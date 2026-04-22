@@ -1,0 +1,4 @@
+board: m5stack_sticks3
+chip: esp32s3
+description: "M5Stack StickS3 (ESP32-S3-PICO-1-N8R8) Development Board"
+manufacturer: "M5Stack"

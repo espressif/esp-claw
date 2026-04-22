@@ -1,0 +1,75 @@
+version: 1.0.0
+# Devices Configuration for M5Stack StickS3
+devices:
+
+  # M5PM1 PMIC (proprietary M5Stack power IC, I2C addr 0x6E).
+  # Implemented as a custom device because there is no upstream driver.
+  # MUST be initialised before display_lcd / audio_dac so LCD power and
+  # speaker PA enable lines are valid before those drivers run.
+  - name: sticks3_power_manager
+    chip: m5pm1
+    type: custom
+    version: default
+    config:
+      i2c_address: 0x6E
+      i2c_frequency: 100000
+    peripherals:
+      - name: i2c_master
+
+  # ES8311 full-duplex codec: modelled as two logical devices that share
+  # the same I2C control line, following the esp32_s3_korvo2l pattern.
+  - name: audio_dac
+    chip: es8311
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: false
+      dac_enabled: true
+      mclk_enabled: true
+      dac_max_channel: 1
+      dac_channel_mask: "1"          # Left channel enabled
+    peripherals:
+      - name: i2s_audio_out
+      - &es8311_i2c_master
+        name: i2c_master
+        address: 0x30                # 7-bit 0x18 shifted
+        frequency: 400000
+
+  - name: audio_adc
+    chip: es8311
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      dac_enabled: false
+      adc_max_channel: 1
+      adc_channel_mask: "1"
+      adc_channel_labels: ['MIC']
+    peripherals:
+      - name: i2s_audio_in
+      - *es8311_i2c_master
+
+  # On-board 1.14" ST7789 LCD (135x240, with 52/40 panel offset)
+  - name: display_lcd
+    chip: st7789
+    type: display_lcd
+    sub_type: spi
+    version: default
+    config:
+      mirror_x: false
+      mirror_y: false
+      swap_xy: false
+      invert_color: true
+      x_max: 135
+      y_max: 240
+      io_spi_config:
+        cs_gpio_num: 41
+        dc_gpio_num: 45
+        spi_mode: 0
+        pclk_hz: 40000000
+      lcd_panel_config:
+        reset_gpio_num: 21
+        data_endian: LCD_RGB_DATA_ENDIAN_BIG
+        vendor_config: NULL
+    peripherals:
+      - name: spi_display

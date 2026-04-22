@@ -1,0 +1,68 @@
+version: 1.0.0
+# Peripherals Configuration for M5Stack StickS3 (ESP32-S3-PICO-1-N8R8)
+peripherals:
+
+  # Internal I2C bus: serves M5PM1 (0x6E), ES8311 codec (0x18), BMI270 IMU (0x68)
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 47
+        scl: 48
+
+  # I2S0 in full-duplex: ES8311 shares MCLK/BCLK/WS for both DAC and ADC.
+  # Two logical peripherals reuse the same physical I2S configuration via
+  # a YAML anchor, mirroring the esp32_s3_korvo2l pattern.
+  - name: i2s_audio_out
+    type: i2s
+    role: master
+    format: std-out
+    config: &i2s_config
+      port: 0
+      sample_rate_hz: 16000
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_STEREO
+      slot_mask: I2S_STD_SLOT_BOTH
+      ws_width: 16
+      pins:
+        mclk: 18
+        bclk: 17
+        ws: 15
+        dout: 14
+        din: 16
+
+  - name: i2s_audio_in
+    type: i2s
+    role: master
+    format: std-in
+    config: *i2s_config
+
+  # SPI bus dedicated to the on-board ST7789 LCD
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI3_HOST
+        data0_io_num: 39             # MOSI
+        sclk_io_num: 40              # SCLK
+        max_transfer_sz: 5400        # 135 * 240 * 2 / 12 ~ keep enough headroom
+
+  # LCD backlight on GPIO38 (active high on M5StickS3).
+  # Initial duty kept at full so the panel is visible the moment the bus
+  # comes up — `display.set_backlight()` toggles the LCD `disp_on_off`
+  # command, not the LEDC duty, so a duty of 0 here would leave the
+  # screen dark even after the application starts drawing.
+  - name: ledc_backlight
+    type: ledc
+    role: none
+    config:
+      gpio_num: 38
+      freq_hz: 5000
+      duty: 1023
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false
