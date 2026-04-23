@@ -1327,6 +1327,7 @@ async function loadSessions() {
       }
     }
     await loadSession(chatSessionId);
+    chatMessages = chatSessions[chatSessionId].messages || [];
     renderSessionSelect();
     renderChat();
   } catch (err) {
@@ -1349,10 +1350,11 @@ async function loadSession(id) {
   }
 }
 
-function switchChatSession(id) {
+async function switchChatSession(id) {
   if (!chatSessions[id] || id === chatSessionId) return;
   if (chatPollTimer) clearTimeout(chatPollTimer);
   chatPollingId = null;
+  await loadSession(id);
   chatSessionId = id;
   chatMessages = chatSessions[id].messages || [];
   renderSessionSelect();
