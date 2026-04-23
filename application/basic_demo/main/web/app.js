@@ -18,6 +18,17 @@ const strings = {
     tabConfig: "Configuration",
     tabMemory: "Memory",
     tabFiles: "File Manager",
+    tabChat: "Chat",
+
+    chatPlaceholder: "Type a message...",
+    chatSend: "Send",
+    chatEmpty: "Start a conversation with ESP-Claw.",
+    chatSessionLabel: "Session",
+    chatNewSession: "New Session",
+    chatClear: "Clear",
+    chatPending: "Thinking...",
+    chatError: "Failed to send message",
+    chatBusy: "Please wait for the current reply to finish.",
 
     statusLoading: "Loading\u2026",
     statusOnline: "Wi-Fi Connected",
@@ -149,6 +160,17 @@ const strings = {
     tabConfig: "配置管理",
     tabMemory: "记忆管理",
     tabFiles: "文件管理",
+    tabChat: "聊天",
+
+    chatPlaceholder: "输入消息...",
+    chatSend: "发送",
+    chatEmpty: "与 ESP-Claw 开始对话。",
+    chatSessionLabel: "会话",
+    chatNewSession: "新会话",
+    chatClear: "清除",
+    chatPending: "思考中...",
+    chatError: "消息发送失败",
+    chatBusy: "请等待当前回复完成。",
 
     statusLoading: "加载中\u2026",
     statusOnline: "Wi-Fi 已连接",
@@ -1257,6 +1279,122 @@ async function refreshMemoryFile(path) {
 }
 
 /* ═══════════════════════════════════════════════════
+   Chat
+   ═══════════════════════════════════════════════════ */
+
+let chatMessages = [];
+let chatSessionId = "web-" + Date.now();
+let chatPollingId = null;
+let chatPollTimer = null;
+
+function renderChat() {
+  const container = document.getElementById("chatMessages");
+  const emptyEl = document.getElementById("chatEmptyState");
+  document.getElementById("chatSessionId").textContent = chatSessionId;
+
+  if (!chatMessages.length) {
+    container.innerHTML = "";
+    container.appendChild(emptyEl);
+    emptyEl.classList.remove("hidden");
+    return;
+  }
+
+  emptyEl.classList.add("hidden");
+  container.innerHTML = "";
+  chatMessages.forEach((msg) => {
+    const div = document.createElement("div");
+    div.className = "chat-msg " + msg.role;
+    if (msg.pending) div.classList.add("pending");
+    if (msg.error) div.classList.add("error");
+    div.textContent = msg.text;
+    container.appendChild(div);
+  });
+  container.scrollTop = container.scrollHeight;
+}
+
+async function sendChatMessage() {
+  const input = document.getElementById("chatInput");
+  const text = input.value.trim();
+  if (!text) return;
+
+  if (chatPollingId !== null) {
+    showBanner("chatBanner", t("chatBusy"), true);
+    return;
+  }
+
+  hideBanner("chatBanner");
+  chatMessages.push({ role: "user", text });
+  chatMessages.push({ role: "assistant", text: t("chatPending"), pending: true });
+  renderChat();
+  input.value = "";
+
+  try {
+    const resp = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, session_id: chatSessionId }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) {
+      throw new Error(data.message || t("chatError"));
+    }
+    chatPollingId = data.request_id;
+    pollChatResult();
+  } catch (err) {
+    chatMessages.pop();
+    chatMessages.push({ role: "assistant", text: err.message, error: true });
+    renderChat();
+    chatPollingId = null;
+  }
+}
+
+function pollChatResult() {
+  if (chatPollingId === null) return;
+  const id = chatPollingId;
+
+  chatPollTimer = setTimeout(async () => {
+    try {
+      const resp = await fetch("/api/chat/result?id=" + id);
+      const data = await resp.json();
+      if (data.status === "pending") {
+        pollChatResult();
+        return;
+      }
+      chatPollingId = null;
+      chatMessages.pop();
+      if (data.status === "ok") {
+        chatMessages.push({ role: "assistant", text: data.text });
+      } else {
+        chatMessages.push({ role: "assistant", text: data.message || t("chatError"), error: true });
+      }
+      renderChat();
+    } catch (err) {
+      chatPollingId = null;
+      chatMessages.pop();
+      chatMessages.push({ role: "assistant", text: err.message, error: true });
+      renderChat();
+    }
+  }, 2000);
+}
+
+function newChatSession() {
+  if (chatPollTimer) clearTimeout(chatPollTimer);
+  chatPollingId = null;
+  chatMessages = [];
+  chatSessionId = "web-" + Date.now();
+  hideBanner("chatBanner");
+  renderChat();
+}
+
+function clearChat() {
+  if (chatPollTimer) clearTimeout(chatPollTimer);
+  chatPollingId = null;
+  chatMessages = [];
+  hideBanner("chatBanner");
+  renderChat();
+}
+
+/* ═══════════════════════════════════════════════════
    Event binding
    ═══════════════════════════════════════════════════ */
 
@@ -1340,6 +1478,16 @@ function bindEvents() {
       nameSpan.textContent = t("fileNoFileSelected");
     }
   });
+
+  document.getElementById("chatSendBtn").addEventListener("click", sendChatMessage);
+  document.getElementById("chatNewSessionBtn").addEventListener("click", newChatSession);
+  document.getElementById("chatClearBtn").addEventListener("click", clearChat);
+  document.getElementById("chatInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendChatMessage();
+    }
+  });
 }
 
 /* ═══════════════════════════════════════════════════
@@ -1391,6 +1539,8 @@ async function bootstrap() {
   } else {
     renderMemoryState();
   }
+
+  renderChat();
 }
 
 bootstrap().catch((err) => {

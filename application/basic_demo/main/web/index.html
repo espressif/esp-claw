@@ -89,6 +89,7 @@
           <button type="button" class="tab-btn active" data-tab="config" data-i18n="tabConfig">Configuration</button>
           <button type="button" class="tab-btn" data-tab="memory" data-i18n="tabMemory">Memory</button>
           <button type="button" class="tab-btn" data-tab="files" data-i18n="tabFiles">File Manager</button>
+          <button type="button" class="tab-btn" data-tab="chat" data-i18n="tabChat">Chat</button>
         </div>
 
         <!-- ═══ CONFIG TAB ═══ -->
@@ -448,6 +449,28 @@
                 </thead>
                 <tbody id="fileTableBody"></tbody>
               </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- ═══ CHAT TAB ═══ -->
+        <div class="tab-panel" id="tab-chat">
+          <div class="chat-panel">
+            <div id="chatBanner" class="banner"></div>
+            <div class="chat-toolbar">
+              <span class="chat-session-label" data-i18n="chatSessionLabel">Session</span>
+              <code class="chat-session-id" id="chatSessionId"></code>
+              <div class="chat-toolbar-right">
+                <button type="button" class="btn-secondary btn-sm" id="chatNewSessionBtn" data-i18n="chatNewSession">New Session</button>
+                <button type="button" class="btn-secondary btn-sm" id="chatClearBtn" data-i18n="chatClear">Clear</button>
+              </div>
+            </div>
+            <div class="chat-messages" id="chatMessages">
+              <p class="chat-empty" id="chatEmptyState" data-i18n="chatEmpty">Start a conversation with ESP-Claw.</p>
+            </div>
+            <div class="chat-input-row">
+              <textarea id="chatInput" class="chat-input" rows="2" data-i18n-placeholder="chatPlaceholder" placeholder="Type a message..."></textarea>
+              <button type="button" class="btn-primary btn-sm" id="chatSendBtn" data-i18n="chatSend">Send</button>
             </div>
           </div>
         </div>

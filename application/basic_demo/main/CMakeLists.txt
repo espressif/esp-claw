@@ -3,6 +3,8 @@ idf_component_register(
         "."
     INCLUDE_DIRS
         "."
+    REQUIRES
+        claw_core
     EMBED_TXTFILES
         "web/index.html"
         "web/styles.css"

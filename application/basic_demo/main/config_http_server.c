@@ -17,10 +17,13 @@
 #include "basic_demo_wifi.h"
 #include "cap_im_wechat.h"
 #include "cJSON.h"
+#include "claw_core.h"
+#include "claw_task.h"
 #include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "config_http";
 
@@ -836,6 +839,225 @@ static esp_err_t captive_404_handler(httpd_req_t *req, httpd_err_code_t error)
     return httpd_resp_send(req, NULL, 0);
 }
 
+/* ── Chat API ── */
+
+#define CHAT_RECEIVE_TIMEOUT_MS  130000
+#define CHAT_RESPONSE_MAX_SIZE   4096
+
+typedef struct {
+    uint32_t request_id;
+    bool active;
+    bool done;
+    bool ok;
+    char *text;
+    char *error_message;
+} chat_pending_t;
+
+static chat_pending_t s_chat_pending = {0};
+static SemaphoreHandle_t s_chat_mutex = NULL;
+static uint32_t s_chat_next_id = 1;
+
+static void chat_ensure_mutex(void)
+{
+    if (!s_chat_mutex) {
+        s_chat_mutex = xSemaphoreCreateMutex();
+    }
+}
+
+static void chat_receive_task(void *arg)
+{
+    uint32_t request_id = (uint32_t)(uintptr_t)arg;
+    claw_core_response_t response = {0};
+    esp_err_t err;
+
+    err = claw_core_receive_for(request_id, &response, CHAT_RECEIVE_TIMEOUT_MS);
+
+    xSemaphoreTake(s_chat_mutex, portMAX_DELAY);
+    if (s_chat_pending.request_id == request_id) {
+        s_chat_pending.done = true;
+        if (err == ESP_OK && response.status == CLAW_CORE_RESPONSE_STATUS_OK && response.text) {
+            s_chat_pending.ok = true;
+            size_t len = strlen(response.text);
+            if (len > CHAT_RESPONSE_MAX_SIZE) len = CHAT_RESPONSE_MAX_SIZE;
+            s_chat_pending.text = malloc(len + 1);
+            if (s_chat_pending.text) {
+                memcpy(s_chat_pending.text, response.text, len);
+                s_chat_pending.text[len] = '\0';
+            }
+        } else {
+            s_chat_pending.ok = false;
+            const char *errmsg = (response.error_message && response.error_message[0])
+                                     ? response.error_message
+                                     : esp_err_to_name(err);
+            s_chat_pending.error_message = strdup(errmsg);
+        }
+    }
+    xSemaphoreGive(s_chat_mutex);
+
+    claw_core_response_free(&response);
+    claw_task_delete(NULL);
+}
+
+static esp_err_t chat_submit_handler(httpd_req_t *req)
+{
+    char *buf = NULL;
+    cJSON *root = NULL;
+    cJSON *reply = NULL;
+    esp_err_t ret = ESP_FAIL;
+    int content_len = req->content_len;
+
+    chat_ensure_mutex();
+
+    if (content_len <= 0 || content_len > CONFIG_HTTP_SCRATCH_SIZE) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid body");
+        return ESP_FAIL;
+    }
+
+    buf = alloc_scratch_buffer();
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
+        return ESP_FAIL;
+    }
+
+    if (httpd_req_recv(req, buf, content_len) != content_len) {
+        goto done;
+    }
+    buf[content_len] = '\0';
+
+    root = cJSON_Parse(buf);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        goto done;
+    }
+
+    const char *text = cJSON_GetStringValue(cJSON_GetObjectItem(root, "text"));
+    const char *session_id = cJSON_GetStringValue(cJSON_GetObjectItem(root, "session_id"));
+    if (!text || !text[0]) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing text");
+        goto done;
+    }
+
+    xSemaphoreTake(s_chat_mutex, portMAX_DELAY);
+    if (s_chat_pending.active && !s_chat_pending.done) {
+        xSemaphoreGive(s_chat_mutex);
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_sendstr(req, "{\"ok\":false,\"message\":\"A request is already in progress\"}");
+        ret = ESP_OK;
+        goto done;
+    }
+
+    free(s_chat_pending.text);
+    free(s_chat_pending.error_message);
+    memset(&s_chat_pending, 0, sizeof(s_chat_pending));
+
+    uint32_t rid = s_chat_next_id++;
+    s_chat_pending.request_id = rid;
+    s_chat_pending.active = true;
+    xSemaphoreGive(s_chat_mutex);
+
+    claw_core_request_t core_req = {
+        .request_id = rid,
+        .user_text = text,
+        .session_id = session_id ? session_id : "web-default",
+        .source_channel = "web",
+    };
+
+    esp_err_t err = claw_core_submit(&core_req, 5000);
+    if (err != ESP_OK) {
+        xSemaphoreTake(s_chat_mutex, portMAX_DELAY);
+        s_chat_pending.active = false;
+        xSemaphoreGive(s_chat_mutex);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to submit request");
+        goto done;
+    }
+
+    TaskHandle_t task = NULL;
+    BaseType_t task_ok = claw_task_create(&(claw_task_config_t){
+                                              .name = "chat_recv",
+                                              .stack_size = 8192,
+                                              .priority = 5,
+                                              .core_id = tskNO_AFFINITY,
+                                              .stack_policy = CLAW_TASK_STACK_PREFER_PSRAM,
+                                          },
+                                          chat_receive_task,
+                                          (void *)(uintptr_t)rid,
+                                          &task);
+    if (task_ok != pdPASS || !task) {
+        xSemaphoreTake(s_chat_mutex, portMAX_DELAY);
+        s_chat_pending.active = false;
+        xSemaphoreGive(s_chat_mutex);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to start receive task");
+        goto done;
+    }
+
+    reply = cJSON_CreateObject();
+    cJSON_AddBoolToObject(reply, "ok", true);
+    cJSON_AddNumberToObject(reply, "request_id", (double)rid);
+    char *json_str = cJSON_PrintUnformatted(reply);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json_str);
+    free(json_str);
+    ret = ESP_OK;
+
+done:
+    cJSON_Delete(root);
+    cJSON_Delete(reply);
+    free(buf);
+    return ret;
+}
+
+static esp_err_t chat_result_handler(httpd_req_t *req)
+{
+    char id_str[64] = {0};
+    cJSON *reply = NULL;
+    char *json_str = NULL;
+
+    chat_ensure_mutex();
+
+    if (httpd_req_get_url_query_str(req, id_str, sizeof(id_str)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing id param");
+        return ESP_FAIL;
+    }
+
+    char val[16] = {0};
+    if (httpd_query_key_value(id_str, "id", val, sizeof(val)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing id param");
+        return ESP_FAIL;
+    }
+
+    uint32_t rid = (uint32_t)strtoul(val, NULL, 10);
+
+    xSemaphoreTake(s_chat_mutex, portMAX_DELAY);
+    if (!s_chat_pending.active || s_chat_pending.request_id != rid) {
+        xSemaphoreGive(s_chat_mutex);
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No such request");
+        return ESP_FAIL;
+    }
+
+    reply = cJSON_CreateObject();
+    if (!s_chat_pending.done) {
+        xSemaphoreGive(s_chat_mutex);
+        cJSON_AddStringToObject(reply, "status", "pending");
+    } else if (s_chat_pending.ok) {
+        cJSON_AddStringToObject(reply, "status", "ok");
+        cJSON_AddStringToObject(reply, "text", s_chat_pending.text ? s_chat_pending.text : "");
+        xSemaphoreGive(s_chat_mutex);
+    } else {
+        cJSON_AddStringToObject(reply, "status", "error");
+        cJSON_AddStringToObject(reply, "message",
+                                s_chat_pending.error_message ? s_chat_pending.error_message : "Unknown error");
+        xSemaphoreGive(s_chat_mutex);
+    }
+
+    json_str = cJSON_PrintUnformatted(reply);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json_str);
+    free(json_str);
+    cJSON_Delete(reply);
+    return ESP_OK;
+}
+
 esp_err_t config_http_server_init(const char *storage_base_path)
 {
     if (!storage_base_path || storage_base_path[0] != '/') {
@@ -855,7 +1077,7 @@ esp_err_t config_http_server_start(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = BASIC_DEMO_HTTP_SERVER_PORT;
     config.ctrl_port = CONFIG_HTTP_CTRL_PORT;
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 20;
     config.stack_size = 8192;
     config.uri_match_fn = httpd_uri_match_wildcard;
 
@@ -878,6 +1100,8 @@ esp_err_t config_http_server_start(void)
         { .uri = "/api/files/upload", .method = HTTP_POST, .handler = files_upload_handler },
         { .uri = "/api/files/mkdir", .method = HTTP_POST, .handler = files_mkdir_handler },
         { .uri = "/files/*", .method = HTTP_GET, .handler = file_download_handler },
+        { .uri = "/api/chat", .method = HTTP_POST, .handler = chat_submit_handler },
+        { .uri = "/api/chat/result", .method = HTTP_GET, .handler = chat_result_handler },
     };
 
     for (size_t i = 0; i < sizeof(handlers) / sizeof(handlers[0]); ++i) {
