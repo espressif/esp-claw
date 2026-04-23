@@ -1350,26 +1350,6 @@ async function loadSession(id) {
   }
 }
 
-async function saveSession(id) {
-  try {
-    await fetch("/api/sessions/" + encodeURIComponent(id), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: chatSessions[id].messages }),
-    });
-  } catch (err) {
-    console.error("saveSession failed:", err);
-  }
-}
-
-async function deleteSessionApi(id) {
-  try {
-    await fetch("/api/sessions/" + encodeURIComponent(id), { method: "DELETE" });
-  } catch (err) {
-    console.error("deleteSessionApi failed:", err);
-  }
-}
-
 function switchChatSession(id) {
   if (!chatSessions[id] || id === chatSessionId) return;
   if (chatPollTimer) clearTimeout(chatPollTimer);
@@ -1383,7 +1363,11 @@ function switchChatSession(id) {
 async function deleteChatSession(id) {
   if (!chatSessions[id]) return;
   if (!window.confirm(t("chatDeleteSessionConfirm"))) return;
-  await deleteSessionApi(id);
+  try {
+    await fetch("/api/sessions/" + encodeURIComponent(id), { method: "DELETE" });
+  } catch (err) {
+    console.error("deleteSession failed:", err);
+  }
   delete chatSessions[id];
   if (chatSessionId === id) {
     const remaining = Object.keys(chatSessions);
@@ -1394,7 +1378,6 @@ async function deleteChatSession(id) {
       chatSessionId = "web-" + Date.now();
       chatSessions[chatSessionId] = { messages: [] };
       chatMessages = [];
-      await saveSession(chatSessionId);
     }
   }
   renderSessionSelect();
@@ -1437,8 +1420,6 @@ async function sendChatMessage() {
   hideBanner("chatBanner");
   chatMessages.push({ role: "user", text });
   chatMessages.push({ role: "assistant", text: t("chatPending"), pending: true });
-  chatSessions[chatSessionId].messages = chatMessages;
-  saveSession(chatSessionId);
   renderChat();
   input.value = "";
 
@@ -1457,8 +1438,6 @@ async function sendChatMessage() {
   } catch (err) {
     chatMessages.pop();
     chatMessages.push({ role: "assistant", text: err.message, error: true });
-    chatSessions[chatSessionId].messages = chatMessages;
-    saveSession(chatSessionId);
     renderChat();
     chatPollingId = null;
   }
@@ -1485,40 +1464,32 @@ function pollChatResult() {
       } else {
         chatMessages.push({ role: "assistant", text: data.message || t("chatError"), error: true });
       }
-      chatSessions[chatSessionId].messages = chatMessages;
-      saveSession(chatSessionId);
       renderChat();
     } catch (err) {
       chatPollingId = null;
       chatMessages.pop();
       chatMessages.push({ role: "assistant", text: err.message, error: true });
-      chatSessions[chatSessionId].messages = chatMessages;
-      saveSession(chatSessionId);
       renderChat();
     }
   }, 2000);
 }
 
-async function newChatSession() {
+function newChatSession() {
   if (chatPollTimer) clearTimeout(chatPollTimer);
   chatPollingId = null;
-  chatSessions[chatSessionId].messages = chatMessages;
-  await saveSession(chatSessionId);
   chatSessionId = "web-" + Date.now();
   chatSessions[chatSessionId] = { messages: [] };
   chatMessages = [];
-  await saveSession(chatSessionId);
   renderSessionSelect();
   hideBanner("chatBanner");
   renderChat();
 }
 
-async function clearChat() {
+function clearChat() {
   if (chatPollTimer) clearTimeout(chatPollTimer);
   chatPollingId = null;
   chatMessages = [];
-  chatSessions[chatSessionId].messages = [];
-  await saveSession(chatSessionId);
+  chatSessions[chatSessionId] = { messages: [] };
   hideBanner("chatBanner");
   renderChat();
 }

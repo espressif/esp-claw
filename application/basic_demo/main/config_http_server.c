@@ -1059,21 +1059,85 @@ static esp_err_t chat_result_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
-/* ── Sessions API ── */
+/* ── Sessions API ──
+   Reads existing session log files created by claw_memory module.
+   File format: s_{session_id}_{hash}.log, each line: role\tcontent
+*/
 
-static esp_err_t sessions_ensure_dir(void)
+static bool is_hex_str(const char *s, size_t len)
 {
-    char dir_path[CONFIG_HTTP_PATH_MAX];
-    if (resolve_storage_path("/sessions", dir_path, sizeof(dir_path)) != ESP_OK) {
-        return ESP_FAIL;
-    }
-    struct stat st = {0};
-    if (stat(dir_path, &st) != 0) {
-        if (mkdir(dir_path, 0755) != 0) {
-            return ESP_FAIL;
+    size_t i;
+    for (i = 0; i < len; i++) {
+        char c = s[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+            return false;
         }
     }
-    return ESP_OK;
+    return true;
+}
+
+/* Parse s_xxx_hash.log -> extract session id (xxx part before _hash)
+   Returns true if parsed successfully, id_out is filled */
+static bool parse_session_log_name(const char *filename, char *id_out, size_t id_out_size)
+{
+    size_t len = strlen(filename);
+
+    if (len <= 9 || strncmp(filename, "s_", 2) != 0 || strcmp(filename + len - 4, ".log") != 0) {
+        return false;
+    }
+
+    /* Strip s_ prefix and .log suffix: xxx_hash */
+    const char *body = filename + 2;
+    size_t body_len = len - 2 - 4;
+
+    /* Find last underscore, _hash should be 9 chars: _ + 8 hex */
+    const char *last_underscore = strrchr(body, '_');
+    if (!last_underscore || last_underscore == body) {
+        return false;
+    }
+
+    size_t hash_len = body + body_len - last_underscore;
+    if (hash_len != 9 || !is_hex_str(last_underscore + 1, 8)) {
+        return false;
+    }
+
+    size_t id_len = last_underscore - body;
+    if (id_len >= id_out_size) {
+        id_len = id_out_size - 1;
+    }
+    memcpy(id_out, body, id_len);
+    id_out[id_len] = '\0';
+    return true;
+}
+
+/* Find session log file by session id, return full path */
+static bool find_session_log_path(const char *session_id, char *full_path, size_t full_path_size)
+{
+    char dir_path[CONFIG_HTTP_PATH_MAX];
+    bool found = false;
+
+    if (resolve_storage_path("/sessions", dir_path, sizeof(dir_path)) != ESP_OK) {
+        return false;
+    }
+
+    DIR *dir = opendir(dir_path);
+    if (!dir) {
+        return false;
+    }
+
+    struct dirent *entry = NULL;
+    while ((entry = readdir(dir)) != NULL) {
+        char parsed_id[64] = {0};
+        if (parse_session_log_name(entry->d_name, parsed_id, sizeof(parsed_id))) {
+            if (strcmp(parsed_id, session_id) == 0) {
+                snprintf(full_path, full_path_size, "%s/%s", dir_path, entry->d_name);
+                found = true;
+                break;
+            }
+        }
+    }
+    closedir(dir);
+    return found;
 }
 
 static esp_err_t sessions_list_handler(httpd_req_t *req)
@@ -1091,19 +1155,11 @@ static esp_err_t sessions_list_handler(httpd_req_t *req)
         if (dir) {
             struct dirent *entry = NULL;
             while ((entry = readdir(dir)) != NULL) {
-                if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-                    continue;
-                }
-                size_t len = strlen(entry->d_name);
-                if (len > 5 && strcmp(entry->d_name + len - 5, ".json") == 0) {
+                char parsed_id[64] = {0};
+                if (parse_session_log_name(entry->d_name, parsed_id, sizeof(parsed_id))) {
                     cJSON *item = cJSON_CreateObject();
                     if (item) {
-                        char id_buf[128] = {0};
-                        if (len - 5 < sizeof(id_buf)) {
-                            memcpy(id_buf, entry->d_name, len - 5);
-                            id_buf[len - 5] = '\0';
-                        }
-                        cJSON_AddStringToObject(item, "id", id_buf);
+                        cJSON_AddStringToObject(item, "id", parsed_id);
                         cJSON_AddItemToArray(root, item);
                     }
                 }
@@ -1143,16 +1199,9 @@ static esp_err_t session_get_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    char relative_path[CONFIG_HTTP_PATH_MAX];
-    int written = snprintf(relative_path, sizeof(relative_path), "/sessions/%s.json", id);
-    if (written <= 0 || (size_t)written >= sizeof(relative_path)) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid session id");
-        return ESP_FAIL;
-    }
-
     char full_path[CONFIG_HTTP_PATH_MAX];
-    if (resolve_storage_path(relative_path, full_path, sizeof(full_path)) != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid path");
+    if (!find_session_log_path(id, full_path, sizeof(full_path))) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Session not found");
         return ESP_FAIL;
     }
 
@@ -1162,118 +1211,50 @@ static esp_err_t session_get_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    fseek(f, 0, SEEK_END);
-    long fsize = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    if (fsize <= 0 || fsize > 256 * 1024) {
+    cJSON *root = cJSON_CreateObject();
+    cJSON *messages = cJSON_CreateArray();
+    if (!root || !messages) {
         fclose(f);
-        httpd_resp_send_err(req, HTTPD_413_CONTENT_TOO_LARGE, "Session too large");
-        return ESP_FAIL;
-    }
-
-    char *buf = malloc(fsize + 1);
-    if (!buf) {
-        fclose(f);
+        cJSON_Delete(root);
+        cJSON_Delete(messages);
         httpd_resp_send_500(req);
         return ESP_ERR_NO_MEM;
     }
 
-    size_t read = fread(buf, 1, fsize, f);
+    char line[4096];
+    while (fgets(line, sizeof(line), f)) {
+        char *tab = strchr(line, '\t');
+        if (!tab) {
+            continue;
+        }
+        *tab = '\0';
+        char *content = tab + 1;
+        content[strcspn(content, "\r\n")] = '\0';
+
+        const char *role = (strcmp(line, "assistant") == 0) ? "assistant" : "user";
+
+        cJSON *msg = cJSON_CreateObject();
+        if (msg) {
+            cJSON_AddStringToObject(msg, "role", role);
+            cJSON_AddStringToObject(msg, "text", content);
+            cJSON_AddItemToArray(messages, msg);
+        }
+    }
     fclose(f);
-    buf[read] = '\0';
+
+    cJSON_AddItemToObject(root, "messages", messages);
+    char *payload = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!payload) {
+        httpd_resp_send_500(req);
+        return ESP_ERR_NO_MEM;
+    }
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    esp_err_t err = httpd_resp_sendstr(req, buf);
-    free(buf);
+    esp_err_t err = httpd_resp_sendstr(req, payload);
+    free(payload);
     return err;
-}
-
-static esp_err_t session_save_handler(httpd_req_t *req)
-{
-    const char *uri = req->uri;
-    const char *prefix = "/api/sessions/";
-    size_t prefix_len = strlen(prefix);
-
-    if (strncmp(uri, prefix, prefix_len) != 0) {
-        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Not found");
-        return ESP_FAIL;
-    }
-
-    const char *id = uri + prefix_len;
-    if (!id || !id[0]) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing session id");
-        return ESP_FAIL;
-    }
-
-    int content_len = req->content_len;
-    if (content_len <= 0 || content_len > 256 * 1024) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid body");
-        return ESP_FAIL;
-    }
-
-    char *buf = alloc_scratch_buffer();
-    if (!buf) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
-        return ESP_FAIL;
-    }
-
-    if (httpd_req_recv(req, buf, content_len) != content_len) {
-        free(buf);
-        return ESP_FAIL;
-    }
-    buf[content_len] = '\0';
-
-    cJSON *test = cJSON_Parse(buf);
-    if (!test) {
-        free(buf);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
-        return ESP_FAIL;
-    }
-    cJSON_Delete(test);
-
-    sessions_ensure_dir();
-
-    char relative_path[CONFIG_HTTP_PATH_MAX];
-    int written = snprintf(relative_path, sizeof(relative_path), "/sessions/%s.json", id);
-    if (written <= 0 || (size_t)written >= sizeof(relative_path)) {
-        free(buf);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid session id");
-        return ESP_FAIL;
-    }
-
-    char full_path[CONFIG_HTTP_PATH_MAX];
-    if (resolve_storage_path(relative_path, full_path, sizeof(full_path)) != ESP_OK) {
-        free(buf);
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid path");
-        return ESP_FAIL;
-    }
-
-    FILE *f = fopen(full_path, "w");
-    if (!f) {
-        free(buf);
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to open file");
-        return ESP_FAIL;
-    }
-
-    size_t w = fwrite(buf, 1, content_len, f);
-    fclose(f);
-    free(buf);
-
-    if (w != (size_t)content_len) {
-        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to write file");
-        return ESP_FAIL;
-    }
-
-    cJSON *reply = cJSON_CreateObject();
-    cJSON_AddBoolToObject(reply, "ok", true);
-    char *json_str = cJSON_PrintUnformatted(reply);
-    cJSON_Delete(reply);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, json_str);
-    free(json_str);
-    return ESP_OK;
 }
 
 static esp_err_t session_delete_handler(httpd_req_t *req)
@@ -1293,16 +1274,9 @@ static esp_err_t session_delete_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    char relative_path[CONFIG_HTTP_PATH_MAX];
-    int written = snprintf(relative_path, sizeof(relative_path), "/sessions/%s.json", id);
-    if (written <= 0 || (size_t)written >= sizeof(relative_path)) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid session id");
-        return ESP_FAIL;
-    }
-
     char full_path[CONFIG_HTTP_PATH_MAX];
-    if (resolve_storage_path(relative_path, full_path, sizeof(full_path)) != ESP_OK) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid path");
+    if (!find_session_log_path(id, full_path, sizeof(full_path))) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Session not found");
         return ESP_FAIL;
     }
 
@@ -1367,7 +1341,6 @@ esp_err_t config_http_server_start(void)
         { .uri = "/api/chat/result", .method = HTTP_GET, .handler = chat_result_handler },
         { .uri = "/api/sessions", .method = HTTP_GET, .handler = sessions_list_handler },
         { .uri = "/api/sessions/*", .method = HTTP_GET, .handler = session_get_handler },
-        { .uri = "/api/sessions/*", .method = HTTP_POST, .handler = session_save_handler },
         { .uri = "/api/sessions/*", .method = HTTP_DELETE, .handler = session_delete_handler },
     };
 
