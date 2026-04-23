@@ -1066,6 +1066,7 @@ static esp_err_t chat_result_handler(httpd_req_t *req)
 
     json_str = cJSON_PrintUnformatted(reply);
     httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate");
     httpd_resp_sendstr(req, json_str);
     free(json_str);
     cJSON_Delete(reply);

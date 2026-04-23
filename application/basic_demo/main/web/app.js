@@ -1354,8 +1354,11 @@ function pollChatResult() {
 
   chatPollTimer = setTimeout(async () => {
     try {
-      const resp = await fetch("/api/chat/result?id=" + id);
+      const resp = await fetch("/api/chat/result?id=" + id + "&_=" + Date.now(), {
+        cache: "no-store",
+      });
       const data = await resp.json();
+      console.log("poll result:", data);
       if (data.status === "pending") {
         pollChatResult();
         return;
@@ -1369,6 +1372,7 @@ function pollChatResult() {
       }
       renderChat();
     } catch (err) {
+      console.error("poll error:", err);
       chatPollingId = null;
       chatMessages.pop();
       chatMessages.push({ role: "assistant", text: err.message, error: true });
