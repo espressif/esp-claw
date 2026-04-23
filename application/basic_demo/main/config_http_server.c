@@ -870,7 +870,13 @@ static void chat_receive_task(void *arg)
     claw_core_response_t response = {0};
     esp_err_t err;
 
+    ESP_LOGI(TAG, "chat_receive_task started for request_id=%" PRIu32, request_id);
+
     err = claw_core_receive_for(request_id, &response, CHAT_RECEIVE_TIMEOUT_MS);
+
+    ESP_LOGI(TAG, "chat_receive_task: receive_for returned %s, status=%d, text=%s",
+             esp_err_to_name(err), response.status,
+             response.text ? "present" : "null");
 
     xSemaphoreTake(s_chat_mutex, portMAX_DELAY);
     if (s_chat_pending.request_id == request_id) {
@@ -884,13 +890,18 @@ static void chat_receive_task(void *arg)
                 memcpy(s_chat_pending.text, response.text, len);
                 s_chat_pending.text[len] = '\0';
             }
+            ESP_LOGI(TAG, "chat_receive_task: response stored, len=%d", (int)len);
         } else {
             s_chat_pending.ok = false;
             const char *errmsg = (response.error_message && response.error_message[0])
                                      ? response.error_message
                                      : esp_err_to_name(err);
             s_chat_pending.error_message = strdup(errmsg);
+            ESP_LOGW(TAG, "chat_receive_task: response error: %s", errmsg);
         }
+    } else {
+        ESP_LOGW(TAG, "chat_receive_task: request_id mismatch (expected %" PRIu32 ", got %" PRIu32 ")",
+                 request_id, s_chat_pending.request_id);
     }
     xSemaphoreGive(s_chat_mutex);
 
@@ -1027,8 +1038,11 @@ static esp_err_t chat_result_handler(httpd_req_t *req)
     }
 
     uint32_t rid = (uint32_t)strtoul(val, NULL, 10);
+    ESP_LOGD(TAG, "chat_result: query id=%" PRIu32, rid);
 
     xSemaphoreTake(s_chat_mutex, portMAX_DELAY);
+    ESP_LOGD(TAG, "chat_result: pending active=%d done=%d req_id=%" PRIu32,
+             s_chat_pending.active, s_chat_pending.done, s_chat_pending.request_id);
     if (!s_chat_pending.active || s_chat_pending.request_id != rid) {
         xSemaphoreGive(s_chat_mutex);
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "No such request");
