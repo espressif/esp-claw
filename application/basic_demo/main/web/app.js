@@ -25,10 +25,12 @@ const strings = {
     chatEmpty: "Start a conversation with ESP-Claw.",
     chatSessionLabel: "Session",
     chatNewSession: "New Session",
+    chatDeleteSession: "Delete",
     chatClear: "Clear",
     chatPending: "Thinking...",
     chatError: "Failed to send message",
     chatBusy: "Please wait for the current reply to finish.",
+    chatDeleteSessionConfirm: "Delete this session?",
 
     statusLoading: "Loading\u2026",
     statusOnline: "Wi-Fi Connected",
@@ -167,10 +169,12 @@ const strings = {
     chatEmpty: "与 ESP-Claw 开始对话。",
     chatSessionLabel: "会话",
     chatNewSession: "新会话",
+    chatDeleteSession: "删除",
     chatClear: "清除",
     chatPending: "思考中...",
     chatError: "消息发送失败",
     chatBusy: "请等待当前回复完成。",
+    chatDeleteSessionConfirm: "确定删除此会话？",
 
     statusLoading: "加载中\u2026",
     statusOnline: "Wi-Fi 已连接",
@@ -1282,16 +1286,92 @@ async function refreshMemoryFile(path) {
    Chat
    ═══════════════════════════════════════════════════ */
 
+const CHAT_STORAGE_KEY = "esp-claw-chat";
+
+let chatSessions = {};
+let chatSessionId = "";
 let chatMessages = [];
-let chatSessionId = "web-" + Date.now();
 let chatPollingId = null;
 let chatPollTimer = null;
 
+function chatSessionName(id) {
+  const idx = Object.keys(chatSessions).indexOf(id);
+  return (idx >= 0 ? "Session " + (idx + 1) : "Session") + " " + id.slice(-4);
+}
+
+function saveChatState() {
+  chatSessions[chatSessionId] = { messages: chatMessages };
+  localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify({
+    sessions: chatSessions,
+    currentId: chatSessionId,
+  }));
+}
+
+function loadChatState() {
+  try {
+    const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+    if (raw) {
+      const data = JSON.parse(raw);
+      chatSessions = data.sessions || {};
+      chatSessionId = data.currentId || "";
+    }
+  } catch (_e) {
+    chatSessions = {};
+  }
+  if (!chatSessionId || !chatSessions[chatSessionId]) {
+    chatSessionId = "web-" + Date.now();
+    chatSessions[chatSessionId] = { messages: [] };
+  }
+  chatMessages = chatSessions[chatSessionId].messages || [];
+}
+
+function renderSessionSelect() {
+  const select = document.getElementById("chatSessionSelect");
+  if (!select) return;
+  select.innerHTML = "";
+  Object.keys(chatSessions).forEach((id) => {
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.textContent = chatSessionName(id);
+    if (id === chatSessionId) opt.selected = true;
+    select.appendChild(opt);
+  });
+}
+
+function switchChatSession(id) {
+  if (!chatSessions[id] || id === chatSessionId) return;
+  if (chatPollTimer) clearTimeout(chatPollTimer);
+  chatPollingId = null;
+  chatSessions[chatSessionId] = { messages: chatMessages };
+  chatSessionId = id;
+  chatMessages = chatSessions[id].messages || [];
+  saveChatState();
+  renderSessionSelect();
+  renderChat();
+}
+
+function deleteChatSession(id) {
+  if (!chatSessions[id]) return;
+  if (!window.confirm(t("chatDeleteSessionConfirm"))) return;
+  delete chatSessions[id];
+  if (chatSessionId === id) {
+    const remaining = Object.keys(chatSessions);
+    if (remaining.length > 0) {
+      chatSessionId = remaining[0];
+      chatMessages = chatSessions[chatSessionId].messages || [];
+    } else {
+      chatSessionId = "web-" + Date.now();
+      chatSessions[chatSessionId] = { messages: [] };
+      chatMessages = [];
+    }
+  }
+  saveChatState();
+  renderSessionSelect();
+  renderChat();
+}
+
 function renderChat() {
   const container = document.getElementById("chatMessages");
-  const sessionEl = document.getElementById("chatSessionId");
-  if (sessionEl) sessionEl.textContent = chatSessionId;
-
   container.innerHTML = "";
 
   if (!chatMessages.length) {
@@ -1326,6 +1406,7 @@ async function sendChatMessage() {
   hideBanner("chatBanner");
   chatMessages.push({ role: "user", text });
   chatMessages.push({ role: "assistant", text: t("chatPending"), pending: true });
+  saveChatState();
   renderChat();
   input.value = "";
 
@@ -1344,6 +1425,7 @@ async function sendChatMessage() {
   } catch (err) {
     chatMessages.pop();
     chatMessages.push({ role: "assistant", text: err.message, error: true });
+    saveChatState();
     renderChat();
     chatPollingId = null;
   }
@@ -1370,11 +1452,13 @@ function pollChatResult() {
       } else {
         chatMessages.push({ role: "assistant", text: data.message || t("chatError"), error: true });
       }
+      saveChatState();
       renderChat();
     } catch (err) {
       chatPollingId = null;
       chatMessages.pop();
       chatMessages.push({ role: "assistant", text: err.message, error: true });
+      saveChatState();
       renderChat();
     }
   }, 2000);
@@ -1383,8 +1467,12 @@ function pollChatResult() {
 function newChatSession() {
   if (chatPollTimer) clearTimeout(chatPollTimer);
   chatPollingId = null;
-  chatMessages = [];
+  chatSessions[chatSessionId] = { messages: chatMessages };
   chatSessionId = "web-" + Date.now();
+  chatSessions[chatSessionId] = { messages: [] };
+  chatMessages = [];
+  saveChatState();
+  renderSessionSelect();
   hideBanner("chatBanner");
   renderChat();
 }
@@ -1393,6 +1481,8 @@ function clearChat() {
   if (chatPollTimer) clearTimeout(chatPollTimer);
   chatPollingId = null;
   chatMessages = [];
+  chatSessions[chatSessionId] = { messages: [] };
+  saveChatState();
   hideBanner("chatBanner");
   renderChat();
 }
@@ -1485,6 +1575,12 @@ function bindEvents() {
   document.getElementById("chatSendBtn").addEventListener("click", sendChatMessage);
   document.getElementById("chatNewSessionBtn").addEventListener("click", newChatSession);
   document.getElementById("chatClearBtn").addEventListener("click", clearChat);
+  document.getElementById("chatDeleteSessionBtn").addEventListener("click", () => {
+    deleteChatSession(chatSessionId);
+  });
+  document.getElementById("chatSessionSelect").addEventListener("change", (e) => {
+    switchChatSession(e.target.value);
+  });
   document.getElementById("chatInput").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -1543,6 +1639,8 @@ async function bootstrap() {
     renderMemoryState();
   }
 
+  loadChatState();
+  renderSessionSelect();
   renderChat();
 }
 

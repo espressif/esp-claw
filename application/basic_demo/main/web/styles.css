@@ -1141,17 +1141,18 @@ footer {
   font-weight: 500;
 }
 
-.chat-session-id {
-  display: inline-flex;
-  align-items: center;
+.chat-session-select {
+  flex: 1;
+  min-width: 120px;
+  max-width: 240px;
   height: 1.8rem;
   padding: 0 0.5rem;
   border-radius: var(--radius-sm);
-  background: var(--bg-surface);
+  background: var(--bg-input);
   border: 1px solid var(--border);
-  font-family: "JetBrains Mono", "Fira Code", monospace;
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-family: inherit;
 }
 
 .chat-toolbar-right {
