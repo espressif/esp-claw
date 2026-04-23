@@ -477,6 +477,10 @@ label {
   font-weight: 500;
 }
 
+textarea {
+  resize: none;
+}
+
 input,
 select {
   background: var(--bg-input);
@@ -804,7 +808,7 @@ select option {
 .memory-editor {
   width: 100%;
   min-height: 420px;
-  resize: vertical;
+  resize: none;
   background: var(--bg-input);
   border: 1px solid var(--border);
   color: var(--text-primary);
@@ -814,6 +818,8 @@ select option {
   line-height: 1.6;
   font-family: "JetBrains Mono", "Fira Code", monospace;
   box-sizing: border-box;
+  overflow-x: auto;
+  white-space: pre;
 }
 
 .memory-editor-sm {
@@ -952,10 +958,15 @@ td {
 }
 
 td.actions {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, max-content));
-  gap: 0.5rem;
-  align-items: center;
+  white-space: nowrap;
+}
+
+td.actions .action-slot {
+  margin-right: 0.5rem;
+}
+
+td.actions .action-slot:last-child {
+  margin-right: 0;
 }
 
 .link-btn {
@@ -1053,7 +1064,7 @@ td.actions {
   width: calc(100% - 2.5rem);
   min-height: 420px;
   margin: 0 1.25rem 1.25rem;
-  resize: vertical;
+  resize: none;
   background: var(--bg-input);
   border: 1px solid var(--border);
   color: var(--text-primary);
@@ -1063,6 +1074,8 @@ td.actions {
   line-height: 1.6;
   font-family: "JetBrains Mono", "Fira Code", monospace;
   box-sizing: border-box;
+  overflow-x: auto;
+  white-space: pre;
 }
 
 .modal-editor:focus {
@@ -1121,6 +1134,10 @@ footer {
   background: transparent;
 }
 
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 ::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.12);
   border-radius: 9px;
@@ -1174,6 +1191,53 @@ footer {
 
   .file-panel {
     padding: 1rem;
+  }
+
+  .file-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+
+  .file-toolbar-right {
+    margin-left: 0;
+    justify-content: flex-end;
+  }
+
+  .file-path {
+    width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .file-create-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .file-create-row input {
+    width: 100%;
+  }
+
+  .file-upload-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+
+  .file-upload-row input[type="text"] {
+    width: 100%;
+  }
+
+  .file-picker {
+    width: 100%;
+    min-width: 0;
+  }
+
+  th, td {
+    padding: 0.5rem 0.5rem;
+    font-size: 0.78rem;
   }
 
   .tab-btn {
