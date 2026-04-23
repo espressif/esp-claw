@@ -1289,18 +1289,19 @@ let chatPollTimer = null;
 
 function renderChat() {
   const container = document.getElementById("chatMessages");
-  const emptyEl = document.getElementById("chatEmptyState");
-  document.getElementById("chatSessionId").textContent = chatSessionId;
+  const sessionEl = document.getElementById("chatSessionId");
+  if (sessionEl) sessionEl.textContent = chatSessionId;
+
+  container.innerHTML = "";
 
   if (!chatMessages.length) {
-    container.innerHTML = "";
-    container.appendChild(emptyEl);
-    emptyEl.classList.remove("hidden");
+    const p = document.createElement("p");
+    p.className = "chat-empty";
+    p.textContent = t("chatEmpty");
+    container.appendChild(p);
     return;
   }
 
-  emptyEl.classList.add("hidden");
-  container.innerHTML = "";
   chatMessages.forEach((msg) => {
     const div = document.createElement("div");
     div.className = "chat-msg " + msg.role;
