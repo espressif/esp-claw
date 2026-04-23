@@ -1293,8 +1293,7 @@ let chatPollingId = null;
 let chatPollTimer = null;
 
 function chatSessionName(id) {
-  const idx = Object.keys(chatSessions).indexOf(id);
-  return (idx >= 0 ? "Session " + (idx + 1) : "Session") + " " + id.slice(-4);
+  return id;
 }
 
 function renderSessionSelect() {
