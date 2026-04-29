@@ -33,6 +33,10 @@ managed_components/
 # OS
 .DS_Store
 Thumbs.db
+
+# Git worktrees
+.worktrees/
+references/
 .venv/
 
 .codex
