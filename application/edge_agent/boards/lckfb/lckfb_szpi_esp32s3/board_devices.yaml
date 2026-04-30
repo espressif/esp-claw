@@ -1,0 +1,107 @@
+version: 1.0.0
+# Devices Configuration for LCKFB SZPI ESP32-S3
+devices:
+
+  # PCA9557 IO expander initialization (handles PA_EN, LCD_CS, DVP_PWDN)
+  - name: pca9557_expander
+    type: custom
+    version: 1.0.0
+    init_skip: false
+    peripherals:
+      - name: i2c_master
+
+  - name: audio_dac
+    chip: es8311
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: false
+      dac_enabled: true
+      dac_max_channel: 1
+      dac_channel_mask: "1"
+      dac_init_gain: 0
+      mclk_enabled: true
+    peripherals:
+      - name: i2s_audio_out
+      - name: i2c_master
+        address: 0x30
+        frequency: 400000
+
+  - name: audio_adc
+    chip: es7210
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      adc_max_channel: 4
+      adc_channel_mask: "0011"
+      adc_channel_labels: ['NA', 'NA', 'RE', 'FL']
+      adc_init_gain: 0
+    peripherals:
+      - name: i2s_audio_in
+      - name: i2c_master
+        address: 0x82
+        frequency: 400000
+
+  - name: fs_sdcard
+    type: fs_fat
+    sub_type: sdmmc
+    version: default
+    config:
+      sub_config:
+        bus_width: 1
+        pins:
+          clk: 47
+          cmd: 48
+          d0: 21
+
+  - name: display_lcd
+    chip: st7789
+    type: display_lcd
+    sub_type: spi
+    version: default
+    config:
+      mirror_x: false
+      mirror_y: true
+      swap_xy: true
+      invert_color: true
+      x_max: 320
+      y_max: 240
+      io_spi_config:
+        cs_gpio_num: -1
+        dc_gpio_num: 39
+        spi_mode: 0
+        pclk_hz: 80000000
+      lcd_panel_config:
+        reset_gpio_num: -1
+        data_endian: LCD_RGB_DATA_ENDIAN_BIG
+        vendor_config: NULL
+    peripherals:
+      - name: spi_display
+
+  # Touch Panel Configuration (FT6336, compatible with FT5x06 driver)
+  - name: lcd_touch
+    chip: ft5x06
+    type: lcd_touch_i2c
+    version: default
+    dependencies:
+      esp_lcd_touch:
+        version: "*"
+        require: public
+      espressif/esp_lcd_touch_ft5x06: "^1.0.0"
+    config:
+      io_i2c_config:
+        dev_addr: [0x38]
+        lcd_cmd_bits: 8
+        scl_speed_hz: 400000
+        peripherals:
+          - name: i2c_master
+      touch_config:
+        x_max: 320
+        y_max: 240
+
+  - name: lcd_brightness
+    type: ledc_ctrl
+    version: default
+    peripherals:
+      - name: ledc_backlight

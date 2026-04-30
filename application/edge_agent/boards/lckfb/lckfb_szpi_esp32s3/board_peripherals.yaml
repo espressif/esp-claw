@@ -1,0 +1,59 @@
+version: 1.0.0
+# Peripherals Configuration for LCKFB SZPI ESP32-S3
+peripherals:
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 1
+        scl: 2
+
+  # I2S Standard Configuration (shared by ES8311 DAC and ES7210 ADC)
+  - name: i2s_audio_out
+    type: i2s
+    role: master
+    format: std-out
+    config: &i2s0_config
+      port: 0
+      sample_rate_hz: 16000
+      mclk_multiple: 384
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_STEREO
+      slot_mask: I2S_STD_SLOT_BOTH
+      ws_width: 16
+      pins:
+        mclk: 38
+        bclk: 14
+        ws: 13
+        dout: 45
+        din: 12
+
+  - name: i2s_audio_in
+    type: i2s
+    role: master
+    format: std-in
+    config: *i2s0_config
+
+  # LCD SPI Configuration for ST7789
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI3_HOST
+        data0_io_num: 40
+        sclk_io_num: 41
+        max_transfer_sz: 6400
+
+  # LCD BACKLIGHT CONTROL
+  - name: ledc_backlight
+    type: ledc
+    role: none
+    config:
+      gpio_num: 42
+      freq_hz: 5000
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT

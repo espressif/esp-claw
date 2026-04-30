@@ -1,0 +1,5 @@
+board: lckfb_szpi_esp32s3
+chip: esp32s3
+version: 1.0.0
+description: "LCKFB SZPI ESP32-S3 Development Board"
+manufacturer: "LCKFB"
