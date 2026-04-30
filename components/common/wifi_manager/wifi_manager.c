@@ -149,7 +149,10 @@ static void wifi_event_handler(void *arg,
             }
             return;
 
-        case WIFI_EVENT_STA_DISCONNECTED:
+        case WIFI_EVENT_STA_DISCONNECTED: {
+            wifi_event_sta_disconnected_t *disconn = (wifi_event_sta_disconnected_t *)event_data;
+            ESP_LOGW(TAG, "STA disconnected reason: %d, ssid: %.*s",
+                     disconn->reason, disconn->ssid_len, disconn->ssid);
             strlcpy(s_ip_addr, "0.0.0.0", sizeof(s_ip_addr));
             if (s_connected) {
                 s_connected = false;
@@ -180,7 +183,7 @@ static void wifi_event_handler(void *arg,
                 fallback_to_ap();
             }
             return;
-
+        }
         case WIFI_EVENT_AP_START:
             s_ap_active = true;
             refresh_ap_ip_str();
@@ -308,9 +311,11 @@ esp_err_t wifi_manager_start(const wifi_manager_config_t *config)
         wifi_config_t sta_cfg = {0};
         strlcpy((char *)sta_cfg.sta.ssid, config->sta_ssid, sizeof(sta_cfg.sta.ssid));
         strlcpy((char *)sta_cfg.sta.password, config->sta_password ? config->sta_password : "", sizeof(sta_cfg.sta.password));
-        sta_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+        sta_cfg.sta.threshold.authmode = WIFI_AUTH_OPEN;
         sta_cfg.sta.pmf_cfg.capable = true;
         sta_cfg.sta.pmf_cfg.required = false;
+        sta_cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+        sta_cfg.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
 
         s_mode = WIFI_MODE_APSTA_TRYING;
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
