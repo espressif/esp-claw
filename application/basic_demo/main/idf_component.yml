@@ -1,0 +1,154 @@
+## IDF Component Manager Manifest File
+dependencies:
+  espressif/esp_board_manager:
+    version: ^0.5.7
+    public: true
+  espressif/esp_wifi_remote:
+    version: '>=0.10,<2.0'
+    rules:
+    - if: target in [esp32p4]
+  espressif/esp_hosted:
+    version: 2.12.3
+    rules:
+    - if: target in [esp32p4]
+
+  espressif2022/esp_emote_expression:
+    version: ^1.0.0
+
+  espressif2022/esp_emote_gfx:
+    version: 3.0.2
+
+  cap_cli:
+    path: ../../../components/claw_capabilities/cap_cli
+
+  cap_boards:
+    path: ../../../components/claw_capabilities/cap_boards
+
+  cap_files:
+    path: ../../../components/claw_capabilities/cap_files
+
+  cap_im_attachment:
+    path: ../../../components/claw_capabilities/cap_im_attachment
+
+  cap_im_feishu:
+    path: ../../../components/claw_capabilities/cap_im_feishu
+
+  cap_im_qq:
+    path: ../../../components/claw_capabilities/cap_im_qq
+
+  cap_im_tg:
+    path: ../../../components/claw_capabilities/cap_im_tg
+
+  cap_im_wechat:
+    path: ../../../components/claw_capabilities/cap_im_wechat
+
+  cap_llm_inspect:
+    path: ../../../components/claw_capabilities/cap_llm_inspect
+
+  cap_lua:
+    path: ../../../components/claw_capabilities/cap_lua
+
+  cap_mcp_client:
+    path: ../../../components/claw_capabilities/cap_mcp_client
+
+  cap_mcp_server:
+    path: ../../../components/claw_capabilities/cap_mcp_server
+
+  cap_router_mgr:
+    path: ../../../components/claw_capabilities/cap_router_mgr
+
+  cap_session_mgr:
+    path: ../../../components/claw_capabilities/cap_session_mgr
+
+  cap_skill_mgr:
+    path: ../../../components/claw_capabilities/cap_skill_mgr
+
+  cap_system:
+    path: ../../../components/claw_capabilities/cap_system
+
+  cap_scheduler:
+    path: ../../../components/claw_capabilities/cap_scheduler
+
+  cap_time:
+    path: ../../../components/claw_capabilities/cap_time
+
+  cap_web_search:
+    path: ../../../components/claw_capabilities/cap_web_search
+
+  claw_cap:
+    path: ../../../components/claw_modules/claw_cap
+
+  claw_core:
+    path: ../../../components/claw_modules/claw_core
+
+  claw_event_router:
+    path: ../../../components/claw_modules/claw_event_router
+
+  claw_memory:
+    path: ../../../components/claw_modules/claw_memory
+
+  claw_skill:
+    path: ../../../components/claw_modules/claw_skill
+
+  esp_painter:
+    path: ../../../components/lua_modules/esp_painter
+
+  lua_module_adc:
+    path: ../../../components/lua_modules/lua_module_adc
+
+  lua_module_audio:
+    matches:
+    - if: $CONFIG{ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT} == True
+    path: ../../../components/lua_modules/lua_module_audio
+
+  lua_module_board_manager:
+    path: ../../../components/lua_modules/lua_module_board_manager
+
+  lua_module_button:
+    path: ../../../components/lua_modules/lua_module_button
+
+  lua_module_call_capability:
+    path: ../../../components/lua_modules/lua_module_call_capability
+
+  lua_module_camera:
+    matches:
+    - if: $CONFIG{ESP_BOARD_DEV_CAMERA_SUPPORT} == True
+    path: ../../../components/lua_modules/lua_module_camera
+
+  lua_module_delay:
+    path: ../../../components/lua_modules/lua_module_delay
+
+  lua_module_display:
+    path: ../../../components/lua_modules/lua_module_display
+
+  lua_module_esp_heap:
+    path: ../../../components/lua_modules/lua_module_esp_heap
+
+  lua_module_event_publisher:
+    path: ../../../components/lua_modules/lua_module_event_publisher
+
+  lua_module_gpio:
+    path: ../../../components/lua_modules/lua_module_gpio
+
+  lua_module_i2c:
+    path: ../../../components/lua_modules/lua_module_i2c
+
+  lua_module_lcd_touch:
+    matches:
+    - if: $CONFIG{ESP_BOARD_DEV_LCD_TOUCH_I2C_SUPPORT} == True
+    path: ../../../components/lua_modules/lua_module_lcd_touch
+
+  lua_module_led_strip:
+    path: ../../../components/lua_modules/lua_module_led_strip
+
+  lua_module_storage:
+    path: ../../../components/lua_modules/lua_module_storage
+
+  lua_module_system:
+    path: ../../../components/lua_modules/lua_module_system
+
+  lua_module_mcpwm:
+    path: ../../../components/lua_modules/lua_module_mcpwm
+
+  lua_module_uart:
+    path: ../../../components/lua_modules/lua_module_uart

@@ -37,7 +37,8 @@ devices:
     type: custom
     version: default
     dependencies:
-      espressif/usb_host_uvc: "2.4.2"
+      espressif/usb_host_uvc:
+        version: "^2.4.2"
 
   - name: audio_dac
     type: custom
