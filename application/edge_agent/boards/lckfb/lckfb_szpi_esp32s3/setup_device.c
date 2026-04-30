@@ -7,73 +7,84 @@
  */
 
 #include <string.h>
+#include <stdlib.h>
 #include "esp_log.h"
 #include "esp_check.h"
-#include "driver/i2c.h"
+#include "driver/i2c_master.h"
 #include "esp_lcd_panel_st7789.h"
 #include "esp_lcd_touch_ft5x06.h"
-#include "esp_board_manager_includes.h"
+#include "esp_board_periph.h"
 #include "gen_board_device_custom.h"
 
 static const char *TAG = "szpi_setup";
 
 /* PCA9557 IO Expander */
 #define PCA9557_I2C_ADDR            0x19
-#define PCA9557_REG_INPUT           0x00
 #define PCA9557_REG_OUTPUT          0x01
-#define PCA9557_REG_POLARITY        0x02
 #define PCA9557_REG_CONFIG          0x03
 
 #define PCA9557_PIN_LCD_CS          BIT(0)
 #define PCA9557_PIN_PA_EN           BIT(1)
 #define PCA9557_PIN_DVP_PWDN        BIT(2)
 
-static uint8_t s_pca9557_output = 0;
+static i2c_master_dev_handle_t s_pca9557_dev = NULL;
 
 static esp_err_t pca9557_write_reg(uint8_t reg, uint8_t val)
 {
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (PCA9557_I2C_ADDR << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(cmd, reg, true);
-    i2c_master_write_byte(cmd, val, true);
-    i2c_master_stop(cmd);
-    esp_err_t ret = i2c_master_cmd_begin(0, cmd, pdMS_TO_TICKS(100));
-    i2c_cmd_link_delete(cmd);
-    return ret;
-}
-
-static esp_err_t pca9557_init(void)
-{
-    /* Configure pins 0-2 as output (0 = output in config register) */
-    esp_err_t ret = pca9557_write_reg(PCA9557_REG_CONFIG, 0xF8);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "PCA9557 init failed: %s", esp_err_to_name(ret));
-        return ret;
-    }
-    /* Set initial state: LCD_CS=low (active), PA_EN=high (on), DVP_PWDN=high (off) */
-    s_pca9557_output = PCA9557_PIN_PA_EN | PCA9557_PIN_DVP_PWDN;
-    return pca9557_write_reg(PCA9557_REG_OUTPUT, s_pca9557_output);
+    uint8_t data[2] = {reg, val};
+    return i2c_master_transmit(s_pca9557_dev, data, sizeof(data), 100);
 }
 
 static int pca9557_expander_init(void *config, int cfg_size, void **device_handle)
 {
-    (void)config;
-    (void)cfg_size;
-    (void)device_handle;
+    dev_custom_pca9557_expander_config_t *cfg = (dev_custom_pca9557_expander_config_t *)config;
 
-    esp_err_t ret = pca9557_init();
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "PCA9557 expander init failed");
+    /* Get the I2C bus handle from the board manager */
+    i2c_master_bus_handle_t i2c_bus = NULL;
+    esp_err_t ret = esp_board_periph_get_handle(cfg->peripheral_name, (void **)&i2c_bus);
+    if (ret != ESP_OK || i2c_bus == NULL) {
+        ESP_LOGE(TAG, "Failed to get I2C bus '%s': %s", cfg->peripheral_name, esp_err_to_name(ret));
         return ret;
     }
+
+    /* Add PCA9557 device to the I2C bus */
+    const i2c_device_config_t dev_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = PCA9557_I2C_ADDR,
+        .scl_speed_hz = 400000,
+    };
+    ret = i2c_master_bus_add_device(i2c_bus, &dev_cfg, &s_pca9557_dev);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to add PCA9557 to I2C bus: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    /* Configure pins 0-2 as output (0 = output in config register) */
+    ret = pca9557_write_reg(PCA9557_REG_CONFIG, 0xF8);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "PCA9557 config register write failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    /* Set initial state: LCD_CS=low (active), PA_EN=high (on), DVP_PWDN=high (off) */
+    uint8_t output_val = PCA9557_PIN_PA_EN | PCA9557_PIN_DVP_PWDN;
+    ret = pca9557_write_reg(PCA9557_REG_OUTPUT, output_val);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "PCA9557 output register write failed: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
     ESP_LOGI(TAG, "PCA9557 IO expander initialized (PA enabled, LCD_CS active)");
+    *device_handle = (void *)s_pca9557_dev;
     return ESP_OK;
 }
 
 static int pca9557_expander_deinit(void *device_handle)
 {
-    (void)device_handle;
+    if (s_pca9557_dev) {
+        i2c_master_bus_rm_device(s_pca9557_dev);
+        s_pca9557_dev = NULL;
+    }
     return ESP_OK;
 }
 
