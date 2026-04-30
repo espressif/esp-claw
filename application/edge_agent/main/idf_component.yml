@@ -29,6 +29,9 @@ dependencies:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_IM_WECHAT} == True
 
+  cap_voice:
+    path: ../../../components/claw_capabilities/cap_voice
+
   captive_dns:
     path: ../../../components/common/captive_dns
 

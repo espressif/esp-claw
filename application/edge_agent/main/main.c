@@ -22,6 +22,7 @@
 #include "cap_im_wechat.h"
 #endif
 #include "app_config.h"
+#include "cap_voice.h"
 
 #define APP_FATFS_PARTITION_LABEL "storage"
 #define APP_ENABLE_MEM_LOG        (0)
@@ -368,6 +369,13 @@ void app_main(void)
 #endif
 
     register_wifi_command();
+
+    /* Initialize voice assistant (GPIO0 press-to-talk → STT → LLM → TTS) */
+    if (cap_voice_init() == ESP_OK) {
+        cap_voice_start();
+    } else {
+        ESP_LOGW(TAG, "Voice assistant init failed (audio devices not ready?)");
+    }
 
 #if APP_ENABLE_MEM_LOG
     /* Start memory monitor: print internal free, min free, PSRAM free every 20s */

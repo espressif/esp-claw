@@ -5,6 +5,7 @@ set(main_requires
     http_server
     wifi_manager
     cmd_wifi
+    cap_voice
 )
 
 if(CONFIG_APP_CLAW_CAP_IM_WECHAT)
