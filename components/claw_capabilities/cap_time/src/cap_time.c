@@ -22,8 +22,8 @@
 
 static const char *TAG = "cap_time";
 
-#define CAP_TIME_SNTP_PRIMARY_SERVER "pool.ntp.org"
-#define CAP_TIME_SNTP_SECONDARY_SERVER "time.windows.com"
+#define CAP_TIME_SNTP_PRIMARY_SERVER "ntp.aliyun.com"
+#define CAP_TIME_SNTP_SECONDARY_SERVER "cn.ntp.org.cn"
 #define CAP_TIME_SNTP_WAIT_MS 3000
 #define CAP_TIME_SNTP_RETRY_COUNT 15
 #define CAP_TIME_MIN_VALID_EPOCH 1704067200

@@ -23,7 +23,7 @@ typedef struct {
 #define APP_DEFAULT_LLM_API_KEY           "sk-cp-kmRiCzHePZYnDjeLCBP8SKK4bjSzHf15OoN2How3i2000w5z-FnU1UCa8mvUyic2-Ch2c06XNCjEC33R6yjecJ6MWF50urFbF7nicibv_jTn9qELY73REUY"
 #define APP_DEFAULT_LLM_BACKEND_TYPE      ""
 #define APP_DEFAULT_LLM_PROFILE           "custom_openai_compatible"
-#define APP_DEFAULT_LLM_MODEL             "M2.7"
+#define APP_DEFAULT_LLM_MODEL             "MiniMax-M2.7"
 #define APP_DEFAULT_LLM_BASE_URL          "https://api.minimax.chat/v1"
 #define APP_DEFAULT_LLM_AUTH_TYPE         ""
 #define APP_DEFAULT_LLM_TIMEOUT_MS        "120000"
