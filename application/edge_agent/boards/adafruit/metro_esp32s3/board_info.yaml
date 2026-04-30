@@ -1,0 +1,4 @@
+board: metro_esp32s3
+chip: esp32s3
+description: "Adafruit Metro ESP32-S3 (16MB flash / 8MB OPI PSRAM)"
+manufacturer: "Adafruit"

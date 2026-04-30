@@ -125,6 +125,19 @@
           "size": "0x6000"
         }
       }
+    },
+    "adafruit": {
+      "metro_esp32s3": {
+        "features": [],
+        "description": "",
+        "merged_binary": "/merged_binary/metro_esp32s3.bin",
+        "min_flash_size": 16,
+        "min_psram_size": 8,
+        "nvs_info": {
+          "start_addr": "0x9000",
+          "size": "0x6000"
+        }
+      }
     }
   }
 }
