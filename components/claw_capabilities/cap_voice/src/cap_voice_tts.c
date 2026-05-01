@@ -18,8 +18,8 @@
 static const char *TAG = "cap_voice_tts";
 
 #define TTS_TIMEOUT_MS      30000
-#define TTS_MODEL           "speech-02-hd"
-#define TTS_VOICE_ID        "Chinese_elderly_woman_stream"
+#define TTS_MODEL           "speech-2.8-hd"
+#define TTS_VOICE_ID        "female-tianmei"
 #define TTS_SAMPLE_RATE     16000
 
 /* HTTP response accumulator */

@@ -39,6 +39,11 @@ static const char *TAG = "cap_voice";
 #define VOICE_DEBOUNCE_MS       50
 #define WAV_HEADER_SIZE         44
 
+/* SiliconFlow API key for STT (SenseVoice) - separate from Minimax LLM key */
+#ifndef SILICONFLOW_API_KEY
+#define SILICONFLOW_API_KEY     "sk-ksekhezlziqinpeshbzxnbvjxozehrtlotlhvtyxodlsxplg"
+#endif
+
 /* Voice state */
 typedef enum {
     VOICE_STATE_IDLE = 0,
@@ -97,19 +102,46 @@ static void voice_build_wav_header(uint8_t *hdr, uint32_t pcm_data_size)
     hdr[43] = (pcm_data_size >> 24) & 0xFF;
 }
 
-/* Play a short beep tone through the speaker */
-static void voice_play_tone(uint16_t freq_hz, uint32_t duration_ms)
+/* Open both codec devices once (called from init).
+ * Tolerates "already open" (error 262) since board manager or
+ * lua_module_audio may have opened the device earlier. */
+static esp_err_t voice_open_codecs(void)
 {
     esp_codec_dev_sample_info_t fs = {
         .sample_rate = VOICE_SAMPLE_RATE,
         .channel = VOICE_CHANNELS,
         .bits_per_sample = VOICE_BITS,
     };
+    int ret;
 
-    if (esp_codec_dev_open(s_voice.dac_dev, &fs) != ESP_CODEC_DEV_OK) {
-        return;
+    ret = esp_codec_dev_open(s_voice.dac_dev, &fs);
+    if (ret != ESP_CODEC_DEV_OK) {
+        if (ret == 262) {
+            ESP_LOGW(TAG, "DAC already open (ret=%d), reusing", ret);
+        } else {
+            ESP_LOGE(TAG, "Failed to open DAC: %d", ret);
+            return ESP_FAIL;
+        }
+    }
+    esp_codec_dev_set_out_vol(s_voice.dac_dev, 80);
+
+    ret = esp_codec_dev_open(s_voice.adc_dev, &fs);
+    if (ret != ESP_CODEC_DEV_OK) {
+        if (ret == 262) {
+            ESP_LOGW(TAG, "ADC already open (ret=%d), reusing", ret);
+        } else {
+            ESP_LOGE(TAG, "Failed to open ADC: %d", ret);
+            return ESP_FAIL;
+        }
     }
 
+    ESP_LOGI(TAG, "Audio codecs ready (DAC + ADC, 16kHz/16bit/mono)");
+    return ESP_OK;
+}
+
+/* Play a short beep tone through the speaker (codec already open) */
+static void voice_play_tone(uint16_t freq_hz, uint32_t duration_ms)
+{
     uint32_t total_samples = (VOICE_SAMPLE_RATE * duration_ms) / 1000;
     int16_t tone_buf[256];
     uint32_t samples_written = 0;
@@ -118,40 +150,26 @@ static void voice_play_tone(uint16_t freq_hz, uint32_t duration_ms)
         uint32_t chunk = total_samples - samples_written;
         if (chunk > 256) chunk = 256;
         for (uint32_t i = 0; i < chunk; i++) {
-            /* Simple square wave at ~30% volume */
             uint32_t period = VOICE_SAMPLE_RATE / freq_hz;
             tone_buf[i] = ((samples_written + i) % period < period / 2) ? 4000 : -4000;
         }
         esp_codec_dev_write(s_voice.dac_dev, tone_buf, chunk * sizeof(int16_t));
         samples_written += chunk;
     }
-    esp_codec_dev_close(s_voice.dac_dev);
 }
 
-/* Start recording from microphone */
+/* Start recording from microphone (codec already open) */
 static esp_err_t voice_start_recording(void)
 {
-    esp_codec_dev_sample_info_t fs = {
-        .sample_rate = VOICE_SAMPLE_RATE,
-        .channel = VOICE_CHANNELS,
-        .bits_per_sample = VOICE_BITS,
-    };
-
     s_voice.record_len = 0;
-    int ret = esp_codec_dev_open(s_voice.adc_dev, &fs);
-    if (ret != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Failed to open ADC: %d", ret);
-        return ESP_FAIL;
-    }
     ESP_LOGI(TAG, "Recording started...");
     s_voice.state = VOICE_STATE_RECORDING;
     return ESP_OK;
 }
 
-/* Stop recording, close mic */
+/* Stop recording */
 static void voice_stop_recording(void)
 {
-    esp_codec_dev_close(s_voice.adc_dev);
     s_voice.state = VOICE_STATE_PROCESSING;
     ESP_LOGI(TAG, "Recording stopped. %zu bytes captured (%.1f sec)",
              s_voice.record_len,
@@ -174,21 +192,9 @@ static void voice_record_chunk(void)
     }
 }
 
-/* Play raw PCM data through speaker */
+/* Play raw PCM data through speaker (codec already open) */
 static void voice_play_pcm(const uint8_t *pcm, size_t len)
 {
-    esp_codec_dev_sample_info_t fs = {
-        .sample_rate = VOICE_SAMPLE_RATE,
-        .channel = VOICE_CHANNELS,
-        .bits_per_sample = VOICE_BITS,
-    };
-
-    if (esp_codec_dev_open(s_voice.dac_dev, &fs) != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Failed to open DAC for playback");
-        return;
-    }
-    esp_codec_dev_set_out_vol(s_voice.dac_dev, 80);
-
     size_t offset = 0;
     while (offset < len) {
         size_t chunk = len - offset;
@@ -196,7 +202,6 @@ static void voice_play_pcm(const uint8_t *pcm, size_t len)
         esp_codec_dev_write(s_voice.dac_dev, (void *)(pcm + offset), chunk);
         offset += chunk;
     }
-    esp_codec_dev_close(s_voice.dac_dev);
 }
 
 /* Process recorded audio: STT → LLM → TTS → Play */
@@ -225,10 +230,18 @@ static void voice_process_recording(void)
     const char *api_key = config.llm_api_key;
     const char *base_url = config.llm_base_url;
 
-    /* Step 1: STT */
+    /* Step 1: STT (uses SiliconFlow API key, not Minimax) */
     ESP_LOGI(TAG, "Step 1/3: Speech-to-Text...");
     char *stt_text = NULL;
-    esp_err_t err = cap_voice_stt_transcribe(wav_buf, wav_size, api_key, base_url, &stt_text);
+    const char *stt_key = SILICONFLOW_API_KEY;
+    if (!stt_key[0]) {
+        ESP_LOGE(TAG, "SiliconFlow API key not configured!");
+        free(wav_buf);
+        voice_play_tone(200, 300);
+        s_voice.state = VOICE_STATE_IDLE;
+        return;
+    }
+    esp_err_t err = cap_voice_stt_transcribe(wav_buf, wav_size, stt_key, NULL, &stt_text);
     free(wav_buf);
 
     if (err != ESP_OK || !stt_text || stt_text[0] == '\0') {
@@ -356,6 +369,13 @@ esp_err_t cap_voice_init(void)
     err = esp_board_manager_get_device_handle("audio_adc", (void **)&s_voice.adc_dev);
     if (err != ESP_OK || !s_voice.adc_dev) {
         ESP_LOGE(TAG, "Failed to get audio_adc handle");
+        return ESP_FAIL;
+    }
+
+    /* Open both codec devices once and keep open */
+    err = voice_open_codecs();
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to open audio codecs");
         return ESP_FAIL;
     }
 

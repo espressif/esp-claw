@@ -18,7 +18,8 @@
 static const char *TAG = "cap_voice_stt";
 
 #define STT_TIMEOUT_MS      30000
-#define STT_MODEL           "speech-01"
+#define STT_MODEL           "FunAudioLLM/SenseVoiceSmall"
+#define STT_BASE_URL        "https://api.siliconflow.cn/v1"
 #define BOUNDARY            "----VoiceBoundary9876543210"
 
 /* HTTP response accumulator */
@@ -58,10 +59,9 @@ esp_err_t cap_voice_stt_transcribe(const uint8_t *wav_data, size_t wav_len,
     }
     *out_text = NULL;
 
-    /* Build URL: base_url + /audio/transcriptions */
+    /* Build URL: use SiliconFlow STT endpoint (separate from LLM base_url) */
     char url[256];
-    const char *effective_base = (base_url && base_url[0]) ? base_url : "https://api.minimax.chat/v1";
-    snprintf(url, sizeof(url), "%s/audio/transcriptions", effective_base);
+    snprintf(url, sizeof(url), "%s/audio/transcriptions", STT_BASE_URL);
 
     /* Build multipart body */
     const char *part_model_fmt =
