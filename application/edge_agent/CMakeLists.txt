@@ -3,6 +3,11 @@ cmake_minimum_required(VERSION 3.16)
 include("${CMAKE_SOURCE_DIR}/tools/cmake/esp_idf_patch.cmake")
 include("${CMAKE_SOURCE_DIR}/tools/cmake/flash_partition_defaults.cmake")
 
+# Board Manager bypasses idf.py and calls cmake directly, so SDKCONFIG_DEFAULTS
+# (sdkconfig.defaults + board_manager.defaults) is never passed to cmake.
+# Must set the target chip explicitly before project().
+set(ENV{IDF_TARGET} esp32s3)
+
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(edge_agent)
 include("${CMAKE_SOURCE_DIR}/tools/cmake/board_manager_patch.cmake")

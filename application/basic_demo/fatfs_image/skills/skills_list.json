@@ -1,0 +1,278 @@
+{
+  "skills": [
+    {
+      "id": "board_hardware_info",
+      "file": "board_hardware_info.md",
+      "summary": "Use this skill before operating hardware or writing Lua and board-specific code that depends on device inventory and occupied GPIOs. **You cannot speculate or fabricate hardware information.**",
+      "cap_groups": [
+        "cap_boards"
+      ]
+    },
+    {
+      "id": "cap_im_feishu",
+      "file": "cap_im_feishu.md",
+      "summary": "How to send additional text, images, and files to Feishu.",
+      "cap_groups": [
+        "cap_im_feishu"
+      ]
+    },
+    {
+      "id": "cap_im_qq",
+      "file": "cap_im_qq.md",
+      "summary": "How to send additional text or send local files back to QQ.",
+      "cap_groups": [
+        "cap_im_qq"
+      ]
+    },
+    {
+      "id": "cap_im_tg",
+      "file": "cap_im_tg.md",
+      "summary": "How to send additional text, images, and files to Telegram.",
+      "cap_groups": [
+        "cap_im_tg"
+      ]
+    },
+    {
+      "id": "cap_im_wechat",
+      "file": "cap_im_wechat.md",
+      "summary": "How to send additional text and images to WeChat.",
+      "cap_groups": [
+        "cap_im_wechat"
+      ]
+    },
+    {
+      "id": "cap_llm_inspect_image",
+      "file": "cap_llm_inspect.md",
+      "summary": "How to inspect a local image with inspect_image.",
+      "cap_groups": [
+        "cap_llm_inspect"
+      ]
+    },
+    {
+      "id": "cap_lua_list",
+      "file": "cap_lua_list.md",
+      "summary": "Discover Lua scripts across builtin/temp/user, prefer reusing existing scripts, and map listed relative paths to read_file paths.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "cap_lua_edit",
+      "file": "cap_lua_edit.md",
+      "summary": "Create and update Lua scripts through cap_lua, preferring existing scripts first and using builtin as references with temp/user for iteration.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "cap_lua_run",
+      "file": "cap_lua_run.md",
+      "summary": "Run Lua scripts from builtin/temp/user sync or async, preferring existing scripts before creating new ones, and manage background Lua jobs.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "cap_lua_patterns",
+      "file": "cap_lua_patterns.md",
+      "summary": "Reusable Lua patterns for scripts that run through cap_lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "cap_router_mgr",
+      "file": "cap_router_mgr.md",
+      "summary": "Manage router automation rules: list/get/add/update/delete/reload with strict rule_json format.",
+      "cap_groups": [
+        "cap_router_mgr"
+      ]
+    },
+    {
+      "id": "cap_scheduler",
+      "file": "cap_scheduler.md",
+      "summary": "Manage scheduler rules: list/get/add/update/remove/enable/disable/pause/resume/trigger/reload.",
+      "cap_groups": [
+        "cap_scheduler"
+      ]
+    },
+    {
+      "id": "cap_time",
+      "file": "cap_time.md",
+      "summary": "Fetch and sync current network time through the get_current_time capability.",
+      "cap_groups": [
+        "cap_time"
+      ]
+    },
+    {
+      "id": "cap_web_search",
+      "file": "cap_web_search.md",
+      "summary": "Search the public web for current information through the configured Tavily or Brave provider.",
+      "cap_groups": [
+        "cap_web_search"
+      ]
+    },
+    {
+      "id": "memory_ops",
+      "file": "memory_ops.md",
+      "summary": "Use on-device long-term memory tools to remember, recall, list, update, and forget structured memories.",
+      "cap_groups": [
+        "claw_memory"
+      ]
+    },
+    {
+      "id": "profile_memory_ops",
+      "file": "profile_memory_ops.md",
+      "summary": "Use the editable profile markdown files to persist changes to the agent's soul, identity card, persona, role, and the user's standing profile.",
+      "cap_groups": [
+        "cap_files"
+      ]
+    },
+    {
+      "id": "lua_module_adc",
+      "file": "lua_module_adc.md",
+      "summary": "How to read analog values (raw or millivolts) from an ADC-capable GPIO in Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_audio",
+      "file": "lua_module_audio.md",
+      "summary": "How to create audio input/output handles and play, record, or inspect audio from Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_board_manager",
+      "file": "lua_module_board_manager.md",
+      "summary": "How to query board information and resolve device handles and parameters from Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_button",
+      "file": "lua_module_button.md",
+      "summary": "How to create button handles, subscribe to events, and dispatch button state from Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_capability",
+      "file": "lua_module_capability.md",
+      "summary": "How to call registered capabilities from Lua through capability.call(name, payload[, opts]).",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_camera",
+      "file": "lua_module_camera.md",
+      "summary": "How to open a camera, inspect stream info, capture frames, and close it from Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_delay",
+      "file": "lua_module_delay.md",
+      "summary": "How to call delay.delay_ms(ms) from Lua after loading the delay module.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_display",
+      "file": "lua_module_display.md",
+      "summary": "How to draw shapes, text, bitmaps, and images on the display from Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_esp_heap",
+      "file": "lua_module_esp_heap.md",
+      "summary": "How to query heap capability flags, memory usage, and task watermarks from Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_event_publisher",
+      "file": "lua_module_event_publisher.md",
+      "summary": "Describe how to publish events to event_router to trigger other actions, such as sending messages or call other capabilities.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_gpio",
+      "file": "lua_module_gpio.md",
+      "summary": "How to set GPIO direction, write level, and read level from Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_i2c",
+      "file": "lua_module_i2c.md",
+      "summary": "How to create an I2C bus, scan it, and read/write I2C devices from Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_led_strip",
+      "file": "lua_module_led_strip.md",
+      "summary": "How to create and control an LED strip from Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_mcpwm",
+      "file": "lua_module_mcpwm.md",
+      "title": "lua_module_mcpwm",
+      "summary": "How to create and control generic PWM output from Lua with MCPWM.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_storage",
+      "file": "lua_module_storage.md",
+      "summary": "How to create directories and read or write files from Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_system",
+      "file": "lua_module_system.md",
+      "summary": "How to access time, uptime, memory, and Wi-Fi info from Lua through the system module.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_uart",
+      "file": "lua_module_uart.md",
+      "summary": "How to open a UART port and read/write bytes or text lines from Lua using polling.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "weather_search",
+      "file": "weather.md",
+      "summary": "How to answer current weather, temperature, and forecast queries through direct web search capabilities.",
+      "cap_groups": [
+        "cap_time",
+        "cap_web_search"
+      ]
+    }
+  ]
+}
