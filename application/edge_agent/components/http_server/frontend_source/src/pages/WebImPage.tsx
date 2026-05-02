@@ -1,5 +1,6 @@
 import { ImagePlus, SendHorizontal } from 'lucide-solid';
 import { createSignal, For, onCleanup, onMount, Show, type Component } from 'solid-js';
+import type { JSX } from 'solid-js';
 import {
   createFolder,
   fetchWebimStatus,
@@ -175,6 +176,7 @@ export const WebImPage: Component = () => {
     const text = input().trim();
     const files = pendingPaths();
     if (!text && files.length === 0) return;
+    if (!wsReady()) return;
     if (bound() === false) {
       pushToast(t('webimNoBind') as string, 'error', 5000);
       return;
@@ -197,9 +199,29 @@ export const WebImPage: Component = () => {
     }
   };
 
+  const onInputKeyDown: JSX.EventHandler<HTMLTextAreaElement, KeyboardEvent> = (e) => {
+    if (e.ctrlKey && e.key === 'Enter') {
+      e.preventDefault();
+      if (!sending() && wsReady()) {
+        void send();
+      }
+    }
+  };
+
   return (
     <TabShell>
-      <PageHeader title={t('navWebIm') as string} description={t('webimDesc') as string} />
+      <PageHeader
+        title={t('navWebIm') as string}
+        description={t('webimDesc') as string}
+        actions={
+          <Show when={wsReady()}>
+            <span class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-[rgba(104,211,145,0.2)] bg-[var(--color-green-dim)] text-[var(--color-green)] text-[0.78rem] font-medium">
+              <span class="w-1.5 h-1.5 rounded-full bg-[var(--color-green)] pulse-dot" />
+              {t('webimOnline')}
+            </span>
+          </Show>
+        }
+      />
 
       <Show when={error()}>
         <div class="px-5 pt-2">
@@ -212,18 +234,9 @@ export const WebImPage: Component = () => {
         </div>
       </Show>
 
-      <p class="text-[0.78rem] text-[var(--color-text-muted)] px-5 mt-2 mb-0">{t('webimLiveHint')}</p>
-      <Show when={bound() === true}>
-        <p class="text-[0.76rem] text-[var(--color-text-muted)] px-5 mt-1 mb-0">
-          {wsReady()
-            ? (t('webimWsConnected') as string)
-            : (t('webimWsReconnecting') as string)}
-        </p>
-      </Show>
-
-      <div class="mt-4 flex flex-col min-h-[420px]">
-        <div class="flex-1 flex flex-col min-w-0 border border-[var(--color-border-subtle)] rounded-[var(--radius-md)] bg-white/[0.02]">
-          <div class="flex-1 overflow-auto p-4 flex flex-col gap-3">
+      <div class="flex flex-col min-h-[420px]">
+        <div class="flex-1 flex flex-col min-w-0 border border-[var(--color-border-subtle)] rounded-none bg-white/[0.02]">
+          <div class="relative flex-1 overflow-auto p-4 flex flex-col gap-3">
             <For each={messages()}>
               {(m) => (
                 <div
@@ -255,8 +268,19 @@ export const WebImPage: Component = () => {
                 </div>
               )}
             </For>
-            <Show when={messages().length === 0}>
-              <p class="text-[0.82rem] text-[var(--color-text-muted)] m-0">{t('webimEmpty')}</p>
+            <Show when={!wsReady() || messages().length === 0}>
+              <div class="absolute inset-0 flex items-center justify-center p-4 pointer-events-none">
+                <p
+                  class={[
+                    'm-0 text-center inline-flex items-center px-4 py-2 rounded-full border text-[0.82rem] font-medium',
+                    !wsReady()
+                      ? 'border-[rgba(245,158,11,0.28)] bg-[rgba(245,158,11,0.12)] text-[rgb(245,158,11)]'
+                      : 'border-[rgba(104,211,145,0.2)] bg-[var(--color-green-dim)] text-[var(--color-green)]',
+                  ].join(' ')}
+                >
+                  {!wsReady() ? (t('webimWsReconnecting') as string) : (t('webimEmpty') as string)}
+                </p>
+              </div>
             </Show>
           </div>
 
@@ -272,6 +296,7 @@ export const WebImPage: Component = () => {
               placeholder={t('webimPlaceholder') as string}
               value={input()}
               onInput={(e) => setInput(e.currentTarget.value)}
+              onKeyDown={onInputKeyDown}
             />
             <div class="flex flex-wrap items-center gap-2">
               <input
@@ -286,14 +311,22 @@ export const WebImPage: Component = () => {
                 variant="secondary"
                 type="button"
                 onClick={() => fileRef?.click()}
-                disabled={sending()}
+                disabled={sending() || !wsReady()}
               >
                 <span class="inline-flex items-center gap-1.5">
                   <ImagePlus class="w-4 h-4" />
                   {t('webimAttach')}
                 </span>
               </Button>
-              <Button size="sm" variant="primary" onClick={() => void send()} disabled={sending()}>
+              <span class="text-[0.76rem] text-[var(--color-text-muted)] sm:ml-auto">
+                {t('webimSendShortcut')}
+              </span>
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={() => void send()}
+                disabled={sending() || !wsReady()}
+              >
                 <span class="inline-flex items-center gap-1.5">
                   <SendHorizontal class="w-4 h-4" />
                   {t('webimSend')}

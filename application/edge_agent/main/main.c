@@ -15,9 +15,12 @@
 #include "esp_vfs_fat.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_system.h"
 #include "esp_board_manager_includes.h"
 #include "captive_dns.h"
 #include "cmd_wifi.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #if CONFIG_APP_CLAW_CAP_IM_WECHAT
 #include "cap_im_wechat.h"
 #endif
@@ -134,6 +137,19 @@ static esp_err_t main_get_wifi_status(http_server_wifi_status_t *status)
     status->ap_ip = wifi_status.ap_ip;
     status->wifi_mode = wifi_status.mode;
     return ESP_OK;
+}
+
+static void main_restart_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+}
+
+static esp_err_t main_restart_device(void)
+{
+    BaseType_t ok = xTaskCreate(main_restart_task, "http_restart", 2048, NULL, 5, NULL);
+    return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
 #if CONFIG_APP_CLAW_CAP_IM_WECHAT
@@ -317,6 +333,7 @@ void app_main(void)
             .load_config = main_load_config,
             .save_config = main_save_config,
             .get_wifi_status = main_get_wifi_status,
+            .restart_device = main_restart_device,
 #if CONFIG_APP_CLAW_CAP_IM_WECHAT
             .wechat_login_start = main_wechat_login_start,
             .wechat_login_get_status = main_wechat_login_get_status,

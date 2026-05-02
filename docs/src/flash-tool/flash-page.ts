@@ -1,1371 +1,1568 @@
-/// <reference types="w3c-web-serial" />
-import { generate } from "lean-qr";
-import { ESPLoader, Transport } from "esptool-js";
-import type { Lang, Strings } from "../flash-tool/i18n";
-import type { FirmwareDb, FirmwareEntry } from "../flash-tool/firmware-db";
-import { getFirmwareList, parseAddr } from "../flash-tool/firmware-db";
-import { generateNvsPartition, type NvsConfig } from "../flash-tool/nvs-gen";
+import { connect, connectWithPort, type ESPLoader, type Logger } from "tasmota-webserial-esptool";
 
-interface FlashBoot {
-  lang: Lang;
+type FirmwareRecord = {
+  description?: string;
+  merged_binary: string;
+  min_flash_size?: number;
+  min_psram_size?: number;
+};
+
+type FirmwareBoards = Record<string, FirmwareRecord>;
+type FirmwareBrands = Record<string, FirmwareBoards>;
+type FirmwareDb = Record<string, FirmwareBrands>;
+
+type Strings = {
+  connectBtn: string;
+  disconnectBtn: string;
+  connectingMsg: string;
+  notConnected: string;
+  connectedTo: string;
+  webSerialUnsupported: string;
+  connectErrorPrefix: string;
+  chipSectionTitle: string;
+  boardSectionTitle: string;
+  chooseChipLabel: string;
+  chooseBrandLabel: string;
+  chooseBoardLabel: string;
+  chooseChipPlaceholder: string;
+  chooseBrandPlaceholder: string;
+  boardAutoHint: string;
+  boardManualHint: string;
+  selectedBoardLabel: string;
+  noBrandSelected: string;
+  noBoardSelected: string;
+  boardFlashMeta: string;
+  boardPsramMeta: string;
+  psramUnknown: string;
+  firmwareRequirementsLabel: string;
+  firmwareDescriptionLabel: string;
+  downloadFirmwareLocalLink: string;
+  downloadBtn: string;
+  flashBtn: string;
+  flashBtnDisabledNoDevice: string;
+  flashBtnDisabledNoFirmware: string;
+  flashBtnDisabledNoMatch: string;
+  actionReadyHint: string;
+  noFirmwareTitle: string;
+  noFirmwareDesc: string;
+  viewSupportedBoardsBtn: string;
+  progressLabel: string;
+  downloadingFirmware: string;
+  writingFlash: string;
+  waitingForDeviceInfo: string;
+  flashSuccess: string;
+  flashError: string;
+  postFlashReconnectTitle: string;
+  postFlashReconnectDesc: string;
+  postFlashReconnectBtn: string;
+  postFlashReconnectBusy: string;
+  postFlashReconnectSuccess: string;
+  postFlashReconnectError: string;
+  wifiSectionTitle: string;
+  wifiPrompt: string;
+  wifiSsidLabel: string;
+  wifiPasswordLabel: string;
+  wifiPasswordLengthError: string;
+  wifiSubmitBtn: string;
+  wifiConnecting: string;
+  wifiProbeError: string;
+  wifiTimeoutError: string;
+  wifiReadyTitle: string;
+  wifiReadyDesc: string;
+  openDeviceBtn: string;
+  consoleToggleOpen: string;
+  consoleToggleClose: string;
+  consoleTitle: string;
+  consoleClearBtn: string;
+  consoleResetBtn: string;
+  consoleResetUnsupported: string;
+  consoleWaiting: string;
+  consoleSendBtn: string;
+  consoleSendPlaceholder: string;
+  consoleCloseBtn: string;
+  deviceChipLabel: string;
+  deviceRevisionLabel: string;
+  deviceFlashLabel: string;
+  devicePsramLabel: string;
+  tabFlash: string;
+  tabConsole: string;
+  consoleTabDisabledHint: string;
+  modalStep1Title: string;
+  modalStep2Title: string;
+  modalStep3Title: string;
+  terminalLabel: string;
+};
+
+type BootData = {
+  lang: string;
   firmwareDb: FirmwareDb;
   strings: Strings;
+  boardsHref: string;
+};
+
+type DeviceInfo = {
+  chipName: string | null;
+  chipKey: string | null;
+  chipRevision: number | null;
+  flashSizeMb: number | null;
+  psramSizeMb: number | null;
+};
+
+type VisibleBoard = {
+  chipKey: string;
+  brandKey: string;
+  boardKey: string;
+  firmware: FirmwareRecord;
+};
+
+type WifiStatus = {
+  connected: boolean;
+  configured: boolean;
+  ip: string | null;
+};
+
+type Waiter<T> = {
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+  timer: number;
+};
+
+const bootEl = document.getElementById("flash-boot");
+if (!bootEl?.textContent) {
+  throw new Error("Missing flash boot data");
 }
 
-function readBoot(): FlashBoot {
-  const raw = document.getElementById("flash-boot")?.textContent ?? "{}";
-  return JSON.parse(raw) as FlashBoot;
-}
+const boot = JSON.parse(bootEl.textContent) as BootData;
+const { firmwareDb, strings: s } = boot;
+const chipKeys = Object.keys(firmwareDb);
 
-const { firmwareDb, strings: s } = readBoot();
+const els = {
+  unsupportedBanner: must("unsupported-banner"),
+  connectBar: must("connect-bar"),
+  connectBarIdle: must("connect-bar-idle"),
+  connectBarActive: must("connect-bar-active"),
+  connectBtn: must<HTMLButtonElement>("connect-btn"),
+  connectBtnLabel: must("connect-btn-label"),
+  disconnectBtn: must<HTMLButtonElement>("disconnect-btn"),
+  statusText: must("status-text"),
+  infoChip: must("info-chip"),
+  infoRevision: must("info-revision"),
+  infoRevisionSep: must("info-revision-sep"),
+  infoFlash: must("info-flash"),
+  infoFlashSep: must("info-flash-sep"),
+  infoPsram: must("info-psram"),
+  infoPsramSep: must("info-psram-sep"),
+  connectError: must("connect-error"),
+  selectionCard: must("selection-card"),
+  selectionFields: must("selection-fields"),
+  chipSelect: must<HTMLSelectElement>("chip-select"),
+  brandSelect: must<HTMLSelectElement>("brand-select"),
+  boardSelect: must<HTMLSelectElement>("board-select"),
+  selectedBoardName: must("selected-board-name"),
+  selectedBoardDesc: must("selected-board-desc"),
+  selectedBoardMeta: must("selected-board-meta"),
+  downloadBtn: must<HTMLAnchorElement>("download-btn"),
+  flashBtn: must<HTMLButtonElement>("flash-btn"),
+  flashHint: must("flash-hint"),
+  actionConnectBtn: must<HTMLButtonElement>("action-connect-btn"),
+  actionConnectBtnLabel: must("action-connect-btn-label"),
+  actionDisconnectBtn: must<HTMLButtonElement>("action-disconnect-btn"),
+  consoleToggleBtn: must<HTMLButtonElement>("console-toggle-btn"),
+  consoleToggleBtnLabel: must("console-toggle-btn-label"),
+  noFirmwareCard: must("no-firmware-card"),
+  selectedBoardSummary: must("selected-board-summary"),
 
-function sleep(ms: number) {
-  return new Promise<void>((r) => setTimeout(r, ms));
-}
+  // Console content
+  consolePanel: must("console-panel"),
+  consoleOutput: must("console-output"),
+  consoleEmpty: must("console-empty"),
+  consoleClearBtn: must<HTMLButtonElement>("console-clear-btn"),
+  consoleResetBtn: must<HTMLButtonElement>("console-reset-btn"),
+  consoleSendInput: must<HTMLInputElement>("console-send-input"),
+  consoleSendBtn: must<HTMLButtonElement>("console-send-btn"),
 
-/** ESPLoader keeps a background readLoop() with an exclusive reader; raw console read must stop it first.
- * Transport declares `reader` as private, so we narrow via `unknown` instead of intersecting (which becomes `never`). */
-async function stopEsptoolReadLoop(t: InstanceType<typeof Transport> | null) {
-  if (!t) return;
-  const reader = (t as unknown as { reader?: ReadableStreamDefaultReader<Uint8Array> }).reader;
-  try {
-    await reader?.cancel();
-  } catch {}
-  for (let i = 0; i < 30; i++) {
-    await t.waitForUnlock(50);
-    const { readable } = t.device;
-    if (!readable || !readable.locked) break;
-  }
-}
+  // Flash modal
+  flashModalBg: must("flash-modal-bg"),
+  modalCloseBtn: must<HTMLButtonElement>("modal-close-btn"),
+  modalStep1Indicator: must("modal-step1-indicator"),
+  modalStep2Indicator: must("modal-step2-indicator"),
+  modalStep3Indicator: must("modal-step3-indicator"),
+  modalStep1Body: must("modal-step1-body"),
+  modalStep2Body: must("modal-step2-body"),
+  modalStep3Body: must("modal-step3-body"),
+  modalFlashResult: must("modal-flash-result"),
+  modalProgressWrap: must("modal-progress-wrap"),
+  modalProgressStage: must("modal-progress-stage"),
+  modalProgressPct: must("modal-progress-pct"),
+  modalProgressBar: must("modal-progress-bar"),
+  modalProgressLog: must("modal-progress-log"),
+  modalReconnectPrompt: must("modal-reconnect-prompt"),
+  modalReconnectBtn: must<HTMLButtonElement>("modal-reconnect-btn"),
+  modalReconnectStatus: must("modal-reconnect-status"),
+  modalWifiPrompt: must("modal-wifi-prompt"),
+  modalWifiSsid: must<HTMLInputElement>("modal-wifi-ssid"),
+  modalWifiPassword: must<HTMLInputElement>("modal-wifi-password"),
+  modalWifiSubmitBtn: must<HTMLButtonElement>("modal-wifi-submit-btn"),
+  modalWifiStatus: must("modal-wifi-status"),
+  modalReadyTitle: must("modal-ready-title"),
+  modalReadyDesc: must("modal-ready-desc"),
+  modalReadyLink: must<HTMLAnchorElement>("modal-ready-link"),
+  modalTerminalDetails: must<HTMLDetailsElement>("modal-terminal-details"),
+  modalTerminalOutput: must("modal-terminal-output"),
+  modalTerminalEmpty: must("modal-terminal-empty"),
+};
 
-let chipInfo: { chipName: string; flashSizeMB: number; psramSizeMB: number | null } | null = null;
-let selectedFirmware: FirmwareEntry | null = null;
-/** True while ESPLoader's readLoop is expected to be running (connect / flash tab). */
-let esptoolReadLoopRunning = false;
-let consoleActive = false;
-let isFlashing = false;
-let transport: InstanceType<typeof Transport> | null = null;
-let loader: InstanceType<typeof ESPLoader> | null = null;
+const state = {
+  serial: "idle" as "unsupported" | "idle" | "connecting" | "connected" | "error",
+  flash: "idle" as "idle" | "downloading" | "flashing" | "flashed" | "postflash" | "error",
+  provision:
+    "idle" as
+      | "idle"
+      | "waiting_boot"
+      | "waiting_reconnect"
+      | "probing_wifi"
+      | "need_wifi"
+      | "connecting_wifi"
+      | "ready"
+      | "error",
+  activeTab: "flash" as "flash" | "console",
+  modalStep: 0 as 0 | 1 | 2 | 3,
+  modalCanClose: false,
+  loader: null as ESPLoader | null,
+  device: {
+    chipName: null,
+    chipKey: null,
+    chipRevision: null,
+    flashSizeMb: null,
+    psramSizeMb: null,
+  } as DeviceInfo,
+  selectedChip: (chipKeys[0] ?? null) as string | null,
+  selectedBrand: null as string | null,
+  selectedBoardId: null as string | null,
+  visibleBoards: [] as VisibleBoard[],
+  readyIp: null as string | null,
+  progressLines: [] as string[],
+  consoleText: "",
+  consoleReader: null as ReadableStreamDefaultReader<Uint8Array> | null,
+  consoleReading: false,
+  consoleLineBuffer: "",
+  statusWaiters: [] as Waiter<WifiStatus>[],
+  readyWaiters: [] as Waiter<string>[],
+  inConsoleMode: false,
+  reconnectingPort: false,
+};
 
-let consoleReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
-let consoleReadPromise: Promise<void> | null = null;
-
-const connectBtn = document.getElementById("connect-btn") as HTMLButtonElement;
-const connectBtnOriginalHTML = connectBtn.innerHTML;
-const disconnectBtn = document.getElementById("disconnect-btn") as HTMLButtonElement;
-const connectBar = document.getElementById("connect-bar") as HTMLDivElement;
-const connectBarIdle = document.getElementById("connect-bar-idle") as HTMLDivElement;
-const connectBarActive = document.getElementById("connect-bar-active") as HTMLDivElement;
-const mainContent = document.getElementById("main-content") as HTMLDivElement;
-const statusBadge = document.getElementById("status-badge") as HTMLSpanElement;
-const statusText = document.getElementById("status-text") as HTMLSpanElement;
-const infoChip = document.getElementById("info-chip") as HTMLSpanElement;
-const infoFlash = document.getElementById("info-flash") as HTMLSpanElement;
-const infoPsram = document.getElementById("info-psram") as HTMLSpanElement;
-const infoPsramSep = document.getElementById("info-psram-sep") as HTMLSpanElement;
-const firmwareGrid = document.getElementById("firmware-grid") as HTMLDivElement;
-const firmwareDesc = document.getElementById("firmware-desc") as HTMLDivElement;
-const noFirmwareCard = document.getElementById("no-firmware-card") as HTMLDivElement;
-const configForm = document.getElementById("config-form") as HTMLDivElement;
-const flashBtn = document.getElementById("flash-btn") as HTMLButtonElement;
-const flashHint = document.getElementById("flash-hint") as HTMLSpanElement;
-const progressWrap = document.getElementById("progress-wrap") as HTMLDivElement;
-const progressBar = document.getElementById("progress-bar") as HTMLDivElement;
-const progressStage = document.getElementById("progress-stage") as HTMLSpanElement;
-const progressPct = document.getElementById("progress-pct") as HTMLSpanElement;
-const progressLog = document.getElementById("progress-log") as HTMLDivElement;
-const flashResult = document.getElementById("flash-result") as HTMLDivElement;
-const tabFlashBtn = document.getElementById("tab-flash-btn") as HTMLButtonElement;
-const tabConsoleBtn = document.getElementById("tab-console-btn") as HTMLButtonElement;
-const tabFlash = document.getElementById("tab-flash") as HTMLDivElement;
-const tabConsole = document.getElementById("tab-console") as HTMLDivElement;
-const consoleOutput = document.getElementById("console-output") as HTMLDivElement;
-const consoleInput = document.getElementById("console-input") as HTMLInputElement;
-const consoleSendBtn = document.getElementById("console-send-btn") as HTMLButtonElement;
-const consoleClearBtn = document.getElementById("console-clear-btn") as HTMLButtonElement;
-const consoleResetBtn = document.getElementById("console-reset-btn") as HTMLButtonElement;
-const unsupportedBanner = document.getElementById("unsupported-banner") as HTMLDivElement;
-const wifiPasswordInput = document.getElementById("wifi_password") as HTMLInputElement | null;
-const timezoneInput = document.getElementById("time_timezone") as HTMLInputElement | null;
-const llmModeSelect = document.getElementById("llm_mode") as HTMLSelectElement | null;
-const llmBaseUrlInput = document.getElementById("llm_base_url") as HTMLInputElement | null;
-const llmVendorActions = document.getElementById("llm_vendor_actions") as HTMLDivElement | null;
-const llmApiKeyLink = document.getElementById("llm_api_key_link") as HTMLAnchorElement | null;
-const llmDocsLink = document.getElementById("llm_docs_link") as HTMLAnchorElement | null;
-const imChannelList = document.getElementById("im-channel-list") as HTMLDivElement | null;
-const imAddBtn = document.getElementById("im-add-btn") as HTMLButtonElement | null;
-const imAddMenu = document.getElementById("im-add-menu") as HTMLDivElement | null;
-const WECHAT_ILINK_BASE_URL =
-  (import.meta.env.PUBLIC_WECHAT_ILINK_BASE_URL as string | undefined)?.trim().replace(/\/+$/, "") ||
-  "https://ilinkai.weixin.qq.com";
-const WECHAT_BOT_TYPE = 3;
-const WECHAT_POLL_INTERVAL_MS = 1500;
-const WECHAT_QR_SIZE = 180;
-
-// ─── IM channel state ─────────────────────────────────────────────────────────
-
-/** Channels currently added by the user (in insertion order). */
-const activeChannels: string[] = [];
-
-interface ImChannelDef {
-  fields: Array<{ id: string; labelKey: keyof typeof s; type: string; full?: boolean }>;
-}
-
-const IM_CHANNEL_DEFS: Record<string, ImChannelDef> = {
-  qq: {
-    fields: [
-      { id: "qq_app_id",     labelKey: "qqAppIdLabel",     type: "text" },
-      { id: "qq_app_secret", labelKey: "qqAppSecretLabel", type: "password" },
-    ],
+const logger: Logger = {
+  log(message: string) {
+    addProgressLine(message);
+    appendConsole(`[tool] ${message}\n`);
   },
-  feishu: {
-    fields: [
-      { id: "feishu_app_id",     labelKey: "feishuAppIdLabel",     type: "text" },
-      { id: "feishu_app_secret", labelKey: "feishuAppSecretLabel", type: "password" },
-    ],
+  error(message: string) {
+    addProgressLine(message);
+    appendConsole(`[error] ${message}\n`);
   },
-  tg: {
-    fields: [
-      { id: "tg_bot_token", labelKey: "tgBotTokenLabel", type: "password", full: true },
-    ],
-  },
-  wechat: {
-    fields: [],
+  debug(message: string) {
+    appendConsole(`[debug] ${message}\n`);
   },
 };
 
-type WechatQrPhase =
-  | "idle"
-  | "fetching_qr"
-  | "waiting_scan"
-  | "scanned"
-  | "redirected"
-  | "expired"
-  | "confirmed"
-  | "error";
+init().catch((error) => {
+  console.error(error);
+  showConnectError(`${s.connectErrorPrefix}${getErrorMessage(error)}`);
+});
 
-interface WechatLoginState {
-  qrcode: string;
-  qrDataUrl: string;
-  currentApiBaseUrl: string;
-  token: string;
-  baseUrl: string;
-  phase: WechatQrPhase;
-  message: string;
-  expired: boolean;
-  polling: boolean;
-  fetchInFlight: boolean;
-  pollTimer: number | null;
-}
-
-const wechatLoginState: WechatLoginState = {
-  qrcode: "",
-  qrDataUrl: "",
-  currentApiBaseUrl: WECHAT_ILINK_BASE_URL,
-  token: "",
-  baseUrl: "",
-  phase: "idle",
-  message: "",
-  expired: false,
-  polling: false,
-  fetchInFlight: false,
-  pollTimer: null,
-};
-
-function clearWechatPollTimer() {
-  if (wechatLoginState.pollTimer !== null) {
-    window.clearTimeout(wechatLoginState.pollTimer);
-    wechatLoginState.pollTimer = null;
+async function init() {
+  if (!("serial" in navigator)) {
+    state.serial = "unsupported";
+    els.unsupportedBanner.classList.add("visible");
+    els.connectBtn.disabled = true;
   }
-}
 
-function stopWechatPolling() {
-  clearWechatPollTimer();
-  wechatLoginState.polling = false;
-}
+  renderChipOptions();
+  refreshBoards();
+  renderActionState();
+  renderConsole();
 
-function resetWechatLoginState(): void {
-  stopWechatPolling();
-  wechatLoginState.qrcode = "";
-  wechatLoginState.qrDataUrl = "";
-  wechatLoginState.currentApiBaseUrl = WECHAT_ILINK_BASE_URL;
-  wechatLoginState.token = "";
-  wechatLoginState.baseUrl = "";
-  wechatLoginState.phase = "idle";
-  wechatLoginState.message = "";
-  wechatLoginState.expired = false;
-  wechatLoginState.fetchInFlight = false;
-}
+  els.chipSelect.addEventListener("change", () => {
+    state.selectedChip = els.chipSelect.value || null;
+    state.selectedBrand = null;
+    state.selectedBoardId = null;
+    refreshBoards();
+  });
+  els.brandSelect.addEventListener("change", () => {
+    state.selectedBrand = els.brandSelect.value || null;
+    state.selectedBoardId = null;
+    refreshBoards();
+  });
+  els.boardSelect.addEventListener("change", () => {
+    state.selectedBoardId = els.boardSelect.value || null;
+    renderSelectedBoard();
+    renderActionState();
+  });
 
-function getWechatPhaseLabel(phase: WechatQrPhase): string {
-  switch (phase) {
-    case "fetching_qr":
-      return "fetching_qr";
-    case "waiting_scan":
-      return "waiting_scan";
-    case "scanned":
-      return "scanned";
-    case "redirected":
-      return "redirected";
-    case "expired":
-      return "expired";
-    case "confirmed":
-      return "confirmed";
-    case "error":
-      return "error";
-    default:
-      return "idle";
-  }
-}
-
-function drawWechatQr(canvas: HTMLCanvasElement, content: string): void {
-  if (!canvas || !content) return;
-  const pixelRatio = Math.max(2, Math.ceil(window.devicePixelRatio || 1));
-  const renderSize = WECHAT_QR_SIZE * pixelRatio;
-  canvas.width = renderSize;
-  canvas.height = renderSize;
-  canvas.style.width = `${WECHAT_QR_SIZE}px`;
-  canvas.style.height = `${WECHAT_QR_SIZE}px`;
-  const code = generate(content);
-  const sourceCanvas = document.createElement("canvas");
-  code.toCanvas(sourceCanvas);
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  ctx.clearRect(0, 0, renderSize, renderSize);
-  // Keep hard QR edges after upscaling; smoothing makes scanners harder to read.
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(sourceCanvas, 0, 0, sourceCanvas.width, sourceCanvas.height, 0, 0, renderSize, renderSize);
-}
-
-function renderWechatLoginPanel(container: HTMLDivElement): void {
-  const notice = document.createElement("div");
-  notice.className = "wechat-notice";
-  const noticeIcon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  noticeIcon.setAttribute("viewBox", "0 0 24 24");
-  noticeIcon.setAttribute("aria-hidden", "true");
-  noticeIcon.setAttribute("focusable", "false");
-  noticeIcon.classList.add("wechat-notice-icon");
-  noticeIcon.innerHTML = `
-    <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"></path>
-    <line x1="12" y1="9" x2="12" y2="13"></line>
-    <line x1="12" y1="17" x2="12.01" y2="17"></line>
-  `;
-  const noticeText = document.createElement("span");
-  noticeText.textContent = s.wechatThirdPartyNotice;
-  notice.appendChild(noticeIcon);
-  notice.appendChild(noticeText);
-  container.appendChild(notice);
-
-  const wrap = document.createElement("div");
-  wrap.className = "wechat-qr-wrap";
-
-  const qrBox = document.createElement("div");
-  qrBox.className = "wechat-qr-box";
-  qrBox.classList.toggle("expired", wechatLoginState.expired);
-
-  const canvas = document.createElement("canvas");
-  canvas.className = "wechat-qr-canvas";
-  canvas.style.width = `${WECHAT_QR_SIZE}px`;
-  canvas.style.height = `${WECHAT_QR_SIZE}px`;
-  qrBox.appendChild(canvas);
-
-  const overlay = document.createElement("button");
-  overlay.className = "wechat-qr-overlay";
-  overlay.type = "button";
-  overlay.textContent = s.wechatQrRefreshBtn;
-  qrBox.appendChild(overlay);
-
-  if (wechatLoginState.qrDataUrl) {
-    try {
-      drawWechatQr(canvas, wechatLoginState.qrDataUrl);
-    } catch (error) {
-      console.error("[flash-tool] Failed to render WeChat QR code", error);
+  els.connectBtn.addEventListener("click", () => {
+    void connectDevice();
+  });
+  els.actionConnectBtn.addEventListener("click", () => {
+    void connectDevice();
+  });
+  els.disconnectBtn.addEventListener("click", () => {
+    void disconnectDevice();
+  });
+  els.actionDisconnectBtn.addEventListener("click", () => {
+    void disconnectDevice();
+  });
+  els.flashBtn.addEventListener("click", () => {
+    void flashSelectedFirmware();
+  });
+  els.consoleToggleBtn.addEventListener("click", () => {
+    if (!els.consoleToggleBtn.disabled) {
+      switchTab(state.activeTab === "console" ? "flash" : "console");
     }
+  });
+
+  // Console
+  els.consoleClearBtn.addEventListener("click", () => {
+    state.consoleText = "";
+    renderConsole();
+  });
+  els.consoleResetBtn.addEventListener("click", () => {
+    void resetDeviceFromConsole();
+  });
+  els.consoleSendBtn.addEventListener("click", () => {
+    void sendConsoleInput();
+  });
+  els.consoleSendInput.addEventListener("keydown", (e) => {
+    if ((e as KeyboardEvent).key === "Enter") {
+      void sendConsoleInput();
+    }
+  });
+
+  // Modal wifi submit
+  els.modalWifiSubmitBtn.addEventListener("click", () => {
+    void submitWifiCredentials();
+  });
+  els.modalReconnectBtn.addEventListener("click", () => {
+    void reconnectDeviceAfterReset();
+  });
+
+  // Modal close button
+  els.modalCloseBtn.addEventListener("click", () => {
+    if (state.modalCanClose) closeModal();
+  });
+
+  // Backdrop click to close (only when closeable)
+  els.flashModalBg.addEventListener("click", (e) => {
+    if (e.target === els.flashModalBg && state.modalCanClose) closeModal();
+  });
+}
+
+function must<T extends HTMLElement = HTMLElement>(id: string): T {
+  const el = document.getElementById(id);
+  if (!el) {
+    throw new Error(`Missing element #${id}`);
+  }
+  return el as T;
+}
+
+// ── Tab management ──────────────────────────────────────────────────────────
+
+function switchTab(tab: "flash" | "console") {
+  state.activeTab = tab;
+  const isConsole = tab === "console";
+  els.selectionCard.hidden = isConsole;
+  els.consolePanel.hidden = !isConsole;
+  els.consoleToggleBtn.classList.toggle("active", isConsole);
+  els.consoleToggleBtn.setAttribute("aria-pressed", String(isConsole));
+  els.consoleToggleBtnLabel.textContent = isConsole ? s.consoleToggleClose : s.consoleToggleOpen;
+  renderActionState();
+}
+
+function canOpenConsoleTab(): boolean {
+  return (
+    state.serial === "connected" &&
+    state.flash !== "downloading" &&
+    state.flash !== "flashing" &&
+    state.flash !== "postflash" &&
+    state.provision !== "waiting_boot" &&
+    state.provision !== "waiting_reconnect"
+  );
+}
+
+function updateConsoleTabState() {
+  const enabled = canOpenConsoleTab();
+  els.consoleToggleBtn.disabled = !enabled;
+  if (enabled) {
+    els.consoleToggleBtn.removeAttribute("title");
   } else {
-    const ctx = canvas.getContext("2d");
-    ctx?.clearRect(0, 0, canvas.width, canvas.height);
+    els.consoleToggleBtn.title = s.consoleTabDisabledHint;
   }
 
-  overlay.disabled = wechatLoginState.fetchInFlight;
-  overlay.addEventListener("click", () => {
-    void fetchWechatQrCode(true);
+  if (!enabled && state.activeTab === "console") {
+    switchTab("flash");
+  }
+}
+
+// ── Modal management ────────────────────────────────────────────────────────
+
+function openModal() {
+  state.modalStep = 1;
+  state.modalCanClose = false;
+  els.flashModalBg.classList.add("open");
+  renderModalStep(1);
+}
+
+function closeModal() {
+  state.modalStep = 0;
+  els.flashModalBg.classList.remove("open");
+}
+
+function renderModalStep(step: 1 | 2 | 3) {
+  state.modalStep = step;
+
+  // Update step indicators
+  const indicators = [
+    els.modalStep1Indicator,
+    els.modalStep2Indicator,
+    els.modalStep3Indicator,
+  ];
+  indicators.forEach((el, i) => {
+    el.classList.remove("active", "done");
+    if (i + 1 === step) {
+      el.classList.add("active");
+    } else if (i + 1 < step) {
+      el.classList.add("done");
+    }
   });
 
-  if (wechatLoginState.phase === "error" && wechatLoginState.message) {
-    const errBox = document.createElement("div");
-    errBox.className = "wechat-error-box";
-    const errText = document.createElement("span");
-    errText.textContent = wechatLoginState.message;
-    errBox.appendChild(errText);
-    wrap.appendChild(errBox);
-  }
+  // Show/hide step bodies
+  els.modalStep1Body.style.display = step === 1 ? "" : "none";
+  els.modalStep2Body.style.display = step === 2 ? "" : "none";
+  els.modalStep3Body.style.display = step === 3 ? "" : "none";
 
-  wrap.appendChild(qrBox);
-
-  const meta = document.createElement("div");
-  meta.className = "wechat-qr-meta";
-
-  const status = document.createElement("div");
-  status.className = "wechat-qr-status";
-  const phaseLabel = getWechatPhaseLabel(wechatLoginState.phase);
-  status.textContent = `${s.wechatQrStatusLabel}: ${phaseLabel}`;
-  meta.appendChild(status);
-
-  if (wechatLoginState.token) {
-    const ready = document.createElement("div");
-    ready.className = "wechat-qr-ready";
-    ready.textContent = s.wechatQrTokenReady;
-    meta.appendChild(ready);
-  }
-
-  const actions = document.createElement("div");
-  actions.className = "wechat-qr-actions";
-  if (wechatLoginState.qrDataUrl) {
-    const openLink = document.createElement("a");
-    openLink.className = "wechat-qr-link";
-    openLink.href = wechatLoginState.qrDataUrl;
-    openLink.target = "_blank";
-    openLink.rel = "noreferrer";
-    openLink.textContent = s.wechatQrOpenLink;
-    actions.appendChild(openLink);
-  }
-  meta.appendChild(actions);
-
-  wrap.appendChild(meta);
-  container.appendChild(wrap);
+  // Show terminal only in steps 1 and 2
+  els.modalTerminalDetails.style.display = step === 3 ? "none" : "";
 }
 
-function scheduleWechatStatusPoll(delayMs = WECHAT_POLL_INTERVAL_MS) {
-  clearWechatPollTimer();
-  if (!activeChannels.includes("wechat") || !wechatLoginState.qrcode || wechatLoginState.expired) {
-    wechatLoginState.polling = false;
+function setModalCloseable(closeable: boolean) {
+  state.modalCanClose = closeable;
+  if (closeable) {
+    els.modalCloseBtn.classList.add("visible");
+  } else {
+    els.modalCloseBtn.classList.remove("visible");
+  }
+}
+
+// ── Board rendering ──────────────────────────────────────────────────────────
+
+function renderChipOptions() {
+  els.chipSelect.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = s.chooseChipPlaceholder;
+  placeholder.selected = !state.selectedChip;
+  els.chipSelect.appendChild(placeholder);
+
+  for (const chipKey of chipKeys) {
+    const option = document.createElement("option");
+    option.value = chipKey;
+    option.textContent = chipLabel(chipKey);
+    if (chipKey === state.selectedChip) {
+      option.selected = true;
+    }
+    els.chipSelect.appendChild(option);
+  }
+}
+
+function refreshBoards() {
+  normalizeSelectionState();
+  renderChipOptions();
+  renderBrandOptions();
+  state.visibleBoards = getVisibleBoards();
+  if (!currentSelectionStillVisible()) {
+    state.selectedBoardId = null;
+  }
+  renderBoardOptions();
+  renderSelectedBoard();
+  renderNoFirmwareState();
+  renderActionState();
+}
+
+function normalizeSelectionState() {
+  state.selectedChip = getNormalizedSelectedChip();
+
+  if (!state.selectedChip) {
+    state.selectedBrand = null;
+    state.selectedBoardId = null;
     return;
   }
-  wechatLoginState.polling = true;
-  wechatLoginState.pollTimer = window.setTimeout(() => {
-    void pollWechatQrStatus();
-  }, delayMs);
+
+  const brandKeys = getBrandKeys(state.selectedChip);
+  if (!brandKeys.includes(state.selectedBrand ?? "")) {
+    state.selectedBrand = brandKeys[0] ?? null;
+  }
 }
 
-async function fetchWechatQrCode(force = false): Promise<void> {
-  if (!activeChannels.includes("wechat")) return;
-  if (wechatLoginState.fetchInFlight) return;
-  if (!force && wechatLoginState.qrcode && !wechatLoginState.expired) return;
+function getNormalizedSelectedChip() {
+  if (state.device.chipKey) {
+    const compatibleChipKeys = getCompatibleChipKeysForCurrentDevice();
+    if (compatibleChipKeys.includes(state.selectedChip ?? "")) {
+      return state.selectedChip;
+    }
+    return compatibleChipKeys[0] ?? null;
+  }
 
-  wechatLoginState.fetchInFlight = true;
-  wechatLoginState.phase = "fetching_qr";
-  wechatLoginState.message = "";
-  wechatLoginState.expired = false;
-  wechatLoginState.token = "";
-  wechatLoginState.baseUrl = "";
-  wechatLoginState.currentApiBaseUrl = WECHAT_ILINK_BASE_URL;
-  stopWechatPolling();
-  renderImChannels();
-  updateFlashBtn();
+  if (state.selectedChip && chipKeys.includes(state.selectedChip)) {
+    return state.selectedChip;
+  }
+  return chipKeys[0] ?? null;
+}
+
+function getCompatibleChipKeysForCurrentDevice() {
+  return chipKeys.filter((chipKey) => hasCompatibleBoardsForChip(chipKey));
+}
+
+function hasCompatibleBoardsForChip(chipKey: string) {
+  const brands = firmwareDb[chipKey] ?? {};
+  return Object.values(brands).some((boards) =>
+    Object.values(boards).some((firmware) => isCompatibleWithCurrentDevice(chipKey, firmware)),
+  );
+}
+
+function renderBrandOptions() {
+  els.brandSelect.innerHTML = "";
+
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = s.chooseBrandPlaceholder;
+  placeholder.selected = !state.selectedBrand;
+  els.brandSelect.appendChild(placeholder);
+
+  const brandKeys = state.selectedChip ? getBrandKeys(state.selectedChip) : [];
+  for (const brandKey of brandKeys) {
+    const option = document.createElement("option");
+    option.value = brandKey;
+    option.textContent = brandKey;
+    option.selected = option.value === state.selectedBrand;
+    els.brandSelect.appendChild(option);
+  }
+
+  els.brandSelect.disabled = !state.selectedChip || brandKeys.length === 0;
+}
+
+function getBrandKeys(chipKey: string) {
+  return Object.keys(firmwareDb[chipKey] ?? {}).sort((a, b) => a.localeCompare(b));
+}
+
+function getVisibleBoards(): VisibleBoard[] {
+  const chipKey = state.selectedChip;
+  const brandKey = state.selectedBrand;
+  if (!chipKey || !brandKey) {
+    return [];
+  }
+  const boards = firmwareDb[chipKey]?.[brandKey] ?? {};
+  return Object.entries(boards)
+    .filter(([, firmware]) => isCompatibleWithCurrentDevice(chipKey, firmware))
+    .map(([boardKey, firmware]) => ({ chipKey, brandKey, boardKey, firmware }));
+}
+
+function isCompatibleWithCurrentDevice(chipKey: string, firmware: FirmwareRecord) {
+  if (!state.device.chipKey) {
+    return true;
+  }
+  if (!isChipKeyCompatibleWithCurrentDevice(chipKey)) {
+    return false;
+  }
+  if (
+    state.device.flashSizeMb != null &&
+    firmware.min_flash_size != null &&
+    state.device.flashSizeMb < firmware.min_flash_size
+  ) {
+    return false;
+  }
+  if (
+    state.device.psramSizeMb != null &&
+    firmware.min_psram_size != null &&
+    state.device.psramSizeMb < firmware.min_psram_size
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isChipKeyCompatibleWithCurrentDevice(chipKey: string) {
+  if (!state.device.chipKey) {
+    return true;
+  }
+
+  const parsed = parseChipKey(chipKey);
+  if (parsed.baseChipKey !== state.device.chipKey) {
+    return false;
+  }
+  if (parsed.rev == null) {
+    return true;
+  }
+  if (state.device.chipRevision == null) {
+    return false;
+  }
+  if (parsed.baseChipKey === "esp32p4") {
+    if (parsed.rev === 1) {
+      return state.device.chipRevision < 300;
+    }
+    if (parsed.rev === 3) {
+      return state.device.chipRevision >= 300;
+    }
+  }
+  return state.device.chipRevision === parsed.rev;
+}
+
+function renderBoardOptions() {
+  els.boardSelect.innerHTML = "";
+
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = s.noBoardSelected;
+  placeholder.selected = !state.selectedBoardId;
+  els.boardSelect.appendChild(placeholder);
+
+  for (const { chipKey, brandKey, boardKey } of state.visibleBoards) {
+    const option = document.createElement("option");
+    option.value = makeBoardId(chipKey, brandKey, boardKey);
+    option.textContent = boardKey;
+    option.selected = option.value === state.selectedBoardId;
+    els.boardSelect.appendChild(option);
+  }
+
+  els.boardSelect.disabled = state.visibleBoards.length === 0;
+}
+
+function renderSelectedBoard() {
+  const selected = getSelectedFirmware();
+  if (!selected) {
+    els.boardSelect.value = "";
+    els.selectedBoardSummary.hidden = true;
+    els.selectedBoardName.textContent = s.noBoardSelected;
+    els.selectedBoardDesc.textContent = "";
+    els.selectedBoardMeta.innerHTML = "";
+    updateDownloadButton(null);
+    return;
+  }
+
+  els.boardSelect.value = state.selectedBoardId ?? "";
+  els.selectedBoardSummary.hidden = false;
+  els.selectedBoardName.textContent = selected.boardKey;
+  const description = selected.firmware.description?.trim() || "";
+  els.selectedBoardMeta.innerHTML = `
+    <span>
+      <strong>${escapeHtml(s.firmwareRequirementsLabel)}:</strong>
+      ${escapeHtml(s.boardFlashMeta)} &gt;= ${escapeHtml(formatSizeRequirement(selected.firmware.min_flash_size))},
+      ${escapeHtml(s.boardPsramMeta)} &gt;= ${escapeHtml(formatSizeRequirement(selected.firmware.min_psram_size))}
+    </span>
+  `;
+  els.selectedBoardDesc.innerHTML = description
+    ? `<strong>${escapeHtml(s.firmwareDescriptionLabel)}:</strong> ${escapeHtml(description)}`
+    : "";
+  updateDownloadButton(selected.firmware);
+}
+
+function renderNoFirmwareState() {
+  const noCompatibleChips =
+    Boolean(state.device.chipKey) && getCompatibleChipKeysForCurrentDevice().length === 0;
+  const noVisibleBoards =
+    Boolean(state.device.chipKey) && Boolean(state.selectedChip) && state.visibleBoards.length === 0;
+  const shouldShow = noCompatibleChips || noVisibleBoards;
+  els.selectionCard.classList.toggle("selection-empty", shouldShow);
+  els.selectionFields.hidden = shouldShow;
+  els.noFirmwareCard.classList.toggle("visible", shouldShow);
+}
+
+function renderActionState() {
+  const selected = getSelectedFirmware();
+  let hint = s.actionReadyHint;
+  let flashDisabled = false;
+
+  if (!selected) {
+    flashDisabled = true;
+    hint = state.device.chipKey ? s.flashBtnDisabledNoFirmware : s.flashBtnDisabledNoDevice;
+  } else if (!state.device.chipKey) {
+    flashDisabled = true;
+    hint = s.flashBtnDisabledNoDevice;
+  } else if (!isCompatibleWithCurrentDevice(selected.chipKey, selected.firmware)) {
+    flashDisabled = true;
+    hint = s.flashBtnDisabledNoMatch;
+  }
+
+  if (state.serial === "unsupported") {
+    flashDisabled = true;
+  }
+  if (state.serial === "connecting" || state.flash === "downloading" || state.flash === "flashing") {
+    flashDisabled = true;
+  }
+  if (state.activeTab === "console") {
+    flashDisabled = true;
+  }
+
+  els.flashBtn.disabled = flashDisabled;
+  els.flashHint.textContent = hint;
+  renderConsoleSendState();
+  updateConsoleTabState();
+}
+
+function renderConnectionState() {
+  const connected = Boolean(state.device.chipKey);
+  els.connectBar.classList.toggle("is-connected", connected);
+  els.connectBarIdle.style.display = connected ? "none" : "";
+  els.connectBarActive.style.display = connected ? "" : "none";
+
+  if (connected) {
+    els.statusText.textContent = `${s.connectedTo}`;
+    els.infoChip.style.display = "";
+    els.infoChip.textContent = `${s.deviceChipLabel}: ${state.device.chipName ?? "—"}`;
+
+    const chipRevision = formatChipRevision(state.device.chipRevision);
+    els.infoRevisionSep.style.display = chipRevision ? "" : "none";
+    els.infoRevision.style.display = chipRevision ? "" : "none";
+    if (chipRevision) {
+      els.infoRevision.textContent = `${s.deviceRevisionLabel}: ${chipRevision}`;
+    }
+
+    els.infoFlashSep.style.display = "";
+    els.infoFlash.style.display = "";
+    els.infoFlash.textContent = `${s.deviceFlashLabel}: ${formatSizeRequirement(state.device.flashSizeMb)}`;
+
+    const psramSize = state.device.psramSizeMb;
+    els.infoPsramSep.style.display = psramSize != null ? "" : "none";
+    els.infoPsram.style.display = psramSize != null ? "" : "none";
+    if (psramSize != null) {
+      els.infoPsram.textContent = `${s.devicePsramLabel}: ${formatSizeRequirement(psramSize)}`;
+    }
+
+    els.chipSelect.disabled = true;
+  } else {
+    els.infoChip.style.display = "none";
+    els.infoRevisionSep.style.display = "none";
+    els.infoRevision.style.display = "none";
+    els.infoFlashSep.style.display = "none";
+    els.infoFlash.style.display = "none";
+    els.infoPsramSep.style.display = "none";
+    els.infoPsram.style.display = "none";
+
+    els.chipSelect.disabled = false;
+  }
+
+  els.connectBtn.disabled = state.serial === "connecting";
+  els.connectBtnLabel.textContent =
+    state.serial === "connecting" ? s.connectingMsg : s.connectBtn;
+  els.actionConnectBtn.style.display = connected ? "none" : "";
+  els.actionDisconnectBtn.style.display = connected ? "" : "none";
+  els.actionConnectBtn.disabled = state.serial === "connecting";
+  els.actionConnectBtnLabel.textContent =
+    state.serial === "connecting" ? s.connectingMsg : s.connectBtn;
+
+  renderConsoleSendState();
+  updateConsoleTabState();
+  renderReconnectState();
+}
+
+// ── Device connection ────────────────────────────────────────────────────────
+
+async function connectDevice() {
+  if (state.serial === "connecting") {
+    return;
+  }
+  clearConnectError();
+  state.serial = "connecting";
+  renderConnectionState();
+
+  let connectingLoader: ESPLoader | null = null;
+  try {
+    connectingLoader = await connect(logger);
+    await connectingLoader.initialize();
+    const activeLoader = await connectingLoader.runStub();
+    connectingLoader = activeLoader;
+    if (!activeLoader.flashSize) {
+      await activeLoader.detectFlashSize();
+    }
+
+    state.loader = activeLoader;
+    connectingLoader = null;
+    state.serial = "connected";
+    state.device = {
+      chipName: activeLoader.chipName,
+      chipKey: normalizeChipKey(activeLoader.chipName),
+      chipRevision: activeLoader.chipRevision ?? null,
+      flashSizeMb: parseFlashSize(activeLoader.flashSize),
+      psramSizeMb: null,
+    };
+    renderConnectionState();
+    refreshBoards();
+  } catch (error) {
+    if (connectingLoader) {
+      try {
+        await connectingLoader.disconnect();
+      } catch {
+        // ignore secondary error
+      }
+    }
+    await disconnectDevice({ silent: true });
+    state.serial = "error";
+    renderConnectionState();
+    showConnectError(`${s.connectErrorPrefix}${getErrorMessage(error)}`);
+  }
+}
+
+async function disconnectDevice(options?: { silent?: boolean }) {
+  // Close modal if open
+  if (state.modalStep > 0) {
+    closeModal();
+  }
+
+  stopConsoleReader();
+  rejectWaiters(state.statusWaiters, new Error("Disconnected"));
+  rejectWaiters(state.readyWaiters, new Error("Disconnected"));
+  state.statusWaiters = [];
+  state.readyWaiters = [];
+  state.inConsoleMode = false;
+  state.readyIp = null;
+  state.provision = "idle";
+  state.flash = "idle";
+  state.reconnectingPort = false;
+  renderReconnectPrompt(false);
+
+  const loader = state.loader;
+  state.loader = null;
+  state.device = {
+    chipName: null,
+    chipKey: null,
+    chipRevision: null,
+    flashSizeMb: null,
+    psramSizeMb: null,
+  };
+  state.serial = "idle";
+  renderConnectionState();
+  refreshBoards();
+
+  // Switch back to flash tab if on console
+  if (state.activeTab === "console") {
+    switchTab("flash");
+  }
+
+  if (loader) {
+    try {
+      await loader.disconnect();
+    } catch (error) {
+      if (!options?.silent) {
+        console.warn(error);
+      }
+    }
+  }
+}
+
+// ── Flash firmware ───────────────────────────────────────────────────────────
+
+async function flashSelectedFirmware() {
+  const selected = getSelectedFirmware();
+  if (!selected) {
+    return;
+  }
+  if (!state.loader || !state.device.chipKey) {
+    renderActionState();
+    return;
+  }
+  if (state.inConsoleMode) {
+    // Show error in a new modal session
+    openModal();
+    renderModalStep(1);
+    showModalFlashError("Please disconnect and reconnect the device before flashing again.");
+    setModalCloseable(true);
+    return;
+  }
+
+  // Open modal at step 1
+  openModal();
+  setModalCloseable(false);
+
+  state.readyIp = null;
+  state.progressLines = [];
+  state.reconnectingPort = false;
+  els.modalProgressLog.textContent = "";
+  hideModalFlashResult();
+  renderModalProgress(true);
+  renderReconnectPrompt(false);
 
   try {
-    const endpoint = `${WECHAT_ILINK_BASE_URL}/ilink/bot/get_bot_qrcode?bot_type=${WECHAT_BOT_TYPE}`;
-    const resp = await fetch(endpoint, { cache: "no-store" });
-    const data = await resp.json();
-    if (!resp.ok || data?.ret !== 0 || !data?.qrcode || !data?.qrcode_img_content) {
-      throw new Error(`HTTP ${resp.status} — ret=${data?.ret ?? "?"}`);
-    }
-
-    wechatLoginState.qrcode = String(data.qrcode);
-    wechatLoginState.qrDataUrl = String(data.qrcode_img_content);
-    wechatLoginState.phase = "waiting_scan";
-    scheduleWechatStatusPoll(1000);
-  } catch (error) {
-    wechatLoginState.phase = "error";
-    const detail = error instanceof Error ? error.message : String(error);
-    wechatLoginState.message = `${s.wechatQrFetchError} (${detail})`;
-    stopWechatPolling();
-  } finally {
-    wechatLoginState.fetchInFlight = false;
-    renderImChannels();
-    updateFlashBtn();
-  }
-}
-
-async function pollWechatQrStatus(): Promise<void> {
-  if (!activeChannels.includes("wechat")) {
-    stopWechatPolling();
-    return;
-  }
-  if (!wechatLoginState.qrcode) {
-    stopWechatPolling();
-    return;
-  }
-
-  const apiBase = wechatLoginState.currentApiBaseUrl || WECHAT_ILINK_BASE_URL;
-  const endpoint = `${apiBase}/ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(wechatLoginState.qrcode)}`;
-
-  try {
-    const resp = await fetch(endpoint, { cache: "no-store" });
-    const data = await resp.json();
-    if (!resp.ok) {
-      throw new Error(`failed to get WeChat QR status: ${resp.status}`);
-    }
-
-    const status = String(data?.status || "");
-    if (status === "wait") {
-      wechatLoginState.phase = "waiting_scan";
-    } else if (status === "scanned") {
-      wechatLoginState.phase = "scanned";
-    } else if (status === "scaned_but_redirect") {
-      const redirectHost = String(data?.redirect_host || "").trim();
-      if (redirectHost) {
-        wechatLoginState.currentApiBaseUrl = `https://${redirectHost}`;
-      }
-      wechatLoginState.phase = "redirected";
-    } else if (status === "expired") {
-      wechatLoginState.phase = "expired";
-      wechatLoginState.expired = true;
-      stopWechatPolling();
-    } else if (status === "confirmed") {
-      const token = String(data?.bot_token || "").trim();
-      if (token) {
-        wechatLoginState.token = token;
-      }
-      const baseurl = String(data?.baseurl || "").trim();
-      wechatLoginState.baseUrl = baseurl || wechatLoginState.currentApiBaseUrl || WECHAT_ILINK_BASE_URL;
-      wechatLoginState.phase = "confirmed";
-      wechatLoginState.expired = false;
-      stopWechatPolling();
-    } else {
-      wechatLoginState.phase = "error";
-      wechatLoginState.message = `unexpected status: ${status || "unknown"}`;
-      stopWechatPolling();
-    }
-  } catch (error) {
-    wechatLoginState.phase = "error";
-    const detail = error instanceof Error ? error.message : String(error);
-    wechatLoginState.message = `${s.wechatQrPollError} (${detail})`;
-    stopWechatPolling();
-  } finally {
-    renderImChannels();
-    updateFlashBtn();
-    if (wechatLoginState.polling) {
-      scheduleWechatStatusPoll();
-    }
-  }
-}
-
-function renderImChannels(): void {
-  if (!imChannelList) return;
-  imChannelList.innerHTML = "";
-
-  for (const channelId of activeChannels) {
-    const def = IM_CHANNEL_DEFS[channelId];
-    if (!def) continue;
-
-    // Resolve channel display name from the menu item data-channel attribute
-    const menuItem = imAddMenu?.querySelector<HTMLButtonElement>(`[data-channel="${channelId}"]`);
-    const channelName = menuItem?.textContent?.trim() ?? channelId;
-
-    const card = document.createElement("div");
-    card.className = "im-channel-card";
-    card.dataset.channel = channelId;
-
-    const header = document.createElement("div");
-    header.className = "im-channel-card-header";
-    const nameSpan = document.createElement("span");
-    nameSpan.className = "im-channel-name";
-    nameSpan.textContent = channelName;
-    const removeBtn = document.createElement("button");
-    removeBtn.type = "button";
-    removeBtn.className = "im-channel-remove";
-    removeBtn.textContent = s.imRemoveChannel;
-    removeBtn.dataset.remove = channelId;
-    removeBtn.addEventListener("click", () => {
-      const idx = activeChannels.indexOf(channelId);
-      if (idx !== -1) activeChannels.splice(idx, 1);
-      if (channelId === "wechat") {
-        resetWechatLoginState();
-      }
-      renderImChannels();
-      updateFlashBtn();
+    state.flash = "downloading";
+    updateConsoleTabState();
+    updateModalProgress(s.downloadingFirmware, 0);
+    const binary = await downloadBinary(selected.firmware.merged_binary, (received, total) => {
+      const pct = total > 0 ? Math.round((received / total) * 100) : 0;
+      updateModalProgress(s.downloadingFirmware, pct);
     });
-    header.appendChild(nameSpan);
-    header.appendChild(removeBtn);
-    card.appendChild(header);
 
-    const body = document.createElement("div");
-    body.className = "im-channel-card-body";
+    state.flash = "flashing";
+    updateModalProgress(s.writingFlash, 0);
+    addProgressLine(`Flashing ${selected.boardKey} from 0x0`);
 
-    if (channelId === "wechat") {
-      renderWechatLoginPanel(body);
-    } else if (def.fields.length > 0) {
-      const grid = document.createElement("div");
-      grid.className = "form-grid";
-      for (const field of def.fields) {
-        const fg = document.createElement("div");
-        fg.className = field.full || def.fields.length === 1 ? "form-group full" : "form-group";
-        const lbl = document.createElement("label");
-        lbl.htmlFor = field.id;
-        lbl.innerHTML = `${s[field.labelKey] as string} <span class="required">*</span>`;
-        const inp = document.createElement("input");
-        inp.type = field.type;
-        inp.id = field.id;
-        inp.name = field.id;
-        inp.autocomplete = "off";
-        inp.addEventListener("input", updateFlashBtn);
-        fg.appendChild(lbl);
-        fg.appendChild(inp);
-        grid.appendChild(fg);
+    let lastWritePct = 0;
+    try {
+      await state.loader.flashData(binary, (written, total) => {
+        const pct = total > 0 ? Math.round((written / total) * 100) : 0;
+        lastWritePct = pct;
+        updateModalProgress(s.writingFlash, pct);
+      }, 0x0, true);
+    } catch (flashError) {
+      // On ESP32-P4 (and some other chips) via UART, the stub does not respond
+      // to the ESP_FLASH_BEGIN(0,0) finalization command after a large compressed
+      // write, causing a "Timed out waiting for packet header" error even though
+      // all data blocks were written successfully.  The post-flash reset is done
+      // via hardware DTR/RTS signals and does not rely on flashDeflFinish, so it
+      // is safe to continue the post-flash flow when this specific condition is met.
+      const isFinalizeTimeout =
+        lastWritePct >= 100 &&
+        getErrorMessage(flashError).includes("Timed out waiting for packet");
+      if (!isFinalizeTimeout) {
+        throw flashError;
       }
-      body.appendChild(grid);
+      addProgressLine("Note: stub finalization timed out after write; continuing with hardware reset.");
+      updateModalProgress(s.writingFlash, 100);
     }
 
-    card.appendChild(body);
-    imChannelList.appendChild(card);
+    state.flash = "flashed";
+    showModalFlashSuccess(s.flashSuccess);
+    await beginPostFlashFlow();
+  } catch (error) {
+    state.flash = "error";
+    const message = getErrorMessage(error);
+    if (state.provision === "error" || state.provision === "probing_wifi") {
+      showModalFlashError(message);
+    } else {
+      showModalFlashError(`${s.flashError}${message}`);
+    }
+    setModalCloseable(true);
+  } finally {
+    renderActionState();
+  }
+}
+
+async function beginPostFlashFlow() {
+  if (!state.loader) {
+    return;
   }
 
-  // Update menu: disable already-added channels
-  imAddMenu?.querySelectorAll<HTMLButtonElement>(".im-add-menu-item").forEach((btn) => {
-    btn.disabled = activeChannels.includes(btn.dataset.channel ?? "");
-  });
-}
+  state.flash = "postflash";
+  state.provision = "waiting_boot";
+  updateConsoleTabState();
+  updateModalProgress(s.waitingForDeviceInfo, 100);
+  addProgressLine(s.waitingForDeviceInfo);
+  await sleep(1000);
 
-// Toggle add-channel dropdown
-imAddBtn?.addEventListener("click", (e) => {
-  e.stopPropagation();
-  if (!imAddMenu) return;
-  const open = imAddMenu.style.display !== "none";
-  imAddMenu.style.display = open ? "none" : "block";
-});
-
-// Close dropdown when clicking outside
-document.addEventListener("click", () => {
-  if (imAddMenu) imAddMenu.style.display = "none";
-});
-
-// Handle menu item clicks
-imAddMenu?.addEventListener("click", (e) => {
-  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>(".im-add-menu-item");
-  if (!btn || btn.disabled) return;
-  const channelId = btn.dataset.channel;
-  if (!channelId || activeChannels.includes(channelId)) return;
-  activeChannels.push(channelId);
-  if (imAddMenu) imAddMenu.style.display = "none";
-  renderImChannels();
-  if (channelId === "wechat") {
-    void fetchWechatQrCode();
+  const portChanged = await state.loader.enterConsoleMode();
+  if (portChanged) {
+    state.provision = "waiting_reconnect";
+    renderReconnectPrompt(true);
+    return;
   }
-  updateFlashBtn();
-});
 
-const llmModelInput = document.getElementById("llm_model") as HTMLInputElement | null;
-let llmModelUserEdited = false;
-llmModelInput?.addEventListener("input", () => {
-  const current = llmModelInput!.value.trim();
-  const allDefaults = Object.values(LLM_DEFAULT_MODELS);
-  llmModelUserEdited = current !== "" && !allDefaults.includes(current);
-});
-let llmBaseUrlUserEdited = false;
-llmBaseUrlInput?.addEventListener("input", () => {
-  const current = llmBaseUrlInput.value.trim();
-  const allDefaults = Object.values(LLM_DEFAULT_BASE_URLS);
-  llmBaseUrlUserEdited = current !== "" && !allDefaults.includes(current);
-});
-
-const LLM_DEFAULT_MODELS: Record<string, string> = {
-  qwen: "qwen3.6-plus",
-  deepseek: "deepseek-v4-pro",
-  openai: "gpt-5.4",
-  anthropic: "claude-sonnet-4-6",
-};
-
-const LLM_DEFAULT_BASE_URLS: Record<string, string> = {
-  qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-  deepseek: "https://api.deepseek.com",
-  openai: "https://api.openai.com/v1",
-  anthropic: "https://api.anthropic.com/v1",
-  openai_compat: "https://api.openai.com/v1",
-  anthropic_compat: "https://api.anthropic.com/v1",
-};
-
-const LLM_VENDOR_LINKS = {
-  qwen: {
-    apiKey: "https://bailian.console.aliyun.com/?tab=model#/api-key",
-    docs: "https://bailian.console.aliyun.com/cn-beijing?tab=doc#/doc/?type=model&url=2840915",
-  },
-  deepseek: {
-    apiKey: "https://platform.deepseek.com/api_keys",
-    docs: "https://api-docs.deepseek.com/",
-  },
-  openai: {
-    apiKey: "https://platform.openai.com/api-keys",
-    docs: "https://developers.openai.com/api/reference/overview",
-  },
-  anthropic: {
-    apiKey: "https://console.anthropic.com/settings/keys",
-    docs: "https://docs.anthropic.com/en/api/messages",
-  },
-} as const;
-
-function appendConsole(text: string) {
-  consoleOutput.textContent += text;
-  consoleOutput.scrollTop = consoleOutput.scrollHeight;
+  renderReconnectPrompt(false);
+  await continuePostFlashConsoleFlow();
 }
 
-function formatPosixOffset(offsetMinutes: number): string {
-  if (offsetMinutes === 0) return "0";
-  const sign = offsetMinutes < 0 ? "-" : "";
-  const absMinutes = Math.abs(offsetMinutes);
-  const hours = Math.floor(absMinutes / 60);
-  const minutes = absMinutes % 60;
-  if (minutes === 0) return `${sign}${hours}`;
-  return `${sign}${hours}:${String(minutes).padStart(2, "0")}`;
-}
+async function reconnectDeviceAfterReset() {
+  if (!state.loader || state.reconnectingPort) {
+    return;
+  }
 
-function getShortTimeZoneName(date: Date): string | null {
+  state.reconnectingPort = true;
+  renderReconnectState();
+  els.modalReconnectStatus.textContent = s.postFlashReconnectBusy;
+
   try {
-    const formatter = new Intl.DateTimeFormat(undefined, { timeZoneName: "short" });
-    const name = formatter.formatToParts(date).find((part) => part.type === "timeZoneName")?.value?.trim();
-    return name || null;
-  } catch {
-    return null;
+    const port = await navigator.serial.requestPort();
+    const nextLoader = await connectWithPort(port, logger);
+    copyLoaderMetadata(state.loader, nextLoader);
+    nextLoader.setConsoleMode(true);
+    state.loader = nextLoader;
+
+    els.modalReconnectStatus.textContent = s.postFlashReconnectSuccess;
+    renderReconnectPrompt(false);
+    await continuePostFlashConsoleFlow();
+  } catch (error) {
+    if (els.modalReconnectPrompt.hidden) {
+      state.provision = "error";
+      showModalFlashError(getErrorMessage(error));
+      setModalCloseable(true);
+    } else {
+      els.modalReconnectStatus.textContent = `${s.postFlashReconnectError}${getErrorMessage(error)}`;
+    }
+  } finally {
+    state.reconnectingPort = false;
+    renderReconnectState();
   }
 }
 
-function sanitizeTzAbbreviation(name: string | null, fallback: string): string {
-  if (!name) return fallback;
-  if (/^[A-Za-z]{3,}$/.test(name)) return name;
-  return fallback;
-}
-
-function getTransitionRule(date: Date): string {
-  const month = date.getMonth() + 1;
-  const weekday = date.getDay();
-  const dayOfMonth = date.getDate();
-  const lastDay = new Date(date.getFullYear(), month, 0).getDate();
-  const week = dayOfMonth + 7 > lastDay ? 5 : Math.floor((dayOfMonth - 1) / 7) + 1;
-  const hours = date.getHours();
-  const minutes = date.getMinutes();
-  const seconds = date.getSeconds();
-  let timePart = "";
-  if (hours !== 2 || minutes !== 0 || seconds !== 0) {
-    timePart = `/${hours}`;
-    if (minutes !== 0 || seconds !== 0) {
-      timePart += `:${String(minutes).padStart(2, "0")}`;
-    }
-    if (seconds !== 0) {
-      timePart += `:${String(seconds).padStart(2, "0")}`;
-    }
+async function continuePostFlashConsoleFlow() {
+  if (!state.loader) {
+    return;
   }
-  return `M${month}.${week}.${weekday}${timePart}`;
+
+  state.inConsoleMode = true;
+  state.provision = "probing_wifi";
+  renderConsoleSendState();
+  updateConsoleTabState();
+  await startConsoleReader();
+  await sleep(5000);
+
+  await sendConsoleCommand("wifi --status\n");
+  const status = await waitForWifiStatus(1000).catch(() => null);
+  if (!status) {
+    state.provision = "error";
+    throw new Error(s.wifiProbeError);
+  }
+
+  if (status.connected && status.configured && status.ip) {
+    handleReady(status.ip);
+    return;
+  }
+
+  state.provision = "need_wifi";
+  updateConsoleTabState();
+  renderModalStep(2);
+  els.modalWifiStatus.textContent = "";
 }
 
-function findTransitionInstant(year: number, startMonth: number, endMonth: number): Date | null {
-  let previousOffset = new Date(year, startMonth, 1, 12).getTimezoneOffset();
-  for (let month = startMonth; month <= endMonth; month++) {
-    const daysInMonth = new Date(year, month + 1, 0).getDate();
-    for (let day = month === startMonth ? 2 : 1; day <= daysInMonth; day++) {
-      const probe = new Date(year, month, day, 12);
-      const offset = probe.getTimezoneOffset();
-      if (offset === previousOffset) {
-        continue;
+async function submitWifiCredentials() {
+  if (!state.loader || !state.inConsoleMode) {
+    return;
+  }
+
+  const ssid = els.modalWifiSsid.value.trim();
+  const password = els.modalWifiPassword.value;
+  if (!ssid) {
+    els.modalWifiSsid.focus();
+    return;
+  }
+  if (password.length > 0 && password.length < 8) {
+    els.modalWifiPassword.focus();
+    els.modalWifiPassword.reportValidity();
+    els.modalWifiStatus.textContent = s.wifiPasswordLengthError;
+    return;
+  }
+
+  state.provision = "connecting_wifi";
+  els.modalWifiSubmitBtn.disabled = true;
+  updateConsoleTabState();
+  els.modalWifiStatus.textContent = s.wifiConnecting;
+
+  try {
+    await sendConsoleCommand(
+      `wifi --set --ssid "${escapeConsoleArgument(ssid)}" --password "${escapeConsoleArgument(password)}" --apply\n`,
+    );
+
+    const pollTimer = window.setInterval(() => {
+      void sendConsoleCommand("wifi --status\n").catch(() => undefined);
+    }, 5000);
+
+    try {
+      const readyIp = await waitForReady(20000);
+      handleReady(readyIp);
+    } finally {
+      window.clearInterval(pollTimer);
+    }
+  } catch (error) {
+    state.provision = "need_wifi";
+    els.modalWifiStatus.textContent = getErrorMessage(error) || s.wifiTimeoutError;
+  } finally {
+    els.modalWifiSubmitBtn.disabled = false;
+    updateConsoleTabState();
+  }
+}
+
+// ── Console reader ───────────────────────────────────────────────────────────
+
+async function startConsoleReader() {
+  if (!state.loader || state.consoleReading || !state.loader.port.readable) {
+    return;
+  }
+
+  state.consoleReader = state.loader.port.readable.getReader();
+  state.consoleReading = true;
+  const decoder = new TextDecoder();
+
+  void (async () => {
+    try {
+      while (state.consoleReading && state.consoleReader) {
+        const { value, done } = await state.consoleReader.read();
+        if (done) {
+          break;
+        }
+        if (!value) {
+          continue;
+        }
+        const text = decoder.decode(value, { stream: true });
+        appendConsole(text);
+        processConsoleText(text);
       }
-
-      for (let hour = 0; hour < 24; hour++) {
-        const hourProbe = new Date(year, month, day, hour);
-        if (hourProbe.getTimezoneOffset() !== previousOffset) {
-          for (let minute = 0; minute < 60; minute++) {
-            const minuteProbe = new Date(year, month, day, hour, minute);
-            if (minuteProbe.getTimezoneOffset() !== previousOffset) {
-              return minuteProbe;
-            }
-          }
-          return hourProbe;
+    } catch (error) {
+      appendConsole(`[console-error] ${getErrorMessage(error)}\n`);
+    } finally {
+      state.consoleReading = false;
+      if (state.consoleReader) {
+        try {
+          state.consoleReader.releaseLock();
+        } catch {
+          // ignore
         }
       }
-      return probe;
+      state.consoleReader = null;
     }
-    previousOffset = new Date(year, month, new Date(year, month + 1, 0).getDate(), 12).getTimezoneOffset();
-  }
-  return null;
+  })();
 }
 
-function guessLocalPosixTimezone(): string {
-  const now = new Date();
-  const year = now.getFullYear();
-  const monthlyOffsets = Array.from({ length: 12 }, (_, month) => new Date(year, month, 1, 12).getTimezoneOffset());
-  const standardOffset = Math.max(...monthlyOffsets);
-  const daylightOffset = Math.min(...monthlyOffsets);
-
-  const january = new Date(year, 0, 1, 12);
-  const july = new Date(year, 6, 1, 12);
-  const standardSample = january.getTimezoneOffset() === standardOffset ? january : july;
-  const daylightSample = january.getTimezoneOffset() === daylightOffset ? january : july;
-
-  const standardName = sanitizeTzAbbreviation(getShortTimeZoneName(standardSample), "UTC");
-  if (standardOffset === daylightOffset) {
-    return `${standardName}${formatPosixOffset(standardOffset)}`;
-  }
-
-  const daylightName = sanitizeTzAbbreviation(getShortTimeZoneName(daylightSample), "DST");
-  const firstHalfTransition = findTransitionInstant(year, 0, 5);
-  const secondHalfTransition = findTransitionInstant(year, 6, 11);
-  if (!firstHalfTransition || !secondHalfTransition) {
-    return `${standardName}${formatPosixOffset(standardOffset)}${daylightName}`;
-  }
-
-  const startTransition =
-    firstHalfTransition.getTimezoneOffset() === daylightOffset ? firstHalfTransition : secondHalfTransition;
-  const endTransition = startTransition === firstHalfTransition ? secondHalfTransition : firstHalfTransition;
-
-  return `${standardName}${formatPosixOffset(standardOffset)}${daylightName},${getTransitionRule(startTransition)},${getTransitionRule(endTransition)}`;
-}
-
-function syncDerivedDefaults() {
-  if (timezoneInput && !timezoneInput.value.trim()) {
-    timezoneInput.value = guessLocalPosixTimezone();
+function stopConsoleReader() {
+  state.consoleReading = false;
+  if (state.consoleReader) {
+    void state.consoleReader.cancel().catch(() => undefined);
   }
 }
 
-function getValidationFailureReason(): string | null {
-  const requiredText = ["wifi_ssid", "time_timezone", "llm_model", "llm_api_key"];
-  for (const id of requiredText) {
-    const el = document.getElementById(id) as HTMLInputElement | null;
-    if (!el) return `missing element: ${id}`;
-    if (!el.value.trim()) return `required field empty: ${id}`;
-  }
+function processConsoleText(text: string) {
+  state.consoleLineBuffer += text;
+  const parts = state.consoleLineBuffer.split(/\r?\n/);
+  state.consoleLineBuffer = parts.pop() ?? "";
 
-  const wifiPassword = wifiPasswordInput?.value?.trim() ?? "";
-  if (wifiPassword && wifiPassword.length < 8) {
-    return "wifi password too short";
-  }
-
-  const mode = (document.getElementById("llm_mode") as HTMLSelectElement | null)?.value;
-  if (mode === "openai_compat" || mode === "anthropic_compat") {
-    const url = (document.getElementById("llm_base_url") as HTMLInputElement | null)?.value?.trim();
-    if (!url) return "required field empty: llm_base_url";
-  }
-
-  // Validate required fields for each added IM channel
-  for (const channelId of activeChannels) {
-    if (channelId === "wechat" && !wechatLoginState.token.trim()) {
-      return "required field empty: wechat_token";
+  for (const rawLine of parts) {
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
     }
-    const def = IM_CHANNEL_DEFS[channelId];
-    if (!def) continue;
-    for (const field of def.fields) {
-      const val = (document.getElementById(field.id) as HTMLInputElement | null)?.value?.trim();
-      if (!val) return `required field empty: ${field.id}`;
+    const ip = extractReadyIp(line);
+    if (ip) {
+      handleReady(ip);
+    }
+
+    const status = parseWifiStatus(line);
+    if (status) {
+      notifyStatusWaiters(status);
+      if (status.connected && status.configured && status.ip) {
+        handleReady(status.ip);
+      }
     }
   }
-
-  return null;
 }
 
-function setFlashTabUi(active: "flash" | "console") {
-  const flash = active === "flash";
-  tabFlashBtn.classList.toggle("active", flash);
-  tabConsoleBtn.classList.toggle("active", !flash);
-  tabFlash.classList.toggle("active", flash);
-  tabConsole.classList.toggle("active", !flash);
-}
-
-function updateConsoleTabEnabled() {
-  const canUseConsole = !!transport && !isFlashing;
-  tabConsoleBtn.disabled = !canUseConsole;
-  tabConsoleBtn.title = isFlashing && transport ? s.tabLockedWhileFlashing : "";
-}
-
-function setConsoleInputsEnabled(on: boolean) {
-  consoleInput.disabled = !on;
-  consoleSendBtn.disabled = !on;
-}
-
-/** Plain UART write (Transport.write SLIP-wraps data for the flasher protocol). */
-async function writeRawSerial(port: SerialPort, data: Uint8Array) {
-  if (!port.writable) return;
-  const writer = port.writable.getWriter();
+async function sendConsoleCommand(command: string) {
+  if (!state.loader?.port.writable) {
+    throw new Error(s.wifiProbeError);
+  }
+  const writer = state.loader.port.writable.getWriter();
   try {
-    await writer.write(data);
+    await writer.write(new TextEncoder().encode(command));
+    appendConsole(`> ${command}`);
   } finally {
     writer.releaseLock();
   }
 }
 
-async function stopConsoleReadLoop() {
-  const hadConsoleLoop = consoleActive || !!consoleReader || !!consoleReadPromise;
-  consoleActive = false;
-  try {
-    await consoleReader?.cancel();
-  } catch {}
-  if (consoleReadPromise) {
-    try {
-      await consoleReadPromise;
-    } catch {}
-    consoleReadPromise = null;
-  }
-  consoleReader = null;
-  if (transport && hadConsoleLoop) {
-    await transport.waitForUnlock(80);
-  }
-}
-
-function startConsoleReadLoop() {
-  if (!transport || consoleReadPromise) return;
-  const port = transport.device;
-  if (!port.readable) {
-    appendConsole("\n[serial] Port not readable — USB may have re-enumerated; try disconnect and connect again.\n");
+async function resetDeviceFromConsole() {
+  if (!state.loader || !state.inConsoleMode) {
     return;
   }
-
-  consoleActive = true;
-  consoleReadPromise = (async () => {
-    try {
-      consoleReader = port.readable!.getReader();
-      while (consoleActive) {
-        const { value, done } = await consoleReader.read();
-        if (done) break;
-        if (value?.length) appendConsole(new TextDecoder().decode(value));
-      }
-    } catch (err) {
-      console.error("[flash-tool] Failed to read serial console", err);
-    } finally {
-      try {
-        consoleReader?.releaseLock();
-      } catch (err) {
-        console.error("[flash-tool] Failed to release console read lock");
-      }
-      consoleReader = null;
-      consoleActive = false;
-      consoleReadPromise = null;
-    }
-  })();
-}
-
-async function switchToFlashTab() {
-  if (tabFlash.classList.contains("active") && (!transport || esptoolReadLoopRunning) && !consoleReadPromise) {
-    return;
-  }
-  await stopConsoleReadLoop();
-  setFlashTabUi("flash");
-  if (transport && !esptoolReadLoopRunning) {
-    void transport.readLoop();
-    esptoolReadLoopRunning = true;
-  }
-}
-
-const CONSOLE_BAUD_RATE = 115200;
-
-async function reopenPortForConsole() {
-  if (!transport) return;
   try {
-    await transport.disconnect();
-  } catch (err) {
-    console.warn("[flash-tool] disconnect before console reopen failed", err);
+    if (!state.loader.isConsoleResetSupported()) {
+      throw new Error(s.consoleResetUnsupported);
+    }
+    await state.loader.resetInConsoleMode();
+  } catch (error) {
+    appendConsole(`[error] ${getErrorMessage(error)}\n`);
   }
-  await transport.connect(CONSOLE_BAUD_RATE);
 }
 
-async function switchToConsoleTab() {
-  if (!transport || isFlashing) return;
-  await stopEsptoolReadLoop(transport);
-  esptoolReadLoopRunning = false;
-  await transport.waitForUnlock(100);
-  if (transport.baudrate !== CONSOLE_BAUD_RATE) {
-    await reopenPortForConsole();
-  }
-  setFlashTabUi("console");
-  startConsoleReadLoop();
-}
-
-if (!("serial" in navigator)) {
-  unsupportedBanner.classList.add("visible");
-  connectBtn.disabled = true;
-}
-
-tabFlashBtn.addEventListener("click", () => {
-  void switchToFlashTab();
-});
-
-tabConsoleBtn.addEventListener("click", () => {
-  if (!transport || isFlashing) return;
-  void switchToConsoleTab();
-});
-
-connectBtn.addEventListener("click", async () => {
-  connectBtn.disabled = true;
-  connectBtn.textContent = s.connectingMsg;
-  flashResult.classList.remove("visible");
-
-  try {
-    const port = await navigator.serial.requestPort();
-    transport = new Transport(port, false);
-
-    const terminal = {
-      clean() {
-        appendConsole("\x1bc");
-      },
-      writeLine(data: string) {
-        appendConsole(data + "\n");
-      },
-      write(data: string) {
-        appendConsole(data);
-      },
-    };
-
-    loader = new ESPLoader({
-      transport,
-      baudrate: 460800,
-      terminal,
-      debugLogging: false,
-    });
-    const rawChipName = await loader.main("default_reset");
-    esptoolReadLoopRunning = true;
-
-    let flashSizeMB = 0;
-    try {
-      const fstr = await loader.detectFlashSize();
-      const m = fstr.match(/^(\d+)/);
-      flashSizeMB = m ? parseInt(m[1]!, 10) : 0;
-    } catch {}
-
-    // Detect PSRAM from the chip's feature list. The ROM driver returns
-    // entries like "Embedded PSRAM 8MB"; external PSRAM can't be detected
-    // this way, so treat "no match" as unknown (null) instead of zero to
-    // avoid accidentally filtering out valid firmware entries.
-    let psramSizeMB: number | null = null;
-    try {
-      const features = await loader.chip.getChipFeatures(loader);
-      for (const feat of features) {
-        const m = feat.match(/PSRAM\s+(\d+)\s*MB/i);
-        if (m) {
-          psramSizeMB = parseInt(m[1]!, 10);
-          break;
-        }
-      }
-    } catch {}
-
-    chipInfo = { chipName: rawChipName, flashSizeMB, psramSizeMB };
-
-    statusBadge.className = "status-badge connected";
-    statusText.textContent = s.connectedTo;
-    infoChip.textContent = rawChipName;
-    infoChip.style.display = "";
-    infoFlash.textContent = `Flash ${flashSizeMB} MB`;
-    infoFlash.style.display = "";
-    if (psramSizeMB !== null) {
-      infoPsram.textContent = `PSRAM ${psramSizeMB} MB`;
-      infoPsram.style.display = "";
-      infoPsramSep.style.display = "";
-    } else {
-      infoPsram.textContent = s.psramUnknown;
-      infoPsram.style.display = "";
-      infoPsramSep.style.display = "";
-    }
-
-    connectBarIdle.style.display = "none";
-    connectBarActive.style.display = "flex";
-    connectBar.classList.add("is-connected");
-
-    mainContent.style.display = "block";
-    mainContent.classList.remove("revealed");
-    void mainContent.offsetWidth;
-    mainContent.classList.add("revealed");
-
-    setConsoleInputsEnabled(true);
-    updateConsoleTabEnabled();
-
-    populateFirmware(rawChipName, flashSizeMB, psramSizeMB);
-    updateFlashBtn();
-  } catch (err) {
-    connectBtn.disabled = false;
-    connectBtn.innerHTML = connectBtnOriginalHTML;
-    connectBarIdle.style.display = "flex";
-    const message = err instanceof Error ? err.message : String(err);
-    if (message !== "No port selected") {
-      appendConsole("[Error] " + message + "\n");
-      console.error("[flash-tool] Failed to connect to device", err);
-    }
-    esptoolReadLoopRunning = false;
-    transport = null;
-    loader = null;
-  }
-});
-
-disconnectBtn.addEventListener("click", async () => {
-  resetWechatLoginState();
-  await stopConsoleReadLoop();
-  if (transport) {
-    try {
-      await transport.disconnect();
-    } catch {
-      /* ignore */
-    }
-  }
-  transport = null;
-  loader = null;
-  chipInfo = null;
-  selectedFirmware = null;
-  isFlashing = false;
-  esptoolReadLoopRunning = false;
-
-  connectBarActive.style.display = "none";
-  connectBarIdle.style.display = "flex";
-  connectBar.classList.remove("is-connected");
-  connectBtn.disabled = false;
-  connectBtn.innerHTML = connectBtnOriginalHTML;
-
-  mainContent.style.display = "none";
-  mainContent.classList.remove("revealed");
-
-  setFlashTabUi("flash");
-  setConsoleInputsEnabled(false);
-  updateConsoleTabEnabled();
-
-  firmwareGrid.innerHTML = "";
-  configForm.style.display = "none";
-  configForm.classList.remove("config-revealed");
-  firmwareDesc.classList.remove("visible");
-  noFirmwareCard.style.display = "none";
-  infoChip.style.display = "none";
-  infoFlash.style.display = "none";
-  infoPsram.style.display = "none";
-  infoPsramSep.style.display = "none";
-  updateFlashBtn();
-});
-
-function populateFirmware(chipName: string, flashSizeMB: number, psramSizeMB: number | null) {
-  const list = getFirmwareList(firmwareDb, chipName, flashSizeMB, psramSizeMB);
-  firmwareGrid.innerHTML = "";
-  firmwareDesc.classList.remove("visible");
-  noFirmwareCard.style.display = "none";
-
-  if (!list.length) {
-    noFirmwareCard.style.display = "flex";
-    return;
-  }
-
-  list.forEach((fw, idx) => {
-    const card = document.createElement("div");
-    card.className = "firmware-card";
-    card.dataset.idx = String(idx);
-
-    const tags = fw.features.map((f) => `<span class="fw-tag">${f}</span>`).join("");
-    const psramReq = fw.min_psram_size ?? 0;
-    const metaParts = [`Flash ≥ ${fw.min_flash_size} MB`];
-    if (psramReq > 0) metaParts.push(`PSRAM ≥ ${psramReq} MB`);
-    card.innerHTML = `
-      <div class="fw-board">${fw.board}</div>
-      <div class="fw-meta">${metaParts.join(" · ")}</div>
-      ${tags ? `<div class="fw-features">${tags}</div>` : ""}
-    `;
-    card.addEventListener("click", () => selectFirmware(fw, card));
-    firmwareGrid.appendChild(card);
+function waitForWifiStatus(timeoutMs: number) {
+  return new Promise<WifiStatus>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      state.statusWaiters = state.statusWaiters.filter((waiter) => waiter.timer !== timer);
+      reject(new Error(s.wifiProbeError));
+    }, timeoutMs);
+    state.statusWaiters.push({ resolve, reject, timer });
   });
 }
 
-function selectFirmware(fw: FirmwareEntry, card: HTMLDivElement) {
-  selectedFirmware = fw;
-  document.querySelectorAll(".firmware-card").forEach((c) => c.classList.remove("selected"));
-  card.classList.add("selected");
-
-  const descText = fw.description.replace(/^#+\s*/gm, "");
-  firmwareDesc.textContent = descText;
-  firmwareDesc.classList.add("visible");
-
-  configForm.style.display = "block";
-  configForm.classList.remove("config-revealed");
-  void configForm.offsetWidth;
-  configForm.classList.add("config-revealed");
-  syncLlmPanels();
-  renderImChannels();
-  updateFlashBtn();
-}
-
-function updateFlashBtn() {
-  if (!chipInfo) {
-    flashBtn.disabled = true;
-    flashHint.textContent = s.flashBtnDisabledNoDevice;
-    return;
-  }
-  if (!selectedFirmware) {
-    flashBtn.disabled = true;
-    flashHint.textContent = s.flashBtnDisabledNoFirmware;
-    return;
-  }
-  const validationFailure = getValidationFailureReason();
-  if (validationFailure) {
-    flashBtn.disabled = true;
-    flashHint.textContent = s.flashBtnDisabledNoConfig;
-    return;
-  }
-  flashBtn.disabled = false;
-  flashHint.textContent = "";
-}
-
-function syncLlmPanels(): void {
-  const mode = llmModeSelect?.value;
-  const baseWrap = document.getElementById("llm_base_url_wrap");
-  if (baseWrap) baseWrap.classList.toggle("open", mode === "openai_compat" || mode === "anthropic_compat");
-  const baseUrlLabelText = document.getElementById("llm_base_url_label_text");
-  if (baseUrlLabelText) {
-    baseUrlLabelText.textContent =
-      mode === "anthropic_compat" ? s.llmBaseUrlLabelAnthropicCompat : s.llmBaseUrlLabel;
+function waitForReady(timeoutMs: number) {
+  if (state.readyIp) {
+    return Promise.resolve(state.readyIp);
   }
 
-  const vendorLinks =
-    mode === "qwen" || mode === "deepseek" || mode === "openai" || mode === "anthropic"
-      ? LLM_VENDOR_LINKS[mode]
-      : null;
-  if (llmVendorActions) {
-    llmVendorActions.classList.toggle("hidden", !vendorLinks);
-  }
-  if (vendorLinks) {
-    if (llmApiKeyLink) llmApiKeyLink.href = vendorLinks.apiKey;
-    if (llmDocsLink) llmDocsLink.href = vendorLinks.docs;
-  }
-
-  if (llmModelInput && !llmModelUserEdited && mode) {
-    const defaultModel = LLM_DEFAULT_MODELS[mode];
-    if (defaultModel) {
-      llmModelInput.value = defaultModel;
-    } else {
-      llmModelInput.value = "";
-    }
-  }
-
-  if (llmBaseUrlInput && !llmBaseUrlUserEdited && mode) {
-    llmBaseUrlInput.value = LLM_DEFAULT_BASE_URLS[mode] ?? "";
-  }
-}
-
-if (configForm) {
-  configForm.addEventListener("input", () => {
-    syncLlmPanels();
-    updateFlashBtn();
-  });
-  configForm.addEventListener("change", () => {
-    syncLlmPanels();
-    updateFlashBtn();
+  return new Promise<string>((resolve, reject) => {
+    const timer = window.setTimeout(() => {
+      state.readyWaiters = state.readyWaiters.filter((waiter) => waiter.timer !== timer);
+      reject(new Error(s.wifiTimeoutError));
+    }, timeoutMs);
+    state.readyWaiters.push({ resolve, reject, timer });
   });
 }
-llmModeSelect?.addEventListener("change", () => {
-  if (llmModelInput) {
-    const current = llmModelInput.value.trim();
-    const allDefaults = Object.values(LLM_DEFAULT_MODELS);
-    if (current === "" || allDefaults.includes(current)) {
-      llmModelUserEdited = false;
-    }
-  }
-  if (llmBaseUrlInput) {
-    const current = llmBaseUrlInput.value.trim();
-    const allDefaults = Object.values(LLM_DEFAULT_BASE_URLS);
-    if (current === "" || allDefaults.includes(current)) {
-      llmBaseUrlUserEdited = false;
-    }
-  }
-  syncLlmPanels();
-});
-syncLlmPanels();
-renderImChannels();
-syncDerivedDefaults();
 
-function validateConfig(): boolean {
-  return getValidationFailureReason() === null;
+function notifyStatusWaiters(status: WifiStatus) {
+  const waiters = [...state.statusWaiters];
+  state.statusWaiters = [];
+  for (const waiter of waiters) {
+    window.clearTimeout(waiter.timer);
+    waiter.resolve(status);
+  }
 }
 
-function getConfig(): NvsConfig {
-  const get = (id: string) =>
-    (document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null)?.value?.trim() ||
-    undefined;
-  const mode = (document.getElementById("llm_mode") as HTMLSelectElement | null)?.value ?? "qwen";
-  let llm_profile: string;
-  let llm_backend_type: string;
-  const llm_base_url = get("llm_base_url");
-  if (mode === "openai") {
-    llm_profile = "openai";
-    llm_backend_type = "openai_compatible";
-  } else if (mode === "deepseek") {
-    llm_profile = "custom_openai_compatible";
-    llm_backend_type = "openai_compatible";
-  } else if (mode === "openai_compat") {
-    llm_profile = "custom_openai_compatible";
-    llm_backend_type = "openai_compatible";
-  } else if (mode === "anthropic") {
-    llm_profile = "anthropic";
-    llm_backend_type = "anthropic";
-  } else if (mode === "anthropic_compat") {
-    llm_profile = "anthropic";
-    llm_backend_type = "anthropic";
+function handleReady(ip: string) {
+  if (state.readyIp === ip && state.provision === "ready") {
+    return;
+  }
+
+  state.readyIp = ip;
+  state.provision = "ready";
+  updateConsoleTabState();
+
+  const href = `http://${ip}/#start`;
+  els.modalReadyLink.href = href;
+  els.modalReadyLink.textContent = s.openDeviceBtn.replace("{ip}", ip);
+  els.modalReadyTitle.textContent = s.wifiReadyTitle;
+  els.modalReadyDesc.textContent = s.wifiReadyDesc;
+
+  // Advance modal to step 3
+  renderModalStep(3);
+  setModalCloseable(true);
+
+  const waiters = [...state.readyWaiters];
+  state.readyWaiters = [];
+  for (const waiter of waiters) {
+    window.clearTimeout(waiter.timer);
+    waiter.resolve(ip);
+  }
+}
+
+// ── Progress helpers ─────────────────────────────────────────────────────────
+
+function renderModalProgress(visible: boolean) {
+  els.modalProgressWrap.classList.toggle("visible", visible);
+}
+
+function renderReconnectPrompt(visible: boolean) {
+  els.modalReconnectPrompt.hidden = !visible;
+  if (!visible) {
+    els.modalReconnectStatus.textContent = "";
+  }
+  renderReconnectState();
+}
+
+function renderReconnectState() {
+  const visible = !els.modalReconnectPrompt.hidden;
+  els.modalReconnectBtn.disabled =
+    !visible || state.reconnectingPort || !("serial" in navigator);
+}
+
+function updateModalProgress(stage: string, percent: number) {
+  els.modalProgressStage.textContent = stage;
+  els.modalProgressPct.textContent = `${Math.max(0, Math.min(100, percent))}%`;
+  els.modalProgressBar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+}
+
+function addProgressLine(line: string) {
+  state.progressLines.push(line);
+  if (state.progressLines.length > 60) {
+    state.progressLines = state.progressLines.slice(-60);
+  }
+  els.modalProgressLog.textContent = state.progressLines.join("\n");
+  els.modalProgressLog.scrollTop = els.modalProgressLog.scrollHeight;
+}
+
+function showModalFlashError(message: string) {
+  els.modalFlashResult.textContent = message;
+  els.modalFlashResult.className = "modal-flash-result error visible";
+}
+
+function showModalFlashSuccess(message: string) {
+  els.modalFlashResult.textContent = message;
+  els.modalFlashResult.className = "modal-flash-result success visible";
+}
+
+function hideModalFlashResult() {
+  els.modalFlashResult.textContent = "";
+  els.modalFlashResult.className = "modal-flash-result";
+}
+
+// ── Console helpers ──────────────────────────────────────────────────────────
+
+function appendConsole(text: string) {
+  state.consoleText += text;
+  if (state.consoleText.length > 120000) {
+    state.consoleText = state.consoleText.slice(-120000);
+  }
+  renderConsole();
+}
+
+function renderConsole() {
+  // Update console tab output
+  if (!state.consoleText) {
+    els.consoleOutput.textContent = "";
+    els.consoleOutput.appendChild(els.consoleEmpty);
   } else {
-    llm_profile = "qwen_compatible";
-    llm_backend_type = "openai_compatible";
+    els.consoleOutput.textContent = state.consoleText;
+    els.consoleOutput.scrollTop = els.consoleOutput.scrollHeight;
   }
 
-  const qqOn    = activeChannels.includes("qq");
-  const feishuOn = activeChannels.includes("feishu");
-  const tgOn    = activeChannels.includes("tg");
-  const wechatOn = activeChannels.includes("wechat");
+  // Update modal readonly terminal
+  if (!state.consoleText) {
+    els.modalTerminalOutput.textContent = "";
+    els.modalTerminalOutput.appendChild(els.modalTerminalEmpty);
+  } else {
+    els.modalTerminalOutput.textContent = state.consoleText;
+    if (els.modalTerminalDetails.open) {
+      els.modalTerminalOutput.scrollTop = els.modalTerminalOutput.scrollHeight;
+    }
+  }
+}
 
+function renderConsoleSendState() {
+  const canSend =
+    state.serial === "connected" &&
+    state.inConsoleMode &&
+    state.flash !== "downloading" &&
+    state.flash !== "flashing" &&
+    state.provision !== "connecting_wifi";
+
+  els.consoleSendInput.disabled = !canSend;
+  els.consoleSendBtn.disabled = !canSend;
+}
+
+async function sendConsoleInput() {
+  const input = els.consoleSendInput.value.trim();
+  if (!input) {
+    return;
+  }
+  els.consoleSendInput.value = "";
+  await sendConsoleCommand(`${input}\n`).catch((error) => {
+    appendConsole(`[send-error] ${getErrorMessage(error)}\n`);
+  });
+}
+
+// ── Show/hide helpers ────────────────────────────────────────────────────────
+
+function showConnectError(message: string) {
+  els.connectError.textContent = message;
+  els.connectError.classList.add("visible");
+}
+
+function clearConnectError() {
+  els.connectError.textContent = "";
+  els.connectError.classList.remove("visible");
+}
+
+// ── Download / button helpers ────────────────────────────────────────────────
+
+async function downloadBinary(
+  url: string,
+  onProgress: (received: number, total: number) => void,
+) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status} while downloading firmware`);
+  }
+
+  const total = Number(response.headers.get("content-length") ?? "0");
+  if (!response.body) {
+    const buffer = await response.arrayBuffer();
+    onProgress(buffer.byteLength, buffer.byteLength);
+    return buffer;
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    if (!value) {
+      continue;
+    }
+    chunks.push(value);
+    received += value.byteLength;
+    onProgress(received, total);
+  }
+
+  const merged = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  onProgress(received, total || received);
+  return merged.buffer;
+}
+
+function getSelectedFirmware() {
+  const boardId = state.selectedBoardId;
+  if (!boardId) {
+    return null;
+  }
+  return state.visibleBoards.find(
+    ({ chipKey, brandKey, boardKey }) => makeBoardId(chipKey, brandKey, boardKey) === boardId,
+  ) ?? null;
+}
+
+function updateDownloadButton(firmware: FirmwareRecord | null) {
+  if (!firmware) {
+    els.downloadBtn.classList.add("disabled");
+    els.downloadBtn.setAttribute("aria-disabled", "true");
+    els.downloadBtn.href = "#";
+    els.downloadBtn.removeAttribute("download");
+    return;
+  }
+
+  els.downloadBtn.classList.remove("disabled");
+  els.downloadBtn.setAttribute("aria-disabled", "false");
+  els.downloadBtn.href = firmware.merged_binary;
+  els.downloadBtn.download = firmware.merged_binary.split("/").pop() || "firmware.bin";
+}
+
+function currentSelectionStillVisible() {
+  if (!state.selectedBoardId) {
+    return true;
+  }
+  return state.visibleBoards.some(
+    ({ chipKey, brandKey, boardKey }) =>
+      makeBoardId(chipKey, brandKey, boardKey) === state.selectedBoardId,
+  );
+}
+
+// ── Utility ──────────────────────────────────────────────────────────────────
+
+function makeBoardId(chipKey: string, brandKey: string, boardKey: string) {
+  return `${chipKey}:${brandKey}:${boardKey}`;
+}
+
+function chipLabel(chipKey: string) {
+  const parsed = parseChipKey(chipKey);
+  const upper = parsed.baseChipKey.toUpperCase();
+  const label = upper
+    .replace("ESP32S", "ESP32-S")
+    .replace("ESP32C", "ESP32-C")
+    .replace("ESP32P", "ESP32-P")
+    .replace("ESP32H", "ESP32-H");
+  return parsed.rev == null ? label : `${label} (Rev ${parsed.rev})`;
+}
+
+function parseChipKey(chipKey: string) {
+  const [baseChipKey, revPart] = chipKey.split("|", 2);
+  const revMatch = revPart?.match(/^rev(\d+)$/i);
   return {
-    wifi_ssid: get("wifi_ssid") || "",
-    wifi_password: get("wifi_password") || "",
-    time_timezone: get("time_timezone") || "",
-    llm_backend_type,
-    llm_profile,
-    llm_model: get("llm_model") || "",
-    llm_api_key: get("llm_api_key") || "",
-    ...(llm_base_url ? { llm_base_url } : {}),
-    ...(qqOn
-      ? { qq_app_id: get("qq_app_id"), qq_app_secret: get("qq_app_secret") }
-      : {}),
-    ...(feishuOn
-      ? { feishu_app_id: get("feishu_app_id"), feishu_app_secret: get("feishu_app_secret") }
-      : {}),
-    ...(tgOn ? { tg_bot_token: get("tg_bot_token") } : {}),
-    ...(wechatOn
-      ? {
-          wechat_token: wechatLoginState.token.trim(),
-          wechat_base_url:
-            wechatLoginState.baseUrl.trim() ||
-            wechatLoginState.currentApiBaseUrl.trim() ||
-            WECHAT_ILINK_BASE_URL,
-        }
-      : {}),
-    search_brave_key: get("search_brave_key"),
-    search_tavily_key: get("search_tavily_key"),
+    baseChipKey,
+    rev: revMatch ? Number.parseInt(revMatch[1], 10) : null,
   };
 }
 
-function showFlashActionBlocked(message: string) {
-  flashResult.textContent = "✗ " + message;
-  flashResult.className = "flash-result error visible";
+function normalizeChipKey(chipName: string | null) {
+  if (!chipName) {
+    return null;
+  }
+  return chipName.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-flashBtn.addEventListener("click", async () => {
-  if (!loader || !chipInfo) {
-    showFlashActionBlocked(s.flashBtnDisabledNoDevice);
-    updateFlashBtn();
-    return;
+function parseFlashSize(value: string | null) {
+  if (!value) {
+    return null;
   }
-  if (!selectedFirmware) {
-    showFlashActionBlocked(s.flashBtnDisabledNoFirmware);
-    updateFlashBtn();
-    return;
+  const match = value.match(/^(\d+)(KB|MB)$/i);
+  if (!match) {
+    return null;
   }
-  if (!validateConfig()) {
-    showFlashActionBlocked(s.flashBtnDisabledNoConfig);
-    updateFlashBtn();
-    return;
-  }
-
-  try {
-    await switchToFlashTab();
-
-    isFlashing = true;
-    updateConsoleTabEnabled();
-
-    flashBtn.disabled = true;
-    flashResult.className = "flash-result";
-    progressWrap.classList.add("visible");
-    progressLog.textContent = "";
-    progressBar.style.width = "0%";
-
-    function onProgress(p: { percent: number; message: string }) {
-      progressStage.textContent = p.message;
-      progressPct.textContent = p.percent + "%";
-      progressBar.style.width = p.percent + "%";
-      progressLog.textContent += p.message + "\n";
-      progressLog.scrollTop = progressLog.scrollHeight;
-    }
-
-    onProgress({ percent: 0, message: s.downloadingFirmware });
-    const resp = await fetch(selectedFirmware.merged_binary);
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    const buf = await resp.arrayBuffer();
-    const fwBytes = new Uint8Array(buf);
-    onProgress({ percent: 30, message: "Firmware downloaded." });
-
-    onProgress({ percent: 35, message: s.generatingNvs });
-    const nvsStart = parseAddr(selectedFirmware.nvs_info.start_addr);
-    const nvsSize = parseAddr(selectedFirmware.nvs_info.size);
-    const nvsData = generateNvsPartition(getConfig(), nvsSize);
-
-    const merged = new Uint8Array(fwBytes);
-    if (nvsStart + nvsSize <= merged.length) {
-      merged.set(nvsData, nvsStart);
-    }
-    onProgress({ percent: 40, message: "NVS partition generated." });
-
-    const fileArray: { data: Uint8Array; address: number }[] = [{ data: merged, address: 0x0 }];
-    if (nvsStart + nvsSize > fwBytes.length) {
-      fileArray.push({ data: nvsData, address: nvsStart });
-    }
-
-    onProgress({ percent: 45, message: s.writingFlash });
-    await loader.writeFlash({
-      fileArray,
-      flashSize: "keep",
-      flashMode: "keep",
-      flashFreq: "keep",
-      eraseAll: false,
-      compress: true,
-      reportProgress(fileIndex, written, total) {
-        const base = 45 + (fileIndex / fileArray.length) * 50;
-        const pct = Math.round(base + (written / total) * (50 / fileArray.length));
-        onProgress({ percent: pct, message: `${s.writingFlash} ${pct}%` });
-      },
-    });
-
-    await loader.after("hard_reset");
-    onProgress({ percent: 100, message: s.flashSuccess });
-
-    flashResult.textContent = "✓ " + s.flashSuccess;
-    flashResult.className = "flash-result success visible";
-
-    isFlashing = false;
-    updateConsoleTabEnabled();
-    flashBtn.disabled = false;
-
-    await sleep(400);
-    await switchToConsoleTab();
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[flash-tool] Flash flow failed", err);
-    progressStage.textContent = s.flashError + message;
-    progressPct.textContent = "0%";
-    progressBar.style.width = "0%";
-    progressLog.textContent += s.flashError + message + "\n";
-    flashResult.textContent = "✗ " + s.flashError + message;
-    flashResult.className = "flash-result error visible";
-
-    isFlashing = false;
-    updateConsoleTabEnabled();
-    flashBtn.disabled = false;
-  }
-});
-
-consoleSendBtn.addEventListener("click", sendInput);
-consoleInput.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") sendInput();
-});
-async function sendInput() {
-  if (!transport || !consoleInput.value || consoleInput.disabled) return;
-  await writeRawSerial(transport.device, new TextEncoder().encode(consoleInput.value + "\r\n"));
-  consoleInput.value = "";
+  const amount = Number(match[1]);
+  return match[2].toUpperCase() === "KB" ? amount / 1024 : amount;
 }
 
-consoleClearBtn.addEventListener("click", () => {
-  consoleOutput.textContent = "";
-});
-
-consoleResetBtn.addEventListener("click", async () => {
-  if (!transport) return;
-  try {
-    await transport.setRTS(true);
-    await sleep(100);
-    await transport.setRTS(false);
-  } catch {
-    /* Port may reconnect after USB reset; ignore NetworkError */
+function formatSizeRequirement(sizeMb: number | null | undefined) {
+  if (sizeMb == null) {
+    return s.psramUnknown;
   }
-});
+  return `${sizeMb} MB`;
+}
 
-updateConsoleTabEnabled();
-updateFlashBtn();
+function formatChipRevision(revision: number | null | undefined) {
+  if (revision == null) {
+    return null;
+  }
+  if (revision >= 300) {
+    return `v${Math.floor(revision / 100)}`;
+  }
+  return `v${revision}`;
+}
+
+function parseWifiStatus(line: string): WifiStatus | null {
+  if (!line.includes("CMD_WIFI:") || !line.includes("cmd=status") || !line.includes("ok=1")) {
+    return null;
+  }
+
+  const connectedMatch = line.match(/sta_connected=(\d)/);
+  const configuredMatch = line.match(/sta_configured=(\d)/);
+  const ipMatch = line.match(/sta_ip=([0-9.\-]+)/);
+  if (!connectedMatch || !configuredMatch || !ipMatch) {
+    return null;
+  }
+
+  const ip = isIpv4(ipMatch[1]) ? ipMatch[1] : null;
+  return {
+    connected: connectedMatch[1] === "1",
+    configured: configuredMatch[1] === "1",
+    ip,
+  };
+}
+
+function extractReadyIp(line: string) {
+  const match = line.match(/esp_netif_handlers:\s+sta ip:\s+(\d+\.\d+\.\d+\.\d+)/);
+  return match?.[1] && isIpv4(match[1]) ? match[1] : null;
+}
+
+function isIpv4(value: string) {
+  return /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(value);
+}
+
+function escapeConsoleArgument(value: string) {
+  return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function copyLoaderMetadata(source: ESPLoader, target: ESPLoader) {
+  target.chipName = source.chipName;
+  target.chipFamily = source.chipFamily;
+  target.chipRevision = source.chipRevision;
+  target.chipVariant = source.chipVariant;
+  target.flashSize = source.flashSize;
+  target._isUsbJtagOrOtg = source._isUsbJtagOrOtg;
+}
+
+function rejectWaiters<T>(waiters: Waiter<T>[], reason: Error) {
+  for (const waiter of waiters) {
+    window.clearTimeout(waiter.timer);
+    waiter.reject(reason);
+  }
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
+function escapeHtml(text: string) {
+  return text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}

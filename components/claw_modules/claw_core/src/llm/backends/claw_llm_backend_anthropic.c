@@ -15,13 +15,13 @@
 #include "llm/media/claw_media_pipeline.h"
 
 #define CLAW_LLM_ANTHROPIC_VERSION "2023-06-01"
-#define CLAW_LLM_ANTHROPIC_MAX_TOKENS 8192
 
 typedef struct {
     char *api_key;
     char *model;
     char *base_url;
     uint32_t timeout_ms;
+    uint32_t max_tokens;
     size_t image_max_bytes;
 } anthropic_backend_ctx_t;
 
@@ -577,7 +577,7 @@ static esp_err_t build_chat_body(const anthropic_backend_ctx_t *ctx,
     }
 
     cJSON_AddStringToObject(body, "model", ctx->model);
-    cJSON_AddNumberToObject(body, "max_tokens", CLAW_LLM_ANTHROPIC_MAX_TOKENS);
+    cJSON_AddNumberToObject(body, "max_tokens", ctx->max_tokens);
     cJSON_AddStringToObject(body, "system", request->system_prompt ? request->system_prompt : "");
 
     messages = convert_messages_to_anthropic(request->messages);
@@ -657,6 +657,7 @@ static esp_err_t anthropic_init(const claw_llm_runtime_config_t *config,
     ctx->model = strdup(config->model);
     ctx->base_url = strdup(base_url);
     ctx->timeout_ms = config->timeout_ms ? config->timeout_ms : profile->default_timeout_ms;
+    ctx->max_tokens = config->max_tokens;
     ctx->image_max_bytes = config->image_max_bytes ? config->image_max_bytes : profile->default_image_max_bytes;
     if (!ctx->api_key || !ctx->model || !ctx->base_url) {
         free(ctx->api_key);
@@ -803,7 +804,7 @@ static esp_err_t anthropic_infer_media(void *backend_ctx,
     }
 
     cJSON_AddStringToObject(body, "model", ctx->model);
-    cJSON_AddNumberToObject(body, "max_tokens", CLAW_LLM_ANTHROPIC_MAX_TOKENS);
+    cJSON_AddNumberToObject(body, "max_tokens", ctx->max_tokens);
     cJSON_AddStringToObject(body, "system", request->system_prompt ? request->system_prompt : "");
 
     cJSON_AddStringToObject(user_msg, "role", "user");

@@ -30,8 +30,36 @@ static esp_err_t status_handler(httpd_req_t *req)
     return http_server_send_json_response(req, root);
 }
 
+static esp_err_t restart_handler(httpd_req_t *req)
+{
+    http_server_ctx_t *ctx = http_server_ctx();
+    esp_err_t err = ctx->services.restart_device ? ctx->services.restart_device() : ESP_ERR_NOT_SUPPORTED;
+    if (err != ESP_OK) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to restart device");
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        httpd_resp_send_500(req);
+        return ESP_ERR_NO_MEM;
+    }
+    cJSON_AddBoolToObject(root, "ok", true);
+    http_server_json_add_string(root, "message", "device restart scheduled");
+    return http_server_send_json_response(req, root);
+}
+
 esp_err_t http_server_register_status_routes(httpd_handle_t server)
 {
-    httpd_uri_t handler = { .uri = "/api/status", .method = HTTP_GET, .handler = status_handler };
-    return httpd_register_uri_handler(server, &handler);
+    const httpd_uri_t handlers[] = {
+        { .uri = "/api/status", .method = HTTP_GET, .handler = status_handler },
+        { .uri = "/api/restart", .method = HTTP_POST, .handler = restart_handler },
+    };
+
+    for (size_t i = 0; i < sizeof(handlers) / sizeof(handlers[0]); i++) {
+        esp_err_t err = httpd_register_uri_handler(server, &handlers[i]);
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+    return ESP_OK;
 }

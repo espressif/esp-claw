@@ -93,6 +93,7 @@ typedef struct {
     const char *base_url;
     const char *auth_type;
     uint32_t timeout_ms;
+    uint32_t max_tokens;
     size_t image_max_bytes;
     const char *system_prompt;
     claw_core_append_session_turn_fn append_session_turn;

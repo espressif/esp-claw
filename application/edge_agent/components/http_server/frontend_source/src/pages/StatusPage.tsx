@@ -1,9 +1,10 @@
-import { type Component } from 'solid-js';
+import { createSignal, type Component } from 'solid-js';
 import { t } from '../i18n';
 import { TabShell } from '../components/layout/TabShell';
 import { PageHeader } from '../components/ui/PageHeader';
 import { StaticConfigBlock } from '../components/ui/ConfigBlocks';
 import { Button } from '../components/ui/Button';
+import { Modal } from '../components/ui/Modal';
 import { appStatus, reloadStatus } from '../state/config';
 import { pushToast } from '../state/toast';
 
@@ -26,7 +27,9 @@ const InfoRow: Component<{ label: string; value?: string; mono?: boolean }> = (p
   );
 };
 
-export const StatusPage: Component = () => {
+export const StatusPage: Component<{ onRestartRequest: () => void }> = (props) => {
+  const [confirmOpen, setConfirmOpen] = createSignal(false);
+
   const reload = async () => {
     try {
       await reloadStatus();
@@ -42,9 +45,14 @@ export const StatusPage: Component = () => {
         title={t('navStatus') as string}
         description={t('pageSubtitle') as string}
         actions={
-          <Button size="sm" variant="secondary" onClick={reload}>
-            {t('sysInfoReload')}
-          </Button>
+          <>
+            <Button size="sm" variant="secondary" onClick={reload}>
+              {t('sysInfoReload')}
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => setConfirmOpen(true)}>
+              {t('sysInfoRestart')}
+            </Button>
+          </>
         }
       />
       <div class="divide-y divide-[var(--color-border-subtle)] mt-2">
@@ -76,6 +84,35 @@ export const StatusPage: Component = () => {
           </div>
         </StaticConfigBlock>
       </div>
+      <Modal
+        open={confirmOpen()}
+        onClose={() => setConfirmOpen(false)}
+        title={t('restartConfirmTitle')}
+        subtitle={t('restartConfirmBody')}
+        widthClass="w-full max-w-md"
+        actions={
+          <>
+            <Button variant="ghost" onClick={() => setConfirmOpen(false)}>
+              {t('restartConfirmCancel')}
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setConfirmOpen(false);
+                props.onRestartRequest();
+              }}
+            >
+              {t('restartConfirmAction')}
+            </Button>
+          </>
+        }
+      >
+        <div class="px-5 pb-2">
+          <p class="m-0 text-[0.88rem] text-[var(--color-text-secondary)]">
+            {t('restartConfirmHint')}
+          </p>
+        </div>
+      </Modal>
     </TabShell>
   );
 };

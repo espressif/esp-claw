@@ -23,9 +23,6 @@ importers:
       astro-d2:
         specifier: ^0.10.0
         version: 0.10.0(astro@6.1.6(@types/node@24.12.0)(rollup@4.60.0)(typescript@6.0.2)(yaml@2.8.3))
-      esptool-js:
-        specifier: ^0.6.0
-        version: 0.6.0
       lean-qr:
         specifier: ^2.7.1
         version: 2.7.1
@@ -35,6 +32,9 @@ importers:
       starlight-theme-nova:
         specifier: ^0.11.7
         version: 0.11.7(@astrojs/starlight@0.38.3(astro@6.1.6(@types/node@24.12.0)(rollup@4.60.0)(typescript@6.0.2)(yaml@2.8.3)))(typescript@6.0.2)
+      tasmota-webserial-esptool:
+        specifier: ^9.2.20
+        version: 9.2.20
       typescript:
         specifier: ^6.0.2
         version: 6.0.2
@@ -971,9 +971,6 @@ packages:
     engines: {node: '>=22.12.0', npm: '>=9.6.5', pnpm: '>=7.1.0'}
     hasBin: true
 
-  atob-lite@2.0.0:
-    resolution: {integrity: sha512-LEeSAWeh2Gfa2FtlQE1shxQ8zi5F9GHarrGKz08TMdODD5T4eH6BMsvtnhbWZ+XQn+Gb6om/917ucvRu7l7ukw==}
-
   axobject-query@4.1.0:
     resolution: {integrity: sha512-qIj0G9wZbMGNLjLmg1PT6v2mE9AH2zlnADJD/2tC6E00hgmhUOfEB6greHPAfLRSufHqROIUTkw6E+M3lH0PTQ==}
     engines: {node: '>= 0.4'}
@@ -1181,9 +1178,6 @@ packages:
   escape-string-regexp@5.0.0:
     resolution: {integrity: sha512-/veY75JbMK4j1yjvuUxuVsiS/hr/4iHs9FTT6cgTexxdE0Ly/glccBAkloH/DofkjRbZU3bnoj38mOmhkZ0lHw==}
     engines: {node: '>=12'}
-
-  esptool-js@0.6.0:
-    resolution: {integrity: sha512-ZyuSBXvmS+4DRKM6GrDHfCscnq3YSNlRfM+Zw0DoS7uC3SdkyC262s/ji4MjDYVmMH8SE2BiYx3/dZ1J23Xiew==}
 
   estree-util-attach-comments@3.0.0:
     resolution: {integrity: sha512-cKUwm/HUcTDsYh/9FgnuFqpfquUbwIqwKM26BVCGDPVgvaCl/nDCCjUfiLlx6lsEZ3Z4RFxNbOQ60pkaEwFxGw==}
@@ -1915,6 +1909,9 @@ packages:
     resolution: {integrity: sha512-XDpWUOPC6FEibaLzjfe0ucaV0YrOjYotGJO1WpF0Zd+n6ZGEQUsSugaoLq9QkEZtAfQIxT42UChcssDVPP3+/w==}
     engines: {node: '>=16'}
     hasBin: true
+
+  tasmota-webserial-esptool@9.2.20:
+    resolution: {integrity: sha512-xL/mFdMP5i8Q/LiOds8V0etZ2UTNJL7v9gDqN4uM3882RCkM9+qJ2osSsvZK4e2FKItK0NQPGMDAcohveHn1Ew==}
 
   tiny-inflate@1.0.3:
     resolution: {integrity: sha512-pkY1fj1cKHb2seWDy0B16HeWyczlJA9/WW3u3c4z/NiWDsO3DOU5D7nhTLE9CF0yXv/QZFY7sEJmj24dK+Rrqw==}
@@ -3274,8 +3271,6 @@ snapshots:
       - uploadthing
       - yaml
 
-  atob-lite@2.0.0: {}
-
   axobject-query@4.1.0: {}
 
   bail@2.0.2: {}
@@ -3477,12 +3472,6 @@ snapshots:
   escalade@3.2.0: {}
 
   escape-string-regexp@5.0.0: {}
-
-  esptool-js@0.6.0:
-    dependencies:
-      atob-lite: 2.0.0
-      pako: 2.1.0
-      tslib: 2.8.1
 
   estree-util-attach-comments@3.0.0:
     dependencies:
@@ -4774,6 +4763,11 @@ snapshots:
       csso: 5.0.5
       picocolors: 1.1.1
       sax: 1.6.0
+
+  tasmota-webserial-esptool@9.2.20:
+    dependencies:
+      pako: 2.1.0
+      tslib: 2.8.1
 
   tiny-inflate@1.0.3: {}
 

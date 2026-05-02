@@ -15,13 +15,6 @@ type SavePanelProps = {
 export const SavePanel: Component<SavePanelProps> = (props) => {
   return (
     <div class="flex flex-wrap items-center gap-3 border-t border-[var(--color-border-subtle)] px-5 py-4 bg-[var(--color-bg-surface)]/30">
-      <Button
-        variant="primary"
-        onClick={props.onSave}
-        disabled={props.saving || !props.dirty}
-      >
-        {props.saving ? '…' : props.saveLabel ?? (t('saveTabBtn') as string)}
-      </Button>
       <Show when={props.onDiscard}>
         <Button
           variant="secondary"
@@ -34,10 +27,18 @@ export const SavePanel: Component<SavePanelProps> = (props) => {
       <Show when={props.dirty}>
         <span class="text-[0.78rem] text-[var(--color-orange)] font-medium">●&nbsp;{t('unsavedIndicator')}</span>
       </Show>
-      <Show when={props.note}>
-        <span class="flex-1 min-w-[200px] text-[0.78rem] text-[var(--color-text-muted)]">{props.note}</span>
-      </Show>
+      <div class="flex-1" />
       <Show when={props.message}>{props.message}</Show>
+      <Show when={props.note}>
+        <span class="min-w-[200px] text-right text-[0.78rem] text-[var(--color-text-muted)]">{props.note}</span>
+      </Show>
+      <Button
+        variant="primary"
+        onClick={props.onSave}
+        disabled={props.saving || !props.dirty}
+      >
+        {props.saving ? '…' : props.saveLabel ?? (t('saveTabBtn') as string)}
+      </Button>
     </div>
   );
 };

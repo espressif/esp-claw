@@ -3,11 +3,8 @@ import type { Lang } from "../site/locales";
 export type { Lang };
 
 export interface Strings {
-  // Page header
   pageTitle: string;
   pageSubtitle: string;
-
-  tabLockedWhileFlashing: string;
 
   connectBtn: string;
   disconnectBtn: string;
@@ -15,99 +12,98 @@ export interface Strings {
   notConnected: string;
   connectedTo: string;
   webSerialUnsupported: string;
+  connectErrorPrefix: string;
 
-  // Firmware & Config (inside Flash tab)
-  step2Title: string;
-  noFirmwareMatch: string;
-  noFirmwareTitle: string;
-  noFirmwareDesc: string;
-  viewSupportedBoardsBtn: string;
+  chooseChipLabel: string;
+  chooseBrandLabel: string;
+  chooseBoardLabel: string;
+  chooseChipPlaceholder: string;
+  chooseBrandPlaceholder: string;
+  boardAutoHint: string;
+  selectedBoardLabel: string;
+  noBrandSelected: string;
+  noBoardSelected: string;
+  boardFlashMeta: string;
+  boardPsramMeta: string;
   psramUnknown: string;
-  // Required – Basic
-  sectionBasic: string;
-  sectionWifi: string;
-  wifiSsidLabel: string;
-  wifiPasswordLabel: string;
-  timezoneLabel: string;
-  timezonePlaceholder: string;
-  // Required – LLM
-  sectionLlm: string;
-  llmModeLabel: string;
-  llmOptionQwen: string;
-  llmOptionDeepSeek: string;
-  llmOptionOpenai: string;
-  llmOptionAnthropic: string;
-  llmOptionOpenaiCompat: string;
-  llmOptionAnthropicCompat: string;
-  llmGetApiKeyBtn: string;
-  llmVendorDocsBtn: string;
-  llmBaseUrlLabel: string;
-  llmBaseUrlLabelAnthropicCompat: string;
-  llmModelLabel: string;
-  llmApiKeyLabel: string;
-  // IM (dynamic channel list)
-  sectionIm: string;
-  imNote: string;
-  imAddChannel: string;
-  imRemoveChannel: string;
-  imChannelQq: string;
-  imChannelFeishu: string;
-  imChannelTg: string;
-  imChannelWechat: string;
-  wechatQrNote: string;
-  wechatQrStatusLabel: string;
-  wechatQrRefreshBtn: string;
-  wechatQrOpenLink: string;
-  wechatQrExpiredOverlay: string;
-  wechatQrTokenReady: string;
-  wechatQrFetchError: string;
-  wechatQrPollError: string;
-  wechatThirdPartyNotice: string;
-  qqAppIdLabel: string;
-  qqAppSecretLabel: string;
-  feishuAppIdLabel: string;
-  feishuAppSecretLabel: string;
-  tgBotTokenLabel: string;
-  // Advanced
-  sectionAdvanced: string;
-  sectionSearch: string;
-  searchNote: string;
-  searchTipTitle: string;
-  searchTipBody: string;
-  searchTipRecommend: string;
-  searchTavilyDashboardLabel: string;
-  searchBraveLabel: string;
-  searchTavilyLabel: string;
+  firmwareRequirementsLabel: string;
+  firmwareDescriptionLabel: string;
+  downloadFirmwareLocalLink: string;
 
-  tabFlash: string;
-  tabConsole: string;
+  downloadBtn: string;
   flashBtn: string;
   flashBtnDisabledNoDevice: string;
   flashBtnDisabledNoFirmware: string;
-  flashBtnDisabledNoConfig: string;
+  flashBtnDisabledNoMatch: string;
+  actionReadyHint: string;
+
+  noFirmwareTitle: string;
+  noFirmwareDesc: string;
+  viewSupportedBoardsBtn: string;
+
+  progressLabel: string;
+  downloadingFirmware: string;
+  writingFlash: string;
+  waitingForDeviceInfo: string;
   flashSuccess: string;
   flashError: string;
-  downloadingFirmware: string;
-  generatingNvs: string;
-  writingFlash: string;
-  consolePlaceholder: string;
+  postFlashReconnectTitle: string;
+  postFlashReconnectDesc: string;
+  postFlashReconnectBtn: string;
+  postFlashReconnectBusy: string;
+  postFlashReconnectSuccess: string;
+  postFlashReconnectError: string;
+
+  wifiSectionTitle: string;
+  wifiPrompt: string;
+  wifiSameNetworkHint: string;
+  wifiSsidLabel: string;
+  wifiPasswordLabel: string;
+  wifiPasswordLengthError: string;
+  wifiSubmitBtn: string;
+  wifiConnecting: string;
+  wifiProbeError: string;
+  wifiTimeoutError: string;
+  wifiReadyTitle: string;
+  wifiReadyDesc: string;
+  openDeviceBtn: string;
+
+  consoleToggleOpen: string;
+  consoleToggleClose: string;
+  consoleTitle: string;
   consoleClearBtn: string;
   consoleResetBtn: string;
-  progressLabel: string;
+  consoleResetUnsupported: string;
+  consoleWaiting: string;
+  consoleSendBtn: string;
+  consoleSendPlaceholder: string;
+  consoleCloseBtn: string;
 
-  // Quick-link cards above the flash tool
+  deviceChipLabel: string;
+  deviceRevisionLabel: string;
+  deviceFlashLabel: string;
+  devicePsramLabel: string;
+
   quickLinkNoHardwareTitle: string;
   quickLinkNoHardwareDesc: string;
   quickLinkBoardsTitle: string;
   quickLinkBoardsDesc: string;
+
+  tabFlash: string;
+  tabConsole: string;
+  consoleTabDisabledHint: string;
+
+  modalStep1Title: string;
+  modalStep2Title: string;
+  modalStep3Title: string;
+  terminalLabel: string;
 }
 
 const en: Strings = {
   pageTitle: "Flash Online",
   pageSubtitle:
-    "Connect your supported ESP series development board and flash ESP-Claw firmware directly from the browser.",
+    "Connect a supported ESP board, flash the merged firmware in your browser, then finish Wi-Fi setup over UART.",
 
-  tabLockedWhileFlashing: "Available when flashing finishes",
   connectBtn: "Connect",
   disconnectBtn: "Disconnect",
   connectingMsg: "Connecting…",
@@ -115,98 +111,103 @@ const en: Strings = {
   connectedTo: "Connected",
   webSerialUnsupported:
     "Web Serial API is not supported in this browser. Please use Chrome, Edge, or another Chromium-based browser.",
+  connectErrorPrefix: "Connection failed: ",
 
-  step2Title: "Select Firmware",
-  noFirmwareMatch:
-    "No firmware available for this chip / flash size combination.",
-  noFirmwareTitle: "No compatible firmware found",
-  noFirmwareDesc:
-    "We couldn't find firmware matching your chip, flash size, or PSRAM. Your board may not be supported yet — check the full list below.",
-  viewSupportedBoardsBtn: "View supported chips & boards",
-  psramUnknown: "PSRAM: unknown",
-  sectionBasic: "Basic Settings",
-  sectionWifi: "Wi-Fi Configuration",
-  wifiSsidLabel: "Wi-Fi SSID",
-  wifiPasswordLabel: "Wi-Fi Password",
-  timezoneLabel: "Timezone (POSIX TZ string)",
-  timezonePlaceholder: "e.g. UTC0",
-  sectionLlm: "LLM Configuration",
-  llmModeLabel: "LLM service",
-  llmOptionQwen: "Qwen (Aliyun Bailian)",
-  llmOptionDeepSeek: "DeepSeek",
-  llmOptionOpenai: "OpenAI",
-  llmOptionAnthropic: "Claude (Anthropic)",
-  llmOptionOpenaiCompat: "OpenAI-compatible API",
-  llmOptionAnthropicCompat: "Claude-compatible API",
-  llmGetApiKeyBtn: "Get API Key",
-  llmVendorDocsBtn: "Vendor Docs",
-  llmBaseUrlLabel: "API base URL (will add /chat/completions path automatically)",
-  llmBaseUrlLabelAnthropicCompat: "API base URL (will add /messages path automatically)",
-  llmModelLabel: "LLM Model",
-  llmApiKeyLabel: "API Key",
-  sectionIm: "Instant messaging (IM)",
-  imNote: "Add zero or more channels. Credentials apply only to added channels.",
-  imAddChannel: "Add channel",
-  imRemoveChannel: "Remove",
-  imChannelQq: "QQ",
-  imChannelFeishu: "Feishu",
-  imChannelTg: "Telegram",
-  imChannelWechat: "WeChat",
-  wechatQrNote:
-    "After adding WeChat, a QR code is fetched automatically. Scan and confirm in WeChat to get token and base URL.",
-  wechatQrStatusLabel: "Status",
-  wechatQrRefreshBtn: "Refresh QR Code",
-  wechatQrOpenLink: "Open QR Link",
-  wechatQrExpiredOverlay: "QR code expired",
-  wechatQrTokenReady: "WeChat token is ready and will be written to NVS.",
-  wechatQrFetchError: "Failed to fetch QR code. Please check your network and try again.",
-  wechatQrPollError: "Failed to check scan status. Please try refreshing the QR code.",
-  wechatThirdPartyNotice:
-    "Note: Scanning this QR code initiates verification through a third-party relay service. This service does not store your login credentials. If you have concerns, you can use the local verification in Web Config after flashing.",
-  qqAppIdLabel: "QQ App ID",
-  qqAppSecretLabel: "QQ App Secret",
-  feishuAppIdLabel: "Feishu App ID",
-  feishuAppSecretLabel: "Feishu App Secret",
-  tgBotTokenLabel: "Telegram Bot Token",
-  sectionAdvanced: "Advanced Settings",
-  sectionSearch: "Search Engine",
-  searchNote:
-    "Search keys are optional, but at least one key is recommended for up-to-date web results.",
-  searchTipTitle: "Tip:",
-  searchTipBody:
-    "Search engine config enables ESP-Claw to retrieve latest information from the web, including weather queries.",
-  searchTipRecommend: "Tavily is recommended and provides a free tier.",
-  searchTavilyDashboardLabel: "Open Tavily Dashboard",
-  searchBraveLabel: "Brave Search API Key",
-  searchTavilyLabel: "Tavily API Key",
+  chooseChipLabel: "Choose Chip",
+  chooseBrandLabel: "Choose Brand/Manufacturer/Series",
+  chooseBoardLabel: "Choose Board",
+  chooseChipPlaceholder: "Choose a chip",
+  chooseBrandPlaceholder: "Choose a brand/manufacturer/series",
+  boardAutoHint: "Compatible boards are filtered automatically after device detection.",
+  selectedBoardLabel: "Selected board",
+  noBrandSelected: "No brand/manufacturer/series selected",
+  noBoardSelected: "No board selected",
+  boardFlashMeta: "Flash",
+  boardPsramMeta: "PSRAM",
+  psramUnknown: "unknown",
+  firmwareRequirementsLabel: "Firmware requirements",
+  firmwareDescriptionLabel: "Firmware description",
+  downloadFirmwareLocalLink: "Download firmware locally",
 
-  tabFlash: "Flash",
-  tabConsole: "Console",
+  downloadBtn: "Download Firmware",
   flashBtn: "Flash Firmware",
   flashBtnDisabledNoDevice: "Connect a device first",
-  flashBtnDisabledNoFirmware: "Select firmware first",
-  flashBtnDisabledNoConfig: "Complete required fields",
-  flashSuccess: "Flash complete! Device is rebooting.",
-  flashError: "Flash failed: ",
-  downloadingFirmware: "Downloading firmware…",
-  generatingNvs: "Generating NVS partition…",
-  writingFlash: "Writing to flash…",
-  consolePlaceholder: "Send command…",
-  consoleClearBtn: "Clear",
-  consoleResetBtn: "Reset",
+  flashBtnDisabledNoFirmware: "Select a board first",
+  flashBtnDisabledNoMatch: "The selected board is not compatible with this device",
+  actionReadyHint: "Select a compatible board, start flashing, and complete Wi-Fi setup.",
+
+  noFirmwareTitle: "No compatible firmware found",
+  noFirmwareDesc:
+    "We couldn't find firmware matching your selected chip or the detected flash / PSRAM size.",
+  viewSupportedBoardsBtn: "View supported chips & boards",
+
   progressLabel: "Progress",
+  downloadingFirmware: "Downloading firmware…",
+  writingFlash: "Writing firmware…",
+  waitingForDeviceInfo: "Waiting for device info…",
+  flashSuccess: "Flash complete. Waiting for the device to boot…",
+  flashError: "Flash failed: ",
+  postFlashReconnectTitle: "Reconnect serial after reset",
+  postFlashReconnectDesc:
+    "If you are flashing over ACM (JTAG), the serial port may briefly disconnect after reset. Click below and select the device again to continue.",
+  postFlashReconnectBtn: "Reconnect Serial",
+  postFlashReconnectBusy: "Waiting for you to select the device in the browser…",
+  postFlashReconnectSuccess: "Serial reconnected. Continuing device setup…",
+  postFlashReconnectError: "Reconnection failed: ",
+
+  wifiSectionTitle: "Wi-Fi Setup",
+  wifiPrompt:
+    "The device is not connected to Wi-Fi yet. Enter SSID and password to continue.",
+  wifiSameNetworkHint:
+    "Make sure ESP-Claw and your browser are on the same network.",
+  wifiSsidLabel: "Wi-Fi SSID",
+  wifiPasswordLabel: "Wi-Fi Password",
+  wifiPasswordLengthError: "Wi-Fi password must be empty or at least 8 characters long.",
+  wifiSubmitBtn: "Connect Wi-Fi",
+  wifiConnecting: "Trying to connect to Wi-Fi…",
+  wifiProbeError:
+    "Unable to communicate with the device. Check whether JTAG and UART are wired correctly. If the device is still in download mode, press RESET manually.",
+  wifiTimeoutError: "Wi-Fi connection timed out. Please check the credentials and try again.",
+  wifiReadyTitle: "Device is online",
+  wifiReadyDesc: "Open the device web setup page to continue configuration.",
+  openDeviceBtn: "Open http://{ip}/#start",
+
+  consoleToggleOpen: "Console",
+  consoleToggleClose: "Console",
+  consoleTitle: "UART Console",
+  consoleClearBtn: "Clear",
+  consoleResetBtn: "RESET",
+  consoleResetUnsupported: "RESET is not supported for the current serial mode.",
+  consoleWaiting: "Console output will appear here after the device enters firmware mode.",
+  consoleSendBtn: "Send",
+  consoleSendPlaceholder: "Type a command…",
+  consoleCloseBtn: "✕",
+
+  deviceChipLabel: "Chip",
+  deviceRevisionLabel: "Revision",
+  deviceFlashLabel: "Flash",
+  devicePsramLabel: "PSRAM",
 
   quickLinkNoHardwareTitle: "No hardware yet?",
   quickLinkNoHardwareDesc: "Assemble your ESP-Claw board",
   quickLinkBoardsTitle: "Have other ESP boards?",
   quickLinkBoardsDesc: "View supported board list",
+
+  tabFlash: "Flash Online",
+  tabConsole: "Console",
+  consoleTabDisabledHint: "Connect a device and complete all setup first",
+
+  modalStep1Title: "Download & Flash",
+  modalStep2Title: "Wi-Fi Setup",
+  modalStep3Title: "Wi-Fi Connected",
+  terminalLabel: "Terminal",
 };
 
 const zhCn: Strings = {
   pageTitle: "在线烧录",
-  pageSubtitle: "连接支持的 ESP 开发板，直接在浏览器中烧录 ESP-Claw 固件。",
+  pageSubtitle:
+    "连接支持的 ESP 开发板，在浏览器内烧录合并固件，并通过 UART 完成 Wi‑Fi 初始化。",
 
-  tabLockedWhileFlashing: "烧录结束后可切换到控制台",
   connectBtn: "连接",
   disconnectBtn: "断开",
   connectingMsg: "连接中…",
@@ -214,87 +215,94 @@ const zhCn: Strings = {
   connectedTo: "已连接",
   webSerialUnsupported:
     "当前浏览器不支持 Web Serial API，请使用 Chrome、Edge 或其他基于 Chromium 的浏览器。",
+  connectErrorPrefix: "连接失败：",
 
-  step2Title: "选择固件",
-  noFirmwareMatch: "当前芯片/Flash 大小没有匹配的固件。",
-  noFirmwareTitle: "未找到匹配的固件",
-  noFirmwareDesc:
-    "当前芯片、Flash 容量或 PSRAM 没有匹配的固件，您的开发板可能暂未被支持。请查看下方的支持列表了解更多信息。",
-  viewSupportedBoardsBtn: "查看支持的芯片 & 开发板",
-  psramUnknown: "PSRAM: 未知",
-  sectionBasic: "基本设置",
-  sectionWifi: "Wi-Fi 配置",
-  wifiSsidLabel: "Wi-Fi 名称 (SSID)",
-  wifiPasswordLabel: "Wi-Fi 密码",
-  timezoneLabel: "时区（POSIX TZ 字符串）",
-  timezonePlaceholder: "例如 UTC0",
-  sectionLlm: "LLM 配置",
-  llmModeLabel: "LLM 服务",
-  llmOptionQwen: "Qwen (阿里云百炼)",
-  llmOptionDeepSeek: "DeepSeek",
-  llmOptionOpenai: "OpenAI",
-  llmOptionAnthropic: "Claude (Anthropic)",
-  llmOptionOpenaiCompat: "OpenAI 兼容 API",
-  llmOptionAnthropicCompat: "Claude 兼容 API",
-  llmGetApiKeyBtn: "获取 API Key",
-  llmVendorDocsBtn: "厂商文档",
-  llmBaseUrlLabel: "API Base URL (会自动添加 /chat/completions 路径)",
-  llmBaseUrlLabelAnthropicCompat: "API Base URL (会自动添加 /messages 路径)",
-  llmModelLabel: "LLM 模型",
-  llmApiKeyLabel: "API 密钥",
-  sectionIm: "即时通讯 (IM)",
-  imNote: "可添加0个或多个渠道。仅对已添加的渠道填写凭据。",
-  imAddChannel: "添加渠道",
-  imRemoveChannel: "移除",
-  imChannelQq: "QQ",
-  imChannelFeishu: "飞书",
-  imChannelTg: "Telegram",
-  imChannelWechat: "微信",
-  wechatQrNote: "添加微信后会自动获取二维码。请扫码并在微信中确认，以获取 token 与 base URL。",
-  wechatQrStatusLabel: "状态",
-  wechatQrRefreshBtn: "刷新二维码",
-  wechatQrOpenLink: "打开二维码链接",
-  wechatQrExpiredOverlay: "二维码已过期",
-  wechatQrTokenReady: "微信 token 已就绪，烧录时会写入 NVS。",
-  wechatQrFetchError: "获取二维码失败，请检查网络后重试。",
-  wechatQrPollError: "查询扫码状态失败，请尝试刷新二维码。",
-  wechatThirdPartyNotice:
-    "提示：扫描此二维码时，验证过程将经由第三方中转服务完成，该服务不会记录您的登录凭据。如有顾虑，可在烧录完成后使用 Web Config 中的本地验证方式。",
-  qqAppIdLabel: "QQ App ID",
-  qqAppSecretLabel: "QQ App Secret",
-  feishuAppIdLabel: "飞书 App ID",
-  feishuAppSecretLabel: "飞书 App Secret",
-  tgBotTokenLabel: "Telegram Bot Token",
-  sectionAdvanced: "高级设置",
-  sectionSearch: "搜索引擎配置",
-  searchNote: "搜索密钥为可选项，但建议至少配置一个以获得最新联网检索结果。",
-  searchTipTitle: "提示：",
-  searchTipBody: "配置搜索引擎后，ESP-Claw 才能通过网络检索获取最新信息，查询天气也依赖搜索引擎支持。",
-  searchTipRecommend: "推荐配置 Tavily，有一定的免费额度。",
-  searchTavilyDashboardLabel: "打开 Tavily Dashboard",
-  searchBraveLabel: "Brave Search API Key",
-  searchTavilyLabel: "Tavily API Key",
+  chooseChipLabel: "选择芯片",
+  chooseBrandLabel: "选择品牌/生产商/开发版系列",
+  chooseBoardLabel: "选择开发板",
+  chooseChipPlaceholder: "请选择芯片",
+  chooseBrandPlaceholder: "请选择品牌/生产商/开发版系列",
+  boardAutoHint: "连接设备后会根据芯片、Flash 和 PSRAM 自动筛选兼容开发板。",
+  selectedBoardLabel: "当前开发板",
+  noBrandSelected: "尚未选择品牌/生产商/开发版系列",
+  noBoardSelected: "尚未选择开发板",
+  boardFlashMeta: "Flash",
+  boardPsramMeta: "PSRAM",
+  psramUnknown: "未知",
+  firmwareRequirementsLabel: "固件要求",
+  firmwareDescriptionLabel: "固件说明",
+  downloadFirmwareLocalLink: "下载固件到本地",
 
-  tabFlash: "烧录",
-  tabConsole: "控制台",
+  downloadBtn: "下载固件",
   flashBtn: "开始烧录",
   flashBtnDisabledNoDevice: "请先连接设备",
-  flashBtnDisabledNoFirmware: "请先选择固件",
-  flashBtnDisabledNoConfig: "请完善必填字段",
-  flashSuccess: "烧录完成！设备正在重启。",
-  flashError: "烧录失败：",
-  downloadingFirmware: "正在下载固件…",
-  generatingNvs: "正在生成 NVS 分区…",
-  writingFlash: "正在写入 Flash…",
-  consolePlaceholder: "发送命令…",
-  consoleClearBtn: "清空",
-  consoleResetBtn: "重启",
+  flashBtnDisabledNoFirmware: "请先选择开发板",
+  flashBtnDisabledNoMatch: "当前开发板与已连接设备不兼容",
+  actionReadyHint: "请选择兼容的开发版，开始烧录，并完成 Wi-Fi 配置。",
+
+  noFirmwareTitle: "未找到兼容固件",
+  noFirmwareDesc:
+    "当前所选芯片或检测到的 Flash / PSRAM 容量没有匹配的固件。",
+  viewSupportedBoardsBtn: "查看支持的芯片和开发板",
+
   progressLabel: "进度",
+  downloadingFirmware: "正在下载固件…",
+  writingFlash: "正在烧录固件…",
+  waitingForDeviceInfo: "正在等待设备信息…",
+  flashSuccess: "烧录完成，正在等待设备启动…",
+  flashError: "烧录失败：",
+  postFlashReconnectTitle: "重启后重新连接串口",
+  postFlashReconnectDesc:
+    "如果你使用的是 ACM（JTAG）烧录，设备重启后串口会短暂断开。请点击下面的按钮，并在浏览器里重新选择设备以继续。",
+  postFlashReconnectBtn: "重新连接串口",
+  postFlashReconnectBusy: "请在浏览器弹窗中重新选择设备…",
+  postFlashReconnectSuccess: "串口已重新连接，正在继续设备初始化…",
+  postFlashReconnectError: "重新连接失败：",
+
+  wifiSectionTitle: "Wi‑Fi 配置",
+  wifiPrompt: "设备当前尚未连上 Wi‑Fi，请输入 SSID 和密码继续。",
+  wifiSameNetworkHint: "请让 ESP-Claw 与当前浏览器连接到同一个网络。",
+  wifiSsidLabel: "Wi‑Fi 名称 (SSID)",
+  wifiPasswordLabel: "Wi‑Fi 密码",
+  wifiPasswordLengthError: "Wi‑Fi 密码必须留空或至少 8 个字符。",
+  wifiSubmitBtn: "连接 Wi‑Fi",
+  wifiConnecting: "正在尝试连接 Wi‑Fi…",
+  wifiProbeError:
+    "未能与设备通信，请注意 JTAG 与 UART 口是否链接错误。如果设备仍在下载模式，请手动 RESET",
+  wifiTimeoutError: "20 秒内未连接成功，请检查 Wi‑Fi 名称和密码后重试。",
+  wifiReadyTitle: "设备已联网",
+  wifiReadyDesc: "请打开设备网页继续后续配置。",
+  openDeviceBtn: "打开 http://{ip}/#start",
+
+  consoleToggleOpen: "控制台",
+  consoleToggleClose: "控制台",
+  consoleTitle: "UART 控制台",
+  consoleClearBtn: "清空",
+  consoleResetBtn: "RESET",
+  consoleResetUnsupported: "当前串口模式不支持 RESET。",
+  consoleWaiting: "设备进入固件运行模式后，这里会显示串口日志。",
+  consoleSendBtn: "发送",
+  consoleSendPlaceholder: "输入命令…",
+  consoleCloseBtn: "✕",
+
+  deviceChipLabel: "芯片",
+  deviceRevisionLabel: "Revision",
+  deviceFlashLabel: "Flash",
+  devicePsramLabel: "PSRAM",
 
   quickLinkNoHardwareTitle: "还没有硬件？",
   quickLinkNoHardwareDesc: "组装 ESP-Claw 开发板",
   quickLinkBoardsTitle: "有其他 ESP 开发板？",
   quickLinkBoardsDesc: "查看支持的开发板列表",
+
+  tabFlash: "在线烧录",
+  tabConsole: "控制台",
+  consoleTabDisabledHint: "请先连接设备并完成全部设置",
+
+  modalStep1Title: "下载 / 烧录",
+  modalStep2Title: "Wi-Fi 配置",
+  modalStep3Title: "联网成功",
+  terminalLabel: "终端",
 };
 
 const strings: Record<Lang, Strings> = {
@@ -303,5 +311,5 @@ const strings: Record<Lang, Strings> = {
 };
 
 export function getStrings(lang: Lang): Strings {
-  return strings[lang] ?? strings["en"];
+  return strings[lang] ?? strings.en;
 }

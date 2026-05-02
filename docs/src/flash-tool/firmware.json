@@ -1,80 +1,130 @@
 {
-  "esp32s3": [
-    {
-      "board": "esp32_S3_DevKitC_1",
-      "features": [],
-      "description": "",
-      "merged_binary": "/esp-claw/esp32_S3_DevKitC_1__65225c1.bin",
-      "min_flash_size": 8,
-      "min_psram_size": 8,
-      "nvs_info": {
-        "start_addr": "0x9000",
-        "size": "0x6000"
-      }
-    },
-    {
-      "board": "esp32_S3_DevKitC_1_breadboard",
-      "features": [],
-      "description": "",
-      "merged_binary": "/esp-claw/esp32_S3_DevKitC_1_breadboard__65225c1.bin",
-      "min_flash_size": 8,
-      "min_psram_size": 8,
-      "nvs_info": {
-        "start_addr": "0x9000",
-        "size": "0x6000"
-      }
-    },
-    {
-      "board": "esp_vocat_board_v1_2",
-      "features": [],
-      "description": "",
-      "merged_binary": "/esp-claw/esp_vocat_board_v1_2__65225c1.bin",
-      "min_flash_size": 16,
-      "min_psram_size": 8,
-      "nvs_info": {
-        "start_addr": "0x9000",
-        "size": "0x6000"
+  "esp32p4|rev1": {
+    "espressif": {
+      "esp32_p4_function_ev": {
+        "features": [],
+        "description": "",
+        "merged_binary": "/merged_binary/esp32_p4_function_ev__rev1.bin",
+        "min_flash_size": 16,
+        "min_psram_size": 8,
+        "nvs_info": {
+          "start_addr": "0x9000",
+          "size": "0x6000"
+        }
       }
     }
-  ],
-  "esp32p4": [
-    {
-      "board": "esp32_p4_function_ev",
-      "features": [],
-      "description": "",
-      "merged_binary": "/esp-claw/esp32_p4_function_ev__65225c1.bin",
-      "min_flash_size": 16,
-      "min_psram_size": 8,
-      "nvs_info": {
-        "start_addr": "0x9000",
-        "size": "0x6000"
+  },
+  "esp32p4|rev3": {
+    "espressif": {
+      "esp32_p4x_function_ev": {
+        "features": [],
+        "description": "",
+        "merged_binary": "/merged_binary/esp32_p4x_function_ev__rev3.bin",
+        "min_flash_size": 16,
+        "min_psram_size": 8,
+        "nvs_info": {
+          "start_addr": "0x9000",
+          "size": "0x6000"
+        }
       }
     }
-  ],
-  "esp32c5": [
-    {
-      "board": "esp_SensairHalo",
-      "features": [],
-      "description": "",
-      "merged_binary": "/esp-claw/esp_SensairHalo__65225c1.bin",
-      "min_flash_size": 16,
-      "min_psram_size": 8,
-      "nvs_info": {
-        "start_addr": "0x9000",
-        "size": "0x6000"
+  },
+  "esp32s3": {
+    "dfrobot": {
+      "dfrobot_k10": {
+        "features": [],
+        "description": "",
+        "merged_binary": "/merged_binary/dfrobot_k10.bin",
+        "min_flash_size": 16,
+        "min_psram_size": 8,
+        "nvs_info": {
+          "start_addr": "0x9000",
+          "size": "0x6000"
+        }
       }
     },
-    {
-      "board": "esp_SensairShuttle",
-      "features": [],
-      "description": "",
-      "merged_binary": "/esp-claw/esp_SensairShuttle__65225c1.bin",
-      "min_flash_size": 16,
-      "min_psram_size": 8,
-      "nvs_info": {
-        "start_addr": "0x9000",
-        "size": "0x6000"
+    "espressif": {
+      "esp_box_3": {
+        "features": [],
+        "description": "",
+        "merged_binary": "/merged_binary/esp_box_3.bin",
+        "min_flash_size": 8,
+        "min_psram_size": 8,
+        "nvs_info": {
+          "start_addr": "0x9000",
+          "size": "0x6000"
+        }
+      },
+      "esp_vocat_board_v1_2": {
+        "features": [],
+        "description": "",
+        "merged_binary": "/merged_binary/esp_vocat_board_v1_2.bin",
+        "min_flash_size": 16,
+        "min_psram_size": 8,
+        "nvs_info": {
+          "start_addr": "0x9000",
+          "size": "0x6000"
+        }
+      },
+      "esp32_S3_DevKitC_1": {
+        "features": [],
+        "description": "",
+        "merged_binary": "/merged_binary/esp32_S3_DevKitC_1.bin",
+        "min_flash_size": 8,
+        "min_psram_size": 8,
+        "nvs_info": {
+          "start_addr": "0x9000",
+          "size": "0x6000"
+        }
+      },
+      "esp32_S3_DevKitC_1_breadboard": {
+        "features": [],
+        "description": "",
+        "merged_binary": "/merged_binary/esp32_S3_DevKitC_1_breadboard.bin",
+        "min_flash_size": 8,
+        "min_psram_size": 8,
+        "nvs_info": {
+          "start_addr": "0x9000",
+          "size": "0x6000"
+        }
+      }
+    },
+    "lilygo": {
+      "lilygo_t_display_s3": {
+        "features": [],
+        "description": "",
+        "merged_binary": "/merged_binary/lilygo_t_display_s3.bin",
+        "min_flash_size": 16,
+        "min_psram_size": 8,
+        "nvs_info": {
+          "start_addr": "0x9000",
+          "size": "0x6000"
+        }
+      }
+    },
+    "m5stack": {
+      "m5stack_cores3": {
+        "features": [],
+        "description": "",
+        "merged_binary": "/merged_binary/m5stack_cores3.bin",
+        "min_flash_size": 16,
+        "min_psram_size": 8,
+        "nvs_info": {
+          "start_addr": "0x9000",
+          "size": "0x6000"
+        }
+      },
+      "m5stack_sticks3": {
+        "features": [],
+        "description": "",
+        "merged_binary": "/merged_binary/m5stack_sticks3.bin",
+        "min_flash_size": 8,
+        "min_psram_size": 8,
+        "nvs_info": {
+          "start_addr": "0x9000",
+          "size": "0x6000"
+        }
       }
     }
-  ]
+  }
 }

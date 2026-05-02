@@ -1480,6 +1480,7 @@ esp_err_t claw_core_init(const claw_core_config_t *config)
     llm_config.base_url = config->base_url;
     llm_config.auth_type = config->auth_type;
     llm_config.timeout_ms = config->timeout_ms;
+    llm_config.max_tokens = config->max_tokens;
     llm_config.image_max_bytes = config->image_max_bytes;
     err = claw_core_llm_init(&llm_config, &llm_error);
     if (err != ESP_OK) {

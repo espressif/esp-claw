@@ -9,6 +9,7 @@ import { SavePanel } from '../components/ui/SavePanel';
 import { Button } from '../components/ui/Button';
 import { Switch } from '../components/ui/Switch';
 import { Banner } from '../components/ui/Banner';
+import { ConfigTable } from '../components/ui/ConfigTable';
 
 const SENTINEL_NONE = '__none__';
 
@@ -226,60 +227,42 @@ export const CapabilitiesPage: Component = () => {
         <Show when={appCapabilities().length > 0 && filtered().length === 0}>
           <Banner kind="info" message={t('capabilityNoResult') as string} />
         </Show>
-        <div class="overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)]">
-          <table class="w-full">
-            <thead>
-              <tr class="bg-[var(--color-bg-card)]">
-                <th class="text-left px-4 py-2.5 text-[0.72rem] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
-                  Capability
-                </th>
-                <th class="text-left px-4 py-2.5 text-[0.72rem] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
-                  ID
-                </th>
-                <th class="px-4 py-2.5 text-[0.72rem] font-bold uppercase tracking-wider text-[var(--color-text-muted)] w-24">
-                  {t('capabilityEnabled')}
-                </th>
-                <th class="px-4 py-2.5 text-[0.72rem] font-bold uppercase tracking-wider text-[var(--color-text-muted)] w-28">
-                  {t('capabilityLlmVisible')}
-                </th>
+        <ConfigTable
+          columns={[
+            { label: t('capabilityNameCol') as string },
+            { label: t('idCol') as string },
+            { label: t('capabilityEnabled') as string, class: 'w-24 text-center' },
+            { label: t('capabilityLlmVisible') as string, class: 'w-28 text-center' },
+          ]}
+        >
+          <For each={filtered()}>
+            {(item) => (
+              <tr class="border-t border-[var(--color-border-subtle)] hover:bg-white/[0.02]">
+                <td class="px-4 py-2.5 text-[0.88rem] text-[var(--color-text-primary)]">
+                  <div class="flex flex-col gap-0.5">
+                    <span class="font-semibold">{item.display_name || item.group_id}</span>
+                  </div>
+                </td>
+                <td class="px-4 py-2.5 font-mono text-[0.78rem] text-[var(--color-text-muted)] break-all">
+                  {item.group_id}
+                </td>
+                <td class="px-4 py-2.5 text-center">
+                  <Switch
+                    checked={enabledSet().has(item.group_id)}
+                    onChange={(checked) => toggleEnabled(item.group_id, checked)}
+                  />
+                </td>
+                <td class="px-4 py-2.5 text-center">
+                  <Switch
+                    checked={llmSet().has(item.group_id)}
+                    disabled={!enabledSet().has(item.group_id)}
+                    onChange={(checked) => toggleLlm(item.group_id, checked)}
+                  />
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              <For each={filtered()}>
-                {(item) => (
-                  <tr class="border-t border-[var(--color-border-subtle)] hover:bg-white/[0.02]">
-                    <td class="px-4 py-2.5 text-[0.88rem] text-[var(--color-text-primary)]">
-                      <div class="flex flex-col gap-0.5">
-                        <span class="font-semibold">{item.display_name || item.group_id}</span>
-                        <Show when={item.default_llm_visible}>
-                          <span class="text-[0.7rem] text-[var(--color-text-muted)]">
-                            {t('capabilityDefaultLlm')}
-                          </span>
-                        </Show>
-                      </div>
-                    </td>
-                    <td class="px-4 py-2.5 font-mono text-[0.78rem] text-[var(--color-text-muted)] break-all">
-                      {item.group_id}
-                    </td>
-                    <td class="px-4 py-2.5 text-center">
-                      <Switch
-                        checked={enabledSet().has(item.group_id)}
-                        onChange={(checked) => toggleEnabled(item.group_id, checked)}
-                      />
-                    </td>
-                    <td class="px-4 py-2.5 text-center">
-                      <Switch
-                        checked={llmSet().has(item.group_id)}
-                        disabled={!enabledSet().has(item.group_id)}
-                        onChange={(checked) => toggleLlm(item.group_id, checked)}
-                      />
-                    </td>
-                  </tr>
-                )}
-              </For>
-            </tbody>
-          </table>
-        </div>
+            )}
+          </For>
+        </ConfigTable>
       </div>
 
       <SavePanel

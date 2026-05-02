@@ -141,7 +141,7 @@ static int cmd_wifi_scan(void)
 static int cmd_wifi_apply_loaded_config(const app_config_t *config, const char *command_name)
 {
     wifi_manager_status_t status = {0};
-    esp_err_t err = wifi_manager_start(&(wifi_manager_config_t) {
+    esp_err_t err = wifi_manager_apply_sta_config(&(wifi_manager_config_t) {
         .sta_ssid = config->wifi_ssid,
         .sta_password = config->wifi_password,
     });

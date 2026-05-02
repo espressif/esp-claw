@@ -211,6 +211,13 @@ menu "App Claw Config"
                 Enable the ADC Lua module and keep app_claw's direct dependency
                 on lua_module_adc when Lua capability is enabled.
 
+        config APP_CLAW_LUA_MODULE_DHT
+            bool "Enable DHT Lua module"
+            default y
+            help
+                Enable the DHT Lua module and keep app_claw's direct dependency
+                on lua_module_dht when Lua capability is enabled.
+
         config APP_CLAW_LUA_MODULE_BOARD_MANAGER
             bool "Enable board manager Lua module"
             default y

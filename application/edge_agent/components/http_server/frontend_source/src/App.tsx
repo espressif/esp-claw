@@ -1,19 +1,19 @@
 import { createEffect, createSignal, lazy, onCleanup, onMount, Show, Suspense } from 'solid-js';
 import type { Component } from 'solid-js';
 
+import { fetchStatus, restartDevice } from './api/client';
 import { Layout } from './components/layout/Layout';
-import { ToastViewport } from './components/ui/ToastViewport';
-import { Banner } from './components/ui/Banner';
-import { t } from './i18n';
-import {
-  reloadCapabilities,
-  reloadLuaModules,
-  reloadStatus,
-} from './state/config';
-import { pushToast } from './state/toast';
-import type { TabId } from './state/dirty';
-import { anyDirty } from './state/dirty';
 import { LEAF_IDS } from './components/layout/Sidebar';
+import {
+  RestartOverlay,
+  type RestartOverlayState,
+} from './components/system/RestartOverlay';
+import { Banner } from './components/ui/Banner';
+import { ToastViewport } from './components/ui/ToastViewport';
+import { t } from './i18n';
+import { anyDirty, type TabId } from './state/dirty';
+import { reloadCapabilities, reloadLuaModules, reloadStatus } from './state/config';
+import { pushToast } from './state/toast';
 
 const StatusPage = lazy(() => import('./pages/StatusPage').then((mod) => ({ default: mod.StatusPage })));
 const BasicPage = lazy(() => import('./pages/BasicPage').then((mod) => ({ default: mod.BasicPage })));
@@ -21,19 +21,52 @@ const SearchPage = lazy(() => import('./pages/SearchPage').then((mod) => ({ defa
 const MemoryPage = lazy(() => import('./pages/MemoryPage').then((mod) => ({ default: mod.MemoryPage })));
 const LlmPage = lazy(() => import('./pages/LlmPage').then((mod) => ({ default: mod.LlmPage })));
 const ImPage = lazy(() => import('./pages/ImPage').then((mod) => ({ default: mod.ImPage })));
-const CapabilitiesPage = lazy(() => import('./pages/CapabilitiesPage').then((mod) => ({ default: mod.CapabilitiesPage })));
+const CapabilitiesPage = lazy(() =>
+  import('./pages/CapabilitiesPage').then((mod) => ({ default: mod.CapabilitiesPage })),
+);
 const SkillsPage = lazy(() => import('./pages/SkillsPage').then((mod) => ({ default: mod.SkillsPage })));
 const FilesPage = lazy(() => import('./pages/FilesPage').then((mod) => ({ default: mod.FilesPage })));
 const WebImPage = lazy(() => import('./pages/WebImPage').then((mod) => ({ default: mod.WebImPage })));
+const SetupWizardPage = lazy(() =>
+  import('./pages/SetupWizardPage').then((mod) => ({ default: mod.SetupWizardPage })),
+);
 
-function readTabFromHash(): TabId {
-  const hash = window.location.hash.replace(/^#\/?/, '') as TabId;
-  return LEAF_IDS.includes(hash) ? hash : 'status';
+type RouteId = TabId | 'start';
+
+function readTabFromHash(): RouteId {
+  const hash = window.location.hash.replace(/^#\/?/, '');
+  if (hash === 'start') return 'start';
+  return LEAF_IDS.includes(hash as TabId) ? (hash as TabId) : 'status';
 }
 
 const App: Component = () => {
-  const [currentTab, setCurrentTab] = createSignal<TabId>(readTabFromHash());
+  const [currentTab, setCurrentTab] = createSignal<RouteId>(readTabFromHash());
   const [bootError, setBootError] = createSignal<string | null>(null);
+  const [restartOverlay, setRestartOverlay] = createSignal<RestartOverlayState>({
+    open: false,
+    phase: 'requesting',
+    error: null,
+  });
+  let restartTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollController: AbortController | null = null;
+  let restartStartedAt = 0;
+  let restartTarget: TabId | null = null;
+  let restartActive = false;
+
+  const clearRestartFlow = () => {
+    restartActive = false;
+    if (restartTimer) {
+      clearTimeout(restartTimer);
+      restartTimer = null;
+    }
+    pollController?.abort();
+    pollController = null;
+  };
+
+  const closeRestartOverlay = () => {
+    clearRestartFlow();
+    setRestartOverlay({ open: false, phase: 'requesting', error: null });
+  };
 
   const onHashChange = () => {
     const next = readTabFromHash();
@@ -50,10 +83,11 @@ const App: Component = () => {
 
   onMount(() => {
     window.addEventListener('hashchange', onHashChange);
-    bootstrap();
+    void bootstrap();
   });
 
   onCleanup(() => {
+    clearRestartFlow();
     window.removeEventListener('hashchange', onHashChange);
   });
 
@@ -66,9 +100,6 @@ const App: Component = () => {
   };
 
   const bootstrap = async () => {
-    /* Only fetch the data used globally (status bar, capabilities & lua
-     * module catalogues). Each tab lazily loads its own configuration
-     * groups via createConfigTab. */
     const tasks: Array<[string, () => Promise<unknown>]> = [
       ['status', () => reloadStatus()],
       ['capabilities', () => reloadCapabilities()],
@@ -88,47 +119,138 @@ const App: Component = () => {
     }
   };
 
+  const scheduleNextPoll = () => {
+    if (!restartActive) return;
+    const deadlineAt = restartStartedAt + 30000;
+    if (Date.now() >= deadlineAt) {
+      setRestartOverlay({
+        open: true,
+        phase: 'error',
+        error: t('restartOverlayTimeout') as string,
+        deadlineAt,
+      });
+      return;
+    }
+
+    restartTimer = setTimeout(async () => {
+      if (!restartActive) return;
+      pollController?.abort();
+      pollController = new AbortController();
+      try {
+        await fetchStatus(pollController.signal);
+        await reloadStatus();
+        closeRestartOverlay();
+        if (restartTarget) {
+          setCurrentTab(restartTarget);
+        }
+      } catch (err) {
+        if (!restartActive) return;
+        if ((err as Error).name !== 'AbortError') {
+          setRestartOverlay({
+            open: true,
+            phase: 'polling',
+            error: null,
+            deadlineAt,
+          });
+        }
+        scheduleNextPoll();
+      }
+    }, 2000);
+  };
+
+  const handleRestartRequest = async (targetTab?: TabId) => {
+    clearRestartFlow();
+    restartActive = true;
+    restartTarget = targetTab ?? null;
+    restartStartedAt = Date.now();
+    const deadlineAt = restartStartedAt + 30000;
+    setRestartOverlay({
+      open: true,
+      phase: 'requesting',
+      error: null,
+      deadlineAt,
+    });
+
+    try {
+      await restartDevice();
+      setRestartOverlay({
+        open: true,
+        phase: 'cooldown',
+        error: null,
+        deadlineAt,
+      });
+      restartTimer = setTimeout(() => {
+        setRestartOverlay({
+          open: true,
+          phase: 'polling',
+          error: null,
+          deadlineAt,
+        });
+        scheduleNextPoll();
+      }, 5000);
+    } catch (err) {
+      setRestartOverlay({
+        open: true,
+        phase: 'error',
+        error: (err as Error).message,
+        deadlineAt,
+      });
+    }
+  };
+
   return (
     <>
-      <Layout currentTab={currentTab()} onSelectTab={handleSelectTab}>
-        <Show when={bootError()}>
-          <div class="mb-4">
-            <Banner kind="error" message={bootError() ?? undefined} />
-          </div>
-        </Show>
+      <Show
+        when={currentTab() === 'start'}
+        fallback={
+          <Layout currentTab={currentTab() as TabId} onSelectTab={handleSelectTab}>
+            <Show when={bootError()}>
+              <div class="mb-4">
+                <Banner kind="error" message={bootError() ?? undefined} />
+              </div>
+            </Show>
+            <Suspense
+              fallback={<div class="p-6 text-[var(--color-text-muted)]">{t('statusLoading')}</div>}
+            >
+              <Show when={currentTab() === 'status'}>
+                <StatusPage onRestartRequest={() => void handleRestartRequest()} />
+              </Show>
+              <Show when={currentTab() === 'basic'}>
+                <BasicPage />
+              </Show>
+              <Show when={currentTab() === 'llm'}>
+                <LlmPage />
+              </Show>
+              <Show when={currentTab() === 'im'}>
+                <ImPage />
+              </Show>
+              <Show when={currentTab() === 'search'}>
+                <SearchPage />
+              </Show>
+              <Show when={currentTab() === 'memory'}>
+                <MemoryPage />
+              </Show>
+              <Show when={currentTab() === 'webim'}>
+                <WebImPage />
+              </Show>
+              <Show when={currentTab() === 'capabilities'}>
+                <CapabilitiesPage />
+              </Show>
+              <Show when={currentTab() === 'skills'}>
+                <SkillsPage />
+              </Show>
+              <Show when={currentTab() === 'files'}>
+                <FilesPage />
+              </Show>
+            </Suspense>
+          </Layout>
+        }
+      >
         <Suspense fallback={<div class="p-6 text-[var(--color-text-muted)]">{t('statusLoading')}</div>}>
-          <Show when={currentTab() === 'status'}>
-            <StatusPage />
-          </Show>
-          <Show when={currentTab() === 'basic'}>
-            <BasicPage />
-          </Show>
-          <Show when={currentTab() === 'llm'}>
-            <LlmPage />
-          </Show>
-          <Show when={currentTab() === 'im'}>
-            <ImPage />
-          </Show>
-          <Show when={currentTab() === 'search'}>
-            <SearchPage />
-          </Show>
-          <Show when={currentTab() === 'memory'}>
-            <MemoryPage />
-          </Show>
-          <Show when={currentTab() === 'webim'}>
-            <WebImPage />
-          </Show>
-          <Show when={currentTab() === 'capabilities'}>
-            <CapabilitiesPage />
-          </Show>
-          <Show when={currentTab() === 'skills'}>
-            <SkillsPage />
-          </Show>
-          <Show when={currentTab() === 'files'}>
-            <FilesPage />
-          </Show>
+          <SetupWizardPage onRestartRequest={(targetTab) => void handleRestartRequest(targetTab)} />
         </Suspense>
-      </Layout>
+      </Show>
+      <RestartOverlay state={restartOverlay()} onClose={closeRestartOverlay} />
       <ToastViewport />
     </>
   );

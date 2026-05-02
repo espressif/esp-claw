@@ -1,5 +1,5 @@
 import { createEffect, createSignal, Show, type Component } from 'solid-js';
-import { t } from '../i18n';
+import { currentLocale, t } from '../i18n';
 import type { AppConfig } from '../api/client';
 import { createConfigTab } from '../state/configTab';
 import { TabShell } from '../components/layout/TabShell';
@@ -60,6 +60,27 @@ export const BasicPage: Component = () => {
     await tab.save();
   };
 
+  const timezoneHint = () =>
+    currentLocale() === 'zh-cn' ? (
+      <>
+        仅接受 POSIX TZ 字符串，符号与日常 UTC 表示相反。北京时间（UTC+8）应写作
+        {' '}
+        "CST-8"
+        ，纽约（UTC-5）写作 "EST5"。可在
+        <a
+          href="https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="underline underline-offset-2 hover:text-[var(--color-text-primary)]"
+        >
+          此表格
+        </a>
+        查阅 IANA 时区与 POSIX 表达转换关系。
+      </>
+    ) : (
+      (t('timezoneHelp') as string)
+    );
+
   return (
     <TabShell>
       <PageHeader
@@ -89,13 +110,13 @@ export const BasicPage: Component = () => {
             />
           </div>
         </StaticConfigBlock>
-        <CollapsibleConfigBlock title={t('sectionAdvanced') as string} defaultOpen>
+        <CollapsibleConfigBlock title={t('sectionAdvanced') as string} defaultOpen={false}>
           <div class="pt-2">
             <TextInput
               full
               label={t('timezone')}
               placeholder={t('timezonePlaceholder') as string}
-              hint={t('timezoneHelp') as string}
+              hint={timezoneHint()}
               value={tab.form.time_timezone}
               onInput={(event) => tab.setForm('time_timezone', event.currentTarget.value)}
             />

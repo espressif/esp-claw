@@ -13,6 +13,7 @@
 #include "llm/backends/claw_llm_backend_openai_compatible.h"
 
 #define CLAW_LLM_DEFAULT_TIMEOUT_MS (120 * 1000)
+#define CLAW_LLM_DEFAULT_MAX_TOKENS 8192
 #define CLAW_LLM_DEFAULT_IMAGE_MAX_BYTES (512 * 1024)
 
 struct claw_llm_runtime {
@@ -165,6 +166,7 @@ static esp_err_t runtime_config_copy(claw_llm_runtime_config_t *dst,
     dst->base_url = dup_or_null(src->base_url);
     dst->auth_type = dup_or_null(src->auth_type);
     dst->timeout_ms = src->timeout_ms;
+    dst->max_tokens = src->max_tokens;
     dst->image_max_bytes = src->image_max_bytes;
 
     if ((src->api_key && !dst->api_key) ||
@@ -240,6 +242,9 @@ esp_err_t claw_llm_runtime_init(claw_llm_runtime_t **out_runtime,
     }
     if (!runtime->config.timeout_ms) {
         runtime->config.timeout_ms = profile->default_timeout_ms;
+    }
+    if (!runtime->config.max_tokens) {
+        runtime->config.max_tokens = CLAW_LLM_DEFAULT_MAX_TOKENS;
     }
     if (!runtime->config.image_max_bytes) {
         runtime->config.image_max_bytes = profile->default_image_max_bytes;

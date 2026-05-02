@@ -20,6 +20,7 @@ typedef struct {
     char *base_url;
     char *auth_type;
     uint32_t timeout_ms;
+    uint32_t max_tokens;
     size_t image_max_bytes;
 } openai_compatible_backend_ctx_t;
 
@@ -212,7 +213,7 @@ static esp_err_t build_chat_body(const openai_compatible_backend_ctx_t *ctx,
     }
 
     cJSON_AddStringToObject(body, "model", ctx->model);
-    cJSON_AddNumberToObject(body, profile->max_tokens_field, 8192);
+    cJSON_AddNumberToObject(body, profile->max_tokens_field, ctx->max_tokens);
 
     cJSON_AddStringToObject(system_msg, "role", "system");
     cJSON_AddStringToObject(system_msg, "content", request->system_prompt);
@@ -295,6 +296,7 @@ static esp_err_t openai_compatible_init(const claw_llm_runtime_config_t *config,
     ctx->base_url = strdup(base_url);
     ctx->auth_type = strdup(auth_type);
     ctx->timeout_ms = config->timeout_ms ? config->timeout_ms : profile->default_timeout_ms;
+    ctx->max_tokens = config->max_tokens;
     ctx->image_max_bytes = config->image_max_bytes ? config->image_max_bytes : profile->default_image_max_bytes;
     if (!ctx->api_key || !ctx->model || !ctx->base_url || !ctx->auth_type) {
         *out_error_message = dup_printf("Out of memory copying backend config");
@@ -424,7 +426,7 @@ static esp_err_t openai_compatible_infer_media(void *backend_ctx,
     }
 
     cJSON_AddStringToObject(body, "model", ctx->model);
-    cJSON_AddNumberToObject(body, profile->max_tokens_field, 8192);
+    cJSON_AddNumberToObject(body, profile->max_tokens_field, ctx->max_tokens);
 
     cJSON_AddStringToObject(system_msg, "role", "system");
     cJSON_AddStringToObject(system_msg, "content", request->system_prompt ? request->system_prompt : "");

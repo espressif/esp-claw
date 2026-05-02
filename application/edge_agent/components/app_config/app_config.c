@@ -27,6 +27,7 @@ typedef struct {
 #define APP_DEFAULT_LLM_BASE_URL          ""
 #define APP_DEFAULT_LLM_AUTH_TYPE         ""
 #define APP_DEFAULT_LLM_TIMEOUT_MS        "120000"
+#define APP_DEFAULT_LLM_MAX_TOKENS        "8192"
 #define APP_DEFAULT_QQ_APP_ID             ""
 #define APP_DEFAULT_QQ_APP_SECRET         ""
 #define APP_DEFAULT_FEISHU_APP_ID         ""
@@ -53,6 +54,7 @@ static const app_config_field_t s_fields[] = {
     APP_CONFIG_FIELD(llm_base_url, "llm_base_url", APP_DEFAULT_LLM_BASE_URL),
     APP_CONFIG_FIELD(llm_auth_type, "llm_auth_type", APP_DEFAULT_LLM_AUTH_TYPE),
     APP_CONFIG_FIELD(llm_timeout_ms, "llm_timeout_ms", APP_DEFAULT_LLM_TIMEOUT_MS),
+    APP_CONFIG_FIELD(llm_max_tokens, "llm_max_tokens", APP_DEFAULT_LLM_MAX_TOKENS),
     APP_CONFIG_FIELD(qq_app_id, "qq_app_id", APP_DEFAULT_QQ_APP_ID),
     APP_CONFIG_FIELD(qq_app_secret, "qq_app_secret", APP_DEFAULT_QQ_APP_SECRET),
     APP_CONFIG_FIELD(feishu_app_id, "feishu_app_id", APP_DEFAULT_FEISHU_APP_ID),
@@ -185,6 +187,7 @@ void app_config_to_claw(const app_config_t *config, app_claw_config_t *out)
     strlcpy(out->llm_base_url, config->llm_base_url, sizeof(out->llm_base_url));
     strlcpy(out->llm_auth_type, config->llm_auth_type, sizeof(out->llm_auth_type));
     strlcpy(out->llm_timeout_ms, config->llm_timeout_ms, sizeof(out->llm_timeout_ms));
+    strlcpy(out->llm_max_tokens, config->llm_max_tokens, sizeof(out->llm_max_tokens));
     strlcpy(out->qq_app_id, config->qq_app_id, sizeof(out->qq_app_id));
     strlcpy(out->qq_app_secret, config->qq_app_secret, sizeof(out->qq_app_secret));
     strlcpy(out->feishu_app_id, config->feishu_app_id, sizeof(out->feishu_app_id));

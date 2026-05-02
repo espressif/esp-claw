@@ -61,6 +61,7 @@ static wifi_manager_state_cb_t s_state_cb;
 static void *s_state_cb_user_ctx;
 static esp_timer_handle_t s_reconnect_timer;
 static wifi_manager_config_t s_config;
+static bool s_wifi_started;
 
 static const char *wifi_manager_mode_string(wifi_mode_state_t mode)
 {
@@ -76,6 +77,8 @@ static const char *wifi_manager_mode_string(wifi_mode_state_t mode)
 static void notify_state_changed(bool force);
 static esp_err_t fallback_to_ap(void);
 static void reconnect_timer_cb(void *arg);
+static esp_err_t configure_sta_mode(const wifi_manager_config_t *config);
+static void reset_sta_runtime_state(void);
 
 static const char *wifi_manager_ap_ssid_prefix(void)
 {
@@ -130,6 +133,60 @@ static void refresh_ap_ip_str(void)
     if (esp_netif_get_ip_info(s_ap_netif, &ip_info) == ESP_OK && ip_info.ip.addr != 0) {
         snprintf(s_ap_ip, sizeof(s_ap_ip), IPSTR, IP2STR(&ip_info.ip));
     }
+}
+
+static void reset_sta_runtime_state(void)
+{
+    strlcpy(s_ip_addr, "0.0.0.0", sizeof(s_ip_addr));
+    s_connected = false;
+    s_retry_count = 0;
+    xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
+}
+
+static esp_err_t configure_sta_mode(const wifi_manager_config_t *config)
+{
+    wifi_mode_t target_mode = WIFI_MODE_AP;
+    esp_err_t err;
+
+    s_config = *config;
+    compose_ap_ssid();
+    s_sta_configured = (config->sta_ssid && config->sta_ssid[0] != '\0');
+    if (s_reconnect_timer) {
+        esp_timer_stop(s_reconnect_timer);
+    }
+    reset_sta_runtime_state();
+
+    if (s_sta_configured) {
+        wifi_config_t sta_cfg = {0};
+        strlcpy((char *)sta_cfg.sta.ssid, config->sta_ssid, sizeof(sta_cfg.sta.ssid));
+        strlcpy((char *)sta_cfg.sta.password,
+                config->sta_password ? config->sta_password : "",
+                sizeof(sta_cfg.sta.password));
+        sta_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+        sta_cfg.sta.pmf_cfg.capable = true;
+        sta_cfg.sta.pmf_cfg.required = false;
+
+        s_mode = WIFI_MODE_APSTA_TRYING;
+        target_mode = WIFI_MODE_APSTA;
+        err = esp_wifi_set_mode(target_mode);
+        if (err != ESP_OK) {
+            return err;
+        }
+        apply_ap_config();
+        err = esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
+        if (err != ESP_OK) {
+            return err;
+        }
+        return ESP_OK;
+    }
+
+    s_mode = WIFI_MODE_PROVISION_AP;
+    err = esp_wifi_set_mode(target_mode);
+    if (err != ESP_OK) {
+        return err;
+    }
+    apply_ap_config();
+    return ESP_OK;
 }
 
 static void wifi_event_handler(void *arg,
@@ -285,44 +342,76 @@ esp_err_t wifi_manager_init(void)
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &s_reconnect_timer));
 
     memset(&s_config, 0, sizeof(s_config));
+    s_wifi_started = false;
     compose_ap_ssid();
     return ESP_OK;
 }
 
 esp_err_t wifi_manager_start(const wifi_manager_config_t *config)
 {
+    esp_err_t err;
+
     if (!config) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    s_config = *config;
-    compose_ap_ssid();
-    s_sta_configured = (config->sta_ssid && config->sta_ssid[0] != '\0');
-    s_retry_count = 0;
-    if (s_reconnect_timer) {
-        esp_timer_stop(s_reconnect_timer);
-    }
-    xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
-
-    if (s_sta_configured) {
-        wifi_config_t sta_cfg = {0};
-        strlcpy((char *)sta_cfg.sta.ssid, config->sta_ssid, sizeof(sta_cfg.sta.ssid));
-        strlcpy((char *)sta_cfg.sta.password, config->sta_password ? config->sta_password : "", sizeof(sta_cfg.sta.password));
-        sta_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
-        sta_cfg.sta.pmf_cfg.capable = true;
-        sta_cfg.sta.pmf_cfg.required = false;
-
-        s_mode = WIFI_MODE_APSTA_TRYING;
-        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
-        apply_ap_config();
-        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg));
-    } else {
-        s_mode = WIFI_MODE_PROVISION_AP;
-        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
-        apply_ap_config();
+    err = configure_sta_mode(config);
+    if (err != ESP_OK) {
+        return err;
     }
 
-    ESP_ERROR_CHECK(esp_wifi_start());
+    if (!s_wifi_started) {
+        err = esp_wifi_start();
+        if (err != ESP_OK) {
+            return err;
+        }
+        s_wifi_started = true;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t wifi_manager_apply_sta_config(const wifi_manager_config_t *config)
+{
+    esp_err_t err;
+    bool was_connected;
+
+    if (!config) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    was_connected = s_connected;
+    err = configure_sta_mode(config);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (was_connected) {
+        notify_state_changed(false);
+    }
+
+    if (!s_wifi_started) {
+        err = esp_wifi_start();
+        if (err != ESP_OK) {
+            return err;
+        }
+        s_wifi_started = true;
+    }
+
+    if (!s_sta_configured) {
+        return ESP_OK;
+    }
+
+    err = esp_wifi_disconnect();
+    if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_CONNECT) {
+        return err;
+    }
+
+    err = esp_wifi_connect();
+    if (err != ESP_OK && err != ESP_ERR_WIFI_CONN) {
+        return err;
+    }
+
     return ESP_OK;
 }
 
