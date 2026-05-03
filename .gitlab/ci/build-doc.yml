@@ -2,6 +2,7 @@ build_doc:
   stage: build
   tags:
     - build
+    - brew
   image: node:24
   extends:
     - .rules:build:doc

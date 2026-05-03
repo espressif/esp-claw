@@ -138,7 +138,7 @@ export const WebImPage: Component = () => {
 
   onMount(async () => {
     try {
-      await createFolder('/inbox/webim');
+      await createFolder('/inbox/webim', { recursive: true });
     } catch {
       /* may already exist */
     }

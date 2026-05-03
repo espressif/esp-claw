@@ -1,5 +1,12 @@
 import { connect, connectWithPort, type ESPLoader, type Logger } from "tasmota-webserial-esptool";
 
+const FLASH_UART_BAUD_FAST = 921600; // UART speed during stub flash
+const FLASH_UART_BAUD_ROM = 115200; // ROM / console default
+
+const WIFI_STATUS_PROBE_ATTEMPTS = 3;
+const WIFI_STATUS_PROBE_WAIT_MS = 1000;
+const WIFI_STATUS_PROBE_RETRY_GAP_MS = 3000;
+
 type FirmwareRecord = {
   description?: string;
   merged_binary: string;
@@ -65,6 +72,7 @@ type Strings = {
   wifiPasswordLengthError: string;
   wifiSubmitBtn: string;
   wifiConnecting: string;
+  wifiStatusProbeAttempt: string;
   wifiProbeError: string;
   wifiTimeoutError: string;
   wifiReadyTitle: string;
@@ -903,9 +911,20 @@ async function flashSelectedFirmware() {
     updateModalProgress(s.writingFlash, 0);
     addProgressLine(`Flashing ${selected.boardKey} from 0x0`);
 
+    const loader = state.loader;
+    let fastBaudForFlash = false;
+    if (loader.IS_STUB) {
+      try {
+        await loader.setBaudrate(FLASH_UART_BAUD_FAST);
+        fastBaudForFlash = true;
+      } catch (baudErr) {
+        addProgressLine(`UART speed-up skipped: ${getErrorMessage(baudErr)}`);
+      }
+    }
+
     let lastWritePct = 0;
     try {
-      await state.loader.flashData(binary, (written, total) => {
+      await loader.flashData(binary, (written, total) => {
         const pct = total > 0 ? Math.round((written / total) * 100) : 0;
         lastWritePct = pct;
         updateModalProgress(s.writingFlash, pct);
@@ -925,6 +944,14 @@ async function flashSelectedFirmware() {
       }
       addProgressLine("Note: stub finalization timed out after write; continuing with hardware reset.");
       updateModalProgress(s.writingFlash, 100);
+    } finally {
+      if (fastBaudForFlash && loader.IS_STUB) {
+        try {
+          await loader.setBaudrate(FLASH_UART_BAUD_ROM);
+        } catch (restoreErr) {
+          addProgressLine(`UART restore to ${FLASH_UART_BAUD_ROM} failed: ${getErrorMessage(restoreErr)}`);
+        }
+      }
     }
 
     state.flash = "flashed";
@@ -1012,8 +1039,22 @@ async function continuePostFlashConsoleFlow() {
   await startConsoleReader();
   await sleep(5000);
 
-  await sendConsoleCommand("wifi --status\n");
-  const status = await waitForWifiStatus(1000).catch(() => null);
+  let status: WifiStatus | null = null;
+  for (let attempt = 1; attempt <= WIFI_STATUS_PROBE_ATTEMPTS; attempt++) {
+    const stage = s.wifiStatusProbeAttempt.replace("{current}", String(attempt)).replace("{total}", String(WIFI_STATUS_PROBE_ATTEMPTS));
+    updateModalProgress(stage, 100);
+    addProgressLine(stage);
+
+    await sendConsoleCommand("wifi --status\n");
+    status = await waitForWifiStatus(WIFI_STATUS_PROBE_WAIT_MS).catch(() => null);
+    if (status) {
+      break;
+    }
+    if (attempt < WIFI_STATUS_PROBE_ATTEMPTS) {
+      await sleep(WIFI_STATUS_PROBE_RETRY_GAP_MS);
+    }
+  }
+
   if (!status) {
     state.provision = "error";
     throw new Error(s.wifiProbeError);

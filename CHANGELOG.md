@@ -1,5 +1,15 @@
 # ChangeLog
 
+## 2026-05-03
+
+### Fix:
+
+* Increased baudrate during flashing to speed up the process.
+
+* Fixed an issue where the device could fail to enter network provisioning after online flashing. (https://github.com/espressif/esp-claw/issues/34)
+
+* Fixed an issue where Web Chat might not receive reply messages from ESP-Claw.
+
 ## 2026-04-30
 
 ### Feature:
