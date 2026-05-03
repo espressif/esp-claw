@@ -1,0 +1,76 @@
+version: 1.0.0
+# Peripherals Configuration for ESP32-P4-NANO
+peripherals:
+  # I2C Configuration for codec and sensors
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 7
+        scl: 8
+
+  # I2S Audio Output for ES8311 codec
+  - name: i2s_audio_out
+    type: i2s
+    format: "std-out"
+    role: master
+    config:
+      port: 0
+      sample_rate_hz: 48000
+      clk_src: "I2S_CLK_SRC_DEFAULT"
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_mode: "I2S_SLOT_MODE_STEREO"
+      slot_mask: "I2S_STD_SLOT_BOTH"
+      ws_width: 16
+      pins:
+        mclk: 13
+        bclk: 12
+        ws: 10
+        dout: 11
+        din: 9
+
+  # I2S Audio Input for ES8311 codec
+  - name: i2s_audio_in
+    type: i2s
+    format: "std-in"
+    role: master
+    config:
+      port: 0
+      sample_rate_hz: 48000
+      clk_src: "I2S_CLK_SRC_DEFAULT"
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_mode: "I2S_SLOT_MODE_STEREO"
+      slot_mask: "I2S_STD_SLOT_BOTH"
+      ws_width: 16
+      pins:
+        mclk: 13
+        bclk: 12
+        ws: 10
+        dout: 11
+        din: 9
+
+  # PA Control GPIO
+  - name: gpio_pa_control
+    type: gpio
+    role: io
+    config:
+      pin: 53
+      mode: GPIO_MODE_OUTPUT
+      pull_up: true
+      default_level: 0
+
+  # LCD Backlight Control via PWM (LEDC)
+  - name: ledc_backlight
+    type: ledc
+    version: default
+    config:
+      gpio_num: 20
+      speed_mode: LEDC_LOW_SPEED_MODE
+      channel: 1
+      timer_sel: 1
+      duty: 0
+      output_invert: true
