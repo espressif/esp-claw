@@ -8,7 +8,7 @@ Use this skill when the user wants to interact through Feishu, especially to rep
 - The task is clearly Feishu-specific rather than QQ, Telegram, or WeChat.
 
 ## Available capabilities
-- `feishu_send_message`: send plain text to a Feishu chat.
+- `feishu_send_message`: send text to a Feishu chat, rendered through a Markdown-capable interactive card when possible.
 - `feishu_send_image`: send a local image file to a Feishu chat.
 - `feishu_send_file`: send a local non-image file to a Feishu chat.
 
@@ -16,7 +16,7 @@ Use this skill when the user wants to interact through Feishu, especially to rep
 - Call the direct Feishu capabilities.
 - When replying to the current inbound Feishu conversation, you can omit `chat_id` if the runtime context already contains it.
 - When starting a new outbound send or the target chat is ambiguous, pass an explicit `chat_id`.
-- Use `feishu_send_message` for text only.
+- Use `feishu_send_message` for text only. Markdown such as bold text, links, and lists is sent unchanged and rendered by Feishu's card Markdown support when card delivery succeeds.
 - Use `feishu_send_image` for image files such as `.jpg`, `.jpeg`, `.png`, `.gif`, or `.webp`.
 - Use `feishu_send_file` for non-image files such as `.txt`, `.json`, `.log`, `.csv`, `.pdf`, or archives.
 - `caption` is optional for image and file sends. In Feishu media send flow, caption is sent as a follow-up text message.
@@ -78,3 +78,4 @@ Send a file:
 ## Notes
 - This skill is for Feishu only. If the user is on another IM channel, use that channel's capability group instead.
 - Feishu send capabilities return JSON such as `{\"ok\":true}` on success.
+- `feishu_send_message` falls back to the plain-text Feishu message path if Markdown card construction or delivery fails.

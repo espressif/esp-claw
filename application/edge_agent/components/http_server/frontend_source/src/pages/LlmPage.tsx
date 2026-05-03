@@ -57,11 +57,16 @@ type LlmForm = {
   llm_api_key: string;
   llm_model: string;
   llm_timeout_ms: string;
+  llm_max_tokens: string;
   llm_backend_type: string;
   llm_profile: string;
   llm_base_url: string;
   llm_auth_type: string;
 };
+
+function isPositiveInteger(value: string): boolean {
+  return /^[1-9]\d*$/.test(value);
+}
 
 function detectPreset(form: LlmForm): ProviderKey {
   for (const key of Object.keys(PROVIDER_PRESETS) as Exclude<ProviderKey, 'custom'>[]) {
@@ -86,6 +91,7 @@ export const LlmPage: Component = () => {
       llm_api_key: config.llm_api_key ?? '',
       llm_model: config.llm_model ?? '',
       llm_timeout_ms: config.llm_timeout_ms ?? '',
+      llm_max_tokens: config.llm_max_tokens ?? '',
       llm_backend_type: config.llm_backend_type ?? '',
       llm_profile: config.llm_profile ?? '',
       llm_base_url: config.llm_base_url ?? '',
@@ -95,6 +101,7 @@ export const LlmPage: Component = () => {
       llm_api_key: form.llm_api_key.trim(),
       llm_model: form.llm_model.trim(),
       llm_timeout_ms: form.llm_timeout_ms.trim(),
+      llm_max_tokens: form.llm_max_tokens.trim(),
       llm_backend_type: form.llm_backend_type.trim(),
       llm_profile: form.llm_profile.trim(),
       llm_base_url: form.llm_base_url.trim(),
@@ -108,6 +115,7 @@ export const LlmPage: Component = () => {
   createEffect(() => {
     void tab.form.llm_api_key;
     void tab.form.llm_model;
+    void tab.form.llm_max_tokens;
     void tab.form.llm_backend_type;
     void tab.form.llm_profile;
     void tab.form.llm_base_url;
@@ -129,6 +137,7 @@ export const LlmPage: Component = () => {
     const requiredFields: Array<[keyof LlmForm, string]> = [
       ['llm_api_key', t('llmApiKey') as string],
       ['llm_model', t('llmModel') as string],
+      ['llm_max_tokens', t('llmMaxTokens') as string],
       ['llm_backend_type', t('llmBackend') as string],
       ['llm_profile', t('llmProfile') as string],
       ['llm_base_url', t('llmBaseUrl') as string],
@@ -143,6 +152,13 @@ export const LlmPage: Component = () => {
         '{fields}',
         missing.join(' / '),
       );
+      setValidationError(message);
+      pushToast(message, 'error', 5000);
+      return;
+    }
+
+    if (!isPositiveInteger(tab.form.llm_max_tokens.trim())) {
+      const message = t('llmValidationMaxTokens') as string;
       setValidationError(message);
       pushToast(message, 'error', 5000);
       return;
@@ -189,6 +205,12 @@ export const LlmPage: Component = () => {
               placeholder={t('llmTimeoutPlaceholder') as string}
               value={tab.form.llm_timeout_ms}
               onInput={(event) => tab.setForm('llm_timeout_ms', event.currentTarget.value)}
+            />
+            <TextInput
+              label={t('llmMaxTokens')}
+              placeholder={t('llmMaxTokensPlaceholder') as string}
+              value={tab.form.llm_max_tokens}
+              onInput={(event) => tab.setForm('llm_max_tokens', event.currentTarget.value)}
             />
           </div>
         </StaticConfigBlock>

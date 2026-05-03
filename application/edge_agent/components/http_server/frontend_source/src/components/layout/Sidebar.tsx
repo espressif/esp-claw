@@ -41,7 +41,7 @@ export type LeafNode = {
     | 'navSearch'
     | 'navMemory'
     | 'navCapabilities'
-    | 'navSkills'
+    | 'navLuaModules'
     | 'navFiles'
     | 'navWebIm';
   icon: Component;
@@ -72,7 +72,7 @@ export const NAV_TREE: NavNode[] = [
   { kind: 'leaf', id: 'memory', labelKey: 'navMemory', icon: IconMemory },
   { kind: 'leaf', id: 'webim', labelKey: 'navWebIm', icon: IconWebIm },
   { kind: 'leaf', id: 'capabilities', labelKey: 'navCapabilities', icon: IconCaps },
-  { kind: 'leaf', id: 'skills', labelKey: 'navSkills', icon: IconSkills },
+  { kind: 'leaf', id: 'skills', labelKey: 'navLuaModules', icon: IconSkills },
   { kind: 'leaf', id: 'files', labelKey: 'navFiles', icon: IconFiles },
 ];
 

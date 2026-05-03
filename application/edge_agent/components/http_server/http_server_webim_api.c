@@ -82,8 +82,10 @@ static void webim_ws_fd_remove(int fd)
 static void webim_ws_broadcast_json(const char *json)
 {
     httpd_ws_frame_t pkt;
+    int local_fds[WEBIM_WS_MAX_CLIENTS];
+    size_t local_count = 0;
 
-    if (!json || !s_httpd || !s_ws_mx || s_ws_count == 0) {
+    if (!json || !s_httpd || !s_ws_mx) {
         return;
     }
 
@@ -93,19 +95,27 @@ static void webim_ws_broadcast_json(const char *json)
     pkt.len = strlen(json);
 
     xSemaphoreTake(s_ws_mx, portMAX_DELAY);
-    for (size_t i = 0; i < s_ws_count;) {
-        int fd = s_ws_fds[i];
-        esp_err_t err = httpd_ws_send_frame_async(s_httpd, fd, &pkt);
+    local_count = s_ws_count;
+    memcpy(local_fds, s_ws_fds, local_count * sizeof(int));
+    xSemaphoreGive(s_ws_mx);
+
+    if (local_count == 0) {
+        ESP_LOGW(TAG, "WS broadcast skipped: no connected clients");
+        return;
+    }
+
+    ESP_LOGI(TAG, "WS broadcast: %u client(s) len=%u", (unsigned)local_count, (unsigned)pkt.len);
+
+    for (size_t i = 0; i < local_count; i++) {
+        esp_err_t err = httpd_ws_send_data(s_httpd, local_fds[i], &pkt);
 
         if (err != ESP_OK) {
-            s_ws_fds[i] = s_ws_fds[s_ws_count - 1];
-            s_ws_count--;
-            ESP_LOGW(TAG, "WS drop fd=%d (%s)", fd, esp_err_to_name(err));
-            continue;
+            webim_ws_fd_remove(local_fds[i]);
+            ESP_LOGW(TAG, "WS drop fd=%d (%s)", local_fds[i], esp_err_to_name(err));
+        } else {
+            ESP_LOGI(TAG, "WS sent fd=%d ok", local_fds[i]);
         }
-        i++;
     }
-    xSemaphoreGive(s_ws_mx);
 }
 
 static esp_err_t webim_emit_outbound_json(const cap_im_local_message_t *message)

@@ -9,6 +9,7 @@ import { SavePanel } from '../components/ui/SavePanel';
 import { Button } from '../components/ui/Button';
 import { Switch } from '../components/ui/Switch';
 import { Banner } from '../components/ui/Banner';
+import { ConfigTable } from '../components/ui/ConfigTable';
 
 const SENTINEL_NONE = '__none__';
 
@@ -94,7 +95,7 @@ export const SkillsPage: Component = () => {
   };
 
   const summary = () =>
-    tf('skillsSummary', {
+    tf('luaModulesSummary', {
       enabled: tab.form.enabled.length,
       total: appLuaModules().length,
     });
@@ -102,26 +103,26 @@ export const SkillsPage: Component = () => {
   return (
     <TabShell>
       <PageHeader
-        title={t('sectionSkills') as string}
-        description={t('skillsDescription') as string}
+        title={t('sectionLuaModules') as string}
+        description={t('luaModulesDescription') as string}
       />
       <div class="px-5 py-4 flex flex-col gap-3 border-b border-[var(--color-border-subtle)]">
         <Show when={!isCapLuaEnabled()}>
-          <Banner kind="info" message={t('skillsCapabilityRequired') as string} />
+          <Banner kind="info" message={t('luaModulesCapabilityRequired') as string} />
         </Show>
         <div class="flex flex-wrap gap-2 items-center">
           <input
             type="search"
-            placeholder={t('skillsSearchPlaceholder') as string}
+            placeholder={t('luaModulesSearchPlaceholder') as string}
             class="flex-1 min-w-[160px] max-w-xs"
             value={search()}
             onInput={(event) => setSearch(event.currentTarget.value)}
           />
           <Button size="sm" variant="secondary" onClick={selectAll} disabled={!isCapLuaEnabled()}>
-            {t('skillsSelectAll')}
+            {t('luaModulesSelectAll')}
           </Button>
           <Button size="sm" variant="secondary" onClick={clearAll} disabled={!isCapLuaEnabled()}>
-            {t('skillsClearAll')}
+            {t('luaModulesClearAll')}
           </Button>
         </div>
         <p class="text-[0.78rem] text-[var(--color-text-muted)] m-0">{summary()}</p>
@@ -129,32 +130,40 @@ export const SkillsPage: Component = () => {
 
       <div class="p-5">
         <Show when={appLuaModules().length === 0}>
-          <Banner kind="info" message={t('skillsLoading') as string} />
+          <Banner kind="info" message={t('luaModulesLoading') as string} />
         </Show>
         <Show when={appLuaModules().length > 0 && filtered().length === 0}>
-          <Banner kind="info" message={t('skillsNoResult') as string} />
+          <Banner kind="info" message={t('luaModulesNoResult') as string} />
         </Show>
-        <div class="grid gap-2 sm:grid-cols-2">
+        <ConfigTable
+          columns={[
+            { label: t('luaModulesNameCol') as string },
+            { label: t('idCol') as string },
+            { label: t('capabilityEnabled') as string, class: 'w-24 text-center' },
+          ]}
+        >
           <For each={filtered()}>
             {(item) => (
-              <div class="flex items-start gap-3 p-3 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-white/[0.02] hover:bg-white/[0.04] transition">
-                <div class="flex-1 min-w-0">
-                  <div class="font-semibold text-[0.9rem] text-[var(--color-text-primary)]">
-                    {item.display_name || item.module_id}
+              <tr class="border-t border-[var(--color-border-subtle)] hover:bg-white/[0.02]">
+                <td class="px-4 py-2.5 text-[0.88rem] text-[var(--color-text-primary)]">
+                  <div class="flex flex-col gap-0.5">
+                    <span class="font-semibold">{item.display_name || item.module_id}</span>
                   </div>
-                  <div class="text-[0.76rem] text-[var(--color-text-muted)] font-mono break-all">
-                    {item.module_id}
-                  </div>
-                </div>
-                <Switch
-                  checked={enabledSet().has(item.module_id)}
-                  disabled={!isCapLuaEnabled()}
-                  onChange={(checked) => toggle(item.module_id, checked)}
-                />
-              </div>
+                </td>
+                <td class="px-4 py-2.5 font-mono text-[0.78rem] text-[var(--color-text-muted)] break-all">
+                  {item.module_id}
+                </td>
+                <td class="px-4 py-2.5 text-center">
+                  <Switch
+                    checked={enabledSet().has(item.module_id)}
+                    disabled={!isCapLuaEnabled()}
+                    onChange={(checked) => toggle(item.module_id, checked)}
+                  />
+                </td>
+              </tr>
             )}
           </For>
-        </div>
+        </ConfigTable>
       </div>
 
       <SavePanel

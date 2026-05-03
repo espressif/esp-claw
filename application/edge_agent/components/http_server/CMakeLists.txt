@@ -1,5 +1,6 @@
 set(FRONTEND_SOURCE_DIR        "${CMAKE_CURRENT_LIST_DIR}/frontend_source")
 set(FRONTEND_DIST_HTML_GZ      "${FRONTEND_SOURCE_DIR}/dist/index.html.gz")
+set(FRONTEND_PUBLIC_FAVICON_ICO  "${FRONTEND_SOURCE_DIR}/public/favicon.ico")
 
 if(NOT EXISTS "${FRONTEND_DIST_HTML_GZ}")
     message(FATAL_ERROR
@@ -28,6 +29,7 @@ idf_component_register(
         "include"
     EMBED_FILES
         "${FRONTEND_DIST_HTML_GZ}"
+        "${FRONTEND_PUBLIC_FAVICON_ICO}"
     REQUIRES
         app_config
         app_claw

@@ -5,6 +5,7 @@
  */
 #include "http_server_priv.h"
 
+#include <ctype.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -45,6 +46,7 @@ static const config_field_def_t CONFIG_FIELDS[] = {
     CONFIG_FIELD("llm",          llm_base_url),
     CONFIG_FIELD("llm",          llm_auth_type),
     CONFIG_FIELD("llm",          llm_timeout_ms),
+    CONFIG_FIELD("llm",          llm_max_tokens),
 
     CONFIG_FIELD("im",           qq_app_id),
     CONFIG_FIELD("im",           qq_app_secret),
@@ -127,6 +129,27 @@ static const char *field_value(const app_config_t *config, const config_field_de
 static char *field_mutable(app_config_t *config, const config_field_def_t *field)
 {
     return ((char *)config) + field->offset;
+}
+
+static bool is_positive_decimal_string(const char *value)
+{
+    const unsigned char *cursor = (const unsigned char *)value;
+
+    if (!cursor || !cursor[0]) {
+        return false;
+    }
+    if (cursor[0] == '0') {
+        return false;
+    }
+
+    while (*cursor) {
+        if (!isdigit(*cursor)) {
+            return false;
+        }
+        cursor++;
+    }
+
+    return true;
 }
 
 static esp_err_t emit_config(httpd_req_t *req,
@@ -273,6 +296,14 @@ static esp_err_t config_post_handler(httpd_req_t *req)
         cJSON *item = cJSON_GetObjectItemCaseSensitive(root, field->name);
         if (!cJSON_IsString(item)) {
             continue;
+        }
+        if (strcmp(field->name, "llm_max_tokens") == 0 &&
+                !is_positive_decimal_string(item->valuestring)) {
+            cJSON_Delete(root);
+            free(config);
+            return httpd_resp_send_err(req,
+                                       HTTPD_400_BAD_REQUEST,
+                                       "llm_max_tokens must be a positive integer");
         }
         strlcpy(field_mutable(config, field), item->valuestring, field->size);
         applied_count++;

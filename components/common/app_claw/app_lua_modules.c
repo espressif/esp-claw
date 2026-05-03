@@ -22,6 +22,9 @@
 #if CONFIG_APP_CLAW_LUA_MODULE_ADC
 #include "lua_module_adc.h"
 #endif
+#if CONFIG_APP_CLAW_LUA_MODULE_DHT
+#include "lua_module_dht.h"
+#endif
 #if CONFIG_APP_CLAW_LUA_MODULE_EVENT_PUBLISHER
 #include "lua_module_event_publisher.h"
 #endif
@@ -236,6 +239,14 @@ static esp_err_t app_lua_register_adc(const char *fatfs_base_path)
 }
 #endif
 
+#if CONFIG_APP_CLAW_LUA_MODULE_DHT
+static esp_err_t app_lua_register_dht(const char *fatfs_base_path)
+{
+    (void)fatfs_base_path;
+    return lua_module_dht_register();
+}
+#endif
+
 #if CONFIG_APP_CLAW_LUA_MODULE_EVENT_PUBLISHER
 static esp_err_t app_lua_register_event_publisher(const char *fatfs_base_path)
 {
@@ -415,6 +426,9 @@ static const app_lua_module_entry_t s_lua_module_entries[] = {
 #if CONFIG_APP_CLAW_LUA_MODULE_ADC
     { "adc", "ADC", app_lua_register_adc },
 #endif
+#if CONFIG_APP_CLAW_LUA_MODULE_DHT
+    { "dht", "DHT", app_lua_register_dht },
+#endif
 #if CONFIG_APP_CLAW_LUA_MODULE_CAPABILITY
     { "capability", "Capability", app_lua_register_capability },
 #endif
@@ -492,6 +506,9 @@ static const app_lua_module_entry_t s_lua_module_entries[] = {
 static const app_lua_module_info_t s_lua_module_infos[] = {
 #if CONFIG_APP_CLAW_LUA_MODULE_ADC
     { "adc", "ADC" },
+#endif
+#if CONFIG_APP_CLAW_LUA_MODULE_DHT
+    { "dht", "DHT" },
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_CAPABILITY
     { "capability", "Capability" },

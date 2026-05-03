@@ -17,11 +17,11 @@
     "@lucide/astro": "^1.7.0",
     "astro": "^6.1.6",
     "astro-d2": "^0.10.0",
-    "esptool-js": "^0.6.0",
     "lean-qr": "^2.7.1",
     "sharp": "^0.34.2",
     "starlight-theme-nova": "^0.11.7",
-    "typescript": "^6.0.2"
+    "typescript": "^6.0.2",
+    "tasmota-webserial-esptool": "^9.2.20"
   },
   "devDependencies": {
     "@types/mdast": "^4.0.4", // for plugins/remark-doc-links

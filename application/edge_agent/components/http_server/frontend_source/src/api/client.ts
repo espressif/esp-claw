@@ -8,6 +8,7 @@ export type AppConfig = {
   llm_base_url: string;
   llm_auth_type: string;
   llm_timeout_ms: string;
+  llm_max_tokens: string;
   qq_app_id: string;
   qq_app_secret: string;
   feishu_app_id: string;
@@ -46,6 +47,7 @@ export const GROUP_FIELDS: Record<ConfigGroup, (keyof AppConfig)[]> = {
     'llm_base_url',
     'llm_auth_type',
     'llm_timeout_ms',
+    'llm_max_tokens',
   ],
   im: [
     'qq_app_id',
@@ -153,8 +155,8 @@ async function request<T>(
   return (await response.text()) as unknown as T;
 }
 
-export function fetchStatus() {
-  return request<StatusInfo>('/api/status', undefined, 'Failed to load status');
+export function fetchStatus(signal?: AbortSignal) {
+  return request<StatusInfo>('/api/status', { signal }, 'Failed to load status');
 }
 
 /** Fetch a subset of the configuration, filtered by group names. */
@@ -251,13 +253,20 @@ export async function uploadFile(path: string, file: File) {
   );
 }
 
-export async function createFolder(path: string) {
+export async function createFolder(
+  path: string,
+  options: { recursive?: boolean } = {},
+) {
+  const body: { path: string; recursive?: boolean } = { path };
+  if (options.recursive) {
+    body.recursive = true;
+  }
   return request<unknown>(
     '/api/files/mkdir',
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path }),
+      body: JSON.stringify(body),
     },
     'Failed to create folder',
   );
@@ -296,6 +305,14 @@ export async function cancelWechatLogin() {
     '/api/wechat/login/cancel',
     { method: 'POST' },
     'Failed to cancel WeChat login',
+  );
+}
+
+export async function restartDevice() {
+  return request<{ ok?: boolean; message?: string }>(
+    '/api/restart',
+    { method: 'POST' },
+    'Failed to restart device',
   );
 }
 

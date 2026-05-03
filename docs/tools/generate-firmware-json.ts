@@ -9,6 +9,9 @@ import { fileURLToPath } from "node:url";
 
 type MetadataRecord = {
   chip?: unknown;
+  rev?: unknown;
+  brand?: unknown;
+  board_brand?: unknown;
   board?: unknown;
   merged_binary?: unknown;
   min_flash_size?: unknown;
@@ -16,7 +19,6 @@ type MetadataRecord = {
 };
 
 type FirmwareEntry = {
-  board: string;
   features: string[];
   description: string;
   merged_binary: string;
@@ -28,7 +30,9 @@ type FirmwareEntry = {
   };
 };
 
-type FirmwareDb = Record<string, FirmwareEntry[]>;
+type FirmwareBoards = Record<string, FirmwareEntry>;
+type FirmwareBrands = Record<string, FirmwareBoards>;
+type FirmwareDb = Record<string, FirmwareBrands>;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DOCS_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -67,6 +71,26 @@ function parseFlashMB(value: unknown): number {
   }
 
   return num;
+}
+
+function parseRevision(value: unknown): number | null {
+  if (value == null) {
+    return null;
+  }
+  if (typeof value === "number" && Number.isInteger(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isInteger(parsed)) {
+      return parsed;
+    }
+  }
+  throw new Error(`unsupported rev value: ${JSON.stringify(value)}`);
+}
+
+function makeChipSelectorKey(chip: string, rev: number | null): string {
+  return rev == null ? chip : `${chip}|rev${rev}`;
 }
 
 async function loadMetadataFiles(mergedDir: string): Promise<MetadataRecord[]> {
@@ -153,6 +177,8 @@ async function main(): Promise<number> {
   const firmware: FirmwareDb = {};
   for (const record of records) {
     const chip = record.chip;
+    const rev = record.rev;
+    const brand = record.brand ?? record.board_brand ?? "others";
     const board = record.board;
     const mergedBinary = record.merged_binary;
     const minFlashSize = record.min_flash_size;
@@ -166,6 +192,10 @@ async function main(): Promise<number> {
       log(`skip one metadata: invalid board (${JSON.stringify(record)})`);
       continue;
     }
+    if (typeof brand !== "string" || !brand.trim()) {
+      log(`skip one metadata: invalid brand (${JSON.stringify(record)})`);
+      continue;
+    }
     if (typeof mergedBinary !== "string" || !mergedBinary.trim()) {
       log(`skip one metadata: invalid merged_binary (${JSON.stringify(record)})`);
       continue;
@@ -176,16 +206,17 @@ async function main(): Promise<number> {
     }
 
     let minFlashMB: number;
+    let revision: number | null;
     try {
       minFlashMB = parseFlashMB(minFlashSize);
+      revision = parseRevision(rev);
     } catch (error) {
-      log(`skip one metadata: invalid min_flash_size (${JSON.stringify(record)}) (${(error as Error).message})`);
+      log(`skip one metadata: invalid metadata (${JSON.stringify(record)}) (${(error as Error).message})`);
       continue;
     }
 
     const nvsInfoRecord = nvsInfo as Record<string, unknown>;
     const item: FirmwareEntry = {
-      board,
       features: [],
       description: "",
       merged_binary: `/merged_binary/${mergedBinary}`,
@@ -197,10 +228,17 @@ async function main(): Promise<number> {
       },
     };
 
-    if (!firmware[chip]) {
-      firmware[chip] = [];
+    const chipKey = makeChipSelectorKey(chip.trim(), revision);
+    const brandKey = brand.trim();
+    const boardKey = board.trim();
+
+    if (!firmware[chipKey]) {
+      firmware[chipKey] = {};
     }
-    firmware[chip].push(item);
+    if (!firmware[chipKey][brandKey]) {
+      firmware[chipKey][brandKey] = {};
+    }
+    firmware[chipKey][brandKey][boardKey] = item;
   }
 
   if (Object.keys(firmware).length === 0) {
@@ -208,11 +246,22 @@ async function main(): Promise<number> {
     return 1;
   }
 
-  for (const chip of Object.keys(firmware)) {
-    firmware[chip].sort((a, b) => a.board.localeCompare(b.board));
+  const sortedFirmware: FirmwareDb = {};
+  for (const chipKey of Object.keys(firmware).sort((a, b) => a.localeCompare(b))) {
+    const brands = firmware[chipKey];
+    const sortedBrands: FirmwareBrands = {};
+    for (const brandKey of Object.keys(brands).sort((a, b) => a.localeCompare(b))) {
+      const boards = brands[brandKey];
+      const sortedBoards: FirmwareBoards = {};
+      for (const boardKey of Object.keys(boards).sort((a, b) => a.localeCompare(b))) {
+        sortedBoards[boardKey] = boards[boardKey];
+      }
+      sortedBrands[brandKey] = sortedBoards;
+    }
+    sortedFirmware[chipKey] = sortedBrands;
   }
 
-  await fs.writeFile(TARGET_FIRMWARE_JSON, `${JSON.stringify(firmware, null, 2)}\n`, "utf8");
+  await fs.writeFile(TARGET_FIRMWARE_JSON, `${JSON.stringify(sortedFirmware, null, 2)}\n`, "utf8");
   console.log(`Copied merged binaries to: ${TARGET_MERGED_DIR}`);
   console.log(`Generated: ${TARGET_FIRMWARE_JSON}`);
   return 0;

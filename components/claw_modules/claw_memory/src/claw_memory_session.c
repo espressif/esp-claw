@@ -437,6 +437,7 @@ esp_err_t claw_memory_async_extract_init(const claw_memory_config_t *config)
                                     .base_url = llm->base_url,
                                     .auth_type = llm->auth_type,
                                     .timeout_ms = llm->timeout_ms,
+                                    .max_tokens = llm->max_tokens,
                                     .image_max_bytes = llm->image_max_bytes,
                                 },
                                 &error_message);

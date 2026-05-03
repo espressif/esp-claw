@@ -165,6 +165,12 @@ dependencies:
       - if: $CONFIG{APP_CLAW_LUA_MODULE_ADC} == True
     path: ../../lua_modules/lua_module_adc
 
+  lua_module_dht:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
+      - if: $CONFIG{APP_CLAW_LUA_MODULE_DHT} == True
+    path: ../../lua_modules/lua_module_dht
+
   lua_module_call_capability:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True
