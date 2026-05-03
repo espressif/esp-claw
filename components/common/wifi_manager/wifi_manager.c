@@ -28,6 +28,12 @@ static const char *TAG = "wifi_manager";
 #ifndef CONFIG_APP_WIFI_AP_SSID_PREFIX
 #define CONFIG_APP_WIFI_AP_SSID_PREFIX "esp-claw"
 #endif
+
+/* Added Default Password Macro */
+#ifndef CONFIG_APP_WIFI_AP_PASSWORD
+#define CONFIG_APP_WIFI_AP_PASSWORD "Yourespclaw123"
+#endif
+
 #ifndef CONFIG_APP_WIFI_AP_CHANNEL
 #define CONFIG_APP_WIFI_AP_CHANNEL 1
 #endif
@@ -87,6 +93,12 @@ static const char *wifi_manager_ap_ssid_prefix(void)
            : CONFIG_APP_WIFI_AP_SSID_PREFIX;
 }
 
+/* Helper to get the AP password */
+static const char *wifi_manager_ap_password(void)
+{
+    return CONFIG_APP_WIFI_AP_PASSWORD;
+}
+
 static uint8_t wifi_manager_ap_channel(void)
 {
     return s_config.ap_channel ? s_config.ap_channel : CONFIG_APP_WIFI_AP_CHANNEL;
@@ -120,7 +132,16 @@ static void apply_ap_config(void)
     ap_cfg.ap.ssid_len = strlen(s_ap_ssid);
     ap_cfg.ap.channel = wifi_manager_ap_channel();
     ap_cfg.ap.max_connection = wifi_manager_ap_max_conn();
-    ap_cfg.ap.authmode = WIFI_AUTH_OPEN;
+    
+    /* Updated Logic: Set Password and Auth Mode */
+    const char* password = wifi_manager_ap_password();
+    if (strlen(password) == 0) {
+        ap_cfg.ap.authmode = WIFI_AUTH_OPEN;
+    } else {
+        strlcpy((char *)ap_cfg.ap.password, password, sizeof(ap_cfg.ap.password));
+        ap_cfg.ap.authmode = WIFI_AUTH_WPA2_PSK;
+    }
+
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
 }
 
