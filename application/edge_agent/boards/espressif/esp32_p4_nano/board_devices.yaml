@@ -1,0 +1,79 @@
+version: 1.0.0
+# Devices Configuration for ESP32-P4-NANO
+devices:
+  # Audio DAC via ES8311 codec
+  - name: audio_dac
+    chip: es8311
+    type: audio_codec
+    version: default
+    config:
+      dac_enabled: true
+      dac_max_channel: 2
+      dac_channel_mask: "11"  # Enable both left and right channels
+      mclk_enabled: true
+
+    peripherals:
+      - name: gpio_pa_control
+        gain: 6
+        active_level: 1
+
+      - name: i2s_audio_out
+      - name: i2c_master
+        address: 0x30              # ES8311 7-bit: 0x18, board_manager 用 8-bit: 0x18<<1=0x30
+
+  # Audio ADC via ES8311 codec
+  - name: audio_adc
+    chip: es8311
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      adc_max_channel: 2
+      adc_channel_mask: "11"  # Enable both left and right channels
+      adc_channel_labels: [RE, FC]
+      mclk_enabled: true
+
+    peripherals:
+      - name: i2s_audio_in
+      - name: i2c_master
+        address: 0x30              # ES8311 7-bit: 0x18, board_manager 用 8-bit: 0x18<<1=0x30
+
+  # SD Card (optional)
+  - name: fs_sdcard
+    type: fs_fat
+    sub_type: sdmmc
+    version: default
+    config:
+      sub_config:
+        slot: SDMMC_HOST_SLOT_0
+        frequency: SDMMC_FREQ_HIGHSPEED
+        bus_width: 4
+        pins:
+          clk: 43
+          cmd: 44
+          d0: 39
+          d1: 40
+          d2: 41
+          d3: 42
+        ldo_chan_id: 4
+
+  # Buttons (GPIO-based, active low)
+  # RESET 为 ESP_EN 硬件复位，非可编程 GPIO
+  - name: buttons
+    chip: gpio_button
+    type: custom
+    version: 1.0.0
+    init_skip: true
+    config:
+      button_boot_gpio: 35   # BOOT 按键
+      active_level: 0
+
+  # System LED
+  - name: system_led
+    chip: gpio_led
+    type: custom
+    version: 1.0.0
+    init_skip: true
+    config:
+      gpio_num: 23
+      active_level: 1
