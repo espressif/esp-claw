@@ -253,13 +253,20 @@ export async function uploadFile(path: string, file: File) {
   );
 }
 
-export async function createFolder(path: string) {
+export async function createFolder(
+  path: string,
+  options: { recursive?: boolean } = {},
+) {
+  const body: { path: string; recursive?: boolean } = { path };
+  if (options.recursive) {
+    body.recursive = true;
+  }
   return request<unknown>(
     '/api/files/mkdir',
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path }),
+      body: JSON.stringify(body),
     },
     'Failed to create folder',
   );

@@ -62,6 +62,7 @@ export interface Strings {
   wifiPasswordLengthError: string;
   wifiSubmitBtn: string;
   wifiConnecting: string;
+  wifiStatusProbeAttempt: string;
   wifiProbeError: string;
   wifiTimeoutError: string;
   wifiReadyTitle: string;
@@ -165,6 +166,7 @@ const en: Strings = {
   wifiPasswordLengthError: "Wi-Fi password must be empty or at least 8 characters long.",
   wifiSubmitBtn: "Connect Wi-Fi",
   wifiConnecting: "Trying to connect to Wi-Fi…",
+  wifiStatusProbeAttempt: "Querying Wi-Fi status ({current}/{total})…",
   wifiProbeError:
     "Unable to communicate with the device. Check whether JTAG and UART are wired correctly. If the device is still in download mode, press RESET manually.",
   wifiTimeoutError: "Wi-Fi connection timed out. Please check the credentials and try again.",
@@ -267,6 +269,7 @@ const zhCn: Strings = {
   wifiPasswordLengthError: "Wi‑Fi 密码必须留空或至少 8 个字符。",
   wifiSubmitBtn: "连接 Wi‑Fi",
   wifiConnecting: "正在尝试连接 Wi‑Fi…",
+  wifiStatusProbeAttempt: "正在查询 Wi‑Fi 状态 ({current}/{total})…",
   wifiProbeError:
     "未能与设备通信，请注意 JTAG 与 UART 口是否链接错误。如果设备仍在下载模式，请手动 RESET",
   wifiTimeoutError: "20 秒内未连接成功，请检查 Wi‑Fi 名称和密码后重试。",

@@ -13,6 +13,28 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+static int mkdir_parents(char *path, mode_t mode)
+{
+    if (!path || path[0] != '/') {
+        return -1;
+    }
+    for (char *p = path + 1; *p; p++) {
+        if (*p != '/') {
+            continue;
+        }
+        *p = '\0';
+        if (mkdir(path, mode) != 0 && errno != EEXIST) {
+            *p = '/';
+            return -1;
+        }
+        *p = '/';
+    }
+    if (mkdir(path, mode) != 0 && errno != EEXIST) {
+        return -1;
+    }
+    return 0;
+}
+
 static esp_err_t files_list_handler(httpd_req_t *req)
 {
     char relative_path[HTTP_SERVER_PATH_MAX] = "/";
@@ -223,6 +245,9 @@ static esp_err_t files_mkdir_handler(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid path");
     }
 
+    cJSON *rec_item = cJSON_GetObjectItemCaseSensitive(root, "recursive");
+    const bool mk_recursive = cJSON_IsBool(rec_item) && cJSON_IsTrue(rec_item);
+
     char full_path[HTTP_SERVER_PATH_MAX];
     esp_err_t err = http_server_resolve_storage_path(path_item->valuestring, full_path, sizeof(full_path));
     cJSON_Delete(root);
@@ -230,7 +255,13 @@ static esp_err_t files_mkdir_handler(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid path");
     }
 
-    if (mkdir(full_path, 0775) != 0 && errno != EEXIST) {
+    if (mk_recursive) {
+        char mkdir_buf[HTTP_SERVER_PATH_MAX];
+        strlcpy(mkdir_buf, full_path, sizeof(mkdir_buf));
+        if (mkdir_parents(mkdir_buf, 0775) != 0) {
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to create directory");
+        }
+    } else if (mkdir(full_path, 0775) != 0 && errno != EEXIST) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to create directory");
     }
 
