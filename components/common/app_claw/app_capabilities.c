@@ -616,7 +616,7 @@ static const app_capability_group_info_t s_capability_group_infos[] = {
     { "cap_lua", "Lua", true },
 #endif
 #if CONFIG_APP_CLAW_CAP_MCP_CLIENT
-    { "cap_mcp_client", "MCP Client", false },
+    { "cap_mcp_client", "MCP Client", true },
 #endif
 #if CONFIG_APP_CLAW_CAP_MCP_SERVER
     { "cap_mcp_server", "MCP Server", false },

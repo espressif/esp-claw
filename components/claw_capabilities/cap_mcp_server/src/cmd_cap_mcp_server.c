@@ -22,6 +22,7 @@ static struct {
     struct arg_str *endpoint;
     struct arg_int *server_port;
     struct arg_int *ctrl_port;
+    struct arg_str *auth_token;
     struct arg_end *end;
 } mcp_server_args;
 
@@ -103,6 +104,7 @@ static int mcp_server_func(int argc, char **argv)
                          (uint16_t)mcp_server_args.server_port->ival[0] : 0;
     config.ctrl_port = mcp_server_args.ctrl_port->count ?
                        (uint16_t)mcp_server_args.ctrl_port->ival[0] : 0;
+    config.auth_token = mcp_server_args.auth_token->count ? mcp_server_args.auth_token->sval[0] : NULL;
 
     err = cap_mcp_server_set_config(&config);
     if (err != ESP_OK) {
@@ -125,7 +127,8 @@ void register_cap_mcp_server(void)
     mcp_server_args.endpoint = arg_str0(NULL, "endpoint", "<endpoint>", "HTTP endpoint path");
     mcp_server_args.server_port = arg_int0(NULL, "server-port", "<port>", "HTTP server port");
     mcp_server_args.ctrl_port = arg_int0(NULL, "ctrl-port", "<port>", "HTTP control port");
-    mcp_server_args.end = arg_end(8);
+    mcp_server_args.auth_token = arg_str0(NULL, "auth-token", "<token>", "Bearer token required for MCP requests");
+    mcp_server_args.end = arg_end(9);
 
     const esp_console_cmd_t mcp_server_cmd = {
         .command = "mcp_server",
@@ -133,6 +136,7 @@ void register_cap_mcp_server(void)
         "Examples:\n"
         " mcp_server --status\n"
         " mcp_server --set-config --hostname "CAP_MCP_SERVER_DEFAULT_HOSTNAME" --endpoint mcp_server\n"
+        " mcp_server --set-config --auth-token secret-token\n"
         " mcp_server --disable\n"
         " mcp_server --enable\n",
         .func = mcp_server_func,

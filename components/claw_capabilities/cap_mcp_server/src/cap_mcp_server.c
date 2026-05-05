@@ -5,6 +5,8 @@
  */
 #include "cap_mcp_server.h"
 
+#include "cap_mcp_transport_http_auth.h"
+
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,7 +37,7 @@ typedef struct {
     const char *name;
     const char *description;
     esp_mcp_value_t (*callback)(const esp_mcp_property_list_t *properties);
-    const char *property_names[6];
+    const char *property_names[7];
     size_t property_count;
 } cap_mcp_server_tool_def_t;
 
@@ -45,6 +47,7 @@ typedef struct {
     char endpoint[64];
     uint16_t server_port;
     uint16_t ctrl_port;
+    char auth_token[128];
 } cap_mcp_server_runtime_config_t;
 
 static cap_mcp_server_runtime_config_t s_config = {
@@ -53,6 +56,7 @@ static cap_mcp_server_runtime_config_t s_config = {
     .endpoint = CAP_MCP_SERVER_DEFAULT_ENDPOINT,
     .server_port = CAP_MCP_SERVER_DEFAULT_PORT,
     .ctrl_port = CAP_MCP_SERVER_DEFAULT_CTRL_PORT,
+    .auth_token = "",
 };
 static esp_mcp_t *s_mcp;
 static esp_mcp_mgr_handle_t s_mgr;
@@ -183,6 +187,8 @@ static esp_mcp_value_t cap_mcp_server_emit_event_callback(
     const char *text = esp_mcp_property_list_get_property_string(properties, "text");
     const char *target_channel = esp_mcp_property_list_get_property_string(properties, "target_channel");
     const char *target_endpoint = esp_mcp_property_list_get_property_string(properties, "target_endpoint");
+    const char *source_channel = esp_mcp_property_list_get_property_string(properties, "source_channel");
+    const char *content_type = esp_mcp_property_list_get_property_string(properties, "content_type");
     const char *payload_json = esp_mcp_property_list_get_property_string(properties, "payload_json");
     claw_event_t event = {0};
     cJSON *resp = NULL;
@@ -194,8 +200,11 @@ static esp_mcp_value_t cap_mcp_server_emit_event_callback(
     strlcpy(event.event_id, "mcp-emit", sizeof(event.event_id));
     strlcpy(event.source_cap, "mcp_server", sizeof(event.source_cap));
     strlcpy(event.event_type, event_type, sizeof(event.event_type));
-    strlcpy(event.source_channel, "mcp", sizeof(event.source_channel));
-    strlcpy(event.content_type, (payload_json && payload_json[0]) ? "json" : "text",
+        strlcpy(event.source_channel,
+            (source_channel && source_channel[0]) ? source_channel : "mcp",
+            sizeof(event.source_channel));
+        strlcpy(event.content_type,
+            (content_type && content_type[0]) ? content_type : ((payload_json && payload_json[0]) ? "json" : "text"),
             sizeof(event.content_type));
     strlcpy(event.target_channel, target_channel ? target_channel : "", sizeof(event.target_channel));
     strlcpy(event.target_endpoint, target_endpoint ? target_endpoint : "", sizeof(event.target_endpoint));
@@ -264,10 +273,10 @@ static esp_err_t cap_mcp_server_register_tools(void)
         },
         {
             .name = "router.emit_event",
-            .description = "Emit a standard router event into esp-claw. Provide event_type and optional text, target_channel, target_endpoint, payload_json.",
+            .description = "Emit a standard router event into esp-claw. Provide event_type and optional text, source_channel, content_type, target_channel, target_endpoint, payload_json.",
             .callback = cap_mcp_server_emit_event_callback,
-            .property_names = {"event_type", "text", "target_channel", "target_endpoint", "payload_json"},
-            .property_count = 5,
+            .property_names = {"event_type", "text", "source_channel", "content_type", "target_channel", "target_endpoint", "payload_json"},
+            .property_count = 7,
         },
     };
     size_t i = 0;
@@ -337,6 +346,7 @@ static esp_err_t cap_mcp_server_descriptor_init(void)
 static esp_err_t cap_mcp_server_descriptor_start(void)
 {
     httpd_config_t http_config = HTTPD_DEFAULT_CONFIG();
+    cap_mcp_http_auth_config_t transport_config = {0};
     esp_mcp_mgr_config_t config;
     esp_err_t err;
 
@@ -362,8 +372,11 @@ static esp_err_t cap_mcp_server_descriptor_start(void)
     http_config.max_uri_handlers = 4;
     http_config.stack_size = 8192;
 
-    config.transport = esp_mcp_transport_http_server;
-    config.config = &http_config;
+    transport_config.http_config = http_config;
+    transport_config.auth_token = s_config.auth_token[0] ? s_config.auth_token : NULL;
+
+    config.transport = cap_mcp_transport_http_server_auth;
+    config.config = &transport_config;
     config.instance = s_mcp;
 
     err = esp_mcp_mgr_init(config, &s_mgr);
@@ -487,6 +500,9 @@ esp_err_t cap_mcp_server_set_config(const cap_mcp_server_config_t *config)
     if (config->ctrl_port != 0) {
         s_config.ctrl_port = config->ctrl_port;
     }
+    if (config->auth_token) {
+        strlcpy(s_config.auth_token, config->auth_token, sizeof(s_config.auth_token));
+    }
 
     return ESP_OK;
 }
@@ -502,6 +518,7 @@ esp_err_t cap_mcp_server_get_config(cap_mcp_server_config_t *config, bool *start
     config->endpoint = s_config.endpoint;
     config->server_port = s_config.server_port;
     config->ctrl_port = s_config.ctrl_port;
+    config->auth_token = s_config.auth_token;
     if (started) {
         *started = s_started;
     }
