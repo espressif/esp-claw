@@ -189,6 +189,42 @@ static esp_err_t parse_chat_response(const char *body,
     return ESP_OK;
 }
 
+/**
+ * @brief Sanitize a string in-place: replace invalid UTF-8 bytes with spaces.
+ */
+static void sanitize_utf8_body(char *buf)
+{
+    if (!buf) return;
+    size_t src = 0, dst = 0;
+    while (buf[src]) {
+        unsigned char c = (unsigned char)buf[src];
+        if (c < 0x80) {
+            buf[dst++] = buf[src++];
+        } else if (c >= 0xC2 && c <= 0xDF) {
+            if (buf[src+1] && ((unsigned char)buf[src+1] & 0xC0) == 0x80) {
+                buf[dst++] = buf[src++]; buf[dst++] = buf[src++];
+            } else { buf[dst++] = ' '; src++; }
+        } else if (c >= 0xE0 && c <= 0xEF) {
+            if (buf[src+1] && buf[src+2] &&
+                ((unsigned char)buf[src+1] & 0xC0) == 0x80 &&
+                ((unsigned char)buf[src+2] & 0xC0) == 0x80) {
+                buf[dst++] = buf[src++]; buf[dst++] = buf[src++]; buf[dst++] = buf[src++];
+            } else { buf[dst++] = ' '; src++; }
+        } else if (c >= 0xF0 && c <= 0xF4) {
+            if (buf[src+1] && buf[src+2] && buf[src+3] &&
+                ((unsigned char)buf[src+1] & 0xC0) == 0x80 &&
+                ((unsigned char)buf[src+2] & 0xC0) == 0x80 &&
+                ((unsigned char)buf[src+3] & 0xC0) == 0x80) {
+                buf[dst++] = buf[src++]; buf[dst++] = buf[src++];
+                buf[dst++] = buf[src++]; buf[dst++] = buf[src++];
+            } else { buf[dst++] = ' '; src++; }
+        } else {
+            buf[dst++] = ' '; src++;
+        }
+    }
+    buf[dst] = '\0';
+}
+
 static esp_err_t build_chat_body(const openai_compatible_backend_ctx_t *ctx,
                                  const claw_llm_model_profile_t *profile,
                                  const claw_llm_chat_request_t *request,
@@ -252,6 +288,9 @@ static esp_err_t build_chat_body(const openai_compatible_backend_ctx_t *ctx,
         *out_error_message = dup_printf("Out of memory serializing request");
         return ESP_ERR_NO_MEM;
     }
+
+    /* Sanitize entire JSON body: replace any invalid UTF-8 bytes */
+    sanitize_utf8_body(post_data);
 
     *out_post_data = post_data;
     return ESP_OK;
@@ -459,6 +498,8 @@ static esp_err_t openai_compatible_infer_media(void *backend_ctx,
         *out_error_message = dup_printf("Out of memory serializing media request");
         goto cleanup;
     }
+
+    sanitize_utf8_body(post_data);
 
     url = join_url(ctx->base_url, profile->chat_path);
     if (!url) {
