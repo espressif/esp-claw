@@ -13,6 +13,84 @@
 
 #include "cap_mcp_client_internal.h"
 
+/**
+ * @brief Truncate string at a UTF-8 character boundary.
+ * If buf[max_len-1] falls in the middle of a multi-byte sequence,
+ * back up to the start of that character to avoid invalid code points.
+ */
+static void cap_mcp_truncate_utf8_safe(char *buf, size_t max_len)
+{
+    if (!buf || max_len == 0) return;
+    size_t len = strlen(buf);
+    if (len < max_len) return;
+
+    /* Start from the truncation point and back up to a valid leading byte */
+    size_t pos = max_len - 1;
+    while (pos > 0 && (buf[pos] & 0xC0) == 0x80) {
+        pos--;  /* Skip continuation bytes (10xxxxxx) */
+    }
+    /* pos now points at the leading byte of the last complete character */
+    /* But if we backed up too far, just truncate cleanly */
+    if (pos < max_len - 4 && pos > 0) {
+        buf[pos] = '\0';
+    } else {
+        buf[max_len - 1] = '\0';
+    }
+}
+
+/**
+ * @brief Sanitize a string in-place: replace invalid UTF-8 bytes with spaces.
+ * Scans for bytes that don't form valid multi-byte sequences and replaces them.
+ */
+static void cap_mcp_sanitize_utf8(char *buf)
+{
+    if (!buf) return;
+    size_t src = 0, dst = 0;
+    while (buf[src]) {
+        unsigned char c = (unsigned char)buf[src];
+        if (c < 0x80) {
+            /* Single byte (0x00-0x7F): valid ASCII */
+            buf[dst++] = buf[src++];
+        } else if (c >= 0xC2 && c <= 0xDF) {
+            /* 2-byte sequence: check continuation byte */
+            if (buf[src+1] && ((unsigned char)buf[src+1] & 0xC0) == 0x80) {
+                buf[dst++] = buf[src++];
+                buf[dst++] = buf[src++];
+            } else {
+                buf[dst++] = ' '; src++; /* Replace invalid lead */
+            }
+        } else if (c >= 0xE0 && c <= 0xEF) {
+            /* 3-byte sequence: check 2 continuation bytes */
+            if (buf[src+1] && buf[src+2] &&
+                ((unsigned char)buf[src+1] & 0xC0) == 0x80 &&
+                ((unsigned char)buf[src+2] & 0xC0) == 0x80) {
+                buf[dst++] = buf[src++];
+                buf[dst++] = buf[src++];
+                buf[dst++] = buf[src++];
+            } else {
+                buf[dst++] = ' '; src++; /* Replace invalid lead */
+            }
+        } else if (c >= 0xF0 && c <= 0xF4) {
+            /* 4-byte sequence: check 3 continuation bytes */
+            if (buf[src+1] && buf[src+2] && buf[src+3] &&
+                ((unsigned char)buf[src+1] & 0xC0) == 0x80 &&
+                ((unsigned char)buf[src+2] & 0xC0) == 0x80 &&
+                ((unsigned char)buf[src+3] & 0xC0) == 0x80) {
+                buf[dst++] = buf[src++];
+                buf[dst++] = buf[src++];
+                buf[dst++] = buf[src++];
+                buf[dst++] = buf[src++];
+            } else {
+                buf[dst++] = ' '; src++; /* Replace invalid lead */
+            }
+        } else {
+            /* Invalid byte (0x80-0xBF continuation without lead, or 0xC0-0xC1 overlong) */
+            buf[dst++] = ' '; src++;
+        }
+    }
+    buf[dst] = '\0';
+}
+
 static esp_err_t cap_mcp_client_group_init(void)
 {
     esp_err_t err = mdns_init();
@@ -69,6 +147,7 @@ static void cap_mcp_extract_content_text(const cJSON *content,
     }
 
     output[offset] = '\0';
+    cap_mcp_sanitize_utf8(output);
 }
 
 static esp_err_t cap_mcp_call_execute(const char *input_json,
@@ -106,6 +185,7 @@ static esp_err_t cap_mcp_call_execute(const char *input_json,
         }
     }
 
+    cap_mcp_sanitize_utf8(output);
     cJSON_Delete(result);
     return ESP_OK;
 }
@@ -139,20 +219,47 @@ static esp_err_t cap_mcp_list_execute(const char *input_json,
 
     tools_array = cJSON_GetObjectItem(result, "tools");
     if (cJSON_IsArray(tools_array)) {
+        size_t count = 0;
+        size_t max_display = 0;
+        cJSON_ArrayForEach(tool, tools_array) {
+            count++;
+        }
+        
+        /* Write summary line */
+        int written = snprintf(output + offset, output_size - offset,
+                               "Found %u tool(s) on the remote MCP server.\n\n", (unsigned)count);
+        if (written > 0 && (size_t)written < output_size - offset) offset += (size_t)written;
+        
+        /* List tool names (compact, no descriptions) */
         cJSON_ArrayForEach(tool, tools_array) {
             const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(tool, "name"));
-            const char *description = cJSON_GetStringValue(cJSON_GetObjectItem(tool, "description"));
-            int written = snprintf(output + offset,
-                                   output_size - offset,
-                                   "- %s: %s\n",
-                                   name ? name : "(no name)",
-                                   description ? description : "");
-
-            if (written < 0 || (size_t)written >= output_size - offset) {
-                offset = output_size - 1;
+            size_t name_len = name ? strlen(name) : 9; /* "(no name)" */
+            size_t line_len = 2 + name_len + 1; /* "  " + name + "\n" */
+            
+            /* Check if full line fits without truncation */
+            if (line_len >= output_size - offset) {
+                if (count > max_display) {
+                    offset += snprintf(output + offset, output_size - offset,
+                                       "...and %u more\n", (unsigned)(count - max_display));
+                }
                 break;
             }
-            offset += (size_t)written;
+            /* Reserve min 10 bytes at end for safety */
+            if (output_size - offset - line_len < 10) {
+                if (count > max_display) {
+                    offset += snprintf(output + offset, output_size - offset,
+                                       "...and %u more\n", (unsigned)(count - max_display));
+                }
+                break;
+            }
+            
+            memcpy(output + offset, "  ", 2);
+            offset += 2;
+            memcpy(output + offset, name, name_len);
+            offset += name_len;
+            output[offset] = '\n';
+            offset += 1;
+            max_display++;
         }
     }
 
@@ -166,9 +273,10 @@ static esp_err_t cap_mcp_list_execute(const char *input_json,
     if (offset == 0) {
         snprintf(output, output_size, "(no tools)");
     } else if (offset >= output_size) {
-        output[output_size - 1] = '\0';
+        cap_mcp_truncate_utf8_safe(output, output_size);
     }
 
+    cap_mcp_sanitize_utf8(output);
     cJSON_Delete(result);
     return ESP_OK;
 }
@@ -236,29 +344,57 @@ static const claw_cap_descriptor_t s_mcp_client_descriptors[] = {
         .id = "mcp_list_tools",
         .name = "mcp_list_tools",
         .family = "mcp",
-        .description = "List tools from a remote MCP server.",
+        .description = "List tools from a remote MCP server. "
+                       "Pass server_url (e.g. http://host:port) and optionally "
+                       "auth_token for Bearer-authenticated servers. "
+                       "The endpoint defaults to 'mcp' for standard MCPHub.",
         .kind = CLAW_CAP_KIND_CALLABLE,
         .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
         .input_schema_json =
-        "{\"type\":\"object\",\"properties\":{\"server_url\":{\"type\":\"string\"},\"endpoint\":{\"type\":\"string\"},\"cursor\":{\"type\":\"string\"}},\"required\":[\"server_url\"]}",
+        "{"
+          "\"type\":\"object\","
+          "\"properties\":{"
+            "\"server_url\":{\"type\":\"string\",\"description\":\"Remote MCP server URL, e.g. http://cloud.yujj.top:3000\"},"
+            "\"endpoint\":{\"type\":\"string\",\"description\":\"Endpoint path (default: 'mcp' for MCPHub)\"},"
+            "\"auth_token\":{\"type\":\"string\",\"description\":\"Bearer token for authentication\"},"
+            "\"initialize\":{\"type\":\"boolean\",\"description\":\"Force re-initialization handshake\"},"
+            "\"cursor\":{\"type\":\"string\",\"description\":\"Pagination cursor\"},"
+            "\"transport\":{\"type\":\"string\",\"enum\":[\"http\",\"sse\"],\"description\":\"Transport (default: http)\"}"
+          "},"
+          "\"required\":[\"server_url\"]"
+        "}",
         .execute = cap_mcp_list_execute,
     },
     {
         .id = "mcp_call_tool",
         .name = "mcp_call_tool",
         .family = "mcp",
-        .description = "Call a tool on a remote MCP server.",
+        .description = "Call a tool on a remote MCP server. "
+                       "Requires server_url, tool_name, and arguments as JSON object. "
+                       "Pass auth_token for authenticated servers.",
         .kind = CLAW_CAP_KIND_CALLABLE,
         .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
         .input_schema_json =
-        "{\"type\":\"object\",\"properties\":{\"server_url\":{\"type\":\"string\"},\"endpoint\":{\"type\":\"string\"},\"tool_name\":{\"type\":\"string\"},\"arguments\":{\"type\":\"object\"}},\"required\":[\"server_url\",\"tool_name\"]}",
+        "{"
+          "\"type\":\"object\","
+          "\"properties\":{"
+            "\"server_url\":{\"type\":\"string\",\"description\":\"Remote MCP server URL, e.g. http://cloud.yujj.top:3000\"},"
+            "\"endpoint\":{\"type\":\"string\",\"description\":\"Endpoint path (default: 'mcp' for MCPHub)\"},"
+            "\"tool_name\":{\"type\":\"string\",\"description\":\"Tool name to call\"},"
+            "\"arguments\":{\"type\":\"object\",\"description\":\"JSON arguments for the tool\"},"
+            "\"auth_token\":{\"type\":\"string\",\"description\":\"Bearer token for authentication\"},"
+            "\"initialize\":{\"type\":\"boolean\",\"description\":\"Force re-initialization handshake\"},"
+            "\"transport\":{\"type\":\"string\",\"enum\":[\"http\",\"sse\"],\"description\":\"Transport (default: http)\"}"
+          "},"
+          "\"required\":[\"server_url\",\"tool_name\"]"
+        "}",
         .execute = cap_mcp_call_execute,
     },
     {
         .id = "mcp_discover",
         .name = "mcp_discover",
         .family = "mcp",
-        .description = "Discover MCP servers advertised on the local network.",
+        .description = "Discover MCP servers on the local network via mDNS.",
         .kind = CLAW_CAP_KIND_CALLABLE,
         .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
         .input_schema_json =

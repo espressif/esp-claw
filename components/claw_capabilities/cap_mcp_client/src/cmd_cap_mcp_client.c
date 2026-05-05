@@ -22,6 +22,9 @@ static struct {
     struct arg_str *cursor;
     struct arg_str *tool_name;
     struct arg_str *arguments_json;
+    struct arg_str *auth_token;
+    struct arg_lit *initialize;
+    struct arg_str *transport;
     struct arg_int *timeout_ms;
     struct arg_lit *include_self;
     struct arg_end *end;
@@ -107,6 +110,15 @@ static int mcp_client_func(int argc, char **argv)
         if (mcp_client_args.endpoint->count) {
             cJSON_AddStringToObject(root, "endpoint", mcp_client_args.endpoint->sval[0]);
         }
+        if (mcp_client_args.auth_token->count) {
+            cJSON_AddStringToObject(root, "auth_token", mcp_client_args.auth_token->sval[0]);
+        }
+        if (mcp_client_args.transport->count) {
+            cJSON_AddStringToObject(root, "transport", mcp_client_args.transport->sval[0]);
+        }
+        if (mcp_client_args.initialize->count) {
+            cJSON_AddBoolToObject(root, "initialize", true);
+        }
 
         if (mcp_client_args.list_tools->count) {
             cap_name = "mcp_list_tools";
@@ -150,9 +162,12 @@ void register_cap_mcp_client(void)
     mcp_client_args.cursor = arg_str0(NULL, "cursor", "<cursor>", "Pagination cursor for list-tools");
     mcp_client_args.tool_name = arg_str0(NULL, "tool-name", "<name>", "Remote MCP tool name");
     mcp_client_args.arguments_json = arg_str0(NULL, "arguments-json", "<json>", "Remote MCP tool arguments JSON object");
+    mcp_client_args.auth_token = arg_str0(NULL, "auth-token", "<token>", "Bearer token for MCP server auth");
+    mcp_client_args.initialize = arg_lit0(NULL, "initialize", "Force MCP initialize handshake before request");
+    mcp_client_args.transport = arg_str0(NULL, "transport", "<http|sse>", "Transport mode: http (default) or sse");
     mcp_client_args.timeout_ms = arg_int0(NULL, "timeout-ms", "<ms>", "Discovery timeout in milliseconds");
     mcp_client_args.include_self = arg_lit0(NULL, "include-self", "Include the local device in discovery");
-    mcp_client_args.end = arg_end(10);
+    mcp_client_args.end = arg_end(12);
 
     const esp_console_cmd_t mcp_client_cmd = {
         .command = "mcp_client",
@@ -160,7 +175,9 @@ void register_cap_mcp_client(void)
         "Examples:\n"
         " mcp_client --discover --timeout-ms 3000\n"
         " mcp_client --list-tools --server-url http://host.local:18791 --endpoint mcp_server\n"
-        " mcp_client --call-tool --server-url http://host.local:18791 --tool-name device.describe\n",
+        " mcp_client --call-tool --server-url http://host.local:18791 --tool-name device.describe\n"
+        " mcp_client --list-tools --server-url http://host.local:18791 --auth-token secret-token --initialize\n"
+        " mcp_client --list-tools --server-url http://cloud.example.com:3000 --endpoint /sse/device-id --transport sse --auth-token secret-token\n",
         .func = mcp_client_func,
         .argtable = &mcp_client_args,
     };

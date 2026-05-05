@@ -23,6 +23,7 @@ typedef struct {
     const char *endpoint;
     uint16_t server_port;
     uint16_t ctrl_port;
+    const char *auth_token;
 } cap_mcp_server_config_t;
 
 esp_err_t cap_mcp_server_register_group(void);

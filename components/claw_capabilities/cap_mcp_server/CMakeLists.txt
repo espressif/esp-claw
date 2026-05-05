@@ -1,5 +1,6 @@
 idf_component_register(
     SRCS
+        "src/cap_mcp_transport_http_auth.c"
         "src/cap_mcp_server.c"
         "src/cmd_cap_mcp_server.c"
     INCLUDE_DIRS

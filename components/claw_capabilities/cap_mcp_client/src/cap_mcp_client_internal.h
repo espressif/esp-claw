@@ -8,7 +8,7 @@
 #include "cJSON.h"
 #include "esp_err.h"
 
-#define CAP_MCP_DEFAULT_ENDPOINT      "mcp_server"
+#define CAP_MCP_DEFAULT_ENDPOINT      "mcp"
 #define CAP_MCP_MDNS_SERVICE_TYPE     "_mcp"
 #define CAP_MCP_MDNS_SERVICE_PROTO    "_tcp"
 #define CAP_MCP_DISCOVER_TIMEOUT_MS   3000
