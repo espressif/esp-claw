@@ -1,0 +1,10 @@
+idf_component_register(
+    SRCS
+        "src/lua_module_http.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        cap_lua
+        esp_http_client
+        esp_http_server
+)

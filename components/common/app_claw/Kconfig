@@ -337,6 +337,14 @@ menu "App Claw Config"
                 Enable the UART Lua module and keep app_claw's direct dependency
                 on lua_module_uart when Lua capability is enabled.
 
+        config APP_CLAW_LUA_MODULE_HTTP
+            bool "Enable HTTP Lua module (client + server)"
+            default y
+            help
+                Enable the HTTP client and server Lua modules (http.request,
+                http.download, http_server.start/route/stop) and keep app_claw's
+                direct dependency on lua_module_http when Lua capability is enabled.
+
         config APP_CLAW_LUA_MODULE_AUDIO
             bool "Enable audio Lua module"
             default y if ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT

@@ -226,6 +226,11 @@ dependencies:
       - if: $CONFIG{APP_CLAW_LUA_MODULE_EVENT_PUBLISHER} == True
     path: ../../lua_modules/lua_module_event_publisher
 
+  lua_module_http:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
+      - if: $CONFIG{APP_CLAW_LUA_MODULE_HTTP} == True
+    path: ../../lua_modules/lua_module_http
   lua_module_gpio:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True

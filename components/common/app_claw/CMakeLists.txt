@@ -186,6 +186,10 @@ if(CONFIG_APP_CLAW_CAP_LUA AND CONFIG_APP_CLAW_LUA_MODULE_UART)
     list(APPEND app_claw_requires lua_module_uart)
 endif()
 
+if(CONFIG_APP_CLAW_CAP_LUA AND CONFIG_APP_CLAW_LUA_MODULE_HTTP)
+    list(APPEND app_claw_requires lua_module_http)
+endif()
+
 if(CONFIG_APP_CLAW_CAP_LUA AND CONFIG_APP_CLAW_LUA_MODULE_AUDIO AND CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT)
     list(APPEND app_claw_requires lua_module_audio)
 endif()

@@ -76,6 +76,9 @@
 #if CONFIG_APP_CLAW_LUA_MODULE_UART
 #include "lua_module_uart.h"
 #endif
+#if CONFIG_APP_CLAW_LUA_MODULE_HTTP
+#include "lua_module_http.h"
+#endif
 
 #if CONFIG_APP_CLAW_LUA_MODULE_AUDIO && defined(CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT)
 #include "lua_module_audio.h"
@@ -246,7 +249,13 @@ static esp_err_t app_lua_register_dht(const char *fatfs_base_path)
     return lua_module_dht_register();
 }
 #endif
-
+#if CONFIG_APP_CLAW_LUA_MODULE_HTTP_SERVER
+static esp_err_t app_lua_register_http_server(const char *fatfs_base_path)
+{
+    (void)fatfs_base_path;
+    return lua_module_http_server_register();
+}
+#endif
 #if CONFIG_APP_CLAW_LUA_MODULE_EVENT_PUBLISHER
 static esp_err_t app_lua_register_event_publisher(const char *fatfs_base_path)
 {
@@ -382,6 +391,14 @@ static esp_err_t app_lua_register_uart(const char *fatfs_base_path)
 }
 #endif
 
+#if CONFIG_APP_CLAW_LUA_MODULE_HTTP
+static esp_err_t app_lua_register_http(const char *fatfs_base_path)
+{
+    (void)fatfs_base_path;
+    return lua_module_http_register();
+}
+#endif
+
 #if CONFIG_APP_CLAW_LUA_MODULE_AUDIO && defined(CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT)
 static esp_err_t app_lua_register_audio(const char *fatfs_base_path)
 {
@@ -498,6 +515,9 @@ static const app_lua_module_entry_t s_lua_module_entries[] = {
 #if CONFIG_APP_CLAW_LUA_MODULE_UART
     { "uart", "UART", app_lua_register_uart },
 #endif
+#if CONFIG_APP_CLAW_LUA_MODULE_HTTP
+    { "http", "HTTP Client", app_lua_register_http },
+#endif
 #if CONFIG_APP_CLAW_LUA_MODULE_EVENT_PUBLISHER
     { "event_publisher", "Event Publisher", app_lua_register_event_publisher },
 #endif
@@ -578,6 +598,9 @@ static const app_lua_module_info_t s_lua_module_infos[] = {
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_UART
     { "uart", "UART" },
+#endif
+#if CONFIG_APP_CLAW_LUA_MODULE_HTTP
+    { "http", "HTTP Client" },
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_EVENT_PUBLISHER
     { "event_publisher", "Event Publisher" },

@@ -265,6 +265,8 @@ esp_err_t app_claw_start(const app_claw_config_t *config,
     ESP_RETURN_ON_ERROR(claw_event_router_register_outbound_binding("web", "local_send_message"),
                         TAG, "Failed to bind Web / local IM outbound");
 #endif
+    ESP_RETURN_ON_ERROR(claw_event_router_register_outbound_binding("mcp_reply", "mcp_save_reply"),
+                        TAG, "Failed to bind MCP reply outbound");
 
     core_config.api_key = config->llm_api_key;
     core_config.backend_type = config->llm_backend_type;
