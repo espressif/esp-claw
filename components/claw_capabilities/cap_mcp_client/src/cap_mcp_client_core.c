@@ -42,6 +42,7 @@ typedef struct {
     bool force_initialize;
     bool initialized;
     bool use_sse;                 /* Use SSE transport instead of HTTP POST */
+    int retry_count;              /* Used for one-time retry on session failure */
 } cap_mcp_request_opts_t;
 
 static cap_mcp_request_opts_t s_cached_opts = {0};
@@ -62,11 +63,16 @@ static esp_err_t cap_mcp_http_event_handler(esp_http_client_event_t *event)
         if (event->header_key && event->header_value) {
             ESP_LOGD(TAG, "[HEADER] %s: %s", event->header_key, event->header_value);
             
-            if (ctx->session_id && ctx->session_id_size > 0 &&
-                    (strcmp(event->header_key, "mcp-session-id") == 0 ||
-                     strcmp(event->header_key, "Mcp-Session-Id") == 0)) {
-                strlcpy(ctx->session_id, event->header_value, ctx->session_id_size);
-                ESP_LOGI(TAG, "[SESSION] Extracted Session ID: %s", event->header_value);
+            if (ctx->session_id && ctx->session_id_size > 0 && event->header_key) {
+                const char *k = event->header_key;
+                if (strcasecmp(k, "mcp-session-id") == 0 ||
+                    strcasecmp(k, "mcp-session") == 0 ||
+                    strcasecmp(k, "x-session-id") == 0 ||
+                    strcasecmp(k, "session-id") == 0 ||
+                    strcasecmp(k, "x-mcp-session") == 0) {
+                    strlcpy(ctx->session_id, event->header_value, ctx->session_id_size);
+                    ESP_LOGI(TAG, "[SESSION] Extracted %s: %s", k, event->header_value);
+                }
             }
         }
         return ESP_OK;
@@ -567,6 +573,12 @@ static esp_err_t cap_mcp_maybe_initialize_session(const char *full_url,
     } else {
         ESP_LOGW(TAG, "[INIT] No session ID received (response_session_id[0]=%d, has_cache=%d)",
                  response_session_id[0], cached_session_id ? 1 : 0);
+        /* Clear any existing cached session to avoid reusing stale session IDs */
+        if (cached_session_id && cached_session_id_size > 0) {
+            cached_session_id[0] = '\0';
+        }
+        /* Mark global cached opts as not initialized to force re-init next time */
+        s_cached_opts.initialized = false;
     }
 
     cJSON_Delete(response);
@@ -652,6 +664,9 @@ esp_err_t cap_mcp_list_remote_tools(const char *input_json, cJSON **result_out)
             return ESP_ERR_INVALID_ARG;
         }
 
+        ESP_LOGI(TAG, "[DIAG] Before init: initialized=%d, cached_session=%s, force_init=%d",
+                 s_cached_opts.initialized, s_cached_opts.session_id, force_initialize);
+
         if (force_initialize || !s_cached_opts.initialized || strcmp(s_cached_opts.session_id, "") == 0) {
             err = cap_mcp_maybe_initialize_session(full_url,
                                                    auth_token_buf,
@@ -694,10 +709,29 @@ esp_err_t cap_mcp_list_remote_tools(const char *input_json, cJSON **result_out)
     error_obj = cJSON_GetObjectItem(response, "error");
     if (cJSON_IsObject(error_obj)) {
         cJSON *message = cJSON_GetObjectItem(error_obj, "message");
+        const char *msg = cJSON_IsString(message) ? message->valuestring : "Unknown MCP error";
+
+        // Detect session-related errors and attempt a one-time recovery
+        if (strstr(msg, "No session") || strstr(msg, "not found") || strstr(msg, "SESSION ERROR") || strstr(msg, "No session ID")) {
+            ESP_LOGW(TAG, "[SESSION] Detected session error: %s", msg);
+            // Clear cache and mark uninitialized
+            s_cached_opts.session_id[0] = '\0';
+            s_cached_opts.initialized = false;
+
+            // Only retry once using retry_count to avoid recursion loop
+            if (s_cached_opts.retry_count == 0) {
+                s_cached_opts.retry_count = 1;
+                cJSON_Delete(response);
+                cJSON_Delete(root);
+                esp_err_t retry_err = cap_mcp_list_remote_tools(input_json, result_out);
+                s_cached_opts.retry_count = 0;
+                return retry_err;
+            }
+        }
 
         cJSON_AddStringToObject(root,
                                 "error_message",
-                                cJSON_IsString(message) ? message->valuestring : "Unknown MCP error");
+                                msg);
         cJSON_AddItemToObject(root, "tools", tools_out);
         cJSON_Delete(response);
         *result_out = root;
