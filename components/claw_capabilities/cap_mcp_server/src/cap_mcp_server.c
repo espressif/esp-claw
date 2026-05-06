@@ -23,9 +23,23 @@
 #include "esp_mcp_mgr.h"
 #include "esp_mcp_property.h"
 #include "esp_mcp_tool.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "mdns.h"
 
 static const char *TAG = "cap_mcp_srv";
+
+#define CAP_MCP_REPLY_BUF_SIZE   5
+#define CAP_MCP_REPLY_TEXT_MAX   4096
+
+typedef struct {
+    char replies[CAP_MCP_REPLY_BUF_SIZE][CAP_MCP_REPLY_TEXT_MAX];
+    int head;
+    int count;
+    SemaphoreHandle_t lock;
+} cap_mcp_reply_buf_t;
+
+static cap_mcp_reply_buf_t s_reply_buf;
 
 #define CAP_MCP_SERVER_DEFAULT_ENDPOINT      "mcp_server"
 #define CAP_MCP_SERVER_DEFAULT_SERVICE_TYPE  "_mcp"
@@ -37,7 +51,7 @@ typedef struct {
     const char *name;
     const char *description;
     esp_mcp_value_t (*callback)(const esp_mcp_property_list_t *properties);
-    const char *property_names[7];
+    const char *property_names[9];
     size_t property_count;
 } cap_mcp_server_tool_def_t;
 
@@ -62,6 +76,53 @@ static esp_mcp_t *s_mcp;
 static esp_mcp_mgr_handle_t s_mgr;
 static bool s_tools_registered;
 static bool s_started;
+
+static void cap_mcp_reply_buf_init(void)
+{
+    s_reply_buf.head = 0;
+    s_reply_buf.count = 0;
+    s_reply_buf.lock = xSemaphoreCreateMutex();
+}
+
+static void cap_mcp_reply_buf_push(const char *text)
+{
+    if (!s_reply_buf.lock) return;
+    if (!text || !text[0]) return;
+
+    if (xSemaphoreTake(s_reply_buf.lock, portMAX_DELAY) == pdTRUE) {
+        strlcpy(s_reply_buf.replies[s_reply_buf.head], text, CAP_MCP_REPLY_TEXT_MAX);
+        s_reply_buf.head = (s_reply_buf.head + 1) % CAP_MCP_REPLY_BUF_SIZE;
+        if (s_reply_buf.count < CAP_MCP_REPLY_BUF_SIZE) {
+            s_reply_buf.count++;
+        }
+        xSemaphoreGive(s_reply_buf.lock);
+    }
+}
+
+static esp_err_t cap_mcp_reply_buf_read_all(char *output, size_t output_size)
+{
+    if (!s_reply_buf.lock) return ESP_ERR_INVALID_STATE;
+
+    output[0] = '\0';
+    if (xSemaphoreTake(s_reply_buf.lock, portMAX_DELAY) == pdTRUE) {
+        cJSON *arr = cJSON_CreateArray();
+        if (arr) {
+            int idx = (s_reply_buf.head - s_reply_buf.count + CAP_MCP_REPLY_BUF_SIZE) % CAP_MCP_REPLY_BUF_SIZE;
+            for (int i = 0; i < s_reply_buf.count; i++) {
+                cJSON_AddItemToArray(arr, cJSON_CreateString(s_reply_buf.replies[idx]));
+                idx = (idx + 1) % CAP_MCP_REPLY_BUF_SIZE;
+            }
+            char *json = cJSON_PrintUnformatted(arr);
+            cJSON_Delete(arr);
+            if (json) {
+                strlcpy(output, json, output_size);
+                free(json);
+            }
+        }
+        xSemaphoreGive(s_reply_buf.lock);
+    }
+    return output[0] ? ESP_OK : ESP_ERR_NOT_FOUND;
+}
 
 static int cap_mcp_server_current_time_ms(void)
 {
@@ -189,6 +250,8 @@ static esp_mcp_value_t cap_mcp_server_emit_event_callback(
     const char *target_endpoint = esp_mcp_property_list_get_property_string(properties, "target_endpoint");
     const char *source_channel = esp_mcp_property_list_get_property_string(properties, "source_channel");
     const char *content_type = esp_mcp_property_list_get_property_string(properties, "content_type");
+    const char *chat_id = esp_mcp_property_list_get_property_string(properties, "chat_id");
+    const char *sender_id = esp_mcp_property_list_get_property_string(properties, "sender_id");
     const char *payload_json = esp_mcp_property_list_get_property_string(properties, "payload_json");
     claw_event_t event = {0};
     cJSON *resp = NULL;
@@ -208,6 +271,8 @@ static esp_mcp_value_t cap_mcp_server_emit_event_callback(
             sizeof(event.content_type));
     strlcpy(event.target_channel, target_channel ? target_channel : "", sizeof(event.target_channel));
     strlcpy(event.target_endpoint, target_endpoint ? target_endpoint : "", sizeof(event.target_endpoint));
+    strlcpy(event.chat_id, chat_id ? chat_id : "", sizeof(event.chat_id));
+    strlcpy(event.sender_id, sender_id ? sender_id : "", sizeof(event.sender_id));
     strlcpy(event.message_id, event_type, sizeof(event.message_id));
     strlcpy(event.correlation_id, event_type, sizeof(event.correlation_id));
     event.timestamp_ms = cap_mcp_server_current_time_ms();
@@ -228,6 +293,54 @@ static esp_mcp_value_t cap_mcp_server_emit_event_callback(
     cJSON_AddStringToObject(resp, "target_channel", target_channel ? target_channel : "");
     cJSON_AddStringToObject(resp, "target_endpoint", target_endpoint ? target_endpoint : "");
     return cap_mcp_server_result_json(resp);
+}
+
+static esp_mcp_value_t cap_mcp_server_agent_chat_callback(
+    const esp_mcp_property_list_t *properties)
+{
+    const char *text = esp_mcp_property_list_get_property_string(properties, "text");
+    const char *chat_id = esp_mcp_property_list_get_property_string(properties, "chat_id");
+    claw_event_t event = {0};
+
+    if (!text || !text[0]) {
+        return esp_mcp_value_create_bool(false);
+    }
+
+    strlcpy(event.event_id, "mcp-chat", sizeof(event.event_id));
+    strlcpy(event.source_cap, "mcp_server", sizeof(event.source_cap));
+    strlcpy(event.event_type, "message", sizeof(event.event_type));
+    strlcpy(event.source_channel, "mcp_reply", sizeof(event.source_channel));
+    strlcpy(event.content_type, "text", sizeof(event.content_type));
+    strlcpy(event.chat_id, chat_id && chat_id[0] ? chat_id : "mcp_chat", sizeof(event.chat_id));
+    strlcpy(event.message_id, "text", sizeof(event.message_id));
+    strlcpy(event.correlation_id, "mcp-chat", sizeof(event.correlation_id));
+    event.timestamp_ms = cap_mcp_server_current_time_ms();
+    event.session_policy = CLAW_EVENT_SESSION_POLICY_CHAT;
+    event.text = (char *)text;
+
+    if (claw_event_router_publish(&event) != ESP_OK) {
+        return esp_mcp_value_create_bool(false);
+    }
+
+    cJSON *resp = cJSON_CreateObject();
+    if (!resp) {
+        return esp_mcp_value_create_bool(false);
+    }
+    cJSON_AddBoolToObject(resp, "accepted", true);
+    return cap_mcp_server_result_json(resp);
+}
+
+static esp_mcp_value_t cap_mcp_server_agent_get_replies_callback(
+    const esp_mcp_property_list_t *properties)
+{
+    char buf[4096] = {0};
+    (void)properties;
+
+    cap_mcp_reply_buf_read_all(buf, sizeof(buf));
+    if (!buf[0]) {
+        return esp_mcp_value_create_string("[]");
+    }
+    return esp_mcp_value_create_string(buf);
 }
 
 static esp_err_t cap_mcp_server_register_tool(
@@ -273,10 +386,23 @@ static esp_err_t cap_mcp_server_register_tools(void)
         },
         {
             .name = "router.emit_event",
-            .description = "Emit a standard router event into esp-claw. Provide event_type and optional text, source_channel, content_type, target_channel, target_endpoint, payload_json.",
+            .description = "Emit a standard router event into esp-claw. Provide event_type and optional text, source_channel, content_type, chat_id, sender_id, target_channel, target_endpoint, payload_json.",
             .callback = cap_mcp_server_emit_event_callback,
-            .property_names = {"event_type", "text", "source_channel", "content_type", "target_channel", "target_endpoint", "payload_json"},
-            .property_count = 7,
+            .property_names = {"event_type", "text", "source_channel", "content_type", "chat_id", "sender_id", "target_channel", "target_endpoint", "payload_json"},
+            .property_count = 9,
+        },
+        {
+            .name = "agent.chat",
+            .description = "Send a text message to the AI agent. The agent will process it and the reply can be retrieved with agent.get_replies. Provide text and optional chat_id.",
+            .callback = cap_mcp_server_agent_chat_callback,
+            .property_names = {"text", "chat_id"},
+            .property_count = 2,
+        },
+        {
+            .name = "agent.get_replies",
+            .description = "Retrieve recent AI agent replies. Returns a JSON array of reply texts, newest last.",
+            .callback = cap_mcp_server_agent_get_replies_callback,
+            .property_count = 0,
         },
     };
     size_t i = 0;
@@ -338,6 +464,7 @@ static esp_err_t cap_mcp_server_descriptor_init(void)
         return ESP_OK;
     }
 
+    cap_mcp_reply_buf_init();
     ESP_RETURN_ON_ERROR(esp_mcp_create(&s_mcp), TAG, "Failed to create MCP engine");
     ESP_RETURN_ON_ERROR(cap_mcp_server_register_tools(), TAG, "Failed to register MCP tools");
     return ESP_OK;
@@ -446,6 +573,28 @@ static esp_err_t cap_mcp_server_descriptor_stop(void)
     return ret;
 }
 
+static esp_err_t cap_mcp_server_save_reply_execute(const char *input_json,
+                                                    const claw_cap_call_context_t *ctx,
+                                                    char *output,
+                                                    size_t output_size)
+{
+    cJSON *root = cJSON_Parse(input_json ? input_json : "{}");
+    if (!root) {
+        snprintf(output, output_size, "Error: invalid JSON");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    const char *message = cJSON_GetStringValue(cJSON_GetObjectItem(root, "message"));
+    if (message && message[0]) {
+        cap_mcp_reply_buf_push(message);
+        ESP_LOGI(TAG, "mcp_save_reply: stored reply (len=%u)", (unsigned)strlen(message));
+    }
+
+    snprintf(output, output_size, "{\"ok\":true}");
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
 static const claw_cap_descriptor_t s_mcp_server_descriptors[] = {
     {
         .id = "mcp_server",
@@ -458,6 +607,17 @@ static const claw_cap_descriptor_t s_mcp_server_descriptors[] = {
         .init = cap_mcp_server_descriptor_init,
         .start = cap_mcp_server_descriptor_start,
         .stop = cap_mcp_server_descriptor_stop,
+    },
+    {
+        .id = "mcp_save_reply",
+        .name = "mcp_save_reply",
+        .family = "mcp",
+        .description = "Store agent reply text for retrieval via MCP agent.get_replies.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .execute = cap_mcp_server_save_reply_execute,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{"
+            "\"message\":{\"type\":\"string\"}"
+        "}}",
     },
 };
 
