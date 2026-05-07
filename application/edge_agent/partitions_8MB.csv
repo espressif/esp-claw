@@ -2,6 +2,9 @@
 nvs,       data, nvs,     0x9000,   0x6000
 otadata,   data, ota,     0xF000,   0x2000
 phy_init,  data, phy,     0x11000,  0x1000
-ota_0,     app,  ota_0,         ,   3M
-emote,     data, spiffs,        ,   3M
-storage,   data, fat,           ,  1500K
+# OTA slots slightly larger than 2560K for edge_agent ~0x288210 (tools/ota_sdcard_hil builds fat claw).
+# Keep total app+emote+storage = 8064K like older layout; shrink emote when HIL disables APP_CLAW_ENABLE_EMOTE (see ota_sdcard_hil.py overlay).
+ota_0,     app,  ota_0,         ,   2624K
+ota_1,     app,  ota_1,         ,   2624K
+emote,     data, spiffs,        ,   1792K
+storage,   data, fat,           ,   1024K

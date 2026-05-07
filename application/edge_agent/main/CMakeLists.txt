@@ -1,6 +1,7 @@
 set(main_requires
     app_claw
     app_config
+    app_ota
     captive_dns
     http_server
     wifi_manager

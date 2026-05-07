@@ -1,0 +1,94 @@
+menu "App OTA (esp_ota_service)"
+
+    menu "HTTP OTA bootstrap"
+
+        config APP_OTA_HTTP_ENABLE
+            bool "Enable optional HTTP firmware OTA bootstrap"
+            default n
+            help
+                When enabled and manifest/firmware URLs are non-empty (menuconfig below),
+                the device runs one HTTP OTA check after Wi‑Fi STA is connected during boot.
+
+        if APP_OTA_HTTP_ENABLE
+
+            config APP_OTA_HTTP_RUN_AT_BOOT
+                bool "Run HTTP OTA check once at startup (after STA online)"
+                default y
+
+            config APP_OTA_HTTP_MANIFEST_URL
+                string "Firmware manifest JSON URL (http/https)"
+                default ""
+                help
+                    JSON manifest consumed by esp_ota_service_checker_manifest (version, optional sha256, size).
+
+            config APP_OTA_HTTP_FIRMWARE_URL
+                string "Firmware binary URL (must match manifest server)"
+                default ""
+                help
+                    Absolute URL for the downloadable app image (paired with APP_OTA_HTTP_MANIFEST_URL).
+
+            config APP_OTA_HTTP_CHUNK_TIMEOUT_MS
+                int "HTTP read timeout per chunk (milliseconds)"
+                default 30000
+                range 3000 120000
+
+        endif # APP_OTA_HTTP_ENABLE
+
+    endmenu
+
+    menu "Filesystem OTA bootstrap"
+
+        config APP_OTA_FS_ENABLE
+            bool "Enable optional filesystem (VFS) app OTA bootstrap"
+            default y
+            help
+                After SPI flash FAT mounts (typically /fatfs), read a staged edge_agent.bin from an absolute path
+                using esp_ota_service_source_fs. Runs **before Wi-Fi**. File must expose a higher semver than running
+                image when APP_OTA_FS_REQUIRE_NEWER_SEMVER=y.
+
+        if APP_OTA_FS_ENABLE
+
+            config APP_OTA_FS_RUN_AT_BOOT
+                bool "Run FS OTA when candidate file exists at boot"
+                default y
+
+            config APP_OTA_FS_FIRMWARE_ABS_PATH
+                string "Absolute filesystem path (VFS fopen) for app binary"
+                default "/fatfs/ota/firmware.bin"
+                help
+                    Typical layout: mkdir /fatfs/ota via host mount and drop edge_agent.bin renamed to firmware.bin.
+
+            config APP_OTA_FS_TRY_SDCARD_AT_BOOT
+                bool "Before SPI flash FAT, try app OTA from SD (board_manager fs_sdcard)"
+                default n
+                help
+                    After esp_board_manager_init(), if the board exposes fs_sdcard (usually mounted at /sdcard),
+                    probe APP_OTA_FS_SDCARD_FIRMWARE_ABS_PATH for a newer app image.
+                    Matches esp_ota_service tools/sdcard_writer output name firmware.bin.
+                    Use together with tools/ota_sdcard_hil.py and ota_fs_flash_sdcard.py from ADF.
+
+            config APP_OTA_FS_SDCARD_FIRMWARE_ABS_PATH
+                string "Absolute path on SD mount for app binary"
+                default "/sdcard/firmware.bin"
+                depends on APP_OTA_FS_TRY_SDCARD_AT_BOOT
+                help
+                    Default matches sdcard_writer (components/esp_ota_service/tools/sdcard_writer).
+
+            config APP_OTA_FS_READ_BUF_BYTES
+                int "Read buffer chunk size passed to filesystem source"
+                default 4096
+                range 512 8192
+
+            config APP_OTA_FS_REQUIRE_NEWER_SEMVER
+                bool "Reject candidate whose esp_app_desc_t version is not strictly higher"
+                default y
+
+            config APP_OTA_FS_CHECK_PROJECT_NAME
+                bool "Reject candidate when esp_app_desc_t project_name differs from running firmware"
+                default y
+
+        endif # APP_OTA_FS_ENABLE
+
+    endmenu
+
+endmenu

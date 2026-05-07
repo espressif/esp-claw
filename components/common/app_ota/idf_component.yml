@@ -1,0 +1,2 @@
+dependencies:
+  espressif/esp_ota_service: "*"

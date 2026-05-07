@@ -1,6 +1,8 @@
 # This file was generated using idf.py save-defconfig. It can be edited manually.
 # Espressif IoT Development Framework (ESP-IDF) 5.5.1 Project Minimal Configuration
 #
+# Match on-module flash and partitions_8MB.csv (overrides board_manager 2MB default for HIL / fresh sdkconfig)
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_8MB.csv"
 CONFIG_HTTPD_WS_SUPPORT=y

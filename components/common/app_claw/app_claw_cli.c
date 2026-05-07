@@ -740,6 +740,7 @@ esp_err_t app_claw_cli_start(void)
 {
     esp_console_repl_t *repl = NULL;
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
+    esp_err_t err = ESP_OK;
 
     ESP_LOGI(TAG, "Starting console REPL");
 
@@ -749,18 +750,22 @@ esp_err_t app_claw_cli_start(void)
 
 #if CONFIG_ESP_CONSOLE_UART_DEFAULT || CONFIG_ESP_CONSOLE_UART_CUSTOM
     esp_console_dev_uart_config_t hw_config = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_console_new_repl_uart(&hw_config, &repl_config, &repl));
+    err = esp_console_new_repl_uart(&hw_config, &repl_config, &repl);
 #elif CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
     esp_console_dev_usb_serial_jtag_config_t hw_config =
         ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_console_new_repl_usb_serial_jtag(&hw_config, &repl_config, &repl));
+    err = esp_console_new_repl_usb_serial_jtag(&hw_config, &repl_config, &repl);
 #elif CONFIG_ESP_CONSOLE_USB_CDC
     esp_console_dev_usb_cdc_config_t hw_config = ESP_CONSOLE_DEV_CDC_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_console_new_repl_usb_cdc(&hw_config, &repl_config, &repl));
+    err = esp_console_new_repl_usb_cdc(&hw_config, &repl_config, &repl);
 #else
     ESP_LOGE(TAG, "No supported console backend is enabled");
     return ESP_ERR_NOT_SUPPORTED;
 #endif
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Create REPL failed: %s", esp_err_to_name(err));
+        return err;
+    }
 
     esp_console_register_help_command();
     register_cap_cli_commands();
@@ -771,7 +776,11 @@ esp_err_t app_claw_cli_start(void)
             .help = "Submit a multi-turn prompt using the current session: ask <prompt>",
             .func = cmd_ask,
         };
-        ESP_ERROR_CHECK(esp_console_cmd_register(&ask_cmd));
+        err = esp_console_cmd_register(&ask_cmd);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Register 'ask' failed: %s", esp_err_to_name(err));
+            return err;
+        }
     }
 
     {
@@ -780,7 +789,11 @@ esp_err_t app_claw_cli_start(void)
             .help = "Submit a single-turn prompt without session history: ask_once <prompt>",
             .func = cmd_ask_once,
         };
-        ESP_ERROR_CHECK(esp_console_cmd_register(&ask_once_cmd));
+        err = esp_console_cmd_register(&ask_once_cmd);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Register 'ask_once' failed: %s", esp_err_to_name(err));
+            return err;
+        }
     }
 
     {
@@ -789,7 +802,11 @@ esp_err_t app_claw_cli_start(void)
             .help = "Show or switch the current session: session [id]",
             .func = cmd_session,
         };
-        ESP_ERROR_CHECK(esp_console_cmd_register(&session_cmd));
+        err = esp_console_cmd_register(&session_cmd);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Register 'session' failed: %s", esp_err_to_name(err));
+            return err;
+        }
     }
 
     {
@@ -798,7 +815,11 @@ esp_err_t app_claw_cli_start(void)
             .help = "cap operations: cap <list|call|groups|enable|disable|unload|load> ...",
             .func = cmd_cap,
         };
-        ESP_ERROR_CHECK(esp_console_cmd_register(&cap_cmd));
+        err = esp_console_cmd_register(&cap_cmd);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Register 'cap' failed: %s", esp_err_to_name(err));
+            return err;
+        }
     }
 
     {
@@ -807,7 +828,11 @@ esp_err_t app_claw_cli_start(void)
             .help = "Automation operations: auto <reload|rules|rule|add_rule|update_rule|delete_rule|last|emit_message|emit_trigger> ...",
             .func = cmd_auto,
         };
-        ESP_ERROR_CHECK(esp_console_cmd_register(&auto_cmd));
+        err = esp_console_cmd_register(&auto_cmd);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Register 'auto' failed: %s", esp_err_to_name(err));
+            return err;
+        }
     }
 
     printf("Type 'help', 'auto rules', 'auto last', or 'auto emit_message qq_gateway qq 123 hello'\n");

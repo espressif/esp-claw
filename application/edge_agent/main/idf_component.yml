@@ -24,6 +24,9 @@ dependencies:
   app_config:
     path: ../components/app_config
 
+  app_ota:
+    path: ../../../components/common/app_ota
+
   cap_im_wechat:
     path: ../../../components/claw_capabilities/cap_im_wechat
     rules:

@@ -19,6 +19,7 @@
 #include "esp_board_manager_includes.h"
 #include "captive_dns.h"
 #include "cmd_wifi.h"
+#include "app_ota.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #if CONFIG_APP_CLAW_CAP_IM_WECHAT
@@ -325,7 +326,24 @@ void app_main(void)
     init_timezone(app_config_get_timezone(s_config)); // no need to check error
     ESP_ERROR_CHECK(esp_board_manager_init());
     ESP_ERROR_CHECK(app_claw_ui_start());
+#if CONFIG_APP_OTA_FS_ENABLE && CONFIG_APP_OTA_FS_TRY_SDCARD_AT_BOOT && CONFIG_APP_OTA_FS_RUN_AT_BOOT
+    {
+        esp_err_t ota_sd_err =
+            app_ota_fs_boot_flow_at(CONFIG_APP_OTA_FS_SDCARD_FIRMWARE_ABS_PATH);
+        if (ota_sd_err != ESP_OK) {
+            ESP_LOGW(TAG, "SD FS OTA: %s", esp_err_to_name(ota_sd_err));
+        }
+    }
+#endif
     ESP_ERROR_CHECK(init_fatfs());
+#if CONFIG_APP_OTA_FS_ENABLE
+    {
+        esp_err_t ota_fs_err = app_ota_fs_boot_flow();
+        if (ota_fs_err != ESP_OK) {
+            ESP_LOGW(TAG, "FS OTA: %s", esp_err_to_name(ota_fs_err));
+        }
+    }
+#endif
     ESP_ERROR_CHECK(wifi_manager_init());
     ESP_ERROR_CHECK(http_server_init(&(http_server_config_t) {
         .storage_base_path = app_fatfs_base_path,
@@ -376,6 +394,15 @@ void app_main(void)
                  status.ap_ssid,
                  status.ap_ip,
                  status.ap_ip);
+    }
+
+    {
+        wifi_manager_status_t wm_ota = {0};
+        wifi_manager_get_status(&wm_ota);
+        esp_err_t ota_err = app_ota_http_boot_flow(wm_ota.sta_connected);
+        if (ota_err != ESP_OK) {
+            ESP_LOGW(TAG, "OTA bootstrap: %s", esp_err_to_name(ota_err));
+        }
     }
 
     ESP_ERROR_CHECK(app_claw_init_storage_paths(s_claw_paths));
