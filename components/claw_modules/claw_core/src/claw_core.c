@@ -1419,8 +1419,9 @@ static esp_err_t build_iteration_context(const claw_core_request_item_t *request
         }
     }
 
-    *out_tools_json = cJSON_GetArraySize(tools) > 0 ? cJSON_PrintUnformatted(tools) : NULL;
-    if (cJSON_GetArraySize(tools) > 0 && !*out_tools_json) {
+    *out_tools_json = (s_core->max_tool_iterations > 0 && cJSON_GetArraySize(tools) > 0) ?
+                      cJSON_PrintUnformatted(tools) : NULL;
+    if (s_core->max_tool_iterations > 0 && cJSON_GetArraySize(tools) > 0 && !*out_tools_json) {
         err = ESP_ERR_NO_MEM;
         goto cleanup;
     }

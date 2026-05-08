@@ -6,12 +6,14 @@
 #include "llm/claw_llm_http_transport.h"
 
 #include <assert.h>
+#include <inttypes.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -19,7 +21,7 @@
 
 static const char *TAG = "llm_http";
 
-#define CLAW_LLM_HTTP_RB_INITIAL_CAP 4096
+#define CLAW_LLM_HTTP_RB_INITIAL_CAP 512
 
 static volatile bool *s_abort_flag = NULL;
 static TaskHandle_t   s_abort_owner = NULL;
@@ -285,6 +287,8 @@ esp_err_t claw_llm_http_post_json(const claw_llm_http_json_request_t *request,
     esp_http_client_handle_t client = NULL;
     char *auth_header_value = NULL;
     char *sanitized_body = NULL;
+    size_t body_len = 0;
+    size_t api_key_len = 0;
     int status_code = 0;
     esp_err_t err;
 
@@ -297,6 +301,8 @@ esp_err_t claw_llm_http_post_json(const claw_llm_http_json_request_t *request,
     if (!request || !request->url || !request->body || !out_response || !out_error_message) {
         return ESP_ERR_INVALID_ARG;
     }
+    body_len = strlen(request->body);
+    api_key_len = request->api_key ? strlen(request->api_key) : 0;
 
     sanitized_body = sanitize_utf8_body_copy(request->body);
     if (!sanitized_body) {
@@ -316,8 +322,7 @@ esp_err_t claw_llm_http_post_json(const claw_llm_http_json_request_t *request,
     config.event_handler = http_event_handler;
     config.user_data = &buffer;
     config.timeout_ms = request->timeout_ms;
-    config.buffer_size = 4096;
-    config.buffer_size_tx = 4096;
+    config.buffer_size = 1024;
     config.crt_bundle_attach = esp_crt_bundle_attach;
 
     client = esp_http_client_init(&config);
@@ -330,6 +335,7 @@ esp_err_t claw_llm_http_post_json(const claw_llm_http_json_request_t *request,
 
     esp_http_client_set_method(client, HTTP_METHOD_POST);
     esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_header(client, "Accept", "application/json");
     auth_header_value = build_auth_header_value(request->auth_type, request->api_key);
     if (auth_header_value) {
         esp_http_client_set_header(client, auth_header_name(request->auth_type), auth_header_value);
@@ -346,18 +352,29 @@ esp_err_t claw_llm_http_post_json(const claw_llm_http_json_request_t *request,
             esp_http_client_set_header(client, header->name, header->value);
         }
     }
+    ESP_LOGI(TAG, "POST %s body_len=%u timeout_ms=%" PRIu32
+             " auth=%s api_key_len=%u key_prefix_ok=%d free_heap=%u largest_block=%u",
+             request->url, (unsigned)body_len, request->timeout_ms,
+             request->auth_type ? request->auth_type : "(null)",
+             (unsigned)api_key_len,
+             request->api_key && strncmp(request->api_key, "sk-or-", 6) == 0,
+             (unsigned)esp_get_free_heap_size(),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT));
     esp_http_client_set_post_field(client, sanitized_body, (int)strlen(sanitized_body));
 
-    ESP_LOGD(TAG, "POST %s", request->url);
     err = esp_http_client_perform(client);
     if (err != ESP_OK) {
+        status_code = esp_http_client_get_status_code(client);
         if (abort_requested()) {
             *out_error_message = dup_printf("HTTP request aborted by caller");
             ESP_LOGW(TAG, "HTTP perform aborted: %s", esp_err_to_name(err));
             err = ESP_ERR_INVALID_STATE;
         } else {
-            *out_error_message = dup_printf("HTTP request failed: %s", esp_err_to_name(err));
-            ESP_LOGE(TAG, "HTTP perform failed: %s", esp_err_to_name(err));
+            *out_error_message = dup_printf("HTTP request failed: %s status=%d",
+                                            esp_err_to_name(err), status_code);
+            ESP_LOGE(TAG, "HTTP perform failed: %s status=%d body_len=%u resp_buf=%u %.256s",
+                     esp_err_to_name(err), status_code, (unsigned)body_len,
+                     (unsigned)buffer.len, buffer.len > 0 ? buffer.data : "");
         }
         goto cleanup;
     }

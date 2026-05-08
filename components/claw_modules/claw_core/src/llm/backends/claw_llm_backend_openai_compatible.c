@@ -11,8 +11,11 @@
 #include <stdarg.h>
 #include <string.h>
 
+#include "esp_log.h"
 #include "llm/claw_llm_http_transport.h"
 #include "llm/media/claw_media_pipeline.h"
+
+static const char *TAG = "llm_openai";
 
 typedef struct {
     char *api_key;
@@ -78,6 +81,20 @@ static char *join_url(const char *base_url, const char *path)
         return dup_printf("%s/%s", base_url, path);
     }
     return dup_printf("%s%s", base_url, path);
+}
+
+static bool is_openrouter_url(const char *base_url)
+{
+    return base_url && strstr(base_url, "openrouter.ai") != NULL;
+}
+
+static const char *completion_token_field(const openai_compatible_backend_ctx_t *ctx,
+                                          const claw_llm_model_profile_t *profile)
+{
+    if (is_openrouter_url(ctx ? ctx->base_url : NULL)) {
+        return "max_tokens";
+    }
+    return profile->max_tokens_field;
 }
 
 static esp_err_t parse_chat_response(const char *body,
@@ -230,7 +247,8 @@ static esp_err_t build_chat_body(const openai_compatible_backend_ctx_t *ctx,
     }
 
     cJSON_AddStringToObject(body, "model", ctx->model);
-    cJSON_AddNumberToObject(body, profile->max_tokens_field, ctx->max_tokens);
+    cJSON_AddNumberToObject(body, completion_token_field(ctx, profile), ctx->max_tokens);
+    cJSON_AddBoolToObject(body, "stream", false);
 
     cJSON_AddStringToObject(system_msg, "role", "system");
     cJSON_AddStringToObject(system_msg, "content", request->system_prompt);
@@ -342,6 +360,7 @@ static esp_err_t openai_compatible_chat(void *backend_ctx,
 {
     openai_compatible_backend_ctx_t *ctx = (openai_compatible_backend_ctx_t *)backend_ctx;
     claw_llm_http_json_request_t http_request = {0};
+    claw_llm_http_header_t headers[4] = {0};
     claw_llm_http_response_t http_response = {0};
     char *url = NULL;
     char *post_data = NULL;
@@ -369,6 +388,14 @@ static esp_err_t openai_compatible_chat(void *backend_ctx,
     http_request.api_key = ctx->api_key;
     http_request.auth_type = ctx->auth_type;
     http_request.timeout_ms = ctx->timeout_ms;
+    if (is_openrouter_url(ctx->base_url)) {
+        headers[0].name = "HTTP-Referer";
+        headers[0].value = "https://github.com/espressif/esp-claw";
+        headers[1].name = "X-Title";
+        headers[1].value = "ESP Claw Rover";
+        http_request.headers = headers;
+        http_request.header_count = 2;
+    }
 
     err = claw_llm_http_post_json(&http_request, &http_response, out_error_message);
     free(url);
@@ -401,6 +428,7 @@ static esp_err_t openai_compatible_infer_media(void *backend_ctx,
     char *url = NULL;
     char *post_data = NULL;
     claw_llm_http_json_request_t http_request = {0};
+    claw_llm_http_header_t headers[2] = {0};
     claw_llm_http_response_t http_response = {0};
     cJSON *body = NULL;
     esp_err_t err;
@@ -448,7 +476,7 @@ static esp_err_t openai_compatible_infer_media(void *backend_ctx,
     }
 
     cJSON_AddStringToObject(body, "model", ctx->model);
-    cJSON_AddNumberToObject(body, profile->max_tokens_field, ctx->max_tokens);
+    cJSON_AddNumberToObject(body, completion_token_field(ctx, profile), ctx->max_tokens);
 
     cJSON_AddStringToObject(system_msg, "role", "system");
     cJSON_AddStringToObject(system_msg, "content", request->system_prompt ? request->system_prompt : "");
@@ -494,6 +522,14 @@ static esp_err_t openai_compatible_infer_media(void *backend_ctx,
     http_request.api_key = ctx->api_key;
     http_request.auth_type = ctx->auth_type;
     http_request.timeout_ms = ctx->timeout_ms;
+    if (is_openrouter_url(ctx->base_url)) {
+        headers[0].name = "HTTP-Referer";
+        headers[0].value = "https://github.com/espressif/esp-claw";
+        headers[1].name = "X-OpenRouter-Title";
+        headers[1].value = "ESP Claw Rover";
+        http_request.headers = headers;
+        http_request.header_count = 2;
+    }
 
     err = claw_llm_http_post_json(&http_request, &http_response, out_error_message);
     if (err != ESP_OK) {

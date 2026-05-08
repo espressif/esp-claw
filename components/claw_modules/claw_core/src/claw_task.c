@@ -66,10 +66,10 @@ static esp_err_t claw_task_resolve_config(const claw_task_config_t *input, claw_
 static UBaseType_t claw_task_memory_caps(claw_task_stack_policy_t policy)
 {
     if (policy != CLAW_TASK_STACK_INTERNAL_ONLY && claw_task_external_memory_available()) {
-        return MALLOC_CAP_SPIRAM;
+        return MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
     }
 
-    return MALLOC_CAP_INTERNAL;
+    return MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
 }
 
 BaseType_t claw_task_create(const claw_task_config_t *config,
@@ -94,7 +94,7 @@ BaseType_t claw_task_create(const claw_task_config_t *config,
            (unsigned int)resolved.stack_size,
            (unsigned int)resolved.priority,
            resolved.core_id,
-           memory_caps == MALLOC_CAP_SPIRAM ? "SPIRAM" : "INTERNAL");
+           (memory_caps & MALLOC_CAP_SPIRAM) ? "SPIRAM" : "INTERNAL");
 
     return xTaskCreatePinnedToCoreWithCaps(task_func,
                                            resolved.name,
