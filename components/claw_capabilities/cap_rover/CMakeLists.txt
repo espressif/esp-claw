@@ -1,0 +1,16 @@
+idf_component_register(
+    SRCS
+        "src/cap_rover.c"
+        "src/cap_rover_hw.c"
+        "src/cmd_cap_rover.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_INCLUDE_DIRS
+        "src"
+    REQUIRES
+        claw_cap
+        claw_core
+        driver
+        console
+        json
+)

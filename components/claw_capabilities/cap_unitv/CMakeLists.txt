@@ -1,0 +1,19 @@
+idf_component_register(
+    SRCS
+        "src/cap_unitv.c"
+        "src/cap_unitv_uart.c"
+        "src/cap_unitv_capture.c"
+        "src/cmd_cap_unitv.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_INCLUDE_DIRS
+        "src"
+    REQUIRES
+        claw_cap
+        claw_core
+        driver
+        esp_http_client
+        mbedtls
+        console
+        json
+)

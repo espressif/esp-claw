@@ -1,0 +1,10 @@
+{
+  "skills": [
+    {
+      "id": "cap_rover",
+      "file": "cap_rover.md",
+      "summary": "Drive the mecanum rover: move, turn with IMU, stop, gripper, and IMU reads.",
+      "cap_groups": ["cap_rover"]
+    }
+  ]
+}

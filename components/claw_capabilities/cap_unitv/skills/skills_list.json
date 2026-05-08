@@ -1,0 +1,10 @@
+{
+  "skills": [
+    {
+      "id": "cap_unitv",
+      "file": "cap_unitv.md",
+      "summary": "Use the rover camera: structured scan or vision-LLM capture.",
+      "cap_groups": ["cap_unitv"]
+    }
+  ]
+}
