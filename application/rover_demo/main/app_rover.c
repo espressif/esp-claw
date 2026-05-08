@@ -139,8 +139,8 @@ esp_err_t app_rover_start(const rover_demo_settings_t *s)
     claw_memory_config_t mem_cfg = {
         .session_root_dir = s_paths.memory_session_root,
         .memory_root_dir = s_paths.memory_root_dir,
-        .max_session_messages = 8,
-        .max_message_chars = 256,
+        .max_session_messages = 4,
+        .max_message_chars = 128,
         .llm = {
             .api_key = s->llm_api_key,
             .backend_type = s->llm_backend_type,
@@ -245,8 +245,8 @@ esp_err_t app_rover_start(const rover_demo_settings_t *s)
             .task_priority = 5,
             .task_core = tskNO_AFFINITY,
             .max_tool_iterations = 20,
-            .request_queue_len = 4,
-            .response_queue_len = 4,
+            .request_queue_len = 2,
+            .response_queue_len = 2,
             .max_context_providers = 8,
         };
         ESP_RETURN_ON_ERROR(claw_core_init(&core_cfg), TAG, "core");

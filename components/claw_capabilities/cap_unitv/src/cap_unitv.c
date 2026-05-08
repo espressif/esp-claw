@@ -11,10 +11,13 @@
 
 #include "cJSON.h"
 #include "claw_cap.h"
+#include "esp_heap_caps.h"
 
-#define UNITV_SCAN_RESP_MAX            768
-#define UNITV_CAPTURE_ANALYSIS_MAX     1024
-#define UNITV_CAPTURE_DEFAULT_QUALITY  30
+#define UNITV_SCAN_RESP_MAX              768
+#define UNITV_CAPTURE_ANALYSIS_MAX       1024
+#define UNITV_CAPTURE_DEFAULT_QUALITY    30
+/* Minimum free contiguous block to attempt vision: jpeg_buf + body_buf + claw_core overhead. */
+#define UNITV_CAPTURE_MIN_LARGEST_BLOCK  16384
 
 static int clamp_int(int v, int lo, int hi)
 {
@@ -98,10 +101,18 @@ static esp_err_t cap_unitv_capture_execute(const char *input_json,
         }
         cJSON_Delete(args);
     }
-    quality = clamp_int(quality, 30, 95);
+    quality = clamp_int(quality, 25, 35);
 
     if (!g_cap_unitv.vision_configured) {
         snprintf(output, output_size, "{\"status\":\"vision_not_configured\",\"action\":\"unitv_capture\"}");
+        return ESP_OK;
+    }
+
+    size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_DEFAULT);
+    if (largest < UNITV_CAPTURE_MIN_LARGEST_BLOCK) {
+        snprintf(output, output_size,
+                 "{\"status\":\"insufficient_memory\",\"action\":\"unitv_capture\",\"largest_block\":%u}",
+                 (unsigned)largest);
         return ESP_OK;
     }
 
