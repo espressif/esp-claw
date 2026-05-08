@@ -1,0 +1,7 @@
+board:
+  name: m5stickc_plus
+  display_name: "M5StickC Plus"
+  chip: esp32
+  flash: "4MB"
+  description: |
+    M5StickC Plus controller with RoverC Pro base and UnitV-M12 camera.

@@ -1,0 +1,43 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "rover_demo_settings.c"
+        "rover_demo_cli.c"
+        "rover_demo_wifi.c"
+        "rover_buttons.c"
+        "rover_display.cpp"
+        "app_rover.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        nvs_flash
+        esp_wifi
+        esp_netif
+        esp_event
+        fatfs
+        wear_levelling
+        console
+        driver
+        esp_timer
+        m5stack__m5unified
+        cap_rover
+        cap_unitv
+        cap_im_tg
+        cap_files
+        cap_skill_mgr
+        cap_session_mgr
+        cap_system
+        cap_time
+        claw_core
+        claw_cap
+        claw_event_router
+        claw_memory
+        claw_skill
+)
+
+target_sources(${COMPONENT_LIB} PRIVATE
+    "${CMAKE_SOURCE_DIR}/boards/m5stickc_plus/setup_device.cpp"
+)
+target_include_directories(${COMPONENT_LIB} PRIVATE
+    "${CMAKE_SOURCE_DIR}/boards/m5stickc_plus"
+)

@@ -1,0 +1,8 @@
+devices:
+  - name: roverc_pro
+    type: i2c_device
+    bus: rover_i2c
+    address: 0x38
+  - name: unitv_m12
+    type: uart_device
+    bus: vision_uart

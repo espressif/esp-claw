@@ -1,0 +1,61 @@
+[
+  {
+    "id": "new_session",
+    "description": "Reset conversation history when user sends /new.",
+    "enabled": true,
+    "consume_on_match": true,
+    "match": {
+      "event_type": "message",
+      "text": "/new"
+    },
+    "actions": [
+      {
+        "type": "call_cap",
+        "cap": "roll_chat_session",
+        "input": {}
+      },
+      {
+        "type": "send_message",
+        "input": {
+          "channel": "{{event.source_channel}}",
+          "chat_id": "{{event.chat_id}}",
+          "message": "Сессия сброшена."
+        }
+      }
+    ]
+  },
+  {
+    "id": "default_to_agent",
+    "enabled": true,
+    "consume_on_match": true,
+    "match": {
+      "event_type": "message"
+    },
+    "actions": [
+      {
+        "type": "run_agent"
+      }
+    ]
+  },
+  {
+    "id": "agent_out_message_send_message",
+    "description": "Deliver agent output messages to the original IM chat.",
+    "enabled": true,
+    "consume_on_match": true,
+    "match": {
+      "source_cap": "claw_core",
+      "event_type": "out_message",
+      "content_type": "text"
+    },
+    "actions": [
+      {
+        "type": "send_message",
+        "input": {
+          "channel": "{{event.source_channel}}",
+          "chat_id": "{{event.chat_id}}",
+          "message": "{{event.text}}"
+        }
+      }
+    ]
+  }
+]

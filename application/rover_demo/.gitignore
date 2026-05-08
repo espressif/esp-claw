@@ -1,0 +1,9 @@
+.pio/
+.pio-core/
+.venv/
+/sdkconfig
+/sdkconfig.*
+!/sdkconfig.defaults
+!/boards/**/sdkconfig.defaults.board
+/dependencies.lock
+/managed_components/

@@ -1,0 +1,47 @@
+menu "Rover Demo Configuration"
+
+config ROVER_DEMO_WIFI_SSID
+    string "Default Wi-Fi SSID"
+    default ""
+
+config ROVER_DEMO_WIFI_PASSWORD
+    string "Default Wi-Fi password"
+    default ""
+
+config ROVER_DEMO_LLM_API_KEY
+    string "Default LLM API key"
+    default ""
+
+config ROVER_DEMO_LLM_BACKEND_TYPE
+    string "Default LLM backend type"
+    default "openai_compatible"
+
+config ROVER_DEMO_LLM_PROFILE
+    string "Default LLM profile"
+    default "openai"
+
+config ROVER_DEMO_LLM_MODEL
+    string "Default LLM model"
+    default "openrouter/auto"
+
+config ROVER_DEMO_LLM_BASE_URL
+    string "Default LLM base URL"
+    default "https://openrouter.ai/api/v1"
+
+config ROVER_DEMO_LLM_AUTH_TYPE
+    string "Default LLM auth type"
+    default "bearer"
+
+config ROVER_DEMO_LLM_TIMEOUT_MS
+    string "Default LLM timeout ms"
+    default "30000"
+
+config ROVER_DEMO_TG_BOT_TOKEN
+    string "Default Telegram bot token"
+    default ""
+
+config ROVER_DEMO_TIME_TIMEZONE
+    string "Default timezone (POSIX TZ string)"
+    default "UTC0"
+
+endmenu

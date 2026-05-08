@@ -1,0 +1,16 @@
+{
+  "skills": [
+    {
+      "id": "rover_ops",
+      "file": "rover_ops.md",
+      "summary": "Multi-step movement patterns and trajectory composition.",
+      "cap_groups": ["cap_rover"]
+    },
+    {
+      "id": "rover_search",
+      "file": "rover_search.md",
+      "summary": "Sweep-and-detect search pattern using rover_turn and unitv_scan.",
+      "cap_groups": ["cap_rover", "cap_unitv"]
+    }
+  ]
+}
