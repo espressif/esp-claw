@@ -1,0 +1,4 @@
+[
+    {"emote": "swim",        "src": "swim.eaf",     "loop": true,  "fps": 20},
+    {"emote": "offline",     "src": "offline.eaf",  "loop": true,  "fps": 20}
+]

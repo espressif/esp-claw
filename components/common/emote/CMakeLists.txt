@@ -13,7 +13,14 @@ idf_component_register(
 if(CONFIG_APP_CLAW_ENABLE_EMOTE)
     set(EMOTE_ASSETS_EXTERNAL_PATH "${CMAKE_CURRENT_LIST_DIR}/assets_local")
     set(EMOTE_ASSETS_FILE "${CMAKE_BINARY_DIR}/emote_assets.bin")
-    build_speaker_assets_bin("emote" "284_240" ${EMOTE_ASSETS_FILE} ${CONFIG_MMAP_FILE_NAME_LENGTH} ${EMOTE_ASSETS_EXTERNAL_PATH})
-    message(STATUS "Generated emote assets: ${EMOTE_ASSETS_FILE} -> emote partition")
+
+    if(CONFIG_ESP_BOARD_LILYGO_T_DISPLAY_S3)
+        set(EMOTE_ASSET_LAYOUT "320_170")
+    else()
+        set(EMOTE_ASSET_LAYOUT "284_240")
+    endif()
+
+    build_speaker_assets_bin("emote" "${EMOTE_ASSET_LAYOUT}" ${EMOTE_ASSETS_FILE} ${CONFIG_MMAP_FILE_NAME_LENGTH} ${EMOTE_ASSETS_EXTERNAL_PATH})
+    message(STATUS "Generated emote assets (${EMOTE_ASSET_LAYOUT}): ${EMOTE_ASSETS_FILE} -> emote partition")
     esptool_py_flash_to_partition(flash "emote" "${EMOTE_ASSETS_FILE}")
 endif()

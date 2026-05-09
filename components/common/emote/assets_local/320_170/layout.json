@@ -1,0 +1,47 @@
+[
+  {
+    "type": "anim",
+    "name": "eye_anim",
+    "align": "GFX_ALIGN_CENTER",
+    "x": 0,
+    "y": 0,
+    "anim": {
+      "mirror": "false"
+    }
+  },
+  {
+    "type": "anim",
+    "name": "emerg_dlg",
+    "align": "GFX_ALIGN_CENTER",
+    "x": 0,
+    "y": 0,
+    "anim": {
+      "mirror": "false"
+    }
+  },
+  {
+    "type": "image",
+    "name": "status_icon",
+    "align": "GFX_ALIGN_TOP_LEFT",
+    "x": 5,
+    "y": 5
+  },
+  {
+    "type": "label",
+    "name": "toast_label",
+    "align": "GFX_ALIGN_TOP_MID",
+    "x": 0,
+    "y": 6,
+    "width": 280,
+    "height": 30,
+    "label": {
+      "color": 16777215,
+      "text_align": "GFX_TEXT_ALIGN_CENTER",
+      "long_mode": {
+        "type": "GFX_LABEL_LONG_SCROLL",
+        "loop": true,
+        "speed": 24
+      }
+    }
+  }
+]
