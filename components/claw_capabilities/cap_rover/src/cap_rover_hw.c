@@ -99,6 +99,11 @@ void cap_rover_set_imu_read(cap_rover_imu_read_fn fn)
     g_cap_rover.imu_read = fn;
 }
 
+void cap_rover_set_power_read(cap_rover_power_read_fn fn)
+{
+    g_cap_rover.power_read = fn;
+}
+
 static void send_result(uint32_t req_id, esp_err_t err, float measured_deg)
 {
     rover_action_result_t r = {

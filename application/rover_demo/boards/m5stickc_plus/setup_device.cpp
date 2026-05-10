@@ -16,6 +16,7 @@ static bool s_imu_ok = false;
 static rover_display_state_t s_last_state = (rover_display_state_t)-1;
 static char s_last_ip[20] = {0};
 static int s_last_batt = -2;
+static bool s_last_charging = false;
 
 extern "C" esp_err_t rover_board_init(void)
 {
@@ -57,6 +58,18 @@ extern "C" int rover_board_get_battery_pct(void)
         return -1;
     }
     return pct > 100 ? 100 : pct;
+}
+
+extern "C" void rover_board_get_power_status(rover_power_status_t *out)
+{
+    if (!out) {
+        return;
+    }
+    int pct = M5.Power.getBatteryLevel();
+    out->battery_pct = (pct < 0) ? -1 : (pct > 100 ? 100 : pct);
+    out->charging = (M5.Power.isCharging() == m5::Power_Class::is_charging);
+    int mv = M5.Power.getBatteryVoltage();
+    out->battery_mv = (mv > 0) ? mv : 0;
 }
 
 extern "C" bool rover_board_imu_enabled(void)
@@ -114,16 +127,21 @@ static uint32_t state_color(rover_display_state_t s)
 
 extern "C" void rover_board_display_render(rover_display_state_t state,
                                            const char *ip,
-                                           int battery_pct)
+                                           const rover_power_status_t *power)
 {
     const char *ip_str = ip ? ip : "";
-    if (state == s_last_state && strcmp(ip_str, s_last_ip) == 0 && battery_pct == s_last_batt) {
+    int battery_pct = power ? power->battery_pct : -1;
+    bool charging = power ? power->charging : false;
+
+    if (state == s_last_state && strcmp(ip_str, s_last_ip) == 0 &&
+            battery_pct == s_last_batt && charging == s_last_charging) {
         return;
     }
 
     s_last_state = state;
     strlcpy(s_last_ip, ip_str, sizeof(s_last_ip));
     s_last_batt = battery_pct;
+    s_last_charging = charging;
 
     const uint32_t bg = 0x111827u;
     const uint32_t bar = state_color(state);
@@ -146,16 +164,17 @@ extern "C" void rover_board_display_render(rover_display_state_t state,
     M5.Display.setTextColor(0x9CA3AFu, bg);
     M5.Display.setCursor(8, 116);
     M5.Display.print(ip_str[0] ? ip_str : "no wifi");
+
     if (battery_pct >= 0) {
-    int shown_batt = battery_pct;
-    if (shown_batt < 0) {
-        shown_batt = 0;
-    } else if (shown_batt > 100) {
-        shown_batt = 100;
-    }
-    char batt_buf[12] = {0};
-    snprintf(batt_buf, sizeof(batt_buf), "%d%%", shown_batt);
+        char batt_buf[16] = {0};
+        if (charging) {
+            snprintf(batt_buf, sizeof(batt_buf), "CHG %d%%", battery_pct);
+        } else {
+            snprintf(batt_buf, sizeof(batt_buf), "%d%%", battery_pct);
+        }
+        uint32_t batt_color = charging ? 0x34D399u : 0x9CA3AFu;
         int batt_w = (int)strlen(batt_buf) * 6;
+        M5.Display.setTextColor(batt_color, bg);
         M5.Display.setCursor(240 - batt_w - 8, 116);
         M5.Display.print(batt_buf);
     }

@@ -54,6 +54,7 @@ typedef struct {
     SemaphoreHandle_t queue_lock;
     TaskHandle_t hw_task;
     cap_rover_imu_read_fn imu_read;
+    cap_rover_power_read_fn power_read;
     volatile bool emergency_requested;
     atomic_uint_fast32_t req_seq;
     bool initialized;

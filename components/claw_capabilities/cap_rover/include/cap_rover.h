@@ -32,10 +32,12 @@ typedef struct {
 
 typedef esp_err_t (*cap_rover_imu_read_fn)(float *ax, float *ay, float *az,
                                            float *gx, float *gy, float *gz);
+typedef esp_err_t (*cap_rover_power_read_fn)(int *battery_pct, bool *charging, int *battery_mv);
 
 esp_err_t cap_rover_init(const cap_rover_config_t *config);
 esp_err_t cap_rover_register_group(void);
 void cap_rover_set_imu_read(cap_rover_imu_read_fn fn);
+void cap_rover_set_power_read(cap_rover_power_read_fn fn);
 void cap_rover_emergency_stop_set(void);
 void cap_rover_emergency_stop_clear(void);
 void cap_rover_register_cli(void);

@@ -22,5 +22,7 @@ extern "C" void rover_display_set_state(rover_display_state_t state)
 extern "C" void rover_display_refresh(void)
 {
     rover_display_state_t state = s_state.load(std::memory_order_relaxed);
-    rover_board_display_render(state, rover_demo_wifi_get_ip(), rover_board_get_battery_pct());
+    rover_power_status_t power = {};
+    rover_board_get_power_status(&power);
+    rover_board_display_render(state, rover_demo_wifi_get_ip(), &power);
 }

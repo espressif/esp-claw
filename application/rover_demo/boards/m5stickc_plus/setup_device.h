@@ -23,6 +23,14 @@ bool rover_board_imu_enabled(void);
 esp_err_t rover_board_imu_read(float *ax, float *ay, float *az,
                                float *gx, float *gy, float *gz);
 
+typedef struct {
+    int battery_pct;
+    bool charging;
+    int battery_mv;
+} rover_power_status_t;
+
+void rover_board_get_power_status(rover_power_status_t *out);
+
 typedef enum {
     ROVER_DISPLAY_STATE_BOOT = 0,
     ROVER_DISPLAY_STATE_IDLE,
@@ -34,7 +42,7 @@ typedef enum {
 
 void rover_board_display_render(rover_display_state_t state,
                                 const char *ip,
-                                int battery_pct);
+                                const rover_power_status_t *power);
 void rover_board_display_sleep(void);
 void rover_board_display_set_brightness(uint8_t brightness);
 

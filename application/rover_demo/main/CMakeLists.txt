@@ -25,6 +25,7 @@ idf_component_register(
         cap_im_tg
         cap_files
         cap_skill_mgr
+        cap_mcp_server
         cap_session_mgr
         cap_system
         cap_time

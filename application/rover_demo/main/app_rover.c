@@ -10,6 +10,8 @@
 
 #include "cap_files.h"
 #include "cap_im_tg.h"
+#include "cap_mcp_server.h"
+#include "cmd_cap_mcp_server.h"
 #include "cap_rover.h"
 #include "cap_session_mgr.h"
 #include "cap_skill_mgr.h"
@@ -81,6 +83,22 @@ static esp_err_t imu_read_adapter(float *ax, float *ay, float *az,
                                   float *gx, float *gy, float *gz)
 {
     return rover_board_imu_read(ax, ay, az, gx, gy, gz);
+}
+
+static esp_err_t power_read_adapter(int *battery_pct, bool *charging, int *battery_mv)
+{
+    rover_power_status_t ps = {0};
+    rover_board_get_power_status(&ps);
+    if (battery_pct) {
+        *battery_pct = ps.battery_pct;
+    }
+    if (charging) {
+        *charging = ps.charging;
+    }
+    if (battery_mv) {
+        *battery_mv = ps.battery_mv;
+    }
+    return ESP_OK;
 }
 
 static esp_err_t demo_event_cb(const claw_event_t *event, void *user_ctx)
@@ -178,6 +196,7 @@ esp_err_t app_rover_start(const rover_demo_settings_t *s)
                         }),
                         TAG, "rover init");
     cap_rover_set_imu_read(imu_read_adapter);
+    cap_rover_set_power_read(power_read_adapter);
     ESP_RETURN_ON_ERROR(cap_unitv_init(&(cap_unitv_config_t){
                             .uart_port = 1,
                             .tx_gpio = 32,
@@ -209,6 +228,11 @@ esp_err_t app_rover_start(const rover_demo_settings_t *s)
                         }),
                         TAG, "Telegram attachments");
 
+    ESP_RETURN_ON_ERROR(cap_mcp_server_set_config(&(cap_mcp_server_config_t){
+                            .hostname = "ai-rover",
+                            .instance_name = "AI Rover",
+                        }),
+                        TAG, "mcp server config");
     ESP_RETURN_ON_ERROR(cap_rover_register_group(), TAG, "register rover");
     ESP_RETURN_ON_ERROR(cap_unitv_register_group(), TAG, "register unitv");
     ESP_RETURN_ON_ERROR(cap_im_tg_register_group(), TAG, "register tg");
@@ -217,6 +241,8 @@ esp_err_t app_rover_start(const rover_demo_settings_t *s)
     ESP_RETURN_ON_ERROR(cap_system_register_group(), TAG, "register system");
     ESP_RETURN_ON_ERROR(cap_time_register_group(), TAG, "register time");
     ESP_RETURN_ON_ERROR(cap_session_mgr_register_group(), TAG, "register sessions");
+    ESP_RETURN_ON_ERROR(cap_mcp_server_register_group(), TAG, "register mcp server");
+    ESP_RETURN_ON_ERROR(claw_cap_disable_group("cap_mcp_server"), TAG, "mcp server start disabled");
     ESP_RETURN_ON_ERROR(claw_cap_set_llm_visible_groups(
                             ROVER_LLM_VISIBLE_GROUPS,
                             sizeof(ROVER_LLM_VISIBLE_GROUPS) / sizeof(ROVER_LLM_VISIBLE_GROUPS[0])),
@@ -227,6 +253,7 @@ esp_err_t app_rover_start(const rover_demo_settings_t *s)
     ESP_RETURN_ON_ERROR(rover_demo_cli_init(), TAG, "console");
     cap_rover_register_cli();
     cap_unitv_register_cli();
+    register_cap_mcp_server();
     ESP_RETURN_ON_ERROR(rover_demo_cli_start(), TAG, "console REPL");
 
     if (llm_is_configured(s)) {

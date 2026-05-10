@@ -242,6 +242,34 @@ static esp_err_t cap_rover_read_imu_execute(const char *input_json,
     return ESP_OK;
 }
 
+static esp_err_t cap_rover_power_status_execute(const char *input_json,
+                                                const claw_cap_call_context_t *ctx,
+                                                char *output,
+                                                size_t output_size)
+{
+    (void)input_json;
+    (void)ctx;
+
+    if (!output || output_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!g_cap_rover.power_read) {
+        snprintf(output, output_size, "{\"status\":\"unavailable\",\"action\":\"rover_power_status\"}");
+        return ESP_OK;
+    }
+
+    int battery_pct = -1;
+    bool charging = false;
+    int battery_mv = 0;
+    g_cap_rover.power_read(&battery_pct, &charging, &battery_mv);
+
+    snprintf(output, output_size,
+             "{\"status\":\"ok\",\"action\":\"rover_power_status\","
+             "\"battery_pct\":%d,\"charging\":%s,\"battery_mv\":%d}",
+             battery_pct, charging ? "true" : "false", battery_mv);
+    return ESP_OK;
+}
+
 static const claw_cap_descriptor_t s_rover_descriptors[] = {
     {
         .id = "rover_move",
@@ -313,6 +341,16 @@ static const claw_cap_descriptor_t s_rover_descriptors[] = {
         .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
         .input_schema_json = "{\"type\":\"object\",\"properties\":{}}",
         .execute = cap_rover_read_imu_execute,
+    },
+    {
+        .id = "rover_power_status",
+        .name = "rover_power_status",
+        .family = "rover",
+        .description = "Read battery level (%), charging state, and voltage (mV).",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{}}",
+        .execute = cap_rover_power_status_execute,
     },
 };
 
