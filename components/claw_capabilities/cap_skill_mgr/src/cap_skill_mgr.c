@@ -624,9 +624,7 @@ static const claw_cap_descriptor_t s_skill_descriptors[] = {
         .id = "activate_skill",
         .name = "activate_skill",
         .family = "skill",
-        .description = "Activate a skill from skill_id and return its full Skill markdown document "
-                       "inside a <skill_content name=\"skill_id\"> block. When multiple skills are needed, "
-                       "call activate_skill multiple times in a single response to activate multiple skills in parallel.",
+        .description = "Activate skills by ID, loading their docs into the prompt context.",
         .kind = CLAW_CAP_KIND_CALLABLE,
         .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
         .input_schema_json =

@@ -159,7 +159,7 @@ static const claw_cap_descriptor_t s_unitv_descriptors[] = {
         .id = "unitv_scan",
         .name = "unitv_scan",
         .family = "vision",
-        .description = "Run the UnitV onboard scan and return structured vision output.",
+        .description = "UnitV onboard scan; returns structured detection result.",
         .kind = CLAW_CAP_KIND_CALLABLE,
         .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
         .input_schema_json =
@@ -172,14 +172,13 @@ static const claw_cap_descriptor_t s_unitv_descriptors[] = {
         .id = "unitv_capture",
         .name = "unitv_capture",
         .family = "vision",
-        .description = "Capture a JPEG from UnitV and ask a vision LLM to analyze it.",
+        .description = "Capture JPEG from UnitV, send to vision LLM for analysis.",
         .kind = CLAW_CAP_KIND_CALLABLE,
         .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
         .input_schema_json =
             "{\"type\":\"object\",\"properties\":{"
             "\"question\":{\"type\":\"string\"},"
-            "\"quality\":{\"type\":\"integer\",\"minimum\":25,\"maximum\":35,"
-            "\"description\":\"JPEG quality 25-35. Use 25 for fast scan, 35 for more detail. Keep low due to memory constraints.\"}"
+            "\"quality\":{\"type\":\"integer\",\"minimum\":25,\"maximum\":35}"
             "}}",
         .execute = cap_unitv_capture_execute,
     },
