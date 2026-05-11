@@ -44,6 +44,26 @@ menu "Default Wi-Fi Settings"
             falls back to pure AP mode and waits for the user to provision
             new credentials.
 
+    config APP_WIFI_AP_AUTO_CLOSE
+        bool "Close provisioning AP after STA connects"
+        default y
+        help
+            When enabled, the SoftAP used for provisioning is shut down
+            shortly after the device successfully joins the configured
+            STA network. This reduces the attack surface of the always-on
+            captive portal. The AP is reopened automatically if STA
+            credentials become invalid (after APP_WIFI_MAX_RETRY failures).
+
+    config APP_WIFI_AP_AUTO_CLOSE_DELAY_MS
+        int "Grace period before closing the AP (ms)"
+        depends on APP_WIFI_AP_AUTO_CLOSE
+        range 0 60000
+        default 3000
+        help
+            Time to keep the SoftAP up after STA gets an IP, so any client
+            still on the captive portal can receive its last response
+            before the AP goes away.
+
 endmenu
 
 endmenu

@@ -25,6 +25,8 @@ typedef struct {
     uint8_t ap_channel;
     uint8_t ap_max_conn;
     uint32_t max_retry;
+    bool ap_auto_close;
+    uint32_t ap_auto_close_delay_ms;
 } wifi_manager_config_t;
 
 typedef struct {

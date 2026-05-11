@@ -60,6 +60,7 @@ static esp_netif_t *s_ap_netif;
 static wifi_manager_state_cb_t s_state_cb;
 static void *s_state_cb_user_ctx;
 static esp_timer_handle_t s_reconnect_timer;
+static esp_timer_handle_t s_ap_close_timer;
 static wifi_manager_config_t s_config;
 static bool s_wifi_started;
 
@@ -77,8 +78,10 @@ static const char *wifi_manager_mode_string(wifi_mode_state_t mode)
 static void notify_state_changed(bool force);
 static esp_err_t fallback_to_ap(void);
 static void reconnect_timer_cb(void *arg);
+static void ap_close_timer_cb(void *arg);
 static esp_err_t configure_sta_mode(const wifi_manager_config_t *config);
 static void reset_sta_runtime_state(void);
+static void schedule_ap_auto_close(void);
 
 static const char *wifi_manager_ap_ssid_prefix(void)
 {
@@ -154,6 +157,9 @@ static esp_err_t configure_sta_mode(const wifi_manager_config_t *config)
     if (s_reconnect_timer) {
         esp_timer_stop(s_reconnect_timer);
     }
+    if (s_ap_close_timer) {
+        esp_timer_stop(s_ap_close_timer);
+    }
     reset_sta_runtime_state();
 
     if (s_sta_configured) {
@@ -208,6 +214,9 @@ static void wifi_event_handler(void *arg,
 
         case WIFI_EVENT_STA_DISCONNECTED:
             strlcpy(s_ip_addr, "0.0.0.0", sizeof(s_ip_addr));
+            if (s_ap_close_timer) {
+                esp_timer_stop(s_ap_close_timer);
+            }
             if (s_connected) {
                 s_connected = false;
                 notify_state_changed(false);
@@ -263,6 +272,7 @@ static void wifi_event_handler(void *arg,
         s_mode = s_ap_active ? WIFI_MODE_APSTA_OK : s_mode;
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
         notify_state_changed(true);
+        schedule_ap_auto_close();
     }
 }
 
@@ -296,6 +306,31 @@ static void reconnect_timer_cb(void *arg)
     if (err != ESP_OK && err != ESP_ERR_WIFI_CONN) {
         ESP_LOGW(TAG, "esp_wifi_connect failed: %s", esp_err_to_name(err));
     }
+}
+
+static void ap_close_timer_cb(void *arg)
+{
+    (void)arg;
+    if (!s_connected || !s_ap_active || !s_config.ap_auto_close) {
+        return;
+    }
+    ESP_LOGI(TAG, "STA stable, closing provisioning AP");
+    esp_err_t err = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to switch to STA-only: %s", esp_err_to_name(err));
+        return;
+    }
+    s_mode = WIFI_MODE_APSTA_OK;
+}
+
+static void schedule_ap_auto_close(void)
+{
+    if (!s_ap_close_timer || !s_config.ap_auto_close || !s_ap_active) {
+        return;
+    }
+    uint64_t delay_us = (uint64_t)s_config.ap_auto_close_delay_ms * 1000ULL;
+    esp_timer_stop(s_ap_close_timer);
+    esp_timer_start_once(s_ap_close_timer, delay_us);
 }
 
 static esp_err_t fallback_to_ap(void)
@@ -340,6 +375,12 @@ esp_err_t wifi_manager_init(void)
         .name = "wifi_reconnect",
     };
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &s_reconnect_timer));
+
+    const esp_timer_create_args_t ap_close_args = {
+        .callback = ap_close_timer_cb,
+        .name = "wifi_ap_close",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&ap_close_args, &s_ap_close_timer));
 
     memset(&s_config, 0, sizeof(s_config));
     s_wifi_started = false;

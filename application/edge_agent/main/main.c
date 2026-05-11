@@ -347,6 +347,10 @@ void app_main(void)
     esp_err_t wifi_err = wifi_manager_start(&(wifi_manager_config_t) {
         .sta_ssid = s_config->wifi_ssid,
         .sta_password = s_config->wifi_password,
+#if CONFIG_APP_WIFI_AP_AUTO_CLOSE
+        .ap_auto_close = true,
+        .ap_auto_close_delay_ms = CONFIG_APP_WIFI_AP_AUTO_CLOSE_DELAY_MS,
+#endif
     });
     if (wifi_err != ESP_OK) {
         ESP_LOGE(TAG, "Wi-Fi start failed: %s", esp_err_to_name(wifi_err));
@@ -371,11 +375,15 @@ void app_main(void)
 
         wifi_manager_status_t status = {0};
         wifi_manager_get_status(&status);
-        ESP_LOGW(TAG,
-                 "*** Provisioning portal: SSID=\"%s\" (open) IP=%s URL=http://%s/ ***",
-                 status.ap_ssid,
-                 status.ap_ip,
-                 status.ap_ip);
+        if (status.ap_active) {
+            ESP_LOGW(TAG,
+                     "*** Provisioning portal: SSID=\"%s\" (open) IP=%s URL=http://%s/ ***",
+                     status.ap_ssid,
+                     status.ap_ip,
+                     status.ap_ip);
+        } else {
+            ESP_LOGI(TAG, "STA up at %s, provisioning portal closed", status.sta_ip);
+        }
     }
 
     ESP_ERROR_CHECK(app_claw_init_storage_paths(s_claw_paths));

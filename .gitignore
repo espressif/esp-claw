@@ -45,3 +45,8 @@ docs/public/d2
 docs/dist
 docs/.astro
 docs/**/*.bin
+
+claude/
+.claude/
+CONTEXT.MD
+eim_config.toml
