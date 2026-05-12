@@ -29,8 +29,8 @@ peripherals:
         mclk: 13
         bclk: 12
         ws: 10
-        dout: 11
-        din: 9
+        dout: 9
+        din: 11
 
   # I2S Audio Input for ES8311 codec
   - name: i2s_audio_in
@@ -50,8 +50,8 @@ peripherals:
         mclk: 13
         bclk: 12
         ws: 10
-        dout: 11
-        din: 9
+        dout: 9
+        din: 11
 
   # PA Control GPIO
   - name: gpio_pa_control
