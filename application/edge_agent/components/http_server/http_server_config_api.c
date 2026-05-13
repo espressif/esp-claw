@@ -55,6 +55,14 @@ static const config_field_def_t CONFIG_FIELDS[] = {
     CONFIG_FIELD("llm",          llm_supports_vision),
     CONFIG_FIELD("llm",          llm_image_remote_url_only),
 
+    CONFIG_FIELD("stt",          stt_enabled),
+    CONFIG_FIELD("stt",          stt_backend_type),
+    CONFIG_FIELD("stt",          stt_api_key),
+    CONFIG_FIELD("stt",          stt_base_url),
+    CONFIG_FIELD("stt",          stt_model),
+    CONFIG_FIELD("stt",          stt_language),
+    CONFIG_FIELD("stt",          stt_keep_audio),
+
     CONFIG_FIELD("im",           qq_app_id),
     CONFIG_FIELD("im",           qq_app_secret),
     CONFIG_FIELD("im",           feishu_app_id),

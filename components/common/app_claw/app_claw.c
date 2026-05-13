@@ -35,6 +35,9 @@
 #if CONFIG_APP_CLAW_CAP_TIME
 #include "cap_time.h"
 #endif
+#if CONFIG_APP_CLAW_AUDIO_STT
+#include "audio_stt.h"
+#endif
 
 static const char *TAG = "app_claw";
 static const char *APP_STARTUP_EVENT_SOURCE_CAP = "app_claw";
@@ -325,6 +328,18 @@ esp_err_t app_claw_start(const app_claw_config_t *config,
                         .on_sync_success = NULL,
 #endif
                     }));
+#endif
+
+#if CONFIG_APP_CLAW_AUDIO_STT
+    audio_stt_set_config(&(audio_stt_config_t) {
+        .enabled = app_claw_bool_is_true(config->stt_enabled),
+        .backend_type = config->stt_backend_type,
+        .api_key = config->stt_api_key,
+        .base_url = config->stt_base_url,
+        .model = config->stt_model,
+        .language = config->stt_language,
+        .keep_audio_in_storage = app_claw_bool_is_true(config->stt_keep_audio),
+    });
 #endif
 
 #if CONFIG_APP_CLAW_ENABLE_CLI

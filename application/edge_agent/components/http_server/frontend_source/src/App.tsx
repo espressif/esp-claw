@@ -20,6 +20,7 @@ const BasicPage = lazy(() => import('./pages/BasicPage').then((mod) => ({ defaul
 const SearchPage = lazy(() => import('./pages/SearchPage').then((mod) => ({ default: mod.SearchPage })));
 const MemoryPage = lazy(() => import('./pages/MemoryPage').then((mod) => ({ default: mod.MemoryPage })));
 const LlmPage = lazy(() => import('./pages/LlmPage').then((mod) => ({ default: mod.LlmPage })));
+const SttPage = lazy(() => import('./pages/SttPage').then((mod) => ({ default: mod.SttPage })));
 const ImPage = lazy(() => import('./pages/ImPage').then((mod) => ({ default: mod.ImPage })));
 const CapabilitiesPage = lazy(() =>
   import('./pages/CapabilitiesPage').then((mod) => ({ default: mod.CapabilitiesPage })),
@@ -231,6 +232,9 @@ const App: Component = () => {
               </Show>
               <Show when={currentTab() === 'llm'}>
                 <LlmPage />
+              </Show>
+              <Show when={currentTab() === 'stt'}>
+                <SttPage onRestartRequest={() => void handleRestartRequest({ reloadOnSuccess: true })} />
               </Show>
               <Show when={currentTab() === 'im'}>
                 <ImPage />

@@ -1,2 +1,7 @@
 dependencies:
   espressif/esp_websocket_client: "^1.4.0"
+
+  audio_stt:
+    rules:
+      - if: $CONFIG{APP_CLAW_AUDIO_STT} == True
+    path: ../../common/audio_stt

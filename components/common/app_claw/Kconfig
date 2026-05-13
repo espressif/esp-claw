@@ -142,6 +142,14 @@ menu "App Claw Config"
                 Enable the web search capability and keep app_claw's direct dependency
                 on cap_web_search.
 
+        config APP_CLAW_AUDIO_STT
+            bool "Enable inbound speech-to-text"
+            default y
+            help
+                Build the audio_stt module and let IM platforms (Telegram voice
+                notes, audio attachments) be auto-transcribed and injected as
+                text messages into the agent. Configurable from the web UI.
+
         config APP_CLAW_CAP_ROUTER_MGR
             bool "Enable router manager capability"
             default y

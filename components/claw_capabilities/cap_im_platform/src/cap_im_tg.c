@@ -5,6 +5,9 @@
  */
 #include "cap_im_tg.h"
 #include "cap_im_attachment.h"
+#if CONFIG_APP_CLAW_AUDIO_STT
+#include "audio_stt.h"
+#endif
 
 #include <ctype.h>
 #include <errno.h>
@@ -430,6 +433,50 @@ static esp_err_t cap_im_tg_save_attachment(const char *chat_id,
         return ESP_FAIL;
     }
 
+    snprintf(download_url, sizeof(download_url), "%s/file/bot%s/%s",
+             CAP_IM_TG_API_BASE, s_tg.bot_token, remote_path);
+
+#if CONFIG_APP_CLAW_AUDIO_STT
+    bool stt_is_voice = (strcmp(attachment_kind, "voice") == 0 ||
+                         strcmp(attachment_kind, "audio") == 0);
+    if (stt_is_voice && audio_stt_is_enabled() && !audio_stt_keep_audio_in_storage()) {
+        unsigned char *audio_buf = NULL;
+        size_t audio_len = 0;
+        esp_err_t dl_err = cap_im_attachment_download_url_to_buffer(TAG,
+                                                                    download_url,
+                                                                    s_tg.max_inbound_file_bytes,
+                                                                    &audio_buf,
+                                                                    &audio_len);
+        free(remote_path);
+        if (dl_err != ESP_OK) {
+            ESP_LOGW(TAG, "Voice buffer download failed message=%s err=%s",
+                     message_id, esp_err_to_name(dl_err));
+            return dl_err;
+        }
+
+        char transcript[1024];
+        esp_err_t stt_err = audio_stt_transcribe_buffer(audio_buf, audio_len,
+                                                        original_filename ? original_filename : "voice.oga",
+                                                        mime, transcript, sizeof(transcript));
+        free(audio_buf);
+
+        if (stt_err == ESP_OK && transcript[0]) {
+            ESP_LOGI(TAG, "Transcribed Telegram %s message=%s (buffer, %u bytes): %.96s%s",
+                     attachment_kind, message_id, (unsigned)audio_len, transcript,
+                     strlen(transcript) > 96 ? "..." : "");
+            return cap_im_tg_publish_inbound_text(chat_id, sender_id, message_id, transcript);
+        }
+        if (stt_err == ESP_OK) {
+            ESP_LOGW(TAG, "STT empty transcript (buffer mode) message=%s; audio discarded",
+                     message_id);
+        } else {
+            ESP_LOGW(TAG, "STT failed (buffer mode) message=%s err=%s; audio discarded",
+                     message_id, esp_err_to_name(stt_err));
+        }
+        return ESP_OK;
+    }
+#endif
+
     extension = cap_im_attachment_guess_extension(remote_path, original_filename, mime);
     err = cap_im_attachment_build_saved_paths(s_tg.attachment_root_dir,
                                               "telegram",
@@ -448,8 +495,6 @@ static esp_err_t cap_im_tg_save_attachment(const char *chat_id,
         return err;
     }
 
-    snprintf(download_url, sizeof(download_url), "%s/file/bot%s/%s",
-             CAP_IM_TG_API_BASE, s_tg.bot_token, remote_path);
     err = cap_im_attachment_download_url_to_file(TAG,
                                                  download_url,
                                                  saved_path,
@@ -459,6 +504,35 @@ static esp_err_t cap_im_tg_save_attachment(const char *chat_id,
         free(remote_path);
         return err;
     }
+
+#if CONFIG_APP_CLAW_AUDIO_STT
+    if ((strcmp(attachment_kind, "voice") == 0 || strcmp(attachment_kind, "audio") == 0) &&
+            audio_stt_is_enabled()) {
+        char transcript[1024];
+        esp_err_t stt_err = audio_stt_transcribe_file(saved_path, mime, transcript, sizeof(transcript));
+        if (stt_err == ESP_OK && transcript[0]) {
+            ESP_LOGI(TAG, "Transcribed Telegram %s message=%s: %.96s%s",
+                     attachment_kind, message_id, transcript,
+                     strlen(transcript) > 96 ? "..." : "");
+            esp_err_t pub_err = cap_im_tg_publish_inbound_text(chat_id,
+                                                               sender_id,
+                                                               message_id,
+                                                               transcript);
+            free(remote_path);
+            if (pub_err != ESP_OK) {
+                ESP_LOGW(TAG, "Failed to publish transcript text: %s", esp_err_to_name(pub_err));
+            }
+            return ESP_OK;
+        }
+        if (stt_err == ESP_OK) {
+            ESP_LOGW(TAG, "STT returned empty transcript for %s; falling back to attachment event",
+                     saved_path);
+        } else {
+            ESP_LOGW(TAG, "STT failed for %s err=%s; falling back to attachment event",
+                     saved_path, esp_err_to_name(stt_err));
+        }
+    }
+#endif
 
     payload_json = cap_im_attachment_build_payload_json(
     &(cap_im_attachment_payload_config_t) {
@@ -684,6 +758,44 @@ static void cap_im_tg_handle_update(cJSON *update_json)
                                        mime,
                                        caption,
                                        "file");
+        }
+    }
+
+    cJSON *voice_json = cJSON_GetObjectItem(message_json, "voice");
+    if (s_tg.enable_inbound_attachments && cJSON_IsObject(voice_json)) {
+        const char *file_id = cJSON_GetStringValue(cJSON_GetObjectItem(voice_json, "file_id"));
+        const char *mime = cJSON_GetStringValue(cJSON_GetObjectItem(voice_json, "mime_type"));
+        ESP_LOGI(TAG, "Telegram voice message=%s chat=%s", message_id, chat_id);
+        if (file_id && file_id[0]) {
+            cap_im_tg_queue_attachment(chat_id,
+                                       sender_id,
+                                       message_id,
+                                       "voice",
+                                       file_id,
+                                       "voice.oga",
+                                       mime && mime[0] ? mime : "audio/ogg",
+                                       caption,
+                                       "audio");
+        }
+    }
+
+    cJSON *audio_json = cJSON_GetObjectItem(message_json, "audio");
+    if (s_tg.enable_inbound_attachments && cJSON_IsObject(audio_json)) {
+        const char *file_id = cJSON_GetStringValue(cJSON_GetObjectItem(audio_json, "file_id"));
+        const char *file_name = cJSON_GetStringValue(cJSON_GetObjectItem(audio_json, "file_name"));
+        const char *mime = cJSON_GetStringValue(cJSON_GetObjectItem(audio_json, "mime_type"));
+        ESP_LOGI(TAG, "Telegram audio message=%s chat=%s filename=%s",
+                 message_id, chat_id, file_name ? file_name : "");
+        if (file_id && file_id[0]) {
+            cap_im_tg_queue_attachment(chat_id,
+                                       sender_id,
+                                       message_id,
+                                       "audio",
+                                       file_id,
+                                       file_name && file_name[0] ? file_name : "audio.mp3",
+                                       mime && mime[0] ? mime : "audio/mpeg",
+                                       caption,
+                                       "audio");
         }
     }
 
