@@ -1,0 +1,56 @@
+version: 1.0.0
+# Devices Configuration for Adafruit Metro ESP32-S3
+devices:
+
+  # On-board NeoPixel on GPIO46
+  - name: led_strip
+    chip: ws2812
+    type: custom
+    version: default
+    init_skip: true
+    dependencies:
+      espressif/led_strip:
+        version: "^3.0"
+        public: true
+    config:
+      max_leds: 1
+    peripherals:
+      - name: rmt_tx
+
+  # ILI9341 TFT on the default SPI bus.
+  # NOTE: CS / DC / RST pins below are placeholders — update them to match
+  # how you've wired the display to the Metro. Any free GPIO on the Metro
+  # will work; the values here (10/11/12) are chosen only because those pins
+  # are broken out on the Arduino header and are otherwise unused.
+  - name: display_lcd
+    chip: ili9341
+    type: display_lcd
+    sub_type: spi
+    version: default
+    dependencies:
+      espressif/esp_lcd_ili9341: "*"
+    config:
+      mirror_x: true
+      mirror_y: false
+      swap_xy: false
+      x_max: 240                 # native ILI9341 portrait: 240 wide x 320 tall
+      y_max: 320
+      invert_color: false        # flip to true if reds/blues look wrong
+      io_spi_config:
+        cs_gpio_num: 10
+        dc_gpio_num: 9
+        spi_mode: 0
+        pclk_hz: 40000000
+        flags:
+          sio_mode: false        # true only for 3-wire SPI (MOSI shared with MISO)
+
+      lcd_panel_config:
+        reset_gpio_num: -1       # <-- set to your ILI9341 RST pin, or -1 if tied high
+        rgb_ele_order: LCD_RGB_ELEMENT_ORDER_BGR
+        bits_per_pixel: 16
+        data_endian: LCD_RGB_DATA_ENDIAN_BIG
+        flags:
+          reset_active_high: false
+
+    peripherals:
+      - name: spi_display

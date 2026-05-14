@@ -1,0 +1,44 @@
+version: 1.0.0
+# Peripherals Configuration for Adafruit Metro ESP32-S3
+
+peripherals:
+  # RMT TX used by the on-board NeoPixel (GPIO46)
+  - name: rmt_tx
+    type: rmt
+    role: tx
+    config:
+      gpio_num: 46
+      clk_src: RMT_CLK_SRC_DEFAULT
+      resolution_hz: 10000000
+      mem_block_symbols: 64
+      trans_queue_depth: 4
+      intr_priority: 1
+      flags:
+        invert_out: false
+        with_dma: true
+        io_loop_back: false
+        io_od_mode: false
+        allow_pd: false
+        init_level: false
+
+  # Default I2C bus on the STEMMA QT / Qwiic connector (SDA=47, SCL=48)
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 47
+        scl: 48
+
+  # SPI bus used by the ILI9341 display.
+  # Matches the Metro's default SPI header: SCK=39, MOSI=42, MISO=21.
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI3_HOST
+        data0_io_num: 42          # MOSI
+        sclk_io_num: 39           # SCK
+        max_transfer_sz: 6400     # 320 * 2 * 10
