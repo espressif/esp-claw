@@ -3248,15 +3248,26 @@ esp_err_t cap_im_feishu_start(void)
 
     /* If a previous stop() is in progress or tasks haven't exited yet, wait. */
     deadline = xTaskGetTickCount() + pdMS_TO_TICKS(10000);
-    while (s_feishu.ws_task && xTaskGetTickCount() < deadline) {
+    while (xTaskGetTickCount() < deadline) {
+        bool ws_task_running;
+
+        xSemaphoreTake(s_feishu_lock, portMAX_DELAY);
+        ws_task_running = (s_feishu.ws_task != NULL);
+        xSemaphoreGive(s_feishu_lock);
+
+        if (!ws_task_running) {
+            break;
+        }
+
         vTaskDelay(pdMS_TO_TICKS(100));
-    }
-    if (s_feishu.ws_task) {
-        ESP_LOGW(TAG, "Feishu start: previous ws_task did not exit");
-        return ESP_ERR_TIMEOUT;
     }
 
     xSemaphoreTake(s_feishu_lock, portMAX_DELAY);
+    if (s_feishu.ws_task) {
+        xSemaphoreGive(s_feishu_lock);
+        ESP_LOGW(TAG, "Feishu start: previous ws_task did not exit");
+        return ESP_ERR_TIMEOUT;
+    }
     s_feishu.stop_requested = false;
     xSemaphoreGive(s_feishu_lock);
 
