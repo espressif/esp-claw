@@ -16,6 +16,13 @@ export type AppConfig = {
   llm_supports_tools: string;
   llm_supports_vision: string;
   llm_image_remote_url_only: string;
+  stt_enabled: string;
+  stt_backend_type: string;
+  stt_api_key: string;
+  stt_base_url: string;
+  stt_model: string;
+  stt_language: string;
+  stt_keep_audio: string;
   qq_app_id: string;
   qq_app_secret: string;
   feishu_app_id: string;
@@ -39,6 +46,7 @@ export type AppConfig = {
 export type ConfigGroup =
   | 'wifi'
   | 'llm'
+  | 'stt'
   | 'im'
   | 'search'
   | 'capabilities'
@@ -60,6 +68,15 @@ export const GROUP_FIELDS: Record<ConfigGroup, (keyof AppConfig)[]> = {
     'llm_supports_tools',
     'llm_supports_vision',
     'llm_image_remote_url_only',
+  ],
+  stt: [
+    'stt_enabled',
+    'stt_backend_type',
+    'stt_api_key',
+    'stt_base_url',
+    'stt_model',
+    'stt_language',
+    'stt_keep_audio',
   ],
   im: [
     'qq_app_id',

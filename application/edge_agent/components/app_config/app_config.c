@@ -45,6 +45,37 @@ typedef struct {
 #define APP_DEFAULT_LLM_SUPPORTS_TOOLS       "false"
 #define APP_DEFAULT_LLM_SUPPORTS_VISION      "false"
 #define APP_DEFAULT_LLM_IMAGE_REMOTE_URL_ONLY "false"
+#ifdef CONFIG_APP_STT_ENABLED
+#define APP_DEFAULT_STT_ENABLED              "true"
+#else
+#define APP_DEFAULT_STT_ENABLED              "false"
+#endif
+#ifdef CONFIG_APP_STT_BACKEND_TYPE
+#define APP_DEFAULT_STT_BACKEND_TYPE         CONFIG_APP_STT_BACKEND_TYPE
+#else
+#define APP_DEFAULT_STT_BACKEND_TYPE         "openai"
+#endif
+#ifdef CONFIG_APP_STT_API_KEY
+#define APP_DEFAULT_STT_API_KEY              CONFIG_APP_STT_API_KEY
+#else
+#define APP_DEFAULT_STT_API_KEY              ""
+#endif
+#ifdef CONFIG_APP_STT_BASE_URL
+#define APP_DEFAULT_STT_BASE_URL             CONFIG_APP_STT_BASE_URL
+#else
+#define APP_DEFAULT_STT_BASE_URL             "https://api.openai.com/v1"
+#endif
+#ifdef CONFIG_APP_STT_MODEL
+#define APP_DEFAULT_STT_MODEL                CONFIG_APP_STT_MODEL
+#else
+#define APP_DEFAULT_STT_MODEL                "whisper-1"
+#endif
+#ifdef CONFIG_APP_STT_LANGUAGE
+#define APP_DEFAULT_STT_LANGUAGE             CONFIG_APP_STT_LANGUAGE
+#else
+#define APP_DEFAULT_STT_LANGUAGE             ""
+#endif
+#define APP_DEFAULT_STT_KEEP_AUDIO           "false"
 #define APP_DEFAULT_QQ_APP_ID                ""
 #define APP_DEFAULT_QQ_APP_SECRET            ""
 #define APP_DEFAULT_FEISHU_APP_ID            ""
@@ -79,6 +110,13 @@ static const app_config_field_t s_fields[] = {
     APP_CONFIG_FIELD(llm_supports_tools, "llm_sup_tools", APP_DEFAULT_LLM_SUPPORTS_TOOLS),
     APP_CONFIG_FIELD(llm_supports_vision, "llm_sup_vis", APP_DEFAULT_LLM_SUPPORTS_VISION),
     APP_CONFIG_FIELD(llm_image_remote_url_only, "llm_img_url_o", APP_DEFAULT_LLM_IMAGE_REMOTE_URL_ONLY),
+    APP_CONFIG_FIELD(stt_enabled, "stt_enabled", APP_DEFAULT_STT_ENABLED),
+    APP_CONFIG_FIELD(stt_backend_type, "stt_backend", APP_DEFAULT_STT_BACKEND_TYPE),
+    APP_CONFIG_FIELD(stt_api_key, "stt_api_key", APP_DEFAULT_STT_API_KEY),
+    APP_CONFIG_FIELD(stt_base_url, "stt_base_url", APP_DEFAULT_STT_BASE_URL),
+    APP_CONFIG_FIELD(stt_model, "stt_model", APP_DEFAULT_STT_MODEL),
+    APP_CONFIG_FIELD(stt_language, "stt_lang", APP_DEFAULT_STT_LANGUAGE),
+    APP_CONFIG_FIELD(stt_keep_audio, "stt_keep_aud", APP_DEFAULT_STT_KEEP_AUDIO),
     APP_CONFIG_FIELD(qq_app_id, "qq_app_id", APP_DEFAULT_QQ_APP_ID),
     APP_CONFIG_FIELD(qq_app_secret, "qq_app_secret", APP_DEFAULT_QQ_APP_SECRET),
     APP_CONFIG_FIELD(feishu_app_id, "feishu_app_id", APP_DEFAULT_FEISHU_APP_ID),
@@ -552,6 +590,13 @@ void app_config_to_claw(const app_config_t *config, app_claw_config_t *out)
     strlcpy(out->llm_image_remote_url_only,
             config->llm_image_remote_url_only,
             sizeof(out->llm_image_remote_url_only));
+    strlcpy(out->stt_enabled, config->stt_enabled, sizeof(out->stt_enabled));
+    strlcpy(out->stt_backend_type, config->stt_backend_type, sizeof(out->stt_backend_type));
+    strlcpy(out->stt_api_key, config->stt_api_key, sizeof(out->stt_api_key));
+    strlcpy(out->stt_base_url, config->stt_base_url, sizeof(out->stt_base_url));
+    strlcpy(out->stt_model, config->stt_model, sizeof(out->stt_model));
+    strlcpy(out->stt_language, config->stt_language, sizeof(out->stt_language));
+    strlcpy(out->stt_keep_audio, config->stt_keep_audio, sizeof(out->stt_keep_audio));
     strlcpy(out->qq_app_id, config->qq_app_id, sizeof(out->qq_app_id));
     strlcpy(out->qq_app_secret, config->qq_app_secret, sizeof(out->qq_app_secret));
     strlcpy(out->feishu_app_id, config->feishu_app_id, sizeof(out->feishu_app_id));

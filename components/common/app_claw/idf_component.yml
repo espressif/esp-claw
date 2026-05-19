@@ -95,6 +95,11 @@ dependencies:
   lua_module_builder:
     path: ../../common/lua_module_builder
 
+  audio_stt:
+    rules:
+      - if: $CONFIG{APP_CLAW_AUDIO_STT} == True
+    path: ../../common/audio_stt
+
   emote:
     rules:
       - if: $CONFIG{ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT} == True

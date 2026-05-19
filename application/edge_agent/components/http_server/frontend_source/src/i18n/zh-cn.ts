@@ -20,6 +20,7 @@ export const zhCn: Dict = {
   navSystemSettings: '系统设置',
   navBasic: '基本设置',
   navLlm: 'LLM 设置',
+  navStt: '语音转文字',
   navIm: 'IM 设置',
   navSearch: '网络搜索设置',
   navMemory: '记忆管理',
@@ -127,6 +128,25 @@ export const zhCn: Dict = {
   llmValidationRequiredFields: '保存前请补全 LLM 必填项：{fields}。',
   llmValidationMaxTokens: '最大 Token 数必须是正整数。',
   llmValidationImageMaxBytes: '默认图片大小上限必须是正整数。',
+
+  sectionStt: '语音转文字',
+  sttNote:
+    '启用后，聊天平台收到的语音和音频消息（如 Telegram 语音条）会被转写为文本并送入 Agent。',
+  sttEnabled: '启用入站语音转写',
+  sttBackendType: '后端',
+  sttBackendOpenai: 'OpenAI / Whisper 兼容',
+  sttBackendDeepgram: 'Deepgram',
+  sttApiKey: 'API Key',
+  sttBaseUrl: 'Base URL',
+  sttBaseUrlPlaceholder: 'https://api.openai.com/v1',
+  sttModel: '模型',
+  sttModelPlaceholderOpenai: 'whisper-1',
+  sttModelPlaceholderDeepgram: 'nova-2',
+  sttLanguage: '语言（留空则自动检测多语言）',
+  sttLanguagePlaceholder: '例如 es、en、pt — 留空表示自动检测',
+  sttKeepAudio: '保留原始音频到 FATFS（调试 / 重试）',
+  sttKeepAudioHint:
+    '默认关闭——语音消息直接从 Telegram 流到 STT API（更快、不写闪存）。启用后会将原始 .oga 保存到 /fatfs/inbox/ 以便重试或检查。',
 
   sectionIm: '即时通讯 (IM)',
   imAdd: '添加',

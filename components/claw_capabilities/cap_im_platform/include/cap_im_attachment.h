@@ -54,6 +54,11 @@ esp_err_t cap_im_attachment_download_url_to_file(const char *log_tag,
                                                  const char *dest_path,
                                                  size_t max_bytes,
                                                  size_t *out_bytes);
+esp_err_t cap_im_attachment_download_url_to_buffer(const char *log_tag,
+                                                   const char *url,
+                                                   size_t max_bytes,
+                                                   unsigned char **out_buf,
+                                                   size_t *out_len);
 esp_err_t cap_im_attachment_save_buffer_to_file(const char *log_tag,
                                                 const char *dest_path,
                                                 const unsigned char *buf,

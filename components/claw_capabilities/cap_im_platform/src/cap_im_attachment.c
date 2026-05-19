@@ -423,6 +423,97 @@ esp_err_t cap_im_attachment_download_url_to_file(const char *log_tag,
     return ESP_OK;
 }
 
+typedef struct {
+    unsigned char *data;
+    size_t         len;
+    size_t         cap;
+    size_t         max_bytes;
+    bool           limit_hit;
+} cap_im_attachment_buffer_dl_t;
+
+static esp_err_t cap_im_attachment_buffer_event_handler(esp_http_client_event_t *event)
+{
+    cap_im_attachment_buffer_dl_t *dl = (cap_im_attachment_buffer_dl_t *)event->user_data;
+
+    if (!dl || event->event_id != HTTP_EVENT_ON_DATA || event->data_len <= 0) {
+        return ESP_OK;
+    }
+    if (dl->len + (size_t)event->data_len > dl->max_bytes) {
+        dl->limit_hit = true;
+        return ESP_FAIL;
+    }
+    if (dl->len + (size_t)event->data_len > dl->cap) {
+        size_t new_cap = dl->cap ? dl->cap * 2 : 4096;
+        while (new_cap < dl->len + (size_t)event->data_len) {
+            new_cap *= 2;
+        }
+        if (new_cap > dl->max_bytes) {
+            new_cap = dl->max_bytes;
+        }
+        unsigned char *tmp = realloc(dl->data, new_cap);
+        if (!tmp) {
+            return ESP_ERR_NO_MEM;
+        }
+        dl->data = tmp;
+        dl->cap = new_cap;
+    }
+    memcpy(dl->data + dl->len, event->data, (size_t)event->data_len);
+    dl->len += (size_t)event->data_len;
+    return ESP_OK;
+}
+
+esp_err_t cap_im_attachment_download_url_to_buffer(const char *log_tag,
+                                                   const char *url,
+                                                   size_t max_bytes,
+                                                   unsigned char **out_buf,
+                                                   size_t *out_len)
+{
+    if (!url || !url[0] || !out_buf || !out_len) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_buf = NULL;
+    *out_len = 0;
+
+    cap_im_attachment_buffer_dl_t dl = {
+        .max_bytes = max_bytes ? max_bytes : (2 * 1024 * 1024),
+    };
+
+    esp_http_client_config_t config = {
+        .url = url,
+        .event_handler = cap_im_attachment_buffer_event_handler,
+        .user_data = &dl,
+        .timeout_ms = 30000,
+        .buffer_size = 2048,
+        .buffer_size_tx = 1024,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        free(dl.data);
+        return ESP_FAIL;
+    }
+
+    esp_err_t err = esp_http_client_perform(client);
+    int status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+
+    if (err != ESP_OK || status < 200 || status >= 300 || dl.limit_hit || dl.len == 0) {
+        ESP_LOGW(log_tag,
+                 "buffer download failed: err=%s http=%d bytes=%u limit_hit=%d url=%s",
+                 esp_err_to_name(err), status, (unsigned)dl.len, dl.limit_hit ? 1 : 0, url);
+        free(dl.data);
+        if (dl.limit_hit) {
+            return ESP_ERR_INVALID_SIZE;
+        }
+        return err != ESP_OK ? err : ESP_FAIL;
+    }
+
+    *out_buf = dl.data;
+    *out_len = dl.len;
+    return ESP_OK;
+}
+
 esp_err_t cap_im_attachment_save_buffer_to_file(const char *log_tag,
                                                 const char *dest_path,
                                                 const unsigned char *buf,

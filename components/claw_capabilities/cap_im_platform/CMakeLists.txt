@@ -31,22 +31,30 @@ if(CONFIG_APP_CLAW_CAP_IM_WECHAT)
     )
 endif()
 
+set(reqs
+    claw_cap
+    claw_event_router
+    esp_http_client
+    http_reuse
+    esp_event
+    esp_http_client
+    esp_timer
+    esp_websocket_client
+    freertos
+    json
+    mbedtls
+    console
+)
+
+if(CONFIG_APP_CLAW_AUDIO_STT)
+    list(APPEND reqs audio_stt)
+endif()
+
 idf_component_register(
     SRCS
         ${srcs}
     INCLUDE_DIRS
         "include"
     REQUIRES
-        claw_cap
-        claw_event_router
-        esp_http_client
-        http_reuse
-        esp_event
-        esp_http_client
-        esp_timer
-        esp_websocket_client
-        freertos
-        json
-        mbedtls
-        console
+        ${reqs}
 )

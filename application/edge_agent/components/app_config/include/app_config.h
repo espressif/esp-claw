@@ -37,6 +37,13 @@ typedef struct {
     char llm_supports_tools[8];
     char llm_supports_vision[8];
     char llm_image_remote_url_only[8];
+    char stt_enabled[8];
+    char stt_backend_type[32];
+    char stt_api_key[APP_CONFIG_STR_LEN];
+    char stt_base_url[APP_CONFIG_STR_LEN];
+    char stt_model[64];
+    char stt_language[32];
+    char stt_keep_audio[8];
     char qq_app_id[32];
     char qq_app_secret[APP_CONFIG_STR_LEN];
     char feishu_app_id[64];

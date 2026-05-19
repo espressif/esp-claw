@@ -19,6 +19,7 @@ export const en = {
   navSystemSettings: 'System Settings',
   navBasic: 'Basic Settings',
   navLlm: 'LLM',
+  navStt: 'Speech-to-Text',
   navIm: 'IM',
   navSearch: 'Web Search',
   navMemory: 'Memory',
@@ -131,6 +132,25 @@ export const en = {
   llmValidationRequiredFields: 'Complete required LLM fields before saving: {fields}.',
   llmValidationMaxTokens: 'Max Tokens must be a positive integer.',
   llmValidationImageMaxBytes: 'Default Image Max Bytes must be a positive integer.',
+
+  sectionStt: 'Speech-to-Text',
+  sttNote:
+    'When enabled, voice and audio messages received from chat platforms (e.g. Telegram voice notes) are transcribed and fed to the agent as text.',
+  sttEnabled: 'Enable inbound transcription',
+  sttBackendType: 'Backend',
+  sttBackendOpenai: 'OpenAI / Whisper-compatible',
+  sttBackendDeepgram: 'Deepgram',
+  sttApiKey: 'API Key',
+  sttBaseUrl: 'Base URL',
+  sttBaseUrlPlaceholder: 'https://api.openai.com/v1',
+  sttModel: 'Model',
+  sttModelPlaceholderOpenai: 'whisper-1',
+  sttModelPlaceholderDeepgram: 'nova-2',
+  sttLanguage: 'Language (leave blank for multi-language auto-detect)',
+  sttLanguagePlaceholder: 'e.g. es, en, pt — blank = auto-detect',
+  sttKeepAudio: 'Keep raw audio in FATFS (debug / retry)',
+  sttKeepAudioHint:
+    'Off by default — voice notes stream straight from Telegram into the STT API (faster, no flash wear). Enable to also save the original .oga to /fatfs/inbox/ for retry or inspection.',
 
   sectionIm: 'Instant Messaging (IM)',
   imAdd: 'Add',

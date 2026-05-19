@@ -59,4 +59,47 @@ menu "Default Search Settings"
 
 endmenu
 
+menu "Default Speech-to-Text Settings"
+
+    config APP_STT_ENABLED
+        bool "Enable inbound voice transcription by default"
+        default n
+        help
+            When enabled, voice and audio attachments received over chat
+            platforms (e.g. Telegram voice notes) are transcribed via the
+            configured STT backend and injected as text into the agent.
+
+    config APP_STT_BACKEND_TYPE
+        string "Default STT backend"
+        default "openai"
+        help
+            "openai" targets the OpenAI-compatible
+            /v1/audio/transcriptions endpoint (Whisper, Groq, self-hosted).
+            "deepgram" targets the Deepgram /v1/listen endpoint with raw
+            audio body.
+
+    config APP_STT_API_KEY
+        string "Default STT API key"
+        default ""
+
+    config APP_STT_BASE_URL
+        string "Default STT base URL"
+        default "https://api.openai.com/v1"
+        help
+            For Deepgram set to https://api.deepgram.com/v1 .
+
+    config APP_STT_MODEL
+        string "Default STT model"
+        default "whisper-1"
+        help
+            For Deepgram use "nova-2" or similar.
+
+    config APP_STT_LANGUAGE
+        string "Default STT language hint"
+        default ""
+        help
+            ISO 639-1 code (e.g. "es", "en"). Leave blank for auto-detect.
+
+endmenu
+
 endmenu
