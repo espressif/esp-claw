@@ -30,6 +30,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 #define CAP_IM_FEISHU_API_BASE "https://open.feishu.cn/open-apis"
@@ -141,6 +142,8 @@ static cap_im_feishu_state_t s_feishu = {
     .ws_reconnect_interval_ms = 30000,
     .ws_reconnect_nonce_ms = 30000,
 };
+
+static SemaphoreHandle_t s_feishu_lock;
 
 static int64_t cap_im_feishu_now_ms(void)
 {
@@ -324,8 +327,13 @@ static esp_err_t cap_im_feishu_get_tenant_token(void)
     int status = 0;
     int64_t now_ms = cap_im_feishu_now_ms();
     esp_err_t err = ESP_OK;
+    bool token_valid = false;
 
-    if (s_feishu.tenant_token[0] && now_ms + 300000 < s_feishu.token_expire_time_ms) {
+    xSemaphoreTake(s_feishu_lock, portMAX_DELAY);
+    token_valid = s_feishu.tenant_token[0] && now_ms + 300000 < s_feishu.token_expire_time_ms;
+    xSemaphoreGive(s_feishu_lock);
+
+    if (token_valid) {
         return ESP_OK;
     }
     if (!s_feishu.app_id[0] || !s_feishu.app_secret[0]) {
@@ -373,9 +381,11 @@ static esp_err_t cap_im_feishu_get_tenant_token(void)
         return ESP_FAIL;
     }
 
+    xSemaphoreTake(s_feishu_lock, portMAX_DELAY);
     strlcpy(s_feishu.tenant_token, token_json->valuestring, sizeof(s_feishu.tenant_token));
     s_feishu.token_expire_time_ms = now_ms +
                                     (int64_t)(cJSON_IsNumber(expire_json) ? expire_json->valueint : 7200) * 1000LL;
+    xSemaphoreGive(s_feishu_lock);
     ESP_LOGI(TAG, "Feishu tenant token refreshed");
     cJSON_Delete(root);
     return ESP_OK;
@@ -913,8 +923,17 @@ static int cap_im_feishu_ws_send_frame(const cap_im_feishu_ws_frame_t *frame,
     uint8_t buf[1024];
     size_t pos = 0;
     size_t i = 0;
+    esp_websocket_client_handle_t client;
 
-    if (!frame || !s_feishu.ws_client) {
+    if (!frame) {
+        return -1;
+    }
+
+    xSemaphoreTake(s_feishu_lock, portMAX_DELAY);
+    client = s_feishu.ws_client;
+    xSemaphoreGive(s_feishu_lock);
+
+    if (!client) {
         return -1;
     }
 
@@ -1655,7 +1674,6 @@ static void cap_im_feishu_attachment_task(void *arg)
                 }
                 cap_im_feishu_free_attachment_job(job);
             }
-            continue;
         }
 
         if (s_feishu.stop_requested) {
@@ -2369,18 +2387,22 @@ static void cap_im_feishu_ws_event_handler(void *arg,
     (void)base;
 
     if (event_id == WEBSOCKET_EVENT_CONNECTED) {
+        xSemaphoreTake(s_feishu_lock, portMAX_DELAY);
         s_feishu.ws_connected = true;
         s_feishu.ws_ever_connected = true;
         s_feishu.ws_disconnect_since_ms = 0;
+        xSemaphoreGive(s_feishu_lock);
         ESP_LOGI(TAG, "Feishu WS connected");
         return;
     }
 
     if (event_id == WEBSOCKET_EVENT_DISCONNECTED) {
+        xSemaphoreTake(s_feishu_lock, portMAX_DELAY);
         s_feishu.ws_connected = false;
         if (s_feishu.ws_ever_connected && s_feishu.ws_disconnect_since_ms == 0) {
             s_feishu.ws_disconnect_since_ms = cap_im_feishu_now_ms();
         }
+        xSemaphoreGive(s_feishu_lock);
         ESP_LOGW(TAG, "Feishu WS disconnected");
         return;
     }
@@ -3166,6 +3188,13 @@ esp_err_t cap_im_feishu_register_group(void)
         return ESP_OK;
     }
 
+    if (!s_feishu_lock) {
+        s_feishu_lock = xSemaphoreCreateMutex();
+        if (!s_feishu_lock) {
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
     return claw_cap_register_group(&s_feishu_group);
 }
 
@@ -3203,14 +3232,34 @@ esp_err_t cap_im_feishu_set_attachment_config(const cap_im_feishu_attachment_con
 esp_err_t cap_im_feishu_start(void)
 {
     BaseType_t ok;
+    TickType_t deadline;
 
     if (!s_feishu.app_id[0] || !s_feishu.app_secret[0]) {
         ESP_LOGW(TAG, "Feishu not configured, skip start");
         return ESP_OK;
     }
-    if (s_feishu.ws_task) {
+
+    xSemaphoreTake(s_feishu_lock, portMAX_DELAY);
+    if (s_feishu.ws_task && !s_feishu.stop_requested) {
+        xSemaphoreGive(s_feishu_lock);
         return ESP_OK;
     }
+    xSemaphoreGive(s_feishu_lock);
+
+    /* If a previous stop() is in progress or tasks haven't exited yet, wait. */
+    deadline = xTaskGetTickCount() + pdMS_TO_TICKS(10000);
+    while (s_feishu.ws_task && xTaskGetTickCount() < deadline) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    if (s_feishu.ws_task) {
+        ESP_LOGW(TAG, "Feishu start: previous ws_task did not exit");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    xSemaphoreTake(s_feishu_lock, portMAX_DELAY);
+    s_feishu.stop_requested = false;
+    xSemaphoreGive(s_feishu_lock);
+
     if (!s_feishu.attachment_queue) {
         s_feishu.attachment_queue = xQueueCreate(CAP_IM_FEISHU_ATTACHMENT_QUEUE_LEN,
                                                  sizeof(cap_im_feishu_attachment_job_t *));
@@ -3230,14 +3279,16 @@ esp_err_t cap_im_feishu_start(void)
                               NULL,
                               &s_feishu.attachment_task);
         if (ok != pdPASS) {
-            vQueueDelete(s_feishu.attachment_queue);
-            s_feishu.attachment_queue = NULL;
+            if (s_feishu.attachment_queue) {
+                vQueueDelete(s_feishu.attachment_queue);
+                s_feishu.attachment_queue = NULL;
+            }
             s_feishu.attachment_task = NULL;
             return ESP_ERR_NO_MEM;
         }
     }
 
-    s_feishu.stop_requested = false;
+    xSemaphoreTake(s_feishu_lock, portMAX_DELAY);
     ok = claw_task_create(&(claw_task_config_t){
                               .name = "feishu_ws",
                               .stack_size = 8192,
@@ -3248,16 +3299,23 @@ esp_err_t cap_im_feishu_start(void)
                           cap_im_feishu_ws_task,
                           NULL,
                           &s_feishu.ws_task);
+    xSemaphoreGive(s_feishu_lock);
     if (ok != pdPASS) {
+        xSemaphoreTake(s_feishu_lock, portMAX_DELAY);
+        s_feishu.ws_task = NULL;
+        xSemaphoreGive(s_feishu_lock);
+        if (s_feishu.attachment_queue) {
+            cap_im_feishu_attachment_job_t *job = NULL;
+            while (xQueueReceive(s_feishu.attachment_queue, &job, 0) == pdTRUE) {
+                cap_im_feishu_free_attachment_job(job);
+            }
+            vQueueDelete(s_feishu.attachment_queue);
+            s_feishu.attachment_queue = NULL;
+        }
         if (s_feishu.attachment_task) {
             claw_task_delete(s_feishu.attachment_task);
             s_feishu.attachment_task = NULL;
         }
-        if (s_feishu.attachment_queue) {
-            vQueueDelete(s_feishu.attachment_queue);
-            s_feishu.attachment_queue = NULL;
-        }
-        s_feishu.ws_task = NULL;
         return ESP_ERR_NO_MEM;
     }
 
@@ -3267,24 +3325,35 @@ esp_err_t cap_im_feishu_start(void)
 esp_err_t cap_im_feishu_stop(void)
 {
     TickType_t deadline = 0;
+    bool had_tasks = false;
 
-    if (!s_feishu.ws_task && !s_feishu.attachment_task) {
+    xSemaphoreTake(s_feishu_lock, portMAX_DELAY);
+    had_tasks = s_feishu.ws_task || s_feishu.attachment_task;
+    if (!had_tasks) {
+        s_feishu.stop_requested = false;
+        xSemaphoreGive(s_feishu_lock);
         return ESP_OK;
     }
-
     s_feishu.stop_requested = true;
     if (s_feishu.ws_client) {
         esp_websocket_client_stop(s_feishu.ws_client);
     }
+    xSemaphoreGive(s_feishu_lock);
 
-    deadline = xTaskGetTickCount() + pdMS_TO_TICKS(5000);
+    deadline = xTaskGetTickCount() + pdMS_TO_TICKS(10000);
     while ((s_feishu.ws_task || s_feishu.attachment_task) && xTaskGetTickCount() < deadline) {
         vTaskDelay(pdMS_TO_TICKS(100));
     }
+
+    xSemaphoreTake(s_feishu_lock, portMAX_DELAY);
     if (s_feishu.ws_task || s_feishu.attachment_task) {
+        xSemaphoreGive(s_feishu_lock);
         ESP_LOGW(TAG, "Feishu stop timed out");
         return ESP_ERR_TIMEOUT;
     }
+
+    s_feishu.ws_client = NULL;
+    s_feishu.ws_connected = false;
     if (s_feishu.attachment_queue) {
         cap_im_feishu_attachment_job_t *job = NULL;
 
@@ -3294,9 +3363,7 @@ esp_err_t cap_im_feishu_stop(void)
         vQueueDelete(s_feishu.attachment_queue);
         s_feishu.attachment_queue = NULL;
     }
-
-    s_feishu.ws_client = NULL;
-    s_feishu.ws_connected = false;
+    xSemaphoreGive(s_feishu_lock);
     return ESP_OK;
 }
 
