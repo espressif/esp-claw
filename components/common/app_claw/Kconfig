@@ -215,6 +215,15 @@ menu "App Claw Config"
                 Enable the UART Lua driver and keep app_claw's direct dependency
                 on lua_driver_uart when Lua capability is enabled.
 
+        config APP_CLAW_LUA_DRIVER_TWAI
+            bool "Enable TWAI Lua driver"
+            default y if SOC_TWAI_SUPPORTED
+            default n
+            help
+                Enable the TWAI Lua driver (Two-Wire Automotive Interface / CAN bus)
+                and keep app_claw's direct dependency on lua_driver_twai when Lua
+                capability is enabled. Defaults to n on chips without TWAI hardware.
+
         comment "--- Higher-level modules (lua_module) ---"
 
         config APP_CLAW_LUA_MODULE_AUDIO
@@ -345,13 +354,6 @@ menu "App Claw Config"
             help
                 Enable the LED strip Lua module and keep app_claw's direct dependency
                 on lua_module_led_strip when Lua capability is enabled.
-
-        config APP_CLAW_LUA_MODULE_LVGL
-            bool "Enable LVGL Lua module"
-            default n
-            help
-                Enable the LVGL Lua module and keep app_claw's direct dependency
-                on lua_module_lvgl when Lua capability is enabled.
 
         config APP_CLAW_LUA_MODULE_MAGNETOMETER
             bool "Enable magnetometer Lua module"

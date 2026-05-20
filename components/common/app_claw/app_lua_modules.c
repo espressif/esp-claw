@@ -35,6 +35,9 @@
 #if CONFIG_APP_CLAW_LUA_DRIVER_UART
 #include "lua_driver_uart.h"
 #endif
+#if CONFIG_APP_CLAW_LUA_DRIVER_TWAI
+#include "lua_driver_twai.h"
+#endif
 
 /* --- lua_module (higher-level modules) --- */
 #if CONFIG_APP_CLAW_LUA_MODULE_AUDIO && defined(CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT)
@@ -87,9 +90,6 @@
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_LED_STRIP
 #include "lua_module_led_strip.h"
-#endif
-#if CONFIG_APP_CLAW_LUA_MODULE_LVGL
-#include "lua_module_lvgl.h"
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_MAGNETOMETER
 #include "lua_module_magnetometer.h"
@@ -284,6 +284,14 @@ static esp_err_t app_lua_register_uart(const char *fatfs_base_path)
 }
 #endif
 
+#if CONFIG_APP_CLAW_LUA_DRIVER_TWAI
+static esp_err_t app_lua_register_twai(const char *fatfs_base_path)
+{
+    (void)fatfs_base_path;
+    return lua_driver_twai_register();
+}
+#endif
+
 /* --- lua_module register wrappers --- */
 
 #if CONFIG_APP_CLAW_LUA_MODULE_AUDIO && defined(CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT)
@@ -422,14 +430,6 @@ static esp_err_t app_lua_register_led_strip(const char *fatfs_base_path)
 }
 #endif
 
-#if CONFIG_APP_CLAW_LUA_MODULE_LVGL
-static esp_err_t app_lua_register_lvgl(const char *fatfs_base_path)
-{
-    (void)fatfs_base_path;
-    return lua_module_lvgl_register();
-}
-#endif
-
 #if CONFIG_APP_CLAW_LUA_MODULE_MAGNETOMETER
 static esp_err_t app_lua_register_magnetometer(const char *fatfs_base_path)
 {
@@ -484,6 +484,9 @@ static const app_lua_module_entry_t s_lua_module_entries[] = {
 #if CONFIG_APP_CLAW_LUA_DRIVER_UART
     { "uart", "UART", app_lua_register_uart },
 #endif
+#if CONFIG_APP_CLAW_LUA_DRIVER_TWAI
+    { "twai", "TWAI", app_lua_register_twai },
+#endif
     /* --- lua_module (higher-level modules) --- */
 #if CONFIG_APP_CLAW_LUA_MODULE_AUDIO && defined(CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT)
     { "audio", "Audio", app_lua_register_audio },
@@ -535,9 +538,6 @@ static const app_lua_module_entry_t s_lua_module_entries[] = {
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_LED_STRIP
     { "led_strip", "LED Strip", app_lua_register_led_strip },
-#endif
-#if CONFIG_APP_CLAW_LUA_MODULE_LVGL
-    { "lvgl", "LVGL", app_lua_register_lvgl },
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_MAGNETOMETER
     { "magnetometer", "Magnetometer", app_lua_register_magnetometer },
@@ -627,9 +627,6 @@ static const app_lua_module_info_t s_lua_module_infos[] = {
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_LED_STRIP
     { "led_strip", "LED Strip" },
-#endif
-#if CONFIG_APP_CLAW_LUA_MODULE_LVGL
-    { "lvgl", "LVGL" },
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_MAGNETOMETER
     { "magnetometer", "Magnetometer" },

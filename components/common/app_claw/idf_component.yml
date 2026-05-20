@@ -145,6 +145,12 @@ dependencies:
       - if: $CONFIG{APP_CLAW_LUA_DRIVER_UART} == True
     path: ../../lua_modules/lua_driver_uart
 
+  lua_driver_twai:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
+      - if: $CONFIG{APP_CLAW_LUA_DRIVER_TWAI} == True
+    path: ../../lua_modules/lua_driver_twai
+
   # --- lua_module (higher-level modules) ---
 
   lua_module_audio:
@@ -258,12 +264,6 @@ dependencies:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True
       - if: $CONFIG{APP_CLAW_LUA_MODULE_LED_STRIP} == True
     path: ../../lua_modules/lua_module_led_strip
-
-  lua_module_lvgl:
-    rules:
-      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
-      - if: $CONFIG{APP_CLAW_LUA_MODULE_LVGL} == True
-    path: ../../lua_modules/lua_module_lvgl
 
   lua_module_magnetometer:
     rules:
