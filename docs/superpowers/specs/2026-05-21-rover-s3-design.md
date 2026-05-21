@@ -63,7 +63,7 @@ components/claw_capabilities/cap_voice/
 
 Raw I2S without ESP-ADF. ES8311 codec managed via `esp_codec_dev` (Espressif managed component). Capture: 16 kHz, 16-bit, mono (required by WakeNet/MultiNet/Whisper). Playback: 24 kHz, 16-bit, mono (matches OpenAI TTS PCM output). ES8311 sample rate is switched between capture and playback modes.
 
-Wake word: **"Hi ESP"** (built-in WakeNet v2 English model). Configurable via Kconfig `CONFIG_CAP_VOICE_WAKEWORD_MODEL`.
+Wake word: **"Hi ESP"** (built-in WakeNet v2 English model). After the wake word, all commands are spoken in any language — Whisper handles Russian naturally. Configurable via Kconfig `CONFIG_CAP_VOICE_WAKEWORD_MODEL`.
 
 ### Voice pipeline state machine
 
