@@ -1,0 +1,7 @@
+board_name: m5sticks3
+vendor: m5stack
+chip: esp32s3
+flash_size: 8MB
+psram_size: 8MB
+display: ST7789P3 135x240
+imu: BMI270

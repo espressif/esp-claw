@@ -1,0 +1,13 @@
+devices:
+  - id: display
+    type: spi_lcd
+    driver: st7789
+    width: 135
+    height: 240
+  - id: imu
+    type: i2c_sensor
+    driver: bmi270
+  - id: codec
+    type: i2c_audio
+    driver: es8311
+    i2c_addr: "0x18"
