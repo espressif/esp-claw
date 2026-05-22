@@ -284,10 +284,11 @@ esp_err_t claw_memory_init(const claw_memory_config_t *config)
     safe_copy(s_memory.memory_root_dir,
               sizeof(s_memory.memory_root_dir),
               config->memory_root_dir);
-    s_memory.max_session_messages = config->max_session_messages ?
-        config->max_session_messages : CLAW_MEMORY_DEFAULT_MAX_SESSION_MESSAGES;
     s_memory.max_message_chars = config->max_message_chars ?
         config->max_message_chars : CLAW_MEMORY_DEFAULT_MAX_MESSAGE_CHARS;
+    s_memory.max_tool_iterations = config->max_tool_iterations ?
+        config->max_tool_iterations : CLAW_MEMORY_DEFAULT_MAX_TOOL_ITERATIONS;
+    s_memory.backend_format = claw_memory_backend_format_from_type(config->llm.backend_type);
     s_memory.next_memory_seq = claw_memory_now_sec() % 10000U;
 
     if (claw_memory_join_path(s_memory.markdown_path,

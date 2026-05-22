@@ -227,15 +227,15 @@ def _resolve_console_output(sdkconfig: Dict) -> str:
     if sdkconfig.get('ESP_CONSOLE_UART') is True:
         return 'UART'
     if sdkconfig.get('ESP_CONSOLE_USB_SERIAL_JTAG') is True:
-        return 'JTAG'
+        return 'Serial JTAG'
     return 'unknown'
 
 
 def _console_output_filename_suffix(console_output: str) -> str:
     if console_output == 'UART':
         return '__uart'
-    if console_output == 'JTAG':
-        return '__jtag'
+    if console_output == 'Serial JTAG':
+        return '__serial_jtag'
     return '__unknown'
 
 

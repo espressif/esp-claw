@@ -1,0 +1,80 @@
+version: 1.0.0
+devices:
+  - name: led_strip
+    chip: ws2812
+    type: custom
+    version: default
+    init_skip: true
+    dependencies:
+      espressif/led_strip:
+        version: "^3.0"
+        public: true
+    config:
+      max_leds: 1
+    peripherals:
+      - name: rmt_tx
+
+  - name: audio_dac
+    chip: es8311
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: false
+      dac_enabled: true
+      dac_max_channel: 1
+      dac_channel_mask: "1"
+      mclk_enabled: true
+    peripherals:
+      - name: gpio_pa_control
+        gain: 6
+        active_level: 1
+      - name: i2s_audio_out
+      - name: i2c_master
+        address: 0x30
+        frequency: 400000
+
+  - name: audio_adc
+    chip: es8311
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      dac_enabled: false
+      adc_max_channel: 1
+      adc_channel_mask: "1"
+      adc_init_gain: 0
+      mclk_enabled: true
+    peripherals:
+      - name: i2s_audio_in
+      - name: i2c_master
+        address: 0x30
+        frequency: 400000
+
+  - name: display_lcd
+    chip: st77916
+    type: display_lcd
+    sub_type: spi
+    version: default
+    dependencies:
+      espressif/esp_lcd_st77916: "*"
+    config:
+      x_max: 360
+      y_max: 360
+      io_spi_config:
+        cs_gpio_num: 3
+        dc_gpio_num: -1
+        spi_mode: 0
+        lcd_cmd_bits: 32
+        flags:
+          quad_mode: true
+      lcd_panel_config:
+        reset_gpio_num: 1
+        vendor_config: NULL
+    peripherals:
+      - name: spi_display
+
+  - name: lcd_brightness
+    type: ledc_ctrl
+    version: default
+    peripherals:
+      - name: ledc_backlight

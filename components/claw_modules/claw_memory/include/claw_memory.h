@@ -34,8 +34,8 @@ typedef struct {
 typedef struct {
     const char *session_root_dir;
     const char *memory_root_dir;
-    size_t max_session_messages;
     size_t max_message_chars;
+    uint32_t max_tool_iterations;
     claw_memory_llm_config_t llm;
     bool enable_async_extract_stage_note;
 } claw_memory_config_t;
@@ -72,18 +72,17 @@ esp_err_t claw_memory_forget_with_result(const char *memory_id,
                                          claw_memory_item_t *out_item,
                                          bool *out_changed);
 esp_err_t claw_memory_list(char **out_json);
-esp_err_t claw_memory_session_append(const char *session_id,
-                                     const char *user_text,
-                                     const char *assistant_text);
 esp_err_t claw_memory_note_session_summary(const char *session_id,
                                            const char *summary_list);
 esp_err_t claw_memory_item_primary_summary_label(const claw_memory_item_t *item,
                                                  char *buf,
                                                  size_t size);
-esp_err_t claw_memory_append_session_turn_callback(const char *session_id,
-                                                   const char *user_text,
-                                                   const char *assistant_text,
-                                                   void *user_ctx);
+esp_err_t claw_memory_persist_session_callback(const claw_session_persist_batch_t *batch,
+                                               void *user_ctx);
+esp_err_t claw_memory_request_gate_callback(const claw_core_request_t *request,
+                                            char *reject_message,
+                                            size_t reject_message_size,
+                                            void *user_ctx);
 esp_err_t claw_memory_request_start_callback(const claw_core_request_t *request,
                                              void *user_ctx);
 esp_err_t claw_memory_request_mark_manual_write(uint32_t request_id);

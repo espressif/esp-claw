@@ -25,6 +25,7 @@ public/d2/docs
 
 # firmware for test
 public/merged_binary/*.bin
+src/flash-tool/firmware.json
 
 # AI Related files
 .codex

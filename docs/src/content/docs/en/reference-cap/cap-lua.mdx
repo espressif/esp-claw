@@ -14,10 +14,10 @@ ESP-Claw uses **Lua** as the primary on-device language for **programmable autom
 
 ### 1. LLM-programmable execution layer
 
-The LLM can author scripts (`lua_write_script`) and run them (`lua_run_script`). Lua bridges natural-language plans to hardware: GPIO, display, audio, etc.
+The LLM can author scripts with file tools (`write_file`) and run them (`lua_run_script`). Lua bridges natural-language plans to hardware: GPIO, display, audio, etc.
 
 ```
-LLM decides → emits Lua → lua_write_script saves → lua_run_script runs → hardware reacts
+LLM decides → emits Lua → write_file saves under scripts/ → lua_run_script runs → hardware reacts
 ```
 
 ### 2. Vehicle for automation actions
@@ -48,10 +48,9 @@ Writable `cap_lua` runtime scripts must live under the Script Base Dir. In `edge
 
 - `path` must target a `.lua` file.
 - `path` supports two forms:
-  - Short relative path: e.g. `hello.lua` or `demo/hello.lua` (auto-expanded to `${base_dir}/...` and must not contain `..`).
-  - Skill read-only script absolute path: e.g. `/fatfs/skills/light_switch/scripts/led_strip_switch.lua` (normally produced by `{CUR_SKILL_DIR}` expansion, must stay under the Skill root, and must not contain `..`).
-- `lua_list_scripts` recursively scans the Script Base Dir and returns relative paths.
-- `lua_list_scripts.prefix` uses a relative-path prefix, and `keyword` does case-insensitive matching against relative paths.
+  - Managed relative path: e.g. `hello.lua` or `builtin/test/hello.lua` (auto-expanded under `${base_dir}` and must not contain `..`).
+  - Skill-local absolute path: e.g. `{CUR_SKILL_DIR}/scripts/hello.lua` when an active skill documents that script. It resolves under `/fatfs/skills/<skill_id>/scripts/...`, must stay under the Skill root, and must not contain `..`.
+- Discover and read scripts with file tools: `list_dir {"keyword":"scripts/"}` and `read_file {"path":"scripts/hello.lua"}`.
 
 ### Module registration lock
 
@@ -67,12 +66,10 @@ cap_lua_register_group();        // then lock
 
 ## `cap_lua` tool surface
 
-`cap_lua` currently registers eight Callables:
+`cap_lua` currently registers six Callables:
 
 | Tool ID | Purpose |
 |---------|---------|
-| `lua_list_scripts` | List `.lua` files under the managed tree |
-| `lua_write_script` | Write (create or overwrite) a script |
 | `lua_run_script` | **Sync** run; block until output |
 | `lua_run_script_async` | **Async** enqueue; returns `job_id` immediately |
 | `lua_list_async_jobs` | List async jobs (status filter) |
@@ -123,13 +120,13 @@ local speed = input.speed or 100
 When `lua_run_script` / `lua_run_script_async` is triggered by the Agent inside an IM conversation, if the tool call does not explicitly provide `args.channel`, `args.chat_id`, or `args.session_id`, the runtime auto-merges the current session context into `args`.
 This lets scripts read conversation context directly (for example, for replies) without passing these fields every time.
 
-### `overwrite` on `lua_write_script`
+### Authoring scripts with file tools
 
 ```json
-{"path": "hello.lua", "content": "print('hello')", "overwrite": false}
+{"path": "scripts/hello.lua", "content": "print('hello')"}
 ```
 
-With `overwrite: false`, an existing file errors instead of being clobbered. Default is `true` (overwrite).
+Use `write_file` to create or overwrite Lua scripts under the file capability base dir. Then run the same script through `lua_run_script` with the leading `scripts/` removed, for example `{"path":"hello.lua"}`.
 
 ## Runtime limits and stability
 
@@ -146,9 +143,6 @@ With `overwrite: false`, an existing file errors instead of being clobbered. Def
 Besides tools, `cap_lua` exposes C helpers for firmware code:
 
 ```c
-// write script
-cap_lua_write_script("startup.lua", lua_code, true, output, sizeof(output));
-
 // sync run
 cap_lua_run_script("startup.lua", NULL, 3000, output, sizeof(output));
 
@@ -188,7 +182,7 @@ running -> stopped
 
 ## Coordination With Skills
 
-The `cap_lua` Skill instructs the model to check and stop running Lua async jobs before deactivating the Skill. At runtime, `cap_lua_async_jobs_provider` also injects the current async-job summary into context so the model can avoid leaving long-lived jobs behind.
+The `cap_lua` Skill instructs the model to inspect running Lua async jobs with `lua_list_async_jobs` / `lua_get_async_job` before stopping, replacing, or deactivating long-lived work.
 
 <Aside type="tip">
   **Suggested workflow:** For peripheral-heavy scripts (continuous animation), submit with `lua_run_script_async` so the LLM can tell the user “started” immediately, then poll `lua_get_async_job` without stalling the Agent loop on a long script.

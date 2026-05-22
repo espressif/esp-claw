@@ -65,45 +65,35 @@ assert(display.init(panel_handle, io_handle, width, height, panel_if))
 
 local frame_active = false
 local ok, err = pcall(function()
-    display.begin_frame({ clear = true, r = 8, g = 18, b = 36 })
+    display.begin_frame({ clear = true, color = { r = 8, g = 18, b = 36 } })
     frame_active = true
 
     display.draw_text(20, 32, "ESP-Claw LCD Demo", {
-        r = 255,
-        g = 240,
-        b = 120,
+        color = { r = 255, g = 240, b = 120 },
         font_size = 24,
     })
 
     display.draw_text(20, 74, "Board: esp32_S3_DevKitC_1_breadboard", {
-        r = 220,
-        g = 230,
-        b = 255,
+        color = { r = 220, g = 230, b = 255 },
         font_size = 14,
     })
 
     display.draw_text(20, 102, "Panel: ST7789 SPI 320x240", {
-        r = 120,
-        g = 255,
-        b = 180,
+        color = { r = 120, g = 255, b = 180 },
         font_size = 18,
     })
 
     display.draw_text(20, 132, "Hello from Lua", {
-        r = 255,
-        g = 255,
-        b = 255,
+        color = "white",
         font_size = 20,
     })
 
     display.draw_text(20, 160, "Pins: SCLK=4 MOSI=5 CS=15 DC=7 RST=6 BL=16", {
-        r = 180,
-        g = 190,
-        b = 210,
+        color = { r = 180, g = 190, b = 210 },
         font_size = 12,
     })
 
-    display.draw_rect(12, 20, width - 24, height - 40, 90, 170, 255)
+    display.draw_rect(12, 20, width - 24, height - 40, { r = 90, g = 170, b = 255 })
     display.present()
     delay.delay_ms(HOLD_MS)
 end)

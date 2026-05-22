@@ -1,0 +1,5 @@
+board: m5stack_tab5
+chip: esp32p4
+version: 1.0.0
+description: "m5stack_tab5"
+manufacturer: "ESPRESSIF"

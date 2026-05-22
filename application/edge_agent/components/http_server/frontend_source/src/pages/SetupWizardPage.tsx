@@ -23,6 +23,8 @@ import { LanguageSwitcher } from '../components/layout/LanguageSwitcher';
 import { Banner } from '../components/ui/Banner';
 import { Button } from '../components/ui/Button';
 import { TextInput } from '../components/ui/FormField';
+import { LabelLink } from '../components/ui/LabelLink';
+import { getProviderLinks, TAVILY_API_KEY_URL } from '../constants/externalLinks';
 import { t } from '../i18n';
 import { appConfig, ensureConfigGroups, patchConfigLocal } from '../state/config';
 import { pushToast } from '../state/toast';
@@ -82,6 +84,7 @@ type ImForm = {
 type SearchForm = {
   search_brave_key: string;
   search_tavily_key: string;
+  search_http_allowlist: string;
 };
 
 type ProviderPreset = {
@@ -212,6 +215,7 @@ function searchFromConfig(config: Partial<AppConfig>): SearchForm {
   return {
     search_brave_key: config.search_brave_key ?? '',
     search_tavily_key: config.search_tavily_key ?? '',
+    search_http_allowlist: config.search_http_allowlist ?? '',
   };
 }
 
@@ -484,6 +488,20 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
   onMount(async () => {
     setLoading(true);
     setError(null);
+
+    {
+      const offsetMin = new Date().getTimezoneOffset();
+      const absH = Math.floor(Math.abs(offsetMin) / 60);
+      const absM = Math.abs(offsetMin) % 60;
+      const sign = offsetMin >= 0 ? '' : '-';
+      const tz = `UTC${sign}${absH}${absM ? ':' + String(absM).padStart(2, '0') : ''}`;
+      saveConfigPatch({ time_timezone: tz })
+        .then(() => patchConfigLocal({ time_timezone: tz }))
+        .catch(() => {
+          console.error('Failed to save time_timezone to config');
+        });
+    }
+
     try {
       await ensureConfigGroups(['llm', 'im', 'search']);
       batch(() => {
@@ -525,6 +543,7 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
   const remainingPlatforms = createMemo(() =>
     PLATFORM_ORDER.filter((id) => !selectedPlatforms().includes(id)),
   );
+  const providerLinks = createMemo(() => getProviderLinks(provider()));
 
   const applyPreset = (key: ProviderKey) => {
     const preset = PROVIDER_PRESETS[key];
@@ -711,6 +730,7 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
   const saveSearch = async () => {
     await savePatch({
       search_tavily_key: searchForm.search_tavily_key.trim(),
+      search_http_allowlist: searchForm.search_http_allowlist.trim(),
     });
   };
 
@@ -959,13 +979,35 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
                       </div>
                     </div>
                     <TextInput
-                      label={t('llmModel')}
+                      label={
+                        <>
+                          {t('llmModel')}
+                          <Show when={providerLinks()}>
+                            {(links) => (
+                              <LabelLink href={links().docsUrl}>
+                                {t('llmProviderDocs') as string} ↗
+                              </LabelLink>
+                            )}
+                          </Show>
+                        </>
+                      }
                       value={llmForm.llm_model}
                       onInput={(event) => setLlmForm('llm_model', event.currentTarget.value)}
                     />
                     <TextInput
                       type="password"
-                      label={t('llmApiKey')}
+                      label={
+                        <>
+                          {t('llmApiKey')}
+                          <Show when={providerLinks()}>
+                            {(links) => (
+                              <LabelLink href={links().consoleUrl}>
+                                {t('llmProviderConsole') as string} ↗
+                              </LabelLink>
+                            )}
+                          </Show>
+                        </>
+                      }
                       value={llmForm.llm_api_key}
                       onInput={(event) => setLlmForm('llm_api_key', event.currentTarget.value)}
                     />
@@ -1050,9 +1092,24 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
                   <div class="grid gap-4 sm:grid-cols-2">
                     <TextInput
                       type="password"
-                      label={t('searchTavilyKey')}
+                      label={
+                        <>
+                          {t('searchTavilyKey')}
+                          <LabelLink href={TAVILY_API_KEY_URL}>
+                            {t('llmProviderConsole') as string} ↗
+                          </LabelLink>
+                        </>
+                      }
                       value={searchForm.search_tavily_key}
                       onInput={(event) => setSearchForm('search_tavily_key', event.currentTarget.value)}
+                    />
+                    <TextInput
+                      label={t('searchHttpAllowlist')}
+                      placeholder={t('searchHttpAllowlistPlaceholder') as string}
+                      value={searchForm.search_http_allowlist}
+                      onInput={(event) =>
+                        setSearchForm('search_http_allowlist', event.currentTarget.value)
+                      }
                     />
                   </div>
                 </Match>

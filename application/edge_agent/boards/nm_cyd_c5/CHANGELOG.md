@@ -1,5 +1,121 @@
 # Changelog
 
+## [2026-05-22]
+
+合并上游 `espressif/master`（`a7be159`）到 `nm-cyd-c5`，完成冲突处理、技能目录迁移适配与功能兼容性核验。
+
+---
+
+### Merge Conflict Summary
+
+- **冲突文件总数：21**
+  - `application/edge_agent/components/http_server/CMakeLists.txt`
+  - `application/edge_agent/main/idf_component.yml`
+  - `application/edge_agent/main/main.c`
+  - `application/edge_agent/sdkconfig.defaults`
+  - `components/claw_capabilities/cap_skill_mgr/src/cap_skill_mgr.c`
+  - `components/claw_modules/claw_skill/src/claw_skill.c`
+  - `components/common/app_claw/Kconfig`
+  - `components/common/app_claw/app_lua_modules.c`
+  - `components/common/app_claw/idf_component.yml`
+  - `components/common/wifi_manager/wifi_manager.c`
+  - `components/lua_modules/lua_module_display/CMakeLists.txt`
+  - `components/lua_modules/lua_module_display/src/display_hal.c`
+  - `components/lua_modules/lua_module_display/src/display_hal.h`
+  - `application/edge_agent/fatfs_image/skills/lua_demo/scripts/nm_cyd_c5_backlight.lua`
+  - `application/edge_agent/fatfs_image/skills/lua_demo/scripts/nm_cyd_c5_gps.lua`
+  - `application/edge_agent/fatfs_image/skills/lua_demo/scripts/nm_cyd_c5_rgb.lua`
+  - `application/edge_agent/fatfs_image/skills/lua_demo/scripts/nm_cyd_c5_screen.lua`
+  - `application/edge_agent/fatfs_image/skills/lua_demo/scripts/nmminer_control.lua`
+  - `application/edge_agent/fatfs_image/skills/lua_demo/scripts/nmminer_info.lua`
+  - `application/edge_agent/fatfs_image/skills/lua_demo/scripts/nmminer_scan.lua`
+  - `application/edge_agent/fatfs_image/skills/lua_demo/scripts/nmminer_setting.lua`
+
+- **处理原则**
+  - `cap_skill_mgr.c`、`claw_skill.c`：采用上游实现，避免技能注册路径与 catalog 语义偏差。
+  - `main.c`：保留 nm-cyd-c5 的 SD 镜像、消息持久化、状态屏逻辑，并合入上游 `claw_ramfs` 初始化。
+  - `wifi_manager.c`：保留本地重连状态清理逻辑，同时合并上游 `ap_behavior=close_on_sta` 行为。
+  - `app_claw` 相关冲突：移除已上游淘汰的 `lua_module_esp_heap` 依赖，保留 `lua_module_http`（保障 nmminer 现有脚本能力）。
+  - `lua_module_display`：保留本地背光百分比接口与分段 swap buffer 优化，兼容上游 `display_color_t` 接口。
+  - skill 路径冲突（`main/skills` -> `fatfs_image/skills`）：采用上游迁移结果，保留 nm-cyd-c5 与 nmminer 脚本。
+
+- **额外修复**
+  - 清理重复技能 ID：删除 `application/edge_agent/main/skills/skill_creator/SKILL.md`，避免与上游 `components/common/skill_builder/skills/skill_creator/SKILL.md` 重复导致构建失败。
+
+---
+
+### Upstream Updated Files (Key Groups)
+
+- **构建与CI**
+  - `.gitlab/ci/build.yml`
+  - `.gitlab/ci/build_apps.py`
+  - `.gitlab/ci/merge_bin.py`
+  - `application/edge_agent/tools/cmake/esp_idf_patch.cmake`
+  - `application/edge_agent/tools/cmake/flash_partition_defaults.cmake`
+
+- **Edge Agent 主工程**
+  - `application/edge_agent/CMakeLists.txt`
+  - `application/edge_agent/main/main.c`
+  - `application/edge_agent/main/idf_component.yml`
+  - `application/edge_agent/main/Kconfig.projbuild`
+  - `application/edge_agent/sdkconfig.defaults`
+  - `application/edge_agent/partitions_8MB.csv`
+  - `application/edge_agent/partitions_16MB.csv`
+  - `application/edge_agent/partitions_32MB.csv`
+
+- **HTTP Server 与前端**
+  - `application/edge_agent/components/http_server/http_server_core.c`
+  - `application/edge_agent/components/http_server/http_server_priv.h`
+  - `application/edge_agent/components/http_server/http_server_lua_app_api.c`
+  - `application/edge_agent/components/http_server/frontend_source/src/pages/WebImPage.tsx`
+  - `application/edge_agent/components/http_server/frontend_source/src/pages/LlmPage.tsx`
+  - `application/edge_agent/components/http_server/frontend_source/src/pages/SetupWizardPage.tsx`
+  - `application/edge_agent/components/http_server/frontend_source/dist/index.html.gz`
+
+- **技能与文件镜像结构迁移**
+  - `application/edge_agent/fatfs_image/skills/lua_demo/SKILL.md`
+  - `application/edge_agent/fatfs_image/skills/lua_demo/scripts/nm_cyd_c5_backlight.lua`
+  - `application/edge_agent/fatfs_image/skills/lua_demo/scripts/nm_cyd_c5_gps.lua`
+  - `application/edge_agent/fatfs_image/skills/lua_demo/scripts/nm_cyd_c5_rgb.lua`
+  - `application/edge_agent/fatfs_image/skills/lua_demo/scripts/nm_cyd_c5_screen.lua`
+  - `application/edge_agent/fatfs_image/skills/lua_demo/scripts/nmminer_control.lua`
+  - `application/edge_agent/fatfs_image/skills/lua_demo/scripts/nmminer_info.lua`
+  - `application/edge_agent/fatfs_image/skills/lua_demo/scripts/nmminer_scan.lua`
+  - `application/edge_agent/fatfs_image/skills/lua_demo/scripts/nmminer_setting.lua`
+
+- **核心组件更新（节选）**
+  - `components/claw_modules/claw_core/src/claw_core.c`
+  - `components/claw_modules/claw_memory/src/claw_memory_session.c`
+  - `components/claw_capabilities/cap_lua/src/cap_lua.c`
+  - `components/common/settings/settings_store.c`
+  - `components/common/wifi_manager/wifi_manager.c`
+  - `components/common/skill_builder/skills/skill_creator/SKILL.md`
+  - `components/common/esp_video/idf_component.yml`
+  - `components/claw_modules/claw_ramfs/src/claw_ramfs.c`
+
+---
+
+### Compatibility Check (nm-cyd-c5 Existing Features)
+
+- [x] `skills/skill_creator`
+  - 结果：通过（采用上游 `components/common/skill_builder/skills/skill_creator/`，移除本地重复定义，避免重复 skill id）。
+
+- [x] `skills/nm_cyd_c5_*`
+  - 结果：通过（4 个脚本均保留并迁移至 `application/edge_agent/fatfs_image/skills/lua_demo/scripts/`）。
+
+- [x] `skills/nmminer`
+  - 结果：通过（4 个 nmminer 脚本均保留并迁移至 `application/edge_agent/fatfs_image/skills/lua_demo/scripts/`）。
+
+- [x] `app_sd_mirror.c/h, SD card backup/restore function`
+  - 结果：通过（组件与依赖仍在；`main.c` 中镜像与恢复调用链保持完整）。
+
+---
+
+### Build Validation Notes
+
+- 当前工作区执行 `idf.py build` 时触发 BLE HID 相关编译错误（`lua_module_ble_hid` 的 `esp_bt.h` 头文件解析），该项为上游新增模块与本地当前 sdkconfig 组合导致的问题，不属于本次冲突处理回归。
+- 本次合并已完成冲突收敛、技能目录迁移与 nm-cyd-c5 既有能力兼容性核验。
+
 ## [2026-05-11]
 
 合并上游 `espressif/master`（`8dc62b4`），同步 WebIM 稳定性增强、LLM 配置去 profile 化、硬件 Lua 模块命名标准化等 8 项核心变更。

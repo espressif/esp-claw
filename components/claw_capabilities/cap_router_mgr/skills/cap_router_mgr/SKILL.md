@@ -81,6 +81,7 @@ Use this skill to inspect and modify event router rules through the direct calla
 - `match.event_type` is required; all other match fields are optional exact-match filters.
 - `event_type`, `event_key`, `source_cap`, and `source_channel` values are not fixed enums in this skill; they must match values emitted elsewhere in the system.
 - Use `match.source_channel` as the canonical rule field. The runtime also accepts `channel` as an alias.
+- To run a script after device boot, match the startup trigger emitted by `app_claw`: `source_cap=app_claw`, `event_type=startup`, `event_key=boot_completed`, and `content_type=trigger`.
 
 ## Actions
 - Supported `type`:
@@ -130,8 +131,17 @@ Use this skill to inspect and modify event router rules through the direct calla
 - Omitting `id` or `actions`, or using an empty `actions` array.
 - Using an unsupported action `type`.
 - Mixing `match.source_channel` with action input `channel`.
+- Using a relative path for `run_script`; use an absolute `.lua` path such as `/fatfs/skills/.../scripts/action.lua`.
 
 ## Canonical examples
+
+### Run Lua script after boot
+
+```json
+{
+  "rule_json": "{\"id\":\"startup_run_lua_script\",\"description\":\"Run a Lua script once the device finishes booting.\",\"enabled\":true,\"consume_on_match\":false,\"ack\":\"startup Lua script executed\",\"match\":{\"source_cap\":\"app_claw\",\"event_type\":\"startup\",\"event_key\":\"boot_completed\",\"content_type\":\"trigger\"},\"actions\":[{\"type\":\"run_script\",\"input\":{\"path\":\"/fatfs/skills/example_skill/scripts/startup.lua\",\"args\":{}}}]}"
+}
+```
 
 ### New session on `/new`
 

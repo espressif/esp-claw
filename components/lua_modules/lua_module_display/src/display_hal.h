@@ -14,6 +14,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include "display_color.h"
 #include "esp_err.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
@@ -63,58 +64,58 @@ int display_hal_height(void);
 
 /* --- Frame control --- */
 
-esp_err_t display_hal_begin_frame(bool clear, uint16_t color565);
+esp_err_t display_hal_begin_frame(bool clear, display_color_t color);
 esp_err_t display_hal_present(void);
-esp_err_t display_hal_present_rect(int x, int y, int width, int height);
+esp_err_t display_hal_present_full(void);
 esp_err_t display_hal_end_frame(void);
 bool display_hal_is_frame_active(void);
 esp_err_t display_hal_get_animation_info(display_hal_animation_info_t *info);
 
 /* --- Drawing primitives --- */
 
-esp_err_t display_hal_clear(uint16_t color565);
+esp_err_t display_hal_clear(display_color_t color);
 esp_err_t display_hal_set_clip_rect(int x, int y, int width, int height);
 esp_err_t display_hal_clear_clip_rect(void);
-esp_err_t display_hal_fill_rect(int x, int y, int width, int height, uint16_t color565);
-esp_err_t display_hal_draw_line(int x0, int y0, int x1, int y1, uint16_t color565);
-esp_err_t display_hal_draw_rect(int x, int y, int width, int height, uint16_t color565);
-esp_err_t display_hal_draw_pixel(int x, int y, uint16_t color565);
+esp_err_t display_hal_fill_rect(int x, int y, int width, int height, display_color_t color);
+esp_err_t display_hal_draw_line(int x0, int y0, int x1, int y1, display_color_t color);
+esp_err_t display_hal_draw_rect(int x, int y, int width, int height, display_color_t color);
+esp_err_t display_hal_draw_pixel(int x, int y, display_color_t color);
 esp_err_t display_hal_set_backlight(bool on);
 esp_err_t display_hal_set_backlight_percent(uint8_t percent);
-esp_err_t display_hal_fill_circle(int cx, int cy, int r, uint16_t color565);
-esp_err_t display_hal_draw_circle(int cx, int cy, int r, uint16_t color565);
+esp_err_t display_hal_fill_circle(int cx, int cy, int r, display_color_t color);
+esp_err_t display_hal_draw_circle(int cx, int cy, int r, display_color_t color);
 esp_err_t display_hal_draw_arc(int cx, int cy, int radius,
-                               float start_deg, float end_deg, uint16_t color565);
+                               float start_deg, float end_deg, display_color_t color);
 esp_err_t display_hal_fill_arc(int cx, int cy, int inner_radius, int outer_radius,
-                               float start_deg, float end_deg, uint16_t color565);
+                               float start_deg, float end_deg, display_color_t color);
 esp_err_t display_hal_draw_ellipse(int cx, int cy, int radius_x, int radius_y,
-                                   uint16_t color565);
+                                   display_color_t color);
 esp_err_t display_hal_fill_ellipse(int cx, int cy, int radius_x, int radius_y,
-                                   uint16_t color565);
+                                   display_color_t color);
 esp_err_t display_hal_draw_round_rect(int x, int y, int width, int height,
-                                      int radius, uint16_t color565);
+                                      int radius, display_color_t color);
 esp_err_t display_hal_fill_round_rect(int x, int y, int width, int height,
-                                      int radius, uint16_t color565);
+                                      int radius, display_color_t color);
 esp_err_t display_hal_draw_triangle(int x1, int y1, int x2, int y2,
-                                    int x3, int y3, uint16_t color565);
+                                    int x3, int y3, display_color_t color);
 esp_err_t display_hal_fill_triangle(int x1, int y1, int x2, int y2,
-                                    int x3, int y3, uint16_t color565);
+                                    int x3, int y3, display_color_t color);
 
 /* --- Text --- */
 
 esp_err_t display_hal_measure_text(const char *text, uint8_t font_size,
                                    uint16_t *out_width, uint16_t *out_height);
 esp_err_t display_hal_draw_text(int x, int y, const char *text, uint8_t font_size,
-                                uint16_t text_color565, bool has_bg, uint16_t bg_color565);
+                                display_color_t text_color, bool has_bg, display_color_t bg_color);
 esp_err_t display_hal_draw_text_aligned(int x, int y, int width, int height,
                                         const char *text, uint8_t font_size,
-                                        uint16_t text_color565, bool has_bg, uint16_t bg_color565,
+                                        display_color_t text_color, bool has_bg, display_color_t bg_color,
                                         display_hal_text_align_t align,
                                         display_hal_text_valign_t valign);
 
 /* --- Bitmap --- */
 
-/* pixels: RGB565, MSB-first byte order */
+/* pixels: RGB565 little-endian byte order */
 esp_err_t display_hal_draw_bitmap(int x, int y, int w, int h, const uint16_t *pixels);
 esp_err_t display_hal_draw_bitmap_crop(int x, int y,
                                        int src_x, int src_y,
@@ -126,23 +127,6 @@ esp_err_t display_hal_draw_bitmap_scaled(int x, int y,
                                          int src_width, int src_height,
                                          int scale_w, int scale_h,
                                          int *out_w, int *out_h);
-
-/* --- JPEG --- */
-
-esp_err_t display_hal_draw_jpeg(int x, int y,
-                                const uint8_t *jpeg_data, size_t jpeg_len,
-                                int *out_w, int *out_h);
-esp_err_t display_hal_draw_jpeg_crop(int x, int y,
-                                     int src_x, int src_y,
-                                     int w, int h,
-                                     const uint8_t *jpeg_data, size_t jpeg_len,
-                                     int *out_w, int *out_h);
-esp_err_t display_hal_jpeg_get_size(const uint8_t *jpeg_data, size_t jpeg_len,
-                                    int *out_w, int *out_h);
-esp_err_t display_hal_draw_jpeg_scaled(int x, int y,
-                                       const uint8_t *jpeg_data, size_t jpeg_len,
-                                       int scale_w, int scale_h,
-                                       int *out_w, int *out_h);
 
 #ifdef __cplusplus
 }

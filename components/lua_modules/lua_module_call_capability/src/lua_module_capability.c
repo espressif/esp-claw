@@ -17,7 +17,8 @@
 #include "lauxlib.h"
 
 #define LUA_MODULE_CAPABILITY_NAME "capability"
-#define LUA_MODULE_CAPABILITY_OUTPUT_SIZE 4096
+#define LUA_MODULE_CAPABILITY_DEFAULT_OUTPUT_SIZE (64 * 1024)
+#define LUA_MODULE_CAPABILITY_MAX_OUTPUT_SIZE     (256 * 1024)
 
 static const char *lua_module_capability_get_string_field(lua_State *L,
                                                           int index,
@@ -65,6 +66,45 @@ static const char *lua_module_capability_get_args_string_field(lua_State *L,
     value = lua_tostring(L, -1);
     lua_pop(L, 2);
     return value;
+}
+
+static size_t lua_module_capability_get_size_field(lua_State *L,
+                                                   int index,
+                                                   const char *field_name,
+                                                   size_t default_value,
+                                                   size_t min_value,
+                                                   size_t max_value)
+{
+    lua_Number value;
+    size_t size_value;
+
+    if (lua_isnoneornil(L, index)) {
+        return default_value;
+    }
+
+    index = lua_absindex(L, index);
+    lua_getfield(L, index, field_name);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        return default_value;
+    }
+    if (!lua_isnumber(L, -1)) {
+        lua_pop(L, 1);
+        luaL_error(L, "field '%s' must be a number", field_name);
+    }
+
+    value = lua_tonumber(L, -1);
+    lua_pop(L, 1);
+
+    if (value < (lua_Number)min_value) {
+        return min_value;
+    }
+    if (value > (lua_Number)max_value) {
+        return max_value;
+    }
+
+    size_value = (size_t)value;
+    return size_value > 0 ? size_value : default_value;
 }
 
 static cJSON *lua_module_capability_json_from_value(lua_State *L, int index);
@@ -271,18 +311,25 @@ static int lua_module_capability_call(lua_State *L)
     claw_cap_call_context_t ctx = {0};
     char *payload_json = NULL;
     char *output = NULL;
+    size_t output_size;
     esp_err_t err;
 
     payload_json = lua_module_capability_build_payload_json(L, 2);
     lua_module_capability_fill_context(L, 3, &ctx);
+    output_size = lua_module_capability_get_size_field(L,
+                                                       3,
+                                                       "max_output_bytes",
+                                                       LUA_MODULE_CAPABILITY_DEFAULT_OUTPUT_SIZE,
+                                                       1024,
+                                                       LUA_MODULE_CAPABILITY_MAX_OUTPUT_SIZE);
 
-    output = calloc(1, LUA_MODULE_CAPABILITY_OUTPUT_SIZE);
+    output = calloc(1, output_size);
     if (!output) {
         free(payload_json);
         return luaL_error(L, "out of memory");
     }
 
-    err = claw_cap_call(cap_name, payload_json, &ctx, output, LUA_MODULE_CAPABILITY_OUTPUT_SIZE);
+    err = claw_cap_call(cap_name, payload_json, &ctx, output, output_size);
     free(payload_json);
 
     if (err == ESP_OK) {

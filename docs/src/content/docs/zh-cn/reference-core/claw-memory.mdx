@@ -16,11 +16,10 @@ import { LinkCard, Aside, FileTree } from '@astrojs/starlight/components';
 |------|------|------|
 | `session_root_dir` | 会话历史文件的根目录 | `/fatfs/sessions` |
 | `memory_root_dir` | 长期记忆目录路径（`claw_memory` 在此目录下管理 `MEMORY.md` 及结构化记忆文件） | `/fatfs/memory` |
-| `max_session_messages` | 单个 session 保留的最大消息条数 | `20` |
 | `max_message_chars` | 单条消息的最大字符数 | `1024` |
 | `enable_async_extract_stage_note` | 是否启用结构化记忆异步抽取阶段说明 | 完整模式下为 `true` |
 
-`max_session_messages` 与 `max_message_chars` 共同控制历史文件的体量，防止在 Flash 上日志式膨胀，同时避免拼入过长的历史而消耗过多 token。
+Session history 现在使用 append-only 数据文件和同名 `.idx` 索引文件。加载时读取完整有效索引；只有在 assistant final 完成后且数据文件超过 session size limit 时，才会压缩较旧的工具调用细节。
 
 ## 与 claw_core 的对接
 
@@ -35,7 +34,7 @@ import { LinkCard, Aside, FileTree } from '@astrojs/starlight/components';
 
 **写回 Callback**：
 
-- `claw_memory_append_session_turn_callback`：作为 `claw_core_config_t.append_session_turn` 传入，Agent 完成一轮推理后自动将本轮 user/assistant 文本追加写回对应 session 文件。
+- `claw_memory_persist_session_callback`：作为 `claw_core_config_t.persist_session` 传入，将普通轮次、工具轮、最终助手记录和失败说明对应的 typed raw session records 追加写回 session 文件。
 - 完整模式还会启用 `on_request_start` 与 `collect_stage_note`，用于结构化记忆自动抽取流程。
 
 ## 长期记忆文件布局

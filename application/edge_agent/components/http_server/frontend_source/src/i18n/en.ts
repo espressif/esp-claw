@@ -39,6 +39,10 @@ export const en = {
   webimUploaded: 'Image uploaded — click Send to post.',
   webimSendShortcut: 'Ctrl+Enter to send',
   webimWsReconnecting: 'Live channel reconnecting…',
+  webimMarkdownPreview: 'Markdown preview',
+  webimMarkdownPreviewLoading: 'Loading Markdown…',
+  webimMarkdownPreviewLoadFailed: 'Could not load Markdown preview libraries.',
+  webimRetrySend: 'Retry sending',
 
   unsavedIndicator: 'Unsaved',
   unsavedConfirmLeave:
@@ -61,6 +65,17 @@ export const en = {
   wifiValidationSsidRequired: 'Wi-Fi SSID is required.',
   wifiValidationPasswordLength:
     'Wi-Fi password must be empty or at least 8 characters long.',
+
+  apName: 'AP SSID',
+  apPassword: 'AP Password',
+  apNameHint: 'Current: {ssid}. Leave empty to keep default name. Changes apply after restart.',
+  apPasswordHint: 'Leave empty for open AP. Must be at least 8 characters if set.',
+  apValidationNameRequired: 'AP Name is required.',
+  apValidationPasswordLength:
+    'AP password must be empty or at least 8 characters long.',
+  apBehavior: 'AP Behavior',
+  apBehaviorKeep: 'Keep On',
+  apBehaviorCloseOnSta: 'Turn Off After Wi-Fi Connects',
 
   sectionStatusNetwork: 'Network',
   sectionStatusStorage: 'Storage',
@@ -97,6 +112,8 @@ export const en = {
   llmProviderAnthropicCompatible: 'Anthropic Compatible API',
   llmProviderCustom: 'Custom',
   llmFillDefaults: 'Fill Default Config',
+  llmProviderDocs: 'Provider Docs',
+  llmProviderConsole: 'Get API Key',
   llmApiKey: 'API Key',
   llmModel: 'Model',
   llmTimeout: 'Timeout (ms)',
@@ -136,6 +153,9 @@ export const en = {
   imValidationInvalidField: '{field} for {platform} is not valid.',
   imWechatCredsFilled:
     'Credentials filled from QR login. Review in Advanced settings and click Save to persist.',
+  qqMsgType: 'Message Type',
+  qqMsgTypePlain: 'Plain Text',
+  qqMsgTypeMarkdown: 'Markdown',
   qqAppId: 'QQ App ID',
   qqAppSecret: 'QQ App Secret',
   feishuAppId: 'Feishu App ID',
@@ -162,6 +182,8 @@ export const en = {
     'If set, ESP-Claw can search online. Tip: Built-in weather skill also relies on online search.',
   searchBraveKey: 'Brave Search API Key',
   searchTavilyKey: 'Tavily API Key',
+  searchHttpAllowlist: 'HTTP allowlist (domains/IP, comma-separated)',
+  searchHttpAllowlistPlaceholder: 'api.example.com,*.example.org,203.0.113.10',
 
   sectionCapabilities: 'Capability Groups',
   capabilitiesDescription:

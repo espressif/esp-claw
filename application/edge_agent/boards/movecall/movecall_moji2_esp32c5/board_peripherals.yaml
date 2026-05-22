@@ -1,0 +1,85 @@
+version: 1.0.0
+peripherals:
+  - name: rmt_tx
+    type: rmt
+    role: tx
+    config:
+      gpio_num: 10
+      clk_src: RMT_CLK_SRC_DEFAULT
+      resolution_hz: 10000000
+      mem_block_symbols: 64
+      trans_queue_depth: 4
+      intr_priority: 1
+      flags:
+        invert_out: false
+        with_dma: false
+        io_loop_back: false
+        io_od_mode: false
+        allow_pd: false
+        init_level: false
+
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 26
+        scl: 27
+
+  - name: i2s_audio_out
+    type: i2s
+    role: master
+    format: std-out
+    config: &i2s_config
+      port: 0
+      sample_rate_hz: 16000
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_MONO
+      slot_mask: I2S_STD_SLOT_LEFT
+      ws_width: 16
+      pins:
+        mclk: 25
+        bclk: 11
+        ws: 24
+        dout: 23
+        din: 12
+
+  - name: i2s_audio_in
+    type: i2s
+    role: master
+    format: std-in
+    config: *i2s_config
+
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        data0_io_num: 9
+        data1_io_num: 8
+        data2_io_num: 7
+        data3_io_num: 6
+        sclk_io_num: 0
+        max_transfer_sz: 14400
+
+  - name: gpio_pa_control
+    type: gpio
+    role: io
+    config:
+      pin: 5
+      mode: GPIO_MODE_OUTPUT
+      default_level: 0
+
+  - name: ledc_backlight
+    type: ledc
+    role: none
+    config:
+      gpio_num: 2
+      freq_hz: 5000
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false

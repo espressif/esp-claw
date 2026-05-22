@@ -19,3 +19,7 @@ CONFIG_SPIRAM_RODATA=n
 # transaction. Force FreeRTOS to allocate task stacks from internal RAM so claw
 # tasks tagged CLAW_TASK_STACK_PREFER_PSRAM fall back to internal memory.
 CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=n
+
+# USB: Serial JTAG
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y

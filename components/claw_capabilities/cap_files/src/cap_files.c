@@ -27,6 +27,46 @@ static const char *TAG = "cap_files";
 
 static char s_files_base_dir[128] = {0};
 
+static bool cap_files_text_contains_ci(const char *haystack, const char *needle)
+{
+    size_t needle_len;
+
+    if (!needle || !needle[0]) {
+        return true;
+    }
+    if (!haystack) {
+        return false;
+    }
+
+    needle_len = strlen(needle);
+    for (const char *cursor = haystack; *cursor; cursor++) {
+        size_t i;
+
+        for (i = 0; i < needle_len; i++) {
+            unsigned char hc = (unsigned char)cursor[i];
+            unsigned char nc = (unsigned char)needle[i];
+
+            if (hc == '\0') {
+                return false;
+            }
+            if (hc >= 'A' && hc <= 'Z') {
+                hc = (unsigned char)(hc - 'A' + 'a');
+            }
+            if (nc >= 'A' && nc <= 'Z') {
+                nc = (unsigned char)(nc - 'A' + 'a');
+            }
+            if (hc != nc) {
+                break;
+            }
+        }
+        if (i == needle_len) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static bool cap_files_path_is_valid(const char *path)
 {
     size_t base_len;
@@ -149,7 +189,7 @@ static esp_err_t cap_files_ensure_parent_dirs(const char *path)
 }
 
 static esp_err_t cap_files_list_recursive(const char *dir_path,
-                                          const char *prefix,
+                                          const char *keyword,
                                           char *output,
                                           size_t output_size,
                                           size_t *offset,
@@ -188,7 +228,7 @@ static esp_err_t cap_files_list_recursive(const char *dir_path,
 
         if (S_ISDIR(st.st_mode)) {
             esp_err_t err = cap_files_list_recursive(full_path,
-                                                     prefix,
+                                                     keyword,
                                                      output,
                                                      output_size,
                                                      offset,
@@ -200,7 +240,7 @@ static esp_err_t cap_files_list_recursive(const char *dir_path,
             continue;
         }
 
-        if (prefix && strncmp(full_path, prefix, strlen(prefix)) != 0) {
+        if (keyword && !cap_files_text_contains_ci(full_path, keyword)) {
             continue;
         }
 
@@ -601,9 +641,7 @@ static esp_err_t cap_files_list_dir_execute(const char *input_json,
                                             size_t output_size)
 {
     cJSON *root = NULL;
-    const char *prefix_value = NULL;
-    char resolved_prefix[256];
-    const char *prefix = NULL;
+    const char *keyword = NULL;
     size_t offset = 0;
     int count = 0;
     esp_err_t err;
@@ -613,16 +651,7 @@ static esp_err_t cap_files_list_dir_execute(const char *input_json,
     output[0] = '\0';
     root = cJSON_Parse(input_json);
     if (root) {
-        prefix_value = cJSON_GetStringValue(cJSON_GetObjectItem(root, "prefix"));
-    }
-
-    if (prefix_value && prefix_value[0]) {
-        if (cap_files_resolve_path(prefix_value, resolved_prefix, sizeof(resolved_prefix)) != ESP_OK) {
-            cJSON_Delete(root);
-            snprintf(output, output_size, "Error: prefix must stay under %s", s_files_base_dir);
-            return ESP_ERR_INVALID_ARG;
-        }
-        prefix = resolved_prefix;
+        keyword = cJSON_GetStringValue(cJSON_GetObjectItem(root, "keyword"));
     }
 
     if (cap_files_ensure_dir(s_files_base_dir) != ESP_OK) {
@@ -631,7 +660,7 @@ static esp_err_t cap_files_list_dir_execute(const char *input_json,
         return ESP_FAIL;
     }
 
-    err = cap_files_list_recursive(s_files_base_dir, prefix, output, output_size, &offset, &count);
+    err = cap_files_list_recursive(s_files_base_dir, keyword, output, output_size, &offset, &count);
     cJSON_Delete(root);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "list %s: err=0x%x", s_files_base_dir, err);
@@ -700,10 +729,10 @@ static const claw_cap_descriptor_t s_files_descriptors[] = {
         .id = "list_dir",
         .name = "list_dir",
         .family = "files",
-        .description = "Recursively list files, optionally filtered by prefix.",
+        .description = "Recursively list files, optionally filtered by case-insensitive path keyword.",
         .kind = CLAW_CAP_KIND_CALLABLE,
         .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
-        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"prefix\":{\"type\":\"string\"}}}",
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"keyword\":{\"type\":\"string\"}}}",
         .execute = cap_files_list_dir_execute,
     },
 };

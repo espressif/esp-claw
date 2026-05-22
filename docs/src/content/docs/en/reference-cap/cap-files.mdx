@@ -24,7 +24,7 @@ The default managed root is `/fatfs`; change it at init with `cap_files_set_base
 | `delete_file` | Delete a file | `path` |
 | `copy_file` | Copy a file to a new path | `src_path`, `dst_path` |
 | `move_file` | Move a file to a new path | `src_path`, `dst_path` |
-| `list_dir` | Recursively list files under the tree | optional `prefix` |
+| `list_dir` | Recursively list files under the tree | optional `keyword` |
 
 All tools are flagged `CLAW_CAP_FLAG_CALLABLE_BY_LLM`.
 
@@ -106,12 +106,12 @@ if (!match) {
 
 That gives precise edits and clear errors when `old_string` is wrong.
 
-### `list_dir`: recursion + prefix
+### `list_dir`: recursion + keyword
 
 ```c
 // Walk base_dir recursively, emit full paths per file
-// Optional prefix filter (only matching paths)
-cap_files_list_recursive(s_files_base_dir, prefix, output, output_size, &offset, &count);
+// Optional case-insensitive keyword filter on the full path
+cap_files_list_recursive(s_files_base_dir, keyword, output, output_size, &offset, &count);
 ```
 
 Output is one absolute path per line:

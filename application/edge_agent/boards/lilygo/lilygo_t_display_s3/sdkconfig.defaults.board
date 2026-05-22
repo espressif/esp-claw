@@ -21,3 +21,7 @@ CONFIG_SPIRAM_SPEED_80M=y
 # Keep display_lcd-dependent code paths enabled even though this board uses
 # a custom i80 LCD device implementation instead of the built-in generator.
 CONFIG_ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT=y
+
+# USB: Serial JTAG
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y

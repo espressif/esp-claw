@@ -141,10 +141,21 @@ static int cmd_wifi_scan(void)
 static int cmd_wifi_apply_loaded_config(const app_config_t *config, const char *command_name)
 {
     wifi_manager_status_t status = {0};
-    esp_err_t err = wifi_manager_apply_sta_config(&(wifi_manager_config_t) {
+    const char *validation_message = NULL;
+    esp_err_t err = app_config_validate_wifi(config, &validation_message);
+    if (err != ESP_OK) {
+        return log_error(command_name, err, validation_message ? validation_message : "invalid_ap_config");
+    }
+
+    wifi_manager_config_t wifi_config = {
         .sta_ssid = config->wifi_ssid,
         .sta_password = config->wifi_password,
-    });
+        .ap_ssid = config->ap_ssid[0] ? config->ap_ssid : NULL,
+        .ap_password = config->ap_password[0] ? config->ap_password : NULL,
+        .ap_behavior = config->ap_behavior,
+    };
+
+    err = wifi_manager_apply_sta_config(&wifi_config);
 
     if (err != ESP_OK) {
         return log_error(command_name, err, "failed_to_apply_config");
@@ -183,6 +194,12 @@ static int cmd_wifi_set(bool apply_now)
     strlcpy(config.wifi_ssid, wifi_args.ssid->sval[0], sizeof(config.wifi_ssid));
     if (wifi_args.password->count) {
         strlcpy(config.wifi_password, wifi_args.password->sval[0], sizeof(config.wifi_password));
+    }
+
+    const char *validation_message = NULL;
+    err = app_config_validate_wifi(&config, &validation_message);
+    if (err != ESP_OK) {
+        return log_error("set", err, validation_message ? validation_message : "invalid_ap_config");
     }
 
     err = app_config_save(&config);

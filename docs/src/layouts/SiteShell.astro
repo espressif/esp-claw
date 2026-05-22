@@ -517,6 +517,10 @@ const currentLocaleLabel =
           <a href={localeHref(lang, "")}>{chrome.navHome}</a>
           <a href={localeHref(lang, "tutorial")}>{chrome.navDocs}</a>
           <a
+            href="https://skills-lab.esp-claw.com"
+            target="_blank"
+            rel="noopener">{chrome.navSkillsLab}</a>
+          <a
             href="https://github.com/espressif/esp-claw"
             target="_blank"
             rel="noopener">{chrome.navGitHub}</a
@@ -573,6 +577,14 @@ const currentLocaleLabel =
           <div class="mobile-nav-panel">
             <a href={localeHref(lang, "")} data-mobile-nav-link>{chrome.navHome}</a>
             <a href={localeHref(lang, "tutorial")} data-mobile-nav-link>{chrome.navDocs}</a>
+            <a
+              href="https://skills-lab.esp-claw.com"
+              target="_blank"
+              rel="noopener"
+              data-mobile-nav-link
+            >
+              {chrome.navSkillsLab}
+            </a>
             <a
               href="https://github.com/espressif/esp-claw"
               target="_blank"

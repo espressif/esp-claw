@@ -1,0 +1,5 @@
+## IDF Component Manager Manifest File
+dependencies:
+  display_arbiter:
+    path: ../../common/display_arbiter
+  lvgl/lvgl: ^9.5.0

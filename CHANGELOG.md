@@ -1,10 +1,74 @@
 # ChangeLog
 
+## 2026-05-19
+
+### Feature:
+
+* Added Markdown preview support in Web Chat. (Related to https://github.com/espressif/esp-claw/issues/36)
+
+### Fixes:
+
+* Web Chat:
+  * Append messages immediately instead of waiting for send success. (Related to https://github.com/espressif/esp-claw/issues/36)
+  * Use visual indicators for send status and allow retries.
+  * Preserve Web Chat history when switching between tabs.
+* Board: Adjusted partition table size to accommodate larger bootloaders on some development boards.
+
+## 2026-05-18
+
+### Feature:
+
+* Added typed raw session history persistence for Claw Core and Claw Memory, preserving the full Agent turn flow: user input, raw assistant tool-call messages, tool results, final assistant messages, and failure notes.
+* Preserved raw assistant messages from OpenAI-compatible and Anthropic-compatible backends so tool-call history can be replayed without reconstructing backend-specific message shapes.
+* Added indexed append-only session history storage using JSON data records and paired `.idx` entries with offset, length, record type, and backend format.
+* Added size-based session compaction and oversized-session blocking. Compaction keeps user and final assistant records, recent tool-turn records, and unfinished current-turn records; blocked sessions return `/new` guidance instead of growing history further.
+* Added a Claw Core request gate callback and request-start-only context provider flag for blocked-session rejection and once-per-request history collection.
+* Degraded final assistant records to plain text across incompatible backend formats, while skipping unsafe backend-specific tool records.
+
+### Change:
+
+* Replaced `append_session_turn` with the `persist_session` typed record batch callback. Applications should migrate to `claw_memory_persist_session_callback` or provide an equivalent `claw_core_persist_session_fn`.
+* Removed `max_session_messages` from `claw_memory_config_t`; session retention now uses size limits and compaction.
+* Removed the Claw Memory `mbedtls` private dependency previously used for encoded session headers.
+
+### Fix:
+
+* Preserved Anthropic `redacted_thinking` blocks and propagated tool-result error state when converting tool messages for Anthropic-compatible requests.
+
+## 2026-05-11
+
+### Feature:
+
+* Added Lua access to the SCI sensor for DFRobot-K10. (@rockets-cn, https://github.com/espressif/esp-claw/pull/32)
+* Added configurable AP name and password settings for Wi-Fi. (@Karasukaigan, https://github.com/espressif/esp-claw/pull/63) (Related to https://github.com/espressif/esp-claw/issues/41)
+* Used a more stable system prompt to improve cache hit rates. (ae_group/esp-claw!133)
+
+### Board:
+
+* Added movecall_cuican_esp32s3, movecall_moji_esp32s3, movecall_moji2_esp32c5. (@MoveCall, https://github.com/espressif/esp-claw/pull/50)
+* Added Waveshare ESP32-P4 NANO. (@yuzheyi, https://github.com/espressif/esp-claw/pull/59)
+* Added NologoTech Xingzhi-395. (@vaemc, https://github.com/espressif/esp-claw/pull/55)
+
+### Fix:
+
+* Improved patch version compatibility across different IDF versions. (ae_group/esp-claw!134)
+* Fixed UTF-8 sanitization in the LLM request body to prevent HTTP 400 errors. (@yuzheyi, https://github.com/espressif/esp-claw/pull/58)
+* Preserved thinking blocks and merged consecutive tool results to fix an Anthropic API compliance issue. (@zz6zz666, https://github.com/espressif/esp-claw/pull/40)
+* Fixed missing `Console Output` declarations in some development builds. (ae_group/esp-claw!132)
+
 ## 2026-05-09
 
 ### Fix:
 
 * LLM HTTP transport (`claw_llm_http_post_json`): copy and sanitize JSON request bodies so invalid UTF-8 sequences are replaced before POST, avoiding stack/client issues on malformed input. (https://github.com/espressif/esp-claw/pull/58, Thanks @yuzheyi.)
+
+### Feature:
+
+* Stablized the system prompt:
+  * `activate_skill` now accepts one `skill_id` per call and returns the full Skill markdown document in a `<skill_content>` tool result.
+  * Removed automatic active Skill document prompt injection and the `deactivate_skill` flow.
+  * Removed time context and part of session context from system prompt to keep it stable.
+  * Removed lua async job infomation from system prompt.
 
 ## 2026-05-08
 
@@ -19,13 +83,29 @@
 
 * Online Flashing Tool: Supported flashing firmware with different console outputs
 
+### Feature:
+
+* Added the `take_picture` Lua module skill for camera-enabled boards, including a guarded JPEG capture script with filename/directory validation and saved-frame reporting.
+
+* Added `system.heap` APIs to `lua_module_system` for heap capability constants, heap statistics, task stack high-water marks, and current-task stack inspection.
+
+* Added Lua test scripts for web search and IM send capability calls.
+
+* Added Skill Creator guidance and reference material for authoring Lua-backed Skills, including script creation workflow, file tool usage, and runnable script conventions.
+
 ### Fix:
 
 * Added WebSocket heartbeat support to Web Chat for improved reliability. (https://github.com/espressif/esp-claw/issues/36)
 
+* Disabled default Lua and system capability registration in shared app capability wiring so applications only enable them explicitly.
+
 ### Change:
 
 * Merged Feishu, QQ, Telegram, WeChat, and IM attachment sources, Skills, and docs into the unified `cap_im_platform` component while keeping existing per-platform runtime group IDs and tool names.
+
+* Removed the standalone `lua_module_esp_heap` module and folded its heap introspection APIs into `lua_module_system` as `system.heap`.
+
+* Updated `cap_lua` script management to rely on file tools (`list_dir`, `read_file`, and `write_file`) for discovering and editing scripts instead of a dedicated Lua script listing tool.
 
 ### Refactor:
 

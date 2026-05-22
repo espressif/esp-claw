@@ -44,6 +44,7 @@ typedef enum {
     WIFI_MODE_PROVISION_AP,
     WIFI_MODE_APSTA_TRYING,
     WIFI_MODE_APSTA_OK,
+    WIFI_MODE_STA_ONLY,
     WIFI_MODE_AP_FALLBACK,
 } wifi_mode_state_t;
 
@@ -55,6 +56,12 @@ static bool s_sta_configured;
 static char s_ip_addr[16] = "0.0.0.0";
 static char s_ap_ip[16] = "192.168.4.1";
 static char s_ap_ssid[33];
+static char s_sta_ssid[33];
+static char s_sta_password[65];
+static char s_ap_ssid_override[33];
+static char s_ap_password[65];
+static char s_ap_behavior[16];
+static char s_ap_ssid_prefix[33];
 static wifi_mode_state_t s_mode = WIFI_MODE_OFF;
 static esp_netif_t *s_sta_netif;
 static esp_netif_t *s_ap_netif;
@@ -70,6 +77,7 @@ static const char *wifi_manager_mode_string(wifi_mode_state_t mode)
     case WIFI_MODE_PROVISION_AP: return "provision";
     case WIFI_MODE_APSTA_TRYING: return "apsta";
     case WIFI_MODE_APSTA_OK:     return "sta_ok";
+    case WIFI_MODE_STA_ONLY:     return "sta_only";
     case WIFI_MODE_AP_FALLBACK:  return "fallback";
     default:                     return "off";
     }
@@ -80,6 +88,36 @@ static esp_err_t fallback_to_ap(void);
 static void reconnect_timer_cb(void *arg);
 static esp_err_t configure_sta_mode(const wifi_manager_config_t *config);
 static void reset_sta_runtime_state(void);
+
+static bool wifi_manager_ap_behavior_is_valid(const char *ap_behavior)
+{
+    return !ap_behavior || ap_behavior[0] == '\0' ||
+           strcmp(ap_behavior, "keep") == 0 ||
+           strcmp(ap_behavior, "close_on_sta") == 0;
+}
+
+static void copy_owned_string(char *dst, size_t dst_size, const char *src)
+{
+    strlcpy(dst, src ? src : "", dst_size);
+}
+
+static void sync_owned_config(const wifi_manager_config_t *config)
+{
+    copy_owned_string(s_sta_ssid, sizeof(s_sta_ssid), config->sta_ssid);
+    copy_owned_string(s_sta_password, sizeof(s_sta_password), config->sta_password);
+    copy_owned_string(s_ap_ssid_prefix, sizeof(s_ap_ssid_prefix), config->ap_ssid_prefix);
+    copy_owned_string(s_ap_ssid_override, sizeof(s_ap_ssid_override), config->ap_ssid);
+    copy_owned_string(s_ap_password, sizeof(s_ap_password), config->ap_password);
+    copy_owned_string(s_ap_behavior, sizeof(s_ap_behavior), config->ap_behavior);
+
+    s_config = *config;
+    s_config.sta_ssid = s_sta_ssid[0] ? s_sta_ssid : NULL;
+    s_config.sta_password = s_sta_password[0] ? s_sta_password : NULL;
+    s_config.ap_ssid_prefix = s_ap_ssid_prefix[0] ? s_ap_ssid_prefix : NULL;
+    s_config.ap_ssid = s_ap_ssid_override[0] ? s_ap_ssid_override : NULL;
+    s_config.ap_password = s_ap_password[0] ? s_ap_password : NULL;
+    s_config.ap_behavior = s_ap_behavior[0] ? s_ap_behavior : NULL;
+}
 
 static const char *wifi_manager_ap_ssid_prefix(void)
 {
@@ -105,6 +143,11 @@ static uint32_t wifi_manager_max_retry(void)
 
 static void compose_ap_ssid(void)
 {
+    if (s_config.ap_ssid && s_config.ap_ssid[0] != '\0') {
+        strlcpy(s_ap_ssid, s_config.ap_ssid, sizeof(s_ap_ssid));
+        ESP_LOGI(TAG, "Custom AP SSID: %s", s_ap_ssid);
+        return;
+    }
     uint8_t mac[6] = {0};
     if (esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP) != ESP_OK) {
         esp_read_mac(mac, ESP_MAC_WIFI_STA);
@@ -117,11 +160,16 @@ static void compose_ap_ssid(void)
 static void apply_ap_config(void)
 {
     wifi_config_t ap_cfg = {0};
-    strlcpy((char *)ap_cfg.ap.ssid, s_ap_ssid, sizeof(ap_cfg.ap.ssid));
     ap_cfg.ap.ssid_len = strlen(s_ap_ssid);
+    memcpy(ap_cfg.ap.ssid, s_ap_ssid, ap_cfg.ap.ssid_len);
     ap_cfg.ap.channel = wifi_manager_ap_channel();
     ap_cfg.ap.max_connection = wifi_manager_ap_max_conn();
-    ap_cfg.ap.authmode = WIFI_AUTH_OPEN;
+    if (s_config.ap_password && s_config.ap_password[0] != '\0') {
+        ap_cfg.ap.authmode = WIFI_AUTH_WPA2_PSK;
+        strlcpy((char *)ap_cfg.ap.password, s_config.ap_password, sizeof(ap_cfg.ap.password));
+    } else {
+        ap_cfg.ap.authmode = WIFI_AUTH_OPEN;
+    }
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
 }
 
@@ -144,14 +192,43 @@ static void reset_sta_runtime_state(void)
     xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
 }
 
+esp_err_t wifi_manager_validate_config(const wifi_manager_config_t *config)
+{
+    if (!config) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (config->ap_password && config->ap_password[0] != '\0') {
+        size_t ap_password_len = strlen(config->ap_password);
+        if (ap_password_len < 8 || ap_password_len >= sizeof(((wifi_config_t *)0)->ap.password)) {
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+    if (config->ap_ssid && strlen(config->ap_ssid) > sizeof(((wifi_config_t *)0)->ap.ssid)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (config->ap_ssid_prefix &&
+            strlen(config->ap_ssid_prefix) >= sizeof(s_ap_ssid) - 7) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!wifi_manager_ap_behavior_is_valid(config->ap_behavior)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return ESP_OK;
+}
+
 static esp_err_t configure_sta_mode(const wifi_manager_config_t *config)
 {
     wifi_mode_t target_mode = WIFI_MODE_AP;
     esp_err_t err;
 
-    s_config = *config;
+    err = wifi_manager_validate_config(config);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    sync_owned_config(config);
     compose_ap_ssid();
-    s_sta_configured = (config->sta_ssid && config->sta_ssid[0] != '\0');
+    s_sta_configured = (s_config.sta_ssid && s_config.sta_ssid[0] != '\0');
     if (s_reconnect_timer) {
         esp_timer_stop(s_reconnect_timer);
     }
@@ -159,9 +236,9 @@ static esp_err_t configure_sta_mode(const wifi_manager_config_t *config)
 
     if (s_sta_configured) {
         wifi_config_t sta_cfg = {0};
-        strlcpy((char *)sta_cfg.sta.ssid, config->sta_ssid, sizeof(sta_cfg.sta.ssid));
+        strlcpy((char *)sta_cfg.sta.ssid, s_config.sta_ssid, sizeof(sta_cfg.sta.ssid));
         strlcpy((char *)sta_cfg.sta.password,
-                config->sta_password ? config->sta_password : "",
+                s_config.sta_password ? s_config.sta_password : "",
                 sizeof(sta_cfg.sta.password));
         sta_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
         sta_cfg.sta.pmf_cfg.capable = true;
@@ -282,6 +359,16 @@ static void wifi_event_handler(void *arg,
             esp_timer_stop(s_reconnect_timer);
         }
         xEventGroupClearBits(s_wifi_event_group, WIFI_FAIL_BIT);
+        if (s_config.ap_behavior && strcmp(s_config.ap_behavior, "close_on_sta") == 0 && s_ap_active) {
+            ESP_LOGI(TAG, "STA connected, closing AP per ap_behavior setting");
+            esp_err_t _ap_err = esp_wifi_set_mode(WIFI_MODE_STA);
+            if (_ap_err == ESP_OK) {
+                s_ap_active = false;
+                s_mode = WIFI_MODE_STA_ONLY;
+            } else {
+                ESP_LOGW(TAG, "Failed to switch to STA-only mode: %s", esp_err_to_name(_ap_err));
+            }
+        }
         xEventGroupSetBits(s_wifi_event_group, WIFI_CONNECTED_BIT);
         notify_state_changed(true);
     }

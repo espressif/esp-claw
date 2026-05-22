@@ -1,0 +1,7 @@
+## IDF Component Manager Manifest File
+dependencies:
+  cap_lua:
+    path: ../../claw_capabilities/cap_lua
+
+  lua_module_image:
+    path: ../lua_module_image

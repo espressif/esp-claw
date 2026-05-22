@@ -37,7 +37,6 @@ import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 | `dht` | `lua_module_dht` | DHT 系列温湿度传感器读取 |
 | `display` | `lua_module_display` | LCD 屏幕绘图（文字、图形、JPEG/PNG） |
 | `environmental_sensor` | `lua_module_environmental_sensor` | BME690 温度、湿度、气压与气体数据读取 |
-| `esp_heap` | `lua_module_esp_heap` | 堆内存查询 |
 | `event_publisher` | `lua_module_event_publisher` | 从 Lua 脚本向 Event Router 发布事件 |
 | `lib_fuel_gauge` | `lua_module_fuel_gauge` | 纯 Lua 电池电量计库，支持 BQ27220/MAX17048 等 |
 | `imu` | `lua_module_imu` | IMU 加速度计与陀螺仪数据读取 |
@@ -49,7 +48,7 @@ import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
 | `magnetometer` | `lua_module_magnetometer` | 磁力计/指南针数据读取 |
 | `ssd1306` | `lua_module_ssd1306` | 纯 Lua SSD1306 I2C OLED 驱动 |
 | `storage` | `lua_module_storage` | 文件系统操作 |
-| `system` | `lua_module_system` | 时间、运行时长、IP、内存与 Wi-Fi 状态查询 |
+| `system` | `lua_module_system` | 时间、运行时长、IP、内存、堆、任务栈与 Wi-Fi 状态查询 |
 | `arg_schema` | `lua_module_system` | 纯 Lua 参数归一化辅助库 |
 
 <Aside type="note" title="模块条件编译">
@@ -352,6 +351,8 @@ static int lua_module_gpio_set_level(lua_State *L)
 
 当底层 ESP-IDF 调用失败时，模块用 `luaL_error` 将错误传回 Lua 运行时。
 这类错误会成为脚本执行失败结果，便于调用方看到明确原因。
+
+激活该 Skill 时，Lua 运行工具（`lua_run_script`、`lua_run_script_async` 等）会对当前 session 可见，同时 Skill 文档注入上下文，LLM 即可编写并执行使用 `myled` 模块的脚本。脚本文件通过 `write_file`、`read_file`、`list_dir` 等文件工具创建和检查。
 
 ### 字符串枚举映射
 

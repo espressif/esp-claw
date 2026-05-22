@@ -9,8 +9,8 @@ import { Aside, LinkCard } from '@astrojs/starlight/components';
 
 <Aside type="tip">
   能看到日志但敲不了命令？
-  - 板子若同时有 UART 与 USB-JTAG，尝试切换到另一个接口。
-  - 单 USB 口设备可换用名称带有 `JTAG` 的固件变体，或 [从源码编译与烧录](@lang/reference-project/build-from-source) 并调整 `Channel for console output` menuconfig 项。
+  - 板子若同时有 UART 与 USB-Serial JTAG，尝试切换到另一个接口。
+  - 单 USB 口设备可换用名称带有 `Serial JTAG` 的固件变体，或 [从源码编译与烧录](@lang/reference-project/build-from-source) 并调整 `Channel for console output` menuconfig 项。
 </Aside>
 
 ## 会话与问答
@@ -52,7 +52,7 @@ cap list
 
 ```sh
 cap call get_current_time '{}'
-cap call list_dir '{"path":"/fatfs"}'
+cap call list_dir '{"keyword":"scripts"}'
 ```
 
 ### 组管理

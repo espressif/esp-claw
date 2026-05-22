@@ -23,6 +23,7 @@ typedef struct {
 
 esp_err_t cap_im_qq_register_group(void);
 esp_err_t cap_im_qq_set_credentials(const char *app_id, const char *app_secret);
+void cap_im_qq_set_msg_type(int msg_type);
 esp_err_t cap_im_qq_set_attachment_config(
     const cap_im_qq_attachment_config_t *config);
 esp_err_t cap_im_qq_start(void);

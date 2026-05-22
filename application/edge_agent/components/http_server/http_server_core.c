@@ -84,6 +84,9 @@ esp_err_t http_server_start(void)
     ESP_RETURN_ON_ERROR(http_server_register_config_routes(s_ctx.server), TAG, "Failed to register config routes");
     ESP_RETURN_ON_ERROR(http_server_register_status_routes(s_ctx.server), TAG, "Failed to register status routes");
     ESP_RETURN_ON_ERROR(http_server_register_files_routes(s_ctx.server), TAG, "Failed to register files routes");
+#if CONFIG_APP_CLAW_LUA_MODULE_HTTP_SERVER
+    ESP_RETURN_ON_ERROR(http_server_register_lua_app_routes(s_ctx.server), TAG, "Failed to register Lua app routes");
+#endif
     ESP_RETURN_ON_ERROR(http_server_register_wechat_routes(s_ctx.server), TAG, "Failed to register WeChat routes");
     ESP_RETURN_ON_ERROR(http_server_register_webim_routes(s_ctx.server), TAG, "Failed to register Web IM routes");
     ESP_RETURN_ON_ERROR(httpd_register_err_handler(s_ctx.server, HTTPD_404_NOT_FOUND, http_server_captive_404_handler),

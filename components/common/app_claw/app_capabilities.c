@@ -8,6 +8,7 @@
 #include "app_lua_modules.h"
 
 #include <ctype.h>
+#include <stdlib.h>
 #include <stdbool.h>
 #include <string.h>
 
@@ -263,6 +264,12 @@ static esp_err_t app_cap_prepare_im_qq(const app_claw_config_t *config,
                             TAG, "Failed to set QQ credentials");
     }
 
+    int msg_type = 0;
+    if (config->qq_msg_type[0]) {
+        msg_type = atoi(config->qq_msg_type);
+    }
+    cap_im_qq_set_msg_type(msg_type);
+
     return ESP_OK;
 }
 
@@ -413,9 +420,6 @@ static esp_err_t app_cap_register_lua(const app_claw_config_t *config,
                                       const app_claw_storage_paths_t *paths)
 {
     (void)config;
-    ESP_RETURN_ON_ERROR(cap_lua_set_skill_root_dir(paths->skills_root_dir),
-                        TAG,
-                        "Failed to set Lua skill root dir");
     return cap_lua_register_group(paths->lua_root_dir);
 }
 #endif
@@ -506,6 +510,9 @@ static esp_err_t app_cap_prepare_web_search(const app_claw_config_t *config,
                             TAG, "Failed to set Tavily search key");
     }
 
+    ESP_RETURN_ON_ERROR(cap_web_search_set_http_allowlist(config->search_http_allowlist),
+                        TAG, "Failed to set HTTP allowlist");
+
     return ESP_OK;
 }
 
@@ -558,7 +565,7 @@ static const app_capability_group_entry_t s_capability_group_entries[] = {
     { "cap_files", "Files", "Register files cap", true, app_cap_prepare_files, app_cap_register_files },
 #endif
 #if CONFIG_APP_CLAW_CAP_SCHEDULER
-    { "cap_scheduler", "Scheduler", "Register scheduler cap", false, NULL, app_cap_register_scheduler },
+    { "cap_scheduler", "Scheduler", "Register scheduler cap", true, NULL, app_cap_register_scheduler },
 #endif
 #if CONFIG_APP_CLAW_CAP_LUA
     { "cap_lua", "Lua", "Register Lua cap", true, app_cap_prepare_lua, app_cap_register_lua },
@@ -573,7 +580,7 @@ static const app_capability_group_entry_t s_capability_group_entries[] = {
     { "cap_skill", "Skill Manager", "Register skill cap", true, NULL, app_cap_register_skill_mgr },
 #endif
 #if CONFIG_APP_CLAW_CAP_SYSTEM
-    { "cap_system", "System", "Register system cap", true, NULL, app_cap_register_system },
+    { "cap_system", "System", "Register system cap", false, NULL, app_cap_register_system },
 #endif
 #if CONFIG_APP_CLAW_MEMORY_MODE_FULL
     { "claw_memory", "Memory", "Register claw_memory group", true, NULL, app_cap_register_memory },
@@ -582,13 +589,13 @@ static const app_capability_group_entry_t s_capability_group_entries[] = {
     { "cap_time", "Time", "Register time cap", false, NULL, app_cap_register_time },
 #endif
 #if CONFIG_APP_CLAW_CAP_LLM_INSPECT
-    { "cap_llm_inspect", "LLM Inspect", "Register LLM inspect cap", false, NULL, app_cap_register_llm_inspect },
+    { "cap_llm_inspect", "LLM Inspect", "Register LLM inspect cap", true, NULL, app_cap_register_llm_inspect },
 #endif
 #if CONFIG_APP_CLAW_CAP_WEB_SEARCH
-    { "cap_web_search", "Web Search", "Register web search cap", false, app_cap_prepare_web_search, app_cap_register_web_search },
+    { "cap_web_search", "Web Search", "Register web search cap", true, app_cap_prepare_web_search, app_cap_register_web_search },
 #endif
 #if CONFIG_APP_CLAW_CAP_ROUTER_MGR
-    { "cap_router_mgr", "Router Manager", "Register router manager cap", false, NULL, app_cap_register_router_mgr },
+    { "cap_router_mgr", "Router Manager", "Register router manager cap", true, NULL, app_cap_register_router_mgr },
 #endif
 #if CONFIG_APP_CLAW_CAP_SESSION_MGR
     { "cap_session_mgr", "Session Manager", "Register session manager cap", false, NULL, app_cap_register_session_mgr },

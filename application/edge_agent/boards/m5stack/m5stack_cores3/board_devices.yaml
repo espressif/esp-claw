@@ -115,7 +115,8 @@ devices:
   # Touch Panel Configuration
   - name: lcd_touch
     chip: ft5x06
-    type: lcd_touch_i2c
+    type: lcd_touch
+    sub_type: i2c
     version: default
     dependencies:
       esp_lcd_touch:
@@ -124,12 +125,11 @@ devices:
       espressif/esp_lcd_touch_ft5x06: "^1.0.0"
     config:
       io_i2c_config:
-        dev_addr: [0x38]
         lcd_cmd_bits: 8
         scl_speed_hz: 400000
-        peripherals:
-          - name: i2c_master
-
       touch_config:
         x_max: 320
         y_max: 240
+    peripherals:
+      - name: i2c_master
+        i2c_addr: [0x70]

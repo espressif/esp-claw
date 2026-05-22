@@ -9,8 +9,8 @@ Connect the board over USB, use `idf.py monitor`, `minicom`, or the [web flasher
 
 <Aside type="tip">
   Logs scroll but you cannot type commands?
-  - Boards with both UART and USB-JTAG: try the other port.
-  - Single-USB devices: try a firmware build with `JTAG` in the name, or [build from source](@lang/reference-project/build-from-source) and adjust `Channel for console output` in menuconfig.
+  - Boards with both UART and USB-Serial JTAG: try the other port.
+  - Single-USB devices: try a firmware build with `Serial JTAG` in the name, or [build from source](@lang/reference-project/build-from-source) and adjust `Channel for console output` in menuconfig.
 </Aside>
 
 ## Session and Q&A
@@ -52,7 +52,7 @@ The second argument must be valid JSON (mind quoting/escaping).
 
 ```sh
 cap call get_current_time '{}'
-cap call list_dir '{"path":"/fatfs"}'
+cap call list_dir '{"keyword":"scripts"}'
 ```
 
 ### Group management

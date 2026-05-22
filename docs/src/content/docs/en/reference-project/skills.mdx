@@ -60,6 +60,9 @@ ESP-Claw reads Skill metadata from JSON frontmatter at the top of each `SKILL.md
 
 `name` and `description` map to the Skill ID and summary shown to the model in the Skills catalog.
 
+`metadata.manage_mode` must be `readonly`, `web`, or `runtime`.
+Skills Lab projects typically use `web`; on device, `web` behaves like `readonly` for management. Runtime-registered skills use `runtime`.
+
 `metadata.cap_groups` is optional: a list of capability group ids. When the Skill activates, those groups become visible to the LLM (tools exposed); when the Skill deactivates, they leave that Skill’s visibility set. This binds “how to use tools” with “having the tools” for the same lifecycle so the model cannot call tools without the guide.
 
 <Aside type="tip">

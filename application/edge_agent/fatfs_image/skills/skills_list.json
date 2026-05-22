@@ -1,0 +1,303 @@
+{
+  "skills": [
+    {
+      "id": "cap_im_feishu",
+      "file": "cap_im_feishu.md",
+      "summary": "How to send additional text, images, and files to Feishu.",
+      "cap_groups": [
+        "cap_im_feishu"
+      ]
+    },
+    {
+      "id": "cap_im_qq",
+      "file": "cap_im_qq.md",
+      "summary": "How to send additional text or send local files back to QQ.",
+      "cap_groups": [
+        "cap_im_qq"
+      ]
+    },
+    {
+      "id": "cap_im_tg",
+      "file": "cap_im_tg.md",
+      "summary": "How to send additional text, images, and files to Telegram.",
+      "cap_groups": [
+        "cap_im_tg"
+      ]
+    },
+    {
+      "id": "cap_im_wechat",
+      "file": "cap_im_wechat.md",
+      "summary": "How to send additional text and images to WeChat.",
+      "cap_groups": [
+        "cap_im_wechat"
+      ]
+    },
+    {
+      "id": "cap_llm_inspect_image",
+      "file": "cap_llm_inspect.md",
+      "summary": "How to inspect a local image with inspect_image.",
+      "cap_groups": [
+        "cap_llm_inspect"
+      ]
+    },
+    {
+      "id": "cap_lua_list",
+      "file": "cap_lua_list.md",
+      "summary": "Discover Lua scripts across builtin/temp/user, prefer reusing existing scripts, and map listed relative paths to read_file paths.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "cap_lua_edit",
+      "file": "cap_lua_edit.md",
+      "summary": "Create and update Lua scripts through cap_lua, preferring existing scripts first and using builtin as references with temp/user for iteration.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "cap_lua_run",
+      "file": "cap_lua_run.md",
+      "summary": "Run Lua scripts from builtin/temp/user sync or async, preferring existing scripts before creating new ones, and manage background Lua jobs.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "cap_lua_patterns",
+      "file": "cap_lua_patterns.md",
+      "summary": "Reusable Lua patterns for scripts that run through cap_lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "cap_router_mgr",
+      "file": "cap_router_mgr.md",
+      "summary": "Manage router automation rules: list/get/add/update/delete/reload with strict rule_json format.",
+      "cap_groups": [
+        "cap_router_mgr"
+      ]
+    },
+    {
+      "id": "cap_scheduler",
+      "file": "cap_scheduler.md",
+      "summary": "Manage scheduler rules: list/get/add/update/remove/enable/disable/pause/resume/trigger/reload.",
+      "cap_groups": [
+        "cap_scheduler"
+      ]
+    },
+    {
+      "id": "cap_time",
+      "file": "cap_time.md",
+      "summary": "Return current local device time with SNTP sync only when the clock is invalid.",
+      "cap_groups": [
+        "cap_time"
+      ]
+    },
+    {
+      "id": "cap_web_search",
+      "file": "cap_web_search.md",
+      "summary": "Search the public web for current information through the configured Tavily or Brave provider.",
+      "cap_groups": [
+        "cap_web_search"
+      ]
+    },
+    {
+      "id": "memory_ops",
+      "file": "memory_ops.md",
+      "summary": "Use on-device long-term memory tools to remember, recall, list, update, and forget structured memories.",
+      "cap_groups": [
+        "claw_memory"
+      ]
+    },
+    {
+      "id": "profile_memory_ops",
+      "file": "profile_memory_ops.md",
+      "summary": "Use the editable profile markdown files to persist changes to the agent's soul, identity card, persona, role, and the user's standing profile.",
+      "cap_groups": [
+        "cap_files"
+      ]
+    },
+    {
+      "id": "lua_module_adc",
+      "file": "lua_module_adc.md",
+      "summary": "How to read analog values (raw or millivolts) from an ADC-capable GPIO in Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_board_manager",
+      "file": "lua_module_board_manager.md",
+      "summary": "How to query board information and resolve device handles and parameters from Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_button",
+      "file": "lua_module_button.md",
+      "summary": "How to create button handles, subscribe to events, and dispatch button state from Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_capability",
+      "file": "lua_module_capability.md",
+      "summary": "How to call registered capabilities from Lua through capability.call(name, payload[, opts]).",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_delay",
+      "file": "lua_module_delay.md",
+      "summary": "How to call delay.delay_ms(ms) from Lua after loading the delay module.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_display",
+      "file": "lua_module_display.md",
+      "summary": "How to draw shapes, text, bitmaps, and images on the display from Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_esp_heap",
+      "file": "lua_module_esp_heap.md",
+      "summary": "How to query heap capability flags, memory usage, and task watermarks from Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_event_publisher",
+      "file": "lua_module_event_publisher.md",
+      "summary": "Describe how to publish events to event_router to trigger other actions, such as sending messages or call other capabilities.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_gpio",
+      "file": "lua_module_gpio.md",
+      "summary": "How to set GPIO direction, write level, and read level from Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_i2c",
+      "file": "lua_module_i2c.md",
+      "summary": "How to create an I2C bus, scan it, and read/write I2C devices from Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_led_strip",
+      "file": "lua_module_led_strip.md",
+      "summary": "How to create and control an LED strip from Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_mcpwm",
+      "file": "lua_module_mcpwm.md",
+      "title": "lua_module_mcpwm",
+      "summary": "How to create and control generic PWM output from Lua with MCPWM.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_ssd1306",
+      "file": "lua_module_ssd1306.md",
+      "summary": "How to drive an I2C SSD1306 OLED from Lua using the i2c module.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_storage",
+      "file": "lua_module_storage.md",
+      "summary": "How to create directories and read or write files from Lua.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_system",
+      "file": "lua_module_system.md",
+      "summary": "How to access time, uptime, memory, and Wi-Fi info from Lua through the system module.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "lua_module_uart",
+      "file": "lua_module_uart.md",
+      "summary": "How to open a UART port and read/write bytes or text lines from Lua using polling.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "weather_search",
+      "file": "weather.md",
+      "summary": "How to answer current weather, temperature, and forecast queries through direct web search capabilities.",
+      "cap_groups": [
+        "cap_time",
+        "cap_web_search"
+      ]
+    },
+    {
+      "id": "nm_cyd_c5_rgb",
+      "file": "nm_cyd_c5_rgb.md",
+      "summary": "Control the NM-CYD-C5 on-board WS2812 RGB LED on GPIO27. Use the single canonical script `nm_cyd_c5_rgb` with mode/color/brightness args; never hand-write led_strip or gpio code.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "nm_cyd_c5_screen",
+      "file": "nm_cyd_c5_screen.md",
+      "summary": "Control the NM-CYD-C5 on-board ST7789 LCD. Use the single canonical script `nm_cyd_c5_screen` (mode=color/text/message/clear) with synchronous run_lua_script; never hand-write display code or use async.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "nm_cyd_c5_backlight",
+      "file": "nm_cyd_c5_backlight.md",
+      "summary": "Adjust the NM-CYD-C5 LCD backlight brightness (0..100%) via the LEDC PWM on GPIO25. Use the single canonical script `nm_cyd_c5_backlight` with `percent` or `mode=on/off`; never hand-write ledc/gpio code.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "nmminer",
+      "file": "nmminer.md",
+      "summary": "Discover and control NMMiner / NMAxe / NMAxeGamma / NMQAxe++ Bitcoin solo miners on the LAN via on-device Lua scripts (nmminer_scan / nmminer_info / nmminer_control / nmminer_setting). nmminer_scan auto-derives the /24 from the device's own STA IP and sweeps it; pass seed_ips=[...] only as an optional speedup. The scripts perform all HTTP work locally; the LLM only chooses a script and forwards the printed summary.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    },
+    {
+      "id": "skill_creator",
+      "file": "skill_creator.md",
+      "summary": "Author a new on-device skill on user request: confirm metadata, draft markdown skeleton, write_file to /fatfs/skills/<id>.md, then register_skill into skills_list.json so future similar requests resolve through activate_skill. Lets ESP-Claw evolve its long-term capabilities locally. Only invoke when the user explicitly asks to save, create, or teach a new skill.",
+      "cap_groups": [
+        "cap_files",
+        "cap_skill"
+      ]
+    }
+  ]
+}

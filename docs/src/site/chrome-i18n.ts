@@ -3,6 +3,7 @@ import type { Lang } from "./locales";
 export interface ChromeStrings {
   navHome: string;
   navDocs: string;
+  navSkillsLab: string;
   navGitHub: string;
   navCta: string;
   footerTerms: string;
@@ -14,6 +15,7 @@ export interface ChromeStrings {
 const en: ChromeStrings = {
   navHome: "Home",
   navDocs: "Documents",
+  navSkillsLab: "Skills Lab",
   navGitHub: "GitHub",
   navCta: "Get Started",
   footerTerms: "Terms",
@@ -25,6 +27,7 @@ const en: ChromeStrings = {
 const zhCn: ChromeStrings = {
   navHome: "首页",
   navDocs: "文档",
+  navSkillsLab: "Skills Lab",
   navGitHub: "GitHub",
   navCta: "开始使用",
   footerTerms: "条款",

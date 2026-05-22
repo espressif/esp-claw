@@ -28,6 +28,8 @@ typedef enum {
 #define CLAW_CORE_REQUEST_FLAG_PUBLISH_OUT_MESSAGE (1U << 0)
 #define CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE (1U << 1)
 
+#define CLAW_CORE_CONTEXT_PROVIDER_FLAG_REQUEST_START_ONLY (1U << 0)
+
 typedef struct {
     uint32_t request_id;
     uint32_t flags;
@@ -42,13 +44,38 @@ typedef struct {
     const char *target_chat_id;
 } claw_core_request_t;
 
-typedef esp_err_t (*claw_core_append_session_turn_fn)(const char *session_id,
-                                                      const char *user_text,
-                                                      const char *assistant_text,
-                                                      void *user_ctx);
+typedef enum {
+    CLAW_SESSION_RECORD_USER = 1,
+    CLAW_SESSION_RECORD_ASSISTANT_FINAL = 2,
+    CLAW_SESSION_RECORD_ASSISTANT_TOOL = 3,
+    CLAW_SESSION_RECORD_TOOL_RESULT = 4,
+} claw_session_record_type_t;
+
+typedef struct {
+    claw_session_record_type_t type;
+    const char *message_json;
+    const char *text;
+} claw_session_record_t;
+
+typedef struct {
+    const char *session_id;
+    const claw_core_request_t *request;
+    const claw_session_record_t *records;
+    size_t record_count;
+    bool turn_completed;
+} claw_session_persist_batch_t;
+
+typedef esp_err_t (*claw_core_persist_session_fn)(
+    const claw_session_persist_batch_t *batch,
+    void *user_ctx);
 
 typedef esp_err_t (*claw_core_request_start_fn)(const claw_core_request_t *request,
                                                 void *user_ctx);
+
+typedef esp_err_t (*claw_core_request_gate_fn)(const claw_core_request_t *request,
+                                               char *reject_message,
+                                               size_t reject_message_size,
+                                               void *user_ctx);
 
 typedef esp_err_t (*claw_core_stage_note_fn)(const claw_core_request_t *request,
                                              char **out_note,
@@ -76,6 +103,7 @@ typedef struct {
     const char *name;
     claw_core_context_provider_collect_fn collect;
     void *user_ctx;
+    uint32_t flags;
 } claw_core_context_provider_t;
 
 typedef esp_err_t (*claw_core_call_cap_fn)(const char *cap_name,
@@ -98,8 +126,10 @@ typedef struct {
     bool supports_vision;
     bool image_remote_url_only;
     const char *system_prompt;
-    claw_core_append_session_turn_fn append_session_turn;
-    void *append_session_turn_user_ctx;
+    claw_core_persist_session_fn persist_session;
+    void *persist_session_user_ctx;
+    claw_core_request_gate_fn request_gate;
+    void *request_gate_user_ctx;
     claw_core_request_start_fn on_request_start;
     void *on_request_start_user_ctx;
     claw_core_stage_note_fn collect_stage_note;
@@ -145,6 +175,7 @@ esp_err_t claw_core_call_cap(const char *cap_name,
                              const char *input_json,
                              const claw_core_request_t *request,
                              char **out_output);
+esp_err_t claw_core_publish_stage_text(const claw_core_request_t *request, const char *text);
 esp_err_t claw_core_submit(const claw_core_request_t *request, uint32_t timeout_ms);
 esp_err_t claw_core_cancel_request(uint32_t request_id);
 esp_err_t claw_core_receive(claw_core_response_t *response, uint32_t timeout_ms);

@@ -588,7 +588,22 @@ function renderBrandOptions() {
 }
 
 function getBrandKeys(chipKey: string) {
-  return Object.keys(firmwareDb[chipKey] ?? {}).sort((a, b) => a.localeCompare(b));
+  return Object.keys(firmwareDb[chipKey] ?? {}).sort(compareBrandKey);
+}
+
+function compareBrandKey(a: string, b: string) {
+  return brandSortWeight(a) - brandSortWeight(b) || a.localeCompare(b);
+}
+
+function brandSortWeight(brandKey: string) {
+  const normalized = brandKey.toLowerCase();
+  if (normalized === "espressif") {
+    return 0;
+  }
+  if (normalized === "m5stack") {
+    return 1;
+  }
+  return 2;
 }
 
 function getVisibleBoards(): VisibleBoard[] {
@@ -638,10 +653,10 @@ function getVisibleConsoleOutputKeys(firmware: FirmwareRecord | null) {
 }
 
 function isConsoleOutputVisibleForCurrentDevice(consoleOutput: string) {
-  if (state.detectedConsoleOutput === "JTAG" && consoleOutput === "UART") {
+  if (state.detectedConsoleOutput === "JTAG" && !consoleOutput.includes("JTAG")) {
     return false;
   }
-  if (state.detectedConsoleOutput === "UART" && consoleOutput === "JTAG") {
+  if (state.detectedConsoleOutput === "UART" && consoleOutput.includes("JTAG")) {
     return false;
   }
   return true;
@@ -655,7 +670,7 @@ function consoleOutputSortWeight(consoleOutput: string) {
   if (consoleOutput === "UART") {
     return 0;
   }
-  if (consoleOutput === "JTAG") {
+  if (consoleOutput.includes("JTAG")) {
     return 1;
   }
   if (consoleOutput === "unknown") {

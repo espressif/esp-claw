@@ -1,0 +1,5 @@
+board: waveshare_ESP32_S3_RLCD_4_2
+chip: esp32s3
+version: 1.0.0
+description: "Waveshare ESP32-S3-RLCD-4.2 Development Board with 4.2-inch reflective monochrome LCD"
+manufacturer: "Waveshare"

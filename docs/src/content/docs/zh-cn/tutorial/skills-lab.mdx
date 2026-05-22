@@ -1,0 +1,35 @@
+---
+title: Skills Lab
+description: 通过 Skills Lab 体验 ESP-Claw 的 Skills。
+---
+
+import { LinkCard, Aside } from '@astrojs/starlight/components';
+
+<LinkCard href="https://skills-lab.esp-claw.com" title="ESP-Claw Skills Lab" />
+
+ESP-Claw Skills Lab 是分享 ESP-Claw Skills 的社区平台，你可以在这里找到各种 ESP-Claw Skills / Lua 脚本，并分享你的 Skills / Lua 脚本。
+
+## 在设备上安装来自 Skills Lab 的 Skill / Lua 脚本
+
+ESP-Claw 内置了从 Skills Lab 上安装 Skill 的 Skill。你可以按照 Skills Lab 的指引，将提示词发送给 ESP-Claw，ESP-Claw 即可自动安装来自 Skills Lab 的 Skill / Lua 脚本。
+
+<Aside type="caution" title="安全提醒">
+
+Skills Lab 中的 Skills 及 Lua 脚本均由第三方提供。Skills 及 Lua 脚本可能包含恶意代码，导致设备文件系统损坏或重要凭据泄露。推荐在安装前仔细检查 Skills 及 Lua 脚本的内容。
+
+</Aside>
+
+## 向 Skills Lab 贡献 Skills / Lua 脚本
+
+你可以通过向 [ESP-Claw Skills Lab 的 GitHub 仓库](https://github.com/espressif/esp-claw-skills-lab)贡献 Skills / Lua 脚本，让更多的人受益。
+
+ESP-Claw Skills Lab 上的项目需要包装为一个遵循 [ESP-Claw Skill 规范](https://github.com/espressif/esp-claw/blob/master/components/common/skill_builder/claw-skill-spec.md)的 Skill。
+这样设计是因为单独的 Lua 脚本无法给 LLM 提供足够的信息，LLM 并不清楚这个 Lua 脚本的作用，也不清楚应当传入哪些参数。
+
+请将你的 Skills / Lua 脚本 / 资源文件放在 [ESP-Claw Skills Lab 的 GitHub 仓库](https://github.com/espressif/esp-claw-skills-lab)的 Skills 目录下。
+在向我们贡献 Skill 时，你应当确认你有合法权利以 MIT License 提交并再分发该 Skill——
+例如 Skill 为你自行创作、你已获著作权人授权，或其中的第三方材料在 CC0、与 MIT 兼容的其他许可等条件下允许如此再分发。
+
+## License
+
+ESP-Claw Skills Lab 的 Skill 使用 MIT License。

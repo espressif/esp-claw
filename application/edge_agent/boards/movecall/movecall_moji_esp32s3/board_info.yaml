@@ -1,0 +1,4 @@
+board: movecall_moji_esp32s3
+chip: esp32s3
+description: "Movecall Moji ESP32-S3 Development Board"
+manufacturer: "Movecall"

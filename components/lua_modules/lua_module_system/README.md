@@ -52,6 +52,25 @@ This module describes how to correctly use system when writing Lua scripts.
   - `wifi_rssi`: `integer`, connected AP RSSI, present only when Wi-Fi STA is connected
   - `wifi_ssid`: `string`, connected AP SSID, present only when available
 
+### `system.heap`
+- Type: `table`
+- Provides heap and task stack introspection helpers
+- `system.heap.caps`: heap capability flags such as `DEFAULT`, `INTERNAL`, `SPIRAM`, `DMA`, `BIT8`, and `BIT32`
+- `system.heap.get_info(caps)`: returns heap statistics for the selected capability flags
+- `system.heap.get_task_watermarks()`: returns stack high-water marks for tasks
+- `system.heap.get_current_task()`: returns stack high-water mark information for the current task
+
+`system.heap.get_info(caps)` returns a table with these fields:
+- `caps`: `integer`, capability flags used for the query
+- `total_size`: `integer`, total heap size for the capability flags
+- `free_size`: `integer`, free bytes
+- `allocated_size`: `integer`, allocated bytes
+- `minimum_free_size`: `integer`, minimum free bytes observed
+- `largest_free_block`: `integer`, largest free block in bytes
+- `allocated_blocks`: `integer`, allocated block count
+- `free_blocks`: `integer`, free block count
+- `total_blocks`: `integer`, total block count
+
 ## Example
 ```lua
 local system = require("system")
@@ -64,4 +83,10 @@ print(system.ip())
 
 local info = system.info()
 print(info.sram_free)
+
+local heap_info = system.heap.get_info(system.heap.caps.DEFAULT)
+print(heap_info.free_size, heap_info.largest_free_block)
+
+local task = system.heap.get_current_task()
+print(task.name, task.stack_high_water_mark_bytes)
 ```

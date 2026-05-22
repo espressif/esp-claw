@@ -156,7 +156,7 @@ const en: Strings = {
   flashError: "Flash failed: ",
   postFlashReconnectTitle: "Reconnect serial after reset",
   postFlashReconnectDesc:
-    "If you are flashing over ACM (JTAG), the serial port may briefly disconnect after reset. Click below and select the device again to continue.",
+    "If you are flashing over ACM (Serial JTAG), the serial port may briefly disconnect after reset. Click below and select the device again to continue.",
   postFlashReconnectBtn: "Reconnect Serial",
   postFlashReconnectBusy: "Waiting for you to select the device in the browser…",
   postFlashReconnectSuccess: "Serial reconnected. Continuing device setup…",
@@ -174,7 +174,7 @@ const en: Strings = {
   wifiConnecting: "Trying to connect to Wi-Fi…",
   wifiStatusProbeAttempt: "Querying Wi-Fi status ({current}/{total})…",
   wifiProbeError:
-    "Unable to communicate with the device. Check whether JTAG and UART are wired correctly. If the device is still in download mode, press RESET manually.",
+    "Unable to communicate with the device. Check whether Serial JTAG and UART are wired correctly. If the device is still in download mode, press RESET manually.",
   wifiTimeoutError: "Wi-Fi connection timed out. Please check the credentials and try again.",
   wifiReadyTitle: "Device is online",
   wifiReadyDesc: "Open the device web setup page to continue configuration.",
@@ -264,7 +264,7 @@ const zhCn: Strings = {
   flashError: "烧录失败：",
   postFlashReconnectTitle: "重启后重新连接串口",
   postFlashReconnectDesc:
-    "如果你使用的是 ACM（JTAG）烧录，设备重启后串口会短暂断开。请点击下面的按钮，并在浏览器里重新选择设备以继续。",
+    "如果你使用的是 ACM（Serial JTAG）烧录，设备重启后串口会短暂断开。请点击下面的按钮，并在浏览器里重新选择设备以继续。",
   postFlashReconnectBtn: "重新连接串口",
   postFlashReconnectBusy: "请在浏览器弹窗中重新选择设备…",
   postFlashReconnectSuccess: "串口已重新连接，正在继续设备初始化…",
@@ -280,7 +280,7 @@ const zhCn: Strings = {
   wifiConnecting: "正在尝试连接 Wi‑Fi…",
   wifiStatusProbeAttempt: "正在查询 Wi‑Fi 状态 ({current}/{total})…",
   wifiProbeError:
-    "未能与设备通信，请注意 JTAG 与 UART 口是否链接错误。如果设备仍在下载模式，请手动 RESET",
+    "未能与设备通信，请注意 Serial JTAG 与 UART 口是否链接错误。如果设备仍在下载模式，请手动 RESET",
   wifiTimeoutError: "20 秒内未连接成功，请检查 Wi‑Fi 名称和密码后重试。",
   wifiReadyTitle: "设备已联网",
   wifiReadyDesc: "请打开设备网页继续后续配置。",

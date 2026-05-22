@@ -1,3 +1,9 @@
 dependencies:
   cap_im_local:
     path: ../../../../components/claw_capabilities/cap_im_local
+
+  lua_module_http_server:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
+      - if: $CONFIG{APP_CLAW_LUA_MODULE_HTTP_SERVER} == True
+    path: ../../../../components/lua_modules/lua_module_http_server

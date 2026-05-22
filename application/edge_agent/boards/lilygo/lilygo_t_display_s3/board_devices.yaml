@@ -32,17 +32,15 @@ devices:
   # -----------------------------------------------------------------------
   # - name: lcd_touch
   #   chip: cst816s
-  #   type: lcd_touch_i2c
+  #   type: lcd_touch
+  #   sub_type: i2c
   #   version: default
   #   dependencies:
   #     espressif/esp_lcd_touch_cst816s: "*"
   #   config:
   #     io_i2c_config:
-  #       dev_addr: [0x15]
   #       lcd_cmd_bits: 8
   #       scl_speed_hz: 400000
-  #       peripherals:
-  #         - name: i2c_master
   #     touch_config:
   #       x_max: 320
   #       y_max: 170
@@ -51,3 +49,6 @@ devices:
   #       flags:
   #         mirror_x: false
   #         mirror_y: false
+  #   peripherals:
+  #     - name: i2c_master
+  #       i2c_addr: [0x2a]

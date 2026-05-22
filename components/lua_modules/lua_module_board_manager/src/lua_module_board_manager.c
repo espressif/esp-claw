@@ -236,7 +236,7 @@ static int lua_bm_get_display_lcd_params(lua_State *L)
  * -------------------------------------------------------------------------- */
 static int lua_bm_get_lcd_touch_handle(lua_State *L)
 {
-#ifdef CONFIG_ESP_BOARD_DEV_LCD_TOUCH_I2C_SUPPORT
+#if defined(CONFIG_ESP_BOARD_DEV_LCD_TOUCH_SUPPORT) && defined(CONFIG_ESP_BOARD_DEV_LCD_TOUCH_SUB_I2C_SUPPORT)
     const char *name = luaL_checkstring(L, 1);
     void *handle = NULL;
     esp_err_t err = esp_board_manager_get_device_handle(name, &handle);
@@ -244,7 +244,7 @@ static int lua_bm_get_lcd_touch_handle(lua_State *L)
         return push_err(L, err, name);
     }
 
-    dev_lcd_touch_i2c_handles_t *touch_handles = (dev_lcd_touch_i2c_handles_t *)handle;
+    dev_lcd_touch_handles_t *touch_handles = (dev_lcd_touch_handles_t *)handle;
     if (touch_handles == NULL || touch_handles->touch_handle == NULL) {
         lua_pushnil(L);
         lua_pushfstring(L, "lcd_touch '%s' handle is NULL", name);

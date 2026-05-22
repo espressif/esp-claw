@@ -46,4 +46,17 @@ menu "Default Wi-Fi Settings"
 
 endmenu
 
+menu "Default Search Settings"
+
+    config APP_SEARCH_HTTP_ALLOWLIST
+        string "Default HTTP Request allowlist"
+        default "*"
+        help
+            Default value used to populate app setting `search_http_allowlist`.
+            Use `*` to allow all hosts, or a comma-separated list of domains/IPs.
+
+            e.g. "api.example.com,*.example.org,203.0.113.10"
+
+endmenu
+
 endmenu

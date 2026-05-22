@@ -16,11 +16,10 @@ Common fields in `claw_memory_config_t`:
 |------|------|------|
 | `session_root_dir` | Root for session history files | `/fatfs/sessions` |
 | `memory_root_dir` | Long-term memory directory (`claw_memory` manages `MEMORY.md` and all structured memory files under this directory) | `/fatfs/memory` |
-| `max_session_messages` | Max messages kept per session | `20` |
 | `max_message_chars` | Max characters per message | `1024` |
 | `enable_async_extract_stage_note` | Enable async extract-stage notes for structured memory | `true` in full mode |
 
-`max_session_messages` and `max_message_chars` together bound history size to avoid unbounded growth on flash and oversized history in prompts.
+Session history is stored as an append-only data file plus a matching `.idx` file. It loads the complete indexed session and compacts old tool details only when the data file exceeds the session size limit after a finalized assistant turn.
 
 ## Wiring into claw_core
 
@@ -35,7 +34,7 @@ Common fields in `claw_memory_config_t`:
 
 **Write-back Callback**:
 
-- `claw_memory_append_session_turn_callback`: passed as `claw_core_config_t.append_session_turn`; after each Agent turn, user/assistant text is appended to the session file.
+- `claw_memory_persist_session_callback`: passed as `claw_core_config_t.persist_session`; typed raw session records are appended to the session file for plain turns, tool rounds, final assistant records, and failure notes.
 - Full mode also enables `on_request_start` and `collect_stage_note` for structured-memory auto-extraction.
 
 ## Long-term memory file layout

@@ -94,7 +94,7 @@ import LinkToSource from '@/components/LinkToSource.astro';
 
     若 `llm_api_key`、`llm_model`、`llm_profile` 均非空：
     - 调用 `claw_core_init` 配置 LLM 后端（API Key、profile、model、base_url、超时等）及系统提示词；
-    - 依次注册 context provider：`claw_memory_profile_provider`、长期记忆 provider（完整模式为 `claw_memory_long_term_provider`，轻量模式为 `claw_memory_long_term_lightweight_provider`）、`claw_memory_session_history_provider`、`claw_skill_skills_list_provider`、`claw_skill_active_skill_docs_provider`、`claw_cap_tools_provider`、`cap_lua_async_jobs_provider`、`cap_time_context_provider`；
+    - 依次注册 context provider：`claw_memory_profile_provider`、长期记忆 provider（完整模式为 `claw_memory_long_term_provider`，轻量模式为 `claw_memory_long_term_lightweight_provider`）、`claw_memory_session_history_provider`、`claw_skill_skills_list_provider`、`claw_cap_tools_provider`；
     - 调用 `claw_core_start` 启动推理任务。
 
     若 LLM 未完整配置，则跳过 `claw_core_init` / `claw_core_start` 并打印 WARN；`ask`、默认路由至 Agent、图片 inspect 等依赖 core 的功能完全不可用，直到 LLM 配置补全并重启。

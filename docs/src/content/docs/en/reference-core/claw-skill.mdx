@@ -47,12 +47,12 @@ Activation is **isolated per session**:
 
 ## Where runtime Skills come from
 
-The `/fatfs/skills` tree read at runtime is merged from every build component's `skills/` subtree:
+The `/fatfs/skills` tree read at runtime is assembled in the build staging image under `build/fatfs_image/skills`:
 
-1. **`application/edge_agent/main/skills/`**: app-bundled Skills laid out as `skills/<skill_id>/SKILL.md`, synced into `fatfs_image/skills/` at build time.
-2. **Component Skills**: each `cap_*` / `lua_module_*` / `lua_driver_*` component may ship `skills/<skill_id>/SKILL.md`; `components/common/skill_builder` syncs them into `fatfs_image/skills/` at build time before packaging.
+1. **`application/edge_agent/fatfs_image/skills/`**: app-bundled factory Skills laid out as `skills/<skill_id>/SKILL.md`, copied into the build staging image.
+2. **Component Skills**: each `cap_*` / `lua_module_*` / `lua_driver_*` component may ship `skills/<skill_id>/SKILL.md`; `components/common/skill_builder` syncs them into `build/fatfs_image/skills/` before packaging.
 
-Note: files placed under `application/edge_agent/main/skills/` go through the build sync flow; directly editing same-named files under `fatfs_image/skills/` will be overwritten by the next build.
+Note: `application/edge_agent/fatfs_image/` is source input. `application/edge_agent/build/fatfs_image/` is generated staging output and is recreated during the build.
 
 ## User-facing interaction
 

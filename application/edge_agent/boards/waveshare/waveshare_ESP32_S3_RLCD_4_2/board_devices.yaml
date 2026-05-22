@@ -1,0 +1,63 @@
+version: 1.0.0
+# Devices Configuration for Waveshare ESP32-S3-RLCD-4.2
+#
+# Audio codec:
+#   ES8311  – I2C 7-bit 0x18 (8-bit 0x30), DAC only (playback)
+#   ES7210  – I2C 7-bit 0x40 (8-bit 0x80), dual-mic ADC with reference channel
+#
+# Display:
+#   4.2-inch fully reflective monochrome LCD, 400 × 300 pixels
+#   Proprietary 1-bit-per-pixel SPI controller; initialization and frame
+#   rendering are handled entirely in setup_device.c (custom device type).
+#   SPI3_HOST, MOSI=GPIO12, SCK=GPIO11, CS=GPIO40, DC=GPIO5, RST=GPIO41.
+
+devices:
+  # ── ES8311 Audio DAC ────────────────────────────────────────────────────
+  - name: audio_dac
+    chip: es8311
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: false
+      dac_enabled: true
+      dac_max_channel: 1
+      # DAC channel mask, 1-enable, 0-disable, layout: left,right
+      dac_channel_mask: "1"     # Left channel enable
+      dac_init_gain: 0          # dB
+      mclk_enabled: true
+    peripherals:
+      - name: gpio_pa_control
+        gain: 6                 # dB
+        active_level: 1         # High = PA enabled
+      - name: i2s_audio_out
+      - name: i2c_master
+        address: 0x30           # 8-bit address (7-bit 0x18 << 1)
+        frequency: 400000       # Hz
+
+  # ── ES7210 Dual-Mic Audio ADC ────────────────────────────────────────────
+  - name: audio_adc
+    chip: es7210
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      adc_max_channel: 4
+      # Bit0=Mic0, Bit1=Mic1(ref), Bit2=Mic2, Bit3=Mic3 — dual mic + reference
+      adc_channel_mask: "0011"
+      adc_init_gain: 0          # dB
+    peripherals:
+      - name: i2s_audio_in
+      - name: i2c_master
+        address: 0x80           # 8-bit address (7-bit 0x40 << 1)
+        frequency: 400000       # Hz
+
+  # ── 4.2-inch Reflective Monochrome LCD ──────────────────────────────────
+  # Fully custom 1-bpp SPI panel; all hardware init is in setup_device.c.
+  # The custom panel translates LVGL RGB565 draws to 1-bit frame updates.
+  - name: display_lcd
+    chip: rlcd
+    type: custom
+    version: default
+    config:
+      lcd_width: 400
+      lcd_height: 300

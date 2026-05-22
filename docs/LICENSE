@@ -9,5 +9,15 @@ from the respective rights holders:
 
 ---------------------------------
 
+The files under docs/public/clientjs are sourced from jsDelivr and have not
+been modified. Please refer to the original licenses at:
+
+- https://www.jsdelivr.com/package/npm/marked
+  - https://cdn.jsdelivr.net/npm/marked@18.0.4/LICENSE
+- https://www.jsdelivr.com/package/npm/dompurify
+  - https://cdn.jsdelivr.net/npm/dompurify@3.4.5/LICENSE
+
+---------------------------------
+
 The project documentation is licensed under the same terms as the project 
 source code. See the LICENSE file in the project root directory for details.

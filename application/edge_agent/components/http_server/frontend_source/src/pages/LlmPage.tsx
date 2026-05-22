@@ -1,4 +1,4 @@
-import { createEffect, createSignal, Show, type Component } from 'solid-js';
+import { createEffect, createMemo, createSignal, Show, type Component } from 'solid-js';
 import { t } from '../i18n';
 import type { AppConfig } from '../api/client';
 import { createConfigTab } from '../state/configTab';
@@ -10,6 +10,8 @@ import { SavePanel } from '../components/ui/SavePanel';
 import { Banner } from '../components/ui/Banner';
 import { Switch } from '../components/ui/Switch';
 import { Button } from '../components/ui/Button';
+import { LabelLink } from '../components/ui/LabelLink';
+import { getProviderLinks } from '../constants/externalLinks';
 import { pushToast } from '../state/toast';
 
 type PresetKey =
@@ -193,6 +195,10 @@ export const LlmPage: Component = () => {
   const [validationError, setValidationError] = createSignal<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = createSignal(false);
   const [selectedPreset, setSelectedPreset] = createSignal<PresetKey | null>(null);
+  const providerLinks = createMemo(() => {
+    const key = selectedPreset();
+    return key ? getProviderLinks(key) : undefined;
+  });
 
   createEffect(() => {
     void tab.form.llm_api_key;
@@ -297,12 +303,34 @@ export const LlmPage: Component = () => {
             <div class="grid gap-3 sm:grid-cols-2">
               <TextInput
                 type="password"
-                label={t('llmApiKey')}
+                label={
+                  <>
+                    {t('llmApiKey')}
+                    <Show when={providerLinks()}>
+                      {(links) => (
+                        <LabelLink href={links().consoleUrl}>
+                          {t('llmProviderConsole') as string} ↗
+                        </LabelLink>
+                      )}
+                    </Show>
+                  </>
+                }
                 value={tab.form.llm_api_key}
                 onInput={(event) => tab.setForm('llm_api_key', event.currentTarget.value)}
               />
             <TextInput
-              label={t('llmModel')}
+              label={
+                <>
+                  {t('llmModel')}
+                  <Show when={providerLinks()}>
+                    {(links) => (
+                      <LabelLink href={links().docsUrl}>
+                        {t('llmProviderDocs') as string} ↗
+                      </LabelLink>
+                    )}
+                  </Show>
+                </>
+              }
               value={tab.form.llm_model}
               onInput={(event) => tab.setForm('llm_model', event.currentTarget.value)}
             />

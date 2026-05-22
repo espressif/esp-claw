@@ -6,13 +6,16 @@ import { TabShell } from '../components/layout/TabShell';
 import { PageHeader } from '../components/ui/PageHeader';
 import { StaticConfigBlock } from '../components/ui/ConfigBlocks';
 import { TextInput } from '../components/ui/FormField';
+import { LabelLink } from '../components/ui/LabelLink';
 import { SavePanel } from '../components/ui/SavePanel';
 import { Banner } from '../components/ui/Banner';
 import { RestartConfirmModal } from '../components/system/RestartConfirmModal';
+import { BRAVE_API_KEY_URL, TAVILY_API_KEY_URL } from '../constants/externalLinks';
 
 type SearchForm = {
   search_brave_key: string;
   search_tavily_key: string;
+  search_http_allowlist: string;
 };
 
 export const SearchPage: Component<{ onRestartRequest: () => void }> = (props) => {
@@ -22,10 +25,12 @@ export const SearchPage: Component<{ onRestartRequest: () => void }> = (props) =
     toForm: (config: Partial<AppConfig>) => ({
       search_brave_key: config.search_brave_key ?? '',
       search_tavily_key: config.search_tavily_key ?? '',
+      search_http_allowlist: config.search_http_allowlist ?? '',
     }),
     fromForm: (form) => ({
       search_brave_key: form.search_brave_key.trim(),
       search_tavily_key: form.search_tavily_key.trim(),
+      search_http_allowlist: form.search_http_allowlist.trim(),
     }),
   });
   const [confirmOpen, setConfirmOpen] = createSignal(false);
@@ -51,15 +56,35 @@ export const SearchPage: Component<{ onRestartRequest: () => void }> = (props) =
           <div class="grid gap-3 sm:grid-cols-2 pt-2">
             <TextInput
               type="password"
-              label={t('searchBraveKey')}
+              label={
+                <>
+                  {t('searchBraveKey')}
+                  <LabelLink href={BRAVE_API_KEY_URL}>
+                    {t('llmProviderConsole') as string} ↗
+                  </LabelLink>
+                </>
+              }
               value={tab.form.search_brave_key}
               onInput={(event) => tab.setForm('search_brave_key', event.currentTarget.value)}
             />
             <TextInput
               type="password"
-              label={t('searchTavilyKey')}
+              label={
+                <>
+                  {t('searchTavilyKey')}
+                  <LabelLink href={TAVILY_API_KEY_URL}>
+                    {t('llmProviderConsole') as string} ↗
+                  </LabelLink>
+                </>
+              }
               value={tab.form.search_tavily_key}
               onInput={(event) => tab.setForm('search_tavily_key', event.currentTarget.value)}
+            />
+            <TextInput
+              label={t('searchHttpAllowlist')}
+              placeholder={t('searchHttpAllowlistPlaceholder') as string}
+              value={tab.form.search_http_allowlist}
+              onInput={(event) => tab.setForm('search_http_allowlist', event.currentTarget.value)}
             />
           </div>
         </StaticConfigBlock>

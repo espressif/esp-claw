@@ -23,6 +23,7 @@ Use this skill when the user needs current public web information that should be
 
 ## Available capability
 - `web_search`: search the web with the configured provider and return concise formatted results.
+- `http_request`: send standard HTTP requests to allowlisted domains/IPs and return status + body text.
 
 ## Provider behavior
 - The runtime prefers `Tavily` when a Tavily API key is configured.
@@ -31,11 +32,27 @@ Use this skill when the user needs current public web information that should be
 
 ## Calling rules
 - Call `web_search` directly. Do not route web search through CLI wrappers unless the user explicitly asks for console commands.
+- Call `http_request` only when the target host is expected to be in device allowlist configuration.
 - Input must be a JSON object with one required field:
 
 ```json
 {
   "query": "your search query"
+}
+```
+
+`http_request` input:
+
+```json
+{
+  "url": "https://api.example.com/v1/data",
+  "method": "GET",
+  "headers": {
+    "Authorization": "Bearer <token>"
+  },
+  "body": "",
+  "timeout_ms": 15000,
+  "max_body_bytes": 16384
 }
 ```
 
@@ -57,6 +74,8 @@ Use this skill when the user needs current public web information that should be
   - `Error: missing query`
   - `Error: search request failed (...)`
   - `Error: failed to parse search results`
+  - `Error: HTTP allowlist is empty; configure search_http_allowlist first`
+  - `Error: host '...' is not in allowlist`
 
 ## Recommended workflow
 1. Decide whether the user needs fresh web information or a normal answer.

@@ -159,36 +159,6 @@ static cJSON *anthropic_make_tool_use_block(cJSON *tool_call)
     return block;
 }
 
-static cJSON *anthropic_make_tool_result_message(const char *tool_call_id, const char *content)
-{
-    cJSON *message = NULL;
-    cJSON *blocks = NULL;
-    cJSON *block = NULL;
-
-    if (!tool_call_id || !tool_call_id[0]) {
-        return NULL;
-    }
-
-    message = cJSON_CreateObject();
-    blocks = cJSON_CreateArray();
-    block = cJSON_CreateObject();
-    if (!message || !blocks || !block) {
-        cJSON_Delete(message);
-        cJSON_Delete(blocks);
-        cJSON_Delete(block);
-        return NULL;
-    }
-
-    cJSON_AddStringToObject(message, "role", "user");
-    cJSON_AddStringToObject(block, "type", "tool_result");
-    cJSON_AddStringToObject(block, "tool_use_id", tool_call_id);
-    cJSON_AddStringToObject(block, "content", content ? content : "");
-    cJSON_AddBoolToObject(block, "is_error", false);
-    cJSON_AddItemToArray(blocks, block);
-    cJSON_AddItemToObject(message, "content", blocks);
-    return message;
-}
-
 static cJSON *anthropic_duplicate_supported_block(cJSON *block)
 {
     cJSON *type_json = NULL;
@@ -203,7 +173,9 @@ static cJSON *anthropic_duplicate_supported_block(cJSON *block)
     }
     if (strcmp(type_json->valuestring, "text") == 0 ||
             strcmp(type_json->valuestring, "tool_use") == 0 ||
-            strcmp(type_json->valuestring, "tool_result") == 0) {
+            strcmp(type_json->valuestring, "tool_result") == 0 ||
+            strcmp(type_json->valuestring, "thinking") == 0 ||
+            strcmp(type_json->valuestring, "redacted_thinking") == 0) {
         return cJSON_Duplicate(block, true);
     }
     return NULL;
@@ -212,7 +184,8 @@ static cJSON *anthropic_duplicate_supported_block(cJSON *block)
 static cJSON *convert_messages_to_anthropic(cJSON *messages)
 {
     cJSON *out = NULL;
-    cJSON *msg = NULL;
+    int msg_count;
+    int idx;
 
     out = cJSON_CreateArray();
     if (!out) {
@@ -222,7 +195,9 @@ static cJSON *convert_messages_to_anthropic(cJSON *messages)
         return out;
     }
 
-    cJSON_ArrayForEach(msg, messages) {
+    msg_count = cJSON_GetArraySize(messages);
+    for (idx = 0; idx < msg_count; idx++) {
+        cJSON *msg = cJSON_GetArrayItem(messages, idx);
         cJSON *role_json = cJSON_GetObjectItem(msg, "role");
         cJSON *content_json = cJSON_GetObjectItem(msg, "content");
         const char *role = cJSON_IsString(role_json) ? role_json->valuestring : NULL;
@@ -235,16 +210,65 @@ static cJSON *convert_messages_to_anthropic(cJSON *messages)
             continue;
         }
 
+        /*
+         * Merge consecutive "tool"-role messages into a single "user"
+         * message.  Anthropic requires every tool_use in an assistant
+         * message to have a corresponding tool_result in the immediately
+         * following user message — all in that ONE user message.
+         */
         if (strcmp(role, "tool") == 0) {
-            cJSON *tool_call_id = cJSON_GetObjectItem(msg, "tool_call_id");
-            cJSON *tool_message = anthropic_make_tool_result_message(
-                                      cJSON_IsString(tool_call_id) ? tool_call_id->valuestring : NULL,
-                                      cJSON_IsString(content_json) ? content_json->valuestring : "");
-            if (!tool_message) {
+            cJSON *tool_blocks = cJSON_CreateArray();
+
+            if (!tool_blocks) {
                 cJSON_Delete(out);
                 return NULL;
             }
-            cJSON_AddItemToArray(out, tool_message);
+
+            while (idx < msg_count) {
+                cJSON *inner = cJSON_GetArrayItem(messages, idx);
+                cJSON *inner_role_json = cJSON_GetObjectItem(inner, "role");
+                const char *inner_role = cJSON_IsString(inner_role_json)
+                                         ? inner_role_json->valuestring : NULL;
+
+                if (!inner_role || strcmp(inner_role, "tool") != 0) {
+                    break;
+                }
+
+                {
+                    cJSON *tool_call_id = cJSON_GetObjectItem(inner, "tool_call_id");
+                    cJSON *inner_content_json = cJSON_GetObjectItem(inner, "content");
+                    cJSON *is_error_json = cJSON_GetObjectItem(inner, "is_error");
+                    const char *tid = cJSON_IsString(tool_call_id) ? tool_call_id->valuestring : NULL;
+                    const char *content = cJSON_IsString(inner_content_json)
+                                          ? inner_content_json->valuestring : "";
+                    bool is_error = cJSON_IsBool(is_error_json) && cJSON_IsTrue(is_error_json);
+                    cJSON *block = cJSON_CreateObject();
+
+                    if (!block) {
+                        cJSON_Delete(tool_blocks);
+                        cJSON_Delete(out);
+                        return NULL;
+                    }
+                    cJSON_AddStringToObject(block, "type", "tool_result");
+                    cJSON_AddStringToObject(block, "tool_use_id", tid ? tid : "");
+                    cJSON_AddStringToObject(block, "content", content);
+                    cJSON_AddBoolToObject(block, "is_error", is_error);
+                    cJSON_AddItemToArray(tool_blocks, block);
+                }
+
+                idx++;
+            }
+            idx--; /* outer loop will advance past the last tool message */
+
+            out_message = cJSON_CreateObject();
+            if (!out_message) {
+                cJSON_Delete(tool_blocks);
+                cJSON_Delete(out);
+                return NULL;
+            }
+            cJSON_AddStringToObject(out_message, "role", "user");
+            cJSON_AddItemToObject(out_message, "content", tool_blocks);
+            cJSON_AddItemToArray(out, out_message);
             continue;
         }
 
@@ -286,6 +310,23 @@ static cJSON *convert_messages_to_anthropic(cJSON *messages)
         }
 
         if (strcmp(role, "assistant") == 0) {
+            cJSON *reasoning = cJSON_GetObjectItem(msg, "reasoning_content");
+
+            if (cJSON_IsString(reasoning) && reasoning->valuestring &&
+                    reasoning->valuestring[0]) {
+                cJSON *thinking_block = cJSON_CreateObject();
+
+                if (!thinking_block) {
+                    cJSON_Delete(out_message);
+                    cJSON_Delete(blocks);
+                    cJSON_Delete(out);
+                    return NULL;
+                }
+                cJSON_AddStringToObject(thinking_block, "type", "thinking");
+                cJSON_AddStringToObject(thinking_block, "thinking", reasoning->valuestring);
+                cJSON_InsertItemInArray(blocks, 0, thinking_block);
+            }
+
             tool_calls = cJSON_GetObjectItem(msg, "tool_calls");
             if (cJSON_IsArray(tool_calls)) {
                 cJSON_ArrayForEach(tool_call, tool_calls) {
@@ -435,7 +476,9 @@ static esp_err_t parse_chat_response(const char *body,
     size_t tool_count = 0;
     size_t tool_index = 0;
     size_t total_text_len = 0;
+    size_t total_thinking_len = 0;
     char *text = NULL;
+    char *reasoning = NULL;
 
     if (!body || !out_response || !out_error_message) {
         return ESP_ERR_INVALID_ARG;
@@ -455,6 +498,28 @@ static esp_err_t parse_chat_response(const char *body,
         return ESP_FAIL;
     }
 
+    {
+        cJSON *message = cJSON_CreateObject();
+        cJSON *content_copy = cJSON_Duplicate(content, true);
+
+        if (!message || !content_copy) {
+            cJSON_Delete(message);
+            cJSON_Delete(content_copy);
+            cJSON_Delete(root);
+            *out_error_message = dup_printf("Out of memory copying LLM raw message");
+            return ESP_ERR_NO_MEM;
+        }
+        cJSON_AddStringToObject(message, "role", "assistant");
+        cJSON_AddItemToObject(message, "content", content_copy);
+        out_response->raw_message_json = cJSON_PrintUnformatted(message);
+        cJSON_Delete(message);
+        if (!out_response->raw_message_json) {
+            cJSON_Delete(root);
+            *out_error_message = dup_printf("Out of memory copying LLM raw message");
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
     cJSON_ArrayForEach(block, content) {
         cJSON *type_json = cJSON_GetObjectItem(block, "type");
 
@@ -467,9 +532,46 @@ static esp_err_t parse_chat_response(const char *body,
             if (cJSON_IsString(text_json) && text_json->valuestring) {
                 total_text_len += strlen(text_json->valuestring);
             }
+        } else if (strcmp(type_json->valuestring, "thinking") == 0) {
+            cJSON *thinking_json = cJSON_GetObjectItem(block, "thinking");
+
+            if (cJSON_IsString(thinking_json) && thinking_json->valuestring) {
+                total_thinking_len += strlen(thinking_json->valuestring);
+            }
         } else if (strcmp(type_json->valuestring, "tool_use") == 0) {
             tool_count++;
         }
+    }
+
+    if (total_thinking_len > 0) {
+        size_t offset = 0;
+
+        reasoning = calloc(1, total_thinking_len + 1);
+        if (!reasoning) {
+            cJSON_Delete(root);
+            *out_error_message = dup_printf("Out of memory copying LLM thinking");
+            return ESP_ERR_NO_MEM;
+        }
+
+        cJSON_ArrayForEach(block, content) {
+            cJSON *type_json = cJSON_GetObjectItem(block, "type");
+            cJSON *thinking_json = NULL;
+            size_t len = 0;
+
+            if (!cJSON_IsString(type_json) || strcmp(type_json->valuestring, "thinking") != 0) {
+                continue;
+            }
+            thinking_json = cJSON_GetObjectItem(block, "thinking");
+            if (!cJSON_IsString(thinking_json) || !thinking_json->valuestring) {
+                continue;
+            }
+            len = strlen(thinking_json->valuestring);
+            memcpy(reasoning + offset, thinking_json->valuestring, len);
+            offset += len;
+        }
+
+        out_response->reasoning_content = reasoning;
+        reasoning = NULL;
     }
 
     if (total_text_len > 0) {
@@ -553,7 +655,8 @@ static esp_err_t parse_chat_response(const char *body,
     }
 
     cJSON_Delete(root);
-    if (!out_response->text && out_response->tool_call_count == 0) {
+    if (!out_response->text && out_response->tool_call_count == 0 &&
+            !out_response->reasoning_content) {
         *out_error_message = dup_printf("LLM returned empty response");
         return ESP_FAIL;
     }

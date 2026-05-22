@@ -55,10 +55,7 @@ When assembling the **current-turn user prompt** sent to the LLM, `claw_core` al
 2. Long-term memory: `claw_memory_long_term_provider` (full mode) or `claw_memory_long_term_lightweight_provider` (lightweight mode)
 3. Session history: `claw_memory_session_history_provider`
 4. Skills catalog: `claw_skill_skills_list_provider`
-5. Activated Skill docs: `claw_skill_active_skill_docs_provider`
-6. Current visible tools: `claw_cap_tools_provider`
-7. Lua async job status: `cap_lua_async_jobs_provider`
-8. Current device time context: `cap_time_context_provider`
+5. Current visible tools: `claw_cap_tools_provider`
 
 So the final tool list depends both on registered capabilities and on `claw_cap_set_llm_visible_groups`.
 
@@ -78,10 +75,10 @@ Per-turn tool rounds are capped by `max_tool_iterations`.
 
 ## Session history writes
 
-`claw_core` supports multiple ways to append session history via callbacks.
+`claw_core` writes session history through a typed record batch callback.
 
-In `edge_agent`, `append_session_turn` is `claw_memory_append_session_turn_callback` from `claw_memory`.
-`claw_core` invokes it at the right times so turns are persisted through `claw_memory`.
+In `edge_agent`, `persist_session` is `claw_memory_persist_session_callback` from `claw_memory`.
+`claw_core` invokes it for plain turns, intermediate tool rounds, final assistant records, and failure notes so session records are persisted through `claw_memory`.
 
 ## Request cancellation
 
@@ -103,8 +100,6 @@ This is cooperative cancellation, mainly used to interrupt an in-progress LLM HT
 - `tool_calls_csv`: CSV list of tool calls triggered in this turn.
 
 This is useful for audit, metrics, or result-consistency checks (for example, verifying whether specific claims were accompanied by the corresponding tool calls).
-
-`edge_agent` registers `cap_lua_honesty_observe_completion` as a completion observer to detect when the model’s reply claims Lua work ran without a matching tool call, and logs when that happens.
 
 ## Init error handling
 

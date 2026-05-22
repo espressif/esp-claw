@@ -1,3 +1,5 @@
+# For PRs, please do not modify this file.
+
 .build_template:
   stage: build
   tags:
@@ -76,47 +78,50 @@ build_application_edge_agent:
     EXAMPLE_DIR: application/edge_agent
   parallel:
     matrix:
-      - EXAMPLE_BOARD: esp32_S3_DevKitC_1
-        EXAMPLE_TARGET: esp32s3
-        EXAMPLE_BOARD_BRAND: "espressif"
-        EXAMPLE_CONFIG: "sdkconfig.console.jtag=jtag" # use this to build the binary with JTAG console output
+      # Hint:
+      #
+      # If a dev board supports both Serial JTAG and UART,
+      # it is recommended to support multiple variants:
+      #   - Remove `CONFIG_ESP_CONSOLE_*` from the sdkconfig.defaults.board file of this board.
+      #   - Add `EXAMPLE_CONFIG: "sdkconfig.console.jtag=jtag"` in the CI.
+      #
+      # If a development board only supports Serial JTAG,
+      # you should add the following in the sdkconfig.defaults.board file:
+      #   ```
+      #   # USB: Serial JTAG
+      #   CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+      #   CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+      #   ```
 
-      - EXAMPLE_BOARD: esp32_S3_DevKitC_1_breadboard
+      - EXAMPLE_BOARD: ["esp32_S3_DevKitC_1", "esp32_S3_DevKitC_1_breadboard"]
         EXAMPLE_TARGET: esp32s3
         EXAMPLE_BOARD_BRAND: "espressif"
         EXAMPLE_CONFIG: "sdkconfig.console.jtag=jtag"
-
+      
       - EXAMPLE_BOARD: esp32_p4_function_ev
         EXAMPLE_TARGET: esp32p4
         EXAMPLE_BOARD_BRAND: "espressif"
+        EXAMPLE_CONFIG: "sdkconfig.console.jtag=jtag"
 
-      - EXAMPLE_BOARD: esp32_p4x_function_ev
+      - EXAMPLE_BOARD: ["esp32_p4x_function_ev", "esp32_p4_eye", "esp32_p4x_eye"]
         EXAMPLE_TARGET: esp32p4
         EXAMPLE_BOARD_BRAND: "espressif"
 
-      - EXAMPLE_BOARD: esp32_p4_eye
-        EXAMPLE_TARGET: esp32p4
+      - EXAMPLE_BOARD: ["esp_vocat_board_v1_2", "esp_box_3"]
+        EXAMPLE_TARGET: esp32s3
         EXAMPLE_BOARD_BRAND: "espressif"
 
-      - EXAMPLE_BOARD: esp32_p4x_eye
-        EXAMPLE_TARGET: esp32p4
+      - EXAMPLE_BOARD: esp_SensairShuttle
+        EXAMPLE_TARGET: esp32c5
         EXAMPLE_BOARD_BRAND: "espressif"
 
-      - EXAMPLE_BOARD: m5stack_sticks3
+      - EXAMPLE_BOARD: ["m5stack_sticks3", "m5stack_cores3"]
         EXAMPLE_TARGET: esp32s3
         EXAMPLE_BOARD_BRAND: "m5stack"
 
-      - EXAMPLE_BOARD: m5stack_cores3
-        EXAMPLE_TARGET: esp32s3
+      - EXAMPLE_BOARD: m5stack_tab5
+        EXAMPLE_TARGET: esp32p4
         EXAMPLE_BOARD_BRAND: "m5stack"
-
-      - EXAMPLE_BOARD: esp_vocat_board_v1_2
-        EXAMPLE_TARGET: esp32s3
-        EXAMPLE_BOARD_BRAND: "espressif"
-
-      - EXAMPLE_BOARD: esp_box_3
-        EXAMPLE_TARGET: esp32s3
-        EXAMPLE_BOARD_BRAND: "espressif"
 
       - EXAMPLE_BOARD: dfrobot_k10
         EXAMPLE_TARGET: esp32s3
@@ -126,10 +131,6 @@ build_application_edge_agent:
         EXAMPLE_TARGET: esp32s3
         EXAMPLE_BOARD_BRAND: "lilygo"
 
-      - EXAMPLE_BOARD: esp_SensairShuttle
-        EXAMPLE_TARGET: esp32c5
-        EXAMPLE_BOARD_BRAND: "espressif"
-
       - EXAMPLE_BOARD: xingzhi_395
         EXAMPLE_TARGET: esp32p4
         EXAMPLE_BOARD_BRAND: "Nologo.Tech"
@@ -137,3 +138,15 @@ build_application_edge_agent:
       - EXAMPLE_BOARD: waveshare_esp32_p4_nano
         EXAMPLE_TARGET: esp32p4
         EXAMPLE_BOARD_BRAND: "waveshare"
+
+      - EXAMPLE_BOARD: waveshare_ESP32_S3_RLCD_4_2
+        EXAMPLE_TARGET: esp32s3
+        EXAMPLE_BOARD_BRAND: "waveshare"
+
+      - EXAMPLE_BOARD: ["movecall_cuican_esp32s3", "movecall_moji_esp32s3"]
+        EXAMPLE_TARGET: esp32s3
+        EXAMPLE_BOARD_BRAND: "movecall"
+
+      - EXAMPLE_BOARD: movecall_moji2_esp32c5
+        EXAMPLE_TARGET: esp32c5
+        EXAMPLE_BOARD_BRAND: "movecall"

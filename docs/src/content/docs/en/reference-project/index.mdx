@@ -21,12 +21,12 @@ Today the code falls into four areas:
 
 <FileTree>
 - application/edge_agent/ **Demo app** — wires the framework and caps into flashable firmware
-  - main/ Boot entry (`app_main`) and Lua script examples
+  - main/ Boot entry (`app_main`)
     - main.c Firmware entry
   - components/ App-level components
     - app_config/ Configuration persistence (NVS read/write)
     - http_server/ Web management UI and JSON API
-  - fatfs_image/ Factory FATFS: router_rules, memory, scheduler samples
+  - fatfs_image/ Factory FATFS inputs: router_rules, memory, scheduler, static files, and app-bundled Skills
 - components/common/ **Shared app components** — reusable wiring across apps
   - app_claw/ App startup and wiring (`app_claw_start`, CLI, Lua module registration)
   - wifi_manager/ Wi-Fi and network setup

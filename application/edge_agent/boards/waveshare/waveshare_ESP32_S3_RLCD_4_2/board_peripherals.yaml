@@ -1,0 +1,56 @@
+version: 1.0.0
+# Peripherals Configuration for Waveshare ESP32-S3-RLCD-4.2
+#
+# Audio codec (ES8311 DAC + ES7210 ADC) share one I2C bus and one I2S port.
+# The 4.2-inch reflective LCD is driven via a custom SPI panel initialized
+# entirely in setup_device.c; no SPI peripheral entry is needed here.
+
+peripherals:
+  # I2C bus — shared by ES8311 (0x18), ES7210 (0x40), PCF85063 RTC, SHTC3
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 13  # GPIO13 – I2C SDA
+        scl: 14  # GPIO14 – I2C SCL
+
+  # I2S port 0 — full-duplex (ES8311 playback + ES7210 capture)
+  - name: i2s_audio_out
+    type: i2s
+    role: master
+    format: std-out
+    config: &i2s0_config
+      port: 0
+      # Clock
+      sample_rate_hz: 16000
+      mclk_multiple: 256
+      # Slot
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_STEREO
+      slot_mask: I2S_STD_SLOT_BOTH
+      ws_width: 16
+      # Pins
+      pins:
+        mclk: 16  # GPIO16 – I2S MCLK
+        bclk: 9   # GPIO9  – I2S BCLK
+        ws: 45    # GPIO45 – I2S LRCK (WS)
+        dout: 8   # GPIO8  – I2S DOUT → ES8311 DAC
+        din: 10   # GPIO10 – I2S DIN  ← ES7210 ADC
+
+  - name: i2s_audio_in
+    type: i2s
+    role: master
+    format: std-in
+    config: *i2s0_config
+
+  # Power-amplifier enable — GPIO46, active HIGH
+  - name: gpio_pa_control
+    type: gpio
+    role: io
+    config:
+      pin: 46
+      mode: GPIO_MODE_OUTPUT
+      pull_up: true

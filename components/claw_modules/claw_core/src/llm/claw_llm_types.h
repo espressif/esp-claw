@@ -71,6 +71,7 @@ typedef struct {
 typedef struct {
     char *text;
     char *reasoning_content;
+    char *raw_message_json;
     claw_llm_tool_call_t *tool_calls;
     size_t tool_call_count;
 } claw_llm_response_t;

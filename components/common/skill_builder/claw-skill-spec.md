@@ -1,6 +1,6 @@
 # Claw Skill Component Spec
 
-This document defines the standard `skills/` directory format, build sync rules, and filesystem path conventions for component-provided skills.
+This document defines the standard `skills/` directory format, `SKILL.md` rules, metadata conventions, build sync rules, and filesystem path conventions for component-provided skills.
 
 ## Directory Layout
 
@@ -24,7 +24,7 @@ Notes:
 - `skills/<skill_id>/` is one complete skill.
 - `SKILL.md` is the only required file.
 - `references/`, `scripts/`, `assets/`, and other subdirectories are optional.
-- The whole skill directory is copied unchanged into `skills/<skill_id>/` in the application file image.
+- The whole skill directory is packaged as one skill and copied unchanged into `skills/<skill_id>/` in the application file image.
 
 ## SKILL.md Rules
 
@@ -35,9 +35,13 @@ Notes:
 {
   "name": "skill_id",
   "description": "Short capability description.",
+  "author": "bob",
   "metadata": {
     "cap_groups": ["cap_lua"],
-    "manage_mode": "readonly"
+    "manage_mode": "web",
+    "category": ["utility"],
+    "peripherals": [],
+    "tags": ["weather", "forecast"]
   }
 }
 ---
@@ -48,12 +52,23 @@ Notes:
 Rules:
 
 - The frontmatter must be wrapped by `---`.
-- The frontmatter must be a valid JSON object.
+- The frontmatter must be valid JSON (a single JSON object).
+- `SKILL.md` must contain exactly one H1 heading.
 - `name` must be a non-empty string.
-- `name` must match the parent directory name `skills/<skill_id>`.
+- `name` must exactly match the parent directory name `skills/<skill_id>`.
 - `description` should briefly describe when to use the skill.
-- `metadata.cap_groups` declares the capability groups that need to be activated.
-- `metadata.manage_mode` should currently be `readonly`.
+- `author` is optional, but if present it must be a non-empty string.
+- If `author` contains angle brackets, it must use the form `Name <email>` with exactly one valid email address.
+- `metadata` must be an object.
+- `metadata.cap_groups` is optional. When present, it must be a JSON array of non-empty unique strings and declares the capability groups that need to be activated.
+- `metadata.manage_mode` must be `readonly`, `web`, or `runtime`. Use `web` for ESP-Claw Skills Lab packaged skills. On device, `web` is treated the same as `readonly` for management (for example unregister rules). `runtime` is reserved for skills registered by the runtime.
+- `metadata.category` must contain at least one value, and every value must be in the category allowlist.
+- `metadata.peripherals` may contain zero or more values, and every value must be in the peripheral allowlist.
+- `metadata.tags` is optional.
+- `metadata.tags`, when present, must be a string array.
+- `metadata.tags` is free-form and is not validated against an allowlist.
+- `metadata.tags` must not repeat any value already present in `metadata.category` or `metadata.peripherals`.
+- Additional keys at the root of the frontmatter or inside `metadata` may appear (for example tooling or Skills Lab fields). The device runtime ignores keys it does not read.
 
 ### Description
 
@@ -61,10 +76,10 @@ Rules:
 
 Rules:
 
-- Include common user wording, such as turn on/off, set color, brightness, LED strip/light.
-- Include critical prerequisites, such as `Requires board_hardware_info skill for the GPIO.`.
-- Keep it to one sentence and avoid long paragraphs.
-- Do not describe only internal script names, module names, or generic phrases such as `Run Lua script`.
+- Include common user wording when applicable, such as turn on/off, set color, brightness, LED strip/light.
+- Include critical prerequisites when they affect whether the skill can be used.
+- Keep it concise and avoid long paragraphs.
+- Do not describe only internal script names, module names, or generic execution phrases.
 
 Example:
 
@@ -80,6 +95,7 @@ Sync rules:
 
 - Every `skills/<skill_id>/SKILL.md` must exist.
 - Every skill id must be unique across the whole project.
+- Every file in the skill directory belongs to that skill.
 - Every file in the skill directory is copied into `skills/<skill_id>/` in the FATFS image.
 - `references/`, `scripts/`, `assets/`, and other subdirectories keep their relative paths.
 - The build fails if two components provide the same `skills/<skill_id>/...` output path.
@@ -137,7 +153,7 @@ skills/<skill_id>/scripts/action.lua
 
 Rules:
 
-- Skill-local Lua scripts are read-only scripts distributed with the skill.
+- Skill-local Lua scripts are read-only files distributed with the skill.
 - User-facing actions should be implemented as standalone skills rather than `test/` entries.
 - If script execution fails, the skill should require the model to report the error directly and avoid retrying with changed arguments.
 

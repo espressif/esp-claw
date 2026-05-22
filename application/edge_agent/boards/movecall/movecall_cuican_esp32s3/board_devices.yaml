@@ -1,0 +1,84 @@
+version: 1.0.0
+devices:
+  - name: led_strip
+    chip: ws2812
+    type: custom
+    version: default
+    init_skip: true
+    dependencies:
+      espressif/led_strip:
+        version: "^3.0"
+        public: true
+    config:
+      max_leds: 1
+    peripherals:
+      - name: rmt_tx
+
+  - name: audio_dac
+    chip: es8311
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: false
+      dac_enabled: true
+      dac_max_channel: 1
+      dac_channel_mask: "1"
+      mclk_enabled: true
+    peripherals:
+      - name: gpio_pa_control
+        gain: 6
+        active_level: 1
+      - name: i2s_audio_out
+      - name: i2c_master
+        address: 0x30
+        frequency: 400000
+
+  - name: audio_adc
+    chip: es8311
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      dac_enabled: false
+      adc_max_channel: 1
+      adc_channel_mask: "1"
+      adc_init_gain: 0
+      mclk_enabled: true
+    peripherals:
+      - name: i2s_audio_in
+      - name: i2c_master
+        address: 0x30
+        frequency: 400000
+
+  - name: display_lcd
+    chip: gc9a01
+    type: display_lcd
+    sub_type: spi
+    version: default
+    dependencies:
+      espressif/esp_lcd_gc9a01: "*"
+    config:
+      mirror_x: true
+      mirror_y: false
+      invert_color: true
+      x_max: 240
+      y_max: 240
+      io_spi_config:
+        cs_gpio_num: 13
+        dc_gpio_num: 14
+        spi_mode: 0
+        pclk_hz: 40000000
+      lcd_panel_config:
+        reset_gpio_num: 11
+        rgb_ele_order: LCD_RGB_ELEMENT_ORDER_BGR
+        bits_per_pixel: 16
+        data_endian: LCD_RGB_DATA_ENDIAN_BIG
+        vendor_config: NULL
+    peripherals:
+      - name: spi_display
+
+  - name: lcd_brightness
+    type: ledc_ctrl
+    version: default
+    peripherals:
+      - name: ledc_backlight

@@ -1,11 +1,12 @@
 import { createEffect, createSignal, Show, type Component } from 'solid-js';
-import { currentLocale, t } from '../i18n';
+import { currentLocale, t, tf } from '../i18n';
 import type { AppConfig } from '../api/client';
 import { createConfigTab } from '../state/configTab';
+import { appStatus } from '../state/config';
 import { TabShell } from '../components/layout/TabShell';
 import { PageHeader } from '../components/ui/PageHeader';
 import { CollapsibleConfigBlock, StaticConfigBlock } from '../components/ui/ConfigBlocks';
-import { TextInput } from '../components/ui/FormField';
+import { TextInput, SelectInput } from '../components/ui/FormField';
 import { SavePanel } from '../components/ui/SavePanel';
 import { Banner } from '../components/ui/Banner';
 import { RestartConfirmModal } from '../components/system/RestartConfirmModal';
@@ -14,6 +15,9 @@ import { pushToast } from '../state/toast';
 type BasicForm = {
   wifi_ssid: string;
   wifi_password: string;
+  ap_ssid: string;
+  ap_password: string;
+  ap_behavior: string;
   time_timezone: string;
 };
 
@@ -24,11 +28,17 @@ export const BasicPage: Component<{ onRestartRequest: () => void }> = (props) =>
     toForm: (config: Partial<AppConfig>) => ({
       wifi_ssid: config.wifi_ssid ?? '',
       wifi_password: config.wifi_password ?? '',
+      ap_ssid: config.ap_ssid ?? '',
+      ap_password: config.ap_password ?? '',
+      ap_behavior: config.ap_behavior ?? 'keep',
       time_timezone: config.time_timezone ?? '',
     }),
     fromForm: (form) => ({
       wifi_ssid: form.wifi_ssid.trim(),
       wifi_password: form.wifi_password,
+      ap_ssid: form.ap_ssid.trim(),
+      ap_password: form.ap_password,
+      ap_behavior: form.ap_behavior,
       time_timezone: form.time_timezone.trim(),
     }),
   });
@@ -38,12 +48,15 @@ export const BasicPage: Component<{ onRestartRequest: () => void }> = (props) =>
   createEffect(() => {
     void tab.form.wifi_ssid;
     void tab.form.wifi_password;
+    void tab.form.ap_ssid;
+    void tab.form.ap_password;
     setValidationError(null);
   });
 
   const handleSave = async () => {
     const wifiSsid = tab.form.wifi_ssid.trim();
     const wifiPassword = tab.form.wifi_password;
+    const apPassword = tab.form.ap_password;
 
     if (!wifiSsid) {
       const message = t('wifiValidationSsidRequired') as string;
@@ -59,8 +72,22 @@ export const BasicPage: Component<{ onRestartRequest: () => void }> = (props) =>
       return;
     }
 
+    if (apPassword.length > 0 && apPassword.length < 8) {
+      const message = t('apValidationPasswordLength') as string;
+      setValidationError(message);
+      pushToast(message, 'error', 5000);
+      return;
+    }
+
     await tab.save();
     setConfirmOpen(true);
+  };
+
+  const currentApSsid = () => appStatus()?.ap_ssid ?? '';
+
+  const apNameHint = () => {
+    const ssid = currentApSsid();
+    return ssid ? tf('apNameHint', { ssid }) : '';
   };
 
   const timezoneHint = () =>
@@ -111,6 +138,29 @@ export const BasicPage: Component<{ onRestartRequest: () => void }> = (props) =>
               value={tab.form.wifi_password}
               onInput={(event) => tab.setForm('wifi_password', event.currentTarget.value)}
             />
+            <TextInput
+              label={t('apName')}
+              autocomplete="off"
+              hint={apNameHint()}
+              value={tab.form.ap_ssid}
+              onInput={(event) => tab.setForm('ap_ssid', event.currentTarget.value)}
+            />
+            <TextInput
+              type="password"
+              label={t('apPassword')}
+              autocomplete="new-password"
+              hint={t('apPasswordHint') as string}
+              value={tab.form.ap_password}
+              onInput={(event) => tab.setForm('ap_password', event.currentTarget.value)}
+            />
+            <SelectInput
+              label={t('apBehavior')}
+              value={tab.form.ap_behavior}
+              onChange={(event) => tab.setForm('ap_behavior', event.currentTarget.value)}
+            >
+              <option value="keep">{t('apBehaviorKeep') as string}</option>
+              <option value="close_on_sta">{t('apBehaviorCloseOnSta') as string}</option>
+            </SelectInput>
           </div>
         </StaticConfigBlock>
         <CollapsibleConfigBlock title={t('sectionAdvanced') as string} defaultOpen={false}>

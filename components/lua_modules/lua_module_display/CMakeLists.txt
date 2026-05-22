@@ -1,6 +1,9 @@
 idf_component_register(
     SRCS
+        "src/display_color.c"
+        "src/display_dirty.c"
         "src/display_hal.c"
+        "src/display_text.c"
         "src/lua_module_display.c"
     INCLUDE_DIRS
         "src"
@@ -11,6 +14,6 @@ idf_component_register(
         esp_driver_ledc
         esp_lcd
         esp_painter
-        libpng
         spi_bus_arbiter
+        lua_module_image
 )

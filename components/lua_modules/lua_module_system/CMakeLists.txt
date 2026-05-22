@@ -8,5 +8,6 @@ idf_component_register(
         esp_netif
         esp_timer
         esp_wifi
+        freertos
         heap
 )

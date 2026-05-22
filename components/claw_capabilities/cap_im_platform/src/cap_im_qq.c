@@ -103,6 +103,7 @@ typedef struct {
     volatile bool ws_identify_pending;
     volatile bool ws_should_reconnect;
     volatile bool stop_requested;
+    int msg_type;
     cap_im_qq_ws_assembly_t ws_assembly;
     uint64_t seen_msg_keys[CAP_IM_QQ_DEDUP_CACHE_SIZE];
     size_t seen_msg_idx;
@@ -112,6 +113,7 @@ static cap_im_qq_state_t s_qq = {
     .max_inbound_file_bytes = 2 * 1024 * 1024,
     .heartbeat_interval_ms = 30000,
     .last_seq = -1,
+    .msg_type = 0,
 };
 
 static int64_t cap_im_qq_now_ms(void)
@@ -1520,8 +1522,18 @@ static esp_err_t cap_im_qq_send_message_chunk(const char *chat_id, const char *m
         return ESP_ERR_NO_MEM;
     }
 
-    cJSON_AddStringToObject(body, "content", message);
-    cJSON_AddNumberToObject(body, "msg_type", 0);
+    if (s_qq.msg_type == 2) {
+        cJSON *markdown = cJSON_CreateObject();
+        if (!markdown) {
+            cJSON_Delete(body);
+            return ESP_ERR_NO_MEM;
+        }
+        cJSON_AddStringToObject(markdown, "content", message);
+        cJSON_AddItemToObject(body, "markdown", markdown);
+    } else {
+        cJSON_AddStringToObject(body, "content", message);
+    }
+    cJSON_AddNumberToObject(body, "msg_type", s_qq.msg_type);
     json_str = cJSON_PrintUnformatted(body);
     cJSON_Delete(body);
     if (!json_str) {
@@ -1963,6 +1975,11 @@ esp_err_t cap_im_qq_register_group(void)
         return ESP_OK;
     }
     return claw_cap_register_group(&s_qq_group);
+}
+
+void cap_im_qq_set_msg_type(int msg_type)
+{
+    s_qq.msg_type = msg_type;
 }
 
 esp_err_t cap_im_qq_set_credentials(const char *app_id, const char *app_secret)

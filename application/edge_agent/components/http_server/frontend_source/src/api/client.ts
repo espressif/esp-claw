@@ -1,6 +1,9 @@
 export type AppConfig = {
   wifi_ssid: string;
   wifi_password: string;
+  ap_ssid: string;
+  ap_password: string;
+  ap_behavior: string;
   llm_api_key: string;
   llm_backend_type: string;
   llm_model: string;
@@ -15,6 +18,7 @@ export type AppConfig = {
   llm_image_remote_url_only: string;
   qq_app_id: string;
   qq_app_secret: string;
+  qq_msg_type: string;
   feishu_app_id: string;
   feishu_app_secret: string;
   tg_bot_token: string;
@@ -24,6 +28,7 @@ export type AppConfig = {
   wechat_account_id: string;
   search_brave_key: string;
   search_tavily_key: string;
+  search_http_allowlist: string;
   enabled_cap_groups: string;
   llm_visible_cap_groups: string;
   enabled_lua_modules: string;
@@ -42,7 +47,7 @@ export type ConfigGroup =
   | 'time';
 
 export const GROUP_FIELDS: Record<ConfigGroup, (keyof AppConfig)[]> = {
-  wifi: ['wifi_ssid', 'wifi_password'],
+  wifi: ['wifi_ssid', 'wifi_password', 'ap_ssid', 'ap_password', 'ap_behavior'],
   llm: [
     'llm_api_key',
     'llm_backend_type',
@@ -60,6 +65,7 @@ export const GROUP_FIELDS: Record<ConfigGroup, (keyof AppConfig)[]> = {
   im: [
     'qq_app_id',
     'qq_app_secret',
+    'qq_msg_type',
     'feishu_app_id',
     'feishu_app_secret',
     'tg_bot_token',
@@ -68,7 +74,7 @@ export const GROUP_FIELDS: Record<ConfigGroup, (keyof AppConfig)[]> = {
     'wechat_cdn_base_url',
     'wechat_account_id',
   ],
-  search: ['search_brave_key', 'search_tavily_key'],
+  search: ['search_brave_key', 'search_tavily_key', 'search_http_allowlist'],
   capabilities: ['enabled_cap_groups', 'llm_visible_cap_groups'],
   skills: ['enabled_lua_modules'],
   time: ['time_timezone'],

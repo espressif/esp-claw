@@ -14,8 +14,8 @@
 #include "claw_memory.h"
 #include "llm/claw_llm_runtime.h"
 
-#define CLAW_MEMORY_DEFAULT_MAX_SESSION_MESSAGES 20
 #define CLAW_MEMORY_DEFAULT_MAX_MESSAGE_CHARS    4096
+#define CLAW_MEMORY_DEFAULT_MAX_TOOL_ITERATIONS  10
 #define CLAW_MEMORY_MAX_PATH                     192
 #define CLAW_MEMORY_MAX_SUMMARIES                3
 #define CLAW_MEMORY_MAX_LABEL_CHARS              8
@@ -23,6 +23,7 @@
 #define CLAW_MEMORY_MAX_ACTIVE_ITEMS             128
 #define CLAW_MEMORY_COMPACT_CHANGE_THRESHOLD     5
 #define CLAW_MEMORY_COMPACT_SIZE_THRESHOLD       (32 * 1024)
+#define CLAW_MEMORY_SESSION_SIZE_LIMIT           (150 * 1024)
 #define CLAW_MEMORY_RECALL_DEFAULT_LIMIT         8
 #define CLAW_MEMORY_RECORDS_FILE                 "memory_records.jsonl"
 #define CLAW_MEMORY_INDEX_FILE                   "memory_index.json"
@@ -32,10 +33,11 @@
 #define CLAW_MEMORY_IDENTITY_FILE                "identity.md"
 #define CLAW_MEMORY_USER_FILE                    "user.md"
 #define CLAW_MEMORY_AUTO_EXTRACT_MAX_ITEMS       3
-#define CLAW_MEMORY_SESSION_HEADER_MAGIC         0x31485343u /* CSH1 */
-#define CLAW_MEMORY_SESSION_HEADER_VERSION       2
-#define CLAW_MEMORY_SESSION_RAW_HEADER_SIZE      256
-#define CLAW_MEMORY_SESSION_HEADER_SIZE          345
+typedef enum {
+    CLAW_MEMORY_BACKEND_FORMAT_UNKNOWN = 0,
+    CLAW_MEMORY_BACKEND_FORMAT_OPENAI = 1,
+    CLAW_MEMORY_BACKEND_FORMAT_ANTHROPIC = 2,
+} claw_memory_backend_format_t;
 
 typedef struct {
     int initialized;
@@ -48,8 +50,9 @@ typedef struct {
     char soul_path[CLAW_MEMORY_MAX_PATH];
     char identity_path[CLAW_MEMORY_MAX_PATH];
     char user_path[CLAW_MEMORY_MAX_PATH];
-    size_t max_session_messages;
     size_t max_message_chars;
+    uint32_t max_tool_iterations;
+    claw_memory_backend_format_t backend_format;
     uint32_t write_changes_since_compact;
     uint32_t next_memory_seq;
 } claw_memory_state_t;
@@ -76,11 +79,11 @@ void claw_memory_normalize_session_text(const char *src,
                                         char *dst,
                                         size_t dst_size,
                                         size_t max_chars);
-esp_err_t claw_memory_write_session_json_record(FILE *file,
-                                                const char *role,
-                                                const char *text,
-                                                uint32_t *out_offset,
-                                                uint32_t *out_length);
+claw_memory_backend_format_t claw_memory_backend_format_from_type(const char *backend_type);
+esp_err_t claw_memory_write_session_raw_record(FILE *file,
+                                               const char *json_text,
+                                               uint32_t *out_offset,
+                                               uint32_t *out_length);
 bool line_list_contains_item(const char *list, const char *item);
 esp_err_t line_list_append_unique(char **list, const char *item);
 esp_err_t line_list_merge_unique(char **dst, const char *src);

@@ -5,8 +5,8 @@ This module describes how to correctly use `display` when writing Lua scripts.
 `display` is a low-level drawing module. It can:
 - Initialize and deinitialize the LCD drawing context
 - Draw text, lines, rectangles, circles, arcs, ellipses, triangles, and round rectangles
-- Draw raw RGB565 bitmaps
-- Draw JPEG and PNG images from memory or files
+- Draw raw RGB565 pixel buffers
+- Draw RGB565 buffers obtained from `image.frame` values through the `image` module
 - Manage frame-based rendering and partial screen flushes
 
 ## Typical setup
@@ -24,8 +24,8 @@ display.init(panel_handle, io_handle, width, height, panel_if)
 ```
 
 After `display.init(...)` succeeds:
-- `display.width()` returns the current screen width
-- `display.height()` returns the current screen height
+- `display.width` returns the current screen width
+- `display.height` returns the current screen height
 - Most drawing APIs can be used
 - The display arbiter automatically grants Lua foreground ownership for the lifetime of the display session
 
@@ -40,14 +40,14 @@ pcall(display.deinit)
 
 - All coordinates and sizes are integer arguments unless noted otherwise.
 - Most numeric drawing arguments are validated as integers in the Lua binding.
-- Passing floating-point values such as `10.5`, `32.2`, or `tilt / 2` to coordinates, widths, heights, radii, crop rectangles, flush rectangles, or `font_size` can raise a Lua error instead of being rounded automatically.
+- Passing floating-point values such as `10.5`, `32.2`, or `tilt / 2` to coordinates, widths, heights, radii, crop rectangles, or `font_size` can raise a Lua error instead of being rounded automatically.
 - If a computed value is meant to be a pixel coordinate or size, convert it to an integer first before passing it to the display API. Prefer integer division `//` when the value comes from a division expression.
-- Colors are almost always passed as three integers: `r, g, b`.
+- Colors are passed as one value: a hex string, a named color string, or a `{ r, g, b [, a] }` table.
+- Supported hex forms are `#rgb`, `#rgba`, `#rrggbb`, and `#rrggbbaa`.
+- Supported named colors include `black`, `white`, `red`, `green`, `blue`, `yellow`, `cyan`, `magenta`, and `transparent`.
 - Text drawing only supports ASCII text.
-- For Chinese or other Unicode text, render an image and draw it with `draw_png_file(...)` or `draw_jpeg_file(...)`.
-- Image file paths must be absolute paths under the current storage root, for example `storage.join_path(storage.get_root_dir(), "pic.jpg")`.
-- Paths containing `..` are rejected.
-- Supported image file extensions are `.jpg`, `.jpeg`, and `.png`.
+- For Chinese or other Unicode text, render or load an image through the `image` module, convert it to `image.RGB565`, then draw the RGB565 buffer.
+- Image file loading, saving, decoding, and format conversion belong to the `image` module. `display` only draws raw RGB565 buffers.
 - This is critical: screen display duration must be considered. Do not deinitialize or exit immediately after `present()`, or the image may only flash briefly. Keep the display session alive long enough, and handle that hold time asynchronously when appropriate.
 
 ## Screen lifecycle
@@ -72,11 +72,11 @@ Deinitializes the drawing context.
 - Returns `true` on success
 - Raises a Lua error on failure
 
-### `display.width()`
+### `display.width`
 
 Returns the current screen width.
 
-### `display.height()`
+### `display.height`
 
 Returns the current screen height.
 
@@ -90,23 +90,21 @@ Starts a frame.
 
 `options` is an optional table:
 - `clear`: boolean, default `true`
-- `r`: background red, default `0`
-- `g`: background green, default `0`
-- `b`: background blue, default `0`
+- `color`: background color, default `"black"`
 
 Example:
 
 ```lua
-display.begin_frame({ clear = true, r = 12, g = 18, b = 28 })
+display.begin_frame({ clear = true, color = "#0c1220" })
 ```
 
 ### `display.present()`
 
-Flushes the full current frame to the panel.
+Flushes the current dirty rectangle to the panel. If no drawing operation changed the framebuffer since the last present, this returns without refreshing.
 
-### `display.present_rect(x, y, width, height)`
+### `display.present_full()`
 
-Flushes only a rectangular region. This is useful for partial updates such as painting apps or small widgets.
+Flushes the full current frame to the panel and clears the dirty state.
 
 ### `display.end_frame()`
 
@@ -145,17 +143,16 @@ display.backlight(true)
 Draws ASCII text at the given position.
 
 `options` is an optional table:
-- `r`, `g`, `b`: text color, default white
+- `color`: text color, default `"white"`
 - `font_size`: integer, default `24`; floating-point values are rejected
-- `bg_r`, `bg_g`, `bg_b`: optional background color; if any background field is given, background fill is enabled
+- `bg`: optional background color
+- Text color and background can include alpha when drawing inside an active frame.
 
 Example:
 
 ```lua
 display.draw_text(16, 24, "hello", {
-    r = 255,
-    g = 255,
-    b = 255,
+    color = "white",
     font_size = 24,
 })
 ```
@@ -163,6 +160,7 @@ display.draw_text(16, 24, "hello", {
 Restrictions:
 - `text` must be ASCII
 - Non-ASCII text raises an error
+- Semi-transparent text or background requires `begin_frame(...)` before drawing.
 
 ### `display.measure_text(text [, options])`
 
@@ -186,19 +184,17 @@ local tw, th = display.measure_text("hello", { font_size = 24 })
 Draws ASCII text inside a rectangle with alignment.
 
 `options` supports:
-- `r`, `g`, `b`
+- `color`
 - `font_size` as an integer
-- `bg_r`, `bg_g`, `bg_b`
+- `bg`
 - `align`: `"left"`, `"center"`/`"centre"`, or `"right"`
 - `valign`: `"top"`, `"middle"`/`"center"`, or `"bottom"`
 
 Example:
 
 ```lua
-display.draw_text_aligned(0, 0, display.width(), 32, "status", {
-    r = 255,
-    g = 255,
-    b = 255,
+display.draw_text_aligned(0, 0, display.width, 32, "status", {
+    color = "white",
     font_size = 16,
     align = "center",
     valign = "middle",
@@ -207,7 +203,7 @@ display.draw_text_aligned(0, 0, display.width(), 32, "status", {
 
 ## Basic drawing primitives
 
-### `display.clear(r, g, b)`
+### `display.clear(color)`
 
 Clears the screen or current frame buffer to a solid color.
 
@@ -219,194 +215,151 @@ Sets a clipping rectangle. Subsequent drawing is restricted to that region until
 
 Removes the active clipping rectangle.
 
-### `display.fill_rect(x, y, width, height, r, g, b)`
+### `display.fill_rect(x, y, width, height, color)`
 
 Draws a filled rectangle.
 
-### `display.draw_rect(x, y, width, height, r, g, b)`
+### `display.draw_rect(x, y, width, height, color)`
 
 Draws a rectangle outline.
 
-### `display.draw_pixel(x, y, r, g, b)`
+### `display.draw_pixel(x, y, color)`
 
 Draws one pixel.
 
-### `display.draw_line(x0, y0, x1, y1, r, g, b)`
+### `display.draw_line(x0, y0, x1, y1, color)`
 
 Draws a line.
 
 ## Shape drawing
 
-### `display.fill_circle(cx, cy, radius, r, g, b)`
+### `display.fill_circle(cx, cy, radius, color)`
 
 Draws a filled circle.
 
-### `display.draw_circle(cx, cy, radius, r, g, b)`
+### `display.draw_circle(cx, cy, radius, color)`
 
 Draws a circle outline.
 
-### `display.draw_arc(cx, cy, radius, start_deg, end_deg, r, g, b)`
+### `display.draw_arc(cx, cy, radius, start_deg, end_deg, color)`
 
 Draws an arc.
 
 - `start_deg` and `end_deg` are numeric values, not limited to integers
 
-### `display.fill_arc(cx, cy, inner_radius, outer_radius, start_deg, end_deg, r, g, b)`
+### `display.fill_arc(cx, cy, inner_radius, outer_radius, start_deg, end_deg, color)`
 
 Draws a filled ring segment.
 
-### `display.draw_ellipse(cx, cy, radius_x, radius_y, r, g, b)`
+### `display.draw_ellipse(cx, cy, radius_x, radius_y, color)`
 
 Draws an ellipse outline.
 
-### `display.fill_ellipse(cx, cy, radius_x, radius_y, r, g, b)`
+### `display.fill_ellipse(cx, cy, radius_x, radius_y, color)`
 
 Draws a filled ellipse.
 
-### `display.draw_round_rect(x, y, width, height, radius, r, g, b)`
+### `display.draw_round_rect(x, y, width, height, radius, color)`
 
 Draws a rounded rectangle outline.
 
-### `display.fill_round_rect(x, y, width, height, radius, r, g, b)`
+### `display.fill_round_rect(x, y, width, height, radius, color)`
 
 Draws a filled rounded rectangle.
 
-### `display.draw_triangle(x1, y1, x2, y2, x3, y3, r, g, b)`
+### `display.draw_triangle(x1, y1, x2, y2, x3, y3, color)`
 
 Draws a triangle outline.
 
-### `display.fill_triangle(x1, y1, x2, y2, x3, y3, r, g, b)`
+### `display.fill_triangle(x1, y1, x2, y2, x3, y3, color)`
 
 Draws a filled triangle.
 
-## Raw bitmap APIs
+## Raw pixel APIs
 
-These APIs draw RGB565 pixel buffers.
+These APIs draw RGB565 pixel buffers. Prefer `display.draw_image(...)` when the source is already an `image.frame`, because it borrows the image buffer during the C call and avoids creating a large Lua string.
 
-### `display.draw_bitmap(x, y, w, h, data)`
+### `display.draw_pixels(x, y, data, opts)`
 
-Draws a raw RGB565 bitmap.
+Draws a raw RGB565 pixel buffer.
 
-- `data` is either a Lua string containing exactly `w * h * 2` bytes or more, or a `lightuserdata` pointer to a buffer of that size
-- Byte order must be RGB565 little-endian
-
-If the byte string is shorter than required, the API raises an error.
-
-### `display.draw_bitmap_crop(x, y, src_x, src_y, width, height, src_width, src_height, data)`
-
-Draws a cropped region from a larger RGB565 source image.
-
-Arguments:
-- `x`, `y`: destination position on screen
-- `src_x`, `src_y`: top-left coordinate inside the source image
-- `width`, `height`: crop size to draw
-- `src_width`, `src_height`: full source image size
-- `data`: source RGB565 data buffer
-- `data` may be a Lua string or `lightuserdata`
-
-Notes:
-- `data` must contain the full source image, not just the crop
-- Required byte size is `src_width * src_height * 2`
-- Input data is RGB565 little-endian
-
-### `display.draw_rgb565_crop(x, y, src_x, src_y, width, height, src_width, src_height, data)`
-
-Alias-style crop API for in-memory RGB565 data, matching the JPEG crop naming pattern.
-
-- Returns `width, height`
-
-### `display.draw_rgb565_scaled(x, y, src_width, src_height, scale_w, scale_h, data)`
-
-Scales an in-memory RGB565 image to the requested output size.
-
-- `data` may be a Lua string or `lightuserdata`
+- `data` is either a Lua string containing at least `opts.width * opts.height * 2` bytes, or a `lightuserdata` pointer to a buffer of that size
+- `opts` is required because raw buffers do not carry width or height metadata
+- `opts.format`: `"rgb565"` or `"rgb565le"`; default is `"rgb565"`
+- `opts.width`, `opts.height`: full source buffer size
+- `opts.mode`: `"raw"`, `"fit"`, `"cover"`, `"stretch"`, or `"crop"`; default is `"raw"`
+- `opts.dst_width`, `opts.dst_height`: destination size for stretch/cover/crop modes
+- `opts.max_width`, `opts.max_height`: fit box; accepted as aliases for fit destination size
+- `opts.source`: `{ x, y, width, height }` source rectangle. In raw mode this draws the source rectangle without scaling.
 - Returns `output_w, output_h`
 
-### `display.draw_rgb565_fit(x, y, src_width, src_height, max_w, max_h, data)`
+Examples:
 
-Scales an in-memory RGB565 image to fit within `max_w x max_h` while preserving aspect ratio.
+```lua
+display.draw_pixels(0, 0, rgb565_bytes, {
+    format = "rgb565",
+    width = 320,
+    height = 240,
+})
 
-- If the original image already fits, it is drawn at full resolution
-- Otherwise the module computes a scaled size automatically
-- For larger outputs, the chosen scaled size is aligned down to multiples of `8` when possible
-- `data` may be a Lua string or `lightuserdata`
+display.draw_pixels(0, 0, rgb565_bytes, {
+    format = "rgb565",
+    width = 320,
+    height = 240,
+    mode = "fit",
+    max_width = display.width,
+    max_height = display.height,
+})
+
+display.draw_pixels(0, 0, rgb565_bytes, {
+    format = "rgb565",
+    width = 320,
+    height = 240,
+    mode = "crop",
+    source = { x = 40, y = 20, width = 160, height = 120 },
+    dst_width = 320,
+    dst_height = 240,
+})
+```
+
+### `display.draw_image(x, y, frame, opts)`
+
+Draws an `image.frame` directly. The display module requests RGB565 from the
+image module and borrows the buffer only during the C call, avoiding the large
+Lua string copy caused by `frame:data()`.
+
+`opts` is optional:
+
+- `mode`: `"raw"`, `"fit"`, `"cover"`, `"stretch"`, or `"crop"`; default is `"raw"`
+- `width`, `height`: destination size for fit/cover/stretch/crop modes
+- `source`: `{ x, y, width, height }` source rectangle for crop/cover modes
+
+Examples:
+
+```lua
+display.draw_image(0, 0, frame, {
+    mode = "fit",
+    width = display.width,
+    height = display.height,
+})
+
+display.draw_image(0, 0, frame, {
+    mode = "crop",
+    source = { x = 20, y = 20, width = 160, height = 120 },
+    width = 320,
+    height = 240,
+})
+```
+
 - Returns `output_w, output_h`
-
-## JPEG and PNG APIs
-
-### `display.draw_jpeg(x, y, jpeg_data)`
-
-Draws a JPEG from raw bytes in memory.
-
-- `jpeg_data` is a Lua string containing JPEG bytes
-- Returns `width, height`
-
-### `display.draw_jpeg_file(x, y, path)`
-
-Draws a JPEG from a file.
-
-- `path` must be an absolute `.jpg` or `.jpeg` path
-- Returns `width, height`
-
-### `display.draw_png_file(x, y, path)`
-
-Draws a PNG from a file.
-
-- `path` must be an absolute `.png` path
-- Returns `width, height`
-
-PNG handling details:
-- The PNG is decoded inside the module
-- RGBA PNG input is converted to RGB565
-- Alpha is pre-multiplied against black
-
-This means transparent PNG pixels are blended toward black before display, not against an arbitrary background.
-
-### `display.draw_jpeg_crop(x, y, src_x, src_y, width, height, jpeg_data)`
-
-Draws a cropped region from in-memory JPEG data.
-
-- Returns `width, height`
-
-### `display.draw_jpeg_file_crop(x, y, src_x, src_y, width, height, path)`
-
-Draws a cropped region from a JPEG file.
-
-- Returns `width, height`
-
-### `display.draw_jpeg_file_scaled(x, y, scale_w, scale_h, path)`
-
-Draws a JPEG file scaled to the requested output size.
-
-Restrictions from the implementation:
-- `scale_w` and `scale_h` must be positive
-- `scale_w` and `scale_h` must both be multiples of `8`
-
-Returns:
-- `output_w`
-- `output_h`
-
-### `display.draw_jpeg_file_fit(x, y, max_w, max_h, path)`
-
-Scales a JPEG to fit within `max_w x max_h` while preserving aspect ratio.
-
-Behavior:
-- If the original image already fits, it is drawn at full resolution
-- Otherwise the module computes a scaled size automatically
-- The chosen scaled size is aligned down to multiples of `8`
-- Minimum output size is clamped to `8x8`
-- Maximum downscale is limited to `1/8` of the original size
-
-Returns:
-- `output_w`
-- `output_h`
+- The call is synchronous and does not retain the image buffer after returning
 
 ## Error behavior and constraints
 
 - Most APIs raise Lua errors directly when arguments are invalid or the HAL returns an error
 - Integer-only APIs reject non-integer Lua values
-- Path-based image APIs reject invalid or unsafe paths
-- `draw_bitmap(...)` and `draw_bitmap_crop(...)` reject buffers that are too short
+- File path validation is handled by the `image` module when loading or saving image files
+- `draw_pixels(...)` rejects buffers that are too short
 - `draw_text(...)` and `draw_text_aligned(...)` reject non-ASCII text
 
 ## Recommended usage pattern
@@ -416,7 +369,7 @@ For normal screen rendering:
 2. Call `display.init(...)`
 3. Call `display.begin_frame(...)`
 4. Draw text, shapes, or images
-5. Call `display.present()` or `display.present_rect(...)`
+5. Call `display.present()` or `display.present_full()`
 6. Call `display.end_frame()`
 7. Call `display.deinit()` before exit
 
@@ -431,20 +384,16 @@ local panel_handle, io_handle, width, height, panel_if =
 
 display.init(panel_handle, io_handle, width, height, panel_if)
 
-display.begin_frame({ clear = true, r = 12, g = 18, b = 28 })
+display.begin_frame({ clear = true, color = "#0c1220" })
 
-display.draw_rect(12, 12, display.width() - 24, display.height() - 24, 80, 120, 160)
-display.fill_rect(20, 40, 80, 36, 72, 208, 235)
+display.draw_rect(12, 12, display.width - 24, display.height - 24, { r = 80, g = 120, b = 160 })
+display.fill_rect(20, 40, 80, 36, "#48d0eb")
 display.draw_text(24, 90, "Lua Display Demo", {
-    r = 245,
-    g = 244,
-    b = 238,
+    color = "#f5f4ee",
     font_size = 24,
 })
-display.draw_text_aligned(0, display.height() - 24, display.width(), 20, "frame api", {
-    r = 210,
-    g = 220,
-    b = 228,
+display.draw_text_aligned(0, display.height - 24, display.width, 20, "frame api", {
+    color = { r = 210, g = 220, b = 228 },
     font_size = 16,
     align = "center",
     valign = "middle",

@@ -55,10 +55,7 @@ Event Router 的 `run_agent` 动作会同时设置这两个标志，实现异步
 2. 长期记忆：`claw_memory_long_term_provider`（完整模式）或 `claw_memory_long_term_lightweight_provider`（轻量模式）
 3. 会话历史：`claw_memory_session_history_provider`
 4. Skills 目录：`claw_skill_skills_list_provider`
-5. 已激活 Skill 文档：`claw_skill_active_skill_docs_provider`
-6. 当前可见工具列表：`claw_cap_tools_provider`
-7. Lua 异步任务状态：`cap_lua_async_jobs_provider`
-8. 当前设备时间上下文：`cap_time_context_provider`
+5. 当前可见工具列表：`claw_cap_tools_provider`
 
 因此：大语言模型最终接收的工具列表，不仅取决于注册了哪些 Capability，还取决于 `claw_cap_set_llm_visible_groups`。
 
@@ -78,10 +75,10 @@ Capability 的解析与执行工作由 `claw_cap` 负责。
 
 ## 会话历史写入
 
-`claw_core` 通过回调机制支持多种会话历史写入方式。
+`claw_core` 通过 typed record batch 回调写入会话历史。
 
-`edge_agent` 中，`append_session_turn` 设为 `claw_memory_append_session_turn_callback`，该函数由 `claw_memory` 提供。
-`claw_core` 会在合适时机触发回调函数，将会话历史交由 `claw_memory` 处理。
+`edge_agent` 中，`persist_session` 设为 `claw_memory_persist_session_callback`，该函数由 `claw_memory` 提供。
+`claw_core` 会在普通轮次、中间工具轮、最终助手记录和失败说明等时机触发回调，将会话记录交由 `claw_memory` 处理。
 
 ## 请求取消
 
@@ -103,8 +100,6 @@ Capability 的解析与执行工作由 `claw_cap` 负责。
 - `tool_calls_csv`：本轮触发过的工具调用列表（CSV）。
 
 该机制适合做审计、统计或“结果一致性”检查（例如检测某些声明是否伴随了对应工具调用）。
-
-`edge_agent` 注册了 `cap_lua_honesty_observe_completion` 作为 completion observer，用于检测模型回复中声称执行了 Lua 操作但实际未产生工具调用的情况，并在发现不一致时记录日志。
 
 ## 初始化错误处理
 

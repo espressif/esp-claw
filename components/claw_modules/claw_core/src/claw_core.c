@@ -64,11 +64,19 @@ typedef struct claw_core_pending_response {
 } claw_core_pending_response_t;
 
 typedef struct {
+    bool valid;
+    claw_core_context_kind_t kind;
+    char *content;
+} claw_core_cached_context_t;
+
+typedef struct {
     bool initialized;
     bool started;
     char *system_prompt;
-    claw_core_append_session_turn_fn append_session_turn;
-    void *append_session_turn_user_ctx;
+    claw_core_persist_session_fn persist_session;
+    void *persist_session_user_ctx;
+    claw_core_request_gate_fn request_gate;
+    void *request_gate_user_ctx;
     claw_core_request_start_fn on_request_start;
     void *on_request_start_user_ctx;
     claw_core_stage_note_fn collect_stage_note;
@@ -366,6 +374,22 @@ static void free_response_item(claw_core_response_item_t *item)
     memset(item, 0, sizeof(*item));
 }
 
+static void free_cached_contexts(claw_core_cached_context_t *contexts, size_t count)
+{
+    size_t i;
+
+    if (!contexts) {
+        return;
+    }
+
+    for (i = 0; i < count; i++) {
+        free(contexts[i].content);
+        contexts[i].content = NULL;
+        contexts[i].valid = false;
+    }
+    free(contexts);
+}
+
 static esp_err_t push_response(claw_core_response_item_t *item)
 {
     if (xQueueSend(s_core->response_queue, item, portMAX_DELAY) != pdTRUE) {
@@ -612,15 +636,15 @@ static void publish_out_message_if_requested(const claw_core_request_item_t *req
 
     free(payload_json);
 }
-#if CONFIG_CLAW_CORE_STAGE_VERBOSITY_VERBOSE
-static void publish_stage_event(const claw_core_request_t *request, const char *text)
+
+esp_err_t claw_core_publish_stage_text(const claw_core_request_t *request, const char *text)
 {
     claw_event_t event = {0};
     int64_t now_ms;
     esp_err_t err;
 
     if (!request || !text || !text[0]) {
-        return;
+        return ESP_ERR_INVALID_ARG;
     }
 
     now_ms = claw_core_now_ms();
@@ -636,7 +660,7 @@ static void publish_stage_event(const claw_core_request_t *request, const char *
         text,
         &event);
     if (err != ESP_OK) {
-        return;
+        return err;
     }
 
     esp_err_t pub_err = claw_event_router_publish(&event);
@@ -644,8 +668,8 @@ static void publish_stage_event(const claw_core_request_t *request, const char *
         ESP_LOGW(TAG, "request=%" PRIu32 " failed to publish stage event: %s",
                  request->request_id, esp_err_to_name(pub_err));
     }
+    return pub_err;
 }
-#endif
 
 static void publish_stage_tool_calls(const claw_core_request_t *request,
                                      const claw_core_llm_response_t *response,
@@ -685,7 +709,7 @@ static void publish_stage_tool_calls(const claw_core_request_t *request,
         off += (size_t)written;
     }
 
-    publish_stage_event(request, buf);
+    (void)claw_core_publish_stage_text(request, buf);
 #else
     (void)request;
     (void)response;
@@ -724,7 +748,7 @@ static void publish_stage_note_for_round(const claw_core_request_t *request,
         free(stage_note);
         return;
     }
-    publish_stage_event(request, buf);
+    (void)claw_core_publish_stage_text(request, buf);
 #else
     (void)request;
     (void)round_index;
@@ -833,19 +857,15 @@ static char *build_current_turn_prompt(const claw_core_request_t *request)
 {
 #define CLAW_CORE_TURN_PROMPT_FMT \
     "## Current Turn Context\n" \
-    "- request_id: %" PRIu32 "\n" \
     "- source_cap: %s\n" \
     "- source_channel: %s\n" \
     "- source_chat_id: %s\n" \
-    "- source_sender_id: %s\n" \
-    "- source_message_id: %s\n"
+    "- source_sender_id: %s\n"
 #define CLAW_CORE_TURN_PROMPT_ARGS(req) \
-    (req)->request_id, \
     (req)->source_cap ? (req)->source_cap : "(unknown)", \
     (req)->source_channel ? (req)->source_channel : "(unknown)", \
     (req)->source_chat_id ? (req)->source_chat_id : "(unknown)", \
-    (req)->source_sender_id ? (req)->source_sender_id : "(unknown)", \
-    (req)->source_message_id ? (req)->source_message_id : "(none)"
+    (req)->source_sender_id ? (req)->source_sender_id : "(unknown)"
 
     int needed;
     char *text = NULL;
@@ -911,57 +931,19 @@ static esp_err_t append_assistant_tool_calls(cJSON *messages,
                                              const claw_core_llm_response_t *response)
 {
     cJSON *assistant = NULL;
-    cJSON *tool_calls = NULL;
-    size_t i;
 
     if (!messages || !response) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (!response->raw_message_json || !response->raw_message_json[0]) {
+        return ESP_ERR_INVALID_STATE;
+    }
 
-    assistant = cJSON_CreateObject();
+    assistant = cJSON_ParseWithOpts(response->raw_message_json, NULL, 1);
     if (!assistant) {
-        return ESP_ERR_NO_MEM;
-    }
-
-    cJSON_AddStringToObject(assistant, "role", "assistant");
-    if (response->text && response->text[0]) {
-        cJSON_AddStringToObject(assistant, "content", response->text);
-    } else {
-        cJSON_AddNullToObject(assistant, "content");
-    }
-    if (response->reasoning_content) {
-        cJSON_AddStringToObject(assistant, "reasoning_content", response->reasoning_content);
-    } else {
-        cJSON_AddStringToObject(assistant, "reasoning_content", "");
-    }
-
-    tool_calls = cJSON_CreateArray();
-    if (!tool_calls) {
         cJSON_Delete(assistant);
-        return ESP_ERR_NO_MEM;
+        return ESP_ERR_INVALID_STATE;
     }
-
-    for (i = 0; i < response->tool_call_count; i++) {
-        cJSON *tool_call = cJSON_CreateObject();
-        cJSON *function = cJSON_CreateObject();
-
-        if (!tool_call || !function) {
-            cJSON_Delete(tool_call);
-            cJSON_Delete(function);
-            cJSON_Delete(tool_calls);
-            cJSON_Delete(assistant);
-            return ESP_ERR_NO_MEM;
-        }
-
-        cJSON_AddStringToObject(tool_call, "id", response->tool_calls[i].id);
-        cJSON_AddStringToObject(tool_call, "type", "function");
-        cJSON_AddStringToObject(function, "name", response->tool_calls[i].name);
-        cJSON_AddStringToObject(function, "arguments", response->tool_calls[i].arguments_json);
-        cJSON_AddItemToObject(tool_call, "function", function);
-        cJSON_AddItemToArray(tool_calls, tool_call);
-    }
-
-    cJSON_AddItemToObject(assistant, "tool_calls", tool_calls);
     cJSON_AddItemToArray(messages, assistant);
     return ESP_OK;
 }
@@ -1002,21 +984,32 @@ static char *claw_core_build_session_failure_trace(const char *error_message,
                       reason);
 }
 
-static esp_err_t append_tool_results_message(cJSON *runtime_messages,
-                                             const claw_core_llm_response_t *response,
-                                             const claw_core_request_t *request,
-                                             char *tool_summary,
-                                             size_t tool_summary_size)
+static esp_err_t append_tool_results_messages(cJSON *runtime_messages,
+                                              const claw_core_llm_response_t *response,
+                                              const claw_core_request_t *request,
+                                              char *tool_summary,
+                                              size_t tool_summary_size,
+                                              char **out_tool_results_json)
 {
+    cJSON *tool_results = NULL;
+    char *tool_results_json = NULL;
     size_t i;
+    esp_err_t ret = ESP_OK;
 
-    if (!runtime_messages || !response || !request) {
+    if (!runtime_messages || !response || !request || !out_tool_results_json) {
         return ESP_ERR_INVALID_ARG;
+    }
+    *out_tool_results_json = NULL;
+
+    tool_results = cJSON_CreateArray();
+    if (!tool_results) {
+        return ESP_ERR_NO_MEM;
     }
 
     for (i = 0; i < response->tool_call_count; i++) {
         char *tool_output = NULL;
         cJSON *tool_message = NULL;
+        cJSON *runtime_copy = NULL;
         esp_err_t err;
 
         ESP_LOGI(TAG, "tool_call request=%" PRIu32 " name=%s args=%.*s%s",
@@ -1034,7 +1027,8 @@ static esp_err_t append_tool_results_message(cJSON *runtime_messages,
             tool_output = dup_string(esp_err_to_name(err));
         }
         if (!tool_output) {
-            return ESP_ERR_NO_MEM;
+            ret = ESP_ERR_NO_MEM;
+            goto cleanup;
         }
 
         ESP_LOGI(TAG, "tool_result request=%" PRIu32 " name=%s err=%s output=%.*s%s",
@@ -1058,21 +1052,254 @@ static esp_err_t append_tool_results_message(cJSON *runtime_messages,
         tool_message = cJSON_CreateObject();
         if (!tool_message) {
             free(tool_output);
-            return ESP_ERR_NO_MEM;
+            ret = ESP_ERR_NO_MEM;
+            goto cleanup;
         }
 
         cJSON_AddStringToObject(tool_message, "role", "tool");
         cJSON_AddStringToObject(tool_message, "tool_call_id", response->tool_calls[i].id);
         cJSON_AddStringToObject(tool_message, "content", tool_output);
-        cJSON_AddItemToArray(runtime_messages, tool_message);
+        cJSON_AddBoolToObject(tool_message, "is_error", err != ESP_OK);
         free(tool_output);
+
+        runtime_copy = cJSON_Duplicate(tool_message, true);
+        if (!runtime_copy) {
+            cJSON_Delete(tool_message);
+            ret = ESP_ERR_NO_MEM;
+            goto cleanup;
+        }
+        cJSON_AddItemToArray(runtime_messages, runtime_copy);
+        cJSON_AddItemToArray(tool_results, tool_message);
     }
 
-    return ESP_OK;
+    tool_results_json = cJSON_PrintUnformatted(tool_results);
+    if (!tool_results_json) {
+        ret = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+
+    *out_tool_results_json = tool_results_json;
+    tool_results_json = NULL;
+
+cleanup:
+    if (tool_results_json) {
+        cJSON_free(tool_results_json);
+    }
+    cJSON_Delete(tool_results);
+    return ret;
+}
+
+static esp_err_t persist_session_batch_if_configured(const claw_core_request_t *request,
+                                                     const claw_session_record_t *records,
+                                                     size_t record_count,
+                                                     bool turn_completed)
+{
+    claw_session_persist_batch_t batch = {0};
+
+    if (!s_core->persist_session ||
+            !request || !request->session_id || !request->session_id[0]) {
+        return ESP_OK;
+    }
+    if (!records || record_count == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    batch.session_id = request->session_id;
+    batch.request = request;
+    batch.records = records;
+    batch.record_count = record_count;
+    batch.turn_completed = turn_completed;
+
+    return s_core->persist_session(&batch, s_core->persist_session_user_ctx);
+}
+
+static void log_session_persist_failure(const claw_core_request_t *request,
+                                        const char *operation,
+                                        esp_err_t err)
+{
+    if (!request || err == ESP_OK) {
+        return;
+    }
+
+    ESP_LOGW(TAG,
+             "%s failed for request=%" PRIu32 ": %s",
+             operation ? operation : "persist_session_records",
+             request->request_id,
+             esp_err_to_name(err));
+}
+
+static esp_err_t persist_session_tool_round_if_configured(const claw_core_request_t *request,
+                                                          const char *assistant_tool_message_json,
+                                                          const char *tool_results_json,
+                                                          bool include_user)
+{
+    claw_session_record_t records[3];
+    size_t record_count = 0;
+
+    if (!request) {
+        return ESP_OK;
+    }
+    if (!assistant_tool_message_json || !assistant_tool_message_json[0] ||
+            !tool_results_json || !tool_results_json[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (include_user) {
+        records[record_count++] = (claw_session_record_t) {
+            .type = CLAW_SESSION_RECORD_USER,
+            .text = request->user_text,
+        };
+    }
+
+    records[record_count++] = (claw_session_record_t) {
+        .type = CLAW_SESSION_RECORD_ASSISTANT_TOOL,
+        .message_json = assistant_tool_message_json,
+    };
+    records[record_count++] = (claw_session_record_t) {
+        .type = CLAW_SESSION_RECORD_TOOL_RESULT,
+        .message_json = tool_results_json,
+    };
+
+    return persist_session_batch_if_configured(request, records, record_count, false);
+}
+
+static esp_err_t persist_session_final_if_configured(const claw_core_request_t *request,
+                                                     const char *assistant_final_json,
+                                                     const char *assistant_text,
+                                                     bool user_already_flushed)
+{
+    claw_session_record_t records[2];
+    size_t record_count = 0;
+
+    if (!request) {
+        return ESP_OK;
+    }
+
+    if (!user_already_flushed) {
+        records[record_count++] = (claw_session_record_t) {
+            .type = CLAW_SESSION_RECORD_USER,
+            .text = request->user_text,
+        };
+    }
+
+    records[record_count++] = (claw_session_record_t) {
+        .type = CLAW_SESSION_RECORD_ASSISTANT_FINAL,
+        .message_json = assistant_final_json,
+        .text = assistant_text,
+    };
+
+    return persist_session_batch_if_configured(request, records, record_count, true);
+}
+
+static esp_err_t apply_context_content(char **system_prompt,
+                                       cJSON *messages,
+                                       cJSON *tools,
+                                       claw_core_context_kind_t kind,
+                                       const char *section_name,
+                                       const char *content)
+{
+    if (!system_prompt || !*system_prompt || !messages || !tools ||
+            !section_name || !content || !content[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    switch (kind) {
+    case CLAW_CORE_CONTEXT_KIND_SYSTEM_PROMPT:
+        return append_prompt_section(system_prompt, section_name, content);
+    case CLAW_CORE_CONTEXT_KIND_MESSAGES:
+        return append_message_array_json(messages, content);
+    case CLAW_CORE_CONTEXT_KIND_TOOLS:
+        return append_tool_array_json(tools, content);
+    default:
+        return ESP_ERR_INVALID_ARG;
+    }
+}
+
+static esp_err_t collect_request_start_only_contexts(
+    const claw_core_request_item_t *request,
+    claw_core_cached_context_t **out_contexts,
+    size_t *out_count)
+{
+    claw_core_cached_context_t *contexts = NULL;
+    size_t i;
+    esp_err_t err = ESP_OK;
+
+    if (!request || !out_contexts || !out_count) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_contexts = NULL;
+    *out_count = 0;
+
+    if (s_core->context_provider_count == 0) {
+        return ESP_OK;
+    }
+
+    contexts = calloc(s_core->context_provider_count, sizeof(*contexts));
+    if (!contexts) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    for (i = 0; i < s_core->context_provider_count; i++) {
+        claw_core_context_t context = {0};
+        const claw_core_context_provider_t *provider = &s_core->context_providers[i];
+        size_t context_len;
+
+        if (!(provider->flags & CLAW_CORE_CONTEXT_PROVIDER_FLAG_REQUEST_START_ONLY)) {
+            continue;
+        }
+
+        err = provider->collect(&request->view, &context, provider->user_ctx);
+        if (err == ESP_ERR_NOT_FOUND) {
+            err = ESP_OK;
+            continue;
+        }
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG,
+                     "context provider collect failed request=%" PRIu32
+                     " provider=%s err=%s",
+                     request->view.request_id,
+                     provider->name,
+                     esp_err_to_name(err));
+            goto cleanup;
+        }
+        if (!context.content || !context.content[0]) {
+            ESP_LOGW(TAG,
+                     "context provider returned empty content request=%" PRIu32
+                     " provider=%s",
+                     request->view.request_id,
+                     provider->name);
+            free(context.content);
+            err = ESP_FAIL;
+            goto cleanup;
+        }
+
+        context_len = strlen(context.content);
+        ESP_LOGI(TAG,
+                 "context_cached request=%" PRIu32 " provider=%s context_kind=%s context_len=%u",
+                 request->view.request_id,
+                 provider->name,
+                 context_kind_to_string(context.kind),
+                 (unsigned)context_len);
+
+        contexts[i].valid = true;
+        contexts[i].kind = context.kind;
+        contexts[i].content = context.content;
+        context.content = NULL;
+    }
+
+    *out_contexts = contexts;
+    *out_count = s_core->context_provider_count;
+    contexts = NULL;
+
+cleanup:
+    free_cached_contexts(contexts, s_core->context_provider_count);
+    return err;
 }
 
 static esp_err_t build_iteration_context(const claw_core_request_item_t *request,
                                          const cJSON *runtime_messages,
+                                         const claw_core_cached_context_t *request_start_contexts,
+                                         size_t request_start_context_count,
                                          char **out_system_prompt,
                                          cJSON **out_messages,
                                          char **out_tools_json,
@@ -1107,6 +1334,23 @@ static esp_err_t build_iteration_context(const claw_core_request_item_t *request
         const claw_core_context_provider_t *provider = &s_core->context_providers[i];
         size_t context_len;
 
+        if (provider->flags & CLAW_CORE_CONTEXT_PROVIDER_FLAG_REQUEST_START_ONLY) {
+            if (i < request_start_context_count && request_start_contexts &&
+                    request_start_contexts[i].valid) {
+                err = apply_context_content(&system_prompt,
+                                            messages,
+                                            tools,
+                                            request_start_contexts[i].kind,
+                                            provider->name,
+                                            request_start_contexts[i].content);
+                if (err != ESP_OK) {
+                    goto cleanup;
+                }
+                obs_csv_append(obs_providers_csv, obs_providers_csv_size, provider->name, true);
+            }
+            continue;
+        }
+
         err = provider->collect(&request->view, &context, provider->user_ctx);
         if (err == ESP_ERR_NOT_FOUND) {
             continue;
@@ -1139,20 +1383,12 @@ static esp_err_t build_iteration_context(const claw_core_request_item_t *request
                  (unsigned)context_len);
         obs_csv_append(obs_providers_csv, obs_providers_csv_size, provider->name, true);
 
-        switch (context.kind) {
-        case CLAW_CORE_CONTEXT_KIND_SYSTEM_PROMPT:
-            err = append_prompt_section(&system_prompt, provider->name, context.content);
-            break;
-        case CLAW_CORE_CONTEXT_KIND_MESSAGES:
-            err = append_message_array_json(messages, context.content);
-            break;
-        case CLAW_CORE_CONTEXT_KIND_TOOLS:
-            err = append_tool_array_json(tools, context.content);
-            break;
-        default:
-            err = ESP_ERR_INVALID_ARG;
-            break;
-        }
+        err = apply_context_content(&system_prompt,
+                                    messages,
+                                    tools,
+                                    context.kind,
+                                    provider->name,
+                                    context.content);
         free(context.content);
         if (err != ESP_OK) {
             goto cleanup;
@@ -1214,6 +1450,8 @@ static void claw_core_task(void *arg)
     while (true) {
         claw_core_request_item_t request = {0};
         claw_core_response_item_t response = {0};
+        claw_core_cached_context_t *request_start_contexts = NULL;
+        size_t request_start_context_count = 0;
         cJSON *runtime_messages = NULL;
         cJSON *messages = NULL;
         char *system_prompt = NULL;
@@ -1224,6 +1462,7 @@ static void claw_core_task(void *arg)
         esp_err_t err = ESP_OK;
         char obs_providers_csv[CLAW_CORE_OBS_CSV_MAX] = {0};
         char obs_tool_calls_csv[CLAW_CORE_OBS_CSV_MAX] = {0};
+        bool session_user_flushed = false;
 
         if (xQueueReceive(s_core->request_queue, &request, portMAX_DELAY) != pdTRUE) {
             continue;
@@ -1248,6 +1487,30 @@ static void claw_core_task(void *arg)
             response.view.error_message = dup_string("Failed to allocate response target");
             goto finish_request;
         }
+        if (s_core->request_gate) {
+            char reject_message[192] = {0};
+            esp_err_t gate_err = s_core->request_gate(&request.view,
+                                                      reject_message,
+                                                      sizeof(reject_message),
+                                                      s_core->request_gate_user_ctx);
+            if (gate_err != ESP_OK) {
+                if (reject_message[0]) {
+                    response.view.status = CLAW_CORE_RESPONSE_STATUS_OK;
+                    response.view.text = dup_string(reject_message);
+                    if (!response.view.text) {
+                        response.view.status = CLAW_CORE_RESPONSE_STATUS_ERROR;
+                        response.view.error_message = dup_string("Failed to allocate reject message");
+                        err = ESP_ERR_NO_MEM;
+                    } else {
+                        err = ESP_OK;
+                    }
+                } else {
+                    response.view.error_message = dup_string(esp_err_to_name(gate_err));
+                    err = gate_err;
+                }
+                goto finish_request;
+            }
+        }
         if (s_core->on_request_start) {
             err = s_core->on_request_start(&request.view, s_core->on_request_start_user_ctx);
             if (err != ESP_OK) {
@@ -1264,6 +1527,14 @@ static void claw_core_task(void *arg)
             goto finish_request;
         }
 
+        err = collect_request_start_only_contexts(&request,
+                                                  &request_start_contexts,
+                                                  &request_start_context_count);
+        if (err != ESP_OK) {
+            response.view.error_message = dup_string(esp_err_to_name(err));
+            goto finish_request;
+        }
+
         while (true) {
             claw_core_llm_response_free(&llm_response);
             free(system_prompt);
@@ -1275,6 +1546,8 @@ static void claw_core_task(void *arg)
 
             err = build_iteration_context(&request,
                                           runtime_messages,
+                                          request_start_contexts,
+                                          request_start_context_count,
                                           &system_prompt,
                                           &messages,
                                           &tools_json,
@@ -1312,20 +1585,49 @@ static void claw_core_task(void *arg)
                                false);
             }
 
+            char *tool_results_json = NULL;
+            const char *assistant_tool_message_json = llm_response.raw_message_json;
+
             err = append_assistant_tool_calls(runtime_messages, &llm_response);
             if (err != ESP_OK) {
                 response.view.error_message = dup_string(esp_err_to_name(err));
                 goto finish_request;
             }
 
-            err = append_tool_results_message(runtime_messages,
-                                              &llm_response,
-                                              &request.view,
-                                              tool_summary,
-                                              sizeof(tool_summary));
+            err = append_tool_results_messages(runtime_messages,
+                                               &llm_response,
+                                               &request.view,
+                                               tool_summary,
+                                               sizeof(tool_summary),
+                                               &tool_results_json);
             if (err != ESP_OK) {
                 response.view.error_message = dup_string(esp_err_to_name(err));
                 goto finish_request;
+            }
+
+            if (tool_results_json && tool_results_json[0]) {
+                bool include_user = !session_user_flushed;
+                esp_err_t persist_err = persist_session_tool_round_if_configured(&request.view,
+                                                                                 assistant_tool_message_json,
+                                                                                 tool_results_json,
+                                                                                 include_user);
+
+                if (persist_err == ESP_OK) {
+                    if (include_user && s_core->persist_session &&
+                            request.view.session_id && request.view.session_id[0]) {
+                        session_user_flushed = true;
+                    }
+                } else {
+                    ESP_LOGW(TAG,
+                             "persist_session_tool_round failed for request=%" PRIu32
+                             " iteration=%" PRIu32 ": %s",
+                             request.view.request_id,
+                             iteration,
+                             esp_err_to_name(persist_err));
+                }
+            }
+            if (tool_results_json) {
+                cJSON_free(tool_results_json);
             }
 
             iteration++;
@@ -1337,18 +1639,16 @@ static void claw_core_task(void *arg)
         }
 
         if (err == ESP_OK && response.view.text) {
+            esp_err_t persist_err;
+
             response.view.status = CLAW_CORE_RESPONSE_STATUS_OK;
-            if (response.view.text[0] &&
-                    s_core->append_session_turn &&
-                    request.view.session_id && request.view.session_id[0]) {
-                err = s_core->append_session_turn(request.view.session_id,
-                                                 request.view.user_text,
-                                                 response.view.text,
-                                                 s_core->append_session_turn_user_ctx);
-                if (err != ESP_OK) {
-                    ESP_LOGW(TAG, "append_session_turn failed: %s", esp_err_to_name(err));
-                }
-            }
+            persist_err = persist_session_final_if_configured(&request.view,
+                                                              llm_response.raw_message_json,
+                                                              response.view.text,
+                                                              session_user_flushed);
+            log_session_persist_failure(&request.view,
+                                        "persist_session_final",
+                                        persist_err);
             if (s_core->completion_observer_count > 0) {
                 claw_core_completion_summary_t summary = {
                     .request_id = request.view.request_id,
@@ -1384,25 +1684,24 @@ finish_request:
             ESP_LOGE(TAG, "request=%" PRIu32 " failed: %s",
                      request.view.request_id,
                      response.view.error_message ? response.view.error_message : esp_err_to_name(err));
-            if (s_core->append_session_turn &&
+            if (s_core->persist_session &&
                     request.view.session_id && request.view.session_id[0] &&
                     request.view.user_text && request.view.user_text[0]) {
+                esp_err_t persist_err;
                 char *failure_trace = claw_core_build_session_failure_trace(response.view.error_message,
                                                                             tool_summary);
 
                 if (!failure_trace) {
-                    ESP_LOGW(TAG, "append_session_turn skipped for failed request=%" PRIu32 ": no memory",
+                    ESP_LOGW(TAG, "persist_session_failure skipped for failed request=%" PRIu32 ": no memory",
                              request.view.request_id);
                 } else {
-                    esp_err_t append_err = s_core->append_session_turn(request.view.session_id,
-                                                                       request.view.user_text,
-                                                                       failure_trace,
-                                                                       s_core->append_session_turn_user_ctx);
-                    if (append_err != ESP_OK) {
-                        ESP_LOGW(TAG, "append_session_turn failed for failed request=%" PRIu32 ": %s",
-                                 request.view.request_id,
-                                 esp_err_to_name(append_err));
-                    }
+                    persist_err = persist_session_final_if_configured(&request.view,
+                                                                      NULL,
+                                                                      failure_trace,
+                                                                      session_user_flushed);
+                    log_session_persist_failure(&request.view,
+                                                "persist_session_failure_note",
+                                                persist_err);
                     free(failure_trace);
                 }
             }
@@ -1420,6 +1719,7 @@ finish_request:
         cJSON_Delete(messages);
         free(system_prompt);
         free(tools_json);
+        free_cached_contexts(request_start_contexts, request_start_context_count);
         free_request_item(&request);
     }
 }
@@ -1451,8 +1751,10 @@ esp_err_t claw_core_init(const claw_core_config_t *config)
         claw_core_free_state_storage();
         return ESP_ERR_NO_MEM;
     }
-    s_core->append_session_turn = config->append_session_turn;
-    s_core->append_session_turn_user_ctx = config->append_session_turn_user_ctx;
+    s_core->persist_session = config->persist_session;
+    s_core->persist_session_user_ctx = config->persist_session_user_ctx;
+    s_core->request_gate = config->request_gate;
+    s_core->request_gate_user_ctx = config->request_gate_user_ctx;
     s_core->on_request_start = config->on_request_start;
     s_core->on_request_start_user_ctx = config->on_request_start_user_ctx;
     s_core->collect_stage_note = config->collect_stage_note;
@@ -1579,6 +1881,7 @@ esp_err_t claw_core_add_context_provider(const claw_core_context_provider_t *pro
     }
     slot->collect = provider->collect;
     slot->user_ctx = provider->user_ctx;
+    slot->flags = provider->flags;
     s_core->context_provider_count++;
     return ESP_OK;
 }

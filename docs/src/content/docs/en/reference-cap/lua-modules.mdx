@@ -37,7 +37,6 @@ Pure Lua modules may provide only managed resources such as `lib/`, `test/`, and
 | `dht` | `lua_module_dht` | DHT-family temperature and humidity reads |
 | `display` | `lua_module_display` | LCD drawing (text, primitives, JPEG/PNG) |
 | `environmental_sensor` | `lua_module_environmental_sensor` | BME690 temperature, humidity, pressure, and gas data |
-| `esp_heap` | `lua_module_esp_heap` | Heap introspection |
 | `event_publisher` | `lua_module_event_publisher` | Publish events from Lua into the Event Router |
 | `lib_fuel_gauge` | `lua_module_fuel_gauge` | Pure-Lua battery fuel-gauge library for BQ27220/MAX17048 and similar chips |
 | `imu` | `lua_module_imu` | IMU accelerometer and gyroscope reads |
@@ -49,7 +48,7 @@ Pure Lua modules may provide only managed resources such as `lib/`, `test/`, and
 | `magnetometer` | `lua_module_magnetometer` | Magnetometer / compass reads |
 | `ssd1306` | `lua_module_ssd1306` | Pure-Lua SSD1306 I2C OLED driver |
 | `storage` | `lua_module_storage` | Filesystem operations |
-| `system` | `lua_module_system` | Time, uptime, IP, memory, and Wi-Fi status |
+| `system` | `lua_module_system` | Time, uptime, IP, memory, heap, task stack, and Wi-Fi status |
 | `arg_schema` | `lua_module_system` | Pure-Lua argument normalization helper |
 
 <Aside type="note" title="Module conditional compilation">
@@ -352,6 +351,8 @@ static int lua_module_gpio_set_level(lua_State *L)
 
 When an underlying ESP-IDF call fails, the module uses `luaL_error` to return the failure to the Lua runtime.
 This makes script execution fail with a clear reason visible to the caller.
+
+Activating the Skill exposes the Lua run tools (`lua_run_script`, `lua_run_script_async`, …) while injecting the module guide so the LLM can author `myled` scripts confidently. Script files are created and inspected with file tools such as `write_file`, `read_file`, and `list_dir`.
 
 ### String enum mapping
 

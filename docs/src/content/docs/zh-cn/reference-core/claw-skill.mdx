@@ -47,12 +47,12 @@ import { Aside, LinkCard, FileTree } from '@astrojs/starlight/components';
 
 ## Skills 文件的来源与构建流程
 
-运行时读取的 `/fatfs/skills` 由构建流程从所有构建组件的 `skills/` 子目录合并而来：
+运行时读取的 `/fatfs/skills` 由构建流程在 `build/fatfs_image/skills` staging 目录中组装而来：
 
-1. **`application/edge_agent/main/skills/`**：demo 工程自带的 Skills 目录，按 `skills/<skill_id>/SKILL.md` 组织，构建时同步到 `fatfs_image/skills/`。
-2. **组件自带 Skills**：各 `cap_*` / `lua_module_*` / `lua_driver_*` 组件可提供 `skills/<skill_id>/SKILL.md`，构建时由 `components/common/skill_builder` 同步到 `fatfs_image/skills/`，再一并打包。
+1. **`application/edge_agent/fatfs_image/skills/`**：demo 工程自带的出厂 Skills 目录，按 `skills/<skill_id>/SKILL.md` 组织，构建时复制到 staging 目录。
+2. **组件自带 Skills**：各 `cap_*` / `lua_module_*` / `lua_driver_*` 组件可提供 `skills/<skill_id>/SKILL.md`，构建时由 `components/common/skill_builder` 同步到 `build/fatfs_image/skills/`，再一并打包。
 
-注意：放入 `application/edge_agent/main/skills/` 中的文件须经构建流程同步，直接修改 `fatfs_image/skills/` 下的同名文件会在下次构建时被覆盖。
+注意：`application/edge_agent/fatfs_image/` 是源码输入；`application/edge_agent/build/fatfs_image/` 是生成的 staging 输出，会在构建时重新创建。
 
 ## 用户侧交互
 

@@ -22,6 +22,9 @@ typedef struct {
     const char *sta_ssid;
     const char *sta_password;
     const char *ap_ssid_prefix;
+    const char *ap_ssid;
+    const char *ap_password;
+    const char *ap_behavior;
     uint8_t ap_channel;
     uint8_t ap_max_conn;
     uint32_t max_retry;
@@ -47,6 +50,7 @@ typedef struct {
 esp_err_t wifi_manager_init(void);
 esp_err_t wifi_manager_start(const wifi_manager_config_t *config);
 esp_err_t wifi_manager_apply_sta_config(const wifi_manager_config_t *config);
+esp_err_t wifi_manager_validate_config(const wifi_manager_config_t *config);
 esp_err_t wifi_manager_wait_connected(uint32_t timeout_ms);
 esp_err_t wifi_manager_register_state_callback(wifi_manager_state_cb_t cb, void *user_ctx);
 void wifi_manager_get_status(wifi_manager_status_t *status);

@@ -16,7 +16,7 @@ import { cancelWechatLogin, pollWechatLoginStatus, startWechatLogin } from '../a
 import { createConfigTab } from '../state/configTab';
 import { TabShell } from '../components/layout/TabShell';
 import { PageHeader } from '../components/ui/PageHeader';
-import { TextInput } from '../components/ui/FormField';
+import { TextInput, SelectInput } from '../components/ui/FormField';
 import { SavePanel } from '../components/ui/SavePanel';
 import { Button } from '../components/ui/Button';
 import { Banner } from '../components/ui/Banner';
@@ -29,6 +29,7 @@ type ImForm = {
   wechat_account_id: string;
   qq_app_id: string;
   qq_app_secret: string;
+  qq_msg_type: string;
   feishu_app_id: string;
   feishu_app_secret: string;
   tg_bot_token: string;
@@ -348,6 +349,7 @@ export const ImPage: Component = () => {
       wechat_account_id: config.wechat_account_id ?? '',
       qq_app_id: config.qq_app_id ?? '',
       qq_app_secret: config.qq_app_secret ?? '',
+      qq_msg_type: config.qq_msg_type ?? '0',
       feishu_app_id: config.feishu_app_id ?? '',
       feishu_app_secret: config.feishu_app_secret ?? '',
       tg_bot_token: config.tg_bot_token ?? '',
@@ -359,6 +361,7 @@ export const ImPage: Component = () => {
       wechat_account_id: form.wechat_account_id.trim(),
       qq_app_id: form.qq_app_id.trim(),
       qq_app_secret: form.qq_app_secret,
+      qq_msg_type: form.qq_msg_type,
       feishu_app_id: form.feishu_app_id.trim(),
       feishu_app_secret: form.feishu_app_secret,
       tg_bot_token: form.tg_bot_token.trim(),
@@ -373,6 +376,7 @@ export const ImPage: Component = () => {
     void tab.form.wechat_account_id;
     void tab.form.qq_app_id;
     void tab.form.qq_app_secret;
+    void tab.form.qq_msg_type;
     void tab.form.feishu_app_id;
     void tab.form.feishu_app_secret;
     void tab.form.tg_bot_token;
@@ -542,6 +546,14 @@ export const ImPage: Component = () => {
               value={tab.form.qq_app_secret}
               onInput={(e) => tab.setForm('qq_app_secret', e.currentTarget.value)}
             />
+            <SelectInput
+              label={t('qqMsgType')}
+              value={tab.form.qq_msg_type}
+              onChange={(e) => tab.setForm('qq_msg_type', e.currentTarget.value)}
+            >
+              <option value="0">{t('qqMsgTypePlain')}</option>
+              <option value="2">{t('qqMsgTypeMarkdown')}</option>
+            </SelectInput>
           </div>
         </PlatformRow>
 

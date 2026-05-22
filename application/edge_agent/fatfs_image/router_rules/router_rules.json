@@ -1,5 +1,35 @@
 [
   {
+    "id": "startup_run_led_strip_dim_white",
+    "description": "Set LED strip to low-brightness white once the device finishes booting.",
+    "enabled": false,
+    "consume_on_match": false,
+    "ack": "startup led strip brightness set to 10",
+    "match": {
+      "source_cap": "app_claw",
+      "event_type": "startup",
+      "event_key": "boot_completed",
+      "content_type": "trigger"
+    },
+    "actions": [
+      {
+        "type": "run_script",
+        "input": {
+          "path": "/fatfs/skills/light_switch/scripts/led_strip_switch.lua",
+          "args": {
+            "enabled": true,
+            "brightness": 10,
+            "color": {
+              "r": 255,
+              "g": 255,
+              "b": 255
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
     "id": "im_new_session",
     "description": "Start a fresh persistent chat session when the user sends /new.",
     "enabled": true,

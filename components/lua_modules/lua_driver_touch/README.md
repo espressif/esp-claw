@@ -1,33 +1,30 @@
 # Lua Touch
 
-This module describes how to read capacitive touch key data from Lua.
-When a request mentions `touch`, `touch keys`, or `capacitive sensor`, use this module by default.
+This module describes how to read capacitive touch channel data from Lua.
+When a request mentions `touch`, `touch channels`, or `capacitive sensor`, use this module by default.
 
 ## How to call
 - Import it with `local touch = require("touch")`
 - Open the device with one of:
-  - `local keys = touch.new()` — use board defaults from the device named `touch_keys`
-  - `local keys = touch.new("touch_keys")` — choose a device name explicitly
-  - `local keys = touch.new({ key1_gpio = 2, key2_gpio = 3 })` — provide GPIOs directly
-  - `local keys = touch.new("touch_keys", { threshold_milli = 20 })` — board defaults + overrides
-- Call `local sample = keys:read()` to get all key states
-- Call `local pressed = keys:is_pressed(index)` to check one key (1-based index)
+  - `local keys = touch.new({ gpios = { 2, 3, 4 } })` — provide GPIOs directly
+  - `local keys = touch.new("touch_inputs", { gpios = { 2, 3, 4 }, threshold_milli = 20 })` — choose a name and threshold
+- Call `local sample = keys:read()` to get all channel states
+- Call `local pressed = keys:is_pressed(index)` to check one channel (1-based index)
 - Call `keys:name()` to get the device name string
 - Call `keys:close()` when done
 
 ## Options table
-All fields are optional. Any field omitted falls back to the board `board_devices.yaml` value for the device named by `device` (default `"touch_keys"`).
+`gpios` is required. Other fields are optional.
 
 | Field             | Type    | Meaning                                              |
 |-------------------|---------|------------------------------------------------------|
-| `device`          | string  | Board device name to read defaults from              |
-| `key1_gpio`       | integer | GPIO number of the first touch key                   |
-| `key2_gpio`       | integer | GPIO number of the second touch key (optional)       |
+| `device`          | string  | Optional name returned by `keys:name()`              |
+| `gpios`           | array   | GPIO numbers of touch channels to read               |
 | `threshold_milli` | integer | Active threshold in permille of benchmark (default from Kconfig) |
 
 ## Data format
 `keys:read()` returns a table with:
-- `sample.keys` — array of key tables, each containing:
+- `sample.keys` — array of touch channel tables, each containing:
   - `key.index` — 1-based key index
   - `key.channel` — touch sensor channel number
   - `key.gpio` — GPIO number
@@ -44,10 +41,10 @@ All fields are optional. Any field omitted falls back to the board `board_device
 ```lua
 local touch = require("touch")
 
-local keys = touch.new()                  -- uses board defaults
+local keys = touch.new({ gpios = { 2, 3, 4 } })
 local sample = keys:read()
 for _, key in ipairs(sample.keys) do
-    print(key.index, key.pressed, key.delta)
+    print(key.index, key.gpio, key.channel, key.smooth)
 end
 keys:close()
 ```

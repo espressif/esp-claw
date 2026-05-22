@@ -114,6 +114,23 @@ static esp_err_t parse_chat_response(const char *body,
         *out_error_message = dup_printf("LLM response missing message");
         return ESP_FAIL;
     }
+    {
+        cJSON *role = cJSON_GetObjectItem(message, "role");
+
+        if (!cJSON_IsString(role) || !role->valuestring ||
+                strcmp(role->valuestring, "assistant") != 0) {
+            cJSON_Delete(root);
+            *out_error_message = dup_printf("LLM response message is not assistant");
+            return ESP_FAIL;
+        }
+    }
+
+    out_response->raw_message_json = cJSON_PrintUnformatted(message);
+    if (!out_response->raw_message_json) {
+        cJSON_Delete(root);
+        *out_error_message = dup_printf("Out of memory copying LLM raw message");
+        return ESP_ERR_NO_MEM;
+    }
 
     content = cJSON_GetObjectItem(message, "content");
     if (content && cJSON_IsString(content) && content->valuestring[0]) {

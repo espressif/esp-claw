@@ -47,6 +47,7 @@ typedef struct {
 #define APP_DEFAULT_LLM_IMAGE_REMOTE_URL_ONLY "false"
 #define APP_DEFAULT_QQ_APP_ID                ""
 #define APP_DEFAULT_QQ_APP_SECRET            ""
+#define APP_DEFAULT_QQ_MSG_TYPE              "0"
 #define APP_DEFAULT_FEISHU_APP_ID            ""
 #define APP_DEFAULT_FEISHU_APP_SECRET        ""
 #define APP_DEFAULT_TG_BOT_TOKEN             ""
@@ -64,6 +65,9 @@ typedef struct {
 static const app_config_field_t s_fields[] = {
     APP_CONFIG_FIELD(wifi_ssid, "wifi_ssid", APP_WIFI_SSID),
     APP_CONFIG_FIELD(wifi_password, "wifi_password", APP_WIFI_PASSWORD),
+    APP_CONFIG_FIELD(ap_ssid, "ap_ssid", ""),
+    APP_CONFIG_FIELD(ap_password, "ap_password", ""),
+    APP_CONFIG_FIELD(ap_behavior, "ap_behavior", "keep"),
     APP_CONFIG_FIELD(llm_api_key, "llm_api_key", APP_DEFAULT_LLM_API_KEY),
     APP_CONFIG_FIELD(llm_backend_type, "llm_backend", APP_DEFAULT_LLM_BACKEND_TYPE),
     APP_CONFIG_FIELD(llm_model, "llm_model", APP_DEFAULT_LLM_MODEL),
@@ -78,6 +82,7 @@ static const app_config_field_t s_fields[] = {
     APP_CONFIG_FIELD(llm_image_remote_url_only, "llm_img_url_o", APP_DEFAULT_LLM_IMAGE_REMOTE_URL_ONLY),
     APP_CONFIG_FIELD(qq_app_id, "qq_app_id", APP_DEFAULT_QQ_APP_ID),
     APP_CONFIG_FIELD(qq_app_secret, "qq_app_secret", APP_DEFAULT_QQ_APP_SECRET),
+    APP_CONFIG_FIELD(qq_msg_type, "qq_msg_type", APP_DEFAULT_QQ_MSG_TYPE),
     APP_CONFIG_FIELD(feishu_app_id, "feishu_app_id", APP_DEFAULT_FEISHU_APP_ID),
     APP_CONFIG_FIELD(feishu_app_secret, "feishu_secret", APP_DEFAULT_FEISHU_APP_SECRET),
     APP_CONFIG_FIELD(tg_bot_token, "tg_bot_token", APP_DEFAULT_TG_BOT_TOKEN),
@@ -87,6 +92,7 @@ static const app_config_field_t s_fields[] = {
     APP_CONFIG_FIELD(wechat_account_id, "wechat_acct_id", APP_DEFAULT_WECHAT_ACCOUNT_ID),
     APP_CONFIG_FIELD(search_brave_key, "brave_key", APP_DEFAULT_SEARCH_BRAVE_KEY),
     APP_CONFIG_FIELD(search_tavily_key, "tavily_key", APP_DEFAULT_SEARCH_TAVILY_KEY),
+    APP_CONFIG_FIELD(search_http_allowlist, "http_allow_ls", APP_SEARCH_HTTP_ALLOWLIST),
     APP_CONFIG_FIELD(enabled_cap_groups, "en_cap_groups", APP_DEFAULT_ENABLED_CAP_GROUPS),
     APP_CONFIG_FIELD(llm_visible_cap_groups, "vis_cap_groups", APP_DEFAULT_LLM_VISIBLE_CAP_GROUPS),
     APP_CONFIG_FIELD(enabled_lua_modules, "en_lua_mods", APP_DEFAULT_ENABLED_LUA_MODULES),
@@ -182,6 +188,13 @@ static inline char *app_config_field_ptr(app_config_t *config, const app_config_
 static inline const char *app_config_field_cptr(const app_config_t *config, const app_config_field_t *field)
 {
     return (const char *)config + field->offset;
+}
+
+static bool app_config_ap_behavior_is_valid(const char *ap_behavior)
+{
+    return !ap_behavior || ap_behavior[0] == '\0' ||
+           strcmp(ap_behavior, "keep") == 0 ||
+           strcmp(ap_behavior, "close_on_sta") == 0;
 }
 
 static const app_config_legacy_llm_preset_t *app_config_find_legacy_llm_preset(const char *legacy_id)
@@ -440,6 +453,28 @@ esp_err_t app_config_load(app_config_t *config)
         }
     }
 
+    for (size_t i = 0; i < sizeof(s_fields) / sizeof(s_fields[0]); ++i) {
+        bool exists = false;
+
+        if (strcmp(s_fields[i].key, "http_allow_ls") != 0) {
+            continue;
+        }
+
+        esp_err_t err = settings_store_has_key(s_fields[i].key, &exists);
+        if (err != ESP_OK) {
+            return err;
+        }
+        if (exists) {
+            continue;
+        }
+
+        err = settings_store_set_string(s_fields[i].key,
+                                        app_config_field_ptr(config, &s_fields[i]));
+        if (err != ESP_OK) {
+            return err;
+        }
+    }
+
     return ESP_OK;
 }
 
@@ -458,6 +493,41 @@ esp_err_t app_config_save(const app_config_t *config)
     }
 
     return settings_store_commit();
+}
+
+esp_err_t app_config_validate_wifi(const app_config_t *config, const char **message)
+{
+    if (message) {
+        *message = NULL;
+    }
+    if (!config) {
+        if (message) {
+            *message = "Missing Wi-Fi configuration";
+        }
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (config->ap_password[0] != '\0') {
+        size_t ap_password_len = strlen(config->ap_password);
+        if (ap_password_len < 8 || ap_password_len > 63) {
+            if (message) {
+                *message = "ap_password must be empty or 8-63 characters";
+            }
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+    if (config->ap_ssid[0] != '\0' && strlen(config->ap_ssid) > 32) {
+        if (message) {
+            *message = "ap_ssid must be 1-32 characters";
+        }
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!app_config_ap_behavior_is_valid(config->ap_behavior)) {
+        if (message) {
+            *message = "ap_behavior must be keep or close_on_sta";
+        }
+        return ESP_ERR_INVALID_ARG;
+    }
+    return ESP_OK;
 }
 
 void app_config_to_claw(const app_config_t *config, app_claw_config_t *out)
@@ -486,6 +556,7 @@ void app_config_to_claw(const app_config_t *config, app_claw_config_t *out)
             sizeof(out->llm_image_remote_url_only));
     strlcpy(out->qq_app_id, config->qq_app_id, sizeof(out->qq_app_id));
     strlcpy(out->qq_app_secret, config->qq_app_secret, sizeof(out->qq_app_secret));
+    strlcpy(out->qq_msg_type, config->qq_msg_type, sizeof(out->qq_msg_type));
     strlcpy(out->feishu_app_id, config->feishu_app_id, sizeof(out->feishu_app_id));
     strlcpy(out->feishu_app_secret, config->feishu_app_secret, sizeof(out->feishu_app_secret));
     strlcpy(out->tg_bot_token, config->tg_bot_token, sizeof(out->tg_bot_token));
@@ -495,6 +566,9 @@ void app_config_to_claw(const app_config_t *config, app_claw_config_t *out)
     strlcpy(out->wechat_account_id, config->wechat_account_id, sizeof(out->wechat_account_id));
     strlcpy(out->search_brave_key, config->search_brave_key, sizeof(out->search_brave_key));
     strlcpy(out->search_tavily_key, config->search_tavily_key, sizeof(out->search_tavily_key));
+    strlcpy(out->search_http_allowlist,
+            config->search_http_allowlist,
+            sizeof(out->search_http_allowlist));
     strlcpy(out->enabled_cap_groups, config->enabled_cap_groups, sizeof(out->enabled_cap_groups));
     strlcpy(out->llm_visible_cap_groups, config->llm_visible_cap_groups, sizeof(out->llm_visible_cap_groups));
     strlcpy(out->enabled_lua_modules, config->enabled_lua_modules, sizeof(out->enabled_lua_modules));

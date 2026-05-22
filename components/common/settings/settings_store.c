@@ -118,6 +118,39 @@ esp_err_t settings_store_get_string(const char *key,
     return ESP_OK;
 }
 
+esp_err_t settings_store_has_key(const char *key, bool *exists)
+{
+    if (!key || !exists) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *exists = false;
+
+    nvs_handle_t handle;
+    esp_err_t err = settings_store_open(NVS_READONLY, &handle);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        return ESP_OK;
+    }
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    size_t required_size = 0;
+    err = nvs_get_str(handle, key, NULL, &required_size);
+    nvs_close(handle);
+
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        return ESP_OK;
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_get_str(%s) failed: %s", key, esp_err_to_name(err));
+        return err;
+    }
+
+    *exists = true;
+    return ESP_OK;
+}
+
 esp_err_t settings_store_set_string(const char *key, const char *value)
 {
     if (!key) {

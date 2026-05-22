@@ -1,0 +1,189 @@
+# Devices Configuration
+devices:
+  - name: audio_dac
+    chip: es8388
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: false
+
+      dac_enabled: true
+      dac_max_channel: 1
+      # DAC channel mask, 1-enable, 0-disable, layout: left,right
+      dac_channel_mask: "1"     # Left enable
+
+    # Power amplifier configuration
+    peripherals:
+      - name: i2s_audio_out
+      - name: i2c_master
+        address: 0x20
+        frequency: 400000          # Hz
+
+  - name: audio_adc
+    chip: es7210
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      adc_max_channel: 4
+      adc_channel_mask: "0111"
+      adc_init_gain: 0           # dB
+
+    # Power amplifier configuration
+    peripherals:
+      # I2S interface configuration
+      - name: i2s_audio_in
+      # I2C interface configuration
+      - name: i2c_master
+        address: 0x80
+        frequency: 400000          # Hz
+
+  - name: fs_sdcard
+    type: fs_fat
+    sub_type: sdmmc
+    version: default
+    config:
+      sub_config:
+        # Use SDMMC slot 0
+        slot: SDMMC_HOST_SLOT_0
+        frequency: SDMMC_FREQ_HIGHSPEED
+        bus_width: 4
+        # If using slot 0, the pin must be configured as 0, the IO pins actually used are configured by the SDMMC driver
+        # For more details, please check https://github.com/espressif/esp-idf/blob/v5.5.1/components/esp_driver_sdmmc/src/sdmmc_host.c#L668
+        pins:
+          clk: 0
+          cmd: 0
+          d0: 0
+          d1: 0
+          d2: 0
+          d3: 0
+          d4: 0
+          d5: 0
+          d6: 0
+          d7: 0
+        ldo_chan_id: 4  # Use LDO_VO4 to power SDMMC IO
+
+  - name: gpio_expander
+    chip: pi3ioe
+    type: gpio_expander
+    version: default
+    dependencies:
+      espressif/esp_io_expander_pi4ioe5v6408: "*"
+    config:
+      max_pins: 8
+      output_io_mask: [0, 1, 2, 3, 4, 5, 6]  # P1(SPK_EN), P2(EXT5V_EN), P4(LCD_RST), P5(TP_RST), P6(CAM_RST)
+      output_io_level_mask : [0, 1, 1, 0, 1, 1, 1]
+      output_io_mode_mask: [0, 0, 0, 0, 0, 0, 0]
+      input_io_mask: [7]  # P7(HEAD_PHONE_DET)
+    peripherals:
+      - name: i2c_master
+        i2c_addr: 0x86         # I2C address of the IO expander
+
+  - name: gpio_expander_2
+    chip: pi3ioe
+    type: gpio_expander
+    version: default
+    dependencies:
+      espressif/esp_io_expander_pi4ioe5v6408: "*"
+    config:
+      max_pins: 8
+      output_io_mask: [0, 3, 4, 5, 6, 7]  # P1(WLAN_PWR_EN), P3(USB5V_EN)
+      output_io_level_mask : [1, 1, 0, 0, 0, 0]
+      output_io_mode_mask: [0, 0, 0, 0, 0, 0]
+    peripherals:
+      - name: i2c_master
+        i2c_addr: 0x88         # I2C address of the IO expander
+
+  - name: lcd_brightness
+    type: ledc_ctrl
+    version: default
+    config:
+      default_percent: 100
+    peripherals:
+      - name: ledc_backlight
+
+  # DSI Display Device
+  - name: display_lcd
+    chip: ili9881c
+    type: display_lcd
+    sub_type: dsi
+    dependencies:
+      espressif/esp_lcd_ili9881c: "*"
+    config:
+      reset_gpio_num: -1
+      rgb_ele_order: LCD_RGB_ELEMENT_ORDER_RGB
+      # data_endian: LCD_RGB_DATA_ENDIAN_BIG
+      bits_per_pixel: 16
+      reset_active_high: 0
+      dbi_config:
+        virtual_channel: 0
+        lcd_cmd_bits: 8
+        lcd_param_bits: 8
+      dpi_config:
+        virtual_channel: 0
+        dpi_clk_src: MIPI_DSI_DPI_CLK_SRC_DEFAULT
+        dpi_clock_freq_mhz: 60
+        # pixel_format: LCD_COLOR_PIXEL_FORMAT_RGB565
+        in_color_format: LCD_COLOR_FMT_RGB565
+        # out_color_format: LCD_COLOR_FMT_RGB565
+        num_fbs: 1
+        flags:
+          use_dma2d: true
+          # disable_lp: false
+        video_timing:
+          h_size: 720
+          v_size: 1280
+          hsync_back_porch : 140
+          hsync_pulse_width : 40
+          hsync_front_porch : 40
+          vsync_back_porch : 20
+          vsync_pulse_width : 4
+          vsync_front_porch : 20
+      peripherals:
+      - name: ldo_mipi
+      - name: dsi_display
+
+  # Power Control for Touch Panel
+  - name: touch_power_ctrl
+    type: power_ctrl
+    sub_type: gpio
+    config:
+      peripherals:
+        - name: gpio_power_touch
+          active_level: 0
+
+  # Touch Panel Configuration
+  - name: lcd_touch
+    chip: gt911
+    type: lcd_touch
+    sub_type: i2c
+    power_ctrl_device: touch_power_ctrl
+    version: default
+    dependencies:
+      espressif/esp_lcd_touch_gt911: "*"
+    config:
+      # esp_lcd_panel_io_i2c_config_t fields for touch communication
+      io_i2c_config:
+        lcd_cmd_bits: 16
+
+      # esp_lcd_touch_config_t fields for touch configuration
+      touch_config:
+        x_max: 720                        # Maximum X coordinate (BSP_LCD_H_RES)
+        y_max: 1280                        # Maximum Y coordinate (BSP_LCD_V_RES)
+    peripherals:
+      - name: i2c_master
+        i2c_addr: 0x28                    # GT911 I2C address (8-bit: 0x14 << 1)
+
+  - name: camera
+    type: camera
+    version: default
+    sub_type: "csi"   # The bus type: csi
+    config:
+      csi_config:
+        reset_io: -1
+        pwdn_io: -1
+        dont_init_ldo: true  # Using periph_ldo to manager this peripheral
+    peripherals:
+      - name: "i2c_master"
+        frequency: 100000
+      - name: ldo_mipi

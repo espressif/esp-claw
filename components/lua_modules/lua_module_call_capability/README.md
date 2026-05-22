@@ -29,6 +29,7 @@ This module describes how to call registered capabilities directly from Lua.
 - `channel: string`
 - `chat_id: string`
 - `source_cap: string`
+- `max_output_bytes: number`, optional output buffer size for this call. Defaults to 65536 and is clamped to `[1024, 262144]`.
 
 If an `opts` field is missing, the module tries to inherit the same field from global `args`.
 

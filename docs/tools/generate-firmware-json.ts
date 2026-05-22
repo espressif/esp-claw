@@ -16,6 +16,7 @@ type MetadataRecord = {
   console_output?: unknown;
   merged_binary?: unknown;
   min_flash_size?: unknown;
+  min_psram_size?: unknown;
   nvs_info?: unknown;
 };
 
@@ -217,9 +218,13 @@ async function main(): Promise<number> {
     }
 
     let minFlashMB: number;
+    let minPsramMB: number = 8;
     let revision: number | null;
     try {
       minFlashMB = parseFlashMB(minFlashSize);
+      if (record.min_psram_size !== undefined) {
+        minPsramMB = parseFlashMB(record.min_psram_size);
+      }
       revision = parseRevision(rev);
     } catch (error) {
       log(`skip one metadata: invalid metadata (${JSON.stringify(record)}) (${(error as Error).message})`);
@@ -234,7 +239,7 @@ async function main(): Promise<number> {
         [consoleOutput]: `/merged_binary/${mergedBinary}`,
       },
       min_flash_size: minFlashMB,
-      min_psram_size: 8,
+      min_psram_size: minPsramMB,
       nvs_info: {
         start_addr: String(nvsInfoRecord.start_addr ?? ""),
         size: String(nvsInfoRecord.size ?? ""),

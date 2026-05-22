@@ -44,6 +44,7 @@ export default defineConfig({
             { slug: "tutorial/get-started" },
             { slug: "tutorial/web-config" },
             { slug: "tutorial/faq" },
+            { slug: "tutorial/skills-lab" },
           ],
         },
         {

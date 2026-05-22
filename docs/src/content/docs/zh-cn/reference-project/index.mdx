@@ -21,12 +21,12 @@ import ClawRunDiagram from "@/assets/images/claw_run.svg?url";
 
 <FileTree>
 - application/edge_agent/ **示例应用** — 把框架与 cap 装配成可烧录固件
-  - main/ 启动入口（`app_main`）与 Lua 脚本示例
+  - main/ 启动入口（`app_main`）
     - main.c 固件入口
   - components/ 应用级组件
     - app_config/ 配置持久化（NVS 读写）
     - http_server/ Web 管理界面与 JSON API
-  - fatfs_image/ 出厂 FATFS：router_rules、memory、scheduler 样例
+  - fatfs_image/ 出厂 FATFS 输入：router_rules、memory、scheduler、静态文件与应用自带 Skills
 - components/common/ **共享应用组件** — 多示例复用的装配逻辑
   - app_claw/ 应用启动与装配（`app_claw_start`、CLI、Lua 模块注册）
   - wifi_manager/ Wi-Fi 连接与网络配置

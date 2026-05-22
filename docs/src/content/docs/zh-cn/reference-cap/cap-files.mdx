@@ -24,7 +24,7 @@ import { Aside } from '@astrojs/starlight/components';
 | `delete_file` | 删除文件 | `path` |
 | `copy_file` | 复制文件到新路径 | `src_path`, `dst_path` |
 | `move_file` | 移动文件到新路径 | `src_path`, `dst_path` |
-| `list_dir` | 递归列举目录下所有文件 | `prefix`（可选） |
+| `list_dir` | 递归列举目录下所有文件 | `keyword`（可选） |
 
 所有工具均标记为 `CLAW_CAP_FLAG_CALLABLE_BY_LLM`。
 
@@ -106,12 +106,12 @@ if (!match) {
 
 这让 LLM 可以精确修改文件的某一处内容，同时错误信息明确（找不到时告知 LLM 提供的旧字符串不正确）。
 
-### `list_dir`：递归遍历 + 前缀过滤
+### `list_dir`：递归遍历 + 关键词过滤
 
 ```c
 // 递归遍历 base_dir，输出每个文件的完整路径
-// 支持可选的 prefix 过滤（只列出前缀匹配的文件）
-cap_files_list_recursive(s_files_base_dir, prefix, output, output_size, &offset, &count);
+// 支持可选的大小写不敏感 keyword 过滤（匹配完整路径）
+cap_files_list_recursive(s_files_base_dir, keyword, output, output_size, &offset, &count);
 ```
 
 输出格式为每行一个绝对路径：

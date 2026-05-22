@@ -92,6 +92,7 @@ class CustomApp(CMakeApp):
                     if defaults.is_file():
                         with open(defaults, 'a', encoding='utf-8') as f:
                             f.write('\n' + extra_defaults)
+                self._inject_board_manager_defaults()
             else:
                 logger.warning(
                     "Board '%s' specified but app '%s' has no esp_board_manager dependency; building as normal.",
@@ -197,6 +198,23 @@ class CustomApp(CMakeApp):
             env=env,
             check=True,
         )
+
+    def _inject_board_manager_defaults(self) -> None:
+        """Inject board_manager.defaults into the sdkconfig files list.
+
+        When building via idf_build_apps (bypassing idf.py), the board manager's
+        global_callback never runs, so board-level configs like flash size and
+        frequency are not applied.  Append the defaults file to the internal
+        sdkconfig list so it is included in the -DSDKCONFIG_DEFAULTS cmake arg.
+        """
+        patch_file = Path(self.work_dir) / 'components' / 'gen_bmgr_codes' / 'board_manager.defaults'
+        if not patch_file.is_file():
+            return
+
+        abs_patch = str(patch_file.absolute())
+        if abs_patch not in self._sdkconfig_files:
+            self._sdkconfig_files.append(abs_patch)
+        logger.info('SDKCONFIG_DEFAULTS updated to: %s', ';'.join(self.sdkconfig_files))
 
 def _get_idf_version():
     if os.environ.get('IDF_VERSION'):

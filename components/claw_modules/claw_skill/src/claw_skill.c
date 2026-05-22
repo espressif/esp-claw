@@ -21,20 +21,12 @@ static const char *TAG = "claw_skill";
 static const char *SKILL_FRONTMATTER_DELIM = "---";
 static const char *SKILL_DOCUMENT_NAME = "SKILL.md";
 static const char *SKILL_MANAGE_MODE_READONLY = "readonly";
+static const char *SKILL_MANAGE_MODE_WEB = "web";
 static const char *SKILL_MANAGE_MODE_RUNTIME = "runtime";
 
 #define CLAW_SKILL_DEFAULT_MAX_FILES 64
 #define CLAW_SKILL_DEFAULT_MAX_BYTES 2048
 #define CLAW_SKILL_MAX_PATH          192
-#define CLAW_SKILL_MAX_GUARDS        8
-
-typedef struct {
-    char skill_id[64];
-    claw_skill_deactivate_guard_t guard;
-} claw_skill_guard_entry_t;
-
-static claw_skill_guard_entry_t *s_guards = NULL;
-static size_t s_guard_count;
 
 #ifdef CONFIG_CLAW_SKILL_DEBUG_LOG
 #define CLAW_SKILL_DIAGI(...) ESP_LOGI(TAG, __VA_ARGS__)
@@ -69,7 +61,6 @@ static esp_err_t load_registry_dir_recursive(const char *relative_dir,
                                              claw_skill_registry_entry_t **entries,
                                              size_t *entry_count);
 static esp_err_t parse_skill_document_metadata(const char *filename, const char *text, claw_skill_registry_entry_t *entry);
-static esp_err_t extract_skill_document_body(const char *text, const char **out_body);
 
 static void safe_copy(char *dst, size_t dst_size, const char *src)
 {
@@ -161,9 +152,6 @@ static void claw_skill_reset(void)
     size_t i;
 
     if (!s_skill) {
-        free(s_guards);
-        s_guards = NULL;
-        s_guard_count = 0;
         return;
     }
 
@@ -174,9 +162,6 @@ static void claw_skill_reset(void)
     memset(s_skill, 0, sizeof(*s_skill));
     free(s_skill);
     s_skill = NULL;
-    free(s_guards);
-    s_guards = NULL;
-    s_guard_count = 0;
 }
 
 static bool is_skill_document_file(const char *name)
@@ -291,14 +276,14 @@ static char *build_session_state_path_dup(const char *session_id)
                       hash);
 }
 
-static esp_err_t read_file_dup(const char *path, char **out_data)
+static esp_err_t read_file_dup(const char *path, size_t max_bytes, char **out_data)
 {
     FILE *file = NULL;
     long size;
     char *data = NULL;
     size_t read_bytes;
 
-    if (!path || !out_data) {
+    if (!path || !out_data || max_bytes == 0) {
         ESP_LOGE(TAG, "read: bad arg");
         return ESP_ERR_INVALID_ARG;
     }
@@ -320,6 +305,12 @@ static esp_err_t read_file_dup(const char *path, char **out_data)
         ESP_LOGE(TAG, "read size: %s", path);
         fclose(file);
         return ESP_FAIL;
+    }
+    if ((size_t)size > max_bytes) {
+        ESP_LOGE(TAG, "read too large: %s (%ld > %u)",
+                 path, size, (unsigned)max_bytes);
+        fclose(file);
+        return ESP_ERR_INVALID_SIZE;
     }
     if (fseek(file, 0, SEEK_SET) != 0) {
         ESP_LOGE(TAG, "read rewind: %s", path);
@@ -449,6 +440,10 @@ static esp_err_t json_parse_manage_mode(cJSON *object, const char *key, claw_ski
         *out_mode = CLAW_SKILL_MANAGE_MODE_READONLY;
         return ESP_OK;
     }
+    if (strcmp(item->valuestring, SKILL_MANAGE_MODE_WEB) == 0) {
+        *out_mode = CLAW_SKILL_MANAGE_MODE_READONLY;
+        return ESP_OK;
+    }
     if (strcmp(item->valuestring, SKILL_MANAGE_MODE_RUNTIME) == 0) {
         *out_mode = CLAW_SKILL_MANAGE_MODE_RUNTIME;
         return ESP_OK;
@@ -574,14 +569,6 @@ static esp_err_t extract_skill_frontmatter_json(const char *text, const char **o
     *out_json_end = json_end;
     *out_body = cursor;
     return ESP_OK;
-}
-
-static esp_err_t extract_skill_document_body(const char *text, const char **out_body)
-{
-    const char *json_start = NULL;
-    const char *json_end = NULL;
-
-    return extract_skill_frontmatter_json(text, &json_start, &json_end, out_body);
 }
 
 static esp_err_t parse_skill_document_metadata(const char *filename, const char *text, claw_skill_registry_entry_t *entry)
@@ -776,7 +763,7 @@ static esp_err_t load_registry_dir_recursive(const char *relative_dir,
             goto cleanup;
         }
 
-        err = read_file_dup(path, &text);
+        err = read_file_dup(path, s_skill->max_file_bytes, &text);
         free(path);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "read skill file %s failed: %s", relative_path, esp_err_to_name(err));
@@ -859,7 +846,7 @@ static esp_err_t load_registry_from_markdown(void)
     return ESP_OK;
 }
 
-/* Replace all occurrences of var with replacement in buf (in-place). Stops early if buf runs out of space. */
+/* Replace all occurrences of var with replacement in buf (in-place). */
 static void str_replace_inplace(char *buf, size_t buf_size, const char *var, const char *replacement)
 {
     size_t var_len = strlen(var);
@@ -877,18 +864,66 @@ static void str_replace_inplace(char *buf, size_t buf_size, const char *var, con
     }
 }
 
-static esp_err_t claw_skill_read_document(const claw_skill_registry_entry_t *entry,
-                                          char *buf,
-                                          size_t size)
+static esp_err_t str_replace_required_len(const char *text,
+                                          const char *var,
+                                          const char *replacement,
+                                          size_t *out_required_len)
 {
+    const char *pos = text;
+    size_t required_len;
+    size_t var_len;
+    size_t rep_len;
+
+    if (!text || !var || !replacement || !out_required_len || !var[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    required_len = strlen(text);
+    var_len = strlen(var);
+    rep_len = strlen(replacement);
+
+    while ((pos = strstr(pos, var)) != NULL) {
+        if (rep_len > var_len) {
+            size_t delta = rep_len - var_len;
+
+            if (SIZE_MAX - required_len < delta) {
+                return ESP_ERR_INVALID_SIZE;
+            }
+            required_len += delta;
+        } else {
+            required_len -= var_len - rep_len;
+        }
+        pos += var_len;
+    }
+
+    *out_required_len = required_len;
+    return ESP_OK;
+}
+
+esp_err_t claw_skill_read_document(const char *skill_id, char *buf, size_t size)
+{
+    const claw_skill_registry_entry_t *entry = NULL;
     char *path = NULL;
     char *text = NULL;
-    const char *body = NULL;
+    char cur_skill_dir[CLAW_SKILL_MAX_PATH];
+    size_t required_len;
     esp_err_t err;
+    int written;
 
-    if (!entry || !buf || size == 0) {
+    if (!s_skill || !s_skill->initialized) {
+        ESP_LOGE(TAG, "read doc: not initialized");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!skill_id || !skill_id[0] || !buf || size == 0) {
         ESP_LOGE(TAG, "read doc: bad arg");
         return ESP_ERR_INVALID_ARG;
+    }
+    buf[0] = '\0';
+
+    entry = claw_skill_find_entry(skill_id);
+    if (!entry) {
+        ESP_LOGE(TAG, "read doc %s: not found", skill_id);
+        return ESP_ERR_NOT_FOUND;
     }
 
     path = build_skill_path_dup(entry->file);
@@ -897,36 +932,33 @@ static esp_err_t claw_skill_read_document(const claw_skill_registry_entry_t *ent
         return ESP_ERR_NO_MEM;
     }
     CLAW_SKILL_DIAGI("read doc %s", entry->id ? entry->id : "(null)");
-    err = read_file_dup(path, &text);
+    err = read_file_dup(path, s_skill->max_file_bytes, &text);
     free(path);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "read doc %s: %s", entry->id ? entry->id : "(null)", esp_err_to_name(err));
         return err;
     }
 
-    err = extract_skill_document_body(text, &body);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "read doc %s: invalid metadata header", entry->id ? entry->id : "(null)");
-        free(text);
-        return err;
-    }
-    const char *skill_id = entry->id ? entry->id : "";
-
-    if (strlen(body) >= size) {
-        ESP_LOGE(TAG, "read doc %s: body too large", entry->id ? entry->id : "(null)");
-        free(text);
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    char cur_skill_dir[CLAW_SKILL_MAX_PATH];
-    int written = snprintf(cur_skill_dir, sizeof(cur_skill_dir), "%s/%s", s_skill->skills_root_dir, skill_id);
+    written = snprintf(cur_skill_dir, sizeof(cur_skill_dir), "%s/%s", s_skill->skills_root_dir, skill_id);
     if (written < 0 || (size_t)written >= sizeof(cur_skill_dir)) {
         ESP_LOGE(TAG, "read doc %s: skill dir too long", entry->id ? entry->id : "(null)");
         free(text);
         return ESP_ERR_INVALID_SIZE;
     }
 
-    snprintf(buf, size, "%s", body);
+    err = str_replace_required_len(text, "{CUR_SKILL_DIR}", cur_skill_dir, &required_len);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "read doc %s: size calculation failed", entry->id ? entry->id : "(null)");
+        free(text);
+        return err;
+    }
+    if (required_len >= size) {
+        ESP_LOGE(TAG, "read doc %s: document too large", entry->id ? entry->id : "(null)");
+        free(text);
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    snprintf(buf, size, "%s", text);
     free(text);
 
     /* Expand {CUR_SKILL_DIR} placeholders so the LLM sees resolved absolute paths directly. */
@@ -972,7 +1004,7 @@ static esp_err_t load_active_skill_ids_from_disk(const char *session_id,
         return ESP_ERR_NOT_FOUND;
     }
 
-    err = read_file_dup(path, &json_text);
+    err = read_file_dup(path, SIZE_MAX, &json_text);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "read session %s: %s", session_id, esp_err_to_name(err));
         free(path);
@@ -1110,55 +1142,6 @@ static esp_err_t claw_skill_render_skills_list(char *buf, size_t size)
     return ESP_OK;
 }
 
-static esp_err_t claw_skill_build_prompt_block(const char *const *skill_ids,
-                                               size_t skill_count,
-                                               char *buf,
-                                               size_t size)
-{
-    size_t i;
-    size_t off = 0;
-
-    if (!s_skill || !s_skill->initialized || !buf || size == 0) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    buf[0] = '\0';
-    for (i = 0; i < skill_count && off + 1 < size; i++) {
-        const claw_skill_registry_entry_t *entry = claw_skill_find_entry(skill_ids[i]);
-        char *content = NULL;
-        esp_err_t err;
-
-        if (!entry) {
-            ESP_LOGW(TAG, "Skipping active skill '%s': not found in catalog", skill_ids[i] ? skill_ids[i] : "(null)");
-            continue;
-        }
-
-        content = calloc(1, s_skill->max_file_bytes + 1);
-        if (!content) {
-            return ESP_ERR_NO_MEM;
-        }
-
-        err = claw_skill_read_document(entry, content, s_skill->max_file_bytes + 1);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Skipping active skill '%s': cannot read doc (%s)",
-                     skill_ids[i] ? skill_ids[i] : "(null)",
-                     esp_err_to_name(err));
-            free(content);
-            continue;
-        }
-
-        off += snprintf(buf + off,
-                        size - off,
-                        "%s--- skill: %s ---\n%s\n",
-                        i == 0 ? "" : "\n",
-                        entry->id,
-                        content);
-        free(content);
-    }
-
-    return ESP_OK;
-}
-
 esp_err_t claw_skill_init(const claw_skill_config_t *config)
 {
     esp_err_t err;
@@ -1170,8 +1153,7 @@ esp_err_t claw_skill_init(const claw_skill_config_t *config)
 
     claw_skill_reset();
     s_skill = calloc(1, sizeof(*s_skill));
-    s_guards = calloc(CLAW_SKILL_MAX_GUARDS, sizeof(*s_guards));
-    if (!s_skill || !s_guards) {
+    if (!s_skill) {
         claw_skill_reset();
         return ESP_ERR_NO_MEM;
     }
@@ -1410,113 +1392,6 @@ esp_err_t claw_skill_activate_for_session(const char *session_id, const char *sk
     return err;
 }
 
-esp_err_t claw_skill_deactivate_for_session(const char *session_id, const char *skill_id)
-{
-    char **active = NULL;
-    size_t active_count = 0;
-    size_t write_count = 0;
-    size_t i;
-    esp_err_t err;
-
-    if (!s_skill || !s_skill->initialized || !session_id || !session_id[0] || !skill_id || !skill_id[0]) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    err = load_active_skill_ids_from_disk(session_id, &active, &active_count);
-    if (err == ESP_ERR_NOT_FOUND) {
-        return ESP_OK;
-    }
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    for (i = 0; i < active_count; i++) {
-        if (active[i] && strcmp(active[i], skill_id) != 0) {
-            active[write_count++] = active[i];
-        } else {
-            free(active[i]);
-            active[i] = NULL;
-        }
-    }
-
-    err = save_active_skill_ids_to_disk(session_id, (const char *const *)active, write_count);
-    for (i = 0; i < write_count; i++) {
-        free(active[i]);
-    }
-    free(active);
-    return err;
-}
-
-esp_err_t claw_skill_clear_active_for_session(const char *session_id)
-{
-    if (!s_skill || !s_skill->initialized || !session_id || !session_id[0]) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    return save_active_skill_ids_to_disk(session_id, NULL, 0);
-}
-
-esp_err_t claw_skill_register_deactivate_guard(const char *skill_id,
-                                               claw_skill_deactivate_guard_t guard)
-{
-    if (!skill_id || !skill_id[0] || !guard) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (!s_guards) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    for (size_t i = 0; i < s_guard_count; i++) {
-        if (strcmp(s_guards[i].skill_id, skill_id) == 0) {
-            s_guards[i].guard = guard;
-            ESP_LOGI(TAG, "Replaced deactivate guard for skill '%s'", skill_id);
-            return ESP_OK;
-        }
-    }
-
-    if (s_guard_count >= CLAW_SKILL_MAX_GUARDS) {
-        ESP_LOGE(TAG, "Cannot register guard for '%s': table full (max %d)",
-                 skill_id, CLAW_SKILL_MAX_GUARDS);
-        return ESP_ERR_NO_MEM;
-    }
-
-    safe_copy(s_guards[s_guard_count].skill_id,
-              sizeof(s_guards[s_guard_count].skill_id),
-              skill_id);
-    s_guards[s_guard_count].guard = guard;
-    s_guard_count++;
-    ESP_LOGI(TAG, "Registered deactivate guard for skill '%s'", skill_id);
-    return ESP_OK;
-}
-
-esp_err_t claw_skill_check_deactivate_allowed(const char *session_id,
-                                              const char *skill_id,
-                                              char *reason_out,
-                                              size_t reason_size)
-{
-    if (reason_out && reason_size > 0) {
-        reason_out[0] = '\0';
-    }
-    if (!skill_id || !skill_id[0]) {
-        return ESP_OK;
-    }
-    if (!s_guards) {
-        return ESP_OK;
-    }
-
-    for (size_t i = 0; i < s_guard_count; i++) {
-        if (strcmp(s_guards[i].skill_id, skill_id) != 0) {
-            continue;
-        }
-        esp_err_t err = s_guards[i].guard(session_id, skill_id, reason_out, reason_size);
-        if (err != ESP_OK && reason_out && reason_size > 0 && reason_out[0] == '\0') {
-            snprintf(reason_out, reason_size,
-                     "deactivation refused by skill '%s' guard", skill_id);
-        }
-        return err;
-    }
-    return ESP_OK;
-}
-
 static esp_err_t claw_skill_skills_list_collect(const claw_core_request_t *request,
                                                 claw_core_context_t *out_context,
                                                 void *user_ctx)
@@ -1560,66 +1435,8 @@ static esp_err_t claw_skill_skills_list_collect(const claw_core_request_t *reque
     return ESP_OK;
 }
 
-static esp_err_t claw_skill_active_docs_collect(const claw_core_request_t *request,
-                                                claw_core_context_t *out_context,
-                                                void *user_ctx)
-{
-    char **active_skill_ids = NULL;
-    size_t active_skill_count = 0;
-    char *content = NULL;
-    size_t content_size;
-    esp_err_t err;
-
-    (void)user_ctx;
-
-    if (!request || !out_context || !request->session_id || !request->session_id[0]) {
-        return ESP_ERR_NOT_FOUND;
-    }
-    memset(out_context, 0, sizeof(*out_context));
-
-    err = load_active_skill_ids_from_disk(request->session_id, &active_skill_ids, &active_skill_count);
-    if (err != ESP_OK) {
-        return err;
-    }
-    if (active_skill_count == 0) {
-        free_string_array(active_skill_ids, active_skill_count);
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    content_size = (active_skill_count * (s_skill->max_file_bytes + 128)) + 1;
-    content = calloc(1, content_size);
-    if (!content) {
-        free_string_array(active_skill_ids, active_skill_count);
-        return ESP_ERR_NO_MEM;
-    }
-
-    err = claw_skill_build_prompt_block((const char *const *)active_skill_ids,
-                                        active_skill_count,
-                                        content,
-                                        content_size);
-    free_string_array(active_skill_ids, active_skill_count);
-    if (err != ESP_OK) {
-        free(content);
-        return err;
-    }
-    if (!content[0]) {
-        free(content);
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    out_context->kind = CLAW_CORE_CONTEXT_KIND_SYSTEM_PROMPT;
-    out_context->content = content;
-    return ESP_OK;
-}
-
 const claw_core_context_provider_t claw_skill_skills_list_provider = {
     .name = "Skills List",
     .collect = claw_skill_skills_list_collect,
-    .user_ctx = NULL,
-};
-
-const claw_core_context_provider_t claw_skill_active_skill_docs_provider = {
-    .name = "Active Skill Docs",
-    .collect = claw_skill_active_docs_collect,
     .user_ctx = NULL,
 };

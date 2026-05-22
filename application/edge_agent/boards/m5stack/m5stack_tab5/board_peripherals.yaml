@@ -1,0 +1,87 @@
+# Peripherals Configuration for ESP32-S3-KORVO2-V3
+peripherals:
+  # I2C Configuration
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 31
+        scl: 32
+
+  # I2S Audio Configuration
+  - name: i2s_audio_out
+    type: i2s
+    role: master
+    format: tdm-out                     # tdm-out, tdm-in
+    config: &i2s_config
+      port: 0
+      # Clock configuration
+      sample_rate_hz: 48000             # Sample rate in Hz
+      mclk_multiple: 256                # Multiple of MCLK to sample rate (256 or 384 for 24-bit)
+      # Slot configuration
+      data_bit_width: 16                # Data bit width (valid data bits per sample)
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO  # Total bits per slot (I2S_SLOT_BIT_WIDTH_AUTO or specific value)
+      slot_mode: I2S_SLOT_MODE_MONO     # I2S_SLOT_MODE_MONO or I2S_SLOT_MODE_STEREO
+      slot_mask: I2S_TDM_SLOT0          # I2S_TDM_SLOT0, I2S_TDM_SLOT1 slots
+      ws_width: 16                      # WS signal width in BCLK ticks
+      total_slot: 2
+
+      # GPIO configuration
+      pins:
+        mclk: 30                       # GPIO number for MCLK
+        bclk: 27                        # GPIO number for BCLK
+        ws: 29                         # GPIO number for WS
+        dout: 26                        # GPIO number for DATA out
+        din: 28                        # GPIO number for DATA in
+
+  - name: i2s_audio_in
+    type: i2s
+    role: master
+    format: tdm-in
+    config:
+      <<: *i2s_config                   # Inherit base I2S configuration
+      mclk_multiple: 384                # Set MCLK multiple for 3 slots
+      slot_mask: I2S_TDM_SLOT0 | I2S_TDM_SLOT1 | I2S_TDM_SLOT2  # Override specific slot mask
+      slot_mode: I2S_SLOT_MODE_STEREO
+
+  # LDO Configuration for MIPI Power Supply, need to be initialized before MIPI.
+  - name: ldo_mipi
+    type: ldo
+    config:
+      chan_id: 3        # On the P4 function board, VO3_LDO is used to power mipi.
+      voltage_mv: 2500  # For MIPI, the operating voltage needs to be set to 2.5V.
+      adjustable: 1
+      owned_by_hw: 0
+
+  # DSI Configuration
+  - name: dsi_display
+    type: dsi
+    config:
+      bus_id: 0
+      data_lanes: 2
+      phy_clk_src: 0
+      lane_bit_rate_mbps: 1000
+
+  # Backlight Control
+  - name: ledc_backlight
+    type: ledc
+    version: default
+    config:
+      gpio_num: 22
+      speed_mode: LEDC_LOW_SPEED_MODE
+      channel: 1
+      timer_sel: LEDC_TIMER_0
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      freq_hz: 5000
+
+  # Power amplifier control
+  - name: gpio_power_touch
+    type: gpio
+    config:
+      pin: 23
+      mode: GPIO_MODE_OUTPUT
+      pull_up: true
+      default_level: 1

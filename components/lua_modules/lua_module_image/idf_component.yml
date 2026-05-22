@@ -1,0 +1,6 @@
+## IDF Component Manager Manifest File
+dependencies:
+  cap_lua:
+    path: ../../claw_capabilities/cap_lua
+
+  espressif/esp_new_jpeg: "^1.0.0"

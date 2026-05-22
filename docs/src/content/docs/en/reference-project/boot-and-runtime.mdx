@@ -94,7 +94,7 @@ This walkthrough uses sample app `application/edge_agent`, covering entry <LinkT
 
     When `llm_api_key`, `llm_model`, and `llm_profile` are all non-empty:
     - `claw_core_init` configures the LLM backend (key, profile, model, base_url, timeouts) and system prompt;
-    - register context providers: `claw_memory_profile_provider`, a long-term provider (`claw_memory_long_term_provider` in full mode, `claw_memory_long_term_lightweight_provider` in lightweight mode), `claw_memory_session_history_provider`, `claw_skill_skills_list_provider`, `claw_skill_active_skill_docs_provider`, `claw_cap_tools_provider`, `cap_lua_async_jobs_provider`, `cap_time_context_provider`;
+    - register context providers: `claw_memory_profile_provider`, a long-term provider (`claw_memory_long_term_provider` in full mode, `claw_memory_long_term_lightweight_provider` in lightweight mode), `claw_memory_session_history_provider`, `claw_skill_skills_list_provider`, and `claw_cap_tools_provider`;
     - `claw_core_start` launches the inference task.
 
     Otherwise `claw_core_init` / `claw_core_start` are skipped with a WARN—`ask`, default Agent routing, image inspect, and other core-dependent features stay unavailable until the LLM is configured and the device reboots.

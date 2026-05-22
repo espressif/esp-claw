@@ -1,9 +1,9 @@
--- Touch key demo: open board device and print two key states.
+-- Touch demo: open explicit GPIO channels and print smooth values.
 local touch = require("touch")
 local delay = require("delay")
 
 local a = type(args) == "table" and args or {}
-local DEVICE_NAME = type(a.device) == "string" and a.device or "touch_keys"
+local GPIOS = type(a.gpios) == "table" and a.gpios or { 2, 3 }
 local SAMPLE_COUNT = type(a.samples) == "number" and math.floor(a.samples) or 20
 local INTERVAL_MS = type(a.interval_ms) == "number" and math.floor(a.interval_ms) or 200
 
@@ -19,15 +19,14 @@ local function cleanup()
 end
 
 local function run()
-    keys = touch.new(DEVICE_NAME)
+    keys = touch.new({ gpios = GPIOS })
     print("[touch] opened " .. keys:name())
     for i = 1, SAMPLE_COUNT do
         local sample = keys:read()
         for _, key in ipairs(sample.keys) do
             print(string.format(
-                "[touch] #%d key%d gpio=%d pressed=%s smooth=%d benchmark=%d delta=%d threshold=%d",
-                i, key.index, key.gpio, tostring(key.pressed),
-                key.smooth, key.benchmark, key.delta, key.threshold
+                "[touch] #%d key%d gpio=%d channel=%d smooth=%d",
+                i, key.index, key.gpio, key.channel, key.smooth
             ))
         end
         delay.delay_ms(INTERVAL_MS)

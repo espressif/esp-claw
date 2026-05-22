@@ -1,7 +1,7 @@
 ## IDF Component Manager Manifest File
 dependencies:
   espressif/esp_board_manager:
-    version: "^0.5.9"
+    version: "^0.5.10"
     public: true
   espressif/esp_wifi_remote:
     version: ">=0.10,<2.0"
@@ -26,6 +26,9 @@ dependencies:
 
   captive_dns:
     path: ../../../components/common/captive_dns
+
+  claw_ramfs:
+    path: ../../../components/claw_modules/claw_ramfs
 
   emote:
     path: ../../../components/common/emote
@@ -58,3 +61,8 @@ dependencies:
 
   spi_bus_arbiter:
     path: ../../../components/common/spi_bus_arbiter
+
+  esp_video:
+    path: ../../../components/common/esp_video
+    matches:
+    - if: $CONFIG{ESP_BOARD_DEV_CAMERA_SUPPORT} == True

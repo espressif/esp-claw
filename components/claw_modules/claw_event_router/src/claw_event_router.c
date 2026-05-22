@@ -2492,7 +2492,7 @@ esp_err_t claw_event_router_add_rule(const claw_event_router_rule_t *rule)
         claw_event_router_free_rule_list(loaded_rules, old_rule_count);
         return ESP_ERR_INVALID_ARG;
     }
-    cJSON_AddItemToArray(root, rule_json);
+    cJSON_InsertItemInArray(root, 0, rule_json);
     claw_event_router_free_rule_list(loaded_rules, old_rule_count);
 
     err = claw_event_router_load_rules_from_root(root, &new_rules, &new_rule_count);

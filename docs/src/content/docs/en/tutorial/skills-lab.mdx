@@ -1,0 +1,35 @@
+---
+title: Skills Lab
+description: Explore ESP-Claw Skills through Skills Lab.
+---
+
+import { LinkCard, Aside } from '@astrojs/starlight/components';
+
+<LinkCard href="https://skills-lab.esp-claw.com" title="ESP-Claw Skills Lab" />
+
+ESP-Claw Skills Lab is a community platform for sharing ESP-Claw Skills. You can find a variety of ESP-Claw Skills and Lua scripts there, and share your own Skills and Lua scripts with others.
+
+## Install a Skill or Lua Script from Skills Lab on Your Device
+
+ESP-Claw includes a built-in Skill for installing Skills from Skills Lab. Follow the instructions on Skills Lab and send the prompt to ESP-Claw, then ESP-Claw can automatically install the Skill or Lua script from Skills Lab.
+
+<Aside type="caution" title="Security Reminder">
+
+The Skills and Lua scripts on Skills Lab are provided by third parties. They may contain malicious code that could damage the device filesystem or leak sensitive credentials. We recommend carefully reviewing the contents of a Skill or Lua script before installing it.
+
+</Aside>
+
+## Contribute Skills or Lua Scripts to Skills Lab
+
+You can help more people benefit from ESP-Claw by contributing Skills or Lua scripts to the [ESP-Claw Skills Lab GitHub repository](https://github.com/espressif/esp-claw-skills-lab).
+
+Projects on ESP-Claw Skills Lab must be packaged as a Skill that follows the [ESP-Claw Skill specification](https://github.com/espressif/esp-claw/blob/master/components/common/skill_builder/claw-skill-spec.md).
+This is because a standalone Lua script cannot provide enough information to the LLM. The LLM would not know what the script does or what parameters should be passed to it.
+
+Please place your Skills, Lua scripts, and resource files under the Skills directory of the [ESP-Claw Skills Lab GitHub repository](https://github.com/espressif/esp-claw-skills-lab).
+When contributing a Skill, you should ensure you have the legal right to submit it for redistribution under the MIT License—
+for example, because you created the work, you have authorization from the copyright holder, or third-party material is used under a compatible license (such as CC0) that permits redistribution under MIT.
+
+## License
+
+Skills in ESP-Claw Skills Lab are distributed under the MIT License.
