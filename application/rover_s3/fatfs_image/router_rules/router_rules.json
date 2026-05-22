@@ -1,27 +1,61 @@
-{
-  "version": 1,
-  "rules": [
-    {
-      "id": "voice_direct",
-      "match": {"source_channel": "voice", "content_type": "direct"},
-      "action": {"type": "drop"}
+[
+  {
+    "id": "voice_direct_drop",
+    "description": "Drop fast-path voice commands (already handled in cap_voice)",
+    "enabled": true,
+    "consume_on_match": true,
+    "match": {
+      "event_type": "voice_command",
+      "source_channel": "voice"
     },
-    {
-      "id": "voice_llm",
-      "match": {"source_channel": "voice"},
-      "action": {"type": "submit_to_agent"},
-      "reply_channel": "voice"
+    "actions": [
+      { "type": "drop" }
+    ]
+  },
+  {
+    "id": "voice_to_agent",
+    "description": "Route voice transcripts to LLM agent",
+    "enabled": true,
+    "consume_on_match": true,
+    "match": {
+      "event_type": "voice_input",
+      "source_channel": "voice"
     },
-    {
-      "id": "tg_llm",
-      "match": {"source_channel": "telegram"},
-      "action": {"type": "submit_to_agent"},
-      "reply_channel": "telegram"
+    "actions": [
+      { "type": "run_agent" }
+    ]
+  },
+  {
+    "id": "telegram_to_agent",
+    "description": "Route Telegram messages to LLM agent",
+    "enabled": true,
+    "consume_on_match": true,
+    "match": {
+      "event_type": "message",
+      "source_channel": "telegram"
     },
-    {
-      "id": "tg_outbound",
-      "match": {"event_type": "out_message", "target_channel": "telegram"},
-      "action": {"type": "call_cap", "cap_id": "tg_send_message"}
-    }
-  ]
-}
+    "actions": [
+      { "type": "run_agent" }
+    ]
+  },
+  {
+    "id": "agent_telegram_out",
+    "description": "Forward agent out_message to Telegram",
+    "enabled": true,
+    "consume_on_match": true,
+    "match": {
+      "event_type": "out_message",
+      "target_channel": "telegram"
+    },
+    "actions": [
+      {
+        "type": "call_cap",
+        "cap": "tg_send_message",
+        "input": {
+          "chat_id": "{{event.target_chat_id}}",
+          "text": "{{event.text}}"
+        }
+      }
+    ]
+  }
+]

@@ -1,14 +1,16 @@
 ---
 {
   "name": "rover_ops",
-  "description": "Multi-step rover movement: square loops, approach-and-grab, error handling. Activate when user asks for trajectories or multi-step navigation."
+  "description": "Multi-step rover movement: square loops, approach-and-grab, error handling. Activate when user asks for trajectories or multi-step navigation.",
+  "metadata": {
+    "manage_mode": "readonly"
+  }
 }
 ---
 
 # Rover Ops
 
-Use this skill for trajectories that need more than one `rover_move` or
-`rover_turn` call.
+Use this skill for trajectories that need more than one `rover_move` or `rover_turn` call.
 
 ## Square Loop
 
@@ -28,5 +30,4 @@ Observe each result. If any tool returns `emergency_stop`, abort and report.
 
 ## Error Handling
 
-Do not retry after `emergency_stop`. For `rover_turn` timeout, try a smaller
-angle or use `rover_move(z=...)` when IMU is unavailable.
+Do not retry after `emergency_stop`. For `rover_turn` timeout, try a smaller angle.

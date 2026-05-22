@@ -222,8 +222,13 @@ esp_err_t app_rover_s3_start(void)
     ESP_RETURN_ON_ERROR(rover_s3_cli_start(), TAG, "console REPL");
 
     if (strcmp(g_settings.voice_enabled, "0") != 0) {
-        ESP_ERROR_CHECK(cap_voice_start());
-        ESP_LOGI(TAG, "Voice pipeline started");
+        esp_err_t voice_err = cap_voice_start();
+        if (voice_err == ESP_OK) {
+            ESP_LOGI(TAG, "Voice pipeline started");
+        } else {
+            ESP_LOGW(TAG, "Voice pipeline start failed (%s); continuing without voice",
+                     esp_err_to_name(voice_err));
+        }
     }
 
     if (llm_is_configured(&g_settings)) {

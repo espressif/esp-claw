@@ -1,7 +1,10 @@
 ---
 {
   "name": "rover_search",
-  "description": "Visual search: find a named object by scanning with camera and rotating the rover. Activate when user asks to find, locate, or search for something."
+  "description": "Visual search: find a named object by scanning with camera and rotating the rover. Activate when user asks to find, locate, or search for something.",
+  "metadata": {
+    "manage_mode": "readonly"
+  }
 }
 ---
 
@@ -21,5 +24,4 @@ Use this skill when the user asks to find a named object.
 ## Limits
 
 Do not exceed 12 vision calls in one user turn. Do not combine search with
-blind driving into unknown space. The camera is fixed; only rover movement
-changes the view.
+blind driving into unknown space.

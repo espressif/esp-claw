@@ -1,7 +1,8 @@
 {
   "skills": [
-    {"id": "rover_ops",    "name": "Rover Operations",  "file": "rover_ops.md"},
-    {"id": "rover_search", "name": "Rover Search",       "file": "rover_search.md"},
-    {"id": "cap_voice",    "name": "Voice I/O",          "file": "cap_voice/SKILL.md"}
+    {"id": "rover_ops",     "name": "Rover Operations",  "file": "rover_ops/SKILL.md"},
+    {"id": "rover_search",  "name": "Rover Search",      "file": "rover_search/SKILL.md"},
+    {"id": "cap_voice",     "name": "Voice I/O",         "file": "cap_voice/SKILL.md"},
+    {"id": "unitv_vision",  "name": "Camera Vision",     "file": "unitv_vision/SKILL.md"}
   ]
 }
