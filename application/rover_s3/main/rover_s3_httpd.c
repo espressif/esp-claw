@@ -482,6 +482,13 @@ static esp_err_t h_config_get(httpd_req_t *req)
     return err;
 }
 
+static void deferred_restart_task(void *arg)
+{
+    (void)arg;
+    vTaskDelay(pdMS_TO_TICKS(1200));
+    esp_restart();
+}
+
 static esp_err_t h_config_post(httpd_req_t *req)
 {
     extern rover_s3_settings_t g_settings;
@@ -534,11 +541,11 @@ static esp_err_t h_config_post(httpd_req_t *req)
     g_settings = s;
 
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
+    httpd_resp_send(req, "{\"ok\":true,\"restarting\":true}", HTTPD_RESP_USE_STRLEN);
 
-    /* Restart after short delay */
-    vTaskDelay(pdMS_TO_TICKS(500));
-    esp_restart();
+    /* Restart from a separate task so the HTTP response finishes sending first */
+    xTaskCreate(deferred_restart_task, "httpd_restart", 2048, NULL, 5, NULL);
+
     return ESP_OK;
 }
 
@@ -569,6 +576,7 @@ esp_err_t rover_s3_httpd_start(void)
     cfg.server_port      = 80;
     cfg.max_uri_handlers = 12;
     cfg.stack_size       = 8192;
+    cfg.uri_match_fn     = httpd_uri_match_wildcard;
 
     ESP_RETURN_ON_ERROR(httpd_start(&s_httpd, &cfg), TAG, "httpd start");
 
