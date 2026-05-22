@@ -1,0 +1,73 @@
+menu "Rover S3 Configuration"
+
+config ROVER_S3_WIFI_SSID
+    string "Default Wi-Fi SSID"
+    default ""
+
+config ROVER_S3_WIFI_PASSWORD
+    string "Default Wi-Fi password"
+    default ""
+
+config ROVER_S3_LLM_API_KEY
+    string "Default LLM API key"
+    default ""
+
+config ROVER_S3_LLM_BACKEND_TYPE
+    string "Default LLM backend type"
+    default "openai_compatible"
+
+config ROVER_S3_LLM_PROFILE
+    string "Default LLM profile"
+    default "openai"
+
+config ROVER_S3_LLM_MODEL
+    string "Default LLM model"
+    default "openrouter/auto"
+
+config ROVER_S3_LLM_BASE_URL
+    string "Default LLM base URL"
+    default "https://openrouter.ai/api/v1"
+
+config ROVER_S3_LLM_AUTH_TYPE
+    string "Default LLM auth type"
+    default "bearer"
+
+config ROVER_S3_LLM_TIMEOUT_MS
+    string "Default LLM timeout ms"
+    default "30000"
+
+config ROVER_S3_TG_BOT_TOKEN
+    string "Default Telegram bot token"
+    default ""
+
+config ROVER_S3_TIME_TIMEZONE
+    string "Default timezone (POSIX TZ string)"
+    default "UTC0"
+
+endmenu
+
+# IM capability selection (subset of app_claw Kconfig, redefined here since
+# rover_s3 does not include components/common/app_claw in its component list)
+menu "Claw IM capabilities"
+
+config APP_CLAW_CAP_IM_TG
+    bool "Enable Telegram IM"
+    default y
+
+config APP_CLAW_CAP_IM_QQ
+    bool "Enable QQ IM"
+    default n
+
+config APP_CLAW_CAP_IM_FEISHU
+    bool "Enable Feishu IM"
+    default n
+
+config APP_CLAW_CAP_IM_WECHAT
+    bool "Enable WeChat IM"
+    default n
+
+config APP_CLAW_CAP_IM_LOCAL
+    bool "Enable Local IM"
+    default n
+
+endmenu

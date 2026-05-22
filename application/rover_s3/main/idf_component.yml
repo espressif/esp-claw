@@ -1,0 +1,29 @@
+dependencies:
+  cap_rover:
+    path: ../../../components/claw_capabilities/cap_rover
+  cap_unitv:
+    path: ../../../components/claw_capabilities/cap_unitv
+  cap_voice:
+    path: ../../../components/claw_capabilities/cap_voice
+  cap_im_platform:
+    path: ../../../components/claw_capabilities/cap_im_platform
+  cap_files:
+    path: ../../../components/claw_capabilities/cap_files
+  cap_skill_mgr:
+    path: ../../../components/claw_capabilities/cap_skill_mgr
+  cap_session_mgr:
+    path: ../../../components/claw_capabilities/cap_session_mgr
+  cap_system:
+    path: ../../../components/claw_capabilities/cap_system
+  cap_time:
+    path: ../../../components/claw_capabilities/cap_time
+  claw_cap:
+    path: ../../../components/claw_modules/claw_cap
+  claw_core:
+    path: ../../../components/claw_modules/claw_core
+  claw_event_router:
+    path: ../../../components/claw_modules/claw_event_router
+  claw_memory:
+    path: ../../../components/claw_modules/claw_memory
+  claw_skill:
+    path: ../../../components/claw_modules/claw_skill

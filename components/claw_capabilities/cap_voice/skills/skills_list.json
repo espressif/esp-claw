@@ -1,0 +1,10 @@
+{
+  "skills": [
+    {
+      "id": "cap_voice",
+      "name": "Voice I/O",
+      "description": "Speak responses and change TTS voice",
+      "file": "cap_voice/SKILL.md"
+    }
+  ]
+}

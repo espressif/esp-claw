@@ -12,8 +12,9 @@ idf_component_register(
         claw_cap
         claw_core
         driver
+        esp_driver_uart
         esp_http_client
         mbedtls
         console
-        json
+        cjson
 )

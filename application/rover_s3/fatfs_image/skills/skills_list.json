@@ -1,0 +1,7 @@
+{
+  "skills": [
+    {"id": "rover_ops",    "name": "Rover Operations",  "file": "rover_ops.md"},
+    {"id": "rover_search", "name": "Rover Search",       "file": "rover_search.md"},
+    {"id": "cap_voice",    "name": "Voice I/O",          "file": "cap_voice/SKILL.md"}
+  ]
+}

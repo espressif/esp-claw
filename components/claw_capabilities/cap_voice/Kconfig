@@ -1,0 +1,20 @@
+menu "cap_voice"
+
+config CAP_VOICE_ENABLED
+    bool "Enable cap_voice component"
+    default y
+
+
+config CAP_VOICE_RECORD_MAX_MS
+    int "Maximum recording duration (ms)"
+    default 10000
+
+config CAP_VOICE_VAD_SILENCE_MS
+    int "Silence duration to stop recording (ms)"
+    default 1500
+
+config CAP_VOICE_AUDIO_RECORD_BUF_KB
+    int "Audio ring buffer size (KB, PSRAM)"
+    default 320
+
+endmenu

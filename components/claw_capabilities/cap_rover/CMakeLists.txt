@@ -11,6 +11,7 @@ idf_component_register(
         claw_cap
         claw_core
         driver
+        esp_driver_i2c
         console
-        json
+        cjson
 )
