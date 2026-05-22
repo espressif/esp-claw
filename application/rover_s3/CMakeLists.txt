@@ -14,6 +14,7 @@ set(EXTRA_COMPONENT_DIRS
     # Common utilities (only what rover_s3 actually needs)
     "${CMAKE_SOURCE_DIR}/../../components/common/json"
     "${CMAKE_SOURCE_DIR}/../../components/common/http_reuse"
+    "${CMAKE_SOURCE_DIR}/../../components/common/captive_dns"
     "${CMAKE_SOURCE_DIR}/components"
 )
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

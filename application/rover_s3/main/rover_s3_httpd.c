@@ -583,9 +583,16 @@ esp_err_t rover_s3_httpd_start(void)
         { .uri = "/config",      .method = HTTP_GET,  .handler = h_config     },
         { .uri = "/config",      .method = HTTP_POST, .handler = h_config     },
     };
+    /* Wildcard handler: redirect all unknown URLs to / for captive portal */
+    static const httpd_uri_t catchall = {
+        .uri      = "/*",
+        .method   = HTTP_GET,
+        .handler  = h_root,  /* serve the page; browser will navigate to settings */
+    };
     for (size_t i = 0; i < sizeof(uris) / sizeof(uris[0]); i++) {
         httpd_register_uri_handler(s_httpd, &uris[i]);
     }
+    httpd_register_uri_handler(s_httpd, &catchall);
 
     ESP_LOGI(TAG, "HTTP server started on port 80");
     return ESP_OK;

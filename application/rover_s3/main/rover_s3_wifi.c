@@ -226,3 +226,45 @@ const char *rover_s3_wifi_get_ip(void)
 {
     return s_ip_str;
 }
+
+/* ── AP (captive portal) mode ──────────────────────────────────────── */
+
+static esp_netif_t *s_ap_netif;
+static bool s_ap_active;
+
+esp_err_t rover_s3_wifi_start_ap(const char *ssid)
+{
+    if (s_ap_active) return ESP_OK;
+
+    if (!s_ap_netif) {
+        s_ap_netif = esp_netif_create_default_wifi_ap();
+        if (!s_ap_netif) return ESP_FAIL;
+    }
+
+    wifi_config_t ap_cfg = {
+        .ap = {
+            .max_connection = 4,
+            .authmode       = WIFI_AUTH_OPEN,
+        },
+    };
+    strlcpy((char *)ap_cfg.ap.ssid, ssid ? ssid : "Rover-S3-Setup",
+            sizeof(ap_cfg.ap.ssid));
+    ap_cfg.ap.ssid_len = (uint8_t)strlen((char *)ap_cfg.ap.ssid);
+
+    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_AP), TAG, "set AP mode");
+    ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg), TAG, "set AP config");
+    ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "start AP");
+    s_ap_active = true;
+    ESP_LOGI(TAG, "AP started SSID='%s' IP=192.168.4.1", ap_cfg.ap.ssid);
+    return ESP_OK;
+}
+
+bool rover_s3_wifi_is_ap_active(void)
+{
+    return s_ap_active;
+}
+
+esp_netif_t *rover_s3_wifi_get_ap_netif(void)
+{
+    return s_ap_netif;
+}
