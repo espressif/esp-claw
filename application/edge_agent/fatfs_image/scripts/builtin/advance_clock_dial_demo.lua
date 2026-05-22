@@ -19,6 +19,10 @@ local TEXT_R, TEXT_G, TEXT_B = 218, 238, 255
 local SUBTEXT_R, SUBTEXT_G, SUBTEXT_B = 112, 160, 204
 local GLOW_R, GLOW_G, GLOW_B = 56, 214, 255
 
+local function rgb(r, g, b)
+    return { r = r, g = g, b = b }
+end
+
 local panel_handle, io_handle, width, height, panel_if = bm.get_display_lcd_params("display_lcd")
 if not panel_handle then
     print("[clock_dial_demo] ERROR: get_display_lcd_params(display_lcd) failed: " .. tostring(io_handle))
@@ -41,8 +45,8 @@ local function cleanup()
     end
 end
 
-width = display.width()
-height = display.height()
+width = display.width
+height = display.height
 
 if width <= 0 or height <= 0 then
     print("[clock_dial_demo] ERROR: invalid display size after init")
@@ -70,7 +74,7 @@ end
 local function draw_hand(angle_deg, inner_r, outer_r, color_r, color_g, color_b)
     local x0, y0 = polar_to_xy(cx, dial_cy, inner_r, angle_deg)
     local x1, y1 = polar_to_xy(cx, dial_cy, outer_r, angle_deg)
-    display.draw_line(x0, y0, x1, y1, color_r, color_g, color_b)
+    display.draw_line(x0, y0, x1, y1, rgb(color_r, color_g, color_b))
 end
 
 local function draw_ticks()
@@ -85,25 +89,25 @@ local function draw_ticks()
         local tick_g = is_major and MAJOR_TICK_G or TICK_G
         local tick_b = is_major and MAJOR_TICK_B or TICK_B
 
-        display.draw_line(x0, y0, x1, y1, tick_r, tick_g, tick_b)
+        display.draw_line(x0, y0, x1, y1, rgb(tick_r, tick_g, tick_b))
     end
 end
 
 local function draw_dial_shell()
-    display.clear(BG_R, BG_G, BG_B)
-    display.fill_round_rect(card_x + 3, card_y + 6, card_w, card_h, 26, SHADOW_R, SHADOW_G, SHADOW_B)
-    display.fill_round_rect(card_x, card_y, card_w, card_h, 26, CARD_R, CARD_G, CARD_B)
-    display.draw_round_rect(card_x, card_y, card_w, card_h, 26, 34, 58, 88)
-    display.draw_round_rect(card_x + 4, card_y + 4, card_w - 8, card_h - 8, 22, 18, 40, 64)
+    display.clear(rgb(BG_R, BG_G, BG_B))
+    display.fill_round_rect(card_x + 3, card_y + 6, card_w, card_h, 26, rgb(SHADOW_R, SHADOW_G, SHADOW_B))
+    display.fill_round_rect(card_x, card_y, card_w, card_h, 26, rgb(CARD_R, CARD_G, CARD_B))
+    display.draw_round_rect(card_x, card_y, card_w, card_h, 26, rgb(34, 58, 88))
+    display.draw_round_rect(card_x + 4, card_y + 4, card_w - 8, card_h - 8, 22, rgb(18, 40, 64))
 
-    display.fill_circle(cx, dial_cy, radius + 12, 12, 24, 40)
-    display.fill_circle(cx, dial_cy, radius + 4, RING_R, RING_G, RING_B)
-    display.fill_circle(cx, dial_cy, radius - 8, 8, 18, 32)
-    display.fill_circle(cx, dial_cy, radius - 24, 4, 10, 20)
-    display.fill_arc(cx, dial_cy, radius - 14, radius - 4, -50, 42, GLOW_R, GLOW_G, GLOW_B)
-    display.fill_arc(cx, dial_cy, radius - 14, radius - 4, 132, 220, 26, 64, 108)
-    display.fill_arc(cx, dial_cy, radius - 28, radius - 22, -8, 108, 32, 112, 188)
-    display.fill_arc(cx, dial_cy, radius - 28, radius - 22, 172, 278, 18, 72, 130)
+    display.fill_circle(cx, dial_cy, radius + 12, rgb(12, 24, 40))
+    display.fill_circle(cx, dial_cy, radius + 4, rgb(RING_R, RING_G, RING_B))
+    display.fill_circle(cx, dial_cy, radius - 8, rgb(8, 18, 32))
+    display.fill_circle(cx, dial_cy, radius - 24, rgb(4, 10, 20))
+    display.fill_arc(cx, dial_cy, radius - 14, radius - 4, -50, 42, rgb(GLOW_R, GLOW_G, GLOW_B))
+    display.fill_arc(cx, dial_cy, radius - 14, radius - 4, 132, 220, rgb(26, 64, 108))
+    display.fill_arc(cx, dial_cy, radius - 28, radius - 22, -8, 108, rgb(32, 112, 188))
+    display.fill_arc(cx, dial_cy, radius - 28, radius - 22, 172, 278, rgb(18, 72, 130))
     draw_ticks()
 end
 
@@ -126,23 +130,19 @@ local function draw_time(h, m, s)
     draw_hand(minute_angle, 0, radius - 36, MIN_R, MIN_G, MIN_B)
     draw_hand(second_angle, 0, radius - 28, SEC_R, SEC_G, SEC_B)
 
-    display.fill_circle(cx, dial_cy, 12, 12, 26, 44)
-    display.fill_circle(cx, dial_cy, 7, SEC_R, SEC_G, SEC_B)
-    display.draw_circle(cx, dial_cy, 12, 100, 190, 255)
+    display.fill_circle(cx, dial_cy, 12, rgb(12, 26, 44))
+    display.fill_circle(cx, dial_cy, 7, rgb(SEC_R, SEC_G, SEC_B))
+    display.draw_circle(cx, dial_cy, 12, rgb(100, 190, 255))
     local sec_tip_x, sec_tip_y = polar_to_xy(cx, dial_cy, radius - 28, second_angle)
-    display.fill_circle(sec_tip_x, sec_tip_y, 4, SEC_R, SEC_G, SEC_B)
+    display.fill_circle(sec_tip_x, sec_tip_y, 4, rgb(SEC_R, SEC_G, SEC_B))
 
-    display.fill_round_rect(cx - 88, digital_y - 8, 176, 52, 16, 8, 20, 34)
-    display.draw_round_rect(cx - 88, digital_y - 8, 176, 52, 16, 60, 132, 206)
-    display.draw_round_rect(cx - 84, digital_y - 4, 168, 44, 13, 18, 48, 78)
+    display.fill_round_rect(cx - 88, digital_y - 8, 176, 52, 16, rgb(8, 20, 34))
+    display.draw_round_rect(cx - 88, digital_y - 8, 176, 52, 16, rgb(60, 132, 206))
+    display.draw_round_rect(cx - 84, digital_y - 4, 168, 44, 13, rgb(18, 48, 78))
     display.draw_text(cx - digital_w // 2, digital_y + 4, digital, {
-        r = TEXT_R,
-        g = TEXT_G,
-        b = TEXT_B,
+        color = rgb(TEXT_R, TEXT_G, TEXT_B),
         font_size = 28,
-        bg_r = 8,
-        bg_g = 20,
-        bg_b = 34,
+        bg = rgb(8, 20, 34),
     })
 end
 
@@ -152,7 +152,7 @@ local run_ok, run_err = xpcall(function()
     while elapsed_ms < RUN_TIME_MS do
         local hour, minute, second = parse_now()
 
-        display.begin_frame({ clear = true, r = BG_R, g = BG_G, b = BG_B })
+        display.begin_frame({ clear = true, color = rgb(BG_R, BG_G, BG_B) })
         draw_dial_shell()
         draw_time(hour, minute, second)
         display.present()

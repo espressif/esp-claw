@@ -52,13 +52,11 @@ end
 
 local panel_handle, io_handle, width, height, panel_if = bm.get_display_lcd_params("display_lcd")
 if not panel_handle then
-    print("[lappybird] ERROR: get_display_lcd_params(display_lcd) failed: " .. tostring(io_handle))
     return
 end
 
 local ok, err = pcall(display.init, panel_handle, io_handle, width, height, panel_if)
 if not ok then
-    print("[lappybird] ERROR: init failed: " .. tostring(err))
     return
 end
 
@@ -87,7 +85,6 @@ width = display.width
 height = display.height
 
 if width <= 0 or height <= 0 then
-    print("[lappybird] ERROR: invalid display size after init")
     cleanup()
     return
 end
@@ -385,29 +382,21 @@ local function init_input()
                 input_mode = "lcd_touch"
                 return true
             end
-            print("[lappybird] WARN: lcd_touch.sync failed: " .. tostring(err))
-        else
-            print("[lappybird] WARN: get_lcd_touch_handle(lcd_touch) failed: " .. tostring(touch_err))
         end
-    else
-        print("[lappybird] WARN: require(lcd_touch) failed")
     end
 
     if not button_ok then
-        print("[lappybird] ERROR: require(button) failed")
         return false
     end
 
     local button_err
     button_handle, button_err = button.new(0, 0)
     if not button_handle then
-        print("[lappybird] ERROR: button.new failed: " .. tostring(button_err))
         return false
     end
 
     local level, level_err = button.get_key_level(button_handle)
     if level == nil then
-        print("[lappybird] ERROR: button.get_key_level failed: " .. tostring(level_err))
         cleanup()
         return false
     end
@@ -421,7 +410,6 @@ local function consume_input_tap()
     if input_mode == "lcd_touch" then
         local polled, info = pcall(lcd_touch.poll, touch_handle)
         if not polled then
-            print("[lappybird] ERROR: lcd_touch.poll failed: " .. tostring(info))
             return nil
         end
 
@@ -433,7 +421,6 @@ local function consume_input_tap()
     if input_mode == "button" then
         local level, level_err = button.get_key_level(button_handle)
         if level == nil then
-            print("[lappybird] ERROR: button.get_key_level failed: " .. tostring(level_err))
             return nil
         end
 
@@ -447,20 +434,17 @@ end
 
 local function init_audio()
     if not audio_ok then
-        print("[lappybird] WARN: require(audio) failed")
         return
     end
 
     local output_codec, output_rate, output_channels, output_bits =
         bm.get_audio_codec_output_params("audio_dac")
     if not output_codec then
-        print("[lappybird] WARN: get_audio_codec_output_params(audio_dac) failed: " .. tostring(output_rate))
         return
     end
 
     local output, out_err = audio.new_output(output_codec, output_rate, output_channels, output_bits)
     if not output then
-        print("[lappybird] WARN: audio.new_output failed: " .. tostring(out_err))
         return
     end
 
@@ -478,13 +462,6 @@ init_audio()
 reset_round("title")
 
 display.begin_frame({ clear = true, color = rgb(SKY_R, SKY_G, SKY_B) })
-
-print(string.format("[lappybird] ready screen=%dx%d", width, height))
-if input_mode == "lcd_touch" then
-    print("[lappybird] lcd_touch ready, tap anywhere to flap, tap after crashing to restart")
-else
-    print("[lappybird] lcd_touch unavailable, using button to flap and restart")
-end
 
 for _ = 1, RUN_TIME_MS // FRAME_MS do
     local tapped = consume_input_tap()
@@ -514,4 +491,3 @@ for _ = 1, RUN_TIME_MS // FRAME_MS do
 end
 
 cleanup()
-print("[lappybird] done")

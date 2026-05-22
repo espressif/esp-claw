@@ -201,7 +201,7 @@ function imFromConfig(config: Partial<AppConfig>): ImForm {
   return {
     wechat_token: config.wechat_token ?? '',
     wechat_base_url: config.wechat_base_url ?? '',
-    wechat_cdn_base_url: config.wechat_cdn_base_url ?? '',
+    wechat_cdn_base_url: config.wechat_cdn_base_url || WECHAT_DEFAULT_CDN_BASE_URL,
     wechat_account_id: config.wechat_account_id ?? '',
     qq_app_id: config.qq_app_id ?? '',
     qq_app_secret: config.qq_app_secret ?? '',

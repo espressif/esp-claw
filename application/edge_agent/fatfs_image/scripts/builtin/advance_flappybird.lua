@@ -46,15 +46,17 @@ local button_active_level = 0
 local button_last_level = 1
 local audio_output = nil
 
+local function rgb(r, g, b)
+    return { r = r, g = g, b = b }
+end
+
 local panel_handle, io_handle, width, height, panel_if = bm.get_display_lcd_params("display_lcd")
 if not panel_handle then
-    print("[lappybird] ERROR: get_display_lcd_params(display_lcd) failed: " .. tostring(io_handle))
     return
 end
 
 local ok, err = pcall(display.init, panel_handle, io_handle, width, height, panel_if)
 if not ok then
-    print("[lappybird] ERROR: init failed: " .. tostring(err))
     return
 end
 
@@ -79,11 +81,10 @@ local function cleanup()
     end
 end
 
-width = display.width()
-height = display.height()
+width = display.width
+height = display.height
 
 if width <= 0 or height <= 0 then
-    print("[lappybird] ERROR: invalid display size after init")
     cleanup()
     return
 end
@@ -176,15 +177,15 @@ local function flap()
 end
 
 local function draw_cloud(x, y, size)
-    display.fill_circle(x, y, size, CLOUD_R, CLOUD_G, CLOUD_B)
-    display.fill_circle(x + size, y - 2, math.floor(size * 0.85), CLOUD_R, CLOUD_G, CLOUD_B)
-    display.fill_circle(x + size * 2 - 2, y, math.floor(size * 0.72), CLOUD_R, CLOUD_G, CLOUD_B)
-    display.fill_rect(x, y - math.floor(size * 0.5), size * 2, size, CLOUD_R, CLOUD_G, CLOUD_B)
+    display.fill_circle(x, y, size, rgb(CLOUD_R, CLOUD_G, CLOUD_B))
+    display.fill_circle(x + size, y - 2, math.floor(size * 0.85), rgb(CLOUD_R, CLOUD_G, CLOUD_B))
+    display.fill_circle(x + size * 2 - 2, y, math.floor(size * 0.72), rgb(CLOUD_R, CLOUD_G, CLOUD_B))
+    display.fill_rect(x, y - math.floor(size * 0.5), size * 2, size, rgb(CLOUD_R, CLOUD_G, CLOUD_B))
 end
 
 local function draw_background()
-    display.clear(SKY_R, SKY_G, SKY_B)
-    display.fill_circle(width - 34, 28, 18, SUN_R, SUN_G, SUN_B)
+    display.clear(rgb(SKY_R, SKY_G, SKY_B))
+    display.fill_circle(width - 34, 28, 18, rgb(SUN_R, SUN_G, SUN_B))
 
     for i = 1, CLOUD_COUNT do
         local cloud = cloud_offsets[i]
@@ -192,13 +193,13 @@ local function draw_background()
         draw_cloud(drift, cloud.y, cloud.size)
     end
 
-    display.fill_rect(0, play_bottom, width, GROUND_HEIGHT, GROUND_R, GROUND_G, GROUND_B)
-    display.fill_rect(0, play_bottom + GROUND_HEIGHT - 8, width, 8, DIRT_R, DIRT_G, DIRT_B)
+    display.fill_rect(0, play_bottom, width, GROUND_HEIGHT, rgb(GROUND_R, GROUND_G, GROUND_B))
+    display.fill_rect(0, play_bottom + GROUND_HEIGHT - 8, width, 8, rgb(DIRT_R, DIRT_G, DIRT_B))
 
     local stripe_w = 14
     for x = 0, width + stripe_w, stripe_w * 2 do
         local offset = (frame_count * 2) % (stripe_w * 2)
-        display.fill_rect(x - offset, play_bottom, stripe_w, 6, 234, 208, 108)
+        display.fill_rect(x - offset, play_bottom, stripe_w, 6, rgb(234, 208, 108))
     end
 end
 
@@ -208,13 +209,13 @@ local function draw_pipe(pipe)
     local bottom_y = pipe.gap_bottom
     local bottom_h = play_bottom - bottom_y
 
-    display.fill_rect(x, 0, PIPE_WIDTH, top_h, PIPE_R, PIPE_G, PIPE_B)
-    display.fill_rect(x + PIPE_WIDTH - 7, 0, 7, top_h, PIPE_SHADE_R, PIPE_SHADE_G, PIPE_SHADE_B)
-    display.fill_rect(x - 2, top_h - 10, PIPE_WIDTH + 4, 10, PIPE_CAP_R, PIPE_CAP_G, PIPE_CAP_B)
+    display.fill_rect(x, 0, PIPE_WIDTH, top_h, rgb(PIPE_R, PIPE_G, PIPE_B))
+    display.fill_rect(x + PIPE_WIDTH - 7, 0, 7, top_h, rgb(PIPE_SHADE_R, PIPE_SHADE_G, PIPE_SHADE_B))
+    display.fill_rect(x - 2, top_h - 10, PIPE_WIDTH + 4, 10, rgb(PIPE_CAP_R, PIPE_CAP_G, PIPE_CAP_B))
 
-    display.fill_rect(x, bottom_y, PIPE_WIDTH, bottom_h, PIPE_R, PIPE_G, PIPE_B)
-    display.fill_rect(x + PIPE_WIDTH - 7, bottom_y, 7, bottom_h, PIPE_SHADE_R, PIPE_SHADE_G, PIPE_SHADE_B)
-    display.fill_rect(x - 2, bottom_y, PIPE_WIDTH + 4, 10, PIPE_CAP_R, PIPE_CAP_G, PIPE_CAP_B)
+    display.fill_rect(x, bottom_y, PIPE_WIDTH, bottom_h, rgb(PIPE_R, PIPE_G, PIPE_B))
+    display.fill_rect(x + PIPE_WIDTH - 7, bottom_y, 7, bottom_h, rgb(PIPE_SHADE_R, PIPE_SHADE_G, PIPE_SHADE_B))
+    display.fill_rect(x - 2, bottom_y, PIPE_WIDTH + 4, 10, rgb(PIPE_CAP_R, PIPE_CAP_G, PIPE_CAP_B))
 end
 
 local function draw_bird()
@@ -223,18 +224,18 @@ local function draw_bird()
     local tilt = math.max(-8, math.min(8, math.floor(bird_vy)))
     local leg_y = by + BIRD_RADIUS + 2 + (tilt // 2)
 
-    display.fill_circle(bx, by, BIRD_RADIUS, BIRD_R, BIRD_G, BIRD_B)
-    display.fill_circle(bx - 2, by + 2, math.floor(BIRD_RADIUS * 0.65), BIRD_WING_R, BIRD_WING_G, BIRD_WING_B)
+    display.fill_circle(bx, by, BIRD_RADIUS, rgb(BIRD_R, BIRD_G, BIRD_B))
+    display.fill_circle(bx - 2, by + 2, math.floor(BIRD_RADIUS * 0.65), rgb(BIRD_WING_R, BIRD_WING_G, BIRD_WING_B))
     display.fill_triangle(
         bx + BIRD_RADIUS - 1, by - 2,
         bx + BIRD_RADIUS + 10, by + 1,
         bx + BIRD_RADIUS - 1, by + 5,
-        BEAK_R, BEAK_G, BEAK_B
+        rgb(BEAK_R, BEAK_G, BEAK_B)
     )
-    display.fill_circle(bx + 3, by - 3, 3, 255, 255, 255)
-    display.fill_circle(bx + 4, by - 3, 1, EYE_R, EYE_G, EYE_B)
-    display.draw_line(bx - 6, by + BIRD_RADIUS - 2, bx - 2, leg_y, EYE_R, EYE_G, EYE_B)
-    display.draw_line(bx + 1, by + BIRD_RADIUS - 2, bx + 5, leg_y, EYE_R, EYE_G, EYE_B)
+    display.fill_circle(bx + 3, by - 3, 3, "white")
+    display.fill_circle(bx + 4, by - 3, 1, rgb(EYE_R, EYE_G, EYE_B))
+    display.draw_line(bx - 6, by + BIRD_RADIUS - 2, bx - 2, leg_y, rgb(EYE_R, EYE_G, EYE_B))
+    display.draw_line(bx + 1, by + BIRD_RADIUS - 2, bx + 5, leg_y, rgb(EYE_R, EYE_G, EYE_B))
 end
 
 local function draw_scoreboard()
@@ -242,28 +243,20 @@ local function draw_scoreboard()
     local left_x = 8
     local right_x = width - box_w - 8
 
-    display.fill_round_rect(left_x, 8, box_w, 40, 8, PANEL_R, PANEL_G, PANEL_B)
-    display.draw_round_rect(left_x, 8, box_w, 40, 8, PANEL_BORDER_R, PANEL_BORDER_G, PANEL_BORDER_B)
+    display.fill_round_rect(left_x, 8, box_w, 40, 8, rgb(PANEL_R, PANEL_G, PANEL_B))
+    display.draw_round_rect(left_x, 8, box_w, 40, 8, rgb(PANEL_BORDER_R, PANEL_BORDER_G, PANEL_BORDER_B))
     display.draw_text(left_x + 8, 18, "SCORE " .. tostring(score), {
-        r = TEXT_R,
-        g = TEXT_G,
-        b = TEXT_B,
+        color = rgb(TEXT_R, TEXT_G, TEXT_B),
         font_size = 14,
-        bg_r = PANEL_R,
-        bg_g = PANEL_G,
-        bg_b = PANEL_B,
+        bg = rgb(PANEL_R, PANEL_G, PANEL_B),
     })
 
-    display.fill_round_rect(right_x, 8, box_w, 40, 8, PANEL_R, PANEL_G, PANEL_B)
-    display.draw_round_rect(right_x, 8, box_w, 40, 8, PANEL_BORDER_R, PANEL_BORDER_G, PANEL_BORDER_B)
+    display.fill_round_rect(right_x, 8, box_w, 40, 8, rgb(PANEL_R, PANEL_G, PANEL_B))
+    display.draw_round_rect(right_x, 8, box_w, 40, 8, rgb(PANEL_BORDER_R, PANEL_BORDER_G, PANEL_BORDER_B))
     display.draw_text(right_x + 8, 18, "BEST " .. tostring(best_score), {
-        r = TEXT_R,
-        g = TEXT_G,
-        b = TEXT_B,
+        color = rgb(TEXT_R, TEXT_G, TEXT_B),
         font_size = 14,
-        bg_r = PANEL_R,
-        bg_g = PANEL_G,
-        bg_b = PANEL_B,
+        bg = rgb(PANEL_R, PANEL_G, PANEL_B),
     })
 end
 
@@ -273,27 +266,19 @@ local function draw_center_panel(title, subtitle, subtitle_color)
     local panel_x = (width - panel_w) // 2
     local panel_y = math.floor(play_height * 0.18)
 
-    display.fill_round_rect(panel_x, panel_y, panel_w, panel_h, 12, PANEL_R, PANEL_G, PANEL_B)
-    display.draw_round_rect(panel_x, panel_y, panel_w, panel_h, 12, PANEL_BORDER_R, PANEL_BORDER_G, PANEL_BORDER_B)
+    display.fill_round_rect(panel_x, panel_y, panel_w, panel_h, 12, rgb(PANEL_R, PANEL_G, PANEL_B))
+    display.draw_round_rect(panel_x, panel_y, panel_w, panel_h, 12, rgb(PANEL_BORDER_R, PANEL_BORDER_G, PANEL_BORDER_B))
     display.draw_text_aligned(panel_x, panel_y + 8, panel_w, 24, title, {
-        r = TEXT_R,
-        g = TEXT_G,
-        b = TEXT_B,
+        color = rgb(TEXT_R, TEXT_G, TEXT_B),
         font_size = 22,
-        bg_r = PANEL_R,
-        bg_g = PANEL_G,
-        bg_b = PANEL_B,
+        bg = rgb(PANEL_R, PANEL_G, PANEL_B),
         align = "center",
         valign = "middle",
     })
     display.draw_text_aligned(panel_x + 12, panel_y + 42, panel_w - 24, 18, subtitle, {
-        r = subtitle_color.r,
-        g = subtitle_color.g,
-        b = subtitle_color.b,
+        color = subtitle_color,
         font_size = 14,
-        bg_r = PANEL_R,
-        bg_g = PANEL_G,
-        bg_b = PANEL_B,
+        bg = rgb(PANEL_R, PANEL_G, PANEL_B),
         align = "center",
         valign = "middle",
     })
@@ -397,29 +382,21 @@ local function init_input()
                 input_mode = "lcd_touch"
                 return true
             end
-            print("[lappybird] WARN: lcd_touch.sync failed: " .. tostring(err))
-        else
-            print("[lappybird] WARN: get_lcd_touch_handle(lcd_touch) failed: " .. tostring(touch_err))
         end
-    else
-        print("[lappybird] WARN: require(lcd_touch) failed")
     end
 
     if not button_ok then
-        print("[lappybird] ERROR: require(button) failed")
         return false
     end
 
     local button_err
     button_handle, button_err = button.new(0, 0)
     if not button_handle then
-        print("[lappybird] ERROR: button.new failed: " .. tostring(button_err))
         return false
     end
 
     local level, level_err = button.get_key_level(button_handle)
     if level == nil then
-        print("[lappybird] ERROR: button.get_key_level failed: " .. tostring(level_err))
         cleanup()
         return false
     end
@@ -433,7 +410,6 @@ local function consume_input_tap()
     if input_mode == "lcd_touch" then
         local polled, info = pcall(lcd_touch.poll, touch_handle)
         if not polled then
-            print("[lappybird] ERROR: lcd_touch.poll failed: " .. tostring(info))
             return nil
         end
 
@@ -445,7 +421,6 @@ local function consume_input_tap()
     if input_mode == "button" then
         local level, level_err = button.get_key_level(button_handle)
         if level == nil then
-            print("[lappybird] ERROR: button.get_key_level failed: " .. tostring(level_err))
             return nil
         end
 
@@ -459,20 +434,17 @@ end
 
 local function init_audio()
     if not audio_ok then
-        print("[lappybird] WARN: require(audio) failed")
         return
     end
 
     local output_codec, output_rate, output_channels, output_bits =
         bm.get_audio_codec_output_params("audio_dac")
     if not output_codec then
-        print("[lappybird] WARN: get_audio_codec_output_params(audio_dac) failed: " .. tostring(output_rate))
         return
     end
 
     local output, out_err = audio.new_output(output_codec, output_rate, output_channels, output_bits)
     if not output then
-        print("[lappybird] WARN: audio.new_output failed: " .. tostring(out_err))
         return
     end
 
@@ -489,14 +461,7 @@ init_audio()
 
 reset_round("title")
 
-display.begin_frame({ clear = true, r = SKY_R, g = SKY_G, b = SKY_B })
-
-print(string.format("[lappybird] ready screen=%dx%d", width, height))
-if input_mode == "lcd_touch" then
-    print("[lappybird] lcd_touch ready, tap anywhere to flap, tap after crashing to restart")
-else
-    print("[lappybird] lcd_touch unavailable, using button to flap and restart")
-end
+display.begin_frame({ clear = true, color = rgb(SKY_R, SKY_G, SKY_B) })
 
 for _ = 1, RUN_TIME_MS // FRAME_MS do
     local tapped = consume_input_tap()
@@ -526,4 +491,3 @@ for _ = 1, RUN_TIME_MS // FRAME_MS do
 end
 
 cleanup()
-print("[lappybird] done")

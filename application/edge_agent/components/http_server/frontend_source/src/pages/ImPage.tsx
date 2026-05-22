@@ -35,6 +35,8 @@ type ImForm = {
   tg_bot_token: string;
 };
 
+const WECHAT_DEFAULT_CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c';
+
 /* ── Shared styles ──────────────────────────────────────────────────── */
 
 const ROW_CLASS =
@@ -345,7 +347,7 @@ export const ImPage: Component = () => {
     toForm: (config: Partial<AppConfig>) => ({
       wechat_token: config.wechat_token ?? '',
       wechat_base_url: config.wechat_base_url ?? '',
-      wechat_cdn_base_url: config.wechat_cdn_base_url ?? '',
+      wechat_cdn_base_url: config.wechat_cdn_base_url || WECHAT_DEFAULT_CDN_BASE_URL,
       wechat_account_id: config.wechat_account_id ?? '',
       qq_app_id: config.qq_app_id ?? '',
       qq_app_secret: config.qq_app_secret ?? '',
@@ -423,6 +425,9 @@ export const ImPage: Component = () => {
       if (data.token) tab.setForm('wechat_token', data.token);
       if (data.base_url) tab.setForm('wechat_base_url', data.base_url);
       if (data.account_id) tab.setForm('wechat_account_id', data.account_id);
+      if (!tab.form.wechat_cdn_base_url.trim()) {
+        tab.setForm('wechat_cdn_base_url', WECHAT_DEFAULT_CDN_BASE_URL);
+      }
     });
     pushToast(t('imWechatCredsFilled') as string, 'info', 6000);
   };

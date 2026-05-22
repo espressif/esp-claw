@@ -25,8 +25,8 @@ local function cleanup()
     end
 end
 
-width = display.width()
-height = display.height()
+width = display.width
+height = display.height
 
 if width <= 0 or height <= 0 then
     print("[lcd_touch_paint] ERROR: invalid display size after init")
@@ -38,6 +38,10 @@ local BG_R, BG_G, BG_B = 250, 246, 238
 local INK_R, INK_G, INK_B = 24, 74, 126
 local ACCENT_R, ACCENT_G, ACCENT_B = 210, 88, 52
 local TEXT_R, TEXT_G, TEXT_B = 32, 36, 42
+
+local function rgb(r, g, b)
+    return { r = r, g = g, b = b }
+end
 
 local CLEAR_W = 74
 local CLEAR_H = 32
@@ -55,36 +59,24 @@ local dirty_y1 = nil
 local dirty_age_ms = 0
 
 local function draw_ui()
-    display.fill_rect(CLEAR_X, CLEAR_Y, CLEAR_W, CLEAR_H, ACCENT_R, ACCENT_G, ACCENT_B)
-    display.draw_rect(CLEAR_X, CLEAR_Y, CLEAR_W, CLEAR_H, 120, 30, 12)
+    display.fill_rect(CLEAR_X, CLEAR_Y, CLEAR_W, CLEAR_H, rgb(ACCENT_R, ACCENT_G, ACCENT_B))
+    display.draw_rect(CLEAR_X, CLEAR_Y, CLEAR_W, CLEAR_H, rgb(120, 30, 12))
     display.draw_text_aligned(CLEAR_X, CLEAR_Y, CLEAR_W, CLEAR_H, "CLEAR", {
-        r = 255,
-        g = 255,
-        b = 255,
+        color = "white",
         font_size = 16,
         align = "center",
         valign = "middle",
-        bg_r = ACCENT_R,
-        bg_g = ACCENT_G,
-        bg_b = ACCENT_B,
+        bg = rgb(ACCENT_R, ACCENT_G, ACCENT_B),
     })
     display.draw_text(10, 10, "LCD Touch Paint", {
-        r = TEXT_R,
-        g = TEXT_G,
-        b = TEXT_B,
+        color = rgb(TEXT_R, TEXT_G, TEXT_B),
         font_size = 20,
-        bg_r = BG_R,
-        bg_g = BG_G,
-        bg_b = BG_B,
+        bg = rgb(BG_R, BG_G, BG_B),
     })
     display.draw_text(10, 34, "draw with finger, tap CLEAR to wipe", {
-        r = 90,
-        g = 96,
-        b = 104,
+        color = rgb(90, 96, 104),
         font_size = 12,
-        bg_r = BG_R,
-        bg_g = BG_G,
-        bg_b = BG_B,
+        bg = rgb(BG_R, BG_G, BG_B),
     })
     display.present()
 end
@@ -94,7 +86,7 @@ local function inside_clear_button(x, y)
 end
 
 local function stamp_brush(x, y)
-    display.fill_circle(x, y, BRUSH_R, INK_R, INK_G, INK_B)
+    display.fill_circle(x, y, BRUSH_R, rgb(INK_R, INK_G, INK_B))
 end
 
 local function mark_dirty(x, y, w, h)
@@ -128,7 +120,7 @@ local function mark_brush_dirty(x, y)
 end
 
 local function draw_segment(x0, y0, x1, y1)
-    display.draw_line(x0, y0, x1, y1, INK_R, INK_G, INK_B)
+    display.draw_line(x0, y0, x1, y1, rgb(INK_R, INK_G, INK_B))
     stamp_brush(x1, y1)
     local min_x = math.min(x0, x1) - BRUSH_R - 1
     local min_y = math.min(y0, y1) - BRUSH_R - 1
@@ -154,7 +146,7 @@ local function flush_dirty(force)
     dirty_age_ms = 0
 end
 
-display.begin_frame({ clear = true, r = BG_R, g = BG_G, b = BG_B })
+display.begin_frame({ clear = true, color = rgb(BG_R, BG_G, BG_B) })
 
 local touch_handle, touch_err = bm.get_lcd_touch_handle("lcd_touch")
 if not touch_handle then
@@ -170,7 +162,7 @@ if not synced then
     return
 end
 
-display.clear(BG_R, BG_G, BG_B)
+display.clear(rgb(BG_R, BG_G, BG_B))
 draw_ui()
 
 print("[lcd_touch_paint] ready")
@@ -190,7 +182,7 @@ for _ = 1, math.floor(RUN_TIME_MS / POLL_MS) do
 
     if info.just_pressed then
         if inside_clear_button(info.x, info.y) then
-            display.clear(BG_R, BG_G, BG_B)
+            display.clear(rgb(BG_R, BG_G, BG_B))
             draw_ui()
             drawing = false
             dirty_x0 = nil

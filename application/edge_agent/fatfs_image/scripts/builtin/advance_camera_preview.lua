@@ -1,4 +1,4 @@
-local board_manager = require("board_manager")
+﻿local board_manager = require("board_manager")
 local camera = require("camera")
 local display = require("display")
 local delay = require("delay")
@@ -67,8 +67,8 @@ if pixel_format ~= "RGBP" and pixel_format ~= "RGBR" then
     return
 end
 
-local width = display.width()
-local height = display.height()
+local width = display.width
+local height = display.height
 local x = 0
 local y = 0
 
@@ -83,7 +83,7 @@ print(string.format(
     info_or_err.width, info_or_err.height, pixel_format, width, height, panel_if_name
 ))
 
-display.begin_frame({ clear = true, r = 0, g = 0, b = 0 })
+display.begin_frame({ clear = true, color = "black" })
 
 while true do
     local frame_ok, frame_or_err = pcall(camera.get_frame, FRAME_TIMEOUT_MS)

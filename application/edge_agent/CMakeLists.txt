@@ -4,7 +4,7 @@ include("${CMAKE_SOURCE_DIR}/tools/cmake/esp_idf_patch.cmake")
 include("${CMAKE_SOURCE_DIR}/tools/cmake/flash_partition_defaults.cmake")
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-set(PROJECT_VER "0.2.1")
+set(PROJECT_VER "0.3.0")
 project(edge_agent)
 
 set(EDGE_AGENT_FATFS_SOURCE_ROOT "${CMAKE_SOURCE_DIR}/fatfs_image")

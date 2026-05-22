@@ -1,4 +1,4 @@
-# Lua Display
+﻿# Lua Display
 
 This module describes how to correctly use `display` when writing Lua scripts.
 
@@ -42,7 +42,7 @@ pcall(display.deinit)
 - Most numeric drawing arguments are validated as integers in the Lua binding.
 - Passing floating-point values such as `10.5`, `32.2`, or `tilt / 2` to coordinates, widths, heights, radii, crop rectangles, flush rectangles, or `font_size` can raise a Lua error instead of being rounded automatically.
 - If a computed value is meant to be a pixel coordinate or size, convert it to an integer first before passing it to the display API. Prefer integer division `//` when the value comes from a division expression.
-- Colors are almost always passed as three integers: `r, g, b`.
+- Colors are passed as a single **color value**: a named string (`"red"`, `"white"`, etc.), a hex string (`"#FF8800"`), or a table `{r = R, g = G, b = B}` where each field is an integer 0鈥?55. Passing three separate integers for color is not supported.
 - Text drawing only supports ASCII text.
 - For Chinese or other Unicode text, render an image and draw it with `draw_png_file(...)` or `draw_jpeg_file(...)`.
 - Image file paths must be absolute paths under the current storage root, for example `storage.join_path(storage.get_root_dir(), "pic.jpg")`.
@@ -72,13 +72,13 @@ Deinitializes the drawing context.
 - Returns `true` on success
 - Raises a Lua error on failure
 
-### `display.width()`
+### `display.width`
 
-Returns the current screen width.
+Integer property. Returns the current screen width.
 
-### `display.height()`
+### `display.height`
 
-Returns the current screen height.
+Integer property. Returns the current screen height.
 
 ## Frame rendering
 
@@ -90,14 +90,12 @@ Starts a frame.
 
 `options` is an optional table:
 - `clear`: boolean, default `true`
-- `r`: background red, default `0`
-- `g`: background green, default `0`
-- `b`: background blue, default `0`
+- `color`: a color value (string, hex, or `{r, g, b}` table), default black
 
 Example:
 
 ```lua
-display.begin_frame({ clear = true, r = 12, g = 18, b = 28 })
+display.begin_frame({ clear = true, color = {r = 12, g = 18, b = 28} })
 ```
 
 ### `display.present()`
@@ -145,17 +143,15 @@ display.backlight(true)
 Draws ASCII text at the given position.
 
 `options` is an optional table:
-- `r`, `g`, `b`: text color, default white
+- `color`: text color value (string, hex, or `{r, g, b}` table), default white
 - `font_size`: integer, default `24`; floating-point values are rejected
-- `bg_r`, `bg_g`, `bg_b`: optional background color; if any background field is given, background fill is enabled
+- `bg`: optional background color value; if provided, background fill is enabled
 
 Example:
 
 ```lua
 display.draw_text(16, 24, "hello", {
-    r = 255,
-    g = 255,
-    b = 255,
+    color = {r = 255, g = 255, b = 255},
     font_size = 24,
 })
 ```
@@ -186,19 +182,17 @@ local tw, th = display.measure_text("hello", { font_size = 24 })
 Draws ASCII text inside a rectangle with alignment.
 
 `options` supports:
-- `r`, `g`, `b`
+- `color`: text color value (string, hex, or `{r, g, b}` table)
 - `font_size` as an integer
-- `bg_r`, `bg_g`, `bg_b`
+- `bg`: optional background color value
 - `align`: `"left"`, `"center"`/`"centre"`, or `"right"`
 - `valign`: `"top"`, `"middle"`/`"center"`, or `"bottom"`
 
 Example:
 
 ```lua
-display.draw_text_aligned(0, 0, display.width(), 32, "status", {
-    r = 255,
-    g = 255,
-    b = 255,
+display.draw_text_aligned(0, 0, display.width, 32, "status", {
+    color = "white",
     font_size = 16,
     align = "center",
     valign = "middle",
@@ -207,9 +201,11 @@ display.draw_text_aligned(0, 0, display.width(), 32, "status", {
 
 ## Basic drawing primitives
 
-### `display.clear(r, g, b)`
+### `display.clear(color)`
 
 Clears the screen or current frame buffer to a solid color.
+
+- `color`: a color value (string, hex, or `{r, g, b}` table)
 
 ### `display.set_clip_rect(x, y, width, height)`
 
@@ -219,63 +215,63 @@ Sets a clipping rectangle. Subsequent drawing is restricted to that region until
 
 Removes the active clipping rectangle.
 
-### `display.fill_rect(x, y, width, height, r, g, b)`
+### `display.fill_rect(x, y, width, height, color)`
 
 Draws a filled rectangle.
 
-### `display.draw_rect(x, y, width, height, r, g, b)`
+### `display.draw_rect(x, y, width, height, color)`
 
 Draws a rectangle outline.
 
-### `display.draw_pixel(x, y, r, g, b)`
+### `display.draw_pixel(x, y, color)`
 
 Draws one pixel.
 
-### `display.draw_line(x0, y0, x1, y1, r, g, b)`
+### `display.draw_line(x0, y0, x1, y1, color)`
 
 Draws a line.
 
 ## Shape drawing
 
-### `display.fill_circle(cx, cy, radius, r, g, b)`
+### `display.fill_circle(cx, cy, radius, color)`
 
 Draws a filled circle.
 
-### `display.draw_circle(cx, cy, radius, r, g, b)`
+### `display.draw_circle(cx, cy, radius, color)`
 
 Draws a circle outline.
 
-### `display.draw_arc(cx, cy, radius, start_deg, end_deg, r, g, b)`
+### `display.draw_arc(cx, cy, radius, start_deg, end_deg, color)`
 
 Draws an arc.
 
 - `start_deg` and `end_deg` are numeric values, not limited to integers
 
-### `display.fill_arc(cx, cy, inner_radius, outer_radius, start_deg, end_deg, r, g, b)`
+### `display.fill_arc(cx, cy, inner_radius, outer_radius, start_deg, end_deg, color)`
 
 Draws a filled ring segment.
 
-### `display.draw_ellipse(cx, cy, radius_x, radius_y, r, g, b)`
+### `display.draw_ellipse(cx, cy, radius_x, radius_y, color)`
 
 Draws an ellipse outline.
 
-### `display.fill_ellipse(cx, cy, radius_x, radius_y, r, g, b)`
+### `display.fill_ellipse(cx, cy, radius_x, radius_y, color)`
 
 Draws a filled ellipse.
 
-### `display.draw_round_rect(x, y, width, height, radius, r, g, b)`
+### `display.draw_round_rect(x, y, width, height, radius, color)`
 
 Draws a rounded rectangle outline.
 
-### `display.fill_round_rect(x, y, width, height, radius, r, g, b)`
+### `display.fill_round_rect(x, y, width, height, radius, color)`
 
 Draws a filled rounded rectangle.
 
-### `display.draw_triangle(x1, y1, x2, y2, x3, y3, r, g, b)`
+### `display.draw_triangle(x1, y1, x2, y2, x3, y3, color)`
 
 Draws a triangle outline.
 
-### `display.fill_triangle(x1, y1, x2, y2, x3, y3, r, g, b)`
+### `display.fill_triangle(x1, y1, x2, y2, x3, y3, color)`
 
 Draws a filled triangle.
 
@@ -431,20 +427,16 @@ local panel_handle, io_handle, width, height, panel_if =
 
 display.init(panel_handle, io_handle, width, height, panel_if)
 
-display.begin_frame({ clear = true, r = 12, g = 18, b = 28 })
+display.begin_frame({ clear = true, color = {r = 12, g = 18, b = 28} })
 
-display.draw_rect(12, 12, display.width() - 24, display.height() - 24, 80, 120, 160)
-display.fill_rect(20, 40, 80, 36, 72, 208, 235)
+display.draw_rect(12, 12, display.width - 24, display.height - 24, {r = 80, g = 120, b = 160})
+display.fill_rect(20, 40, 80, 36, {r = 72, g = 208, b = 235})
 display.draw_text(24, 90, "Lua Display Demo", {
-    r = 245,
-    g = 244,
-    b = 238,
+    color = {r = 245, g = 244, b = 238},
     font_size = 24,
 })
-display.draw_text_aligned(0, display.height() - 24, display.width(), 20, "frame api", {
-    r = 210,
-    g = 220,
-    b = 228,
+display.draw_text_aligned(0, display.height - 24, display.width, 20, "frame api", {
+    color = {r = 210, g = 220, b = 228},
     font_size = 16,
     align = "center",
     valign = "middle",

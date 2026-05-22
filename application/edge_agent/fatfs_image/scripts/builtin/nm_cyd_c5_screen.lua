@@ -134,12 +134,12 @@ local function open_display()
         error("nm_cyd_c5_screen: display.init failed: " .. tostring(err))
     end
     owned = true
-    return display.width(), display.height()
+    return display.width, display.height
 end
 
 -- ------------------------------------------------------------ mode handlers
 local function fill_solid(r, g, b)
-    display.begin_frame({ clear = true, r = r, g = g, b = b })
+    display.begin_frame({ clear = true, color = {r = r, g = g, b = b} })
     frame_open = true
     display.present()
 end
@@ -166,7 +166,7 @@ local function center_text(text, font_size, fr, fg, fb, w, h)
     local tw, th = display.measure_text(text, { font_size = font_size })
     local x = math.floor((w - tw) / 2)
     local y = math.floor((h - th) / 2)
-    display.draw_text(x, y, text, { r = fr, g = fg, b = fb, font_size = font_size })
+    display.draw_text(x, y, text, { color = {r = fr, g = fg, b = fb}, font_size = font_size })
 end
 
 local function run_text()
@@ -178,7 +178,7 @@ local function run_text()
     local fr, fg, fb = parse_color(a.fg, NAMED_COLORS.white)
     local font_size = num_arg("font_size", 28, 8, 96)
     local w, h = open_display()
-    display.begin_frame({ clear = true, r = br, g = bg, b = bb })
+    display.begin_frame({ clear = true, color = {r = br, g = bg, b = bb} })
     frame_open = true
     center_text(text, font_size, fr, fg, fb, w, h)
     display.present()
@@ -200,7 +200,7 @@ local function run_message()
     local body_size  = num_arg("font_size", 24, 8, 96)
 
     local w, h = open_display()
-    display.begin_frame({ clear = true, r = br, g = bgc, b = bb })
+    display.begin_frame({ clear = true, color = {r = br, g = bgc, b = bb} })
     frame_open = true
 
     -- Title bar across the top (1/5 of height, capped at 60 px).
@@ -208,10 +208,10 @@ local function run_message()
     -- Slightly lighter accent bar.
     local ar, ag, ab = math.min(255, br + 40), math.min(255, bgc + 40),
                        math.min(255, bb + 40)
-    display.fill_rect(0, 0, w, bar_h, ar, ag, ab)
+    display.fill_rect(0, 0, w, bar_h, {r = ar, g = ag, b = ab})
     if #title > 0 then
         display.draw_text_aligned(0, 0, w, bar_h, title,
-            { r = fr, g = fgc, b = fb, font_size = title_size,
+            { color = {r = fr, g = fgc, b = fb}, font_size = title_size,
               align = "center", valign = "middle" })
     end
 
@@ -219,7 +219,7 @@ local function run_message()
         local body_y = bar_h
         local body_h = h - bar_h
         display.draw_text_aligned(8, body_y, w - 16, body_h, text,
-            { r = fr, g = fgc, b = fb, font_size = body_size,
+            { color = {r = fr, g = fgc, b = fb}, font_size = body_size,
               align = "center", valign = "middle" })
     end
 

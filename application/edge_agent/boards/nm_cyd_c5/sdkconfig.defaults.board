@@ -23,3 +23,6 @@ CONFIG_SPIRAM_TYPE_AUTO=y
 CONFIG_APP_CLAW_LUA_MODULE_TOUCH=n
 CONFIG_APP_CLAW_LUA_MODULE_IMU=n
 CONFIG_APP_CLAW_LUA_MODULE_BQ27220=n
+# ESP32-C5 NimBLE HID is not used on this board; disable to avoid pulling in
+# the bt/Bluedroid header (esp_bt.h) which is absent on RISC-V NimBLE-only builds.
+CONFIG_APP_CLAW_LUA_MODULE_BLE_HID=n
