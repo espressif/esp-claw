@@ -31,6 +31,7 @@
 #include "freertos/task.h"
 #include "rover_s3_cli.h"
 #include "rover_s3_display.h"
+#include "rover_s3_httpd.h"
 #include "rover_s3_settings.h"
 #include "rover_s3_wifi.h"
 #include "setup_device.h"
@@ -90,6 +91,11 @@ static void wifi_state_cb(bool connected, void *user_ctx)
 {
     (void)user_ctx;
     rover_s3_display_set_state(connected ? ROVER_S3_DISPLAY_IDLE : ROVER_S3_DISPLAY_OFFLINE);
+    if (connected) {
+        rover_s3_httpd_start();
+    } else {
+        rover_s3_httpd_stop();
+    }
 }
 
 esp_err_t app_rover_s3_start(void)

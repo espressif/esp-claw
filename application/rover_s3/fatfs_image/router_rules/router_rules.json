@@ -39,6 +39,25 @@
     ]
   },
   {
+    "id": "agent_web_out",
+    "description": "Forward agent out_message to web UI",
+    "enabled": true,
+    "consume_on_match": true,
+    "match": {
+      "event_type": "out_message",
+      "target_channel": "web"
+    },
+    "actions": [
+      {
+        "type": "send_message",
+        "input": {
+          "channel": "web",
+          "chat_id": "web"
+        }
+      }
+    ]
+  },
+  {
     "id": "agent_telegram_out",
     "description": "Forward agent out_message to Telegram",
     "enabled": true,
