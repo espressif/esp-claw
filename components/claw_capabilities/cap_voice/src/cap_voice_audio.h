@@ -18,7 +18,7 @@
 #define CAP_VOICE_I2C_PORT       I2C_NUM_0
 #define CAP_VOICE_I2C_SDA        47
 #define CAP_VOICE_I2C_SCL        48
-#define CAP_VOICE_ES8311_ADDR    0x18
+#define CAP_VOICE_ES8311_ADDR    0x30  /* 8-bit write addr; esp_codec_dev does addr>>1 internally */
 
 #define CAP_VOICE_SAMPLE_RATE_REC   16000
 #define CAP_VOICE_SAMPLE_RATE_PLAY  24000

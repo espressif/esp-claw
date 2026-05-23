@@ -285,5 +285,11 @@ esp_err_t app_rover_s3_start(void)
 
     rover_s3_display_set_state(rover_s3_wifi_is_connected()
                                 ? ROVER_S3_DISPLAY_IDLE : ROVER_S3_DISPLAY_OFFLINE);
+
+    /* WiFi may have connected before the state callback was registered — start httpd now */
+    if (rover_s3_wifi_is_connected()) {
+        rover_s3_httpd_start();
+    }
+
     return ESP_OK;
 }

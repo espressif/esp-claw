@@ -241,7 +241,9 @@ extern "C" esp_err_t rover_s3_board_init(void)
     esp_err_t err = gpio_config(&btn_cfg);
     if (err != ESP_OK) return err;
 
+    ESP_LOGI(TAG, "board_init: init_m5pm1");
     init_m5pm1();
+    ESP_LOGI(TAG, "board_init: init_display");
     init_display();
 
     ESP_LOGI(TAG, "board_init done");
