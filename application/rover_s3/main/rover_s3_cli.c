@@ -71,6 +71,7 @@ static void print_usage(void)
     printf("  rover_config tg --token <token>\n");
     printf("  rover_config llm --api-key <key> [--model <model>] [--base-url <url>] [--backend <type>] [--profile <profile>] [--auth <type>] [--timeout-ms <ms>]\n");
     printf("  rover_config timezone --tz <TZ>\n");
+    printf("  rover_config voice [--whisper-key <key>] [--whisper-url <url>] [--tts-key <key>] [--tts-url <url>] [--voice <name>] [--enabled 0|1]\n");
     printf("  rover_config clear\n");
     printf("  rover_config reboot\n");
 }
@@ -169,6 +170,21 @@ static int cmd_rover_config(int argc, char **argv)
             return 1;
         }
         copy_arg(s.time_timezone, sizeof(s.time_timezone), tz);
+        return save_and_report(&s);
+    }
+    if (strcmp(argv[1], "voice") == 0) {
+        const char *whisper_key  = find_arg(argc, argv, "--whisper-key");
+        const char *whisper_url  = find_arg(argc, argv, "--whisper-url");
+        const char *tts_key      = find_arg(argc, argv, "--tts-key");
+        const char *tts_url      = find_arg(argc, argv, "--tts-url");
+        const char *tts_voice    = find_arg(argc, argv, "--voice");
+        const char *enabled      = find_arg(argc, argv, "--enabled");
+        if (whisper_key) copy_arg(s.whisper_api_key,    sizeof(s.whisper_api_key),  whisper_key);
+        if (whisper_url) copy_arg(s.whisper_base_url,   sizeof(s.whisper_base_url), whisper_url);
+        if (tts_key)     copy_arg(s.tts_api_key,        sizeof(s.tts_api_key),      tts_key);
+        if (tts_url)     copy_arg(s.tts_base_url,       sizeof(s.tts_base_url),     tts_url);
+        if (tts_voice)   copy_arg(s.tts_voice,          sizeof(s.tts_voice),        tts_voice);
+        if (enabled)     copy_arg(s.voice_enabled,      sizeof(s.voice_enabled),    enabled);
         return save_and_report(&s);
     }
     if (strcmp(argv[1], "clear") == 0) {
