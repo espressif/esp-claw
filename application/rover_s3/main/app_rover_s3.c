@@ -98,6 +98,17 @@ static void wifi_state_cb(bool connected, void *user_ctx)
     }
 }
 
+static void voice_ui_cb(cap_voice_ui_state_t state, void *ctx)
+{
+    (void)ctx;
+    switch (state) {
+    case CAP_VOICE_UI_LISTENING: rover_s3_display_set_state(ROVER_S3_DISPLAY_LISTENING);  break;
+    case CAP_VOICE_UI_THINKING:  rover_s3_display_set_state(ROVER_S3_DISPLAY_THINKING);   break;
+    case CAP_VOICE_UI_SPEAKING:  rover_s3_display_set_state(ROVER_S3_DISPLAY_SPEAKING);   break;
+    case CAP_VOICE_UI_IDLE:      rover_s3_display_set_state(ROVER_S3_DISPLAY_IDLE);       break;
+    }
+}
+
 esp_err_t app_rover_s3_start(void)
 {
     ESP_RETURN_ON_ERROR(rover_s3_settings_init(), TAG, "settings init");
@@ -212,6 +223,8 @@ esp_err_t app_rover_s3_start(void)
                                  ? g_settings.wake_sensitivity : "0.7"),
         .multinet_threshold = atof(g_settings.multinet_threshold[0]
                                    ? g_settings.multinet_threshold : "0.85"),
+        .on_ui_state = voice_ui_cb,
+        .ui_ctx      = NULL,
     };
     cap_voice_set_config(&vcfg);
 

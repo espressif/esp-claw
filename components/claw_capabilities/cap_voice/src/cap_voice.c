@@ -19,11 +19,19 @@ static const char *TAG = "cap_voice";
 static cap_voice_config_t s_config;
 static char s_session_voice[32];  /* mutable copy for voice_set_voice tool */
 
+static void ui_notify(cap_voice_ui_state_t state)
+{
+    if (s_config.on_ui_state) {
+        s_config.on_ui_state(state, s_config.ui_ctx);
+    }
+}
+
 /* Callbacks from pipeline -> publish claw events */
 static void on_wakeup(void *ctx)
 {
     (void)ctx;
     ESP_LOGI(TAG, "Wake word detected");
+    ui_notify(CAP_VOICE_UI_LISTENING);
 }
 
 static void on_command(const char *cmd_id, const char *text, void *ctx)
@@ -46,6 +54,7 @@ static void on_transcript(const char *cmd_id, const char *text, void *ctx)
     (void)ctx;
     if (!text || !text[0]) return;
     ESP_LOGI(TAG, "Transcript: %s", text);
+    ui_notify(CAP_VOICE_UI_THINKING);
     claw_event_t ev = {0};
     strlcpy(ev.event_id,       "voice-input",  sizeof(ev.event_id));
     strlcpy(ev.source_cap,     "cap_voice",    sizeof(ev.source_cap));
@@ -82,7 +91,9 @@ static esp_err_t voice_say_execute(const char *input_json,
         .base_url = s_config.tts_base_url,
         .voice    = s_config.tts_voice,
     };
+    ui_notify(CAP_VOICE_UI_SPEAKING);
     esp_err_t err = cap_voice_tts_speak(&tcfg, text);
+    ui_notify(CAP_VOICE_UI_IDLE);
     cJSON_Delete(args);
 
     if (err == ESP_OK) {
