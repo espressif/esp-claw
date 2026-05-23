@@ -204,12 +204,12 @@ esp_err_t rover_s3_settings_load(rover_s3_settings_t *s)
         {"tg_bot_token", s->tg_bot_token, sizeof(s->tg_bot_token)},
         {"time_timezone", s->time_timezone, sizeof(s->time_timezone)},
         {"whisper_api_key", s->whisper_api_key, sizeof(s->whisper_api_key)},
-        {"whisper_base_url", s->whisper_base_url, sizeof(s->whisper_base_url)},
+        {"whisper_base", s->whisper_base_url, sizeof(s->whisper_base_url)},
         {"tts_api_key", s->tts_api_key, sizeof(s->tts_api_key)},
         {"tts_base_url", s->tts_base_url, sizeof(s->tts_base_url)},
         {"tts_voice", s->tts_voice, sizeof(s->tts_voice)},
-        {"wake_sensitivity", s->wake_sensitivity, sizeof(s->wake_sensitivity)},
-        {"multinet_threshold", s->multinet_threshold, sizeof(s->multinet_threshold)},
+        {"wake_sens", s->wake_sensitivity, sizeof(s->wake_sensitivity)},
+        {"mn_thresh", s->multinet_threshold, sizeof(s->multinet_threshold)},
         {"voice_enabled", s->voice_enabled, sizeof(s->voice_enabled)},
     };
     for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); i++) {
@@ -253,12 +253,12 @@ esp_err_t rover_s3_settings_save(const rover_s3_settings_t *s)
         {"tg_bot_token", s->tg_bot_token},
         {"time_timezone", s->time_timezone},
         {"whisper_api_key", s->whisper_api_key},
-        {"whisper_base_url", s->whisper_base_url},
+        {"whisper_base", s->whisper_base_url},
         {"tts_api_key", s->tts_api_key},
         {"tts_base_url", s->tts_base_url},
         {"tts_voice", s->tts_voice},
-        {"wake_sensitivity", s->wake_sensitivity},
-        {"multinet_threshold", s->multinet_threshold},
+        {"wake_sens", s->wake_sensitivity},
+        {"mn_thresh", s->multinet_threshold},
         {"voice_enabled", s->voice_enabled},
     };
     for (size_t i = 0; i < sizeof(pairs) / sizeof(pairs[0]); i++) {

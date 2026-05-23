@@ -119,7 +119,7 @@ whisper_fallback:
 static void detect_task(void *arg)
 {
     (void)arg;
-    static int silence_ms = 0;
+    int silence_ms = 0;
     while (s_running) {
         afe_fetch_result_t *res = s_afe_handle->fetch(s_afe_data);
         if (!res) {
