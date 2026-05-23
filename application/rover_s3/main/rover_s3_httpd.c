@@ -170,20 +170,22 @@ static const char *k_html =
     "<div class='muted' id='chatInfo' style='margin-top:6px'>idle</div>"
     "<pre id='chatOut'></pre>"
     "</div></div>"
-    /* ── Settings ── */
+    /* ── Settings: native form works in all browsers including CNA popup ── */
     "<div class='panel' id='p3'>"
     "<div class='card'>"
-    "<label>WiFi SSID</label><input type='text' id='cWifiSsid'>"
-    "<label>WiFi Password</label><input type='password' id='cWifiPass'>"
-    "<label>LLM API Key</label><input type='password' id='cLlmKey'>"
-    "<label>LLM Model</label><input type='text' id='cLlmModel'>"
-    "<label>LLM Base URL</label><input type='text' id='cLlmUrl'>"
-    "<label>Telegram Bot Token</label><input type='password' id='cTgToken'>"
-    "<label>Timezone (POSIX TZ)</label><input type='text' id='cTz'>"
-    "<div class='row'>"
-    "<button class='cfg-save' onclick='saveConfig()'>Save &amp; Restart</button>"
-    "<button onclick='loadConfig()'>Reload</button>"
+    "<form id='cfgForm' method='POST' action='/config' onsubmit='return saveConfig(event)'>"
+    "<label>WiFi SSID</label><input type='text' name='wifi_ssid' id='cWifiSsid'>"
+    "<label>WiFi Password</label><input type='password' name='wifi_password' id='cWifiPass'>"
+    "<label>LLM API Key</label><input type='password' name='llm_api_key' id='cLlmKey'>"
+    "<label>LLM Model</label><input type='text' name='llm_model' id='cLlmModel'>"
+    "<label>LLM Base URL</label><input type='text' name='llm_base_url' id='cLlmUrl'>"
+    "<label>Telegram Bot Token</label><input type='password' name='tg_bot_token' id='cTgToken'>"
+    "<label>Timezone (POSIX TZ)</label><input type='text' name='time_timezone' id='cTz'>"
+    "<div class='row' style='margin-top:10px'>"
+    "<button type='submit' class='cfg-save'>Save &amp; Restart</button>"
+    "<button type='button' onclick='loadConfig()'>Reload</button>"
     "</div>"
+    "</form>"
     "<div class='muted' id='cfgInfo' style='margin-top:6px'></div>"
     "</div></div>"
     /* ── Script ── */
@@ -262,19 +264,22 @@ static const char *k_html =
     "document.getElementById('cTgToken').value=j.tg_bot_token||'';"
     "document.getElementById('cTz').value=j.time_timezone||'';"
     "document.getElementById('cfgInfo').textContent='loaded';}catch(e){document.getElementById('cfgInfo').textContent=''+e;}}"
-    "async function saveConfig(){"
-    "const body=JSON.stringify({"
-    "wifi_ssid:document.getElementById('cWifiSsid').value,"
-    "wifi_password:document.getElementById('cWifiPass').value,"
-    "llm_api_key:document.getElementById('cLlmKey').value,"
-    "llm_model:document.getElementById('cLlmModel').value,"
-    "llm_base_url:document.getElementById('cLlmUrl').value,"
-    "tg_bot_token:document.getElementById('cTgToken').value,"
-    "time_timezone:document.getElementById('cTz').value});"
+    /* saveConfig: tries fetch first, falls back to native form submit */
+    "async function saveConfig(evt){"
+    "if(evt)evt.preventDefault();"
+    "const f=document.getElementById('cfgForm');"
+    "const data=Object.fromEntries(new FormData(f));"
     "document.getElementById('cfgInfo').textContent='saving...';"
-    "try{await fetch('/config',{method:'POST',headers:{'Content-Type':'application/json'},body});"
-    "document.getElementById('cfgInfo').textContent='saved, restarting...';"
-    "}catch(e){document.getElementById('cfgInfo').textContent=''+e;}}"
+    "try{"
+    "const r=await fetch('/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});"
+    "const j=await r.json();"
+    "document.getElementById('cfgInfo').textContent=j.ok?'saved, restarting...':'error: '+JSON.stringify(j);"
+    "}catch(e){"
+    /* fetch failed (captive portal or other) — fall back to native form POST */
+    "document.getElementById('cfgInfo').textContent='submitting form...';"
+    "f.submit();"
+    "}"
+    "return false;}"
     "drawJ();setInterval(refresh,1500);refresh();"
     "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',loadConfig);}else{loadConfig();}"
     "</script></body></html>";
@@ -489,64 +494,145 @@ static void deferred_restart_task(void *arg)
     esp_restart();
 }
 
+/* Simple URL decode in-place: %XX → char, + → space */
+static void url_decode_inplace(char *s)
+{
+    char *p = s, *q = s;
+    while (*p) {
+        if (*p == '%' && p[1] && p[2]) {
+            char hex[3] = {p[1], p[2], '\0'};
+            *q++ = (char)strtol(hex, NULL, 16);
+            p += 3;
+        } else {
+            *q++ = (*p == '+') ? ' ' : *p;
+            p++;
+        }
+    }
+    *q = '\0';
+}
+
 static esp_err_t h_config_post(httpd_req_t *req)
 {
     extern rover_s3_settings_t g_settings;
 
-    if (req->content_len == 0 || req->content_len > 4096) {
-        httpd_resp_set_status(req, "400 Bad Request");
-        return httpd_resp_send(req, "{\"ok\":false}", HTTPD_RESP_USE_STRLEN);
+    /* Read body — accept both JSON and form-encoded */
+    size_t max_body = 2048;
+    char *body = NULL;
+
+    if (req->content_len > 0 && req->content_len <= 4096) {
+        body = malloc(req->content_len + 1);
+        if (body) {
+            int got = 0;
+            while (got < (int)req->content_len) {
+                int r = httpd_req_recv(req, body + got,
+                                       req->content_len - (size_t)got);
+                if (r <= 0) break;
+                got += r;
+            }
+            body[got] = '\0';
+            max_body = (size_t)got;
+        }
+    } else {
+        /* No Content-Length — read until connection closes */
+        body = malloc(2049);
+        if (body) {
+            int got = 0;
+            while (got < 2048) {
+                int r = httpd_req_recv(req, body + got, 2048 - (size_t)got);
+                if (r <= 0) break;
+                got += r;
+            }
+            body[got] = '\0';
+            max_body = (size_t)got;
+        }
     }
-    char *body = malloc(req->content_len + 1);
+
     if (!body) return httpd_resp_send_500(req);
 
-    int got = 0;
-    while (got < (int)req->content_len) {
-        int r = httpd_req_recv(req, body + got, req->content_len - (size_t)got);
-        if (r <= 0) break;
-        got += r;
-    }
-    body[got] = '\0';
-
-    cJSON *j = cJSON_Parse(body);
-    free(body);
-    if (!j) {
-        httpd_resp_set_status(req, "400 Bad Request");
-        return httpd_resp_send(req, "{\"ok\":false,\"error\":\"bad json\"}", HTTPD_RESP_USE_STRLEN);
-    }
+    /* Detect content type: try JSON first, else form-encoded */
+    char ct[64] = {0};
+    httpd_req_get_hdr_value_str(req, "Content-Type", ct, sizeof(ct));
+    bool is_json = (strstr(ct, "application/json") != NULL);
+    bool body_is_json = (body[0] == '{');
 
     rover_s3_settings_t s = g_settings;
 
-#define SET_FIELD(key, field) do { \
+    if (is_json || body_is_json) {
+        cJSON *j = cJSON_Parse(body);
+        if (j) {
+#define SET_J(key, field) do { \
     const char *v = cJSON_GetStringValue(cJSON_GetObjectItem(j, key)); \
     if (v) strlcpy(s.field, v, sizeof(s.field)); \
 } while(0)
+            SET_J("wifi_ssid",       wifi_ssid);
+            SET_J("wifi_password",   wifi_password);
+            SET_J("llm_api_key",     llm_api_key);
+            SET_J("llm_model",       llm_model);
+            SET_J("llm_base_url",    llm_base_url);
+            SET_J("llm_backend_type",llm_backend_type);
+            SET_J("llm_auth_type",   llm_auth_type);
+            SET_J("tg_bot_token",    tg_bot_token);
+            SET_J("time_timezone",   time_timezone);
+            SET_J("tts_voice",       tts_voice);
+            SET_J("voice_enabled",   voice_enabled);
+#undef SET_J
+            cJSON_Delete(j);
+        }
+    } else {
+        /* application/x-www-form-urlencoded from native <form> POST */
+#define SET_FORM(key, field) do { \
+    char v[sizeof(s.field)] = {0}; \
+    if (httpd_query_key_value(body, key, v, sizeof(v)) == ESP_OK) { \
+        url_decode_inplace(v); \
+        strlcpy(s.field, v, sizeof(s.field)); \
+    } \
+} while(0)
+        SET_FORM("wifi_ssid",       wifi_ssid);
+        SET_FORM("wifi_password",   wifi_password);
+        SET_FORM("llm_api_key",     llm_api_key);
+        SET_FORM("llm_model",       llm_model);
+        SET_FORM("llm_base_url",    llm_base_url);
+        SET_FORM("llm_backend_type",llm_backend_type);
+        SET_FORM("llm_auth_type",   llm_auth_type);
+        SET_FORM("tg_bot_token",    tg_bot_token);
+        SET_FORM("time_timezone",   time_timezone);
+        SET_FORM("tts_voice",       tts_voice);
+        SET_FORM("voice_enabled",   voice_enabled);
+#undef SET_FORM
+    }
 
-    SET_FIELD("wifi_ssid",      wifi_ssid);
-    SET_FIELD("wifi_password",  wifi_password);
-    SET_FIELD("llm_api_key",    llm_api_key);
-    SET_FIELD("llm_model",      llm_model);
-    SET_FIELD("llm_base_url",   llm_base_url);
-    SET_FIELD("llm_backend_type", llm_backend_type);
-    SET_FIELD("llm_auth_type",  llm_auth_type);
-    SET_FIELD("tg_bot_token",   tg_bot_token);
-    SET_FIELD("time_timezone",  time_timezone);
-    SET_FIELD("tts_voice",      tts_voice);
-    SET_FIELD("voice_enabled",  voice_enabled);
+    free(body);
 
-#undef SET_FIELD
+    ESP_LOGI(TAG, "config save: ssid='%s' model='%s'",
+             s.wifi_ssid, s.llm_model);
 
-    cJSON_Delete(j);
     rover_s3_settings_save(&s);
     g_settings = s;
 
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, "{\"ok\":true,\"restarting\":true}", HTTPD_RESP_USE_STRLEN);
-
-    /* Restart from a separate task so the HTTP response finishes sending first */
+    /* JSON response for fetch(), or HTML page for native form submission */
+    bool want_html = !is_json && !body_is_json;
     xTaskCreate(deferred_restart_task, "httpd_restart", 2048, NULL, 5, NULL);
 
-    return ESP_OK;
+    if (want_html) {
+        static const char *saved_html =
+            "<!doctype html><html><head><meta charset='utf-8'>"
+            "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            "<meta http-equiv='refresh' content='4;url=/'>"
+            "<title>Saved</title>"
+            "<style>body{font-family:system-ui,sans-serif;background:#0b1220;color:#e5e7eb;"
+            "display:flex;align-items:center;justify-content:center;height:100vh;margin:0}"
+            ".box{text-align:center;padding:20px}</style></head>"
+            "<body><div class='box'>"
+            "<h2>&#x2705; Settings Saved</h2>"
+            "<p>Restarting in 4 seconds...</p>"
+            "<p><a href='/'>Back to settings</a></p>"
+            "</div></body></html>";
+        httpd_resp_set_type(req, "text/html");
+        return httpd_resp_send(req, saved_html, HTTPD_RESP_USE_STRLEN);
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, "{\"ok\":true,\"restarting\":true}", HTTPD_RESP_USE_STRLEN);
 }
 
 static esp_err_t h_config(httpd_req_t *req)
