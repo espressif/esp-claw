@@ -52,3 +52,4 @@ pages/simulator/dist
 pages/simulator/*.log
 pages/simulator/public/runtime/*
 !pages/simulator/public/runtime/.gitkeep
+application/rover_s3/sdkconfig.m5sticks3
