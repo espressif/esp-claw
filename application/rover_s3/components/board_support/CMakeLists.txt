@@ -4,5 +4,5 @@ idf_component_register(
     INCLUDE_DIRS
         "${CMAKE_SOURCE_DIR}/boards/m5sticks3"
     REQUIRES
-        driver esp_system esp_driver_gpio esp_driver_i2c freertos
+        driver esp_system esp_driver_gpio esp_driver_i2c esp_driver_spi esp_lcd freertos
 )
