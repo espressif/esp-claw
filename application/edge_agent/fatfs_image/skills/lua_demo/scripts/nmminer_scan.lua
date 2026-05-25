@@ -89,6 +89,19 @@ local function fmt_hr(hr)
     return string.format("%d H/s", hr)
 end
 
+local function family_for_model(model)
+    local lower = string.lower(model or "")
+    if lower:find("nmminer", 1, true) then return "nmminer" end
+    if lower:find("nmaxe", 1, true) or lower:find("nmqaxe", 1, true) or lower:find("axe", 1, true) then
+        return "axeos"
+    end
+    return "unknown"
+end
+
+local function hash_class(hr)
+    return (tonumber(hr) or 0) >= 1000000000 and "high" or "low"
+end
+
 -- Dedupe set helper.
 local function add_unique(set, list, ip)
     if not ip or ip == "" then return end
@@ -217,6 +230,8 @@ for _, ip in ipairs(candidates) do
                     hostname = jget_string(body, "hostname") or "",
                     ver      = ver,
                     hr       = hr,
+                    family   = family_for_model(model),
+                    class    = hash_class(hr),
                     sw       = jget_number(body, "sw"),
                     sh       = jget_number(body, "sh"),
                     sbd      = jget_number(body, "sbd"),
@@ -241,12 +256,14 @@ table.sort(devices, function(a, b) return (a.hr or 0) > (b.hr or 0) end)
 -- Step 4: print compact summary.
 -- ======================================================================
 print("---- NMMiner devices ----")
-print("idx  ip               model        ver         hashrate     uptime  hostname")
+print("idx  ip               model        family  class  ver         hashrate     uptime  hostname")
 for i, d in ipairs(devices) do
-    print(string.format("%-4d %-16s %-12s %-11s %-12s %-7s %s",
+    print(string.format("%-4d %-16s %-12s %-7s %-6s %-11s %-12s %-7s %s",
         i,
         d.ip,
         d.model,
+        d.family,
+        d.class,
         d.ver,
         fmt_hr(d.hr),
         tostring(d.ut or 0) .. "s",

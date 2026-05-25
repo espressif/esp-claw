@@ -1,123 +1,111 @@
-# NMMiner LAN Discovery & Control
+# NMMiner LAN Discovery And Settings
 
-Quickly discover NMMiner / NMAxe / NMAxeGamma / NMQAxe++ Bitcoin solo miners on
-the local network, read their live status, and control them. All work happens in
-the on-board Lua scripts so the LLM only needs to choose a script and pass JSON
-arguments — **no per-IP planning, no JSON parsing, no loop logic** is required
-from the LLM.
+Use this skill when the user asks about NMMiner, NMAxe, NMAxeGamma, NMQAxe++, AxeOS, BitAxe, LAN Bitcoin solo miners, miner discovery, hashrate, temperature, pool settings, display preferences, market coins, ASIC voltage, ASIC frequency, locating, or restarting miners.
 
-## When to use
+All scripts perform HTTP requests locally from the ESP device. Always answer the user in English. Do not manually loop through IPs in the LLM and do not hand-edit JSON from remote APIs. Run the most specific Lua script and treat its `SUMMARY:` or `RESULT:` lines as the source of truth.
 
-When the user asks anything about NMMiner / NMAxe / NMAxeGamma / NMQAxe++ /
-"矿机" / "BitAxe" devices:
+## Mandatory Discovery Rule
 
-- "扫一下网内的矿机 / scan miners / list miners"
-- "看看 192.168.x.y 这台机的算力 / status / hashrate / temperature"
-- "重启那台矿机 / restart / 找一下哪台 / blink"
-- "把频率调到 500 / vcore 1250"
+For any request that does not name a specific IP address, first discover devices through `/alive`, then `/probe`:
 
-## Discovery procedure (do not deviate)
+```json
+{"path":"/fatfs/skills/lua_demo/scripts/nmminer_scan.lua","args":{}}
+```
 
-NMMiner devices run an HTTP API on port 80. To scan accurately and fast:
+The scan script reads the local subnet, calls `/alive` to collect the LAN `ips` list, probes each candidate with `/probe`, and prints each device's `model`, `family`, `class`, and hashrate. `class=low` means `/probe.hr < 1 GH/s`; `class=high` means `/probe.hr >= 1 GH/s`. Use `model` and `family` for API shape decisions.
 
-1. **Just call `nmminer_scan` with no args** — `run_lua_script
-   script="nmminer_scan" args={}`. The script will:
-   - read this device's own STA IP (`system.ip()`),
-   - derive the `/24` subnet (e.g. `192.168.124.0/24`),
-   - fast-sweep `/alive` on every host with a 250 ms timeout; the **first**
-     responder returns the full NMMiner IP list and the sweep stops,
-   - fall back to a direct `/probe` sweep if no `/alive` responds,
-   - then `/probe` each candidate, filter NM-compatible, and print a
-     compact summary table.
-2. (Optional) If the user already knows a NMMiner IP and wants the fastest
-   possible scan, pass it as a seed:
-   `args={"seed_ips":["192.168.x.y"]}`. This skips the subnet sweep
-   (~1–2 s instead of ~5–60 s).
-3. Read back the printed table and present it to the user in friendly form.
-   Do not re-issue `/probe` requests yourself.
+If the user gives a known miner IP only as a seed for faster discovery, pass it as `seed_ips`:
 
-Optional args for `nmminer_scan`:
+```json
+{"path":"/fatfs/skills/lua_demo/scripts/nmminer_scan.lua","args":{"seed_ips":["192.168.124.167"]}}
+```
 
-| Arg | Type | Default | Meaning |
-|---|---|---|---|
-| `seed_ips` | string[] | *auto* | Skip subnet sweep; treat each entry as a known NMMiner |
-| `probe_timeout_ms` | int | `1500` | Per-IP `/probe` timeout (final classification step) |
-| `alive_timeout_ms` | int | `2500` | Per-seed `/alive` timeout (seeded mode only) |
-| `subnet_alive_timeout_ms` | int | `250` | Per-host `/alive` timeout during auto sweep |
-| `subnet_probe_timeout_ms` | int | `250` | Per-host `/probe` timeout for fallback sweep |
-| `subnet_host_start` | int | `1` | First host octet to sweep (.X) |
-| `subnet_host_end` | int | `254` | Last host octet to sweep (.X) |
-| `model_filter` | string | `""` | If set (e.g. `"NMQAxe++"`) only keep matching `model` |
-| `max_targets` | int | `64` | Hard cap on probed IPs |
+Useful scan args: `seed_ips`, `model_filter`, `max_targets`, `probe_timeout_ms`, `alive_timeout_ms`, `subnet_alive_timeout_ms`, `subnet_probe_timeout_ms`.
 
-## Status / control / setting
+## Direct Status And Control
 
-Once you have an IP, use one of these scripts. Each takes `{"ip":"<addr>", ...}`
-and prints either a one-line summary or a small JSON snippet.
+Read one miner status:
 
-### Read live status
+```json
+{"path":"/fatfs/skills/lua_demo/scripts/nmminer_info.lua","args":{"ip":"192.168.124.42"}}
+```
 
-`run_lua_script script="nmminer_info" args={"ip":"<addr>"}`
+Optional `section`: `system`, `realtime`, or `probe`.
 
-Optional `args.section` selects a sub-endpoint:
+Control one miner:
 
-| Section | Endpoint | Use when |
-|---|---|---|
-| `"system"` (default) | `/api/system/info` | Hashrate, temps, power, pool, fans |
-| `"realtime"` | `/api/dashboard/chart/realtime` | Most-recent telemetry sample |
-| `"probe"` | `/probe` | Just identification |
+```json
+{"path":"/fatfs/skills/lua_demo/scripts/nmminer_control.lua","args":{"ip":"192.168.124.42","action":"find"}}
+```
 
-### Control actions
+Actions: `restart`, `clearhits`, `find`, `wakeup`, `rescan`.
 
-`run_lua_script script="nmminer_control" args={"ip":"<addr>", "action":"<name>"}`
+## Configure Devices
 
-| `action` | Endpoint | Effect |
-|---|---|---|
-| `"restart"` | `POST /api/system/restart` | Reboot the device (~10–15 s offline) |
-| `"clearhits"` | `POST /api/system/clearhits` | Reset block-hit counter |
-| `"find"` | `POST /api/swarm/find` | Make the device blink (locate it physically) |
-| `"wakeup"` | `GET  /api/wakeup` | Wake screen from screensaver |
-| `"rescan"` | `POST /api/swarm/scan` | Trigger device-side ICMP rescan |
+Use `nmminer_setting.lua` for mining pool settings, high-ASIC voltage/frequency, display preferences, LED state, screensaver duration, and market coin settings. The script always probes the target model first, GETs current settings from the endpoint, then PATCHes only the requested fields. For older NMMiner firmware that rejects PATCH, the script falls back to POST after the GET.
 
-### Change mining settings
+If the user provides an IP, modify that IP directly after `/probe` classification:
 
-`run_lua_script script="nmminer_setting" args={"ip":"<addr>", "freq":500, "vcore":1200}`
+```json
+{"path":"/fatfs/skills/lua_demo/scripts/nmminer_setting.lua","args":{"ip":"192.168.124.42","brightness":60}}
+```
 
-At least one of `freq` (MHz, 400–600) or `vcore` (mV, 1100–1400) must be set.
-The script PATCHes `/api/setting/mining` with `asicFreqReq` / `asicVcoreReq`.
+If the user does not provide an IP, let the setting script scan with `/alive`, probe models, apply `model` / `family` / `hash_class` filters, then modify matching devices:
 
-> Frequency change requires a reboot to take effect. Vcore applies immediately.
-> The script will print a one-line confirmation; chain `nmminer_control
-> action="restart"` if the user wanted the freq change to take effect now.
+```json
+{"path":"/fatfs/skills/lua_demo/scripts/nmminer_setting.lua","args":{"model":"NMMiner","pool":"stratum+tcp://public-pool.io:21496","address":"bc1q...worker"}}
+```
 
-## Examples
+Filter args: `model`, `model_filter`, `models`, `family` (`nmminer` or `axeos`), `hash_class` or `power_class` (`low` or `high`).
 
-**User**: "扫描一下家里的矿机"
-1. `run_lua_script script="nmminer_scan" args={}`
-2. Forward the printed table; do not re-probe.
+### Pool Settings
 
-**User**: "扫一下，知道 192.168.124.167 是一台矿机"
-1. `run_lua_script script="nmminer_scan" args={"seed_ips":["192.168.124.167"]}`
-2. Same as above but faster.
+For pool changes, use `/api/setting/mining`. If the user does not specify primary or secondary, change only the primary pool/address. If they explicitly ask for backup, secondary, or fallback, set `secondary=true`.
 
-**User**: "192.168.124.42 现在算力多少？"
-1. `run_lua_script script="nmminer_info" args={"ip":"192.168.124.42"}`
-2. Read `hashRate` / `asic.temp` / `power` from the printed JSON.
+Primary example:
 
-**User**: "找一下 .42 是哪一台 / 闪一下灯"
-1. `run_lua_script script="nmminer_control" args={"ip":"192.168.124.42","action":"find"}`
+```json
+{"path":"/fatfs/skills/lua_demo/scripts/nmminer_setting.lua","args":{"ip":"192.168.124.42","pool":"stratum+tcp://pool.example.com:3333","address":"wallet.worker"}}
+```
 
-**User**: "把 .42 频率调到 500MHz 立即生效"
-1. `run_lua_script script="nmminer_setting" args={"ip":"192.168.124.42","freq":500}`
-2. `run_lua_script script="nmminer_control" args={"ip":"192.168.124.42","action":"restart"}`
+Secondary example:
 
-## Notes
+```json
+{"path":"/fatfs/skills/lua_demo/scripts/nmminer_setting.lua","args":{"ip":"192.168.124.42","secondary":true,"pool":"stratum+tcp://backup.example.com:3333","address":"wallet.worker"}}
+```
 
-- All endpoints are HTTP (not HTTPS), no authentication, port 80.
-- Auto subnet mode (no `seed_ips`): worst case ~5–60 s on an empty /24
-  (250 ms × 254 hosts), short-circuits the moment any `/alive` responder is
-  found — typically **2–10 s** when at least one NMMiner is online.
-- Seeded mode: **1–3 s** total. Pass `seed_ips` whenever a known NM IP is
-  available (or the user asks for a re-scan after a recent successful one).
-- Output of every script is bounded to fit the cap_lua 4 KB stdout buffer;
-  very large fleets are summarized rather than dumped row-by-row.
+Accepted explicit fields: `primary_pool`, `primary_address`, `primary_password`, `secondary_pool`, `secondary_address`, `secondary_password`. For `family=nmminer`, these map to `PrimaryPool`, `PrimaryAddress`, `SecondaryPool`, and `SecondaryAddress`. For `family=axeos`, they map to nested `stratum.primary` and `stratum.fallback`.
+
+### High-ASIC Settings
+
+Only change high-ASIC tuning through `asicVcoreReq` and `asicFreqReq` on `/api/setting/mining`. Use this for AxeOS models such as `NMAxe`, `NMAxeGamma`, and `NMQAxe++`:
+
+```json
+{"path":"/fatfs/skills/lua_demo/scripts/nmminer_setting.lua","args":{"ip":"192.168.124.18","freq":500,"vcore":1200}}
+```
+
+`freq` must be `400..600` MHz. `vcore` must be `1100..1400` mV. Frequency changes usually require `nmminer_control.lua` with `action=restart` to take effect.
+
+### Preference Settings
+
+Use `/api/setting/preference` for display brightness, screen rotation, LED enable, and screensaver duration:
+
+```json
+{"path":"/fatfs/skills/lua_demo/scripts/nmminer_setting.lua","args":{"ip":"192.168.124.42","Brightness":80,"RotateScreen":90,"LedEnable":1,"ScreenSaver":"5m"}}
+```
+
+Preferred lowercase aliases are `brightness`, `rotate_screen`, `led_enable`, and `screen_saver`. For AxeOS models, `brightness` maps to `Brightness`, `led_enable` maps to `ledIndicator`, `screen_saver` maps to `screensaverEnable` / `screensaverTimeout`, and `rotate_screen` supports only `0` or `180` via `screenFlip`.
+
+### Market Settings
+
+Use `/api/setting/market` for digital currency display settings:
+
+```json
+{"path":"/fatfs/skills/lua_demo/scripts/nmminer_setting.lua","args":{"ip":"192.168.124.42","main_coin":"BTC","watch_coins":"BTC,ETH,SOL","kline_rotate":"30s","price_page_mode":"ticker"}}
+```
+
+For NMMiner this maps to `MainCoin`, `WatchCoins`, `KlineRotate`, and `PricePageMode`. For AxeOS this maps to `mainprice` and `coinWatchlist`.
+
+## Response Rules
+
+Run exactly the relevant `lua_run_script` call and summarize the script output in English. For configuration, report which IPs changed, which endpoint was used, and any skipped model/filter mismatch. If a script fails, report the error directly and stop unless an earlier step already completed successfully and the user asked for a multi-step operation.
