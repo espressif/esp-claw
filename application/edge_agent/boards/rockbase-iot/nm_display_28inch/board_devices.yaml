@@ -1,0 +1,186 @@
+version: 1.0.0
+# Devices Configuration for NM-Display-28inch
+#
+# Hardware reference from RockBase-iot/NM-Display-28inch:
+#   LCD  : ST7789, 320x240, SPI2, rotation 270
+#   Touch: FT6336, I2C address 0x38
+#   PMU  : AXP2101, I2C address 0x34
+#   Audio : ES8311 playback + ES8311 capture on the shared I2S bus
+
+devices:
+  # gpio_expander MUST be first: its factory function initializes AXP2101 power
+  # rails and performs the LCD/Touch hardware reset via TCA9554 PIN_1, before
+  # any other device (LCD, audio, etc.) is initialized.
+  - name: gpio_expander
+    chip: tca9554
+    type: gpio_expander
+    version: default
+    dependencies:
+      espressif/esp_io_expander_tca9554: "^2"
+    config:
+      max_pins: 8
+      output_io_mask: [1]
+      output_io_level_mask: [1]
+      input_io_mask: []
+    peripherals:
+      - name: i2c_master
+        i2c_addr: [0x40]
+
+  - name: lcd_brightness
+    type: ledc_ctrl
+    version: default
+    config:
+      default_percent: 100
+    peripherals:
+      - name: ledc_backlight
+
+  - name: audio_dac
+    chip: es8311
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: false
+      dac_enabled: true
+      dac_max_channel: 1
+      dac_channel_mask: "1"
+      dac_init_gain: 0
+      mclk_enabled: true
+    peripherals:
+      - name: i2s_audio_out
+      - name: i2c_master
+        address: 0x30
+        frequency: 400000
+
+  - name: audio_adc
+    chip: es8311
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      dac_enabled: false
+      adc_max_channel: 1
+      adc_channel_mask: "1"
+      adc_init_gain: 0
+      mclk_enabled: true
+    peripherals:
+      - name: i2s_audio_in
+      - name: i2c_master
+        address: 0x30
+        frequency: 400000
+
+  - name: display_lcd
+    chip: st7789
+    type: display_lcd
+    sub_type: spi
+    version: default
+    config:
+      mirror_x: false
+      mirror_y: true
+      swap_xy: true
+      invert_color: true
+      x_max: 320
+      y_max: 240
+      io_spi_config:
+        cs_gpio_num: -1
+        dc_gpio_num: 3
+        spi_mode: 3
+        pclk_hz: 80000000
+      lcd_panel_config:
+        reset_gpio_num: -1
+        rgb_ele_order: LCD_RGB_ELEMENT_ORDER_RGB
+        bits_per_pixel: 16
+        data_endian: LCD_RGB_DATA_ENDIAN_BIG
+        vendor_config: NULL
+    peripherals:
+      - name: spi_display
+
+  - name: lcd_touch
+    chip: ft6336
+    type: custom
+    version: default
+    init_skip: true
+    config:
+      i2c_addr: 0x38
+      x_max: 320
+      y_max: 240
+    peripherals:
+      - name: i2c_master
+
+  - name: fs_sdcard
+    type: fs_fat
+    sub_type: sdmmc
+    version: default
+    config:
+      vfs_config:
+        format_if_mount_failed: true
+      sub_config:
+        bus_width: 1
+        slot_flags: "SDMMC_SLOT_FLAG_INTERNAL_PULLUP"
+        pins:
+          clk: 11
+          cmd: 10
+          d0: 9
+
+  - name: imu_sensor
+    chip: qmi8658
+    type: custom
+    version: default
+    init_skip: true
+    config:
+      i2c_addr: 0x6b
+    peripherals:
+      - name: i2c_master
+
+  - name: rtc
+    chip: pcf85063
+    type: custom
+    version: default
+    init_skip: true
+    config:
+      i2c_addr: 0x51
+    peripherals:
+      - name: i2c_master
+
+  - name: camera
+    type: camera
+    sub_type: dvp
+    version: default
+    config:
+      dvp_config:
+        reset_io: -1
+        pwdn_io: -1
+        vsync_io: 17
+        de_io: 18
+        pclk_io: 41
+        xclk_io: 38
+        xclk_freq: 20000000
+        data_width: CAM_CTLR_DATA_WIDTH_8
+        data_io:
+          data_io_0: 45
+          data_io_1: 47
+          data_io_2: 48
+          data_io_3: 46
+          data_io_4: 42
+          data_io_5: 40
+          data_io_6: 39
+          data_io_7: 21
+          data_io_8: -1
+          data_io_9: -1
+          data_io_10: -1
+          data_io_11: -1
+          data_io_12: -1
+          data_io_13: -1
+          data_io_14: -1
+          data_io_15: -1
+    peripherals:
+      - name: i2c_master
+        frequency: 100000
+
+  - name: buttons
+    chip: gpio_button
+    type: custom
+    version: default
+    init_skip: true
+    config:
+      boot_gpio_num: 0
+      active_level: 0

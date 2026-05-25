@@ -1,0 +1,65 @@
+version: 1.0.0
+# Peripherals Configuration for NM-Display-28inch
+#
+# Hardware summary from the RockBase-iot/NM-Display-28inch project:
+#   I2C bus       : IO7 / IO8
+#   LCD (ST7789)  : IO1 MOSI, IO5 SCLK, IO3 DC, IO6 BL, CS NC, RST NC
+#   Touch (FT6336): IO7 / IO8
+#   Audio (ES8311 DAC + ES8311 ADC): IO12 MCLK, IO13 BCLK, IO15 LRCK, IO16 DOUT, IO14 DIN
+#   SD card       : IO11 CLK, IO10 CMD, IO9 D0
+
+peripherals:
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 8
+        scl: 7
+
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        mosi_io_num: 1
+        sclk_io_num: 5
+        max_transfer_sz: 6400
+
+  - name: i2s_audio_out
+    type: i2s
+    role: master
+    format: std-out
+    config: &i2s0_config
+      port: 0
+      sample_rate_hz: 16000
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_STEREO
+      slot_mask: I2S_STD_SLOT_BOTH
+      ws_width: 16
+      pins:
+        mclk: 12
+        bclk: 13
+        ws: 15
+        dout: 16
+        din: 14
+
+  - name: i2s_audio_in
+    type: i2s
+    role: master
+    format: std-in
+    config: *i2s0_config
+
+  - name: ledc_backlight
+    type: ledc
+    role: none
+    config:
+      gpio_num: 6
+      freq_hz: 5000
+      duty: 1023
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false

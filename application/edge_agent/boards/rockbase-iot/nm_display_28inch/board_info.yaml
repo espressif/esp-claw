@@ -1,0 +1,5 @@
+board: nm_display_28inch
+chip: esp32s3
+version: 1.0.0
+description: "RockBase-iot NM-Display-28inch Development Board with 2.8-inch ST7789 LCD"
+manufacturer: "RockBase-iot"
