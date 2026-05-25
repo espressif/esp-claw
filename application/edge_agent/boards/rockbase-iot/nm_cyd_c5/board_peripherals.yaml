@@ -1,0 +1,41 @@
+version: 1.0.0
+# Peripherals Configuration for NM-CYD-C5 (ESP32-C5)
+#
+# Pin assignment is taken from the official RockBase-iot/NM-CYD-C5 project:
+#   Display (ST7789) : SCK=6, MISO=2, MOSI=7, CS=23, DC=24, RST=board RST, BL=25
+#   Touch (XPT2046)  : SCK=6, MISO=2, MOSI=7, CS=1, shared SPI2 bus
+#   SD card slot     : SCK=6, MISO=2, MOSI=7, CS=10, shared SPI2 bus
+#   WS2812 RGB LED   : DIN=27
+#   GPS LP-UART P5   : ESP32 RX=4 (GPS TX), ESP32 TX=5 (GPS RX)
+#   I2C CN1 header   : SDA=9, SCL=8
+
+peripherals:
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 9
+        scl: 8
+
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        mosi_io_num: 7
+        miso_io_num: 2
+        sclk_io_num: 6
+        max_transfer_sz: 6400
+
+  - name: ledc_backlight
+    type: ledc
+    role: none
+    config:
+      gpio_num: 25
+      freq_hz: 5000
+      duty: 1023
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false
