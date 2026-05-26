@@ -1,0 +1,46 @@
+version: 1.0.0
+# Peripherals for DFRobot FireBeetle 2 ESP32-P4 (DFR1172 / DFR1237)
+peripherals:
+
+  # I2C: board default (SDA=GPIO7, SCL=GPIO8)
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 7
+        scl: 8
+
+  # PDM microphone (PCM MIC): CLK=GPIO12, DATA=GPIO9
+  - name: i2s_audio_in
+    type: i2s
+    format: "pdm-in"
+    role: master
+    config:
+      port: 0
+      sample_rate_hz: 16000
+      clk_src: "I2S_CLK_SRC_DEFAULT"
+      data_bit_width: 16
+      slot_mode: "I2S_SLOT_MODE_MONO"
+      pins:
+        clk: 12
+        din: 9
+
+  # TF card EN (GPIO45): low = power on. default_level 1 keeps slot off until power_ctrl.
+  - name: gpio_tf_en
+    type: gpio
+    role: io
+    config:
+      pin: 45
+      mode: GPIO_MODE_OUTPUT
+      default_level: 1
+
+  # LDO for MIPI camera (CSI) power rail
+  - name: ldo_mipi
+    type: ldo
+    config:
+      chan_id: 3
+      voltage_mv: 2500
+      adjustable: 1
+      owned_by_hw: 0
