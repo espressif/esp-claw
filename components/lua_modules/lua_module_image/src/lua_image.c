@@ -781,18 +781,25 @@ static int lua_module_image_resize(lua_State *L)
                           lua_image_format_name(output_format));
     }
 
-    /* Lift the source into the canonical intermediate format, caching it
-     * inside the source store so future calls (including convert / resize)
-     * skip the decode step. */
-    err = lua_image_store_require_format(source->store, output_format);
-    if (err != ESP_OK) {
-        return luaL_error(L, "image.resize source conversion failed: %s", esp_err_to_name(err));
+    if (source_format == LUA_IMAGE_FORMAT_RGB565BE && output_format == LUA_IMAGE_FORMAT_RGB565LE) {
+        intermediate = lua_image_store_get_buffer(source->store, source_format);
+    } else {
+        /* Lift the source into the canonical intermediate format, caching it
+         * inside the source store so future calls (including convert / resize)
+         * skip the decode step. */
+        err = lua_image_store_require_format(source->store, output_format);
+        if (err != ESP_OK) {
+            return luaL_error(L, "image.resize source conversion failed: %s", esp_err_to_name(err));
+        }
+        intermediate = lua_image_store_get_buffer(source->store, output_format);
     }
-    intermediate = lua_image_store_get_buffer(source->store, output_format);
     if (intermediate == NULL || !intermediate->valid || intermediate->data == NULL) {
         return luaL_error(L, "image.resize intermediate buffer missing after conversion");
     }
-    err = lua_image_source_from_buffer(intermediate, output_format, &intermediate_src);
+    err = lua_image_source_from_buffer(intermediate,
+                                       source_format == LUA_IMAGE_FORMAT_RGB565BE && output_format == LUA_IMAGE_FORMAT_RGB565LE ?
+                                       source_format : output_format,
+                                       &intermediate_src);
     if (err != ESP_OK) {
         return luaL_error(L, "image.resize intermediate buffer borrow failed");
     }
@@ -964,11 +971,73 @@ static int lua_module_image_save_file(lua_State *L)
     return 0;
 }
 
+/* image.rotate_ccw90(frame)
+ * Rotates a RGB565LE frame 90 degrees counter-clockwise.
+ * Returns a new frame with swapped dimensions (height becomes width, width becomes height). */
+static int lua_module_image_rotate_ccw90(lua_State *L)
+{
+    lua_image_frame_ud_t *source = lua_image_check_frame(L, 1);
+    const lua_image_buffer_t *intermediate;
+    lua_image_source_t intermediate_src;
+    lua_image_view_t input_view = {0};
+    lua_image_view_t output_view = {0};
+    lua_image_frame_info_t info = {0};
+    const char *fourcc;
+    esp_err_t err;
+
+    if (source->closed || source->store == NULL || source->store->closed) {
+        return luaL_error(L, "image.rotate_ccw90 source frame is released");
+    }
+
+    err = lua_image_store_require_format(source->store, LUA_IMAGE_FORMAT_RGB565LE);
+    if (err != ESP_OK) {
+        return luaL_error(L, "image.rotate_ccw90 source conversion failed: %s", esp_err_to_name(err));
+    }
+    intermediate = lua_image_store_get_buffer(source->store, LUA_IMAGE_FORMAT_RGB565LE);
+    if (intermediate == NULL || !intermediate->valid || intermediate->data == NULL) {
+        return luaL_error(L, "image.rotate_ccw90 intermediate buffer missing");
+    }
+    err = lua_image_source_from_buffer(intermediate, LUA_IMAGE_FORMAT_RGB565LE, &intermediate_src);
+    if (err != ESP_OK) {
+        return luaL_error(L, "image.rotate_ccw90 source borrow failed");
+    }
+    input_view.data = intermediate_src.data;
+    input_view.bytes = intermediate_src.bytes;
+    input_view.width = intermediate_src.width;
+    input_view.height = intermediate_src.height;
+    input_view.format = LUA_IMAGE_FORMAT_RGB565LE;
+    input_view.owned = false;
+    strlcpy(input_view.source_format, intermediate_src.source_format, sizeof(input_view.source_format));
+
+    err = lua_image_rotate_ccw90_view(&input_view, &output_view);
+    if (err != ESP_OK) {
+        return luaL_error(L, "image.rotate_ccw90 failed: %s", esp_err_to_name(err));
+    }
+
+    fourcc = lua_image_format_fourcc(LUA_IMAGE_FORMAT_RGB565LE);
+    info.width = output_view.width;
+    info.height = output_view.height;
+    info.bytes = output_view.bytes;
+    info.timestamp_us = intermediate->info.timestamp_us;
+    strlcpy(info.pixel_format, fourcc, sizeof(info.pixel_format));
+
+    err = lua_image_push_frame(L, output_view.data, output_view.bytes, &info, lua_image_free_owned_frame, NULL);
+    if (err != ESP_OK) {
+        lua_image_release_view(&output_view);
+        return luaL_error(L, "image.rotate_ccw90 push frame failed: %s", esp_err_to_name(err));
+    }
+    output_view.data = NULL;
+    output_view.bytes = 0;
+    output_view.owned = false;
+    return 1;
+}
+
 int luaopen_image(lua_State *L)
 {
     static const luaL_Reg funcs[] = {
         {"convert", lua_module_image_convert},
         {"resize", lua_module_image_resize},
+        {"rotate_ccw90", lua_module_image_rotate_ccw90},
         {"load_file", lua_module_image_load_file},
         {"save_file", lua_module_image_save_file},
         {NULL, NULL},

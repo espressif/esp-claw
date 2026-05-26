@@ -20,6 +20,18 @@ typedef enum {
 } lua_image_resize_filter_t;
 
 /**
+ * @brief Rotate a RGB565LE image 90 degrees counter-clockwise.
+ *
+ * Input:  @p src->width by @p src->height image (RGB565LE only).
+ * Output: @p src->height by @p src->width image with pixels rotated 90 degrees CCW.
+ *
+ * On ESP_OK, @p out owns its own buffer and must be released with
+ * lua_image_release_view().
+ */
+esp_err_t lua_image_rotate_ccw90_view(const lua_image_view_t *src,
+                                      lua_image_view_t *out);
+
+/**
  * @brief Resize an already-decoded image view to @p dst_width x @p dst_height.
  *
  * Only RGB565LE and GRAY8 source formats are supported, and the output format

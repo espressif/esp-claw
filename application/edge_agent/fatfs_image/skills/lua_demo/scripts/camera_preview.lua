@@ -35,10 +35,18 @@ local function panel_if_name(panel_if)
 end
 
 local function draw_preview_frame(frame, lcd_w, lcd_h)
-    -- Convert once, then let display borrow the RGB565 frame without copying it into a Lua string.
-    local rgb565 <close> = image.convert(frame, image.RGB565)
+    -- Camera is landscape (800x600), LCD is landscape (320x240) but mounted
+    -- rotated so we need CCW 90-degree rotation. Resize to portrait dims first,
+    -- then rotate to get the final landscape image.
+    local portrait <close> = image.resize(frame, {
+        width = lcd_h,   -- portrait width = lcd height (240)
+        height = lcd_w,  -- portrait height = lcd width  (320)
+        format = image.RGB565,
+        filter = "nearest",
+    })
+    local landscape <close> = image.rotate_ccw90(portrait)
     display.begin_frame({ clear = true, color = "black" })
-    local draw_w, draw_h = display.draw_image(0, 0, rgb565, { mode = "fit", width = lcd_w, height = lcd_h })
+    local draw_w, draw_h = display.draw_image(0, 0, landscape, { mode = "fit", width = lcd_w, height = lcd_h })
     display.present()
     display.end_frame()
     return draw_w, draw_h
@@ -64,7 +72,7 @@ end
 display_started = true
 
 ok, err = pcall(camera.open, camera_paths.dev_path, {
-    format = { "JPEG", "RGBP", "YUYV", "UYVY", "YU12" },
+    format = { "JPEG", "RGBR", "RGBP", "YUYV", "UYVY", "YU12" },
     width = 320, height = 240, nearest = true,
 })
 if not ok then
