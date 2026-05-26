@@ -77,7 +77,7 @@ menu "App Claw Config"
             depends on APP_CLAW_CAP_SESSION_MGR
             default y
             help
-                Register cap_im_local for in-process IM (e.g. edge_agent Web IM). Requires session manager for roll_chat_session.
+                Register cap_im_local for in-process IM (e.g. edge_agent Web IM). Requires session manager for session_command.
 
         config APP_CLAW_CAP_SCHEDULER
             bool "Enable scheduler capability"

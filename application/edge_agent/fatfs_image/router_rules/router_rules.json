@@ -30,29 +30,31 @@
     ]
   },
   {
-    "id": "im_new_session",
-    "description": "Start a fresh persistent chat session when the user sends /new.",
+    "id": "im_session_command",
+    "description": "Handle persistent chat session commands when the user sends /session.",
     "enabled": true,
     "consume_on_match": true,
-    "ack": "{{event.source_channel}} new session started",
+    "ack": "{{event.source_channel}} session command handled",
     "match": {
       "event_type": "message",
       "event_key": "text",
       "content_type": "text",
-      "text": "/new"
+      "text": "/session",
+      "text_match_rule": "prefix"
     },
     "actions": [
       {
         "type": "call_cap",
-        "cap": "roll_chat_session",
-        "input": {}
+        "cap": "session_command",
+        "input": {
+          "command": "{{match.remainder}}"
+        }
       },
       {
         "type": "send_message",
         "input": {
           "channel": "{{event.source_channel}}",
-          "chat_id": "{{event.chat_id}}",
-          "message": "Started a new session."
+          "chat_id": "{{event.chat_id}}"
         }
       }
     ]

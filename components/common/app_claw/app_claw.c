@@ -73,6 +73,37 @@ static bool app_claw_bool_is_true(const char *value)
            (strcmp(value, "true") == 0 || strcmp(value, "1") == 0 || strcmp(value, "yes") == 0);
 }
 
+#if CONFIG_APP_CLAW_CAP_SESSION_MGR
+static esp_err_t app_claw_delete_session_history(const char *session_id,
+                                                 bool *out_deleted_any,
+                                                 void *user_ctx)
+{
+    bool memory_deleted = false;
+    bool skill_deleted = false;
+    esp_err_t err;
+
+    (void)user_ctx;
+
+    if (!out_deleted_any) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_deleted_any = false;
+
+    err = claw_memory_delete_session_history(session_id, &memory_deleted);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = claw_skill_delete_session_state(session_id, &skill_deleted);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    *out_deleted_any = memory_deleted || skill_deleted;
+    return ESP_OK;
+}
+#endif
+
 esp_err_t app_claw_ui_start(void)
 {
 #if defined(CONFIG_APP_CLAW_ENABLE_EMOTE)
@@ -229,6 +260,10 @@ esp_err_t app_claw_start(const app_claw_config_t *config,
                         TAG, "Failed to init scheduler");
 #endif
     ESP_RETURN_ON_ERROR(init_memory(config, paths, max_tool_iterations), TAG, "Failed to init memory");
+#if CONFIG_APP_CLAW_CAP_SESSION_MGR
+    ESP_RETURN_ON_ERROR(cap_session_mgr_set_delete_session_handler(app_claw_delete_session_history, NULL),
+                        TAG, "Failed to register session delete handler");
+#endif
     ESP_RETURN_ON_ERROR(init_skills(paths), TAG, "Failed to init skills");
     ESP_RETURN_ON_ERROR(app_capabilities_init(config, paths), TAG, "Failed to init capabilities");
 #if CONFIG_APP_CLAW_CAP_IM_QQ

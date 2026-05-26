@@ -5,6 +5,7 @@
  */
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #include "claw_core.h"
@@ -58,6 +59,8 @@ esp_err_t claw_skill_load_active_cap_groups(const char *session_id,
 
 /* Changes only the active skill state for one session. */
 esp_err_t claw_skill_activate_for_session(const char *session_id, const char *skill_id);
+esp_err_t claw_skill_delete_session_state(const char *session_id,
+                                          bool *out_deleted_any);
 
 /* Prompt provider for the stable skill catalog. */
 extern const claw_core_context_provider_t claw_skill_skills_list_provider;

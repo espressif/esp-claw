@@ -61,6 +61,13 @@ typedef struct {
 } claw_event_router_binding_t;
 
 typedef struct {
+    bool has_text;
+    const char *text;
+    const char *rule;
+    const char *remainder;
+} claw_event_router_text_match_context_t;
+
+typedef struct {
     bool initialized;
     bool started;
     bool stop_requested;
@@ -238,6 +245,17 @@ static const char *claw_event_router_action_kind_to_string(claw_event_router_act
     }
 }
 
+static const char *claw_event_router_text_match_rule_to_string(claw_event_router_text_match_rule_t rule)
+{
+    switch (rule) {
+    case CLAW_EVENT_ROUTER_TEXT_MATCH_PREFIX:
+        return "prefix";
+    case CLAW_EVENT_ROUTER_TEXT_MATCH_EXACT:
+    default:
+        return "exact";
+    }
+}
+
 static int64_t claw_event_router_now_ms(void)
 {
     struct timeval tv = {0};
@@ -384,6 +402,22 @@ static void claw_event_router_trim_copy(char *dst, size_t dst_size, const char *
     dst[len] = '\0';
 }
 
+static bool claw_event_router_is_ascii_space(char ch)
+{
+    return ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' || ch == '\v' || ch == '\f';
+}
+
+static const char *claw_event_router_skip_ascii_space(const char *value)
+{
+    if (!value) {
+        return "";
+    }
+    while (*value && claw_event_router_is_ascii_space(*value)) {
+        value++;
+    }
+    return value;
+}
+
 static esp_err_t claw_event_router_read_file(const char *path, char **out_buf)
 {
     FILE *file = NULL;
@@ -475,6 +509,33 @@ static bool claw_event_router_parse_caller(const char *value, claw_cap_caller_t 
     }
     if (strcmp(value, "console") == 0) {
         *out = CLAW_CAP_CALLER_CONSOLE;
+        return true;
+    }
+    return false;
+}
+
+static bool claw_event_router_parse_text_match_rule(const cJSON *match,
+                                                    claw_event_router_text_match_rule_t *out_rule)
+{
+    cJSON *item = NULL;
+    const char *value = NULL;
+
+    if (!match || !out_rule) {
+        return false;
+    }
+
+    *out_rule = CLAW_EVENT_ROUTER_TEXT_MATCH_EXACT;
+    item = cJSON_GetObjectItem((cJSON *)match, "text_match_rule");
+    if (!item) {
+        return true;
+    }
+
+    value = cJSON_GetStringValue(item);
+    if (!value || !value[0] || strcmp(value, "exact") == 0) {
+        return true;
+    }
+    if (strcmp(value, "prefix") == 0) {
+        *out_rule = CLAW_EVENT_ROUTER_TEXT_MATCH_PREFIX;
         return true;
     }
     return false;
@@ -712,6 +773,15 @@ static esp_err_t claw_event_router_parse_rule(const cJSON *item,
     strlcpy(out_rule->match.text,
             claw_event_router_json_string_or_empty(match, "text"),
             sizeof(out_rule->match.text));
+    if (!claw_event_router_parse_text_match_rule(match, &out_rule->match.text_match_rule)) {
+        ESP_LOGE(TAG, "Unsupported text_match_rule in router rule %s", out_rule->id);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (out_rule->match.text_match_rule != CLAW_EVENT_ROUTER_TEXT_MATCH_EXACT &&
+            !out_rule->match.text[0]) {
+        ESP_LOGE(TAG, "text_match_rule requires match.text in router rule %s", out_rule->id);
+        return ESP_ERR_INVALID_ARG;
+    }
 
     if (vars) {
         out_rule->vars_json = cJSON_PrintUnformatted(vars);
@@ -874,6 +944,10 @@ static cJSON *claw_event_router_rule_to_json(const claw_event_router_rule_t *rul
     }
     if (rule->match.text[0]) {
         cJSON_AddStringToObject(match, "text", rule->match.text);
+    }
+    if (rule->match.text_match_rule == CLAW_EVENT_ROUTER_TEXT_MATCH_PREFIX) {
+        cJSON_AddStringToObject(match, "text_match_rule",
+                                claw_event_router_text_match_rule_to_string(rule->match.text_match_rule));
     }
 
     for (size_t i = 0; i < rule->action_count; i++) {
@@ -1074,8 +1148,81 @@ static bool claw_event_router_match_field(const char *expected, const char *actu
     return !expected || !expected[0] || strcmp(expected, actual ? actual : "") == 0;
 }
 
+static bool claw_event_router_match_text_exact(const char *expected,
+                                               const char *actual,
+                                               claw_event_router_text_match_context_t *out_match)
+{
+    if (!expected || !expected[0]) {
+        return true;
+    }
+    if (strcmp(expected, actual ? actual : "") != 0) {
+        return false;
+    }
+    if (out_match) {
+        out_match->has_text = true;
+        out_match->text = expected;
+        out_match->rule = claw_event_router_text_match_rule_to_string(CLAW_EVENT_ROUTER_TEXT_MATCH_EXACT);
+        out_match->remainder = "";
+    }
+    return true;
+}
+
+static bool claw_event_router_match_text_prefix(const char *expected,
+                                                const char *actual,
+                                                claw_event_router_text_match_context_t *out_match)
+{
+    const char *trimmed = NULL;
+    const char *remainder = NULL;
+    size_t expected_len = 0;
+
+    if (!expected || !expected[0]) {
+        return true;
+    }
+
+    trimmed = claw_event_router_skip_ascii_space(actual);
+    expected_len = strlen(expected);
+    if (strncmp(trimmed, expected, expected_len) != 0) {
+        return false;
+    }
+
+    remainder = trimmed + expected_len;
+    if (*remainder && !claw_event_router_is_ascii_space(*remainder)) {
+        return false;
+    }
+    remainder = claw_event_router_skip_ascii_space(remainder);
+
+    if (out_match) {
+        out_match->has_text = true;
+        out_match->text = expected;
+        out_match->rule = claw_event_router_text_match_rule_to_string(CLAW_EVENT_ROUTER_TEXT_MATCH_PREFIX);
+        out_match->remainder = remainder;
+    }
+    return true;
+}
+
+static bool claw_event_router_match_text(const claw_event_router_match_t *match,
+                                         const char *actual,
+                                         claw_event_router_text_match_context_t *out_match)
+{
+    if (out_match) {
+        memset(out_match, 0, sizeof(*out_match));
+    }
+    if (!match) {
+        return false;
+    }
+
+    switch (match->text_match_rule) {
+    case CLAW_EVENT_ROUTER_TEXT_MATCH_PREFIX:
+        return claw_event_router_match_text_prefix(match->text, actual, out_match);
+    case CLAW_EVENT_ROUTER_TEXT_MATCH_EXACT:
+    default:
+        return claw_event_router_match_text_exact(match->text, actual, out_match);
+    }
+}
+
 static bool claw_event_router_rule_matches(const claw_event_router_rule_t *rule,
-                                           const claw_event_t *event)
+                                           const claw_event_t *event,
+                                           claw_event_router_text_match_context_t *out_match)
 {
     return rule && rule->enabled &&
            claw_event_router_match_field(rule->match.event_type, event->event_type) &&
@@ -1084,7 +1231,7 @@ static bool claw_event_router_rule_matches(const claw_event_router_rule_t *rule,
            claw_event_router_match_field(rule->match.channel, event->source_channel) &&
            claw_event_router_match_field(rule->match.chat_id, event->chat_id) &&
            claw_event_router_match_field(rule->match.content_type, event->content_type) &&
-           claw_event_router_match_field(rule->match.text, event->text);
+           claw_event_router_match_text(&rule->match, event->text, out_match);
 }
 
 static cJSON *claw_event_router_build_event_context(const claw_event_t *event)
@@ -1142,6 +1289,31 @@ static cJSON *claw_event_router_build_event_context(const claw_event_t *event)
     cJSON_AddItemToObject(event_obj, "payload", payload_obj);
     cJSON_AddItemToObject(ctx, "event", event_obj);
     return ctx;
+}
+
+static esp_err_t claw_event_router_update_match_context(cJSON *ctx,
+                                                        const claw_event_router_text_match_context_t *match_ctx)
+{
+    cJSON *match_obj = NULL;
+
+    if (!ctx) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    cJSON_DeleteItemFromObjectCaseSensitive(ctx, "match");
+    if (!match_ctx || !match_ctx->has_text) {
+        return ESP_OK;
+    }
+
+    match_obj = cJSON_CreateObject();
+    if (!match_obj) {
+        return ESP_ERR_NO_MEM;
+    }
+    cJSON_AddStringToObject(match_obj, "text", match_ctx->text ? match_ctx->text : "");
+    cJSON_AddStringToObject(match_obj, "rule", match_ctx->rule ? match_ctx->rule : "");
+    cJSON_AddStringToObject(match_obj, "remainder", match_ctx->remainder ? match_ctx->remainder : "");
+    cJSON_AddItemToObject(ctx, "match", match_obj);
+    return ESP_OK;
 }
 
 static char *claw_event_router_lookup_string_dup(const cJSON *ctx,
@@ -1923,11 +2095,12 @@ static esp_err_t claw_event_router_process_event(const claw_event_t *event,
 
     for (size_t i = 0; i < s_runtime->rule_count; i++) {
         claw_event_router_rule_t *rule = &s_runtime->rules[i];
+        claw_event_router_text_match_context_t match_ctx = {0};
         cJSON *rule_obj = NULL;
         cJSON *vars_obj = NULL;
         esp_err_t rule_err = ESP_OK;
 
-        if (!claw_event_router_rule_matches(rule, event)) {
+        if (!claw_event_router_rule_matches(rule, event, &match_ctx)) {
             continue;
         }
 
@@ -1955,6 +2128,13 @@ static esp_err_t claw_event_router_process_event(const claw_event_t *event,
         cJSON_AddStringToObject(rule_obj, "id", rule->id);
         cJSON_DeleteItemFromObjectCaseSensitive(ctx, "rule");
         cJSON_AddItemToObject(ctx, "rule", rule_obj);
+
+        rule_err = claw_event_router_update_match_context(ctx, &match_ctx);
+        if (rule_err != ESP_OK) {
+            cJSON_Delete(ctx);
+            claw_event_router_unlock();
+            return rule_err;
+        }
 
         cJSON_DeleteItemFromObjectCaseSensitive(ctx, "vars");
         vars_obj = rule->vars_json ? cJSON_Parse(rule->vars_json) : cJSON_CreateObject();

@@ -46,6 +46,34 @@ The **order** of rules in `router_rules.json` is evaluation order. Each rule typ
   For actions such as `run_script`, `send_message`, and `emit_event`, put parameters under `actions[*].input` (for example, `{"type":"run_script","input":{"path":"demo.lua"}}`) instead of at the action object's top level.
 </Aside>
 
+`match.text` uses exact matching by default. To build command-style rules, set `match.text_match_rule` to `prefix`; the router left-trims the incoming text, requires a token boundary after the command, and exposes the argument text as `{{match.remainder}}`.
+
+```json
+{
+  "id": "run_script_command",
+  "match": {
+    "event_type": "message",
+    "event_key": "text",
+    "content_type": "text",
+    "text": "/run",
+    "text_match_rule": "prefix"
+  },
+  "actions": [
+    {
+      "type": "run_script",
+      "input": {
+        "path": "/fatfs/skills/runner/scripts/run.lua",
+        "args": {
+          "command": "{{match.remainder}}"
+        }
+      }
+    }
+  ]
+}
+```
+
+Matched text templates include `{{match.text}}`, `{{match.rule}}`, and `{{match.remainder}}`.
+
 `edge_agent` ships a starter `router_rules.json` for basic IM flows. See <LinkToSource relativePath="application/edge_agent/fatfs_image/router_rules/router_rules.json" />.
 
 Full syntax is captured in the JSON Schema.

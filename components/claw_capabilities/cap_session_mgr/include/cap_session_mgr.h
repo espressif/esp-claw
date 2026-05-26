@@ -5,6 +5,7 @@
  */
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 
 #include "claw_event_router.h"
@@ -14,8 +15,14 @@
 extern "C" {
 #endif
 
+typedef esp_err_t (*cap_session_mgr_delete_session_fn_t)(const char *session_id,
+                                                         bool *out_deleted_any,
+                                                         void *user_ctx);
+
 esp_err_t cap_session_mgr_register_group(void);
 esp_err_t cap_session_mgr_set_session_root_dir(const char *session_root_dir);
+esp_err_t cap_session_mgr_set_delete_session_handler(cap_session_mgr_delete_session_fn_t fn,
+                                                     void *user_ctx);
 size_t cap_session_mgr_build_session_id(const claw_event_t *event, char *buf, size_t buf_size, void *user_ctx);
 
 #ifdef __cplusplus

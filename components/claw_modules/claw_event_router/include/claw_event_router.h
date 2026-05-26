@@ -69,6 +69,11 @@ typedef enum {
     CLAW_EVENT_ROUTER_ACTION_DROP = 5,
 } claw_event_router_action_kind_t;
 
+typedef enum {
+    CLAW_EVENT_ROUTER_TEXT_MATCH_EXACT = 0,
+    CLAW_EVENT_ROUTER_TEXT_MATCH_PREFIX = 1,
+} claw_event_router_text_match_rule_t;
+
 typedef struct {
     char event_type[96];
     char event_key[96];
@@ -77,6 +82,7 @@ typedef struct {
     char chat_id[96];
     char content_type[96];
     char text[96];
+    claw_event_router_text_match_rule_t text_match_rule;
 } claw_event_router_match_t;
 
 typedef struct {

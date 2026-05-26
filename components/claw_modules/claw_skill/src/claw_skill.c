@@ -5,6 +5,7 @@
  */
 #include "claw_skill.h"
 
+#include <errno.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <dirent.h>
@@ -1116,6 +1117,42 @@ cleanup:
     cJSON_Delete(root);
     free(json_text);
     return err;
+}
+
+esp_err_t claw_skill_delete_session_state(const char *session_id,
+                                          bool *out_deleted_any)
+{
+    char *path = NULL;
+
+    if (!out_deleted_any) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_deleted_any = false;
+
+    if (!s_skill || !s_skill->initialized || !session_id || !session_id[0]) {
+        ESP_LOGE(TAG, "delete session: bad state");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    path = build_session_state_path_dup(session_id);
+    if (!path) {
+        ESP_LOGE(TAG, "session path %s", session_id ? session_id : "(null)");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (remove(path) == 0) {
+        *out_deleted_any = true;
+        free(path);
+        return ESP_OK;
+    }
+    if (errno == ENOENT) {
+        free(path);
+        return ESP_OK;
+    }
+
+    ESP_LOGE(TAG, "delete session state %s failed: errno=%d", path, errno);
+    free(path);
+    return ESP_FAIL;
 }
 
 static esp_err_t claw_skill_render_skills_list(char *buf, size_t size)

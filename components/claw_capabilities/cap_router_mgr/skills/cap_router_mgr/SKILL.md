@@ -76,9 +76,12 @@ Use this skill to inspect and modify event router rules through the direct calla
   - `chat_id`
   - `content_type`
   - `text`
+  - `text_match_rule`
 
 ## Match semantics
 - `match.event_type` is required; all other match fields are optional exact-match filters.
+- `match.text` uses `text_match_rule="exact"` by default. Set `text_match_rule="prefix"` to match a leading command token, for example `/run args`.
+- Prefix text matching trims leading whitespace from the event text, requires a token boundary after `match.text`, rejects embedded prose such as `please /run args`, and exposes the post-prefix argument string as `{{match.remainder}}`.
 - `event_type`, `event_key`, `source_cap`, and `source_channel` values are not fixed enums in this skill; they must match values emitted elsewhere in the system.
 - Use `match.source_channel` as the canonical rule field. The runtime also accepts `channel` as an alias.
 - To run a script after device boot, match the startup trigger emitted by `app_claw`: `source_cap=app_claw`, `event_type=startup`, `event_key=boot_completed`, and `content_type=trigger`.
@@ -117,6 +120,10 @@ Use this skill to inspect and modify event router rules through the direct calla
   - `{{event.content_type}}`
   - `{{event.session_policy}}`
   - `{{event.text}}`
+- Matched text fields are available when `match.text` matched:
+  - `{{match.text}}`
+  - `{{match.rule}}`
+  - `{{match.remainder}}`
 - Parsed payload fields are available under `event.payload`, for example `{{event.payload.kind}}`.
 
 ## Decision policy
@@ -147,7 +154,15 @@ Use this skill to inspect and modify event router rules through the direct calla
 
 ```json
 {
-  "rule_json": "{\"id\":\"im_new_session\",\"enabled\":true,\"consume_on_match\":true,\"match\":{\"event_type\":\"message\",\"event_key\":\"text\",\"content_type\":\"text\",\"text\":\"/new\"},\"actions\":[{\"type\":\"call_cap\",\"cap\":\"roll_chat_session\",\"input\":{}},{\"type\":\"send_message\",\"input\":{\"channel\":\"{{event.source_channel}}\",\"chat_id\":\"{{event.chat_id}}\",\"message\":\"Started a new session.\"}}]}"
+  "rule_json": "{\"id\":\"im_new_session\",\"enabled\":true,\"consume_on_match\":true,\"match\":{\"event_type\":\"message\",\"event_key\":\"text\",\"content_type\":\"text\",\"text\":\"/new\"},\"actions\":[{\"type\":\"call_cap\",\"cap\":\"new_chat_session\",\"input\":{}},{\"type\":\"send_message\",\"input\":{\"channel\":\"{{event.source_channel}}\",\"chat_id\":\"{{event.chat_id}}\",\"message\":\"Started a new session.\"}}]}"
+}
+```
+
+### Prefix command with arguments
+
+```json
+{
+  "rule_json": "{\"id\":\"im_run_script_command\",\"enabled\":true,\"consume_on_match\":true,\"match\":{\"event_type\":\"message\",\"event_key\":\"text\",\"content_type\":\"text\",\"text\":\"/run\",\"text_match_rule\":\"prefix\"},\"actions\":[{\"type\":\"run_script\",\"input\":{\"path\":\"/fatfs/skills/runner/scripts/run.lua\",\"args\":{\"command\":\"{{match.remainder}}\"}}}]}"
 }
 ```
 
