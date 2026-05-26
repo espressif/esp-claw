@@ -14,6 +14,8 @@ local DEFAULT_FILENAME = "capture.jpg"
 local DEFAULT_DIR = ""
 local DEFAULT_TIMEOUT_MS = 3000
 local DEFAULT_SKIP_FRAMES = 3
+local DEFAULT_MAX_WIDTH = 640   -- resize before JPEG encode to reduce PSRAM pressure
+local DEFAULT_MAX_HEIGHT = 480  -- set to 0 to skip resize (risk OOM on large sensors)
 
 -- 3. Args
 local function raw_arg(name, default)
@@ -24,8 +26,10 @@ local function raw_arg(name, default)
 end
 
 local ARG_SCHEMA = {
-  timeout_ms = arg_schema.int({ default = DEFAULT_TIMEOUT_MS, min = 0 }),
+  timeout_ms  = arg_schema.int({ default = DEFAULT_TIMEOUT_MS,  min = 0 }),
   skip_frames = arg_schema.int({ default = DEFAULT_SKIP_FRAMES, min = 0 }),
+  max_width   = arg_schema.int({ default = DEFAULT_MAX_WIDTH,   min = 0 }),
+  max_height  = arg_schema.int({ default = DEFAULT_MAX_HEIGHT,  min = 0 }),
 }
 
 local ctx = arg_schema.parse(args, ARG_SCHEMA)
@@ -142,7 +146,32 @@ local function run()
 
   local frame <close> = camera.get_frame(ctx.timeout_ms)
   local frame_info = frame:info()
-  image.save_file(save_path, frame)
+
+  -- Resize raw frames before JPEG encoding to avoid PSRAM OOM.
+  -- Encoding a large UYVY frame (e.g. 800x600=960KB) directly requires an
+  -- aligned input copy + JPEG output buffer; two large contiguous allocations
+  -- that may fail due to PSRAM fragmentation.  Resizing to max_width×max_height
+  -- RGB565 first caps the intermediate buffer (640×480×2 = 614KB) and keeps
+  -- total peak allocation well under 1MB.
+  -- Pass max_width=0 or max_height=0 to skip resizing (may cause OOM).
+  local save_src
+  if ctx.max_width > 0 and ctx.max_height > 0
+      and frame_info.pixel_format ~= "JPEG"
+      and frame_info.pixel_format ~= "MJPG" then
+    local target_w = math.min(frame_info.width,  ctx.max_width)
+    local target_h = math.min(frame_info.height, ctx.max_height)
+    save_src = image.resize(frame, { width = target_w, height = target_h,
+                                     format = image.RGB565, filter = "nearest" })
+    print(string.format("[take_picture] resized for encode: %dx%d -> %dx%d RGB565",
+          frame_info.width, frame_info.height, target_w, target_h))
+  end
+
+  do
+    local jpeg_src = save_src or frame
+    local jpeg <close> = image.convert(jpeg_src, image.JPEG)
+    image.save_file(save_path, jpeg)
+  end
+  if save_src then save_src:release() end
 
   local saved_info, stat_err = storage.stat(save_path)
   if not saved_info then

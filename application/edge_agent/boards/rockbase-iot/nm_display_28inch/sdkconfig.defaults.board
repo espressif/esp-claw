@@ -22,6 +22,9 @@ CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT=y
 
 # Camera: OV5640 DVP 8-bit, RGB565 output
+# RGB565 allows image.resize to scale directly (RGB565→RGB565) without any
+# intermediate YUV→RGB conversion buffer (~1.44 MB for 800x600 UYVY), so even
+# a 320x240 resize only needs 153 KB rather than >1.4 MB of contiguous PSRAM.
 CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT=y
 CONFIG_APP_CLAW_LUA_MODULE_CAMERA=y
 CONFIG_ESP_VIDEO_ENABLE_DVP_VIDEO_DEVICE=y

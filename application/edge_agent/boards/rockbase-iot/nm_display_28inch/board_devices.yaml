@@ -174,7 +174,7 @@ devices:
           data_io_15: -1
     peripherals:
       - name: i2c_master
-        frequency: 100000
+        frequency: 400000
 
   - name: buttons
     chip: gpio_button

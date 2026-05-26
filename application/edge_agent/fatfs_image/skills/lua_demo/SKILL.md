@@ -58,7 +58,7 @@ Tool call:
 
 Use when the user asks to preview the camera, show camera output, open the camera, or run a camera demo.
 
-Requires a camera and display. The script supports RGB565/RGB565X preview frames.
+Requires a camera and display. The script resizes captured frames to the LCD before drawing them.
 
 Tool call:
 ```json

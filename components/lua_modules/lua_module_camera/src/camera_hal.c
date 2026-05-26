@@ -26,7 +26,7 @@
 
 #define CAMERA_DEFAULT_TIMEOUT_MS   5000
 #define CAMERA_SETTLE_TIMEOUT_MS   30000  /* settle at open time, allow slow SPI sensors */
-#define CAMERA_BUFFER_COUNT            3
+#define CAMERA_BUFFER_COUNT            2  /* 2 is the V4L2 minimum; saves ~960 KB PSRAM vs 3 */
 #define CAMERA_STREAM_SETTLE_FRAMES    3  /* reduced: 3 frames enough for AE/AWB stabilize */
 
 static const char *TAG = "camera_service";

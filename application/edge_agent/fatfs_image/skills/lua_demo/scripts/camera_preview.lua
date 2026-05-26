@@ -7,7 +7,9 @@ local image = require("image")
 local TAG = "[camera_preview]"
 local FRAME_TIMEOUT_MS = 3000
 local FRAME_INTERVAL_MS = 30
-local PREVIEW_FRAME_COUNT = 300 -- Set to 0 for continuous preview.
+local SCRIPT_ARGS = rawget(_G, "args") or {}
+local PREVIEW_FRAME_COUNT = tonumber(SCRIPT_ARGS.frames) or 300 -- Set to 0 for continuous preview.
+local DEFAULT_FORMATS = { "JPEG", "RGBR", "RGBP", "YUYV", "UYVY", "YU12" }
 
 local camera_started = false
 local display_started = false
@@ -32,6 +34,16 @@ local function panel_if_name(panel_if)
         return "rgb"
     end
     return "io"
+end
+
+local function camera_format_list()
+    if type(SCRIPT_ARGS.format) == "string" and SCRIPT_ARGS.format ~= "" then
+        return { SCRIPT_ARGS.format }
+    end
+    if type(SCRIPT_ARGS.formats) == "table" then
+        return SCRIPT_ARGS.formats
+    end
+    return DEFAULT_FORMATS
 end
 
 local function draw_preview_frame(frame, lcd_w, lcd_h)
@@ -71,8 +83,11 @@ if not ok then
 end
 display_started = true
 
+local requested_formats = camera_format_list()
+print(string.format("%s request formats=%s frames=%d", TAG, table.concat(requested_formats, ","), PREVIEW_FRAME_COUNT))
+
 ok, err = pcall(camera.open, camera_paths.dev_path, {
-    format = { "JPEG", "RGBR", "RGBP", "YUYV", "UYVY", "YU12" },
+    format = requested_formats,
     width = 320, height = 240, nearest = true,
 })
 if not ok then

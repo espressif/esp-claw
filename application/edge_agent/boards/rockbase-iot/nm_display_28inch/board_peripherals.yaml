@@ -59,6 +59,9 @@ peripherals:
     role: none
     config:
       gpio_num: 6
+      speed_mode: LEDC_LOW_SPEED_MODE
+      channel: 1
+      timer_sel: LEDC_TIMER_1
       freq_hz: 5000
       duty: 1023
       duty_resolution: LEDC_TIMER_10_BIT
