@@ -30,6 +30,36 @@ static esp_err_t status_handler(httpd_req_t *req)
     return http_server_send_json_response(req, root);
 }
 
+static esp_err_t probe_handler(httpd_req_t *req)
+{
+    http_server_ctx_t *ctx = http_server_ctx();
+    http_server_wifi_status_t status = {0};
+
+    if (ctx->services.get_wifi_status) {
+        (void)ctx->services.get_wifi_status(&status);
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        httpd_resp_send_500(req);
+        return ESP_ERR_NO_MEM;
+    }
+
+    cJSON_AddBoolToObject(root, "ok", true);
+    http_server_json_add_string(root, "device", "esp-claw");
+    cJSON_AddBoolToObject(root, "wifi_connected", status.wifi_connected);
+    http_server_json_add_string(root, "ip", status.ip);
+    cJSON_AddBoolToObject(root, "ap_active", status.ap_active);
+    http_server_json_add_string(root, "ap_ip", status.ap_ip);
+    http_server_json_add_string(root, "wifi_mode", status.wifi_mode);
+    return http_server_send_json_response(req, root);
+}
+
+static esp_err_t alive_handler(httpd_req_t *req)
+{
+    return probe_handler(req);
+}
+
 static esp_err_t restart_handler(httpd_req_t *req)
 {
     http_server_ctx_t *ctx = http_server_ctx();
@@ -52,6 +82,8 @@ esp_err_t http_server_register_status_routes(httpd_handle_t server)
 {
     const httpd_uri_t handlers[] = {
         { .uri = "/api/status", .method = HTTP_GET, .handler = status_handler },
+        { .uri = "/probe", .method = HTTP_GET, .handler = probe_handler },
+        { .uri = "/alive", .method = HTTP_GET, .handler = alive_handler },
         { .uri = "/api/restart", .method = HTTP_POST, .handler = restart_handler },
     };
 

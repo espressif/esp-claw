@@ -39,6 +39,7 @@ esp_err_t http_server_send_json_response(httpd_req_t *req, cJSON *root)
 
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store, max-age=0");
+    httpd_resp_set_hdr(req, "Connection", "close");
     esp_err_t err = httpd_resp_sendstr(req, payload);
     free(payload);
     return err;

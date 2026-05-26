@@ -1,5 +1,5 @@
 --[[
-nmminer_info : read live status from a single NMMiner device.
+nmminer_info : read live status from one NM miner or Bitaxe ESP-Miner device.
 
 Args:
   ip         : string   required
@@ -47,14 +47,21 @@ end
 
 if section == "system" then
     print(string.format("SUMMARY: ip=%s host=%s fw=%s model=%s",
-        ip, str("hostName") or "?", str("fwVersion") or "?", str("hwModel") or "?"))
+        ip,
+        str("hostName") or str("hostname") or "?",
+        str("fwVersion") or str("axeOSVersion") or str("version") or "?",
+        str("hwModel") or str("boardVersion") or str("ASICModel") or "?"))
     print(string.format("        hashRate=%s asicTemp=%s vcoreTemp=%s power=%sW",
-        num("hashRate") or "?", num("asic") or num("asic") or "?",
-        num("vcore") or "?", num("power") or "?"))
+        num("hashRate") or num("hashRate_1m") or "?",
+        num("asic") or num("temp") or "?",
+        num("vcore") or num("vrTemp") or "?",
+        num("power") or "?"))
     print(string.format("        accepted=%s rejected=%s blkhits=%s uptime=%ss",
-        num("sAccepted") or "?", num("sRejected") or "?",
-        num("blkhits") or "?", num("uptimeSeconds") or "?"))
-    local pool = str("url")
+        num("sAccepted") or num("sharesAccepted") or "?",
+        num("sRejected") or num("sharesRejected") or "?",
+        num("blkhits") or num("blockFound") or "?",
+        num("uptimeSeconds") or "?"))
+    local pool = str("url") or str("stratumURL")
     if pool then print("        pool=" .. pool) end
 elseif section == "probe" then
     print(string.format("SUMMARY: ip=%s model=%s ver=%s host=%s hr=%s ut=%ss",

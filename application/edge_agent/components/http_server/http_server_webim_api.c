@@ -21,7 +21,7 @@ static const char *TAG = "http_webim";
 #define WEBIM_FILE_PREFIX    "/inbox/webim/"
 #define WEBIM_LINKS_MAX      4
 #define WEBIM_URL_MAX        192
-#define WEBIM_WS_MAX_CLIENTS 8
+#define WEBIM_WS_MAX_CLIENTS 4
 
 static httpd_handle_t      s_httpd;
 static SemaphoreHandle_t   s_ws_mx;

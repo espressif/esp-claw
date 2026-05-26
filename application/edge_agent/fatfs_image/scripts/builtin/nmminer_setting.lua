@@ -11,7 +11,7 @@ Common args:
   ip | ips | seed_ips       : target IP(s); omit to scan the local /24 with /alive
   model | model_filter      : only modify this exact /probe model
   models                    : array of exact model names
-  family                    : "nmminer" | "axeos"
+    family                    : "nmminer" | "nm_axeos" | "bitaxe" | "axeos"
   hash_class | power_class  : "low" (<1 GH/s) | "high" (>=1 GH/s), based on /probe hr
   timeout_ms                : per-request timeout, default 3000
 
@@ -61,6 +61,28 @@ local function jget_number(s, key)
     if not s then return nil end
     local v = s:match('"' .. key .. '"%s*:%s*(%-?[%d%.eE%+]+)')
     return v and tonumber(v) or nil
+end
+
+local function jget_object(s, key)
+    if not s then return nil end
+    local _, open_pos = s:find('"' .. key .. '"%s*:%s*{')
+    if not open_pos then return nil end
+    local depth = 0
+    for pos = open_pos, #s do
+        local ch = s:sub(pos, pos)
+        if ch == "{" then depth = depth + 1 end
+        if ch == "}" then
+            depth = depth - 1
+            if depth == 0 then return s:sub(open_pos, pos) end
+        end
+    end
+    return nil
+end
+
+local function current_stratum_value(body, pool_name, field_name)
+    local stratum = jget_object(body, "stratum") or body
+    local pool = jget_object(stratum, pool_name)
+    return jget_string(pool, field_name)
 end
 
 local function extract_ips(s)
@@ -128,35 +150,76 @@ local function parse_duration_seconds(v)
     return n
 end
 
-local function family_for_model(model)
+local function family_for_probe_model(model)
     local lower = string.lower(model or "")
     if lower:find("nmminer", 1, true) then return "nmminer" end
-    if lower:find("nmaxe", 1, true) or lower:find("nmqaxe", 1, true) or lower:find("axe", 1, true) then
-        return "axeos"
+    if lower:find("nmaxe", 1, true) or lower:find("nmqaxe", 1, true) then
+        return "nm_axeos"
+    end
+    if lower:find("bitaxe", 1, true) or lower:find("axe", 1, true) then
+        return "bitaxe"
     end
     return "unknown"
 end
 
-local function probe_device(ip)
-    local r = http.get("http://" .. ip .. "/probe", { timeout_ms = probe_timeout, max_body_bytes = 2048 })
-    if not (r and r.ok and r.status == 200 and r.body) then
-        return nil, string.format("probe failed status=%s err=%s", tostring(r and r.status), tostring(r and r.error))
-    end
-    local model = jget_string(r.body, "model")
-    local ver = jget_string(r.body, "ver")
-    local hr = jget_number(r.body, "hr")
-    if not (model and ver and hr) then
-        return nil, "probe response is not NM-compatible"
-    end
+local function is_nm_axeos(d)
+    return d and d.family == "nm_axeos"
+end
+
+local function is_bitaxe(d)
+    return d and d.family == "bitaxe"
+end
+
+local function is_any_axeos(d)
+    return is_nm_axeos(d) or is_bitaxe(d)
+end
+
+local function espminer_from_system_info(ip, body)
+    if not body then return nil end
+    local axe_ver = jget_string(body, "axeOSVersion")
+    local version = jget_string(body, "version")
+    local asic = jget_string(body, "ASICModel")
+    local board = jget_string(body, "boardVersion")
+    if not (axe_ver or asic or board) then return nil end
+    local hash_gh = jget_number(body, "hashRate") or jget_number(body, "hashRate_1m") or 0
     return {
         ip = ip,
-        model = model,
-        hostname = jget_string(r.body, "hostname") or "",
-        ver = ver,
-        hr = hr,
-        family = family_for_model(model),
-        hash_class = hr >= 1000000000 and "high" or "low",
+        model = board or (asic and ("Bitaxe-" .. asic)) or "Bitaxe",
+        hostname = jget_string(body, "hostname") or "",
+        ver = axe_ver or version or "?",
+        hr = hash_gh * 1000000000,
+        family = "bitaxe",
+        hash_class = hash_gh >= 1 and "high" or "low",
     }
+end
+
+local function probe_device(ip)
+    local r = http.get("http://" .. ip .. "/probe", { timeout_ms = probe_timeout, max_body_bytes = 2048 })
+    if r and r.ok and r.status == 200 and r.body then
+        local model = jget_string(r.body, "model")
+        local ver = jget_string(r.body, "ver")
+        local hr = jget_number(r.body, "hr")
+        if model and ver and hr then
+            return {
+                ip = ip,
+                model = model,
+                hostname = jget_string(r.body, "hostname") or "",
+                ver = ver,
+                hr = hr,
+                family = family_for_probe_model(model),
+                hash_class = hr >= 1000000000 and "high" or "low",
+            }
+        end
+    end
+
+    local info_r = http.get("http://" .. ip .. "/api/system/info", { timeout_ms = probe_timeout, max_body_bytes = 4096 })
+    if info_r and info_r.ok and info_r.status == 200 and info_r.body then
+        local d = espminer_from_system_info(ip, info_r.body)
+        if d then return d end
+    end
+
+    return nil, string.format("not NM /probe or Bitaxe /api/system/info compatible; probe_status=%s info_status=%s",
+        tostring(r and r.status), tostring(info_r and info_r.status))
 end
 
 local function collect_direct_ips()
@@ -227,6 +290,12 @@ local function collect_probe_fallback(set, ips)
             local r = http.get("http://" .. ip .. "/probe", { timeout_ms = subnet_probe_timeout, max_body_bytes = 2048 })
             if r and r.ok and r.status == 200 and r.body and jget_string(r.body, "model") and jget_number(r.body, "hr") then
                 add_unique(set, ips, ip)
+            else
+                local info_r = http.get("http://" .. ip .. "/api/system/info",
+                    { timeout_ms = subnet_probe_timeout, max_body_bytes = 2048 })
+                if info_r and info_r.ok and info_r.status == 200 and info_r.body and espminer_from_system_info(ip, info_r.body) then
+                    add_unique(set, ips, ip)
+                end
             end
         end
     end
@@ -241,7 +310,13 @@ local function matches_filter(d)
         if not ok then return false end
     end
     local family_filter = a.family
-    if type(family_filter) == "string" and family_filter ~= "" and d.family ~= family_filter then return false end
+    if type(family_filter) == "string" and family_filter ~= "" then
+        if family_filter == "axeos" then
+            if not is_any_axeos(d) then return false end
+        elseif d.family ~= family_filter then
+            return false
+        end
+    end
     local class_filter = first_non_nil(a.hash_class, a.power_class)
     if type(class_filter) == "string" and class_filter ~= "" and d.hash_class ~= class_filter then return false end
     return true
@@ -258,19 +333,28 @@ local function add_field(fields, key, value)
     if value ~= nil then fields[#fields + 1] = { key, value } end
 end
 
-local function build_mining_body(d, errors)
+local function build_mining_body(d, errors, current_body)
     local fields = {}
     local freq = tonumber(first_non_nil(a.freq, a.asicFreqReq))
     local vcore = tonumber(first_non_nil(a.vcore, a.asicVcoreReq))
-    if freq and (freq < 400 or freq > 600) then errors[#errors + 1] = "freq out of range 400..600" end
-    if vcore and (vcore < 1100 or vcore > 1400) then errors[#errors + 1] = "vcore out of range 1100..1400" end
+    if is_bitaxe(d) then
+        if freq and freq < 1 then errors[#errors + 1] = "frequency must be positive" end
+        if vcore and vcore < 1 then errors[#errors + 1] = "coreVoltage must be positive" end
+    else
+        if freq and (freq < 400 or freq > 600) then errors[#errors + 1] = "freq out of range 400..600" end
+        if vcore and (vcore < 1100 or vcore > 1400) then errors[#errors + 1] = "vcore out of range 1100..1400" end
+    end
 
     if freq or vcore then
-        if d.family == "axeos" then
+        if is_nm_axeos(d) then
             if freq then add_field(fields, "asicFreqReq", math.floor(freq)) end
             if vcore then add_field(fields, "asicVcoreReq", math.floor(vcore)) end
+        elseif is_bitaxe(d) then
+            if freq then add_field(fields, "frequency", math.floor(freq)) end
+            if vcore then add_field(fields, "coreVoltage", math.floor(vcore)) end
+            add_field(fields, "overclockEnabled", 1)
         else
-            errors[#errors + 1] = "ASIC freq/vcore is only supported on AxeOS models"
+            errors[#errors + 1] = "ASIC freq/vcore is only supported on AxeOS/Bitaxe models"
         end
     end
 
@@ -300,13 +384,34 @@ local function build_mining_body(d, errors)
             add_field(fields, "SecondaryPool", secondary_pool)
             add_field(fields, "SecondaryAddress", secondary_address)
             add_field(fields, "SecondaryPassword", secondary_password)
-        elseif d.family == "axeos" then
+        elseif is_nm_axeos(d) then
             local stratum = {}
-            local primary = json_object({ { "url", primary_pool }, { "user", primary_address }, { "pwd", primary_password } })
-            local fallback = json_object({ { "url", secondary_pool }, { "user", secondary_address }, { "pwd", secondary_password } })
-            if primary ~= "{}" then stratum[#stratum + 1] = { "primary", raw_json(primary) } end
-            if fallback ~= "{}" then stratum[#stratum + 1] = { "fallback", raw_json(fallback) } end
+            local wants_primary = primary_pool ~= nil or primary_address ~= nil or primary_password ~= nil
+            local wants_fallback = secondary_pool ~= nil or secondary_address ~= nil or secondary_password ~= nil
+            if wants_primary then
+                local primary = json_object({
+                    { "url", first_non_nil(primary_pool, current_stratum_value(current_body, "primary", "url")) },
+                    { "user", first_non_nil(primary_address, current_stratum_value(current_body, "primary", "user")) },
+                    { "pwd", first_non_nil(primary_password, current_stratum_value(current_body, "primary", "pwd")) },
+                })
+                stratum[#stratum + 1] = { "primary", raw_json(primary) }
+            end
+            if wants_fallback then
+                local fallback = json_object({
+                    { "url", first_non_nil(secondary_pool, current_stratum_value(current_body, "fallback", "url")) },
+                    { "user", first_non_nil(secondary_address, current_stratum_value(current_body, "fallback", "user")) },
+                    { "pwd", first_non_nil(secondary_password, current_stratum_value(current_body, "fallback", "pwd")) },
+                })
+                stratum[#stratum + 1] = { "fallback", raw_json(fallback) }
+            end
             if #stratum > 0 then add_field(fields, "stratum", raw_json(json_object(stratum))) end
+        elseif is_bitaxe(d) then
+            add_field(fields, "stratumURL", primary_pool)
+            add_field(fields, "stratumUser", primary_address)
+            add_field(fields, "stratumPassword", primary_password)
+            add_field(fields, "fallbackStratumURL", secondary_pool)
+            add_field(fields, "fallbackStratumUser", secondary_address)
+            add_field(fields, "fallbackStratumPassword", secondary_password)
         else
             errors[#errors + 1] = "unknown model family for mining settings"
         end
@@ -329,7 +434,7 @@ local function build_preference_body(d, errors)
         add_field(fields, "RotateScreen", rotate)
         add_field(fields, "LedEnable", led)
         add_field(fields, "ScreenSaver", saver)
-    elseif d.family == "axeos" then
+    elseif is_nm_axeos(d) then
         add_field(fields, "Brightness", brightness and math.floor(brightness) or nil)
         if led ~= nil then add_field(fields, "ledIndicator", led) end
         if rotate ~= nil then
@@ -352,6 +457,22 @@ local function build_preference_body(d, errors)
         add_field(fields, "screenFlip", first_non_nil(a.screen_flip, a.screenFlip))
         add_field(fields, "screenAutoRoll", first_non_nil(a.screen_auto_roll, a.screenAutoRoll))
         add_field(fields, "screensaverMode", first_non_nil(a.screensaver_mode, a.screensaverMode))
+    elseif is_bitaxe(d) then
+        if brightness ~= nil or led ~= nil then
+            errors[#errors + 1] = "Bitaxe ESP-Miner OpenAPI does not expose Brightness or LedEnable"
+        end
+        if rotate ~= nil then add_field(fields, "rotation", tonumber(rotate) or rotate) end
+        if saver ~= nil then
+            local seconds = parse_duration_seconds(saver)
+            if seconds == nil then
+                errors[#errors + 1] = "Bitaxe ScreenSaver must be minutes/seconds, never/off, or a duration like 5m"
+            elseif seconds <= 0 then
+                add_field(fields, "displayTimeout", -1)
+            else
+                add_field(fields, "displayTimeout", math.max(1, math.floor((seconds + 59) / 60)))
+            end
+        end
+        add_field(fields, "invertscreen", first_non_nil(a.invert_screen, a.invertscreen))
     end
 
     if #fields == 0 then return nil end
@@ -370,20 +491,31 @@ local function build_market_body(d)
         add_field(fields, "WatchCoins", watch_coins)
         add_field(fields, "KlineRotate", kline_rotate)
         add_field(fields, "PricePageMode", price_page_mode)
-    elseif d.family == "axeos" then
+    elseif is_nm_axeos(d) then
         add_field(fields, "mainprice", main_coin)
         add_field(fields, "coinWatchlist", watch_coins)
+    elseif is_bitaxe(d) then
+        if main_coin ~= nil or watch_coins ~= nil or kline_rotate ~= nil or price_page_mode ~= nil then
+            return nil, "Bitaxe ESP-Miner OpenAPI does not expose market display settings"
+        end
     end
 
     if #fields == 0 then return nil end
     return json_object(fields)
 end
 
-local function request_json(ip, path, body)
+local function request_json(ip, path, body, get_path)
     local url = "http://" .. ip .. path
-    local get_r = http.get(url, { timeout_ms = timeout, max_body_bytes = 4096 })
+    local get_r = http.get("http://" .. ip .. (get_path or path), { timeout_ms = timeout, max_body_bytes = 4096 })
     if not (get_r and get_r.ok and get_r.status >= 200 and get_r.status < 300) then
         return false, string.format("GET %s failed status=%s err=%s", path, tostring(get_r and get_r.status), tostring(get_r and get_r.error))
+    end
+    if type(body) == "function" then
+        local build_err
+        body, build_err = body(get_r.body or "")
+        if not body then
+            return false, build_err or "failed to build PATCH body from current settings"
+        end
     end
     local r = http.request{
         url = url,
@@ -447,10 +579,30 @@ for _, d in ipairs(devices) do
     local jobs = {}
     local mining = build_mining_body(d, errors)
     local preference = build_preference_body(d, errors)
-    local market = build_market_body(d)
-    if mining then jobs[#jobs + 1] = { name = "mining", path = "/api/setting/mining", body = mining } end
-    if preference then jobs[#jobs + 1] = { name = "preference", path = "/api/setting/preference", body = preference } end
+    local market, market_err = build_market_body(d)
+    if mining then
+        jobs[#jobs + 1] = {
+            name = "mining",
+            path = is_bitaxe(d) and "/api/system" or "/api/setting/mining",
+            get_path = is_bitaxe(d) and "/api/system/info" or nil,
+            body = function(current_body)
+                local job_errors = {}
+                local body = build_mining_body(d, job_errors, current_body)
+                if #job_errors > 0 then return nil, table.concat(job_errors, "; ") end
+                return body
+            end,
+        }
+    end
+    if preference then
+        jobs[#jobs + 1] = {
+            name = "preference",
+            path = is_bitaxe(d) and "/api/system" or "/api/setting/preference",
+            get_path = is_bitaxe(d) and "/api/system/info" or nil,
+            body = preference,
+        }
+    end
     if market then jobs[#jobs + 1] = { name = "market", path = "/api/setting/market", body = market } end
+    if market_err then errors[#errors + 1] = market_err end
 
     if #errors > 0 then
         failed = failed + 1
@@ -463,7 +615,7 @@ for _, d in ipairs(devices) do
     else
         local ok_device = true
         for _, job in ipairs(jobs) do
-            local ok, msg = request_json(d.ip, job.path, job.body)
+            local ok, msg = request_json(d.ip, job.path, job.body, job.get_path)
             print(string.format("RESULT: ip=%s model=%s family=%s class=%s endpoint=%s ok=%s %s",
                 d.ip, d.model, d.family, d.hash_class, job.name, tostring(ok), msg))
             if not ok then ok_device = false end

@@ -23,6 +23,7 @@ config HTTP_REUSE_MAX_POOL
     default 6 if LWIP_MAX_SOCKETS < 12
     default 10 if LWIP_MAX_SOCKETS < 20
     default 12 if LWIP_MAX_SOCKETS < 32
+    default 12
     help
         Upper bound on the number of HTTP clients kept in the pool after
         requests complete. When the pool is full, the least-recently-used

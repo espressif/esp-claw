@@ -1,13 +1,15 @@
 --[[
-nmminer_scan : LAN discovery for NMMiner / NMAxe / NMAxeGamma / NMQAxe++.
+nmminer_scan : LAN discovery for NM miners and Bitaxe ESP-Miner / AxeOS devices.
 
 Two operating modes:
 
   A) Fast seeded mode  (args.seed_ips supplied)
      1. GET http://<seed>/alive on each seed (any one known NMMiner IP).
      2. Union+dedupe the returned IP lists.
-     3. GET http://<ip>/probe on every unique IP.
-     4. Print a compact summary table.
+      3. Try GET http://<ip>/probe first for NM devices.
+      4. If /probe is not NM-compatible, try GET http://<ip>/api/system/info
+          for Bitaxe ESP-Miner / AxeOS devices.
+      5. Print a compact summary table, NM-family devices first.
 
   B) Auto subnet mode  (args.seed_ips omitted / empty)
      1. Read this device's own STA IP (system.ip()).
@@ -17,7 +19,7 @@ Two operating modes:
      4. If /alive sweep yields no list, fall back to a direct /probe sweep
         of the same /24 (slower; useful when no live NMMiner is reachable
         but a single device is up).
-     5. Probe + summarize as in mode A.
+    5. Identify + summarize as in mode A.
 
 Args (global `args`):
   seed_ips              : table[string]  optional - explicit seeds (mode A)
@@ -89,17 +91,27 @@ local function fmt_hr(hr)
     return string.format("%d H/s", hr)
 end
 
-local function family_for_model(model)
+local function family_for_probe_model(model)
     local lower = string.lower(model or "")
     if lower:find("nmminer", 1, true) then return "nmminer" end
-    if lower:find("nmaxe", 1, true) or lower:find("nmqaxe", 1, true) or lower:find("axe", 1, true) then
-        return "axeos"
+    if lower:find("nmaxe", 1, true) or lower:find("nmqaxe", 1, true) or lower:find("nmaaxe", 1, true) then
+        return "nm_axeos"
+    end
+    if lower:find("bitaxe", 1, true) or lower:find("axe", 1, true) then
+        return "bitaxe"
     end
     return "unknown"
 end
 
 local function hash_class(hr)
     return (tonumber(hr) or 0) >= 1000000000 and "high" or "low"
+end
+
+local function priority_for_family(family)
+    if family == "nmminer" then return 1 end
+    if family == "nm_axeos" then return 2 end
+    if family == "bitaxe" then return 3 end
+    return 9
 end
 
 -- Dedupe set helper.
@@ -117,6 +129,62 @@ local function probe_is_nmminer(body)
     local ver   = jget_string(body, "ver")
     local hr    = jget_number(body, "hr")
     if model and ver and hr then return model, ver, hr end
+    return nil
+end
+
+local function espminer_from_system_info(ip, body)
+    if not body then return nil end
+    local axe_ver = jget_string(body, "axeOSVersion")
+    local version = jget_string(body, "version")
+    local asic = jget_string(body, "ASICModel")
+    local board = jget_string(body, "boardVersion")
+    local hostname = jget_string(body, "hostname") or ""
+    local hash_gh = jget_number(body, "hashRate") or jget_number(body, "hashRate_1m") or 0
+    if not (axe_ver or asic or board) then return nil end
+    local model = board or (asic and ("Bitaxe-" .. asic)) or "Bitaxe"
+    return {
+        ip       = ip,
+        model    = model,
+        hostname = hostname,
+        ver      = axe_ver or version or "?",
+        hr       = hash_gh * 1000000000,
+        family   = "bitaxe",
+        class    = hash_class(hash_gh * 1000000000),
+        sw       = nil,
+        sh       = nil,
+        sbd      = jget_number(body, "bestSessionDiff"),
+        ebd      = jget_number(body, "bestDiff"),
+        ut       = jget_number(body, "uptimeSeconds"),
+    }
+end
+
+local function identify_device(ip)
+    local probe_r = http.get(string.format("http://%s/probe", ip), { timeout_ms = probe_to, max_body_bytes = 2048 })
+    if probe_r and probe_r.ok and probe_r.status == 200 and probe_r.body then
+        local model, ver, hr = probe_is_nmminer(probe_r.body)
+        if model then
+            return {
+                ip       = ip,
+                model    = model,
+                hostname = jget_string(probe_r.body, "hostname") or "",
+                ver      = ver,
+                hr       = hr,
+                family   = family_for_probe_model(model),
+                class    = hash_class(hr),
+                sw       = jget_number(probe_r.body, "sw"),
+                sh       = jget_number(probe_r.body, "sh"),
+                sbd      = jget_number(probe_r.body, "sbd"),
+                ebd      = jget_number(probe_r.body, "ebd"),
+                ut       = jget_number(probe_r.body, "ut"),
+            }
+        end
+    end
+
+    local info_r = http.get(string.format("http://%s/api/system/info", ip),
+                            { timeout_ms = probe_to, max_body_bytes = 4096 })
+    if info_r and info_r.ok and info_r.status == 200 and info_r.body then
+        return espminer_from_system_info(ip, info_r.body)
+    end
     return nil
 end
 
@@ -181,7 +249,7 @@ else
         end
     end
 
-    -- Pass 2: if /alive sweep failed, fall back to a direct /probe sweep.
+    -- Pass 2: if /alive sweep failed, fall back to direct NM /probe, then Bitaxe /api/system/info.
     if not alive_hit_ip then
         print(string.format("[scan] no /alive responder found in %d host(s); falling back to /probe sweep",
               sweep_seen))
@@ -192,10 +260,17 @@ else
                                    { timeout_ms = subnet_probe_to, max_body_bytes = 2048 })
                 if r and r.ok and r.status == 200 and r.body and probe_is_nmminer(r.body) then
                     add_unique(set, candidates, ip)
+                else
+                    local info_r = http.get("http://" .. ip .. "/api/system/info",
+                                            { timeout_ms = subnet_probe_to, max_body_bytes = 2048 })
+                    if info_r and info_r.ok and info_r.status == 200 and info_r.body and
+                        espminer_from_system_info(ip, info_r.body) then
+                        add_unique(set, candidates, ip)
+                    end
                 end
             end
         end
-        print(string.format("[scan] /probe fallback found %d candidate(s)", #candidates))
+        print(string.format("[scan] fallback found %d candidate(s)", #candidates))
     end
     seed_count_for_log = 0
 end
@@ -211,46 +286,26 @@ print(string.format("[scan] %s union: %d unique IP(s) from %d seed(s)",
       #candidates, seed_count_for_log))
 
 -- ======================================================================
--- Step 3: probe each IP, classify NMMiner-compatible.
+-- Step 3: identify each IP, classify NM-compatible and Bitaxe ESP-Miner devices.
 -- ======================================================================
 local devices = {}        -- list of probed-and-confirmed devices
 local skipped = 0         -- non-NM responders / timeouts
 
 for _, ip in ipairs(candidates) do
-    local url = string.format("http://%s/probe", ip)
-    local r = http.get(url, { timeout_ms = probe_to, max_body_bytes = 2048 })
-    if r and r.ok and r.status == 200 and r.body then
-        local body = r.body
-        local model, ver, hr = probe_is_nmminer(body)
-        if model then
-            if model_filter == "" or model == model_filter then
-                devices[#devices + 1] = {
-                    ip       = ip,
-                    model    = model,
-                    hostname = jget_string(body, "hostname") or "",
-                    ver      = ver,
-                    hr       = hr,
-                    family   = family_for_model(model),
-                    class    = hash_class(hr),
-                    sw       = jget_number(body, "sw"),
-                    sh       = jget_number(body, "sh"),
-                    sbd      = jget_number(body, "sbd"),
-                    ebd      = jget_number(body, "ebd"),
-                    ut       = jget_number(body, "ut"),
-                }
-            else
-                skipped = skipped + 1
-            end
-        else
-            skipped = skipped + 1
-        end
+    local device = identify_device(ip)
+    if device and (model_filter == "" or device.model == model_filter) then
+        devices[#devices + 1] = device
     else
         skipped = skipped + 1
     end
 end
 
--- Sort descending by hashrate so the user sees the biggest first.
-table.sort(devices, function(a, b) return (a.hr or 0) > (b.hr or 0) end)
+-- Sort NM-family first, then Bitaxe ESP-Miner devices, then by hashrate.
+table.sort(devices, function(a, b)
+    local ap, bp = priority_for_family(a.family), priority_for_family(b.family)
+    if ap ~= bp then return ap < bp end
+    return (a.hr or 0) > (b.hr or 0)
+end)
 
 -- ======================================================================
 -- Step 4: print compact summary.
