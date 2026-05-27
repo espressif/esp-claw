@@ -5,6 +5,7 @@
  */
 #include "display_dirty.h"
 
+#include <stddef.h>
 #include "esp_log.h"
 
 static const char *TAG = "display_dirty";

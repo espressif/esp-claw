@@ -1971,7 +1971,8 @@ static esp_err_t claw_event_router_process_event(const claw_event_t *event,
 
         for (size_t j = 0; j < rule->action_count; j++) {
             rule_err = claw_event_router_execute_action(rule, &rule->actions[j], event, ctx, &local);
-            ESP_LOG_LEVEL(rule_err == ESP_OK ? ESP_LOG_DEBUG : ESP_LOG_WARN,
+            esp_log_level_t _log_lvl = (rule_err == ESP_OK) ? ESP_LOG_DEBUG : ESP_LOG_WARN;
+            ESP_LOG_LEVEL(_log_lvl,
                           TAG,
                           "event=%s rule=%s action=%s done err=%s",
                           event->event_id,

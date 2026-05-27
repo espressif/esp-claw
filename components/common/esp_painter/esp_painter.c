@@ -257,7 +257,7 @@ static esp_err_t esp_painter_draw_pixel(esp_painter_handle_t handle, uint8_t *bu
 #endif
 
     if (using_ppa) {
-        ESP_LOGD(TAG, "Drawing pixel at (%d,%d) with color 0x%04" PRIx32, x, y, color_value);
+        ESP_LOGD(TAG, "Drawing pixel at (%d,%d) with color 0x%04" PRIx32, x, y, (uint32_t)color_value);
 
         uint32_t offset = (y * painter->text_canvas.width + x) * 2;
         if (offset + 2 > buffer_size) {

@@ -95,16 +95,28 @@ devices:
       - name: spi_display
 
   - name: lcd_touch
-    chip: ft6336
-    type: custom
+    chip: ft5x06
+    type: lcd_touch
+    sub_type: i2c
     version: default
-    init_skip: true
+    dependencies:
+      espressif/esp_lcd_touch_ft5x06: "^1.0.0"
     config:
-      i2c_addr: 0x38
-      x_max: 320
-      y_max: 240
+      io_i2c_config:
+        lcd_cmd_bits: 8
+        scl_speed_hz: 400000
+      touch_config:
+        x_max: 320
+        y_max: 240
+        rst_gpio_num: -1
+        int_gpio_num: -1
+        flags:
+          swap_xy: true    # 90° landscape rotation: swap X/Y axes
+          mirror_x: false
+          mirror_y: true   # 90° landscape rotation: mirror Y
     peripherals:
       - name: i2c_master
+        i2c_addr: [0x70]   # FT6336 8-bit I2C addr (7-bit 0x38 << 1)
 
   - name: fs_sdcard
     type: fs_fat

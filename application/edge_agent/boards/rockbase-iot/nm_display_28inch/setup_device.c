@@ -10,6 +10,7 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_st7789.h"
+#include "esp_lcd_touch_ft5x06.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -24,6 +25,12 @@ static const char *TAG = "nm_display_28";
 #define AXP2101_REG_DCDC_EN     0x80
 #define AXP2101_REG_LDO_EN      0x90
 #define AXP2101_REG_DLDO2_EN    0x91
+
+/* Power-path / charger registers */
+#define AXP2101_REG_VBUSLIM     0x16   /* VBUS input current limit (REG 0x16, bits[2:0]) */
+                                       /* NOTE: 0x15 is the VBUS *voltage* threshold – different register! */
+#define AXP2101_REG_CHG_CTRL1   0x18   /* Charger control 1 */
+#define AXP2101_REG_BAT_DET     0x68   /* Battery detection control */
 
 #define AXP2101_REG_DC2_VOL     0x83
 #define AXP2101_REG_DC3_VOL     0x84
@@ -47,6 +54,16 @@ static const char *TAG = "nm_display_28";
 #define AXP2101_BLDO1_1500MV    0x0A
 #define AXP2101_BLDO2_2800MV    0x17
 #define AXP2101_CPUSLDO_1000MV  0x0A
+
+/* VBUS input current limit – bits[2:0] of REG_VBUSLIM:
+ *   001 = 500 mA (chip default – too low for USB-only operation)
+ *   010 = 900 mA
+ *   011 = 1000 mA
+ *   100 = 1500 mA  ← use this for USB-C / high-power USB 2.0
+ *   101 = 2000 mA
+ *   111 = no limit
+ */
+#define AXP2101_VBUS_1500MA     0x04
 
 typedef struct {
     uint8_t reg;
@@ -106,6 +123,28 @@ static esp_err_t axp2101_init(i2c_master_bus_handle_t bus)
         return ret;
     }
 
+    /* -----------------------------------------------------------------------
+     * Step 0: Configure the power path BEFORE enabling any output rail.
+     *
+     * Without a battery the AXP2101 supplies VSYS entirely from VBUS through
+     * its internal pass-FET.  The chip's default VBUS current limit is 500 mA
+     * (IBUSLIM bits[2:0] = 001 in REG 0x16).  At full system load – WiFi TX
+     * (~350 mA peak) + OV5640 DVP + ST7789 + ES8311 + all LDOs – the demand
+     * easily exceeds 500 mA, causing VSYS to droop below the under-voltage
+     * lockout threshold, which makes the PMIC cut all outputs and reset the
+     * board.  With a battery this is invisible because the battery buffers
+     * current spikes.  Raising the limit to 1500 mA (USB-C / high-power
+     * USB 2.0) removes this failure mode.
+     * --------------------------------------------------------------------- */
+    const axp2101_update_t power_path_updates[] = {
+        {AXP2101_REG_VBUSLIM, 0x07, AXP2101_VBUS_1500MA, "VBUS limit 1500 mA"},
+    };
+    ret = axp2101_apply_updates(dev, power_path_updates, sizeof(power_path_updates) / sizeof(power_path_updates[0]));
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "AXP2101 power-path config failed");
+        goto cleanup;
+    }
+
     const axp2101_update_t voltage_updates[] = {
         {AXP2101_REG_DC2_VOL,     0x7F, AXP2101_DC2_1000MV,     "DC2 1000 mV"},
         {AXP2101_REG_DC3_VOL,     0x7F, AXP2101_DC3_3300MV,     "DC3 3300 mV"},
@@ -128,16 +167,21 @@ static esp_err_t axp2101_init(i2c_master_bus_handle_t bus)
     };
 
     ret = axp2101_apply_updates(dev, voltage_updates, sizeof(voltage_updates) / sizeof(voltage_updates[0]));
-    if (ret == ESP_OK) {
-        ret = axp2101_apply_updates(dev, enable_updates, sizeof(enable_updates) / sizeof(enable_updates[0]));
+    if (ret != ESP_OK) {
+        goto cleanup;
     }
+    ret = axp2101_apply_updates(dev, enable_updates, sizeof(enable_updates) / sizeof(enable_updates[0]));
+    if (ret != ESP_OK) {
+        goto cleanup;
+    }
+    ESP_LOGI(TAG, "AXP2101 power rails enabled");
 
-    esp_err_t rm_ret = i2c_master_bus_rm_device(dev);
-    if (ret == ESP_OK && rm_ret != ESP_OK) {
-        ret = rm_ret;
-    }
-    if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "AXP2101 power rails enabled");
+cleanup:
+    {
+        esp_err_t rm_ret = i2c_master_bus_rm_device(dev);
+        if (ret == ESP_OK) {
+            ret = rm_ret;
+        }
     }
     return ret;
 }
@@ -196,5 +240,29 @@ esp_err_t lcd_panel_factory_entry_t(esp_lcd_panel_io_handle_t io,
         ESP_LOGE(TAG, "Failed to create ST7789 panel: %s", esp_err_to_name(ret));
         return ret;
     }
+    return ESP_OK;
+}
+
+/* ---------------------------------------------------------------------------
+ * lcd_touch_factory_entry_t
+ *
+ * Called by esp_board_manager when initializing the 'lcd_touch' device.
+ * FT6336 is register-compatible with the FT5x06 family; the same
+ * esp_lcd_touch_ft5x06 driver works without modification.
+ * I2C bus and panel IO handle are already configured by the board manager
+ * (SDA=IO8, SCL=IO7, addr=0x38, 400 kHz).
+ * Coordinate transforms (swap_xy + mirror_y) for 90° landscape rotation
+ * are already embedded in the touch_config passed from board_devices.yaml.
+ * --------------------------------------------------------------------------- */
+esp_err_t lcd_touch_factory_entry_t(esp_lcd_panel_io_handle_t io,
+                                    const esp_lcd_touch_config_t *touch_dev_config,
+                                    esp_lcd_touch_handle_t *ret_touch)
+{
+    esp_err_t ret = esp_lcd_touch_new_i2c_ft5x06(io, touch_dev_config, ret_touch);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create FT6336/FT5x06 touch driver: %s", esp_err_to_name(ret));
+        return ret;
+    }
+    ESP_LOGI(TAG, "FT6336 touch driver ready (swap_xy=1, mirror_y=1 for 90° landscape)");
     return ESP_OK;
 }

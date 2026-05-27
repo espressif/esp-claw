@@ -12,12 +12,19 @@
 #include <string.h>
 
 #include "cap_lua.h"
-#include "driver/touch_sens.h"
-#include "esp_check.h"
-#include "esp_log.h"
 #include "lauxlib.h"
 #include "sdkconfig.h"
 #include "soc/soc_caps.h"
+
+/* esp_driver_touch_sens does not support ESP32-S2/S3 (touch hw version 2) in
+ * IDF 5.x -- hw_ver2/include/driver/touch_version_types.h explicitly errors.
+ * Only compile the full implementation for touch hw version 3 chips; all
+ * others get minimal stubs so the Lua module loads without crashing. */
+#if SOC_TOUCH_SENSOR_VERSION == 3
+
+#include "driver/touch_sens.h"
+#include "esp_check.h"
+#include "esp_log.h"
 #include "soc/touch_sensor_channel.h"
 
 #define LUA_DRIVER_TOUCH_METATABLE        "touch.device"
@@ -571,3 +578,18 @@ esp_err_t lua_driver_touch_register(void)
 {
     return cap_lua_register_module("touch", luaopen_touch);
 }
+
+#else  /* SOC_TOUCH_SENSOR_VERSION != 3 */
+
+int luaopen_touch(lua_State *L)
+{
+    lua_newtable(L);
+    return 1;
+}
+
+esp_err_t lua_driver_touch_register(void)
+{
+    return cap_lua_register_module("touch", luaopen_touch);
+}
+
+#endif  /* SOC_TOUCH_SENSOR_VERSION */

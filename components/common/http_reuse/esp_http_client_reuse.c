@@ -29,6 +29,20 @@ esp_http_client_handle_t __real_esp_http_client_init(const esp_http_client_confi
 esp_err_t                __real_esp_http_client_cleanup(esp_http_client_handle_t client);
 esp_err_t                __real_esp_http_client_perform(esp_http_client_handle_t client);
 
+/* IDF < 5.5 does not expose esp_http_client_is_persistent_connection() as a
+ * public API.  HTTP/1.1 connections are persistent by default; if the server
+ * sends "Connection: close" the socket will be refused on the next perform()
+ * and the pool node will be evicted then.  Conservatively returning true here
+ * keeps the reuse-pool working correctly for the common case.
+ * IDF 5.5+ declares this function in esp_http_client.h, so skip the stub.  */
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 5, 0)
+static inline bool esp_http_client_is_persistent_connection(esp_http_client_handle_t client)
+{
+    (void)client;
+    return true;
+}
+#endif
+
 static const char *TAG = "http_reuse";
 
 typedef struct http_reuse_endpoint {
