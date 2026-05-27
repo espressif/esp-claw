@@ -263,6 +263,6 @@ esp_err_t lcd_touch_factory_entry_t(esp_lcd_panel_io_handle_t io,
         ESP_LOGE(TAG, "Failed to create FT6336/FT5x06 touch driver: %s", esp_err_to_name(ret));
         return ret;
     }
-    ESP_LOGI(TAG, "FT6336 touch driver ready (swap_xy=1, mirror_y=1 for 90° landscape)");
+    ESP_LOGI(TAG, "FT6336 touch driver ready (swap_xy=1, mirror_x=1 for 270° CW landscape)");
     return ESP_OK;
 }

@@ -106,14 +106,14 @@ devices:
         lcd_cmd_bits: 8
         scl_speed_hz: 400000
       touch_config:
-        x_max: 320
+        x_max: 239         # raw portrait panel X max (short axis 240-1)
         y_max: 240
         rst_gpio_num: -1
         int_gpio_num: -1
         flags:
-          swap_xy: true    # 90° landscape rotation: swap X/Y axes
-          mirror_x: false
-          mirror_y: true   # 90° landscape rotation: mirror Y
+          swap_xy: true    # 270° CW landscape: swap portrait X/Y → screen axes
+          mirror_x: true   # 270° CW landscape: flip portrait X → screen_y = 239 - x_raw
+          mirror_y: false
     peripherals:
       - name: i2c_master
         i2c_addr: [0x70]   # FT6336 8-bit I2C addr (7-bit 0x38 << 1)
