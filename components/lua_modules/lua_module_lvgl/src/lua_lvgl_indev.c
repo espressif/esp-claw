@@ -65,6 +65,17 @@ static void lua_lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
     }
+
+    /* Debug: print only on state transitions to avoid flooding the console */
+    static lv_indev_state_t s_last_state = LV_INDEV_STATE_RELEASED;
+    if (data->state != s_last_state) {
+        if (data->state == LV_INDEV_STATE_PRESSED) {
+            ESP_LOGI(TAG, "LVGL touch PRESSED x=%d y=%d", (int)data->point.x, (int)data->point.y);
+        } else {
+            ESP_LOGI(TAG, "LVGL touch RELEASED");
+        }
+        s_last_state = data->state;
+    }
 }
 
 /* Attach a pointer indev backed by `touch_handle`. Caller holds the lock.

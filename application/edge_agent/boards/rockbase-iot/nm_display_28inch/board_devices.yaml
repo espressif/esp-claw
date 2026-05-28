@@ -106,14 +106,14 @@ devices:
         lcd_cmd_bits: 8
         scl_speed_hz: 400000
       touch_config:
-        x_max: 239         # raw portrait panel X max (short axis 240-1)
-        y_max: 240
+        x_max: 319         # x_raw (long axis) max, unused (mirror_x=false)
+        y_max: 239         # y_raw (short axis) max, used by mirror_y formula
         rst_gpio_num: -1
         int_gpio_num: -1
         flags:
-          swap_xy: true    # 270° CW landscape: swap portrait X/Y → screen axes
-          mirror_x: true   # 270° CW landscape: flip portrait X → screen_y = 239 - x_raw
-          mirror_y: false
+          swap_xy: false   # x_raw→LVGL_X (long 0..319), y_raw→LVGL_Y (short 0..239)
+          mirror_x: false  # x_raw increases rightward in 270° CW landscape
+          mirror_y: true   # y_raw increases upward; invert → LVGL_Y increases downward
     peripherals:
       - name: i2c_master
         i2c_addr: [0x70]   # FT6336 8-bit I2C addr (7-bit 0x38 << 1)

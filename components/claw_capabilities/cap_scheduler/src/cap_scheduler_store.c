@@ -805,7 +805,9 @@ esp_err_t cap_scheduler_load_items(const char *path, cap_scheduler_item_t *items
     free(buf);
     if (!cJSON_IsArray(root)) {
         cJSON_Delete(root);
-        return ESP_ERR_INVALID_RESPONSE;
+        ESP_LOGW(TAG, "Schedules file %s is not a valid JSON array, resetting to empty schedule", path ? path : "(null)");
+        *out_count = 0;
+        return ESP_OK;
     }
 
     cJSON *node = NULL;
@@ -820,8 +822,9 @@ esp_err_t cap_scheduler_load_items(const char *path, cap_scheduler_item_t *items
         cap_scheduler_parse_item_json(node, &items[count]);
         err = cap_scheduler_validate_item(&items[count]);
         if (err != ESP_OK) {
-            cJSON_Delete(root);
-            return err;
+            ESP_LOGW(TAG, "Skipping invalid schedule entry at index %zu in %s: %s",
+                     count, path ? path : "(null)", esp_err_to_name(err));
+            continue;
         }
         count++;
     }

@@ -27,10 +27,28 @@ static const char *TAG = "nm_display_28";
 #define AXP2101_REG_DLDO2_EN    0x91
 
 /* Power-path / charger registers */
-#define AXP2101_REG_VBUSLIM     0x16   /* VBUS input current limit (REG 0x16, bits[2:0]) */
-                                       /* NOTE: 0x15 is the VBUS *voltage* threshold – different register! */
-#define AXP2101_REG_CHG_CTRL1   0x18   /* Charger control 1 */
-#define AXP2101_REG_BAT_DET     0x68   /* Battery detection control */
+#define AXP2101_REG_VSYS_MIN        0x14   /* REG 0x14 – VSYS minimum system voltage DPM threshold (charger keeps VSYS above this)
+                                            * bits[6:4]: 000=4.1V, 001=4.2V, 010=4.3V, 011=4.4V,
+                                            *            100=4.5V, 101=4.6V, 110=4.7V, 111=4.8V  step 100mV */
+#define AXP2101_REG_VINDPM          0x15   /* REG 0x15 – VBUS input voltage DPM threshold (stop drawing current when VBUS drops below this)
+                                            * bits[3:0]: 0000=3.88V, ... step 80mV ..., 1110=5.00V, 1111=5.08V */
+#define AXP2101_REG_VBUSLIM         0x16   /* REG 0x16 – VBUS input current limit
+                                            * bits[2:0]: 000=100mA, 001=500mA, 010=900mA,
+                                            *            011=1000mA, 100=1500mA, 101=2000mA */
+#define AXP2101_REG_CHG_CTRL1       0x18   /* Charger control 1 */
+#define AXP2101_REG_DCDC_OVP_UVP   0x23   /* REG 0x23 – DC-DC OVP/UVP triggered PMIC shutdown control
+                                            * bit[5]=overvoltage (120%/130%) shutdown enable
+                                            * bit[4]=DC5, bit[3]=DC4, bit[2]=DC3,
+                                            * bit[1]=DC2, bit[0]=DC1  undervoltage (85%) shutdown enable */
+#define AXP2101_REG_FAST_PWRON0     0x28   /* REG 0x28 – fast power-on sequence config 0 (DC4/DC3/DC2/DC1)
+                                            * 2 bits per rail: 00=priority 0 (first), 01=1, 10=2, 11=disable
+                                            * bits[7:6]=DC4, bits[5:4]=DC3, bits[3:2]=DC2, bits[1:0]=DC1 */
+#define AXP2101_REG_FAST_PWRON1     0x29   /* REG 0x29 – fast power-on sequence config 1 (ALDO3/ALDO2/ALDO1/DC5)
+                                            * bits[7:6]=ALDO3, bits[5:4]=ALDO2, bits[3:2]=ALDO1, bits[1:0]=DC5 */
+#define AXP2101_REG_ITERM_CHG       0x63   /* REG 0x63 – charger termination current
+                                            * bit[4]=termination detection enable; bits[3:0]: 0000=0mA,
+                                            *   0001=25mA, ... step 25mA ..., 1000=200mA */
+#define AXP2101_REG_BAT_DET         0x68   /* Battery detection control */
 
 #define AXP2101_REG_DC2_VOL     0x83
 #define AXP2101_REG_DC3_VOL     0x84
@@ -55,15 +73,24 @@ static const char *TAG = "nm_display_28";
 #define AXP2101_BLDO2_2800MV    0x17
 #define AXP2101_CPUSLDO_1000MV  0x0A
 
-/* VBUS input current limit – bits[2:0] of REG_VBUSLIM:
- *   001 = 500 mA (chip default – too low for USB-only operation)
- *   010 = 900 mA
- *   011 = 1000 mA
- *   100 = 1500 mA  ← use this for USB-C / high-power USB 2.0
- *   101 = 2000 mA
- *   111 = no limit
- */
-#define AXP2101_VBUS_1500MA     0x04
+/* REG 0x14 bits[6:4] – VSYS minimum voltage */
+#define AXP2101_VSYS_MIN_4V1        (0b000 << 4)   /* 4.1 V */
+
+/* REG 0x15 bits[3:0] – VBUS input voltage DPM threshold */
+#define AXP2101_VINDPM_3V88         0x00            /* 3.88 V – lowest setting (VBUS voltage DPM effectively disabled) */
+
+/* REG 0x16 bits[2:0] – VBUS input current limit */
+#define AXP2101_VBUS_1500MA         0x04            /* 1500 mA */
+#define AXP2101_VBUS_2000MA         0x05            /* 2000 mA */
+
+/* REG 0x23 – DC-DC OVP/UVP shutdown control */
+#define AXP2101_DCDC_OVP_UVP_OFF    0x00            /* disable all DC-DC OVP/UVP triggered shutdown */
+
+/* REG 0x28 / 0x29 – fast power-on sequence: all 2-bit fields set to 11b = disable */
+#define AXP2101_FAST_PWRON_ALL_DIS  0xFF            /* disable fast power-on sequence for all rails */
+
+/* REG 0x63 bits[3:0] – charger termination current */
+#define AXP2101_ITERM_200MA         0x08            /* 200 mA (~C/10 for a 2000 mAh cell) */
 
 typedef struct {
     uint8_t reg;
@@ -146,6 +173,18 @@ static esp_err_t axp2101_init(i2c_master_bus_handle_t bus)
     }
 
     const axp2101_update_t voltage_updates[] = {
+        /* REG 0x14: VSYS minimum DPM voltage -> 4.1 V (charger keeps VSYS >= 4.1 V during charge) */
+        {AXP2101_REG_VSYS_MIN,      0x70, AXP2101_VSYS_MIN_4V1,       "vsys_min 4.1V"},
+        /* REG 0x28/0x29: disable fast power-on sequence for all rails (firmware controls sequencing via enable_updates) */
+        {AXP2101_REG_FAST_PWRON0,   0xFF, AXP2101_FAST_PWRON_ALL_DIS, "fast_pwron DC4/3/2/1 off"},
+        {AXP2101_REG_FAST_PWRON1,   0xFF, AXP2101_FAST_PWRON_ALL_DIS, "fast_pwron ALDO3/2/1/DC5 off"},
+        /* REG 0x63: charger termination current -> 200 mA (bits[3:0] = 0x8; bit[4] enable is not in this mask) */
+        {AXP2101_REG_ITERM_CHG,     0x0F, AXP2101_ITERM_200MA,        "iterm 200mA"},
+        /* REG 0x23: disable all DC-DC OVP/UVP shutdown triggers (prevents spurious resets when running without a battery) */
+        {AXP2101_REG_DCDC_OVP_UVP,  0xFF, AXP2101_DCDC_OVP_UVP_OFF,  "dcdc ovp/uvp off"},
+        /* REG 0x15: VBUS input voltage DPM threshold -> 3.88 V (lowest setting, no additional VBUS current limiting) */
+        {AXP2101_REG_VINDPM,        0x0F, AXP2101_VINDPM_3V88,        "vindpm 3.88V"},
+        {AXP2101_REG_BLDO1_VOL,   0x1F, AXP2101_BLDO1_1500MV,   "BLDO1 1500 mV"},
         {AXP2101_REG_DC2_VOL,     0x7F, AXP2101_DC2_1000MV,     "DC2 1000 mV"},
         {AXP2101_REG_DC3_VOL,     0x7F, AXP2101_DC3_3300MV,     "DC3 3300 mV"},
         {AXP2101_REG_DC4_VOL,     0x7F, AXP2101_DC4_1000MV,     "DC4 1000 mV"},
@@ -154,7 +193,6 @@ static esp_err_t axp2101_init(i2c_master_bus_handle_t bus)
         {AXP2101_REG_ALDO2_VOL,   0x1F, AXP2101_LDO_3300MV,     "ALDO2 3300 mV"},
         {AXP2101_REG_ALDO3_VOL,   0x1F, AXP2101_LDO_3300MV,     "ALDO3 3300 mV"},
         {AXP2101_REG_ALDO4_VOL,   0x1F, AXP2101_LDO_3300MV,     "ALDO4 3300 mV"},
-        {AXP2101_REG_BLDO1_VOL,   0x1F, AXP2101_BLDO1_1500MV,   "BLDO1 1500 mV"},
         {AXP2101_REG_BLDO2_VOL,   0x1F, AXP2101_BLDO2_2800MV,   "BLDO2 2800 mV"},
         {AXP2101_REG_CPUSLDO_VOL, 0x1F, AXP2101_CPUSLDO_1000MV, "CPUSLDO 1000 mV"},
         {AXP2101_REG_DLDO1_VOL,   0x1F, AXP2101_LDO_3300MV,     "DLDO1 3300 mV"},
@@ -263,6 +301,6 @@ esp_err_t lcd_touch_factory_entry_t(esp_lcd_panel_io_handle_t io,
         ESP_LOGE(TAG, "Failed to create FT6336/FT5x06 touch driver: %s", esp_err_to_name(ret));
         return ret;
     }
-    ESP_LOGI(TAG, "FT6336 touch driver ready (swap_xy=1, mirror_x=1 for 270° CW landscape)");
+    ESP_LOGI(TAG, "FT6336 touch driver ready (swap_xy=0, mirror_y=1, y_max=239 for 270° CW landscape)");
     return ESP_OK;
 }
