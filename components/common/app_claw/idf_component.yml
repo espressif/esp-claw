@@ -268,7 +268,6 @@ dependencies:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True
       - if: $CONFIG{APP_CLAW_LUA_MODULE_LCD_TOUCH} == True
       - if: $CONFIG{ESP_BOARD_DEV_LCD_TOUCH_SUPPORT} == True
-      - if: $CONFIG{ESP_BOARD_DEV_LCD_TOUCH_SUB_I2C_SUPPORT} == True
     path: ../../lua_modules/lua_module_lcd_touch
 
   lua_module_led_strip:

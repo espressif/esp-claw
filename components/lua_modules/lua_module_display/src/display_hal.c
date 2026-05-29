@@ -58,6 +58,8 @@ typedef struct {
     SemaphoreHandle_t display_flush_done;
     uint16_t *submit_swap_buffer;
     size_t submit_swap_buffer_pixels;
+    uint16_t *scale_buffer;
+    size_t scale_buffer_pixels;
 } display_hal_state_t;
 
 static display_hal_state_t s_state;
@@ -80,6 +82,9 @@ static bool display_hal_flush_done_dpi_isr(esp_lcd_panel_handle_t panel,
 static esp_err_t display_hal_register_display_callbacks_locked(void);
 static esp_err_t display_hal_wait_flush_done_locked(TickType_t timeout_ticks);
 static bool display_hal_clip_rect_to_screen_locked(int *x, int *y, int *width, int *height);
+static esp_err_t display_hal_scale_rgb565_bytes(const uint8_t *src, bool src_big_endian,
+                                                int src_w, int src_h,
+                                                int dst_w, int dst_h, uint16_t **dst_out);
 
 static esp_err_t display_hal_checked_rgb565_bytes(int width, int height, size_t *out_bytes)
 {
@@ -112,6 +117,15 @@ static void display_hal_bswap16_into(uint16_t *dst, const uint16_t *src, size_t 
     for (size_t i = 0; i < pixel_count; ++i) {
         dst[i] = __builtin_bswap16(src[i]);
     }
+}
+
+static inline uint16_t display_hal_read_rgb565_byte_pixel(const uint8_t *src, size_t index, bool src_big_endian)
+{
+    const uint8_t *pixel = src + index * 2;
+
+    return src_big_endian ?
+           (uint16_t)(((uint16_t)pixel[0] << 8) | pixel[1]) :
+           (uint16_t)(pixel[0] | ((uint16_t)pixel[1] << 8));
 }
 
 static esp_err_t display_hal_lock(void)
@@ -295,6 +309,9 @@ esp_err_t display_hal_destroy(void)
     heap_caps_free(s_state.submit_swap_buffer);
     s_state.submit_swap_buffer = NULL;
     s_state.submit_swap_buffer_pixels = 0;
+    heap_caps_free(s_state.scale_buffer);
+    s_state.scale_buffer = NULL;
+    s_state.scale_buffer_pixels = 0;
     s_state.display_flush_done = NULL;
 
     /* Keep the HAL mutex alive across destroy/create cycles so concurrent callers cannot block on or acquire a deleted semaphore. */
@@ -1088,6 +1105,52 @@ static esp_err_t display_hal_draw_bitmap_locked(int x, int y, int w, int h, cons
     return display_hal_draw_bitmap_crop_locked(x, y, 0, 0, w, h, w, h, pixels);
 }
 
+static esp_err_t display_hal_draw_bitmap_scaled_rgb565_bytes_locked(int x, int y,
+                                                                    const uint8_t *pixels,
+                                                                    bool src_big_endian,
+                                                                    int src_width, int src_height,
+                                                                    int scale_w, int scale_h)
+{
+    uint16_t *framebuffer = display_hal_get_draw_framebuffer_locked();
+    int dst_offset_x = 0;
+    int dst_offset_y = 0;
+    int clipped_w = scale_w;
+    int clipped_h = scale_h;
+
+    if (!pixels || src_width <= 0 || src_height <= 0 || scale_w <= 0 || scale_h <= 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!display_hal_clip_rect_locked(&x, &y, &clipped_w, &clipped_h, &dst_offset_x, &dst_offset_y)) {
+        return ESP_OK;
+    }
+    if (s_state.frame_active && framebuffer) {
+        if (s_state.flush_in_flight &&
+            s_state.pending_framebuffer_index == (int8_t)s_state.draw_framebuffer_index) {
+            ESP_RETURN_ON_ERROR(
+                display_hal_wait_flush_done_locked(pdMS_TO_TICKS(DISPLAY_HAL_FLUSH_TIMEOUT_MS)),
+                TAG, "wait flush failed");
+        }
+        for (int row = 0; row < clipped_h; ++row) {
+            int src_y = ((dst_offset_y + row) * src_height) / scale_h;
+            uint16_t *dst_row = framebuffer + ((size_t)(y + row) * s_state.width) + x;
+
+            for (int col = 0; col < clipped_w; ++col) {
+                int src_x = ((dst_offset_x + col) * src_width) / scale_w;
+                dst_row[col] = display_hal_read_rgb565_byte_pixel(
+                                   pixels, (size_t)src_y * (size_t)src_width + (size_t)src_x, src_big_endian);
+            }
+        }
+        display_dirty_mark(&s_state.dirty, x, y, clipped_w, clipped_h);
+        return ESP_OK;
+    }
+
+    ESP_RETURN_ON_ERROR(
+        display_hal_scale_rgb565_bytes(pixels, src_big_endian, src_width, src_height, scale_w, scale_h,
+                                       &s_state.scale_buffer),
+        TAG, "scale RGB565 bytes failed");
+    return display_hal_draw_bitmap_locked(x, y, scale_w, scale_h, s_state.scale_buffer);
+}
+
 static esp_err_t display_hal_present_full_locked(void)
 {
     uint16_t *framebuffer = display_hal_get_draw_framebuffer_locked();
@@ -1205,12 +1268,31 @@ static esp_err_t display_hal_scale_rgb565(const uint16_t *src, int src_w, int sr
                                           int dst_w, int dst_h, uint16_t **dst_out)
 {
     uint16_t *dst = NULL;
+    size_t need_pixels;
 
     if (!src || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0 || !dst_out) {
         return ESP_ERR_INVALID_ARG;
     }
-    dst = malloc((size_t)dst_w * (size_t)dst_h * sizeof(uint16_t));
-    ESP_RETURN_ON_FALSE(dst != NULL, ESP_ERR_NO_MEM, TAG, "scale buffer alloc failed");
+
+    need_pixels = (size_t)dst_w * (size_t)dst_h;
+    if (s_state.scale_buffer == NULL || s_state.scale_buffer_pixels < need_pixels) {
+        heap_caps_free(s_state.scale_buffer);
+        s_state.scale_buffer = NULL;
+        s_state.scale_buffer_pixels = 0;
+        dst = (uint16_t *)heap_caps_aligned_alloc(16, need_pixels * sizeof(uint16_t),
+                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (dst == NULL) {
+            /* Fall back to internal heap if PSRAM is exhausted. */
+            dst = (uint16_t *)heap_caps_malloc(need_pixels * sizeof(uint16_t), MALLOC_CAP_8BIT);
+        }
+        ESP_RETURN_ON_FALSE(dst != NULL, ESP_ERR_NO_MEM, TAG,
+                            "scale buffer alloc failed (%u bytes)",
+                            (unsigned)(need_pixels * sizeof(uint16_t)));
+        s_state.scale_buffer = dst;
+        s_state.scale_buffer_pixels = need_pixels;
+    } else {
+        dst = s_state.scale_buffer;
+    }
 
     for (int y = 0; y < dst_h; ++y) {
         int src_y = (y * src_h) / dst_h;
@@ -1219,6 +1301,50 @@ static esp_err_t display_hal_scale_rgb565(const uint16_t *src, int src_w, int sr
         for (int x = 0; x < dst_w; ++x) {
             int src_x = (x * src_w) / dst_w;
             dst_row[x] = src_row[src_x];
+        }
+    }
+
+    *dst_out = dst;
+    return ESP_OK;
+}
+
+static esp_err_t display_hal_scale_rgb565_bytes(const uint8_t *src, bool src_big_endian,
+                                                int src_w, int src_h,
+                                                int dst_w, int dst_h, uint16_t **dst_out)
+{
+    uint16_t *dst = NULL;
+    size_t need_pixels;
+
+    if (!src || src_w <= 0 || src_h <= 0 || dst_w <= 0 || dst_h <= 0 || !dst_out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    need_pixels = (size_t)dst_w * (size_t)dst_h;
+    if (s_state.scale_buffer == NULL || s_state.scale_buffer_pixels < need_pixels) {
+        heap_caps_free(s_state.scale_buffer);
+        s_state.scale_buffer = NULL;
+        s_state.scale_buffer_pixels = 0;
+        dst = (uint16_t *)heap_caps_aligned_alloc(16, need_pixels * sizeof(uint16_t),
+                                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (dst == NULL) {
+            dst = (uint16_t *)heap_caps_malloc(need_pixels * sizeof(uint16_t), MALLOC_CAP_8BIT);
+        }
+        ESP_RETURN_ON_FALSE(dst != NULL, ESP_ERR_NO_MEM, TAG,
+                            "scale buffer alloc failed (%u bytes)",
+                            (unsigned)(need_pixels * sizeof(uint16_t)));
+        s_state.scale_buffer = dst;
+        s_state.scale_buffer_pixels = need_pixels;
+    } else {
+        dst = s_state.scale_buffer;
+    }
+
+    for (int y = 0; y < dst_h; ++y) {
+        int src_y = (y * src_h) / dst_h;
+        uint16_t *dst_row = dst + ((size_t)y * dst_w);
+        for (int x = 0; x < dst_w; ++x) {
+            int src_x = (x * src_w) / dst_w;
+            dst_row[x] = display_hal_read_rgb565_byte_pixel(
+                             src, (size_t)src_y * (size_t)src_w + (size_t)src_x, src_big_endian);
         }
     }
 
@@ -2187,9 +2313,37 @@ esp_err_t display_hal_draw_bitmap_scaled(int x, int y,
         return ESP_ERR_INVALID_ARG;
     }
 
+    if (out_w) {
+        *out_w = scale_w;
+    }
+    if (out_h) {
+        *out_h = scale_h;
+    }
+
+    /* Short-circuit when no scaling is needed; avoids allocating / copying. */
+    if (src_width == scale_w && src_height == scale_h) {
+        return display_hal_draw_bitmap(x, y, src_width, src_height, pixels);
+    }
+
     ret = display_hal_scale_rgb565(pixels, src_width, src_height, scale_w, scale_h, &scaled);
     if (ret == ESP_OK) {
         ret = display_hal_draw_bitmap(x, y, scale_w, scale_h, scaled);
+    }
+    /* scaled is owned by the HAL (reusable cache); do not free here. */
+    return ret;
+}
+
+esp_err_t display_hal_draw_bitmap_scaled_rgb565_bytes(int x, int y,
+                                                      const uint8_t *pixels,
+                                                      bool src_big_endian,
+                                                      int src_width, int src_height,
+                                                      int scale_w, int scale_h,
+                                                      int *out_w, int *out_h)
+{
+    esp_err_t ret = display_hal_lock();
+
+    if (ret != ESP_OK) {
+        return ret;
     }
     if (out_w) {
         *out_w = scale_w;
@@ -2197,6 +2351,18 @@ esp_err_t display_hal_draw_bitmap_scaled(int x, int y,
     if (out_h) {
         *out_h = scale_h;
     }
-    free(scaled);
+    if (!pixels || src_width <= 0 || src_height <= 0 || scale_w <= 0 || scale_h <= 0) {
+        display_hal_unlock();
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    ret = display_hal_ensure_display_locked();
+    if (ret == ESP_OK && !src_big_endian && src_width == scale_w && src_height == scale_h) {
+        ret = display_hal_draw_bitmap_locked(x, y, src_width, src_height, (const uint16_t *)pixels);
+    } else if (ret == ESP_OK) {
+        ret = display_hal_draw_bitmap_scaled_rgb565_bytes_locked(x, y, pixels, src_big_endian,
+                                                                 src_width, src_height, scale_w, scale_h);
+    }
+    display_hal_unlock();
     return ret;
 }

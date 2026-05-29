@@ -126,6 +126,12 @@ esp_err_t display_hal_draw_bitmap_scaled(int x, int y,
                                          int src_width, int src_height,
                                          int scale_w, int scale_h,
                                          int *out_w, int *out_h);
+esp_err_t display_hal_draw_bitmap_scaled_rgb565_bytes(int x, int y,
+                                                      const uint8_t *pixels,
+                                                      bool src_big_endian,
+                                                      int src_width, int src_height,
+                                                      int scale_w, int scale_h,
+                                                      int *out_w, int *out_h);
 
 #ifdef __cplusplus
 }

@@ -289,7 +289,7 @@ esp_err_t lcd_panel_factory_entry_t(esp_lcd_panel_io_handle_t io,
  * esp_lcd_touch_ft5x06 driver works without modification.
  * I2C bus and panel IO handle are already configured by the board manager
  * (SDA=IO8, SCL=IO7, addr=0x38, 400 kHz).
- * Coordinate transforms (swap_xy + mirror_y) for 90° landscape rotation
+ * Coordinate transforms (swap_xy + mirror_y) for landscape rotation
  * are already embedded in the touch_config passed from board_devices.yaml.
  * --------------------------------------------------------------------------- */
 esp_err_t lcd_touch_factory_entry_t(esp_lcd_panel_io_handle_t io,
@@ -301,6 +301,6 @@ esp_err_t lcd_touch_factory_entry_t(esp_lcd_panel_io_handle_t io,
         ESP_LOGE(TAG, "Failed to create FT6336/FT5x06 touch driver: %s", esp_err_to_name(ret));
         return ret;
     }
-    ESP_LOGI(TAG, "FT6336 touch driver ready (swap_xy=0, mirror_y=1, y_max=239 for 270° CW landscape)");
+    ESP_LOGI(TAG, "FT6336 touch driver ready (swap_xy=1, mirror_y=1, x_max=240, y_max=320 for landscape)");
     return ESP_OK;
 }

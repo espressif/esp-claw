@@ -605,6 +605,85 @@ static esp_err_t lua_display_draw_pixels_fit_data(int x, int y, int src_width, i
     return display_hal_draw_bitmap_scaled(x, y, data, src_width, src_height, scale_w, scale_h, out_w, out_h);
 }
 
+static bool lua_display_borrow_rgb565_frame(lua_State *L, int index,
+                                            lua_image_frame_borrow_t *borrow,
+                                            bool *src_big_endian)
+{
+    size_t required_bytes;
+
+    if (borrow == NULL || src_big_endian == NULL) {
+        return false;
+    }
+    if (lua_image_borrow_frame(L, index, borrow) != ESP_OK) {
+        return false;
+    }
+    if (strcmp(borrow->info.pixel_format, "RGBP") == 0) {
+        *src_big_endian = false;
+    } else if (strcmp(borrow->info.pixel_format, "RGBR") == 0) {
+        *src_big_endian = true;
+    } else {
+        return false;
+    }
+    if (borrow->info.width <= 0 || borrow->info.height <= 0 ||
+        (size_t)borrow->info.width > SIZE_MAX / (size_t)borrow->info.height / sizeof(uint16_t)) {
+        return false;
+    }
+    required_bytes = (size_t)borrow->info.width * (size_t)borrow->info.height * sizeof(uint16_t);
+    return borrow->bytes >= required_bytes;
+}
+
+static esp_err_t lua_display_draw_pixels_fit_rgb565_bytes(int x, int y,
+                                                          const lua_image_frame_borrow_t *borrow,
+                                                          bool src_big_endian,
+                                                          int max_w, int max_h,
+                                                          int *out_w, int *out_h)
+{
+    int src_width;
+    int src_height;
+    int scale_w;
+    int scale_h;
+
+    if (borrow == NULL || max_w <= 0 || max_h <= 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    src_width = borrow->info.width;
+    src_height = borrow->info.height;
+    if (src_width <= max_w && src_height <= max_h) {
+        return display_hal_draw_bitmap_scaled_rgb565_bytes(x, y, borrow->data, src_big_endian,
+                                                           src_width, src_height,
+                                                           src_width, src_height,
+                                                           out_w, out_h);
+    }
+
+    double ratio_w = (double)max_w / src_width;
+    double ratio_h = (double)max_h / src_height;
+    double ratio = (ratio_w < ratio_h) ? ratio_w : ratio_h;
+    scale_w = (int)(src_width * ratio);
+    scale_h = (int)(src_height * ratio);
+
+    if (scale_w <= 0) {
+        scale_w = 1;
+    }
+    if (scale_h <= 0) {
+        scale_h = 1;
+    }
+    if (scale_w >= 8) {
+        scale_w = lua_display_align_down(scale_w, 8);
+        if (scale_w == 0) {
+            scale_w = 8;
+        }
+    }
+    if (scale_h >= 8) {
+        scale_h = lua_display_align_down(scale_h, 8);
+        if (scale_h == 0) {
+            scale_h = 8;
+        }
+    }
+    return display_hal_draw_bitmap_scaled_rgb565_bytes(x, y, borrow->data, src_big_endian,
+                                                       src_width, src_height, scale_w, scale_h,
+                                                       out_w, out_h);
+}
+
 static esp_err_t lua_display_copy_rgb565_crop(const uint16_t *src, int src_width, int src_x, int src_y, int crop_w, int crop_h, uint16_t **out)
 {
     uint16_t *crop = NULL;
@@ -629,12 +708,45 @@ static int lua_display_draw_image(lua_State *L)
 {
     int x = lua_display_check_integer_arg(L, 1, "x");
     int y = lua_display_check_integer_arg(L, 2, "y");
+    lua_image_frame_borrow_t borrow = {0};
     lua_image_view_t view = {0};
     lua_display_image_options_t opts = {0};
     const uint16_t *pixels = NULL;
     int out_w = 0;
     int out_h = 0;
-    esp_err_t err = lua_image_require_format(L, 3, LUA_IMAGE_FORMAT_RGB565LE, &view);
+    bool src_big_endian = false;
+    esp_err_t err;
+
+    if (lua_display_borrow_rgb565_frame(L, 3, &borrow, &src_big_endian)) {
+        lua_display_parse_image_options(L, 4, borrow.info.width, borrow.info.height, &opts);
+        if (opts.dst_w <= 0 || opts.dst_h <= 0 || opts.src_w <= 0 || opts.src_h <= 0) {
+            return luaL_error(L, "display draw_image invalid image size");
+        }
+        if (opts.src_x < 0 || opts.src_y < 0 || opts.src_x + opts.src_w > borrow.info.width ||
+            opts.src_y + opts.src_h > borrow.info.height) {
+            return luaL_error(L, "display draw_image source rectangle out of bounds");
+        }
+        if (opts.src_x == 0 && opts.src_y == 0 && opts.src_w == borrow.info.width && opts.src_h == borrow.info.height &&
+            (opts.mode == LUA_DISPLAY_IMAGE_FIT || opts.mode == LUA_DISPLAY_IMAGE_STRETCH)) {
+            if (opts.mode == LUA_DISPLAY_IMAGE_FIT) {
+                err = lua_display_draw_pixels_fit_rgb565_bytes(x, y, &borrow, src_big_endian,
+                                                               opts.dst_w, opts.dst_h, &out_w, &out_h);
+            } else {
+                err = display_hal_draw_bitmap_scaled_rgb565_bytes(x, y, borrow.data, src_big_endian,
+                                                                  borrow.info.width, borrow.info.height,
+                                                                  opts.dst_w, opts.dst_h, &out_w, &out_h);
+            }
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "display draw_image RGB565 fast path failed: %s", esp_err_to_name(err));
+                return luaL_error(L, "display draw_image failed: %s", esp_err_to_name(err));
+            }
+            lua_pushinteger(L, out_w);
+            lua_pushinteger(L, out_h);
+            return 2;
+        }
+    }
+
+    err = lua_image_require_format(L, 3, LUA_IMAGE_FORMAT_RGB565LE, &view);
 
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "display image require RGB565 failed: %s", esp_err_to_name(err));

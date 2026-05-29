@@ -1,3 +1,6 @@
 dependencies:
   espressif/esp_io_expander_tca9554: ^2
+  esp_lcd_touch:
+    version: '*'
+    require: public
   espressif/esp_lcd_touch_ft5x06: ^1.0.0

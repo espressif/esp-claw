@@ -100,20 +100,23 @@ devices:
     sub_type: i2c
     version: default
     dependencies:
+      esp_lcd_touch:
+        version: "*"
+        require: public
       espressif/esp_lcd_touch_ft5x06: "^1.0.0"
     config:
       io_i2c_config:
         lcd_cmd_bits: 8
         scl_speed_hz: 400000
       touch_config:
-        x_max: 319         # x_raw (long axis) max, unused (mirror_x=false)
-        y_max: 239         # y_raw (short axis) max, used by mirror_y formula
+        x_max: 240
+        y_max: 320
         rst_gpio_num: -1
         int_gpio_num: -1
         flags:
-          swap_xy: false   # x_raw→LVGL_X (long 0..319), y_raw→LVGL_Y (short 0..239)
-          mirror_x: false  # x_raw increases rightward in 270° CW landscape
-          mirror_y: true   # y_raw increases upward; invert → LVGL_Y increases downward
+          swap_xy: true
+          mirror_x: false
+          mirror_y: true
     peripherals:
       - name: i2c_master
         i2c_addr: [0x70]   # FT6336 8-bit I2C addr (7-bit 0x38 << 1)
