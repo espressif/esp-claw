@@ -1,0 +1,15 @@
+dependencies:
+  m5stack/m5unified:
+    version: "^0.2.0"
+  cap_rover:
+    path: ../../../components/claw_capabilities/cap_rover
+  cap_unitv:
+    path: ../../../components/claw_capabilities/cap_unitv
+  cap_mcp_server:
+    path: ../../../components/claw_capabilities/cap_mcp_server
+  cap_session_mgr:
+    path: ../../../components/claw_capabilities/cap_session_mgr
+  claw_cap:
+    path: ../../../components/claw_modules/claw_cap
+  claw_event_router:
+    path: ../../../components/claw_modules/claw_event_router

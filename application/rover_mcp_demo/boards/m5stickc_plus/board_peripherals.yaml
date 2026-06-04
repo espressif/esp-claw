@@ -1,0 +1,21 @@
+peripherals:
+  - name: rover_i2c
+    type: i2c
+    port: 0
+    sda: 0
+    scl: 26
+    frequency: 100000
+  - name: vision_uart
+    type: uart
+    port: 1
+    tx: 32
+    rx: 33
+    baud: 115200
+  - name: btn_a
+    type: gpio
+    pin: 37
+    direction: input
+  - name: btn_b
+    type: gpio
+    pin: 39
+    direction: input

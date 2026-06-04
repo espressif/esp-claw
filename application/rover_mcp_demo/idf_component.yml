@@ -1,0 +1,6 @@
+dependencies:
+  idf: ">=5.5.0"
+  m5stack/m5unified:
+    version: "^0.2.0"
+  espressif/mdns: "^1.10.1"
+  espressif/mcp-c-sdk: "^1.0.0"
