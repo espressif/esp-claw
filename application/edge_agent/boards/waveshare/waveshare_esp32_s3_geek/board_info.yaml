@@ -1,0 +1,4 @@
+board: waveshare_esp32_s3_geek
+chip: esp32s3
+description: "Waveshare ESP32-S3-GEEK USB-A stick with 1.14in ST7789 240x135 IPS LCD and TF card slot"
+manufacturer: "Waveshare"

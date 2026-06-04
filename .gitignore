@@ -40,8 +40,6 @@ references/
 .venv/
 
 .codex
-openspec
-AGENTS.md
 
 # Docs
 docs/node_modules

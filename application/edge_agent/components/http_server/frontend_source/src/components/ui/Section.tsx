@@ -34,15 +34,11 @@ export const Section: ParentComponent<SectionProps> = (props) => {
       ? 'flex items-center justify-between gap-3 px-5 py-3 cursor-pointer select-none hover:bg-white/[0.02] transition'
       : 'flex items-center justify-between gap-3 px-4 py-2.5 cursor-pointer select-none text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition text-[0.82rem] font-semibold';
 
-  const bodyClasses = () =>
-    variant() === 'primary' ? 'px-5 pb-5' : 'px-4 pb-4';
+  const bodyClasses = () => (variant() === 'primary' ? 'px-5 pb-5' : 'px-4 pb-4');
 
   const rootClasses = () =>
     variant() === 'primary'
-      ? [
-          'border-b border-[var(--color-border-subtle)] last:border-b-0',
-          props.class ?? '',
-        ]
+      ? ['border-b border-[var(--color-border-subtle)] last:border-b-0', props.class ?? '']
           .filter(Boolean)
           .join(' ')
       : [

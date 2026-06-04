@@ -15,6 +15,7 @@
 #include "claw_cap.h"
 #include "claw_event_publisher.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_mcp_engine.h"
@@ -134,7 +135,7 @@ static esp_mcp_value_t cap_mcp_server_report_state_callback(
     strlcpy(event.message_id, state_name, sizeof(event.message_id));
     strlcpy(event.correlation_id, state_name, sizeof(event.correlation_id));
     event.timestamp_ms = timestamp_ms;
-    event.session_policy = CLAW_EVENT_SESSION_POLICY_TRIGGER;
+    event.session_policy = CLAW_SESSION_POLICY_TRIGGER;
     event.payload_json = payload_json;
 
     if (claw_event_router_publish(&event) != ESP_OK) {
@@ -202,7 +203,7 @@ static esp_mcp_value_t cap_mcp_server_emit_event_callback(
     strlcpy(event.message_id, event_type, sizeof(event.message_id));
     strlcpy(event.correlation_id, event_type, sizeof(event.correlation_id));
     event.timestamp_ms = cap_mcp_server_current_time_ms();
-    event.session_policy = CLAW_EVENT_SESSION_POLICY_TRIGGER;
+    event.session_policy = CLAW_SESSION_POLICY_TRIGGER;
     event.text = (char *)(text ? text : "");
     event.payload_json = (char *)(payload_json && payload_json[0] ? payload_json : "{}");
 
@@ -361,6 +362,14 @@ static esp_err_t cap_mcp_server_descriptor_start(void)
     http_config.ctrl_port = s_config.ctrl_port;
     http_config.max_uri_handlers = 4;
     http_config.stack_size = 8192;
+
+    uint32_t task_caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+#if CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM
+    if (heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) >= http_config.stack_size) {
+        task_caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
+    }
+#endif
+    http_config.task_caps = task_caps;
 
     config.transport = esp_mcp_transport_http_server;
     config.config = &http_config;

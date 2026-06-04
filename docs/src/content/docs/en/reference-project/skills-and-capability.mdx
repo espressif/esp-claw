@@ -3,7 +3,8 @@ title: Skills and Capability
 description: How Skill injection, capability tools, and collaboration work.
 ---
 
-import { LinkCard, Aside } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
 
 ## Capability: tool layer
 
@@ -13,14 +14,13 @@ On every LLM request, `claw_cap_tools_provider` injects only tools from groups t
 
 ## Skills: knowledge layer
 
-A **Skill** is a **Markdown file** describing how to use a feature, workflows, or behavioral contracts. `claw_skill` injects via two context providers:
+A **Skill** is a **Markdown file** describing how to use a feature, workflows, or behavioral contracts. `claw_skill` injects the Skills catalog into `claw_core` through a context provider:
 
 | Provider | Injected content | Always on |
 |----------|------------------|:---------:|
 | `claw_skill_skills_list_provider` | All Skill `name` and `description` values | yes |
-| `claw_skill_active_skill_docs_provider` | Full `SKILL.md` body for activated Skills | only when active |
 
-Before activation the LLM only sees summaries; activation loads the full doc. Activation is per session and persisted on disk across reboots.
+Before activation the LLM only sees summaries. After calling `activate_skill`, the full Skill document is injected into conversation history through the **tool result** instead of the system prompt, keeping the prompt-cache prefix stable. Activation is per session and persisted on disk across reboots.
 
 ## Relationship and differences
 
@@ -31,7 +31,7 @@ Capabilities expose tool signatures without prose guides; Skills carry guides wi
 | **Nature** | Tools (functions) | Knowledge (context) |
 | **Carrier** | C code (`cap_*`) | Markdown files |
 | **Role** | Lets the LLM **do** | Teaches the LLM **how** |
-| **Lifecycle** | Registered at boot; visibility per group | Activate/deactivate on demand; persisted |
+| **Lifecycle** | Registered at boot; visibility per group | Activate on demand; persisted |
 
 They link through `metadata.cap_groups` in `SKILL.md` frontmatter:
 
@@ -49,15 +49,15 @@ They link through `metadata.cap_groups` in `SKILL.md` frontmatter:
 
 **Activating a Skill does two things**:
 
-1. Injects the `SKILL.md` body into the next request (knowledge).
+1. Injects the `SKILL.md` body into conversation history through the `activate_skill` tool result (knowledge).
 2. Makes the `metadata.cap_groups` entries visible for the session (tools).
 
-Deactivating removes both to keep context tight.
+Skill documents are no longer injected into the system prompt. They enter context through tool results, keeping the prompt-cache prefix stable.
 
 <Aside type="tip">
   A capability group without complex usage can skip a Skill and be added to `claw_cap_set_llm_visible_groups` for always-on exposure.
 </Aside>
 
 <LinkCard href="@lang/reference-core/claw-skill" title="claw_skill" description="Skills layout, SKILL.md metadata, and activation plumbing" />
-<LinkCard href="@lang/reference-cap/cap-skill" title="cap_skill" description="Console skill commands and activate_skill / deactivate_skill tools" />
+<LinkCard href="@lang/reference-cap/cap-skill" title="cap_skill" description="activate_skill tool and cache-friendly Skill document injection" />
 <LinkCard href="@lang/reference-project/skills" title="Skills guide" description="Manual and Agent workflows plus file format examples" />

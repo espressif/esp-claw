@@ -7,22 +7,26 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cap_lua.h"
 #include "driver/pulse_cnt.h"
 #include "esp_err.h"
+#include "esp_log.h"
 #include "lauxlib.h"
-#include "soc/soc_caps.h"
 
 #define LUA_DRIVER_PCNT_METATABLE "pcnt.unit"
 #define LUA_DRIVER_PCNT_DEFAULT_LOW_LIMIT (-32768)
 #define LUA_DRIVER_PCNT_DEFAULT_HIGH_LIMIT 32767
 
+static const char *TAG = "lua_driver_pcnt";
+
 typedef struct {
     pcnt_unit_handle_t unit;
-    pcnt_channel_handle_t channels[SOC_PCNT_CHANNELS_PER_UNIT];
-    int channel_count;
+    pcnt_channel_handle_t *channels;
+    size_t channel_count;
+    size_t channel_capacity;
     bool enabled;
     bool running;
 } lua_driver_pcnt_ud_t;
@@ -179,6 +183,24 @@ static void lua_driver_pcnt_resolve_channel_config(lua_State *L,
         lua_driver_pcnt_get_level_action_field(L, table_idx, "low_level", "keep");
 }
 
+static esp_err_t lua_driver_pcnt_append_channel(lua_driver_pcnt_ud_t *ud, pcnt_channel_handle_t channel)
+{
+    if (ud->channel_count == ud->channel_capacity) {
+        size_t new_capacity = ud->channel_capacity == 0 ? 2 : ud->channel_capacity * 2;
+        pcnt_channel_handle_t *new_channels = (pcnt_channel_handle_t *)realloc(ud->channels, new_capacity * sizeof(*new_channels));
+        if (!new_channels) {
+            ESP_LOGE(TAG, "Failed to grow PCNT channel list");
+            return ESP_ERR_NO_MEM;
+        }
+        ud->channels = new_channels;
+        ud->channel_capacity = new_capacity;
+    }
+
+    // Keep created channels so close/gc can release them later.
+    ud->channels[ud->channel_count++] = channel;
+    return ESP_OK;
+}
+
 static esp_err_t lua_driver_pcnt_destroy(lua_driver_pcnt_ud_t *ud)
 {
     esp_err_t first_err = ESP_OK;
@@ -191,6 +213,7 @@ static esp_err_t lua_driver_pcnt_destroy(lua_driver_pcnt_ud_t *ud)
     if (ud->running && ud->unit) {
         err = pcnt_unit_stop(ud->unit);
         if (first_err == ESP_OK && err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to stop PCNT unit during destroy: %s", esp_err_to_name(err));
             first_err = err;
         }
         ud->running = false;
@@ -199,25 +222,31 @@ static esp_err_t lua_driver_pcnt_destroy(lua_driver_pcnt_ud_t *ud)
     if (ud->enabled && ud->unit) {
         err = pcnt_unit_disable(ud->unit);
         if (first_err == ESP_OK && err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to disable PCNT unit during destroy: %s", esp_err_to_name(err));
             first_err = err;
         }
         ud->enabled = false;
     }
 
-    for (int i = 0; i < ud->channel_count; ++i) {
+    for (size_t i = 0; i < ud->channel_count; ++i) {
         if (ud->channels[i]) {
             err = pcnt_del_channel(ud->channels[i]);
             if (first_err == ESP_OK && err != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to delete PCNT channel during destroy: %s", esp_err_to_name(err));
                 first_err = err;
             }
             ud->channels[i] = NULL;
         }
     }
     ud->channel_count = 0;
+    ud->channel_capacity = 0;
+    free(ud->channels);
+    ud->channels = NULL;
 
     if (ud->unit) {
         err = pcnt_del_unit(ud->unit);
         if (first_err == ESP_OK && err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to delete PCNT unit during destroy: %s", esp_err_to_name(err));
             first_err = err;
         }
         ud->unit = NULL;
@@ -236,13 +265,11 @@ static esp_err_t lua_driver_pcnt_add_channel_from_table(lua_State *L,
     if (ud->enabled) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (ud->channel_count >= SOC_PCNT_CHANNELS_PER_UNIT) {
-        return ESP_ERR_NOT_FOUND;
-    }
 
     pcnt_channel_handle_t channel = NULL;
     esp_err_t err = pcnt_new_channel(ud->unit, &resolved_config.chan_config, &channel);
     if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create PCNT channel: %s", esp_err_to_name(err));
         return err;
     }
 
@@ -251,6 +278,7 @@ static esp_err_t lua_driver_pcnt_add_channel_from_table(lua_State *L,
                                        resolved_config.neg_edge);
     if (err != ESP_OK) {
         pcnt_del_channel(channel);
+        ESP_LOGE(TAG, "Failed to set PCNT edge action: %s", esp_err_to_name(err));
         return err;
     }
 
@@ -259,10 +287,15 @@ static esp_err_t lua_driver_pcnt_add_channel_from_table(lua_State *L,
                                         resolved_config.low_level);
     if (err != ESP_OK) {
         pcnt_del_channel(channel);
+        ESP_LOGE(TAG, "Failed to set PCNT level action: %s", esp_err_to_name(err));
         return err;
     }
 
-    ud->channels[ud->channel_count++] = channel;
+    err = lua_driver_pcnt_append_channel(ud, channel);
+    if (err != ESP_OK) {
+        pcnt_del_channel(channel);
+        return err;
+    }
     return ESP_OK;
 }
 
@@ -370,7 +403,12 @@ static int lua_driver_pcnt_new(lua_State *L)
             lua_driver_pcnt_destroy(ud);
             return luaL_error(L, "pcnt add initial channel failed: %s", esp_err_to_name(err));
         }
-        ud->channels[ud->channel_count++] = channel;
+        err = lua_driver_pcnt_append_channel(ud, channel);
+        if (err != ESP_OK) {
+            pcnt_del_channel(channel);
+            lua_driver_pcnt_destroy(ud);
+            return luaL_error(L, "pcnt add initial channel failed: %s", esp_err_to_name(err));
+        }
     }
 
     return 1;

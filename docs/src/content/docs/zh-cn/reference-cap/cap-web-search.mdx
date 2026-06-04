@@ -1,0 +1,63 @@
+---
+title: cap_web_search
+description: 调用外部搜索 API 进行网络搜索的能力。
+---
+
+import LinkToSource from '@/components/LinkToSource.astro';
+import { Aside } from '@astrojs/starlight/components';
+
+源码：<LinkToSource relativePath="components/claw_capabilities/cap_web_search/src/cap_web_search.c" /> ·
+头文件：<LinkToSource relativePath="components/claw_capabilities/cap_web_search/include/cap_web_search.h" /> ·
+Skill：<LinkToSource relativePath="components/claw_capabilities/cap_web_search/skills/cap_web_search/SKILL.md" />
+
+## 概述
+
+`cap_web_search` 向 LLM 暴露 `web_search` 工具，允许 Agent 通过配置的搜索服务提供商执行网络搜索。当前支持 **Tavily** 和 **Brave Search** 两个搜索 API 后端。
+
+## 工具描述
+
+| 工具 ID | 说明 |
+|---------|------|
+| `web_search` | 搜索网络并返回简洁格式化结果 |
+
+### 输入参数
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `query` | string | ✅ | 搜索关键词 |
+
+### 返回值
+
+返回格式化的搜索结果文本，包含标题、摘要和链接。默认返回前 5 条结果。
+
+## 搜索提供商
+
+| 提供商 | NVS 配置项 | 说明 |
+|--------|-----------|------|
+| Tavily | `tavily_api_key` | 优先使用（若配置了 Tavily 和 Brave 则 Tavily 优先） |
+| Brave Search | `brave_api_key` | 备选提供商 |
+
+<Aside type="note">
+  至少需要配置一个搜索 API Key 才能使用 `web_search` 工具。如果两个都未配置，调用将返回错误。
+</Aside>
+
+## 注册与配置
+
+```c
+#include "cap_web_search.h"
+
+cap_web_search_register_group();
+cap_web_search_set_tavily_key("tvly-xxxxx");
+// 或
+cap_web_search_set_brave_key("BSAxxxxx");
+```
+
+API Key 通常在应用层从 NVS 读取后调用相应的 `set_*_key` 函数设置。
+
+## Group 信息
+
+| 属性 | 值 |
+|------|------|
+| Group ID | `cap_web_search` |
+| 默认 LLM 可见 | ✅（`edge_agent` 默认初始可见组） |
+| 工具数量 | 1 |

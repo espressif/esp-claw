@@ -9,6 +9,7 @@
 #include <stddef.h>
 
 #include "app_claw.h"
+#include "app_storage_paths.h"
 
 #ifdef __cplusplus
 extern "C" {

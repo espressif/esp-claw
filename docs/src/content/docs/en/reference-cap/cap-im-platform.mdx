@@ -22,6 +22,7 @@ This means the build dependency is unified, but the existing runtime group ids a
 | `cap_im_qq` | `qq_gateway` | `qq_send_message` | `qq_send_image` | `qq_send_file` |
 | `cap_im_tg` | `tg_gateway` | `tg_send_message` | `tg_send_image` | `tg_send_file` |
 | `cap_im_wechat` | `wechat_gateway` | `wechat_send_message` | `wechat_send_image` | Not supported |
+| `cap_im_local` | `local_gateway` | `local_send_message` | — | — |
 
 ## Component layout
 
@@ -64,7 +65,7 @@ router -> tools: "send_message binding"
 
 ## Startup and visibility
 
-Application startup prepares credentials and attachment settings per enabled platform, then registers the matching runtime groups. The `edge_agent` app binds outbound Event Router channels such as `qq`, `feishu`, `telegram`, and `wechat` to the corresponding send tools.
+Application startup prepares credentials and attachment settings per enabled platform, then registers the matching runtime groups. The `edge_agent` app binds outbound Event Router channels such as `qq`, `feishu`, `telegram`, `wechat`, and `web` to the corresponding send tools.
 
 The unified Skill declares all four IM runtime groups in `cap_groups`. Activating the Skill gives the model the platform-specific tools together with the guidance for choosing the current channel and avoiding duplicate replies.
 
@@ -80,6 +81,7 @@ The unified Skill declares all four IM runtime groups in `cap_groups`. Activatin
 | QQ | QQ Bot WebSocket API | `c2c:<openid>` or `group:<group_openid>` | File delivery depends on QQ platform support; image and generic file paths are separate tool calls. |
 | Telegram | Bot API long polling | Numeric chat id such as `123456789` or `-100...` | Long text is chunked and files are uploaded with multipart streaming. |
 | WeChat | ClawBot polling API | Concrete room id or contact id | Text and image sends are supported; generic non-image file send is not available. |
+| Web (local) | HTTP/WebSocket (Web frontend) | `web` channel | Separate `cap_im_local` component for the built-in IM chat UI on the Web config page; supports text sending. |
 
 ## Telegram as a reference backend
 

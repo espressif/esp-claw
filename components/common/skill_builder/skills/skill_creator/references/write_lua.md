@@ -17,11 +17,10 @@ Rules:
 For Lua authoring, debugging, or hardware control, gather likely needed references before writing code.
 Prefer several consecutive `read_file` tool calls in the same step instead of reading one document, reasoning, then coming back for another.
 
-- Always read `scripts/builtin/lib/arg_schema.md` and  `scripts/builtin/lib/lua_module_delay.md` when script args are involved.
+- Always read `/system/scripts/builtin/lib/arg_schema.md` and  `/system/scripts/builtin/lib/lua_module_delay.md` when script args are involved.
 - Read every Lua module doc needed by the task before code generation.
 - Read the closest builtin test script source as the implementation pattern.
 - Activate `builtin_lua_modules` and use its table to find the needed doc path.
-- Batch-read module docs with `read_file("scripts/docs/<doc-file>")`.
 - If output ends with `[read_file truncated: ...]`, treat it as incomplete and do not infer missing APIs.
 
 Builtin patterns:

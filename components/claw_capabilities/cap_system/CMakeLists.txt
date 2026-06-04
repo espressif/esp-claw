@@ -5,7 +5,6 @@ idf_component_register(
         "include"
     REQUIRES
         claw_cap
-        json
         esp_netif
         esp_wifi
     PRIV_REQUIRES

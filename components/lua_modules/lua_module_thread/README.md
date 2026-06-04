@@ -57,7 +57,7 @@ provided in the first version.
 ```lua
 local thread = require("thread")
 
-local ok, output = thread.run("/fatfs/scripts/builtin/test/thread_child_a.lua", {
+local ok, output = thread.run("/system/skills/builtin_lua_modules/scripts/builtin/test/thread_child_a.lua", {
     mode = "sync",
 }, {
     timeout_ms = 5000,

@@ -4,7 +4,8 @@ description: Unified event model, automation rules, and hand-off to Agent / scri
 ---
 
 import LinkToSource from '@/components/LinkToSource.astro';
-import { LinkCard, Aside } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
 
 ## Header Files
 
@@ -46,7 +47,7 @@ Common fields in `claw_event_router_config_t`:
 In `edge_agent`, `default_route_messages_to_agent` depends on whether the LLM is fully configured: if the LLM API is not set up correctly, it will be `false`.
 
 <Aside type="caution" title="When the LLM is not configured, claw_core does not start">
-  If any of the LLM API key, profile, or model is empty, `edge_agent` skips `claw_core_init` and `claw_core_start`, so the inference core never starts.
+  If any of the LLM API key, backend_type, or model is empty, `edge_agent` skips `claw_core_init` and `claw_core_start`, so the inference core never starts.
   Then `run_agent`, `ask`, image inspect, and other core-dependent features stay unavailable until the LLM settings are filled in and the device reboots. The Event Router, automation rules, local capabilities, and the Console REPL still work.
 </Aside>
 
@@ -72,7 +73,7 @@ In `edge_agent`, `default_route_messages_to_agent` depends on whether the LLM is
 User-facing “components” in ESP-Claw are also capabilities. When wrapping user input as an Event they add a `channel` field for the source and act as the default target `channel` for follow-on Events from that trigger.
 When the Event Router handles a final send-message Event, it resolves the target `channel` to a capability and invokes its `send_message` action. If an `outbound_resolver` is configured, it is called first; if it doesn't match, the binding table is used.
 
-In `edge_agent`, QQ, Feishu, Telegram, and WeChat each bind their send path and `channel` name.
+In `edge_agent`, QQ, Feishu, Telegram, WeChat, and Web (local IM) each bind their send path and `channel` name.
 
 ## Session policy
 

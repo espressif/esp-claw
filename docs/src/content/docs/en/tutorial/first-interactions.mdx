@@ -1,0 +1,273 @@
+---
+title: First Interactions
+description: Try ESP-Claw through chat, web search, Skills, memory, sessions, scheduled tasks, and Chat Coding.
+---
+
+import { Aside, LinkButton } from '@astrojs/starlight/components';
+
+<Aside type="tip">
+   Boards with a display can show Wi-Fi status on screen. Headless boards can check Wi-Fi status through serial Console or the status display on the Web config page.
+</Aside>
+
+Telegram / QQ Bot / WeChat ClawBot are recommended for interacting with ESP-Claw.
+- Send a message on a configured IM channel and ESP-Claw replies automatically.
+- No reply? [➡️FAQ](@lang/tutorial/faq#messages-sent-via-im-get-no-response)
+- Prefer serial Console? [➡️Console usage](@lang/reference-project/console-usage)
+
+## Chat and Q&A
+
+You can ask ESP-Claw questions directly, just like chatting with a person:
+
+- Hi, what capabilities do you currently have?
+- Calculate this for me: at 12% annual interest, what will 10,000 become after 3 years?
+
+ESP-Claw supports natural language understanding, basic Q&A, calculations, and task assistance.
+
+## Web Search
+
+ESP-Claw can retrieve up-to-date information and online resources:
+
+- Any AI news lately?
+- Visit `https://github.com/espressif/esp-claw` and check the latest progress
+
+Besides normal search, it can read web pages and summarize or analyze their content.
+
+## Cloud Skills
+
+ESP-Claw can fetch and install new Skills from the cloud to extend its capabilities.
+
+### Fetch Cloud Skills
+
+- Can you fetch some cloud Skills?
+
+### Install Cloud Skills
+
+- Install the weather Skill
+- Install the GPIO control Skill
+
+After installation, the Skill is automatically connected to the current system capabilities.
+
+## Memory System
+
+ESP-Claw supports long-term memory and device context records.
+
+### User Memory
+
+- My name is xxx, remember me
+- I like xxx
+
+### Hardware Memory
+
+- I connected a temperature and humidity sensor to your XX pin, remember that
+- A WS2812 LED strip is connected to GPIO4
+
+This information will continue to be used in later conversations.
+
+## Session Management
+
+### Interrupt the Current Session
+
+Say:
+
+- Stop
+- Cancel
+- Never mind
+
+ESP-Claw will immediately terminate the current task or conversation flow.
+
+### Switch Sessions
+
+ESP-Claw supports multiple sessions.
+
+View sessions:
+
+```text
+/session
+```
+
+Create a new session:
+
+```text
+/session new
+```
+
+Use this to isolate different projects, devices, or scenarios.
+
+## Scheduled Tasks
+
+ESP-Claw supports recurring and one-shot task scheduling.
+
+### Recurring Triggers
+
+- Send me a message every five minutes
+- Summarize today's sensor information and send it to me every day at 8am
+
+### One-shot Triggers
+
+- Remind me about the meeting tomorrow at 10am
+- Automatically start XXX after boot
+
+## Automation Rules and Shortcuts
+
+### Custom Shortcuts
+
+When a shortcut matches, ESP-Claw can execute it without waking the large model, so response is faster and power consumption is lower.
+
+For example:
+
+- Add an automation rule: next time I say "movie mode", immediately set the light to blue
+
+These rules are useful for:
+
+- Smart home workflows
+- Fixed action chains
+- Frequent device control
+- Local offline automation
+
+### Startup Tasks
+
+ESP-Claw can automatically run scripts or features after device startup:
+
+- Automatically start sensor monitoring after boot
+- Automatically connect MQTT after boot
+- Automatically run a display animation after boot
+
+This is useful for long-running and unattended scenarios.
+
+## Programming and Chat Coding
+
+ESP-Claw follows the Vibe Coding idea.
+
+Compared with traditional embedded development, you no longer need to repeatedly:
+
+- Write large amounts of boilerplate code
+- Set up projects manually
+- Compile, flash, and debug in loops
+
+You can collaborate with ESP-Claw through natural language to build features.
+
+To help ESP-Claw deliver results more efficiently and accurately, follow these principles.
+
+### 1. Intent First, Not Syntax First
+
+Your core asset is not code, but a clear goal.
+
+Focus on describing:
+
+- What feature you want
+- How the user interacts with it
+- How the device should respond
+
+Use natural, clear, and logical language.
+
+For example:
+
+- When the human presence sensor detects someone, turn on the light automatically
+- Build a desktop screen that shows weather and time
+
+Instead of:
+
+- Help me write a while(1) GPIO control loop
+
+### 2. Run First, Refine Later
+
+ESP-Claw emphasizes fast prototyping and iterative development.
+
+Avoid starting with:
+
+- Perfect architecture
+- Extreme performance
+- Optimal resource usage
+- Complex abstraction design
+
+Build a working version first.
+
+After seeing the result, gradually:
+
+- Fix issues
+- Improve the experience
+- Adjust the structure
+- Improve performance
+
+Fast validation is often more important than long design cycles.
+
+### 3. Keep the Feedback Loop
+
+Chat Coding is not:
+
+> Ask once and get a perfect application automatically
+
+It is a continuous iteration process:
+
+```text
+Describe the goal
+    ↓
+AI generates the feature
+    ↓
+Run and observe the result
+    ↓
+Provide feedback
+    ↓
+Improve again
+```
+
+If the result does not match expectations, provide:
+
+- Screen output
+- Performance issues
+- Behavior differences
+
+ESP-Claw can combine logs with this feedback to improve later generation quality.
+
+### 4. Split Tasks
+
+For complex requirements, avoid asking for an oversized goal in one step.
+
+Split the work into stages, for example:
+
+1. Light up the screen first
+2. Add touch input
+3. Build the UI
+4. Connect networking last
+
+Small steps are usually more stable than trying to finish everything at once.
+
+### 5. Understand ESP32 Capability Boundaries
+
+One major difference between ESP-Claw and cloud-only AI is that ESP-Claw runs on real hardware.
+
+It has hardware capabilities, but it is also limited by hardware resources.
+
+Before designing a feature, clarify:
+
+- Which features ESP-Claw can do directly
+- Which features require installing Skills
+- Which features require extra peripherals
+- Which features exceed the current hardware capability
+
+For example:
+
+| Feature | Directly available |
+| --- | --- |
+| GPIO control | ✅ |
+| Local automation | ✅ |
+| Camera recognition | Depends on hardware |
+| Local large-model inference | Usually not suitable for ESP32 |
+| Cloud AI collaboration | ✅ |
+
+## When Unsure, Ask It Directly
+
+If you are not sure whether a feature is feasible, ask ESP-Claw:
+
+- What features do you currently support?
+- Which hardware resources can you access?
+- How should this requirement be implemented?
+- Which Skills need to be installed?
+- Which peripherals need to be added?
+
+ESP-Claw will suggest an implementation plan based on current device status, installed capabilities, and hardware resources.
+
+## Next Steps
+
+<LinkButton href="@lang/reference-project/console-usage">Console usage</LinkButton>
+<LinkButton href="@lang/reference-project/configuration" variant="secondary">Configuration</LinkButton>

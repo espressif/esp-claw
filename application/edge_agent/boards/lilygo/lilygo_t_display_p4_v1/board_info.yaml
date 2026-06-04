@@ -1,0 +1,5 @@
+board: lilygo_t_display_p4
+chip: esp32p4
+version: 1.0.0
+description: "Lilygo T-Display-P4 Development Board"
+manufacturer: "Lilygo"

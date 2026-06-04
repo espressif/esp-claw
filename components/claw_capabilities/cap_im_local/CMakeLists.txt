@@ -8,6 +8,5 @@ idf_component_register(
         claw_event_router
         esp_timer
         freertos
-        json
         console
 )

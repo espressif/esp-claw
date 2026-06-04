@@ -4,78 +4,40 @@ description: Tips for using Skills
 ---
 
 import { Aside, FileTree } from '@astrojs/starlight/components';
-import { Code } from 'starlight-theme-nova/components'
-import exampleSkill from '@/assets/example-skill.md?raw';
+import { LinkCard } from 'starlight-theme-nova/components'
 
 Skills give the LLM modular “skills”—tool usage, workflows, best practices, guardrails, and more.
 Compared to stuffing everything in the prompt, Skills distill durable know-how and load on demand instead of every turn.
 
 ESP-Claw uses Skills to manage context dynamically and extend the Agent—including driving hardware through documented tool flows.
 
-## Manually add, remove, or edit Skills
+<LinkCard href="@lang/tutorial/skills-lab" title="Skills Lab" description="Download more Skills from Skills Lab" />
 
-Skills live on disk under `/fatfs/skills` by default. Use the Web config file manager to add or remove them.
+## Directory structure and metadata
 
-<FileTree>
-- fatfs
-  - skills
-    - cap_im_qq
-      - **SKILL.md** Skill for QQ IM usage
-    - cap_lua
-      - **SKILL.md** Skill for running Lua scripts
-    - light_switch
-      - **SKILL.md**
-      - scripts
-        - led_strip_switch.lua
-    - builtin_lua_modules
-      - **SKILL.md** built-in Lua module index
-    - ...
-</FileTree>
+Unlike Skills in common desktop LLM agent frameworks, ESP-Claw Skills can include Lua scripts, provide API references for Lua scripts, and include static assets so they can extend ESP-Claw Agent capabilities.
+Because of this, ESP-Claw Skills must follow a specific directory structure and metadata specification.
 
-<Aside type="tip">
-  The Skill files included with `cap_*`, `lua_module_*`, and `lua_driver_*` components are located in the `skills/` directory of the component's source code and are bundled into the FATFS image during build.
-</Aside>
+You can find the ESP-Claw Skill specification in [claw-skill-spec.md](https://github.com/espressif/esp-claw/blob/master/.agents/spec/claw-skill-spec.md).
 
 ### Metadata
 
 ESP-Claw reads Skill metadata from JSON frontmatter at the top of each `SKILL.md`. The directory name, `name`, and built path must match: `skills/<skill_id>/SKILL.md`.
-
-<details>
-<summary>`SKILL.md` frontmatter format</summary>
-````md
----
-{
-  "name": "skill_id",
-  "description": "Short capability description.",
-  "metadata": {
-    "cap_groups": ["cap_lua"],
-    "manage_mode": "readonly"
-  }
-}
----
-
-# Skill Title
-````
-</details>
 
 `name` and `description` map to the Skill ID and summary shown to the model in the Skills catalog.
 
 `metadata.manage_mode` must be `readonly`, `web`, or `runtime`.
 Skills Lab projects typically use `web`; on device, `web` behaves like `readonly` for management. Runtime-registered skills use `runtime`.
 
-`metadata.cap_groups` is optional: a list of capability group ids. When the Skill activates, those groups become visible to the LLM (tools exposed); when the Skill deactivates, they leave that Skill’s visibility set. This binds “how to use tools” with “having the tools” for the same lifecycle so the model cannot call tools without the guide.
+`metadata.cap_groups` is optional: a list of capability group ids. When the Skill activates, those groups become visible to the LLM (tools exposed). This binds “how to use tools” with “having the tools” for the same lifecycle so the model cannot call tools without the guide.
 
 <Aside type="tip">
   Values in `metadata.cap_groups` are `claw_cap_group_info_t.id` strings—the ids used when each capability group registers (e.g. `cap_lua`, `cap_im_qq`).
 </Aside>
 
-### Skill files
+For other fields, see [claw-skill-spec.md](https://github.com/espressif/esp-claw/blob/master/.agents/spec/claw-skill-spec.md).
 
-The `SKILL.md` body is Markdown. Spell out the skill—usage, workflow, best practices, rules—clearly. Example:
-
-<Code lang="md" title="weather.md" code={exampleSkill} />
-
-### Writing effective Skill documentation
+## Writing effective Skills
 
 After activation, the Skill `.md` is injected into the chat, so write for the **LLM**, not for human developers skimming a repo.
 
@@ -89,7 +51,7 @@ After activation, the Skill `.md` is injected into the chat, so write for the **
 | Error playbook | Frequent errors and how to recover |
 | Cross-tool notes | e.g. “Call X first to discover paths, then call this tool” |
 
-Here is a full template for a capability-backed Skill:
+Here is a full template for the body of a capability-backed Skill:
 
 ``````markdown
 # My Feature
@@ -120,7 +82,7 @@ With optional fields:
 - `Error: invalid state` — device not ready; tell the user to try later
 ``````
 
-#### Lua module Skills
+### Lua module Skills
 
 `lua_module_*` / `lua_driver_*` Skills target **LLM-authored Lua**, not JSON tool calls like `cap_*` docs. Provide precise API references instead of generic prose.
 
@@ -173,7 +135,7 @@ The `lua_module_display` Skill is a good model: it spells out each drawing helpe
 
 Prefer keeping one Skill clear and complete. Split into multiple Skills only when the Capability is complex and has multiple independent usage scenarios.
 
-## Let the Agent add, remove, or edit Skills
+### Let the Agent add, remove, or edit Skills
 
 Skills usually capture repeatable work or guidance, so after a task you can ask the Agent to summarize and evolve them.
 
@@ -184,13 +146,35 @@ ask "turn the earlier city-weather lookup into a reusable skill"
 
 ## How Skills work
 
+### Build time: sync component Skills into the FATFS image
+
+The Skill files included with `cap_*`, `lua_module_*`, and `lua_driver_*` components are located in the `skills/` directory of the component source code and are bundled into the FATFS image during build.
+
+<FileTree>
+- fatfs
+  - skills
+    - cap_lua
+      - **SKILL.md** Skill for running Lua scripts
+    - light_switch
+      - **SKILL.md**
+      - scripts
+        - led_strip_switch.lua
+    - builtin_lua_modules
+      - **SKILL.md** built-in Lua module index
+    - ...
+</FileTree>
+
+You can use the Web config file manager to add or remove Skills, or download new Skills from [Skills Lab](@lang/tutorial/skills-lab).
+
+### Runtime: progressively disclose capabilities to the LLM
+
 Context can carry tools, requirements, and extra rules.
 But repeating every tool’s full manual every turn bloats context, hurts quality, and burns tokens.
 
 Skills progressively disclose capabilities. Initially the model only sees the catalog entries with summaries.
 When a Skill is needed, the model activates it and receives the full document.
 
-If `metadata.cap_groups` is set, activation also opens the matching capability groups so the LLM can call tools immediately—no separate manual enable. After the task, `deactivate_skill` drops the Skill and its tool visibility to keep context lean.
+If `metadata.cap_groups` is set, activation also opens the matching capability groups so the LLM can call tools immediately—no separate manual enable. The `activate_skill` tool result contains the complete Skill document, so the LLM can read the usage guide without waiting for the next turn.
 
 <Aside type="tip">
   See Claude’s docs for more background: [How skills work](https://platform.claude.com/docs@lang/agents-and-tools/agent-skills/overview#how-skills-work).

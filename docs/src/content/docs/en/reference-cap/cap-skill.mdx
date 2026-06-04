@@ -10,21 +10,20 @@ Source: <LinkToSource relativePath="components/claw_capabilities/cap_skill_mgr/s
 
 ## Role
 
-`cap_skill` is the **thin wrapper that exposes core runtime features as tools**. It contains no standalone product logic; it forwards `claw_skill` (see [claw_skill](@lang/reference-core/claw-skill))—register/unregister Skills, activate/deactivate them—into LLM-callable tools and Console `cap call` entry points.
+`cap_skill` is the **thin wrapper that exposes core runtime features as tools**. It contains no standalone product logic; it forwards `claw_skill` (see [claw_skill](@lang/reference-core/claw-skill))—register/unregister Skills and activate Skills—into LLM-callable tools and Console `cap call` entry points.
 
 This “thin `cap_*` over `claw_*`” pattern is common: frameworks implement behavior, capabilities adapt it to tools and routing.
 
 ## Tools exposed
 
-`cap_skill` registers five Callables:
+`cap_skill` registers four Callables:
 
 | Tool ID | Description |
 |---------|-------------|
 | `list_skill` | List every Skill discovered from Markdown under the Skills root |
 | `register_skill` | Create one runtime-managed `skills/<skill_id>/SKILL.md` and reload the registry |
 | `unregister_skill` | Delete one runtime-managed Skill Markdown and reload the registry |
-| `activate_skill` | Activate for the current session and open bound `metadata.cap_groups` |
-| `deactivate_skill` | Deactivate a Skill (or `"all"` to clear) |
+| `activate_skill` | Activate a Skill, return the complete Skill document as the tool result, and open bound `metadata.cap_groups` |
 
 Except `list_skill`, all are flagged `CLAW_CAP_FLAG_CALLABLE_BY_LLM`.
 
@@ -36,30 +35,44 @@ Except `list_skill`, all are flagged `CLAW_CAP_FLAG_CALLABLE_BY_LLM`.
 
 ## Implementation notes
 
-### `activate_skill`: tool call → session sync
+### `activate_skill`: tool result as context injection
 
-`activate_skill` is the heart of the flow—how a capability mutates core session state:
+`activate_skill` is the heart of the flow. It shows how a Capability mutates core runtime state while using the tool result for cache-friendly context injection:
 
 ```d2
 direction: down
 
 llm: "LLM\nactivate_skill({skill_id})"
+read_fn: "claw_skill_read_document()"
 activate_fn: "claw_skill_activate_for_session()"
 fatfs: "FATFS\nactive_skills.json"
 sync_fn: "cap_skill_sync_session_visible_groups()"
-load_fn: "claw_skill_load_active_cap_groups()"
 set_fn: "claw_cap_set_session_llm_visible_groups()"
+result: "return <skill_content>\ncomplete SKILL.md document\n</skill_content>"
 
+llm -> read_fn: "read Skill document"
 llm -> activate_fn
 llm -> sync_fn
 
 activate_fn -> fatfs: "persist activation"
-
-sync_fn -> load_fn: "merge cap_groups from active skills"
 sync_fn -> set_fn: "refresh tool allow-list"
+read_fn -> result: "wrap as tool result"
 ```
 
-The last hop, `claw_cap_set_session_llm_visible_groups`, **immediately** widens the current session’s tool surface so the LLM can call newly opened caps on the next turn.
+After `activate_skill` runs:
+
+1. It reads the full `SKILL.md` document for the Skill
+2. It calls `claw_skill_activate_for_session` to persist the activation state
+3. It calls `cap_skill_sync_session_visible_groups` to refresh the tool visibility allow-list
+4. It returns the Skill document to the LLM as a **tool-call result** in the form `<skill_content name="skill_id">...</skill_content>`
+
+The LLM receives the complete Skill document in the same turn, and sees the newly opened tools on the next turn. When multiple Skills are needed, the LLM can call several `activate_skill` tools in parallel in one response to fetch multiple documents at once.
+
+<Aside type="tip" title="Why inject through tool results instead of the system prompt?">
+  Earlier implementations injected activated Skill documents into the system prompt through a context provider. Every Skill activation or deactivation changed the system prompt content, invalidating LLM API prompt caches.
+
+  The current design injects Skill documents into conversation history through tool results. The system prompt only contains the stable Skills catalog, avoiding frequent cache-prefix changes and significantly improving cache hit rates.
+</Aside>
 
 ### `register_skill`: filesystem checks
 
@@ -80,39 +93,32 @@ After creating or deleting `SKILL.md`, `claw_skill_reload_registry()` applies ch
 
 ### Session isolation
 
-`activate_skill` / `deactivate_skill` read `ctx->session_id`, so activation sets differ per session:
+`activate_skill` reads `ctx->session_id`, so activation sets differ per session:
 
 - Telegram vs Feishu sessions can load different Skills
 - After reboot, activation state is restored from FATFS
 
 ### Response shape
 
-Tools return structured JSON the LLM can parse:
+When `activate_skill` succeeds, it returns the raw Skill document wrapped in XML tags:
 
-```jsonc
-// Successful activate_skill
-{
-  "action": "activate_skill",
-  "session_id": "tg::-123456",
-  "skill_id": "cap_lua",
-  "ok": true,
-  "active_skill_ids": ["cap_lua", "cap_files"]
-}
+```xml
+<skill_content name="cap_lua">
+... SKILL.md body ...
+</skill_content>
 ```
 
-When `deactivate_skill` is blocked by a guard, it also returns structured JSON (instead of a silent failure), for example:
+On failure, it returns structured JSON:
 
 ```jsonc
 {
   "ok": false,
-  "error": "deactivate blocked by skill guard",
-  "skill_id": "all",
-  "blocked_by": "cap_lua",
-  "reason": "1 Lua async job(s) still running..."
+  "error": "failed to read skill document",
+  "skill_id": "nonexistent"
 }
 ```
 
-When deactivating a single Skill, the response usually includes `skill_id` and `reason`; when using `"all"`, it may additionally include `blocked_by` to indicate the first blocker.
+Other tools (`register_skill`, `unregister_skill`) also return structured JSON describing the operation result.
 
 ## Skill docs
 
@@ -122,8 +128,8 @@ When deactivating a single Skill, the response usually includes `skill_id` and `
 
 | Layer | Module | Responsibility |
 |-------|--------|------------------|
-| Framework | `claw_skill` | Parse the skills tree, persist activation per session, inject docs into `claw_core` |
-| Tooling | `cap_skill` | Expose the above as LLM / Console-callable tools |
+| Framework | `claw_skill` | Parse the skills tree, persist activation per session, read documents, and provide the Skills catalog provider |
+| Tooling | `cap_skill` | Expose the above as LLM / Console-callable tools; inject documents through tool results on activation |
 
 `cap_skill` is a pure adapter: no private state; everything delegates to `claw_skill` while handling JSON IO and error strings.
 

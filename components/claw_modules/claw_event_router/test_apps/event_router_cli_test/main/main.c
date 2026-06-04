@@ -246,6 +246,54 @@ static bool run_cli_and_check(const char *label,
     return passed;
 }
 
+static bool run_agent_without_submit_check(void)
+{
+    static const char *agent_rule_json =
+        "{\"id\":\"agent_missing_submit\",\"enabled\":true,\"consume_on_match\":true,"
+        "\"match\":{\"event_type\":\"message\",\"content_type\":\"text\",\"source_cap\":\"test_source\","
+        "\"channel\":\"cli\",\"chat_id\":\"room_agent\",\"text\":\"agent please\"},"
+        "\"actions\":[{\"type\":\"run_agent\"}]}";
+    claw_event_t event = {
+        .source_cap = "test_source",
+        .event_type = "message",
+        .source_channel = "cli",
+        .chat_id = "room_agent",
+        .content_type = "text",
+        .session_policy = CLAW_SESSION_POLICY_CHAT,
+    };
+    claw_event_router_result_t result = {0};
+    esp_err_t err;
+    bool passed;
+
+    ESP_LOGI(TAG, "[RUN] run_agent_without_submit");
+    err = claw_event_router_add_rule_json(agent_rule_json);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to add run_agent rule: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    event.text = strdup("agent please");
+    if (!event.text) {
+        (void)claw_event_router_delete_rule("agent_missing_submit");
+        return false;
+    }
+
+    err = claw_event_router_handle_event(&event, &result);
+    passed = err == ESP_ERR_INVALID_STATE || result.last_error == ESP_ERR_INVALID_STATE;
+    if (!passed) {
+        ESP_LOGE(TAG,
+                 "run_agent without submit returned err=%s last_error=%s failed_actions=%d",
+                 esp_err_to_name(err),
+                 esp_err_to_name(result.last_error),
+                 result.failed_actions);
+    }
+
+    claw_event_free(&event);
+    (void)claw_event_router_delete_rule("agent_missing_submit");
+    ESP_LOGI(TAG, "[%s] run_agent_without_submit", passed ? "PASS" : "FAIL");
+    return passed;
+}
+
 static bool run_smoke_suite(void)
 {
     bool ok = true;
@@ -340,6 +388,8 @@ static bool run_smoke_suite(void)
                            "[]",
                            NULL,
                            0) && ok;
+
+    ok = run_agent_without_submit_check() && ok;
 
     return ok;
 }

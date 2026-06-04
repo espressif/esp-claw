@@ -1,106 +1,43 @@
 ---
 title: Configuration
-description: Build-time defaults, NVS persistence, Web changes, precedence, and how settings apply.
+description: Build-time defaults, NVS persistence, and precedence for Web-based changes.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components';
 import LinkToSource from '@/components/LinkToSource.astro';
 
-ESP-Claw `edge_agent` stores boot defaults in menuconfig (`sdkconfig`) and runtime overrides in NVS.
+ESP-Claw `edge_agent` uses menuconfig (`sdkconfig`) for initial default settings, and uses NVS to persist runtime configuration changes.
 
-`edge_agent` uses the NVS namespace `app`.
-On boot, menuconfig defaults load first, then keys present in NVS override them.
-Field list and read/write logic live in <LinkToSource relativePath="application/edge_agent/components/app_config/app_config.c" />.
+`edge_agent` stores configuration in the NVS namespace `app`.
+At boot, it loads default values from menuconfig first, then overrides them with keys stored in NVS (if present).
+The field list and read/write logic are in <LinkToSource relativePath="application/edge_agent/components/app_config/app_config.c" />.
 
-<Aside title="How precedence works">
-  **Effective value = NVS if present, else compile-time default.**
+<Aside title="How to understand precedence">
+  **Effective runtime value = use NVS value if present; otherwise use compile-time default.**
 
-  After you save once from Web or serial tools, NVS wins; “factory reset” means clearing those NVS keys.
+  So: once you save from Web or serial tools for the first time, NVS takes precedence; to “restore factory defaults”, clear the related NVS keys.
 </Aside>
 
-## edge_agent settings
+## edge_agent configuration fields
 
-Unless marked optional, fields are required.
+ESP-Claw does not recommend changing these settings via menuconfig, because they may be overridden by NVS values.
+For detailed explanations of these fields, see the Web configuration documentation.
 
-### Basic
-
-- **`wifi_ssid` / `wifi_password`: Wi‑Fi SSID and password**
-  - Except ESP32-C5, only 2.4 GHz Wi‑Fi is supported.
-  - Empty password means open network.
-- **`time_timezone`: time zone**
-  - Must be a POSIX TZ string; see [this table](https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv).
-  - Example for Beijing/Hong Kong/Singapore: `CST-8`.
-
-### LLM
-
-The firmware LLM runtime (`claw_llm_runtime.c` inside `claw_core`) builds requests from **profile (preset) + backend (protocol)**:
-- **profile** picks default gateway root, API path shape, `max_tokens` field names, etc.;
-- **backend** chooses OpenAI Chat Completions–compatible vs Anthropic Messages request/response parsing.
-
-Fields:
-- **`llm_profile`: vendor/scenario preset**
-  - Empty string falls back to `claw_llm_profile_default()` (currently `openai`).
-  - Mapping of preset names to concrete settings is in
-    <LinkToSource relativePath="application/edge_agent/components/app_config/app_config.c" />.
-- **`llm_backend_type`: backend type** [optional]
-  - Must match the real wire protocol or be empty: use `anthropic` for official Anthropic or Messages-compatible gateways; use `openai_compatible` for OpenAI or “OpenAI-compatible” gateways.
-  - Non-empty overrides the profile’s default backend; empty keeps the profile default.
-  - Allowed values: `openai_compatible`, `anthropic`, `custom`[^custombackend].
-- **`llm_base_url`: API base URL** [optional]
-  - Custom gateway root; empty uses the profile’s default `base_url`.
-  - Runtime endpoint is `base_url` + `api_path`.
-- **`llm_model`: model name**
-  - Must match the provider’s model id.
-- **`llm_api_key`: LLM API key**
-- **`llm_auth_type`: auth header style** [optional]
-  - Extra hint such as `bearer`, `api-key`, `none`, …
-  - With `openai_compatible`, empty `llm_auth_type` implies `bearer` and `Authorization: Bearer <API Key>`.
-  - With `anthropic`, `llm_auth_type` is ignored; the key goes in `x-api-key: <API Key>`.
-- **`llm_timeout_ms`: request timeout**
-  - Timeout in milliseconds (stored as string).
-
-### IM and platforms
-
-ESP-Claw can connect QQ, Feishu, Telegram, and WeChat ClawBot, with extension hooks. If credentials for a channel are empty, that IM cannot work end-to-end.
-
-- **`qq_app_id` / `qq_app_secret`: QQ Open Platform bot credentials**
-- **`feishu_app_id` / `feishu_app_secret`: Feishu app credentials**
-- **`tg_bot_token`: Telegram bot token**
-- **`wechat_token` / `wechat_base_url` / `wechat_cdn_base_url` / `wechat_account_id`: WeChat ClawBot fields**, usually filled by the QR login flow.
-
-<Aside type="note" title="Capabilities vs IM settings">
-  IM needs the matching capability enabled **and** valid credentials.\
-  Enabling the cap without credentials still loads the cap, but it cannot send/receive messages.
-</Aside>
-
-### Web search
-
-Search API keys are optional. If both are empty, ESP-Claw cannot fetch online results via search.
-
-- `search_brave_key`: Brave Search API key—see [Brave auth docs](https://api-dashboard.search.brave.com/documentation/guides/authentication).
-- `search_tavily_key`: Tavily key—see [Tavily quickstart](https://docs.tavily.com/documentation/quickstart).
+<LinkCard href="@lang/tutorial/web-config" title="Web Configuration" description="Learn how to modify settings from Web configuration" />
 
 ## Compile-time Kconfig options
 
-Besides the NVS settings above, some behavior is controlled at **build time** via **Kconfig** (`menuconfig`) with no runtime toggle—change requires rebuilding and reflashing:
+In addition to the runtime-editable NVS settings above, some behaviors are controlled by compile-time **Kconfig** (`menuconfig`) options. They are not editable at runtime and require rebuilding firmware after changes:
 
-- **`APP_CLAW_MEMORY_MODE`**: long-term memory mode.
-  - **Structured (full structured memory, default)**: enables structured memory extraction; the LLM-visible groups additionally include `claw_memory`; the summary-tag catalog is injected instead of the full `MEMORY.md` text.
-  - **Lightweight**: skips structured extraction and injects `MEMORY.md` text directly—useful when RAM or context window is tight.
-- **`APP_CLAW_ENABLE_EMOTE`**: whether to start the LCD emote/status UI at boot. Only meaningful on boards with an LCD; disabling saves a little heap.
+- **`APP_CLAW_MEMORY_MODE`**: selects the long-term memory mode.
+  - **Structured (full structured memory, default)**: enables structured memory extraction; LLM-visible groups additionally include `claw_memory`; injects summary-tag catalog instead of full `MEMORY.md`.
+  - **Lightweight**: skips structured extraction and injects `MEMORY.md` text directly into context; suitable for memory- or context-window-constrained scenarios.
+- **`APP_CLAW_ENABLE_EMOTE`**: whether to enable the LCD emote/status display component at boot. Only meaningful on boards with LCD; disabling it saves a small amount of heap memory.
 
-Use `idf.py menuconfig` → `(Top)` → `App Claw Config` to view or change these options.
+You can view and modify these options via `idf.py menuconfig` → `(Top)` → `App Claw Config`.
 
-## Where to edit
-
-- **Web**: see [Web configuration](@lang/tutorial/web-config).
-- **menuconfig**: good for factory Wi‑Fi/keys before mass flash; still overridden by NVS.
-- **Web flasher**: values entered in the wizard are saved to NVS like Web saves.
-
-After changes, rebooting the device is recommended.
-
-<Aside type="caution" title="Security">
-  The config UI and NVS hold secrets—do not publish exported configs or full NVS dumps.
+<Aside type="caution" title="Security note">
+  The configuration page and NVS contain secret tokens. Do not publicly share exported config files or full-device NVS dumps.
 </Aside>
 
-[^custombackend]: Custom backend for advanced use; read the source for details.

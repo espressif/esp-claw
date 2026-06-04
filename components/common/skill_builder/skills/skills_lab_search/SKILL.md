@@ -4,7 +4,8 @@
   "description": "Search skills from the ESP-Skill hub by keywords and advanced filters, then guide the user to download a selected skill with skills_lab_downloader.",
   "metadata": {
     "cap_groups": [
-      "cap_web_search"
+      "cap_http_request",
+      "cap_boards"
     ],
     "manage_mode": "web"
   }

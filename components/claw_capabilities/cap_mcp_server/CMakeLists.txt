@@ -10,6 +10,5 @@ idf_component_register(
         esp_http_server
         espressif__mcp-c-sdk
         espressif__mdns
-        json
         console
 )

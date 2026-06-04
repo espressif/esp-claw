@@ -1,5 +1,13 @@
 import { CircleX, ImagePlus, LoaderCircle, SendHorizontal } from 'lucide-solid';
-import { createEffect, createSignal, For, onCleanup, onMount, Show, type Component } from 'solid-js';
+import {
+  createEffect,
+  createSignal,
+  For,
+  onCleanup,
+  onMount,
+  Show,
+  type Component,
+} from 'solid-js';
 import type { JSX } from 'solid-js';
 import {
   createFolder,
@@ -88,7 +96,11 @@ function escapeMarkdownHtml(text: string): string {
   return text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function loadExternalScript(src: string, integrity: string, testReady: () => boolean): Promise<void> {
+function loadExternalScript(
+  src: string,
+  integrity: string,
+  testReady: () => boolean,
+): Promise<void> {
   if (testReady()) {
     return Promise.resolve();
   }
@@ -137,7 +149,11 @@ async function loadMarkdownRuntime(): Promise<void> {
 
   markdownRuntimePromise ??= Promise.all([
     loadExternalScript(MARKED_CDN_URL, MARKED_CDN_INTEGRITY, () => !!window.marked?.parse),
-    loadExternalScript(DOMPURIFY_CDN_URL, DOMPURIFY_CDN_INTEGRITY, () => !!window.DOMPurify?.sanitize),
+    loadExternalScript(
+      DOMPURIFY_CDN_URL,
+      DOMPURIFY_CDN_INTEGRITY,
+      () => !!window.DOMPurify?.sanitize,
+    ),
   ]).then(() => undefined);
 
   try {

@@ -1,0 +1,91 @@
+---
+title: cap_mcp_client / cap_mcp_server
+description: Model Context Protocol（MCP）客户端与服务端能力。
+---
+
+import LinkToSource from '@/components/LinkToSource.astro';
+import { Aside } from '@astrojs/starlight/components';
+
+**Client** 源码：<LinkToSource relativePath="components/claw_capabilities/cap_mcp_client/src/cap_mcp_client.c" /> ·
+头文件：<LinkToSource relativePath="components/claw_capabilities/cap_mcp_client/include/cap_mcp_client.h" /> ·
+Skill：<LinkToSource relativePath="components/claw_capabilities/cap_mcp_client/skills/cap_mcp_client/SKILL.md" />
+
+**Server** 源码：<LinkToSource relativePath="components/claw_capabilities/cap_mcp_server/src/cap_mcp_server.c" /> ·
+头文件：<LinkToSource relativePath="components/claw_capabilities/cap_mcp_server/include/cap_mcp_server.h" /> ·
+Skill：<LinkToSource relativePath="components/claw_capabilities/cap_mcp_server/skills/cap_mcp_server/SKILL.md" />
+
+## 概述
+
+ESP-Claw 通过 `cap_mcp_client` 和 `cap_mcp_server` 两个组件实现 [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) 支持：
+
+- **`cap_mcp_client`**：允许 LLM 发现并调用远程 MCP 服务器提供的工具
+- **`cap_mcp_server`**：将设备自身的 Capability 暴露为本地 MCP 服务端，供外部 MCP 客户端调用
+
+## cap_mcp_client
+
+### 工具描述
+
+| 工具 ID | 说明 |
+|---------|------|
+| `mcp_list_tools` | 列出远程 MCP 服务器上的可用工具 |
+| `mcp_call_tool` | 调用远程 MCP 服务器上的指定工具 |
+| `mcp_discover` | 发现局域网内广播的 MCP 服务器 |
+
+### 工具参数
+
+#### `mcp_list_tools`
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `server_url` | string | ✅ | MCP 服务器 URL |
+| `endpoint` | string | | MCP endpoint 路径 |
+| `cursor` | string | | 分页游标 |
+
+#### `mcp_call_tool`
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `server_url` | string | ✅ | MCP 服务器 URL |
+| `tool_name` | string | ✅ | 要调用的工具名称 |
+| `endpoint` | string | | MCP endpoint 路径 |
+| `arguments` | object | | 传递给工具的参数 |
+
+#### `mcp_discover`
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `timeout_ms` | integer | | 发现超时时间 |
+| `include_self` | boolean | | 是否包含自身 |
+
+### Group 信息
+
+| 属性 | 值 |
+|------|------|
+| Group ID | `cap_mcp_client` |
+| 默认 LLM 可见 | ❌（需通过 Skill 激活） |
+| 工具数量 | 3 |
+
+## cap_mcp_server
+
+### 概述
+
+`cap_mcp_server` 是一个 `CLAW_CAP_KIND_HYBRID` 类型的 Capability，具有生命周期管理。启动后，它在本地创建一个 MCP 服务端实例，将设备的已注册 Capability 暴露为 MCP 工具，供局域网内的外部 MCP 客户端（如桌面 IDE、其他 ESP-Claw 设备）发现和调用。
+
+### 特性
+
+- 支持 MCP SSE（Server-Sent Events）传输
+- 自动将设备 Capability 映射为 MCP 工具
+- 支持 mDNS 广播，局域网可发现
+- 具备完整生命周期（init → start → stop）
+
+### Group 信息
+
+| 属性 | 值 |
+|------|------|
+| Group ID | `cap_mcp_server` |
+| 默认 LLM 可见 | ❌ |
+| 工具数量 | 0（作为服务端，不暴露 LLM 可调用工具） |
+
+<Aside type="tip">
+  `cap_mcp_client` 与 `cap_mcp_server` 配合使用时，多个 ESP-Claw 设备可以组成分布式 Agent 网络，设备间通过 MCP 协议互相发现并调用对方的能力。
+</Aside>

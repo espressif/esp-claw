@@ -485,7 +485,8 @@ static esp_err_t app_lua_register_sci(const char *fatfs_base_path)
 #if CONFIG_APP_CLAW_LUA_MODULE_STORAGE
 static esp_err_t app_lua_register_storage(const char *fatfs_base_path)
 {
-    return lua_module_storage_register(fatfs_base_path);
+    (void)fatfs_base_path;
+    return lua_module_storage_register();
 }
 #endif
 

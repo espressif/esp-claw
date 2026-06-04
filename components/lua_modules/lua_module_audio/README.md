@@ -7,8 +7,8 @@ This module describes how to correctly use audio when writing Lua scripts.
 - Call `audio.new_input(codec_dev_handle, sample_rate, channels, bits_per_sample [, gain_db])` to create an input handle
 - Call `audio.new_output(codec_dev_handle, sample_rate, channels, bits_per_sample [, volume])` to create an output handle
 - Call `audio.play_tone(output_handle, freq_hz, duration_ms [, volume_pct [, wait_done]])` to generate and play a sine tone on a 16-bit PCM output handle
-- Call `audio.play_wav(output_handle, path)` to play a WAV file under `/fatfs/data/`
-- Call `audio.record_wav(input_handle, path, duration_ms)` to record audio to a WAV file under `/fatfs/data/`
+- Call `audio.play_wav(output_handle, path)` to play a WAV file
+- Call `audio.record_wav(input_handle, path, duration_ms)` to record audio to a WAV file
 - Call `audio.loopback(input_handle, output_handle [, duration_ms])` to route input to output for monitoring
 - Call `audio.set_volume(output_handle, pct)`, `audio.get_volume(output_handle)`, `audio.set_mute(output_handle, enabled)`, or `audio.set_gain(input_handle, db)` to adjust levels
 - Call `audio.mic_read_level(input_handle [, duration_ms])` to read microphone level statistics such as `rms` and `peak`

@@ -1,0 +1,33 @@
+# Waveshare ESP32-S3-GEEK — ESP32-S3R2
+# 16 MB external QIO NOR flash (W25Q128) + 2 MB on-chip Quad PSRAM
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# Partition table is auto-selected from partitions_16MB.csv
+# by tools/cmake/flash_partition_defaults.cmake.
+
+# On-chip 2 MB Quad PSRAM (R2 variant — not octal)
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# Disable XIP-from-PSRAM: 2 MB is not enough to hold both flash instructions
+# (~1.5 MB) and rodata (~700 KB). Instructions are fetched from flash cache
+# instead (32 KB I-cache on ESP32-S3), with a small performance trade-off.
+CONFIG_SPIRAM_XIP_FROM_PSRAM=n
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=n
+CONFIG_SPIRAM_RODATA=n
+
+# Quad PSRAM cannot keep the stack accessible while cache is disabled for a flash
+# transaction. Force FreeRTOS to allocate task stacks from internal RAM so claw
+# tasks tagged CLAW_TASK_STACK_PREFER_PSRAM fall back to internal memory.
+CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=n
+CONFIG_MDNS_TASK_CREATE_FROM_INTERNAL=y
+
+# USB: Serial JTAG
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED=y

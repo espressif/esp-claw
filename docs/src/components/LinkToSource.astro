@@ -1,5 +1,8 @@
 ---
 import FileCodeCorner from "@lucide/astro/icons/file-code-corner";
+import FolderCode from "@lucide/astro/icons/folder-code";
+import Copy from "@lucide/astro/icons/copy";
+import CopyCheck from "@lucide/astro/icons/copy-check";
 
 interface Props {
   /** Source file path relative to repository root */
@@ -15,6 +18,7 @@ interface Props {
 const props = Astro.props as Props;
 const rawPath = props.relativePath ?? props.path ?? "";
 const normalizedPath = rawPath.replace(/^\/+/, "").replace(/^\.\/+/, "");
+const isDirectory = normalizedPath.endsWith("/");
 
 const repoBase =
   import.meta.env.PUBLIC_DOC_SOURCECODE_REPO ?? "https://github.com/espressif/esp-claw";
@@ -27,63 +31,117 @@ const encodedPath = normalizedPath
   .filter(Boolean)
   .map((segment) => encodeURIComponent(segment))
   .join("/");
-const lineFragment = props.line ? `#L${props.line}` : "";
-const href = `${safeRepoBase}/blob/${encodeURIComponent(refs)}/${encodedPath}${lineFragment}`;
+const lineFragment = !isDirectory && props.line ? `#L${props.line}` : "";
+const viewMode = isDirectory ? "tree" : "blob";
+const href = `${safeRepoBase}/${viewMode}/${encodeURIComponent(refs)}/${encodedPath}${lineFragment}`;
 
 const fileName = normalizedPath.split("/").filter(Boolean).pop() ?? normalizedPath;
-const lineSuffix = props.line ? `:${props.line}` : "";
+const lineSuffix = !isDirectory && props.line ? `:${props.line}` : "";
 const label = `${fileName}${lineSuffix}`;
+const Icon = isDirectory ? FolderCode : FileCodeCorner;
 ---
 
 {
   normalizedPath ? (
-    <a
-      class="source-link"
-      href={href}
-      target="_blank"
-      rel="noreferrer noopener"
-      title={normalizedPath}
-      aria-label={`View source: ${normalizedPath}${lineSuffix}`}
-    >
-      <FileCodeCorner class="source-link-icon" aria-hidden="true" />
-      <span>{label}</span>
-    </a>
+    <span class="source-link-group">
+      <a
+        class="source-link"
+        href={href}
+        target="_blank"
+        rel="noreferrer noopener"
+        aria-label={`View source: ${normalizedPath}${lineSuffix}`}
+      >
+        <Icon class="source-link-icon" aria-hidden="true" />
+        <span>{label}</span>
+      </a>
+      <button
+        type="button"
+        class="source-link-copy"
+        title="Copy path"
+        aria-label={`Copy source path: ${normalizedPath}`}
+        data-copy-path={normalizedPath}
+      >
+        <span class="source-link-copy-icon source-link-copy-icon-default" aria-hidden="true">
+          <Copy class="source-link-icon" />
+        </span>
+        <span class="source-link-copy-icon source-link-copy-icon-success" aria-hidden="true">
+          <CopyCheck class="source-link-icon" />
+        </span>
+      </button>
+      <span class="source-link-tooltip" role="tooltip">{normalizedPath}</span>
+    </span>
   ) : null
 }
 
 <style>
-  .source-link {
+  .source-link-group {
     --source-link-border-color: var(--sl-color-gray-4);
 
+    position: relative;
     display: inline-flex;
     align-items: center;
-    gap: 0.35rem;
     font-family: "JetBrains Mono", monospace;
     font-size: 0.8rem;
-    color: var(--text-secondary);
-    text-decoration: none;
     border: 1px dotted var(--source-link-border-color);
     border-radius: var(--radius-sm, 6px);
-    padding: 0.1rem 0.2rem;
     transform: translateY(0.1rem);
     transition:
-      color 0.15s ease,
       border-color 0.15s ease,
       background-color 0.15s ease;
   }
 
-  :root[data-theme='dark'] .source-link {
+  .source-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    color: var(--text-secondary);
+    text-decoration: none;
+    padding: 0.1rem 0.45rem 0.1rem 0.35rem;
+    transition:
+      color 0.15s ease,
+      background-color 0.15s ease;
+  }
+
+  .source-link-copy {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    inline-size: 1.8rem;
+    block-size: 1.45rem;
+    flex-shrink: 0;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 0;
+    border-left: 1px dotted var(--source-link-border-color);
+    border-radius: 0;
+    padding: 0;
+    cursor: pointer;
+    transition:
+      color 0.15s ease,
+      background-color 0.15s ease;
+  }
+
+  :root[data-theme='dark'] .source-link-group {
     --source-link-border-color: var(--sl-color-gray-3);
   }
 
-  .source-link:hover {
+  .source-link-group:hover,
+  .source-link-group:focus-within {
     border-color: rgba(255, 255, 255, 0.2);
     background-color: rgba(0, 0, 0, 0.041);
   }
 
-  :root[data-theme='dark'] .source-link:hover {
+  :root[data-theme='dark'] .source-link-group:hover,
+  :root[data-theme='dark'] .source-link-group:focus-within {
     border-color: rgba(255, 255, 255, 0.2);
     background-color: rgba(255, 255, 255, 0.084);
+  }
+
+  .source-link-copy:focus-visible,
+  .source-link:focus-visible {
+    outline: 2px solid var(--sl-color-accent-high);
+    outline-offset: 1px;
   }
 
   .source-link-icon {
@@ -91,4 +149,107 @@ const label = `${fileName}${lineSuffix}`;
     height: 0.9rem;
     flex-shrink: 0;
   }
+
+  .source-link-copy-icon {
+    position: absolute;
+    inset: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition:
+      opacity 0.18s ease,
+      color 0.18s ease;
+  }
+
+  .source-link-copy-icon-default {
+    opacity: 1;
+  }
+
+  .source-link-copy-icon-success {
+    opacity: 0;
+    color: #2f9e44;
+  }
+
+  .source-link-copy[data-copied='true'] .source-link-copy-icon-default {
+    opacity: 0;
+  }
+
+  .source-link-copy[data-copied='true'] .source-link-copy-icon-success {
+    opacity: 1;
+  }
+
+  .source-link-tooltip {
+    position: absolute;
+    left: 0;
+    top: calc(100% + 0.45rem);
+    z-index: 10;
+    padding: 0.35rem 0.5rem;
+    border-radius: 0.45rem;
+    background: color-mix(in srgb, var(--sl-color-black) 88%, transparent);
+    color: var(--sl-color-white);
+    font-family: "JetBrains Mono", monospace;
+    font-size: 0.72rem;
+    line-height: 1.35;
+    white-space: nowrap;
+    box-shadow: 0 0.4rem 1rem rgba(0, 0, 0, 0.18);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-0.2rem);
+    transition:
+      opacity 0.15s ease,
+      transform 0.15s ease;
+  }
+
+  .source-link:hover + .source-link-copy + .source-link-tooltip,
+  .source-link:focus-visible + .source-link-copy + .source-link-tooltip {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
 </style>
+
+<script is:inline>
+  if (!window.__sourceLinkCopyBound) {
+    window.__sourceLinkCopyBound = true;
+
+    document.addEventListener("click", async (event) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+
+      const button = target.closest("[data-copy-path]");
+      if (!(button instanceof HTMLButtonElement)) {
+        return;
+      }
+
+      const { copyPath } = button.dataset;
+      if (!copyPath) {
+        return;
+      }
+
+      const resetTimerId = button.dataset.resetTimerId;
+      if (resetTimerId) {
+        window.clearTimeout(Number(resetTimerId));
+      }
+
+      const originalTitle = button.title;
+
+      try {
+        await navigator.clipboard.writeText(copyPath);
+        button.title = "Copied";
+        button.dataset.copied = "true";
+      } catch {
+        button.title = "Copy failed";
+      }
+
+      const timerId = window.setTimeout(() => {
+        button.title = originalTitle;
+        delete button.dataset.copied;
+        delete button.dataset.resetTimerId;
+      }, 1200);
+
+      button.dataset.resetTimerId = String(timerId);
+    });
+  }
+</script>

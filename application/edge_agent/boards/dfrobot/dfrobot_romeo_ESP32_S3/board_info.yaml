@@ -1,0 +1,5 @@
+board: dfrobot_romeo_ESP32_S3
+chip: esp32s3
+version: 1.0.0
+description: "DFRobot Romeo ESP32-S3 (DFR0994) with OV3660 camera, GDI display, SPI SD and motor driver"
+manufacturer: "DFRobot"

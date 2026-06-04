@@ -12,8 +12,7 @@ import {
 const ROW_CLASS =
   'flex items-center gap-3 py-3 px-5 hover:bg-white/[0.015] transition-colors select-none';
 
-const BODY_CLASS =
-  'px-5 pb-5 pt-1 bg-white/[0.015] border-t border-[var(--color-border-subtle)]';
+const BODY_CLASS = 'px-5 pb-5 pt-1 bg-white/[0.015] border-t border-[var(--color-border-subtle)]';
 
 export const ChevronIcon: Component<{ open: boolean }> = (props) => (
   <svg

@@ -5,376 +5,466 @@
  */
 #include "cap_session_mgr.h"
 
-#include <errno.h>
-#include <inttypes.h>
 #include <stdbool.h>
+#include <stdarg.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 
 #include "cJSON.h"
 #include "claw_cap.h"
 #include "esp_log.h"
-#include "freertos/semphr.h"
 
 static const char *TAG = "cap_session_mgr";
 
-#define CAP_SESSION_MGR_MAP_DIRNAME  "chat_map"
-#define CAP_SESSION_MGR_PATH_SIZE    256
-#define CAP_SESSION_MGR_KEY_SIZE     128
-#define CAP_SESSION_MGR_ID_SIZE      128
+static const char *s_session_mgr_usage =
+    "Usage:\n"
+    "/session new [name]       Create and switch to a new session\n"
+    "/session list             List sessions in this chat\n"
+    "/session switch <name>    Switch to an existing session\n"
+    "/session delete <name>    Delete a non-current session\n"
+    "\n"
+    "Examples:\n"
+    "/session new\n"
+    "/session new project-a\n"
+    "/session list\n"
+    "/session switch project-a\n"
+    "/session delete project-a\n"
+    "\n"
+    "Session names must be 1-32 characters and may only contain A-Z, a-z, 0-9, _ or -.";
+
+typedef enum {
+    CAP_SESSION_MGR_CMD_NEW,
+    CAP_SESSION_MGR_CMD_LIST,
+    CAP_SESSION_MGR_CMD_SWITCH,
+    CAP_SESSION_MGR_CMD_DELETE,
+} cap_session_mgr_command_t;
 
 typedef struct {
-    bool configured;
-    char session_root_dir[160];
-    char mapping_root_dir[192];
-    SemaphoreHandle_t mutex;
-} cap_session_mgr_state_t;
+    cap_session_mgr_command_t command;
+    bool has_alias;
+    char alias[CLAW_SESSION_MGR_ALIAS_MAX + 1];
+} cap_session_mgr_parsed_command_t;
 
-static cap_session_mgr_state_t s_session_mgr = {0};
-
-static bool cap_session_mgr_is_chat_event(const claw_event_t *event)
+static bool cap_session_mgr_is_ascii_space(char ch)
 {
-    return event &&
-           strcmp(event->event_type, "message") == 0 &&
-           event->source_channel[0] != '\0' &&
-           event->chat_id[0] != '\0';
+    return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\f' || ch == '\v';
 }
 
-static uint32_t cap_session_mgr_hash(const char *text)
+static const char *cap_session_mgr_skip_ascii_space(const char *text)
 {
-    uint32_t hash = 2166136261u;
-    const unsigned char *ptr = (const unsigned char *)text;
-
-    while (ptr && *ptr) {
-        hash ^= *ptr++;
-        hash *= 16777619u;
+    if (!text) {
+        return "";
+    }
+    while (*text && cap_session_mgr_is_ascii_space(*text)) {
+        text++;
     }
 
-    return hash;
+    return text;
 }
 
-static void cap_session_mgr_sanitize(const char *src, char *dst, size_t dst_size)
+static esp_err_t cap_session_mgr_append_output(char *output,
+                                               size_t output_size,
+                                               size_t *offset,
+                                               const char *fmt,
+                                               ...)
 {
-    size_t off = 0;
+    va_list args;
+    int written;
 
-    if (!dst || dst_size == 0) {
-        return;
-    }
-    dst[0] = '\0';
-    if (!src) {
-        return;
-    }
-
-    while (*src && off + 1 < dst_size) {
-        char ch = *src++;
-
-        if ((ch >= 'a' && ch <= 'z') ||
-                (ch >= 'A' && ch <= 'Z') ||
-                (ch >= '0' && ch <= '9')) {
-            dst[off++] = ch;
-        } else if (off == 0 || dst[off - 1] != '_') {
-            dst[off++] = '_';
-        }
-    }
-    if (off > 0 && dst[off - 1] == '_') {
-        off--;
-    }
-    dst[off] = '\0';
-}
-
-static esp_err_t cap_session_mgr_ensure_dir(const char *path)
-{
-    struct stat st = {0};
-
-    if (!path || !path[0]) {
+    if (!output || output_size == 0 || !offset || *offset >= output_size) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (stat(path, &st) == 0) {
-        return S_ISDIR(st.st_mode) ? ESP_OK : ESP_FAIL;
+
+    va_start(args, fmt);
+    written = vsnprintf(output + *offset, output_size - *offset, fmt, args);
+    va_end(args);
+    if (written < 0) {
+        return ESP_FAIL;
     }
-    if (mkdir(path, 0755) == 0 || errno == EEXIST) {
+    if ((size_t)written >= output_size - *offset) {
+        *offset = output_size - 1;
+        return ESP_ERR_INVALID_SIZE;
+    }
+    *offset += (size_t)written;
+
+    return ESP_OK;
+}
+
+static esp_err_t cap_session_mgr_read_command_input(const char *input_json,
+                                                    char *command,
+                                                    size_t command_size)
+{
+    cJSON *root = NULL;
+    cJSON *item = NULL;
+
+    if (!command || command_size == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    command[0] = '\0';
+
+    if (!input_json || !input_json[0]) {
         return ESP_OK;
     }
-    return ESP_FAIL;
-}
-
-static esp_err_t cap_session_mgr_build_chat_key(const char *source_channel, const char *chat_id, char *buf, size_t buf_size)
-{
-    int written;
-
-    if (!source_channel || !source_channel[0] || !chat_id || !chat_id[0] || !buf || buf_size == 0) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    written = snprintf(buf, buf_size, "%s:%s", source_channel, chat_id);
-    if (written < 0 || (size_t)written >= buf_size) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    return ESP_OK;
-}
-
-static esp_err_t cap_session_mgr_build_mapping_path(const char *chat_key, char *path, size_t path_size)
-{
-    char safe_key[40];
-    uint32_t hash;
-    int written;
-
-    if (!chat_key || !chat_key[0] || !path || path_size == 0) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    cap_session_mgr_sanitize(chat_key, safe_key, sizeof(safe_key));
-    if (strlen(safe_key) > 24) {
-        safe_key[24] = '\0';
-    }
-    hash = cap_session_mgr_hash(chat_key);
-    written = snprintf(path,
-                       path_size,
-                       "%s/chat_%s_%08" PRIx32 ".json",
-                       s_session_mgr.mapping_root_dir,
-                       safe_key[0] ? safe_key : "default",
-                       hash);
-    if (written < 0 || (size_t)written >= path_size) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    return ESP_OK;
-}
-
-static esp_err_t cap_session_mgr_write_mapping_locked(const char *chat_key, int version)
-{
-    char path[CAP_SESSION_MGR_PATH_SIZE];
-    cJSON *root = NULL;
-    char *json = NULL;
-    FILE *file = NULL;
-    esp_err_t err;
-
-    err = cap_session_mgr_build_mapping_path(chat_key, path, sizeof(path));
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    root = cJSON_CreateObject();
-    if (!root) {
-        return ESP_ERR_NO_MEM;
-    }
-    cJSON_AddStringToObject(root, "chat_key", chat_key);
-    cJSON_AddNumberToObject(root, "version", version);
-    json = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-    if (!json) {
-        return ESP_ERR_NO_MEM;
-    }
-
-    file = fopen(path, "wb");
-    if (!file) {
-        free(json);
-        return ESP_FAIL;
-    }
-    if (fputs(json, file) < 0) {
-        fclose(file);
-        free(json);
-        return ESP_FAIL;
-    }
-    fclose(file);
-    free(json);
-    return ESP_OK;
-}
-
-static esp_err_t cap_session_mgr_read_version_locked(const char *chat_key, int *out_version)
-{
-    char path[CAP_SESSION_MGR_PATH_SIZE];
-    FILE *file = NULL;
-    long size;
-    char *text = NULL;
-    size_t read_bytes;
-    cJSON *root = NULL;
-    cJSON *version = NULL;
-    esp_err_t err;
-
-    if (!chat_key || !chat_key[0] || !out_version) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    err = cap_session_mgr_build_mapping_path(chat_key, path, sizeof(path));
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    file = fopen(path, "rb");
-    if (!file) {
-        return errno == ENOENT ? ESP_ERR_NOT_FOUND : ESP_FAIL;
-    }
-    if (fseek(file, 0, SEEK_END) != 0) {
-        fclose(file);
-        return ESP_FAIL;
-    }
-    size = ftell(file);
-    if (size < 0) {
-        fclose(file);
-        return ESP_FAIL;
-    }
-    if (fseek(file, 0, SEEK_SET) != 0) {
-        fclose(file);
-        return ESP_FAIL;
-    }
-
-    text = calloc(1, (size_t)size + 1);
-    if (!text) {
-        fclose(file);
-        return ESP_ERR_NO_MEM;
-    }
-    read_bytes = fread(text, 1, (size_t)size, file);
-    fclose(file);
-    text[read_bytes] = '\0';
-
-    root = cJSON_Parse(text);
-    free(text);
+    root = cJSON_Parse(input_json);
     if (!cJSON_IsObject(root)) {
         cJSON_Delete(root);
-        return ESP_ERR_INVALID_RESPONSE;
+        return ESP_ERR_INVALID_ARG;
     }
-
-    version = cJSON_GetObjectItemCaseSensitive(root, "version");
-    if (!cJSON_IsNumber(version) || version->valueint < 1) {
+    item = cJSON_GetObjectItemCaseSensitive(root, "command");
+    if (!item || cJSON_IsNull(item)) {
         cJSON_Delete(root);
-        return ESP_ERR_INVALID_RESPONSE;
+        return ESP_OK;
     }
-
-    *out_version = version->valueint;
-    cJSON_Delete(root);
-    return ESP_OK;
-}
-
-static esp_err_t cap_session_mgr_build_current_session_id_locked(const char *source_channel,
-                                                                 const char *chat_id,
-                                                                 char *buf,
-                                                                 size_t buf_size)
-{
-    char chat_key[CAP_SESSION_MGR_KEY_SIZE];
-    int version = 0;
-    int written;
-    esp_err_t err;
-
-    err = cap_session_mgr_build_chat_key(source_channel, chat_id, chat_key, sizeof(chat_key));
-    if (err != ESP_OK) {
-        return err;
+    if (!cJSON_IsString(item) || !item->valuestring) {
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
     }
-
-    err = cap_session_mgr_read_version_locked(chat_key, &version);
-    if (err == ESP_ERR_NOT_FOUND || err == ESP_ERR_INVALID_RESPONSE) {
-        version = 1;
-        err = cap_session_mgr_write_mapping_locked(chat_key, version);
-    }
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    written = snprintf(buf, buf_size, "%s:v%d", chat_key, version);
-    if (written < 0 || (size_t)written >= buf_size) {
+    if (strlcpy(command, item->valuestring, command_size) >= command_size) {
+        cJSON_Delete(root);
         return ESP_ERR_INVALID_SIZE;
     }
+    cJSON_Delete(root);
 
     return ESP_OK;
 }
 
-static esp_err_t cap_session_mgr_roll_locked(const char *source_channel,
-                                             const char *chat_id,
-                                             char *new_session_id,
-                                             size_t new_session_id_size,
-                                             int *out_version)
+static esp_err_t cap_session_mgr_read_token(const char **cursor,
+                                            char *token,
+                                            size_t token_size,
+                                            bool *out_has_token)
 {
-    char chat_key[CAP_SESSION_MGR_KEY_SIZE];
-    int version = 0;
+    const char *start = NULL;
+    size_t len;
+
+    if (!cursor || !*cursor || !token || token_size == 0 || !out_has_token) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    token[0] = '\0';
+    *out_has_token = false;
+
+    start = cap_session_mgr_skip_ascii_space(*cursor);
+    if (!start[0]) {
+        *cursor = start;
+        return ESP_OK;
+    }
+    *out_has_token = true;
+    len = 0;
+    while (start[len] && !cap_session_mgr_is_ascii_space(start[len])) {
+        len++;
+    }
+    if (len >= token_size) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    memcpy(token, start, len);
+    token[len] = '\0';
+    *cursor = start + len;
+
+    return ESP_OK;
+}
+
+static esp_err_t cap_session_mgr_parse_session_command(const char *command_text,
+                                                       cap_session_mgr_parsed_command_t *parsed)
+{
+    const char *cursor = command_text;
+    char subcommand[8];
+    char extra[2];
+    bool has_subcommand = false;
+    bool has_extra = false;
     esp_err_t err;
 
-    err = cap_session_mgr_build_chat_key(source_channel, chat_id, chat_key, sizeof(chat_key));
+    if (!parsed) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memset(parsed, 0, sizeof(*parsed));
+
+    err = cap_session_mgr_read_token(&cursor, subcommand, sizeof(subcommand), &has_subcommand);
+    if (err != ESP_OK || !has_subcommand) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (strcmp(subcommand, "new") == 0) {
+        parsed->command = CAP_SESSION_MGR_CMD_NEW;
+    } else if (strcmp(subcommand, "list") == 0) {
+        parsed->command = CAP_SESSION_MGR_CMD_LIST;
+    } else if (strcmp(subcommand, "switch") == 0) {
+        parsed->command = CAP_SESSION_MGR_CMD_SWITCH;
+    } else if (strcmp(subcommand, "delete") == 0) {
+        parsed->command = CAP_SESSION_MGR_CMD_DELETE;
+    } else {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = cap_session_mgr_read_token(&cursor,
+                                     parsed->alias,
+                                     sizeof(parsed->alias),
+                                     &parsed->has_alias);
     if (err != ESP_OK) {
         return err;
     }
-
-    err = cap_session_mgr_read_version_locked(chat_key, &version);
-    if (err == ESP_ERR_NOT_FOUND || err == ESP_ERR_INVALID_RESPONSE) {
-        version = 0;
-        err = ESP_OK;
+    err = cap_session_mgr_read_token(&cursor, extra, sizeof(extra), &has_extra);
+    if (err != ESP_OK || has_extra) {
+        return ESP_ERR_INVALID_ARG;
     }
+
+    if (parsed->command == CAP_SESSION_MGR_CMD_LIST && parsed->has_alias) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if ((parsed->command == CAP_SESSION_MGR_CMD_SWITCH ||
+            parsed->command == CAP_SESSION_MGR_CMD_DELETE) &&
+            !parsed->has_alias) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (parsed->has_alias && !claw_session_mgr_alias_is_valid(parsed->alias)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    return ESP_OK;
+}
+
+static void cap_session_mgr_write_message(char *output, size_t output_size, const char *message)
+{
+    if (output && output_size > 0) {
+        snprintf(output, output_size, "%s", message ? message : "");
+    }
+}
+
+static void cap_session_mgr_write_format(char *output, size_t output_size, const char *fmt, ...)
+{
+    va_list args;
+
+    if (!output || output_size == 0 || !fmt) {
+        return;
+    }
+
+    va_start(args, fmt);
+    vsnprintf(output, output_size, fmt, args);
+    va_end(args);
+}
+
+static bool cap_session_mgr_context_has_chat(const claw_cap_call_context_t *ctx,
+                                             char *output,
+                                             size_t output_size)
+{
+    if (!ctx || !ctx->channel || !ctx->channel[0] || !ctx->chat_id || !ctx->chat_id[0]) {
+        cap_session_mgr_write_message(output, output_size, "Session command failed: missing chat context.");
+        ESP_LOGW(TAG, "Session command missing channel or chat_id");
+        return false;
+    }
+
+    return true;
+}
+
+static bool cap_session_mgr_context_ready(const claw_cap_call_context_t *ctx,
+                                          char *output,
+                                          size_t output_size)
+{
+    if (!cap_session_mgr_context_has_chat(ctx, output, output_size)) {
+        return false;
+    }
+    if (!claw_session_mgr_is_configured()) {
+        cap_session_mgr_write_message(output, output_size, "Session command failed: session manager is not configured.");
+        ESP_LOGW(TAG, "Session manager command called before configuration");
+        return false;
+    }
+
+    return true;
+}
+
+static void cap_session_mgr_write_storage_error(const char *action,
+                                                const claw_cap_call_context_t *ctx,
+                                                const char *alias,
+                                                esp_err_t err,
+                                                char *output,
+                                                size_t output_size)
+{
+    ESP_LOGE(TAG,
+             "%s chat session failed for %s:%s alias=%s: %s",
+             action,
+             ctx->channel,
+             ctx->chat_id,
+             alias ? alias : "",
+             esp_err_to_name(err));
+    cap_session_mgr_write_message(output,
+                                  output_size,
+                                  "Session command failed: unable to access session storage.");
+}
+
+static esp_err_t cap_session_mgr_write_list_output(const claw_session_mgr_alias_map_t *map,
+                                                   char *output,
+                                                   size_t output_size)
+{
+    size_t offset = 0;
+    esp_err_t err;
+
+    err = cap_session_mgr_append_output(output, output_size, &offset, "Sessions:");
     if (err != ESP_OK) {
         return err;
     }
-
-    version++;
-    err = cap_session_mgr_write_mapping_locked(chat_key, version);
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    if (new_session_id && new_session_id_size > 0) {
-        err = cap_session_mgr_build_current_session_id_locked(source_channel, chat_id, new_session_id, new_session_id_size);
+    for (size_t i = 0; i < map->session_count; i++) {
+        err = cap_session_mgr_append_output(output,
+                                            output_size,
+                                            &offset,
+                                            "\n* %s%s",
+                                            map->sessions[i],
+                                            strcmp(map->sessions[i], map->current_alias) == 0 ? " (current)" : "");
         if (err != ESP_OK) {
             return err;
         }
     }
-    if (out_version) {
-        *out_version = version;
+
+    return ESP_OK;
+}
+
+static esp_err_t cap_session_mgr_command_execute(cap_session_mgr_command_t command,
+                                                 const char *alias,
+                                                 bool has_alias,
+                                                 const claw_cap_call_context_t *ctx,
+                                                 char *output,
+                                                 size_t output_size)
+{
+    char result_alias[CLAW_SESSION_MGR_ALIAS_MAX + 1];
+    claw_session_mgr_alias_map_t map;
+    esp_err_t err;
+
+    if (!cap_session_mgr_context_ready(ctx, output, output_size)) {
+        return ESP_OK;
+    }
+
+    switch (command) {
+    case CAP_SESSION_MGR_CMD_NEW:
+        err = claw_session_mgr_new_chat_session(0,
+                                                ctx->channel,
+                                                ctx->chat_id,
+                                                alias,
+                                                has_alias,
+                                                result_alias,
+                                                sizeof(result_alias));
+        break;
+    case CAP_SESSION_MGR_CMD_LIST:
+        err = claw_session_mgr_list_chat_sessions(0, ctx->channel, ctx->chat_id, &map);
+        if (err == ESP_OK) {
+            err = cap_session_mgr_write_list_output(&map, output, output_size);
+        }
+        break;
+    case CAP_SESSION_MGR_CMD_SWITCH:
+        err = claw_session_mgr_switch_chat_session(0,
+                                                   ctx->channel,
+                                                   ctx->chat_id,
+                                                   alias,
+                                                   result_alias,
+                                                   sizeof(result_alias));
+        break;
+    case CAP_SESSION_MGR_CMD_DELETE:
+        err = claw_session_mgr_delete_chat_session(0,
+                                                   ctx->channel,
+                                                   ctx->chat_id,
+                                                   alias,
+                                                   result_alias,
+                                                   sizeof(result_alias));
+        break;
+    default:
+        err = ESP_ERR_INVALID_ARG;
+        break;
+    }
+
+    if (err == ESP_ERR_INVALID_STATE && command == CAP_SESSION_MGR_CMD_NEW) {
+        cap_session_mgr_write_format(output,
+                                     output_size,
+                                     "Cannot create session \"%s\": a session with that name already exists.",
+                                     alias);
+        return ESP_OK;
+    }
+    if (command == CAP_SESSION_MGR_CMD_SWITCH && err == ESP_ERR_NOT_FOUND) {
+        cap_session_mgr_write_format(output,
+                                     output_size,
+                                     "Cannot switch to session \"%s\": no such session. Send /session list to list sessions.",
+                                     alias);
+        return ESP_OK;
+    }
+    if (command == CAP_SESSION_MGR_CMD_DELETE && err == ESP_ERR_NOT_FOUND) {
+        cap_session_mgr_write_format(output,
+                                     output_size,
+                                     "Cannot delete session \"%s\": no such session. Send /session list to list sessions.",
+                                     alias);
+        return ESP_OK;
+    }
+    if (command == CAP_SESSION_MGR_CMD_DELETE && err == ESP_ERR_INVALID_STATE) {
+        cap_session_mgr_write_format(output,
+                                     output_size,
+                                     "Cannot delete the current session \"%s\". Switch to another session first.",
+                                     alias);
+        return ESP_OK;
+    }
+    if (command == CAP_SESSION_MGR_CMD_DELETE && err == ESP_ERR_NOT_SUPPORTED) {
+        cap_session_mgr_write_message(output,
+                                      output_size,
+                                      "Session command failed: session history deletion is unavailable.");
+        return ESP_OK;
+    }
+    if (err == ESP_ERR_INVALID_STATE) {
+        cap_session_mgr_write_message(output, output_size, "Session command failed: session manager is not configured.");
+        ESP_LOGW(TAG, "Session manager command called before configuration");
+        return ESP_OK;
+    }
+    if (err != ESP_OK) {
+        cap_session_mgr_write_storage_error(command == CAP_SESSION_MGR_CMD_NEW ? "Create" :
+                                            command == CAP_SESSION_MGR_CMD_LIST ? "List" :
+                                            command == CAP_SESSION_MGR_CMD_SWITCH ? "Switch" : "Delete",
+                                            ctx,
+                                            has_alias ? alias : NULL,
+                                            err,
+                                            output,
+                                            output_size);
+        return ESP_OK;
+    }
+
+    if (command == CAP_SESSION_MGR_CMD_NEW) {
+        ESP_LOGI(TAG, "Created chat session %s:%s alias=%s", ctx->channel, ctx->chat_id, result_alias);
+        cap_session_mgr_write_format(output, output_size, "Started a new session: %s", result_alias);
+    } else if (command == CAP_SESSION_MGR_CMD_SWITCH) {
+        ESP_LOGI(TAG, "Switched chat session %s:%s alias=%s", ctx->channel, ctx->chat_id, result_alias);
+        cap_session_mgr_write_format(output, output_size, "Switched to session: %s", result_alias);
+    } else if (command == CAP_SESSION_MGR_CMD_DELETE) {
+        cap_session_mgr_write_format(output, output_size, "Deleted session: %s", result_alias);
     }
 
     return ESP_OK;
 }
 
-static esp_err_t cap_session_mgr_roll_execute(const char *input_json,
-                                              const claw_cap_call_context_t *ctx,
-                                              char *output,
-                                              size_t output_size)
+static esp_err_t cap_session_mgr_session_execute(const char *input_json,
+                                                 const claw_cap_call_context_t *ctx,
+                                                 char *output,
+                                                 size_t output_size)
 {
-    char session_id[CAP_SESSION_MGR_ID_SIZE];
-    int version = 0;
+    char command_text[96];
+    cap_session_mgr_parsed_command_t parsed;
     esp_err_t err;
 
-    (void)input_json;
-
-    if (!ctx || !ctx->channel || !ctx->channel[0] || !ctx->chat_id || !ctx->chat_id[0]) {
-        if (output && output_size > 0) {
-            snprintf(output, output_size, "{\"ok\":false,\"error\":\"channel and chat_id are required\"}");
-        }
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (!s_session_mgr.configured || !s_session_mgr.mutex) {
-        if (output && output_size > 0) {
-            snprintf(output, output_size, "{\"ok\":false,\"error\":\"session manager not configured\"}");
-        }
-        return ESP_ERR_INVALID_STATE;
+    err = cap_session_mgr_read_command_input(input_json, command_text, sizeof(command_text));
+    if (err != ESP_OK ||
+            cap_session_mgr_parse_session_command(command_text, &parsed) != ESP_OK) {
+        cap_session_mgr_write_message(output, output_size, s_session_mgr_usage);
+        return ESP_OK;
     }
 
-    xSemaphoreTakeRecursive(s_session_mgr.mutex, portMAX_DELAY);
-    err = cap_session_mgr_roll_locked(ctx->channel, ctx->chat_id, session_id, sizeof(session_id), &version);
-    xSemaphoreGiveRecursive(s_session_mgr.mutex);
-    if (err != ESP_OK) {
-        if (output && output_size > 0) {
-            snprintf(output, output_size, "{\"ok\":false,\"error\":\"%s\"}", esp_err_to_name(err));
-        }
-        return err;
-    }
-
-    ESP_LOGI(TAG, "Rolled chat session %s:%s to version %d", ctx->channel, ctx->chat_id, version);
-    if (output && output_size > 0) {
-        snprintf(output, output_size, "{\"ok\":true,\"session_id\":\"%s\",\"version\":%d}", session_id, version);
-    }
-    return ESP_OK;
+    return cap_session_mgr_command_execute(parsed.command,
+                                           parsed.has_alias ? parsed.alias : NULL,
+                                           parsed.has_alias,
+                                           ctx,
+                                           output,
+                                           output_size);
 }
 
 static const claw_cap_descriptor_t s_session_mgr_caps[] = {
     {
-        .id = "roll_chat_session",
-        .name = "roll_chat_session",
+        .id = "session_command",
+        .name = "session_command",
         .family = "system",
-        .description = "Advance the current chat to a fresh persistent session.",
+        .description = "Handle consolidated /session chat commands.",
         .kind = CLAW_CAP_KIND_CALLABLE,
         .cap_flags = CLAW_CAP_FLAG_RESTRICTED,
-        .input_schema_json = "{\"type\":\"object\",\"properties\":{}}",
-        .execute = cap_session_mgr_roll_execute,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}}}",
+        .execute = cap_session_mgr_session_execute,
     },
 };
 
@@ -393,64 +483,11 @@ esp_err_t cap_session_mgr_register_group(void)
 
 esp_err_t cap_session_mgr_set_session_root_dir(const char *session_root_dir)
 {
-    int written;
-    SemaphoreHandle_t mutex = s_session_mgr.mutex;
-
-    if (!session_root_dir || !session_root_dir[0]) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    memset(&s_session_mgr, 0, sizeof(s_session_mgr));
-    s_session_mgr.mutex = mutex;
-    strlcpy(s_session_mgr.session_root_dir, session_root_dir, sizeof(s_session_mgr.session_root_dir));
-    written = snprintf(s_session_mgr.mapping_root_dir,
-                       sizeof(s_session_mgr.mapping_root_dir),
-                       "%s/%s",
-                       session_root_dir,
-                       CAP_SESSION_MGR_MAP_DIRNAME);
-    if (written < 0 || (size_t)written >= sizeof(s_session_mgr.mapping_root_dir)) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    if (!s_session_mgr.mutex) {
-        s_session_mgr.mutex = xSemaphoreCreateRecursiveMutex();
-    }
-    if (!s_session_mgr.mutex) {
-        return ESP_ERR_NO_MEM;
-    }
-    if (cap_session_mgr_ensure_dir(s_session_mgr.session_root_dir) != ESP_OK ||
-            cap_session_mgr_ensure_dir(s_session_mgr.mapping_root_dir) != ESP_OK) {
-        return ESP_FAIL;
-    }
-
-    s_session_mgr.configured = true;
-    return ESP_OK;
+    return claw_session_mgr_set_session_root_dir(session_root_dir);
 }
 
-size_t cap_session_mgr_build_session_id(const claw_event_t *event, char *buf, size_t buf_size, void *user_ctx)
+esp_err_t cap_session_mgr_set_delete_session_handler(cap_session_mgr_delete_session_fn_t fn,
+                                                     void *user_ctx)
 {
-    esp_err_t err;
-
-    (void)user_ctx;
-
-    if (!buf || buf_size == 0 || !event) {
-        return 0;
-    }
-    if (!cap_session_mgr_is_chat_event(event) || !s_session_mgr.configured || !s_session_mgr.mutex) {
-        return claw_event_router_build_session_id(event, buf, buf_size);
-    }
-
-    xSemaphoreTakeRecursive(s_session_mgr.mutex, portMAX_DELAY);
-    err = cap_session_mgr_build_current_session_id_locked(event->source_channel, event->chat_id, buf, buf_size);
-    xSemaphoreGiveRecursive(s_session_mgr.mutex);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG,
-                 "Falling back to default session id for %s:%s: %s",
-                 event->source_channel,
-                 event->chat_id,
-                 esp_err_to_name(err));
-        return claw_event_router_build_session_id(event, buf, buf_size);
-    }
-
-    return strlen(buf);
+    return claw_session_mgr_set_delete_session_handler(fn, user_ctx);
 }

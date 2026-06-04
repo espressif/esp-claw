@@ -4,7 +4,8 @@ description: SKILL.md 元数据、按会话的激活状态与上下文注入。
 ---
 
 import LinkToSource from '@/components/LinkToSource.astro';
-import { Aside, LinkCard, FileTree } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
 
 头文件：<LinkToSource relativePath="components/claw_modules/claw_skill/include/claw_skill.h" />
 
@@ -12,7 +13,7 @@ import { Aside, LinkCard, FileTree } from '@astrojs/starlight/components';
 
 - 文件系统中有一组 `skills/<skill_id>/SKILL.md` 文件，JSON frontmatter 描述 Skill ID、摘要、管理模式与关联 Capability Group。
 - 每个 Session 有一组「当前激活」的 Skill id，持久化在 Session 状态目录下。
-- 激活某个 Skill 后，模型侧可以看到更完整的 Skill 文档，并可通过 `cap_skill` 提供的工具继续激活/关闭 Skill。
+- 激活某个 Skill 后，`cap_skill` 通过工具返回值将完整 Skill 文档注入会话历史，模型即可获得该 Skill 的详细文档。
 
 <LinkCard title="Skills 如何工作" href="@lang/reference-project/skills" description="Skills 的工作逻辑、手动或由 Agent 增删改 Skills 的流程" />
 
@@ -26,12 +27,11 @@ import { Aside, LinkCard, FileTree } from '@astrojs/starlight/components';
 
 ## 与 claw_core 的对接
 
-`claw_skill` 以两个 **context provider** 的形式接入 `claw_core`：
+`claw_skill` 以一个 **context provider** 的形式接入 `claw_core`：
 
-1. **`claw_skill_skills_list_provider`**：每次请求时，把所有 `SKILL.md` frontmatter 中的 `name`、`description` 渲染成文本注入系统 Prompt，让模型知道「当前有哪些可用 Skills」。
-2. **`claw_skill_active_skill_docs_provider`**：把当前 session 中已激活的 Skills 的 `SKILL.md` 正文拼入上下文，提供完整的 Skill 文档。
+- **`claw_skill_skills_list_provider`**：每次请求时，把所有 `SKILL.md` frontmatter 中的 `name`、`description` 渲染成文本注入系统 Prompt，让模型知道「当前有哪些可用 Skills」。
 
-因此，激活某个 Skill 等价于把它的 `SKILL.md` 正文加入下一次请求的上下文，模型看到的工具说明、行为约定都由这份文档决定。
+已激活 Skill 的完整文档不再通过 context provider 注入系统提示词，而是由 `cap_skill` 的 `activate_skill` 工具在激活时作为**工具返回值**注入会话历史。这一设计使系统提示词保持稳定，优化了 LLM API 的 prompt cache 命中率。
 
 ## 激活状态
 
@@ -39,7 +39,7 @@ import { Aside, LinkCard, FileTree } from '@astrojs/starlight/components';
 
 - Session A 激活 `weather`，Session B 不受影响。
 - 状态以文件形式持久化在 `session_state_dir`，重启后恢复。
-- 可通过 `cap_skill` 提供的 `activate_skill` / `deactivate_skill` 工具由模型操作，也可用 Console `skill` 命令人工操作。
+- 可通过 `cap_skill` 提供的 `activate_skill` 工具由模型操作，也可用 Console `skill` 命令人工操作。
 
 <Aside type="caution">
   Console 的 `--session` 参数需与当前 `session` 命令切到的 id 一致，否则会出现「激活了但没进上下文」的现象。
@@ -49,12 +49,12 @@ import { Aside, LinkCard, FileTree } from '@astrojs/starlight/components';
 
 运行时读取的 `/fatfs/skills` 由构建流程在 `build/fatfs_image/skills` staging 目录中组装而来：
 
-1. **`application/edge_agent/fatfs_image/skills/`**：demo 工程自带的出厂 Skills 目录，按 `skills/<skill_id>/SKILL.md` 组织，构建时复制到 staging 目录。
-2. **组件自带 Skills**：各 `cap_*` / `lua_module_*` / `lua_driver_*` 组件可提供 `skills/<skill_id>/SKILL.md`，构建时由 `components/common/skill_builder` 同步到 `build/fatfs_image/skills/`，再一并打包。
+1. <LinkToSource relativePath="application/edge_agent/fatfs_image/skills/" />：demo 工程自带的出厂 Skills 目录，按 `skills/<skill_id>/SKILL.md` 组织，构建时复制到 staging 目录。
+2. **组件自带 Skills**：各 `cap_*` / `lua_module_*` / `lua_driver_*` 组件可提供 `skills/<skill_id>/SKILL.md`，构建时由 <LinkToSource relativePath="components/common/skill_builder/" /> 同步到 `build/fatfs_image/skills/`，再一并打包。
 
-注意：`application/edge_agent/fatfs_image/` 是源码输入；`application/edge_agent/build/fatfs_image/` 是生成的 staging 输出，会在构建时重新创建。
+注意：<LinkToSource relativePath="application/edge_agent/fatfs_image/" /> 是源码输入；`application/edge_agent/build/fatfs_image/` 是生成的 staging 输出，会在构建时重新创建。
 
 ## 用户侧交互
 
 <LinkCard title="Console 交互" href="@lang/reference-project/console-usage" description="Console 中使用 skill 命令管理 Skills" />
-<LinkCard title="cap_skill" href="@lang/reference-cap/cap-skill" description="activate_skill / deactivate_skill 与模型可见 Skills 的关系" />
+<LinkCard title="cap_skill" href="@lang/reference-cap/cap-skill" description="activate_skill 工具与缓存友好的文档注入机制" />

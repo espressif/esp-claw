@@ -32,10 +32,12 @@ static esp_err_t cap_llm_inspect_execute(const char *input_json,
     char *error_message = NULL;
     esp_err_t err;
 
-    (void)ctx;
-
     if (!input_json || !output || output_size == 0) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (!ctx || !ctx->core) {
+        snprintf(output, output_size, "Error: claw_core is not ready");
+        return ESP_ERR_INVALID_STATE;
     }
 
     root = cJSON_Parse(input_json);
@@ -59,7 +61,7 @@ static esp_err_t cap_llm_inspect_execute(const char *input_json,
     request.user_prompt = prompt_json->valuestring;
     request.media = &asset;
     request.media_count = 1;
-    err = claw_core_llm_infer_media(&request, &analysis, &error_message);
+    err = claw_core_llm_infer_media(ctx->core, &request, &analysis, &error_message);
     cJSON_Delete(root);
     if (err != ESP_OK) {
         snprintf(output,

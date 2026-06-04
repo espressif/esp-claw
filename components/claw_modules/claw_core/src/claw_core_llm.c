@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#include "claw_core_llm.h"
+#include "claw_core_internal.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -17,8 +17,6 @@ static const char *TAG = "claw_core_llm";
 #ifndef CLAW_CORE_LOG_FULL_LLM_REQUEST
 #define CLAW_CORE_LOG_FULL_LLM_REQUEST 0
 #endif
-
-static claw_llm_runtime_t *s_runtime = NULL;
 
 static char *dup_printf(const char *fmt, ...)
 {
@@ -47,20 +45,22 @@ static char *dup_printf(const char *fmt, ...)
     return buf;
 }
 
-esp_err_t claw_core_llm_init(const claw_core_llm_config_t *config, char **out_error_message)
+esp_err_t claw_core_llm_init(const claw_core_llm_config_t *config,
+                             claw_llm_runtime_t **out_runtime,
+                             char **out_error_message)
 {
     claw_llm_runtime_config_t runtime_config = {0};
     esp_err_t err;
 
+    if (out_runtime) {
+        *out_runtime = NULL;
+    }
     if (out_error_message) {
         *out_error_message = NULL;
     }
-    if (!config || !config->api_key || !config->model || !out_error_message) {
+    if (!config || !config->api_key || !config->model || !out_runtime || !out_error_message) {
         return ESP_ERR_INVALID_ARG;
     }
-
-    claw_llm_runtime_deinit(s_runtime);
-    s_runtime = NULL;
 
     runtime_config.api_key = config->api_key;
     runtime_config.backend_type = config->backend_type;
@@ -74,14 +74,15 @@ esp_err_t claw_core_llm_init(const claw_core_llm_config_t *config, char **out_er
     runtime_config.supports_tools = config->supports_tools;
     runtime_config.supports_vision = config->supports_vision;
     runtime_config.image_remote_url_only = config->image_remote_url_only;
-    err = claw_llm_runtime_init(&s_runtime, &runtime_config, out_error_message);
+    err = claw_llm_runtime_init(out_runtime, &runtime_config, out_error_message);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "init: runtime init failed err=0x%x", err);
     }
     return err;
 }
 
-esp_err_t claw_core_llm_chat_messages(const char *system_prompt,
+esp_err_t claw_core_llm_chat_messages(claw_core_handle_t core,
+                                      const char *system_prompt,
                                       cJSON *messages,
                                       const char *tools_json,
                                       claw_core_llm_response_t *out_response,
@@ -92,7 +93,7 @@ esp_err_t claw_core_llm_chat_messages(const char *system_prompt,
     char *messages_json = NULL;
 #endif
 
-    if (!s_runtime) {
+    if (!core || !core->llm_runtime) {
         if (out_error_message) {
             *out_error_message = dup_printf("LLM runtime is not initialized");
         }
@@ -106,6 +107,7 @@ esp_err_t claw_core_llm_chat_messages(const char *system_prompt,
     request.system_prompt = system_prompt;
     request.messages = messages;
     request.tools_json = tools_json;
+    request.abort_flag = &core->inflight_abort;
 
 #if CLAW_CORE_LOG_FULL_LLM_REQUEST
     messages_json = cJSON_PrintUnformatted(messages);
@@ -119,70 +121,21 @@ esp_err_t claw_core_llm_chat_messages(const char *system_prompt,
     }
 #endif
 
-    esp_err_t err = claw_llm_runtime_chat(s_runtime, &request, out_response, out_error_message);
+    esp_err_t err = claw_llm_runtime_chat(core->llm_runtime, &request, out_response, out_error_message);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "chat_messages: runtime chat failed err=0x%x", err);
     }
     return err;
 }
 
-esp_err_t claw_core_llm_chat(const char *system_prompt,
-                             const char *user_text,
-                             char **out_text,
-                             char **out_error_message)
-{
-    claw_core_llm_response_t response = {0};
-    cJSON *messages = NULL;
-    cJSON *user_msg = NULL;
-    esp_err_t err;
-
-    if (out_text) {
-        *out_text = NULL;
-    }
-    if (!system_prompt || !user_text || !out_text || !out_error_message) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    messages = cJSON_CreateArray();
-    user_msg = cJSON_CreateObject();
-    if (!messages || !user_msg) {
-        cJSON_Delete(messages);
-        cJSON_Delete(user_msg);
-        *out_error_message = dup_printf("Out of memory building messages");
-        ESP_LOGE(TAG, "chat: out of memory building messages");
-        return ESP_ERR_NO_MEM;
-    }
-
-    cJSON_AddStringToObject(user_msg, "role", "user");
-    cJSON_AddStringToObject(user_msg, "content", user_text);
-    cJSON_AddItemToArray(messages, user_msg);
-
-    err = claw_core_llm_chat_messages(system_prompt, messages, NULL, &response, out_error_message);
-    cJSON_Delete(messages);
-    if (err != ESP_OK) {
-        claw_core_llm_response_free(&response);
-        return err;
-    }
-    if (response.tool_call_count > 0) {
-        ESP_LOGE(TAG, "chat: unsupported tool calls returned count=%zu", response.tool_call_count);
-        claw_core_llm_response_free(&response);
-        *out_error_message = dup_printf("LLM returned unsupported tool calls");
-        return ESP_ERR_NOT_SUPPORTED;
-    }
-
-    *out_text = response.text;
-    response.text = NULL;
-    claw_core_llm_response_free(&response);
-    return ESP_OK;
-}
-
-esp_err_t claw_core_llm_infer_media(const claw_llm_media_request_t *request,
+esp_err_t claw_core_llm_infer_media(claw_core_handle_t core,
+                                    const claw_llm_media_request_t *request,
                                     char **out_text,
                                     char **out_error_message)
 {
     esp_err_t err;
 
-    if (!s_runtime) {
+    if (!core || !core->llm_runtime) {
         if (out_error_message) {
             *out_error_message = dup_printf("LLM runtime is not initialized");
         }
@@ -192,35 +145,12 @@ esp_err_t claw_core_llm_infer_media(const claw_llm_media_request_t *request,
     if (!request || !out_text || !out_error_message) {
         return ESP_ERR_INVALID_ARG;
     }
-    err = claw_llm_runtime_infer_media(s_runtime, request, out_text, out_error_message);
+    err = claw_llm_runtime_infer_media(core->llm_runtime, request, out_text, out_error_message);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "infer_media: runtime inference failed err=0x%x media_count=%zu",
                  err, request->media_count);
     }
     return err;
-}
-
-esp_err_t claw_core_llm_analyze_image(const char *system_prompt,
-                                      const char *user_prompt,
-                                      const char *image_path,
-                                      char **out_text,
-                                      char **out_error_message)
-{
-    claw_media_asset_t asset = {0};
-    claw_llm_media_request_t request = {0};
-
-    if (!system_prompt || !user_prompt || !image_path || !out_text || !out_error_message) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    asset.kind = CLAW_MEDIA_ASSET_KIND_LOCAL_PATH;
-    asset.path = image_path;
-
-    request.system_prompt = system_prompt;
-    request.user_prompt = user_prompt;
-    request.media = &asset;
-    request.media_count = 1;
-    return claw_core_llm_infer_media(&request, out_text, out_error_message);
 }
 
 esp_err_t claw_core_llm_register_custom_backend(const claw_llm_custom_backend_registration_t *registration)

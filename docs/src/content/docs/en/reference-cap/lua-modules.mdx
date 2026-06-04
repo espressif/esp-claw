@@ -4,7 +4,8 @@ description: How `lua_module_*` and `lua_driver_*` components register with `cap
 ---
 
 import LinkToSource from '@/components/LinkToSource.astro';
-import { Aside, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import { Aside, CardGrid } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
 
 ## Overview
 
@@ -20,7 +21,10 @@ Pure Lua modules may provide only managed resources such as `lib/`, `test/`, and
 | `adc` | `lua_driver_adc` | ADC sampling |
 | `gpio` | `lua_driver_gpio` | GPIO reads/writes and direction |
 | `i2c` | `lua_driver_i2c` | I2C bus scan and per-device read/write |
+| `ssd1306` | `lua_driver_i2c` | Pure-Lua SSD1306 I2C OLED driver |
+| `lib_si12t_touch` | `lua_driver_i2c` | Pure-Lua Si12T I2C capacitive touch driver |
 | `mcpwm` | `lua_driver_mcpwm` | Generic PWM output (frequency/duty control) |
+| `pcnt` | `lua_driver_pcnt` | PCNT pulse counter / encoder reading |
 | `touch` | `lua_driver_touch` | Capacitive touch key reads |
 | `uart` | `lua_driver_uart` | UART serial I/O (polling read/write) |
 
@@ -29,6 +33,7 @@ Pure Lua modules may provide only managed resources such as `lib/`, `test/`, and
 | Module | Component | Purpose |
 |--------|-----------|---------|
 | `audio` | `lua_module_audio` | PCM/WAV playback/recording and spectrum analysis |
+| `ble_hid` | `lua_module_ble_hid` | BLE HID composite peripheral (media control, keyboard, mouse) |
 | `board_manager` | `lua_module_board_manager` | Board initialization and peripheral handle lookup |
 | `button` | `lua_module_button` | Button events and callbacks |
 | `capability` | `lua_module_call_capability` | Call registered Capabilities directly from Lua |
@@ -38,6 +43,9 @@ Pure Lua modules may provide only managed resources such as `lib/`, `test/`, and
 | `display` | `lua_module_display` | LCD drawing (text, primitives, JPEG/PNG) |
 | `environmental_sensor` | `lua_module_environmental_sensor` | BME690 temperature, humidity, pressure, and gas data |
 | `event_publisher` | `lua_module_event_publisher` | Publish events from Lua into the Event Router |
+| `http_server` | `lua_module_http_server` | Publish static files and HTTP callbacks on the existing HTTP server |
+| `image` | `lua_module_image` | Generic image frame type, format conversion, resizing, and file I/O |
+| `json` | `lua_module_json` | JSON encode/decode helper library |
 | `lib_fuel_gauge` | `lua_module_fuel_gauge` | Pure-Lua battery fuel-gauge library for BQ27220/MAX17048 and similar chips |
 | `imu` | `lua_module_imu` | IMU accelerometer and gyroscope reads |
 | `ir` | `lua_module_ir` | IR receive, learn, and transmit |
@@ -45,10 +53,13 @@ Pure Lua modules may provide only managed resources such as `lib/`, `test/`, and
 | `lcd` | `lua_module_lcd` | LCD panel initialization, backlight, and display helpers |
 | `lcd_touch` | `lua_module_lcd_touch` | Touch coordinates |
 | `led_strip` | `lua_module_led_strip` | Addressable strips such as WS2812 |
+| `lvgl` | `lua_module_lvgl` | LVGL graphics binding with full UI widgets and event system |
 | `magnetometer` | `lua_module_magnetometer` | Magnetometer / compass reads |
-| `ssd1306` | `lua_module_ssd1306` | Pure-Lua SSD1306 I2C OLED driver |
+| `motion_detect` | `lua_module_vision` | Motion detection based on `image.frame` |
+| `sci` | `lua_module_sci` | DFRobot SCI acquisition module (DFR0999) I2C reading |
 | `storage` | `lua_module_storage` | Filesystem operations |
 | `system` | `lua_module_system` | Time, uptime, IP, memory, heap, task stack, and Wi-Fi status |
+| `thread` | `lua_module_thread` | Lua task management, named synchronization queues/semaphores/event groups |
 | `arg_schema` | `lua_module_system` | Pure-Lua argument normalization helper |
 
 <Aside type="note" title="Module conditional compilation">
@@ -92,7 +103,7 @@ void app_lua_modules_init(void)
     lua_module_delay_register();
     // …other modules…
 
-    cap_lua_register_group();  // lock—no more registration afterward
+    cap_lua_register_group("/fatfs/scripts");  // pass script base dir; no more registration after lock
 }
 ```
 
@@ -352,7 +363,7 @@ static int lua_module_gpio_set_level(lua_State *L)
 When an underlying ESP-IDF call fails, the module uses `luaL_error` to return the failure to the Lua runtime.
 This makes script execution fail with a clear reason visible to the caller.
 
-Activating the Skill exposes the Lua run tools (`lua_run_script`, `lua_run_script_async`, …) while injecting the module guide so the LLM can author `myled` scripts confidently. Script files are created and inspected with file tools such as `write_file`, `read_file`, and `list_dir`.
+Activating the Skill exposes the Lua run tools (`lua_run_script`, `lua_run_script_async`, …), while the Skill document is injected into conversation history as the `activate_skill` tool result so the LLM can author `myled` scripts confidently. Script files are created and inspected with file tools such as `write_file`, `read_file`, and `list_dir`.
 
 ### String enum mapping
 

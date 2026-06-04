@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/ip4_addr.h"
@@ -155,8 +156,8 @@ static void dns_task(void *arg)
         return;
     }
 
-    static uint8_t buf[DNS_BUF_SIZE];
-    static uint8_t resp[DNS_BUF_SIZE + 16];
+    static EXT_RAM_BSS_ATTR uint8_t buf[DNS_BUF_SIZE];
+    static EXT_RAM_BSS_ATTR uint8_t resp[DNS_BUF_SIZE + 16];
 
     while (s_running) {
         struct sockaddr_in src;

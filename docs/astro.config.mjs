@@ -11,6 +11,7 @@ const BASE = "/";
 
 export default defineConfig({
   base: BASE,
+  site: "https://esp-claw.com",
   integrations: [
     astroD2(),
     starlight({
@@ -42,9 +43,10 @@ export default defineConfig({
             { slug: "tutorial/bom" },
             { slug: "tutorial/assemble" },
             { slug: "tutorial/get-started" },
+            { slug: "tutorial/first-interactions", translations: { en: "First interactions", "zh-CN": "上手体验" } },
             { slug: "tutorial/web-config" },
-            { slug: "tutorial/faq" },
             { slug: "tutorial/skills-lab" },
+            { slug: "tutorial/faq" },
           ],
         },
         {
@@ -52,27 +54,46 @@ export default defineConfig({
           items: [
             {
               label: "Project Architecture",
-              autogenerate: { directory: "reference-project" },
               translations: {
                 en: "Project Architecture",
                 "zh-CN": "项目架构",
               },
+              items: [
+                { autogenerate: { directory: "reference-project" } },
+              ]
             },
             {
               label: "Core",
-              autogenerate: { directory: "reference-core" },
               translations: {
                 en: "Core",
                 "zh-CN": "核心 Core",
               },
+              items: [
+                { autogenerate: { directory: "reference-core" } },
+              ]
             },
             {
               label: "Capabilities",
-              autogenerate: { directory: "reference-cap" },
               translations: {
                 en: "Capabilities",
                 "zh-CN": "能力 Capabilities",
               },
+              items: [
+                { slug: "reference-cap"},
+                { slug: "reference-cap/implement-capability" },
+                { slug: "reference-cap/cap-im-platform" },
+                { slug: "reference-cap/cap-skill" },
+                { slug: "reference-cap/cap-llm-inspect" },
+                { slug: "reference-cap/cap-files" },
+                { slug: "reference-cap/cap-system" },
+                { slug: "reference-cap/cap-scheduler" },
+                { slug: "reference-cap/cap-http-request" },
+                { slug: "reference-cap/cap-web-search" },
+                { slug: "reference-cap/cap-router-mgr" },
+                { slug: "reference-cap/cap-mcp" },
+                { slug: "reference-cap/cap-lua" },
+                { slug: "reference-cap/lua-modules" },
+              ]
             },
           ],
           translations: {

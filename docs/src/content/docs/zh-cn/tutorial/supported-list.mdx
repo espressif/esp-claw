@@ -3,7 +3,10 @@ title: 支持的芯片&开发板列表
 description: 支持的芯片&开发板列表
 ---
 
-import { LinkCard, Steps, Aside, LinkButton } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
+import { LinkButton } from 'starlight-theme-nova/components'
+import LinkToSource from '@/components/LinkToSource.astro';
 
 ## 支持的芯片
 
@@ -13,16 +16,17 @@ ESP-Claw 需要至少 8MB Flash 和 8MB PSRAM。
 - ESP32-S3
 - ESP32-P4
 - ESP32-C5
+- ESP32-S31
 
 ## 支持的开发板
 
-请见 [GitHub 仓库](https://github.com/espressif/esp-claw/tree/master/application/edge_agent/boards)。
+请见 <LinkToSource relativePath="application/edge_agent/boards/" />。
 
 <Aside title="需要适配新的开发板？" type="tip">
     ESP-Claw 使用 ESP Board Manager 适配多种开发板。
 
     如需添加其他开发板，请参考 [ESP Board Manager 文档](https://github.com/espressif/esp-gmf/blob/main/packages/esp_board_manager/docs/how_to_customize_board_cn.md)，
-    将开发板适配文件存放到 [`application/edge_agent/boards`](https://github.com/espressif/esp-claw/tree/master/application/edge_agent/boards)
+    将开发板适配文件存放到 <LinkToSource relativePath="application/edge_agent/boards/" />
 
     欢迎将开发板适配代码通过 Pull Request 提交到 ESP-Claw 仓库。
 </Aside>

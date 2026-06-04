@@ -90,7 +90,10 @@ export const SkillsPage: Component<{ onRestartRequest: () => void }> = (props) =
   };
 
   const selectAll = () => {
-    tab.setForm('enabled', appLuaModules().map((item) => item.module_id));
+    tab.setForm(
+      'enabled',
+      appLuaModules().map((item) => item.module_id),
+    );
   };
   const clearAll = () => {
     tab.setForm('enabled', []);

@@ -812,6 +812,7 @@ static esp_err_t anthropic_chat(void *backend_ctx,
     http_request.body = post_data;
     http_request.auth_type = "none";
     http_request.timeout_ms = ctx->timeout_ms;
+    http_request.abort_flag = request->abort_flag;
     http_request.headers = headers;
     http_request.header_count = sizeof(headers) / sizeof(headers[0]);
 

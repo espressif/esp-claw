@@ -34,17 +34,13 @@ export type ConfigTabApi<T extends object> = {
   reload: () => Promise<void>;
 };
 
-export function createConfigTab<T extends object>(
-  options: ConfigTabOptions<T>,
-): ConfigTabApi<T> {
+export function createConfigTab<T extends object>(options: ConfigTabOptions<T>): ConfigTabApi<T> {
   const initial = options.toForm(appConfig());
   const [form, setForm] = createStore<T>(initial);
   let baseline: T = clone(initial);
   const [baselineTick, setBaselineTick] = createSignal(0);
   const [saving, setSaving] = createSignal(false);
-  const [loading, setLoading] = createSignal(
-    options.groups.some((group) => !isGroupLoaded(group)),
-  );
+  const [loading, setLoading] = createSignal(options.groups.some((group) => !isGroupLoaded(group)));
   const [error, setError] = createSignal<string | null>(null);
 
   const applyBaseline = () => {
@@ -96,9 +92,7 @@ export function createConfigTab<T extends object>(
 
   const isDirtyMemo = createMemo(() => {
     void baselineTick();
-    return options.isDirty
-      ? options.isDirty(form as T, baseline)
-      : !shallowEqual(form, baseline);
+    return options.isDirty ? options.isDirty(form as T, baseline) : !shallowEqual(form, baseline);
   });
 
   createEffect(() => {
@@ -123,7 +117,10 @@ export function createConfigTab<T extends object>(
         setBaselineTick((value) => value + 1);
         markDirty(options.tab, false);
       });
-      pushToast(options.saveMessage ? options.saveMessage() : (t('saveSuccess') as string), 'success');
+      pushToast(
+        options.saveMessage ? options.saveMessage() : (t('saveSuccess') as string),
+        'success',
+      );
     } catch (err) {
       setError((err as Error).message);
       pushToast((err as Error).message || (t('saveError') as string), 'error', 5000);

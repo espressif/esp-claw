@@ -38,7 +38,7 @@ export type LeafNode = {
     | 'navBasic'
     | 'navLlm'
     | 'navIm'
-    | 'navSearch'
+    | 'navWebReq'
     | 'navMemory'
     | 'navCapabilities'
     | 'navLuaModules'
@@ -66,7 +66,7 @@ export const NAV_TREE: NavNode[] = [
       { kind: 'leaf', id: 'basic', labelKey: 'navBasic', icon: IconWifi },
       { kind: 'leaf', id: 'llm', labelKey: 'navLlm', icon: IconLlm },
       { kind: 'leaf', id: 'im', labelKey: 'navIm', icon: IconIm },
-      { kind: 'leaf', id: 'search', labelKey: 'navSearch', icon: IconSearch },
+      { kind: 'leaf', id: 'webreq', labelKey: 'navWebReq', icon: IconSearch },
     ],
   },
   { kind: 'leaf', id: 'memory', labelKey: 'navMemory', icon: IconMemory },
@@ -168,7 +168,11 @@ export const Sidebar: Component<SidebarProps> = (props) => {
       type="button"
       class={[
         'relative w-full flex items-center gap-3 rounded-[var(--radius-sm)] transition text-left',
-        isCollapsed() ? 'justify-center py-2 px-0' : options.indent ? 'px-3 py-2 pl-8' : 'px-3 py-2',
+        isCollapsed()
+          ? 'justify-center py-2 px-0'
+          : options.indent
+            ? 'px-3 py-2 pl-8'
+            : 'px-3 py-2',
         props.current === leaf.id
           ? 'bg-[var(--color-accent)]/15 text-[var(--color-text-primary)] ring-1 ring-[var(--color-accent-soft)]/40'
           : 'text-[var(--color-text-secondary)] hover:bg-white/5 hover:text-[var(--color-text-primary)]',
@@ -235,7 +239,10 @@ export const Sidebar: Component<SidebarProps> = (props) => {
             </Show>
             <Show when={!isMobileDrawer()}>
               <svg
-                class={['w-3.5 h-3.5 text-[var(--color-text-muted)] transition-transform', expanded().has(group.id) ? 'rotate-90' : ''].join(' ')}
+                class={[
+                  'w-3.5 h-3.5 text-[var(--color-text-muted)] transition-transform',
+                  expanded().has(group.id) ? 'rotate-90' : '',
+                ].join(' ')}
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -292,13 +299,17 @@ export const Sidebar: Component<SidebarProps> = (props) => {
           type="button"
           onClick={isMobileDrawer() ? props.onCloseMobile : props.onToggleCollapsed}
           class="inline-flex items-center justify-center w-9 h-9 rounded-[var(--radius-sm)] text-[var(--color-text-muted)] hover:bg-white/5 hover:text-[var(--color-text-primary)] transition shrink-0"
-          aria-label={isMobileDrawer() ? (t('closeMenu') as string) : (t('toggleSidebar') as string)}
+          aria-label={
+            isMobileDrawer() ? (t('closeMenu') as string) : (t('toggleSidebar') as string)
+          }
         >
           <Show
             when={isMobileDrawer()}
             fallback={
               <svg
-                class={['w-4 h-4 transition-transform', props.collapsed ? 'rotate-180' : ''].join(' ')}
+                class={['w-4 h-4 transition-transform', props.collapsed ? 'rotate-180' : ''].join(
+                  ' ',
+                )}
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -330,9 +341,7 @@ export const Sidebar: Component<SidebarProps> = (props) => {
           <For each={NAV_TREE}>
             {(node) => (
               <li>
-                {node.kind === 'leaf'
-                  ? renderLeaf(node, { indent: false })
-                  : renderGroup(node)}
+                {node.kind === 'leaf' ? renderLeaf(node, { indent: false }) : renderGroup(node)}
               </li>
             )}
           </For>

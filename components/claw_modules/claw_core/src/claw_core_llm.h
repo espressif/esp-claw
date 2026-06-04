@@ -5,6 +5,7 @@
  */
 #pragma once
 
+#include "claw_core.h"
 #include "llm/claw_llm_runtime.h"
 
 typedef struct {
@@ -25,22 +26,17 @@ typedef struct {
 typedef claw_llm_tool_call_t claw_core_llm_tool_call_t;
 typedef claw_llm_response_t claw_core_llm_response_t;
 
-esp_err_t claw_core_llm_init(const claw_core_llm_config_t *config, char **out_error_message);
-esp_err_t claw_core_llm_chat_messages(const char *system_prompt,
+esp_err_t claw_core_llm_init(const claw_core_llm_config_t *config,
+                             claw_llm_runtime_t **out_runtime,
+                             char **out_error_message);
+esp_err_t claw_core_llm_chat_messages(claw_core_handle_t core,
+                                      const char *system_prompt,
                                       cJSON *messages,
                                       const char *tools_json,
                                       claw_core_llm_response_t *out_response,
                                       char **out_error_message);
-esp_err_t claw_core_llm_chat(const char *system_prompt,
-                             const char *user_text,
-                             char **out_text,
-                             char **out_error_message);
-esp_err_t claw_core_llm_analyze_image(const char *system_prompt,
-                                      const char *user_prompt,
-                                      const char *image_path,
-                                      char **out_text,
-                                      char **out_error_message);
-esp_err_t claw_core_llm_infer_media(const claw_llm_media_request_t *request,
+esp_err_t claw_core_llm_infer_media(claw_core_handle_t core,
+                                    const claw_llm_media_request_t *request,
                                     char **out_text,
                                     char **out_error_message);
 esp_err_t claw_core_llm_register_custom_backend(const claw_llm_custom_backend_registration_t *registration);

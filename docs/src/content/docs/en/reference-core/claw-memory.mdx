@@ -4,7 +4,8 @@ description: Session history and long-term memory file I/O and how they connect 
 ---
 
 import LinkToSource from '@/components/LinkToSource.astro';
-import { LinkCard, Aside, FileTree } from '@astrojs/starlight/components';
+import { Aside, FileTree } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
 
 Header: <LinkToSource relativePath="components/claw_modules/claw_memory/include/claw_memory.h" />
 
@@ -16,7 +17,8 @@ Common fields in `claw_memory_config_t`:
 |------|------|------|
 | `session_root_dir` | Root for session history files | `/fatfs/sessions` |
 | `memory_root_dir` | Long-term memory directory (`claw_memory` manages `MEMORY.md` and all structured memory files under this directory) | `/fatfs/memory` |
-| `max_message_chars` | Max characters per message | `1024` |
+| `max_message_chars` | Max characters per message | `4096` |
+| `max_tool_iterations` | Maximum tool-call iterations, kept consistent with `claw_core` | `32` |
 | `enable_async_extract_stage_note` | Enable async extract-stage notes for structured memory | `true` in full mode |
 
 Session history is stored as an append-only data file plus a matching `.idx` file. It loads the complete indexed session and compacts old tool details only when the data file exceeds the session size limit after a finalized assistant turn.
@@ -34,7 +36,7 @@ Session history is stored as an append-only data file plus a matching `.idx` fil
 
 **Write-back Callback**:
 
-- `claw_memory_persist_session_callback`: passed as `claw_core_config_t.persist_session`; typed raw session records are appended to the session file for plain turns, tool rounds, final assistant records, and failure notes.
+- `claw_memory_persist_context_callback`: passed as `claw_core_config_t.persist_context`; typed raw context records are appended to the session file for plain turns, tool rounds, final assistant records, and failure notes.
 - Full mode also enables `on_request_start` and `collect_stage_note` for structured-memory auto-extraction.
 
 ## Long-term memory file layout

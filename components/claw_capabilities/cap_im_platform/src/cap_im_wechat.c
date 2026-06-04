@@ -30,9 +30,9 @@
 #include "freertos/idf_additions.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "mbedtls/aes.h"
+#include "aes/esp_aes.h"
 #include "mbedtls/base64.h"
-#include "mbedtls/md5.h"
+#include "esp_rom_md5.h"
 
 static const char *TAG = "cap_im_wechat";
 
@@ -751,7 +751,7 @@ static esp_err_t cap_im_wechat_publish_attachment_event(const char *chat_id,
     strlcpy(event.message_id, message_id, sizeof(event.message_id));
     strlcpy(event.content_type, content_type, sizeof(event.content_type));
     event.timestamp_ms = cap_im_wechat_now_ms();
-    event.session_policy = CLAW_EVENT_SESSION_POLICY_CHAT;
+    event.session_policy = CLAW_SESSION_POLICY_CHAT;
     snprintf(event.event_id, sizeof(event.event_id), "wechat-attach-%" PRId64, event.timestamp_ms);
     event.text = "";
     event.payload_json = (char *)payload_json;
@@ -887,7 +887,7 @@ static esp_err_t cap_im_wechat_aes_ecb_crypt(const unsigned char *input,
                                              unsigned char **out_buf,
                                              size_t *out_len)
 {
-    mbedtls_aes_context aes;
+    esp_aes_context aes;
     unsigned char *buffer = NULL;
     size_t padded_len;
     size_t i;
@@ -913,26 +913,26 @@ static esp_err_t cap_im_wechat_aes_ecb_crypt(const unsigned char *input,
         memset(buffer + input_len, pad, pad);
     }
 
-    mbedtls_aes_init(&aes);
-    ret = encrypt ? mbedtls_aes_setkey_enc(&aes, key, 128) : mbedtls_aes_setkey_dec(&aes, key, 128);
+    esp_aes_init(&aes);
+    ret = esp_aes_setkey(&aes, key, 128);
     if (ret != 0) {
-        mbedtls_aes_free(&aes);
+        esp_aes_free(&aes);
         free(buffer);
         return ESP_FAIL;
     }
 
     for (i = 0; i < padded_len; i += 16) {
-        ret = mbedtls_aes_crypt_ecb(&aes,
-                                    encrypt ? MBEDTLS_AES_ENCRYPT : MBEDTLS_AES_DECRYPT,
-                                    buffer + i,
-                                    buffer + i);
+        ret = esp_aes_crypt_ecb(&aes,
+                                encrypt ? ESP_AES_ENCRYPT : ESP_AES_DECRYPT,
+                                buffer + i,
+                                buffer + i);
         if (ret != 0) {
-            mbedtls_aes_free(&aes);
+            esp_aes_free(&aes);
             free(buffer);
             return ESP_FAIL;
         }
     }
-    mbedtls_aes_free(&aes);
+    esp_aes_free(&aes);
 
     if (!encrypt) {
         unsigned char pad = buffer[padded_len - 1];
@@ -1740,7 +1740,10 @@ static esp_err_t cap_im_wechat_md5_hex(const unsigned char *buf,
         return ESP_ERR_INVALID_ARG;
     }
 
-    mbedtls_md5(buf, len, digest);
+    md5_context_t md5_ctx;
+    esp_rom_md5_init(&md5_ctx);
+    esp_rom_md5_update(&md5_ctx, buf, len);
+    esp_rom_md5_final(digest, &md5_ctx);
     for (i = 0; i < sizeof(digest); i++) {
         snprintf(out + (i * 2), out_size - (i * 2), "%02x", digest[i]);
     }

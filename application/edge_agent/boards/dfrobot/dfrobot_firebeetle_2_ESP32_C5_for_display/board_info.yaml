@@ -1,0 +1,5 @@
+board: dfrobot_firebeetle_2_ESP32_C5_for_display
+chip: esp32c5
+version: 1.0.0
+description: "DFRobot FireBeetle 2 ESP32-C5 (DFR1222) with GDI display"
+manufacturer: "DFRobot"

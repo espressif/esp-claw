@@ -139,7 +139,10 @@ export const CapabilitiesPage: Component<{ onRestartRequest: () => void }> = (pr
   };
 
   const selectAll = () => {
-    tab.setForm('enabled', appCapabilities().map((item) => item.group_id));
+    tab.setForm(
+      'enabled',
+      appCapabilities().map((item) => item.group_id),
+    );
   };
 
   const clearAll = () => {

@@ -26,7 +26,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 **常见原因：**
 - 设备访问不了 LLM 云端（DNS、防火墙、地区网络）。
-- API Key、profile、model 不匹配或过期。
+- API Key、backend_type、model 不匹配或过期。
 - 模型过慢，超过路由层等待 `claw_core` 的时间（日志里会有线索）。
 - Event Router 规则不正确，消息无法正确路由。
 
@@ -80,7 +80,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 **常见原因：**
 
-- 该工具所在 **group** 不在 `claw_cap_set_llm_visible_groups` 白名单内（demo 默认是 `cap_files`、`cap_skill`、`cap_system`、`cap_lua`，完整结构化记忆模式还包含 `claw_memory`）。
+- 该工具所在 **group** 不在 `claw_cap_set_llm_visible_groups` 白名单内（demo 默认是 `cap_files`、`cap_scheduler`、`cap_lua`、`cap_skill`、`cap_llm_inspect`、`cap_http_request`、`cap_web_search`、`cap_router_mgr`，完整结构化记忆模式还包含 `claw_memory`）。
 - 需要 **激活技能** 后，模型才会同时拿到工具文档与对应 group 的可见性。
 
 **排查建议：**

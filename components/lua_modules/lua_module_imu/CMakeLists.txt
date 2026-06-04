@@ -6,9 +6,22 @@ set(imu_include_dirs
     "src"
 )
 
+if(CONFIG_LUA_MODULE_IMU_CHIP_BMI270)
+    list(APPEND imu_srcs
+        "src/bmi270/bmi270_backend.c"
+    )
+endif()
+
+if(CONFIG_LUA_MODULE_IMU_CHIP_ICM42670)
+    list(APPEND imu_srcs
+        "src/icm42670/icm42670_backend.c"
+    )
+endif()
+
 if(CONFIG_LUA_MODULE_IMU_CHIP_MPU6050)
     list(APPEND imu_srcs
         "src/mpu6050/mpu6050.c"
+        "src/mpu6050/mpu6050_backend.c"
     )
     list(APPEND imu_include_dirs
         "src/mpu6050"

@@ -9,10 +9,7 @@ export const LabelLink: ParentComponent<LabelLinkProps> = (props) => (
     {...props}
     target={props.target ?? '_blank'}
     rel={props.rel ?? 'noopener noreferrer'}
-    class={[
-      'ml-2 text-[var(--color-accent-soft)] hover:underline',
-      props.class ?? '',
-    ]
+    class={['ml-2 text-[var(--color-accent-soft)] hover:underline', props.class ?? '']
       .filter(Boolean)
       .join(' ')}
     onClick={(event) => {

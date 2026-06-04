@@ -1,0 +1,9 @@
+idf_component_register(
+    SRCS
+        "src/cap_agent_mgr.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        claw_cap
+        claw_manager
+)

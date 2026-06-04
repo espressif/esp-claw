@@ -53,8 +53,10 @@ static void lua_module_system_push_heap_caps_constants(lua_State *L)
     lua_setfield(L, -2, "BIT8");
     lua_pushinteger(L, MALLOC_CAP_32BIT);
     lua_setfield(L, -2, "BIT32");
+#if CONFIG_HEAP_HAS_EXEC_HEAP
     lua_pushinteger(L, MALLOC_CAP_EXEC);
     lua_setfield(L, -2, "EXEC");
+#endif
     lua_pushinteger(L, MALLOC_CAP_IRAM_8BIT);
     lua_setfield(L, -2, "IRAM_8BIT");
     lua_pushinteger(L, MALLOC_CAP_RTCRAM);

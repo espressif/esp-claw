@@ -3,7 +3,11 @@ import { t } from '../../i18n';
 import { appStatus } from '../../state/config';
 
 export const Logo: Component<{ class?: string }> = (props) => (
-  <svg class={props.class ?? 'h-auto w-[6rem]'} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 686.46 191.26">
+  <svg
+    class={props.class ?? 'h-auto w-[6rem]'}
+    xmlns="http://www.w3.org/2000/svg"
+    viewBox="0 0 686.46 191.26"
+  >
     <path
       fill="currentColor"
       d="M274.61 59.98v13.2h-37.7v15.3h34.6v12.2h-34.6v17.5h38.5v13.2h-54.2v-71.4zm23.4 53.8q1.305 2.505 3.45 4.05c1.43 1.03 3.12 1.8 5.05 2.3q2.895.75 6 .75c1.4 0 2.9-.12 4.5-.35q2.4-.345 4.5-1.35c1.4-.67 2.57-1.58 3.5-2.75s1.4-2.65 1.4-4.45c0-1.93-.62-3.5-1.85-4.7s-2.85-2.2-4.85-3-4.27-1.5-6.8-2.1-5.1-1.27-7.7-2c-2.67-.67-5.27-1.48-7.8-2.45s-4.8-2.22-6.8-3.75-3.62-3.45-4.85-5.75-1.85-5.08-1.85-8.35c0-3.67.78-6.85 2.35-9.55q2.355-4.05 6.15-6.75c2.53-1.8 5.4-3.13 8.6-4s6.4-1.3 9.6-1.3c3.73 0 7.32.42 10.75 1.25q5.145 1.245 9.15 4.05c2.67 1.87 4.78 4.25 6.35 7.15s2.35 6.42 2.35 10.55h-15.2c-.13-2.13-.58-3.9-1.35-5.3s-1.78-2.5-3.05-3.3-2.72-1.37-4.35-1.7-3.42-.5-5.35-.5c-1.27 0-2.53.13-3.8.4s-2.42.73-3.45 1.4-1.88 1.5-2.55 2.5-1 2.27-1 3.8c0 1.4.27 2.53.8 3.4q.795 1.305 3.15 2.4c1.57.73 3.73 1.47 6.5 2.2s6.38 1.67 10.85 2.8c1.33.27 3.18.75 5.55 1.45s4.72 1.82 7.05 3.35 4.35 3.58 6.05 6.15 2.55 5.85 2.55 9.85c0 3.27-.63 6.3-1.9 9.1s-3.15 5.22-5.65 7.25c-2.5 2.04-5.6 3.62-9.3 4.75s-7.98 1.7-12.85 1.7c-3.93 0-7.75-.48-11.45-1.45-3.7-.96-6.97-2.48-9.8-4.55s-5.08-4.7-6.75-7.9q-2.505-4.8-2.4-11.4h15.2c0 2.4.43 4.43 1.3 6.1m85.1-53.8q6.705 0 11.4 1.95c3.13 1.3 5.68 3.02 7.65 5.15 1.96 2.13 3.4 4.57 4.3 7.3s1.35 5.57 1.35 8.5-.45 5.68-1.35 8.45-2.33 5.22-4.3 7.35-4.52 3.85-7.65 5.15q-4.695 1.95-11.4 1.95h-16.5v25.6h-15.7v-71.4zm-4.3 33.6c1.8 0 3.53-.13 5.2-.4s3.13-.78 4.4-1.55 2.28-1.85 3.05-3.25 1.15-3.23 1.15-5.5-.38-4.1-1.15-5.5-1.78-2.48-3.05-3.25-2.73-1.28-4.4-1.55-3.4-.4-5.2-.4h-12.2v21.4zm36.06 10.09h24.74v9.18h-24.74z"
@@ -25,7 +29,9 @@ export const StatusSummary: Component<{ class?: string; compact?: boolean }> = (
         'min-w-0 flex items-center gap-2 text-[0.8rem]',
         props.compact ? 'flex-nowrap overflow-hidden' : 'flex-wrap',
         props.class ?? '',
-      ].join(' ').trim()}
+      ]
+        .join(' ')
+        .trim()}
     >
       <span
         class={[
@@ -33,8 +39,8 @@ export const StatusSummary: Component<{ class?: string; compact?: boolean }> = (
           loading()
             ? 'border-[var(--color-border-subtle)] text-[var(--color-text-muted)] bg-white/[0.04]'
             : online()
-            ? 'border-[rgba(104,211,145,0.2)] bg-[var(--color-green-dim)] text-[var(--color-green)]'
-            : 'border-[var(--color-border-subtle)] bg-white/[0.04] text-[var(--color-text-muted)]',
+              ? 'border-[rgba(104,211,145,0.2)] bg-[var(--color-green-dim)] text-[var(--color-green)]'
+              : 'border-[var(--color-border-subtle)] bg-white/[0.04] text-[var(--color-text-muted)]',
         ].join(' ')}
       >
         <span
@@ -47,25 +53,45 @@ export const StatusSummary: Component<{ class?: string; compact?: boolean }> = (
           {loading()
             ? t('statusLoading')
             : online()
-            ? t('statusOnline')
-            : appStatus()?.ap_active
-            ? t('statusApActive')
-            : t('statusOffline')}
+              ? t('statusOnline')
+              : appStatus()?.ap_active
+                ? t('statusApActive')
+                : t('statusOffline')}
         </span>
       </span>
       <Show when={appStatus()?.ip}>
-        <span class={['text-[var(--color-border-subtle)] select-none', props.compact ? 'shrink-0' : ''].join(' ')}>
+        <span
+          class={[
+            'text-[var(--color-border-subtle)] select-none',
+            props.compact ? 'shrink-0' : '',
+          ].join(' ')}
+        >
           ·
         </span>
-        <span class={['font-mono text-[0.78rem] text-[var(--color-text-secondary)]', props.compact ? 'truncate min-w-0' : ''].join(' ')}>
+        <span
+          class={[
+            'font-mono text-[0.78rem] text-[var(--color-text-secondary)]',
+            props.compact ? 'truncate min-w-0' : '',
+          ].join(' ')}
+        >
           IP: {appStatus()!.ip}
         </span>
       </Show>
       <Show when={appStatus()?.storage_base_path}>
-        <span class={['text-[var(--color-border-subtle)] select-none', props.compact ? 'shrink-0' : ''].join(' ')}>
+        <span
+          class={[
+            'text-[var(--color-border-subtle)] select-none',
+            props.compact ? 'shrink-0' : '',
+          ].join(' ')}
+        >
           ·
         </span>
-        <span class={['font-mono text-[0.78rem] text-[var(--color-text-secondary)]', props.compact ? 'truncate min-w-0' : ''].join(' ')}>
+        <span
+          class={[
+            'font-mono text-[0.78rem] text-[var(--color-text-secondary)]',
+            props.compact ? 'truncate min-w-0' : '',
+          ].join(' ')}
+        >
           Storage: {appStatus()!.storage_base_path}
         </span>
       </Show>

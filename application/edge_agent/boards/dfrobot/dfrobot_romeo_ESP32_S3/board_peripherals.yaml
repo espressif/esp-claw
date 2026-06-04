@@ -1,0 +1,126 @@
+version: 1.0.0
+# Peripherals for DFRobot Romeo ESP32-S3 (DFR0994)
+peripherals:
+
+  # Camera SCCB + GDI I2C (shared on GDI FPC: SDA=1, SCL=2)
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 1
+        scl: 2
+
+  # GDI FPC shared SPI: SCLK=17, MOSI=15, MISO=16 (display CS=18, SD CS=0)
+  - name: spi_gdi
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        mosi_io_num: 15
+        miso_io_num: 16
+        sclk_io_num: 17
+        max_transfer_sz: 307200
+        
+
+  # GDI LCD_BL = GPIO21 (LEDC channel 0)
+  - name: ledc_backlight
+    type: ledc
+    version: default
+    config:
+      gpio_num: 21
+      speed_mode: LEDC_LOW_SPEED_MODE
+      channel: 0
+      timer_sel: 0
+      freq_hz: 5000
+      duty: 1023
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false
+
+  # 4-channel H-bridge PH/EN mode (PMODE jumper shorted). EN = PWM speed, PH = direction GPIO.
+  # M2_PH is remapped to GPIO44 to avoid conflict with LCD backlight GPIO21.
+  - name: ledc_motor_m1_en
+    type: ledc
+    version: default
+    config:
+      gpio_num: 12
+      speed_mode: LEDC_LOW_SPEED_MODE
+      channel: 1
+      timer_sel: 0
+      freq_hz: 16000
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: true
+
+  - name: ledc_motor_m2_en
+    type: ledc
+    version: default
+    config:
+      gpio_num: 14
+      speed_mode: LEDC_LOW_SPEED_MODE
+      channel: 2
+      timer_sel: 0
+      freq_hz: 16000
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: true
+
+  - name: ledc_motor_m3_en
+    type: ledc
+    version: default
+    config:
+      gpio_num: 9
+      speed_mode: LEDC_LOW_SPEED_MODE
+      channel: 3
+      timer_sel: 0
+      freq_hz: 16000
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: true
+
+  - name: ledc_motor_m4_en
+    type: ledc
+    version: default
+    config:
+      gpio_num: 47
+      speed_mode: LEDC_LOW_SPEED_MODE
+      channel: 4
+      timer_sel: 0
+      freq_hz: 16000
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: true
+
+  - name: gpio_motor_m1_ph
+    type: gpio
+    role: io
+    config:
+      pin: 13
+      mode: GPIO_MODE_OUTPUT
+      default_level: 0
+
+  - name: gpio_motor_m2_ph
+    type: gpio
+    role: io
+    config:
+      pin: 44
+      mode: GPIO_MODE_OUTPUT
+      default_level: 0
+
+  - name: gpio_motor_m3_ph
+    type: gpio
+    role: io
+    config:
+      pin: 10
+      mode: GPIO_MODE_OUTPUT
+      default_level: 0
+
+  - name: gpio_motor_m4_ph
+    type: gpio
+    role: io
+    config:
+      pin: 11
+      mode: GPIO_MODE_OUTPUT
+      default_level: 0

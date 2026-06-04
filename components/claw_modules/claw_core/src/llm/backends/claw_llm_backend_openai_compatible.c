@@ -388,6 +388,7 @@ static esp_err_t openai_compatible_chat(void *backend_ctx,
     http_request.api_key = ctx->api_key;
     http_request.auth_type = ctx->auth_type;
     http_request.timeout_ms = ctx->timeout_ms;
+    http_request.abort_flag = request->abort_flag;
     if (is_openrouter_url(ctx->base_url)) {
         headers[0].name = "HTTP-Referer";
         headers[0].value = "https://github.com/espressif/esp-claw";

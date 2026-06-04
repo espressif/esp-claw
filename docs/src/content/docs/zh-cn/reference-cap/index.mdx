@@ -3,7 +3,8 @@ title: Capabilities 总览
 description: ESP-Claw 中 cap_* 模块的整体架构、分类与注册机制。
 ---
 
-import { LinkCard, CardGrid, Aside } from '@astrojs/starlight/components';
+import { CardGrid, Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
 import LinkToSource from '@/components/LinkToSource.astro';
 
 ## 什么是 Capability
@@ -27,8 +28,9 @@ import LinkToSource from '@/components/LinkToSource.astro';
 | **IM 接入** | `cap_im_platform` | 飞书、QQ、Telegram、微信的统一 IM 组件，并注册 `cap_im_tg` 等按平台划分的运行时 Group |
 | **文件系统** | `cap_files` | 受管 FATFS 目录的读写、编辑、复制、移动、列举与删除 |
 | **Lua 脚本** | `cap_lua` | Lua 脚本的写入、同步/异步执行与任务管理 |
-| **Skill 管理** | `cap_skill` | Skill 的注册/注销与激活/停用（暴露 core 功能为工具） |
+| **Skill 管理** | `cap_skill` | Skill 的注册/注销与激活（暴露 core 功能为工具，激活时返回完整文档） |
 | **LLM 检视** | `cap_llm_inspect` | 将本地图像文件发送给 LLM 分析（与 LLM 产生嵌套交互） |
+| **HTTP 请求** | `cap_http_request` | 受 allowlist 保护的直接 HTTP / HTTPS 请求 |
 | **网络搜索** | `cap_web_search` | 调用外部搜索 API |
 | **时间** | `cap_time` | 查询设备当前本地时间，并为相对时间推理提供时间上下文 |
 | **系统信息** | `cap_system` | 查询设备系统/内存/CPU/Wi-Fi/IP 信息，并支持触发重启等运维操作 |
@@ -37,6 +39,7 @@ import LinkToSource from '@/components/LinkToSource.astro';
 | **MCP** | `cap_mcp_*` | Model Context Protocol 客户端/服务端 |
 | **CLI** | `cap_cli` | 将 Capability 调用暴露为终端命令 |
 | **会话管理** | `cap_session_mgr` | 会话状态读写 |
+| **子智能体管理** | `cap_agent_mgr` | 仅根可用的子智能体派生 / 监管 / 关闭 / 删除 |
 
 ## Group 注册机制
 
@@ -89,10 +92,15 @@ Capability 可通过以下三条路径被调用：
   <LinkCard title="如何实现 Capability" href="./implement-capability" description="从零实现一个 cap_* 组件的完整步骤与最佳实践" />
   <LinkCard title="cap_im_platform" href="./cap-im-platform" description="统一 IM 参考：飞书、QQ、Telegram 与微信" />
   <LinkCard title="cap_skill" href="./cap-skill" description="core 功能暴露代表：将 claw_skill 能力封装为工具" />
+  <LinkCard title="cap_agent_mgr" href="./cap-agent-mgr" description="子智能体参考：仅根可用的派生、监管与回收子智能体" />
   <LinkCard title="cap_llm_inspect" href="./cap-llm-inspect" description="LLM 交互代表：在工具执行中嵌套发起 LLM 推理" />
   <LinkCard title="cap_files" href="./cap-files" description="文件系统代表：受管目录的读写、编辑、复制、移动与删除能力" />
   <LinkCard title="cap_system" href="./cap-system" description="系统信息代表：读取设备运行状态并支持安全重启" />
   <LinkCard title="cap_scheduler" href="./cap-scheduler" description="定时调度代表：基于时间触发事件，管理周期性任务" />
+  <LinkCard title="cap_http_request" href="./cap-http-request" description="受 Allowlist 保护的 HTTP/HTTPS 请求" />
+  <LinkCard title="cap_web_search" href="./cap-web-search" description="调用外部搜索 API（Tavily / Brave）进行网络搜索" />
+  <LinkCard title="cap_router_mgr" href="./cap-router-mgr" description="动态维护 Event Router 自动化规则" />
+  <LinkCard title="cap_mcp_client / cap_mcp_server" href="./cap-mcp" description="MCP 协议客户端与服务端，支持多设备工具互调" />
   <LinkCard title="cap_lua 与 Lua 综述" href="./cap-lua" description="Lua 脚本能力与 Lua 在 ESP-Claw 中的整体定位" />
   <LinkCard title="Lua 扩展模块" href="./lua-modules" description="lua_module_* / lua_driver_* 的注册机制、实现方式与 display 模块分析" />
 </CardGrid>

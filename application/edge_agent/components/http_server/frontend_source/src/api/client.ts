@@ -1,3 +1,9 @@
+const TAR_BLOCK = 512;
+const TAR_MAX_DEPTH = 3;
+const TAR_MAX_FILES = 50;
+
+type BlobBytes = Uint8Array<ArrayBuffer>;
+
 export type AppConfig = {
   wifi_ssid: string;
   wifi_password: string;
@@ -37,14 +43,7 @@ export type AppConfig = {
 
 /** Server-side configuration groups (must stay in sync with
  * CONFIG_FIELDS in http_server_config_api.c). */
-export type ConfigGroup =
-  | 'wifi'
-  | 'llm'
-  | 'im'
-  | 'search'
-  | 'capabilities'
-  | 'skills'
-  | 'time';
+export type ConfigGroup = 'wifi' | 'llm' | 'im' | 'search' | 'capabilities' | 'skills' | 'time';
 
 export const GROUP_FIELDS: Record<ConfigGroup, (keyof AppConfig)[]> = {
   wifi: ['wifi_ssid', 'wifi_password', 'ap_ssid', 'ap_password', 'ap_behavior'],
@@ -195,7 +194,12 @@ export function fetchConfigFields(fields: (keyof AppConfig)[]) {
 /** Partial save: only keys present in the patch are written; absent
  * keys remain untouched in NVS. */
 export async function saveConfigPatch(patch: Partial<AppConfig>) {
-  return request<{ ok?: boolean; applied?: number; message?: string; error?: string }>(
+  return request<{
+    ok?: boolean;
+    applied?: number;
+    message?: string;
+    error?: string;
+  }>(
     '/api/config',
     {
       method: 'POST',
@@ -224,19 +228,16 @@ export async function fetchLuaModules() {
   return Array.isArray(data.items) ? data.items : [];
 }
 
-export async function fetchFileList(path: string) {
+export async function fetchFileList(path: string, signal?: AbortSignal) {
   const data = await request<{ path: string; entries: FileEntry[] }>(
     '/api/files?path=' + encodeURIComponent(path),
-    undefined,
+    { signal },
     'Failed to load file list',
   );
   return data;
 }
 
-export async function fetchFileContent(
-  path: string,
-  options: { allowMissing?: boolean } = {},
-) {
+export async function fetchFileContent(path: string, options: { allowMissing?: boolean } = {}) {
   const response = await fetch('/files' + path, { cache: 'no-store' });
   if (!response.ok) {
     if (options.allowMissing && response.status === 404) {
@@ -249,9 +250,7 @@ export async function fetchFileContent(
 
 export async function saveFileContent(path: string, content: string | Blob) {
   const body =
-    content instanceof Blob
-      ? content
-      : new Blob([content], { type: 'text/plain; charset=utf-8' });
+    content instanceof Blob ? content : new Blob([content], { type: 'text/plain; charset=utf-8' });
   return request<unknown>(
     '/api/files/upload?path=' + encodeURIComponent(path),
     { method: 'POST', body },
@@ -267,10 +266,7 @@ export async function uploadFile(path: string, file: File) {
   );
 }
 
-export async function createFolder(
-  path: string,
-  options: { recursive?: boolean } = {},
-) {
+export async function createFolder(path: string, options: { recursive?: boolean } = {}) {
   const body: { path: string; recursive?: boolean } = { path };
   if (options.recursive) {
     body.recursive = true;
@@ -286,12 +282,95 @@ export async function createFolder(
   );
 }
 
-export async function deletePath(path: string) {
-  return request<unknown>(
-    '/api/files?path=' + encodeURIComponent(path),
-    { method: 'DELETE' },
-    'Failed to delete path',
-  );
+export async function deletePath(path: string, options: { recursive?: boolean } = {}) {
+  let url = '/api/files?path=' + encodeURIComponent(path);
+  if (options.recursive) {
+    url += '&recursive=1';
+  }
+  return request<unknown>(url, { method: 'DELETE' }, 'Failed to delete path');
+}
+
+function makeBlobBytes(size: number): BlobBytes {
+  return new Uint8Array(new ArrayBuffer(size));
+}
+
+function tarHeader(name: string, size: number): BlobBytes {
+  const buf = makeBlobBytes(TAR_BLOCK);
+  const enc = new TextEncoder();
+  const write = (offset: number, len: number, val: string) => {
+    const bytes = enc.encode(val);
+    buf.set(bytes.subarray(0, Math.min(bytes.length, len)), offset);
+  };
+  write(0, 100, name);
+  write(100, 8, '0000644\0');
+  write(108, 8, '0000000\0');
+  write(116, 8, '0000000\0');
+  write(124, 12, size.toString(8).padStart(11, '0') + '\0');
+  write(136, 12, '00000000000\0');
+  buf[156] = 48; // '0' = regular file
+  // checksum placeholder (spaces)
+  for (let i = 148; i < 156; i++) buf[i] = 32;
+  let chksum = 0;
+  for (const byte of buf) chksum += byte;
+  write(148, 7, chksum.toString(8).padStart(6, '0') + '\0');
+  buf[155] = 32;
+  return buf;
+}
+
+type CollectedFile = { path: string; relativeName: string; size: number };
+
+async function collectFiles(
+  basePath: string,
+  prefix: string,
+  depth: number,
+  result: CollectedFile[],
+  signal?: AbortSignal,
+): Promise<void> {
+  if (depth > TAR_MAX_DEPTH || result.length >= TAR_MAX_FILES) return;
+  signal?.throwIfAborted();
+  const data = await fetchFileList(basePath, signal);
+  for (const entry of data.entries ?? []) {
+    signal?.throwIfAborted();
+    if (result.length >= TAR_MAX_FILES) break;
+    const name = prefix ? prefix + '/' + entry.name : entry.name;
+    if (entry.is_dir) {
+      await collectFiles(entry.path, name, depth + 1, result, signal);
+    } else {
+      result.push({ path: entry.path, relativeName: name, size: entry.size });
+    }
+  }
+}
+
+export async function downloadFolderTar(
+  path: string,
+  onProgress?: (done: number, total: number) => void,
+  signal?: AbortSignal,
+): Promise<Blob> {
+  const files: CollectedFile[] = [];
+  await collectFiles(path, '', 1, files, signal);
+  if (files.length === 0) {
+    throw new Error('No files found in directory');
+  }
+
+  const total = files.length;
+  const parts: BlobPart[] = [];
+
+  for (const [i, f] of files.entries()) {
+    signal?.throwIfAborted();
+    const resp = await fetch('/files' + f.path, { cache: 'no-store', signal });
+    if (!resp.ok) throw new Error(`Failed to download ${f.path}`);
+    const content: BlobBytes = new Uint8Array(await resp.arrayBuffer());
+
+    parts.push(tarHeader(f.relativeName, content.length));
+    parts.push(content);
+    const pad = (TAR_BLOCK - (content.length % TAR_BLOCK)) % TAR_BLOCK;
+    if (pad > 0) parts.push(makeBlobBytes(pad));
+
+    onProgress?.(i + 1, total);
+  }
+
+  parts.push(makeBlobBytes(TAR_BLOCK * 2));
+  return new Blob(parts, { type: 'application/x-tar' });
 }
 
 export async function startWechatLogin(accountId: string, force = true) {
@@ -345,7 +424,11 @@ export type WebImStatusResponse = {
 };
 
 export async function fetchWebimStatus() {
-  return request<WebImStatusResponse>('/api/webim/status', undefined, 'Failed to read Web IM status');
+  return request<WebImStatusResponse>(
+    '/api/webim/status',
+    undefined,
+    'Failed to read Web IM status',
+  );
 }
 
 /** Browser WebSocket URL for live assistant events (`CONFIG_HTTPD_WS_SUPPORT` must be enabled). */

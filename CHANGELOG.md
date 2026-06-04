@@ -14,6 +14,10 @@
   * Preserve Web Chat history when switching between tabs.
 * Board: Adjusted partition table size to accommodate larger bootloaders on some development boards.
 
+### Change:
+
+* **Breaking change**: Renamed the Claw Core write-side session persistence API to context persistence for clearer semantics. Applications should migrate `persist_session` to `persist_context`, `persist_session_user_ctx` to `persist_context_user_ctx`, `claw_core_persist_session_fn` to `claw_core_persist_context_fn`, `claw_session_persist_batch_t` to `claw_core_context_persist_batch_t`, `claw_session_record_t` to `claw_core_context_record_t`, `claw_session_record_type_t` to `claw_core_context_record_type_t`, `CLAW_SESSION_RECORD_*` to `CLAW_CORE_CONTEXT_RECORD_*`, and `claw_memory_persist_session_callback` to `claw_memory_persist_context_callback`. `session_id` and `claw_memory_session_history_provider` are unchanged.
+
 ## 2026-05-18
 
 ### Feature:

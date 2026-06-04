@@ -1,0 +1,5 @@
+board: nm_cyd_c5
+chip: esp32c5
+version: 1.0.0
+description: "RockBase-iot NM-CYD-C5 Cheap Yellow Display with 2.8-inch ST7789 LCD"
+manufacturer: "RockBase-iot"

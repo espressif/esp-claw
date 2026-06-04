@@ -1,0 +1,104 @@
+# Devices for DFRobot ESP32-S3 AI Camera (DFR1154)
+version: 1.0.0
+devices:
+
+  # MAX98357: I2S-only Class-D amp (I2S1 STD TX)
+  - name: audio_dac
+    chip: internal
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: false
+      dac_enabled: true
+      dac_max_channel: 2
+      dac_channel_mask: "11"
+      dac_init_gain: 0
+      mclk_enabled: false
+    peripherals:
+      - name: i2s_audio_out
+
+  # PDM microphone: board manager owns i2s_audio_in (pdm-in on I2S0)
+  - name: audio_adc
+    chip: internal
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      dac_enabled: false
+      adc_max_channel: 1
+      adc_channel_mask: "1"
+      adc_init_gain: 0
+      mclk_enabled: false
+    peripherals:
+      - name: i2s_audio_in
+
+  # OV3660 over DVP 8-bit (pins from DFR1154 Arduino CameraWebServer example)
+  - name: camera
+    type: camera
+    sub_type: dvp
+    version: default
+    config:
+      dvp_config:
+        reset_io: -1
+        pwdn_io: -1
+        vsync_io: 1
+        de_io: 2
+        pclk_io: 15
+        xclk_io: 5
+        xclk_freq: 20000000
+        data_width: CAM_CTLR_DATA_WIDTH_8
+        data_io:
+          data_io_0: 16
+          data_io_1: 18
+          data_io_2: 21
+          data_io_3: 17
+          data_io_4: 14
+          data_io_5: 7
+          data_io_6: 6
+          data_io_7: 4
+          data_io_8: -1
+          data_io_9: -1
+          data_io_10: -1
+          data_io_11: -1
+          data_io_12: -1
+          data_io_13: -1
+          data_io_14: -1
+          data_io_15: -1
+    peripherals:
+      - name: i2c_master
+        frequency: 100000
+
+  # On-board status LED (GPIO3, active-low)
+  - name: board_led
+    type: gpio_ctrl
+    version: default
+    config:
+      active_level: 0
+      default_level: 1
+    peripherals:
+      - name: gpio_led_r
+
+  # Infrared fill light (GPIO47, active-high)
+  - name: ir_led
+    type: gpio_ctrl
+    version: default
+    config:
+      active_level: 1
+      default_level: 0
+    peripherals:
+      - name: gpio_ir_led
+
+  # microSD over SPI (DFR1154 Arduino examples: CS=10, MOSI=11, MISO=13, SCK=12)
+  - name: fs_sdcard
+    type: fs_fat
+    sub_type: spi
+    version: default
+    config:
+      vfs_config:
+        format_if_mount_failed: false
+        max_files: 5
+      sub_config:
+        cs_gpio_num: 10
+        frequency: SDMMC_FREQ_DEFAULT
+    peripherals:
+      - name: spi_sdcard

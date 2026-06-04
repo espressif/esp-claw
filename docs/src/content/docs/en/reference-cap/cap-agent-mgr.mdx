@@ -1,0 +1,105 @@
+---
+title: cap_agent_mgr — Subagent management tools
+description: Root-agent-only tools that spawn and supervise subagents through `claw_agent_mgr`.
+---
+
+import LinkToSource from '@/components/LinkToSource.astro';
+import { Aside } from '@astrojs/starlight/components';
+
+Source: <LinkToSource relativePath="components/claw_capabilities/cap_agent_mgr/src/cap_agent_mgr.c" /> · framework: <LinkToSource relativePath="components/claw_modules/claw_manager/src/claw_agent_mgr.c" />
+
+## Role
+
+`cap_agent_mgr` exposes the **root agent's subagent control surface** as LLM-callable tools. It holds no logic of its own; every tool validates the caller, parses JSON, and forwards into `claw_agent_mgr`, which owns the subagent runtime, sessions, and lifecycle.
+
+Each agent is an independent `claw_core` instance with its own task, queues, and system prompt. The root agent delegates focused work to short-lived subagents and collects their results.
+
+## Tools exposed
+
+`cap_agent_mgr` registers six Callables, all flagged `CLAW_CAP_FLAG_ROOT_AGENT_ONLY`:
+
+| Tool ID | Description |
+|---------|-------------|
+| `spawn_agent` | Start an asynchronous subagent from an explicit `prompt` (optional `agent_type`, `background`) |
+| `send_agent_followup` | Send more input to a live or closed subagent (optional `interrupt`) |
+| `inspect_agent` | Report one subagent's lifecycle status, phase, and last error |
+| `list_agents` | Enumerate the live and closed subagents spawned in the current session |
+| `close_agent` | Tear down a live subagent runtime while keeping its persisted history |
+| `delete_agent` | Permanently remove a subagent runtime and its persisted history |
+
+## Root-only access
+
+Subagent management is reserved for the root agent. Tools are hidden from subagents in two layers: the `CLAW_CAP_FLAG_ROOT_AGENT_ONLY` flag drops them from the sub-agent tool provider, and `cap_agent_mgr_require_root()` rejects any non-root caller at execution time. This prevents subagents from spawning or controlling other agents.
+
+## Agent identity and sessions
+
+The root agent always has `agent_id` `"0"`. A subagent's `agent_id` doubles as its session id, derived from the parent session:
+
+```text
+<parent_session_id>:subagent_NN
+```
+
+The mapping of parent → child ids is persisted under `subagent_map/`, so a closed subagent can be discovered (`list_agents`), re-opened (`send_agent_followup`), or removed (`delete_agent`) across reboots.
+
+## Lifecycle
+
+```d2
+direction: right
+
+spawn: "spawn_agent\n(running)"
+idle: "idle\n(turn done)"
+closed: "closed\n(runtime freed)"
+deleted: "deleted"
+
+spawn -> idle: "completes"
+idle -> spawn: "send_agent_followup"
+idle -> closed: "close_agent"
+closed -> spawn: "send_agent_followup\n(lazy re-create)"
+closed -> deleted: "delete_agent"
+```
+
+`close_agent` frees the live runtime but preserves history; a later follow-up lazily re-creates the core from the persisted session. `delete_agent` removes both the runtime and the persisted history.
+
+## Result delivery
+
+Subagents run asynchronously. When a subagent finishes a turn, a completion observer wraps its final text and submits it back into the root agent as an interrupting user message:
+
+```text
+<subagent_completed agent_id="0:subagent_00" request_id="7">
+...subagent final answer...
+</subagent_completed>
+```
+
+The root agent therefore "hears back" from subagents without polling, though it can still call `inspect_agent` or `list_agents` for status.
+
+## Prompt overlays
+
+A subagent's system prompt is stacked from three layers: the shared base prompt, a generic subagent-role overlay, and an `agent_type` overlay. Built-in types include `subagent` (default), `research`, `coding` / `worker`, and `debug` / `debugger`; applications can override these via `claw_agent_mgr_config_t`.
+
+## Response shapes
+
+Tools return compact JSON the LLM can parse:
+
+```jsonc
+// spawn_agent
+{ "agent_id": "0:subagent_00", "status": "running" }
+
+// list_agents
+{
+  "agents": [
+    { "agent_id": "0:subagent_00", "status": "idle", "agent_type": "research", "phase": 0, "last_request_id": 7 }
+  ],
+  "count": 1
+}
+```
+
+## Split with `claw_agent_mgr`
+
+| Layer | Module | Responsibility |
+|-------|--------|------------------|
+| Framework | `claw_agent_mgr` | Own subagent slots, cores, sessions, prompt overlays, and result routing |
+| Tooling | `cap_agent_mgr` | Expose the above as root-only LLM / Console-callable tools with JSON IO |
+
+<Aside type="note">
+  The maximum number of concurrent live subagents is set by `CONFIG_CLAW_AGENT_MGR_MAX_SUBAGENTS` (default 3). Closed subagents stay discoverable through their persisted session map even after their runtime slot is reclaimed.
+</Aside>

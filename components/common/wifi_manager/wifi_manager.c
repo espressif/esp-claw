@@ -14,6 +14,7 @@
 #include "esp_mac.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
+#include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "sdkconfig.h"
@@ -54,13 +55,13 @@ static bool s_ap_active;
 static bool s_sta_configured;
 static char s_ip_addr[16] = "0.0.0.0";
 static char s_ap_ip[16] = "192.168.4.1";
-static char s_ap_ssid[33];
-static char s_sta_ssid[33];
-static char s_sta_password[65];
-static char s_ap_ssid_override[33];
-static char s_ap_password[65];
-static char s_ap_behavior[16];
-static char s_ap_ssid_prefix[33];
+static EXT_RAM_BSS_ATTR char s_ap_ssid[33];
+static EXT_RAM_BSS_ATTR char s_sta_ssid[33];
+static EXT_RAM_BSS_ATTR char s_sta_password[65];
+static EXT_RAM_BSS_ATTR char s_ap_ssid_override[33];
+static EXT_RAM_BSS_ATTR char s_ap_password[65];
+static EXT_RAM_BSS_ATTR char s_ap_behavior[16];
+static EXT_RAM_BSS_ATTR char s_ap_ssid_prefix[33];
 static wifi_mode_state_t s_mode = WIFI_MODE_OFF;
 static esp_netif_t *s_sta_netif;
 static esp_netif_t *s_ap_netif;

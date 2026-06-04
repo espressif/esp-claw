@@ -47,7 +47,9 @@ export const Modal: ParentComponent<ModalProps> = (props) => {
               <div class="flex items-start justify-between gap-4 p-5 pb-3 flex-wrap">
                 <div class="flex flex-col gap-1">
                   <Show when={props.title}>
-                    <h2 class="text-base font-bold text-[var(--color-text-primary)] m-0">{props.title}</h2>
+                    <h2 class="text-base font-bold text-[var(--color-text-primary)] m-0">
+                      {props.title}
+                    </h2>
                   </Show>
                   <Show when={props.subtitle}>
                     <div class="text-[0.8rem] text-[var(--color-text-muted)]">{props.subtitle}</div>

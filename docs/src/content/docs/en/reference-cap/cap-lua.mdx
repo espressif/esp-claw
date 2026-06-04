@@ -4,7 +4,8 @@ description: Where Lua fits in ESP-Claw, the `cap_lua` tool surface, and sync vs
 ---
 
 import LinkToSource from '@/components/LinkToSource.astro';
-import { Aside, LinkCard } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
 
 Source: <LinkToSource relativePath="components/claw_capabilities/cap_lua/src/cap_lua.c" /> · header: <LinkToSource relativePath="components/claw_capabilities/cap_lua/include/cap_lua.h" />
 
@@ -61,7 +62,7 @@ Writable `cap_lua` runtime scripts must live under the Script Base Dir. In `edge
 lua_module_display_register();   // register display
 lua_driver_gpio_register();      // register gpio
 // ...
-cap_lua_register_group();        // then lock
+cap_lua_register_group("/fatfs/scripts");  // pass script base dir, then lock
 ```
 
 ## `cap_lua` tool surface

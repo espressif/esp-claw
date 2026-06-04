@@ -7,5 +7,4 @@ idf_component_register(
         claw_core
         claw_skill
         freertos
-        json
 )

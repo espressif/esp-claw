@@ -4,18 +4,19 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "app_claw.h"
-#include "claw_ramfs.h"
+#include "app_fs.h"
+#include "claw_paths.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <stdio.h>
 #include "wifi_manager.h"
-#include "wear_levelling.h"
 #include "time.h"
 #include "nvs_flash.h"
 #include "http_server.h"
-#include "esp_vfs_fat.h"
 #include "esp_log.h"
 #include "esp_err.h"
+#include "esp_check.h"
 #include "esp_system.h"
 #include "esp_board_manager_includes.h"
 #include "captive_dns.h"
@@ -29,20 +30,10 @@
 
 #define APP_ENABLE_MEM_LOG        (0)
 
-#define APP_FATFS_PARTITION_LABEL "storage"
-#define APP_RAMFS_BASE_PATH       "/ramfs"
-#define APP_RAMFS_MAX_FILES       (8)
-#define APP_RAMFS_MAX_BYTES       (512 * 1024)
-
 static const char *TAG = "app";
 
 static app_config_t *s_config;
 static app_claw_config_t *s_claw_config;
-static app_claw_storage_paths_t *s_claw_paths;
-
-static const char *app_fatfs_base_path = "/fatfs";
-
-static wl_handle_t s_wl_handle = WL_INVALID_HANDLE;
 
 static esp_err_t app_allocate_runtime_state(void)
 {
@@ -52,22 +43,15 @@ static esp_err_t app_allocate_runtime_state(void)
     if (!s_claw_config) {
         s_claw_config = calloc(1, sizeof(*s_claw_config));
     }
-    if (!s_claw_paths) {
-        s_claw_paths = calloc(1, sizeof(*s_claw_paths));
-    }
 
-    if (!s_config || !s_claw_config || !s_claw_paths) {
-        return ESP_ERR_NO_MEM;
-    }
+    ESP_RETURN_ON_FALSE(s_config && s_claw_config, ESP_ERR_NO_MEM, TAG,
+                        "Failed to allocate runtime state");
 
     return ESP_OK;
 }
 
 static void app_free_runtime_state(void)
 {
-    free(s_claw_paths);
-    s_claw_paths = NULL;
-
     free(s_claw_config);
     s_claw_config = NULL;
 
@@ -95,28 +79,6 @@ static void on_wifi_state_changed(bool connected, void *user_ctx)
     }
 }
 
-static esp_err_t app_claw_init_storage_paths(app_claw_storage_paths_t *paths)
-{
-    if (!paths || !app_fatfs_base_path || app_fatfs_base_path[0] != '/') {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    memset(paths, 0, sizeof(*paths));
-
-    if (strlcpy(paths->fatfs_base_path, app_fatfs_base_path, sizeof(paths->fatfs_base_path)) >= sizeof(paths->fatfs_base_path) ||
-        snprintf(paths->memory_session_root, sizeof(paths->memory_session_root), "%s/sessions", app_fatfs_base_path) >= sizeof(paths->memory_session_root) ||
-        snprintf(paths->memory_root_dir, sizeof(paths->memory_root_dir), "%s/memory", app_fatfs_base_path) >= sizeof(paths->memory_root_dir) ||
-        snprintf(paths->skills_root_dir, sizeof(paths->skills_root_dir), "%s/skills", app_fatfs_base_path) >= sizeof(paths->skills_root_dir) ||
-        snprintf(paths->lua_root_dir, sizeof(paths->lua_root_dir), "%s/scripts", app_fatfs_base_path) >= sizeof(paths->lua_root_dir) ||
-        snprintf(paths->router_rules_path, sizeof(paths->router_rules_path), "%s/router_rules/router_rules.json", app_fatfs_base_path) >= sizeof(paths->router_rules_path) ||
-        snprintf(paths->scheduler_rules_path, sizeof(paths->scheduler_rules_path), "%s/scheduler/schedules.json", app_fatfs_base_path) >= sizeof(paths->scheduler_rules_path) ||
-        snprintf(paths->im_attachment_root, sizeof(paths->im_attachment_root), "%s/inbox", app_fatfs_base_path) >= sizeof(paths->im_attachment_root)) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    return ESP_OK;
-}
-
 static esp_err_t main_load_config(app_config_t *config)
 {
     return app_config_load(config);
@@ -124,23 +86,15 @@ static esp_err_t main_load_config(app_config_t *config)
 
 static esp_err_t main_save_config(const app_config_t *config)
 {
-    if (!config) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    esp_err_t err = app_config_validate_wifi(config, NULL);
-    if (err != ESP_OK) {
-        return err;
-    }
+    ESP_RETURN_ON_FALSE(config, ESP_ERR_INVALID_ARG, TAG, "config is NULL");
+    ESP_RETURN_ON_ERROR(app_config_validate_wifi(config, NULL), TAG, "Invalid Wi-Fi config");
 
     return app_config_save(config);
 }
 
 static esp_err_t main_get_wifi_status(http_server_wifi_status_t *status)
 {
-    if (!status) {
-        return ESP_ERR_INVALID_ARG;
-    }
+    ESP_RETURN_ON_FALSE(status, ESP_ERR_INVALID_ARG, TAG, "status is NULL");
 
     wifi_manager_status_t wifi_status = {0};
     wifi_manager_get_status(&wifi_status);
@@ -163,7 +117,8 @@ static void main_restart_task(void *arg)
 static esp_err_t main_restart_device(void)
 {
     BaseType_t ok = xTaskCreate(main_restart_task, "http_restart", 2048, NULL, 5, NULL);
-    return ok == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
+    ESP_RETURN_ON_FALSE(ok == pdPASS, ESP_ERR_NO_MEM, TAG, "Failed to create restart task");
+    return ESP_OK;
 }
 
 #if CONFIG_APP_CLAW_CAP_IM_WECHAT
@@ -174,23 +129,16 @@ static esp_err_t main_wechat_login_start(const char *account_id, bool force)
 
 static esp_err_t main_wechat_login_get_status(http_server_wechat_login_status_t *status)
 {
+    esp_err_t ret = ESP_OK;
     cap_im_wechat_qr_login_status_t *raw = NULL;
-    esp_err_t err;
 
-    if (!status) {
-        return ESP_ERR_INVALID_ARG;
-    }
+    ESP_RETURN_ON_FALSE(status, ESP_ERR_INVALID_ARG, TAG, "status is NULL");
 
     raw = calloc(1, sizeof(*raw));
-    if (!raw) {
-        return ESP_ERR_NO_MEM;
-    }
+    ESP_RETURN_ON_FALSE(raw, ESP_ERR_NO_MEM, TAG, "Failed to allocate login status");
 
-    err = cap_im_wechat_qr_login_get_status(raw);
-    if (err != ESP_OK) {
-        free(raw);
-        return err;
-    }
+    ESP_GOTO_ON_ERROR(cap_im_wechat_qr_login_get_status(raw), cleanup, TAG,
+                      "Failed to query WeChat login status");
 
     memset(status, 0, sizeof(*status));
     status->active = raw->active;
@@ -205,8 +153,10 @@ static esp_err_t main_wechat_login_get_status(http_server_wechat_login_status_t 
     strlcpy(status->user_id, raw->user_id, sizeof(status->user_id));
     strlcpy(status->token, raw->token, sizeof(status->token));
     strlcpy(status->base_url, raw->base_url, sizeof(status->base_url));
+
+cleanup:
     free(raw);
-    return ESP_OK;
+    return ret;
 }
 
 static esp_err_t main_wechat_login_cancel(void)
@@ -230,78 +180,14 @@ static esp_err_t init_nvs(void)
     return err;
 }
 
-static esp_err_t init_fatfs(void)
-{
-    esp_vfs_fat_mount_config_t mount_config = {
-        .format_if_mount_failed = true,
-        .max_files = 8,
-        .allocation_unit_size = 4096,
-        .disk_status_check_enable = false,
-        .use_one_fat = false,
-    };
-    uint64_t total = 0;
-    uint64_t free_bytes = 0;
-    esp_err_t err;
-
-    err = esp_vfs_fat_spiflash_mount_rw_wl(app_fatfs_base_path,
-                                           APP_FATFS_PARTITION_LABEL,
-                                           &mount_config,
-                                           &s_wl_handle);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to mount FATFS: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    err = esp_vfs_fat_info(app_fatfs_base_path, &total, &free_bytes);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to query FATFS info: %s", esp_err_to_name(err));
-    } else {
-        ESP_LOGI(TAG, "FATFS mounted total=%u used=%u",
-                 (unsigned int)total,
-                 (unsigned int)(total - free_bytes));
-    }
-
-    return ESP_OK;
-}
-
-static esp_err_t init_ramfs(void)
-{
-    claw_ramfs_config_t config = {
-        .base_path = APP_RAMFS_BASE_PATH,
-        .max_files = APP_RAMFS_MAX_FILES,
-        .max_bytes = APP_RAMFS_MAX_BYTES,
-        .caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
-    };
-    esp_err_t err = claw_ramfs_register(&config);
-
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to mount RAMFS at %s: %s", APP_RAMFS_BASE_PATH, esp_err_to_name(err));
-        return err;
-    }
-
-    ESP_LOGI(TAG, "RAMFS mounted at %s max_files=%u max_bytes=%u",
-             APP_RAMFS_BASE_PATH,
-             (unsigned int)APP_RAMFS_MAX_FILES,
-             (unsigned int)APP_RAMFS_MAX_BYTES);
-
-    return ESP_OK;
-}
-
 static esp_err_t init_timezone(const char *timezone)
 {
-    esp_err_t err = ESP_OK;
+    esp_err_t ret = ESP_OK;
 
-    if (!timezone || timezone[0] == '\0') {
-        ESP_LOGE(TAG, "Timezone is empty.");
-        err = ESP_ERR_INVALID_ARG;
-        goto tz_default;
-    }
-
-    if (setenv("TZ", timezone, 1) != 0) {
-        ESP_LOGE(TAG, "Failed to set TZ env");
-        err = ESP_FAIL;
-        goto tz_default;
-    }
+    ESP_GOTO_ON_FALSE(timezone && timezone[0] != '\0', ESP_ERR_INVALID_ARG, tz_default, TAG,
+                      "Timezone is empty.");
+    ESP_GOTO_ON_FALSE(setenv("TZ", timezone, 1) == 0, ESP_FAIL, tz_default, TAG,
+                      "Failed to set TZ env");
     tzset();
     ESP_LOGI(TAG, "Timezone set to %s", timezone);
     return ESP_OK;
@@ -310,7 +196,7 @@ tz_default:
     assert(setenv("TZ", "CST-8", 1) == 0);
     tzset();
     ESP_LOGI(TAG, "Timezone set to default: CST-8");
-    return err;
+    return ret;
 }
 
 #if APP_ENABLE_MEM_LOG
@@ -363,11 +249,16 @@ void app_main(void)
     init_timezone(app_config_get_timezone(s_config)); // no need to check error
     ESP_ERROR_CHECK(esp_board_manager_init());
     ESP_ERROR_CHECK(app_claw_ui_start());
-    ESP_ERROR_CHECK(init_fatfs());
-    ESP_ERROR_CHECK(init_ramfs());
+    ESP_ERROR_CHECK(app_fs_init());
+
+    /* Publish the resolved storage roots so any component can compose paths
+     * without knowing whether data lives on flash or an SD card. */
+    ESP_ERROR_CHECK(claw_paths_set(CLAW_PATH_DATA, app_fs_storage_base_path()));
+    ESP_ERROR_CHECK(claw_paths_set(CLAW_PATH_SYSTEM, app_fs_system_base_path()));
+
     ESP_ERROR_CHECK(wifi_manager_init());
     ESP_ERROR_CHECK(http_server_init(&(http_server_config_t) {
-        .storage_base_path = app_fatfs_base_path,
+        .storage_base_path = app_fs_storage_base_path(),
         .services = {
             .load_config = main_load_config,
             .save_config = main_save_config,
@@ -424,8 +315,7 @@ void app_main(void)
         }
     }
 
-    ESP_ERROR_CHECK(app_claw_init_storage_paths(s_claw_paths));
-    ESP_ERROR_CHECK(app_claw_start(s_claw_config, s_claw_paths));
+    ESP_ERROR_CHECK(app_claw_start(s_claw_config));
 #if CONFIG_APP_CLAW_CAP_IM_LOCAL
     ESP_ERROR_CHECK(http_server_webim_bind_im());
 #endif

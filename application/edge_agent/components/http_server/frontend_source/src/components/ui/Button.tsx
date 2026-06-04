@@ -39,7 +39,9 @@ export const Button: ParentComponent<ButtonProps> = (props) => {
         baseClasses,
         variantClasses[local.variant ?? 'secondary'],
         sizeClasses[local.size ?? 'md'],
-        local.active ? 'ring-1 ring-[var(--color-accent-soft)] text-[var(--color-text-primary)]' : '',
+        local.active
+          ? 'ring-1 ring-[var(--color-accent-soft)] text-[var(--color-text-primary)]'
+          : '',
         local.class ?? '',
       ]
         .filter(Boolean)

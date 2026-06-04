@@ -1,0 +1,65 @@
+version: 1.0.0
+# Devices for DFRobot FireBeetle 2 ESP32-P4 (Camera)
+devices:
+
+  # PDM microphone (PCM MIC) via I2S PDM RX — CLK=GPIO12, DIN=GPIO9
+  - name: audio_adc
+    chip: internal
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      dac_enabled: false
+      adc_max_channel: 1
+      adc_channel_mask: "1"
+      adc_init_gain: 0
+      mclk_enabled: false
+    peripherals:
+      - name: i2s_audio_in
+
+  # TF card filesystem (on-board slot is SDIO/SDMMC 4-bit)
+  - name: sdcard_power
+    type: power_ctrl
+    sub_type: gpio
+    peripherals:
+      - name: gpio_tf_en
+        active_level: 0
+
+  - name: fs_sdcard
+    type: fs_fat
+    sub_type: sdmmc
+    power_ctrl_device: sdcard_power
+    version: default
+    config:
+      vfs_config:
+        format_if_mount_failed: false
+        max_files: 5
+      sub_config:
+        slot: SDMMC_HOST_SLOT_0
+        frequency: SDMMC_FREQ_DEFAULT
+        bus_width: 4
+        pins:
+          d0: 39
+          d1: 40
+          d2: 41
+          d3: 42
+          clk: 43
+          cmd: 44
+          cd: -1
+          wp: -1
+        ldo_chan_id: 4
+
+  # Camera: OV5647 (MIPI CSI, Raspberry Pi CSI pin-compatible connector)
+  - name: camera
+    type: camera
+    version: default
+    sub_type: "csi"
+    config:
+      csi_config:
+        reset_io: -1
+        pwdn_io: -1
+        dont_init_ldo: true
+    peripherals:
+      - name: i2c_master
+        frequency: 100000
+      - name: ldo_mipi

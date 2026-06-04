@@ -18,7 +18,6 @@
 #include "lauxlib.h"
 #include "sdkconfig.h"
 #include "soc/soc_caps.h"
-#include "soc/touch_sensor_channel.h"
 
 #define LUA_DRIVER_TOUCH_METATABLE        "touch.device"
 #define LUA_DRIVER_TOUCH_DEFAULT_NAME     "touch_inputs"

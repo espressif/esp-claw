@@ -6,7 +6,8 @@ pre_check_docs:
   extends:
     - .rules:pre_check:docs
   script:
+    - cd docs
     - corepack enable
-    - pnpm -C docs install --frozen-lockfile
-    - pnpm -C docs run check:doc-lines
-    - pnpm -C docs run astro check
+    - pnpm ci
+    - pnpm run check:doc-lines
+    - pnpm run astro check

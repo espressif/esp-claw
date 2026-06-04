@@ -77,8 +77,10 @@ esp_err_t claw_memory_note_session_summary(const char *session_id,
 esp_err_t claw_memory_item_primary_summary_label(const claw_memory_item_t *item,
                                                  char *buf,
                                                  size_t size);
-esp_err_t claw_memory_persist_session_callback(const claw_session_persist_batch_t *batch,
+esp_err_t claw_memory_persist_context_callback(const claw_core_context_persist_batch_t *batch,
                                                void *user_ctx);
+esp_err_t claw_memory_delete_session_history(const char *session_id,
+                                             bool *out_deleted_any);
 esp_err_t claw_memory_request_gate_callback(const claw_core_request_t *request,
                                             char *reject_message,
                                             size_t reject_message_size,

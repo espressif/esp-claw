@@ -7,6 +7,11 @@ dependencies:
       - if: $CONFIG{APP_CLAW_CAP_FILES} == True
     path: ../../claw_capabilities/cap_files
 
+  cap_agent_mgr:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_AGENT_MGR} == True
+    path: ../../claw_capabilities/cap_agent_mgr
+
   cap_im_platform:
     rules:
       - if: >-
@@ -69,6 +74,11 @@ dependencies:
       - if: $CONFIG{APP_CLAW_CAP_TIME} == True
     path: ../../claw_capabilities/cap_time
 
+  cap_http_request:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_HTTP_REQUEST} == True
+    path: ../../claw_capabilities/cap_http_request
+
   cap_web_search:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_WEB_SEARCH} == True
@@ -82,6 +92,9 @@ dependencies:
 
   claw_event_router:
     path: ../../claw_modules/claw_event_router
+
+  claw_manager:
+    path: ../../claw_modules/claw_manager
 
   claw_memory:
     path: ../../claw_modules/claw_memory
@@ -294,12 +307,6 @@ dependencies:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True
       - if: $CONFIG{APP_CLAW_LUA_MODULE_SCI} == True
     path: ../../lua_modules/lua_module_sci
-
-  lua_module_ssd1306:
-    rules:
-      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
-      - if: $CONFIG{APP_CLAW_LUA_MODULE_SSD1306} == True
-    path: ../../lua_modules/lua_module_ssd1306
 
   lua_module_storage:
     rules:

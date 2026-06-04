@@ -3,7 +3,8 @@ title: Skills Lab
 description: Explore ESP-Claw Skills through Skills Lab.
 ---
 
-import { LinkCard, Aside } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
 
 <LinkCard href="https://skills-lab.esp-claw.com" title="ESP-Claw Skills Lab" />
 
@@ -23,7 +24,7 @@ The Skills and Lua scripts on Skills Lab are provided by third parties. They may
 
 You can help more people benefit from ESP-Claw by contributing Skills or Lua scripts to the [ESP-Claw Skills Lab GitHub repository](https://github.com/espressif/esp-claw-skills-lab).
 
-Projects on ESP-Claw Skills Lab must be packaged as a Skill that follows the [ESP-Claw Skill specification](https://github.com/espressif/esp-claw/blob/master/components/common/skill_builder/claw-skill-spec.md).
+Projects on ESP-Claw Skills Lab must be packaged as a Skill that follows the [ESP-Claw Skill specification](https://github.com/espressif/esp-claw/blob/master/.agents/spec/claw-skill-spec.md).
 This is because a standalone Lua script cannot provide enough information to the LLM. The LLM would not know what the script does or what parameters should be passed to it.
 
 Please place your Skills, Lua scripts, and resource files under the Skills directory of the [ESP-Claw Skills Lab GitHub repository](https://github.com/espressif/esp-claw-skills-lab).

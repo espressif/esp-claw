@@ -4,7 +4,8 @@ description: Agent 任务、上下文提供器、与大语言模型/工具的交
 ---
 
 import LinkToSource from '@/components/LinkToSource.astro';
-import { LinkCard, Aside } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
 
 头文件：<LinkToSource relativePath="components/claw_modules/claw_core/include/claw_core.h" />
 
@@ -31,8 +32,9 @@ import { LinkCard, Aside } from '@astrojs/starlight/components';
 |------|------|
 | `CLAW_CORE_REQUEST_FLAG_PUBLISH_OUT_MESSAGE` | Agent 完成推理后，将响应以 `out_message` 事件发布到 Event Router |
 | `CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE` | 跳过响应队列，不通过 `claw_core_receive` 返回结果 |
+| `CLAW_CORE_REQUEST_FLAG_USER_INTERRUPT` | 标记本次请求为用户打断（中止前一个请求后发起的新请求） |
 
-Event Router 的 `run_agent` 动作会同时设置这两个标志，实现异步提交 + 事件发布的响应路径。
+Event Router 的 `run_agent` 动作会同时设置前两个标志，实现异步提交 + 事件发布的响应路径。
 
 在拼装发往大语言模型的**当前轮用户提示**时，`claw_core` 会附带一段 **Behavior Notes**，说明最终助手结果通常会由框架自动投递给用户，因此一般不必再主动调用 `cap_im_platform` 中的 IM 发送接口返回正文（减少重复回复）。
 
@@ -54,13 +56,31 @@ Event Router 的 `run_agent` 动作会同时设置这两个标志，实现异步
 1. 可编辑人设与画像：`claw_memory_profile_provider`
 2. 长期记忆：`claw_memory_long_term_provider`（完整模式）或 `claw_memory_long_term_lightweight_provider`（轻量模式）
 3. 会话历史：`claw_memory_session_history_provider`
-4. Skills 目录：`claw_skill_skills_list_provider`
+4. Skills 目录清单：`claw_skill_skills_list_provider`
 5. 当前可见工具列表：`claw_cap_tools_provider`
 
 因此：大语言模型最终接收的工具列表，不仅取决于注册了哪些 Capability，还取决于 `claw_cap_set_llm_visible_groups`。
 
 <Aside type="tip">
-    `edge_agent` 默认只对大语言模型暴露 `cap_files`、`cap_skill`、`cap_system`、`cap_lua`（完整结构化记忆模式还包含 `claw_memory`）。其余能力通常需要先激活对应 Skill，模型才能同时获得「工具可见性 + 使用说明」——详见 [claw_cap](./claw-cap) 与 [cap_skill](@lang/reference-cap/cap-skill)
+    `edge_agent` 默认对大语言模型暴露 `cap_files`、`cap_scheduler`、`cap_lua`、`cap_skill`、`cap_llm_inspect`、`cap_http_request`、`cap_web_search`、`cap_router_mgr`（完整结构化记忆模式还包含 `claw_memory`）。其余能力通常需要先激活对应 Skill，模型才能同时获得「工具可见性 + 使用说明」——详见 [claw_cap](./claw-cap) 与 [cap_skill](@lang/reference-cap/cap-skill)
+</Aside>
+
+## 缓存命中率优化设计
+
+`claw_core` 的上下文拼接顺序经过设计，以最大化 LLM API 的缓存命中率。
+
+### 设计原则
+
+LLM API（如 Anthropic、OpenAI）的缓存基于前缀匹配。因此，ESP-Claw 在最近的版本中尝试减少提示词前部内容变更频率。
+
+### Skill 文档注入的变更
+
+早期设计中，已激活的 Skill 文档通过独立的 context provider (`claw_skill_active_skill_docs_provider`) 注入 system prompt。每次 Skill 激活/停用都会改变 system prompt 内容，导致缓存失效。
+
+当前设计移除了该 provider，改为通过 `activate_skill` 工具的返回值将 Skill 文档注入会话历史。这确保 system prompt 较为稳定，缓存前缀不受 Skill 激活状态影响。
+
+<Aside type="note">
+  这一设计意味着 Skill 文档仅在激活时一次性进入上下文。对于长期运行的多轮对话，Skill 文档会随着会话历史的增长而因 token 预算压缩。如需重新获取，LLM 可再次调用 `activate_skill`。
 </Aside>
 
 ## 工具调用
@@ -73,12 +93,12 @@ Capability 的解析与执行工作由 `claw_cap` 负责。
 
 一轮里允许的工具轮数由 `max_tool_iterations` 限制。
 
-## 会话历史写入
+## 上下文持久化
 
-`claw_core` 通过 typed record batch 回调写入会话历史。
+`claw_core` 通过 typed record batch 回调持久化可回放的上下文记录。
 
-`edge_agent` 中，`persist_session` 设为 `claw_memory_persist_session_callback`，该函数由 `claw_memory` 提供。
-`claw_core` 会在普通轮次、中间工具轮、最终助手记录和失败说明等时机触发回调，将会话记录交由 `claw_memory` 处理。
+`edge_agent` 中，`persist_context` 设为 `claw_memory_persist_context_callback`，该函数由 `claw_memory` 提供。
+`claw_core` 会在普通轮次、中间工具轮、最终助手记录和失败说明等时机触发回调，将按 `session_id` 分区的上下文记录交由 `claw_memory` 处理。
 
 ## 请求取消
 
@@ -103,7 +123,7 @@ Capability 的解析与执行工作由 `claw_cap` 负责。
 
 ## 初始化错误处理
 
-`app_claw_start` 会在 API Key、profile、model 不全时跳过 `claw_core_init` / `claw_core_start`，并打印日志。
+`app_claw_start` 会在 API Key、backend_type、model 不全时跳过 `claw_core_init` / `claw_core_start`，并打印日志。
 
 此时依赖大语言模型的 `ask`、Event Router 发往 Agent 的路由（含 fallback 路由）、图片 inspect 等能力不可用。
 但 Event Router、自动化、本地 Capability、Console REPL 仍可工作。
@@ -114,9 +134,11 @@ Capability 的解析与执行工作由 `claw_cap` 负责。
 
 `claw_core_config_t` 中常见字段含义：
 
-- `profile` / `provider` / `backend_type` / `model` / `base_url` / `auth_type` / `timeout_ms`：对接不同大语言模型供应商时的路由与鉴权（具体支持的后端在 `claw_core_llm` 与 `llm/backends` 下实现）。`profile` 与 `provider` 二选一即可。
+- `backend_type` / `model` / `base_url` / `auth_type` / `max_tokens_field` / `timeout_ms` / `max_tokens`：对接不同大语言模型供应商时的路由与鉴权（具体支持的后端在 `claw_core_llm` 与 `llm/backends` 下实现）。
 - `system_prompt`：系统提示词，必填（`claw_core_init` 会校验此字段非空）。
+- `supports_tools` / `supports_vision` / `image_remote_url_only`：是否支持工具调用、视觉输入和仅远程 URL 图像。
 - `image_max_bytes`：传入 LLM 层的图像/媒体大小上限。
+- `request_gate`：可选的请求门控回调，在请求处理前拦截或拒绝请求。
 - `task_stack_size`、`task_priority`、`task_core`：后台 Agent 任务在 FreeRTOS 上的资源。
 - `request_queue_len`、`response_queue_len`：请求/响应队列深度。
 - `max_context_providers`：最多可注册的 provider 数量。

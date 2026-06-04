@@ -25,19 +25,19 @@ export const SavePanel: Component<SavePanelProps> = (props) => {
         </Button>
       </Show>
       <Show when={props.dirty}>
-        <span class="text-[0.78rem] text-[var(--color-orange)] font-medium">●&nbsp;{t('unsavedIndicator')}</span>
+        <span class="text-[0.78rem] text-[var(--color-orange)] font-medium">
+          ●&nbsp;{t('unsavedIndicator')}
+        </span>
       </Show>
       <div class="flex-1" />
       <Show when={props.message}>{props.message}</Show>
       <Show when={props.note}>
-        <span class="min-w-[200px] text-right text-[0.78rem] text-[var(--color-text-muted)]">{props.note}</span>
+        <span class="min-w-[200px] text-right text-[0.78rem] text-[var(--color-text-muted)]">
+          {props.note}
+        </span>
       </Show>
-      <Button
-        variant="primary"
-        onClick={props.onSave}
-        disabled={props.saving || !props.dirty}
-      >
-        {props.saving ? '…' : props.saveLabel ?? (t('saveTabBtn') as string)}
+      <Button variant="primary" onClick={props.onSave} disabled={props.saving || !props.dirty}>
+        {props.saving ? '…' : (props.saveLabel ?? (t('saveTabBtn') as string))}
       </Button>
     </div>
   );

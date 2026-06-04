@@ -21,6 +21,7 @@ PIN_KEY_SUFFIXES = (
 )
 PIN_KEY_NAMES = {
     'gpio_num',
+    'pin',
     'sda',
     'scl',
     'mclk',

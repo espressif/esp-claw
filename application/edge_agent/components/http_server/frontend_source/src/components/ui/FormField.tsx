@@ -17,11 +17,7 @@ export const Field: Component<FieldRendererProps> = (props) => {
   const id = createUniqueId();
   return (
     <div
-      class={[
-        'flex flex-col gap-1.5',
-        props.full ? 'sm:col-span-2' : '',
-        props.fieldClass ?? '',
-      ]
+      class={['flex flex-col gap-1.5', props.full ? 'sm:col-span-2' : '', props.fieldClass ?? '']
         .filter(Boolean)
         .join(' ')}
     >
@@ -73,7 +69,9 @@ export const TextInput: Component<TextInputProps> = (props) => {
         <div class="relative">
           <input
             id={id}
-            type={isPasswordField() ? (passwordVisible() ? 'text' : 'password') : (local.type ?? 'text')}
+            type={
+              isPasswordField() ? (passwordVisible() ? 'text' : 'password') : (local.type ?? 'text')
+            }
             autocomplete="off"
             {...rest}
             class={[
@@ -93,14 +91,10 @@ export const TextInput: Component<TextInputProps> = (props) => {
               class="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-[var(--color-text-muted)] transition hover:text-[var(--color-text-primary)] focus:outline-none"
               onClick={() => setPasswordVisible((value) => !value)}
               aria-label={
-                passwordVisible()
-                  ? (t('passwordHide') as string)
-                  : (t('passwordShow') as string)
+                passwordVisible() ? (t('passwordHide') as string) : (t('passwordShow') as string)
               }
               title={
-                passwordVisible()
-                  ? (t('passwordHide') as string)
-                  : (t('passwordShow') as string)
+                passwordVisible() ? (t('passwordHide') as string) : (t('passwordShow') as string)
               }
             >
               <Show

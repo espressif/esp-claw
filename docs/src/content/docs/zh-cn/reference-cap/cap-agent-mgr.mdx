@@ -1,0 +1,105 @@
+---
+title: cap_agent_mgr — 子智能体管理工具
+description: 仅限根智能体调用的工具，通过 `claw_agent_mgr` 派生并管理子智能体。
+---
+
+import LinkToSource from '@/components/LinkToSource.astro';
+import { Aside } from '@astrojs/starlight/components';
+
+源码：<LinkToSource relativePath="components/claw_capabilities/cap_agent_mgr/src/cap_agent_mgr.c" /> · 框架：<LinkToSource relativePath="components/claw_modules/claw_manager/src/claw_agent_mgr.c" />
+
+## 角色
+
+`cap_agent_mgr` 把**根智能体的子智能体控制面**暴露为可由 LLM 调用的工具。它本身不含业务逻辑；每个工具只负责校验调用方、解析 JSON，并转发给 `claw_agent_mgr`，由后者负责子智能体的运行时、会话与生命周期。
+
+每个智能体都是独立的 `claw_core` 实例，拥有各自的任务、队列与系统提示词。根智能体把聚焦的工作委派给短生命周期的子智能体，并收集它们的结果。
+
+## 暴露的工具
+
+`cap_agent_mgr` 注册了六个 Callable，全部带有 `CLAW_CAP_FLAG_ROOT_AGENT_ONLY` 标志：
+
+| 工具 ID | 说明 |
+|---------|-------------|
+| `spawn_agent` | 根据显式 `prompt` 启动一个异步子智能体（可选 `agent_type`、`background`） |
+| `send_agent_followup` | 向存活或已关闭的子智能体追加输入（可选 `interrupt`） |
+| `inspect_agent` | 报告单个子智能体的生命周期状态、阶段与最近错误 |
+| `list_agents` | 枚举当前会话中派生的存活与已关闭子智能体 |
+| `close_agent` | 释放存活子智能体的运行时，同时保留其持久化历史 |
+| `delete_agent` | 永久删除子智能体运行时及其持久化历史 |
+
+## 仅根智能体可用
+
+子智能体管理仅保留给根智能体。工具通过两层机制对子智能体隐藏：`CLAW_CAP_FLAG_ROOT_AGENT_ONLY` 标志使其从子智能体工具提供者中剔除，而 `cap_agent_mgr_require_root()` 在执行时拒绝任何非根调用方。这样可防止子智能体派生或控制其它智能体。
+
+## 智能体标识与会话
+
+根智能体的 `agent_id` 恒为 `"0"`。子智能体的 `agent_id` 同时也是它的会话 id，由父会话派生：
+
+```text
+<parent_session_id>:subagent_NN
+```
+
+父 → 子 id 的映射持久化在 `subagent_map/` 下，因此即便重启，已关闭的子智能体仍可被发现（`list_agents`）、重新开启（`send_agent_followup`）或移除（`delete_agent`）。
+
+## 生命周期
+
+```d2
+direction: right
+
+spawn: "spawn_agent\n(running)"
+idle: "idle\n(turn done)"
+closed: "closed\n(runtime freed)"
+deleted: "deleted"
+
+spawn -> idle: "completes"
+idle -> spawn: "send_agent_followup"
+idle -> closed: "close_agent"
+closed -> spawn: "send_agent_followup\n(lazy re-create)"
+closed -> deleted: "delete_agent"
+```
+
+`close_agent` 释放存活运行时但保留历史；后续追加输入会从持久化会话惰性地重建 core。`delete_agent` 则同时移除运行时与持久化历史。
+
+## 结果回传
+
+子智能体异步运行。当子智能体完成一轮对话后，完成观察者会包装它的最终文本，并作为一条打断式的用户消息提交回根智能体：
+
+```text
+<subagent_completed agent_id="0:subagent_00" request_id="7">
+...subagent final answer...
+</subagent_completed>
+```
+
+因此根智能体无需轮询即可“收到”子智能体的反馈，当然它仍可调用 `inspect_agent` 或 `list_agents` 查询状态。
+
+## 提示词叠加
+
+子智能体的系统提示词由三层叠加而成：共享的基础提示词、通用的子智能体角色叠加层，以及 `agent_type` 叠加层。内置类型包括 `subagent`（默认）、`research`、`coding` / `worker` 以及 `debug` / `debugger`；应用可通过 `claw_agent_mgr_config_t` 覆盖它们。
+
+## 返回结构
+
+工具返回紧凑的、可供 LLM 解析的 JSON：
+
+```jsonc
+// spawn_agent
+{ "agent_id": "0:subagent_00", "status": "running" }
+
+// list_agents
+{
+  "agents": [
+    { "agent_id": "0:subagent_00", "status": "idle", "agent_type": "research", "phase": 0, "last_request_id": 7 }
+  ],
+  "count": 1
+}
+```
+
+## 与 `claw_agent_mgr` 的分工
+
+| 层次 | 模块 | 职责 |
+|-------|--------|------------------|
+| 框架 | `claw_agent_mgr` | 拥有子智能体槽位、core、会话、提示词叠加与结果路由 |
+| 工具 | `cap_agent_mgr` | 把上述能力暴露为仅根可用、带 JSON IO 的 LLM / 控制台可调用工具 |
+
+<Aside type="note">
+  并发存活子智能体的上限由 `CONFIG_CLAW_AGENT_MGR_MAX_SUBAGENTS` 设置（默认 3）。即使运行时槽位被回收，已关闭的子智能体仍可通过其持久化会话映射被发现。
+</Aside>

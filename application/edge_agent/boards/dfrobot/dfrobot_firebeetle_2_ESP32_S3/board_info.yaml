@@ -1,0 +1,5 @@
+board: dfrobot_firebeetle_2_ESP32_S3
+chip: esp32s3
+version: 1.0.0
+description: "DFRobot FireBeetle 2 ESP32-S3 with OV3660 camera and DFR1092 display"
+manufacturer: "DFRobot"

@@ -253,6 +253,7 @@ def get_cmake_apps(
             str(Path(PROJECT_ROOT) /'application'/'.build-rules.yml'),
         ],
         build_system=CustomApp,
+        enable_preview_targets=True,
     )
     return apps
 

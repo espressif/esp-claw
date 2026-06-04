@@ -1,13 +1,11 @@
-import {
-  FolderOpen,
-  HardDriveDownload,
-  Trash2,
-} from 'lucide-solid';
+import { HardDriveDownload, Trash2, X } from 'lucide-solid';
 import { createEffect, createSignal, For, onCleanup, Show, type Component } from 'solid-js';
+import { Portal } from 'solid-js/web';
 import { t, tf } from '../i18n';
 import {
   createFolder,
   deletePath,
+  downloadFolderTar,
   fetchFileContent,
   fetchFileList,
   saveFileContent,
@@ -61,6 +59,13 @@ type EditorState = {
   readOnly: boolean;
 };
 
+type FolderDownloadState = {
+  path: string;
+  name: string;
+  progress: number;
+  controller: AbortController;
+};
+
 const initialEditor: EditorState = {
   open: false,
   path: '',
@@ -85,6 +90,7 @@ export const FilesPage: Component = () => {
   const [chosenFile, setChosenFile] = createSignal<File | null>(null);
 
   const [editor, setEditor] = createSignal<EditorState>(initialEditor);
+  const [folderDownload, setFolderDownload] = createSignal<FolderDownloadState | null>(null);
 
   const dirtyEditor = () => editor().open && editor().content !== editor().baseline;
 
@@ -92,6 +98,7 @@ export const FilesPage: Component = () => {
     markDirty('files', dirtyEditor());
   });
   onCleanup(() => markDirty('files', false));
+  onCleanup(() => folderDownload()?.controller.abort());
 
   const loadList = async () => {
     setError(null);
@@ -178,7 +185,20 @@ export const FilesPage: Component = () => {
       pushToast(t('fileDeleteComplete') as string, 'success');
       await loadList();
     } catch (err) {
-      pushToast((err as Error).message, 'error');
+      const msg = (err as Error).message;
+      if (entry.is_dir && msg.includes('directory_not_empty')) {
+        if (window.confirm(tf('fileDeleteDirNotEmpty', { path: entry.path }))) {
+          try {
+            await deletePath(entry.path, { recursive: true });
+            pushToast(t('fileDeleteComplete') as string, 'success');
+            await loadList();
+          } catch (err2) {
+            pushToast((err2 as Error).message, 'error');
+          }
+        }
+      } else {
+        pushToast(msg, 'error');
+      }
     }
   };
 
@@ -224,8 +244,47 @@ export const FilesPage: Component = () => {
     await openEditor(entry);
   };
 
-  const openFolderFromAction = (entry: FileEntry) => {
-    setCurrentPath(entry.path);
+  const handleDownloadFolder = async (entry: FileEntry) => {
+    if (folderDownload()) return;
+    const controller = new AbortController();
+    setFolderDownload({
+      path: entry.path,
+      name: entry.name,
+      progress: 0,
+      controller,
+    });
+    try {
+      const blob = await downloadFolderTar(
+        entry.path,
+        (done, total) => {
+          setFolderDownload((prev) =>
+            prev?.path === entry.path
+              ? { ...prev, progress: Math.round((done / total) * 100) }
+              : prev,
+          );
+        },
+        controller.signal,
+      );
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = entry.name + '.tar';
+      a.click();
+      URL.revokeObjectURL(url);
+      pushToast(t('fileDownloadFolderDone') as string, 'success');
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') {
+        pushToast(t('fileDownloadFolderCancelled') as string, 'info');
+      } else {
+        pushToast((err as Error).message || (t('fileDownloadFolderFailed') as string), 'error');
+      }
+    } finally {
+      setFolderDownload((prev) => (prev?.path === entry.path ? null : prev));
+    }
+  };
+
+  const cancelFolderDownload = () => {
+    folderDownload()?.controller.abort();
   };
 
   const reloadEditor = async () => {
@@ -278,12 +337,7 @@ export const FilesPage: Component = () => {
         title={t('navFiles') as string}
         actions={
           <div class="flex items-center gap-2 flex-wrap">
-            <Button
-              size="sm"
-              variant="secondary"
-              active={devMode()}
-              onClick={toggleDevMode}
-            >
+            <Button size="sm" variant="secondary" active={devMode()} onClick={toggleDevMode}>
               {devMode() ? t('fileDevModeOn') : t('fileDevMode')}
             </Button>
             <Button size="sm" variant="secondary" onClick={loadList} disabled={loading()}>
@@ -359,10 +413,18 @@ export const FilesPage: Component = () => {
           <table class="w-full">
             <thead>
               <tr class="bg-[var(--color-bg-card)]">
-                <th class="text-left px-4 py-2.5 text-[0.72rem] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">{t('fileColName')}</th>
-                <th class="text-left px-4 py-2.5 text-[0.72rem] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">{t('fileColType')}</th>
-                <th class="text-left px-4 py-2.5 text-[0.72rem] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">{t('fileColSize')}</th>
-                <th class="text-left px-4 py-2.5 text-[0.72rem] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">{t('fileColActions')}</th>
+                <th class="text-left px-4 py-2.5 text-[0.72rem] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+                  {t('fileColName')}
+                </th>
+                <th class="text-left px-4 py-2.5 text-[0.72rem] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+                  {t('fileColType')}
+                </th>
+                <th class="text-left px-4 py-2.5 text-[0.72rem] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+                  {t('fileColSize')}
+                </th>
+                <th class="text-left px-4 py-2.5 text-[0.72rem] font-bold uppercase tracking-wider text-[var(--color-text-muted)]">
+                  {t('fileColActions')}
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -398,7 +460,10 @@ export const FilesPage: Component = () => {
                         {entry.is_dir ? '—' : humanSize(entry.size ?? 0)}
                       </td>
                       <td class="px-4 py-2.5">
-                        <div class="flex flex-wrap items-center gap-1.5" onClick={(event) => event.stopPropagation()}>
+                        <div
+                          class="flex flex-wrap items-center gap-1.5"
+                          onClick={(event) => event.stopPropagation()}
+                        >
                           <Show
                             when={entry.is_dir}
                             fallback={
@@ -416,12 +481,13 @@ export const FilesPage: Component = () => {
                           >
                             <button
                               type="button"
-                              class="inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-primary)] hover:bg-white/[0.05]"
-                              onClick={() => openFolderFromAction(entry)}
-                              title={t('fileOpen') as string}
-                              aria-label={t('fileOpen') as string}
+                              class="inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-primary)] hover:bg-white/[0.05] disabled:opacity-50 disabled:cursor-not-allowed"
+                              disabled={folderDownload() !== null}
+                              onClick={() => void handleDownloadFolder(entry)}
+                              title={t('fileDownloadFolder') as string}
+                              aria-label={t('fileDownloadFolder') as string}
                             >
-                              <FolderOpen class="h-4 w-4 shrink-0" />
+                              <HardDriveDownload class="h-4 w-4 shrink-0" />
                             </button>
                           </Show>
                           <button
@@ -448,13 +514,68 @@ export const FilesPage: Component = () => {
       <FileEditorModal
         state={editor}
         onClose={closeEditor}
-        onContentChange={(value) =>
-          setEditor((prev) => ({ ...prev, content: value }))
-        }
+        onContentChange={(value) => setEditor((prev) => ({ ...prev, content: value }))}
         onReload={reloadEditor}
         onSave={saveEditor}
       />
+      <FolderDownloadPopup state={folderDownload} onCancel={cancelFolderDownload} />
     </TabShell>
+  );
+};
+
+const FolderDownloadPopup: Component<{
+  state: () => FolderDownloadState | null;
+  onCancel: () => void;
+}> = (props) => {
+  const progressWidth = () => `${Math.max(0, Math.min(100, props.state()?.progress ?? 0))}%`;
+
+  return (
+    <Show when={props.state()}>
+      {(download) => (
+        <Portal>
+          <div
+            class="fixed bottom-5 right-5 z-[1100] w-[min(22rem,calc(100vw-2.5rem))] rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-card)] shadow-[0_18px_48px_rgba(0,0,0,0.38)]"
+            role="status"
+            aria-live="polite"
+          >
+            <div class="flex items-start justify-between gap-3 p-4 pb-3">
+              <div class="min-w-0">
+                <div class="text-[0.86rem] font-semibold text-[var(--color-text-primary)]">
+                  {t('fileDownloadingFolder')}
+                </div>
+                <div class="mt-1 truncate text-[0.76rem] text-[var(--color-text-muted)]">
+                  {download().name}
+                </div>
+              </div>
+              <button
+                type="button"
+                class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-secondary)] hover:bg-white/[0.05] hover:text-[var(--color-text-primary)]"
+                onClick={props.onCancel}
+                title={t('fileDownloadFolderCancel') as string}
+                aria-label={t('fileDownloadFolderCancel') as string}
+              >
+                <X class="h-4 w-4" />
+              </button>
+            </div>
+            <div class="px-4 pb-4">
+              <div class="mb-2 flex items-center justify-between gap-3 text-[0.76rem] text-[var(--color-text-muted)]">
+                <span class="min-w-0 truncate">{download().path}</span>
+                <span>{download().progress}%</span>
+              </div>
+              <div class="h-2 overflow-hidden rounded-full bg-white/[0.08]">
+                <div
+                  class="h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-200"
+                  style={{ width: progressWidth() }}
+                />
+              </div>
+              <Button class="mt-3 w-full" size="sm" variant="danger-ghost" onClick={props.onCancel}>
+                {t('fileDownloadFolderCancel')}
+              </Button>
+            </div>
+          </div>
+        </Portal>
+      )}
+    </Show>
   );
 };
 
@@ -470,14 +591,28 @@ const FileEditorModal: Component<{
       open={props.state().open}
       onClose={props.onClose}
       title={t('fileEditorTitle') as string}
-      subtitle={<code class="font-mono text-[0.8rem] text-[var(--color-text-muted)]">{props.state().path}</code>}
+      subtitle={
+        <code class="font-mono text-[0.8rem] text-[var(--color-text-muted)]">
+          {props.state().path}
+        </code>
+      }
       actions={
         <>
-          <Button size="sm" variant="secondary" onClick={props.onReload} disabled={props.state().loading}>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={props.onReload}
+            disabled={props.state().loading}
+          >
             {t('fileEditorRefresh')}
           </Button>
           <Show when={!props.state().readOnly}>
-            <Button size="sm" variant="primary" onClick={props.onSave} disabled={props.state().saving}>
+            <Button
+              size="sm"
+              variant="primary"
+              onClick={props.onSave}
+              disabled={props.state().saving}
+            >
               {props.state().saving ? '…' : t('fileEditorSave')}
             </Button>
           </Show>

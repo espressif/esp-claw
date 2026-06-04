@@ -3,7 +3,8 @@ title: Console usage
 description: "Serial REPL: session, Q&A, cap, skills, and automation debug commands."
 ---
 
-import { Aside, LinkCard } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
 
 Connect the board over USB, use `idf.py monitor`, `minicom`, or the [web flasher](@lang/flash) Console to reach the `edge_agent` prompt (default `app> `).
 
@@ -34,7 +35,7 @@ ask_once one-off question, do not use history
 ```
 
 <Aside type="tip">
-  If the LLM was not fully configured at boot (missing key / model / profile), `claw_core` never starts and `ask` fails.
+  If the LLM was not fully configured at boot (missing key / model / backend_type), `claw_core` never starts and `ask` fails.
   See [Configuration](@lang/reference-project/configuration) for required LLM fields.
 </Aside>
 
@@ -74,14 +75,12 @@ cap unload <group_id>
   Alternatively, use `cap call activate_skill '{"skill_id":"your_skill"}'` from the console to manage Skills.
 </Aside>
 
-On the model side: `activate_skill` / `deactivate_skill`. On serial: the `skill` command (registered by `cmd_cap_skill`) can manage Skills, e.g.:
+On the model side: `activate_skill`. On serial: the `skill` command (registered by `cmd_cap_skill`) can manage Skills, e.g.:
 
 ```sh
 skill --catalog
 skill --list --session default
 skill --activate weather --session default
-skill --deactivate weather --session default
-skill --clear --session default
 ```
 
 Keep `--session` aligned with the active `session` id, otherwise it looks “activated but not in context”.

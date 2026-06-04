@@ -4,10 +4,7 @@ import type { Component } from 'solid-js';
 import { fetchStatus, restartDevice } from './api/client';
 import { Layout } from './components/layout/Layout';
 import { LEAF_IDS } from './components/layout/Sidebar';
-import {
-  RestartOverlay,
-  type RestartOverlayState,
-} from './components/system/RestartOverlay';
+import { RestartOverlay, type RestartOverlayState } from './components/system/RestartOverlay';
 import { Banner } from './components/ui/Banner';
 import { ToastViewport } from './components/ui/ToastViewport';
 import { t } from './i18n';
@@ -15,18 +12,32 @@ import { anyDirty, type TabId } from './state/dirty';
 import { reloadCapabilities, reloadLuaModules, reloadStatus } from './state/config';
 import { pushToast } from './state/toast';
 
-const StatusPage = lazy(() => import('./pages/StatusPage').then((mod) => ({ default: mod.StatusPage })));
-const BasicPage = lazy(() => import('./pages/BasicPage').then((mod) => ({ default: mod.BasicPage })));
-const SearchPage = lazy(() => import('./pages/SearchPage').then((mod) => ({ default: mod.SearchPage })));
-const MemoryPage = lazy(() => import('./pages/MemoryPage').then((mod) => ({ default: mod.MemoryPage })));
+const StatusPage = lazy(() =>
+  import('./pages/StatusPage').then((mod) => ({ default: mod.StatusPage })),
+);
+const BasicPage = lazy(() =>
+  import('./pages/BasicPage').then((mod) => ({ default: mod.BasicPage })),
+);
+const WebReqPage = lazy(() =>
+  import('./pages/WebReqPage').then((mod) => ({ default: mod.WebReqPage })),
+);
+const MemoryPage = lazy(() =>
+  import('./pages/MemoryPage').then((mod) => ({ default: mod.MemoryPage })),
+);
 const LlmPage = lazy(() => import('./pages/LlmPage').then((mod) => ({ default: mod.LlmPage })));
 const ImPage = lazy(() => import('./pages/ImPage').then((mod) => ({ default: mod.ImPage })));
 const CapabilitiesPage = lazy(() =>
   import('./pages/CapabilitiesPage').then((mod) => ({ default: mod.CapabilitiesPage })),
 );
-const SkillsPage = lazy(() => import('./pages/SkillsPage').then((mod) => ({ default: mod.SkillsPage })));
-const FilesPage = lazy(() => import('./pages/FilesPage').then((mod) => ({ default: mod.FilesPage })));
-const WebImPage = lazy(() => import('./pages/WebImPage').then((mod) => ({ default: mod.WebImPage })));
+const SkillsPage = lazy(() =>
+  import('./pages/SkillsPage').then((mod) => ({ default: mod.SkillsPage })),
+);
+const FilesPage = lazy(() =>
+  import('./pages/FilesPage').then((mod) => ({ default: mod.FilesPage })),
+);
+const WebImPage = lazy(() =>
+  import('./pages/WebImPage').then((mod) => ({ default: mod.WebImPage })),
+);
 const SetupWizardPage = lazy(() =>
   import('./pages/SetupWizardPage').then((mod) => ({ default: mod.SetupWizardPage })),
 );
@@ -39,6 +50,7 @@ type RestartRequestOptions = {
 
 function readTabFromHash(): RouteId {
   const hash = window.location.hash.replace(/^#\/?/, '');
+  if (hash === 'search') return 'webreq';
   if (hash === 'start') return 'start';
   return LEAF_IDS.includes(hash as TabId) ? (hash as TabId) : 'status';
 }
@@ -227,7 +239,9 @@ const App: Component = () => {
                 <StatusPage onRestartRequest={() => void handleRestartRequest()} />
               </Show>
               <Show when={currentTab() === 'basic'}>
-                <BasicPage onRestartRequest={() => void handleRestartRequest({ reloadOnSuccess: true })} />
+                <BasicPage
+                  onRestartRequest={() => void handleRestartRequest({ reloadOnSuccess: true })}
+                />
               </Show>
               <Show when={currentTab() === 'llm'}>
                 <LlmPage />
@@ -235,8 +249,10 @@ const App: Component = () => {
               <Show when={currentTab() === 'im'}>
                 <ImPage />
               </Show>
-              <Show when={currentTab() === 'search'}>
-                <SearchPage onRestartRequest={() => void handleRestartRequest({ reloadOnSuccess: true })} />
+              <Show when={currentTab() === 'webreq'}>
+                <WebReqPage
+                  onRestartRequest={() => void handleRestartRequest({ reloadOnSuccess: true })}
+                />
               </Show>
               <Show when={currentTab() === 'memory'}>
                 <MemoryPage />
@@ -245,10 +261,14 @@ const App: Component = () => {
                 <WebImPage />
               </Show>
               <Show when={currentTab() === 'capabilities'}>
-                <CapabilitiesPage onRestartRequest={() => void handleRestartRequest({ reloadOnSuccess: true })} />
+                <CapabilitiesPage
+                  onRestartRequest={() => void handleRestartRequest({ reloadOnSuccess: true })}
+                />
               </Show>
               <Show when={currentTab() === 'skills'}>
-                <SkillsPage onRestartRequest={() => void handleRestartRequest({ reloadOnSuccess: true })} />
+                <SkillsPage
+                  onRestartRequest={() => void handleRestartRequest({ reloadOnSuccess: true })}
+                />
               </Show>
               <Show when={currentTab() === 'files'}>
                 <FilesPage />
@@ -257,8 +277,12 @@ const App: Component = () => {
           </Layout>
         }
       >
-        <Suspense fallback={<div class="p-6 text-[var(--color-text-muted)]">{t('statusLoading')}</div>}>
-          <SetupWizardPage onRestartRequest={(targetTab) => void handleRestartRequest({ targetTab })} />
+        <Suspense
+          fallback={<div class="p-6 text-[var(--color-text-muted)]">{t('statusLoading')}</div>}
+        >
+          <SetupWizardPage
+            onRestartRequest={(targetTab) => void handleRestartRequest({ targetTab })}
+          />
         </Suspense>
       </Show>
       <RestartOverlay state={restartOverlay()} onClose={closeRestartOverlay} />

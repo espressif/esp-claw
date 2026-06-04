@@ -1,0 +1,83 @@
+---
+title: cap_router_mgr
+description: Capability for dynamically maintaining Event Router automation rules.
+---
+
+import LinkToSource from '@/components/LinkToSource.astro';
+import { Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
+
+Source: <LinkToSource relativePath="components/claw_capabilities/cap_router_mgr/src/cap_router_mgr.c" /> ·
+header: <LinkToSource relativePath="components/claw_capabilities/cap_router_mgr/include/cap_router_mgr.h" /> ·
+Skill: <LinkToSource relativePath="components/claw_capabilities/cap_router_mgr/skills/cap_router_mgr/SKILL.md" />
+
+## Overview
+
+`cap_router_mgr` exposes a set of tools to the LLM, allowing the Agent to dynamically add, query, update, and delete Event Router automation rules at runtime. Combined with the rule format described in [Dataflow and automation](@lang/reference-project/dataflow-and-automation), the LLM can create complex event-driven automation from user instructions.
+
+## Tool description
+
+| Tool ID | Description |
+|---------|-------------|
+| `list_router_rules` | List all automation rules as a JSON array |
+| `get_router_rule` | Get one rule by ID |
+| `add_router_rule` | Add a new automation rule |
+| `update_router_rule` | Update an existing automation rule |
+| `delete_router_rule` | Delete one rule by ID |
+| `reload_router_rules` | Reload all rules from disk |
+
+### Tool parameters
+
+#### `list_router_rules`
+
+No parameters. Returns all rules as a JSON array.
+
+#### `get_router_rule`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | Rule ID |
+
+#### `add_router_rule`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `rule_json` | string | Yes | Complete rule JSON string |
+
+#### `update_router_rule`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `rule_json` | string | Yes | Complete rule JSON string containing an `id` field |
+
+#### `delete_router_rule`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `id` | string | Yes | ID of the rule to delete |
+
+#### `reload_router_rules`
+
+No parameters. Reloads all rules from the disk file.
+
+## Error handling
+
+All tools return JSON-formatted results:
+
+- Success: `{"ok": true, ...}`
+- Failure: `{"ok": false, "error": "...", "code": "ESP_ERR_*"}`
+
+Common errors:
+- `add_router_rule` returns `ESP_ERR_INVALID_STATE` when the ID already exists
+- Reaching the rule count limit returns `ESP_ERR_INVALID_SIZE`
+- Invalid parameter format returns `ESP_ERR_INVALID_ARG`
+
+## Group information
+
+| Property | Value |
+|----------|-------|
+| Group ID | `cap_router_mgr` |
+| Default LLM-visible | Yes (`edge_agent` default initial visible group) |
+| Tool count | 6 |
+
+<LinkCard title="Dataflow and automation" href="@lang/reference-project/dataflow-and-automation" description="Event Router rule format and the complete event-driven automation mechanism" />

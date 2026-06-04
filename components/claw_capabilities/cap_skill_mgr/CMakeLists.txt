@@ -7,6 +7,5 @@ idf_component_register(
     REQUIRES
         claw_cap
         claw_skill
-        json
         console
 )

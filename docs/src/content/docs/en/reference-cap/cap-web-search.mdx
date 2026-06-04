@@ -1,0 +1,63 @@
+---
+title: cap_web_search
+description: Capability for web search through external search APIs.
+---
+
+import LinkToSource from '@/components/LinkToSource.astro';
+import { Aside } from '@astrojs/starlight/components';
+
+Source: <LinkToSource relativePath="components/claw_capabilities/cap_web_search/src/cap_web_search.c" /> ·
+header: <LinkToSource relativePath="components/claw_capabilities/cap_web_search/include/cap_web_search.h" /> ·
+Skill: <LinkToSource relativePath="components/claw_capabilities/cap_web_search/skills/cap_web_search/SKILL.md" />
+
+## Overview
+
+`cap_web_search` exposes the `web_search` tool to the LLM, allowing the Agent to run web searches through the configured search provider. It currently supports two search API backends: **Tavily** and **Brave Search**.
+
+## Tool description
+
+| Tool ID | Description |
+|---------|-------------|
+| `web_search` | Search the web and return concise formatted results |
+
+### Input parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | Yes | Search keywords |
+
+### Return value
+
+Returns formatted search result text containing titles, summaries, and links. By default it returns the first 5 results.
+
+## Search providers
+
+| Provider | NVS config key | Description |
+|----------|----------------|-------------|
+| Tavily | `tavily_api_key` | Preferred provider; if both Tavily and Brave are configured, Tavily is used first |
+| Brave Search | `brave_api_key` | Fallback provider |
+
+<Aside type="note">
+  At least one search API key must be configured to use the `web_search` tool. If neither key is configured, calls return an error.
+</Aside>
+
+## Registration and configuration
+
+```c
+#include "cap_web_search.h"
+
+cap_web_search_register_group();
+cap_web_search_set_tavily_key("tvly-xxxxx");
+// or
+cap_web_search_set_brave_key("BSAxxxxx");
+```
+
+API keys are usually read from NVS by the application layer, then passed to the corresponding `set_*_key` function.
+
+## Group information
+
+| Property | Value |
+|----------|-------|
+| Group ID | `cap_web_search` |
+| Default LLM-visible | Yes (`edge_agent` default initial visible group) |
+| Tool count | 1 |

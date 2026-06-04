@@ -67,7 +67,7 @@ const PROVIDER_PRESETS: Record<PresetKey, ProviderPreset> = {
     llm_max_tokens_field: 'max_completion_tokens',
     llm_default_image_max_bytes: '524288',
     llm_supports_tools: true,
-    llm_supports_vision: true,
+    llm_supports_vision: false,
     llm_image_remote_url_only: false,
     llm_model: 'deepseek-v4-pro',
     advanced: false,
@@ -318,26 +318,26 @@ export const LlmPage: Component = () => {
                 value={tab.form.llm_api_key}
                 onInput={(event) => tab.setForm('llm_api_key', event.currentTarget.value)}
               />
-            <TextInput
-              label={
-                <>
-                  {t('llmModel')}
-                  <Show when={providerLinks()}>
-                    {(links) => (
-                      <LabelLink href={links().docsUrl}>
-                        {t('llmProviderDocs') as string} ↗
-                      </LabelLink>
-                    )}
-                  </Show>
-                </>
-              }
-              value={tab.form.llm_model}
-              onInput={(event) => tab.setForm('llm_model', event.currentTarget.value)}
-            />
-            <TextInput
-              label={t('llmMaxTokens')}
-              placeholder={t('llmMaxTokensPlaceholder') as string}
-              value={tab.form.llm_max_tokens}
+              <TextInput
+                label={
+                  <>
+                    {t('llmModel')}
+                    <Show when={providerLinks()}>
+                      {(links) => (
+                        <LabelLink href={links().docsUrl}>
+                          {t('llmProviderDocs') as string} ↗
+                        </LabelLink>
+                      )}
+                    </Show>
+                  </>
+                }
+                value={tab.form.llm_model}
+                onInput={(event) => tab.setForm('llm_model', event.currentTarget.value)}
+              />
+              <TextInput
+                label={t('llmMaxTokens')}
+                placeholder={t('llmMaxTokensPlaceholder') as string}
+                value={tab.form.llm_max_tokens}
                 onInput={(event) => tab.setForm('llm_max_tokens', event.currentTarget.value)}
               />
             </div>

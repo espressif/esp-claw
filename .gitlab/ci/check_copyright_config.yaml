@@ -97,3 +97,4 @@ ignore:  # You can also select ignoring files here
     - 'components/display/tools/esp_lv_decoder/priv_include/qoi.h'
     - 'examples/robot/ragtime_panthera/follower/main/ui/**/*'
     - 'components/lua_modules/lua_module_magnetometer/src/bmm350/**/*'
+    - 'components/lua_modules/lua_module_magnetometer/src/bmm150/**/*'

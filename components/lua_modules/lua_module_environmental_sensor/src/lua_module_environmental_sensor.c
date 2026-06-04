@@ -15,6 +15,7 @@
 #if CONFIG_LUA_MODULE_ENVIRONMENTAL_SENSOR_BACKEND_BME690
 #include "bme69x.h"
 #include "bme69x_defs.h"
+#include "esp_board_device.h"
 #include "esp_board_manager.h"
 #include "esp_board_periph.h"
 #include "esp_check.h"
@@ -60,6 +61,17 @@ typedef struct {
     char device_name[LUA_MODULE_BME690_MAX_NAME_LEN];
 } lua_module_bme690_ud_t;
 
+/*
+ * Local mirror of the auto-generated `dev_custom_environmental_sensor_config_t`
+ * struct (or whatever name the board manager emits for this device).
+ *
+ * IMPORTANT: This MUST be byte-for-byte identical to the auto-generated
+ * struct. `lua_bme690_resolve_board_cfg()` cross-checks the size reported
+ * by the board manager descriptor against `sizeof(lua_bme690_board_cfg_t)`
+ * and refuses to use the config if they differ -- otherwise a YAML schema
+ * mismatch would silently misinterpret bytes (e.g. read the wrong field
+ * as `i2c_addr` or `frequency`).
+ */
 typedef struct {
     const char *name;
     const char *type;
@@ -505,16 +517,49 @@ static int lua_module_bme690_read_gas(lua_State *L)
     return 1;
 }
 
+/*
+ * Walk the board manager descriptor list and verify that the auto-generated
+ * config for `device_name` has the layout `lua_bme690_board_cfg_t` expects.
+ * Returns ESP_ERR_NOT_FOUND if the board doesn't declare the device, and
+ * ESP_ERR_INVALID_SIZE if the schema diverges from this module's mirror.
+ */
+static esp_err_t lua_bme690_resolve_board_cfg(const char *device_name,
+                                              const lua_bme690_board_cfg_t **out)
+{
+    extern const esp_board_device_desc_t g_esp_board_devices[];
+    const esp_board_device_desc_t *desc = g_esp_board_devices;
+    while (desc != NULL && desc->name != NULL) {
+        if (strcmp(desc->name, device_name) == 0) {
+            if (desc->cfg == NULL) {
+                return ESP_ERR_NOT_FOUND;
+            }
+            if (desc->cfg_size != sizeof(lua_bme690_board_cfg_t)) {
+                ESP_LOGE(TAG,
+                         "Board device '%s' cfg_size=%u differs from expected %u; "
+                         "board_devices.yaml schema is out of sync with lua_bme690_board_cfg_t. "
+                         "Every field listed in lua_bme690_board_cfg_t MUST be present in YAML "
+                         "(use -1 for unused GPIOs).",
+                         device_name,
+                         (unsigned)desc->cfg_size,
+                         (unsigned)sizeof(lua_bme690_board_cfg_t));
+                return ESP_ERR_INVALID_SIZE;
+            }
+            *out = (const lua_bme690_board_cfg_t *)desc->cfg;
+            return ESP_OK;
+        }
+        desc = desc->next;
+    }
+    return ESP_ERR_NOT_FOUND;
+}
+
 static esp_err_t lua_module_bme690_load_board_defaults(const char *device_name,
                                                        lua_bme690_resolved_cfg_t *out)
 {
-    void *raw = NULL;
-    esp_err_t err = esp_board_manager_get_device_config(device_name, &raw);
-    if (err != ESP_OK || raw == NULL) {
-        return ESP_ERR_NOT_FOUND;
+    const lua_bme690_board_cfg_t *board = NULL;
+    esp_err_t err = lua_bme690_resolve_board_cfg(device_name, &board);
+    if (err != ESP_OK) {
+        return err;
     }
-
-    const lua_bme690_board_cfg_t *board = (const lua_bme690_board_cfg_t *)raw;
 
     if (board->chip != NULL && strcmp(board->chip, LUA_MODULE_ENVIRONMENTAL_SENSOR_SELECTED_CHIP_NAME) != 0) {
         ESP_LOGW(TAG, "Board device '%s' chip='%s' does not match %s backend",
@@ -609,11 +654,21 @@ static int lua_module_bme690_new(lua_State *L)
 
     esp_err_t err = lua_module_bme690_load_board_defaults(device_name, &cfg);
     const char *opened_device_name = device_name;
+    if (err == ESP_ERR_INVALID_SIZE) {
+        return luaL_error(L,
+                          "environmental_sensor.new: board device '%s' config schema mismatch "
+                          "(see error log above for details)", device_name);
+    }
     if (err != ESP_OK && strcmp(device_name, LUA_MODULE_BME690_DEFAULT_NAME) == 0) {
-        if (lua_module_bme690_load_board_defaults(LUA_MODULE_BME690_LEGACY_NAME, &cfg) == ESP_OK) {
+        esp_err_t legacy_err = lua_module_bme690_load_board_defaults(LUA_MODULE_BME690_LEGACY_NAME, &cfg);
+        if (legacy_err == ESP_OK) {
             opened_device_name = LUA_MODULE_BME690_LEGACY_NAME;
             ESP_LOGW(TAG, "Default device '%s' not declared, using legacy '%s'",
                      LUA_MODULE_BME690_DEFAULT_NAME, LUA_MODULE_BME690_LEGACY_NAME);
+        } else if (legacy_err == ESP_ERR_INVALID_SIZE) {
+            return luaL_error(L,
+                              "environmental_sensor.new: legacy board device '%s' config schema mismatch",
+                              LUA_MODULE_BME690_LEGACY_NAME);
         }
     }
 

@@ -1,64 +1,35 @@
 # Edge Agent Guide
 
-## How It Works
-
-The main entry point is `application/edge_agent/main/main.c`.
-
-After the device boots, the overall flow is:
-
-1. Initialize NVS and load device settings
-2. Mount FATFS at `/fatfs`
-3. Initialize Wi-Fi and the local HTTP configuration service
-4. Enter `app_claw_start()`
-5. Initialize the event router, memory, skills, and capabilities
-6. Initialize and start `claw_core`
-7. Start the CLI and begin handling requests and events
-
-The current runtime depends on the following local directories:
-
-- `/fatfs/sessions`: session history
-- `/fatfs/memory/MEMORY.md`: long-term memory
-- `/fatfs/skills`: skill documents and manifest
-- `/fatfs/scripts`: Lua scripts
-- `/fatfs/router_rules/router_rules.json`: automation rules
-- `/fatfs/inbox`: message attachment storage
-
 ## FATFS Image Layout
 
-The base FATFS image content lives in:
+Source content for all FAT partitions lives under a single tree, with one
+subdirectory per partition:
 
 ```text
 application/edge_agent/fatfs_image/
+├── storage/   # → storage partition (writable, mounted at /fatfs)
+└── system/    # → system partition (read-only seed, mounted at /system)
 ```
 
-Files and directories under this path are copied into the build-time image staging directory:
+Each subdirectory is copied into its own build-time staging directory:
 
 ```text
-application/edge_agent/build/fatfs_image/
+application/edge_agent/build/fatfs_image/        # storage staging
+application/edge_agent/build/system_fs_image/    # system staging
 ```
 
-Each board can also provide optional board-specific FATFS content under its own board directory:
+Each board can also provide optional board-specific FATFS content under its own board directory. This content is overlaid onto the `system` partition:
 
 ```text
 application/edge_agent/boards/<vendor>/<board>/fatfs_image/
 ```
 
-During the build, `application/edge_agent/CMakeLists.txt` first copies the base `fatfs_image/` directory, then copies the selected board's `fatfs_image/` directory if it exists. The selected board path comes from the generated `components/gen_bmgr_codes/CMakeLists.txt`, which is produced by `idf.py gen-bmgr-config`.
+During the build, `application/edge_agent/CMakeLists.txt` first copies the base `fatfs_image/system/` directory into the system staging dir, then copies the selected board's `fatfs_image/` directory if it exists. The selected board path comes from the generated `components/gen_bmgr_codes/CMakeLists.txt`, which is produced by `idf.py bmgr`.
 
-If a board-specific file has the same relative path as a base file, the board-specific file overwrites the base file in `build/fatfs_image/`. This lets a board replace defaults such as skills, scripts, router rules, static assets, or memory files without changing the shared base image.
+If a board-specific file has the same relative path as a base system file, the board-specific file overwrites the base file in `build/system_fs_image/`. This lets a board replace firmware-baked defaults such as skills, scripts, and static assets without changing the shared base image. Board `fatfs_image/` content targets the SYSTEM image only; hidden board folders are not considered.
 
-The current app integrates the following capabilities:
+Skill manifests and built-in Lua scripts/docs are synced into `build/system_fs_image/` so they end up on the read-only system partition; the writable storage partition can be reformatted at runtime and re-seeded from `/system` without losing them.
 
-- `cap_im_qq`
-- `cap_im_tg`
-- `cap_files`
-- `cap_lua`
-- `cap_mcp_client`
-- `cap_mcp_server`
-- `cap_skill_mgr`
-- `cap_time`
-- `cap_llm_inspect`
-- `cap_web_search`
 
 ## Quick Start
 
@@ -79,10 +50,10 @@ To make `esp-board-manager` easier to use, first install the helper package with
 
 ```bash
 cd application/edge_agent
-idf.py gen-bmgr-config -c ./boards -b esp32_S3_DevKitC_1
+idf.py bmgr -c ./boards -b esp32_S3_DevKitC_1
 ```
 
-> `idf.py gen-bmgr-config -c ./boards -b <board_name>` generates the configuration for the specified board. Available board names can be found in the `boards` directory.
+> `idf.py bmgr -c ./boards -b <board_name>` generates the configuration for the specified board. Available board names can be found in the `boards` directory.
 
 2. Configure Wi-Fi, LLM, IM, search engine, and related parameters:
 

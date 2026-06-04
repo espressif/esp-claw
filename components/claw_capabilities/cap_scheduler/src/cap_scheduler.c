@@ -17,7 +17,7 @@
 
 static const char *TAG = "cap_scheduler";
 
-cap_scheduler_runtime_t s_cap_scheduler = {0};
+EXT_RAM_BSS_ATTR cap_scheduler_runtime_t s_cap_scheduler = {0};
 
 static esp_err_t cap_scheduler_execute_list(const char *input_json,
                                             const claw_cap_call_context_t *ctx,
@@ -197,29 +197,29 @@ static const char *cap_scheduler_kind_to_string_local(cap_scheduler_item_kind_t 
 }
 
 static bool cap_scheduler_parse_session_policy_local(const char *value,
-                                                     claw_event_session_policy_t *out_policy)
+                                                     claw_session_policy_t *out_policy)
 {
     if (!out_policy) {
         return false;
     }
     if (!value || !value[0] || strcmp(value, "trigger") == 0) {
-        *out_policy = CLAW_EVENT_SESSION_POLICY_TRIGGER;
+        *out_policy = CLAW_SESSION_POLICY_TRIGGER;
         return true;
     }
     if (strcmp(value, "chat") == 0) {
-        *out_policy = CLAW_EVENT_SESSION_POLICY_CHAT;
+        *out_policy = CLAW_SESSION_POLICY_CHAT;
         return true;
     }
     if (strcmp(value, "global") == 0) {
-        *out_policy = CLAW_EVENT_SESSION_POLICY_GLOBAL;
+        *out_policy = CLAW_SESSION_POLICY_GLOBAL;
         return true;
     }
     if (strcmp(value, "ephemeral") == 0) {
-        *out_policy = CLAW_EVENT_SESSION_POLICY_EPHEMERAL;
+        *out_policy = CLAW_SESSION_POLICY_EPHEMERAL;
         return true;
     }
     if (strcmp(value, "nosave") == 0) {
-        *out_policy = CLAW_EVENT_SESSION_POLICY_NOSAVE;
+        *out_policy = CLAW_SESSION_POLICY_NOSAVE;
         return true;
     }
     return false;
@@ -466,7 +466,7 @@ static esp_err_t cap_scheduler_publish_entry_locked(cap_scheduler_entry_t *entry
     event.text = entry->item.text[0] ? entry->item.text : NULL;
     event.payload_json = payload_json;
     if (!cap_scheduler_parse_session_policy_local(entry->item.session_policy, &event.session_policy)) {
-        event.session_policy = CLAW_EVENT_SESSION_POLICY_TRIGGER;
+        event.session_policy = CLAW_SESSION_POLICY_TRIGGER;
     }
 
     entry->status = CAP_SCHEDULER_STATUS_RUNNING;

@@ -3,7 +3,8 @@ title: Memory
 description: 结构化长期记忆与会话历史：摘要标签检索、会话历史隔离与自动抽取机制。
 ---
 
-import { LinkCard, Aside } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
 
 大语言模型本身是无状态的——每次请求都从零开始。ESP-Claw 通过 `claw_memory` 将两类持久化上下文在请求前注入，使 Agent 表现出「记住」对话与用户的能力。
 

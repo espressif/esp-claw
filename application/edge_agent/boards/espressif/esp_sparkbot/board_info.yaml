@@ -1,0 +1,5 @@
+board: esp_sparkbot
+chip: esp32s3
+version: 1.0.0
+description: "ESP32-S3 SparkBot"
+manufacturer: "ESPRESSIF"

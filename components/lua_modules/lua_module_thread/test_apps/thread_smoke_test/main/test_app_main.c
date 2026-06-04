@@ -181,7 +181,7 @@ static esp_err_t init_lua_runtime(void)
     if (err != ESP_OK) {
         return err;
     }
-    err = cap_lua_register_group(TEST_LUA_BASE_DIR);
+    err = cap_lua_register_group();
     if (err != ESP_OK) {
         return err;
     }

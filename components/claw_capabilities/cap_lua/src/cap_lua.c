@@ -33,8 +33,7 @@ typedef struct cap_lua_package_path_dir_node {
     struct cap_lua_package_path_dir_node *next;
 } cap_lua_package_path_dir_node_t;
 
-char g_cap_lua_base_dir[128];
-static cap_lua_module_t s_modules[CAP_LUA_MAX_MODULES];
+static EXT_RAM_BSS_ATTR cap_lua_module_t s_modules[CAP_LUA_MAX_MODULES];
 static cap_lua_package_path_dir_node_t *s_package_path_dirs;
 static size_t s_package_path_dir_count;
 static size_t s_module_count;
@@ -91,11 +90,6 @@ static esp_err_t cap_lua_build_simple_request(const char *string_key,
     *json_out = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
     return *json_out ? ESP_OK : ESP_ERR_NO_MEM;
-}
-
-const char *cap_lua_get_base_dir(void)
-{
-    return g_cap_lua_base_dir;
 }
 
 size_t cap_lua_get_package_path_dir_count(void)
@@ -170,35 +164,6 @@ static bool cap_lua_abs_dir_is_valid(const char *dir)
     return dir && dir[0] == '/' && strstr(dir, "..") == NULL;
 }
 
-static bool cap_lua_relative_path_is_valid(const char *path)
-{
-    return path && path[0] && path[0] != '/' && strstr(path, "..") == NULL;
-}
-
-static bool cap_lua_path_is_under_root(const char *path, const char *root_dir)
-{
-    size_t base_len;
-
-    if (!path || !root_dir || !root_dir[0]) {
-        return false;
-    }
-
-    base_len = strlen(root_dir);
-    return strncmp(path, root_dir, base_len) == 0 && path[base_len] == '/';
-}
-
-static bool cap_lua_abs_lua_path_is_valid(const char *path, const char *root_dir)
-{
-    return cap_lua_path_is_under_root(path, root_dir) &&
-           strstr(path, "..") == NULL &&
-           cap_lua_has_lua_suffix(path);
-}
-
-bool cap_lua_path_is_valid(const char *path)
-{
-    return cap_lua_abs_lua_path_is_valid(path, g_cap_lua_base_dir);
-}
-
 bool cap_lua_run_path_is_valid(const char *path)
 {
     /* Run targets must be absolute .lua paths with no ".." segments. The script root is no
@@ -207,35 +172,6 @@ bool cap_lua_run_path_is_valid(const char *path)
            strstr(path, "..") == NULL &&
            cap_lua_has_lua_suffix(path);
 }
-
-esp_err_t cap_lua_resolve_path(const char *path, char *resolved, size_t resolved_size)
-{
-    int written;
-
-    if (!path || !path[0] || !resolved || resolved_size == 0 || !g_cap_lua_base_dir[0]) {
-        ESP_LOGE(TAG, "resolve_path: invalid arg");
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    /* Only accept relative paths from callers; resolved paths remain anchored under the Lua base dir. */
-    if (!cap_lua_relative_path_is_valid(path)) {
-        ESP_LOGE(TAG, "resolve_path: bad path=%s", path ? path : "(null)");
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    written = snprintf(resolved, resolved_size, "%s/%s", g_cap_lua_base_dir, path);
-    if (written < 0 || (size_t)written >= resolved_size) {
-        ESP_LOGE(TAG, "resolve_path: path too long");
-        return ESP_ERR_INVALID_SIZE;
-    }
-    if (!cap_lua_path_is_valid(resolved)) {
-        ESP_LOGE(TAG, "resolve_path: invalid resolved path");
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    return ESP_OK;
-}
-
 
 esp_err_t cap_lua_resolve_run_path(const char *path, char *resolved, size_t resolved_size)
 {
@@ -253,19 +189,6 @@ esp_err_t cap_lua_resolve_run_path(const char *path, char *resolved, size_t reso
         ESP_LOGE(TAG, "resolve_run_path: path too long");
         return ESP_ERR_INVALID_SIZE;
     }
-    return ESP_OK;
-}
-
-esp_err_t cap_lua_ensure_base_dir(void)
-{
-    if (!g_cap_lua_base_dir[0]) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (mkdir(g_cap_lua_base_dir, 0755) != 0 && errno != EEXIST) {
-        ESP_LOGE(TAG, "Failed to create Lua base dir %s", g_cap_lua_base_dir);
-        return ESP_FAIL;
-    }
-
     return ESP_OK;
 }
 
@@ -867,17 +790,12 @@ static const claw_cap_group_t s_lua_group = {
     .group_start = cap_lua_group_start,
 };
 
-esp_err_t cap_lua_register_group(const char *base_dir)
+esp_err_t cap_lua_register_group(void)
 {
-    if (!base_dir || base_dir[0] != '/') {
-        ESP_LOGE(TAG, "register_group: bad base_dir");
-        return ESP_ERR_INVALID_ARG;
-    }
     if (claw_cap_group_exists(s_lua_group.group_id)) {
         return ESP_OK;
     }
 
-    strlcpy(g_cap_lua_base_dir, base_dir, sizeof(g_cap_lua_base_dir));
     return claw_cap_register_group(&s_lua_group);
 }
 

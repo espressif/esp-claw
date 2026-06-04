@@ -4,7 +4,8 @@ description: How events enter the router, how rules act, and how outputs reach t
 ---
 
 import LinkToSource from '@/components/LinkToSource.astro';
-import { LinkCard, Aside } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
 import { Code } from 'starlight-theme-nova/components'
 import RouterRulesSchema from '@/assets/router_rules.schema.json?raw';
 
@@ -36,7 +37,7 @@ The **order** of rules in `router_rules.json` is evaluation order. Each rule typ
     | Action | Typical use |
     |--------------|----------|
     | `call_cap` | Run a capability without the LLM |
-    | `run_agent` | Asynchronously submit to `claw_core`; Agent response is published back via `agent_response` event |
+    | `run_agent` | Asynchronously submit to `claw_core`; Agent response is published back via `out_message` event |
     | `run_script` | Run a Lua script |
     | `send_message` | Send IM via outbound binding |
     | `emit_event` | Emit a new Event back into `claw_event_router` |
@@ -45,6 +46,34 @@ The **order** of rules in `router_rules.json` is evaluation order. Each rule typ
 <Aside type="tip">
   For actions such as `run_script`, `send_message`, and `emit_event`, put parameters under `actions[*].input` (for example, `{"type":"run_script","input":{"path":"demo.lua"}}`) instead of at the action object's top level.
 </Aside>
+
+`match.text` uses exact matching by default. To build command-style rules, set `match.text_match_rule` to `prefix`; the router left-trims the incoming text, requires a token boundary after the command, and exposes the argument text as `{{match.remainder}}`.
+
+```json
+{
+  "id": "run_script_command",
+  "match": {
+    "event_type": "message",
+    "event_key": "text",
+    "content_type": "text",
+    "text": "/run",
+    "text_match_rule": "prefix"
+  },
+  "actions": [
+    {
+      "type": "run_script",
+      "input": {
+        "path": "/fatfs/skills/runner/scripts/run.lua",
+        "args": {
+          "command": "{{match.remainder}}"
+        }
+      }
+    }
+  ]
+}
+```
+
+Matched text templates include `{{match.text}}`, `{{match.rule}}`, and `{{match.remainder}}`.
 
 `edge_agent` ships a starter `router_rules.json` for basic IM flows. See <LinkToSource relativePath="application/edge_agent/fatfs_image/router_rules/router_rules.json" />.
 
@@ -114,19 +143,19 @@ fallback_check -> run_default: "yes"
 fallback_check -> done: "no"
 ```
 
-## `agent_response` Event and Outbound Messages
+## `out_message` Event and Outbound Messages
 
-When the `run_agent` action is triggered, the Agent's response is not returned synchronously. Instead, it is published back to the Event Router as an asynchronous event of type `agent_response`.
+When the `run_agent` action is triggered, the Agent's response is not returned synchronously. Instead, it is published back to the Event Router as an asynchronous event of type `out_message`.
 
-To send the Agent's response to an IM channel, you need to configure a routing rule for `agent_response`, for example:
+To send the Agent's response to an IM channel, you need to configure a routing rule for `out_message`, for example:
 
 ```json
 {
-  "id": "agent_response_send_message",
+  "id": "agent_out_message_send_message",
   "consume_on_match": true,
   "match": {
     "source_cap": "claw_core",
-    "event_type": "agent_response",
+    "event_type": "out_message",
     "content_type": "text"
   },
   "actions": [
@@ -163,7 +192,7 @@ Accordingly, the framework offers two cancellation layers (C APIs):
 
 ## `agent_stage` Event and Execution Progress Notifications
 
-Besides the final `agent_response`, `claw_core` can also publish `agent_stage` events during multi-round tool calling, which can be used to push staged tool-call progress information.
+Besides the final `out_message`, `claw_core` can also publish `agent_stage` events during multi-round tool calling, which can be used to push staged tool-call progress information.
 
 The `agent_stage` event structure is:
 - `source_cap`: `claw_core`
@@ -203,7 +232,7 @@ scheduler --trigger <id>             # trigger once immediately
 
 ### Scheduler LLM Tools
 
-`cap_scheduler` registers tools like `scheduler_list`, `scheduler_get`, `scheduler_add`, `scheduler_enable`, `scheduler_disable`, `scheduler_pause`, `scheduler_resume`, `scheduler_trigger_now`, and `scheduler_reload`. These tools are available after activating the `cap_scheduler` Skill.
+`cap_scheduler` registers tools like `scheduler_list`, `scheduler_get`, `scheduler_add`, `scheduler_update`, `scheduler_remove`, `scheduler_enable`, `scheduler_disable`, `scheduler_pause`, `scheduler_resume`, `scheduler_trigger_now`, and `scheduler_reload`. `cap_scheduler` is visible to the LLM by default and does not require Skill activation to use.
 
 `cap_router_mgr` registers tools like `list_router_rules`, `get_router_rule`, `add_router_rule`, `update_router_rule`, `delete_router_rule`, and `reload_router_rules`.
 

@@ -26,7 +26,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 **Typical causes:**
 - Device cannot reach the LLM cloud (DNS, firewall, region).
-- API key / profile / model mismatch or expired key.
+- API key / backend_type / model mismatch or expired key.
 - Model slower than router wait for `claw_core` (check logs).
 - Event Router rules mis-route messages.
 
@@ -80,7 +80,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 **Typical causes:**
 
-- The tool’s **group** is outside `claw_cap_set_llm_visible_groups` (demo defaults to `cap_files`, `cap_skill`, `cap_system`, `cap_lua`; full structured-memory mode also includes `claw_memory`).
+- The tool’s **group** is outside `claw_cap_set_llm_visible_groups` (demo defaults to `cap_files`, `cap_scheduler`, `cap_lua`, `cap_skill`, `cap_llm_inspect`, `cap_http_request`, `cap_web_search`, `cap_router_mgr`; full structured-memory mode also includes `claw_memory`).
 - A **Skill must be activated** so the model gets both the tool docs and that group's visibility.
 
 **What to try:**

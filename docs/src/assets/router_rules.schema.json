@@ -67,7 +67,13 @@
           },
           "text": {
             "type": "string",
-            "description": "Exact text or template to match"
+            "description": "Text to match. Exact matching is the default unless text_match_rule is set."
+          },
+          "text_match_rule": {
+            "type": "string",
+            "enum": ["exact", "prefix"],
+            "default": "exact",
+            "description": "Match mode for match.text. exact requires identical text; prefix matches a leading command token and exposes the remaining text as {{match.remainder}}."
           }
         },
         "additionalProperties": false

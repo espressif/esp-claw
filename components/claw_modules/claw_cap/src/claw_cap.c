@@ -12,6 +12,8 @@
 
 #include "cJSON.h"
 #include "esp_log.h"
+#include "esp_attr.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -69,10 +71,11 @@ typedef struct {
     size_t group_capacity;
 } claw_cap_runtime_t;
 
-static claw_cap_runtime_t s_runtime = {0};
+static EXT_RAM_BSS_ATTR claw_cap_runtime_t s_runtime = {0};
 
 static bool claw_cap_is_llm_visible(const claw_cap_descriptor_slot_t *slot,
-                                    const char *session_id);
+                                    const char *session_id,
+                                    claw_cap_caller_t caller);
 static bool claw_cap_group_is_llm_visible_locked(size_t group_slot_index,
                                                  const char *session_id);
 static void claw_cap_clear_llm_visible_groups_locked(void);
@@ -265,7 +268,9 @@ char *claw_cap_build_llm_tools_json(const claw_cap_call_context_t *ctx,
         cJSON *item = NULL;
         cJSON *schema = NULL;
 
-        if (!claw_cap_is_llm_visible(slot, session_id)) {
+        if (!claw_cap_is_llm_visible(slot,
+                                     session_id,
+                                     ctx ? ctx->caller : CLAW_CAP_CALLER_SYSTEM)) {
             continue;
         }
 
@@ -357,14 +362,14 @@ esp_err_t claw_cap_call_from_core(const char *cap_name,
     esp_err_t err;
     const size_t output_size = CLAW_CAP_CORE_OUTPUT_SIZE;
 
-    (void)user_ctx;
-
     if (!cap_name || !out_output) {
         return ESP_ERR_INVALID_ARG;
     }
     *out_output = NULL;
 
-    output = calloc(1, output_size);
+    output = heap_caps_calloc_prefer(1, output_size, 2,
+                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
+                                     MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!output) {
         return ESP_ERR_NO_MEM;
     }
@@ -374,8 +379,25 @@ esp_err_t claw_cap_call_from_core(const char *cap_name,
         ctx.session_id = request->session_id;
         ctx.channel = request->source_channel;
         ctx.chat_id = request->source_chat_id;
+        ctx.target_channel = request->target_channel;
+        ctx.target_chat_id = request->target_chat_id;
         ctx.source_cap = request->source_cap;
-        ctx.caller = CLAW_CAP_CALLER_AGENT;
+        if (user_ctx) {
+            const claw_cap_core_call_user_ctx_t *call_user_ctx =
+                (const claw_cap_core_call_user_ctx_t *)user_ctx;
+
+            if (call_user_ctx->magic == CLAW_CAP_CORE_CALL_USER_CTX_MAGIC) {
+                if (call_user_ctx->core) {
+                    ctx.core = *call_user_ctx->core;
+                }
+                ctx.caller = call_user_ctx->caller;
+            } else {
+                ctx.core = *((claw_core_handle_t *)user_ctx);
+                ctx.caller = CLAW_CAP_CALLER_AGENT;
+            }
+        } else {
+            ctx.caller = CLAW_CAP_CALLER_AGENT;
+        }
     }
 
     err = claw_cap_call(cap_name,
@@ -391,14 +413,12 @@ esp_err_t claw_cap_call_from_core(const char *cap_name,
     return err;
 }
 
-static esp_err_t claw_cap_tools_collect(const claw_core_request_t *request,
-                                        claw_core_context_t *out_context,
-                                        void *user_ctx)
+static esp_err_t claw_cap_tools_collect_for_caller(const claw_core_request_t *request,
+                                                   claw_core_context_t *out_context,
+                                                   claw_cap_caller_t caller)
 {
     claw_cap_call_context_t ctx = {0};
     char *tools_json = NULL;
-
-    (void)user_ctx;
 
     if (!request || !out_context) {
         return ESP_ERR_INVALID_ARG;
@@ -408,8 +428,10 @@ static esp_err_t claw_cap_tools_collect(const claw_core_request_t *request,
     ctx.session_id = request->session_id;
     ctx.channel = request->source_channel;
     ctx.chat_id = request->source_chat_id;
+    ctx.target_channel = request->target_channel;
+    ctx.target_chat_id = request->target_chat_id;
     ctx.source_cap = request->source_cap;
-    ctx.caller = CLAW_CAP_CALLER_AGENT;
+    ctx.caller = caller;
 
     tools_json = claw_cap_build_llm_tools_json(&ctx, true);
     if (!tools_json || !tools_json[0] || strcmp(tools_json, "[]") == 0) {
@@ -422,9 +444,37 @@ static esp_err_t claw_cap_tools_collect(const claw_core_request_t *request,
     return ESP_OK;
 }
 
+static esp_err_t claw_cap_root_tools_collect(const claw_core_request_t *request,
+                                             claw_core_context_t *out_context,
+                                             void *user_ctx)
+{
+    (void)user_ctx;
+    return claw_cap_tools_collect_for_caller(request, out_context, CLAW_CAP_CALLER_ROOT_AGENT);
+}
+
+static esp_err_t claw_cap_sub_tools_collect(const claw_core_request_t *request,
+                                            claw_core_context_t *out_context,
+                                            void *user_ctx)
+{
+    (void)user_ctx;
+    return claw_cap_tools_collect_for_caller(request, out_context, CLAW_CAP_CALLER_SUB_AGENT);
+}
+
+const claw_core_context_provider_t claw_cap_root_agent_tools_provider = {
+    .name = "cap Tools",
+    .collect = claw_cap_root_tools_collect,
+    .user_ctx = NULL,
+};
+
+const claw_core_context_provider_t claw_cap_sub_agent_tools_provider = {
+    .name = "cap Tools",
+    .collect = claw_cap_sub_tools_collect,
+    .user_ctx = NULL,
+};
+
 const claw_core_context_provider_t claw_cap_tools_provider = {
     .name = "cap Tools",
-    .collect = claw_cap_tools_collect,
+    .collect = claw_cap_root_tools_collect,
     .user_ctx = NULL,
 };
 
@@ -462,7 +512,8 @@ static bool claw_cap_descriptor_is_listable(
 
 static bool claw_cap_is_llm_visible(
     const claw_cap_descriptor_slot_t *slot,
-    const char *session_id)
+    const char *session_id,
+    claw_cap_caller_t caller)
 {
     if (!claw_cap_descriptor_is_available(slot)) {
         return false;
@@ -475,6 +526,10 @@ static bool claw_cap_is_llm_visible(
         return false;
     }
     if (!(slot->descriptor.cap_flags & CLAW_CAP_FLAG_CALLABLE_BY_LLM)) {
+        return false;
+    }
+    if (caller == CLAW_CAP_CALLER_SUB_AGENT &&
+            (slot->descriptor.cap_flags & CLAW_CAP_FLAG_ROOT_AGENT_ONLY)) {
         return false;
     }
     if (!claw_cap_group_is_llm_visible_locked(slot->group_slot_index, session_id)) {
@@ -1670,7 +1725,9 @@ esp_err_t claw_cap_call(const char *id_or_name,
         return ESP_ERR_INVALID_ARG;
     }
     output[0] = '\0';
-    session_id = (ctx && ctx->caller == CLAW_CAP_CALLER_AGENT &&
+    session_id = (ctx && (ctx->caller == CLAW_CAP_CALLER_AGENT ||
+                          ctx->caller == CLAW_CAP_CALLER_ROOT_AGENT ||
+                          ctx->caller == CLAW_CAP_CALLER_SUB_AGENT) &&
                   ctx->session_id && ctx->session_id[0]) ? ctx->session_id : NULL;
 
     claw_cap_lock();
@@ -1691,8 +1748,10 @@ esp_err_t claw_cap_call(const char *id_or_name,
                      id_or_name ? id_or_name : "");
             return ESP_ERR_INVALID_STATE;
         }
-        if (ctx && ctx->caller == CLAW_CAP_CALLER_AGENT &&
-                !claw_cap_is_llm_visible(slot, session_id)) {
+        if (ctx && (ctx->caller == CLAW_CAP_CALLER_AGENT ||
+                    ctx->caller == CLAW_CAP_CALLER_ROOT_AGENT ||
+                    ctx->caller == CLAW_CAP_CALLER_SUB_AGENT) &&
+                !claw_cap_is_llm_visible(slot, session_id, ctx->caller)) {
             claw_cap_unlock();
             snprintf(output, output_size,
                      "Error: cap '%s' is not exposed to the LLM.",

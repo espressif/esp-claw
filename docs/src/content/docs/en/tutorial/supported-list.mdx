@@ -3,7 +3,10 @@ title: Supported chips & development boards
 description: Supported chips & development boards
 ---
 
-import { LinkCard, Steps, Aside, LinkButton } from '@astrojs/starlight/components';
+import { Steps, Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
+import { LinkButton } from 'starlight-theme-nova/components'
+import LinkToSource from '@/components/LinkToSource.astro';
 
 ## Supported chips
 
@@ -13,16 +16,17 @@ Currently supported:
 - ESP32-S3
 - ESP32-P4
 - ESP32-C5
+- ESP32-S31
 
 ## Supported development boards
 
-See [GitHub repository](https://github.com/espressif/esp-claw/tree/master/application/edge_agent/boards).
+See <LinkToSource relativePath="application/edge_agent/boards/" />.
 
 <Aside title="Need to adapt a new development board?" type="tip">
     ESP-Claw uses ESP Board Manager to support multiple development boards.
 
     To add other boards, see the [ESP Board Manager component](https://github.com/espressif/esp-gmf/blob/main/packages/esp_board_manager/docs/how_to_customize_board.md),
-    and put the board adaptation files in [`application/edge_agent/boards`](https://github.com/espressif/esp-claw/tree/master/application/edge_agent/boards).
+    and put the board adaptation files in <LinkToSource relativePath="application/edge_agent/boards/" />.
 
     Welcome to submit the board adaptation code to the ESP-Claw repository via Pull Request.
 </Aside>

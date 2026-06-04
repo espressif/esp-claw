@@ -1,0 +1,93 @@
+version: 1.0.0
+
+peripherals:
+  - name: i2c_port0
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 7
+        scl: 8
+
+  - name: i2c_port1
+    type: i2c
+    role: master
+    config:
+      port: 1
+      pins:
+        sda: 20
+        scl: 21
+
+  - name: ldo_mipi
+    type: ldo
+    config:
+      chan_id: 3
+      voltage_mv: 2500
+      adjustable: 1
+      owned_by_hw: 0
+
+  - name: dsi_display
+    type: dsi
+    config:
+      bus_id: 0
+      data_lanes: 2
+      phy_clk_src: 0
+      lane_bit_rate_mbps: 1000
+
+  - name: ledc_backlight
+    type: ledc
+    version: default
+    config:
+      gpio_num: 51
+      speed_mode: LEDC_LOW_SPEED_MODE
+      channel: 1
+      timer_sel: LEDC_TIMER_0
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      freq_hz: 5000
+
+  - name: i2s_audio_out
+    type: i2s
+    role: master
+    format: std-out
+    config: &es8311_i2s_config
+      port: 0
+      sample_rate_hz: 44100
+      clk_src: I2S_CLK_SRC_DEFAULT
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_STEREO
+      slot_mask: I2S_STD_SLOT_BOTH
+      ws_width: 16
+      pins:
+        mclk: 13
+        bclk: 12
+        ws: 9
+        dout: 10
+        din: 11
+
+  - name: i2s_audio_in
+    type: i2s
+    role: master
+    format: std-in
+    config: *es8311_i2s_config
+
+  - name: spi_port1
+    type: spi
+    config:
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        mosi_io_num: 3
+        miso_io_num: 4
+        sclk_io_num: 2
+
+  - name: uart_gnss
+    type: uart
+    config:
+      uart_num: UART_NUM_1
+      tx_io_num: 23
+      rx_io_num: 22
+      uart_config:
+        baud_rate: 9600

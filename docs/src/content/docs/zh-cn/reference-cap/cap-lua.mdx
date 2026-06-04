@@ -4,7 +4,8 @@ description: Lua 脚本引擎在 ESP-Claw 中的定位、cap_lua 工具集，以
 ---
 
 import LinkToSource from '@/components/LinkToSource.astro';
-import { Aside, LinkCard } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
 
 源码：<LinkToSource relativePath="components/claw_capabilities/cap_lua/src/cap_lua.c" /> · 头文件：<LinkToSource relativePath="components/claw_capabilities/cap_lua/include/cap_lua.h" />
 
@@ -61,7 +62,7 @@ ESP-Claw 使用 Lua 解释器，通过 `cap_lua_runtime_*` 系列函数初始化
 lua_module_display_register();   // 注册 display 模块
 lua_driver_gpio_register();      // 注册 gpio 模块
 // ...
-cap_lua_register_group();        // 之后锁定
+cap_lua_register_group("/fatfs/scripts");  // 传入脚本基目录，之后锁定
 ```
 
 ## cap_lua 工具集

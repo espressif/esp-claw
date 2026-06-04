@@ -183,7 +183,8 @@ Call from `app_claw.c` (or your init):
 ```c
 #include "cap_my_feature.h"
 
-void app_claw_start(void)
+// In app_capabilities_init or a similar initialization file
+void my_app_init(void)
 {
     // …other registrations…
     cap_my_feature_register_group();

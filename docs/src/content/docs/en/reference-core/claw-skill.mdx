@@ -4,7 +4,8 @@ description: SKILL.md metadata, per-session activation, and context injection.
 ---
 
 import LinkToSource from '@/components/LinkToSource.astro';
-import { Aside, LinkCard, FileTree } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
 
 Header: <LinkToSource relativePath="components/claw_modules/claw_skill/include/claw_skill.h" />
 
@@ -12,7 +13,7 @@ Header: <LinkToSource relativePath="components/claw_modules/claw_skill/include/c
 
 - On disk: a set of `skills/<skill_id>/SKILL.md` files whose JSON frontmatter describes the Skill id, summary, manage mode, and capability groups.
 - Per session: a set of “currently activated” Skill ids persisted under the session state directory.
-- After activation, the model sees fuller Skill docs and can use `cap_skill` tools to activate/deactivate Skills.
+- After activation, `cap_skill` injects the complete Skill document into conversation history through the tool result, so the model can read the detailed documentation for that Skill.
 
 <LinkCard title="How Skills work" href="@lang/reference-project/skills" description="Skill mechanics and manual or Agent-driven edits to Skills" />
 
@@ -26,12 +27,11 @@ Main fields of `claw_skill_config_t`:
 
 ## Wiring into claw_core
 
-`claw_skill` plugs into `claw_core` as two **context providers**:
+`claw_skill` plugs into `claw_core` as one **context provider**:
 
-1. **`claw_skill_skills_list_provider`**: each request renders `name` and `description` from every `SKILL.md` frontmatter into the system prompt so the model knows what Skills exist.
-2. **`claw_skill_active_skill_docs_provider`**: concatenates `SKILL.md` bodies for Skills activated in the current session.
+- **`claw_skill_skills_list_provider`**: each request renders `name` and `description` from every `SKILL.md` frontmatter into the system prompt so the model knows what Skills exist.
 
-Activating a Skill therefore adds its `SKILL.md` body to the next request; tool descriptions and behavioral contracts come from that document.
+Complete documents for activated Skills are no longer injected into the system prompt through a context provider. Instead, the `activate_skill` tool from `cap_skill` injects them into conversation history as **tool results** during activation. This keeps the system prompt stable and improves LLM API prompt-cache hit rates.
 
 ## Activation state
 
@@ -39,7 +39,7 @@ Activation is **isolated per session**:
 
 - Session A activating `weather` does not affect session B.
 - State is persisted as files under `session_state_root_dir` and survives reboot.
-- The model can toggle via `cap_skill`’s `activate_skill` / `deactivate_skill`, or you can use the Console `skill` commands.
+- The model can operate through `cap_skill`'s `activate_skill` tool, or you can use the Console `skill` commands.
 
 <Aside type="caution">
   Console `--session` must match the id from the current `session` command, otherwise it looks like “activated but not in context”.
@@ -49,12 +49,12 @@ Activation is **isolated per session**:
 
 The `/fatfs/skills` tree read at runtime is assembled in the build staging image under `build/fatfs_image/skills`:
 
-1. **`application/edge_agent/fatfs_image/skills/`**: app-bundled factory Skills laid out as `skills/<skill_id>/SKILL.md`, copied into the build staging image.
-2. **Component Skills**: each `cap_*` / `lua_module_*` / `lua_driver_*` component may ship `skills/<skill_id>/SKILL.md`; `components/common/skill_builder` syncs them into `build/fatfs_image/skills/` before packaging.
+1. <LinkToSource relativePath="application/edge_agent/fatfs_image/skills/" />: app-bundled factory Skills laid out as `skills/<skill_id>/SKILL.md`, copied into the build staging image.
+2. **Component Skills**: each `cap_*` / `lua_module_*` / `lua_driver_*` component may ship `skills/<skill_id>/SKILL.md`; <LinkToSource relativePath="components/common/skill_builder/" /> syncs them into `build/fatfs_image/skills/` before packaging.
 
-Note: `application/edge_agent/fatfs_image/` is source input. `application/edge_agent/build/fatfs_image/` is generated staging output and is recreated during the build.
+Note: <LinkToSource relativePath="application/edge_agent/fatfs_image/" /> is source input. `application/edge_agent/build/fatfs_image/` is generated staging output and is recreated during the build.
 
 ## User-facing interaction
 
 <LinkCard title="Console usage" href="@lang/reference-project/console-usage" description="Using the skill command in the Console" />
-<LinkCard title="cap_skill" href="@lang/reference-cap/cap-skill" description="activate_skill / deactivate_skill vs model-visible Skills" />
+<LinkCard title="cap_skill" href="@lang/reference-cap/cap-skill" description="activate_skill tool and cache-friendly document injection" />

@@ -1,8 +1,7 @@
 export const en = {
   docTitle: 'ESP-Claw Settings',
   pageTitle: 'Device Settings',
-  pageSubtitle:
-    'View system operation basic information and status',
+  pageSubtitle: 'View system operation basic information and status',
 
   statusLoading: 'Loading…',
   statusOnline: 'Wi-Fi Connected',
@@ -20,7 +19,7 @@ export const en = {
   navBasic: 'Basic Settings',
   navLlm: 'LLM',
   navIm: 'IM',
-  navSearch: 'Web Search',
+  navWebReq: 'Network & Search Config',
   navMemory: 'Memory',
   navCapabilities: 'Capabilities',
   navLuaModules: 'Lua Modules',
@@ -45,10 +44,8 @@ export const en = {
   webimRetrySend: 'Retry sending',
 
   unsavedIndicator: 'Unsaved',
-  unsavedConfirmLeave:
-    'You have unsaved changes on this tab. Leave without saving?',
-  unsavedConfirmReload:
-    'You have unsaved changes. Are you sure you want to leave?',
+  unsavedConfirmLeave: 'You have unsaved changes on this tab. Leave without saving?',
+  unsavedConfirmReload: 'You have unsaved changes. Are you sure you want to leave?',
 
   saveBtn: 'Save Changes',
   saveTabBtn: 'Save Tab',
@@ -63,16 +60,14 @@ export const en = {
   passwordShow: 'Show password',
   passwordHide: 'Hide password',
   wifiValidationSsidRequired: 'Wi-Fi SSID is required.',
-  wifiValidationPasswordLength:
-    'Wi-Fi password must be empty or at least 8 characters long.',
+  wifiValidationPasswordLength: 'Wi-Fi password must be empty or at least 8 characters long.',
 
   apName: 'AP SSID',
   apPassword: 'AP Password',
   apNameHint: 'Current: {ssid}. Leave empty to keep default name. Changes apply after restart.',
   apPasswordHint: 'Leave empty for open AP. Must be at least 8 characters if set.',
   apValidationNameRequired: 'AP Name is required.',
-  apValidationPasswordLength:
-    'AP password must be empty or at least 8 characters long.',
+  apValidationPasswordLength: 'AP password must be empty or at least 8 characters long.',
   apBehavior: 'AP Behavior',
   apBehaviorKeep: 'Keep On',
   apBehaviorCloseOnSta: 'Turn Off After Wi-Fi Connects',
@@ -90,16 +85,19 @@ export const en = {
   sysInfoRestart: 'Restart Device',
   restartConfirmTitle: 'Confirm Device Restart',
   restartConfirmBody: 'The device will restart immediately and this page will go offline briefly.',
-  restartConfirmHint: 'The current connection will drop during restart. You can continue once the device comes back.',
+  restartConfirmHint:
+    'The current connection will drop during restart. You can continue once the device comes back.',
   restartConfirmCancel: 'Cancel',
   restartConfirmAction: 'Restart',
   restartOverlayTitle: 'Waiting For Device Restart',
   restartOverlayRequesting: 'Sending restart request…',
   restartOverlayCooldown: 'The device is shutting down and preparing to reboot…',
   restartOverlayPolling: 'Polling device status and waiting for it to come back online…',
-  restartOverlayHint: 'The page will automatically check the restart status. No manual refresh is needed.',
+  restartOverlayHint:
+    'The page will automatically check the restart status. No manual refresh is needed.',
   restartOverlayErrorTitle: 'The device did not come back online in time',
-  restartOverlayTimeout: 'The device did not come back online within 30 seconds. Check network reachability or serial logs.',
+  restartOverlayTimeout:
+    'The device did not come back online within 30 seconds. Check network reachability or serial logs.',
   restartOverlayClose: 'Close',
 
   sectionLlm: 'LLM Settings',
@@ -177,13 +175,16 @@ export const en = {
     'Scan the QR code with WeChat. Credentials will be filled in Advanced settings below — click Save to store them.',
   wechatLoginOpenLink: 'Open login link',
 
-  sectionSearch: 'Search (Optional)',
-  searchNote:
-    'If set, ESP-Claw can search online. Tip: Built-in weather skill also relies on online search.',
-  searchBraveKey: 'Brave Search API Key',
-  searchTavilyKey: 'Tavily API Key',
-  searchHttpAllowlist: 'HTTP allowlist (domains/IP, comma-separated)',
-  searchHttpAllowlistPlaceholder: 'api.example.com,*.example.org,203.0.113.10',
+  sectionWebReqSearch: 'Search',
+  webreqSearchNote:
+    'Optional. If set, ESP-Claw can search online.',
+  sectionWebReqNetwork: 'Network Requests',
+  webreqBraveKey: 'Brave Search API Key',
+  webreqTavilyKey: 'Tavily API Key',
+  webreqHttpAllowlist: 'HTTP allowlist (domains/IP, comma-separated)',
+  webreqHttpAllowlistPlaceholder: 'api.example.com,*.example.org,203.0.113.10',
+  webreqHttpAllowlistNote:
+    'Use comma-separated domains/IPs. Wildcard * is supported, and a standalone * allows all domains/IPs.',
 
   sectionCapabilities: 'Capability Groups',
   capabilitiesDescription:
@@ -266,6 +267,14 @@ export const en = {
   fileDevModeConfirm:
     'After entering Dev Mode, you can upload, modify, or delete files. Incorrect changes may cause the system to fail, reboot endlessly, or behave unexpectedly. Please proceed carefully.',
   fileDeleteConfirm: 'Delete {path}?',
+  fileDeleteDirNotEmpty:
+    'Directory {path} is not empty. Recursively delete all contents? This cannot be undone.',
+  fileDownloadFolder: 'Download folder',
+  fileDownloadingFolder: 'Downloading and packing files…',
+  fileDownloadFolderCancel: 'Give up download',
+  fileDownloadFolderCancelled: 'Folder download cancelled',
+  fileDownloadFolderDone: 'Folder download complete',
+  fileDownloadFolderFailed: 'Folder download failed',
   fileUploadComplete: 'Upload completed',
   fileFolderCreated: 'Folder created',
   fileDeleteComplete: 'Delete completed',
@@ -277,19 +286,22 @@ export const en = {
   fileEditorLoadError: 'Failed to load file',
   fileEditorSaveError: 'Failed to save file',
   fileUnsupportedAction: '{action} is not supported for this file type.',
-  fileSelectAndPath:
-    'Select a file and provide a target path that starts with /.',
+  fileSelectAndPath: 'Select a file and provide a target path that starts with /.',
   fileFolderNameRequired: 'Enter a folder name.',
   setupEyebrow: 'First-Use Wizard',
   setupTitle: 'Finish Initial Device Setup',
-  setupIntro: 'Configure LLM, IM, and web search in order. Each step can be skipped and completed later from the settings pages.',
+  setupIntro:
+    'Configure LLM, IM, and web search in order. Each step can be skipped and completed later from the settings pages.',
   setupStepLabel: 'Step {index}',
   setupStepLlm: 'Configure LLM',
-  setupStepLlmDesc: 'Connect a model backend first. Core agent features become available after reboot.',
+  setupStepLlmDesc:
+    'Connect a model backend first. Core agent features become available after reboot.',
   setupStepIm: 'Configure IM',
-  setupStepImDesc: 'Fill in WeChat, Feishu, QQ, or Telegram credentials as needed. Leave unused ones blank.',
+  setupStepImDesc:
+    'Fill in WeChat, Feishu, QQ, or Telegram credentials as needed. Leave unused ones blank.',
   setupStepSearch: 'Configure Web Search',
-  setupStepSearchDesc: 'Optionally add online search keys to enable web search and built-in skills that depend on it.',
+  setupStepSearchDesc:
+    'Optionally add online search keys to enable web search and built-in skills that depend on it.',
   setupStepDone: 'Finish And Restart',
   setupStepDoneDesc: 'Your configuration has been saved. Restart the device to reload everything.',
   setupSavedStep: 'Step saved',
@@ -309,7 +321,8 @@ export const en = {
   setupImAdded: 'All available platforms have been added.',
   setupWechatConfigured: 'WeChat is configured',
   setupWechatLoginRequired: 'WeChat was added. Complete the QR login before continuing.',
-  setupRestartBanner: 'Setup is complete. A device restart is required for all changes to take effect.',
+  setupRestartBanner:
+    'Setup is complete. A device restart is required for all changes to take effect.',
   setupRestartNow: 'Restart Now',
 };
 

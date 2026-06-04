@@ -31,7 +31,7 @@ If script execution returns an error, report that error directly to the user.
     },
     "web_root": {
       "type": "string",
-      "description": "Optional absolute FatFS directory for static web files. Defaults to /fatfs/skills/http_server_lua_demo/assets."
+      "description": "Optional absolute directory for static web files. Defaults to {CUR_SKILL_DIR}/assets."
     }
   }
 }

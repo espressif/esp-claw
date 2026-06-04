@@ -1,14 +1,17 @@
 ---
-title: Web Flash & Get Started
+title: Web Flash
 description: Flash ESP-Claw firmware using the web flasher.
 ---
 
-import { LinkCard, Steps, Aside, LinkButton } from '@astrojs/starlight/components';
+import { Steps, Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
+import { LinkButton } from 'starlight-theme-nova/components'
+import LinkToSource from '@/components/LinkToSource.astro';
 
 ## Prerequisites
 
 At this point, you should already have assembled the ESP-Claw breadboard hardware, or prepared other ESP-Claw compatible hardware.
-You can view the list of ESP-Claw compatible development boards in the [GitHub repository](https://github.com/espressif/esp-claw/tree/master/application/edge_agent/boards).
+You can view the list of ESP-Claw compatible development boards in <LinkToSource relativePath="application/edge_agent/boards/" />.
 ESP-Claw requires at least 8 MB Flash and 8 MB PSRAM, currently supports ESP32-S3 and ESP32-P4.
 
 Before flashing, prepare a computer with Chrome or Edge installed. Web flashing is not available in Firefox for now.
@@ -70,39 +73,7 @@ Before flashing, prepare a computer with Chrome or Edge installed. Web flashing 
 
 </Steps>
 
-## First interactions
-
-<Aside type="tip">
-   Boards with a display can show Wi-Fi status on screen. Headless boards can check Wi-Fi status through serial Console or the status display on the Web config page.
-</Aside>
-
-Telegram / QQ Bot / WeChat ClawBot are recommended for interacting with ESP-Claw.
-- Send a message on a configured IM channel and ESP-Claw replies automatically.
-- No reply? [➡️FAQ](@lang/tutorial/faq#messages-sent-via-im-get-no-response)
-- Prefer serial Console? [➡️Console usage](@lang/reference-project/console-usage)
-
-**Everyday Q&A**
-- Hi, what capabilities do you currently have?
-- Any AI news lately?
-- At 12% annual interest, what will 10,000 become after 3 years?
-
-**Hardware control** (requires supported hardware)
-- Turn the light on / set the light to red
-- Draw `Hello, ESP-Claw!` on the display
-- Take a photo and send it to me
-- Play a 1s 440Hz beep
-- Draw a smiley face on the display
-
-**Scheduled reminders**
-- Remind me to drink water every day at 7am
-- Remind me to sleep at 9pm every day
-- Remind me to clean every Saturday at 8am
-
-**Memory**
-- Remember that I prefer concise answers
-- Do you still remember my name?
-
 ## Next steps
 
-<LinkButton href="@lang/reference-project/console-usage">Console usage</LinkButton>
+<LinkButton href="@lang/tutorial/first-interactions">First interactions</LinkButton>
 <LinkButton href="@lang/reference-project/configuration" variant="secondary">Configuration</LinkButton>

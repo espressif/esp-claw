@@ -1,0 +1,52 @@
+version: 1.0.0
+# Peripherals Configuration for Waveshare ESP32-S3-GEEK
+#
+# Pin reference (from schematic ESP32-S3-GEEK V1.1):
+#   LCD SPI:   CLK=GPIO12, MOSI=GPIO11, CS=GPIO10, DC=GPIO8, RST=GPIO9
+#   LCD BL:    GPIO7 → R2(1K) → SS8050(NPN) → LEDK  (active-HIGH)
+#   SD card:   SCK=GPIO36,  MOSI=GPIO35, MISO=GPIO37, CS=GPIO34
+#   I2C hdr:   SDA=GPIO16, SCL=GPIO17  (H1 connector, no onboard devices)
+#   UART hdr:  RXD=GPIO44, TXD=GPIO43  (H3 connector)
+#   GPIO hdr:  GPIO6, GPIO13, GPIO14   (H2 connector)
+#   BOOT btn:  GPIO0
+
+peripherals:
+
+  # SPI bus for the onboard 1.14" ST7789 LCD (write-only, no MISO).
+  # Uses SPI3_HOST to leave SPI2_HOST free for the TF card.
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI3_HOST
+        data0_io_num: 11         # MOSI  (LCD_MOSI)
+        sclk_io_num: 12          # SCLK  (LCD_CLK)
+        max_transfer_sz: 5400    # ~1/12 frame (240*135*2/12 ≈ 5400 B) for DMA chunks
+
+  # SPI bus for the onboard TF (microSD) card slot (full-duplex).
+  # Uses SPI2_HOST on dedicated GPIO33-38 range.
+  - name: spi_sdcard
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        mosi_io_num: 35          # SD_MOSI  (SDIO_CMD)
+        miso_io_num: 37          # SD_MISO  (SDIO_D0)
+        sclk_io_num: 36          # SD_SCK   (SDIO_SCK)
+        max_transfer_sz: 32768   # 32 KB — typical SD block multiple
+
+  # LCD backlight: GPIO7 drives SS8050 NPN transistor base (active-HIGH).
+  # Full duty (1023) on startup so the display is visible immediately;
+  # duty stays fixed — the board manager toggles the ST7789 disp_on_off
+  # command, not the PWM duty, to control on/off.
+  - name: ledc_backlight
+    type: ledc
+    role: none
+    config:
+      gpio_num: 7
+      freq_hz: 5000
+      duty: 1023
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false

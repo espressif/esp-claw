@@ -35,6 +35,38 @@ function(edge_agent_patch_file_replace FILE_PATH OLD_TEXT NEW_TEXT PATCH_NAME)
     message(STATUS "${EDGE_AGENT_PROJECT_LOG_PREFIX} Applied ESP-IDF patch '${PATCH_NAME}'")
 endfunction()
 
+function(edge_agent_patch_file_replace_literal FILE_PATH OLD_TEXT NEW_TEXT PATCH_NAME)
+    set(ALLOW_MISSING_SOURCE OFF)
+    if(ARGC GREATER 4 AND ARGV4 STREQUAL "ALLOW_MISSING")
+        set(ALLOW_MISSING_SOURCE ON)
+    endif()
+
+    if(NOT EXISTS "${FILE_PATH}")
+        message(WARNING "${EDGE_AGENT_PROJECT_LOG_PREFIX} ESP-IDF patch '${PATCH_NAME}' skipped: file not found: ${FILE_PATH}")
+        return()
+    endif()
+
+    file(READ "${FILE_PATH}" FILE_CONTENT)
+    string(FIND "${FILE_CONTENT}" "${NEW_TEXT}" FIXED_TEXT_OFFSET)
+    if(NOT FIXED_TEXT_OFFSET EQUAL -1)
+        message(STATUS "${EDGE_AGENT_PROJECT_LOG_PREFIX} ESP-IDF patch '${PATCH_NAME}' already applied")
+        return()
+    endif()
+
+    string(FIND "${FILE_CONTENT}" "${OLD_TEXT}" OLD_TEXT_OFFSET)
+    if(OLD_TEXT_OFFSET EQUAL -1)
+        if(EDGE_AGENT_STRICT_IDF_PATCH AND NOT ALLOW_MISSING_SOURCE)
+            message(FATAL_ERROR "${EDGE_AGENT_PROJECT_LOG_PREFIX} ESP-IDF patch '${PATCH_NAME}' could not be verified or applied: source pattern not found in ${FILE_PATH}")
+        endif()
+        message(WARNING "${EDGE_AGENT_PROJECT_LOG_PREFIX} ESP-IDF patch '${PATCH_NAME}' skipped: source pattern not found in ${FILE_PATH}")
+        return()
+    endif()
+
+    string(REPLACE "${OLD_TEXT}" "${NEW_TEXT}" FILE_CONTENT "${FILE_CONTENT}")
+    file(WRITE "${FILE_PATH}" "${FILE_CONTENT}")
+    message(STATUS "${EDGE_AGENT_PROJECT_LOG_PREFIX} Applied ESP-IDF patch '${PATCH_NAME}'")
+endfunction()
+
 # Upstream moved this repair from sample_edge NEG to shift_edge NEG later.
 # Treat both as fixed states so v5.5.4, release/v5.5 snapshots, and the
 # upstream fix branch can all configure without relying on a brittle patch file.
@@ -52,3 +84,23 @@ edge_agent_patch_file_replace(
     "#define USB_IAD_DESC_SIZE    8"
     "usb_iad_desc_size"
 )
+
+# ESP32-S31 XIP maps flash rodata and ext_ram onto the same PSRAM address bus in ESP-IDF 6.1.
+# Keep the current location if NOLOAD rodata has already advanced past the computed reserved end.
+edge_agent_patch_file_replace_literal(
+    "$ENV{IDF_PATH}/components/esp_system/ld/ld.ext_ram.sections"
+    [=[. = _ext_ram_on_same_bus ? ORIGIN(ext_ram_seg) + (_rodata_reserved_end - _flash_rodata_dummy_start) : 0;]=]
+    [=[. = _ext_ram_on_same_bus ? MAX(ABSOLUTE(.), ORIGIN(ext_ram_seg) + (_rodata_reserved_end - _flash_rodata_dummy_start)) : 0;]=]
+    "ext_ram_dummy_same_bus_rodata_noload"
+    ALLOW_MISSING
+)
+
+edge_agent_patch_file_replace_literal(
+    "$ENV{IDF_PATH}/components/esp_system/ld/ld.ext_ram.sections"
+    [=[. = _ext_ram_on_same_bus ? MAX(., ORIGIN(ext_ram_seg) + (_rodata_reserved_end - _flash_rodata_dummy_start)) : 0;]=]
+    [=[. = _ext_ram_on_same_bus ? MAX(ABSOLUTE(.), ORIGIN(ext_ram_seg) + (_rodata_reserved_end - _flash_rodata_dummy_start)) : 0;]=]
+    "ext_ram_dummy_same_bus_rodata_noload_absolute_dot"
+)
+
+# The preprocessed S31 linker script depends on this included fragment, but Ninja only tracks the top-level input.
+file(TOUCH_NOCREATE "$ENV{IDF_PATH}/components/esp_system/ld/esp32s31/sections.ld.in")

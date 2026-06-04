@@ -22,6 +22,7 @@
 #include "claw_event_publisher.h"
 #include "cJSON.h"
 #include "esp_crt_bundle.h"
+#include "esp_attr.h"
 #include "esp_event.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
@@ -136,11 +137,20 @@ typedef struct {
     size_t seen_message_idx;
 } cap_im_feishu_state_t;
 
-static cap_im_feishu_state_t s_feishu = {
-    .ws_ping_interval_ms = 120000,
-    .ws_reconnect_interval_ms = 30000,
-    .ws_reconnect_nonce_ms = 30000,
-};
+static EXT_RAM_BSS_ATTR cap_im_feishu_state_t s_feishu;
+static bool s_feishu_initialized;
+
+static void cap_im_feishu_init_defaults(void)
+{
+    if (s_feishu_initialized) {
+        return;
+    }
+
+    s_feishu.ws_ping_interval_ms = 120000;
+    s_feishu.ws_reconnect_interval_ms = 30000;
+    s_feishu.ws_reconnect_nonce_ms = 30000;
+    s_feishu_initialized = true;
+}
 
 static int64_t cap_im_feishu_now_ms(void)
 {
@@ -982,7 +992,7 @@ static esp_err_t cap_im_feishu_publish_attachment_event(const char *chat_id,
     }
     snprintf(event.event_id, sizeof(event.event_id), "feishu-attach-%" PRId64, cap_im_feishu_now_ms());
     event.timestamp_ms = cap_im_feishu_now_ms();
-    event.session_policy = CLAW_EVENT_SESSION_POLICY_CHAT;
+    event.session_policy = CLAW_SESSION_POLICY_CHAT;
     event.text = "";
     event.payload_json = (char *)payload_json;
     return claw_event_router_publish(&event);
@@ -3162,6 +3172,8 @@ static const claw_cap_group_t s_feishu_group = {
 
 esp_err_t cap_im_feishu_register_group(void)
 {
+    cap_im_feishu_init_defaults();
+
     if (claw_cap_group_exists(s_feishu_group.group_id)) {
         return ESP_OK;
     }
@@ -3171,6 +3183,10 @@ esp_err_t cap_im_feishu_register_group(void)
 
 esp_err_t cap_im_feishu_set_credentials(const char *app_id, const char *app_secret)
 {
+    if (!s_feishu_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (!app_id || !app_secret) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -3184,6 +3200,10 @@ esp_err_t cap_im_feishu_set_credentials(const char *app_id, const char *app_secr
 
 esp_err_t cap_im_feishu_set_attachment_config(const cap_im_feishu_attachment_config_t *config)
 {
+    if (!s_feishu_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (!config) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -3202,6 +3222,10 @@ esp_err_t cap_im_feishu_set_attachment_config(const cap_im_feishu_attachment_con
 
 esp_err_t cap_im_feishu_start(void)
 {
+    if (!s_feishu_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     BaseType_t ok;
 
     if (!s_feishu.app_id[0] || !s_feishu.app_secret[0]) {
@@ -3302,6 +3326,10 @@ esp_err_t cap_im_feishu_stop(void)
 
 esp_err_t cap_im_feishu_send_text(const char *chat_id, const char *text)
 {
+    if (!s_feishu_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     size_t offset = 0;
     size_t text_len = 0;
 
@@ -3359,6 +3387,10 @@ esp_err_t cap_im_feishu_send_text(const char *chat_id, const char *text)
 
 esp_err_t cap_im_feishu_send_image(const char *chat_id, const char *path, const char *caption)
 {
+    if (!s_feishu_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (!chat_id || !chat_id[0] || !path || !path[0]) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -3368,6 +3400,10 @@ esp_err_t cap_im_feishu_send_image(const char *chat_id, const char *path, const 
 
 esp_err_t cap_im_feishu_send_file(const char *chat_id, const char *path, const char *caption)
 {
+    if (!s_feishu_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
     if (!chat_id || !chat_id[0] || !path || !path[0]) {
         return ESP_ERR_INVALID_ARG;
     }

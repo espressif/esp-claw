@@ -46,7 +46,6 @@ idf_component_register(
         esp_timer
         esp_websocket_client
         freertos
-        json
         mbedtls
         console
 )

@@ -1,0 +1,94 @@
+version: 1.0.0
+# Peripherals for DFRobot ESP32-S3 AI Camera (DFR1154)
+peripherals:
+
+  # Camera SCCB + LTR-308 ambient light sensor (I2C)
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 8
+        scl: 9
+
+  # MAX98357 speaker amplifier (I2S STD TX on I2S1)
+  - name: i2s_audio_out
+    type: i2s
+    role: master
+    format: std-out
+    config:
+      port: 1
+      sample_rate_hz: 16000
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_STEREO
+      slot_mask: I2S_STD_SLOT_BOTH
+      ws_width: 16
+      pins:
+        mclk: -1
+        bclk: 45
+        ws: 46
+        dout: 42
+        din: -1
+
+  # MAX98357 strap pins (DFR1154): MODE=GPIO40, GAIN=GPIO41
+  - name: gpio_max98357_mode
+    type: gpio
+    role: io
+    config:
+      pin: 40
+      mode: GPIO_MODE_OUTPUT
+      default_level: 1
+
+  - name: gpio_max98357_gain
+    type: gpio
+    role: io
+    config:
+      pin: 41
+      mode: GPIO_MODE_OUTPUT
+      default_level: 1
+
+  # On-board PDM microphone (PDM-RX on I2S0)
+  - name: i2s_audio_in
+    type: i2s
+    format: "pdm-in"
+    role: master
+    config:
+      port: 0
+      sample_rate_hz: 16000
+      clk_src: "I2S_CLK_SRC_DEFAULT"
+      data_bit_width: 16
+      slot_mode: "I2S_SLOT_MODE_MONO"
+      pins:
+        clk: 38
+        din: 39
+
+  - name: gpio_led_r
+    type: gpio
+    role: io
+    config:
+      pin: 3                          # GPIO3 - status LED
+      mode: GPIO_MODE_OUTPUT
+      default_level: 1
+
+  - name: gpio_ir_led
+    type: gpio
+    role: io
+    config:
+      pin: 47                         # GPIO47 - IR fill light
+      mode: GPIO_MODE_OUTPUT
+      default_level: 0
+
+  # microSD over SPI (DFR1154 Arduino examples: CS=10, MOSI=11, MISO=13, SCK=12)
+  - name: spi_sdcard
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        mosi_io_num: 11
+        miso_io_num: 13
+        sclk_io_num: 12
+        max_transfer_sz: 4096

@@ -130,33 +130,3 @@ esp_hidd_dev_input_set(dev, 0, report_id, data, len);
 The payload does not include the report ID. ESP-IDF `esp_hidd` owns the HID GATT
 service, characteristics, CCCD handling, protocol mode, control point, and BLE
 notification transport.
-
-## Runtime Scripts
-
-Agent-facing runtime scripts are installed under `/fatfs/skills/ble_hid/scripts/`:
-- `/fatfs/skills/ble_hid/scripts/start_ble_hid.lua`
-- `/fatfs/skills/ble_hid/scripts/send_ble_hid_action.lua`
-
-`start_ble_hid.lua` initializes BLE HID and starts advertising if needed.
-`send_ble_hid_action.lua` sends one explicit media, keyboard, or mouse action.
-
-The reusable action helper is `lib/ble_hid_actions.lua`. It is an internal
-library, not a direct runtime entry point.
-
-Example runtime calls:
-
-```json
-{"path":"/fatfs/skills/ble_hid/scripts/start_ble_hid.lua","args":{"name":"esp-claw-hid"},"timeout_ms":10000}
-```
-
-```json
-{"path":"/fatfs/skills/ble_hid/scripts/send_ble_hid_action.lua","args":{"type":"media","key":"play_pause"},"timeout_ms":5000}
-```
-
-```json
-{"path":"/fatfs/skills/ble_hid/scripts/send_ble_hid_action.lua","args":{"type":"keyboard_combo","keys":["CTRL","C"]},"timeout_ms":5000}
-```
-
-```json
-{"path":"/fatfs/skills/ble_hid/scripts/send_ble_hid_action.lua","args":{"type":"mouse_move","dx":30,"dy":0},"timeout_ms":5000}
-```

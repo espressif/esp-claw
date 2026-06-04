@@ -14,6 +14,7 @@
 #include "cJSON.h"
 #include "esp_console.h"
 #include "esp_log.h"
+#include "esp_attr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
@@ -39,7 +40,7 @@ static const char *TAG = "cap_cli";
     "\"description\":\"Full ESP console CLI command line to execute. The first token must match an allowed command.\"}}," \
     "\"required\":[\"command_line\"]}"
 
-static cap_cli_state_t s_cli = {0};
+static EXT_RAM_BSS_ATTR cap_cli_state_t s_cli = {0};
 
 static char *cap_cli_strdup(const char *src)
 {

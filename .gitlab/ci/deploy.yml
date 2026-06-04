@@ -39,4 +39,5 @@ deploy_website:
       artifacts: true
   script:
     - cd docs
-    - npx wrangler pages deploy "dist/" --project-name "$SITE_DEPLOY_PROJECT_NAME" --branch="$DEPLOY_BRANCH"
+    - corepack enable
+    - pnpx wrangler pages deploy "dist/" --project-name "$SITE_DEPLOY_PROJECT_NAME" --branch="$DEPLOY_BRANCH"

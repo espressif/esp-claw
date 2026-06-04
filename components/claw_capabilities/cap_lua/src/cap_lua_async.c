@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "claw_task.h"
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_random.h"
@@ -58,7 +59,7 @@ typedef struct {
 } cap_lua_job_ctx_t;
 
 static SemaphoreHandle_t s_job_lock;
-static cap_lua_job_record_t s_jobs[CAP_LUA_ASYNC_MAX_JOBS];
+static EXT_RAM_BSS_ATTR cap_lua_job_record_t s_jobs[CAP_LUA_ASYNC_MAX_JOBS];
 static SemaphoreHandle_t s_slot_terminal_sem[CAP_LUA_ASYNC_MAX_JOBS];
 static size_t s_running_jobs;
 static bool s_runner_started;

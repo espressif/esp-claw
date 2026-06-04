@@ -25,6 +25,8 @@ typedef enum {
     CLAW_CAP_CALLER_SYSTEM = 0,
     CLAW_CAP_CALLER_AGENT = 1,
     CLAW_CAP_CALLER_CONSOLE = 2,
+    CLAW_CAP_CALLER_ROOT_AGENT = CLAW_CAP_CALLER_AGENT,
+    CLAW_CAP_CALLER_SUB_AGENT = 3,
 } claw_cap_caller_t;
 
 typedef enum {
@@ -32,6 +34,7 @@ typedef enum {
     CLAW_CAP_FLAG_EMITS_EVENTS = 1 << 1,
     CLAW_CAP_FLAG_SUPPORTS_LIFECYCLE = 1 << 2,
     CLAW_CAP_FLAG_RESTRICTED = 1 << 3,
+    CLAW_CAP_FLAG_ROOT_AGENT_ONLY = 1 << 4,
 } claw_cap_flags_t;
 
 typedef enum {
@@ -47,10 +50,21 @@ typedef struct {
     const char *session_id;
     const char *channel;
     const char *chat_id;
+    const char *target_channel;
+    const char *target_chat_id;
     const char *source_cap;
     const char *correlation_id;
+    claw_core_handle_t core;
     claw_cap_caller_t caller;
 } claw_cap_call_context_t;
+
+typedef struct {
+    uint32_t magic;
+    claw_core_handle_t *core;
+    claw_cap_caller_t caller;
+} claw_cap_core_call_user_ctx_t;
+
+#define CLAW_CAP_CORE_CALL_USER_CTX_MAGIC 0x43415043U
 
 typedef enum {
     CLAW_CAP_EVENT_ROUTE_PASS = 0,
@@ -151,7 +165,11 @@ char *claw_cap_build_llm_tools_json(const claw_cap_call_context_t *ctx,
 char *claw_cap_build_catalog(void);
 const char *claw_cap_state_to_string(claw_cap_state_t state);
 
-/* Exposes all LLM-visible tools for one request. */
+/* Exposes all root-agent LLM-visible tools for one request. */
+extern const claw_core_context_provider_t claw_cap_root_agent_tools_provider;
+/* Exposes sub-agent LLM-visible tools, excluding root-only tools. */
+extern const claw_core_context_provider_t claw_cap_sub_agent_tools_provider;
+/* Compatibility alias for root-agent tools. */
 extern const claw_core_context_provider_t claw_cap_tools_provider;
 
 #ifdef __cplusplus

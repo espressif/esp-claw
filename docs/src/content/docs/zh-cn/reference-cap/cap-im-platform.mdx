@@ -22,6 +22,7 @@ Skill：<LinkToSource relativePath="components/claw_capabilities/cap_im_platform
 | `cap_im_qq` | `qq_gateway` | `qq_send_message` | `qq_send_image` | `qq_send_file` |
 | `cap_im_tg` | `tg_gateway` | `tg_send_message` | `tg_send_image` | `tg_send_file` |
 | `cap_im_wechat` | `wechat_gateway` | `wechat_send_message` | `wechat_send_image` | 不支持 |
+| `cap_im_local` | `local_gateway` | `local_send_message` | — | — |
 
 ## 组件结构
 
@@ -64,7 +65,7 @@ router -> tools: "send_message 绑定"
 
 ## 启动与可见性
 
-应用启动时会按启用的平台分别准备凭证和附件配置，再注册对应的运行时 Group。`edge_agent` 会把 Event Router 的出站 channel，例如 `qq`、`feishu`、`telegram`、`wechat`，绑定到对应发送工具。
+应用启动时会按启用的平台分别准备凭证和附件配置，再注册对应的运行时 Group。`edge_agent` 会把 Event Router 的出站 channel，例如 `qq`、`feishu`、`telegram`、`wechat`、`web`，绑定到对应发送工具。
 
 统一 IM Skill 在 `cap_groups` 中声明四个平台的运行时 Group。激活该 Skill 后，模型会同时获得平台专属工具和通道选择说明，避免跨平台误发或重复回复。
 
@@ -80,6 +81,7 @@ router -> tools: "send_message 绑定"
 | QQ | QQ Bot WebSocket API | `c2c:<openid>` 或 `group:<group_openid>` | 文件发送依赖 QQ 平台侧支持；图片和通用文件使用不同工具。 |
 | Telegram | Bot API 长轮询 | 数字 chat id，例如 `123456789` 或 `-100...` | 长文本会自动分片，文件通过 multipart 流式上传。 |
 | 微信 | ClawBot 轮询 API | 明确的群 id 或联系人 id | 支持文本和图片发送，暂不支持通用非图片文件发送。 |
+| Web（本地） | HTTP/WebSocket（Web 前端） | `web` channel | 独立组件 `cap_im_local`，用于 Web 配置页内置的 IM 对话界面，支持文本发送。 |
 
 ## Telegram 作为代表实现
 

@@ -183,7 +183,8 @@ esp_err_t cap_my_feature_register_group(void)
 ```c
 #include "cap_my_feature.h"
 
-void app_claw_start(void)
+// 在 app_capabilities_init 或类似初始化文件中
+void my_app_init(void)
 {
     // ... 其他注册 ...
     cap_my_feature_register_group();

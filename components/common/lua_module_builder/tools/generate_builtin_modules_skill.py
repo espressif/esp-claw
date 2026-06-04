@@ -85,8 +85,8 @@ def render_generated_skill(entries: list[dict]) -> str:
         lines.extend(['No compiled lua_module/lua_driver component currently provides markdown docs or test scripts.', ''])
         return '\n'.join(lines)
 
-    lines.extend(['To read documentation for a module, call `read_file("scripts/docs/<Doc file path>")`.',
-                  'To read a module test script, call `read_file("scripts/builtin/test/<Test script path>")`.',
+    lines.extend(['To read documentation for a module, call `read_file("{CUR_SKILL_DIR}/scripts/docs/<Doc file path>")`.',
+                  'To read a module test script, call `read_file("{CUR_SKILL_DIR}/scripts/builtin/test/<Test script path>")`.',
                   'Read all the files you need in one go as much as possible.'])
     lines.extend(['Do not fabricate functions that are not documented.', ''])
     lines.extend(['| Module | Doc file path | Test script path |', '| --- | --- | --- |'])

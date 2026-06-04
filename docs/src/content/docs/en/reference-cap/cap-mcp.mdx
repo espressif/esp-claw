@@ -1,0 +1,91 @@
+---
+title: cap_mcp_client / cap_mcp_server
+description: Model Context Protocol (MCP) client and server capabilities.
+---
+
+import LinkToSource from '@/components/LinkToSource.astro';
+import { Aside } from '@astrojs/starlight/components';
+
+**Client** source: <LinkToSource relativePath="components/claw_capabilities/cap_mcp_client/src/cap_mcp_client.c" /> ·
+header: <LinkToSource relativePath="components/claw_capabilities/cap_mcp_client/include/cap_mcp_client.h" /> ·
+Skill: <LinkToSource relativePath="components/claw_capabilities/cap_mcp_client/skills/cap_mcp_client/SKILL.md" />
+
+**Server** source: <LinkToSource relativePath="components/claw_capabilities/cap_mcp_server/src/cap_mcp_server.c" /> ·
+header: <LinkToSource relativePath="components/claw_capabilities/cap_mcp_server/include/cap_mcp_server.h" /> ·
+Skill: <LinkToSource relativePath="components/claw_capabilities/cap_mcp_server/skills/cap_mcp_server/SKILL.md" />
+
+## Overview
+
+ESP-Claw implements [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) support through two components, `cap_mcp_client` and `cap_mcp_server`:
+
+- **`cap_mcp_client`**: allows the LLM to discover and call tools exposed by remote MCP servers
+- **`cap_mcp_server`**: exposes the device's own Capabilities as a local MCP server for external MCP clients
+
+## cap_mcp_client
+
+### Tool description
+
+| Tool ID | Description |
+|---------|-------------|
+| `mcp_list_tools` | List available tools on a remote MCP server |
+| `mcp_call_tool` | Call a specified tool on a remote MCP server |
+| `mcp_discover` | Discover MCP servers advertised on the local network |
+
+### Tool parameters
+
+#### `mcp_list_tools`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `server_url` | string | Yes | MCP server URL |
+| `endpoint` | string | | MCP endpoint path |
+| `cursor` | string | | Pagination cursor |
+
+#### `mcp_call_tool`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `server_url` | string | Yes | MCP server URL |
+| `tool_name` | string | Yes | Tool name to call |
+| `endpoint` | string | | MCP endpoint path |
+| `arguments` | object | | Arguments passed to the tool |
+
+#### `mcp_discover`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `timeout_ms` | integer | | Discovery timeout |
+| `include_self` | boolean | | Whether to include this device itself |
+
+### Group information
+
+| Property | Value |
+|----------|-------|
+| Group ID | `cap_mcp_client` |
+| Default LLM-visible | No (requires Skill activation) |
+| Tool count | 3 |
+
+## cap_mcp_server
+
+### Overview
+
+`cap_mcp_server` is a `CLAW_CAP_KIND_HYBRID` Capability with lifecycle management. After start, it creates a local MCP server instance and exposes the device's registered Capabilities as MCP tools for discovery and invocation by external MCP clients on the LAN, such as desktop IDEs or other ESP-Claw devices.
+
+### Features
+
+- Supports MCP SSE (Server-Sent Events) transport
+- Automatically maps device Capabilities to MCP tools
+- Supports mDNS advertisement for LAN discovery
+- Provides a full lifecycle (init -> start -> stop)
+
+### Group information
+
+| Property | Value |
+|----------|-------|
+| Group ID | `cap_mcp_server` |
+| Default LLM-visible | No |
+| Tool count | 0 (server only; no LLM-callable tools exposed) |
+
+<Aside type="tip">
+  When `cap_mcp_client` and `cap_mcp_server` are used together, multiple ESP-Claw devices can form a distributed Agent network, discovering and calling one another's capabilities through MCP.
+</Aside>

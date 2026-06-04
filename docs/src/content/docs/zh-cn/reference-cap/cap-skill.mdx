@@ -10,21 +10,20 @@ import { Aside } from '@astrojs/starlight/components';
 
 ## 定位
 
-`cap_skill` 是**将 core 运行时功能暴露为工具**的代表实现。它不实现任何自己独立的业务逻辑，而是将 `claw_skill` 模块（见 [claw_skill](@lang/reference-core/claw-skill)）的能力——注册/注销 Skill、激活/停用 Skill——封装成 LLM 可调用的工具，同时向 Console 暴露为 `cap call` 命令。
+`cap_skill` 是**将 core 运行时功能暴露为工具**的代表实现。它不实现任何自己独立的业务逻辑，而是将 `claw_skill` 模块（见 [claw_skill](@lang/reference-core/claw-skill)）的能力——注册/注销 Skill、激活 Skill——封装成 LLM 可调用的工具，同时向 Console 暴露为 `cap call` 命令。
 
 这种「薄包装（thin wrapper）」模式在 ESP-Claw 中很常见：底层功能由 `claw_*` 模块实现，`cap_*` 组件负责将其转化为工具接口和调用路由。
 
 ## 暴露的工具
 
-`cap_skill` 注册了五个 Callable：
+`cap_skill` 注册了四个 Callable：
 
 | 工具 ID | 描述 |
 |---------|------|
 | `list_skill` | 列出 Skills 根目录下所有 Markdown 中发现的 Skill |
 | `register_skill` | 创建一个运行时管理的 `skills/<skill_id>/SKILL.md` 并重载注册表 |
 | `unregister_skill` | 删除一个运行时管理的 Skill Markdown 并重载注册表 |
-| `activate_skill` | 为当前 session 激活 Skill，同步开放对应 `metadata.cap_groups` |
-| `deactivate_skill` | 停用 Skill（或用 `"all"` 清除所有激活状态） |
+| `activate_skill` | 激活 Skill 并以工具返回值的形式返回完整 Skill 文档，同步开放对应 `metadata.cap_groups` |
 
 除 `list_skill` 外，其余工具均标记为 `CLAW_CAP_FLAG_CALLABLE_BY_LLM`，即 LLM 可直接调用。
 
@@ -36,30 +35,44 @@ import { Aside } from '@astrojs/starlight/components';
 
 ## 核心实现分析
 
-### `activate_skill`：从工具调用到状态同步
+### `activate_skill`：工具返回即上下文注入
 
-`activate_skill` 是最核心的工具，它的执行链路展示了 Capability 如何操作 core 运行时状态：
+`activate_skill` 是最核心的工具。它的执行链路展示了 Capability 如何操作 core 运行时状态，同时利用工具返回值实现缓存友好的上下文注入：
 
 ```d2
 direction: down
 
 llm: "LLM\nactivate_skill({skill_id})"
+read_fn: "claw_skill_read_document()"
 activate_fn: "claw_skill_activate_for_session()"
 fatfs: "FATFS\nactive_skills.json"
 sync_fn: "cap_skill_sync_session_visible_groups()"
-load_fn: "claw_skill_load_active_cap_groups()"
 set_fn: "claw_cap_set_session_llm_visible_groups()"
+result: "返回 <skill_content>\n完整 SKILL.md 文档\n</skill_content>"
 
+llm -> read_fn: "读取 Skill 文档"
 llm -> activate_fn
 llm -> sync_fn
 
 activate_fn -> fatfs: "写入激活状态"
-
-sync_fn -> load_fn: "读取已激活 Skill\n的 cap_groups 合并"
 sync_fn -> set_fn: "更新工具可见白名单"
+read_fn -> result: "包装为工具返回值"
 ```
 
-关键在于最后一步 `claw_cap_set_session_llm_visible_groups`：激活 Skill 会**立即**在当前对话 session 中开放对应 Capability Group 的工具，LLM 在下一轮对话中即可看到并调用新工具。
+`activate_skill` 执行后会：
+
+1. 读取 Skill 的 `SKILL.md` 文档全文
+2. 调用 `claw_skill_activate_for_session` 写入激活状态
+3. 调用 `cap_skill_sync_session_visible_groups` 更新工具可见白名单
+4. 将 Skill 文档以 `<skill_content name="skill_id">...</skill_content>` 格式作为**工具调用返回值**返回给 LLM
+
+LLM 在同一轮对话中即可获得完整 Skill 文档，并在下一轮看到新开放的工具。当需要多个 Skill 时，LLM 可在单次响应中并行调用多个 `activate_skill`，批量获取多份文档。
+
+<Aside type="tip" title="为何通过工具返回值注入而非系统提示词？">
+  早期实现中，已激活 Skill 文档通过 context provider 注入系统提示词（system prompt）。这导致每次激活/停用 Skill 都会改变系统提示词的内容，使 LLM API 的缓存失效。
+
+  当前设计将 Skill 文档通过工具返回值注入会话历史，系统提示词仅包含稳定的 Skills 目录清单，避免缓存前缀频繁变化，显著提升缓存命中率。
+</Aside>
 
 ### `register_skill`：文件系统完整性检查
 
@@ -80,39 +93,32 @@ if (cap_skill_catalog_contains_id(skills, skill_id)) { ... return ESP_ERR_INVALI
 
 ### Session 隔离
 
-`activate_skill` 和 `deactivate_skill` 都从 `ctx->session_id` 获取当前会话 ID，激活状态按 session 独立存储。这意味着：
+`activate_skill` 从 `ctx->session_id` 获取当前会话 ID，激活状态按 session 独立存储。这意味着：
 
 - Telegram 会话和飞书会话可以激活不同的 Skill 集合
 - 重启后，持久化在文件系统的激活状态会自动恢复
 
 ### 输出格式
 
-所有工具返回结构化 JSON，便于 LLM 解析：
+`activate_skill` 成功时，返回 Skill 文档原文包装在 XML 标签中：
 
-```jsonc
-// activate_skill 成功响应
-{
-  "action": "activate_skill",
-  "session_id": "tg::-123456",
-  "skill_id": "cap_lua",
-  "ok": true,
-  "active_skill_ids": ["cap_lua", "cap_files"]
-}
+```xml
+<skill_content name="cap_lua">
+... SKILL.md 正文 ...
+</skill_content>
 ```
 
-`deactivate_skill` 在被 guard 拦截时，也会返回结构化 JSON（而非静默失败），例如：
+失败时返回结构化 JSON：
 
 ```jsonc
 {
   "ok": false,
-  "error": "deactivate blocked by skill guard",
-  "skill_id": "all",
-  "blocked_by": "cap_lua",
-  "reason": "1 Lua async job(s) still running..."
+  "error": "failed to read skill document",
+  "skill_id": "nonexistent"
 }
 ```
 
-当仅停用单个 Skill 时，返回中通常包含 `skill_id` 与 `reason`；当使用 `"all"` 时，可能附带 `blocked_by` 指出首个拦截来源。
+其余工具（`register_skill`、`unregister_skill`）也返回结构化 JSON 表示操作结果。
 
 ## Skills 文档位置
 
@@ -122,8 +128,8 @@ if (cap_skill_catalog_contains_id(skills, skill_id)) { ... return ESP_ERR_INVALI
 
 | 层 | 模块 | 职责 |
 |----|------|------|
-| 框架层 | `claw_skill` | Skills 目录解析、session 激活状态持久化、向 `claw_core` 注入上下文 |
-| 工具层 | `cap_skill` | 将上述功能暴露为 LLM 工具，供 Console / Agent 调用 |
+| 框架层 | `claw_skill` | Skills 目录解析、session 激活状态持久化、文档读取、Skills 目录列表 provider |
+| 工具层 | `cap_skill` | 将上述功能暴露为 LLM 工具，供 Console / Agent 调用；激活时通过工具返回值注入文档 |
 
 `cap_skill` 是一个纯粹的「适配器」：它不持有任何状态，所有操作都委托给 `claw_skill`，自己只负责参数解析、错误格式化和返回值构造。
 

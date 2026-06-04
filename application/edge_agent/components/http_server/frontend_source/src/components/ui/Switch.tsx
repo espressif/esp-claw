@@ -45,11 +45,17 @@ export const Switch: Component<SwitchProps> = (props) => {
       </span>
       <span class="flex flex-col">
         {props.label && (
-          <span class={[props.labelClass ?? 'text-[var(--color-text-primary)]', 'text-[0.82rem]'].join(' ')}>
+          <span
+            class={[props.labelClass ?? 'text-[var(--color-text-primary)]', 'text-[0.82rem]'].join(
+              ' ',
+            )}
+          >
             {props.label}
           </span>
         )}
-        {props.hint && <span class="text-[0.7rem] text-[var(--color-text-muted)]">{props.hint}</span>}
+        {props.hint && (
+          <span class="text-[0.7rem] text-[var(--color-text-muted)]">{props.hint}</span>
+        )}
       </span>
     </label>
   );

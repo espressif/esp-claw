@@ -12,7 +12,9 @@ export const PageHeader: Component<PageHeaderProps> = (props) => {
       <div class="flex flex-col gap-1 min-w-0">
         <h2 class="text-lg font-semibold text-[var(--color-text-primary)] m-0">{props.title}</h2>
         {props.description && (
-          <p class="text-[0.85rem] text-[var(--color-text-muted)] max-w-2xl m-0">{props.description}</p>
+          <p class="text-[0.85rem] text-[var(--color-text-muted)] max-w-2xl m-0">
+            {props.description}
+          </p>
         )}
       </div>
       {props.actions && <div class="flex items-center gap-2 flex-wrap">{props.actions}</div>}

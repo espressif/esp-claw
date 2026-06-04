@@ -6,7 +6,7 @@ export type TabId =
   | 'basic'
   | 'llm'
   | 'im'
-  | 'search'
+  | 'webreq'
   | 'memory'
   | 'webim'
   | 'capabilities'
@@ -18,7 +18,7 @@ const [dirtyTabs, setDirtyTabs] = createSignal<Record<TabId, boolean>>({
   basic: false,
   llm: false,
   im: false,
-  search: false,
+  webreq: false,
   memory: false,
   webim: false,
   capabilities: false,

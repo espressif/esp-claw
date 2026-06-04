@@ -14,14 +14,12 @@ menu "Lua Magnetometer Module"
         config LUA_MODULE_MAGNETOMETER_CHIP_BMM150
             bool "BMM150"
             help
-                Reserved for a future BMM150 backend. The code path is not
-                implemented yet and will fail at compile time if selected.
+                Build the magnetometer Lua module with the BMM150 backend.
 
-        config LUA_MODULE_MAGNETOMETER_CHIP_MMC5603NJ
-            bool "MMC5603NJ"
+        config LUA_MODULE_MAGNETOMETER_CHIP_QMC6309
+            bool "QMC6309"
             help
-                Reserved for a future MMC5603NJ backend. The code path is not
-                implemented yet and will fail at compile time if selected.
+                Build the magnetometer Lua module with the QMC6309 backend.
     endchoice
 
 endmenu

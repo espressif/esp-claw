@@ -3,7 +3,8 @@ title: Console 交互
 description: 串口 REPL：会话、问答、cap、技能与自动化调试命令。
 ---
 
-import { Aside, LinkCard } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
 
 将开发板通过 USB 连到电脑，使用 `idf.py monitor`、`minicom` 或[在线烧录工具](@lang/flash)自带的 Console，进入 `edge_agent` 的交互提示符（默认 `app> `）。
 
@@ -34,7 +35,7 @@ ask_once 这是一次性问题，不要带历史
 ```
 
 <Aside type="tip">
-  若设备启动时未完整配置 LLM（缺 Key / model / profile），`claw_core` 不会初始化，此时 `ask` 会失败。
+  若设备启动时未完整配置 LLM（缺 Key / model / backend_type），`claw_core` 不会初始化，此时 `ask` 会失败。
   见[配置说明](@lang/reference-project/configuration)了解配置 LLM 需要的参数。
 </Aside>
 
@@ -74,14 +75,12 @@ cap unload <group_id>
   作为替代方案，可通过 `cap call activate_skill '{"skill_id":"your_skill"}'` 在串口直接操作 Skill。
 </Aside>
 
-模型侧用 `activate_skill` / `deactivate_skill`；人类在串口可用 `skill` 命令（由 `cmd_cap_skill` 注册）来管理 Skill，例如：
+模型侧用 `activate_skill`；人类在串口可用 `skill` 命令（由 `cmd_cap_skill` 注册）来管理 Skill，例如：
 
 ```sh
 skill --catalog
 skill --list --session default
 skill --activate weather --session default
-skill --deactivate weather --session default
-skill --clear --session default
 ```
 
 请保证 `--session` 与当前 `session` 命令切到的 id 一致，否则看起来会像「激活了但没进上下文」。

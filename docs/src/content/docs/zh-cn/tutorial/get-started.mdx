@@ -1,14 +1,17 @@
 ---
-title: 在线烧录&快速开始
+title: 在线烧录
 description: 使用在线烧录工具为 ESP-Claw 烧录固件。
 ---
 
-import { LinkCard, Steps, Aside, LinkButton } from '@astrojs/starlight/components';
+import { Steps, Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
+import { LinkButton } from 'starlight-theme-nova/components'
+import LinkToSource from '@/components/LinkToSource.astro';
 
 ## 准备工作
 
 进行到这里，你应当已经组装好 ESP-Claw 面包板，或已经准备好 ESP-Claw 适配的其他硬件。
-你可以在[GitHub 仓库](https://github.com/espressif/esp-claw/tree/master/application/edge_agent/boards)中查看 ESP-Claw 适配的开发板列表。
+你可以在 <LinkToSource relativePath="application/edge_agent/boards/" /> 中查看 ESP-Claw 适配的开发板列表。
 ESP-Claw 需要至少 8 MB Flash 和 8 MB PSRAM，目前支持 ESP32-S3、ESP32-P4。
 
 在烧录之前，你还需要准备一台电脑，并安装 Chrome 或 Edge 浏览器。在线烧录暂时无法使用 Firefox 浏览器完成。
@@ -70,39 +73,7 @@ ESP-Claw 需要至少 8 MB Flash 和 8 MB PSRAM，目前支持 ESP32-S3、ESP32-
 
 </Steps>
 
-## 上手体验
-
-<Aside type="tip">
-   带屏设备可以通过屏幕状态判断是否已连接到 Wi-Fi。无屏设备需要通过串口 Console 或 Web 配置页面的装显示判断是否已连接到 Wi-Fi。
-</Aside>
-
-推荐使用 Telegram / QQ Bot / 微信 ClawBot 与 ESP-Claw 交互。
-- 使用已配置的 IM 通道发送消息，ESP-Claw 会自动回复。
-- 无法获得回复？[➡️FAQ](@lang/tutorial/faq#通过-im-发送的消息没有响应)
-- 希望通过串口 Console 交互？[➡️Console 交互](@lang/reference-project/console-usage)
-
-**日常问答**
-- 你好，介绍一下你当前有哪些能力？
-- 最近有什么 AI 新闻？
-- 帮我计算 12% 年化利率，3年后10000元会变成多少钱？
-
-**控制硬件**（需硬件支持）
-- 打开灯 / 把灯调成红色
-- 在屏幕上写 `Hello, ESP-Claw!`
-- 拍一张照片发给我
-- 播放 1s 440Hz 的提示音
-- 在屏幕上画一个笑脸
-
-**定时任务**
-- 每天早上 7 点提醒我喝水
-- 每天晚上 9 点提醒我睡觉
-- 每周六早上 8 点提醒我打扫卫生
-
-**询问记忆**
-- 记住我喜欢简洁的回答
-- 你还记得我叫什么名字吗？
-
 ## 下一步……？
 
-<LinkButton href="@lang/reference-project/console-usage">Console 交互</LinkButton>
+<LinkButton href="@lang/tutorial/first-interactions">上手体验</LinkButton>
 <LinkButton href="@lang/reference-project/configuration" variant="secondary">配置说明</LinkButton>

@@ -9,7 +9,6 @@ idf_component_register(
         claw_cap
         console
         fatfs
-        json
         nvs_flash
         wear_levelling
 )

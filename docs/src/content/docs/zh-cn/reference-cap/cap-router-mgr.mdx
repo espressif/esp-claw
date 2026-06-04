@@ -1,0 +1,83 @@
+---
+title: cap_router_mgr
+description: 动态维护 Event Router 自动化规则的能力。
+---
+
+import LinkToSource from '@/components/LinkToSource.astro';
+import { Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
+
+源码：<LinkToSource relativePath="components/claw_capabilities/cap_router_mgr/src/cap_router_mgr.c" /> ·
+头文件：<LinkToSource relativePath="components/claw_capabilities/cap_router_mgr/include/cap_router_mgr.h" /> ·
+Skill：<LinkToSource relativePath="components/claw_capabilities/cap_router_mgr/skills/cap_router_mgr/SKILL.md" />
+
+## 概述
+
+`cap_router_mgr` 向 LLM 暴露一组工具，允许 Agent 在运行时动态添加、查询、更新和删除 Event Router 的自动化规则。结合 [数据流与自动化](@lang/reference-project/dataflow-and-automation) 中描述的规则格式，LLM 可以根据用户指令自主创建复杂的事件驱动自动化。
+
+## 工具描述
+
+| 工具 ID | 说明 |
+|---------|------|
+| `list_router_rules` | 列出所有自动化规则（JSON 数组） |
+| `get_router_rule` | 根据 ID 获取单条规则详情 |
+| `add_router_rule` | 添加一条新的自动化规则 |
+| `update_router_rule` | 更新已有的自动化规则 |
+| `delete_router_rule` | 根据 ID 删除一条规则 |
+| `reload_router_rules` | 从磁盘重新加载所有规则 |
+
+### 工具参数
+
+#### `list_router_rules`
+
+无参数。返回所有规则的 JSON 数组。
+
+#### `get_router_rule`
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `id` | string | ✅ | 规则 ID |
+
+#### `add_router_rule`
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `rule_json` | string | ✅ | 完整的规则 JSON 字符串 |
+
+#### `update_router_rule`
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `rule_json` | string | ✅ | 包含 `id` 字段的完整规则 JSON 字符串 |
+
+#### `delete_router_rule`
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `id` | string | ✅ | 要删除的规则 ID |
+
+#### `reload_router_rules`
+
+无参数。从磁盘文件重新加载全部规则。
+
+## 错误处理
+
+所有工具返回 JSON 格式结果：
+
+- 成功：`{"ok": true, ...}`
+- 失败：`{"ok": false, "error": "...", "code": "ESP_ERR_*"}`
+
+常见错误：
+- `add_router_rule` 遇到已存在的 ID 时返回 `ESP_ERR_INVALID_STATE`
+- 规则数量达到上限时返回 `ESP_ERR_INVALID_SIZE`
+- 参数格式错误时返回 `ESP_ERR_INVALID_ARG`
+
+## Group 信息
+
+| 属性 | 值 |
+|------|------|
+| Group ID | `cap_router_mgr` |
+| 默认 LLM 可见 | ✅（`edge_agent` 默认初始可见组） |
+| 工具数量 | 6 |
+
+<LinkCard title="数据流与自动化" href="@lang/reference-project/dataflow-and-automation" description="Event Router 规则格式与完整的事件驱动自动化机制" />

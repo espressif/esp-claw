@@ -3,7 +3,8 @@ title: Memory
 description: "Structured long-term memory and session history: summary-tag retrieval, session-history isolation, and auto-extraction."
 ---
 
-import { LinkCard, Aside } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
 
 LLMs are stateless—each request starts fresh. ESP-Claw uses `claw_memory` to inject two kinds of persisted context before each request so the Agent appears to “remember” chats and users.
 

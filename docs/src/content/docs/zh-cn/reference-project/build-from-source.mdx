@@ -4,6 +4,7 @@ description: 从源码编译与烧录 ESP-Claw。
 ---
 
 import { Steps, Aside, Badge } from '@astrojs/starlight/components';
+import LinkToSource from '@/components/LinkToSource.astro';
 
 
 <Aside>
@@ -29,7 +30,7 @@ import { Steps, Aside, Badge } from '@astrojs/starlight/components';
     ESP-Claw 使用 ESP Board Manager 适配多种开发板。
 
     如需添加其他开发板，请参考 [ESP Board Manager 文档](https://github.com/espressif/esp-gmf/blob/main/packages/esp_board_manager/docs/how_to_customize_board_cn.md)，
-    将开发板适配文件存放到 [`application/edge_agent/boards`](https://github.com/espressif/esp-claw/tree/master/application/edge_agent/boards)
+    将开发板适配文件存放到 <LinkToSource relativePath="application/edge_agent/boards/" />
 
     欢迎将开发板适配代码通过 Pull Request 提交到 ESP-Claw 仓库。
    </Aside>
@@ -44,17 +45,17 @@ import { Steps, Aside, Badge } from '@astrojs/starlight/components';
 3. **选择开发板**
 
    ```bash
-   idf.py gen-bmgr-config -c ./boards -b <board_name>
-   # 例如: idf.py gen-bmgr-config -c ./boards -b esp32_S3_DevKitC_1
+   idf.py bmgr -c ./boards -b <board_name>
+   # 例如: idf.py bmgr -c ./boards -b esp32_S3_DevKitC_1
    ```
 
    <Aside type="tip" title="支持的开发板列表">
       你可以通过以下命令列出支持的开发板列表：
       ```bash
-      idf.py gen-bmgr-config -c ./boards -l
+      idf.py bmgr -c ./boards -l
       ```
 
-      也可以在 `application/edge_agent/boards` 目录下查阅支持的开发板列表。
+      也可以在 <LinkToSource relativePath="application/edge_agent/boards/" /> 下查阅支持的开发板列表。
    </Aside>
 
    <Aside type="note" title="为什么不需要 set-target">

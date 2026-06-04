@@ -77,7 +77,7 @@ menu "App Claw Config"
             depends on APP_CLAW_CAP_SESSION_MGR
             default y
             help
-                Register cap_im_local for in-process IM (e.g. edge_agent Web IM). Requires session manager for roll_chat_session.
+                Register cap_im_local for in-process IM (e.g. edge_agent Web IM). Requires session manager for session_command.
 
         config APP_CLAW_CAP_SCHEDULER
             bool "Enable scheduler capability"
@@ -135,6 +135,13 @@ menu "App Claw Config"
                 Enable the LLM inspect capability and keep app_claw's direct dependency
                 on cap_llm_inspect.
 
+        config APP_CLAW_CAP_HTTP_REQUEST
+            bool "Enable HTTP request capability"
+            default y
+            help
+                Enable the HTTP request capability and keep app_claw's direct dependency
+                on cap_http_request.
+
         config APP_CLAW_CAP_WEB_SEARCH
             bool "Enable web search capability"
             default y
@@ -155,6 +162,13 @@ menu "App Claw Config"
             help
                 Enable the session manager capability and keep app_claw's direct dependency
                 on cap_session_mgr.
+
+        config APP_CLAW_CAP_AGENT_MGR
+            bool "Enable agent manager capability"
+            default y
+            depends on APP_CLAW_CAP_SESSION_MGR
+            help
+                Enable root-only subagent management tools backed by claw_agent_mgr.
 
     endmenu
 
@@ -392,13 +406,6 @@ menu "App Claw Config"
                 Enable the DFRobot RP2040 SCI Acquisition Module Lua module and
                 keep app_claw's direct dependency on lua_module_sci when Lua
                 capability is enabled.
-
-        config APP_CLAW_LUA_MODULE_SSD1306
-            bool "Enable SSD1306 Lua module"
-            default y
-            help
-                Enable the SSD1306 Lua module and keep app_claw's direct
-                dependency on lua_module_ssd1306 when Lua capability is enabled.
 
         config APP_CLAW_LUA_MODULE_STORAGE
             bool "Enable storage Lua module"

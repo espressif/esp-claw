@@ -13,15 +13,16 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#include "cap_lua.h"
-#include "esp_vfs_fat.h"
 #include "lauxlib.h"
+#include "cap_lua.h"
+#include "claw_paths.h"
+#include "esp_vfs_fat.h"
 
-static char *s_storage_base_path;
-
+/* The writable data root is owned by claw_paths; resolve it on each call so the
+ * module always sees the current mount point (flash partition or SD card). */
 static const char *lua_module_storage_base_path(void)
 {
-    return s_storage_base_path;
+    return claw_paths_get(CLAW_PATH_DATA);
 }
 
 static int lua_module_storage_get_root_dir(lua_State *L)
@@ -343,20 +344,7 @@ int luaopen_storage(lua_State *L)
     return 1;
 }
 
-esp_err_t lua_module_storage_register(const char *base_path)
+esp_err_t lua_module_storage_register(void)
 {
-    char *base_path_copy = NULL;
-
-    if (!base_path || !base_path[0]) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    base_path_copy = strdup(base_path);
-    if (!base_path_copy) {
-        return ESP_ERR_NO_MEM;
-    }
-
-    free(s_storage_base_path);
-    s_storage_base_path = base_path_copy;
     return cap_lua_register_module("storage", luaopen_storage);
 }

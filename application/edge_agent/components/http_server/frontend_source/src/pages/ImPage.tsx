@@ -283,9 +283,7 @@ const WechatQrPanel: Component<{ onComplete: (data: WechatLoginStatus) => void }
 
   const statusText = () => {
     const s = status()?.status;
-    return s
-      ? ((t('wechatLoginStatusPrefix') as string) + s)
-      : (t('wechatLoginStatus') as string);
+    return s ? (t('wechatLoginStatusPrefix') as string) + s : (t('wechatLoginStatus') as string);
   };
 
   return (
@@ -445,10 +443,7 @@ export const ImPage: Component = () => {
     const normalizedAccountId = accountId.toLowerCase();
 
     const onlyDefaultPrefill =
-      !token &&
-      !!baseUrl &&
-      !!cdnBaseUrl &&
-      (!accountId || normalizedAccountId === 'default');
+      !token && !!baseUrl && !!cdnBaseUrl && (!accountId || normalizedAccountId === 'default');
 
     if (onlyDefaultPrefill) return null;
 
@@ -563,9 +558,7 @@ export const ImPage: Component = () => {
           configured={isFeishuConfigured()}
           open={isOpen('feishu')}
           onToggle={() => toggle('feishu')}
-          onDelete={() =>
-            clearPlatform('feishu', ['feishu_app_id', 'feishu_app_secret'], setField)
-          }
+          onDelete={() => clearPlatform('feishu', ['feishu_app_id', 'feishu_app_secret'], setField)}
         >
           <div class="grid gap-3 sm:grid-cols-2 pt-2">
             <TextInput

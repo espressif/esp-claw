@@ -9,10 +9,13 @@ function(lua_module_builder_require_args function_name prefix)
 endfunction()
 
 function(lua_module_builder_configure_builtin_lua_sync)
+    # DOCS_OUTPUT_DIR is parsed for backward compatibility but no longer used:
+    # module docs are now bundled into the builtin_lua_modules skill source tree
+    # so {CUR_SKILL_DIR}/scripts/docs/... resolves correctly at runtime.
     set(one_value_args TARGET BUILTIN_OUTPUT_DIR DOCS_OUTPUT_DIR)
     cmake_parse_arguments(arg "" "${one_value_args}" "" ${ARGN})
 
-    lua_module_builder_require_args(lua_module_builder_configure_builtin_lua_sync arg TARGET BUILTIN_OUTPUT_DIR DOCS_OUTPUT_DIR)
+    lua_module_builder_require_args(lua_module_builder_configure_builtin_lua_sync arg TARGET BUILTIN_OUTPUT_DIR)
 
     idf_build_get_property(python PYTHON)
     set(tools_dir "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../tools")
@@ -32,7 +35,8 @@ function(lua_module_builder_configure_builtin_lua_sync)
                 "${tools_dir}/sync_lua_module_resources.py"
                 ${common_script_args}
                 --builtin-output-dir "${arg_BUILTIN_OUTPUT_DIR}"
-                --manifest-path "${CMAKE_BINARY_DIR}/lua_module_builder_builtin_lua_manifest.json"
+                --libs-manifest-path "${CMAKE_BINARY_DIR}/lua_module_builder_builtin_lua_libs_manifest.json"
+                --tests-manifest-path "${CMAKE_BINARY_DIR}/lua_module_builder_builtin_lua_tests_manifest.json"
                 --stamp-path "${scripts_stamp}"
                 --depfile "${scripts_depfile}"
         DEPENDS
@@ -68,7 +72,6 @@ function(lua_module_builder_configure_builtin_lua_sync)
         COMMAND ${python}
                 "${tools_dir}/sync_lua_module_docs.py"
                 ${common_script_args}
-                --docs-output-dir "${arg_DOCS_OUTPUT_DIR}"
                 --manifest-path "${CMAKE_BINARY_DIR}/lua_module_builder_docs_manifest.json"
                 --stamp-path "${docs_stamp}"
                 --depfile "${docs_depfile}"
@@ -81,6 +84,13 @@ function(lua_module_builder_configure_builtin_lua_sync)
         VERBATIM
     )
     add_custom_target(lua_module_builder_sync_docs ALL DEPENDS "${docs_stamp}")
+
+    # Docs and tests now live inside the builtin_lua_modules skill source dir,
+    # so they must be written before skill_builder packs the skill via the
+    # generate target.
+    add_dependencies(lua_module_builder_generate_builtin_lua_modules_skill
+        lua_module_builder_sync_docs
+        lua_module_builder_sync_builtin_scripts)
 
     if(COMMAND skill_builder_add_target)
         skill_builder_add_target(lua_module_builder_generate_builtin_lua_modules_skill)

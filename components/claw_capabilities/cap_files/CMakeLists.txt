@@ -5,5 +5,4 @@ idf_component_register(
         "include"
     REQUIRES
         claw_cap
-        json
 )

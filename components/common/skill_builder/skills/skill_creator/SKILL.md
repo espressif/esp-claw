@@ -61,7 +61,7 @@ Registration rules:
 Use this source layout for a skill with files:
 
 ```text
-component_or_app/
+parent_directory/
 └── skills/
     └── skill_id/
         ├── SKILL.md
@@ -72,8 +72,6 @@ component_or_app/
         └── assets/
             └── image.bin
 ```
-
-Valid source locations are project-specific. Common locations include component skill directories and application FATFS image skill directories. Do not create skills outside a directory that the current build or file-image generation path includes.
 
 Rules:
 

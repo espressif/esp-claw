@@ -5,4 +5,5 @@ phy_init,  data, phy,     0x12000,  0x1000
 ota_0,     app,  ota_0,         ,   8M
 ota_1,     app,  ota_1,         ,   8M
 emote,     data, spiffs,        ,   6M
-storage,   data, fat,           ,   8M
+system,    data, fat,           ,   1M
+storage,   data, fat,           ,   7M

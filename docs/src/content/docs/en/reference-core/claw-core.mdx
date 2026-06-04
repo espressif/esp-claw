@@ -4,7 +4,8 @@ description: Agent tasks, context providers, and boundaries with the LLM / tools
 ---
 
 import LinkToSource from '@/components/LinkToSource.astro';
-import { LinkCard, Aside } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
 
 Header: <LinkToSource relativePath="components/claw_modules/claw_core/include/claw_core.h" />
 
@@ -31,8 +32,9 @@ Applications submit with `claw_core_submit` and read `claw_core_response_t` via 
 |------|-------------|
 | `CLAW_CORE_REQUEST_FLAG_PUBLISH_OUT_MESSAGE` | After inference, publish the response as an `out_message` event to the Event Router |
 | `CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE` | Skip the response queue; don't return results via `claw_core_receive` |
+| `CLAW_CORE_REQUEST_FLAG_USER_INTERRUPT` | Mark this request as a user interrupt, started after aborting the previous request |
 
-The Event Router's `run_agent` action sets both flags to enable an asynchronous submit + event-published response path.
+The Event Router's `run_agent` action sets the first two flags to enable an asynchronous submit + event-published response path.
 
 When assembling the **current-turn user prompt** sent to the LLM, `claw_core` also appends **Behavior Notes**: since the framework usually auto-delivers the final assistant result to users, you generally do not need to proactively call IM send APIs from `cap_im_platform` to return the same text (to avoid duplicate replies).
 
@@ -54,13 +56,31 @@ When assembling the **current-turn user prompt** sent to the LLM, `claw_core` al
 1. Editable profile/persona: `claw_memory_profile_provider`
 2. Long-term memory: `claw_memory_long_term_provider` (full mode) or `claw_memory_long_term_lightweight_provider` (lightweight mode)
 3. Session history: `claw_memory_session_history_provider`
-4. Skills catalog: `claw_skill_skills_list_provider`
+4. Skills catalog list: `claw_skill_skills_list_provider`
 5. Current visible tools: `claw_cap_tools_provider`
 
 So the final tool list depends both on registered capabilities and on `claw_cap_set_llm_visible_groups`.
 
 <Aside type="tip">
-    `edge_agent` exposes `cap_files`, `cap_skill`, `cap_system`, and `cap_lua` to the LLM by default (full structured-memory mode also includes `claw_memory`). Other capabilities typically require activating the corresponding Skill first, so the model gets both "tool visibility + usage guidance" together. See [claw_cap](./claw-cap) and [cap_skill](@lang/reference-cap/cap-skill)
+    `edge_agent` exposes `cap_files`, `cap_scheduler`, `cap_lua`, `cap_skill`, `cap_llm_inspect`, `cap_http_request`, `cap_web_search`, and `cap_router_mgr` to the LLM by default (full structured-memory mode also includes `claw_memory`). Other capabilities typically require activating the corresponding Skill first, so the model gets both "tool visibility + usage guidance" together. See [claw_cap](./claw-cap) and [cap_skill](@lang/reference-cap/cap-skill)
+</Aside>
+
+## Cache Hit-Rate Optimization Design
+
+`claw_core`'s context assembly order is designed to maximize LLM API cache hit rates.
+
+### Design principle
+
+LLM APIs such as Anthropic and OpenAI use prefix matching for caching. Therefore, recent ESP-Claw versions try to reduce how often early prompt content changes.
+
+### Skill document injection changes
+
+Earlier designs injected activated Skill documents into the system prompt through a separate context provider (`claw_skill_active_skill_docs_provider`). Every Skill activation or deactivation changed the system prompt content and invalidated caches.
+
+The current design removes that provider and instead injects Skill documents into conversation history through the return value of the `activate_skill` tool. This keeps the system prompt relatively stable, so the cache prefix is not affected by Skill activation state.
+
+<Aside type="note">
+  This design means a Skill document enters context only once, when activated. In long-running multi-turn conversations, the Skill document may be compressed out as conversation history grows and token budgets apply. The LLM can call `activate_skill` again if it needs to retrieve it.
 </Aside>
 
 ## Tool calls
@@ -73,12 +93,12 @@ Resolution and execution live in `claw_cap`.
 
 Per-turn tool rounds are capped by `max_tool_iterations`.
 
-## Session history writes
+## Context persistence
 
-`claw_core` writes session history through a typed record batch callback.
+`claw_core` persists replayable context records through a typed record batch callback.
 
-In `edge_agent`, `persist_session` is `claw_memory_persist_session_callback` from `claw_memory`.
-`claw_core` invokes it for plain turns, intermediate tool rounds, final assistant records, and failure notes so session records are persisted through `claw_memory`.
+In `edge_agent`, `persist_context` is `claw_memory_persist_context_callback` from `claw_memory`.
+`claw_core` invokes it for plain turns, intermediate tool rounds, final assistant records, and failure notes so context records scoped by `session_id` are persisted through `claw_memory`.
 
 ## Request cancellation
 
@@ -103,7 +123,7 @@ This is useful for audit, metrics, or result-consistency checks (for example, ve
 
 ## Init error handling
 
-`app_claw_start` skips `claw_core_init` / `claw_core_start` when API key, profile, or model is missing, and logs.
+`app_claw_start` skips `claw_core_init` / `claw_core_start` when API key, backend_type, or model is missing, and logs.
 
 Core-dependent features (`ask`, default routing to the Agent, image inspect, …) stay unavailable until the LLM is fully configured and the device reboots.
 Event routing, automation, local capabilities, and the Console REPL still work.
@@ -114,9 +134,11 @@ Event routing, automation, local capabilities, and the Console REPL still work.
 
 Common fields in `claw_core_config_t`:
 
-- `profile` / `provider` / `backend_type` / `model` / `base_url` / `auth_type` / `timeout_ms`: routing and auth for different LLM vendors (backends live under `claw_core_llm` and `llm/backends`). `profile` and `provider` are mutually exclusive.
+- `backend_type` / `model` / `base_url` / `auth_type` / `max_tokens_field` / `timeout_ms` / `max_tokens`: routing and auth for different LLM vendors (backends live under `claw_core_llm` and `llm/backends`).
 - `system_prompt`: system prompt, required (`claw_core_init` validates this is non-empty).
+- `supports_tools` / `supports_vision` / `image_remote_url_only`: whether tools, vision input, and remote-URL-only images are supported.
 - `image_max_bytes`: maximum size of images/media passed to the LLM layer.
+- `request_gate`: optional request-gating callback that can intercept or reject requests before handling.
 - `task_stack_size`, `task_priority`, `task_core`: FreeRTOS resources for the background Agent task.
 - `request_queue_len`, `response_queue_len`: queue depths.
 - `max_context_providers`: maximum number of registered providers.

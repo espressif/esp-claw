@@ -21,7 +21,7 @@ export const zhCn: Dict = {
   navBasic: '基本设置',
   navLlm: 'LLM 设置',
   navIm: 'IM 设置',
-  navSearch: '网络搜索设置',
+  navWebReq: '网络和搜索设置',
   navMemory: '记忆管理',
   navCapabilities: 'Capabilities 管理',
   navLuaModules: 'Lua 模块管理',
@@ -170,13 +170,16 @@ export const zhCn: Dict = {
   wechatLoginNote: '用微信扫描二维码。扫码后凭据将自动填入下方高级设置，请点击保存持久化。',
   wechatLoginOpenLink: '打开登录链接',
 
-  sectionSearch: '搜索（可选）',
-  searchNote:
-    '如填写，ESP-Claw 可在运行中检索在线资源。提示：系统自带的天气 Skill 也依赖在线搜索功能。',
-  searchBraveKey: 'Brave Search API Key',
-  searchTavilyKey: 'Tavily API Key',
-  searchHttpAllowlist: 'HTTP 白名单（域名/IP，逗号分隔）',
-  searchHttpAllowlistPlaceholder: 'api.example.com,*.example.org,203.0.113.10',
+  sectionWebReqSearch: '搜索',
+  webreqSearchNote:
+    '可选。如填写，ESP-Claw 可在运行中检索在线资源。',
+  sectionWebReqNetwork: '网络请求',
+  webreqBraveKey: 'Brave Search API Key',
+  webreqTavilyKey: 'Tavily API Key',
+  webreqHttpAllowlist: 'HTTP 白名单（域名/IP，逗号分隔）',
+  webreqHttpAllowlistPlaceholder: 'api.example.com,*.example.org,203.0.113.10',
+  webreqHttpAllowlistNote:
+    '使用逗号分隔的域名/IP，支持通配符*，单独*表示允许全部域名/IP',
 
   sectionCapabilities: 'Capability Group',
   capabilitiesDescription:
@@ -198,8 +201,7 @@ export const zhCn: Dict = {
   capabilityNoResult: '没有匹配当前筛选条件的 capability。',
 
   sectionLuaModules: 'Lua 模块',
-  luaModulesDescription:
-    '选择 cap_lua 启动时要注册哪些已编译的 Lua 模块。修改后需重启生效。',
+  luaModulesDescription: '选择 cap_lua 启动时要注册哪些已编译的 Lua 模块。修改后需重启生效。',
   luaModulesSearchPlaceholder: '搜索模块…',
   luaModulesSummary: '已启用 {enabled} / 共 {total}',
   luaModulesSelectAll: '全选',
@@ -259,6 +261,13 @@ export const zhCn: Dict = {
   fileDevModeConfirm:
     '进入开发者模式后，你可以上传、修改或删除文件。不正确的增删改可能导致系统无法正常运行、无限重启等问题。请注意合理修改。',
   fileDeleteConfirm: '确定删除 {path}？',
+  fileDeleteDirNotEmpty: '文件夹 {path} 不为空，是否递归删除所有内容？此操作不可撤销。',
+  fileDownloadFolder: '下载文件夹',
+  fileDownloadingFolder: '正在逐个下载并打包…',
+  fileDownloadFolderCancel: '放弃下载',
+  fileDownloadFolderCancelled: '已放弃文件夹下载',
+  fileDownloadFolderDone: '文件夹下载完成',
+  fileDownloadFolderFailed: '文件夹下载失败',
   fileUploadComplete: '上传完成',
   fileFolderCreated: '文件夹已创建',
   fileDeleteComplete: '删除完成',

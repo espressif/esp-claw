@@ -1,0 +1,5 @@
+board: dfrobot_ai_camera
+chip: esp32s3
+version: 1.0.0
+description: "DFRobot ESP32-S3 AI Camera (DFR1154)"
+manufacturer: "DFRobot"

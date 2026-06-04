@@ -1,0 +1,38 @@
+version: 1.0.0
+# Peripherals for DFRobot FireBeetle 2 ESP32-S3 (DFR0975) + DFR1092 over GDI FPC
+peripherals:
+
+  # Camera SCCB (shared with GDI I2C on FireBeetle 2 ESP32-S3)
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 1
+        scl: 2
+
+  # DFR1092 display SPI (GDI FPC: SCLK=17, MOSI=15, MISO=16)
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        mosi_io_num: 15
+        miso_io_num: 16
+        sclk_io_num: 17
+        max_transfer_sz: 307200
+
+  # DFR1092 backlight (GDI LCD_BL = GPIO21)
+  - name: ledc_backlight
+    type: ledc
+    version: default
+    config:
+      gpio_num: 21
+      speed_mode: LEDC_LOW_SPEED_MODE
+      channel: 0
+      timer_sel: 0
+      duty: 1023
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false

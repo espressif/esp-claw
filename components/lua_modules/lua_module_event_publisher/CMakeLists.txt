@@ -7,5 +7,4 @@ idf_component_register(
         cap_lua
         claw_event_router
         esp_timer
-        json
 )

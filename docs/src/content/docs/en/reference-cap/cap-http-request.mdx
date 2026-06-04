@@ -1,0 +1,80 @@
+---
+title: cap_http_request
+description: Allowlist-protected HTTP/HTTPS request capability.
+---
+
+import LinkToSource from '@/components/LinkToSource.astro';
+import { Aside } from '@astrojs/starlight/components';
+
+Source: <LinkToSource relativePath="components/claw_capabilities/cap_http_request/src/cap_http_request.c" /> ·
+header: <LinkToSource relativePath="components/claw_capabilities/cap_http_request/include/cap_http_request.h" /> ·
+Skill: <LinkToSource relativePath="components/claw_capabilities/cap_http_request/skills/cap_http_request/SKILL.md" />
+
+## Overview
+
+`cap_http_request` exposes a generic `http_request` tool to the LLM, allowing the Agent to call external HTTP/HTTPS APIs directly. To prevent the LLM from accessing arbitrary network resources, every request must pass the **domain allowlist** check.
+
+<Aside type="caution">
+  If `http_allowlist` is not configured, all HTTP requests are rejected. The allowlist is set through the NVS config key `http_allowlist`, using a comma-separated list of domains.
+</Aside>
+
+## Tool description
+
+| Tool ID | Description |
+|---------|-------------|
+| `http_request` | Call a standard HTTP endpoint, supporting GET/POST/PUT/PATCH/DELETE/HEAD |
+
+### Input parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `url` | string | Yes | Request URL; hostname must be in the allowlist |
+| `method` | string | | HTTP method, default `GET`. Options: `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD` |
+| `headers` | object | | Custom request headers as key-value pairs |
+| `body` | string | | Request body |
+| `save_path` | string | | Save the response body to the specified file path, useful for large downloads |
+| `timeout_ms` | integer | | Timeout (1-120000ms), default 15000ms |
+| `max_body_bytes` | integer | | In-memory response body buffer limit (1-65535), default 16384 |
+| `max_file_bytes` | integer | | File write limit in `save_path` mode (1-2147483647) |
+
+### Return value
+
+Returns a JSON object containing:
+- `status`: HTTP status code
+- `body`: response body text when `save_path` is not specified
+- `saved_path` / `saved_bytes`: saved file path and byte count when `save_path` is specified
+- `truncated`: whether the response was truncated
+- `error`: error message when the request fails
+
+## Allowlist mechanism
+
+The allowlist is stored in the NVS config key `http_allowlist` as comma-separated domains:
+
+```
+api.openai.com,httpbin.org,example.com
+```
+
+Validation rules:
+- Extract the hostname from the request URL and match each allowlisted domain case-insensitively
+- Support subdomain matching: allowlisting `example.com` permits `api.example.com`
+- HTTP redirect targets must also pass the allowlist check
+- Maximum allowlist length is 320 characters
+
+## Registration and configuration
+
+```c
+#include "cap_http_request.h"
+
+cap_http_request_register_group();
+cap_http_request_set_allowlist("api.example.com,httpbin.org");
+```
+
+`cap_http_request_set_allowlist` is called by the application layer to set the allowlist dynamically from NVS configuration.
+
+## Group information
+
+| Property | Value |
+|----------|-------|
+| Group ID | `cap_http_request` |
+| Default LLM-visible | Yes (`edge_agent` default initial visible group) |
+| Tool count | 1 |

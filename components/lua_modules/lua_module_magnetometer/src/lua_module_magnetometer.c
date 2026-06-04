@@ -13,37 +13,29 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "bmm350/bmm350.h"
-#include "bmm350/bmm350_defs.h"
 #include "cap_lua.h"
 #include "driver/gpio.h"
+#include "esp_board_device.h"
 #include "esp_board_manager.h"
 #include "esp_board_periph.h"
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
-#include "nvs.h"
-#include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "i2c_bus.h"
 #include "lauxlib.h"
+#include "nvs.h"
+#include "nvs_flash.h"
 
-#if CONFIG_LUA_MODULE_MAGNETOMETER_CHIP_BMM150
-#error "CONFIG_LUA_MODULE_MAGNETOMETER_CHIP_BMM150 is reserved but not implemented yet"
-#elif CONFIG_LUA_MODULE_MAGNETOMETER_CHIP_MMC5603NJ
-#error "CONFIG_LUA_MODULE_MAGNETOMETER_CHIP_MMC5603NJ is reserved but not implemented yet"
-#elif !CONFIG_LUA_MODULE_MAGNETOMETER_CHIP_BMM350
-#error "Unsupported magnetometer chip selection"
-#endif
+#include "lua_module_mag_backend.h"
 
-#define LUA_MODULE_MAGNETOMETER_METATABLE    "magnetometer.device"
-#define LUA_MODULE_MAGNETOMETER_DEFAULT_NAME "magnetometer_sensor"
-#define LUA_MODULE_MAGNETOMETER_LEGACY_NAME  "bmm350_sensor"
-#define LUA_MODULE_MAGNETOMETER_MAX_NAME_LEN 64
-#define LUA_MODULE_MAGNETOMETER_NVS_KEY_HARD_IRON  "hard_iron"
-#define LUA_MODULE_MAGNETOMETER_NVS_KEY_SOFT_IRON  "soft_iron"
-#define LUA_MODULE_MAGNETOMETER_NVS_KEY_CALIBRATED "calibrated"
+#define LUA_MAG_METATABLE        "magnetometer.device"
+#define LUA_MAG_DEFAULT_DEVICE   "magnetometer_sensor"
+#define LUA_MAG_MAX_NAME_LEN     64
+#define LUA_MAG_NVS_KEY_HARD     "hard_iron"
+#define LUA_MAG_NVS_KEY_SOFT     "soft_iron"
+#define LUA_MAG_NVS_KEY_CAL      "calibrated"
 
 typedef struct {
     float hard_iron[3];
@@ -53,26 +45,34 @@ typedef struct {
     uint32_t sample_count;
     bool calibrated;
     bool collecting;
-} lua_module_magnetometer_calibration_t;
+} lua_mag_calibration_t;
 
 typedef struct {
-    struct bmm350_dev sensor_handle;
-    i2c_bus_handle_t i2c_bus_handle;
-    i2c_bus_device_handle_t i2c_dev_handle;
-    char peripheral_name[LUA_MODULE_MAGNETOMETER_MAX_NAME_LEN];
+    lua_mag_backend_ctx_t ctx;
+    char peripheral_name[LUA_MAG_MAX_NAME_LEN];
     bool peripheral_ref_held;
     gpio_num_t int_gpio_num;
     gpio_num_t sdo_gpio_num;
-    uint8_t i2c_addr;
     bool sensor_initialized;
-    lua_module_magnetometer_calibration_t calibration;
-} lua_module_magnetometer_handle_t;
+    lua_mag_calibration_t calibration;
+} lua_mag_handle_t;
 
 typedef struct {
-    lua_module_magnetometer_handle_t *handle;
-    char device_name[LUA_MODULE_MAGNETOMETER_MAX_NAME_LEN];
-} lua_module_magnetometer_ud_t;
+    lua_mag_handle_t *handle;
+    char device_name[LUA_MAG_MAX_NAME_LEN];
+} lua_mag_ud_t;
 
+/*
+ * Local mirror of the dev_custom_magnetometer_sensor_config_t struct that
+ * the ESP Board Manager auto-generates from the board's board_devices.yaml.
+ *
+ * IMPORTANT: This MUST be byte-for-byte identical to the auto-generated
+ * struct. See `lua_mag_resolve_board_cfg()` below: the size of this struct
+ * is cross-checked against the board manager descriptor's `cfg_size`, and
+ * the magnetometer refuses to start if they differ. That prevents a board
+ * whose YAML drops e.g. `sdo_gpio_num` from silently re-aliasing the next
+ * field as the SDO GPIO (which would otherwise hijack GPIO0).
+ */
 typedef struct {
     const char *name;
     const char *type;
@@ -83,10 +83,10 @@ typedef struct {
     int8_t sdo_gpio_num;
     uint8_t peripheral_count;
     const char *peripheral_name;
-} lua_magnetometer_board_cfg_t;
+} lua_mag_board_cfg_t;
 
 typedef struct {
-    char peripheral_name[LUA_MODULE_MAGNETOMETER_MAX_NAME_LEN];
+    char peripheral_name[LUA_MAG_MAX_NAME_LEN];
     int i2c_addr;
     int frequency;
     int int_gpio_num;
@@ -97,13 +97,48 @@ typedef struct {
     bool has_int_gpio;
     bool has_sdo_gpio;
     bool try_alt_i2c_addr;
-} lua_magnetometer_resolved_cfg_t;
+} lua_mag_resolved_cfg_t;
 
 static const char *TAG = "lua_module_magnetometer";
 
-static void lua_module_magnetometer_destroy_handle(lua_module_magnetometer_handle_t *handle);
+static void lua_mag_destroy_handle(lua_mag_handle_t *handle);
 
-static void lua_module_magnetometer_calibration_reset_state(lua_module_magnetometer_handle_t *handle)
+/* ---------------------------------------------------------------------------
+ * Helpers exported to chip backends (declared in lua_module_mag_backend.h).
+ * ------------------------------------------------------------------------- */
+
+void lua_mag_delay_us(uint32_t period_us)
+{
+    if (period_us < 1000) {
+        esp_rom_delay_us(period_us);
+    } else {
+        vTaskDelay(pdMS_TO_TICKS((period_us + 999) / 1000));
+    }
+}
+
+esp_err_t lua_mag_ctx_select_addr(lua_mag_backend_ctx_t *ctx, uint8_t i2c_addr)
+{
+    if (ctx->i2c_dev_handle != NULL && ctx->i2c_addr == i2c_addr) {
+        return ESP_OK;
+    }
+    if (ctx->i2c_dev_handle != NULL) {
+        i2c_bus_device_delete(&ctx->i2c_dev_handle);
+        ctx->i2c_dev_handle = NULL;
+    }
+    ctx->i2c_dev_handle = i2c_bus_device_create(ctx->i2c_bus_handle, i2c_addr, 0);
+    if (ctx->i2c_dev_handle == NULL) {
+        ESP_LOGE(TAG, "Failed to create magnetometer I2C device for address 0x%02x", i2c_addr);
+        return ESP_FAIL;
+    }
+    ctx->i2c_addr = i2c_addr;
+    return ESP_OK;
+}
+
+/* ---------------------------------------------------------------------------
+ * Calibration: NVS persistence + hard/soft-iron math (chip-agnostic).
+ * ------------------------------------------------------------------------- */
+
+static void lua_mag_calibration_reset_state(lua_mag_handle_t *handle)
 {
     for (size_t i = 0; i < 3; i++) {
         handle->calibration.hard_iron[i] = 0.0f;
@@ -118,31 +153,28 @@ static void lua_module_magnetometer_calibration_reset_state(lua_module_magnetome
     handle->calibration.collecting = false;
 }
 
-static uint32_t lua_module_magnetometer_hash_name(const char *name)
+static uint32_t lua_mag_hash_name(const char *name)
 {
     uint32_t hash = 2166136261u;
-
     while (name != NULL && *name != '\0') {
         hash ^= (uint8_t)*name++;
         hash *= 16777619u;
     }
-
     return hash;
 }
 
-static esp_err_t lua_module_magnetometer_open_nvs(const char *device_name, nvs_handle_t *nvs_handle)
+static esp_err_t lua_mag_open_nvs(const char *device_name, nvs_handle_t *nvs_handle)
 {
     char namespace_name[16];
     esp_err_t err;
 
     snprintf(namespace_name, sizeof(namespace_name), "mag%08" PRIx32,
-             lua_module_magnetometer_hash_name(device_name));
+             lua_mag_hash_name(device_name));
 
     err = nvs_open(namespace_name, NVS_READWRITE, nvs_handle);
     if (err == ESP_OK) {
         return ESP_OK;
     }
-
     if (err == ESP_ERR_NVS_NOT_INITIALIZED) {
         err = nvs_flash_init();
         if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -154,89 +186,66 @@ static esp_err_t lua_module_magnetometer_open_nvs(const char *device_name, nvs_h
         }
         return nvs_open(namespace_name, NVS_READWRITE, nvs_handle);
     }
-
     return err;
 }
 
-static esp_err_t lua_module_magnetometer_save_calibration(const char *device_name,
-                                                          const lua_module_magnetometer_calibration_t *cal)
+static esp_err_t lua_mag_save_calibration(const char *device_name,
+                                          const lua_mag_calibration_t *cal)
 {
     nvs_handle_t nvs_handle;
-    esp_err_t err = lua_module_magnetometer_open_nvs(device_name, &nvs_handle);
+    esp_err_t err = lua_mag_open_nvs(device_name, &nvs_handle);
     if (err != ESP_OK) {
         return err;
     }
-
-    err = nvs_set_blob(nvs_handle, LUA_MODULE_MAGNETOMETER_NVS_KEY_HARD_IRON,
-                       cal->hard_iron, sizeof(cal->hard_iron));
+    err = nvs_set_blob(nvs_handle, LUA_MAG_NVS_KEY_HARD, cal->hard_iron, sizeof(cal->hard_iron));
     if (err == ESP_OK) {
-        err = nvs_set_blob(nvs_handle, LUA_MODULE_MAGNETOMETER_NVS_KEY_SOFT_IRON,
-                           cal->soft_iron, sizeof(cal->soft_iron));
+        err = nvs_set_blob(nvs_handle, LUA_MAG_NVS_KEY_SOFT, cal->soft_iron, sizeof(cal->soft_iron));
     }
     if (err == ESP_OK) {
-        err = nvs_set_u8(nvs_handle, LUA_MODULE_MAGNETOMETER_NVS_KEY_CALIBRATED,
-                         cal->calibrated ? 1 : 0);
+        err = nvs_set_u8(nvs_handle, LUA_MAG_NVS_KEY_CAL, cal->calibrated ? 1 : 0);
     }
     if (err == ESP_OK) {
         err = nvs_commit(nvs_handle);
     }
-
     nvs_close(nvs_handle);
     return err;
 }
 
-static esp_err_t lua_module_magnetometer_load_calibration(const char *device_name,
-                                                          lua_module_magnetometer_calibration_t *cal)
+static esp_err_t lua_mag_load_calibration(const char *device_name, lua_mag_calibration_t *cal)
 {
     nvs_handle_t nvs_handle;
-    size_t hard_iron_size = sizeof(cal->hard_iron);
-    size_t soft_iron_size = sizeof(cal->soft_iron);
+    size_t hard_size = sizeof(cal->hard_iron);
+    size_t soft_size = sizeof(cal->soft_iron);
     uint8_t calibrated = 0;
-    esp_err_t err = lua_module_magnetometer_open_nvs(device_name, &nvs_handle);
+    esp_err_t err = lua_mag_open_nvs(device_name, &nvs_handle);
     if (err != ESP_OK) {
         return err;
     }
-
-    err = nvs_get_blob(nvs_handle, LUA_MODULE_MAGNETOMETER_NVS_KEY_HARD_IRON,
-                       cal->hard_iron, &hard_iron_size);
+    err = nvs_get_blob(nvs_handle, LUA_MAG_NVS_KEY_HARD, cal->hard_iron, &hard_size);
     if (err == ESP_OK) {
-        err = nvs_get_blob(nvs_handle, LUA_MODULE_MAGNETOMETER_NVS_KEY_SOFT_IRON,
-                           cal->soft_iron, &soft_iron_size);
+        err = nvs_get_blob(nvs_handle, LUA_MAG_NVS_KEY_SOFT, cal->soft_iron, &soft_size);
     }
     if (err == ESP_OK) {
-        err = nvs_get_u8(nvs_handle, LUA_MODULE_MAGNETOMETER_NVS_KEY_CALIBRATED, &calibrated);
+        err = nvs_get_u8(nvs_handle, LUA_MAG_NVS_KEY_CAL, &calibrated);
     }
-
     nvs_close(nvs_handle);
-
     if (err != ESP_OK) {
         return err;
     }
-
     cal->calibrated = (calibrated != 0);
     return ESP_OK;
 }
 
-static esp_err_t lua_module_magnetometer_clear_calibration_storage(const char *device_name)
+static esp_err_t lua_mag_clear_calibration_storage(const char *device_name)
 {
     nvs_handle_t nvs_handle;
-    esp_err_t err = lua_module_magnetometer_open_nvs(device_name, &nvs_handle);
+    esp_err_t err = lua_mag_open_nvs(device_name, &nvs_handle);
     if (err != ESP_OK) {
         return err;
     }
-
-    err = nvs_erase_key(nvs_handle, LUA_MODULE_MAGNETOMETER_NVS_KEY_HARD_IRON);
-    if (err == ESP_ERR_NVS_NOT_FOUND) {
-        err = ESP_OK;
-    }
-    if (err == ESP_OK) {
-        err = nvs_erase_key(nvs_handle, LUA_MODULE_MAGNETOMETER_NVS_KEY_SOFT_IRON);
-        if (err == ESP_ERR_NVS_NOT_FOUND) {
-            err = ESP_OK;
-        }
-    }
-    if (err == ESP_OK) {
-        err = nvs_erase_key(nvs_handle, LUA_MODULE_MAGNETOMETER_NVS_KEY_CALIBRATED);
+    const char *keys[] = { LUA_MAG_NVS_KEY_HARD, LUA_MAG_NVS_KEY_SOFT, LUA_MAG_NVS_KEY_CAL };
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]) && err == ESP_OK; i++) {
+        err = nvs_erase_key(nvs_handle, keys[i]);
         if (err == ESP_ERR_NVS_NOT_FOUND) {
             err = ESP_OK;
         }
@@ -244,37 +253,32 @@ static esp_err_t lua_module_magnetometer_clear_calibration_storage(const char *d
     if (err == ESP_OK) {
         err = nvs_commit(nvs_handle);
     }
-
     nvs_close(nvs_handle);
     return err;
 }
 
-static void lua_module_magnetometer_apply_calibration(const lua_module_magnetometer_calibration_t *cal,
-                                                      const float raw[3],
-                                                      float corrected[3])
+static void lua_mag_apply_calibration(const lua_mag_calibration_t *cal,
+                                      const float raw[3], float corrected[3])
 {
-    float hard_iron_corrected[3];
-
     if (!cal->calibrated) {
         corrected[0] = raw[0];
         corrected[1] = raw[1];
         corrected[2] = raw[2];
         return;
     }
-
-    hard_iron_corrected[0] = raw[0] - cal->hard_iron[0];
-    hard_iron_corrected[1] = raw[1] - cal->hard_iron[1];
-    hard_iron_corrected[2] = raw[2] - cal->hard_iron[2];
-
+    float v[3] = {
+        raw[0] - cal->hard_iron[0],
+        raw[1] - cal->hard_iron[1],
+        raw[2] - cal->hard_iron[2],
+    };
     for (size_t row = 0; row < 3; row++) {
-        corrected[row] = cal->soft_iron[row][0] * hard_iron_corrected[0] +
-                         cal->soft_iron[row][1] * hard_iron_corrected[1] +
-                         cal->soft_iron[row][2] * hard_iron_corrected[2];
+        corrected[row] = cal->soft_iron[row][0] * v[0] +
+                         cal->soft_iron[row][1] * v[1] +
+                         cal->soft_iron[row][2] * v[2];
     }
 }
 
-static void lua_module_magnetometer_calibration_record_sample(lua_module_magnetometer_handle_t *handle,
-                                                              const float sample[3])
+static void lua_mag_calibration_record_sample(lua_mag_handle_t *handle, const float sample[3])
 {
     for (size_t i = 0; i < 3; i++) {
         if (sample[i] < handle->calibration.mag_min[i]) {
@@ -284,20 +288,17 @@ static void lua_module_magnetometer_calibration_record_sample(lua_module_magneto
             handle->calibration.mag_max[i] = sample[i];
         }
     }
-
     handle->calibration.sample_count++;
     handle->calibration.collecting = true;
 }
 
-static esp_err_t lua_module_magnetometer_calibration_finish(lua_module_magnetometer_handle_t *handle)
+static esp_err_t lua_mag_calibration_finish(lua_mag_handle_t *handle)
 {
     float avg_delta[3];
-    float avg_radius;
 
     if (handle->calibration.sample_count < 16) {
         return ESP_ERR_INVALID_STATE;
     }
-
     for (size_t i = 0; i < 3; i++) {
         handle->calibration.hard_iron[i] =
             (handle->calibration.mag_max[i] + handle->calibration.mag_min[i]) * 0.5f;
@@ -307,41 +308,38 @@ static esp_err_t lua_module_magnetometer_calibration_finish(lua_module_magnetome
             return ESP_ERR_INVALID_STATE;
         }
     }
-
-    avg_radius = (avg_delta[0] + avg_delta[1] + avg_delta[2]) / 3.0f;
+    float avg_radius = (avg_delta[0] + avg_delta[1] + avg_delta[2]) / 3.0f;
     if (avg_radius <= 0.0f) {
         return ESP_ERR_INVALID_STATE;
     }
-
     for (size_t i = 0; i < 3; i++) {
         for (size_t j = 0; j < 3; j++) {
             handle->calibration.soft_iron[i][j] = (i == j) ? (avg_radius / avg_delta[i]) : 0.0f;
         }
     }
-
     handle->calibration.calibrated = true;
     handle->calibration.collecting = false;
     return ESP_OK;
 }
 
-static esp_err_t lua_module_magnetometer_read_sample(lua_module_magnetometer_handle_t *handle,
-                                                     struct bmm350_mag_temp_data *mag_data,
-                                                     uint8_t *status)
-{
-    int8_t rslt = bmm350_get_compensated_mag_xyz_temp_data(mag_data, &handle->sensor_handle);
-    if (rslt != BMM350_OK) {
-        return ESP_FAIL;
-    }
+/* ---------------------------------------------------------------------------
+ * Lua <-> C value plumbing.
+ * ------------------------------------------------------------------------- */
 
-    rslt = bmm350_get_regs(BMM350_REG_INT_STATUS, status, 1, &handle->sensor_handle);
-    return (rslt == BMM350_OK) ? ESP_OK : ESP_FAIL;
-}
-
-static void lua_module_magnetometer_push_calibration_table(lua_State *L,
-                                                           const lua_module_magnetometer_calibration_t *cal)
+static void lua_mag_push_axes_table(lua_State *L, float x, float y, float z)
 {
     lua_newtable(L);
+    lua_pushnumber(L, x);
+    lua_setfield(L, -2, "x");
+    lua_pushnumber(L, y);
+    lua_setfield(L, -2, "y");
+    lua_pushnumber(L, z);
+    lua_setfield(L, -2, "z");
+}
 
+static void lua_mag_push_calibration_table(lua_State *L, const lua_mag_calibration_t *cal)
+{
+    lua_newtable(L);
     lua_pushboolean(L, cal->calibrated);
     lua_setfield(L, -2, "calibrated");
     lua_pushboolean(L, cal->collecting);
@@ -368,10 +366,9 @@ static void lua_module_magnetometer_push_calibration_table(lua_State *L,
     lua_setfield(L, -2, "soft_iron");
 }
 
-static bool lua_module_magnetometer_read_vec3(lua_State *L, int idx, float out[3])
+static bool lua_mag_read_vec3(lua_State *L, int idx, float out[3])
 {
     bool ok = true;
-
     for (int i = 0; i < 3; i++) {
         lua_rawgeti(L, idx, i + 1);
         if (!lua_isnumber(L, -1)) {
@@ -381,14 +378,12 @@ static bool lua_module_magnetometer_read_vec3(lua_State *L, int idx, float out[3
         }
         lua_pop(L, 1);
     }
-
     return ok;
 }
 
-static bool lua_module_magnetometer_read_mat3(lua_State *L, int idx, float out[3][3])
+static bool lua_mag_read_mat3(lua_State *L, int idx, float out[3][3])
 {
     bool ok = true;
-
     for (int row = 0; row < 3 && ok; row++) {
         lua_rawgeti(L, idx, row + 1);
         if (!lua_istable(L, -1)) {
@@ -406,53 +401,50 @@ static bool lua_module_magnetometer_read_mat3(lua_State *L, int idx, float out[3
         }
         lua_pop(L, 1);
     }
-
     return ok;
 }
 
-static esp_err_t lua_module_magnetometer_configure_interrupt_pin(int int_gpio_num)
+/* ---------------------------------------------------------------------------
+ * GPIO + I2C bus setup (board-level, not chip-specific).
+ * ------------------------------------------------------------------------- */
+
+static esp_err_t lua_mag_configure_interrupt_pin(int int_gpio_num)
 {
     if (int_gpio_num < 0) {
         return ESP_OK;
     }
-
-    const gpio_config_t int_pin_cfg = {
+    const gpio_config_t cfg = {
         .pin_bit_mask = 1ULL << int_gpio_num,
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
-
-    return gpio_config(&int_pin_cfg);
+    return gpio_config(&cfg);
 }
 
-static esp_err_t lua_module_magnetometer_configure_sdo_pin(int sdo_gpio_num)
+static esp_err_t lua_mag_configure_sdo_pin(int sdo_gpio_num)
 {
     if (sdo_gpio_num < 0) {
         return ESP_OK;
     }
-
-    const gpio_config_t sdo_pin_cfg = {
+    const gpio_config_t cfg = {
         .pin_bit_mask = 1ULL << sdo_gpio_num,
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
-
-    esp_err_t err = gpio_config(&sdo_pin_cfg);
+    esp_err_t err = gpio_config(&cfg);
     if (err != ESP_OK) {
         return err;
     }
-
     return gpio_set_level((gpio_num_t)sdo_gpio_num, 0);
 }
 
-static esp_err_t lua_module_magnetometer_open_i2c_bus(const char *peripheral_name,
-                                                      int frequency,
-                                                      i2c_bus_handle_t *i2c_bus_handle,
-                                                      bool *peripheral_ref_held)
+static esp_err_t lua_mag_open_i2c_bus(const char *peripheral_name, int frequency,
+                                      i2c_bus_handle_t *i2c_bus_handle,
+                                      bool *peripheral_ref_held)
 {
     i2c_master_bus_handle_t i2c_master_handle = NULL;
     i2c_master_bus_config_t *i2c_master_cfg = NULL;
@@ -465,14 +457,16 @@ static esp_err_t lua_module_magnetometer_open_i2c_bus(const char *peripheral_nam
 
     esp_err_t err = esp_board_periph_get_config(peripheral_name, (void **)&i2c_master_cfg);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get board I2C config '%s': %s", peripheral_name, esp_err_to_name(err));
+        ESP_LOGE(TAG, "Failed to get board I2C config '%s': %s",
+                 peripheral_name, esp_err_to_name(err));
         esp_board_periph_unref_handle(peripheral_name);
         *peripheral_ref_held = false;
         return err;
     }
 
     if (!i2c_master_cfg->flags.enable_internal_pullup) {
-        ESP_LOGW(TAG, "Board I2C '%s' has internal pull-ups disabled; enabling them for BMM350 stability",
+        ESP_LOGW(TAG,
+                 "Board I2C '%s' has internal pull-ups disabled; enabling pull-ups for magnetometer",
                  peripheral_name);
         ESP_RETURN_ON_ERROR(gpio_pullup_en(i2c_master_cfg->sda_io_num), TAG,
                             "Failed to enable SDA pull-up on GPIO%d", i2c_master_cfg->sda_io_num);
@@ -480,7 +474,7 @@ static esp_err_t lua_module_magnetometer_open_i2c_bus(const char *peripheral_nam
                             "Failed to enable SCL pull-up on GPIO%d", i2c_master_cfg->scl_io_num);
     }
 
-    const i2c_config_t i2c_bus_cfg = {
+    const i2c_config_t bus_cfg = {
         .mode = I2C_MODE_MASTER,
         .sda_io_num = i2c_master_cfg->sda_io_num,
         .scl_io_num = i2c_master_cfg->scl_io_num,
@@ -491,199 +485,96 @@ static esp_err_t lua_module_magnetometer_open_i2c_bus(const char *peripheral_nam
     };
 
     (void)i2c_master_handle;
-    *i2c_bus_handle = i2c_bus_create(i2c_master_cfg->i2c_port, &i2c_bus_cfg);
+    *i2c_bus_handle = i2c_bus_create(i2c_master_cfg->i2c_port, &bus_cfg);
     if (*i2c_bus_handle == NULL) {
         esp_board_periph_unref_handle(peripheral_name);
         *peripheral_ref_held = false;
         return ESP_FAIL;
     }
-
     return ESP_OK;
 }
 
-static esp_err_t lua_module_magnetometer_select_addr(lua_module_magnetometer_handle_t *handle,
-                                                     uint8_t i2c_addr)
+/* ---------------------------------------------------------------------------
+ * Handle lifecycle (delegates chip work to the backend).
+ * ------------------------------------------------------------------------- */
+
+static esp_err_t lua_mag_create_handle(const lua_mag_resolved_cfg_t *cfg,
+                                       lua_mag_handle_t **out_handle)
 {
-    if (handle->i2c_dev_handle != NULL && handle->i2c_addr == i2c_addr) {
-        return ESP_OK;
-    }
-
-    if (handle->i2c_dev_handle != NULL) {
-        i2c_bus_device_delete(&handle->i2c_dev_handle);
-        handle->i2c_dev_handle = NULL;
-    }
-
-    handle->i2c_dev_handle = i2c_bus_device_create(handle->i2c_bus_handle, i2c_addr, 0);
-    if (handle->i2c_dev_handle == NULL) {
-        ESP_LOGE(TAG, "Failed to create BMM350 I2C device for address 0x%02x", i2c_addr);
-        return ESP_FAIL;
-    }
-
-    handle->i2c_addr = i2c_addr;
-    return ESP_OK;
-}
-
-static BMM350_INTF_RET_TYPE lua_module_magnetometer_i2c_read(uint8_t reg_addr,
-                                                             uint8_t *reg_data,
-                                                             uint32_t length,
-                                                             void *intf_ptr)
-{
-    lua_module_magnetometer_handle_t *handle = (lua_module_magnetometer_handle_t *)intf_ptr;
-    if (handle == NULL || handle->i2c_dev_handle == NULL) {
-        return BMM350_E_COM_FAIL;
-    }
-
-    esp_err_t err = i2c_bus_read_bytes(handle->i2c_dev_handle, reg_addr, (uint16_t)length, reg_data);
-    return (err == ESP_OK) ? BMM350_INTF_RET_SUCCESS : BMM350_E_COM_FAIL;
-}
-
-static BMM350_INTF_RET_TYPE lua_module_magnetometer_i2c_write(uint8_t reg_addr,
-                                                              const uint8_t *reg_data,
-                                                              uint32_t length,
-                                                              void *intf_ptr)
-{
-    lua_module_magnetometer_handle_t *handle = (lua_module_magnetometer_handle_t *)intf_ptr;
-    if (handle == NULL || handle->i2c_dev_handle == NULL) {
-        return BMM350_E_COM_FAIL;
-    }
-
-    esp_err_t err = i2c_bus_write_bytes(handle->i2c_dev_handle, reg_addr, (uint16_t)length, reg_data);
-    return (err == ESP_OK) ? BMM350_INTF_RET_SUCCESS : BMM350_E_COM_FAIL;
-}
-
-static void lua_module_magnetometer_delay_us(uint32_t period_us, void *intf_ptr)
-{
-    (void)intf_ptr;
-    if (period_us < 1000) {
-        esp_rom_delay_us(period_us);
-    } else {
-        vTaskDelay(pdMS_TO_TICKS((period_us + 999) / 1000));
-    }
-}
-
-static esp_err_t lua_module_magnetometer_apply_default_runtime_config(lua_module_magnetometer_handle_t *handle)
-{
-    int8_t rslt;
-
-    rslt = bmm350_set_odr_performance(BMM350_DATA_RATE_100HZ, BMM350_AVERAGING_4,
-                                      &handle->sensor_handle);
-    if (rslt != BMM350_OK) {
-        ESP_LOGW(TAG, "bmm350_set_odr_performance returned %d (continuing)", rslt);
-    }
-
-    rslt = bmm350_enable_axes(BMM350_X_EN, BMM350_Y_EN, BMM350_Z_EN, &handle->sensor_handle);
-    if (rslt != BMM350_OK) {
-        ESP_LOGW(TAG, "bmm350_enable_axes returned %d (continuing)", rslt);
-    }
-
-    rslt = bmm350_set_powermode(BMM350_NORMAL_MODE, &handle->sensor_handle);
-    if (rslt != BMM350_OK) {
-        ESP_LOGW(TAG, "bmm350_set_powermode returned %d (continuing)", rslt);
-    }
-
-    uint8_t err_reg = 0;
-    (void)bmm350_get_regs(BMM350_REG_ERR_REG, &err_reg, 1, &handle->sensor_handle);
-    ESP_LOGI(TAG, "BMM350 configured: ERR_REG=0x%02X", err_reg);
-    return ESP_OK;
-}
-
-static esp_err_t lua_module_magnetometer_probe_addr(lua_module_magnetometer_handle_t *handle,
-                                                    uint8_t i2c_addr)
-{
-    int8_t rslt;
-
-    ESP_RETURN_ON_ERROR(lua_module_magnetometer_select_addr(handle, i2c_addr), TAG,
-                        "Failed to select BMM350 I2C address 0x%02x", i2c_addr);
-
-    memset(&handle->sensor_handle, 0, sizeof(handle->sensor_handle));
-    handle->sensor_handle.read = lua_module_magnetometer_i2c_read;
-    handle->sensor_handle.write = lua_module_magnetometer_i2c_write;
-    handle->sensor_handle.delay_us = lua_module_magnetometer_delay_us;
-    handle->sensor_handle.intf_ptr = handle;
-
-    rslt = bmm350_init(&handle->sensor_handle);
-    ESP_LOGI(TAG, "BMM350 init at 0x%02x -> rslt=%d, chip_id=0x%02x",
-             i2c_addr, rslt, handle->sensor_handle.chip_id);
-
-    if (handle->sensor_handle.chip_id != BMM350_CHIP_ID) {
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    if (rslt != BMM350_OK) {
-        ESP_LOGW(TAG, "BMM350 init failed at 0x%02x: %d", i2c_addr, rslt);
-        return ESP_FAIL;
-    }
-
-    return lua_module_magnetometer_apply_default_runtime_config(handle);
-}
-
-static esp_err_t lua_module_magnetometer_create_handle(const lua_magnetometer_resolved_cfg_t *cfg,
-                                                       lua_module_magnetometer_handle_t **out_handle)
-{
-    lua_module_magnetometer_handle_t *handle = calloc(1, sizeof(lua_module_magnetometer_handle_t));
+    lua_mag_handle_t *handle = calloc(1, sizeof(*handle));
     if (handle == NULL) {
         return ESP_ERR_NO_MEM;
+    }
+    if (lua_mag_backend.state_size > 0) {
+        handle->ctx.state = calloc(1, lua_mag_backend.state_size);
+        if (handle->ctx.state == NULL) {
+            free(handle);
+            return ESP_ERR_NO_MEM;
+        }
     }
 
     snprintf(handle->peripheral_name, sizeof(handle->peripheral_name), "%s", cfg->peripheral_name);
     handle->int_gpio_num = (gpio_num_t)cfg->int_gpio_num;
     handle->sdo_gpio_num = (gpio_num_t)cfg->sdo_gpio_num;
 
-    esp_err_t err = lua_module_magnetometer_configure_sdo_pin(cfg->sdo_gpio_num);
+    esp_err_t err = lua_mag_configure_sdo_pin(cfg->sdo_gpio_num);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to configure SDO pin GPIO%d: %s", cfg->sdo_gpio_num, esp_err_to_name(err));
-        free(handle);
-        return err;
+        ESP_LOGE(TAG, "Failed to configure SDO pin GPIO%d: %s",
+                 cfg->sdo_gpio_num, esp_err_to_name(err));
+        goto cleanup;
     }
 
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    err = lua_module_magnetometer_configure_interrupt_pin(cfg->int_gpio_num);
+    err = lua_mag_configure_interrupt_pin(cfg->int_gpio_num);
     if (err != ESP_OK) {
-        free(handle);
-        return err;
+        goto cleanup;
     }
 
-    err = lua_module_magnetometer_open_i2c_bus(cfg->peripheral_name, cfg->frequency,
-                                               &handle->i2c_bus_handle, &handle->peripheral_ref_held);
+    err = lua_mag_open_i2c_bus(cfg->peripheral_name, cfg->frequency,
+                               &handle->ctx.i2c_bus_handle, &handle->peripheral_ref_held);
     if (err != ESP_OK) {
-        free(handle);
-        return err;
+        goto cleanup;
     }
 
-    err = lua_module_magnetometer_probe_addr(handle, (uint8_t)cfg->i2c_addr);
-    if (err != ESP_OK && cfg->try_alt_i2c_addr) {
-        const uint8_t alt_addr = (cfg->i2c_addr == BMM350_I2C_ADSEL_SET_LOW) ?
-                                 BMM350_I2C_ADSEL_SET_HIGH : BMM350_I2C_ADSEL_SET_LOW;
-        ESP_LOGW(TAG, "Probe 0x%02x failed, retrying BMM350 at 0x%02x", cfg->i2c_addr, alt_addr);
-        err = lua_module_magnetometer_probe_addr(handle, alt_addr);
+    err = lua_mag_backend.probe(&handle->ctx, (uint8_t)cfg->i2c_addr);
+    if (err != ESP_OK && cfg->try_alt_i2c_addr && lua_mag_backend.probe_alternates != NULL) {
+        err = lua_mag_backend.probe_alternates(&handle->ctx, (uint8_t)cfg->i2c_addr);
     }
     if (err != ESP_OK) {
-        lua_module_magnetometer_destroy_handle(handle);
+        lua_mag_destroy_handle(handle);
         return err;
     }
 
     handle->sensor_initialized = true;
     *out_handle = handle;
     if (cfg->int_gpio_num >= 0) {
-        ESP_LOGI(TAG, "BMM350 initialized on %s, INT GPIO%d, addr 0x%02x, freq %d Hz",
-                 cfg->peripheral_name, cfg->int_gpio_num, handle->i2c_addr, cfg->frequency);
+        ESP_LOGI(TAG, "%s initialized on %s, INT GPIO%d, addr 0x%02x, freq %d Hz",
+                 lua_mag_backend.chip_name, cfg->peripheral_name, cfg->int_gpio_num,
+                 handle->ctx.i2c_addr, cfg->frequency);
     } else {
-        ESP_LOGI(TAG, "BMM350 initialized on %s, addr 0x%02x, freq %d Hz",
-                 cfg->peripheral_name, handle->i2c_addr, cfg->frequency);
+        ESP_LOGI(TAG, "%s initialized on %s, addr 0x%02x, freq %d Hz",
+                 lua_mag_backend.chip_name, cfg->peripheral_name,
+                 handle->ctx.i2c_addr, cfg->frequency);
     }
     return ESP_OK;
+
+cleanup:
+    if (handle->ctx.state != NULL) {
+        free(handle->ctx.state);
+    }
+    free(handle);
+    return err;
 }
 
-static void lua_module_magnetometer_destroy_handle(lua_module_magnetometer_handle_t *handle)
+static void lua_mag_destroy_handle(lua_mag_handle_t *handle)
 {
     if (handle == NULL) {
         return;
     }
-
-    if (handle->i2c_dev_handle != NULL) {
-        i2c_bus_device_delete(&handle->i2c_dev_handle);
-        handle->i2c_dev_handle = NULL;
+    if (handle->ctx.i2c_dev_handle != NULL) {
+        i2c_bus_device_delete(&handle->ctx.i2c_dev_handle);
+        handle->ctx.i2c_dev_handle = NULL;
     }
     if (handle->int_gpio_num >= 0) {
         gpio_reset_pin(handle->int_gpio_num);
@@ -694,204 +585,179 @@ static void lua_module_magnetometer_destroy_handle(lua_module_magnetometer_handl
     if (handle->peripheral_ref_held && handle->peripheral_name[0] != '\0') {
         esp_board_periph_unref_handle(handle->peripheral_name);
     }
-
+    if (handle->ctx.state != NULL) {
+        free(handle->ctx.state);
+        handle->ctx.state = NULL;
+    }
     free(handle);
 }
 
-static lua_module_magnetometer_ud_t *lua_module_magnetometer_get_ud(lua_State *L, int idx)
+/* ---------------------------------------------------------------------------
+ * Lua bindings.
+ * ------------------------------------------------------------------------- */
+
+static lua_mag_ud_t *lua_mag_get_ud(lua_State *L, int idx)
 {
-    lua_module_magnetometer_ud_t *ud =
-        (lua_module_magnetometer_ud_t *)luaL_checkudata(L, idx, LUA_MODULE_MAGNETOMETER_METATABLE);
+    lua_mag_ud_t *ud = (lua_mag_ud_t *)luaL_checkudata(L, idx, LUA_MAG_METATABLE);
     if (!ud || !ud->handle || !ud->handle->sensor_initialized) {
         luaL_error(L, "magnetometer: invalid or closed handle");
     }
     return ud;
 }
 
-static void lua_module_magnetometer_push_axes_table(lua_State *L, float x, float y, float z)
-{
-    lua_newtable(L);
-    lua_pushnumber(L, x);
-    lua_setfield(L, -2, "x");
-    lua_pushnumber(L, y);
-    lua_setfield(L, -2, "y");
-    lua_pushnumber(L, z);
-    lua_setfield(L, -2, "z");
-}
-
-static int lua_module_magnetometer_close_impl(lua_State *L, lua_module_magnetometer_ud_t *ud)
+static int lua_mag_close_impl(lua_State *L, lua_mag_ud_t *ud)
 {
     (void)L;
     if (ud->handle != NULL) {
-        lua_module_magnetometer_destroy_handle(ud->handle);
+        lua_mag_destroy_handle(ud->handle);
         ud->handle = NULL;
     }
     ud->device_name[0] = '\0';
     return 0;
 }
 
-static int lua_module_magnetometer_gc(lua_State *L)
+static int lua_mag_gc(lua_State *L)
 {
-    lua_module_magnetometer_ud_t *ud =
-        (lua_module_magnetometer_ud_t *)luaL_testudata(L, 1, LUA_MODULE_MAGNETOMETER_METATABLE);
+    lua_mag_ud_t *ud = (lua_mag_ud_t *)luaL_testudata(L, 1, LUA_MAG_METATABLE);
     if (ud && ud->handle) {
-        return lua_module_magnetometer_close_impl(L, ud);
+        return lua_mag_close_impl(L, ud);
     }
     return 0;
 }
 
-static int lua_module_magnetometer_close(lua_State *L)
+static int lua_mag_close(lua_State *L)
 {
-    lua_module_magnetometer_ud_t *ud =
-        (lua_module_magnetometer_ud_t *)luaL_checkudata(L, 1, LUA_MODULE_MAGNETOMETER_METATABLE);
+    lua_mag_ud_t *ud = (lua_mag_ud_t *)luaL_checkudata(L, 1, LUA_MAG_METATABLE);
     if (ud->handle) {
-        return lua_module_magnetometer_close_impl(L, ud);
+        return lua_mag_close_impl(L, ud);
     }
     return 0;
 }
 
-static int lua_module_magnetometer_name(lua_State *L)
+static int lua_mag_name(lua_State *L)
 {
-    lua_module_magnetometer_ud_t *ud = lua_module_magnetometer_get_ud(L, 1);
+    lua_mag_ud_t *ud = lua_mag_get_ud(L, 1);
     lua_pushstring(L, ud->device_name);
     return 1;
 }
 
-static int lua_module_magnetometer_chip_id(lua_State *L)
+static int lua_mag_chip_id(lua_State *L)
 {
-    lua_module_magnetometer_ud_t *ud = lua_module_magnetometer_get_ud(L, 1);
-    lua_pushinteger(L, ud->handle->sensor_handle.chip_id);
+    lua_mag_ud_t *ud = lua_mag_get_ud(L, 1);
+    lua_pushinteger(L, ud->handle->ctx.chip_id);
     return 1;
 }
 
-static esp_err_t lua_module_magnetometer_read_status(lua_module_magnetometer_handle_t *handle,
-                                                     uint8_t *status)
+static int lua_mag_read(lua_State *L)
 {
-    int8_t rslt = bmm350_get_regs(BMM350_REG_INT_STATUS, status, 1, &handle->sensor_handle);
-    return (rslt == BMM350_OK) ? ESP_OK : ESP_FAIL;
-}
-
-static int lua_module_magnetometer_read(lua_State *L)
-{
-    lua_module_magnetometer_ud_t *ud = lua_module_magnetometer_get_ud(L, 1);
-    struct bmm350_mag_temp_data mag_data = { 0 };
-    uint8_t status = 0;
+    lua_mag_ud_t *ud = lua_mag_get_ud(L, 1);
+    lua_mag_sample_t sample = { 0 };
     float raw[3];
     float corrected[3];
 
-    if (lua_module_magnetometer_read_sample(ud->handle, &mag_data, &status) != ESP_OK) {
-        return luaL_error(L, "magnetometer read status failed");
+    if (lua_mag_backend.read_sample(&ud->handle->ctx, &sample) != ESP_OK) {
+        return luaL_error(L, "magnetometer read failed");
     }
 
-    raw[0] = mag_data.x;
-    raw[1] = mag_data.y;
-    raw[2] = mag_data.z;
-    lua_module_magnetometer_apply_calibration(&ud->handle->calibration, raw, corrected);
+    raw[0] = sample.x;
+    raw[1] = sample.y;
+    raw[2] = sample.z;
+    lua_mag_apply_calibration(&ud->handle->calibration, raw, corrected);
 
     lua_newtable(L);
-    lua_module_magnetometer_push_axes_table(L, corrected[0], corrected[1], corrected[2]);
+    lua_mag_push_axes_table(L, corrected[0], corrected[1], corrected[2]);
     lua_setfield(L, -2, "magnetic");
-    lua_module_magnetometer_push_axes_table(L, raw[0], raw[1], raw[2]);
+    lua_mag_push_axes_table(L, raw[0], raw[1], raw[2]);
     lua_setfield(L, -2, "raw_magnetic");
-    lua_pushnumber(L, mag_data.temperature);
+    lua_pushnumber(L, sample.temperature);
     lua_setfield(L, -2, "temperature");
-    lua_pushinteger(L, status);
+    lua_pushinteger(L, sample.status);
     lua_setfield(L, -2, "status");
     lua_pushboolean(L, ud->handle->calibration.calibrated);
     lua_setfield(L, -2, "calibrated");
     return 1;
 }
 
-static int lua_module_magnetometer_read_temperature(lua_State *L)
+static int lua_mag_read_temperature(lua_State *L)
 {
-    lua_module_magnetometer_ud_t *ud = lua_module_magnetometer_get_ud(L, 1);
-    struct bmm350_mag_temp_data mag_data = { 0 };
-    uint8_t status = 0;
-
-    if (lua_module_magnetometer_read_sample(ud->handle, &mag_data, &status) != ESP_OK) {
+    lua_mag_ud_t *ud = lua_mag_get_ud(L, 1);
+    lua_mag_sample_t sample = { 0 };
+    if (lua_mag_backend.read_sample(&ud->handle->ctx, &sample) != ESP_OK) {
         return luaL_error(L, "magnetometer read_temperature failed");
     }
-
-    lua_pushnumber(L, mag_data.temperature);
+    lua_pushnumber(L, sample.temperature);
     return 1;
 }
 
-static int lua_module_magnetometer_read_int_status(lua_State *L)
+static int lua_mag_read_int_status(lua_State *L)
 {
-    lua_module_magnetometer_ud_t *ud = lua_module_magnetometer_get_ud(L, 1);
+    lua_mag_ud_t *ud = lua_mag_get_ud(L, 1);
     uint8_t status = 0;
-
-    if (lua_module_magnetometer_read_status(ud->handle, &status) != ESP_OK) {
+    if (lua_mag_backend.read_status(&ud->handle->ctx, &status) != ESP_OK) {
         return luaL_error(L, "magnetometer read_int_status failed");
     }
-
     lua_pushinteger(L, status);
     return 1;
 }
 
-static int lua_module_magnetometer_calibration_reset(lua_State *L)
+static int lua_mag_calibration_reset(lua_State *L)
 {
-    lua_module_magnetometer_ud_t *ud = lua_module_magnetometer_get_ud(L, 1);
-
-    lua_module_magnetometer_calibration_reset_state(ud->handle);
+    lua_mag_ud_t *ud = lua_mag_get_ud(L, 1);
+    lua_mag_calibration_reset_state(ud->handle);
     ud->handle->calibration.collecting = true;
     return 0;
 }
 
-static int lua_module_magnetometer_calibration_add_sample(lua_State *L)
+static int lua_mag_calibration_add_sample(lua_State *L)
 {
-    lua_module_magnetometer_ud_t *ud = lua_module_magnetometer_get_ud(L, 1);
+    lua_mag_ud_t *ud = lua_mag_get_ud(L, 1);
     float sample[3];
 
     if (lua_istable(L, 2)) {
-        if (!lua_module_magnetometer_read_vec3(L, 2, sample)) {
+        if (!lua_mag_read_vec3(L, 2, sample)) {
             return luaL_error(L, "magnetometer calibration_add_sample expects {x,y,z} array");
         }
     } else {
-        struct bmm350_mag_temp_data mag_data = { 0 };
-        uint8_t status = 0;
-        if (lua_module_magnetometer_read_sample(ud->handle, &mag_data, &status) != ESP_OK) {
+        lua_mag_sample_t mag_sample = { 0 };
+        if (lua_mag_backend.read_sample(&ud->handle->ctx, &mag_sample) != ESP_OK) {
             return luaL_error(L, "magnetometer calibration_add_sample read failed");
         }
-        sample[0] = mag_data.x;
-        sample[1] = mag_data.y;
-        sample[2] = mag_data.z;
+        sample[0] = mag_sample.x;
+        sample[1] = mag_sample.y;
+        sample[2] = mag_sample.z;
     }
 
-    lua_module_magnetometer_calibration_record_sample(ud->handle, sample);
+    lua_mag_calibration_record_sample(ud->handle, sample);
     lua_pushinteger(L, (lua_Integer)ud->handle->calibration.sample_count);
     return 1;
 }
 
-static int lua_module_magnetometer_calibration_finish_lua(lua_State *L)
+static int lua_mag_calibration_finish_lua(lua_State *L)
 {
-    lua_module_magnetometer_ud_t *ud = lua_module_magnetometer_get_ud(L, 1);
-    esp_err_t err = lua_module_magnetometer_calibration_finish(ud->handle);
+    lua_mag_ud_t *ud = lua_mag_get_ud(L, 1);
+    esp_err_t err = lua_mag_calibration_finish(ud->handle);
     if (err != ESP_OK) {
-        return luaL_error(L, "magnetometer calibration_finish failed: %s",
-                          esp_err_to_name(err));
+        return luaL_error(L, "magnetometer calibration_finish failed: %s", esp_err_to_name(err));
     }
-
-    err = lua_module_magnetometer_save_calibration(ud->device_name, &ud->handle->calibration);
+    err = lua_mag_save_calibration(ud->device_name, &ud->handle->calibration);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to persist calibration for %s: %s",
                  ud->device_name, esp_err_to_name(err));
     }
-
-    lua_module_magnetometer_push_calibration_table(L, &ud->handle->calibration);
+    lua_mag_push_calibration_table(L, &ud->handle->calibration);
     return 1;
 }
 
-static int lua_module_magnetometer_calibration_get(lua_State *L)
+static int lua_mag_calibration_get(lua_State *L)
 {
-    lua_module_magnetometer_ud_t *ud = lua_module_magnetometer_get_ud(L, 1);
-    lua_module_magnetometer_push_calibration_table(L, &ud->handle->calibration);
+    lua_mag_ud_t *ud = lua_mag_get_ud(L, 1);
+    lua_mag_push_calibration_table(L, &ud->handle->calibration);
     return 1;
 }
 
-static int lua_module_magnetometer_calibration_set(lua_State *L)
+static int lua_mag_calibration_set(lua_State *L)
 {
-    lua_module_magnetometer_ud_t *ud = lua_module_magnetometer_get_ud(L, 1);
+    lua_mag_ud_t *ud = lua_mag_get_ud(L, 1);
     float hard_iron[3];
     float soft_iron[3][3];
     esp_err_t err;
@@ -899,14 +765,14 @@ static int lua_module_magnetometer_calibration_set(lua_State *L)
     luaL_checktype(L, 2, LUA_TTABLE);
 
     lua_getfield(L, 2, "hard_iron");
-    if (!lua_istable(L, -1) || !lua_module_magnetometer_read_vec3(L, lua_gettop(L), hard_iron)) {
+    if (!lua_istable(L, -1) || !lua_mag_read_vec3(L, lua_gettop(L), hard_iron)) {
         lua_pop(L, 1);
         return luaL_error(L, "magnetometer calibration_set: missing/invalid hard_iron");
     }
     lua_pop(L, 1);
 
     lua_getfield(L, 2, "soft_iron");
-    if (!lua_istable(L, -1) || !lua_module_magnetometer_read_mat3(L, lua_gettop(L), soft_iron)) {
+    if (!lua_istable(L, -1) || !lua_mag_read_mat3(L, lua_gettop(L), soft_iron)) {
         lua_pop(L, 1);
         return luaL_error(L, "magnetometer calibration_set: missing/invalid soft_iron");
     }
@@ -917,48 +783,81 @@ static int lua_module_magnetometer_calibration_set(lua_State *L)
     ud->handle->calibration.calibrated = true;
     ud->handle->calibration.collecting = false;
 
-    err = lua_module_magnetometer_save_calibration(ud->device_name, &ud->handle->calibration);
+    err = lua_mag_save_calibration(ud->device_name, &ud->handle->calibration);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to persist calibration for %s: %s",
                  ud->device_name, esp_err_to_name(err));
     }
-
-    lua_module_magnetometer_push_calibration_table(L, &ud->handle->calibration);
+    lua_mag_push_calibration_table(L, &ud->handle->calibration);
     return 1;
 }
 
-static int lua_module_magnetometer_calibration_clear(lua_State *L)
+static int lua_mag_calibration_clear(lua_State *L)
 {
-    lua_module_magnetometer_ud_t *ud = lua_module_magnetometer_get_ud(L, 1);
-    esp_err_t err;
-
-    lua_module_magnetometer_calibration_reset_state(ud->handle);
-    err = lua_module_magnetometer_clear_calibration_storage(ud->device_name);
+    lua_mag_ud_t *ud = lua_mag_get_ud(L, 1);
+    lua_mag_calibration_reset_state(ud->handle);
+    esp_err_t err = lua_mag_clear_calibration_storage(ud->device_name);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to clear persisted calibration for %s: %s",
                  ud->device_name, esp_err_to_name(err));
     }
-
-    lua_module_magnetometer_push_calibration_table(L, &ud->handle->calibration);
+    lua_mag_push_calibration_table(L, &ud->handle->calibration);
     return 1;
 }
 
-static esp_err_t lua_module_magnetometer_load_board_defaults(const char *device_name,
-                                                             lua_magnetometer_resolved_cfg_t *out)
+/* ---------------------------------------------------------------------------
+ * Board defaults + Lua options resolution.
+ * ------------------------------------------------------------------------- */
+
+/*
+ * Walk the board manager descriptor list and verify that the auto-generated
+ * config for `device_name` has exactly the layout `lua_mag_board_cfg_t`
+ * expects. Returns ESP_ERR_NOT_FOUND if the board doesn't declare the
+ * device, and ESP_ERR_INVALID_SIZE if the schema diverges (which is a
+ * board-side bug and must be surfaced rather than papered over).
+ */
+static esp_err_t lua_mag_resolve_board_cfg(const char *device_name,
+                                           const lua_mag_board_cfg_t **out)
 {
-    void *raw = NULL;
-    esp_err_t err = esp_board_manager_get_device_config(device_name, &raw);
-    if (err != ESP_OK || raw == NULL) {
-        return ESP_ERR_NOT_FOUND;
+    extern const esp_board_device_desc_t g_esp_board_devices[];
+    const esp_board_device_desc_t *desc = g_esp_board_devices;
+    while (desc != NULL && desc->name != NULL) {
+        if (strcmp(desc->name, device_name) == 0) {
+            if (desc->cfg == NULL) {
+                return ESP_ERR_NOT_FOUND;
+            }
+            if (desc->cfg_size != sizeof(lua_mag_board_cfg_t)) {
+                ESP_LOGE(TAG,
+                         "Board device '%s' cfg_size=%u differs from expected %u; "
+                         "board_devices.yaml schema is out of sync with lua_mag_board_cfg_t. "
+                         "Every field listed in lua_mag_board_cfg_t MUST be present in YAML "
+                         "(use -1 for unused GPIOs).",
+                         device_name,
+                         (unsigned)desc->cfg_size,
+                         (unsigned)sizeof(lua_mag_board_cfg_t));
+                return ESP_ERR_INVALID_SIZE;
+            }
+            *out = (const lua_mag_board_cfg_t *)desc->cfg;
+            return ESP_OK;
+        }
+        desc = desc->next;
+    }
+    return ESP_ERR_NOT_FOUND;
+}
+
+static esp_err_t lua_mag_load_board_defaults(const char *device_name,
+                                             lua_mag_resolved_cfg_t *out)
+{
+    const lua_mag_board_cfg_t *board = NULL;
+    esp_err_t err = lua_mag_resolve_board_cfg(device_name, &board);
+    if (err != ESP_OK) {
+        return err;
     }
 
-    const lua_magnetometer_board_cfg_t *board = (const lua_magnetometer_board_cfg_t *)raw;
-
-    if (board->chip != NULL && strcmp(board->chip, LUA_MODULE_MAGNETOMETER_SELECTED_CHIP_NAME) != 0) {
+    if (board->chip != NULL && strcmp(board->chip, lua_mag_backend.chip_name) != 0) {
         ESP_LOGW(TAG, "Board device '%s' chip='%s' does not match %s backend",
-                 device_name, board->chip, LUA_MODULE_MAGNETOMETER_SELECTED_CHIP_NAME);
+                 device_name, board->chip, lua_mag_backend.chip_name);
     }
-
     if (board->peripheral_name != NULL && board->peripheral_name[0] != '\0') {
         snprintf(out->peripheral_name, sizeof(out->peripheral_name), "%s", board->peripheral_name);
         out->has_peripheral = true;
@@ -971,16 +870,23 @@ static esp_err_t lua_module_magnetometer_load_board_defaults(const char *device_
         out->frequency = board->frequency;
         out->has_frequency = true;
     }
-    out->int_gpio_num = board->int_gpio_num;
-    out->has_int_gpio = true;
-    out->sdo_gpio_num = board->sdo_gpio_num;
-    out->has_sdo_gpio = true;
-
+    /* Only adopt board GPIOs when explicitly non-negative. The board manager
+     * auto-generator defaults missing int8 fields to 0, which we MUST NOT
+     * treat as a real GPIO0 -- doing so would silently reconfigure GPIO0 as
+     * an INT input or SDO strap output. Boards that lack the strap should
+     * either omit the device entry or set the field to -1 in YAML. */
+    if (board->int_gpio_num >= 0) {
+        out->int_gpio_num = board->int_gpio_num;
+        out->has_int_gpio = true;
+    }
+    if (board->sdo_gpio_num >= 0) {
+        out->sdo_gpio_num = board->sdo_gpio_num;
+        out->has_sdo_gpio = true;
+    }
     return ESP_OK;
 }
 
-static void lua_module_magnetometer_apply_lua_overrides(lua_State *L, int opts_idx,
-                                                        lua_magnetometer_resolved_cfg_t *cfg)
+static void lua_mag_apply_lua_overrides(lua_State *L, int opts_idx, lua_mag_resolved_cfg_t *cfg)
 {
     if (opts_idx == 0 || lua_type(L, opts_idx) != LUA_TTABLE) {
         return;
@@ -988,8 +894,7 @@ static void lua_module_magnetometer_apply_lua_overrides(lua_State *L, int opts_i
 
     lua_getfield(L, opts_idx, "peripheral");
     if (lua_isstring(L, -1)) {
-        const char *p = lua_tostring(L, -1);
-        snprintf(cfg->peripheral_name, sizeof(cfg->peripheral_name), "%s", p);
+        snprintf(cfg->peripheral_name, sizeof(cfg->peripheral_name), "%s", lua_tostring(L, -1));
         cfg->has_peripheral = true;
     }
     lua_pop(L, 1);
@@ -1024,9 +929,9 @@ static void lua_module_magnetometer_apply_lua_overrides(lua_State *L, int opts_i
     lua_pop(L, 1);
 }
 
-static int lua_module_magnetometer_new(lua_State *L)
+static int lua_mag_new(lua_State *L)
 {
-    const char *device_name = LUA_MODULE_MAGNETOMETER_DEFAULT_NAME;
+    const char *device_name = LUA_MAG_DEFAULT_DEVICE;
     int opts_idx = 0;
 
     if (lua_isstring(L, 1)) {
@@ -1043,32 +948,46 @@ static int lua_module_magnetometer_new(lua_State *L)
         lua_pop(L, 1);
     }
 
-    if (strlen(device_name) >= LUA_MODULE_MAGNETOMETER_MAX_NAME_LEN) {
+    if (strlen(device_name) >= LUA_MAG_MAX_NAME_LEN) {
         return luaL_error(L, "magnetometer device name too long");
     }
 
-    lua_magnetometer_resolved_cfg_t cfg = { 0 };
+    lua_mag_resolved_cfg_t cfg = { 0 };
     cfg.int_gpio_num = -1;
     cfg.sdo_gpio_num = -1;
 
-    esp_err_t err = lua_module_magnetometer_load_board_defaults(device_name, &cfg);
+    /* Try the requested device, then fall back to legacy "<chip>_sensor" name. */
+    char legacy_name[LUA_MAG_MAX_NAME_LEN];
+    snprintf(legacy_name, sizeof(legacy_name), "%s_sensor", lua_mag_backend.chip_name);
+
+    esp_err_t err = lua_mag_load_board_defaults(device_name, &cfg);
     const char *opened_device_name = device_name;
-    if (err != ESP_OK && strcmp(device_name, LUA_MODULE_MAGNETOMETER_DEFAULT_NAME) == 0) {
-        if (lua_module_magnetometer_load_board_defaults(LUA_MODULE_MAGNETOMETER_LEGACY_NAME, &cfg) == ESP_OK) {
-            opened_device_name = LUA_MODULE_MAGNETOMETER_LEGACY_NAME;
+    if (err == ESP_ERR_INVALID_SIZE) {
+        return luaL_error(L,
+                          "magnetometer.new: board device '%s' config schema mismatch "
+                          "(see error log above for details)", device_name);
+    }
+    if (err != ESP_OK && strcmp(device_name, LUA_MAG_DEFAULT_DEVICE) == 0) {
+        esp_err_t legacy_err = lua_mag_load_board_defaults(legacy_name, &cfg);
+        if (legacy_err == ESP_OK) {
+            opened_device_name = legacy_name;
             ESP_LOGW(TAG, "Default device '%s' not declared, using legacy '%s'",
-                     LUA_MODULE_MAGNETOMETER_DEFAULT_NAME, LUA_MODULE_MAGNETOMETER_LEGACY_NAME);
+                     LUA_MAG_DEFAULT_DEVICE, legacy_name);
+        } else if (legacy_err == ESP_ERR_INVALID_SIZE) {
+            return luaL_error(L,
+                              "magnetometer.new: legacy board device '%s' config schema mismatch",
+                              legacy_name);
         }
     }
 
-    lua_module_magnetometer_apply_lua_overrides(L, opts_idx, &cfg);
+    lua_mag_apply_lua_overrides(L, opts_idx, &cfg);
 
     if (!cfg.has_peripheral) {
         return luaL_error(L, "magnetometer.new: missing 'peripheral' (board declares no '%s', "
                               "and no override given)", device_name);
     }
     if (!cfg.has_i2c_addr) {
-        cfg.i2c_addr = BMM350_I2C_ADSEL_SET_LOW;
+        cfg.i2c_addr = lua_mag_backend.default_addr();
         cfg.has_i2c_addr = true;
         cfg.try_alt_i2c_addr = true;
     }
@@ -1083,71 +1002,71 @@ static int lua_module_magnetometer_new(lua_State *L)
         cfg.sdo_gpio_num = -1;
     }
 
-    if (cfg.i2c_addr != BMM350_I2C_ADSEL_SET_LOW && cfg.i2c_addr != BMM350_I2C_ADSEL_SET_HIGH) {
-        return luaL_error(L, "magnetometer.new: unsupported BMM350 I2C address 0x%02x", cfg.i2c_addr);
+    if (!lua_mag_backend.is_supported_addr((uint8_t)cfg.i2c_addr)) {
+        return luaL_error(L, "magnetometer.new: unsupported %s I2C address 0x%02x",
+                          lua_mag_backend.chip_name, cfg.i2c_addr);
     }
 
-    lua_module_magnetometer_handle_t *handle = NULL;
-    err = lua_module_magnetometer_create_handle(&cfg, &handle);
+    lua_mag_handle_t *handle = NULL;
+    err = lua_mag_create_handle(&cfg, &handle);
     if (err != ESP_OK || handle == NULL) {
         return luaL_error(L, "magnetometer.new failed: %s",
                           esp_err_to_name(err != ESP_OK ? err : ESP_FAIL));
     }
 
-    lua_module_magnetometer_ud_t *ud =
-        (lua_module_magnetometer_ud_t *)lua_newuserdata(L, sizeof(*ud));
+    lua_mag_ud_t *ud = (lua_mag_ud_t *)lua_newuserdata(L, sizeof(*ud));
     memset(ud, 0, sizeof(*ud));
     ud->handle = handle;
     snprintf(ud->device_name, sizeof(ud->device_name), "%s", opened_device_name);
-    lua_module_magnetometer_calibration_reset_state(handle);
-    err = lua_module_magnetometer_load_calibration(ud->device_name, &handle->calibration);
+    lua_mag_calibration_reset_state(handle);
+    err = lua_mag_load_calibration(ud->device_name, &handle->calibration);
     if (err != ESP_OK && err != ESP_ERR_NVS_NOT_FOUND) {
         ESP_LOGW(TAG, "Failed to load calibration for %s: %s",
                  ud->device_name, esp_err_to_name(err));
-        lua_module_magnetometer_calibration_reset_state(handle);
+        lua_mag_calibration_reset_state(handle);
     }
 
-    luaL_getmetatable(L, LUA_MODULE_MAGNETOMETER_METATABLE);
+    luaL_getmetatable(L, LUA_MAG_METATABLE);
     lua_setmetatable(L, -2);
     return 1;
 }
 
 int luaopen_magnetometer(lua_State *L)
 {
-    if (luaL_newmetatable(L, LUA_MODULE_MAGNETOMETER_METATABLE)) {
-        lua_pushcfunction(L, lua_module_magnetometer_gc);
+    if (luaL_newmetatable(L, LUA_MAG_METATABLE)) {
+        lua_pushcfunction(L, lua_mag_gc);
         lua_setfield(L, -2, "__gc");
         lua_pushvalue(L, -1);
         lua_setfield(L, -2, "__index");
-        lua_pushcfunction(L, lua_module_magnetometer_read);
+        lua_pushcfunction(L, lua_mag_read);
         lua_setfield(L, -2, "read");
-        lua_pushcfunction(L, lua_module_magnetometer_read_temperature);
+        lua_pushcfunction(L, lua_mag_read_temperature);
         lua_setfield(L, -2, "read_temperature");
-        lua_pushcfunction(L, lua_module_magnetometer_read_int_status);
+        lua_pushcfunction(L, lua_mag_read_int_status);
         lua_setfield(L, -2, "read_int_status");
-        lua_pushcfunction(L, lua_module_magnetometer_chip_id);
+        lua_pushcfunction(L, lua_mag_chip_id);
         lua_setfield(L, -2, "chip_id");
-        lua_pushcfunction(L, lua_module_magnetometer_calibration_reset);
+        lua_pushcfunction(L, lua_mag_calibration_reset);
         lua_setfield(L, -2, "calibration_reset");
-        lua_pushcfunction(L, lua_module_magnetometer_calibration_add_sample);
+        lua_pushcfunction(L, lua_mag_calibration_add_sample);
         lua_setfield(L, -2, "calibration_add_sample");
-        lua_pushcfunction(L, lua_module_magnetometer_calibration_finish_lua);
+        lua_pushcfunction(L, lua_mag_calibration_finish_lua);
         lua_setfield(L, -2, "calibration_finish");
-        lua_pushcfunction(L, lua_module_magnetometer_calibration_get);
+        lua_pushcfunction(L, lua_mag_calibration_get);
         lua_setfield(L, -2, "calibration_get");
-        lua_pushcfunction(L, lua_module_magnetometer_calibration_set);
+        lua_pushcfunction(L, lua_mag_calibration_set);
         lua_setfield(L, -2, "calibration_set");
-        lua_pushcfunction(L, lua_module_magnetometer_calibration_clear);
+        lua_pushcfunction(L, lua_mag_calibration_clear);
         lua_setfield(L, -2, "calibration_clear");
-        lua_pushcfunction(L, lua_module_magnetometer_name);
+        lua_pushcfunction(L, lua_mag_name);
         lua_setfield(L, -2, "name");
-        lua_pushcfunction(L, lua_module_magnetometer_close);
+        lua_pushcfunction(L, lua_mag_close);
         lua_setfield(L, -2, "close");
     }
     lua_pop(L, 1);
 
     lua_newtable(L);
-    lua_pushcfunction(L, lua_module_magnetometer_new);
+    lua_pushcfunction(L, lua_mag_new);
     lua_setfield(L, -2, "new");
     return 1;
 }

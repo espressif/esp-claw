@@ -20,7 +20,7 @@ or move/click/scroll the mouse.
 ## Start BLE HID
 
 ```json
-{"path":"/fatfs/skills/ble_hid/scripts/start_ble_hid.lua","args":{"name":"esp-claw-hid"},"timeout_ms":10000}
+{"path":"{CUR_SKILL_DIR}/scripts/start_ble_hid.lua","args":{"name":"esp-claw-hid"},"timeout_ms":10000}
 ```
 
 BLE HID is a composite device. Media, keyboard, and mouse reports are all
@@ -31,29 +31,29 @@ available at the same time; the action `type` decides which report is sent.
 Media:
 
 ```json
-{"path":"/fatfs/skills/ble_hid/scripts/send_ble_hid_action.lua","args":{"type":"media","key":"play_pause"},"timeout_ms":5000}
+{"path":"{CUR_SKILL_DIR}/scripts/send_ble_hid_action.lua","args":{"type":"media","key":"play_pause"},"timeout_ms":5000}
 ```
 
 Keyboard key:
 
 ```json
-{"path":"/fatfs/skills/ble_hid/scripts/send_ble_hid_action.lua","args":{"type":"keyboard_key","key":"SPACE"},"timeout_ms":5000}
+{"path":"{CUR_SKILL_DIR}/scripts/send_ble_hid_action.lua","args":{"type":"keyboard_key","key":"SPACE"},"timeout_ms":5000}
 ```
 
 Keyboard combo:
 
 ```json
-{"path":"/fatfs/skills/ble_hid/scripts/send_ble_hid_action.lua","args":{"type":"keyboard_combo","keys":["CTRL","C"]},"timeout_ms":5000}
+{"path":"{CUR_SKILL_DIR}/scripts/send_ble_hid_action.lua","args":{"type":"keyboard_combo","keys":["CTRL","C"]},"timeout_ms":5000}
 ```
 
 Text:
 
 ```json
-{"path":"/fatfs/skills/ble_hid/scripts/send_ble_hid_action.lua","args":{"type":"keyboard_text","text":"hello"},"timeout_ms":5000}
+{"path":"{CUR_SKILL_DIR}/scripts/send_ble_hid_action.lua","args":{"type":"keyboard_text","text":"hello"},"timeout_ms":5000}
 ```
 
 Mouse:
 
 ```json
-{"path":"/fatfs/skills/ble_hid/scripts/send_ble_hid_action.lua","args":{"type":"mouse_move","dx":30,"dy":0},"timeout_ms":5000}
+{"path":"{CUR_SKILL_DIR}/scripts/send_ble_hid_action.lua","args":{"type":"mouse_move","dx":30,"dy":0},"timeout_ms":5000}
 ```

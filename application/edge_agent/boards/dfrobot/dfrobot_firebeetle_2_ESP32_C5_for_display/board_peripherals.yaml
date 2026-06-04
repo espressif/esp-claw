@@ -1,0 +1,28 @@
+version: 1.0.0
+# Peripherals for DFRobot FireBeetle 2 ESP32-C5 (DFR1222) + GDI display interface
+peripherals:
+
+  # GDI display (SPI)
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        mosi_io_num: 24
+        miso_io_num: 25
+        sclk_io_num: 23
+        max_transfer_sz: 307200
+
+  # GDI display backlight (LCD_BL)
+  - name: ledc_backlight
+    type: ledc
+    version: default
+    config:
+      gpio_num: 2
+      speed_mode: LEDC_LOW_SPEED_MODE
+      channel: 0
+      timer_sel: 0
+      duty: 1023
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false

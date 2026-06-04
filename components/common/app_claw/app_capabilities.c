@@ -12,6 +12,9 @@
 #include <stdbool.h>
 #include <string.h>
 
+#if CONFIG_APP_CLAW_CAP_AGENT_MGR
+#include "cap_agent_mgr.h"
+#endif
 #if CONFIG_APP_CLAW_CAP_FILES
 #include "cap_files.h"
 #endif
@@ -60,11 +63,15 @@
 #if CONFIG_APP_CLAW_CAP_TIME
 #include "cap_time.h"
 #endif
+#if CONFIG_APP_CLAW_CAP_HTTP_REQUEST
+#include "cap_http_request.h"
+#endif
 #if CONFIG_APP_CLAW_CAP_WEB_SEARCH
 #include "cap_web_search.h"
 #endif
 #include "claw_cap.h"
 #include "claw_memory.h"
+#include "claw_paths.h"
 #include "esp_check.h"
 #include "esp_log.h"
 
@@ -232,13 +239,6 @@ static esp_err_t app_cap_register_entry(const app_capability_group_entry_t *entr
 }
 
 #if CONFIG_APP_CLAW_CAP_FILES
-static esp_err_t app_cap_prepare_files(const app_claw_config_t *config,
-                                       const app_claw_storage_paths_t *paths)
-{
-    (void)config;
-    return cap_files_set_base_dir(paths->fatfs_base_path);
-}
-
 static esp_err_t app_cap_register_files(const app_claw_config_t *config,
                                         const app_claw_storage_paths_t *paths)
 {
@@ -252,6 +252,18 @@ static esp_err_t app_cap_register_files(const app_claw_config_t *config,
 static esp_err_t app_cap_prepare_im_qq(const app_claw_config_t *config,
                                        const app_claw_storage_paths_t *paths)
 {
+    (void)config;
+    (void)paths;
+    return ESP_OK;
+}
+
+static esp_err_t app_cap_register_im_qq(const app_claw_config_t *config,
+                                        const app_claw_storage_paths_t *paths)
+{
+    ESP_RETURN_ON_ERROR(cap_im_qq_register_group(),
+                        TAG,
+                        "Failed to register QQ group");
+
     ESP_RETURN_ON_ERROR(cap_im_qq_set_attachment_config(&(cap_im_qq_attachment_config_t) {
                             .storage_root_dir = paths->im_attachment_root,
                             .max_inbound_file_bytes = APP_IM_ATTACHMENT_MAX_BYTES,
@@ -272,20 +284,23 @@ static esp_err_t app_cap_prepare_im_qq(const app_claw_config_t *config,
 
     return ESP_OK;
 }
-
-static esp_err_t app_cap_register_im_qq(const app_claw_config_t *config,
-                                        const app_claw_storage_paths_t *paths)
-{
-    (void)config;
-    (void)paths;
-    return cap_im_qq_register_group();
-}
 #endif
 
 #if CONFIG_APP_CLAW_CAP_IM_FEISHU
 static esp_err_t app_cap_prepare_im_feishu(const app_claw_config_t *config,
                                            const app_claw_storage_paths_t *paths)
 {
+    (void)config;
+    (void)paths;
+    return ESP_OK;
+}
+
+static esp_err_t app_cap_register_im_feishu(const app_claw_config_t *config,
+                                            const app_claw_storage_paths_t *paths)
+{
+    ESP_RETURN_ON_ERROR(cap_im_feishu_register_group(),
+                        TAG, "Failed to register Feishu group");
+
     ESP_RETURN_ON_ERROR(cap_im_feishu_set_attachment_config(&(cap_im_feishu_attachment_config_t) {
                             .storage_root_dir = paths->im_attachment_root,
                             .max_inbound_file_bytes = APP_IM_ATTACHMENT_MAX_BYTES,
@@ -301,20 +316,23 @@ static esp_err_t app_cap_prepare_im_feishu(const app_claw_config_t *config,
 
     return ESP_OK;
 }
-
-static esp_err_t app_cap_register_im_feishu(const app_claw_config_t *config,
-                                            const app_claw_storage_paths_t *paths)
-{
-    (void)config;
-    (void)paths;
-    return cap_im_feishu_register_group();
-}
 #endif
 
 #if CONFIG_APP_CLAW_CAP_IM_TG
 static esp_err_t app_cap_prepare_im_tg(const app_claw_config_t *config,
                                        const app_claw_storage_paths_t *paths)
 {
+    (void)config;
+    (void)paths;
+    return ESP_OK;
+}
+
+static esp_err_t app_cap_register_im_tg(const app_claw_config_t *config,
+                                        const app_claw_storage_paths_t *paths)
+{
+    ESP_RETURN_ON_ERROR(cap_im_tg_register_group(),
+                        TAG, "Failed to register Telegram group");
+
     ESP_RETURN_ON_ERROR(cap_im_tg_set_attachment_config(&(cap_im_tg_attachment_config_t) {
                             .storage_root_dir = paths->im_attachment_root,
                             .max_inbound_file_bytes = APP_IM_ATTACHMENT_MAX_BYTES,
@@ -328,14 +346,6 @@ static esp_err_t app_cap_prepare_im_tg(const app_claw_config_t *config,
     }
 
     return ESP_OK;
-}
-
-static esp_err_t app_cap_register_im_tg(const app_claw_config_t *config,
-                                        const app_claw_storage_paths_t *paths)
-{
-    (void)config;
-    (void)paths;
-    return cap_im_tg_register_group();
 }
 #endif
 
@@ -407,10 +417,16 @@ static esp_err_t app_cap_register_scheduler(const app_claw_config_t *config,
 static esp_err_t app_cap_prepare_lua(const app_claw_config_t *config,
                                      const app_claw_storage_paths_t *paths)
 {
+    /* Builtin Lua libraries are baked into the read-only system partition by
+     * sync_lua_module_resources.py, so require() must search there — not under
+     * paths->lua_root_dir (the writable data root). */
+    const char *system_root = claw_paths_get(CLAW_PATH_SYSTEM);
     char path_temp[96];
-    snprintf(path_temp, sizeof(path_temp), "%s/builtin", paths->lua_root_dir);
+
+    ESP_RETURN_ON_FALSE(system_root, ESP_ERR_INVALID_STATE, TAG, "CLAW_PATH_SYSTEM not configured");
+    snprintf(path_temp, sizeof(path_temp), "%s/scripts/builtin", system_root);
     cap_lua_add_package_path_dir(path_temp);
-    snprintf(path_temp, sizeof(path_temp), "%s/builtin/lib", paths->lua_root_dir);
+    snprintf(path_temp, sizeof(path_temp), "%s/scripts/builtin/lib", system_root);
     cap_lua_add_package_path_dir(path_temp);
 
     return app_lua_modules_register(config, paths->fatfs_base_path);
@@ -420,7 +436,8 @@ static esp_err_t app_cap_register_lua(const app_claw_config_t *config,
                                       const app_claw_storage_paths_t *paths)
 {
     (void)config;
-    return cap_lua_register_group(paths->lua_root_dir);
+    (void)paths;
+    return cap_lua_register_group();
 }
 #endif
 
@@ -449,8 +466,7 @@ static esp_err_t app_cap_register_skill_mgr(const app_claw_config_t *config,
                                             const app_claw_storage_paths_t *paths)
 {
     (void)config;
-    (void)paths;
-    return cap_skill_mgr_register_group();
+    return cap_skill_mgr_register_group(paths ? paths->skills_root_dir : NULL);
 }
 #endif
 
@@ -494,6 +510,26 @@ static esp_err_t app_cap_register_llm_inspect(const app_claw_config_t *config,
 }
 #endif
 
+#if CONFIG_APP_CLAW_CAP_HTTP_REQUEST
+static esp_err_t app_cap_prepare_http_request(const app_claw_config_t *config,
+                                              const app_claw_storage_paths_t *paths)
+{
+    (void)paths;
+
+    ESP_RETURN_ON_ERROR(cap_http_request_set_allowlist(config->search_http_allowlist),
+                        TAG, "Failed to set HTTP allowlist");
+    return ESP_OK;
+}
+
+static esp_err_t app_cap_register_http_request(const app_claw_config_t *config,
+                                               const app_claw_storage_paths_t *paths)
+{
+    (void)config;
+    (void)paths;
+    return cap_http_request_register_group();
+}
+#endif
+
 #if CONFIG_APP_CLAW_CAP_WEB_SEARCH
 static esp_err_t app_cap_prepare_web_search(const app_claw_config_t *config,
                                             const app_claw_storage_paths_t *paths)
@@ -509,9 +545,6 @@ static esp_err_t app_cap_prepare_web_search(const app_claw_config_t *config,
         ESP_RETURN_ON_ERROR(cap_web_search_set_tavily_key(config->search_tavily_key),
                             TAG, "Failed to set Tavily search key");
     }
-
-    ESP_RETURN_ON_ERROR(cap_web_search_set_http_allowlist(config->search_http_allowlist),
-                        TAG, "Failed to set HTTP allowlist");
 
     return ESP_OK;
 }
@@ -545,7 +578,20 @@ static esp_err_t app_cap_register_session_mgr(const app_claw_config_t *config,
 }
 #endif
 
+#if CONFIG_APP_CLAW_CAP_AGENT_MGR
+static esp_err_t app_cap_register_agent_mgr(const app_claw_config_t *config,
+                                            const app_claw_storage_paths_t *paths)
+{
+    (void)config;
+    (void)paths;
+    return cap_agent_mgr_register_group();
+}
+#endif
+
 static const app_capability_group_entry_t s_capability_group_entries[] = {
+#if CONFIG_APP_CLAW_CAP_AGENT_MGR
+    { "cap_agent_mgr", "Agent Manager", "Register agent manager cap", true, NULL, app_cap_register_agent_mgr },
+#endif
 #if CONFIG_APP_CLAW_CAP_IM_QQ
     { "cap_im_qq", "QQ", "Register QQ cap", false, app_cap_prepare_im_qq, app_cap_register_im_qq },
 #endif
@@ -562,7 +608,7 @@ static const app_capability_group_entry_t s_capability_group_entries[] = {
     { "cap_im_local", "Local IM", "Register local / Web IM cap", false, app_cap_prepare_im_local, app_cap_register_im_local },
 #endif
 #if CONFIG_APP_CLAW_CAP_FILES
-    { "cap_files", "Files", "Register files cap", true, app_cap_prepare_files, app_cap_register_files },
+    { "cap_files", "Files", "Register files cap", true, NULL, app_cap_register_files },
 #endif
 #if CONFIG_APP_CLAW_CAP_SCHEDULER
     { "cap_scheduler", "Scheduler", "Register scheduler cap", true, NULL, app_cap_register_scheduler },
@@ -591,6 +637,9 @@ static const app_capability_group_entry_t s_capability_group_entries[] = {
 #if CONFIG_APP_CLAW_CAP_LLM_INSPECT
     { "cap_llm_inspect", "LLM Inspect", "Register LLM inspect cap", true, NULL, app_cap_register_llm_inspect },
 #endif
+#if CONFIG_APP_CLAW_CAP_HTTP_REQUEST
+    { "cap_http_request", "HTTP Request", "Register HTTP request cap", true, app_cap_prepare_http_request, app_cap_register_http_request },
+#endif
 #if CONFIG_APP_CLAW_CAP_WEB_SEARCH
     { "cap_web_search", "Web Search", "Register web search cap", true, app_cap_prepare_web_search, app_cap_register_web_search },
 #endif
@@ -603,6 +652,9 @@ static const app_capability_group_entry_t s_capability_group_entries[] = {
 };
 
 static const app_capability_group_info_t s_capability_group_infos[] = {
+#if CONFIG_APP_CLAW_CAP_AGENT_MGR
+    { "cap_agent_mgr", "Agent Manager", true },
+#endif
 #if CONFIG_APP_CLAW_CAP_IM_QQ
     { "cap_im_qq", "QQ", false },
 #endif
@@ -647,6 +699,9 @@ static const app_capability_group_info_t s_capability_group_infos[] = {
 #endif
 #if CONFIG_APP_CLAW_CAP_LLM_INSPECT
     { "cap_llm_inspect", "LLM Inspect", false },
+#endif
+#if CONFIG_APP_CLAW_CAP_HTTP_REQUEST
+    { "cap_http_request", "HTTP Request", false },
 #endif
 #if CONFIG_APP_CLAW_CAP_WEB_SEARCH
     { "cap_web_search", "Web Search", false },

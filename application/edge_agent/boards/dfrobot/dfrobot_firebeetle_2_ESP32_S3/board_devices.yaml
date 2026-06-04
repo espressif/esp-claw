@@ -1,0 +1,74 @@
+version: 1.0.0
+# Devices for DFRobot FireBeetle 2 ESP32-S3 + DFR1092 (ST7365P) display
+devices:
+
+  # OV3660 over DVP 8-bit (FireBeetle 2 ESP32-S3 CAM connector pin table)
+  - name: camera
+    type: camera
+    sub_type: dvp
+    version: default
+    config:
+      dvp_config:
+        reset_io: -1
+        pwdn_io: -1
+        vsync_io: 6
+        de_io: 42
+        pclk_io: 5
+        xclk_io: 45
+        xclk_freq: 20000000
+        data_width: CAM_CTLR_DATA_WIDTH_8
+        data_io:
+          data_io_0: 39
+          data_io_1: 40
+          data_io_2: 41
+          data_io_3: 4
+          data_io_4: 7
+          data_io_5: 8
+          data_io_6: 46
+          data_io_7: 48
+          data_io_8: -1
+          data_io_9: -1
+          data_io_10: -1
+          data_io_11: -1
+          data_io_12: -1
+          data_io_13: -1
+          data_io_14: -1
+          data_io_15: -1
+    peripherals:
+      - name: i2c_master
+        frequency: 100000
+
+  # DFR1092: 3.5" IPS 480x320, controller ST7365P (GDI FPC on FireBeetle 2 ESP32-S3)
+  - name: display_lcd
+    chip: st7365
+    type: display_lcd
+    sub_type: spi
+    version: default
+    dependencies:
+      atanisoft/esp_lcd_ili9488: "^1.1.0"
+    config:
+      mirror_x: false
+      mirror_y: false
+      swap_xy: true
+      invert_color: false
+      x_max: 480
+      y_max: 320
+      io_spi_config:
+        cs_gpio_num: 18
+        dc_gpio_num: 3
+        spi_mode: 0
+        pclk_hz: 40000000
+      lcd_panel_config:
+        reset_gpio_num: 38
+        rgb_ele_order: LCD_RGB_ELEMENT_ORDER_BGR
+        bits_per_pixel: 16
+        data_endian: LCD_RGB_DATA_ENDIAN_BIG
+        vendor_config: NULL
+    peripherals:
+      - name: spi_display
+
+  - name: lcd_brightness
+    type: ledc_ctrl
+    version: default
+    peripherals:
+      - name: ledc_backlight

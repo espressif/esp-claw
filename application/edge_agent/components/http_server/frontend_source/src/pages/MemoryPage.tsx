@@ -1,12 +1,7 @@
 import { createEffect, createSignal, For, onCleanup, Show, type Component } from 'solid-js';
 import { createStore } from 'solid-js/store';
 import { t } from '../i18n';
-import {
-  fetchFileContent,
-  fetchFileList,
-  saveFileContent,
-  type FileEntry,
-} from '../api/client';
+import { fetchFileContent, fetchFileList, saveFileContent, type FileEntry } from '../api/client';
 import { TabShell } from '../components/layout/TabShell';
 import { PageHeader } from '../components/ui/PageHeader';
 import { CollapsibleConfigBlock } from '../components/ui/ConfigBlocks';
@@ -58,7 +53,8 @@ export const MemoryPage: Component = () => {
   const [refreshing, setRefreshing] = createSignal(false);
   const [initialized, setInitialized] = createSignal(false);
 
-  const isDirty = () => MEMORY_FILES.some((file) => state[file.path]!.current !== state[file.path]!.baseline);
+  const isDirty = () =>
+    MEMORY_FILES.some((file) => state[file.path]!.current !== state[file.path]!.baseline);
 
   createEffect(() => {
     markDirty('memory', isDirty());
@@ -112,7 +108,13 @@ export const MemoryPage: Component = () => {
       if (missing) {
         setState(path, { exists: false, baseline: '', current: '', loading: false, error: null });
       } else {
-        setState(path, { exists: true, baseline: content, current: content, loading: false, error: null });
+        setState(path, {
+          exists: true,
+          baseline: content,
+          current: content,
+          loading: false,
+          error: null,
+        });
       }
     } catch (err) {
       setState(path, 'error', (err as Error).message);

@@ -3,9 +3,11 @@ title: Core modules overview
 description: Roles of claw_* framework layers and doc index for contributors and code readers.
 ---
 
-import { LinkCard, CardGrid } from '@astrojs/starlight/components';
+import { CardGrid } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
+import LinkToSource from '@/components/LinkToSource.astro';
 
-Modules under `components/claw_modules/` are ESP-Claw’s **runtime framework**: Agent loop, capability registration and invocation, event routing and automation, context persistence, and related core logic.
+Modules under <LinkToSource relativePath="components/claw_modules/" /> are ESP-Claw’s **runtime framework**: Agent loop, capability registration and invocation, event routing and automation, context persistence, and related core logic.
 Each `cap_*` capability registers and runs through the framework’s unified interfaces without tight coupling to one another. Aside from `claw_core` and `claw_event_router`, other modules may be omitted from the build.
 
 ## Module roles at a glance
@@ -14,9 +16,10 @@ Each `cap_*` capability registers and runs through the framework’s unified int
 |------|--------|
 | [claw_core](./claw-core) | Request queue and background tasks; assembles system / messages / tools context; drives multi-turn LLM and tool calls; writes session history via callbacks and invokes `claw_cap`. |
 | [claw_cap](./claw-cap) | Capability registry: descriptors and lifecycle per group, LLM-visible grouping, unified execution entry, and tools JSON for `claw_core`. |
-| [claw_event_router](./claw-event-router) | Unified event ingress: rule matching, action chains such as `call_cap` / `run_agent` / `run_script` / `send_message`; `run_agent` asynchronously submits to `claw_core` and the response is published via `agent_response` event. Event types are in `claw_event.h` and publishing APIs are in `claw_event_publisher.h`. |
+| [claw_event_router](./claw-event-router) | Unified event ingress: rule matching, action chains such as `call_cap` / `run_agent` / `run_script` / `send_message`; `run_agent` asynchronously submits to `claw_core` and the response is published via `out_message` event. Event types are in `claw_event.h` and publishing APIs are in `claw_event_publisher.h`. |
 | [claw_memory](./claw-memory) | Read/write session history and long-term memory files; acts as a context provider for `claw_core`. |
-| [claw_skill](./claw-skill) | Skills tree, `SKILL.md` metadata rendering, per-session activation persistence, and injection of “catalog + activated Skill docs” into the model context. |
+| [claw_skill](./claw-skill) | Skills tree, `SKILL.md` metadata rendering, per-session activation persistence, and injection of the Skills catalog list into the model. Activated Skill documents are injected into conversation history through `activate_skill` tool results. |
+| [claw_ramfs](./claw-ramfs) | RAM-backed file system that provides high-speed memory file storage through VFS and supports bidirectional sync with FATFS. |
 
 ## Per-module docs
 
@@ -26,4 +29,5 @@ Each `cap_*` capability registers and runs through the framework’s unified int
   <LinkCard title="claw_event_router" href="./claw-event-router" description="Event ingress, automation rules, outbound channel bindings" />
   <LinkCard title="claw_memory" href="./claw-memory" description="Session history and long-term memory file I/O" />
   <LinkCard title="claw_skill" href="./claw-skill" description="Skills directory and per-session activation state" />
+  <LinkCard title="claw_ramfs" href="./claw-ramfs" description="RAM file system: high-speed memory storage and FATFS sync" />
 </CardGrid>

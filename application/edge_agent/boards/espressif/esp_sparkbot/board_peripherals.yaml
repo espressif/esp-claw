@@ -1,0 +1,70 @@
+version: 1.0.0
+# Peripherals Configuration for ESP32-S3 SparkBot
+
+peripherals:
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 4
+        scl: 5
+
+  # SparkBot LCD: 1.3" ST7789, 240x240, SPI3.
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI3_HOST
+        data0_io_num: 47
+        sclk_io_num: 21
+        max_transfer_sz: 115200
+
+  # LCD backlight: GPIO46, active high.
+  - name: ledc_backlight
+    type: ledc
+    role: none
+    config:
+      gpio_num: 46
+      freq_hz: 5000
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false
+
+  # SparkBot audio codec wiring from bsp_extra.
+  - name: i2s_audio_out
+    type: i2s
+    role: master
+    format: std-out
+    config: &i2s0_config
+      port: 0
+      sample_rate_hz: 16000
+      clk_src: I2S_CLK_SRC_DEFAULT
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_MONO
+      slot_mask: I2S_STD_SLOT_LEFT
+      ws_width: 16
+      pins:
+        mclk: 45
+        bclk: 39
+        ws: 41
+        dout: 42
+        din: 40
+
+  - name: i2s_audio_in
+    type: i2s
+    role: master
+    format: std-in
+    config: *i2s0_config
+
+  - name: gpio_led
+    type: gpio
+    role: io
+    config:
+      pin: 3
+      mode: GPIO_MODE_OUTPUT
+      default_level: 0

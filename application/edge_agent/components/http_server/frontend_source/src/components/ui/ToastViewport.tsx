@@ -15,8 +15,8 @@ export function ToastViewport() {
                 toast.kind === 'success'
                   ? 'bg-[var(--color-green-dim)] border-[rgba(104,211,145,0.2)] text-[var(--color-green)]'
                   : toast.kind === 'error'
-                  ? 'bg-[var(--color-accent-dim)] border-[var(--color-border-accent)] text-[var(--color-danger)]'
-                  : 'bg-[var(--color-bg-card)] border-[var(--color-border-subtle)] text-[var(--color-text-primary)]',
+                    ? 'bg-[var(--color-accent-dim)] border-[var(--color-border-accent)] text-[var(--color-danger)]'
+                    : 'bg-[var(--color-bg-card)] border-[var(--color-border-subtle)] text-[var(--color-text-primary)]',
               ].join(' ')}
               role="status"
             >

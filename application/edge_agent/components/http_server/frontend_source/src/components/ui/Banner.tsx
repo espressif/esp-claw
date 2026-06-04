@@ -21,7 +21,9 @@ export const Banner: Component<BannerProps> = (props) => {
           kind() === 'error'
             ? 'bg-[var(--color-accent-dim)] border-[var(--color-border-accent)] text-[var(--color-danger)]'
             : '',
-          kind() === 'info' ? 'bg-white/[0.03] border-[var(--color-border-subtle)] text-[var(--color-text-secondary)]' : '',
+          kind() === 'info'
+            ? 'bg-white/[0.03] border-[var(--color-border-subtle)] text-[var(--color-text-secondary)]'
+            : '',
           props.class ?? '',
         ]
           .filter(Boolean)

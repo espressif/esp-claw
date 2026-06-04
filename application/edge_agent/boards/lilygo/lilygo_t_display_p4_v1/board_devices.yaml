@@ -1,0 +1,124 @@
+version: 1.0.0
+
+devices:
+  - name: gpio_expander_xl9535
+    chip: xl9535
+    type: gpio_expander
+    version: default
+    dependencies:
+      espressif/esp_io_expander_tca95xx_16bit:
+        version: "*"
+        require: public
+    config:
+      max_pins: 16
+      output_io_mask: [0, 1, 2, 3, 5, 6, 10, 11, 14, 15]
+      output_io_level_mask: [0, 1, 1, 1, 1, 1, 0, 1, 1, 0]
+    peripherals:
+      - name: i2c_port0
+        i2c_addr: [0x40]
+
+  - name: display_lcd
+    chip: t_display_p4_lcd
+    type: display_lcd
+    sub_type: dsi
+    depends_on: gpio_expander_xl9535
+    version: default
+    config:
+      need_reset: false
+      reset_gpio_num: -1
+      rgb_ele_order: LCD_RGB_ELEMENT_ORDER_RGB
+      data_endian: LCD_RGB_DATA_ENDIAN_LITTLE
+      bits_per_pixel: 16
+      reset_active_high: 0
+      dbi_config:
+        virtual_channel: 0
+        lcd_cmd_bits: 8
+        lcd_param_bits: 8
+      dpi_config:
+        virtual_channel: 0
+        dpi_clk_src: MIPI_DSI_DPI_CLK_SRC_DEFAULT
+        dpi_clock_freq_mhz: 60
+        pixel_format: LCD_COLOR_PIXEL_FORMAT_RGB565
+        in_color_format: LCD_COLOR_FMT_RGB565
+        out_color_format: LCD_COLOR_FMT_RGB565
+        num_fbs: 1
+        flags:
+          use_dma2d: true
+          disable_lp: false
+        video_timing:
+          h_size: 540
+          v_size: 1168
+          hsync_pulse_width: 28
+          hsync_back_porch: 26
+          hsync_front_porch: 20
+          vsync_pulse_width: 2
+          vsync_back_porch: 22
+          vsync_front_porch: 200
+    peripherals:
+      - name: ldo_mipi
+      - name: dsi_display
+
+  - name: lcd_touch
+    chip: t_display_p4_touch
+    type: lcd_touch
+    sub_type: i2c
+    depends_on: [gpio_expander_xl9535, display_lcd]
+    version: default
+    dependencies:
+      esp_lcd_touch:
+        version: "*"
+        require: public
+    config:
+      io_i2c_config:
+        lcd_cmd_bits: 8
+        lcd_param_bits: 0
+        scl_speed_hz: 400000
+        flags:
+          disable_control_phase: true
+      touch_config:
+        x_max: 540
+        y_max: 1168
+        rst_gpio_num: -1
+        int_gpio_num: -1
+    peripherals:
+      - name: i2c_port0
+        i2c_addr: [0xba, 0x28, 0xd0]
+
+  - name: lcd_brightness
+    type: ledc_ctrl
+    depends_on: [gpio_expander_xl9535, display_lcd]
+    version: default
+    config:
+      default_percent: 100
+    peripherals:
+      - name: ledc_backlight
+
+  - name: audio_dac
+    chip: es8311
+    type: audio_codec
+    version: default
+    config:
+      dac_enabled: true
+      dac_max_channel: 1
+      dac_channel_mask: "1"
+      mclk_enabled: true
+    peripherals:
+      - name: i2s_audio_out
+      - &es8311_i2c
+        name: i2c_port1
+        address: 0x30
+        frequency: 400000
+
+  - name: audio_adc
+    chip: es8311
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      adc_max_channel: 2
+      adc_channel_mask: "11"
+      adc_channel_labels: [RE, FC]
+      mclk_enabled: true
+    peripherals:
+      - name: i2s_audio_in
+      - *es8311_i2c

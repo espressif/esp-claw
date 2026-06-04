@@ -15,6 +15,12 @@ from lua_sync_common import collect_build_component_sources, write_depfile, writ
 
 console = LuaSyncConsole()
 
+# Docs are bundled into the generated builtin_lua_modules skill so they can be
+# addressed at runtime via {CUR_SKILL_DIR}/scripts/docs/<name>. skill_builder
+# picks them up from this source-tree location and syncs them into the image.
+GENERATED_SKILL_DIR = Path(__file__).resolve().parents[1] / 'skills' / 'builtin_lua_modules'
+DOCS_DEST_DIR = GENERATED_SKILL_DIR / 'scripts' / 'docs'
+
 
 def is_self_component(source: ComponentSource) -> bool:
     return source.name == 'lua_module_builder'
@@ -28,9 +34,8 @@ def iter_module_doc_mappings(source: ComponentSource) -> list[tuple[str, Path]]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Sync Lua module markdown docs into the FATFS image.')
+    parser = argparse.ArgumentParser(description='Sync Lua module markdown docs into the builtin_lua_modules skill.')
     parser.add_argument('--build-dir', required=True)
-    parser.add_argument('--docs-output-dir', required=True)
     parser.add_argument('--manifest-path', required=True)
     parser.add_argument('--stamp-path', required=True)
     parser.add_argument('--depfile', required=True)
@@ -65,7 +70,7 @@ def collect_lua_module_doc_entries(sources: list[ComponentSource]) -> list[dict]
 def main() -> int:
     args = parse_args()
     build_dir = Path(args.build_dir).resolve()
-    output_dir = Path(args.docs_output_dir).resolve()
+    output_dir = DOCS_DEST_DIR.resolve()
     manifest_path = Path(args.manifest_path).resolve()
     stamp_path = Path(args.stamp_path).resolve()
     depfile_path = Path(args.depfile).resolve()

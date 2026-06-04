@@ -1,6 +1,14 @@
 idf_component_register(
     SRCS
         "src/claw_core.c"
+        "src/claw_paths.c"
+        "src/claw_core_agent_loop.c"
+        "src/claw_core_context.c"
+        "src/claw_core_control.c"
+        "src/claw_core_events.c"
+        "src/claw_core_messages.c"
+        "src/claw_core_context_persist.c"
+        "src/claw_core_utils.c"
         "src/claw_task.c"
         "src/claw_core_llm.c"
         "src/llm/claw_llm_runtime.c"
@@ -17,7 +25,6 @@ idf_component_register(
         http_reuse
         esp-tls
         freertos
-        json
         mbedtls
     PRIV_REQUIRES
         claw_event_router

@@ -34,7 +34,7 @@ type TabId =
   | 'basic'
   | 'llm'
   | 'im'
-  | 'search'
+  | 'webreq'
   | 'memory'
   | 'webim'
   | 'capabilities'
@@ -129,7 +129,7 @@ const PROVIDER_PRESETS: Record<ProviderKey, ProviderPreset> = {
     llm_default_image_max_bytes: '524288',
     llm_max_tokens_field: 'max_completion_tokens',
     llm_supports_tools: 'true',
-    llm_supports_vision: 'true',
+    llm_supports_vision: 'false',
     llm_image_remote_url_only: 'false',
     llm_model: 'deepseek-v4-pro',
   },
@@ -295,10 +295,7 @@ function isWechatConfiguredLikeIm(form: ImForm): boolean {
   const normalizedAccountId = accountId.toLowerCase();
 
   const onlyDefaultPrefill =
-    !token &&
-    !!baseUrl &&
-    !!cdnBaseUrl &&
-    (!accountId || normalizedAccountId === 'default');
+    !token && !!baseUrl && !!cdnBaseUrl && (!accountId || normalizedAccountId === 'default');
 
   if (onlyDefaultPrefill) return false;
   return !!token || !!accountId;
@@ -409,9 +406,7 @@ const WechatWizardPanel: Component<{
 
   const statusText = () => {
     const s = status()?.status;
-    return s
-      ? ((t('wechatLoginStatusPrefix') as string) + s)
-      : (t('wechatLoginStatus') as string);
+    return s ? (t('wechatLoginStatusPrefix') as string) + s : (t('wechatLoginStatus') as string);
   };
 
   return (
@@ -591,9 +586,7 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
       requiredFields.push([llmForm.llm_max_tokens_field, t('llmMaxTokensField') as string]);
     }
 
-    const missing = requiredFields
-      .filter(([value]) => !value.trim())
-      .map(([, label]) => label);
+    const missing = requiredFields.filter(([value]) => !value.trim()).map(([, label]) => label);
 
     if (missing.length > 0) {
       const message = (t('llmValidationRequiredFields') as string).replace(
@@ -698,14 +691,14 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
           ])
         : null) ??
       (selected.has('telegram')
-        ? validatePlatform(t('imTelegramTitle') as string, [
+        ? (validatePlatform(t('imTelegramTitle') as string, [
             [imForm.tg_bot_token, t('tgBotToken') as string],
           ]) ??
           (!isTelegramToken(imForm.tg_bot_token.trim())
             ? (t('imValidationInvalidField') as string)
                 .replace('{platform}', t('imTelegramTitle') as string)
                 .replace('{field}', t('tgBotToken') as string)
-            : null)
+            : null))
         : null);
 
     if (message) {
@@ -1061,7 +1054,11 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
                           <div class="flex flex-wrap gap-2">
                             <For each={remainingPlatforms()}>
                               {(id) => (
-                                <Button size="sm" variant="secondary" onClick={() => addPlatform(id)}>
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  onClick={() => addPlatform(id)}
+                                >
                                   + {platformLabel(id)}
                                 </Button>
                               )}
@@ -1094,18 +1091,20 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
                       type="password"
                       label={
                         <>
-                          {t('searchTavilyKey')}
+                          {t('webreqTavilyKey')}
                           <LabelLink href={TAVILY_API_KEY_URL}>
                             {t('llmProviderConsole') as string} ↗
                           </LabelLink>
                         </>
                       }
                       value={searchForm.search_tavily_key}
-                      onInput={(event) => setSearchForm('search_tavily_key', event.currentTarget.value)}
+                      onInput={(event) =>
+                        setSearchForm('search_tavily_key', event.currentTarget.value)
+                      }
                     />
                     <TextInput
-                      label={t('searchHttpAllowlist')}
-                      placeholder={t('searchHttpAllowlistPlaceholder') as string}
+                      label={t('webreqHttpAllowlist')}
+                      placeholder={t('webreqHttpAllowlistPlaceholder') as string}
                       value={searchForm.search_http_allowlist}
                       onInput={(event) =>
                         setSearchForm('search_http_allowlist', event.currentTarget.value)
@@ -1133,7 +1132,9 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
             </div>
             <div class="flex flex-wrap items-center justify-end gap-2">
               <Show when={step() < 3}>
-                <span class="text-[0.82rem] text-[var(--color-text-muted)]">{t('setupSkipHint')}</span>
+                <span class="text-[0.82rem] text-[var(--color-text-muted)]">
+                  {t('setupSkipHint')}
+                </span>
               </Show>
               <Show when={step() < 3}>
                 <Button variant="secondary" onClick={next} disabled={saving()}>

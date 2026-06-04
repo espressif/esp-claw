@@ -7,6 +7,7 @@ import { getHomeContent } from "@/site/home-i18n";
 
 import EspressifLogoHorizontal from "@/assets/logos/espressif-logo-horizontal.svg";
 import CloudToClaw from "@/assets/images/cloud-to-claw.png";
+import ArchitectureDiagram from "@/assets/images/architecture-diagram-dark.webp";
 
 import { Zap } from "@lucide/astro"
 import ClawLogoHorizontalRaw from "@/assets/logos/logo-horizontal.svg?raw";
@@ -611,6 +612,63 @@ const flashHref = localeHref(lang, "flash");
       }
     }
 
+    /* ── Technological Advantages ── */
+    .tech-advantages {
+      padding: 5rem 2rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: center;
+      background: var(--bg-base);
+    }
+
+    .tech-advantages-inner {
+      max-width: 1120px;
+      width: 100%;
+      text-align: center;
+    }
+
+    .tech-advantages-inner h2 {
+      font-size: clamp(1.4rem, 2vw, 1.7rem);
+      font-weight: 700;
+      letter-spacing: -0.025em;
+      color: var(--text-primary);
+      margin: 0 0 2rem;
+    }
+
+    .tech-advantages-figure {
+      margin: 0;
+    }
+
+    .tech-advantages-figure img {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+
+    .tech-advantages-note {
+      margin-top: 0.85rem;
+      color: var(--text-muted);
+      font-size: 0.78rem;
+      line-height: 1.55;
+      text-align: center;
+    }
+
+    @media (max-width: 900px) {
+      .tech-advantages {
+        padding: 3.5rem 1.25rem;
+      }
+
+      .tech-advantages-inner h2 {
+        text-align: left;
+        margin-bottom: 1.5rem;
+        font-size: clamp(1.25rem, 2vw, 1.4rem);
+      }
+
+      .tech-advantages-note {
+        text-align: left;
+      }
+    }
+
     /* ── Feat and Demo ── */
     .feat-and-demo {
       display: grid;
@@ -860,6 +918,237 @@ const flashHref = localeHref(lang, "flash");
         transform: translateY(0) scale(1);
       }
     }
+
+    /* ── Video Cases ── */
+    .video-cases {
+      padding: 5rem 0 5rem;
+      border-bottom: 1px solid var(--border);
+      overflow: hidden;
+    }
+
+    .video-cases-header {
+      padding: 0 clamp(1.5rem, 5vw, 4rem);
+      margin-bottom: 2.5rem;
+      display: flex;
+      align-items: baseline;
+      justify-content: center;
+      gap: 1rem;
+    }
+
+    .video-cases-header h2 {
+      font-size: clamp(1.3rem, 2.2vw, 1.7rem);
+      font-weight: 700;
+      letter-spacing: -0.025em;
+      color: var(--text-primary);
+      margin: 0;
+    }
+
+    .video-cases-track-wrap {
+      position: relative;
+    }
+
+    .video-cases-track-wrap::before,
+    .video-cases-track-wrap::after {
+      content: "";
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: clamp(1.5rem, 5vw, 4rem);
+      z-index: 2;
+      pointer-events: none;
+    }
+
+    .video-cases-track-wrap::before {
+      left: 0;
+      background: linear-gradient(to right, var(--bg-base), transparent);
+    }
+
+    .video-cases-track-wrap::after {
+      right: 0;
+      background: linear-gradient(to left, var(--bg-base), transparent);
+    }
+
+    .video-cases-track {
+      display: flex;
+      gap: 1.25rem;
+      overflow-x: auto;
+      overflow-y: visible;
+      padding: 0.25rem clamp(1.5rem, 5vw, 4rem) 1.25rem;
+      scroll-snap-type: x mandatory;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+
+    .video-cases-track.is-auto-scrolling {
+      scroll-snap-type: none;
+    }
+
+    .video-cases-track::-webkit-scrollbar {
+      display: none;
+    }
+
+    .vc-item {
+      flex: 0 0 clamp(240px, 30vw, 340px);
+      scroll-snap-align: start;
+      display: flex;
+      flex-direction: column;
+      text-decoration: none;
+      color: inherit;
+      border: 1px solid var(--border);
+      background: var(--bg-surface);
+      overflow: hidden;
+      transition:
+        border-color 0.3s ease,
+        background 0.3s ease,
+        box-shadow 0.35s ease;
+      position: relative;
+      cursor: pointer;
+    }
+
+    .vc-item::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--accent);
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+      z-index: 2;
+    }
+
+    .vc-item:hover {
+      border-color: var(--border-accent);
+      background: var(--bg-card);
+      box-shadow: 0 12px 28px -16px rgba(232, 54, 45, 0.3),
+                  0 4px 10px -5px rgba(0, 0, 0, 0.2);
+    }
+
+    .vc-item:hover::before {
+      transform: scaleX(1);
+    }
+
+    .vc-thumb {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      position: relative;
+      overflow: hidden;
+      background: var(--bg-base);
+      flex-shrink: 0;
+    }
+
+    .vc-thumb img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1),
+                  opacity 0.3s ease;
+    }
+
+    .vc-thumb img[data-loaded="false"] {
+      opacity: 0;
+    }
+
+    .vc-thumb img[data-loaded="true"] {
+      opacity: 1;
+    }
+
+    .vc-placeholder {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(
+        135deg,
+        color-mix(in srgb, var(--bg-surface) 90%, var(--accent) 10%) 0%,
+        var(--bg-surface) 100%
+      );
+      transition: opacity 0.3s ease;
+    }
+
+    .vc-placeholder svg {
+      width: 2.5rem;
+      height: 2.5rem;
+      color: var(--border-accent);
+      opacity: 0.5;
+    }
+
+    .vc-thumb img[data-loaded="true"] + .vc-placeholder {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .vc-thumb-overlay {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        180deg,
+        transparent 50%,
+        rgba(10, 11, 14, 0.5) 100%
+      );
+      pointer-events: none;
+      transition: opacity 0.3s ease;
+      z-index: 1;
+    }
+
+    .vc-play-badge {
+      position: absolute;
+      bottom: 0.7rem;
+      right: 0.7rem;
+      width: 2rem;
+      height: 2rem;
+      border-radius: 50%;
+      background: rgba(10, 11, 14, 0.6);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      z-index: 2;
+      opacity: 0;
+      transition: opacity 0.3s ease, background 0.3s ease;
+    }
+
+    .vc-play-badge svg {
+      width: 0.75rem;
+      height: 0.75rem;
+    }
+
+    .vc-item:hover .vc-play-badge {
+      opacity: 1;
+      background: var(--accent);
+      border-color: transparent;
+    }
+
+    .vc-caption {
+      padding: 0.85rem 1rem 1rem;
+      font-size: 0.88rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      line-height: 1.4;
+      letter-spacing: -0.01em;
+      transition: color 0.3s ease;
+    }
+
+    .vc-item:hover .vc-caption {
+      color: var(--text-primary);
+    }
+
+    @media (max-width: 900px) {
+      .video-cases {
+        padding: 3.5rem 0 3.5rem;
+      }
+
+      .vc-item {
+        flex: 0 0 min(78vw, 300px);
+      }
+    }
   </style>
 
   <div class="first-fold">
@@ -950,6 +1239,18 @@ const flashHref = localeHref(lang, "flash");
     </div>
   </section>
 
+  <section class="tech-advantages">
+    <div class="tech-advantages-inner">
+      <h2>{h.techAdvantagesTitle}</h2>
+      <figure class="tech-advantages-figure">
+        <img src={ArchitectureDiagram.src} alt={h.techAdvantagesTitle} loading="lazy" />
+        <figcaption class="tech-advantages-note">
+          All logos and product names are the property of their respective owners and are used for identification purposes only.
+        </figcaption>
+      </figure>
+    </div>
+  </section>
+
   <section class="feat-and-demo">
     {h.featAndDemos.map((fad, idx) => (
       <div class="fad-item">
@@ -985,6 +1286,49 @@ const flashHref = localeHref(lang, "flash");
     ))}
   </section>
 
+
+  <section class="video-cases">
+    <div class="video-cases-header">
+      <h2>{h.videoCasesTitle}</h2>
+    </div>
+    <div class="video-cases-track-wrap">
+      <div class="video-cases-track">
+        {h.videoCases.map((vc) => (
+          <a
+            class="vc-item"
+            href={vc.videoUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-has-thumb={vc.thumbnail ? "true" : undefined}
+          >
+            <div class="vc-thumb">
+              {vc.thumbnail && (
+                <img
+                  src={vc.thumbnail}
+                  alt={vc.title}
+                  loading="lazy"
+                  data-loaded="false"
+                  onload="this.dataset.loaded='true'"
+                />
+              )}
+              <div class="vc-placeholder" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <polygon points="5 3 19 12 5 21 5 3" />
+                </svg>
+              </div>
+              <div class="vc-thumb-overlay" aria-hidden="true"></div>
+              <div class="vc-play-badge" aria-hidden="true">
+                <svg viewBox="0 0 12 12" fill="currentColor">
+                  <path d="M3 1.5v9l7.5-4.5L3 1.5z" />
+                </svg>
+              </div>
+            </div>
+            <div class="vc-caption">{vc.title}</div>
+          </a>
+        ))}
+      </div>
+    </div>
+  </section>
 
   <div class="final-cta">
     <a href={docsHref} class="final-cta-link">
@@ -1127,6 +1471,87 @@ const flashHref = localeHref(lang, "flash");
           else playVideo();
         });
       }
+    });
+  </script>
+
+  <script>
+    document.querySelectorAll<HTMLElement>('.video-cases-track').forEach((track) => {
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+      const items = Array.from(track.children) as HTMLElement[];
+      if (items.length < 2) return;
+
+      const initialWidth = track.scrollWidth;
+      if (initialWidth <= track.clientWidth) return;
+
+      items.forEach((item) => {
+        const clone = item.cloneNode(true) as HTMLElement;
+        clone.setAttribute('aria-hidden', 'true');
+        clone.setAttribute('tabindex', '-1');
+        clone.querySelectorAll<HTMLElement>('a, button, input, select, textarea, [tabindex]').forEach((el) => {
+          el.setAttribute('tabindex', '-1');
+        });
+
+        track.append(clone);
+      });
+
+      const firstItem = items[0];
+      const firstClone = track.children[items.length] as HTMLElement | undefined;
+      const loopWidth = firstItem && firstClone
+        ? firstClone.offsetLeft - firstItem.offsetLeft
+        : initialWidth;
+
+      if (loopWidth <= 0) return;
+
+      track.classList.add('is-auto-scrolling');
+
+      const speed = 28;
+      let paused = false;
+      let rafId = 0;
+      let lastTs = 0;
+      let resumeTimer = 0;
+
+      const pause = () => {
+        paused = true;
+        if (resumeTimer) window.clearTimeout(resumeTimer);
+      };
+
+      const resume = (delay = 0) => {
+        if (resumeTimer) window.clearTimeout(resumeTimer);
+        resumeTimer = window.setTimeout(() => {
+          paused = false;
+        }, delay);
+      };
+
+      const step = (ts: number) => {
+        if (!lastTs) lastTs = ts;
+        const delta = ts - lastTs;
+        lastTs = ts;
+
+        if (!paused) {
+          track.scrollLeft += (speed * delta) / 1000;
+          if (track.scrollLeft >= loopWidth) {
+            track.scrollLeft -= loopWidth;
+          }
+        }
+
+        rafId = window.requestAnimationFrame(step);
+      };
+
+      track.addEventListener('pointerenter', pause);
+      track.addEventListener('pointerleave', () => resume());
+      track.addEventListener('focusin', pause);
+      track.addEventListener('focusout', () => resume());
+      track.addEventListener('touchstart', pause, { passive: true });
+      track.addEventListener('touchend', () => resume(2500), { passive: true });
+      track.addEventListener('wheel', () => resume(1500), { passive: true });
+
+      rafId = window.requestAnimationFrame(step);
+
+      window.addEventListener('pagehide', () => {
+        if (resumeTimer) window.clearTimeout(resumeTimer);
+        window.cancelAnimationFrame(rafId);
+      }, { once: true });
     });
   </script>
 </SiteShell>

@@ -30,6 +30,16 @@ and talking to multiple devices on the same bus.
 Omit it (or pass `nil`) for devices that have no internal address. Any error
 raises a Lua error, so wrap calls in `pcall` if you want to handle failures.
 
+## Reusable libraries
+- `ssd1306`: Pure-Lua SSD1306 OLED helper for I2C panels. Use
+  `local ssd1306 = require("ssd1306")` after opening an I2C device handle.
+- `lib_si12t_touch`: Pure-Lua Si12T 12-channel capacitive touch helper. Use
+  `local si12t_touch = require("lib_si12t_touch")`; it can reuse an existing
+  I2C bus or create one from `port`, `sda`, and `scl` options.
+
+See `scripts/builtin/lib/ssd1306.md` and
+`scripts/builtin/lib/lib_si12t_touch.md` for the full library APIs.
+
 ## Example: scan the bus
 ```lua
 local i2c = require("i2c")

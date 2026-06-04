@@ -1,0 +1,69 @@
+# Peripherals Configuration for ESP32-S31-Korvo1
+peripherals:
+  # Shared control bus for ES8389. Schematic nets: GPIO0 -> CDATA, GPIO1 -> CCLK.
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 0
+        scl: 1
+
+  # ES8389 audio output path. Schematic nets:
+  # I2S_MCLK=GPIO2, I2S_SCLK=GPIO3, I2S_LRCK=GPIO4, I2S_DSDIN=GPIO5.
+  - name: i2s_audio_out
+    type: i2s
+    role: master
+    format: std-out
+    config: &i2s_audio_config
+      port: 0
+      sample_rate_hz: 48000
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_STEREO
+      slot_mask: I2S_STD_SLOT_BOTH
+      ws_width: 16
+      pins:
+        mclk: -1
+        bclk: 3
+        ws: 4
+        dout: 5
+        din: 6
+
+  # ES8389 audio input path. Schematic net: I2S_DSOUT=GPIO6.
+  - name: i2s_audio_in
+    type: i2s
+    role: master
+    format: std-in
+    config: *i2s_audio_config
+
+  # NS4150 left/right speaker amplifier enable. Schematic net: PA_CTRL=GPIO7.
+  - name: gpio_pa_control
+    type: gpio
+    role: io
+    config:
+      pin: 7
+      mode: GPIO_MODE_OUTPUT
+      default_level: 0
+
+  # SD card power/control. S31 BSP drives GPIO39 low to enable the SD path.
+  - name: gpio_sd_power
+    type: gpio
+    role: io
+    config:
+      pin: 39
+      mode: GPIO_MODE_OUTPUT
+      default_level: 1
+
+  # # ADC button ladder. Schematic net: ADC_KEY=GPIO42, ESP32-S31 ADC1 channel 0.
+  # - name: adc_oneshot
+  #   type: adc
+  #   role: oneshot
+  #   config:
+  #     unit_id: ADC_UNIT_1
+  #     clk_src: ADC_DIGI_CLK_SRC_DEFAULT
+  #     channel_id: 0
+  #     atten: ADC_ATTEN_DB_12
+  #     bit_width: ADC_BITWIDTH_12

@@ -1,88 +1,158 @@
 ---
-title: Web 配置
-description: 通过局域网浏览器修改 Wi‑Fi、LLM、IM 与文件，无需重新编译。
+title: Web 控制台
+description: 通过局域网浏览器发起聊天、查看状态与修改配置。
 ---
 
-import { Aside, Steps, LinkCard } from '@astrojs/starlight/components';
+import { Aside, Steps, Badge } from '@astrojs/starlight/components';
+import { Code, LinkCard } from 'starlight-theme-nova/components';
+import LinkToSource from '@/components/LinkToSource.astro';
+export const RestartBadge = () => <Badge text="重启生效" variant="tip" />;
+export const ApiBaseUrlHighlight = ['https://api.openai.com/v1', 'https://api.anthropic.com/v1', 'https://api.deepseek.com'];
+export const ApiBaseUrlExample = `https://api.openai.com/v1/chat/completions
+https://api.anthropic.com/v1/messages
+https://api.deepseek.com`;
 
-`edge_agent` 在 Wi‑Fi 栈就绪后会启动一个轻量 HTTP 服务，托管配置页静态资源，并提供 JSON API。实现位于 `application/edge_agent/components/http_server/`。
+`edge_agent` 在 Wi‑Fi 栈就绪后会启动 Web 控制台，提供聊天、查看状态与修改配置功能。
+Web 控制台的实现位于 <LinkToSource relativePath="application/edge_agent/components/http_server/" />。
 
-## 打开配置页
+<Aside type="caution" title="安全提示">
+  **`edge_agent` 不是为生产环境准备的。`edge_agent` 的 Web 控制台假定你在可信的环境中运行，并且会返回几乎所有信息。**
 
-电脑或手机需与开发板在 **同一局域网**，或连接至**开发板提供的 SoftAP 热点**（`edge_agent` 中默认的 SSID 为 `esp-claw-xxxx`，`xxxx` 为设备 MAC 地址）。
+  - **不要把 Web 配置页端口暴露到公网。**
+  - **SoftAP 保留的控制台也有完整权限，请注意配置密码或启用自动关闭 SoftAP 功能。**
+  - 服务跑在局域网，默认无 HTTPS。
+  - 配置页与 NVS 中存有机密令牌，请勿把导出的配置或整机 NVS 转储随意公开。
+  - 配置页可以下载文件系统中几乎所有内容。
+
+  查看 [GitHub issue #41](https://github.com/espressif/esp-claw/issues/41) 了解更多信息。
+</Aside>
+
+## 打开 Web 控制台
+
+电脑或手机需与开发板在 **同一局域网**，或连接至**开发板提供的 SoftAP 热点**（`edge_agent` 中默认的 SSID 为 `esp-claw-XXXXXX`，`XXXXXX` 为设备 MAC 地址）。
 
 在浏览器访问：
 [http://esp-claw.local/](http://esp-claw.local/)
 或
 `http://<设备IP>/`
 
-
 <Aside type="note">
   - 若打不开 `.local` 域名，请改用串口日志里打印的 IP，或路由器后台查看 DHCP 分配。
   - 默认端口 **80**；若修改默认端口或 mDNS 域名，需访问修改后端口/域名。
 </Aside>
 
-页面加载后会自动加载当前配置。页面支持多语言切换，以及显示 Wi-Fi 连接状态、设备 IP 等信息。
+## 系统状态
 
-## 页面布局
+系统状态页面可以查看 ESP-Claw 的基本状态，包括网络信息、IP 地址、Wi-Fi 模式、SoftAP SSID 和 IP 等。
 
-配置页分为三个 Tab：
+## 在线聊天
 
-- **Configuration**：系统配置（Wi-Fi、LLM、IM、搜索、时区等）
-- **Memory**：记忆文件管理（长期记忆与画像记忆）
-- **File Manager**：文件系统管理
+在线聊天功能可在不配置额外 IM 通道时与 ESP-Claw 互动。
+在线聊天同样支持使用各项功能，以及通过消息触发 Event Router 能力。例如，你可以使用 `/new` 新建 Session 并切换。
 
-### 系统配置
+在线聊天暂不支持接收图片等附件。
 
-#### LLM 供应商选择
-
-配置页提供 **LLM Provider** 下拉菜单，选择后会自动填写对应的 `Profile`、`Base URL`、`Backend Type` 和 `Auth Type`：
-
-| Provider | Profile | Base URL |
-|----------|---------|----------|
-| OpenAI | `openai` | `https://api.openai.com/v1` |
-| Qwen Compatible | `qwen_compatible` | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| Anthropic | `anthropic` | `https://api.anthropic.com/v1` |
-| Custom | 自定义 | 自定义 |
-
-选择供应商后，只需填写 `API Key` 和 `Model` 即可。其余 LLM 配置项与 [配置说明](@lang/reference-project/configuration) 中的表一致。
-
-#### 启用微信 ClawBot 接口
-
-目前，微信以插件的形式提供 ClawBot 功能，需先按照下述步骤在微信中启用，并在 Web 配置页面登录：
-
-<Steps>
-1. **启用微信 ClawBot 插件**
-
-    微信「我」→「设置」→「插件」→「ClawBot」，启用此插件。
-    <Aside type="tip">
-      若找不到 ClawBot 插件，请尝试更新微信到最新版本。
-    </Aside>
-
-2. **在 Web 配置页面登录**
-
-    打开 Web 配置页面，可通过以下两种方式登录：
-    - **扫码登录**：点击「Generate QR」生成二维码，使用微信「我」→「设置」→「插件」→「ClawBot」→「微信扫一扫」扫描二维码。
-    - **链接登录**：点击「Generate QR」生成二维码后，点击「Open login link」在新窗口打开登录链接，按提示完成登录。
-
-3. **登录成功**
-
-    登录成功后，Web 配置页面将有相应提示。
-
-4. **保存配置**
-
-    点击「Save Changes」按钮保存全部配置。
-</Steps>
-
-<Aside type="note">
-  虽然 Web 配置界面可以修改 WeChat Base URL & WeChat CDN Base URL，但现阶段微信仅可使用默认的 Base URL，请勿修改。
+<Aside type="tip" title="在线聊天不可用？">
+  请检查 Capabilities 管理页面中的 Local IM 是否被禁用。
 </Aside>
 
-#### 其他配置
+## 系统设置
 
-网络配置、搜索配置、时区配置等，与 [配置说明](@lang/reference-project/configuration) 中的表一致。
+### 基础设置
 
-### 记忆管理
+基础设置包括 Wi-Fi 设置和时区设置。
+
+- Wi-Fi 设置可以配置 SSID 和密码。<RestartBadge />
+  - 目前，除 ESP32-C5 外，其他芯片仅支持 2.4 GHz 频段的 Wi-Fi。
+  - 密码留空表示当前 Wi-Fi 无密码。
+- SoftAP 设置可以调整 SoftAP SSID、密码及启停。<RestartBadge />
+  - ESP-Claw 默认会启用 SoftAP，以便配网或调整配置。
+  - SSID 留空表示采用基于 MAC 地址的默认 SSID（`esp-claw-XXXXXX`）。
+  - 密码留空表示开放热点。如设置密码，长度至少 8 个字符。
+  - 可以配置 SoftAP 在成功连接至 Wi-Fi 后自动关闭。**出于安全考量，建议启用此功能。**
+- 高级设置中，时区设置可以调整设备时区。<RestartBadge />
+  - 需为 POSIX TZ string 格式，推荐从[此表格](https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv)中查阅。
+  - 例如：北京/香港/新加坡等地的时区为 `CST-8`。
+  - 时区设置关系到 Schedule 定时任务的运行、LLM 获取到的时间等。
+  - 初次设置时，系统会自动尝试通过浏览器推断当前时区。但此方法推断的时区可能不准确、并不能推断出夏令时等信息。
+
+### LLM 设置 <RestartBadge />
+
+LLM 设置可以调整 LLM 的配置，包括供应商、API Key、模型等。
+为方便使用，ESP-Claw 内置了一些常用的 LLM 供应商配置，选择这些供应商仅需输入 API Key 和模型名称。
+
+ESP-Claw 同样支持自定义 LLM 供应商。目前，ESP-Claw 支持 OpenAI 兼容 API 和 Anthropic 兼容 API 两种后端类型。
+你需要另行提供 Base URL，必要时按照 LLM 供应商的要求配置 Max Tokens 字段名称等。
+
+ESP-Claw 推荐使用 `gpt-5.4`、`qwen3.6-plus`、`deepseek-v4-pro`、`claude-sonnet-4-6` 同等水平或更佳的模型，以充分发挥 ESP-Claw 的潜力。
+如需使用其他模型，请注意调整 LLM 高级选项中的「支持视觉输入」等配置，使之与模型支持的功能相匹配。
+
+<Aside type="tip" title="留意 Base URL 的格式">
+  自定义 LLM 供应商时，Base URL 的路径需要保留到版本号，即：
+  - 保留 `/chat/completions` （OpenAI 格式）或 `/messages` （Anthropic 格式）<b><u>前</u></b>的部分；
+  - 不应以 `/` 结尾。
+
+  例如：
+
+  ```text
+  https://api.openai.com/v1/chat/completions
+  vvvvvvvv Base URL vvvvvvv
+  https://api.openai.com/v1
+
+  https://api.anthropic.com/v1/messages
+  vvvvvvvvvv Base URL vvvvvvvv
+  https://api.anthropic.com/v1
+
+  https://api.deepseek.com/chat/completions
+  vvvvvvv Base URL vvvvvvv
+  https://api.deepseek.com
+  ```
+
+</Aside>
+
+### IM 设置 <RestartBadge />
+
+IM 设置页面可接入或调整不同的即时通讯平台，包括微信、QQ、飞书、Telegram 等。
+
+#### 微信
+
+如需启用微信，请点击「生成二维码」按钮，使用微信「扫一扫」功能扫描二维码完成配置。配置后，保存并重启即可生效。
+
+高级设置中的微信 Base URL 和 CDN Base URL 一般不需要修改。默认值为
+
+```text
+https://ilinkai.weixin.qq.com # WeChat Base URL
+https://novac2c.cdn.weixin.qq.com/c2c # WeChat CDN Base URL
+```
+
+#### QQ
+
+如需启用 QQ，请在 [QQ开放平台](https://q.qq.com/qqbot/openclaw/login.html) 创建 QQ 机器人，随后将 App ID 和 App Secret 填入对应字段。
+配置后，保存并重启即可生效。
+
+#### 飞书
+
+如需启用飞书，请在 [飞书开放平台-创建飞书智能体应用](https://open.feishu.cn/page/launcher?from=backend_oneclick) 创建飞书智能体应用，随后将 App ID 和 App Secret 填入对应字段。
+配置后，保存并重启即可生效。
+
+注：暂不支持 Lark 飞书国际版。
+
+#### Telegram
+
+如需启用 Telegram，请与 Telegram APP 内的 [@botfather](https://t.me/botfather) 对话，创建机器人并获取 Bot Token。随后将 Bot Token 填入对应字段。
+配置后，保存并重启即可生效。
+
+### 网络和搜索设置
+
+ESP-Claw 可以接入 Brave 或 Tavily 的搜索 API，并在运行中检索在线资源；也支持发起网络请求（GET/POST/...），实时请求在线资源。
+
+**搜索 API Key**：可选，配置后支持通过搜索 API 检索在线资源。
+- Brave Search API Key：Brave Search API Key，详见 [Brave API 文档](https://api-dashboard.search.brave.com/documentation/guides/authentication)。
+- Tavily API Key：Tavily API Key，详见 [Tavily API 文档](https://docs.tavily.com/documentation/quickstart)。
+
+**HTTP 请求**：需配置 HTTP 白名单，支持通配符*，单独*表示允许全部域名/IP。
+
+## 记忆管理
 
 记忆管理页面用于查看记忆系统中的长期记忆、管理「灵魂」、「身份」与「用户信息」。
 
@@ -93,7 +163,21 @@ import { Aside, Steps, LinkCard } from '@astrojs/starlight/components';
 
 <LinkCard href="@lang/reference-project/memory" title="Memory 参考文档" description="了解长期记忆、「灵魂」、「身份」与「用户信息」的详细信息" />
 
-### 文件管理
+## Capabilities 管理
+
+Capabilities 管理页面用于管理 ESP-Claw 的各项 Capability 是否启用。如禁用，对应的 Capability 将不被加载。
+默认情况下，所有 Capability 均被启用。你可以通过勾选或取消勾选对应的 Capability 来启用或禁用该 Capability。
+
+为了精简上下文长度，不是所有 Capability 都默认对 LLM 可见。
+某些 Capability 提供了 Skill，当 LLM 选择激活对应的 Skill 时，该 Capability 将自动向 LLM 提供其提供的工具。
+
+## Lua 模块管理 <RestartBadge />
+
+Lua 模块管理可用于管理**由 IDF 底层模块转译**的 Lua 模块是否启用，其与 Skill 提供的 Lua 模块不同。
+
+<LinkCard href="@lang/reference-cap/lua-modules" title="Lua 模块参考文档" description="了解 Lua 模块的详细信息" />
+
+## 文件管理
 
 Web 配置页面提供了简单的文件管理功能，可以在不通过 LLM 的情况下直接查阅和读写文件系统中的文件。
 ESP-Claw 运行时的文件系统结构见 [文件系统布局](@lang/reference-project/boot-and-runtime#文件系统)。
@@ -107,17 +191,5 @@ ESP-Claw 运行时的文件系统结构见 [文件系统布局](@lang/reference-
 
 <Aside type="note">
   - 在线文件读写有大小限制，具体取决于编译固件时的 `CONFIG_HTTP_MAX_UPLOAD_SIZE` 常量。
-  - 修改自动化规则后，记得在 Console 执行 `auto reload`（见 [Console 交互](@lang/reference-project/console-usage)）。
-</Aside>
-
-## 安全提示
-
-**`edge_agent` 不是为生产环境准备的。`edge_agent` 的 HTTP Server 假定你在可信的环境中运行，并且会返回几乎所有信息以便「极客」们调试。**
-
-<Aside type="caution" title="安全提示">
-  - **不要把 Web 配置页端口暴露到公网。**
-  - **请注意 SoftAP 也可获取到完整的配置信息，含机密令牌。**
-  - 服务跑在局域网，默认无 HTTPS。
-  - 配置页与 NVS 中存有机密令牌，请勿把导出的配置或整机 NVS 转储随意公开。
-  - 配置页可以下载文件系统中几乎所有内容。
+  - 修改自动化规则后，记得在 Console 执行 `auto reload`（见 [Console 交互](@lang/reference-project/console-usage)）或重启。
 </Aside>

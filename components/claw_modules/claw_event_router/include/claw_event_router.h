@@ -18,11 +18,6 @@
 extern "C" {
 #endif
 
-typedef size_t (*claw_event_router_session_builder_fn)(const claw_event_t *event,
-                                                       char *buf,
-                                                       size_t buf_size,
-                                                       void *user_ctx);
-
 typedef esp_err_t (*claw_event_router_outbound_resolver_fn)(const claw_event_t *event,
                                                             const char *target_channel,
                                                             const char *target_endpoint,
@@ -39,11 +34,8 @@ typedef struct {
     uint32_t task_stack_size;
     UBaseType_t task_priority;
     BaseType_t task_core;
-    uint32_t core_submit_timeout_ms;
-    uint32_t core_receive_timeout_ms;
+    uint32_t agent_submit_timeout_ms;
     bool default_route_messages_to_agent;
-    claw_event_router_session_builder_fn session_builder;
-    void *session_builder_user_ctx;
     claw_event_router_outbound_resolver_fn outbound_resolver;
     void *outbound_resolver_user_ctx;
 } claw_event_router_config_t;
@@ -69,6 +61,11 @@ typedef enum {
     CLAW_EVENT_ROUTER_ACTION_DROP = 5,
 } claw_event_router_action_kind_t;
 
+typedef enum {
+    CLAW_EVENT_ROUTER_TEXT_MATCH_EXACT = 0,
+    CLAW_EVENT_ROUTER_TEXT_MATCH_PREFIX = 1,
+} claw_event_router_text_match_rule_t;
+
 typedef struct {
     char event_type[96];
     char event_key[96];
@@ -77,6 +74,7 @@ typedef struct {
     char chat_id[96];
     char content_type[96];
     char text[96];
+    claw_event_router_text_match_rule_t text_match_rule;
 } claw_event_router_match_t;
 
 typedef struct {

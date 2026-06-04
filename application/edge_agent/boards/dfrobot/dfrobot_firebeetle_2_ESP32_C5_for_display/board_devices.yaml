@@ -1,0 +1,38 @@
+version: 1.0.0
+# Devices for DFRobot FireBeetle 2 ESP32-C5 (DFR1222) + GDI display
+devices:
+
+  # GDI display: use the same panel bring-up strategy as FireBeetle 2 ESP32-S3 (ST7365P mapped via ILI9488 IPS path)
+  - name: display_lcd
+    chip: st7365
+    type: display_lcd
+    sub_type: spi
+    version: default
+    dependencies:
+      atanisoft/esp_lcd_ili9488: "^1.1.0"
+    config:
+      mirror_x: false
+      mirror_y: false
+      swap_xy: true
+      invert_color: false
+      x_max: 480
+      y_max: 320
+      io_spi_config:
+        cs_gpio_num: 27
+        dc_gpio_num: 8
+        spi_mode: 0
+        pclk_hz: 40000000
+      lcd_panel_config:
+        reset_gpio_num: 26
+        rgb_ele_order: LCD_RGB_ELEMENT_ORDER_BGR
+        bits_per_pixel: 16
+        data_endian: LCD_RGB_DATA_ENDIAN_BIG
+        vendor_config: NULL
+    peripherals:
+      - name: spi_display
+
+  - name: lcd_brightness
+    type: ledc_ctrl
+    version: default
+    peripherals:
+      - name: ledc_backlight

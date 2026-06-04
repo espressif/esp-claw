@@ -1,8 +1,9 @@
 # Lua Magnetometer
 
 This skill describes how to read magnetometer data from Lua.
-When a request mentions `bmm350`, `magnetometer`, `magnetic field`, or `compass`,
-use this module by default.
+When a request mentions `bmm350`, `bmm150`, `magnetometer`, `magnetic field`, or `compass`,
+use this module by default. The active chip backend is selected at build time via
+`CONFIG_LUA_MODULE_MAGNETOMETER_CHIP_*` (BMM350, BMM150, or QMC6309).
 
 ## How to call
 - Import it with `local magnetometer = require("magnetometer")`
@@ -31,14 +32,15 @@ missing required fields will raise an error.
 |--------------|---------|-----------------------------------------------------------------------|
 | `device`     | string  | Board device name to read defaults from (default `magnetometer_sensor`) |
 | `peripheral` | string  | Board I2C master peripheral name (e.g. `"i2c_master"`)               |
-| `i2c_addr`   | integer | BMM350 7-bit I2C address (`0x14` or `0x15`)                          |
+| `i2c_addr`   | integer | 7-bit I2C address (BMM350: `0x14`/`0x15`; BMM150: `0x10`–`0x13`; QMC6309: `0x7C`) |
 | `frequency`  | integer | I2C clock in Hz (default `100000`)                                   |
-| `int_gpio`   | integer | Optional GPIO number wired to the BMM350 interrupt pin               |
+| `int_gpio`   | integer | Optional GPIO number wired to the sensor interrupt pin               |
+| `sdo_gpio`   | integer | Optional GPIO to strap SDO/ADSEL for alternate I2C address           |
 
 ## Data format
 - `sample.magnetic.x`, `sample.magnetic.y`, `sample.magnetic.z`
 - `sample.raw_magnetic.x`, `sample.raw_magnetic.y`, `sample.raw_magnetic.z`
-- `sample.temperature`
+- `sample.temperature` (BMM150 and QMC6309 return `0`; no on-chip temperature)
 - `sample.status`
 - `sample.calibrated`
 

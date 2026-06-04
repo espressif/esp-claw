@@ -1,123 +1,195 @@
 ---
-title: Web configuration
-description: Change Wi‑Fi, LLM, IM, and files from a browser on the LAN—no rebuild.
+title: Web Console
+description: Start chats, view status, and change settings from a browser on the LAN.
 ---
 
-import { Aside, Steps, LinkCard } from '@astrojs/starlight/components';
+import { Aside, Steps, Badge } from '@astrojs/starlight/components';
+import { Code, LinkCard } from 'starlight-theme-nova/components';
+import LinkToSource from '@/components/LinkToSource.astro';
+export const RestartBadge = () => <Badge text="Requires Restart" variant="tip" />;
+export const ApiBaseUrlHighlight = ['https://api.openai.com/v1', 'https://api.anthropic.com/v1', 'https://api.deepseek.com'];
+export const ApiBaseUrlExample = `https://api.openai.com/v1/chat/completions
+https://api.anthropic.com/v1/messages
+https://api.deepseek.com`;
 
-`edge_agent` starts a small HTTP server after Wi‑Fi is up, serves the config UI, and exposes JSON APIs. Implementation: `application/edge_agent/components/http_server/`.
+`edge_agent` starts the Web Console after the Wi-Fi stack is ready, providing chat, status view, and configuration features.
+The Web Console implementation is located at <LinkToSource relativePath="application/edge_agent/components/http_server/" />.
 
-## Open the config UI
+<Aside type="caution" title="Security notice">
+  **`edge_agent` is not intended for production use. The `edge_agent` Web Console assumes a trusted environment and returns almost all information.**
 
-Your computer or phone must be on the **same LAN** as the board, or connected to the **board-provided SoftAP hotspot** (in `edge_agent`, default SSID is `esp-claw-xxxx`, where `xxxx` is derived from the device MAC address).
+  - **Do not expose the Web configuration page port to the public Internet.**
+  - **The retained SoftAP console also has full privileges. Set a password or enable auto-disable SoftAP when possible.**
+  - The service runs on LAN and does not use HTTPS by default.
+  - The configuration page and NVS contain secret tokens. Do not publicly share exported config files or full-device NVS dumps.
+  - The configuration page can download almost all content in the filesystem.
 
-In the browser open:
+  See [GitHub issue #41](https://github.com/espressif/esp-claw/issues/41) for more details.
+</Aside>
+
+## Open the Web Console
+
+Your computer or phone must be on the **same LAN** as the board, or connected to the **SoftAP hotspot provided by the board** (default SSID in `edge_agent` is `esp-claw-XXXXXX`, where `XXXXXX` is the device MAC address).
+
+Open in browser:
 [http://esp-claw.local/](http://esp-claw.local/)
 or
 `http://<device-ip>/`
 
-
 <Aside type="note">
-  - If `.local` fails, use the IP printed on serial or from your router’s DHCP list.
-  - Default port **80**; if you change port or mDNS name, use the updated URL/port.
+  - If `.local` cannot be resolved, use the IP printed in serial logs, or check DHCP assignments in your router admin page.
+  - Default port is **80**; if default port or mDNS domain is changed, use the updated port/domain.
 </Aside>
 
-The page loads current settings automatically. The UI supports multi-language switching and displays Wi-Fi status, device IP, and other information.
+## System Status
 
-## Page layout
+The System Status page shows basic ESP-Claw status, including network information, IP address, Wi-Fi mode, SoftAP SSID, and SoftAP IP.
 
-The configuration page is divided into three tabs:
+## Web Chat
 
-- **Configuration**: System settings (Wi-Fi, LLM, IM, search, time zone, etc.)
-- **Memory**: Memory file management (long-term memory and profile memory)
-- **File Manager**: Filesystem management
+Web Chat lets you interact with ESP-Claw without configuring extra IM channels.
+Web Chat also supports regular features and triggering Event Router capabilities through messages. For example, you can use `/new` to create and switch Session.
 
-### System settings
+Web Chat currently does not support receiving image attachments.
 
-#### LLM provider selection
-
-The page provides an **LLM Provider** dropdown menu. Selecting a provider automatically fills in the corresponding `Profile`, `Base URL`, `Backend Type`, and `Auth Type`:
-
-| Provider | Profile | Base URL |
-|----------|---------|----------|
-| OpenAI | `openai` | `https://api.openai.com/v1` |
-| Qwen Compatible | `qwen_compatible` | `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| Anthropic | `anthropic` | `https://api.anthropic.com/v1` |
-| Custom | Custom | Custom |
-
-After choosing a provider, you only need to fill in your `API Key` and `Model`. Other LLM configuration items match the tables in [Configuration](@lang/reference-project/configuration).
-
-#### Enable WeChat ClawBot
-
-WeChat ships ClawBot as a plugin—enable it in WeChat first, then log in via the Web config page:
-
-<Steps>
-1. **Enable the WeChat ClawBot plugin**
-
-    WeChat Me → Settings → Plugins → ClawBot, and turn it on.
-    <Aside type="tip">
-      If you cannot find the plugin, update WeChat to the latest version.
-    </Aside>
-
-2. **Log in on the Web config page**
-
-    Open the Web config page. You can log in via two ways:
-    - **Scan QR login**: Click 「Generate QR」 to create a QR code, then in WeChat Me → Settings → Plugins → ClawBot, use Scan to read the code.
-    - **Link login**: Click 「Generate QR」 to create a QR code first, then click 「Open login link」 to open the login page in a new window and follow the prompts.
-
-3. **Signed in**
-
-    After login, the Web page shows a confirmation.
-
-4. **Save**
-
-    Click Save Changes to persist all settings.
-</Steps>
-
-<Aside type="note">
-  The UI can edit WeChat Base URL & WeChat CDN Base URL, but WeChat currently only works with the default base URL—do not change it.
+<Aside type="tip" title="Web Chat unavailable?">
+  Check whether Local IM is disabled on the Capabilities management page.
 </Aside>
 
-#### Other settings
+## System Settings
 
-Network, search, and time zone follow the same fields as [Configuration](@lang/reference-project/configuration).
+### Basic Settings
 
-### Memory manager
+Basic settings include Wi-Fi and timezone settings.
 
-The Memory manager page is used to view and manage the long-term memory, soul, identity, and user information in the memory system.
+- Wi-Fi settings configure SSID and password. <RestartBadge />
+  - Currently, except ESP32-C5, other chips only support 2.4 GHz Wi-Fi.
+  - Empty password means the current Wi-Fi has no password.
+- SoftAP settings configure SoftAP SSID, password, and start/stop behavior. <RestartBadge />
+  - ESP-Claw enables SoftAP by default for provisioning and configuration adjustments.
+  - Empty SSID means using the MAC-based default SSID (`esp-claw-XXXXXX`).
+  - Empty password means open hotspot. If password is set, it must be at least 8 characters.
+  - You can configure SoftAP to auto-disable after successful Wi-Fi connection. **For security, this is recommended.**
+- In Advanced settings, timezone settings adjust device timezone. <RestartBadge />
+  - Must be in POSIX TZ string format. Recommended reference: [this table](https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv).
+  - Example: timezone for Beijing/Hong Kong/Singapore is `CST-8`.
+  - Timezone affects Schedule task execution and the time provided to LLM.
+  - On first setup, the system attempts to infer timezone from browser automatically. This inference may be inaccurate and cannot infer DST details.
 
-- **Long-term memory** is a human-readable file generated by the system based on structured memory. Modifying this file does not directly change the structured memory, so it only provides a read-only view function.
-- **Soul**, **Identity**, and **User Information** are editable files used to record the personalized information of the device and the user.
+### LLM Settings <RestartBadge />
 
-After chatting with ESP-Claw, you can click the "Refresh" button or "Refresh All" button to refresh the memory files and view the latest memory content.
+LLM settings configure provider, API key, model, and other LLM options.
+For easier onboarding, ESP-Claw includes presets for common LLM providers. For those providers, you only need API key and model name.
 
-<LinkCard href="@lang/reference-project/memory" title="Memory Reference Documentation" description="Learn more about long-term memory, soul, identity, and user information" />
+ESP-Claw also supports custom LLM providers. Currently, ESP-Claw supports two backend types: OpenAI-compatible API and Anthropic-compatible API.
+You need to provide Base URL manually, and configure fields like Max Tokens field name if required by the provider.
 
-### File manager
+ESP-Claw recommends models at least comparable to `gpt-5.4`, `qwen3.6-plus`, `deepseek-v4-pro`, and `claude-sonnet-4-6` to unlock its full potential.
+If you use other models, tune LLM advanced options such as “supports vision input” to match the model capabilities.
 
-The Web UI includes a simple file manager so you can browse and read/write files directly, without going through the LLM.
-For the ESP-Claw runtime filesystem structure, see [Filesystem layout](@lang/reference-project/boot-and-runtime#filesystem-layout).
+<Aside type="tip" title="Pay attention to Base URL format">
+  For custom LLM providers, the Base URL path must be kept up to the version segment:
+  - Keep only the part <b><u>before</u></b> `/chat/completions` (OpenAI format) or `/messages` (Anthropic format);
+  - Do not end with `/`.
 
-By default, the file manager is read-only. Write operations are available only after enabling Admin mode (Dev Mode).
-After enabling Admin mode, you can manually add Skills, edit automation rules, modify Lua scripts, and more.
+  For example:
+
+  ```text
+  https://api.openai.com/v1/chat/completions
+  vvvvvvvv Base URL vvvvvvv
+  https://api.openai.com/v1
+
+  https://api.anthropic.com/v1/messages
+  vvvvvvvvvv Base URL vvvvvvvv
+  https://api.anthropic.com/v1
+
+  https://api.deepseek.com/chat/completions
+  vvvvvvv Base URL vvvvvvv
+  https://api.deepseek.com
+  ```
+
+</Aside>
+
+### IM Settings <RestartBadge />
+
+The IM settings page lets you connect or adjust different instant messaging platforms, including WeChat, QQ, Feishu, Telegram, and more.
+
+#### WeChat
+
+To enable WeChat, click “Generate QR” and scan it with WeChat “Scan” to complete setup. Save and restart for changes to take effect.
+
+WeChat Base URL and CDN Base URL in Advanced settings usually do not need changes. Default values are:
+
+```text
+https://ilinkai.weixin.qq.com # WeChat Base URL
+https://novac2c.cdn.weixin.qq.com/c2c # WeChat CDN Base URL
+```
+
+#### QQ
+
+To enable QQ, create a QQ bot on [QQ Open Platform](https://q.qq.com/qqbot/openclaw/login.html), then fill App ID and App Secret in the corresponding fields.
+Save and restart for changes to take effect.
+
+#### Feishu
+
+To enable Feishu, create a Feishu bot app on [Feishu Open Platform - Create Feishu Agent App](https://open.feishu.cn/page/launcher?from=backend_oneclick), then fill App ID and App Secret in the corresponding fields.
+Save and restart for changes to take effect.
+
+Note: Lark international edition is not supported yet.
+
+#### Telegram
+
+To enable Telegram, chat with [@botfather](https://t.me/botfather) in Telegram app, create a bot, and obtain Bot Token. Then fill the Bot Token field.
+Save and restart for changes to take effect.
+
+### Network & Search Settings
+
+ESP-Claw can connect to Brave or Tavily search APIs to retrieve online resources during runtime; it can also issue HTTP requests (GET/POST/...) for real-time online access.
+
+**Search API Keys**: optional. Once configured, online resources can be retrieved via search APIs.
+- Brave Search API Key: Brave Search API Key, see [Brave API docs](https://api-dashboard.search.brave.com/documentation/guides/authentication).
+- Tavily API Key: Tavily API Key, see [Tavily API docs](https://docs.tavily.com/documentation/quickstart).
+
+**HTTP Requests**: configure HTTP allowlist. Wildcard `*` is supported; standalone `*` allows all domains/IPs.
+
+## Memory Management
+
+The Memory Management page is for viewing long-term memory and managing “Soul”, “Identity”, and “User Info” in the memory system.
+
+- **Long-term Memory** is a human-readable file generated from structured memory. Editing this file does not directly modify structured memory, so it is read-only for inspection.
+- **Soul**, **Identity**, and **User Info** are editable files used to store personalized information for the device and user.
+
+After chatting with ESP-Claw, click “Refresh” or “Refresh All” to refresh memory files and view the latest memory content.
+
+<LinkCard href="@lang/reference-project/memory" title="Memory Reference" description="Learn details about long-term memory, Soul, Identity, and User Info" />
+
+## Capabilities Management
+
+The Capabilities Management page controls whether each ESP-Claw capability is enabled. If disabled, the capability is not loaded.
+By default, all capabilities are enabled. You can enable or disable each capability by checking or unchecking it.
+
+To reduce context length, not all capabilities are LLM-visible by default.
+Some capabilities provide Skills. When LLM chooses to activate the corresponding Skill, that capability automatically provides its tools to the LLM.
+
+## Lua Modules Management <RestartBadge />
+
+Lua Modules Management controls whether Lua modules **translated from IDF low-level modules** are enabled. These are different from Lua modules provided by Skills.
+
+<LinkCard href="@lang/reference-cap/lua-modules" title="Lua Modules Reference" description="Learn details about Lua modules" />
+
+## File Management
+
+The Web configuration page provides simple file management, so you can browse and read/write filesystem files directly without going through LLM.
+For ESP-Claw runtime filesystem structure, see [Filesystem layout](@lang/reference-project/boot-and-runtime#文件系统).
+
+By default, File Management is read-only. Write actions are enabled only after turning on “Admin Mode” (Dev Mode).
+After enabling “Admin Mode”, you can manually add Skills, edit automation rules, modify Lua scripts, and more.
 
 <Aside type="danger" title="Warning">
-  After enabling Admin mode, operate carefully. Deleting critical files or writing invalid JSON may cause system malfunction or even reboot loops.
+  After enabling “Admin Mode”, operate carefully. Deleting important files or invalid JSON may cause system failures, even reboot loops.
 </Aside>
 
 <Aside type="note">
-  - Upload/download size limits depend on `CONFIG_HTTP_MAX_UPLOAD_SIZE` in your build.
-  - After editing automation rules, run `auto reload` in the Console (see [Console usage](@lang/reference-project/console-usage)).
-</Aside>
-
-## Security
-
-**`edge_agent` is not designed for production. Its HTTP server assumes a trusted environment and returns almost all information to help with debugging.**
-
-<Aside type="caution" title="Security notes">
-  - **Do not expose the web config page port to the public Internet.**
-  - **Note that the SoftAP also provides complete configuration information, including secret tokens.**
-  - The service runs on LAN and uses plain HTTP by default (no HTTPS).
-  - Config and NVS contain secret tokens; do not publicly share exported config files or full NVS dumps.
-  - The config page can download almost all files from the filesystem.
+  - Online file read/write has size limits, depending on `CONFIG_HTTP_MAX_UPLOAD_SIZE` when firmware is built.
+  - After changing automation rules, remember to run `auto reload` in Console (see [Console usage](@lang/reference-project/console-usage)) or restart.
 </Aside>

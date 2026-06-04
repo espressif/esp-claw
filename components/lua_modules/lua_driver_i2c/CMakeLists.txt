@@ -5,4 +5,5 @@ idf_component_register(
         "src"
     REQUIRES
         cap_lua
+        esp_driver_i2c
 )

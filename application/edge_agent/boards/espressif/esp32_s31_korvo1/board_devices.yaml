@@ -1,0 +1,222 @@
+# Devices Configuration for ESP32-S31-Korvo1
+devices:
+  - name: sdcard_power_ctrl
+    type: power_ctrl
+    sub_type: gpio
+    config:
+      peripherals:
+        - name: gpio_sd_power
+          active_level: 0
+
+  # On-board WS2812 status LED. Schematic net: GPIO37.
+  - name: led_strip
+    chip: ws2812
+    type: led_strip
+    sub_type: rmt
+    version: 1.0.0
+    config:
+      strip_gpio_num: 37
+      max_leds: 1
+      led_model: LED_MODEL_WS2812
+      color_component_format: LED_STRIP_COLOR_COMPONENT_FMT_GRB
+      invert_out: false
+      rmt:
+        clk_src: RMT_CLK_SRC_DEFAULT
+        resolution_hz: 10000000
+        mem_block_symbols: 0
+        with_dma: false
+
+  # # Four ADC buttons on GPIO42. Voltage centers follow the S31 Korvo BSP:
+  # # VOLUP=380mV, VOLDOWN=820mV, MODE=1340mV, SET=1870mV.
+  # - name: adc_button_group
+  #   type: button
+  #   sub_type: adc_multi
+  #   version: default
+  #   config:
+  #     long_press_time: 2000
+  #     short_press_time: 100
+  #     events_cfg:
+  #       press_down: true
+  #       press_up: true
+  #       single_click: true
+  #       double_click: true
+  #       multi_click: false
+  #       long_press_start: true
+  #       long_press_up: true
+  #       long_press_hold: false
+  #       press_repeat: false
+  #       press_repeat_done: false
+  #       press_end: false
+  #     button_num: 4
+  #     max_voltage: 2000
+  #     voltage_range: [380, 820, 1340, 1870]
+  #     button_labels: ["VOLUME_UP", "VOLUME_DOWN", "MODE", "SET"]
+  #   peripherals:
+  #     - name: adc_oneshot
+
+  # ES8389 DAC drives ES_LOUTP/N and ES_ROUTP/N into two NS4150 power amplifiers.
+  - name: audio_dac
+    chip: es8389
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: false
+      dac_enabled: true
+      dac_max_channel: 2
+      dac_channel_mask: "11"
+      mclk_enabled: false
+    peripherals:
+      - name: gpio_pa_control
+        gain: 6
+        active_level: 1
+      - name: i2s_audio_out
+      - name: i2c_master
+        address: 0x20
+        frequency: 400000
+
+  # ES8389 ADC receives two analog microphones on MIC1P/N and MIC2P/N.
+  - name: audio_adc
+    chip: es8389
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      dac_enabled: false
+      adc_max_channel: 4
+      adc_channel_mask: "0111"
+      adc_channel_labels: ['NA', 'RE', 'FR', 'FL'] # MSB ~ LSB
+      adc_init_gain: 0
+      mclk_enabled: false
+    peripherals:
+      - name: i2s_audio_in
+      - name: i2c_master
+        address: 0x20
+        frequency: 400000
+
+  # # microSD card on SDMMC 4-bit bus. Shares GPIO20~25 stuffing option with SPI NAND.
+  # - name: fs_sdcard
+  #   type: fs_fat
+  #   sub_type: sdmmc
+  #   power_ctrl_device: sdcard_power_ctrl
+  #   version: default
+  #   config:
+  #     mount_point: "/sdcard"
+  #     vfs_config:
+  #       format_if_mount_failed: false
+  #       max_files: 5
+  #       allocation_unit_size: 16384
+  #     sub_config:
+  #       slot: SDMMC_HOST_SLOT_0
+  #       frequency: SDMMC_FREQ_HIGHSPEED
+  #       bus_width: 4
+  #       slot_flags: SDMMC_SLOT_FLAG_INTERNAL_PULLUP
+  #       pins:
+  #         clk: 24
+  #         cmd: 25
+  #         d0: 20
+  #         d1: 21
+  #         d2: 22
+  #         d3: 23
+  #         cd: -1
+  #         wp: -1
+
+  # 800x480 RGB LCD panel. Schematic nets: RGB565 data GPIO8-19/33-36,
+  # PCLK=GPIO40, DE=GPIO43, HSYNC=GPIO44, VSYNC=GPIO45.
+  - name: display_lcd
+    chip: generic_rgb
+    type: display_lcd
+    version: 1.0.0
+    sub_type: rgb
+    config:
+      swap_xy: false
+      mirror_y: false
+      mirror_x: false
+      invert_color: false
+      need_reset: true
+      bits_per_pixel: 16
+      rgb_ele_order: LCD_RGB_ELEMENT_ORDER_RGB
+      data_endian: LCD_RGB_DATA_ENDIAN_BIG
+      rgb_panel_config:
+        clk_src: LCD_CLK_SRC_DEFAULT
+        data_width: 16
+        in_color_format: LCD_COLOR_FMT_RGB565
+        out_color_format: LCD_COLOR_FMT_RGB565
+        num_fbs: 1
+        bounce_buffer_size_px: 0
+        dma_burst_size: 64
+        hsync_gpio_num: 44
+        vsync_gpio_num: 45
+        de_gpio_num: 43
+        pclk_gpio_num: 40
+        disp_gpio_num: -1
+        data_gpio_nums: [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 33, 34, 35, 36]
+        timings:
+          pclk_hz: 18000000
+          h_res: 800
+          v_res: 480
+          hsync_pulse_width: 1
+          hsync_back_porch: 40
+          hsync_front_porch: 20
+          vsync_pulse_width: 1
+          vsync_back_porch: 10
+          vsync_front_porch: 5
+          flags:
+            pclk_active_neg: true
+        flags:
+          fb_in_psram: true
+
+  - name: lcd_touch
+    chip: gt1151
+    type: lcd_touch
+    sub_type: i2c
+    version: default
+    dependencies:
+      espressif/esp_lcd_touch_gt1151: "*"
+    config:
+      io_i2c_config:
+        lcd_cmd_bits: 16
+        scl_speed_hz: 400000
+
+      touch_config:
+        x_max: 800
+        y_max: 480
+        rst_gpio_num: -1
+        int_gpio_num: -1
+        levels:
+          reset: 0
+          interrupt: 0
+        flags:
+          swap_xy: false
+          mirror_x: false
+          mirror_y: false
+    peripherals:
+      - name: i2c_master
+        i2c_addr: [0x28]  # GT1151 8-bit I2C address, from 7-bit 0x14
+
+  # DVP camera interface. SCCB shares i2c_master with audio/touch.
+  - name: camera
+    type: camera
+    version: default
+    sub_type: dvp
+    config:
+      dvp_config:
+        reset_io: 60
+        pwdn_io: 61
+        vsync_io: 56
+        data_width: CAM_CTLR_DATA_WIDTH_8
+        de_io: 57
+        pclk_io: 54
+        xclk_io: 55
+        xclk_freq: 20000000
+        data_io:
+          data_io_0: 46
+          data_io_1: 47
+          data_io_2: 48
+          data_io_3: 49
+          data_io_4: 50
+          data_io_5: 51
+          data_io_6: 52
+          data_io_7: 53
+    peripherals:
+      - name: i2c_master
+        frequency: 100000

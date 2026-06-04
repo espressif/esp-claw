@@ -7,6 +7,7 @@ local HUB_HOST = "skills-lab.esp-claw.com"
 local HUB_BASE = "https://" .. HUB_HOST .. "/raw"
 local HTTP_TIMEOUT_MS = 20000
 local HTTP_MAX_BODY_BYTES = 65535
+local HTTP_MAX_FILE_BYTES = 10 * 1024 * 1024 -- Currently we do not expect to download files larger than 10MB.
 
 local function string_arg(key, default)
     local value = a[key]
@@ -47,6 +48,29 @@ local function call_http(url)
     return tostring(out or "")
 end
 
+local function call_http_save(url, path)
+    local ok, out, err = capability.call("http_request", {
+        url = url,
+        method = "GET",
+        timeout_ms = HTTP_TIMEOUT_MS,
+        save_path = path,
+        max_file_bytes = HTTP_MAX_FILE_BYTES,
+    }, {
+        source_cap = "skills_lab_downloader",
+    })
+
+    if not ok then
+        local text = tostring(err or out or "unknown error")
+        if text:find("HTTP allowlist is empty", 1, true) or
+                text:find("is not in allowlist", 1, true) then
+            error(text .. ". Add *.esp-claw.com to the Web Console allowlist and try again.")
+        end
+        error(text)
+    end
+
+    return tostring(out or "")
+end
+
 local function parse_http_output(out)
     local first_line, body = out:match("^(.-)\n(.*)$")
     if not first_line then
@@ -60,6 +84,15 @@ local function parse_http_output(out)
     end
 
     return status, body
+end
+
+local function parse_http_status_line(out)
+    local first_line = out:match("^(.-)\n") or out
+    local status = tonumber(first_line:match("^HTTP%s+(%d+)"))
+    if not status then
+        error("unexpected http_request output: " .. out)
+    end
+    return status, first_line
 end
 
 local function fetch_text(url)
@@ -120,19 +153,17 @@ local function get_extra_files()
     return extra_files
 end
 
-local function write_text_file(path, content)
-    local ok, err = storage.write_file(path, content)
-    if ok == false then
-        error("failed to write file " .. path .. ": " .. tostring(err))
-    end
-end
-
 local function download_and_save(url, path)
-    local status, body = fetch_text(url)
+    local out = call_http_save(url, path)
+    local status, first_line = parse_http_status_line(out)
     if status ~= 200 then
+        pcall(storage.remove, path)
         error(string.format("failed to download %s (HTTP %d)", url, status))
     end
-    write_text_file(path, body)
+    if first_line:find("file truncated", 1, true) then
+        pcall(storage.remove, path)
+        error(string.format("failed to download %s: file exceeds %d bytes", url, HTTP_MAX_FILE_BYTES))
+    end
 end
 
 local function fetch_metadata(skill_name)

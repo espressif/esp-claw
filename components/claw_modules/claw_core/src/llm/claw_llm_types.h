@@ -80,6 +80,7 @@ typedef struct {
     const char *system_prompt;
     cJSON *messages;
     const char *tools_json;
+    volatile bool *abort_flag;
 } claw_llm_chat_request_t;
 
 typedef struct {
@@ -100,6 +101,7 @@ typedef struct {
     const char *api_key;
     const char *auth_type;
     uint32_t timeout_ms;
+    volatile bool *abort_flag;
     const claw_llm_http_header_t *headers;
     size_t header_count;
 } claw_llm_http_json_request_t;

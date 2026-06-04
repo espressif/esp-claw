@@ -1,0 +1,80 @@
+---
+title: cap_http_request
+description: 受 Allowlist 保护的 HTTP/HTTPS 请求能力。
+---
+
+import LinkToSource from '@/components/LinkToSource.astro';
+import { Aside } from '@astrojs/starlight/components';
+
+源码：<LinkToSource relativePath="components/claw_capabilities/cap_http_request/src/cap_http_request.c" /> ·
+头文件：<LinkToSource relativePath="components/claw_capabilities/cap_http_request/include/cap_http_request.h" /> ·
+Skill：<LinkToSource relativePath="components/claw_capabilities/cap_http_request/skills/cap_http_request/SKILL.md" />
+
+## 概述
+
+`cap_http_request` 向 LLM 暴露一个通用的 `http_request` 工具，允许 Agent 直接调用外部 HTTP/HTTPS API。为防止 LLM 访问任意网络资源，所有请求必须通过 **域名白名单（Allowlist）** 校验。
+
+<Aside type="caution">
+  如果未配置 `http_allowlist`，所有 HTTP 请求将被拒绝。白名单通过 NVS 配置项 `http_allowlist` 设置，格式为逗号分隔的域名列表。
+</Aside>
+
+## 工具描述
+
+| 工具 ID | 说明 |
+|---------|------|
+| `http_request` | 调用标准 HTTP 端点，支持 GET/POST/PUT/PATCH/DELETE/HEAD |
+
+### 输入参数
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `url` | string | ✅ | 请求 URL，主机名必须在白名单中 |
+| `method` | string | | HTTP 方法，默认 `GET`。可选 `GET`、`POST`、`PUT`、`PATCH`、`DELETE`、`HEAD` |
+| `headers` | object | | 自定义请求头，键值对 |
+| `body` | string | | 请求体 |
+| `save_path` | string | | 将响应体保存到指定文件路径（适合下载大文件） |
+| `timeout_ms` | integer | | 超时（1–120000ms），默认 15000ms |
+| `max_body_bytes` | integer | | 响应体内存缓冲上限（1–65535），默认 16384 |
+| `max_file_bytes` | integer | | `save_path` 模式下的文件写入上限（1–2147483647） |
+
+### 返回值
+
+返回 JSON 对象，包含：
+- `status`：HTTP 状态码
+- `body`：响应体文本（未指定 `save_path` 时）
+- `saved_path` / `saved_bytes`：文件保存路径与字节数（指定 `save_path` 时）
+- `truncated`：响应是否被截断
+- `error`：错误信息（请求失败时）
+
+## Allowlist 机制
+
+白名单存储在 NVS 配置项 `http_allowlist` 中，格式为逗号分隔的域名：
+
+```
+api.openai.com,httpbin.org,example.com
+```
+
+校验规则：
+- 从请求 URL 提取主机名，与白名单逐一匹配（不区分大小写）
+- 支持子域名匹配：白名单中的 `example.com` 允许 `api.example.com`
+- HTTP 重定向的目标 URL 同样需要通过白名单校验
+- 白名单最大长度 320 字符
+
+## 注册与配置
+
+```c
+#include "cap_http_request.h"
+
+cap_http_request_register_group();
+cap_http_request_set_allowlist("api.example.com,httpbin.org");
+```
+
+`cap_http_request_set_allowlist` 在应用层根据 NVS 配置动态设置白名单内容。
+
+## Group 信息
+
+| 属性 | 值 |
+|------|------|
+| Group ID | `cap_http_request` |
+| 默认 LLM 可见 | ✅（`edge_agent` 默认初始可见组） |
+| 工具数量 | 1 |

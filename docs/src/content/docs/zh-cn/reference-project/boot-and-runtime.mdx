@@ -3,7 +3,8 @@ title: 启动与运行时装配
 description: 从 app_main 到各子系统就绪的顺序
 ---
 
-import { Steps, FileTree, LinkCard } from '@astrojs/starlight/components';
+import { Steps, FileTree } from '@astrojs/starlight/components';
+import { LinkCard } from 'starlight-theme-nova/components'
 import LinkToSource from '@/components/LinkToSource.astro';
 
 下文以示例应用 `application/edge_agent` 为例，介绍入口 <LinkToSource relativePath="application/edge_agent/main/main.c" /> 与装配逻辑 <LinkToSource relativePath="components/common/app_claw/app_claw.c" />。
@@ -41,7 +42,7 @@ import LinkToSource from '@/components/LinkToSource.astro';
 
 6. **启动 ESP-Claw Agent 子系统**
 
-    调用 `app_claw_start(&s_settings)`，启用 ESP-Claw Agent 子系统。
+    调用 `app_claw_start(s_claw_config, s_claw_paths)`，启用 ESP-Claw Agent 子系统。
 
 </Steps>
 
@@ -77,31 +78,32 @@ import LinkToSource from '@/components/LinkToSource.astro';
     - **cap_files**：设置文件访问根目录（`/fatfs`）。
     - **cap_lua**：设置 Lua 脚本根目录（`/fatfs/scripts/`）。
     - **cap_im_platform**：若 IM 凭证非空，则写入 QQ / 飞书 / Telegram / 微信的 App ID、Secret 或 Token 等字段，并配置共享附件存盘目录（`/fatfs/inbox/`）与最大文件大小。该组件会注册各平台运行时 Group（`cap_im_qq`、`cap_im_feishu`、`cap_im_tg`、`cap_im_wechat`）。
+    - **cap_http_request**：写入配置中的 `search_http_allowlist`，供受保护的外部 HTTP 请求使用。
     - **cap_web_search**：若 Brave / Tavily key 非空则写入搜索密钥。
     - **cap_router_mgr**：注册 Event Router 的管理命令（`event_router`）。
     - **cap_system**：注册系统信息能力组（内存、CPU、Wi-Fi、IP，提供重启动作）。
     - **cap_mcp_client / cap_mcp_server / cap_skill / cap_time / cap_llm_inspect / cap_session_mgr** 等：逐一调用 `*_register_group` 完成注册（其中 Skill 管理模块源码目录为 `cap_skill_mgr`，Group ID 仍是 `cap_skill`）。
     - 完整结构化记忆模式下，还会注册 `claw_memory` 能力组；轻量模式下不注册该组。
-    - 调用 `claw_cap_set_llm_visible_groups` 将 `cap_files`、`cap_skill`、`cap_system`、`cap_lua` 设为 LLM 初始可见组；完整结构化记忆模式还会额外包含 `claw_memory`。最后 `claw_cap_start_all` 启动全部 cap。
+    - 调用 `claw_cap_set_llm_visible_groups` 将 `cap_files`、`cap_scheduler`、`cap_lua`、`cap_skill`、`cap_llm_inspect`、`cap_http_request`、`cap_web_search`、`cap_router_mgr` 设为 LLM 初始可见组；完整结构化记忆模式还会额外包含 `claw_memory`。最后 `claw_cap_start_all` 启动全部 cap。
 
     <br />
 
 6. **绑定出站 IM 通道**
 
-    调用 `claw_event_router_register_outbound_binding`，将 `qq`、`feishu`、`telegram`、`wechat` 四个来源分别绑定到对应的发送 cap（如 `qq_send_message`）。
+    调用 `claw_event_router_register_outbound_binding`，将 `qq`、`feishu`、`telegram`、`wechat`、`web` 五个来源分别绑定到对应的发送 cap（如 `qq_send_message`、`local_send_message`）。
 
 7. **初始化 claw_core（条件执行）**
 
-    若 `llm_api_key`、`llm_model`、`llm_profile` 均非空：
-    - 调用 `claw_core_init` 配置 LLM 后端（API Key、profile、model、base_url、超时等）及系统提示词；
+    若 `llm_api_key`、`llm_model`、`llm_backend_type` 均非空：
+    - 调用 `claw_core_init` 配置 LLM 后端（API Key、backend_type、model、base_url、超时等）及系统提示词；
     - 依次注册 context provider：`claw_memory_profile_provider`、长期记忆 provider（完整模式为 `claw_memory_long_term_provider`，轻量模式为 `claw_memory_long_term_lightweight_provider`）、`claw_memory_session_history_provider`、`claw_skill_skills_list_provider`、`claw_cap_tools_provider`；
     - 调用 `claw_core_start` 启动推理任务。
 
     若 LLM 未完整配置，则跳过 `claw_core_init` / `claw_core_start` 并打印 WARN；`ask`、默认路由至 Agent、图片 inspect 等依赖 core 的功能完全不可用，直到 LLM 配置补全并重启。
 
-8. **启动 Event Router、时间同步、调度器与 Console REPL**
+8. **启动 Event Router、调度器、时间同步、Console REPL 与启动事件**
 
-    调用 `claw_event_router_start` 开始处理入站事件，随后调用 `cap_time_sync_service_start` 启动 SNTP 时间同步服务（首次同步成功时会触发 `cap_scheduler_handle_time_sync` 对调度器进行时间校准），再调用 `cap_scheduler_start` 启动调度器任务，最后调用 `app_claw_cli_start` 启动 Console REPL，装配完成。
+    调用 `claw_event_router_start` 开始处理入站事件，随后调用 `cap_scheduler_start` 启动调度器任务，再调用 `cap_time_sync_service_start` 启动 SNTP 时间同步服务（首次同步成功时会触发 `cap_scheduler_handle_time_sync` 对调度器进行时间校准），再调用 `app_claw_cli_start` 启动 Console REPL，最后发布 `startup` / `boot_completed` 触发事件通知系统启动完成，装配完毕。
 
 </Steps>
 

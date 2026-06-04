@@ -24,9 +24,11 @@ static const char *CAP_SKILL_UNREGISTER = "unregister_skill";
 #define CAP_SKILL_MAX_CATALOG_LEN 16384
 #define CAP_SKILL_MAX_PATH_LEN    128
 
+static char s_skill_root_dir[CAP_SKILL_MAX_PATH_LEN];
+
 static const char *cap_skill_root_dir(void)
 {
-    return claw_skill_get_skills_root_dir();
+    return s_skill_root_dir[0] ? s_skill_root_dir : NULL;
 }
 
 static void cap_skill_free_string_array(char **items, size_t count)
@@ -538,13 +540,21 @@ static esp_err_t cap_skill_unregister_execute(const char *input_json,
     skill_id = skill_id_item->valuestring;
     err = claw_skill_get_catalog_entry(skill_id, &entry);
     if (err != ESP_OK) {
+        ESP_LOGE(TAG, "skill %s not found before unregister: %s", skill_id, esp_err_to_name(err));
         cJSON_Delete(root);
         cap_skill_write_error(output, output_size, "skill not found", skill_id);
         return err;
     }
+    if (entry.manage_mode == CLAW_SKILL_MANAGE_MODE_READONLY) {
+        ESP_LOGW(TAG, "reject unregister readonly skill %s", skill_id);
+        cJSON_Delete(root);
+        cap_skill_write_error(output, output_size, "skill is readonly", skill_id);
+        return ESP_ERR_INVALID_STATE;
+    }
     {
         const char *root_dir = cap_skill_root_dir();
         if (!root_dir) {
+            ESP_LOGE(TAG, "skill storage is not initialized for unregister %s", skill_id);
             cJSON_Delete(root);
             cap_skill_write_error(output, output_size, "skill storage is not initialized", skill_id);
             return ESP_ERR_INVALID_STATE;
@@ -557,11 +567,13 @@ static esp_err_t cap_skill_unregister_execute(const char *input_json,
     }
     err = cap_skill_read_file_dup(skill_path, &old_markdown);
     if (err != ESP_OK) {
+        ESP_LOGE(TAG, "failed to read skill markdown before unregister %s: %s", skill_id, esp_err_to_name(err));
         cJSON_Delete(root);
         cap_skill_write_error(output, output_size, "failed to read skill markdown", skill_id);
         return err;
     }
     if (remove(skill_path) != 0) {
+        ESP_LOGE(TAG, "failed to delete skill markdown %s", skill_path);
         free(old_markdown);
         cJSON_Delete(root);
         cap_skill_write_error(output, output_size, "failed to delete skill markdown", skill_id);
@@ -573,6 +585,7 @@ static esp_err_t cap_skill_unregister_execute(const char *input_json,
         if (cap_skill_write_file_text(skill_path, old_markdown) == ESP_OK) {
             (void)claw_skill_reload_registry();
         }
+        ESP_LOGE(TAG, "failed to reload registry after unregister %s: %s", skill_id, esp_err_to_name(err));
         free(old_markdown);
         cJSON_Delete(root);
         cap_skill_write_error(output, output_size, "failed to reload skill registry", skill_id);
@@ -639,8 +652,18 @@ static const claw_cap_group_t s_skill_group = {
     .descriptor_count = sizeof(s_skill_descriptors) / sizeof(s_skill_descriptors[0]),
 };
 
-esp_err_t cap_skill_mgr_register_group(void)
+esp_err_t cap_skill_mgr_register_group(const char *skills_root_dir)
 {
+    if (!skills_root_dir || !skills_root_dir[0]) {
+        ESP_LOGE(TAG, "register group: missing skills root dir");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (snprintf(s_skill_root_dir, sizeof(s_skill_root_dir), "%s", skills_root_dir) >= (int)sizeof(s_skill_root_dir)) {
+        s_skill_root_dir[0] = '\0';
+        ESP_LOGE(TAG, "register group: skills root dir too long");
+        return ESP_ERR_INVALID_SIZE;
+    }
+
     if (claw_cap_group_exists(s_skill_group.group_id)) {
         return ESP_OK;
     }

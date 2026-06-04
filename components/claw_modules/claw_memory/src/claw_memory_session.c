@@ -96,7 +96,8 @@ typedef struct {
 #define CLAW_MEMORY_SESSION_IDX_VERSION 1
 #define CLAW_MEMORY_SESSION_COMPACT_TOOL_TURNS 1
 #define CLAW_MEMORY_SESSION_SIZE_WARNING \
-    "Session history is still too large after compaction. Please create a new conversation by sending the command `/new`."
+    "Session history is still too large after compaction. Please create a new conversation by sending \
+    the command `/session new [name]`, and delete the old session by `/session delete <name>` due to limited storage space."
 
 _Static_assert(sizeof(claw_memory_session_index_header_t) == 8,
                "session history index header size must remain fixed");
@@ -561,11 +562,11 @@ esp_err_t claw_memory_async_extract_ensure_started(const claw_core_request_t *re
 
 static bool session_history_record_type_valid(uint8_t record_type)
 {
-    switch ((claw_session_record_type_t)record_type) {
-    case CLAW_SESSION_RECORD_USER:
-    case CLAW_SESSION_RECORD_ASSISTANT_FINAL:
-    case CLAW_SESSION_RECORD_ASSISTANT_TOOL:
-    case CLAW_SESSION_RECORD_TOOL_RESULT:
+    switch ((claw_core_context_record_type_t)record_type) {
+    case CLAW_CORE_CONTEXT_RECORD_USER:
+    case CLAW_CORE_CONTEXT_RECORD_ASSISTANT_FINAL:
+    case CLAW_CORE_CONTEXT_RECORD_ASSISTANT_TOOL:
+    case CLAW_CORE_CONTEXT_RECORD_TOOL_RESULT:
         return true;
     default:
         return false;
@@ -608,6 +609,24 @@ static bool session_history_path_exists(const char *path)
         return false;
     }
     return stat(path, &st) == 0;
+}
+
+static esp_err_t session_history_unlink_path(const char *path, bool *out_deleted_any)
+{
+    if (!path || !path[0] || !out_deleted_any) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (unlink(path) == 0) {
+        *out_deleted_any = true;
+        return ESP_OK;
+    }
+    if (errno == ENOENT) {
+        return ESP_OK;
+    }
+
+    ESP_LOGE(TAG, "delete session history artifact %s failed: errno=%d", path, errno);
+    return ESP_FAIL;
 }
 
 static esp_err_t session_history_close_file(FILE *file);
@@ -993,12 +1012,12 @@ static esp_err_t session_history_load_indexed_json(FILE *file,
 
     for (i = 0; i < index->count; i++) {
         const claw_memory_session_index_entry_t *entry;
-        claw_session_record_type_t type;
+        claw_core_context_record_type_t type;
         char *record_text = NULL;
         cJSON *record = NULL;
 
         entry = &index->entries[i];
-        type = (claw_session_record_type_t)entry->record_type;
+        type = (claw_core_context_record_type_t)entry->record_type;
 
         err = session_history_read_record_text(file, entry, &record_text);
         if (err != ESP_OK) {
@@ -1013,12 +1032,12 @@ static esp_err_t session_history_load_indexed_json(FILE *file,
         }
 
         if (session_history_backend_mismatch(entry->backend_format)) {
-            if (type == CLAW_SESSION_RECORD_ASSISTANT_TOOL ||
-                    type == CLAW_SESSION_RECORD_TOOL_RESULT) {
+            if (type == CLAW_CORE_CONTEXT_RECORD_ASSISTANT_TOOL ||
+                    type == CLAW_CORE_CONTEXT_RECORD_TOOL_RESULT) {
                 cJSON_Delete(record);
                 continue;
             }
-            if (type == CLAW_SESSION_RECORD_ASSISTANT_FINAL) {
+            if (type == CLAW_CORE_CONTEXT_RECORD_ASSISTANT_FINAL) {
                 cJSON *degraded = NULL;
 
                 err = session_history_degrade_assistant_final(record, &degraded);
@@ -1035,7 +1054,7 @@ static esp_err_t session_history_load_indexed_json(FILE *file,
 
         err = session_history_append_loaded_record(records,
                                                    record,
-                                                   type == CLAW_SESSION_RECORD_TOOL_RESULT);
+                                                   type == CLAW_CORE_CONTEXT_RECORD_TOOL_RESULT);
         if (err != ESP_OK) {
             goto cleanup;
         }
@@ -1351,7 +1370,7 @@ static esp_err_t session_history_open_pair_for_append(const char *data_path,
 
 static esp_err_t session_history_append_indexed_record(FILE *data_file,
                                                        FILE *idx_file,
-                                                       claw_session_record_type_t record_type,
+                                                       claw_core_context_record_type_t record_type,
                                                        const char *json_text,
                                                        const char *role,
                                                        const char *text)
@@ -1456,10 +1475,10 @@ static esp_err_t session_history_analyze_turns(const claw_memory_session_index_t
     }
 
     for (i = 0; i < index->count; i++) {
-        claw_session_record_type_t type =
-            (claw_session_record_type_t)index->entries[i].record_type;
+        claw_core_context_record_type_t type =
+            (claw_core_context_record_type_t)index->entries[i].record_type;
 
-        if (i == 0 || type == CLAW_SESSION_RECORD_USER) {
+        if (i == 0 || type == CLAW_CORE_CONTEXT_RECORD_USER) {
             if (turn_count > 0) {
                 turns[turn_count - 1].end = i;
             }
@@ -1475,13 +1494,13 @@ static esp_err_t session_history_analyze_turns(const claw_memory_session_index_t
 
     for (t = 0; t < turn_count; t++) {
         for (i = turns[t].start; i < turns[t].end; i++) {
-            claw_session_record_type_t type =
-                (claw_session_record_type_t)index->entries[i].record_type;
+            claw_core_context_record_type_t type =
+                (claw_core_context_record_type_t)index->entries[i].record_type;
 
-            if (type == CLAW_SESSION_RECORD_ASSISTANT_FINAL) {
+            if (type == CLAW_CORE_CONTEXT_RECORD_ASSISTANT_FINAL) {
                 turns[t].completed = true;
-            } else if (type == CLAW_SESSION_RECORD_ASSISTANT_TOOL ||
-                       type == CLAW_SESSION_RECORD_TOOL_RESULT) {
+            } else if (type == CLAW_CORE_CONTEXT_RECORD_ASSISTANT_TOOL ||
+                       type == CLAW_CORE_CONTEXT_RECORD_TOOL_RESULT) {
                 turns[t].has_tool_records = true;
             }
         }
@@ -1506,21 +1525,21 @@ static esp_err_t session_history_analyze_turns(const claw_memory_session_index_t
 static bool session_history_compact_keep_record(const claw_memory_session_turn_t *turns,
                                                 size_t turn_count,
                                                 size_t turn_index,
-                                                claw_session_record_type_t type)
+                                                claw_core_context_record_type_t type)
 {
     if (!turns || turn_index >= turn_count) {
         return false;
     }
-    if (type == CLAW_SESSION_RECORD_USER ||
-            type == CLAW_SESSION_RECORD_ASSISTANT_FINAL) {
+    if (type == CLAW_CORE_CONTEXT_RECORD_USER ||
+            type == CLAW_CORE_CONTEXT_RECORD_ASSISTANT_FINAL) {
         return true;
     }
     if (turn_index + 1 == turn_count && !turns[turn_index].completed) {
         return true;
     }
     return turns[turn_index].keep_tool_records &&
-           (type == CLAW_SESSION_RECORD_ASSISTANT_TOOL ||
-            type == CLAW_SESSION_RECORD_TOOL_RESULT);
+           (type == CLAW_CORE_CONTEXT_RECORD_ASSISTANT_TOOL ||
+            type == CLAW_CORE_CONTEXT_RECORD_TOOL_RESULT);
 }
 
 static esp_err_t session_history_plan_compaction(const claw_memory_session_index_t *index,
@@ -1542,8 +1561,8 @@ static esp_err_t session_history_plan_compaction(const claw_memory_session_index
     *out_entry_count = 0;
 
     for (i = 0; i < index->count; i++) {
-        claw_session_record_type_t type =
-            (claw_session_record_type_t)index->entries[i].record_type;
+        claw_core_context_record_type_t type =
+            (claw_core_context_record_type_t)index->entries[i].record_type;
 
         while (turn_index + 1 < turn_count && i >= turns[turn_index].end) {
             turn_index++;
@@ -1650,8 +1669,8 @@ static esp_err_t session_history_rewrite_compacted(const char *session_id,
     }
 
     for (i = 0; i < index->count; i++) {
-        claw_session_record_type_t type =
-            (claw_session_record_type_t)index->entries[i].record_type;
+        claw_core_context_record_type_t type =
+            (claw_core_context_record_type_t)index->entries[i].record_type;
 
         while (turn_index + 1 < turn_count && i >= turns[turn_index].end) {
             turn_index++;
@@ -1778,7 +1797,7 @@ static esp_err_t session_history_compact_if_needed(const char *session_id,
     return err;
 }
 
-static esp_err_t claw_memory_session_validate_batch(const claw_session_persist_batch_t *batch)
+static esp_err_t claw_memory_session_validate_batch(const claw_core_context_persist_batch_t *batch)
 {
     size_t i;
 
@@ -1798,19 +1817,19 @@ static esp_err_t claw_memory_session_validate_batch(const claw_session_persist_b
     return ESP_OK;
 }
 
-static const char *claw_memory_session_record_text_role(claw_session_record_type_t type)
+static const char *claw_memory_session_record_text_role(claw_core_context_record_type_t type)
 {
     switch (type) {
-    case CLAW_SESSION_RECORD_USER:
+    case CLAW_CORE_CONTEXT_RECORD_USER:
         return "user";
-    case CLAW_SESSION_RECORD_ASSISTANT_FINAL:
+    case CLAW_CORE_CONTEXT_RECORD_ASSISTANT_FINAL:
         return "assistant";
     default:
         return NULL;
     }
 }
 
-esp_err_t claw_memory_persist_session_callback(const claw_session_persist_batch_t *batch,
+esp_err_t claw_memory_persist_context_callback(const claw_core_context_persist_batch_t *batch,
                                                void *user_ctx)
 {
     char *data_path = NULL;
@@ -1891,6 +1910,58 @@ cleanup:
     }
     free(data_path);
     free(idx_path);
+    return err;
+}
+
+esp_err_t claw_memory_delete_session_history(const char *session_id,
+                                             bool *out_deleted_any)
+{
+    char *data_path = NULL;
+    char *idx_path = NULL;
+    char *blocked_path = NULL;
+    bool deleted_any = false;
+    esp_err_t err = ESP_OK;
+
+    if (!session_id || !session_id[0] || !out_deleted_any) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_memory.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    *out_deleted_any = false;
+
+    data_path = claw_memory_session_path_dup(session_id);
+    if (!data_path) {
+        ESP_LOGE(TAG, "allocate session history path failed");
+        return ESP_ERR_NO_MEM;
+    }
+    idx_path = session_history_idx_path_dup(data_path);
+    blocked_path = session_history_blocked_path_dup(data_path);
+    if (!idx_path || !blocked_path) {
+        err = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+
+    err = session_history_unlink_path(data_path, &deleted_any);
+    if (err != ESP_OK) {
+        goto cleanup;
+    }
+    err = session_history_unlink_path(idx_path, &deleted_any);
+    if (err != ESP_OK) {
+        goto cleanup;
+    }
+    err = session_history_unlink_path(blocked_path, &deleted_any);
+    if (err != ESP_OK) {
+        goto cleanup;
+    }
+
+cleanup:
+    free(data_path);
+    free(idx_path);
+    free(blocked_path);
+    if (err == ESP_OK) {
+        *out_deleted_any = deleted_any;
+    }
     return err;
 }
 

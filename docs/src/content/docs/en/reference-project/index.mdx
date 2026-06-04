@@ -3,8 +3,9 @@ title: Project architecture
 description: Repo layering, runtime dataflow, and documentation navigation for ESP-Claw.
 ---
 
-import { FileTree, Aside } from '@astrojs/starlight/components';
+import { FileTree } from '@astrojs/starlight/components';
 import ClawRunDiagram from "@/assets/images/claw_run.svg?url";
+import LinkToSource from '@/components/LinkToSource.astro';
 
 ## System overview
 
@@ -12,10 +13,10 @@ The repo follows an **“example app + shared components”** layout: `applicati
 
 Today the code falls into four areas:
 
-- **App assembly:** `application/edge_agent/main` and `components/common` — boot, networking, settings, the HTTP provisioning UI, and app-level module registration.
-- **Capabilities:** `components/claw_capabilities` — outward-facing capabilities such as IM, MCP client/server, Lua runtime, scheduling, files, time, web search, and more.
-- **Runtime core:** `components/claw_modules` — Agent infrastructure: core context, capability registration, event routing, memory, and skills.
-- **Device & script extensions:** `components/lua_modules` — exposes displays, cameras, audio, buttons, GPIO, PWM, storage, and other peripherals to Lua and the Agent.
+- **App assembly:** <LinkToSource relativePath="application/edge_agent/main/" /> and <LinkToSource relativePath="components/common/" /> — boot, networking, settings, the HTTP provisioning UI, and app-level module registration.
+- **Capabilities:** <LinkToSource relativePath="components/claw_capabilities/" /> — outward-facing capabilities such as IM, MCP client/server, Lua runtime, scheduling, files, time, web search, and more.
+- **Runtime core:** <LinkToSource relativePath="components/claw_modules/" /> — Agent infrastructure: core context, capability registration, event routing, memory, and skills.
+- **Device & script extensions:** <LinkToSource relativePath="components/lua_modules/" /> — exposes displays, cameras, audio, buttons, GPIO, PWM, storage, and other peripherals to Lua and the Agent.
 
 ## Project directory layout
 
@@ -26,6 +27,8 @@ Today the code falls into four areas:
   - components/ App-level components
     - app_config/ Configuration persistence (NVS read/write)
     - http_server/ Web management UI and JSON API
+    - cmd_wifi/ Wi-Fi CLI commands
+    - gen_bmgr_codes/ [auto-generated] board-adaptation helper code
   - fatfs_image/ Factory FATFS inputs: router_rules, memory, scheduler, static files, and app-bundled Skills
 - components/common/ **Shared app components** — reusable wiring across apps
   - app_claw/ App startup and wiring (`app_claw_start`, CLI, Lua module registration)
@@ -34,12 +37,18 @@ Today the code falls into four areas:
   - captive_dns/ Captive DNS for SoftAP provisioning
   - display_arbiter/ Display ownership arbitration [\[details\]](@lang/reference-cap/lua-modules#display-module)
   - emote/ Emote display and network-state linkage
+  - esp_painter/ Lightweight drawing helpers
+  - esp_video/ Video-processing wrappers
+  - http_reuse/ Reusable HTTP foundation component
+  - lua_module_builder/ Lua module build helpers
+  - skill_builder/ Skill build helpers
 - components/
   - claw_modules/ **Runtime core**
     - claw_core/ Agent core — Agent loop, context assembly, tool calls
     - claw_cap/ Capability runtime — capability abstraction, registration, and management
     - claw_event_router/ Event Router & automation — deterministic event routing
     - claw_memory/ Structured memory
+    - claw_ramfs/ RAMFS runtime filesystem support
     - claw_skill/ Skills — skill metadata and loading
   - claw_capabilities/ **Capability**
     - cap_im_platform/ Unified IM platform component (Feishu, QQ, Telegram, WeChat groups)
@@ -54,9 +63,11 @@ Today the code falls into four areas:
     - lua_module_camera/ Camera
     - lua_module_audio/ Audio
     - lua_driver_mcpwm/ PWM
+    - lua_driver_pcnt/ Pulse counter
     - lua_module_button/ Button
     - lua_driver_gpio/ GPIO
     - lua_driver_i2c/ I2C bus
+    - lua_driver_touch/ Touch
     - lua_driver_adc/ ADC sampling
     - lua_module_led_strip/ LED strip
     - lua_module_storage/ Storage
@@ -64,7 +75,24 @@ Today the code falls into four areas:
     - lua_module_system/ System time, memory, and network status
     - lua_module_event_publisher/ Event publishing
     - lua_driver_uart/ UART serial I/O
-    - esp_painter/ Lightweight drawing helpers
+    - lua_module_ble_hid/ Bluetooth HID
+    - lua_module_board_manager/ Board management
+    - lua_module_call_capability/ Capability call bridge
+    - lua_module_environmental_sensor/ Environmental sensor
+    - lua_module_fuel_gauge/ Fuel gauge
+    - lua_module_http_server/ Local HTTP server
+    - lua_module_image/ Image processing
+    - lua_module_imu/ IMU sensor
+    - lua_module_ir/ Infrared
+    - lua_module_json/ JSON utilities
+    - lua_module_knob/ Knob
+    - lua_module_lcd/ LCD
+    - lua_module_lcd_touch/ LCD touch
+    - lua_module_lvgl/ LVGL UI
+    - lua_module_magnetometer/ Magnetometer
+    - lua_module_sci/ Serial peripheral integration
+    - lua_module_thread/ Thread support
+    - lua_module_vision/ Vision capabilities
 - docs/ Project documentation and images
 </FileTree>
 
@@ -102,11 +130,13 @@ All runtime data lives under the FATFS mount `/fatfs`:
   - scheduler/
     - schedules.json Scheduler jobs
     - schedules.json.state Scheduler runtime state (generated)
+  - static/
+    - ESP-Claw.png Example static asset (factory preset)
   - inbox/
     - ... IM attachments
 </FileTree>
 
 ## Backup and reset
 
-- **Backup**: copy the `/fatfs` subfolders (`sessions/`, `memory/`, `skills/`, `scripts/`, `router_rules/`, `scheduler/`) to external storage.
+- **Backup**: copy the `/fatfs` subfolders (`sessions/`, `memory/`, `skills/`, `scripts/`, `router_rules/`, `scheduler/`, `static/`, `inbox/`) to external storage.
 - **Reset**: re-flash the `storage` partition or re-flash the full firmware.
