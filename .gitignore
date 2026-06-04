@@ -53,3 +53,7 @@ pages/simulator/*.log
 pages/simulator/public/runtime/*
 !pages/simulator/public/runtime/.gitkeep
 application/rover_s3/sdkconfig.m5sticks3
+
+# MemPalace per-project files (issue #185)
+mempalace.yaml
+entities.json

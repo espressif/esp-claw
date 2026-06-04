@@ -2,9 +2,17 @@ CONFIG_IDF_TARGET="esp32s3"
 CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
+# N8R8 (quad flash + octal PSRAM) documented combo: flash 80MHz SDR + PSRAM 40MHz DDR.
+# 80/80 is non-documented and marginal — large PSRAM transfers (e.g. fatfs 42KB
+# buffer) wedge in tlsf_malloc. 40MHz DDR needs no MSPI timing tuning → robust.
 CONFIG_SPIRAM_SPEED_40M=y
 CONFIG_SPIRAM_BOOT_INIT=y
 CONFIG_SPIRAM_USE_MALLOC=y
+# Make the I2C master driver PSRAM-safe: ISR handler + driver structs in
+# internal RAM/IRAM instead of PSRAM (MALLOC_CAP_DEFAULT). Without this the i2c
+# bus structs land in PSRAM and alloc/free traversal of their TLSF metadata
+# wedges (IWDT). Structs are tiny, so internal RAM cost is negligible.
+CONFIG_I2C_ISR_IRAM_SAFE=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
 CONFIG_MBEDTLS_DYNAMIC_BUFFER=n
 CONFIG_MBEDTLS_SSL_IN_CONTENT_LEN=16384
@@ -14,6 +22,19 @@ CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
 CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS=y
 CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
 CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+# Match the known-good M5/Arduino qio_opi config: flash 80MHz + PSRAM 80MHz,
+# both on the shared MSPI clock (a 80/40 split wedges PSRAM reads after flash ops).
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+# Octal PSRAM on ESP32-S3 requires QIO flash for valid MSPI timing tuning.
+# DIO flash + Octal PSRAM leaves PSRAM timing marginal: the memory test passes
+# but the cache wedges under load (i2c_master init) → panic_enable_cache hangs
+# → IWDT reset. Matches the M5Stack-validated qio_opi memory type. (esp-idf #13019)
+# CONFIG_ESPTOOLPY_FLASH_MODE_AUTO_DETECT is not set
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+# DIAG: run panic handler from IRAM so it doesn't re-enable cache (that path
+# hangs in panic_enable_cache, masking the real fault). Lets the chip print
+# the actual exception (e.g. "Cache disabled but cached memory accessed").
+CONFIG_ESP_PANIC_HANDLER_IRAM=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_FATFS_LFN_HEAP=y
