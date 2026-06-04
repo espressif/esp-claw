@@ -1,0 +1,141 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+ * SPDX-License-Identifier: Apache-2.0
+ */
+#include "wave_rover_hal.h"
+#include "wave_rover_hal_internal.h"
+#include "board_config.h"
+#include "esp_log.h"
+#include "esp_check.h"
+#include <string.h>
+
+static const char *TAG = "wr_imu";
+static i2c_master_dev_handle_t s_qmi_dev  = NULL;
+static i2c_master_dev_handle_t s_ak09_dev = NULL;
+
+/* QMI8658 registers */
+#define QMI_WHO_AM_I  0x00
+#define QMI_CTRL1     0x02
+#define QMI_CTRL2     0x03
+#define QMI_CTRL3     0x04
+#define QMI_CTRL7     0x08
+#define QMI_TEMP_L    0x33
+#define QMI_ACCX_L    0x35
+#define QMI_GYRX_L    0x3B
+
+/* AK09918 registers */
+#define AK_ST1    0x10
+#define AK_HXL    0x11
+#define AK_CNTL2  0x31
+
+static esp_err_t qmi_read(uint8_t reg, uint8_t *buf, size_t len)
+{
+    ESP_RETURN_ON_ERROR(i2c_master_transmit(s_qmi_dev, &reg, 1, 50), TAG, "qmi tx");
+    return i2c_master_receive(s_qmi_dev, buf, len, 50);
+}
+
+static esp_err_t qmi_write(uint8_t reg, uint8_t val)
+{
+    uint8_t buf[2] = {reg, val};
+    return i2c_master_transmit(s_qmi_dev, buf, 2, 50);
+}
+
+static esp_err_t ak_read(uint8_t reg, uint8_t *buf, size_t len)
+{
+    ESP_RETURN_ON_ERROR(i2c_master_transmit(s_ak09_dev, &reg, 1, 50), TAG, "ak tx");
+    return i2c_master_receive(s_ak09_dev, buf, len, 50);
+}
+
+static esp_err_t ak_write(uint8_t reg, uint8_t val)
+{
+    uint8_t buf[2] = {reg, val};
+    return i2c_master_transmit(s_ak09_dev, buf, 2, 50);
+}
+
+static esp_err_t imu_hw_init(void)
+{
+    if (!g_wr_i2c_bus) return ESP_ERR_INVALID_STATE;
+
+    i2c_device_config_t qmi_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address  = WR_QMI8658_ADDR,
+        .scl_speed_hz    = WR_I2C_FREQ_HZ,
+    };
+    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(g_wr_i2c_bus, &qmi_cfg, &s_qmi_dev),
+                        TAG, "add qmi");
+
+    uint8_t who;
+    ESP_RETURN_ON_ERROR(qmi_read(QMI_WHO_AM_I, &who, 1), TAG, "who_am_i");
+    ESP_LOGI(TAG, "QMI8658 WHO_AM_I=0x%02X", who);
+
+    ESP_RETURN_ON_ERROR(qmi_write(QMI_CTRL1, 0x40), TAG, "ctrl1");
+    ESP_RETURN_ON_ERROR(qmi_write(QMI_CTRL2, 0x03), TAG, "ctrl2"); /* accel: 4g */
+    ESP_RETURN_ON_ERROR(qmi_write(QMI_CTRL3, 0x55), TAG, "ctrl3"); /* gyro: 512dps */
+    ESP_RETURN_ON_ERROR(qmi_write(QMI_CTRL7, 0x03), TAG, "ctrl7"); /* enable acc+gyr */
+
+    i2c_device_config_t ak_cfg = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address  = WR_AK09918_ADDR,
+        .scl_speed_hz    = WR_I2C_FREQ_HZ,
+    };
+    if (i2c_master_bus_add_device(g_wr_i2c_bus, &ak_cfg, &s_ak09_dev) == ESP_OK) {
+        ak_write(AK_CNTL2, 0x08); /* continuous mode 1 (10Hz) */
+        ESP_LOGI(TAG, "AK09918 initialized");
+    } else {
+        ESP_LOGW(TAG, "AK09918 not found, mag disabled");
+    }
+    return ESP_OK;
+}
+
+static float raw16_to_float(uint8_t lo, uint8_t hi, float scale)
+{
+    int16_t raw = (int16_t)(((uint16_t)hi << 8) | lo);
+    return raw * scale;
+}
+
+esp_err_t wr_imu_get_sample(wr_imu_sample_t *s)
+{
+    if (!s) return ESP_ERR_INVALID_ARG;
+    memset(s, 0, sizeof(*s));
+
+    if (g_wr_dry_run || !g_wr_i2c_bus) {
+        s->present = false;
+        s->accel_z = 1.0f;
+        return ESP_OK;
+    }
+
+    if (!s_qmi_dev) {
+        if (imu_hw_init() != ESP_OK) return ESP_OK;
+    }
+
+    uint8_t raw[12];
+    if (qmi_read(QMI_ACCX_L, raw, 12) != ESP_OK) return ESP_OK;
+
+    s->present = true;
+    s->accel_x = raw16_to_float(raw[0],  raw[1],  4.0f / 32768.0f);
+    s->accel_y = raw16_to_float(raw[2],  raw[3],  4.0f / 32768.0f);
+    s->accel_z = raw16_to_float(raw[4],  raw[5],  4.0f / 32768.0f);
+    s->gyro_x  = raw16_to_float(raw[6],  raw[7],  512.0f / 32768.0f);
+    s->gyro_y  = raw16_to_float(raw[8],  raw[9],  512.0f / 32768.0f);
+    s->gyro_z  = raw16_to_float(raw[10], raw[11], 512.0f / 32768.0f);
+
+    uint8_t tmp[2];
+    if (qmi_read(QMI_TEMP_L, tmp, 2) == ESP_OK) {
+        s->has_temperature = true;
+        s->temperature_c   = raw16_to_float(tmp[0], tmp[1], 1.0f / 256.0f);
+    }
+
+    if (s_ak09_dev) {
+        uint8_t st1;
+        if (ak_read(AK_ST1, &st1, 1) == ESP_OK && (st1 & 0x01)) {
+            uint8_t mag[6];
+            if (ak_read(AK_HXL, mag, 6) == ESP_OK) {
+                s->mag_present = true;
+                s->mag_x = raw16_to_float(mag[0], mag[1], 0.15f);
+                s->mag_y = raw16_to_float(mag[2], mag[3], 0.15f);
+                s->mag_z = raw16_to_float(mag[4], mag[5], 0.15f);
+            }
+        }
+    }
+    return ESP_OK;
+}

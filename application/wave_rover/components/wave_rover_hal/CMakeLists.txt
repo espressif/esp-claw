@@ -1,1 +1,16 @@
-idf_component_register(SRCS "" INCLUDE_DIRS "include")
+idf_component_register(
+    SRCS
+        "wave_rover_hal.c"
+        "wave_rover_motor.c"
+        "wave_rover_power.c"
+        "wave_rover_imu.c"
+        "wave_rover_display.c"
+    INCLUDE_DIRS "include"
+    PRIV_INCLUDE_DIRS
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../boards/wave_rover"
+    PRIV_REQUIRES
+        driver
+        esp_log
+        esp_check
+        freertos
+)
