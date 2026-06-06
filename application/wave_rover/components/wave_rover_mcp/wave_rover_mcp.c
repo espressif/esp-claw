@@ -60,16 +60,18 @@ static esp_err_t null_transport_start(esp_mcp_transport_handle_t t, void *c)
     return ESP_OK;
 }
 
+static uint8_t s_null_cfg_sentinel = 0;  /* non-NULL sentinel required by SDK */
+
 static esp_err_t null_transport_create_cfg(const void *c, void **o)
 {
     (void)c;
-    *o = NULL;
+    *o = &s_null_cfg_sentinel;  /* SDK asserts non-NULL after create_config */
     return ESP_OK;
 }
 
 static esp_err_t null_transport_delete_cfg(void *c)
 {
-    (void)c;
+    (void)c;  /* sentinel is not heap-allocated, nothing to free */
     return ESP_OK;
 }
 
