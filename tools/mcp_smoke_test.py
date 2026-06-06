@@ -7,15 +7,16 @@ import urllib.request
 import urllib.error
 
 
-def mcp_call(host, port, method, params=None):
+def mcp_call(host, port, method, params=None, token=None):
     url = f"http://{host}:{port}/mcp"
     body = json.dumps({
         "jsonrpc": "2.0", "id": 1,
         "method": method, "params": params or {}
     }).encode()
-    req = urllib.request.Request(
-        url, data=body, headers={"Content-Type": "application/json"}
-    )
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=body, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             return json.loads(r.read())
@@ -36,6 +37,8 @@ def main():
     p = argparse.ArgumentParser(description="Wave Rover MCP smoke test")
     p.add_argument("--host", default="192.168.4.1")
     p.add_argument("--port", type=int, default=8080)
+    p.add_argument("--token", default=None,
+                   help="Bearer token (required when auth_enabled=true on device)")
     p.add_argument("--allow-motion", action="store_true",
                    help="Enable motion tests (rover must be in a safe position)")
     args = p.parse_args()
@@ -52,7 +55,7 @@ def main():
         ("resources/list", "resources/list", {}),
     ]
     for label, method, params in protocol_tests:
-        r = mcp_call(args.host, args.port, method, params)
+        r = mcp_call(args.host, args.port, method, params, token=args.token)
         if check(label, r):
             passed += 1
         else:
@@ -70,7 +73,7 @@ def main():
     ]
     for label, tool_name, tool_args in tool_tests:
         r = mcp_call(args.host, args.port, "tools/call",
-                     {"name": tool_name, "arguments": tool_args})
+                     {"name": tool_name, "arguments": tool_args}, token=args.token)
         if check(label, r):
             passed += 1
         else:
@@ -80,7 +83,7 @@ def main():
         r = mcp_call(args.host, args.port, "tools/call", {
             "name": "rover.move",
             "arguments": {"linear": 0.2, "angular": 0.0, "duration_ms": 200}
-        })
+        }, token=args.token)
         if check("rover.move (motion enabled)", r):
             passed += 1
         else:

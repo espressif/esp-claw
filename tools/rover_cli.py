@@ -7,14 +7,15 @@ import urllib.request
 import urllib.error
 
 
-def mcp_call(host, port, method, params):
+def mcp_call(host, port, method, params, token=None):
     url = f"http://{host}:{port}/mcp"
     body = json.dumps({
         "jsonrpc": "2.0", "id": 1, "method": method, "params": params
     }).encode()
-    req = urllib.request.Request(
-        url, data=body, headers={"Content-Type": "application/json"}
-    )
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=body, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             return json.loads(r.read())
@@ -23,8 +24,9 @@ def mcp_call(host, port, method, params):
         sys.exit(1)
 
 
-def tool_call(host, port, tool, arguments):
-    return mcp_call(host, port, "tools/call", {"name": tool, "arguments": arguments})
+def tool_call(host, port, tool, arguments, token=None):
+    return mcp_call(host, port, "tools/call", {"name": tool, "arguments": arguments},
+                    token=token)
 
 
 def pretty(resp):
@@ -39,8 +41,10 @@ def pretty(resp):
 
 def main():
     p = argparse.ArgumentParser(description="Wave Rover CLI")
-    p.add_argument("--host", default="wave-rover.local")
-    p.add_argument("--port", type=int, default=8080)
+    p.add_argument("--host",  default="wave-rover.local")
+    p.add_argument("--port",  type=int, default=8080)
+    p.add_argument("--token", default=None,
+                   help="Bearer token (required when auth_enabled=true on device)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("status",         help="Get rover status")
@@ -75,21 +79,22 @@ def main():
     host, port = args.host, args.port
 
     if args.cmd == "status":
-        pretty(tool_call(host, port, "rover.get_status", {}))
+        pretty(tool_call(host, port, "rover.get_status", {}, token=args.token))
     elif args.cmd == "power":
-        pretty(tool_call(host, port, "rover.get_power", {}))
+        pretty(tool_call(host, port, "rover.get_power", {}, token=args.token))
     elif args.cmd == "imu":
-        pretty(tool_call(host, port, "rover.get_imu", {}))
+        pretty(tool_call(host, port, "rover.get_imu", {}, token=args.token))
     elif args.cmd == "display-status":
-        pretty(tool_call(host, port, "rover.display_status", {}))
+        pretty(tool_call(host, port, "rover.display_status", {}, token=args.token))
     elif args.cmd == "stop":
-        pretty(tool_call(host, port, "rover.stop", {"reason": args.reason}))
+        pretty(tool_call(host, port, "rover.stop", {"reason": args.reason},
+                         token=args.token))
     elif args.cmd == "emergency-stop":
         pretty(tool_call(host, port, "rover.emergency_stop",
-                         {"reason": args.reason}))
+                         {"reason": args.reason}, token=args.token))
     elif args.cmd == "clear-estop":
         pretty(tool_call(host, port, "rover.clear_emergency_stop",
-                         {"confirm": True}))
+                         {"confirm": True}, token=args.token))
     elif args.cmd == "move":
         if not args.allow_motion:
             print("ERROR: pass --allow-motion to send movement commands",
@@ -99,7 +104,7 @@ def main():
             "linear":      args.linear,
             "angular":     args.angular,
             "duration_ms": args.duration_ms,
-        }))
+        }, token=args.token))
     elif args.cmd == "tank":
         if not args.allow_motion:
             print("ERROR: pass --allow-motion to send movement commands",
@@ -109,7 +114,7 @@ def main():
             "left":        args.left,
             "right":       args.right,
             "duration_ms": args.duration_ms,
-        }))
+        }, token=args.token))
 
 
 if __name__ == "__main__":

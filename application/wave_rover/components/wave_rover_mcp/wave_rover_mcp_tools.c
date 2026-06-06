@@ -436,6 +436,16 @@ static esp_mcp_value_t tool_set_wifi(const esp_mcp_property_list_t *p)
         cJSON_AddStringToObject(root, "error", "mode required");
         return json_obj_str(root);
     }
+    /* Validate mode strictly — unknown value must not silently change to AP */
+    uint8_t wifi_mode;
+    if      (strcmp(mode_str, "ap")     == 0) wifi_mode = 0;
+    else if (strcmp(mode_str, "sta")    == 0) wifi_mode = 1;
+    else if (strcmp(mode_str, "ap_sta") == 0) wifi_mode = 2;
+    else {
+        cJSON_AddBoolToObject(root,   "ok",    false);
+        cJSON_AddStringToObject(root, "error", "mode must be 'ap', 'sta', or 'ap_sta'");
+        return json_obj_str(root);
+    }
 
     if (s_cfg && save) {
         wave_rover_config_t new_cfg;
@@ -443,9 +453,7 @@ static esp_mcp_value_t tool_set_wifi(const esp_mcp_property_list_t *p)
         if (ssid)     strlcpy(new_cfg.wifi_ssid, ssid, sizeof(new_cfg.wifi_ssid));
         /* do not log password */
         if (password) strlcpy(new_cfg.wifi_password, password, sizeof(new_cfg.wifi_password));
-        if (strcmp(mode_str, "sta") == 0)        new_cfg.wifi_mode = 1;
-        else if (strcmp(mode_str, "ap_sta") == 0) new_cfg.wifi_mode = 2;
-        else                                      new_cfg.wifi_mode = 0;
+        new_cfg.wifi_mode = wifi_mode;
         wave_rover_config_save(&new_cfg);
         ESP_LOGI(TAG, "wifi config saved, reboot to apply");
     }

@@ -28,12 +28,13 @@ static const char *TAG = "wr_mcp";
 esp_err_t wr_mcp_register_all_tools(esp_mcp_t *mcp);
 void      wr_mcp_tools_set_config(const wave_rover_config_t *cfg);
 
-static esp_mcp_t           *s_mcp    = NULL;
-static esp_mcp_mgr_handle_t s_mgr    = 0;
-static httpd_handle_t       s_httpd  = NULL;
-static bool                 s_running = false;
-static TimerHandle_t        s_keepalive_timer = NULL;
-static uint32_t             s_last_cmd_ms = 0;
+static esp_mcp_t                    *s_mcp    = NULL;
+static esp_mcp_mgr_handle_t          s_mgr    = 0;
+static httpd_handle_t                s_httpd  = NULL;
+static bool                          s_running = false;
+static TimerHandle_t                 s_keepalive_timer = NULL;
+static uint32_t                      s_last_cmd_ms = 0;
+static const wave_rover_config_t    *s_cfg    = NULL;
 
 /* ------------------------------------------------------------------ */
 /* Null transport (no-op function table so the SDK engine works        */
@@ -214,11 +215,53 @@ static char *jsonrpc_error_resp(cJSON *id, int code, const char *msg)
 }
 
 /* ------------------------------------------------------------------ */
+/* Auth check                                                          */
+/* ------------------------------------------------------------------ */
+
+/* Constant-time byte comparison — avoids timing side-channel on token */
+static bool ct_streq(const char *a, const char *b)
+{
+    if (!a || !b) return false;
+    size_t la = strlen(a), lb = strlen(b);
+    volatile uint8_t diff = (uint8_t)(la ^ lb);
+    size_t n = la < lb ? la : lb;
+    for (size_t i = 0; i < n; i++) {
+        diff |= (uint8_t)(a[i] ^ b[i]);
+    }
+    return diff == 0;
+}
+
+#define AUTH_HDR_BUF 96
+
+static bool check_auth(httpd_req_t *req)
+{
+    if (!s_cfg || !s_cfg->auth_enabled) return true;   /* auth disabled */
+    if (s_cfg->auth_token[0] == '\0')   return true;   /* no token set */
+
+    char buf[AUTH_HDR_BUF] = {0};
+    if (httpd_req_get_hdr_value_str(req, "Authorization", buf, sizeof(buf)) != ESP_OK) {
+        return false;
+    }
+    /* Expect "Bearer <token>" */
+    if (strncmp(buf, "Bearer ", 7) != 0) return false;
+    return ct_streq(buf + 7, s_cfg->auth_token);
+}
+
+/* ------------------------------------------------------------------ */
 /* HTTP POST handler for /mcp                                          */
 /* ------------------------------------------------------------------ */
 
 static esp_err_t mcp_post_handler(httpd_req_t *req)
 {
+    if (!check_auth(req)) {
+        httpd_resp_set_status(req, "401 Unauthorized");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req,
+            "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":"
+            "{\"code\":-32001,\"message\":\"Unauthorized\"}}");
+        return ESP_OK;
+    }
+
     int total = req->content_len;
     if (total <= 0 || total > MCP_MAX_BODY) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad length");
@@ -317,6 +360,7 @@ esp_err_t wave_rover_mcp_start(const wave_rover_config_t *cfg)
 {
     if (s_running) return ESP_OK;
 
+    s_cfg = cfg;
     ESP_RETURN_ON_ERROR(esp_mcp_create(&s_mcp), TAG, "esp_mcp_create");
     wr_mcp_tools_set_config(cfg);
     ESP_RETURN_ON_ERROR(wr_mcp_register_all_tools(s_mcp), TAG, "register tools");
@@ -365,6 +409,7 @@ esp_err_t wave_rover_mcp_stop(void)
     if (s_httpd) { httpd_stop(s_httpd); s_httpd = NULL; }
     if (s_mgr)   { esp_mcp_mgr_deinit(s_mgr); s_mgr = 0; }
     if (s_mcp)   { esp_mcp_destroy(s_mcp); s_mcp = NULL; }
+    s_cfg     = NULL;
     s_running = false;
     return ESP_OK;
 }
