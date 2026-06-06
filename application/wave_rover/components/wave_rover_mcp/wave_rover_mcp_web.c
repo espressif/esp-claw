@@ -33,6 +33,43 @@ static TimerHandle_t              s_web_timer    = NULL;
 
 static int clamp_int(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
+/* ------------------------------------------------------------------ */
+/* Auth — mirrors mcp_post_handler check; both use the same s_web_cfg  */
+/* ------------------------------------------------------------------ */
+
+/* Constant-time comparison to avoid timing side-channel on token */
+static bool ct_streq(const char *a, const char *b)
+{
+    if (!a || !b) return false;
+    size_t la = strlen(a), lb = strlen(b);
+    volatile uint8_t diff = (uint8_t)(la ^ lb);
+    size_t n = la < lb ? la : lb;
+    for (size_t i = 0; i < n; i++) diff |= (uint8_t)(a[i] ^ b[i]);
+    return diff == 0;
+}
+
+#define AUTH_HDR_BUF 96
+
+static bool web_check_auth(httpd_req_t *req)
+{
+    if (!s_web_cfg || !s_web_cfg->auth_enabled) return true;
+    if (s_web_cfg->auth_token[0] == '\0')       return true;
+    char buf[AUTH_HDR_BUF] = {0};
+    if (httpd_req_get_hdr_value_str(req, "Authorization",
+                                    buf, sizeof(buf)) != ESP_OK) return false;
+    if (strncmp(buf, "Bearer ", 7) != 0) return false;
+    return ct_streq(buf + 7, s_web_cfg->auth_token);
+}
+
+#define WEB_REQUIRE_AUTH(req) do { \
+    if (!web_check_auth(req)) { \
+        httpd_resp_set_status(req, "401 Unauthorized"); \
+        httpd_resp_set_type(req, "application/json"); \
+        return httpd_resp_sendstr(req, \
+            "{\"ok\":false,\"error\":\"unauth\"}"); \
+    } \
+} while (0)
+
 static void get_ip(char *buf, size_t len)
 {
     /* Try STA first */
@@ -262,12 +299,14 @@ static const char s_html[] =
 
 static esp_err_t handle_root(httpd_req_t *req)
 {
+    WEB_REQUIRE_AUTH(req);
     httpd_resp_set_type(req, "text/html");
     return httpd_resp_send(req, s_html, HTTPD_RESP_USE_STRLEN);
 }
 
 static esp_err_t handle_status(httpd_req_t *req)
 {
+    WEB_REQUIRE_AUTH(req);
     wr_power_status_t ps = {0};
     wr_power_get_status(&ps);
 
@@ -290,6 +329,7 @@ static esp_err_t handle_status(httpd_req_t *req)
 
 static esp_err_t handle_cmd(httpd_req_t *req)
 {
+    WEB_REQUIRE_AUTH(req);
     char query[160] = {0};
     char action[32] = "stop";
     int  y = 0, z = 0;
@@ -334,28 +374,34 @@ static esp_err_t handle_cmd(httpd_req_t *req)
 
 static esp_err_t handle_settings_get(httpd_req_t *req)
 {
-    if (!s_web_cfg) {
-        return httpd_resp_sendstr(req, "{\"ok\":false}");
-    }
+    WEB_REQUIRE_AUTH(req);
+    if (!s_web_cfg) return httpd_resp_sendstr(req, "{\"ok\":false}");
+
     char ip[20];
     get_ip(ip, sizeof(ip));
-    bool connected = is_sta_connected();
 
-    char buf[256];
-    snprintf(buf, sizeof(buf),
-             "{\"ok\":true,\"wifi_mode\":%u,"
-             "\"wifi_ap_ssid\":\"%s\","
-             "\"wifi_ssid\":\"%s\","
-             "\"wifi_ip\":\"%s\","
-             "\"wifi_connected\":%s}",
-             s_web_cfg->wifi_mode,
-             s_web_cfg->wifi_ap_ssid,
-             s_web_cfg->wifi_ssid,
-             ip,
-             connected ? "true" : "false");
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"oom\"}");
+    }
+    cJSON_AddBoolToObject(root,   "ok",             true);
+    cJSON_AddNumberToObject(root, "wifi_mode",      s_web_cfg->wifi_mode);
+    cJSON_AddStringToObject(root, "wifi_ap_ssid",   s_web_cfg->wifi_ap_ssid);
+    cJSON_AddStringToObject(root, "wifi_ssid",      s_web_cfg->wifi_ssid);
+    cJSON_AddStringToObject(root, "wifi_ip",        ip);
+    cJSON_AddBoolToObject(root,   "wifi_connected", is_sta_connected());
 
+    char *json = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!json) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"oom\"}");
+    }
     httpd_resp_set_type(req, "application/json");
-    return httpd_resp_sendstr(req, buf);
+    esp_err_t se = httpd_resp_sendstr(req, json);
+    free(json);
+    return se;
 }
 
 static bool read_body(httpd_req_t *req, char *buf, size_t buf_size)
@@ -377,6 +423,7 @@ static bool read_body(httpd_req_t *req, char *buf, size_t buf_size)
 
 static esp_err_t handle_settings_post(httpd_req_t *req)
 {
+    WEB_REQUIRE_AUTH(req);
     char *body = malloc(1024);
     if (!body) {
         httpd_resp_set_status(req, "500 Internal Server Error");
@@ -440,6 +487,7 @@ static esp_err_t handle_settings_post(httpd_req_t *req)
 
 static esp_err_t handle_settings_reset(httpd_req_t *req)
 {
+    WEB_REQUIRE_AUTH(req);
     wave_rover_config_t defaults;
     wave_rover_config_defaults(&defaults);
 
@@ -458,6 +506,7 @@ static esp_err_t handle_settings_reset(httpd_req_t *req)
 
 static esp_err_t handle_wifi_scan(httpd_req_t *req)
 {
+    WEB_REQUIRE_AUTH(req);
     /* In pure-AP mode switch to APSTA so scanning works */
     wifi_mode_t mode = WIFI_MODE_NULL;
     if (esp_wifi_get_mode(&mode) == ESP_OK && mode == WIFI_MODE_AP) {
