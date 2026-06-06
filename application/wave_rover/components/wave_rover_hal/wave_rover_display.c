@@ -141,7 +141,7 @@ static esp_err_t oled_init(void)
 
 esp_err_t wr_display_clear(void)
 {
-    if (g_wr_dry_run || !g_wr_i2c_bus) return ESP_OK;
+    if (!g_wr_i2c_bus) return ESP_OK;
     if (!s_oled_dev) {
         if (oled_init() != ESP_OK) return ESP_OK;
     }
@@ -158,10 +158,7 @@ esp_err_t wr_display_clear(void)
 
 esp_err_t wr_display_text(const char *text, int line, bool clear_first)
 {
-    if (g_wr_dry_run || !g_wr_i2c_bus) {
-        ESP_LOGD(TAG, "dry-run display[%d]: %s", line, text ? text : "");
-        return ESP_OK;
-    }
+    if (!g_wr_i2c_bus) return ESP_OK;
     if (!s_oled_dev) {
         if (oled_init() != ESP_OK) return ESP_OK;
     }
