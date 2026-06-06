@@ -1,0 +1,567 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+ * SPDX-License-Identifier: Apache-2.0
+ */
+#include "wave_rover_hal.h"
+#include "wave_rover_config.h"
+#include <string.h>
+#include <stdio.h>
+#include "cJSON.h"
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "esp_heap_caps.h"
+#include "esp_mcp_engine.h"
+#include "esp_mcp_tool.h"
+#include "esp_mcp_property.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+static const char *TAG = "wr_tools";
+
+static const wave_rover_config_t *s_cfg = NULL;
+
+void wr_mcp_tools_set_config(const wave_rover_config_t *cfg) { s_cfg = cfg; }
+
+#define WR_FW_VERSION "0.1.0"
+#define WR_FW_NAME    "wave-rover-esp-claw-mcp"
+
+/* ------------------------------------------------------------------ */
+/* JSON helpers                                                        */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t json_obj_str(cJSON *obj)
+{
+    char *s = cJSON_PrintUnformatted(obj);
+    esp_mcp_value_t v = esp_mcp_value_create_string(s ? s : "{}");
+    free(s);
+    cJSON_Delete(obj);
+    return v;
+}
+
+/* ------------------------------------------------------------------ */
+/* rover.get_status                                                    */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_get_status(const esp_mcp_property_list_t *p)
+{
+    (void)p;
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    cJSON_AddStringToObject(root, "state",
+        wr_motor_emergency_stop_active() ? "emergency_stop" : "idle");
+
+    cJSON *fw = cJSON_AddObjectToObject(root, "firmware");
+    cJSON_AddStringToObject(fw, "name",    WR_FW_NAME);
+    cJSON_AddStringToObject(fw, "version", WR_FW_VERSION);
+
+    wr_motor_state_t ms = {0};
+    wr_motor_get_state(&ms);
+    cJSON *mot = cJSON_AddObjectToObject(root, "motors");
+    cJSON_AddNumberToObject(mot, "left",            ms.left);
+    cJSON_AddNumberToObject(mot, "right",           ms.right);
+    cJSON_AddBoolToObject(mot,   "emergency_stop",  ms.emergency_stop);
+
+    wr_power_status_t ps = {0};
+    wr_power_get_status(&ps);
+    cJSON *pwr = cJSON_AddObjectToObject(root, "power");
+    cJSON_AddBoolToObject(pwr,   "present",     ps.present);
+    cJSON_AddNumberToObject(pwr, "voltage",     ps.load_voltage_v);
+    cJSON_AddNumberToObject(pwr, "current_ma",  ps.current_ma);
+    cJSON_AddBoolToObject(pwr,   "charging",    ps.charging);
+    cJSON_AddBoolToObject(pwr,   "low_battery", ps.low_battery);
+
+    wr_imu_sample_t is = {0};
+    wr_imu_get_sample(&is);
+    cJSON *imu = cJSON_AddObjectToObject(root, "imu");
+    cJSON_AddBoolToObject(imu, "present", is.present);
+
+    cJSON_AddNumberToObject(root, "uptime_ms", (double)(esp_timer_get_time() / 1000));
+    cJSON_AddNumberToObject(root, "free_heap",  (double)esp_get_free_heap_size());
+    cJSON_AddNullToObject(root, "last_error");
+
+    return json_obj_str(root);
+}
+
+/* ------------------------------------------------------------------ */
+/* rover.get_config                                                    */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_get_config(const esp_mcp_property_list_t *p)
+{
+    (void)p;
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    if (s_cfg) {
+        cJSON_AddStringToObject(root, "hostname",     s_cfg->hostname);
+        cJSON_AddNumberToObject(root, "mcp_port",     s_cfg->mcp_port);
+        cJSON_AddBoolToObject(root,   "auth_enabled", s_cfg->auth_enabled);
+        cJSON_AddBoolToObject(root,   "dry_run",      s_cfg->dry_run);
+        cJSON_AddNumberToObject(root, "max_speed",    (double)s_cfg->max_speed);
+        cJSON_AddNumberToObject(root, "max_cmd_ms",   s_cfg->max_command_duration_ms);
+    }
+    return json_obj_str(root);
+}
+
+/* ------------------------------------------------------------------ */
+/* rover.stop                                                          */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_stop(const esp_mcp_property_list_t *p)
+{
+    const char *reason = esp_mcp_property_list_get_property_string(p, "reason");
+    wr_motor_stop();
+    ESP_LOGI(TAG, "rover.stop: %s", reason ? reason : "(no reason)");
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok",     true);
+    cJSON_AddStringToObject(root, "action", "stopped");
+    if (reason) cJSON_AddStringToObject(root, "reason", reason);
+    return json_obj_str(root);
+}
+
+/* ------------------------------------------------------------------ */
+/* rover.emergency_stop                                                */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_emergency_stop(const esp_mcp_property_list_t *p)
+{
+    const char *reason = esp_mcp_property_list_get_property_string(p, "reason");
+    wr_motor_emergency_stop_set();
+    ESP_LOGW(TAG, "rover.emergency_stop: %s", reason ? reason : "(no reason)");
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root,   "ok",     true);
+    cJSON_AddStringToObject(root, "action", "emergency_stop_set");
+    return json_obj_str(root);
+}
+
+/* ------------------------------------------------------------------ */
+/* rover.clear_emergency_stop                                          */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_clear_estop(const esp_mcp_property_list_t *p)
+{
+    bool confirm = esp_mcp_property_list_get_property_bool(p, "confirm");
+    cJSON *root = cJSON_CreateObject();
+    if (!confirm) {
+        cJSON_AddBoolToObject(root,   "ok",    false);
+        cJSON_AddStringToObject(root, "error", "confirm must be true");
+        return json_obj_str(root);
+    }
+    wr_motor_emergency_stop_clear();
+    cJSON_AddBoolToObject(root,   "ok",     true);
+    cJSON_AddStringToObject(root, "action", "emergency_stop_cleared");
+    return json_obj_str(root);
+}
+
+/* ------------------------------------------------------------------ */
+/* rover.move                                                          */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_move(const esp_mcp_property_list_t *p)
+{
+    float linear  = (float)esp_mcp_property_list_get_property_float(p, "linear");
+    float angular = (float)esp_mcp_property_list_get_property_float(p, "angular");
+    int   dur_ms  = esp_mcp_property_list_get_property_int(p, "duration_ms");
+
+    cJSON *root = cJSON_CreateObject();
+    if (wr_motor_emergency_stop_active()) {
+        cJSON_AddBoolToObject(root,   "ok",    false);
+        cJSON_AddStringToObject(root, "error", "emergency_stop_active");
+        return json_obj_str(root);
+    }
+
+    if (linear  < -1.0f) linear  = -1.0f;
+    if (linear  >  1.0f) linear  =  1.0f;
+    if (angular < -1.0f) angular = -1.0f;
+    if (angular >  1.0f) angular =  1.0f;
+    if (dur_ms < 1)    dur_ms = 1;
+    if (dur_ms > 3000) dur_ms = 3000;
+
+    float max_spd = s_cfg ? s_cfg->max_speed : 0.4f;
+    if (linear >  max_spd) linear =  max_spd;
+    if (linear < -max_spd) linear = -max_spd;
+
+    float left  = linear - angular;
+    float right = linear + angular;
+    if (left  >  1.0f) left  =  1.0f;
+    if (left  < -1.0f) left  = -1.0f;
+    if (right >  1.0f) right =  1.0f;
+    if (right < -1.0f) right = -1.0f;
+
+    wr_motor_cmd_t cmd = {
+        .type        = WR_MOTOR_CMD_MOVE,
+        .left        = left,
+        .right       = right,
+        .duration_ms = (uint16_t)dur_ms,
+    };
+    esp_err_t err = wr_motor_submit_and_wait(&cmd, (uint32_t)(dur_ms + 500));
+
+    cJSON_AddBoolToObject(root,   "ok",          err == ESP_OK);
+    cJSON_AddStringToObject(root, "action",      err == ESP_OK ? "move_complete" : "preempted");
+    cJSON_AddNumberToObject(root, "linear",      (double)linear);
+    cJSON_AddNumberToObject(root, "angular",     (double)angular);
+    cJSON_AddNumberToObject(root, "duration_ms", dur_ms);
+    return json_obj_str(root);
+}
+
+/* ------------------------------------------------------------------ */
+/* rover.drive_tank                                                    */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_drive_tank(const esp_mcp_property_list_t *p)
+{
+    float left   = (float)esp_mcp_property_list_get_property_float(p, "left");
+    float right  = (float)esp_mcp_property_list_get_property_float(p, "right");
+    int   dur_ms = esp_mcp_property_list_get_property_int(p, "duration_ms");
+
+    cJSON *root = cJSON_CreateObject();
+    if (wr_motor_emergency_stop_active()) {
+        cJSON_AddBoolToObject(root,   "ok",    false);
+        cJSON_AddStringToObject(root, "error", "emergency_stop_active");
+        return json_obj_str(root);
+    }
+
+    float max_spd = s_cfg ? s_cfg->max_speed : 0.4f;
+    if (left  >  max_spd) left  =  max_spd;
+    if (left  < -max_spd) left  = -max_spd;
+    if (right >  max_spd) right =  max_spd;
+    if (right < -max_spd) right = -max_spd;
+    if (dur_ms < 1)    dur_ms = 1;
+    if (dur_ms > 3000) dur_ms = 3000;
+
+    wr_motor_cmd_t cmd = {
+        .type        = WR_MOTOR_CMD_MOVE,
+        .left        = left,
+        .right       = right,
+        .duration_ms = (uint16_t)dur_ms,
+    };
+    esp_err_t err = wr_motor_submit_and_wait(&cmd, (uint32_t)(dur_ms + 500));
+
+    cJSON_AddBoolToObject(root,   "ok",     err == ESP_OK);
+    cJSON_AddStringToObject(root, "action", err == ESP_OK ? "drive_tank_complete" : "preempted");
+    cJSON_AddNumberToObject(root, "left",   (double)left);
+    cJSON_AddNumberToObject(root, "right",  (double)right);
+    return json_obj_str(root);
+}
+
+/* ------------------------------------------------------------------ */
+/* rover.turn                                                          */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_turn(const esp_mcp_property_list_t *p)
+{
+    const char *dir = esp_mcp_property_list_get_property_string(p, "direction");
+    float spd       = (float)esp_mcp_property_list_get_property_float(p, "speed");
+    int   dur_ms    = esp_mcp_property_list_get_property_int(p, "duration_ms");
+
+    cJSON *root = cJSON_CreateObject();
+    if (wr_motor_emergency_stop_active()) {
+        cJSON_AddBoolToObject(root,   "ok",    false);
+        cJSON_AddStringToObject(root, "error", "emergency_stop_active");
+        return json_obj_str(root);
+    }
+
+    float max_spd = s_cfg ? s_cfg->max_speed : 0.4f;
+    if (spd < 0.0f)    spd = 0.0f;
+    if (spd > max_spd) spd = max_spd;
+    if (dur_ms < 1)    dur_ms = 1;
+    if (dur_ms > 3000) dur_ms = 3000;
+
+    float left, right;
+    if (dir && strcmp(dir, "right") == 0) {
+        left  =  spd;
+        right = -spd;
+    } else {
+        left  = -spd;
+        right =  spd;
+    }
+
+    wr_motor_cmd_t cmd = {
+        .type        = WR_MOTOR_CMD_MOVE,
+        .left        = left,
+        .right       = right,
+        .duration_ms = (uint16_t)dur_ms,
+    };
+    esp_err_t err = wr_motor_submit_and_wait(&cmd, (uint32_t)(dur_ms + 500));
+
+    cJSON_AddBoolToObject(root,   "ok",        err == ESP_OK);
+    cJSON_AddStringToObject(root, "action",    err == ESP_OK ? "turn_complete" : "preempted");
+    cJSON_AddStringToObject(root, "direction", dir ? dir : "left");
+    return json_obj_str(root);
+}
+
+/* ------------------------------------------------------------------ */
+/* rover.get_power / rover.get_ups                                     */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_get_power(const esp_mcp_property_list_t *p)
+{
+    (void)p;
+    wr_power_status_t ps = {0};
+    wr_power_get_status(&ps);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root,   "ok",              true);
+    cJSON_AddBoolToObject(root,   "present",          ps.present);
+    cJSON_AddStringToObject(root, "source",           "ina219");
+    cJSON_AddNumberToObject(root, "bus_voltage_v",    (double)ps.bus_voltage_v);
+    cJSON_AddNumberToObject(root, "shunt_voltage_mv", (double)ps.shunt_voltage_mv);
+    cJSON_AddNumberToObject(root, "current_ma",       (double)ps.current_ma);
+    cJSON_AddNumberToObject(root, "power_mw",         (double)ps.power_mw);
+    cJSON_AddBoolToObject(root,   "charging",         ps.charging);
+    cJSON_AddBoolToObject(root,   "low_battery",      ps.low_battery);
+    return json_obj_str(root);
+}
+
+static esp_mcp_value_t tool_get_ups(const esp_mcp_property_list_t *p)
+{
+    (void)p;
+    wr_power_status_t ps = {0};
+    wr_power_get_status(&ps);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root,   "ok",          true);
+    cJSON_AddBoolToObject(root,   "present",      ps.present);
+    cJSON_AddStringToObject(root, "type",         "3s_18650");
+    cJSON_AddStringToObject(root, "monitor",      "ina219");
+    cJSON_AddNumberToObject(root, "voltage_v",    (double)ps.load_voltage_v);
+    cJSON_AddNumberToObject(root, "current_ma",   (double)ps.current_ma);
+    cJSON_AddNullToObject(root,   "estimated_percent");
+    cJSON_AddBoolToObject(root,   "charging",     ps.charging);
+    cJSON_AddBoolToObject(root,   "discharging",  !ps.charging);
+    cJSON_AddBoolToObject(root,   "low_battery",  ps.low_battery);
+    return json_obj_str(root);
+}
+
+/* ------------------------------------------------------------------ */
+/* rover.get_imu                                                       */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_get_imu(const esp_mcp_property_list_t *p)
+{
+    (void)p;
+    wr_imu_sample_t is = {0};
+    wr_imu_get_sample(&is);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root,   "ok",      true);
+    cJSON_AddBoolToObject(root,   "present", is.present);
+    cJSON_AddStringToObject(root, "chip",    "QMI8658+AK09918");
+
+    cJSON *accel = cJSON_AddObjectToObject(root, "accel");
+    cJSON_AddNumberToObject(accel, "x", (double)is.accel_x);
+    cJSON_AddNumberToObject(accel, "y", (double)is.accel_y);
+    cJSON_AddNumberToObject(accel, "z", (double)is.accel_z);
+
+    cJSON *gyro = cJSON_AddObjectToObject(root, "gyro");
+    cJSON_AddNumberToObject(gyro, "x", (double)is.gyro_x);
+    cJSON_AddNumberToObject(gyro, "y", (double)is.gyro_y);
+    cJSON_AddNumberToObject(gyro, "z", (double)is.gyro_z);
+
+    cJSON *mag = cJSON_AddObjectToObject(root, "mag");
+    cJSON_AddBoolToObject(mag,   "present", is.mag_present);
+    cJSON_AddNumberToObject(mag, "x",       (double)is.mag_x);
+    cJSON_AddNumberToObject(mag, "y",       (double)is.mag_y);
+    cJSON_AddNumberToObject(mag, "z",       (double)is.mag_z);
+
+    if (is.has_temperature)
+        cJSON_AddNumberToObject(root, "temperature_c", (double)is.temperature_c);
+    else
+        cJSON_AddNullToObject(root, "temperature_c");
+
+    cJSON_AddNullToObject(root, "calibration");
+    return json_obj_str(root);
+}
+
+/* ------------------------------------------------------------------ */
+/* Display tools                                                       */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_display_text(const esp_mcp_property_list_t *p)
+{
+    const char *text = esp_mcp_property_list_get_property_string(p, "text");
+    int line         = esp_mcp_property_list_get_property_int(p, "line");
+    bool clr         = esp_mcp_property_list_get_property_bool(p, "clear");
+    wr_display_text(text, line, clr);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    return json_obj_str(root);
+}
+
+static esp_mcp_value_t tool_display_clear(const esp_mcp_property_list_t *p)
+{
+    (void)p;
+    wr_display_clear();
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    return json_obj_str(root);
+}
+
+static esp_mcp_value_t tool_display_status(const esp_mcp_property_list_t *p)
+{
+    (void)p;
+    wr_power_status_t ps = {0};
+    wr_power_get_status(&ps);
+    wr_display_status(WR_FW_VERSION, "MCP active", ps.load_voltage_v,
+                      true, wr_motor_emergency_stop_active());
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    return json_obj_str(root);
+}
+
+/* ------------------------------------------------------------------ */
+/* Wi-Fi tools                                                         */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_get_wifi(const esp_mcp_property_list_t *p)
+{
+    (void)p;
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", true);
+    if (s_cfg) {
+        cJSON_AddNumberToObject(root, "mode",     s_cfg->wifi_mode);
+        cJSON_AddStringToObject(root, "ssid",     s_cfg->wifi_ssid);
+        cJSON_AddStringToObject(root, "hostname", s_cfg->hostname);
+        /* Never return passwords */
+    }
+    return json_obj_str(root);
+}
+
+static esp_mcp_value_t tool_set_wifi(const esp_mcp_property_list_t *p)
+{
+    const char *ssid     = esp_mcp_property_list_get_property_string(p, "ssid");
+    const char *password = esp_mcp_property_list_get_property_string(p, "password");
+    const char *mode_str = esp_mcp_property_list_get_property_string(p, "mode");
+    bool save            = esp_mcp_property_list_get_property_bool(p, "save");
+
+    cJSON *root = cJSON_CreateObject();
+    if (!mode_str) {
+        cJSON_AddBoolToObject(root,   "ok",    false);
+        cJSON_AddStringToObject(root, "error", "mode required");
+        return json_obj_str(root);
+    }
+
+    if (s_cfg && save) {
+        wave_rover_config_t new_cfg;
+        memcpy(&new_cfg, s_cfg, sizeof(new_cfg));
+        if (ssid)     strlcpy(new_cfg.wifi_ssid, ssid, sizeof(new_cfg.wifi_ssid));
+        /* do not log password */
+        if (password) strlcpy(new_cfg.wifi_password, password, sizeof(new_cfg.wifi_password));
+        if (strcmp(mode_str, "sta") == 0)        new_cfg.wifi_mode = 1;
+        else if (strcmp(mode_str, "ap_sta") == 0) new_cfg.wifi_mode = 2;
+        else                                      new_cfg.wifi_mode = 0;
+        wave_rover_config_save(&new_cfg);
+        ESP_LOGI(TAG, "wifi config saved, reboot to apply");
+    }
+
+    /* do NOT return password in response */
+    cJSON_AddBoolToObject(root,   "ok",   true);
+    cJSON_AddStringToObject(root, "note", "reboot_to_apply");
+    return json_obj_str(root);
+}
+
+/* ------------------------------------------------------------------ */
+/* Registration                                                        */
+/* ------------------------------------------------------------------ */
+
+#define TOOL(name, desc, cb) do { \
+    esp_mcp_tool_t *_t = esp_mcp_tool_create((name), (desc), (cb)); \
+    if (!_t) return ESP_ERR_NO_MEM; \
+    if (esp_mcp_add_tool(mcp, _t) != ESP_OK) { esp_mcp_tool_destroy(_t); return ESP_FAIL; } \
+} while (0)
+
+#define PROP_STR(t, name)            esp_mcp_tool_add_property((t), esp_mcp_property_create_with_string((name), ""))
+#define PROP_FLOAT(t, name)          esp_mcp_tool_add_property((t), esp_mcp_property_create_with_float((name), 0.0f))
+#define PROP_BOOL(t, name)           esp_mcp_tool_add_property((t), esp_mcp_property_create_with_bool((name), false))
+#define PROP_INT_RANGE(t, n, lo, hi) esp_mcp_tool_add_property((t), esp_mcp_property_create_with_range((n), (lo), (hi)))
+
+esp_err_t wr_mcp_register_all_tools(esp_mcp_t *mcp)
+{
+    /* System */
+    TOOL("rover.get_status", "Get full rover status",   tool_get_status);
+    TOOL("rover.get_config", "Get rover configuration", tool_get_config);
+
+    /* Motor — float params use create_with_float (range is int-only) */
+    {
+        esp_mcp_tool_t *t = esp_mcp_tool_create("rover.move",
+                                                 "Move rover (linear+angular)", tool_move);
+        if (!t) return ESP_ERR_NO_MEM;
+        PROP_FLOAT(t, "linear");
+        PROP_FLOAT(t, "angular");
+        PROP_INT_RANGE(t, "duration_ms", 1, 3000);
+        if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
+    }
+    {
+        esp_mcp_tool_t *t = esp_mcp_tool_create("rover.drive_tank",
+                                                 "Tank drive (left+right)", tool_drive_tank);
+        if (!t) return ESP_ERR_NO_MEM;
+        PROP_FLOAT(t, "left");
+        PROP_FLOAT(t, "right");
+        PROP_INT_RANGE(t, "duration_ms", 1, 3000);
+        if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
+    }
+    {
+        esp_mcp_tool_t *t = esp_mcp_tool_create("rover.turn",
+                                                 "Turn in place", tool_turn);
+        if (!t) return ESP_ERR_NO_MEM;
+        PROP_STR(t, "direction");
+        PROP_FLOAT(t, "speed");
+        PROP_INT_RANGE(t, "duration_ms", 1, 3000);
+        if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
+    }
+    {
+        esp_mcp_tool_t *t = esp_mcp_tool_create("rover.stop",
+                                                 "Stop all motors", tool_stop);
+        if (!t) return ESP_ERR_NO_MEM;
+        PROP_STR(t, "reason");
+        if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
+    }
+    {
+        esp_mcp_tool_t *t = esp_mcp_tool_create("rover.emergency_stop",
+                                                 "Emergency stop (blocks movement)",
+                                                 tool_emergency_stop);
+        if (!t) return ESP_ERR_NO_MEM;
+        PROP_STR(t, "reason");
+        if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
+    }
+    {
+        esp_mcp_tool_t *t = esp_mcp_tool_create("rover.clear_emergency_stop",
+                                                 "Clear emergency stop flag",
+                                                 tool_clear_estop);
+        if (!t) return ESP_ERR_NO_MEM;
+        PROP_BOOL(t, "confirm");
+        if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
+    }
+
+    /* Power */
+    TOOL("rover.get_power", "Get INA219 power status", tool_get_power);
+    TOOL("rover.get_ups",   "Get UPS/battery status",  tool_get_ups);
+
+    /* IMU */
+    TOOL("rover.get_imu", "Get IMU sensor data", tool_get_imu);
+
+    /* Display */
+    {
+        esp_mcp_tool_t *t = esp_mcp_tool_create("rover.display_text",
+                                                 "Show text on OLED", tool_display_text);
+        if (!t) return ESP_ERR_NO_MEM;
+        PROP_STR(t, "text");
+        PROP_INT_RANGE(t, "line", 0, 3);
+        PROP_BOOL(t, "clear");
+        if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
+    }
+    TOOL("rover.display_clear",  "Clear OLED display",         tool_display_clear);
+    TOOL("rover.display_status", "Show system status on OLED", tool_display_status);
+
+    /* Wi-Fi */
+    TOOL("rover.get_wifi", "Get Wi-Fi config (no passwords)", tool_get_wifi);
+    {
+        esp_mcp_tool_t *t = esp_mcp_tool_create("rover.set_wifi",
+                                                 "Set Wi-Fi config", tool_set_wifi);
+        if (!t) return ESP_ERR_NO_MEM;
+        PROP_STR(t, "ssid");
+        PROP_STR(t, "password");
+        PROP_STR(t, "mode");
+        PROP_BOOL(t, "save");
+        if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
+    }
+
+    ESP_LOGI(TAG, "registered all rover MCP tools");
+    return ESP_OK;
+}

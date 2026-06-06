@@ -7,10 +7,12 @@ idf_component_register(
         "wave_rover_display.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../../boards/wave_rover"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../boards/wave_rover"
     PRIV_REQUIRES
-        driver
-        esp_log
-        esp_check
+        esp_driver_i2c
+        esp_driver_ledc
+        esp_driver_gpio
+        log
+        esp_common
         freertos
 )

@@ -9,6 +9,6 @@ idf_component_register(
         esp_wifi
         esp_event
         esp_netif
-        esp_log
-        esp_check
+        log
+        esp_common
 )
