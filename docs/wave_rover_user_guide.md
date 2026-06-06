@@ -30,10 +30,10 @@ MCP:ON
 Серийный вывод (115200):
 ```
 I wave_rover: Wave Rover MCP firmware v0.1.0 starting
-I wr_config:  config loaded: wifi_mode=0 mcp_port=8080 dry_run=1
+I wr_config:  config loaded: wifi_mode=0 mcp_port=80 dry_run=1
 I wr_wifi:    AP started: SSID=WR-ESP32 IP=192.168.4.1
-I wr_mcp:     MCP server started on port 8080 at /mcp
-I wave_rover: boot complete. MCP at http://192.168.4.1:8080/mcp
+I wr_mcp:     MCP server started on port 80 at /mcp
+I wave_rover: boot complete. MCP at http://192.168.4.1:80/mcp
 ```
 
 ---
@@ -47,13 +47,13 @@ I wave_rover: boot complete. MCP at http://192.168.4.1:8080/mcp
 | SSID     | `WR-ESP32` |
 | Пароль   | `12345678` |
 | IP ровера | `192.168.4.1` |
-| Порт MCP | `8080` |
+| Порт MCP | `80` |
 
 **Подключитесь к `WR-ESP32`** с компьютера или телефона.
 
 Проверка доступности:
 ```bash
-curl -s http://192.168.4.1:8080/mcp \
+curl -s http://192.168.4.1:80/mcp \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}'
 # → {"jsonrpc":"2.0","id":1,"result":{}}
@@ -66,7 +66,7 @@ curl -s http://192.168.4.1:8080/mcp \
 Чтобы ровер подключался к вашей домашней сети (и был доступен на одном IP с компьютером):
 
 ```bash
-curl -s http://192.168.4.1:8080/mcp \
+curl -s http://192.168.4.1:80/mcp \
   -H 'content-type: application/json' \
   -d '{
     "jsonrpc": "2.0", "id": 1,
@@ -88,7 +88,7 @@ curl -s http://192.168.4.1:8080/mcp \
 При следующем старте ровер подключится к вашей сети. IP будет виден в серийном мониторе:
 ```
 I wr_wifi: STA connected, IP=192.168.1.42
-I wave_rover: boot complete. MCP at http://192.168.1.42:8080/mcp
+I wave_rover: boot complete. MCP at http://192.168.1.42:80/mcp
 ```
 
 Если ровер не подключился за 30 секунд — он останется без Wi-Fi, но MCP не запустится. Проверьте SSID/пароль и повторите.
@@ -101,12 +101,30 @@ I wave_rover: boot complete. MCP at http://192.168.1.42:8080/mcp
 
 ---
 
+## Веб-интерфейс управления
+
+Откройте браузер и перейдите по адресу:
+
+```
+http://192.168.4.1/
+```
+
+Интерфейс (тёмная тема, работает на телефоне и компьютере):
+
+- **Статус** — индикатор E-STOP, напряжение батареи, режим dry-run
+- **Drive** — виртуальный джойстик (мышь / тач), слайдер скорости, кнопки поворота, STOP, E-STOP
+- **Wi-Fi** — смена режима (AP/STA/AP+STA), SSID, пароль, сканирование сетей, сохранение (ровер перезагружается)
+
+> При смене Wi-Fi настроек ровер перезагружается автоматически. Новый IP будет виден в серийном мониторе.
+
+---
+
 ## Подключение MCP-клиента
 
 Ровер реализует [MCP 2024-11-05](https://spec.modelcontextprotocol.io) через HTTP POST. Адрес эндпоинта:
 
 ```
-http://<IP ровера>:8080/mcp
+http://<IP ровера>:80/mcp
 ```
 
 ### Claude Code CLI
@@ -114,12 +132,12 @@ http://<IP ровера>:8080/mcp
 Добавьте ровер как MCP-сервер:
 
 ```bash
-claude mcp add --transport http wave-rover http://192.168.4.1:8080/mcp
+claude mcp add --transport http wave-rover http://192.168.4.1:80/mcp
 ```
 
 Если включён токен авторизации:
 ```bash
-claude mcp add --transport http wave-rover http://192.168.4.1:8080/mcp \
+claude mcp add --transport http wave-rover http://192.168.4.1:80/mcp \
   --header "Authorization: Bearer ВашТокен"
 ```
 
@@ -143,7 +161,7 @@ claude mcp add --transport http wave-rover http://192.168.4.1:8080/mcp \
   "mcpServers": {
     "wave-rover": {
       "transport": "http",
-      "url": "http://192.168.4.1:8080/mcp"
+      "url": "http://192.168.4.1:80/mcp"
     }
   }
 }
@@ -155,7 +173,7 @@ claude mcp add --transport http wave-rover http://192.168.4.1:8080/mcp \
   "mcpServers": {
     "wave-rover": {
       "transport": "http",
-      "url": "http://192.168.4.1:8080/mcp",
+      "url": "http://192.168.4.1:80/mcp",
       "headers": {
         "Authorization": "Bearer ВашТокен"
       }
@@ -170,28 +188,28 @@ claude mcp add --transport http wave-rover http://192.168.4.1:8080/mcp \
 
 Список всех инструментов:
 ```bash
-curl -s http://192.168.4.1:8080/mcp \
+curl -s http://192.168.4.1:80/mcp \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
 ```
 
 Статус ровера:
 ```bash
-curl -s http://192.168.4.1:8080/mcp \
+curl -s http://192.168.4.1:80/mcp \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"rover.get_status","arguments":{}}}'
 ```
 
 Список ресурсов (данные в реальном времени):
 ```bash
-curl -s http://192.168.4.1:8080/mcp \
+curl -s http://192.168.4.1:80/mcp \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":3,"method":"resources/list","params":{}}'
 ```
 
 Конфигурация (ресурс):
 ```bash
-curl -s http://192.168.4.1:8080/mcp \
+curl -s http://192.168.4.1:80/mcp \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"rover://config"}}'
 ```
@@ -239,7 +257,7 @@ python3 tools/rover_cli.py --host 192.168.4.1 emergency-stop
 python3 tools/rover_cli.py --host 192.168.4.1 clear-estop
 
 # Калибровка IMU (держите ровер неподвижно ~1 секунду)
-curl -s http://192.168.4.1:8080/mcp \
+curl -s http://192.168.4.1:80/mcp \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"rover.calibrate_imu","arguments":{"samples":50,"interval_ms":20}}}'
 

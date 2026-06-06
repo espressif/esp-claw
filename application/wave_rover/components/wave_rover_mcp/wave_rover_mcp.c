@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "wave_rover_mcp.h"
+#include "wave_rover_mcp_web.h"
 #include "wave_rover_hal.h"
 #include "wave_rover_config.h"
 #include <string.h>
@@ -400,7 +401,7 @@ esp_err_t wave_rover_mcp_start(const wave_rover_config_t *cfg)
 
     httpd_config_t hcfg    = HTTPD_DEFAULT_CONFIG();
     hcfg.server_port       = cfg->mcp_port;
-    hcfg.max_uri_handlers  = 4;
+    hcfg.max_uri_handlers  = 16;
     ESP_RETURN_ON_ERROR(httpd_start(&s_httpd, &hcfg), TAG, "httpd_start");
 
     httpd_uri_t mcp_uri = {
@@ -411,6 +412,8 @@ esp_err_t wave_rover_mcp_start(const wave_rover_config_t *cfg)
     };
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &mcp_uri),
                         TAG, "register uri");
+
+    ESP_RETURN_ON_ERROR(wr_mcp_web_register(s_httpd, cfg), TAG, "web ui");
 
     s_last_cmd_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
     s_keepalive_timer = xTimerCreate("mcp_ka", pdMS_TO_TICKS(5000),
@@ -430,6 +433,7 @@ esp_err_t wave_rover_mcp_stop(void)
         xTimerDelete(s_keepalive_timer, 0);
         s_keepalive_timer = NULL;
     }
+    wr_mcp_web_stop();
     if (s_httpd) { httpd_stop(s_httpd); s_httpd = NULL; }
     if (s_mgr)   { esp_mcp_mgr_deinit(s_mgr); s_mgr = 0; }
     if (s_mcp)   { esp_mcp_destroy(s_mcp); s_mcp = NULL; }

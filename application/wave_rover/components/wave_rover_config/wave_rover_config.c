@@ -19,7 +19,7 @@ void wave_rover_config_defaults(wave_rover_config_t *cfg)
     strlcpy(cfg->wifi_ap_password, "12345678",    sizeof(cfg->wifi_ap_password));
     strlcpy(cfg->hostname,         "wave-rover",  sizeof(cfg->hostname));
     cfg->wifi_mode               = 0;     /* AP */
-    cfg->mcp_port                = 8080;
+    cfg->mcp_port                = 80;
     cfg->auth_enabled            = false;
     cfg->safe_mode               = false;
     cfg->dry_run                 = true;  /* safe default until HW confirmed */
