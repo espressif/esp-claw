@@ -41,6 +41,13 @@ typedef struct {
     bool  has_temperature;
 } wr_imu_sample_t;
 
+/* IMU calibration result */
+typedef struct {
+    bool  valid;
+    float gyro_offset_x, gyro_offset_y, gyro_offset_z;  /* dps bias */
+    float accel_ref_z;   /* g — should be ~1.0 when flat */
+} wr_imu_calib_t;
+
 /* Motor command queue types (Task 7b: safe concurrent stop) */
 typedef enum {
     WR_MOTOR_CMD_MOVE = 1,
@@ -75,6 +82,8 @@ esp_err_t wr_power_get_status(wr_power_status_t *status);
 
 /* IMU */
 esp_err_t wr_imu_get_sample(wr_imu_sample_t *sample);
+/* Collect `samples` readings at `interval_ms` apart; compute+store gyro bias offsets */
+esp_err_t wr_imu_calibrate(uint16_t samples, uint32_t interval_ms, wr_imu_calib_t *out);
 
 /* Display */
 esp_err_t wr_display_clear(void);

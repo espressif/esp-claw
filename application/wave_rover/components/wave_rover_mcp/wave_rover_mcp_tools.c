@@ -370,6 +370,40 @@ static esp_mcp_value_t tool_get_imu(const esp_mcp_property_list_t *p)
 }
 
 /* ------------------------------------------------------------------ */
+/* rover.calibrate_imu                                                 */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_calibrate_imu(const esp_mcp_property_list_t *p)
+{
+    int samples     = esp_mcp_property_list_get_property_int(p, "samples");
+    int interval_ms = esp_mcp_property_list_get_property_int(p, "interval_ms");
+
+    if (samples     <= 0)  samples     = 50;
+    if (samples     > 500) samples     = 500;
+    if (interval_ms <= 0)  interval_ms = 20;
+
+    ESP_LOGI(TAG, "rover.calibrate_imu: %d samples @ %d ms", samples, interval_ms);
+
+    wr_imu_calib_t cal = {0};
+    esp_err_t err = wr_imu_calibrate((uint16_t)samples, (uint32_t)interval_ms, &cal);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "ok", err == ESP_OK && cal.valid);
+    if (err == ESP_OK && cal.valid) {
+        cJSON *offsets = cJSON_AddObjectToObject(root, "gyro_offsets_dps");
+        cJSON_AddNumberToObject(offsets, "x", (double)cal.gyro_offset_x);
+        cJSON_AddNumberToObject(offsets, "y", (double)cal.gyro_offset_y);
+        cJSON_AddNumberToObject(offsets, "z", (double)cal.gyro_offset_z);
+        cJSON_AddNumberToObject(root, "accel_ref_z_g", (double)cal.accel_ref_z);
+        cJSON_AddNumberToObject(root, "samples_used",  samples);
+    } else {
+        cJSON_AddStringToObject(root, "error",
+            err == ESP_ERR_INVALID_STATE ? "imu_not_ready" : "calibration_failed");
+    }
+    return json_obj_str(root);
+}
+
+/* ------------------------------------------------------------------ */
 /* Display tools                                                       */
 /* ------------------------------------------------------------------ */
 
@@ -543,6 +577,15 @@ esp_err_t wr_mcp_register_all_tools(esp_mcp_t *mcp)
 
     /* IMU */
     TOOL("rover.get_imu", "Get IMU sensor data", tool_get_imu);
+    {
+        esp_mcp_tool_t *t = esp_mcp_tool_create("rover.calibrate_imu",
+            "Calibrate IMU gyro bias (keep rover still during calibration)",
+            tool_calibrate_imu);
+        if (!t) return ESP_ERR_NO_MEM;
+        PROP_INT_RANGE(t, "samples",     2, 500);
+        PROP_INT_RANGE(t, "interval_ms", 1, 100);
+        if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
+    }
 
     /* Display */
     {

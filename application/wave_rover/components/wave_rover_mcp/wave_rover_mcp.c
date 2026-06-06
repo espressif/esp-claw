@@ -149,11 +149,33 @@ static cJSON *read_resource(const char *uri)
         wr_imu_get_sample(&is);
         cJSON_AddBoolToObject(out, "ok",      true);
         cJSON_AddBoolToObject(out, "present", is.present);
-    } else if (strcmp(uri, "rover://logs/recent") == 0) {
-        cJSON_AddStringToObject(out, "log", "(ring buffer not implemented in MVP)");
-    } else {
-        /* rover://config, rover://wifi, rover://display — return ok stub */
+    } else if (strcmp(uri, "rover://config") == 0) {
         cJSON_AddBoolToObject(out, "ok", true);
+        if (s_cfg) {
+            cJSON_AddStringToObject(out, "hostname",     s_cfg->hostname);
+            cJSON_AddNumberToObject(out, "mcp_port",     s_cfg->mcp_port);
+            cJSON_AddBoolToObject(out,   "auth_enabled", s_cfg->auth_enabled);
+            cJSON_AddBoolToObject(out,   "dry_run",      s_cfg->dry_run);
+            cJSON_AddNumberToObject(out, "max_speed",    (double)s_cfg->max_speed);
+            cJSON_AddNumberToObject(out, "max_cmd_ms",   s_cfg->max_command_duration_ms);
+        }
+    } else if (strcmp(uri, "rover://wifi") == 0) {
+        cJSON_AddBoolToObject(out, "ok", true);
+        if (s_cfg) {
+            cJSON_AddNumberToObject(out, "mode",        s_cfg->wifi_mode);
+            cJSON_AddStringToObject(out, "ap_ssid",     s_cfg->wifi_ap_ssid);
+            cJSON_AddStringToObject(out, "sta_ssid",    s_cfg->wifi_ssid);
+            cJSON_AddStringToObject(out, "hostname",    s_cfg->hostname);
+            /* Passwords are never returned */
+        }
+    } else if (strcmp(uri, "rover://display") == 0) {
+        cJSON_AddBoolToObject(out,   "ok",   true);
+        cJSON_AddStringToObject(out, "type", "SSD1306 128x32");
+    } else if (strcmp(uri, "rover://logs/recent") == 0) {
+        cJSON_AddStringToObject(out, "log", "(ring buffer not implemented)");
+    } else {
+        cJSON_AddBoolToObject(out,   "ok",    false);
+        cJSON_AddStringToObject(out, "error", "unknown resource uri");
     }
     return out;
 }

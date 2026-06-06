@@ -8,6 +8,8 @@
 #include "esp_log.h"
 #include "esp_check.h"
 #include <string.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "wr_imu";
 static i2c_master_dev_handle_t s_qmi_dev  = NULL;
@@ -87,6 +89,11 @@ static esp_err_t imu_hw_init(void)
     return ESP_OK;
 }
 
+/* Gyro bias offsets applied in wr_imu_get_sample() */
+static float s_gyro_off_x = 0.0f;
+static float s_gyro_off_y = 0.0f;
+static float s_gyro_off_z = 0.0f;
+
 static float raw16_to_float(uint8_t lo, uint8_t hi, float scale)
 {
     int16_t raw = (int16_t)(((uint16_t)hi << 8) | lo);
@@ -115,9 +122,9 @@ esp_err_t wr_imu_get_sample(wr_imu_sample_t *s)
     s->accel_x = raw16_to_float(raw[0],  raw[1],  4.0f / 32768.0f);
     s->accel_y = raw16_to_float(raw[2],  raw[3],  4.0f / 32768.0f);
     s->accel_z = raw16_to_float(raw[4],  raw[5],  4.0f / 32768.0f);
-    s->gyro_x  = raw16_to_float(raw[6],  raw[7],  512.0f / 32768.0f);
-    s->gyro_y  = raw16_to_float(raw[8],  raw[9],  512.0f / 32768.0f);
-    s->gyro_z  = raw16_to_float(raw[10], raw[11], 512.0f / 32768.0f);
+    s->gyro_x  = raw16_to_float(raw[6],  raw[7],  512.0f / 32768.0f) - s_gyro_off_x;
+    s->gyro_y  = raw16_to_float(raw[8],  raw[9],  512.0f / 32768.0f) - s_gyro_off_y;
+    s->gyro_z  = raw16_to_float(raw[10], raw[11], 512.0f / 32768.0f) - s_gyro_off_z;
 
     uint8_t tmp[2];
     if (qmi_read(QMI_TEMP_L, tmp, 2) == ESP_OK) {
@@ -137,5 +144,68 @@ esp_err_t wr_imu_get_sample(wr_imu_sample_t *s)
             }
         }
     }
+    return ESP_OK;
+}
+
+esp_err_t wr_imu_calibrate(uint16_t samples, uint32_t interval_ms,
+                            wr_imu_calib_t *out)
+{
+    if (!out) return ESP_ERR_INVALID_ARG;
+    memset(out, 0, sizeof(*out));
+
+    if (g_wr_dry_run || !g_wr_i2c_bus) {
+        /* Dry-run: return zeroed offsets as if already calibrated */
+        out->valid       = true;
+        out->accel_ref_z = 1.0f;
+        ESP_LOGI(TAG, "dry-run calibrate: returning identity offsets");
+        return ESP_OK;
+    }
+
+    if (!s_qmi_dev) {
+        if (imu_hw_init() != ESP_OK) return ESP_ERR_INVALID_STATE;
+    }
+
+    if (samples < 2)   samples = 2;
+    if (samples > 500) samples = 500;
+
+    double sum_gx = 0, sum_gy = 0, sum_gz = 0, sum_az = 0;
+    uint16_t good = 0;
+
+    /* Temporarily clear offsets so we measure raw values */
+    float saved_x = s_gyro_off_x, saved_y = s_gyro_off_y, saved_z = s_gyro_off_z;
+    s_gyro_off_x = 0; s_gyro_off_y = 0; s_gyro_off_z = 0;
+
+    for (uint16_t i = 0; i < samples; i++) {
+        uint8_t raw[12];
+        if (qmi_read(QMI_ACCX_L, raw, 12) == ESP_OK) {
+            sum_gz += raw16_to_float(raw[10], raw[11], 512.0f / 32768.0f);
+            sum_gy += raw16_to_float(raw[8],  raw[9],  512.0f / 32768.0f);
+            sum_gx += raw16_to_float(raw[6],  raw[7],  512.0f / 32768.0f);
+            sum_az += raw16_to_float(raw[4],  raw[5],  4.0f   / 32768.0f);
+            good++;
+        }
+        if (interval_ms > 0) vTaskDelay(pdMS_TO_TICKS(interval_ms));
+    }
+
+    if (good < 2) {
+        /* Restore old offsets on failure */
+        s_gyro_off_x = saved_x;
+        s_gyro_off_y = saved_y;
+        s_gyro_off_z = saved_z;
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+
+    s_gyro_off_x = (float)(sum_gx / good);
+    s_gyro_off_y = (float)(sum_gy / good);
+    s_gyro_off_z = (float)(sum_gz / good);
+
+    out->valid         = true;
+    out->gyro_offset_x = s_gyro_off_x;
+    out->gyro_offset_y = s_gyro_off_y;
+    out->gyro_offset_z = s_gyro_off_z;
+    out->accel_ref_z   = (float)(sum_az / good);
+
+    ESP_LOGI(TAG, "IMU calibrated: gyro_off=[%.4f %.4f %.4f] dps, accel_z=%.4f g",
+             s_gyro_off_x, s_gyro_off_y, s_gyro_off_z, out->accel_ref_z);
     return ESP_OK;
 }
