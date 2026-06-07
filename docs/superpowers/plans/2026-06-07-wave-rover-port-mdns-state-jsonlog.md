@@ -1,6 +1,6 @@
 # Wave Rover: mDNS, derived-state status pill, JSON log forwarding — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Port three features from `~/repos/ai-rover` into `wave_rover`: an mDNS
 hostname (`wave-rover.local`), a derived-state color-coded status pill in the
@@ -9,8 +9,8 @@ touching Wi-Fi connection logic (explicitly declined by the user) or rewriting
 existing `ESP_LOGx` call sites.
 
 **Architecture:**
-- mDNS: one new dependency (`mdns`, already declared in `idf_component.yml`)
-  plus ~10 lines in `app_main.c` after Wi-Fi comes up.
+- mDNS: one new managed-component dependency (`espressif/mdns`, declared in
+  `main/idf_component.yml`) plus ~10 lines in `app_main.c` after Wi-Fi comes up.
 - Status: a small new private module (`wave_rover_mcp_state.{h,c}`) inside the
   `wave_rover_mcp` component computes a *derived* state
   (`idle`/`driving`/`nav_busy`/`estop`) from values the code already polls
@@ -41,7 +41,7 @@ failure later is attributable to your edit, not a pre-existing issue.
 
 **Files:** none (verification only)
 
-- [ ] **Step 1: Run a clean build and record the baseline**
+- [x] **Step 1: Run a clean build and record the baseline**
 
 ```bash
 cd /home/artem/repos/esp-claw/application/wave_rover
@@ -52,7 +52,7 @@ Expected: `SUCCESS` at the end, with a `.pio/build/wave_rover/firmware.bin`
 timestamp updated. If it fails, STOP and resolve the pre-existing failure
 first — do not build on top of a broken baseline.
 
-- [ ] **Step 2: Note the flash command for later** (do not run yet)
+- [x] **Step 2: Note the flash command for later** (do not run yet)
 
 ```bash
 ~/.local/bin/pio run -t upload
@@ -68,18 +68,56 @@ to verify over a normal serial flash + monitor cycle.)
 
 **Files:**
 - Modify: `application/wave_rover/main/CMakeLists.txt`
+- Modify: `application/wave_rover/main/idf_component.yml`
 - Modify: `application/wave_rover/main/app_main.c:31-34`
 
-The `mdns` component is **already declared** in `idf_component.yml`
-(`espressif/mdns: "^1.0.0"`) but not yet in `main/CMakeLists.txt`'s
-`PRIV_REQUIRES`, and not yet pulled into `managed_components/`. The build
-system resolves and downloads it automatically once it's required.
+**Correction found during implementation:** `application/wave_rover/idf_component.yml`
+(top-level) declares `espressif/mdns: "^1.0.0"`, but that file is **not**
+the manifest the build actually consults for `main`'s dependencies — the
+build log shows components are resolved from `main/idf_component.yml`
+(confirmed: `dependencies.lock` has no `mdns` entry, and a build attempt with
+only the `CMakeLists.txt` change fails with `Failed to resolve component
+'mdns' required by component 'main': unknown name`). `mdns` must be added to
+`main/idf_component.yml`'s `dependencies:` map — the top-level file appears to
+be a stray leftover, not a consulted manifest. `mdns` is also not a built-in
+ESP-IDF component in this `framework-espidf` package — it's a managed
+component pulled from the registry once declared.
 
 The config struct already has a `hostname` field
 (`wave_rover_config.h:19`, defaults to `"wave-rover"` in
 `wave_rover_config.c:20`) — no new config is needed.
 
-- [ ] **Step 1: Add `mdns` to the main component's dependencies**
+- [x] **Step 1a: Declare the `espressif/mdns` managed-component dependency**
+
+Edit `application/wave_rover/main/idf_component.yml` (the manifest the build
+actually consults for `main` — not the stray top-level
+`application/wave_rover/idf_component.yml`). Current content:
+
+```yaml
+dependencies:
+  wave_rover_config:
+    path: ../components/wave_rover_config
+  wave_rover_hal:
+    path: ../components/wave_rover_hal
+  wave_rover_mcp:
+    path: ../components/wave_rover_mcp
+```
+
+Add an `espressif/mdns` entry:
+
+```yaml
+dependencies:
+  espressif/mdns:
+    version: "^1.0.0"
+  wave_rover_config:
+    path: ../components/wave_rover_config
+  wave_rover_hal:
+    path: ../components/wave_rover_hal
+  wave_rover_mcp:
+    path: ../components/wave_rover_mcp
+```
+
+- [x] **Step 1b: Add `mdns` to the main component's `PRIV_REQUIRES`**
 
 Edit `application/wave_rover/main/CMakeLists.txt`. Current content:
 
@@ -125,7 +163,7 @@ idf_component_register(
 )
 ```
 
-- [ ] **Step 2: Initialize mDNS in `app_main.c` after Wi-Fi comes up**
+- [x] **Step 2: Initialize mDNS in `app_main.c` after Wi-Fi comes up**
 
 Current relevant section of `application/wave_rover/main/app_main.c`
 (lines 5-14 includes, 31-41 body):
@@ -191,7 +229,7 @@ continue, matching the optional-feature style already used for syslog:
     const char *ip = wr_wifi_get_ip();
 ```
 
-- [ ] **Step 3: Build**
+- [x] **Step 3: Build**
 
 ```bash
 cd /home/artem/repos/esp-claw/application/wave_rover
@@ -204,7 +242,7 @@ If it fails to resolve the dependency, check `dependencies.lock` got updated
 (it's checked into git; a diff there is expected and should be committed
 alongside the code change).
 
-- [ ] **Step 4: Flash and verify over the network**
+- [x] **Step 4: Flash and verify over the network**
 
 ```bash
 ~/.local/bin/pio run -t upload
@@ -221,7 +259,7 @@ Expected: resolves to the rover's IP and responds. Also check the boot log
 line. If `wifi_mode` is AP-only (`0`), `.local` resolution requires the test
 machine to be connected to the rover's AP — that's expected, not a bug.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add application/wave_rover/main/CMakeLists.txt \
@@ -261,7 +299,7 @@ States and their web-UI colors (mirrors ai-rover's `state_color()` palette):
 | `nav_busy` | blocking `drive_cm`/`rotate_deg`/`nav_to`  | `#d97706` (amber)  |
 | `estop`    | emergency stop active                      | `#dc2626` (red)    |
 
-- [ ] **Step 1: Create the state module header**
+- [x] **Step 1: Create the state module header**
 
 Create `application/wave_rover/components/wave_rover_mcp/wave_rover_mcp_state.h`:
 
@@ -303,7 +341,7 @@ const char *wr_rover_state_name(wr_rover_state_t state);
 #endif
 ```
 
-- [ ] **Step 2: Create the state module source**
+- [x] **Step 2: Create the state module source**
 
 Create `application/wave_rover/components/wave_rover_mcp/wave_rover_mcp_state.c`:
 
@@ -356,7 +394,7 @@ const char *wr_rover_state_name(wr_rover_state_t state)
 }
 ```
 
-- [ ] **Step 3: Register the new source file in the component**
+- [x] **Step 3: Register the new source file in the component**
 
 Edit `application/wave_rover/components/wave_rover_mcp/CMakeLists.txt`.
 Current `SRCS` line:
@@ -375,7 +413,7 @@ Change to:
 files, not under `include/`, so no `INCLUDE_DIRS` change is needed; the two
 consumer files in the same directory include it with `"wave_rover_mcp_state.h"`.)
 
-- [ ] **Step 4: Build to confirm the new module compiles and links**
+- [x] **Step 4: Build to confirm the new module compiles and links**
 
 ```bash
 cd /home/artem/repos/esp-claw/application/wave_rover
@@ -385,7 +423,7 @@ cd /home/artem/repos/esp-claw/application/wave_rover
 Expected: `SUCCESS` (the new files aren't referenced anywhere yet, so this
 just confirms they compile standalone).
 
-- [ ] **Step 5: Wire `nav_busy` into the three blocking nav tools**
+- [x] **Step 5: Wire `nav_busy` into the three blocking nav tools**
 
 Edit `application/wave_rover/components/wave_rover_mcp/wave_rover_mcp_tools.c`.
 
@@ -524,7 +562,7 @@ outside that branch, that's a pre-existing pattern question — leave `cal` as
 declared since it mirrors the original code's structure and the validity
 check is the only thing that needs it.)
 
-- [ ] **Step 6: Extend `/status` JSON with the `state` field**
+- [x] **Step 6: Extend `/status` JSON with the `state` field**
 
 Edit `application/wave_rover/components/wave_rover_mcp/wave_rover_mcp_web.c`.
 
@@ -582,7 +620,7 @@ static esp_err_t handle_status(httpd_req_t *req)
 (Buffer grew from 128 to 160 — the longest possible addition is
 `,"state":"nav_busy"` = 20 bytes, so 128+32 headroom is comfortable.)
 
-- [ ] **Step 7: Color the status pill from `state` in the web UI JS**
+- [x] **Step 7: Color the status pill from `state` in the web UI JS**
 
 Current pill markup (`wave_rover_mcp_web.c:162`):
 
@@ -627,7 +665,7 @@ palette) driven by the new `state` field:
 `.toUpperCase().replace('_',' ')`; unknown/future state values fall back to
 gray `#374151`, matching ai-rover's `default:` branch in `state_color()`.)
 
-- [ ] **Step 8: Build**
+- [x] **Step 8: Build**
 
 ```bash
 cd /home/artem/repos/esp-claw/application/wave_rover
@@ -636,7 +674,7 @@ cd /home/artem/repos/esp-claw/application/wave_rover
 
 Expected: `SUCCESS`.
 
-- [ ] **Step 9: Flash and verify in the browser**
+- [x] **Step 9: Flash and verify in the browser**
 
 ```bash
 ~/.local/bin/pio run -t upload
@@ -654,7 +692,7 @@ Open the rover's web UI (`http://wave-rover.local/` or its IP). Verify:
 - `curl -s http://<ip>/status` (with auth if enabled) returns valid JSON
   containing the new `"state"` field.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add application/wave_rover/components/wave_rover_mcp/wave_rover_mcp_state.h \
@@ -694,7 +732,7 @@ Loki `syslog` receiver + `json` pipeline stage can extract clean labels:
 <134>wave-rover: {"ts":12345,"level":"info","tag":"wr_wifi","msg":"STA connected, IP=192.168.1.5"}
 ```
 
-- [ ] **Step 1: Add the includes the parser needs**
+- [x] **Step 1: Add the includes the parser needs**
 
 Current includes in `application/wave_rover/main/wr_syslog.c` (lines 9-18):
 
@@ -729,7 +767,7 @@ Add `<stdlib.h>` (for `strtoul`):
 #include "freertos/queue.h"
 ```
 
-- [ ] **Step 2: Add a JSON-string-escaping helper**
+- [x] **Step 2: Add a JSON-string-escaping helper**
 
 Insert this just above the `/* UDP sender task */` section comment (before
 `syslog_task`, around current line 55):
@@ -777,7 +815,7 @@ static void json_escape(const char *in, size_t in_len, char *out, size_t out_sz)
 }
 ```
 
-- [ ] **Step 3: Add the line parser + JSON formatter**
+- [x] **Step 3: Add the line parser + JSON formatter**
 
 Insert directly below `json_escape` (still before `syslog_task`):
 
@@ -830,7 +868,7 @@ static void format_json(const char *line, char *out, size_t out_sz)
 }
 ```
 
-- [ ] **Step 4: Use the formatter in `syslog_task` and size buffers for it**
+- [x] **Step 4: Use the formatter in `syslog_task` and size buffers for it**
 
 Current `syslog_task` (lines 59-76):
 
@@ -883,7 +921,7 @@ static void syslog_task(void *arg)
 }
 ```
 
-- [ ] **Step 5: Bump the task's stack size for the new local buffers**
+- [x] **Step 5: Bump the task's stack size for the new local buffers**
 
 `syslog_task` now carries `msg` (480 B) + `json` (576 B) + `pkt` (608 B) ≈
 1.7 KB of locals, plus `format_json`'s own frame (`tag_buf`/`msg_buf` ≈
@@ -902,7 +940,7 @@ Change to:
     xTaskCreate(syslog_task, "wr_syslog", 4096, NULL, 2, NULL);
 ```
 
-- [ ] **Step 6: Build**
+- [x] **Step 6: Build**
 
 ```bash
 cd /home/artem/repos/esp-claw/application/wave_rover
@@ -911,7 +949,7 @@ cd /home/artem/repos/esp-claw/application/wave_rover
 
 Expected: `SUCCESS`.
 
-- [ ] **Step 7: Flash and verify the JSON stream on the wire**
+- [x] **Step 7: Flash and verify the JSON stream on the wire**
 
 ```bash
 ~/.local/bin/pio run -t upload
@@ -949,7 +987,7 @@ Verify:
 - The serial monitor (`~/.local/bin/pio run -t monitor`) still shows
   human-readable plain-text lines — UART output is untouched.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add application/wave_rover/main/wr_syslog.c
@@ -960,7 +998,7 @@ git commit -m "feat(wave_rover): forward all logs as structured JSON over the sy
 
 ## Final check
 
-- [ ] Run `~/.local/bin/pio run` once more from a clean state to confirm all
+- [x] Run `~/.local/bin/pio run` once more from a clean state to confirm all
       three features build together:
 
 ```bash
@@ -973,7 +1011,7 @@ Expected: `SUCCESS`. Flash once more (`~/.local/bin/pio run -t upload`) and
 re-verify all three behaviors (mDNS resolution, status-pill state coloring,
 JSON log lines on the wire) together in one boot cycle.
 
-- [ ] Update `docs/wave_rover_user_guide.md` if it documents `/status` JSON
+- [x] Update `docs/wave_rover_user_guide.md` if it documents `/status` JSON
       shape, the syslog format, or how to discover the rover's address — add
       `wave-rover.local`, the new `"state"` field, and the JSON log shape
       where relevant. (Check first whether it documents these at all; if not,
