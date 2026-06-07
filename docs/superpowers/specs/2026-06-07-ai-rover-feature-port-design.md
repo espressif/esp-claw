@@ -1,38 +1,54 @@
-# Port 4 ai-rover features into wave_rover
+# Port ai-rover features into wave_rover
 
 **Date:** 2026-06-07
-**Status:** approved (user: "Думаю, стоит всё перенести. Используй superpowers, спланируй портирование и приступай")
+**Status:** approved, scope revised after user feedback (see Revision note)
+
+## Revision note (2026-06-07, post-review)
+
+Original plan proposed 4 features. After presenting it, the user (via
+Telegram) said:
+
+> "Давай sta-ap пока не будем трогать совсем, а логи хотелось бы все видеть
+> в json, чтобы в Loki их красиво укладывать"
+> ("Let's not touch STA-AP at all for now, and I'd like to see ALL logs in
+> JSON, so they fit nicely into Loki.")
+
+This **drops feature 4 (Wi-Fi STA→AP fallback) entirely** — out of scope, not
+just reordered — and **expands feature 3 from "scoped key-event logging" to
+"every log line in JSON"**. The expansion turns out to have a much cleaner
+implementation than either ai-rover's pervasive `rover_log()` rewrite or this
+doc's original scoped-helper idea: see revised Feature 3 below.
 
 ## Background
 
-`~/repos/ai-rover` (M5StickC Plus + RoverC Pro, Mecanum) has four things worth
-porting into `wave_rover` (ESP32 tank-drive rover, IDF + MCP):
+`~/repos/ai-rover` (M5StickC Plus + RoverC Pro, Mecanum) had three things
+worth porting into `wave_rover` (ESP32 tank-drive rover, IDF + MCP), after the
+above revision:
 
-1. Wi-Fi STA→AP fallback with a background reconnect task
-2. mDNS hostname advertisement
-3. Structured JSON event logging
-4. An FSM with named states, surfaced as a color-coded status pill in the web UI
+1. mDNS hostname advertisement
+2. An FSM with named states, surfaced as a color-coded status pill in the web UI
+3. All log output in structured JSON (for Loki ingestion over the existing
+   UDP syslog forwarder)
 
 wave_rover already has the dark-theme web UI, joystick, Wi-Fi settings page,
 and a UDP syslog forwarder (`wr_syslog.c`) from prior sessions — those are not
-touched here.
+touched here. Wi-Fi STA→AP fallback is explicitly out of scope per the user's
+"не будем трогать совсем" (let's not touch it at all).
 
-## Ordering (risk-driven, not feature-priority-driven)
+## Ordering
 
-The Wi-Fi rewrite is the only change that can sever the rover's only remote
-access channel (it's flashed via OTA, `POST /update`; no routine serial
-access). So build order is reversed from feature-priority order:
+No risk-ordering constraint remains once Wi-Fi is out of scope — all three
+remaining features are additive (new component dep, new state module, log
+formatting inside an existing forwarder) and none can sever connectivity.
+Build in dependency order: mDNS first (simplest, validates the OTA-flash loop
+for this round of changes), then FSM/status (feeds the `state` field into both
+`/status` JSON and `wr_display_status`), then JSON logging (independent of the
+other two, can be done in any order — placed last because it touches the most
+performance-sensitive path, the log hook that fires on every log line).
 
-1. **mDNS** — additive, can't break connectivity
-2. **FSM + status pill** — additive, UI/state only
-3. **Structured logging helper** — additive, rides on existing `wr_syslog`
-4. **Wi-Fi STA→AP fallback** — last, flashed only with serial access confirmed
+Each step is flashed and verified over OTA before starting the next.
 
-Each step is flashed and verified over OTA before starting the next, so a
-regression in step N doesn't strand the device before step N+1 is even
-written.
-
-## Feature 1: mDNS hostname
+## Feature: mDNS hostname
 
 - Add `mdns` to `PRIV_REQUIRES` in `main/CMakeLists.txt`.
 - In `app_main.c`, after `wr_wifi_init()`, call `mdns_init()` /
@@ -42,7 +58,7 @@ written.
   `"wave-rover"` — no new config needed).
 - Skip mDNS setup entirely in pure-AP mode (no upstream LAN to advertise to).
 
-## Feature 2: FSM + color-coded web status pill
+## Feature: FSM + color-coded web status pill
 
 - New small header/source (e.g. `wr_state.h/.c` in `main/`) defining
   `wr_state_t` (`IDLE, DRIVING, NAV_BUSY, AP_FALLBACK, ESTOP`) and
@@ -62,69 +78,69 @@ written.
   about drive/estop/nav events (motor/nav/estop handlers in `wave_rover_hal`
   and `wave_rover_mcp_tools.c`), not via new polling.
 
-## Feature 3: Structured JSON event logging (scoped, not a rewrite)
+## Feature: all logs as structured JSON (for Loki)
 
-ai-rover's `rover_log()` wraps *every* log call in a JSON envelope. That's a
-pervasive rewrite this codebase's "don't refactor beyond the task" guidance
-argues against, and it would also multiply the chance of accidentally logging
-a secret across dozens of call sites.
+ai-rover's `rover_log()` wraps every *call site* in a JSON envelope — a
+pervasive rewrite touching dozens of files. The user wants the *output* in
+JSON (so Loki can parse fields/labels cleanly), not a particular call-site
+API, and `wr_syslog.c` already gives us a single chokepoint where every log
+line in the firmware passes through exactly once:
 
-Scoped version: one helper, e.g. `wr_log_event(const char *event, const char
-*k1, const char *v1, ...)` (or a small fixed-shape struct, following
-ai-rover's field-array idea) that emits a single-line JSON object via
-`ESP_LOGI` — which `wr_syslog` already forwards over UDP. Used only at a
-handful of *significant* transition points that are currently just prose logs:
+- `wr_syslog_init()` installs `syslog_vprintf()` via `esp_log_set_vprintf()`
+  — this hook receives the fully-rendered line for *every* `ESP_LOGx` call in
+  the firmware (confirmed: `CONFIG_LOG_COLORS` is **not** set in
+  `sdkconfig.wave_rover`, so lines are plain text, no ANSI codes:
+  `"%c (%lu) %s: %s\n"` → e.g. `I (12345) wr_wifi: STA connected, IP=...`).
+- `syslog_task()` currently wraps the stripped line in an RFC 3164 envelope
+  (`"<%d>wave-rover: %s"`) and sends it over UDP.
 
-- Wi-Fi state changes (connected / disconnected / AP-fallback entered/exited)
-- E-stop trigger / clear
-- FSM state transitions (feature 2)
-- Nav command start / complete / abort
+**Plan: parse the rendered line into level/timestamp/tag/message once, in
+`syslog_task()`, and replace the RFC 3164 plain-text body with a JSON object**
+— keeping the `<PRI>` envelope (Promtail/syslog receivers expect it; the JSON
+becomes the message body, which a Loki pipeline `json` stage then parses into
+labels):
 
-Existing routine `ESP_LOGI/D` calls are untouched. The helper must never be
-passed `wifi_password`/`auth_token` — only identifiers, states, and numeric
-values, consistent with the existing "never log password fields" rule in
-`wave_rover_config.c`.
+```
+<PRI>wave-rover: {"ts":12345,"level":"info","tag":"wr_wifi","msg":"STA connected, IP=192.168.1.5"}
+```
 
-## Feature 4: Wi-Fi STA→AP fallback + background reconnect (last, careful)
+Parsing is a single small function: the line always starts with `"%c (%lu) %s: "`
+(level char, space, `(`, decimal ms timestamp, `)`, space, tag, `: `, message)
+because that's ESP-IDF's fixed `LOG_FORMAT` with colors disabled. Map the level
+char (`E/W/I/D/V`) to a lowercase word (`error/warn/info/debug/verbose`) for
+clean Loki label values. JSON-escape `tag` and `msg` (quotes, backslashes,
+control characters) — both can in principle contain arbitrary bytes.
 
-Current `wr_wifi_init()` (confirmed by reading `on_event()`): on
-`WIFI_EVENT_STA_DISCONNECTED` it just clears `s_connected`/`s_ip` — there is
-**no** existing retry/reconnect logic, so a new reconnect task will not race
-with anything.
+This is strictly additive to one already-private file:
+- **Zero changes to any of the ~hundreds of `ESP_LOGx` call sites** — no
+  refactor risk, no new chance of a call site leaking a secret.
+- **UART/serial output stays human-readable** — only the UDP-forwarded copy
+  changes shape (the existing `vprintf(fmt, args)` call for UART is untouched).
+- Reuses the existing queue/socket/broadcast machinery as-is; only the framing
+  in `syslog_task()` changes.
 
-Plan:
-- On initial STA connect timeout, instead of "continuing offline": switch to
-  `WIFI_MODE_APSTA` (config already supports `wifi_mode == 2` AP+STA path) and
-  bring up the configured fallback AP (`wifi_ap_ssid`/`wifi_ap_password`) so
-  there is always a LAN-side lifeline — this directly avoids the failure mode
-  where forcing a test of the fallback strands the device.
-- Add `wr_wifi_reconnect_task()`: every ~15 s while not connected in STA mode,
-  call `esp_wifi_connect()`; on success, log + transition state, and (if the
-  fallback AP was brought up) tear it down and drop back to STA-only — mirrors
-  ai-rover's `wifi_reconnect_task()` teardown-on-success pattern.
-- Expose `wr_wifi_is_ap_fallback(void)` for the status JSON / FSM (an
-  `AP_FALLBACK` state, feature 2) and the OLED line.
-- **Flash protocol for this step only**: confirm serial/USB access to the
-  board *before* flashing this change, and keep `wifi_mode == 2` as the
-  effective runtime mode during bring-up testing so the AP is always live
-  regardless of STA outcome — never test "force STA to fail" against a board
-  that only has the new code's untested fallback as its recovery path.
+No new secret-logging surface is introduced: the formatter only restructures
+bytes that `wr_syslog` already forwards verbatim today (and that already pass
+the project's "never log password fields" discipline at the `ESP_LOGx` call
+sites themselves).
 
 ## Build / verification
 
 - `idf.py build` for the wave_rover board config after each feature.
-- Flash via the existing OTA path (`POST /update`) for features 1–3; flash
-  feature 4 only with physical serial access available.
-- After each flash: verify over the MCP web UI / `/status` endpoint and
-  (where applicable) `wr_syslog` UDP stream — no new ESP_LOG secret leakage,
-  state pill renders and changes color, `<hostname>.local` resolves, and (for
-  feature 4) the rover recovers from a forced STA outage without a manual
-  power cycle.
+- Flash via the existing OTA path (`POST /update`).
+- After each flash: verify over the MCP web UI / `/status` endpoint —
+  `<hostname>.local` resolves, state pill renders and changes color with FSM
+  transitions, and the `wr_syslog` UDP stream carries well-formed JSON lines
+  (spot-check with `nc -ul 5514` or similar) with no secret fields and no
+  parse/escaping artifacts.
 
 ## Out of scope
 
+- Wi-Fi STA→AP fallback — explicitly declined by the user for now
+  ("давай sta-ap пока не будем трогать совсем")
 - Deep sleep / RTC GPIO wake (ai-rover is M5StickC-battery-specific; wave_rover
   has a UPS — not applicable)
 - Mecanum/gripper/AI-chat states from ai-rover's FSM — different hardware,
   not present on wave_rover
-- Rewriting all `ESP_LOG*` call sites to structured JSON
+- Rewriting `ESP_LOGx` call sites — the JSON conversion happens centrally in
+  `wr_syslog.c`, not at call sites
