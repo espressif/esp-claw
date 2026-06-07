@@ -26,6 +26,14 @@ void app_main(void)
 
     wr_syslog_init();  /* hook esp_log before any WiFi/HW init */
 
+    /* The MCP SDK logs raw inbound/outbound JSON-RPC bodies at INFO level
+     * ("Received message: %s" / "Sending response: %s" in esp_mcp_mgr.c) —
+     * before any tool handler runs, so e.g. rover.set_wifi's plaintext
+     * password would otherwise be captured here and forwarded over syslog
+     * regardless of what individual tool handlers choose to log. Raise this
+     * tag's threshold so those lines are neither emitted nor forwarded. */
+    esp_log_level_set("esp_mcp_mgr", ESP_LOG_WARN);
+
     ESP_ERROR_CHECK(wr_hal_init());
     wr_motor_stop(); /* ensure motors off at boot */
 
