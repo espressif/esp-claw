@@ -60,23 +60,54 @@ Each step is flashed and verified over OTA before starting the next.
 
 ## Feature: FSM + color-coded web status pill
 
-- New small header/source (e.g. `wr_state.h/.c` in `main/`) defining
-  `wr_state_t` (`IDLE, DRIVING, NAV_BUSY, AP_FALLBACK, ESTOP`) and
-  `wr_state_set()/wr_state_get()/wr_state_name()`, mirroring ai-rover's
-  `transition_to()`/`state_name()` but trimmed to states that actually occur
-  on wave_rover (no AI/chat states — that's not part of this firmware).
-- `wave_rover_mcp_web.c`: extend the `/status` JSON with a `"state"` field;
-  extend the JS `stColors`-style map so the pill's background color reflects
-  state (mirrors ai-rover's `state_color()` → hex map, e.g. green=IDLE,
-  blue=DRIVING, red=ESTOP/AP_FALLBACK, amber=NAV_BUSY).
-- OLED (`wave_rover_display.c`) is monochrome SSD1306 — color is not
-  physically possible there. `wr_display_status()` keeps showing text; we
-  only add the state name as a short label (e.g. replacing/augmenting the
-  `MCP:ON ESTOP` line with the FSM state name) so the two surfaces stay
-  consistent without inventing a color scheme that can't render.
-- State transitions are wired at the existing call sites that already know
-  about drive/estop/nav events (motor/nav/estop handlers in `wave_rover_hal`
-  and `wave_rover_mcp_tools.c`), not via new polling.
+ai-rover's FSM tracks AI/chat states (`AI_THINKING`, `AI_EXECUTING`,
+`WEB_CONTROL`) that have no equivalent here — wave_rover runs no local agent
+loop. The states that actually occur on wave_rover are derivable almost
+entirely from values the code already polls every status refresh:
+
+- `WR_STATE_ESTOP`    — `wr_motor_emergency_stop_active()` is true (red)
+- `WR_STATE_NAV_BUSY` — a blocking nav command (`rover.drive_cm`/
+  `rover.rotate_deg`) is in progress (amber)
+- `WR_STATE_DRIVING`  — motors are moving: `wr_motor_get_state().left/right != 0`
+  (blue)
+- `WR_STATE_IDLE`     — none of the above (green)
+
+This is a **derived** status, not a transition-tracked FSM with history —
+simpler, and the only piece that can't be derived from already-polled values
+is "nav command in progress" (the blocking `wr_nav_drive_cm`/`wr_nav_rotate_deg`
+calls don't expose a busy flag). That needs exactly one new piece of shared
+state, set/cleared around those two call sites in `wave_rover_mcp_tools.c`.
+
+Implementation, confined to the `wave_rover_mcp` component (where both the
+setter — tool handlers — and the only consumer — `/status` — already live, so
+no new cross-component dependency is introduced):
+
+- New `wave_rover_mcp_state.h/.c` (private, added to the component's `SRCS`,
+  not under `include/`): `wr_rover_state_t` enum, `wr_rover_state_get(void)`
+  (derives from motor state + estop + the nav-busy flag),
+  `wr_rover_state_set_nav_busy(bool)`, `wr_rover_state_name(wr_rover_state_t)`.
+- `wave_rover_mcp_tools.c`: bracket the (synchronous, blocking)
+  `wr_nav_drive_cm`/`wr_nav_rotate_deg` call expressions in `tool_drive_cm`
+  (`:561`), `tool_rotate_deg` (`:521`), and `tool_nav_to` (`:606`, `:610`,
+  wrapping both calls in one busy span) with `wr_rover_state_set_nav_busy(true)`
+  before and `..._set_nav_busy(false)` after. Since these calls are
+  synchronous and always return before the wrapper resumes, a single
+  set/clear pair around each call site is correct regardless of how many
+  internal early-return paths the nav functions have — no restructuring of
+  `wave_rover_nav.c` needed.
+- `wave_rover_mcp_web.c`: extend `handle_status()`'s JSON with a `"state"`
+  string field (`handle_status` at `wave_rover_mcp_web.c:387`); extend the
+  page's JS with a `stColors`-style `{idle:'#2d8b2d', driving:'#2563eb',
+  nav_busy:'#d97706', estop:'#dc2626'}` map (mirrors ai-rover's
+  `state_color()` hex values) and use it in `rf()` (currently
+  `wave_rover_mcp_web.c:273-278`) to set both `ePill`'s text and background.
+
+OLED (`wave_rover_display.c`) is monochrome SSD1306 — color coding is not
+physically possible there, and it already shows the most safety-critical bit
+(`ESTOP` in the MCP line). Adding FSM-state text would require either a new
+polling task or pushing transitions across a `wave_rover_mcp` →
+`wave_rover_hal` dependency that doesn't currently exist, for marginal benefit
+over what's already shown. **Left untouched** — out of scope for this pass.
 
 ## Feature: all logs as structured JSON (for Loki)
 
