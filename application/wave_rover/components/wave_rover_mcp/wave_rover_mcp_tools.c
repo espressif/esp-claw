@@ -4,8 +4,10 @@
  */
 #include "wave_rover_hal.h"
 #include "wave_rover_config.h"
+#include "wave_rover_mcp_state.h"
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 #include "cJSON.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -95,7 +97,6 @@ static esp_mcp_value_t tool_get_config(const esp_mcp_property_list_t *p)
         cJSON_AddStringToObject(root, "hostname",     s_cfg->hostname);
         cJSON_AddNumberToObject(root, "mcp_port",     s_cfg->mcp_port);
         cJSON_AddBoolToObject(root,   "auth_enabled", s_cfg->auth_enabled);
-        cJSON_AddBoolToObject(root,   "dry_run",      s_cfg->dry_run);
         cJSON_AddNumberToObject(root, "max_speed",    (double)s_cfg->max_speed);
         cJSON_AddNumberToObject(root, "max_cmd_ms",   s_cfg->max_command_duration_ms);
     }
@@ -499,6 +500,169 @@ static esp_mcp_value_t tool_set_wifi(const esp_mcp_property_list_t *p)
 }
 
 /* ------------------------------------------------------------------ */
+/* rover.rotate_deg                                                    */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_rotate_deg(const esp_mcp_property_list_t *p)
+{
+    float angle_deg = (float)esp_mcp_property_list_get_property_float(p, "angle_deg");
+    float speed     = (float)esp_mcp_property_list_get_property_float(p, "speed");
+
+    float max_spd = s_cfg ? s_cfg->max_speed : 0.4f;
+    if (speed <= 0.0f || speed > max_spd) speed = max_spd;
+
+    cJSON *root = cJSON_CreateObject();
+    if (wr_motor_emergency_stop_active()) {
+        cJSON_AddBoolToObject(root,   "ok",    false);
+        cJSON_AddStringToObject(root, "error", "emergency_stop_active");
+        return json_obj_str(root);
+    }
+
+    float integrated = 0.0f;
+    wr_rover_state_set_nav_busy(true);
+    esp_err_t err = wr_nav_rotate_deg(angle_deg, speed, &integrated);
+    wr_rover_state_set_nav_busy(false);
+
+    cJSON_AddBoolToObject(root,   "ok",             err == ESP_OK);
+    cJSON_AddStringToObject(root, "action",         err == ESP_OK ? "rotated" : "error");
+    cJSON_AddNumberToObject(root, "target_deg",     (double)angle_deg);
+    cJSON_AddNumberToObject(root, "integrated_deg", (double)integrated);
+    cJSON_AddStringToObject(root, "direction",      angle_deg > 0 ? "CCW" : "CW");
+    if (err != ESP_OK)
+        cJSON_AddStringToObject(root, "error",
+            err == ESP_ERR_NOT_ALLOWED ? "emergency_stop" : "timeout");
+    return json_obj_str(root);
+}
+
+/* ------------------------------------------------------------------ */
+/* rover.drive_cm                                                      */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_drive_cm(const esp_mcp_property_list_t *p)
+{
+    float distance_cm = (float)esp_mcp_property_list_get_property_float(p, "distance_cm");
+    float speed       = (float)esp_mcp_property_list_get_property_float(p, "speed");
+
+    float max_spd = s_cfg ? s_cfg->max_speed : 0.4f;
+    if (speed <= 0.0f || speed > max_spd) speed = max_spd;
+
+    cJSON *root = cJSON_CreateObject();
+    if (wr_motor_emergency_stop_active()) {
+        cJSON_AddBoolToObject(root,   "ok",    false);
+        cJSON_AddStringToObject(root, "error", "emergency_stop_active");
+        return json_obj_str(root);
+    }
+    wr_nav_cal_t cal = wr_nav_get_cal();
+    if (!cal.k_dist_valid) {
+        cJSON_AddBoolToObject(root,   "ok",    false);
+        cJSON_AddStringToObject(root, "error", "distance_not_calibrated");
+        cJSON_AddStringToObject(root, "hint",  "call rover.set_nav_cal with k_dist");
+        return json_obj_str(root);
+    }
+
+    int32_t dur_ms = (int32_t)(distance_cm / (cal.k_dist * speed));
+    wr_rover_state_set_nav_busy(true);
+    esp_err_t err = wr_nav_drive_cm(distance_cm, speed);
+    wr_rover_state_set_nav_busy(false);
+
+    cJSON_AddBoolToObject(root,   "ok",          err == ESP_OK);
+    cJSON_AddStringToObject(root, "action",      err == ESP_OK ? "drive_complete" : "error");
+    cJSON_AddNumberToObject(root, "distance_cm", (double)distance_cm);
+    cJSON_AddNumberToObject(root, "speed",       (double)speed);
+    cJSON_AddNumberToObject(root, "duration_ms", (double)dur_ms);
+    if (err != ESP_OK)
+        cJSON_AddStringToObject(root, "error",
+            err == ESP_ERR_NOT_ALLOWED ? "emergency_stop" : "drive_failed");
+    return json_obj_str(root);
+}
+
+/* ------------------------------------------------------------------ */
+/* rover.nav_to  (drive straight then rotate)                         */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_nav_to(const esp_mcp_property_list_t *p)
+{
+    float distance_cm = (float)esp_mcp_property_list_get_property_float(p, "distance_cm");
+    float angle_deg   = (float)esp_mcp_property_list_get_property_float(p, "angle_deg");
+    float speed       = (float)esp_mcp_property_list_get_property_float(p, "speed");
+
+    float max_spd = s_cfg ? s_cfg->max_speed : 0.4f;
+    if (speed <= 0.0f || speed > max_spd) speed = max_spd;
+
+    cJSON *root = cJSON_CreateObject();
+    if (wr_motor_emergency_stop_active()) {
+        cJSON_AddBoolToObject(root,   "ok",    false);
+        cJSON_AddStringToObject(root, "error", "emergency_stop_active");
+        return json_obj_str(root);
+    }
+
+    bool need_drive = (distance_cm > 0.01f);
+    wr_nav_cal_t cal = {0};
+    if (need_drive) {
+        cal = wr_nav_get_cal();
+        if (!cal.k_dist_valid) {
+            cJSON_AddBoolToObject(root,   "ok",    false);
+            cJSON_AddStringToObject(root, "error", "distance_not_calibrated");
+            cJSON_AddStringToObject(root, "hint",  "call rover.set_nav_cal with k_dist");
+            return json_obj_str(root);
+        }
+    }
+
+    bool drive_ok = true;
+    bool rotate_ok = true;
+    float integrated_deg = 0.0f;
+
+    wr_rover_state_set_nav_busy(true);
+    if (need_drive) {
+        drive_ok = (wr_nav_drive_cm(distance_cm, speed) == ESP_OK);
+    }
+    if (drive_ok && fabsf(angle_deg) > 0.5f) {
+        rotate_ok = (wr_nav_rotate_deg(angle_deg, speed, &integrated_deg) == ESP_OK);
+    }
+    wr_rover_state_set_nav_busy(false);
+
+    cJSON_AddBoolToObject(root,   "ok",             drive_ok && rotate_ok);
+    cJSON_AddBoolToObject(root,   "drive_ok",       drive_ok);
+    cJSON_AddBoolToObject(root,   "rotate_ok",      rotate_ok);
+    cJSON_AddNumberToObject(root, "distance_cm",    (double)distance_cm);
+    cJSON_AddNumberToObject(root, "angle_deg",      (double)angle_deg);
+    cJSON_AddNumberToObject(root, "integrated_deg", (double)integrated_deg);
+    return json_obj_str(root);
+}
+
+/* ------------------------------------------------------------------ */
+/* rover.get_nav_cal / rover.set_nav_cal                               */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_get_nav_cal(const esp_mcp_property_list_t *p)
+{
+    (void)p;
+    wr_nav_cal_t cal = wr_nav_get_cal();
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root,   "ok",           true);
+    cJSON_AddNumberToObject(root, "k_dist",       (double)cal.k_dist);
+    cJSON_AddNumberToObject(root, "gyro_scale",   (double)cal.gyro_scale);
+    cJSON_AddBoolToObject(root,   "k_dist_valid", cal.k_dist_valid);
+    cJSON_AddStringToObject(root, "hint_k_dist",  "cm / (speed_unit * ms)");
+    cJSON_AddStringToObject(root, "hint_gyro",    "physical_deg / integrated_deg");
+    return json_obj_str(root);
+}
+
+static esp_mcp_value_t tool_set_nav_cal(const esp_mcp_property_list_t *p)
+{
+    float k_dist     = (float)esp_mcp_property_list_get_property_float(p, "k_dist");
+    float gyro_scale = (float)esp_mcp_property_list_get_property_float(p, "gyro_scale");
+    if (gyro_scale <= 0.0f) gyro_scale = 1.0f;
+
+    esp_err_t err = wr_nav_set_cal(k_dist, gyro_scale);
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root,   "ok",         err == ESP_OK);
+    cJSON_AddNumberToObject(root, "k_dist",     (double)k_dist);
+    cJSON_AddNumberToObject(root, "gyro_scale", (double)gyro_scale);
+    return json_obj_str(root);
+}
+
+/* ------------------------------------------------------------------ */
 /* Registration                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -547,27 +711,62 @@ esp_err_t wr_mcp_register_all_tools(esp_mcp_t *mcp)
         PROP_INT_RANGE(t, "duration_ms", 1, 3000);
         if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
     }
-    {
-        esp_mcp_tool_t *t = esp_mcp_tool_create("rover.stop",
-                                                 "Stop all motors", tool_stop);
-        if (!t) return ESP_ERR_NO_MEM;
-        PROP_STR(t, "reason");
-        if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
-    }
-    {
-        esp_mcp_tool_t *t = esp_mcp_tool_create("rover.emergency_stop",
-                                                 "Emergency stop (blocks movement)",
-                                                 tool_emergency_stop);
-        if (!t) return ESP_ERR_NO_MEM;
-        PROP_STR(t, "reason");
-        if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
-    }
+    TOOL("rover.stop",           "Stop all motors",                  tool_stop);
+    TOOL("rover.emergency_stop", "Emergency stop (blocks movement)", tool_emergency_stop);
     {
         esp_mcp_tool_t *t = esp_mcp_tool_create("rover.clear_emergency_stop",
                                                  "Clear emergency stop flag",
                                                  tool_clear_estop);
         if (!t) return ESP_ERR_NO_MEM;
         PROP_BOOL(t, "confirm");
+        if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
+    }
+
+    /* Precise navigation */
+    {
+        esp_mcp_tool_t *t = esp_mcp_tool_create("rover.rotate_deg",
+            "Rotate in place by exact degrees using gyro integration. "
+            "angle_deg>0=CCW (anti-clockwise), angle_deg<0=CW. "
+            "Calibrates gyro bias first (keep rover still). "
+            "integrated_deg in response shows actual measured rotation.",
+            tool_rotate_deg);
+        if (!t) return ESP_ERR_NO_MEM;
+        PROP_FLOAT(t, "angle_deg");
+        PROP_FLOAT(t, "speed");
+        if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
+    }
+    {
+        esp_mcp_tool_t *t = esp_mcp_tool_create("rover.drive_cm",
+            "Drive straight forward by exact centimetres using calibrated time coefficient. "
+            "Requires rover.set_nav_cal to be called first with k_dist value.",
+            tool_drive_cm);
+        if (!t) return ESP_ERR_NO_MEM;
+        PROP_FLOAT(t, "distance_cm");
+        PROP_FLOAT(t, "speed");
+        if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
+    }
+    {
+        esp_mcp_tool_t *t = esp_mcp_tool_create("rover.nav_to",
+            "Drive straight then rotate: first drives distance_cm (skip if 0), "
+            "then rotates angle_deg (skip if 0). "
+            "angle_deg>0=CCW, angle_deg<0=CW. Requires k_dist calibration for drive.",
+            tool_nav_to);
+        if (!t) return ESP_ERR_NO_MEM;
+        PROP_FLOAT(t, "distance_cm");
+        PROP_FLOAT(t, "angle_deg");
+        PROP_FLOAT(t, "speed");
+        if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
+    }
+    TOOL("rover.get_nav_cal", "Get navigation calibration (k_dist, gyro_scale)", tool_get_nav_cal);
+    {
+        esp_mcp_tool_t *t = esp_mcp_tool_create("rover.set_nav_cal",
+            "Set navigation calibration and persist to NVS. "
+            "k_dist = cm / (speed_unit * ms), e.g. 0.013 means 13 cm/s at speed=1.0. "
+            "gyro_scale = physical_deg / integrated_deg (1.0 = no correction, 0 = keep current).",
+            tool_set_nav_cal);
+        if (!t) return ESP_ERR_NO_MEM;
+        PROP_FLOAT(t, "k_dist");
+        PROP_FLOAT(t, "gyro_scale");
         if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
     }
 

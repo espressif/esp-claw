@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "wave_rover_mcp.c" "wave_rover_mcp_tools.c" "wave_rover_mcp_web.c"
+    SRCS "wave_rover_mcp.c" "wave_rover_mcp_tools.c" "wave_rover_mcp_web.c" "wave_rover_mcp_state.c"
     INCLUDE_DIRS "include"
     PRIV_REQUIRES
         wave_rover_hal
@@ -13,5 +13,6 @@ idf_component_register(
         esp_timer
         heap
         freertos
+        app_update
         espressif__cjson
 )
