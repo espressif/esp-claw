@@ -100,3 +100,12 @@ esp_err_t wr_wifi_init(const wave_rover_config_t *cfg)
 
 bool wr_wifi_is_connected(void) { return s_connected; }
 const char *wr_wifi_get_ip(void) { return s_ip; }
+
+esp_err_t wr_wifi_get_rssi(int8_t *out_rssi_dbm)
+{
+    wifi_ap_record_t info;
+    esp_err_t err = esp_wifi_sta_get_ap_info(&info);
+    if (err != ESP_OK) return err;
+    *out_rssi_dbm = info.rssi;
+    return ESP_OK;
+}
