@@ -27,9 +27,12 @@ typedef struct {
     bool     auth_enabled;
     char     auth_token[WR_CFG_TOKEN_LEN];
     bool     safe_mode;
-    bool     dry_run;                           /* true=no real hardware */
     float    max_speed;                         /* [0.0, 1.0] */
     uint16_t max_command_duration_ms;
+    bool     syslog_enabled;
+    char     syslog_host[WR_CFG_HOST_LEN];       /* empty = subnet broadcast */
+    uint16_t syslog_port;
+    uint8_t  syslog_facility;                    /* syslog facility 0-23 */
 } wave_rover_config_t;
 
 esp_err_t wave_rover_config_init(void);

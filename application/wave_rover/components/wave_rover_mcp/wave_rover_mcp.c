@@ -158,7 +158,6 @@ static cJSON *read_resource(const char *uri)
             cJSON_AddStringToObject(out, "hostname",     s_cfg->hostname);
             cJSON_AddNumberToObject(out, "mcp_port",     s_cfg->mcp_port);
             cJSON_AddBoolToObject(out,   "auth_enabled", s_cfg->auth_enabled);
-            cJSON_AddBoolToObject(out,   "dry_run",      s_cfg->dry_run);
             cJSON_AddNumberToObject(out, "max_speed",    (double)s_cfg->max_speed);
             cJSON_AddNumberToObject(out, "max_cmd_ms",   s_cfg->max_command_duration_ms);
         }
@@ -402,6 +401,7 @@ esp_err_t wave_rover_mcp_start(const wave_rover_config_t *cfg)
     httpd_config_t hcfg    = HTTPD_DEFAULT_CONFIG();
     hcfg.server_port       = cfg->mcp_port;
     hcfg.max_uri_handlers  = 16;
+    hcfg.stack_size        = 8192;  /* nav tools run in httpd task, need headroom */
     ESP_RETURN_ON_ERROR(httpd_start(&s_httpd, &hcfg), TAG, "httpd_start");
 
     httpd_uri_t mcp_uri = {

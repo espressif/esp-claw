@@ -40,18 +40,25 @@ static esp_err_t ina219_write_reg(uint8_t reg, uint16_t val)
     return i2c_master_transmit(s_ina219_dev, buf, 3, 50);
 }
 
+static bool s_ina219_failed = false;
+
 static esp_err_t ina219_init(void)
 {
-    if (!g_wr_i2c_bus) return ESP_ERR_INVALID_STATE;
+    if (!g_wr_i2c_bus || s_ina219_failed) return ESP_ERR_INVALID_STATE;
     i2c_device_config_t dev_cfg = {
         .dev_addr_length = I2C_ADDR_BIT_LEN_7,
         .device_address  = WR_INA219_ADDR,
         .scl_speed_hz    = WR_I2C_FREQ_HZ,
     };
-    ESP_RETURN_ON_ERROR(i2c_master_bus_add_device(g_wr_i2c_bus, &dev_cfg, &s_ina219_dev),
-                        TAG, "add device");
-    ESP_RETURN_ON_ERROR(ina219_write_reg(INA219_REG_CONFIG, INA219_CONFIG_VAL), TAG, "config");
-    ESP_RETURN_ON_ERROR(ina219_write_reg(INA219_REG_CALIB,  INA219_CALIB_VAL),  TAG, "calib");
+    esp_err_t err = i2c_master_bus_add_device(g_wr_i2c_bus, &dev_cfg, &s_ina219_dev);
+    if (err != ESP_OK) { s_ina219_failed = true; return err; }
+    if (ina219_write_reg(INA219_REG_CONFIG, INA219_CONFIG_VAL) != ESP_OK ||
+        ina219_write_reg(INA219_REG_CALIB,  INA219_CALIB_VAL)  != ESP_OK) {
+        i2c_master_bus_rm_device(s_ina219_dev);
+        s_ina219_dev = NULL;
+        s_ina219_failed = true;
+        return ESP_FAIL;
+    }
     ESP_LOGI(TAG, "INA219 initialized at 0x%02X", WR_INA219_ADDR);
     return ESP_OK;
 }
@@ -61,7 +68,7 @@ esp_err_t wr_power_get_status(wr_power_status_t *s)
     if (!s) return ESP_ERR_INVALID_ARG;
     memset(s, 0, sizeof(*s));
 
-    if (g_wr_dry_run || !g_wr_i2c_bus) {
+    if (!g_wr_i2c_bus) {
         s->present        = false;
         s->bus_voltage_v  = 11.8f;
         s->load_voltage_v = 11.8f;

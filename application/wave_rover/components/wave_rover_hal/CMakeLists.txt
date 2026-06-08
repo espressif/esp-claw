@@ -4,6 +4,7 @@ idf_component_register(
         "wave_rover_motor.c"
         "wave_rover_power.c"
         "wave_rover_imu.c"
+        "wave_rover_nav.c"
         "wave_rover_display.c"
     INCLUDE_DIRS "include"
     PRIV_INCLUDE_DIRS
@@ -12,7 +13,9 @@ idf_component_register(
         esp_driver_i2c
         esp_driver_ledc
         esp_driver_gpio
+        esp_timer
         log
         esp_common
         freertos
+        nvs_flash
 )

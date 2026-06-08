@@ -9,6 +9,7 @@
 #include "driver/gpio.h"
 #include "esp_log.h"
 #include "esp_check.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -109,12 +110,22 @@ static void hw_set_side(float spd, ledc_channel_t ch, int in1, int in2)
 /* Internal raw set — bypasses s_estop guard; worker task checks s_estop in loop */
 static void wr_motor_set_raw(float left, float right)
 {
+    bool was_stopped = (fabsf(s_left) < 0.01f && fabsf(s_right) < 0.01f);
+    bool will_stop   = (fabsf(left)   < 0.01f && fabsf(right)   < 0.01f);
+    int64_t t = esp_timer_get_time();
+
     s_left  = left;
     s_right = right;
-    if (g_wr_dry_run) return;
     if (!s_hw_init) hw_motor_init();
     hw_set_side(left,  WR_LEDC_CH_A, WR_MOTOR_AIN1, WR_MOTOR_AIN2);
     hw_set_side(right, WR_LEDC_CH_B, WR_MOTOR_BIN1, WR_MOTOR_BIN2);
+
+    if (was_stopped && !will_stop)
+        ESP_LOGI(TAG, "MOTOR ON  t=%lldus L=%.2f R=%.2f", t, (double)left, (double)right);
+    else if (!was_stopped && will_stop)
+        ESP_LOGI(TAG, "MOTOR OFF t=%lldus", t);
+    else if (!will_stop)
+        ESP_LOGD(TAG, "MOTOR SET t=%lldus L=%.2f R=%.2f", t, (double)left, (double)right);
 }
 
 /* ------------------------------------------------------------------ */
@@ -201,11 +212,8 @@ esp_err_t wr_motor_set(float left, float right)
 
 esp_err_t wr_motor_stop(void)
 {
+    bool was_moving = (fabsf(s_left) > 0.01f || fabsf(s_right) > 0.01f);
     s_left = s_right = 0.0f;
-    if (g_wr_dry_run) {
-        ESP_LOGD(TAG, "dry-run motor_stop");
-        return ESP_OK;
-    }
     if (!s_hw_init) return ESP_OK;
     gpio_set_level(WR_MOTOR_AIN1, 0); gpio_set_level(WR_MOTOR_AIN2, 0);
     gpio_set_level(WR_MOTOR_BIN1, 0); gpio_set_level(WR_MOTOR_BIN2, 0);
@@ -213,6 +221,8 @@ esp_err_t wr_motor_stop(void)
     ledc_update_duty(WR_LEDC_SPEED, WR_LEDC_CH_A);
     ledc_set_duty(WR_LEDC_SPEED, WR_LEDC_CH_B, 0);
     ledc_update_duty(WR_LEDC_SPEED, WR_LEDC_CH_B);
+    if (was_moving)
+        ESP_LOGI(TAG, "MOTOR STOP t=%lldus", esp_timer_get_time());
     return ESP_OK;
 }
 

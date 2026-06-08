@@ -105,7 +105,7 @@ esp_err_t wr_imu_get_sample(wr_imu_sample_t *s)
     if (!s) return ESP_ERR_INVALID_ARG;
     memset(s, 0, sizeof(*s));
 
-    if (g_wr_dry_run || !g_wr_i2c_bus) {
+    if (!g_wr_i2c_bus) {
         s->present = false;
         s->accel_z = 1.0f;
         return ESP_OK;
@@ -147,17 +147,28 @@ esp_err_t wr_imu_get_sample(wr_imu_sample_t *s)
     return ESP_OK;
 }
 
+esp_err_t wr_imu_get_gyro(float *gz_dps)
+{
+    if (!gz_dps) return ESP_ERR_INVALID_ARG;
+    if (!g_wr_i2c_bus) { *gz_dps = 0.0f; return ESP_OK; }
+    if (!s_qmi_dev) {
+        if (imu_hw_init() != ESP_OK) return ESP_ERR_INVALID_STATE;
+    }
+    uint8_t raw[6];
+    ESP_RETURN_ON_ERROR(qmi_read(QMI_GYRX_L, raw, 6), TAG, "gyro_read");
+    *gz_dps = raw16_to_float(raw[4], raw[5], 512.0f / 32768.0f) - s_gyro_off_z;
+    return ESP_OK;
+}
+
 esp_err_t wr_imu_calibrate(uint16_t samples, uint32_t interval_ms,
                             wr_imu_calib_t *out)
 {
     if (!out) return ESP_ERR_INVALID_ARG;
     memset(out, 0, sizeof(*out));
 
-    if (g_wr_dry_run || !g_wr_i2c_bus) {
-        /* Dry-run: return zeroed offsets as if already calibrated */
+    if (!g_wr_i2c_bus) {
         out->valid       = true;
         out->accel_ref_z = 1.0f;
-        ESP_LOGI(TAG, "dry-run calibrate: returning identity offsets");
         return ESP_OK;
     }
 

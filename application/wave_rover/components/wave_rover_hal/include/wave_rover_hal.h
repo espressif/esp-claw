@@ -63,7 +63,7 @@ typedef struct {
 } wr_motor_cmd_t;
 
 /* HAL lifecycle */
-esp_err_t wr_hal_init(bool dry_run);
+esp_err_t wr_hal_init(void);
 
 /* Motor basic */
 esp_err_t wr_motor_set(float left, float right);
@@ -82,8 +82,29 @@ esp_err_t wr_power_get_status(wr_power_status_t *status);
 
 /* IMU */
 esp_err_t wr_imu_get_sample(wr_imu_sample_t *sample);
+/* Fast gyro-only read: bias-corrected Z-axis, for tight control loops */
+esp_err_t wr_imu_get_gyro(float *gz_dps);
 /* Collect `samples` readings at `interval_ms` apart; compute+store gyro bias offsets */
 esp_err_t wr_imu_calibrate(uint16_t samples, uint32_t interval_ms, wr_imu_calib_t *out);
+
+/* Navigation calibration state */
+typedef struct {
+    float k_dist;       /* cm / (speed_unit × ms); 0 = uncalibrated */
+    float gyro_scale;   /* physical_deg / integrated_deg correction (1.0 = no correction) */
+    bool  k_dist_valid;
+} wr_nav_cal_t;
+
+/* Load calibration from NVS (call after nvs_flash_init) */
+esp_err_t wr_nav_init(void);
+/* Rotate in place: degrees>0=CCW, degrees<0=CW.
+ * Calibrates gyro bias first (rover must be still).
+ * integrated_out: total integrated angle (may differ from target due to lead-stop). */
+esp_err_t wr_nav_rotate_deg(float degrees, float speed, float *integrated_out);
+/* Drive straight forward using time-based open-loop with calibrated k_dist. */
+esp_err_t wr_nav_drive_cm(float cm, float speed);
+/* Persist calibration to NVS.  gyro_scale<=0 defaults to 1.0. */
+esp_err_t wr_nav_set_cal(float k_dist, float gyro_scale);
+wr_nav_cal_t wr_nav_get_cal(void);
 
 /* Display */
 esp_err_t wr_display_clear(void);

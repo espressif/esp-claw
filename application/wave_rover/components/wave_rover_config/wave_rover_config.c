@@ -22,9 +22,12 @@ void wave_rover_config_defaults(wave_rover_config_t *cfg)
     cfg->mcp_port                = 80;
     cfg->auth_enabled            = false;
     cfg->safe_mode               = false;
-    cfg->dry_run                 = true;  /* safe default until HW confirmed */
     cfg->max_speed               = 0.4f;
     cfg->max_command_duration_ms = 3000;
+    cfg->syslog_enabled          = true;
+    cfg->syslog_host[0]          = '\0';   /* broadcast */
+    cfg->syslog_port             = 5514;
+    cfg->syslog_facility         = 16;     /* local0 */
 }
 
 esp_err_t wave_rover_config_init(void)
@@ -58,8 +61,8 @@ esp_err_t wave_rover_config_load(wave_rover_config_t *cfg)
     }
     nvs_close(h);
     /* Never log password fields */
-    ESP_LOGI(TAG, "config loaded: wifi_mode=%u mcp_port=%u dry_run=%d",
-             cfg->wifi_mode, cfg->mcp_port, cfg->dry_run);
+    ESP_LOGI(TAG, "config loaded: wifi_mode=%u mcp_port=%u",
+             cfg->wifi_mode, cfg->mcp_port);
     return err;
 }
 
