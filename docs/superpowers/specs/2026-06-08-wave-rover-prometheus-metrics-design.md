@@ -96,7 +96,7 @@ Implementation wraps `esp_wifi_sta_get_ap_info(&ap_info)` and copies `ap_info.rs
 
 ### 4. Response generation
 
-The handler allocates a heap buffer (4096 bytes — generous for ~30 metric lines with HELP/TYPE comments), builds the exposition text via bounded `snprintf`-with-offset calls (truncating safely on overflow, matching the `json_escape` truncation pattern already used in `wr_syslog.c`), sends it once via `httpd_resp_send` with content type `text/plain; version=0.0.4`, then frees the buffer. This mirrors the existing `malloc`/`free`-per-request pattern in `handle_settings_post`/`handle_update`, and avoids large stack locals per the project's memory rules (no >128-byte locals on task stacks).
+The handler allocates an 8192-byte heap buffer — the catalog above is ~21 distinct metric names (each contributing a `# HELP` and `# TYPE` comment line) plus up to ~30 value lines (some expand into multiple lines via labels, e.g. `motor_speed_ratio{side=...}` ×2, `wave_rover_state{state=...}` ×4, IMU axes ×3 each), roughly 75-90 lines total at up to ~90 bytes/line worst case (long metric names with multiple labels) — 8192 bytes leaves comfortable headroom. The handler builds the exposition text into this buffer via bounded `snprintf`-with-offset calls (truncating safely on overflow, matching the `json_escape` truncation pattern already used in `wr_syslog.c`), sends it once via `httpd_resp_send` with content type `text/plain; version=0.0.4`, then frees the buffer. This mirrors the existing `malloc`/`free`-per-request pattern in `handle_settings_post`/`handle_update`, and avoids large stack locals per the project's memory rules (no >128-byte locals on task stacks).
 
 ### 5. mDNS TXT records
 
