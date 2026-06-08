@@ -73,12 +73,24 @@ esp_err_t wr_wifi_init(const wave_rover_config_t *cfg)
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "wifi start");
 
     if (cfg->wifi_mode == 1) {
-        ESP_RETURN_ON_ERROR(esp_wifi_connect(), TAG, "wifi connect");
-        ESP_LOGI(TAG, "connecting to STA SSID '%s'...", cfg->wifi_ssid);
-        xEventGroupWaitBits(s_wifi_eg, WIFI_CONNECTED_BIT,
-                            pdFALSE, pdTRUE, pdMS_TO_TICKS(30000));
-        if (!s_connected) {
-            ESP_LOGW(TAG, "STA connect timeout, continuing offline");
+        /* A connect failure (e.g. bad/empty SSID, AP out of range) must never
+         * be fatal here — ESP_ERROR_CHECK on this would abort() and reboot,
+         * and since the bad config persists in NVS the device would crash-loop
+         * forever with no way to reach it over the network. Degrade to
+         * offline operation instead so the device stays reachable for repair
+         * (USB serial, or AP fallback once wave_rover_config_load sanity-checks
+         * the stored mode/SSID combination). */
+        esp_err_t connect_err = esp_wifi_connect();
+        if (connect_err != ESP_OK) {
+            ESP_LOGW(TAG, "wifi connect failed: %s — continuing offline",
+                     esp_err_to_name(connect_err));
+        } else {
+            ESP_LOGI(TAG, "connecting to STA SSID '%s'...", cfg->wifi_ssid);
+            xEventGroupWaitBits(s_wifi_eg, WIFI_CONNECTED_BIT,
+                                pdFALSE, pdTRUE, pdMS_TO_TICKS(30000));
+            if (!s_connected) {
+                ESP_LOGW(TAG, "STA connect timeout, continuing offline");
+            }
         }
     } else {
         ESP_LOGI(TAG, "AP started: SSID=%s", cfg->wifi_ap_ssid);

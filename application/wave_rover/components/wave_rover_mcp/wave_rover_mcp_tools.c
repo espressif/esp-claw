@@ -489,6 +489,18 @@ static esp_mcp_value_t tool_set_wifi(const esp_mcp_property_list_t *p)
         /* do not log password */
         if (password) strlcpy(new_cfg.wifi_password, password, sizeof(new_cfg.wifi_password));
         new_cfg.wifi_mode = wifi_mode;
+
+        /* STA/AP_STA with an empty SSID makes esp_wifi_connect() fail with
+         * ESP_ERR_WIFI_SSID at boot — wr_wifi_init cannot recover from that,
+         * and a saved bad config crash-loops the device on every reboot
+         * (this exact bug bricked the rover on 2026-06-08). Reject the save
+         * up front instead of persisting an unbootable combination. */
+        if ((wifi_mode == 1 || wifi_mode == 2) && new_cfg.wifi_ssid[0] == '\0') {
+            cJSON_AddBoolToObject(root,   "ok",    false);
+            cJSON_AddStringToObject(root, "error", "ssid required for sta/ap_sta mode");
+            return json_obj_str(root);
+        }
+
         wave_rover_config_save(&new_cfg);
         ESP_LOGI(TAG, "wifi config saved, reboot to apply");
     }

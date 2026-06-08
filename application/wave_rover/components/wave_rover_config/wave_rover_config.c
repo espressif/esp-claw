@@ -60,6 +60,17 @@ esp_err_t wave_rover_config_load(wave_rover_config_t *cfg)
         err = ESP_OK;
     }
     nvs_close(h);
+
+    /* Sanity-check the loaded combination — STA mode with an empty SSID
+     * makes esp_wifi_connect() return ESP_ERR_WIFI_SSID, which wr_wifi_init
+     * cannot recover from at boot; that previously caused an abort()/reboot
+     * crash-loop with the bad config persisting in NVS (unreachable brick).
+     * Fall back to AP mode so the device stays reachable for repair. */
+    if (cfg->wifi_mode == 1 && cfg->wifi_ssid[0] == '\0') {
+        ESP_LOGW(TAG, "saved config: STA mode with empty SSID — falling back to AP");
+        cfg->wifi_mode = 0;
+    }
+
     /* Never log password fields */
     ESP_LOGI(TAG, "config loaded: wifi_mode=%u mcp_port=%u",
              cfg->wifi_mode, cfg->mcp_port);
