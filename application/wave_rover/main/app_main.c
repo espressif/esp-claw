@@ -43,7 +43,14 @@ void app_main(void)
     if (mdns_err == ESP_OK) {
         mdns_hostname_set(s_cfg.hostname);
         mdns_instance_name_set("Wave Rover MCP");
-        mdns_service_add(NULL, "_http", "_tcp", s_cfg.mcp_port, NULL, 0);
+        mdns_txt_item_t txt[] = {
+            { "path",         "/" },
+            { "api_status",   "/status" },
+            { "api_metrics",  "/metrics" },
+            { "api_settings", "/settings" },
+        };
+        mdns_service_add(NULL, "_http", "_tcp", s_cfg.mcp_port, txt,
+                         sizeof(txt) / sizeof(txt[0]));
         ESP_LOGI(TAG, "mDNS: %s.local -> :%u", s_cfg.hostname, s_cfg.mcp_port);
     } else {
         ESP_LOGW(TAG, "mDNS init failed: %s", esp_err_to_name(mdns_err));
