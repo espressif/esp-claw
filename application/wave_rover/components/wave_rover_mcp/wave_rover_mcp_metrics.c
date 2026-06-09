@@ -9,7 +9,7 @@
 #include "wave_rover_mcp_metrics.h"
 #include "wave_rover_hal.h"
 #include "wave_rover_mcp_state.h"
-#include "wr_wifi.h"
+#include "esp_netif.h"
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -220,17 +220,22 @@ static void append_system(char *buf, size_t sz, size_t *off)
     append(buf, sz, off, "wave_rover_min_free_heap_bytes %lu\n",
            (unsigned long)esp_get_minimum_free_heap_size());
 
-    bool connected = wr_wifi_is_connected();
+    esp_netif_ip_info_t ip_info = {0};
+    esp_netif_t *sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    bool connected = (sta_netif != NULL &&
+                      esp_netif_get_ip_info(sta_netif, &ip_info) == ESP_OK &&
+                      ip_info.ip.addr != 0);
+
     append_help_type(buf, sz, off, "wave_rover_wifi_connected", "gauge",
                      "Whether the rover is connected to a Wi-Fi AP (1) or not (0)");
     append(buf, sz, off, "wave_rover_wifi_connected %d\n", connected ? 1 : 0);
 
     if (connected) {
-        int8_t rssi = 0;
-        if (wr_wifi_get_rssi(&rssi) == ESP_OK) {
+        wifi_ap_record_t ap_info;
+        if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
             append_help_type(buf, sz, off, "wave_rover_wifi_rssi_dbm", "gauge",
                              "Wi-Fi signal strength of the connected AP, in dBm");
-            append(buf, sz, off, "wave_rover_wifi_rssi_dbm %d\n", (int)rssi);
+            append(buf, sz, off, "wave_rover_wifi_rssi_dbm %d\n", (int)ap_info.rssi);
         }
     }
 
