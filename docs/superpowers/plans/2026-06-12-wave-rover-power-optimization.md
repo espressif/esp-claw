@@ -12,6 +12,77 @@
 
 ---
 
+## Task 0: Enable OTA app-rollback safety net
+
+**Why first / out of band:** This plan's riskiest change (Task 3/5: `CONFIG_PM_ENABLE` + `esp_pm_configure` running at boot, before the web server with `/update` comes up) will be validated **over OTA, not USB** (per discussion — disassembling the rover for USB access is impractical; USB is the last-resort fallback). ESP-IDF's app-rollback feature is the standard mitigation: if the newly-flashed firmware never confirms itself as valid (e.g. it crash-loops before `wave_rover_mcp_start()` succeeds), the bootloader automatically reverts to the previous working partition on the *next* boot — restoring OTA access without any manual intervention. Currently `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE` and `CONFIG_APP_ROLLBACK_ENABLE` are both unset in `sdkconfig.wave_rover`.
+
+**Files:**
+- Modify: `application/wave_rover/sdkconfig.wave_rover`
+- Modify: `application/wave_rover/main/app_main.c`
+- Modify: `application/wave_rover/main/CMakeLists.txt`
+
+- [ ] **Step 1: Enable rollback in sdkconfig**
+
+In `sdkconfig.wave_rover`, change:
+```
+# CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE is not set
+```
+to:
+```
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+```
+and:
+```
+# CONFIG_APP_ROLLBACK_ENABLE is not set
+```
+to:
+```
+CONFIG_APP_ROLLBACK_ENABLE=y
+```
+
+With rollback enabled, a freshly-flashed OTA image boots into state `ESP_OTA_IMG_PENDING_VERIFY`. If it reboots (crash, watchdog, panic) **without** being marked valid, the bootloader marks it `ESP_OTA_IMG_ABORTED` and boots the previous partition instead.
+
+- [ ] **Step 2: Mark the running image valid after a successful boot**
+
+Add `#include "esp_ota_ops.h"` to `app_main.c`. After `wave_rover_mcp_start(&s_cfg, power_mgr)` succeeds (end of `app_main`, after the existing `ESP_LOGI(TAG, "boot complete...")` line) — i.e. once Wi-Fi is up, the power manager started without crashing, and the MCP/web server is listening — add:
+
+```c
+    esp_ota_img_states_t ota_state;
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    if (esp_ota_get_state_partition(running, &ota_state) == ESP_OK &&
+        ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
+        esp_ota_mark_app_valid_cancel_rollback();
+        ESP_LOGI(TAG, "OTA image marked valid");
+    }
+```
+
+This must run on every boot path that reaches "the device is fully up and reachable", not just immediately after an OTA — it's a no-op (returns `ESP_ERR_NOT_SUPPORTED`/`ESP_OK` depending on state) for a normally-booted, already-confirmed image, so placing it unconditionally at the end of `app_main` is correct and simplest.
+
+> **Important corollary for Tasks 1-10:** because this task is implemented *first* and committed/flashed-and-confirmed on its own, every subsequent OTA in this plan starts from a build that already has rollback wired up — so each later task's "flash via OTA" gets the safety net automatically. If a later task's firmware crash-loops before reaching this `esp_ota_mark_app_valid_cancel_rollback()` call, the device will self-revert to the last-confirmed-good build on its own within one reboot cycle (a few seconds), restoring OTA access without disassembly.
+
+- [ ] **Step 3: Add `app_update` to `main`'s component requirements**
+
+In `main/CMakeLists.txt`, add `app_update` to `PRIV_REQUIRES` (it's already used by `wave_rover_mcp` for `esp_ota_set_boot_partition`, but `main` needs its own dependency for `esp_ota_ops.h`).
+
+- [ ] **Step 4: Build check**
+
+```bash
+cd application/wave_rover && pio run
+```
+
+- [ ] **Step 5: Flash this task alone via OTA and confirm self-validation**
+
+Flash this build via the existing `/update` OTA flow (this is the *last* time in the project's history that OTA doesn't yet have the rollback net — treat it with extra care, e.g. have the USB cable accessible just for this one flash if at all convenient). After reboot, confirm via Loki (`wr_syslog` forwarding) or `curl http://wave-rover.local/status` that the device is reachable, then re-flash trivially (or just wait) and confirm no rollback occurred. From here on, every OTA in Tasks 1-10 is protected.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add application/wave_rover/sdkconfig.wave_rover application/wave_rover/main
+git commit -m "feat(wave_rover): enable OTA app-rollback as a safety net for in-place OTA iteration"
+```
+
+---
+
 ## Task 1: Config — add power fields to `wave_rover_config_t`
 
 **Files:**
@@ -846,21 +917,16 @@ git add application/wave_rover/main application/wave_rover/components/wave_rover
 git commit -m "feat(wave_rover): wire power_mgr into app_main, MCP tools, web, and OTA"
 ```
 
-- [ ] **Step 9: Flash via USB and verify network/OTA path before relying on OTA again**
+- [ ] **Step 9: Flash via OTA and verify, relying on the Task 0 rollback safety net**
 
-This is the first task where `CONFIG_PM_ENABLE=y` (Task 3) and `wr_power_mgr_create/start()` actually run at boot, **before** `wave_rover_mcp_start()` brings up the web server that serves `/update`. If `esp_pm_configure()` or the eval task panics/hangs here, the device boots but never exposes OTA over the network — recoverable only via USB.
+This is the first task where `CONFIG_PM_ENABLE=y` (Task 3) and `wr_power_mgr_create/start()` actually run at boot, **before** `wave_rover_mcp_start()` brings up the web server that serves `/update`. If `esp_pm_configure()` or the eval task panics/hangs here, Task 0's `esp_ota_mark_app_valid_cancel_rollback()` (called only after `wave_rover_mcp_start()` succeeds) never runs, so the bootloader reverts to the previous working build on the next reboot — restoring OTA without disassembly.
 
-```bash
-cd application/wave_rover && pio run -t upload -t monitor
-```
+Flash via the existing `/update` OTA flow, then confirm via Loki (`wr_syslog`) or `curl`:
+- `curl http://wave-rover.local/status` and `curl http://wave-rover.local/metrics` respond normally (device is up on the new image, not rolled back).
+- Loki shows `"OTA image marked valid"` (Task 0 Step 2) for this boot, and `"boot complete. MCP at http://..."`.
+- No repeated boot-log cycles in Loki (which would indicate a crash-loop/rollback happened).
 
-Confirm via serial monitor:
-- Boot completes, reaches `"boot complete. MCP at http://..."` log line (as before).
-- No panic/reboot loop from `wr_power_eval` task or `esp_pm_configure`.
-- `curl http://wave-rover.local/status` and `curl http://wave-rover.local/metrics` respond normally.
-- `curl -X POST http://wave-rover.local/update ...` (or just confirm the `/update` page loads in the web UI) — i.e. the OTA endpoint is reachable.
-
-Only once this passes, continue with Tasks 6-10 using OTA (`pio run -t upload` over network, if configured) as usual. If it fails, fix the issue and re-flash via USB — do not proceed to rely on OTA until this step passes.
+If the device becomes unreachable for more than ~30s after the OTA, wait for it to reboot and self-revert (Task 0), then fix the issue and re-flash via OTA. Only fall back to disassembly + USB if rollback itself is somehow ineffective (e.g. the crash happens *after* `esp_ota_mark_app_valid_cancel_rollback()` — shouldn't occur if Step 9 of Task 0 was verified, but is the documented last resort).
 
 ---
 
