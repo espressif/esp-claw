@@ -655,6 +655,8 @@ cd application/wave_rover && pio run
 ```
 Expected: builds successfully. `esp_pm.h` / `esp_wifi.h` come from `esp_pm` / `esp_wifi` components already in `PRIV_REQUIRES` (Task 2 CMakeLists).
 
+> **OTA-safety note:** `CONFIG_PM_ENABLE=y` has no runtime effect yet — `wave_rover_power_mgr` isn't created/started until Task 5. Task 5 is where this setting first runs on real hardware, **before** the web server (and `/update`) comes up in `app_main`. See Task 5 Step 9 for the required USB-flash verification before relying on OTA again.
+
 - [ ] **Step 4: Commit**
 
 ```bash
@@ -843,6 +845,22 @@ cd application/wave_rover && pio run
 git add application/wave_rover/main application/wave_rover/components/wave_rover_mcp
 git commit -m "feat(wave_rover): wire power_mgr into app_main, MCP tools, web, and OTA"
 ```
+
+- [ ] **Step 9: Flash via USB and verify network/OTA path before relying on OTA again**
+
+This is the first task where `CONFIG_PM_ENABLE=y` (Task 3) and `wr_power_mgr_create/start()` actually run at boot, **before** `wave_rover_mcp_start()` brings up the web server that serves `/update`. If `esp_pm_configure()` or the eval task panics/hangs here, the device boots but never exposes OTA over the network — recoverable only via USB.
+
+```bash
+cd application/wave_rover && pio run -t upload -t monitor
+```
+
+Confirm via serial monitor:
+- Boot completes, reaches `"boot complete. MCP at http://..."` log line (as before).
+- No panic/reboot loop from `wr_power_eval` task or `esp_pm_configure`.
+- `curl http://wave-rover.local/status` and `curl http://wave-rover.local/metrics` respond normally.
+- `curl -X POST http://wave-rover.local/update ...` (or just confirm the `/update` page loads in the web UI) — i.e. the OTA endpoint is reachable.
+
+Only once this passes, continue with Tasks 6-10 using OTA (`pio run -t upload` over network, if configured) as usual. If it fails, fix the issue and re-flash via USB — do not proceed to rely on OTA until this step passes.
 
 ---
 
