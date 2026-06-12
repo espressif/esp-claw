@@ -51,6 +51,11 @@ void app_main(void)
         };
         mdns_service_add(NULL, "_http", "_tcp", s_cfg.mcp_port, txt,
                          sizeof(txt) / sizeof(txt[0]));
+        /* Advertise the same endpoint as _prometheus-http._tcp so the
+         * mDNS-based Prometheus service discovery (which browses for that
+         * service type, not _http._tcp) picks up /metrics automatically. */
+        mdns_service_add(NULL, "_prometheus-http", "_tcp", s_cfg.mcp_port,
+                         NULL, 0);
         ESP_LOGI(TAG, "mDNS: %s.local -> :%u", s_cfg.hostname, s_cfg.mcp_port);
     } else {
         ESP_LOGW(TAG, "mDNS init failed: %s", esp_err_to_name(mdns_err));
