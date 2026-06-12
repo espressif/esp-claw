@@ -301,13 +301,17 @@ static void claw_memory_async_extract_task(void *arg)
             job->result = err;
             job->completed = true;
             job->completed_ticks = xTaskGetTickCount();
+            /* Signal completion while still holding the lock. Once `completed`
+             * is visible, the consumer (take_summary_list) may detach and free
+             * this job; doing the give after releasing the lock would be a
+             * use-after-free on `job`/`job->done_sem`. Holding the lock across
+             * the give keeps the consumer's free serialized after us. */
+            if (job->done_sem) {
+                xSemaphoreGive(job->done_sem);
+            }
             xSemaphoreGive(s_async_extract.lock);
         } else {
             free(llm_text);
-        }
-
-        if (job->done_sem) {
-            xSemaphoreGive(job->done_sem);
         }
     }
 }

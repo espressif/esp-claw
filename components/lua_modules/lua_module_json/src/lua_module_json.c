@@ -151,10 +151,12 @@ static cJSON *lua_module_json_from_object_table(lua_State *L, int index, int dep
             snprintf(key_buf, sizeof(key_buf), "%lld", (long long)lua_tointeger(L, -2));
             key = key_buf;
         } else {
+            /* Return NULL (instead of luaL_error here) so the whole partial tree
+             * is freed by the unwinding callers; raising mid-recursion would
+             * longjmp past every ancestor container's cJSON_Delete and leak them. */
             cJSON_Delete(child);
             lua_pop(L, 1);
             cJSON_Delete(json);
-            luaL_error(L, "json.encode: table keys must be strings or integers");
             return NULL;
         }
 
@@ -183,8 +185,10 @@ static cJSON *lua_module_json_from_table(lua_State *L, int index, int depth)
 
 static cJSON *lua_module_json_from_value(lua_State *L, int index, int depth)
 {
+    /* Errors are reported by returning NULL (not luaL_error) so that any partial
+     * cJSON tree built by ancestor frames is freed as the NULL propagates up.
+     * Raising here would longjmp past those cJSON_Delete cleanups and leak. */
     if (depth > LUA_MODULE_JSON_MAX_DEPTH) {
-        luaL_error(L, "json.encode: nested value too deep");
         return NULL;
     }
 
@@ -201,7 +205,6 @@ static cJSON *lua_module_json_from_value(lua_State *L, int index, int depth)
     case LUA_TTABLE:
         return lua_module_json_from_table(L, index, depth);
     default:
-        luaL_error(L, "json.encode: unsupported Lua type '%s'", luaL_typename(L, index));
         return NULL;
     }
 }
@@ -212,7 +215,12 @@ static int lua_module_json_encode(lua_State *L)
     char *payload = NULL;
 
     if (!json) {
-        return luaL_error(L, "json.encode: out of memory");
+        /* The full (partial) tree has already been freed by from_value's callers;
+         * safe to raise now. Covers unsupported type, non-string/int key, nesting
+         * too deep, and out-of-memory. */
+        return luaL_error(L,
+                          "json.encode: cannot serialize value "
+                          "(unsupported type, invalid table key, too deeply nested, or OOM)");
     }
 
     payload = cJSON_PrintUnformatted(json);

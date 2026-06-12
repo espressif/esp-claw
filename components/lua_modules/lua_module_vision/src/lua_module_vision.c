@@ -14,9 +14,17 @@
 #include "esp_log.h"
 #include "lauxlib.h"
 #include "lua.h"
+#include "sdkconfig.h"
+
+#if CONFIG_LUA_MODULE_VISION_ESPDET
+#include "espdet.h"
+#endif
+#if CONFIG_LUA_MODULE_VISION_MOTION_DETECT
 #include "lua_image.h"
 #include "motion_detect.h"
+#endif
 
+#if CONFIG_LUA_MODULE_VISION_MOTION_DETECT
 static const char *TAG = "lua_vision";
 static const char *LUA_IMAGE_FRAME_MT = "image.frame";
 
@@ -245,11 +253,21 @@ int luaopen_motion_detect(lua_State *L)
     luaL_setfuncs(L, funcs, 0);
     return 1;
 }
+#endif
 
 esp_err_t lua_module_vision_register(void)
 {
+#if !CONFIG_LUA_MODULE_VISION_MOTION_DETECT && !CONFIG_LUA_MODULE_VISION_ESPDET
+    return ESP_OK;
+#else
     static const cap_lua_module_t modules[] = {
+#if CONFIG_LUA_MODULE_VISION_MOTION_DETECT
         {"motion_detect", luaopen_motion_detect},
+#endif
+#if CONFIG_LUA_MODULE_VISION_ESPDET
+        {"espdet", luaopen_espdet},
+#endif
     };
     return cap_lua_register_modules(modules, sizeof(modules) / sizeof(modules[0]));
+#endif
 }

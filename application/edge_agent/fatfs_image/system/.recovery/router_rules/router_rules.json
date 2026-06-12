@@ -60,6 +60,36 @@
     ]
   },
   {
+    "id": "im_llm_command",
+    "description": "Handle LLM configuration commands when the user sends /llm.",
+    "enabled": true,
+    "consume_on_match": true,
+    "ack": "{{event.source_channel}} LLM command handled",
+    "match": {
+      "event_type": "message",
+      "event_key": "text",
+      "content_type": "text",
+      "text": "/llm",
+      "text_match_rule": "prefix"
+    },
+    "actions": [
+      {
+        "type": "call_cap",
+        "cap": "llm_config_command",
+        "input": {
+          "command": "{{match.remainder}}"
+        }
+      },
+      {
+        "type": "send_message",
+        "input": {
+          "channel": "{{event.source_channel}}",
+          "chat_id": "{{event.chat_id}}"
+        }
+      }
+    ]
+  },
+  {
     "id": "im_any_message_working_reply",
     "description": "Reply to any IM text message before other automation handling.",
     "enabled": true,

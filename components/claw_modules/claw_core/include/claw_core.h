@@ -186,6 +186,8 @@ esp_err_t claw_core_create(const claw_core_config_t *config, claw_core_handle_t 
 esp_err_t claw_core_start(claw_core_handle_t core);
 esp_err_t claw_core_stop(claw_core_handle_t core, uint32_t timeout_ms);
 esp_err_t claw_core_destroy(claw_core_handle_t core);
+esp_err_t claw_core_update_llm_config(claw_core_handle_t core,
+                                      const claw_core_config_t *config);
 esp_err_t claw_core_add_context_provider(claw_core_handle_t core,
                                          const claw_core_context_provider_t *provider);
 esp_err_t claw_core_add_completion_observer(claw_core_handle_t core,

@@ -48,6 +48,10 @@ typedef enum {
 typedef struct {
     uint32_t request_id;
     const char *session_id;
+    const char *agent_id;
+    const char *agent_type;
+    const char *parent_agent_id;
+    const char *parent_session_id;
     const char *channel;
     const char *chat_id;
     const char *target_channel;
@@ -62,6 +66,10 @@ typedef struct {
     uint32_t magic;
     claw_core_handle_t *core;
     claw_cap_caller_t caller;
+    const char *agent_id;
+    const char *agent_type;
+    const char *parent_agent_id;
+    const char *parent_session_id;
 } claw_cap_core_call_user_ctx_t;
 
 #define CLAW_CAP_CORE_CALL_USER_CTX_MAGIC 0x43415043U

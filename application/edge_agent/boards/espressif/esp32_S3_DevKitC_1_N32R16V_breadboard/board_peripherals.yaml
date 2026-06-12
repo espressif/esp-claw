@@ -1,0 +1,83 @@
+version: 1.0.0
+# Peripherals Configuration
+peripherals:
+  - name: rmt_tx
+    type: rmt
+    role: tx
+    config:
+      gpio_num: 38
+      clk_src: RMT_CLK_SRC_DEFAULT
+      resolution_hz: 10000000
+      mem_block_symbols: 64
+      trans_queue_depth: 4
+      intr_priority: 1
+      flags:
+        invert_out: false
+        with_dma: true  # RMT peripheral can connect to DMA channel in esp32s3
+        io_loop_back: false
+        io_od_mode: false
+        allow_pd: false
+        init_level: false
+
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 2
+        scl: 3
+
+  - name: i2s_audio_out
+    type: i2s
+    role: master
+    format: pdm-out
+    config:
+      sample_rate_hz: 16000
+      clk_src: I2S_CLK_SRC_DEFAULT
+      mclk_multiple: 256
+      up_sample_fp: 960
+      up_sample_fs: 441
+      bclk_div: 8
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_MONO
+      slot_mask: I2S_PDM_SLOT_LEFT
+      data_fmt: "I2S_PDM_DATA_FMT_PCM"
+      sd_prescale: 0
+      sd_scale: I2S_PDM_SIG_SCALING_MUL_4
+      hp_scale: I2S_PDM_SIG_SCALING_MUL_4
+      lp_scale: I2S_PDM_SIG_SCALING_MUL_4
+      sinc_scale: I2S_PDM_SIG_SCALING_MUL_4
+      line_mode: I2S_PDM_TX_ONE_LINE_CODEC
+      hp_en: false
+      hp_cut_off_freq_hz: 35.5
+      sd_dither: 0
+      sd_dither2: 1
+      pins:
+        dout: 9                    # [IO] Data output pin
+      invert_flags:
+        clk_inv: false
+
+  # LCD SPI Configuration for ST7789 QSPI
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      # spi_bus_config_t fields
+      spi_bus_config:
+        spi_port: SPI3_HOST               # 0: SPI1_HOST, 1: SPI2_HOST, 2: SPI3_HOST
+        data0_io_num: 5                   # MOSI_IO_NUM
+        sclk_io_num: 4                    # SPI Clock signal
+        max_transfer_sz: 6400             # Maximum transfer size in bytes : width * 2 * 10
+
+  # LCD BACKLIGHT CONTROL
+  - name: ledc_backlight
+    type: ledc
+    role: none
+    config:
+      gpio_num: 16
+      freq_hz: 5000
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: true

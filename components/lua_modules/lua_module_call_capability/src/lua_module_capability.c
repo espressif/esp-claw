@@ -314,7 +314,8 @@ static int lua_module_capability_call(lua_State *L)
     size_t output_size;
     esp_err_t err;
 
-    payload_json = lua_module_capability_build_payload_json(L, 2);
+    /* Parse the opts (which can raise -> longjmp) before allocating any heap
+     * buffers, otherwise a bad opts field would leak payload_json. */
     lua_module_capability_fill_context(L, 3, &ctx);
     output_size = lua_module_capability_get_size_field(L,
                                                        3,
@@ -322,6 +323,8 @@ static int lua_module_capability_call(lua_State *L)
                                                        LUA_MODULE_CAPABILITY_DEFAULT_OUTPUT_SIZE,
                                                        1024,
                                                        LUA_MODULE_CAPABILITY_MAX_OUTPUT_SIZE);
+
+    payload_json = lua_module_capability_build_payload_json(L, 2);
 
     output = calloc(1, output_size);
     if (!output) {

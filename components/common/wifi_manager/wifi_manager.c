@@ -141,6 +141,11 @@ static uint32_t wifi_manager_max_retry(void)
     return s_config.max_retry ? s_config.max_retry : CONFIG_APP_WIFI_MAX_RETRY;
 }
 
+static bool wifi_manager_sta_password_is_set(void)
+{
+    return s_config.sta_password && s_config.sta_password[0] != '\0';
+}
+
 static void compose_ap_ssid(void)
 {
     if (s_config.ap_ssid && s_config.ap_ssid[0] != '\0') {
@@ -197,6 +202,18 @@ esp_err_t wifi_manager_validate_config(const wifi_manager_config_t *config)
     if (!config) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (config->sta_ssid && config->sta_ssid[0] != '\0') {
+        size_t sta_ssid_len = strlen(config->sta_ssid);
+        if (sta_ssid_len >= sizeof(((wifi_config_t *)0)->sta.ssid)) {
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+    if (config->sta_password && config->sta_password[0] != '\0') {
+        size_t sta_password_len = strlen(config->sta_password);
+        if (sta_password_len < 8 || sta_password_len >= sizeof(((wifi_config_t *)0)->sta.password)) {
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
     if (config->ap_password && config->ap_password[0] != '\0') {
         size_t ap_password_len = strlen(config->ap_password);
         if (ap_password_len < 8 || ap_password_len >= sizeof(((wifi_config_t *)0)->ap.password)) {
@@ -229,6 +246,13 @@ static esp_err_t configure_sta_mode(const wifi_manager_config_t *config)
     sync_owned_config(config);
     compose_ap_ssid();
     s_sta_configured = (s_config.sta_ssid && s_config.sta_ssid[0] != '\0');
+    ESP_LOGI(TAG,
+             "Applying Wi-Fi config: sta_configured=%d sta_ssid_len=%u sta_password_empty=%d ap_password_empty=%d ap_behavior=%s",
+             s_sta_configured,
+             (unsigned)(s_config.sta_ssid ? strlen(s_config.sta_ssid) : 0U),
+             wifi_manager_sta_password_is_set() ? 0 : 1,
+             (s_config.ap_password && s_config.ap_password[0] != '\0') ? 0 : 1,
+             s_config.ap_behavior ? s_config.ap_behavior : "keep");
     if (s_reconnect_timer) {
         esp_timer_stop(s_reconnect_timer);
     }
@@ -240,7 +264,10 @@ static esp_err_t configure_sta_mode(const wifi_manager_config_t *config)
         strlcpy((char *)sta_cfg.sta.password,
                 s_config.sta_password ? s_config.sta_password : "",
                 sizeof(sta_cfg.sta.password));
-        sta_cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+        sta_cfg.sta.threshold.authmode =
+            wifi_manager_sta_password_is_set()
+            ? WIFI_AUTH_WPA2_PSK
+            : WIFI_AUTH_OPEN;
         sta_cfg.sta.pmf_cfg.capable = true;
         sta_cfg.sta.pmf_cfg.required = false;
 
@@ -278,6 +305,11 @@ static void wifi_event_handler(void *arg,
         switch (event_id) {
         case WIFI_EVENT_STA_START:
             if (s_sta_configured) {
+                ESP_LOGI(TAG,
+                         "STA start: ssid_len=%u auth_threshold=%s mode=%s",
+                         (unsigned)strlen(s_config.sta_ssid),
+                         wifi_manager_sta_password_is_set() ? "wpa2_psk" : "open",
+                         wifi_manager_mode_string(s_mode));
                 esp_wifi_connect();
             } else {
                 ESP_LOGW(TAG, "Wi-Fi STA not configured, skipping connection");
@@ -285,12 +317,17 @@ static void wifi_event_handler(void *arg,
             return;
 
         case WIFI_EVENT_STA_DISCONNECTED:
+        {
+            const wifi_event_sta_disconnected_t *disc =
+                event_data ? (const wifi_event_sta_disconnected_t *)event_data : NULL;
+            uint16_t reason = disc ? disc->reason : 0;
             strlcpy(s_ip_addr, "0.0.0.0", sizeof(s_ip_addr));
             if (s_connected) {
                 s_connected = false;
                 notify_state_changed(false);
             }
             if (!s_sta_configured) {
+                ESP_LOGW(TAG, "STA disconnected but not configured, reason=%u", (unsigned)reason);
                 return;
             }
             if (s_retry_count < (int)wifi_manager_max_retry()) {
@@ -300,8 +337,14 @@ static void wifi_event_handler(void *arg,
                 }
                 s_retry_count++;
                 s_mode = s_ap_active ? WIFI_MODE_APSTA_TRYING : s_mode;
-                ESP_LOGI(TAG, "STA disconnected, retry %d/%" PRIu32 " in %" PRIu32 "ms",
-                         s_retry_count, wifi_manager_max_retry(), delay_ms);
+                ESP_LOGI(TAG,
+                         "STA disconnected: reason=%u retry=%d/%" PRIu32 " delay_ms=%" PRIu32 " mode=%s ap_active=%d",
+                         (unsigned)reason,
+                         s_retry_count,
+                         wifi_manager_max_retry(),
+                         delay_ms,
+                         wifi_manager_mode_string(s_mode),
+                         s_ap_active);
                 if (s_reconnect_timer) {
                     esp_timer_stop(s_reconnect_timer);
                     esp_timer_start_once(s_reconnect_timer, (uint64_t)delay_ms * 1000ULL);
@@ -309,12 +352,15 @@ static void wifi_event_handler(void *arg,
                     esp_wifi_connect();
                 }
             } else {
-                ESP_LOGE(TAG, "STA failed after %" PRIu32 " retries, falling back to AP",
-                         wifi_manager_max_retry());
+                ESP_LOGE(TAG,
+                         "STA failed after %" PRIu32 " retries, reason=%u, falling back to AP",
+                         wifi_manager_max_retry(),
+                         (unsigned)reason);
                 xEventGroupSetBits(s_wifi_event_group, WIFI_FAIL_BIT);
                 fallback_to_ap();
             }
             return;
+        }
 
         case WIFI_EVENT_AP_START:
             s_ap_active = true;
@@ -392,12 +438,18 @@ static esp_err_t fallback_to_ap(void)
     s_sta_configured = false;
     s_retry_count = 0;
 
+    ESP_LOGW(TAG,
+             "Switching to AP fallback: ap_ssid=%s ap_auth=%s",
+             s_ap_ssid[0] ? s_ap_ssid : "-",
+             (s_config.ap_password && s_config.ap_password[0] != '\0') ? "wpa2_psk" : "open");
+
     esp_err_t err = esp_wifi_set_mode(WIFI_MODE_AP);
     if (err != ESP_OK) {
         return err;
     }
     apply_ap_config();
     refresh_ap_ip_str();
+    ESP_LOGW(TAG, "AP fallback active: ap_ssid=%s ap_ip=%s", s_ap_ssid, s_ap_ip);
     notify_state_changed(true);
     return ESP_OK;
 }
@@ -515,7 +567,13 @@ esp_err_t wifi_manager_wait_connected(uint32_t timeout_ms)
                                            pdFALSE,
                                            pdFALSE,
                                            ticks);
-    return (bits & WIFI_CONNECTED_BIT) ? ESP_OK : ESP_ERR_TIMEOUT;
+    if (bits & WIFI_CONNECTED_BIT) {
+        return ESP_OK;
+    }
+    if (bits & WIFI_FAIL_BIT) {
+        return ESP_FAIL;
+    }
+    return ESP_ERR_TIMEOUT;
 }
 
 esp_err_t wifi_manager_register_state_callback(wifi_manager_state_cb_t cb, void *user_ctx)

@@ -48,15 +48,15 @@ static esp_err_t clone_request_item(const claw_core_request_t *request,
 
     item.view.request_id = request->request_id;
     item.view.flags = request->flags;
-    item.owned_session_id = claw_core_dup_string(request->session_id);
-    item.owned_user_text = claw_core_dup_string(request->user_text);
-    item.owned_source_channel = claw_core_dup_string(request->source_channel);
-    item.owned_source_chat_id = claw_core_dup_string(request->source_chat_id);
-    item.owned_source_sender_id = claw_core_dup_string(request->source_sender_id);
-    item.owned_source_message_id = claw_core_dup_string(request->source_message_id);
-    item.owned_source_cap = claw_core_dup_string(request->source_cap);
-    item.owned_target_channel = claw_core_dup_string(request->target_channel);
-    item.owned_target_chat_id = claw_core_dup_string(request->target_chat_id);
+    item.owned_session_id = claw_utils_string_dup(request->session_id);
+    item.owned_user_text = claw_utils_string_dup(request->user_text);
+    item.owned_source_channel = claw_utils_string_dup(request->source_channel);
+    item.owned_source_chat_id = claw_utils_string_dup(request->source_chat_id);
+    item.owned_source_sender_id = claw_utils_string_dup(request->source_sender_id);
+    item.owned_source_message_id = claw_utils_string_dup(request->source_message_id);
+    item.owned_source_cap = claw_utils_string_dup(request->source_cap);
+    item.owned_target_channel = claw_utils_string_dup(request->target_channel);
+    item.owned_target_chat_id = claw_utils_string_dup(request->target_chat_id);
 
     item.view.session_id = item.owned_session_id;
     item.view.user_text = item.owned_user_text;

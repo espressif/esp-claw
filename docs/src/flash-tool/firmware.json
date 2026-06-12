@@ -5,7 +5,10 @@
         "features": [],
         "description": "",
         "merged_binary": {
-          "Serial JTAG": "/merged_binary/test_Board_p4__rev1__serial_jtag.bin"
+          "Serial JTAG": {
+            "bin": "/merged_binary/test_Board_p4__rev1__serial_jtag.bin",
+            "gzip": "/merged_binary/test_Board_p4__rev1__serial_jtag.bin.gz"
+          }
         },
         "min_flash_size": 16,
         "min_psram_size": 8,
@@ -22,7 +25,10 @@
         "features": [],
         "description": "",
         "merged_binary": {
-          "Serial JTAG": "/merged_binary/test_Board_p4x__rev3__serial_jtag.bin"
+          "Serial JTAG": {
+            "bin": "/merged_binary/test_Board_p4x__rev3__serial_jtag.bin",
+            "gzip": "/merged_binary/test_Board_p4x__rev3__serial_jtag.bin.gz"
+          }
         },
         "min_flash_size": 16,
         "min_psram_size": 8,
@@ -39,7 +45,10 @@
         "features": [],
         "description": "",
         "merged_binary": {
-          "Serial JTAG": "/merged_binary/test_Board_s3__serial_jtag.bin"
+          "Serial JTAG": {
+            "bin": "/merged_binary/test_Board_s3__serial_jtag.bin",
+            "gzip": "/merged_binary/test_Board_s3__serial_jtag.bin.gz"
+          }
         },
         "min_flash_size": 8,
         "min_psram_size": 8,
@@ -52,8 +61,14 @@
         "features": [],
         "description": "",
         "merged_binary": {
-          "UART": "/merged_binary/test_Board_s3_2__uart.bin",
-          "Serial JTAG": "/merged_binary/test_Board_s3_2__serial_jtag.bin"
+          "UART": {
+            "bin": "/merged_binary/test_Board_s3_2__uart.bin",
+            "gzip": "/merged_binary/test_Board_s3_2__uart.bin.gz"
+          },
+          "Serial JTAG": {
+            "bin": "/merged_binary/test_Board_s3_2__serial_jtag.bin",
+            "gzip": "/merged_binary/test_Board_s3_2__serial_jtag.bin.gz"
+          }
         },
         "min_flash_size": 8,
         "min_psram_size": 8,
@@ -66,8 +81,14 @@
         "features": [],
         "description": "",
         "merged_binary": {
-          "UART": "/merged_binary/test_Board_s3_3__uart.bin",
-          "Serial JTAG": "/merged_binary/test_Board_s3_3__serial_jtag.bin"
+          "UART": {
+            "bin": "/merged_binary/test_Board_s3_3__uart.bin",
+            "gzip": "/merged_binary/test_Board_s3_3__uart.bin.gz"
+          },
+          "Serial JTAG": {
+            "bin": "/merged_binary/test_Board_s3_3__serial_jtag.bin",
+            "gzip": "/merged_binary/test_Board_s3_3__serial_jtag.bin.gz"
+          }
         },
         "min_flash_size": 8,
         "min_psram_size": 8,

@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "src/mcp_mdns.c"
+        "src/mcp_local.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        esp_netif
+        json
+        mdns
+)

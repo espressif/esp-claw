@@ -152,13 +152,13 @@ char *claw_core_build_context_failure_trace(const char *error_message,
     const char *reason = (error_message && error_message[0]) ? error_message : "unknown error";
 
     if (tool_summary && tool_summary[0]) {
-        return claw_core_dup_printf("Session note: the previous request failed before producing a final answer.\n"
+        return claw_utils_string_dup_printf("Session note: the previous request failed before producing a final answer.\n"
                                     "Reason: %s\n%s",
                                     reason,
                                     tool_summary);
     }
 
-    return claw_core_dup_printf("Session note: the previous request failed before producing a final answer.\n"
+    return claw_utils_string_dup_printf("Session note: the previous request failed before producing a final answer.\n"
                                 "Reason: %s",
                                 reason);
 }

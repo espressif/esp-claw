@@ -1,0 +1,4 @@
+board: esp32_S3_DevKitC_1_N32R16V_breadboard
+chip: esp32s3
+description: "ESP32-S3-DevKitC-1 Development Board"
+manufacturer: "ESPRESSIF"

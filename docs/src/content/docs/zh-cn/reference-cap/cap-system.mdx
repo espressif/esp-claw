@@ -1,6 +1,6 @@
 ---
-title: cap_system — 系统信息与设备重启
-description: 查询设备运行状态（系统、内存、CPU、Wi-Fi、IP）并支持延迟重启等运维操作。
+title: cap_system — 系统信息、时间查询与设备重启
+description: 查询设备运行状态（系统、内存、CPU、Wi-Fi、IP）、当前本地时间，并支持延迟重启等运维操作。
 ---
 
 import LinkToSource from '@/components/LinkToSource.astro';
@@ -10,24 +10,23 @@ import { Aside } from '@astrojs/starlight/components';
 
 ## 定位
 
-`cap_system` 提供设备运行状态的统一查询入口，并提供可控的重启动作。它属于可被 LLM 直接调用的系统级工具组，适合用于设备诊断、健康检查和远程恢复。
+`cap_system` 提供设备运行状态和当前本地时间的统一查询入口，并提供可控的重启动作。它属于可被 LLM 直接调用的系统级工具组，适合用于设备诊断、健康检查和远程恢复。
 
 ## 暴露给 LLM 的工具
 
 | 工具 ID | 功能 | 输入参数 |
 |---------|------|----------|
-| `get_system_info` | 返回系统汇总（芯片、内存、CPU、Wi-Fi、IP、uptime） | (无) |
-| `get_memory_info` | 返回内存信息（内部内存、heap、PSRAM） | (无) |
-| `get_cpu_usage` | 返回 CPU 使用率与运行时统计信息 | (无) |
-| `get_wifi_info` | 返回当前 Wi-Fi 连接信息（SSID、RSSI、信道等） | (无) |
-| `get_ip_address` | 返回当前站点 IP / netmask / gateway | (无) |
+| `get_system_info` | 返回系统信息；省略 `sections` 时返回完整汇总 | `sections`（可选，`chip` / `uptime` / `memory` / `cpu` / `wifi` / `ip` 数组） |
+| `get_current_time` | 返回格式化的当前本地时间；系统时钟无效时会先尝试 SNTP 同步 | (无) |
 | `restart_device` | 安排设备延迟重启 | `delay_ms`（可选，毫秒） |
 
 ## 返回结构说明
 
-- `get_system_info` 会组合多个子结构：`memory`、`cpu`、`wifi`、`ip`。
-- `get_cpu_usage` 在未启用 FreeRTOS 运行时统计时，返回 `supported: false` 与说明消息。
-- `get_wifi_info` / `get_ip_address` 在未连网时会返回 `connected: false` 与空值字段。
+- `get_system_info` 省略 `sections` 时会组合多个子结构：`memory`、`cpu`、`wifi`、`ip`，并包含芯片与 uptime 字段。
+- `sections` 可用于只请求部分结构，例如 `{"sections":["memory","wifi"]}`。
+- `cpu` 在未启用 FreeRTOS 运行时统计时，返回 `supported: false` 与说明消息。
+- `wifi` / `ip` 在未连网时会返回 `connected: false` 与空值字段。
+- `get_current_time` 返回格式为 `YYYY-MM-DD HH:MM:SS TZ (weekday)` 的本地时间；当系统时间早于 2024-01-01 时，会先尝试通过 SNTP 同步。
 
 ## `restart_device` 行为
 

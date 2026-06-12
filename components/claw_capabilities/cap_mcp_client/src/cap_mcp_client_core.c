@@ -3,112 +3,20 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#include "cap_mcp_client_internal.h"
-
 #include <stdlib.h>
 #include <string.h>
-#include <stdbool.h>
 
-#include "esp_crt_bundle.h"
 #include "esp_http_client.h"
-#include "esp_log.h"
+#include "esp_mcp_mgr.h"
 
-static const char *TAG = "mcp_client_core";
+#include "cap_mcp_client_priv.h"
 
-#define CAP_MCP_REQUEST_ID_CALL    1
-#define CAP_MCP_REQUEST_ID_LIST    2
-#define CAP_MCP_RESPONSE_BUF_SIZE  (8 * 1024)
 #define CAP_MCP_HTTP_TIMEOUT_MS    20000
 
 typedef struct {
-    char *data;
-    size_t len;
-    size_t cap;
-} cap_mcp_buf_t;
-
-static esp_err_t cap_mcp_http_event_handler(esp_http_client_event_t *event)
-{
-    cap_mcp_buf_t *buf = (cap_mcp_buf_t *)event->user_data;
-    size_t needed;
-
-    if (!buf || event->event_id != HTTP_EVENT_ON_DATA) {
-        return ESP_OK;
-    }
-
-    needed = buf->len + event->data_len;
-    if (needed < buf->cap) {
-        memcpy(buf->data + buf->len, event->data, event->data_len);
-        buf->len += event->data_len;
-        buf->data[buf->len] = '\0';
-    }
-    return ESP_OK;
-}
-
-static void cap_mcp_build_full_url(const char *server_url,
-                                   const char *endpoint,
-                                   char *full_url,
-                                   size_t full_url_size)
-{
-    size_t length = strnlen(server_url, 256);
-
-    if (length == 0 || length >= full_url_size) {
-        full_url[0] = '\0';
-        return;
-    }
-
-    while (length > 0 && server_url[length - 1] == '/') {
-        length--;
-    }
-    memcpy(full_url, server_url, length);
-    full_url[length] = '\0';
-
-    if (endpoint && endpoint[0] != '\0') {
-        const char *trimmed = endpoint[0] == '/' ? endpoint + 1 : endpoint;
-
-        if (*trimmed) {
-            snprintf(full_url + length, full_url_size - length, "/%s", trimmed);
-        }
-    }
-}
-
-static esp_err_t cap_mcp_http_post(const char *url,
-                                   const char *body,
-                                   cap_mcp_buf_t *buf)
-{
-    esp_http_client_config_t config = {
-        .url = url,
-        .method = HTTP_METHOD_POST,
-        .event_handler = cap_mcp_http_event_handler,
-        .user_data = buf,
-        .timeout_ms = CAP_MCP_HTTP_TIMEOUT_MS,
-        .buffer_size = 2048,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-    };
-    esp_http_client_handle_t client = NULL;
+    cJSON *result;
     esp_err_t err;
-    int status;
-
-    client = esp_http_client_init(&config);
-    if (!client) {
-        return ESP_ERR_NO_MEM;
-    }
-
-    esp_http_client_set_header(client, "Content-Type", "application/json");
-    esp_http_client_set_header(client, "Accept", "application/json");
-    esp_http_client_set_post_field(client, body, (int)strlen(body));
-    err = esp_http_client_perform(client);
-    status = esp_http_client_get_status_code(client);
-    esp_http_client_cleanup(client);
-
-    if (err != ESP_OK) {
-        return err;
-    }
-    if (status != 200) {
-        ESP_LOGW(TAG, "HTTP status %d", status);
-        return ESP_ERR_HTTP_CONNECT;
-    }
-    return ESP_OK;
-}
+} cap_mcp_response_ctx_t;
 
 static esp_err_t cap_mcp_parse_common_input(const char *input_json,
                                             char *server_url_buf,
@@ -136,7 +44,7 @@ static esp_err_t cap_mcp_parse_common_input(const char *input_json,
     strlcpy(server_url_buf, server_url_item->valuestring, server_url_buf_size);
 
     if (endpoint_buf && endpoint_buf_size > 0) {
-        const char *endpoint = CAP_MCP_DEFAULT_ENDPOINT;
+        const char *endpoint = MCP_MDNS_DEFAULT_ENDPOINT;
         cJSON *endpoint_item = cJSON_GetObjectItem(input, "endpoint");
         if (cJSON_IsString(endpoint_item) && endpoint_item->valuestring[0]) {
             endpoint = endpoint_item->valuestring;
@@ -181,41 +89,153 @@ static esp_err_t cap_mcp_parse_common_input(const char *input_json,
     return ESP_OK;
 }
 
-static esp_err_t cap_mcp_execute_json_rpc(const char *full_url,
-                                          cJSON *request,
-                                          cJSON **response_out)
+static esp_err_t cap_mcp_mgr_response_cb(int error_code,
+                                         const char *ep_name,
+                                         const char *resp_json,
+                                         void *user_ctx,
+                                         uint32_t jsonrpc_request_id)
 {
-    cap_mcp_buf_t response_buf = {0};
-    char *body = NULL;
+    cap_mcp_response_ctx_t *ctx = (cap_mcp_response_ctx_t *)user_ctx;
+
+    (void)ep_name;
+    (void)jsonrpc_request_id;
+
+    if (!ctx) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    cJSON_Delete(ctx->result);
+    ctx->result = cJSON_CreateObject();
+    if (!ctx->result) {
+        ctx->err = ESP_ERR_NO_MEM;
+        return ctx->err;
+    }
+
+    if (error_code == 0 || error_code == 1) {
+        if (resp_json && resp_json[0]) {
+            cJSON *parsed = cJSON_Parse(resp_json);
+
+            if (!cJSON_IsObject(parsed)) {
+                cJSON_Delete(parsed);
+                cJSON_AddStringToObject(ctx->result, "error_message", "Invalid MCP response");
+                ctx->err = ESP_FAIL;
+                return ctx->err;
+            }
+            cJSON_Delete(ctx->result);
+            ctx->result = parsed;
+        }
+        ctx->err = ESP_OK;
+        return ESP_OK;
+    }
+
+    if (error_code < 0) {
+        cJSON_AddStringToObject(ctx->result,
+                                "error_message",
+                                (resp_json && resp_json[0]) ? resp_json : "Unknown MCP protocol error");
+        ctx->err = ESP_OK;
+        return ESP_OK;
+    }
+
+    cJSON_AddStringToObject(ctx->result, "error_message", esp_err_to_name(error_code));
+    ctx->err = ESP_OK;
+    return ESP_OK;
+}
+
+static esp_err_t cap_mcp_init_remote_session(esp_mcp_mgr_handle_t mgr, const char *endpoint)
+{
+    cap_mcp_response_ctx_t ctx = {0};
+    esp_mcp_mgr_req_t req = {
+        .ep_name = endpoint,
+        .cb = cap_mcp_mgr_response_cb,
+        .user_ctx = &ctx,
+        .u.init = {
+            .name = "esp-claw",
+            .version = "1.0.0",
+            .title = "ESP-Claw",
+        },
+    };
+    esp_err_t err = esp_mcp_mgr_post_info_init(mgr, &req);
+
+    if (err == ESP_OK) {
+        err = ctx.err;
+    }
+    cJSON_Delete(ctx.result);
+    return err;
+}
+
+static esp_err_t cap_mcp_mgr_create(const char *server_url,
+                                    const char *endpoint,
+                                    esp_mcp_mgr_handle_t *mgr_out)
+{
     esp_err_t err;
+    esp_http_client_config_t http_config = {
+        .url = server_url,
+        .timeout_ms = CAP_MCP_HTTP_TIMEOUT_MS,
+        .buffer_size = 4096,
+        .keep_alive_enable = true,
+    };
+    esp_mcp_mgr_config_t mgr_config = {
+        .transport = esp_mcp_transport_http_client,
+        .config = &http_config,
+    };
 
-    *response_out = NULL;
-    body = cJSON_PrintUnformatted(request);
-    if (!body) {
-        return ESP_FAIL;
+    if (!server_url || !server_url[0] || !endpoint || !endpoint[0] || !mgr_out) {
+        return ESP_ERR_INVALID_ARG;
     }
+    *mgr_out = 0;
 
-    response_buf.data = malloc(CAP_MCP_RESPONSE_BUF_SIZE);
-    if (!response_buf.data) {
-        free(body);
-        return ESP_ERR_NO_MEM;
-    }
-    response_buf.cap = CAP_MCP_RESPONSE_BUF_SIZE;
-    response_buf.data[0] = '\0';
-
-    err = cap_mcp_http_post(full_url, body, &response_buf);
-    free(body);
+    err = esp_mcp_mgr_init(mgr_config, mgr_out);
     if (err != ESP_OK) {
-        free(response_buf.data);
         return err;
     }
 
-    *response_out = cJSON_Parse(response_buf.data);
-    free(response_buf.data);
-    if (!*response_out) {
+    err = esp_mcp_mgr_start(*mgr_out);
+    if (err != ESP_OK) {
+        esp_mcp_mgr_deinit(*mgr_out);
+        *mgr_out = 0;
+        return err;
+    }
+
+    err = esp_mcp_mgr_register_endpoint(*mgr_out, endpoint, NULL);
+    if (err != ESP_OK) {
+        esp_mcp_mgr_stop(*mgr_out);
+        esp_mcp_mgr_deinit(*mgr_out);
+        *mgr_out = 0;
+        return err;
+    }
+
+    err = cap_mcp_init_remote_session(*mgr_out, endpoint);
+    if (err != ESP_OK) {
+        esp_mcp_mgr_stop(*mgr_out);
+        esp_mcp_mgr_deinit(*mgr_out);
+        *mgr_out = 0;
+    }
+    return err;
+}
+
+static void cap_mcp_mgr_destroy(esp_mcp_mgr_handle_t mgr)
+{
+    if (mgr != 0) {
+        esp_mcp_mgr_stop(mgr);
+        esp_mcp_mgr_deinit(mgr);
+    }
+}
+
+static esp_err_t cap_mcp_capture_result(cap_mcp_response_ctx_t *ctx, cJSON **result_out)
+{
+    if (!ctx || !result_out) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (ctx->err != ESP_OK) {
+        cJSON_Delete(ctx->result);
+        ctx->result = NULL;
+        return ctx->err;
+    }
+    if (!ctx->result) {
         return ESP_FAIL;
     }
 
+    *result_out = ctx->result;
+    ctx->result = NULL;
     return ESP_OK;
 }
 
@@ -224,16 +244,9 @@ esp_err_t cap_mcp_list_remote_tools(const char *input_json, cJSON **result_out)
     char server_url_buf[256];
     char endpoint_buf[64];
     char cursor_buf[128];
-    char full_url[384];
-    cJSON *params = NULL;
-    cJSON *request = NULL;
-    cJSON *response = NULL;
-    cJSON *root = NULL;
-    cJSON *tools_out = NULL;
-    cJSON *error_obj = NULL;
-    cJSON *result = NULL;
-    cJSON *tools_array = NULL;
-    cJSON *tool = NULL;
+    esp_mcp_mgr_handle_t mgr = 0;
+    cap_mcp_response_ctx_t ctx = {0};
+    esp_mcp_mgr_req_t req = {0};
     esp_err_t err;
 
     if (!input_json || !result_out) {
@@ -255,85 +268,24 @@ esp_err_t cap_mcp_list_remote_tools(const char *input_json, cJSON **result_out)
         return err;
     }
 
-    cap_mcp_build_full_url(server_url_buf, endpoint_buf, full_url, sizeof(full_url));
-    if (full_url[0] == '\0') {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    params = cJSON_CreateObject();
-    request = cJSON_CreateObject();
-    if (!params || !request) {
-        cJSON_Delete(params);
-        cJSON_Delete(request);
-        return ESP_ERR_NO_MEM;
-    }
-
-    if (cursor_buf[0]) {
-        cJSON_AddStringToObject(params, "cursor", cursor_buf);
-    }
-    cJSON_AddStringToObject(request, "jsonrpc", "2.0");
-    cJSON_AddStringToObject(request, "method", "tools/list");
-    cJSON_AddItemToObject(request, "params", params);
-    cJSON_AddNumberToObject(request, "id", CAP_MCP_REQUEST_ID_LIST);
-
-    err = cap_mcp_execute_json_rpc(full_url, request, &response);
-    cJSON_Delete(request);
+    err = cap_mcp_mgr_create(server_url_buf, endpoint_buf, &mgr);
     if (err != ESP_OK) {
         return err;
     }
 
-    root = cJSON_CreateObject();
-    tools_out = cJSON_CreateArray();
-    if (!root || !tools_out) {
-        cJSON_Delete(response);
-        cJSON_Delete(root);
-        cJSON_Delete(tools_out);
-        return ESP_ERR_NO_MEM;
+    req.ep_name = endpoint_buf;
+    req.cb = cap_mcp_mgr_response_cb;
+    req.user_ctx = &ctx;
+    req.u.list.cursor = cursor_buf[0] ? cursor_buf : NULL;
+    req.u.list.limit = -1;
+
+    err = esp_mcp_mgr_post_tools_list(mgr, &req);
+    cap_mcp_mgr_destroy(mgr);
+    if (err == ESP_OK) {
+        err = cap_mcp_capture_result(&ctx, result_out);
     }
-
-    error_obj = cJSON_GetObjectItem(response, "error");
-    if (cJSON_IsObject(error_obj)) {
-        cJSON *message = cJSON_GetObjectItem(error_obj, "message");
-
-        cJSON_AddStringToObject(root,
-                                "error_message",
-                                cJSON_IsString(message) ? message->valuestring : "Unknown MCP error");
-        cJSON_AddItemToObject(root, "tools", tools_out);
-        cJSON_Delete(response);
-        *result_out = root;
-        return ESP_OK;
-    }
-
-    result = cJSON_GetObjectItem(response, "result");
-    if (!cJSON_IsObject(result)) {
-        cJSON_Delete(response);
-        cJSON_Delete(root);
-        return ESP_FAIL;
-    }
-
-    tools_array = cJSON_GetObjectItem(result, "tools");
-    if (cJSON_IsArray(tools_array)) {
-        cJSON_ArrayForEach(tool, tools_array) {
-            cJSON *duplicate = cJSON_Duplicate(tool, 1);
-
-            if (!duplicate) {
-                cJSON_Delete(response);
-                cJSON_Delete(root);
-                return ESP_ERR_NO_MEM;
-            }
-            cJSON_AddItemToArray(tools_out, duplicate);
-        }
-    }
-    cJSON_AddItemToObject(root, "tools", tools_out);
-
-    cJSON *next_cursor = cJSON_GetObjectItem(result, "nextCursor");
-    if (cJSON_IsString(next_cursor) && next_cursor->valuestring[0]) {
-        cJSON_AddStringToObject(root, "nextCursor", next_cursor->valuestring);
-    }
-
-    cJSON_Delete(response);
-    *result_out = root;
-    return ESP_OK;
+    cJSON_Delete(ctx.result);
+    return err;
 }
 
 esp_err_t cap_mcp_call_remote_tool(const char *input_json, cJSON **result_out)
@@ -341,14 +293,11 @@ esp_err_t cap_mcp_call_remote_tool(const char *input_json, cJSON **result_out)
     char server_url_buf[256];
     char endpoint_buf[64];
     char tool_name_buf[128];
-    char full_url[384];
     cJSON *arguments = NULL;
-    cJSON *params = NULL;
-    cJSON *request = NULL;
-    cJSON *response = NULL;
-    cJSON *root = NULL;
-    cJSON *error_obj = NULL;
-    cJSON *result = NULL;
+    char *arguments_json = NULL;
+    esp_mcp_mgr_handle_t mgr = 0;
+    cap_mcp_response_ctx_t ctx = {0};
+    esp_mcp_mgr_req_t req = {0};
     esp_err_t err;
 
     if (!input_json || !result_out) {
@@ -371,67 +320,30 @@ esp_err_t cap_mcp_call_remote_tool(const char *input_json, cJSON **result_out)
         return err;
     }
 
-    cap_mcp_build_full_url(server_url_buf, endpoint_buf, full_url, sizeof(full_url));
-    if (full_url[0] == '\0') {
-        cJSON_Delete(arguments);
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    params = cJSON_CreateObject();
-    request = cJSON_CreateObject();
-    if (!params || !request) {
-        cJSON_Delete(arguments);
-        cJSON_Delete(params);
-        cJSON_Delete(request);
+    arguments_json = cJSON_PrintUnformatted(arguments);
+    cJSON_Delete(arguments);
+    if (!arguments_json) {
         return ESP_ERR_NO_MEM;
     }
 
-    cJSON_AddStringToObject(params, "name", tool_name_buf);
-    cJSON_AddItemToObject(params, "arguments", arguments);
-    cJSON_AddStringToObject(request, "jsonrpc", "2.0");
-    cJSON_AddStringToObject(request, "method", "tools/call");
-    cJSON_AddItemToObject(request, "params", params);
-    cJSON_AddNumberToObject(request, "id", CAP_MCP_REQUEST_ID_CALL);
-
-    err = cap_mcp_execute_json_rpc(full_url, request, &response);
-    cJSON_Delete(request);
+    err = cap_mcp_mgr_create(server_url_buf, endpoint_buf, &mgr);
     if (err != ESP_OK) {
+        cJSON_free(arguments_json);
         return err;
     }
 
-    root = cJSON_CreateObject();
-    if (!root) {
-        cJSON_Delete(response);
-        return ESP_ERR_NO_MEM;
+    req.ep_name = endpoint_buf;
+    req.cb = cap_mcp_mgr_response_cb;
+    req.user_ctx = &ctx;
+    req.u.call.tool_name = tool_name_buf;
+    req.u.call.args_json = arguments_json;
+
+    err = esp_mcp_mgr_post_tools_call(mgr, &req);
+    cap_mcp_mgr_destroy(mgr);
+    cJSON_free(arguments_json);
+    if (err == ESP_OK) {
+        err = cap_mcp_capture_result(&ctx, result_out);
     }
-
-    error_obj = cJSON_GetObjectItem(response, "error");
-    if (cJSON_IsObject(error_obj)) {
-        cJSON *message = cJSON_GetObjectItem(error_obj, "message");
-
-        cJSON_AddStringToObject(root,
-                                "error_message",
-                                cJSON_IsString(message) ? message->valuestring : "Unknown MCP error");
-        cJSON_Delete(response);
-        *result_out = root;
-        return ESP_OK;
-    }
-
-    result = cJSON_GetObjectItem(response, "result");
-    if (!cJSON_IsObject(result)) {
-        cJSON_Delete(response);
-        cJSON_Delete(root);
-        return ESP_FAIL;
-    }
-
-    cJSON *content = cJSON_GetObjectItem(result, "content");
-    cJSON *is_error = cJSON_GetObjectItem(result, "isError");
-    cJSON_AddItemToObject(root, "content", content ? cJSON_Duplicate(content, 1) : cJSON_CreateArray());
-    if (cJSON_IsBool(is_error)) {
-        cJSON_AddBoolToObject(root, "isError", cJSON_IsTrue(is_error));
-    }
-
-    cJSON_Delete(response);
-    *result_out = root;
-    return ESP_OK;
+    cJSON_Delete(ctx.result);
+    return err;
 }

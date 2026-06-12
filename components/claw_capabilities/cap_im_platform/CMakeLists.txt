@@ -38,6 +38,7 @@ idf_component_register(
         "include"
     REQUIRES
         claw_cap
+        claw_utils
         claw_event_router
         esp_http_client
         http_reuse

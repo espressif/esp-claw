@@ -3,26 +3,16 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
-#include "cap_mcp_client.h"
-
 #include <string.h>
 
 #include "cJSON.h"
 #include "claw_cap.h"
-#include "mdns.h"
 
-#include "cap_mcp_client_internal.h"
+#include "cap_mcp_client.h"
+#include "cap_mcp_client_priv.h"
 
 static esp_err_t cap_mcp_client_group_init(void)
 {
-    esp_err_t err = mdns_init();
-
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        return err;
-    }
-
-    mdns_hostname_set("esp-claw");
-    mdns_instance_name_set("esp-claw");
     return ESP_OK;
 }
 
@@ -209,7 +199,7 @@ static esp_err_t cap_mcp_discover_execute(const char *input_json,
                                    hostname ? hostname : "(unknown)",
                                    ip ? ip : "(unresolved)",
                                    cJSON_IsNumber(port) ? (unsigned)port->valueint : 0,
-                                   endpoint ? endpoint : CAP_MCP_DEFAULT_ENDPOINT,
+                                   endpoint ? endpoint : MCP_MDNS_DEFAULT_ENDPOINT,
                                    url ? url : "(unknown)");
 
             if (written < 0 || (size_t)written >= output_size - offset) {

@@ -9,7 +9,18 @@ const WIFI_STATUS_PROBE_ATTEMPTS = 3;
 const WIFI_STATUS_PROBE_WAIT_MS = 1000;
 const WIFI_STATUS_PROBE_RETRY_GAP_MS = 3000;
 
-type FirmwareBinaryLinks = Record<string, string>;
+type FirmwareBinaryAsset =
+  | string
+  | {
+      bin?: string;
+      gzip?: string;
+    };
+
+type FirmwareBinaryLinks = Record<string, FirmwareBinaryAsset>;
+type FirmwareDownloadSource = {
+  url: string;
+  compression: "gzip" | "none";
+};
 
 type FirmwareRecord = {
   description?: string;
@@ -648,6 +659,7 @@ function getVisibleConsoleOutputKeys(firmware: FirmwareRecord | null) {
   }
 
   return Object.keys(firmware.merged_binary)
+    .filter((consoleOutput) => Boolean(normalizeFirmwareBinaryAsset(firmware.merged_binary[consoleOutput])))
     .filter((consoleOutput) => isConsoleOutputVisibleForCurrentDevice(consoleOutput))
     .sort(compareConsoleOutputKey);
 }
@@ -1514,14 +1526,27 @@ function clearConnectError() {
 // ── Download / button helpers ────────────────────────────────────────────────
 
 async function downloadBinary(
-  url: string,
+  asset: FirmwareBinaryAsset,
   onProgress: (received: number, total: number) => void,
 ) {
-  const response = await fetch(url);
+  const source = resolveFirmwareDownloadSource(asset, "flash");
+  const response = await fetch(source.url);
   if (!response.ok) {
     throw new Error(`HTTP ${response.status} while downloading firmware`);
   }
 
+  const downloaded = await downloadResponseBuffer(response, onProgress);
+  if (source.compression !== "gzip") {
+    return downloaded;
+  }
+
+  return await gunzipArrayBuffer(downloaded);
+}
+
+async function downloadResponseBuffer(
+  response: Response,
+  onProgress: (received: number, total: number) => void,
+) {
   const total = Number(response.headers.get("content-length") ?? "0");
   if (!response.body) {
     const buffer = await response.arrayBuffer();
@@ -1556,6 +1581,15 @@ async function downloadBinary(
   return merged.buffer;
 }
 
+async function gunzipArrayBuffer(buffer: ArrayBuffer) {
+  if (typeof DecompressionStream === "undefined") {
+    throw new Error("This browser does not support gzip firmware flashing.");
+  }
+
+  const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return await new Response(stream).arrayBuffer();
+}
+
 function getSelectedFirmware() {
   const boardId = state.selectedBoardId;
   if (!boardId) {
@@ -1571,11 +1605,77 @@ function getSelectedMergedBinary(firmware: FirmwareRecord | null) {
   if (!firmware || !consoleOutput) {
     return null;
   }
-  return firmware.merged_binary[consoleOutput] ?? null;
+  return normalizeFirmwareBinaryAsset(firmware.merged_binary[consoleOutput] ?? null);
 }
 
-function updateDownloadButton(binaryLink: string | null) {
-  if (!binaryLink) {
+function normalizeFirmwareBinaryAsset(asset: FirmwareBinaryAsset | null | undefined) {
+  if (!asset) {
+    return null;
+  }
+  if (typeof asset === "string") {
+    return {
+      bin: asset,
+    };
+  }
+  if (typeof asset !== "object") {
+    return null;
+  }
+
+  const bin = typeof asset.bin === "string" && asset.bin.trim() ? asset.bin : undefined;
+  const gzip = typeof asset.gzip === "string" && asset.gzip.trim() ? asset.gzip : undefined;
+  if (!bin && !gzip) {
+    return null;
+  }
+
+  return { bin, gzip };
+}
+
+function resolveFirmwareDownloadSource(asset: FirmwareBinaryAsset, purpose: "flash"): FirmwareDownloadSource;
+function resolveFirmwareDownloadSource(
+  asset: FirmwareBinaryAsset,
+  purpose: "download",
+): FirmwareDownloadSource | null;
+function resolveFirmwareDownloadSource(
+  asset: FirmwareBinaryAsset,
+  purpose: "download" | "flash",
+): FirmwareDownloadSource | null {
+  const normalized = normalizeFirmwareBinaryAsset(asset);
+  if (!normalized) {
+    if (purpose === "flash") {
+      throw new Error("No firmware binary is available for the selected console output.");
+    }
+    return null;
+  }
+
+  if (purpose === "flash") {
+    if (normalized.gzip && typeof DecompressionStream !== "undefined") {
+      return { url: normalized.gzip, compression: "gzip" };
+    }
+    if (normalized.bin) {
+      return { url: normalized.bin, compression: "none" };
+    }
+    if (normalized.gzip) {
+      throw new Error("This browser does not support gzip firmware flashing.");
+    }
+  }
+
+  if (normalized.gzip) {
+    return { url: normalized.gzip, compression: "gzip" };
+  }
+  if (normalized.bin) {
+    return { url: normalized.bin, compression: "none" };
+  }
+
+  if (purpose === "flash") {
+    throw new Error("No firmware binary is available for the selected console output.");
+  }
+
+  return null;
+}
+
+function updateDownloadButton(asset: FirmwareBinaryAsset | null) {
+  const source = asset ? resolveFirmwareDownloadSource(asset, "download") : null;
+  if (!source) {
     els.downloadBtn.classList.add("disabled");
     els.downloadBtn.setAttribute("aria-disabled", "true");
     els.downloadBtn.href = "#";
@@ -1585,8 +1685,8 @@ function updateDownloadButton(binaryLink: string | null) {
 
   els.downloadBtn.classList.remove("disabled");
   els.downloadBtn.setAttribute("aria-disabled", "false");
-  els.downloadBtn.href = binaryLink;
-  els.downloadBtn.download = binaryLink.split("/").pop() || "firmware.bin";
+  els.downloadBtn.href = source.url;
+  els.downloadBtn.download = source.url.split("/").pop() || "firmware.bin";
 }
 
 function currentSelectionStillVisible() {

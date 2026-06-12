@@ -17,10 +17,12 @@ menu "App Claw Config"
 
     choice APP_CLAW_MEMORY_MODE
         prompt "App Claw memory management mode"
+        depends on APP_CLAW_CAP_MEMORY
         default APP_CLAW_MEMORY_MODE_FULL
         help
             Select whether app_claw uses the current structured memory module
             or a lightweight master-compatible memory flow.
+            Only available when claw_memory subsystem is enabled.
 
     config APP_CLAW_MEMORY_MODE_FULL
         bool "Structured memory management"
@@ -44,8 +46,29 @@ menu "App Claw Config"
                 Enable the files capability and keep app_claw's direct dependency
                 on cap_files.
 
+        config APP_CLAW_CAP_MEMORY
+            bool "Enable claw_memory subsystem"
+            default y
+            help
+                Run claw_memory initialization during app_claw_start and link the
+                claw_memory component.
+
+        config APP_CLAW_CAP_EVENT_ROUTER
+            bool "Enable event router subsystem"
+            default y
+            help
+                Initialize and start claw_event_router (rule dispatch, IM bindings,
+                startup trigger).
+
+        config APP_CLAW_CAP_CORE
+            bool "Enable claw_core (LLM agent runtime)"
+            default y
+            help
+                Initialize and start claw_core when LLM credentials are configured.
+
         config APP_CLAW_CAP_IM_QQ
             bool "Enable QQ capability"
+            select APP_CLAW_CAP_EVENT_ROUTER
             default y
             help
                 Enable the QQ capability and keep app_claw's direct dependency
@@ -53,6 +76,7 @@ menu "App Claw Config"
 
         config APP_CLAW_CAP_IM_FEISHU
             bool "Enable Feishu capability"
+            select APP_CLAW_CAP_EVENT_ROUTER
             default y
             help
                 Enable the Feishu capability and keep app_claw's direct dependency
@@ -60,6 +84,7 @@ menu "App Claw Config"
 
         config APP_CLAW_CAP_IM_TG
             bool "Enable Telegram capability"
+            select APP_CLAW_CAP_EVENT_ROUTER
             default y
             help
                 Enable the Telegram capability and keep app_claw's direct dependency
@@ -67,6 +92,7 @@ menu "App Claw Config"
 
         config APP_CLAW_CAP_IM_WECHAT
             bool "Enable WeChat capability"
+            select APP_CLAW_CAP_EVENT_ROUTER
             default y
             help
                 Enable the WeChat capability and keep app_claw's direct dependency
@@ -74,13 +100,15 @@ menu "App Claw Config"
 
         config APP_CLAW_CAP_IM_LOCAL
             bool "Enable local / Web IM capability (cap_im_local)"
-            depends on APP_CLAW_CAP_SESSION_MGR
+            select APP_CLAW_CAP_SESSION_MGR
+            select APP_CLAW_CAP_EVENT_ROUTER
             default y
             help
                 Register cap_im_local for in-process IM (e.g. edge_agent Web IM). Requires session manager for session_command.
 
         config APP_CLAW_CAP_SCHEDULER
             bool "Enable scheduler capability"
+            select APP_CLAW_CAP_EVENT_ROUTER
             default y
             help
                 Enable the scheduler capability and keep app_claw's direct dependency
@@ -121,13 +149,6 @@ menu "App Claw Config"
                 Enable the system capability and keep app_claw's direct dependency
                 on cap_system.
 
-        config APP_CLAW_CAP_TIME
-            bool "Enable time capability"
-            default y
-            help
-                Enable the time capability and keep app_claw's direct dependency
-                on cap_time.
-
         config APP_CLAW_CAP_LLM_INSPECT
             bool "Enable LLM inspect capability"
             default y
@@ -151,6 +172,7 @@ menu "App Claw Config"
 
         config APP_CLAW_CAP_ROUTER_MGR
             bool "Enable router manager capability"
+            select APP_CLAW_CAP_EVENT_ROUTER
             default y
             help
                 Enable the router manager capability and keep app_claw's direct dependency
@@ -165,8 +187,8 @@ menu "App Claw Config"
 
         config APP_CLAW_CAP_AGENT_MGR
             bool "Enable agent manager capability"
-            default y
-            depends on APP_CLAW_CAP_SESSION_MGR
+            default y if APP_CLAW_CAP_SESSION_MGR && APP_CLAW_CAP_CORE
+            default n
             help
                 Enable root-only subagent management tools backed by claw_agent_mgr.
 
@@ -213,6 +235,15 @@ menu "App Claw Config"
                 on lua_driver_pcnt when Lua capability is enabled.
                 Defaults to n on chips without PCNT hardware support.
 
+        config APP_CLAW_LUA_DRIVER_RMT
+            bool "Enable RMT Lua driver"
+            default y if SOC_RMT_SUPPORTED
+            default n
+            help
+                Enable the RMT Lua driver and keep app_claw's direct dependency
+                on lua_driver_rmt when Lua capability is enabled.
+                Defaults to n on chips without RMT hardware support.
+
         config APP_CLAW_LUA_DRIVER_TOUCH
             bool "Enable touch Lua driver"
             default y if SOC_TOUCH_SENSOR_SUPPORTED
@@ -253,9 +284,16 @@ menu "App Claw Config"
                 Enable the button Lua module and keep app_claw's direct dependency
                 on lua_module_button when Lua capability is enabled.
 
+        config APP_CLAW_LUA_MODULE_BLE
+            bool "Enable BLE Lua module"
+            default n
+            depends on APP_CLAW_CAP_LUA
+            help
+                Enable the generic BLE Lua module.
+
         config APP_CLAW_LUA_MODULE_BLE_HID
             bool "Enable BLE HID Lua module"
-            default y
+            default n
             depends on APP_CLAW_CAP_LUA
             select BT_NIMBLE_HID_SERVICE
             help
@@ -423,13 +461,13 @@ menu "App Claw Config"
 
         config APP_CLAW_LUA_MODULE_VISION
             bool "Enable vision Lua modules"
-            default y if ESP_BOARD_DEV_CAMERA_SUPPORT
-            default n
+            depends on ESP_BOARD_DEV_CAMERA_SUPPORT
+            default y
             help
-                Enable the vision Lua modules and keep app_claw's direct dependency
-                on lua_module_vision when Lua capability is enabled. This module
-                currently registers only motion_detect and does not pull in ESP-DL
-                model components.
+                Enable registration of the vision Lua modules from app_claw.
+                The lua_module_vision component is included whenever Lua support
+                and camera support are enabled so its own Kconfig submenu can
+                define vision-specific options such as motion_detect and espdet.
 
     endmenu
 

@@ -1,6 +1,6 @@
 ---
-title: cap_system — System info and device restart
-description: Query runtime status (system, memory, CPU, Wi-Fi, IP) and perform operational actions like delayed restart.
+title: cap_system — System info, time queries, and device restart
+description: Query runtime status (system, memory, CPU, Wi-Fi, IP), current local time, and perform operational actions like delayed restart.
 ---
 
 import LinkToSource from '@/components/LinkToSource.astro';
@@ -10,24 +10,23 @@ Source: <LinkToSource relativePath="components/claw_capabilities/cap_system/src/
 
 ## Positioning
 
-`cap_system` provides a unified entry point for runtime status queries and a controlled restart operation. It is a system-level tool group directly callable by the LLM, suitable for device diagnostics, health checks, and remote recovery.
+`cap_system` provides a unified entry point for runtime status and current local time queries, plus a controlled restart operation. It is a system-level tool group directly callable by the LLM, suitable for device diagnostics, health checks, and remote recovery.
 
 ## Tools exposed to LLM
 
 | Tool ID | Function | Input Parameters |
 |---------|----------|------------------|
-| `get_system_info` | Return a system summary (chip, memory, CPU, Wi-Fi, IP, uptime) | (None) |
-| `get_memory_info` | Return memory details (internal memory, heap, PSRAM) | (None) |
-| `get_cpu_usage` | Return CPU usage and runtime stats | (None) |
-| `get_wifi_info` | Return current Wi-Fi status (SSID, RSSI, channel, etc.) | (None) |
-| `get_ip_address` | Return current station IP / netmask / gateway | (None) |
+| `get_system_info` | Return system information; omit `sections` for the full summary | `sections` (optional array of `chip` / `uptime` / `memory` / `cpu` / `wifi` / `ip`) |
+| `get_current_time` | Return formatted current local time; sync with SNTP first when the system clock is invalid | (None) |
 | `restart_device` | Schedule a delayed device restart | `delay_ms` (optional, milliseconds) |
 
 ## Response structure notes
 
-- `get_system_info` combines multiple sub-objects: `memory`, `cpu`, `wifi`, `ip`.
-- If FreeRTOS runtime stats are not enabled, `get_cpu_usage` returns `supported: false` plus an explanatory message.
-- When not connected, `get_wifi_info` / `get_ip_address` return `connected: false` with empty-value fields.
+- When `sections` is omitted, `get_system_info` combines multiple sub-objects: `memory`, `cpu`, `wifi`, `ip`, plus chip and uptime fields.
+- Use `sections` to request only selected structures, for example `{"sections":["memory","wifi"]}`.
+- If FreeRTOS runtime stats are not enabled, the `cpu` section returns `supported: false` plus an explanatory message.
+- When not connected, the `wifi` / `ip` sections return `connected: false` with empty-value fields.
+- `get_current_time` returns local time in `YYYY-MM-DD HH:MM:SS TZ (weekday)` format; when the system time is earlier than 2024-01-01, it attempts SNTP sync first.
 
 ## `restart_device` behavior
 

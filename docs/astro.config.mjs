@@ -83,6 +83,7 @@ export default defineConfig({
                 { slug: "reference-cap/implement-capability" },
                 { slug: "reference-cap/cap-im-platform" },
                 { slug: "reference-cap/cap-skill" },
+                { slug: "reference-cap/cap-agent-mgr" },
                 { slug: "reference-cap/cap-llm-inspect" },
                 { slug: "reference-cap/cap-files" },
                 { slug: "reference-cap/cap-system" },
@@ -124,6 +125,7 @@ export default defineConfig({
     }),
   ],
   markdown: {
+    gfm: true,
     remarkPlugins: [[remarkDocLinks, { base: BASE }]],
   },
   vite: {

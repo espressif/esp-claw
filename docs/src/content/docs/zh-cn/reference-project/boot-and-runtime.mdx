@@ -81,8 +81,8 @@ import LinkToSource from '@/components/LinkToSource.astro';
     - **cap_http_request**：写入配置中的 `search_http_allowlist`，供受保护的外部 HTTP 请求使用。
     - **cap_web_search**：若 Brave / Tavily key 非空则写入搜索密钥。
     - **cap_router_mgr**：注册 Event Router 的管理命令（`event_router`）。
-    - **cap_system**：注册系统信息能力组（内存、CPU、Wi-Fi、IP，提供重启动作）。
-    - **cap_mcp_client / cap_mcp_server / cap_skill / cap_time / cap_llm_inspect / cap_session_mgr** 等：逐一调用 `*_register_group` 完成注册（其中 Skill 管理模块源码目录为 `cap_skill_mgr`，Group ID 仍是 `cap_skill`）。
+    - **cap_system**：注册系统信息能力组（时间、内存、CPU、Wi-Fi、IP，提供重启动作）。
+    - **cap_mcp_client / cap_mcp_server / cap_skill / cap_llm_inspect / cap_session_mgr** 等：逐一调用 `*_register_group` 完成注册（其中 Skill 管理模块源码目录为 `cap_skill_mgr`，Group ID 仍是 `cap_skill`）。
     - 完整结构化记忆模式下，还会注册 `claw_memory` 能力组；轻量模式下不注册该组。
     - 调用 `claw_cap_set_llm_visible_groups` 将 `cap_files`、`cap_scheduler`、`cap_lua`、`cap_skill`、`cap_llm_inspect`、`cap_http_request`、`cap_web_search`、`cap_router_mgr` 设为 LLM 初始可见组；完整结构化记忆模式还会额外包含 `claw_memory`。最后 `claw_cap_start_all` 启动全部 cap。
 
@@ -103,7 +103,7 @@ import LinkToSource from '@/components/LinkToSource.astro';
 
 8. **启动 Event Router、调度器、时间同步、Console REPL 与启动事件**
 
-    调用 `claw_event_router_start` 开始处理入站事件，随后调用 `cap_scheduler_start` 启动调度器任务，再调用 `cap_time_sync_service_start` 启动 SNTP 时间同步服务（首次同步成功时会触发 `cap_scheduler_handle_time_sync` 对调度器进行时间校准），再调用 `app_claw_cli_start` 启动 Console REPL，最后发布 `startup` / `boot_completed` 触发事件通知系统启动完成，装配完毕。
+    调用 `claw_event_router_start` 开始处理入站事件，随后调用 `cap_scheduler_start` 启动调度器任务，再调用 `cap_system_time_sync_service_start` 启动 SNTP 时间同步服务（首次同步成功时会触发 `cap_scheduler_handle_time_sync` 对调度器进行时间校准），再调用 `app_claw_cli_start` 启动 Console REPL，最后发布 `startup` / `boot_completed` 触发事件通知系统启动完成，装配完毕。
 
 </Steps>
 

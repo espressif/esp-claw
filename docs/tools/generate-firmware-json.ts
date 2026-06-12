@@ -20,7 +20,19 @@ type MetadataRecord = {
   nvs_info?: unknown;
 };
 
-type FirmwareBinaryLinks = Record<string, string>;
+type MetadataMergedBinary =
+  | string
+  | {
+      bin?: unknown;
+      gzip?: unknown;
+    };
+
+type FirmwareBinaryAsset = {
+  bin?: string;
+  gzip?: string;
+};
+
+type FirmwareBinaryLinks = Record<string, FirmwareBinaryAsset>;
 
 type FirmwareEntry = {
   features: string[];
@@ -102,6 +114,27 @@ function parseConsoleOutput(value: unknown): string {
     return value.trim();
   }
   return "unknown";
+}
+
+function parseMergedBinaryLinks(value: unknown): FirmwareBinaryAsset | null {
+  if (typeof value === "string" && value.trim()) {
+    return {
+      bin: `/merged_binary/${value.trim()}`,
+    };
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  const bin = typeof record.bin === "string" && record.bin.trim() ? `/merged_binary/${record.bin.trim()}` : undefined;
+  const gzip = typeof record.gzip === "string" && record.gzip.trim() ? `/merged_binary/${record.gzip.trim()}` : undefined;
+  if (!bin && !gzip) {
+    return null;
+  }
+
+  return { bin, gzip };
 }
 
 async function loadMetadataFiles(mergedDir: string): Promise<MetadataRecord[]> {
@@ -192,7 +225,7 @@ async function main(): Promise<number> {
     const brand = record.brand ?? record.board_brand ?? "others";
     const board = record.board;
     const consoleOutput = parseConsoleOutput(record.console_output);
-    const mergedBinary = record.merged_binary;
+    const mergedBinary = parseMergedBinaryLinks(record.merged_binary as MetadataMergedBinary);
     const minFlashSize = record.min_flash_size;
     const nvsInfo = record.nvs_info;
 
@@ -208,7 +241,7 @@ async function main(): Promise<number> {
       log(`skip one metadata: invalid brand (${JSON.stringify(record)})`);
       continue;
     }
-    if (typeof mergedBinary !== "string" || !mergedBinary.trim()) {
+    if (!mergedBinary) {
       log(`skip one metadata: invalid merged_binary (${JSON.stringify(record)})`);
       continue;
     }
@@ -236,7 +269,7 @@ async function main(): Promise<number> {
       features: [],
       description: "",
       merged_binary: {
-        [consoleOutput]: `/merged_binary/${mergedBinary}`,
+        [consoleOutput]: mergedBinary,
       },
       min_flash_size: minFlashMB,
       min_psram_size: minPsramMB,
@@ -259,7 +292,10 @@ async function main(): Promise<number> {
 
     const existing = firmware[chipKey][brandKey][boardKey];
     if (existing) {
-      existing.merged_binary[consoleOutput] = item.merged_binary[consoleOutput];
+      existing.merged_binary[consoleOutput] = {
+        ...(existing.merged_binary[consoleOutput] ?? {}),
+        ...item.merged_binary[consoleOutput],
+      };
       continue;
     }
 
@@ -283,7 +319,14 @@ async function main(): Promise<number> {
         sortedBoards[boardKey] = {
           ...board,
           merged_binary: Object.fromEntries(
-            Object.entries(board.merged_binary).sort(([left], [right]) => left.localeCompare(right)),
+            Object.entries(board.merged_binary)
+              .sort(([left], [right]) => left.localeCompare(right))
+              .map(([consoleOutput, links]) => [
+                consoleOutput,
+                Object.fromEntries(
+                  Object.entries(links).filter(([, link]) => Boolean(link)).sort(([left], [right]) => left.localeCompare(right)),
+                ),
+              ]),
           ),
         };
       }

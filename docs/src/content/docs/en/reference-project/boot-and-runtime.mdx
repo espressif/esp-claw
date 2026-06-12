@@ -81,8 +81,8 @@ This walkthrough uses sample app `application/edge_agent`, covering entry <LinkT
     - **cap_http_request**: store the configured `search_http_allowlist` for guarded outbound HTTP requests.
     - **cap_web_search**: store Brave / Tavily keys when non-empty.
     - **cap_router_mgr**: register Event Router console commands (`event_router`).
-    - **cap_system**: register the system information capability group (memory, CPU, Wi-Fi, IP, and restart action).
-    - **cap_mcp_client / cap_mcp_server / cap_skill / cap_time / cap_llm_inspect / cap_session_mgr**, etc.: each `*_register_group` (Skill management sources live under `cap_skill_mgr`; the group id remains `cap_skill`).
+    - **cap_system**: register the system information capability group (time, memory, CPU, Wi-Fi, IP, and restart action).
+    - **cap_mcp_client / cap_mcp_server / cap_skill / cap_llm_inspect / cap_session_mgr**, etc.: each `*_register_group` (Skill management sources live under `cap_skill_mgr`; the group id remains `cap_skill`).
     - In full structured-memory mode, the `claw_memory` capability group is also registered; in lightweight mode it is not.
     - `claw_cap_set_llm_visible_groups` seeds `cap_files`, `cap_scheduler`, `cap_lua`, `cap_skill`, `cap_llm_inspect`, `cap_http_request`, `cap_web_search`, and `cap_router_mgr` for the LLM; full structured-memory mode additionally includes `claw_memory`. Then `claw_cap_start_all` starts every group.
 
@@ -103,7 +103,7 @@ This walkthrough uses sample app `application/edge_agent`, covering entry <LinkT
 
 8. **Start Event Router, scheduler, time sync, Console REPL, and startup events**
 
-    `claw_event_router_start` begins processing inbound events, then `cap_scheduler_start` starts the scheduler task, then `cap_time_sync_service_start` starts SNTP (first successful sync triggers `cap_scheduler_handle_time_sync` to rebase the scheduler), then `app_claw_cli_start` opens the Console REPL, and finally `startup` / `boot_completed` trigger events are published to notify the system that boot is complete.
+    `claw_event_router_start` begins processing inbound events, then `cap_scheduler_start` starts the scheduler task, then `cap_system_time_sync_service_start` starts SNTP (first successful sync triggers `cap_scheduler_handle_time_sync` to rebase the scheduler), then `app_claw_cli_start` opens the Console REPL, and finally `startup` / `boot_completed` trigger events are published to notify the system that boot is complete.
 
 </Steps>
 

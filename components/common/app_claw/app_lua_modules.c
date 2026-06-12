@@ -29,6 +29,9 @@
 #if CONFIG_APP_CLAW_LUA_DRIVER_PCNT
 #include "lua_driver_pcnt.h"
 #endif
+#if CONFIG_APP_CLAW_LUA_DRIVER_RMT
+#include "lua_driver_rmt.h"
+#endif
 #if CONFIG_APP_CLAW_LUA_DRIVER_TOUCH
 #include "lua_driver_touch.h"
 #endif
@@ -45,6 +48,9 @@
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_BUTTON
 #include "lua_module_button.h"
+#endif
+#if CONFIG_APP_CLAW_LUA_MODULE_BLE
+#include "lua_module_ble.h"
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_BLE_HID
 #include "lua_module_ble_hid.h"
@@ -280,6 +286,14 @@ static esp_err_t app_lua_register_pcnt(const char *fatfs_base_path)
 }
 #endif
 
+#if CONFIG_APP_CLAW_LUA_DRIVER_RMT
+static esp_err_t app_lua_register_rmt(const char *fatfs_base_path)
+{
+    (void)fatfs_base_path;
+    return lua_driver_rmt_register();
+}
+#endif
+
 #if CONFIG_APP_CLAW_LUA_DRIVER_TOUCH
 static esp_err_t app_lua_register_touch(const char *fatfs_base_path)
 {
@@ -319,6 +333,14 @@ static esp_err_t app_lua_register_button(const char *fatfs_base_path)
 {
     (void)fatfs_base_path;
     return lua_module_button_register();
+}
+#endif
+
+#if CONFIG_APP_CLAW_LUA_MODULE_BLE
+static esp_err_t app_lua_register_ble(const char *fatfs_base_path)
+{
+    (void)fatfs_base_path;
+    return lua_module_ble_register();
 }
 #endif
 
@@ -523,6 +545,9 @@ static const app_lua_module_entry_t s_lua_module_entries[] = {
 #if CONFIG_APP_CLAW_LUA_DRIVER_PCNT
     { "pcnt", "PCNT", app_lua_register_pcnt },
 #endif
+#if CONFIG_APP_CLAW_LUA_DRIVER_RMT
+    { "rmt", "RMT", app_lua_register_rmt },
+#endif
 #if CONFIG_APP_CLAW_LUA_DRIVER_TOUCH
     { "touch", "Touch", app_lua_register_touch },
 #endif
@@ -538,6 +563,9 @@ static const app_lua_module_entry_t s_lua_module_entries[] = {
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_BUTTON
     { "button", "Button", app_lua_register_button },
+#endif
+#if CONFIG_APP_CLAW_LUA_MODULE_BLE
+    { "ble", "BLE", app_lua_register_ble },
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_BLE_HID
     { "ble_hid", "BLE HID", app_lua_register_ble_hid },
@@ -627,6 +655,9 @@ static const app_lua_module_info_t s_lua_module_infos[] = {
 #if CONFIG_APP_CLAW_LUA_DRIVER_PCNT
     { "pcnt", "PCNT" },
 #endif
+#if CONFIG_APP_CLAW_LUA_DRIVER_RMT
+    { "rmt", "RMT" },
+#endif
 #if CONFIG_APP_CLAW_LUA_DRIVER_TOUCH
     { "touch", "Touch" },
 #endif
@@ -642,6 +673,9 @@ static const app_lua_module_info_t s_lua_module_infos[] = {
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_BUTTON
     { "button", "Button" },
+#endif
+#if CONFIG_APP_CLAW_LUA_MODULE_BLE
+    { "ble", "BLE" },
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_BLE_HID
     { "ble_hid", "BLE HID" },

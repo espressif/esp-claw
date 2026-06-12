@@ -72,6 +72,7 @@ typedef struct {
 } claw_agent_mgr_agent_info_t;
 
 esp_err_t claw_agent_mgr_init(const claw_agent_mgr_config_t *config);
+esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_config);
 esp_err_t claw_agent_mgr_create_root_agent(const char **out_agent_id);
 claw_core_handle_t claw_agent_mgr_get_root_core(void);
 esp_err_t claw_agent_mgr_submit_root(const claw_agent_mgr_root_input_t *input,

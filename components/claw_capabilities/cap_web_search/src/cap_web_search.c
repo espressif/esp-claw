@@ -237,6 +237,9 @@ static esp_err_t cap_web_search_brave_direct(const char *url, cap_web_search_buf
         .timeout_ms = 15000,
         .buffer_size = 4096,
         .crt_bundle_attach = esp_crt_bundle_attach,
+#ifdef CONFIG_HTTP_REUSE_ENABLE
+        .keep_alive_enable = true,
+#endif
     };
     esp_http_client_handle_t client = NULL;
     esp_err_t err;
@@ -273,6 +276,9 @@ static esp_err_t cap_web_search_tavily_direct(const char *query, cap_web_search_
         .timeout_ms = 15000,
         .buffer_size = 4096,
         .crt_bundle_attach = esp_crt_bundle_attach,
+#ifdef CONFIG_HTTP_REUSE_ENABLE
+        .keep_alive_enable = true,
+#endif
     };
     esp_http_client_handle_t client = NULL;
     char auth[192];

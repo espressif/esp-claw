@@ -1,14 +1,10 @@
 idf_component_register(
     SRCS
         "src/cap_mcp_server.c"
-        "src/cmd_cap_mcp_server.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
-        claw_cap
-        claw_event_router
         esp_http_server
-        espressif__mcp-c-sdk
-        espressif__mdns
-        console
+        mcp-c-sdk
+        mcp_mdns
 )

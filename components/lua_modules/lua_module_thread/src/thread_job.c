@@ -316,8 +316,10 @@ static int thread_job_push_result(lua_State *L, esp_err_t err, const char *outpu
 static int thread_job_run(lua_State *L)
 {
     const char *path = luaL_checkstring(L, 1);
-    char *args_json = thread_job_build_args_json(L, 2);
+    /* Parse opts (which can raise -> longjmp) before building args_json so a bad
+     * opts field cannot leak it. */
     uint32_t timeout_ms = thread_job_get_timeout_ms(L, 3, 0);
+    char *args_json = thread_job_build_args_json(L, 2);
     char output[THREAD_JOB_OUTPUT_SIZE] = {0};
     esp_err_t err = cap_lua_run_script(path,
                                        args_json,
@@ -332,13 +334,15 @@ static int thread_job_run(lua_State *L)
 static int thread_job_start(lua_State *L)
 {
     const char *path = luaL_checkstring(L, 1);
-    char *args_json = thread_job_build_args_json(L, 2);
+    /* Parse opts (which can raise -> longjmp) before building args_json so a bad
+     * opts field cannot leak it. */
     uint32_t timeout_ms = thread_job_get_timeout_ms(L, 3, 0);
     char name[64] = {0};
     char exclusive[64] = {0};
     const char *name_value = thread_job_get_string_field(L, 3, "name", name, sizeof(name));
     const char *exclusive_value = thread_job_get_string_field(L, 3, "exclusive", exclusive, sizeof(exclusive));
     bool replace = thread_job_get_bool_field(L, 3, "replace", false);
+    char *args_json = thread_job_build_args_json(L, 2);
     char output[THREAD_JOB_OUTPUT_SIZE] = {0};
     esp_err_t err = cap_lua_run_script_async(path,
                                              args_json,

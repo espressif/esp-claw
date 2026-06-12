@@ -1,13 +1,19 @@
 version: 1.0.0
 # Devices Configuration for ESP32-P4-EYE
 devices:
+  # PDM Microphone (bare PDM mic, no I2C codec IC).
+  # Lua audio reads the already-initialized i2s_audio_in peripheral directly.
   - name: audio_adc
-    type: custom
+    chip: internal
+    type: audio_codec
+    power_ctrl_device: mic_power_ctrl
     version: default
-    init_skip: true
     config:
-      sample_rate_hz: 16000
-
+      adc_enabled: true
+      dac_enabled: false
+      adc_max_channel: 1
+      adc_channel_mask: "1"
+      adc_init_gain: 0
     peripherals:
       - name: i2s_audio_in
 
@@ -32,7 +38,6 @@ devices:
           d6: 0
           d7: 0
         ldo_chan_id: 4
-
   # SPI Display Device (ST7789 240x240)
   - name: display_lcd
     chip: st7789

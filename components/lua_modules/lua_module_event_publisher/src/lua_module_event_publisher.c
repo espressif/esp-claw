@@ -366,7 +366,6 @@ static int lua_event_publisher_publish(lua_State *L)
     correlation_id = lua_table_get_string_field(L, 1, "correlation_id", false);
     content_type = lua_table_get_string_field(L, 1, "content_type", false);
     text = lua_table_get_string_field(L, 1, "text", false);
-    payload_json = lua_table_get_payload_json_field(L, 1, false);
     has_timestamp = lua_table_get_integer_field(L, 1, "timestamp_ms", &timestamp_ms);
 
     lua_module_event_publisher_copy_field(event.source_cap, sizeof(event.source_cap), source_cap);
@@ -392,6 +391,10 @@ static int lua_event_publisher_publish(lua_State *L)
     if (!has_policy && strcmp(event_type, "trigger") == 0) {
         event.session_policy = CLAW_SESSION_POLICY_TRIGGER;
     }
+
+    /* Build the heap payload last: every option parser above can raise
+     * (luaL_error -> longjmp), which would otherwise leak payload_json. */
+    payload_json = lua_table_get_payload_json_field(L, 1, false);
 
     event.text = (char *)text;
     event.payload_json = payload_json;

@@ -13,13 +13,14 @@
   },
   "dependencies": {
     "@astrojs/check": "^0.9.9",
-    "@astrojs/starlight": "^0.39.2",
-    "@lucide/astro": "^1.16.0",
-    "astro": "^6.3.7",
-    "astro-d2": "^0.10.0",
+    "@astrojs/markdown-remark": "^7.2.0",
+    "@astrojs/starlight": "^0.39.3",
+    "@lucide/astro": "^1.17.0",
+    "astro": "^6.4.4",
+    "astro-d2": "^0.11.0",
     "lean-qr": "^2.7.1",
     "sharp": "^0.34.2",
-    "starlight-theme-nova": "^0.11.10",
+    "starlight-theme-nova": "^0.11.11",
     "tasmota-webserial-esptool": "^9.2.23",
     "typescript": "^6.0.3"
   },
@@ -27,7 +28,7 @@
     "@types/mdast": "^4.0.4",
     "@types/w3c-web-serial": "^1.0.8",
     "mdast-util-mdx-jsx": "^3.2.0",
-    "tsx": "^4.22.3",
+    "tsx": "^4.22.4",
     "unified": "^11.0.5",
     "unist-util-visit": "^5.0.0",
     "vfile": "^6.0.3"

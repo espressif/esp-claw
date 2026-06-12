@@ -1,0 +1,17 @@
+idf_component_register(
+    SRCS
+        "test_app_main.c"
+    INCLUDE_DIRS
+        "."
+    EMBED_TXTFILES
+        "lua/harness.lua"
+    PRIV_REQUIRES
+        cap_lua
+        claw_cap
+        esp_codec_dev
+        fatfs
+        http_reuse
+        lua_module_audio
+        unity
+        wear_levelling
+)

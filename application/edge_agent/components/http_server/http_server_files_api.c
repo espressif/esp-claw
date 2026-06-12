@@ -132,7 +132,23 @@ static esp_err_t file_download_handler(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Cache-Control", "no-store, max-age=0");
     while (!feof(file)) {
         size_t read_bytes = fread(scratch, 1, HTTP_SERVER_SCRATCH_SIZE, file);
-        if (read_bytes > 0 && httpd_resp_send_chunk(req, scratch, read_bytes) != ESP_OK) {
+        if (read_bytes == 0) {
+            /* fread returned 0: either clean EOF or a hard read error, which
+             * also leaves feof() false and would otherwise spin forever and pin
+             * this worker plus its scratch buffer. On a genuine read error,
+             * leave the chunked stream unterminated and return ESP_FAIL so the
+             * server aborts the connection: the client then sees a broken
+             * transfer instead of a cleanly finished but silently truncated
+             * file. (Headers may already be on the wire; aborting is still the
+             * most honest signal we can give.) Clean EOF just ends the loop. */
+            if (ferror(file)) {
+                free(scratch);
+                fclose(file);
+                return ESP_FAIL;
+            }
+            break;
+        }
+        if (httpd_resp_send_chunk(req, scratch, read_bytes) != ESP_OK) {
             free(scratch);
             fclose(file);
             return ESP_FAIL;

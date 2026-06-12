@@ -5,6 +5,7 @@
  */
 #include "claw_memory_internal.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +15,30 @@
 static const char *TAG = "claw_memory";
 
 claw_memory_state_t s_memory = {0};
+
+/* Append a formatted chunk into buf[off..buf_size) and return the number of
+ * bytes ACTUALLY written (never the snprintf "would-have-written" value), so
+ * a running offset can never advance past the buffer. */
+static size_t claw_memory_append(char *buf, size_t buf_size, size_t off,
+                                 const char *fmt, ...)
+{
+    va_list ap;
+    int n;
+
+    if (!buf || off >= buf_size) {
+        return 0;
+    }
+    va_start(ap, fmt);
+    n = vsnprintf(buf + off, buf_size - off, fmt, ap);
+    va_end(ap);
+    if (n < 0) {
+        return 0;
+    }
+    if ((size_t)n >= buf_size - off) {
+        return buf_size - off - 1; /* truncated: filled to the last byte */
+    }
+    return (size_t)n;
+}
 
 static void claw_memory_fill_defaults(claw_memory_item_t *item)
 {
@@ -702,6 +727,18 @@ static esp_err_t claw_memory_long_term_collect(const claw_core_request_t *reques
                                                claw_core_context_t *out_context,
                                                void *user_ctx)
 {
+    static const char k_long_term_preamble[] =
+        "The auto-injected long-term memory context only contains summary labels, not full memory bodies.\n"
+        "Use exact summary labels with memory_recall when you need detailed long-term memory.\n"
+        "Summary labels must be copied verbatim from the catalog below. Do not invent new labels.\n"
+        "If the user asks what you remember about them, what they like or prefer, or asks you to verify a remembered fact, call memory_recall before answering when any relevant summary label is present.\n"
+        "If the user asks you to forget a remembered item, first inspect memory_id with memory_recall or memory_list, then call memory_forget with that exact memory_id.\n"
+        "If the user asks you to update a remembered item and any relevant summary label exists, first choose the most relevant summary labels from this catalog, call memory_recall to inspect the original memory bodies and memory_id values, then call memory_update with the selected memory_id.\n"
+        "Do not rely on session history alone for those recall questions, because long-term memory may contain additional facts not visible in the recent chat.\n"
+        "Do not treat /memory/MEMORY.md or raw memory files as the retrieval source of truth.\n"
+        "Do not mention internal memory policy, storage behavior, auto-extraction, or whether you will or will not remember something unless the user explicitly asks about memory behavior.\n"
+        "Summary label catalog:\n";
+
     cJSON *index_root = NULL;
     cJSON *summaries;
     cJSON *item;
@@ -729,25 +766,16 @@ static esp_err_t claw_memory_long_term_collect(const claw_core_request_t *reques
         count = (size_t)cJSON_GetArraySize(summaries);
     }
 
-    buf_size = 512 + (count * 64);
+    /* Size for the full preamble plus one line per label (labels are bounded,
+     * long ones are truncated by the per-line snprintf below). */
+    buf_size = sizeof(k_long_term_preamble) + 64 + (count * 128);
     content = calloc(1, buf_size);
     if (!content) {
         cJSON_Delete(index_root);
         return ESP_ERR_NO_MEM;
     }
 
-    off += snprintf(content + off,
-                    buf_size - off,
-                    "The auto-injected long-term memory context only contains summary labels, not full memory bodies.\n"
-                    "Use exact summary labels with memory_recall when you need detailed long-term memory.\n"
-                    "Summary labels must be copied verbatim from the catalog below. Do not invent new labels.\n"
-                    "If the user asks what you remember about them, what they like or prefer, or asks you to verify a remembered fact, call memory_recall before answering when any relevant summary label is present.\n"
-                    "If the user asks you to forget a remembered item, first inspect memory_id with memory_recall or memory_list, then call memory_forget with that exact memory_id.\n"
-                    "If the user asks you to update a remembered item and any relevant summary label exists, first choose the most relevant summary labels from this catalog, call memory_recall to inspect the original memory bodies and memory_id values, then call memory_update with the selected memory_id.\n"
-                    "Do not rely on session history alone for those recall questions, because long-term memory may contain additional facts not visible in the recent chat.\n"
-                    "Do not treat /memory/MEMORY.md or raw memory files as the retrieval source of truth.\n"
-                    "Do not mention internal memory policy, storage behavior, auto-extraction, or whether you will or will not remember something unless the user explicitly asks about memory behavior.\n"
-                    "Summary label catalog:\n");
+    off += claw_memory_append(content, buf_size, off, "%s", k_long_term_preamble);
     cJSON_ArrayForEach(item, summaries) {
         const char *label = cJSON_GetStringValue(cJSON_GetObjectItem(item, "label"));
 
@@ -757,10 +785,10 @@ static esp_err_t claw_memory_long_term_collect(const claw_core_request_t *reques
         if (!label) {
             continue;
         }
-        off += snprintf(content + off, buf_size - off, "- %s\n", label);
+        off += claw_memory_append(content, buf_size, off, "- %s\n", label);
     }
     if (count == 0) {
-        off += snprintf(content + off, buf_size - off, "- (empty)\n");
+        off += claw_memory_append(content, buf_size, off, "- (empty)\n");
     }
 
     out_context->kind = CLAW_CORE_CONTEXT_KIND_SYSTEM_PROMPT;

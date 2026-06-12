@@ -308,6 +308,9 @@ esp_err_t claw_llm_http_post_json(const claw_llm_http_json_request_t *request,
     config.timeout_ms = request->timeout_ms;
     config.buffer_size = 1024;
     config.crt_bundle_attach = esp_crt_bundle_attach;
+#ifdef CONFIG_HTTP_REUSE_ENABLE
+    config.keep_alive_enable = true;
+#endif
 
     client = esp_http_client_init(&config);
     if (!client) {

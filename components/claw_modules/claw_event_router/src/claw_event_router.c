@@ -1586,6 +1586,7 @@ static void claw_event_router_update_last_output(cJSON *ctx,
                                                  const char *output)
 {
     cJSON *last_obj = NULL;
+    char *output_copy = NULL;
 
     last_obj = cJSON_GetObjectItemCaseSensitive(ctx, "last");
     if (!last_obj) {
@@ -1596,14 +1597,35 @@ static void claw_event_router_update_last_output(cJSON *ctx,
         cJSON_AddItemToObject(ctx, "last", last_obj);
     }
 
+    /* `output` may alias the existing last.output node (e.g. send_message's
+     * fallback to ctx.last.output): deleting that node below would free the
+     * buffer `output` points at, so duplicate it before the delete to avoid a
+     * use-after-free. kind/target/status are always caller stack/literals.
+     *
+     * update_output stays false only when there is a non-empty `output` we
+     * failed to duplicate (OOM). In that case we leave the existing last.output
+     * untouched rather than clobbering a real value with "" -- preserving the
+     * old output is safer than reporting an empty one. A NULL/empty `output` is
+     * an explicit clear request, so it still updates the field to "". */
+    bool update_output = true;
+    if (output && output[0]) {
+        output_copy = strdup(output);
+        if (!output_copy) {
+            update_output = false;
+        }
+    }
+
     cJSON_DeleteItemFromObjectCaseSensitive(last_obj, "kind");
     cJSON_DeleteItemFromObjectCaseSensitive(last_obj, "target");
     cJSON_DeleteItemFromObjectCaseSensitive(last_obj, "status");
-    cJSON_DeleteItemFromObjectCaseSensitive(last_obj, "output");
     cJSON_AddStringToObject(last_obj, "kind", kind ? kind : "");
     cJSON_AddStringToObject(last_obj, "target", target ? target : "");
     cJSON_AddStringToObject(last_obj, "status", status ? status : "");
-    cJSON_AddStringToObject(last_obj, "output", output ? output : "");
+    if (update_output) {
+        cJSON_DeleteItemFromObjectCaseSensitive(last_obj, "output");
+        cJSON_AddStringToObject(last_obj, "output", output_copy ? output_copy : "");
+    }
+    free(output_copy);
 }
 
 static const char *claw_event_router_get_ctx_string(const cJSON *ctx,
@@ -2804,6 +2826,9 @@ esp_err_t claw_event_router_add_rule_json(const char *rule_json)
 
     err = claw_event_router_parse_rule_json(rule_json, rule);
     if (err != ESP_OK) {
+        /* parse_rule may have allocated vars_json/actions before failing in the
+         * per-action loop; release those before freeing the struct. */
+        claw_event_router_free_rule(rule);
         free(rule);
         return err;
     }
@@ -2825,6 +2850,9 @@ esp_err_t claw_event_router_update_rule_json(const char *rule_json)
 
     err = claw_event_router_parse_rule_json(rule_json, rule);
     if (err != ESP_OK) {
+        /* parse_rule may have allocated vars_json/actions before failing in the
+         * per-action loop; release those before freeing the struct. */
+        claw_event_router_free_rule(rule);
         free(rule);
         return err;
     }

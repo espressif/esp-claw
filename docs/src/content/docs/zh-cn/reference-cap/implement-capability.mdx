@@ -300,7 +300,7 @@ claw_event_router_publish(&event);
 
 | 需求 | 模式 | 参考实现 |
 |------|------|----------|
-| 纯工具，无副作用 | 简单 `execute` 回调 | `cap_time`、`cap_llm_inspect` |
+| 纯工具，无副作用 | 简单 `execute` 回调 | `cap_system` 中的 `get_current_time`、`cap_llm_inspect` |
 | 需要读写文件系统 | 路径校验 + POSIX IO | `cap_files`、`cap_lua` |
 | 持续轮询/推送事件 | 后台任务 + `EVENT_SOURCE` | `cap_im_tg` |
 | 调用 LLM 推理 | `claw_core_llm_infer_*` | `cap_llm_inspect` |

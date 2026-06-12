@@ -44,4 +44,15 @@ config HTTP_REUSE_MAX_POOL
         as much as you need; each pooled client consumes TLS buffers and heap,
         so stay within available RAM.
 
+config HTTP_REUSE_IDLE_TIMEOUT_SEC
+    int "Idle pooled client timeout (seconds)"
+    depends on HTTP_REUSE_ENABLE
+    range 5 3600
+    default 60
+    help
+        Maximum idle time for a persistent pooled HTTP client. If a pooled
+        handle stays idle longer than this without being reused by a new
+        session, the reuse layer closes and frees it automatically so the
+        socket, TLS buffers, and heap are not held indefinitely.
+
 endmenu

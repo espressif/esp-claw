@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "cap_im_wechat.h"
+#include "claw_utils_string.h"
 
 #include <ctype.h>
 #include <inttypes.h>
@@ -571,6 +572,9 @@ static esp_err_t cap_im_wechat_http_request(const char *url,
     config.user_data = response;
     config.buffer_size = 1024;
     config.buffer_size_tx = 2048;
+#ifdef CONFIG_HTTP_REUSE_ENABLE
+    config.keep_alive_enable = true;
+#endif
 
     client = esp_http_client_init(&config);
     if (!client) {
@@ -1538,7 +1542,11 @@ static esp_err_t cap_im_wechat_poll_once(void)
 
     if (cap_im_wechat_int_value(cJSON_GetObjectItemCaseSensitive(root, "ret"), 0) != 0 ||
             cap_im_wechat_int_value(cJSON_GetObjectItemCaseSensitive(root, "errcode"), 0) != 0) {
-        ESP_LOGW(TAG, "wechat getupdates error: %s", cJSON_PrintUnformatted(root));
+        /* cJSON_PrintUnformatted returns a heap string; free it after logging
+         * (it was previously leaked on every error poll cycle). */
+        char *err_body = cJSON_PrintUnformatted(root);
+        ESP_LOGW(TAG, "wechat getupdates error: %s", err_body ? err_body : "(null)");
+        cJSON_free(err_body);
         cJSON_Delete(root);
         return ESP_FAIL;
     }
@@ -2449,7 +2457,10 @@ esp_err_t cap_im_wechat_send_text(const char *chat_id, const char *text)
         esp_err_t err;
 
         if (chunk_len > CAP_IM_WECHAT_MAX_MSG_LEN) {
-            chunk_len = CAP_IM_WECHAT_MAX_MSG_LEN;
+            chunk_len = claw_utils_utf8_prefix_len(text + offset, CAP_IM_WECHAT_MAX_MSG_LEN);
+            if (chunk_len == 0) {
+                return ESP_ERR_INVALID_ARG;
+            }
         }
 
         chunk = calloc(1, chunk_len + 1);

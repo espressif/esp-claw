@@ -1,0 +1,10 @@
+idf_component_register(
+    SRCS
+        "cap_mcp_lua.c"
+    INCLUDE_DIRS
+        "."
+    PRIV_REQUIRES
+        cap_mcp_server
+        cap_lua
+        mcp_mdns
+)

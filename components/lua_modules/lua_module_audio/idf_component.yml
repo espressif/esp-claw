@@ -2,3 +2,6 @@
 dependencies:
   espressif/esp_codec_dev: "*"
   espressif/esp-dsp: "*"
+  espressif/esp_audio_codec: "*"
+  espressif/esp_audio_simple_player: ^0.9.6
+  espressif/esp_asrc: ^1.0.0

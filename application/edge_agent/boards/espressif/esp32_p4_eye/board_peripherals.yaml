@@ -11,20 +11,32 @@ peripherals:
         sda: 14
         scl: 13
 
-  # I2S PDM RX for microphone (MSM261S4030H0)
+  # I2S PDM RX for microphone (MSM261S4030H0, CLK=IO22, DIN=IO21)
   - name: i2s_audio_in
     type: i2s
-    format: "pdm-in"
+    version: default
     role: master
+    format: pdm-in
     config:
       port: 0
       sample_rate_hz: 16000
-      clk_src: "I2S_CLK_SRC_DEFAULT"
+      clk_src: I2S_CLK_SRC_DEFAULT
+      mclk_multiple: 256
+      dn_sample_mode: I2S_PDM_DSR_8S
+      bclk_div: 8
       data_bit_width: 16
-      slot_mode: "I2S_SLOT_MODE_MONO"
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_MONO
+      slot_mask: I2S_PDM_SLOT_LEFT
+      data_fmt: I2S_PDM_DATA_FMT_PCM
+      hp_en: true
+      hp_cut_off_freq_hz: 35.5
+      amplify_num: 1
       pins:
         clk: 22
         din: 21
+      invert_flags:
+        clk_inv: false
 
   # LCD SPI Configuration for ST7789
   - name: spi_display

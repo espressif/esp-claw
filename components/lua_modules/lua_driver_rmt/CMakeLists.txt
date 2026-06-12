@@ -1,0 +1,10 @@
+idf_component_register(
+    SRCS
+        "src/lua_driver_rmt.c"
+    INCLUDE_DIRS
+        "src"
+    REQUIRES
+        cap_lua
+        esp_driver_rmt
+)
+

@@ -6,52 +6,14 @@
 #include "claw_core_internal.h"
 
 #include <inttypes.h>
-#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/time.h>
-#include <time.h>
 
+#include "claw_utils_string.h"
 #include "esp_log.h"
 
 static const char *TAG = "claw_core";
-
-char *claw_core_dup_string(const char *src)
-{
-    if (!src) {
-        return NULL;
-    }
-
-    return strdup(src);
-}
-
-char *claw_core_dup_printf(const char *fmt, ...)
-{
-    va_list args;
-    va_list copy;
-    int needed;
-    char *buf;
-
-    va_start(args, fmt);
-    va_copy(copy, args);
-    needed = vsnprintf(NULL, 0, fmt, copy);
-    va_end(copy);
-    if (needed < 0) {
-        va_end(args);
-        return NULL;
-    }
-
-    buf = calloc(1, (size_t)needed + 1);
-    if (!buf) {
-        va_end(args);
-        return NULL;
-    }
-
-    vsnprintf(buf, (size_t)needed + 1, fmt, args);
-    va_end(args);
-    return buf;
-}
 
 const char *claw_core_log_snippet(const char *text)
 {
@@ -67,7 +29,8 @@ int claw_core_log_snippet_len(const char *text)
     return (int)strlen(text);
 #else
     size_t len = strlen(text);
-    return (int)(len > CLAW_CORE_LOG_SNIPPET_LEN ? CLAW_CORE_LOG_SNIPPET_LEN : len);
+    return (int)(len > CLAW_CORE_LOG_SNIPPET_LEN ?
+                 claw_utils_utf8_prefix_len(text, CLAW_CORE_LOG_SNIPPET_LEN) : len);
 #endif
 }
 
@@ -175,7 +138,20 @@ void claw_core_log_tool_call_names(uint32_t request_id, const claw_core_llm_resp
     size_t off = 0;
     size_t i;
 
-    if (!response || response->tool_call_count == 0) {
+    if (!response) {
+        return;
+    }
+
+    if (response->reasoning_content && response->reasoning_content[0]) {
+        ESP_LOGD(TAG, "llm_reasoning_content request=%" PRIu32 " content=%.*s%s",
+                 request_id,
+                 claw_core_log_snippet_len(response->reasoning_content),
+                 claw_core_log_snippet(response->reasoning_content),
+                 claw_core_log_snippet_suffix(response->reasoning_content));
+        return;
+    }
+
+    if (response->tool_call_count == 0) {
         return;
     }
 
@@ -199,14 +175,6 @@ void claw_core_log_tool_call_names(uint32_t request_id, const claw_core_llm_resp
              (unsigned)response->tool_call_count,
              buf,
              off >= sizeof(buf) - 1 ? "..." : "");
-}
-
-int64_t claw_core_now_ms(void)
-{
-    struct timeval tv = {0};
-
-    gettimeofday(&tv, NULL);
-    return ((int64_t)tv.tv_sec * 1000LL) + (tv.tv_usec / 1000LL);
 }
 
 void claw_core_check_timezone(void)

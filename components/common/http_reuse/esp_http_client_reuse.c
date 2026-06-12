@@ -14,6 +14,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "freertos/timers.h"
 #include "sdkconfig.h"
 
 #if CONFIG_HTTP_REUSE_ENABLE
@@ -26,10 +27,12 @@
  * wrappers below to avoid recursion.
  */
 esp_http_client_handle_t __real_esp_http_client_init(const esp_http_client_config_t *config);
-esp_err_t                __real_esp_http_client_cleanup(esp_http_client_handle_t client);
 esp_err_t                __real_esp_http_client_perform(esp_http_client_handle_t client);
+esp_err_t                __real_esp_http_client_cleanup(esp_http_client_handle_t client);
 
 static const char *TAG = "http_reuse";
+
+#define HTTP_REUSE_IDLE_REAPER_PERIOD_MS 5000U
 
 typedef struct http_reuse_endpoint {
     esp_http_client_transport_t transport;
@@ -49,11 +52,41 @@ typedef struct http_reuse_node {
     bool                     reused_in_current_lease;
 } http_reuse_node_t;
 
+typedef struct http_reuse_lease {
+    STAILQ_ENTRY(http_reuse_lease) list;
+    esp_http_client_handle_t client;
+    /** Becomes true once the app calls esp_http_client_perform during this lease. */
+    bool                     perform_called;
+} http_reuse_lease_t;
+
 static STAILQ_HEAD(http_reuse_head, http_reuse_node)
     s_pool = STAILQ_HEAD_INITIALIZER(s_pool);
+static STAILQ_HEAD(http_reuse_lease_head, http_reuse_lease)
+    s_leases = STAILQ_HEAD_INITIALIZER(s_leases);
 
-static SemaphoreHandle_t s_pool_mutex            = NULL;
-static portMUX_TYPE      s_pool_mutex_init_mux   = portMUX_INITIALIZER_UNLOCKED;
+static SemaphoreHandle_t s_pool_mutex          = NULL;
+static TimerHandle_t     s_pool_reaper_timer   = NULL;
+static portMUX_TYPE      s_pool_mutex_init_mux = portMUX_INITIALIZER_UNLOCKED;
+
+static void pool_reap_idle_timer_cb(TimerHandle_t timer);
+
+static TickType_t pool_idle_timeout_ticks(void)
+{
+    return pdMS_TO_TICKS((uint32_t)CONFIG_HTTP_REUSE_IDLE_TIMEOUT_SEC * 1000U);
+}
+
+static TickType_t pool_reaper_period_ticks(void)
+{
+    uint32_t period_ms = HTTP_REUSE_IDLE_REAPER_PERIOD_MS;
+    uint32_t timeout_ms = (uint32_t)CONFIG_HTTP_REUSE_IDLE_TIMEOUT_SEC * 1000U;
+
+    if (timeout_ms < period_ms) {
+        period_ms = timeout_ms;
+    }
+
+    TickType_t ticks = pdMS_TO_TICKS(period_ms);
+    return ticks > 0 ? ticks : 1;
+}
 
 /** Frees @p ep->host and clears the pointer. Safe on cleared / transferred endpoints. */
 static void endpoint_release(http_reuse_endpoint_t *ep)
@@ -70,11 +103,36 @@ static void endpoint_release(http_reuse_endpoint_t *ep)
 
 static void pool_mutex_take(void)
 {
+    TimerHandle_t new_timer = NULL;
+
     portENTER_CRITICAL(&s_pool_mutex_init_mux);
     if (s_pool_mutex == NULL) {
         s_pool_mutex = xSemaphoreCreateMutex();
     }
     portEXIT_CRITICAL(&s_pool_mutex_init_mux);
+
+    if (s_pool_reaper_timer == NULL) {
+        new_timer = xTimerCreate("http_reuse_gc",
+                                 pool_reaper_period_ticks(),
+                                 pdTRUE,
+                                 NULL,
+                                 pool_reap_idle_timer_cb);
+        if (new_timer != NULL) {
+            portENTER_CRITICAL(&s_pool_mutex_init_mux);
+            if (s_pool_reaper_timer == NULL) {
+                s_pool_reaper_timer = new_timer;
+                new_timer = NULL;
+            }
+            portEXIT_CRITICAL(&s_pool_mutex_init_mux);
+            if (new_timer != NULL) {
+                (void)xTimerDelete(new_timer, 0);
+            }
+        }
+    }
+
+    if (s_pool_reaper_timer && xTimerIsTimerActive(s_pool_reaper_timer) == pdFALSE) {
+        (void)xTimerStart(s_pool_reaper_timer, 0);
+    }
     if (s_pool_mutex) {
         xSemaphoreTake(s_pool_mutex, portMAX_DELAY);
     }
@@ -224,10 +282,51 @@ static void node_free(http_reuse_node_t *node, bool destroy_client)
     free(node);
 }
 
+static void pool_reap_idle_locked(void)
+{
+    TickType_t         now = xTaskGetTickCount();
+    TickType_t         timeout_ticks = pool_idle_timeout_ticks();
+    http_reuse_node_t *node;
+    http_reuse_node_t *next;
+
+    for (node = STAILQ_FIRST(&s_pool); node != NULL; node = next) {
+        next = STAILQ_NEXT(node, list);
+
+        if (!node->is_persistent || node->leased) {
+            continue;
+        }
+
+        TickType_t idle_ticks = now - node->last_update_ticks;
+        if (idle_ticks < timeout_ticks) {
+            continue;
+        }
+
+        ESP_LOGI(TAG,
+                 "evict idle timeout %p host=%s port=%d idle_ms=%u",
+                 node->client,
+                 node->endpoint.host ? node->endpoint.host : "(null)",
+                 node->endpoint.port,
+                 (unsigned)(idle_ticks * portTICK_PERIOD_MS));
+        STAILQ_REMOVE(&s_pool, node, http_reuse_node, list);
+        node_free(node, true);
+    }
+}
+
+static void pool_reap_idle_timer_cb(TimerHandle_t timer)
+{
+    (void)timer;
+
+    pool_mutex_take();
+    pool_reap_idle_locked();
+    pool_mutex_give();
+}
+
 static esp_http_client_handle_t pool_take_locked(const http_reuse_endpoint_t *target)
 {
     http_reuse_node_t *node;
     http_reuse_node_t *next;
+
+    pool_reap_idle_locked();
 
     for (node = STAILQ_FIRST(&s_pool); node != NULL; node = next) {
         next = STAILQ_NEXT(node, list);
@@ -270,6 +369,56 @@ static http_reuse_node_t *pool_find_locked(esp_http_client_handle_t client)
     return NULL;
 }
 
+static http_reuse_lease_t *lease_find_locked(esp_http_client_handle_t client)
+{
+    http_reuse_lease_t *lease;
+    STAILQ_FOREACH(lease, &s_leases, list) {
+        if (lease->client == client) {
+            return lease;
+        }
+    }
+    return NULL;
+}
+
+static esp_err_t lease_insert_locked(esp_http_client_handle_t client)
+{
+    http_reuse_lease_t *lease;
+
+    if (!client) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (lease_find_locked(client)) {
+        return ESP_OK;
+    }
+
+    lease = calloc(1, sizeof(*lease));
+    if (!lease) {
+        return ESP_ERR_NO_MEM;
+    }
+    lease->client = client;
+    STAILQ_INSERT_TAIL(&s_leases, lease, list);
+    return ESP_OK;
+}
+
+static bool lease_remove_locked(esp_http_client_handle_t client, bool *out_perform_called)
+{
+    http_reuse_lease_t *lease = lease_find_locked(client);
+
+    if (out_perform_called) {
+        *out_perform_called = false;
+    }
+    if (!lease) {
+        return false;
+    }
+
+    if (out_perform_called) {
+        *out_perform_called = lease->perform_called;
+    }
+    STAILQ_REMOVE(&s_leases, lease, http_reuse_lease, list);
+    free(lease);
+    return true;
+}
+
 /** Caller must hold @ref pool_mutex. Removes @p client from the pool and destroys it, or only destroys if not listed. */
 static void pool_detach_and_destroy_client_locked(esp_http_client_handle_t client)
 {
@@ -297,6 +446,8 @@ static esp_err_t pool_insert_locked(esp_http_client_handle_t client, http_reuse_
     if (!client || !ep) {
         return ESP_ERR_INVALID_ARG;
     }
+
+    pool_reap_idle_locked();
 
     while (pool_count_locked() >= (size_t)CONFIG_HTTP_REUSE_MAX_POOL) {
         http_reuse_node_t *node;
@@ -350,14 +501,19 @@ esp_http_client_handle_t __wrap_esp_http_client_init(const esp_http_client_confi
         return NULL;
     }
 
-    /* Local shallow copy so we can force keep-alive without mutating caller's config. */
-    esp_http_client_config_t cfg = *config;
-    if (!cfg.keep_alive_enable) {
-        cfg.keep_alive_enable   = true;
-        cfg.keep_alive_idle     = 5;
-        cfg.keep_alive_interval = 5;
-        cfg.keep_alive_count    = 3;
+    /*
+     * http_reuse is opt-in per caller. Only configs that explicitly enable
+     * keep-alive participate in pool lookup / lease tracking. Other callers go
+     * straight to the IDF client and never enter the reuse pool.
+     */
+    if (!config->keep_alive_enable) {
+        ESP_LOGD(TAG, "bypass reuse: keep_alive_enable=false url=%s",
+                 config->url ? config->url : (config->host ? config->host : "(none)"));
+        return __real_esp_http_client_init(config);
     }
+
+    /* Local shallow copy for reuse-path adjustments without mutating caller's config. */
+    esp_http_client_config_t cfg = *config;
 
     ESP_LOGD(TAG, "init url=%s", cfg.url ? cfg.url : (cfg.host ? cfg.host : "(none)"));
 
@@ -425,6 +581,7 @@ esp_http_client_handle_t __wrap_esp_http_client_init(const esp_http_client_confi
         const int timeout_ms = cfg.timeout_ms > 0 ? cfg.timeout_ms : 5000;
         esp_http_client_set_timeout_ms(client, timeout_ms);
         esp_http_client_set_user_data(client, cfg.user_data);
+        esp_http_client_set_event_handler(client, cfg.event_handler);
         ESP_LOGI(TAG, "reuse hit %p url=%s", client,
                  cfg.url ? cfg.url : (cfg.host ? cfg.host : "(none)"));
         return client;
@@ -438,74 +595,34 @@ esp_http_client_handle_t __wrap_esp_http_client_init(const esp_http_client_confi
     }
 
     /*
-     * Do not register in the pool at init. Handles that are never cleaned up
-     * would fill CONFIG_HTTP_REUSE_MAX_POOL with leased non-persistent slots
-     * that cannot be LRU-evicted, breaking further inits. Idle reuse entries are
-     * added only in cleanup when the connection is persistent.
+     * Fresh handles are not inserted into the reuse pool at init time.
+     * Instead, track them only as active leases. They become pool-eligible
+     * later only if the app actually goes through esp_http_client_perform()
+     * and then calls esp_http_client_cleanup() while the connection is
+     * still persistent.
      */
+    pool_mutex_take();
+    esp_err_t lease_err = lease_insert_locked(new_client);
+    pool_mutex_give();
+    if (lease_err != ESP_OK) {
+        ESP_LOGW(TAG, "track new lease %p failed (%s), reuse disabled for this handle", new_client,
+                 esp_err_to_name(lease_err));
+    }
     endpoint_release(&target);
     return new_client;
 }
 
-esp_err_t __wrap_esp_http_client_cleanup(esp_http_client_handle_t client)
-{
-    if (!client) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    ESP_LOGD(TAG, "cleanup %p", client);
-
-    pool_mutex_take();
-    http_reuse_node_t *node       = pool_find_locked(client);
-    bool               in_pool    = (node != NULL);
-    bool               persistent = esp_http_client_is_persistent_connection(client);
-
-    if (in_pool) {
-        if (!persistent) {
-            STAILQ_REMOVE(&s_pool, node, http_reuse_node, list);
-            pool_mutex_give();
-            ESP_LOGD(TAG, "remove non-persistent pooled %p", client);
-            node_free(node, true);
-            return ESP_OK;
-        }
-        node->is_persistent           = true;
-        node->leased                  = false; /* idle in pool for pool_take */
-        node->reused_in_current_lease = false; /* lease ended */
-        node->last_update_ticks       = xTaskGetTickCount();
-        pool_mutex_give();
-        ESP_LOGD(TAG, "idle persistent in pool %p", client);
-        return ESP_OK;
-    }
-    pool_mutex_give();
-
-    /* Not in pool: either never registered (new init path) or foreign handle. */
-    if (!persistent) {
-        ESP_LOGD(TAG, "cleanup destroy (not in pool) %p", client);
-        return __real_esp_http_client_cleanup(client);
-    }
-
-    /* Persistent connection after use: retain for pool_take without holding a slot during init. */
-    http_reuse_endpoint_t ep = {0};
-    esp_err_t             epe = endpoint_from_client(client, &ep);
-    if (epe != ESP_OK) {
-        ESP_LOGE(TAG, "persistent %p get_url/endpoint failed (%s), destroy", client, esp_err_to_name(epe));
-        return __real_esp_http_client_cleanup(client);
-    }
-
-    pool_mutex_take();
-    esp_err_t pin_err = pool_insert_locked(client, &ep, true, false);
-    pool_mutex_give();
-    if (pin_err != ESP_OK) {
-        ESP_LOGE(TAG, "pool insert persistent %p failed (%s), destroy", client, esp_err_to_name(pin_err));
-        endpoint_release(&ep);
-        return __real_esp_http_client_cleanup(client);
-    }
-    ESP_LOGD(TAG, "insert idle persistent %p", client);
-    return ESP_OK;
-}
-
 esp_err_t __wrap_esp_http_client_perform(esp_http_client_handle_t client)
 {
+    if (client) {
+        pool_mutex_take();
+        http_reuse_lease_t *lease = lease_find_locked(client);
+        if (lease) {
+            lease->perform_called = true;
+        }
+        pool_mutex_give();
+    }
+
     esp_err_t err = __real_esp_http_client_perform(client);
     if (err == ESP_OK || !client) {
         return err;
@@ -528,4 +645,68 @@ esp_err_t __wrap_esp_http_client_perform(esp_http_client_handle_t client)
     return err;
 }
 
+esp_err_t __wrap_esp_http_client_cleanup(esp_http_client_handle_t client)
+{
+    if (!client) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    ESP_LOGD(TAG, "cleanup %p", client);
+
+    pool_mutex_take();
+    http_reuse_node_t *node       = pool_find_locked(client);
+    bool               in_pool    = (node != NULL);
+    bool               persistent = esp_http_client_is_persistent_connection(client);
+    bool               perform_called_in_lease = false;
+
+    if (in_pool) {
+        (void)lease_remove_locked(client, NULL);
+        if (!persistent) {
+            STAILQ_REMOVE(&s_pool, node, http_reuse_node, list);
+            pool_mutex_give();
+            ESP_LOGD(TAG, "remove non-persistent pooled %p", client);
+            node_free(node, true);
+            return ESP_OK;
+        }
+        node->is_persistent           = true;
+        node->leased                  = false; /* idle in pool for pool_take */
+        node->reused_in_current_lease = false; /* lease ended */
+        node->last_update_ticks       = xTaskGetTickCount();
+        pool_mutex_give();
+        ESP_LOGD(TAG, "idle persistent in pool %p", client);
+        return ESP_OK;
+    }
+
+    (void)lease_remove_locked(client, &perform_called_in_lease);
+    pool_mutex_give();
+
+    /*
+     * Not in pool: either a fresh handle created by init or a foreign handle.
+     * Only leases that have gone through esp_http_client_perform() are promoted
+     * into the idle reuse pool at cleanup. init->open->cleanup destroys them.
+     */
+    if (!persistent || !perform_called_in_lease) {
+        ESP_LOGD(TAG, "cleanup destroy (not in pool, persistent=%d perform_called=%d) %p", persistent,
+                 perform_called_in_lease, client);
+        return __real_esp_http_client_cleanup(client);
+    }
+
+    /* Persistent connection after perform: retain for later pool_take. */
+    http_reuse_endpoint_t ep = {0};
+    esp_err_t             epe = endpoint_from_client(client, &ep);
+    if (epe != ESP_OK) {
+        ESP_LOGE(TAG, "persistent %p get_url/endpoint failed (%s), destroy", client, esp_err_to_name(epe));
+        return __real_esp_http_client_cleanup(client);
+    }
+
+    pool_mutex_take();
+    esp_err_t pin_err = pool_insert_locked(client, &ep, true, false);
+    pool_mutex_give();
+    if (pin_err != ESP_OK) {
+        ESP_LOGE(TAG, "pool insert persistent %p failed (%s), destroy", client, esp_err_to_name(pin_err));
+        endpoint_release(&ep);
+        return __real_esp_http_client_cleanup(client);
+    }
+    ESP_LOGD(TAG, "insert idle persistent %p", client);
+    return ESP_OK;
+}
 #endif /* CONFIG_HTTP_REUSE_ENABLE */

@@ -12,14 +12,23 @@ function(edge_agent_patch_file_replace FILE_PATH OLD_TEXT NEW_TEXT PATCH_NAME)
     endif()
 
     file(READ "${FILE_PATH}" FILE_CONTENT)
-    set(FIXED_TEXTS "${NEW_TEXT}" ${ARGN})
-    foreach(FIXED_TEXT IN LISTS FIXED_TEXTS)
-        string(FIND "${FILE_CONTENT}" "${FIXED_TEXT}" FIXED_TEXT_OFFSET)
-        if(NOT FIXED_TEXT_OFFSET EQUAL -1)
-            message(STATUS "${EDGE_AGENT_PROJECT_LOG_PREFIX} ESP-IDF patch '${PATCH_NAME}' already applied")
-            return()
-        endif()
-    endforeach()
+    string(FIND "${FILE_CONTENT}" "${NEW_TEXT}" FIXED_TEXT_OFFSET)
+    if(NOT FIXED_TEXT_OFFSET EQUAL -1)
+        message(STATUS "${EDGE_AGENT_PROJECT_LOG_PREFIX} ESP-IDF patch '${PATCH_NAME}' already applied")
+        return()
+    endif()
+
+    if(ARGC GREATER 4)
+        math(EXPR FIXED_TEXT_ARGC "${ARGC} - 1")
+        foreach(FIXED_TEXT_ARG_IDX RANGE 4 ${FIXED_TEXT_ARGC})
+            set(FIXED_TEXT "${ARGV${FIXED_TEXT_ARG_IDX}}")
+            string(FIND "${FILE_CONTENT}" "${FIXED_TEXT}" FIXED_TEXT_OFFSET)
+            if(NOT FIXED_TEXT_OFFSET EQUAL -1)
+                message(STATUS "${EDGE_AGENT_PROJECT_LOG_PREFIX} ESP-IDF patch '${PATCH_NAME}' already applied")
+                return()
+            endif()
+        endforeach()
+    endif()
 
     string(FIND "${FILE_CONTENT}" "${OLD_TEXT}" OLD_TEXT_OFFSET)
     if(OLD_TEXT_OFFSET EQUAL -1)
@@ -104,3 +113,55 @@ edge_agent_patch_file_replace_literal(
 
 # The preprocessed S31 linker script depends on this included fragment, but Ninja only tracks the top-level input.
 file(TOUCH_NOCREATE "$ENV{IDF_PATH}/components/esp_system/ld/esp32s31/sections.ld.in")
+
+# Add esp_http_client_set_event_handler declaration to esp_http_client.c
+edge_agent_patch_file_replace(
+    "$ENV{IDF_PATH}/components/esp_http_client/esp_http_client.c"
+    [=[    client->user_data = data;
+    return ESP_OK;
+}
+
+static esp_err_t _set_config(esp_http_client_handle_t client, const esp_http_client_config_t *config)]=]
+    [=[    client->user_data = data;
+    return ESP_OK;
+}
+
+esp_err_t esp_http_client_set_event_handler(esp_http_client_handle_t client, http_event_handle_cb event_handler)
+{
+    if (client == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    client->event_handler = event_handler;
+    return ESP_OK;
+}
+
+static esp_err_t _set_config(esp_http_client_handle_t client, const esp_http_client_config_t *config)]=]
+    "http_client_set_event_handler_impl"
+    "esp_err_t esp_http_client_set_event_handler(esp_http_client_handle_t client, http_event_handle_cb event_handler)"
+)
+
+edge_agent_patch_file_replace(
+    "$ENV{IDF_PATH}/components/esp_http_client/include/esp_http_client.h"
+    [=[esp_err_t esp_http_client_set_user_data(esp_http_client_handle_t client, void *data);
+
+/**
+ * @brief      Get HTTP client session errno]=]
+    [=[esp_err_t esp_http_client_set_user_data(esp_http_client_handle_t client, void *data);
+
+/**
+ * @brief      Set the event handler for the client
+ *
+ * @param[in]  client  The esp_http_client handle
+ * @param[in]  event_handler     The event handler
+ *
+ * @return
+ *     - ESP_OK
+ *     - ESP_ERR_INVALID_ARG
+ */
+esp_err_t esp_http_client_set_event_handler(esp_http_client_handle_t client, http_event_handle_cb event_handler);
+
+/**
+ * @brief      Get HTTP client session errno]=]
+    "http_client_set_event_handler_decl"
+    "esp_err_t esp_http_client_set_event_handler(esp_http_client_handle_t client, http_event_handle_cb event_handler)"
+)

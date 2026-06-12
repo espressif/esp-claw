@@ -13,7 +13,7 @@
 #include "cap_lua.h"
 #include "esp_err.h"
 
-#define CAP_LUA_MAX_SCRIPT_SIZE         (16 * 1024)
+#define CAP_LUA_MAX_SCRIPT_SIZE         (64 * 1024)
 #define CAP_LUA_OUTPUT_SIZE             (4 * 1024)
 #define CAP_LUA_SYNC_DEFAULT_TIMEOUT_MS 60000
 #define CAP_LUA_ASYNC_DEFAULT_TIMEOUT_MS 0

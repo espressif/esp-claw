@@ -13,8 +13,6 @@
 
 #include "esp_log.h"
 
-static const char *TAG = "claw_core";
-
 static void free_context_provider_storage(claw_core_state_t *core)
 {
     size_t i;
@@ -41,7 +39,11 @@ static void claw_core_free_runtime(claw_core_state_t *core)
 
     free_context_provider_storage(core);
     free(core->system_prompt);
+    claw_core_llm_config_free(&core->llm_config);
     claw_llm_runtime_deinit(core->llm_runtime);
+    if (core->llm_lock) {
+        vSemaphoreDelete(core->llm_lock);
+    }
     if (core->request_queue) {
         vQueueDelete(core->request_queue);
     }
@@ -66,7 +68,6 @@ esp_err_t claw_core_create(const claw_core_config_t *config, claw_core_handle_t 
 {
     claw_core_state_t *core = NULL;
     claw_core_llm_config_t llm_config = {0};
-    char *llm_error = NULL;
     esp_err_t err;
     uint32_t request_queue_len;
     uint32_t response_queue_len;
@@ -74,8 +75,7 @@ esp_err_t claw_core_create(const claw_core_config_t *config, claw_core_handle_t 
     if (out_core) {
         *out_core = NULL;
     }
-    if (!config || !config->system_prompt || !config->api_key || !config->model ||
-            !(config->backend_type && config->backend_type[0]) || !out_core) {
+    if (!config || !config->system_prompt || !out_core) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -87,7 +87,7 @@ esp_err_t claw_core_create(const claw_core_config_t *config, claw_core_handle_t 
 
     core->instance_id = config->instance_id;
     snprintf(core->log_tag, sizeof(core->log_tag), "claw_core_agent_%" PRIu32, core->instance_id);
-    core->system_prompt = claw_core_dup_string(config->system_prompt);
+    core->system_prompt = claw_utils_string_dup(config->system_prompt);
     if (!core->system_prompt) {
         claw_core_free_runtime(core);
         return ESP_ERR_NO_MEM;
@@ -125,8 +125,9 @@ esp_err_t claw_core_create(const claw_core_config_t *config, claw_core_handle_t 
     core->response_queue = xQueueCreate(response_queue_len, sizeof(claw_core_response_item_t));
     core->response_lock = xSemaphoreCreateMutex();
     core->inflight_lock = xSemaphoreCreateMutex();
+    core->llm_lock = xSemaphoreCreateMutex();
     if (!core->request_queue || !core->response_queue ||
-            !core->response_lock || !core->inflight_lock) {
+            !core->response_lock || !core->inflight_lock || !core->llm_lock) {
         claw_core_free_runtime(core);
         return ESP_ERR_NO_MEM;
     }
@@ -143,10 +144,8 @@ esp_err_t claw_core_create(const claw_core_config_t *config, claw_core_handle_t 
     llm_config.supports_tools = config->supports_tools;
     llm_config.supports_vision = config->supports_vision;
     llm_config.image_remote_url_only = config->image_remote_url_only;
-    err = claw_core_llm_init(&llm_config, &core->llm_runtime, &llm_error);
+    err = claw_core_llm_config_copy(&core->llm_config, &llm_config);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "LLM init failed: %s", llm_error ? llm_error : esp_err_to_name(err));
-        free(llm_error);
         claw_core_free_runtime(core);
         return err;
     }
@@ -154,6 +153,59 @@ esp_err_t claw_core_create(const claw_core_config_t *config, claw_core_handle_t 
     core->initialized = true;
     *out_core = core;
     ESP_LOGI(core->log_tag, "Initialized");
+    return ESP_OK;
+}
+
+esp_err_t claw_core_update_llm_config(claw_core_handle_t core,
+                                      const claw_core_config_t *config)
+{
+    claw_core_llm_config_t next = {0};
+    claw_core_llm_config_t copied = {0};
+    esp_err_t err;
+
+    if (!core || !core->initialized || !config) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    next.api_key = config->api_key;
+    next.backend_type = config->backend_type;
+    next.model = config->model;
+    next.base_url = config->base_url;
+    next.auth_type = config->auth_type;
+    next.max_tokens_field = config->max_tokens_field;
+    next.timeout_ms = config->timeout_ms;
+    next.max_tokens = config->max_tokens;
+    next.image_max_bytes = config->image_max_bytes;
+    next.supports_tools = config->supports_tools;
+    next.supports_vision = config->supports_vision;
+    next.image_remote_url_only = config->image_remote_url_only;
+
+    err = claw_core_llm_config_copy(&copied, &next);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (core->llm_lock) {
+        xSemaphoreTake(core->llm_lock, portMAX_DELAY);
+    }
+    claw_llm_runtime_deinit(core->llm_runtime);
+    core->llm_runtime = NULL;
+    claw_core_llm_config_free(&core->llm_config);
+    core->llm_config = copied;
+    if (core->llm_lock) {
+        xSemaphoreGive(core->llm_lock);
+    }
+
+    ESP_LOGI(core->log_tag,
+             "LLM config updated backend=%s base_url=%s model=%s token=%s",
+             core->llm_config.backend_type && core->llm_config.backend_type[0] ?
+             core->llm_config.backend_type : "(empty)",
+             core->llm_config.base_url && core->llm_config.base_url[0] ?
+             core->llm_config.base_url : "(empty)",
+             core->llm_config.model && core->llm_config.model[0] ?
+             core->llm_config.model : "(empty)",
+             core->llm_config.api_key && core->llm_config.api_key[0] ?
+             "configured" : "missing");
     return ESP_OK;
 }
 
@@ -252,7 +304,7 @@ esp_err_t claw_core_add_context_provider(claw_core_handle_t core,
     }
 
     slot = &core->context_providers[core->context_provider_count];
-    slot->name = claw_core_dup_string(provider->name);
+    slot->name = claw_utils_string_dup(provider->name);
     if (!slot->name) {
         return ESP_ERR_NO_MEM;
     }

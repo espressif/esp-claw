@@ -506,6 +506,21 @@ esp_err_t app_config_validate_wifi(const app_config_t *config, const char **mess
         }
         return ESP_ERR_INVALID_ARG;
     }
+    if (config->wifi_ssid[0] != '\0' && strlen(config->wifi_ssid) >= 32) {
+        if (message) {
+            *message = "wifi_ssid must be 1-31 characters";
+        }
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (config->wifi_password[0] != '\0') {
+        size_t wifi_password_len = strlen(config->wifi_password);
+        if (wifi_password_len < 8 || wifi_password_len > 63) {
+            if (message) {
+                *message = "wifi_password must be empty or 8-63 characters";
+            }
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
     if (config->ap_password[0] != '\0') {
         size_t ap_password_len = strlen(config->ap_password);
         if (ap_password_len < 8 || ap_password_len > 63) {

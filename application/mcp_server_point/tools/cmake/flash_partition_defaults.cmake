@@ -1,0 +1,35 @@
+set(MCP_SERVER_POINT_LOG_PREFIX "[mcp_server_point]")
+set(MCP_SERVER_POINT_FLASH_SIZE "")
+set(MCP_SERVER_POINT_BOARD_MANAGER_DEFAULTS "${CMAKE_SOURCE_DIR}/components/gen_bmgr_codes/board_manager.defaults")
+if(EXISTS "${MCP_SERVER_POINT_BOARD_MANAGER_DEFAULTS}")
+    file(STRINGS "${MCP_SERVER_POINT_BOARD_MANAGER_DEFAULTS}" _flash_line REGEX "^CONFIG_ESPTOOLPY_FLASHSIZE_(4|8|16)MB=y$")
+    if(_flash_line)
+        list(GET _flash_line 0 _flash_line)
+        string(REGEX REPLACE "^CONFIG_ESPTOOLPY_FLASHSIZE_((4|8|16)MB)=y$" "\\1" MCP_SERVER_POINT_FLASH_SIZE "${_flash_line}")
+    endif()
+endif()
+
+if(MCP_SERVER_POINT_FLASH_SIZE)
+    if(EXISTS "${CMAKE_SOURCE_DIR}/sdkconfig")
+        file(READ "${CMAKE_SOURCE_DIR}/sdkconfig" MCP_SERVER_POINT_SDKCONFIG_CONTENT)
+        string(REGEX REPLACE "(^|\\n)CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"[^\\n]*\"\\n" "\\1" MCP_SERVER_POINT_SDKCONFIG_CONTENT "${MCP_SERVER_POINT_SDKCONFIG_CONTENT}")
+        string(REGEX REPLACE "(^|\\n)CONFIG_PARTITION_TABLE_FILENAME=\"[^\\n]*\"\\n" "\\1" MCP_SERVER_POINT_SDKCONFIG_CONTENT "${MCP_SERVER_POINT_SDKCONFIG_CONTENT}")
+        file(WRITE "${CMAKE_SOURCE_DIR}/sdkconfig" "${MCP_SERVER_POINT_SDKCONFIG_CONTENT}")
+    endif()
+
+    set(MCP_SERVER_POINT_PARTITION_DEFAULTS "${CMAKE_BINARY_DIR}/mcp_server_point_partition_auto.defaults")
+    file(WRITE "${MCP_SERVER_POINT_PARTITION_DEFAULTS}"
+        "# Auto-generated from flash size selection. Do not edit.\n"
+        "CONFIG_PARTITION_TABLE_CUSTOM=y\n"
+        "CONFIG_PARTITION_TABLE_CUSTOM_FILENAME=\"partitions_${MCP_SERVER_POINT_FLASH_SIZE}.csv\"\n")
+
+    if(SDKCONFIG_DEFAULTS)
+        set(SDKCONFIG_DEFAULTS "${SDKCONFIG_DEFAULTS};${MCP_SERVER_POINT_PARTITION_DEFAULTS}")
+    elseif(NOT "$ENV{SDKCONFIG_DEFAULTS}" STREQUAL "")
+        set(SDKCONFIG_DEFAULTS "$ENV{SDKCONFIG_DEFAULTS};${MCP_SERVER_POINT_PARTITION_DEFAULTS}")
+    else()
+        set(SDKCONFIG_DEFAULTS "${CMAKE_SOURCE_DIR}/sdkconfig.defaults;${MCP_SERVER_POINT_PARTITION_DEFAULTS}")
+    endif()
+
+    message(STATUS "${MCP_SERVER_POINT_LOG_PREFIX} Partition table auto-selected: partitions_${MCP_SERVER_POINT_FLASH_SIZE}.csv")
+endif()

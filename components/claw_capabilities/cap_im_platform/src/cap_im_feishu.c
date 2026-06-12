@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "cap_im_feishu.h"
+#include "claw_utils_string.h"
 
 #include <inttypes.h>
 #include <errno.h>
@@ -288,6 +289,9 @@ static esp_err_t cap_im_feishu_http_json(const char *url,
     config.buffer_size = 2048;
     config.buffer_size_tx = 2048;
     config.crt_bundle_attach = esp_crt_bundle_attach;
+#ifdef CONFIG_HTTP_REUSE_ENABLE
+    config.keep_alive_enable = true;
+#endif
 
     client = esp_http_client_init(&config);
     if (!client) {
@@ -1398,7 +1402,7 @@ static esp_err_t cap_im_feishu_download_attachment(const char *message_id,
     config.url = url;
     config.timeout_ms = 30000;
     config.buffer_size = sizeof(read_buf);
-    config.buffer_size_tx = 1024;
+    config.buffer_size_tx = 2048;
     config.crt_bundle_attach = esp_crt_bundle_attach;
     config.event_handler = cap_im_feishu_download_event_handler;
     config.user_data = &download_ctx;
@@ -3350,7 +3354,10 @@ esp_err_t cap_im_feishu_send_text(const char *chat_id, const char *text)
         esp_err_t err;
 
         if (chunk_len > CAP_IM_FEISHU_MAX_CHUNK_LEN) {
-            chunk_len = CAP_IM_FEISHU_MAX_CHUNK_LEN;
+            chunk_len = claw_utils_utf8_prefix_len(text + offset, CAP_IM_FEISHU_MAX_CHUNK_LEN);
+            if (chunk_len == 0) {
+                return ESP_ERR_INVALID_ARG;
+            }
         }
 
         segment = calloc(1, chunk_len + 1);

@@ -183,6 +183,9 @@ static esp_err_t emit_config(httpd_req_t *req,
 {
     cJSON *root = cJSON_CreateObject();
     if (!root) {
+        /* emit_config owns extra_meta once called; free it here since it is
+         * never attached to root on this failure path (caller does not). */
+        cJSON_Delete(extra_meta);
         httpd_resp_send_500(req);
         return ESP_ERR_NO_MEM;
     }

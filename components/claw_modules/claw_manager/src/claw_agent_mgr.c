@@ -282,6 +282,11 @@ static void claw_agent_mgr_unlock(void)
     xSemaphoreGiveRecursive(s_mgr.mutex);
 }
 
+static bool claw_agent_mgr_is_ready(void)
+{
+    return s_mgr.initialized && s_mgr.mutex;
+}
+
 static claw_agent_mgr_agent_t *claw_agent_mgr_find_locked(const char *agent_id)
 {
     if (!agent_id || !agent_id[0]) {
@@ -445,6 +450,96 @@ fail:
     return err;
 }
 
+esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_config)
+{
+    char *api_key = NULL;
+    char *backend_type = NULL;
+    char *model = NULL;
+    char *base_url = NULL;
+    char *auth_type = NULL;
+    char *max_tokens_field = NULL;
+    char *system_prompt = NULL;
+    claw_core_config_t next_config = {0};
+    esp_err_t err = ESP_OK;
+
+    if (!core_config || !core_config->system_prompt) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!claw_agent_mgr_is_ready()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    api_key = claw_agent_mgr_strdup(core_config->api_key ? core_config->api_key : "");
+    backend_type = claw_agent_mgr_strdup(core_config->backend_type ? core_config->backend_type : "");
+    model = claw_agent_mgr_strdup(core_config->model ? core_config->model : "");
+    base_url = claw_agent_mgr_strdup(core_config->base_url ? core_config->base_url : "");
+    auth_type = claw_agent_mgr_strdup(core_config->auth_type ? core_config->auth_type : "");
+    max_tokens_field = claw_agent_mgr_strdup(core_config->max_tokens_field ? core_config->max_tokens_field : "");
+    system_prompt = claw_agent_mgr_strdup(core_config->system_prompt);
+    if (!api_key || !backend_type || !model || !base_url ||
+            !auth_type || !max_tokens_field || !system_prompt) {
+        err = ESP_ERR_NO_MEM;
+        goto fail;
+    }
+
+    next_config = *core_config;
+    next_config.api_key = api_key;
+    next_config.backend_type = backend_type;
+    next_config.model = model;
+    next_config.base_url = base_url;
+    next_config.auth_type = auth_type;
+    next_config.max_tokens_field = max_tokens_field;
+    next_config.system_prompt = system_prompt;
+
+    claw_agent_mgr_lock();
+    free(s_mgr.api_key);
+    free(s_mgr.backend_type);
+    free(s_mgr.model);
+    free(s_mgr.base_url);
+    free(s_mgr.auth_type);
+    free(s_mgr.max_tokens_field);
+    free(s_mgr.system_prompt);
+    s_mgr.api_key = api_key;
+    s_mgr.backend_type = backend_type;
+    s_mgr.model = model;
+    s_mgr.base_url = base_url;
+    s_mgr.auth_type = auth_type;
+    s_mgr.max_tokens_field = max_tokens_field;
+    s_mgr.system_prompt = system_prompt;
+    s_mgr.core_config = next_config;
+    api_key = NULL;
+    backend_type = NULL;
+    model = NULL;
+    base_url = NULL;
+    auth_type = NULL;
+    max_tokens_field = NULL;
+    system_prompt = NULL;
+
+    for (size_t i = 0; i < CLAW_AGENT_MGR_MAX_AGENTS; i++) {
+        if (s_mgr.agents[i].occupied && s_mgr.agents[i].core) {
+            esp_err_t update_err = claw_core_update_llm_config(s_mgr.agents[i].core,
+                                                               &s_mgr.core_config);
+            if (update_err != ESP_OK && err == ESP_OK) {
+                err = update_err;
+            }
+        }
+    }
+    claw_agent_mgr_unlock();
+    if (err == ESP_OK) {
+        ESP_LOGI(TAG, "Updated agent manager LLM config");
+    }
+
+fail:
+    free(api_key);
+    free(backend_type);
+    free(model);
+    free(base_url);
+    free(auth_type);
+    free(max_tokens_field);
+    free(system_prompt);
+    return err;
+}
+
 static void claw_agent_mgr_fill_core_config(claw_agent_mgr_agent_t *agent,
                                             claw_core_config_t *out_config)
 {
@@ -457,6 +552,7 @@ static void claw_agent_mgr_fill_core_config(claw_agent_mgr_agent_t *agent,
 static esp_err_t claw_agent_mgr_start_agent_core(claw_agent_mgr_agent_t *agent)
 {
     claw_core_config_t core_config = {0};
+    claw_core_context_provider_t cap_tools_provider = {0};
     char *agent_system_prompt = NULL;
     esp_err_t ret;
 
@@ -478,6 +574,12 @@ static esp_err_t claw_agent_mgr_start_agent_core(claw_agent_mgr_agent_t *agent)
     agent->cap_user_ctx.core = &agent->core;
     agent->cap_user_ctx.caller = agent->role == CLAW_AGENT_MGR_ROLE_ROOT ?
                                  CLAW_CAP_CALLER_ROOT_AGENT : CLAW_CAP_CALLER_SUB_AGENT;
+    agent->cap_user_ctx.agent_id = agent->agent_id;
+    agent->cap_user_ctx.agent_type = agent->agent_type;
+    agent->cap_user_ctx.parent_agent_id = agent->role == CLAW_AGENT_MGR_ROLE_SUBAGENT ?
+                                          CLAW_AGENT_MGR_ROOT_AGENT_ID : NULL;
+    agent->cap_user_ctx.parent_session_id = agent->role == CLAW_AGENT_MGR_ROLE_SUBAGENT ?
+                                            agent->parent_session_id : NULL;
 
     ret = claw_core_create(&core_config, &agent->core);
     free(agent_system_prompt);
@@ -490,10 +592,11 @@ static esp_err_t claw_agent_mgr_start_agent_core(claw_agent_mgr_agent_t *agent)
         ESP_GOTO_ON_ERROR(claw_core_add_context_provider(agent->core, &s_mgr.base_providers[i]),
                           fail, TAG, "add base context provider");
     }
-    ESP_GOTO_ON_ERROR(claw_core_add_context_provider(agent->core,
-                                                    agent->role == CLAW_AGENT_MGR_ROLE_ROOT ?
-                                                    &claw_cap_root_agent_tools_provider :
-                                                    &claw_cap_sub_agent_tools_provider),
+    cap_tools_provider = agent->role == CLAW_AGENT_MGR_ROLE_ROOT ?
+                         claw_cap_root_agent_tools_provider :
+                         claw_cap_sub_agent_tools_provider;
+    cap_tools_provider.user_ctx = &agent->cap_user_ctx;
+    ESP_GOTO_ON_ERROR(claw_core_add_context_provider(agent->core, &cap_tools_provider),
                       fail, TAG, "add cap tools provider");
     if (agent->role == CLAW_AGENT_MGR_ROLE_SUBAGENT) {
         ESP_GOTO_ON_ERROR(claw_core_add_completion_observer(agent->core,
@@ -519,7 +622,7 @@ esp_err_t claw_agent_mgr_create_root_agent(const char **out_agent_id)
     claw_agent_mgr_agent_t *agent = NULL;
     esp_err_t err;
 
-    if (!s_mgr.initialized) {
+    if (!claw_agent_mgr_is_ready()) {
         return ESP_ERR_INVALID_STATE;
     }
 
@@ -635,9 +738,13 @@ static void claw_agent_mgr_completion_observer(const claw_core_completion_summar
     if ((size_t)written >= sizeof(text)) {
         size_t suffix_len = strlen(truncated_suffix);
         if (suffix_len + 1U < sizeof(text)) {
-            strlcpy(text + sizeof(text) - suffix_len - 1U,
-                    truncated_suffix,
-                    suffix_len + 1U);
+            size_t p = sizeof(text) - suffix_len - 1U;
+            /* Back off so the suffix never splices into the middle of a
+             * multi-byte UTF-8 sequence, which would emit invalid bytes. */
+            while (p > 0 && ((unsigned char)text[p] & 0xC0) == 0x80) {
+                p--;
+            }
+            strlcpy(text + p, truncated_suffix, sizeof(text) - p);
         }
     }
 
@@ -677,6 +784,9 @@ esp_err_t claw_agent_mgr_submit_root(const claw_agent_mgr_root_input_t *input,
 
     if (!input || !input->user_text || !input->user_text[0]) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (!claw_agent_mgr_is_ready()) {
+        return ESP_ERR_INVALID_STATE;
     }
 
     err = claw_agent_mgr_build_root_session_id(input,
@@ -722,6 +832,9 @@ esp_err_t claw_agent_mgr_submit_root_text(const char *text,
 
     if (!text || !text[0]) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (!claw_agent_mgr_is_ready()) {
+        return ESP_ERR_INVALID_STATE;
     }
 
     claw_agent_mgr_lock();

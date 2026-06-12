@@ -5,8 +5,10 @@ idf_component_register(
         "include"
     REQUIRES
         claw_cap
+        claw_core
         esp_netif
         esp_wifi
     PRIV_REQUIRES
+        esp_app_format
         esp_timer
 )

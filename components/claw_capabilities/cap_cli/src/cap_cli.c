@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "claw_cap.h"
+#include "claw_utils_string.h"
 #include "cJSON.h"
 #include "esp_console.h"
 #include "esp_log.h"
@@ -297,7 +298,7 @@ static esp_err_t cap_cli_execute(const char *input_json,
     captured_len = strlen(captured_output);
     keep_len = captured_len;
     if (s_cli.max_output_bytes > 0 && keep_len > s_cli.max_output_bytes) {
-        keep_len = s_cli.max_output_bytes;
+        keep_len = claw_utils_utf8_prefix_len(captured_output, s_cli.max_output_bytes);
         truncated_suffix = "\n[truncated]";
     }
 

@@ -68,8 +68,13 @@ esp_err_t claw_memory_load_index(cJSON **out_root)
         return ESP_FAIL;
     }
 
+    /* cJSON_ReplaceItemInObject only takes ownership of the new node when the
+     * key already exists; on a malformed/legacy index that is MISSING the key
+     * entirely it returns false and leaks the freshly-created node. Delete +
+     * add handles both the absent and wrong-type cases without leaking. */
     if (!cJSON_IsArray(cJSON_GetObjectItem(root, "summaries"))) {
-        cJSON_ReplaceItemInObject(root, "summaries", cJSON_CreateArray());
+        cJSON_DeleteItemFromObject(root, "summaries");
+        cJSON_AddItemToObject(root, "summaries", cJSON_CreateArray());
     }
     if (!cJSON_IsNumber(cJSON_GetObjectItem(root, "next_summary_id"))) {
         cJSON_AddNumberToObject(root, "next_summary_id", 1);
@@ -78,7 +83,8 @@ esp_err_t claw_memory_load_index(cJSON **out_root)
         cJSON_AddNumberToObject(root, "last_compact_digest_size", 0);
     }
     if (!cJSON_IsObject(cJSON_GetObjectItem(root, "keyword_index"))) {
-        cJSON_ReplaceItemInObject(root, "keyword_index", cJSON_CreateObject());
+        cJSON_DeleteItemFromObject(root, "keyword_index");
+        cJSON_AddItemToObject(root, "keyword_index", cJSON_CreateObject());
     }
     {
         cJSON *summaries = cJSON_GetObjectItem(root, "summaries");
@@ -682,7 +688,11 @@ void claw_memory_rebuild_keyword_index(cJSON *index_root,
             claw_memory_keyword_index_add_csv(keyword_index, item->id, item->tags);
         }
     }
-    cJSON_ReplaceItemInObject(index_root, "keyword_index", keyword_index);
+    /* Replace only takes ownership when the key exists; delete+add handles a
+     * root missing keyword_index without leaking the freshly built object
+     * (consistent with claw_memory_load_index). */
+    cJSON_DeleteItemFromObject(index_root, "keyword_index");
+    cJSON_AddItemToObject(index_root, "keyword_index", keyword_index);
 }
 
 esp_err_t claw_memory_export_markdown_internal(char **out_markdown,

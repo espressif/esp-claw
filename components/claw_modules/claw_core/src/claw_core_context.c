@@ -226,7 +226,7 @@ void claw_core_finish_from_plain_text(uint32_t request_id,
 
     response->completion_type = CLAW_CORE_COMPLETION_DONE;
     free(response->text);
-    response->text = claw_core_dup_string(text);
+    response->text = claw_utils_string_dup(text);
     free(response->error_message);
     response->error_message = NULL;
 
@@ -282,7 +282,7 @@ esp_err_t claw_core_append_tool_results_messages(claw_core_state_t *core,
                              &tool_output,
                              core->cap_user_ctx);
         if (err != ESP_OK && !tool_output) {
-            tool_output = claw_core_dup_string(esp_err_to_name(err));
+            tool_output = claw_utils_string_dup(esp_err_to_name(err));
         }
         if (!tool_output) {
             ret = ESP_ERR_NO_MEM;
@@ -497,7 +497,7 @@ esp_err_t claw_core_build_iteration_context(claw_core_state_t *core,
     *out_messages = NULL;
     *out_tools_json = NULL;
 
-    system_prompt = claw_core_dup_string(core->system_prompt);
+    system_prompt = claw_utils_string_dup(core->system_prompt);
     messages = cJSON_CreateArray();
     tools = cJSON_CreateArray();
     if (!system_prompt || !messages || !tools) {

@@ -101,16 +101,22 @@ static void log_status_line(const char *command,
 
 static int cmd_wifi_status(void)
 {
-    app_config_t config = {0};
+    app_config_t *config = calloc(1, sizeof(*config));
     wifi_manager_status_t status = {0};
-    esp_err_t err = app_config_load(&config);
+    esp_err_t err;
 
+    if (!config) {
+        return log_error("status", ESP_ERR_NO_MEM, "failed_to_allocate_config");
+    }
+    err = app_config_load(config);
     if (err != ESP_OK) {
+        free(config);
         return log_error("status", err, "failed_to_load_saved_config");
     }
 
     wifi_manager_get_status(&status);
-    log_status_line("status", &status, &config, NULL);
+    log_status_line("status", &status, config, NULL);
+    free(config);
     return 0;
 }
 
@@ -168,51 +174,71 @@ static int cmd_wifi_apply_loaded_config(const app_config_t *config, const char *
 
 static int cmd_wifi_apply(void)
 {
-    app_config_t config = {0};
-    esp_err_t err = app_config_load(&config);
+    app_config_t *config = calloc(1, sizeof(*config));
+    esp_err_t err;
+    int ret;
 
+    if (!config) {
+        return log_error("apply", ESP_ERR_NO_MEM, "failed_to_allocate_config");
+    }
+    err = app_config_load(config);
     if (err != ESP_OK) {
+        free(config);
         return log_error("apply", err, "failed_to_load_saved_config");
     }
 
-    return cmd_wifi_apply_loaded_config(&config, "apply");
+    ret = cmd_wifi_apply_loaded_config(config, "apply");
+    free(config);
+    return ret;
 }
 
 static int cmd_wifi_set(bool apply_now)
 {
-    app_config_t config = {0};
-    esp_err_t err = app_config_load(&config);
+    app_config_t *config = calloc(1, sizeof(*config));
+    esp_err_t err;
+    int ret;
 
+    if (!config) {
+        return log_error("set", ESP_ERR_NO_MEM, "failed_to_allocate_config");
+    }
+    err = app_config_load(config);
     if (err != ESP_OK) {
+        free(config);
         return log_error("set", err, "failed_to_load_saved_config");
     }
 
     if (!wifi_args.ssid->count) {
+        free(config);
         return log_error("set", ESP_ERR_INVALID_ARG, "missing_ssid");
     }
 
-    strlcpy(config.wifi_ssid, wifi_args.ssid->sval[0], sizeof(config.wifi_ssid));
+    strlcpy(config->wifi_ssid, wifi_args.ssid->sval[0], sizeof(config->wifi_ssid));
     if (wifi_args.password->count) {
-        strlcpy(config.wifi_password, wifi_args.password->sval[0], sizeof(config.wifi_password));
+        strlcpy(config->wifi_password, wifi_args.password->sval[0], sizeof(config->wifi_password));
     }
 
     const char *validation_message = NULL;
-    err = app_config_validate_wifi(&config, &validation_message);
+    err = app_config_validate_wifi(config, &validation_message);
     if (err != ESP_OK) {
+        free(config);
         return log_error("set", err, validation_message ? validation_message : "invalid_ap_config");
     }
 
-    err = app_config_save(&config);
+    err = app_config_save(config);
     if (err != ESP_OK) {
+        free(config);
         return log_error("set", err, "failed_to_save_config");
     }
 
     if (apply_now) {
-        return cmd_wifi_apply_loaded_config(&config, "set");
+        ret = cmd_wifi_apply_loaded_config(config, "set");
+        free(config);
+        return ret;
     }
 
     /* ssid last to tolerate spaces */
-    ESP_LOGI(TAG, "cmd=set ok=1 msg=config_saved applied=0 ssid=%s", config.wifi_ssid);
+    ESP_LOGI(TAG, "cmd=set ok=1 msg=config_saved applied=0 ssid=%s", config->wifi_ssid);
+    free(config);
     return 0;
 }
 

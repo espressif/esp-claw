@@ -36,14 +36,12 @@
 #if CONFIG_APP_CLAW_CAP_LLM_INSPECT
 #include "cap_llm_inspect.h"
 #endif
+#include "cap_llm_config.h"
 #if CONFIG_APP_CLAW_CAP_LUA
 #include "cap_lua.h"
 #endif
 #if CONFIG_APP_CLAW_CAP_MCP_CLIENT
 #include "cap_mcp_client.h"
-#endif
-#if CONFIG_APP_CLAW_CAP_MCP_SERVER
-#include "cap_mcp_server.h"
 #endif
 #if CONFIG_APP_CLAW_CAP_ROUTER_MGR
 #include "cap_router_mgr.h"
@@ -60,9 +58,6 @@
 #if CONFIG_APP_CLAW_CAP_SYSTEM
 #include "cap_system.h"
 #endif
-#if CONFIG_APP_CLAW_CAP_TIME
-#include "cap_time.h"
-#endif
 #if CONFIG_APP_CLAW_CAP_HTTP_REQUEST
 #include "cap_http_request.h"
 #endif
@@ -70,7 +65,9 @@
 #include "cap_web_search.h"
 #endif
 #include "claw_cap.h"
+#if CONFIG_APP_CLAW_CAP_MEMORY
 #include "claw_memory.h"
+#endif
 #include "claw_paths.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -236,6 +233,117 @@ static esp_err_t app_cap_register_entry(const app_capability_group_entry_t *entr
              (unsigned)group_list.count,
              (unsigned)cap_list.count);
     return ESP_OK;
+}
+
+static void app_cap_copy_app_to_llm_config(const app_claw_config_t *app_config,
+                                           cap_llm_config_t *llm_config)
+{
+    strlcpy(llm_config->api_key, app_config->llm_api_key, sizeof(llm_config->api_key));
+    strlcpy(llm_config->backend_type, app_config->llm_backend_type, sizeof(llm_config->backend_type));
+    strlcpy(llm_config->model, app_config->llm_model, sizeof(llm_config->model));
+    strlcpy(llm_config->base_url, app_config->llm_base_url, sizeof(llm_config->base_url));
+    strlcpy(llm_config->auth_type, app_config->llm_auth_type, sizeof(llm_config->auth_type));
+    strlcpy(llm_config->timeout_ms, app_config->llm_timeout_ms, sizeof(llm_config->timeout_ms));
+    strlcpy(llm_config->max_tokens, app_config->llm_max_tokens, sizeof(llm_config->max_tokens));
+    strlcpy(llm_config->default_image_max_bytes,
+            app_config->llm_default_image_max_bytes,
+            sizeof(llm_config->default_image_max_bytes));
+    strlcpy(llm_config->max_tokens_field,
+            app_config->llm_max_tokens_field,
+            sizeof(llm_config->max_tokens_field));
+    strlcpy(llm_config->supports_tools, app_config->llm_supports_tools, sizeof(llm_config->supports_tools));
+    strlcpy(llm_config->supports_vision, app_config->llm_supports_vision, sizeof(llm_config->supports_vision));
+    strlcpy(llm_config->image_remote_url_only,
+            app_config->llm_image_remote_url_only,
+            sizeof(llm_config->image_remote_url_only));
+}
+
+static void app_cap_copy_llm_to_app_config(const cap_llm_config_t *llm_config,
+                                           app_claw_config_t *app_config)
+{
+    strlcpy(app_config->llm_api_key, llm_config->api_key, sizeof(app_config->llm_api_key));
+    strlcpy(app_config->llm_backend_type, llm_config->backend_type, sizeof(app_config->llm_backend_type));
+    strlcpy(app_config->llm_model, llm_config->model, sizeof(app_config->llm_model));
+    strlcpy(app_config->llm_base_url, llm_config->base_url, sizeof(app_config->llm_base_url));
+    strlcpy(app_config->llm_auth_type, llm_config->auth_type, sizeof(app_config->llm_auth_type));
+    strlcpy(app_config->llm_timeout_ms, llm_config->timeout_ms, sizeof(app_config->llm_timeout_ms));
+    strlcpy(app_config->llm_max_tokens, llm_config->max_tokens, sizeof(app_config->llm_max_tokens));
+    strlcpy(app_config->llm_default_image_max_bytes,
+            llm_config->default_image_max_bytes,
+            sizeof(app_config->llm_default_image_max_bytes));
+    strlcpy(app_config->llm_max_tokens_field,
+            llm_config->max_tokens_field,
+            sizeof(app_config->llm_max_tokens_field));
+    strlcpy(app_config->llm_supports_tools, llm_config->supports_tools, sizeof(app_config->llm_supports_tools));
+    strlcpy(app_config->llm_supports_vision, llm_config->supports_vision, sizeof(app_config->llm_supports_vision));
+    strlcpy(app_config->llm_image_remote_url_only,
+            llm_config->image_remote_url_only,
+            sizeof(app_config->llm_image_remote_url_only));
+}
+
+static esp_err_t app_cap_llm_config_get(cap_llm_config_t *out_config, void *user_ctx)
+{
+    app_claw_config_t *app_config = NULL;
+    esp_err_t err;
+
+    (void)user_ctx;
+    if (!out_config) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    app_config = calloc(1, sizeof(*app_config));
+    if (!app_config) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    err = app_claw_get_config(app_config);
+    if (err != ESP_OK) {
+        free(app_config);
+        return err;
+    }
+
+    app_cap_copy_app_to_llm_config(app_config, out_config);
+    free(app_config);
+    return ESP_OK;
+}
+
+static esp_err_t app_cap_llm_config_apply(const cap_llm_config_t *config, void *user_ctx)
+{
+    app_claw_config_t *app_config = NULL;
+    esp_err_t err;
+
+    (void)user_ctx;
+    if (!config) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    app_config = calloc(1, sizeof(*app_config));
+    if (!app_config) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    err = app_claw_get_config(app_config);
+    if (err != ESP_OK) {
+        free(app_config);
+        return err;
+    }
+
+    app_cap_copy_llm_to_app_config(config, app_config);
+    err = app_claw_apply_config(app_config);
+    free(app_config);
+    return err;
+}
+
+static esp_err_t app_cap_register_llm_config_command(void)
+{
+    ESP_RETURN_ON_ERROR(cap_llm_config_set_provider(&(cap_llm_config_provider_t) {
+                            .get_config = app_cap_llm_config_get,
+                            .apply_config = app_cap_llm_config_apply,
+                        }),
+                        TAG,
+                        "Failed to set LLM config provider");
+
+    return cap_llm_config_register_group();
 }
 
 #if CONFIG_APP_CLAW_CAP_FILES
@@ -451,16 +559,6 @@ static esp_err_t app_cap_register_mcp_client(const app_claw_config_t *config,
 }
 #endif
 
-#if CONFIG_APP_CLAW_CAP_MCP_SERVER
-static esp_err_t app_cap_register_mcp_server(const app_claw_config_t *config,
-                                             const app_claw_storage_paths_t *paths)
-{
-    (void)config;
-    (void)paths;
-    return cap_mcp_server_register_group();
-}
-#endif
-
 #if CONFIG_APP_CLAW_CAP_SKILL_MGR
 static esp_err_t app_cap_register_skill_mgr(const app_claw_config_t *config,
                                             const app_claw_storage_paths_t *paths)
@@ -480,23 +578,13 @@ static esp_err_t app_cap_register_system(const app_claw_config_t *config,
 }
 #endif
 
-#if CONFIG_APP_CLAW_MEMORY_MODE_FULL
+#if CONFIG_APP_CLAW_CAP_MEMORY && CONFIG_APP_CLAW_MEMORY_MODE_FULL
 static esp_err_t app_cap_register_memory(const app_claw_config_t *config,
                                          const app_claw_storage_paths_t *paths)
 {
     (void)config;
     (void)paths;
     return claw_memory_register_group();
-}
-#endif
-
-#if CONFIG_APP_CLAW_CAP_TIME
-static esp_err_t app_cap_register_time(const app_claw_config_t *config,
-                                       const app_claw_storage_paths_t *paths)
-{
-    (void)config;
-    (void)paths;
-    return cap_time_register_group();
 }
 #endif
 
@@ -619,20 +707,14 @@ static const app_capability_group_entry_t s_capability_group_entries[] = {
 #if CONFIG_APP_CLAW_CAP_MCP_CLIENT
     { "cap_mcp_client", "MCP Client", "Register MCP client cap", false, NULL, app_cap_register_mcp_client },
 #endif
-#if CONFIG_APP_CLAW_CAP_MCP_SERVER
-    { "cap_mcp_server", "MCP Server", "Register MCP server cap", false, NULL, app_cap_register_mcp_server },
-#endif
 #if CONFIG_APP_CLAW_CAP_SKILL_MGR
     { "cap_skill", "Skill Manager", "Register skill cap", true, NULL, app_cap_register_skill_mgr },
 #endif
 #if CONFIG_APP_CLAW_CAP_SYSTEM
-    { "cap_system", "System", "Register system cap", false, NULL, app_cap_register_system },
+    { "cap_system", "System", "Register system cap", true, NULL, app_cap_register_system },
 #endif
-#if CONFIG_APP_CLAW_MEMORY_MODE_FULL
+#if CONFIG_APP_CLAW_CAP_MEMORY && CONFIG_APP_CLAW_MEMORY_MODE_FULL
     { "claw_memory", "Memory", "Register claw_memory group", true, NULL, app_cap_register_memory },
-#endif
-#if CONFIG_APP_CLAW_CAP_TIME
-    { "cap_time", "Time", "Register time cap", false, NULL, app_cap_register_time },
 #endif
 #if CONFIG_APP_CLAW_CAP_LLM_INSPECT
     { "cap_llm_inspect", "LLM Inspect", "Register LLM inspect cap", true, NULL, app_cap_register_llm_inspect },
@@ -682,20 +764,14 @@ static const app_capability_group_info_t s_capability_group_infos[] = {
 #if CONFIG_APP_CLAW_CAP_MCP_CLIENT
     { "cap_mcp_client", "MCP Client", false },
 #endif
-#if CONFIG_APP_CLAW_CAP_MCP_SERVER
-    { "cap_mcp_server", "MCP Server", false },
-#endif
 #if CONFIG_APP_CLAW_CAP_SKILL_MGR
     { "cap_skill", "Skill Manager", true },
 #endif
 #if CONFIG_APP_CLAW_CAP_SYSTEM
     { "cap_system", "System", true },
 #endif
-#if CONFIG_APP_CLAW_MEMORY_MODE_FULL
+#if CONFIG_APP_CLAW_CAP_MEMORY && CONFIG_APP_CLAW_MEMORY_MODE_FULL
     { "claw_memory", "Memory", true },
-#endif
-#if CONFIG_APP_CLAW_CAP_TIME
-    { "cap_time", "Time", false },
 #endif
 #if CONFIG_APP_CLAW_CAP_LLM_INSPECT
     { "cap_llm_inspect", "LLM Inspect", false },
@@ -730,6 +806,8 @@ esp_err_t app_capabilities_init(const app_claw_config_t *config,
     }
 
     ESP_RETURN_ON_ERROR(claw_cap_init(), TAG, "Failed to init claw_cap");
+    ESP_GOTO_ON_ERROR(app_cap_register_llm_config_command(),
+                      cleanup, TAG, "Failed to register LLM config command");
 
     enabled_map = calloc(entry_count > 0 ? entry_count : 1, sizeof(enabled_map[0]));
     llm_visible_map = calloc(entry_count > 0 ? entry_count : 1, sizeof(llm_visible_map[0]));

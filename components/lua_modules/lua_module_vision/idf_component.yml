@@ -5,3 +5,8 @@ dependencies:
 
   lua_module_image:
     path: ../lua_module_image
+
+  espressif/esp-dl:
+    version: "~3.3.0"
+    rules:
+      - if: "$CONFIG{LUA_MODULE_VISION_ESPDET} == True"
