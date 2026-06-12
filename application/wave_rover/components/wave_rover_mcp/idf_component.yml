@@ -1,0 +1,3 @@
+dependencies:
+  espressif/mcp-c-sdk: "^1.0.0"
+  espressif/cjson: "*"

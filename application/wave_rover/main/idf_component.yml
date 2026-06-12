@@ -1,0 +1,9 @@
+dependencies:
+  espressif/mdns:
+    version: "^1.0.0"
+  wave_rover_config:
+    path: ../components/wave_rover_config
+  wave_rover_hal:
+    path: ../components/wave_rover_hal
+  wave_rover_mcp:
+    path: ../components/wave_rover_mcp
