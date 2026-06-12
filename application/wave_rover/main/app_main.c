@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_heap_caps.h"
+#include "esp_ota_ops.h"
 #include "mdns.h"
 #include "wave_rover_config.h"
 #include "wave_rover_hal.h"
@@ -71,6 +72,14 @@ void app_main(void)
 
     ESP_LOGI(TAG, "boot complete. MCP at http://%s:%u/mcp",
              ip[0] ? ip : "<AP>", s_cfg.mcp_port);
+
+    esp_ota_img_states_t ota_state;
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    if (esp_ota_get_state_partition(running, &ota_state) == ESP_OK &&
+        ota_state == ESP_OTA_IMG_PENDING_VERIFY) {
+        esp_ota_mark_app_valid_cancel_rollback();
+        ESP_LOGI(TAG, "OTA image marked valid");
+    }
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(30000));
