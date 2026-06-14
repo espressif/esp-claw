@@ -35,6 +35,7 @@ struct wr_power_mgr_t {
     wr_power_mode_cb_t    cb;
     void                 *cb_ctx;
     SemaphoreHandle_t     mutex;
+    SemaphoreHandle_t     stopped_sem;
     TaskHandle_t          eval_task;
     bool                  running;
 };
@@ -141,6 +142,7 @@ static void eval_task_fn(void *arg)
 
         xSemaphoreGive(m->mutex);
     }
+    xSemaphoreGive(m->stopped_sem);
     vTaskDelete(NULL);
 }
 
@@ -160,6 +162,12 @@ esp_err_t wr_power_mgr_create(const wr_power_mgr_config_t *config,
         free(m);
         return ESP_ERR_NO_MEM;
     }
+    m->stopped_sem = xSemaphoreCreateBinary();
+    if (!m->stopped_sem) {
+        vSemaphoreDelete(m->mutex);
+        free(m);
+        return ESP_ERR_NO_MEM;
+    }
     *ret_handle = m;
     return ESP_OK;
 }
@@ -167,8 +175,12 @@ esp_err_t wr_power_mgr_create(const wr_power_mgr_config_t *config,
 esp_err_t wr_power_mgr_delete(wr_power_mgr_handle_t handle)
 {
     if (!handle) return ESP_ERR_INVALID_ARG;
-    handle->running = false;
+    if (handle->eval_task) {
+        handle->running = false;
+        xSemaphoreTake(handle->stopped_sem, portMAX_DELAY);
+    }
     if (handle->mutex) vSemaphoreDelete(handle->mutex);
+    if (handle->stopped_sem) vSemaphoreDelete(handle->stopped_sem);
     free(handle);
     return ESP_OK;
 }
