@@ -44,7 +44,7 @@ typedef struct {
     float    power_critical_battery_v;     /* forces LOW_POWER + motor stop below this */
     uint16_t power_telemetry_active_sec;   /* INA219 poll interval in ACTIVE */
     uint16_t power_telemetry_idle_sec;     /* INA219 poll interval in IDLE */
-    uint16_t power_telemetry_low_power_sec;/* INA219 poll interval in LOW_POWER */
+    uint16_t power_telemetry_low_power_sec; /* INA219 poll interval in LOW_POWER */
 } wave_rover_config_t;
 
 esp_err_t wave_rover_config_init(void);
