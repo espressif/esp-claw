@@ -1535,9 +1535,17 @@ CONFIG_ESP_PHY_IRAM_OPT=y
 # default:
 # CONFIG_PM_SLEEP_FUNC_IN_IRAM is not set
 # default:
-# CONFIG_PM_ENABLE is not set
+CONFIG_PM_ENABLE=y
+# default:
+# CONFIG_PM_DFS_INIT_AUTO is not set
+# default:
+# CONFIG_PM_PROFILING is not set
+# default:
+# CONFIG_PM_TRACE is not set
 # default:
 # CONFIG_PM_SLP_IRAM_OPT is not set
+# default:
+CONFIG_PM_LIGHTSLEEP_RTC_OSC_CAL_INTERVAL=1
 # end of Power Management
 
 #
@@ -2029,6 +2037,8 @@ CONFIG_FREERTOS_TASK_NOTIFICATION_ARRAY_ENTRIES=1
 # CONFIG_FREERTOS_USE_LIST_DATA_INTEGRITY_CHECK_BYTES is not set
 # default:
 # CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS is not set
+# default:
+# CONFIG_FREERTOS_USE_TICKLESS_IDLE is not set
 # default:
 # CONFIG_FREERTOS_USE_APPLICATION_TASK_TAG is not set
 # end of Kernel

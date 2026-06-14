@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_wifi.h"
+#include "esp_pm.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -50,13 +52,37 @@ const char *wr_power_mode_name(wr_power_mode_t mode)
     }
 }
 
-/* Side effects applied on transition. Task 3 fills this in; for now it
- * only logs. Always succeeds — individual peripheral failures inside it
- * (added in Task 3) are logged but never block the transition. */
+/* Side effects applied on transition. Always succeeds — individual
+ * peripheral failures inside it are logged but never block the
+ * transition. */
 static void apply_mode(struct wr_power_mgr_t *m, wr_power_mode_t mode)
 {
-    (void)m;
-    (void)mode;
+    if (m->config.wifi_power_save) {
+        wifi_ps_type_t ps;
+        switch (mode) {
+        case WR_POWER_MODE_ACTIVE:    ps = WIFI_PS_NONE; break;
+        case WR_POWER_MODE_IDLE:      ps = WIFI_PS_MIN_MODEM; break;
+        case WR_POWER_MODE_LOW_POWER: ps = WIFI_PS_MAX_MODEM; break;
+        default:                      ps = WIFI_PS_NONE; break;
+        }
+        esp_err_t err = esp_wifi_set_ps(ps);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "power: esp_wifi_set_ps(%d) failed: %s", ps, esp_err_to_name(err));
+        }
+    }
+
+    if (m->config.reduce_cpu_frequency) {
+        int min_mhz = (mode == WR_POWER_MODE_ACTIVE) ? 240 : 80;
+        esp_pm_config_t pm_cfg = {
+            .max_freq_mhz = 240,
+            .min_freq_mhz = min_mhz,
+            .light_sleep_enable = false,
+        };
+        esp_err_t err = esp_pm_configure(&pm_cfg);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "power: esp_pm_configure(min=%d) failed: %s", min_mhz, esp_err_to_name(err));
+        }
+    }
 }
 
 /* Caller must hold m->mutex. */
