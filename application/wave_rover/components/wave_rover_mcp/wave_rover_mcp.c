@@ -424,6 +424,7 @@ esp_err_t wave_rover_mcp_start(const wave_rover_config_t *cfg,
     wr_mcp_web_set_power_mgr(s_power_mgr);
     ESP_RETURN_ON_ERROR(wr_mcp_web_register(s_httpd, cfg), TAG, "web ui");
     ESP_RETURN_ON_ERROR(wr_mcp_metrics_register(s_httpd, cfg), TAG, "metrics");
+    wr_mcp_metrics_set_power_mgr(s_power_mgr);
 
     s_last_cmd_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
     s_keepalive_timer = xTimerCreate("mcp_ka", pdMS_TO_TICKS(5000),
