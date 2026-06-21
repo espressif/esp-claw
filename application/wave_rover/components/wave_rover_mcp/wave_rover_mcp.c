@@ -419,8 +419,8 @@ esp_err_t wave_rover_mcp_start(const wave_rover_config_t *cfg,
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(s_httpd, &mcp_uri),
                         TAG, "register uri");
 
-    ESP_RETURN_ON_ERROR(wr_mcp_web_register(s_httpd, cfg), TAG, "web ui");
     wr_mcp_web_set_power_mgr(s_power_mgr);
+    ESP_RETURN_ON_ERROR(wr_mcp_web_register(s_httpd, cfg), TAG, "web ui");
     ESP_RETURN_ON_ERROR(wr_mcp_metrics_register(s_httpd, cfg), TAG, "metrics");
 
     s_last_cmd_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
