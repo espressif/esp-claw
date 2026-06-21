@@ -377,7 +377,10 @@ static void sensor_poll_task(void *arg)
         wr_power_status_t ps = {0};
         wr_power_get_status(&ps);
         s_cached_bat_v = ps.load_voltage_v;
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        uint16_t interval_sec = s_web_power_mgr
+            ? wr_power_mgr_get_telemetry_interval_sec(s_web_power_mgr) : 1;
+        if (interval_sec < 1) interval_sec = 1;
+        vTaskDelay(pdMS_TO_TICKS((uint32_t)interval_sec * 1000));
     }
 }
 
