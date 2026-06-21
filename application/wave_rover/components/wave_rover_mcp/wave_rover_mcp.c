@@ -29,6 +29,7 @@ static const char *TAG = "wr_mcp";
 /* Forward declarations from wave_rover_mcp_tools.c */
 esp_err_t wr_mcp_register_all_tools(esp_mcp_t *mcp);
 void      wr_mcp_tools_set_config(const wave_rover_config_t *cfg);
+void      wr_mcp_tools_set_power_mgr(wr_power_mgr_handle_t pm);
 
 static esp_mcp_t                    *s_mcp    = NULL;
 static esp_mcp_mgr_handle_t          s_mgr    = 0;
@@ -37,6 +38,7 @@ static bool                          s_running = false;
 static TimerHandle_t                 s_keepalive_timer = NULL;
 static uint32_t                      s_last_cmd_ms = 0;
 static const wave_rover_config_t    *s_cfg    = NULL;
+static wr_power_mgr_handle_t         s_power_mgr = NULL;
 
 /* ------------------------------------------------------------------ */
 /* Null transport (no-op function table so the SDK engine works        */
@@ -381,13 +383,16 @@ static void keepalive_cb(TimerHandle_t t)
 /* Public API                                                          */
 /* ------------------------------------------------------------------ */
 
-esp_err_t wave_rover_mcp_start(const wave_rover_config_t *cfg)
+esp_err_t wave_rover_mcp_start(const wave_rover_config_t *cfg,
+                                wr_power_mgr_handle_t power_mgr)
 {
     if (s_running) return ESP_OK;
 
     s_cfg = cfg;
+    s_power_mgr = power_mgr;
     ESP_RETURN_ON_ERROR(esp_mcp_create(&s_mcp), TAG, "esp_mcp_create");
     wr_mcp_tools_set_config(cfg);
+    wr_mcp_tools_set_power_mgr(s_power_mgr);
     ESP_RETURN_ON_ERROR(wr_mcp_register_all_tools(s_mcp), TAG, "register tools");
 
     esp_mcp_mgr_config_t mcfg = {
@@ -415,6 +420,7 @@ esp_err_t wave_rover_mcp_start(const wave_rover_config_t *cfg)
                         TAG, "register uri");
 
     ESP_RETURN_ON_ERROR(wr_mcp_web_register(s_httpd, cfg), TAG, "web ui");
+    wr_mcp_web_set_power_mgr(s_power_mgr);
     ESP_RETURN_ON_ERROR(wr_mcp_metrics_register(s_httpd, cfg), TAG, "metrics");
 
     s_last_cmd_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
@@ -439,8 +445,9 @@ esp_err_t wave_rover_mcp_stop(void)
     if (s_httpd) { httpd_stop(s_httpd); s_httpd = NULL; }
     if (s_mgr)   { esp_mcp_mgr_deinit(s_mgr); s_mgr = 0; }
     if (s_mcp)   { esp_mcp_destroy(s_mcp); s_mcp = NULL; }
-    s_cfg     = NULL;
-    s_running = false;
+    s_cfg       = NULL;
+    s_power_mgr = NULL;
+    s_running   = false;
     return ESP_OK;
 }
 

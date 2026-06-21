@@ -5,6 +5,7 @@
 #include "wave_rover_hal.h"
 #include "wave_rover_config.h"
 #include "wave_rover_mcp_state.h"
+#include "wave_rover_power_mgr.h"
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
@@ -20,9 +21,11 @@
 
 static const char *TAG = "wr_tools";
 
-static const wave_rover_config_t *s_cfg = NULL;
+static const wave_rover_config_t *s_cfg       = NULL;
+static wr_power_mgr_handle_t      s_power_mgr = NULL;
 
 void wr_mcp_tools_set_config(const wave_rover_config_t *cfg) { s_cfg = cfg; }
+void wr_mcp_tools_set_power_mgr(wr_power_mgr_handle_t pm) { s_power_mgr = pm; }
 
 #define WR_FW_VERSION "0.1.0"
 #define WR_FW_NAME    "wave-rover-esp-claw-mcp"
@@ -109,6 +112,7 @@ static esp_mcp_value_t tool_get_config(const esp_mcp_property_list_t *p)
 
 static esp_mcp_value_t tool_stop(const esp_mcp_property_list_t *p)
 {
+    if (s_power_mgr) wr_power_mgr_notify_activity(s_power_mgr, "mcp_tool");
     const char *reason = esp_mcp_property_list_get_property_string(p, "reason");
     wr_motor_stop();
     ESP_LOGI(TAG, "rover.stop: %s", reason ? reason : "(no reason)");
@@ -159,6 +163,7 @@ static esp_mcp_value_t tool_clear_estop(const esp_mcp_property_list_t *p)
 
 static esp_mcp_value_t tool_move(const esp_mcp_property_list_t *p)
 {
+    if (s_power_mgr) wr_power_mgr_notify_activity(s_power_mgr, "mcp_tool");
     float linear  = (float)esp_mcp_property_list_get_property_float(p, "linear");
     float angular = (float)esp_mcp_property_list_get_property_float(p, "angular");
     int   dur_ms  = esp_mcp_property_list_get_property_int(p, "duration_ms");
@@ -210,6 +215,7 @@ static esp_mcp_value_t tool_move(const esp_mcp_property_list_t *p)
 
 static esp_mcp_value_t tool_drive_tank(const esp_mcp_property_list_t *p)
 {
+    if (s_power_mgr) wr_power_mgr_notify_activity(s_power_mgr, "mcp_tool");
     float left   = (float)esp_mcp_property_list_get_property_float(p, "left");
     float right  = (float)esp_mcp_property_list_get_property_float(p, "right");
     int   dur_ms = esp_mcp_property_list_get_property_int(p, "duration_ms");
@@ -250,6 +256,7 @@ static esp_mcp_value_t tool_drive_tank(const esp_mcp_property_list_t *p)
 
 static esp_mcp_value_t tool_turn(const esp_mcp_property_list_t *p)
 {
+    if (s_power_mgr) wr_power_mgr_notify_activity(s_power_mgr, "mcp_tool");
     const char *dir = esp_mcp_property_list_get_property_string(p, "direction");
     float spd       = (float)esp_mcp_property_list_get_property_float(p, "speed");
     int   dur_ms    = esp_mcp_property_list_get_property_int(p, "duration_ms");
@@ -410,6 +417,7 @@ static esp_mcp_value_t tool_calibrate_imu(const esp_mcp_property_list_t *p)
 
 static esp_mcp_value_t tool_display_text(const esp_mcp_property_list_t *p)
 {
+    if (s_power_mgr) wr_power_mgr_notify_activity(s_power_mgr, "mcp_tool");
     const char *text = esp_mcp_property_list_get_property_string(p, "text");
     int line         = esp_mcp_property_list_get_property_int(p, "line");
     bool clr         = esp_mcp_property_list_get_property_bool(p, "clear");
@@ -422,6 +430,7 @@ static esp_mcp_value_t tool_display_text(const esp_mcp_property_list_t *p)
 static esp_mcp_value_t tool_display_clear(const esp_mcp_property_list_t *p)
 {
     (void)p;
+    if (s_power_mgr) wr_power_mgr_notify_activity(s_power_mgr, "mcp_tool");
     wr_display_clear();
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root, "ok", true);
@@ -431,6 +440,7 @@ static esp_mcp_value_t tool_display_clear(const esp_mcp_property_list_t *p)
 static esp_mcp_value_t tool_display_status(const esp_mcp_property_list_t *p)
 {
     (void)p;
+    if (s_power_mgr) wr_power_mgr_notify_activity(s_power_mgr, "mcp_tool");
     wr_power_status_t ps = {0};
     wr_power_get_status(&ps);
     wr_display_status(WR_FW_VERSION, "MCP active", ps.load_voltage_v,
@@ -517,6 +527,7 @@ static esp_mcp_value_t tool_set_wifi(const esp_mcp_property_list_t *p)
 
 static esp_mcp_value_t tool_rotate_deg(const esp_mcp_property_list_t *p)
 {
+    if (s_power_mgr) wr_power_mgr_notify_activity(s_power_mgr, "mcp_tool");
     float angle_deg = (float)esp_mcp_property_list_get_property_float(p, "angle_deg");
     float speed     = (float)esp_mcp_property_list_get_property_float(p, "speed");
 
@@ -552,6 +563,7 @@ static esp_mcp_value_t tool_rotate_deg(const esp_mcp_property_list_t *p)
 
 static esp_mcp_value_t tool_drive_cm(const esp_mcp_property_list_t *p)
 {
+    if (s_power_mgr) wr_power_mgr_notify_activity(s_power_mgr, "mcp_tool");
     float distance_cm = (float)esp_mcp_property_list_get_property_float(p, "distance_cm");
     float speed       = (float)esp_mcp_property_list_get_property_float(p, "speed");
 
@@ -594,6 +606,7 @@ static esp_mcp_value_t tool_drive_cm(const esp_mcp_property_list_t *p)
 
 static esp_mcp_value_t tool_nav_to(const esp_mcp_property_list_t *p)
 {
+    if (s_power_mgr) wr_power_mgr_notify_activity(s_power_mgr, "mcp_tool");
     float distance_cm = (float)esp_mcp_property_list_get_property_float(p, "distance_cm");
     float angle_deg   = (float)esp_mcp_property_list_get_property_float(p, "angle_deg");
     float speed       = (float)esp_mcp_property_list_get_property_float(p, "speed");

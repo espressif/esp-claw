@@ -8,6 +8,7 @@
 #include "wave_rover_hal.h"
 #include "wave_rover_config.h"
 #include "wave_rover_mcp_state.h"
+#include "wave_rover_power_mgr.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -29,6 +30,9 @@ static const wave_rover_config_t *s_web_cfg     = NULL;
 static volatile uint32_t          s_web_deadline = 0;  /* ms; 0 = no active web motion */
 static TimerHandle_t              s_web_timer    = NULL;
 static volatile float             s_cached_bat_v = 0.0f; /* updated by sensor task, never by httpd */
+static wr_power_mgr_handle_t      s_web_power_mgr = NULL;
+
+void wr_mcp_web_set_power_mgr(wr_power_mgr_handle_t pm) { s_web_power_mgr = pm; }
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -410,6 +414,7 @@ static esp_err_t handle_status(httpd_req_t *req)
 static esp_err_t handle_cmd(httpd_req_t *req)
 {
     WEB_REQUIRE_AUTH(req);
+    if (s_web_power_mgr) wr_power_mgr_notify_activity(s_web_power_mgr, "web");
     char query[160] = {0};
     char action[32] = "stop";
     int  y = 0, z = 0;
@@ -470,14 +475,19 @@ static esp_err_t handle_update(httpd_req_t *req)
 {
     WEB_REQUIRE_AUTH(req);
 
+    uint32_t ota_lock_id = 0;
+    if (s_web_power_mgr) wr_power_mgr_acquire_lock(s_web_power_mgr, "ota", 0, &ota_lock_id);
+
     int total = (int)req->content_len;
     if (total <= 0 || total > OTA_MAX) {
+        if (s_web_power_mgr && ota_lock_id) wr_power_mgr_release_lock(s_web_power_mgr, ota_lock_id);
         httpd_resp_set_status(req, "400 Bad Request");
         return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"size\"}");
     }
 
     const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
     if (!part) {
+        if (s_web_power_mgr && ota_lock_id) wr_power_mgr_release_lock(s_web_power_mgr, ota_lock_id);
         httpd_resp_set_status(req, "500 Internal Server Error");
         return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"no_ota_partition\"}");
     }
@@ -485,6 +495,7 @@ static esp_err_t handle_update(httpd_req_t *req)
     esp_ota_handle_t ota = 0;
     esp_err_t err = esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, &ota);
     if (err != ESP_OK) {
+        if (s_web_power_mgr && ota_lock_id) wr_power_mgr_release_lock(s_web_power_mgr, ota_lock_id);
         ESP_LOGE(TAG, "ota begin: %s", esp_err_to_name(err));
         httpd_resp_set_status(req, "500 Internal Server Error");
         return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"begin\"}");
@@ -492,6 +503,7 @@ static esp_err_t handle_update(httpd_req_t *req)
 
     char *buf = malloc(OTA_CHUNK);
     if (!buf) {
+        if (s_web_power_mgr && ota_lock_id) wr_power_mgr_release_lock(s_web_power_mgr, ota_lock_id);
         esp_ota_abort(ota);
         httpd_resp_set_status(req, "500 Internal Server Error");
         return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"oom\"}");
@@ -518,6 +530,7 @@ static esp_err_t handle_update(httpd_req_t *req)
     free(buf);
 
     if (!write_ok) {
+        if (s_web_power_mgr && ota_lock_id) wr_power_mgr_release_lock(s_web_power_mgr, ota_lock_id);
         esp_ota_abort(ota);
         httpd_resp_set_status(req, "500 Internal Server Error");
         return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"write\"}");
@@ -525,6 +538,7 @@ static esp_err_t handle_update(httpd_req_t *req)
 
     err = esp_ota_end(ota);
     if (err != ESP_OK) {
+        if (s_web_power_mgr && ota_lock_id) wr_power_mgr_release_lock(s_web_power_mgr, ota_lock_id);
         ESP_LOGE(TAG, "ota end: %s", esp_err_to_name(err));
         httpd_resp_set_status(req, "500 Internal Server Error");
         return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"verify\"}");
@@ -532,11 +546,13 @@ static esp_err_t handle_update(httpd_req_t *req)
 
     err = esp_ota_set_boot_partition(part);
     if (err != ESP_OK) {
+        if (s_web_power_mgr && ota_lock_id) wr_power_mgr_release_lock(s_web_power_mgr, ota_lock_id);
         ESP_LOGE(TAG, "ota set_boot: %s", esp_err_to_name(err));
         httpd_resp_set_status(req, "500 Internal Server Error");
         return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"set_boot\"}");
     }
 
+    /* Success path: device reboots, no lock release needed */
     ESP_LOGI(TAG, "OTA complete (%d bytes) → %s; rebooting", total, part->label);
     httpd_resp_set_type(req, "application/json");
     esp_err_t se = httpd_resp_sendstr(req, "{\"ok\":true,\"reboot\":true}");
@@ -603,6 +619,7 @@ static bool read_body(httpd_req_t *req, char *buf, size_t buf_size)
 static esp_err_t handle_settings_post(httpd_req_t *req)
 {
     WEB_REQUIRE_AUTH(req);
+    if (s_web_power_mgr) wr_power_mgr_notify_activity(s_web_power_mgr, "web");
     char *body = malloc(1024);
     if (!body) {
         httpd_resp_set_status(req, "500 Internal Server Error");
@@ -824,6 +841,7 @@ void wr_mcp_web_stop(void)
         xTimerDelete(s_web_timer, 0);
         s_web_timer = NULL;
     }
-    s_web_deadline = 0;
-    s_web_cfg = NULL;
+    s_web_deadline  = 0;
+    s_web_cfg       = NULL;
+    s_web_power_mgr = NULL;
 }

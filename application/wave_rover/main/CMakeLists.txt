@@ -6,6 +6,7 @@ idf_component_register(
         wave_rover_config
         wave_rover_hal
         wave_rover_mcp
+        wave_rover_power_mgr
         nvs_flash
         esp_wifi
         esp_event

@@ -12,6 +12,7 @@
 #include "wave_rover_config.h"
 #include "wave_rover_hal.h"
 #include "wave_rover_mcp.h"
+#include "wave_rover_power_mgr.h"
 #include "wr_wifi.h"
 #include "wr_syslog.h"
 
@@ -40,6 +41,22 @@ void app_main(void)
 
     ESP_ERROR_CHECK(wr_wifi_init(&s_cfg));
 
+    wr_power_mgr_handle_t power_mgr = NULL;
+    wr_power_mgr_config_t pm_cfg = {
+        .enabled                          = s_cfg.power_mgr_enabled,
+        .active_timeout_sec               = s_cfg.power_active_timeout_sec,
+        .idle_to_low_power_sec            = s_cfg.power_idle_to_low_power_sec,
+        .wifi_power_save                  = s_cfg.power_wifi_power_save,
+        .reduce_cpu_frequency             = s_cfg.power_reduce_cpu_frequency,
+        .disable_display_when_idle        = s_cfg.power_disable_display_idle,
+        .critical_battery_voltage         = s_cfg.power_critical_battery_v,
+        .telemetry_interval_active_sec    = s_cfg.power_telemetry_active_sec,
+        .telemetry_interval_idle_sec      = s_cfg.power_telemetry_idle_sec,
+        .telemetry_interval_low_power_sec = s_cfg.power_telemetry_low_power_sec,
+    };
+    ESP_ERROR_CHECK(wr_power_mgr_create(&pm_cfg, &power_mgr));
+    ESP_ERROR_CHECK(wr_power_mgr_start(power_mgr));
+
     esp_err_t mdns_err = mdns_init();
     if (mdns_err == ESP_OK) {
         mdns_hostname_set(s_cfg.hostname);
@@ -64,7 +81,7 @@ void app_main(void)
 
     wr_syslog_start(s_cfg.syslog_enabled, s_cfg.syslog_host,
                     s_cfg.syslog_port, s_cfg.syslog_facility);
-    ESP_ERROR_CHECK(wave_rover_mcp_start(&s_cfg));
+    ESP_ERROR_CHECK(wave_rover_mcp_start(&s_cfg, power_mgr));
 
     const char *ip = wr_wifi_get_ip();
     wr_display_status("0.1.0", ip[0] ? ip : "AP mode",
