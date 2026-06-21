@@ -36,11 +36,6 @@ typedef struct {
 
 typedef struct wr_power_mgr_t *wr_power_mgr_handle_t;
 
-/* old_mode/new_mode/reason are valid only for the duration of the callback. */
-typedef void (*wr_power_mode_cb_t)(wr_power_mode_t old_mode,
-                                    wr_power_mode_t new_mode,
-                                    const char *reason, void *user_ctx);
-
 esp_err_t wr_power_mgr_create(const wr_power_mgr_config_t *config,
                                wr_power_mgr_handle_t *ret_handle);
 esp_err_t wr_power_mgr_delete(wr_power_mgr_handle_t handle);
@@ -60,9 +55,6 @@ esp_err_t wr_power_mgr_set_mode(wr_power_mgr_handle_t handle,
                                  wr_power_mode_t mode, const char *reason);
 
 wr_power_mode_t wr_power_mgr_get_mode(wr_power_mgr_handle_t handle);
-
-esp_err_t wr_power_mgr_register_cb(wr_power_mgr_handle_t handle,
-                                    wr_power_mode_cb_t cb, void *user_ctx);
 
 /* Mode-floor lock: while >=1 lock is held, mode cannot drop below ACTIVE.
  * ttl_sec == 0 means "until explicitly released" (used by OTA).

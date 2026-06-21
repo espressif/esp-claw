@@ -34,8 +34,6 @@ struct wr_power_mgr_t {
     int64_t               start_us;
     wr_power_lock_t       locks[WR_POWER_MAX_LOCKS];
     uint32_t              next_lock_id;
-    wr_power_mode_cb_t    cb;
-    void                 *cb_ctx;
     SemaphoreHandle_t     mutex;
     SemaphoreHandle_t     stopped_sem;
     TaskHandle_t          eval_task;
@@ -106,7 +104,6 @@ static void transition_locked(struct wr_power_mgr_t *m, wr_power_mode_t new_mode
     m->mode = new_mode;
     ESP_LOGI(TAG, "power: mode changed %s -> %s, reason=%s",
              wr_power_mode_name(old), wr_power_mode_name(new_mode), reason);
-    if (m->cb) m->cb(old, new_mode, reason, m->cb_ctx);
 }
 
 /* Caller must hold m->mutex. Returns true if any lock is currently active
@@ -279,17 +276,6 @@ wr_power_mode_t wr_power_mgr_get_mode(wr_power_mgr_handle_t handle)
     mode = handle->mode;
     xSemaphoreGive(handle->mutex);
     return mode;
-}
-
-esp_err_t wr_power_mgr_register_cb(wr_power_mgr_handle_t handle,
-                                    wr_power_mode_cb_t cb, void *user_ctx)
-{
-    if (!handle) return ESP_ERR_INVALID_ARG;
-    xSemaphoreTake(handle->mutex, portMAX_DELAY);
-    handle->cb = cb;
-    handle->cb_ctx = user_ctx;
-    xSemaphoreGive(handle->mutex);
-    return ESP_OK;
 }
 
 esp_err_t wr_power_mgr_acquire_lock(wr_power_mgr_handle_t handle,

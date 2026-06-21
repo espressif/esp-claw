@@ -134,6 +134,7 @@ static esp_mcp_value_t tool_emergency_stop(const esp_mcp_property_list_t *p)
     const char *reason = esp_mcp_property_list_get_property_string(p, "reason");
     wr_motor_emergency_stop_set();
     ESP_LOGW(TAG, "rover.emergency_stop: %s", reason ? reason : "(no reason)");
+    if (s_power_mgr) wr_power_mgr_notify_activity(s_power_mgr, "mcp_tool");
     cJSON *root = cJSON_CreateObject();
     cJSON_AddBoolToObject(root,   "ok",     true);
     cJSON_AddStringToObject(root, "action", "emergency_stop_set");
@@ -154,6 +155,7 @@ static esp_mcp_value_t tool_clear_estop(const esp_mcp_property_list_t *p)
         return json_obj_str(root);
     }
     wr_motor_emergency_stop_clear();
+    if (s_power_mgr) wr_power_mgr_notify_activity(s_power_mgr, "mcp_tool");
     cJSON_AddBoolToObject(root,   "ok",     true);
     cJSON_AddStringToObject(root, "action", "emergency_stop_cleared");
     return json_obj_str(root);
