@@ -76,10 +76,6 @@ esp_err_t wr_power_mgr_release_lock(wr_power_mgr_handle_t handle, uint32_t lock_
 /* Writes a JSON object (no trailing newline) into buf, e.g.:
  * {"mode":"idle","battery_voltage":11.80,"low_battery":false,
  *  "uptime_sec":1234,"last_activity_sec_ago":42,"locks_active":false}
- * Note: "wifi_power_save", "cpu_freq_mhz", and "display_on" fields will be
- * added in a later task (Task 3) once apply_mode() actually applies those
- * power-saving measures; their absence here is intentional staging, not a
- * missed field.
  * Returns ESP_ERR_INVALID_SIZE if buf is too small (output untouched). */
 esp_err_t wr_power_mgr_get_status_json(wr_power_mgr_handle_t handle,
                                         char *buf, size_t buf_len);

@@ -65,6 +65,9 @@ static void apply_mode(struct wr_power_mgr_t *m, wr_power_mode_t mode)
         case WR_POWER_MODE_LOW_POWER: ps = WIFI_PS_MAX_MODEM; break;
         default:                      ps = WIFI_PS_NONE; break;
         }
+        /* esp_wifi_set_ps() returns ESP_ERR_WIFI_NOT_INIT if called before
+         * Wi-Fi starts (e.g. first transition at power_mgr startup); this is
+         * expected and the warning is the intended handling. */
         esp_err_t err = esp_wifi_set_ps(ps);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "power: esp_wifi_set_ps(%d) failed: %s", ps, esp_err_to_name(err));
@@ -72,7 +75,7 @@ static void apply_mode(struct wr_power_mgr_t *m, wr_power_mode_t mode)
     }
 
     if (m->config.reduce_cpu_frequency) {
-        int min_mhz = (mode == WR_POWER_MODE_ACTIVE) ? 240 : 80;
+        int min_mhz = (mode == WR_POWER_MODE_ACTIVE) ? 240 : 80; /* lock to max in ACTIVE mode */
         esp_pm_config_t pm_cfg = {
             .max_freq_mhz = 240,
             .min_freq_mhz = min_mhz,
