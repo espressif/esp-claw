@@ -284,7 +284,7 @@ static void claw_agent_mgr_unlock(void)
 
 static bool claw_agent_mgr_is_ready(void)
 {
-    return s_mgr.initialized && s_mgr.mutex;
+    return s_mgr.initialized && s_mgr.mutex != NULL;
 }
 
 static claw_agent_mgr_agent_t *claw_agent_mgr_find_locked(const char *agent_id)
@@ -906,6 +906,9 @@ esp_err_t claw_agent_mgr_spawn_subagent(const claw_cap_call_context_t *parent_ct
             !prompt || !prompt[0] || !out_agent_id || out_agent_id_size == 0) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (!claw_agent_mgr_is_ready()) {
+        return ESP_ERR_INVALID_STATE;
+    }
 
     err = claw_session_mgr_alloc_subagent_session_id(parent_ctx->session_id,
                                                      agent_id,
@@ -1038,6 +1041,9 @@ esp_err_t claw_agent_mgr_send_subagent_input(const claw_cap_call_context_t *ctx,
     if (!claw_agent_mgr_ctx_is_root_agent(ctx) || !input || !input[0]) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (!claw_agent_mgr_is_ready()) {
+        return ESP_ERR_INVALID_STATE;
+    }
 
     claw_agent_mgr_lock();
     err = claw_agent_mgr_find_or_lazy_create_subagent_locked(ctx, agent_id, &agent);
@@ -1068,6 +1074,9 @@ esp_err_t claw_agent_mgr_inspect_agent(const claw_cap_call_context_t *ctx,
 
     if (!claw_agent_mgr_ctx_is_root_agent(ctx) || !agent_id || !out_info) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (!claw_agent_mgr_is_ready()) {
+        return ESP_ERR_INVALID_STATE;
     }
 
     claw_agent_mgr_lock();
@@ -1115,6 +1124,9 @@ esp_err_t claw_agent_mgr_list_agents(const claw_cap_call_context_t *ctx,
     if (!claw_agent_mgr_ctx_is_root_agent(ctx) || !ctx->session_id || !ctx->session_id[0] ||
             !out_infos || max_infos == 0 || !out_count) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (!claw_agent_mgr_is_ready()) {
+        return ESP_ERR_INVALID_STATE;
     }
     *out_count = 0;
 
@@ -1164,6 +1176,9 @@ esp_err_t claw_agent_mgr_close_agent(const claw_cap_call_context_t *ctx,
     if (!claw_agent_mgr_ctx_is_root_agent(ctx) ||
             !agent_id || strcmp(agent_id, CLAW_AGENT_MGR_ROOT_AGENT_ID) == 0) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (!claw_agent_mgr_is_ready()) {
+        return ESP_ERR_INVALID_STATE;
     }
 
     claw_agent_mgr_lock();
@@ -1216,6 +1231,9 @@ esp_err_t claw_agent_mgr_delete_agent(const claw_cap_call_context_t *ctx,
             !agent_id || !agent_id[0] ||
             strcmp(agent_id, CLAW_AGENT_MGR_ROOT_AGENT_ID) == 0) {
         return ESP_ERR_INVALID_ARG;
+    }
+    if (!claw_agent_mgr_is_ready()) {
+        return ESP_ERR_INVALID_STATE;
     }
     if (strlcpy(agent_id_copy, agent_id, sizeof(agent_id_copy)) >= sizeof(agent_id_copy) ||
             strlcpy(parent_session_id, ctx->session_id, sizeof(parent_session_id)) >= sizeof(parent_session_id)) {

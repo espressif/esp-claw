@@ -1281,6 +1281,7 @@ esp_err_t claw_skill_init(const claw_skill_config_t *config)
 esp_err_t claw_skill_add_directory(const char *dir)
 {
     esp_err_t err;
+    size_t i;
 
     if (!s_skill || !s_skill->initialized) {
         ESP_LOGE(TAG, "add dir before init");
@@ -1288,6 +1289,12 @@ esp_err_t claw_skill_add_directory(const char *dir)
     }
     if (!dir || !dir[0]) {
         return ESP_ERR_INVALID_ARG;
+    }
+    for (i = 0; i < s_skill->root_count; i++) {
+        if (strcmp(s_skill->roots[i], dir) == 0) {
+            CLAW_SKILL_DIAGI("skills dir %s already registered, skipping", dir);
+            return ESP_OK;
+        }
     }
 
     err = append_root_dir(dir);

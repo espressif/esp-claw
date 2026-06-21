@@ -83,6 +83,7 @@ void lua_lvgl_apply_style_opts_locked(lua_State *L, int index, lv_obj_t *obj)
     lua_lvgl_apply_style_int_field(L, index, obj, "pad_column");
     lua_lvgl_apply_style_int_field(L, index, obj, "line_width");
     lua_lvgl_apply_style_int_field(L, index, obj, "arc_width");
+    lua_lvgl_apply_font_style_field(L, index, obj);
 }
 int lua_lvgl_set_style(lua_State *L)
 {

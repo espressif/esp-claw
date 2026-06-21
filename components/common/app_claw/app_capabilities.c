@@ -75,6 +75,7 @@
 static const char *TAG = "app_capabilities";
 
 #define APP_IM_ATTACHMENT_MAX_BYTES (2 * 1024 * 1024)
+#define APP_CAP_EXTERNAL_GROUP_INITIAL_CAPACITY 4
 
 typedef esp_err_t (*app_cap_prepare_fn)(const app_claw_config_t *config,
                                         const app_claw_storage_paths_t *paths);
@@ -89,6 +90,12 @@ typedef struct {
     app_cap_prepare_fn prepare;
     app_cap_register_fn reg;
 } app_capability_group_entry_t;
+
+static app_capability_external_group_t *s_external_groups;
+static size_t s_external_group_count;
+static size_t s_external_group_capacity;
+static app_capability_group_info_t *s_group_infos;
+static size_t s_group_info_capacity;
 
 static bool app_cap_groups_config_empty(const char *value)
 {
@@ -144,6 +151,68 @@ static int app_cap_find_group_entry(const app_capability_group_entry_t *entries,
     }
 
     return -1;
+}
+
+static int app_cap_find_external_group(const char *group_id)
+{
+    size_t i;
+
+    if (!group_id || !group_id[0]) {
+        return -1;
+    }
+
+    for (i = 0; i < s_external_group_count; i++) {
+        if (s_external_groups[i].group_id &&
+                strcmp(s_external_groups[i].group_id, group_id) == 0) {
+            return (int)i;
+        }
+    }
+
+    return -1;
+}
+
+static esp_err_t app_cap_reserve_external_groups(size_t required_count)
+{
+    app_capability_external_group_t *new_groups = NULL;
+    size_t new_capacity = s_external_group_capacity;
+
+    if (required_count <= s_external_group_capacity) {
+        return ESP_OK;
+    }
+
+    if (new_capacity == 0) {
+        new_capacity = APP_CAP_EXTERNAL_GROUP_INITIAL_CAPACITY;
+    }
+    while (new_capacity < required_count) {
+        new_capacity *= 2;
+    }
+
+    new_groups = realloc(s_external_groups, new_capacity * sizeof(new_groups[0]));
+    if (!new_groups) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_external_groups = new_groups;
+    s_external_group_capacity = new_capacity;
+    return ESP_OK;
+}
+
+static esp_err_t app_cap_reserve_group_infos(size_t required_count)
+{
+    app_capability_group_info_t *new_infos = NULL;
+
+    if (required_count <= s_group_info_capacity) {
+        return ESP_OK;
+    }
+
+    new_infos = realloc(s_group_infos, required_count * sizeof(new_infos[0]));
+    if (!new_infos) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_group_infos = new_infos;
+    s_group_info_capacity = required_count;
+    return ESP_OK;
 }
 
 static esp_err_t app_cap_build_group_map(const char *configured_groups,
@@ -790,10 +859,37 @@ static const app_capability_group_info_t s_capability_group_infos[] = {
 #endif
 };
 
+esp_err_t app_capabilities_register_external_group(const app_capability_external_group_t *group)
+{
+    app_capability_external_group_t *slot = NULL;
+
+    if (!group || !group->group_id || !group->group_id[0] || !group->reg) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (app_cap_find_group_entry(s_capability_group_entries,
+                                 sizeof(s_capability_group_entries) / sizeof(s_capability_group_entries[0]),
+                                 group->group_id) >= 0 ||
+            app_cap_find_external_group(group->group_id) >= 0) {
+        ESP_LOGW(TAG, "Capability group already registered: %s", group->group_id);
+        return ESP_ERR_INVALID_STATE;
+    }
+    ESP_RETURN_ON_ERROR(app_cap_reserve_external_groups(s_external_group_count + 1),
+                        TAG, "Failed to grow external capability registry");
+
+    slot = &s_external_groups[s_external_group_count++];
+    *slot = *group;
+    if (!slot->display_name) {
+        slot->display_name = slot->group_id;
+    }
+    return ESP_OK;
+}
+
 esp_err_t app_capabilities_init(const app_claw_config_t *config,
                                 const app_claw_storage_paths_t *paths)
 {
-    const size_t entry_count = sizeof(s_capability_group_entries) / sizeof(s_capability_group_entries[0]);
+    const size_t builtin_entry_count = sizeof(s_capability_group_entries) / sizeof(s_capability_group_entries[0]);
+    const size_t entry_count = builtin_entry_count + s_external_group_count;
+    app_capability_group_entry_t *entries = NULL;
     bool *enabled_map = NULL;
     bool *llm_visible_map = NULL;
     const char **llm_visible_groups = NULL;
@@ -809,25 +905,36 @@ esp_err_t app_capabilities_init(const app_claw_config_t *config,
     ESP_GOTO_ON_ERROR(app_cap_register_llm_config_command(),
                       cleanup, TAG, "Failed to register LLM config command");
 
+    entries = calloc(entry_count > 0 ? entry_count : 1, sizeof(entries[0]));
     enabled_map = calloc(entry_count > 0 ? entry_count : 1, sizeof(enabled_map[0]));
     llm_visible_map = calloc(entry_count > 0 ? entry_count : 1, sizeof(llm_visible_map[0]));
     llm_visible_groups = calloc(entry_count > 0 ? entry_count : 1, sizeof(llm_visible_groups[0]));
-    if (!enabled_map || !llm_visible_map || !llm_visible_groups) {
-        free(enabled_map);
-        free(llm_visible_map);
-        free(llm_visible_groups);
-        return ESP_ERR_NO_MEM;
+    if (!entries || !enabled_map || !llm_visible_map || !llm_visible_groups) {
+        ret = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+
+    memcpy(entries, s_capability_group_entries, builtin_entry_count * sizeof(entries[0]));
+    for (i = 0; i < s_external_group_count; i++) {
+        entries[builtin_entry_count + i] = (app_capability_group_entry_t) {
+            .group_id = s_external_groups[i].group_id,
+            .display_name = s_external_groups[i].display_name,
+            .label = s_external_groups[i].display_name,
+            .llm_visible_by_default = s_external_groups[i].llm_visible_by_default,
+            .prepare = s_external_groups[i].prepare,
+            .reg = s_external_groups[i].reg,
+        };
     }
 
     ESP_GOTO_ON_ERROR(app_cap_build_group_map(config->enabled_cap_groups,
-                                              s_capability_group_entries,
+                                              entries,
                                               entry_count,
                                               enabled_map,
                                               true,
                                               false),
                       cleanup, TAG, "Failed to parse capability whitelist");
     ESP_GOTO_ON_ERROR(app_cap_build_group_map(config->llm_visible_cap_groups,
-                                              s_capability_group_entries,
+                                              entries,
                                               entry_count,
                                               llm_visible_map,
                                               false,
@@ -835,7 +942,7 @@ esp_err_t app_capabilities_init(const app_claw_config_t *config,
                       cleanup, TAG, "Failed to parse LLM-visible capability groups");
 
     for (i = 0; i < entry_count; i++) {
-        const app_capability_group_entry_t *entry = &s_capability_group_entries[i];
+        const app_capability_group_entry_t *entry = &entries[i];
 
         if (!enabled_map[i]) {
             ESP_LOGI(TAG, "Skipping capability group at init: %s", entry->group_id);
@@ -868,6 +975,7 @@ esp_err_t app_capabilities_init(const app_claw_config_t *config,
     }
 
 cleanup:
+    free(entries);
     free(enabled_map);
     free(llm_visible_map);
     free(llm_visible_groups);
@@ -877,11 +985,33 @@ cleanup:
 esp_err_t app_capabilities_get_compiled_groups(const app_capability_group_info_t **groups,
                                                size_t *count)
 {
+    const size_t builtin_count = sizeof(s_capability_group_infos) / sizeof(s_capability_group_infos[0]);
+    const size_t total_count = builtin_count + s_external_group_count;
+    size_t i;
+
     if (!groups || !count) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    *groups = s_capability_group_infos;
-    *count = sizeof(s_capability_group_infos) / sizeof(s_capability_group_infos[0]);
+    if (s_external_group_count == 0) {
+        *groups = s_capability_group_infos;
+        *count = builtin_count;
+        return ESP_OK;
+    }
+
+    ESP_RETURN_ON_ERROR(app_cap_reserve_group_infos(total_count > 0 ? total_count : 1),
+                        TAG, "Failed to grow capability group info cache");
+
+    memcpy(s_group_infos, s_capability_group_infos, builtin_count * sizeof(s_group_infos[0]));
+    for (i = 0; i < s_external_group_count; i++) {
+        s_group_infos[builtin_count + i] = (app_capability_group_info_t) {
+            .group_id = s_external_groups[i].group_id,
+            .display_name = s_external_groups[i].display_name,
+            .llm_visible_by_default = s_external_groups[i].llm_visible_by_default,
+        };
+    }
+
+    *groups = s_group_infos;
+    *count = total_count;
     return ESP_OK;
 }

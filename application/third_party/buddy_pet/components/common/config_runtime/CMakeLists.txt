@@ -1,0 +1,9 @@
+idf_component_register(
+    SRCS
+        "config_runtime.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        display_session
+        hw_gfx_runtime
+)

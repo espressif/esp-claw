@@ -1,0 +1,12 @@
+idf_component_register(
+    SRCS
+        "app_wechat_setup.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        app_config
+        app_provisioning
+        cap_im_platform
+        config_runtime
+        http_server
+)

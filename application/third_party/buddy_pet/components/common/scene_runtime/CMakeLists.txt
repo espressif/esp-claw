@@ -1,0 +1,10 @@
+idf_component_register(
+    SRCS
+        "src/scene_manager.c"
+        "src/scene_policy.c"
+        "src/scene_runtime.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        freertos
+)

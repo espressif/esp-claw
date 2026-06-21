@@ -674,7 +674,7 @@ esp_err_t cap_lua_async_run_and_wait(const cap_lua_async_job_t *job,
 
     if (!terminal) {
         bool was_running = false;
-        (void)cap_lua_stop_slot_and_wait(slot, job_id, 0, &was_running);
+        (void)cap_lua_stop_slot_and_wait(slot, job_id, CAP_LUA_STOP_WAIT_DEFAULT_MS, &was_running);
         if (xSemaphoreTake(s_job_lock, pdMS_TO_TICKS(1000)) == pdTRUE) {
             if (s_jobs[slot].used &&
                     strncmp(s_jobs[slot].job_id, job_id,

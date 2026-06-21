@@ -9,6 +9,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -37,6 +38,9 @@
 #define LUA_MODULE_LVGL_PANEL_IF_IO 0
 #define LUA_MODULE_LVGL_PANEL_IF_RGB 1
 #define LUA_MODULE_LVGL_PANEL_IF_MIPI_DSI 2
+#define LUA_MODULE_LVGL_FS_LETTER 'D'
+#define LUA_MODULE_LVGL_PATH_MAX 256
+#define LUA_LVGL_FONT_MT "lvgl.font"
 
 typedef enum {
     LUA_LVGL_OBJ_GENERIC = 0,
@@ -140,6 +144,20 @@ typedef struct {
     lua_lvgl_obj_record_t *record;
 } lua_lvgl_obj_ud_t;
 
+typedef struct lua_lvgl_font_ud lua_lvgl_font_ud_t;
+
+typedef struct lua_lvgl_font_record {
+    lv_font_t *font;
+    lua_lvgl_font_ud_t *ud;
+    uint32_t generation;
+    bool valid;
+    struct lua_lvgl_font_record *next;
+} lua_lvgl_font_record_t;
+
+struct lua_lvgl_font_ud {
+    lua_lvgl_font_record_t *record;
+};
+
 typedef struct {
     SemaphoreHandle_t mutex;
     bool lvgl_initialized;
@@ -168,6 +186,10 @@ typedef struct {
     lua_lvgl_event_sub_t *event_queue_head;
     lua_lvgl_event_sub_t *event_queue_tail;
     lua_lvgl_pending_unref_t *pending_unrefs;
+    lua_lvgl_font_record_t *fonts;
+    lv_fs_drv_t fs_drv;
+    char data_root[LUA_MODULE_LVGL_PATH_MAX];
+    bool fs_registered;
     /* P4: input devices. Only one indev of each kind is supported on a
      * single-script runtime; the underlying esp_lcd_touch_handle_t is owned
      * by board_manager, so we only borrow the pointer here and never free
@@ -228,6 +250,16 @@ int lua_lvgl_align(lua_State *L);
 
 /* lua_lvgl_style.c */
 int lua_lvgl_set_style(lua_State *L);
+
+/* lua_lvgl_font.c */
+esp_err_t lua_lvgl_set_data_root(const char *data_root);
+esp_err_t lua_lvgl_register_fs_locked(void);
+void lua_lvgl_register_font_metatable(lua_State *L);
+void lua_lvgl_release_fonts_locked(void);
+lua_lvgl_font_ud_t *lua_lvgl_check_font(lua_State *L, int index);
+lv_font_t *lua_lvgl_validate_font_locked(const lua_lvgl_font_ud_t *ud, const char **out_error);
+void lua_lvgl_apply_font_style_field(lua_State *L, int index, lv_obj_t *obj);
+extern const luaL_Reg lua_lvgl_font_module_funcs[];
 
 /* lua_lvgl_layout.c */
 int lua_lvgl_set_flex(lua_State *L);

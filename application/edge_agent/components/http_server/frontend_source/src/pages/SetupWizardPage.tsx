@@ -889,8 +889,8 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
       <div class="max-w-4xl mx-auto px-4 py-8 sm:px-6 sm:py-10">
         <div class="rounded-[var(--radius-lg)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-card)] overflow-hidden shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
           <div class="px-6 py-6 border-b border-[var(--color-border-subtle)]">
-            <div class="flex items-start justify-between gap-4">
-              <div>
+            <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div class="min-w-0 flex-1">
                 <p class="m-0 text-[0.78rem] uppercase tracking-[0.18em] text-[var(--color-accent-soft)]">
                   {t('setupEyebrow')}
                 </p>
@@ -901,7 +901,7 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
                   {t('setupIntro')}
                 </p>
               </div>
-              <div class="shrink-0">
+              <div class="shrink-0 self-start">
                 <LanguageSwitcher />
               </div>
             </div>

@@ -1,0 +1,18 @@
+idf_component_register(
+    SRCS
+        "src/pet_buddy.c"
+        "src/pet_host.c"
+        "src/pet_registry.c"
+        "src/pet_renderer.c"
+        "src/pet_runtime.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_INCLUDE_DIRS
+        "private_include"
+    REQUIRES
+        display_session
+        hw_gfx_runtime
+        espressif__esp_mmap_assets
+        json
+        nvs_flash
+)

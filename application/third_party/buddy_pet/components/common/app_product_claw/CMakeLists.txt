@@ -1,0 +1,12 @@
+idf_component_register(
+    SRCS
+        "app_product_claw.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        app_claw
+        app_config
+        cap_match_watch
+        cap_pet_buddy
+        claw_core
+)

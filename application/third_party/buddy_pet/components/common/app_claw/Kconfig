@@ -1,0 +1,455 @@
+menu "App Claw Config"
+
+    config APP_CLAW_ENABLE_CLI
+        bool "Enable App Claw CLI"
+        default y
+        help
+            Enable the console REPL managed by app_claw. When disabled, app_claw
+            does not build or start the serial CLI.
+
+    choice APP_CLAW_MEMORY_MODE
+        prompt "App Claw memory management mode"
+        depends on APP_CLAW_CAP_MEMORY
+        default APP_CLAW_MEMORY_MODE_FULL
+        help
+            Select whether app_claw uses the current structured memory module
+            or a lightweight master-compatible memory flow.
+            Only available when claw_memory subsystem is enabled.
+
+    config APP_CLAW_MEMORY_MODE_FULL
+        bool "Structured memory management"
+        help
+            Enable structured memory skills and the full memory capability group.
+
+    config APP_CLAW_MEMORY_MODE_LIGHTWEIGHT
+        bool "Lightweight memory"
+        help
+            Keep profile memory support, but switch long-term/session memory to a
+            lightweight flow without structured auto extraction.
+
+    endchoice
+
+    menu "App Claw Capabilities"
+
+        config APP_CLAW_CAP_FILES
+            bool "Enable files capability"
+            default y
+            help
+                Enable the files capability and keep app_claw's direct dependency
+                on cap_files.
+
+        config APP_CLAW_CAP_MEMORY
+            bool "Enable claw_memory subsystem"
+            default y
+            help
+                Run claw_memory initialization during app_claw_start and link the
+                claw_memory component.
+
+        config APP_CLAW_CAP_EVENT_ROUTER
+            bool "Enable event router subsystem"
+            default y
+            help
+                Initialize and start claw_event_router (rule dispatch, IM bindings,
+                startup trigger).
+
+        config APP_CLAW_CAP_CORE
+            bool "Enable claw_core (LLM agent runtime)"
+            default y
+            help
+                Initialize and start claw_core when LLM credentials are configured.
+
+        config APP_CLAW_CAP_IM_QQ
+            bool "Enable QQ capability"
+            select APP_CLAW_CAP_EVENT_ROUTER
+            default y
+            help
+                Enable the QQ capability and keep app_claw's direct dependency
+                on cap_im_qq.
+
+        config APP_CLAW_CAP_IM_FEISHU
+            bool "Enable Feishu capability"
+            select APP_CLAW_CAP_EVENT_ROUTER
+            default y
+            help
+                Enable the Feishu capability and keep app_claw's direct dependency
+                on cap_im_feishu.
+
+        config APP_CLAW_CAP_IM_TG
+            bool "Enable Telegram capability"
+            select APP_CLAW_CAP_EVENT_ROUTER
+            default y
+            help
+                Enable the Telegram capability and keep app_claw's direct dependency
+                on cap_im_tg.
+
+        config APP_CLAW_CAP_IM_WECHAT
+            bool "Enable WeChat capability"
+            select APP_CLAW_CAP_EVENT_ROUTER
+            default y
+            help
+                Enable the WeChat capability and keep app_claw's direct dependency
+                on cap_im_wechat.
+
+        config APP_CLAW_CAP_IM_LOCAL
+            bool "Enable local / Web IM capability (cap_im_local)"
+            select APP_CLAW_CAP_SESSION_MGR
+            select APP_CLAW_CAP_EVENT_ROUTER
+            default y
+            help
+                Register cap_im_local for in-process IM (e.g. edge_agent Web IM). Requires session manager for session_command.
+
+        config APP_CLAW_CAP_SCHEDULER
+            bool "Enable scheduler capability"
+            select APP_CLAW_CAP_EVENT_ROUTER
+            default y
+            help
+                Enable the scheduler capability and keep app_claw's direct dependency
+                on cap_scheduler.
+
+        config APP_CLAW_CAP_LUA
+            bool "Enable Lua capability"
+            default y
+            help
+                Enable the Lua capability and keep app_claw's direct dependency
+                on cap_lua.
+
+        config APP_CLAW_CAP_MCP_CLIENT
+            bool "Enable MCP client capability"
+            default y
+            help
+                Enable the MCP client capability and keep app_claw's direct dependency
+                on cap_mcp_client.
+
+        config APP_CLAW_CAP_MCP_SERVER
+            bool "Enable MCP server capability"
+            default y
+            help
+                Enable the MCP server capability and keep app_claw's direct dependency
+                on cap_mcp_server.
+
+        config APP_CLAW_CAP_SKILL_MGR
+            bool "Enable skill manager capability"
+            default y
+            help
+                Enable the skill manager capability and keep app_claw's direct dependency
+                on cap_skill_mgr.
+
+        config APP_CLAW_CAP_SYSTEM
+            bool "Enable system capability"
+            default y
+            help
+                Enable the system capability and keep app_claw's direct dependency
+                on cap_system.
+
+        config APP_CLAW_CAP_LLM_INSPECT
+            bool "Enable LLM inspect capability"
+            default y
+            help
+                Enable the LLM inspect capability and keep app_claw's direct dependency
+                on cap_llm_inspect.
+
+        config APP_CLAW_CAP_HTTP_REQUEST
+            bool "Enable HTTP request capability"
+            default y
+            help
+                Enable the HTTP request capability and keep app_claw's direct dependency
+                on cap_http_request.
+
+        config APP_CLAW_CAP_WEB_SEARCH
+            bool "Enable web search capability"
+            default y
+            help
+                Enable the web search capability and keep app_claw's direct dependency
+                on cap_web_search.
+
+        config APP_CLAW_CAP_ROUTER_MGR
+            bool "Enable router manager capability"
+            select APP_CLAW_CAP_EVENT_ROUTER
+            default y
+            help
+                Enable the router manager capability and keep app_claw's direct dependency
+                on cap_router_mgr.
+
+        config APP_CLAW_CAP_SESSION_MGR
+            bool "Enable session manager capability"
+            default y
+            help
+                Enable the session manager capability and keep app_claw's direct dependency
+                on cap_session_mgr.
+
+        config APP_CLAW_CAP_AGENT_MGR
+            bool "Enable agent manager capability"
+            default y if APP_CLAW_CAP_SESSION_MGR && APP_CLAW_CAP_CORE
+            default n
+            help
+                Enable root-only subagent management tools backed by claw_agent_mgr.
+
+    endmenu
+
+    menu "App Claw Lua Modules"
+
+        comment "--- Hardware peripheral drivers (lua_driver) ---"
+
+        config APP_CLAW_LUA_DRIVER_ADC
+            bool "Enable ADC Lua driver"
+            default y
+            help
+                Enable the ADC Lua driver and keep app_claw's direct dependency
+                on lua_driver_adc when Lua capability is enabled.
+
+        config APP_CLAW_LUA_DRIVER_GPIO
+            bool "Enable GPIO Lua driver"
+            default y
+            help
+                Enable the GPIO Lua driver and keep app_claw's direct dependency
+                on lua_driver_gpio when Lua capability is enabled.
+
+        config APP_CLAW_LUA_DRIVER_I2C
+            bool "Enable I2C Lua driver"
+            default y
+            help
+                Enable the I2C Lua driver and keep app_claw's direct dependency
+                on lua_driver_i2c when Lua capability is enabled.
+
+        config APP_CLAW_LUA_DRIVER_MCPWM
+            bool "Enable MCPWM Lua driver"
+            default y
+            help
+                Enable the MCPWM Lua driver and keep app_claw's direct dependency
+                on lua_driver_mcpwm when Lua capability is enabled.
+
+        config APP_CLAW_LUA_DRIVER_PCNT
+            bool "Enable PCNT Lua driver"
+            default y if SOC_PCNT_SUPPORTED
+            default n
+            help
+                Enable the PCNT Lua driver and keep app_claw's direct dependency
+                on lua_driver_pcnt when Lua capability is enabled.
+                Defaults to n on chips without PCNT hardware support.
+
+        config APP_CLAW_LUA_DRIVER_TOUCH
+            bool "Enable touch Lua driver"
+            default y if SOC_TOUCH_SENSOR_SUPPORTED
+            default n
+            help
+                Enable the touch Lua driver and keep app_claw's direct dependency
+                on lua_driver_touch when Lua capability is enabled.
+                Defaults to n on chips without touch sensor hardware support.
+
+        config APP_CLAW_LUA_DRIVER_UART
+            bool "Enable UART Lua driver"
+            default y
+            help
+                Enable the UART Lua driver and keep app_claw's direct dependency
+                on lua_driver_uart when Lua capability is enabled.
+
+        comment "--- Higher-level modules (lua_module) ---"
+
+        config APP_CLAW_LUA_MODULE_AUDIO
+            bool "Enable audio Lua module"
+            default y if ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT
+            default n
+            help
+                Enable the audio Lua module and keep app_claw's direct dependency
+                on lua_module_audio when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_BOARD_MANAGER
+            bool "Enable board manager Lua module"
+            default y
+            help
+                Enable the board manager Lua module and keep app_claw's direct
+                dependency on lua_module_board_manager when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_BUTTON
+            bool "Enable button Lua module"
+            default y
+            help
+                Enable the button Lua module and keep app_claw's direct dependency
+                on lua_module_button when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_BLE
+            bool "Enable BLE Lua module"
+            default n
+            depends on APP_CLAW_CAP_LUA
+            help
+                Enable the generic BLE Lua module.
+
+        config APP_CLAW_LUA_MODULE_BLE_HID
+            bool "Enable BLE HID Lua module"
+            default n
+            depends on APP_CLAW_CAP_LUA
+            select BT_NIMBLE_HID_SERVICE
+            help
+                Enable the BLE HID Lua module for Consumer Control, Keyboard, Mouse,
+                and local HID behavior. This module owns its BLE HID runtime via
+                ESP-IDF NimBLE and esp_hidd, and exposes the ble_hid.* behavior APIs.
+                Do not start the generic BLE Lua module advertising while BLE HID is
+                running.
+
+        config APP_CLAW_LUA_MODULE_CAMERA
+            bool "Enable camera Lua module"
+            default n
+            help
+                Enable the camera Lua module and keep app_claw's direct dependency
+                on lua_module_camera when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_CAPABILITY
+            bool "Enable capability Lua module"
+            default y
+            help
+                Enable the capability Lua module and keep app_claw's direct
+                dependency on lua_module_call_capability when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_DELAY
+            bool "Enable delay Lua module"
+            default y
+            help
+                Enable the delay Lua module and keep app_claw's direct dependency
+                on lua_module_delay when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_DISPLAY
+            bool "Enable display Lua module"
+            default y
+            help
+                Enable the display Lua module and keep app_claw's direct dependency
+                on lua_module_display when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_ENVIRONMENTAL_SENSOR
+            bool "Enable environmental sensor Lua module"
+            default n
+            help
+                Enable the environmental sensor Lua module and keep app_claw's direct
+                dependency on lua_module_environmental_sensor when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_EVENT_PUBLISHER
+            bool "Enable event publisher Lua module"
+            default y
+            help
+                Enable the event publisher Lua module and keep app_claw's direct
+                dependency on lua_module_event_publisher when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_HTTP_SERVER
+            bool "Enable HTTP server Lua module"
+            default y
+            help
+                Enable the HTTP server Lua module and keep app_claw's direct
+                dependency on lua_module_http_server when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_JSON
+            bool "Enable JSON Lua module"
+            default y
+            help
+                Enable the JSON Lua module and keep app_claw's direct dependency
+                on lua_module_json when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_THREAD
+            bool "Enable Thread Lua module"
+            default y
+            help
+                Enable the Thread Lua module and keep app_claw's direct
+                dependency on lua_module_thread when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_FUEL_GAUGE
+            bool "Enable Fuel Gauge Lua module"
+            default n
+            help
+                Enable the Fuel Gauge Lua module and keep app_claw's direct dependency
+                on lua_module_fuel_gauge when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_IMAGE
+            bool "Enable image Lua module"
+            default y
+            help
+                Enable the image Lua module. Exposes frame format conversion helpers.
+
+        config APP_CLAW_LUA_MODULE_IMU
+            bool "Enable IMU Lua module"
+            default n
+            help
+                Enable the IMU Lua module and keep app_claw's direct dependency
+                on lua_module_imu when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_IR
+            bool "Enable IR Lua module"
+            default n
+            help
+                Enable the IR Lua module and keep app_claw's direct dependency
+                on lua_module_ir when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_KNOB
+            bool "Enable knob (rotary encoder) Lua module"
+            default n
+            help
+                Enable the knob Lua module and keep app_claw's direct dependency
+                on lua_module_knob when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_LCD
+            bool "Enable LCD Lua module"
+            default n
+            help
+                Enable the LCD Lua module and keep app_claw's direct dependency
+                on lua_module_lcd when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_LCD_TOUCH
+            bool "Enable LCD touch Lua module"
+            default y if ESP_BOARD_DEV_LCD_TOUCH_SUPPORT && ESP_BOARD_DEV_LCD_TOUCH_SUB_I2C_SUPPORT
+            default n
+            help
+                Enable the LCD touch Lua module and keep app_claw's direct dependency
+                on lua_module_lcd_touch when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_LED_STRIP
+            bool "Enable LED strip Lua module"
+            default y
+            help
+                Enable the LED strip Lua module and keep app_claw's direct dependency
+                on lua_module_led_strip when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_LVGL
+            bool "Enable LVGL Lua module"
+            default y
+            help
+                Enable the LVGL Lua module and keep app_claw's direct dependency
+                on lua_module_lvgl when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_MAGNETOMETER
+            bool "Enable magnetometer Lua module"
+            default n
+            help
+                Enable the magnetometer Lua module and keep app_claw's direct
+                dependency on lua_module_magnetometer when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_SCI
+            bool "Enable DFRobot SCI Lua module"
+            default n
+            help
+                Enable the DFRobot RP2040 SCI Acquisition Module Lua module and
+                keep app_claw's direct dependency on lua_module_sci when Lua
+                capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_STORAGE
+            bool "Enable storage Lua module"
+            default y
+            help
+                Enable the storage Lua module and keep app_claw's direct dependency
+                on lua_module_storage when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_SYSTEM
+            bool "Enable system Lua module"
+            default y
+            help
+                Enable the system Lua module and keep app_claw's direct dependency
+                on lua_module_system when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_VISION
+            bool "Enable vision Lua modules"
+            default n
+            help
+                Enable the vision Lua modules and keep app_claw's direct dependency
+                on lua_module_vision when Lua capability is enabled. This module
+                currently registers only motion_detect and does not pull in ESP-DL
+                model components.
+
+    endmenu
+
+endmenu

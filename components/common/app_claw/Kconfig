@@ -12,8 +12,7 @@ menu "App Claw Config"
         depends on ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT
         default y
         help
-            Enable expression emote startup and emote asset packaging for boards
-            with LCD display support.
+            Enable the ESP-Claw lobster display UI and animation assets.
 
     choice APP_CLAW_MEMORY_MODE
         prompt "App Claw memory management mode"

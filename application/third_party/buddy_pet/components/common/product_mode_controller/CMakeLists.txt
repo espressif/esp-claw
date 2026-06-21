@@ -1,0 +1,9 @@
+idf_component_register(
+    SRCS
+        "product_mode_controller.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        config_runtime
+        match_watch_runtime
+)

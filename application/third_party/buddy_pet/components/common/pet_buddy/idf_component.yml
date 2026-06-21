@@ -1,0 +1,6 @@
+dependencies:
+  espressif/esp_mmap_assets: "^2.0.0"
+  display_session:
+    path: ../../../../../../components/common/display_session
+  hw_gfx_runtime:
+    path: ../../../../../../components/common/hw_gfx_runtime

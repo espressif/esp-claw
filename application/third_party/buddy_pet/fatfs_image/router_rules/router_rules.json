@@ -1,0 +1,443 @@
+[
+  {
+    "id": "match_watch_notify_im",
+    "description": "Deliver match watch notifications directly to the IM chat that enabled them.",
+    "enabled": true,
+    "consume_on_match": true,
+    "ack": "match watch notification sent",
+    "match": {
+      "source_cap": "match_watch",
+      "event_type": "match_watch_notify",
+      "content_type": "text"
+    },
+    "actions": [
+      {
+        "type": "send_message",
+        "input": {
+          "channel": "{{event.source_channel}}",
+          "chat_id": "{{event.chat_id}}",
+          "message": "{{event.text}}"
+        }
+      }
+    ]
+  },
+  {
+    "id": "network_ready_sync_match_watch_from_pet",
+    "description": "Sync Match Watch provider from the selected pet after STA Wi-Fi is connected.",
+    "enabled": true,
+    "consume_on_match": false,
+    "ack": "network ready match watch provider synced from pet",
+    "match": {
+      "source_cap": "match_watch",
+      "event_type": "network",
+      "event_key": "ready",
+      "content_type": "trigger"
+    },
+    "actions": [
+      {
+        "type": "run_script",
+        "input": {
+          "path": "/fatfs/skills/match_watch/scripts/sync_from_pet.lua",
+          "args": {
+            "open": true,
+            "prefer_pet_profile": true
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "pet_selected_sync_match_watch",
+    "description": "Sync Match Watch provider from the selected pet profile when the selected pet changes and Match Watch is running.",
+    "enabled": true,
+    "consume_on_match": false,
+    "ack": "match watch provider synced from selected pet",
+    "match": {
+      "source_cap": "pet_buddy",
+      "event_type": "pet",
+      "event_key": "selected",
+      "content_type": "trigger"
+    },
+    "actions": [
+      {
+        "type": "run_script",
+        "input": {
+          "path": "/fatfs/skills/match_watch/scripts/sync_from_pet.lua",
+          "args": {
+            "open": false,
+            "only_if_running": true,
+            "selected_only": true,
+            "prefer_pet_profile": true
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "im_new_session",
+    "description": "Start a fresh persistent chat session when the user sends /new.",
+    "enabled": true,
+    "consume_on_match": true,
+    "ack": "{{event.source_channel}} new session started",
+    "match": {
+      "event_type": "message",
+      "event_key": "text",
+      "content_type": "text",
+      "text": "/new"
+    },
+    "actions": [
+      {
+        "type": "call_cap",
+        "cap": "roll_chat_session",
+        "input": {}
+      },
+      {
+        "type": "send_message",
+        "input": {
+          "channel": "{{event.source_channel}}",
+          "chat_id": "{{event.chat_id}}",
+          "message": "Started a new session."
+        }
+      }
+    ]
+  },
+  {
+    "id": "im_llm_command",
+    "description": "Handle LLM configuration commands when the user sends /llm.",
+    "enabled": true,
+    "consume_on_match": true,
+    "ack": "{{event.source_channel}} LLM command handled",
+    "match": {
+      "event_type": "message",
+      "event_key": "text",
+      "content_type": "text",
+      "text": "/llm",
+      "text_match_rule": "prefix"
+    },
+    "actions": [
+      {
+        "type": "call_cap",
+        "cap": "llm_config_command",
+        "input": {
+          "command": "{{match.remainder}}"
+        }
+      },
+      {
+        "type": "send_message",
+        "input": {
+          "channel": "{{event.source_channel}}",
+          "chat_id": "{{event.chat_id}}"
+        }
+      }
+    ]
+  },
+  {
+    "id": "im_match_watch_open_text",
+    "description": "Open Match Watch directly for common IM text command without requiring the agent.",
+    "enabled": true,
+    "consume_on_match": true,
+    "ack": "{{event.source_channel}} match watch opened",
+    "match": {
+      "event_type": "message",
+      "event_key": "text",
+      "content_type": "text",
+      "text": "打开比赛"
+    },
+    "actions": [
+      {
+        "type": "call_cap",
+        "cap": "match_watch_open",
+        "input": {}
+      },
+      {
+        "type": "send_message",
+        "input": {
+          "channel": "{{event.source_channel}}",
+          "chat_id": "{{event.chat_id}}",
+          "message": "已打开 Match Watch 比赛界面。"
+        }
+      }
+    ]
+  },
+  {
+    "id": "im_match_watch_sim_on_text",
+    "description": "Start Match Watch simulation provider directly from IM.",
+    "enabled": true,
+    "consume_on_match": true,
+    "ack": "{{event.source_channel}} match watch simulation enabled",
+    "match": {
+      "event_type": "message",
+      "event_key": "text",
+      "content_type": "text",
+      "text": "打开模拟赛事"
+    },
+    "actions": [
+      {
+        "type": "call_cap",
+        "cap": "match_watch_provider_start",
+        "input": {
+          "path": "/fatfs/skills/match_watch_sim/scripts/watch.lua",
+          "args": {
+            "open": true
+          },
+          "name": "match_watch_sim"
+        }
+      },
+      {
+        "type": "call_cap",
+        "cap": "match_watch_set_reminders",
+        "input": {
+          "enabled": true
+        }
+      },
+      {
+        "type": "send_message",
+        "input": {
+          "channel": "{{event.source_channel}}",
+          "chat_id": "{{event.chat_id}}",
+          "message": "已打开 Match Watch 模拟赛事 provider，比赛提醒已开启。"
+        }
+      }
+    ]
+  },
+  {
+    "id": "im_match_watch_sim_off_text",
+    "description": "Stop Match Watch simulation provider and resync live data from the current pet.",
+    "enabled": true,
+    "consume_on_match": true,
+    "ack": "{{event.source_channel}} match watch simulation disabled",
+    "match": {
+      "event_type": "message",
+      "event_key": "text",
+      "content_type": "text",
+      "text": "关闭模拟赛事"
+    },
+    "actions": [
+      {
+        "type": "call_cap",
+        "cap": "match_watch_provider_stop",
+        "input": {
+          "wait_ms": 3000
+        }
+      },
+      {
+        "type": "run_script",
+        "input": {
+          "path": "/fatfs/skills/match_watch/scripts/sync_from_pet.lua",
+          "args": {
+            "open": false,
+            "only_if_running": true
+          }
+        }
+      },
+      {
+        "type": "send_message",
+        "input": {
+          "channel": "{{event.source_channel}}",
+          "chat_id": "{{event.chat_id}}",
+          "message": "已停止模拟赛事，并按当前 buddy 重新同步真实赛程。"
+        }
+      }
+    ]
+  },
+  {
+    "id": "im_match_watch_reminders_on_text",
+    "description": "Enable Match Watch reminders directly from IM.",
+    "enabled": true,
+    "consume_on_match": true,
+    "ack": "{{event.source_channel}} match watch reminders enabled",
+    "match": {
+      "event_type": "message",
+      "event_key": "text",
+      "content_type": "text",
+      "text": "开启比赛提醒"
+    },
+    "actions": [
+      {
+        "type": "call_cap",
+        "cap": "match_watch_set_reminders",
+        "input": {
+          "enabled": true
+        }
+      },
+      {
+        "type": "send_message",
+        "input": {
+          "channel": "{{event.source_channel}}",
+          "chat_id": "{{event.chat_id}}",
+          "message": "已开启比赛提醒。"
+        }
+      }
+    ]
+  },
+  {
+    "id": "im_match_watch_reminders_off_text",
+    "description": "Disable Match Watch reminders directly from IM.",
+    "enabled": true,
+    "consume_on_match": true,
+    "ack": "{{event.source_channel}} match watch reminders disabled",
+    "match": {
+      "event_type": "message",
+      "event_key": "text",
+      "content_type": "text",
+      "text": "关闭比赛提醒"
+    },
+    "actions": [
+      {
+        "type": "call_cap",
+        "cap": "match_watch_set_reminders",
+        "input": {
+          "enabled": false
+        }
+      },
+      {
+        "type": "send_message",
+        "input": {
+          "channel": "{{event.source_channel}}",
+          "chat_id": "{{event.chat_id}}",
+          "message": "已关闭比赛提醒。"
+        }
+      }
+    ]
+  },
+  {
+    "id": "im_match_watch_refresh_text",
+    "description": "Resync Match Watch provider from the current pet when Match Watch is already running.",
+    "enabled": true,
+    "consume_on_match": true,
+    "ack": "{{event.source_channel}} match watch refresh requested",
+    "match": {
+      "event_type": "message",
+      "event_key": "text",
+      "content_type": "text",
+      "text": "刷新比赛"
+    },
+    "actions": [
+      {
+        "type": "run_script",
+        "input": {
+          "path": "/fatfs/skills/match_watch/scripts/sync_from_pet.lua",
+          "args": {
+            "open": false,
+            "only_if_running": true
+          }
+        }
+      },
+      {
+        "type": "send_message",
+        "input": {
+          "channel": "{{event.source_channel}}",
+          "chat_id": "{{event.chat_id}}",
+          "message": "已按当前 buddy 重新同步比赛数据。"
+        }
+      }
+    ]
+  },
+  {
+    "id": "im_any_message_working_reply",
+    "description": "Reply to any IM text message before other automation handling.",
+    "enabled": true,
+    "consume_on_match": false,
+    "ack": "{{event.source_channel}} working reply sent",
+    "match": {
+      "event_type": "message",
+      "event_key": "text",
+      "content_type": "text"
+    },
+    "actions": [
+      {
+        "type": "send_message",
+        "input": {
+          "channel": "{{event.source_channel}}",
+          "chat_id": "{{event.chat_id}}",
+          "message": "🦞 ESP-Claw is snapping on it..."
+        }
+      }
+    ]
+  },
+  {
+    "id": "im_attachment_saved_reply",
+    "description": "Reply when an IM attachment is saved.",
+    "enabled": true,
+    "ack": "{{event.channel}} attachment saved",
+    "match": {
+      "event_type": "attachment_saved"
+    },
+    "actions": [
+      {
+        "type": "send_message",
+        "input": {
+          "channel": "{{event.source_channel}}",
+          "chat_id": "{{event.chat_id}}",
+          "message": "File received from {{event.source_channel}}"
+        }
+      }
+    ]
+  },
+  {
+    "id": "im_any_message_agent",
+    "description": "Route IM text messages to the agent.",
+    "enabled": true,
+    "consume_on_match": true,
+    "ack": "{{event.source_channel}} routed to agent",
+    "match": {
+      "event_type": "message",
+      "event_key": "text",
+      "content_type": "text"
+    },
+    "actions": [
+      {
+        "type": "run_agent",
+        "input": {
+          "target_channel": "{{event.source_channel}}",
+          "session_policy": "chat"
+        }
+      }
+    ]
+  },
+  {
+    "id": "agent_stage_im_notify",
+    "description": "Deliver agent stage progress messages to the original IM chat.",
+    "enabled": true,
+    "consume_on_match": true,
+    "ack": "{{event.source_channel}} agent stage sent",
+    "match": {
+      "source_cap": "claw_core",
+      "event_type": "agent_stage",
+      "content_type": "text"
+    },
+    "actions": [
+      {
+        "type": "send_message",
+        "input": {
+          "event_type": "{{event.event_type}}",
+          "channel": "{{event.source_channel}}",
+          "chat_id": "{{event.chat_id}}",
+          "message": "{{event.text}}"
+        }
+      }
+    ]
+  },
+  {
+    "id": "agent_out_message_send_message",
+    "description": "Deliver agent output messages to the original IM chat.",
+    "enabled": true,
+    "consume_on_match": true,
+    "ack": "{{event.source_channel}} agent output sent",
+    "match": {
+      "source_cap": "claw_core",
+      "event_type": "out_message",
+      "content_type": "text"
+    },
+    "actions": [
+      {
+        "type": "send_message",
+        "input": {
+          "channel": "{{event.source_channel}}",
+          "chat_id": "{{event.chat_id}}",
+          "message": "{{event.text}}"
+        }
+      }
+    ]
+  }
+]

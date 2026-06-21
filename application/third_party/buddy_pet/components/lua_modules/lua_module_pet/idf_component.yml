@@ -1,0 +1,7 @@
+dependencies:
+  pet_buddy:
+    path: ../../common/pet_buddy
+  cap_lua:
+    path: ../../../../../../components/claw_capabilities/cap_lua
+  claw_event_router:
+    path: ../../../../../../components/claw_modules/claw_event_router

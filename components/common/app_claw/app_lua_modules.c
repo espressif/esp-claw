@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
 
@@ -124,13 +125,19 @@
 
 static const char *TAG = "app_lua_modules";
 
-typedef esp_err_t (*app_lua_module_register_fn)(const char *fatfs_base_path);
+#define APP_LUA_EXTERNAL_MODULE_INITIAL_CAPACITY 4
 
 typedef struct {
     const char *module_id;
     const char *display_name;
     app_lua_module_register_fn reg;
 } app_lua_module_entry_t;
+
+static app_lua_module_external_t *s_external_modules;
+static size_t s_external_module_count;
+static size_t s_external_module_capacity;
+static app_lua_module_info_t *s_module_infos;
+static size_t s_module_info_capacity;
 
 static bool app_lua_modules_config_empty(const char *value)
 {
@@ -186,6 +193,68 @@ static int app_lua_find_entry(const app_lua_module_entry_t *entries,
     }
 
     return -1;
+}
+
+static int app_lua_find_external_module(const char *module_id)
+{
+    size_t i;
+
+    if (!module_id || !module_id[0]) {
+        return -1;
+    }
+
+    for (i = 0; i < s_external_module_count; i++) {
+        if (s_external_modules[i].module_id &&
+                strcmp(s_external_modules[i].module_id, module_id) == 0) {
+            return (int)i;
+        }
+    }
+
+    return -1;
+}
+
+static esp_err_t app_lua_reserve_external_modules(size_t required_count)
+{
+    app_lua_module_external_t *new_modules = NULL;
+    size_t new_capacity = s_external_module_capacity;
+
+    if (required_count <= s_external_module_capacity) {
+        return ESP_OK;
+    }
+
+    if (new_capacity == 0) {
+        new_capacity = APP_LUA_EXTERNAL_MODULE_INITIAL_CAPACITY;
+    }
+    while (new_capacity < required_count) {
+        new_capacity *= 2;
+    }
+
+    new_modules = realloc(s_external_modules, new_capacity * sizeof(new_modules[0]));
+    if (!new_modules) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_external_modules = new_modules;
+    s_external_module_capacity = new_capacity;
+    return ESP_OK;
+}
+
+static esp_err_t app_lua_reserve_module_infos(size_t required_count)
+{
+    app_lua_module_info_t *new_infos = NULL;
+
+    if (required_count <= s_module_info_capacity) {
+        return ESP_OK;
+    }
+
+    new_infos = realloc(s_module_infos, required_count * sizeof(new_infos[0]));
+    if (!new_infos) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_module_infos = new_infos;
+    s_module_info_capacity = required_count;
+    return ESP_OK;
 }
 
 static esp_err_t app_lua_build_module_map(const char *configured_modules,
@@ -483,8 +552,7 @@ static esp_err_t app_lua_register_led_strip(const char *fatfs_base_path)
 #if CONFIG_APP_CLAW_LUA_MODULE_LVGL
 static esp_err_t app_lua_register_lvgl(const char *fatfs_base_path)
 {
-    (void)fatfs_base_path;
-    return lua_module_lvgl_register();
+    return lua_module_lvgl_register_with_data_root(fatfs_base_path);
 }
 #endif
 
@@ -748,9 +816,36 @@ static const app_lua_module_info_t s_lua_module_infos[] = {
 #endif
 };
 
+esp_err_t app_lua_modules_register_external(const app_lua_module_external_t *module)
+{
+    app_lua_module_external_t *slot = NULL;
+
+    if (!module || !module->module_id || !module->module_id[0] || !module->reg) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (app_lua_find_entry(s_lua_module_entries,
+                           sizeof(s_lua_module_entries) / sizeof(s_lua_module_entries[0]),
+                           module->module_id) >= 0 ||
+            app_lua_find_external_module(module->module_id) >= 0) {
+        ESP_LOGW(TAG, "Lua module already registered: %s", module->module_id);
+        return ESP_ERR_INVALID_STATE;
+    }
+    ESP_RETURN_ON_ERROR(app_lua_reserve_external_modules(s_external_module_count + 1),
+                        TAG, "Failed to grow external Lua module registry");
+
+    slot = &s_external_modules[s_external_module_count++];
+    *slot = *module;
+    if (!slot->display_name) {
+        slot->display_name = slot->module_id;
+    }
+    return ESP_OK;
+}
+
 esp_err_t app_lua_modules_register(const app_claw_config_t *config, const char *fatfs_base_path)
 {
-    const size_t entry_count = sizeof(s_lua_module_entries) / sizeof(s_lua_module_entries[0]);
+    const size_t builtin_entry_count = sizeof(s_lua_module_entries) / sizeof(s_lua_module_entries[0]);
+    const size_t entry_count = builtin_entry_count + s_external_module_count;
+    app_lua_module_entry_t *entries = NULL;
     bool *selected_map = NULL;
     esp_err_t err = ESP_OK;
     size_t i;
@@ -759,36 +854,51 @@ esp_err_t app_lua_modules_register(const app_claw_config_t *config, const char *
         return ESP_ERR_INVALID_ARG;
     }
 
+    entries = calloc(entry_count > 0 ? entry_count : 1, sizeof(entries[0]));
     selected_map = calloc(entry_count > 0 ? entry_count : 1, sizeof(selected_map[0]));
-    if (!selected_map) {
+    if (!entries || !selected_map) {
+        free(entries);
+        free(selected_map);
         return ESP_ERR_NO_MEM;
     }
 
+    memcpy(entries, s_lua_module_entries, builtin_entry_count * sizeof(entries[0]));
+    for (i = 0; i < s_external_module_count; i++) {
+        entries[builtin_entry_count + i] = (app_lua_module_entry_t) {
+            .module_id = s_external_modules[i].module_id,
+            .display_name = s_external_modules[i].display_name,
+            .reg = s_external_modules[i].reg,
+        };
+    }
+
     err = app_lua_build_module_map(config->enabled_lua_modules,
-                                   s_lua_module_entries,
+                                   entries,
                                    entry_count,
                                    selected_map);
     if (err != ESP_OK) {
+        free(entries);
         free(selected_map);
         return err;
     }
 
     for (i = 0; i < entry_count; i++) {
         if (!selected_map[i]) {
-            ESP_LOGI(TAG, "Skipping Lua module at init: %s", s_lua_module_entries[i].module_id);
+            ESP_LOGI(TAG, "Skipping Lua module at init: %s", entries[i].module_id);
             continue;
         }
 
-        err = s_lua_module_entries[i].reg(fatfs_base_path);
+        err = entries[i].reg(fatfs_base_path);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to register Lua module %s: %s",
-                     s_lua_module_entries[i].module_id,
+                     entries[i].module_id,
                      esp_err_to_name(err));
+            free(entries);
             free(selected_map);
             return err;
         }
     }
 
+    free(entries);
     free(selected_map);
     return ESP_OK;
 }
@@ -796,11 +906,32 @@ esp_err_t app_lua_modules_register(const app_claw_config_t *config, const char *
 esp_err_t app_lua_modules_get_compiled_modules(const app_lua_module_info_t **modules,
                                                size_t *count)
 {
+    const size_t builtin_count = sizeof(s_lua_module_infos) / sizeof(s_lua_module_infos[0]);
+    const size_t total_count = builtin_count + s_external_module_count;
+    size_t i;
+
     if (!modules || !count) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    *modules = s_lua_module_infos;
-    *count = sizeof(s_lua_module_infos) / sizeof(s_lua_module_infos[0]);
+    if (s_external_module_count == 0) {
+        *modules = s_lua_module_infos;
+        *count = builtin_count;
+        return ESP_OK;
+    }
+
+    ESP_RETURN_ON_ERROR(app_lua_reserve_module_infos(total_count > 0 ? total_count : 1),
+                        TAG, "Failed to grow Lua module info cache");
+
+    memcpy(s_module_infos, s_lua_module_infos, builtin_count * sizeof(s_module_infos[0]));
+    for (i = 0; i < s_external_module_count; i++) {
+        s_module_infos[builtin_count + i] = (app_lua_module_info_t) {
+            .module_id = s_external_modules[i].module_id,
+            .display_name = s_external_modules[i].display_name,
+        };
+    }
+
+    *modules = s_module_infos;
+    *count = total_count;
     return ESP_OK;
 }

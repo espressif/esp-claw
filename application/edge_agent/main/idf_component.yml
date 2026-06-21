@@ -12,12 +12,6 @@ dependencies:
     rules:
       - if: "target in [esp32p4]"
 
-  espressif2022/esp_emote_expression:
-    version: "^1.0.0"
-
-  espressif2022/esp_emote_gfx:
-    version: "3.0.2"
-
   app_claw:
     path: ../../../components/common/app_claw
 

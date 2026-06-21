@@ -1,0 +1,19 @@
+dependencies:
+  app_claw:
+    path: ../app_claw
+  app_config:
+    path: ../app_config
+  cap_match_watch:
+    path: ../../claw_capabilities/cap_match_watch
+  cap_pet_buddy:
+    path: ../../claw_capabilities/cap_pet_buddy
+  lua_module_match_watch:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
+    path: ../../lua_modules/lua_module_match_watch
+  lua_module_pet:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
+    path: ../../lua_modules/lua_module_pet
+  claw_core:
+    path: ../../../../../../components/claw_modules/claw_core

@@ -1,0 +1,50 @@
+version: 1.0.0
+# Peripherals Configuration for Anyboard
+peripherals:
+  # I2C Configuration (SCL=IO40, SDA=IO39)
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 39
+        scl: 40
+
+  # I2S PDM RX for microphone (CLK=IO9, DIN=IO17)
+  - name: i2s_audio_in
+    type: i2s
+    version: default
+    role: master
+    format: pdm-in
+    config:
+      port: 0
+      sample_rate_hz: 16000
+      clk_src: I2S_CLK_SRC_DEFAULT
+      mclk_multiple: 256
+      dn_sample_mode: I2S_PDM_DSR_8S
+      bclk_div: 8
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_MONO
+      slot_mask: I2S_PDM_SLOT_LEFT
+      data_fmt: I2S_PDM_DATA_FMT_PCM
+      hp_en: true
+      hp_cut_off_freq_hz: 35.5
+      amplify_num: 1
+      pins:
+        clk: 9
+        din: 17
+      invert_flags:
+        clk_inv: false
+
+  # LCD SPI Configuration for ST7789 (SCLK=IO5, MOSI=IO7)
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        data0_io_num: 7
+        sclk_io_num: 5
+        max_transfer_sz: 6400    # 320 * 2 * 10 (10 lines RGB565)

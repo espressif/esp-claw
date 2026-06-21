@@ -190,7 +190,7 @@ Most widgets support:
 - Numeric values: `min`, `max`, `value`
 - Style: `bg_color`, `text_color`, `border_color`, `bg_opa`, `opa`,
   `radius`, `border_width`, `pad`, `pad_row`, `pad_column`,
-  `line_color`, `line_width`, `arc_width`
+  `line_color`, `line_width`, `arc_width`, `font`
 
 Colors can be strings or numbers:
 
@@ -198,6 +198,28 @@ Colors can be strings or numbers:
 bg_color = "#2f80ed"
 text_color = 0xffffff
 ```
+
+## Runtime TTF Fonts
+
+When LVGL `tiny_ttf` is enabled, fonts can be loaded from the DATA root at
+runtime:
+
+```lua
+local storage = require("storage")
+local lvgl = require("lvgl")
+
+local font_path = storage.join_path(storage.get_root_dir(), "fonts/NotoSansSC-Regular.ttf")
+local font = lvgl.font_load(font_path, { size = 24, cache_size = 128 })
+label:set_style({ font = font })
+```
+
+- `lvgl.font_load(path, { size = px, cache_size = n })` -> font handle
+- `font:set_size(px)`
+- `font:is_valid()` -> boolean
+- `font:delete()`
+
+Font paths must be relative to or under the DATA root. The font file must
+remain available while any LVGL object uses the font.
 
 ## Common Methods
 
@@ -361,13 +383,14 @@ Basic methods:
 ## Limitations
 
 - Encoder/keypad indevs are not exposed yet.
-- Custom fonts, image decoders, and filesystem setup are not wrapped.
+- Image decoders and general filesystem setup are not wrapped.
 - `lvgl.image(...)` and `lvgl.imagebutton(...)` only pass string `src` values
   to LVGL. Whether those strings load depends on firmware FS/decoder setup.
 - Canvas support covers buffer allocation, background fill, and pixel read/write only. Advanced draw layers are not wrapped.
 - Chart cursors and other advanced chart APIs are not wrapped.
 - Span handles and chart series handles are not LVGL objects; they do not support object base methods such as `set_pos`, `set_style`, or `delete`.
-- Non-ASCII text rendering depends on the fonts enabled in firmware.
+- Non-ASCII text rendering depends on either firmware-enabled fonts or a
+  runtime TTF font applied with `font`.
 
 ## Test Scripts
 

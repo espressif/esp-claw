@@ -1,0 +1,13 @@
+dependencies:
+  app_config:
+    path: ../app_config
+  app_runtime_state:
+    path: ../app_runtime_state
+  captive_dns:
+    path: ../../../../../../components/common/captive_dns
+  config_runtime:
+    path: ../config_runtime
+  http_server:
+    path: ../http_server
+  wifi_manager:
+    path: ../../../../../../components/common/wifi_manager

@@ -40,8 +40,8 @@ static const char *lua_lvgl_display_owner_name(display_arbiter_owner_t owner)
         return "none";
     case DISPLAY_ARBITER_OWNER_LUA:
         return "lua";
-    case DISPLAY_ARBITER_OWNER_EMOTE:
-        return "emote";
+    case DISPLAY_ARBITER_OWNER_EMOTE_GFX:
+        return "emote_gfx";
     default:
         return "unknown";
     }
@@ -279,6 +279,7 @@ static void lua_lvgl_release_runtime_locked(void)
         s_lvgl.display = NULL;
     }
     lua_lvgl_invalidate_records_locked();
+    lua_lvgl_release_fonts_locked();
     lua_lvgl_drain_event_queue_locked();
     lua_lvgl_drain_pending_unrefs_locked(owner);
     heap_caps_free(s_lvgl.draw_buf);
@@ -405,7 +406,7 @@ static int lua_lvgl_init(lua_State *L)
         return luaL_error(L,
                           "display is already owned by Lua; deinit display/lvgl before lvgl.init");
     }
-    if (owner != DISPLAY_ARBITER_OWNER_NONE && owner != DISPLAY_ARBITER_OWNER_EMOTE) {
+    if (owner != DISPLAY_ARBITER_OWNER_NONE && owner != DISPLAY_ARBITER_OWNER_EMOTE_GFX) {
         return luaL_error(L,
                           "display is already owned by %s",
                           lua_lvgl_display_owner_name(owner));
@@ -446,6 +447,14 @@ static int lua_lvgl_init(lua_State *L)
     if (!s_lvgl.lvgl_initialized) {
         lv_init();
         s_lvgl.lvgl_initialized = true;
+    }
+    err = lua_lvgl_register_fs_locked();
+    if (err != ESP_OK) {
+        lua_lvgl_unlock();
+        heap_caps_free(draw_buf);
+        (void)display_arbiter_release(DISPLAY_ARBITER_OWNER_LUA);
+        s_lvgl.display_owner_acquired = false;
+        return lua_lvgl_error_esp(L, "register fs", err);
     }
 
     display = lv_display_create(width, height);

@@ -192,6 +192,11 @@ build_application_edge_agent:
         EXAMPLE_TARGET: esp32c5
         EXAMPLE_BOARD_BRAND: "dfrobot"
 
+      - IMAGE: ["espressif/idf:release-v5.5"]
+        EXAMPLE_BOARD: anyboard
+        EXAMPLE_TARGET: esp32s3
+        EXAMPLE_BOARD_BRAND: "community"
+
 build_application_mcp_server_point:
   extends:
     - .build_examples_template

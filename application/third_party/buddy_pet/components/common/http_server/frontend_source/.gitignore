@@ -1,0 +1,31 @@
+# The built bundle (dist/index.html) is committed so ESP-IDF can build
+# without Node.js installed. Run `pnpm run build` after editing any
+# source file to refresh dist/index.html before committing.
+.wrangler
+.output
+.vercel
+.netlify
+.vinxi
+app.config.timestamp_*.js
+
+# Environment
+.env
+.env*.local
+
+# Dependencies
+/node_modules
+
+# IDEs and editors
+/.idea
+.project
+.classpath
+*.launch
+.settings/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# dist
+dist/*
+!dist/index.html.gz

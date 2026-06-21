@@ -26,7 +26,7 @@
 #define CAP_LUA_MAX_MODULES             32
 
 #define CAP_LUA_JOB_NAME_MAX            32
-#define CAP_LUA_JOB_EXCLUSIVE_MAX       16
+#define CAP_LUA_JOB_EXCLUSIVE_MAX       32
 #define CAP_LUA_JOB_PATH_MAX            192
 #define CAP_LUA_JOB_ID_LEN              9
 #define CAP_LUA_STOP_WAIT_DEFAULT_MS    2000

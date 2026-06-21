@@ -1,0 +1,3 @@
+dependencies:
+  app_config:
+    path: ../app_config

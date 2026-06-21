@@ -64,7 +64,8 @@ esp_err_t claw_skill_init(const claw_skill_config_t *config);
  *
  *         Call once per directory. Directories added earlier take priority:
  *         a skill id found in an earlier directory shadows the same id in a
- *         later one.
+ *         later one. Registering the same directory more than once is
+ *         idempotent and does not trigger a reload.
  *
  * @param[in]  dir  Absolute path of the directory to scan for skills
  *

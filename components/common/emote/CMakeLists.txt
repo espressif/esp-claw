@@ -4,16 +4,27 @@ idf_component_register(
     INCLUDE_DIRS
         "include"
     REQUIRES
-        espressif__esp_board_manager
-        espressif2022__esp_emote_expression
+        espressif__esp_mmap_assets
         espressif2022__esp_emote_gfx
+        display_session
         freertos
+        lvgl
 )
 
 if(CONFIG_APP_CLAW_ENABLE_EMOTE)
-    set(EMOTE_ASSETS_EXTERNAL_PATH "${CMAKE_CURRENT_LIST_DIR}/assets_local")
-    set(EMOTE_ASSETS_FILE "${CMAKE_BINARY_DIR}/emote_assets.bin")
-    build_speaker_assets_bin("emote" "284_240" ${EMOTE_ASSETS_FILE} ${CONFIG_MMAP_FILE_NAME_LENGTH} ${EMOTE_ASSETS_EXTERNAL_PATH})
-    message(STATUS "Generated emote assets: ${EMOTE_ASSETS_FILE} -> emote partition")
-    esptool_py_flash_to_partition(flash "emote" "${EMOTE_ASSETS_FILE}")
+    set(EMOTE_ANIM_ASSETS_DIR "${CMAKE_BINARY_DIR}/mmap_asset_src/emote_anim")
+    file(MAKE_DIRECTORY "${EMOTE_ANIM_ASSETS_DIR}")
+    file(COPY
+        "${CMAKE_CURRENT_LIST_DIR}/assets_local/emoji_large/offline.eaf"
+        "${CMAKE_CURRENT_LIST_DIR}/assets_local/emoji_large/swim.eaf"
+        DESTINATION "${EMOTE_ANIM_ASSETS_DIR}"
+    )
+
+    spiffs_create_partition_assets(
+        emote
+        "${EMOTE_ANIM_ASSETS_DIR}"
+        FLASH_IN_PROJECT
+        MMAP_FILE_SUPPORT_FORMAT ".eaf"
+        IMPORT_INC_PATH "${CMAKE_BINARY_DIR}/mmap_include/emote"
+    )
 endif()

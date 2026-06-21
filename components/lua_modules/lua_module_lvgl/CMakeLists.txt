@@ -5,6 +5,7 @@ idf_component_register(
         "src/lua_lvgl_complex_widgets.c"
         "src/lua_lvgl_demos.c"
         "src/lua_lvgl_events.c"
+        "src/lua_lvgl_font.c"
         "src/lua_lvgl_extra_widgets.c"
         "src/lua_lvgl_indev.c"
         "src/lua_lvgl_layout.c"

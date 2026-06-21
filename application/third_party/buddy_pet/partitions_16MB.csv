@@ -1,0 +1,6 @@
+# Name,    Type, SubType, Offset,   Size
+nvs,       data, nvs,     0xA000,   0x6000
+otadata,   data, ota,     0x10000,  0x2000
+phy_init,  data, phy,     0x12000,  0x1000
+ota_0,     app,  ota_0,         ,   5M
+storage,   data, fat,           ,   5M
