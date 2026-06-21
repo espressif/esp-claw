@@ -16,6 +16,9 @@ static i2c_master_dev_handle_t s_oled_dev = NULL;
 #define SSD_CMD  0x00
 #define SSD_DATA 0x40
 
+#define SSD_CMD_DISPLAY_ON   0xAF
+#define SSD_CMD_DISPLAY_OFF  0xAE
+
 static esp_err_t ssd_cmd(uint8_t cmd)
 {
     uint8_t buf[2] = {SSD_CMD, cmd};
@@ -175,11 +178,11 @@ esp_err_t wr_display_text(const char *text, int line, bool clear_first)
 
 esp_err_t wr_display_set_power(bool on)
 {
-    if (!g_wr_i2c_bus) return ESP_OK;
-    if (!s_oled_dev) {
-        if (oled_init() != ESP_OK) return ESP_OK;
+    if (!g_wr_i2c_bus || !s_oled_dev) {
+        ESP_LOGD(TAG, "display_set_power: display not ready, skipping");
+        return ESP_OK;
     }
-    return ssd_cmd(on ? 0xAF : 0xAE);
+    return ssd_cmd(on ? SSD_CMD_DISPLAY_ON : SSD_CMD_DISPLAY_OFF);
 }
 
 esp_err_t wr_display_status(const char *fw_ver, const char *wifi_info,

@@ -54,7 +54,8 @@ const char *wr_power_mode_name(wr_power_mode_t mode)
 
 /* Side effects applied on transition. Always succeeds — individual
  * peripheral failures inside it are logged but never block the
- * transition. */
+ * transition. Wi-Fi and PM errors are logged here; HAL peripherals
+ * (mag, display) log failures internally. */
 static void apply_mode(struct wr_power_mgr_t *m, wr_power_mode_t mode)
 {
     if (m->config.wifi_power_save) {
@@ -90,6 +91,7 @@ static void apply_mode(struct wr_power_mgr_t *m, wr_power_mode_t mode)
     wr_imu_set_mag_continuous(mode == WR_POWER_MODE_ACTIVE);
 
     if (m->config.disable_display_when_idle) {
+        /* display off only in LOW_POWER; stays on in IDLE for readability */
         wr_display_set_power(mode != WR_POWER_MODE_LOW_POWER);
     }
 }
