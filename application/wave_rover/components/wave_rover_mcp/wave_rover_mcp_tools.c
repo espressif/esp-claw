@@ -22,10 +22,12 @@
 static const char *TAG = "wr_tools";
 
 static const wave_rover_config_t *s_cfg       = NULL;
+static wave_rover_config_t       *s_cfg_mut   = NULL;
 static wr_power_mgr_handle_t      s_power_mgr = NULL;
 
 void wr_mcp_tools_set_config(const wave_rover_config_t *cfg) { s_cfg = cfg; }
-void wr_mcp_tools_set_power_mgr(wr_power_mgr_handle_t pm) { s_power_mgr = pm; }
+void wr_mcp_tools_set_config_mut(wave_rover_config_t *cfg)   { s_cfg_mut = cfg; }
+void wr_mcp_tools_set_power_mgr(wr_power_mgr_handle_t pm)   { s_power_mgr = pm; }
 
 #define WR_FW_VERSION "0.1.0"
 #define WR_FW_NAME    "wave-rover-esp-claw-mcp"
@@ -688,6 +690,131 @@ static esp_mcp_value_t tool_set_nav_cal(const esp_mcp_property_list_t *p)
 }
 
 /* ------------------------------------------------------------------ */
+/* rover.power_get_status                                              */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_power_get_status(const esp_mcp_property_list_t *p)
+{
+    (void)p;
+    char buf[256];
+    if (!s_power_mgr ||
+        wr_power_mgr_get_status_json(s_power_mgr, buf, sizeof(buf)) != ESP_OK) {
+        return esp_mcp_value_create_string("{\"error\":\"power manager unavailable\"}");
+    }
+    return esp_mcp_value_create_string(buf);
+}
+
+/* ------------------------------------------------------------------ */
+/* rover.power_set_mode                                                */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_power_set_mode(const esp_mcp_property_list_t *p)
+{
+    const char *mode_str = esp_mcp_property_list_get_property_string(p, "mode");
+    const char *reason   = esp_mcp_property_list_get_property_string(p, "reason");
+
+    wr_power_mode_t mode;
+    if      (mode_str && strcasecmp(mode_str, "ACTIVE")    == 0) mode = WR_POWER_MODE_ACTIVE;
+    else if (mode_str && strcasecmp(mode_str, "IDLE")      == 0) mode = WR_POWER_MODE_IDLE;
+    else if (mode_str && strcasecmp(mode_str, "LOW_POWER") == 0) mode = WR_POWER_MODE_LOW_POWER;
+    else return esp_mcp_value_create_string("{\"ok\":false,\"error\":\"invalid mode\"}");
+
+    if (!s_power_mgr)
+        return esp_mcp_value_create_string("{\"ok\":false,\"error\":\"power manager unavailable\"}");
+
+    esp_err_t err = wr_power_mgr_set_mode(s_power_mgr, mode, reason ? reason : "mcp");
+    if (err != ESP_OK)
+        return esp_mcp_value_create_string(
+            "{\"ok\":false,\"error\":\"rejected: rover busy or sleep lock held\"}");
+
+    char out[80];
+    snprintf(out, sizeof(out), "{\"ok\":true,\"mode\":\"%s\"}", wr_power_mode_name(mode));
+    return esp_mcp_value_create_string(out);
+}
+
+/* ------------------------------------------------------------------ */
+/* rover.power_configure                                               */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_power_configure(const esp_mcp_property_list_t *p)
+{
+    if (!s_cfg_mut)
+        return esp_mcp_value_create_string("{\"ok\":false,\"error\":\"config unavailable\"}");
+
+    wave_rover_config_t cfg = *s_cfg_mut;
+
+    /* For integer/float fields: 0 / 0.0 means "not provided" — skip those.
+     * For boolean fields: always applied when the property is present (callers
+     * must include all bools they want to set). */
+    int v_int;
+    float v_float;
+
+    v_int = esp_mcp_property_list_get_property_int(p, "active_timeout_sec");
+    if (v_int > 0) cfg.power_active_timeout_sec = (uint16_t)v_int;
+
+    v_int = esp_mcp_property_list_get_property_int(p, "idle_to_low_power_sec");
+    if (v_int > 0) cfg.power_idle_to_low_power_sec = (uint16_t)v_int;
+
+    v_float = esp_mcp_property_list_get_property_float(p, "critical_battery_voltage");
+    if (v_float > 0.0f) cfg.power_critical_battery_v = v_float;
+
+    /* Booleans: applied unconditionally when the property is registered.
+     * Callers should include all three when changing any of them. */
+    cfg.power_wifi_power_save    = esp_mcp_property_list_get_property_bool(p, "wifi_power_save");
+    cfg.power_reduce_cpu_frequency = esp_mcp_property_list_get_property_bool(p, "reduce_cpu_frequency");
+    cfg.power_disable_display_idle  = esp_mcp_property_list_get_property_bool(p, "disable_display_when_idle");
+
+    esp_err_t err = wave_rover_config_save(&cfg);
+    if (err != ESP_OK)
+        return esp_mcp_value_create_string("{\"ok\":false,\"error\":\"save failed\"}");
+
+    *s_cfg_mut = cfg;
+    return esp_mcp_value_create_string(
+        "{\"ok\":true,\"note\":\"some settings take effect after reboot\"}");
+}
+
+/* ------------------------------------------------------------------ */
+/* rover.power_prevent_sleep                                           */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_power_prevent_sleep(const esp_mcp_property_list_t *p)
+{
+    const char *reason = esp_mcp_property_list_get_property_string(p, "reason");
+    int ttl_sec        = esp_mcp_property_list_get_property_int(p, "ttl_sec");
+    if (!reason) reason = "manual_control";
+    if (ttl_sec < 0) ttl_sec = 0;
+
+    if (!s_power_mgr)
+        return esp_mcp_value_create_string("{\"ok\":false,\"error\":\"power manager unavailable\"}");
+
+    uint32_t lock_id = 0;
+    esp_err_t err = wr_power_mgr_acquire_lock(s_power_mgr, reason, (uint32_t)ttl_sec, &lock_id);
+    if (err != ESP_OK)
+        return esp_mcp_value_create_string("{\"ok\":false,\"error\":\"too many locks\"}");
+
+    char out[64];
+    snprintf(out, sizeof(out), "{\"ok\":true,\"lock_id\":%lu}", (unsigned long)lock_id);
+    return esp_mcp_value_create_string(out);
+}
+
+/* ------------------------------------------------------------------ */
+/* rover.power_release_sleep_lock                                      */
+/* ------------------------------------------------------------------ */
+
+static esp_mcp_value_t tool_power_release_sleep_lock(const esp_mcp_property_list_t *p)
+{
+    int lock_id = esp_mcp_property_list_get_property_int(p, "lock_id");
+    if (!s_power_mgr)
+        return esp_mcp_value_create_string("{\"ok\":false,\"error\":\"power manager unavailable\"}");
+
+    esp_err_t err = wr_power_mgr_release_lock(s_power_mgr, (uint32_t)lock_id);
+    if (err != ESP_OK)
+        return esp_mcp_value_create_string("{\"ok\":false,\"error\":\"lock not found\"}");
+
+    return esp_mcp_value_create_string("{\"ok\":true}");
+}
+
+/* ------------------------------------------------------------------ */
 /* Registration                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -700,6 +827,7 @@ static esp_mcp_value_t tool_set_nav_cal(const esp_mcp_property_list_t *p)
 #define PROP_STR(t, name)            esp_mcp_tool_add_property((t), esp_mcp_property_create_with_string((name), ""))
 #define PROP_FLOAT(t, name)          esp_mcp_tool_add_property((t), esp_mcp_property_create_with_float((name), 0.0f))
 #define PROP_BOOL(t, name)           esp_mcp_tool_add_property((t), esp_mcp_property_create_with_bool((name), false))
+#define PROP_INT(t, name)            esp_mcp_tool_add_property((t), esp_mcp_property_create_with_int((name), 0))
 #define PROP_INT_RANGE(t, n, lo, hi) esp_mcp_tool_add_property((t), esp_mcp_property_create_with_range((n), (lo), (hi)))
 
 esp_err_t wr_mcp_register_all_tools(esp_mcp_t *mcp)
@@ -798,6 +926,62 @@ esp_err_t wr_mcp_register_all_tools(esp_mcp_t *mcp)
     /* Power */
     TOOL("rover.get_power", "Get INA219 power status", tool_get_power);
     TOOL("rover.get_ups",   "Get UPS/battery status",  tool_get_ups);
+
+    /* Power manager */
+    TOOL("rover.power_get_status",
+         "Get power manager status: current mode, battery voltage, idle time, active locks",
+         tool_power_get_status);
+    {
+        esp_mcp_tool_t *t = esp_mcp_tool_create(
+            "rover.power_set_mode",
+            "Set power mode (ACTIVE, IDLE, or LOW_POWER). "
+            "Rejected if rover is moving or a sleep-prevention lock is active.",
+            tool_power_set_mode);
+        if (!t) return ESP_ERR_NO_MEM;
+        PROP_STR(t, "mode");
+        PROP_STR(t, "reason");
+        if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
+    }
+    {
+        esp_mcp_tool_t *t = esp_mcp_tool_create(
+            "rover.power_configure",
+            "Update persistent power management settings. "
+            "Integer/float fields: omit or pass 0 to leave unchanged. "
+            "Boolean fields (wifi_power_save, reduce_cpu_frequency, disable_display_when_idle) "
+            "are always applied — include all three when changing any. "
+            "Most settings take effect after reboot.",
+            tool_power_configure);
+        if (!t) return ESP_ERR_NO_MEM;
+        PROP_INT_RANGE(t, "active_timeout_sec",     0, 3600);
+        PROP_INT_RANGE(t, "idle_to_low_power_sec",  0, 86400);
+        PROP_BOOL(t, "wifi_power_save");
+        PROP_BOOL(t, "reduce_cpu_frequency");
+        PROP_BOOL(t, "disable_display_when_idle");
+        PROP_FLOAT(t, "critical_battery_voltage");
+        if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
+    }
+    {
+        esp_mcp_tool_t *t = esp_mcp_tool_create(
+            "rover.power_prevent_sleep",
+            "Acquire a sleep-prevention lock: while any lock is held the rover stays in ACTIVE mode. "
+            "ttl_sec=0 means the lock never expires (must be released manually). "
+            "Returns lock_id needed to release the lock.",
+            tool_power_prevent_sleep);
+        if (!t) return ESP_ERR_NO_MEM;
+        PROP_STR(t, "reason");
+        PROP_INT_RANGE(t, "ttl_sec", 0, 604800);
+        if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
+    }
+    {
+        esp_mcp_tool_t *t = esp_mcp_tool_create(
+            "rover.power_release_sleep_lock",
+            "Release a sleep-prevention lock acquired with rover.power_prevent_sleep. "
+            "Pass the lock_id returned by that call.",
+            tool_power_release_sleep_lock);
+        if (!t) return ESP_ERR_NO_MEM;
+        PROP_INT_RANGE(t, "lock_id", 0, 1000000);
+        if (esp_mcp_add_tool(mcp, t) != ESP_OK) { esp_mcp_tool_destroy(t); return ESP_FAIL; }
+    }
 
     /* IMU */
     TOOL("rover.get_imu", "Get IMU sensor data", tool_get_imu);

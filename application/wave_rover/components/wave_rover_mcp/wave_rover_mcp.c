@@ -29,6 +29,7 @@ static const char *TAG = "wr_mcp";
 /* Forward declarations from wave_rover_mcp_tools.c */
 esp_err_t wr_mcp_register_all_tools(esp_mcp_t *mcp);
 void      wr_mcp_tools_set_config(const wave_rover_config_t *cfg);
+void      wr_mcp_tools_set_config_mut(wave_rover_config_t *cfg);
 void      wr_mcp_tools_set_power_mgr(wr_power_mgr_handle_t pm);
 
 static esp_mcp_t                    *s_mcp    = NULL;
@@ -392,6 +393,7 @@ esp_err_t wave_rover_mcp_start(const wave_rover_config_t *cfg,
     s_power_mgr = power_mgr;
     ESP_RETURN_ON_ERROR(esp_mcp_create(&s_mcp), TAG, "esp_mcp_create");
     wr_mcp_tools_set_config(cfg);
+    wr_mcp_tools_set_config_mut((wave_rover_config_t *)cfg);
     wr_mcp_tools_set_power_mgr(s_power_mgr);
     ESP_RETURN_ON_ERROR(wr_mcp_register_all_tools(s_mcp), TAG, "register tools");
 
