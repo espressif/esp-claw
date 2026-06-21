@@ -173,6 +173,15 @@ esp_err_t wr_display_text(const char *text, int line, bool clear_first)
     return ESP_OK;
 }
 
+esp_err_t wr_display_set_power(bool on)
+{
+    if (!g_wr_i2c_bus) return ESP_OK;
+    if (!s_oled_dev) {
+        if (oled_init() != ESP_OK) return ESP_OK;
+    }
+    return ssd_cmd(on ? 0xAF : 0xAE);
+}
+
 esp_err_t wr_display_status(const char *fw_ver, const char *wifi_info,
                              float battery_v, bool mcp_active, bool estop)
 {

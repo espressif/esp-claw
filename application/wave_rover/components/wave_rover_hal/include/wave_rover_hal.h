@@ -86,6 +86,10 @@ esp_err_t wr_imu_get_sample(wr_imu_sample_t *sample);
 esp_err_t wr_imu_get_gyro(float *gz_dps);
 /* Collect `samples` readings at `interval_ms` apart; compute+store gyro bias offsets */
 esp_err_t wr_imu_calibrate(uint16_t samples, uint32_t interval_ms, wr_imu_calib_t *out);
+/* Switches AK09918 magnetometer between continuous 10Hz mode (true) and
+ * power-down mode (false). No-op (returns ESP_OK) if magnetometer not
+ * present. */
+esp_err_t wr_imu_set_mag_continuous(bool enable);
 
 /* Navigation calibration state */
 typedef struct {
@@ -111,6 +115,9 @@ esp_err_t wr_display_clear(void);
 esp_err_t wr_display_text(const char *text, int line, bool clear_first);
 esp_err_t wr_display_status(const char *fw_ver, const char *wifi_info,
                              float battery_v, bool mcp_active, bool estop);
+/* SSD1306 display on/off via command 0xAF/0xAE. Framebuffer content is
+ * preserved and reappears when re-enabled with `on=true`. */
+esp_err_t wr_display_set_power(bool on);
 
 #ifdef __cplusplus
 }

@@ -220,3 +220,10 @@ esp_err_t wr_imu_calibrate(uint16_t samples, uint32_t interval_ms,
              s_gyro_off_x, s_gyro_off_y, s_gyro_off_z, out->accel_ref_z);
     return ESP_OK;
 }
+
+esp_err_t wr_imu_set_mag_continuous(bool enable)
+{
+    if (!s_ak09_dev) return ESP_OK;
+    /* AK09918: 0x08 = continuous measurement mode 2 (10Hz), 0x00 = power-down */
+    return ak_write(AK_CNTL2, enable ? 0x08 : 0x00);
+}

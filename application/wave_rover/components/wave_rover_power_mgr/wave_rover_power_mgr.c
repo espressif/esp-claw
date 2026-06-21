@@ -86,6 +86,12 @@ static void apply_mode(struct wr_power_mgr_t *m, wr_power_mode_t mode)
             ESP_LOGW(TAG, "power: esp_pm_configure(min=%d) failed: %s", min_mhz, esp_err_to_name(err));
         }
     }
+
+    wr_imu_set_mag_continuous(mode == WR_POWER_MODE_ACTIVE);
+
+    if (m->config.disable_display_when_idle) {
+        wr_display_set_power(mode != WR_POWER_MODE_LOW_POWER);
+    }
 }
 
 /* Caller must hold m->mutex. */
