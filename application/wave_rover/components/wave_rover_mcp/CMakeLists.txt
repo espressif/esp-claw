@@ -4,6 +4,7 @@ idf_component_register(
     PRIV_REQUIRES
         wave_rover_hal
         wave_rover_config
+        wave_rover_power_mgr
         espressif__mcp-c-sdk
         esp_http_server
         esp_wifi

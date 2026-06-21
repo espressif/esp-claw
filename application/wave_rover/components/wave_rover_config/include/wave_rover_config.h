@@ -33,6 +33,18 @@ typedef struct {
     char     syslog_host[WR_CFG_HOST_LEN];       /* empty = subnet broadcast */
     uint16_t syslog_port;
     uint8_t  syslog_facility;                    /* syslog facility 0-23 */
+
+    /* Power management (Wave Rover power optimization) */
+    bool     power_mgr_enabled;            /* default true */
+    uint16_t power_active_timeout_sec;     /* ACTIVE -> IDLE after this many idle seconds */
+    uint16_t power_idle_to_low_power_sec;  /* total idle seconds before LOW_POWER */
+    bool     power_wifi_power_save;        /* enable esp_wifi_set_ps() per mode */
+    bool     power_reduce_cpu_frequency;   /* enable esp_pm DFS per mode */
+    bool     power_disable_display_idle;   /* turn SSD1306 off in LOW_POWER */
+    float    power_critical_battery_v;     /* forces LOW_POWER + motor stop below this */
+    uint16_t power_telemetry_active_sec;   /* INA219 poll interval in ACTIVE */
+    uint16_t power_telemetry_idle_sec;     /* INA219 poll interval in IDLE */
+    uint16_t power_telemetry_low_power_sec; /* INA219 poll interval in LOW_POWER */
 } wave_rover_config_t;
 
 esp_err_t wave_rover_config_init(void);

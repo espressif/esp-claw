@@ -30,6 +30,10 @@ static i2c_master_dev_handle_t s_ak09_dev = NULL;
 #define AK_HXL    0x11
 #define AK_CNTL2  0x31
 
+/* AK09918 CNTL2 mode values */
+#define AK_CNTL2_MODE_10HZ   0x01  /* continuous measurement mode 1 */
+#define AK_CNTL2_POWER_DOWN  0x00
+
 static esp_err_t qmi_read(uint8_t reg, uint8_t *buf, size_t len)
 {
     ESP_RETURN_ON_ERROR(i2c_master_transmit(s_qmi_dev, &reg, 1, 50), TAG, "qmi tx");
@@ -81,7 +85,7 @@ static esp_err_t imu_hw_init(void)
         .scl_speed_hz    = WR_I2C_FREQ_HZ,
     };
     if (i2c_master_bus_add_device(g_wr_i2c_bus, &ak_cfg, &s_ak09_dev) == ESP_OK) {
-        ak_write(AK_CNTL2, 0x08); /* continuous mode 1 (10Hz) */
+        ak_write(AK_CNTL2, AK_CNTL2_MODE_10HZ); /* start in 10 Hz continuous mode */
         ESP_LOGI(TAG, "AK09918 initialized");
     } else {
         ESP_LOGW(TAG, "AK09918 not found, mag disabled");
@@ -219,4 +223,11 @@ esp_err_t wr_imu_calibrate(uint16_t samples, uint32_t interval_ms,
     ESP_LOGI(TAG, "IMU calibrated: gyro_off=[%.4f %.4f %.4f] dps, accel_z=%.4f g",
              s_gyro_off_x, s_gyro_off_y, s_gyro_off_z, out->accel_ref_z);
     return ESP_OK;
+}
+
+esp_err_t wr_imu_set_mag_continuous(bool enable)
+{
+    if (!s_ak09_dev) return ESP_OK;
+    /* AK09918: mode 1 = 10 Hz continuous, 0x00 = power-down */
+    return ak_write(AK_CNTL2, enable ? AK_CNTL2_MODE_10HZ : AK_CNTL2_POWER_DOWN);
 }

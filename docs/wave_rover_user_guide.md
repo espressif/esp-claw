@@ -265,3 +265,82 @@ python3 tools/rover_cli.py --host 192.168.4.1 move \
   --linear 0.3 --angular 0 --duration-ms 1000 --allow-motion
 ```
 
+
+## Power Optimization
+
+Wave Rover implements a three-level power management system that automatically adjusts CPU frequency, Wi-Fi power-save mode, magnetometer polling, and display power based on rover activity.
+
+### Power Modes
+
+| Mode | Entry condition | CPU | Wi-Fi PS | Magnetometer | Display |
+|------|----------------|-----|----------|--------------|---------|
+| **ACTIVE** | Boot, any MCP/web command, rover driving | 240 MHz (locked) | Off (WIFI_PS_NONE) | 10 Hz continuous | On |
+| **IDLE** | No activity for `active_timeout_sec` (default 60 s) | 80–240 MHz DFS | MIN_MODEM | 10 Hz continuous | On |
+| **LOW_POWER** | No activity for `idle_to_low_power_sec` (default 300 s), or battery critical | 80–240 MHz DFS | MAX_MODEM | Power-down | Off |
+
+> **DEEP_SLEEP deferred:** Deep sleep requires tearing down Wi-Fi and the MCP/web server, with a wake latency and reassociation cost incompatible with always-on remote control. This will be revisited if standby power measurements justify it.
+
+Automatic transitions are driven by a 1 Hz background task. Any MCP tool call (motor/nav/display commands), web `/cmd` or `/settings` POST, or explicit `rover.power_set_mode` resets the idle timer and transitions to ACTIVE.
+
+### Configuration
+
+These fields are set in NVS and editable via `rover.power_configure` or the Settings page:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `power_mgr_enabled` | `true` | Enable/disable the power manager |
+| `power_active_timeout_sec` | `60` | Seconds of inactivity before ACTIVE → IDLE |
+| `power_idle_to_low_power_sec` | `300` | Total idle seconds before → LOW_POWER |
+| `power_wifi_power_save` | `true` | Enable `esp_wifi_set_ps()` transitions |
+| `power_reduce_cpu_frequency` | `true` | Enable `esp_pm_configure()` DFS |
+| `power_disable_display_idle` | `true` | Turn SSD1306 off in LOW_POWER |
+| `power_critical_battery_v` | `9.6 V` | Voltage threshold forcing LOW_POWER + motor stop |
+| `power_telemetry_active_sec` | `5` | INA219 poll interval in ACTIVE mode |
+| `power_telemetry_idle_sec` | `30` | INA219 poll interval in IDLE mode |
+| `power_telemetry_low_power_sec` | `120` | INA219 poll interval in LOW_POWER mode |
+
+> **Note:** `rover.power_configure` persists settings to NVS. The running power_mgr uses its boot-time config copy; changes take effect after reboot.
+
+### MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `rover.power_get_status` | Returns JSON with `mode`, `battery_voltage`, `low_battery`, `uptime_sec`, `last_activity_sec_ago`, `locks_active` |
+| `rover.power_set_mode` | Force a mode: `{"mode":"IDLE"}`. Rejected if rover is driving or a sleep lock is active. |
+| `rover.power_configure` | Persist config: `{"active_timeout_sec":120,"wifi_power_save":true,...}` |
+| `rover.power_prevent_sleep` | Acquire a mode-floor lock: `{"reason":"recording","ttl_sec":300}`. Returns `lock_id`. |
+| `rover.power_release_sleep_lock` | Release a lock: `{"lock_id":1}` |
+
+Web endpoints: `GET /power` (same JSON as `power_get_status`), `POST /power {"mode":"IDLE"}`. The web UI **Power** tab provides one-click mode switching.
+
+Prometheus metrics (via `GET /metrics`):
+
+```
+wave_rover_power_mode{mode="active"}   1   # 1 for active mode, 0 otherwise
+wave_rover_power_mode{mode="idle"}     0
+wave_rover_power_mode{mode="low_power"} 0
+wave_rover_power_locks_active          0   # 1 when any sleep-prevention lock is held
+```
+
+### Test Plan
+
+| # | Scenario | Expected mode | What should be ON | What should be OFF | Expected log |
+|---|----------|--------------|-------------------|--------------------|--------------|
+| 1 | Boot → Wi-Fi connect → no activity | ACTIVE → IDLE after `active_timeout_sec` | Wi-Fi, MCP, Web, display | — | `power: mode changed ACTIVE -> IDLE, reason=active_timeout` |
+| 2 | Drive via MCP/web for 60 s | ACTIVE throughout | motors, full CPU, Wi-Fi PS off | — | (no transition while driving) |
+| 3 | Idle 5+ minutes | LOW_POWER after `idle_to_low_power_sec` | Wi-Fi (max PS), MCP, Web | display, mag continuous | `power: mode changed IDLE -> LOW_POWER, reason=idle_timeout` |
+| 4 | Web UI open, polling `/status` only | IDLE/LOW_POWER (status polling does not call notify_activity) | — | — | idle timer continues |
+| 5 | MCP read-only tool calls only | IDLE/LOW_POWER per timers | — | — | — |
+| 6 | Wi-Fi connection lost | mode logic unaffected | — | — | existing Wi-Fi reconnect log |
+| 7 | Battery voltage < `power_critical_battery_v` | forced LOW_POWER, motors stopped | — | motors | `power: critical battery, voltage=X.XX` |
+| 8 | OTA update in progress | pinned ACTIVE via `ota` lock | Wi-Fi full power, full CPU | — | `power: lock acquired, reason=ota, ttl=0` |
+| 9 | LOW_POWER → drive command | immediate ACTIVE | motors, full CPU, Wi-Fi PS off | — | `power: mode changed LOW_POWER -> ACTIVE, reason=rover_busy` |
+
+### Current Measurement (fill in with USB power meter)
+
+| Scenario | Expected mode | Current (A) | Notes |
+|----------|--------------|-------------|-------|
+| Boot, Wi-Fi connected | ACTIVE | | |
+| Idle 1 min | IDLE | | |
+| Idle 5 min | LOW_POWER | | |
+| Driving | ACTIVE | | |

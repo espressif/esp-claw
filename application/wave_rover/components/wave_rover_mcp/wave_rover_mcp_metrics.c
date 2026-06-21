@@ -9,6 +9,7 @@
 #include "wave_rover_mcp_metrics.h"
 #include "wave_rover_hal.h"
 #include "wave_rover_mcp_state.h"
+#include "wave_rover_power_mgr.h"
 #include "esp_netif.h"
 #include <stdarg.h>
 #include <stdbool.h>
@@ -22,7 +23,10 @@
 #include "esp_wifi.h"
 
 static const char *TAG = "wr_metrics";
-static const wave_rover_config_t *s_cfg = NULL;
+static const wave_rover_config_t *s_cfg       = NULL;
+static wr_power_mgr_handle_t      s_power_mgr = NULL;
+
+void wr_mcp_metrics_set_power_mgr(wr_power_mgr_handle_t pm) { s_power_mgr = pm; }
 
 #define METRICS_BUF_SIZE 8192
 #define FW_VERSION       "0.1.0"
@@ -136,6 +140,27 @@ static void append_power(char *buf, size_t sz, size_t *off)
     append_help_type(buf, sz, off, "wave_rover_power_low_battery", "gauge",
                      "Whether the low-battery threshold has been crossed (1) or not (0)");
     append(buf, sz, off, "wave_rover_power_low_battery %d\n", ps.low_battery ? 1 : 0);
+
+    if (s_power_mgr) {
+        wr_power_mode_t mode = wr_power_mgr_get_mode(s_power_mgr);
+        append_help_type(buf, sz, off, "wave_rover_power_mode", "gauge",
+                         "Current power mode — 1 for the active mode, 0 for the others");
+        append(buf, sz, off, "wave_rover_power_mode{mode=\"active\"} %d\n",
+               mode == WR_POWER_MODE_ACTIVE ? 1 : 0);
+        append(buf, sz, off, "wave_rover_power_mode{mode=\"idle\"} %d\n",
+               mode == WR_POWER_MODE_IDLE ? 1 : 0);
+        append(buf, sz, off, "wave_rover_power_mode{mode=\"low_power\"} %d\n",
+               mode == WR_POWER_MODE_LOW_POWER ? 1 : 0);
+
+        char status_json[256];
+        bool locks_active = false;
+        if (wr_power_mgr_get_status_json(s_power_mgr, status_json, sizeof(status_json)) == ESP_OK) {
+            locks_active = strstr(status_json, "\"locks_active\":true") != NULL;
+        }
+        append_help_type(buf, sz, off, "wave_rover_power_locks_active", "gauge",
+                         "Whether any power-mode-floor locks are currently held (1) or not (0)");
+        append(buf, sz, off, "wave_rover_power_locks_active %d\n", locks_active ? 1 : 0);
+    }
 }
 
 static void append_motors(char *buf, size_t sz, size_t *off)

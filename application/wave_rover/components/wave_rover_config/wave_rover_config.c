@@ -28,6 +28,17 @@ void wave_rover_config_defaults(wave_rover_config_t *cfg)
     cfg->syslog_host[0]          = '\0';   /* broadcast */
     cfg->syslog_port             = 5514;
     cfg->syslog_facility         = 16;     /* local0 */
+
+    cfg->power_mgr_enabled             = true;
+    cfg->power_active_timeout_sec      = 60;
+    cfg->power_idle_to_low_power_sec   = 300;
+    cfg->power_wifi_power_save         = true;
+    cfg->power_reduce_cpu_frequency    = true;
+    cfg->power_disable_display_idle    = true;
+    cfg->power_critical_battery_v      = 9.6f;
+    cfg->power_telemetry_active_sec    = 5;
+    cfg->power_telemetry_idle_sec      = 30;
+    cfg->power_telemetry_low_power_sec = 120;
 }
 
 esp_err_t wave_rover_config_init(void)
