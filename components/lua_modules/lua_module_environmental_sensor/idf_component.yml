@@ -2,4 +2,5 @@
 dependencies:
   espressif/bme690:
     version: "*"
+  espressif/i2c_bus: ^1.5.1
   esp-idf-lib/dht: ^1.2.0

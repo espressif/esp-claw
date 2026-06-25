@@ -21,6 +21,12 @@ CONFIG_SPIRAM_SPEED_80M=y
 # Enable display_lcd device support for the custom RLCD panel
 CONFIG_ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT=y
 
+# Enable the onboard SHTC3 temperature/humidity sensor on I2C 7-bit address 0x70
+CONFIG_APP_CLAW_LUA_MODULE_ENVIRONMENTAL_SENSOR=y
+CONFIG_LUA_MODULE_ENVIRONMENTAL_SENSOR_BACKEND_BME690=n
+CONFIG_LUA_MODULE_ENVIRONMENTAL_SENSOR_BACKEND_DHT=n
+CONFIG_LUA_MODULE_ENVIRONMENTAL_SENSOR_BACKEND_SHTC3=y
+
 # Size-optimised build; move FreeRTOS and ring-buffer code out of IRAM to free
 # space for the LCD framebuffer, and reduce Wi-Fi IRAM usage similarly.
 CONFIG_COMPILER_OPTIMIZATION_SIZE=y

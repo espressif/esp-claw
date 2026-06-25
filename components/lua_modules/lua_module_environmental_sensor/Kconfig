@@ -7,6 +7,13 @@ menu "Lua Environmental Sensor Module"
             Build the environmental sensor Lua module with the Bosch BME690
             backend.
 
+    config LUA_MODULE_ENVIRONMENTAL_SENSOR_BACKEND_SHTC3
+        bool "Enable SHTC3 backend"
+        default n
+        help
+            Build the environmental sensor Lua module with the Sensirion SHTC3
+            temperature and humidity backend.
+
     config LUA_MODULE_ENVIRONMENTAL_SENSOR_BACKEND_DHT
         bool "Enable DHT backend"
         default y

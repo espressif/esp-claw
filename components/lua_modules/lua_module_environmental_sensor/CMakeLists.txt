@@ -1,5 +1,6 @@
 set(env_sensor_srcs
     "src/lua_module_environmental_sensor.c"
+    "src/shtc3_math.c"
 )
 
 set(env_sensor_requires
@@ -13,6 +14,12 @@ set(env_sensor_priv_requires
 if(CONFIG_LUA_MODULE_ENVIRONMENTAL_SENSOR_BACKEND_BME690)
     list(APPEND env_sensor_priv_requires
         espressif__bme690
+        espressif__i2c_bus
+    )
+endif()
+
+if(CONFIG_LUA_MODULE_ENVIRONMENTAL_SENSOR_BACKEND_SHTC3)
+    list(APPEND env_sensor_priv_requires
         espressif__i2c_bus
     )
 endif()

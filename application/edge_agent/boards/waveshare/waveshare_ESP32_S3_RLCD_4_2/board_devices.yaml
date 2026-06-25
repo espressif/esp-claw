@@ -5,6 +5,9 @@ version: 1.0.0
 #   ES8311  – I2C 7-bit 0x18 (8-bit 0x30), DAC only (playback)
 #   ES7210  – I2C 7-bit 0x40 (8-bit 0x80), dual-mic ADC with reference channel
 #
+# Environmental sensor:
+#   SHTC3   – I2C fixed 7-bit 0x70
+#
 # Display:
 #   4.2-inch fully reflective monochrome LCD, 400 × 300 pixels
 #   Proprietary 1-bit-per-pixel SPI controller; initialization and frame
@@ -50,6 +53,22 @@ devices:
       - name: i2c_master
         address: 0x80           # 8-bit address (7-bit 0x40 << 1)
         frequency: 400000       # Hz
+
+  # ── Sensirion SHTC3 Temperature/Humidity Sensor ────────────────────────
+  # SHTC3 uses a fixed 7-bit I2C address 0x70. Do not configure 0xE0 here;
+  # that is the 8-bit write address representation and is rejected by the Lua
+  # I2C APIs.
+  - name: environmental_sensor
+    chip: shtc3
+    type: custom
+    version: 1.0.0
+    init_skip: true
+    config:
+      i2c_addr: 0x70
+      frequency: 400000
+      int_gpio_num: -1
+    peripherals:
+      - name: i2c_master
 
   # ── 4.2-inch Reflective Monochrome LCD ──────────────────────────────────
   # Fully custom 1-bpp SPI panel; all hardware init is in setup_device.c.
