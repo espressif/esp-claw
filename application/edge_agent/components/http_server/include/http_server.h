@@ -6,6 +6,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "app_config.h"
 #include "esp_err.h"
@@ -39,9 +40,27 @@ typedef struct {
 } http_server_wechat_login_status_t;
 
 typedef struct {
+    bool safe_mode;
+    char safe_mode_reason[96];
+    char reset_reason[32];
+    bool router_available;
+    char router_state[32];
+    char router_reason[96];
+    uint32_t router_event_queue_depth;
+    uint32_t router_action_queue_depth;
+    uint32_t router_stack_hwm_bytes;
+    uint32_t router_action_stack_hwm_bytes;
+    uint32_t router_failed_actions;
+    uint32_t router_dropped_events;
+    esp_err_t router_last_error;
+} http_server_runtime_status_t;
+
+typedef struct {
     esp_err_t (*load_config)(app_config_t *config);
     esp_err_t (*save_config)(const app_config_t *config);
     esp_err_t (*get_wifi_status)(http_server_wifi_status_t *status);
+    esp_err_t (*get_runtime_status)(http_server_runtime_status_t *status);
+    esp_err_t (*clear_safe_mode)(void);
     esp_err_t (*restart_device)(void);
     esp_err_t (*wechat_login_start)(const char *account_id, bool force);
     esp_err_t (*wechat_login_get_status)(http_server_wechat_login_status_t *status);

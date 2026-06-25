@@ -9,3 +9,8 @@ idf_component_register(
         claw_core
         freertos
 )
+
+set_source_files_properties(
+    "src/claw_session_mgr.c"
+    PROPERTIES COMPILE_OPTIONS "-Wframe-larger-than=512"
+)

@@ -33,9 +33,43 @@ static const char *TAG = "event_router_test";
 #define TEST_RULES_PATH            TEST_AUTOMATION_DIR "/rules"
 
 static wl_handle_t s_wl_handle = WL_INVALID_HANDLE;
+static volatile uint32_t s_test_record_calls;
 
 static const char *s_seed_rules_json =
     "[]\n";
+
+static esp_err_t test_record_execute(const char *input_json,
+                                     const claw_cap_call_context_t *ctx,
+                                     char *output,
+                                     size_t output_size)
+{
+    (void)input_json;
+    (void)ctx;
+
+    s_test_record_calls++;
+    snprintf(output, output_size, "recorded:%" PRIu32, s_test_record_calls);
+    return ESP_OK;
+}
+
+static const claw_cap_descriptor_t s_test_descriptors[] = {
+    {
+        .id = "test_record",
+        .name = "test_record",
+        .family = "test",
+        .description = "Record one test action execution.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{}}",
+        .execute = test_record_execute,
+    },
+};
+
+static const claw_cap_group_t s_test_group = {
+    .group_id = "test_caps",
+    .plugin_name = "test_caps",
+    .version = "1.0.0",
+    .descriptors = s_test_descriptors,
+    .descriptor_count = sizeof(s_test_descriptors) / sizeof(s_test_descriptors[0]),
+};
 
 static esp_err_t init_nvs(void)
 {
@@ -126,6 +160,7 @@ static esp_err_t init_console(void)
     ESP_RETURN_ON_ERROR(esp_console_init(&console_config), TAG, "Failed to init console");
     esp_console_register_help_command();
     ESP_RETURN_ON_ERROR(claw_cap_init(), TAG, "Failed to init claw_cap");
+    ESP_RETURN_ON_ERROR(claw_cap_register_group(&s_test_group), TAG, "Failed to register test caps");
     ESP_RETURN_ON_ERROR(cap_router_mgr_register_group(), TAG, "Failed to register router manager cap");
     ESP_RETURN_ON_ERROR(claw_cap_start_all(), TAG, "Failed to start capabilities");
     register_cap_router_mgr();
@@ -138,6 +173,11 @@ static esp_err_t init_event_router(void)
         .rules_path = TEST_RULES_PATH,
         .event_queue_len = 4,
         .task_stack_size = 4096,
+        .action_queue_len = 4,
+        .action_task_stack_size = 8192,
+        .action_task_priority = 4,
+        .action_task_core = tskNO_AFFINITY,
+        .min_stack_watermark_bytes = 512,
         .task_priority = 4,
         .task_core = tskNO_AFFINITY,
         .default_route_messages_to_agent = false,
@@ -145,6 +185,19 @@ static esp_err_t init_event_router(void)
 
     ESP_RETURN_ON_ERROR(claw_event_router_init(&config), TAG, "Failed to init event router");
     return claw_event_router_start();
+}
+
+static bool wait_for_test_record_calls(uint32_t expected, TickType_t timeout_ticks)
+{
+    TickType_t deadline = xTaskGetTickCount() + timeout_ticks;
+
+    while (xTaskGetTickCount() < deadline) {
+        if (s_test_record_calls >= expected) {
+            return true;
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    return s_test_record_calls >= expected;
 }
 
 static esp_err_t run_cli_capture(const char *command_line, char **out_stdout_text, int *out_cmd_ret)
@@ -279,18 +332,110 @@ static bool run_agent_without_submit_check(void)
     }
 
     err = claw_event_router_handle_event(&event, &result);
-    passed = err == ESP_ERR_INVALID_STATE || result.last_error == ESP_ERR_INVALID_STATE;
+    vTaskDelay(pdMS_TO_TICKS(200));
+    claw_event_router_health_t health = {0};
+    esp_err_t health_err = claw_event_router_get_health(&health);
+    passed = err == ESP_OK &&
+             health_err == ESP_OK &&
+             health.failed_actions > 0 &&
+             health.state == CLAW_EVENT_ROUTER_HEALTH_DEGRADED;
     if (!passed) {
         ESP_LOGE(TAG,
-                 "run_agent without submit returned err=%s last_error=%s failed_actions=%d",
+                 "run_agent without submit returned err=%s last_error=%s failed_actions=%u state=%d",
                  esp_err_to_name(err),
-                 esp_err_to_name(result.last_error),
-                 result.failed_actions);
+                 esp_err_to_name(health_err),
+                 (unsigned)health.failed_actions,
+                 health.state);
     }
 
     claw_event_free(&event);
     (void)claw_event_router_delete_rule("agent_missing_submit");
     ESP_LOGI(TAG, "[%s] run_agent_without_submit", passed ? "PASS" : "FAIL");
+    return passed;
+}
+
+static bool action_worker_call_cap_check(void)
+{
+    static const char *cap_rule_json =
+        "{\"id\":\"async_cap\",\"enabled\":true,\"consume_on_match\":true,"
+        "\"ack\":\"async accepted\","
+        "\"match\":{\"event_type\":\"message\",\"content_type\":\"text\",\"source_cap\":\"test_source\","
+        "\"channel\":\"cli\",\"chat_id\":\"room_async\",\"text\":\"async please\"},"
+        "\"actions\":[{\"type\":\"call_cap\",\"cap\":\"test_record\",\"input\":{\"value\":\"{{event.text}}\"}}]}";
+    claw_event_t event = {
+        .source_cap = "test_source",
+        .event_type = "message",
+        .source_channel = "cli",
+        .chat_id = "room_async",
+        .content_type = "text",
+        .session_policy = CLAW_SESSION_POLICY_CHAT,
+    };
+    claw_event_router_result_t result = {0};
+    claw_event_router_health_t health = {0};
+    esp_err_t err;
+    bool passed;
+
+    ESP_LOGI(TAG, "[RUN] action_worker_call_cap");
+    err = claw_event_router_add_rule_json(cap_rule_json);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to add async cap rule: %s", esp_err_to_name(err));
+        return false;
+    }
+
+    event.text = strdup("async please");
+    if (!event.text) {
+        (void)claw_event_router_delete_rule("async_cap");
+        return false;
+    }
+    s_test_record_calls = 0;
+
+    err = claw_event_router_handle_event(&event, &result);
+    passed = err == ESP_OK &&
+             result.matched &&
+             result.action_count == 1 &&
+             wait_for_test_record_calls(1, pdMS_TO_TICKS(1000)) &&
+             claw_event_router_get_health(&health) == ESP_OK &&
+             health.state == CLAW_EVENT_ROUTER_HEALTH_OK;
+    if (!passed) {
+        ESP_LOGE(TAG,
+                 "async cap check err=%s matched=%d actions=%d calls=%u state=%d failed=%u",
+                 esp_err_to_name(err),
+                 result.matched,
+                 result.action_count,
+                 (unsigned)s_test_record_calls,
+                 health.state,
+                 (unsigned)health.failed_actions);
+    }
+
+    claw_event_free(&event);
+    (void)claw_event_router_delete_rule("async_cap");
+    ESP_LOGI(TAG, "[%s] action_worker_call_cap", passed ? "PASS" : "FAIL");
+    return passed;
+}
+
+static bool router_health_accepting_check(void)
+{
+    claw_event_router_health_t health = {0};
+    bool passed;
+
+    ESP_LOGI(TAG, "[RUN] router_health_accepting");
+    passed = claw_event_router_get_health(&health) == ESP_OK &&
+             health.state == CLAW_EVENT_ROUTER_HEALTH_DEGRADED;
+    passed = claw_event_router_set_accepting(true, NULL) == ESP_OK && passed;
+    memset(&health, 0, sizeof(health));
+    passed = claw_event_router_get_health(&health) == ESP_OK &&
+             health.state == CLAW_EVENT_ROUTER_HEALTH_OK &&
+             health.event_queue_depth == 0 &&
+             health.action_queue_depth == 0 && passed;
+
+    if (!passed) {
+        ESP_LOGE(TAG,
+                 "health accepting check failed state=%d event_depth=%u action_depth=%u",
+                 health.state,
+                 (unsigned)health.event_queue_depth,
+                 (unsigned)health.action_queue_depth);
+    }
+    ESP_LOGI(TAG, "[%s] router_health_accepting", passed ? "PASS" : "FAIL");
     return passed;
 }
 
@@ -389,7 +534,9 @@ static bool run_smoke_suite(void)
                            NULL,
                            0) && ok;
 
+    ok = action_worker_call_cap_check() && ok;
     ok = run_agent_without_submit_check() && ok;
+    ok = router_health_accepting_check() && ok;
 
     return ok;
 }

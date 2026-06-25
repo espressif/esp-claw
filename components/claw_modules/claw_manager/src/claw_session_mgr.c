@@ -482,7 +482,7 @@ static esp_err_t claw_session_mgr_build_current_session_id_locked(uint32_t agent
                                                                   size_t *out_len)
 {
     char chat_key[CLAW_SESSION_MGR_KEY_SIZE];
-    claw_session_mgr_alias_map_t map;
+    claw_session_mgr_alias_map_t *map = NULL;
     esp_err_t err;
 
     err = claw_session_mgr_build_chat_key(agent_id, source_channel, chat_id, chat_key, sizeof(chat_key));
@@ -490,12 +490,20 @@ static esp_err_t claw_session_mgr_build_current_session_id_locked(uint32_t agent
         return err;
     }
 
-    err = claw_session_mgr_load_or_init_mapping_locked(chat_key, &map);
+    map = calloc(1, sizeof(*map));
+    if (!map) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    err = claw_session_mgr_load_or_init_mapping_locked(chat_key, map);
     if (err != ESP_OK) {
+        free(map);
         return err;
     }
 
-    return claw_session_mgr_build_alias_session_id(chat_key, map.current_alias, buf, buf_size, out_len);
+    err = claw_session_mgr_build_alias_session_id(chat_key, map->current_alias, buf, buf_size, out_len);
+    free(map);
+    return err;
 }
 
 static const char *claw_session_mgr_event_key(const claw_session_build_context_t *ctx)
@@ -899,7 +907,7 @@ esp_err_t claw_session_mgr_alloc_subagent_session_id(const char *parent_session_
                                                      size_t buf_size,
                                                      size_t *out_len)
 {
-    claw_session_mgr_subagent_map_t map;
+    claw_session_mgr_subagent_map_t *map = NULL;
     char candidate[CLAW_SESSION_MGR_ID_SIZE];
     esp_err_t err;
     int written;
@@ -912,15 +920,21 @@ esp_err_t claw_session_mgr_alloc_subagent_session_id(const char *parent_session_
     if (!s_session_mgr.configured || !s_session_mgr.mutex) {
         return ESP_ERR_INVALID_STATE;
     }
+    map = calloc(1, sizeof(*map));
+    if (!map) {
+        return ESP_ERR_NO_MEM;
+    }
 
     xSemaphoreTakeRecursive(s_session_mgr.mutex, portMAX_DELAY);
-    err = claw_session_mgr_load_subagent_map_locked(parent_session_id, &map);
+    err = claw_session_mgr_load_subagent_map_locked(parent_session_id, map);
     if (err != ESP_OK && err != ESP_ERR_NOT_FOUND) {
         xSemaphoreGiveRecursive(s_session_mgr.mutex);
+        free(map);
         return err;
     }
-    if (map.child_count >= CLAW_SESSION_MGR_SUBAGENT_MAX) {
+    if (map->child_count >= CLAW_SESSION_MGR_SUBAGENT_MAX) {
         xSemaphoreGiveRecursive(s_session_mgr.mutex);
+        free(map);
         return ESP_ERR_NO_MEM;
     }
 
@@ -929,16 +943,18 @@ esp_err_t claw_session_mgr_alloc_subagent_session_id(const char *parent_session_
                            sizeof(candidate),
                            "%s:subagent_%02" PRIu32,
                            parent_session_id,
-                           map.next_suffix++);
+                           map->next_suffix++);
         if (written < 0 || (size_t)written >= sizeof(candidate)) {
             xSemaphoreGiveRecursive(s_session_mgr.mutex);
+            free(map);
             return ESP_ERR_INVALID_SIZE;
         }
-    } while (claw_session_mgr_subagent_map_has_child(&map, candidate));
+    } while (claw_session_mgr_subagent_map_has_child(map, candidate));
 
-    strlcpy(map.child_ids[map.child_count++], candidate, sizeof(map.child_ids[0]));
-    err = claw_session_mgr_write_subagent_map_locked(&map);
+    strlcpy(map->child_ids[map->child_count++], candidate, sizeof(map->child_ids[0]));
+    err = claw_session_mgr_write_subagent_map_locked(map);
     xSemaphoreGiveRecursive(s_session_mgr.mutex);
+    free(map);
     if (err != ESP_OK) {
         return err;
     }
@@ -954,7 +970,7 @@ esp_err_t claw_session_mgr_subagent_id_is_known(const char *parent_session_id,
                                                 const char *subagent_id,
                                                 bool *out_known)
 {
-    claw_session_mgr_subagent_map_t map;
+    claw_session_mgr_subagent_map_t *map = NULL;
     esp_err_t err;
 
     if (!parent_session_id || !parent_session_id[0] ||
@@ -965,13 +981,18 @@ esp_err_t claw_session_mgr_subagent_id_is_known(const char *parent_session_id,
     if (!s_session_mgr.configured || !s_session_mgr.mutex) {
         return ESP_ERR_INVALID_STATE;
     }
+    map = calloc(1, sizeof(*map));
+    if (!map) {
+        return ESP_ERR_NO_MEM;
+    }
 
     xSemaphoreTakeRecursive(s_session_mgr.mutex, portMAX_DELAY);
-    err = claw_session_mgr_load_subagent_map_locked(parent_session_id, &map);
+    err = claw_session_mgr_load_subagent_map_locked(parent_session_id, map);
     if (err == ESP_OK) {
-        *out_known = claw_session_mgr_subagent_map_has_child(&map, subagent_id);
+        *out_known = claw_session_mgr_subagent_map_has_child(map, subagent_id);
     }
     xSemaphoreGiveRecursive(s_session_mgr.mutex);
+    free(map);
 
     if (err == ESP_ERR_NOT_FOUND) {
         return ESP_OK;
@@ -984,7 +1005,7 @@ esp_err_t claw_session_mgr_list_subagent_sessions(const char *parent_session_id,
                                                   size_t max_ids,
                                                   size_t *out_count)
 {
-    claw_session_mgr_subagent_map_t map;
+    claw_session_mgr_subagent_map_t *map = NULL;
     esp_err_t err;
 
     if (!parent_session_id || !parent_session_id[0] || !out_count ||
@@ -995,16 +1016,21 @@ esp_err_t claw_session_mgr_list_subagent_sessions(const char *parent_session_id,
     if (!s_session_mgr.configured || !s_session_mgr.mutex) {
         return ESP_ERR_INVALID_STATE;
     }
+    map = calloc(1, sizeof(*map));
+    if (!map) {
+        return ESP_ERR_NO_MEM;
+    }
 
     xSemaphoreTakeRecursive(s_session_mgr.mutex, portMAX_DELAY);
-    err = claw_session_mgr_load_subagent_map_locked(parent_session_id, &map);
+    err = claw_session_mgr_load_subagent_map_locked(parent_session_id, map);
     if (err == ESP_OK) {
-        for (size_t i = 0; i < map.child_count && i < max_ids; i++) {
-            strlcpy(out_ids[i], map.child_ids[i], sizeof(out_ids[i]));
+        for (size_t i = 0; i < map->child_count && i < max_ids; i++) {
+            strlcpy(out_ids[i], map->child_ids[i], sizeof(out_ids[i]));
         }
-        *out_count = map.child_count < max_ids ? map.child_count : max_ids;
+        *out_count = map->child_count < max_ids ? map->child_count : max_ids;
     }
     xSemaphoreGiveRecursive(s_session_mgr.mutex);
+    free(map);
 
     if (err == ESP_ERR_NOT_FOUND) {
         return ESP_OK;
@@ -1016,7 +1042,7 @@ esp_err_t claw_session_mgr_delete_subagent_session(const char *parent_session_id
                                                    const char *subagent_id,
                                                    bool *out_deleted_any)
 {
-    claw_session_mgr_subagent_map_t map;
+    claw_session_mgr_subagent_map_t *map = NULL;
     bool deleted_any = false;
     size_t child_index = CLAW_SESSION_MGR_SUBAGENT_MAX;
     esp_err_t err;
@@ -1031,14 +1057,18 @@ esp_err_t claw_session_mgr_delete_subagent_session(const char *parent_session_id
     if (!s_session_mgr.configured || !s_session_mgr.mutex) {
         return ESP_ERR_INVALID_STATE;
     }
+    map = calloc(1, sizeof(*map));
+    if (!map) {
+        return ESP_ERR_NO_MEM;
+    }
 
     xSemaphoreTakeRecursive(s_session_mgr.mutex, portMAX_DELAY);
     err = claw_session_mgr_require_configured_locked();
     if (err == ESP_OK) {
-        err = claw_session_mgr_load_subagent_map_locked(parent_session_id, &map);
+        err = claw_session_mgr_load_subagent_map_locked(parent_session_id, map);
     }
     if (err == ESP_OK) {
-        err = claw_session_mgr_subagent_map_find_child(&map, subagent_id, &child_index);
+        err = claw_session_mgr_subagent_map_find_child(map, subagent_id, &child_index);
     }
     if (err == ESP_OK && !s_session_mgr.delete_session) {
         err = ESP_ERR_NOT_SUPPORTED;
@@ -1052,14 +1082,15 @@ esp_err_t claw_session_mgr_delete_subagent_session(const char *parent_session_id
         }
     }
     if (err == ESP_OK) {
-        for (size_t i = child_index; i + 1 < map.child_count; i++) {
-            strlcpy(map.child_ids[i], map.child_ids[i + 1], sizeof(map.child_ids[i]));
+        for (size_t i = child_index; i + 1 < map->child_count; i++) {
+            strlcpy(map->child_ids[i], map->child_ids[i + 1], sizeof(map->child_ids[i]));
         }
-        map.child_count--;
-        map.child_ids[map.child_count][0] = '\0';
-        err = claw_session_mgr_write_subagent_map_locked(&map);
+        map->child_count--;
+        map->child_ids[map->child_count][0] = '\0';
+        err = claw_session_mgr_write_subagent_map_locked(map);
     }
     xSemaphoreGiveRecursive(s_session_mgr.mutex);
+    free(map);
 
     if (err == ESP_OK) {
         if (out_deleted_any) {
@@ -1128,7 +1159,7 @@ esp_err_t claw_session_mgr_new_chat_session(uint32_t agent_id,
                                             size_t out_alias_size)
 {
     char chat_key[CLAW_SESSION_MGR_KEY_SIZE];
-    claw_session_mgr_alias_map_t map;
+    claw_session_mgr_alias_map_t *map = NULL;
     char new_alias[CLAW_SESSION_MGR_ALIAS_MAX + 1];
     esp_err_t err;
 
@@ -1141,6 +1172,10 @@ esp_err_t claw_session_mgr_new_chat_session(uint32_t agent_id,
     if (!s_session_mgr.configured || !s_session_mgr.mutex) {
         return ESP_ERR_INVALID_STATE;
     }
+    map = calloc(1, sizeof(*map));
+    if (!map) {
+        return ESP_ERR_NO_MEM;
+    }
 
     xSemaphoreTakeRecursive(s_session_mgr.mutex, portMAX_DELAY);
     err = claw_session_mgr_require_configured_locked();
@@ -1148,34 +1183,35 @@ esp_err_t claw_session_mgr_new_chat_session(uint32_t agent_id,
         err = claw_session_mgr_build_chat_key(agent_id, source_channel, chat_id, chat_key, sizeof(chat_key));
     }
     if (err == ESP_OK) {
-        err = claw_session_mgr_load_mapping_locked(chat_key, &map);
+        err = claw_session_mgr_load_mapping_locked(chat_key, map);
         if (err == ESP_ERR_NOT_FOUND) {
-            memset(&map, 0, sizeof(map));
-            strlcpy(map.chat_key, chat_key, sizeof(map.chat_key));
+            memset(map, 0, sizeof(*map));
+            strlcpy(map->chat_key, chat_key, sizeof(map->chat_key));
             err = ESP_OK;
         }
     }
-    if (err == ESP_OK && map.session_count >= CLAW_SESSION_MGR_MAX_SESSIONS) {
+    if (err == ESP_OK && map->session_count >= CLAW_SESSION_MGR_MAX_SESSIONS) {
         err = ESP_ERR_NO_MEM;
     }
     if (err == ESP_OK) {
         if (has_requested_alias) {
-            if (claw_session_mgr_alias_exists(&map, requested_alias)) {
+            if (claw_session_mgr_alias_exists(map, requested_alias)) {
                 err = ESP_ERR_INVALID_STATE;
             } else {
                 strlcpy(new_alias, requested_alias, sizeof(new_alias));
             }
         } else {
-            err = claw_session_mgr_build_default_alias(&map, new_alias, sizeof(new_alias));
+            err = claw_session_mgr_build_default_alias(map, new_alias, sizeof(new_alias));
         }
     }
     if (err == ESP_OK) {
-        strlcpy(map.sessions[map.session_count], new_alias, sizeof(map.sessions[map.session_count]));
-        map.session_count++;
-        strlcpy(map.current_alias, new_alias, sizeof(map.current_alias));
-        err = claw_session_mgr_write_mapping_locked(&map);
+        strlcpy(map->sessions[map->session_count], new_alias, sizeof(map->sessions[map->session_count]));
+        map->session_count++;
+        strlcpy(map->current_alias, new_alias, sizeof(map->current_alias));
+        err = claw_session_mgr_write_mapping_locked(map);
     }
     xSemaphoreGiveRecursive(s_session_mgr.mutex);
+    free(map);
 
     if (err == ESP_OK && out_alias && out_alias_size > 0) {
         strlcpy(out_alias, new_alias, out_alias_size);
@@ -1221,7 +1257,7 @@ esp_err_t claw_session_mgr_switch_chat_session(uint32_t agent_id,
                                                size_t out_alias_size)
 {
     char chat_key[CLAW_SESSION_MGR_KEY_SIZE];
-    claw_session_mgr_alias_map_t map;
+    claw_session_mgr_alias_map_t *map = NULL;
     esp_err_t err;
 
     if (!claw_session_mgr_alias_is_valid(alias)) {
@@ -1233,6 +1269,10 @@ esp_err_t claw_session_mgr_switch_chat_session(uint32_t agent_id,
     if (!s_session_mgr.configured || !s_session_mgr.mutex) {
         return ESP_ERR_INVALID_STATE;
     }
+    map = calloc(1, sizeof(*map));
+    if (!map) {
+        return ESP_ERR_NO_MEM;
+    }
 
     xSemaphoreTakeRecursive(s_session_mgr.mutex, portMAX_DELAY);
     err = claw_session_mgr_require_configured_locked();
@@ -1240,16 +1280,17 @@ esp_err_t claw_session_mgr_switch_chat_session(uint32_t agent_id,
         err = claw_session_mgr_build_chat_key(agent_id, source_channel, chat_id, chat_key, sizeof(chat_key));
     }
     if (err == ESP_OK) {
-        err = claw_session_mgr_load_or_init_mapping_locked(chat_key, &map);
+        err = claw_session_mgr_load_or_init_mapping_locked(chat_key, map);
     }
-    if (err == ESP_OK && !claw_session_mgr_alias_exists(&map, alias)) {
+    if (err == ESP_OK && !claw_session_mgr_alias_exists(map, alias)) {
         err = ESP_ERR_NOT_FOUND;
     }
     if (err == ESP_OK) {
-        strlcpy(map.current_alias, alias, sizeof(map.current_alias));
-        err = claw_session_mgr_write_mapping_locked(&map);
+        strlcpy(map->current_alias, alias, sizeof(map->current_alias));
+        err = claw_session_mgr_write_mapping_locked(map);
     }
     xSemaphoreGiveRecursive(s_session_mgr.mutex);
+    free(map);
 
     if (err == ESP_OK && out_alias && out_alias_size > 0) {
         strlcpy(out_alias, alias, out_alias_size);
@@ -1267,7 +1308,7 @@ esp_err_t claw_session_mgr_delete_chat_session(uint32_t agent_id,
 {
     char chat_key[CLAW_SESSION_MGR_KEY_SIZE];
     char session_id[CLAW_SESSION_MGR_ID_SIZE];
-    claw_session_mgr_alias_map_t map;
+    claw_session_mgr_alias_map_t *map = NULL;
     bool deleted_any = false;
     size_t alias_index = CLAW_SESSION_MGR_MAX_SESSIONS;
     esp_err_t err;
@@ -1281,6 +1322,10 @@ esp_err_t claw_session_mgr_delete_chat_session(uint32_t agent_id,
     if (!s_session_mgr.configured || !s_session_mgr.mutex) {
         return ESP_ERR_INVALID_STATE;
     }
+    map = calloc(1, sizeof(*map));
+    if (!map) {
+        return ESP_ERR_NO_MEM;
+    }
 
     xSemaphoreTakeRecursive(s_session_mgr.mutex, portMAX_DELAY);
     err = claw_session_mgr_require_configured_locked();
@@ -1288,18 +1333,18 @@ esp_err_t claw_session_mgr_delete_chat_session(uint32_t agent_id,
         err = claw_session_mgr_build_chat_key(agent_id, source_channel, chat_id, chat_key, sizeof(chat_key));
     }
     if (err == ESP_OK) {
-        err = claw_session_mgr_load_mapping_locked(chat_key, &map);
+        err = claw_session_mgr_load_mapping_locked(chat_key, map);
     }
     if (err == ESP_OK) {
-        for (size_t i = 0; i < map.session_count; i++) {
-            if (strcmp(map.sessions[i], alias) == 0) {
+        for (size_t i = 0; i < map->session_count; i++) {
+            if (strcmp(map->sessions[i], alias) == 0) {
                 alias_index = i;
                 break;
             }
         }
         if (alias_index == CLAW_SESSION_MGR_MAX_SESSIONS) {
             err = ESP_ERR_NOT_FOUND;
-        } else if (strcmp(map.current_alias, alias) == 0) {
+        } else if (strcmp(map->current_alias, alias) == 0) {
             err = ESP_ERR_INVALID_STATE;
         } else if (!s_session_mgr.delete_session) {
             err = ESP_ERR_NOT_SUPPORTED;
@@ -1315,14 +1360,15 @@ esp_err_t claw_session_mgr_delete_chat_session(uint32_t agent_id,
         }
     }
     if (err == ESP_OK) {
-        for (size_t i = alias_index; i + 1 < map.session_count; i++) {
-            strlcpy(map.sessions[i], map.sessions[i + 1], sizeof(map.sessions[i]));
+        for (size_t i = alias_index; i + 1 < map->session_count; i++) {
+            strlcpy(map->sessions[i], map->sessions[i + 1], sizeof(map->sessions[i]));
         }
-        map.session_count--;
-        map.sessions[map.session_count][0] = '\0';
-        err = claw_session_mgr_write_mapping_locked(&map);
+        map->session_count--;
+        map->sessions[map->session_count][0] = '\0';
+        err = claw_session_mgr_write_mapping_locked(map);
     }
     xSemaphoreGiveRecursive(s_session_mgr.mutex);
+    free(map);
 
     if (err == ESP_OK) {
         if (out_alias && out_alias_size > 0) {

@@ -209,6 +209,8 @@ export const WebImPage: Component = () => {
   const [pendingPaths, setPendingPaths] = createSignal<string[]>([]);
   const [error, setError] = createSignal<string | null>(null);
   const [bound, setBound] = createSignal<boolean | null>(null);
+  const [routerAvailable, setRouterAvailable] = createSignal<boolean | null>(null);
+  const [routerReason, setRouterReason] = createSignal('');
   const [wsReady, setWsReady] = createSignal(false);
   const [sending, setSending] = createSignal(false);
   const [markdownPreview, setMarkdownPreview] = createSignal(false);
@@ -339,8 +341,12 @@ export const WebImPage: Component = () => {
     try {
       const st = await fetchWebimStatus();
       setBound(!!st.bound);
+      setRouterAvailable(st.router_available !== false);
+      setRouterReason(st.router_reason || '');
     } catch {
       setBound(false);
+      setRouterAvailable(false);
+      setRouterReason(t('webimRouterUnavailable') as string);
     }
     connectWs();
   });
@@ -415,6 +421,10 @@ export const WebImPage: Component = () => {
     const files = pendingPaths();
     if (!text && files.length === 0) return;
     if (!wsReady()) return;
+    if (routerAvailable() === false) {
+      pushToast(routerReason() || (t('webimRouterUnavailable') as string), 'error', 5000);
+      return;
+    }
     if (bound() === false) {
       pushToast(t('webimNoBind') as string, 'error', 5000);
       return;
@@ -427,7 +437,7 @@ export const WebImPage: Component = () => {
   };
 
   const retryMessage = async (message: LocalWebImMessage) => {
-    if (!message.localId || sending() || !wsReady()) return;
+    if (!message.localId || sending() || !wsReady() || routerAvailable() === false) return;
     const retry = { ...message, sendStatus: 'pending' as const };
     setMessages((prev) => [...prev.filter((m) => m.localId !== message.localId), retry]);
     await postLocalMessage(retry);
@@ -485,6 +495,11 @@ export const WebImPage: Component = () => {
           <Banner kind="info" message={t('webimNoBind') as string} />
         </div>
       </Show>
+      <Show when={routerAvailable() === false}>
+        <div class="px-5 pt-2">
+          <Banner kind="error" message={routerReason() || (t('webimRouterUnavailable') as string)} />
+        </div>
+      </Show>
 
       <div class="flex min-h-0 flex-1 flex-col">
         <div class="flex min-h-0 flex-1 flex-col min-w-0 border border-[var(--color-border-subtle)] rounded-none bg-white/[0.02]">
@@ -511,7 +526,7 @@ export const WebImPage: Component = () => {
                           class="inline-flex h-5 w-5 items-center justify-center rounded-full text-[rgb(248,113,113)] transition hover:bg-[rgba(248,113,113,0.12)] hover:text-[rgb(252,165,165)] disabled:opacity-60"
                           title={t('webimRetrySend') as string}
                           aria-label={t('webimRetrySend') as string}
-                          disabled={sending() || !wsReady()}
+                          disabled={sending() || !wsReady() || routerAvailable() === false}
                           onClick={() => void retryMessage(m)}
                         >
                           <CircleX class="h-4 w-4" />
@@ -592,7 +607,7 @@ export const WebImPage: Component = () => {
                 variant="secondary"
                 type="button"
                 onClick={() => fileRef?.click()}
-                disabled={sending() || !wsReady()}
+                disabled={sending() || !wsReady() || routerAvailable() === false}
               >
                 <span class="inline-flex items-center gap-1.5">
                   <ImagePlus class="w-4 h-4" />
@@ -618,7 +633,7 @@ export const WebImPage: Component = () => {
                 size="sm"
                 variant="primary"
                 onClick={() => void send()}
-                disabled={sending() || !wsReady()}
+                disabled={sending() || !wsReady() || routerAvailable() === false}
               >
                 <span class="inline-flex items-center gap-1.5">
                   <SendHorizontal class="w-4 h-4" />

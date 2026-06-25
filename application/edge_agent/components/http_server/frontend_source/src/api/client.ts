@@ -91,6 +91,23 @@ export type StatusInfo = {
   ap_ip: string;
   wifi_mode: string;
   storage_base_path: string;
+  runtime?: {
+    safe_mode?: boolean;
+    safe_mode_reason?: string;
+    reset_reason?: string;
+    router?: {
+      available?: boolean;
+      state?: string;
+      reason?: string;
+      event_queue_depth?: number;
+      action_queue_depth?: number;
+      router_stack_hwm_bytes?: number;
+      action_stack_hwm_bytes?: number;
+      failed_actions?: number;
+      dropped_events?: number;
+      last_error?: number;
+    };
+  };
 };
 
 export type CapabilityItem = {
@@ -140,6 +157,10 @@ async function parseError(response: Response, fallback: string): Promise<Error> 
       const parsed = JSON.parse(text);
       if (parsed && typeof parsed === 'object' && typeof parsed.error === 'string') {
         return new Error(parsed.error);
+      }
+      if (parsed && typeof parsed === 'object' && typeof parsed.message === 'string') {
+        const code = typeof parsed.code === 'string' ? `${parsed.code}: ` : '';
+        return new Error(code + parsed.message);
       }
     } catch {
       /* not JSON, return plain text */
@@ -409,6 +430,14 @@ export async function restartDevice() {
   );
 }
 
+export async function clearSafeMode() {
+  return request<{ ok?: boolean; message?: string }>(
+    '/api/safe-mode/clear',
+    { method: 'POST' },
+    'Failed to clear safe mode',
+  );
+}
+
 export type WebImLink = { url: string; label: string };
 export type WebImMessage = {
   seq: number;
@@ -421,6 +450,9 @@ export type WebImMessage = {
 export type WebImStatusResponse = {
   ok?: boolean;
   bound?: boolean;
+  router_available?: boolean;
+  router_state?: string;
+  router_reason?: string;
 };
 
 export async function fetchWebimStatus() {

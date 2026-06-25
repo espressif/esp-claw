@@ -55,4 +55,10 @@ idf_component_register(
 # Rebuild the component whenever the bundled UI asset changes on disk.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FRONTEND_DIST_HTML_GZ}")
 
+set_source_files_properties(
+    "http_server_status_api.c"
+    "http_server_webim_api.c"
+    PROPERTIES COMPILE_OPTIONS "-Wframe-larger-than=512"
+)
+
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wno-missing-field-initializers)

@@ -5,6 +5,7 @@
  */
 #include "app_claw.h"
 #include "app_fs.h"
+#include "claw_event_router.h"
 #include "claw_version.h"
 #include "claw_paths.h"
 #include "edge_agent_version.h"
@@ -14,6 +15,7 @@
 #include <stdio.h>
 #include "wifi_manager.h"
 #include "time.h"
+#include "nvs.h"
 #include "nvs_flash.h"
 #include "http_server.h"
 #include "esp_log.h"
@@ -34,8 +36,20 @@
 
 static const char *TAG = "app";
 
+#define RUNTIME_GUARD_NAMESPACE      "runtime_guard"
+#define RUNTIME_GUARD_STAGE_KEY      "stage"
+#define RUNTIME_GUARD_SAFE_KEY       "safe"
+#define RUNTIME_GUARD_REASON_KEY     "reason"
+#define RUNTIME_GUARD_STAGE_HTTP     "booting_http"
+#define RUNTIME_GUARD_STAGE_BUSINESS "business"
+#define RUNTIME_GUARD_STAGE_RUNNING  "running"
+#define RUNTIME_GUARD_STAGE_SAFE     "safe_mode"
+
 static app_config_t *s_config;
 static app_claw_config_t *s_claw_config;
+static bool s_safe_mode;
+static char s_safe_mode_reason[96];
+static char s_reset_reason[32];
 
 static esp_err_t app_allocate_runtime_state(void)
 {
@@ -59,6 +73,158 @@ static void app_free_runtime_state(void)
 
     free(s_config);
     s_config = NULL;
+}
+
+static const char *main_reset_reason_to_string(esp_reset_reason_t reason)
+{
+    switch (reason) {
+    case ESP_RST_POWERON:
+        return "poweron";
+    case ESP_RST_EXT:
+        return "external";
+    case ESP_RST_SW:
+        return "software";
+    case ESP_RST_PANIC:
+        return "panic";
+    case ESP_RST_INT_WDT:
+        return "interrupt_wdt";
+    case ESP_RST_TASK_WDT:
+        return "task_wdt";
+    case ESP_RST_WDT:
+        return "watchdog";
+    case ESP_RST_DEEPSLEEP:
+        return "deepsleep";
+    case ESP_RST_BROWNOUT:
+        return "brownout";
+    case ESP_RST_SDIO:
+        return "sdio";
+    case ESP_RST_UNKNOWN:
+    default:
+        return "unknown";
+    }
+}
+
+static bool main_reset_reason_is_business_crash(esp_reset_reason_t reason)
+{
+    return reason == ESP_RST_PANIC ||
+           reason == ESP_RST_INT_WDT ||
+           reason == ESP_RST_TASK_WDT ||
+           reason == ESP_RST_WDT;
+}
+
+static esp_err_t main_runtime_guard_set_stage(const char *stage)
+{
+    nvs_handle_t handle;
+    esp_err_t err;
+
+    err = nvs_open(RUNTIME_GUARD_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = nvs_set_str(handle, RUNTIME_GUARD_STAGE_KEY, stage ? stage : "");
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+    return err;
+}
+
+static esp_err_t main_runtime_guard_init(void)
+{
+    nvs_handle_t handle;
+    esp_err_t err;
+    char last_stage[32] = {0};
+    size_t last_stage_len = sizeof(last_stage);
+    char persisted_reason[sizeof(s_safe_mode_reason)] = {0};
+    size_t persisted_reason_len = sizeof(persisted_reason);
+    uint8_t persisted_safe = 0;
+    esp_reset_reason_t reset_reason = esp_reset_reason();
+
+    strlcpy(s_reset_reason, main_reset_reason_to_string(reset_reason), sizeof(s_reset_reason));
+
+    err = nvs_open(RUNTIME_GUARD_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "runtime guard NVS open failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    if (nvs_get_str(handle, RUNTIME_GUARD_STAGE_KEY, last_stage, &last_stage_len) != ESP_OK) {
+        last_stage[0] = '\0';
+    }
+    if (nvs_get_u8(handle, RUNTIME_GUARD_SAFE_KEY, &persisted_safe) != ESP_OK) {
+        persisted_safe = 0;
+    }
+    if (nvs_get_str(handle, RUNTIME_GUARD_REASON_KEY,
+                    persisted_reason, &persisted_reason_len) != ESP_OK) {
+        persisted_reason[0] = '\0';
+    }
+
+    if (persisted_safe) {
+        s_safe_mode = true;
+        strlcpy(s_safe_mode_reason,
+                persisted_reason[0] ? persisted_reason : "safe mode requested",
+                sizeof(s_safe_mode_reason));
+    } else if (main_reset_reason_is_business_crash(reset_reason) &&
+               (strcmp(last_stage, RUNTIME_GUARD_STAGE_BUSINESS) == 0 ||
+                strcmp(last_stage, RUNTIME_GUARD_STAGE_RUNNING) == 0)) {
+        s_safe_mode = true;
+        snprintf(s_safe_mode_reason,
+                 sizeof(s_safe_mode_reason),
+                 "previous reset=%s during %s",
+                 s_reset_reason,
+                 last_stage[0] ? last_stage : "business");
+        (void)nvs_set_u8(handle, RUNTIME_GUARD_SAFE_KEY, 1);
+        (void)nvs_set_str(handle, RUNTIME_GUARD_REASON_KEY, s_safe_mode_reason);
+    } else {
+        s_safe_mode = false;
+        s_safe_mode_reason[0] = '\0';
+    }
+
+    (void)nvs_set_str(handle,
+                      RUNTIME_GUARD_STAGE_KEY,
+                      s_safe_mode ? RUNTIME_GUARD_STAGE_SAFE : RUNTIME_GUARD_STAGE_HTTP);
+    err = nvs_commit(handle);
+    nvs_close(handle);
+
+    if (s_safe_mode) {
+        ESP_LOGW(TAG, "Runtime safe mode active: %s", s_safe_mode_reason);
+    }
+    return err;
+}
+
+static esp_err_t main_runtime_guard_clear_safe_mode(void)
+{
+    nvs_handle_t handle;
+    esp_err_t err;
+
+    err = nvs_open(RUNTIME_GUARD_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) {
+        return err;
+    }
+    (void)nvs_erase_key(handle, RUNTIME_GUARD_SAFE_KEY);
+    (void)nvs_erase_key(handle, RUNTIME_GUARD_REASON_KEY);
+    err = nvs_set_str(handle, RUNTIME_GUARD_STAGE_KEY, RUNTIME_GUARD_STAGE_HTTP);
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    nvs_close(handle);
+    return err;
+}
+
+static const char *main_router_health_state_to_string(claw_event_router_health_state_t state)
+{
+    switch (state) {
+    case CLAW_EVENT_ROUTER_HEALTH_OK:
+        return "ok";
+    case CLAW_EVENT_ROUTER_HEALTH_DEGRADED:
+        return "degraded";
+    case CLAW_EVENT_ROUTER_HEALTH_STOPPED:
+        return "stopped";
+    case CLAW_EVENT_ROUTER_HEALTH_SAFE_MODE_DISABLED:
+        return "safe_mode_disabled";
+    default:
+        return "unknown";
+    }
 }
 
 static void log_wifi_startup_config(const app_config_t *config)
@@ -185,6 +351,50 @@ static esp_err_t main_get_wifi_status(http_server_wifi_status_t *status)
     return ESP_OK;
 }
 
+static esp_err_t main_get_runtime_status(http_server_runtime_status_t *status)
+{
+    claw_event_router_health_t router = {0};
+    esp_err_t err;
+
+    ESP_RETURN_ON_FALSE(status, ESP_ERR_INVALID_ARG, TAG, "status is NULL");
+    memset(status, 0, sizeof(*status));
+    status->safe_mode = s_safe_mode;
+    strlcpy(status->safe_mode_reason, s_safe_mode_reason, sizeof(status->safe_mode_reason));
+    strlcpy(status->reset_reason, s_reset_reason, sizeof(status->reset_reason));
+
+    if (s_safe_mode) {
+        status->router_available = false;
+        strlcpy(status->router_state, "safe_mode_disabled", sizeof(status->router_state));
+        strlcpy(status->router_reason,
+                s_safe_mode_reason[0] ? s_safe_mode_reason : "safe mode active",
+                sizeof(status->router_reason));
+        return ESP_OK;
+    }
+
+    err = claw_event_router_get_health(&router);
+    if (err != ESP_OK) {
+        status->router_available = false;
+        strlcpy(status->router_state, "stopped", sizeof(status->router_state));
+        strlcpy(status->router_reason, "router not initialized", sizeof(status->router_reason));
+        status->router_last_error = err;
+        return ESP_OK;
+    }
+
+    status->router_available = router.state == CLAW_EVENT_ROUTER_HEALTH_OK;
+    strlcpy(status->router_state,
+            main_router_health_state_to_string(router.state),
+            sizeof(status->router_state));
+    strlcpy(status->router_reason, router.reason, sizeof(status->router_reason));
+    status->router_event_queue_depth = router.event_queue_depth;
+    status->router_action_queue_depth = router.action_queue_depth;
+    status->router_stack_hwm_bytes = router.router_stack_hwm_bytes;
+    status->router_action_stack_hwm_bytes = router.action_stack_hwm_bytes;
+    status->router_failed_actions = router.failed_actions;
+    status->router_dropped_events = router.dropped_events;
+    status->router_last_error = router.last_error;
+    return ESP_OK;
+}
+
 static void main_restart_task(void *arg)
 {
     (void)arg;
@@ -197,6 +407,14 @@ static esp_err_t main_restart_device(void)
     BaseType_t ok = xTaskCreate(main_restart_task, "http_restart", 2048, NULL, 5, NULL);
     ESP_RETURN_ON_FALSE(ok == pdPASS, ESP_ERR_NO_MEM, TAG, "Failed to create restart task");
     return ESP_OK;
+}
+
+static esp_err_t main_clear_safe_mode(void)
+{
+    ESP_RETURN_ON_ERROR(main_runtime_guard_clear_safe_mode(), TAG, "Failed to clear runtime guard");
+    s_safe_mode = false;
+    s_safe_mode_reason[0] = '\0';
+    return main_restart_device();
 }
 
 #if CONFIG_APP_CLAW_CAP_IM_WECHAT
@@ -324,6 +542,7 @@ void app_main(void)
     ESP_LOGI(TAG, "Edge Agent version: %s", edge_agent_get_version());
     ESP_ERROR_CHECK(app_allocate_runtime_state());
     ESP_ERROR_CHECK(init_nvs());
+    ESP_ERROR_CHECK(main_runtime_guard_init());
     ESP_ERROR_CHECK(app_config_init());
     ESP_ERROR_CHECK(app_config_load(s_config));
     app_config_to_claw(s_config, s_claw_config);
@@ -344,6 +563,8 @@ void app_main(void)
             .load_config = main_load_config,
             .save_config = main_save_config,
             .get_wifi_status = main_get_wifi_status,
+            .get_runtime_status = main_get_runtime_status,
+            .clear_safe_mode = main_clear_safe_mode,
             .restart_device = main_restart_device,
 #if CONFIG_APP_CLAW_CAP_IM_WECHAT
             .wechat_login_start = main_wechat_login_start,
@@ -416,10 +637,16 @@ void app_main(void)
     }
 
     ESP_ERROR_CHECK(app_claw_set_save_config_callback(main_save_claw_config, NULL));
-    ESP_ERROR_CHECK(app_claw_start(s_claw_config));
+    if (s_safe_mode) {
+        ESP_LOGW(TAG, "Safe mode: skipping router/agent/webim startup");
+    } else {
+        ESP_ERROR_CHECK(main_runtime_guard_set_stage(RUNTIME_GUARD_STAGE_BUSINESS));
+        ESP_ERROR_CHECK(app_claw_start(s_claw_config));
 #if CONFIG_APP_CLAW_CAP_IM_LOCAL
-    ESP_ERROR_CHECK(http_server_webim_bind_im());
+        ESP_ERROR_CHECK(http_server_webim_bind_im());
 #endif
+        ESP_ERROR_CHECK(main_runtime_guard_set_stage(RUNTIME_GUARD_STAGE_RUNNING));
+    }
 
     register_wifi_command();
 

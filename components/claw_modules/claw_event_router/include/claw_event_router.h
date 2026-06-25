@@ -34,6 +34,11 @@ typedef struct {
     uint32_t task_stack_size;
     UBaseType_t task_priority;
     BaseType_t task_core;
+    uint32_t action_queue_len;
+    uint32_t action_task_stack_size;
+    UBaseType_t action_task_priority;
+    BaseType_t action_task_core;
+    uint32_t min_stack_watermark_bytes;
     uint32_t agent_submit_timeout_ms;
     bool default_route_messages_to_agent;
     claw_event_router_outbound_resolver_fn outbound_resolver;
@@ -60,6 +65,25 @@ typedef enum {
     CLAW_EVENT_ROUTER_ACTION_EMIT_EVENT = 4,
     CLAW_EVENT_ROUTER_ACTION_DROP = 5,
 } claw_event_router_action_kind_t;
+
+typedef enum {
+    CLAW_EVENT_ROUTER_HEALTH_OK = 0,
+    CLAW_EVENT_ROUTER_HEALTH_DEGRADED = 1,
+    CLAW_EVENT_ROUTER_HEALTH_STOPPED = 2,
+    CLAW_EVENT_ROUTER_HEALTH_SAFE_MODE_DISABLED = 3,
+} claw_event_router_health_state_t;
+
+typedef struct {
+    claw_event_router_health_state_t state;
+    uint32_t event_queue_depth;
+    uint32_t action_queue_depth;
+    uint32_t router_stack_hwm_bytes;
+    uint32_t action_stack_hwm_bytes;
+    uint32_t failed_actions;
+    uint32_t dropped_events;
+    esp_err_t last_error;
+    char reason[96];
+} claw_event_router_health_t;
 
 typedef enum {
     CLAW_EVENT_ROUTER_TEXT_MATCH_EXACT = 0,
@@ -121,6 +145,8 @@ esp_err_t claw_event_router_update_rule_json(const char *rule_json);
 esp_err_t claw_event_router_list_rules_json(char *output, size_t output_size);
 esp_err_t claw_event_router_get_rule_json(const char *id, char *output, size_t output_size);
 esp_err_t claw_event_router_get_last_result(claw_event_router_result_t *out_result);
+esp_err_t claw_event_router_get_health(claw_event_router_health_t *out);
+esp_err_t claw_event_router_set_accepting(bool accepting, const char *reason);
 void claw_event_router_free_rule(claw_event_router_rule_t *rule);
 void claw_event_router_free_rule_list(claw_event_router_rule_t *rules, size_t rule_count);
 

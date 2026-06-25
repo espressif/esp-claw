@@ -37,9 +37,60 @@ typedef struct {
     size_t fd_count;
 } webim_ws_broadcast_job_t;
 
+typedef struct {
+    const char *emit_links[WEBIM_LINKS_MAX];
+    char link_bufs[WEBIM_LINKS_MAX][WEBIM_URL_MAX];
+    char link_lbl[WEBIM_LINKS_MAX][48];
+} webim_send_links_t;
+
 static esp_err_t webim_ws_mx_ensure(void);
 static void webim_ws_fd_remove(int fd);
 static esp_err_t webim_ws_queue_json_to_fds(const int *fds, size_t fd_count, const char *json);
+
+static esp_err_t webim_send_error_json(httpd_req_t *req,
+                                       const char *status,
+                                       const char *code,
+                                       const char *message)
+{
+    cJSON *root = cJSON_CreateObject();
+
+    if (!root) {
+        httpd_resp_send_500(req);
+        return ESP_ERR_NO_MEM;
+    }
+    cJSON_AddBoolToObject(root, "ok", false);
+    http_server_json_add_string(root, "code", code);
+    http_server_json_add_string(root, "message", message);
+    if (status && status[0]) {
+        httpd_resp_set_status(req, status);
+    }
+    return http_server_send_json_response(req, root);
+}
+
+static bool webim_router_available(http_server_runtime_status_t *out_status)
+{
+    http_server_ctx_t *ctx = http_server_ctx();
+    http_server_runtime_status_t status = {0};
+
+    if (!ctx->services.get_runtime_status) {
+        if (out_status) {
+            memset(out_status, 0, sizeof(*out_status));
+            out_status->router_available = true;
+            strlcpy(out_status->router_state, "unknown", sizeof(out_status->router_state));
+        }
+        return true;
+    }
+
+    if (ctx->services.get_runtime_status(&status) != ESP_OK) {
+        status.router_available = false;
+        strlcpy(status.router_state, "unknown", sizeof(status.router_state));
+        strlcpy(status.router_reason, "runtime status unavailable", sizeof(status.router_reason));
+    }
+    if (out_status) {
+        *out_status = status;
+    }
+    return status.router_available;
+}
 
 static void webim_ws_broadcast_job_run(void *arg)
 {
@@ -299,13 +350,18 @@ static void webim_build_file_url(const char *storage_path, char *out, size_t out
 static esp_err_t webim_status_handler(httpd_req_t *req)
 {
     cJSON *root = cJSON_CreateObject();
+    http_server_runtime_status_t runtime = {0};
 
     if (!root) {
         httpd_resp_send_500(req);
         return ESP_ERR_NO_MEM;
     }
+    (void)webim_router_available(&runtime);
     cJSON_AddBoolToObject(root, "ok", true);
     cJSON_AddBoolToObject(root, "bound", s_webim_bound);
+    cJSON_AddBoolToObject(root, "router_available", runtime.router_available);
+    http_server_json_add_string(root, "router_state", runtime.router_state);
+    http_server_json_add_string(root, "router_reason", runtime.router_reason);
     return http_server_send_json_response(req, root);
 }
 
@@ -315,14 +371,24 @@ static esp_err_t webim_send_handler(httpd_req_t *req)
     const char *chat_id = NULL;
     const char *text = NULL;
     cJSON *files = NULL;
-    const char *emit_links[WEBIM_LINKS_MAX];
-    char link_bufs[WEBIM_LINKS_MAX][WEBIM_URL_MAX];
-    char link_lbl[WEBIM_LINKS_MAX][48];
+    webim_send_links_t *links = NULL;
     int nlinks = 0;
     esp_err_t err;
+    http_server_runtime_status_t runtime = {0};
+
+    if (!webim_router_available(&runtime)) {
+        const char *reason = runtime.router_reason[0] ? runtime.router_reason : "router unavailable";
+        return webim_send_error_json(req,
+                                     "503 Service Unavailable",
+                                     "router_unhealthy",
+                                     reason);
+    }
 
     if (!s_webim_bound) {
-        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Web IM not ready");
+        return webim_send_error_json(req,
+                                     "503 Service Unavailable",
+                                     "webim_not_ready",
+                                     "Web IM not ready");
     }
 
     err = http_server_parse_json_body(req, &root);
@@ -343,6 +409,13 @@ static esp_err_t webim_send_handler(httpd_req_t *req)
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "text or files required");
     }
 
+    links = calloc(1, sizeof(*links));
+    if (!links) {
+        cJSON_Delete(root);
+        httpd_resp_send_500(req);
+        return ESP_ERR_NO_MEM;
+    }
+
     if (cJSON_IsArray(files)) {
         int n = cJSON_GetArraySize(files);
         for (int i = 0; i < n && nlinks < WEBIM_LINKS_MAX; i++) {
@@ -351,14 +424,15 @@ static esp_err_t webim_send_handler(httpd_req_t *req)
             const char *bn = NULL;
 
             if (!p || !webim_path_allowed_upload(p)) {
+                free(links);
                 cJSON_Delete(root);
                 return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid files path");
             }
-            webim_build_file_url(p, link_bufs[nlinks], sizeof(link_bufs[nlinks]));
+            webim_build_file_url(p, links->link_bufs[nlinks], sizeof(links->link_bufs[nlinks]));
             bn = strrchr(p, '/');
             bn = (bn && bn[1]) ? bn + 1 : p;
-            strlcpy(link_lbl[nlinks], bn, sizeof(link_lbl[nlinks]));
-            emit_links[nlinks] = link_bufs[nlinks];
+            strlcpy(links->link_lbl[nlinks], bn, sizeof(links->link_lbl[nlinks]));
+            links->emit_links[nlinks] = links->link_bufs[nlinks];
             nlinks++;
         }
     }
@@ -368,11 +442,18 @@ static esp_err_t webim_send_handler(httpd_req_t *req)
                                          "web_user",
                                          NULL,
                                          text ? text : "",
-                                         nlinks > 0 ? emit_links : NULL,
+                                         nlinks > 0 ? links->emit_links : NULL,
                                          (size_t)nlinks);
     cJSON_Delete(root);
+    free(links);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "emit_user_message failed: %s", esp_err_to_name(err));
+        if (err == ESP_ERR_INVALID_STATE || err == ESP_ERR_TIMEOUT) {
+            return webim_send_error_json(req,
+                                         "503 Service Unavailable",
+                                         "router_unhealthy",
+                                         "router is not accepting new messages");
+        }
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "IM gateway not ready");
     }
 

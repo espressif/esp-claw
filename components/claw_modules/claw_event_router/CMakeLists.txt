@@ -11,3 +11,5 @@ idf_component_register(
         freertos
         console
 )
+
+target_compile_options(${COMPONENT_LIB} PRIVATE -Wframe-larger-than=512)
