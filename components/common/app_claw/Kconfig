@@ -437,6 +437,14 @@ menu "App Claw Config"
                 Enable the magnetometer Lua module and keep app_claw's direct
                 dependency on lua_module_magnetometer when Lua capability is enabled.
 
+        config APP_CLAW_LUA_MODULE_MQTT
+            bool "Enable MQTT Lua module"
+            default n
+            help
+                Enable the MQTT Lua module and keep app_claw's direct dependency
+                on lua_module_mqtt when Lua capability is enabled. Wraps the
+                ESP-IDF esp-mqtt client for publish/subscribe from Lua scripts.
+
         config APP_CLAW_LUA_MODULE_SCI
             bool "Enable DFRobot SCI Lua module"
             default n

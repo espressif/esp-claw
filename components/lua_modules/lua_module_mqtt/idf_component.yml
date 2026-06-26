@@ -1,0 +1,4 @@
+## IDF Component Manager Manifest File
+## esp-mqtt ships with ESP-IDF as the built-in `mqtt` component; no external
+## dependency is required here.
+dependencies: {}

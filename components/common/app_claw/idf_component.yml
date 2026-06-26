@@ -324,6 +324,12 @@ dependencies:
       - if: $CONFIG{APP_CLAW_LUA_MODULE_MAGNETOMETER} == True
     path: ../../lua_modules/lua_module_magnetometer
 
+  lua_module_mqtt:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
+      - if: $CONFIG{APP_CLAW_LUA_MODULE_MQTT} == True
+    path: ../../lua_modules/lua_module_mqtt
+
   lua_module_sci:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True

@@ -110,6 +110,9 @@
 #if CONFIG_APP_CLAW_LUA_MODULE_MAGNETOMETER
 #include "lua_module_magnetometer.h"
 #endif
+#if CONFIG_APP_CLAW_LUA_MODULE_MQTT
+#include "lua_module_mqtt.h"
+#endif
 #if CONFIG_APP_CLAW_LUA_MODULE_SCI
 #include "lua_module_sci.h"
 #endif
@@ -564,6 +567,14 @@ static esp_err_t app_lua_register_magnetometer(const char *fatfs_base_path)
 }
 #endif
 
+#if CONFIG_APP_CLAW_LUA_MODULE_MQTT
+static esp_err_t app_lua_register_mqtt(const char *fatfs_base_path)
+{
+    (void)fatfs_base_path;
+    return lua_module_mqtt_register();
+}
+#endif
+
 #if CONFIG_APP_CLAW_LUA_MODULE_SCI
 static esp_err_t app_lua_register_sci(const char *fatfs_base_path)
 {
@@ -692,6 +703,9 @@ static const app_lua_module_entry_t s_lua_module_entries[] = {
 #if CONFIG_APP_CLAW_LUA_MODULE_MAGNETOMETER
     { "magnetometer", "Magnetometer", app_lua_register_magnetometer },
 #endif
+#if CONFIG_APP_CLAW_LUA_MODULE_MQTT
+    { "mqtt", "MQTT", app_lua_register_mqtt },
+#endif
 #if CONFIG_APP_CLAW_LUA_MODULE_SCI
     { "sci", "DFRobot SCI", app_lua_register_sci },
 #endif
@@ -801,6 +815,9 @@ static const app_lua_module_info_t s_lua_module_infos[] = {
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_MAGNETOMETER
     { "magnetometer", "Magnetometer" },
+#endif
+#if CONFIG_APP_CLAW_LUA_MODULE_MQTT
+    { "mqtt", "MQTT" },
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_SCI
     { "sci", "DFRobot SCI" },
