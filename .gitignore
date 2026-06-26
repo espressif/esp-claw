@@ -37,6 +37,9 @@ Thumbs.db
 
 .codex
 
+# Local flash scripts
+application/edge_agent/flash.sh
+
 # Docs
 docs/node_modules
 docs/public/d2
