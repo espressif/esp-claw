@@ -22,6 +22,7 @@
 #define LUA_MODULE_MQTT_DEFAULT_QLEN  16
 #define LUA_MODULE_MQTT_MAX_QLEN      128
 #define LUA_MODULE_MQTT_CONNECTED_BIT BIT0
+#define LUA_MODULE_MQTT_MAX_CALLBACKS 16
 
 /* Message copied out of the esp-mqtt event task and handed to the Lua task. */
 typedef struct {
@@ -30,11 +31,22 @@ typedef struct {
     size_t payload_len;
 } lua_module_mqtt_rx_msg_t;
 
+/* One registered topic-pattern callback. `pattern` is the strdup'd subscription
+ * pattern (the registration key); `lua_ref` is a luaL_ref into the registry, or
+ * LUA_NOREF when the slot is free. Stored per-client (see decision below). */
+typedef struct {
+    char *pattern;
+    int   lua_ref;
+} lua_module_mqtt_cb_reg_t;
+
 typedef struct {
     esp_mqtt_client_handle_t client;
     QueueHandle_t rx_queue; /* holds lua_module_mqtt_rx_msg_t* */
     EventGroupHandle_t state;
     bool started;
+    /* Callback registry lives inside the userdata (per-client), not in a global
+     * array: it is freed deterministically when the client is destroyed. */
+    lua_module_mqtt_cb_reg_t callbacks[LUA_MODULE_MQTT_MAX_CALLBACKS];
 } lua_module_mqtt_ud_t;
 
 /* Default broker connection values injected by the application layer. NULL
@@ -87,6 +99,79 @@ static void lua_module_mqtt_rx_queue_flush(QueueHandle_t queue)
     lua_module_mqtt_rx_msg_t *msg = NULL;
     while (xQueueReceive(queue, &msg, 0) == pdTRUE) {
         lua_module_mqtt_rx_msg_free(msg);
+    }
+}
+
+/* MQTT topic-filter match. `pattern` is a subscription filter that may contain
+ * wildcards; `topic` is a concrete published topic (no wildcards). Rules:
+ *   '+'  matches exactly one level (the text between '/' separators);
+ *   '#'  matches the remaining levels and must be the last pattern level; it
+ *        also matches zero levels, so "sport/#" matches "sport" (MQTT spec).
+ * Comparison walks both strings level by level without allocating. Returns
+ * true on full match. */
+static bool lua_module_mqtt_topic_matches(const char *pattern, const char *topic)
+{
+    const char *p = pattern;
+    const char *t = topic;
+
+    while (*p) {
+        if (p[0] == '#' && (p[1] == '\0')) {
+            /* Trailing '#' swallows the rest, including zero remaining levels. */
+            return true;
+        }
+
+        /* Bounds of the current pattern level and topic level. */
+        const char *p_end = p;
+        while (*p_end && *p_end != '/') {
+            p_end++;
+        }
+        const char *t_end = t;
+        while (*t_end && *t_end != '/') {
+            t_end++;
+        }
+
+        bool single = (p_end - p == 1 && p[0] == '+');
+        if (!single) {
+            size_t p_len = (size_t)(p_end - p);
+            size_t t_len = (size_t)(t_end - t);
+            if (p_len != t_len || strncmp(p, t, p_len) != 0) {
+                return false;
+            }
+        }
+
+        p = p_end;
+        t = t_end;
+        if (*p == '/') {
+            p++;
+        }
+        if (*t == '/') {
+            t++;
+        }
+        /* Pattern level remains but topic is exhausted: only a lone trailing
+         * '#' (handled at loop top) may match an empty tail. */
+        if (*p && !*t) {
+            if (p[0] == '#' && p[1] == '\0') {
+                return true;
+            }
+            return false;
+        }
+    }
+
+    /* Both must be fully consumed for an exact-length match. */
+    return *t == '\0';
+}
+
+/* Release every registered callback: unref the Lua function and free the
+ * pattern string. Required from close()/__gc to avoid leaking registry refs. */
+static void lua_module_mqtt_free_callbacks(lua_State *L, lua_module_mqtt_ud_t *ud)
+{
+    for (int i = 0; i < LUA_MODULE_MQTT_MAX_CALLBACKS; i++) {
+        if (ud->callbacks[i].lua_ref != LUA_NOREF) {
+            luaL_unref(L, LUA_REGISTRYINDEX, ud->callbacks[i].lua_ref);
+            ud->callbacks[i].lua_ref = LUA_NOREF;
+        }
+        free(ud->callbacks[i].pattern);
+        ud->callbacks[i].pattern = NULL;
     }
 }
 
@@ -174,6 +259,7 @@ static int lua_module_mqtt_gc(lua_State *L)
     lua_module_mqtt_ud_t *ud =
         (lua_module_mqtt_ud_t *)luaL_testudata(L, 1, LUA_MODULE_MQTT_METATABLE);
     if (ud) {
+        lua_module_mqtt_free_callbacks(L, ud);
         lua_module_mqtt_destroy(ud);
     }
     return 0;
@@ -183,6 +269,7 @@ static int lua_module_mqtt_close(lua_State *L)
 {
     lua_module_mqtt_ud_t *ud =
         (lua_module_mqtt_ud_t *)luaL_checkudata(L, 1, LUA_MODULE_MQTT_METATABLE);
+    lua_module_mqtt_free_callbacks(L, ud);
     lua_module_mqtt_destroy(ud);
     return 0;
 }
@@ -285,6 +372,122 @@ static int lua_module_mqtt_poll(lua_State *L)
     return 1;
 }
 
+/* on(topic, fn) -> true. Registers a Lua function for a topic filter (wildcards
+ * allowed). Re-registering the same pattern replaces the previous function.
+ * Callbacks fire from dispatch(), which shares the rx queue with poll(): use one
+ * model or the other on a given client, not both. */
+static int lua_module_mqtt_on(lua_State *L)
+{
+    lua_module_mqtt_ud_t *ud = lua_module_mqtt_get_ud(L, 1);
+    const char *topic = luaL_checkstring(L, 2);
+    luaL_checktype(L, 3, LUA_TFUNCTION);
+
+    /* Replace an existing registration for the same pattern. */
+    int slot = -1;
+    for (int i = 0; i < LUA_MODULE_MQTT_MAX_CALLBACKS; i++) {
+        if (ud->callbacks[i].pattern && strcmp(ud->callbacks[i].pattern, topic) == 0) {
+            slot = i;
+            break;
+        }
+    }
+    /* Otherwise take the first free slot. */
+    if (slot < 0) {
+        for (int i = 0; i < LUA_MODULE_MQTT_MAX_CALLBACKS; i++) {
+            if (ud->callbacks[i].lua_ref == LUA_NOREF && !ud->callbacks[i].pattern) {
+                slot = i;
+                break;
+            }
+        }
+    }
+    if (slot < 0) {
+        return luaL_error(L, "mqtt on: too many callbacks (max %d)",
+                          LUA_MODULE_MQTT_MAX_CALLBACKS);
+    }
+
+    if (!ud->callbacks[slot].pattern) {
+        char *dup = strdup(topic);
+        if (!dup) {
+            return luaL_error(L, "mqtt on: out of memory");
+        }
+        ud->callbacks[slot].pattern = dup;
+    }
+    if (ud->callbacks[slot].lua_ref != LUA_NOREF) {
+        luaL_unref(L, LUA_REGISTRYINDEX, ud->callbacks[slot].lua_ref);
+    }
+    lua_pushvalue(L, 3);
+    ud->callbacks[slot].lua_ref = luaL_ref(L, LUA_REGISTRYINDEX);
+
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+/* off([topic]) -> true. Removes the callback registered for an exact pattern,
+ * or all callbacks when no topic is given. */
+static int lua_module_mqtt_off(lua_State *L)
+{
+    lua_module_mqtt_ud_t *ud = lua_module_mqtt_get_ud(L, 1);
+    const char *topic = luaL_optstring(L, 2, NULL);
+
+    if (!topic) {
+        lua_module_mqtt_free_callbacks(L, ud);
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+
+    for (int i = 0; i < LUA_MODULE_MQTT_MAX_CALLBACKS; i++) {
+        if (ud->callbacks[i].pattern && strcmp(ud->callbacks[i].pattern, topic) == 0) {
+            if (ud->callbacks[i].lua_ref != LUA_NOREF) {
+                luaL_unref(L, LUA_REGISTRYINDEX, ud->callbacks[i].lua_ref);
+                ud->callbacks[i].lua_ref = LUA_NOREF;
+            }
+            free(ud->callbacks[i].pattern);
+            ud->callbacks[i].pattern = NULL;
+            break;
+        }
+    }
+
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+/* dispatch() -> count. Drains the rx queue and invokes every registered callback
+ * whose pattern matches each message's topic. One message may fire several
+ * callbacks. Returns the number of callback invocations. */
+static int lua_module_mqtt_dispatch(lua_State *L)
+{
+    lua_module_mqtt_ud_t *ud = lua_module_mqtt_get_ud(L, 1);
+    int count = 0;
+
+    lua_module_mqtt_rx_msg_t *msg = NULL;
+    while (xQueueReceive(ud->rx_queue, &msg, 0) == pdTRUE) {
+        for (int i = 0; i < LUA_MODULE_MQTT_MAX_CALLBACKS; i++) {
+            if (ud->callbacks[i].lua_ref == LUA_NOREF || !ud->callbacks[i].pattern) {
+                continue;
+            }
+            if (!lua_module_mqtt_topic_matches(ud->callbacks[i].pattern, msg->topic)) {
+                continue;
+            }
+
+            lua_rawgeti(L, LUA_REGISTRYINDEX, ud->callbacks[i].lua_ref);
+            lua_newtable(L);
+            lua_pushstring(L, msg->topic);
+            lua_setfield(L, -2, "topic");
+            lua_pushlstring(L, msg->payload, msg->payload_len);
+            lua_setfield(L, -2, "payload");
+
+            if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+                ESP_LOGW(LUA_MODULE_MQTT_TAG, "mqtt callback error: %s", lua_tostring(L, -1));
+                lua_pop(L, 1);
+            }
+            count++;
+        }
+        lua_module_mqtt_rx_msg_free(msg);
+    }
+
+    lua_pushinteger(L, count);
+    return 1;
+}
+
 static int lua_module_mqtt_disconnect(lua_State *L)
 {
     lua_module_mqtt_ud_t *ud = lua_module_mqtt_get_ud(L, 1);
@@ -355,6 +558,9 @@ static int lua_module_mqtt_new(lua_State *L)
     lua_module_mqtt_ud_t *ud =
         (lua_module_mqtt_ud_t *)lua_newuserdata(L, sizeof(*ud));
     memset(ud, 0, sizeof(*ud));
+    for (int i = 0; i < LUA_MODULE_MQTT_MAX_CALLBACKS; i++) {
+        ud->callbacks[i].lua_ref = LUA_NOREF;
+    }
     luaL_getmetatable(L, LUA_MODULE_MQTT_METATABLE);
     lua_setmetatable(L, -2);
 
@@ -402,6 +608,12 @@ int luaopen_mqtt(lua_State *L)
         lua_setfield(L, -2, "unsubscribe");
         lua_pushcfunction(L, lua_module_mqtt_poll);
         lua_setfield(L, -2, "poll");
+        lua_pushcfunction(L, lua_module_mqtt_on);
+        lua_setfield(L, -2, "on");
+        lua_pushcfunction(L, lua_module_mqtt_off);
+        lua_setfield(L, -2, "off");
+        lua_pushcfunction(L, lua_module_mqtt_dispatch);
+        lua_setfield(L, -2, "dispatch");
         lua_pushcfunction(L, lua_module_mqtt_close);
         lua_setfield(L, -2, "close");
     }
