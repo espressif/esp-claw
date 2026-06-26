@@ -37,6 +37,37 @@ typedef struct {
     bool started;
 } lua_module_mqtt_ud_t;
 
+/* Default broker connection values injected by the application layer. NULL
+ * means "no default"; explicit `mqtt.new()` arguments always take priority. */
+static char *s_default_uri;
+static char *s_default_username;
+static char *s_default_password;
+static char *s_default_client_id;
+
+static char *lua_module_mqtt_dup_or_null(const char *value)
+{
+    if (!value || !value[0]) {
+        return NULL;
+    }
+    return strdup(value);
+}
+
+esp_err_t lua_module_mqtt_set_defaults(const char *uri,
+                                       const char *username,
+                                       const char *password,
+                                       const char *client_id)
+{
+    free(s_default_uri);
+    free(s_default_username);
+    free(s_default_password);
+    free(s_default_client_id);
+    s_default_uri = lua_module_mqtt_dup_or_null(uri);
+    s_default_username = lua_module_mqtt_dup_or_null(username);
+    s_default_password = lua_module_mqtt_dup_or_null(password);
+    s_default_client_id = lua_module_mqtt_dup_or_null(client_id);
+    return ESP_OK;
+}
+
 static void lua_module_mqtt_rx_msg_free(lua_module_mqtt_rx_msg_t *msg)
 {
     if (!msg) {
@@ -265,15 +296,24 @@ static int lua_module_mqtt_disconnect(lua_State *L)
     return 0;
 }
 
-/* new(uri[, opts]) -> client. opts: username, password, client_id, keepalive,
- * rx_queue_len. uri example: "mqtt://192.168.1.10:1883". */
+/* new([uri[, opts]]) -> client. opts: username, password, client_id, keepalive,
+ * rx_queue_len. uri example: "mqtt://192.168.1.10:1883". When uri or a
+ * credential field is omitted, the value configured via the web UI (injected
+ * with lua_module_mqtt_set_defaults) is used. */
 static int lua_module_mqtt_new(lua_State *L)
 {
-    const char *uri = luaL_checkstring(L, 1);
+    const char *uri = luaL_optstring(L, 1, s_default_uri);
     int rx_queue_len = LUA_MODULE_MQTT_DEFAULT_QLEN;
+
+    if (!uri || !uri[0]) {
+        return luaL_error(L, "mqtt new: uri required (none given and no broker configured)");
+    }
 
     esp_mqtt_client_config_t cfg = {
         .broker.address.uri = uri,
+        .credentials.username = s_default_username,
+        .credentials.authentication.password = s_default_password,
+        .credentials.client_id = s_default_client_id,
     };
 
     if (lua_istable(L, 2)) {

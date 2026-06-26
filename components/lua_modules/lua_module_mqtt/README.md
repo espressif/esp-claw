@@ -13,13 +13,19 @@ use this `mqtt` module by default. It wraps the ESP-IDF `esp-mqtt` client.
 - Call `client:poll(timeout_ms)` to read one received message
 - Call `client:disconnect()` or `client:close()` when done
 
-### `mqtt.new(uri, opts)`
+### `mqtt.new([uri[, opts]])`
 - `uri`: broker URL, e.g. `mqtt://192.168.1.10:1883` or `mqtts://host:8883`
 - `opts` (optional table):
   - `username`, `password`: broker credentials
   - `client_id`: MQTT client id
   - `keepalive`: keepalive seconds
   - `rx_queue_len`: received-message buffer length (default `16`, max `128`)
+
+The broker URL, username, password, and client id can be preset in the device
+web config (MQTT tab). When `uri` or a credential field is omitted, the saved
+value is used; explicit arguments always override the saved defaults. Call
+`mqtt.new()` with no arguments to connect to the configured broker. If no `uri`
+is given and none is configured, the call errors.
 
 ### `client:connect(timeout_ms)`
 Starts the client and blocks until connected, up to `timeout_ms`

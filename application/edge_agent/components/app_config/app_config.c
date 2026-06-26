@@ -57,6 +57,10 @@ typedef struct {
 #define APP_DEFAULT_WECHAT_ACCOUNT_ID        "default"
 #define APP_DEFAULT_SEARCH_BRAVE_KEY         ""
 #define APP_DEFAULT_SEARCH_TAVILY_KEY        ""
+#define APP_DEFAULT_MQTT_URI                 ""
+#define APP_DEFAULT_MQTT_USERNAME            ""
+#define APP_DEFAULT_MQTT_PASSWORD            ""
+#define APP_DEFAULT_MQTT_CLIENT_ID           ""
 #define APP_DEFAULT_ENABLED_CAP_GROUPS       ""
 #define APP_DEFAULT_LLM_VISIBLE_CAP_GROUPS   ""
 #define APP_DEFAULT_ENABLED_LUA_MODULES      ""
@@ -93,6 +97,10 @@ static const app_config_field_t s_fields[] = {
     APP_CONFIG_FIELD(search_brave_key, "brave_key", APP_DEFAULT_SEARCH_BRAVE_KEY),
     APP_CONFIG_FIELD(search_tavily_key, "tavily_key", APP_DEFAULT_SEARCH_TAVILY_KEY),
     APP_CONFIG_FIELD(search_http_allowlist, "http_allow_ls", APP_SEARCH_HTTP_ALLOWLIST),
+    APP_CONFIG_FIELD(mqtt_uri, "mqtt_uri", APP_DEFAULT_MQTT_URI),
+    APP_CONFIG_FIELD(mqtt_username, "mqtt_username", APP_DEFAULT_MQTT_USERNAME),
+    APP_CONFIG_FIELD(mqtt_password, "mqtt_password", APP_DEFAULT_MQTT_PASSWORD),
+    APP_CONFIG_FIELD(mqtt_client_id, "mqtt_client_id", APP_DEFAULT_MQTT_CLIENT_ID),
     APP_CONFIG_FIELD(enabled_cap_groups, "en_cap_groups", APP_DEFAULT_ENABLED_CAP_GROUPS),
     APP_CONFIG_FIELD(llm_visible_cap_groups, "vis_cap_groups", APP_DEFAULT_LLM_VISIBLE_CAP_GROUPS),
     APP_CONFIG_FIELD(enabled_lua_modules, "en_lua_mods", APP_DEFAULT_ENABLED_LUA_MODULES),
@@ -584,6 +592,10 @@ void app_config_to_claw(const app_config_t *config, app_claw_config_t *out)
     strlcpy(out->search_http_allowlist,
             config->search_http_allowlist,
             sizeof(out->search_http_allowlist));
+    strlcpy(out->mqtt_uri, config->mqtt_uri, sizeof(out->mqtt_uri));
+    strlcpy(out->mqtt_username, config->mqtt_username, sizeof(out->mqtt_username));
+    strlcpy(out->mqtt_password, config->mqtt_password, sizeof(out->mqtt_password));
+    strlcpy(out->mqtt_client_id, config->mqtt_client_id, sizeof(out->mqtt_client_id));
     strlcpy(out->enabled_cap_groups, config->enabled_cap_groups, sizeof(out->enabled_cap_groups));
     strlcpy(out->llm_visible_cap_groups, config->llm_visible_cap_groups, sizeof(out->llm_visible_cap_groups));
     strlcpy(out->enabled_lua_modules, config->enabled_lua_modules, sizeof(out->enabled_lua_modules));

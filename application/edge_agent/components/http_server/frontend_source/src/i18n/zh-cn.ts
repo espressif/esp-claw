@@ -22,6 +22,7 @@ export const zhCn: Dict = {
   navLlm: 'LLM 设置',
   navIm: 'IM 设置',
   navWebReq: '网络和搜索设置',
+  navMqtt: 'MQTT',
   navMemory: '记忆管理',
   navCapabilities: 'Capabilities 管理',
   navLuaModules: 'Lua 模块管理',
@@ -180,6 +181,16 @@ export const zhCn: Dict = {
   webreqHttpAllowlistPlaceholder: 'api.example.com,*.example.org,203.0.113.10',
   webreqHttpAllowlistNote:
     '使用逗号分隔的域名/IP，支持通配符*，单独*表示允许全部域名/IP',
+
+  sectionMqttBroker: 'MQTT 服务器',
+  mqttUri: '服务器地址',
+  mqttUriPlaceholder: 'mqtt://192.168.1.10:1883',
+  mqttUsername: '用户名',
+  mqttPassword: '密码',
+  mqttClientId: '客户端 ID',
+  mqttClientIdPlaceholder: 'esp_claw_1',
+  mqttNote:
+    'Lua mqtt 模块的默认服务器。Lua 脚本可不带参数调用 mqtt.new() 复用这些值，也可在调用时覆盖。重启后生效。',
 
   sectionCapabilities: 'Capability Group',
   capabilitiesDescription:

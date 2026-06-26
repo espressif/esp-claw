@@ -21,6 +21,9 @@ const BasicPage = lazy(() =>
 const WebReqPage = lazy(() =>
   import('./pages/WebReqPage').then((mod) => ({ default: mod.WebReqPage })),
 );
+const MqttPage = lazy(() =>
+  import('./pages/MqttPage').then((mod) => ({ default: mod.MqttPage })),
+);
 const MemoryPage = lazy(() =>
   import('./pages/MemoryPage').then((mod) => ({ default: mod.MemoryPage })),
 );
@@ -251,6 +254,11 @@ const App: Component = () => {
               </Show>
               <Show when={currentTab() === 'webreq'}>
                 <WebReqPage
+                  onRestartRequest={() => void handleRestartRequest({ reloadOnSuccess: true })}
+                />
+              </Show>
+              <Show when={currentTab() === 'mqtt'}>
+                <MqttPage
                   onRestartRequest={() => void handleRestartRequest({ reloadOnSuccess: true })}
                 />
               </Show>

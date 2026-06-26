@@ -152,6 +152,16 @@ ESP-Claw can connect to Brave or Tavily search APIs to retrieve online resources
 
 **HTTP Requests**: configure HTTP allowlist. Wildcard `*` is supported; standalone `*` allows all domains/IPs.
 
+### MQTT Settings <RestartBadge />
+
+Configure the default MQTT broker used by the Lua `mqtt` module.
+
+- Broker URL: e.g. `mqtt://192.168.1.10:1883` or `mqtts://host:8883`.
+- Username / Password: optional broker credentials.
+- Client ID: optional MQTT client id.
+
+Lua scripts can call `mqtt.new()` with no arguments to reuse these values, or override any field per call. See the [Lua modules reference](/reference-cap/lua-modules/).
+
 ## Memory Management
 
 The Memory Management page is for viewing long-term memory and managing “Soul”, “Identity”, and “User Info” in the memory system.

@@ -20,6 +20,7 @@ export const en = {
   navLlm: 'LLM',
   navIm: 'IM',
   navWebReq: 'Network & Search Config',
+  navMqtt: 'MQTT',
   navMemory: 'Memory',
   navCapabilities: 'Capabilities',
   navLuaModules: 'Lua Modules',
@@ -185,6 +186,16 @@ export const en = {
   webreqHttpAllowlistPlaceholder: 'api.example.com,*.example.org,203.0.113.10',
   webreqHttpAllowlistNote:
     'Use comma-separated domains/IPs. Wildcard * is supported, and a standalone * allows all domains/IPs.',
+
+  sectionMqttBroker: 'MQTT Broker',
+  mqttUri: 'Broker URL',
+  mqttUriPlaceholder: 'mqtt://192.168.1.10:1883',
+  mqttUsername: 'Username',
+  mqttPassword: 'Password',
+  mqttClientId: 'Client ID',
+  mqttClientIdPlaceholder: 'esp_claw_1',
+  mqttNote:
+    'Default broker for the Lua mqtt module. Lua scripts can call mqtt.new() with no arguments to reuse these values, or override them per call. Restart to apply.',
 
   sectionCapabilities: 'Capability Groups',
   capabilitiesDescription:

@@ -6,6 +6,7 @@ import {
   Folder,
   MessageSquareCode,
   MessagesSquare,
+  Radio,
   Search,
   Settings,
   SquareFunction,
@@ -24,6 +25,7 @@ const IconWifi: Component = () => <WifiPen class={iconClass} />;
 const IconLlm: Component = () => <Bot class={iconClass} />;
 const IconIm: Component = () => <MessageSquareCode class={iconClass} />;
 const IconSearch: Component = () => <Search class={iconClass} />;
+const IconMqtt: Component = () => <Radio class={iconClass} />;
 const IconMemory: Component = () => <DatabaseZap class={iconClass} />;
 const IconCaps: Component = () => <Blocks class={iconClass} />;
 const IconSkills: Component = () => <SquareFunction class={iconClass} />;
@@ -39,6 +41,7 @@ export type LeafNode = {
     | 'navLlm'
     | 'navIm'
     | 'navWebReq'
+    | 'navMqtt'
     | 'navMemory'
     | 'navCapabilities'
     | 'navLuaModules'
@@ -67,6 +70,7 @@ export const NAV_TREE: NavNode[] = [
       { kind: 'leaf', id: 'llm', labelKey: 'navLlm', icon: IconLlm },
       { kind: 'leaf', id: 'im', labelKey: 'navIm', icon: IconIm },
       { kind: 'leaf', id: 'webreq', labelKey: 'navWebReq', icon: IconSearch },
+      { kind: 'leaf', id: 'mqtt', labelKey: 'navMqtt', icon: IconMqtt },
     ],
   },
   { kind: 'leaf', id: 'memory', labelKey: 'navMemory', icon: IconMemory },

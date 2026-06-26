@@ -142,6 +142,10 @@ static size_t s_external_module_capacity;
 static app_lua_module_info_t *s_module_infos;
 static size_t s_module_info_capacity;
 
+/* Set only for the duration of app_lua_modules_register so per-module register
+ * callbacks (which receive only fatfs_base_path) can read the active config. */
+static const app_claw_config_t *s_register_config;
+
 static bool app_lua_modules_config_empty(const char *value)
 {
     size_t i;
@@ -571,7 +575,19 @@ static esp_err_t app_lua_register_magnetometer(const char *fatfs_base_path)
 static esp_err_t app_lua_register_mqtt(const char *fatfs_base_path)
 {
     (void)fatfs_base_path;
-    return lua_module_mqtt_register();
+    esp_err_t err = lua_module_mqtt_register();
+    if (err != ESP_OK) {
+        return err;
+    }
+    /* Seed the module with the broker settings stored via the web UI so Lua
+     * scripts can call mqtt.new() without hard-coding the broker. */
+    if (s_register_config) {
+        err = lua_module_mqtt_set_defaults(s_register_config->mqtt_uri,
+                                           s_register_config->mqtt_username,
+                                           s_register_config->mqtt_password,
+                                           s_register_config->mqtt_client_id);
+    }
+    return err;
 }
 #endif
 
@@ -898,6 +914,7 @@ esp_err_t app_lua_modules_register(const app_claw_config_t *config, const char *
         return err;
     }
 
+    s_register_config = config;
     for (i = 0; i < entry_count; i++) {
         if (!selected_map[i]) {
             ESP_LOGI(TAG, "Skipping Lua module at init: %s", entries[i].module_id);
@@ -909,11 +926,13 @@ esp_err_t app_lua_modules_register(const app_claw_config_t *config, const char *
             ESP_LOGE(TAG, "Failed to register Lua module %s: %s",
                      entries[i].module_id,
                      esp_err_to_name(err));
+            s_register_config = NULL;
             free(entries);
             free(selected_map);
             return err;
         }
     }
+    s_register_config = NULL;
 
     free(entries);
     free(selected_map);

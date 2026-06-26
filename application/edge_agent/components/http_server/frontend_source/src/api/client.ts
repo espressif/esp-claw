@@ -35,6 +35,10 @@ export type AppConfig = {
   search_brave_key: string;
   search_tavily_key: string;
   search_http_allowlist: string;
+  mqtt_uri: string;
+  mqtt_username: string;
+  mqtt_password: string;
+  mqtt_client_id: string;
   enabled_cap_groups: string;
   llm_visible_cap_groups: string;
   enabled_lua_modules: string;
@@ -43,7 +47,15 @@ export type AppConfig = {
 
 /** Server-side configuration groups (must stay in sync with
  * CONFIG_FIELDS in http_server_config_api.c). */
-export type ConfigGroup = 'wifi' | 'llm' | 'im' | 'search' | 'capabilities' | 'skills' | 'time';
+export type ConfigGroup =
+  | 'wifi'
+  | 'llm'
+  | 'im'
+  | 'search'
+  | 'mqtt'
+  | 'capabilities'
+  | 'skills'
+  | 'time';
 
 export const GROUP_FIELDS: Record<ConfigGroup, (keyof AppConfig)[]> = {
   wifi: ['wifi_ssid', 'wifi_password', 'ap_ssid', 'ap_password', 'ap_behavior'],
@@ -74,6 +86,7 @@ export const GROUP_FIELDS: Record<ConfigGroup, (keyof AppConfig)[]> = {
     'wechat_account_id',
   ],
   search: ['search_brave_key', 'search_tavily_key', 'search_http_allowlist'],
+  mqtt: ['mqtt_uri', 'mqtt_username', 'mqtt_password', 'mqtt_client_id'],
   capabilities: ['enabled_cap_groups', 'llm_visible_cap_groups'],
   skills: ['enabled_lua_modules'],
   time: ['time_timezone'],
