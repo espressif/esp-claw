@@ -11,6 +11,9 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
+#include "mqtt_client.h"
 
 /*
  * Field catalogue
@@ -390,11 +393,122 @@ static esp_err_t config_post_handler(httpd_req_t *req)
     return http_server_send_json_response(req, resp);
 }
 
+/* ── MQTT connection probe ───────────────────────────────────────────────
+ * On-demand test of the stored broker credentials. Spins up a throwaway
+ * esp-mqtt client, waits a short time for it to connect (or error), reports the
+ * result, and always tears the client down. There is no persistent app-level
+ * MQTT connection to read, so this is a one-shot probe, not a live monitor. */
+
+#define MQTT_PROBE_CONNECTED_BIT BIT0
+#define MQTT_PROBE_FAILED_BIT    BIT1
+#define MQTT_PROBE_TIMEOUT_MS    4000
+
+static void mqtt_probe_event_handler(void *arg, esp_event_base_t base,
+                                     int32_t event_id, void *event_data)
+{
+    (void)base;
+    (void)event_data;
+    EventGroupHandle_t state = (EventGroupHandle_t)arg;
+    if (!state) {
+        return;
+    }
+    switch ((esp_mqtt_event_id_t)event_id) {
+    case MQTT_EVENT_CONNECTED:
+        xEventGroupSetBits(state, MQTT_PROBE_CONNECTED_BIT);
+        break;
+    case MQTT_EVENT_ERROR:
+        xEventGroupSetBits(state, MQTT_PROBE_FAILED_BIT);
+        break;
+    default:
+        break;
+    }
+}
+
+static esp_err_t mqtt_probe_handler(httpd_req_t *req)
+{
+    http_server_ctx_t *ctx = http_server_ctx();
+    app_config_t *config = NULL;
+    EventGroupHandle_t state = NULL;
+    esp_mqtt_client_handle_t client = NULL;
+    bool connected = false;
+    cJSON *root = NULL;
+
+    config = calloc(1, sizeof(*config));
+    if (!config) {
+        httpd_resp_send_500(req);
+        return ESP_ERR_NO_MEM;
+    }
+    if (ctx->services.load_config(config) != ESP_OK) {
+        free(config);
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to load config");
+    }
+
+    /* Nothing to test if no broker is configured. */
+    if (config->mqtt_uri[0] == '\0') {
+        free(config);
+        root = cJSON_CreateObject();
+        if (!root) {
+            httpd_resp_send_500(req);
+            return ESP_ERR_NO_MEM;
+        }
+        cJSON_AddBoolToObject(root, "connected", false);
+        http_server_json_add_string(root, "reason", "not configured");
+        return http_server_send_json_response(req, root);
+    }
+
+    /* JWT takes priority over the password, matching the runtime auth logic. */
+    const char *secret = config->mqtt_jwt[0] ? config->mqtt_jwt : config->mqtt_password;
+    esp_mqtt_client_config_t cfg = {
+        .broker.address.uri = config->mqtt_uri,
+        .credentials.username = config->mqtt_username,
+        .credentials.authentication.password = secret,
+        .credentials.client_id = config->mqtt_client_id[0] ? config->mqtt_client_id : NULL,
+        .network.disable_auto_reconnect = true,
+        /* Bound the TCP connect attempt so an unreachable broker fails fast and
+         * the teardown below does not block on an in-flight connection. */
+        .network.timeout_ms = 3000,
+    };
+
+    state = xEventGroupCreate();
+    if (state) {
+        client = esp_mqtt_client_init(&cfg);
+    }
+    if (client &&
+        esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID,
+                                       mqtt_probe_event_handler, state) == ESP_OK &&
+        esp_mqtt_client_start(client) == ESP_OK) {
+        EventBits_t bits = xEventGroupWaitBits(state,
+                                               MQTT_PROBE_CONNECTED_BIT | MQTT_PROBE_FAILED_BIT,
+                                               pdFALSE, pdFALSE,
+                                               pdMS_TO_TICKS(MQTT_PROBE_TIMEOUT_MS));
+        connected = (bits & MQTT_PROBE_CONNECTED_BIT) != 0;
+    }
+
+    /* Always tear the probe client down — on success, failure or timeout. */
+    if (client) {
+        esp_mqtt_client_stop(client);
+        esp_mqtt_client_destroy(client);
+    }
+    if (state) {
+        vEventGroupDelete(state);
+    }
+    free(config);
+
+    root = cJSON_CreateObject();
+    if (!root) {
+        httpd_resp_send_500(req);
+        return ESP_ERR_NO_MEM;
+    }
+    cJSON_AddBoolToObject(root, "connected", connected);
+    return http_server_send_json_response(req, root);
+}
+
 esp_err_t http_server_register_config_routes(httpd_handle_t server)
 {
     const httpd_uri_t handlers[] = {
-        { .uri = "/api/config", .method = HTTP_GET,  .handler = config_get_handler  },
-        { .uri = "/api/config", .method = HTTP_POST, .handler = config_post_handler },
+        { .uri = "/api/config",     .method = HTTP_GET,  .handler = config_get_handler  },
+        { .uri = "/api/config",     .method = HTTP_POST, .handler = config_post_handler },
+        { .uri = "/api/mqtt/probe", .method = HTTP_POST, .handler = mqtt_probe_handler  },
     };
 
     for (size_t i = 0; i < sizeof(handlers) / sizeof(handlers[0]); ++i) {

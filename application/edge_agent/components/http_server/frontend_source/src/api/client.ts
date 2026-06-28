@@ -224,6 +224,16 @@ export async function saveConfigPatch(patch: Partial<AppConfig>) {
   );
 }
 
+/** One-shot probe of the stored MQTT broker credentials. Not a live monitor:
+ * the result reflects a single connection attempt at call time. */
+export async function probeMqtt() {
+  return request<{ connected: boolean; reason?: string }>(
+    '/api/mqtt/probe',
+    { method: 'POST' },
+    'Failed to test MQTT connection',
+  );
+}
+
 export async function fetchCapabilities() {
   const data = await request<{ items: CapabilityItem[] }>(
     '/api/capabilities',

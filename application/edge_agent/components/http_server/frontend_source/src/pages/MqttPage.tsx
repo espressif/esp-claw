@@ -1,6 +1,6 @@
 import { createSignal, Show, type Component } from 'solid-js';
 import { t } from '../i18n';
-import { saveConfigPatch, type AppConfig } from '../api/client';
+import { probeMqtt, saveConfigPatch, type AppConfig } from '../api/client';
 import { pushToast } from '../state/toast';
 import { createConfigTab } from '../state/configTab';
 import { TabShell } from '../components/layout/TabShell';
@@ -46,6 +46,46 @@ export const MqttPage: Component<{ onRestartRequest: () => void }> = (props) => 
   const [devMode, setDevMode] = createSignal(false);
   const [clearing, setClearing] = createSignal(false);
 
+  // Result of the last on-demand connection test. NOT a live status — just the
+  // outcome of the most recent probe. 'idle' means not tested yet.
+  type TestState = 'idle' | 'testing' | 'ok' | 'failed';
+  const [testState, setTestState] = createSignal<TestState>('idle');
+
+  const testConnection = async () => {
+    if (testState() === 'testing') return;
+    setTestState('testing');
+    try {
+      const res = await probeMqtt();
+      setTestState(res.connected ? 'ok' : 'failed');
+    } catch {
+      setTestState('failed');
+    }
+  };
+
+  const badgeLabel = () => {
+    switch (testState()) {
+      case 'testing':
+        return t('mqttTesting');
+      case 'ok':
+        return t('mqttTestOk');
+      case 'failed':
+        return t('mqttTestFailed');
+      default:
+        return t('mqttNotTested');
+    }
+  };
+
+  const badgeClass = () => {
+    switch (testState()) {
+      case 'ok':
+        return 'bg-[var(--color-green-dim)] text-[var(--color-green)] border-[rgba(104,211,145,0.3)]';
+      case 'failed':
+        return 'bg-[var(--color-accent-dim)] text-[var(--color-danger)] border-[var(--color-border-accent)]';
+      default:
+        return 'bg-[var(--color-bg-subtle)] text-[var(--color-text-muted)] border-[var(--color-border-subtle)]';
+    }
+  };
+
   const toggleDevMode = () => {
     if (!devMode()) {
       if (!window.confirm(t('mqttDevModeConfirm') as string)) return;
@@ -83,6 +123,19 @@ export const MqttPage: Component<{ onRestartRequest: () => void }> = (props) => 
         title={t('navMqtt') as string}
         actions={
           <>
+            <span
+              class={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[0.72rem] font-medium ${badgeClass()}`}
+            >
+              {badgeLabel()}
+            </span>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => testConnection().catch(() => undefined)}
+              disabled={testState() === 'testing'}
+            >
+              {testState() === 'testing' ? t('mqttTesting') : t('mqttTestConn')}
+            </Button>
             <Button size="sm" variant="secondary" active={devMode()} onClick={toggleDevMode}>
               {devMode() ? t('mqttDevModeOn') : t('mqttDevMode')}
             </Button>

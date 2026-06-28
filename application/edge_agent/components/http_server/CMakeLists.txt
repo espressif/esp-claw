@@ -33,6 +33,7 @@ set(http_server_requires
     claw_cap
     esp_http_server
     heap
+    mqtt
 )
 
 if(CONFIG_APP_CLAW_LUA_MODULE_HTTP_SERVER)

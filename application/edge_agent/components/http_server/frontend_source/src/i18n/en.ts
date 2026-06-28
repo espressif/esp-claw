@@ -206,6 +206,11 @@ export const en = {
     'Enable developer mode? It unlocks editing the MQTT fields and clearing all stored credentials.',
   mqttDevModeRequired: 'Enable dev mode first to clear credentials.',
   mqttLocked: 'Fields are read-only. Enable dev mode to edit MQTT settings or clear credentials.',
+  mqttTestConn: 'Test connection',
+  mqttTesting: 'Testing…',
+  mqttNotTested: 'Not tested',
+  mqttTestOk: 'Last test: OK',
+  mqttTestFailed: 'Last test: failed',
   mqttClearCreds: 'Clear credentials',
   mqttClearConfirm:
     'Clear ALL MQTT credentials (broker URL, username, password, JWT) from the device? This cannot be undone.',
