@@ -14,6 +14,9 @@ extern "C" {
 
 #define APP_CONFIG_STR_LEN        320
 #define APP_CONFIG_TIMEZONE_LEN   32
+/* JWTs (e.g. EMQX auth tokens) carry claims and easily exceed APP_CONFIG_STR_LEN,
+ * so the MQTT JWT gets its own, larger buffer. */
+#define APP_CONFIG_MQTT_JWT_LEN   1024
 
 #define APP_WIFI_SSID             CONFIG_APP_WIFI_SSID
 #define APP_WIFI_PASSWORD         CONFIG_APP_WIFI_PASSWORD
@@ -53,6 +56,7 @@ typedef struct {
     char mqtt_uri[APP_CONFIG_STR_LEN];
     char mqtt_username[64];
     char mqtt_password[APP_CONFIG_STR_LEN];
+    char mqtt_jwt[APP_CONFIG_MQTT_JWT_LEN];
     char mqtt_client_id[64];
     char enabled_cap_groups[APP_CONFIG_STR_LEN];
     char llm_visible_cap_groups[APP_CONFIG_STR_LEN];

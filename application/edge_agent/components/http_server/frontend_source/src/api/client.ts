@@ -38,6 +38,7 @@ export type AppConfig = {
   mqtt_uri: string;
   mqtt_username: string;
   mqtt_password: string;
+  mqtt_jwt: string;
   mqtt_client_id: string;
   enabled_cap_groups: string;
   llm_visible_cap_groups: string;
@@ -86,7 +87,7 @@ export const GROUP_FIELDS: Record<ConfigGroup, (keyof AppConfig)[]> = {
     'wechat_account_id',
   ],
   search: ['search_brave_key', 'search_tavily_key', 'search_http_allowlist'],
-  mqtt: ['mqtt_uri', 'mqtt_username', 'mqtt_password', 'mqtt_client_id'],
+  mqtt: ['mqtt_uri', 'mqtt_username', 'mqtt_password', 'mqtt_jwt', 'mqtt_client_id'],
   capabilities: ['enabled_cap_groups', 'llm_visible_cap_groups'],
   skills: ['enabled_lua_modules'],
   time: ['time_timezone'],

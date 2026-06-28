@@ -73,6 +73,7 @@ static const config_field_def_t CONFIG_FIELDS[] = {
     CONFIG_FIELD("mqtt",         mqtt_uri),
     CONFIG_FIELD("mqtt",         mqtt_username),
     CONFIG_FIELD("mqtt",         mqtt_password),
+    CONFIG_FIELD("mqtt",         mqtt_jwt),
     CONFIG_FIELD("mqtt",         mqtt_client_id),
 
     CONFIG_FIELD("capabilities", enabled_cap_groups),

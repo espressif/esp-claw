@@ -189,8 +189,20 @@ export const zhCn: Dict = {
   mqttPassword: '密码',
   mqttClientId: '客户端 ID',
   mqttClientIdPlaceholder: 'esp_claw_1',
+  mqttJwt: 'JWT 令牌',
+  mqttJwtPlaceholder: 'eyJhbGciOi...',
+  mqttJwtNote:
+    '可选。设置后将使用 JWT 进行认证而非密码（例如 EMQX）。留空则使用上方的用户名/密码。',
   mqttNote:
     'Lua mqtt 模块的默认服务器。Lua 脚本可不带参数调用 mqtt.new() 复用这些值，也可在调用时覆盖。重启后生效。',
+  mqttDevMode: '开发者模式',
+  mqttDevModeOn: '开发者模式已开启',
+  mqttDevModeConfirm: '启用开发者模式？将允许编辑 MQTT 字段并清除所有已存储的凭据。',
+  mqttDevModeRequired: '请先启用开发者模式再清除凭据。',
+  mqttLocked: '字段为只读。启用开发者模式以编辑 MQTT 设置或清除凭据。',
+  mqttClearCreds: '清除凭据',
+  mqttClearConfirm: '清除设备上所有 MQTT 凭据（服务器地址、用户名、密码、JWT）？此操作不可撤销。',
+  mqttClearDone: 'MQTT 凭据已清除。重启后生效。',
 
   sectionCapabilities: 'Capability Group',
   capabilitiesDescription:

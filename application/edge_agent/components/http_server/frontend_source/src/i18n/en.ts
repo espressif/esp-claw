@@ -194,8 +194,22 @@ export const en = {
   mqttPassword: 'Password',
   mqttClientId: 'Client ID',
   mqttClientIdPlaceholder: 'esp_claw_1',
+  mqttJwt: 'JWT Token',
+  mqttJwtPlaceholder: 'eyJhbGciOi...',
+  mqttJwtNote:
+    'Optional. When set, the JWT is used for authentication instead of the password (e.g. EMQX). Leave empty to use the username/password above.',
   mqttNote:
     'Default broker for the Lua mqtt module. Lua scripts can call mqtt.new() with no arguments to reuse these values, or override them per call. Restart to apply.',
+  mqttDevMode: 'Dev mode',
+  mqttDevModeOn: 'Dev mode ON',
+  mqttDevModeConfirm:
+    'Enable developer mode? It unlocks editing the MQTT fields and clearing all stored credentials.',
+  mqttDevModeRequired: 'Enable dev mode first to clear credentials.',
+  mqttLocked: 'Fields are read-only. Enable dev mode to edit MQTT settings or clear credentials.',
+  mqttClearCreds: 'Clear credentials',
+  mqttClearConfirm:
+    'Clear ALL MQTT credentials (broker URL, username, password, JWT) from the device? This cannot be undone.',
+  mqttClearDone: 'MQTT credentials cleared. Restart to apply.',
 
   sectionCapabilities: 'Capability Groups',
   capabilitiesDescription:

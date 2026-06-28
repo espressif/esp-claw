@@ -20,6 +20,8 @@ extern "C" {
 #define APP_CLAW_TIMEOUT_LEN          16
 #define APP_CLAW_PATH_LEN             64
 #define APP_CLAW_FILE_PATH_LEN        96
+/* MQTT JWTs carry claims and easily exceed APP_CLAW_STR_LEN; give them room. */
+#define APP_CLAW_MQTT_JWT_LEN         1024
 
 typedef struct claw_core_state *claw_core_handle_t;
 
@@ -52,6 +54,7 @@ typedef struct {
     char mqtt_uri[APP_CLAW_STR_LEN];
     char mqtt_username[APP_CLAW_MODEL_LEN];
     char mqtt_password[APP_CLAW_STR_LEN];
+    char mqtt_jwt[APP_CLAW_MQTT_JWT_LEN];
     char mqtt_client_id[APP_CLAW_MODEL_LEN];
     char enabled_cap_groups[APP_CLAW_STR_LEN];
     char llm_visible_cap_groups[APP_CLAW_STR_LEN];

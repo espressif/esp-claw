@@ -580,11 +580,17 @@ static esp_err_t app_lua_register_mqtt(const char *fatfs_base_path)
         return err;
     }
     /* Seed the module with the broker settings stored via the web UI so Lua
-     * scripts can call mqtt.new() without hard-coding the broker. */
+     * scripts can call mqtt.new() without hard-coding the broker. When a JWT is
+     * configured it takes priority and is passed in the password slot (EMQX and
+     * similar brokers authenticate the JWT there); otherwise the plain password
+     * is used, so user/password auth keeps working unchanged. */
     if (s_register_config) {
+        const char *secret = s_register_config->mqtt_jwt[0]
+                           ? s_register_config->mqtt_jwt
+                           : s_register_config->mqtt_password;
         err = lua_module_mqtt_set_defaults(s_register_config->mqtt_uri,
                                            s_register_config->mqtt_username,
-                                           s_register_config->mqtt_password,
+                                           secret,
                                            s_register_config->mqtt_client_id);
     }
     return err;
