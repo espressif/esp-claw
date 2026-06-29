@@ -17,10 +17,8 @@ use claw_core::{ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput};
 use claw_interface::{
     CapturingHttp, ClawHttp, DiskFs, FailingHttp, NeverHttp, ScriptStep, ScriptedHttp, StdThread,
 };
-use claw_memory::{
-    ConversationConfig, ConversationDeps, ConversationMemory, MemoryTaskPool, NoopCompactor,
-    PoolConfig,
-};
+use claw_memory::{ConversationConfig, ConversationDeps, ConversationMemory, NoopCompactor};
+use claw_utils::{PoolConfig, SharedTaskPool};
 use serde_json::{json, Value};
 
 // ===========================================================================
@@ -80,7 +78,7 @@ pub fn body_echo_call_id(id: &str, input: &str) -> String {
 // LLM builders
 // ===========================================================================
 
-fn build_llm(http: Arc<dyn ClawHttp>, supports_tools: bool) -> ClawApi {
+fn build_llm<H: ClawHttp>(http: H, supports_tools: bool) -> ClawApi<H> {
     ClawApi::init(
         ClawApiConfig {
             api_key: Some("sk-test".into()),
@@ -96,35 +94,35 @@ fn build_llm(http: Arc<dyn ClawHttp>, supports_tools: bool) -> ClawApi {
 }
 
 /// Tool-capable LLM serving the given plain bodies in order (strict).
-pub fn scripted_llm(bodies: Vec<String>) -> ClawApi {
-    build_llm(Arc::new(ScriptedHttp::new(bodies)), true)
+pub fn scripted_llm(bodies: Vec<String>) -> ClawApi<ScriptedHttp> {
+    build_llm(ScriptedHttp::new(bodies), true)
 }
 
 /// Tool-capable LLM whose rounds may be successes or transport errors (strict).
-pub fn scripted_llm_steps(steps: Vec<ScriptStep>) -> ClawApi {
-    build_llm(Arc::new(ScriptedHttp::with_steps(steps)), true)
+pub fn scripted_llm_steps(steps: Vec<ScriptStep>) -> ClawApi<ScriptedHttp> {
+    build_llm(ScriptedHttp::with_steps(steps), true)
 }
 
 /// Tool-capable LLM that records requests; returns the API plus the capture handle.
-pub fn capturing_llm(bodies: Vec<String>) -> (ClawApi, Arc<CapturingHttp>) {
+pub fn capturing_llm(bodies: Vec<String>) -> (ClawApi<Arc<CapturingHttp>>, Arc<CapturingHttp>) {
     let http = CapturingHttp::new(bodies);
-    let llm = build_llm(Arc::clone(&http) as Arc<dyn ClawHttp>, true);
+    let llm = build_llm(Arc::clone(&http), true);
     (llm, http)
 }
 
 /// Tool-capable LLM whose every round fails.
-pub fn failing_llm() -> ClawApi {
-    build_llm(Arc::new(FailingHttp), true)
+pub fn failing_llm() -> ClawApi<FailingHttp> {
+    build_llm(FailingHttp, true)
 }
 
 /// LLM that does NOT support tools, serving the given plain bodies (strict).
-pub fn scripted_llm_no_tools(bodies: Vec<String>) -> ClawApi {
-    build_llm(Arc::new(ScriptedHttp::new(bodies)), false)
+pub fn scripted_llm_no_tools(bodies: Vec<String>) -> ClawApi<ScriptedHttp> {
+    build_llm(ScriptedHttp::new(bodies), false)
 }
 
 /// Tool-capable LLM that must never be called (panics if it is).
-pub fn never_called_llm() -> ClawApi {
-    build_llm(Arc::new(NeverHttp), true)
+pub fn never_called_llm() -> ClawApi<NeverHttp> {
+    build_llm(NeverHttp, true)
 }
 
 // Filesystem doubles: the shared `DiskFs` from `claw_interface` (the `diskfs`
@@ -162,8 +160,8 @@ impl ToolHandler for EchoTool {
 // ===========================================================================
 
 /// A fresh background memory pool.
-pub fn test_pool() -> Arc<MemoryTaskPool> {
-    Arc::new(MemoryTaskPool::new(PoolConfig::default(), StdThread::default()).expect("memory pool"))
+pub fn test_pool() -> Arc<SharedTaskPool> {
+    Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread).expect("memory pool"))
 }
 
 /// `<crate>/output/<name>/`, wiped clean and recreated. Use a UNIQUE `name` per
@@ -178,11 +176,12 @@ pub fn test_output_dir(name: &str) -> PathBuf {
 }
 
 /// The concrete `ClawFs` these integration tests run over: the real disk
-/// backend behind an `Arc` (shared, cheap to clone, statically dispatched).
-pub type TestFs = Arc<DiskFs>;
+/// backend. `DiskFs` is itself a cheap clone handle, so it needs no `Arc`.
+pub type TestFs = DiskFs;
 
-/// A disk-backed [`BaseAgent`] for the integration tests.
-pub type TestAgent = BaseAgent<TestFs>;
+/// A disk-backed [`BaseAgent`] for the integration tests, generic over the HTTP
+/// transport `H` the test's LLM double uses.
+pub type TestAgent<H> = BaseAgent<H>;
 
 /// A disk-backed [`ConversationMemory`] view for the integration tests.
 pub type TestMemory = ConversationMemory<TestFs>;
@@ -191,13 +190,13 @@ pub type TestMemory = ConversationMemory<TestFs>;
 pub fn test_memory(
     agent_id: AgentId,
     dir: impl Into<String>,
-    pool: Arc<MemoryTaskPool>,
+    pool: Arc<SharedTaskPool>,
 ) -> TestMemory {
     ConversationMemory::new(
         agent_id.0,
         ConversationConfig::new(dir),
         ConversationDeps {
-            fs: Arc::new(DiskFs::absolute()),
+            fs: DiskFs::absolute(),
             pool,
             compactor: Arc::new(NoopCompactor),
         },
@@ -205,21 +204,21 @@ pub fn test_memory(
 }
 
 /// A `BaseAgentBuilder` over fresh disk memory.
-pub fn agent_builder(
-    llm: ClawApi,
+pub fn agent_builder<H: ClawHttp>(
+    llm: ClawApi<H>,
     agent_id: AgentId,
     dir: impl Into<String>,
-) -> BaseAgentBuilder<TestFs> {
+) -> BaseAgentBuilder<TestFs, H> {
     BaseAgent::builder(llm, test_memory(agent_id, dir, test_pool()))
 }
 
 /// A builder plus a cloned read-only view of the same memory, so a test can
 /// inspect the committed transcript without going through the agent.
-pub fn builder_with_view(
-    llm: ClawApi,
+pub fn builder_with_view<H: ClawHttp>(
+    llm: ClawApi<H>,
     agent_id: AgentId,
     dir: impl Into<String>,
-) -> (BaseAgentBuilder<TestFs>, TestMemory) {
+) -> (BaseAgentBuilder<TestFs, H>, TestMemory) {
     let memory = test_memory(agent_id, dir, test_pool());
     let view = memory.clone();
     (BaseAgent::builder(llm, memory), view)
@@ -232,7 +231,7 @@ pub fn builder_with_view(
 /// Pump until the task hands back an answer (`Yielded`) or ends (`Ended`),
 /// returning that text. Panics on `Failed` or any other non-progress outcome so
 /// an unexpected pause/approval/cancel surfaces instead of hanging.
-pub fn run_to_completion(agent: &mut TestAgent) -> String {
+pub fn run_to_completion<H: ClawHttp>(agent: &mut BaseAgent<H>) -> String {
     loop {
         match agent.tick() {
             TickOutcome::Working => continue,

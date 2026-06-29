@@ -25,7 +25,6 @@
 //! (`/messages`).
 
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 
 use claw_api::{ChatJsonRequest, ChatRequest, ClawApi, ClawApiConfig};
 use claw_interface::RealHttp;
@@ -41,13 +40,13 @@ const MOCK_BASE_URL: &str = "https://mock-ai.fly.dev";
 // `RealHttp` whose `User-Agent` matches the backend under test.
 
 /// Live transport that MockAI routes to its OpenAI-compatible endpoint.
-fn openai_http() -> Arc<RealHttp> {
-    Arc::new(RealHttp::with_user_agent("claw-api-itest OpenAI/1.0"))
+fn openai_http() -> RealHttp {
+    RealHttp::with_user_agent("claw-api-itest OpenAI/1.0")
 }
 
 /// Live transport that MockAI routes to its Anthropic endpoint.
-fn anthropic_http() -> Arc<RealHttp> {
-    Arc::new(RealHttp::with_user_agent("claw-api-itest Anthropic/1.0"))
+fn anthropic_http() -> RealHttp {
+    RealHttp::with_user_agent("claw-api-itest Anthropic/1.0")
 }
 
 /// An OpenAI-compatible provider: only `model`/`base_url` differ between them.
@@ -91,7 +90,7 @@ const OPENAI_COMPATIBLE_PROVIDERS: &[Provider] = &[
     },
 ];
 
-fn openai_compatible_api(model: &str) -> ClawApi {
+fn openai_compatible_api(model: &str) -> ClawApi<RealHttp> {
     ClawApi::init(
         ClawApiConfig {
             api_key: Some("mock-key".into()), // any non-empty string; mock ignores it
@@ -118,7 +117,7 @@ fn openai_compatible_providers_roundtrip() {
             provider.name
         );
 
-        let api = openai_compatible_api(provider.model);
+        let mut api = openai_compatible_api(provider.model);
         // MockAI echoes the last user message content, so a unique marker lets
         // us assert the full request->transport->response->parse round-trip.
         let marker = format!("roundtrip-{}", provider.name);
@@ -141,7 +140,7 @@ fn openai_compatible_providers_roundtrip() {
 #[test]
 #[ignore = "hits hosted mock LLM endpoint over the network; run with --ignored"]
 fn anthropic_roundtrip() {
-    let api = ClawApi::init(
+    let mut api = ClawApi::init(
         ClawApiConfig {
             api_key: Some("mock-key".into()),
             backend_type: "anthropic_compatible".into(),
@@ -174,7 +173,7 @@ fn chat_json_roundtrip() {
         score: i32,
     }
 
-    let api = openai_compatible_api("gpt-4o-mini");
+    let mut api = openai_compatible_api("gpt-4o-mini");
 
     // MockAI echoes the user content verbatim, so sending a JSON object string
     // lets us exercise the chat_json parse path end-to-end.

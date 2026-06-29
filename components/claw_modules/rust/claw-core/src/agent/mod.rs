@@ -32,7 +32,7 @@ pub use base_agent::{
     TickOutcome,
 };
 pub use config::{AgentConfig, AgentConfigError};
-pub use factory::{AgentFactory, FsAgentFactory};
+pub use factory::{AgentFactory, FsAgentFactory, LongTermDeps};
 pub use generic_agent::{GenericAgent, GenericAgentBuildError};
 pub use graph::{
     AgentSnapshot, AgentStatus, ApprovalVerdict, GraphEffect, GraphHost, TerminationPolicy,
@@ -47,6 +47,8 @@ pub use resolver::{AgentResolver, MapAgentResolver};
 
 #[doc(no_inline)]
 pub use claw_api::RetryPolicy;
+
+use claw_interface::http::ClawHttp;
 
 /// The unified contract a scheduler drives any agent through.
 ///
@@ -80,8 +82,8 @@ pub trait Agent: Send {
 /// Child results re-enter the conversation as information the model re-decides
 /// over (no counting, no gating); both semantic agents handle them identically,
 /// so the formatting lives here once.
-fn append_child_result<F: claw_interface::ClawFs + 'static>(
-    base: &mut BaseAgent<F>,
+fn append_child_result<H: ClawHttp>(
+    base: &mut BaseAgent<H>,
     child: AgentId,
     text: String,
     ok: bool,

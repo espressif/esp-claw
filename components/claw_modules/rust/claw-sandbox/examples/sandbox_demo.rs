@@ -10,19 +10,17 @@
 //!
 //! Everything else — bare roots, unlisted paths, `..` escapes — is rejected.
 
-use std::error::Error;
-use std::sync::Arc;
-
 use claw_interface::{ClawFs, MemFs};
 use claw_sandbox::{RealRoots, Sandbox, SandboxError, SandboxFs};
 
-fn main() -> Result<(), Box<dyn Error>> {
-    // The real backing store. We keep a clone of the Arc so we can peek at the
-    // raw real paths and see where the sandbox actually routed each write.
-    let backend = Arc::new(MemFs::new());
+fn main() -> anyhow::Result<()> {
+    // The real backing store. `MemFs` is a cheap clone handle to the same store,
+    // so we keep a clone to peek at the raw real paths and see where the sandbox
+    // actually routed each write.
+    let backend = MemFs::new();
 
     let sandbox = Sandbox::new(
-        Arc::clone(&backend),
+        backend.clone(),
         "/data/sandboxes/inst-1",
         RealRoots {
             shared_skills: "/data/shared/skills",

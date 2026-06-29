@@ -151,7 +151,11 @@ impl Context {
         let mut entries: Vec<(&BlockKind, &String)> = self.blocks.iter().collect();
         // Sort by the wire-order key; the full `BlockKind` Ord breaks ties between
         // custom blocks sharing a key, keeping the render deterministic.
-        entries.sort_by(|a, b| a.0.sort_key().cmp(&b.0.sort_key()).then_with(|| a.0.cmp(b.0)));
+        entries.sort_by(|a, b| {
+            a.0.sort_key()
+                .cmp(&b.0.sort_key())
+                .then_with(|| a.0.cmp(b.0))
+        });
 
         let mut buffer = std::mem::take(&mut self.rendered);
         buffer.clear();
@@ -228,7 +232,10 @@ mod tests {
             .with(Block::new(BlockKind::AgentInstruction, "AGENT"))
             .with(Block::new(BlockKind::ConversationSummary, "SUMMARY"));
 
-        assert_eq!(system_of(&mut context), "COMMON\n\nAGENT\n\nSUMMARY\n\nINPUT\n\nOUTPUT");
+        assert_eq!(
+            system_of(&mut context),
+            "COMMON\n\nAGENT\n\nSUMMARY\n\nINPUT\n\nOUTPUT"
+        );
     }
 
     #[test]

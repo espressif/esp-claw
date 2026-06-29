@@ -205,8 +205,6 @@ fn normalize(path: &str) -> Result<String, SandboxError> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use std::sync::Arc;
-
     use claw_interface::{ClawFs, MemFs};
 
     use super::*;
@@ -218,14 +216,14 @@ mod tests {
         system_skills: "/real/system/skills",
     };
 
-    fn sandbox() -> Sandbox<Arc<MemFs>> {
-        Sandbox::new(Arc::new(MemFs::new()), "/real/sandbox/inst-1", REAL).unwrap()
+    fn sandbox() -> Sandbox<MemFs> {
+        Sandbox::new(MemFs::new(), "/real/sandbox/inst-1", REAL).unwrap()
     }
 
     #[test]
     fn routes_each_visible_root_to_its_real_path() {
-        let backend = Arc::new(MemFs::new());
-        let sb = Sandbox::new(Arc::clone(&backend), "/host/sandbox", REAL).unwrap();
+        let backend = MemFs::new();
+        let sb = Sandbox::new(backend.clone(), "/host/sandbox", REAL).unwrap();
 
         sb.write_atomic("/sandbox/tmp/a", b"1").unwrap();
         sb.write_atomic("/shared/data/b", b"2").unwrap();
@@ -301,7 +299,7 @@ mod tests {
 
     #[test]
     fn system_root_is_readable() {
-        let backend = Arc::new(MemFs::new());
+        let backend = MemFs::new();
         backend
             .write_atomic("/real/system/skills/doc", b"hi")
             .unwrap();

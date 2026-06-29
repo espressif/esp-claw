@@ -17,7 +17,7 @@ fn skill_md(description: &str, body: &str) -> Vec<u8> {
 }
 
 /// A `MemFs` with two skills (`alpha`, `beta`) under the `skills` root.
-fn two_skill_fs() -> Arc<MemFs> {
+fn two_skill_fs() -> MemFs {
     let fs = MemFs::new();
     fs.write_atomic(
         "skills/alpha/SKILL.md",
@@ -32,7 +32,7 @@ fn two_skill_fs() -> Arc<MemFs> {
         &skill_md("Beta skill", "# Beta\nBeta body\n"),
     )
     .unwrap();
-    Arc::new(fs)
+    fs
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn duplicate_id_across_roots_is_an_error() {
         .unwrap();
     fs.write_atomic("data/shared/SKILL.md", &skill_md("from data", "# S"))
         .unwrap();
-    let result = FsSkillRegistry::scan_roots(Arc::new(fs), ["system", "data"]);
+    let result = FsSkillRegistry::scan_roots(fs, ["system", "data"]);
     assert!(matches!(result, Err(SkillError::DuplicateId(id)) if id.as_str() == "shared"));
 }
 
@@ -138,7 +138,8 @@ fn reload_picks_up_a_newly_added_skill() {
 #[test]
 fn skill_set_catalog_reflects_registry_reload() {
     let fs = two_skill_fs();
-    let registry: Arc<FsSkillRegistry> = Arc::new(FsSkillRegistry::scan(fs.clone(), "skills").unwrap());
+    let registry: Arc<FsSkillRegistry<MemFs>> =
+        Arc::new(FsSkillRegistry::scan(fs.clone(), "skills").unwrap());
     let mut set = SkillSet::new(registry.clone());
     assert!(!set.catalog().contains("gamma"));
 

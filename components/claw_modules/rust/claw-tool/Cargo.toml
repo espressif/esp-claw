@@ -13,6 +13,10 @@ crate-type = ["rlib"]
 
 [dependencies]
 claw-permission = { path = "../claw-permission" }
+# Used only by the build-time `bake` module (called from dependent crates' build
+# scripts). Nothing in the firmware call graph references `bake`, so the linker
+# garbage-collects it and its `anyhow` usage out of the device image.
+anyhow = "1"
 jsonschema = { version = "0.46", default-features = false }
 serde_json = "1"
 thiserror = "2"

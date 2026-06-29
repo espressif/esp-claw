@@ -72,7 +72,9 @@ mod tests {
 
         let refreshed = invoke(&reload, "reload_skills");
         assert!(refreshed.ok);
-        assert!(invoke(&list, "list_skills").output.contains("gamma: Late skill"));
+        assert!(invoke(&list, "list_skills")
+            .output
+            .contains("gamma: Late skill"));
     }
 
     #[test]

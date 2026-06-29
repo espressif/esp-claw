@@ -15,7 +15,7 @@ use claw_core::agent::{
 };
 use common::{agent_builder, body_plain_text, scripted_llm, TestAgent};
 
-fn idle_agent(name: &str) -> TestAgent {
+fn idle_agent(name: &str) -> TestAgent<claw_interface::ScriptedHttp> {
     let dir = common::test_output_dir(name);
     agent_builder(scripted_llm(vec![]), AgentId(1), dir.display().to_string())
         .build()

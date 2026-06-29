@@ -5,7 +5,6 @@
 //! defaulting logic as the C `claw_llm_runtime_init`.
 
 use core::sync::atomic::AtomicBool;
-use std::sync::Arc;
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -33,20 +32,25 @@ const DEFAULT_IMAGE_MAX_BYTES: usize = 512 * 1024;
 /// [`ClawHttp`] transport.
 ///
 /// Construct it once with [`ClawApi::init`], then reuse it for many requests.
-/// `ClawApi` is `Send + Sync` (the transport is an `Arc<dyn ClawHttp>`), so it
-/// can be shared across threads/tasks behind an `Arc`.
+///
+/// Generic over the concrete transport `H` (static dispatch): the client *owns*
+/// its `H` and drives it through `&mut self`, so a transport may keep and reuse a
+/// persistent connection handle (keep-alive) across calls. There is no
+/// `Arc<dyn ClawHttp>` and no built-in synchronization — the `Send`/`Sync` auto
+/// traits flow from `H`, so threading requirements are decided by the caller at
+/// the point of sharing (e.g. `Mutex<ClawApi<H>>` for a transport shared across
+/// tasks), not imposed by this type.
 ///
 /// # Example
 ///
 /// ```no_run
-/// use std::sync::Arc;
 /// use std::sync::atomic::AtomicBool;
 /// use claw_api::{ChatRequest, ClawApi, ClawApiConfig};
 /// # use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse};
 /// # struct H; impl ClawHttp for H {
-/// #   fn post_json(&self, _r: &HttpJsonRequest, _a: &AtomicBool) -> Result<HttpResponse, HttpError> {
+/// #   fn post_json(&mut self, _r: &HttpJsonRequest, _a: &AtomicBool) -> Result<HttpResponse, HttpError> {
 /// #     Ok(HttpResponse { status_code: 200, body: r#"{"choices":[{"message":{"role":"assistant","content":"ok"}}]}"#.into() }) } }
-/// let api = ClawApi::init(
+/// let mut api = ClawApi::init(
 ///     ClawApiConfig {
 ///         api_key: Some("sk-...".into()),
 ///         backend_type: "openai_compatible".into(),
@@ -54,24 +58,24 @@ const DEFAULT_IMAGE_MAX_BYTES: usize = 512 * 1024;
 ///         base_url: Some("https://api.openai.com/v1".into()),
 ///         ..Default::default()
 ///     },
-///     Arc::new(H),
+///     H,
 /// )?;
 /// let msgs = serde_json::json!([{ "role": "user", "content": "hi" }]);
 /// let abort = AtomicBool::new(false);
 /// let resp = api.chat(&ChatRequest::new("sys", &msgs), &abort)?;
-/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// # Ok::<(), anyhow::Error>(())
 /// ```
-pub struct ClawApi {
+pub struct ClawApi<H: ClawHttp> {
     profile: ModelProfile,
-    backend: Box<dyn LlmBackend>,
-    http: Arc<dyn ClawHttp>,
+    backend: Box<dyn LlmBackend<H>>,
+    http: H,
 }
 
 fn empty(value: &Option<String>) -> bool {
     value.as_deref().map(|s| s.is_empty()).unwrap_or(true)
 }
 
-impl ClawApi {
+impl<H: ClawHttp> ClawApi<H> {
     /// Validate `config`, select the built-in backend, and bind the `http`
     /// transport. (Port of `claw_llm_runtime_init`.)
     ///
@@ -92,21 +96,20 @@ impl ClawApi {
     /// # Example
     ///
     /// ```
-    /// use std::sync::Arc;
     /// use std::sync::atomic::AtomicBool;
     /// use claw_api::{ClawApi, ClawApiConfig, InitError};
     /// # use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse};
     /// # struct H; impl ClawHttp for H {
-    /// #   fn post_json(&self, _r: &HttpJsonRequest, _a: &AtomicBool) -> Result<HttpResponse, HttpError> {
+    /// #   fn post_json(&mut self, _r: &HttpJsonRequest, _a: &AtomicBool) -> Result<HttpResponse, HttpError> {
     /// #     Ok(HttpResponse { status_code: 200, body: "{}".into() }) } }
     /// // Missing api_key is rejected.
     /// let result = ClawApi::init(
     ///     ClawApiConfig { backend_type: "openai_compatible".into(), ..Default::default() },
-    ///     Arc::new(H),
+    ///     H,
     /// );
     /// assert!(matches!(result, Err(InitError::MissingApiKey)));
     /// ```
-    pub fn init(mut config: ClawApiConfig, http: Arc<dyn ClawHttp>) -> Result<ClawApi, InitError> {
+    pub fn init(mut config: ClawApiConfig, http: H) -> Result<ClawApi<H>, InitError> {
         // Centralized credential/config validation. Backends trust that these
         // are present and non-empty once `init` returns Ok.
         if empty(&config.api_key) {
@@ -122,8 +125,8 @@ impl ClawApi {
             return Err(InitError::MissingBackendType);
         }
 
-        let registration =
-            find_builtin_registration(&config.backend_type).ok_or(InitError::UnknownBackend)?;
+        let registration = find_builtin_registration::<H>(&config.backend_type)
+            .ok_or(InitError::UnknownBackend)?;
 
         // Apply defaults exactly as the C code does.
         if empty(&config.auth_type) {
@@ -185,7 +188,9 @@ impl ClawApi {
     /// ```no_run
     /// use std::sync::atomic::AtomicBool;
     /// use claw_api::{ChatRequest, ClawApi, RetryPolicy};
-    /// # let api: ClawApi = unimplemented!();
+    /// # use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse};
+    /// # struct H; impl ClawHttp for H { fn post_json(&mut self, _r: &HttpJsonRequest, _a: &AtomicBool) -> Result<HttpResponse, HttpError> { unimplemented!() } }
+    /// # let mut api: ClawApi<H> = unimplemented!();
     /// let messages = serde_json::json!([
     ///     { "role": "user", "content": "What is 2 + 2?" }
     /// ]);
@@ -201,20 +206,20 @@ impl ClawApi {
     /// # Ok::<(), claw_api::ChatError>(())
     /// ```
     pub fn chat(
-        &self,
+        &mut self,
         request: &ChatRequest,
         abort: &AtomicBool,
     ) -> Result<LlmResponse, ChatError> {
         let policy = request.retry;
+        let backend = &self.backend;
+        let profile = &self.profile;
+        let http = &mut self.http;
         run_with_retry(
             &policy,
             abort,
             ChatError::is_retryable,
             || ChatError::Api(ClawApiError::Transport(ABORTED_DURING_BACKOFF.to_string())),
-            || {
-                self.backend
-                    .chat(self.http.as_ref(), &self.profile, request, abort)
-            },
+            || backend.chat(&mut *http, profile, request, abort),
         )
     }
 
@@ -244,7 +249,9 @@ impl ClawApi {
     /// ```no_run
     /// use std::sync::atomic::AtomicBool;
     /// use claw_api::{ChatJsonRequest, ClawApi};
-    /// # let api: ClawApi = unimplemented!();
+    /// # use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse};
+    /// # struct H; impl ClawHttp for H { fn post_json(&mut self, _r: &HttpJsonRequest, _a: &AtomicBool) -> Result<HttpResponse, HttpError> { unimplemented!() } }
+    /// # let mut api: ClawApi<H> = unimplemented!();
     ///
     /// #[derive(serde::Deserialize)]
     /// struct Sentiment { label: String, score: f32 }
@@ -272,7 +279,7 @@ impl ClawApi {
     /// # Ok::<(), claw_api::ChatJsonError>(())
     /// ```
     pub fn chat_json<T: DeserializeOwned + Send>(
-        &self,
+        &mut self,
         request: &ChatJsonRequest<'_>,
         abort: &AtomicBool,
     ) -> Result<ChatJsonResponse<T>, ChatJsonError> {
@@ -286,6 +293,9 @@ impl ClawApi {
         }
 
         let policy = request.retry;
+        let backend = &self.backend;
+        let profile = &self.profile;
+        let http = &mut self.http;
         run_with_retry(
             &policy,
             abort,
@@ -296,16 +306,8 @@ impl ClawApi {
                 )))
             },
             || {
-                let response = self
-                    .backend
-                    .chat_json(
-                        self.http.as_ref(),
-                        &self.profile,
-                        request,
-                        spec.name,
-                        &schema,
-                        abort,
-                    )
+                let response = backend
+                    .chat_json(&mut *http, profile, request, spec.name, &schema, abort)
                     .map_err(ChatJsonError::from)?;
                 Self::parse_chat_json_response(response)
             },
@@ -354,7 +356,9 @@ impl ClawApi {
     /// ```no_run
     /// use std::sync::atomic::AtomicBool;
     /// use claw_api::{ClawApi, MediaAsset, MediaRequest};
-    /// # let api: ClawApi = unimplemented!();
+    /// # use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse};
+    /// # struct H; impl ClawHttp for H { fn post_json(&mut self, _r: &HttpJsonRequest, _a: &AtomicBool) -> Result<HttpResponse, HttpError> { unimplemented!() } }
+    /// # let mut api: ClawApi<H> = unimplemented!();
     /// let assets = [MediaAsset::local_path("/sdcard/photo.jpg")];
     /// let abort = AtomicBool::new(false);
     /// let description = api.infer_media(
@@ -365,20 +369,20 @@ impl ClawApi {
     /// # Ok::<(), claw_api::InferMediaError>(())
     /// ```
     pub fn infer_media(
-        &self,
+        &mut self,
         request: &MediaRequest,
         abort: &AtomicBool,
     ) -> Result<String, InferMediaError> {
         let policy = request.retry;
+        let backend = &self.backend;
+        let profile = &self.profile;
+        let http = &mut self.http;
         run_with_retry(
             &policy,
             abort,
             InferMediaError::is_retryable,
             || InferMediaError::Api(ClawApiError::Transport(ABORTED_DURING_BACKOFF.to_string())),
-            || {
-                self.backend
-                    .infer_media(self.http.as_ref(), &self.profile, request, abort)
-            },
+            || backend.infer_media(&mut *http, profile, request, abort),
         )
     }
 

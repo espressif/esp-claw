@@ -218,7 +218,8 @@ fn display_name(name: &str) -> &str {
 mod tests {
     use super::*;
     use crate::handler::{
-        Tool, ToolHandler, ToolInvokeError, ToolOutput, ToolRetryCount, tool_invoke_err_with_retries,
+        tool_invoke_err_with_retries, Tool, ToolHandler, ToolInvokeError, ToolOutput,
+        ToolRetryCount,
     };
     use crate::set::{AllowedTools, ToolGroup};
     use claw_permission::{Action, RiskClass};

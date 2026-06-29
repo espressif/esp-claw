@@ -1,9 +1,14 @@
-//! Shared helpers for the claw Rust crates: log-safe text truncation and the
-//! prefixed-id newtype macro ([`define_prefixed_id`]).
+//! Shared helpers for the claw Rust crates: log-safe text truncation, the
+//! prefixed-id newtype macro ([`define_prefixed_id`]), and the process-wide
+//! background worker pool ([`SharedTaskPool`]).
 
 use core::fmt;
 
 use thiserror::Error;
+
+pub mod pool;
+
+pub use pool::{PoolConfig, PoolJob, SharedTaskPool};
 
 /// Default byte ceiling for [`TruncatedText::new`]. On device, keep trace/log
 /// lines compact (flash + UART bandwidth); on host, print the full text so the

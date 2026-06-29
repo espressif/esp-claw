@@ -17,8 +17,8 @@ use std::sync::Arc;
 use claw_interface::{MemFs, StdThread};
 use claw_memory::{
     CompactError, Compactor, ConversationConfig, ConversationDeps, ConversationMemory,
-    MemoryTaskPool, PoolConfig,
 };
+use claw_utils::{PoolConfig, SharedTaskPool};
 use serde_json::{json, Value};
 
 /// A stand-in for the real summarizer: folds an aged window of messages into a
@@ -34,13 +34,10 @@ impl Compactor for CountingCompactor {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> anyhow::Result<()> {
     // One pool is shared by every memory type; create it once at boot. The
     // caller injects the spawn policy (host `StdThread` here).
-    let pool = Arc::new(MemoryTaskPool::new(
-        PoolConfig::default(),
-        StdThread::default(),
-    )?);
+    let pool = Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread)?);
 
     let conversation_id = 42;
     let memory = ConversationMemory::new(

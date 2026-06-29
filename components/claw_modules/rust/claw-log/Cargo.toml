@@ -64,6 +64,10 @@ tracing = { version = "0.1", default-features = false, features = ["std"] }
 [target.'cfg(not(target_os = "espidf"))'.dependencies]
 env_logger = { version = "0.11", default-features = false, features = ["auto-color"] }
 
+[dev-dependencies]
+# Ergonomic error handling for the `fmt_demo` example (host-only).
+anyhow = "1"
+
 [lints.rust]
 unsafe_code = "forbid"
 

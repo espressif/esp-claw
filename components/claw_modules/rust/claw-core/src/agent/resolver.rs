@@ -13,8 +13,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use claw_tool::Tool;
 use claw_skill::{SkillError, SkillId, SkillRegistry, SkillSet};
+use claw_tool::Tool;
 
 /// Resolves the *names* in a manifest to the *code* that backs them.
 ///

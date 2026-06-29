@@ -84,10 +84,10 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use claw_interface::ClawFs;
+use claw_interface::{ClawFile, ClawFs};
 
 use crate::compaction::Compactor;
-use crate::pool::MemoryTaskPool;
+use claw_utils::SharedTaskPool;
 
 /// Token budget past which a background compaction is scheduled.
 const DEFAULT_COMPACT_THRESHOLD_TOKENS: usize = 6000;
@@ -257,7 +257,7 @@ pub struct ConversationDeps<F: ClawFs + 'static> {
     /// Persistence backend (read on construction, written on the foreground).
     pub fs: F,
     /// Shared worker pool that runs the summarization compute off the tick path.
-    pub pool: Arc<MemoryTaskPool>,
+    pub pool: Arc<SharedTaskPool>,
     /// How aged windows are summarized.
     pub compactor: Arc<dyn Compactor>,
 }
@@ -369,6 +369,11 @@ struct MemoryState {
     /// compaction applied), so each iteration bumps a refcount instead of cloning
     /// the whole transcript.
     messages_cache: Option<Arc<Value>>,
+    /// Monotonic content version, bumped in lockstep with every `messages_cache`
+    /// invalidation (an open-turn append or an applied compaction). A pull-based
+    /// reader caches work keyed on the transcript and recomputes only when this
+    /// advances — see [`ConversationMemory::version`].
+    version: u64,
 
     approx_tokens: usize,
     last_persist: Option<Instant>,
@@ -399,34 +404,23 @@ struct MemoryInner<F: ClawFs + 'static> {
 ///
 /// ```
 /// # use std::sync::Arc;
-/// # use claw_interface::{ClawFs, FsError, StdThread};
+/// # use claw_interface::{MemFs, StdThread};
 /// # use claw_memory::{
 /// #     CompactError, Compactor, ConversationConfig, ConversationDeps,
-/// #     ConversationMemory, MemoryTaskPool, PoolConfig,
+/// #     ConversationMemory,
 /// # };
+/// # use claw_utils::{SharedTaskPool, PoolConfig};
 /// # use serde_json::Value;
-/// # struct StubFs;
-/// # impl ClawFs for StubFs {
-/// #     fn read(&self, _: &str) -> Result<Vec<u8>, FsError> { Err(FsError::NotFound) }
-/// #     fn read_at(&self, _: &str, _: u64, _: usize) -> Result<Vec<u8>, FsError> { Err(FsError::NotFound) }
-/// #     fn len(&self, _: &str) -> Result<u64, FsError> { Err(FsError::NotFound) }
-/// #     fn write_atomic(&self, _: &str, _: &[u8]) -> Result<(), FsError> { Ok(()) }
-/// #     fn append(&self, _: &str, _: &[u8]) -> Result<(), FsError> { Ok(()) }
-/// #     fn create_dir_all(&self, _: &str) -> Result<(), FsError> { Ok(()) }
-/// #     fn exists(&self, _: &str) -> bool { false }
-/// #     fn remove(&self, _: &str) -> Result<(), FsError> { Ok(()) }
-/// #     fn list_dir(&self, _: &str) -> Result<Vec<String>, FsError> { Ok(Vec::new()) }
-/// # }
 /// # struct StubCompactor;
 /// # impl Compactor for StubCompactor {
 /// #     fn compact(&self, _: &[Value]) -> Result<Vec<Value>, CompactError> { Ok(vec![]) }
 /// # }
-/// let pool = Arc::new(MemoryTaskPool::new(PoolConfig::default(), StdThread::default())?);
+/// let pool = Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread)?);
 /// let mut memory = ConversationMemory::new(
 ///     42,
 ///     ConversationConfig::new("/data/conversations"),
 ///     ConversationDeps {
-///         fs: StubFs,
+///         fs: MemFs::new(),
 ///         pool: Arc::clone(&pool),
 ///         compactor: Arc::new(StubCompactor),
 ///     },
@@ -470,33 +464,22 @@ impl<F: ClawFs + 'static> ConversationMemory<F> {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use claw_interface::{ClawFs, FsError, StdThread};
+    /// # use claw_interface::{MemFs, StdThread};
     /// # use claw_memory::{
     /// #     CompactError, Compactor, ConversationConfig, ConversationDeps,
-    /// #     ConversationMemory, MemoryTaskPool, PoolConfig,
+    /// #     ConversationMemory,
     /// # };
+    /// # use claw_utils::{SharedTaskPool, PoolConfig};
     /// # use serde_json::Value;
-    /// # struct StubFs;
-    /// # impl ClawFs for StubFs {
-    /// #     fn read(&self, _: &str) -> Result<Vec<u8>, FsError> { Err(FsError::NotFound) }
-    /// #     fn read_at(&self, _: &str, _: u64, _: usize) -> Result<Vec<u8>, FsError> { Err(FsError::NotFound) }
-    /// #     fn len(&self, _: &str) -> Result<u64, FsError> { Err(FsError::NotFound) }
-    /// #     fn write_atomic(&self, _: &str, _: &[u8]) -> Result<(), FsError> { Ok(()) }
-    /// #     fn append(&self, _: &str, _: &[u8]) -> Result<(), FsError> { Ok(()) }
-    /// #     fn create_dir_all(&self, _: &str) -> Result<(), FsError> { Ok(()) }
-    /// #     fn exists(&self, _: &str) -> bool { false }
-    /// #     fn remove(&self, _: &str) -> Result<(), FsError> { Ok(()) }
-    /// #     fn list_dir(&self, _: &str) -> Result<Vec<String>, FsError> { Ok(Vec::new()) }
-    /// # }
     /// # struct StubCompactor;
     /// # impl Compactor for StubCompactor {
     /// #     fn compact(&self, _: &[Value]) -> Result<Vec<Value>, CompactError> { Ok(vec![]) }
     /// # }
-    /// # let pool = Arc::new(MemoryTaskPool::new(PoolConfig::default(), StdThread::default())?);
+    /// # let pool = Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread)?);
     /// let memory = ConversationMemory::new(
     ///     7,
     ///     ConversationConfig::new("/data/conversations"),
-    ///     ConversationDeps { fs: StubFs, pool, compactor: Arc::new(StubCompactor) },
+    ///     ConversationDeps { fs: MemFs::new(), pool, compactor: Arc::new(StubCompactor) },
     /// );
     /// assert_eq!(memory.conversation_id(), 7);
     /// assert!(memory.messages().as_array().unwrap().is_empty()); // missing files start empty
@@ -537,6 +520,18 @@ impl<F: ClawFs + 'static> ConversationMemory<F> {
         self.inner.conversation_id
     }
 
+    /// A monotonic counter bumped whenever the rendered transcript changes (an
+    /// open-turn append or an applied compaction).
+    ///
+    /// Lets a pull-based reader cache output keyed on the transcript and rebuild
+    /// only when this advances, without diffing [`messages`](Self::messages). It
+    /// is a content version, not a structural one: committing an open turn moves
+    /// messages between buffers but leaves the rendered output (and this counter)
+    /// unchanged.
+    pub fn version(&self) -> u64 {
+        self.lock_state().version
+    }
+
     /// Open a turn. Append its messages through the returned [`GroupGuard`]; the
     /// whole turn is committed as one group when the guard drops.
     ///
@@ -549,33 +544,22 @@ impl<F: ClawFs + 'static> ConversationMemory<F> {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use claw_interface::{ClawFs, FsError, StdThread};
+    /// # use claw_interface::{MemFs, StdThread};
     /// # use claw_memory::{
     /// #     CompactError, Compactor, ConversationConfig, ConversationDeps,
-    /// #     ConversationMemory, MemoryTaskPool, PoolConfig,
+    /// #     ConversationMemory,
     /// # };
+    /// # use claw_utils::{SharedTaskPool, PoolConfig};
     /// # use serde_json::Value;
-    /// # struct StubFs;
-    /// # impl ClawFs for StubFs {
-    /// #     fn read(&self, _: &str) -> Result<Vec<u8>, FsError> { Err(FsError::NotFound) }
-    /// #     fn read_at(&self, _: &str, _: u64, _: usize) -> Result<Vec<u8>, FsError> { Err(FsError::NotFound) }
-    /// #     fn len(&self, _: &str) -> Result<u64, FsError> { Err(FsError::NotFound) }
-    /// #     fn write_atomic(&self, _: &str, _: &[u8]) -> Result<(), FsError> { Ok(()) }
-    /// #     fn append(&self, _: &str, _: &[u8]) -> Result<(), FsError> { Ok(()) }
-    /// #     fn create_dir_all(&self, _: &str) -> Result<(), FsError> { Ok(()) }
-    /// #     fn exists(&self, _: &str) -> bool { false }
-    /// #     fn remove(&self, _: &str) -> Result<(), FsError> { Ok(()) }
-    /// #     fn list_dir(&self, _: &str) -> Result<Vec<String>, FsError> { Ok(Vec::new()) }
-    /// # }
     /// # struct StubCompactor;
     /// # impl Compactor for StubCompactor {
     /// #     fn compact(&self, _: &[Value]) -> Result<Vec<Value>, CompactError> { Ok(vec![]) }
     /// # }
-    /// # let pool = Arc::new(MemoryTaskPool::new(PoolConfig::default(), StdThread::default())?);
+    /// # let pool = Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread)?);
     /// # let mut memory = ConversationMemory::new(
     /// #     1,
     /// #     ConversationConfig::new("/data/conversations"),
-    /// #     ConversationDeps { fs: StubFs, pool, compactor: Arc::new(StubCompactor) },
+    /// #     ConversationDeps { fs: MemFs::new(), pool, compactor: Arc::new(StubCompactor) },
     /// # );
     /// {
     ///     let turn = memory.group();
@@ -605,33 +589,22 @@ impl<F: ClawFs + 'static> ConversationMemory<F> {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use claw_interface::{ClawFs, FsError, StdThread};
+    /// # use claw_interface::{MemFs, StdThread};
     /// # use claw_memory::{
     /// #     CompactError, Compactor, ConversationConfig, ConversationDeps,
-    /// #     ConversationMemory, MemoryTaskPool, PoolConfig,
+    /// #     ConversationMemory,
     /// # };
+    /// # use claw_utils::{SharedTaskPool, PoolConfig};
     /// # use serde_json::Value;
-    /// # struct StubFs;
-    /// # impl ClawFs for StubFs {
-    /// #     fn read(&self, _: &str) -> Result<Vec<u8>, FsError> { Err(FsError::NotFound) }
-    /// #     fn read_at(&self, _: &str, _: u64, _: usize) -> Result<Vec<u8>, FsError> { Err(FsError::NotFound) }
-    /// #     fn len(&self, _: &str) -> Result<u64, FsError> { Err(FsError::NotFound) }
-    /// #     fn write_atomic(&self, _: &str, _: &[u8]) -> Result<(), FsError> { Ok(()) }
-    /// #     fn append(&self, _: &str, _: &[u8]) -> Result<(), FsError> { Ok(()) }
-    /// #     fn create_dir_all(&self, _: &str) -> Result<(), FsError> { Ok(()) }
-    /// #     fn exists(&self, _: &str) -> bool { false }
-    /// #     fn remove(&self, _: &str) -> Result<(), FsError> { Ok(()) }
-    /// #     fn list_dir(&self, _: &str) -> Result<Vec<String>, FsError> { Ok(Vec::new()) }
-    /// # }
     /// # struct StubCompactor;
     /// # impl Compactor for StubCompactor {
     /// #     fn compact(&self, _: &[Value]) -> Result<Vec<Value>, CompactError> { Ok(vec![]) }
     /// # }
-    /// # let pool = Arc::new(MemoryTaskPool::new(PoolConfig::default(), StdThread::default())?);
+    /// # let pool = Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread)?);
     /// # let mut memory = ConversationMemory::new(
     /// #     1,
     /// #     ConversationConfig::new("/data/conversations"),
-    /// #     ConversationDeps { fs: StubFs, pool, compactor: Arc::new(StubCompactor) },
+    /// #     ConversationDeps { fs: MemFs::new(), pool, compactor: Arc::new(StubCompactor) },
     /// # );
     /// memory.group().append_user("first");
     /// memory.group().append_user("second");
@@ -700,33 +673,22 @@ impl<F: ClawFs + 'static> ConversationMemory<F> {
     ///
     /// ```
     /// # use std::sync::Arc;
-    /// # use claw_interface::{ClawFs, FsError, StdThread};
+    /// # use claw_interface::{MemFs, StdThread};
     /// # use claw_memory::{
     /// #     CompactError, Compactor, ConversationConfig, ConversationDeps,
-    /// #     ConversationMemory, MemoryTaskPool, PoolConfig,
+    /// #     ConversationMemory,
     /// # };
+    /// # use claw_utils::{SharedTaskPool, PoolConfig};
     /// # use serde_json::Value;
-    /// # struct StubFs;
-    /// # impl ClawFs for StubFs {
-    /// #     fn read(&self, _: &str) -> Result<Vec<u8>, FsError> { Err(FsError::NotFound) }
-    /// #     fn read_at(&self, _: &str, _: u64, _: usize) -> Result<Vec<u8>, FsError> { Err(FsError::NotFound) }
-    /// #     fn len(&self, _: &str) -> Result<u64, FsError> { Err(FsError::NotFound) }
-    /// #     fn write_atomic(&self, _: &str, _: &[u8]) -> Result<(), FsError> { Ok(()) }
-    /// #     fn append(&self, _: &str, _: &[u8]) -> Result<(), FsError> { Ok(()) }
-    /// #     fn create_dir_all(&self, _: &str) -> Result<(), FsError> { Ok(()) }
-    /// #     fn exists(&self, _: &str) -> bool { false }
-    /// #     fn remove(&self, _: &str) -> Result<(), FsError> { Ok(()) }
-    /// #     fn list_dir(&self, _: &str) -> Result<Vec<String>, FsError> { Ok(Vec::new()) }
-    /// # }
     /// # struct StubCompactor;
     /// # impl Compactor for StubCompactor {
     /// #     fn compact(&self, _: &[Value]) -> Result<Vec<Value>, CompactError> { Ok(vec![]) }
     /// # }
-    /// # let pool = Arc::new(MemoryTaskPool::new(PoolConfig::default(), StdThread::default())?);
+    /// # let pool = Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread)?);
     /// # let mut memory = ConversationMemory::new(
     /// #     1,
     /// #     ConversationConfig::new("/data/conversations"),
-    /// #     ConversationDeps { fs: StubFs, pool, compactor: Arc::new(StubCompactor) },
+    /// #     ConversationDeps { fs: MemFs::new(), pool, compactor: Arc::new(StubCompactor) },
     /// # );
     /// memory.group().append_user("remember this");
     /// memory.flush(); // committed turn is now on disk
@@ -759,33 +721,22 @@ impl<F: ClawFs + 'static> ConversationMemory<F> {
 ///
 /// ```
 /// # use std::sync::Arc;
-/// # use claw_interface::{ClawFs, FsError, StdThread};
+/// # use claw_interface::{MemFs, StdThread};
 /// # use claw_memory::{
 /// #     CompactError, Compactor, ConversationConfig, ConversationDeps,
-/// #     ConversationMemory, MemoryTaskPool, PoolConfig,
+/// #     ConversationMemory,
 /// # };
+/// # use claw_utils::{SharedTaskPool, PoolConfig};
 /// # use serde_json::{json, Value};
-/// # struct StubFs;
-/// # impl ClawFs for StubFs {
-/// #     fn read(&self, _: &str) -> Result<Vec<u8>, FsError> { Err(FsError::NotFound) }
-/// #     fn read_at(&self, _: &str, _: u64, _: usize) -> Result<Vec<u8>, FsError> { Err(FsError::NotFound) }
-/// #     fn len(&self, _: &str) -> Result<u64, FsError> { Err(FsError::NotFound) }
-/// #     fn write_atomic(&self, _: &str, _: &[u8]) -> Result<(), FsError> { Ok(()) }
-/// #     fn append(&self, _: &str, _: &[u8]) -> Result<(), FsError> { Ok(()) }
-/// #     fn create_dir_all(&self, _: &str) -> Result<(), FsError> { Ok(()) }
-/// #     fn exists(&self, _: &str) -> bool { false }
-/// #     fn remove(&self, _: &str) -> Result<(), FsError> { Ok(()) }
-/// #     fn list_dir(&self, _: &str) -> Result<Vec<String>, FsError> { Ok(Vec::new()) }
-/// # }
 /// # struct StubCompactor;
 /// # impl Compactor for StubCompactor {
 /// #     fn compact(&self, _: &[Value]) -> Result<Vec<Value>, CompactError> { Ok(vec![]) }
 /// # }
-/// # let pool = Arc::new(MemoryTaskPool::new(PoolConfig::default(), StdThread::default())?);
+/// # let pool = Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread)?);
 /// # let mut memory = ConversationMemory::new(
 /// #     1,
 /// #     ConversationConfig::new("/data/conversations"),
-/// #     ConversationDeps { fs: StubFs, pool, compactor: Arc::new(StubCompactor) },
+/// #     ConversationDeps { fs: MemFs::new(), pool, compactor: Arc::new(StubCompactor) },
 /// # );
 /// let turn = memory.group();
 /// turn.append_user("call the weather tool");
@@ -907,8 +858,10 @@ impl<F: ClawFs + 'static> GroupGuard<F> {
             .approx_tokens
             .saturating_add(estimate_message_tokens(&message));
         state.open_group.push(message);
-        // Content changed: the next `messages()` must rebuild.
+        // Content changed: the next `messages()` must rebuild, and any reader
+        // gating on `version()` must recompute.
         state.messages_cache = None;
+        state.version = state.version.saturating_add(1);
     }
 }
 
@@ -1103,8 +1056,10 @@ fn apply_parked_compact<F: ClawFs + 'static>(inner: &MemoryInner<F>) -> bool {
     );
     state.approx_tokens = estimate_state_tokens(&state);
     state.index_dirty = true;
-    // Compaction replaced verbatim groups with a summary: invalidate the snapshot.
+    // Compaction replaced verbatim groups with a summary: invalidate the snapshot
+    // and bump the content version so pull-based readers recompute.
     state.messages_cache = None;
+    state.version = state.version.saturating_add(1);
 
     debug_assert!(
         coverage_is_contiguous(&state),
@@ -1438,13 +1393,23 @@ fn load_state(fs: &impl ClawFs, data_path: &str, index_path: &str) -> (MemorySta
     let mut manifest_next_id = RecordId::default();
     let mut mismatch = false;
 
+    // One handle to the data log, reused for every indexed record read and the
+    // tail scan below, instead of reopening the file per access.
+    let mut data_file = fs.open(data_path).ok();
+
     if let Ok(bytes) = fs.read(index_path) {
         if let Ok(manifest) = serde_json::from_slice::<Manifest>(&bytes) {
             covered_len = manifest.covered_len;
             manifest_next_id = manifest.next_id;
             'entries: for entry in &manifest.live {
                 let (off, len) = entry_loc(entry);
-                match fs.read_at(data_path, off.as_u64(), len.as_usize()) {
+                let Some(file) = data_file.as_mut() else {
+                    // The manifest references a data log that cannot be opened;
+                    // rebuild from whatever the tail scan recovers.
+                    mismatch = true;
+                    break 'entries;
+                };
+                match file.read_exact_at(off.as_u64(), len.as_usize()) {
                     Ok(buf) => match parse_record(&buf) {
                         Some(record) if verify_entry(entry, &record) => {
                             apply_record(&mut state, record, Some((off, len)));
@@ -1488,14 +1453,19 @@ fn load_state(fs: &impl ClawFs, data_path: &str, index_path: &str) -> (MemorySta
         manifest_next_id = RecordId::default();
     }
 
-    let data_len = ByteLen::from_file_len(fs.len(data_path).unwrap_or(0));
+    let data_len = ByteLen::from_file_len(
+        data_file
+            .as_ref()
+            .and_then(|file| file.size().ok())
+            .unwrap_or(0),
+    );
     if data_len > covered_len {
         let extra = data_len.saturating_sub(covered_len);
-        if let Ok(tail) = fs.read_at(
-            data_path,
-            covered_len.as_offset().as_u64(),
-            extra.as_usize(),
-        ) {
+        let tail = data_file.as_mut().and_then(|file| {
+            file.read_exact_at(covered_len.as_offset().as_u64(), extra.as_usize())
+                .ok()
+        });
+        if let Some(tail) = tail {
             scan_tail(&mut state, &tail, covered_len.as_offset());
         }
         state.index_dirty = true;

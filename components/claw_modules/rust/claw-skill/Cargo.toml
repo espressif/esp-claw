@@ -15,3 +15,5 @@ thiserror = "2"
 # Host-only ClawFs doubles: `memfs` for hermetic unit tests, `diskfs` for the
 # data-driven golden test over the `tests/data/skills` fixtures.
 claw-interface = { path = "../claw-interface", features = ["memfs", "diskfs"] }
+# Ergonomic error handling for the crate examples (host-only, never in firmware).
+anyhow = "1"

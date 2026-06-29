@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use claw_permission::{Action, RiskClass};
-use claw_tool::{tool_metadata, ToolError, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput, tool_invoke_err};
+use claw_tool::{
+    tool_invoke_err, tool_metadata, ToolError, ToolHandler, ToolInvocation, ToolInvokeError,
+    ToolOutput,
+};
 
 use crate::agent::base_agent::AgentId;
 use crate::agent::graph::AgentContext;
@@ -73,7 +76,10 @@ mod tests {
             snap(3, Some(2), 2),
         ]);
         let context = context_for(Arc::clone(&host) as Arc<dyn GraphHost>, AgentId(2));
-        let delete = tool_named(&subagent_tool_group(context, SpawnPolicy::Any), "delete_subagent");
+        let delete = tool_named(
+            &subagent_tool_group(context, SpawnPolicy::Any),
+            "delete_subagent",
+        );
 
         let ok = delete
             .invoke(&ToolInvocation {
@@ -97,12 +103,7 @@ mod tests {
         let effects = host.effects.lock().unwrap();
         assert_eq!(
             effects.as_slice(),
-            &[(
-                AgentId(2),
-                GraphEffect::Delete {
-                    target: AgentId(3)
-                }
-            )]
+            &[(AgentId(2), GraphEffect::Delete { target: AgentId(3) })]
         );
     }
 }

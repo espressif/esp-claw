@@ -18,14 +18,22 @@ path = "src/bin/claw-agent-chat.rs"
 [dependencies]
 claw-core = { path = "../claw-core" }
 claw-api = { path = "../claw-api" }
-# `compactor-stub` provides the never-compacts `NoopCompactor` used by the
-# host `on_disk` convenience constructor.
-claw-memory = { path = "../claw-memory", features = ["compactor-stub"] }
+# The capability surface: callers register tools/channels as `Capability`s in a
+# `Registry`; this crate bridges it onto the orchestrator's resolver/egress seams.
+claw-capability = { path = "../claw-capability" }
+# Conversation/long-term memory. The compaction policy is wired internally
+# (the LLM-backed `LlmCompactor`), so no stub-compactor feature is needed.
+claw-memory = { path = "../claw-memory" }
+# The shared background worker pool callers configure and inject.
+claw-utils = { path = "../claw-utils" }
 # Host dependency-injection backends: real disk fs, blocking reqwest transport,
 # and std-thread memory pool spawner. This crate is a host-facing dev/test tool
 # (like `cli`), so these host-only features are always on.
 claw-interface = { path = "../claw-interface", features = ["diskfs", "realhttp", "stdthread"] }
 thiserror = "2"
+# Ergonomic error handling for the host-facing `claw-agent-chat` bin and the
+# crate examples. This crate is a host dev/test tool, never linked into firmware.
+anyhow = "1"
 # Used by the `claw-agent-chat` bin to load `claw-core/.env.local`.
 dotenvy = "0.15"
 

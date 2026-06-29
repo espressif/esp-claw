@@ -80,7 +80,10 @@ impl RuleBasedTierClassifier {
 impl Default for RuleBasedTierClassifier {
     fn default() -> Self {
         Self {
-            global_tags: DEFAULT_GLOBAL_TAGS.iter().map(|tag| tag.to_string()).collect(),
+            global_tags: DEFAULT_GLOBAL_TAGS
+                .iter()
+                .map(|tag| tag.to_string())
+                .collect(),
         }
     }
 }
@@ -90,10 +93,11 @@ impl TierClassifier for RuleBasedTierClassifier {
         if let Some(hint) = hint {
             return hint;
         }
-        let is_global = draft
-            .tags
-            .iter()
-            .any(|tag| self.global_tags.iter().any(|known| known.eq_ignore_ascii_case(tag)));
+        let is_global = draft.tags.iter().any(|tag| {
+            self.global_tags
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(tag))
+        });
         if is_global {
             MemoryTier::Global
         } else {

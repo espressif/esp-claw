@@ -12,21 +12,18 @@ use std::path::Path;
 use std::sync::Arc;
 
 use claw_api::{ClawApi, ClawApiConfig};
-use claw_interface::http::ClawHttp;
 use claw_interface::{DiskFs, RealHttp, StdThread};
-use claw_memory::{
-    ConversationConfig, ConversationDeps, ConversationMemory, MemoryTaskPool, NoopCompactor,
-    PoolConfig,
-};
+use claw_memory::{ConversationConfig, ConversationDeps, ConversationMemory, NoopCompactor};
+use claw_utils::{PoolConfig, SharedTaskPool};
 
 // The real network transport is `claw_interface::RealHttp` (the `realhttp`
 // feature); background summarisation is disabled via claw-memory's
 // `NoopCompactor` (the `compactor-stub` feature).
 
-/// The concrete `ClawFs` the CLI runs over: the real disk backend behind an
-/// `Arc` (shared, cheaply cloned per agent, and statically dispatched — `Arc<T>`
-/// itself implements `ClawFs`).
-pub type CliFs = Arc<DiskFs>;
+/// The concrete `ClawFs` the CLI runs over: the real disk backend. `DiskFs` is
+/// itself a cheap clone handle (just a base path), so each agent gets a clone
+/// and there is no need to wrap it in an `Arc`.
+pub type CliFs = DiskFs;
 
 // ---------------------------------------------------------------------------
 // Config / wiring
@@ -78,9 +75,9 @@ pub fn make_llm_config(supports_tools: bool) -> ClawApiConfig {
     }
 }
 
-/// The shared live network transport ([`RealHttp`]).
-pub fn make_http() -> Arc<dyn ClawHttp> {
-    Arc::new(RealHttp::new())
+/// The live network transport ([`RealHttp`]). Each LLM client owns its own.
+pub fn make_http() -> RealHttp {
+    RealHttp::new()
 }
 
 /// Build a live LLM client from the `CLAW_LLM_*` environment variables.
@@ -90,7 +87,7 @@ pub fn make_http() -> Arc<dyn ClawHttp> {
 /// # Panics
 ///
 /// If any required `CLAW_LLM_*` variable is missing, or the client cannot init.
-pub fn make_llm(supports_tools: bool) -> ClawApi {
+pub fn make_llm(supports_tools: bool) -> ClawApi<RealHttp> {
     ClawApi::init(make_llm_config(supports_tools), make_http()).expect("failed to init LLM client")
 }
 
@@ -104,11 +101,10 @@ pub fn make_llm(supports_tools: bool) -> ClawApi {
 ///
 /// If the background memory task pool cannot be created.
 pub fn make_memory_deps() -> ConversationDeps<CliFs> {
-    let pool = Arc::new(
-        MemoryTaskPool::new(PoolConfig::default(), StdThread::default()).expect("memory pool"),
-    );
+    let pool =
+        Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread).expect("memory pool"));
     ConversationDeps {
-        fs: Arc::new(DiskFs::absolute()),
+        fs: DiskFs::absolute(),
         pool,
         compactor: Arc::new(NoopCompactor),
     }

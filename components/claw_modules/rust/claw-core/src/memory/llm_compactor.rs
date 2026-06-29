@@ -10,11 +10,12 @@
 //! into `ConversationDeps.compactor` by whoever builds the agent's memory.
 
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::Mutex;
 
 use serde_json::{json, Value};
 
 use claw_api::{ChatRequest, ClawApi};
+use claw_interface::http::ClawHttp;
 use claw_memory::{CompactError, Compactor};
 
 /// System prompt steering the summarization.
@@ -28,17 +29,19 @@ const SUMMARY_USER_PREFIX: &str = "Summarize the following conversation transcri
 
 /// A [`Compactor`] that summarizes the aged window via the LLM client.
 ///
-/// Holds a shared [`ClawApi`]; typically the same client the agent uses, passed
-/// in through `ConversationDeps.compactor`.
-pub struct LlmCompactor {
-    api: Arc<ClawApi>,
+/// Owns its own [`ClawApi`] transport (`H`) behind a [`Mutex`]: the compactor is
+/// shared across every agent's conversation memory as an `Arc<dyn Compactor>`,
+/// while [`ClawApi::chat`] needs `&mut self`, so the mutex serializes the
+/// (infrequent, off-tick) compaction calls.
+pub struct LlmCompactor<H: ClawHttp> {
+    api: Mutex<ClawApi<H>>,
 }
 
-impl LlmCompactor {
-    /// Build a compactor over the given LLM client.
+impl<H: ClawHttp> LlmCompactor<H> {
+    /// Build a compactor that owns the given LLM client.
     ///
-    /// Typically the `api` is the same [`ClawApi`] the agent already uses, wired
-    /// into `ConversationDeps.compactor` so compaction summarizes through the
+    /// The `api` is its own [`ClawApi`] (with its own transport `H`), wired into
+    /// `ConversationDeps.compactor` so compaction summarizes through the
     /// configured backend.
     ///
     /// # Examples
@@ -51,9 +54,10 @@ impl LlmCompactor {
     /// use claw_memory::Compactor;
     /// # use std::sync::atomic::AtomicBool;
     /// # use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse};
+    /// # #[derive(Default)]
     /// # struct StubHttp;
     /// # impl ClawHttp for StubHttp {
-    /// #     fn post_json(&self, _: &HttpJsonRequest, _: &AtomicBool) -> Result<HttpResponse, HttpError> {
+    /// #     fn post_json(&mut self, _: &HttpJsonRequest, _: &AtomicBool) -> Result<HttpResponse, HttpError> {
     /// #         Ok(HttpResponse { status_code: 200, body: "{}".into() })
     /// #     }
     /// # }
@@ -65,20 +69,22 @@ impl LlmCompactor {
     ///         base_url: Some("https://api.openai.com/v1".into()),
     ///         ..Default::default()
     ///     },
-    ///     Arc::new(StubHttp),
+    ///     StubHttp::default(),
     /// )
     /// .expect("init");
     ///
     /// // A ready-to-inject `Compactor`.
-    /// let compactor: Arc<dyn Compactor> = Arc::new(LlmCompactor::new(Arc::new(api)));
+    /// let compactor: Arc<dyn Compactor> = Arc::new(LlmCompactor::new(api));
     /// # let _ = compactor;
     /// ```
-    pub fn new(api: Arc<ClawApi>) -> Self {
-        Self { api }
+    pub fn new(api: ClawApi<H>) -> Self {
+        Self {
+            api: Mutex::new(api),
+        }
     }
 }
 
-impl Compactor for LlmCompactor {
+impl<H: ClawHttp + Send> Compactor for LlmCompactor<H> {
     fn compact(&self, window: &[Value]) -> Result<Vec<Value>, CompactError> {
         let transcript = render_transcript(window);
         let messages = json!([
@@ -90,6 +96,8 @@ impl Compactor for LlmCompactor {
         let abort = AtomicBool::new(false);
         let response = self
             .api
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
             .chat(&ChatRequest::new(SUMMARY_SYSTEM_PROMPT, &messages), &abort)
             .map_err(|err| CompactError::Backend(err.to_string()))?;
 

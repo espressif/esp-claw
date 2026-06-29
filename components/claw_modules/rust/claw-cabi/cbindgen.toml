@@ -1,10 +1,15 @@
-# cbindgen config for the AUTHORITATIVE claw_cabi.h, generated once the ABI is
-# implemented. Until then `include/claw_cabi.h` is a hand-written draft (see
-# DESIGN.md) and this file is NOT yet wired into a build.rs — generating now
-# would clobber the draft with an empty header.
+# cbindgen config used to CROSS-CHECK include/claw_cabi.h, which is the
+# authoritative, hand-maintained header (see the banner in that file). cbindgen
+# is NOT the generator of record: it strips the header's prose and emits enum
+# constants with a `_t`-qualified prefix (CLAW_CAPABILITY_ERROR_KIND_T_OK)
+# instead of the agreed names. Use it to verify the *layout* matches the Rust
+# after an ABI change; do not overwrite the committed header with its output:
+#   cbindgen --config cbindgen.toml --crate claw-cabi --output /tmp/claw_cabi_gen.h
 #
-# Generate manually with:
-#   cbindgen --config cbindgen.toml --crate claw-cabi --output include/claw_cabi.h
+# Note on function pointers: the `#[repr(C)]` structs spell `Option<extern "C"
+# fn ...>` inline rather than via the callback type aliases — cbindgen turns the
+# inline form into a proper nullable C function pointer, but renders
+# `Option<FnAlias>` as an opaque struct.
 
 language = "C"
 pragma_once = true
@@ -33,3 +38,18 @@ prefix_with_name = false
 [export]
 # Only the claw_capability_* / claw_inbound_* surface is intended to be public.
 include = []
+
+# Idiomatic Rust types are CamelCase; the C ABI uses snake_case `_t` names.
+[export.rename]
+"ClawCapabilityErrorKind" = "claw_capability_error_kind_t"
+"ClawCapabilityResult" = "claw_capability_result_t"
+"ClawCapabilityRole" = "claw_capability_role_t"
+"ClawCapabilityTool" = "claw_capability_tool_t"
+"ClawCapabilityChannel" = "claw_capability_channel_t"
+"ClawCapabilityRoleData" = "claw_capability_role_data_t"
+"ClawCapabilityLifecycle" = "claw_capability_lifecycle_t"
+"ClawCapability" = "claw_capability_t"
+"ClawCapabilityGroup" = "claw_capability_group_t"
+"ClawInboundMessage" = "claw_inbound_message_t"
+"ClawCapabilityRegistry" = "claw_capability_registry_t"
+"ClawCapabilityIngress" = "claw_capability_ingress_t"

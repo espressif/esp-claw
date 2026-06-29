@@ -54,12 +54,25 @@ pub enum HttpError {
 }
 
 /// Networking injection point for the LLM backends.
-pub trait ClawHttp: Send + Sync {
+///
+/// Thread-safety is **not** a property of this trait: it carries no `Send`/`Sync`
+/// supertrait bound. An implementation may hold a single, non-thread-safe
+/// connection handle (e.g. an `esp_http_client` handle reused across calls — see
+/// the espidf driver) and mutate it through `&mut self`. Concurrency is the
+/// *caller's* decision: a transport driven by one task needs no synchronization;
+/// a transport shared across tasks must be wrapped at that sharing point (e.g.
+/// `Mutex<ClawApi<H>>`). With static dispatch the `Send`/`Sync` auto traits then
+/// flow from the concrete implementor and are required only where threads cross.
+pub trait ClawHttp {
     /// Equivalent to `claw_llm_http_post_json`. Returns the body on HTTP 200,
     /// otherwise an [`HttpError`]. `abort` is polled cooperatively; when set the
     /// request is cancelled (mirrors the C `volatile bool *abort_flag`).
+    ///
+    /// Takes `&mut self` so an implementation can lazily open and then reuse a
+    /// persistent connection handle across calls (keep-alive) without interior
+    /// mutability or locking.
     fn post_json(
-        &self,
+        &mut self,
         request: &HttpJsonRequest,
         abort: &AtomicBool,
     ) -> Result<HttpResponse, HttpError>;
@@ -264,6 +277,7 @@ async fn race_cancel<'a>(
 
 #[cfg(feature = "httpmock")]
 mod httpmock {
+    use core::cell::RefCell;
     use core::future::Future;
     use core::pin::Pin;
     use core::task::{Context, Poll};
@@ -318,18 +332,36 @@ mod httpmock {
                 steps: Mutex::new(steps.into_iter().collect()),
             }
         }
-    }
 
-    impl ClawHttp for ScriptedHttp {
-        fn post_json(
-            &self,
-            _request: &HttpJsonRequest,
-            _abort: &AtomicBool,
-        ) -> Result<HttpResponse, HttpError> {
+        /// Serve the next scripted step. Takes `&self` (state is interior-mutable)
+        /// so the double works both owned and behind an `Arc`.
+        fn serve(&self) -> Result<HttpResponse, HttpError> {
             let step = guard(&self.steps)
                 .pop_front()
                 .expect("ScriptedHttp: LLM called more times than scripted");
             respond(step)
+        }
+    }
+
+    impl ClawHttp for ScriptedHttp {
+        fn post_json(
+            &mut self,
+            _request: &HttpJsonRequest,
+            _abort: &AtomicBool,
+        ) -> Result<HttpResponse, HttpError> {
+            self.serve()
+        }
+    }
+
+    /// Share one script across clients that each *own* their transport (e.g. a
+    /// `ClawApi<Arc<ScriptedHttp>>`): every clone replays from the same queue.
+    impl ClawHttp for Arc<ScriptedHttp> {
+        fn post_json(
+            &mut self,
+            _request: &HttpJsonRequest,
+            _abort: &AtomicBool,
+        ) -> Result<HttpResponse, HttpError> {
+            self.serve()
         }
     }
 
@@ -374,18 +406,100 @@ mod httpmock {
         pub fn call_count(&self) -> usize {
             guard(&self.captured).len()
         }
-    }
 
-    impl ClawHttp for CapturingHttp {
-        fn post_json(
-            &self,
-            request: &HttpJsonRequest,
-            _abort: &AtomicBool,
-        ) -> Result<HttpResponse, HttpError> {
+        /// Record `request` and serve the next scripted step. Takes `&self` (state
+        /// is interior-mutable) so the double works both owned and behind an `Arc`
+        /// — the latter lets a test keep a handle to assert on `captured` after the
+        /// client has consumed it.
+        fn serve(&self, request: &HttpJsonRequest) -> Result<HttpResponse, HttpError> {
             guard(&self.captured).push(request.body.to_string());
             let step = guard(&self.steps)
                 .pop_front()
                 .expect("CapturingHttp: LLM called more times than scripted");
+            respond(step)
+        }
+    }
+
+    impl ClawHttp for CapturingHttp {
+        fn post_json(
+            &mut self,
+            request: &HttpJsonRequest,
+            _abort: &AtomicBool,
+        ) -> Result<HttpResponse, HttpError> {
+            self.serve(request)
+        }
+    }
+
+    /// Lets a test hold an `Arc<CapturingHttp>` for inspection while a
+    /// `ClawApi<Arc<CapturingHttp>>` owns a clone and drives it.
+    impl ClawHttp for Arc<CapturingHttp> {
+        fn post_json(
+            &mut self,
+            request: &HttpJsonRequest,
+            _abort: &AtomicBool,
+        ) -> Result<HttpResponse, HttpError> {
+            self.serve(request)
+        }
+    }
+
+    thread_local! {
+        /// The script every [`SharedScriptHttp::default`] on this thread shares.
+        /// Installed by [`SharedScriptHttp::install`]; read once at construction.
+        static SHARED_SCRIPT: RefCell<Option<Arc<Mutex<VecDeque<ScriptStep>>>>> =
+            const { RefCell::new(None) };
+    }
+
+    /// A [`Default`]-constructible scripted transport for systems that mint their
+    /// own clients and choose the transport by *type* (e.g. `FsAgentFactory<F, H>`
+    /// / `AgentSystemBuilder<F, H>` with `H = SharedScriptHttp`).
+    ///
+    /// A plain [`ScriptedHttp`] can't be injected into those, because the system
+    /// constructs each `H::default()` internally. `SharedScriptHttp` bridges the
+    /// gap: a test calls [`install`](Self::install) once, then **every**
+    /// `SharedScriptHttp::default()` constructed on that thread shares the one
+    /// script and pops from it in call order — reproducing the single-shared-script
+    /// behavior of an injected [`ScriptedHttp`]. Strict: panics if called more
+    /// times than scripted, or if no script was installed.
+    #[derive(Clone)]
+    pub struct SharedScriptHttp {
+        steps: Option<Arc<Mutex<VecDeque<ScriptStep>>>>,
+    }
+
+    impl SharedScriptHttp {
+        /// Install the script shared by every later `SharedScriptHttp::default()`
+        /// on the current thread. Call once before building the system under test.
+        pub fn install(bodies: impl IntoIterator<Item = impl Into<String>>) {
+            let steps = Arc::new(Mutex::new(into_steps(bodies)));
+            SHARED_SCRIPT.with(|cell| *cell.borrow_mut() = Some(steps));
+        }
+
+        /// Drop the installed script (so a later `default()` with no script fails
+        /// loudly rather than replaying a stale one).
+        pub fn clear() {
+            SHARED_SCRIPT.with(|cell| *cell.borrow_mut() = None);
+        }
+    }
+
+    impl Default for SharedScriptHttp {
+        fn default() -> Self {
+            Self {
+                steps: SHARED_SCRIPT.with(|cell| cell.borrow().clone()),
+            }
+        }
+    }
+
+    impl ClawHttp for SharedScriptHttp {
+        fn post_json(
+            &mut self,
+            _request: &HttpJsonRequest,
+            _abort: &AtomicBool,
+        ) -> Result<HttpResponse, HttpError> {
+            let steps = self.steps.as_ref().expect(
+                "SharedScriptHttp: no script installed; call SharedScriptHttp::install(..)",
+            );
+            let step = guard(steps)
+                .pop_front()
+                .expect("SharedScriptHttp: LLM called more times than scripted");
             respond(step)
         }
     }
@@ -395,7 +509,7 @@ mod httpmock {
 
     impl ClawHttp for FailingHttp {
         fn post_json(
-            &self,
+            &mut self,
             _request: &HttpJsonRequest,
             _abort: &AtomicBool,
         ) -> Result<HttpResponse, HttpError> {
@@ -408,7 +522,7 @@ mod httpmock {
 
     impl ClawHttp for NoopHttp {
         fn post_json(
-            &self,
+            &mut self,
             _request: &HttpJsonRequest,
             _abort: &AtomicBool,
         ) -> Result<HttpResponse, HttpError> {
@@ -421,7 +535,7 @@ mod httpmock {
 
     impl ClawHttp for NeverHttp {
         fn post_json(
-            &self,
+            &mut self,
             _request: &HttpJsonRequest,
             _abort: &AtomicBool,
         ) -> Result<HttpResponse, HttpError> {
@@ -444,15 +558,27 @@ mod httpmock {
     /// the wrapped call blocks the polling task for the whole request, defeating
     /// the purpose of the async seam (use the native `esp_http_client` driver
     /// there instead).
-    pub struct BlockingClawHttpAsync<T>(pub T);
+    pub struct BlockingClawHttpAsync<T>(Mutex<T>);
 
-    impl<T: ClawHttp> ClawHttpAsync for BlockingClawHttpAsync<T> {
+    impl<T> BlockingClawHttpAsync<T> {
+        /// Wrap a blocking [`ClawHttp`] for the async seam.
+        ///
+        /// The inner transport is driven through `&mut self` ([`ClawHttp::post_json`]),
+        /// but the async seam shares the transport behind `&self`, so it is held
+        /// behind a `Mutex` — the synchronization belongs here, at the sharing
+        /// point, not in the `ClawHttp` trait.
+        pub fn new(inner: T) -> Self {
+            Self(Mutex::new(inner))
+        }
+    }
+
+    impl<T: ClawHttp + Send> ClawHttpAsync for BlockingClawHttpAsync<T> {
         fn transfer<'a>(&'a self, request: &'a HttpJsonRequest<'a>) -> HttpResponseFuture<'a> {
             // A blocking call cannot be interrupted mid-flight, so no abort flag
             // is threaded in; the async seam's `post_json` race cancels at the
             // (single) poll boundary instead.
             let never = AtomicBool::new(false);
-            let result = self.0.post_json(request, &never);
+            let result = self.0.lock().unwrap().post_json(request, &never);
             Box::pin(core::future::ready(result))
         }
     }
@@ -493,26 +619,33 @@ mod httpmock {
     /// Like [`BlockingClawHttpAsync`], the final transfer step still calls the
     /// blocking [`ClawHttp`], so it is **not** appropriate on-device.
     pub struct YieldingClawHttpAsync<T> {
-        inner: T,
+        inner: Mutex<T>,
         yields: u32,
     }
 
     impl<T> YieldingClawHttpAsync<T> {
         /// Wrap `inner`, yielding to the executor `yields` times before
         /// resolving. `yields == 0` behaves like [`BlockingClawHttpAsync`].
+        ///
+        /// The inner transport is driven through `&mut self`, but the async seam
+        /// shares it behind `&self`, so it lives behind a `Mutex` (synchronization
+        /// at the sharing point, not in the `ClawHttp` trait).
         pub fn new(inner: T, yields: u32) -> Self {
-            Self { inner, yields }
+            Self {
+                inner: Mutex::new(inner),
+                yields,
+            }
         }
 
         /// Borrow the wrapped blocking transport. Test-only: the in-crate tests
         /// inspect the wrapped double's call counter.
         #[cfg(test)]
-        pub(crate) fn inner(&self) -> &T {
-            &self.inner
+        pub(crate) fn inner(&self) -> std::sync::MutexGuard<'_, T> {
+            self.inner.lock().unwrap()
         }
     }
 
-    impl<T: ClawHttp> ClawHttpAsync for YieldingClawHttpAsync<T> {
+    impl<T: ClawHttp + Send> ClawHttpAsync for YieldingClawHttpAsync<T> {
         fn transfer<'a>(&'a self, request: &'a HttpJsonRequest<'a>) -> HttpResponseFuture<'a> {
             Box::pin(async move {
                 for _ in 0..self.yields {
@@ -521,7 +654,7 @@ mod httpmock {
                 // The final transfer step is the blocking inner call; the async
                 // seam's `post_json` handles cancellation by dropping us.
                 let never = AtomicBool::new(false);
-                self.inner.post_json(request, &never)
+                self.inner.lock().unwrap().post_json(request, &never)
             })
         }
     }
@@ -530,7 +663,7 @@ mod httpmock {
 #[cfg(feature = "httpmock")]
 pub use httpmock::{
     BlockingClawHttpAsync, CapturingHttp, FailingHttp, NeverHttp, NoopHttp, ScriptStep,
-    ScriptedHttp, YieldingClawHttpAsync,
+    ScriptedHttp, SharedScriptHttp, YieldingClawHttpAsync,
 };
 
 #[cfg(feature = "realhttp")]
@@ -567,7 +700,7 @@ mod realhttp {
 
     impl ClawHttp for RealHttp {
         fn post_json(
-            &self,
+            &mut self,
             request: &HttpJsonRequest,
             abort: &AtomicBool,
         ) -> Result<HttpResponse, HttpError> {
@@ -745,7 +878,7 @@ mod async_test_support {
 
     impl ClawHttp for EchoStatus {
         fn post_json(
-            &self,
+            &mut self,
             request: &HttpJsonRequest,
             abort: &AtomicBool,
         ) -> Result<HttpResponse, HttpError> {
@@ -765,7 +898,7 @@ mod async_test_support {
 
     impl ClawHttp for FailingStatus {
         fn post_json(
-            &self,
+            &mut self,
             _request: &HttpJsonRequest,
             _abort: &AtomicBool,
         ) -> Result<HttpResponse, HttpError> {
@@ -823,7 +956,7 @@ mod async_seam_tests {
 
     #[test]
     fn blocking_adapter_drives_clawhttp_through_async_seam() {
-        let transport = BlockingClawHttpAsync(EchoStatus::new(200));
+        let transport = BlockingClawHttpAsync::new(EchoStatus::new(200));
         let abort = AtomicBool::new(false);
         let request = request("https://example.test", "ping");
         let response = block_on(transport.post_json(&request, Cancel::new(&abort))).expect("ok");
@@ -836,7 +969,7 @@ mod async_seam_tests {
         // The async seam must be shareable as a trait object, mirroring the
         // blocking `Arc<dyn ClawHttp>` usage in `claw-api`.
         let transport: Arc<dyn ClawHttpAsync> =
-            Arc::new(BlockingClawHttpAsync(EchoStatus::new(204)));
+            Arc::new(BlockingClawHttpAsync::new(EchoStatus::new(204)));
         let abort = AtomicBool::new(false);
         let request = request("https://example.test", "{}");
         let response = block_on(transport.post_json(&request, Cancel::new(&abort))).expect("ok");
@@ -845,7 +978,7 @@ mod async_seam_tests {
 
     #[test]
     fn blocking_adapter_resolves_in_a_single_poll() {
-        let transport = BlockingClawHttpAsync(EchoStatus::new(200));
+        let transport = BlockingClawHttpAsync::new(EchoStatus::new(200));
         let abort = AtomicBool::new(false);
         let request = request("https://example.test", "{}");
         let (response, polls) =
@@ -1013,7 +1146,7 @@ mod embedded_executor_tests {
 
     #[test]
     fn executor_drives_blocking_transport_to_completion() {
-        let transport = BlockingClawHttpAsync(EchoStatus::new(200));
+        let transport = BlockingClawHttpAsync::new(EchoStatus::new(200));
         let response = run_async(transport, "hello", AtomicBool::new(false)).expect("ok");
         assert_eq!(response.status_code, 200);
         assert_eq!(response.body, "hello");

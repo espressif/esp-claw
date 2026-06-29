@@ -15,7 +15,7 @@ fn skill_md(description: &str, body: &str) -> Vec<u8> {
     format!("---\n{{\"description\":\"{description}\"}}\n---\n{body}").into_bytes()
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> anyhow::Result<()> {
     // Lay out two skills under the `skills` root.
     let fs = MemFs::new();
     fs.write_atomic(
@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // Scan once; the catalog is cheap in-memory metadata (no bodies read).
-    let registry = FsSkillRegistry::scan(Arc::new(fs), "skills")?;
+    let registry = FsSkillRegistry::scan(fs, "skills")?;
 
     println!("== structured catalog ==");
     for metadata in registry.catalog().entries() {

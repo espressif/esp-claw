@@ -6,7 +6,9 @@
 mod common;
 
 use claw_core::agent::{AgentId, BaseAgentBuildError, TickOutcome};
-use claw_core::{Tool, ToolGroup, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput, ToolSet};
+use claw_core::{
+    Tool, ToolGroup, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput, ToolSet,
+};
 use common::{
     agent_builder, body_echo_call, body_end_conversation, body_plain_text, capturing_llm,
     run_to_completion, scripted_llm, scripted_llm_no_tools, test_output_dir,

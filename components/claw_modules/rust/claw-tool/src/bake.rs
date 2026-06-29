@@ -14,13 +14,16 @@
 //! `debug_assert!` when a `ToolSet` is built), so the full chain
 //! `handler.name() == dir == function.name` is closed.
 //!
-//! The validator itself uses only `std` + `serde_json`; the rest of the crate is
-//! not exercised at build time.
+//! The validator itself uses only `std` + `serde_json` + `anyhow`; the rest of
+//! the crate is not exercised at build time. Because nothing in the firmware
+//! call graph references `bake`, the linker garbage-collects it (and its
+//! `anyhow` usage) out of the device image even though `anyhow` is a regular
+//! dependency.
 
-use std::error::Error;
 use std::fs;
 use std::path::Path;
 
+use anyhow::{anyhow, bail, Context, Result};
 use serde_json::Value;
 
 /// The exact entries every `resources/tools/<name>/` directory must contain —
@@ -40,20 +43,20 @@ const TOOL_DIR_ENTRIES: &[&str] = &["schema.json", "usage.md"];
 /// (non-hidden) file, a tool directory has a missing/stray entry, a `schema.json`
 /// is not a function object with a string `function.name`, or that name does not
 /// match the directory name.
-pub fn validate_tools_dir(tools_dir: &Path) -> Result<usize, Box<dyn Error>> {
+pub fn validate_tools_dir(tools_dir: &Path) -> Result<usize> {
     // Re-run when a tool directory is added or removed.
     println!("cargo:rerun-if-changed={}", tools_dir.display());
 
     let mut found = 0usize;
-    for entry in fs::read_dir(tools_dir)
-        .map_err(|error| format!("reading {}: {error}", tools_dir.display()))?
+    for entry in
+        fs::read_dir(tools_dir).with_context(|| format!("reading {}", tools_dir.display()))?
     {
         let entry = entry?;
         let path = entry.path();
         let name = path
             .file_name()
             .and_then(|name| name.to_str())
-            .ok_or_else(|| format!("non-UTF-8 entry name in {}", tools_dir.display()))?
+            .ok_or_else(|| anyhow!("non-UTF-8 entry name in {}", tools_dir.display()))?
             .to_string();
 
         // Hidden entries (e.g. `.gitkeep`, `.DS_Store`) are not tools; skip them.
@@ -63,12 +66,11 @@ pub fn validate_tools_dir(tools_dir: &Path) -> Result<usize, Box<dyn Error>> {
         // Anything else must be a proper tool directory: a stray file here would
         // otherwise be silently ignored, so reject it ("no more, no less").
         if !path.is_dir() {
-            return Err(format!(
+            bail!(
                 "{}: unexpected file '{name}' — only tool directories may live under \
                  resources/tools (each holding exactly {TOOL_DIR_ENTRIES:?})",
                 tools_dir.display()
-            )
-            .into());
+            );
         }
 
         for file in TOOL_DIR_ENTRIES {
@@ -79,52 +81,50 @@ pub fn validate_tools_dir(tools_dir: &Path) -> Result<usize, Box<dyn Error>> {
     }
 
     if found == 0 {
-        return Err(format!("no tools found under {}", tools_dir.display()).into());
+        bail!("no tools found under {}", tools_dir.display());
     }
     Ok(found)
 }
 
 /// Validate one tool directory: the fixed two-file layout plus
 /// `function.name` == `dir_name`.
-fn validate_tool(dir: &Path, dir_name: &str) -> Result<(), Box<dyn Error>> {
+fn validate_tool(dir: &Path, dir_name: &str) -> Result<()> {
     // Exactly schema.json + usage.md — a missing or stray entry fails the build.
     ensure_exact_entries(dir, TOOL_DIR_ENTRIES)?;
 
     let schema_path = dir.join("schema.json");
     let schema_text = fs::read_to_string(&schema_path)
-        .map_err(|error| format!("reading {}: {error}", schema_path.display()))?;
+        .with_context(|| format!("reading {}", schema_path.display()))?;
     let schema: Value = serde_json::from_str(&schema_text)
-        .map_err(|error| format!("parsing {}: {error}", schema_path.display()))?;
+        .with_context(|| format!("parsing {}", schema_path.display()))?;
 
     let function_name = schema
         .get("function")
         .and_then(|function| function.get("name"))
         .and_then(Value::as_str)
         .ok_or_else(|| {
-            format!(
+            anyhow!(
                 "{}: schema is not a function object with a string `function.name`",
                 schema_path.display()
             )
         })?;
 
     if function_name != dir_name {
-        return Err(format!(
+        bail!(
             "tool name mismatch in {}: directory is '{dir_name}' but schema declares \
              function.name '{function_name}'",
             dir.display()
-        )
-        .into());
+        );
     }
 
     // Parameters must compile as JSON Schema so runtime validation cannot drift.
     let parameters = crate::validate::parameters_from_tool_schema(&schema_text)
-        .map_err(|details| format!("{}: {details}", schema_path.display()))?;
-    jsonschema::Validator::new(&parameters).map_err(|error| -> Box<dyn Error> {
-        format!(
+        .map_err(|details| anyhow!("{}: {details}", schema_path.display()))?;
+    jsonschema::Validator::new(&parameters).map_err(|error| {
+        anyhow!(
             "{}: parameters JSON Schema is invalid: {error}",
             schema_path.display()
         )
-        .into()
     })?;
 
     Ok(())
@@ -133,14 +133,14 @@ fn validate_tool(dir: &Path, dir_name: &str) -> Result<(), Box<dyn Error>> {
 /// Enforce that `dir` contains **exactly** `expected` — no missing entry and no
 /// stray one. Hidden entries (names starting with `.`) are ignored so VCS/OS
 /// artifacts do not fail the build.
-fn ensure_exact_entries(dir: &Path, expected: &[&str]) -> Result<(), Box<dyn Error>> {
+fn ensure_exact_entries(dir: &Path, expected: &[&str]) -> Result<()> {
     let mut actual: Vec<String> = Vec::new();
-    for entry in fs::read_dir(dir).map_err(|error| format!("reading {}: {error}", dir.display()))? {
+    for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
         let entry = entry?;
         let name = entry
             .file_name()
             .to_str()
-            .ok_or_else(|| format!("non-UTF-8 entry name in {}", dir.display()))?
+            .ok_or_else(|| anyhow!("non-UTF-8 entry name in {}", dir.display()))?
             .to_string();
         if name.starts_with('.') {
             continue;
@@ -150,22 +150,20 @@ fn ensure_exact_entries(dir: &Path, expected: &[&str]) -> Result<(), Box<dyn Err
 
     for want in expected {
         if !actual.iter().any(|name| name == want) {
-            return Err(format!(
+            bail!(
                 "{}: missing required entry '{want}' (a tool directory is fixed: \
                  exactly {expected:?})",
                 dir.display()
-            )
-            .into());
+            );
         }
     }
     for got in &actual {
         if !expected.iter().any(|want| want == got) {
-            return Err(format!(
+            bail!(
                 "{}: unexpected entry '{got}' (a tool directory is fixed: \
                  exactly {expected:?}; remove it)",
                 dir.display()
-            )
-            .into());
+            );
         }
     }
     Ok(())

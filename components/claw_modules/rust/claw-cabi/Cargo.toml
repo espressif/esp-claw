@@ -13,13 +13,17 @@ name = "claw_cabi"
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-# The adapter whose Registry C populates. claw-cabi is the *only* place that
-# turns those Rust types into a C ABI.
+# The adapter whose Registry C populates (Registry, Capability, CapabilityRole,
+# ChannelAdapter, Lifecycle, CapabilityError). claw-cabi is the *only* place that
+# turns these Rust types into a C ABI.
 claw-capability = { path = "../claw-capability" }
-# The agent runtime + channel ingress sink the bridge feeds the Registry into
-# (re-exports the claw-core types: Orchestrator, ChannelIngressSink,
-# InboundMessage, AgentResolver).
-claw-agent = { path = "../claw-agent" }
+# The Tool a capability with the Tool role *is* — a C `execute` callback is
+# wrapped as a `claw_tool::ToolHandler`.
+claw-tool = { path = "../claw-tool" }
+# The inbound sink + message the data plane pushes into: `ChannelIngressSink`,
+# `InboundMessage`. (The agent-runtime bridge — claw-agent — is added when that
+# Rust-side wiring lands; it is not part of the C ABI itself.)
+claw-core = { path = "../claw-core" }
 
 [lints.rust]
 # THE ONE EXCEPTION in the workspace: this crate is the FFI boundary, so it must

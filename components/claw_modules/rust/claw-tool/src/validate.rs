@@ -47,13 +47,12 @@ pub(crate) fn compile_argument_validator(
 pub(crate) fn parse_arguments_json(arguments_json: &str) -> Result<Value, ToolInvokeError> {
     let trimmed = arguments_json.trim();
     let text = if trimmed.is_empty() { "{}" } else { trimmed };
-    let value: Value = serde_json::from_str(text).map_err(|error| {
-        tool_invoke_err(ToolError::InvalidArgumentsJson(error.to_string()))
-    })?;
+    let value: Value = serde_json::from_str(text)
+        .map_err(|error| tool_invoke_err(ToolError::InvalidArgumentsJson(error.to_string())))?;
     if !value.is_object() {
-        return Err(tool_invoke_err(
-            ToolError::InvalidArgumentsJson("tool arguments must be a JSON object".into()),
-        ));
+        return Err(tool_invoke_err(ToolError::InvalidArgumentsJson(
+            "tool arguments must be a JSON object".into(),
+        )));
     }
     Ok(value)
 }

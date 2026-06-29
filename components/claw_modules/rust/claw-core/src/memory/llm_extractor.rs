@@ -7,11 +7,12 @@
 //! injected into the long-term memory adapter.
 
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
 use claw_api::{ChatRequest, ClawApi};
+use claw_interface::http::ClawHttp;
 
 use crate::memory::extraction::{ExtractError, ExtractedItem, Extractor};
 
@@ -31,24 +32,28 @@ const EXTRACT_USER_PREFIX: &str = "Extract durable memory from this transcript:"
 
 /// An [`Extractor`] that distills facts via the LLM client.
 ///
-/// Holds a shared [`ClawApi`]; typically the same client the agent uses.
-pub struct LlmExtractor {
-    api: Arc<ClawApi>,
+/// Owns its own [`ClawApi`] transport (`H`) behind a [`Mutex`]: the extractor is
+/// shared across agents as an `Arc<dyn Extractor>`, while [`ClawApi::chat`] needs
+/// `&mut self`, so the mutex serializes the (off-tick) extraction calls.
+pub struct LlmExtractor<H: ClawHttp> {
+    api: Mutex<ClawApi<H>>,
 }
 
-impl LlmExtractor {
-    /// Build an extractor over the given LLM client.
-    pub fn new(api: Arc<ClawApi>) -> Self {
-        Self { api }
+impl<H: ClawHttp + Send + 'static> LlmExtractor<H> {
+    /// Build an extractor that owns the given LLM client.
+    pub fn new(api: ClawApi<H>) -> Self {
+        Self {
+            api: Mutex::new(api),
+        }
     }
 
     /// A ready-to-inject [`Extractor`] over `api`.
-    pub fn shared(api: Arc<ClawApi>) -> Arc<dyn Extractor> {
+    pub fn shared(api: ClawApi<H>) -> Arc<dyn Extractor> {
         Arc::new(Self::new(api))
     }
 }
 
-impl Extractor for LlmExtractor {
+impl<H: ClawHttp + Send> Extractor for LlmExtractor<H> {
     fn extract(&self, transcript: &str) -> Result<Vec<ExtractedItem>, ExtractError> {
         let messages = json!([
             { "role": "user", "content": format!("{EXTRACT_USER_PREFIX}\n\n{transcript}") }
@@ -59,6 +64,8 @@ impl Extractor for LlmExtractor {
         let abort = AtomicBool::new(false);
         let response = self
             .api
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
             .chat(&ChatRequest::new(EXTRACT_SYSTEM_PROMPT, &messages), &abort)
             .map_err(|error| ExtractError::Backend(error.to_string()))?;
 

@@ -14,7 +14,8 @@ use std::sync::Arc;
 
 use claw_permission::{Action, RiskClass};
 use claw_tool::{
-    tool_metadata, ToolError, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput, tool_invoke_err,
+    tool_invoke_err, tool_metadata, ToolError, ToolHandler, ToolInvocation, ToolInvokeError,
+    ToolOutput,
 };
 
 use crate::agent::base_agent::AgentId;

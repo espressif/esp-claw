@@ -19,6 +19,36 @@
 use std::io;
 use std::thread::JoinHandle;
 
+/// An opaque handle to a spawned worker, returned by
+/// [`ClawThread::spawn_worker`].
+///
+/// It abstracts the platform's thread-completion primitive so callers (e.g. a
+/// task pool) depend on this type instead of naming `std::thread::JoinHandle`
+/// directly. Today every [`ClawThread`] impl is built on `std::thread` (on
+/// ESP-IDF that maps to a pthread / FreeRTOS task), so this wraps a
+/// [`JoinHandle`]; the wrapper is what lets the worker-completion primitive
+/// change at this boundary without touching the core crates that consume it.
+#[derive(Debug)]
+pub struct WorkerHandle {
+    inner: JoinHandle<()>,
+}
+
+impl WorkerHandle {
+    /// Wrap a platform join handle. Called by [`ClawThread`] implementors at the
+    /// boundary where the concrete thread primitive is known.
+    pub fn new(inner: JoinHandle<()>) -> Self {
+        Self { inner }
+    }
+
+    /// Block until the worker finishes.
+    ///
+    /// A worker that panicked is still joined and its panic payload discarded:
+    /// worker panics are isolated by design and must not unwind into the joiner.
+    pub fn join(self) {
+        let _ = self.inner.join();
+    }
+}
+
 /// Relative scheduling priority of a worker, abstracting the RTOS's numeric
 /// priority scale (FreeRTOS `0..configMAX_PRIORITIES`).
 ///
@@ -70,7 +100,7 @@ pub trait ClawThread: Send + Sync {
         priority: Priority,
         affinity: CoreAffinity,
         f: F,
-    ) -> io::Result<JoinHandle<()>>
+    ) -> io::Result<WorkerHandle>
     where
         F: FnOnce() + Send + 'static;
 }
@@ -93,11 +123,14 @@ impl ClawThread for StdThread {
         priority: Priority,
         affinity: CoreAffinity,
         f: F,
-    ) -> io::Result<JoinHandle<()>>
+    ) -> io::Result<WorkerHandle>
     where
         F: FnOnce() + Send + 'static,
     {
         let _ = (stack_size, priority, affinity);
-        std::thread::Builder::new().name(name.to_string()).spawn(f)
+        std::thread::Builder::new()
+            .name(name.to_string())
+            .spawn(f)
+            .map(WorkerHandle::new)
     }
 }

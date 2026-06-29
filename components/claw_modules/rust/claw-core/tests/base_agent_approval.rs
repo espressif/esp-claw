@@ -34,10 +34,10 @@ fn echo_tools() -> ToolSet {
 
 /// A `BaseAgentBuilder` wired with the echo tool, the ask-everything policy, and
 /// an identity — ready to `.build()`.
-fn asking_builder(
-    llm: claw_api::ClawApi,
+fn asking_builder<H: claw_interface::http::ClawHttp>(
+    llm: claw_api::ClawApi<H>,
     dir: impl Into<String>,
-) -> claw_core::agent::BaseAgentBuilder<TestFs> {
+) -> claw_core::agent::BaseAgentBuilder<TestFs, H> {
     agent_builder(llm, AgentId(1), dir)
         .with_tools(echo_tools())
         .with_permission_policy(ask_everything())
@@ -45,7 +45,10 @@ fn asking_builder(
 }
 
 /// Build an asking agent over fresh disk memory with the given scripted LLM.
-fn build_agent(name: &str, llm: claw_api::ClawApi) -> TestAgent {
+fn build_agent<H: claw_interface::http::ClawHttp>(
+    name: &str,
+    llm: claw_api::ClawApi<H>,
+) -> TestAgent<H> {
     let dir = common::test_output_dir(name);
     asking_builder(llm, dir.display().to_string())
         .build()
@@ -56,7 +59,10 @@ fn build_agent(name: &str, llm: claw_api::ClawApi) -> TestAgent {
 
 #[test]
 fn risky_tool_pauses_for_approval() {
-    let mut agent = build_agent("appr_request_pauses", scripted_llm(vec![body_echo_call("x")]));
+    let mut agent = build_agent(
+        "appr_request_pauses",
+        scripted_llm(vec![body_echo_call("x")]),
+    );
 
     agent.run("do it");
     assert!(matches!(
@@ -165,7 +171,9 @@ fn grant_lets_retried_call_run() {
     // The second (granted) echo actually executed.
     let transcript = transcript_contents(&view);
     assert!(
-        transcript.iter().any(|c| c.contains("echo:") && c.contains("second")),
+        transcript
+            .iter()
+            .any(|c| c.contains("echo:") && c.contains("second")),
         "granted retry did not run: {transcript:?}"
     );
 }
@@ -202,7 +210,10 @@ fn wrong_approval_id_is_rejected_and_stays_awaiting() {
 
 #[test]
 fn approve_twice_is_rejected() {
-    let mut agent = build_agent("appr_approve_twice", scripted_llm(vec![body_echo_call("x")]));
+    let mut agent = build_agent(
+        "appr_approve_twice",
+        scripted_llm(vec![body_echo_call("x")]),
+    );
 
     agent.run("go");
     let id = match agent.tick() {

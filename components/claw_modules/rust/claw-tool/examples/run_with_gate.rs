@@ -13,8 +13,7 @@
 
 use claw_permission::{Action, PermissionDecision, RiskClass};
 use claw_tool::{
-    Tool, ToolGate, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput, ToolRunner,
-    ToolSet,
+    Tool, ToolGate, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput, ToolRunner, ToolSet,
 };
 
 /// A demo tool that classifies a "write" verb as risky so the permission path is
@@ -82,7 +81,7 @@ fn call(name: &str) -> ToolInvocation<'_> {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> anyhow::Result<()> {
     let tools = ToolSet::new([
         Tool::new(DemoTool::new("read_file")),
         Tool::new(DemoTool::new("write_file")),
@@ -92,7 +91,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Safe tool: allowed, runs.
     let outcome = runner.run_one(&call("read_file"));
-    println!("read_file  -> ok={} content={:?}", outcome.ok, outcome.content);
+    println!(
+        "read_file  -> ok={} content={:?}",
+        outcome.ok, outcome.content
+    );
 
     // High-risk tool: the gate asks for approval; the tool does NOT run.
     let outcome = runner.run_one(&call("write_file"));
@@ -101,7 +103,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "write_file -> approval needed: summary={:?} signature={:?}",
             approval.summary, approval.signature
         ),
-        None => println!("write_file -> ok={} content={:?}", outcome.ok, outcome.content),
+        None => println!(
+            "write_file -> ok={} content={:?}",
+            outcome.ok, outcome.content
+        ),
     }
 
     Ok(())

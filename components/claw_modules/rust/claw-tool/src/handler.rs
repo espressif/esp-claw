@@ -128,9 +128,9 @@ impl ToolError {
             tool_name
         };
         match self {
-            Self::NotFound(_) => format!(
-                "Tool \"{display}\" is not registered and was not executed."
-            ),
+            Self::NotFound(_) => {
+                format!("Tool \"{display}\" is not registered and was not executed.")
+            }
             Self::InvalidArgumentsJson(details) => format!(
                 "Tool \"{display}\" arguments are not valid JSON: {details}. \
                  Fix the arguments and retry."

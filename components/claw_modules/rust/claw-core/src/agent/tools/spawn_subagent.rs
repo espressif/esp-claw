@@ -4,10 +4,12 @@
 use std::sync::Arc;
 
 use claw_permission::{Action, RiskClass};
-use claw_tool::{tool_metadata, ToolError, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput};
+use claw_tool::{
+    tool_metadata, ToolError, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
+};
 
-use crate::agent::kind::AgentKind;
 use crate::agent::graph::{AgentContext, SpawnPolicy, TerminationPolicy};
+use crate::agent::kind::AgentKind;
 use crate::agent::manifest::AgentManifest;
 
 use super::string_argument;
@@ -149,7 +151,10 @@ mod tests {
 
     #[test]
     fn termination_policy_parses_auto_manual_and_rejects_others() {
-        assert_eq!(parse_termination("").unwrap(), TerminationPolicy::AutoOnIdle);
+        assert_eq!(
+            parse_termination("").unwrap(),
+            TerminationPolicy::AutoOnIdle
+        );
         assert_eq!(
             parse_termination("auto").unwrap(),
             TerminationPolicy::AutoOnIdle
@@ -260,9 +265,10 @@ mod tests {
     fn spawn_requires_name_via_schema_validation() {
         let host = Arc::new(RecordingHost::default());
         let context = context_for(Arc::clone(&host) as Arc<dyn GraphHost>, AgentId(1));
-        let set = ToolSet::from_groups([
-            subagent_tool_group(context, SpawnPolicy::Only(vec![AgentKind::new("worker")])),
-        ])
+        let set = ToolSet::from_groups([subagent_tool_group(
+            context,
+            SpawnPolicy::Only(vec![AgentKind::new("worker")]),
+        )])
         .unwrap();
 
         let missing_name = set.invoke(&ToolInvocation {
@@ -290,9 +296,10 @@ mod tests {
     fn spawn_rejects_whitespace_only_name_after_trim() {
         let host = Arc::new(RecordingHost::default());
         let context = context_for(Arc::clone(&host) as Arc<dyn GraphHost>, AgentId(1));
-        let set = ToolSet::from_groups([
-            subagent_tool_group(context, SpawnPolicy::Only(vec![AgentKind::new("worker")])),
-        ])
+        let set = ToolSet::from_groups([subagent_tool_group(
+            context,
+            SpawnPolicy::Only(vec![AgentKind::new("worker")]),
+        )])
         .unwrap();
 
         // Schema `minLength` accepts whitespace; invoke trims and rejects blank.

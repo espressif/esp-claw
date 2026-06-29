@@ -20,13 +20,14 @@
 //! the `respond_to_approval` tool). The `goal` is seeded as the agent's first
 //! user message so it starts working immediately.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use claw_api::{ClawApi, ClawApiConfig};
 use claw_context::Block;
 use claw_interface::http::ClawHttp;
 use claw_interface::ClawFs;
-use claw_memory::{ConversationConfig, ConversationDeps};
+use claw_memory::{ConversationConfig, ConversationDeps, LongTermMemory};
 
 use crate::agent::base_agent::{AgentCommand, AgentId};
 use crate::agent::config::AgentConfig;
@@ -35,6 +36,7 @@ use crate::agent::graph::GraphHost;
 use crate::agent::kind::AgentKind;
 use crate::agent::resolver::AgentResolver;
 use crate::agent::Agent;
+use crate::memory::{agent_store, Extractor, LongTermMemoryAdapter, TierClassifier};
 
 /// Creates a concrete agent for a goal.
 ///
@@ -72,20 +74,61 @@ pub trait AgentFactory: Send + Sync {
     ) -> Result<Box<dyn Agent>, String>;
 }
 
+/// The long-term-memory collaborators shared across every agent a factory
+/// builds: the one global store, the base directory for per-agent stores, and
+/// the routing/extraction policies.
+///
+/// Built once by the system wiring layer and handed to
+/// [`FsAgentFactory::with_long_term_memory`]; each agent then gets its own
+/// private store under [`agent_dir`](Self::agent_dir) plus a clone of the shared
+/// `global` store, fronted by one [`LongTermMemoryAdapter`].
+pub struct LongTermDeps<F: ClawFs + Clone + 'static> {
+    /// The single store shared by every agent (user-level facts). Cloned (an
+    /// `Arc` bump) into each agent's adapter so all agents read/write one store.
+    global: LongTermMemory<F>,
+    /// Base directory under which each agent's private store lives, keyed by id.
+    agent_dir: String,
+    /// Routes a new fact to the global or per-agent tier.
+    classifier: Arc<dyn TierClassifier>,
+    /// Distills durable facts from the transcript off the tick path.
+    extractor: Arc<dyn Extractor>,
+}
+
+impl<F: ClawFs + Clone + 'static> LongTermDeps<F> {
+    /// Bundle the shared long-term collaborators. `global` is the one shared
+    /// store; `agent_dir` is the base directory under which each agent's private
+    /// store is created (keyed by agent id).
+    pub fn new(
+        global: LongTermMemory<F>,
+        agent_dir: impl Into<String>,
+        classifier: Arc<dyn TierClassifier>,
+        extractor: Arc<dyn Extractor>,
+    ) -> Self {
+        Self {
+            global,
+            agent_dir: agent_dir.into(),
+            classifier,
+            extractor,
+        }
+    }
+}
+
 /// Builds real [`GenericAgent`]s from compile-time manifests, an injected
 /// resolver, a shared LLM config/transport, and shared memory collaborators.
 ///
 /// Construct one and hand it to the orchestrator via
 /// [`with_agent_factory`](crate::OrchestratorBuilder::with_agent_factory); the
 /// registry then uses it for every agent in every session.
-pub struct FsAgentFactory<F: ClawFs + Clone + 'static> {
+pub struct FsAgentFactory<F: ClawFs + Clone + 'static, H: ClawHttp + Default + 'static> {
     /// Maps a manifest's capability/skill *names* to handler code.
     resolver: Arc<dyn AgentResolver>,
-    /// Template for the per-agent LLM client (cloned, then `init`-ed per agent so
-    /// each agent owns an independent client over the shared transport).
+    /// Template for the per-agent LLM client. Each agent gets its own `ClawApi`
+    /// minted from this config plus a freshly constructed `H::default()`
+    /// transport, so no transport instance is shared between agents.
     llm_config: ClawApiConfig,
-    /// The shared HTTP transport every minted client speaks through.
-    http: Arc<dyn ClawHttp>,
+    /// Marks the HTTP transport type minted per agent. `fn() -> H` so the marker
+    /// is unconditionally `Send + Sync` (the factory only *produces* `H`).
+    _http: PhantomData<fn() -> H>,
     /// Base directory for conversation files; each agent keys its own files by id.
     memory_dir: String,
     /// Template memory collaborators (fs/pool/compactor) cloned into each agent's
@@ -93,11 +136,16 @@ pub struct FsAgentFactory<F: ClawFs + Clone + 'static> {
     /// [`ClawFs`]; it must be `Clone` because every agent gets its own handle
     /// (use `Arc<ConcreteFs>` for a shared backend — `Arc<T>` is itself `ClawFs`).
     memory_deps: ConversationDeps<F>,
+    /// Long-term-memory collaborators. `None` (the default) builds agents with no
+    /// long-term memory — the prior behavior; set via
+    /// [`with_long_term_memory`](Self::with_long_term_memory) to attach it.
+    long_term: Option<LongTermDeps<F>>,
 }
 
-impl<F: ClawFs + Clone + 'static> FsAgentFactory<F> {
-    /// Build a factory over the injected `resolver`, an LLM `llm_config` +
-    /// `http` transport, and the memory base dir + collaborators.
+impl<F: ClawFs + Clone + 'static, H: ClawHttp + Default + 'static> FsAgentFactory<F, H> {
+    /// Build a factory over the injected `resolver`, an LLM `llm_config`, and the
+    /// memory base dir + collaborators. The HTTP transport `H` is chosen by type
+    /// (like `F`); each agent gets its own `H::default()` instance.
     ///
     /// `memory_deps` is the template the firmware/host already knows how to build
     /// (real disk fs + task pool + compactor on device, in-memory doubles in
@@ -105,17 +153,34 @@ impl<F: ClawFs + Clone + 'static> FsAgentFactory<F> {
     pub fn new(
         resolver: Arc<dyn AgentResolver>,
         llm_config: ClawApiConfig,
-        http: Arc<dyn ClawHttp>,
         memory_dir: impl Into<String>,
         memory_deps: ConversationDeps<F>,
     ) -> Self {
         Self {
             resolver,
             llm_config,
-            http,
+            _http: PhantomData,
             memory_dir: memory_dir.into(),
             memory_deps,
+            long_term: None,
         }
+    }
+
+    /// Attach long-term memory: every agent this factory builds gets a private
+    /// store plus a clone of the shared global store, fronted by one
+    /// [`LongTermMemoryAdapter`] (its five `memory_*` tools and background
+    /// extraction). Without this, agents have no long-term memory.
+    pub fn with_long_term_memory(mut self, long_term: LongTermDeps<F>) -> Self {
+        self.long_term = Some(long_term);
+        self
+    }
+
+    /// Mint a fresh LLM client for one agent: the shared config plus this
+    /// factory's transport type, freshly constructed so each agent owns an
+    /// independent `H`.
+    fn mint_llm(&self) -> Result<ClawApi<H>, String> {
+        ClawApi::init(self.llm_config.clone(), H::default())
+            .map_err(|error| format!("initializing LLM: {error}"))
     }
 
     /// A fresh [`ConversationDeps`] sharing this factory's collaborators (a cheap
@@ -129,7 +194,9 @@ impl<F: ClawFs + Clone + 'static> FsAgentFactory<F> {
     }
 }
 
-impl<F: ClawFs + Clone + 'static> AgentFactory for FsAgentFactory<F> {
+impl<F: ClawFs + Clone + 'static, H: ClawHttp + Default + Send + 'static> AgentFactory
+    for FsAgentFactory<F, H>
+{
     fn create_agent(
         &self,
         id: AgentId,
@@ -145,8 +212,9 @@ impl<F: ClawFs + Clone + 'static> AgentFactory for FsAgentFactory<F> {
         let config = AgentConfig::resolve(kind.as_str(), self.resolver.as_ref())
             .map_err(|error| format!("resolving config for kind '{kind}': {error}"))?;
 
-        let llm = ClawApi::init(self.llm_config.clone(), Arc::clone(&self.http))
-            .map_err(|error| format!("initializing LLM for {id}: {error}"))?;
+        let llm = self
+            .mint_llm()
+            .map_err(|error| format!("{error} for {id}"))?;
 
         let memory_config = ConversationConfig::new(self.memory_dir.clone());
         let mut agent = GenericAgent::new(
@@ -160,6 +228,22 @@ impl<F: ClawFs + Clone + 'static> AgentFactory for FsAgentFactory<F> {
             inherited_context,
         )
         .map_err(|error| format!("building {kind} agent {id}: {error}"))?;
+
+        // Attach long-term memory when configured: a per-agent store under the
+        // base dir (keyed by id) plus a clone of the shared global store.
+        if let Some(long_term) = &self.long_term {
+            let agent_dir = format!("{}/{}", long_term.agent_dir.trim_end_matches('/'), id);
+            let adapter = LongTermMemoryAdapter::new(
+                agent_store(agent_dir, self.memory_deps.fs.clone()),
+                long_term.global.clone(),
+                Arc::clone(&long_term.classifier),
+                Arc::clone(&long_term.extractor),
+                Arc::clone(&self.memory_deps.pool),
+            );
+            agent
+                .register_memory(Arc::new(adapter))
+                .map_err(|error| format!("attaching long-term memory to {id}: {error}"))?;
+        }
 
         // The goal is the agent's first task: seed it as a user message so the
         // agent has something to work on as soon as it is ticked.
@@ -176,15 +260,16 @@ impl<F: ClawFs + Clone + 'static> AgentFactory for FsAgentFactory<F> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use claw_interface::{MemFs, ScriptedHttp, StdThread};
-    use claw_memory::{MemoryTaskPool, NoopCompactor, PoolConfig};
+    use claw_interface::{MemFs, SharedScriptHttp, StdThread};
+    use claw_memory::NoopCompactor;
+    use claw_utils::{PoolConfig, SharedTaskPool};
     use serde_json::json;
 
     use super::*;
     use crate::agent::base_agent::TickOutcome;
     use crate::agent::graph::GraphEffect;
-    use claw_tool::Tool;
     use claw_skill::{SkillError, SkillId, SkillSet};
+    use claw_tool::Tool;
 
     /// A resolver with no capabilities or skills — enough for the built-in
     /// manifests, whose capability/skill lists are currently empty.
@@ -214,7 +299,11 @@ mod tests {
         json!({ "choices": [{ "message": { "role": "assistant", "content": text } }] }).to_string()
     }
 
-    fn factory(bodies: Vec<String>) -> FsAgentFactory<Arc<MemFs>> {
+    /// The factory mints each agent's transport internally via `H::default()`, so
+    /// the script can't be injected as an instance — it is installed into the
+    /// thread-local `SharedScriptHttp` script that every minted client shares.
+    fn factory(bodies: Vec<String>) -> FsAgentFactory<MemFs, SharedScriptHttp> {
+        SharedScriptHttp::install(bodies);
         let llm_config = ClawApiConfig {
             api_key: Some("sk-test".into()),
             backend_type: "openai_compatible".into(),
@@ -224,17 +313,15 @@ mod tests {
             ..Default::default()
         };
         let memory_deps = ConversationDeps {
-            fs: Arc::new(MemFs::default()),
+            fs: MemFs::default(),
             pool: Arc::new(
-                MemoryTaskPool::new(PoolConfig::default(), StdThread::default())
-                    .expect("memory pool"),
+                SharedTaskPool::new(PoolConfig::default(), StdThread).expect("memory pool"),
             ),
             compactor: Arc::new(NoopCompactor),
         };
-        FsAgentFactory::new(
+        FsAgentFactory::<MemFs, SharedScriptHttp>::new(
             Arc::new(EmptyResolver),
             llm_config,
-            Arc::new(ScriptedHttp::new(bodies)),
             "/mem/agents",
             memory_deps,
         )

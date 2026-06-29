@@ -83,11 +83,11 @@ const END_CONVERSATION_BODY: &str = r#"{"choices":[{"message":{"role":"assistant
 
 /// Tool-capable strict scripted LLM over `&str` bodies (thin wrapper over the
 /// shared [`common::scripted_llm`], which takes owned `String`s).
-fn scripted_llm(bodies: Vec<&str>) -> ClawApi {
+fn scripted_llm(bodies: Vec<&str>) -> ClawApi<claw_interface::ScriptedHttp> {
     common_scripted_llm(bodies.into_iter().map(String::from).collect())
 }
 
-fn live_llm() -> ClawApi {
+fn live_llm() -> ClawApi<RealHttp> {
     let api_key = require_local_api_key();
     ClawApi::init(
         ClawApiConfig {
@@ -99,7 +99,7 @@ fn live_llm() -> ClawApi {
             timeout_ms: 60_000,
             ..Default::default()
         },
-        Arc::new(RealHttp::new()),
+        RealHttp::new(),
     )
     .expect("live llm")
 }

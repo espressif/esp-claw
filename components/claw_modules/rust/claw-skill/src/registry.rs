@@ -141,14 +141,19 @@ pub trait SkillRegistry: Send + Sync {
 /// runtime by [`reload`](Self::reload) — even while shared as an
 /// `Arc<dyn SkillRegistry>` — without handing out a borrow that would outlive a
 /// reload. `fs` and `roots` are fixed at construction and need no locking.
-pub struct FsSkillRegistry {
-    fs: Arc<dyn ClawFs>,
+///
+/// The persistence backend `F` is a concrete, statically dispatched [`ClawFs`]
+/// held by value (not behind `Arc<dyn>`): the device passes its single on-disk
+/// implementation, host tools and tests pass `DiskFs`/`MemFs`. Document reads
+/// compile down to direct (monomorphized) calls with no vtable.
+pub struct FsSkillRegistry<F: ClawFs> {
+    fs: F,
     roots: Vec<String>,
     /// The live catalog snapshot, swapped atomically on [`reload`](Self::reload).
     snapshot: RwLock<Arc<CatalogSnapshot>>,
 }
 
-impl FsSkillRegistry {
+impl<F: ClawFs> FsSkillRegistry<F> {
     /// Scan a single `root` and build the catalog.
     ///
     /// Convenience for the common single-root case; see [`scan_roots`](Self::scan_roots).
@@ -156,7 +161,7 @@ impl FsSkillRegistry {
     /// # Errors
     ///
     /// See [`scan_roots`](Self::scan_roots).
-    pub fn scan(fs: Arc<dyn ClawFs>, root: impl Into<String>) -> Result<Self, SkillError> {
+    pub fn scan(fs: F, root: impl Into<String>) -> Result<Self, SkillError> {
         Self::scan_roots(fs, [root.into()])
     }
 
@@ -175,11 +180,11 @@ impl FsSkillRegistry {
     /// - [`SkillError::MissingOpeningFence`] / [`SkillError::MissingClosingFence`]
     ///   / [`SkillError::InvalidJson`] if a skill's front-matter is malformed.
     pub fn scan_roots(
-        fs: Arc<dyn ClawFs>,
+        fs: F,
         roots: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<Self, SkillError> {
         let roots: Vec<String> = roots.into_iter().map(Into::into).collect();
-        let snapshot = Self::scan_catalog(fs.as_ref(), &roots)?;
+        let snapshot = Self::scan_catalog(&fs, &roots)?;
         Ok(Self {
             fs,
             roots,
@@ -188,7 +193,7 @@ impl FsSkillRegistry {
     }
 
     /// Build a [`CatalogSnapshot`] by scanning every root once.
-    fn scan_catalog(fs: &dyn ClawFs, roots: &[String]) -> Result<CatalogSnapshot, SkillError> {
+    fn scan_catalog(fs: &F, roots: &[String]) -> Result<CatalogSnapshot, SkillError> {
         let mut entries = Vec::new();
         let mut root_by_id: HashMap<SkillId, String> = HashMap::new();
         for root in roots {
@@ -218,7 +223,7 @@ impl FsSkillRegistry {
     }
 }
 
-impl SkillRegistry for FsSkillRegistry {
+impl<F: ClawFs> SkillRegistry for FsSkillRegistry<F> {
     fn catalog(&self) -> Arc<CatalogSnapshot> {
         // Poisoning only means a writer panicked mid-swap; the data is still a
         // valid `Arc`, so recover it rather than propagating the panic.
@@ -260,7 +265,7 @@ impl SkillRegistry for FsSkillRegistry {
     ///
     /// Same as [`scan_roots`](Self::scan_roots).
     fn reload(&self) -> Result<(), SkillError> {
-        let snapshot = Self::scan_catalog(self.fs.as_ref(), &self.roots)?;
+        let snapshot = Self::scan_catalog(&self.fs, &self.roots)?;
         // Recover from a poisoned lock: a prior writer panic doesn't corrupt the
         // `Arc`, and we're about to overwrite it wholesale anyway.
         let mut guard = self
@@ -280,7 +285,7 @@ fn skill_document_path(root: &str, id: &str) -> String {
 ///
 /// Clamps the read to the file size so small files don't trip `read_at`'s
 /// past-EOF error, and to [`METADATA_PREFIX_BYTES`] so large bodies aren't read.
-fn read_head(fs: &dyn ClawFs, id: &SkillId, path: &str) -> Result<String, SkillError> {
+fn read_head<F: ClawFs>(fs: &F, id: &SkillId, path: &str) -> Result<String, SkillError> {
     let read_failed = |error| SkillError::ReadFailed(id.clone(), error);
     let size = fs.len(path).map_err(read_failed)?;
     let take = usize::try_from(size.min(METADATA_PREFIX_BYTES)).unwrap_or(usize::MAX);

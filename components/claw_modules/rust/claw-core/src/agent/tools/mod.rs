@@ -151,7 +151,10 @@ fn snapshot_json(snapshot: &AgentSnapshot) -> Value {
 
 /// Build the agent's built-in tool group over a control sink.
 pub(crate) fn internal_tool_group(sink: ControlSink) -> ToolGroup {
-    ToolGroup::new(INTERNAL_TOOL_GROUP, [Tool::new(EndConversationTool::new(sink))])
+    ToolGroup::new(
+        INTERNAL_TOOL_GROUP,
+        [Tool::new(EndConversationTool::new(sink))],
+    )
 }
 
 /// Build the subagent-management tool group, all scoped by the context's agent
@@ -245,15 +248,15 @@ pub(crate) mod test_support {
     /// test can add/remove skills after construction and exercise `reload`.
     pub(crate) fn skill_registry_with_fs(
         entries: &[(&str, &str)],
-    ) -> (Arc<MemFs>, Arc<dyn SkillRegistry>) {
-        let fs = Arc::new(MemFs::new());
+    ) -> (MemFs, Arc<dyn SkillRegistry>) {
+        let fs = MemFs::new();
         for (id, description) in entries {
             write_skill(&fs, id, description);
         }
-        // Clone with `T = MemFs` (no expected type), then let the call site
-        // coerce the value to `Arc<dyn ClawFs>`.
-        let scan_fs = Arc::clone(&fs);
-        let registry = Arc::new(FsSkillRegistry::scan(scan_fs, "skills").unwrap());
+        // `MemFs` is a cheap clone handle to the same store, so the returned
+        // handle and the registry's both see writes made after construction;
+        // the registry value coerces to `Arc<dyn SkillRegistry>` at the return.
+        let registry = Arc::new(FsSkillRegistry::scan(fs.clone(), "skills").unwrap());
         (fs, registry)
     }
 

@@ -6,7 +6,9 @@
 //! no registry check is needed here — only that an id was supplied.
 
 use claw_skill::SkillId;
-use claw_tool::{tool_metadata, ToolError, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput};
+use claw_tool::{
+    tool_metadata, ToolError, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
+};
 
 use super::{push, string_argument, ControlSignal, ControlSink};
 

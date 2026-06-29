@@ -26,8 +26,8 @@
 use claw_api::RetryPolicy;
 use claw_skill::{SkillError, SkillSet};
 
-use crate::agent::kind::AgentKind;
 use crate::agent::graph::SpawnPolicy;
+use crate::agent::kind::AgentKind;
 use crate::agent::manifest::{AgentManifest, RetryCount};
 use crate::agent::resolver::AgentResolver;
 use claw_tool::Tool;

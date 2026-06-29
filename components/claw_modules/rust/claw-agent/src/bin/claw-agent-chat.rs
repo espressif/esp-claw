@@ -12,10 +12,10 @@
 //!
 //! [`Chat`]: claw_agent::Chat
 
-use std::error::Error;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 
+use anyhow::{bail, Result};
 use claw_agent::{AgentSystem, ClawApiConfig};
 
 const MEMORY_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/output/claw-agent-chat");
@@ -27,7 +27,7 @@ fn main() {
     }
 }
 
-fn run() -> Result<(), Box<dyn Error>> {
+fn run() -> Result<()> {
     load_env();
 
     let system = AgentSystem::on_disk(llm_config()?, MEMORY_DIR)?;
@@ -77,7 +77,7 @@ fn load_env() {
 }
 
 /// Build the LLM client config from the required `CLAW_LLM_*` variables.
-fn llm_config() -> Result<ClawApiConfig, Box<dyn Error>> {
+fn llm_config() -> Result<ClawApiConfig> {
     Ok(ClawApiConfig {
         api_key: Some(required("CLAW_LLM_API_KEY")?),
         backend_type: "openai_compatible".into(),
@@ -90,9 +90,9 @@ fn llm_config() -> Result<ClawApiConfig, Box<dyn Error>> {
 }
 
 /// Read a required, non-empty environment variable or fail with a clear message.
-fn required(key: &str) -> Result<String, Box<dyn Error>> {
+fn required(key: &str) -> Result<String> {
     match std::env::var(key) {
         Ok(value) if !value.is_empty() => Ok(value),
-        _ => Err(format!("{key} must be set (in env or claw-core/.env.local)").into()),
+        _ => bail!("{key} must be set (in env or claw-core/.env.local)"),
     }
 }

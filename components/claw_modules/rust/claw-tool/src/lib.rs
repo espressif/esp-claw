@@ -42,7 +42,10 @@ mod validate;
 
 pub use block::{BlockPolicy, ToolBlockVerdict, DEFAULT_BLOCK_RETRIES};
 pub use gate::PermissionGate;
-pub use handler::{Tool, ToolError, ToolHandler, ToolInvocation, ToolOutput, ToolInvokeError, ToolRetryCount, tool_invoke_err, tool_invoke_err_with_retries};
+pub use handler::{
+    tool_invoke_err, tool_invoke_err_with_retries, Tool, ToolError, ToolHandler, ToolInvocation,
+    ToolInvokeError, ToolOutput, ToolRetryCount,
+};
 pub use registry::ToolRegistry;
 pub use runner::{ApprovalNeeded, CallOutcome, ToolGate, ToolRunner};
 pub use set::{AllowedTools, ToolGroup, ToolSet, ToolSetError, DEFAULT_TOOL_GROUP};

@@ -1,5 +1,4 @@
-//! `MemoryTaskPool` — a fixed set of background workers shared by the memory
-//! subsystem.
+//! `SharedTaskPool` — a fixed set of background workers shared across the system.
 //!
 //! Why a pool instead of spawning per job: on ESP-IDF (FreeRTOS) creating and
 //! tearing down a task per piece of work churns the heap and risks fragmentation
@@ -9,32 +8,31 @@
 //! [`ClawThread`] (the device impl gives them a PSRAM-backed stack) and they
 //! live until the pool is dropped.
 //!
-//! Every memory type (conversation compaction today; profile / long-term
-//! extraction later) submits its background work here as a [`MemoryJob`]. The
+//! Any subsystem that needs off-tick background work (conversation compaction,
+//! long-term extraction, and others later) submits it here as a [`PoolJob`]. The
 //! pool is intentionally dumb: FIFO, no priorities, no result channel. A job
 //! that needs to report back captures its own `Arc`/channel.
 
 use std::collections::VecDeque;
 use std::io;
 use std::sync::{Arc, Condvar, Mutex};
-use std::thread::JoinHandle;
 
-use claw_interface::{ClawThread, CoreAffinity, Priority};
+use claw_interface::{ClawThread, CoreAffinity, Priority, WorkerHandle};
 
-/// A unit of background memory work. Runs to completion on one worker thread.
-pub type MemoryJob = Box<dyn FnOnce() + Send + 'static>;
+/// A unit of background work. Runs to completion on one worker thread.
+pub type PoolJob = Box<dyn FnOnce() + Send + 'static>;
 
 /// Default worker stack size.
 ///
-/// Compaction summarization can reach the LLM backend (HTTP + TLS + serde_json),
-/// the deepest workload these workers run, so the stack is sized for it. Matches
-/// the order of magnitude of the C agent worker stacks.
+/// Background work can reach the LLM backend (HTTP + TLS + serde_json), the
+/// deepest workload these workers run, so the stack is sized for it. Matches the
+/// order of magnitude of the C agent worker stacks.
 const DEFAULT_STACK_SIZE: usize = 32 * 1024;
 
-/// Configuration for a [`MemoryTaskPool`].
+/// Configuration for a [`SharedTaskPool`].
 pub struct PoolConfig {
-    /// Number of persistent worker threads. One is enough for serialized
-    /// compaction; raise it when several memory types run heavy jobs at once.
+    /// Number of persistent worker threads. One is enough for serialized work;
+    /// raise it when several subsystems run heavy jobs at once.
     pub workers: usize,
     /// Per-worker stack size in bytes.
     pub stack_size: usize,
@@ -63,15 +61,15 @@ struct Shared {
 }
 
 struct Queue {
-    jobs: VecDeque<MemoryJob>,
+    jobs: VecDeque<PoolJob>,
     /// Set on drop; tells idle workers to exit once the queue drains.
     shutdown: bool,
 }
 
-/// A fixed pool of background workers for memory jobs.
+/// A fixed pool of background workers shared across the system.
 ///
-/// Create one at boot with [`MemoryTaskPool::new`] and share it (via `Arc`)
-/// across every memory type; submit work with [`submit`](Self::submit). Workers
+/// Create one at boot with [`SharedTaskPool::new`] and share it (via `Arc`)
+/// across every subsystem; submit work with [`submit`](Self::submit). Workers
 /// run until the pool is dropped.
 ///
 /// # Examples
@@ -80,11 +78,11 @@ struct Queue {
 /// use std::sync::{Arc, mpsc};
 ///
 /// use claw_interface::StdThread;
-/// use claw_memory::{MemoryTaskPool, PoolConfig};
+/// use claw_utils::{SharedTaskPool, PoolConfig};
 ///
 /// // The caller supplies the spawn policy: `StdThread` on the host, the
 /// // PSRAM-backed `EspIdfThread` on device.
-/// let pool = MemoryTaskPool::new(PoolConfig::default(), StdThread::default())?;
+/// let pool = SharedTaskPool::new(PoolConfig::default(), StdThread)?;
 ///
 /// // Submit a job and wait for it to run on a worker thread.
 /// let (tx, rx) = mpsc::channel();
@@ -94,16 +92,16 @@ struct Queue {
 /// assert_eq!(rx.recv().unwrap(), 4);
 /// # Ok::<(), std::io::Error>(())
 /// ```
-pub struct MemoryTaskPool {
+pub struct SharedTaskPool {
     shared: Arc<Shared>,
-    workers: Vec<JoinHandle<()>>,
+    workers: Vec<WorkerHandle>,
 }
 
-impl MemoryTaskPool {
+impl SharedTaskPool {
     /// Spawn the worker threads using the caller-supplied [`ClawThread`] spawner.
     /// They block on an empty queue until work arrives.
     ///
-    /// This core crate bakes in no default spawner: the caller injects the spawn
+    /// This crate bakes in no default spawner: the caller injects the spawn
     /// policy — the device firmware its PSRAM-backed `EspIdfThread`, host CLIs and
     /// tests `claw_interface::StdThread`. The spawner is a zero-sized type, so the
     /// `T: ClawThread` bound is statically dispatched with no allocation or vtable.
@@ -124,7 +122,7 @@ impl MemoryTaskPool {
         let mut workers = Vec::with_capacity(config.workers);
         for index in 0..config.workers {
             let shared = Arc::clone(&shared);
-            let name = format!("claw_mem_{index}");
+            let name = format!("claw_pool_{index}");
             let handle = thread.spawn_worker(
                 &name,
                 config.stack_size,
@@ -141,7 +139,7 @@ impl MemoryTaskPool {
     /// Enqueue a job. It runs on the next free worker, in submission order.
     ///
     /// Best-effort: if the pool is shutting down the job is dropped unrun.
-    pub fn submit(&self, job: MemoryJob) {
+    pub fn submit(&self, job: PoolJob) {
         let mut queue = lock(&self.shared.queue);
         if queue.shutdown {
             return;
@@ -152,7 +150,7 @@ impl MemoryTaskPool {
     }
 }
 
-impl Drop for MemoryTaskPool {
+impl Drop for SharedTaskPool {
     fn drop(&mut self) {
         {
             let mut queue = lock(&self.shared.queue);
@@ -161,8 +159,9 @@ impl Drop for MemoryTaskPool {
         self.shared.signal.notify_all();
         for handle in self.workers.drain(..) {
             // A worker only exits its loop after observing shutdown, so joining
-            // cannot deadlock. Ignore the panic payload if a job unwound.
-            let _ = handle.join();
+            // cannot deadlock. `WorkerHandle::join` discards a panicked worker's
+            // payload (worker panics are isolated by design).
+            handle.join();
         }
     }
 }
@@ -183,7 +182,7 @@ fn worker_loop(shared: &Shared) {
             }
         };
         // Run the job with the lock released so it never blocks submitters or
-        // other workers (compaction can be slow — it may hit the network).
+        // other workers (a job can be slow — it may hit the network).
         job();
     }
 }

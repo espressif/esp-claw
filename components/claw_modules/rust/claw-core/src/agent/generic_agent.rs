@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use claw_api::ClawApi;
 use claw_context::Block;
+use claw_interface::http::ClawHttp;
 use claw_interface::ClawFs;
 use claw_memory::{ConversationConfig, ConversationDeps, ConversationMemory};
 
@@ -27,6 +28,7 @@ use crate::agent::graph::{AgentContext, GraphHost};
 use crate::agent::kind::AgentKind;
 use crate::agent::tools::{respond_to_approval_tool_group, subagent_tool_group};
 use crate::agent::{append_child_result, Agent};
+use crate::memory::Memory;
 use claw_tool::{ToolSet, ToolSetError};
 
 // ===========================================================================
@@ -35,16 +37,16 @@ use claw_tool::{ToolSet, ToolSetError};
 
 /// The one agent type: a flat ReAct loop over a [`BaseAgent`], configured by an
 /// [`AgentConfig`]. No semantic FSM — `tick` forwards straight to the base.
-pub struct GenericAgent<F: ClawFs + 'static> {
+pub struct GenericAgent<F: ClawFs + 'static, H: ClawHttp> {
     id: AgentId,
     kind: AgentKind,
     /// A view sharing inner state with the base agent's memory, for reads and
     /// persistence inspection (a cheap `Arc` clone of the live transcript).
     memory: ConversationMemory<F>,
-    base: BaseAgent<F>,
+    base: BaseAgent<H>,
 }
 
-impl<F: ClawFs + 'static> GenericAgent<F> {
+impl<F: ClawFs + 'static, H: ClawHttp> GenericAgent<F, H> {
     /// Build a generic agent with `id` over `llm`, configured by `config`.
     ///
     /// The agent constructs its **own** [`ConversationMemory`] from the injected
@@ -68,7 +70,7 @@ impl<F: ClawFs + 'static> GenericAgent<F> {
     /// [`GenericAgentBuildError`] when tool assembly or base construction fails.
     pub fn new(
         id: AgentId,
-        llm: ClawApi,
+        llm: ClawApi<H>,
         memory_config: ConversationConfig,
         memory_deps: ConversationDeps<F>,
         config: AgentConfig,
@@ -132,9 +134,22 @@ impl<F: ClawFs + 'static> GenericAgent<F> {
     pub fn memory(&self) -> &ConversationMemory<F> {
         &self.memory
     }
+
+    /// Register a pluggable long-term [`Memory`] on the underlying base agent.
+    ///
+    /// Forwards to [`BaseAgent::register_memory`]; the factory calls this after
+    /// construction to attach the dual-tier long-term store.
+    ///
+    /// # Errors
+    ///
+    /// [`BaseAgentBuildError`] when a memory tool clashes with an existing tool or
+    /// the LLM does not support the tools the memory provides.
+    pub fn register_memory(&mut self, memory: Arc<dyn Memory>) -> Result<(), BaseAgentBuildError> {
+        self.base.register_memory(memory)
+    }
 }
 
-impl<F: ClawFs + 'static> Agent for GenericAgent<F> {
+impl<F: ClawFs + 'static, H: ClawHttp + Send> Agent for GenericAgent<F, H> {
     fn id(&self) -> AgentId {
         self.id
     }
@@ -171,16 +186,14 @@ mod tests {
 
     use claw_api::{ClawApi, ClawApiConfig, RetryPolicy};
     use claw_interface::{MemFs, ScriptedHttp, StdThread};
-    use claw_memory::{
-        ConversationConfig, ConversationDeps, ConversationMemory, MemoryTaskPool, NoopCompactor,
-        PoolConfig,
-    };
+    use claw_memory::{ConversationConfig, ConversationDeps, ConversationMemory, NoopCompactor};
+    use claw_utils::{PoolConfig, SharedTaskPool};
     use serde_json::{json, Value};
 
     use super::*;
     use crate::agent::graph::{GraphEffect, SpawnPolicy};
 
-    fn scripted_llm(bodies: Vec<String>) -> ClawApi {
+    fn scripted_llm(bodies: Vec<String>) -> ClawApi<ScriptedHttp> {
         ClawApi::init(
             ClawApiConfig {
                 api_key: Some("sk-test".into()),
@@ -190,7 +203,7 @@ mod tests {
                 supports_tools: true,
                 ..Default::default()
             },
-            Arc::new(ScriptedHttp::new(bodies)),
+            ScriptedHttp::new(bodies),
         )
         .expect("init llm")
     }
@@ -198,14 +211,13 @@ mod tests {
     /// The ingredients [`GenericAgent::new`] needs to build its own memory: a
     /// base config plus the in-memory collaborators. The agent keys the
     /// conversation by its own id.
-    fn memory_ingredients(agent_id: AgentId) -> (ConversationConfig, ConversationDeps<Arc<MemFs>>) {
-        let pool = Arc::new(
-            MemoryTaskPool::new(PoolConfig::default(), StdThread::default()).expect("memory pool"),
-        );
+    fn memory_ingredients(agent_id: AgentId) -> (ConversationConfig, ConversationDeps<MemFs>) {
+        let pool =
+            Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread).expect("memory pool"));
         (
             ConversationConfig::new(format!("/mem/agent-{}", agent_id.0)),
             ConversationDeps {
-                fs: Arc::new(MemFs::default()),
+                fs: MemFs::default(),
                 pool,
                 compactor: Arc::new(NoopCompactor),
             },
@@ -231,7 +243,7 @@ mod tests {
         .to_string()
     }
 
-    fn transcript_contents(memory: &ConversationMemory<Arc<MemFs>>) -> Vec<String> {
+    fn transcript_contents(memory: &ConversationMemory<MemFs>) -> Vec<String> {
         memory
             .messages()
             .as_array()
@@ -245,7 +257,7 @@ mod tests {
             .unwrap_or_default()
     }
 
-    fn drive(agent: &mut GenericAgent<Arc<MemFs>>) -> TickOutcome {
+    fn drive<H: ClawHttp + Send>(agent: &mut GenericAgent<MemFs, H>) -> TickOutcome {
         loop {
             match agent.tick() {
                 TickOutcome::Working => continue,

@@ -18,7 +18,7 @@ use core::sync::atomic::AtomicBool;
 
 use claw_interface::{ClawFs, ClawHttp, HttpHeader, HttpJsonRequest, MemFs, ScriptedHttp};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> anyhow::Result<()> {
     filesystem_seam()?;
     http_seam()?;
     Ok(())
@@ -26,7 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// `ClawFs`: byte-oriented persistence. The in-memory `MemFs` behaves like the
 /// on-device FATFS backend for the operations the modules rely on.
-fn filesystem_seam() -> Result<(), Box<dyn std::error::Error>> {
+fn filesystem_seam() -> anyhow::Result<()> {
     let fs = MemFs::new();
 
     fs.create_dir_all("/data/conversations")?;
@@ -48,8 +48,8 @@ fn filesystem_seam() -> Result<(), Box<dyn std::error::Error>> {
 
 /// `ClawHttp`: a blocking JSON POST. `ScriptedHttp` hands back canned bodies in
 /// order, standing in for the `esp_http_client` driver.
-fn http_seam() -> Result<(), Box<dyn std::error::Error>> {
-    let http = ScriptedHttp::new([
+fn http_seam() -> anyhow::Result<()> {
+    let mut http = ScriptedHttp::new([
         r#"{"choices":[{"message":{"content":"first"}}]}"#,
         r#"{"choices":[{"message":{"content":"second"}}]}"#,
     ]);

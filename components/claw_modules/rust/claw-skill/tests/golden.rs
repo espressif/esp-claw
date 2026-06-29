@@ -47,14 +47,13 @@ fn update_golden() -> bool {
     std::env::var_os("CLAW_UPDATE_GOLDEN").is_some()
 }
 
-fn registry() -> FsSkillRegistry {
-    FsSkillRegistry::scan(Arc::new(DiskFs::rooted(data_dir())), SKILLS_ROOT)
-        .expect("scan skills fixtures")
+fn registry() -> FsSkillRegistry<DiskFs> {
+    FsSkillRegistry::scan(DiskFs::rooted(data_dir()), SKILLS_ROOT).expect("scan skills fixtures")
 }
 
 /// The catalog rendered as canonical pretty JSON (trailing newline) for golden
 /// comparison.
-fn catalog_json(registry: &FsSkillRegistry) -> String {
+fn catalog_json(registry: &FsSkillRegistry<DiskFs>) -> String {
     let entries: Vec<_> = registry
         .catalog()
         .entries()

@@ -10,7 +10,9 @@
 use std::sync::Arc;
 
 use claw_skill::{SkillId, SkillRegistry};
-use claw_tool::{tool_metadata, ToolError, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput};
+use claw_tool::{
+    tool_metadata, ToolError, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
+};
 
 use super::{push, string_argument, ControlSignal, ControlSink};
 

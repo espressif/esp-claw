@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use claw_interface::{ClawFs, DiskFs, MemFs, StdThread};
 use claw_memory::{
     CompactError, Compactor, ConversationConfig, ConversationDeps, ConversationMemory,
-    MemoryTaskPool, PoolConfig,
 };
+use claw_utils::{PoolConfig, SharedTaskPool};
 use serde_json::{json, Value};
 
 // --- test doubles --------------------------------------------------------
@@ -43,15 +43,15 @@ impl Compactor for StubCompactor {
 
 // --- helpers -------------------------------------------------------------
 
-fn pool() -> Arc<MemoryTaskPool> {
-    Arc::new(MemoryTaskPool::new(PoolConfig::default(), StdThread::default()).expect("spawn pool"))
+fn pool() -> Arc<SharedTaskPool> {
+    Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread).expect("spawn pool"))
 }
 
-fn deps(
-    fs: Arc<dyn ClawFs>,
-    pool: Arc<MemoryTaskPool>,
+fn deps<F: ClawFs + 'static>(
+    fs: F,
+    pool: Arc<SharedTaskPool>,
     marker: &str,
-) -> ConversationDeps<Arc<dyn ClawFs>> {
+) -> ConversationDeps<F> {
     ConversationDeps {
         fs,
         pool,
@@ -74,7 +74,7 @@ fn instant_config(dir: &str, threshold: usize, keep_recent_tokens: usize) -> Con
 }
 
 /// A memory with default tuning, conversation id 1, and fresh doubles.
-fn memory_with(fs: Arc<dyn ClawFs>) -> ConversationMemory<Arc<dyn ClawFs>> {
+fn memory_with<F: ClawFs + 'static>(fs: F) -> ConversationMemory<F> {
     ConversationMemory::new(
         1,
         ConversationConfig::new("/conversations"),
@@ -158,7 +158,7 @@ fn pump_until<F: ClawFs + 'static>(
 
 #[test]
 fn appends_render_in_order() {
-    let mut memory = memory_with(Arc::new(MemFs::default()));
+    let mut memory = memory_with(MemFs::default());
 
     {
         let turn = memory.group();
@@ -181,7 +181,7 @@ fn appends_render_in_order() {
 
 #[test]
 fn append_patch_expands_a_batch() {
-    let mut memory = memory_with(Arc::new(MemFs::default()));
+    let mut memory = memory_with(MemFs::default());
 
     let batch = json!([
         { "role": "assistant", "content": "calling tool" },
@@ -200,7 +200,7 @@ fn append_patch_expands_a_batch() {
 
 #[test]
 fn distinct_ids_persist_independently() {
-    let fs = Arc::new(MemFs::default());
+    let fs = MemFs::default();
     let shared_pool = pool();
     let dir = "/sessions";
 
@@ -209,7 +209,7 @@ fn distinct_ids_persist_independently() {
             id,
             ConversationConfig::new(dir),
             ConversationDeps {
-                fs: Arc::clone(&fs) as Arc<dyn ClawFs>,
+                fs: fs.clone(),
                 pool: Arc::clone(&shared_pool),
                 compactor: Arc::new(StubCompactor::new("S")),
             },
@@ -241,7 +241,7 @@ fn missing_persist_file_starts_empty() {
         7,
         ConversationConfig::new("/empty"),
         ConversationDeps {
-            fs: Arc::new(MemFs::default()),
+            fs: MemFs::default(),
             pool: pool(),
             compactor: Arc::new(StubCompactor::new("S")),
         },
@@ -266,7 +266,7 @@ fn crosses_threshold_and_auto_compacts_in_background() {
         1,
         config,
         ConversationDeps {
-            fs: Arc::new(MemFs::default()),
+            fs: MemFs::default(),
             pool: pool(),
             compactor: Arc::clone(&compactor) as Arc<dyn Compactor>,
         },
@@ -298,7 +298,7 @@ fn crosses_threshold_and_auto_compacts_in_background() {
 
 #[test]
 fn reloads_after_compaction_via_manifest() {
-    let fs: Arc<dyn ClawFs> = Arc::new(MemFs::default());
+    let fs = MemFs::default();
     let shared = pool();
 
     // "mN" serialises to ~29 chars (~8 tokens/group). keep_recent_tokens=9 keeps
@@ -306,7 +306,7 @@ fn reloads_after_compaction_via_manifest() {
     let mut memory = ConversationMemory::new(
         1,
         instant_config("/c", 5, 9),
-        deps(Arc::clone(&fs), Arc::clone(&shared), "SUMMARY"),
+        deps(fs.clone(), Arc::clone(&shared), "SUMMARY"),
     );
     for i in 0..6 {
         memory.group().append_user(format!("m{i}"));
@@ -321,7 +321,7 @@ fn reloads_after_compaction_via_manifest() {
     let reloaded = ConversationMemory::new(
         1,
         instant_config("/c", 5, 9),
-        deps(Arc::clone(&fs), Arc::clone(&shared), "SUMMARY"),
+        deps(fs.clone(), Arc::clone(&shared), "SUMMARY"),
     );
     let after = messages(&reloaded);
     assert_eq!(
@@ -333,13 +333,13 @@ fn reloads_after_compaction_via_manifest() {
 
 #[test]
 fn reloads_from_data_log_without_manifest() {
-    let fs: Arc<dyn ClawFs> = Arc::new(MemFs::default());
+    let fs = MemFs::default();
     let shared = pool();
 
     let mut memory = ConversationMemory::new(
         3,
         instant_config("/c", 100_000, 999_999),
-        deps(Arc::clone(&fs), Arc::clone(&shared), "S"),
+        deps(fs.clone(), Arc::clone(&shared), "S"),
     );
     memory.group().append_user("a");
     memory.group().append_user("b");
@@ -349,17 +349,13 @@ fn reloads_from_data_log_without_manifest() {
     // the manifest is synced). A fresh load must reconstruct purely from a data-log scan.
     fs.remove("/c/conversation-3.json").ok();
 
-    let fs_for_reload = Arc::clone(&fs);
+    let fs_for_reload = fs.clone();
     let pool_for_reload = Arc::clone(&shared);
     assert!(wait_until(move || {
         let reloaded = ConversationMemory::new(
             3,
             ConversationConfig::new("/c"),
-            deps(
-                Arc::clone(&fs_for_reload),
-                Arc::clone(&pool_for_reload),
-                "S",
-            ),
+            deps(fs_for_reload.clone(), Arc::clone(&pool_for_reload), "S"),
         );
         messages(&reloaded).len() == 3
     }));
@@ -368,30 +364,26 @@ fn reloads_from_data_log_without_manifest() {
 
 #[test]
 fn reload_tail_scans_appends_after_manifest() {
-    let fs: Arc<dyn ClawFs> = Arc::new(MemFs::default());
+    let fs = MemFs::default();
     let shared = pool();
 
     let mut memory = ConversationMemory::new(
         4,
         instant_config("/c", 100_000, 999_999),
-        deps(Arc::clone(&fs), Arc::clone(&shared), "S"),
+        deps(fs.clone(), Arc::clone(&shared), "S"),
     );
     memory.group().append_user("a");
     memory.group().append_user("b");
     memory.flush(); // manifest now covers a, b
     memory.group().append_user("c"); // appended past covered_len; manifest left stale
 
-    let fs_for_reload = Arc::clone(&fs);
+    let fs_for_reload = fs.clone();
     let pool_for_reload = Arc::clone(&shared);
     assert!(wait_until(move || {
         let reloaded = ConversationMemory::new(
             4,
             ConversationConfig::new("/c"),
-            deps(
-                Arc::clone(&fs_for_reload),
-                Arc::clone(&pool_for_reload),
-                "S",
-            ),
+            deps(fs_for_reload.clone(), Arc::clone(&pool_for_reload), "S"),
         );
         let m = messages(&reloaded);
         m.len() == 3 && m[2]["content"] == "c"
@@ -400,13 +392,13 @@ fn reload_tail_scans_appends_after_manifest() {
 
 #[test]
 fn collapse_reclaims_dead_bytes() {
-    let memfs = Arc::new(MemFs::default());
-    let fs: Arc<dyn ClawFs> = Arc::clone(&memfs) as Arc<dyn ClawFs>;
+    let memfs = MemFs::default();
+    let fs = memfs.clone();
 
     let mut memory = ConversationMemory::new(
         5,
         instant_config("/c", 5, 9),
-        deps(Arc::clone(&fs), pool(), "SUMMARY"),
+        deps(fs.clone(), pool(), "SUMMARY"),
     );
     let big = "x".repeat(1024);
     for i in 0..60 {
@@ -427,7 +419,7 @@ fn collapse_reclaims_dead_bytes() {
 
 #[test]
 fn torn_trailing_line_is_ignored_on_load() {
-    let fs: Arc<dyn ClawFs> = Arc::new(MemFs::default());
+    let fs = MemFs::default();
 
     // One complete record line, then a torn (newline-less) partial record.
     let mut data = serde_json::to_vec(
@@ -441,7 +433,7 @@ fn torn_trailing_line_is_ignored_on_load() {
     let memory = ConversationMemory::new(
         9,
         ConversationConfig::new("/c"),
-        deps(Arc::clone(&fs), pool(), "S"),
+        deps(fs.clone(), pool(), "S"),
     );
     let m = messages(&memory);
     assert_eq!(m.len(), 1);
@@ -450,7 +442,7 @@ fn torn_trailing_line_is_ignored_on_load() {
 
 #[test]
 fn invalid_assistant_json_is_dropped_not_panicking() {
-    let mut memory = memory_with(Arc::new(MemFs::default()));
+    let mut memory = memory_with(MemFs::default());
 
     {
         let turn = memory.group();
@@ -486,15 +478,15 @@ fn compact_line(id_start: u64, id_end: u64, summary_content: &str) -> Vec<u8> {
     line
 }
 
-fn load_from_log(data: Vec<u8>) -> ConversationMemory<Arc<dyn ClawFs>> {
-    let fs: Arc<dyn ClawFs> = Arc::new(MemFs::default());
+fn load_from_log(data: Vec<u8>) -> ConversationMemory<MemFs> {
+    let fs = MemFs::default();
     fs.append("/c/conversation-1.jsonl", &data).unwrap();
     ConversationMemory::new(1, ConversationConfig::new("/c"), deps(fs, pool(), "S"))
 }
 
 #[test]
 fn mismatched_manifest_triggers_rebuild_and_recovers_all_groups() {
-    let fs: Arc<dyn ClawFs> = Arc::new(MemFs::default());
+    let fs = MemFs::default();
 
     // Write 3 valid groups to the data log.
     let line0 = group_line(0, "g0");
@@ -524,7 +516,7 @@ fn mismatched_manifest_triggers_rebuild_and_recovers_all_groups() {
     let memory = ConversationMemory::new(
         1,
         ConversationConfig::new("/c"),
-        deps(Arc::clone(&fs), pool(), "S"),
+        deps(fs.clone(), pool(), "S"),
     );
     let msgs = messages(&memory);
     assert_eq!(msgs.len(), 3, "all 3 groups recovered after rebuild");
@@ -536,7 +528,7 @@ fn mismatched_manifest_triggers_rebuild_and_recovers_all_groups() {
     let reloaded = ConversationMemory::new(
         1,
         ConversationConfig::new("/c"),
-        deps(Arc::clone(&fs), pool(), "S"),
+        deps(fs.clone(), pool(), "S"),
     );
     let reloaded_msgs = messages(&reloaded);
     assert_eq!(reloaded_msgs.len(), 3);
@@ -546,7 +538,7 @@ fn mismatched_manifest_triggers_rebuild_and_recovers_all_groups() {
 
 #[test]
 fn messages_without_compaction_are_in_id_order() {
-    let mut memory = memory_with(Arc::new(MemFs::default()));
+    let mut memory = memory_with(MemFs::default());
     for i in 0..5u32 {
         memory.group().append_user(format!("turn {i}"));
     }
@@ -740,7 +732,7 @@ fn compaction_index_coverage_has_no_holes() {
     std::fs::remove_dir_all(&disk_dir).ok();
     std::fs::create_dir_all(&disk_dir).expect("create disk_dir");
 
-    let fs: Arc<dyn ClawFs> = Arc::new(DiskFs::rooted(output_root).with_pretty_json(true));
+    let fs = DiskFs::rooted(output_root).with_pretty_json(true);
     let shared = pool();
 
     let mut cfg = ConversationConfig::new(virtual_dir);
@@ -749,8 +741,7 @@ fn compaction_index_coverage_has_no_holes() {
     cfg.segment_token_budget = 12; // small → each chunk is one group → many segments
     cfg.persist_debounce = Duration::ZERO;
 
-    let mut memory =
-        ConversationMemory::new(2, cfg, deps(Arc::clone(&fs), Arc::clone(&shared), "S"));
+    let mut memory = ConversationMemory::new(2, cfg, deps(fs.clone(), Arc::clone(&shared), "S"));
 
     for i in 0..15u32 {
         memory.group().append_user(format!("turn {i}"));
@@ -794,7 +785,7 @@ fn writes_inspectable_output_files() {
     std::fs::remove_dir_all(&disk_dir).ok();
     std::fs::create_dir_all(&disk_dir).expect("create disk_dir");
 
-    let fs: Arc<dyn ClawFs> = Arc::new(DiskFs::rooted(output_root).with_pretty_json(true));
+    let fs = DiskFs::rooted(output_root).with_pretty_json(true);
     let shared = pool();
 
     let mut cfg = ConversationConfig::new(virtual_dir);
@@ -811,7 +802,7 @@ fn writes_inspectable_output_files() {
     let mut memory = ConversationMemory::new(
         1,
         cfg,
-        deps(Arc::clone(&fs), Arc::clone(&shared), "[COMPACTED SUMMARY]"),
+        deps(fs.clone(), Arc::clone(&shared), "[COMPACTED SUMMARY]"),
     );
 
     // Commit 6 turns; each has a user question and an assistant answer.

@@ -9,7 +9,9 @@ use thiserror::Error;
 
 use jsonschema::Validator;
 
-use crate::handler::{Tool, ToolError, ToolInvocation, ToolInvokeError, ToolOutput, tool_invoke_err};
+use crate::handler::{
+    tool_invoke_err, Tool, ToolError, ToolInvocation, ToolInvokeError, ToolOutput,
+};
 use crate::validate::{compile_argument_validator, parse_arguments_json, validate_arguments};
 
 /// A named bundle of [`Tool`]s registered together.
@@ -253,7 +255,10 @@ impl ToolSet {
 
         // Schema array: splice each tool's schema text, no re-serialization.
         self.schemas_json = (!entries.is_empty()).then(|| {
-            let schemas: Vec<&str> = entries.iter().map(|(_, entry)| entry.tool.schema()).collect();
+            let schemas: Vec<&str> = entries
+                .iter()
+                .map(|(_, entry)| entry.tool.schema())
+                .collect();
             format!("[{}]", schemas.join(","))
         });
 

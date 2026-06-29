@@ -1,16 +1,15 @@
 //! `claw-memory` — the agent memory subsystem.
 //!
-//! Today this holds the short-term conversation memory ([`ConversationMemory`])
-//! and the shared worker pool ([`MemoryTaskPool`]) that runs its background jobs
-//! (compaction now; profile / long-term extraction later). Every memory type
-//! submits its background work to the same pool so FreeRTOS task allocation stays
-//! amortized.
+//! Today this holds the short-term conversation memory ([`ConversationMemory`]).
+//! Its background jobs (compaction now; profile / long-term extraction later) run
+//! on the process-wide [`SharedTaskPool`](claw_utils::SharedTaskPool) — owned by
+//! `claw-utils` so non-memory subsystems can share one pool — injected through
+//! [`ConversationDeps`].
 //!
-//! As a core crate it depends only on the [`claw_interface`] inbound traits —
-//! the [`ClawFs`](claw_interface::ClawFs) persistence seam and the
-//! [`ClawThread`](claw_interface::ClawThread) worker-spawn seam — never on the
-//! platform boundary (`claw-sys`) or on the LLM client (`claw-api`). The concrete
-//! spawner, filesystem, and summarizer are all **injected** by the caller: the
+//! As a core crate it depends only on the [`claw_interface`] inbound traits — the
+//! [`ClawFs`](claw_interface::ClawFs) persistence seam — and on `claw-utils`,
+//! never on the platform boundary (`claw-sys`) or on the LLM client (`claw-api`).
+//! The pool, filesystem, and summarizer are all **injected** by the caller: the
 //! summarization policy comes in through the [`Compactor`] trait, so this crate
 //! owns the compaction *mechanism* but not the *transformation*. The ready-made
 //! LLM-backed compactor (`LlmCompactor`) lives in `claw_core`, which has the LLM
@@ -21,29 +20,17 @@
 //! ```no_run
 //! use std::sync::Arc;
 //!
-//! use claw_interface::{ClawFs, FsError, StdThread};
+//! use claw_interface::{MemFs, StdThread};
 //! use claw_memory::{
 //!     CompactError, Compactor, ConversationConfig, ConversationDeps, ConversationMemory,
-//!     MemoryTaskPool, PoolConfig,
 //! };
+//! use claw_utils::{SharedTaskPool, PoolConfig};
 //! use serde_json::{json, Value};
 //!
-//! // 1. A filesystem for persistence. On device this is backed by the DATA root;
-//! //    here it is a stub.
-//! struct MyFs;
-//! impl ClawFs for MyFs {
-//!     fn read(&self, _path: &str) -> Result<Vec<u8>, FsError> { Err(FsError::NotFound) }
-//!     fn read_at(&self, _path: &str, _off: u64, _len: usize) -> Result<Vec<u8>, FsError> {
-//!         Err(FsError::NotFound)
-//!     }
-//!     fn len(&self, _path: &str) -> Result<u64, FsError> { Err(FsError::NotFound) }
-//!     fn write_atomic(&self, _path: &str, _data: &[u8]) -> Result<(), FsError> { Ok(()) }
-//!     fn append(&self, _path: &str, _data: &[u8]) -> Result<(), FsError> { Ok(()) }
-//!     fn create_dir_all(&self, _path: &str) -> Result<(), FsError> { Ok(()) }
-//!     fn exists(&self, _path: &str) -> bool { false }
-//!     fn remove(&self, _path: &str) -> Result<(), FsError> { Ok(()) }
-//!     fn list_dir(&self, _path: &str) -> Result<Vec<String>, FsError> { Ok(Vec::new()) }
-//! }
+//! // 1. A filesystem for persistence. On device this is the espidf `ClawFs` over
+//! //    the DATA root; here it is the in-memory host double. A `ClawFs` hands out
+//! //    `ClawFile` handles; the memory layer holds the type parameter `F`.
+//! let fs = MemFs::new();
 //!
 //! // 2. A compactor that folds an aged window into a summary (e.g. an LLM call).
 //! struct MyCompactor;
@@ -56,9 +43,9 @@
 //!     }
 //! }
 //!
-//! // 3. One pool is shared by every memory type — create it once at boot. The
+//! // 3. One pool is shared across the system — create it once at boot. The
 //! //    caller injects the spawn policy (`StdThread` here; `EspIdfThread` on device).
-//! let pool = Arc::new(MemoryTaskPool::new(PoolConfig::default(), StdThread::default())?);
+//! let pool = Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread)?);
 //!
 //! // 4. Build the conversation memory for one conversation id. Typically one
 //! //    memory per agent instance; all of them share the single pool above.
@@ -67,7 +54,7 @@
 //!     conversation_id,
 //!     ConversationConfig::new("/data/conversations"),
 //!     ConversationDeps {
-//!         fs: MyFs,
+//!         fs,
 //!         pool: Arc::clone(&pool),
 //!         compactor: Arc::new(MyCompactor),
 //!     },
@@ -97,7 +84,7 @@
 
 pub mod compaction;
 pub mod conversation_memory;
-pub mod pool;
+pub mod long_term_memory;
 
 #[cfg(feature = "compactor-stub")]
 pub use compaction::NoopCompactor;
@@ -105,4 +92,7 @@ pub use compaction::{CompactError, Compactor};
 pub use conversation_memory::{
     ConversationConfig, ConversationDeps, ConversationMemory, GroupGuard,
 };
-pub use pool::{MemoryJob, MemoryTaskPool, PoolConfig};
+pub use long_term_memory::{
+    LongTermConfig, LongTermError, LongTermMemory, MemoryDraft, MemoryId, MemoryItem, MemoryPatch,
+    StoreOutcome,
+};

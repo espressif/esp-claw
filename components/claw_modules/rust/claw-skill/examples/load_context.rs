@@ -14,7 +14,7 @@ fn skill_md(description: &str, body: &str) -> Vec<u8> {
     format!("---\n{{\"description\":\"{description}\"}}\n---\n{body}").into_bytes()
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> anyhow::Result<()> {
     let fs = MemFs::new();
     fs.write_atomic(
         "skills/board_hardware_info/SKILL.md",
@@ -31,7 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
     )?;
 
-    let registry: Arc<dyn SkillRegistry> = Arc::new(FsSkillRegistry::scan(Arc::new(fs), "skills")?);
+    let registry: Arc<dyn SkillRegistry> = Arc::new(FsSkillRegistry::scan(fs, "skills")?);
     let mut set = SkillSet::new(registry);
 
     // Nothing loaded yet: the context fragment is empty.

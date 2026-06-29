@@ -13,15 +13,15 @@ pub mod fs;
 pub mod http;
 pub mod thread;
 
+pub use fs::{ClawFile, ClawFs, FsError};
 #[cfg(feature = "diskfs")]
-pub use fs::DiskFs;
+pub use fs::{DiskFile, DiskFs};
 #[cfg(feature = "memfs")]
-pub use fs::MemFs;
-pub use fs::{ClawFs, FsError};
+pub use fs::{MemFile, MemFs};
 #[cfg(feature = "httpmock")]
 pub use http::{
     BlockingClawHttpAsync, CapturingHttp, FailingHttp, NeverHttp, NoopHttp, ScriptStep,
-    ScriptedHttp, YieldingClawHttpAsync,
+    ScriptedHttp, SharedScriptHttp, YieldingClawHttpAsync,
 };
 pub use http::{
     Cancel, ClawHttp, ClawHttpAsync, HttpError, HttpHeader, HttpJsonRequest, HttpResponse,
@@ -31,4 +31,4 @@ pub use http::{
 pub use http::{RealHttp, RealHttpAsync};
 #[cfg(feature = "stdthread")]
 pub use thread::StdThread;
-pub use thread::{ClawThread, CoreAffinity, Priority};
+pub use thread::{ClawThread, CoreAffinity, Priority, WorkerHandle};

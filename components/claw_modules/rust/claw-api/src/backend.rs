@@ -14,10 +14,16 @@ use super::types::{
 };
 
 /// A constructed backend instance (`backend_ctx` + the vtable methods in C).
-pub trait LlmBackend: Send + Sync {
+///
+/// Generic over the concrete transport `H` so the `http.post_json` call stays
+/// **static dispatch** even though the backend itself is selected at runtime
+/// (`Box<dyn LlmBackend<H>>`). `H` is a trait type parameter — fixed per
+/// monomorphization, not a generic *method* parameter — so the trait remains
+/// object-safe.
+pub trait LlmBackend<H: ClawHttp>: Send + Sync {
     fn chat(
         &self,
-        http: &dyn ClawHttp,
+        http: &mut H,
         profile: &ModelProfile,
         request: &ChatRequest,
         abort: &AtomicBool,
@@ -27,7 +33,7 @@ pub trait LlmBackend: Send + Sync {
     /// Anthropic and others use prompt fallback until API-level support lands.
     fn chat_json(
         &self,
-        http: &dyn ClawHttp,
+        http: &mut H,
         profile: &ModelProfile,
         request: &ChatJsonRequest<'_>,
         schema_name: &str,
@@ -37,7 +43,7 @@ pub trait LlmBackend: Send + Sync {
 
     fn infer_media(
         &self,
-        http: &dyn ClawHttp,
+        http: &mut H,
         profile: &ModelProfile,
         request: &MediaRequest,
         abort: &AtomicBool,
@@ -54,21 +60,24 @@ pub struct BackendDefaults {
 
 /// `claw_llm_backend_registration_t` — the factory replaces the `init` vtable
 /// entry (it constructs the backend instance from the resolved config).
-pub struct BackendRegistration {
+///
+/// Generic over the transport `H`: the produced `Box<dyn LlmBackend<H>>` carries
+/// `H`, so the registry is monomorphized per transport (one `H` per target).
+pub struct BackendRegistration<H: ClawHttp> {
     pub defaults: BackendDefaults,
-    pub make: fn(&ClawApiConfig) -> Result<Box<dyn LlmBackend>, InitError>,
+    pub make: fn(&ClawApiConfig) -> Result<Box<dyn LlmBackend<H>>, InitError>,
 }
 
 /// Built-in registrations, mirroring `find_builtin_backend_registration`.
-pub fn find_builtin_registration(id: &str) -> Option<BackendRegistration> {
+pub fn find_builtin_registration<H: ClawHttp>(id: &str) -> Option<BackendRegistration<H>> {
     if id.is_empty() {
         return None;
     }
     if id == openai_compatible::ID {
-        return Some(openai_compatible::registration());
+        return Some(openai_compatible::registration::<H>());
     }
     if id == anthropic::ID {
-        return Some(anthropic::registration());
+        return Some(anthropic::registration::<H>());
     }
     None
 }

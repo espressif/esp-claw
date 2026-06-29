@@ -3,7 +3,6 @@
 //! A canned `ClawHttp` stands in for the network so the test is hermetic.
 
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 
 use claw_api::{ClawApi, ClawApiConfig};
 use claw_core::LlmCompactor;
@@ -18,7 +17,7 @@ struct CannedHttp {
 
 impl ClawHttp for CannedHttp {
     fn post_json(
-        &self,
+        &mut self,
         _request: &HttpJsonRequest,
         _abort: &AtomicBool,
     ) -> Result<HttpResponse, HttpError> {
@@ -29,13 +28,13 @@ impl ClawHttp for CannedHttp {
     }
 }
 
-fn api_replying(reply: &str) -> Arc<ClawApi> {
+fn api_replying(reply: &str) -> ClawApi<CannedHttp> {
     let body = json!({
         "choices": [{ "message": { "role": "assistant", "content": reply } }]
     })
     .to_string();
-    let http = Arc::new(CannedHttp { body });
-    let api = ClawApi::init(
+    let http = CannedHttp { body };
+    ClawApi::init(
         ClawApiConfig {
             api_key: Some("key".into()),
             backend_type: "openai_compatible".into(),
@@ -45,8 +44,7 @@ fn api_replying(reply: &str) -> Arc<ClawApi> {
         },
         http,
     )
-    .expect("init ClawApi");
-    Arc::new(api)
+    .expect("init ClawApi")
 }
 
 #[test]

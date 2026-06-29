@@ -138,7 +138,7 @@ pub unsafe extern "C" fn claw_sys_selftest_sync_http_post(
         headers: &[],
     };
 
-    match ClawHttp::post_json(&EspIdfHttp, &request, &abort) {
+    match ClawHttp::post_json(&mut EspIdfHttp::new(), &request, &abort) {
         Ok(response) => {
             write_cstr(&response.body, out, out_len);
             // c_int and i32 are the same type on xtensa-esp32s3; no cast needed.
@@ -187,7 +187,8 @@ pub unsafe extern "C" fn claw_sys_selftest_run_three_async_http_posts(url: *cons
                 timeout_ms: 20_000,
                 headers: &[],
             };
-            let pending = ClawHttpAsync::post_json(&EspIdfHttp, &request, Cancel::new(&abort));
+            let pending =
+                ClawHttpAsync::post_json(&EspIdfHttp::new(), &request, Cancel::new(&abort));
             if let Ok(response) = pending.await {
                 if response.status_code == 200 {
                     sink.set(sink.get().saturating_add(1));
@@ -253,7 +254,6 @@ mod resource {
                 }
             }
         }
-
     }
 
     pub struct HeapDelta {
@@ -308,7 +308,6 @@ mod resource {
         let msg = format!("[RESOURCE] {label}: {delta}");
         claw_sys::log_sink::write(log::Level::Warn, "resource", &msg);
     }
-
 }
 
 /// Measure heap baseline (no HTTP activity). Prints the snapshot via ESP_LOG.
@@ -345,7 +344,7 @@ pub unsafe extern "C" fn claw_sys_selftest_resource_sync_http(url: *const c_char
         headers: &[],
     };
 
-    let result = ClawHttp::post_json(&EspIdfHttp, &request, &abort);
+    let result = ClawHttp::post_json(&mut EspIdfHttp::new(), &request, &abort);
 
     let during = resource::HeapSnapshot::take();
     resource::print_snapshot("sync_http:during_response", &during);
@@ -414,7 +413,7 @@ pub unsafe extern "C" fn claw_sys_selftest_resource_async_http(url: *const c_cha
                     headers: &[],
                 };
                 let pending =
-                    ClawHttpAsync::post_json(&EspIdfHttp, &request, Cancel::new(&abort));
+                    ClawHttpAsync::post_json(&EspIdfHttp::new(), &request, Cancel::new(&abort));
                 if let Ok(response) = pending.await {
                     if response.status_code == 200 {
                         sink.set(sink.get().saturating_add(1));
@@ -490,7 +489,7 @@ pub unsafe extern "C" fn claw_sys_selftest_resource_summary(
         timeout_ms: 15_000,
         headers: &[],
     };
-    let sync_result = ClawHttp::post_json(&EspIdfHttp, &sync_req, &abort);
+    let sync_result = ClawHttp::post_json(&mut EspIdfHttp::new(), &sync_req, &abort);
     let after_sync_resp = resource::HeapSnapshot::take();
     drop(sync_result);
     let after_sync_clean = resource::HeapSnapshot::take();
@@ -526,14 +525,16 @@ pub unsafe extern "C" fn claw_sys_selftest_resource_summary(
             timeout_ms: 20_000,
             headers: &[],
         };
-        let pending = ClawHttpAsync::post_json(&EspIdfHttp, &request, Cancel::new(&abort));
+        let pending = ClawHttpAsync::post_json(&EspIdfHttp::new(), &request, Cancel::new(&abort));
         let _ = pending.await;
         peak_ref.set(Some(resource::HeapSnapshot::take()));
     });
 
     edge_executor::block_on(executor.run(task));
 
-    let peak = async_peak.get().unwrap_or_else(resource::HeapSnapshot::take);
+    let peak = async_peak
+        .get()
+        .unwrap_or_else(resource::HeapSnapshot::take);
     drop(executor);
     drop(async_peak);
     let after_async_clean = resource::HeapSnapshot::take();

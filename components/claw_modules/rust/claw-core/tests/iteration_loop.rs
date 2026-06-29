@@ -12,8 +12,8 @@ use claw_core::iteration_loop::{
     SystemPrompt, ToolsOutcome,
 };
 use claw_core::{
-    IterationId, Tool, ToolError, ToolGroup, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
-    ToolSet,
+    IterationId, Tool, ToolError, ToolGroup, ToolHandler, ToolInvocation, ToolInvokeError,
+    ToolOutput, ToolSet,
 };
 use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse};
 use claw_interface::RealHttp;
@@ -75,7 +75,7 @@ struct ScriptedHttp {
 
 impl ClawHttp for ScriptedHttp {
     fn post_json(
-        &self,
+        &mut self,
         _request: &HttpJsonRequest,
         _abort: &AtomicBool,
     ) -> Result<HttpResponse, HttpError> {
@@ -96,7 +96,7 @@ struct FailingHttp;
 
 impl ClawHttp for FailingHttp {
     fn post_json(
-        &self,
+        &mut self,
         _request: &HttpJsonRequest,
         _abort: &AtomicBool,
     ) -> Result<HttpResponse, HttpError> {
@@ -106,10 +106,10 @@ impl ClawHttp for FailingHttp {
     }
 }
 
-fn test_llm(bodies: Vec<&str>) -> ClawApi {
-    let http = Arc::new(ScriptedHttp {
+fn test_llm(bodies: Vec<&str>) -> ClawApi<ScriptedHttp> {
+    let http = ScriptedHttp {
         bodies: Mutex::new(bodies.into_iter().map(str::to_string).collect()),
-    });
+    };
     ClawApi::init(
         ClawApiConfig {
             api_key: Some("sk-test".into()),
@@ -170,7 +170,7 @@ impl ArmInterruptAfterResponseHttp {
 
 impl ClawHttp for ArmInterruptAfterResponseHttp {
     fn post_json(
-        &self,
+        &mut self,
         _request: &HttpJsonRequest,
         _abort: &AtomicBool,
     ) -> Result<HttpResponse, HttpError> {
@@ -196,7 +196,7 @@ struct AbortDuringHttp {
 
 impl ClawHttp for AbortDuringHttp {
     fn post_json(
-        &self,
+        &mut self,
         _request: &HttpJsonRequest,
         _abort: &AtomicBool,
     ) -> Result<HttpResponse, HttpError> {
@@ -262,7 +262,7 @@ fn tool_set(tool: impl ToolHandler + 'static) -> ToolSet {
     ToolSet::from_groups([ToolGroup::new("test", [Tool::new(tool)])]).expect("tool set")
 }
 
-fn test_llm_with_http(http: Arc<dyn ClawHttp>) -> ClawApi {
+fn test_llm_with_http<H: ClawHttp>(http: H) -> ClawApi<H> {
     ClawApi::init(
         ClawApiConfig {
             api_key: Some("sk-test".into()),
@@ -277,8 +277,8 @@ fn test_llm_with_http(http: Arc<dyn ClawHttp>) -> ClawApi {
     .expect("test llm init")
 }
 
-fn run_step(
-    llm: &ClawApi,
+fn run_step<H: ClawHttp>(
+    llm: &mut ClawApi<H>,
     control: &MockControl,
     tools: Option<&ToolSet>,
     iteration_id: IterationId,
@@ -330,11 +330,18 @@ fn system_prompt_borrows_text() {
 
 #[test]
 fn run_returns_plain_text_outcome() {
-    let llm = test_llm(vec![PLAIN_TEXT_BODY]);
+    let mut llm = test_llm(vec![PLAIN_TEXT_BODY]);
     let control = MockControl::new();
     let messages = json!([{"role":"user","content":"hi"}]);
 
-    let result = run_step(&llm, &control, None, TEST_ITERATION_ID, &messages, "system");
+    let result = run_step(
+        &mut llm,
+        &control,
+        None,
+        TEST_ITERATION_ID,
+        &messages,
+        "system",
+    );
 
     let Ok(IterationOutcome::Completed(outcome)) = result else {
         panic!("expected Completed, got {result:?}");
@@ -350,13 +357,13 @@ fn run_returns_plain_text_outcome() {
 
 #[test]
 fn run_executes_tools_and_records_runs() {
-    let llm = test_llm(vec![TOOL_CALL_BODY]);
+    let mut llm = test_llm(vec![TOOL_CALL_BODY]);
     let control = MockControl::new();
     let echo = tool_set(EchoTool);
     let messages = json!([]);
 
     let result = run_step(
-        &llm,
+        &mut llm,
         &control,
         Some(&echo),
         TEST_ITERATION_ID,
@@ -387,12 +394,19 @@ fn run_executes_tools_and_records_runs() {
 
 #[test]
 fn run_returns_preempted_when_interrupt_signaled_before_llm() {
-    let llm = test_llm(vec![PLAIN_TEXT_BODY]);
+    let mut llm = test_llm(vec![PLAIN_TEXT_BODY]);
     let control = MockControl::new();
     control.signal_interrupt();
     let messages = json!([]);
 
-    let result = run_step(&llm, &control, None, TEST_ITERATION_ID, &messages, "system");
+    let result = run_step(
+        &mut llm,
+        &control,
+        None,
+        TEST_ITERATION_ID,
+        &messages,
+        "system",
+    );
 
     let Ok(IterationOutcome::Preempted(outcome)) = result else {
         panic!("expected Preempted, got {result:?}");
@@ -403,11 +417,18 @@ fn run_returns_preempted_when_interrupt_signaled_before_llm() {
 
 #[test]
 fn run_errors_when_tool_calls_without_tools_port() {
-    let llm = test_llm(vec![TOOL_CALL_BODY]);
+    let mut llm = test_llm(vec![TOOL_CALL_BODY]);
     let control = MockControl::new();
     let messages = json!([]);
 
-    let result = run_step(&llm, &control, None, TEST_ITERATION_ID, &messages, "system");
+    let result = run_step(
+        &mut llm,
+        &control,
+        None,
+        TEST_ITERATION_ID,
+        &messages,
+        "system",
+    );
 
     assert!(matches!(result, Err(IterationLoopError::MissingTools)));
 }
@@ -415,15 +436,20 @@ fn run_errors_when_tool_calls_without_tools_port() {
 #[test]
 fn run_returns_preempted_after_llm_before_tool_execution() {
     let control = MockControl::new();
-    let http = Arc::new(ArmInterruptAfterResponseHttp::new(
-        control.interrupt_flag().clone(),
-        vec![TOOL_CALL_BODY],
-    ));
+    let http =
+        ArmInterruptAfterResponseHttp::new(control.interrupt_flag().clone(), vec![TOOL_CALL_BODY]);
     http.arm();
-    let llm = test_llm_with_http(http);
+    let mut llm = test_llm_with_http(http);
     let messages = json!([]);
 
-    let result = run_step(&llm, &control, None, TEST_ITERATION_ID, &messages, "system");
+    let result = run_step(
+        &mut llm,
+        &control,
+        None,
+        TEST_ITERATION_ID,
+        &messages,
+        "system",
+    );
 
     let Ok(IterationOutcome::Preempted(outcome)) = result else {
         panic!("expected Preempted, got {result:?}");
@@ -435,12 +461,19 @@ fn run_returns_preempted_after_llm_before_tool_execution() {
 #[test]
 fn run_returns_preempted_when_http_aborted() {
     let control = MockControl::new();
-    let llm = test_llm_with_http(Arc::new(AbortDuringHttp {
+    let mut llm = test_llm_with_http(AbortDuringHttp {
         interrupt: control.interrupt_flag().clone(),
-    }));
+    });
     let messages = json!([]);
 
-    let result = run_step(&llm, &control, None, TEST_ITERATION_ID, &messages, "system");
+    let result = run_step(
+        &mut llm,
+        &control,
+        None,
+        TEST_ITERATION_ID,
+        &messages,
+        "system",
+    );
 
     let Ok(IterationOutcome::Preempted(outcome)) = result else {
         panic!("expected Preempted, got {result:?}");
@@ -451,24 +484,31 @@ fn run_returns_preempted_when_http_aborted() {
 
 #[test]
 fn run_propagates_chat_errors_without_interrupt() {
-    let llm = test_llm_with_http(Arc::new(FailingHttp));
+    let mut llm = test_llm_with_http(FailingHttp);
     let control = MockControl::new();
     let messages = json!([]);
 
-    let result = run_step(&llm, &control, None, TEST_ITERATION_ID, &messages, "system");
+    let result = run_step(
+        &mut llm,
+        &control,
+        None,
+        TEST_ITERATION_ID,
+        &messages,
+        "system",
+    );
 
     assert!(matches!(result, Err(IterationLoopError::Chat(_))));
 }
 
 #[test]
 fn run_records_soft_failing_tool_with_null_name() {
-    let llm = test_llm(vec![TOOL_CALL_EMPTY_NAME_BODY]);
+    let mut llm = test_llm(vec![TOOL_CALL_EMPTY_NAME_BODY]);
     let control = MockControl::new();
     let soft_fail = tool_set(SoftFailTool);
     let messages = json!([]);
 
     let result = run_step(
-        &llm,
+        &mut llm,
         &control,
         Some(&soft_fail),
         TEST_ITERATION_ID,
@@ -495,13 +535,13 @@ fn run_records_soft_failing_tool_with_null_name() {
 
 #[test]
 fn run_recovers_from_invoke_errors_as_tool_message() {
-    let llm = test_llm(vec![TOOL_CALL_BODY]);
+    let mut llm = test_llm(vec![TOOL_CALL_BODY]);
     let control = MockControl::new();
     let failing = tool_set(FailingTool);
     let messages = json!([]);
 
     let result = run_step(
-        &llm,
+        &mut llm,
         &control,
         Some(&failing),
         TEST_ITERATION_ID,
@@ -534,8 +574,8 @@ fn run_recovers_from_invoke_errors_as_tool_message() {
 fn live_plain_text_when_api_key_configured() {
     let api_key = require_local_api_key();
 
-    let http = Arc::new(RealHttp::new());
-    let llm = ClawApi::init(
+    let http = RealHttp::new();
+    let mut llm = ClawApi::init(
         ClawApiConfig {
             api_key: Some(api_key),
             backend_type: "openai_compatible".into(),
@@ -553,7 +593,7 @@ fn live_plain_text_when_api_key_configured() {
     let messages = json!([{"role":"user","content":"Reply with exactly: pong"}]);
 
     let result = run_step(
-        &llm,
+        &mut llm,
         &control,
         None,
         TEST_ITERATION_ID,

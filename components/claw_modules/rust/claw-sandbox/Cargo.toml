@@ -18,6 +18,8 @@ thiserror = "2"
 [dev-dependencies]
 # Hermetic in-memory ClawFs double for sandbox tests (host-only).
 claw-interface = { path = "../claw-interface", features = ["memfs"] }
+# Ergonomic error handling for the `sandbox_demo` example (host-only).
+anyhow = "1"
 
 [lints.rust]
 unsafe_code = "forbid"

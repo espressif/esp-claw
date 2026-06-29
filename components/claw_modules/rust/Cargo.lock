@@ -88,6 +88,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.103"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
+
+[[package]]
 name = "async-task"
 version = "4.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -179,6 +185,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
+name = "claw-agent"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "claw-api",
+ "claw-capability",
+ "claw-core",
+ "claw-interface",
+ "claw-memory",
+ "claw-utils",
+ "dotenvy",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "claw-agent-cli"
 version = "0.1.0"
 dependencies = [
@@ -187,6 +209,7 @@ dependencies = [
  "claw-interface",
  "claw-log",
  "claw-memory",
+ "claw-utils",
  "dotenvy",
  "owo-colors",
  "serde_json",
@@ -196,6 +219,7 @@ dependencies = [
 name = "claw-api"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "base64",
  "claw-interface",
  "serde",
@@ -215,10 +239,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "claw-cabi"
+version = "0.1.0"
+dependencies = [
+ "claw-capability",
+ "claw-core",
+ "claw-tool",
+]
+
+[[package]]
 name = "claw-capability"
 version = "0.1.0"
 dependencies = [
- "serde_json",
+ "claw-tool",
  "thiserror",
 ]
 
@@ -233,6 +266,7 @@ dependencies = [
 name = "claw-core"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "claw-api",
  "claw-capability",
  "claw-context",
@@ -255,6 +289,7 @@ dependencies = [
 name = "claw-interface"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "embedded-executor",
  "lock_api",
  "reqwest",
@@ -267,6 +302,7 @@ dependencies = [
 name = "claw-log"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "claw-sys",
  "env_logger",
  "log",
@@ -278,7 +314,9 @@ dependencies = [
 name = "claw-memory"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "claw-interface",
+ "claw-utils",
  "log",
  "serde",
  "serde_json",
@@ -296,6 +334,7 @@ dependencies = [
 name = "claw-sandbox"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "claw-interface",
  "thiserror",
 ]
@@ -304,6 +343,7 @@ dependencies = [
 name = "claw-skill"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "claw-interface",
  "serde",
  "serde_json",
@@ -333,6 +373,7 @@ dependencies = [
 name = "claw-tool"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "claw-permission",
  "jsonschema",
  "serde_json",
@@ -343,6 +384,7 @@ dependencies = [
 name = "claw-utils"
 version = "0.1.0"
 dependencies = [
+ "claw-interface",
  "thiserror",
 ]
 

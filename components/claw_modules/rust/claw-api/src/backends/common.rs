@@ -177,16 +177,17 @@ pub fn insert_tools_into_body(
 }
 
 /// Prompt-fallback structured chat: inject schema into system prompt, then `chat`.
-pub fn chat_json_prompt_fallback(
-    backend: &dyn LlmBackend,
-    http: &dyn ClawHttp,
+pub fn chat_json_prompt_fallback<H: ClawHttp>(
+    backend: &dyn LlmBackend<H>,
+    http: &mut H,
     profile: &ModelProfile,
     request: &ChatJsonRequest<'_>,
     schema: &Value,
     abort: &AtomicBool,
 ) -> Result<LlmResponse, ChatError> {
     let system = augment_system_with_schema(request.system_prompt, schema);
-    let mut chat_req = ChatRequest::new(&system, request.messages).with_reminders(request.reminders);
+    let mut chat_req =
+        ChatRequest::new(&system, request.messages).with_reminders(request.reminders);
     if let Some(tools_json) = request.tools_json.filter(|s| !s.is_empty()) {
         chat_req = chat_req.with_tools(tools_json);
     }

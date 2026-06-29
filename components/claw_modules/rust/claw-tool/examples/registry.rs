@@ -44,7 +44,7 @@ impl ToolHandler for DemoTool {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> anyhow::Result<()> {
     // The registry owns every tool the system knows about.
     let mut registry = ToolRegistry::new();
     registry.register(Tool::new(DemoTool::new("read_file")));

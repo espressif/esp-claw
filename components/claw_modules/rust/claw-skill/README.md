@@ -64,7 +64,7 @@ use std::sync::Arc;
 use claw_interface::ClawFs;
 use claw_skill::{FsSkillRegistry, SkillGroup, SkillId, SkillRegistry, SkillSet};
 
-fn build(fs: Arc<dyn ClawFs>) -> Result<(), Box<dyn std::error::Error>> {
+fn build(fs: Arc<dyn ClawFs>) -> anyhow::Result<()> {
     // Scan one or more skills roots into a catalog (only front-matter is read).
     let registry: Arc<dyn SkillRegistry> = Arc::new(FsSkillRegistry::scan(fs, "skills")?);
 

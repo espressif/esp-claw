@@ -20,7 +20,11 @@ pub use channels::{
     RecordingTransport, ReplyRoute,
 };
 pub use claw_utils::define_prefixed_id;
-pub use memory::LlmCompactor;
+pub use memory::{
+    agent_store, global_store, ExtractError, ExtractedItem, Extractor, History, LlmCompactor,
+    LlmExtractor, LongTermMemoryAdapter, Memory, MemoryTier, NoopExtractor,
+    RuleBasedTierClassifier, TierClassifier, Transcript, AGENT_ID_PREFIX, GLOBAL_ID_PREFIX,
+};
 pub use orchestrator::{
     ChannelsEgressOnly, ChannelsUnset, FactorySet, FactoryUnset, Orchestrator, OrchestratorBuilder,
 };
@@ -37,9 +41,9 @@ pub use claw_skill::{
 // The tool framework moved to the standalone `claw-tool` crate; re-exported here
 // so `claw_core::Tool*` stays the stable surface for existing callers.
 pub use claw_tool::{
-    AllowedTools, Tool, ToolError, ToolGate, ToolGroup, ToolHandler, ToolInvocation, ToolInvokeError,
-    ToolOutput, ToolRetryCount, tool_invoke_err, tool_invoke_err_with_retries,
-    ToolSet, ToolSetError, DEFAULT_TOOL_GROUP,
+    tool_invoke_err, tool_invoke_err_with_retries, AllowedTools, Tool, ToolError, ToolGate,
+    ToolGroup, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput, ToolRetryCount, ToolSet,
+    ToolSetError, DEFAULT_TOOL_GROUP,
 };
 // The permission layer authoring surface — re-exported so callers can build the
 // policies that `BaseAgentBuilder::with_permission_policy` accepts without

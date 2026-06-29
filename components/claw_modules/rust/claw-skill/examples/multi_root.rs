@@ -7,8 +7,6 @@
 //! the same id in two roots is a hard [`SkillError::DuplicateId`], never a
 //! silent override.
 
-use std::sync::Arc;
-
 use claw_interface::{ClawFs, MemFs};
 use claw_skill::{FsSkillRegistry, SkillError, SkillId, SkillRegistry};
 
@@ -16,7 +14,7 @@ fn skill_md(description: &str) -> Vec<u8> {
     format!("---\n{{\"description\":\"{description}\"}}\n---\n# body\n").into_bytes()
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> anyhow::Result<()> {
     // Two distinct roots, each contributing different skills.
     let fs = MemFs::new();
     fs.write_atomic("system/time/SKILL.md", &skill_md("Built-in time helper."))?;
@@ -25,7 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &skill_md("User-installed notes skill."),
     )?;
 
-    let registry = FsSkillRegistry::scan_roots(Arc::new(fs), ["system", "data"])?;
+    let registry = FsSkillRegistry::scan_roots(fs, ["system", "data"])?;
     println!("== merged catalog from system + data ==");
     for metadata in registry.catalog().entries() {
         println!("{:<8} {}", metadata.id().as_str(), metadata.description());
@@ -37,7 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     clashing.write_atomic("data/time/SKILL.md", &skill_md("installed"))?;
 
     println!("\n== scanning roots with a clashing id ==");
-    match FsSkillRegistry::scan_roots(Arc::new(clashing), ["system", "data"]) {
+    match FsSkillRegistry::scan_roots(clashing, ["system", "data"]) {
         Err(SkillError::DuplicateId(id)) => {
             println!("rejected duplicate id: {id}");
             assert_eq!(id, SkillId::new("time"));

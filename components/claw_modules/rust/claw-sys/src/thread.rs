@@ -22,11 +22,9 @@
 //! costs nothing.
 
 #[cfg(target_os = "espidf")]
-use claw_interface::{ClawThread, CoreAffinity, Priority};
+use claw_interface::{ClawThread, CoreAffinity, Priority, WorkerHandle};
 #[cfg(target_os = "espidf")]
 use std::io;
-#[cfg(target_os = "espidf")]
-use std::thread::JoinHandle;
 
 /// Device implementation of [`ClawThread`] over `esp_pthread`, giving worker
 /// threads a PSRAM-backed stack (when PSRAM is available). Zero-sized.
@@ -43,7 +41,7 @@ impl ClawThread for EspIdfThread {
         priority: Priority,
         affinity: CoreAffinity,
         f: F,
-    ) -> io::Result<JoinHandle<()>>
+    ) -> io::Result<WorkerHandle>
     where
         F: FnOnce() + Send + 'static,
     {
@@ -54,6 +52,7 @@ impl ClawThread for EspIdfThread {
             .name(name.to_string())
             .stack_size(stack_size)
             .spawn(f)
+            .map(WorkerHandle::new)
     }
 }
 

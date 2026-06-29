@@ -54,17 +54,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use claw_api::{ClawApi, RetryPolicy};
+use claw_interface::http::ClawHttp;
 use claw_interface::ClawFs;
-use claw_memory::{ConversationMemory, GroupGuard};
-use serde_json::{json, Value};
+use claw_memory::ConversationMemory;
+use serde_json::Value;
 
 use crate::agent::tools::{internal_tool_group, skill_tool_group, ControlSignal, ControlSink};
-use crate::memory::{AgentEvent, Memory};
 use crate::iteration_loop::{
     ChatMessages, CompletedKind, CompletedOutcome, InterruptionControl, IterationId, IterationLoop,
-    IterationLoopError, IterationOutcome, IterationResult, IterationStep, PlainTextOutcome,
-    PreemptedOutcome, SystemPrompt, ToolRun,
+    IterationLoopError, IterationOutcome, IterationResult, IterationStep, PreemptedOutcome,
+    SystemPrompt, ToolRun,
 };
+use crate::memory::{ConversationHistory, Memory, Transcript};
 use claw_context::{Block, BlockKind, Context};
 use claw_permission::{Grant, PermissionPolicy};
 use claw_skill::SkillSet;
@@ -377,12 +378,20 @@ impl InterruptionControl for AgentInterruption {
 ///     }
 /// }
 /// ```
-pub struct BaseAgent<F: ClawFs + 'static> {
-    llm: ClawApi,
+pub struct BaseAgent<H: ClawHttp> {
+    llm: ClawApi<H>,
     /// Retry policy applied to every per-iteration LLM call.
     retry_policy: RetryPolicy,
     interruption: AgentInterruption,
-    memory: ConversationMemory<F>,
+    /// The conversation transcript's sole owner. The agent **writes** it directly
+    /// at each boundary (a user message, a committed answer/tool patch, an
+    /// end/cancel marker) and **reads** it to assemble each request
+    /// ([`run_iteration`](Self::run_iteration)); it also lends the read view
+    /// ([`Transcript::as_history`]) to each [`Memory`] so they can pull from it.
+    /// Held behind the [`Transcript`] trait object — the agent never sees the
+    /// concrete conversation-memory type, which is why it is not generic over a
+    /// filesystem.
+    transcript: Arc<dyn Transcript>,
     /// The agent's tools, including soft-hide phase gating (which tools may run
     /// now via [`ToolSet::is_allowed`]). The full schema is always sent
     /// regardless, so the cached prompt prefix stays stable. The agent only reads
@@ -402,10 +411,6 @@ pub struct BaseAgent<F: ClawFs + 'static> {
     /// [`Context::with`]; [`Context::request`] renders lazily. Change detection,
     /// wire ordering, and reminder rendering all live in the context.
     context: Context,
-    /// Open group guard from task start until the first response, so the user turn
-    /// and the assistant reply commit as one group (compaction never orphans a
-    /// reply with no user turn).
-    open_turn: Option<GroupGuard<F>>,
     /// The permission gate consulted per tool call (`None` = no permission layer:
     /// every call that passes soft-hide runs). A `claw-tool` type owning the
     /// grant store of human decisions; mutated when an
@@ -433,15 +438,25 @@ pub struct BaseAgent<F: ClawFs + 'static> {
     outcome: Option<TickOutcome>,
     /// Sink the built-in tools push [`ControlSignal`]s onto; drained each tick.
     control: ControlSink,
+    /// Registered memories. Each pulls the transcript and contributes context
+    /// blocks before every iteration, and may have added its tools to
+    /// [`tools`](Self::tools) at registration. The conversation transcript is
+    /// **not** here (it is [`transcript`](Self::transcript), the thing these
+    /// memories read *from*); these are pure readers (e.g. long-term memory)
+    /// added via [`register_memory`](Self::register_memory). Driven only from this
+    /// tick thread.
+    memories: Vec<Arc<dyn Memory>>,
     inbox: VecDeque<Inbound>,
 }
 
-impl<F: ClawFs + 'static> BaseAgent<F> {
+impl<H: ClawHttp> BaseAgent<H> {
     /// Start building an agent over a caller-owned [`ConversationMemory`].
     ///
-    /// The caller decides how the memory is built and keyed (via
-    /// [`ConversationMemory::new`]) and may keep a clone to inspect the
-    /// conversation without going through `BaseAgent`:
+    /// The conversation memory is the only place the filesystem type `F` enters,
+    /// and it stays on the *builder*: the built [`BaseAgent`] erases it behind the
+    /// [`History`] / [`Memory`] trait objects. The caller decides how the memory
+    /// is built and keyed (via [`ConversationMemory::new`]) and may keep a clone
+    /// to inspect the conversation without going through `BaseAgent`:
     ///
     /// ```ignore
     /// let memory = ConversationMemory::new(agent_id, config, deps);
@@ -449,7 +464,10 @@ impl<F: ClawFs + 'static> BaseAgent<F> {
     /// let agent = BaseAgent::builder(llm, memory).build()?;
     /// // later: let messages = view.messages();
     /// ```
-    pub fn builder(llm: ClawApi, memory: ConversationMemory<F>) -> BaseAgentBuilder<F> {
+    pub fn builder<F: ClawFs + 'static>(
+        llm: ClawApi<H>,
+        memory: ConversationMemory<F>,
+    ) -> BaseAgentBuilder<F, H> {
         BaseAgentBuilder {
             llm,
             memory,
@@ -614,6 +632,54 @@ impl<F: ClawFs + 'static> BaseAgent<F> {
         }
     }
 
+    // -- Memory registration ------------------------------------------------
+
+    /// Register a pluggable [`Memory`]. From now on it pulls this agent's
+    /// transcript and contributes context blocks before every iteration; if it
+    /// provides any tools, they are merged into the agent's tool set now.
+    ///
+    /// Call after [`build`](BaseAgentBuilder::build) and before driving the agent.
+    /// Memories render in registration order, after the agent's own context
+    /// blocks.
+    ///
+    /// # Errors
+    ///
+    /// - [`BaseAgentBuildError::Tools`] if a memory tool name clashes with an
+    ///   existing tool.
+    /// - [`BaseAgentBuildError::ToolsUnsupported`] if the memory provides tools
+    ///   but the configured LLM cannot call tools.
+    pub fn register_memory(&mut self, memory: Arc<dyn Memory>) -> Result<(), BaseAgentBuildError> {
+        if let Some(group) = memory.tools() {
+            let Some(tools) = self.tools.as_mut() else {
+                return Err(BaseAgentBuildError::ToolsUnsupported);
+            };
+            tools.extend_with_group(group)?;
+            // The catalog grew, so re-declare the static tool-policy prose; the
+            // context re-renders the cached prefix on the next request.
+            let prose = tools.tool_context().unwrap_or_default().to_string();
+            self.context.with(Block::new(BlockKind::ToolPolicy, prose));
+        }
+        self.memories.push(memory);
+        Ok(())
+    }
+
+    /// Pull every registered memory's context blocks into this agent's context.
+    ///
+    /// Pull, not push: a memory shared across agents (and written by background
+    /// workers) reads the transcript and feeds blocks into *this* agent's
+    /// [`Context`] only here, on the tick thread that owns it.
+    fn render_memory_context(&mut self) {
+        // Disjoint field borrows: memories + the lent transcript read view (both
+        // shared) feed blocks into context (exclusive).
+        let context = &mut self.context;
+        let history = self.transcript.as_history();
+        for memory in &self.memories {
+            memory.render_context(history, &mut |block| {
+                context.with(block);
+            });
+        }
+    }
+
     // -- The tick -----------------------------------------------------------
 
     /// Process queued commands, advance at most one iteration, and report what
@@ -677,13 +743,15 @@ impl<F: ClawFs + 'static> BaseAgent<F> {
     /// stitching happens anywhere else; reminders are never written to memory, so
     /// the cached system/history prefix is untouched.
     fn run_iteration(&mut self, iteration_id: IterationId) -> IterationResult {
-        let history = self.memory.messages();
+        // Pull each memory's blocks into the private context before assembling.
+        self.render_memory_context();
+        let history = self.transcript.messages();
         // Take the disjoint field borrows first, then borrow `context` mutably for
         // the (lazily rebuilt) request. `request` takes `&mut self.context`, so the
         // permission gate must be derived from `self.gate` directly here rather
         // than through a whole-`&self` helper.
         let iteration_loop = IterationLoop {
-            llm: &self.llm,
+            llm: &mut self.llm,
             interruption: &self.interruption,
             retry: self.retry_policy,
         };
@@ -733,19 +801,22 @@ impl<F: ClawFs + 'static> BaseAgent<F> {
     fn apply_inbound(&mut self, inbound: Inbound) {
         match inbound {
             Inbound::Command(AgentCommand::AppendMessage(text)) => {
-                if self.lifecycle == AgentState::Idle {
-                    // A fresh task: reset the iteration counter and open a new turn.
+                let starts_task = self.lifecycle == AgentState::Idle;
+                if starts_task {
+                    // A fresh task: reset the iteration counter.
                     self.next_iteration = IterationId(0);
-                    self.open_turn = None;
                     self.lifecycle = AgentState::Running;
                 }
-                self.append_user_message(text);
+                // Write the user turn directly; `starts_task` lets the transcript
+                // flush any turn a prior task left open before opening a new one.
+                self.transcript.append_user(&text, starts_task);
             }
             Inbound::Command(AgentCommand::Cancel { reason }) => {
                 // Cancel is *disruptive* (unlike pause/resume/append/approve, which
                 // are normal flow): record why the task was abandoned so the next
-                // task does not inherit an unexplained, half-finished exchange.
-                self.commit_cancellation(&reason);
+                // task does not inherit an unexplained, half-finished exchange. The
+                // transcript writes the marker (and flushes any open turn).
+                self.transcript.commit_cancellation(cancel_marker(&reason));
                 self.pending_approval = None;
                 self.pending_grant_signatures.clear();
                 self.lifecycle = AgentState::Idle;
@@ -758,7 +829,9 @@ impl<F: ClawFs + 'static> BaseAgent<F> {
                 self.lifecycle = AgentState::Running;
             }
             Inbound::Command(AgentCommand::ApprovalResult { id, decision }) => {
-                self.commit_approval_decision(id, &decision);
+                // The verdict re-enters the transcript as a synthetic user turn.
+                let marker = approval_marker(id, &decision);
+                self.transcript.append_user(&marker, false);
                 // Record the decision against the asked-about actions so the
                 // retried tool calls resolve without asking again.
                 self.record_grants(&decision);
@@ -766,11 +839,7 @@ impl<F: ClawFs + 'static> BaseAgent<F> {
                 self.lifecycle = AgentState::Running;
             }
             Inbound::Control(ControlSignal::EndConversation { final_message }) => {
-                let turn = self.open_turn.take().unwrap_or_else(|| self.memory.group());
-                turn.append_patch(
-                    &json!([{ "role": "assistant", "content": final_message.clone() }]),
-                );
-                drop(turn);
+                self.transcript.commit_ended(&final_message);
                 self.lifecycle = AgentState::Idle;
                 self.outcome = Some(TickOutcome::Ended { final_message });
             }
@@ -821,7 +890,9 @@ impl<F: ClawFs + 'static> BaseAgent<F> {
         match outcome {
             Ok(IterationOutcome::Completed(CompletedOutcome { kind, .. })) => match kind {
                 CompletedKind::PlainText(answer) => {
-                    self.commit_assistant(&answer);
+                    // Commit the answer directly (closing the turn).
+                    self.transcript
+                        .commit_assistant(&answer.text, answer.raw_message_json.as_deref());
                     // Non-terminal: hand back to the caller, go idle for next input.
                     self.lifecycle = AgentState::Idle;
                     self.outcome = Some(TickOutcome::Yielded { text: answer.text });
@@ -832,8 +903,8 @@ impl<F: ClawFs + 'static> BaseAgent<F> {
                     // does not surface it as an outcome. The patch is well-formed
                     // even for gating-blocked / permission-refused calls (each got
                     // a matched tool error), so committing never leaves a dangling
-                    // call.
-                    self.commit_patch(&tools.appended.0);
+                    // call. Write the patch directly.
+                    self.transcript.commit_patch(&tools.appended.0);
                     self.apply_tool_block_policy(&tools.runs);
                     // A permission `Ask` pauses the agent for a human decision
                     // (unless the round already failed the task via the block
@@ -925,40 +996,12 @@ impl<F: ClawFs + 'static> BaseAgent<F> {
 
     // -- Memory helpers -----------------------------------------------------
 
-    /// Append a user message, reusing the open turn group or opening a new one.
-    fn append_user_message(&mut self, text: impl Into<String>) {
-        let text = text.into();
-        match &self.open_turn {
-            Some(turn) => turn.append_user(text),
-            None => {
-                let turn = self.memory.group();
-                turn.append_user(text);
-                self.open_turn = Some(turn);
-            }
-        }
-    }
-
-    /// Commit the model's plain-text answer, closing the open turn group.
-    fn commit_assistant(&mut self, answer: &PlainTextOutcome) {
-        let turn = self.open_turn.take().unwrap_or_else(|| self.memory.group());
-        match answer.raw_message_json.as_deref() {
-            Some(raw) => turn.append_assistant(raw),
-            None => turn.append_patch(&json!([{ "role": "assistant", "content": answer.text }])),
-        }
-    }
-
-    /// Commit a materialized assistant+tool patch, closing the open turn group.
-    fn commit_patch(&mut self, patch: &Value) {
-        let turn = self.open_turn.take().unwrap_or_else(|| self.memory.group());
-        turn.append_patch(patch);
-    }
-
     /// Merge a preemption's partial patch only when it is well-formed.
     ///
     /// A mid-tool-round preempt can leave an assistant message whose `tool_calls`
     /// have no matching tool results — committing that would make the next LLM
     /// call ill-formed. So such a patch is dropped (the half-done work simply did
-    /// not happen); a clean patch is merged.
+    /// not happen); a clean patch is emitted for the conversation memory to write.
     fn merge_preempt_patch(&mut self, outcome: PreemptedOutcome) {
         let Some(produced) = outcome.produced else {
             return;
@@ -967,37 +1010,7 @@ impl<F: ClawFs + 'static> BaseAgent<F> {
             tracing::info!("dropping preempted partial patch: unmatched tool_calls");
             return;
         }
-        let turn = self.open_turn.take().unwrap_or_else(|| self.memory.group());
-        turn.append_patch(&produced.0);
-    }
-
-    /// Record a disruption marker for a cancelled task and commit it — together
-    /// with any abandoned (still-open) user turn — as one group.
-    ///
-    /// Cancel is the one command that ends a task abruptly without the agent
-    /// producing a closing message, so it leaves an explicit trace keyed on the
-    /// [`CancelReason`]. The buffered turn is *not* lost: dropping the open guard
-    /// commits it alongside the marker.
-    fn commit_cancellation(&mut self, reason: &CancelReason) {
-        let note = match reason {
-            CancelReason::UserRequested => "[conversation interrupted: cancelled by the user]",
-            CancelReason::Superseded => "[conversation interrupted: superseded by a new task]",
-            CancelReason::Shutdown => "[conversation interrupted: the agent is shutting down]",
-        };
-        self.append_user_message(note);
-        // Drop the guard to commit the abandoned turn plus the marker as one group.
-        self.open_turn = None;
-    }
-
-    /// Record a human approval decision as a message for the next iteration.
-    fn commit_approval_decision(&mut self, id: ApprovalId, decision: &ApprovalDecision) {
-        let text = match decision {
-            ApprovalDecision::Approved => format!("[approval {id}] approved by the human."),
-            ApprovalDecision::Rejected(reason) => {
-                format!("[approval {id}] rejected by the human: {reason}")
-            }
-        };
-        self.append_user_message(text);
+        self.transcript.commit_patch(&produced.0);
     }
 
     fn allocate_approval_id(&mut self) -> ApprovalId {
@@ -1005,7 +1018,28 @@ impl<F: ClawFs + 'static> BaseAgent<F> {
         self.next_approval = self.next_approval.saturating_add(1);
         id
     }
+}
 
+/// The interruption marker recorded for a cancelled task, keyed on the
+/// [`CancelReason`]. Written via [`Transcript::commit_cancellation`] as the
+/// abandoned turn's closing note.
+fn cancel_marker(reason: &CancelReason) -> &'static str {
+    match reason {
+        CancelReason::UserRequested => "[conversation interrupted: cancelled by the user]",
+        CancelReason::Superseded => "[conversation interrupted: superseded by a new task]",
+        CancelReason::Shutdown => "[conversation interrupted: the agent is shutting down]",
+    }
+}
+
+/// The synthetic user-turn text recording a human approval decision, so the
+/// retried iteration sees the verdict. Written via [`Transcript::append_user`].
+fn approval_marker(id: ApprovalId, decision: &ApprovalDecision) -> String {
+    match decision {
+        ApprovalDecision::Approved => format!("[approval {id}] approved by the human."),
+        ApprovalDecision::Rejected(reason) => {
+            format!("[approval {id}] rejected by the human: {reason}")
+        }
+    }
 }
 
 /// True when `patch` contains an assistant `tool_calls` id with no matching
@@ -1041,8 +1075,8 @@ fn has_dangling_tool_calls(patch: &Value) -> bool {
 /// skills are set here (optional, any order), and [`build`](Self::build) produces
 /// a finished agent that exposes only the runtime command/tick API.
 #[must_use = "a BaseAgentBuilder does nothing until `.build()` is called"]
-pub struct BaseAgentBuilder<F: ClawFs + 'static> {
-    llm: ClawApi,
+pub struct BaseAgentBuilder<F: ClawFs + 'static, H: ClawHttp> {
+    llm: ClawApi<H>,
     memory: ConversationMemory<F>,
     tools: Option<ToolSet>,
     skills: Option<SkillSet>,
@@ -1055,7 +1089,7 @@ pub struct BaseAgentBuilder<F: ClawFs + 'static> {
     block_retries: u32,
 }
 
-impl<F: ClawFs + 'static> BaseAgentBuilder<F> {
+impl<F: ClawFs + 'static, H: ClawHttp> BaseAgentBuilder<F, H> {
     /// Set the tools available to the agent across all tasks.
     ///
     /// Takes a pre-built [`ToolSet`]; the agent's built-in control tool
@@ -1159,7 +1193,7 @@ impl<F: ClawFs + 'static> BaseAgentBuilder<F> {
     ///   caller tool.
     /// - [`BaseAgentBuildError::ToolsUnsupported`] if tools were provided but the
     ///   configured LLM cannot call tools.
-    pub fn build(self) -> Result<BaseAgent<F>, BaseAgentBuildError> {
+    pub fn build(self) -> Result<BaseAgent<H>, BaseAgentBuildError> {
         let control: ControlSink = Arc::new(Mutex::new(VecDeque::new()));
         let supports_tools = self.llm.profile().supports_tools;
 
@@ -1169,7 +1203,8 @@ impl<F: ClawFs + 'static> BaseAgentBuilder<F> {
             // Skill management is model-callable only when a skill set is
             // configured: the tools read its registry to list/validate ids.
             if let Some(skills) = &self.skills {
-                tools.extend_with_group(skill_tool_group(Arc::clone(&control), skills.registry()))?;
+                tools
+                    .extend_with_group(skill_tool_group(Arc::clone(&control), skills.registry()))?;
             }
             Some(tools)
         } else {
@@ -1201,18 +1236,23 @@ impl<F: ClawFs + 'static> BaseAgentBuilder<F> {
             context.reminder(tools.extra_tool_context());
         }
 
+        // The conversation transcript's owner, erased behind the `Transcript`
+        // trait object: the agent writes it directly and lends its `History` read
+        // view to memories. This is the only place `F` is erased — the built
+        // agent is filesystem-agnostic.
+        let transcript: Arc<dyn Transcript> = Arc::new(ConversationHistory::new(self.memory));
+
         Ok(BaseAgent {
             llm: self.llm,
             retry_policy: self.retry_policy,
             interruption: AgentInterruption {
                 flag: Arc::new(AtomicBool::new(false)),
             },
-            memory: self.memory,
+            transcript,
             tools,
             block_policy: BlockPolicy::new(self.block_retries),
             skills: self.skills,
             context,
-            open_turn: None,
             gate,
             pending_grant_signatures: Vec::new(),
             next_iteration: IterationId(0),
@@ -1222,6 +1262,7 @@ impl<F: ClawFs + 'static> BaseAgentBuilder<F> {
             projected_lifecycle: AgentState::Idle,
             outcome: None,
             control,
+            memories: Vec::new(),
             inbox: VecDeque::new(),
         })
     }
@@ -1455,10 +1496,8 @@ mod gating_tests {
 
     use claw_api::{ClawApi, ClawApiConfig};
     use claw_interface::{CapturingHttp, ClawHttp, MemFs, ScriptedHttp, StdThread};
-    use claw_memory::{
-        ConversationConfig, ConversationDeps, ConversationMemory, MemoryTaskPool, NoopCompactor,
-        PoolConfig,
-    };
+    use claw_memory::{ConversationConfig, ConversationDeps, ConversationMemory, NoopCompactor};
+    use claw_utils::{PoolConfig, SharedTaskPool};
     use serde_json::{json, Value};
 
     use crate::agent::{AgentId, AgentRunError, BaseAgent, BaseAgentBuilder, TickOutcome};
@@ -1514,7 +1553,7 @@ mod gating_tests {
 
     // Builders / drivers --------------------------------------------------------
 
-    fn build_llm(http: Arc<dyn ClawHttp>) -> ClawApi {
+    fn build_llm<H: ClawHttp>(http: H) -> ClawApi<H> {
         ClawApi::init(
             ClawApiConfig {
                 api_key: Some("sk-test".into()),
@@ -1529,19 +1568,18 @@ mod gating_tests {
         .expect("init llm")
     }
 
-    fn scripted_llm(bodies: Vec<String>) -> ClawApi {
-        build_llm(Arc::new(ScriptedHttp::new(bodies)))
+    fn scripted_llm(bodies: Vec<String>) -> ClawApi<ScriptedHttp> {
+        build_llm(ScriptedHttp::new(bodies))
     }
 
-    fn test_memory(agent_id: AgentId) -> ConversationMemory<Arc<MemFs>> {
-        let pool = Arc::new(
-            MemoryTaskPool::new(PoolConfig::default(), StdThread::default()).expect("memory pool"),
-        );
+    fn test_memory(agent_id: AgentId) -> ConversationMemory<MemFs> {
+        let pool =
+            Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread).expect("memory pool"));
         ConversationMemory::new(
             agent_id.0,
             ConversationConfig::new(format!("/mem/agent-{}", agent_id.0)),
             ConversationDeps {
-                fs: Arc::new(MemFs::default()),
+                fs: MemFs::default(),
                 pool,
                 compactor: Arc::new(NoopCompactor),
             },
@@ -1549,10 +1587,10 @@ mod gating_tests {
     }
 
     /// A builder plus a cloned read-only view of the same memory.
-    fn builder_with_view(
-        llm: ClawApi,
+    fn builder_with_view<H: ClawHttp>(
+        llm: ClawApi<H>,
         agent_id: AgentId,
-    ) -> (BaseAgentBuilder<Arc<MemFs>>, ConversationMemory<Arc<MemFs>>) {
+    ) -> (BaseAgentBuilder<MemFs, H>, ConversationMemory<MemFs>) {
         let memory = test_memory(agent_id);
         let view = memory.clone();
         (BaseAgent::builder(llm, memory), view)
@@ -1585,7 +1623,7 @@ mod gating_tests {
         )
     }
 
-    fn run_to_completion(agent: &mut BaseAgent<Arc<MemFs>>) -> String {
+    fn run_to_completion<H: ClawHttp>(agent: &mut BaseAgent<H>) -> String {
         loop {
             match agent.tick() {
                 TickOutcome::Working => continue,
@@ -1597,7 +1635,7 @@ mod gating_tests {
         }
     }
 
-    fn transcript_contents(view: &ConversationMemory<Arc<MemFs>>) -> Vec<String> {
+    fn transcript_contents(view: &ConversationMemory<MemFs>) -> Vec<String> {
         view.messages()
             .as_array()
             .map(|items| {
@@ -1716,7 +1754,8 @@ mod gating_tests {
             AgentId(1),
         );
         // echo is permitted (the clean round); writer is not.
-        let tools = caller_tools().with_active_tools(AllowedTools::new(["echo", "end_conversation"]));
+        let tools =
+            caller_tools().with_active_tools(AllowedTools::new(["echo", "end_conversation"]));
         let mut agent = builder.with_tools(tools).build().expect("build");
 
         agent.run("go");
@@ -1809,7 +1848,7 @@ mod gating_tests {
             body_tool_call("t1", "writer", "{}"),
             body_end_conversation("done"),
         ]);
-        let llm = build_llm(Arc::clone(&http) as Arc<dyn ClawHttp>);
+        let llm = build_llm(Arc::clone(&http));
         let (builder, view) = builder_with_view(llm, AgentId(1));
 
         // Gate the set (which also arms the phase note), then immediately ungate
@@ -1841,15 +1880,97 @@ mod gating_tests {
         }
     }
 
+    /// A registered memory pulls the transcript on render and injects a durable
+    /// context block that reaches the next LLM request.
+    #[test]
+    fn registered_memory_pulls_transcript_and_injects_context() {
+        use std::sync::Mutex;
+
+        use crate::memory::{History, Memory};
+        use claw_context::{Block, BlockKind};
+
+        /// On each render, records how many transcript messages it saw and the
+        /// transcript version, then injects one global-memory block.
+        struct RecordingMemory {
+            seen_versions: Arc<Mutex<Vec<u64>>>,
+            saw_user: Arc<Mutex<bool>>,
+        }
+
+        impl Memory for RecordingMemory {
+            fn id(&self) -> &str {
+                "recording"
+            }
+            fn render_context(&self, history: &dyn History, emit: &mut dyn FnMut(Block<'_>)) {
+                self.seen_versions
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .push(history.version());
+                let saw_user = history.messages().as_array().is_some_and(|messages| {
+                    messages.iter().any(|message| {
+                        message.get("content").and_then(Value::as_str) == Some("hello")
+                    })
+                });
+                if saw_user {
+                    *self.saw_user.lock().unwrap_or_else(|p| p.into_inner()) = true;
+                }
+                emit(Block::new(
+                    BlockKind::GlobalMemory,
+                    "Remembered: user likes tea.",
+                ));
+            }
+        }
+
+        let http = CapturingHttp::new(vec![body_plain_text("ok")]);
+        let (builder, _view) = builder_with_view(build_llm(http.clone()), AgentId(1));
+        let mut agent = builder.build().expect("build");
+        let seen_versions = Arc::new(Mutex::new(Vec::new()));
+        let saw_user = Arc::new(Mutex::new(false));
+        agent
+            .register_memory(Arc::new(RecordingMemory {
+                seen_versions: Arc::clone(&seen_versions),
+                saw_user: Arc::clone(&saw_user),
+            }))
+            .expect("register memory");
+
+        agent.run("hello");
+        assert_eq!(run_to_completion(&mut agent), "ok");
+
+        // The memory rendered at least once and read the user message from the
+        // lent transcript (pull, not push).
+        assert!(
+            !seen_versions.lock().unwrap().is_empty(),
+            "memory never rendered"
+        );
+        assert!(
+            *saw_user.lock().unwrap(),
+            "memory did not see the user message"
+        );
+
+        // The injected block reached the request (carried in the system message).
+        let body = http.captured_bodies().pop().expect("one captured request");
+        let messages = body["messages"].as_array().expect("messages array");
+        let injected = messages.iter().any(|message| {
+            message
+                .get("content")
+                .and_then(Value::as_str)
+                .is_some_and(|content| content.contains("Remembered: user likes tea."))
+        });
+        assert!(
+            injected,
+            "memory context block missing from request: {messages:?}"
+        );
+    }
+
     /// Gating auto-generates a phase note that is appended to the request the model
     /// sees (last message, naming the allowed tools) but is never written to memory.
     #[test]
     fn gating_phase_note_reaches_model_but_not_memory() {
         let http = CapturingHttp::new(vec![body_plain_text("hi there")]);
-        let llm = build_llm(Arc::clone(&http) as Arc<dyn ClawHttp>);
+        let llm = build_llm(Arc::clone(&http));
         let (builder, view) = builder_with_view(llm, AgentId(1));
         // Gating the set arms the note; the agent only places it each tick.
-        let tools = caller_tools().with_active_tools(AllowedTools::new(["echo", "end_conversation"]));
+        let tools =
+            caller_tools().with_active_tools(AllowedTools::new(["echo", "end_conversation"]));
         let mut agent = builder.with_tools(tools).build().expect("build");
 
         agent.run("hello");

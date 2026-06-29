@@ -9,9 +9,10 @@
 //! with the same shape, so each stays isolated and `main` stays a thin wiring
 //! layer.
 
-use std::error::Error;
 use std::fs;
 use std::path::Path;
+
+use anyhow::{anyhow, bail, Context, Result};
 
 use crate::codegen;
 use crate::parse::{
@@ -37,7 +38,7 @@ const SHARED_DIR: &str = "common";
 /// Returns an error if the resources directory cannot be read, a manifest is
 /// malformed/invalid (via [`parse_kind`]), no kinds are found, or the output
 /// file cannot be written — any of which fails the build.
-pub fn generate(manifest_dir: &Path, out_dir: &Path) -> Result<(), Box<dyn Error>> {
+pub fn generate(manifest_dir: &Path, out_dir: &Path) -> Result<()> {
     let agents_dir = manifest_dir.join("resources/agents");
     // Re-run when a kind is added or removed.
     println!("cargo:rerun-if-changed={}", agents_dir.display());
@@ -59,13 +60,12 @@ pub fn generate(manifest_dir: &Path, out_dir: &Path) -> Result<(), Box<dyn Error
     kinds.sort_by(|left, right| left.kind.cmp(&right.kind));
 
     if kinds.is_empty() {
-        return Err(format!("no agent kinds found under {}", agents_dir.display()).into());
+        bail!("no agent kinds found under {}", agents_dir.display());
     }
 
     let generated = codegen::render(&kinds);
     let out_path = out_dir.join(OUTPUT_FILE);
-    fs::write(&out_path, generated)
-        .map_err(|error| format!("writing {}: {error}", out_path.display()))?;
+    fs::write(&out_path, generated).with_context(|| format!("writing {}", out_path.display()))?;
 
     Ok(())
 }
@@ -73,17 +73,17 @@ pub fn generate(manifest_dir: &Path, out_dir: &Path) -> Result<(), Box<dyn Error
 /// Parse every kind subdirectory under `agents_dir`, registering each manifest
 /// file for `rerun-if-changed`. Hidden directories and the reserved shared-data
 /// folder are skipped; only proper kind directories carry a manifest.
-fn collect_kinds(agents_dir: &Path) -> Result<Vec<ParsedManifest>, Box<dyn Error>> {
+fn collect_kinds(agents_dir: &Path) -> Result<Vec<ParsedManifest>> {
     let mut kinds = Vec::new();
-    for entry in fs::read_dir(agents_dir)
-        .map_err(|error| format!("reading {}: {error}", agents_dir.display()))?
+    for entry in
+        fs::read_dir(agents_dir).with_context(|| format!("reading {}", agents_dir.display()))?
     {
         let entry = entry?;
         let path = entry.path();
         let name = path
             .file_name()
             .and_then(|name| name.to_str())
-            .ok_or_else(|| format!("non-UTF-8 entry name in {}", agents_dir.display()))?
+            .ok_or_else(|| anyhow!("non-UTF-8 entry name in {}", agents_dir.display()))?
             .to_string();
 
         // Hidden entries (e.g. `.gitkeep`, `.DS_Store`) and the reserved shared
@@ -94,12 +94,11 @@ fn collect_kinds(agents_dir: &Path) -> Result<Vec<ParsedManifest>, Box<dyn Error
         // Everything else must be a proper kind directory: a stray file here
         // would otherwise be silently ignored, so reject it ("no more, no less").
         if !path.is_dir() {
-            return Err(format!(
+            bail!(
                 "{}: unexpected file '{name}' — only agent kind directories (and the \
                  reserved '{SHARED_DIR}' base) may live under resources/agents",
                 agents_dir.display()
-            )
-            .into());
+            );
         }
 
         for file in MANIFEST_FILES {

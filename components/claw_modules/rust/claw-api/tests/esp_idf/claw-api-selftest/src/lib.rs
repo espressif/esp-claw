@@ -15,7 +15,6 @@
 use core::ffi::{c_char, c_int};
 use core::sync::atomic::AtomicBool;
 use std::ffi::CStr;
-use std::sync::Arc;
 
 use claw_api::{ChatRequest, ClawApi, ClawApiConfig};
 use claw_interface::http::{Cancel, ClawHttpAsync, HttpJsonRequest};
@@ -76,9 +75,12 @@ pub unsafe extern "C" fn claw_api_selftest_chat(
     out: *mut c_char,
     out_len: usize,
 ) -> c_int {
-    let (Some(base_url), Some(api_key), Some(model), Some(user_message)) =
-        (cstr(base_url), cstr(api_key), cstr(model), cstr(user_message))
-    else {
+    let (Some(base_url), Some(api_key), Some(model), Some(user_message)) = (
+        cstr(base_url),
+        cstr(api_key),
+        cstr(model),
+        cstr(user_message),
+    ) else {
         return ERR_NULL_ARG;
     };
 
@@ -92,7 +94,7 @@ pub unsafe extern "C" fn claw_api_selftest_chat(
         ..Default::default()
     };
 
-    let Ok(api) = ClawApi::init(config, Arc::new(EspIdfHttp)) else {
+    let Ok(mut api) = ClawApi::init(config, EspIdfHttp::new()) else {
         return ERR_INIT;
     };
 
@@ -135,9 +137,12 @@ pub unsafe extern "C" fn claw_api_selftest_chat_async(
     out: *mut c_char,
     out_len: usize,
 ) -> c_int {
-    let (Some(base_url), Some(api_key), Some(model), Some(user_message)) =
-        (cstr(base_url), cstr(api_key), cstr(model), cstr(user_message))
-    else {
+    let (Some(base_url), Some(api_key), Some(model), Some(user_message)) = (
+        cstr(base_url),
+        cstr(api_key),
+        cstr(model),
+        cstr(user_message),
+    ) else {
         return ERR_NULL_ARG;
     };
 
@@ -166,15 +171,13 @@ pub unsafe extern "C" fn claw_api_selftest_chat_async(
             timeout_ms: 30_000,
             headers: &[],
         };
-        let pending = ClawHttpAsync::post_json(&EspIdfHttp, &request, Cancel::new(&abort));
+        let pending = ClawHttpAsync::post_json(&EspIdfHttp::new(), &request, Cancel::new(&abort));
         match pending.await {
             Ok(response) if response.status_code == 200 => {
                 let parsed: Result<serde_json::Value, _> = serde_json::from_str(&response.body);
                 match parsed {
                     Ok(v) => {
-                        let text = v["choices"][0]["message"]["content"]
-                            .as_str()
-                            .unwrap_or("");
+                        let text = v["choices"][0]["message"]["content"].as_str().unwrap_or("");
                         if text.is_empty() {
                             (ERR_NO_TEXT, "model returned empty content".to_string())
                         } else {

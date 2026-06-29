@@ -23,10 +23,11 @@ mod model;
 mod parse;
 
 use std::env;
-use std::error::Error;
 use std::path::PathBuf;
 
-fn main() -> Result<(), Box<dyn Error>> {
+use anyhow::Result;
+
+fn main() -> Result<()> {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
 

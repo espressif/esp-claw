@@ -73,7 +73,10 @@ fn main() {
 
     let version_before = context.version();
     let request = context.request(&history);
-    println!("===== system prefix (version {version_before}) =====\n{}\n", request.system());
+    println!(
+        "===== system prefix (version {version_before}) =====\n{}\n",
+        request.system()
+    );
     println!("===== reminders (ephemeral tail) =====");
     for reminder in request.reminders() {
         if let Some(text) = reminder.get("content").and_then(serde_json::Value::as_str) {

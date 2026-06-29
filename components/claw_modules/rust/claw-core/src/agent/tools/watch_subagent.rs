@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use claw_permission::{Action, RiskClass};
-use claw_tool::{tool_metadata, ToolError, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput, tool_invoke_err};
+use claw_tool::{
+    tool_invoke_err, tool_metadata, ToolError, ToolHandler, ToolInvocation, ToolInvokeError,
+    ToolOutput,
+};
 
 use crate::agent::base_agent::AgentId;
 use crate::agent::graph::AgentContext;
@@ -71,11 +74,12 @@ mod tests {
     #[test]
     fn watch_subagent_reports_snapshot_or_refuses() {
         let host = host_with_tree(vec![snap(1, None, 0), snap(2, Some(1), 1)]);
-        let context = crate::agent::graph::test_support::context_for(
-            host as Arc<dyn GraphHost>,
-            AgentId(1),
+        let context =
+            crate::agent::graph::test_support::context_for(host as Arc<dyn GraphHost>, AgentId(1));
+        let watch = tool_named(
+            &subagent_tool_group(context, SpawnPolicy::Any),
+            "watch_subagent",
         );
-        let watch = tool_named(&subagent_tool_group(context, SpawnPolicy::Any), "watch_subagent");
 
         let ok = watch
             .invoke(&ToolInvocation {

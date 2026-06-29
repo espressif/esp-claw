@@ -22,14 +22,14 @@ pub const CHAT_PATH: &str = "/chat/completions";
 pub const AUTH_TYPE: &str = "bearer";
 pub const DEFAULT_MAX_TOKENS_FIELD: &str = "max_tokens";
 
-pub fn registration() -> BackendRegistration {
+pub fn registration<H: ClawHttp>() -> BackendRegistration<H> {
     BackendRegistration {
         defaults: BackendDefaults {
             auth_type: AUTH_TYPE,
             chat_path: CHAT_PATH,
             max_tokens_field: DEFAULT_MAX_TOKENS_FIELD,
         },
-        make,
+        make: make::<H>,
     }
 }
 
@@ -47,7 +47,7 @@ struct OpenAiCompatible {
 ///
 /// Credential/config validation is centralized in [`crate::ClawApi::init`];
 /// `api_key`, `model`, and `base_url` are guaranteed non-empty here.
-fn make(config: &ClawApiConfig) -> Result<Box<dyn LlmBackend>, InitError> {
+fn make<H: ClawHttp>(config: &ClawApiConfig) -> Result<Box<dyn LlmBackend<H>>, InitError> {
     let api_key = config.api_key.as_deref().unwrap_or("");
     let model = config.model.as_deref().unwrap_or("");
     let base_url = config.base_url.as_deref().unwrap_or("");
@@ -140,11 +140,11 @@ impl OpenAiCompatible {
     }
 }
 
-impl LlmBackend for OpenAiCompatible {
+impl<H: ClawHttp> LlmBackend<H> for OpenAiCompatible {
     /// `openai_compatible_chat`
     fn chat(
         &self,
-        http: &dyn ClawHttp,
+        http: &mut H,
         profile: &ModelProfile,
         request: &ChatRequest,
         abort: &AtomicBool,
@@ -168,7 +168,7 @@ impl LlmBackend for OpenAiCompatible {
 
     fn chat_json(
         &self,
-        http: &dyn ClawHttp,
+        http: &mut H,
         profile: &ModelProfile,
         request: &ChatJsonRequest<'_>,
         schema_name: &str,
@@ -198,7 +198,7 @@ impl LlmBackend for OpenAiCompatible {
     /// `openai_compatible_infer_media`
     fn infer_media(
         &self,
-        http: &dyn ClawHttp,
+        http: &mut H,
         profile: &ModelProfile,
         request: &MediaRequest,
         abort: &AtomicBool,

@@ -12,8 +12,9 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use claw_tool::{ApprovalNeeded, CallOutcome, ToolGate, ToolInvocation, ToolRunner, ToolSet};
 use claw_api::{ChatError, ChatRequest, ClawApi, ClawApiError, LlmResponse, RetryPolicy};
+use claw_interface::http::ClawHttp;
+use claw_tool::{ApprovalNeeded, CallOutcome, ToolGate, ToolInvocation, ToolRunner, ToolSet};
 
 use claw_utils::TruncatedText;
 
@@ -177,21 +178,28 @@ pub trait InterruptionControl: Send + Sync {
 }
 
 /// One-step executor: LLM + preempt control only. Tools live on [`IterationStep`].
-pub struct IterationLoop<'a> {
-    pub llm: &'a ClawApi,
+///
+/// Generic over the HTTP transport `H` so the LLM call stays statically
+/// dispatched. The loop borrows the agent's [`ClawApi`] mutably for exactly one
+/// `chat` round, so it is consumed by [`run`](Self::run).
+pub struct IterationLoop<'a, H: ClawHttp> {
+    pub llm: &'a mut ClawApi<H>,
     pub interruption: &'a dyn InterruptionControl,
     /// Retry policy applied to this iteration's LLM call (see [`RetryPolicy`]).
     pub retry: RetryPolicy,
 }
 
-impl IterationLoop<'_> {
+impl<H: ClawHttp> IterationLoop<'_, H> {
     /// Execute exactly one iteration: LLM chat → optional tool execution.
-    pub fn run(&self, step: IterationStep<'_>) -> IterationResult {
+    pub fn run(self, step: IterationStep<'_>) -> IterationResult {
         run_one_iteration(self, step)
     }
 }
 
-fn run_one_iteration(loop_: &IterationLoop<'_>, step: IterationStep<'_>) -> IterationResult {
+fn run_one_iteration<H: ClawHttp>(
+    loop_: IterationLoop<'_, H>,
+    step: IterationStep<'_>,
+) -> IterationResult {
     let iteration_id = step.iteration_id;
     // One span per iteration; tool-call spans nest beneath it.
     let _span =
@@ -473,8 +481,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use claw_tool::{AllowedTools, Tool, ToolGroup, ToolHandler, ToolInvokeError, ToolOutput};
     use claw_api::ToolCall;
+    use claw_tool::{AllowedTools, Tool, ToolGroup, ToolHandler, ToolInvokeError, ToolOutput};
     use serde_json::json;
 
     struct FlagControl {

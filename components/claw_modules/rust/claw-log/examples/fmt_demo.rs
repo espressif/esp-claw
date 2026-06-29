@@ -5,11 +5,9 @@
 //! - piped (non-TTY) → plain text, ANSI auto-stripped by anstream;
 //! - on a TTY → ESP-IDF per-level colors (E red, W yellow, I green).
 
-use std::error::Error;
-
 use claw_log::LevelFilter;
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> anyhow::Result<()> {
     // `Trace` defers filtering to the compile-time `log_max_*` ceiling.
     claw_log::init_logger(LevelFilter::Trace, claw_log::LogOutput::Stderr)?;
     claw_log::init_tracing(

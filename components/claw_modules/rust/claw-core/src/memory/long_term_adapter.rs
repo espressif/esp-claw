@@ -13,6 +13,7 @@
 //! id-addressed operations (`update`/`forget`): the prefix is opaque to the
 //! model but lets the adapter send an edit back to the store that owns the item.
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use claw_context::{Block, BlockKind};
@@ -21,13 +22,14 @@ use claw_memory::{
     LongTermConfig, LongTermError, LongTermMemory, MemoryDraft, MemoryId, MemoryItem, MemoryPatch,
     StoreOutcome,
 };
-use claw_memory::MemoryTaskPool;
 use claw_tool::ToolGroup;
+use claw_utils::SharedTaskPool;
+use serde_json::Value;
 
-use crate::memory::bus::{AgentEvent, Memory, MemoryError};
 use crate::memory::extraction::Extractor;
 use crate::memory::tier::{MemoryTier, TierClassifier};
 use crate::memory::tools::memory_tool_group;
+use crate::memory::traits::{History, Memory};
 
 /// Id prefix for the shared global store.
 pub const GLOBAL_ID_PREFIX: &str = "g-";
@@ -36,8 +38,6 @@ pub const AGENT_ID_PREFIX: &str = "a-";
 
 /// Default memory id used in logs.
 const DEFAULT_MEMORY_ID: &str = "long_term";
-/// Max recent transcript lines retained for extraction.
-const RECENT_BUFFER_MAX: usize = 24;
 
 /// Build a global long-term store under `dir` (minting `g-` ids).
 pub fn global_store<F: ClawFs + 'static>(dir: impl Into<String>, fs: F) -> LongTermMemory<F> {
@@ -131,9 +131,31 @@ pub struct LongTermMemoryAdapter<F: ClawFs + 'static> {
     id: String,
     stores: MemoryStores<F>,
     extractor: Arc<dyn Extractor>,
-    pool: Arc<MemoryTaskPool>,
-    /// Rolling recent-conversation lines fed to extraction (capped).
-    recent: Mutex<Vec<String>>,
+    pool: Arc<SharedTaskPool>,
+    /// Cached rendered catalog blocks, rebuilt only when a store's version
+    /// advances — so an unchanged store contributes context with zero allocation.
+    catalog_cache: Mutex<CatalogCache>,
+    /// Highest transcript [`History::version`] already handed to an extraction
+    /// job. Render schedules a fresh extraction only when the transcript has
+    /// advanced past this, so an unchanged conversation costs nothing.
+    extract_cursor: AtomicU64,
+    /// Single-flight guard: at most one extraction job in the pool at a time.
+    /// New transcript content that lands while one runs simply re-triggers on a
+    /// later render, coalescing a busy multi-round turn into roughly one job.
+    /// `Arc` so the pool job can clear it on completion off the tick thread.
+    extraction_in_flight: Arc<AtomicBool>,
+}
+
+/// The adapter's rendered-catalog cache, keyed on each store's change version.
+#[derive(Default)]
+struct CatalogCache {
+    global_version: u64,
+    agent_version: u64,
+    global_block: String,
+    agent_block: String,
+    /// `false` until the first render populates the blocks (version 0 is a real
+    /// state — an empty store — so a flag distinguishes "never rendered").
+    primed: bool,
 }
 
 impl<F: ClawFs + 'static> LongTermMemoryAdapter<F> {
@@ -144,7 +166,7 @@ impl<F: ClawFs + 'static> LongTermMemoryAdapter<F> {
         global: LongTermMemory<F>,
         classifier: Arc<dyn TierClassifier>,
         extractor: Arc<dyn Extractor>,
-        pool: Arc<MemoryTaskPool>,
+        pool: Arc<SharedTaskPool>,
     ) -> Self {
         Self {
             id: DEFAULT_MEMORY_ID.to_string(),
@@ -155,53 +177,59 @@ impl<F: ClawFs + 'static> LongTermMemoryAdapter<F> {
             },
             extractor,
             pool,
-            recent: Mutex::new(Vec::new()),
+            catalog_cache: Mutex::new(CatalogCache::default()),
+            extract_cursor: AtomicU64::new(0),
+            extraction_in_flight: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// Append a line to the rolling recent buffer, capping its length.
-    fn push_recent(&self, line: String) {
-        let mut recent = self.lock_recent();
-        recent.push(line);
-        let overflow = recent.len().saturating_sub(RECENT_BUFFER_MAX);
-        if overflow > 0 {
-            recent.drain(0..overflow);
-        }
-    }
-
-    /// Schedule a background extraction over the current transcript snapshot.
+    /// Schedule a background extraction when the transcript has advanced.
     ///
-    /// Runs on a pool worker: it calls the (possibly LLM-backed) extractor, then
-    /// routes and stores each fact. Dedup in the store absorbs facts re-extracted
-    /// on later turns, so repeated scheduling is safe.
-    fn schedule_extraction(&self) {
-        let transcript = self.lock_recent().join("\n");
-        if transcript.trim().is_empty() {
-            return;
+    /// Pull, not push: called from [`render_context`](Memory::render_context) on
+    /// the tick thread, it self-detects new conversation via [`History::version`]
+    /// against [`extract_cursor`](Self::extract_cursor). It snapshots only when it
+    /// actually schedules (a cheap `Arc` clone of the canonical transcript), and
+    /// the single-flight guard coalesces a busy multi-round turn into roughly one
+    /// job. Dedup in the store absorbs facts re-extracted across turns.
+    fn maybe_schedule_extraction(&self, history: &dyn History) {
+        let version = history.version();
+        if version == self.extract_cursor.load(Ordering::Acquire) {
+            return; // transcript unchanged since the last extraction
         }
+        if self.extraction_in_flight.swap(true, Ordering::AcqRel) {
+            return; // one already running; a later render re-triggers
+        }
+        self.extract_cursor.store(version, Ordering::Release);
+
+        let snapshot = history.messages();
         let extractor = Arc::clone(&self.extractor);
         let stores = self.stores.clone();
         let memory_id = self.id.clone();
+        let in_flight = Arc::clone(&self.extraction_in_flight);
         self.pool.submit(Box::new(move || {
-            let items = match extractor.extract(&transcript) {
-                Ok(items) => items,
-                Err(error) => {
-                    tracing::warn!(%error, memory = %memory_id, "memory extraction failed");
-                    return;
+            let transcript = flatten_transcript(&snapshot);
+            if !transcript.trim().is_empty() {
+                match extractor.extract(&transcript) {
+                    Ok(items) => {
+                        for item in items {
+                            let draft = MemoryDraft::new(item.content)
+                                .with_tags(item.tags)
+                                .with_keywords(item.keywords)
+                                .with_source("extracted");
+                            stores.store(draft, item.tier);
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, memory = %memory_id, "memory extraction failed")
+                    }
                 }
-            };
-            for item in items {
-                let draft = MemoryDraft::new(item.content)
-                    .with_tags(item.tags)
-                    .with_keywords(item.keywords)
-                    .with_source("extracted");
-                stores.store(draft, item.tier);
             }
+            in_flight.store(false, Ordering::Release);
         }));
     }
 
-    fn lock_recent(&self) -> std::sync::MutexGuard<'_, Vec<String>> {
-        self.recent
+    fn lock_catalog(&self) -> std::sync::MutexGuard<'_, CatalogCache> {
+        self.catalog_cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -212,35 +240,73 @@ impl<F: ClawFs + 'static> Memory for LongTermMemoryAdapter<F> {
         &self.id
     }
 
-    fn on_event(&self, event: &AgentEvent<'_>) -> Result<(), MemoryError> {
-        match event {
-            AgentEvent::UserMessage { text } => self.push_recent(format!("User: {text}")),
-            AgentEvent::AssistantMessage { text } => {
-                self.push_recent(format!("Assistant: {text}"));
-                // A completed plain-text answer is a natural turn boundary;
-                // extract over the accumulated transcript.
-                self.schedule_extraction();
-            }
-            // Tool activity and lifecycle boundaries do not feed extraction.
-            _ => {}
-        }
-        Ok(())
-    }
+    fn render_context(&self, history: &dyn History, emit: &mut dyn FnMut(Block<'_>)) {
+        // Pull, not push: reading the transcript here is also where this memory
+        // decides whether new conversation warrants a background extraction.
+        self.maybe_schedule_extraction(history);
 
-    fn render_context(&self, emit: &mut dyn FnMut(Block<'_>)) {
+        let mut cache = self.lock_catalog();
+        let global_version = self.stores.global.version();
+        let agent_version = self.stores.agent.version();
+        // Rebuild a block's text only when its store changed (or on first render).
+        if !cache.primed || cache.global_version != global_version {
+            cache.global_block = render_catalog(
+                "Shared long-term memory topics",
+                &self.stores.global.catalog(),
+            );
+            cache.global_version = global_version;
+        }
+        if !cache.primed || cache.agent_version != agent_version {
+            cache.agent_block =
+                render_catalog("Your long-term memory topics", &self.stores.agent.catalog());
+            cache.agent_version = agent_version;
+        }
+        cache.primed = true;
+        // Borrow the cached strings into the blocks — `Context::with` copies them
+        // only on a real change, so an unchanged catalog allocates nothing here.
         emit(Block::new(
             BlockKind::GlobalMemory,
-            render_catalog("Shared long-term memory topics", &self.stores.global.catalog()),
+            cache.global_block.as_str(),
         ));
         emit(Block::new(
             BlockKind::AgentMemory,
-            render_catalog("Your long-term memory topics", &self.stores.agent.catalog()),
+            cache.agent_block.as_str(),
         ));
     }
 
     fn tools(&self) -> Option<ToolGroup> {
         Some(memory_tool_group(self.stores.clone()))
     }
+}
+
+/// Flatten a transcript snapshot (a JSON array of chat messages) into the
+/// role-prefixed plain text an [`Extractor`] reads. Messages without string
+/// content (e.g. an assistant turn carrying only `tool_calls`) are skipped.
+fn flatten_transcript(messages: &Value) -> String {
+    let Some(items) = messages.as_array() else {
+        return String::new();
+    };
+    let mut out = String::new();
+    for message in items {
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let content = message
+            .get("content")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if role.is_empty() || content.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(role);
+        out.push_str(": ");
+        out.push_str(content);
+    }
+    out
 }
 
 /// Render a label catalog as a single durable-context line, or empty when there

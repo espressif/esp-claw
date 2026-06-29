@@ -10,10 +10,8 @@
 
 use std::sync::Arc;
 
-use claw_agent::{AgentSystem, ClawApiConfig, ConversationDeps};
-use claw_interface::http::ClawHttp;
-use claw_interface::{MemFs, ScriptedHttp, StdThread};
-use claw_memory::{MemoryTaskPool, NoopCompactor, PoolConfig};
+use claw_agent::{AgentSystem, ClawApiConfig, PoolConfig, SharedTaskPool};
+use claw_interface::{MemFs, SharedScriptHttp, StdThread};
 use serde_json::json;
 
 /// A test LLM config; the base URL is never dialed (HTTP is the scripted double).
@@ -34,20 +32,17 @@ fn plain_text(text: &str) -> String {
 }
 
 /// Build an in-memory agent system whose LLM serves `bodies` in order (strict).
+///
+/// The system mints each LLM client internally and chooses the transport by type
+/// (`H = SharedScriptHttp`), so the script is installed into the thread-local
+/// every minted client shares rather than injected as an instance.
 fn system(bodies: Vec<String>) -> AgentSystem {
-    let pool = Arc::new(
-        MemoryTaskPool::new(PoolConfig::default(), StdThread::default()).expect("memory pool"),
-    );
-    let memory_deps = ConversationDeps {
-        fs: Arc::new(MemFs::default()),
-        pool,
-        compactor: Arc::new(NoopCompactor),
-    };
-    AgentSystem::builder::<Arc<MemFs>>()
+    SharedScriptHttp::install(bodies);
+    let pool = Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread).expect("task pool"));
+    AgentSystem::builder::<MemFs, SharedScriptHttp>()
         .llm(test_llm_config())
-        .http(Arc::new(ScriptedHttp::new(bodies)) as Arc<dyn ClawHttp>)
         .memory_dir("/mem/agents")
-        .memory_deps(memory_deps)
+        .task_pool(pool)
         .build()
         .expect("build agent system")
 }

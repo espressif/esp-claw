@@ -8,8 +8,8 @@
 //! ```
 
 use claw_tool::{
-    AllowedTools, BlockPolicy, Tool, ToolBlockVerdict, ToolHandler, ToolInvocation, ToolInvokeError,
-    ToolOutput, ToolSet,
+    AllowedTools, BlockPolicy, Tool, ToolBlockVerdict, ToolHandler, ToolInvocation,
+    ToolInvokeError, ToolOutput, ToolSet,
 };
 
 /// A demo tool carrying soft-tools `usage` prose for the `tool_context` block.
@@ -50,10 +50,16 @@ impl ToolHandler for DemoTool {
     }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> anyhow::Result<()> {
     let mut set = ToolSet::new([
-        Tool::new(DemoTool::new("read_file", Some("Read a file from the workspace."))),
-        Tool::new(DemoTool::new("write_file", Some("Write a file. Mutates the workspace."))),
+        Tool::new(DemoTool::new(
+            "read_file",
+            Some("Read a file from the workspace."),
+        )),
+        Tool::new(DemoTool::new(
+            "write_file",
+            Some("Write a file. Mutates the workspace."),
+        )),
     ])?;
 
     // The static usage block — stable, name-ordered, belongs in the cached prefix.

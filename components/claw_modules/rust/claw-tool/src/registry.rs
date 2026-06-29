@@ -164,9 +164,7 @@ mod tests {
     impl DummyTool {
         fn new(name: &str) -> Self {
             Self {
-                tool_schema: format!(
-                    r#"{{"type":"function","function":{{"name":"{name}"}}}}"#
-                ),
+                tool_schema: format!(r#"{{"type":"function","function":{{"name":"{name}"}}}}"#),
                 tool_name: name.to_string(),
             }
         }

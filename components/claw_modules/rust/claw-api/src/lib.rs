@@ -42,7 +42,6 @@
 //! # End-to-end example
 //!
 //! ```no_run
-//! use std::sync::Arc;
 //! use std::sync::atomic::AtomicBool;
 //! use claw_api::{ChatRequest, ClawApi, ClawApiConfig, RetryPolicy};
 //! use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse};
@@ -51,7 +50,7 @@
 //! //    here we stub a fixed OpenAI-shaped reply.
 //! struct MyHttp;
 //! impl ClawHttp for MyHttp {
-//!     fn post_json(&self, _req: &HttpJsonRequest, _abort: &AtomicBool)
+//!     fn post_json(&mut self, _req: &HttpJsonRequest, _abort: &AtomicBool)
 //!         -> Result<HttpResponse, HttpError> {
 //!         Ok(HttpResponse {
 //!             status_code: 200,
@@ -60,7 +59,7 @@
 //!     }
 //! }
 //!
-//! // 2. Build the client once.
+//! // 2. Build the client once. It owns the transport and is driven via `&mut`.
 //! let config = ClawApiConfig {
 //!     api_key: Some("sk-...".into()),
 //!     backend_type: "openai_compatible".into(), // or "anthropic_compatible"
@@ -70,7 +69,7 @@
 //!     supports_vision: true,
 //!     ..Default::default()
 //! };
-//! let api = ClawApi::init(config, Arc::new(MyHttp))?;
+//! let mut api = ClawApi::init(config, MyHttp)?;
 //!
 //! // 3. Chat. The abort flag can be flipped from another thread to cancel.
 //! let messages = serde_json::json!([{ "role": "user", "content": "Hello" }]);
@@ -81,7 +80,7 @@
 //!     &abort,
 //! )?;
 //! assert_eq!(reply.text.as_deref(), Some("Hi!"));
-//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! # Ok::<(), anyhow::Error>(())
 //! ```
 
 // Implementation modules are private: the public surface is the curated
@@ -131,17 +130,23 @@ mod tests {
         }
     }
 
-    impl ClawHttp for MockHttp {
+    /// `ClawApi<H>` owns its transport by value. The doubles below record into
+    /// interior-mutable fields and are shared with the test via `Arc`, so the
+    /// test wraps a cloned `Arc` in this newtype to hand ownership to the client
+    /// while keeping its own handle to assert on what was sent.
+    struct Owned<T>(Arc<T>);
+
+    impl ClawHttp for Owned<MockHttp> {
         fn post_json(
-            &self,
+            &mut self,
             request: &HttpJsonRequest,
             _abort: &AtomicBool,
         ) -> Result<HttpResponse, HttpError> {
-            *self.last_body.lock().unwrap() = Some(request.body.to_string());
-            *self.last_url.lock().unwrap() = Some(request.url.to_string());
+            *self.0.last_body.lock().unwrap() = Some(request.body.to_string());
+            *self.0.last_url.lock().unwrap() = Some(request.url.to_string());
             Ok(HttpResponse {
                 status_code: 200,
-                body: self.reply.clone(),
+                body: self.0.reply.clone(),
             })
         }
     }
@@ -162,9 +167,9 @@ mod tests {
     fn openai_chat_text() {
         let http =
             MockHttp::new(r#"{"choices":[{"message":{"role":"assistant","content":"hi there"}}]}"#);
-        let rt = ClawApi::init(
+        let mut rt = ClawApi::init(
             cfg("openai_compatible", "https://api.example.com/v1"),
-            http.clone(),
+            Owned(http.clone()),
         )
         .unwrap();
         let messages = json!([{"role": "user", "content": "hello"}]);
@@ -193,7 +198,11 @@ mod tests {
         let reply = r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
             {"id":"call_1","function":{"name":"files","arguments":"{\"p\":\"/x\"}"}}]}}]}"#;
         let http = MockHttp::new(reply);
-        let rt = ClawApi::init(cfg("openai_compatible", "https://api.example.com"), http).unwrap();
+        let mut rt = ClawApi::init(
+            cfg("openai_compatible", "https://api.example.com"),
+            Owned(http),
+        )
+        .unwrap();
         let messages = json!([{"role": "user", "content": "list"}]);
         let abort = AtomicBool::new(false);
         let resp = rt.chat(&ChatRequest::new("s", &messages), &abort).unwrap();
@@ -208,9 +217,9 @@ mod tests {
         let reply = r#"{"content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"done"},
             {"type":"tool_use","id":"tu1","name":"foo","input":{"a":1}}]}"#;
         let http = MockHttp::new(reply);
-        let rt = ClawApi::init(
+        let mut rt = ClawApi::init(
             cfg("anthropic_compatible", "https://api.anthropic.com/v1"),
-            http.clone(),
+            Owned(http.clone()),
         )
         .unwrap();
 
@@ -255,9 +264,9 @@ mod tests {
     #[test]
     fn anthropic_converts_tools() {
         let http = MockHttp::new(r#"{"content":[{"type":"text","text":"ok"}]}"#);
-        let rt = ClawApi::init(
+        let mut rt = ClawApi::init(
             cfg("anthropic_compatible", "https://api.anthropic.com"),
-            http.clone(),
+            Owned(http.clone()),
         )
         .unwrap();
         let messages = json!([{"role": "user", "content": "hi"}]);
@@ -277,7 +286,7 @@ mod tests {
     #[test]
     fn unknown_backend_rejected() {
         let http = MockHttp::new("{}");
-        let err = match ClawApi::init(cfg("nope", "https://x"), http) {
+        let err = match ClawApi::init(cfg("nope", "https://x"), Owned(http)) {
             Ok(_) => panic!("expected error"),
             Err(e) => e,
         };
@@ -308,9 +317,9 @@ mod tests {
     fn openai_chat_json_uses_response_format() {
         let reply = r#"{"choices":[{"message":{"role":"assistant","content":"{\"action\":\"ok\",\"value\":7}"}}]}"#;
         let http = MockHttp::new(reply);
-        let rt = ClawApi::init(
+        let mut rt = ClawApi::init(
             cfg("openai_compatible", "https://api.example.com/v1"),
-            http.clone(),
+            Owned(http.clone()),
         )
         .unwrap();
         assert!(rt.profile().supports_json_schema);
@@ -335,9 +344,9 @@ mod tests {
     fn anthropic_chat_json_uses_output_config() {
         let reply = r#"{"content":[{"type":"text","text":"{\"action\":\"ok\",\"value\":3}"}]}"#;
         let http = MockHttp::new(reply);
-        let rt = ClawApi::init(
+        let mut rt = ClawApi::init(
             cfg("anthropic_compatible", "https://api.anthropic.com/v1"),
-            http.clone(),
+            Owned(http.clone()),
         )
         .unwrap();
         assert!(rt.profile().supports_json_schema);
@@ -363,7 +372,7 @@ mod tests {
         let http = MockHttp::new(reply);
         let mut config = cfg("anthropic_compatible", "https://api.anthropic.com/v1");
         config.supports_json_schema = Some(false);
-        let rt = ClawApi::init(config, http.clone()).unwrap();
+        let mut rt = ClawApi::init(config, Owned(http.clone())).unwrap();
         assert!(!rt.profile().supports_json_schema);
 
         let messages = json!([{"role": "user", "content": "go"}]);
@@ -385,9 +394,9 @@ mod tests {
     fn anthropic_chat_json_sends_tools_with_output_config() {
         let reply = r#"{"content":[{"type":"text","text":"{\"action\":\"ok\",\"value\":5}"}]}"#;
         let http = MockHttp::new(reply);
-        let rt = ClawApi::init(
+        let mut rt = ClawApi::init(
             cfg("anthropic_compatible", "https://api.anthropic.com/v1"),
-            http.clone(),
+            Owned(http.clone()),
         )
         .unwrap();
         let messages = json!([{"role": "user", "content": "go"}]);
@@ -411,7 +420,11 @@ mod tests {
     fn chat_json_rejects_invalid_output() {
         let reply = r#"{"choices":[{"message":{"role":"assistant","content":"not-json"}}]}"#;
         let http = MockHttp::new(reply);
-        let rt = ClawApi::init(cfg("openai_compatible", "https://api.example.com"), http).unwrap();
+        let mut rt = ClawApi::init(
+            cfg("openai_compatible", "https://api.example.com"),
+            Owned(http),
+        )
+        .unwrap();
         let messages = json!([{"role": "user", "content": "go"}]);
         let abort = AtomicBool::new(false);
         let err = rt
@@ -424,9 +437,9 @@ mod tests {
     fn openai_chat_json_sends_tools_with_response_format() {
         let reply = r#"{"choices":[{"message":{"role":"assistant","content":"{\"action\":\"ok\",\"value\":1}"}}]}"#;
         let http = MockHttp::new(reply);
-        let rt = ClawApi::init(
+        let mut rt = ClawApi::init(
             cfg("openai_compatible", "https://api.example.com/v1"),
-            http.clone(),
+            Owned(http.clone()),
         )
         .unwrap();
         let messages = json!([{"role": "user", "content": "go"}]);
@@ -450,7 +463,11 @@ mod tests {
         let reply = r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
             {"id":"call_1","function":{"name":"files","arguments":"{}"}}]}}]}"#;
         let http = MockHttp::new(reply);
-        let rt = ClawApi::init(cfg("openai_compatible", "https://api.example.com"), http).unwrap();
+        let mut rt = ClawApi::init(
+            cfg("openai_compatible", "https://api.example.com"),
+            Owned(http),
+        )
+        .unwrap();
         let messages = json!([{"role": "user", "content": "go"}]);
         let tools = r#"[{"type":"function","function":{"name":"files","description":"d","parameters":{"type":"object"}}}]"#;
         let abort = AtomicBool::new(false);
@@ -482,21 +499,21 @@ mod tests {
         }
     }
 
-    impl ClawHttp for FlakyHttp {
+    impl ClawHttp for Owned<FlakyHttp> {
         fn post_json(
-            &self,
+            &mut self,
             _request: &HttpJsonRequest,
             _abort: &AtomicBool,
         ) -> Result<HttpResponse, HttpError> {
-            *self.calls.lock().unwrap() += 1;
-            let mut remaining = self.remaining_failures.lock().unwrap();
+            *self.0.calls.lock().unwrap() += 1;
+            let mut remaining = self.0.remaining_failures.lock().unwrap();
             if *remaining > 0 {
                 *remaining -= 1;
-                return Err(self.error.clone());
+                return Err(self.0.error.clone());
             }
             Ok(HttpResponse {
                 status_code: 200,
-                body: self.reply.clone(),
+                body: self.0.reply.clone(),
             })
         }
     }
@@ -528,8 +545,12 @@ mod tests {
         assert_eq!(fixed.backoff_ms(3), 250);
     }
 
-    fn flaky_rt(http: Arc<FlakyHttp>) -> ClawApi {
-        ClawApi::init(cfg("openai_compatible", "https://api.example.com"), http).unwrap()
+    fn flaky_rt(http: Arc<FlakyHttp>) -> ClawApi<Owned<FlakyHttp>> {
+        ClawApi::init(
+            cfg("openai_compatible", "https://api.example.com"),
+            Owned(http),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -539,7 +560,7 @@ mod tests {
             HttpError::RequestFailed("connection reset".into()),
             r#"{"choices":[{"message":{"role":"assistant","content":"ok"}}]}"#,
         );
-        let rt = flaky_rt(http.clone());
+        let mut rt = flaky_rt(http.clone());
         let messages = json!([{"role": "user", "content": "hi"}]);
         let abort = AtomicBool::new(false);
 
@@ -556,7 +577,7 @@ mod tests {
     #[test]
     fn retry_exhausts_and_returns_transient_error() {
         let http = FlakyHttp::new(9, HttpError::RequestFailed("down".into()), "{}");
-        let rt = flaky_rt(http.clone());
+        let mut rt = flaky_rt(http.clone());
         let messages = json!([{"role": "user", "content": "hi"}]);
         let abort = AtomicBool::new(false);
 
@@ -581,7 +602,7 @@ mod tests {
             HttpError::UnexpectedStatus("HTTP 401: bad key".into()),
             "{}",
         );
-        let rt = flaky_rt(http.clone());
+        let mut rt = flaky_rt(http.clone());
         let messages = json!([{"role": "user", "content": "hi"}]);
         let abort = AtomicBool::new(false);
 
@@ -602,7 +623,7 @@ mod tests {
             HttpError::UnexpectedStatus("HTTP 503: try later".into()),
             r#"{"choices":[{"message":{"role":"assistant","content":"recovered"}}]}"#,
         );
-        let rt = flaky_rt(http.clone());
+        let mut rt = flaky_rt(http.clone());
         let messages = json!([{"role": "user", "content": "hi"}]);
         let abort = AtomicBool::new(false);
 
@@ -619,7 +640,7 @@ mod tests {
     #[test]
     fn abort_is_not_retried() {
         let http = FlakyHttp::new(9, HttpError::Aborted, "{}");
-        let rt = flaky_rt(http.clone());
+        let mut rt = flaky_rt(http.clone());
         let messages = json!([{"role": "user", "content": "hi"}]);
         let abort = AtomicBool::new(false);
 
@@ -643,7 +664,7 @@ mod tests {
         // RetryPolicy::default(), which retries transient failures
         // (max_retries=2). Pre-abort so the test does not actually sleep.
         let http = FlakyHttp::new(2, HttpError::RequestFailed("blip".into()), "{}");
-        let rt = flaky_rt(http.clone());
+        let mut rt = flaky_rt(http.clone());
         let messages = json!([{"role": "user", "content": "hi"}]);
         let abort = AtomicBool::new(true); // pre-aborted: skip backoff sleeps
 

@@ -161,6 +161,7 @@ mod espidf_driver {
 
     extern "C" {
         fn esp_http_client_init(config: *const esp_http_client_config_t) -> *mut c_void;
+        fn esp_http_client_set_url(client: *mut c_void, url: *const c_char) -> c_int;
         fn esp_http_client_set_method(client: *mut c_void, method: c_int) -> c_int;
         fn esp_http_client_set_header(
             client: *mut c_void,
@@ -214,21 +215,37 @@ mod espidf_driver {
         }
     }
 
-    /// `esp_http_client`-backed transport implementing both [`ClawHttp`]
-    /// (blocking, cancelled via the in-band abort flag) and [`ClawHttpAsync`]
-    /// (non-blocking `config.is_async` mode, cancelled by dropping the future).
-    pub struct EspIdfHttp;
+    /// A persistent `esp_http_client` connection owned by [`EspIdfHttp`].
+    ///
+    /// Created lazily on the first blocking request and **reused** by every
+    /// subsequent one (keep-alive is enabled at init), so the TCP connection and
+    /// TLS handshake are paid once per endpoint instead of per request. The
+    /// handle is torn down on `Drop` (RAII).
+    struct EspClient {
+        raw: *mut c_void,
+        // `config.user_data` points at this box for the client's whole life; the
+        // event handler writes the response body here through that raw pointer,
+        // so the box must outlive the client and must not move. `Box` keeps the
+        // heap payload pinned even when the `EspClient` value itself is moved.
+        ctx: Box<RequestCtx>,
+    }
 
-    impl ClawHttp for EspIdfHttp {
-        fn post_json(
-            &self,
-            request: &HttpJsonRequest,
-            abort: &AtomicBool,
-        ) -> Result<HttpResponse, HttpError> {
+    impl Drop for EspClient {
+        fn drop(&mut self) {
+            unsafe { esp_http_client_cleanup(self.raw) };
+        }
+    }
+
+    impl EspClient {
+        /// Initialize a reusable keep-alive client. The per-request method,
+        /// headers, and body are applied later by [`EspClient::execute`].
+        fn new(request: &HttpJsonRequest) -> Result<EspClient, HttpError> {
+            // `url` is parsed/copied by `esp_http_client_init`; it only needs to
+            // stay alive until that call returns.
             let url = CString::new(request.url).map_err(|_| HttpError::InvalidUrl)?;
             let mut ctx = Box::new(RequestCtx {
                 body: Vec::with_capacity(4096),
-                abort: abort as *const _,
+                abort: core::ptr::null(),
             });
 
             let mut config: esp_http_client_config_t = unsafe { core::mem::zeroed() };
@@ -239,22 +256,51 @@ mod espidf_driver {
             config.buffer_size = 4096;
             config.buffer_size_tx = 4096;
             config.crt_bundle_attach = Some(esp_crt_bundle_attach);
+            // Reuse the underlying TCP/TLS connection across requests to the same
+            // endpoint rather than reconnecting on every call.
+            config.keep_alive_enable = true;
 
-            let client = unsafe { esp_http_client_init(&config) };
-            if client.is_null() {
+            let raw = unsafe { esp_http_client_init(&config) };
+            if raw.is_null() {
                 return Err(HttpError::ClientInitFailed);
             }
+            Ok(EspClient { raw, ctx })
+        }
 
-            let result = (|| unsafe {
-                esp_http_client_set_method(client, HTTP_METHOD_POST);
+        /// Apply this request's URL/method/headers/body to the persistent client
+        /// and run one blocking transfer.
+        ///
+        /// Headers are re-set every call (same key overwrites); callers that send
+        /// a stable header set per endpoint — like the LLM transport — get the
+        /// expected wire format. A header present on an earlier request but absent
+        /// here would persist, which the current callers never rely on.
+        fn execute(
+            &mut self,
+            request: &HttpJsonRequest,
+            abort: &AtomicBool,
+        ) -> Result<HttpResponse, HttpError> {
+            self.ctx.body.clear();
+            // Only dereferenced by the event handler during the blocking
+            // `perform` below, where `abort` is guaranteed live.
+            self.ctx.abort = abort as *const _;
+
+            // `set_url` copies the string internally; `set_post_field` stores the
+            // pointer (no copy), so `body` must outlive the blocking perform.
+            let url = CString::new(request.url).map_err(|_| HttpError::InvalidUrl)?;
+            let body = CString::new(request.body).map_err(|_| HttpError::InvalidBody)?;
+
+            unsafe {
+                esp_http_client_set_url(self.raw, url.as_ptr());
+                esp_http_client_set_method(self.raw, HTTP_METHOD_POST);
+
                 let ct_key = CString::new("Content-Type").unwrap();
                 let ct_val = CString::new("application/json").unwrap();
-                esp_http_client_set_header(client, ct_key.as_ptr(), ct_val.as_ptr());
+                esp_http_client_set_header(self.raw, ct_key.as_ptr(), ct_val.as_ptr());
 
                 if let Some((name, value)) = build_auth_header(request.auth_type, request.api_key) {
                     let k = CString::new(name).unwrap();
                     if let Ok(v) = CString::new(value) {
-                        esp_http_client_set_header(client, k.as_ptr(), v.as_ptr());
+                        esp_http_client_set_header(self.raw, k.as_ptr(), v.as_ptr());
                     }
                 }
                 for h in request.headers {
@@ -262,25 +308,28 @@ mod espidf_driver {
                         continue;
                     }
                     if let (Ok(k), Ok(v)) = (CString::new(h.name), CString::new(h.value)) {
-                        esp_http_client_set_header(client, k.as_ptr(), v.as_ptr());
+                        esp_http_client_set_header(self.raw, k.as_ptr(), v.as_ptr());
                     }
                 }
-                let body = CString::new(request.body).map_err(|_| HttpError::InvalidBody)?;
-                esp_http_client_set_post_field(client, body.as_ptr(), request.body.len() as c_int);
+                esp_http_client_set_post_field(
+                    self.raw,
+                    body.as_ptr(),
+                    request.body.len() as c_int,
+                );
 
-                let err = esp_http_client_perform(client);
+                let err = esp_http_client_perform(self.raw);
                 let aborted = abort.load(Ordering::Relaxed);
                 if err != ESP_OK {
                     if aborted {
                         return Err(HttpError::Aborted);
                     }
-                    return Err(HttpError::RequestFailed(err_name(err).to_string()));
+                    return Err(HttpError::RequestFailed(err_name(err)));
                 }
                 if aborted {
                     return Err(HttpError::Aborted);
                 }
-                let status = esp_http_client_get_status_code(client);
-                let body_str = String::from_utf8_lossy(&ctx.body).into_owned();
+                let status = esp_http_client_get_status_code(self.raw);
+                let body_str = String::from_utf8_lossy(&self.ctx.body).into_owned();
                 if status != 200 {
                     return Err(HttpError::UnexpectedStatus(parse_error_message_body(
                         &body_str, status,
@@ -290,10 +339,57 @@ mod espidf_driver {
                     status_code: status,
                     body: body_str,
                 })
-            })();
+            }
+        }
+    }
 
-            unsafe { esp_http_client_cleanup(client) };
-            result
+    /// `esp_http_client`-backed transport implementing both [`ClawHttp`]
+    /// (blocking, cancelled via the in-band abort flag) and [`ClawHttpAsync`]
+    /// (non-blocking `config.is_async` mode, cancelled by dropping the future).
+    ///
+    /// The blocking seam owns a persistent keep-alive [`EspClient`] (created on
+    /// the first request and reused after) and is therefore driven through
+    /// `&mut self`. The async seam uses an independent per-request client and
+    /// does not touch the persistent connection.
+    pub struct EspIdfHttp {
+        // `None` until the first `post_json`; established lazily and reused.
+        conn: Option<EspClient>,
+    }
+
+    impl EspIdfHttp {
+        /// Create a transport with no open connection. The keep-alive client is
+        /// established lazily on the first [`ClawHttp::post_json`].
+        pub fn new() -> Self {
+            Self { conn: None }
+        }
+    }
+
+    impl Default for EspIdfHttp {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    // SAFETY: the only non-`Send`/`Sync` content is the raw `esp_http_client`
+    // handle inside `conn`, reached exclusively through `&mut self`
+    // (`post_json`) and so never used concurrently. Moving the transport between
+    // threads (`Send`) is sound because the handle is touched only by its owner;
+    // `&self` access (`ClawHttpAsync::transfer`) reads no shared state, so `Sync`
+    // is sound too. The `ClawHttpAsync` supertrait requires both bounds.
+    unsafe impl Send for EspIdfHttp {}
+    unsafe impl Sync for EspIdfHttp {}
+
+    impl ClawHttp for EspIdfHttp {
+        fn post_json(
+            &mut self,
+            request: &HttpJsonRequest,
+            abort: &AtomicBool,
+        ) -> Result<HttpResponse, HttpError> {
+            if self.conn.is_none() {
+                self.conn = Some(EspClient::new(request)?);
+            }
+            let client = self.conn.as_mut().ok_or(HttpError::ClientInitFailed)?;
+            client.execute(request, abort)
         }
     }
 

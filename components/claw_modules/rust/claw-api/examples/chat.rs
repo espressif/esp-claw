@@ -12,7 +12,6 @@
 //! device the espidf layer implements [`ClawHttp`] over `esp_http_client`.
 
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 
 use claw_api::{ChatJsonRequest, ChatRequest, ClawApi, ClawApiConfig};
 use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse};
@@ -26,7 +25,7 @@ struct StubHttp;
 
 impl ClawHttp for StubHttp {
     fn post_json(
-        &self,
+        &mut self,
         request: &HttpJsonRequest,
         _abort: &AtomicBool,
     ) -> Result<HttpResponse, HttpError> {
@@ -59,7 +58,7 @@ const WEATHER_SCHEMA: &str = r#"{
     "additionalProperties": false
 }"#;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> anyhow::Result<()> {
     let config = ClawApiConfig {
         api_key: Some("sk-demo".into()),
         backend_type: "openai_compatible".into(),
@@ -69,7 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         supports_vision: true,
         ..Default::default()
     };
-    let api = ClawApi::init(config, Arc::new(StubHttp))?;
+    let mut api = ClawApi::init(config, StubHttp)?;
     let abort = AtomicBool::new(false);
 
     // 1. Plain chat → free-form text (+ any tool calls).

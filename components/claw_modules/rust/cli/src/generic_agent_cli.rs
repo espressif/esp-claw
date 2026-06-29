@@ -34,7 +34,8 @@ fn main() {
     // `conversation` manifest. An empty resolver suffices here: the kind declares
     // no capability/skill names, and the base agent merges its own control tools.
     let resolver = MapAgentResolver::new();
-    let config = AgentConfig::resolve("conversation", &resolver).expect("resolve conversation config");
+    let config =
+        AgentConfig::resolve("conversation", &resolver).expect("resolve conversation config");
     // No graph host is wired here, so the single agent gets neither the
     // `spawn_subagent` nor `respond_to_approval` tool — this is the single-agent
     // path on purpose.

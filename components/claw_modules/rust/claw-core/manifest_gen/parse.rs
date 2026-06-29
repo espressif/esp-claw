@@ -3,9 +3,10 @@
 //! returned as an error so the build script can fail the build with a clear
 //! message.
 
-use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use anyhow::{anyhow, bail, Context, Result};
 
 use crate::model::{AgentJson, CapabilitiesJson, SkillsJson};
 
@@ -85,14 +86,13 @@ pub struct CommonBase {
 ///
 /// Errors if `common/` contains `agent.json`, has a missing/stray entry, or if
 /// its `capabilities.json` / `skills.json` is malformed.
-pub fn parse_common(common_dir: &Path) -> Result<CommonBase, Box<dyn Error>> {
+pub fn parse_common(common_dir: &Path) -> Result<CommonBase> {
     if common_dir.join("agent.json").is_file() {
-        return Err(format!(
+        bail!(
             "{} must not contain agent.json: the shared base defines default \
              capabilities/skills/instructions inherited by all kinds, not an agent kind",
             common_dir.display()
-        )
-        .into());
+        );
     }
 
     // The shared base layout is fixed: the two metadata subdirectories (each
@@ -107,11 +107,10 @@ pub fn parse_common(common_dir: &Path) -> Result<CommonBase, Box<dyn Error>> {
 
     let instructions_path = common_dir.join("instructions.md");
     if !instructions_path.is_file() {
-        return Err(format!(
+        bail!(
             "{} must be a file, not a directory",
             instructions_path.display()
-        )
-        .into());
+        );
     }
 
     Ok(CommonBase {
@@ -125,11 +124,11 @@ pub fn parse_common(common_dir: &Path) -> Result<CommonBase, Box<dyn Error>> {
 ///
 /// The directory name is the source of truth for the kind: `agent.json`'s
 /// declared `kind` must match it, otherwise the build fails.
-pub fn parse_kind(dir: &Path) -> Result<ParsedManifest, Box<dyn Error>> {
+pub fn parse_kind(dir: &Path) -> Result<ParsedManifest> {
     let dir_name = dir
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or_else(|| format!("agent kind directory has no UTF-8 name: {}", dir.display()))?
+        .ok_or_else(|| anyhow!("agent kind directory has no UTF-8 name: {}", dir.display()))?
         .to_string();
 
     // A kind directory's layout is fixed: exactly the two files plus the two
@@ -141,12 +140,11 @@ pub fn parse_kind(dir: &Path) -> Result<ParsedManifest, Box<dyn Error>> {
 
     let agent: AgentJson = read_json(dir, "agent.json")?;
     if agent.kind != dir_name {
-        return Err(format!(
+        bail!(
             "kind mismatch in {}: directory is '{dir_name}' but agent.json declares '{}'",
             dir.display(),
             agent.kind
-        )
-        .into());
+        );
     }
 
     let capabilities: CapabilitiesJson = read_json(dir, "capabilities/capabilities.json")?;
@@ -154,11 +152,10 @@ pub fn parse_kind(dir: &Path) -> Result<ParsedManifest, Box<dyn Error>> {
 
     let instructions_path = dir.join("instructions.md");
     if !instructions_path.is_file() {
-        return Err(format!(
+        bail!(
             "{} must be a file, not a directory",
             instructions_path.display()
-        )
-        .into());
+        );
     }
 
     Ok(ParsedManifest {
@@ -189,14 +186,14 @@ pub fn parse_kind(dir: &Path) -> Result<ParsedManifest, Box<dyn Error>> {
 ///
 /// Errors if `dir` cannot be read, a required entry is missing, or an
 /// unexpected entry is present.
-pub(crate) fn ensure_exact_entries(dir: &Path, expected: &[&str]) -> Result<(), Box<dyn Error>> {
+pub(crate) fn ensure_exact_entries(dir: &Path, expected: &[&str]) -> Result<()> {
     let mut actual: Vec<String> = Vec::new();
-    for entry in fs::read_dir(dir).map_err(|error| format!("reading {}: {error}", dir.display()))? {
+    for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
         let entry = entry?;
         let name = entry
             .file_name()
             .to_str()
-            .ok_or_else(|| format!("non-UTF-8 entry name in {}", dir.display()))?
+            .ok_or_else(|| anyhow!("non-UTF-8 entry name in {}", dir.display()))?
             .to_string();
         if name.starts_with('.') {
             continue;
@@ -206,22 +203,20 @@ pub(crate) fn ensure_exact_entries(dir: &Path, expected: &[&str]) -> Result<(), 
 
     for want in expected {
         if !actual.iter().any(|name| name == want) {
-            return Err(format!(
+            bail!(
                 "{}: missing required entry '{want}' (the manifest layout is fixed: \
                  exactly {expected:?})",
                 dir.display()
-            )
-            .into());
+            );
         }
     }
     for got in &actual {
         if !expected.iter().any(|want| want == got) {
-            return Err(format!(
+            bail!(
                 "{}: unexpected entry '{got}' (the manifest layout is fixed: \
                  exactly {expected:?}; remove it or add it to the schema)",
                 dir.display()
-            )
-            .into());
+            );
         }
     }
     Ok(())
@@ -229,13 +224,8 @@ pub(crate) fn ensure_exact_entries(dir: &Path, expected: &[&str]) -> Result<(), 
 
 /// Read and deserialize `dir/<relative>` as JSON, wrapping IO/parse errors with
 /// the offending path.
-fn read_json<T: serde::de::DeserializeOwned>(
-    dir: &Path,
-    relative: &str,
-) -> Result<T, Box<dyn Error>> {
+fn read_json<T: serde::de::DeserializeOwned>(dir: &Path, relative: &str) -> Result<T> {
     let path = dir.join(relative);
-    let text = fs::read_to_string(&path)
-        .map_err(|error| format!("reading {}: {error}", path.display()))?;
-    serde_json::from_str(&text)
-        .map_err(|error| format!("parsing {}: {error}", path.display()).into())
+    let text = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
 }

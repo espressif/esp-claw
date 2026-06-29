@@ -26,12 +26,13 @@
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
-use claw_agent_cli::{load_env, make_http, make_llm_config, make_memory_deps};
+use claw_agent_cli::{load_env, make_llm_config, make_memory_deps, CliFs};
 use claw_core::agent::{FsAgentFactory, MapAgentResolver};
 use claw_core::{
     ChannelEgress, ChannelEgressHub, ChannelIngressSink, ChannelTransport, InboundMessage,
     Orchestrator, RecordingTransport,
 };
+use claw_interface::RealHttp;
 
 const MEMORY_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -95,10 +96,9 @@ fn main() {
     // Empty resolver: the built-in conversation/worker manifests declare no extra
     // capabilities, so no name->handler mapping is needed yet.
     let resolver = Arc::new(MapAgentResolver::new());
-    let factory = Arc::new(FsAgentFactory::new(
+    let factory = Arc::new(FsAgentFactory::<CliFs, RealHttp>::new(
         resolver,
         make_llm_config(true),
-        make_http(),
         MEMORY_DIR,
         make_memory_deps(),
     ));

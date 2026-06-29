@@ -1,4 +1,4 @@
-# claw-cabi — design (DRAFT, plan only)
+# claw-cabi — design
 
 `claw-cabi` is the **single outbound C ABI** for the Rust agent/capability stack:
 the one crate that turns the pure-Rust APIs back into a C ABI for the firmware's
@@ -16,10 +16,24 @@ driven from Rust, not exposed to C. The crate also contains the Rust-side bridge
 that wires the populated `Registry` into the agent (§6) — that is plain Rust,
 not ABI.
 
-> Status: **design + interface draft only.** No crate skeleton, no
-> implementation yet. The header in `include/claw_cabi.h` documents the intended
-> ABI; the authoritative header will be **cbindgen-generated** once the crate is
-> implemented.
+> Status: **the three ABI functions are implemented and host-tested**
+> (`src/result.rs`, `src/abi.rs`, `src/wrappers.rs`, `src/lib.rs`).
+> `include/claw_cabi.h` is the **authoritative, hand-maintained** header — its
+> layout and enum discriminants match the Rust exactly. cbindgen is kept only as
+> a layout cross-check (`cbindgen.toml`), not the generator of record: it strips
+> the header prose and emits enum constants as `CLAW_CAPABILITY_ERROR_KIND_T_OK`
+> (a `_t`-qualified prefix) rather than the agreed `CLAW_CAPABILITY_OK` names.
+>
+> The §6 bridge **glue is implemented and host-tested** in `src/bridge.rs`:
+> `RegistryResolver` (tools -> `AgentResolver`, skills threaded through),
+> `RegistryChannelTransport` (channel adapter -> `ChannelTransport`), and
+> `register_channels`. It lives in `claw-cabi` rather than `claw-core` (the design
+> floated `claw-core`) to keep the actively-evolving core crate untouched; both are
+> equally host-testable. Still pending: the **firmware Rust entry point** that
+> assembles the `Orchestrator`, installs `RegistryResolver`, calls
+> `register_channels`, and hands the orchestrator out as the
+> `claw_capability_ingress_t` — that is app-shell wiring against `claw-agent`'s
+> construction API.
 
 Inbound C→Rust shims (`claw-sys`: log sink, HTTP, thread) are the *opposite*
 direction and stay where they are. This crate is strictly outbound (Rust→C).
