@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use std::ffi::CString;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use claw_capability::CapabilityError;
+use claw_agent::CapabilityError;
 
 /// Error taxonomy mirrored from [`CapabilityError`]; `Ok` carries no message.
 #[repr(C)]

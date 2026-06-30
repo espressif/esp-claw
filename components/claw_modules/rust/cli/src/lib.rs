@@ -12,6 +12,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use claw_api::{ClawApi, ClawApiConfig};
+use claw_core::agent::LongTermDeps;
+use claw_core::{global_store, LlmExtractor, RuleBasedTierClassifier};
 use claw_interface::{DiskFs, RealHttp, StdThread};
 use claw_memory::{ConversationConfig, ConversationDeps, ConversationMemory, NoopCompactor};
 use claw_utils::{PoolConfig, SharedTaskPool};
@@ -141,4 +143,25 @@ pub fn make_memory(
 /// If the background memory task pool cannot be created.
 pub fn make_memory_ingredients(memory_dir: &str) -> (ConversationConfig, ConversationDeps<CliFs>) {
     (ConversationConfig::new(memory_dir), make_memory_deps())
+}
+
+/// Build the long-term-memory collaborators rooted at `base_dir` — mandatory for
+/// every agent a [`claw_core::agent::FsAgentFactory`] builds: one shared global
+/// store under `<base_dir>/global`, per-agent stores under `<base_dir>/agents`,
+/// rule-based tier routing, and LLM-backed background extraction over a fresh
+/// client.
+///
+/// # Panics
+///
+/// If the extraction LLM client cannot init (missing `CLAW_LLM_*`).
+pub fn make_long_term_deps(base_dir: &str) -> LongTermDeps<CliFs> {
+    let base_dir = base_dir.trim_end_matches('/');
+    let global = global_store(format!("{base_dir}/global"), DiskFs::absolute());
+    let extractor = LlmExtractor::shared(make_llm(true));
+    LongTermDeps::new(
+        global,
+        format!("{base_dir}/agents"),
+        RuleBasedTierClassifier::shared(),
+        extractor,
+    )
 }

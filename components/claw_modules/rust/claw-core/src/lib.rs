@@ -21,8 +21,8 @@ pub use channels::{
 };
 pub use claw_utils::define_prefixed_id;
 pub use memory::{
-    agent_store, global_store, ExtractError, ExtractedItem, Extractor, History, LlmCompactor,
-    LlmExtractor, LongTermMemoryAdapter, Memory, MemoryTier, NoopExtractor,
+    agent_store, global_store, ContextAdapter, ExtractError, ExtractedItem, Extractor, History,
+    LlmCompactor, LlmExtractor, LongTermMemoryAdapter, MemoryTier, NoopExtractor,
     RuleBasedTierClassifier, TierClassifier, Transcript, AGENT_ID_PREFIX, GLOBAL_ID_PREFIX,
 };
 pub use orchestrator::{

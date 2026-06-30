@@ -22,28 +22,44 @@
 //! borrowed both ways (see `result`).
 
 mod abi;
-mod bridge;
 mod result;
 mod wrappers;
 
 use std::sync::Arc;
+#[cfg(target_os = "espidf")]
+use std::sync::Mutex;
 
-use claw_capability::{CapabilityError, Registry};
-use claw_core::{ChannelIngressSink, InboundMessage};
+#[cfg(target_os = "espidf")]
+use claw_agent::{AgentSystem, ClawApiConfig, PoolConfig, SessionId, SharedTaskPool};
+use claw_agent::{CapabilityError, ChannelIngressSink, InboundMessage, Registry};
+#[cfg(target_os = "espidf")]
+use claw_sys::{EspIdfFs, EspIdfHttp, EspIdfThread};
+#[cfg(target_os = "espidf")]
+use core::{
+    ffi::{c_char, CStr},
+    ptr,
+};
 
 pub use abi::{
-    ClawCapability, ClawCapabilityChannel, ClawCapabilityExecuteCallback, ClawCapabilityGroup,
-    ClawCapabilityLifecycle, ClawCapabilityLifecycleCallback, ClawCapabilityRole,
-    ClawCapabilityRoleData, ClawCapabilitySendCallback, ClawCapabilityTool, ClawInboundMessage,
-    CLAW_CAPABILITY_TOOL_OUTPUT_CAPACITY,
+    ClawAgentSystemConfig, ClawCapability, ClawCapabilityChannel, ClawCapabilityExecuteCallback,
+    ClawCapabilityGroup, ClawCapabilityLifecycle, ClawCapabilityLifecycleCallback,
+    ClawCapabilityRole, ClawCapabilityRoleData, ClawCapabilitySendCallback, ClawCapabilityTool,
+    ClawInboundMessage, CLAW_CAPABILITY_TOOL_OUTPUT_CAPACITY,
 };
-pub use bridge::{register_channels, RegistryChannelTransport, RegistryResolver};
 pub use result::{ClawCapabilityErrorKind, ClawCapabilityResult};
 
 use crate::result::{from_result, guard};
 use crate::wrappers::{build_capability, build_group, build_inbound};
 
-/// Opaque registry handle: wraps `Arc<claw_capability::Registry>`.
+/// Opaque agent runtime handle.
+#[cfg(target_os = "espidf")]
+pub struct ClawAgentSystem {
+    system: AgentSystem,
+    registry: Arc<Registry>,
+    default_session: Mutex<Option<SessionId>>,
+}
+
+/// Opaque registry handle: wraps `Arc<claw_agent::Registry>`.
 ///
 /// Created and destroyed Rust-side (the firmware's Rust entry point owns the
 /// `Registry`); C only receives the pointer to register into it.
@@ -70,7 +86,42 @@ impl ClawCapabilityRegistry {
     }
 }
 
-/// Opaque ingress handle: wraps `Arc<dyn claw_core::ChannelIngressSink>`.
+/// Create an empty capability registry for C registration.
+///
+/// # Safety
+/// `ret_registry` must be a valid out-pointer.
+#[no_mangle]
+pub unsafe extern "C" fn claw_capability_registry_create(
+    ret_registry: *mut *mut ClawCapabilityRegistry,
+) -> ClawCapabilityResult {
+    guard(|| from_result(unsafe { registry_create_inner(ret_registry) }))
+}
+
+unsafe fn registry_create_inner(
+    ret_registry: *mut *mut ClawCapabilityRegistry,
+) -> Result<(), CapabilityError> {
+    let out = ret_registry.as_mut().ok_or(CapabilityError::InvalidArg)?;
+    *out = core::ptr::null_mut();
+    *out = ClawCapabilityRegistry::into_raw(Arc::new(Registry::new()));
+    Ok(())
+}
+
+/// Destroy a registry handle previously returned by
+/// [`claw_capability_registry_create`].
+///
+/// # Safety
+/// `registry` must be null or a live registry handle not already destroyed.
+#[no_mangle]
+pub unsafe extern "C" fn claw_capability_registry_destroy(
+    registry: *mut ClawCapabilityRegistry,
+) -> ClawCapabilityResult {
+    guard(|| {
+        unsafe { ClawCapabilityRegistry::drop_raw(registry) };
+        crate::result::ok()
+    })
+}
+
+/// Opaque ingress handle: wraps `Arc<dyn claw_agent::ChannelIngressSink>`.
 ///
 /// Created Rust-side after the runtime is wired (the sink is the `Orchestrator`)
 /// and handed to C so channel gateways can push inbound messages.
@@ -94,6 +145,338 @@ impl ClawCapabilityIngress {
             drop(Box::from_raw(handle));
         }
     }
+}
+
+/// Destroy an ingress handle returned by [`claw_agent_system_create`].
+///
+/// # Safety
+/// `ingress` must be null or a live ingress handle not already destroyed.
+#[no_mangle]
+pub unsafe extern "C" fn claw_capability_ingress_destroy(
+    ingress: *mut ClawCapabilityIngress,
+) -> ClawCapabilityResult {
+    guard(|| {
+        unsafe { ClawCapabilityIngress::drop_raw(ingress) };
+        crate::result::ok()
+    })
+}
+
+#[cfg(target_os = "espidf")]
+/// Build an ESP-IDF agent runtime from an already-populated registry.
+///
+/// This does not start capability lifecycle hooks. C can store the returned
+/// ingress handle in channel contexts, then call [`claw_agent_system_start`].
+///
+/// # Safety
+/// All pointers must be valid for the duration of the call. `registry` must be a
+/// live registry handle. `ret_system` and `ret_ingress` must be valid
+/// out-pointers.
+#[no_mangle]
+pub unsafe extern "C" fn claw_agent_system_create(
+    config: *const ClawAgentSystemConfig,
+    registry: *mut ClawCapabilityRegistry,
+    ret_system: *mut *mut ClawAgentSystem,
+    ret_ingress: *mut *mut ClawCapabilityIngress,
+) -> ClawCapabilityResult {
+    guard(|| {
+        from_result(unsafe { agent_system_create_inner(config, registry, ret_system, ret_ingress) })
+    })
+}
+
+#[cfg(target_os = "espidf")]
+unsafe fn agent_system_create_inner(
+    config: *const ClawAgentSystemConfig,
+    registry: *mut ClawCapabilityRegistry,
+    ret_system: *mut *mut ClawAgentSystem,
+    ret_ingress: *mut *mut ClawCapabilityIngress,
+) -> Result<(), CapabilityError> {
+    let config = config.as_ref().ok_or(CapabilityError::InvalidArg)?;
+    let registry_handle = registry.as_ref().ok_or(CapabilityError::InvalidArg)?;
+    let system_out = ret_system.as_mut().ok_or(CapabilityError::InvalidArg)?;
+    let ingress_out = ret_ingress.as_mut().ok_or(CapabilityError::InvalidArg)?;
+    *system_out = core::ptr::null_mut();
+    *ingress_out = core::ptr::null_mut();
+
+    let registry = Arc::clone(&registry_handle.registry);
+    let llm = build_llm_config(config)?;
+    let memory_dir = unsafe { required_string(config.memory_dir)? };
+    let pool = Arc::new(
+        SharedTaskPool::new(PoolConfig::default(), EspIdfThread)
+            .map_err(|error| CapabilityError::Failed(error.to_string()))?,
+    );
+
+    let mut builder = AgentSystem::builder::<EspIdfFs, EspIdfHttp>()
+        .llm(llm)
+        .memory_dir(memory_dir)
+        .task_pool(pool)
+        .capabilities(Arc::clone(&registry));
+    if let Some(channel) = unsafe { optional_string(config.default_channel)? } {
+        builder = builder.channel(channel);
+    }
+
+    let system = builder
+        .build()
+        .map_err(|error| CapabilityError::Failed(error.to_string()))?;
+    let ingress = system.ingress();
+
+    *ingress_out = ClawCapabilityIngress::into_raw(ingress);
+    *system_out = Box::into_raw(Box::new(ClawAgentSystem {
+        system,
+        registry,
+        default_session: Mutex::new(None),
+    }));
+    Ok(())
+}
+
+#[cfg(target_os = "espidf")]
+/// Start all registered capability lifecycles for this runtime.
+///
+/// # Safety
+/// `system` must be a live system handle.
+#[no_mangle]
+pub unsafe extern "C" fn claw_agent_system_start(
+    system: *mut ClawAgentSystem,
+) -> ClawCapabilityResult {
+    guard(|| from_result(unsafe { agent_system_start_inner(system) }))
+}
+
+#[cfg(target_os = "espidf")]
+unsafe fn agent_system_start_inner(system: *mut ClawAgentSystem) -> Result<(), CapabilityError> {
+    let handle = system.as_ref().ok_or(CapabilityError::InvalidArg)?;
+    handle.registry.start_all()
+}
+
+#[cfg(target_os = "espidf")]
+/// Stop all registered capability lifecycles for this runtime.
+///
+/// # Safety
+/// `system` must be a live system handle.
+#[no_mangle]
+pub unsafe extern "C" fn claw_agent_system_stop(
+    system: *mut ClawAgentSystem,
+) -> ClawCapabilityResult {
+    guard(|| from_result(unsafe { agent_system_stop_inner(system) }))
+}
+
+#[cfg(target_os = "espidf")]
+unsafe fn agent_system_stop_inner(system: *mut ClawAgentSystem) -> Result<(), CapabilityError> {
+    let handle = system.as_ref().ok_or(CapabilityError::InvalidArg)?;
+    handle.registry.stop_all()
+}
+
+#[cfg(target_os = "espidf")]
+/// Destroy an agent runtime handle, stopping lifecycles first.
+///
+/// # Safety
+/// `system` must be null or a live system handle not already destroyed.
+#[no_mangle]
+pub unsafe extern "C" fn claw_agent_system_destroy(
+    system: *mut ClawAgentSystem,
+) -> ClawCapabilityResult {
+    guard(|| from_result(unsafe { agent_system_destroy_inner(system) }))
+}
+
+#[cfg(target_os = "espidf")]
+unsafe fn agent_system_destroy_inner(system: *mut ClawAgentSystem) -> Result<(), CapabilityError> {
+    if system.is_null() {
+        return Ok(());
+    }
+    let boxed = Box::from_raw(system);
+    boxed.registry.stop_all()?;
+    drop(boxed);
+    Ok(())
+}
+
+#[cfg(target_os = "espidf")]
+/// Send one text prompt synchronously through the Rust agent runtime.
+///
+/// `session_id` may be null, empty, or `"default"` to use an ABI-owned default
+/// session. When `session_id_buffer` is provided, the actual session id is
+/// copied back as `session-N`.
+///
+/// # Safety
+/// `system` must be a live system handle. String pointers must be valid
+/// NUL-terminated UTF-8 strings for the duration of this call. Output buffers
+/// must be writable for their stated capacities.
+#[no_mangle]
+pub unsafe extern "C" fn claw_agent_system_send(
+    system: *mut ClawAgentSystem,
+    session_id: *const c_char,
+    text: *const c_char,
+    output_buffer: *mut c_char,
+    output_capacity: usize,
+    output_length: *mut usize,
+    session_id_buffer: *mut c_char,
+    session_id_capacity: usize,
+    session_id_length: *mut usize,
+) -> ClawCapabilityResult {
+    guard(|| {
+        from_result(unsafe {
+            agent_system_send_inner(
+                system,
+                session_id,
+                text,
+                output_buffer,
+                output_capacity,
+                output_length,
+                session_id_buffer,
+                session_id_capacity,
+                session_id_length,
+            )
+        })
+    })
+}
+
+#[cfg(target_os = "espidf")]
+#[allow(clippy::too_many_arguments)]
+unsafe fn agent_system_send_inner(
+    system: *mut ClawAgentSystem,
+    session_id: *const c_char,
+    text: *const c_char,
+    output_buffer: *mut c_char,
+    output_capacity: usize,
+    output_length: *mut usize,
+    session_id_buffer: *mut c_char,
+    session_id_capacity: usize,
+    session_id_length: *mut usize,
+) -> Result<(), CapabilityError> {
+    let handle = system.as_ref().ok_or(CapabilityError::InvalidArg)?;
+    let text = required_string(text)?;
+    let session = resolve_session(handle, optional_string(session_id)?)?;
+    let response = handle.system.send(session, text).join("\n");
+    copy_string_to_c_buffer(&response, output_buffer, output_capacity, output_length)?;
+
+    if !session_id_buffer.is_null() {
+        copy_string_to_c_buffer(
+            &session.to_wire(),
+            session_id_buffer,
+            session_id_capacity,
+            session_id_length,
+        )?;
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "espidf")]
+fn resolve_session(
+    handle: &ClawAgentSystem,
+    requested: Option<String>,
+) -> Result<SessionId, CapabilityError> {
+    if matches!(requested.as_deref(), None | Some("default")) {
+        let mut default_session = handle
+            .default_session
+            .lock()
+            .map_err(|_| CapabilityError::Failed("default session lock poisoned".to_string()))?;
+        let session = match *default_session {
+            Some(session) => session,
+            None => {
+                let session = handle.system.new_session();
+                *default_session = Some(session);
+                session
+            }
+        };
+        return Ok(session);
+    }
+
+    let session_id = requested.ok_or(CapabilityError::InvalidArg)?;
+    SessionId::from_wire(&session_id).map_err(|error| CapabilityError::Failed(error.to_string()))
+}
+
+#[cfg(target_os = "espidf")]
+unsafe fn build_llm_config(
+    config: &ClawAgentSystemConfig,
+) -> Result<ClawApiConfig, CapabilityError> {
+    Ok(ClawApiConfig {
+        api_key: Some(required_string(config.api_key)?),
+        backend_type: required_string(config.backend_type)?,
+        model: Some(required_string(config.model)?),
+        base_url: optional_string(config.base_url)?,
+        auth_type: optional_string(config.auth_type)?,
+        max_tokens_field: optional_string(config.max_tokens_field)?,
+        timeout_ms: config.timeout_ms,
+        max_tokens: config.max_tokens,
+        image_max_bytes: config.image_max_bytes,
+        supports_tools: config.supports_tools,
+        supports_vision: config.supports_vision,
+        image_remote_url_only: config.image_remote_url_only,
+        ..Default::default()
+    })
+}
+
+/// Copy a required, non-empty UTF-8 C string.
+///
+/// # Safety
+/// `pointer` must be a valid NUL-terminated C string.
+#[cfg(target_os = "espidf")]
+unsafe fn required_string(pointer: *const c_char) -> Result<String, CapabilityError> {
+    if pointer.is_null() {
+        return Err(CapabilityError::InvalidArg);
+    }
+    let value = CStr::from_ptr(pointer)
+        .to_str()
+        .map(str::to_string)
+        .map_err(|_| CapabilityError::InvalidArg)?;
+    if value.is_empty() {
+        return Err(CapabilityError::InvalidArg);
+    }
+    Ok(value)
+}
+
+/// Copy a nullable UTF-8 C string; null or empty becomes `None`.
+///
+/// # Safety
+/// `pointer` must be null or a valid NUL-terminated C string.
+#[cfg(target_os = "espidf")]
+unsafe fn optional_string(pointer: *const c_char) -> Result<Option<String>, CapabilityError> {
+    if pointer.is_null() {
+        return Ok(None);
+    }
+    let value = CStr::from_ptr(pointer)
+        .to_str()
+        .map(str::to_string)
+        .map_err(|_| CapabilityError::InvalidArg)?;
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(value))
+    }
+}
+
+/// Copy a Rust string into a writable C buffer and NUL-terminate it.
+///
+/// On overflow, copies the longest valid prefix, writes `*output_length` to the
+/// required byte length, and returns `Failed`.
+///
+/// # Safety
+/// `buffer` must be writable for `capacity` bytes and `output_length` must be a
+/// valid out-pointer.
+#[cfg(target_os = "espidf")]
+unsafe fn copy_string_to_c_buffer(
+    value: &str,
+    buffer: *mut c_char,
+    capacity: usize,
+    output_length: *mut usize,
+) -> Result<(), CapabilityError> {
+    let output_length = output_length.as_mut().ok_or(CapabilityError::InvalidArg)?;
+    *output_length = value.len();
+    if buffer.is_null() || capacity == 0 {
+        return Err(CapabilityError::InvalidArg);
+    }
+
+    let bytes = value.as_bytes();
+    let max_payload = capacity.checked_sub(1).ok_or(CapabilityError::InvalidArg)?;
+    let copied = bytes.len().min(max_payload);
+    ptr::copy_nonoverlapping(bytes.as_ptr(), buffer.cast::<u8>(), copied);
+    *buffer.add(copied) = 0;
+
+    if copied != bytes.len() {
+        return Err(CapabilityError::Failed(
+            "output buffer too small for agent response".to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Register one capability into the registry.
@@ -182,9 +565,7 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Mutex;
 
-    use claw_capability::OutboundMessage;
-    use claw_core::InboundCommand;
-    use claw_tool::ToolInvocation;
+    use claw_agent::{InboundCommand, OutboundMessage, ToolInvocation};
 
     fn ok_value() -> ClawCapabilityResult {
         ClawCapabilityResult {

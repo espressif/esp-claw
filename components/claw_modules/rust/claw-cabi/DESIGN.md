@@ -24,16 +24,18 @@ not ABI.
 > the header prose and emits enum constants as `CLAW_CAPABILITY_ERROR_KIND_T_OK`
 > (a `_t`-qualified prefix) rather than the agreed `CLAW_CAPABILITY_OK` names.
 >
-> The §6 bridge **glue is implemented and host-tested** in `src/bridge.rs`:
+> The §6 bridge **glue lives in `claw-agent`** (`src/capability.rs`:
 > `RegistryResolver` (tools -> `AgentResolver`, skills threaded through),
 > `RegistryChannelTransport` (channel adapter -> `ChannelTransport`), and
-> `register_channels`. It lives in `claw-cabi` rather than `claw-core` (the design
-> floated `claw-core`) to keep the actively-evolving core crate untouched; both are
-> equally host-testable. Still pending: the **firmware Rust entry point** that
-> assembles the `Orchestrator`, installs `RegistryResolver`, calls
-> `register_channels`, and hands the orchestrator out as the
-> `claw_capability_ingress_t` — that is app-shell wiring against `claw-agent`'s
-> construction API.
+> `register_channels`) and is wired automatically by
+> `AgentSystemBuilder::capabilities(...)`. `claw-cabi` **consumes claw-agent's
+> wrapped API** rather than re-wrapping the lower crates: it depends only on
+> `claw-agent` (with `default-features = false` so the dev backends never reach
+> the device image) and uses its re-exports. Still pending: the **firmware Rust
+> entry point** that builds an `AgentSystem` from the populated `Registry`
+> (`builder().capabilities(registry)`), drives lifecycle, and hands the
+> orchestrator out as the `claw_capability_ingress_t` via `AgentSystem::ingress()`
+> — app-shell wiring against `claw-agent`'s construction API.
 
 Inbound C→Rust shims (`claw-sys`: log sink, HTTP, thread) are the *opposite*
 direction and stay where they are. This crate is strictly outbound (Rust→C).
@@ -284,15 +286,16 @@ C fills the `Registry` (§5) and later pushes inbound (§5b). *Building* the age
 runtime and wiring it to the registry happens entirely in **Rust** — the
 firmware's Rust entry point owns the `Registry` and the `Orchestrator`, drives
 lifecycle (`start_all`, …), and wires the two together. The wiring itself is
-plain Rust glue in `claw-cabi` (core crates unchanged except the new
-`RegistryResolver`); the only C entries on the message path are the `send`
-callback (out) and `claw_capability_ingress_push` (in).
+plain Rust glue in **`claw-agent`** (`src/capability.rs`), applied through
+`AgentSystemBuilder::capabilities(...)`; `claw-cabi` does not duplicate it. The
+only C entries on the message path are the `send` callback (out) and
+`claw_capability_ingress_push` (in).
 
-- **tools → resolver.** New `RegistryResolver { registry: Arc<Registry> }:
-  AgentResolver` in **claw-core** (where `AgentResolver` already lives, host-
-  testable): `resolve_tool(name) = registry.tool(name)` (disabled/absent → `None`
-  → manifest build fails with `UnknownCapability`, never silently dropped).
-  Skills stay on `claw-skill`'s `SkillRegistry`, unrelated to capabilities.
+- **tools → resolver.** `RegistryResolver { registry: Arc<Registry> }:
+  AgentResolver` in **claw-agent**: `resolve_tool(name) = registry.tool(name)`
+  (disabled/absent → `None` → manifest build fails with `UnknownCapability`,
+  never silently dropped). Skills stay on `claw-skill`'s `SkillRegistry`,
+  unrelated to capabilities.
 - **channels → egress.** For each `registry.channels()` adapter, register a
   `ChannelTransport` into the `ChannelEgressHub`. A small adapter converts
   `claw_capability::OutboundMessage` ↔ `claw_core::channels::OutboundMessage`
@@ -403,8 +406,10 @@ This is all C-side work and stays **postponed**; captured here for when it lands
   threads the ingress handle to its gateway tasks* (handed at boot after wiring;
   stored in the channel's `user_context` or an app global) — a C-side wiring
   detail, not an ABI gap.
-- **`RegistryResolver` location** → `claw-core`.
+- **`RegistryResolver` location** → `claw-agent` (`src/capability.rs`).
 - **Tool output buffer** → fixed `CLAW_CAPABILITY_TOOL_OUTPUT_CAPACITY` buffer.
-- **Crate setup** → `crate-type = ["staticlib"]`, `unsafe_code = "allow"` (the
-  only such crate), clippy panic lints still `deny`, depends on
-  `claw-capability` + `claw-agent` + `claw-tool`; cbindgen generates the header.
+- **Crate setup** → `crate-type = ["staticlib", "rlib"]`, `unsafe_code = "allow"`
+  (the only such crate), clippy panic lints still `deny`, depends on `claw-agent`
+  alone (`default-features = false`, so the dev backends — `DiskFs` / reqwest
+  `RealHttp` / `StdThread` — are not compiled into the device image); the header
+  is hand-maintained with cbindgen as a layout cross-check.

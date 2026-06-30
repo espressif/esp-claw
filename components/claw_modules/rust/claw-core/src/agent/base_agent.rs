@@ -65,7 +65,7 @@ use crate::iteration_loop::{
     IterationLoopError, IterationOutcome, IterationResult, IterationStep, PreemptedOutcome,
     SystemPrompt, ToolRun,
 };
-use crate::memory::{ConversationHistory, Memory, Transcript};
+use crate::memory::{ConversationHistory, ContextAdapter, History, Transcript};
 use claw_context::{Block, BlockKind, Context};
 use claw_permission::{Grant, PermissionPolicy};
 use claw_skill::SkillSet;
@@ -387,7 +387,8 @@ pub struct BaseAgent<H: ClawHttp> {
     /// at each boundary (a user message, a committed answer/tool patch, an
     /// end/cancel marker) and **reads** it to assemble each request
     /// ([`run_iteration`](Self::run_iteration)); it also lends the read view
-    /// ([`Transcript::as_history`]) to each [`Memory`] so they can pull from it.
+    /// ([`Transcript::as_history`]) to each [`ContextAdapter`] so they can pull
+    /// from it.
     /// Held behind the [`Transcript`] trait object — the agent never sees the
     /// concrete conversation-memory type, which is why it is not generic over a
     /// filesystem.
@@ -438,14 +439,15 @@ pub struct BaseAgent<H: ClawHttp> {
     outcome: Option<TickOutcome>,
     /// Sink the built-in tools push [`ControlSignal`]s onto; drained each tick.
     control: ControlSink,
-    /// Registered memories. Each pulls the transcript and contributes context
-    /// blocks before every iteration, and may have added its tools to
-    /// [`tools`](Self::tools) at registration. The conversation transcript is
-    /// **not** here (it is [`transcript`](Self::transcript), the thing these
-    /// memories read *from*); these are pure readers (e.g. long-term memory)
-    /// added via [`register_memory`](Self::register_memory). Driven only from this
-    /// tick thread.
-    memories: Vec<Arc<dyn Memory>>,
+    /// Registered context adapters. Each pulls the transcript and contributes
+    /// context (blocks and/or messages) before every iteration, and may have added
+    /// its tools to [`tools`](Self::tools) at registration. The conversation
+    /// transcript is **not** here (it is [`transcript`](Self::transcript), the
+    /// thing these adapters read *from*); these are pure readers (e.g. long-term
+    /// memory) added via [`register_context_adapter`](Self::register_context_adapter).
+    /// Owned (not shared) so they can be refreshed under `&mut`; driven only from
+    /// this tick thread.
+    adapters: Vec<Box<dyn ContextAdapter>>,
     inbox: VecDeque<Inbound>,
 }
 
@@ -481,6 +483,17 @@ impl<H: ClawHttp> BaseAgent<H> {
             agent_kind: String::new(),
             block_retries: DEFAULT_BLOCK_RETRIES,
         }
+    }
+
+    /// A read-only view of this agent's conversation transcript, as the narrow
+    /// [`History`] capability.
+    ///
+    /// The concrete conversation-memory type — and its filesystem parameter —
+    /// stays hidden behind the trait object, so a reader (CLI inspection, a
+    /// test) depends only on this capability, never on storage internals. This
+    /// is the same boundary the agent itself lends to its memories.
+    pub fn history(&self) -> &dyn History {
+        self.transcript.as_history()
     }
 
     // -- Inbound: the kernel + ergonomic wrappers ---------------------------
@@ -632,24 +645,28 @@ impl<H: ClawHttp> BaseAgent<H> {
         }
     }
 
-    // -- Memory registration ------------------------------------------------
+    // -- Context-adapter registration ---------------------------------------
 
-    /// Register a pluggable [`Memory`]. From now on it pulls this agent's
-    /// transcript and contributes context blocks before every iteration; if it
-    /// provides any tools, they are merged into the agent's tool set now.
+    /// Register a pluggable [`ContextAdapter`]. From now on it pulls this agent's
+    /// transcript and contributes context before every iteration; if it provides
+    /// any tools, they are merged into the agent's tool set now.
     ///
     /// Call after [`build`](BaseAgentBuilder::build) and before driving the agent.
-    /// Memories render in registration order, after the agent's own context
-    /// blocks.
+    /// Adapters contribute in registration order, after the agent's own context
+    /// blocks (cross-adapter wire order is fixed by [`BlockKind`], not by this
+    /// order).
     ///
     /// # Errors
     ///
-    /// - [`BaseAgentBuildError::Tools`] if a memory tool name clashes with an
+    /// - [`BaseAgentBuildError::Tools`] if an adapter tool name clashes with an
     ///   existing tool.
-    /// - [`BaseAgentBuildError::ToolsUnsupported`] if the memory provides tools
+    /// - [`BaseAgentBuildError::ToolsUnsupported`] if the adapter provides tools
     ///   but the configured LLM cannot call tools.
-    pub fn register_memory(&mut self, memory: Arc<dyn Memory>) -> Result<(), BaseAgentBuildError> {
-        if let Some(group) = memory.tools() {
+    pub fn register_context_adapter(
+        &mut self,
+        adapter: Box<dyn ContextAdapter>,
+    ) -> Result<(), BaseAgentBuildError> {
+        if let Some(group) = adapter.tools() {
             let Some(tools) = self.tools.as_mut() else {
                 return Err(BaseAgentBuildError::ToolsUnsupported);
             };
@@ -659,24 +676,34 @@ impl<H: ClawHttp> BaseAgent<H> {
             let prose = tools.tool_context().unwrap_or_default().to_string();
             self.context.with(Block::new(BlockKind::ToolPolicy, prose));
         }
-        self.memories.push(memory);
+        self.adapters.push(adapter);
         Ok(())
     }
 
-    /// Pull every registered memory's context blocks into this agent's context.
+    /// Pull every registered adapter's context into this agent's context, in two
+    /// passes so each adapter's read borrow can coexist with the others'.
     ///
-    /// Pull, not push: a memory shared across agents (and written by background
-    /// workers) reads the transcript and feeds blocks into *this* agent's
-    /// [`Context`] only here, on the tick thread that owns it.
-    fn render_memory_context(&mut self) {
-        // Disjoint field borrows: memories + the lent transcript read view (both
-        // shared) feed blocks into context (exclusive).
-        let context = &mut self.context;
+    /// 1. **refresh** (`&mut` each adapter): read the lent transcript and
+    ///    recompute the adapter's cache (and schedule any background work).
+    /// 2. **lend** (`&` each adapter): collect the just-refreshed [`Block`]s into
+    ///    *this* agent's [`Context`].
+    ///
+    /// The message channel ([`ContextAdapter::messages`]) is not consumed here
+    /// yet — the conversation history is still sourced from the transcript.
+    fn render_adapter_context(&mut self) {
+        // Pass 1: refresh under &mut. Disjoint field borrows — the lent transcript
+        // read view (shared) drives each adapter's recompute (exclusive).
         let history = self.transcript.as_history();
-        for memory in &self.memories {
-            memory.render_context(history, &mut |block| {
+        for adapter in &mut self.adapters {
+            adapter.refresh(history);
+        }
+        // Pass 2: lend under &. Disjoint field borrows — each adapter's blocks
+        // (shared) feed into context (exclusive); `with` copies the content out.
+        let context = &mut self.context;
+        for adapter in &self.adapters {
+            for block in adapter.blocks() {
                 context.with(block);
-            });
+            }
         }
     }
 
@@ -743,8 +770,8 @@ impl<H: ClawHttp> BaseAgent<H> {
     /// stitching happens anywhere else; reminders are never written to memory, so
     /// the cached system/history prefix is untouched.
     fn run_iteration(&mut self, iteration_id: IterationId) -> IterationResult {
-        // Pull each memory's blocks into the private context before assembling.
-        self.render_memory_context();
+        // Pull each adapter's blocks into the private context before assembling.
+        self.render_adapter_context();
         let history = self.transcript.messages();
         // Take the disjoint field borrows first, then borrow `context` mutably for
         // the (lazily rebuilt) request. `request` takes `&mut self.context`, so the
@@ -1262,7 +1289,7 @@ impl<F: ClawFs + 'static, H: ClawHttp> BaseAgentBuilder<F, H> {
             projected_lifecycle: AgentState::Idle,
             outcome: None,
             control,
-            memories: Vec::new(),
+            adapters: Vec::new(),
             inbox: VecDeque::new(),
         })
     }
@@ -1880,32 +1907,32 @@ mod gating_tests {
         }
     }
 
-    /// A registered memory pulls the transcript on render and injects a durable
-    /// context block that reaches the next LLM request.
+    /// A registered context adapter pulls the transcript on refresh and lends a
+    /// durable context block that reaches the next LLM request.
     #[test]
-    fn registered_memory_pulls_transcript_and_injects_context() {
+    fn registered_adapter_pulls_transcript_and_injects_context() {
         use std::sync::Mutex;
 
-        use crate::memory::{History, Memory};
+        use crate::memory::{ContextAdapter, History};
         use claw_context::{Block, BlockKind};
 
-        /// On each render, records how many transcript messages it saw and the
-        /// transcript version, then injects one global-memory block.
-        struct RecordingMemory {
+        /// On each refresh, records the transcript version it saw and whether the
+        /// user message was present; then lends one global-memory block.
+        struct RecordingAdapter {
             seen_versions: Arc<Mutex<Vec<u64>>>,
             saw_user: Arc<Mutex<bool>>,
         }
 
-        impl Memory for RecordingMemory {
+        impl ContextAdapter for RecordingAdapter {
             fn id(&self) -> &str {
                 "recording"
             }
-            fn render_context(&self, history: &dyn History, emit: &mut dyn FnMut(Block<'_>)) {
+            fn refresh(&mut self, transcript: &dyn History) {
                 self.seen_versions
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
-                    .push(history.version());
-                let saw_user = history.messages().as_array().is_some_and(|messages| {
+                    .push(transcript.version());
+                let saw_user = transcript.messages().as_array().is_some_and(|messages| {
                     messages.iter().any(|message| {
                         message.get("content").and_then(Value::as_str) == Some("hello")
                     })
@@ -1913,10 +1940,12 @@ mod gating_tests {
                 if saw_user {
                     *self.saw_user.lock().unwrap_or_else(|p| p.into_inner()) = true;
                 }
-                emit(Block::new(
+            }
+            fn blocks(&self) -> Vec<Block<'_>> {
+                vec![Block::new(
                     BlockKind::GlobalMemory,
                     "Remembered: user likes tea.",
-                ));
+                )]
             }
         }
 
@@ -1926,24 +1955,24 @@ mod gating_tests {
         let seen_versions = Arc::new(Mutex::new(Vec::new()));
         let saw_user = Arc::new(Mutex::new(false));
         agent
-            .register_memory(Arc::new(RecordingMemory {
+            .register_context_adapter(Box::new(RecordingAdapter {
                 seen_versions: Arc::clone(&seen_versions),
                 saw_user: Arc::clone(&saw_user),
             }))
-            .expect("register memory");
+            .expect("register adapter");
 
         agent.run("hello");
         assert_eq!(run_to_completion(&mut agent), "ok");
 
-        // The memory rendered at least once and read the user message from the
+        // The adapter refreshed at least once and read the user message from the
         // lent transcript (pull, not push).
         assert!(
             !seen_versions.lock().unwrap().is_empty(),
-            "memory never rendered"
+            "adapter never refreshed"
         );
         assert!(
             *saw_user.lock().unwrap(),
-            "memory did not see the user message"
+            "adapter did not see the user message"
         );
 
         // The injected block reached the request (carried in the system message).

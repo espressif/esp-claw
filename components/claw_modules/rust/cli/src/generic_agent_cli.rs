@@ -17,6 +17,7 @@ use claw_agent_cli::{load_env, make_llm, make_memory_ingredients};
 use claw_core::agent::{
     Agent, AgentCommand, AgentConfig, AgentId, GenericAgent, MapAgentResolver, TickOutcome,
 };
+use claw_core::History;
 use owo_colors::OwoColorize;
 use serde_json::Value;
 
@@ -70,7 +71,7 @@ fn main() {
         }
 
         if input == "/messages" {
-            let messages = agent.memory().messages();
+            let messages = agent.history().messages();
             println!(
                 "{}",
                 serde_json::to_string_pretty(&*messages)
@@ -82,7 +83,7 @@ fn main() {
 
         // Remember where the transcript ends so we can show the tool calls this
         // turn appends, after the reply.
-        let turn_start = message_count(agent.memory());
+        let turn_start = message_count(agent.history());
 
         if let Err(error) = agent.send_command(AgentCommand::AppendMessage(input.to_string())) {
             eprintln!("could not accept input: {error}");
@@ -117,7 +118,7 @@ fn main() {
             }
         }
 
-        print_tool_calls_since(&agent.memory().messages(), turn_start);
+        print_tool_calls_since(&agent.history().messages(), turn_start);
         println!();
     }
 
@@ -125,8 +126,8 @@ fn main() {
 }
 
 /// Number of messages currently in the transcript.
-fn message_count(memory: &claw_memory::ConversationMemory<claw_agent_cli::CliFs>) -> usize {
-    memory.messages().as_array().map_or(0, Vec::len)
+fn message_count(history: &dyn History) -> usize {
+    history.messages().as_array().map_or(0, Vec::len)
 }
 
 /// Print, in gray under the model's reply, every tool call recorded after index

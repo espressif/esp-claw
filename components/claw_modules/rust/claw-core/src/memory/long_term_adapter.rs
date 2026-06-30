@@ -13,8 +13,8 @@
 //! id-addressed operations (`update`/`forget`): the prefix is opaque to the
 //! model but lets the adapter send an edit back to the store that owns the item.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use claw_context::{Block, BlockKind};
 use claw_interface::ClawFs;
@@ -29,7 +29,7 @@ use serde_json::Value;
 use crate::memory::extraction::Extractor;
 use crate::memory::tier::{MemoryTier, TierClassifier};
 use crate::memory::tools::memory_tool_group;
-use crate::memory::traits::{History, Memory};
+use crate::memory::traits::{ContextAdapter, History};
 
 /// Id prefix for the shared global store.
 pub const GLOBAL_ID_PREFIX: &str = "g-";
@@ -126,22 +126,24 @@ impl<F: ClawFs + 'static> MemoryStores<F> {
     }
 }
 
-/// A [`Memory`] over a dual-tier long-term store. See the module docs.
+/// A [`ContextAdapter`] over a dual-tier long-term store. See the module docs.
 pub struct LongTermMemoryAdapter<F: ClawFs + 'static> {
     id: String,
     stores: MemoryStores<F>,
     extractor: Arc<dyn Extractor>,
     pool: Arc<SharedTaskPool>,
-    /// Cached rendered catalog blocks, rebuilt only when a store's version
-    /// advances — so an unchanged store contributes context with zero allocation.
-    catalog_cache: Mutex<CatalogCache>,
+    /// Cached rendered catalog blocks, rebuilt by [`refresh`](Self::refresh) only
+    /// when a store's version advances — so an unchanged store re-lends its blocks
+    /// with no work. Plain fields: the agent calls `refresh` under `&mut self`, so
+    /// no interior lock is needed.
+    catalog: CatalogCache,
     /// Highest transcript [`History::version`] already handed to an extraction
-    /// job. Render schedules a fresh extraction only when the transcript has
+    /// job. Refresh schedules a fresh extraction only when the transcript has
     /// advanced past this, so an unchanged conversation costs nothing.
-    extract_cursor: AtomicU64,
+    extract_cursor: u64,
     /// Single-flight guard: at most one extraction job in the pool at a time.
     /// New transcript content that lands while one runs simply re-triggers on a
-    /// later render, coalescing a busy multi-round turn into roughly one job.
+    /// later refresh, coalescing a busy multi-round turn into roughly one job.
     /// `Arc` so the pool job can clear it on completion off the tick thread.
     extraction_in_flight: Arc<AtomicBool>,
 }
@@ -177,29 +179,29 @@ impl<F: ClawFs + 'static> LongTermMemoryAdapter<F> {
             },
             extractor,
             pool,
-            catalog_cache: Mutex::new(CatalogCache::default()),
-            extract_cursor: AtomicU64::new(0),
+            catalog: CatalogCache::default(),
+            extract_cursor: 0,
             extraction_in_flight: Arc::new(AtomicBool::new(false)),
         }
     }
 
     /// Schedule a background extraction when the transcript has advanced.
     ///
-    /// Pull, not push: called from [`render_context`](Memory::render_context) on
-    /// the tick thread, it self-detects new conversation via [`History::version`]
+    /// Pull, not push: called from [`refresh`](ContextAdapter::refresh) on the
+    /// tick thread, it self-detects new conversation via [`History::version`]
     /// against [`extract_cursor`](Self::extract_cursor). It snapshots only when it
     /// actually schedules (a cheap `Arc` clone of the canonical transcript), and
     /// the single-flight guard coalesces a busy multi-round turn into roughly one
     /// job. Dedup in the store absorbs facts re-extracted across turns.
-    fn maybe_schedule_extraction(&self, history: &dyn History) {
+    fn maybe_schedule_extraction(&mut self, history: &dyn History) {
         let version = history.version();
-        if version == self.extract_cursor.load(Ordering::Acquire) {
+        if version == self.extract_cursor {
             return; // transcript unchanged since the last extraction
         }
         if self.extraction_in_flight.swap(true, Ordering::AcqRel) {
-            return; // one already running; a later render re-triggers
+            return; // one already running; a later refresh re-triggers
         }
-        self.extract_cursor.store(version, Ordering::Release);
+        self.extract_cursor = version;
 
         let snapshot = history.messages();
         let extractor = Arc::clone(&self.extractor);
@@ -227,51 +229,44 @@ impl<F: ClawFs + 'static> LongTermMemoryAdapter<F> {
             in_flight.store(false, Ordering::Release);
         }));
     }
-
-    fn lock_catalog(&self) -> std::sync::MutexGuard<'_, CatalogCache> {
-        self.catalog_cache
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-    }
 }
 
-impl<F: ClawFs + 'static> Memory for LongTermMemoryAdapter<F> {
+impl<F: ClawFs + 'static> ContextAdapter for LongTermMemoryAdapter<F> {
     fn id(&self) -> &str {
         &self.id
     }
 
-    fn render_context(&self, history: &dyn History, emit: &mut dyn FnMut(Block<'_>)) {
-        // Pull, not push: reading the transcript here is also where this memory
+    fn refresh(&mut self, transcript: &dyn History) {
+        // Pull, not push: reading the transcript here is also where this adapter
         // decides whether new conversation warrants a background extraction.
-        self.maybe_schedule_extraction(history);
+        self.maybe_schedule_extraction(transcript);
 
-        let mut cache = self.lock_catalog();
         let global_version = self.stores.global.version();
         let agent_version = self.stores.agent.version();
-        // Rebuild a block's text only when its store changed (or on first render).
-        if !cache.primed || cache.global_version != global_version {
-            cache.global_block = render_catalog(
+        // Rebuild a block's text only when its store changed (or on first refresh).
+        if !self.catalog.primed || self.catalog.global_version != global_version {
+            self.catalog.global_block = render_catalog(
                 "Shared long-term memory topics",
                 &self.stores.global.catalog(),
             );
-            cache.global_version = global_version;
+            self.catalog.global_version = global_version;
         }
-        if !cache.primed || cache.agent_version != agent_version {
-            cache.agent_block =
+        if !self.catalog.primed || self.catalog.agent_version != agent_version {
+            self.catalog.agent_block =
                 render_catalog("Your long-term memory topics", &self.stores.agent.catalog());
-            cache.agent_version = agent_version;
+            self.catalog.agent_version = agent_version;
         }
-        cache.primed = true;
+        self.catalog.primed = true;
+    }
+
+    fn blocks(&self) -> Vec<Block<'_>> {
         // Borrow the cached strings into the blocks — `Context::with` copies them
         // only on a real change, so an unchanged catalog allocates nothing here.
-        emit(Block::new(
-            BlockKind::GlobalMemory,
-            cache.global_block.as_str(),
-        ));
-        emit(Block::new(
-            BlockKind::AgentMemory,
-            cache.agent_block.as_str(),
-        ));
+        // An empty catalog renders to an empty block, which clears that section.
+        vec![
+            Block::new(BlockKind::GlobalMemory, self.catalog.global_block.as_str()),
+            Block::new(BlockKind::AgentMemory, self.catalog.agent_block.as_str()),
+        ]
     }
 
     fn tools(&self) -> Option<ToolGroup> {

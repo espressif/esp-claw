@@ -242,9 +242,8 @@ dependencies = [
 name = "claw-cabi"
 version = "0.1.0"
 dependencies = [
- "claw-capability",
- "claw-core",
- "claw-tool",
+ "claw-agent",
+ "claw-sys",
 ]
 
 [[package]]

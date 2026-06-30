@@ -1,18 +1,17 @@
-//! Turning the C descriptor (`abi`) into the internal `claw_capability` types:
-//! a `Tool` role becomes a [`claw_tool::ToolHandler`], a `Channel` a
-//! [`ChannelAdapter`], and the lifecycle hooks a [`Lifecycle`]. Each wrapper
-//! holds raw C callback pointers + the opaque `user_context`.
+//! Turning the C descriptor (`abi`) into the internal capability types (all
+//! re-exported from `claw_agent`): a `Tool` role becomes a [`ToolHandler`], a
+//! `Channel` a [`ChannelAdapter`], and the lifecycle hooks a [`Lifecycle`]. Each
+//! wrapper holds raw C callback pointers + the opaque `user_context`.
 
 use core::ffi::{c_char, CStr};
 use core::ptr;
 use std::ffi::CString;
 use std::sync::Arc;
 
-use claw_capability::{Capability, CapabilityError, CapabilityGroup, CapabilityRole};
-use claw_capability::{ChannelAdapter, Lifecycle, OutboundMessage};
-use claw_core::InboundMessage;
-use claw_tool::{
-    tool_invoke_err, Tool, ToolError, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
+use claw_agent::{
+    tool_invoke_err, Capability, CapabilityError, CapabilityGroup, CapabilityRole, ChannelAdapter,
+    InboundMessage, Lifecycle, OutboundMessage, Tool, ToolError, ToolHandler, ToolInvocation,
+    ToolInvokeError, ToolOutput,
 };
 
 use crate::abi::{
@@ -319,7 +318,7 @@ pub(crate) unsafe fn build_group(
     })
 }
 
-/// Validate and convert a C inbound message into a [`claw_core::InboundMessage`].
+/// Validate and convert a C inbound message into an [`InboundMessage`].
 ///
 /// # Safety
 /// `message` must be a valid `ClawInboundMessage`: each string pointer null

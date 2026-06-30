@@ -28,7 +28,7 @@ use crate::agent::graph::{AgentContext, GraphHost};
 use crate::agent::kind::AgentKind;
 use crate::agent::tools::{respond_to_approval_tool_group, subagent_tool_group};
 use crate::agent::{append_child_result, Agent};
-use crate::memory::Memory;
+use crate::memory::{ContextAdapter, History};
 use claw_tool::{ToolSet, ToolSetError};
 
 // ===========================================================================
@@ -37,16 +37,13 @@ use claw_tool::{ToolSet, ToolSetError};
 
 /// The one agent type: a flat ReAct loop over a [`BaseAgent`], configured by an
 /// [`AgentConfig`]. No semantic FSM — `tick` forwards straight to the base.
-pub struct GenericAgent<F: ClawFs + 'static, H: ClawHttp> {
+pub struct GenericAgent<H: ClawHttp> {
     id: AgentId,
     kind: AgentKind,
-    /// A view sharing inner state with the base agent's memory, for reads and
-    /// persistence inspection (a cheap `Arc` clone of the live transcript).
-    memory: ConversationMemory<F>,
     base: BaseAgent<H>,
 }
 
-impl<F: ClawFs + 'static, H: ClawHttp> GenericAgent<F, H> {
+impl<H: ClawHttp> GenericAgent<H> {
     /// Build a generic agent with `id` over `llm`, configured by `config`.
     ///
     /// The agent constructs its **own** [`ConversationMemory`] from the injected
@@ -68,7 +65,7 @@ impl<F: ClawFs + 'static, H: ClawHttp> GenericAgent<F, H> {
     /// # Errors
     ///
     /// [`GenericAgentBuildError`] when tool assembly or base construction fails.
-    pub fn new(
+    pub fn new<F: ClawFs + 'static>(
         id: AgentId,
         llm: ClawApi<H>,
         memory_config: ConversationConfig,
@@ -81,7 +78,6 @@ impl<F: ClawFs + 'static, H: ClawHttp> GenericAgent<F, H> {
         // Memory identity follows agent identity: the conversation is keyed by the
         // agent's own id, so the transcript can never be mismatched by the caller.
         let memory = ConversationMemory::new(id.0, memory_config, memory_deps);
-        let memory_view = memory.clone();
 
         let mut tool_set = ToolSet::new(config.tools)?;
         // Graph-affecting tools need a back-channel; without one (standalone agent)
@@ -116,7 +112,6 @@ impl<F: ClawFs + 'static, H: ClawHttp> GenericAgent<F, H> {
         Ok(Self {
             id,
             kind: config.kind,
-            memory: memory_view,
             base,
         })
     }
@@ -126,30 +121,35 @@ impl<F: ClawFs + 'static, H: ClawHttp> GenericAgent<F, H> {
         &self.kind
     }
 
-    /// A read-only view of this agent's conversation memory.
+    /// A read-only view of this agent's conversation transcript, as the narrow
+    /// [`History`] capability — for inspection (CLI, tests), never mutation.
     ///
-    /// Shares inner state with the live agent (cheap `Arc` clone), so reads always
-    /// reflect the current transcript. Intended for inspection and persistence,
-    /// not direct mutation (the agent owns writes through its tick loop).
-    pub fn memory(&self) -> &ConversationMemory<F> {
-        &self.memory
+    /// Delegates to [`BaseAgent::history`]: the concrete conversation-memory
+    /// type and its filesystem parameter stay hidden, which is why this agent is
+    /// not generic over a filesystem. A reader depends only on [`History`], the
+    /// same boundary every other caller uses.
+    pub fn history(&self) -> &dyn History {
+        self.base.history()
     }
 
-    /// Register a pluggable long-term [`Memory`] on the underlying base agent.
+    /// Register a pluggable [`ContextAdapter`] on the underlying base agent.
     ///
-    /// Forwards to [`BaseAgent::register_memory`]; the factory calls this after
-    /// construction to attach the dual-tier long-term store.
+    /// Forwards to [`BaseAgent::register_context_adapter`]; the factory calls this
+    /// after construction to attach the dual-tier long-term store.
     ///
     /// # Errors
     ///
-    /// [`BaseAgentBuildError`] when a memory tool clashes with an existing tool or
-    /// the LLM does not support the tools the memory provides.
-    pub fn register_memory(&mut self, memory: Arc<dyn Memory>) -> Result<(), BaseAgentBuildError> {
-        self.base.register_memory(memory)
+    /// [`BaseAgentBuildError`] when an adapter tool clashes with an existing tool
+    /// or the LLM does not support the tools the adapter provides.
+    pub fn register_context_adapter(
+        &mut self,
+        adapter: Box<dyn ContextAdapter>,
+    ) -> Result<(), BaseAgentBuildError> {
+        self.base.register_context_adapter(adapter)
     }
 }
 
-impl<F: ClawFs + 'static, H: ClawHttp + Send> Agent for GenericAgent<F, H> {
+impl<H: ClawHttp + Send> Agent for GenericAgent<H> {
     fn id(&self) -> AgentId {
         self.id
     }
@@ -186,7 +186,7 @@ mod tests {
 
     use claw_api::{ClawApi, ClawApiConfig, RetryPolicy};
     use claw_interface::{MemFs, ScriptedHttp, StdThread};
-    use claw_memory::{ConversationConfig, ConversationDeps, ConversationMemory, NoopCompactor};
+    use claw_memory::{ConversationConfig, ConversationDeps, NoopCompactor};
     use claw_utils::{PoolConfig, SharedTaskPool};
     use serde_json::{json, Value};
 
@@ -243,8 +243,8 @@ mod tests {
         .to_string()
     }
 
-    fn transcript_contents(memory: &ConversationMemory<MemFs>) -> Vec<String> {
-        memory
+    fn transcript_contents(history: &dyn History) -> Vec<String> {
+        history
             .messages()
             .as_array()
             .map(|items| {
@@ -257,7 +257,7 @@ mod tests {
             .unwrap_or_default()
     }
 
-    fn drive<H: ClawHttp + Send>(agent: &mut GenericAgent<MemFs, H>) -> TickOutcome {
+    fn drive<H: ClawHttp + Send>(agent: &mut GenericAgent<H>) -> TickOutcome {
         loop {
             match agent.tick() {
                 TickOutcome::Working => continue,
@@ -384,7 +384,7 @@ mod tests {
         agent.deliver_child_result(AgentId(7), "subtask output".into(), true);
         let _ = drive(&mut agent);
 
-        assert!(transcript_contents(agent.memory())
+        assert!(transcript_contents(agent.history())
             .iter()
             .any(|c| c.contains("[subagent agent-7 ok] subtask output")));
     }

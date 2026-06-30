@@ -6,13 +6,13 @@
 //! the LLM-backed policies. This module is the agent wiring layer's home for
 //! everything that needs the LLM client or ties memory into the agent loop:
 //!
-//! - the [`History`] / [`Transcript`] / [`Memory`] traits the agent reads, writes,
-//!   and pulls memories through;
+//! - the [`History`] / [`Transcript`] / [`ContextAdapter`] traits the agent reads,
+//!   writes, and pulls context sources through;
 //! - the [`ConversationHistory`] that owns the transcript;
 //! - the LLM-backed [`LlmCompactor`] and [`LlmExtractor`];
 //! - the [`Extractor`] seam and tier policy ([`TierClassifier`]);
 //! - the [`LongTermMemoryAdapter`] that fronts the dual-tier store as one
-//!   [`Memory`] with its five model-callable tools.
+//!   [`ContextAdapter`] with its five model-callable tools.
 
 mod conversation_history;
 mod extraction;
@@ -31,4 +31,4 @@ pub use long_term_adapter::{
     agent_store, global_store, LongTermMemoryAdapter, AGENT_ID_PREFIX, GLOBAL_ID_PREFIX,
 };
 pub use tier::{MemoryTier, RuleBasedTierClassifier, TierClassifier};
-pub use traits::{History, Memory, Transcript};
+pub use traits::{ContextAdapter, History, Transcript};

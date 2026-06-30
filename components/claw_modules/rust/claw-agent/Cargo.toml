@@ -10,10 +10,34 @@ name = "claw_agent"
 path = "src/lib.rs"
 
 # A minimal REPL that drives the whole agent system through the public API
-# (`AgentSystem` -> `Chat::send`) against a live LLM with on-disk memory.
+# (`AgentSystem` -> `Chat::send`) against a live LLM with on-disk memory. It uses
+# the dev backends (`AgentSystem::on_disk`), so it is gated on the `dev` feature.
 [[bin]]
 name = "claw-agent-chat"
 path = "src/bin/claw-agent-chat.rs"
+required-features = ["dev"]
+
+# The capability-loop reference example uses the dev backends + `anyhow`.
+[[example]]
+name = "capability_loop"
+required-features = ["dev"]
+
+[features]
+# Dev/test backends, ON by default. Bundles the injectable dev implementations
+# (`DiskFs`, `RealHttp` (reqwest), `StdThread`) plus the conveniences built on
+# them: `AgentSystem::on_disk`, the `claw-agent-chat` REPL bin, and the examples.
+# Host consumers (CLI, tests, examples, the bin) get this batteries-included
+# surface for free. The firmware C ABI (`claw-cabi`) instead sets
+# `default-features = false` so reqwest/std-thread never reach the device image;
+# it injects device backends through `AgentSystem::builder::<F, H>()`.
+default = ["dev"]
+dev = [
+    "claw-interface/diskfs",
+    "claw-interface/realhttp",
+    "claw-interface/stdthread",
+    "dep:dotenvy",
+    "dep:anyhow",
+]
 
 [dependencies]
 claw-core = { path = "../claw-core" }
@@ -26,16 +50,15 @@ claw-capability = { path = "../claw-capability" }
 claw-memory = { path = "../claw-memory" }
 # The shared background worker pool callers configure and inject.
 claw-utils = { path = "../claw-utils" }
-# Host dependency-injection backends: real disk fs, blocking reqwest transport,
-# and std-thread memory pool spawner. This crate is a host-facing dev/test tool
-# (like `cli`), so these host-only features are always on.
-claw-interface = { path = "../claw-interface", features = ["diskfs", "realhttp", "stdthread"] }
+# The DI trait surface (`ClawFs` / `ClawHttp`) is always available; the concrete
+# dev backends (`diskfs`/`realhttp`/`stdthread`) are pulled in only by the `dev`
+# feature so the device build (via claw-cabi) stays free of reqwest/std-thread.
+claw-interface = { path = "../claw-interface" }
 thiserror = "2"
-# Ergonomic error handling for the host-facing `claw-agent-chat` bin and the
-# crate examples. This crate is a host dev/test tool, never linked into firmware.
-anyhow = "1"
-# Used by the `claw-agent-chat` bin to load `claw-core/.env.local`.
-dotenvy = "0.15"
+# Dev-only: ergonomic errors for the `claw-agent-chat` bin and the examples.
+anyhow = { version = "1", optional = true }
+# Dev-only: the `claw-agent-chat` bin loads `claw-core/.env.local`.
+dotenvy = { version = "0.15", optional = true }
 
 [dev-dependencies]
 # In-memory fs + scripted HTTP doubles so the end-to-end tests run hermetically

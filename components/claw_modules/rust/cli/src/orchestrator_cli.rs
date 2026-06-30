@@ -26,7 +26,7 @@
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
-use claw_agent_cli::{load_env, make_llm_config, make_memory_deps, CliFs};
+use claw_agent_cli::{load_env, make_llm_config, make_long_term_deps, make_memory_deps, CliFs};
 use claw_core::agent::{FsAgentFactory, MapAgentResolver};
 use claw_core::{
     ChannelEgress, ChannelEgressHub, ChannelIngressSink, ChannelTransport, InboundMessage,
@@ -101,6 +101,10 @@ fn main() {
         make_llm_config(true),
         MEMORY_DIR,
         make_memory_deps(),
+        make_long_term_deps(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../claw-core/output/orchestrator-chat/long_term"
+        )),
     ));
 
     // A recording transport doubles as the CLI's "screen": the orchestrator sends

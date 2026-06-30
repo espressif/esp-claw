@@ -79,9 +79,9 @@ pub trait AgentFactory: Send + Sync {
 /// the routing/extraction policies.
 ///
 /// Built once by the system wiring layer and handed to
-/// [`FsAgentFactory::with_long_term_memory`]; each agent then gets its own
-/// private store under [`agent_dir`](Self::agent_dir) plus a clone of the shared
-/// `global` store, fronted by one [`LongTermMemoryAdapter`].
+/// [`FsAgentFactory::new`]; each agent then gets its own private store under
+/// `agent_dir` plus a clone of the shared `global` store, fronted by one
+/// [`LongTermMemoryAdapter`].
 pub struct LongTermDeps<F: ClawFs + Clone + 'static> {
     /// The single store shared by every agent (user-level facts). Cloned (an
     /// `Arc` bump) into each agent's adapter so all agents read/write one store.
@@ -136,10 +136,10 @@ pub struct FsAgentFactory<F: ClawFs + Clone + 'static, H: ClawHttp + Default + '
     /// [`ClawFs`]; it must be `Clone` because every agent gets its own handle
     /// (use `Arc<ConcreteFs>` for a shared backend — `Arc<T>` is itself `ClawFs`).
     memory_deps: ConversationDeps<F>,
-    /// Long-term-memory collaborators. `None` (the default) builds agents with no
-    /// long-term memory — the prior behavior; set via
-    /// [`with_long_term_memory`](Self::with_long_term_memory) to attach it.
-    long_term: Option<LongTermDeps<F>>,
+    /// Long-term-memory collaborators, shared across every agent this factory
+    /// builds. Required: every agent gets a private store plus a clone of the
+    /// shared global store, fronted by one [`LongTermMemoryAdapter`].
+    long_term: LongTermDeps<F>,
 }
 
 impl<F: ClawFs + Clone + 'static, H: ClawHttp + Default + 'static> FsAgentFactory<F, H> {
@@ -149,12 +149,14 @@ impl<F: ClawFs + Clone + 'static, H: ClawHttp + Default + 'static> FsAgentFactor
     ///
     /// `memory_deps` is the template the firmware/host already knows how to build
     /// (real disk fs + task pool + compactor on device, in-memory doubles in
-    /// tests); its `Arc`s are cloned per agent.
+    /// tests); its `Arc`s are cloned per agent. `long_term` is the shared
+    /// long-term-memory collaborators every agent is fronted with.
     pub fn new(
         resolver: Arc<dyn AgentResolver>,
         llm_config: ClawApiConfig,
         memory_dir: impl Into<String>,
         memory_deps: ConversationDeps<F>,
+        long_term: LongTermDeps<F>,
     ) -> Self {
         Self {
             resolver,
@@ -162,17 +164,8 @@ impl<F: ClawFs + Clone + 'static, H: ClawHttp + Default + 'static> FsAgentFactor
             _http: PhantomData,
             memory_dir: memory_dir.into(),
             memory_deps,
-            long_term: None,
+            long_term,
         }
-    }
-
-    /// Attach long-term memory: every agent this factory builds gets a private
-    /// store plus a clone of the shared global store, fronted by one
-    /// [`LongTermMemoryAdapter`] (its five `memory_*` tools and background
-    /// extraction). Without this, agents have no long-term memory.
-    pub fn with_long_term_memory(mut self, long_term: LongTermDeps<F>) -> Self {
-        self.long_term = Some(long_term);
-        self
     }
 
     /// Mint a fresh LLM client for one agent: the shared config plus this
@@ -229,21 +222,20 @@ impl<F: ClawFs + Clone + 'static, H: ClawHttp + Default + Send + 'static> AgentF
         )
         .map_err(|error| format!("building {kind} agent {id}: {error}"))?;
 
-        // Attach long-term memory when configured: a per-agent store under the
-        // base dir (keyed by id) plus a clone of the shared global store.
-        if let Some(long_term) = &self.long_term {
-            let agent_dir = format!("{}/{}", long_term.agent_dir.trim_end_matches('/'), id);
-            let adapter = LongTermMemoryAdapter::new(
-                agent_store(agent_dir, self.memory_deps.fs.clone()),
-                long_term.global.clone(),
-                Arc::clone(&long_term.classifier),
-                Arc::clone(&long_term.extractor),
-                Arc::clone(&self.memory_deps.pool),
-            );
-            agent
-                .register_memory(Arc::new(adapter))
-                .map_err(|error| format!("attaching long-term memory to {id}: {error}"))?;
-        }
+        // Attach long-term memory (always): a per-agent store under the base dir
+        // (keyed by id) plus a clone of the shared global store.
+        let long_term = &self.long_term;
+        let agent_dir = format!("{}/{}", long_term.agent_dir.trim_end_matches('/'), id);
+        let adapter = LongTermMemoryAdapter::new(
+            agent_store(agent_dir, self.memory_deps.fs.clone()),
+            long_term.global.clone(),
+            Arc::clone(&long_term.classifier),
+            Arc::clone(&long_term.extractor),
+            Arc::clone(&self.memory_deps.pool),
+        );
+        agent
+            .register_context_adapter(Box::new(adapter))
+            .map_err(|error| format!("attaching long-term memory to {id}: {error}"))?;
 
         // The goal is the agent's first task: seed it as a user message so the
         // agent has something to work on as soon as it is ticked.
@@ -268,6 +260,7 @@ mod tests {
     use super::*;
     use crate::agent::base_agent::TickOutcome;
     use crate::agent::graph::GraphEffect;
+    use crate::memory::{global_store, NoopExtractor, RuleBasedTierClassifier};
     use claw_skill::{SkillError, SkillId, SkillSet};
     use claw_tool::Tool;
 
@@ -319,11 +312,21 @@ mod tests {
             ),
             compactor: Arc::new(NoopCompactor),
         };
+        // Long-term memory is mandatory: build its (in-memory) collaborators. The
+        // extractor is a no-op since these tests never trigger background
+        // extraction; they only assert the agent builds and ticks.
+        let long_term = LongTermDeps::new(
+            global_store("/mem/long_term/global", MemFs::default()),
+            "/mem/long_term/agents",
+            RuleBasedTierClassifier::shared(),
+            Arc::new(NoopExtractor),
+        );
         FsAgentFactory::<MemFs, SharedScriptHttp>::new(
             Arc::new(EmptyResolver),
             llm_config,
             "/mem/agents",
             memory_deps,
+            long_term,
         )
     }
 

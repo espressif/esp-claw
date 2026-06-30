@@ -143,3 +143,24 @@ pub struct ClawInboundMessage {
     pub session_id: *const c_char,
     pub text: *const c_char,
 }
+
+/// `claw_agent_system_config_t`: device runtime build inputs.
+#[repr(C)]
+pub struct ClawAgentSystemConfig {
+    pub api_key: *const c_char,
+    pub backend_type: *const c_char,
+    pub model: *const c_char,
+    pub base_url: *const c_char,
+    pub auth_type: *const c_char,
+    pub max_tokens_field: *const c_char,
+    pub timeout_ms: u32,
+    pub max_tokens: u32,
+    pub image_max_bytes: usize,
+    pub supports_tools: bool,
+    pub supports_vision: bool,
+    pub image_remote_url_only: bool,
+    /// DATA-rooted directory for agent conversation and long-term memory.
+    pub memory_dir: *const c_char,
+    /// Default egress channel id. Nullable => "claw".
+    pub default_channel: *const c_char,
+}

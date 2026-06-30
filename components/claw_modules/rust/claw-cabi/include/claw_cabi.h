@@ -24,6 +24,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -166,6 +167,8 @@ typedef struct {
 
 typedef struct claw_capability_registry claw_capability_registry_t;
 
+claw_capability_result_t claw_capability_registry_create(claw_capability_registry_t **ret_registry);
+claw_capability_result_t claw_capability_registry_destroy(claw_capability_registry_t *registry);
 claw_capability_result_t claw_capability_register(claw_capability_registry_t *registry,
                                                   const claw_capability_t *capability);
 claw_capability_result_t claw_capability_register_group(claw_capability_registry_t *registry,
@@ -188,6 +191,8 @@ claw_capability_result_t claw_capability_register_group(claw_capability_registry
 
 typedef struct claw_capability_ingress claw_capability_ingress_t;
 
+claw_capability_result_t claw_capability_ingress_destroy(claw_capability_ingress_t *ingress);
+
 typedef struct {
     const char *message_id;
     const char *channel;
@@ -199,6 +204,69 @@ typedef struct {
 
 claw_capability_result_t claw_capability_ingress_push(claw_capability_ingress_t *ingress,
                                                       const claw_inbound_message_t *message);
+
+/* ------------------------------------------------------------------------- */
+/* Agent runtime: ESP-IDF target creates and owns the Rust AgentSystem.       */
+/*                                                                           */
+/* Expected boot order for C firmware:                                        */
+/*   1. claw_capability_registry_create(&registry)                            */
+/*   2. register every capability/group into registry                         */
+/*   3. claw_agent_system_create(&config, registry, &system, &ingress)        */
+/*   4. store ingress where channel tasks can use it                          */
+/*   5. claw_agent_system_start(system)                                       */
+/*   6. channel tasks call claw_capability_ingress_push(ingress, ...)         */
+/*                                                                           */
+/* Destroy in reverse order: stop/destroy system, destroy ingress, then       */
+/* destroy registry when no component will register into it anymore.          */
+/* ------------------------------------------------------------------------- */
+
+typedef struct claw_agent_system claw_agent_system_t;
+
+typedef struct {
+    const char *api_key;
+    const char *backend_type;
+    const char *model;
+    const char *base_url;           /* nullable */
+    const char *auth_type;          /* nullable: backend default */
+    const char *max_tokens_field;   /* nullable: backend default */
+    uint32_t timeout_ms;            /* 0 => claw-api default */
+    uint32_t max_tokens;            /* 0 => claw-api default */
+    size_t image_max_bytes;         /* 0 => claw-api default */
+    bool supports_tools;
+    bool supports_vision;
+    bool image_remote_url_only;
+    const char *memory_dir;         /* required DATA-rooted directory */
+    const char *default_channel;    /* nullable => "claw" */
+} claw_agent_system_config_t;
+
+claw_capability_result_t claw_agent_system_create(const claw_agent_system_config_t *config,
+                                                  claw_capability_registry_t *registry,
+                                                  claw_agent_system_t **ret_system,
+                                                  claw_capability_ingress_t **ret_ingress);
+claw_capability_result_t claw_agent_system_start(claw_agent_system_t *system);
+claw_capability_result_t claw_agent_system_stop(claw_agent_system_t *system);
+claw_capability_result_t claw_agent_system_destroy(claw_agent_system_t *system);
+
+/*
+ * Synchronous local send helper for firmware-side CLI/local callers.
+ *
+ * `session_id` may be NULL, empty, or "default" to use the ABI-owned default
+ * session. When `session_id_buffer` is non-NULL, the actual session id
+ * ("session-N") is written back there.
+ *
+ * `output_length` receives the required response byte length. If
+ * `output_buffer` is too small the function returns CLAW_CAPABILITY_FAILED
+ * after writing a truncated NUL-terminated prefix and the required length.
+ */
+claw_capability_result_t claw_agent_system_send(claw_agent_system_t *system,
+                                                const char *session_id,
+                                                const char *text,
+                                                char *output_buffer,
+                                                size_t output_capacity,
+                                                size_t *output_length,
+                                                char *session_id_buffer,
+                                                size_t session_id_capacity,
+                                                size_t *session_id_length);
 
 #ifdef __cplusplus
 }

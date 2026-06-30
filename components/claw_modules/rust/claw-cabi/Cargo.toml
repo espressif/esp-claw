@@ -13,17 +13,22 @@ name = "claw_cabi"
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-# The adapter whose Registry C populates (Registry, Capability, CapabilityRole,
-# ChannelAdapter, Lifecycle, CapabilityError). claw-cabi is the *only* place that
-# turns these Rust types into a C ABI.
-claw-capability = { path = "../claw-capability" }
-# The Tool a capability with the Tool role *is* — a C `execute` callback is
-# wrapped as a `claw_tool::ToolHandler`.
-claw-tool = { path = "../claw-tool" }
-# The inbound sink + message the data plane pushes into: `ChannelIngressSink`,
-# `InboundMessage`. (The agent-runtime bridge — claw-agent — is added when that
-# Rust-side wiring lands; it is not part of the C ABI itself.)
-claw-core = { path = "../claw-core" }
+# The single wrapped agent API. claw-cabi turns *its* re-exported types into a C
+# ABI rather than re-wrapping the lower crates itself: the capability surface
+# (`Registry`, `Capability`, `CapabilityRole`, `ChannelAdapter`, `Lifecycle`,
+# `CapabilityError`), the tool surface (`Tool`, `ToolHandler`, `tool_invoke_err`,
+# …), and the data-plane sink/message (`ChannelIngressSink`, `InboundMessage`).
+# The Registry -> agent-runtime bridge lives in claw-agent (single source of
+# truth); the firmware Rust entry point wires it via `AgentSystem`.
+#
+# `default-features = false` drops claw-agent's `dev` backends so reqwest /
+# std-thread never reach the device image; device backends are injected through
+# `AgentSystem::builder::<F, H>()` by the Rust entry point.
+claw-agent = { path = "../claw-agent", default-features = false }
+
+[target.'cfg(target_os = "espidf")'.dependencies]
+# Device backends used by the C-created agent runtime.
+claw-sys = { path = "../claw-sys" }
 
 [lints.rust]
 # THE ONE EXCEPTION in the workspace: this crate is the FFI boundary, so it must
