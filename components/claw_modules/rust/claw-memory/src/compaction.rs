@@ -3,14 +3,14 @@
 //! Compaction is "fold an aged window of conversation messages into a shorter
 //! summary so the working context stays inside the model's budget". *How* that
 //! summary is produced (an LLM summarization call, a cheap heuristic, …) is a
-//! policy decision that does not belong to the conversation tape, so it is
-//! injected as a [`Compactor`].
+//! transformation, injected as a [`Compactor`].
 //!
-//! The conversation memory owns the *mechanism* (when to compact, which
-//! messages, splicing the result back in, persistence) in
-//! [`crate::conversation_memory`]; the `Compactor` owns only the
-//! *transformation*. This keeps it free of any LLM dependency and lets future
-//! memory types reuse the same trait.
+//! Compaction is **not** a storage concern: the [`TranscriptStore`](crate::TranscriptStore)
+//! keeps the full verbatim record and knows nothing of summaries. The *policy*
+//! (when to compact, which window, where the summary goes) lives in the agent
+//! layer's rolling-summary context adapter, which drives a `Compactor`. This seam
+//! is defined here only so it stays free of any LLM dependency, exactly like the
+//! crate depends on the `ClawFs` trait and never on its implementation.
 
 use serde_json::Value;
 

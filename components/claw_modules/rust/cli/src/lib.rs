@@ -12,10 +12,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use claw_api::{ClawApi, ClawApiConfig};
-use claw_core::agent::LongTermDeps;
-use claw_core::{global_store, LlmExtractor, RuleBasedTierClassifier};
+use claw_core::agent::{CompactionDeps, LongTermDeps};
+use claw_core::{global_store, CompactionPolicy, LlmExtractor, RuleBasedTierClassifier};
 use claw_interface::{DiskFs, RealHttp, StdThread};
-use claw_memory::{ConversationConfig, ConversationDeps, ConversationMemory, NoopCompactor};
+use claw_memory::{NoopCompactor, TranscriptConfig, TranscriptStore};
 use claw_utils::{PoolConfig, SharedTaskPool};
 
 // The real network transport is `claw_interface::RealHttp` (the `realhttp`
@@ -93,56 +93,60 @@ pub fn make_llm(supports_tools: bool) -> ClawApi<RealHttp> {
     ClawApi::init(make_llm_config(supports_tools), make_http()).expect("failed to init LLM client")
 }
 
-/// Build the shared memory collaborators: the real disk [`ClawFs`], a fresh
-/// background task pool, and the no-op compactor.
+/// The real disk storage backend the CLI runs its transcripts over. `DiskFs` is
+/// a cheap clone handle (just a base path), so each agent gets its own clone.
+pub fn make_memory_fs() -> CliFs {
+    DiskFs::absolute()
+}
+
+/// Build the compaction collaborators an agent's rolling-summary adapter needs:
+/// a fresh background task pool, the no-op compactor (background summarisation is
+/// disabled in the CLI), and the default compaction policy. These belong to the
+/// agent layer, not the transcript store, which never compacts.
 ///
 /// Public so factories that build their own memory (e.g.
 /// [`claw_core::agent::FsAgentFactory`]) can take these collaborators directly.
 ///
 /// # Panics
 ///
-/// If the background memory task pool cannot be created.
-pub fn make_memory_deps() -> ConversationDeps<CliFs> {
+/// If the background task pool cannot be created.
+pub fn make_compaction() -> CompactionDeps {
     let pool =
         Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread).expect("memory pool"));
-    ConversationDeps {
-        fs: DiskFs::absolute(),
+    CompactionDeps {
         pool,
         compactor: Arc::new(NoopCompactor),
+        policy: CompactionPolicy::new(6000, 2000, 1500),
     }
 }
 
-/// Build an on-disk conversation memory at `memory_dir` plus a cloned read-only
-/// view of the same memory (handy for a `/messages` command). For agents that
-/// build their own memory (e.g. [`claw_core::agent::GenericAgent`]), use
+/// Build an on-disk [`TranscriptStore`] at `memory_dir` plus a cloned read-only
+/// view of the same store (handy for a `/messages` command). For agents that
+/// build their own store (e.g. [`claw_core::agent::GenericAgent`]), use
 /// [`make_memory_ingredients`] instead.
-///
-/// # Panics
-///
-/// If the background memory task pool cannot be created.
 pub fn make_memory(
     agent_id: usize,
     memory_dir: &str,
-) -> (ConversationMemory<CliFs>, ConversationMemory<CliFs>) {
-    let memory = ConversationMemory::new(
-        agent_id,
-        ConversationConfig::new(memory_dir),
-        make_memory_deps(),
-    );
-    let view = memory.clone();
-    (memory, view)
+) -> (TranscriptStore<CliFs>, TranscriptStore<CliFs>) {
+    let store = TranscriptStore::new(agent_id, TranscriptConfig::new(memory_dir), make_memory_fs());
+    let view = store.clone();
+    (store, view)
 }
 
 /// Build the ingredients a [`claw_core::agent::GenericAgent`] needs to construct
-/// its own on-disk memory at `memory_dir`: the base config plus the shared
-/// collaborators. The agent keys the conversation by its own id, so no id is
-/// needed here.
+/// its own on-disk transcript store at `memory_dir`: the transcript config, the
+/// storage backend, and the compaction collaborators. The agent keys the
+/// conversation by its own id, so no id is needed here.
 ///
 /// # Panics
 ///
-/// If the background memory task pool cannot be created.
-pub fn make_memory_ingredients(memory_dir: &str) -> (ConversationConfig, ConversationDeps<CliFs>) {
-    (ConversationConfig::new(memory_dir), make_memory_deps())
+/// If the background task pool cannot be created.
+pub fn make_memory_ingredients(memory_dir: &str) -> (TranscriptConfig, CliFs, CompactionDeps) {
+    (
+        TranscriptConfig::new(memory_dir),
+        make_memory_fs(),
+        make_compaction(),
+    )
 }
 
 /// Build the long-term-memory collaborators rooted at `base_dir` — mandatory for

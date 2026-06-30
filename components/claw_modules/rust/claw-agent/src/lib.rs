@@ -41,15 +41,14 @@ mod capability;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
-use claw_core::agent::{FsAgentFactory, LongTermDeps};
+use claw_core::agent::{CompactionDeps, FsAgentFactory, LongTermDeps};
 use claw_core::{
-    global_store, ChannelEgress, ChannelEgressHub, LlmCompactor, LlmExtractor, Orchestrator,
-    RecordingTransport, RuleBasedTierClassifier,
+    global_store, ChannelEgress, ChannelEgressHub, CompactionPolicy, LlmCompactor, LlmExtractor,
+    Orchestrator, RecordingTransport, RuleBasedTierClassifier,
 };
 use claw_interface::http::ClawHttp;
 #[cfg(feature = "dev")]
 use claw_interface::{RealHttp, StdThread};
-use claw_memory::ConversationDeps;
 
 // Re-exported so callers can configure the system without depending on the lower
 // crates directly. These names are also used internally below.
@@ -414,17 +413,18 @@ where
         // conversation memory; callers never choose or see it.
         let compaction_llm = ClawApi::init(llm_config.clone(), H::default())
             .map_err(|error| AgentError::CompactorLlm(error.to_string()))?;
-        let memory_deps = ConversationDeps {
-            fs,
+        let compaction = CompactionDeps {
             pool,
             compactor: Arc::new(LlmCompactor::new(compaction_llm)),
+            policy: CompactionPolicy::new(6000, 2000, 1500),
         };
 
         let factory = Arc::new(FsAgentFactory::<F, H>::new(
             resolver,
             llm_config,
             memory_dir,
-            memory_deps,
+            fs,
+            compaction,
             long_term,
         ));
 

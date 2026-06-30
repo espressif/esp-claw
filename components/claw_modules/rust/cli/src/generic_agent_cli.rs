@@ -30,7 +30,7 @@ const AGENT_ID: usize = 1;
 fn main() {
     load_env();
 
-    let (mem_config, mem_deps) = make_memory_ingredients(MEMORY_DIR);
+    let (transcript_config, memory_fs, compaction) = make_memory_ingredients(MEMORY_DIR);
     // The config (system prompt, capabilities, skills) comes from the baked
     // `conversation` manifest. An empty resolver suffices here: the kind declares
     // no capability/skill names, and the base agent merges its own control tools.
@@ -43,8 +43,9 @@ fn main() {
     let mut agent = GenericAgent::new(
         AgentId(AGENT_ID),
         make_llm(true),
-        mem_config,
-        mem_deps,
+        transcript_config,
+        memory_fs,
+        compaction,
         config,
         None,
         false,
