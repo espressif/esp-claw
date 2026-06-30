@@ -160,7 +160,13 @@ impl BlockKind {
     }
 
     /// The total wire-order key: `(band, scope, in-band order)`.
-    pub(crate) fn sort_key(&self) -> (u8, u8, u16) {
+    ///
+    /// Public so a caller assembling a *second* channel keyed by the same
+    /// taxonomy — e.g. the agent ordering the structured `messages` array it
+    /// builds from `ConversationSummary` / `RecentContext` contributions — can sort
+    /// by the identical wire order [`Context`](crate::Context) uses for the system
+    /// prefix, without duplicating the band/scope/order ranking.
+    pub fn sort_key(&self) -> (u8, u8, u16) {
         (self.band().rank(), self.scope().rank(), self.order())
     }
 }

@@ -7,7 +7,8 @@
 //! `claw-memory`: `claw-memory` owns only the [`Compactor`] *seam* and stays free
 //! of any LLM dependency, exactly like it depends on the `ClawThread` /  `ClawFs`
 //! traits and never on their implementations. The concrete compactor is injected
-//! into `ConversationDeps.compactor` by whoever builds the agent's memory.
+//! into `CompactionDeps.compactor` by whoever wires the agent's
+//! rolling-summary adapter.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
@@ -30,7 +31,7 @@ const SUMMARY_USER_PREFIX: &str = "Summarize the following conversation transcri
 /// A [`Compactor`] that summarizes the aged window via the LLM client.
 ///
 /// Owns its own [`ClawApi`] transport (`H`) behind a [`Mutex`]: the compactor is
-/// shared across every agent's conversation memory as an `Arc<dyn Compactor>`,
+/// shared across every agent's rolling-summary adapter as an `Arc<dyn Compactor>`,
 /// while [`ClawApi::chat`] needs `&mut self`, so the mutex serializes the
 /// (infrequent, off-tick) compaction calls.
 pub struct LlmCompactor<H: ClawHttp> {
@@ -41,7 +42,7 @@ impl<H: ClawHttp> LlmCompactor<H> {
     /// Build a compactor that owns the given LLM client.
     ///
     /// The `api` is its own [`ClawApi`] (with its own transport `H`), wired into
-    /// `ConversationDeps.compactor` so compaction summarizes through the
+    /// `CompactionDeps.compactor` so compaction summarizes through the
     /// configured backend.
     ///
     /// # Examples

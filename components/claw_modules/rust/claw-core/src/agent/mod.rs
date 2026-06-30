@@ -33,7 +33,7 @@ pub use base_agent::{
 };
 pub use config::{AgentConfig, AgentConfigError};
 pub use factory::{AgentFactory, FsAgentFactory, LongTermDeps};
-pub use generic_agent::{GenericAgent, GenericAgentBuildError};
+pub use generic_agent::{CompactionDeps, GenericAgent, GenericAgentBuildError};
 pub use graph::{
     AgentSnapshot, AgentStatus, ApprovalVerdict, GraphEffect, GraphHost, TerminationPolicy,
 };

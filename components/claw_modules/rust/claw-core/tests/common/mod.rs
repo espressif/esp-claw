@@ -17,7 +17,7 @@ use claw_core::{ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput};
 use claw_interface::{
     CapturingHttp, ClawHttp, DiskFs, FailingHttp, NeverHttp, ScriptStep, ScriptedHttp, StdThread,
 };
-use claw_memory::{ConversationConfig, ConversationDeps, ConversationMemory, NoopCompactor};
+use claw_memory::{TranscriptConfig, TranscriptStore};
 use claw_utils::{PoolConfig, SharedTaskPool};
 use serde_json::{json, Value};
 
@@ -132,8 +132,6 @@ pub fn never_called_llm() -> ClawApi<NeverHttp> {
 // ===========================================================================
 // Tools
 // ===========================================================================
-// The never-compacts `NoopCompactor` is shared from claw-memory (the
-// `compactor-stub` dev-dependency feature).
 
 /// A trivial caller tool named `echo` that echoes its arguments back.
 pub struct EchoTool;
@@ -183,45 +181,33 @@ pub type TestFs = DiskFs;
 /// transport `H` the test's LLM double uses.
 pub type TestAgent<H> = BaseAgent<H>;
 
-/// A disk-backed [`ConversationMemory`] view for the integration tests.
-pub type TestMemory = ConversationMemory<TestFs>;
+/// A disk-backed [`TranscriptStore`] view for the integration tests.
+pub type TestMemory = TranscriptStore<TestFs>;
 
-/// Real disk-backed conversation memory.
-pub fn test_memory(
-    agent_id: AgentId,
-    dir: impl Into<String>,
-    pool: Arc<SharedTaskPool>,
-) -> TestMemory {
-    ConversationMemory::new(
-        agent_id.0,
-        ConversationConfig::new(dir),
-        ConversationDeps {
-            fs: DiskFs::absolute(),
-            pool,
-            compactor: Arc::new(NoopCompactor),
-        },
-    )
+/// Real disk-backed transcript store.
+pub fn test_memory(agent_id: AgentId, dir: impl Into<String>) -> TestMemory {
+    TranscriptStore::new(agent_id.0, TranscriptConfig::new(dir), DiskFs::absolute())
 }
 
-/// A `BaseAgentBuilder` over fresh disk memory.
+/// A `BaseAgentBuilder` over a fresh disk transcript store.
 pub fn agent_builder<H: ClawHttp>(
     llm: ClawApi<H>,
     agent_id: AgentId,
     dir: impl Into<String>,
 ) -> BaseAgentBuilder<TestFs, H> {
-    BaseAgent::builder(llm, test_memory(agent_id, dir, test_pool()))
+    BaseAgent::builder(llm, test_memory(agent_id, dir))
 }
 
-/// A builder plus a cloned read-only view of the same memory, so a test can
+/// A builder plus a cloned read-only view of the same store, so a test can
 /// inspect the committed transcript without going through the agent.
 pub fn builder_with_view<H: ClawHttp>(
     llm: ClawApi<H>,
     agent_id: AgentId,
     dir: impl Into<String>,
 ) -> (BaseAgentBuilder<TestFs, H>, TestMemory) {
-    let memory = test_memory(agent_id, dir, test_pool());
-    let view = memory.clone();
-    (BaseAgent::builder(llm, memory), view)
+    let store = test_memory(agent_id, dir);
+    let view = store.clone();
+    (BaseAgent::builder(llm, store), view)
 }
 
 // ===========================================================================

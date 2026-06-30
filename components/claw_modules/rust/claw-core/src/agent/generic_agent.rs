@@ -18,7 +18,8 @@ use claw_api::ClawApi;
 use claw_context::Block;
 use claw_interface::http::ClawHttp;
 use claw_interface::ClawFs;
-use claw_memory::{ConversationConfig, ConversationDeps, ConversationMemory};
+use claw_memory::{Compactor, TranscriptConfig, TranscriptStore};
+use claw_utils::SharedTaskPool;
 
 use crate::agent::base_agent::{
     AgentCommand, AgentCommandError, AgentId, BaseAgent, BaseAgentBuildError, TickOutcome,
@@ -28,8 +29,27 @@ use crate::agent::graph::{AgentContext, GraphHost};
 use crate::agent::kind::AgentKind;
 use crate::agent::tools::{respond_to_approval_tool_group, subagent_tool_group};
 use crate::agent::{append_child_result, Agent};
-use crate::memory::{ContextAdapter, History};
+use crate::memory::{
+    CompactionPolicy, ContextAdapter, History, RollingSummaryContextAdapter, SummaryCursor,
+};
 use claw_tool::{ToolSet, ToolSetError};
+
+/// The compaction collaborators a [`GenericAgent`] hands to its rolling-summary
+/// adapter: the shared worker pool the summarization runs on, the summarizer
+/// itself, and the policy budgets. Bundled so the construction signature and the
+/// factory's per-agent clone stay small.
+///
+/// These belong to the *agent layer*, not the transcript store: the store is pure
+/// verbatim storage and never compacts (see [`TranscriptStore`]). The summarizer
+/// seam stays dynamic (`Arc<dyn Compactor>`) — swapped per build, not a hot path.
+pub struct CompactionDeps {
+    /// Shared worker pool the summarization runs on, off the tick path.
+    pub pool: Arc<SharedTaskPool>,
+    /// How aged windows are turned into a summary.
+    pub compactor: Arc<dyn Compactor>,
+    /// When/what to compact.
+    pub policy: CompactionPolicy,
+}
 
 // ===========================================================================
 // GenericAgent: the flat Agent over BaseAgent
@@ -46,11 +66,18 @@ pub struct GenericAgent<H: ClawHttp> {
 impl<H: ClawHttp> GenericAgent<H> {
     /// Build a generic agent with `id` over `llm`, configured by `config`.
     ///
-    /// The agent constructs its **own** [`ConversationMemory`] from the injected
-    /// `memory_config` (base dir + tuning) and `memory_deps` (fs/pool/compactor),
-    /// keyed by its own `id`. Keeping memory construction inside the agent means a
-    /// caller cannot wire a transcript that belongs to a different agent: the
-    /// conversation identity always follows the agent identity.
+    /// The agent constructs its **own** [`TranscriptStore`] from the injected
+    /// `transcript_config` (base dir + tuning) and `fs`, keyed by its own `id`.
+    /// Keeping the store construction inside the agent means a caller cannot wire
+    /// a transcript that belongs to a different agent: the conversation identity
+    /// always follows the agent identity.
+    ///
+    /// `compaction` (pool + compactor + policy) belongs to the agent layer, not
+    /// the store: it drives the [`RollingSummaryContextAdapter`], which summarizes
+    /// the aged prefix at request time. That adapter and the always-present
+    /// recent-history adapter share one [`SummaryCursor`] — the boundary between
+    /// the summarized prefix and the verbatim tail — so this one agent owns both
+    /// halves of its history with no gap or overlap.
     ///
     /// The config's capability tools are merged with the graph tools that require
     /// a [`GraphHost`]: `spawn_subagent` when `config.spawn_enabled`, and
@@ -68,8 +95,9 @@ impl<H: ClawHttp> GenericAgent<H> {
     pub fn new<F: ClawFs + 'static>(
         id: AgentId,
         llm: ClawApi<H>,
-        memory_config: ConversationConfig,
-        memory_deps: ConversationDeps<F>,
+        transcript_config: TranscriptConfig,
+        fs: F,
+        compaction: CompactionDeps,
         config: AgentConfig,
         host: Option<Arc<dyn GraphHost>>,
         is_root: bool,
@@ -77,7 +105,19 @@ impl<H: ClawHttp> GenericAgent<H> {
     ) -> Result<Self, GenericAgentBuildError> {
         // Memory identity follows agent identity: the conversation is keyed by the
         // agent's own id, so the transcript can never be mismatched by the caller.
-        let memory = ConversationMemory::new(id.0, memory_config, memory_deps);
+        let store = TranscriptStore::new(id.0, transcript_config, fs);
+
+        // The two conversation adapters share one cursor: the rolling summary
+        // advances it as it summarizes; the recent-tail adapter (wired by the base
+        // builder below) renders only the turns past it.
+        let cursor = SummaryCursor::new();
+        let rolling_summary = RollingSummaryContextAdapter::new(
+            store.clone(),
+            compaction.pool,
+            compaction.compactor,
+            compaction.policy,
+            cursor.clone(),
+        );
 
         let mut tool_set = ToolSet::new(config.tools)?;
         // Graph-affecting tools need a back-channel; without one (standalone agent)
@@ -95,11 +135,12 @@ impl<H: ClawHttp> GenericAgent<H> {
             }
         }
 
-        let mut base_builder = BaseAgent::builder(llm, memory)
+        let mut base_builder = BaseAgent::builder(llm, store)
             .with_system_prompt(config.system_prompt)
             .with_tools(tool_set)
             .with_inherited_context(inherited_context)
-            .with_retry_policy(config.retry_policy);
+            .with_retry_policy(config.retry_policy)
+            .with_summary_cursor(cursor);
         // The soft-hide "retry then fail" budget is the agent's BlockPolicy.
         if let Some(retries) = config.tool_block_retries {
             base_builder = base_builder.with_block_retries(retries);
@@ -107,7 +148,11 @@ impl<H: ClawHttp> GenericAgent<H> {
         if let Some(skills) = config.skills {
             base_builder = base_builder.with_skills(skills);
         }
-        let base = base_builder.build()?;
+        let mut base = base_builder.build()?;
+        // Attach the rolling compact-summary half of the history. The base agent
+        // already wired the recent verbatim half; this one carries the compaction
+        // policy the builder lacks, so the agent layer registers it here.
+        base.register_context_adapter(Box::new(rolling_summary))?;
 
         Ok(Self {
             id,
@@ -186,7 +231,7 @@ mod tests {
 
     use claw_api::{ClawApi, ClawApiConfig, RetryPolicy};
     use claw_interface::{MemFs, ScriptedHttp, StdThread};
-    use claw_memory::{ConversationConfig, ConversationDeps, NoopCompactor};
+    use claw_memory::NoopCompactor;
     use claw_utils::{PoolConfig, SharedTaskPool};
     use serde_json::{json, Value};
 
@@ -208,18 +253,19 @@ mod tests {
         .expect("init llm")
     }
 
-    /// The ingredients [`GenericAgent::new`] needs to build its own memory: a
-    /// base config plus the in-memory collaborators. The agent keys the
-    /// conversation by its own id.
-    fn memory_ingredients(agent_id: AgentId) -> (ConversationConfig, ConversationDeps<MemFs>) {
+    /// The ingredients [`GenericAgent::new`] needs to build its own transcript: a
+    /// base config, the storage backend, and the (in-memory) compaction
+    /// collaborators. The agent keys the conversation by its own id.
+    fn memory_ingredients(agent_id: AgentId) -> (TranscriptConfig, MemFs, CompactionDeps) {
         let pool =
             Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread).expect("memory pool"));
         (
-            ConversationConfig::new(format!("/mem/agent-{}", agent_id.0)),
-            ConversationDeps {
-                fs: MemFs::default(),
+            TranscriptConfig::new(format!("/mem/agent-{}", agent_id.0)),
+            MemFs::default(),
+            CompactionDeps {
                 pool,
                 compactor: Arc::new(NoopCompactor),
+                policy: CompactionPolicy::new(6000, 2000, 1500),
             },
         )
     }
@@ -310,14 +356,15 @@ mod tests {
 
     #[test]
     fn flat_agent_answers_directly() {
-        let (mem_config, mem_deps) = memory_ingredients(AgentId(1));
+        let (mem_config, fs, compaction) = memory_ingredients(AgentId(1));
         let mut config = test_config("conversation");
         config.system_prompt = "be helpful".into();
         let mut agent = GenericAgent::new(
             AgentId(1),
             scripted_llm(vec![body_plain_text("hi")]),
             mem_config,
-            mem_deps,
+            fs,
+            compaction,
             config,
             noop_host(),
             false,
@@ -337,7 +384,7 @@ mod tests {
 
     #[test]
     fn end_conversation_ends_the_task() {
-        let (mem_config, mem_deps) = memory_ingredients(AgentId(1));
+        let (mem_config, fs, compaction) = memory_ingredients(AgentId(1));
         let body = body_tool_call(
             "e1",
             "end_conversation",
@@ -348,7 +395,8 @@ mod tests {
             AgentId(1),
             scripted_llm(vec![body]),
             mem_config,
-            mem_deps,
+            fs,
+            compaction,
             config,
             noop_host(),
             false,
@@ -367,13 +415,14 @@ mod tests {
 
     #[test]
     fn child_result_is_appended_as_message() {
-        let (mem_config, mem_deps) = memory_ingredients(AgentId(1));
+        let (mem_config, fs, compaction) = memory_ingredients(AgentId(1));
         let config = test_config("conversation");
         let mut agent = GenericAgent::new(
             AgentId(1),
             scripted_llm(vec![body_plain_text("ack")]),
             mem_config,
-            mem_deps,
+            fs,
+            compaction,
             config,
             noop_host(),
             false,
@@ -394,7 +443,7 @@ mod tests {
         use crate::agent::graph::ApprovalVerdict;
 
         let host = Arc::new(RecordingHost::default());
-        let (mem_config, mem_deps) = memory_ingredients(AgentId(1));
+        let (mem_config, fs, compaction) = memory_ingredients(AgentId(1));
         let config = test_config("conversation");
         // A root (is_root = true) with a graph host gets the `respond_to_approval`
         // tool; calling it emits a `ResolveApproval` effect on the host.
@@ -410,7 +459,8 @@ mod tests {
                 body_plain_text("handled"),
             ]),
             mem_config,
-            mem_deps,
+            fs,
+            compaction,
             config,
             Some(Arc::clone(&host) as Arc<dyn GraphHost>),
             true,

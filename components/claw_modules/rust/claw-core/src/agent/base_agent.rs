@@ -56,7 +56,7 @@ use std::sync::{Arc, Mutex};
 use claw_api::{ClawApi, RetryPolicy};
 use claw_interface::http::ClawHttp;
 use claw_interface::ClawFs;
-use claw_memory::ConversationMemory;
+use claw_memory::TranscriptStore;
 use serde_json::Value;
 
 use crate::agent::tools::{internal_tool_group, skill_tool_group, ControlSignal, ControlSink};
@@ -65,7 +65,10 @@ use crate::iteration_loop::{
     IterationLoopError, IterationOutcome, IterationResult, IterationStep, PreemptedOutcome,
     SystemPrompt, ToolRun,
 };
-use crate::memory::{ConversationHistory, ContextAdapter, History, Transcript};
+use crate::memory::{
+    ContextAdapter, ConversationHistory, History, RecentMessagesContextAdapter, SummaryCursor,
+    Transcript,
+};
 use claw_context::{Block, BlockKind, Context};
 use claw_permission::{Grant, PermissionPolicy};
 use claw_skill::SkillSet;
@@ -452,27 +455,27 @@ pub struct BaseAgent<H: ClawHttp> {
 }
 
 impl<H: ClawHttp> BaseAgent<H> {
-    /// Start building an agent over a caller-owned [`ConversationMemory`].
+    /// Start building an agent over a caller-owned [`TranscriptStore`].
     ///
-    /// The conversation memory is the only place the filesystem type `F` enters,
-    /// and it stays on the *builder*: the built [`BaseAgent`] erases it behind the
-    /// [`History`] / [`Memory`] trait objects. The caller decides how the memory
-    /// is built and keyed (via [`ConversationMemory::new`]) and may keep a clone
-    /// to inspect the conversation without going through `BaseAgent`:
+    /// The transcript store is the only place the filesystem type `F` enters, and
+    /// it stays on the *builder*: the built [`BaseAgent`] erases it behind the
+    /// [`History`] / [`Transcript`] trait objects. The caller decides how the
+    /// store is built and keyed (via [`TranscriptStore::new`]) and may keep a
+    /// clone to inspect the conversation without going through `BaseAgent`:
     ///
     /// ```ignore
-    /// let memory = ConversationMemory::new(agent_id, config, deps);
-    /// let view = memory.clone();
-    /// let agent = BaseAgent::builder(llm, memory).build()?;
+    /// let store = TranscriptStore::new(agent_id, config, fs);
+    /// let view = store.clone();
+    /// let agent = BaseAgent::builder(llm, store).build()?;
     /// // later: let messages = view.messages();
     /// ```
     pub fn builder<F: ClawFs + 'static>(
         llm: ClawApi<H>,
-        memory: ConversationMemory<F>,
+        store: TranscriptStore<F>,
     ) -> BaseAgentBuilder<F, H> {
         BaseAgentBuilder {
             llm,
-            memory,
+            store,
             tools: None,
             skills: None,
             system_prompt: String::new(),
@@ -482,6 +485,7 @@ impl<H: ClawHttp> BaseAgent<H> {
             agent_id: 0,
             agent_kind: String::new(),
             block_retries: DEFAULT_BLOCK_RETRIES,
+            summary_cursor: SummaryCursor::new(),
         }
     }
 
@@ -685,26 +689,43 @@ impl<H: ClawHttp> BaseAgent<H> {
     ///
     /// 1. **refresh** (`&mut` each adapter): read the lent transcript and
     ///    recompute the adapter's cache (and schedule any background work).
-    /// 2. **lend** (`&` each adapter): collect the just-refreshed [`Block`]s into
-    ///    *this* agent's [`Context`].
+    /// 2. **lend** (`&` each adapter): collect the just-refreshed contributions —
+    ///    [`Block`]s into *this* agent's [`Context`] (the text prefix), and
+    ///    history [`messages`](ContextAdapter::messages) into the structured
+    ///    `messages` array returned here.
     ///
-    /// The message channel ([`ContextAdapter::messages`]) is not consumed here
-    /// yet — the conversation history is still sourced from the transcript.
-    fn render_adapter_context(&mut self) {
+    /// The returned `Value::Array` is the model's history channel: every adapter's
+    /// `(BlockKind, &Value)` contributions, ordered by
+    /// [`BlockKind::sort_key`] so summaries (`ConversationSummary`) precede the
+    /// recent verbatim tail (`RecentContext`) — the same wire order [`Context`]
+    /// uses for the system prefix. The history is owned (each message cloned out)
+    /// so the adapter borrows release before the caller takes its other field
+    /// borrows.
+    fn render_adapter_context(&mut self) -> Value {
         // Pass 1: refresh under &mut. Disjoint field borrows — the lent transcript
         // read view (shared) drives each adapter's recompute (exclusive).
-        let history = self.transcript.as_history();
+        let history_view = self.transcript.as_history();
         for adapter in &mut self.adapters {
-            adapter.refresh(history);
+            adapter.refresh(history_view);
         }
         // Pass 2: lend under &. Disjoint field borrows — each adapter's blocks
-        // (shared) feed into context (exclusive); `with` copies the content out.
+        // (shared) feed into context (exclusive, `with` copies the content out),
+        // and its messages (shared) are collected for ordering.
         let context = &mut self.context;
+        let mut messages: Vec<(BlockKind, &Value)> = Vec::new();
         for adapter in &self.adapters {
             for block in adapter.blocks() {
                 context.with(block);
             }
+            messages.extend(adapter.messages());
         }
+        messages.sort_by_key(|(kind, _)| kind.sort_key());
+        Value::Array(
+            messages
+                .into_iter()
+                .map(|(_, message)| message.clone())
+                .collect(),
+        )
     }
 
     // -- The tick -----------------------------------------------------------
@@ -770,9 +791,9 @@ impl<H: ClawHttp> BaseAgent<H> {
     /// stitching happens anywhere else; reminders are never written to memory, so
     /// the cached system/history prefix is untouched.
     fn run_iteration(&mut self, iteration_id: IterationId) -> IterationResult {
-        // Pull each adapter's blocks into the private context before assembling.
-        self.render_adapter_context();
-        let history = self.transcript.messages();
+        // Pull each adapter's blocks into the private context and assemble the
+        // model's history channel from the adapter `messages()` contributions.
+        let history = self.render_adapter_context();
         // Take the disjoint field borrows first, then borrow `context` mutably for
         // the (lazily rebuilt) request. `request` takes `&mut self.context`, so the
         // permission gate must be derived from `self.gate` directly here rather
@@ -784,7 +805,7 @@ impl<H: ClawHttp> BaseAgent<H> {
         };
         let tools = self.tools.as_ref();
         let gate = self.gate.as_ref().map(|gate| gate as &dyn ToolGate);
-        let context = self.context.request(history.as_ref());
+        let context = self.context.request(&history);
         let step = IterationStep {
             iteration_id,
             system_prompt: SystemPrompt(context.system()),
@@ -1104,7 +1125,7 @@ fn has_dangling_tool_calls(patch: &Value) -> bool {
 #[must_use = "a BaseAgentBuilder does nothing until `.build()` is called"]
 pub struct BaseAgentBuilder<F: ClawFs + 'static, H: ClawHttp> {
     llm: ClawApi<H>,
-    memory: ConversationMemory<F>,
+    store: TranscriptStore<F>,
     tools: Option<ToolSet>,
     skills: Option<SkillSet>,
     system_prompt: String,
@@ -1114,6 +1135,11 @@ pub struct BaseAgentBuilder<F: ClawFs + 'static, H: ClawHttp> {
     agent_id: u64,
     agent_kind: String,
     block_retries: u32,
+    /// The boundary the built-in recent-tail adapter renders past. Defaults to a
+    /// fresh cursor (nothing summarized → whole transcript verbatim); the agent
+    /// layer overrides it with [`with_summary_cursor`](Self::with_summary_cursor)
+    /// and hands the same cursor to its rolling-summary adapter.
+    summary_cursor: SummaryCursor,
 }
 
 impl<F: ClawFs + 'static, H: ClawHttp> BaseAgentBuilder<F, H> {
@@ -1133,6 +1159,19 @@ impl<F: ClawFs + 'static, H: ClawHttp> BaseAgentBuilder<F, H> {
     /// round. Defaults to [`DEFAULT_BLOCK_RETRIES`](claw_tool::DEFAULT_BLOCK_RETRIES).
     pub fn with_block_retries(mut self, retries: u32) -> Self {
         self.block_retries = retries;
+        self
+    }
+
+    /// Share the [`SummaryCursor`] the built-in recent-tail adapter renders past.
+    ///
+    /// The recent-tail adapter renders the committed turns *after* this cursor
+    /// (plus the open turn). Hand the **same** cursor to the agent layer's
+    /// rolling-summary adapter (which advances it as it summarizes) so the two
+    /// halves tile the transcript with no gap or overlap. Without this, the
+    /// default cursor stays at 0 and the whole transcript renders verbatim — the
+    /// correct standalone behavior when no summary adapter is attached.
+    pub fn with_summary_cursor(mut self, cursor: SummaryCursor) -> Self {
+        self.summary_cursor = cursor;
         self
     }
 
@@ -1263,11 +1302,24 @@ impl<F: ClawFs + 'static, H: ClawHttp> BaseAgentBuilder<F, H> {
             context.reminder(tools.extra_tool_context());
         }
 
-        // The conversation transcript's owner, erased behind the `Transcript`
-        // trait object: the agent writes it directly and lends its `History` read
-        // view to memories. This is the only place `F` is erased — the built
-        // agent is filesystem-agnostic.
-        let transcript: Arc<dyn Transcript> = Arc::new(ConversationHistory::new(self.memory));
+        // The conversation transcript drives the model's history off one store.
+        // The agent writes verbatim turns through the `Transcript` owner; the
+        // history is then assembled (in `render_adapter_context`) from context
+        // adapters reading clones of the same `Arc`-backed store. The verbatim
+        // recent tail (`RecentContext`) is intrinsic — it needs only the store and
+        // the summary cursor — so it is registered here up front, ahead of any
+        // caller adapter, giving every agent its own history with no extra wiring.
+        // The rolling summary (`ConversationSummary`) carries compaction *policy*
+        // (pool + compactor + budgets) the builder does not have, so the agent
+        // layer (`GenericAgent::new`) registers it and shares the same
+        // `summary_cursor`. This is the only place `F` is erased — both the trait
+        // object and the boxed adapter drop it, so the built agent is
+        // filesystem-agnostic.
+        let recent: Box<dyn ContextAdapter> = Box::new(RecentMessagesContextAdapter::new(
+            self.store.clone(),
+            self.summary_cursor,
+        ));
+        let transcript: Arc<dyn Transcript> = Arc::new(ConversationHistory::new(self.store));
 
         Ok(BaseAgent {
             llm: self.llm,
@@ -1289,7 +1341,7 @@ impl<F: ClawFs + 'static, H: ClawHttp> BaseAgentBuilder<F, H> {
             projected_lifecycle: AgentState::Idle,
             outcome: None,
             control,
-            adapters: Vec::new(),
+            adapters: vec![recent],
             inbox: VecDeque::new(),
         })
     }
@@ -1522,9 +1574,8 @@ mod gating_tests {
     use std::sync::Arc;
 
     use claw_api::{ClawApi, ClawApiConfig};
-    use claw_interface::{CapturingHttp, ClawHttp, MemFs, ScriptedHttp, StdThread};
-    use claw_memory::{ConversationConfig, ConversationDeps, ConversationMemory, NoopCompactor};
-    use claw_utils::{PoolConfig, SharedTaskPool};
+    use claw_interface::{CapturingHttp, ClawHttp, MemFs, ScriptedHttp};
+    use claw_memory::{TranscriptConfig, TranscriptStore};
     use serde_json::{json, Value};
 
     use crate::agent::{AgentId, AgentRunError, BaseAgent, BaseAgentBuilder, TickOutcome};
@@ -1532,9 +1583,8 @@ mod gating_tests {
         AllowedTools, Tool, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput, ToolSet,
     };
 
-    // HTTP doubles (ScriptedHttp / CapturingHttp, httpmock feature) and the
-    // never-compacts `NoopCompactor` (compactor-stub feature) are shared from
-    // claw_interface / claw-memory.
+    // HTTP doubles (ScriptedHttp / CapturingHttp, httpmock feature) are shared from
+    // claw_interface.
 
     // Test tools ----------------------------------------------------------------
 
@@ -1599,28 +1649,22 @@ mod gating_tests {
         build_llm(ScriptedHttp::new(bodies))
     }
 
-    fn test_memory(agent_id: AgentId) -> ConversationMemory<MemFs> {
-        let pool =
-            Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread).expect("memory pool"));
-        ConversationMemory::new(
+    fn test_store(agent_id: AgentId) -> TranscriptStore<MemFs> {
+        TranscriptStore::new(
             agent_id.0,
-            ConversationConfig::new(format!("/mem/agent-{}", agent_id.0)),
-            ConversationDeps {
-                fs: MemFs::default(),
-                pool,
-                compactor: Arc::new(NoopCompactor),
-            },
+            TranscriptConfig::new(format!("/mem/agent-{}", agent_id.0)),
+            MemFs::default(),
         )
     }
 
-    /// A builder plus a cloned read-only view of the same memory.
+    /// A builder plus a cloned read-only view of the same store.
     fn builder_with_view<H: ClawHttp>(
         llm: ClawApi<H>,
         agent_id: AgentId,
-    ) -> (BaseAgentBuilder<MemFs, H>, ConversationMemory<MemFs>) {
-        let memory = test_memory(agent_id);
-        let view = memory.clone();
-        (BaseAgent::builder(llm, memory), view)
+    ) -> (BaseAgentBuilder<MemFs, H>, TranscriptStore<MemFs>) {
+        let store = test_store(agent_id);
+        let view = store.clone();
+        (BaseAgent::builder(llm, store), view)
     }
 
     fn body_plain_text(text: &str) -> String {
@@ -1662,7 +1706,7 @@ mod gating_tests {
         }
     }
 
-    fn transcript_contents(view: &ConversationMemory<MemFs>) -> Vec<String> {
+    fn transcript_contents(view: &TranscriptStore<MemFs>) -> Vec<String> {
         view.messages()
             .as_array()
             .map(|items| {

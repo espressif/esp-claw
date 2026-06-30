@@ -1,54 +1,54 @@
 //! [`ConversationHistory`] — the sole owner of the conversation transcript.
 //!
 //! The transcript is the agent's authoritative history. This type owns it and
-//! exposes the two faces the agent needs, over one underlying
-//! [`ConversationMemory`] store:
+//! exposes the two faces the agent needs, over one underlying [`TranscriptStore`]:
 //!
 //! - **read** — [`History`]: the message snapshot + a change version, lent to the
-//!   agent for request assembly and to every pluggable [`Memory`] for pulling.
+//!   agent for request assembly and to every [`ContextAdapter`](crate::memory::ContextAdapter)
+//!   for pulling.
 //! - **write** — [`Transcript`]: the boundary writes the agent drives directly
 //!   (a user message, a committed answer or tool patch, an end/cancel marker).
 //!
-//! It is deliberately **not** a [`Memory`]: the transcript is the thing memories
-//! read *from*, not one of the readers. The agent holds it as `Arc<dyn Transcript>`
-//! and never sees the concrete store — which is the only place the filesystem
-//! type parameter `F` is erased.
+//! It is deliberately **not** a context adapter: the transcript is the thing
+//! adapters read *from*, not one of the readers. The agent holds it as
+//! `Arc<dyn Transcript>` and never sees the concrete store — which is the only
+//! place the filesystem type parameter `F` is erased.
 //!
 //! # Turn grouping
 //!
 //! A [`GroupGuard`] batches a user turn and the assistant reply that answers it
-//! into one compaction group (so compaction never orphans a reply). This type
-//! owns the open guard: [`append_user`](Transcript::append_user) opens or reuses
-//! it, and an assistant / tool / end / cancel commit takes (closes) it.
-//! `starts_task` flushes any guard left open by a previous task (e.g. one that
-//! failed mid-turn) before opening the new turn.
+//! into one turn group. This type owns the open guard:
+//! [`append_user`](Transcript::append_user) opens or reuses it, and an
+//! assistant / tool / end / cancel commit takes (closes) it. `starts_task`
+//! flushes any guard left open by a previous task (e.g. one that failed mid-turn)
+//! before opening the new turn.
 
 use std::sync::{Arc, Mutex};
 
 use claw_interface::ClawFs;
-use claw_memory::{ConversationMemory, GroupGuard};
+use claw_memory::{GroupGuard, TranscriptStore};
 use serde_json::{json, Value};
 
 use crate::memory::traits::{History, Transcript};
 
 /// The owner of the conversation transcript: a [`History`] + [`Transcript`] over
-/// one [`ConversationMemory`] store. See the module docs.
+/// one [`TranscriptStore`]. See the module docs.
 ///
-/// Holds the agent's conversation store (the same `Arc`-backed store a caller may
+/// Holds the agent's transcript store (the same `Arc`-backed store a caller may
 /// keep a read clone of) plus the open turn-group guard. Driven only from the
 /// agent's tick thread; the guard sits behind a `Mutex` solely to satisfy the
 /// `Send + Sync` bound the `Arc<dyn Transcript>` trait object requires.
 pub struct ConversationHistory<F: ClawFs + 'static> {
-    memory: ConversationMemory<F>,
+    store: TranscriptStore<F>,
     /// The open turn group, from a user message until the reply that closes it.
     open_turn: Mutex<Option<GroupGuard<F>>>,
 }
 
 impl<F: ClawFs + 'static> ConversationHistory<F> {
-    /// Wrap the agent's conversation store as the transcript owner.
-    pub fn new(memory: ConversationMemory<F>) -> Self {
+    /// Wrap the agent's transcript store as the transcript owner.
+    pub fn new(store: TranscriptStore<F>) -> Self {
         Self {
-            memory,
+            store,
             open_turn: Mutex::new(None),
         }
     }
@@ -63,17 +63,17 @@ impl<F: ClawFs + 'static> ConversationHistory<F> {
     fn take_or_open(&self) -> GroupGuard<F> {
         self.lock_turn()
             .take()
-            .unwrap_or_else(|| self.memory.group())
+            .unwrap_or_else(|| self.store.group())
     }
 }
 
 impl<F: ClawFs + 'static> History for ConversationHistory<F> {
     fn messages(&self) -> Arc<Value> {
-        self.memory.messages()
+        self.store.messages()
     }
 
     fn version(&self) -> u64 {
-        self.memory.version()
+        self.store.version()
     }
 }
 
@@ -86,7 +86,7 @@ impl<F: ClawFs + 'static> Transcript for ConversationHistory<F> {
         match open.as_ref() {
             Some(turn) => turn.append_user(text),
             None => {
-                let turn = self.memory.group();
+                let turn = self.store.group();
                 turn.append_user(text);
                 *open = Some(turn);
             }

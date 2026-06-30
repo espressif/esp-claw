@@ -6,7 +6,6 @@
 //! The live test talks to a real LLM and verifies multi-turn memory continuity.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use claw_api::{ClawApi, ClawApiConfig};
 use claw_core::agent::{AgentId, BaseAgent, CancelReason, TickOutcome};
@@ -17,7 +16,7 @@ use serde_json::{json, Value};
 mod common;
 use common::{
     agent_builder, capturing_llm, failing_llm, run_to_completion,
-    scripted_llm as common_scripted_llm, test_memory, test_output_dir, test_pool, EchoTool,
+    scripted_llm as common_scripted_llm, test_memory, test_output_dir, EchoTool,
 };
 
 // ---------------------------------------------------------------------------
@@ -164,9 +163,9 @@ fn cancel_reports_cancelled_and_goes_idle() {
 #[test]
 fn cancel_records_interruption_marker_in_memory() {
     let dir = test_output_dir("cancel_records_interruption_marker_in_memory");
-    let memory = test_memory(AgentId(1), dir.display().to_string(), test_pool());
-    let view = memory.clone();
-    let mut agent = BaseAgent::builder(scripted_llm(vec![]), memory)
+    let store = test_memory(AgentId(1), dir.display().to_string());
+    let view = store.clone();
+    let mut agent = BaseAgent::builder(scripted_llm(vec![]), store)
         .build()
         .expect("build");
 
@@ -406,13 +405,12 @@ fn second_turn_includes_first_turn_context() {
 #[test]
 fn live_two_turn_chat_uses_memory() {
     let dir = test_output_dir("live_two_turn_chat_uses_memory");
-    let pool = test_pool();
 
     // Turn 1 — plant a memorable fact.
     {
         let mut agent = BaseAgent::builder(
             live_llm(),
-            test_memory(AgentId(1), dir.display().to_string(), Arc::clone(&pool)),
+            test_memory(AgentId(1), dir.display().to_string()),
         )
         .with_system_prompt("You are a test assistant. Be brief and exact.")
         .build()
@@ -430,7 +428,7 @@ fn live_two_turn_chat_uses_memory() {
     {
         let mut agent = BaseAgent::builder(
             live_llm(),
-            test_memory(AgentId(1), dir.display().to_string(), pool),
+            test_memory(AgentId(1), dir.display().to_string()),
         )
         .with_system_prompt("You are a test assistant. Be brief and exact.")
         .build()

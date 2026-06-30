@@ -27,11 +27,11 @@ use claw_api::{ClawApi, ClawApiConfig};
 use claw_context::Block;
 use claw_interface::http::ClawHttp;
 use claw_interface::ClawFs;
-use claw_memory::{ConversationConfig, ConversationDeps, LongTermMemory};
+use claw_memory::{LongTermMemory, TranscriptConfig};
 
 use crate::agent::base_agent::{AgentCommand, AgentId};
 use crate::agent::config::AgentConfig;
-use crate::agent::generic_agent::GenericAgent;
+use crate::agent::generic_agent::{CompactionDeps, GenericAgent};
 use crate::agent::graph::GraphHost;
 use crate::agent::kind::AgentKind;
 use crate::agent::resolver::AgentResolver;
@@ -131,11 +131,15 @@ pub struct FsAgentFactory<F: ClawFs + Clone + 'static, H: ClawHttp + Default + '
     _http: PhantomData<fn() -> H>,
     /// Base directory for conversation files; each agent keys its own files by id.
     memory_dir: String,
-    /// Template memory collaborators (fs/pool/compactor) cloned into each agent's
-    /// own [`ConversationDeps`]. `F` is a concrete, statically dispatched
-    /// [`ClawFs`]; it must be `Clone` because every agent gets its own handle
-    /// (use `Arc<ConcreteFs>` for a shared backend — `Arc<T>` is itself `ClawFs`).
-    memory_deps: ConversationDeps<F>,
+    /// Storage backend cloned into each agent's [`TranscriptStore`] (and its
+    /// long-term store). `F` is a concrete, statically dispatched [`ClawFs`]; it
+    /// must be `Clone` because every agent gets its own handle (use
+    /// `Arc<ConcreteFs>` for a shared backend — `Arc<T>` is itself `ClawFs`).
+    memory_fs: F,
+    /// Compaction collaborators (pool + compactor + policy), cloned into each
+    /// agent's rolling-summary adapter. These belong to the agent layer, not the
+    /// transcript store, which never compacts.
+    compaction: CompactionDeps,
     /// Long-term-memory collaborators, shared across every agent this factory
     /// builds. Required: every agent gets a private store plus a clone of the
     /// shared global store, fronted by one [`LongTermMemoryAdapter`].
@@ -147,15 +151,17 @@ impl<F: ClawFs + Clone + 'static, H: ClawHttp + Default + 'static> FsAgentFactor
     /// memory base dir + collaborators. The HTTP transport `H` is chosen by type
     /// (like `F`); each agent gets its own `H::default()` instance.
     ///
-    /// `memory_deps` is the template the firmware/host already knows how to build
-    /// (real disk fs + task pool + compactor on device, in-memory doubles in
-    /// tests); its `Arc`s are cloned per agent. `long_term` is the shared
-    /// long-term-memory collaborators every agent is fronted with.
+    /// `memory_fs` is the storage backend the firmware/host already knows how to
+    /// build (real disk fs on device, in-memory doubles in tests); it is cloned
+    /// per agent. `compaction` (pool + compactor + policy) drives each agent's
+    /// rolling-summary adapter. `long_term` is the shared long-term-memory
+    /// collaborators every agent is fronted with.
     pub fn new(
         resolver: Arc<dyn AgentResolver>,
         llm_config: ClawApiConfig,
         memory_dir: impl Into<String>,
-        memory_deps: ConversationDeps<F>,
+        memory_fs: F,
+        compaction: CompactionDeps,
         long_term: LongTermDeps<F>,
     ) -> Self {
         Self {
@@ -163,7 +169,8 @@ impl<F: ClawFs + Clone + 'static, H: ClawHttp + Default + 'static> FsAgentFactor
             llm_config,
             _http: PhantomData,
             memory_dir: memory_dir.into(),
-            memory_deps,
+            memory_fs,
+            compaction,
             long_term,
         }
     }
@@ -176,13 +183,13 @@ impl<F: ClawFs + Clone + 'static, H: ClawHttp + Default + 'static> FsAgentFactor
             .map_err(|error| format!("initializing LLM: {error}"))
     }
 
-    /// A fresh [`ConversationDeps`] sharing this factory's collaborators (a cheap
-    /// `fs` clone — typically an `Arc` bump — plus `Arc` clones of pool/compactor).
-    fn clone_memory_deps(&self) -> ConversationDeps<F> {
-        ConversationDeps {
-            fs: self.memory_deps.fs.clone(),
-            pool: Arc::clone(&self.memory_deps.pool),
-            compactor: Arc::clone(&self.memory_deps.compactor),
+    /// A fresh [`CompactionDeps`] sharing this factory's collaborators (`Arc`
+    /// clones of the pool/compactor plus the `Copy` policy).
+    fn clone_compaction(&self) -> CompactionDeps {
+        CompactionDeps {
+            pool: Arc::clone(&self.compaction.pool),
+            compactor: Arc::clone(&self.compaction.compactor),
+            policy: self.compaction.policy,
         }
     }
 }
@@ -209,12 +216,13 @@ impl<F: ClawFs + Clone + 'static, H: ClawHttp + Default + Send + 'static> AgentF
             .mint_llm()
             .map_err(|error| format!("{error} for {id}"))?;
 
-        let memory_config = ConversationConfig::new(self.memory_dir.clone());
+        let transcript_config = TranscriptConfig::new(self.memory_dir.clone());
         let mut agent = GenericAgent::new(
             id,
             llm,
-            memory_config,
-            self.clone_memory_deps(),
+            transcript_config,
+            self.memory_fs.clone(),
+            self.clone_compaction(),
             config,
             Some(host),
             is_root,
@@ -227,11 +235,11 @@ impl<F: ClawFs + Clone + 'static, H: ClawHttp + Default + Send + 'static> AgentF
         let long_term = &self.long_term;
         let agent_dir = format!("{}/{}", long_term.agent_dir.trim_end_matches('/'), id);
         let adapter = LongTermMemoryAdapter::new(
-            agent_store(agent_dir, self.memory_deps.fs.clone()),
+            agent_store(agent_dir, self.memory_fs.clone()),
             long_term.global.clone(),
             Arc::clone(&long_term.classifier),
             Arc::clone(&long_term.extractor),
-            Arc::clone(&self.memory_deps.pool),
+            Arc::clone(&self.compaction.pool),
         );
         agent
             .register_context_adapter(Box::new(adapter))
@@ -260,7 +268,7 @@ mod tests {
     use super::*;
     use crate::agent::base_agent::TickOutcome;
     use crate::agent::graph::GraphEffect;
-    use crate::memory::{global_store, NoopExtractor, RuleBasedTierClassifier};
+    use crate::memory::{global_store, CompactionPolicy, NoopExtractor, RuleBasedTierClassifier};
     use claw_skill::{SkillError, SkillId, SkillSet};
     use claw_tool::Tool;
 
@@ -305,12 +313,12 @@ mod tests {
             supports_tools: true,
             ..Default::default()
         };
-        let memory_deps = ConversationDeps {
-            fs: MemFs::default(),
+        let compaction = CompactionDeps {
             pool: Arc::new(
                 SharedTaskPool::new(PoolConfig::default(), StdThread).expect("memory pool"),
             ),
             compactor: Arc::new(NoopCompactor),
+            policy: CompactionPolicy::new(6000, 2000, 1500),
         };
         // Long-term memory is mandatory: build its (in-memory) collaborators. The
         // extractor is a no-op since these tests never trigger background
@@ -325,7 +333,8 @@ mod tests {
             Arc::new(EmptyResolver),
             llm_config,
             "/mem/agents",
-            memory_deps,
+            MemFs::default(),
+            compaction,
             long_term,
         )
     }
