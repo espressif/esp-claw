@@ -29,11 +29,12 @@ pub enum ToolError {
     /// Arguments are not valid JSON, or the root value is not a JSON object.
     #[error("tool arguments are not valid JSON: {0}")]
     InvalidArgumentsJson(String),
-    /// Arguments failed JSON Schema validation against the tool's parameter schema.
-    #[error("tool arguments failed schema validation: {0}")]
+    /// Arguments are a JSON object but failed tool-specific validation.
+    #[error("tool arguments are invalid: {0}")]
     InvalidArguments(String),
-    /// Dynamic / domain validation inside [`ToolHandler::invoke`] that JSON Schema
-    /// cannot express (policy, wire-format ids, cross-field rules, etc.).
+    /// Dynamic / domain validation inside [`ToolHandler::invoke`] that simple
+    /// argument shape checks cannot express (policy, wire-format ids,
+    /// cross-field rules, etc.).
     #[error("tool invocation rejected: {0}")]
     InvokeRejected(String),
 }
@@ -136,8 +137,8 @@ impl ToolError {
                  Fix the arguments and retry."
             ),
             Self::InvalidArguments(details) => format!(
-                "Tool \"{display}\" arguments failed schema validation: {details}. \
-                 Check the tool schema and retry."
+                "Tool \"{display}\" arguments are invalid: {details}. \
+                 Fix the arguments and retry."
             ),
             Self::InvokeRejected(details) => format!(
                 "Tool \"{display}\" rejected the call: {details}. \

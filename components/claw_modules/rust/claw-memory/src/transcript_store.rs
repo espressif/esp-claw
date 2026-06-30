@@ -33,10 +33,14 @@
 //!
 //! # Turns are built through a guard
 //!
-//! Conversation content is appended through a [`GroupGuard`] from
-//! [`group`](TranscriptStore::group). The guard buffers the open turn and commits
-//! it as a single record when it drops, so a turn can never be left half-open and
-//! a reader never sees a partial turn boundary.
+//! Conversation content is appended through either:
+//! - a [`GroupGuard`] from [`group`](TranscriptStore::group), for RAII turn
+//!   grouping; or
+//! - the direct `push_*` methods plus [`commit_open_turn`](TranscriptStore::commit_open_turn),
+//!   for an agent loop that already owns the turn lifecycle.
+//!
+//! Both paths write the same open turn and commit it as a single record, so readers
+//! see one transcript regardless of the writer style.
 //!
 //! # Threading
 //!
@@ -79,7 +83,9 @@ const MANIFEST_VERSION: u32 = 1;
 /// handle for "the summary covers turns up to here". A distinct type from byte
 /// offsets/lengths so the two can never be swapped: ordering is keyed on
 /// `TurnId`, addressing on [`ByteOffset`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 #[serde(transparent)]
 pub struct TurnId(pub u64);
 
@@ -415,6 +421,56 @@ impl<F: ClawFs + 'static> TranscriptStore<F> {
         }
     }
 
+    /// Append a user message to the current open turn.
+    ///
+    /// This is the direct writer form for callers that already own turn lifetime.
+    /// Call [`commit_open_turn`](Self::commit_open_turn) when the turn boundary is
+    /// reached. For RAII grouping, prefer [`group`](Self::group).
+    pub fn push_user_message(&self, content: impl Into<String>) {
+        push_open(
+            &self.inner,
+            json!({ "role": "user", "content": content.into() }),
+        );
+    }
+
+    /// Append a raw assistant message object to the current open turn.
+    ///
+    /// `raw_message_json` is the backend-shaped assistant message object; an
+    /// unparseable value is logged and dropped rather than corrupting the turn.
+    pub fn push_assistant_message(&self, raw_message_json: &str) {
+        push_assistant_message(&self.inner, raw_message_json);
+    }
+
+    /// Append a tool result to the current open turn.
+    ///
+    /// Set `is_error` when the tool failed, so the model can see the call did not
+    /// succeed.
+    pub fn push_tool_result(&self, tool_call_id: &str, content: &str, is_error: bool) {
+        push_open(
+            &self.inner,
+            json!({
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": content,
+                "is_error": is_error,
+            }),
+        );
+    }
+
+    /// Append a whole batch of messages to the current open turn.
+    ///
+    /// `messages` must be a JSON array; a non-array value is logged and ignored.
+    pub fn push_patch(&self, messages: &Value) {
+        push_patch(&self.inner, messages);
+    }
+
+    /// Commit the current open turn as one group record, then persist if due.
+    ///
+    /// No-ops when the open turn is empty.
+    pub fn commit_open_turn(&self) {
+        commit_open_turn(&self.inner);
+    }
+
     /// The current messages, ready to send to the model in chronological order:
     /// every committed turn's messages followed by the in-progress open turn.
     /// Returns a shared, internally consistent JSON array snapshot.
@@ -526,7 +582,10 @@ pub struct GroupGuard<F: ClawFs + 'static> {
 impl<F: ClawFs + 'static> GroupGuard<F> {
     /// Append a user (or addon) message to the open turn.
     pub fn append_user(&self, content: impl Into<String>) {
-        self.push_open(json!({ "role": "user", "content": content.into() }));
+        push_open(
+            &self.inner,
+            json!({ "role": "user", "content": content.into() }),
+        );
     }
 
     /// Append a raw assistant message (plain text and/or `tool_calls`).
@@ -534,13 +593,7 @@ impl<F: ClawFs + 'static> GroupGuard<F> {
     /// `raw_message_json` is the backend-shaped assistant message object; an
     /// unparseable value is logged and dropped rather than corrupting the turn.
     pub fn append_assistant(&self, raw_message_json: &str) {
-        match serde_json::from_str::<Value>(raw_message_json) {
-            Ok(message) => self.push_open(message),
-            Err(err) => log::warn!(
-                "conversation {}: invalid assistant json: {err}",
-                self.inner.conversation_id
-            ),
-        }
+        push_assistant_message(&self.inner, raw_message_json);
     }
 
     /// Append a tool result for the call `tool_call_id` to the open turn.
@@ -548,66 +601,86 @@ impl<F: ClawFs + 'static> GroupGuard<F> {
     /// Set `is_error` when the tool failed, so the model can see the call did not
     /// succeed.
     pub fn append_tool_result(&self, tool_call_id: &str, content: &str, is_error: bool) {
-        self.push_open(json!({
-            "role": "tool",
-            "tool_call_id": tool_call_id,
-            "content": content,
-            "is_error": is_error,
-        }));
+        push_open(
+            &self.inner,
+            json!({
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": content,
+                "is_error": is_error,
+            }),
+        );
     }
 
     /// Append a whole batch of messages to the open turn (e.g. one tool round).
     ///
     /// `messages` must be a JSON array; a non-array value is logged and ignored.
     pub fn append_patch(&self, messages: &Value) {
-        let Some(items) = messages.as_array() else {
-            log::warn!(
-                "conversation {}: append_patch expected a JSON array",
-                self.inner.conversation_id
-            );
-            return;
-        };
-        for message in items {
-            self.push_open(message.clone());
-        }
+        push_patch(&self.inner, messages);
     }
 
     /// Commit the open turn now as one group record, then persist if due.
     pub fn commit(&self) {
-        let inner = &self.inner;
-        let due = {
-            let mut state = lock_state(inner);
-            if state.open_group.is_empty() {
-                return;
-            }
-            let msgs = std::mem::take(&mut state.open_group);
-            let id = next_id(&mut state);
-            enqueue(&mut state, id, msgs.clone(), inner.conversation_id);
-            state.groups.push(StoredGroup {
-                id,
-                msgs,
-                loc: None,
-            });
-            // A committed turn changes the turn-structured snapshot (a new turn
-            // appears), so invalidate caches and bump the version.
-            state.mark_changed();
-            persist_due(inner, &state)
-        };
-        if due {
-            persist(inner, false);
-        }
-    }
-
-    fn push_open(&self, message: Value) {
-        let mut state = lock_state(&self.inner);
-        state.open_group.push(message);
-        state.mark_changed();
+        commit_open_turn(&self.inner);
     }
 }
 
 impl<F: ClawFs + 'static> Drop for GroupGuard<F> {
     fn drop(&mut self) {
         self.commit();
+    }
+}
+
+fn push_assistant_message<F: ClawFs + 'static>(inner: &StoreInner<F>, raw_message_json: &str) {
+    match serde_json::from_str::<Value>(raw_message_json) {
+        Ok(message) => push_open(inner, message),
+        Err(err) => log::warn!(
+            "conversation {}: invalid assistant json: {err}",
+            inner.conversation_id
+        ),
+    }
+}
+
+fn push_patch<F: ClawFs + 'static>(inner: &StoreInner<F>, messages: &Value) {
+    let Some(items) = messages.as_array() else {
+        log::warn!(
+            "conversation {}: append_patch expected a JSON array",
+            inner.conversation_id
+        );
+        return;
+    };
+    for message in items {
+        push_open(inner, message.clone());
+    }
+}
+
+fn push_open<F: ClawFs + 'static>(inner: &StoreInner<F>, message: Value) {
+    let mut state = lock_state(inner);
+    state.open_group.push(message);
+    state.mark_changed();
+}
+
+fn commit_open_turn<F: ClawFs + 'static>(inner: &StoreInner<F>) {
+    let due = {
+        let mut state = lock_state(inner);
+        if state.open_group.is_empty() {
+            return;
+        }
+        let msgs = std::mem::take(&mut state.open_group);
+        let id = next_id(&mut state);
+        enqueue(&mut state, id, msgs.clone(), inner.conversation_id);
+        state.groups.push(StoredGroup {
+            id,
+            msgs,
+            loc: None,
+        });
+        // A committed turn changes the turn-structured snapshot (a new turn
+        // appears), so invalidate caches and bump the version.
+        state.mark_changed();
+        persist_due(inner, &state)
+    };
+    if due {
+        persist(inner, false);
     }
 }
 

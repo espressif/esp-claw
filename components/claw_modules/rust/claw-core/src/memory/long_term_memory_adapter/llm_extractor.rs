@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use claw_api::{ChatRequest, ClawApi};
 use claw_interface::http::ClawHttp;
 
-use crate::memory::extraction::{ExtractError, ExtractedItem, Extractor};
+use super::extraction::{ExtractError, ExtractedItem, Extractor};
 
 /// System prompt steering the extraction. Asks for stable, third-person facts and
 /// nothing else, so the result is parseable JSON.

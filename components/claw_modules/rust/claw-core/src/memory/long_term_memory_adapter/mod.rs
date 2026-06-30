@@ -1,9 +1,9 @@
-//! [`LongTermMemoryAdapter`] — the [`Memory`] that fronts the dual-tier long-term
-//! store, owning extraction scheduling, context contribution, and the memory
-//! tools.
+//! [`LongTermMemoryContextAdapter`] — the [`ContextAdapter`] that fronts the
+//! dual-tier long-term store, owning extraction scheduling, context contribution,
+//! and the memory tools.
 //!
 //! It holds two [`LongTermMemory`] stores — a **global** one shared across every
-//! agent and a **agent** one private to this agent — and presents them to the
+//! agent and an **agent** one private to this agent — and presents them to the
 //! model as a *single* memory: the tools take no tier parameter, recall/list
 //! merge both stores, and stores route through the [`TierClassifier`]. The model
 //! therefore never has to reason about where a fact lives; it just remembers and
@@ -26,10 +26,20 @@ use claw_tool::ToolGroup;
 use claw_utils::SharedTaskPool;
 use serde_json::Value;
 
-use crate::memory::extraction::Extractor;
-use crate::memory::tier::{MemoryTier, TierClassifier};
-use crate::memory::tools::memory_tool_group;
 use crate::memory::traits::{ContextAdapter, History};
+
+mod extraction;
+mod llm_compactor;
+mod llm_extractor;
+mod tier;
+mod tools;
+
+pub use extraction::{ExtractError, ExtractedItem, Extractor, NoopExtractor};
+pub use llm_compactor::LlmCompactor;
+pub use llm_extractor::LlmExtractor;
+pub use tier::{MemoryTier, RuleBasedTierClassifier, TierClassifier};
+
+use self::tools::memory_tool_group;
 
 /// Id prefix for the shared global store.
 pub const GLOBAL_ID_PREFIX: &str = "g-";
@@ -127,7 +137,7 @@ impl<F: ClawFs + 'static> MemoryStores<F> {
 }
 
 /// A [`ContextAdapter`] over a dual-tier long-term store. See the module docs.
-pub struct LongTermMemoryAdapter<F: ClawFs + 'static> {
+pub struct LongTermMemoryContextAdapter<F: ClawFs + 'static> {
     id: String,
     stores: MemoryStores<F>,
     extractor: Arc<dyn Extractor>,
@@ -160,7 +170,7 @@ struct CatalogCache {
     primed: bool,
 }
 
-impl<F: ClawFs + 'static> LongTermMemoryAdapter<F> {
+impl<F: ClawFs + 'static> LongTermMemoryContextAdapter<F> {
     /// Build an adapter over the two stores, a tier `classifier`, an `extractor`,
     /// and the shared memory `pool` that runs extraction off the tick path.
     pub fn new(
@@ -231,7 +241,7 @@ impl<F: ClawFs + 'static> LongTermMemoryAdapter<F> {
     }
 }
 
-impl<F: ClawFs + 'static> ContextAdapter for LongTermMemoryAdapter<F> {
+impl<F: ClawFs + 'static> ContextAdapter for LongTermMemoryContextAdapter<F> {
     fn id(&self) -> &str {
         &self.id
     }

@@ -9,33 +9,25 @@
 //!
 //! - the [`History`] / [`Transcript`] / [`ContextAdapter`] traits the agent reads,
 //!   writes, and pulls context sources through;
-//! - the [`ConversationHistory`] that owns the transcript;
+//! - the [`History`] / [`Transcript`] implementation over
+//!   [`TranscriptStore`](claw_memory::TranscriptStore);
 //! - the LLM-backed [`LlmCompactor`] and [`LlmExtractor`];
 //! - the [`Extractor`] seam and tier policy ([`TierClassifier`]);
-//! - the [`LongTermMemoryAdapter`] that fronts the dual-tier store as one
+//! - the [`LongTermMemoryContextAdapter`] that fronts the dual-tier store as one
 //!   [`ContextAdapter`] with its five model-callable tools.
 
-mod conversation_history;
-mod extraction;
-mod llm_compactor;
-mod llm_extractor;
-mod long_term_adapter;
-mod recent_messages_context_adapter;
-mod rolling_summary_context_adapter;
+mod long_term_memory_adapter;
+mod recent_messages_adapter;
+mod rolling_summary_adapter;
 mod summary_cursor;
-mod tier;
-mod tools;
 mod traits;
 
-pub use conversation_history::ConversationHistory;
-pub use extraction::{ExtractError, ExtractedItem, Extractor, NoopExtractor};
-pub use llm_compactor::LlmCompactor;
-pub use llm_extractor::LlmExtractor;
-pub use long_term_adapter::{
-    agent_store, global_store, LongTermMemoryAdapter, AGENT_ID_PREFIX, GLOBAL_ID_PREFIX,
+pub use long_term_memory_adapter::{
+    agent_store, global_store, ExtractError, ExtractedItem, Extractor, LlmCompactor, LlmExtractor,
+    LongTermMemoryContextAdapter, MemoryTier, NoopExtractor, RuleBasedTierClassifier,
+    TierClassifier, AGENT_ID_PREFIX, GLOBAL_ID_PREFIX,
 };
-pub use recent_messages_context_adapter::RecentMessagesContextAdapter;
-pub use rolling_summary_context_adapter::{CompactionPolicy, RollingSummaryContextAdapter};
+pub use recent_messages_adapter::RecentMessagesContextAdapter;
+pub use rolling_summary_adapter::{CompactionPolicy, RollingSummaryContextAdapter};
 pub use summary_cursor::SummaryCursor;
-pub use tier::{MemoryTier, RuleBasedTierClassifier, TierClassifier};
 pub use traits::{ContextAdapter, History, Transcript};

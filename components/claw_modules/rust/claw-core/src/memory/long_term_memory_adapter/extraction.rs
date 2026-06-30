@@ -8,7 +8,7 @@
 //! the results to a tier, persisting); the `Extractor` owns only the
 //! *transformation*, so it stays free of any storage concern.
 
-use crate::memory::tier::MemoryTier;
+use super::tier::MemoryTier;
 
 /// One fact an [`Extractor`] distilled from a transcript.
 ///

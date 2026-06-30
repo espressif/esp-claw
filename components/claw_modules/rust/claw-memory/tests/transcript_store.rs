@@ -119,6 +119,28 @@ fn open_turn_is_visible_then_becomes_a_committed_turn() {
 }
 
 #[test]
+fn direct_writer_keeps_open_turn_until_commit() {
+    let store = store_with(MemFs::default());
+    let patch = json!([{ "role": "assistant", "content": "working" }]);
+
+    store.push_user_message("hello");
+    store.push_patch(&patch);
+
+    assert_eq!(messages(&store).len(), 2);
+    assert_eq!(store.open_turn_messages().len(), 2);
+    assert!(store.turns_snapshot().is_empty());
+
+    store.commit_open_turn();
+
+    assert!(store.open_turn_messages().is_empty());
+    let turns = store.turns_snapshot();
+    assert_eq!(turns.len(), 1);
+    assert_eq!(turns[0].messages.len(), 2);
+    assert_eq!(turns[0].messages[0]["content"], "hello");
+    assert_eq!(turns[0].messages[1]["content"], "working");
+}
+
+#[test]
 fn version_advances_on_append_and_commit() {
     let store = store_with(MemFs::default());
     let v0 = store.version();
@@ -130,7 +152,10 @@ fn version_advances_on_append_and_commit() {
 
     turn.commit();
     let v2 = store.version();
-    assert!(v2 > v1, "commit must bump the version (a new committed turn)");
+    assert!(
+        v2 > v1,
+        "commit must bump the version (a new committed turn)"
+    );
 }
 
 #[test]
@@ -179,7 +204,10 @@ fn reloads_via_manifest() {
     // A fresh store restores the same view from the manifest + data log.
     let reloaded = TranscriptStore::new(1, instant_config("/c"), fs.clone());
     let after = messages(&reloaded);
-    assert_eq!(after, before, "reload reproduces the pre-flush view exactly");
+    assert_eq!(
+        after, before,
+        "reload reproduces the pre-flush view exactly"
+    );
     assert_eq!(after.len(), 6);
 }
 

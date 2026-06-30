@@ -117,16 +117,6 @@ fn validate_tool(dir: &Path, dir_name: &str) -> Result<()> {
         );
     }
 
-    // Parameters must compile as JSON Schema so runtime validation cannot drift.
-    let parameters = crate::validate::parameters_from_tool_schema(&schema_text)
-        .map_err(|details| anyhow!("{}: {details}", schema_path.display()))?;
-    jsonschema::Validator::new(&parameters).map_err(|error| {
-        anyhow!(
-            "{}: parameters JSON Schema is invalid: {error}",
-            schema_path.display()
-        )
-    })?;
-
     Ok(())
 }
 

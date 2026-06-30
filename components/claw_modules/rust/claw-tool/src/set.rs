@@ -7,12 +7,10 @@ use claw_permission::Action;
 use serde_json::Value;
 use thiserror::Error;
 
-use jsonschema::Validator;
-
 use crate::handler::{
     tool_invoke_err, Tool, ToolError, ToolInvocation, ToolInvokeError, ToolOutput,
 };
-use crate::validate::{compile_argument_validator, parse_arguments_json, validate_arguments};
+use crate::validate::parse_arguments_json;
 
 /// A named bundle of [`Tool`]s registered together.
 ///
@@ -53,8 +51,6 @@ struct Entry {
     tool: Tool,
     /// The [`ToolGroup`] this tool was registered under (provenance).
     group: &'static str,
-    /// Compiled validator for `function.parameters`, built at assembly time.
-    argument_validator: Validator,
 }
 
 /// Error from assembling a [`ToolSet`].
@@ -64,9 +60,6 @@ pub enum ToolSetError {
     /// name, so this would silently shadow one — rejected at construction.
     #[error("duplicate tool name across groups: {0}")]
     DuplicateToolName(String),
-    /// A tool's `function.parameters` JSON Schema could not be compiled.
-    #[error("tool '{tool}' parameters JSON Schema is invalid: {details}")]
-    InvalidParameterSchema { tool: String, details: String },
 }
 
 /// A set of [`Tool`]s, organized by group, ready for one or more iterations.
@@ -164,13 +157,11 @@ fn insert_tool(
         return Err(ToolSetError::DuplicateToolName(name.to_string()));
     }
     debug_validate_schema(name, tool.schema());
-    let argument_validator = compile_argument_validator(name, tool.schema())?;
     by_name.insert(
         name.to_string(),
         Entry {
             tool,
             group: group_name,
-            argument_validator,
         },
     );
     Ok(())
@@ -395,18 +386,17 @@ impl ToolSet {
 
     /// Dispatch one model `tool_call` to its tool by name.
     ///
-    /// Arguments are parsed and validated against the tool's parameter JSON Schema
-    /// before [`ToolHandler::invoke`] runs. Returns [`ToolError::NotFound`] when no
-    /// tool owns `call.name`; schema and JSON parse failures return the matching
-    /// [`ToolError`] variant; dynamic rejections come from `invoke`.
+    /// Arguments are parsed as a JSON object before [`ToolHandler::invoke`] runs.
+    /// Returns [`ToolError::NotFound`] when no tool owns `call.name`; JSON parse
+    /// failures return the matching [`ToolError`] variant; dynamic rejections come
+    /// from `invoke`.
     pub fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         // Note: the per-call `toolcall` span is created one layer up, in the
         // iteration loop, so it also covers calls refused by soft-hide gating
         // (which never reach here).
         match self.by_name.get(call.name) {
             Some(entry) => {
-                let arguments = parse_arguments_json(call.arguments_json)?;
-                validate_arguments(&entry.argument_validator, &arguments)?;
+                parse_arguments_json(call.arguments_json)?;
                 entry.tool.invoke(call)
             }
             None => Err(tool_invoke_err(ToolError::NotFound(call.name.to_string()))),
@@ -624,7 +614,7 @@ mod tests {
     }
 
     #[test]
-    fn invoke_rejects_arguments_that_fail_schema_validation() {
+    fn invoke_does_not_enforce_parameter_schema_when_runtime_validator_is_disabled() {
         const SCHEMA: &str = r#"{
             "type": "function",
             "function": {
@@ -652,14 +642,14 @@ mod tests {
             }
         }
         let set = ToolSet::new([Tool::new(NeedsNameTool)]).unwrap();
-        let error = set
+        let output = set
             .invoke(&ToolInvocation {
                 id: Some("t1"),
                 name: "needs_name",
                 arguments_json: "{}",
             })
-            .unwrap_err();
-        assert!(matches!(error.error, ToolError::InvalidArguments(_)));
-        assert!(error.retries.is_none());
+            .unwrap();
+        assert!(output.ok);
+        assert_eq!(output.output, "ok");
     }
 }

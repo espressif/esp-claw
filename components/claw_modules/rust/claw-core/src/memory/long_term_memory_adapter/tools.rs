@@ -16,7 +16,7 @@ use claw_tool::{
 };
 use serde_json::Value;
 
-use crate::memory::long_term_adapter::MemoryStores;
+use super::MemoryStores;
 
 /// Group label for the long-term memory tools (provenance only).
 pub(crate) const MEMORY_TOOL_GROUP: &str = "memory";

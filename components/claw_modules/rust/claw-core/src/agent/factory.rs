@@ -36,7 +36,7 @@ use crate::agent::graph::GraphHost;
 use crate::agent::kind::AgentKind;
 use crate::agent::resolver::AgentResolver;
 use crate::agent::Agent;
-use crate::memory::{agent_store, Extractor, LongTermMemoryAdapter, TierClassifier};
+use crate::memory::{agent_store, Extractor, LongTermMemoryContextAdapter, TierClassifier};
 
 /// Creates a concrete agent for a goal.
 ///
@@ -81,7 +81,7 @@ pub trait AgentFactory: Send + Sync {
 /// Built once by the system wiring layer and handed to
 /// [`FsAgentFactory::new`]; each agent then gets its own private store under
 /// `agent_dir` plus a clone of the shared `global` store, fronted by one
-/// [`LongTermMemoryAdapter`].
+/// [`LongTermMemoryContextAdapter`].
 pub struct LongTermDeps<F: ClawFs + Clone + 'static> {
     /// The single store shared by every agent (user-level facts). Cloned (an
     /// `Arc` bump) into each agent's adapter so all agents read/write one store.
@@ -142,7 +142,7 @@ pub struct FsAgentFactory<F: ClawFs + Clone + 'static, H: ClawHttp + Default + '
     compaction: CompactionDeps,
     /// Long-term-memory collaborators, shared across every agent this factory
     /// builds. Required: every agent gets a private store plus a clone of the
-    /// shared global store, fronted by one [`LongTermMemoryAdapter`].
+    /// shared global store, fronted by one [`LongTermMemoryContextAdapter`].
     long_term: LongTermDeps<F>,
 }
 
@@ -234,7 +234,7 @@ impl<F: ClawFs + Clone + 'static, H: ClawHttp + Default + Send + 'static> AgentF
         // (keyed by id) plus a clone of the shared global store.
         let long_term = &self.long_term;
         let agent_dir = format!("{}/{}", long_term.agent_dir.trim_end_matches('/'), id);
-        let adapter = LongTermMemoryAdapter::new(
+        let adapter = LongTermMemoryContextAdapter::new(
             agent_store(agent_dir, self.memory_fs.clone()),
             long_term.global.clone(),
             Arc::clone(&long_term.classifier),

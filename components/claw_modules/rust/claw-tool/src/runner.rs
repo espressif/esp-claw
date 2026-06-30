@@ -325,17 +325,17 @@ mod tests {
     }
 
     #[test]
-    fn schema_validation_failure_becomes_recoverable_tool_message() {
-        struct NeedsNameTool;
-        impl ToolHandler for NeedsNameTool {
+    fn invalid_arguments_json_becomes_recoverable_tool_message() {
+        struct JsonTool;
+        impl ToolHandler for JsonTool {
             fn name(&self) -> &str {
-                "needs_name"
+                "json_tool"
             }
             fn schema(&self) -> &str {
                 r#"{
                     "type": "function",
                     "function": {
-                        "name": "needs_name",
+                        "name": "json_tool",
                         "parameters": {
                             "type": "object",
                             "properties": { "name": { "type": "string" } },
@@ -351,15 +351,15 @@ mod tests {
                 })
             }
         }
-        let tools = ToolSet::new([Tool::new(NeedsNameTool)]).unwrap();
+        let tools = ToolSet::new([Tool::new(JsonTool)]).unwrap();
         let runner = ToolRunner::new(&tools, None);
         let outcome = runner.run_one(&ToolInvocation {
             id: Some("t1"),
-            name: "needs_name",
-            arguments_json: "{}",
+            name: "json_tool",
+            arguments_json: "[",
         });
         assert!(!outcome.ok);
-        assert!(outcome.content.contains("schema validation"));
+        assert!(outcome.content.contains("not valid JSON"));
     }
 
     #[test]

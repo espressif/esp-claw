@@ -66,8 +66,7 @@ use crate::iteration_loop::{
     SystemPrompt, ToolRun,
 };
 use crate::memory::{
-    ContextAdapter, ConversationHistory, History, RecentMessagesContextAdapter, SummaryCursor,
-    Transcript,
+    ContextAdapter, History, RecentMessagesContextAdapter, SummaryCursor, Transcript,
 };
 use claw_context::{Block, BlockKind, Context};
 use claw_permission::{Grant, PermissionPolicy};
@@ -1319,7 +1318,7 @@ impl<F: ClawFs + 'static, H: ClawHttp> BaseAgentBuilder<F, H> {
             self.store.clone(),
             self.summary_cursor,
         ));
-        let transcript: Arc<dyn Transcript> = Arc::new(ConversationHistory::new(self.store));
+        let transcript: Arc<dyn Transcript> = Arc::new(self.store);
 
         Ok(BaseAgent {
             llm: self.llm,

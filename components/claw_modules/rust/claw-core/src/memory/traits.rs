@@ -1,12 +1,12 @@
 //! The three traits the agent's context plumbing rests on: the [`History`] read
-//! view over the conversation transcript, the [`Transcript`] write face its owner
-//! exposes to the agent, and the pull-based [`ContextAdapter`] every pluggable
-//! context source implements.
+//! view over the conversation transcript, the [`Transcript`] write face
+//! [`TranscriptStore`](claw_memory::TranscriptStore) exposes to the agent, and the
+//! pull-based [`ContextAdapter`] every pluggable context source implements.
 //!
-//! # One transcript, owned by `History`; adapters only read it
+//! # One transcript, owned by `TranscriptStore`; adapters only read it
 //!
 //! The conversation transcript has a single owner — the
-//! [`ConversationHistory`](super::ConversationHistory) — which exposes:
+//! [`TranscriptStore`](claw_memory::TranscriptStore) — which exposes:
 //! - [`History`] (read): the message snapshot + a change [`version`](History::version),
 //! - [`Transcript`] (write): the boundary writes the agent drives directly.
 //!
@@ -22,8 +22,10 @@
 use std::sync::Arc;
 
 use claw_context::{Block, BlockKind};
+use claw_interface::ClawFs;
+use claw_memory::TranscriptStore;
 use claw_tool::ToolGroup;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 /// The read view of the conversation transcript: the one capability request
 /// assembly — and every pluggable [`Memory`] — needs from the transcript owner.
@@ -84,6 +86,52 @@ pub trait Transcript: History {
     /// A plain unsizing coercion (`self`), provided as a method so the agent need
     /// not rely on trait upcasting from `&dyn Transcript` to `&dyn History`.
     fn as_history(&self) -> &dyn History;
+}
+
+impl<F: ClawFs + 'static> History for TranscriptStore<F> {
+    fn messages(&self) -> Arc<Value> {
+        TranscriptStore::messages(self)
+    }
+
+    fn version(&self) -> u64 {
+        TranscriptStore::version(self)
+    }
+}
+
+impl<F: ClawFs + 'static> Transcript for TranscriptStore<F> {
+    fn append_user(&self, text: &str, starts_task: bool) {
+        if starts_task {
+            self.commit_open_turn();
+        }
+        self.push_user_message(text);
+    }
+
+    fn commit_assistant(&self, text: &str, raw_json: Option<&str>) {
+        match raw_json {
+            Some(raw) => self.push_assistant_message(raw),
+            None => self.push_patch(&json!([{ "role": "assistant", "content": text }])),
+        }
+        self.commit_open_turn();
+    }
+
+    fn commit_patch(&self, patch: &Value) {
+        self.push_patch(patch);
+        self.commit_open_turn();
+    }
+
+    fn commit_ended(&self, final_message: &str) {
+        self.push_patch(&json!([{ "role": "assistant", "content": final_message }]));
+        self.commit_open_turn();
+    }
+
+    fn commit_cancellation(&self, marker: &str) {
+        self.push_user_message(marker);
+        self.commit_open_turn();
+    }
+
+    fn as_history(&self) -> &dyn History {
+        self
+    }
 }
 
 /// A pluggable context source: a pure reader over [`History`] that contributes

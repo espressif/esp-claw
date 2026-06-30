@@ -19,7 +19,7 @@ flowchart TB
     subgraph L2["Layer 2 — Agent（claw-core）"]
         GA["GenericAgent"]
         BA["BaseAgent"]
-        MEM["ConversationMemory<br/>(claw-memory)"]
+        MEM["TranscriptStore<br/>(claw-memory)"]
         CTX["Context<br/>(claw-context)"]
         GA --> BA
         BA --> MEM
@@ -232,7 +232,7 @@ flowchart BT
 | `claw-tool` | Tool 框架：define / `ToolRegistry` / `ToolSet` / `ToolRunner` / soft-hide / `PermissionGate` / build-time `bake` |
 | `claw-skill` | Skill 目录扫描、`SkillRegistry`、`SkillSet`、prompt catalog/context |
 | `claw-permission` | `Action` / `PermissionPolicy` / `GrantStore`；Allow / Ask / Deny 策略 |
-| `claw-memory` | `ConversationMemory`、transcript 持久化、compaction、`MemoryTaskPool` |
+| `claw-memory` | `TranscriptStore`（纯 append-only verbatim 存储 + 持久化）、`Compactor` seam、long-term memory；compaction 策略由 `claw-core` 的 rolling-summary adapter 拥有 |
 | `claw-context` | Prompt `Block` / `BlockKind` 组装与缓存；`RequestContext` |
 | `claw-capability` | C `claw_cap` 的 Rust registry（迁移中，**当前不在 `claw-core` 运行时依赖链**） |
 | `claw-sandbox` | 沙箱 FS：限制 agent 文件访问虚拟根（`/sandbox`, `/shared`, `/system`） |
@@ -269,7 +269,7 @@ flowchart BT
 | `claw-interface` | `ClawFs` 注入 memory / skill registry / factory |
 | `claw-utils` | `AgentId`, `IterationId`, `SessionId` 等 newtype |
 | `claw-api` | `ClawApi` LLM 客户端；`LlmCompactor` 在 `memory/` |
-| `claw-memory` | `BaseAgent` / `GenericAgent` 的 `ConversationMemory` |
+| `claw-memory` | `BaseAgent` / `GenericAgent` 的 `TranscriptStore`；`Compactor` seam 由 rolling-summary adapter 驱动 |
 | `claw-context` | system prompt block 组装（Global / Session / Agent 层） |
 | `claw-skill` | manifest skill id → `SkillSet`；**re-export** `Skill*` |
 | `claw-tool` | manifest capability → `ToolSet`；iteration 调 `ToolRunner`；**re-export** `Tool*` |

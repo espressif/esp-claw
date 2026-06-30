@@ -15,9 +15,15 @@ use crate::agent::manifest::AgentManifest;
 use super::string_argument;
 
 /// Read one string argument and reject values that are empty after trimming.
-/// Schema covers presence and `minLength`; this catches whitespace-only strings.
+/// Missing, non-string, and empty values are invalid arguments; whitespace-only
+/// values are rejected after trim as a dynamic tool validation failure.
 fn non_blank_argument(arguments_json: &str, key: &str) -> Result<String, ToolError> {
     let raw = string_argument(arguments_json, key)?;
+    if raw.is_empty() {
+        return Err(ToolError::InvalidArguments(format!(
+            "spawn_subagent '{key}' is required"
+        )));
+    }
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(ToolError::invoke_rejected(format!(
@@ -262,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn spawn_requires_name_via_schema_validation() {
+    fn spawn_requires_name_in_handler_validation() {
         let host = Arc::new(RecordingHost::default());
         let context = context_for(Arc::clone(&host) as Arc<dyn GraphHost>, AgentId(1));
         let set = ToolSet::from_groups([subagent_tool_group(
