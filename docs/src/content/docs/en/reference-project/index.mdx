@@ -9,19 +9,19 @@ import LinkToSource from '@/components/LinkToSource.astro';
 
 ## System overview
 
-The repo follows an **“example app + shared components”** layout: `application/edge_agent` is a buildable ESP-IDF sample that wires Wi-Fi, the config UI, Lua modules, and capabilities into a full device; `components` holds reusable runtime core, capability plugins, and hardware/script extensions for other boards and scenarios.
+The repo follows an **“example app + shared app layer + reusable framework”** layout: `applications/edge_agent` is a buildable ESP-IDF sample that wires Wi-Fi, the config UI, Lua modules, and capabilities into a full device; `applications/shared` holds reusable app wiring, while `framework` holds reusable runtime core, services, capability plugins, and hardware/script extensions.
 
 Today the code falls into four areas:
 
-- **App assembly:** <LinkToSource relativePath="application/edge_agent/main/" /> and <LinkToSource relativePath="components/common/" /> — boot, networking, settings, the HTTP provisioning UI, and app-level module registration.
+- **App assembly:** <LinkToSource relativePath="applications/edge_agent/main/" /> and <LinkToSource relativePath="applications/shared/" /> — boot, app wiring, the HTTP provisioning UI, and app-level module registration.
 - **Capabilities:** <LinkToSource relativePath="framework/capabilities/" /> — outward-facing capabilities such as IM, MCP client/server, Lua runtime, scheduling, files, time, web search, and more.
-- **Runtime core:** <LinkToSource relativePath="components/claw_modules/" /> — Agent infrastructure: core context, capability registration, event routing, memory, and skills.
-- **Device & script extensions:** <LinkToSource relativePath="components/lua_modules/" /> — exposes displays, cameras, audio, buttons, GPIO, PWM, storage, and other peripherals to Lua and the Agent.
+- **Runtime core:** <LinkToSource relativePath="framework/foundation/" /> — Agent infrastructure: core context, capability registration, event routing, memory, and skills.
+- **Device & script extensions:** <LinkToSource relativePath="framework/lua_modules/" /> — exposes displays, cameras, audio, buttons, GPIO, PWM, storage, and other peripherals to Lua and the Agent.
 
 ## Project directory layout
 
 <FileTree>
-- application/edge_agent/ **Demo app** — wires the framework and caps into flashable firmware
+- applications/edge_agent/ **Demo app** — wires the framework and caps into flashable firmware
   - main/ Boot entry (`app_main`)
     - main.c Firmware entry
   - components/ App-level components
@@ -30,33 +30,37 @@ Today the code falls into four areas:
     - cmd_wifi/ Wi-Fi CLI commands
     - gen_bmgr_codes/ [auto-generated] board-adaptation helper code
   - fatfs_image/ Factory FATFS inputs: router_rules, memory, scheduler, static files, and app-bundled Skills
-- components/common/ **Shared app components** — reusable wiring across apps
+- applications/shared/ **Shared app components** — reusable wiring across apps
   - app_claw/ App startup and wiring (`app_claw_start`, CLI, Lua module registration)
-  - wifi_manager/ Wi-Fi and network setup
-  - settings/ Base library for local settings persistence
-  - captive_dns/ Captive DNS for SoftAP provisioning
-  - display_arbiter/ Display ownership arbitration [\[details\]](@lang/reference-cap/lua-modules#display-module)
   - emote/ Emote display and network-state linkage
-  - esp_painter/ Lightweight drawing helpers
-  - esp_video/ Video-processing wrappers
-  - http_reuse/ Reusable HTTP foundation component
-  - lua_module_builder/ Lua module build helpers
-  - skill_builder/ Skill build helpers
-- components/
-  - claw_modules/ **Runtime core**
+- framework/
+  - services/ **Reusable runtime services**
+    - network/wifi_manager/ Wi-Fi and network setup
+    - network/captive_dns/ Captive DNS for SoftAP provisioning
+    - settings_store/ NVS-backed key/value service
+    - discovery/mcp_mdns/ MCP mDNS discovery and publishing
+  - platform/ **Platform adapters**
+    - esp_idf/http_reuse/ ESP-IDF HTTP client reuse adapter
+    - component_overrides/esp_video/ External component override
+  - ui/ **UI primitives**
+    - display_arbiter/ Display ownership arbitration [\[details\]](@lang/reference-cap/lua-modules#display-module)
+    - esp_painter/ Lightweight drawing and font primitives
+  - build_support/ **Build-time sync helpers**
+    - lua_module_builder/ Lua module resource and docs sync
+    - skill_builder/ Component Skills sync
+  - foundation/ **Runtime core**
     - claw_core/ Agent core — Agent loop, context assembly, tool calls
     - claw_cap/ Capability runtime — capability abstraction, registration, and management
     - claw_event_router/ Event Router & automation — deterministic event routing
     - claw_memory/ Structured memory
     - claw_ramfs/ RAMFS runtime filesystem support
     - claw_skill/ Skills — skill metadata and loading
-  - framework/capabilities/ **Capability**
-    - cap_im_platform/ Unified IM platform component (Feishu, QQ, Telegram, WeChat groups)
-    - cap_mcp_*/ MCP protocol (MCP client, MCP server)
-    - cap_lua/ Lua runtime management
-    - cap_skill_mgr/ Managed interface wrapper for `claw_skill`
-    - cap_scheduler/ Scheduler
-    - cap_router_mgr/ Managed interface wrapper for `claw_event_router`
+  - capabilities/ **Capability**
+    - im_platform/ Unified IM platform component (Feishu, QQ, Telegram, WeChat groups)
+    - mcp_client/ and mcp_server/ MCP protocol components
+    - lua_runtime/ Lua runtime management
+    - scheduler/ Scheduler
+    - router_manager/ Managed interface wrapper for `claw_event_router`
     - ... other utility capabilities
   - lua_modules/ **Device & script extensions**
     - lua_module_display/ Display

@@ -1,0 +1,9 @@
+idf_component_register(
+    SRCS
+        "src/lua_module_storage.c"
+    INCLUDE_DIRS
+        "src"
+    REQUIRES
+        lua_runtime
+        fatfs
+)

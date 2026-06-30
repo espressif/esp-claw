@@ -386,7 +386,7 @@ descriptors carrying `id` / `description` / schema / `execute` (+ optional
    `channel`/`chat_id` become explicit `send` parameters (the data is still
    there, just delivered explicitly).
 4. **`claw_cap_call`** in 5 `cmd_*.c` CLI commands (`mcp_client`, `web_search`,
-   `skill`, `router_mgr`, `llm_inspect`): the ABI drops dispatch. These need a
+   `skill`, `router_manager`, `llm_inspect`): the ABI drops dispatch. These need a
    system-invoke path or to be re-pointed through `claw-tool` / the agent.
 
 **Confirmed unused by callers (safe to drop):** `claw_cap_call_from_core`,

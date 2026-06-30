@@ -1,0 +1,14 @@
+idf_component_register(
+    SRCS
+        "main.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        router_manager
+        claw_event_router
+        claw_cap
+        console
+        fatfs
+        nvs_flash
+        wear_levelling
+)

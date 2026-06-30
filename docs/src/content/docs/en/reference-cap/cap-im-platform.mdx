@@ -6,9 +6,9 @@ description: Unified IM component for Feishu, QQ, Telegram, and WeChat event ing
 import LinkToSource from '@/components/LinkToSource.astro';
 import { Aside } from '@astrojs/starlight/components';
 
-Entry point: <LinkToSource relativePath="framework/capabilities/cap_im_platform/src/cap_im_platform.c" /> ·
-header: <LinkToSource relativePath="framework/capabilities/cap_im_platform/include/cap_im_platform.h" /> ·
-Skill: <LinkToSource relativePath="framework/capabilities/cap_im_platform/skills/cap_im_platform/SKILL.md" />
+Entry point: <LinkToSource relativePath="framework/capabilities/im_platform/src/cap_im_platform.c" /> ·
+header: <LinkToSource relativePath="framework/capabilities/im_platform/include/cap_im_platform.h" /> ·
+Skill: <LinkToSource relativePath="framework/capabilities/im_platform/skills/cap_im_platform/SKILL.md" />
 
 ## Role
 
@@ -30,12 +30,12 @@ The platform component keeps each backend in its own source file so protocol-spe
 
 | Source | Responsibility |
 |--------|----------------|
-| <LinkToSource relativePath="framework/capabilities/cap_im_platform/src/cap_im_platform.c" /> | Registers all enabled IM runtime groups. |
-| <LinkToSource relativePath="framework/capabilities/cap_im_platform/src/cap_im_feishu.c" /> | Feishu WebSocket/Event API ingress, rich text flattening, and sends. |
-| <LinkToSource relativePath="framework/capabilities/cap_im_platform/src/cap_im_qq.c" /> | QQ Bot WebSocket ingress, token handling, and sends. |
-| <LinkToSource relativePath="framework/capabilities/cap_im_platform/src/cap_im_tg.c" /> | Telegram long-poll ingress, attachment download queue, and sends. |
-| <LinkToSource relativePath="framework/capabilities/cap_im_platform/src/cap_im_wechat.c" /> | WeChat ClawBot polling, QR login state, and sends. |
-| <LinkToSource relativePath="framework/capabilities/cap_im_platform/src/cap_im_attachment.c" /> | Shared local attachment path helpers. |
+| <LinkToSource relativePath="framework/capabilities/im_platform/src/cap_im_platform.c" /> | Registers all enabled IM runtime groups. |
+| <LinkToSource relativePath="framework/capabilities/im_platform/src/cap_im_feishu.c" /> | Feishu WebSocket/Event API ingress, rich text flattening, and sends. |
+| <LinkToSource relativePath="framework/capabilities/im_platform/src/cap_im_qq.c" /> | QQ Bot WebSocket ingress, token handling, and sends. |
+| <LinkToSource relativePath="framework/capabilities/im_platform/src/cap_im_tg.c" /> | Telegram long-poll ingress, attachment download queue, and sends. |
+| <LinkToSource relativePath="framework/capabilities/im_platform/src/cap_im_wechat.c" /> | WeChat ClawBot polling, QR login state, and sends. |
+| <LinkToSource relativePath="framework/capabilities/im_platform/src/cap_im_attachment.c" /> | Shared local attachment path helpers. |
 
 ## Runtime model
 

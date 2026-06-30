@@ -1,6 +1,6 @@
 # Register the Unity test component and link the Rust `claw-sys-selftest`
 # staticlib, mirroring the cargo->staticlib->imported-library wiring in
-# components/claw_modules/claw_core/CMakeLists.txt.
+# framework/runtime/CMakeLists.txt.
 #
 # The tiny `claw_rs_log.c` shim (the per-level ESP_LOGx bridge the Rust log sink
 # calls) is compiled here. WHOLE_ARCHIVE keeps the Unity `TEST_CASE`s and the

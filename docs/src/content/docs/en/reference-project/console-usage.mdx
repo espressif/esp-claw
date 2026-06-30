@@ -70,7 +70,7 @@ cap unload <group_id>
 ## skill
 
 <Aside type="note" title="skill console command is not registered by default">
-  `edge_agent` does **not** call `register_cap_skill()` by default, so the `skill` command does not appear on the serial console. To enable it, call `register_cap_skill()` inside `app_claw_cli_start` in `components/common/app_claw/app_claw_cli.c` and rebuild.
+  `edge_agent` does **not** call `register_cap_skill()` by default, so the `skill` command does not appear on the serial console. To enable it, call `register_cap_skill()` inside `app_claw_cli_start` in `applications/shared/app_claw/app_claw_cli.c` and rebuild.
 
   Alternatively, use `cap call activate_skill '{"skill_id":"your_skill"}'` from the console to manage Skills.
 </Aside>

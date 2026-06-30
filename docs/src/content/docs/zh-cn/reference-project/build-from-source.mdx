@@ -30,7 +30,7 @@ import LinkToSource from '@/components/LinkToSource.astro';
     ESP-Claw 使用 ESP Board Manager 适配多种开发板。
 
     如需添加其他开发板，请参考 [ESP Board Manager 文档](https://github.com/espressif/esp-gmf/blob/main/packages/esp_board_manager/docs/how_to_customize_board_cn.md)，
-    将开发板适配文件存放到 <LinkToSource relativePath="application/edge_agent/boards/" />
+    将开发板适配文件存放到 <LinkToSource relativePath="applications/edge_agent/boards/" />
 
     欢迎将开发板适配代码通过 Pull Request 提交到 ESP-Claw 仓库。
    </Aside>
@@ -39,7 +39,7 @@ import LinkToSource from '@/components/LinkToSource.astro';
 
    ```bash
    git clone https://github.com/espressif/esp-claw.git
-   cd esp-claw/application/edge_agent
+   cd esp-claw/applications/edge_agent
    ```
 
 3. **选择开发板**
@@ -55,7 +55,7 @@ import LinkToSource from '@/components/LinkToSource.astro';
       idf.py bmgr -c ./boards -l
       ```
 
-      也可以在 <LinkToSource relativePath="application/edge_agent/boards/" /> 下查阅支持的开发板列表。
+      也可以在 <LinkToSource relativePath="applications/edge_agent/boards/" /> 下查阅支持的开发板列表。
    </Aside>
 
    <Aside type="note" title="为什么不需要 set-target">

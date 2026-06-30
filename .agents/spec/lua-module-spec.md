@@ -1,6 +1,6 @@
 # Lua Module Component Spec
 
-This document defines the source layout and authoring rules for components under `components/lua_modules/`.
+This document defines the source layout and authoring rules for components under `framework/lua_modules/`.
 
 Two naming conventions exist:
 

@@ -74,7 +74,7 @@ build_application_edge_agent:
     - .build_examples_template
     - .rules:build:application_edge_agent
   variables:
-    EXAMPLE_DIR: application/edge_agent
+    EXAMPLE_DIR: applications/edge_agent
   parallel:
     matrix:
       # Hint:

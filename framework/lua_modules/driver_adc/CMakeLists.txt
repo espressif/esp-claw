@@ -1,0 +1,9 @@
+idf_component_register(
+    SRCS
+        "src/lua_driver_adc.c"
+    INCLUDE_DIRS
+        "src"
+    REQUIRES
+        lua_runtime
+        esp_adc
+)

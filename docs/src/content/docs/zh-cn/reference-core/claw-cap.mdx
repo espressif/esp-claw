@@ -7,7 +7,7 @@ import LinkToSource from '@/components/LinkToSource.astro';
 import { Aside } from '@astrojs/starlight/components';
 import { LinkCard } from 'starlight-theme-nova/components'
 
-头文件：<LinkToSource relativePath="components/claw_modules/claw_cap/include/claw_cap.h" />
+头文件：<LinkToSource relativePath="framework/foundation/claw_cap/include/claw_cap.h" />
 
 ## 职责
 
@@ -43,7 +43,7 @@ import { LinkCard } from 'starlight-theme-nova/components'
 
 `claw_cap_set_llm_visible_groups` 用 **group_id 白名单** 限制暴露范围。
 `edge_agent` 里默认对大语言模型暴露 `cap_files`、`cap_scheduler`、`cap_lua`、`cap_skill`、`cap_llm_inspect`、`cap_http_request`、`cap_web_search`、`cap_router_mgr`，完整结构化记忆模式还会暴露 `claw_memory`，
-见 <LinkToSource relativePath="components/common/app_claw/app_capabilities.c" /> 中的可见组配置。
+见 <LinkToSource relativePath="applications/shared/app_claw/app_capabilities.c" /> 中的可见组配置。
 
 <Aside type="tip">
   其余已注册的 Group（IM、搜索、MCP、Lua……）仍然存在，Console 和自动化可直接调用；

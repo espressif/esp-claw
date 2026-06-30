@@ -7,7 +7,7 @@ import { CardGrid } from '@astrojs/starlight/components';
 import { LinkCard } from 'starlight-theme-nova/components'
 import LinkToSource from '@/components/LinkToSource.astro';
 
-<LinkToSource relativePath="components/claw_modules/" /> 下的模块是 ESP-Claw 的**运行时框架**，负责 Agent Loop 运行、能力注册与调用、事件路由与自动化、上下文持久化等核心逻辑。
+<LinkToSource relativePath="framework/foundation/" /> 下的模块是 ESP-Claw 的**运行时框架**，负责 Agent Loop 运行、能力注册与调用、事件路由与自动化、上下文持久化等核心逻辑。
 各 `cap_*` 能力插件通过框架层提供的统一接口注册与执行，不直接耦合彼此。除了 `claw_core` 与 `claw_event_router` 外，各模块可不加载。
 
 ## 模块职责速览

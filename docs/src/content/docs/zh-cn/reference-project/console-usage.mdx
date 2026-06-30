@@ -70,7 +70,7 @@ cap unload <group_id>
 ## 技能 skill
 
 <Aside type="note" title="skill console 命令 默认未注册">
-  `edge_agent` 默认**未**调用 `register_cap_skill()`，即串口中不会出现 `skill` 命令。如需在串口使用 `skill` 命令，请在 `components/common/app_claw/app_claw_cli.c` 的 `app_claw_cli_start` 中手动调用 `register_cap_skill()` 并重新编译。
+  `edge_agent` 默认**未**调用 `register_cap_skill()`，即串口中不会出现 `skill` 命令。如需在串口使用 `skill` 命令，请在 `applications/shared/app_claw/app_claw_cli.c` 的 `app_claw_cli_start` 中手动调用 `register_cap_skill()` 并重新编译。
 
   作为替代方案，可通过 `cap call activate_skill '{"skill_id":"your_skill"}'` 在串口直接操作 Skill。
 </Aside>

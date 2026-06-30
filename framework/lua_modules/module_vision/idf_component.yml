@@ -1,0 +1,7 @@
+## IDF Component Manager Manifest File
+dependencies:
+  lua_runtime:
+    path: ../../../framework/capabilities/lua_runtime
+
+  module_image:
+    path: ../module_image

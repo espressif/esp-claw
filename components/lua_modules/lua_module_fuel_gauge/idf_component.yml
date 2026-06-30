@@ -1,4 +1,0 @@
-## IDF Component Manager Manifest File
-dependencies:
-  lua_driver_i2c:
-    path: ../lua_driver_i2c

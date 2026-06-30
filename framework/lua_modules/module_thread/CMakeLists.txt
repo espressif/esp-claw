@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "src/lua_module_thread.c"
+        "src/thread_sync.c"
+        "src/thread_job.c"
+    INCLUDE_DIRS
+        "src"
+    REQUIRES
+        lua_runtime
+        json
+)

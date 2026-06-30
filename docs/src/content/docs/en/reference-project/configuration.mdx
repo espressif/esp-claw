@@ -11,7 +11,7 @@ ESP-Claw `edge_agent` uses menuconfig (`sdkconfig`) for initial default settings
 
 `edge_agent` stores configuration in the NVS namespace `app`.
 At boot, it loads default values from menuconfig first, then overrides them with keys stored in NVS (if present).
-The field list and read/write logic are in <LinkToSource relativePath="application/edge_agent/components/app_config/app_config.c" />.
+The field list and read/write logic are in <LinkToSource relativePath="applications/edge_agent/components/app_config/app_config.c" />.
 
 <Aside title="How to understand precedence">
   **Effective runtime value = use NVS value if present; otherwise use compile-time default.**

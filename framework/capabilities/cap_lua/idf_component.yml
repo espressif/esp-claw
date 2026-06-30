@@ -1,4 +1,0 @@
-dependencies:
-  claw_utils:
-    path: ../../../components/claw_modules/claw_utils
-  georgik/lua: "^5.5.0~7"

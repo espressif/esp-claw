@@ -10,7 +10,7 @@ import LinkToSource from '@/components/LinkToSource.astro';
 
 ## 核心数据结构
 
-实现 Capability 前需理解两个核心结构体，均定义于 <LinkToSource relativePath="components/claw_modules/claw_cap/include/claw_cap.h" />：
+实现 Capability 前需理解两个核心结构体，均定义于 <LinkToSource relativePath="framework/foundation/claw_cap/include/claw_cap.h" />：
 
 ### `claw_cap_descriptor_t` — 单个能力描述符
 
@@ -57,7 +57,7 @@ typedef struct {
 ### 步骤 1：创建组件目录结构
 
 <FileTree>
-- framework/capabilities/cap_my_feature
+- framework/capabilities/my_feature
     - CMakeLists.txt
     - include
         - cap_my_feature.h 头文件
@@ -267,7 +267,7 @@ claw_event_router_publish(&event);
             - SKILL.md         Skill 元数据与正文
 </FileTree>
 
-构建时 `components/common/skill_builder` 会把这些文件同步到 FATFS 的 Skills 根目录（默认 `/fatfs/skills/`）下。
+构建时 `framework/build_support/skill_builder` 会把这些文件同步到 FATFS 的 Skills 根目录（默认 `/fatfs/skills/`）下。
 
 ### `SKILL.md` frontmatter 格式
 

@@ -1,0 +1,10 @@
+idf_component_register(
+    SRC_DIRS
+        "src"
+    INCLUDE_DIRS
+        "src"
+    REQUIRES
+        lua_runtime
+        esp_new_jpeg
+        heap
+)

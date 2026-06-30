@@ -10,7 +10,7 @@ This page walks through authoring a custom capability for ESP-Claw—from layout
 
 ## Core data structures
 
-Understand two structs from <LinkToSource relativePath="components/claw_modules/claw_cap/include/claw_cap.h" /> before coding:
+Understand two structs from <LinkToSource relativePath="framework/foundation/claw_cap/include/claw_cap.h" /> before coding:
 
 ### `claw_cap_descriptor_t` — single capability
 
@@ -57,7 +57,7 @@ typedef struct {
 ### Step 1 — scaffold the component
 
 <FileTree>
-- framework/capabilities/cap_my_feature
+- framework/capabilities/my_feature
     - CMakeLists.txt
     - include
         - cap_my_feature.h public header
@@ -267,7 +267,7 @@ Add `skills/` beside your sources:
             - SKILL.md         Skill metadata and body
 </FileTree>
 
-At build time, `components/common/skill_builder` syncs these files under the FATFS skills root (default `/fatfs/skills/`).
+At build time, `framework/build_support/skill_builder` syncs these files under the FATFS skills root (default `/fatfs/skills/`).
 
 ### `SKILL.md` frontmatter shape
 

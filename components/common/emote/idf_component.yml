@@ -1,5 +1,0 @@
-## IDF Component Manager Manifest File
-dependencies:
-
-  display_arbiter:
-    path: ../display_arbiter

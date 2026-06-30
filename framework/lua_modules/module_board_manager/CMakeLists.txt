@@ -1,0 +1,9 @@
+idf_component_register(
+    SRC_DIRS
+        "src"
+    INCLUDE_DIRS
+        "src"
+    REQUIRES
+        lua_runtime
+        espressif__esp_board_manager
+)

@@ -11,7 +11,7 @@ ESP-Claw `edge_agent` 使用 menuconfig (sdkconfig) 保存初始化默认配置�
 
 `edge_agent` 会将配置储存在 NVS 命名空间 `app` 里。
 上电后，程序会读取 menuconfig 中的默认配置，再使用 NVS 中储存的键（如有）覆盖。
-字段列表与读写逻辑位于 <LinkToSource relativePath="application/edge_agent/components/app_config/app_config.c" />。
+字段列表与读写逻辑位于 <LinkToSource relativePath="applications/edge_agent/components/app_config/app_config.c" />。
 
 <Aside title="优先级如何理解">
   **当前运行使用的值 = NVS 里有的用 NVS，没有的用编译默认值。**

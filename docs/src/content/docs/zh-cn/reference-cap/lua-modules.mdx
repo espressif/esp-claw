@@ -114,7 +114,7 @@ void app_lua_modules_init(void)
 ### 1. 创建组件目录
 
 ```
-components/lua_modules/lua_module_myled/
+framework/lua_modules/module_myled/
 ├── CMakeLists.txt
 ├── README.md
 ├── test/
@@ -269,7 +269,7 @@ myled.set(false)  -- 熄灭
 
 ## 典型外设模块深度分析：`lua_module_gpio`
 
-源码：<LinkToSource relativePath="components/lua_modules/lua_module_gpio/src/lua_module_gpio.c" />
+源码：<LinkToSource relativePath="framework/lua_modules/module_gpio/src/lua_module_gpio.c" />
 
 `lua_module_gpio` 是一个小而完整的 C-backed Lua 模块，适合作为实现简单硬件绑定的参考。
 它只暴露三个 Lua API：设置方向、写输出电平、读输入电平。

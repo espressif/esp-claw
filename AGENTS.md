@@ -4,7 +4,7 @@ This file provides guidance to agents when working with code in this repository.
 
 ## Project Overview
 
-ESP-Claw is an ESP-IDF firmware project for running an AI agent framework on Espressif IoT devices. The main application is `application/edge_agent/`; reusable firmware components live under `components/`. The repo also contains board definitions, build-time FATFS content, documentation, and the embedded device settings UI.
+ESP-Claw is an ESP-IDF firmware project for running an AI agent framework on Espressif IoT devices. The main application is `applications/edge_agent/`; shared application wiring lives under `applications/shared/`, and reusable framework components live under `framework/`. The repo also contains board definitions, build-time FATFS content, documentation, and the embedded device settings UI.
 
 ## Development Commands
 
@@ -17,7 +17,7 @@ Export ESP-IDF before firmware work:
 Generate board manager files and build from the app directory:
 
 ```bash
-cd application/edge_agent
+cd applications/edge_agent
 idf.py bmgr -c ./boards -b esp32_S3_DevKitC_1
 idf.py build
 idf.py flash monitor
@@ -35,7 +35,7 @@ pnpm dev
 Embedded settings UI:
 
 ```bash
-cd application/edge_agent/components/http_server/frontend_source
+cd applications/edge_agent/components/http_server/frontend_source
 pnpm build
 pnpm typecheck
 ```
@@ -44,7 +44,7 @@ pnpm typecheck
 
 ### Boot and Runtime Flow
 
-The main entry point is `application/edge_agent/main/main.c`. 
+The main entry point is `applications/edge_agent/main/main.c`. 
 
 ### Core Data Flow
 
@@ -64,17 +64,21 @@ The main entry point is `application/edge_agent/main/main.c`.
 
 ## Key Subsystems
 
-- **Application shell** (`application/edge_agent/main/main.c`, `components/common/app_claw/`): boot flow, storage paths, capability registration, Lua module registration, CLI, and agent startup.
-- **Agent core** (`components/claw_modules/claw_core/`): request queue, context building, LLM backend runtime, tool-call loop, media inference, interrupts, context persistence, and response delivery.
-- **Event router** (`components/claw_modules/claw_event_router/`): declarative event routing and actions backed by router rules in FATFS.
-- **Capability registry** (`components/claw_modules/claw_cap/`): common registration and dispatch layer for model-callable capabilities.
+- **Application shell** (`applications/edge_agent/main/main.c`, `applications/shared/app_claw/`): boot flow, storage paths, capability registration, Lua module registration, CLI, and agent startup.
+- **Agent core** (`framework/runtime/claw-core/`): request queue, context building, LLM backend runtime, tool-call loop, media inference, interrupts, context persistence, and response delivery.
+- **Event router** (`framework/foundation/claw_event_router/`): declarative event routing and actions backed by router rules in FATFS.
+- **Capability registry** (`framework/runtime/claw-capability/`): common registration and dispatch layer for model-callable capabilities.
 - **Capabilities** (`framework/capabilities/`): concrete agent capabilities such as Lua execution, files, IM platforms, MCP, skill management, router management, scheduler, session management, time, HTTP requests, web search, system, and LLM inspection.
-- **Memory** (`components/claw_modules/claw_memory/`): session history, profile/long-term memory providers, memory persistence, request gating, and stage notes.
-- **Skills** (`components/claw_modules/claw_skill/`, component `skills/` directories): user-facing skill documents and activation state.
-- **Lua modules** (`components/lua_modules/`): Lua drivers and higher-level modules for hardware, media, HTTP server, storage, threading, JSON, board manager, and capability calls.
-- **Board manager** (`application/edge_agent/boards/`): board metadata, peripheral YAML, board setup code, board defaults, optional local components, and optional board FATFS overlays.
-- **FATFS images** (`application/edge_agent/fatfs_image/`): build-time source trees for the read-only SYSTEM image and writable DATA seed image.
-- **HTTP config service** (`application/edge_agent/components/http_server/`): local device configuration server and embedded frontend.
+- **Framework services** (`framework/services/`): reusable runtime services such as Wi-Fi, captive DNS, settings storage, and discovery.
+- **Framework platform adapters** (`framework/platform/`): ESP-IDF-specific behavior overrides and platform integration helpers.
+- **Framework UI primitives** (`framework/ui/`): reusable display arbitration and drawing primitives used by Lua modules and app UI.
+- **Framework build support** (`framework/build_support/`): build-time syncing for skills and Lua module resources.
+- **Memory** (`framework/runtime/claw-memory/`): session history, profile/long-term memory providers, memory persistence, request gating, and stage notes.
+- **Skills** (`framework/runtime/claw-skill/`, component `skills/` directories): user-facing skill documents and activation state.
+- **Lua modules** (`framework/lua_modules/`): Lua drivers and higher-level modules for hardware, media, HTTP server, storage, threading, JSON, board manager, and capability calls.
+- **Board manager** (`applications/edge_agent/boards/`): board metadata, peripheral YAML, board setup code, board defaults, optional local components, and optional board FATFS overlays.
+- **FATFS images** (`applications/edge_agent/fatfs_image/`): build-time source trees for the read-only SYSTEM image and writable DATA seed image.
+- **HTTP config service** (`applications/edge_agent/components/http_server/`): local device configuration server and embedded frontend.
 
 ### Runtime Path Rules
 
@@ -333,17 +337,17 @@ unsafe_code = "forbid"
 ## Testing
 
 - Firmware changes should at minimum run `idf.py build` for the affected board configuration after exporting ESP-IDF and generating board manager config.
-- Component test apps live under `components/claw_modules/*/test_apps/`.
-- Lua module tests live beside modules under `components/lua_modules/<module>/test/` with descriptive names such as `json_roundtrip.lua`.
-- Embedded frontend changes should run `cd application/edge_agent/components/http_server/frontend_source && pnpm build` and `pnpm typecheck`.
+- Component test apps live under `framework/foundation/*/test_apps/`.
+- Lua module tests live beside modules under `framework/lua_modules/<module>/test/` with descriptive names such as `json_roundtrip.lua`.
+- Embedded frontend changes should run `cd applications/edge_agent/components/http_server/frontend_source && pnpm build` and `pnpm typecheck`.
 
 ## Common File Locations
 
-- App entry point: `application/edge_agent/main/main.c`
-- Capability registration: `components/common/app_claw/app_capabilities.c`
-- Lua module registration: `components/common/app_claw/app_lua_modules.c`
-- App config schema/storage: `application/edge_agent/components/app_config/`
-- Board definitions: `application/edge_agent/boards/`
+- App entry point: `applications/edge_agent/main/main.c`
+- Capability registration: `applications/shared/app_claw/app_capabilities.c`
+- Lua module registration: `applications/shared/app_claw/app_lua_modules.c`
+- App config schema/storage: `applications/edge_agent/components/app_config/`
+- Board definitions: `applications/edge_agent/boards/`
 
 ## AGENTS.md Best-Practice Notes
 

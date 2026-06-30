@@ -1,6 +1,6 @@
 # Register the Unity test component and link the Rust `claw-api-selftest`
 # staticlib (cargo -> staticlib -> imported library), mirroring
-# components/claw_modules/claw_core/CMakeLists.txt and the sibling claw-sys app.
+# framework/runtime/CMakeLists.txt and the sibling claw-sys app.
 #
 # `claw_rs_log.c` (the per-level ESP_LOGx bridge claw-sys's log sink calls) is
 # compiled here so the linker can always resolve the `claw_rs_log_*` shims that

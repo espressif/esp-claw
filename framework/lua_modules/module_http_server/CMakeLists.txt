@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "src/lua_module_http_server.c"
+    INCLUDE_DIRS
+        "src"
+    REQUIRES
+        lua_runtime
+        json
+        esp_http_server
+        freertos
+)

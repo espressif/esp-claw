@@ -7,7 +7,7 @@ import LinkToSource from '@/components/LinkToSource.astro';
 import { Aside } from '@astrojs/starlight/components';
 import { LinkCard } from 'starlight-theme-nova/components'
 
-Header: <LinkToSource relativePath="components/claw_modules/claw_skill/include/claw_skill.h" />
+Header: <LinkToSource relativePath="framework/foundation/claw_skill/include/claw_skill.h" />
 
 `claw_skill` manages user-visible **Skills** in the model context:
 
@@ -49,10 +49,10 @@ Activation is **isolated per session**:
 
 The `/fatfs/skills` tree read at runtime is assembled in the build staging image under `build/fatfs_image/skills`:
 
-1. <LinkToSource relativePath="application/edge_agent/fatfs_image/skills/" />: app-bundled factory Skills laid out as `skills/<skill_id>/SKILL.md`, copied into the build staging image.
-2. **Component Skills**: each `cap_*` / `lua_module_*` / `lua_driver_*` component may ship `skills/<skill_id>/SKILL.md`; <LinkToSource relativePath="components/common/skill_builder/" /> syncs them into `build/fatfs_image/skills/` before packaging.
+1. <LinkToSource relativePath="applications/edge_agent/fatfs_image/skills/" />: app-bundled factory Skills laid out as `skills/<skill_id>/SKILL.md`, copied into the build staging image.
+2. **Component Skills**: each `cap_*` / `lua_module_*` / `lua_driver_*` component may ship `skills/<skill_id>/SKILL.md`; <LinkToSource relativePath="framework/build_support/skill_builder/" /> syncs them into `build/fatfs_image/skills/` before packaging.
 
-Note: <LinkToSource relativePath="application/edge_agent/fatfs_image/" /> is source input. `application/edge_agent/build/fatfs_image/` is generated staging output and is recreated during the build.
+Note: <LinkToSource relativePath="applications/edge_agent/fatfs_image/" /> is source input. `applications/edge_agent/build/fatfs_image/` is generated staging output and is recreated during the build.
 
 ## User-facing interaction
 

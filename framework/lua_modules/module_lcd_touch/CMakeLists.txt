@@ -1,0 +1,10 @@
+idf_component_register(
+    SRCS
+        "src/lua_module_lcd_touch.c"
+    INCLUDE_DIRS
+        "src"
+    REQUIRES
+        lua_runtime
+        esp_lcd_touch
+        esp_timer
+)

@@ -6,9 +6,9 @@ description: 飞书、QQ、Telegram、微信的统一 IM 组件，负责入站�
 import LinkToSource from '@/components/LinkToSource.astro';
 import { Aside } from '@astrojs/starlight/components';
 
-入口：<LinkToSource relativePath="framework/capabilities/cap_im_platform/src/cap_im_platform.c" /> ·
-头文件：<LinkToSource relativePath="framework/capabilities/cap_im_platform/include/cap_im_platform.h" /> ·
-Skill：<LinkToSource relativePath="framework/capabilities/cap_im_platform/skills/cap_im_platform/SKILL.md" />
+入口：<LinkToSource relativePath="framework/capabilities/im_platform/src/cap_im_platform.c" /> ·
+头文件：<LinkToSource relativePath="framework/capabilities/im_platform/include/cap_im_platform.h" /> ·
+Skill：<LinkToSource relativePath="framework/capabilities/im_platform/skills/cap_im_platform/SKILL.md" />
 
 ## 定位
 
@@ -30,12 +30,12 @@ Skill：<LinkToSource relativePath="framework/capabilities/cap_im_platform/skill
 
 | 源码 | 职责 |
 |------|------|
-| <LinkToSource relativePath="framework/capabilities/cap_im_platform/src/cap_im_platform.c" /> | 注册所有启用的 IM 运行时 Group。 |
-| <LinkToSource relativePath="framework/capabilities/cap_im_platform/src/cap_im_feishu.c" /> | 飞书 WebSocket/Event API 入站、富文本展开与发送。 |
-| <LinkToSource relativePath="framework/capabilities/cap_im_platform/src/cap_im_qq.c" /> | QQ Bot WebSocket 入站、Token 处理与发送。 |
-| <LinkToSource relativePath="framework/capabilities/cap_im_platform/src/cap_im_tg.c" /> | Telegram 长轮询入站、附件下载队列与发送。 |
-| <LinkToSource relativePath="framework/capabilities/cap_im_platform/src/cap_im_wechat.c" /> | 微信 ClawBot 轮询、扫码登录状态与发送。 |
-| <LinkToSource relativePath="framework/capabilities/cap_im_platform/src/cap_im_attachment.c" /> | 共享本地附件路径辅助逻辑。 |
+| <LinkToSource relativePath="framework/capabilities/im_platform/src/cap_im_platform.c" /> | 注册所有启用的 IM 运行时 Group。 |
+| <LinkToSource relativePath="framework/capabilities/im_platform/src/cap_im_feishu.c" /> | 飞书 WebSocket/Event API 入站、富文本展开与发送。 |
+| <LinkToSource relativePath="framework/capabilities/im_platform/src/cap_im_qq.c" /> | QQ Bot WebSocket 入站、Token 处理与发送。 |
+| <LinkToSource relativePath="framework/capabilities/im_platform/src/cap_im_tg.c" /> | Telegram 长轮询入站、附件下载队列与发送。 |
+| <LinkToSource relativePath="framework/capabilities/im_platform/src/cap_im_wechat.c" /> | 微信 ClawBot 轮询、扫码登录状态与发送。 |
+| <LinkToSource relativePath="framework/capabilities/im_platform/src/cap_im_attachment.c" /> | 共享本地附件路径辅助逻辑。 |
 
 ## 运行模型
 

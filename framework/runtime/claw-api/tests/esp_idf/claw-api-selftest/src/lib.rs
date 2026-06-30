@@ -171,7 +171,8 @@ pub unsafe extern "C" fn claw_api_selftest_chat_async(
             timeout_ms: 30_000,
             headers: &[],
         };
-        let pending = ClawHttpAsync::post_json(&EspIdfHttp::new(), &request, Cancel::new(&abort));
+        let http = EspIdfHttp::new();
+        let pending = ClawHttpAsync::post_json(&http, &request, Cancel::new(&abort));
         match pending.await {
             Ok(response) if response.status_code == 200 => {
                 let parsed: Result<serde_json::Value, _> = serde_json::from_str(&response.body);

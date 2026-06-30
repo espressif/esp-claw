@@ -7,11 +7,11 @@ import { Steps, FileTree } from '@astrojs/starlight/components';
 import { LinkCard } from 'starlight-theme-nova/components'
 import LinkToSource from '@/components/LinkToSource.astro';
 
-下文以示例应用 `application/edge_agent` 为例，介绍入口 <LinkToSource relativePath="application/edge_agent/main/main.c" /> 与装配逻辑 <LinkToSource relativePath="components/common/app_claw/app_claw.c" />。
+下文以示例应用 `applications/edge_agent` 为例，介绍入口 <LinkToSource relativePath="applications/edge_agent/main/main.c" /> 与装配逻辑 <LinkToSource relativePath="applications/shared/app_claw/app_claw.c" />。
 
 ## `main.c` 入口程序
 
-<LinkToSource relativePath="application/edge_agent/main/main.c" /> 会初始化系统必要组件及所需外设，为 ESP-Claw Agent 的运行做好准备。
+<LinkToSource relativePath="applications/edge_agent/main/main.c" /> 会初始化系统必要组件及所需外设，为 ESP-Claw Agent 的运行做好准备。
 
 <Steps>
 1. **初始化 NVS 并载入配置**
@@ -48,7 +48,7 @@ import LinkToSource from '@/components/LinkToSource.astro';
 
 ## `app_claw.c` Agent 装配程序
 
-<LinkToSource relativePath="components/common/app_claw/app_claw.c" /> 会初始化 ESP-Claw Agent 子系统，按顺序启动各子组件并设置参数，最终启动 Console REPL。
+<LinkToSource relativePath="applications/shared/app_claw/app_claw.c" /> 会初始化 ESP-Claw Agent 子系统，按顺序启动各子组件并设置参数，最终启动 Console REPL。
 
 <Steps>
 1. **初始化 Session Manager 与 Event Router**

@@ -1,0 +1,6 @@
+## IDF Component Manager Manifest File
+dependencies:
+  espressif/esp_video: "^2.0.1"
+
+  module_image:
+    path: ../module_image

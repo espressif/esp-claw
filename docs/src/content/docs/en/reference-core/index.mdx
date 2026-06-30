@@ -7,7 +7,7 @@ import { CardGrid } from '@astrojs/starlight/components';
 import { LinkCard } from 'starlight-theme-nova/components'
 import LinkToSource from '@/components/LinkToSource.astro';
 
-Modules under <LinkToSource relativePath="components/claw_modules/" /> are ESP-Claw’s **runtime framework**: Agent loop, capability registration and invocation, event routing and automation, context persistence, and related core logic.
+Modules under <LinkToSource relativePath="framework/foundation/" /> are ESP-Claw’s **runtime framework**: Agent loop, capability registration and invocation, event routing and automation, context persistence, and related core logic.
 Each `cap_*` capability registers and runs through the framework’s unified interfaces without tight coupling to one another. Aside from `claw_core` and `claw_event_router`, other modules may be omitted from the build.
 
 ## Module roles at a glance

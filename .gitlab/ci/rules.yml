@@ -11,20 +11,24 @@
 
 # components folder, in the alphabetic order
 .patterns-components_capabilities: &patterns-components_capabilities
-  - "components/claw_capabilities/**/*"
+  - "framework/capabilities/**/*"
 
 .patterns-components_modules: &patterns-components_modules
-  - "components/claw_modules/**/*"
+  - "framework/foundation/**/*"
 
 .patterns-components_lua_modules: &patterns-components_lua_modules
-  - "components/lua_modules/**/*"
+  - "framework/lua_modules/**/*"
 
 .patterns-components_common: &patterns-components_common
-- "components/common/**/*"
+  - "applications/shared/**/*"
+  - "framework/build_support/**/*"
+  - "framework/platform/**/*"
+  - "framework/services/**/*"
+  - "framework/ui/**/*"
 
-# application folder, in the alphabetic order
+# applications folder, in the alphabetic order
 .patterns-application_edge_agent: &patterns-application_edge_agent
-  - "application/edge_agent/**/*"
+  - "applications/edge_agent/**/*"
 
 .patterns-docs: &patterns-docs
   - "docs/**/*"

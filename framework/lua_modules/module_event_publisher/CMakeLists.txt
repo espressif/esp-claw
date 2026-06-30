@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "src/lua_module_event_publisher.c"
+    INCLUDE_DIRS
+        "src"
+    REQUIRES
+        lua_runtime
+        claw_event_router
+        json
+        esp_timer
+)

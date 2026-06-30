@@ -40,7 +40,7 @@ examples_and_unit_tests:
 
 edge_agent_boards:
   include:
-    - 'application/edge_agent/boards/espressif/**/*'
+    - 'applications/edge_agent/boards/espressif/**/*'
   allowed_licenses:
   - Apache-2.0
   - CC0-1.0
@@ -50,8 +50,8 @@ edge_agent_boards:
 ignore:  # You can also select ignoring files here
   perform_check: no  # Don't check files from that block
   include:
-    - 'application/edge_agent/boards/**'
-    - '!application/edge_agent/boards/espressif/**'
+    - 'applications/edge_agent/boards/**'
+    - '!applications/edge_agent/boards/espressif/**'
     - 'components/audio/dac_audio/test/wave_1ch_16bits.c'
     - 'components/audio/dac_audio/test/wave_1ch_8bits.c'
     - 'components/audio/dac_audio/test/wave_2ch_16bits.c'
@@ -96,5 +96,5 @@ ignore:  # You can also select ignoring files here
     - 'examples/usb/device/usb_dongle/components/FreeRTOS-Plus-CLI/**/*'
     - 'components/display/tools/esp_lv_decoder/priv_include/qoi.h'
     - 'examples/robot/ragtime_panthera/follower/main/ui/**/*'
-    - 'components/lua_modules/lua_module_magnetometer/src/bmm350/**/*'
-    - 'components/lua_modules/lua_module_magnetometer/src/bmm150/**/*'
+    - 'framework/lua_modules/module_magnetometer/src/bmm350/**/*'
+    - 'framework/lua_modules/module_magnetometer/src/bmm150/**/*'

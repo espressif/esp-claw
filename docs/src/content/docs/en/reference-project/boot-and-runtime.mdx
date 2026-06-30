@@ -7,11 +7,11 @@ import { Steps, FileTree } from '@astrojs/starlight/components';
 import { LinkCard } from 'starlight-theme-nova/components'
 import LinkToSource from '@/components/LinkToSource.astro';
 
-This walkthrough uses sample app `application/edge_agent`, covering entry <LinkToSource relativePath="application/edge_agent/main/main.c" /> and wiring in <LinkToSource relativePath="components/common/app_claw/app_claw.c" />.
+This walkthrough uses sample app `applications/edge_agent`, covering entry <LinkToSource relativePath="applications/edge_agent/main/main.c" /> and wiring in <LinkToSource relativePath="applications/shared/app_claw/app_claw.c" />.
 
 ## `main.c` entry
 
-<LinkToSource relativePath="application/edge_agent/main/main.c" /> initializes required system pieces and peripherals so the ESP-Claw Agent can run.
+<LinkToSource relativePath="applications/edge_agent/main/main.c" /> initializes required system pieces and peripherals so the ESP-Claw Agent can run.
 
 <Steps>
 1. **Init NVS and load settings**
@@ -48,7 +48,7 @@ This walkthrough uses sample app `application/edge_agent`, covering entry <LinkT
 
 ## `app_claw.c` Agent wiring
 
-<LinkToSource relativePath="components/common/app_claw/app_claw.c" /> initializes the Agent stack in order, then launches the Console REPL.
+<LinkToSource relativePath="applications/shared/app_claw/app_claw.c" /> initializes the Agent stack in order, then launches the Console REPL.
 
 <Steps>
 1. **Init Session Manager and Event Router**
