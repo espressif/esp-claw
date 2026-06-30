@@ -14,7 +14,7 @@ The repo follows an **“example app + shared components”** layout: `applicati
 Today the code falls into four areas:
 
 - **App assembly:** <LinkToSource relativePath="application/edge_agent/main/" /> and <LinkToSource relativePath="components/common/" /> — boot, networking, settings, the HTTP provisioning UI, and app-level module registration.
-- **Capabilities:** <LinkToSource relativePath="components/claw_capabilities/" /> — outward-facing capabilities such as IM, MCP client/server, Lua runtime, scheduling, files, time, web search, and more.
+- **Capabilities:** <LinkToSource relativePath="framework/capabilities/" /> — outward-facing capabilities such as IM, MCP client/server, Lua runtime, scheduling, files, time, web search, and more.
 - **Runtime core:** <LinkToSource relativePath="components/claw_modules/" /> — Agent infrastructure: core context, capability registration, event routing, memory, and skills.
 - **Device & script extensions:** <LinkToSource relativePath="components/lua_modules/" /> — exposes displays, cameras, audio, buttons, GPIO, PWM, storage, and other peripherals to Lua and the Agent.
 
@@ -50,7 +50,7 @@ Today the code falls into four areas:
     - claw_memory/ Structured memory
     - claw_ramfs/ RAMFS runtime filesystem support
     - claw_skill/ Skills — skill metadata and loading
-  - claw_capabilities/ **Capability**
+  - framework/capabilities/ **Capability**
     - cap_im_platform/ Unified IM platform component (Feishu, QQ, Telegram, WeChat groups)
     - cap_mcp_*/ MCP protocol (MCP client, MCP server)
     - cap_lua/ Lua runtime management

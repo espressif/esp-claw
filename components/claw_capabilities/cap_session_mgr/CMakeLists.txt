@@ -1,9 +1,0 @@
-idf_component_register(
-    SRCS
-        "src/cap_session_mgr.c"
-    INCLUDE_DIRS
-        "include"
-    REQUIRES
-        claw_cap
-        claw_manager
-)

@@ -5,8 +5,9 @@ idf_component_register(
     INCLUDE_DIRS
         "include"
     REQUIRES
-        claw_cap
-        claw_core
+        runtime
+        claw_utils
+        json
         freertos
         console
 )

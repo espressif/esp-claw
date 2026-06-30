@@ -8,12 +8,19 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "claw_session_mgr.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef enum {
+    CLAW_SESSION_POLICY_CHAT = 0,
+    CLAW_SESSION_POLICY_TRIGGER,
+    CLAW_SESSION_POLICY_GLOBAL,
+    CLAW_SESSION_POLICY_EPHEMERAL,
+    CLAW_SESSION_POLICY_NOSAVE,
+} claw_session_policy_t;
 
 typedef struct {
     char event_id[48];

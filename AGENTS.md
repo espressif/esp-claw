@@ -68,7 +68,7 @@ The main entry point is `application/edge_agent/main/main.c`.
 - **Agent core** (`components/claw_modules/claw_core/`): request queue, context building, LLM backend runtime, tool-call loop, media inference, interrupts, context persistence, and response delivery.
 - **Event router** (`components/claw_modules/claw_event_router/`): declarative event routing and actions backed by router rules in FATFS.
 - **Capability registry** (`components/claw_modules/claw_cap/`): common registration and dispatch layer for model-callable capabilities.
-- **Capabilities** (`components/claw_capabilities/`): concrete agent capabilities such as Lua execution, files, IM platforms, MCP, skill management, router management, scheduler, session management, time, HTTP requests, web search, system, and LLM inspection.
+- **Capabilities** (`framework/capabilities/`): concrete agent capabilities such as Lua execution, files, IM platforms, MCP, skill management, router management, scheduler, session management, time, HTTP requests, web search, system, and LLM inspection.
 - **Memory** (`components/claw_modules/claw_memory/`): session history, profile/long-term memory providers, memory persistence, request gating, and stage notes.
 - **Skills** (`components/claw_modules/claw_skill/`, component `skills/` directories): user-facing skill documents and activation state.
 - **Lua modules** (`components/lua_modules/`): Lua drivers and higher-level modules for hardware, media, HTTP server, storage, threading, JSON, board manager, and capability calls.
@@ -279,7 +279,7 @@ The payoff: callers pass whatever they already hold with no `.as_ref()` / `.to_s
 
 #### Crate Design: Inbound vs Outbound Boundaries
 
-Rust is integrated as an ESP-IDF *component*, so the Rust workspace (`components/claw_modules/rust/`) is organized around two FFI boundaries with a pure-Rust core in between.
+Rust is integrated as an ESP-IDF *component*, so the Rust workspace (`framework/runtime/`) is organized around two FFI boundaries with a pure-Rust core in between.
 
 - **Inbound crates (C / OS → Rust).** Convert C and operating-system facilities into ergonomic Rust APIs and dependency-injection traits, including OS-level abstraction, with per-target implementations (ESP-IDF and Linux/host). The core depends on the *traits*, never on a platform directly.
   - `claw-interface` — shared types + DI traits (`esp_err`, `ClawEvent`, `EventPublisher`, `ClawHttp`).

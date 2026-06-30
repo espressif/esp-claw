@@ -1,0 +1,10 @@
+idf_component_register(
+    SRCS
+        "src/cap_router_mgr.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        runtime
+        json
+        claw_event_router
+)

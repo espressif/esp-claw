@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.16)
 
 set(COMPONENTS main)
 set(EXTRA_COMPONENT_DIRS
-    "../../../../claw_capabilities/cap_lua"
+    "../../../../../framework/capabilities/cap_lua"
     "../../../../claw_modules/claw_cap"
     "../../../../claw_modules/claw_core"
     "../../../../claw_modules/claw_event_router"

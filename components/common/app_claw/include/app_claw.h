@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "claw_cabi.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -20,8 +21,6 @@ extern "C" {
 #define APP_CLAW_TIMEOUT_LEN          16
 #define APP_CLAW_PATH_LEN             64
 #define APP_CLAW_FILE_PATH_LEN        96
-
-typedef struct claw_core_state *claw_core_handle_t;
 
 typedef struct {
     char llm_api_key[APP_CLAW_STR_LEN];
@@ -55,7 +54,7 @@ typedef struct {
 } app_claw_config_t;
 
 esp_err_t app_claw_start(const app_claw_config_t *config);
-claw_core_handle_t app_claw_get_core(void);
+claw_agent_system_t *app_claw_get_agent_system(void);
 esp_err_t app_claw_ui_start(void);
 esp_err_t app_claw_set_network_status(bool sta_connected, const char *ap_ssid);
 

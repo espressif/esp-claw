@@ -1,0 +1,12 @@
+idf_component_register(
+    SRCS
+        "src/cap_im_local.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        runtime
+        claw_event_router
+        esp_timer
+        freertos
+        console
+)

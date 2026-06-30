@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "src/cap_mcp_server.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        runtime
+        esp_http_server
+        mcp-c-sdk
+        mcp_mdns
+)

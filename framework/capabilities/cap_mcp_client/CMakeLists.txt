@@ -1,0 +1,16 @@
+idf_component_register(
+    SRCS
+        "src/cap_mcp_client.c"
+        "src/cap_mcp_client_core.c"
+        "src/cap_mcp_discover_core.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_INCLUDE_DIRS
+        "src/priv_include"
+    REQUIRES
+        runtime
+        esp_http_client
+        mcp-c-sdk
+        mcp_mdns
+        json
+)

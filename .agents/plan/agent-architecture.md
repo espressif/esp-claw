@@ -143,6 +143,6 @@ Heavy tasks → Worker backend agent. Light → Frontend chat/short loop.
 
 ## References
 
-- Layer model: `components/claw_modules/rust/claw_core/docs/arch.mermaid`
-- Existing `AgentSpec`: `components/claw_modules/rust/claw_core/src/agent/spec.rs`
+- Layer model: `framework/runtime/claw-core/docs/arch.mermaid`
+- Existing `AgentSpec`: `framework/runtime/claw-core/src/agent/spec.rs`
 - Iteration semantics: `AGENTS.md` (update `patch`/`reason` wording when implementing)

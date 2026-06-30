@@ -1,0 +1,10 @@
+idf_component_register(
+    SRCS
+        "src/cap_files.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        runtime
+        claw_utils
+        json
+)

@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "src/cap_cli.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        runtime
+        claw_utils
+        console
+        freertos
+)

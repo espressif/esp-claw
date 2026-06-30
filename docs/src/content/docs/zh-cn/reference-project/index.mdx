@@ -14,7 +14,7 @@ import LinkToSource from '@/components/LinkToSource.astro';
 当前代码可以分为四个部分：
 
 - **应用装配部分：** <LinkToSource relativePath="application/edge_agent/main/" /> 与 <LinkToSource relativePath="components/common/" />，负责启动入口、网络连接、参数配置、HTTP 配网页面以及 Demo 级模块注册。
-- **能力部分：** <LinkToSource relativePath="components/claw_capabilities/" />，负责对外能力封装，包括 IM 通讯、MCP Client/Server、Lua 运行时、调度、文件、时间、Web 搜索等能力。
+- **能力部分：** <LinkToSource relativePath="framework/capabilities/" />，负责对外能力封装，包括 IM 通讯、MCP Client/Server、Lua 运行时、调度、文件、时间、Web 搜索等能力。
 - **运行时核心部分：** <LinkToSource relativePath="components/claw_modules/" />，负责 Agent 基础设施，包括核心上下文、能力注册、事件路由、记忆管理与技能管理等。
 - **设备与脚本扩展部分：** <LinkToSource relativePath="components/lua_modules/" />，负责把显示屏、摄像头、音频、按键、GPIO、PWM、存储等外设能力暴露给 Lua 和上层 Agent 使用。
 
@@ -50,7 +50,7 @@ import LinkToSource from '@/components/LinkToSource.astro';
     - claw_memory/ 结构化记忆管理
     - claw_ramfs/ RAMFS 运行时文件系统支持
     - claw_skill/ Skills 系统 — 技能元数据与加载
-  - claw_capabilities/ **能力 Capability**
+  - framework/capabilities/ **能力 Capability**
     - cap_im_platform/ 统一 IM 平台组件（飞书、QQ、Telegram、微信能力组）
     - cap_mcp_*/ MCP 协议（MCP Client、MCP Server）
     - cap_lua/ Lua 运行时管理

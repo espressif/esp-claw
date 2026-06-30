@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 
 set(EXTRA_COMPONENT_DIRS
             "../../../../../components/claw_modules"
-            "../../../../../components/claw_capabilities/cap_router_mgr"
+            "../../../../../framework/capabilities/cap_router_mgr"
             "../../../../../components/common/http_reuse"
             )
 

@@ -30,6 +30,9 @@ dependencies:
   claw_ramfs:
     path: ../../../components/claw_modules/claw_ramfs
 
+  claw_utils:
+    path: ../../../components/claw_modules/claw_utils
+
   emote:
     path: ../../../components/common/emote
     rules:

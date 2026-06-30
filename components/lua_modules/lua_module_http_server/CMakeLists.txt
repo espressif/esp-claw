@@ -5,6 +5,7 @@ idf_component_register(
         "src"
     REQUIRES
         cap_lua
+        json
         esp_http_server
         freertos
 )

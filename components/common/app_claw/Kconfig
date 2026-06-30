@@ -74,10 +74,9 @@ menu "App Claw Config"
 
         config APP_CLAW_CAP_IM_LOCAL
             bool "Enable local / Web IM capability (cap_im_local)"
-            depends on APP_CLAW_CAP_SESSION_MGR
             default y
             help
-                Register cap_im_local for in-process IM (e.g. edge_agent Web IM). Requires session manager for session_command.
+                Register cap_im_local for in-process IM (e.g. edge_agent Web IM).
 
         config APP_CLAW_CAP_SCHEDULER
             bool "Enable scheduler capability"
@@ -107,26 +106,12 @@ menu "App Claw Config"
                 Enable the MCP server capability and keep app_claw's direct dependency
                 on cap_mcp_server.
 
-        config APP_CLAW_CAP_SKILL_MGR
-            bool "Enable skill manager capability"
-            default y
-            help
-                Enable the skill manager capability and keep app_claw's direct dependency
-                on cap_skill_mgr.
-
         config APP_CLAW_CAP_SYSTEM
             bool "Enable system capability"
             default y
             help
                 Enable the system capability and keep app_claw's direct dependency
                 on cap_system.
-
-        config APP_CLAW_CAP_TIME
-            bool "Enable time capability"
-            default y
-            help
-                Enable the time capability and keep app_claw's direct dependency
-                on cap_time.
 
         config APP_CLAW_CAP_LLM_INSPECT
             bool "Enable LLM inspect capability"
@@ -155,20 +140,6 @@ menu "App Claw Config"
             help
                 Enable the router manager capability and keep app_claw's direct dependency
                 on cap_router_mgr.
-
-        config APP_CLAW_CAP_SESSION_MGR
-            bool "Enable session manager capability"
-            default y
-            help
-                Enable the session manager capability and keep app_claw's direct dependency
-                on cap_session_mgr.
-
-        config APP_CLAW_CAP_AGENT_MGR
-            bool "Enable agent manager capability"
-            default y
-            depends on APP_CLAW_CAP_SESSION_MGR
-            help
-                Enable root-only subagent management tools backed by claw_agent_mgr.
 
     endmenu
 
@@ -279,13 +250,6 @@ menu "App Claw Config"
             help
                 Enable the camera Lua module and keep app_claw's direct dependency
                 on lua_module_camera when Lua capability is enabled.
-
-        config APP_CLAW_LUA_MODULE_CAPABILITY
-            bool "Enable capability Lua module"
-            default y
-            help
-                Enable the capability Lua module and keep app_claw's direct
-                dependency on lua_module_call_capability when Lua capability is enabled.
 
         config APP_CLAW_LUA_MODULE_DELAY
             bool "Enable delay Lua module"

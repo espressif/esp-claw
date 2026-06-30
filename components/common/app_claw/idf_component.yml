@@ -1,93 +1,77 @@
 dependencies:
   cap_boards:
-    path: ../../claw_capabilities/cap_boards
+    path: ../../../framework/capabilities/cap_boards
 
   cap_files:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_FILES} == True
-    path: ../../claw_capabilities/cap_files
+    path: ../../../framework/capabilities/cap_files
 
   cap_im_platform:
     rules:
       - if: >-
           $CONFIG{APP_CLAW_CAP_IM_FEISHU} == True || $CONFIG{APP_CLAW_CAP_IM_QQ} == True ||
           $CONFIG{APP_CLAW_CAP_IM_TG} == True || $CONFIG{APP_CLAW_CAP_IM_WECHAT} == True
-    path: ../../claw_capabilities/cap_im_platform
+    path: ../../../framework/capabilities/cap_im_platform
 
   cap_im_local:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_IM_LOCAL} == True
-    path: ../../claw_capabilities/cap_im_local
+    path: ../../../framework/capabilities/cap_im_local
 
   cap_llm_inspect:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_LLM_INSPECT} == True
-    path: ../../claw_capabilities/cap_llm_inspect
+    path: ../../../framework/capabilities/cap_llm_inspect
 
   cap_lua:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True
-    path: ../../claw_capabilities/cap_lua
+    path: ../../../framework/capabilities/cap_lua
 
   cap_mcp_client:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_MCP_CLIENT} == True
-    path: ../../claw_capabilities/cap_mcp_client
+    path: ../../../framework/capabilities/cap_mcp_client
 
   cap_mcp_server:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_MCP_SERVER} == True
-    path: ../../claw_capabilities/cap_mcp_server
+    path: ../../../framework/capabilities/cap_mcp_server
 
   cap_router_mgr:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_ROUTER_MGR} == True
-    path: ../../claw_capabilities/cap_router_mgr
+    path: ../../../framework/capabilities/cap_router_mgr
 
   cap_scheduler:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_SCHEDULER} == True
-    path: ../../claw_capabilities/cap_scheduler
-
-  cap_skill_mgr:
-    rules:
-      - if: $CONFIG{APP_CLAW_CAP_SKILL_MGR} == True
-    path: ../../claw_capabilities/cap_skill_mgr
+    path: ../../../framework/capabilities/cap_scheduler
 
   cap_system:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_SYSTEM} == True
-    path: ../../claw_capabilities/cap_system
-
-  cap_time:
-    rules:
-      - if: $CONFIG{APP_CLAW_CAP_TIME} == True
-    path: ../../claw_capabilities/cap_time
+    path: ../../../framework/capabilities/cap_system
 
   cap_http_request:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_HTTP_REQUEST} == True
-    path: ../../claw_capabilities/cap_http_request
+    path: ../../../framework/capabilities/cap_http_request
 
   cap_web_search:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_WEB_SEARCH} == True
-    path: ../../claw_capabilities/cap_web_search
+    path: ../../../framework/capabilities/cap_web_search
 
-  claw_cap:
-    path: ../../claw_modules/claw_cap
+  runtime:
+    path: ../../../framework/runtime
 
-  claw_core:
-    path: ../../claw_modules/claw_core
+  claw_utils:
+    path: ../../claw_modules/claw_utils
 
   claw_event_router:
     path: ../../claw_modules/claw_event_router
-
-  claw_memory:
-    path: ../../claw_modules/claw_memory
-
-  claw_skill:
-    path: ../../claw_modules/claw_skill
 
   skill_builder:
     path: ../../common/skill_builder
@@ -177,12 +161,6 @@ dependencies:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True
       - if: $CONFIG{APP_CLAW_LUA_MODULE_BLE_HID} == True
     path: ../../lua_modules/lua_module_ble_hid
-
-  lua_module_call_capability:
-    rules:
-      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
-      - if: $CONFIG{APP_CLAW_LUA_MODULE_CAPABILITY} == True
-    path: ../../lua_modules/lua_module_call_capability
 
   lua_module_camera:
     rules:

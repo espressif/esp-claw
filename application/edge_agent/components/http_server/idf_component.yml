@@ -2,7 +2,7 @@ dependencies:
   espressif/cjson:
     version: "^1.7.19"
   cap_im_local:
-    path: ../../../../components/claw_capabilities/cap_im_local
+    path: ../../../../framework/capabilities/cap_im_local
 
   lua_module_http_server:
     rules:

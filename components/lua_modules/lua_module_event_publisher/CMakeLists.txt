@@ -6,5 +6,6 @@ idf_component_register(
     REQUIRES
         cap_lua
         claw_event_router
+        json
         esp_timer
 )
