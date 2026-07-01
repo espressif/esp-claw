@@ -9,14 +9,14 @@
 //!
 //! Two jobs, both pull-based off the agent's tick:
 //!
-//! - **Compact (write its own state):** on each [`refresh`](ContextAdapter::refresh)
-//!   it looks at the committed turns past the shared [`SummaryCursor`] and, once
-//!   their token estimate crosses the trigger budget, summarizes the oldest aged
-//!   turns (keeping a verbatim tail) by running the injected [`Compactor`] on the
-//!   shared pool, off the tick path. The finished summary segment is parked and
-//!   spliced in at the next tick, which advances the cursor — so the sibling
-//!   recent-tail adapter stops rendering the now-summarized turns. No gap, no
-//!   overlap.
+//! - **Compact (write its own state):** on each
+//!   [`contribute`](ContextAdapter::contribute) it looks at the committed turns
+//!   past the shared [`SummaryCursor`] and, once their token estimate crosses the
+//!   trigger budget, summarizes the oldest aged turns (keeping a verbatim tail)
+//!   by running the injected [`Compactor`] on the shared pool, off the tick path.
+//!   The finished summary segment is parked and spliced in at the next tick,
+//!   which advances the cursor — so the sibling recent-tail adapter stops
+//!   rendering the now-summarized turns. No gap, no overlap.
 //! - **Render (read):** it surfaces its accumulated summary segments as history
 //!   messages tagged [`BlockKind::ConversationSummary`]. The recent verbatim tail
 //!   is the sibling
@@ -40,14 +40,14 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use claw_context::BlockKind;
+use claw_context::{BlockKind, ContextSink};
 use claw_interface::ClawFs;
 use claw_memory::{Compactor, TranscriptStore, Turn, TurnId};
 use claw_utils::SharedTaskPool;
 use serde_json::Value;
 
 use crate::memory::summary_cursor::SummaryCursor;
-use crate::memory::traits::{ContextAdapter, History};
+use crate::memory::traits::{ContextAdapter, ContextAdapterInput};
 
 /// Stable id for this adapter, used in logs.
 const ADAPTER_ID: &str = "rolling_summary";
@@ -120,7 +120,7 @@ pub struct RollingSummaryContextAdapter<F: ClawFs + 'static> {
     /// `Arc` so the pool job can clear it on completion off the tick thread.
     in_flight: Arc<AtomicBool>,
     /// Cached summary snapshot (all segments flattened), rebuilt only when a
-    /// parked segment is applied; lent by [`messages`](ContextAdapter::messages).
+    /// parked segment is applied, then emitted into the context sink.
     cached: Arc<Value>,
 }
 
@@ -175,9 +175,9 @@ impl<F: ClawFs + 'static> RollingSummaryContextAdapter<F> {
     /// [`Compactor`] on it on the pool, when the verbatim history has outgrown the
     /// trigger budget and nothing is already in flight or parked.
     ///
-    /// Pull, not push: called from [`refresh`](ContextAdapter::refresh) on the
-    /// tick thread *after* any parked result has been applied, so the cursor is
-    /// current and the same turns are never selected twice.
+    /// Pull, not push: called from [`contribute`](ContextAdapter::contribute) on
+    /// the tick thread *after* any parked result has been applied, so the cursor
+    /// is current and the same turns are never selected twice.
     fn maybe_schedule_compaction(&mut self) {
         if self.in_flight.load(Ordering::Acquire) {
             return; // a job is running; its result will land first
@@ -257,24 +257,17 @@ impl<F: ClawFs + 'static> ContextAdapter for RollingSummaryContextAdapter<F> {
         ADAPTER_ID
     }
 
-    fn refresh(&mut self, _transcript: &dyn History) {
+    fn contribute(&mut self, _input: ContextAdapterInput<'_>, output: &mut ContextSink<'_>) {
         // Apply any finished summary first (advances the cursor), then decide
         // whether to start the next one. Order matters: scheduling reads the
         // freshly advanced cursor, so a turn is never summarized twice.
         self.apply_parked();
         self.maybe_schedule_compaction();
-    }
-
-    fn messages(&self) -> Vec<(BlockKind, &Value)> {
-        self.cached
-            .as_array()
-            .map(|items| {
-                items
-                    .iter()
-                    .map(|message| (BlockKind::ConversationSummary, message))
-                    .collect()
-            })
-            .unwrap_or_default()
+        if let Some(items) = self.cached.as_array() {
+            for message in items {
+                output.message(BlockKind::ConversationSummary, message);
+            }
+        }
     }
 }
 

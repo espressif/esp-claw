@@ -11,13 +11,13 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use claw_api::{ClawApi, ClawApiConfig};
+use claw_api::{BackendKind, ClawApi, ClawApiConfig};
 use claw_core::agent::{AgentId, BaseAgent, BaseAgentBuilder, TickOutcome};
-use claw_core::{ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput};
 use claw_interface::{
     CapturingHttp, ClawHttp, DiskFs, FailingHttp, NeverHttp, ScriptStep, ScriptedHttp, StdThread,
 };
 use claw_memory::{TranscriptConfig, TranscriptStore};
+use claw_tool::{ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput};
 use claw_utils::{PoolConfig, SharedTaskPool};
 use serde_json::{json, Value};
 
@@ -78,51 +78,41 @@ pub fn body_echo_call_id(id: &str, input: &str) -> String {
 // LLM builders
 // ===========================================================================
 
-fn build_llm<H: ClawHttp>(http: H, supports_tools: bool) -> ClawApi<H> {
-    ClawApi::init(
-        ClawApiConfig {
-            api_key: Some("sk-test".into()),
-            backend_type: "openai_compatible".into(),
-            model: Some("gpt-test".into()),
-            base_url: Some("https://example.invalid".into()),
-            supports_tools,
-            ..Default::default()
-        },
-        http,
-    )
-    .expect("init llm")
+fn build_llm<H: ClawHttp>(http: H) -> ClawApi<H> {
+    let config = ClawApiConfig::new(
+        BackendKind::OpenAiCompatible,
+        "sk-test",
+        "gpt-test",
+        "https://example.invalid",
+    );
+    ClawApi::init(config, http).expect("init llm")
 }
 
 /// Tool-capable LLM serving the given plain bodies in order (strict).
 pub fn scripted_llm(bodies: Vec<String>) -> ClawApi<ScriptedHttp> {
-    build_llm(ScriptedHttp::new(bodies), true)
+    build_llm(ScriptedHttp::new(bodies))
 }
 
 /// Tool-capable LLM whose rounds may be successes or transport errors (strict).
 pub fn scripted_llm_steps(steps: Vec<ScriptStep>) -> ClawApi<ScriptedHttp> {
-    build_llm(ScriptedHttp::with_steps(steps), true)
+    build_llm(ScriptedHttp::with_steps(steps))
 }
 
 /// Tool-capable LLM that records requests; returns the API plus the capture handle.
 pub fn capturing_llm(bodies: Vec<String>) -> (ClawApi<Arc<CapturingHttp>>, Arc<CapturingHttp>) {
     let http = CapturingHttp::new(bodies);
-    let llm = build_llm(Arc::clone(&http), true);
+    let llm = build_llm(Arc::clone(&http));
     (llm, http)
 }
 
 /// Tool-capable LLM whose every round fails.
 pub fn failing_llm() -> ClawApi<FailingHttp> {
-    build_llm(FailingHttp, true)
-}
-
-/// LLM that does NOT support tools, serving the given plain bodies (strict).
-pub fn scripted_llm_no_tools(bodies: Vec<String>) -> ClawApi<ScriptedHttp> {
-    build_llm(ScriptedHttp::new(bodies), false)
+    build_llm(FailingHttp)
 }
 
 /// Tool-capable LLM that must never be called (panics if it is).
 pub fn never_called_llm() -> ClawApi<NeverHttp> {
-    build_llm(NeverHttp, true)
+    build_llm(NeverHttp)
 }
 
 // Filesystem doubles: the shared `DiskFs` from `claw_interface` (the `diskfs`

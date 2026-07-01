@@ -7,8 +7,7 @@
 //!
 //! Everything *about* the agents — identity allocation, the factory that builds
 //! them, the parent/child graph, scheduling, outcome routing, approval handling,
-//! and lifecycle policy — lives in
-//! [`OrchestratorInstance`](crate::orchestrator_instance). The registry knows
+//! and lifecycle policy — lives in the orchestrator instance. The registry knows
 //! nothing of edges, depth, readiness, or what a tick outcome means; it only
 //! stores what the instance hands it and gives back handles on request.
 //!

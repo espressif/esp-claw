@@ -32,14 +32,12 @@ use std::sync::{Arc, Mutex};
 
 use claw_context::Block;
 
-use crate::agent::base_agent::{
-    AgentCommand, AgentCommandError, AgentId, ApprovalDecision, ApprovalId, TickOutcome,
-};
 use crate::agent::factory::AgentFactory;
 use crate::agent::registry::{AgentIdAllocator, AgentRegistry};
 use crate::agent::{
-    AgentKind, AgentSnapshot, AgentStatus, ApprovalVerdict, GraphEffect, GraphHost,
-    TerminationPolicy,
+    AgentCommand, AgentCommandError, AgentId, AgentKind, AgentSnapshot, AgentStatus,
+    ApprovalDecision, ApprovalId, ApprovalVerdict, GraphEffect, GraphHost, TerminationPolicy,
+    TickOutcome,
 };
 use crate::session::SessionId;
 
@@ -790,9 +788,8 @@ mod tests {
     use std::sync::Mutex;
 
     use super::*;
-    use crate::agent::base_agent::AgentCommand;
     use crate::agent::factory::AgentFactory;
-    use crate::agent::{Agent, AgentContext};
+    use crate::agent::{Agent, AgentCommand, AgentContext, TickOutcome};
 
     /// The kind every test child is spawned as.
     const TEST_KIND: &str = "worker";

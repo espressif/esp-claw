@@ -16,7 +16,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use claw_context::{Block, BlockKind};
+use claw_context::{Block, BlockKind, ContextSink};
 use claw_interface::ClawFs;
 use claw_memory::{
     LongTermConfig, LongTermError, LongTermMemory, MemoryDraft, MemoryId, MemoryItem, MemoryPatch,
@@ -26,7 +26,7 @@ use claw_tool::ToolGroup;
 use claw_utils::SharedTaskPool;
 use serde_json::Value;
 
-use crate::memory::traits::{ContextAdapter, History};
+use crate::memory::traits::{ContextAdapter, ContextAdapterInput, History};
 
 mod extraction;
 mod llm_compactor;
@@ -197,12 +197,12 @@ impl<F: ClawFs + 'static> LongTermMemoryContextAdapter<F> {
 
     /// Schedule a background extraction when the transcript has advanced.
     ///
-    /// Pull, not push: called from [`refresh`](ContextAdapter::refresh) on the
-    /// tick thread, it self-detects new conversation via [`History::version`]
-    /// against [`extract_cursor`](Self::extract_cursor). It snapshots only when it
-    /// actually schedules (a cheap `Arc` clone of the canonical transcript), and
-    /// the single-flight guard coalesces a busy multi-round turn into roughly one
-    /// job. Dedup in the store absorbs facts re-extracted across turns.
+    /// Pull, not push: called from [`contribute`](ContextAdapter::contribute) on
+    /// the tick thread, it self-detects new conversation via [`History::version`]
+    /// against [`extract_cursor`](Self::extract_cursor). It snapshots only when
+    /// it actually schedules (a cheap `Arc` clone of the canonical transcript),
+    /// and the single-flight guard coalesces a busy multi-round turn into roughly
+    /// one job. Dedup in the store absorbs facts re-extracted across turns.
     fn maybe_schedule_extraction(&mut self, history: &dyn History) {
         let version = history.version();
         if version == self.extract_cursor {
@@ -239,18 +239,8 @@ impl<F: ClawFs + 'static> LongTermMemoryContextAdapter<F> {
             in_flight.store(false, Ordering::Release);
         }));
     }
-}
 
-impl<F: ClawFs + 'static> ContextAdapter for LongTermMemoryContextAdapter<F> {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
-    fn refresh(&mut self, transcript: &dyn History) {
-        // Pull, not push: reading the transcript here is also where this adapter
-        // decides whether new conversation warrants a background extraction.
-        self.maybe_schedule_extraction(transcript);
-
+    fn refresh_catalog(&mut self) {
         let global_version = self.stores.global.version();
         let agent_version = self.stores.agent.version();
         // Rebuild a block's text only when its store changed (or on first refresh).
@@ -268,15 +258,29 @@ impl<F: ClawFs + 'static> ContextAdapter for LongTermMemoryContextAdapter<F> {
         }
         self.catalog.primed = true;
     }
+}
 
-    fn blocks(&self) -> Vec<Block<'_>> {
+impl<F: ClawFs + 'static> ContextAdapter for LongTermMemoryContextAdapter<F> {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn contribute(&mut self, input: ContextAdapterInput<'_>, output: &mut ContextSink<'_>) {
+        // Pull, not push: reading the transcript here is also where this adapter
+        // decides whether new conversation warrants a background extraction.
+        self.maybe_schedule_extraction(input.history);
+        self.refresh_catalog();
         // Borrow the cached strings into the blocks — `Context::with` copies them
         // only on a real change, so an unchanged catalog allocates nothing here.
         // An empty catalog renders to an empty block, which clears that section.
-        vec![
-            Block::new(BlockKind::GlobalMemory, self.catalog.global_block.as_str()),
-            Block::new(BlockKind::AgentMemory, self.catalog.agent_block.as_str()),
-        ]
+        output.block(Block::new(
+            BlockKind::GlobalMemory,
+            self.catalog.global_block.as_str(),
+        ));
+        output.block(Block::new(
+            BlockKind::AgentMemory,
+            self.catalog.agent_block.as_str(),
+        ));
     }
 
     fn tools(&self) -> Option<ToolGroup> {

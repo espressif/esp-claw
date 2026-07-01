@@ -10,18 +10,19 @@
 //! the unified [`Agent`] trait the scheduler drives; the trait never reaches into
 //! internals.
 //!
-//! Spawning is a model-callable `spawn_subagent(kind, goal)` tool (in
-//! [`tools`]) that emits a [`GraphEffect`] through a [`GraphHost`] (both in
-//! [`graph`]); the [`OrchestratorInstance`](crate::orchestrator_instance) owns the
-//! flattened agent graph and materializes children through an [`AgentFactory`].
+//! Spawning is a model-callable `spawn_subagent(kind, goal)` tool in the
+//! crate-internal tool module. It emits a [`GraphEffect`] through a [`GraphHost`];
+//! the crate-internal orchestrator instance owns the flattened agent graph and
+//! materializes children through an [`AgentFactory`].
 
-pub mod base_agent;
-pub mod config;
+mod base_agent;
+mod config;
 pub(crate) mod factory;
-pub mod generic_agent;
+mod generic_agent;
 pub(crate) mod graph;
+mod iteration_loop;
 pub(crate) mod kind;
-pub mod manifest;
+mod manifest;
 pub(crate) mod registry;
 pub(crate) mod resolver;
 pub(crate) mod tools;
@@ -37,6 +38,7 @@ pub use generic_agent::{CompactionDeps, GenericAgent, GenericAgentBuildError};
 pub use graph::{
     AgentSnapshot, AgentStatus, ApprovalVerdict, GraphEffect, GraphHost, TerminationPolicy,
 };
+pub use iteration_loop::IterationId;
 // Re-exported only so the orchestrator instance's tests (outside the `agent`
 // module) can build agents over an `AgentContext`; the runtime uses it via the
 // in-module path.

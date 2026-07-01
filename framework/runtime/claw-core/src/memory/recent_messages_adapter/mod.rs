@@ -22,13 +22,13 @@
 
 use std::sync::Arc;
 
-use claw_context::BlockKind;
+use claw_context::{BlockKind, ContextSink};
 use claw_interface::ClawFs;
 use claw_memory::TranscriptStore;
 use serde_json::Value;
 
 use crate::memory::summary_cursor::SummaryCursor;
-use crate::memory::traits::{ContextAdapter, History};
+use crate::memory::traits::{ContextAdapter, ContextAdapterInput};
 
 /// Stable id for this adapter, used in logs.
 const ADAPTER_ID: &str = "recent_messages";
@@ -42,9 +42,9 @@ pub struct RecentMessagesContextAdapter<F: ClawFs + 'static> {
     /// The boundary: render committed turns whose id is past this. Advanced by the
     /// sibling rolling-summary adapter; read-only here.
     cursor: SummaryCursor,
-    /// Cached verbatim-tail snapshot, rebuilt by [`refresh`](ContextAdapter::refresh)
-    /// only when the transcript version or the cursor advances; lent by
-    /// [`messages`](ContextAdapter::messages) without further work.
+    /// Cached verbatim-tail snapshot, rebuilt during
+    /// [`contribute`](ContextAdapter::contribute) only when the transcript version
+    /// or the cursor advances, then emitted into the context sink.
     cached: Arc<Value>,
     /// The store [`version`](TranscriptStore::version) `cached` reflects.
     cached_version: u64,
@@ -68,14 +68,8 @@ impl<F: ClawFs + 'static> RecentMessagesContextAdapter<F> {
             primed: false,
         }
     }
-}
 
-impl<F: ClawFs + 'static> ContextAdapter for RecentMessagesContextAdapter<F> {
-    fn id(&self) -> &str {
-        ADAPTER_ID
-    }
-
-    fn refresh(&mut self, _transcript: &dyn History) {
+    fn refresh_tail(&mut self) {
         // The lent transcript and `self.store` share the same `Arc`-backed state,
         // so gate on the store's version (the same source the snapshot reads from)
         // together with the cursor the summary adapter advances.
@@ -97,16 +91,19 @@ impl<F: ClawFs + 'static> ContextAdapter for RecentMessagesContextAdapter<F> {
         self.cached_cursor = cursor;
         self.primed = true;
     }
+}
 
-    fn messages(&self) -> Vec<(BlockKind, &Value)> {
-        self.cached
-            .as_array()
-            .map(|items| {
-                items
-                    .iter()
-                    .map(|message| (BlockKind::RecentContext, message))
-                    .collect()
-            })
-            .unwrap_or_default()
+impl<F: ClawFs + 'static> ContextAdapter for RecentMessagesContextAdapter<F> {
+    fn id(&self) -> &str {
+        ADAPTER_ID
+    }
+
+    fn contribute(&mut self, _input: ContextAdapterInput<'_>, output: &mut ContextSink<'_>) {
+        self.refresh_tail();
+        if let Some(items) = self.cached.as_array() {
+            for message in items {
+                output.message(BlockKind::RecentContext, message);
+            }
+        }
     }
 }

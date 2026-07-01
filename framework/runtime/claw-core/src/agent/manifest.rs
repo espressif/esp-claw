@@ -48,6 +48,7 @@ pub struct CapabilityName(&'static str);
 
 impl CapabilityName {
     /// Wrap a `&'static str` capability name in a `const` context (baked manifests).
+    #[allow(dead_code)]
     pub const fn new(name: &'static str) -> Self {
         Self(name)
     }

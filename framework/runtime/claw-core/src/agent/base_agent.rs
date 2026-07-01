@@ -53,20 +53,21 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use claw_api::{ClawApi, RetryPolicy};
+use claw_api::{ChatError, ClawApi, RetryPolicy};
 use claw_interface::http::ClawHttp;
 use claw_interface::ClawFs;
 use claw_memory::TranscriptStore;
 use serde_json::Value;
 
-use crate::agent::tools::{internal_tool_group, skill_tool_group, ControlSignal, ControlSink};
-use crate::iteration_loop::{
+use super::iteration_loop::{
     ChatMessages, CompletedKind, CompletedOutcome, InterruptionControl, IterationId, IterationLoop,
     IterationLoopError, IterationOutcome, IterationResult, IterationStep, PreemptedOutcome,
     SystemPrompt, ToolRun,
 };
+use crate::agent::tools::{internal_tool_group, ControlSignal, ControlSink};
 use crate::memory::{
-    ContextAdapter, History, RecentMessagesContextAdapter, SummaryCursor, Transcript,
+    ContextAdapter, ContextAdapterInput, History, RecentMessagesContextAdapter,
+    SkillContextAdapter, SkillTools, SummaryCursor, ToolPolicyContextAdapter, Transcript,
 };
 use claw_context::{Block, BlockKind, Context};
 use claw_permission::{Grant, PermissionPolicy};
@@ -78,10 +79,6 @@ use claw_tool::{
 
 crate::define_prefixed_id!(AgentId, "agent-", "agent");
 crate::define_prefixed_id!(ApprovalId, "approval-", "approval");
-
-/// Provenance group recorded for a skill the model loaded at runtime via the
-/// `load_skill` tool (shown in the active-skills context block as the source).
-const MODEL_SKILL_GROUP: &str = "model";
 
 // ===========================================================================
 // Public command / outcome vocabulary
@@ -276,16 +273,28 @@ impl TickOutcome {
 /// Cause of a terminal [`TickOutcome::Failed`].
 ///
 /// Wraps the lower-level errors a tick can hit: a failed LLM/tool iteration, or a
-/// tool refused past the soft-hide retry budget. Skill-context assembly no longer
-/// fails a tick — it is rebuilt when a `load_skill` / `unload_skill` control
-/// signal is reduced (a [`SkillError`](claw_skill::SkillError) there is logged,
-/// not surfaced), and [`Context::request`] is infallible, so the tick never fails
-/// on context assembly.
+/// tool refused past the soft-hide retry budget. Context assembly is driven by
+/// adapters; adapter-local failures are logged at the adapter boundary, and
+/// [`Context::request`] is infallible, so the tick never fails on context
+/// assembly.
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum AgentRunError {
-    /// The LLM/tool iteration itself failed.
+    /// Request history was not a JSON array.
+    #[error("messages must be a JSON array")]
+    MessagesNotArray,
+    /// The LLM returned tool calls without the raw assistant message needed for
+    /// transcript persistence.
+    #[error("LLM tool-call response missing raw assistant message JSON")]
+    MissingAssistantMessage,
+    /// The raw assistant message returned by the LLM was not valid JSON.
+    #[error("LLM raw assistant message JSON is not valid JSON")]
+    MalformedAssistantMessage,
+    /// The LLM issued tool calls, but this agent was built without a tool port.
+    #[error("LLM issued tool calls but no tools port was supplied")]
+    MissingTools,
+    /// The LLM chat request failed.
     #[error(transparent)]
-    Iteration(#[from] IterationLoopError),
+    Chat(#[from] ChatError),
     /// The model kept calling a tool that soft-hide gating does not permit this
     /// phase, past the allowed retry budget (the agent's
     /// [`BlockPolicy`](claw_tool::BlockPolicy)).
@@ -294,6 +303,18 @@ pub enum AgentRunError {
         /// The name of the refused tool.
         name: String,
     },
+}
+
+impl From<IterationLoopError> for AgentRunError {
+    fn from(error: IterationLoopError) -> Self {
+        match error {
+            IterationLoopError::MessagesNotArray => Self::MessagesNotArray,
+            IterationLoopError::MissingAssistantMessage => Self::MissingAssistantMessage,
+            IterationLoopError::MalformedAssistantMessage => Self::MalformedAssistantMessage,
+            IterationLoopError::MissingTools => Self::MissingTools,
+            IterationLoopError::Chat(error) => Self::Chat(error),
+        }
+    }
 }
 
 /// Failure assembling a [`BaseAgent`] in [`BaseAgentBuilder::build`].
@@ -325,7 +346,7 @@ enum Inbound {
 ///
 /// Obtain it via [`BaseAgent::abort_handle`] **before** the tick loop (you cannot
 /// borrow the agent while a `tick` holds `&mut self`). It shares the same
-/// `Arc<AtomicBool>` the [`IterationLoop`] polls at its checkpoints, so it can
+/// `Arc<AtomicBool>` the internal iteration loop polls at its checkpoints, so it can
 /// stop a `tick` blocked on the LLM HTTP. It is plumbing for stopping a now-stale
 /// call — the *content* of the new input still arrives as an [`AgentCommand`].
 #[derive(Clone)]
@@ -405,14 +426,12 @@ pub struct BaseAgent<H: ClawHttp> {
     /// immutable catalog and the once-rendered, cached wire surfaces. Fed each tool
     /// round by [`apply_tool_block_policy`](Self::apply_tool_block_policy).
     block_policy: BlockPolicy,
-    skills: Option<SkillSet>,
-    /// The agent's context assembly, owned wholesale by `claw-context`: the
-    /// inherited blocks, the agent instruction, the tool-policy and active-skills
-    /// prose, the cached system prefix, and the ephemeral reminder tail. The agent
-    /// only *declares content* into it when a source changes (the instruction and
-    /// tool policy/reminder at build, the active skills on load/unload) via
-    /// [`Context::with`]; [`Context::request`] renders lazily. Change detection,
-    /// wire ordering, and reminder rendering all live in the context.
+    /// The agent's context assembly, owned wholesale by `claw-context`: inherited
+    /// blocks, the agent instruction, adapter-projected blocks/reminders, the
+    /// cached system prefix, and the ephemeral reminder tail. The agent does not
+    /// hand-place adapter sources; they contribute into a context sink, and
+    /// [`Context::request`] renders lazily. Change detection, wire ordering, and
+    /// reminder rendering all live in the context.
     context: Context,
     /// The permission gate consulted per tool call (`None` = no permission layer:
     /// every call that passes soft-hide runs). A `claw-tool` type owning the
@@ -451,6 +470,21 @@ pub struct BaseAgent<H: ClawHttp> {
     /// this tick thread.
     adapters: Vec<Box<dyn ContextAdapter>>,
     inbox: VecDeque<Inbound>,
+}
+
+fn install_context_adapter(
+    adapters: &mut Vec<Box<dyn ContextAdapter>>,
+    tools: &mut Option<ToolSet>,
+    adapter: Box<dyn ContextAdapter>,
+) -> Result<(), BaseAgentBuildError> {
+    if let Some(group) = adapter.tools() {
+        let Some(tools) = tools.as_mut() else {
+            return Err(BaseAgentBuildError::ToolsUnsupported);
+        };
+        tools.extend_with_group(group)?;
+    }
+    adapters.push(adapter);
+    Ok(())
 }
 
 impl<H: ClawHttp> BaseAgent<H> {
@@ -669,62 +703,29 @@ impl<H: ClawHttp> BaseAgent<H> {
         &mut self,
         adapter: Box<dyn ContextAdapter>,
     ) -> Result<(), BaseAgentBuildError> {
-        if let Some(group) = adapter.tools() {
-            let Some(tools) = self.tools.as_mut() else {
-                return Err(BaseAgentBuildError::ToolsUnsupported);
-            };
-            tools.extend_with_group(group)?;
-            // The catalog grew, so re-declare the static tool-policy prose; the
-            // context re-renders the cached prefix on the next request.
-            let prose = tools.tool_context().unwrap_or_default().to_string();
-            self.context.with(Block::new(BlockKind::ToolPolicy, prose));
-        }
-        self.adapters.push(adapter);
-        Ok(())
+        install_context_adapter(&mut self.adapters, &mut self.tools, adapter)
     }
 
-    /// Pull every registered adapter's context into this agent's context, in two
-    /// passes so each adapter's read borrow can coexist with the others'.
+    /// Project every registered adapter's source into this agent's context.
     ///
-    /// 1. **refresh** (`&mut` each adapter): read the lent transcript and
-    ///    recompute the adapter's cache (and schedule any background work).
-    /// 2. **lend** (`&` each adapter): collect the just-refreshed contributions —
-    ///    [`Block`]s into *this* agent's [`Context`] (the text prefix), and
-    ///    history [`messages`](ContextAdapter::messages) into the structured
-    ///    `messages` array returned here.
-    ///
-    /// The returned `Value::Array` is the model's history channel: every adapter's
-    /// `(BlockKind, &Value)` contributions, ordered by
-    /// [`BlockKind::sort_key`] so summaries (`ConversationSummary`) precede the
-    /// recent verbatim tail (`RecentContext`) — the same wire order [`Context`]
-    /// uses for the system prefix. The history is owned (each message cloned out)
-    /// so the adapter borrows release before the caller takes its other field
-    /// borrows.
+    /// The returned `Value::Array` is the model's history channel. Blocks and
+    /// reminders are applied directly to [`Context`]; history messages are cloned
+    /// into the request-local sink and ordered by `claw-context` using
+    /// [`BlockKind::sort_key`].
     fn render_adapter_context(&mut self) -> Value {
-        // Pass 1: refresh under &mut. Disjoint field borrows — the lent transcript
-        // read view (shared) drives each adapter's recompute (exclusive).
         let history_view = self.transcript.as_history();
+        let tools = self.tools.as_ref();
+        let mut sink = self.context.sink();
         for adapter in &mut self.adapters {
-            adapter.refresh(history_view);
+            adapter.contribute(
+                ContextAdapterInput {
+                    history: history_view,
+                    tools,
+                },
+                &mut sink,
+            );
         }
-        // Pass 2: lend under &. Disjoint field borrows — each adapter's blocks
-        // (shared) feed into context (exclusive, `with` copies the content out),
-        // and its messages (shared) are collected for ordering.
-        let context = &mut self.context;
-        let mut messages: Vec<(BlockKind, &Value)> = Vec::new();
-        for adapter in &self.adapters {
-            for block in adapter.blocks() {
-                context.with(block);
-            }
-            messages.extend(adapter.messages());
-        }
-        messages.sort_by_key(|(kind, _)| kind.sort_key());
-        Value::Array(
-            messages
-                .into_iter()
-                .map(|(_, message)| message.clone())
-                .collect(),
-        )
+        sink.into_history()
     }
 
     // -- The tick -----------------------------------------------------------
@@ -890,43 +891,6 @@ impl<H: ClawHttp> BaseAgent<H> {
                 self.lifecycle = AgentState::Idle;
                 self.outcome = Some(TickOutcome::Ended { final_message });
             }
-            Inbound::Control(ControlSignal::LoadSkill { id }) => {
-                // `load_skill` already validated the id against the registry; a
-                // failure here can only be a registry reload race, which is
-                // non-fatal (the skill is simply not added).
-                if let Some(skills) = self.skills.as_mut() {
-                    if let Err(error) = skills.load(MODEL_SKILL_GROUP, id) {
-                        tracing::warn!(%error, "load_skill control signal failed");
-                    }
-                }
-                self.refresh_active_skills();
-            }
-            Inbound::Control(ControlSignal::UnloadSkill { id }) => {
-                if let Some(skills) = self.skills.as_mut() {
-                    skills.unload(&id);
-                }
-                self.refresh_active_skills();
-            }
-        }
-    }
-
-    /// Re-render the active-skills context block from the current loaded set.
-    ///
-    /// Non-fatal: skills are auxiliary prompt context, and the reducer has no
-    /// channel to surface a [`SkillError`](claw_skill::SkillError), so a
-    /// reassembly failure is logged and
-    /// the previous block is left in place (the next load/unload retries).
-    fn refresh_active_skills(&mut self) {
-        let Some(skills) = self.skills.as_mut() else {
-            return;
-        };
-        match skills.context() {
-            Ok(rendered) => {
-                let rendered = rendered.to_string();
-                self.context
-                    .with(Block::new(BlockKind::ActiveSkills, rendered));
-            }
-            Err(error) => tracing::warn!(%error, "rebuilding active-skills context failed"),
         }
     }
 
@@ -964,7 +928,7 @@ impl<H: ClawHttp> BaseAgent<H> {
                 // well-formed partial patch, then re-iterate next tick.
                 self.merge_preempt_patch(outcome);
             }
-            Err(error) => self.fail_with(AgentRunError::Iteration(error)),
+            Err(error) => self.fail_with(error.into()),
         }
     }
 
@@ -1174,10 +1138,9 @@ impl<F: ClawFs + 'static, H: ClawHttp> BaseAgentBuilder<F, H> {
         self
     }
 
-    /// Set the agent's skills. The [`SkillSet`] stays mutable after build so the
-    /// model can load/unload skills at runtime through the `load_skill` /
-    /// `unload_skill` tools (merged on at [`build`](Self::build) when a set is
-    /// configured).
+    /// Set the agent's skills. The [`SkillSet`] is handed to the skill context
+    /// adapter, which projects loaded skills as `ActiveSkills` and owns the
+    /// optional skill-management tools for tool-capable backends.
     pub fn with_skills(mut self, skills: SkillSet) -> Self {
         self.skills = Some(skills);
         self
@@ -1248,9 +1211,9 @@ impl<F: ClawFs + 'static, H: ClawHttp> BaseAgentBuilder<F, H> {
     /// Finish configuration and produce a runnable [`BaseAgent`].
     ///
     /// The built-in tool group is merged onto the caller's tools when the LLM
-    /// supports tool calls; the skill-management group (`list_skills` /
-    /// `load_skill` / `unload_skill`) is also merged when a [`SkillSet`] is
-    /// configured.
+    /// supports tool calls. A configured [`SkillSet`] is wrapped by the skill
+    /// context adapter, which contributes `ActiveSkills` and, for tool-capable
+    /// backends, provides the skill-management tool group.
     ///
     /// # Errors
     ///
@@ -1260,17 +1223,11 @@ impl<F: ClawFs + 'static, H: ClawHttp> BaseAgentBuilder<F, H> {
     ///   configured LLM cannot call tools.
     pub fn build(self) -> Result<BaseAgent<H>, BaseAgentBuildError> {
         let control: ControlSink = Arc::new(Mutex::new(VecDeque::new()));
-        let supports_tools = self.llm.profile().supports_tools;
+        let supports_tools = self.llm.profile().supports_tools();
 
-        let tools = if supports_tools {
+        let mut tools = if supports_tools {
             let mut tools = self.tools.unwrap_or_else(ToolSet::empty);
             tools.extend_with_group(internal_tool_group(Arc::clone(&control)))?;
-            // Skill management is model-callable only when a skill set is
-            // configured: the tools read its registry to list/validate ids.
-            if let Some(skills) = &self.skills {
-                tools
-                    .extend_with_group(skill_tool_group(Arc::clone(&control), skills.registry()))?;
-            }
             Some(tools)
         } else {
             if self.tools.is_some() {
@@ -1283,23 +1240,15 @@ impl<F: ClawFs + 'static, H: ClawHttp> BaseAgentBuilder<F, H> {
             .permission_policy
             .map(|policy| PermissionGate::new(policy, self.agent_id, self.agent_kind));
 
-        // Declare every piece of content the context owns up front: the inherited
-        // (Global/Session) blocks, the agent instruction, then the tool set's two
-        // static prompt surfaces. The active-skills prose stays absent until a
-        // skill is loaded at runtime (which declares it). After this the agent
-        // only re-declares a block when its source changes.
+        // Declare the construction-time blocks the context owns up front: the
+        // inherited (Global/Session) blocks and the agent instruction. Tool policy
+        // is projected by its adapter from the current ToolSet, so tool mutations
+        // never need to manually sync prompt prose here.
         let mut context = Context::new();
         for block in self.inherited_context.iter() {
             context.with(block.clone());
         }
         context.with(Block::new(BlockKind::AgentInstruction, self.system_prompt));
-        if let Some(tools) = &tools {
-            context.with(Block::new(
-                BlockKind::ToolPolicy,
-                tools.tool_context().unwrap_or_default(),
-            ));
-            context.reminder(tools.extra_tool_context());
-        }
 
         // The conversation transcript drives the model's history off one store.
         // The agent writes verbatim turns through the `Transcript` owner; the
@@ -1314,11 +1263,26 @@ impl<F: ClawFs + 'static, H: ClawHttp> BaseAgentBuilder<F, H> {
         // `summary_cursor`. This is the only place `F` is erased — both the trait
         // object and the boxed adapter drop it, so the built agent is
         // filesystem-agnostic.
+        let tool_policy: Box<dyn ContextAdapter> = Box::new(ToolPolicyContextAdapter::new());
+        let skill_adapter = self.skills.map(|skills| {
+            let tool_mode = if supports_tools {
+                SkillTools::Enabled
+            } else {
+                SkillTools::Disabled
+            };
+            Box::new(SkillContextAdapter::new(skills, tool_mode)) as Box<dyn ContextAdapter>
+        });
         let recent: Box<dyn ContextAdapter> = Box::new(RecentMessagesContextAdapter::new(
             self.store.clone(),
             self.summary_cursor,
         ));
         let transcript: Arc<dyn Transcript> = Arc::new(self.store);
+        let mut adapters = Vec::new();
+        install_context_adapter(&mut adapters, &mut tools, tool_policy)?;
+        if let Some(skill_adapter) = skill_adapter {
+            install_context_adapter(&mut adapters, &mut tools, skill_adapter)?;
+        }
+        install_context_adapter(&mut adapters, &mut tools, recent)?;
 
         Ok(BaseAgent {
             llm: self.llm,
@@ -1329,7 +1293,6 @@ impl<F: ClawFs + 'static, H: ClawHttp> BaseAgentBuilder<F, H> {
             transcript,
             tools,
             block_policy: BlockPolicy::new(self.block_retries),
-            skills: self.skills,
             context,
             gate,
             pending_grant_signatures: Vec::new(),
@@ -1340,7 +1303,7 @@ impl<F: ClawFs + 'static, H: ClawHttp> BaseAgentBuilder<F, H> {
             projected_lifecycle: AgentState::Idle,
             outcome: None,
             control,
-            adapters: vec![recent],
+            adapters,
             inbox: VecDeque::new(),
         })
     }
@@ -1572,7 +1535,7 @@ mod gating_tests {
 
     use std::sync::Arc;
 
-    use claw_api::{ClawApi, ClawApiConfig};
+    use claw_api::{BackendKind, ClawApi, ClawApiConfig};
     use claw_interface::{CapturingHttp, ClawHttp, MemFs, ScriptedHttp};
     use claw_memory::{TranscriptConfig, TranscriptStore};
     use serde_json::{json, Value};
@@ -1623,6 +1586,26 @@ mod gating_tests {
         }
     }
 
+    struct UsageTool;
+
+    impl ToolHandler for UsageTool {
+        fn name(&self) -> &str {
+            "usage_tool"
+        }
+        fn schema(&self) -> &str {
+            r#"{"type":"function","function":{"name":"usage_tool","description":"Usage"}}"#
+        }
+        fn usage(&self) -> Option<&str> {
+            Some("Use usage_tool only when checking tool policy projection.")
+        }
+        fn invoke(&self, _call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
+            Ok(ToolOutput {
+                output: "used".into(),
+                ok: true,
+            })
+        }
+    }
+
     fn caller_tools() -> ToolSet {
         ToolSet::new([Tool::new(EchoTool), Tool::new(WriterTool)]).expect("tool set")
     }
@@ -1630,18 +1613,13 @@ mod gating_tests {
     // Builders / drivers --------------------------------------------------------
 
     fn build_llm<H: ClawHttp>(http: H) -> ClawApi<H> {
-        ClawApi::init(
-            ClawApiConfig {
-                api_key: Some("sk-test".into()),
-                backend_type: "openai_compatible".into(),
-                model: Some("gpt-test".into()),
-                base_url: Some("https://example.invalid".into()),
-                supports_tools: true,
-                ..Default::default()
-            },
-            http,
-        )
-        .expect("init llm")
+        let config = ClawApiConfig::new(
+            BackendKind::OpenAiCompatible,
+            "sk-test",
+            "gpt-test",
+            "https://example.invalid",
+        );
+        ClawApi::init(config, http).expect("init llm")
     }
 
     fn scripted_llm(bodies: Vec<String>) -> ClawApi<ScriptedHttp> {
@@ -1833,11 +1811,10 @@ mod gating_tests {
     }
 
     /// A model-issued `load_skill` tool call lands the skill's body in the
-    /// system prompt of the *next* LLM request (the control signal is reduced
-    /// before the following iteration builds its context).
+    /// system prompt of the *next* LLM request.
     #[test]
     fn load_skill_tool_injects_skill_body_into_context() {
-        use crate::agent::tools::test_support::skill_registry;
+        use crate::memory::skill_test_support::skill_registry;
         use claw_skill::SkillSet;
 
         let http = CapturingHttp::new(vec![
@@ -1863,6 +1840,32 @@ mod gating_tests {
         assert!(
             bodies[1].to_string().contains("Body for alpha."),
             "loaded skill body missing from the next request"
+        );
+    }
+
+    /// Skills already loaded before build are projected by the ActiveSkills
+    /// adapter on the first request.
+    #[test]
+    fn preloaded_skill_is_injected_on_first_request() {
+        use crate::memory::skill_test_support::skill_registry;
+        use claw_skill::{SkillId, SkillSet};
+
+        let http = CapturingHttp::new(vec![body_plain_text("done")]);
+        let (builder, _view) = builder_with_view(build_llm(http.clone()), AgentId(1));
+        let registry = skill_registry(&[("alpha", "Alpha skill")]);
+        let mut skills = SkillSet::new(registry);
+        skills
+            .load("manifest", SkillId::new("alpha"))
+            .expect("load skill");
+        let mut agent = builder.with_skills(skills).build().expect("build");
+
+        agent.run("go");
+        assert_eq!(run_to_completion(&mut agent), "done");
+
+        let body = http.captured_bodies().pop().expect("one captured request");
+        assert!(
+            body.to_string().contains("Body for alpha."),
+            "preloaded skill body missing from first request"
         );
     }
 
@@ -1908,6 +1911,32 @@ mod gating_tests {
         assert_eq!(run_to_completion(&mut agent), "done");
         // The writer tool actually executed.
         assert!(transcript_contents(&view).iter().any(|c| c == "wrote"));
+    }
+
+    /// Tool usage prose is projected through the ToolPolicy adapter into the
+    /// system prompt.
+    #[test]
+    fn tool_policy_adapter_injects_tool_usage() {
+        let http = CapturingHttp::new(vec![body_plain_text("ok")]);
+        let llm = build_llm(Arc::clone(&http));
+        let (builder, _view) = builder_with_view(llm, AgentId(1));
+        let tools = ToolSet::new([Tool::new(UsageTool)]).expect("tool set");
+        let mut agent = builder.with_tools(tools).build().expect("build");
+
+        agent.run("go");
+        assert_eq!(run_to_completion(&mut agent), "ok");
+
+        let body = http.captured_bodies().pop().expect("one captured request");
+        let messages = body["messages"].as_array().expect("messages array");
+        let system = messages
+            .iter()
+            .find(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_str)
+            .expect("system message");
+        assert!(system.contains("# Tool usage"));
+        assert!(system.contains("## usage_tool"));
+        assert!(system.contains("checking tool policy projection"));
     }
 
     /// Clearing the gating restores the defaults: the previously blocked tool runs
@@ -1956,7 +1985,7 @@ mod gating_tests {
     fn registered_adapter_pulls_transcript_and_injects_context() {
         use std::sync::Mutex;
 
-        use crate::memory::{ContextAdapter, History};
+        use crate::memory::{ContextAdapter, ContextAdapterInput};
         use claw_context::{Block, BlockKind};
 
         /// On each refresh, records the transcript version it saw and whether the
@@ -1970,12 +1999,16 @@ mod gating_tests {
             fn id(&self) -> &str {
                 "recording"
             }
-            fn refresh(&mut self, transcript: &dyn History) {
+            fn contribute(
+                &mut self,
+                input: ContextAdapterInput<'_>,
+                output: &mut claw_context::ContextSink<'_>,
+            ) {
                 self.seen_versions
                     .lock()
                     .unwrap_or_else(|p| p.into_inner())
-                    .push(transcript.version());
-                let saw_user = transcript.messages().as_array().is_some_and(|messages| {
+                    .push(input.history.version());
+                let saw_user = input.history.messages().as_array().is_some_and(|messages| {
                     messages.iter().any(|message| {
                         message.get("content").and_then(Value::as_str) == Some("hello")
                     })
@@ -1983,12 +2016,10 @@ mod gating_tests {
                 if saw_user {
                     *self.saw_user.lock().unwrap_or_else(|p| p.into_inner()) = true;
                 }
-            }
-            fn blocks(&self) -> Vec<Block<'_>> {
-                vec![Block::new(
+                output.block(Block::new(
                     BlockKind::GlobalMemory,
                     "Remembered: user likes tea.",
-                )]
+                ));
             }
         }
 

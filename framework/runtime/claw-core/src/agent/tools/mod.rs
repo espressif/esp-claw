@@ -22,26 +22,21 @@
 //! its siblings only when its manifest enables spawning, `respond_to_approval`
 //! only for a session root.
 //!
-//! Keeping these here means [`IterationLoop`](crate::iteration_loop) stays fully
-//! agnostic: it runs them like ordinary tools and never learns their meaning.
+//! Keeping these here means the iteration loop stays fully agnostic: it runs them
+//! like ordinary tools and never learns their meaning.
 
 mod delete_subagent;
 mod end_conversation;
-mod list_skills;
 mod list_spawnable_agents;
 mod list_subagents;
-mod load_skill;
-mod reload_skills;
 mod respond_to_approval;
 mod spawn_subagent;
-mod unload_skill;
 mod watch_subagent;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use claw_permission::Resource;
-use claw_skill::{SkillId, SkillRegistry};
 use claw_tool::{Tool, ToolError, ToolGroup, ToolInvocation};
 use serde_json::Value;
 
@@ -49,14 +44,10 @@ use crate::agent::graph::{AgentContext, AgentSnapshot, SpawnPolicy};
 
 use delete_subagent::DeleteSubagentTool;
 use end_conversation::EndConversationTool;
-use list_skills::ListSkillsTool;
 use list_spawnable_agents::ListSpawnableAgentsTool;
 use list_subagents::ListSubagentsTool;
-use load_skill::LoadSkillTool;
-use reload_skills::ReloadSkillsTool;
 use respond_to_approval::RespondToApprovalTool;
 use spawn_subagent::SpawnSubagentTool;
-use unload_skill::UnloadSkillTool;
 use watch_subagent::WatchSubagentTool;
 
 /// Group label for the agent's built-in tools (provenance only).
@@ -68,9 +59,6 @@ pub(crate) const SUBAGENT_TOOL_GROUP: &str = "subagents";
 /// Group label for the approval-response tool (provenance only).
 pub(crate) const APPROVAL_TOOL_GROUP: &str = "approval";
 
-/// Group label for the runtime skill-management tools (provenance only).
-pub(crate) const SKILL_TOOL_GROUP: &str = "skills";
-
 // -- Self-control seam ------------------------------------------------------
 
 /// A signal an internal tool raises for the agent to act on next tick.
@@ -81,12 +69,6 @@ pub(crate) const SKILL_TOOL_GROUP: &str = "skills";
 pub(crate) enum ControlSignal {
     /// The agent decided it is done; carries its closing message.
     EndConversation { final_message: String },
-    /// The model asked to load a skill into context (already validated against
-    /// the registry by [`LoadSkillTool`]).
-    LoadSkill { id: SkillId },
-    /// The model asked to unload a skill from context (a no-op if it was not
-    /// loaded).
-    UnloadSkill { id: SkillId },
 }
 
 /// The shared queue internal tools push [`ControlSignal`]s onto.
@@ -177,29 +159,6 @@ pub(crate) fn subagent_tool_group(context: Arc<AgentContext>, policy: SpawnPolic
     )
 }
 
-/// Build the runtime skill-management tool group over the agent's control
-/// `sink` and a `registry` handle:
-/// - `list_skills` — the menu of skills available to load (id + description);
-/// - `load_skill` — load one skill (by id) into context for later turns;
-/// - `unload_skill` — drop one loaded skill from context;
-/// - `reload_skills` — re-scan the skills directory to pick up disk changes.
-///
-/// `list_skills` / `load_skill` read a cached catalog snapshot (no filesystem
-/// I/O); `reload_skills` is the one tool that pays the rescan, on demand.
-/// `load_skill` validates the id against the snapshot synchronously; the actual
-/// load/unload is applied on the next tick via a [`ControlSignal`].
-pub(crate) fn skill_tool_group(sink: ControlSink, registry: Arc<dyn SkillRegistry>) -> ToolGroup {
-    ToolGroup::new(
-        SKILL_TOOL_GROUP,
-        [
-            Tool::new(ListSkillsTool::new(Arc::clone(&registry))),
-            Tool::new(LoadSkillTool::new(Arc::clone(&sink), Arc::clone(&registry))),
-            Tool::new(UnloadSkillTool::new(sink)),
-            Tool::new(ReloadSkillsTool::new(registry)),
-        ],
-    )
-}
-
 /// Build the approval-response tool group: a `respond_to_approval` tool that
 /// reports verdicts through `context`.
 pub(crate) fn respond_to_approval_tool_group(context: Arc<AgentContext>) -> ToolGroup {
@@ -218,8 +177,6 @@ pub(crate) mod test_support {
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
-    use claw_interface::{ClawFs, MemFs};
-    use claw_skill::{FsSkillRegistry, SkillRegistry};
     use claw_tool::{Tool, ToolGroup};
 
     use super::ControlSink;
@@ -227,37 +184,6 @@ pub(crate) mod test_support {
     /// A fresh, empty control sink.
     pub(crate) fn sink() -> ControlSink {
         Arc::new(Mutex::new(VecDeque::new()))
-    }
-
-    /// Write a minimal `SKILL.md` for `id` under the `skills` root of `fs`, so
-    /// both catalog scans and document reads succeed.
-    pub(crate) fn write_skill(fs: &MemFs, id: &str, description: &str) {
-        let document = format!(
-            "---\n{{\"name\":\"{id}\",\"description\":\"{description}\"}}\n---\n# {id}\n\nBody for {id}.\n"
-        );
-        fs.write_atomic(&format!("skills/{id}/SKILL.md"), document.as_bytes())
-            .unwrap();
-    }
-
-    /// An in-memory skill registry seeded with `(id, description)` rows.
-    pub(crate) fn skill_registry(entries: &[(&str, &str)]) -> Arc<dyn SkillRegistry> {
-        skill_registry_with_fs(entries).1
-    }
-
-    /// Like [`skill_registry`], but also hands back the backing [`MemFs`] so a
-    /// test can add/remove skills after construction and exercise `reload`.
-    pub(crate) fn skill_registry_with_fs(
-        entries: &[(&str, &str)],
-    ) -> (MemFs, Arc<dyn SkillRegistry>) {
-        let fs = MemFs::new();
-        for (id, description) in entries {
-            write_skill(&fs, id, description);
-        }
-        // `MemFs` is a cheap clone handle to the same store, so the returned
-        // handle and the registry's both see writes made after construction;
-        // the registry value coerces to `Arc<dyn SkillRegistry>` at the return.
-        let registry = Arc::new(FsSkillRegistry::scan(fs.clone(), "skills").unwrap());
-        (fs, registry)
     }
 
     /// The tool named `name` in `group` (cloned), panicking if absent.

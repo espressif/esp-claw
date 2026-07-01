@@ -260,6 +260,7 @@ impl<F: ClawFs + Clone + 'static, H: ClawHttp + Default + Send + 'static> AgentF
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use claw_api::BackendKind;
     use claw_interface::{MemFs, SharedScriptHttp, StdThread};
     use claw_memory::NoopCompactor;
     use claw_utils::{PoolConfig, SharedTaskPool};
@@ -305,14 +306,12 @@ mod tests {
     /// thread-local `SharedScriptHttp` script that every minted client shares.
     fn factory(bodies: Vec<String>) -> FsAgentFactory<MemFs, SharedScriptHttp> {
         SharedScriptHttp::install(bodies);
-        let llm_config = ClawApiConfig {
-            api_key: Some("sk-test".into()),
-            backend_type: "openai_compatible".into(),
-            model: Some("gpt-test".into()),
-            base_url: Some("https://example.invalid".into()),
-            supports_tools: true,
-            ..Default::default()
-        };
+        let llm_config = ClawApiConfig::new(
+            BackendKind::OpenAiCompatible,
+            "sk-test",
+            "gpt-test",
+            "https://example.invalid",
+        );
         let compaction = CompactionDeps {
             pool: Arc::new(
                 SharedTaskPool::new(PoolConfig::default(), StdThread).expect("memory pool"),

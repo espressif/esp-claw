@@ -7,10 +7,10 @@
 
 use std::path::{Path, PathBuf};
 
-use claw_api::{ClawApi, ClawApiConfig};
+use claw_api::{BackendKind, ClawApi, ClawApiConfig};
 use claw_core::agent::{AgentId, BaseAgent, CancelReason, TickOutcome};
-use claw_core::{Tool, ToolGroup, ToolSet};
 use claw_interface::RealHttp;
+use claw_tool::{Tool, ToolGroup, ToolSet};
 use serde_json::{json, Value};
 
 mod common;
@@ -88,19 +88,14 @@ fn scripted_llm(bodies: Vec<&str>) -> ClawApi<claw_interface::ScriptedHttp> {
 
 fn live_llm() -> ClawApi<RealHttp> {
     let api_key = require_local_api_key();
-    ClawApi::init(
-        ClawApiConfig {
-            api_key: Some(api_key),
-            backend_type: "openai_compatible".into(),
-            model: Some(local_model()),
-            base_url: Some(local_base_url()),
-            supports_tools: false,
-            timeout_ms: 60_000,
-            ..Default::default()
-        },
-        RealHttp::new(),
-    )
-    .expect("live llm")
+    let mut config = ClawApiConfig::new(
+        BackendKind::OpenAiCompatible,
+        api_key,
+        local_model(),
+        local_base_url(),
+    );
+    config.timeout_ms = 60_000;
+    ClawApi::init(config, RealHttp::new()).expect("live llm")
 }
 
 // ---------------------------------------------------------------------------

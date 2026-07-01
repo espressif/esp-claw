@@ -10,25 +10,23 @@
 //! - [`History`] (read): the message snapshot + a change [`version`](History::version),
 //! - [`Transcript`] (write): the boundary writes the agent drives directly.
 //!
-//! Every [`ContextAdapter`] is a **pure reader**: given a `&dyn History`, it
-//! derives context (text blocks and/or structured messages) and may schedule its
-//! own background work into its own store. There is no event bus and nothing is
-//! pushed at an adapter — an adapter *pulls* the transcript when the agent
-//! [`refresh`](ContextAdapter::refresh)es it, and self-detects change by comparing
-//! [`History::version`] to a cursor it keeps. This keeps the agent ignorant of
-//! every concrete adapter type and makes "the transcript lives in exactly one
-//! place, everyone else borrows it" literally true.
+//! Every [`ContextAdapter`] is a **pure projector**: given a narrow input view, it
+//! contributes first-class context items into a `claw-context` sink and may
+//! schedule its own background work into its own store. There is no event bus and
+//! nothing is pushed at an adapter — an adapter pulls the source views it needs
+//! during [`contribute`](ContextAdapter::contribute) and self-detects change by
+//! comparing source versions to cursors it keeps.
 
 use std::sync::Arc;
 
-use claw_context::{Block, BlockKind};
+use claw_context::ContextSink;
 use claw_interface::ClawFs;
 use claw_memory::TranscriptStore;
-use claw_tool::ToolGroup;
+use claw_tool::{ToolGroup, ToolSet};
 use serde_json::{json, Value};
 
 /// The read view of the conversation transcript: the one capability request
-/// assembly — and every pluggable [`Memory`] — needs from the transcript owner.
+/// assembly — and every pluggable context adapter — needs from the transcript owner.
 ///
 /// Handed around as `&dyn History` so a reader depends on this narrow capability,
 /// never on the concrete conversation-memory type (which would drag its
@@ -134,59 +132,33 @@ impl<F: ClawFs + 'static> Transcript for TranscriptStore<F> {
     }
 }
 
-/// A pluggable context source: a pure reader over [`History`] that contributes
-/// to the next LLM request — text [`Block`]s into the system prefix and/or
-/// structured messages into the history channel — and may provide model-callable
-/// tools.
+/// The read-only runtime sources an adapter may project into context.
+#[derive(Clone, Copy)]
+pub struct ContextAdapterInput<'a> {
+    /// The conversation transcript read view.
+    pub history: &'a dyn History,
+    /// The current tool set, if this agent has tool support.
+    pub tools: Option<&'a ToolSet>,
+}
+
+/// A pluggable context source: a pure projector over [`ContextAdapterInput`] that
+/// contributes to the next LLM request through a `claw-context` [`ContextSink`],
+/// and may provide model-callable tools.
 ///
 /// Owned by the agent (one `Box<dyn ContextAdapter>` per registration) and driven
 /// from its single tick thread, but `Send + Sync` because an adapter typically
 /// owns state also written by background workers (e.g. an extraction pool job),
 /// and the agent itself moves across worker tasks.
 ///
-/// # Two-phase per iteration: refresh, then lend
-///
-/// The agent drives every adapter once per iteration in two passes, so the read
-/// borrows of *all* adapters can coexist while the agent collects from them:
-///
-/// 1. [`refresh`](Self::refresh) (`&mut self`): read the lent transcript,
-///    recompute the adapter's internal cache, and schedule any background work.
-///    Exclusive access means the cache is plain fields — no interior locking.
-/// 2. [`blocks`](Self::blocks) / [`messages`](Self::messages) (`&self`): lend the
-///    just-refreshed contributions, borrowing the adapter's cache (zero-copy).
-///
-/// Both contribution methods default to empty, so an adapter implements only the
-/// channel(s) it feeds. The agent orders contributions across adapters by
-/// [`BlockKind`] (the block taxonomy is the single wire-order authority).
+/// The agent does not decide whether a source is a system block, history message,
+/// or ephemeral reminder; each adapter emits the correct item into the sink and
+/// `claw-context` owns placement, ordering, and render caches.
 pub trait ContextAdapter: Send + Sync {
     /// A stable identifier for this adapter, used in logs.
     fn id(&self) -> &str;
 
-    /// Read the lent transcript and refresh internal state for this iteration.
-    ///
-    /// Called first, on the agent's tick thread, before either contribution
-    /// method. `transcript` is the lent read view: the adapter derives its cached
-    /// output here and gates any background work on [`History::version`] (an
-    /// unchanged transcript should cost nothing). `&mut self` so the cache is
-    /// plain fields, never a lock.
-    fn refresh(&mut self, transcript: &dyn History);
-
-    /// Lend the text blocks this adapter contributes to the system prefix, each
-    /// tagged with its [`BlockKind`]. Borrows the cache refreshed by
-    /// [`refresh`](Self::refresh); an empty block clears that section (the context
-    /// drops blank content). The default contributes none.
-    fn blocks(&self) -> Vec<Block<'_>> {
-        Vec::new()
-    }
-
-    /// Lend the structured messages this adapter contributes to the history
-    /// channel, each tagged with the [`BlockKind`] that fixes its wire position
-    /// (e.g. `ConversationSummary` before `RecentContext`). The agent merges these
-    /// across adapters and orders them by `kind.sort_key()`. The default
-    /// contributes none.
-    fn messages(&self) -> Vec<(BlockKind, &Value)> {
-        Vec::new()
-    }
+    /// Project this source into the request context for the current iteration.
+    fn contribute(&mut self, input: ContextAdapterInput<'_>, output: &mut ContextSink<'_>);
 
     /// The model-callable tools this adapter provides, if any.
     ///

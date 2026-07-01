@@ -6,12 +6,12 @@
 mod common;
 
 use claw_core::agent::{AgentId, BaseAgentBuildError, TickOutcome};
-use claw_core::{
+use claw_tool::{
     Tool, ToolGroup, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput, ToolSet,
 };
 use common::{
     agent_builder, body_echo_call, body_end_conversation, body_plain_text, capturing_llm,
-    run_to_completion, scripted_llm, scripted_llm_no_tools, test_output_dir,
+    run_to_completion, scripted_llm, test_output_dir,
 };
 
 /// The caller-provided `echo` tool set used by several builder tests.
@@ -71,35 +71,6 @@ fn built_in_end_conversation_is_available_with_tools() {
         agent.tick(),
         TickOutcome::Ended { final_message } if final_message == "bye"
     ));
-}
-
-#[test]
-fn tools_with_unsupported_llm_is_error() {
-    let dir = test_output_dir("tools_with_unsupported_llm_is_error");
-    let result = agent_builder(
-        scripted_llm_no_tools(vec![]),
-        AgentId(1),
-        dir.display().to_string(),
-    )
-    .with_tools(echo_tools())
-    .build();
-
-    assert!(matches!(result, Err(BaseAgentBuildError::ToolsUnsupported)));
-}
-
-#[test]
-fn no_tools_with_unsupported_llm_builds_and_runs() {
-    let dir = test_output_dir("no_tools_with_unsupported_llm_builds_and_runs");
-    let mut agent = agent_builder(
-        scripted_llm_no_tools(vec![body_plain_text("hi")]),
-        AgentId(1),
-        dir.display().to_string(),
-    )
-    .build()
-    .expect("build");
-
-    agent.run("say hi");
-    assert_eq!(run_to_completion(&mut agent), "hi");
 }
 
 /// A caller tool whose name collides with the built-in `end_conversation`.

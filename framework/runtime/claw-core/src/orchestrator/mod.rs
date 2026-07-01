@@ -3,6 +3,8 @@
 //! Inbound logic lives in [`Orchestrator::on_user_message`] and
 //! [`Orchestrator::on_command`].
 
+mod instance;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -10,12 +12,12 @@ use claw_context::Block;
 
 use crate::agent::factory::AgentFactory;
 use crate::agent::registry::AgentIdAllocator;
-use crate::channels::{ChannelEgress, ChannelIngressSink, InboundCommand, InboundMessage};
-use crate::orchestrator_instance::{DriveOutput, OrchestratorInstance};
-use crate::protocol::Command;
+use crate::channels::{ChannelEgress, ChannelIngressSink, Command, InboundCommand, InboundMessage};
 use crate::session::{
     DeliverError, SessionError, SessionId, SessionMessage, SessionOut, SessionRoutes, SessionStore,
 };
+
+use self::instance::{DriveOutput, OrchestratorInstance};
 
 pub struct Orchestrator {
     egress: Arc<dyn ChannelEgress>,
@@ -126,8 +128,8 @@ impl Orchestrator {
 
     fn on_command(&self, session_id: SessionId, cmd: &Command) {
         // Not wired yet (intentionally a no-op, not a panic): the `Command`
-        // protocol still uses the legacy task/run model and must be reconciled
-        // with the session/agent/approval model before it can drive the graph.
+        // command flow still uses the legacy task/run model and must be
+        // reconciled with the session/agent/approval model before it can drive the graph.
         // Until then, acknowledge in the log and drop rather than aborting.
         tracing::warn!(session = %session_id, command = ?cmd, "inbound command ignored (not implemented yet)");
     }
@@ -308,11 +310,11 @@ mod tests {
     use std::collections::VecDeque;
 
     use super::*;
-    use crate::agent::base_agent::{
-        AgentCommand, AgentCommandError, AgentId, ApprovalId, TickOutcome,
-    };
     use crate::agent::factory::AgentFactory;
-    use crate::agent::{Agent, AgentKind, GraphHost};
+    use crate::agent::{
+        Agent, AgentCommand, AgentCommandError, AgentId, AgentKind, ApprovalId, GraphHost,
+        TickOutcome,
+    };
     use crate::channels::{ChannelEgressHub, ChannelTransport, RecordingTransport};
 
     // -- A fake factory + agent that echoes each delivered message --------------

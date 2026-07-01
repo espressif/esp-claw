@@ -229,7 +229,7 @@ pub enum GenericAgentBuildError {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use claw_api::{ClawApi, ClawApiConfig, RetryPolicy};
+    use claw_api::{BackendKind, ClawApi, ClawApiConfig, RetryPolicy};
     use claw_interface::{MemFs, ScriptedHttp, StdThread};
     use claw_memory::NoopCompactor;
     use claw_utils::{PoolConfig, SharedTaskPool};
@@ -239,18 +239,13 @@ mod tests {
     use crate::agent::graph::{GraphEffect, SpawnPolicy};
 
     fn scripted_llm(bodies: Vec<String>) -> ClawApi<ScriptedHttp> {
-        ClawApi::init(
-            ClawApiConfig {
-                api_key: Some("sk-test".into()),
-                backend_type: "openai_compatible".into(),
-                model: Some("gpt-test".into()),
-                base_url: Some("https://example.invalid".into()),
-                supports_tools: true,
-                ..Default::default()
-            },
-            ScriptedHttp::new(bodies),
-        )
-        .expect("init llm")
+        let config = ClawApiConfig::new(
+            BackendKind::OpenAiCompatible,
+            "sk-test",
+            "gpt-test",
+            "https://example.invalid",
+        );
+        ClawApi::init(config, ScriptedHttp::new(bodies)).expect("init llm")
     }
 
     /// The ingredients [`GenericAgent::new`] needs to build its own transcript: a

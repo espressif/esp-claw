@@ -50,26 +50,25 @@ impl<H: ClawHttp> LlmCompactor<H> {
     /// ```
     /// use std::sync::Arc;
     ///
-    /// use claw_api::{ClawApi, ClawApiConfig};
+    /// use claw_api::{BackendKind, ClawApi, ClawApiConfig};
     /// use claw_core::LlmCompactor;
     /// use claw_memory::Compactor;
     /// # use std::sync::atomic::AtomicBool;
-    /// # use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse};
+    /// # use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
     /// # #[derive(Default)]
     /// # struct StubHttp;
     /// # impl ClawHttp for StubHttp {
     /// #     fn post_json(&mut self, _: &HttpJsonRequest, _: &AtomicBool) -> Result<HttpResponse, HttpError> {
-    /// #         Ok(HttpResponse { status_code: 200, body: "{}".into() })
+    /// #         Ok(HttpResponse { status_code: HttpStatusCode::OK, body: "{}".into() })
     /// #     }
     /// # }
     /// let api = ClawApi::init(
-    ///     ClawApiConfig {
-    ///         backend_type: "openai_compatible".into(),
-    ///         api_key: Some("sk-test".into()),
-    ///         model: Some("gpt-4o-mini".into()),
-    ///         base_url: Some("https://api.openai.com/v1".into()),
-    ///         ..Default::default()
-    ///     },
+    ///     ClawApiConfig::new(
+    ///         BackendKind::OpenAiCompatible,
+    ///         "sk-test",
+    ///         "gpt-4o-mini",
+    ///         "https://api.openai.com/v1",
+    ///     ),
     ///     StubHttp::default(),
     /// )
     /// .expect("init");

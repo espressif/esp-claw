@@ -8,8 +8,8 @@ use claw_core::agent::{
     TickOutcome,
 };
 use claw_core::{
-    ChannelEgressHub, ChannelIngressSink, Command, InboundCommand, InboundMessage, Orchestrator,
-    RecordingTransport, SessionId, TaskId,
+    ChannelEgressHub, ChannelIngressSink, InboundMessage, Orchestrator, RecordingTransport,
+    SessionId,
 };
 
 /// An agent that never produces output. These tests only exercise ingress
@@ -121,22 +121,4 @@ fn push_with_unknown_session_id_is_rejected() {
     let (orch, _) = test_orchestrator();
 
     orch.push_user_message(user_msg(SessionId(99), "orphan"));
-}
-
-#[test]
-fn command_requires_prior_reply_route() {
-    let (orch, transport) = test_orchestrator();
-
-    let sid = orch.session_create();
-    orch.push_command(InboundCommand {
-        session_id: sid,
-        command: Command::CreateTask {
-            task_id: TaskId(1),
-            goal: "g".into(),
-            frontend_instance_id: "fe".into(),
-            requires_plan_approval: false,
-        },
-    });
-
-    assert!(transport.drain_sent().is_empty());
 }

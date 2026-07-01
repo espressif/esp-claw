@@ -8,4 +8,6 @@ mod message;
 pub use egress::{ChannelEgress, ChannelTransport};
 pub use ingress::{ChannelIngress, ChannelIngressSink};
 pub use local::{ChannelEgressHub, LocalChannelIngress, RecordingTransport};
-pub use message::{ChannelError, InboundCommand, InboundMessage, OutboundMessage, ReplyRoute};
+pub use message::{
+    ChannelError, Command, InboundCommand, InboundMessage, OutboundMessage, ReplyRoute,
+};

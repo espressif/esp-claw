@@ -11,7 +11,7 @@
 mod common;
 
 use claw_core::agent::{AgentCommandError, AgentId, AgentState, CancelReason, TickOutcome};
-use claw_core::{Tool, ToolGroup, ToolSet};
+use claw_tool::{Tool, ToolGroup, ToolSet};
 use common::{
     agent_builder, body_echo_call, body_plain_text, capturing_llm, scripted_llm, TestAgent,
 };

@@ -15,7 +15,8 @@ use std::sync::Arc;
 use claw_core::agent::{
     AgentCommandError, AgentId, AgentState, ApprovalDecision, ApprovalId, CancelReason, TickOutcome,
 };
-use claw_core::{AskAtOrAbove, PermissionPolicy, RiskClass, Tool, ToolGroup, ToolSet};
+use claw_permission::{AskAtOrAbove, PermissionPolicy, RiskClass};
+use claw_tool::{Tool, ToolGroup, ToolSet};
 use common::{
     agent_builder, body_echo_call, body_echo_call_id, body_plain_text, builder_with_view,
     capturing_llm, scripted_llm, transcript_contents, EchoTool, TestAgent, TestFs,

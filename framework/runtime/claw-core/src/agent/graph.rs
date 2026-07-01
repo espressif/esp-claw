@@ -96,8 +96,8 @@ pub enum GraphEffect {
     },
 }
 
-/// A subagent's coarse lifecycle state, as observed by its parent through
-/// [`AgentContext::list_subagents`] / [`AgentContext::get_subagent`].
+/// A subagent's coarse lifecycle state, as observed by its parent through the
+/// graph inspection tools.
 ///
 /// Derived by the orchestrator instance from its own scheduling state, not asked
 /// of the agent — so it reflects what the graph owner knows: queued, parked, or
@@ -150,7 +150,7 @@ pub struct AgentSnapshot {
 /// This is the *single* back-channel from an agent to the orchestrator: identity
 /// allocation ([`next_id`](Self::next_id)) plus a deferred-effect queue
 /// ([`emit`](Self::emit)). The orchestrator instance implements it; tools reach
-/// it through an [`AgentContext`]. Keeping the surface to these methods means new
+/// it through an internal agent context. Keeping the surface to these methods means new
 /// tools extend [`GraphEffect`], not this trait.
 pub trait GraphHost: Send + Sync {
     /// Allocate the next process-unique [`AgentId`] (e.g. for a child a tool is

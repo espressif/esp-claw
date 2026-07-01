@@ -4,9 +4,9 @@
 
 use std::sync::atomic::AtomicBool;
 
-use claw_api::{ClawApi, ClawApiConfig};
+use claw_api::{BackendKind, ClawApi, ClawApiConfig};
 use claw_core::LlmCompactor;
-use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse};
+use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
 use claw_memory::Compactor;
 use serde_json::json;
 
@@ -22,7 +22,7 @@ impl ClawHttp for CannedHttp {
         _abort: &AtomicBool,
     ) -> Result<HttpResponse, HttpError> {
         Ok(HttpResponse {
-            status_code: 200,
+            status_code: HttpStatusCode::OK,
             body: self.body.clone(),
         })
     }
@@ -35,13 +35,12 @@ fn api_replying(reply: &str) -> ClawApi<CannedHttp> {
     .to_string();
     let http = CannedHttp { body };
     ClawApi::init(
-        ClawApiConfig {
-            api_key: Some("key".into()),
-            backend_type: "openai_compatible".into(),
-            model: Some("model-x".into()),
-            base_url: Some("https://api.example.com/v1".into()),
-            ..Default::default()
-        },
+        ClawApiConfig::new(
+            BackendKind::OpenAiCompatible,
+            "key",
+            "model-x",
+            "https://api.example.com/v1",
+        ),
         http,
     )
     .expect("init ClawApi")

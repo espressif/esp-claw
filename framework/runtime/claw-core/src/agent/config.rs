@@ -1,8 +1,8 @@
-//! Resolving a baked [`AgentManifest`] into a runnable [`AgentConfig`].
+//! Resolving a baked agent manifest into a runnable [`AgentConfig`].
 //!
 //! # Relationship to the manifest
 //!
-//! An [`AgentManifest`](crate::agent::manifest::AgentManifest) is pure compile-time
+//! An agent manifest is pure compile-time
 //! **data**: a system prompt plus the *names* of capabilities/skills. The actual
 //! tool/skill *handlers* are code that lives in firmware (or a test double), so a
 //! manifest cannot run on its own. This module is the **seam** that binds the two:
@@ -61,7 +61,7 @@ pub struct AgentConfig {
 impl AgentConfig {
     /// Resolve a firmware-baked agent kind into a runnable config.
     ///
-    /// Looks up the compile-time [`AgentManifest`] baked for `kind` and resolves
+    /// Looks up the compile-time manifest baked for `kind` and resolves
     /// every capability/skill *name* in it through `resolver` into handler code.
     /// The manifest's JSON was already parsed and validated at build time, so this
     /// does only the runtime-only half: turning names into handlers.
