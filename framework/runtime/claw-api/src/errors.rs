@@ -13,7 +13,7 @@ use thiserror::Error;
 
 /// Failures shared by chat and media calls (transport, response parsing,
 /// allocation). `ApiError` is the static-message catch-all.
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ClawApiError {
     /// Permanent transport failure (aborts, bad URL/body, 4xx, ...). Carries the
     /// backend/transport detail (e.g. `"HTTP 401: invalid api key"`), which is
@@ -41,6 +41,7 @@ pub enum ClawApiError {
 
 impl ClawApiError {
     /// Whether retrying the same request might succeed.
+    #[must_use]
     pub fn is_retryable(&self) -> bool {
         matches!(self, ClawApiError::TransientTransport(_))
     }
@@ -48,7 +49,7 @@ impl ClawApiError {
 
 /// Failures from constructing a [`crate::ClawApi`] (config validation + backend
 /// selection).
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum InitError {
     #[error("LLM API key is empty")]
     MissingApiKey,
@@ -56,14 +57,10 @@ pub enum InitError {
     MissingModel,
     #[error("LLM base URL is empty")]
     MissingBaseUrl,
-    #[error("LLM backend type is empty")]
-    MissingBackendType,
-    #[error("unknown LLM backend type")]
-    UnknownBackend,
 }
 
 /// Failures from a structured JSON chat completion request.
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ChatJsonError {
     /// Tools were requested but the profile does not support them.
     #[error("selected backend does not support tool calls")]
@@ -86,6 +83,7 @@ pub enum ChatJsonError {
 impl ChatJsonError {
     /// Retryable only when the underlying chat transport failure is transient;
     /// schema/parse failures are deterministic and never retried.
+    #[must_use]
     pub fn is_retryable(&self) -> bool {
         matches!(self, ChatJsonError::Chat(err) if err.is_retryable())
     }
@@ -109,7 +107,7 @@ impl ChatJsonError {
 ///     }
 /// }
 /// ```
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ChatError {
     /// The selected backend/profile does not support tool calls.
     #[error("selected backend does not support tool calls")]
@@ -124,6 +122,7 @@ pub enum ChatError {
 
 impl ChatError {
     /// Whether retrying the same request might succeed.
+    #[must_use]
     pub fn is_retryable(&self) -> bool {
         matches!(self, ChatError::Api(err) if err.is_retryable())
     }
@@ -131,7 +130,7 @@ impl ChatError {
 
 /// Failures from a one-shot media inference request (includes the media-prep
 /// pipeline used only by this call).
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum InferMediaError {
     /// The selected profile does not support vision/media.
     #[error("selected profile does not support media inference")]
@@ -139,6 +138,9 @@ pub enum InferMediaError {
     /// The request was missing a prompt or media asset.
     #[error("media request is incomplete")]
     IncompleteRequest,
+    /// Multiple media assets were supplied, but current backends accept one.
+    #[error("multiple media assets are not supported")]
+    MultipleMediaAssetsUnsupported,
     /// Media path was empty.
     #[error("media path is empty")]
     MediaPathEmpty,
@@ -182,6 +184,7 @@ pub enum InferMediaError {
 
 impl InferMediaError {
     /// Whether retrying the same request might succeed.
+    #[must_use]
     pub fn is_retryable(&self) -> bool {
         matches!(self, InferMediaError::Api(err) if err.is_retryable())
     }

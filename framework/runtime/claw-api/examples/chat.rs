@@ -13,8 +13,8 @@
 
 use std::sync::atomic::AtomicBool;
 
-use claw_api::{ChatJsonRequest, ChatRequest, ClawApi, ClawApiConfig};
-use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse};
+use claw_api::{BackendKind, ChatJsonRequest, ChatRequest, ClawApi, ClawApiConfig};
+use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -35,7 +35,7 @@ impl ClawHttp for StubHttp {
             r#"{"choices":[{"message":{"role":"assistant","content":"Hello!"}}]}"#
         };
         Ok(HttpResponse {
-            status_code: 200,
+            status_code: HttpStatusCode::OK,
             body: body.to_string(),
         })
     }
@@ -59,15 +59,12 @@ const WEATHER_SCHEMA: &str = r#"{
 }"#;
 
 fn main() -> anyhow::Result<()> {
-    let config = ClawApiConfig {
-        api_key: Some("sk-demo".into()),
-        backend_type: "openai_compatible".into(),
-        model: Some("gpt-4o-mini".into()),
-        base_url: Some("https://api.example.com/v1".into()),
-        supports_tools: true,
-        supports_vision: true,
-        ..Default::default()
-    };
+    let config = ClawApiConfig::new(
+        BackendKind::OpenAiCompatible,
+        "sk-demo",
+        "gpt-4o-mini",
+        "https://api.example.com/v1",
+    );
     let mut api = ClawApi::init(config, StubHttp)?;
     let abort = AtomicBool::new(false);
 

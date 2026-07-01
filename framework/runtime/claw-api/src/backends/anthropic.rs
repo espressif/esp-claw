@@ -5,67 +5,37 @@
 //!
 //! Structured JSON ([`crate::ClawApi::chat_json`]) uses Anthropic
 //! `output_config.format` when [`crate::ModelProfile::supports_json_schema`]
-//! is set; otherwise it falls back to schema-in-prompt via [`super::common::chat_json_prompt_fallback`].
+//! is set; otherwise it falls back to schema-in-prompt.
 
 use core::sync::atomic::AtomicBool;
 
 use serde_json::{json, Map, Value};
 
-use claw_interface::http::{ClawHttp, HttpHeader, HttpJsonRequest};
+use claw_interface::http::{Cancel, ClawHttp, ClawHttpAsync, HttpAuth, HttpHeader};
 
-use super::super::backend::{BackendDefaults, BackendRegistration, LlmBackend};
 use super::super::errors::{ChatError, ClawApiError, InferMediaError, InitError};
 use super::super::media::prepare_asset;
 use super::super::types::{
-    ChatJsonRequest, ChatRequest, ClawApiConfig, LlmResponse, MediaRequest, ModelProfile,
-    PreparedKind, ToolCall,
+    ChatJsonRequest, ChatRequest, ClawApiConfig, LlmResponse, MediaRequest, ModelProfile, ToolCall,
 };
-use super::common::{chat_json_prompt_fallback, join_url, map_http_error, single_media_asset};
+use super::shared::{
+    post_json, post_json_async, single_media_asset, BackendContext, ChatJsonPromptFallback,
+};
+use super::BackendImpl;
 
-pub const ID: &str = "anthropic_compatible";
-pub const AUTH_TYPE: &str = "none";
-pub const CHAT_PATH: &str = "/messages";
-pub const DEFAULT_MAX_TOKENS_FIELD: &str = "max_tokens";
+pub(super) const ID: &str = "anthropic_compatible";
+pub(super) const CHAT_PATH: &str = "/messages";
+pub(super) const DEFAULT_MAX_TOKENS_FIELD: &str = "max_tokens";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
-pub fn registration<H: ClawHttp>() -> BackendRegistration<H> {
-    BackendRegistration {
-        defaults: BackendDefaults {
-            auth_type: AUTH_TYPE,
-            chat_path: CHAT_PATH,
-            max_tokens_field: DEFAULT_MAX_TOKENS_FIELD,
-        },
-        make: make::<H>,
-    }
-}
-
-struct Anthropic {
-    api_key: String,
-    model: String,
-    base_url: String,
-    timeout_ms: u32,
-    max_tokens: u32,
-    image_max_bytes: usize,
+pub(super) struct Anthropic {
+    context: BackendContext,
 }
 
 /// `anthropic_init`
 ///
 /// Credential/config validation is centralized in [`crate::ClawApi::init`];
 /// `api_key`, `model`, and `base_url` are guaranteed non-empty here.
-fn make<H: ClawHttp>(config: &ClawApiConfig) -> Result<Box<dyn LlmBackend<H>>, InitError> {
-    let api_key = config.api_key.as_deref().unwrap_or("");
-    let model = config.model.as_deref().unwrap_or("");
-    let base_url = config.base_url.as_deref().unwrap_or("");
-    Ok(Box::new(Anthropic {
-        api_key: api_key.to_string(),
-        model: model.to_string(),
-        base_url: base_url.to_string(),
-        timeout_ms: config.timeout_ms,
-        max_tokens: config.max_tokens,
-        image_max_bytes: config.image_max_bytes,
-    }))
-}
-
 fn str_field<'a>(obj: &'a Value, key: &str) -> Option<&'a str> {
     obj.get(key).and_then(|v| v.as_str())
 }
@@ -123,47 +93,32 @@ fn convert_messages_to_anthropic(
         Some(a) => a.as_slice(),
         None => &[],
     };
-    let arr: Vec<&Value> = history.iter().chain(reminders.iter()).collect();
+    let mut iter = history.iter().chain(reminders.iter()).peekable();
 
-    let mut idx = 0usize;
-    while idx < arr.len() {
-        let msg = arr[idx];
+    while let Some(msg) = iter.next() {
         let role = match str_field(msg, "role") {
             Some(r) if !r.is_empty() => r,
-            _ => {
-                idx += 1;
-                continue;
-            }
+            _ => continue,
         };
 
         // Merge consecutive "tool"-role messages into one "user" message.
         if role == "tool" {
             let mut tool_blocks: Vec<Value> = Vec::new();
-            while idx < arr.len() {
-                let inner = arr[idx];
-                if str_field(inner, "role") != Some("tool") {
+            push_tool_result_block(msg, &mut tool_blocks);
+            while iter
+                .peek()
+                .is_some_and(|next| str_field(next, "role") == Some("tool"))
+            {
+                let Some(inner) = iter.next() else {
                     break;
-                }
-                let tid = str_field(inner, "tool_call_id").unwrap_or("");
-                let content = str_field(inner, "content").unwrap_or("");
-                let is_error = inner
-                    .get("is_error")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                tool_blocks.push(json!({
-                    "type": "tool_result",
-                    "tool_use_id": tid,
-                    "content": content,
-                    "is_error": is_error,
-                }));
-                idx += 1;
+                };
+                push_tool_result_block(inner, &mut tool_blocks);
             }
             out.push(json!({"role": "user", "content": tool_blocks}));
             continue;
         }
 
         if role != "assistant" && role != "user" {
-            idx += 1;
             continue;
         }
 
@@ -202,15 +157,28 @@ fn convert_messages_to_anthropic(
         }
 
         if blocks.is_empty() {
-            idx += 1;
             continue;
         }
 
         out.push(json!({"role": role, "content": blocks}));
-        idx += 1;
     }
 
     Ok(Value::Array(out))
+}
+
+fn push_tool_result_block(message: &Value, tool_blocks: &mut Vec<Value>) {
+    let tid = str_field(message, "tool_call_id").unwrap_or("");
+    let content = str_field(message, "content").unwrap_or("");
+    let is_error = message
+        .get("is_error")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    tool_blocks.push(json!({
+        "type": "tool_result",
+        "tool_use_id": tid,
+        "content": content,
+        "is_error": is_error,
+    }));
 }
 
 /// `convert_tools_to_anthropic`. Returns `None` when there are no tools or the
@@ -271,12 +239,8 @@ fn convert_tools_to_anthropic(tools_json: Option<&str>, strict: bool) -> Option<
 fn parse_data_url(data_url: &str) -> Option<(String, String)> {
     const PREFIX: &str = "data:";
     const MARKER: &str = ";base64,";
-    if !data_url.starts_with(PREFIX) {
-        return None;
-    }
-    let marker_pos = data_url.find(MARKER)?;
-    let mime = &data_url[PREFIX.len()..marker_pos];
-    let data = &data_url[marker_pos + MARKER.len()..];
+    let rest = data_url.strip_prefix(PREFIX)?;
+    let (mime, data) = rest.split_once(MARKER)?;
     if data.is_empty() {
         return None;
     }
@@ -349,13 +313,19 @@ fn parse_chat_response(body: &str) -> Result<LlmResponse, ClawApiError> {
 }
 
 impl Anthropic {
+    pub(super) fn make(config: &ClawApiConfig) -> Result<Self, InitError> {
+        Ok(Anthropic {
+            context: BackendContext::from_config(config),
+        })
+    }
+
     /// `build_chat_body`
     fn build_chat_body(&self, request: &ChatRequest) -> Result<String, ChatError> {
         let messages = convert_messages_to_anthropic(request.messages, request.reminders)?;
 
         let mut body = Map::new();
-        body.insert("model".to_string(), json!(self.model));
-        body.insert("max_tokens".to_string(), json!(self.max_tokens));
+        body.insert("model".to_string(), json!(self.context.model()));
+        body.insert("max_tokens".to_string(), json!(self.context.max_tokens()));
         if !request.system_prompt.is_empty() {
             body.insert("system".to_string(), json!(request.system_prompt));
         }
@@ -376,8 +346,8 @@ impl Anthropic {
         let messages = convert_messages_to_anthropic(request.messages, request.reminders)?;
 
         let mut body = Map::new();
-        body.insert("model".to_string(), json!(self.model));
-        body.insert("max_tokens".to_string(), json!(self.max_tokens));
+        body.insert("model".to_string(), json!(self.context.model()));
+        body.insert("max_tokens".to_string(), json!(self.context.max_tokens()));
         if !request.system_prompt.is_empty() {
             body.insert("system".to_string(), json!(request.system_prompt));
         }
@@ -417,17 +387,23 @@ impl Anthropic {
         Ok(())
     }
 
-    fn headers(&self) -> [(&'static str, String); 2] {
+    fn headers(&self) -> [HttpHeader<'_>; 2] {
         [
-            ("x-api-key", self.api_key.clone()),
-            ("anthropic-version", ANTHROPIC_VERSION.to_string()),
+            HttpHeader {
+                name: "x-api-key",
+                value: self.context.api_key(),
+            },
+            HttpHeader {
+                name: "anthropic-version",
+                value: ANTHROPIC_VERSION,
+            },
         ]
     }
 }
 
-impl<H: ClawHttp> LlmBackend<H> for Anthropic {
+impl BackendImpl for Anthropic {
     /// `anthropic_chat`
-    fn chat(
+    fn chat<H: ClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -435,28 +411,17 @@ impl<H: ClawHttp> LlmBackend<H> for Anthropic {
         abort: &AtomicBool,
     ) -> Result<LlmResponse, ChatError> {
         let post_data = self.build_chat_body(request)?;
-        let url = join_url(&self.base_url, &profile.chat_path);
-        let header_storage = self.headers();
-        let headers: Vec<HttpHeader> = header_storage
-            .iter()
-            .map(|(n, v)| HttpHeader { name: n, value: v })
-            .collect();
+        let url = self.context.endpoint_url(profile);
+        let headers = self.headers();
 
-        let http_request = HttpJsonRequest {
-            url: &url,
-            body: &post_data,
-            api_key: None,
-            auth_type: Some("none"),
-            timeout_ms: self.timeout_ms,
-            headers: &headers,
-        };
-        let response = http
-            .post_json(&http_request, abort)
-            .map_err(map_http_error)?;
+        let http_request = self
+            .context
+            .json_request(&url, &post_data, HttpAuth::None, &headers);
+        let response = post_json(http, &http_request, abort)?;
         Ok(parse_chat_response(&response.body)?)
     }
 
-    fn chat_json(
+    fn chat_json<H: ClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -465,41 +430,32 @@ impl<H: ClawHttp> LlmBackend<H> for Anthropic {
         schema: &Value,
         abort: &AtomicBool,
     ) -> Result<LlmResponse, ChatError> {
-        if !profile.supports_json_schema {
-            return chat_json_prompt_fallback(self, http, profile, request, schema, abort);
+        if !profile.supports_json_schema() {
+            let fallback = ChatJsonPromptFallback::new(request, schema);
+            let chat_req = fallback.chat_request();
+            return self.chat(http, profile, &chat_req, abort);
         }
 
         let post_data = self.build_chat_json_body(request, schema)?;
-        let url = join_url(&self.base_url, &profile.chat_path);
-        let header_storage = self.headers();
-        let headers: Vec<HttpHeader> = header_storage
-            .iter()
-            .map(|(n, v)| HttpHeader { name: n, value: v })
-            .collect();
+        let url = self.context.endpoint_url(profile);
+        let headers = self.headers();
 
-        let http_request = HttpJsonRequest {
-            url: &url,
-            body: &post_data,
-            api_key: None,
-            auth_type: Some("none"),
-            timeout_ms: self.timeout_ms,
-            headers: &headers,
-        };
-        let response = http
-            .post_json(&http_request, abort)
-            .map_err(map_http_error)?;
+        let http_request = self
+            .context
+            .json_request(&url, &post_data, HttpAuth::None, &headers);
+        let response = post_json(http, &http_request, abort)?;
         Ok(parse_chat_response(&response.body)?)
     }
 
     /// `anthropic_infer_media`
-    fn infer_media(
+    fn infer_media<H: ClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
         request: &MediaRequest,
         abort: &AtomicBool,
     ) -> Result<String, InferMediaError> {
-        if !profile.supports_vision {
+        if !profile.supports_vision() {
             return Err(InferMediaError::VisionUnsupported);
         }
         let user_prompt = request.user_prompt.unwrap_or("");
@@ -508,16 +464,16 @@ impl<H: ClawHttp> LlmBackend<H> for Anthropic {
         }
         let asset = single_media_asset(request.media)?;
 
-        let prepared = prepare_asset(asset, profile, self.image_max_bytes)?;
-        if prepared.kind != PreparedKind::DataUrl {
+        let prepared = prepare_asset(asset, profile, self.context.image_max_bytes())?;
+        if !prepared.is_data_url() {
             return Err(InferMediaError::RequiresLocalImage);
         }
         let (mime, base64_data) =
-            parse_data_url(&prepared.payload).ok_or(InferMediaError::PayloadPrepFailed)?;
+            parse_data_url(prepared.payload()).ok_or(InferMediaError::PayloadPrepFailed)?;
 
         let mut body = Map::new();
-        body.insert("model".to_string(), json!(self.model));
-        body.insert("max_tokens".to_string(), json!(self.max_tokens));
+        body.insert("model".to_string(), json!(self.context.model()));
+        body.insert("max_tokens".to_string(), json!(self.context.max_tokens()));
         let system = request.system_prompt.unwrap_or("");
         if !system.is_empty() {
             body.insert("system".to_string(), json!(system));
@@ -535,24 +491,115 @@ impl<H: ClawHttp> LlmBackend<H> for Anthropic {
         let body = Value::Object(body);
         let post_data = serde_json::to_string(&body)
             .map_err(|_| ClawApiError::ApiError("out of memory serializing media request"))?;
-        let url = join_url(&self.base_url, &profile.chat_path);
-        let header_storage = self.headers();
-        let headers: Vec<HttpHeader> = header_storage
-            .iter()
-            .map(|(n, v)| HttpHeader { name: n, value: v })
-            .collect();
+        let url = self.context.endpoint_url(profile);
+        let headers = self.headers();
 
-        let http_request = HttpJsonRequest {
-            url: &url,
-            body: &post_data,
-            api_key: None,
-            auth_type: Some("none"),
-            timeout_ms: self.timeout_ms,
-            headers: &headers,
-        };
-        let response = http
-            .post_json(&http_request, abort)
-            .map_err(map_http_error)?;
+        let http_request = self
+            .context
+            .json_request(&url, &post_data, HttpAuth::None, &headers);
+        let response = post_json(http, &http_request, abort)?;
+
+        let parsed = parse_chat_response(&response.body)?;
+        match parsed.text {
+            Some(t) if !t.is_empty() => Ok(t),
+            _ => Err(ClawApiError::EmptyResponse.into()),
+        }
+    }
+
+    async fn chat_async<H: ClawHttpAsync>(
+        &self,
+        http: &mut H,
+        profile: &ModelProfile,
+        request: &ChatRequest<'_>,
+        cancel: Cancel<'_>,
+    ) -> Result<LlmResponse, ChatError> {
+        let post_data = self.build_chat_body(request)?;
+        let url = self.context.endpoint_url(profile);
+        let headers = self.headers();
+
+        let http_request = self
+            .context
+            .json_request(&url, &post_data, HttpAuth::None, &headers);
+        let response = post_json_async(http, &http_request, cancel).await?;
+        Ok(parse_chat_response(&response.body)?)
+    }
+
+    async fn chat_json_async<H: ClawHttpAsync>(
+        &self,
+        http: &mut H,
+        profile: &ModelProfile,
+        request: &ChatJsonRequest<'_>,
+        _schema_name: &str,
+        schema: &Value,
+        cancel: Cancel<'_>,
+    ) -> Result<LlmResponse, ChatError> {
+        if !profile.supports_json_schema() {
+            let fallback = ChatJsonPromptFallback::new(request, schema);
+            let chat_req = fallback.chat_request();
+            return self.chat_async(http, profile, &chat_req, cancel).await;
+        }
+
+        let post_data = self.build_chat_json_body(request, schema)?;
+        let url = self.context.endpoint_url(profile);
+        let headers = self.headers();
+
+        let http_request = self
+            .context
+            .json_request(&url, &post_data, HttpAuth::None, &headers);
+        let response = post_json_async(http, &http_request, cancel).await?;
+        Ok(parse_chat_response(&response.body)?)
+    }
+
+    async fn infer_media_async<H: ClawHttpAsync>(
+        &self,
+        http: &mut H,
+        profile: &ModelProfile,
+        request: &MediaRequest<'_>,
+        cancel: Cancel<'_>,
+    ) -> Result<String, InferMediaError> {
+        if !profile.supports_vision() {
+            return Err(InferMediaError::VisionUnsupported);
+        }
+        let user_prompt = request.user_prompt.unwrap_or("");
+        if user_prompt.is_empty() {
+            return Err(InferMediaError::IncompleteRequest);
+        }
+        let asset = single_media_asset(request.media)?;
+
+        let prepared = prepare_asset(asset, profile, self.context.image_max_bytes())?;
+        if !prepared.is_data_url() {
+            return Err(InferMediaError::RequiresLocalImage);
+        }
+        let (mime, base64_data) =
+            parse_data_url(prepared.payload()).ok_or(InferMediaError::PayloadPrepFailed)?;
+
+        let mut body = Map::new();
+        body.insert("model".to_string(), json!(self.context.model()));
+        body.insert("max_tokens".to_string(), json!(self.context.max_tokens()));
+        let system = request.system_prompt.unwrap_or("");
+        if !system.is_empty() {
+            body.insert("system".to_string(), json!(system));
+        }
+        body.insert(
+            "messages".to_string(),
+            json!([{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_prompt},
+                    {"type": "image", "source": {"type": "base64", "media_type": mime, "data": base64_data}}
+                ]
+            }]),
+        );
+        let body = Value::Object(body);
+        let post_data = serde_json::to_string(&body)
+            .map_err(|_| ClawApiError::ApiError("out of memory serializing media request"))?;
+        let url = self.context.endpoint_url(profile);
+        let headers = self.headers();
+
+        let http_request = self
+            .context
+            .json_request(&url, &post_data, HttpAuth::None, &headers);
+        let response = post_json_async(http, &http_request, cancel).await?;
 
         let parsed = parse_chat_response(&response.body)?;
         match parsed.text {

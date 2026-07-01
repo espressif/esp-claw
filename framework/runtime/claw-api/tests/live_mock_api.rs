@@ -26,7 +26,7 @@
 
 use std::sync::atomic::AtomicBool;
 
-use claw_api::{ChatJsonRequest, ChatRequest, ClawApi, ClawApiConfig};
+use claw_api::{BackendKind, ChatJsonRequest, ChatRequest, ClawApi, ClawApiConfig};
 use claw_interface::RealHttp;
 use serde_json::json;
 
@@ -92,15 +92,12 @@ const OPENAI_COMPATIBLE_PROVIDERS: &[Provider] = &[
 
 fn openai_compatible_api(model: &str) -> ClawApi<RealHttp> {
     ClawApi::init(
-        ClawApiConfig {
-            api_key: Some("mock-key".into()), // any non-empty string; mock ignores it
-            backend_type: "openai_compatible".into(),
-            model: Some(model.into()),
-            base_url: Some(MOCK_BASE_URL.into()),
-            supports_tools: true,
-            supports_vision: true,
-            ..Default::default()
-        },
+        ClawApiConfig::new(
+            BackendKind::OpenAiCompatible,
+            "mock-key",
+            model,
+            MOCK_BASE_URL,
+        ),
         openai_http(),
     )
     .expect("init openai_compatible")
@@ -141,15 +138,12 @@ fn openai_compatible_providers_roundtrip() {
 #[ignore = "hits hosted mock LLM endpoint over the network; run with --ignored"]
 fn anthropic_roundtrip() {
     let mut api = ClawApi::init(
-        ClawApiConfig {
-            api_key: Some("mock-key".into()),
-            backend_type: "anthropic_compatible".into(),
-            model: Some("claude-3-5-sonnet".into()),
-            base_url: Some(MOCK_BASE_URL.into()),
-            supports_tools: true,
-            supports_vision: true,
-            ..Default::default()
-        },
+        ClawApiConfig::new(
+            BackendKind::AnthropicCompatible,
+            "mock-key",
+            "claude-3-5-sonnet",
+            MOCK_BASE_URL,
+        ),
         anthropic_http(),
     )
     .expect("init anthropic_compatible");

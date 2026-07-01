@@ -9,12 +9,11 @@ use core::sync::atomic::AtomicBool;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use claw_interface::http::ClawHttp;
+use claw_interface::{Cancel, ClawHttp, ClawHttpAsync, ClawTimer};
 
-use super::backend::{find_builtin_registration, LlmBackend};
-use super::backends::{anthropic, openai_compatible};
+use super::backends::Backend;
 use super::errors::{ChatError, ChatJsonError, ClawApiError, InferMediaError, InitError};
-use super::retry::run_with_retry;
+use super::retry::{run_with_retry, sleep_abortable_async};
 use super::types::{
     ChatJsonRequest, ChatJsonResponse, ChatRequest, ClawApiConfig, LlmResponse, MediaRequest,
     ModelProfile,
@@ -23,10 +22,6 @@ use super::types::{
 /// Message used when the abort flag fires during a retry backoff sleep. Kept
 /// containing "aborted" so upstream string-based abort detection still matches.
 const ABORTED_DURING_BACKOFF: &str = "LLM request aborted during retry backoff";
-
-const DEFAULT_TIMEOUT_MS: u32 = 120 * 1000;
-const DEFAULT_MAX_TOKENS: u32 = 8192;
-const DEFAULT_IMAGE_MAX_BYTES: usize = 512 * 1024;
 
 /// The LLM client: a resolved backend + model profile behind an injected
 /// [`ClawHttp`] transport.
@@ -45,19 +40,18 @@ const DEFAULT_IMAGE_MAX_BYTES: usize = 512 * 1024;
 ///
 /// ```no_run
 /// use std::sync::atomic::AtomicBool;
-/// use claw_api::{ChatRequest, ClawApi, ClawApiConfig};
-/// # use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse};
+/// use claw_api::{BackendKind, ChatRequest, ClawApi, ClawApiConfig};
+/// # use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
 /// # struct H; impl ClawHttp for H {
 /// #   fn post_json(&mut self, _r: &HttpJsonRequest, _a: &AtomicBool) -> Result<HttpResponse, HttpError> {
-/// #     Ok(HttpResponse { status_code: 200, body: r#"{"choices":[{"message":{"role":"assistant","content":"ok"}}]}"#.into() }) } }
+/// #     Ok(HttpResponse { status_code: HttpStatusCode::OK, body: r#"{"choices":[{"message":{"role":"assistant","content":"ok"}}]}"#.into() }) } }
 /// let mut api = ClawApi::init(
-///     ClawApiConfig {
-///         api_key: Some("sk-...".into()),
-///         backend_type: "openai_compatible".into(),
-///         model: Some("gpt-4o-mini".into()),
-///         base_url: Some("https://api.openai.com/v1".into()),
-///         ..Default::default()
-///     },
+///     ClawApiConfig::new(
+///         BackendKind::OpenAiCompatible,
+///         "sk-...",
+///         "gpt-4o-mini",
+///         "https://api.openai.com/v1",
+///     ),
 ///     H,
 /// )?;
 /// let msgs = serde_json::json!([{ "role": "user", "content": "hi" }]);
@@ -67,101 +61,95 @@ const DEFAULT_IMAGE_MAX_BYTES: usize = 512 * 1024;
 /// ```
 pub struct ClawApi<H: ClawHttp> {
     profile: ModelProfile,
-    backend: Box<dyn LlmBackend<H>>,
+    backend: Backend,
     http: H,
 }
 
-fn empty(value: &Option<String>) -> bool {
-    value.as_deref().map(|s| s.is_empty()).unwrap_or(true)
+/// Async LLM client: a resolved backend + model profile behind an injected
+/// [`ClawHttpAsync`] transport and [`ClawTimer`] backoff timer.
+pub struct ClawApiAsync<H: ClawHttpAsync, Timer: ClawTimer> {
+    profile: ModelProfile,
+    backend: Backend,
+    http: H,
+    timer: Timer,
+}
+
+fn resolve_config(config: ClawApiConfig) -> Result<(ModelProfile, Backend), InitError> {
+    // Centralized credential/config validation. Backends trust that these are
+    // present and non-empty once `init` returns Ok.
+    if config.api_key.is_empty() {
+        return Err(InitError::MissingApiKey);
+    }
+    if config.model.is_empty() {
+        return Err(InitError::MissingModel);
+    }
+    if config.base_url.is_empty() {
+        return Err(InitError::MissingBaseUrl);
+    }
+    let backend_kind = config.backend;
+    let profile = backend_kind.profile();
+    let backend = backend_kind.make(&config)?;
+    Ok((profile, backend))
+}
+
+fn parse_chat_json_response<T: DeserializeOwned + Send>(
+    response: LlmResponse,
+) -> Result<ChatJsonResponse<T>, ChatJsonError> {
+    let output = match response.text {
+        Some(ref text) if !text.trim().is_empty() => Some(
+            serde_json::from_str(text)
+                .map_err(|err| ChatJsonError::InvalidOutput(err.to_string()))?,
+        ),
+        _ => None,
+    };
+
+    if output.is_none() && response.tool_calls.is_empty() {
+        return Err(ChatJsonError::EmptyText);
+    }
+
+    Ok(ChatJsonResponse {
+        output,
+        tool_calls: response.tool_calls,
+        reasoning_content: response.reasoning_content,
+        raw_message_json: response.raw_message_json,
+    })
 }
 
 impl<H: ClawHttp> ClawApi<H> {
     /// Validate `config`, select the built-in backend, and bind the `http`
     /// transport. (Port of `claw_llm_runtime_init`.)
     ///
-    /// Missing fields are filled with backend defaults: `auth_type`,
-    /// `chat_path`, `max_tokens_field`, a 120s `timeout_ms`, 8192 `max_tokens`,
-    /// and a 512KiB `image_max_bytes`. `supports_json_schema = None` enables
-    /// API-level JSON schema for backends that support it (`openai_compatible`,
-    /// `anthropic_compatible`).
-    ///
-    /// `backend_type` must be one of `"openai_compatible"` or
-    /// `"anthropic_compatible"`.
+    /// Backend wire details and capability flags come from the selected
+    /// [`BackendKind`](crate::BackendKind). Request policy (`timeout_ms`,
+    /// `max_tokens`, `image_max_bytes`) is carried directly by `config`.
     ///
     /// # Errors
     ///
-    /// Returns [`InitError`] when `api_key`, `model`, or `backend_type` is empty,
-    /// or `backend_type` is unknown.
+    /// Returns [`InitError`] when `api_key`, `model`, or `base_url` is empty.
     ///
     /// # Example
     ///
     /// ```
     /// use std::sync::atomic::AtomicBool;
     /// use claw_api::{ClawApi, ClawApiConfig, InitError};
-    /// # use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse};
+    /// # use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
     /// # struct H; impl ClawHttp for H {
     /// #   fn post_json(&mut self, _r: &HttpJsonRequest, _a: &AtomicBool) -> Result<HttpResponse, HttpError> {
-    /// #     Ok(HttpResponse { status_code: 200, body: "{}".into() }) } }
+    /// #     Ok(HttpResponse { status_code: HttpStatusCode::OK, body: "{}".into() }) } }
     /// // Missing api_key is rejected.
     /// let result = ClawApi::init(
-    ///     ClawApiConfig { backend_type: "openai_compatible".into(), ..Default::default() },
+    ///     ClawApiConfig::new(
+    ///         claw_api::BackendKind::OpenAiCompatible,
+    ///         "",
+    ///         "gpt-4o-mini",
+    ///         "https://api.openai.com/v1",
+    ///     ),
     ///     H,
     /// );
     /// assert!(matches!(result, Err(InitError::MissingApiKey)));
     /// ```
-    pub fn init(mut config: ClawApiConfig, http: H) -> Result<ClawApi<H>, InitError> {
-        // Centralized credential/config validation. Backends trust that these
-        // are present and non-empty once `init` returns Ok.
-        if empty(&config.api_key) {
-            return Err(InitError::MissingApiKey);
-        }
-        if empty(&config.model) {
-            return Err(InitError::MissingModel);
-        }
-        if empty(&config.base_url) {
-            return Err(InitError::MissingBaseUrl);
-        }
-        if config.backend_type.is_empty() {
-            return Err(InitError::MissingBackendType);
-        }
-
-        let registration = find_builtin_registration::<H>(&config.backend_type)
-            .ok_or(InitError::UnknownBackend)?;
-
-        // Apply defaults exactly as the C code does.
-        if empty(&config.auth_type) {
-            config.auth_type = Some(registration.defaults.auth_type.to_string());
-        }
-        if config.timeout_ms == 0 {
-            config.timeout_ms = DEFAULT_TIMEOUT_MS;
-        }
-        if config.max_tokens == 0 {
-            config.max_tokens = DEFAULT_MAX_TOKENS;
-        }
-        if config.image_max_bytes == 0 {
-            config.image_max_bytes = DEFAULT_IMAGE_MAX_BYTES;
-        }
-        if empty(&config.max_tokens_field) {
-            config.max_tokens_field = Some(registration.defaults.max_tokens_field.to_string());
-        }
-
-        let supports_json_schema = match config.supports_json_schema {
-            Some(enabled) => enabled,
-            None => {
-                config.backend_type == openai_compatible::ID || config.backend_type == anthropic::ID
-            }
-        };
-
-        let profile = ModelProfile {
-            chat_path: registration.defaults.chat_path.to_string(),
-            max_tokens_field: config.max_tokens_field.clone().unwrap_or_default(),
-            supports_tools: config.supports_tools,
-            supports_vision: config.supports_vision,
-            supports_json_schema,
-            image_remote_url_only: config.image_remote_url_only,
-        };
-
-        let backend = (registration.make)(&config)?;
+    pub fn init(config: ClawApiConfig, http: H) -> Result<ClawApi<H>, InitError> {
+        let (profile, backend) = resolve_config(config)?;
 
         Ok(ClawApi {
             profile,
@@ -288,7 +276,8 @@ impl<H: ClawHttp> ClawApi<H> {
             .ok_or(ChatJsonError::MissingOutputSchema)?;
         let schema: Value = serde_json::from_str(spec.json)
             .map_err(|err| ChatJsonError::InvalidOutput(format!("invalid schema json: {err}")))?;
-        if request.tools_json.filter(|s| !s.is_empty()).is_some() && !self.profile.supports_tools {
+        if request.tools_json.filter(|s| !s.is_empty()).is_some() && !self.profile.supports_tools()
+        {
             return Err(ChatJsonError::ToolsUnsupported);
         }
 
@@ -309,32 +298,9 @@ impl<H: ClawHttp> ClawApi<H> {
                 let response = backend
                     .chat_json(&mut *http, profile, request, spec.name, &schema, abort)
                     .map_err(ChatJsonError::from)?;
-                Self::parse_chat_json_response(response)
+                parse_chat_json_response(response)
             },
         )
-    }
-
-    fn parse_chat_json_response<T: DeserializeOwned + Send>(
-        response: LlmResponse,
-    ) -> Result<ChatJsonResponse<T>, ChatJsonError> {
-        let output = match response.text {
-            Some(ref text) if !text.trim().is_empty() => Some(
-                serde_json::from_str(text)
-                    .map_err(|err| ChatJsonError::InvalidOutput(err.to_string()))?,
-            ),
-            _ => None,
-        };
-
-        if output.is_none() && response.tool_calls.is_empty() {
-            return Err(ChatJsonError::EmptyText);
-        }
-
-        Ok(ChatJsonResponse {
-            output,
-            tool_calls: response.tool_calls,
-            reasoning_content: response.reasoning_content,
-            raw_message_json: response.raw_message_json,
-        })
     }
 
     /// Run one-shot image inference: send image(s) + prompts and return the
@@ -386,9 +352,152 @@ impl<H: ClawHttp> ClawApi<H> {
         )
     }
 
-    /// The resolved [`ModelProfile`](crate::ModelProfile): capability flags
-    /// (`supports_tools`, `supports_vision`, `supports_json_schema`) and derived
-    /// paths/fields, after defaulting in [`init`](ClawApi::init).
+    /// The resolved [`ModelProfile`](crate::ModelProfile), after backend
+    /// defaults are applied in [`init`](ClawApi::init).
+    #[must_use]
+    pub fn profile(&self) -> &ModelProfile {
+        &self.profile
+    }
+}
+
+impl<H: ClawHttpAsync, Timer: ClawTimer> ClawApiAsync<H, Timer> {
+    /// Validate `config`, select the built-in backend, and bind the async HTTP
+    /// transport plus timer used for retry backoff.
+    pub fn init(
+        config: ClawApiConfig,
+        http: H,
+        timer: Timer,
+    ) -> Result<ClawApiAsync<H, Timer>, InitError> {
+        let (profile, backend) = resolve_config(config)?;
+
+        Ok(ClawApiAsync {
+            profile,
+            backend,
+            http,
+            timer,
+        })
+    }
+
+    /// Async chat completion over [`ClawHttpAsync`].
+    pub async fn chat(
+        &mut self,
+        request: &ChatRequest<'_>,
+        cancel: Cancel<'_>,
+    ) -> Result<LlmResponse, ChatError> {
+        let policy = request.retry;
+        let mut attempt = 0u32;
+        loop {
+            match self
+                .backend
+                .chat_async(&mut self.http, &self.profile, request, cancel)
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    if !error.is_retryable() || attempt >= policy.max_retries {
+                        return Err(error);
+                    }
+                    attempt = attempt.saturating_add(1);
+                    if !sleep_abortable_async(policy.backoff_ms(attempt), &mut self.timer, cancel)
+                        .await
+                    {
+                        return Err(ChatError::Api(ClawApiError::Transport(
+                            ABORTED_DURING_BACKOFF.to_string(),
+                        )));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Async structured JSON chat over [`ClawHttpAsync`].
+    pub async fn chat_json<T: DeserializeOwned + Send>(
+        &mut self,
+        request: &ChatJsonRequest<'_>,
+        cancel: Cancel<'_>,
+    ) -> Result<ChatJsonResponse<T>, ChatJsonError> {
+        let spec = request
+            .output_schema
+            .ok_or(ChatJsonError::MissingOutputSchema)?;
+        let schema: Value = serde_json::from_str(spec.json)
+            .map_err(|err| ChatJsonError::InvalidOutput(format!("invalid schema json: {err}")))?;
+        if request.tools_json.filter(|s| !s.is_empty()).is_some() && !self.profile.supports_tools()
+        {
+            return Err(ChatJsonError::ToolsUnsupported);
+        }
+
+        let policy = request.retry;
+        let mut attempt = 0u32;
+        loop {
+            let result = match self
+                .backend
+                .chat_json_async(
+                    &mut self.http,
+                    &self.profile,
+                    request,
+                    spec.name,
+                    &schema,
+                    cancel,
+                )
+                .await
+            {
+                Ok(response) => parse_chat_json_response(response),
+                Err(error) => Err(ChatJsonError::from(error)),
+            };
+
+            match result {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    if !error.is_retryable() || attempt >= policy.max_retries {
+                        return Err(error);
+                    }
+                    attempt = attempt.saturating_add(1);
+                    if !sleep_abortable_async(policy.backoff_ms(attempt), &mut self.timer, cancel)
+                        .await
+                    {
+                        return Err(ChatJsonError::Chat(ChatError::Api(
+                            ClawApiError::Transport(ABORTED_DURING_BACKOFF.to_string()),
+                        )));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Async one-shot image inference over [`ClawHttpAsync`].
+    pub async fn infer_media(
+        &mut self,
+        request: &MediaRequest<'_>,
+        cancel: Cancel<'_>,
+    ) -> Result<String, InferMediaError> {
+        let policy = request.retry;
+        let mut attempt = 0u32;
+        loop {
+            match self
+                .backend
+                .infer_media_async(&mut self.http, &self.profile, request, cancel)
+                .await
+            {
+                Ok(response) => return Ok(response),
+                Err(error) => {
+                    if !error.is_retryable() || attempt >= policy.max_retries {
+                        return Err(error);
+                    }
+                    attempt = attempt.saturating_add(1);
+                    if !sleep_abortable_async(policy.backoff_ms(attempt), &mut self.timer, cancel)
+                        .await
+                    {
+                        return Err(InferMediaError::Api(ClawApiError::Transport(
+                            ABORTED_DURING_BACKOFF.to_string(),
+                        )));
+                    }
+                }
+            }
+        }
+    }
+
+    /// The resolved [`ModelProfile`](crate::ModelProfile).
+    #[must_use]
     pub fn profile(&self) -> &ModelProfile {
         &self.profile
     }

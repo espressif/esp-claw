@@ -8,6 +8,8 @@
 use core::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use claw_interface::{Cancel, ClawTimer, SleepOutcome};
+
 use crate::types::RetryPolicy;
 
 /// Abort poll granularity while sleeping for backoff.
@@ -17,7 +19,7 @@ const BACKOFF_POLL_SLICE_MS: u64 = 25;
 ///
 /// `is_retryable` classifies an error; `on_abort` produces the error returned
 /// when the abort flag fires during a backoff sleep.
-pub fn run_with_retry<T, E>(
+pub(crate) fn run_with_retry<T, E>(
     policy: &RetryPolicy,
     abort: &AtomicBool,
     is_retryable: impl Fn(&E) -> bool,
@@ -32,7 +34,7 @@ pub fn run_with_retry<T, E>(
                 if !is_retryable(&err) || attempt >= policy.max_retries {
                     return Err(err);
                 }
-                attempt += 1;
+                attempt = attempt.saturating_add(1);
                 if !sleep_abortable(policy.backoff_ms(attempt), abort) {
                     return Err(on_abort());
                 }
@@ -50,7 +52,24 @@ fn sleep_abortable(total_ms: u32, abort: &AtomicBool) -> bool {
         }
         let slice = remaining.min(BACKOFF_POLL_SLICE_MS);
         std::thread::sleep(Duration::from_millis(slice));
-        remaining -= slice;
+        remaining = remaining.saturating_sub(slice);
     }
     !abort.load(Ordering::Acquire)
+}
+
+/// Async backoff sleep using the caller-injected timer seam.
+pub(crate) async fn sleep_abortable_async<T: ClawTimer>(
+    total_ms: u32,
+    timer: &mut T,
+    cancel: Cancel<'_>,
+) -> bool {
+    if total_ms == 0 {
+        return !cancel.is_cancelled();
+    }
+    matches!(
+        timer
+            .sleep(Duration::from_millis(u64::from(total_ms)), cancel)
+            .await,
+        SleepOutcome::Completed
+    )
 }

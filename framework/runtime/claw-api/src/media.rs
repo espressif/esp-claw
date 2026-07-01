@@ -7,7 +7,32 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 
 use super::errors::InferMediaError;
-use super::types::{AssetKind, MediaAsset, ModelProfile, Prepared, PreparedKind};
+use super::types::{AssetKind, MediaAsset, ModelProfile};
+
+/// How a prepared media payload is encoded (`claw_media_prepared_kind_t`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreparedKind {
+    DataUrl,
+    RemoteUrl,
+}
+
+/// Output of the media-prep pipeline (`claw_media_prepared_t`).
+#[derive(Clone, Debug)]
+pub(crate) struct Prepared {
+    kind: PreparedKind,
+    /// Data URL (for [`PreparedKind::DataUrl`]) or the remote URL.
+    payload: String,
+}
+
+impl Prepared {
+    pub(crate) fn is_data_url(&self) -> bool {
+        self.kind == PreparedKind::DataUrl
+    }
+
+    pub(crate) fn payload(&self) -> &str {
+        &self.payload
+    }
+}
 
 /// Mirror of `image_mime_from_path`: extension-based MIME, case-insensitive.
 fn image_mime_from_path(path: &str) -> Option<&'static str> {
@@ -90,7 +115,7 @@ fn prepare_inline_bytes_asset(
 }
 
 /// `claw_media_prepare_asset`
-pub fn prepare_asset(
+pub(crate) fn prepare_asset(
     asset: &MediaAsset,
     profile: &ModelProfile,
     image_max_bytes: usize,
@@ -107,13 +132,13 @@ pub fn prepare_asset(
             })
         }
         AssetKind::InlineBytes => {
-            if profile.image_remote_url_only {
+            if profile.image_remote_url_only() {
                 return Err(InferMediaError::RemoteOnlyProfile);
             }
             prepare_inline_bytes_asset(asset, image_max_bytes)
         }
         AssetKind::LocalPath => {
-            if profile.image_remote_url_only {
+            if profile.image_remote_url_only() {
                 return Err(InferMediaError::RemoteOnlyProfile);
             }
             prepare_local_path_asset(asset, image_max_bytes)
@@ -126,10 +151,7 @@ mod tests {
     use super::*;
 
     fn profile() -> ModelProfile {
-        ModelProfile {
-            supports_vision: true,
-            ..Default::default()
-        }
+        ModelProfile::new("", "", false, true, false, false)
     }
 
     #[test]
@@ -246,8 +268,7 @@ mod tests {
 
     #[test]
     fn inline_bytes_rejects_remote_only_profile() {
-        let mut p = profile();
-        p.image_remote_url_only = true;
+        let p = ModelProfile::new("", "", false, true, false, true);
         let asset = MediaAsset {
             kind: AssetKind::InlineBytes,
             path: None,

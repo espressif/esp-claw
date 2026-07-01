@@ -1,5 +1,7 @@
 //! Request, response, and configuration types for [`crate::ClawApi`].
 
+use crate::BackendKind;
+
 /// A tool/function call requested by the model in a chat response.
 ///
 /// Present in [`LlmResponse::tool_calls`] (and [`ChatJsonResponse::tool_calls`]).
@@ -19,7 +21,7 @@ pub struct ToolCall {
 ///
 /// `text` is the assistant message (may be `None` when the model only returned
 /// tool calls). `tool_calls` is empty unless the model invoked tools.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LlmResponse {
     /// Assistant text content, if any.
     pub text: Option<String>,
@@ -31,64 +33,65 @@ pub struct LlmResponse {
     pub tool_calls: Vec<ToolCall>,
 }
 
+/// Default per-request HTTP timeout, in milliseconds.
+const DEFAULT_TIMEOUT_MS: u32 = 120 * 1000;
+/// Default maximum output tokens sent to the backend.
+const DEFAULT_MAX_TOKENS: u32 = 8192;
+/// Default maximum local/inline image size accepted by media inference.
+const DEFAULT_IMAGE_MAX_BYTES: usize = 512 * 1024;
+
 /// Inputs to [`crate::ClawApi::init`].
 ///
-/// Only `api_key`, `backend_type`, and `model` are required; the rest take
-/// backend defaults (see [`ClawApi::init`](crate::ClawApi::init)). Build it with
-/// struct-update syntax over [`Default`]:
-///
-/// ```
-/// use claw_api::ClawApiConfig;
-/// let config = ClawApiConfig {
-///     api_key: Some("sk-...".into()),
-///     backend_type: "openai_compatible".into(),
-///     model: Some("gpt-4o-mini".into()),
-///     base_url: Some("https://api.openai.com/v1".into()),
-///     supports_tools: true,
-///     supports_vision: true,
-///     ..Default::default()
-/// };
-/// # let _ = config;
-/// ```
-#[derive(Clone, Debug, Default)]
+/// Backend wire details and capability flags are intentionally not configurable
+/// here: [`BackendKind`] owns those decisions. Callers choose the provider
+/// endpoint and request policy (`timeout_ms`, `max_tokens`, `image_max_bytes`).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClawApiConfig {
-    /// Provider API key (required).
-    pub api_key: Option<String>,
-    /// Backend id: `"openai_compatible"` or `"anthropic_compatible"` (required).
-    pub backend_type: String,
-    /// Model name sent to the provider (required).
-    pub model: Option<String>,
+    /// Built-in backend kind.
+    pub backend: BackendKind,
+    /// Provider API key.
+    pub api_key: String,
+    /// Model name sent to the provider.
+    pub model: String,
     /// API base URL, e.g. `"https://api.openai.com/v1"`.
-    pub base_url: Option<String>,
-    /// Auth scheme override (`"bearer"`, `"api-key"`, `"none"`); defaults per backend.
-    pub auth_type: Option<String>,
-    /// Override the max-tokens field name; defaults per backend.
-    pub max_tokens_field: Option<String>,
-    /// Per-request HTTP timeout; `0` applies the 120s default.
+    pub base_url: String,
+    /// Per-request HTTP timeout.
     pub timeout_ms: u32,
-    /// Max output tokens; `0` applies the default (8192).
+    /// Max output tokens.
     pub max_tokens: u32,
-    /// Max local image size for [`crate::ClawApi::infer_media`]; `0` applies 512KiB.
+    /// Max local image size for [`crate::ClawApi::infer_media`].
     pub image_max_bytes: usize,
-    /// Advertise tool-call support to the client.
-    pub supports_tools: bool,
-    /// Advertise vision/media support.
-    pub supports_vision: bool,
-    /// API-level JSON schema support. `None` enables it for backends that
-    /// support it by default (`openai_compatible`, `anthropic_compatible`).
-    pub supports_json_schema: Option<bool>,
-    /// When set, only remote image URLs are accepted (no local data URLs).
-    pub image_remote_url_only: bool,
+}
+
+impl ClawApiConfig {
+    /// Build a config with all required LLM connection fields.
+    #[must_use]
+    pub fn new(
+        backend: BackendKind,
+        api_key: impl Into<String>,
+        model: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Self {
+        Self {
+            backend,
+            api_key: api_key.into(),
+            model: model.into(),
+            base_url: base_url.into(),
+            timeout_ms: DEFAULT_TIMEOUT_MS,
+            max_tokens: DEFAULT_MAX_TOKENS,
+            image_max_bytes: DEFAULT_IMAGE_MAX_BYTES,
+        }
+    }
 }
 
 /// Default retry interval (backoff before the first retry), in milliseconds.
-pub const DEFAULT_RETRY_INTERVAL_MS: u32 = 500;
+const DEFAULT_RETRY_INTERVAL_MS: u32 = 500;
 /// Default number of extra attempts after the first try.
-pub const DEFAULT_MAX_RETRIES: u32 = 2;
+const DEFAULT_MAX_RETRIES: u32 = 2;
 /// Default upper bound on any single backoff, in milliseconds.
-pub const DEFAULT_MAX_BACKOFF_MS: u32 = 8_000;
+const DEFAULT_MAX_BACKOFF_MS: u32 = 8_000;
 /// Default backoff growth factor (`2` = exponential).
-pub const DEFAULT_BACKOFF_MULTIPLIER: u32 = 2;
+const DEFAULT_BACKOFF_MULTIPLIER: u32 = 2;
 
 /// Per-call retry policy, set via `with_retry` on a request
 /// ([`ChatRequest::with_retry`], [`ChatJsonRequest::with_retry`],
@@ -142,6 +145,7 @@ impl Default for RetryPolicy {
 impl RetryPolicy {
     /// Retry `max_retries` times with the default 500ms interval (exponential,
     /// capped at 8s). Tweak the interval with [`RetryPolicy::with_interval_ms`].
+    #[must_use]
     pub const fn new(max_retries: u32) -> Self {
         RetryPolicy {
             max_retries,
@@ -152,6 +156,7 @@ impl RetryPolicy {
     }
 
     /// Retry `max_retries` times at a fixed interval (no exponential growth).
+    #[must_use]
     pub const fn fixed(max_retries: u32, interval_ms: u32) -> Self {
         RetryPolicy {
             max_retries,
@@ -162,24 +167,28 @@ impl RetryPolicy {
     }
 
     /// Override the retry interval (backoff before the first retry).
+    #[must_use]
     pub const fn with_interval_ms(mut self, interval_ms: u32) -> Self {
         self.initial_backoff_ms = interval_ms;
         self
     }
 
     /// Override the cap applied to any single backoff.
+    #[must_use]
     pub const fn with_max_backoff_ms(mut self, max_backoff_ms: u32) -> Self {
         self.max_backoff_ms = max_backoff_ms;
         self
     }
 
     /// Override the backoff growth factor (`1` = fixed interval).
+    #[must_use]
     pub const fn with_multiplier(mut self, backoff_multiplier: u32) -> Self {
         self.backoff_multiplier = backoff_multiplier;
         self
     }
 
     /// A policy that never retries.
+    #[must_use]
     pub const fn none() -> Self {
         RetryPolicy {
             max_retries: 0,
@@ -190,6 +199,7 @@ impl RetryPolicy {
     }
 
     /// Capped backoff (ms) before the given 1-based retry `attempt`.
+    #[must_use]
     pub fn backoff_ms(&self, attempt: u32) -> u32 {
         if attempt == 0 {
             return 0;
@@ -208,29 +218,82 @@ impl RetryPolicy {
 
 /// The resolved model capabilities and derived endpoint settings, as computed
 /// by [`crate::ClawApi::init`]. Read it back via [`crate::ClawApi::profile`].
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModelProfile {
     /// Chat endpoint path appended to the base URL (e.g. `"/chat/completions"`).
     ///
     /// Backend plumbing detail; not part of the public surface.
-    pub(crate) chat_path: String,
+    chat_path: String,
     /// The provider field name carrying the max-tokens value.
     ///
     /// Backend plumbing detail; not part of the public surface.
-    pub(crate) max_tokens_field: String,
+    max_tokens_field: String,
     /// Whether tool calls may be sent.
-    pub supports_tools: bool,
+    supports_tools: bool,
     /// Whether image/media inference is available.
-    pub supports_vision: bool,
+    supports_vision: bool,
     /// Whether API-level JSON schema is used (vs. schema-in-prompt fallback).
-    pub supports_json_schema: bool,
+    supports_json_schema: bool,
     /// Whether only remote image URLs are accepted.
-    pub image_remote_url_only: bool,
+    image_remote_url_only: bool,
+}
+
+impl ModelProfile {
+    pub(crate) fn new(
+        chat_path: impl Into<String>,
+        max_tokens_field: impl Into<String>,
+        supports_tools: bool,
+        supports_vision: bool,
+        supports_json_schema: bool,
+        image_remote_url_only: bool,
+    ) -> Self {
+        Self {
+            chat_path: chat_path.into(),
+            max_tokens_field: max_tokens_field.into(),
+            supports_tools,
+            supports_vision,
+            supports_json_schema,
+            image_remote_url_only,
+        }
+    }
+
+    pub(crate) fn chat_path(&self) -> &str {
+        &self.chat_path
+    }
+
+    pub(crate) fn max_tokens_field(&self) -> &str {
+        &self.max_tokens_field
+    }
+
+    /// Whether the selected backend can send tool definitions and receive tool
+    /// calls.
+    #[must_use]
+    pub const fn supports_tools(&self) -> bool {
+        self.supports_tools
+    }
+
+    /// Whether the selected backend can handle media/image inference.
+    #[must_use]
+    pub const fn supports_vision(&self) -> bool {
+        self.supports_vision
+    }
+
+    /// Whether the selected backend uses provider-native JSON schema output.
+    #[must_use]
+    pub const fn supports_json_schema(&self) -> bool {
+        self.supports_json_schema
+    }
+
+    /// Whether local/inline media must be rejected in favor of remote URLs.
+    #[must_use]
+    pub const fn image_remote_url_only(&self) -> bool {
+        self.image_remote_url_only
+    }
 }
 
 /// A named JSON Schema for structured output, attached to a
 /// [`ChatJsonRequest`] via [`ChatJsonRequest::with_output_schema`].
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StaticOutputSchema<'a> {
     /// Schema name reported to the provider (e.g. `"sentiment"`).
     pub name: &'a str,
@@ -254,6 +317,7 @@ pub struct StaticOutputSchema<'a> {
 ///     .with_output_schema("answer", schema);
 /// # let _ = req;
 /// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ChatJsonRequest<'a> {
     /// System prompt / instructions.
     pub system_prompt: &'a str,
@@ -275,6 +339,7 @@ pub struct ChatJsonRequest<'a> {
 
 impl<'a> ChatJsonRequest<'a> {
     /// A structured-output request (no schema/tools yet).
+    #[must_use]
     pub fn new(system_prompt: &'a str, messages: &'a serde_json::Value) -> Self {
         Self {
             system_prompt,
@@ -287,18 +352,21 @@ impl<'a> ChatJsonRequest<'a> {
     }
 
     /// Attach an OpenAI-style tools JSON array (may be sent with `response_format`).
+    #[must_use]
     pub fn with_tools(mut self, tools_json: &'a str) -> Self {
         self.tools_json = Some(tools_json);
         self
     }
 
     /// Attach ephemeral trailing reminder messages for this request only.
+    #[must_use]
     pub fn with_reminders(mut self, reminders: &'a [serde_json::Value]) -> Self {
         self.reminders = reminders;
         self
     }
 
     /// Attach a static JSON Schema (`name` + schema JSON string).
+    #[must_use]
     pub fn with_output_schema(mut self, name: &'a str, schema_json: &'a str) -> Self {
         self.output_schema = Some(StaticOutputSchema {
             name,
@@ -308,6 +376,7 @@ impl<'a> ChatJsonRequest<'a> {
     }
 
     /// Override the retry policy for this call.
+    #[must_use]
     pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
         self.retry = retry;
         self
@@ -319,7 +388,7 @@ impl<'a> ChatJsonRequest<'a> {
 /// `output` is the reply parsed into `T`, or `None` when the model returned only
 /// tool calls. `T` is whatever you asked [`chat_json`](crate::ClawApi::chat_json)
 /// to deserialize.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChatJsonResponse<T> {
     /// The parsed structured output, if the model produced JSON.
     pub output: Option<T>,
@@ -345,6 +414,7 @@ pub struct ChatJsonResponse<T> {
 ///     .with_retry(RetryPolicy::fixed(3, 250));
 /// # let _ = req;
 /// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ChatRequest<'a> {
     /// System prompt / instructions.
     pub system_prompt: &'a str,
@@ -364,6 +434,7 @@ pub struct ChatRequest<'a> {
 
 impl<'a> ChatRequest<'a> {
     /// A tool-less chat request.
+    #[must_use]
     pub fn new(system_prompt: &'a str, messages: &'a serde_json::Value) -> Self {
         ChatRequest {
             system_prompt,
@@ -375,18 +446,21 @@ impl<'a> ChatRequest<'a> {
     }
 
     /// Attach an OpenAI-style tools JSON array.
+    #[must_use]
     pub fn with_tools(mut self, tools_json: &'a str) -> Self {
         self.tools_json = Some(tools_json);
         self
     }
 
     /// Attach ephemeral trailing reminder messages for this request only.
+    #[must_use]
     pub fn with_reminders(mut self, reminders: &'a [serde_json::Value]) -> Self {
         self.reminders = reminders;
         self
     }
 
     /// Override the retry policy for this call.
+    #[must_use]
     pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
         self.retry = retry;
         self
@@ -415,7 +489,7 @@ pub enum AssetKind {
 /// let b = MediaAsset::remote_url("https://example.com/cat.png");
 /// # let _ = (a, b);
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MediaAsset {
     /// Which of the fields below is populated.
     pub kind: AssetKind,
@@ -431,6 +505,7 @@ pub struct MediaAsset {
 
 impl MediaAsset {
     /// An asset backed by a local file path.
+    #[must_use]
     pub fn local_path(path: impl Into<String>) -> Self {
         MediaAsset {
             kind: AssetKind::LocalPath,
@@ -442,6 +517,7 @@ impl MediaAsset {
     }
 
     /// An asset referenced by a remote URL.
+    #[must_use]
     pub fn remote_url(url: impl Into<String>) -> Self {
         MediaAsset {
             kind: AssetKind::RemoteUrl,
@@ -453,6 +529,7 @@ impl MediaAsset {
     }
 
     /// An asset carrying inline bytes with an explicit MIME type.
+    #[must_use]
     pub fn inline_bytes(bytes: Vec<u8>, mime_type: impl Into<String>) -> Self {
         MediaAsset {
             kind: AssetKind::InlineBytes,
@@ -464,6 +541,7 @@ impl MediaAsset {
     }
 
     /// Override the MIME type (otherwise inferred from the file extension).
+    #[must_use]
     pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
         self.mime_type = Some(mime_type.into());
         self
@@ -478,6 +556,7 @@ impl MediaAsset {
 /// let req = MediaRequest::new(&assets).with_user_prompt("Describe this image.");
 /// # let _ = req;
 /// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct MediaRequest<'a> {
     /// Optional system prompt / instructions.
     pub system_prompt: Option<&'a str>,
@@ -492,6 +571,7 @@ pub struct MediaRequest<'a> {
 
 impl<'a> MediaRequest<'a> {
     /// A media request over the given assets, with no prompts set yet.
+    #[must_use]
     pub fn new(media: &'a [MediaAsset]) -> Self {
         MediaRequest {
             system_prompt: None,
@@ -502,35 +582,23 @@ impl<'a> MediaRequest<'a> {
     }
 
     /// Set the system prompt / instructions.
+    #[must_use]
     pub fn with_system_prompt(mut self, system_prompt: &'a str) -> Self {
         self.system_prompt = Some(system_prompt);
         self
     }
 
     /// Set the user prompt accompanying the image(s).
+    #[must_use]
     pub fn with_user_prompt(mut self, user_prompt: &'a str) -> Self {
         self.user_prompt = Some(user_prompt);
         self
     }
 
     /// Override the retry policy for this call.
+    #[must_use]
     pub fn with_retry(mut self, retry: RetryPolicy) -> Self {
         self.retry = retry;
         self
     }
-}
-
-/// Internal: how a prepared media payload is encoded (`claw_media_prepared_kind_t`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PreparedKind {
-    DataUrl,
-    RemoteUrl,
-}
-
-/// Internal: output of the media-prep pipeline (`claw_media_prepared_t`).
-#[derive(Clone, Debug)]
-pub(crate) struct Prepared {
-    pub kind: PreparedKind,
-    /// Data URL (for [`PreparedKind::DataUrl`]) or the remote URL.
-    pub payload: String,
 }

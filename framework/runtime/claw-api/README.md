@@ -44,22 +44,20 @@ initial interval, exponential, capped at 8 s); override with `.with_retry(..)`
 or disable with `RetryPolicy::none()`. Only transient transport failures are
 retried (network errors and HTTP 408/429/5xx); aborts, bad URLs/bodies, and
 other 4xx are never retried. See `ClawApiError::is_retryable` for the
-classification and the `DEFAULT_*` constants for the default knobs.
+classification.
 
 ## Public API
 
 Curated re-exports (implementation modules — backend registry, media-prep
 pipeline, retry loop — are private):
 
-- Client: `ClawApi`
-- Config / requests: `ClawApiConfig`, `ChatRequest`, `ChatJsonRequest`,
+- Client: `ClawApi`, `ClawApiAsync`
+- Config / requests: `ClawApiConfig`, `BackendKind`, `ChatRequest`, `ChatJsonRequest`,
   `MediaRequest`, `RetryPolicy`, `StaticOutputSchema`
 - Responses / values: `LlmResponse`, `ChatJsonResponse`, `ToolCall`,
   `ModelProfile`, `MediaAsset`, `AssetKind`
 - Errors: `ClawApiError`, `ChatError`, `ChatJsonError`, `InferMediaError`,
-  `InitError`
-- Defaults: `DEFAULT_MAX_RETRIES`, `DEFAULT_RETRY_INTERVAL_MS`,
-  `DEFAULT_BACKOFF_MULTIPLIER`, `DEFAULT_MAX_BACKOFF_MS`
+  `InitError`, `ParseBackendKindError`
 
 ## Example
 

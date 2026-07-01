@@ -3,10 +3,9 @@
 //!
 //! - **Sync**: [`claw_api_selftest_chat`] builds a `ClawApi` over `EspIdfHttp`
 //!   and issues a blocking chat request to a live OpenAI-compatible endpoint.
-//! - **Async**: [`claw_api_selftest_chat_async`] constructs the same
-//!   OpenAI-format request body and sends it via `ClawHttpAsync`, proving the
-//!   async transport works for LLM API calls. Driven by `edge-executor`'s
-//!   `LocalExecutor`.
+//! - **Async**: [`claw_api_selftest_chat_async`] builds a `ClawApiAsync` over
+//!   `EspIdfHttp` and issues an async chat request through the full API stack.
+//!   Driven by `edge-executor`'s `LocalExecutor`.
 //!
 //! The entire crate is gated on the `espidf` target so a host
 //! `cargo build --workspace` compiles it to an empty static archive.
@@ -14,10 +13,11 @@
 
 use core::ffi::{c_char, c_int};
 use core::sync::atomic::AtomicBool;
+use core::time::Duration;
 use std::ffi::CStr;
 
-use claw_api::{ChatRequest, ClawApi, ClawApiConfig};
-use claw_interface::http::{Cancel, ClawHttpAsync, HttpJsonRequest};
+use claw_api::{BackendKind, ChatRequest, ClawApi, ClawApiAsync, ClawApiConfig};
+use claw_interface::{Cancel, ClawTimer, SleepOutcome, TimerFuture};
 use claw_sys::EspIdfHttp;
 use serde_json::json;
 
@@ -59,6 +59,20 @@ unsafe fn write_cstr(text: &str, out: *mut c_char, out_len: usize) {
     *out.add(copy) = 0;
 }
 
+struct NoDelayTimer;
+
+impl ClawTimer for NoDelayTimer {
+    fn sleep<'a>(&'a mut self, _duration: Duration, cancel: Cancel<'a>) -> TimerFuture<'a> {
+        Box::pin(async move {
+            if cancel.is_cancelled() {
+                SleepOutcome::Cancelled
+            } else {
+                SleepOutcome::Completed
+            }
+        })
+    }
+}
+
 /// Build a `ClawApi` over `EspIdfHttp` and issue a single chat request to a live
 /// OpenAI-compatible endpoint. Returns [`OK`] on a text reply (written to
 /// `out`), or a negative error. On error, the error text is written to `out`.
@@ -84,17 +98,12 @@ pub unsafe extern "C" fn claw_api_selftest_chat(
         return ERR_NULL_ARG;
     };
 
-    let config = ClawApiConfig {
-        api_key: Some(api_key.to_string()),
-        backend_type: "openai_compatible".to_string(),
-        model: Some(model.to_string()),
-        base_url: Some(base_url.to_string()),
-        supports_tools: false,
-        supports_vision: false,
-        ..Default::default()
-    };
+    let config = ClawApiConfig::new(BackendKind::OpenAiCompatible, api_key, model, base_url);
 
-    let Ok(mut api) = ClawApi::init(config, EspIdfHttp::new()) else {
+    let Ok(http) = EspIdfHttp::new(base_url) else {
+        return ERR_INIT;
+    };
+    let Ok(mut api) = ClawApi::init(config, http) else {
         return ERR_INIT;
     };
 
@@ -120,10 +129,9 @@ pub unsafe extern "C" fn claw_api_selftest_chat(
     }
 }
 
-/// Async variant: build the OpenAI-format chat body, POST it via
-/// `ClawHttpAsync` (the async `esp_http_client` seam), and extract the
-/// assistant reply. Driven by `edge-executor::LocalExecutor` on the calling
-/// thread. Returns [`OK`] on a text reply, or a negative error.
+/// Async variant: build a `ClawApiAsync` over the async `esp_http_client` seam
+/// and run a chat request. Driven by `edge-executor::LocalExecutor` on the
+/// calling thread. Returns [`OK`] on a text reply, or a negative error.
 ///
 /// # Safety
 /// All pointer arguments must be valid C strings; `out` must point to `out_len`
@@ -146,16 +154,10 @@ pub unsafe extern "C" fn claw_api_selftest_chat_async(
         return ERR_NULL_ARG;
     };
 
-    let url = format!("{base_url}/chat/completions");
-    let body = json!({
-        "model": model,
-        "messages": [
-            { "role": "system", "content": "You are a concise test assistant. Reply in one short sentence." },
-            { "role": "user", "content": user_message }
-        ],
-        "max_tokens": 64
-    })
-    .to_string();
+    let mut config = ClawApiConfig::new(BackendKind::OpenAiCompatible, api_key, model, base_url);
+    config.max_tokens = 64;
+    let base_url = base_url.to_string();
+    let user_message = user_message.to_string();
 
     let executor: edge_executor::LocalExecutor = Default::default();
     let out_ptr = out;
@@ -163,36 +165,30 @@ pub unsafe extern "C" fn claw_api_selftest_chat_async(
 
     let task = executor.spawn(async move {
         let abort = AtomicBool::new(false);
-        let request = HttpJsonRequest {
-            url: &url,
-            body: &body,
-            api_key: Some(api_key),
-            auth_type: Some("bearer"),
-            timeout_ms: 30_000,
-            headers: &[],
+        let Ok(http) = EspIdfHttp::new(&base_url) else {
+            return (ERR_INIT, "failed to create http client".to_string());
         };
-        let http = EspIdfHttp::new();
-        let pending = ClawHttpAsync::post_json(&http, &request, Cancel::new(&abort));
-        match pending.await {
-            Ok(response) if response.status_code == 200 => {
-                let parsed: Result<serde_json::Value, _> = serde_json::from_str(&response.body);
-                match parsed {
-                    Ok(v) => {
-                        let text = v["choices"][0]["message"]["content"].as_str().unwrap_or("");
-                        if text.is_empty() {
-                            (ERR_NO_TEXT, "model returned empty content".to_string())
-                        } else {
-                            (OK, text.to_string())
-                        }
+        let Ok(mut api) = ClawApiAsync::init(config, http, NoDelayTimer) else {
+            return (ERR_INIT, "failed to initialize async api".to_string());
+        };
+        let messages = json!([{ "role": "user", "content": user_message }]);
+        let request = ChatRequest::new(
+            "You are a concise test assistant. Reply in one short sentence.",
+            &messages,
+        );
+
+        match api.chat(&request, Cancel::new(&abort)).await {
+            Ok(response) => match response.text {
+                Some(text) => {
+                    if text.is_empty() {
+                        (ERR_NO_TEXT, "model returned empty content".to_string())
+                    } else {
+                        (OK, text)
                     }
-                    Err(e) => (ERR_CHAT, format!("json parse: {e}")),
                 }
-            }
-            Ok(response) => (
-                ERR_CHAT,
-                format!("HTTP {}: {}", response.status_code, response.body),
-            ),
-            Err(e) => (ERR_CHAT, format!("transport: {e}")),
+                None => (ERR_NO_TEXT, "model returned no text".to_string()),
+            },
+            Err(error) => (ERR_CHAT, error.to_string()),
         }
     });
 
