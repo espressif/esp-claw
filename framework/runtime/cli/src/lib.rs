@@ -11,7 +11,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use claw_api::{ClawApi, ClawApiConfig};
+use claw_api::{BackendKind, ClawApi, ClawApiConfig};
 use claw_core::agent::{CompactionDeps, LongTermDeps};
 use claw_core::{global_store, CompactionPolicy, LlmExtractor, RuleBasedTierClassifier};
 use claw_interface::{DiskFs, RealHttp, StdThread};
@@ -47,9 +47,6 @@ pub fn load_env() {
 
 /// Build the LLM client config from the `CLAW_LLM_*` environment variables.
 ///
-/// `supports_tools` enables tool-calling for agents that need it (the
-/// conversation/orchestrator agents); pass `false` for a plain chat agent.
-///
 /// Returned separately from the transport so callers that mint clients
 /// themselves (e.g. [`claw_core::agent::FsAgentFactory`], which inits one client
 /// per agent) can reuse this config.
@@ -58,7 +55,7 @@ pub fn load_env() {
 ///
 /// If any required `CLAW_LLM_*` variable is missing — there is no safe default
 /// for these, so fail loudly.
-pub fn make_llm_config(supports_tools: bool) -> ClawApiConfig {
+pub fn make_llm_config() -> ClawApiConfig {
     let api_key = std::env::var("CLAW_LLM_API_KEY")
         .ok()
         .filter(|v| !v.is_empty())
@@ -66,15 +63,9 @@ pub fn make_llm_config(supports_tools: bool) -> ClawApiConfig {
     let base_url = std::env::var("CLAW_LLM_BASE_URL").expect("CLAW_LLM_BASE_URL must be set");
     let model = std::env::var("CLAW_LLM_MODEL").expect("CLAW_LLM_MODEL must be set");
 
-    ClawApiConfig {
-        api_key: Some(api_key),
-        backend_type: "openai_compatible".into(),
-        model: Some(model),
-        base_url: Some(base_url),
-        supports_tools,
-        timeout_ms: 60_000,
-        ..Default::default()
-    }
+    let mut config = ClawApiConfig::new(BackendKind::OpenAiCompatible, api_key, model, base_url);
+    config.timeout_ms = 60_000;
+    config
 }
 
 /// The live network transport ([`RealHttp`]). Each LLM client owns its own.
@@ -84,13 +75,11 @@ pub fn make_http() -> RealHttp {
 
 /// Build a live LLM client from the `CLAW_LLM_*` environment variables.
 ///
-/// `supports_tools` enables tool-calling for agents that need it.
-///
 /// # Panics
 ///
 /// If any required `CLAW_LLM_*` variable is missing, or the client cannot init.
-pub fn make_llm(supports_tools: bool) -> ClawApi<RealHttp> {
-    ClawApi::init(make_llm_config(supports_tools), make_http()).expect("failed to init LLM client")
+pub fn make_llm() -> ClawApi<RealHttp> {
+    ClawApi::init(make_llm_config(), make_http()).expect("failed to init LLM client")
 }
 
 /// The real disk storage backend the CLI runs its transcripts over. `DiskFs` is
@@ -128,7 +117,11 @@ pub fn make_memory(
     agent_id: usize,
     memory_dir: &str,
 ) -> (TranscriptStore<CliFs>, TranscriptStore<CliFs>) {
-    let store = TranscriptStore::new(agent_id, TranscriptConfig::new(memory_dir), make_memory_fs());
+    let store = TranscriptStore::new(
+        agent_id,
+        TranscriptConfig::new(memory_dir),
+        make_memory_fs(),
+    );
     let view = store.clone();
     (store, view)
 }
@@ -161,7 +154,7 @@ pub fn make_memory_ingredients(memory_dir: &str) -> (TranscriptConfig, CliFs, Co
 pub fn make_long_term_deps(base_dir: &str) -> LongTermDeps<CliFs> {
     let base_dir = base_dir.trim_end_matches('/');
     let global = global_store(format!("{base_dir}/global"), DiskFs::absolute());
-    let extractor = LlmExtractor::shared(make_llm(true));
+    let extractor = LlmExtractor::shared(make_llm());
     LongTermDeps::new(
         global,
         format!("{base_dir}/agents"),

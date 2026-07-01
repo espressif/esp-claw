@@ -16,7 +16,7 @@ use std::io::{self, BufRead, Write};
 use std::path::Path;
 
 use anyhow::{bail, Result};
-use claw_agent::{AgentSystem, ClawApiConfig};
+use claw_agent::{AgentSystem, BackendKind, ClawApiConfig};
 
 const MEMORY_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/output/claw-agent-chat");
 
@@ -78,15 +78,14 @@ fn load_env() {
 
 /// Build the LLM client config from the required `CLAW_LLM_*` variables.
 fn llm_config() -> Result<ClawApiConfig> {
-    Ok(ClawApiConfig {
-        api_key: Some(required("CLAW_LLM_API_KEY")?),
-        backend_type: "openai_compatible".into(),
-        model: Some(required("CLAW_LLM_MODEL")?),
-        base_url: Some(required("CLAW_LLM_BASE_URL")?),
-        supports_tools: true,
-        timeout_ms: 60_000,
-        ..Default::default()
-    })
+    let mut config = ClawApiConfig::new(
+        BackendKind::OpenAiCompatible,
+        required("CLAW_LLM_API_KEY")?,
+        required("CLAW_LLM_MODEL")?,
+        required("CLAW_LLM_BASE_URL")?,
+    );
+    config.timeout_ms = 60_000;
+    Ok(config)
 }
 
 /// Read a required, non-empty environment variable or fail with a clear message.

@@ -17,11 +17,13 @@ crate-type = ["rlib"]
 # - `diskfs`:       `std::fs` backend for host CLIs and disk-backed tests.
 # - `diskfs-pretty`: pretty-print `.json` writes via serde_json (implies diskfs).
 # - `httpmock`:     scripted / failing / never-called ClawHttp test doubles.
+# - `timermock`:    immediate/yielding ClawTimer test doubles.
 # - `realhttp`:     blocking reqwest ClawHttp backend for host CLIs / live tests.
 memfs = []
 diskfs = []
 diskfs-pretty = ["diskfs", "dep:serde_json"]
 httpmock = ["dep:serde_json"]
+timermock = []
 realhttp = ["dep:reqwest"]
 # `StdThread`: a plain `std::thread` host implementation of `ClawThread` (host
 # only; the device build uses `claw-sys`'s `EspIdfThread`).

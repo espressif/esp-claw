@@ -42,6 +42,8 @@ dev = [
 [dependencies]
 claw-core = { path = "../claw-core" }
 claw-api = { path = "../claw-api" }
+claw-skill = { path = "../claw-skill" }
+claw-tool = { path = "../claw-tool" }
 # The capability surface: callers register tools/channels as `Capability`s in a
 # `Registry`; this crate bridges it onto the orchestrator's resolver/egress seams.
 claw-capability = { path = "../claw-capability" }

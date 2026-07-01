@@ -25,14 +25,14 @@
 //! let mut context = Context::new();
 //! // Blocks may be declared in any order; the wire order is fixed by BlockKind.
 //! context
-//!     .with(Block::new(BlockKind::CurrentInput, "What's the weather?"))
-//!     .with(Block::new(BlockKind::AgentInstruction, "You are a helpful agent."));
+//!     .with(Block::new(BlockKind::AgentInstruction, "You are a helpful agent."))
+//!     .with(Block::new(BlockKind::OutputContract, "Answer in one concise paragraph."));
 //!
-//! let history = json!([]);
+//! let history = json!([{ "role": "user", "content": "What's the weather?" }]);
 //! let request = context.request(&history);
 //! assert_eq!(
 //!     request.system(),
-//!     "You are a helpful agent.\n\nWhat's the weather?"
+//!     "You are a helpful agent.\n\nAnswer in one concise paragraph."
 //! );
 //! ```
 
@@ -41,4 +41,4 @@ mod context;
 mod reminder;
 
 pub use block::{Band, Block, BlockKind, Scope};
-pub use context::{Context, RequestContext};
+pub use context::{Context, ContextItem, ContextSink, RequestContext};

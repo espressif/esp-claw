@@ -65,7 +65,6 @@ impl Scope {
 #[non_exhaustive]
 pub enum BlockKind {
     // Band 1 — Static instructions.
-    CommonInstruction,
     AgentInstruction,
     ToolPolicy,
     // Band 2 — Durable state.
@@ -78,8 +77,8 @@ pub enum BlockKind {
     ModeFraming,
     ConversationSummary,
     // Band 3 — Volatile tail.
+    ToolReminder,
     RecentContext,
-    CurrentInput,
     OutputContract,
     /// An extension block placed explicitly within a band/scope. `order`
     /// disambiguates against other blocks sharing the same `(band, scope)`.
@@ -95,9 +94,7 @@ impl BlockKind {
     /// The band this block renders in.
     pub fn band(&self) -> Band {
         match self {
-            BlockKind::CommonInstruction | BlockKind::AgentInstruction | BlockKind::ToolPolicy => {
-                Band::Static
-            }
+            BlockKind::AgentInstruction | BlockKind::ToolPolicy => Band::Static,
             BlockKind::Soul
             | BlockKind::GlobalMemory
             | BlockKind::SessionContext
@@ -106,7 +103,7 @@ impl BlockKind {
             | BlockKind::ActiveSkills
             | BlockKind::ModeFraming
             | BlockKind::ConversationSummary => Band::Durable,
-            BlockKind::RecentContext | BlockKind::CurrentInput | BlockKind::OutputContract => {
+            BlockKind::ToolReminder | BlockKind::RecentContext | BlockKind::OutputContract => {
                 Band::Volatile
             }
             BlockKind::Custom { band, .. } => *band,
@@ -118,19 +115,16 @@ impl BlockKind {
     /// e.g. `OutputContract` sorts in the `Turn` tail by design.)
     pub fn scope(&self) -> Scope {
         match self {
-            BlockKind::CommonInstruction | BlockKind::GlobalMemory | BlockKind::Soul => {
-                Scope::Global
-            }
+            BlockKind::GlobalMemory | BlockKind::Soul => Scope::Global,
             BlockKind::SessionContext | BlockKind::SessionMemory => Scope::Session,
             BlockKind::AgentInstruction
             | BlockKind::ToolPolicy
             | BlockKind::AgentMemory
             | BlockKind::ActiveSkills
-            | BlockKind::ModeFraming => Scope::Agent,
+            | BlockKind::ModeFraming
+            | BlockKind::ToolReminder => Scope::Agent,
             BlockKind::ConversationSummary => Scope::Conversation,
-            BlockKind::RecentContext | BlockKind::CurrentInput | BlockKind::OutputContract => {
-                Scope::Turn
-            }
+            BlockKind::RecentContext | BlockKind::OutputContract => Scope::Turn,
             BlockKind::Custom { scope, .. } => *scope,
         }
     }
@@ -139,7 +133,6 @@ impl BlockKind {
     fn order(&self) -> u16 {
         match self {
             // Band 1
-            BlockKind::CommonInstruction => 0,
             BlockKind::AgentInstruction => 0,
             BlockKind::ToolPolicy => 1,
             // Band 2
@@ -152,8 +145,8 @@ impl BlockKind {
             BlockKind::ModeFraming => 2,
             BlockKind::ConversationSummary => 0,
             // Band 3
+            BlockKind::ToolReminder => 0,
             BlockKind::RecentContext => 0,
-            BlockKind::CurrentInput => 1,
             BlockKind::OutputContract => 2,
             BlockKind::Custom { order, .. } => *order,
         }

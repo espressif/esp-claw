@@ -25,9 +25,10 @@ use std::sync::Arc;
 use claw_capability::{ChannelAdapter, OutboundMessage as CapabilityOutbound, Registry};
 use claw_core::agent::AgentResolver;
 use claw_core::{
-    ChannelEgressHub, ChannelError, ChannelTransport, OutboundMessage as CoreOutbound, SkillError,
-    SkillId, SkillRegistry, SkillSet, Tool,
+    ChannelEgressHub, ChannelError, ChannelTransport, OutboundMessage as CoreOutbound,
 };
+use claw_skill::{SkillError, SkillId, SkillRegistry, SkillSet};
+use claw_tool::Tool;
 
 /// Provenance label applied to every skill a manifest asks for (mirrors
 /// `MapAgentResolver`'s group tag).
@@ -138,10 +139,10 @@ mod tests {
     use std::sync::Mutex;
 
     use claw_capability::{Capability, CapabilityError};
-    use claw_core::{ToolInvocation, ToolInvokeError, ToolOutput};
+    use claw_tool::{ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput};
 
     struct DummyTool;
-    impl claw_core::ToolHandler for DummyTool {
+    impl ToolHandler for DummyTool {
         fn name(&self) -> &str {
             "do_thing"
         }

@@ -12,6 +12,7 @@
 pub mod fs;
 pub mod http;
 pub mod thread;
+pub mod timer;
 
 pub use fs::{ClawFile, ClawFs, FsError};
 #[cfg(feature = "diskfs")]
@@ -24,11 +25,14 @@ pub use http::{
     ScriptedHttp, SharedScriptHttp, YieldingClawHttpAsync,
 };
 pub use http::{
-    Cancel, ClawHttp, ClawHttpAsync, HttpError, HttpHeader, HttpJsonRequest, HttpResponse,
-    HttpResponseFuture,
+    Cancel, ClawHttp, ClawHttpAsync, HttpAuth, HttpError, HttpHeader, HttpJsonRequest,
+    HttpRequestFailure, HttpResponse, HttpResponseFuture, HttpStatusCode,
 };
 #[cfg(feature = "realhttp")]
 pub use http::{RealHttp, RealHttpAsync};
 #[cfg(feature = "stdthread")]
 pub use thread::StdThread;
 pub use thread::{ClawThread, CoreAffinity, Priority, WorkerHandle};
+#[cfg(feature = "timermock")]
+pub use timer::mock::{ImmediateTimer, YieldingTimer};
+pub use timer::{ClawTimer, SleepOutcome, TimerFuture};

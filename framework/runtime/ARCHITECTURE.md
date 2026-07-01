@@ -271,18 +271,19 @@ flowchart BT
 | `claw-api` | `ClawApi` LLM 客户端；`LlmCompactor` 在 `memory/` |
 | `claw-memory` | `BaseAgent` / `GenericAgent` 的 `TranscriptStore`；`Compactor` seam 由 rolling-summary adapter 驱动 |
 | `claw-context` | system prompt block 组装（Global / Session / Agent 层） |
-| `claw-skill` | manifest skill id → `SkillSet`；**re-export** `Skill*` |
-| `claw-tool` | manifest capability → `ToolSet`；iteration 调 `ToolRunner`；**re-export** `Tool*` |
-| `claw-permission` | `BaseAgent` 装 `PermissionGate` + policy；**re-export** 策略类型 |
+| `claw-skill` | manifest skill id → `SkillSet`；skill 类型的 owner crate |
+| `claw-tool` | manifest capability → `ToolSet`；iteration 调 `ToolRunner`；tool 类型的 owner crate |
+| `claw-permission` | `BaseAgent` 装 `PermissionGate` + policy；permission 类型的 owner crate |
 
-### 7.2 Re-export 稳定面（固件可只依赖 `claw-core`）
+### 7.2 Public API ownership
 
-`claw-core` 对外 re-export，避免 C/固件侧拉多个子 crate：
+`claw-core` 不再把 tool / skill / permission 类型 re-export 到 crate root。
+这些类型从 owner crate 引用；需要单一入口的上层使用 `claw-agent` facade。
 
 ```text
-claw_core::SkillRegistry, SkillSet, SkillId, …     ← claw-skill
-claw_core::Tool, ToolSet, ToolRunner, ToolGate, …   ← claw-tool
-claw_core::Action, PermissionPolicy, PolicyChain, … ← claw-permission
+claw_skill::SkillRegistry, SkillSet, SkillId, …
+claw_tool::Tool, ToolSet, ToolRunner, ToolGate, …
+claw_permission::Action, PermissionPolicy, PolicyChain, …
 ```
 
 ### 7.3 仅 dev / build 的依赖（不在设备镜像依赖链）

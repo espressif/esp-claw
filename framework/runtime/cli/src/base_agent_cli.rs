@@ -20,7 +20,7 @@ fn main() {
     load_env();
 
     let (memory, memory_view) = make_memory(AGENT_ID, MEMORY_DIR);
-    let mut agent = BaseAgent::builder(make_llm(false), memory)
+    let mut agent = BaseAgent::builder(make_llm(), memory)
         .with_system_prompt(SYSTEM_PROMPT)
         .build()
         .expect("failed to build agent");

@@ -12,14 +12,16 @@ persona, memory, retrieved knowledge — is supplied by callers.
 
 ## The two lanes
 
-A request has exactly two wire fields, and `Context` produces both:
+A request has exactly two wire fields, and `Context` produces both. Providers may
+feed it directly with `Block`s or through a `ContextSink` that accepts
+first-class `ContextItem`s (`Block`, history `Message`, or `Reminder`):
 
 - **PREFIX (cacheable) -> `system`**: the declared `Block`s rendered into one
   string, in wire order. Held in a **reused buffer** and re-rendered only when a
   block actually changes, so a steady prefix costs nothing per iteration.
 - **TAIL -> `messages`**: the persisted conversation `history` (owned by memory)
-  plus ephemeral `reminders` (per-request nudges, never persisted). These are
-  **not** owned here — they pass through by reference.
+  plus ephemeral `reminders` (per-request nudges, never persisted). History is
+  passed in by reference; reminders are owned and dirty-gated by `Context`.
 
 `Context::request(history)` pairs the prefix with the tail's two segments as a
 `RequestContext` of all-borrows (`history` + `reminders` stay separate so
@@ -44,9 +46,10 @@ fails.
 
 | Item | Role |
 |---|---|
-| `Context` | The owned, self-caching context: declare with `with(Block)` / `reminder(Option<&str>)`, read with `request(&history)`. `version()` advances only on a real prefix change (a cheap LLM prefix-cache key). |
+| `Context` | The owned, self-caching context: declare with `with(Block)` / `with_reminder(kind, text)`, or create a `sink()` for mixed `ContextItem`s; read with `request(&history)`. `version()` advances only on a real prefix change (a cheap LLM prefix-cache key). |
+| `ContextItem<'a>` / `ContextSink<'a>` | The unified contribution path for adapters: block prose, history messages, and typed reminders enter through one sink while `Context` keeps placement and caches. |
 | `Block<'a>` | One piece of content plus its placement: `Block::new(kind, text)`. Content is a `Cow`, so callers pass `&str`/`String`/`Cow` freely; `Context` copies it on a real change. |
-| `BlockKind` | The canonical block kinds (e.g. `CommonInstruction`, `AgentInstruction`, `AgentMemory`, `ActiveSkills`, `ModeFraming`, `RecentContext`, `CurrentInput`, `OutputContract`) plus `Custom { band, scope, order, label }` for caller-defined blocks. |
+| `BlockKind` | The canonical context kinds (e.g. `AgentInstruction`, `ToolPolicy`, `ToolReminder`, `AgentMemory`, `ActiveSkills`, `ModeFraming`, `RecentContext`, `OutputContract`) plus `Custom { band, scope, order, label }` for caller-defined blocks. |
 | `Band` / `Scope` | The two axes the layout sorts on (durability band, ownership scope). |
 | `RequestContext<'a>` | The assembled `(system, messages)` hand-off: a `system` prefix plus the tail's two segments (`history` + `reminders`), all borrows. |
 
@@ -58,14 +61,14 @@ use serde_json::json;
 
 let mut context = Context::new();
 context
-    .with(Block::new(BlockKind::CurrentInput, "What's the weather?"))
-    .with(Block::new(BlockKind::AgentInstruction, "You are a helpful agent."));
+    .with(Block::new(BlockKind::AgentInstruction, "You are a helpful agent."))
+    .with(Block::new(BlockKind::OutputContract, "Answer in one concise paragraph."));
 
-let history = json!([]);
+let history = json!([{ "role": "user", "content": "What's the weather?" }]);
 let request = context.request(&history);
 assert_eq!(
     request.system(),
-    "You are a helpful agent.\n\nWhat's the weather?",
+    "You are a helpful agent.\n\nAnswer in one concise paragraph.",
 );
 ```
 
@@ -81,5 +84,5 @@ cargo run -p claw-context --example build_context --target x86_64-unknown-linux-
 Pure-Rust, depends only on `serde_json` (to carry the structured `messages`
 tail). It bundles into the firmware's `claw_rt` staticlib and is fully
 host-testable. Content providers (instruction loaders, memory providers, skill
-sets, summarizers) live in other crates and feed their prose in via `with`; the
-conversation `history` and `reminders` are passed in by the agent.
+sets, summarizers) live in other crates and feed their prose/items in via
+`with` or `sink`; the conversation `history` is passed in by the agent.

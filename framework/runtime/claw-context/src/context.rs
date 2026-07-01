@@ -18,6 +18,7 @@
 //! the volatile ones every tick — never betting that it "remembers" to push a
 //! change, and never re-rendering when nothing changed.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use serde_json::Value;
@@ -47,12 +48,15 @@ const BLOCK_SEPARATOR: &str = "\n\n";
 /// let mut context = Context::new();
 /// // Blocks may be declared in any order; the wire order is fixed by BlockKind.
 /// context
-///     .with(Block::new(BlockKind::CurrentInput, "What's the weather?"))
-///     .with(Block::new(BlockKind::AgentInstruction, "You are a helpful agent."));
+///     .with(Block::new(BlockKind::AgentInstruction, "You are a helpful agent."))
+///     .with(Block::new(BlockKind::OutputContract, "Answer in one concise paragraph."));
 ///
-/// let history = json!([]);
+/// let history = json!([{ "role": "user", "content": "What's the weather?" }]);
 /// let request = context.request(&history);
-/// assert_eq!(request.system(), "You are a helpful agent.\n\nWhat's the weather?");
+/// assert_eq!(
+///     request.system(),
+///     "You are a helpful agent.\n\nAnswer in one concise paragraph."
+/// );
 /// ```
 pub struct Context {
     /// One owned content string per declared kind. Only ever holds non-absent
@@ -89,6 +93,17 @@ impl Context {
         }
     }
 
+    /// Declare a context item. Blocks and reminders are stored in this context;
+    /// message items belong to a [`ContextSink`] because they are per-request
+    /// history contributions.
+    pub fn with_item(&mut self, item: ContextItem<'_>) -> &mut Self {
+        match item {
+            ContextItem::Block(block) => self.with(block),
+            ContextItem::Reminder { kind, text } => self.with_reminder(kind, text.as_deref()),
+            ContextItem::Message { .. } => self,
+        }
+    }
+
     /// Declare a block (set or replace the content for its [`BlockKind`]).
     /// Chainable; meant to be called freely — re-declaring identical content is a
     /// no-op (no version bump, no re-render).
@@ -117,12 +132,27 @@ impl Context {
         self
     }
 
-    /// Set (or clear with `None`) the single ephemeral reminder appended to the
+    /// Set (or clear with `None`) the tool reminder appended to the message tail.
+    ///
+    /// Kept for the common single-reminder path; use
+    /// [`with_reminder`](Self::with_reminder) when the source has a more specific
+    /// [`BlockKind`].
+    pub fn reminder(&mut self, text: Option<&str>) -> &mut Self {
+        self.with_reminder(BlockKind::ToolReminder, text)
+    }
+
+    /// Set (or clear with `None`) one ephemeral reminder kind appended to the
     /// message tail. Chainable. Dirty-gated inside the reminder channel, and
     /// outside the cached system prefix, so it never bumps [`version`](Self::version).
-    pub fn reminder(&mut self, text: Option<&str>) -> &mut Self {
-        self.reminders.set_single(text);
+    pub fn with_reminder(&mut self, kind: BlockKind, text: Option<&str>) -> &mut Self {
+        self.reminders.set(kind, text);
         self
+    }
+
+    /// Create a sink that accepts first-class context items for one request
+    /// assembly pass.
+    pub fn sink(&mut self) -> ContextSink<'_> {
+        ContextSink::new(self)
     }
 
     /// The system-prefix version: a counter that advances only when a block's
@@ -166,6 +196,121 @@ impl Context {
             buffer.push_str(content.trim());
         }
         self.rendered = buffer;
+    }
+}
+
+/// One context contribution before it is rendered into its target request
+/// channel.
+#[derive(Debug, Clone)]
+pub enum ContextItem<'a> {
+    /// Stable or durable prose rendered into the cached system prefix.
+    Block(Block<'a>),
+    /// Structured chat history rendered into the request's messages segment.
+    Message {
+        /// The semantic kind used for cross-source ordering.
+        kind: BlockKind,
+        /// The message JSON object to append to history.
+        value: &'a Value,
+    },
+    /// Ephemeral guidance rendered into the trailing reminder segment.
+    Reminder {
+        /// The semantic kind used for reminder ordering.
+        kind: BlockKind,
+        /// `None` clears the reminder kind.
+        text: Option<Cow<'a, str>>,
+    },
+}
+
+impl<'a> ContextItem<'a> {
+    /// Construct a system-prefix block item.
+    pub fn block(kind: BlockKind, content: impl Into<Cow<'a, str>>) -> Self {
+        Self::Block(Block::new(kind, content))
+    }
+
+    /// Construct a structured history-message item.
+    pub fn message(kind: BlockKind, value: &'a Value) -> Self {
+        Self::Message { kind, value }
+    }
+
+    /// Construct an ephemeral reminder item.
+    pub fn reminder(kind: BlockKind, text: impl Into<Cow<'a, str>>) -> Self {
+        Self::Reminder {
+            kind,
+            text: Some(text.into()),
+        }
+    }
+
+    /// Construct a reminder clear item.
+    pub fn clear_reminder(kind: BlockKind) -> Self {
+        Self::Reminder { kind, text: None }
+    }
+}
+
+/// Request-local sink for context contributions.
+///
+/// Blocks and reminders are applied immediately to the owning [`Context`], which
+/// keeps their caches and dirty gates. Message items are cloned into this sink's
+/// request-local history buffer; this preserves the existing `Value::Array`
+/// request shape without making adapters own the final history.
+pub struct ContextSink<'a> {
+    context: &'a mut Context,
+    messages: Vec<(BlockKind, Value)>,
+}
+
+impl<'a> ContextSink<'a> {
+    fn new(context: &'a mut Context) -> Self {
+        Self {
+            context,
+            messages: Vec::new(),
+        }
+    }
+
+    /// Accept one context item.
+    pub fn item(&mut self, item: ContextItem<'_>) -> &mut Self {
+        match item {
+            ContextItem::Block(block) => {
+                self.context.with(block);
+            }
+            ContextItem::Message { kind, value } => {
+                self.message(kind, value);
+            }
+            ContextItem::Reminder { kind, text } => {
+                self.context.with_reminder(kind, text.as_deref());
+            }
+        }
+        self
+    }
+
+    /// Accept a system-prefix block.
+    pub fn block(&mut self, block: Block<'_>) -> &mut Self {
+        self.item(ContextItem::Block(block))
+    }
+
+    /// Accept a structured history message.
+    pub fn message(&mut self, kind: BlockKind, value: &Value) -> &mut Self {
+        self.messages.push((kind, value.clone()));
+        self
+    }
+
+    /// Accept or clear an ephemeral reminder.
+    pub fn reminder(&mut self, kind: BlockKind, text: Option<&str>) -> &mut Self {
+        self.context.with_reminder(kind, text);
+        self
+    }
+
+    /// Finish this sink and return the ordered history array for the request.
+    pub fn into_history(mut self) -> Value {
+        self.messages.sort_by(|a, b| {
+            a.0.sort_key()
+                .cmp(&b.0.sort_key())
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        Value::Array(
+            self.messages
+                .into_iter()
+                .map(|(_, message)| message)
+                .collect(),
+        )
     }
 }
 
@@ -226,15 +371,14 @@ mod tests {
     fn blocks_render_in_wire_order_regardless_of_declaration_order() {
         let mut context = Context::new();
         context
-            .with(Block::new(BlockKind::CurrentInput, "INPUT"))
-            .with(Block::new(BlockKind::CommonInstruction, "COMMON"))
+            .with(Block::new(BlockKind::RecentContext, "RECENT"))
             .with(Block::new(BlockKind::OutputContract, "OUTPUT"))
             .with(Block::new(BlockKind::AgentInstruction, "AGENT"))
             .with(Block::new(BlockKind::ConversationSummary, "SUMMARY"));
 
         assert_eq!(
             system_of(&mut context),
-            "COMMON\n\nAGENT\n\nSUMMARY\n\nINPUT\n\nOUTPUT"
+            "AGENT\n\nSUMMARY\n\nRECENT\n\nOUTPUT"
         );
     }
 
@@ -242,10 +386,10 @@ mod tests {
     fn empty_content_is_absent_and_drops_the_key() {
         let mut context = Context::new();
         context
-            .with(Block::new(BlockKind::CommonInstruction, "COMMON"))
+            .with(Block::new(BlockKind::AgentInstruction, "AGENT"))
             .with(Block::new(BlockKind::ToolPolicy, ""))
-            .with(Block::new(BlockKind::CurrentInput, "   \n  "));
-        assert_eq!(system_of(&mut context), "COMMON");
+            .with(Block::new(BlockKind::RecentContext, "   \n  "));
+        assert_eq!(system_of(&mut context), "AGENT");
     }
 
     #[test]
@@ -317,5 +461,34 @@ mod tests {
             .and_then(Value::as_str)
             .unwrap();
         assert!(content.contains("only these tools"));
+    }
+
+    #[test]
+    fn sink_routes_items_to_their_request_channels() {
+        let mut context = Context::new();
+        let recent = serde_json::json!({ "role": "user", "content": "hello" });
+        let summary = serde_json::json!({ "role": "assistant", "content": "summary" });
+
+        let history = {
+            let mut sink = context.sink();
+            sink.item(ContextItem::block(BlockKind::AgentInstruction, "PERSONA"));
+            sink.item(ContextItem::message(BlockKind::RecentContext, &recent));
+            sink.item(ContextItem::message(
+                BlockKind::ConversationSummary,
+                &summary,
+            ));
+            sink.item(ContextItem::reminder(
+                BlockKind::ToolReminder,
+                "only these tools",
+            ));
+            sink.into_history()
+        };
+
+        let request = context.request(&history);
+        assert_eq!(request.system(), "PERSONA");
+        let history_items = request.history().as_array().unwrap();
+        assert_eq!(history_items.first(), Some(&summary));
+        assert_eq!(history_items.get(1), Some(&recent));
+        assert_eq!(request.reminders().len(), 1);
     }
 }

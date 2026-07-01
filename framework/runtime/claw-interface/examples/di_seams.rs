@@ -16,7 +16,9 @@
 
 use core::sync::atomic::AtomicBool;
 
-use claw_interface::{ClawFs, ClawHttp, HttpHeader, HttpJsonRequest, MemFs, ScriptedHttp};
+use claw_interface::{
+    ClawFs, ClawHttp, HttpAuth, HttpHeader, HttpJsonRequest, MemFs, ScriptedHttp,
+};
 
 fn main() -> anyhow::Result<()> {
     filesystem_seam()?;
@@ -58,8 +60,7 @@ fn http_seam() -> anyhow::Result<()> {
     let request = HttpJsonRequest {
         url: "https://api.example.com/v1/chat/completions",
         body: r#"{"model":"demo","messages":[]}"#,
-        api_key: Some("sk-demo"),
-        auth_type: Some("bearer"),
+        auth: HttpAuth::Bearer("sk-demo"),
         timeout_ms: 30_000,
         headers: &[HttpHeader {
             name: "X-Demo",

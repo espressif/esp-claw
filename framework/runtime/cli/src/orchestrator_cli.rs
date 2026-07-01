@@ -100,7 +100,7 @@ fn main() {
     let resolver = Arc::new(MapAgentResolver::new());
     let factory = Arc::new(FsAgentFactory::<CliFs, RealHttp>::new(
         resolver,
-        make_llm_config(true),
+        make_llm_config(),
         MEMORY_DIR,
         make_memory_fs(),
         make_compaction(),

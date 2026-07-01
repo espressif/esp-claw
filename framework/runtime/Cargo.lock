@@ -132,6 +132,8 @@ dependencies = [
  "claw-core",
  "claw-interface",
  "claw-memory",
+ "claw-skill",
+ "claw-tool",
  "claw-utils",
  "dotenvy",
  "serde_json",

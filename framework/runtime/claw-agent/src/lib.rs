@@ -17,16 +17,14 @@
 //! # Examples
 //!
 //! ```no_run
-//! use claw_agent::{AgentSystem, ClawApiConfig};
+//! use claw_agent::{AgentSystem, BackendKind, ClawApiConfig};
 //!
-//! let llm = ClawApiConfig {
-//!     api_key: Some("sk-...".into()),
-//!     backend_type: "openai_compatible".into(),
-//!     model: Some("gpt-4o-mini".into()),
-//!     base_url: Some("https://api.openai.com/v1".into()),
-//!     supports_tools: true,
-//!     ..Default::default()
-//! };
+//! let llm = ClawApiConfig::new(
+//!     BackendKind::OpenAiCompatible,
+//!     "sk-...",
+//!     "gpt-4o-mini",
+//!     "https://api.openai.com/v1",
+//! );
 //!
 //! let system = AgentSystem::on_disk(llm, "/tmp/claw-mem")?;
 //! let chat = system.chat();
@@ -55,17 +53,19 @@ use claw_interface::{RealHttp, StdThread};
 pub use capability::{register_channels, RegistryChannelTransport, RegistryResolver};
 // The capability surface callers build their device from — re-exported so they
 // depend on `claw_agent` alone, not the lower crates.
-pub use claw_api::{ClawApi, ClawApiConfig};
+pub use claw_api::{BackendKind, ClawApi, ClawApiConfig};
 pub use claw_capability::{
     Capability, CapabilityError, CapabilityGroup, CapabilityRole, CapabilityState, ChannelAdapter,
     Lifecycle, OutboundMessage, Registry,
 };
 pub use claw_core::agent::{AgentResolver, MapAgentResolver};
 pub use claw_core::{
-    tool_invoke_err, ChannelIngressSink, ChannelTransport, InboundCommand, InboundMessage,
-    SessionId, Tool, ToolError, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
+    ChannelIngressSink, ChannelTransport, InboundCommand, InboundMessage, SessionId,
 };
 pub use claw_interface::ClawFs;
+pub use claw_tool::{
+    tool_invoke_err, Tool, ToolError, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
+};
 // The on-disk filesystem backend is a dev convenience; device builds inject
 // their own `ClawFs` through `AgentSystem::builder::<F, H>()`.
 #[cfg(feature = "dev")]
@@ -420,12 +420,7 @@ where
         };
 
         let factory = Arc::new(FsAgentFactory::<F, H>::new(
-            resolver,
-            llm_config,
-            memory_dir,
-            fs,
-            compaction,
-            long_term,
+            resolver, llm_config, memory_dir, fs, compaction, long_term,
         ));
 
         let transport = RecordingTransport::new(self.channel.clone());

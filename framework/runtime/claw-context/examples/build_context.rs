@@ -21,14 +21,15 @@ use serde_json::json;
 fn main() {
     let mut context = Context::new();
 
-    // A custom retrieved-docs block, placed at the bottom of the agent durable
-    // group (after ModeFraming, order 2).
-    let retrieved_docs = Block::new(
+    // A custom always-on hardware-docs block, placed at the bottom of the agent
+    // durable group (after ModeFraming, order 2). Query-specific retrieved docs
+    // should normally arrive as tool results in `history`, not as durable blocks.
+    let hardware_docs = Block::new(
         BlockKind::Custom {
             band: Band::Durable,
             scope: Scope::Agent,
             order: 3,
-            label: Cow::Borrowed("RetrievedDocs"),
+            label: Cow::Borrowed("HardwareDocs"),
         },
         "Doc: the GPIO API exposes claw_gpio_set_level(pin, level).",
     );
@@ -40,14 +41,9 @@ fn main() {
             BlockKind::OutputContract,
             "Respond as JSON: {actions, blockers, needs_approval, next_step}.",
         ))
-        .with(Block::new(BlockKind::CurrentInput, "Make the LED blink."))
-        .with(Block::new(
-            BlockKind::CommonInstruction,
-            "You are Claw, a helpful on-device agent.",
-        ))
         .with(Block::new(
             BlockKind::AgentInstruction,
-            "Role: worker. Execute the task and report structured results.",
+            "You are Claw, a helpful on-device worker. Execute the task and report structured results.",
         ))
         .with(Block::new(
             BlockKind::AgentMemory,
@@ -61,7 +57,7 @@ fn main() {
             BlockKind::ModeFraming,
             "Task: blink the LED 3 times. Workspace: board=esp32s3.",
         ))
-        .with(retrieved_docs)
+        .with(hardware_docs)
         .with(Block::new(
             BlockKind::RecentContext,
             "tool_result(claw_gpio_set_level): ok",

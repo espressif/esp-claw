@@ -42,7 +42,7 @@ fn main() {
     // path on purpose.
     let mut agent = GenericAgent::new(
         AgentId(AGENT_ID),
-        make_llm(true),
+        make_llm(),
         transcript_config,
         memory_fs,
         compaction,

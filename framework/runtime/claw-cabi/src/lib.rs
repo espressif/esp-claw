@@ -30,7 +30,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 #[cfg(target_os = "espidf")]
-use claw_agent::{AgentSystem, ClawApiConfig, PoolConfig, SessionId, SharedTaskPool};
+use claw_agent::{AgentSystem, BackendKind, ClawApiConfig, PoolConfig, SessionId, SharedTaskPool};
 use claw_agent::{CapabilityError, ChannelIngressSink, InboundMessage, Registry};
 #[cfg(target_os = "espidf")]
 use claw_sys::{EspIdfFs, EspIdfHttp, EspIdfThread};
@@ -387,21 +387,26 @@ fn resolve_session(
 unsafe fn build_llm_config(
     config: &ClawAgentSystemConfig,
 ) -> Result<ClawApiConfig, CapabilityError> {
-    Ok(ClawApiConfig {
-        api_key: Some(required_string(config.api_key)?),
-        backend_type: required_string(config.backend_type)?,
-        model: Some(required_string(config.model)?),
-        base_url: optional_string(config.base_url)?,
-        auth_type: optional_string(config.auth_type)?,
-        max_tokens_field: optional_string(config.max_tokens_field)?,
-        timeout_ms: config.timeout_ms,
-        max_tokens: config.max_tokens,
-        image_max_bytes: config.image_max_bytes,
-        supports_tools: config.supports_tools,
-        supports_vision: config.supports_vision,
-        image_remote_url_only: config.image_remote_url_only,
-        ..Default::default()
-    })
+    let backend_type = required_string(config.backend_type)?
+        .parse::<BackendKind>()
+        .map_err(|_| CapabilityError::InvalidArg)?;
+
+    let mut llm_config = ClawApiConfig::new(
+        backend_type,
+        required_string(config.api_key)?,
+        required_string(config.model)?,
+        required_string(config.base_url)?,
+    );
+    if config.timeout_ms != 0 {
+        llm_config.timeout_ms = config.timeout_ms;
+    }
+    if config.max_tokens != 0 {
+        llm_config.max_tokens = config.max_tokens;
+    }
+    if config.image_max_bytes != 0 {
+        llm_config.image_max_bytes = config.image_max_bytes;
+    }
+    Ok(llm_config)
 }
 
 /// Copy a required, non-empty UTF-8 C string.

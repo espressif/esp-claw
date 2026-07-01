@@ -24,9 +24,9 @@
 use std::sync::{Arc, Mutex};
 
 use claw_agent::{
-    AgentSystem, Capability, CapabilityError, ChannelAdapter, ClawApiConfig, InboundMessage,
-    OutboundMessage, PoolConfig, Registry, SharedTaskPool, Tool, ToolHandler, ToolInvocation,
-    ToolInvokeError, ToolOutput,
+    AgentSystem, BackendKind, Capability, CapabilityError, ChannelAdapter, ClawApiConfig,
+    InboundMessage, OutboundMessage, PoolConfig, Registry, SharedTaskPool, Tool, ToolHandler,
+    ToolInvocation, ToolInvokeError, ToolOutput,
 };
 use claw_interface::{MemFs, SharedScriptHttp, StdThread};
 
@@ -104,14 +104,12 @@ fn assistant_text(text: &str) -> String {
 
 /// A test LLM config; its base URL is never dialed (HTTP is the scripted double).
 fn scripted_llm() -> ClawApiConfig {
-    ClawApiConfig {
-        api_key: Some("sk-example".into()),
-        backend_type: "openai_compatible".into(),
-        model: Some("gpt-example".into()),
-        base_url: Some("https://example.invalid".into()),
-        supports_tools: true,
-        ..Default::default()
-    }
+    ClawApiConfig::new(
+        BackendKind::OpenAiCompatible,
+        "sk-example",
+        "gpt-example",
+        "https://example.invalid",
+    )
 }
 
 fn main() -> anyhow::Result<()> {
