@@ -237,6 +237,7 @@ mod tests {
         StdThread,
     };
     use claw_memory::NoopCompactor;
+    use claw_tool::init_tool_executor;
     use claw_utils::{PoolConfig, SharedTaskPool};
     use serde_json::{json, Value};
 
@@ -267,6 +268,7 @@ mod tests {
     }
 
     fn block_on<F: Future>(future: F) -> F::Output {
+        init_tool_executor(StdThread).expect("tool executor");
         let mut future = Box::pin(future);
         let waker = Waker::from(Arc::new(NoopWake));
         let mut context = Context::from_waker(&waker);

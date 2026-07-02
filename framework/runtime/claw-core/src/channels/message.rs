@@ -10,7 +10,6 @@ use thiserror::Error;
 /// The command lane is intentionally kept as part of the channel boundary, but
 /// no command variants are wired yet. Add variants here only when they drive the
 /// current session/agent model end-to-end.
-#[non_exhaustive]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {}
 

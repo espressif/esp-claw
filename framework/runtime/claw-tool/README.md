@@ -8,6 +8,22 @@ gate and execute calls, and enforce the on-disk tool contract at build time.
 nothing about agents or the orchestrator, only about *tools*. The same code runs
 on-device and in host tests.
 
+## Sync and async are both intentional
+
+`claw-tool` deliberately exposes two first-class execution surfaces:
+
+- **Sync:** `ToolHandler`, `Tool::new`, `Tool::invoke`,
+  `ToolSet::invoke`, and `ToolRunner::run_one`.
+- **Async:** `AsyncToolHandler`, `Tool::new_async`, `Tool::invoke_async`,
+  `ToolSet::invoke_async`, and `ToolRunner::run_one_async`.
+
+Do not treat the sync surface as migration leftover or compatibility-only code.
+Some tools are naturally immediate or C-backed and should stay sync. Rust tools
+that await I/O or other cooperative work should implement the async surface. The
+agent runtime drives tools through `run_one_async`; sync handlers are still valid
+there because `Tool::invoke_async` moves the handler body onto the fixed tool
+executor instead of blocking the main agent executor.
+
 ## The on-disk tool contract
 
 A baked tool's metadata lives in `resources/tools/<name>/`, holding **exactly**:
@@ -48,16 +64,18 @@ Re-exported from the crate root:
 
 | Type | Role |
 |------|------|
-| `ToolHandler` | Trait: one model-callable tool — `name()`, `schema()` (OpenAI function JSON), optional `usage()`, optional `concurrent()` / `classify()`, and `invoke()`. |
+| `ToolHandler` | Sync trait for one model-callable tool — `name()`, `schema()` (OpenAI function JSON), optional `usage()`, optional `concurrent()` / `classify()`, and `invoke()`. |
+| `AsyncToolHandler` / `ToolFuture` | Async Rust trait for one model-callable tool. It mirrors `ToolHandler` metadata/classification and implements `invoke_async()`. |
 | `tool_metadata!` | Macro: generate `name`/`schema`/`usage` from a baked `resources/tools/<name>/` directory. |
-| `Tool` | A cheap-to-clone (`Arc`-backed) handler value; pass tools around by value. |
+| `Tool` | A cheap-to-clone (`Arc`-backed) handler value wrapping either a sync or async implementation. |
+| `init_tool_executor` | Initializes the fixed async tool executor with a caller-supplied `T: ClawThread` backend. Required before driving `Tool::invoke_async` / `ToolRunner::run_one_async`. |
 | `ToolRegistry` | A pool of every known tool, keyed by name. `register()` / `register_as()` / `unregister()`, then `select()` / `select_all()` / `group()` to build sets. |
 | `ToolGroup` | A named bundle of tools; the name tags provenance (it does *not* namespace dispatch — names stay flat and globally unique). |
-| `ToolSet` | The per-agent aggregate the iteration loop consumes: precomputed combined `schemas_json()`, flat O(1) `invoke()`, plus the soft-tools state it owns. |
+| `ToolSet` | The per-agent aggregate the iteration loop consumes: precomputed combined `schemas_json()`, flat O(1) `invoke()` / `invoke_async()`, plus the soft-tools state it owns. |
 | `AllowedTools` | The soft-hide phase allow-set: which tools may *execute* this phase. |
-| `ToolBlockVerdict` / `DEFAULT_BLOCK_RETRIES` | The "retry then fail" verdict from `ToolSet::record_round`, and its default budget. |
-| `ToolRunner` | Per-call execution seam: soft-hide gating → permission gating → dispatch, returning a neutral `CallOutcome`. |
-| `ToolGate` / `PermissionGate` | The permission seam the runner consults; `PermissionGate` is the policy + grant-store implementation the agent installs. |
+| `BlockPolicy` / `ToolBlockVerdict` | The soft-hide "retry then fail" policy and the verdict it returns. The default budget is expressed by `BlockPolicy::default()`. |
+| `ToolRunner` | Per-call execution boundary: soft-hide gating → permission gating → dispatch via `run_one()` or `run_one_async()`, returning a neutral `CallOutcome`. |
+| `ToolGate` / `PermissionGate` | The permission boundary the runner consults; `PermissionGate` is the policy + grant-store implementation the agent installs. |
 | `CallOutcome` / `ApprovalNeeded` | The runner's per-call verdict, and what an `Ask` decision needs the agent to resolve. |
 | `ToolError` / `ToolSetError` | Failure enums for invocation and set assembly. |
 
@@ -86,9 +104,11 @@ exceed `block_retries`, so the agent can end the task.
   byte-stable ordering keeps the server-side prompt cache warm across restarts.
 - **Flat, globally-unique names.** Dispatch is by name across all groups; a
   duplicate name is a hard `ToolSetError::DuplicateToolName` at assembly.
-- **The runner is a thin seam.** It classifies → gates → executes, surfaces a
-  `concurrent()` hint for a future async runner, and turns refusals (soft-hide /
-  deny / ask) into a `CallOutcome` rather than an error.
+- **The sync and async runners are both permanent API.** `run_one()` exists for
+  synchronous callers and immediate/C-backed tools; `run_one_async()` is the
+  agent runtime path. They share the same classify → gate → execute semantics
+  and both turn refusals (soft-hide / deny / ask) into a `CallOutcome` rather
+  than an error.
 
 ## Examples
 

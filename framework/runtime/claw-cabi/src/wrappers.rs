@@ -9,9 +9,8 @@ use std::ffi::CString;
 use std::sync::Arc;
 
 use claw_agent::{
-    tool_invoke_err, Capability, CapabilityError, CapabilityGroup, ChannelAdapter, InboundMessage,
-    Lifecycle, OutboundMessage, Tool, ToolError, ToolHandler, ToolInvocation, ToolInvokeError,
-    ToolOutput,
+    Capability, CapabilityError, CapabilityGroup, ChannelAdapter, InboundMessage, Lifecycle,
+    OutboundMessage, Tool, ToolError, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
 };
 
 use crate::abi::{
@@ -94,7 +93,7 @@ impl ToolHandler for CTool {
 
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let arguments = CString::new(call.arguments_json).map_err(|_| {
-            tool_invoke_err(ToolError::InvalidArgumentsJson(
+            ToolInvokeError::new(ToolError::InvalidArgumentsJson(
                 "arguments contained an interior NUL byte".to_string(),
             ))
         })?;
@@ -119,7 +118,7 @@ impl ToolHandler for CTool {
         if result.kind != crate::result::ClawCapabilityErrorKind::Ok {
             // SAFETY: borrowed message valid for this call.
             let message = unsafe { copy_message(result.message) };
-            return Err(tool_invoke_err(ToolError::invoke_rejected(message)));
+            return Err(ToolError::invoke_rejected(message).into());
         }
 
         let length = output_length.min(buffer.len());

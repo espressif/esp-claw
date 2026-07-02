@@ -3,17 +3,16 @@
 //! This is intentionally small and private to `claw-tool`: async tool execution is
 //! moved off the main agent executor, but scheduling policy still belongs to
 //! [`ToolRunner`](crate::ToolRunner). The worker creates and drives each tool
-//! future on its own thread, so the future itself does not need to be `Send`.
+//! future on its own worker, so the future itself does not need to be `Send`.
 
 use std::collections::VecDeque;
+use std::io;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
-use std::thread;
 
+use claw_interface::{ClawThread, CoreAffinity, Priority, WorkerHandle};
 use claw_utils::{async_oneshot, block_on};
 
-use crate::handler::{
-    tool_invoke_err, Tool, ToolError, ToolFuture, ToolInvocation, ToolInvokeError,
-};
+use crate::handler::{Tool, ToolError, ToolFuture, ToolInvocation, ToolInvokeError};
 
 /// One fixed worker is enough for the current serialized tool-call loop: it moves
 /// potentially blocking handlers off the main agent executor without introducing
@@ -21,12 +20,13 @@ use crate::handler::{
 const TOOL_EXECUTOR_WORKERS: usize = 1;
 const TOOL_EXECUTOR_STACK_SIZE: usize = 32 * 1024;
 
-static TOOL_EXECUTOR: OnceLock<Result<ToolExecutor, String>> = OnceLock::new();
+static TOOL_EXECUTOR: OnceLock<ToolExecutor> = OnceLock::new();
 
 type ToolJob = Box<dyn FnOnce() + Send + 'static>;
 
 struct ToolExecutor {
     shared: Arc<Shared>,
+    workers: Vec<WorkerHandle>,
 }
 
 struct Shared {
@@ -36,6 +36,7 @@ struct Shared {
 
 struct Queue {
     jobs: VecDeque<ToolJob>,
+    shutdown: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -66,33 +67,77 @@ impl From<&ToolInvocation<'_>> for OwnedToolInvocation {
 }
 
 impl ToolExecutor {
-    fn new() -> Result<Self, String> {
+    fn new<T: ClawThread>(thread: T) -> io::Result<Self> {
         let shared = Arc::new(Shared {
             queue: Mutex::new(Queue {
                 jobs: VecDeque::new(),
+                shutdown: false,
             }),
             signal: Condvar::new(),
         });
 
+        let mut workers = Vec::with_capacity(TOOL_EXECUTOR_WORKERS);
         for index in 0..TOOL_EXECUTOR_WORKERS {
             let worker_shared = Arc::clone(&shared);
-            thread::Builder::new()
-                .name(format!("claw_tool_exec_{index}"))
-                .stack_size(TOOL_EXECUTOR_STACK_SIZE)
-                .spawn(move || worker_loop(worker_shared))
-                .map_err(|error| {
-                    format!("failed to spawn tool executor worker {index}: {error}")
-                })?;
+            let name = format!("claw_tool_exec_{index}");
+            let handle = thread.spawn_worker(
+                &name,
+                TOOL_EXECUTOR_STACK_SIZE,
+                Priority::Normal,
+                CoreAffinity::Any,
+                move || worker_loop(worker_shared),
+            )?;
+            workers.push(handle);
         }
 
-        Ok(Self { shared })
+        Ok(Self { shared, workers })
     }
 
     fn submit(&self, job: ToolJob) {
         let mut queue = lock(&self.shared.queue);
+        if queue.shutdown {
+            return;
+        }
         queue.jobs.push_back(job);
         drop(queue);
         self.shared.signal.notify_one();
+    }
+}
+
+impl Drop for ToolExecutor {
+    fn drop(&mut self) {
+        {
+            let mut queue = lock(&self.shared.queue);
+            queue.shutdown = true;
+        }
+        self.shared.signal.notify_all();
+        for worker in self.workers.drain(..) {
+            worker.join();
+        }
+    }
+}
+
+/// Initialize the process-wide tool executor with the caller's platform thread
+/// spawner.
+///
+/// The executor is global because [`Tool::invoke_async`] is a low-level value
+/// method: it cannot carry a runtime handle without making every tool value
+/// runtime-specific. The spawning policy still stays outside this crate: callers
+/// inject a concrete `T: ClawThread` once during runtime startup. Repeated calls
+/// are treated as success so independent startup paths can defensively initialize
+/// the executor without coordinating a separate "already initialized" state.
+///
+/// # Errors
+///
+/// Returns the platform spawn error if the worker cannot be created.
+pub fn init_tool_executor<T: ClawThread>(thread: T) -> io::Result<()> {
+    if TOOL_EXECUTOR.get().is_some() {
+        return Ok(());
+    }
+
+    let executor = ToolExecutor::new(thread)?;
+    match TOOL_EXECUTOR.set(executor) {
+        Ok(()) | Err(_) => Ok(()),
     }
 }
 
@@ -121,14 +166,13 @@ pub(crate) fn invoke_on_global_executor<'a>(
 }
 
 fn global_executor() -> Result<&'static ToolExecutor, &'static str> {
-    match TOOL_EXECUTOR.get_or_init(ToolExecutor::new) {
-        Ok(executor) => Ok(executor),
-        Err(error) => Err(error.as_str()),
-    }
+    TOOL_EXECUTOR
+        .get()
+        .ok_or("tool executor has not been initialized")
 }
 
 fn executor_unavailable(message: &str) -> ToolInvokeError {
-    tool_invoke_err(ToolError::invoke_rejected(format!(
+    ToolInvokeError::new(ToolError::invoke_rejected(format!(
         "tool executor unavailable: {message}"
     )))
 }
@@ -140,6 +184,9 @@ fn worker_loop(shared: Arc<Shared>) {
             loop {
                 if let Some(job) = queue.jobs.pop_front() {
                     break job;
+                }
+                if queue.shutdown {
+                    return;
                 }
                 queue = wait(&shared.signal, queue);
             }

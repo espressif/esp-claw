@@ -62,7 +62,6 @@ impl Scope {
 /// what makes "duplicate block" unrepresentable). Map order is irrelevant — the
 /// render sorts by [`sort_key`](Self::sort_key).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-#[non_exhaustive]
 pub enum BlockKind {
     // Band 1 — Static instructions.
     AgentInstruction,

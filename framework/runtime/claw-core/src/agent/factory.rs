@@ -292,7 +292,7 @@ mod tests {
     use crate::agent::graph::GraphEffect;
     use crate::memory::{global_store, CompactionPolicy, NoopExtractor, RuleBasedTierClassifier};
     use claw_skill::{SkillError, SkillId, SkillSet};
-    use claw_tool::Tool;
+    use claw_tool::{init_tool_executor, Tool};
 
     struct NoopWake;
     impl Wake for NoopWake {
@@ -300,6 +300,7 @@ mod tests {
     }
 
     fn block_on<F: Future>(future: F) -> F::Output {
+        init_tool_executor(StdThread).expect("tool executor");
         let mut future = Box::pin(future);
         let waker = Waker::from(Arc::new(NoopWake));
         let mut context = Context::from_waker(&waker);

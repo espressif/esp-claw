@@ -14,7 +14,6 @@ use crate::lifecycle::Lifecycle;
 /// [`None`](CapabilityRole::None) is a capability that exists *only* for its
 /// lifecycle.
 #[derive(Clone)]
-#[non_exhaustive]
 pub enum CapabilityRole {
     /// A model-callable tool. A capability with this role *is* a
     /// [`claw_tool::Tool`]; this crate adds no dispatch, schema, or visibility

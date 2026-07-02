@@ -89,7 +89,7 @@ impl<'a> ToolRunner<'a> {
     /// Whether `name`'s tool may run concurrently (the async scheduling hint; unknown
     /// tools are treated as serializing).
     ///
-    /// Reserved for the future async runner (see the module docs): today every
+    /// Reserved for the future batch scheduler (see the module docs): today every
     /// call runs in order, so nothing consults this yet.
     #[allow(dead_code)]
     pub fn is_concurrent(&self, name: &str) -> bool {
@@ -267,10 +267,11 @@ fn display_name(name: &str) -> &str {
 mod tests {
     use super::*;
     use crate::handler::{
-        tool_invoke_err_with_retries, AsyncToolHandler, Tool, ToolFuture, ToolHandler,
-        ToolInvokeError, ToolOutput, ToolRetryCount,
+        AsyncToolHandler, Tool, ToolFuture, ToolHandler, ToolInvokeError, ToolOutput,
+        ToolRetryCount,
     };
     use crate::set::{AllowedTools, ToolGroup};
+    use claw_interface::StdThread;
     use claw_permission::{Action, RiskClass};
     use core::future::Future;
     use core::task::{Context, Poll};
@@ -335,6 +336,10 @@ mod tests {
         }
     }
 
+    fn init_test_tool_executor() {
+        crate::init_tool_executor(StdThread).expect("tool executor");
+    }
+
     #[test]
     fn allow_runs_the_tool() {
         let tools = tools();
@@ -396,6 +401,8 @@ mod tests {
 
     #[test]
     fn async_runner_offloads_sync_tool_work() {
+        init_test_tool_executor();
+
         struct BlockingTool {
             started: Mutex<Option<mpsc::Sender<()>>>,
             release: Mutex<mpsc::Receiver<()>>,
@@ -490,6 +497,8 @@ mod tests {
 
     #[test]
     fn async_runner_executes_async_tool() {
+        init_test_tool_executor();
+
         struct AsyncTool;
         impl AsyncToolHandler for AsyncTool {
             fn name(&self) -> &str {
@@ -538,7 +547,7 @@ mod tests {
             }
             fn invoke(&self, _call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
                 if self.calls.fetch_add(1, Ordering::Relaxed) == 0 {
-                    Err(tool_invoke_err_with_retries(
+                    Err(ToolInvokeError::with_retries(
                         ToolError::invoke_rejected("transient"),
                         ToolRetryCount::extra(1),
                     ))

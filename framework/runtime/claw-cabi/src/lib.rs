@@ -36,7 +36,10 @@ use std::sync::{
 use std::task::{Wake, Waker};
 
 #[cfg(target_os = "espidf")]
-use claw_agent::{AgentSystem, BackendKind, ClawApiConfig, PoolConfig, SessionId, SharedTaskPool};
+use claw_agent::{
+    init_tool_executor, AgentSystem, BackendKind, ClawApiConfig, PoolConfig, SessionId,
+    SharedTaskPool,
+};
 use claw_agent::{CapabilityError, ChannelIngressSink, InboundMessage, Registry};
 #[cfg(target_os = "espidf")]
 use claw_interface::{ClawThread, CoreAffinity, Priority, WorkerHandle};
@@ -432,6 +435,7 @@ unsafe fn agent_system_create_inner(
     let registry = Arc::clone(&registry_handle.registry);
     let llm = build_llm_config(config)?;
     let memory_dir = unsafe { required_string(config.memory_dir)? };
+    init_tool_executor(EspIdfThread).map_err(|error| CapabilityError::Failed(error.to_string()))?;
     let pool = Arc::new(
         SharedTaskPool::new(PoolConfig::default(), EspIdfThread)
             .map_err(|error| CapabilityError::Failed(error.to_string()))?,

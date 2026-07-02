@@ -11,8 +11,8 @@
 use claw_interface::ClawFs;
 use claw_memory::{MemoryDraft, MemoryId, MemoryItem, MemoryPatch, StoreOutcome};
 use claw_tool::{
-    tool_invoke_err, tool_metadata, Tool, ToolError, ToolGroup, ToolHandler, ToolInvocation,
-    ToolInvokeError, ToolOutput,
+    tool_metadata, Tool, ToolError, ToolGroup, ToolHandler, ToolInvocation, ToolInvokeError,
+    ToolOutput,
 };
 use serde_json::Value;
 
@@ -181,7 +181,7 @@ fn parse_object(call: &ToolInvocation<'_>) -> Result<Value, ToolInvokeError> {
         return Ok(Value::Object(serde_json::Map::new()));
     }
     serde_json::from_str(call.arguments_json)
-        .map_err(|error| tool_invoke_err(ToolError::InvalidArgumentsJson(error.to_string())))
+        .map_err(|error| ToolInvokeError::new(ToolError::InvalidArgumentsJson(error.to_string())))
 }
 
 /// A required non-empty string field.
@@ -192,7 +192,7 @@ fn required_string(args: &Value, key: &str) -> Result<String, ToolInvokeError> {
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .ok_or_else(|| {
-            tool_invoke_err(ToolError::invoke_rejected(format!(
+            ToolInvokeError::new(ToolError::invoke_rejected(format!(
                 "missing required string field '{key}'"
             )))
         })?;

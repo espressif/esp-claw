@@ -30,6 +30,13 @@
 //! `function.name`) is enforced at build time by [`bake`] — the *same* crate
 //! that defines the macro reading those files, so the runtime and build-time
 //! halves of the contract can never drift.
+//!
+//! Sync and async execution are both intentional public surfaces. The sync path
+//! is not migration leftover: immediate and C-backed tools can remain sync, while
+//! Rust tools that await cooperative work use [`AsyncToolHandler`]. The agent
+//! runtime drives tools through [`ToolRunner::run_one_async`], and sync handlers
+//! remain valid there because [`Tool::invoke_async`] moves their body onto the
+//! fixed tool executor instead of blocking the main agent executor.
 
 pub mod bake;
 
@@ -42,12 +49,13 @@ mod runner;
 mod set;
 mod validate;
 
-pub use block::{BlockPolicy, ToolBlockVerdict, DEFAULT_BLOCK_RETRIES};
+pub use block::{BlockPolicy, ToolBlockVerdict};
+pub use executor::init_tool_executor;
 pub use gate::PermissionGate;
 pub use handler::{
-    tool_invoke_err, tool_invoke_err_with_retries, AsyncToolHandler, Tool, ToolError, ToolFuture,
-    ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput, ToolRetryCount,
+    AsyncToolHandler, Tool, ToolError, ToolFuture, ToolHandler, ToolInvocation, ToolInvokeError,
+    ToolOutput, ToolRetryCount,
 };
-pub use registry::ToolRegistry;
+pub use registry::{ToolRegistry, ToolRegistryError};
 pub use runner::{ApprovalNeeded, CallOutcome, ToolGate, ToolRunner};
-pub use set::{AllowedTools, ToolGroup, ToolSet, ToolSetError, DEFAULT_TOOL_GROUP};
+pub use set::{AllowedTools, ToolGroup, ToolSet, ToolSetError};

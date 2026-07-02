@@ -71,10 +71,7 @@ use crate::memory::{
 use claw_context::{Block, BlockKind, Context};
 use claw_permission::{Grant, PermissionPolicy};
 use claw_skill::SkillSet;
-use claw_tool::{
-    BlockPolicy, PermissionGate, ToolBlockVerdict, ToolGate, ToolSet, ToolSetError,
-    DEFAULT_BLOCK_RETRIES,
-};
+use claw_tool::{BlockPolicy, PermissionGate, ToolBlockVerdict, ToolGate, ToolSet, ToolSetError};
 
 crate::define_prefixed_id!(AgentId, "agent-", "agent");
 crate::define_prefixed_id!(ApprovalId, "approval-", "approval");
@@ -516,7 +513,7 @@ impl<H: ClawHttpAsync, Timer: ClawTimer> BaseAgent<H, Timer> {
             permission_policy: None,
             agent_id: 0,
             agent_kind: String::new(),
-            block_retries: DEFAULT_BLOCK_RETRIES,
+            block_retries: BlockPolicy::default().retries(),
             summary_cursor: SummaryCursor::new(),
         }
     }
@@ -1118,7 +1115,7 @@ impl<F: ClawFs + 'static, H: ClawHttpAsync, Timer: ClawTimer> BaseAgentBuilder<F
     /// the agent fails the task with
     /// [`ToolNotPermitted`](AgentRunError::ToolNotPermitted). Each tolerated round
     /// is one self-correction nudge to the model; `0` fails on the first blocked
-    /// round. Defaults to [`DEFAULT_BLOCK_RETRIES`](claw_tool::DEFAULT_BLOCK_RETRIES).
+    /// round. Defaults to the [`BlockPolicy::default`] tolerance.
     pub fn with_block_retries(mut self, retries: u32) -> Self {
         self.block_retries = retries;
         self
@@ -1540,14 +1537,15 @@ mod gating_tests {
     use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
     use claw_interface::{
         BlockingClawHttpAsync, CapturingHttp, ClawHttp, ClawHttpAsync, ClawTimer, ImmediateTimer,
-        MemFs, ScriptedHttp,
+        MemFs, ScriptedHttp, StdThread,
     };
     use claw_memory::{TranscriptConfig, TranscriptStore};
     use serde_json::{json, Value};
 
     use crate::agent::{AgentId, AgentRunError, BaseAgent, BaseAgentBuilder, TickOutcome};
     use claw_tool::{
-        AllowedTools, Tool, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput, ToolSet,
+        init_tool_executor, AllowedTools, Tool, ToolHandler, ToolInvocation, ToolInvokeError,
+        ToolOutput, ToolSet,
     };
 
     // HTTP doubles (ScriptedHttp / CapturingHttp, httpmock feature) are shared from
@@ -1658,6 +1656,7 @@ mod gating_tests {
     }
 
     fn block_on<F: Future>(future: F) -> F::Output {
+        init_tool_executor(StdThread).expect("tool executor");
         let mut future = Box::pin(future);
         let waker = Waker::from(Arc::new(NoopWake));
         let mut context = Context::from_waker(&waker);

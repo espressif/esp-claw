@@ -10,7 +10,7 @@
 /// Consecutive gating-blocked tool rounds tolerated before
 /// [`record_round`](BlockPolicy::record_round) reports [`ToolBlockVerdict::Exhausted`].
 /// One round buys the model a single self-correction nudge.
-pub const DEFAULT_BLOCK_RETRIES: u32 = 1;
+const DEFAULT_BLOCK_RETRIES: u32 = 1;
 
 /// The verdict [`BlockPolicy::record_round`] returns after a tool round, driving
 /// the soft-hide "retry then fail" policy.
@@ -37,8 +37,8 @@ pub enum ToolBlockVerdict {
 ///
 /// Holds the tolerated budget plus the live count of consecutive blocked rounds.
 /// A clean round resets the streak; a blocked round bumps it and, once it exceeds
-/// the budget, yields [`ToolBlockVerdict::Exhausted`]. Defaults to
-/// [`DEFAULT_BLOCK_RETRIES`].
+/// the budget, yields [`ToolBlockVerdict::Exhausted`]. Defaults to one tolerated
+/// blocked round.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BlockPolicy {
     /// How many consecutive gating-blocked rounds to tolerate before reporting

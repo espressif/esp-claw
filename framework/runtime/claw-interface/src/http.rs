@@ -53,6 +53,15 @@ pub struct HttpJsonRequest<'a> {
     pub headers: &'a [HttpHeader<'a>],
 }
 
+/// Parameters for a JSON GET request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HttpGetRequest<'a> {
+    pub url: &'a str,
+    pub auth: HttpAuth<'a>,
+    pub timeout_ms: u32,
+    pub headers: &'a [HttpHeader<'a>],
+}
+
 /// HTTP status code.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -348,6 +357,24 @@ pub trait ClawHttpAsync {
         request: &'a HttpJsonRequest<'a>,
         cancel: Cancel<'a>,
     ) -> HttpResponseFuture<'a>;
+
+    /// Async JSON GET for read-only capability clients.
+    ///
+    /// Implementations that only support POST keep the default rejection. Callers
+    /// should surface it as a capability/tool invocation error rather than
+    /// silently changing methods.
+    fn get_json<'a>(
+        &'a mut self,
+        _request: &'a HttpGetRequest<'a>,
+        _cancel: Cancel<'a>,
+    ) -> HttpResponseFuture<'a> {
+        Box::pin(async {
+            Err(HttpError::RequestFailed(HttpRequestFailure::driver(
+                "http get",
+                "transport does not support async HTTP GET",
+            )))
+        })
+    }
 }
 
 /// Drive `future` while checking `cancel` before each poll.

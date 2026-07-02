@@ -67,9 +67,8 @@ pub use claw_core::{
 };
 pub use claw_interface::ClawFs;
 pub use claw_tool::{
-    tool_invoke_err, tool_invoke_err_with_retries, tool_metadata, AsyncToolHandler, Tool,
-    ToolError, ToolFuture, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
-    ToolRetryCount,
+    init_tool_executor, tool_metadata, AsyncToolHandler, Tool, ToolError, ToolFuture, ToolHandler,
+    ToolInvocation, ToolInvokeError, ToolOutput, ToolRetryCount,
 };
 // The on-disk filesystem backend is a dev convenience; device builds inject
 // their own `ClawFs` through `AgentSystem::builder::<F, H, Timer>()`.
@@ -100,6 +99,9 @@ pub enum AgentError {
     /// The background memory task pool could not start (e.g. thread spawn failed).
     #[error("failed to start the shared task pool: {0}")]
     MemoryPool(#[from] std::io::Error),
+    /// The fixed tool-call executor could not start.
+    #[error("failed to start the tool executor: {0}")]
+    ToolExecutor(#[source] std::io::Error),
     /// The shared conversation-compaction LLM client failed to init.
     #[error("failed to initialize the compaction LLM client: {0}")]
     CompactorLlm(String),
@@ -168,6 +170,7 @@ impl AgentSystem {
         llm: ClawApiConfig,
         memory_dir: impl Into<String>,
     ) -> Result<AgentSystem, AgentError> {
+        init_tool_executor(StdThread).map_err(AgentError::ToolExecutor)?;
         let pool = Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread)?);
         let memory_dir = memory_dir.into();
         // `DiskFs::default()` is verbatim-path mode; `memory_dir` is already an
@@ -277,6 +280,9 @@ impl Chat<'_> {
 /// and the egress channel id. Long-term memory is always on, rooted at
 /// `<memory_dir>/long_term`; the conversation-compaction policy is internal —
 /// callers do not supply one.
+/// Custom runtimes that drive tools must also initialize the fixed tool executor
+/// once at boot with [`init_tool_executor`] and their platform `ClawThread`
+/// backend; [`on_disk`](AgentSystem::on_disk) does this for the dev host path.
 ///
 /// The persistence backend `F`, async HTTP transport `H`, and `Timer` are type
 /// parameters chosen at

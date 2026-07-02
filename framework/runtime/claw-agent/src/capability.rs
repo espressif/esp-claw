@@ -139,9 +139,10 @@ mod tests {
     use std::sync::Mutex;
 
     use claw_capability::{Capability, CapabilityError};
+    use claw_interface::StdThread;
     use claw_tool::{
-        AsyncToolHandler, ToolFuture, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
-        ToolRunner, ToolSet,
+        init_tool_executor, AsyncToolHandler, ToolFuture, ToolHandler, ToolInvocation,
+        ToolInvokeError, ToolOutput, ToolRunner, ToolSet,
     };
 
     struct DummyTool;
@@ -194,6 +195,8 @@ mod tests {
 
     #[test]
     fn resolver_runs_registered_async_tool_capability() {
+        init_tool_executor(StdThread).expect("tool executor");
+
         let registry = Arc::new(Registry::new());
         registry
             .register(Capability::async_tool(AsyncDummyTool))

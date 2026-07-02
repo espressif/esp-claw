@@ -14,8 +14,7 @@ use std::sync::Arc;
 
 use claw_permission::{Action, RiskClass};
 use claw_tool::{
-    tool_invoke_err, tool_metadata, ToolError, ToolHandler, ToolInvocation, ToolInvokeError,
-    ToolOutput,
+    tool_metadata, ToolError, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
 };
 
 use crate::agent::base_agent::AgentId;
@@ -49,9 +48,7 @@ impl ToolHandler for RespondToApprovalTool {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let agent = string_argument(call.arguments_json, "agent")?;
         let target = AgentId::from_wire(agent.trim()).map_err(|error| {
-            tool_invoke_err(ToolError::invoke_rejected(format!(
-                "invalid agent id '{agent}': {error}"
-            )))
+            ToolError::invoke_rejected(format!("invalid agent id '{agent}': {error}"))
         })?;
 
         let verdict_raw = string_argument(call.arguments_json, "verdict")?;
@@ -60,9 +57,10 @@ impl ToolHandler for RespondToApprovalTool {
             "no" => ApprovalVerdict::No,
             "other" => ApprovalVerdict::Other,
             other => {
-                return Err(tool_invoke_err(ToolError::invoke_rejected(format!(
+                return Err(ToolError::invoke_rejected(format!(
                     "respond_to_approval 'verdict' must be one of yes|no|other, got '{other}'"
-                ))))
+                ))
+                .into())
             }
         };
 

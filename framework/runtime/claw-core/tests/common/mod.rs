@@ -21,7 +21,7 @@ use claw_interface::{
     ScriptStep, ScriptedHttp, StdThread,
 };
 use claw_memory::{TranscriptConfig, TranscriptStore};
-use claw_tool::{ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput};
+use claw_tool::{init_tool_executor, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput};
 use claw_utils::{PoolConfig, SharedTaskPool};
 use serde_json::{json, Value};
 
@@ -219,6 +219,7 @@ impl Wake for NoopWake {
 }
 
 pub fn block_on<F: Future>(future: F) -> F::Output {
+    init_tool_executor(StdThread).expect("tool executor");
     let mut future = Box::pin(future);
     let waker = Waker::from(Arc::new(NoopWake));
     let mut context = Context::from_waker(&waker);

@@ -7,9 +7,7 @@ use claw_permission::Action;
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::handler::{
-    tool_invoke_err, Tool, ToolError, ToolInvocation, ToolInvokeError, ToolOutput,
-};
+use crate::handler::{Tool, ToolError, ToolInvocation, ToolInvokeError, ToolOutput};
 use crate::validate::parse_arguments_json;
 
 /// A named bundle of [`Tool`]s registered together.
@@ -44,7 +42,7 @@ impl ToolGroup {
 }
 
 /// Group label for tools registered without an explicit [`ToolGroup`].
-pub const DEFAULT_TOOL_GROUP: &str = "default";
+const DEFAULT_TOOL_GROUP: &str = "default";
 
 /// One tool plus its group identity, as stored for dispatch.
 struct Entry {
@@ -168,7 +166,7 @@ fn insert_tool(
 }
 
 impl ToolSet {
-    /// Assemble ungrouped tools under [`DEFAULT_TOOL_GROUP`].
+    /// Assemble ungrouped tools under an internal default group label.
     ///
     /// See [`from_groups`](Self::from_groups) for the grouped form and the
     /// duplicate-name rule.
@@ -399,7 +397,7 @@ impl ToolSet {
                 parse_arguments_json(call.arguments_json)?;
                 entry.tool.invoke(call)
             }
-            None => Err(tool_invoke_err(ToolError::NotFound(call.name.to_string()))),
+            None => Err(ToolError::NotFound(call.name.to_string()).into()),
         }
     }
 
@@ -417,7 +415,7 @@ impl ToolSet {
                 parse_arguments_json(call.arguments_json)?;
                 entry.tool.clone()
             }
-            None => return Err(tool_invoke_err(ToolError::NotFound(call.name.to_string()))),
+            None => return Err(ToolError::NotFound(call.name.to_string()).into()),
         };
         tool.invoke_async(call).await
     }
@@ -494,6 +492,7 @@ impl<'a> FromIterator<&'a str> for AllowedTools {
 mod tests {
     use super::*;
     use crate::handler::{AsyncToolHandler, ToolFuture, ToolHandler, ToolInvokeError};
+    use claw_interface::StdThread;
     use core::future::Future;
     use core::task::{Context, Poll};
     use std::sync::Arc;
@@ -581,6 +580,10 @@ mod tests {
         }
     }
 
+    fn init_test_tool_executor() {
+        crate::init_tool_executor(StdThread).expect("tool executor");
+    }
+
     #[test]
     fn tool_context_is_none_when_no_tool_has_usage() {
         let set = ToolSet::new([Tool::new(UsageTool::new("bare", None))]).unwrap();
@@ -654,6 +657,8 @@ mod tests {
 
     #[test]
     fn sync_tool_invokes_through_async_dispatch() {
+        init_test_tool_executor();
+
         let set = ToolSet::new([Tool::new(UsageTool::new("read", None))]).unwrap();
         let output = block_on(set.invoke_async(&ToolInvocation {
             id: Some("t1"),
@@ -688,6 +693,8 @@ mod tests {
 
     #[test]
     fn async_tool_invokes_through_async_dispatch() {
+        init_test_tool_executor();
+
         let set = ToolSet::new([Tool::new_async(AsyncEchoTool)]).unwrap();
         let output = block_on(set.invoke_async(&ToolInvocation {
             id: Some("t1"),

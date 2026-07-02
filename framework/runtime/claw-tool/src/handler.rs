@@ -94,8 +94,8 @@ impl ToolRetryCount {
 /// re-invoke the same call before giving up.
 ///
 /// Most handlers never construct this directly — returning a [`ToolError`] uses
-/// the [`From`] impl (no retry). Reach for [`tool_invoke_err_with_retries`] only
-/// for a transient failure worth an automatic re-invoke.
+/// the [`From`] impl (no retry). Reach for [`with_retries`](Self::with_retries)
+/// only for a transient failure worth an automatic re-invoke.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 #[error("{error}")]
 pub struct ToolInvokeError {
@@ -106,22 +106,27 @@ pub struct ToolInvokeError {
     pub retries: ToolRetryCount,
 }
 
-/// An immediate failure with no automatic re-invocation.
-pub fn tool_invoke_err(error: ToolError) -> ToolInvokeError {
-    ToolInvokeError {
-        error,
-        retries: ToolRetryCount::none(),
+impl ToolInvokeError {
+    /// An immediate failure with no automatic re-invocation.
+    pub fn new(error: impl Into<ToolError>) -> Self {
+        Self {
+            error: error.into(),
+            retries: ToolRetryCount::none(),
+        }
     }
-}
 
-/// A failure paired with an explicit automatic retry budget.
-pub fn tool_invoke_err_with_retries(error: ToolError, retries: ToolRetryCount) -> ToolInvokeError {
-    ToolInvokeError { error, retries }
+    /// A failure paired with an explicit automatic retry budget.
+    pub fn with_retries(error: impl Into<ToolError>, retries: ToolRetryCount) -> Self {
+        Self {
+            error: error.into(),
+            retries,
+        }
+    }
 }
 
 impl From<ToolError> for ToolInvokeError {
     fn from(error: ToolError) -> Self {
-        tool_invoke_err(error)
+        Self::new(error)
     }
 }
 
@@ -159,12 +164,19 @@ impl ToolError {
     }
 }
 
-/// One model-callable tool: the full, concise shape a caller must provide.
+/// One synchronous model-callable tool: the full, concise shape a caller must
+/// provide.
 ///
 /// Implement this once per tool. A collection of tools is assembled into a
 /// [`ToolSet`](crate::ToolSet) (which dispatches `invoke` by
 /// [`name`](ToolHandler::name) and combines every [`schema`](ToolHandler::schema)
 /// into the JSON sent to the LLM).
+///
+/// This trait is a permanent part of the API, not a compatibility layer. Use it
+/// for immediate work, deterministic CPU-light parsing/formatting, and C-backed
+/// capability callbacks. Async callers still drive sync handlers through
+/// [`Tool::invoke_async`], which runs the handler body on the fixed tool
+/// executor.
 pub trait ToolHandler: Send + Sync {
     /// The tool's name. Must match the `name` field inside [`schema`](Self::schema)
     /// and what the model emits in its `tool_call`.
@@ -220,8 +232,9 @@ pub trait ToolHandler: Send + Sync {
 
 /// Async model-callable tool implemented in Rust.
 ///
-/// C-backed tools keep using [`ToolHandler`]. This trait is the Rust-side async
-/// surface: the metadata/classification methods intentionally mirror
+/// This trait is the Rust-side async surface for tools that await I/O or other
+/// cooperative work. It is intentionally separate from [`ToolHandler`], not a
+/// replacement for it. The metadata/classification methods mirror
 /// [`ToolHandler`] so a [`Tool`] can hide whether the implementation is sync or
 /// async from the aggregate/runner layers.
 pub trait AsyncToolHandler: Send + Sync {
@@ -379,9 +392,9 @@ impl Tool {
     pub fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         match &self.handler {
             ToolKind::Sync(handler) => handler.invoke(call),
-            ToolKind::Async(_) => Err(tool_invoke_err(ToolError::invoke_rejected(
-                "async tool requires the async tool runner",
-            ))),
+            ToolKind::Async(_) => {
+                Err(ToolError::invoke_rejected("async tool requires the async tool runner").into())
+            }
         }
     }
 
@@ -403,5 +416,36 @@ impl Tool {
             ToolKind::Sync(handler) => Box::pin(async move { handler.invoke(call) }),
             ToolKind::Async(handler) => handler.invoke_async(call),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug)]
+    struct ExternalToolError;
+
+    impl From<ExternalToolError> for ToolError {
+        fn from(_: ExternalToolError) -> Self {
+            ToolError::invoke_rejected("external")
+        }
+    }
+
+    #[test]
+    fn invoke_error_constructors_accept_convertible_errors() {
+        let immediate = ToolInvokeError::new(ExternalToolError);
+        assert_eq!(immediate.retries, ToolRetryCount::none());
+        assert!(matches!(
+            immediate.error,
+            ToolError::InvokeRejected(message) if message == "external"
+        ));
+
+        let retried = ToolInvokeError::with_retries(ExternalToolError, ToolRetryCount::extra(2));
+        assert_eq!(retried.retries, ToolRetryCount::extra(2));
+        assert!(matches!(
+            retried.error,
+            ToolError::InvokeRejected(message) if message == "external"
+        ));
     }
 }

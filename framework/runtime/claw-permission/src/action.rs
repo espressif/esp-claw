@@ -47,7 +47,6 @@ pub enum RiskClass {
 /// assert_eq!(Resource::Host("example.com".into()).to_string(), "host:example.com");
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum Resource {
     /// A filesystem path.
     Path(String),

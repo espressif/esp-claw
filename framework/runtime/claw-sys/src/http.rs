@@ -62,8 +62,8 @@ pub use espidf_driver::{EspIdfHttp, EspIdfHttpOneShot};
 mod espidf_driver {
     use super::{build_auth_header, parse_error_message_body};
     use claw_interface::http::{
-        Cancel, ClawHttp, ClawHttpAsync, HttpError, HttpJsonRequest, HttpRequestFailure,
-        HttpResponse, HttpResponseFuture, HttpStatusCode,
+        Cancel, ClawHttp, ClawHttpAsync, HttpError, HttpGetRequest, HttpJsonRequest,
+        HttpRequestFailure, HttpResponse, HttpResponseFuture, HttpStatusCode,
     };
     use core::ffi::{c_char, c_int, c_void};
     use core::future::Future;
@@ -97,6 +97,7 @@ mod espidf_driver {
     // esp_http_client_event_id_t: ERROR=0, ON_CONNECTED=1, HEADERS_SENT=2,
     // ON_HEADER=3, ON_DATA=4, ON_FINISH=5, ...
     const HTTP_EVENT_ON_DATA: c_int = 4;
+    const HTTP_METHOD_GET: c_int = 0;
     const HTTP_METHOD_POST: c_int = 1;
 
     type HttpEventHandleCb = unsafe extern "C" fn(*mut esp_http_client_event_t) -> c_int;
@@ -381,24 +382,55 @@ mod espidf_driver {
             request: &HttpJsonRequest,
             abort: *const AtomicBool,
         ) -> Result<CString, HttpError> {
+            self.prepare_base_request(
+                request.url,
+                request.timeout_ms,
+                request.auth,
+                request.headers,
+                abort,
+            )?;
+
+            // `set_post_field` stores the pointer (no copy), so `body` must
+            // outlive the blocking perform.
+            let body = CString::new(request.body).map_err(|_| HttpError::InvalidBody)?;
+            let body_len = body_len_to_c_int(request.body.len())?;
+
+            unsafe {
+                check_client_call(
+                    esp_http_client_set_method(self.raw, HTTP_METHOD_POST),
+                    "esp_http_client_set_method",
+                )?;
+                set_header(self.raw, "Content-Type", "application/json")?;
+                self.set_auth_and_extra_headers(request.auth, request.headers)?;
+                check_client_call(
+                    esp_http_client_set_post_field(self.raw, body.as_ptr(), body_len),
+                    "esp_http_client_set_post_field",
+                )?;
+            }
+            Ok(body)
+        }
+
+        /// Apply common request fields and clear the response accumulator.
+        fn prepare_base_request(
+            &mut self,
+            url: &str,
+            timeout_ms: u32,
+            auth: claw_interface::HttpAuth<'_>,
+            headers: &[claw_interface::HttpHeader<'_>],
+            abort: *const AtomicBool,
+        ) -> Result<(), HttpError> {
             self.ctx.body.clear();
             self.ctx.abort = abort;
 
-            // `set_url` copies the string internally; `set_post_field` stores the
-            // pointer (no copy), so `body` must outlive the blocking perform.
-            let url = CString::new(request.url).map_err(|_| HttpError::InvalidUrl)?;
-            let body = CString::new(request.body).map_err(|_| HttpError::InvalidBody)?;
-            let body_len = body_len_to_c_int(request.body.len())?;
-            let timeout_ms = timeout_to_c_int(request.timeout_ms)?;
+            // `set_url` copies the string internally; it only needs to live for
+            // the duration of the call.
+            let url = CString::new(url).map_err(|_| HttpError::InvalidUrl)?;
+            let timeout_ms = timeout_to_c_int(timeout_ms)?;
 
             unsafe {
                 check_client_call(
                     esp_http_client_set_url(self.raw, url.as_ptr()),
                     "esp_http_client_set_url",
-                )?;
-                check_client_call(
-                    esp_http_client_set_method(self.raw, HTTP_METHOD_POST),
-                    "esp_http_client_set_method",
                 )?;
                 check_client_call(
                     esp_http_client_set_timeout_ms(self.raw, timeout_ms),
@@ -412,24 +444,43 @@ mod espidf_driver {
                     esp_http_client_delete_all_headers(self.raw),
                     "esp_http_client_delete_all_headers",
                 )?;
+            }
+            self.set_auth_and_extra_headers(auth, headers)
+        }
 
-                set_header(self.raw, "Content-Type", "application/json")?;
-
-                if let Some((name, value)) = build_auth_header(request.auth) {
+        fn set_auth_and_extra_headers(
+            &self,
+            auth: claw_interface::HttpAuth<'_>,
+            headers: &[claw_interface::HttpHeader<'_>],
+        ) -> Result<(), HttpError> {
+            unsafe {
+                if let Some((name, value)) = build_auth_header(auth) {
                     set_header(self.raw, name, &value)?;
                 }
-                for h in request.headers {
-                    if h.name.is_empty() {
+                for header in headers {
+                    if header.name.is_empty() {
                         continue;
                     }
-                    set_header(self.raw, h.name, h.value)?;
+                    set_header(self.raw, header.name, header.value)?;
                 }
-                check_client_call(
-                    esp_http_client_set_post_field(self.raw, body.as_ptr(), body_len),
-                    "esp_http_client_set_post_field",
-                )?;
             }
-            Ok(body)
+            Ok(())
+        }
+
+        fn prepare_get_request(&mut self, request: &HttpGetRequest<'_>) -> Result<(), HttpError> {
+            self.prepare_base_request(
+                request.url,
+                request.timeout_ms,
+                request.auth,
+                request.headers,
+                core::ptr::null(),
+            )?;
+            unsafe {
+                check_client_call(
+                    esp_http_client_set_method(self.raw, HTTP_METHOD_GET),
+                    "esp_http_client_set_method",
+                )
+            }
         }
 
         /// Run one non-blocking transfer step. `Ok(None)` means the transfer is
@@ -520,6 +571,39 @@ mod espidf_driver {
                 return Err(HttpError::Aborted);
             }
             let _body = self.prepare_request(request, core::ptr::null())?;
+            let mut active = ActiveRequestGuard::new(self.raw);
+            loop {
+                if cancel.is_cancelled() {
+                    active.cancel();
+                    return Err(HttpError::Aborted);
+                }
+                match self.perform_step() {
+                    Ok(Some(response)) => {
+                        active.finish();
+                        return Ok(response);
+                    }
+                    Ok(None) => {
+                        active.mark_started();
+                        yield_once().await;
+                    }
+                    Err(error) => {
+                        self.close_failed_connection(&error);
+                        active.finish();
+                        return Err(error);
+                    }
+                }
+            }
+        }
+
+        async fn execute_get_async(
+            &mut self,
+            request: &HttpGetRequest<'_>,
+            cancel: Cancel<'_>,
+        ) -> Result<HttpResponse, HttpError> {
+            if cancel.is_cancelled() {
+                return Err(HttpError::Aborted);
+            }
+            self.prepare_get_request(request)?;
             let mut active = ActiveRequestGuard::new(self.raw);
             loop {
                 if cancel.is_cancelled() {
@@ -638,6 +722,14 @@ mod espidf_driver {
         ) -> HttpResponseFuture<'a> {
             Box::pin(async move { self.conn.execute_async(request, cancel).await })
         }
+
+        fn get_json<'a>(
+            &'a mut self,
+            request: &'a HttpGetRequest<'a>,
+            cancel: Cancel<'a>,
+        ) -> HttpResponseFuture<'a> {
+            Box::pin(async move { self.conn.execute_get_async(request, cancel).await })
+        }
     }
 
     impl ClawHttpAsync for EspIdfHttpOneShot {
@@ -649,6 +741,17 @@ mod espidf_driver {
             Box::pin(async move {
                 let mut http = EspIdfHttp::new(request.url)?;
                 ClawHttpAsync::post_json(&mut http, request, cancel).await
+            })
+        }
+
+        fn get_json<'a>(
+            &'a mut self,
+            request: &'a HttpGetRequest<'a>,
+            cancel: Cancel<'a>,
+        ) -> HttpResponseFuture<'a> {
+            Box::pin(async move {
+                let mut http = EspIdfHttp::new(request.url)?;
+                ClawHttpAsync::get_json(&mut http, request, cancel).await
             })
         }
     }

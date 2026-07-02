@@ -25,8 +25,8 @@ pub use http::{
     ScriptedHttp, SharedScriptHttp, YieldingClawHttpAsync,
 };
 pub use http::{
-    Cancel, ClawHttp, ClawHttpAsync, HttpAuth, HttpError, HttpHeader, HttpJsonRequest,
-    HttpRequestFailure, HttpResponse, HttpResponseFuture, HttpStatusCode,
+    Cancel, ClawHttp, ClawHttpAsync, HttpAuth, HttpError, HttpGetRequest, HttpHeader,
+    HttpJsonRequest, HttpRequestFailure, HttpResponse, HttpResponseFuture, HttpStatusCode,
 };
 #[cfg(feature = "realhttp")]
 pub use http::{RealHttp, RealHttpAsync};

@@ -54,7 +54,6 @@ pub trait Lifecycle: Send + Sync {
 /// not happen in this layer (tools are invoked through `claw-tool`), so there is
 /// nothing in flight to serialize against unregister.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-#[non_exhaustive]
 pub enum CapabilityState {
     /// Registered but not started (registry not started, or group disabled-then-registered).
     #[default]

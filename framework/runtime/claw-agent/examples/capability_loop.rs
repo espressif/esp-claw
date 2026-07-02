@@ -24,9 +24,9 @@
 use std::sync::{Arc, Mutex};
 
 use claw_agent::{
-    AgentSystem, BackendKind, Capability, CapabilityError, ChannelAdapter, ClawApiConfig,
-    InboundMessage, OutboundMessage, PoolConfig, Registry, SharedTaskPool, Tool, ToolHandler,
-    ToolInvocation, ToolInvokeError, ToolOutput,
+    init_tool_executor, AgentSystem, BackendKind, Capability, CapabilityError, ChannelAdapter,
+    ClawApiConfig, InboundMessage, OutboundMessage, PoolConfig, Registry, SharedTaskPool, Tool,
+    ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
 };
 use claw_interface::{BlockingClawHttpAsync, ImmediateTimer, MemFs, SharedScriptHttp, StdThread};
 
@@ -137,6 +137,7 @@ async fn main() -> anyhow::Result<()> {
 
     // 2. Build the system from the registry. Hermetic backends (in-memory fs +
     //    scripted LLM) keep the example offline and deterministic.
+    init_tool_executor(StdThread)?;
     let pool = Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread)?);
     SharedScriptHttp::install(vec![assistant_text(
         "Hello from the agent — the local time is 2026-06-29T17:00:00Z.",

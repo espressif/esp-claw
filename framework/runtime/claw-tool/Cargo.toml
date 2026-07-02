@@ -12,6 +12,7 @@ name = "claw_tool"
 crate-type = ["rlib"]
 
 [dependencies]
+claw-interface = { path = "../claw-interface" }
 claw-permission = { path = "../claw-permission" }
 claw-utils = { path = "../claw-utils" }
 # Used only by the build-time `bake` module (called from dependent crates' build
@@ -20,6 +21,9 @@ claw-utils = { path = "../claw-utils" }
 anyhow = "1"
 serde_json = "1"
 thiserror = "2"
+
+[dev-dependencies]
+claw-interface = { path = "../claw-interface", features = ["stdthread"] }
 
 [lints.rust]
 unsafe_code = "forbid"

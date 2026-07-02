@@ -481,7 +481,10 @@ mod tests {
 
     use super::*;
     use claw_api::ToolCall;
-    use claw_tool::{AllowedTools, Tool, ToolGroup, ToolHandler, ToolInvokeError, ToolOutput};
+    use claw_interface::StdThread;
+    use claw_tool::{
+        init_tool_executor, AllowedTools, Tool, ToolGroup, ToolHandler, ToolInvokeError, ToolOutput,
+    };
     use serde_json::json;
 
     struct NoopWake;
@@ -490,6 +493,7 @@ mod tests {
     }
 
     fn block_on<F: Future>(future: F) -> F::Output {
+        init_tool_executor(StdThread).expect("tool executor");
         let mut future = Box::pin(future);
         let waker = Waker::from(Arc::new(NoopWake));
         let mut context = Context::from_waker(&waker);
@@ -840,11 +844,11 @@ mod behavior_tests {
         ClawHttp, HttpError, HttpJsonRequest, HttpRequestFailure, HttpResponse, HttpStatusCode,
     };
     use claw_interface::{
-        BlockingClawHttpAsync, ClawHttpAsync, ClawTimer, ImmediateTimer, RealHttp,
+        BlockingClawHttpAsync, ClawHttpAsync, ClawTimer, ImmediateTimer, RealHttp, StdThread,
     };
     use claw_tool::{
-        Tool, ToolError, ToolGroup, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
-        ToolSet,
+        init_tool_executor, Tool, ToolError, ToolGroup, ToolHandler, ToolInvocation,
+        ToolInvokeError, ToolOutput, ToolSet,
     };
     use serde_json::{json, Value};
 
@@ -870,6 +874,7 @@ mod behavior_tests {
     }
 
     fn block_on<F: Future>(future: F) -> F::Output {
+        init_tool_executor(StdThread).expect("tool executor");
         let mut future = Box::pin(future);
         let waker = Waker::from(Arc::new(NoopWake));
         let mut context = Context::from_waker(&waker);

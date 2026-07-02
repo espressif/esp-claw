@@ -318,6 +318,7 @@ name = "claw-tool"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "claw-interface",
  "claw-permission",
  "claw-utils",
  "serde_json",

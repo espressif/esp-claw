@@ -77,8 +77,8 @@ impl ToolRegistry {
         self.tools.is_empty()
     }
 
-    /// Build a [`ToolSet`] from the named tools, placed under
-    /// [`DEFAULT_TOOL_GROUP`].
+    /// Build a [`ToolSet`] from the named tools, placed under the internal
+    /// default group label.
     ///
     /// # Errors
     ///
@@ -100,8 +100,8 @@ impl ToolRegistry {
         ToolSet::new(tools).map_err(ToolRegistryError::Set)
     }
 
-    /// Build a [`ToolSet`] containing *every* tool in the registry, under
-    /// [`DEFAULT_TOOL_GROUP`].
+    /// Build a [`ToolSet`] containing *every* tool in the registry, under the
+    /// internal default group label.
     ///
     /// # Errors
     ///

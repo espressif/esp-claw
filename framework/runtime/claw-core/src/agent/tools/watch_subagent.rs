@@ -4,8 +4,7 @@ use std::sync::Arc;
 
 use claw_permission::{Action, RiskClass};
 use claw_tool::{
-    tool_invoke_err, tool_metadata, ToolError, ToolHandler, ToolInvocation, ToolInvokeError,
-    ToolOutput,
+    tool_metadata, ToolError, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
 };
 
 use crate::agent::base_agent::AgentId;
@@ -44,9 +43,7 @@ impl ToolHandler for WatchSubagentTool {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let agent = string_argument(call.arguments_json, "agent")?;
         let target = AgentId::from_wire(agent.trim()).map_err(|error| {
-            tool_invoke_err(ToolError::invoke_rejected(format!(
-                "invalid agent id '{agent}': {error}"
-            )))
+            ToolError::invoke_rejected(format!("invalid agent id '{agent}': {error}"))
         })?;
         match self.context.get_subagent(target) {
             Some(snapshot) => Ok(ToolOutput {
