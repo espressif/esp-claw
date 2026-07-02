@@ -5,17 +5,11 @@
 #![allow(non_camel_case_types)]
 
 pub mod agent;
-mod channels;
 pub mod memory;
 mod orchestrator;
 mod session;
 
 pub use agent::IterationId;
-pub use channels::{
-    ChannelEgress, ChannelEgressHub, ChannelError, ChannelIngress, ChannelIngressSink,
-    ChannelTransport, Command, InboundCommand, InboundMessage, IngressFuture, LocalChannelIngress,
-    OutboundMessage, RecordingTransport, ReplyRoute,
-};
 pub use claw_utils::{define_prefixed_id, IdParseError};
 pub use memory::{
     agent_store, global_store, CompactionPolicy, ContextAdapter, ContextAdapterInput, ExtractError,
@@ -23,9 +17,7 @@ pub use memory::{
     MemoryTier, NoopExtractor, ProfileContextAdapter, ProfileTools, RuleBasedTierClassifier,
     TierClassifier, Transcript, AGENT_ID_PREFIX, GLOBAL_ID_PREFIX,
 };
-pub use orchestrator::{
-    ChannelsEgressOnly, ChannelsUnset, FactorySet, FactoryUnset, Orchestrator, OrchestratorBuilder,
-};
+pub use orchestrator::{ApprovalRequest, DriveOutput, Orchestrator, RootReply};
 pub use session::{
-    DeliverError, SessionError, SessionId, SessionMessage, SessionOut, SessionRecord, SessionStore,
+    DeliverError, SessionError, SessionId, SessionMessage, SessionRecord, SessionStore,
 };

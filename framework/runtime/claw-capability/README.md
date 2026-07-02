@@ -11,7 +11,7 @@ orthogonal, optional **lifecycle**.
     no dispatch, schema, or visibility logic of its own. Rust tools may be
     synchronous (`Capability::tool(claw_tool::Tool::new(...))`) or async
     (`Capability::async_tool(...)` with a `claw_tool::AsyncToolHandler`).
-  - `Channel` — a message transport (outbound egress; inbound via its lifecycle task).
+  - `Channel` — a bidirectional message channel adapter.
   - `None` — no invocation surface; the capability exists only for its lifecycle.
 - **Lifecycle** — optional resource management, available to *any* role (a `Tool`
   may own a runtime, a `Channel` owns its transport, a lifecycle-only capability
@@ -37,7 +37,7 @@ re-entering this layer.
 | `CapabilityGroup` | A registrable bundle of capabilities with an optional **shared** lifecycle (e.g. one runtime backing several tools). |
 | `Lifecycle` | The orthogonal hooks on any capability or group: the one-time `init`/`deinit` pair and the per-activation `start`/`stop` pair (`init → (start → stop)* → deinit`). |
 | `CapabilityState` | Lifecycle state: `Registered` / `Started` / `Disabled`. |
-| `ChannelAdapter` / `OutboundMessage` | The outbound side of a message channel. |
+| `ChannelAdapter` / `ChannelRuntime` / `InboundMessage` / `OutboundMessage` | Bidirectional message channel contract. |
 | `CapabilityError` | Registration / lifecycle failure. |
 
 ## Example

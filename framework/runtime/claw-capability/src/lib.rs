@@ -54,7 +54,7 @@ mod lifecycle;
 mod registry;
 
 pub use capability::{Capability, CapabilityGroup, CapabilityRole};
-pub use channel::{ChannelAdapter, OutboundMessage};
+pub use channel::{ChannelAdapter, ChannelFuture, ChannelRuntime, InboundMessage, OutboundMessage};
 pub use error::CapabilityError;
 pub use lifecycle::{CapabilityState, Lifecycle};
 pub use registry::Registry;

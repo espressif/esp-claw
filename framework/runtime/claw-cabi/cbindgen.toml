@@ -36,7 +36,8 @@ rename_variants = "QualifiedScreamingSnakeCase"
 prefix_with_name = false
 
 [export]
-# Only the claw_capability_* / claw_inbound_* surface is intended to be public.
+# Only the claw_capability_* / claw_channel_* / claw_inbound_* surface is
+# intended to be public.
 include = []
 
 # Idiomatic Rust types are CamelCase; the C ABI uses snake_case `_t` names.
@@ -52,4 +53,4 @@ include = []
 "ClawCapabilityGroup" = "claw_capability_group_t"
 "ClawInboundMessage" = "claw_inbound_message_t"
 "ClawCapabilityRegistry" = "claw_capability_registry_t"
-"ClawCapabilityIngress" = "claw_capability_ingress_t"
+"ClawChannelRuntime" = "claw_channel_runtime_t"

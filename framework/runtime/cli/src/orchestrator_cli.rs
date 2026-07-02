@@ -26,46 +26,15 @@
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
-use claw_agent_cli::{
-    load_env, make_compaction, make_llm_config, make_long_term_deps, make_memory_fs,
-    make_profile_store, CliFs,
-};
-use claw_core::agent::{AgentLongTermDirs, FsAgentFactory, MapAgentResolver};
-use claw_core::{
-    ChannelEgress, ChannelEgressHub, ChannelIngressSink, ChannelTransport, InboundMessage,
-    Orchestrator, RecordingTransport,
-};
+use claw_agent_cli::{load_env, make_llm_config, CliFs};
+use claw_core::agent::{FsAgentFactory, MapAgentResolver};
+use claw_core::{Orchestrator, SessionMessage};
 use claw_interface::{RealHttp, TokioTimer};
 
 const MEMORY_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../claw-core/output/orchestrator-chat"
 );
-const TRANSCRIPT_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../claw-core/output/orchestrator-chat/sessions"
-);
-const PROFILE_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../claw-core/output/orchestrator-chat/profile"
-);
-const GLOBAL_LONG_TERM_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../claw-core/output/orchestrator-chat/long_term/global"
-);
-const CONVERSATION_LONG_TERM_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../claw-core/output/orchestrator-chat/long_term/agents/conversation"
-);
-const WORKER_LONG_TERM_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../claw-core/output/orchestrator-chat/long_term/agents/worker"
-);
-/// The CLI's single inbound/outbound channel; the transport registers under it
-/// and inbound messages carry it so the reply route resolves back to us.
-const CHANNEL: &str = "cli";
-const CHAT_ID: &str = "cli-chat";
-
 /// Parse the optional `--log-file <PATH>` (or `--log-file=<PATH>`) flag into a
 /// [`claw_log::LogOutput`]; absent → [`claw_log::LogOutput::Stderr`]. Exits with a
 /// usage error when the flag is given without a path.
@@ -120,29 +89,19 @@ async fn main() {
     // Empty resolver: the built-in conversation/worker manifests declare no extra
     // capabilities, so no name->handler mapping is needed yet.
     let resolver = Arc::new(MapAgentResolver::new());
-    let agent_long_term_dirs = AgentLongTermDirs::new()
-        .with_dir("conversation", CONVERSATION_LONG_TERM_DIR)
-        .with_dir("worker", WORKER_LONG_TERM_DIR);
-    let factory = Arc::new(FsAgentFactory::<CliFs, RealHttp, TokioTimer>::new(
+    let factory = match FsAgentFactory::<CliFs, RealHttp, TokioTimer>::new(
         resolver,
         make_llm_config(),
-        TRANSCRIPT_DIR,
-        make_memory_fs(),
-        make_compaction(),
-        make_long_term_deps(GLOBAL_LONG_TERM_DIR, agent_long_term_dirs),
-        make_profile_store(PROFILE_DIR),
-    ));
+        MEMORY_DIR,
+    ) {
+        Ok(factory) => Arc::new(factory),
+        Err(error) => {
+            eprintln!("failed to build agent factory: {error}");
+            std::process::exit(1);
+        }
+    };
 
-    // A recording transport doubles as the CLI's "screen": the orchestrator sends
-    // replies through the egress, and we drain them after each turn.
-    let transport = RecordingTransport::new(CHANNEL);
-    let egress = Arc::new(ChannelEgressHub::new());
-    egress.register(Arc::clone(&transport) as Arc<dyn ChannelTransport>);
-
-    let orchestrator = Orchestrator::builder()
-        .config_egress(egress as Arc<dyn ChannelEgress>)
-        .with_agent_factory(factory)
-        .build();
+    let orchestrator = Orchestrator::new(factory);
     let session = orchestrator.session_create();
 
     eprintln!("Memory:  {MEMORY_DIR}");
@@ -169,29 +128,31 @@ async fn main() {
         }
 
         turn += 1;
-        if let Err(error) = orchestrator
-            .push_user_message(InboundMessage {
-                message_id: format!("m{turn}"),
-                channel: CHANNEL.into(),
-                chat_id: CHAT_ID.into(),
-                sender_id: None,
-                session_id: session.to_wire(),
-                text: input.to_string(),
-            })
+        let output = match orchestrator
+            .deliver(
+                session,
+                SessionMessage::new(input.to_string(), format!("m{turn}"), None),
+            )
             .await
         {
-            println!("\n(error: {error})\n");
-            continue;
-        }
+            Ok(output) => output,
+            Err(error) => {
+                println!("\n(error: {error})\n");
+                continue;
+            }
+        };
 
-        // The orchestrator drives the graph synchronously inside `push_user_message`
-        // and routes every reply/approval through our transport.
-        let replies = transport.drain_sent();
-        if replies.is_empty() {
+        if output.replies.is_empty() && output.approvals.is_empty() {
             println!("\n(no reply)");
         }
-        for reply in replies {
+        for reply in output.replies {
             println!("\n{}", reply.text);
+        }
+        for approval in output.approvals {
+            println!(
+                "\n[approval needed: {} {}] {}",
+                approval.agent, approval.approval, approval.summary
+            );
         }
         println!();
     }

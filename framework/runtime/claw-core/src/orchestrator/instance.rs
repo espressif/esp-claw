@@ -48,17 +48,17 @@ use tracing::Instrument;
 /// The kind instantiated as a session's user-facing root agent.
 const ROOT_AGENT_KIND: &str = "conversation";
 
-/// A user-facing reply produced by a **root** agent, surfaced to the orchestrator
-/// to route to the session's egress.
+/// A user-facing reply produced by a **root** agent, surfaced to the channel
+/// router.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RootReply {
+pub struct RootReply {
     /// The session whose root produced this reply.
-    pub(crate) session: SessionId,
+    pub session: SessionId,
     /// The reply text.
-    pub(crate) text: String,
+    pub text: String,
     /// True when the root *ended* the conversation (via `end_conversation`),
     /// false for an ordinary yielded answer.
-    pub(crate) ended: bool,
+    pub ended: bool,
 }
 
 /// A pending human decision surfaced out of the graph.
@@ -70,15 +70,15 @@ pub(crate) struct RootReply {
 /// approval is surfaced as an `ApprovalRequest`, to be resolved via
 /// [`OrchestratorInstance::resolve_approval`].
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ApprovalRequest {
+pub struct ApprovalRequest {
     /// The session the requesting agent belongs to.
-    pub(crate) session: SessionId,
+    pub session: SessionId,
     /// The agent awaiting the decision (the resolution target).
-    pub(crate) agent: AgentId,
+    pub agent: AgentId,
     /// The pending approval id to pass back when resolving.
-    pub(crate) approval: ApprovalId,
+    pub approval: ApprovalId,
     /// Human-readable description of what needs approving.
-    pub(crate) summary: String,
+    pub summary: String,
 }
 
 /// Everything one [`drive`](OrchestratorInstance::drive) surfaced to the
@@ -87,11 +87,11 @@ pub(crate) struct ApprovalRequest {
 /// An `Idle`/`Working`/parked tick contributes nothing, so an empty `DriveOutput`
 /// means "nothing to route this drive".
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct DriveOutput {
+pub struct DriveOutput {
     /// Replies a root produced.
-    pub(crate) replies: Vec<RootReply>,
+    pub replies: Vec<RootReply>,
     /// Approvals any agent is waiting on.
-    pub(crate) approvals: Vec<ApprovalRequest>,
+    pub approvals: Vec<ApprovalRequest>,
 }
 
 impl DriveOutput {

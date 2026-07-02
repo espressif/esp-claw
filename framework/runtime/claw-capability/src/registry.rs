@@ -562,7 +562,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{Capability, CapabilityRole, OutboundMessage};
+    use crate::{Capability, CapabilityRole, ChannelRuntime, OutboundMessage};
 
     /// A trivial tool whose id/name is `name`.
     struct DummyTool {
@@ -709,6 +709,15 @@ mod tests {
         fn channel_id(&self) -> &str {
             &self.id
         }
+
+        fn open(&self, _runtime: Arc<dyn ChannelRuntime>) -> Result<(), CapabilityError> {
+            Ok(())
+        }
+
+        fn close(&self) -> Result<(), CapabilityError> {
+            Ok(())
+        }
+
         fn send(&self, message: &OutboundMessage) -> Result<(), CapabilityError> {
             self.sent.lock().unwrap().push(message.clone());
             Ok(())
@@ -738,6 +747,8 @@ mod tests {
 
     #[test]
     fn register_then_expose_async_tool() {
+        claw_tool::init_tool_executor(claw_interface::StdThread).unwrap();
+
         let registry = Registry::new();
         registry
             .register(Capability::async_tool(AsyncDummyTool::new("async_echo")))

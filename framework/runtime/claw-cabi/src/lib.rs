@@ -1,20 +1,23 @@
 //! `claw-cabi` — the single outbound C ABI (Rust -> C) for the agent/capability
 //! stack.
 //!
-//! To C, the only concept is a *capability*. The whole surface is three
-//! functions in two planes:
+//! To C, the Rust side exposes two surfaces:
 //!
 //! - **Control plane** — register capabilities:
 //!   [`claw_capability_register`] / [`claw_capability_register_group`].
-//! - **Data plane** — the receive half of a channel:
-//!   [`claw_capability_ingress_push`] (the mirror of
-//!   `claw_core::Orchestrator::push_user_message`; the outbound half is the
-//!   capability descriptor's `send` callback).
+//! - **Data plane** — C submits channel messages through
+//!   [`claw_agent_system_push_message`] or, for registered C channel
+//!   capabilities, through the [`ClawChannelRuntime`] handed to the channel's
+//!   open callback.
+//! - **Agent system plane** (ESP-IDF target only) — create/start/stop/destroy a
+//!   device agent runtime and expose explicit session create/bind/list/delete
+//!   calls for C callers.
 //!
-//! The two opaque handles ([`ClawCapabilityRegistry`], [`ClawCapabilityIngress`])
-//! are created and destroyed on the Rust side and handed to C; lifecycle
-//! *driving*, queries, and *building* the agent runtime are owned by Rust and
-//! are not exposed to C.
+//! `claw-agent` remains the Rust-native API. It builds an [`AgentSystem`] and
+//! exposes async channel submission directly for host/dev callers. This crate is the
+//! C adapter: on ESP-IDF it selects the concrete platform backends, starts a
+//! worker with `edge_executor`, and translates C's synchronous calls into
+//! commands for the async agent system.
 //!
 //! This is the one crate in the workspace where `unsafe` / `extern "C"` is
 //! allowed; every other crate keeps `unsafe_code = "forbid"`. Every `extern "C"`
@@ -38,10 +41,11 @@ use std::task::{Wake, Waker};
 #[cfg(target_os = "espidf")]
 use claw_agent::{
     init_tool_executor, AgentPersistenceConfig, AgentSystem, BackendKind, ClawApiConfig, SessionId,
+    SessionRecord,
 };
-use claw_agent::{
-    CapabilityError, ChannelIngressSink, DeliverError, InboundMessage, Registry, SessionError,
-};
+use claw_agent::{CapabilityError, ChannelRuntime, Registry};
+#[cfg(target_os = "espidf")]
+use claw_agent::{ChannelFuture, InboundMessage};
 #[cfg(target_os = "espidf")]
 use claw_interface::{ClawThread, CoreAffinity, Priority, WorkerHandle};
 #[cfg(target_os = "espidf")]
@@ -50,18 +54,24 @@ use claw_sys::{EspIdfFs, EspIdfHttp, EspIdfThread, EspIdfTimer};
 use claw_utils::{async_channel, AsyncReceiver, AsyncSender};
 #[cfg(target_os = "espidf")]
 use core::{
-    ffi::{c_char, CStr},
+    ffi::{c_char, c_void, CStr},
     ptr,
 };
+#[cfg(target_os = "espidf")]
+use std::ffi::CString;
 
 pub use abi::{
-    ClawAgentSystemConfig, ClawCapability, ClawCapabilityChannel, ClawCapabilityExecuteCallback,
-    ClawCapabilityGroup, ClawCapabilityLifecycle, ClawCapabilityLifecycleCallback,
-    ClawCapabilityRole, ClawCapabilityRoleData, ClawCapabilitySendCallback, ClawCapabilityTool,
-    ClawInboundMessage, CLAW_CAPABILITY_TOOL_OUTPUT_CAPACITY,
+    ClawAgentSessionListCallback, ClawAgentSessionRecord, ClawAgentSystemConfig, ClawCapability,
+    ClawCapabilityChannel, ClawCapabilityChannelCloseCallback, ClawCapabilityChannelOpenCallback,
+    ClawCapabilityExecuteCallback, ClawCapabilityGroup, ClawCapabilityLifecycle,
+    ClawCapabilityLifecycleCallback, ClawCapabilityRole, ClawCapabilityRoleData,
+    ClawCapabilitySendCallback, ClawCapabilityTool, ClawInboundMessage,
+    CLAW_CAPABILITY_TOOL_OUTPUT_CAPACITY,
 };
 pub use result::{ClawCapabilityErrorKind, ClawCapabilityResult};
 
+#[cfg(target_os = "espidf")]
+use crate::result::into_result;
 use crate::result::{from_result, guard};
 use crate::wrappers::{build_capability, build_group, build_inbound};
 
@@ -88,17 +98,10 @@ const AGENT_WORKER_STACK_SIZE: usize = 64 * 1024;
 const SESSION_ID_BUFFER_MIN_CAPACITY: usize = 32;
 
 #[cfg(target_os = "espidf")]
-struct RuntimeSendReply {
-    session: SessionId,
-    replies: Vec<String>,
-}
-
-#[cfg(target_os = "espidf")]
 #[derive(Clone)]
 struct AgentRuntimeConfig {
     llm: ClawApiConfig,
     persistence: AgentPersistenceConfig,
-    default_channel: Option<String>,
     registry: Arc<Registry>,
 }
 
@@ -108,23 +111,20 @@ enum RuntimeCommand {
     SessionCreate {
         reply: mpsc::Sender<Result<SessionId, CapabilityError>>,
     },
+    SessionList {
+        reply: mpsc::Sender<Result<Vec<SessionRecord>, CapabilityError>>,
+    },
+    SessionBind {
+        session: SessionId,
+        channel: String,
+        chat_id: String,
+        reply: mpsc::Sender<Result<(), CapabilityError>>,
+    },
     SessionDelete {
         session: SessionId,
         reply: mpsc::Sender<Result<(), CapabilityError>>,
     },
-    Send {
-        session: SessionId,
-        text: String,
-        reply: mpsc::Sender<Result<RuntimeSendReply, CapabilityError>>,
-    },
     Shutdown,
-}
-
-#[cfg(target_os = "espidf")]
-#[derive(Clone)]
-struct RuntimeIngress {
-    sender: Arc<Mutex<AsyncSender<RuntimeCommand>>>,
-    running: Arc<AtomicBool>,
 }
 
 #[cfg(target_os = "espidf")]
@@ -147,13 +147,6 @@ impl AgentRuntime {
         }
     }
 
-    fn ingress(&self) -> RuntimeIngress {
-        RuntimeIngress {
-            sender: Arc::clone(&self.sender),
-            running: Arc::clone(&self.running),
-        }
-    }
-
     fn is_running(&self) -> bool {
         self.running.load(Ordering::Acquire)
     }
@@ -163,6 +156,7 @@ impl AgentRuntime {
             return Err(CapabilityError::InvalidState);
         }
         let receiver = self.receiver.take().ok_or(CapabilityError::InvalidState)?;
+        let command_sender = Arc::clone(&self.sender);
         let (ready_sender, ready_receiver) = mpsc::channel();
         let running = Arc::clone(&self.running);
         self.running.store(true, Ordering::Release);
@@ -172,7 +166,7 @@ impl AgentRuntime {
                 AGENT_WORKER_STACK_SIZE,
                 Priority::Normal,
                 CoreAffinity::Any,
-                move || run_agent_executor(config, receiver, ready_sender, running),
+                move || run_agent_executor(config, receiver, command_sender, ready_sender, running),
             )
             .map_err(|error| {
                 self.running.store(false, Ordering::Release);
@@ -233,17 +227,53 @@ impl AgentRuntime {
 }
 
 #[cfg(target_os = "espidf")]
+struct RuntimeCommandSink {
+    sender: Arc<Mutex<AsyncSender<RuntimeCommand>>>,
+    running: Arc<AtomicBool>,
+}
+
+#[cfg(target_os = "espidf")]
+impl ChannelRuntime for RuntimeCommandSink {
+    fn push_message(&self, message: InboundMessage) -> ChannelFuture<'_> {
+        Box::pin(async move {
+            if !self.running.load(Ordering::Acquire) {
+                return Err(CapabilityError::InvalidState);
+            }
+            self.sender
+                .lock()
+                .map_err(|_| {
+                    CapabilityError::Failed("agent runtime sender lock poisoned".to_string())
+                })?
+                .send(RuntimeCommand::Inbound(message))
+                .map_err(|_| CapabilityError::InvalidState)
+        })
+    }
+}
+
+#[cfg(target_os = "espidf")]
 fn run_agent_executor(
     config: AgentRuntimeConfig,
     receiver: AsyncReceiver<RuntimeCommand>,
+    sender: Arc<Mutex<AsyncSender<RuntimeCommand>>>,
     ready_sender: mpsc::Sender<Result<(), CapabilityError>>,
     running: Arc<AtomicBool>,
 ) {
+    let channel_runtime = Arc::new(RuntimeCommandSink {
+        sender,
+        running: Arc::clone(&running),
+    }) as Arc<dyn ChannelRuntime>;
     let system = match build_agent_system(&config) {
-        Ok(system) => {
-            let _ = ready_sender.send(Ok(()));
-            system
-        }
+        Ok(system) => match system.start_with_runtime(channel_runtime) {
+            Ok(()) => {
+                let _ = ready_sender.send(Ok(()));
+                system
+            }
+            Err(error) => {
+                let _ = ready_sender.send(Err(error));
+                running.store(false, Ordering::Release);
+                return;
+            }
+        },
         Err(error) => {
             let _ = ready_sender.send(Err(error));
             running.store(false, Ordering::Release);
@@ -258,16 +288,12 @@ fn run_agent_executor(
 
 #[cfg(target_os = "espidf")]
 fn build_agent_system(config: &AgentRuntimeConfig) -> Result<AgentSystem, CapabilityError> {
-    let mut builder = AgentSystem::builder::<EspIdfFs, EspIdfHttp, EspIdfTimer>()
-        .llm(config.llm.clone())
-        .persistence(config.persistence.clone())
-        .capabilities(Arc::clone(&config.registry));
-    if let Some(channel) = &config.default_channel {
-        builder = builder.channel(channel.clone());
-    }
-    builder
-        .build()
-        .map_err(|error| CapabilityError::Failed(error.to_string()))
+    AgentSystem::new::<EspIdfFs, EspIdfHttp, EspIdfTimer>(
+        config.llm.clone(),
+        config.persistence.clone(),
+        Arc::clone(&config.registry),
+    )
+    .map_err(|error| CapabilityError::Failed(error.to_string()))
 }
 
 #[cfg(target_os = "espidf")]
@@ -275,48 +301,30 @@ async fn agent_worker_loop(system: AgentSystem, receiver: AsyncReceiver<RuntimeC
     while let Some(command) = receiver.recv().await {
         match command {
             RuntimeCommand::Inbound(message) => {
-                let _ = system.ingress().push_user_message(message).await;
+                let _ = system.push_message(message).await;
             }
             RuntimeCommand::SessionCreate { reply } => {
                 let _ = reply.send(Ok(system.new_session()));
             }
-            RuntimeCommand::SessionDelete { session, reply } => {
-                let _ = reply.send(system.delete_session(session).map_err(map_session_error));
+            RuntimeCommand::SessionList { reply } => {
+                let _ = reply.send(Ok(system.list_sessions()));
             }
-            RuntimeCommand::Send {
+            RuntimeCommand::SessionBind {
                 session,
-                text,
+                channel,
+                chat_id,
                 reply,
             } => {
-                let result = system
-                    .send(session, text)
-                    .await
-                    .map(|replies| RuntimeSendReply { session, replies })
-                    .map_err(map_deliver_error);
-                let _ = reply.send(result);
+                let _ = reply.send(system.bind_session(session, &channel, &chat_id));
             }
-            RuntimeCommand::Shutdown => break,
+            RuntimeCommand::SessionDelete { session, reply } => {
+                let _ = reply.send(system.delete_session(session));
+            }
+            RuntimeCommand::Shutdown => {
+                let _ = system.stop();
+                break;
+            }
         }
-    }
-}
-
-fn map_session_error(error: SessionError) -> CapabilityError {
-    match error {
-        SessionError::NotFound(_) => CapabilityError::NotFound,
-        SessionError::AlreadyExists(_) => CapabilityError::AlreadyExists,
-    }
-}
-
-fn map_deliver_error(error: DeliverError) -> CapabilityError {
-    match error {
-        DeliverError::MissingSessionId | DeliverError::InvalidSessionId(_) => {
-            CapabilityError::InvalidArg
-        }
-        DeliverError::SessionNotFound(_) => CapabilityError::NotFound,
-        DeliverError::NoReplyRoute(_) | DeliverError::Channel(_) => {
-            CapabilityError::Failed(error.to_string())
-        }
-        DeliverError::Session(error) => map_session_error(error),
     }
 }
 
@@ -389,81 +397,77 @@ pub unsafe extern "C" fn claw_capability_registry_destroy(
     })
 }
 
-/// Opaque ingress handle: wraps `Arc<dyn claw_agent::ChannelIngressSink>`.
-///
-/// Created Rust-side after the runtime is wired (the sink is the `Orchestrator`)
-/// and handed to C so channel gateways can push inbound messages.
-enum IngressTarget {
-    Direct(Arc<dyn ChannelIngressSink>),
-    #[cfg(target_os = "espidf")]
-    Runtime(RuntimeIngress),
+/// Opaque channel runtime handle passed to C channel `open` callbacks.
+pub struct ClawChannelRuntime {
+    runtime: Arc<dyn ChannelRuntime>,
 }
 
-pub struct ClawCapabilityIngress {
-    target: IngressTarget,
-}
-
-impl ClawCapabilityIngress {
-    /// Box a shared ingress sink into a raw handle for C.
-    pub fn into_raw(sink: Arc<dyn ChannelIngressSink>) -> *mut ClawCapabilityIngress {
-        Box::into_raw(Box::new(ClawCapabilityIngress {
-            target: IngressTarget::Direct(sink),
-        }))
+impl ClawChannelRuntime {
+    pub fn into_raw(runtime: Arc<dyn ChannelRuntime>) -> *mut Self {
+        Box::into_raw(Box::new(Self { runtime }))
     }
 
-    #[cfg(target_os = "espidf")]
-    fn into_raw_runtime(ingress: RuntimeIngress) -> *mut ClawCapabilityIngress {
-        Box::into_raw(Box::new(ClawCapabilityIngress {
-            target: IngressTarget::Runtime(ingress),
-        }))
-    }
-
-    /// Reclaim and drop a handle produced by [`into_raw`](Self::into_raw).
-    ///
     /// # Safety
     /// `handle` must be null or a pointer returned by [`into_raw`](Self::into_raw)
     /// that has not already been dropped.
-    pub unsafe fn drop_raw(handle: *mut ClawCapabilityIngress) {
+    pub unsafe fn drop_raw(handle: *mut Self) {
         if !handle.is_null() {
             drop(Box::from_raw(handle));
         }
     }
 }
 
-/// Destroy an ingress handle returned by [`claw_agent_system_create`].
+/// Destroy a channel runtime handle previously handed to a C channel.
 ///
 /// # Safety
-/// `ingress` must be null or a live ingress handle not already destroyed.
+/// `runtime` must be null or a live runtime handle not already destroyed.
 #[no_mangle]
-pub unsafe extern "C" fn claw_capability_ingress_destroy(
-    ingress: *mut ClawCapabilityIngress,
+pub unsafe extern "C" fn claw_channel_runtime_destroy(
+    runtime: *mut ClawChannelRuntime,
 ) -> ClawCapabilityResult {
     guard(|| {
-        unsafe { ClawCapabilityIngress::drop_raw(ingress) };
+        unsafe { ClawChannelRuntime::drop_raw(runtime) };
         crate::result::ok()
     })
+}
+
+/// Submit one inbound channel message through a channel runtime handle.
+///
+/// # Safety
+/// `runtime` must be a live handle and `message` a valid `ClawInboundMessage`.
+#[no_mangle]
+pub unsafe extern "C" fn claw_channel_runtime_push(
+    runtime: *mut ClawChannelRuntime,
+    message: *const ClawInboundMessage,
+) -> ClawCapabilityResult {
+    guard(|| from_result(unsafe { channel_runtime_push_inner(runtime, message) }))
+}
+
+unsafe fn channel_runtime_push_inner(
+    runtime: *mut ClawChannelRuntime,
+    message: *const ClawInboundMessage,
+) -> Result<(), CapabilityError> {
+    let runtime = runtime.as_ref().ok_or(CapabilityError::InvalidArg)?;
+    let descriptor = message.as_ref().ok_or(CapabilityError::InvalidArg)?;
+    let inbound = unsafe { build_inbound(descriptor)? };
+    block_on(runtime.runtime.push_message(inbound))
 }
 
 #[cfg(target_os = "espidf")]
 /// Build an ESP-IDF agent runtime from an already-populated registry.
 ///
-/// This does not start capability lifecycle hooks. C can store the returned
-/// ingress handle in channel contexts, then call [`claw_agent_system_start`].
+/// This does not start the worker; call [`claw_agent_system_start`] next.
 ///
 /// # Safety
 /// All pointers must be valid for the duration of the call. `registry` must be a
-/// live registry handle. `ret_system` and `ret_ingress` must be valid
-/// out-pointers.
+/// live registry handle. `ret_system` must be a valid out-pointer.
 #[no_mangle]
 pub unsafe extern "C" fn claw_agent_system_create(
     config: *const ClawAgentSystemConfig,
     registry: *mut ClawCapabilityRegistry,
     ret_system: *mut *mut ClawAgentSystem,
-    ret_ingress: *mut *mut ClawCapabilityIngress,
 ) -> ClawCapabilityResult {
-    guard(|| {
-        from_result(unsafe { agent_system_create_inner(config, registry, ret_system, ret_ingress) })
-    })
+    guard(|| from_result(unsafe { agent_system_create_inner(config, registry, ret_system) }))
 }
 
 #[cfg(target_os = "espidf")]
@@ -471,39 +475,26 @@ unsafe fn agent_system_create_inner(
     config: *const ClawAgentSystemConfig,
     registry: *mut ClawCapabilityRegistry,
     ret_system: *mut *mut ClawAgentSystem,
-    ret_ingress: *mut *mut ClawCapabilityIngress,
 ) -> Result<(), CapabilityError> {
     let config = config.as_ref().ok_or(CapabilityError::InvalidArg)?;
     let registry_handle = registry.as_ref().ok_or(CapabilityError::InvalidArg)?;
     let system_out = ret_system.as_mut().ok_or(CapabilityError::InvalidArg)?;
-    let ingress_out = ret_ingress.as_mut().ok_or(CapabilityError::InvalidArg)?;
     *system_out = core::ptr::null_mut();
-    *ingress_out = core::ptr::null_mut();
 
     let registry = Arc::clone(&registry_handle.registry);
     let llm = build_llm_config(config)?;
-    let transcript_dir = unsafe { required_string(config.transcript_dir)? };
-    let profile_dir = unsafe { required_string(config.profile_dir)? };
-    let global_long_term_dir = unsafe { required_string(config.global_long_term_dir)? };
-    let conversation_long_term_dir = unsafe { required_string(config.conversation_long_term_dir)? };
-    let worker_long_term_dir = unsafe { required_string(config.worker_long_term_dir)? };
-    let persistence =
-        AgentPersistenceConfig::new(&transcript_dir, &profile_dir, &global_long_term_dir)
-            .with_agent_long_term_dir("conversation", &conversation_long_term_dir)
-            .with_agent_long_term_dir("worker", &worker_long_term_dir);
+    let persistence_dir = unsafe { required_string(config.persistence_dir)? };
+    let persistence = AgentPersistenceConfig::new(&persistence_dir);
     init_tool_executor(EspIdfThread).map_err(|error| CapabilityError::Failed(error.to_string()))?;
 
     let runtime_config = AgentRuntimeConfig {
         llm,
         persistence,
-        default_channel: unsafe { optional_string(config.default_channel)? },
         registry,
     };
 
     let runtime = AgentRuntime::new();
-    let ingress = runtime.ingress();
 
-    *ingress_out = ClawCapabilityIngress::into_raw_runtime(ingress);
     *system_out = Box::into_raw(Box::new(ClawAgentSystem {
         config: runtime_config,
         runtime: Mutex::new(runtime),
@@ -526,24 +517,11 @@ pub unsafe extern "C" fn claw_agent_system_start(
 #[cfg(target_os = "espidf")]
 unsafe fn agent_system_start_inner(system: *mut ClawAgentSystem) -> Result<(), CapabilityError> {
     let handle = system.as_ref().ok_or(CapabilityError::InvalidArg)?;
-    {
-        let mut runtime = handle
-            .runtime
-            .lock()
-            .map_err(|_| CapabilityError::Failed("agent runtime lock poisoned".to_string()))?;
-        if let Err(error) = runtime.start(handle.config.clone()) {
-            return Err(error);
-        }
-    }
-    if let Err(error) = handle.config.registry.start_all() {
-        let mut runtime = handle
-            .runtime
-            .lock()
-            .map_err(|_| CapabilityError::Failed("agent runtime lock poisoned".to_string()))?;
-        runtime.stop()?;
-        return Err(error);
-    }
-    Ok(())
+    handle
+        .runtime
+        .lock()
+        .map_err(|_| CapabilityError::Failed("agent runtime lock poisoned".to_string()))?
+        .start(handle.config.clone())
 }
 
 #[cfg(target_os = "espidf")]
@@ -561,13 +539,11 @@ pub unsafe extern "C" fn claw_agent_system_stop(
 #[cfg(target_os = "espidf")]
 unsafe fn agent_system_stop_inner(system: *mut ClawAgentSystem) -> Result<(), CapabilityError> {
     let handle = system.as_ref().ok_or(CapabilityError::InvalidArg)?;
-    let lifecycle_result = handle.config.registry.stop_all();
-    let mut runtime = handle
+    handle
         .runtime
         .lock()
-        .map_err(|_| CapabilityError::Failed("agent runtime lock poisoned".to_string()))?;
-    runtime.stop()?;
-    lifecycle_result
+        .map_err(|_| CapabilityError::Failed("agent runtime lock poisoned".to_string()))?
+        .stop()
 }
 
 #[cfg(target_os = "espidf")]
@@ -588,13 +564,40 @@ unsafe fn agent_system_destroy_inner(system: *mut ClawAgentSystem) -> Result<(),
         return Ok(());
     }
     let boxed = Box::from_raw(system);
-    let lifecycle_result = boxed.config.registry.stop_all();
     if let Ok(mut runtime) = boxed.runtime.lock() {
         let _ = runtime.stop();
     }
-    lifecycle_result?;
     drop(boxed);
     Ok(())
+}
+
+#[cfg(target_os = "espidf")]
+/// Submit one inbound channel message to the running agent system.
+///
+/// # Safety
+/// `system` must be a live system handle and `message` a valid
+/// [`ClawInboundMessage`] for the duration of the call.
+#[no_mangle]
+pub unsafe extern "C" fn claw_agent_system_push_message(
+    system: *mut ClawAgentSystem,
+    message: *const ClawInboundMessage,
+) -> ClawCapabilityResult {
+    guard(|| from_result(unsafe { agent_system_push_message_inner(system, message) }))
+}
+
+#[cfg(target_os = "espidf")]
+unsafe fn agent_system_push_message_inner(
+    system: *mut ClawAgentSystem,
+    message: *const ClawInboundMessage,
+) -> Result<(), CapabilityError> {
+    let handle = system.as_ref().ok_or(CapabilityError::InvalidArg)?;
+    let descriptor = message.as_ref().ok_or(CapabilityError::InvalidArg)?;
+    let inbound = unsafe { build_inbound(descriptor)? };
+    handle
+        .runtime
+        .lock()
+        .map_err(|_| CapabilityError::Failed("agent runtime lock poisoned".to_string()))?
+        .send_command(RuntimeCommand::Inbound(inbound))
 }
 
 #[cfg(target_os = "espidf")]
@@ -653,6 +656,133 @@ unsafe fn agent_system_session_create_inner(
 }
 
 #[cfg(target_os = "espidf")]
+/// Bind an existing conversation session to one external channel chat.
+///
+/// Inbound channel messages for `(channel, chat_id)` are accepted only after
+/// this explicit binding.
+///
+/// # Safety
+/// `system` must be a live system handle. `session_id`, `channel`, and `chat_id`
+/// must be valid NUL-terminated UTF-8 strings.
+#[no_mangle]
+pub unsafe extern "C" fn claw_agent_system_session_bind(
+    system: *mut ClawAgentSystem,
+    session_id: *const c_char,
+    channel: *const c_char,
+    chat_id: *const c_char,
+) -> ClawCapabilityResult {
+    guard(|| {
+        from_result(unsafe {
+            agent_system_session_bind_inner(system, session_id, channel, chat_id)
+        })
+    })
+}
+
+#[cfg(target_os = "espidf")]
+unsafe fn agent_system_session_bind_inner(
+    system: *mut ClawAgentSystem,
+    session_id: *const c_char,
+    channel: *const c_char,
+    chat_id: *const c_char,
+) -> Result<(), CapabilityError> {
+    let handle = system.as_ref().ok_or(CapabilityError::InvalidArg)?;
+    let session = required_session_id(session_id)?;
+    let channel = required_string(channel)?;
+    let chat_id = required_string(chat_id)?;
+    let (reply_tx, reply_rx) = mpsc::channel();
+    {
+        let runtime = handle
+            .runtime
+            .lock()
+            .map_err(|_| CapabilityError::Failed("agent runtime lock poisoned".to_string()))?;
+        runtime.send_command(RuntimeCommand::SessionBind {
+            session,
+            channel,
+            chat_id,
+            reply: reply_tx,
+        })?;
+    }
+    reply_rx.recv().map_err(|_| {
+        CapabilityError::Failed("agent runtime stopped before binding session".to_string())
+    })?
+}
+
+#[cfg(target_os = "espidf")]
+/// Enumerate live conversation sessions.
+///
+/// The callback is invoked once for each live session. Pointers inside
+/// [`ClawAgentSessionRecord`] are borrowed and valid only until the callback
+/// returns.
+///
+/// # Safety
+/// `system` must be a live system handle. `callback` must be non-null and must
+/// not retain borrowed record pointers.
+#[no_mangle]
+pub unsafe extern "C" fn claw_agent_system_session_list(
+    system: *mut ClawAgentSystem,
+    callback: Option<ClawAgentSessionListCallback>,
+    user_context: *mut c_void,
+) -> ClawCapabilityResult {
+    guard(|| {
+        from_result(unsafe { agent_system_session_list_inner(system, callback, user_context) })
+    })
+}
+
+#[cfg(target_os = "espidf")]
+unsafe fn agent_system_session_list_inner(
+    system: *mut ClawAgentSystem,
+    callback: Option<ClawAgentSessionListCallback>,
+    user_context: *mut c_void,
+) -> Result<(), CapabilityError> {
+    let handle = system.as_ref().ok_or(CapabilityError::InvalidArg)?;
+    let callback = callback.ok_or(CapabilityError::InvalidArg)?;
+    let (reply_tx, reply_rx) = mpsc::channel();
+    {
+        let runtime = handle
+            .runtime
+            .lock()
+            .map_err(|_| CapabilityError::Failed("agent runtime lock poisoned".to_string()))?;
+        runtime.send_command(RuntimeCommand::SessionList { reply: reply_tx })?;
+    }
+    let sessions = reply_rx.recv().map_err(|_| {
+        CapabilityError::Failed("agent runtime stopped before listing sessions".to_string())
+    })??;
+
+    for session in sessions {
+        unsafe { call_session_list_callback(&session, callback, user_context)? };
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "espidf")]
+unsafe fn call_session_list_callback(
+    session: &SessionRecord,
+    callback: ClawAgentSessionListCallback,
+    user_context: *mut c_void,
+) -> Result<(), CapabilityError> {
+    let session_id = CString::new(session.id.to_wire())
+        .map_err(|_| CapabilityError::Failed("session id contains interior nul".to_string()))?;
+    let channel = optional_c_string(session.channel.as_deref(), "session channel")?;
+    let chat_id = optional_c_string(session.chat_id.as_deref(), "session chat id")?;
+    let record = ClawAgentSessionRecord {
+        session_id: session_id.as_ptr(),
+        channel: channel.as_ref().map_or(ptr::null(), |value| value.as_ptr()),
+        chat_id: chat_id.as_ref().map_or(ptr::null(), |value| value.as_ptr()),
+    };
+    unsafe { into_result(callback(&record, user_context)) }
+}
+
+#[cfg(target_os = "espidf")]
+fn optional_c_string(value: Option<&str>, label: &str) -> Result<Option<CString>, CapabilityError> {
+    value
+        .map(|value| {
+            CString::new(value)
+                .map_err(|_| CapabilityError::Failed(format!("{label} contains interior nul")))
+        })
+        .transpose()
+}
+
+#[cfg(target_os = "espidf")]
 /// Delete a conversation session and drop its live agent graph.
 ///
 /// # Safety
@@ -690,92 +820,6 @@ unsafe fn agent_system_session_delete_inner(
 }
 
 #[cfg(target_os = "espidf")]
-/// Send one text prompt synchronously through the Rust agent runtime.
-///
-/// `session_id` must name an existing `session-N` created through
-/// [`claw_agent_system_session_create`]. No default session is created
-/// implicitly.
-///
-/// # Safety
-/// `system` must be a live system handle. String pointers must be valid
-/// NUL-terminated UTF-8 strings for the duration of this call. Output buffers
-/// must be writable for their stated capacities.
-#[no_mangle]
-pub unsafe extern "C" fn claw_agent_system_send(
-    system: *mut ClawAgentSystem,
-    session_id: *const c_char,
-    text: *const c_char,
-    output_buffer: *mut c_char,
-    output_capacity: usize,
-    output_length: *mut usize,
-    session_id_buffer: *mut c_char,
-    session_id_capacity: usize,
-    session_id_length: *mut usize,
-) -> ClawCapabilityResult {
-    guard(|| {
-        from_result(unsafe {
-            agent_system_send_inner(
-                system,
-                session_id,
-                text,
-                output_buffer,
-                output_capacity,
-                output_length,
-                session_id_buffer,
-                session_id_capacity,
-                session_id_length,
-            )
-        })
-    })
-}
-
-#[cfg(target_os = "espidf")]
-#[allow(clippy::too_many_arguments)]
-unsafe fn agent_system_send_inner(
-    system: *mut ClawAgentSystem,
-    session_id: *const c_char,
-    text: *const c_char,
-    output_buffer: *mut c_char,
-    output_capacity: usize,
-    output_length: *mut usize,
-    session_id_buffer: *mut c_char,
-    session_id_capacity: usize,
-    session_id_length: *mut usize,
-) -> Result<(), CapabilityError> {
-    let handle = system.as_ref().ok_or(CapabilityError::InvalidArg)?;
-    let text = required_string(text)?;
-    let session = required_session_id(session_id)?;
-    let (reply_tx, reply_rx) = mpsc::channel();
-    {
-        let runtime = handle
-            .runtime
-            .lock()
-            .map_err(|_| CapabilityError::Failed("agent runtime lock poisoned".to_string()))?;
-        runtime.send_command(RuntimeCommand::Send {
-            session,
-            text,
-            reply: reply_tx,
-        })?;
-    }
-    let reply = reply_rx.recv().map_err(|_| {
-        CapabilityError::Failed("agent runtime stopped before replying".to_string())
-    })??;
-    let response = reply.replies.join("\n");
-    copy_string_to_c_buffer(&response, output_buffer, output_capacity, output_length)?;
-
-    if !session_id_buffer.is_null() {
-        copy_string_to_c_buffer(
-            &reply.session.to_wire(),
-            session_id_buffer,
-            session_id_capacity,
-            session_id_length,
-        )?;
-    }
-
-    Ok(())
-}
-
-#[cfg(target_os = "espidf")]
 unsafe fn build_llm_config(
     config: &ClawAgentSystemConfig,
 ) -> Result<ClawApiConfig, CapabilityError> {
@@ -783,21 +827,12 @@ unsafe fn build_llm_config(
         .parse::<BackendKind>()
         .map_err(|_| CapabilityError::InvalidArg)?;
 
-    let mut llm_config = ClawApiConfig::new(
+    let llm_config = ClawApiConfig::new(
         backend_type,
         required_string(config.api_key)?,
         required_string(config.model)?,
         required_string(config.base_url)?,
     );
-    if config.timeout_ms != 0 {
-        llm_config.timeout_ms = config.timeout_ms;
-    }
-    if config.max_tokens != 0 {
-        llm_config.max_tokens = config.max_tokens;
-    }
-    if config.image_max_bytes != 0 {
-        llm_config.image_max_bytes = config.image_max_bytes;
-    }
     Ok(llm_config)
 }
 
@@ -818,26 +853,6 @@ unsafe fn required_string(pointer: *const c_char) -> Result<String, CapabilityEr
         return Err(CapabilityError::InvalidArg);
     }
     Ok(value)
-}
-
-/// Copy a nullable UTF-8 C string; null or empty becomes `None`.
-///
-/// # Safety
-/// `pointer` must be null or a valid NUL-terminated C string.
-#[cfg(target_os = "espidf")]
-unsafe fn optional_string(pointer: *const c_char) -> Result<Option<String>, CapabilityError> {
-    if pointer.is_null() {
-        return Ok(None);
-    }
-    let value = CStr::from_ptr(pointer)
-        .to_str()
-        .map(str::to_string)
-        .map_err(|_| CapabilityError::InvalidArg)?;
-    if value.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(value))
-    }
 }
 
 /// Copy and parse a required session id.
@@ -952,49 +967,6 @@ unsafe fn register_group_inner(
     handle.registry.register_group(group)
 }
 
-/// Deliver one inbound message to the orchestrator (the receive half of a
-/// channel). The reply flows back out asynchronously through the channel's
-/// `send` callback, not through this return value.
-///
-/// # Safety
-/// `ingress` must be a handle from [`ClawCapabilityIngress::into_raw`] and
-/// `message` a valid `ClawInboundMessage` for the duration of the call.
-#[no_mangle]
-pub unsafe extern "C" fn claw_capability_ingress_push(
-    ingress: *mut ClawCapabilityIngress,
-    message: *const ClawInboundMessage,
-) -> ClawCapabilityResult {
-    guard(|| from_result(unsafe { ingress_push_inner(ingress, message) }))
-}
-
-unsafe fn ingress_push_inner(
-    ingress: *mut ClawCapabilityIngress,
-    message: *const ClawInboundMessage,
-) -> Result<(), CapabilityError> {
-    let handle = ingress.as_ref().ok_or(CapabilityError::InvalidArg)?;
-    let descriptor = message.as_ref().ok_or(CapabilityError::InvalidArg)?;
-    let inbound: InboundMessage = unsafe { build_inbound(descriptor)? };
-    match &handle.target {
-        IngressTarget::Direct(sink) => {
-            block_on(sink.push_user_message(inbound)).map_err(map_deliver_error)
-        }
-        #[cfg(target_os = "espidf")]
-        IngressTarget::Runtime(runtime) => {
-            if !runtime.running.load(Ordering::Acquire) {
-                return Err(CapabilityError::InvalidState);
-            }
-            runtime
-                .sender
-                .lock()
-                .map_err(|_| {
-                    CapabilityError::Failed("agent runtime sender lock poisoned".to_string())
-                })?
-                .send(RuntimeCommand::Inbound(inbound))
-                .map_err(|_| CapabilityError::InvalidState)
-        }
-    }
-}
-
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -1009,7 +981,9 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Mutex;
 
-    use claw_agent::{InboundCommand, OutboundMessage, ToolInvocation};
+    use claw_agent::{
+        ChannelFuture, ChannelRuntime, InboundMessage, OutboundMessage, ToolInvocation,
+    };
 
     fn ok_value() -> ClawCapabilityResult {
         ClawCapabilityResult {
@@ -1144,7 +1118,11 @@ mod tests {
             description: ptr::null(),
             role: ClawCapabilityRole::None,
             role_data: ClawCapabilityRoleData {
-                channel: ClawCapabilityChannel { send: None },
+                channel: ClawCapabilityChannel {
+                    open: None,
+                    close: None,
+                    send: None,
+                },
             },
             lifecycle: ClawCapabilityLifecycle {
                 init: None,
@@ -1167,45 +1145,40 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct RecordingSink {
+    struct RecordingRuntime {
         messages: Mutex<Vec<InboundMessage>>,
     }
 
-    impl ChannelIngressSink for RecordingSink {
-        fn push_user_message(&self, message: InboundMessage) -> claw_agent::IngressFuture<'_> {
+    impl ChannelRuntime for RecordingRuntime {
+        fn push_message(&self, message: InboundMessage) -> ChannelFuture<'_> {
             self.messages.lock().unwrap().push(message);
-            Box::pin(async { Ok(()) })
-        }
-        fn push_command(&self, _command: InboundCommand) -> claw_agent::IngressFuture<'_> {
             Box::pin(async { Ok(()) })
         }
     }
 
     #[test]
-    fn ingress_push_delivers_message() {
-        let sink = Arc::new(RecordingSink::default());
-        let handle =
-            ClawCapabilityIngress::into_raw(Arc::clone(&sink) as Arc<dyn ChannelIngressSink>);
+    fn channel_runtime_push_delivers_message() {
+        let runtime = Arc::new(RecordingRuntime::default());
+        let handle = ClawChannelRuntime::into_raw(Arc::clone(&runtime) as Arc<dyn ChannelRuntime>);
 
         let message = ClawInboundMessage {
             message_id: c"m1".as_ptr(),
             channel: c"local".as_ptr(),
             chat_id: c"chat".as_ptr(),
             sender_id: ptr::null(),
-            session_id: c"session".as_ptr(),
             text: c"hello".as_ptr(),
         };
-        let result = unsafe { claw_capability_ingress_push(handle, &message) };
+        let result = unsafe { claw_channel_runtime_push(handle, &message) };
         assert_eq!(result.kind, ClawCapabilityErrorKind::Ok);
 
-        let received = sink.messages.lock().unwrap();
+        let received = runtime.messages.lock().unwrap();
         assert_eq!(received.len(), 1);
         assert_eq!(received[0].text, "hello");
         assert_eq!(received[0].channel, "local");
         assert!(received[0].sender_id.is_none());
 
         drop(received);
-        unsafe { ClawCapabilityIngress::drop_raw(handle) };
+        unsafe { ClawChannelRuntime::drop_raw(handle) };
     }
 
     #[test]
@@ -1225,6 +1198,16 @@ mod tests {
             SENT.lock().unwrap().push(copied);
             ok_value()
         }
+        unsafe extern "C" fn open_channel(
+            runtime: *mut ClawChannelRuntime,
+            _user_context: *mut c_void,
+        ) -> ClawCapabilityResult {
+            unsafe { ClawChannelRuntime::drop_raw(runtime) };
+            ok_value()
+        }
+        unsafe extern "C" fn close_channel(_user_context: *mut c_void) -> ClawCapabilityResult {
+            ok_value()
+        }
 
         let registry = Arc::new(Registry::new());
         let handle = ClawCapabilityRegistry::into_raw(Arc::clone(&registry));
@@ -1235,6 +1218,8 @@ mod tests {
             role: ClawCapabilityRole::Channel,
             role_data: ClawCapabilityRoleData {
                 channel: ClawCapabilityChannel {
+                    open: Some(open_channel),
+                    close: Some(close_channel),
                     send: Some(record_send),
                 },
             },

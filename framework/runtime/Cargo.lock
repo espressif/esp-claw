@@ -129,6 +129,7 @@ dependencies = [
  "anyhow",
  "claw-api",
  "claw-capability",
+ "claw-context",
  "claw-core",
  "claw-interface",
  "claw-memory",
@@ -194,6 +195,7 @@ dependencies = [
 name = "claw-capability"
 version = "0.1.0"
 dependencies = [
+ "claw-interface",
  "claw-tool",
  "thiserror",
 ]

@@ -1,7 +1,6 @@
-//! Layer 1 orchestrator: session registry, ingress, egress reply routing.
+//! Layer 1 orchestrator: session registry and per-session agent graph driving.
 //!
-//! Inbound logic lives in [`Orchestrator::on_user_message`] and
-//! [`Orchestrator::on_command`].
+//! Channel routing is owned by the layer above this crate.
 
 mod instance;
 
@@ -12,21 +11,18 @@ use claw_context::Block;
 
 use crate::agent::factory::AgentFactory;
 use crate::agent::registry::AgentIdAllocator;
-use crate::channels::{
-    ChannelEgress, ChannelIngressSink, Command, InboundCommand, InboundMessage, IngressFuture,
-};
 use crate::session::{
-    DeliverError, SessionError, SessionId, SessionMessage, SessionOut, SessionRecord,
-    SessionRoutes, SessionStore,
+    DeliverError, SessionError, SessionId, SessionMessage, SessionRecord, SessionStore,
 };
 
-use self::instance::{DriveOutput, OrchestratorInstance};
+pub use self::instance::{ApprovalRequest, DriveOutput, RootReply};
+
+use self::instance::OrchestratorInstance;
 
 pub struct Orchestrator {
-    egress: Arc<dyn ChannelEgress>,
     /// Builds agents for every session's registry. Required at construction
-    /// (enforced by the builder typestate): the orchestrator owns no LLM client
-    /// of its own — the factory holds whatever an agent needs to run.
+    /// time: the orchestrator owns no LLM client of its own — the factory holds
+    /// whatever an agent needs to run.
     factory: Arc<dyn AgentFactory>,
     /// Global agent-id allocator shared by every per-session registry so ids are
     /// unique across the whole process, not merely within one session.
@@ -36,7 +32,6 @@ pub struct Orchestrator {
     /// the agent graph awaits LLM/tool work.
     instances: Mutex<HashMap<SessionId, OrchestratorInstance>>,
     sessions: SessionStore,
-    routes: SessionRoutes,
     /// Process-wide (Global scope) prose injected into every session's agents.
     /// Shared as an `Arc<[Block]>` so all sessions reference one computed set for
     /// byte-identical prefixes. Empty until a Global scope provider populates it.
@@ -44,11 +39,40 @@ pub struct Orchestrator {
 }
 
 impl Orchestrator {
-    // -----------------------------------------------------------------------
-    // Inbound callbacks — edit these
-    // -----------------------------------------------------------------------
+    /// Build an orchestrator using `factory` for each session's agent graph.
+    pub fn new(factory: Arc<dyn AgentFactory>) -> Arc<Self> {
+        Self::with_global_context(factory, Arc::from([]))
+    }
 
-    async fn on_user_message(&self, session_id: SessionId, msg: &SessionMessage) {
+    /// Build an orchestrator with process-wide Global-scope prose blocks.
+    pub fn with_global_context(
+        factory: Arc<dyn AgentFactory>,
+        global_context: Arc<[Block<'static>]>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            factory,
+            next_agent_id: AgentIdAllocator::new(),
+            instances: Mutex::new(HashMap::new()),
+            sessions: SessionStore::new(),
+            global_context,
+        })
+    }
+
+    /// Deliver one user message to a live session and drive that session's agent
+    /// graph until it has no ready work.
+    ///
+    /// The returned [`DriveOutput`] is intentionally channel-free. The caller is
+    /// responsible for routing replies and approvals to whatever transport
+    /// delivered the message.
+    pub async fn deliver(
+        &self,
+        session_id: SessionId,
+        msg: SessionMessage,
+    ) -> Result<DriveOutput, DeliverError> {
+        if !self.sessions.contains(session_id) {
+            return Err(DeliverError::SessionNotFound(session_id));
+        }
+
         let mut instance = self.take_instance(session_id);
         let output = {
             let turn = instance.next_turn();
@@ -64,16 +88,14 @@ impl Orchestrator {
                 cause = "message"
             )
             .entered();
-            if let Err(error) = instance.deliver(msg.text.clone()) {
-                tracing::warn!(session = %session_id, %error, "failed to build/deliver root");
-                self.put_instance(session_id, instance);
-                return;
-            }
+            instance
+                .deliver(msg.text.clone())
+                .map_err(DeliverError::Agent)?;
             instance.drive().await
         };
 
         self.put_instance(session_id, instance);
-        self.surface_output(output);
+        Ok(output)
     }
 
     /// Move the session's agent graph out of the map so it can be driven without
@@ -100,86 +122,6 @@ impl Orchestrator {
             .insert(session_id, instance);
     }
 
-    /// Route a [`DriveOutput`] to the session's egress: replies as messages, and
-    /// each pending approval as a visible message tagged with its agent/approval
-    /// id. Resolving an approval is an internal concern; there is no public
-    /// resolve entry point on the orchestrator yet.
-    fn surface_output(&self, output: DriveOutput) {
-        for reply in output.replies {
-            if let Err(error) = self.send_message(reply.session, reply.text) {
-                tracing::warn!(session = %reply.session, %error, "failed to send reply");
-            }
-        }
-        for approval in output.approvals {
-            // There is no inbound approval-response binding yet; surface the
-            // request so it is visible and resolvable out of band rather than
-            // dropped. The id tags let a caller target the exact agent.
-            tracing::info!(
-                session = %approval.session,
-                agent = %approval.agent,
-                approval = %approval.approval,
-                "approval requested"
-            );
-            let text = format!(
-                "[approval needed · {} · {}] {}",
-                approval.agent, approval.approval, approval.summary
-            );
-            if let Err(error) = self.send_message(approval.session, text) {
-                tracing::warn!(session = %approval.session, %error, "failed to surface approval");
-            }
-        }
-    }
-
-    fn on_command(&self, session_id: SessionId, cmd: &Command) {
-        // Not wired yet (intentionally a no-op, not a panic): the `Command`
-        // command flow still uses the legacy task/run model and must be
-        // reconciled with the session/agent/approval model before it can drive the graph.
-        // Until then, acknowledge in the log and drop rather than aborting.
-        tracing::warn!(session = %session_id, command = ?cmd, "inbound command ignored (not implemented yet)");
-    }
-
-    fn send_message(
-        &self,
-        session_id: SessionId,
-        text: impl Into<String>,
-    ) -> Result<(), DeliverError> {
-        let reply_route = self
-            .routes
-            .get(session_id)
-            .ok_or(DeliverError::NoReplyRoute(session_id))?;
-        SessionOut::new(self.egress.as_ref(), &reply_route)
-            .send_message(text)
-            .map_err(Into::into)
-    }
-
-    async fn deliver_user_message(&self, msg: InboundMessage) -> Result<(), DeliverError> {
-        if msg.session_id.trim().is_empty() {
-            return Err(DeliverError::MissingSessionId);
-        }
-        let session_id = SessionId::from_wire(&msg.session_id)
-            .map_err(|_| DeliverError::InvalidSessionId(msg.session_id.clone()))?;
-        if !self.sessions.contains(session_id) {
-            return Err(DeliverError::SessionNotFound(session_id));
-        }
-
-        self.routes.update_from_inbound(session_id, &msg);
-        let session_msg = SessionMessage::from_inbound(&msg);
-        self.on_user_message(session_id, &session_msg).await;
-        Ok(())
-    }
-
-    fn deliver_command(&self, inbound: InboundCommand) -> Result<(), DeliverError> {
-        let session_id = inbound.session_id;
-        if !self.sessions.contains(session_id) {
-            return Err(DeliverError::SessionNotFound(session_id));
-        }
-        if self.routes.get(session_id).is_none() {
-            return Err(DeliverError::NoReplyRoute(session_id));
-        }
-        self.on_command(session_id, &inbound.command);
-        Ok(())
-    }
-
     pub fn session_create(&self) -> SessionId {
         self.sessions.create().id
     }
@@ -190,9 +132,12 @@ impl Orchestrator {
         sessions
     }
 
+    pub fn session_exists(&self, session_id: SessionId) -> bool {
+        self.sessions.contains(session_id)
+    }
+
     pub fn session_delete(&self, session_id: SessionId) -> Result<(), SessionError> {
         self.sessions.delete(session_id)?;
-        self.routes.remove(session_id);
         // Drop the session's agent graph so a deleted session leaves no live
         // agents behind.
         self.instances
@@ -200,113 +145,6 @@ impl Orchestrator {
             .unwrap_or_else(|poison| poison.into_inner())
             .remove(&session_id);
         Ok(())
-    }
-
-    pub fn builder() -> OrchestratorBuilder<ChannelsUnset, FactoryUnset> {
-        OrchestratorBuilder {
-            channels: ChannelsUnset,
-            factory: FactoryUnset,
-            global_context: Arc::from([]),
-        }
-    }
-}
-
-impl ChannelIngressSink for Orchestrator {
-    fn push_user_message(&self, msg: InboundMessage) -> IngressFuture<'_> {
-        Box::pin(async move { self.deliver_user_message(msg).await })
-    }
-
-    fn push_command(&self, command: InboundCommand) -> IngressFuture<'_> {
-        Box::pin(async move { self.deliver_command(command) })
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Builder
-// ---------------------------------------------------------------------------
-
-pub struct OrchestratorBuilder<Channels, Factory> {
-    channels: Channels,
-    factory: Factory,
-    /// Process-wide (Global scope) prose injected into every agent. Optional;
-    /// defaults to empty. Carried through the typestate transitions so it can be
-    /// set before either required dependency.
-    global_context: Arc<[Block<'static>]>,
-}
-
-impl<Channels, Factory> OrchestratorBuilder<Channels, Factory> {
-    /// Inject the Global-scope prose blocks shared by every session's agents.
-    ///
-    /// Optional (defaults to empty). Shared as an `Arc<[Block]>` so all agents
-    /// reference one computed set for byte-identical prefixes.
-    pub fn with_global_context(mut self, blocks: Arc<[Block<'static>]>) -> Self {
-        self.global_context = blocks;
-        self
-    }
-}
-
-impl<Channels> OrchestratorBuilder<Channels, FactoryUnset> {
-    /// Inject the [`AgentFactory`] used to build every session's agents.
-    ///
-    /// Required: [`build`](OrchestratorBuilder::build) is only callable once a
-    /// factory is set, so the orchestrator can always materialize a root agent
-    /// for a live session.
-    pub fn with_agent_factory(
-        self,
-        factory: Arc<dyn AgentFactory>,
-    ) -> OrchestratorBuilder<Channels, FactorySet> {
-        OrchestratorBuilder {
-            channels: self.channels,
-            factory: FactorySet { factory },
-            global_context: self.global_context,
-        }
-    }
-}
-
-// Typestate markers for `OrchestratorBuilder`. They are `pub` only because they
-// appear in the builder's public method signatures; they carry no usable API and
-// are hidden from the rendered docs.
-#[doc(hidden)]
-pub struct ChannelsUnset;
-#[doc(hidden)]
-pub struct ChannelsEgressOnly {
-    egress: Arc<dyn ChannelEgress>,
-}
-#[doc(hidden)]
-pub struct FactoryUnset;
-#[doc(hidden)]
-pub struct FactorySet {
-    factory: Arc<dyn AgentFactory>,
-}
-
-impl<Factory> OrchestratorBuilder<ChannelsUnset, Factory> {
-    /// Inject the [`ChannelEgress`] outbound messages are routed through.
-    ///
-    /// Required: [`build`](OrchestratorBuilder::build) is only callable once an
-    /// egress is set, so every reply has somewhere to go.
-    pub fn config_egress(
-        self,
-        egress: Arc<dyn ChannelEgress>,
-    ) -> OrchestratorBuilder<ChannelsEgressOnly, Factory> {
-        OrchestratorBuilder {
-            channels: ChannelsEgressOnly { egress },
-            factory: self.factory,
-            global_context: self.global_context,
-        }
-    }
-}
-
-impl OrchestratorBuilder<ChannelsEgressOnly, FactorySet> {
-    pub fn build(self) -> Arc<Orchestrator> {
-        Arc::new(Orchestrator {
-            egress: self.channels.egress,
-            factory: self.factory.factory,
-            next_agent_id: AgentIdAllocator::new(),
-            instances: Mutex::new(HashMap::new()),
-            sessions: SessionStore::new(),
-            routes: SessionRoutes::new(),
-            global_context: self.global_context,
-        })
     }
 }
 
@@ -325,7 +163,6 @@ mod tests {
         Agent, AgentCommand, AgentCommandError, AgentId, AgentKind, AgentTickFuture, ApprovalId,
         GraphHost, TickOutcome,
     };
-    use crate::channels::{ChannelEgressHub, ChannelTransport, RecordingTransport};
 
     struct NoopWake;
 
@@ -461,55 +298,40 @@ mod tests {
         }
     }
 
-    fn user_msg(session_id: SessionId, text: &str) -> InboundMessage {
-        InboundMessage {
-            message_id: "m1".into(),
-            channel: "qq".into(),
-            chat_id: "chat-a".into(),
-            sender_id: None,
-            session_id: session_id.to_wire(),
-            text: text.into(),
-        }
+    fn user_msg(text: &str) -> SessionMessage {
+        SessionMessage::new(text, "m1", None)
     }
 
-    fn orchestrator_with_factory(
-        factory: Arc<dyn AgentFactory>,
-    ) -> (Arc<Orchestrator>, Arc<RecordingTransport>) {
-        let transport = RecordingTransport::new("qq");
-        let egress = Arc::new(ChannelEgressHub::new());
-        let as_transport: Arc<dyn ChannelTransport> = Arc::clone(&transport) as Arc<_>;
-        egress.register(as_transport);
-
-        let orch = Orchestrator::builder()
-            .config_egress(egress as Arc<dyn ChannelEgress>)
-            .with_agent_factory(factory)
-            .build();
-        (orch, transport)
+    fn orchestrator_with_factory(factory: Arc<dyn AgentFactory>) -> Arc<Orchestrator> {
+        Orchestrator::new(factory)
     }
 
     #[test]
     fn user_message_drives_root_and_replies() {
-        let (orch, transport) = orchestrator_with_factory(Arc::new(EchoFactory));
+        let orch = orchestrator_with_factory(Arc::new(EchoFactory));
         let session = orch.session_create();
 
-        assert!(block_on(orch.push_user_message(user_msg(session, "hi"))).is_ok());
+        let output = block_on(orch.deliver(session, user_msg("hi"))).unwrap();
 
-        let sent = transport.drain_sent();
-        assert_eq!(sent.len(), 1);
-        assert_eq!(sent[0].text, "echo:hi");
+        assert_eq!(output.replies.len(), 1);
+        assert_eq!(output.replies[0].text, "echo:hi");
     }
 
     #[test]
     fn second_message_reuses_the_same_session_root() {
-        let (orch, transport) = orchestrator_with_factory(Arc::new(EchoFactory));
+        let orch = orchestrator_with_factory(Arc::new(EchoFactory));
         let session = orch.session_create();
 
-        assert!(block_on(orch.push_user_message(user_msg(session, "first"))).is_ok());
-        assert!(block_on(orch.push_user_message(user_msg(session, "second"))).is_ok());
+        let first = block_on(orch.deliver(session, user_msg("first"))).unwrap();
+        let second = block_on(orch.deliver(session, user_msg("second"))).unwrap();
 
-        let sent = transport.drain_sent();
         assert_eq!(
-            sent.iter().map(|m| m.text.clone()).collect::<Vec<_>>(),
+            first
+                .replies
+                .into_iter()
+                .chain(second.replies)
+                .map(|reply| reply.text)
+                .collect::<Vec<_>>(),
             vec!["echo:first".to_string(), "echo:second".to_string()]
         );
         // Exactly one instance was created for the session.
@@ -518,34 +340,35 @@ mod tests {
 
     #[test]
     fn root_approval_is_surfaced_as_a_message() {
-        let (orch, transport) = orchestrator_with_factory(Arc::new(ApprovalFactory));
+        let orch = orchestrator_with_factory(Arc::new(ApprovalFactory));
         let session = orch.session_create();
 
-        // The first message parks the root on an approval, surfaced as a message.
+        // The first message parks the root on an approval, surfaced in
+        // DriveOutput for the channel router.
         // (Resolving an approval is an internal concern — there is no public
         // resolve entry point on the orchestrator.)
-        assert!(block_on(orch.push_user_message(user_msg(session, "do it"))).is_ok());
-        let surfaced = transport.drain_sent();
-        assert_eq!(surfaced.len(), 1);
-        assert!(
-            surfaced[0].text.contains("[approval needed"),
-            "expected an approval surface, got: {}",
-            surfaced[0].text
-        );
+        let output = block_on(orch.deliver(session, user_msg("do it"))).unwrap();
+        assert_eq!(output.approvals.len(), 1);
+        assert_eq!(output.approvals[0].summary, "ok?");
     }
 
     #[test]
     fn two_sessions_have_independent_graphs() {
-        let (orch, transport) = orchestrator_with_factory(Arc::new(EchoFactory));
+        let orch = orchestrator_with_factory(Arc::new(EchoFactory));
         let s1 = orch.session_create();
         let s2 = orch.session_create();
 
-        assert!(block_on(orch.push_user_message(user_msg(s1, "one"))).is_ok());
-        assert!(block_on(orch.push_user_message(user_msg(s2, "two"))).is_ok());
+        let one = block_on(orch.deliver(s1, user_msg("one"))).unwrap();
+        let two = block_on(orch.deliver(s2, user_msg("two"))).unwrap();
 
         // One isolated instance per session.
         assert_eq!(orch.instances.lock().unwrap().len(), 2);
-        let texts: Vec<String> = transport.drain_sent().into_iter().map(|m| m.text).collect();
+        let texts: Vec<String> = one
+            .replies
+            .into_iter()
+            .chain(two.replies)
+            .map(|reply| reply.text)
+            .collect();
         assert!(texts.contains(&"echo:one".to_string()));
         assert!(texts.contains(&"echo:two".to_string()));
     }

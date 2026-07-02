@@ -102,43 +102,22 @@ static char *join_args_from(int argc, char **argv, int start_index)
 static int submit_and_print(const char *prompt, const char *session_id)
 {
     claw_agent_system_t *system = app_claw_get_agent_system();
-    char *output = NULL;
-    size_t output_length = 0;
-    claw_capability_result_t result;
+
+    (void)prompt;
 
     if (!system) {
         printf("AgentSystem is not configured\n");
         return 1;
     }
-
-    output = calloc(1, CLAW_CAPABILITY_TOOL_OUTPUT_CAPACITY);
-    if (!output) {
-        printf("Out of memory\n");
+    if (!session_id || !session_id[0]) {
+        printf("session id cannot be empty\n");
         return 1;
     }
 
-    printf("Submitting orchestrator turn%s%s...\n",
-           session_id && session_id[0] ? " [session=" : "",
-           session_id && session_id[0] ? session_id : "");
-
-    result = claw_agent_system_send(system,
-                                    session_id,
-                                    prompt,
-                                    output,
-                                    CLAW_CAPABILITY_TOOL_OUTPUT_CAPACITY,
-                                    &output_length,
-                                    NULL,
-                                    0,
-                                    NULL);
-    if (!claw_capability_is_ok(result)) {
-        printf("agent send failed: %s\n", result.message ? result.message : "unknown error");
-        free(output);
-        return 1;
-    }
-
-    printf("%s\n", output);
-    free(output);
-    return 0;
+    printf("ask is disabled until the CLI registers a console channel "
+           "and submits through claw_agent_system_push_message [session=%s]\n",
+           session_id);
+    return 1;
 }
 
 static int create_session(char *session_id, size_t session_id_size)
@@ -200,6 +179,58 @@ static int delete_session(const char *session_id)
         return 1;
     }
 
+    return 0;
+}
+
+static claw_capability_result_t print_session_record(const claw_agent_session_record_t *record,
+                                                     void *user_context)
+{
+    bool *printed = (bool *)user_context;
+
+    if (!record || !record->session_id) {
+        return (claw_capability_result_t) {
+            .kind = CLAW_CAPABILITY_INVALID_ARGUMENT,
+            .message = "missing session record",
+        };
+    }
+
+    printf("%s", record->session_id);
+    if (record->channel && record->channel[0]) {
+        printf(" channel=%s", record->channel);
+    }
+    if (record->chat_id && record->chat_id[0]) {
+        printf(" chat_id=%s", record->chat_id);
+    }
+    printf("\n");
+
+    if (printed) {
+        *printed = true;
+    }
+    return (claw_capability_result_t) {
+        .kind = CLAW_CAPABILITY_OK,
+        .message = NULL,
+    };
+}
+
+static int list_sessions(void)
+{
+    claw_agent_system_t *system = app_claw_get_agent_system();
+    bool printed = false;
+    claw_capability_result_t result;
+
+    if (!system) {
+        printf("AgentSystem is not configured\n");
+        return 1;
+    }
+
+    result = claw_agent_system_session_list(system, print_session_record, &printed);
+    if (!claw_capability_is_ok(result)) {
+        printf("session list failed: %s\n", result.message ? result.message : "unknown error");
+        return 1;
+    }
+    if (!printed) {
+        printf("(no sessions)\n");
+    }
     return 0;
 }
 
@@ -274,6 +305,10 @@ static int cmd_session(int argc, char **argv)
         return 0;
     }
 
+    if (argc == 2 && strcmp(argv[1], "list") == 0) {
+        return list_sessions();
+    }
+
     if ((argc == 2 || argc == 3) && strcmp(argv[1], "delete") == 0) {
         const char *session_id = argc == 3 ? argv[2] : s_current_session_id;
         char deleted_id[64] = {0};
@@ -292,7 +327,7 @@ static int cmd_session(int argc, char **argv)
     }
 
     if (argc != 2) {
-        printf("Usage: session [id|new|delete [id]]\n");
+        printf("Usage: session [id|new|list|delete [id]]\n");
         return 1;
     }
 
@@ -322,7 +357,7 @@ static int cmd_cap_call(int argc, char **argv)
         return 1;
     }
 
-    printf("cap call is not available through the legacy claw_cap path\n");
+    printf("cap call is not exposed by claw-cabi yet\n");
     return 1;
 }
 
@@ -737,7 +772,7 @@ esp_err_t app_claw_cli_start(void)
     {
         esp_console_cmd_t session_cmd = {
             .command = "session",
-            .help = "Show, switch, create, or delete sessions: session [id|new|delete [id]]",
+            .help = "Show, switch, list, create, or delete sessions: session [id|new|list|delete [id]]",
             .func = cmd_session,
         };
         ESP_ERROR_CHECK(esp_console_cmd_register(&session_cmd));

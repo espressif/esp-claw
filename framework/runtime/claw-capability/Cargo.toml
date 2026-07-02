@@ -15,6 +15,9 @@ crate-type = ["rlib"]
 claw-tool = { path = "../claw-tool" }
 thiserror = "2"
 
+[dev-dependencies]
+claw-interface = { path = "../claw-interface", features = ["stdthread"] }
+
 [lints.rust]
 unsafe_code = "forbid"
 

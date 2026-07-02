@@ -1,6 +1,6 @@
 //! `claw-agent-chat` — a minimal REPL that drives the whole agent system through
 //! the public [`claw_agent`] API: build an [`AgentSystem`], create a session,
-//! and print each turn's replies.
+//! push channel messages through a registered channel, and print each turn's replies.
 //!
 //! LLM config is read from `claw-core/.env.local` (the same file the integration
 //! tests use): `CLAW_LLM_API_KEY`, `CLAW_LLM_BASE_URL`, `CLAW_LLM_MODEL`. Memory
@@ -12,31 +12,90 @@
 //!
 use std::io::{self, BufRead, Write};
 use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Result};
-use claw_agent::{AgentPersistenceConfig, AgentSystem, BackendKind, ClawApiConfig};
+use claw_agent::{
+    AgentPersistenceConfig, AgentSystem, BackendKind, Capability, CapabilityError, ChannelAdapter,
+    ChannelRuntime, ClawApiConfig, InboundMessage, OutboundMessage, Registry,
+};
 
 const MEMORY_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/output/claw-agent-chat");
-const TRANSCRIPT_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/output/claw-agent-chat/sessions"
-);
-const PROFILE_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/output/claw-agent-chat/profile"
-);
-const GLOBAL_LONG_TERM_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/output/claw-agent-chat/long_term/global"
-);
-const CONVERSATION_LONG_TERM_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/output/claw-agent-chat/long_term/agents/conversation"
-);
-const WORKER_LONG_TERM_DIR: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/output/claw-agent-chat/long_term/agents/worker"
-);
+const CHANNEL: &str = "claw-agent-chat";
+const CHAT_ID: &str = "claw-agent-chat";
+
+struct CliChannel {
+    received: Mutex<Vec<String>>,
+}
+
+impl CliChannel {
+    fn new() -> Self {
+        Self {
+            received: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn drain(&self) -> Vec<String> {
+        self.received
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .drain(..)
+            .collect()
+    }
+}
+
+impl ChannelAdapter for CliChannel {
+    fn channel_id(&self) -> &str {
+        CHANNEL
+    }
+
+    fn open(&self, _runtime: Arc<dyn ChannelRuntime>) -> Result<(), CapabilityError> {
+        Ok(())
+    }
+
+    fn close(&self) -> Result<(), CapabilityError> {
+        Ok(())
+    }
+
+    fn send(&self, message: &OutboundMessage) -> Result<(), CapabilityError> {
+        self.received
+            .lock()
+            .map_err(|_| CapabilityError::Failed("cli channel lock poisoned".to_string()))?
+            .push(message.text.clone());
+        Ok(())
+    }
+}
+
+struct ChatDriver {
+    system: AgentSystem,
+    channel: Arc<CliChannel>,
+    next_message_id: u64,
+}
+
+impl ChatDriver {
+    fn new(system: AgentSystem, channel: Arc<CliChannel>) -> Self {
+        Self {
+            system,
+            channel,
+            next_message_id: 1,
+        }
+    }
+
+    async fn send(&mut self, text: impl Into<String>) -> Result<Vec<String>, CapabilityError> {
+        let message_number = self.next_message_id;
+        self.next_message_id = self.next_message_id.saturating_add(1);
+        self.system
+            .push_message(InboundMessage {
+                message_id: format!("m{message_number}"),
+                channel: CHANNEL.into(),
+                chat_id: CHAT_ID.into(),
+                sender_id: None,
+                text: text.into(),
+            })
+            .await?;
+        Ok(self.channel.drain())
+    }
+}
 
 #[tokio::main]
 async fn main() {
@@ -49,14 +108,18 @@ async fn main() {
 async fn run() -> Result<()> {
     load_env();
 
-    let persistence =
-        AgentPersistenceConfig::new(TRANSCRIPT_DIR, PROFILE_DIR, GLOBAL_LONG_TERM_DIR)
-            .with_agent_long_term_dir("conversation", CONVERSATION_LONG_TERM_DIR)
-            .with_agent_long_term_dir("worker", WORKER_LONG_TERM_DIR);
-    let system = AgentSystem::on_disk(llm_config()?, persistence)?;
+    let persistence = AgentPersistenceConfig::new(MEMORY_DIR);
+    let registry = Arc::new(Registry::new());
+    let channel = Arc::new(CliChannel::new());
+    registry.register(Capability::channel(
+        Arc::clone(&channel) as Arc<dyn ChannelAdapter>
+    ))?;
+    let system = AgentSystem::on_disk(llm_config()?, persistence, registry)?;
+    system.start()?;
     let session = system.new_session();
+    system.bind_session(session, CHANNEL, CHAT_ID)?;
+    let mut chat = ChatDriver::new(system, channel);
 
-    eprintln!("Session: {}", session.to_wire());
     eprintln!("Memory:  {MEMORY_DIR}");
     eprintln!("Type your message and press Enter. Empty line or Ctrl-D to quit.\n");
 
@@ -74,7 +137,7 @@ async fn run() -> Result<()> {
             break;
         }
 
-        let replies = system.send(session, input).await?;
+        let replies = chat.send(input).await?;
         if replies.is_empty() {
             println!("\n(no reply)\n");
         }

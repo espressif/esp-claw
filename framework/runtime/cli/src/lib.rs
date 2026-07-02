@@ -12,10 +12,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
-use claw_core::agent::{AgentLongTermDirs, CompactionDeps, LongTermDeps};
-use claw_core::{global_store, CompactionPolicy, LlmExtractor, RuleBasedTierClassifier};
+use claw_core::agent::CompactionDeps;
+use claw_core::CompactionPolicy;
 use claw_interface::{DiskFs, RealHttp, TokioTimer};
-use claw_memory::{NoopCompactor, ProfileConfig, ProfileStore, TranscriptConfig, TranscriptStore};
+use claw_memory::{NoopCompactor, TranscriptConfig, TranscriptStore};
 
 // The real network transport is `claw_interface::RealHttp` (the `realhttp`
 // feature); summarisation is disabled via claw-memory's `NoopCompactor` (the
@@ -84,7 +84,7 @@ pub fn make_llm() -> ClawApiAsync<RealHttp, TokioTimer> {
 
 /// The real disk storage backend the CLI runs its transcripts over. `DiskFs` is
 /// a cheap clone handle (just a base path), so each agent gets its own clone.
-pub fn make_memory_fs() -> CliFs {
+pub fn make_storage() -> CliFs {
     DiskFs::absolute()
 }
 
@@ -93,8 +93,8 @@ pub fn make_memory_fs() -> CliFs {
 /// compaction policy. These belong to the
 /// agent layer, not the transcript store, which never compacts.
 ///
-/// Public so factories that build their own memory (e.g.
-/// [`claw_core::agent::FsAgentFactory`]) can take these collaborators directly.
+/// Public for CLIs that build a single [`claw_core::agent::GenericAgent`]
+/// directly. [`claw_core::agent::FsAgentFactory`] owns this wiring internally.
 pub fn make_compaction() -> CompactionDeps {
     CompactionDeps {
         compactor: Arc::new(NoopCompactor),
@@ -113,7 +113,7 @@ pub fn make_memory(
     let store = TranscriptStore::new(
         agent_id,
         TranscriptConfig::new(transcript_dir),
-        make_memory_fs(),
+        make_storage(),
     );
     let view = store.clone();
     (store, view)
@@ -126,34 +126,7 @@ pub fn make_memory(
 pub fn make_memory_ingredients(transcript_dir: &str) -> (TranscriptConfig, CliFs, CompactionDeps) {
     (
         TranscriptConfig::new(transcript_dir),
-        make_memory_fs(),
+        make_storage(),
         make_compaction(),
     )
-}
-
-/// Build the long-term-memory collaborators from explicit final directories —
-/// mandatory for every agent a [`claw_core::agent::FsAgentFactory`] builds: one
-/// shared global store, explicit per-kind agent stores, rule-based tier routing,
-/// and LLM-backed extraction over a fresh client.
-///
-/// # Panics
-///
-/// If the extraction LLM client cannot init (missing `CLAW_LLM_*`).
-pub fn make_long_term_deps(
-    global_long_term_dir: &str,
-    agent_long_term_dirs: AgentLongTermDirs,
-) -> LongTermDeps<CliFs> {
-    let global = global_store(global_long_term_dir, DiskFs::absolute());
-    let extractor = LlmExtractor::shared(make_llm());
-    LongTermDeps::new(
-        global,
-        agent_long_term_dirs,
-        RuleBasedTierClassifier::shared(),
-        extractor,
-    )
-}
-
-/// Build the editable profile store rooted at `profile_dir`.
-pub fn make_profile_store(profile_dir: &str) -> ProfileStore<CliFs> {
-    ProfileStore::new(ProfileConfig::new(profile_dir), DiskFs::absolute())
 }

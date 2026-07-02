@@ -1,24 +1,31 @@
-//! The message-channel role: a capability that ingests inbound messages and/or
-//! sends outbound ones (IM platforms, the local/web channel).
+//! The bidirectional message-channel role.
 //!
-//! A channel capability unifies the inbound gateway and the outbound send verbs:
-//!
-//! - **Outbound** is the [`ChannelAdapter::send`] egress below — *not* an
-//!   LLM-callable tool.
-//! - **Inbound** is driven by the channel's [`Lifecycle`](crate::Lifecycle)
-//!   (the transport task started in `start`), which pushes messages to a sink
-//!   the host injects at construction. The sink type is intentionally *not*
-//!   defined here yet — wiring inbound to the orchestrator's ingress is a later
-//!   step.
+//! A channel capability is opened with a [`ChannelRuntime`] and can then push
+//! inbound user messages through that runtime. Agent replies flow back out
+//! through [`ChannelAdapter::send`].
+
+use core::future::Future;
+use core::pin::Pin;
+use std::sync::Arc;
 
 use crate::error::CapabilityError;
 
-/// An agent reply routed back out through a channel transport.
+pub type ChannelFuture<'a> = Pin<Box<dyn Future<Output = Result<(), CapabilityError>> + 'a>>;
+
+/// User or IM message submitted by a channel.
 ///
-/// Deliberately minimal — `{channel, chat_id, text, reply_to}` is everything an
-/// outbound send needs. When the channel half is wired end-to-end this will be
-/// reconciled with `claw_core::channels::OutboundMessage`; kept local for now to
-/// avoid an upward crate dependency.
+/// `session_id` is intentionally absent: the agent runtime accepts this message
+/// only after `(channel, chat_id)` has been explicitly bound to a session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct InboundMessage {
+    pub message_id: String,
+    pub channel: String,
+    pub chat_id: String,
+    pub sender_id: Option<String>,
+    pub text: String,
+}
+
+/// An agent reply routed back out through a channel transport.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutboundMessage {
     pub channel: String,
@@ -27,15 +34,22 @@ pub struct OutboundMessage {
     pub reply_to_message_id: Option<String>,
 }
 
-/// The outbound side of a message channel: deliver one reply to a transport.
-///
-/// A `ChannelAdapter` almost always also owns a [`Lifecycle`](crate::Lifecycle)
-/// (its transport task); register the same concrete object into both the
-/// [`Channel`](crate::CapabilityRole::Channel) role and the
-/// [`lifecycle`](crate::Capability::lifecycle) slot.
+/// Runtime injected into a channel when the agent system starts.
+pub trait ChannelRuntime {
+    /// Submit one inbound message into the agent runtime.
+    fn push_message(&self, message: InboundMessage) -> ChannelFuture<'_>;
+}
+
+/// Bidirectional channel adapter.
 pub trait ChannelAdapter: Send + Sync {
     /// The channel id this adapter serves (e.g. `"telegram"`, `"local"`).
     fn channel_id(&self) -> &str;
+
+    /// Bind the channel to the agent runtime and start its receive side.
+    fn open(&self, runtime: Arc<dyn ChannelRuntime>) -> Result<(), CapabilityError>;
+
+    /// Stop the receive side and release the injected runtime.
+    fn close(&self) -> Result<(), CapabilityError>;
 
     /// Deliver `message` to the underlying transport.
     fn send(&self, message: &OutboundMessage) -> Result<(), CapabilityError>;

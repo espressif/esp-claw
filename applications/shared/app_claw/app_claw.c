@@ -12,8 +12,6 @@
 
 #include <stdbool.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 #if CONFIG_APP_CLAW_CAP_SCHEDULER
 #include "cap_scheduler.h"
@@ -38,13 +36,6 @@ static const char *APP_STARTUP_EVENT_TYPE = "startup";
 static const char *APP_STARTUP_EVENT_KEY = "boot_completed";
 static claw_capability_registry_t *s_registry;
 static claw_agent_system_t *s_agent_system;
-static claw_capability_ingress_t *s_ingress;
-
-static bool app_claw_bool_is_true(const char *value)
-{
-    return value &&
-           (strcmp(value, "true") == 0 || strcmp(value, "1") == 0 || strcmp(value, "yes") == 0);
-}
 
 claw_agent_system_t *app_claw_get_agent_system(void)
 {
@@ -89,7 +80,8 @@ static bool app_llm_is_configured(const app_claw_config_t *config)
     return config &&
            config->llm_api_key[0] &&
            config->llm_model[0] &&
-           config->llm_backend_type[0];
+           config->llm_backend_type[0] &&
+           config->llm_base_url[0];
 }
 
 #if CONFIG_APP_CLAW_CAP_SCHEDULER && CONFIG_APP_CLAW_CAP_SYSTEM
@@ -119,18 +111,8 @@ static esp_err_t build_storage_paths(app_claw_storage_paths_t *paths)
 
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, NULL, paths->fatfs_base_path, sizeof(paths->fatfs_base_path)),
                         TAG, "data home unavailable");
-    ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "sessions", paths->memory_session_root, sizeof(paths->memory_session_root)),
-                        TAG, "session root path too long");
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "memory", paths->memory_root_dir, sizeof(paths->memory_root_dir)),
                         TAG, "memory root path too long");
-    ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "memory/profile", paths->profile_dir, sizeof(paths->profile_dir)),
-                        TAG, "profile path too long");
-    ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "memory/long_term/global", paths->global_long_term_dir, sizeof(paths->global_long_term_dir)),
-                        TAG, "global long-term memory path too long");
-    ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "memory/long_term/agents/conversation", paths->conversation_long_term_dir, sizeof(paths->conversation_long_term_dir)),
-                        TAG, "conversation long-term memory path too long");
-    ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "memory/long_term/agents/worker", paths->worker_long_term_dir, sizeof(paths->worker_long_term_dir)),
-                        TAG, "worker long-term memory path too long");
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "skills", paths->skills_root_dir, sizeof(paths->skills_root_dir)),
                         TAG, "skills root path too long");
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "scripts", paths->lua_root_dir, sizeof(paths->lua_root_dir)),
@@ -214,7 +196,7 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
 
     if (!llm_enabled) {
         ESP_LOGW(TAG, "LLM is not fully configured. backend=%s base_url=%s model=%s. "
-                      "The demo will start without AgentSystem; ask, auto-route-to-agent, and image analysis stay disabled until LLM API key, backend type, and model are set.",
+                      "The demo will start without AgentSystem; ask, auto-route-to-agent, and image analysis stay disabled until LLM API key, backend type, model, and base URL are set.",
                  config->llm_backend_type[0] ? config->llm_backend_type : "(empty)",
                  config->llm_base_url[0] ? config->llm_base_url : "(empty)",
                  config->llm_model[0] ? config->llm_model : "(empty)");
@@ -224,20 +206,7 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
             .backend_type = config->llm_backend_type,
             .model = config->llm_model,
             .base_url = config->llm_base_url,
-            .auth_type = config->llm_auth_type,
-            .max_tokens_field = config->llm_max_tokens_field,
-            .timeout_ms = (uint32_t)strtoul(config->llm_timeout_ms, NULL, 10),
-            .max_tokens = (uint32_t)strtoul(config->llm_max_tokens, NULL, 10),
-            .image_max_bytes = (size_t)strtoul(config->llm_default_image_max_bytes, NULL, 10),
-            .supports_tools = app_claw_bool_is_true(config->llm_supports_tools),
-            .supports_vision = app_claw_bool_is_true(config->llm_supports_vision),
-            .image_remote_url_only = app_claw_bool_is_true(config->llm_image_remote_url_only),
-            .transcript_dir = paths.memory_session_root,
-            .profile_dir = paths.profile_dir,
-            .global_long_term_dir = paths.global_long_term_dir,
-            .conversation_long_term_dir = paths.conversation_long_term_dir,
-            .worker_long_term_dir = paths.worker_long_term_dir,
-            .default_channel = "claw",
+            .persistence_dir = paths.memory_root_dir,
         };
 
         ESP_LOGI(TAG, "Starting LLM backend=%s base_url=%s model=%s",
@@ -246,8 +215,7 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
                  config->llm_model);
         err = claw_cabi_result_to_esp(claw_agent_system_create(&agent_config,
                                                                s_registry,
-                                                               &s_agent_system,
-                                                               &s_ingress));
+                                                               &s_agent_system));
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Failed to create AgentSystem: %s", esp_err_to_name(err));
             return err;

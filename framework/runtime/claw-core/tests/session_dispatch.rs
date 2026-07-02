@@ -1,4 +1,4 @@
-//! Session isolation and ingress validation tests.
+//! Session isolation and delivery validation tests.
 
 use core::future::Future;
 use core::task::{Context, Poll};
@@ -10,10 +10,7 @@ use claw_core::agent::{
     Agent, AgentCommand, AgentCommandError, AgentFactory, AgentId, AgentKind, AgentTickFuture,
     GraphHost, TickOutcome,
 };
-use claw_core::{
-    ChannelEgressHub, ChannelIngressSink, InboundMessage, Orchestrator, RecordingTransport,
-    SessionId,
-};
+use claw_core::{Orchestrator, SessionId, SessionMessage};
 
 struct NoopWake;
 
@@ -32,7 +29,7 @@ fn block_on<F: Future>(future: F) -> F::Output {
     }
 }
 
-/// An agent that never produces output. These tests only exercise ingress
+/// An agent that never produces output. These tests only exercise delivery
 /// validation (no message reaches a live session's graph), so the factory below
 /// is never actually invoked — but the builder requires one.
 struct IdleAgent {
@@ -71,38 +68,17 @@ impl AgentFactory for IdleFactory {
     }
 }
 
-fn test_orchestrator() -> (Arc<Orchestrator>, Arc<RecordingTransport>) {
-    let transport = RecordingTransport::new("qq");
-    let for_drain = Arc::clone(&transport);
-    let egress = Arc::new(ChannelEgressHub::new());
-    let as_transport: Arc<dyn claw_core::ChannelTransport> = transport;
-    egress.register(as_transport);
-
-    let orch = dummy_orchestrator(egress);
-    (orch, for_drain)
+fn test_orchestrator() -> Arc<Orchestrator> {
+    Orchestrator::new(Arc::new(IdleFactory))
 }
 
-fn dummy_orchestrator(egress: Arc<dyn claw_core::ChannelEgress>) -> Arc<Orchestrator> {
-    Orchestrator::builder()
-        .config_egress(egress)
-        .with_agent_factory(Arc::new(IdleFactory))
-        .build()
-}
-
-fn user_msg(session_id: SessionId, text: &str) -> InboundMessage {
-    InboundMessage {
-        message_id: "m1".into(),
-        channel: "qq".into(),
-        chat_id: "chat-a".into(),
-        sender_id: None,
-        session_id: session_id.to_wire(),
-        text: text.into(),
-    }
+fn user_msg(text: &str) -> SessionMessage {
+    SessionMessage::new(text, "m1", None)
 }
 
 #[test]
 fn sessions_can_be_created_independently() {
-    let (orch, _transport) = test_orchestrator();
+    let orch = test_orchestrator();
 
     let s1 = orch.session_create();
     let s2 = orch.session_create();
@@ -110,36 +86,18 @@ fn sessions_can_be_created_independently() {
 }
 
 #[test]
-fn delete_session_rejects_push() {
-    let (orch, transport) = test_orchestrator();
+fn delete_session_rejects_deliver() {
+    let orch = test_orchestrator();
 
     let sid = orch.session_create();
     orch.session_delete(sid).unwrap();
 
-    assert!(block_on(orch.push_user_message(user_msg(sid, "ghost"))).is_err());
-    assert!(transport.drain_sent().is_empty());
+    assert!(block_on(orch.deliver(sid, user_msg("ghost"))).is_err());
 }
 
 #[test]
-fn push_without_session_id_is_rejected() {
-    let (orch, transport) = test_orchestrator();
+fn deliver_with_unknown_session_id_is_rejected() {
+    let orch = test_orchestrator();
 
-    assert!(block_on(orch.push_user_message(InboundMessage {
-        message_id: "m1".into(),
-        channel: "qq".into(),
-        chat_id: "route-chat".into(),
-        sender_id: None,
-        session_id: String::new(),
-        text: "via-route".into(),
-    }))
-    .is_err());
-
-    assert!(transport.drain_sent().is_empty());
-}
-
-#[test]
-fn push_with_unknown_session_id_is_rejected() {
-    let (orch, _) = test_orchestrator();
-
-    assert!(block_on(orch.push_user_message(user_msg(SessionId(99), "orphan"))).is_err());
+    assert!(block_on(orch.deliver(SessionId(99), user_msg("orphan"))).is_err());
 }

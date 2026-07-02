@@ -17,14 +17,15 @@ crate-type = ["staticlib", "rlib"]
 # ABI rather than re-wrapping the lower crates itself: the capability surface
 # (`Registry`, `Capability`, `CapabilityRole`, `ChannelAdapter`, `Lifecycle`,
 # `CapabilityError`), the tool surface (`Tool`, `ToolHandler`, `tool_invoke_err`,
-# …), and the data-plane sink/message (`ChannelIngressSink`, `InboundMessage`).
+# …), and the channel data-plane message/runtime (`InboundMessage`,
+# `ChannelRuntime`).
 # The Registry -> agent-runtime bridge lives in claw-agent (single source of
 # truth); the firmware Rust entry point wires it via `AgentSystem`.
 #
 # `default-features = false` keeps claw-agent's host development workflow and
 # host-target backends disabled, so reqwest/std-thread never reach the device
-# image; ESP-IDF backends are injected through `AgentSystem::builder::<F, H>()`
-# by the Rust entry point.
+# image; ESP-IDF backends are injected through
+# `AgentSystem::new::<F, H, Timer>(...)` by the Rust entry point.
 claw-agent = { path = "../claw-agent", default-features = false }
 
 [target.'cfg(target_os = "espidf")'.dependencies]

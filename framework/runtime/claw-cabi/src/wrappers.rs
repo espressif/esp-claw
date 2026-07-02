@@ -9,16 +9,19 @@ use std::ffi::CString;
 use std::sync::Arc;
 
 use claw_agent::{
-    Capability, CapabilityError, CapabilityGroup, ChannelAdapter, InboundMessage, Lifecycle,
-    OutboundMessage, Tool, ToolError, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
+    Capability, CapabilityError, CapabilityGroup, ChannelAdapter, ChannelRuntime, InboundMessage,
+    Lifecycle, OutboundMessage, Tool, ToolError, ToolHandler, ToolInvocation, ToolInvokeError,
+    ToolOutput,
 };
 
 use crate::abi::{
-    ClawCapability, ClawCapabilityExecuteCallback, ClawCapabilityGroup, ClawCapabilityLifecycle,
+    ClawCapability, ClawCapabilityChannelCloseCallback, ClawCapabilityChannelOpenCallback,
+    ClawCapabilityExecuteCallback, ClawCapabilityGroup, ClawCapabilityLifecycle,
     ClawCapabilityLifecycleCallback, ClawCapabilityRole, ClawCapabilitySendCallback,
     ClawInboundMessage, UserContext, CLAW_CAPABILITY_TOOL_OUTPUT_CAPACITY,
 };
 use crate::result::into_result;
+use crate::ClawChannelRuntime;
 
 // --- C-string helpers -------------------------------------------------------
 
@@ -132,9 +135,11 @@ impl ToolHandler for CTool {
 
 // --- Channel role -----------------------------------------------------------
 
-/// A channel egress backed by a C `send` callback.
+/// A C-backed bidirectional channel adapter.
 struct CChannel {
     channel_id: String,
+    open: ClawCapabilityChannelOpenCallback,
+    close: ClawCapabilityChannelCloseCallback,
     send: ClawCapabilitySendCallback,
     user_context: UserContext,
 }
@@ -142,6 +147,26 @@ struct CChannel {
 impl ChannelAdapter for CChannel {
     fn channel_id(&self) -> &str {
         &self.channel_id
+    }
+
+    fn open(&self, runtime: Arc<dyn ChannelRuntime>) -> Result<(), CapabilityError> {
+        let runtime = ClawChannelRuntime::into_raw(runtime);
+        // SAFETY: callback is a valid fn pointer. Ownership of `runtime` is
+        // transferred to C on success; on failure Rust reclaims it below.
+        let result = unsafe { (self.open)(runtime, self.user_context.0) };
+        // SAFETY: borrowed message valid for the call.
+        match unsafe { into_result(result) } {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                unsafe { ClawChannelRuntime::drop_raw(runtime) };
+                Err(error)
+            }
+        }
+    }
+
+    fn close(&self) -> Result<(), CapabilityError> {
+        // SAFETY: callback is a valid fn pointer; message valid for the call.
+        unsafe { into_result((self.close)(self.user_context.0)) }
     }
 
     fn send(&self, message: &OutboundMessage) -> Result<(), CapabilityError> {
@@ -273,9 +298,13 @@ pub(crate) unsafe fn build_capability(
         ClawCapabilityRole::Channel => {
             // SAFETY: role == Channel means the `channel` arm is the live one.
             let channel = unsafe { descriptor.role_data.channel };
+            let open = channel.open.ok_or(CapabilityError::InvalidArg)?;
+            let close = channel.close.ok_or(CapabilityError::InvalidArg)?;
             let send = channel.send.ok_or(CapabilityError::InvalidArg)?;
             Capability::channel(Arc::new(CChannel {
                 channel_id: id.clone(),
+                open,
+                close,
                 send,
                 user_context,
             }))
@@ -331,7 +360,6 @@ pub(crate) unsafe fn build_inbound(
         channel: required_id(message.channel)?,
         chat_id: required_id(message.chat_id)?,
         sender_id: optional_string(message.sender_id)?,
-        session_id: required_id(message.session_id)?,
         text: required_string(message.text)?,
     })
 }

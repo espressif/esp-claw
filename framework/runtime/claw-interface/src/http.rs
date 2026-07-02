@@ -591,7 +591,7 @@ mod httpmock {
 
     /// A [`Default`]-constructible scripted transport for systems that mint their
     /// own clients and choose the transport by *type* (e.g. `FsAgentFactory<F, H>`
-    /// / `AgentSystemBuilder<F, H>` with `H = SharedScriptHttp`).
+    /// / `AgentSystem` with `H = SharedScriptHttp`).
     ///
     /// A plain [`ScriptedHttp`] can't be injected into those, because the system
     /// constructs each `H::default()` internally. `SharedScriptHttp` bridges the

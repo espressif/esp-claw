@@ -11,8 +11,8 @@
 //!    (pure data: prompt + capability/skill *names*),
 //! 2. an injected [`AgentResolver`] that maps those names to handler *code*,
 //! 3. a live LLM client minted per agent from a shared config + transport, and
-//! 4. per-agent on-disk transcript storage (one explicit transcript dir; the
-//!    agent keys its own files by id).
+//! 4. the factory-owned memory layout below one persistence root: transcripts,
+//!    editable profile documents, and long-term memory.
 //!
 //! The orchestrator instance calls
 //! [`create_agent`](AgentFactory::create_agent) for every root and subagent,
@@ -20,14 +20,13 @@
 //! the `respond_to_approval` tool). The `goal` is seeded as the agent's first
 //! user message so it starts working immediately.
 
-use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
 use claw_api::{ClawApiAsync, ClawApiConfig};
 use claw_context::Block;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
-use claw_memory::{LongTermMemory, ProfileStore, TranscriptConfig};
+use claw_memory::{LongTermMemory, ProfileConfig, ProfileStore, TranscriptConfig};
 
 use crate::agent::base_agent::{AgentCommand, AgentId};
 use crate::agent::config::AgentConfig;
@@ -37,9 +36,19 @@ use crate::agent::kind::AgentKind;
 use crate::agent::resolver::AgentResolver;
 use crate::agent::Agent;
 use crate::memory::{
-    agent_store, Extractor, LongTermMemoryContextAdapter, ProfileContextAdapter, ProfileTools,
+    agent_store, global_store, CompactionPolicy, Extractor, LlmCompactor, LlmExtractor,
+    LongTermMemoryContextAdapter, ProfileContextAdapter, ProfileTools, RuleBasedTierClassifier,
     TierClassifier,
 };
+
+const TRANSCRIPT_DIR: &str = "sessions";
+const PROFILE_DIR: &str = "profile";
+const LONG_TERM_DIR: &str = "long_term";
+const GLOBAL_LONG_TERM_DIR: &str = "global";
+const AGENT_LONG_TERM_DIR: &str = "agents";
+const COMPACTION_TRIGGER_TOKENS: usize = 6000;
+const COMPACTION_KEEP_RECENT_TOKENS: usize = 2000;
+const COMPACTION_SEGMENT_TOKEN_BUDGET: usize = 1500;
 
 /// Creates a concrete agent for a goal.
 ///
@@ -77,60 +86,20 @@ pub trait AgentFactory {
     ) -> Result<Box<dyn Agent>, String>;
 }
 
-/// Explicit final long-term memory directories for agent kinds.
-///
-/// The factory never derives a path from a root. Assembly code owns the storage
-/// layout and inserts the final directory for every kind it allows the runtime
-/// to build.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentLongTermDirs {
-    by_kind: BTreeMap<String, String>,
-}
-
-impl AgentLongTermDirs {
-    /// Start an empty directory table.
-    pub fn new() -> Self {
-        Self {
-            by_kind: BTreeMap::new(),
-        }
-    }
-
-    /// Insert or replace the final long-term memory directory for `kind`.
-    pub fn insert(&mut self, kind: &str, dir: &str) {
-        self.by_kind.insert(kind.to_string(), dir.to_string());
-    }
-
-    /// Builder-style insertion for call sites that construct the table inline.
-    pub fn with_dir(mut self, kind: &str, dir: &str) -> Self {
-        self.insert(kind, dir);
-        self
-    }
-
-    fn get(&self, kind: &AgentKind) -> Option<&str> {
-        self.by_kind.get(kind.as_str()).map(String::as_str)
-    }
-
-    /// Whether the table has no configured kinds.
-    pub fn is_empty(&self) -> bool {
-        self.by_kind.is_empty()
-    }
-}
-
 /// The long-term-memory collaborators shared across every agent a factory
-/// builds: the one global store, explicit final per-kind store directories, and
-/// the routing/extraction policies.
+/// builds: the one global store, the derived per-agent-kind store root, and the
+/// routing/extraction policies.
 ///
-/// Built once by the system wiring layer and handed to
-/// [`FsAgentFactory::new`]; each agent then gets its own private store from the
-/// explicit per-kind directory table plus a clone of the shared `global` store,
-/// fronted by one
+/// Built once by [`FsAgentFactory::new`]; each agent then gets its own private
+/// store under `<long_term_dir>/agents/<kind>` plus a clone of the shared global
+/// store under `<long_term_dir>/global`, fronted by one
 /// [`LongTermMemoryContextAdapter`].
-pub struct LongTermDeps<F: ClawFs + Clone + 'static> {
+struct LongTermDeps<F: ClawFs + Clone + 'static> {
     /// The single store shared by every agent (user-level facts). Cloned (an
     /// `Arc` bump) into each agent's adapter so all agents read/write one store.
     global: LongTermMemory<F>,
-    /// Final directory for each agent kind's private store.
-    agent_dirs: AgentLongTermDirs,
+    /// Root under which each baked agent kind owns a private store directory.
+    agent_root_dir: String,
     /// Routes a new fact to the global or per-agent tier.
     classifier: Arc<dyn TierClassifier>,
     /// Distills durable facts from the transcript.
@@ -138,36 +107,80 @@ pub struct LongTermDeps<F: ClawFs + Clone + 'static> {
 }
 
 impl<F: ClawFs + Clone + 'static> LongTermDeps<F> {
-    /// Bundle the shared long-term collaborators. `global` is the one shared
-    /// store; `agent_dirs` maps each agent kind to its final private store
-    /// directory.
-    pub fn new(
-        global: LongTermMemory<F>,
-        agent_dirs: AgentLongTermDirs,
+    /// Build the shared long-term collaborators from the explicit long-term
+    /// memory root. The Rust memory runtime owns the internal layout below that
+    /// root: `global` for shared facts and `agents/<kind>` for each baked agent
+    /// kind's private memory.
+    fn from_root(
+        long_term_dir: &str,
+        fs: F,
         classifier: Arc<dyn TierClassifier>,
         extractor: Arc<dyn Extractor>,
     ) -> Self {
+        let global_dir = join_storage_path(long_term_dir, GLOBAL_LONG_TERM_DIR);
+        let agent_root_dir = join_storage_path(long_term_dir, AGENT_LONG_TERM_DIR);
         Self {
-            global,
-            agent_dirs,
+            global: global_store(&global_dir, fs),
+            agent_root_dir,
             classifier,
             extractor,
         }
     }
 
-    fn agent_dir_for(&self, kind: &AgentKind) -> Option<&str> {
-        self.agent_dirs.get(kind)
+    fn agent_dir_for(&self, kind: &AgentKind) -> String {
+        join_storage_path(&self.agent_root_dir, kind.as_str())
+    }
+}
+
+struct FsAgentFactoryLayout {
+    transcript_dir: String,
+    profile_dir: String,
+    long_term_dir: String,
+}
+
+impl FsAgentFactoryLayout {
+    fn new(root: &str) -> Self {
+        Self {
+            transcript_dir: join_storage_path(root, TRANSCRIPT_DIR),
+            profile_dir: join_storage_path(root, PROFILE_DIR),
+            long_term_dir: join_storage_path(root, LONG_TERM_DIR),
+        }
+    }
+}
+
+/// What can go wrong while building an [`FsAgentFactory`].
+#[derive(Debug, thiserror::Error)]
+pub enum FsAgentFactoryError {
+    /// No persistence directory was provided to the factory.
+    #[error("persistence directory is required")]
+    MissingPersistenceDir,
+    /// The shared conversation-compaction LLM client failed to init.
+    #[error("failed to initialize the compaction LLM client: {0}")]
+    CompactorLlm(String),
+    /// The dedicated extraction LLM client (for long-term memory) failed to init.
+    #[error("failed to initialize the extraction LLM client: {0}")]
+    ExtractionLlm(String),
+}
+
+fn join_storage_path(parent: &str, child: &str) -> String {
+    if parent == "/" {
+        return format!("/{child}");
+    }
+    let parent = parent.trim_end_matches('/');
+    if parent.is_empty() {
+        child.to_string()
+    } else {
+        format!("{parent}/{child}")
     }
 }
 
 /// Builds real [`GenericAgent`]s from compile-time manifests, an injected
 /// resolver, a shared LLM config/transport, and shared memory collaborators.
 ///
-/// Construct one and hand it to the orchestrator via
-/// [`with_agent_factory`](crate::OrchestratorBuilder::with_agent_factory); the
-/// registry then uses it for every agent in every session.
+/// Construct one and hand it to [`Orchestrator::new`](crate::Orchestrator::new);
+/// the registry then uses it for every agent in every session.
 pub struct FsAgentFactory<
-    F: ClawFs + Clone + 'static,
+    F: ClawFs + Clone + Default + 'static,
     H: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 > {
@@ -188,7 +201,7 @@ pub struct FsAgentFactory<
     /// long-term store). `F` is a concrete, statically dispatched [`ClawFs`]; it
     /// must be `Clone` because every agent gets its own handle (use
     /// `Arc<ConcreteFs>` for a shared backend — `Arc<T>` is itself `ClawFs`).
-    memory_fs: F,
+    storage: F,
     /// Compaction collaborators cloned into each agent's rolling-summary adapter.
     /// These belong to the agent layer, not the transcript store, which never
     /// compacts.
@@ -203,40 +216,70 @@ pub struct FsAgentFactory<
 }
 
 impl<
-        F: ClawFs + Clone + 'static,
+        F: ClawFs + Clone + Default + 'static,
         H: ClawHttp + Default + 'static,
         Timer: ClawTimer + Default + 'static,
     > FsAgentFactory<F, H, Timer>
 {
-    /// Build a factory over the injected `resolver`, an LLM `llm_config`, and the
-    /// transcript dir + collaborators. The HTTP transport `H` is chosen by type
-    /// (like `F`); each agent gets its own `H::default()` instance.
+    /// Build a factory over the injected `resolver`, an LLM `llm_config`, and one
+    /// persistence root. The HTTP transport `H` is chosen by type (like `F`);
+    /// each agent gets its own `H::default()` instance.
     ///
-    /// `memory_fs` is the storage backend the firmware/host already knows how to
-    /// build (real disk fs on device, in-memory doubles in tests); it is cloned
-    /// per agent. `compaction` drives each agent's rolling-summary adapter.
-    /// `long_term` is the shared long-term-memory
-    /// collaborators every agent is fronted with.
+    /// The factory owns the memory layout below `persistence_dir`: transcripts,
+    /// editable profile documents, and long-term memory. It constructs the
+    /// storage backend with `F::default()` and clones that handle per agent.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FsAgentFactoryError::MissingPersistenceDir`] when the
+    /// persistence root is blank, or
+    /// [`FsAgentFactoryError::CompactorLlm`] /
+    /// [`FsAgentFactoryError::ExtractionLlm`] if one of the internal LLM clients
+    /// cannot be initialized.
     pub fn new(
         resolver: Arc<dyn AgentResolver>,
         llm_config: ClawApiConfig,
-        transcript_dir: &str,
-        memory_fs: F,
-        compaction: CompactionDeps,
-        long_term: LongTermDeps<F>,
-        profile: ProfileStore<F>,
-    ) -> Self {
-        Self {
+        persistence_dir: &str,
+    ) -> Result<Self, FsAgentFactoryError> {
+        if persistence_dir.trim().is_empty() {
+            return Err(FsAgentFactoryError::MissingPersistenceDir);
+        }
+        let layout = FsAgentFactoryLayout::new(persistence_dir);
+        let storage = F::default();
+
+        let extraction_llm = ClawApiAsync::init(llm_config.clone(), H::default(), Timer::default())
+            .map_err(|error| FsAgentFactoryError::ExtractionLlm(error.to_string()))?;
+        let long_term = LongTermDeps::from_root(
+            &layout.long_term_dir,
+            storage.clone(),
+            RuleBasedTierClassifier::shared(),
+            LlmExtractor::shared(extraction_llm),
+        );
+
+        let profile = ProfileStore::new(ProfileConfig::new(&layout.profile_dir), storage.clone());
+
+        let compaction_llm = ClawApiAsync::init(llm_config.clone(), H::default(), Timer::default())
+            .map_err(|error| FsAgentFactoryError::CompactorLlm(error.to_string()))?;
+        let compaction = CompactionDeps {
+            compactor: Arc::new(LlmCompactor::new(compaction_llm)),
+            policy: CompactionPolicy::new(
+                COMPACTION_TRIGGER_TOKENS,
+                COMPACTION_KEEP_RECENT_TOKENS,
+                COMPACTION_SEGMENT_TOKEN_BUDGET,
+            ),
+        };
+
+        Ok(Self {
             resolver,
             llm_config,
             _http: PhantomData,
             _timer: PhantomData,
-            transcript_dir: transcript_dir.to_string(),
-            memory_fs,
+            transcript_dir: layout.transcript_dir,
+            storage,
             compaction,
             long_term,
             profile,
-        }
+        })
     }
 
     /// Mint a fresh LLM client for one agent: the shared config plus this
@@ -258,7 +301,7 @@ impl<
 }
 
 impl<
-        F: ClawFs + Clone + 'static,
+        F: ClawFs + Clone + Default + 'static,
         H: ClawHttp + Default + 'static,
         Timer: ClawTimer + Default + 'static,
     > AgentFactory for FsAgentFactory<F, H, Timer>
@@ -288,7 +331,7 @@ impl<
             id,
             llm,
             transcript_config,
-            self.memory_fs.clone(),
+            self.storage.clone(),
             self.clone_compaction(),
             config,
             Some(host),
@@ -310,14 +353,12 @@ impl<
             .register_context_adapter(Box::new(profile_adapter))
             .map_err(|error| format!("attaching profile context to {id}: {error}"))?;
 
-        // Attach long-term memory (always): a per-agent-kind store from the
-        // explicit directory table plus a clone of the shared global store.
+        // Attach long-term memory (always): a per-agent-kind store derived from
+        // the explicit long-term root plus a clone of the shared global store.
         let long_term = &self.long_term;
-        let agent_dir = long_term
-            .agent_dir_for(kind)
-            .ok_or_else(|| format!("missing long-term memory dir for agent kind '{kind}'"))?;
+        let agent_dir = long_term.agent_dir_for(kind);
         let adapter = LongTermMemoryContextAdapter::new(
-            agent_store(agent_dir, self.memory_fs.clone()),
+            agent_store(&agent_dir, self.storage.clone()),
             long_term.global.clone(),
             Arc::clone(&long_term.classifier),
             Arc::clone(&long_term.extractor),
@@ -348,13 +389,11 @@ mod tests {
 
     use claw_api::BackendKind;
     use claw_interface::{BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp, StdThread};
-    use claw_memory::NoopCompactor;
     use serde_json::json;
 
     use super::*;
     use crate::agent::base_agent::TickOutcome;
     use crate::agent::graph::GraphEffect;
-    use crate::memory::{global_store, CompactionPolicy, NoopExtractor, RuleBasedTierClassifier};
     use claw_skill::{SkillError, SkillId, SkillSet};
     use claw_tool::{init_tool_executor, Tool};
 
@@ -409,39 +448,24 @@ mod tests {
     fn factory(
         bodies: Vec<String>,
     ) -> FsAgentFactory<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer> {
-        SharedScriptHttp::install(bodies);
+        let mut script = Vec::with_capacity(bodies.len().saturating_mul(2));
+        for body in bodies {
+            script.push(body_plain_text("[]"));
+            script.push(body);
+        }
+        SharedScriptHttp::install(script);
         let llm_config = ClawApiConfig::new(
             BackendKind::OpenAiCompatible,
             "sk-test",
             "gpt-test",
             "https://example.invalid",
         );
-        let compaction = CompactionDeps {
-            compactor: Arc::new(NoopCompactor),
-            policy: CompactionPolicy::new(6000, 2000, 1500),
-        };
-        // Long-term memory is mandatory: build its (in-memory) collaborators. The
-        // extractor is a no-op since these tests never trigger background
-        // extraction; they only assert the agent builds and ticks.
-        let long_term = LongTermDeps::new(
-            global_store("/mem/long_term/global", MemFs::default()),
-            AgentLongTermDirs::new().with_dir("conversation", "/mem/long_term/agents/conversation"),
-            RuleBasedTierClassifier::shared(),
-            Arc::new(NoopExtractor),
-        );
-        let profile = ProfileStore::new(
-            claw_memory::ProfileConfig::new("/mem/profile"),
-            MemFs::default(),
-        );
         FsAgentFactory::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new(
             Arc::new(EmptyResolver),
             llm_config,
-            "/mem/agents",
-            MemFs::default(),
-            compaction,
-            long_term,
-            profile,
+            "/mem",
         )
+        .expect("factory builds")
     }
 
     #[test]
@@ -486,22 +510,16 @@ mod tests {
     }
 
     #[test]
-    fn missing_agent_long_term_dir_is_an_error() {
+    fn worker_kind_gets_derived_long_term_dir() {
         let factory = factory(vec![]);
-        let error = match factory.create_agent(
+        let result = factory.create_agent(
             AgentId(1),
             &AgentKind::new("worker"),
             "x".into(),
             Arc::new(NoopHost),
             false,
             Arc::from([]),
-        ) {
-            Ok(_) => panic!("worker dir is intentionally not configured"),
-            Err(error) => error,
-        };
-        assert!(
-            error.contains("missing long-term memory dir for agent kind 'worker'"),
-            "{error}"
         );
+        assert!(result.is_ok());
     }
 }

@@ -96,6 +96,15 @@ typedef claw_capability_result_t (*claw_capability_execute_callback_t)(const cha
                                                                        bool *output_success,
                                                                        void *user_context);
 
+typedef struct claw_channel_runtime claw_channel_runtime_t;
+
+/* Channel open receives an owned runtime handle. C must eventually destroy it
+ * with claw_channel_runtime_destroy, normally from the matching close path. */
+typedef claw_capability_result_t (*claw_capability_channel_open_callback_t)(claw_channel_runtime_t *runtime,
+                                                                            void *user_context);
+
+typedef claw_capability_result_t (*claw_capability_channel_close_callback_t)(void *user_context);
+
 /* Outbound delivery for a message channel. `reply_to_message_id` may be NULL. */
 typedef claw_capability_result_t (*claw_capability_send_callback_t)(const char *channel,
                                                                     const char *chat_id,
@@ -122,13 +131,15 @@ typedef struct {
 
 /* CHANNEL payload. */
 typedef struct {
+    claw_capability_channel_open_callback_t open;
+    claw_capability_channel_close_callback_t close;
     claw_capability_send_callback_t send;
 } claw_capability_channel_t;
 
 /*
  * `role` selects the live union arm and is validated against it:
  *  - ROLE_TOOL    -> role_data.tool.{execute, schema_json} required
- *  - ROLE_CHANNEL -> role_data.channel.send required
+ *  - ROLE_CHANNEL -> role_data.channel.{open, close, send} required
  *  - ROLE_NONE    -> no payload; lifecycle MUST have at least one hook set
  * Any violation (incl. an empty `id`) is CLAW_CAPABILITY_INVALID_ARGUMENT.
  * Setting "both Tool and Channel" is structurally impossible — the arms share
@@ -175,35 +186,26 @@ claw_capability_result_t claw_capability_register_group(claw_capability_registry
                                                         const claw_capability_group_t *group);
 
 /* ------------------------------------------------------------------------- */
-/* Data plane: inbound delivery — the receive half of a channel.             */
+/* Data plane: inbound channel messages.                                     */
 /*                                                                           */
-/* A channel is bidirectional. Outbound (a reply) is the descriptor's `send` */
-/* callback (Rust -> C). Inbound (a received message) is this push (C ->      */
-/* Rust): the exact mirror of Rust's `Orchestrator::push_user_message`.      */
-/*                                                                           */
-/* `claw_capability_ingress_t` wraps the orchestrator's ingress sink. Like   */
-/* the registry, it is created and owned on the Rust side (after the runtime  */
-/* is wired) and handed to C; C never creates or frees it. A C channel        */
-/* gateway (typically a task spawned by the channel capability's `start`      */
-/* hook) calls push when a message arrives. The agent's reply comes back out  */
-/* through the channel's `send` callback, not through a return value here.    */
+/* Registered C channel capabilities receive a claw_channel_runtime_t in      */
+/* their open callback and use claw_channel_runtime_push(). App-level         */
+/* producers such as the event router can submit directly through             */
+/* claw_agent_system_push_message(). Both paths require an explicit           */
+/* claw_agent_system_session_bind() for the message's channel/chat_id.        */
 /* ------------------------------------------------------------------------- */
-
-typedef struct claw_capability_ingress claw_capability_ingress_t;
-
-claw_capability_result_t claw_capability_ingress_destroy(claw_capability_ingress_t *ingress);
 
 typedef struct {
     const char *message_id;
     const char *channel;
     const char *chat_id;
     const char *sender_id;           /* nullable */
-    const char *session_id;
     const char *text;
 } claw_inbound_message_t;
 
-claw_capability_result_t claw_capability_ingress_push(claw_capability_ingress_t *ingress,
-                                                      const claw_inbound_message_t *message);
+claw_capability_result_t claw_channel_runtime_push(claw_channel_runtime_t *runtime,
+                                                   const claw_inbound_message_t *message);
+claw_capability_result_t claw_channel_runtime_destroy(claw_channel_runtime_t *runtime);
 
 /* ------------------------------------------------------------------------- */
 /* Agent runtime: ESP-IDF target creates and owns the Rust AgentSystem.       */
@@ -211,13 +213,12 @@ claw_capability_result_t claw_capability_ingress_push(claw_capability_ingress_t 
 /* Expected boot order for C firmware:                                        */
 /*   1. claw_capability_registry_create(&registry)                            */
 /*   2. register every capability/group into registry                         */
-/*   3. claw_agent_system_create(&config, registry, &system, &ingress)        */
-/*   4. store ingress where channel tasks can use it                          */
-/*   5. claw_agent_system_start(system)                                       */
-/*   6. channel tasks call claw_capability_ingress_push(ingress, ...)         */
+/*   3. claw_agent_system_create(&config, registry, &system)                  */
+/*   4. claw_agent_system_start(system)                                       */
+/*   5. create + bind sessions, then push channel messages                    */
 /*                                                                           */
-/* Destroy in reverse order: stop/destroy system, destroy ingress, then       */
-/* destroy registry when no component will register into it anymore.          */
+/* Destroy in reverse order: stop/destroy system, then destroy registry when  */
+/* no component will register into it anymore.                                */
 /* ------------------------------------------------------------------------- */
 
 typedef struct claw_agent_system claw_agent_system_t;
@@ -226,30 +227,28 @@ typedef struct {
     const char *api_key;
     const char *backend_type;
     const char *model;
-    const char *base_url;           /* nullable */
-    const char *auth_type;          /* nullable: backend default */
-    const char *max_tokens_field;   /* nullable: backend default */
-    uint32_t timeout_ms;            /* 0 => claw-api default */
-    uint32_t max_tokens;            /* 0 => claw-api default */
-    size_t image_max_bytes;         /* 0 => claw-api default */
-    bool supports_tools;
-    bool supports_vision;
-    bool image_remote_url_only;
-    const char *transcript_dir;              /* required DATA-rooted directory */
-    const char *profile_dir;                 /* required DATA-rooted directory */
-    const char *global_long_term_dir;        /* required DATA-rooted directory */
-    const char *conversation_long_term_dir;  /* required DATA-rooted directory */
-    const char *worker_long_term_dir;        /* required DATA-rooted directory */
-    const char *default_channel;    /* nullable => "claw" */
+    const char *base_url;
+    const char *persistence_dir;    /* required DATA-rooted directory */
 } claw_agent_system_config_t;
 
 claw_capability_result_t claw_agent_system_create(const claw_agent_system_config_t *config,
                                                   claw_capability_registry_t *registry,
-                                                  claw_agent_system_t **ret_system,
-                                                  claw_capability_ingress_t **ret_ingress);
+                                                  claw_agent_system_t **ret_system);
 claw_capability_result_t claw_agent_system_start(claw_agent_system_t *system);
 claw_capability_result_t claw_agent_system_stop(claw_agent_system_t *system);
 claw_capability_result_t claw_agent_system_destroy(claw_agent_system_t *system);
+claw_capability_result_t claw_agent_system_push_message(claw_agent_system_t *system,
+                                                        const claw_inbound_message_t *message);
+
+typedef struct {
+    const char *session_id;          /* borrowed; valid only during callback */
+    const char *channel;             /* nullable; borrowed */
+    const char *chat_id;             /* nullable; borrowed */
+} claw_agent_session_record_t;
+
+typedef claw_capability_result_t (*claw_agent_session_list_callback_t)(
+    const claw_agent_session_record_t *record,
+    void *user_context);
 
 /*
  * Explicit session lifecycle.
@@ -260,6 +259,9 @@ claw_capability_result_t claw_agent_system_destroy(claw_agent_system_t *system);
  * 32 bytes. The function returns CLAW_CAPABILITY_FAILED before creating a
  * session if the buffer is too small.
  *
+ * Inbound channel messages are accepted only after an explicit
+ * claw_agent_system_session_bind(system, session_id, channel, chat_id).
+ *
  * `claw_agent_system_session_delete` removes the session and drops its live
  * agent graph. Deleting an unknown session returns CLAW_CAPABILITY_NOT_FOUND.
  */
@@ -267,30 +269,15 @@ claw_capability_result_t claw_agent_system_session_create(claw_agent_system_t *s
                                                           char *session_id_buffer,
                                                           size_t session_id_capacity,
                                                           size_t *session_id_length);
+claw_capability_result_t claw_agent_system_session_bind(claw_agent_system_t *system,
+                                                        const char *session_id,
+                                                        const char *channel,
+                                                        const char *chat_id);
+claw_capability_result_t claw_agent_system_session_list(claw_agent_system_t *system,
+                                                        claw_agent_session_list_callback_t callback,
+                                                        void *user_context);
 claw_capability_result_t claw_agent_system_session_delete(claw_agent_system_t *system,
                                                           const char *session_id);
-
-/*
- * Synchronous local send helper for firmware-side CLI/local callers.
- *
- * `session_id` must be an existing id returned by
- * `claw_agent_system_session_create`. No session is created implicitly.
- * When `session_id_buffer` is non-NULL, the actual session id ("session-N") is
- * written back there.
- *
- * `output_length` receives the required response byte length. If
- * `output_buffer` is too small the function returns CLAW_CAPABILITY_FAILED
- * after writing a truncated NUL-terminated prefix and the required length.
- */
-claw_capability_result_t claw_agent_system_send(claw_agent_system_t *system,
-                                                const char *session_id,
-                                                const char *text,
-                                                char *output_buffer,
-                                                size_t output_capacity,
-                                                size_t *output_length,
-                                                char *session_id_buffer,
-                                                size_t session_id_capacity,
-                                                size_t *session_id_length);
 
 #ifdef __cplusplus
 }

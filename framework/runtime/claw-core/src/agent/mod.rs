@@ -33,7 +33,7 @@ pub use base_agent::{
     TickOutcome,
 };
 pub use config::{AgentConfig, AgentConfigError};
-pub use factory::{AgentFactory, AgentLongTermDirs, FsAgentFactory, LongTermDeps};
+pub use factory::{AgentFactory, FsAgentFactory, FsAgentFactoryError};
 pub use generic_agent::{CompactionDeps, GenericAgent, GenericAgentBuildError};
 pub use graph::{
     AgentSnapshot, AgentStatus, ApprovalVerdict, GraphEffect, GraphHost, TerminationPolicy,

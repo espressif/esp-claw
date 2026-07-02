@@ -31,7 +31,7 @@ const AGENT_ID: usize = 1;
 async fn main() {
     load_env();
 
-    let (transcript_config, memory_fs, compaction) = make_memory_ingredients(MEMORY_DIR);
+    let (transcript_config, storage, compaction) = make_memory_ingredients(MEMORY_DIR);
     // The config (system prompt, capabilities, skills) comes from the baked
     // `conversation` manifest. An empty resolver suffices here: the kind declares
     // no capability/skill names, and the base agent merges its own control tools.
@@ -45,7 +45,7 @@ async fn main() {
         AgentId(AGENT_ID),
         make_llm(),
         transcript_config,
-        memory_fs,
+        storage,
         compaction,
         config,
         None,

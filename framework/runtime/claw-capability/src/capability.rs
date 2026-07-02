@@ -19,7 +19,7 @@ pub enum CapabilityRole {
     /// [`claw_tool::Tool`]; this crate adds no dispatch, schema, or visibility
     /// logic of its own — `claw-core` composes these into per-agent `ToolSet`s.
     Tool(Tool),
-    /// A message channel: outbound egress (and inbound via its lifecycle task).
+    /// A bidirectional message channel adapter.
     Channel(Arc<dyn ChannelAdapter>),
     /// No invocation surface; the capability exists only for its
     /// [`lifecycle`](Capability::lifecycle) (e.g. an MCP server managed purely

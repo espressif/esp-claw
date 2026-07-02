@@ -5,6 +5,7 @@
 use core::ffi::{c_char, c_void};
 
 use crate::result::ClawCapabilityResult;
+use crate::ClawChannelRuntime;
 
 /// Size of the buffer the registry hands a tool's `execute` callback to write
 /// its output into. `output_capacity` always equals this value.
@@ -53,6 +54,22 @@ pub type ClawCapabilitySendCallback = unsafe extern "C" fn(
     user_context: *mut c_void,
 ) -> ClawCapabilityResult;
 
+/// Channel open hook: `claw_capability_channel_open_callback_t`.
+pub type ClawCapabilityChannelOpenCallback = unsafe extern "C" fn(
+    runtime: *mut ClawChannelRuntime,
+    user_context: *mut c_void,
+) -> ClawCapabilityResult;
+
+/// Channel close hook: `claw_capability_channel_close_callback_t`.
+pub type ClawCapabilityChannelCloseCallback =
+    unsafe extern "C" fn(user_context: *mut c_void) -> ClawCapabilityResult;
+
+/// Session list callback: `claw_agent_session_list_callback_t`.
+pub type ClawAgentSessionListCallback = unsafe extern "C" fn(
+    record: *const ClawAgentSessionRecord,
+    user_context: *mut c_void,
+) -> ClawCapabilityResult;
+
 /// `claw_capability_lifecycle_t`: four nullable hooks.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -93,6 +110,13 @@ pub struct ClawCapabilityTool {
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ClawCapabilityChannel {
+    pub open: Option<
+        unsafe extern "C" fn(
+            runtime: *mut ClawChannelRuntime,
+            user_context: *mut c_void,
+        ) -> ClawCapabilityResult,
+    >,
+    pub close: Option<unsafe extern "C" fn(user_context: *mut c_void) -> ClawCapabilityResult>,
     pub send: Option<
         unsafe extern "C" fn(
             channel: *const c_char,
@@ -133,14 +157,13 @@ pub struct ClawCapabilityGroup {
     pub user_context: *mut c_void,
 }
 
-/// `claw_inbound_message_t`: maps field-for-field onto `claw_core::InboundMessage`.
+/// `claw_inbound_message_t`: one channel message submitted to the agent runtime.
 #[repr(C)]
 pub struct ClawInboundMessage {
     pub message_id: *const c_char,
     pub channel: *const c_char,
     pub chat_id: *const c_char,
     pub sender_id: *const c_char,
-    pub session_id: *const c_char,
     pub text: *const c_char,
 }
 
@@ -151,24 +174,14 @@ pub struct ClawAgentSystemConfig {
     pub backend_type: *const c_char,
     pub model: *const c_char,
     pub base_url: *const c_char,
-    pub auth_type: *const c_char,
-    pub max_tokens_field: *const c_char,
-    pub timeout_ms: u32,
-    pub max_tokens: u32,
-    pub image_max_bytes: usize,
-    pub supports_tools: bool,
-    pub supports_vision: bool,
-    pub image_remote_url_only: bool,
-    /// DATA-rooted directory for transcript files.
-    pub transcript_dir: *const c_char,
-    /// DATA-rooted directory for editable profile documents.
-    pub profile_dir: *const c_char,
-    /// DATA-rooted directory for global long-term memory.
-    pub global_long_term_dir: *const c_char,
-    /// DATA-rooted directory for the conversation agent's long-term memory.
-    pub conversation_long_term_dir: *const c_char,
-    /// DATA-rooted directory for the worker agent's long-term memory.
-    pub worker_long_term_dir: *const c_char,
-    /// Default egress channel id. Nullable => "claw".
-    pub default_channel: *const c_char,
+    /// DATA-rooted persistence directory for the agent system.
+    pub persistence_dir: *const c_char,
+}
+
+/// `claw_agent_session_record_t`: one live conversation session.
+#[repr(C)]
+pub struct ClawAgentSessionRecord {
+    pub session_id: *const c_char,
+    pub channel: *const c_char,
+    pub chat_id: *const c_char,
 }
