@@ -923,7 +923,7 @@ mod realhttp {
 #[cfg(feature = "realhttp")]
 pub use realhttp::RealHttp;
 
-/// Shared host-only test doubles + helpers for the async-seam test modules
+/// Shared host-target test doubles + helpers for the async-seam test modules
 /// below. Kept in one place so the hand-rolled `block_on` tests and the
 /// `embedded-executor` integration tests exercise the same transports.
 ///

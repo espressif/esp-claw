@@ -1,5 +1,5 @@
 //! The two dependency-injection seams in action: `ClawFs` (persistence) and
-//! `ClawHttp` (networking), each driven by a host-only reference double.
+//! `ClawHttp` (networking), each driven by a host-target reference double.
 //!
 //! Run with:
 //!

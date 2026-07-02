@@ -26,7 +26,7 @@ claw-core = { path = "../claw-core" }
 claw-log = { path = "../claw-log" }
 claw-api = { path = "../claw-api" }
 claw-memory = { path = "../claw-memory", features = ["compactor-stub"] }
-claw-interface = { path = "../claw-interface", features = ["diskfs", "realhttp", "stdthread", "tokiotimer"] }
+claw-interface = { path = "../claw-interface", features = ["host-backends"] }
 dotenvy = "0.15"
 owo-colors = "4"
 serde_json = "1"

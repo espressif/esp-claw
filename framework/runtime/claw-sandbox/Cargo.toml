@@ -16,9 +16,9 @@ claw-interface = { path = "../claw-interface" }
 thiserror = "2"
 
 [dev-dependencies]
-# Hermetic in-memory ClawFs double for sandbox tests (host-only).
+# Hermetic in-memory ClawFs double for host-target sandbox tests.
 claw-interface = { path = "../claw-interface", features = ["memfs"] }
-# Ergonomic error handling for the `sandbox_demo` example (host-only).
+# Ergonomic error handling for the host dev workflow `sandbox_demo` example.
 anyhow = "1"
 
 [lints.rust]

@@ -56,12 +56,11 @@ proc-macro2 = "1"
 claw-tool = { path = "../claw-tool" }
 
 [dev-dependencies]
-# Host-only fs/http doubles + live transport shared from claw-interface (tests only).
+# Host-target live backends (`diskfs`/`realhttp`/`stdthread`) plus hermetic
+# doubles (`test-doubles`) shared from claw-interface (tests only).
 claw-interface = { path = "../claw-interface", features = [
-    "memfs",
+    "test-doubles",
     "diskfs",
-    "httpmock",
-    "timermock",
     "realhttp",
     "stdthread",
 ] }

@@ -12,8 +12,8 @@ serde_json = "1"
 thiserror = "2"
 
 [dev-dependencies]
-# Host-only ClawFs doubles: `memfs` for hermetic unit tests, `diskfs` for the
-# data-driven golden test over the `tests/data/skills` fixtures.
+# Filesystem backends for host-target tests: `memfs` is the hermetic test double,
+# `diskfs` reads the data-driven golden fixtures from the checkout.
 claw-interface = { path = "../claw-interface", features = ["memfs", "diskfs"] }
-# Ergonomic error handling for the crate examples (host-only, never in firmware).
+# Ergonomic error handling for host dev workflow examples; never in firmware.
 anyhow = "1"

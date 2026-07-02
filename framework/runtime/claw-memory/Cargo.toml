@@ -9,7 +9,7 @@ description = "Agent memory subsystem: conversation tape and compaction"
 crate-type = ["rlib"]
 
 [features]
-# `NoopCompactor`: a never-compacts stub for host CLIs and tests (host-only).
+# `NoopCompactor`: a never-compacts stub for host-target CLIs and tests.
 compactor-stub = []
 
 [dependencies]
@@ -24,10 +24,10 @@ serde_json = "1"
 thiserror = "2"
 
 [dev-dependencies]
-# Host-only doubles shared from claw-interface (tests/examples/doctests only).
-# diskfs-pretty implies diskfs and pretty-prints on-disk JSON for inspection.
-# None of these reach the device build (dev-deps only).
+# Host-target helpers for tests/examples/doctests: `memfs` is the hermetic test
+# double, `diskfs-pretty` is a disk-backed inspection backend, and `stdthread`
+# drives background work on the host target. None of these reach device builds.
 claw-interface = { path = "../claw-interface", features = ["memfs", "diskfs-pretty", "stdthread"] }
 claw-utils = { path = "../claw-utils" }
-# Ergonomic error handling for the `conversation` example (host-only).
+# Ergonomic error handling for the host dev workflow `conversation` example.
 anyhow = "1"

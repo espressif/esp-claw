@@ -9,10 +9,21 @@ description = "Shared types and dependency-injection traits for the claw_modules
 crate-type = ["rlib"]
 
 [features]
-# Host-only `ClawFs` reference implementations. Opt-in and NEVER enabled in a
-# device build — they live beside the trait only to keep the few distinct
-# implementations in one place.
+# Concepts:
+# - target selection is Cargo/rustc cfg (`target_os = "espidf"` vs host), not a
+#   feature. ESP-IDF implementations live in `claw-sys` behind target cfg.
+# - `host-backends` is the opt-in bundle of concrete host-target
+#   implementations used by host CLIs and live host tests.
+# - `test-doubles` is the opt-in bundle of hermetic doubles used by tests and
+#   examples.
+# - `dev` belongs to application crates that bundle workflows; this crate only
+#   exposes implementations and doubles.
 #
+# Nothing is enabled by default so pure core/device crates only see the traits.
+default = []
+host-backends = ["diskfs", "realhttp", "stdthread", "tokiotimer"]
+test-doubles = ["memfs", "httpmock", "timermock"]
+
 # - `memfs`:        in-memory test double (no extra deps).
 # - `diskfs`:       `std::fs` backend for host CLIs and disk-backed tests.
 # - `diskfs-pretty`: pretty-print `.json` writes via serde_json (implies diskfs).
@@ -41,11 +52,11 @@ tokio = { version = "1.52.3", default-features = false, features = ["time"], opt
 embedded-executor = "0.6.1"
 lock_api = "0.4.14"
 tokio = { version = "1.52.3", features = ["rt", "net", "time", "io-util"] }
-# Ergonomic error handling for the `di_seams` example (host-only).
+# Ergonomic error handling for the host dev workflow `di_seams` example.
 anyhow = "1"
 
-# The DI-seams example drives the host-only `MemFs` / `ScriptedHttp` doubles, so
-# it requires the features that gate them.
+# The DI-seams example drives hermetic `MemFs` / `ScriptedHttp` doubles on the
+# host target, so it requires the features that gate them.
 [[example]]
 name = "di_seams"
-required-features = ["memfs", "httpmock"]
+required-features = ["test-doubles"]

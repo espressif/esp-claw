@@ -11,32 +11,37 @@ path = "src/lib.rs"
 
 # A minimal REPL that drives the whole agent system through the public API
 # (`AgentSystem::new_session` -> `AgentSystem::send`) against a live LLM with
-# on-disk memory. It uses the dev backends (`AgentSystem::on_disk`), so it is
-# gated on the `dev` feature.
+# on-disk memory. It uses the host-target backends (`AgentSystem::on_disk`) and
+# dev workflow dependencies, so it is gated on the `dev` feature.
 [[bin]]
 name = "claw-agent-chat"
 path = "src/bin/claw-agent-chat.rs"
 required-features = ["dev"]
 
-# The capability-loop reference example uses the dev backends + `anyhow`.
+# The capability-loop reference example uses test doubles plus dev workflow deps.
 [[example]]
 name = "capability_loop"
 required-features = ["dev"]
 
 [features]
-# Dev/test backends, ON by default. Bundles the injectable dev implementations
-# (`DiskFs`, `RealHttp` (reqwest), `StdThread`) plus the conveniences built on
-# them: `AgentSystem::on_disk`, the `claw-agent-chat` REPL bin, and the examples.
-# Host consumers (CLI, tests, examples, the bin) get this batteries-included
-# surface for free. The firmware C ABI (`claw-cabi`) instead sets
-# `default-features = false` so reqwest/std-thread never reach the device image;
-# it injects device backends through `AgentSystem::builder::<F, H>()`.
-default = ["dev"]
+# Concepts:
+# - target selection is Cargo/rustc cfg (`target_os = "espidf"` vs host), not a
+#   feature. The firmware path reaches ESP-IDF implementations through
+#   `claw-cabi` + `claw-sys`.
+# - `host-backends` enables host-target concrete implementations and the
+#   `AgentSystem::on_disk` constructor.
+# - `dev` is a local workflow bundle for the REPL/examples: it includes
+#   host-backends plus CLI/example dependencies.
+#
+# Nothing is enabled by default so library/device consumers must choose their
+# backend explicitly. Firmware uses `AgentSystem::builder::<F, H, Timer>()` with
+# ESP-IDF backends injected by `claw-cabi`.
+default = []
+host-backends = [
+    "claw-interface/host-backends",
+]
 dev = [
-    "claw-interface/diskfs",
-    "claw-interface/realhttp",
-    "claw-interface/stdthread",
-    "claw-interface/tokiotimer",
+    "host-backends",
     "dep:dotenvy",
     "dep:anyhow",
     "dep:tokio",
@@ -53,9 +58,9 @@ claw-capability = { path = "../claw-capability" }
 # Conversation/long-term memory. The compaction policy is wired internally
 # (the LLM-backed `LlmCompactor`), so no stub-compactor feature is needed.
 claw-memory = { path = "../claw-memory" }
-# The DI trait surface (`ClawFs` / `ClawHttp`) is always available; the concrete
-# dev backends (`diskfs`/`realhttp`/`stdthread`) are pulled in only by the `dev`
-# feature so the device build (via claw-cabi) stays free of reqwest/std-thread.
+# The DI trait surface (`ClawFs` / `ClawHttp`) is always available; concrete
+# host-target backends are pulled in only by `host-backends`/`dev`, so the device
+# build (via claw-cabi) stays free of reqwest/std-thread.
 claw-interface = { path = "../claw-interface" }
 thiserror = "2"
 # Dev-only: ergonomic errors for the `claw-agent-chat` bin and the examples.
@@ -66,7 +71,8 @@ tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"], optional
 
 [dev-dependencies]
 # In-memory fs + scripted HTTP doubles so the end-to-end tests run hermetically
-# (no network, no API key) entirely through the public API.
-claw-interface = { path = "../claw-interface", features = ["memfs", "httpmock", "timermock"] }
+# (no network, no API key) entirely through the public API; `stdthread` is the
+# host-target executor backend used by capability/tool tests.
+claw-interface = { path = "../claw-interface", features = ["test-doubles", "stdthread"] }
 claw-utils = { path = "../claw-utils" }
 serde_json = "1"

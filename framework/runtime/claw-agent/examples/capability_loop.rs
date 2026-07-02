@@ -17,7 +17,7 @@
 //! example runs hermetically (no network, no API key):
 //!
 //! ```bash
-//! cargo run -p claw-agent --example capability_loop \
+//! cargo run -p claw-agent --features dev --example capability_loop \
 //!   --target x86_64-unknown-linux-gnu
 //! ```
 

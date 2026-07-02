@@ -4,8 +4,9 @@
 //! memory, and the LLM client) is wired together here behind one small surface:
 //!
 //! - [`AgentSystem`] is a ready-to-drive agent runtime. Build it with the
-//!   host-friendly [`AgentSystem::on_disk`] (real disk memory + live HTTP) or the
-//!   fully injectable [`AgentSystem::builder`] (for tests / custom backends).
+//!   host-backend [`AgentSystem::on_disk`] (real disk memory + live HTTP,
+//!   requires `host-backends`) or the fully injectable [`AgentSystem::builder`]
+//!   (for device, tests, or custom backends).
 //! - Sessions are explicit: create one with [`AgentSystem::new_session`], then
 //!   pass that [`SessionId`] to [`AgentSystem::send`].
 //!
@@ -16,6 +17,8 @@
 //! # Examples
 //!
 //! ```no_run
+//! # #[cfg(feature = "dev")]
+//! # {
 //! use claw_agent::{AgentSystem, BackendKind, ClawApiConfig};
 //! use claw_agent::AgentPersistenceConfig;
 //!
@@ -42,6 +45,7 @@
 //! }
 //! # Ok(())
 //! # }
+//! # }
 //! ```
 
 mod capability;
@@ -55,7 +59,7 @@ use claw_core::{
     Orchestrator, RecordingTransport, RuleBasedTierClassifier,
 };
 use claw_interface::{ClawHttp, ClawTimer};
-#[cfg(feature = "dev")]
+#[cfg(feature = "host-backends")]
 use claw_interface::{RealHttp, StdThread, TokioTimer};
 use claw_memory::{ProfileConfig, ProfileStore};
 
@@ -79,9 +83,9 @@ pub use claw_tool::{
     init_tool_executor, tool_metadata, AsyncToolHandler, Tool, ToolError, ToolFuture, ToolHandler,
     ToolInvocation, ToolInvokeError, ToolOutput, ToolRetryCount,
 };
-// The on-disk filesystem backend is a dev convenience; device builds inject
-// their own `ClawFs` through `AgentSystem::builder::<F, H, Timer>()`.
-#[cfg(feature = "dev")]
+// The on-disk filesystem backend is a host-target convenience; device builds
+// inject their own `ClawFs` through `AgentSystem::builder::<F, H, Timer>()`.
+#[cfg(feature = "host-backends")]
 pub use claw_interface::DiskFs;
 
 /// The channel id outbound replies are routed through. Callers never see it; it
@@ -186,20 +190,21 @@ impl AgentSystem {
         AgentSystemBuilder::default()
     }
 
-    /// Build a dev agent system backed by real disk memory and a live HTTP
+    /// Build a host-target agent system backed by real disk memory and live HTTP
     /// transport, with no extra capabilities/skills resolver.
     ///
     /// `persistence` provides final directories for transcript, profile, global
     /// long-term memory, and each agent kind's long-term memory.
     ///
-    /// Dev convenience (requires the default `dev` feature): it constructs the
-    /// [`DiskFs`] / [`RealHttp`] / [`StdThread`] backends directly. Device builds
-    /// disable `dev` and use [`AgentSystem::builder::<F, H, Timer>()`](Self::builder)
-    /// with injected backends instead.
+    /// Host-target convenience (requires the `host-backends` feature): it
+    /// constructs the [`DiskFs`] / [`RealHttp`] / [`StdThread`] backends
+    /// directly. Device builds use
+    /// [`AgentSystem::builder::<F, H, Timer>()`](Self::builder) with injected
+    /// ESP-IDF backends instead.
     ///
     /// # Errors
     ///
-    #[cfg(feature = "dev")]
+    #[cfg(feature = "host-backends")]
     pub fn on_disk(
         llm: ClawApiConfig,
         persistence: AgentPersistenceConfig,
@@ -303,7 +308,8 @@ impl AgentSystem {
 /// conversation-compaction policy is internal — callers do not supply one.
 /// Custom runtimes that drive tools must also initialize the fixed tool executor
 /// once at boot with [`init_tool_executor`] and their platform `ClawThread`
-/// backend; [`on_disk`](AgentSystem::on_disk) does this for the dev host path.
+/// backend; [`on_disk`](AgentSystem::on_disk) does this for the host-backends
+/// path.
 ///
 /// The persistence backend `F`, async HTTP transport `H`, and `Timer` are type
 /// parameters chosen at

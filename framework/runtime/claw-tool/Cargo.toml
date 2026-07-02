@@ -23,6 +23,7 @@ serde_json = "1"
 thiserror = "2"
 
 [dev-dependencies]
+# Host-target thread backend for executor tests.
 claw-interface = { path = "../claw-interface", features = ["stdthread"] }
 
 [lints.rust]

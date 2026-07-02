@@ -34,7 +34,7 @@ pub use trace::{FlatTreeSubscriber, TraceSink};
 /// Where the host `log` facade (and, through it, the `tracing` stream) writes.
 ///
 /// On `espidf` this is ignored — device output always goes through `ESP_LOGx`;
-/// file redirection is a host-only convenience for the CLIs.
+/// file redirection is a host-target convenience for the CLIs.
 #[derive(Debug, Clone, Default)]
 pub enum LogOutput {
     /// Standard error — the default, unchanged behavior.
@@ -48,7 +48,7 @@ pub enum LogOutput {
 /// Failure installing the global `log` backend (see [`init_logger`]).
 #[derive(Debug, Error)]
 pub enum InitLoggerError {
-    /// Opening the [`LogOutput::File`] target failed (host only).
+    /// Opening the [`LogOutput::File`] target failed (host target only).
     #[error("failed to open log file {path}: {source}")]
     OpenLogFile {
         path: PathBuf,
@@ -100,7 +100,7 @@ static LOGGER: ClawLogger = ClawLogger;
 /// Pass [`LevelFilter::Trace`] to defer all filtering to those other gates.
 ///
 /// `output` selects the sink: [`LogOutput::Stderr`] (default) or
-/// [`LogOutput::File`] to redirect host log/trace output to a file (host only;
+/// [`LogOutput::File`] to redirect host log/trace output to a file (host target;
 /// ignored on `espidf`). The interactive CLI output (prompts/replies) is written
 /// directly to stdout/stderr and is unaffected.
 ///
@@ -116,7 +116,7 @@ pub fn init_logger(max_level: LevelFilter, output: LogOutput) -> Result<(), Init
 #[cfg(target_os = "espidf")]
 fn install_logger(max_level: LevelFilter, _output: LogOutput) -> Result<(), InitLoggerError> {
     // Device output always goes through `ESP_LOGx`; `_output` (file redirection)
-    // is a host-only convenience and is intentionally ignored here.
+    // is a host-target convenience and is intentionally ignored here.
     log::set_logger(&LOGGER)?;
     log::set_max_level(max_level);
     Ok(())

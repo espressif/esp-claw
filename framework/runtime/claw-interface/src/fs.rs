@@ -190,7 +190,7 @@ pub trait ClawFs: Send + Sync {
 // Reference implementations (feature-gated)
 // ===========================================================================
 //
-// These are host-only `ClawFs` backends, kept beside the trait so the handful
+// These are host-target `ClawFs` backends, kept beside the trait so the handful
 // of distinct implementations live in exactly one place. They are NOT part of
 // the platform-free seam the rest of this crate provides, so each is gated
 // behind its own opt-in feature and must never be enabled in a device build:
