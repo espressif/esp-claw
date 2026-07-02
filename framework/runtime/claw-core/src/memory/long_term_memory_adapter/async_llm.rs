@@ -4,18 +4,18 @@ use core::task::{Context, Poll, Waker};
 use std::sync::{Mutex, MutexGuard};
 
 use claw_api::ClawApiAsync;
-use claw_interface::{ClawHttpAsync, ClawTimer};
+use claw_interface::{ClawHttp, ClawTimer};
 
-pub(super) struct SharedAsyncLlm<H: ClawHttpAsync, Timer: ClawTimer> {
+pub(super) struct SharedAsyncLlm<H: ClawHttp, Timer: ClawTimer> {
     state: Mutex<SharedAsyncLlmState<H, Timer>>,
 }
 
-struct SharedAsyncLlmState<H: ClawHttpAsync, Timer: ClawTimer> {
+struct SharedAsyncLlmState<H: ClawHttp, Timer: ClawTimer> {
     api: Option<ClawApiAsync<H, Timer>>,
     waker: Option<Waker>,
 }
 
-impl<H: ClawHttpAsync, Timer: ClawTimer> SharedAsyncLlm<H, Timer> {
+impl<H: ClawHttp, Timer: ClawTimer> SharedAsyncLlm<H, Timer> {
     pub(super) fn new(api: ClawApiAsync<H, Timer>) -> Self {
         Self {
             state: Mutex::new(SharedAsyncLlmState {
@@ -30,19 +30,22 @@ impl<H: ClawHttpAsync, Timer: ClawTimer> SharedAsyncLlm<H, Timer> {
     }
 
     fn put(&self, api: ClawApiAsync<H, Timer>) {
-        let mut state = lock(&self.state);
-        state.api = Some(api);
-        if let Some(waker) = state.waker.take() {
+        let waker = {
+            let mut state = lock(&self.state);
+            state.api = Some(api);
+            state.waker.take()
+        };
+        if let Some(waker) = waker {
             waker.wake();
         }
     }
 }
 
-pub(super) struct AsyncLlmLeaseFuture<'owner, H: ClawHttpAsync, Timer: ClawTimer> {
+pub(super) struct AsyncLlmLeaseFuture<'owner, H: ClawHttp, Timer: ClawTimer> {
     owner: &'owner SharedAsyncLlm<H, Timer>,
 }
 
-impl<'owner, H: ClawHttpAsync, Timer: ClawTimer> Future for AsyncLlmLeaseFuture<'owner, H, Timer> {
+impl<'owner, H: ClawHttp, Timer: ClawTimer> Future for AsyncLlmLeaseFuture<'owner, H, Timer> {
     type Output = AsyncLlmLease<'owner, H, Timer>;
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
@@ -60,12 +63,12 @@ impl<'owner, H: ClawHttpAsync, Timer: ClawTimer> Future for AsyncLlmLeaseFuture<
     }
 }
 
-pub(super) struct AsyncLlmLease<'owner, H: ClawHttpAsync, Timer: ClawTimer> {
+pub(super) struct AsyncLlmLease<'owner, H: ClawHttp, Timer: ClawTimer> {
     owner: &'owner SharedAsyncLlm<H, Timer>,
     api: Option<ClawApiAsync<H, Timer>>,
 }
 
-impl<H: ClawHttpAsync, Timer: ClawTimer> AsyncLlmLease<'_, H, Timer> {
+impl<H: ClawHttp, Timer: ClawTimer> AsyncLlmLease<'_, H, Timer> {
     pub(super) fn api_mut(&mut self) -> &mut ClawApiAsync<H, Timer> {
         match self.api.as_mut() {
             Some(api) => api,
@@ -74,7 +77,7 @@ impl<H: ClawHttpAsync, Timer: ClawTimer> AsyncLlmLease<'_, H, Timer> {
     }
 }
 
-impl<H: ClawHttpAsync, Timer: ClawTimer> Drop for AsyncLlmLease<'_, H, Timer> {
+impl<H: ClawHttp, Timer: ClawTimer> Drop for AsyncLlmLease<'_, H, Timer> {
     fn drop(&mut self) {
         if let Some(api) = self.api.take() {
             self.owner.put(api);

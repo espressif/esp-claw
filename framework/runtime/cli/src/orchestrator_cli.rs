@@ -35,7 +35,7 @@ use claw_core::{
     ChannelEgress, ChannelEgressHub, ChannelIngressSink, ChannelTransport, InboundMessage,
     Orchestrator, RecordingTransport,
 };
-use claw_interface::{RealHttpAsync, TokioTimer};
+use claw_interface::{RealHttp, TokioTimer};
 
 const MEMORY_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -123,7 +123,7 @@ async fn main() {
     let agent_long_term_dirs = AgentLongTermDirs::new()
         .with_dir("conversation", CONVERSATION_LONG_TERM_DIR)
         .with_dir("worker", WORKER_LONG_TERM_DIR);
-    let factory = Arc::new(FsAgentFactory::<CliFs, RealHttpAsync, TokioTimer>::new(
+    let factory = Arc::new(FsAgentFactory::<CliFs, RealHttp, TokioTimer>::new(
         resolver,
         make_llm_config(),
         TRANSCRIPT_DIR,

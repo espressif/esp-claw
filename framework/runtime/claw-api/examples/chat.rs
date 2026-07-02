@@ -14,7 +14,9 @@
 use std::sync::atomic::AtomicBool;
 
 use claw_api::{BackendKind, ChatJsonRequest, ChatRequest, ClawApi, ClawApiConfig};
-use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
+use claw_interface::http::{
+    blocking::ClawHttp, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode,
+};
 use serde::Deserialize;
 use serde_json::json;
 

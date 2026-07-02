@@ -3,8 +3,8 @@
 use core::sync::atomic::AtomicBool;
 
 use claw_interface::http::{
-    Cancel, ClawHttp, ClawHttpAsync, HttpAuth, HttpError, HttpHeader, HttpJsonRequest,
-    HttpResponse, HttpStatusCode,
+    blocking::ClawHttp as BlockingClawHttp, Cancel, ClawHttp, HttpAuth, HttpError, HttpHeader,
+    HttpJsonRequest, HttpResponse, HttpStatusCode,
 };
 use serde_json::{Map, Value};
 
@@ -140,7 +140,7 @@ fn status_is_transient(status: HttpStatusCode) -> bool {
         || (STATUS_SERVER_ERROR_MIN..=STATUS_SERVER_ERROR_MAX).contains(&code)
 }
 
-pub(super) fn post_json<H: ClawHttp>(
+pub(super) fn post_json<H: BlockingClawHttp>(
     http: &mut H,
     request: &HttpJsonRequest<'_>,
     abort: &AtomicBool,
@@ -148,7 +148,7 @@ pub(super) fn post_json<H: ClawHttp>(
     http.post_json(request, abort).map_err(map_http_error)
 }
 
-pub(super) async fn post_json_async<'a, H: ClawHttpAsync>(
+pub(super) async fn post_json_async<'a, H: ClawHttp>(
     http: &'a mut H,
     request: &'a HttpJsonRequest<'a>,
     cancel: Cancel<'a>,

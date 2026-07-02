@@ -28,10 +28,10 @@
 //!
 //! # Concurrency
 //!
-//! All state sits behind one `Mutex` inside an `Arc`, so the foreground tick
-//! thread (manual tool calls) and a background pool worker (LLM extraction) can
-//! both write the *same* store through cheap [`Clone`]s of the handle. Drive
-//! reads/writes from any thread.
+//! All state sits behind one `Mutex` inside an `Arc`, so the agent context path
+//! and memory tools can write the *same* store through cheap [`Clone`]s of the
+//! handle. The store itself is thread-safe; higher layers decide whether a
+//! particular extraction or tool path is local or worker-driven.
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -242,7 +242,7 @@ struct Inner<F: ClawFs + 'static> {
 /// the storage layout and concurrency model.
 ///
 /// Cheap to [`Clone`] (clones the `Arc`, not the backend); every clone refers to
-/// the same store, so a foreground thread and a background worker can share one.
+/// the same store, so context adapters and memory tools share one live view.
 ///
 /// # Examples
 ///

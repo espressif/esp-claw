@@ -12,7 +12,7 @@ use core::pin::Pin;
 pub type IngressFuture<'a> = Pin<Box<dyn Future<Output = Result<(), DeliverError>> + 'a>>;
 
 /// Producer side: adapters push inbound work here.
-pub trait ChannelIngressSink: Send + Sync {
+pub trait ChannelIngressSink {
     fn push_user_message(&self, msg: InboundMessage) -> IngressFuture<'_>;
     fn push_command(&self, command: InboundCommand) -> IngressFuture<'_>;
 }

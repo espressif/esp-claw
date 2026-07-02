@@ -11,10 +11,3 @@ crate-type = ["rlib"]
 
 [dependencies]
 thiserror = "2"
-# The `SharedTaskPool` spawns workers through the `ClawThread` injection seam.
-# Only the trait/types are used here; the `StdThread` impl is host-only (dev).
-claw-interface = { path = "../claw-interface" }
-
-[dev-dependencies]
-# `StdThread` (host std::thread spawner) for the pool doctest/tests.
-claw-interface = { path = "../claw-interface", features = ["stdthread"] }

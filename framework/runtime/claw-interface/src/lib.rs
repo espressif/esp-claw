@@ -19,17 +19,17 @@ pub use fs::{ClawFile, ClawFs, FsError};
 pub use fs::{DiskFile, DiskFs};
 #[cfg(feature = "memfs")]
 pub use fs::{MemFile, MemFs};
+#[cfg(feature = "realhttp")]
+pub use http::RealHttp;
 #[cfg(feature = "httpmock")]
 pub use http::{
-    BlockingClawHttpAsync, CapturingHttp, FailingHttp, NeverHttp, NoopHttp, ScriptStep,
-    ScriptedHttp, SharedScriptHttp, YieldingClawHttpAsync,
+    BlockingHttpAdapter, CapturingHttp, FailingHttp, NeverHttp, NoopHttp, ScriptStep, ScriptedHttp,
+    SharedScriptHttp, YieldingHttpAdapter,
 };
 pub use http::{
-    Cancel, ClawHttp, ClawHttpAsync, HttpAuth, HttpError, HttpGetRequest, HttpHeader,
-    HttpJsonRequest, HttpRequestFailure, HttpResponse, HttpResponseFuture, HttpStatusCode,
+    Cancel, ClawHttp, HttpAuth, HttpError, HttpGetRequest, HttpHeader, HttpJsonRequest,
+    HttpRequestFailure, HttpResponse, HttpResponseFuture, HttpStatusCode,
 };
-#[cfg(feature = "realhttp")]
-pub use http::{RealHttp, RealHttpAsync};
 #[cfg(feature = "stdthread")]
 pub use thread::StdThread;
 pub use thread::{ClawThread, CoreAffinity, Priority, WorkerHandle};

@@ -37,8 +37,7 @@ use std::task::{Wake, Waker};
 
 #[cfg(target_os = "espidf")]
 use claw_agent::{
-    init_tool_executor, AgentPersistenceConfig, AgentSystem, BackendKind, ClawApiConfig,
-    PoolConfig, SessionId, SharedTaskPool,
+    init_tool_executor, AgentPersistenceConfig, AgentSystem, BackendKind, ClawApiConfig, SessionId,
 };
 use claw_agent::{
     CapabilityError, ChannelIngressSink, DeliverError, InboundMessage, Registry, SessionError,
@@ -95,6 +94,15 @@ struct RuntimeSendReply {
 }
 
 #[cfg(target_os = "espidf")]
+#[derive(Clone)]
+struct AgentRuntimeConfig {
+    llm: ClawApiConfig,
+    persistence: AgentPersistenceConfig,
+    default_channel: Option<String>,
+    registry: Arc<Registry>,
+}
+
+#[cfg(target_os = "espidf")]
 enum RuntimeCommand {
     Inbound(InboundMessage),
     SessionCreate {
@@ -123,7 +131,6 @@ struct RuntimeIngress {
 struct AgentRuntime {
     sender: Arc<Mutex<AsyncSender<RuntimeCommand>>>,
     receiver: Option<AsyncReceiver<RuntimeCommand>>,
-    system_receiver: Option<mpsc::Receiver<AgentSystem>>,
     running: Arc<AtomicBool>,
     worker: Option<WorkerHandle>,
 }
@@ -135,7 +142,6 @@ impl AgentRuntime {
         Self {
             sender: Arc::new(Mutex::new(sender)),
             receiver: Some(receiver),
-            system_receiver: None,
             running: Arc::new(AtomicBool::new(false)),
             worker: None,
         }
@@ -152,42 +158,49 @@ impl AgentRuntime {
         self.running.load(Ordering::Acquire)
     }
 
-    fn start(&mut self, system: AgentSystem) -> Result<(), CapabilityError> {
+    fn start(&mut self, config: AgentRuntimeConfig) -> Result<(), CapabilityError> {
         if self.is_running() || self.worker.is_some() {
             return Err(CapabilityError::InvalidState);
         }
         let receiver = self.receiver.take().ok_or(CapabilityError::InvalidState)?;
-        let (system_sender, system_receiver) = mpsc::channel();
+        let (ready_sender, ready_receiver) = mpsc::channel();
         let running = Arc::clone(&self.running);
+        self.running.store(true, Ordering::Release);
         let handle = EspIdfThread
             .spawn_worker(
                 "claw_agent_async",
                 AGENT_WORKER_STACK_SIZE,
                 Priority::Normal,
                 CoreAffinity::Any,
-                move || run_agent_executor(system, receiver, system_sender, running),
+                move || run_agent_executor(config, receiver, ready_sender, running),
             )
-            .map_err(|error| CapabilityError::Failed(error.to_string()))?;
-        self.running.store(true, Ordering::Release);
-        self.system_receiver = Some(system_receiver);
+            .map_err(|error| {
+                self.running.store(false, Ordering::Release);
+                let _ = self.reset_command_channel();
+                CapabilityError::Failed(error.to_string())
+            })?;
         self.worker = Some(handle);
-        Ok(())
+
+        match ready_receiver.recv() {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => {
+                self.join_worker_and_reset()?;
+                Err(error)
+            }
+            Err(_) => {
+                self.join_worker_and_reset()?;
+                Err(CapabilityError::Failed(
+                    "agent runtime stopped before it became ready".to_string(),
+                ))
+            }
+        }
     }
 
-    fn stop(&mut self) -> Result<Option<AgentSystem>, CapabilityError> {
+    fn stop(&mut self) -> Result<(), CapabilityError> {
         if self.is_running() {
             let _ = self.send_command(RuntimeCommand::Shutdown);
         }
-        if let Some(worker) = self.worker.take() {
-            worker.join();
-        }
-        self.running.store(false, Ordering::Release);
-        let system = self
-            .system_receiver
-            .take()
-            .and_then(|receiver| receiver.recv().ok());
-        self.reset_command_channel()?;
-        Ok(system)
+        self.join_worker_and_reset()
     }
 
     fn send_command(&self, command: RuntimeCommand) -> Result<(), CapabilityError> {
@@ -209,27 +222,56 @@ impl AgentRuntime {
         self.receiver = Some(receiver);
         Ok(())
     }
+
+    fn join_worker_and_reset(&mut self) -> Result<(), CapabilityError> {
+        if let Some(worker) = self.worker.take() {
+            worker.join();
+        }
+        self.running.store(false, Ordering::Release);
+        self.reset_command_channel()
+    }
 }
 
 #[cfg(target_os = "espidf")]
 fn run_agent_executor(
-    system: AgentSystem,
+    config: AgentRuntimeConfig,
     receiver: AsyncReceiver<RuntimeCommand>,
-    system_sender: mpsc::Sender<AgentSystem>,
+    ready_sender: mpsc::Sender<Result<(), CapabilityError>>,
     running: Arc<AtomicBool>,
 ) {
+    let system = match build_agent_system(&config) {
+        Ok(system) => {
+            let _ = ready_sender.send(Ok(()));
+            system
+        }
+        Err(error) => {
+            let _ = ready_sender.send(Err(error));
+            running.store(false, Ordering::Release);
+            return;
+        }
+    };
     let executor: edge_executor::LocalExecutor = Default::default();
     let task = executor.spawn(agent_worker_loop(system, receiver));
-    let system = edge_executor::block_on(executor.run(task));
-    let _ = system_sender.send(system);
+    edge_executor::block_on(executor.run(task));
     running.store(false, Ordering::Release);
 }
 
 #[cfg(target_os = "espidf")]
-async fn agent_worker_loop(
-    system: AgentSystem,
-    receiver: AsyncReceiver<RuntimeCommand>,
-) -> AgentSystem {
+fn build_agent_system(config: &AgentRuntimeConfig) -> Result<AgentSystem, CapabilityError> {
+    let mut builder = AgentSystem::builder::<EspIdfFs, EspIdfHttp, EspIdfTimer>()
+        .llm(config.llm.clone())
+        .persistence(config.persistence.clone())
+        .capabilities(Arc::clone(&config.registry));
+    if let Some(channel) = &config.default_channel {
+        builder = builder.channel(channel.clone());
+    }
+    builder
+        .build()
+        .map_err(|error| CapabilityError::Failed(error.to_string()))
+}
+
+#[cfg(target_os = "espidf")]
+async fn agent_worker_loop(system: AgentSystem, receiver: AsyncReceiver<RuntimeCommand>) {
     while let Some(command) = receiver.recv().await {
         match command {
             RuntimeCommand::Inbound(message) => {
@@ -256,7 +298,6 @@ async fn agent_worker_loop(
             RuntimeCommand::Shutdown => break,
         }
     }
-    system
 }
 
 fn map_session_error(error: SessionError) -> CapabilityError {
@@ -282,9 +323,8 @@ fn map_deliver_error(error: DeliverError) -> CapabilityError {
 /// Opaque agent runtime handle.
 #[cfg(target_os = "espidf")]
 pub struct ClawAgentSystem {
-    system: Mutex<Option<AgentSystem>>,
+    config: AgentRuntimeConfig,
     runtime: Mutex<AgentRuntime>,
-    registry: Arc<Registry>,
 }
 
 /// Opaque registry handle: wraps `Arc<claw_agent::Registry>`.
@@ -452,31 +492,21 @@ unsafe fn agent_system_create_inner(
             .with_agent_long_term_dir("conversation", &conversation_long_term_dir)
             .with_agent_long_term_dir("worker", &worker_long_term_dir);
     init_tool_executor(EspIdfThread).map_err(|error| CapabilityError::Failed(error.to_string()))?;
-    let pool = Arc::new(
-        SharedTaskPool::new(PoolConfig::default(), EspIdfThread)
-            .map_err(|error| CapabilityError::Failed(error.to_string()))?,
-    );
 
-    let mut builder = AgentSystem::builder::<EspIdfFs, EspIdfHttp, EspIdfTimer>()
-        .llm(llm)
-        .persistence(persistence)
-        .task_pool(pool)
-        .capabilities(Arc::clone(&registry));
-    if let Some(channel) = unsafe { optional_string(config.default_channel)? } {
-        builder = builder.channel(channel);
-    }
+    let runtime_config = AgentRuntimeConfig {
+        llm,
+        persistence,
+        default_channel: unsafe { optional_string(config.default_channel)? },
+        registry,
+    };
 
-    let system = builder
-        .build()
-        .map_err(|error| CapabilityError::Failed(error.to_string()))?;
     let runtime = AgentRuntime::new();
     let ingress = runtime.ingress();
 
     *ingress_out = ClawCapabilityIngress::into_raw_runtime(ingress);
     *system_out = Box::into_raw(Box::new(ClawAgentSystem {
-        system: Mutex::new(Some(system)),
+        config: runtime_config,
         runtime: Mutex::new(runtime),
-        registry,
     }));
     Ok(())
 }
@@ -496,31 +526,21 @@ pub unsafe extern "C" fn claw_agent_system_start(
 #[cfg(target_os = "espidf")]
 unsafe fn agent_system_start_inner(system: *mut ClawAgentSystem) -> Result<(), CapabilityError> {
     let handle = system.as_ref().ok_or(CapabilityError::InvalidArg)?;
-    let system = handle
-        .system
-        .lock()
-        .map_err(|_| CapabilityError::Failed("agent system lock poisoned".to_string()))?
-        .take()
-        .ok_or(CapabilityError::InvalidState)?;
     {
         let mut runtime = handle
             .runtime
             .lock()
             .map_err(|_| CapabilityError::Failed("agent runtime lock poisoned".to_string()))?;
-        if let Err(error) = runtime.start(system) {
+        if let Err(error) = runtime.start(handle.config.clone()) {
             return Err(error);
         }
     }
-    if let Err(error) = handle.registry.start_all() {
+    if let Err(error) = handle.config.registry.start_all() {
         let mut runtime = handle
             .runtime
             .lock()
             .map_err(|_| CapabilityError::Failed("agent runtime lock poisoned".to_string()))?;
-        let returned_system = runtime.stop()?;
-        drop(runtime);
-        if let Some(system) = returned_system {
-            store_agent_system(handle, system)?;
-        }
+        runtime.stop()?;
         return Err(error);
     }
     Ok(())
@@ -541,16 +561,12 @@ pub unsafe extern "C" fn claw_agent_system_stop(
 #[cfg(target_os = "espidf")]
 unsafe fn agent_system_stop_inner(system: *mut ClawAgentSystem) -> Result<(), CapabilityError> {
     let handle = system.as_ref().ok_or(CapabilityError::InvalidArg)?;
-    let lifecycle_result = handle.registry.stop_all();
+    let lifecycle_result = handle.config.registry.stop_all();
     let mut runtime = handle
         .runtime
         .lock()
         .map_err(|_| CapabilityError::Failed("agent runtime lock poisoned".to_string()))?;
-    let returned_system = runtime.stop()?;
-    drop(runtime);
-    if let Some(system) = returned_system {
-        store_agent_system(handle, system)?;
-    }
+    runtime.stop()?;
     lifecycle_result
 }
 
@@ -572,28 +588,12 @@ unsafe fn agent_system_destroy_inner(system: *mut ClawAgentSystem) -> Result<(),
         return Ok(());
     }
     let boxed = Box::from_raw(system);
-    let lifecycle_result = boxed.registry.stop_all();
+    let lifecycle_result = boxed.config.registry.stop_all();
     if let Ok(mut runtime) = boxed.runtime.lock() {
         let _ = runtime.stop();
     }
     lifecycle_result?;
     drop(boxed);
-    Ok(())
-}
-
-#[cfg(target_os = "espidf")]
-fn store_agent_system(
-    handle: &ClawAgentSystem,
-    system: AgentSystem,
-) -> Result<(), CapabilityError> {
-    let mut slot = handle
-        .system
-        .lock()
-        .map_err(|_| CapabilityError::Failed("agent system lock poisoned".to_string()))?;
-    if slot.is_some() {
-        return Err(CapabilityError::InvalidState);
-    }
-    *slot = Some(system);
     Ok(())
 }
 

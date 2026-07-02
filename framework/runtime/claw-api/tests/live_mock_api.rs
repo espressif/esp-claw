@@ -27,7 +27,7 @@
 use std::sync::atomic::AtomicBool;
 
 use claw_api::{BackendKind, ChatJsonRequest, ChatRequest, ClawApi, ClawApiConfig};
-use claw_interface::RealHttp;
+use claw_interface::http::blocking::RealHttp;
 use serde_json::json;
 
 /// Free, keyless mock LLM service. Serves OpenAI shape at `/chat/completions`

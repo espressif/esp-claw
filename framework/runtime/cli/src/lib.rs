@@ -14,13 +14,12 @@ use std::sync::Arc;
 use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
 use claw_core::agent::{AgentLongTermDirs, CompactionDeps, LongTermDeps};
 use claw_core::{global_store, CompactionPolicy, LlmExtractor, RuleBasedTierClassifier};
-use claw_interface::{DiskFs, RealHttpAsync, StdThread, TokioTimer};
+use claw_interface::{DiskFs, RealHttp, TokioTimer};
 use claw_memory::{NoopCompactor, ProfileConfig, ProfileStore, TranscriptConfig, TranscriptStore};
-use claw_utils::{PoolConfig, SharedTaskPool};
 
-// The real network transport is `claw_interface::RealHttpAsync` (the `realhttp`
-// feature); background summarisation is disabled via claw-memory's
-// `NoopCompactor` (the `compactor-stub` feature).
+// The real network transport is `claw_interface::RealHttp` (the `realhttp`
+// feature); summarisation is disabled via claw-memory's `NoopCompactor` (the
+// `compactor-stub` feature).
 
 /// The concrete `ClawFs` the CLI runs over: the real disk backend. `DiskFs` is
 /// itself a cheap clone handle (just a base path), so each agent gets a clone
@@ -68,9 +67,9 @@ pub fn make_llm_config() -> ClawApiConfig {
     config
 }
 
-/// The live network transport ([`RealHttpAsync`]). Each LLM client owns its own.
-pub fn make_http() -> RealHttpAsync {
-    RealHttpAsync::new()
+/// The live network transport ([`RealHttp`]). Each LLM client owns its own.
+pub fn make_http() -> RealHttp {
+    RealHttp::new()
 }
 
 /// Build a live LLM client from the `CLAW_LLM_*` environment variables.
@@ -78,7 +77,7 @@ pub fn make_http() -> RealHttpAsync {
 /// # Panics
 ///
 /// If any required `CLAW_LLM_*` variable is missing, or the client cannot init.
-pub fn make_llm() -> ClawApiAsync<RealHttpAsync, TokioTimer> {
+pub fn make_llm() -> ClawApiAsync<RealHttp, TokioTimer> {
     ClawApiAsync::init(make_llm_config(), make_http(), TokioTimer)
         .expect("failed to init LLM client")
 }
@@ -90,21 +89,14 @@ pub fn make_memory_fs() -> CliFs {
 }
 
 /// Build the compaction collaborators an agent's rolling-summary adapter needs:
-/// a fresh background task pool, the no-op compactor (background summarisation is
-/// disabled in the CLI), and the default compaction policy. These belong to the
+/// the no-op compactor (summarisation is disabled in the CLI), and the default
+/// compaction policy. These belong to the
 /// agent layer, not the transcript store, which never compacts.
 ///
 /// Public so factories that build their own memory (e.g.
 /// [`claw_core::agent::FsAgentFactory`]) can take these collaborators directly.
-///
-/// # Panics
-///
-/// If the background task pool cannot be created.
 pub fn make_compaction() -> CompactionDeps {
-    let pool =
-        Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread).expect("memory pool"));
     CompactionDeps {
-        pool,
         compactor: Arc::new(NoopCompactor),
         policy: CompactionPolicy::new(6000, 2000, 1500),
     }
@@ -131,10 +123,6 @@ pub fn make_memory(
 /// its own on-disk transcript store at `transcript_dir`: the transcript config, the
 /// storage backend, and the compaction collaborators. The agent keys the
 /// conversation by its own id, so no id is needed here.
-///
-/// # Panics
-///
-/// If the background task pool cannot be created.
 pub fn make_memory_ingredients(transcript_dir: &str) -> (TranscriptConfig, CliFs, CompactionDeps) {
     (
         TranscriptConfig::new(transcript_dir),
@@ -146,7 +134,7 @@ pub fn make_memory_ingredients(transcript_dir: &str) -> (TranscriptConfig, CliFs
 /// Build the long-term-memory collaborators from explicit final directories —
 /// mandatory for every agent a [`claw_core::agent::FsAgentFactory`] builds: one
 /// shared global store, explicit per-kind agent stores, rule-based tier routing,
-/// and LLM-backed background extraction over a fresh client.
+/// and LLM-backed extraction over a fresh client.
 ///
 /// # Panics
 ///

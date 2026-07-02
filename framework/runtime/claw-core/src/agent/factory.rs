@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use claw_api::{ClawApiAsync, ClawApiConfig};
 use claw_context::Block;
-use claw_interface::{ClawFs, ClawHttpAsync, ClawTimer};
+use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::{LongTermMemory, ProfileStore, TranscriptConfig};
 
 use crate::agent::base_agent::{AgentCommand, AgentId};
@@ -47,7 +47,7 @@ use crate::memory::{
 /// unit-testable with a fake factory. The factory wires the new agent's tools to
 /// the provided [`GraphHost`] so it can spawn children and (for a root) resolve
 /// approvals.
-pub trait AgentFactory: Send + Sync {
+pub trait AgentFactory {
     /// Build an agent of `kind` with id `id` already tasked with `goal`, handing
     /// it `host` as its back-channel to the agent graph. Used for both spawned
     /// subagents and a session's root agent.
@@ -133,7 +133,7 @@ pub struct LongTermDeps<F: ClawFs + Clone + 'static> {
     agent_dirs: AgentLongTermDirs,
     /// Routes a new fact to the global or per-agent tier.
     classifier: Arc<dyn TierClassifier>,
-    /// Distills durable facts from the transcript off the tick path.
+    /// Distills durable facts from the transcript.
     extractor: Arc<dyn Extractor>,
 }
 
@@ -168,7 +168,7 @@ impl<F: ClawFs + Clone + 'static> LongTermDeps<F> {
 /// registry then uses it for every agent in every session.
 pub struct FsAgentFactory<
     F: ClawFs + Clone + 'static,
-    H: ClawHttpAsync + Default + 'static,
+    H: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 > {
     /// Maps a manifest's capability/skill *names* to handler code.
@@ -178,7 +178,7 @@ pub struct FsAgentFactory<
     /// transport, so no transport instance is shared between agents.
     llm_config: ClawApiConfig,
     /// Marks the HTTP transport type minted per agent. `fn() -> H` so the marker
-    /// is unconditionally `Send + Sync` (the factory only *produces* `H`).
+    /// is independent of owning an `H` value (the factory only *produces* `H`).
     _http: PhantomData<fn() -> H>,
     /// Timer type minted per agent for async retry backoff.
     _timer: PhantomData<fn() -> Timer>,
@@ -189,9 +189,9 @@ pub struct FsAgentFactory<
     /// must be `Clone` because every agent gets its own handle (use
     /// `Arc<ConcreteFs>` for a shared backend — `Arc<T>` is itself `ClawFs`).
     memory_fs: F,
-    /// Compaction collaborators (pool + compactor + policy), cloned into each
-    /// agent's rolling-summary adapter. These belong to the agent layer, not the
-    /// transcript store, which never compacts.
+    /// Compaction collaborators cloned into each agent's rolling-summary adapter.
+    /// These belong to the agent layer, not the transcript store, which never
+    /// compacts.
     compaction: CompactionDeps,
     /// Long-term-memory collaborators, shared across every agent this factory
     /// builds. Required: every agent gets a private store plus a clone of the
@@ -204,7 +204,7 @@ pub struct FsAgentFactory<
 
 impl<
         F: ClawFs + Clone + 'static,
-        H: ClawHttpAsync + Default + 'static,
+        H: ClawHttp + Default + 'static,
         Timer: ClawTimer + Default + 'static,
     > FsAgentFactory<F, H, Timer>
 {
@@ -214,8 +214,8 @@ impl<
     ///
     /// `memory_fs` is the storage backend the firmware/host already knows how to
     /// build (real disk fs on device, in-memory doubles in tests); it is cloned
-    /// per agent. `compaction` (pool + compactor + policy) drives each agent's
-    /// rolling-summary adapter. `long_term` is the shared long-term-memory
+    /// per agent. `compaction` drives each agent's rolling-summary adapter.
+    /// `long_term` is the shared long-term-memory
     /// collaborators every agent is fronted with.
     pub fn new(
         resolver: Arc<dyn AgentResolver>,
@@ -248,10 +248,9 @@ impl<
     }
 
     /// A fresh [`CompactionDeps`] sharing this factory's collaborators (`Arc`
-    /// clones of the pool/compactor plus the `Copy` policy).
+    /// clone of the compactor plus the `Copy` policy).
     fn clone_compaction(&self) -> CompactionDeps {
         CompactionDeps {
-            pool: Arc::clone(&self.compaction.pool),
             compactor: Arc::clone(&self.compaction.compactor),
             policy: self.compaction.policy,
         }
@@ -260,8 +259,8 @@ impl<
 
 impl<
         F: ClawFs + Clone + 'static,
-        H: ClawHttpAsync + Default + Send + 'static,
-        Timer: ClawTimer + Default + Send + 'static,
+        H: ClawHttp + Default + 'static,
+        Timer: ClawTimer + Default + 'static,
     > AgentFactory for FsAgentFactory<F, H, Timer>
 {
     fn create_agent(
@@ -322,7 +321,6 @@ impl<
             long_term.global.clone(),
             Arc::clone(&long_term.classifier),
             Arc::clone(&long_term.extractor),
-            Arc::clone(&self.compaction.pool),
         );
         agent
             .register_context_adapter(Box::new(adapter))
@@ -349,11 +347,8 @@ mod tests {
     use std::task::{Wake, Waker};
 
     use claw_api::BackendKind;
-    use claw_interface::{
-        BlockingClawHttpAsync, ImmediateTimer, MemFs, SharedScriptHttp, StdThread,
-    };
+    use claw_interface::{BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp, StdThread};
     use claw_memory::NoopCompactor;
-    use claw_utils::{PoolConfig, SharedTaskPool};
     use serde_json::json;
 
     use super::*;
@@ -413,7 +408,7 @@ mod tests {
     /// thread-local `SharedScriptHttp` script that every minted client shares.
     fn factory(
         bodies: Vec<String>,
-    ) -> FsAgentFactory<MemFs, BlockingClawHttpAsync<SharedScriptHttp>, ImmediateTimer> {
+    ) -> FsAgentFactory<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer> {
         SharedScriptHttp::install(bodies);
         let llm_config = ClawApiConfig::new(
             BackendKind::OpenAiCompatible,
@@ -422,9 +417,6 @@ mod tests {
             "https://example.invalid",
         );
         let compaction = CompactionDeps {
-            pool: Arc::new(
-                SharedTaskPool::new(PoolConfig::default(), StdThread).expect("memory pool"),
-            ),
             compactor: Arc::new(NoopCompactor),
             policy: CompactionPolicy::new(6000, 2000, 1500),
         };
@@ -441,7 +433,7 @@ mod tests {
             claw_memory::ProfileConfig::new("/mem/profile"),
             MemFs::default(),
         );
-        FsAgentFactory::<MemFs, BlockingClawHttpAsync<SharedScriptHttp>, ImmediateTimer>::new(
+        FsAgentFactory::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new(
             Arc::new(EmptyResolver),
             llm_config,
             "/mem/agents",

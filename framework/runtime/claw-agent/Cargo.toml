@@ -53,8 +53,6 @@ claw-capability = { path = "../claw-capability" }
 # Conversation/long-term memory. The compaction policy is wired internally
 # (the LLM-backed `LlmCompactor`), so no stub-compactor feature is needed.
 claw-memory = { path = "../claw-memory" }
-# The shared background worker pool callers configure and inject.
-claw-utils = { path = "../claw-utils" }
 # The DI trait surface (`ClawFs` / `ClawHttp`) is always available; the concrete
 # dev backends (`diskfs`/`realhttp`/`stdthread`) are pulled in only by the `dev`
 # feature so the device build (via claw-cabi) stays free of reqwest/std-thread.
@@ -70,4 +68,5 @@ tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"], optional
 # In-memory fs + scripted HTTP doubles so the end-to-end tests run hermetically
 # (no network, no API key) entirely through the public API.
 claw-interface = { path = "../claw-interface", features = ["memfs", "httpmock", "timermock"] }
+claw-utils = { path = "../claw-utils" }
 serde_json = "1"

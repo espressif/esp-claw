@@ -16,9 +16,8 @@ use std::sync::Arc;
 
 use claw_api::ClawApiAsync;
 use claw_context::Block;
-use claw_interface::{ClawFs, ClawHttpAsync, ClawTimer};
+use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::{Compactor, TranscriptConfig, TranscriptStore};
-use claw_utils::SharedTaskPool;
 
 use crate::agent::base_agent::{
     AgentCommand, AgentCommandError, AgentId, BaseAgent, BaseAgentBuildError,
@@ -34,16 +33,13 @@ use crate::memory::{
 use claw_tool::{ToolSet, ToolSetError};
 
 /// The compaction collaborators a [`GenericAgent`] hands to its rolling-summary
-/// adapter: the shared worker pool the summarization runs on, the summarizer
-/// itself, and the policy budgets. Bundled so the construction signature and the
-/// factory's per-agent clone stay small.
+/// adapter: the summarizer itself and the policy budgets. Bundled so the
+/// construction signature and the factory's per-agent clone stay small.
 ///
 /// These belong to the *agent layer*, not the transcript store: the store is pure
 /// verbatim storage and never compacts (see [`TranscriptStore`]). The summarizer
 /// seam stays dynamic (`Arc<dyn Compactor>`) — swapped per build, not a hot path.
 pub struct CompactionDeps {
-    /// Shared worker pool the summarization runs on, off the tick path.
-    pub pool: Arc<SharedTaskPool>,
     /// How aged windows are turned into a summary.
     pub compactor: Arc<dyn Compactor>,
     /// When/what to compact.
@@ -56,13 +52,13 @@ pub struct CompactionDeps {
 
 /// The one agent type: a flat ReAct loop over a [`BaseAgent`], configured by an
 /// [`AgentConfig`]. No semantic FSM — `tick` forwards straight to the base.
-pub struct GenericAgent<H: ClawHttpAsync, Timer: ClawTimer> {
+pub struct GenericAgent<H: ClawHttp, Timer: ClawTimer> {
     id: AgentId,
     kind: AgentKind,
     base: BaseAgent<H, Timer>,
 }
 
-impl<H: ClawHttpAsync, Timer: ClawTimer> GenericAgent<H, Timer> {
+impl<H: ClawHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
     /// Build a generic agent with `id` over `llm`, configured by `config`.
     ///
     /// The agent constructs its **own** [`TranscriptStore`] from the injected
@@ -71,9 +67,9 @@ impl<H: ClawHttpAsync, Timer: ClawTimer> GenericAgent<H, Timer> {
     /// a transcript that belongs to a different agent: the conversation identity
     /// always follows the agent identity.
     ///
-    /// `compaction` (pool + compactor + policy) belongs to the agent layer, not
-    /// the store: it drives the [`RollingSummaryContextAdapter`], which summarizes
-    /// the aged prefix at request time. That adapter and the always-present
+    /// `compaction` belongs to the agent layer, not the store: it drives the
+    /// [`RollingSummaryContextAdapter`], which summarizes the aged prefix at
+    /// request time. That adapter and the always-present
     /// recent-history adapter share one [`SummaryCursor`] — the boundary between
     /// the summarized prefix and the verbatim tail — so this one agent owns both
     /// halves of its history with no gap or overlap.
@@ -112,7 +108,6 @@ impl<H: ClawHttpAsync, Timer: ClawTimer> GenericAgent<H, Timer> {
         let cursor = SummaryCursor::new();
         let rolling_summary = RollingSummaryContextAdapter::new(
             store.clone(),
-            compaction.pool,
             compaction.compactor,
             compaction.policy,
             cursor.clone(),
@@ -193,7 +188,7 @@ impl<H: ClawHttpAsync, Timer: ClawTimer> GenericAgent<H, Timer> {
     }
 }
 
-impl<H: ClawHttpAsync + Send, Timer: ClawTimer + Send> Agent for GenericAgent<H, Timer> {
+impl<H: ClawHttp, Timer: ClawTimer> Agent for GenericAgent<H, Timer> {
     fn id(&self) -> AgentId {
         self.id
     }
@@ -233,19 +228,17 @@ mod tests {
 
     use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig, RetryPolicy};
     use claw_interface::{
-        BlockingClawHttpAsync, ClawHttpAsync, ClawTimer, ImmediateTimer, MemFs, ScriptedHttp,
-        StdThread,
+        BlockingHttpAdapter, ClawHttp, ClawTimer, ImmediateTimer, MemFs, ScriptedHttp, StdThread,
     };
     use claw_memory::NoopCompactor;
     use claw_tool::init_tool_executor;
-    use claw_utils::{PoolConfig, SharedTaskPool};
     use serde_json::{json, Value};
 
     use super::*;
     use crate::agent::graph::{GraphEffect, SpawnPolicy};
     use crate::agent::TickOutcome;
 
-    type TestLlm = ClawApiAsync<BlockingClawHttpAsync<ScriptedHttp>, ImmediateTimer>;
+    type TestLlm = ClawApiAsync<BlockingHttpAdapter<ScriptedHttp>, ImmediateTimer>;
 
     fn scripted_llm(bodies: Vec<String>) -> TestLlm {
         let config = ClawApiConfig::new(
@@ -256,7 +249,7 @@ mod tests {
         );
         ClawApiAsync::init(
             config,
-            BlockingClawHttpAsync::new(ScriptedHttp::new(bodies)),
+            BlockingHttpAdapter::new(ScriptedHttp::new(bodies)),
             ImmediateTimer,
         )
         .expect("init llm")
@@ -283,14 +276,11 @@ mod tests {
     /// base config, the storage backend, and the (in-memory) compaction
     /// collaborators. The agent keys the conversation by its own id.
     fn memory_ingredients(agent_id: AgentId) -> (TranscriptConfig, MemFs, CompactionDeps) {
-        let pool =
-            Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread).expect("memory pool"));
         let transcript_dir = format!("/mem/agent-{}", agent_id.0);
         (
             TranscriptConfig::new(&transcript_dir),
             MemFs::default(),
             CompactionDeps {
-                pool,
                 compactor: Arc::new(NoopCompactor),
                 policy: CompactionPolicy::new(6000, 2000, 1500),
             },
@@ -330,9 +320,7 @@ mod tests {
             .unwrap_or_default()
     }
 
-    fn drive<H: ClawHttpAsync + Send, Timer: ClawTimer + Send>(
-        agent: &mut GenericAgent<H, Timer>,
-    ) -> TickOutcome {
+    fn drive<H: ClawHttp, Timer: ClawTimer>(agent: &mut GenericAgent<H, Timer>) -> TickOutcome {
         block_on(async {
             loop {
                 match agent.tick().await {

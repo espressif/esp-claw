@@ -54,7 +54,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use claw_api::{ChatError, ClawApiAsync, RetryPolicy};
-use claw_interface::{ClawFs, ClawHttpAsync, ClawTimer};
+use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::TranscriptStore;
 use serde_json::Value;
 
@@ -397,7 +397,7 @@ impl InterruptionControl for AgentInterruption {
 ///     }
 /// }
 /// ```
-pub struct BaseAgent<H: ClawHttpAsync, Timer: ClawTimer> {
+pub struct BaseAgent<H: ClawHttp, Timer: ClawTimer> {
     llm: ClawApiAsync<H, Timer>,
     /// Retry policy applied to every per-iteration LLM call.
     retry_policy: RetryPolicy,
@@ -483,7 +483,7 @@ fn install_context_adapter(
     Ok(())
 }
 
-impl<H: ClawHttpAsync, Timer: ClawTimer> BaseAgent<H, Timer> {
+impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// Start building an agent over a caller-owned [`TranscriptStore`].
     ///
     /// The transcript store is the only place the filesystem type `F` enters, and
@@ -702,6 +702,21 @@ impl<H: ClawHttpAsync, Timer: ClawTimer> BaseAgent<H, Timer> {
         install_context_adapter(&mut self.adapters, &mut self.tools, adapter)
     }
 
+    /// Let adapters refresh any async state before the request context is
+    /// rendered.
+    async fn prepare_adapter_context(&mut self) {
+        let history_view = self.transcript.as_history();
+        let tools = self.tools.as_ref();
+        for adapter in &mut self.adapters {
+            adapter
+                .prepare(ContextAdapterInput {
+                    history: history_view,
+                    tools,
+                })
+                .await;
+        }
+    }
+
     /// Project every registered adapter's source into this agent's context.
     ///
     /// The returned `Value::Array` is the model's history channel. Blocks and
@@ -787,6 +802,7 @@ impl<H: ClawHttpAsync, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// stitching happens anywhere else; reminders are never written to memory, so
     /// the cached system/history prefix is untouched.
     async fn run_iteration(&mut self, iteration_id: IterationId) -> IterationResult {
+        self.prepare_adapter_context().await;
         // Pull each adapter's blocks into the private context and assemble the
         // model's history channel from the adapter `messages()` contributions.
         let history = self.render_adapter_context();
@@ -1082,7 +1098,7 @@ fn has_dangling_tool_calls(patch: &Value) -> bool {
 /// skills are set here (optional, any order), and [`build`](Self::build) produces
 /// a finished agent that exposes only the runtime command/tick API.
 #[must_use = "a BaseAgentBuilder does nothing until `.build()` is called"]
-pub struct BaseAgentBuilder<F: ClawFs + 'static, H: ClawHttpAsync, Timer: ClawTimer> {
+pub struct BaseAgentBuilder<F: ClawFs + 'static, H: ClawHttp, Timer: ClawTimer> {
     llm: ClawApiAsync<H, Timer>,
     store: TranscriptStore<F>,
     tools: Option<ToolSet>,
@@ -1101,7 +1117,7 @@ pub struct BaseAgentBuilder<F: ClawFs + 'static, H: ClawHttpAsync, Timer: ClawTi
     summary_cursor: SummaryCursor,
 }
 
-impl<F: ClawFs + 'static, H: ClawHttpAsync, Timer: ClawTimer> BaseAgentBuilder<F, H, Timer> {
+impl<F: ClawFs + 'static, H: ClawHttp, Timer: ClawTimer> BaseAgentBuilder<F, H, Timer> {
     /// Set the tools available to the agent across all tasks.
     ///
     /// Takes a pre-built [`ToolSet`]; the agent's built-in control tool
@@ -1253,8 +1269,8 @@ impl<F: ClawFs + 'static, H: ClawHttpAsync, Timer: ClawTimer> BaseAgentBuilder<F
         // recent tail (`RecentContext`) is intrinsic — it needs only the store and
         // the summary cursor — so it is registered here up front, ahead of any
         // caller adapter, giving every agent its own history with no extra wiring.
-        // The rolling summary (`ConversationSummary`) carries compaction *policy*
-        // (pool + compactor + budgets) the builder does not have, so the agent
+        // The rolling summary (`ConversationSummary`) carries compaction policy
+        // and summarizer collaborators the builder does not have, so the agent
         // layer (`GenericAgent::new`) registers it and shares the same
         // `summary_cursor`. This is the only place `F` is erased — both the trait
         // object and the boxed adapter drop it, so the built agent is
@@ -1535,9 +1551,10 @@ mod gating_tests {
     use std::task::{Wake, Waker};
 
     use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
+    use claw_interface::http::blocking::ClawHttp as BlockingClawHttp;
     use claw_interface::{
-        BlockingClawHttpAsync, CapturingHttp, ClawHttp, ClawHttpAsync, ClawTimer, ImmediateTimer,
-        MemFs, ScriptedHttp, StdThread,
+        BlockingHttpAdapter, CapturingHttp, ClawHttp, ClawTimer, ImmediateTimer, MemFs,
+        ScriptedHttp, StdThread,
     };
     use claw_memory::{TranscriptConfig, TranscriptStore};
     use serde_json::{json, Value};
@@ -1615,20 +1632,22 @@ mod gating_tests {
 
     // Builders / drivers --------------------------------------------------------
 
-    fn build_llm<H: ClawHttp>(http: H) -> ClawApiAsync<BlockingClawHttpAsync<H>, ImmediateTimer> {
+    fn build_llm<H: BlockingClawHttp>(
+        http: H,
+    ) -> ClawApiAsync<BlockingHttpAdapter<H>, ImmediateTimer> {
         let config = ClawApiConfig::new(
             BackendKind::OpenAiCompatible,
             "sk-test",
             "gpt-test",
             "https://example.invalid",
         );
-        ClawApiAsync::init(config, BlockingClawHttpAsync::new(http), ImmediateTimer)
+        ClawApiAsync::init(config, BlockingHttpAdapter::new(http), ImmediateTimer)
             .expect("init llm")
     }
 
     fn scripted_llm(
         bodies: Vec<String>,
-    ) -> ClawApiAsync<BlockingClawHttpAsync<ScriptedHttp>, ImmediateTimer> {
+    ) -> ClawApiAsync<BlockingHttpAdapter<ScriptedHttp>, ImmediateTimer> {
         build_llm(ScriptedHttp::new(bodies))
     }
 
@@ -1642,7 +1661,7 @@ mod gating_tests {
     }
 
     /// A builder plus a cloned read-only view of the same store.
-    fn builder_with_view<H: ClawHttpAsync, Timer: ClawTimer>(
+    fn builder_with_view<H: ClawHttp, Timer: ClawTimer>(
         llm: ClawApiAsync<H, Timer>,
         agent_id: AgentId,
     ) -> (BaseAgentBuilder<MemFs, H, Timer>, TranscriptStore<MemFs>) {
@@ -1695,9 +1714,7 @@ mod gating_tests {
         )
     }
 
-    fn run_to_completion<H: ClawHttpAsync, Timer: ClawTimer>(
-        agent: &mut BaseAgent<H, Timer>,
-    ) -> String {
+    fn run_to_completion<H: ClawHttp, Timer: ClawTimer>(agent: &mut BaseAgent<H, Timer>) -> String {
         block_on(async {
             loop {
                 match agent.tick().await {

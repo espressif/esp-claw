@@ -17,6 +17,8 @@
 //! during [`contribute`](ContextAdapter::contribute) and self-detects change by
 //! comparing source versions to cursors it keeps.
 
+use core::future::Future;
+use core::pin::Pin;
 use std::sync::Arc;
 
 use claw_context::ContextSink;
@@ -33,7 +35,7 @@ use serde_json::{json, Value};
 /// storage/compaction/persistence — and a filesystem type parameter — along).
 ///
 /// Both request assembly and every pluggable [`ContextAdapter`] read through it.
-pub trait History: Send + Sync {
+pub trait History {
     /// The current transcript as a JSON array of chat messages.
     ///
     /// Returns an [`Arc`] so the snapshot is shared, not deep-copied, on every
@@ -141,21 +143,30 @@ pub struct ContextAdapterInput<'a> {
     pub tools: Option<&'a ToolSet>,
 }
 
+/// Future returned by [`ContextAdapter::prepare`].
+pub type ContextAdapterFuture<'a> = Pin<Box<dyn Future<Output = ()> + 'a>>;
+
 /// A pluggable context source: a pure projector over [`ContextAdapterInput`] that
 /// contributes to the next LLM request through a `claw-context` [`ContextSink`],
 /// and may provide model-callable tools.
 ///
 /// Owned by the agent (one `Box<dyn ContextAdapter>` per registration) and driven
-/// from its single tick thread, but `Send + Sync` because an adapter typically
-/// owns state also written by background workers (e.g. an extraction pool job),
-/// and the agent itself moves across worker tasks.
+/// from its single tick thread.
 ///
 /// The agent does not decide whether a source is a system block, history message,
 /// or ephemeral reminder; each adapter emits the correct item into the sink and
 /// `claw-context` owns placement, ordering, and render caches.
-pub trait ContextAdapter: Send + Sync {
+pub trait ContextAdapter {
     /// A stable identifier for this adapter, used in logs.
     fn id(&self) -> &str;
+
+    /// Refresh any async state needed for the next contribution.
+    ///
+    /// Called from the agent's local async tick before [`contribute`](Self::contribute).
+    /// The default is a no-op for purely synchronous projectors.
+    fn prepare<'a>(&'a mut self, _input: ContextAdapterInput<'a>) -> ContextAdapterFuture<'a> {
+        Box::pin(async {})
+    }
 
     /// Project this source into the request context for the current iteration.
     fn contribute(&mut self, input: ContextAdapterInput<'_>, output: &mut ContextSink<'_>);

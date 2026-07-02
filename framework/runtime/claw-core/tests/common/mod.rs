@@ -16,13 +16,13 @@ use std::task::{Wake, Waker};
 
 use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
 use claw_core::agent::{AgentId, BaseAgent, BaseAgentBuilder, TickOutcome};
+use claw_interface::http::blocking::ClawHttp as BlockingClawHttp;
 use claw_interface::{
-    BlockingClawHttpAsync, CapturingHttp, ClawHttp, DiskFs, FailingHttp, ImmediateTimer, NeverHttp,
-    ScriptStep, ScriptedHttp, StdThread,
+    BlockingHttpAdapter, CapturingHttp, DiskFs, FailingHttp, ImmediateTimer, NeverHttp, ScriptStep,
+    ScriptedHttp, StdThread,
 };
 use claw_memory::{TranscriptConfig, TranscriptStore};
 use claw_tool::{init_tool_executor, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput};
-use claw_utils::{PoolConfig, SharedTaskPool};
 use serde_json::{json, Value};
 
 // ===========================================================================
@@ -82,16 +82,16 @@ pub fn body_echo_call_id(id: &str, input: &str) -> String {
 // LLM builders
 // ===========================================================================
 
-pub type TestLlm<H> = ClawApiAsync<BlockingClawHttpAsync<H>, ImmediateTimer>;
+pub type TestLlm<H> = ClawApiAsync<BlockingHttpAdapter<H>, ImmediateTimer>;
 
-fn build_llm<H: ClawHttp>(http: H) -> TestLlm<H> {
+fn build_llm<H: BlockingClawHttp>(http: H) -> TestLlm<H> {
     let config = ClawApiConfig::new(
         BackendKind::OpenAiCompatible,
         "sk-test",
         "gpt-test",
         "https://example.invalid",
     );
-    ClawApiAsync::init(config, BlockingClawHttpAsync::new(http), ImmediateTimer).expect("init llm")
+    ClawApiAsync::init(config, BlockingHttpAdapter::new(http), ImmediateTimer).expect("init llm")
 }
 
 /// Tool-capable LLM serving the given plain bodies in order (strict).
@@ -153,11 +153,6 @@ impl ToolHandler for EchoTool {
 // Memory / agent builders
 // ===========================================================================
 
-/// A fresh background memory pool.
-pub fn test_pool() -> Arc<SharedTaskPool> {
-    Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread).expect("memory pool"))
-}
-
 /// `<crate>/output/<name>/`, wiped clean and recreated. Use a UNIQUE `name` per
 /// test (collisions across tests corrupt each other's transcripts).
 pub fn test_output_dir(name: &str) -> PathBuf {
@@ -175,9 +170,9 @@ pub type TestFs = DiskFs;
 
 /// A disk-backed [`BaseAgent`] for the integration tests, generic over the HTTP
 /// transport `H` the test's LLM double uses.
-pub type TestAgent<H> = BaseAgent<BlockingClawHttpAsync<H>, ImmediateTimer>;
+pub type TestAgent<H> = BaseAgent<BlockingHttpAdapter<H>, ImmediateTimer>;
 
-pub type TestAgentBuilder<H> = BaseAgentBuilder<TestFs, BlockingClawHttpAsync<H>, ImmediateTimer>;
+pub type TestAgentBuilder<H> = BaseAgentBuilder<TestFs, BlockingHttpAdapter<H>, ImmediateTimer>;
 
 /// A disk-backed [`TranscriptStore`] view for the integration tests.
 pub type TestMemory = TranscriptStore<TestFs>;
@@ -192,7 +187,7 @@ pub fn test_memory(agent_id: AgentId, dir: impl AsRef<str>) -> TestMemory {
 }
 
 /// A `BaseAgentBuilder` over a fresh disk transcript store.
-pub fn agent_builder<H: ClawHttp>(
+pub fn agent_builder<H: BlockingClawHttp>(
     llm: TestLlm<H>,
     agent_id: AgentId,
     dir: impl AsRef<str>,
@@ -202,7 +197,7 @@ pub fn agent_builder<H: ClawHttp>(
 
 /// A builder plus a cloned read-only view of the same store, so a test can
 /// inspect the committed transcript without going through the agent.
-pub fn builder_with_view<H: ClawHttp>(
+pub fn builder_with_view<H: BlockingClawHttp>(
     llm: TestLlm<H>,
     agent_id: AgentId,
     dir: impl AsRef<str>,
@@ -237,7 +232,7 @@ pub fn block_on<F: Future>(future: F) -> F::Output {
 /// Pump until the task hands back an answer (`Yielded`) or ends (`Ended`),
 /// returning that text. Panics on `Failed` or any other non-progress outcome so
 /// an unexpected pause/approval/cancel surfaces instead of hanging.
-pub fn run_to_completion<H: ClawHttp>(agent: &mut TestAgent<H>) -> String {
+pub fn run_to_completion<H: BlockingClawHttp>(agent: &mut TestAgent<H>) -> String {
     loop {
         match block_on(agent.tick()) {
             TickOutcome::Working => continue,

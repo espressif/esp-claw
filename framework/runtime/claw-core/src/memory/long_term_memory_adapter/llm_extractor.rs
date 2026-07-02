@@ -12,7 +12,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use claw_api::{ChatRequest, ClawApiAsync};
-use claw_interface::{Cancel, ClawHttpAsync, ClawTimer};
+use claw_interface::{Cancel, ClawHttp, ClawTimer};
 
 use super::async_llm::SharedAsyncLlm;
 use super::extraction::{ExtractError, ExtractFuture, ExtractedItem, Extractor};
@@ -40,11 +40,11 @@ const EXTRACT_USER_PREFIX: &str = "Extract durable memory from this transcript:"
 /// `Arc<dyn Extractor>`, while [`ClawApiAsync::chat`] needs `&mut self`, so
 /// calls borrow the client exclusively without holding a mutex while the future
 /// is running.
-pub struct LlmExtractor<H: ClawHttpAsync, Timer: ClawTimer> {
+pub struct LlmExtractor<H: ClawHttp, Timer: ClawTimer> {
     api: SharedAsyncLlm<H, Timer>,
 }
 
-impl<H: ClawHttpAsync + Send + 'static, Timer: ClawTimer + Send + 'static> LlmExtractor<H, Timer> {
+impl<H: ClawHttp + 'static, Timer: ClawTimer + 'static> LlmExtractor<H, Timer> {
     /// Build an extractor that owns the given LLM client.
     pub fn new(api: ClawApiAsync<H, Timer>) -> Self {
         Self {
@@ -58,15 +58,15 @@ impl<H: ClawHttpAsync + Send + 'static, Timer: ClawTimer + Send + 'static> LlmEx
     }
 }
 
-impl<H: ClawHttpAsync + Send, Timer: ClawTimer + Send> Extractor for LlmExtractor<H, Timer> {
+impl<H: ClawHttp, Timer: ClawTimer> Extractor for LlmExtractor<H, Timer> {
     fn extract<'a>(&'a self, transcript: &'a str) -> ExtractFuture<'a> {
         Box::pin(async move {
             let messages = json!([
                 { "role": "user", "content": format!("{EXTRACT_USER_PREFIX}\n\n{transcript}") }
             ]);
 
-            // Extraction runs off the tick path; it is not tied to the agent's
-            // interrupt flag, so it uses its own (never-set) abort flag.
+            // Extraction is not tied to the active iteration's interrupt flag,
+            // so it uses its own (never-set) abort flag.
             let abort = AtomicBool::new(false);
             let mut lease = self.api.lease().await;
             let response = lease

@@ -22,7 +22,7 @@ use claw_tool::Tool;
 /// (or a test double). The resolver is the injected boundary that turns each name
 /// into a real [`Tool`] / [`SkillSet`]. An unknown name is **not** silently
 /// dropped — the resolver returns `None`/an error and resolution fails.
-pub trait AgentResolver: Send + Sync {
+pub trait AgentResolver {
     /// Resolve a capability name to its [`Tool`], or `None` if this resolver has
     /// no such capability.
     fn resolve_tool(&self, name: &str) -> Option<Tool>;

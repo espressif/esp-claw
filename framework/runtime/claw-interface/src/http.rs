@@ -169,40 +169,123 @@ pub enum HttpError {
     },
 }
 
-/// Networking injection point for the LLM backends.
-///
-/// Thread-safety is **not** a property of this trait: it carries no `Send`/`Sync`
-/// supertrait bound. An implementation may hold a single, non-thread-safe
-/// connection handle (e.g. an `esp_http_client` handle reused across calls — see
-/// the espidf driver) and mutate it through `&mut self`. Concurrency is the
-/// *caller's* decision: a transport driven by one task needs no synchronization;
-/// a transport shared across tasks must be wrapped at that sharing point (e.g.
-/// `Mutex<ClawApi<H>>`). With static dispatch the `Send`/`Sync` auto traits then
-/// flow from the concrete implementor and are required only where threads cross.
-pub trait ClawHttp {
-    /// Equivalent to `claw_llm_http_post_json`. Returns the body on HTTP 2xx,
-    /// otherwise an [`HttpError`]. `abort` is polled cooperatively; when set the
-    /// request is cancelled (mirrors the C `volatile bool *abort_flag`).
+pub mod blocking {
+    //! Blocking HTTP transport seam.
+    //!
+    //! This namespace holds the synchronous compatibility surface. Agent runtime
+    //! code should prefer the async [`crate::http::ClawHttp`].
+
+    use super::{AtomicBool, HttpError, HttpJsonRequest, HttpResponse};
+    #[cfg(feature = "realhttp")]
+    use super::{HttpRequestFailure, HttpStatusCode};
+    #[cfg(feature = "realhttp")]
+    use core::sync::atomic::Ordering;
+    #[cfg(feature = "realhttp")]
+    use std::time::Duration;
+
+    /// Networking injection point for blocking LLM clients.
     ///
-    /// Takes `&mut self` so an implementation can lazily open and then reuse a
-    /// persistent connection handle across calls (keep-alive) without interior
-    /// mutability or locking.
-    fn post_json(
-        &mut self,
-        request: &HttpJsonRequest,
-        abort: &AtomicBool,
-    ) -> Result<HttpResponse, HttpError>;
+    /// Thread-safety is **not** a property of this trait: it carries no
+    /// `Send`/`Sync` supertrait bound. An implementation may hold a single,
+    /// non-thread-safe connection handle and mutate it through `&mut self`.
+    /// Concurrency is the *caller's* decision.
+    pub trait ClawHttp {
+        /// Equivalent to `claw_llm_http_post_json`. Returns the body on HTTP 2xx,
+        /// otherwise an [`HttpError`]. `abort` is polled cooperatively; when set the
+        /// request is cancelled (mirrors the C `volatile bool *abort_flag`).
+        fn post_json(
+            &mut self,
+            request: &HttpJsonRequest,
+            abort: &AtomicBool,
+        ) -> Result<HttpResponse, HttpError>;
+    }
+
+    /// Host [`ClawHttp`] backed by a blocking `reqwest::blocking::Client`.
+    ///
+    /// This is the synchronous compatibility backend for host CLIs and live
+    /// tests that intentionally run blocking HTTP. Async code should prefer the
+    /// top-level [`crate::http::RealHttp`].
+    #[cfg(feature = "realhttp")]
+    #[derive(Debug, Clone, Default)]
+    pub struct RealHttp {
+        user_agent: Option<String>,
+    }
+
+    #[cfg(feature = "realhttp")]
+    impl RealHttp {
+        /// A client with no extra `User-Agent`.
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        /// A client that sends the given `User-Agent` on every request.
+        pub fn with_user_agent(user_agent: impl Into<String>) -> Self {
+            Self {
+                user_agent: Some(user_agent.into()),
+            }
+        }
+    }
+
+    #[cfg(feature = "realhttp")]
+    impl ClawHttp for RealHttp {
+        fn post_json(
+            &mut self,
+            request: &HttpJsonRequest,
+            abort: &AtomicBool,
+        ) -> Result<HttpResponse, HttpError> {
+            if abort.load(Ordering::Acquire) {
+                return Err(HttpError::Aborted);
+            }
+
+            let client = reqwest::blocking::Client::builder()
+                .timeout(Duration::from_millis(u64::from(request.timeout_ms)))
+                .build()
+                .map_err(|_| HttpError::ClientInitFailed)?;
+
+            let mut builder = client
+                .post(request.url)
+                .header("Content-Type", "application/json")
+                .body(request.body.to_string());
+
+            if let Some(user_agent) = &self.user_agent {
+                builder = builder.header("User-Agent", user_agent);
+            }
+
+            if let Some((name, value)) = request.auth.header() {
+                builder = builder.header(name, value);
+            }
+            for header in request.headers {
+                builder = builder.header(header.name, header.value);
+            }
+
+            let response = builder.send().map_err(|error| {
+                HttpError::RequestFailed(HttpRequestFailure::transport(error.to_string()))
+            })?;
+            let status_code = HttpStatusCode::new(response.status().as_u16());
+            let body = response.text().map_err(|error| {
+                HttpError::RequestFailed(HttpRequestFailure::transport(error.to_string()))
+            })?;
+
+            if !status_code.is_success() {
+                return Err(HttpError::UnexpectedStatus {
+                    status: status_code,
+                    message: format!("HTTP {status_code}: {body}"),
+                });
+            }
+            Ok(HttpResponse { status_code, body })
+        }
+    }
 }
 
-/// Boxed future returned by [`ClawHttpAsync::post_json`].
+/// Boxed future returned by [`ClawHttp::post_json`].
 ///
-/// Boxed (instead of an `async fn` in the trait) so `ClawHttpAsync` stays object
-/// safe. The future borrows `self` mutably, the request, and the cancellation token, so
-/// it cannot outlive any of them.
+/// Boxed (instead of an `async fn` in the trait) so [`ClawHttp`] stays object
+/// safe. The future borrows `self` mutably, the request, and the cancellation
+/// token, so it cannot outlive any of them.
 pub type HttpResponseFuture<'a> =
     Pin<Box<dyn Future<Output = Result<HttpResponse, HttpError>> + 'a>>;
 
-/// Cooperative cancellation token for [`ClawHttpAsync`].
+/// Cooperative cancellation token for [`ClawHttp`].
 ///
 /// A thin, `Copy` wrapper over a caller-owned abort flag. Implementations check
 /// the token cooperatively: a non-blocking driver should check it before each
@@ -252,106 +335,26 @@ impl Cancel<'static> {
     }
 }
 
-/// Async counterpart of [`ClawHttp`], driven by a cooperative executor instead
-/// of blocking the calling task for the whole request.
+/// HTTP transport driven by a cooperative executor instead of blocking the
+/// calling task for the whole request.
 ///
 /// On ESP-IDF this maps onto `esp_http_client`'s non-blocking mode
 /// (`config.is_async = true`): each poll runs one `esp_http_client_perform`
 /// step and yields (`Poll::Pending`) while the call reports
 /// `ESP_ERR_HTTP_EAGAIN`, letting other tasks run between steps.
 ///
-/// # Implementing
-///
 /// Thread-safety is intentionally not a property of this base trait. Host
 /// transports such as `reqwest::Client` may be `Send + Sync`, while embedded
 /// transports may be task-local because they advance raw driver handles across
 /// polls. Require `Send`/`Sync` at the caller boundary that actually crosses
-/// threads. The method takes `&mut self` so an implementation can reuse one
-/// persistent client handle while the borrow prevents another request from
-/// using that handle concurrently.
-///
-/// Implementors own cancellation semantics in [`post_json`](ClawHttpAsync::post_json).
-/// This keeps driver-specific cleanup at the implementation boundary: an
-/// ESP-IDF implementation can cancel its active `esp_http_client` request,
-/// while a host implementation can drop a reqwest future.
-///
-/// # Examples
-///
-/// A minimal in-memory transport, driven by a hand-rolled `block_on` (on device
-/// a cooperative executor polls the future instead):
-///
-/// ```
-/// use claw_interface::{
-///     Cancel, ClawHttpAsync, HttpAuth, HttpJsonRequest, HttpResponse, HttpResponseFuture,
-///     HttpStatusCode,
-/// };
-/// use core::future::Future;
-/// use core::sync::atomic::AtomicBool;
-/// use core::task::{Context, Poll};
-/// use std::sync::Arc;
-/// use std::task::{Wake, Waker};
-///
-/// // Implement `post_json`, including cancellation checks.
-/// struct Echo;
-/// impl ClawHttpAsync for Echo {
-///     fn post_json<'a>(
-///         &'a mut self,
-///         request: &'a HttpJsonRequest<'a>,
-///         cancel: Cancel<'a>,
-///     ) -> HttpResponseFuture<'a> {
-///         let body = request.body.to_string();
-///         Box::pin(async move {
-///             if cancel.is_cancelled() {
-///                 return Err(claw_interface::HttpError::Aborted);
-///             }
-///             Ok(HttpResponse { status_code: HttpStatusCode::OK, body })
-///         })
-///     }
-/// }
-///
-/// struct Noop;
-/// impl Wake for Noop {
-///     fn wake(self: Arc<Self>) {}
-/// }
-///
-/// fn block_on<F: Future>(future: F) -> F::Output {
-///     let mut future = Box::pin(future);
-///     let waker = Waker::from(Arc::new(Noop));
-///     let mut context = Context::from_waker(&waker);
-///     loop {
-///         if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
-///             return value;
-///         }
-///     }
-/// }
-///
-/// let request = HttpJsonRequest {
-///     url: "https://example.test",
-///     body: r#"{"hi":true}"#,
-///     auth: HttpAuth::None,
-///     timeout_ms: 1_000,
-///     headers: &[],
-/// };
-///
-/// // Not cancelled: resolves to the transfer's result.
-/// let mut echo = Echo;
-/// let flag = AtomicBool::new(false);
-/// let response = block_on(echo.post_json(&request, Cancel::new(&flag))).unwrap();
-/// assert_eq!(response.status_code, HttpStatusCode::OK);
-/// assert_eq!(response.body, r#"{"hi":true}"#);
-///
-/// // A pre-set flag cancels before the transfer runs.
-/// let cancelled = AtomicBool::new(true);
-/// assert!(block_on(echo.post_json(&request, Cancel::new(&cancelled))).is_err());
-/// ```
-pub trait ClawHttpAsync {
-    /// Async equivalent of [`ClawHttp::post_json`].
+/// threads.
+pub trait ClawHttp {
+    /// Async JSON POST.
     ///
     /// Implementations must observe `cancel` cooperatively and return
-    /// [`HttpError::Aborted`] when cancellation wins. A non-blocking driver should
-    /// release any in-flight request state when the returned future is dropped,
-    /// because callers may cancel by dropping the future as well as by setting the
-    /// token.
+    /// [`HttpError::Aborted`] when cancellation wins. A non-blocking driver
+    /// should release any in-flight request state when the returned future is
+    /// dropped.
     fn post_json<'a>(
         &'a mut self,
         request: &'a HttpJsonRequest<'a>,
@@ -360,9 +363,9 @@ pub trait ClawHttpAsync {
 
     /// Async JSON GET for read-only capability clients.
     ///
-    /// Implementations that only support POST keep the default rejection. Callers
-    /// should surface it as a capability/tool invocation error rather than
-    /// silently changing methods.
+    /// Implementations that only support POST keep the default rejection.
+    /// Callers should surface it as a capability/tool invocation error rather
+    /// than silently changing methods.
     fn get_json<'a>(
         &'a mut self,
         _request: &'a HttpGetRequest<'a>,
@@ -420,7 +423,7 @@ mod httpmock {
     use std::sync::{Arc, Mutex, MutexGuard};
 
     use super::{
-        ClawHttp, ClawHttpAsync, HttpError, HttpJsonRequest, HttpRequestFailure, HttpResponse,
+        blocking, ClawHttp, HttpError, HttpJsonRequest, HttpRequestFailure, HttpResponse,
         HttpResponseFuture, HttpStatusCode,
     };
 
@@ -480,7 +483,7 @@ mod httpmock {
         }
     }
 
-    impl ClawHttp for ScriptedHttp {
+    impl blocking::ClawHttp for ScriptedHttp {
         fn post_json(
             &mut self,
             _request: &HttpJsonRequest,
@@ -492,7 +495,7 @@ mod httpmock {
 
     /// Share one script across clients that each *own* their transport (e.g. a
     /// `ClawApi<Arc<ScriptedHttp>>`): every clone replays from the same queue.
-    impl ClawHttp for Arc<ScriptedHttp> {
+    impl blocking::ClawHttp for Arc<ScriptedHttp> {
         fn post_json(
             &mut self,
             _request: &HttpJsonRequest,
@@ -557,7 +560,7 @@ mod httpmock {
         }
     }
 
-    impl ClawHttp for CapturingHttp {
+    impl blocking::ClawHttp for CapturingHttp {
         fn post_json(
             &mut self,
             request: &HttpJsonRequest,
@@ -569,7 +572,7 @@ mod httpmock {
 
     /// Lets a test hold an `Arc<CapturingHttp>` for inspection while a
     /// `ClawApi<Arc<CapturingHttp>>` owns a clone and drives it.
-    impl ClawHttp for Arc<CapturingHttp> {
+    impl blocking::ClawHttp for Arc<CapturingHttp> {
         fn post_json(
             &mut self,
             request: &HttpJsonRequest,
@@ -625,7 +628,7 @@ mod httpmock {
         }
     }
 
-    impl ClawHttp for SharedScriptHttp {
+    impl blocking::ClawHttp for SharedScriptHttp {
         fn post_json(
             &mut self,
             _request: &HttpJsonRequest,
@@ -644,7 +647,7 @@ mod httpmock {
     /// Always fails the LLM round with a transport error.
     pub struct FailingHttp;
 
-    impl ClawHttp for FailingHttp {
+    impl blocking::ClawHttp for FailingHttp {
         fn post_json(
             &mut self,
             _request: &HttpJsonRequest,
@@ -659,7 +662,7 @@ mod httpmock {
     /// Returns a no-op transport error; for wiring where the LLM is never driven.
     pub struct NoopHttp;
 
-    impl ClawHttp for NoopHttp {
+    impl blocking::ClawHttp for NoopHttp {
         fn post_json(
             &mut self,
             _request: &HttpJsonRequest,
@@ -674,7 +677,7 @@ mod httpmock {
     /// Panics if called — for tests that must never reach the LLM.
     pub struct NeverHttp;
 
-    impl ClawHttp for NeverHttp {
+    impl blocking::ClawHttp for NeverHttp {
         fn post_json(
             &mut self,
             _request: &HttpJsonRequest,
@@ -685,12 +688,12 @@ mod httpmock {
     }
 
     // -----------------------------------------------------------------------
-    // Async-seam adapters: turn a blocking `ClawHttp` into a `ClawHttpAsync`.
+    // Async-seam adapters: turn a blocking HTTP transport into async HTTP.
     // Host-only, so they live beside the blocking doubles instead of in the
     // platform-free seam, and never enter the device/default build.
     // -----------------------------------------------------------------------
 
-    /// Adapts any blocking [`ClawHttp`] into a [`ClawHttpAsync`] by running the
+    /// Adapts any blocking [`blocking::ClawHttp`] into an async HTTP transport by running the
     /// request to completion in a single poll.
     ///
     /// Intended for the host (CLIs, tests) where the blocking transports — the
@@ -699,22 +702,22 @@ mod httpmock {
     /// the wrapped call blocks the polling task for the whole request, defeating
     /// the purpose of the async seam (use the native `esp_http_client` driver
     /// there instead).
-    pub struct BlockingClawHttpAsync<T>(T);
+    pub struct BlockingHttpAdapter<T>(T);
 
-    impl<T> BlockingClawHttpAsync<T> {
-        /// Wrap a blocking [`ClawHttp`] for the async seam.
+    impl<T> BlockingHttpAdapter<T> {
+        /// Wrap a blocking [`blocking::ClawHttp`] for the async seam.
         pub fn new(inner: T) -> Self {
             Self(inner)
         }
     }
 
-    impl<T: Default> Default for BlockingClawHttpAsync<T> {
+    impl<T: Default> Default for BlockingHttpAdapter<T> {
         fn default() -> Self {
             Self(T::default())
         }
     }
 
-    impl<T: ClawHttp> ClawHttpAsync for BlockingClawHttpAsync<T> {
+    impl<T: blocking::ClawHttp> ClawHttp for BlockingHttpAdapter<T> {
         fn post_json<'a>(
             &'a mut self,
             request: &'a HttpJsonRequest<'a>,
@@ -755,7 +758,7 @@ mod httpmock {
         YieldOnce(false).await
     }
 
-    /// Adapts any blocking [`ClawHttp`] into a [`ClawHttpAsync`] that yields to
+    /// Adapts any blocking [`blocking::ClawHttp`] into an async HTTP transport that yields to
     /// the executor `yields` times **before** running the wrapped request to
     /// completion.
     ///
@@ -763,20 +766,20 @@ mod httpmock {
     /// reproduces the multi-poll, `Poll::Pending`-between-steps shape of the
     /// on-device `esp_http_client` driver (which yields on every
     /// `ESP_ERR_HTTP_EAGAIN`) without needing real hardware. Use it to drive a
-    /// cooperative executor's poll/wake loop against the [`ClawHttpAsync`] seam:
-    /// unlike [`BlockingClawHttpAsync`] (which resolves in a single poll), its
+    /// cooperative executor's poll/wake loop against the async HTTP seam:
+    /// unlike [`BlockingHttpAdapter`] (which resolves in a single poll), its
     /// future returns `Poll::Pending` `yields` times first.
     ///
-    /// Like [`BlockingClawHttpAsync`], the final transfer step still calls the
-    /// blocking [`ClawHttp`], so it is **not** appropriate on-device.
-    pub struct YieldingClawHttpAsync<T> {
+    /// Like [`BlockingHttpAdapter`], the final transfer step still calls the
+    /// blocking [`blocking::ClawHttp`], so it is **not** appropriate on-device.
+    pub struct YieldingHttpAdapter<T> {
         inner: T,
         yields: u32,
     }
 
-    impl<T> YieldingClawHttpAsync<T> {
+    impl<T> YieldingHttpAdapter<T> {
         /// Wrap `inner`, yielding to the executor `yields` times before
-        /// resolving. `yields == 0` behaves like [`BlockingClawHttpAsync`].
+        /// resolving. `yields == 0` behaves like [`BlockingHttpAdapter`].
         pub fn new(inner: T, yields: u32) -> Self {
             Self { inner, yields }
         }
@@ -789,7 +792,7 @@ mod httpmock {
         }
     }
 
-    impl<T: ClawHttp> ClawHttpAsync for YieldingClawHttpAsync<T> {
+    impl<T: blocking::ClawHttp> ClawHttp for YieldingHttpAdapter<T> {
         fn post_json<'a>(
             &'a mut self,
             request: &'a HttpJsonRequest<'a>,
@@ -819,131 +822,44 @@ mod httpmock {
 
 #[cfg(feature = "httpmock")]
 pub use httpmock::{
-    BlockingClawHttpAsync, CapturingHttp, FailingHttp, NeverHttp, NoopHttp, ScriptStep,
-    ScriptedHttp, SharedScriptHttp, YieldingClawHttpAsync,
+    BlockingHttpAdapter, CapturingHttp, FailingHttp, NeverHttp, NoopHttp, ScriptStep, ScriptedHttp,
+    SharedScriptHttp, YieldingHttpAdapter,
 };
 
 #[cfg(feature = "realhttp")]
 mod realhttp {
-    use core::sync::atomic::{AtomicBool, Ordering};
     use std::time::Duration;
 
     use super::{
-        ClawHttp, HttpError, HttpJsonRequest, HttpRequestFailure, HttpResponse, HttpStatusCode,
-    };
-
-    /// Host [`ClawHttp`] backed by a blocking `reqwest` client.
-    ///
-    /// The single real transport for host CLIs and live/integration tests:
-    /// honours `request.auth`, forwards extra headers, polls `abort` before
-    /// sending, and treats any 2xx as success.
-    /// An optional `User-Agent` lets a test route requests by client identity.
-    #[derive(Debug, Clone, Default)]
-    pub struct RealHttp {
-        user_agent: Option<String>,
-    }
-
-    impl RealHttp {
-        /// A client with no extra `User-Agent`.
-        pub fn new() -> Self {
-            Self::default()
-        }
-
-        /// A client that sends the given `User-Agent` on every request.
-        pub fn with_user_agent(user_agent: impl Into<String>) -> Self {
-            Self {
-                user_agent: Some(user_agent.into()),
-            }
-        }
-    }
-
-    impl ClawHttp for RealHttp {
-        fn post_json(
-            &mut self,
-            request: &HttpJsonRequest,
-            abort: &AtomicBool,
-        ) -> Result<HttpResponse, HttpError> {
-            if abort.load(Ordering::Acquire) {
-                return Err(HttpError::Aborted);
-            }
-
-            let client = reqwest::blocking::Client::builder()
-                .timeout(Duration::from_millis(u64::from(request.timeout_ms)))
-                .build()
-                .map_err(|_| HttpError::ClientInitFailed)?;
-
-            let mut builder = client
-                .post(request.url)
-                .header("Content-Type", "application/json")
-                .body(request.body.to_string());
-
-            if let Some(user_agent) = &self.user_agent {
-                builder = builder.header("User-Agent", user_agent);
-            }
-
-            if let Some((name, value)) = request.auth.header() {
-                builder = builder.header(name, value);
-            }
-            for header in request.headers {
-                builder = builder.header(header.name, header.value);
-            }
-
-            let response = builder.send().map_err(|error| {
-                HttpError::RequestFailed(HttpRequestFailure::transport(error.to_string()))
-            })?;
-            let status_code = HttpStatusCode::new(response.status().as_u16());
-            let body = response.text().map_err(|error| {
-                HttpError::RequestFailed(HttpRequestFailure::transport(error.to_string()))
-            })?;
-
-            if !status_code.is_success() {
-                return Err(HttpError::UnexpectedStatus {
-                    status: status_code,
-                    message: format!("HTTP {status_code}: {body}"),
-                });
-            }
-            Ok(HttpResponse { status_code, body })
-        }
-    }
-}
-
-#[cfg(feature = "realhttp")]
-pub use realhttp::RealHttp;
-
-#[cfg(feature = "realhttp")]
-mod realhttp_async {
-    use std::time::Duration;
-
-    use super::{
-        cancel_on_poll, Cancel, ClawHttpAsync, HttpError, HttpJsonRequest, HttpRequestFailure,
+        cancel_on_poll, Cancel, ClawHttp, HttpError, HttpJsonRequest, HttpRequestFailure,
         HttpResponse, HttpResponseFuture, HttpStatusCode,
     };
 
-    /// Host [`ClawHttpAsync`] backed by an **async** `reqwest::Client`.
+    /// Host [`ClawHttp`] backed by an **async** `reqwest::Client`.
     ///
-    /// The native non-blocking counterpart of the blocking `RealHttp`: it
+    /// The native non-blocking counterpart of [`blocking::RealHttp`]: it
     /// issues a genuinely concurrent request instead of blocking the polling
     /// task, so multiple in-flight calls progress together. It honours
     /// `request.auth` (bearer / API key / none), forwards extra
     /// headers, and treats any 2xx as success. Cancellation is handled by
-    /// [`ClawHttpAsync::post_json`] by dropping the in-flight reqwest future.
+    /// [`ClawHttp::post_json`] by dropping the in-flight reqwest future.
     ///
     /// Driver requirement: `reqwest`'s futures poll against **tokio**'s IO
     /// reactor, so this backend must be driven by a tokio runtime
     /// (`Runtime::block_on` / `#[tokio::test]`) — *not* by the cooperative
-    /// `embedded-executor` used for the device-model `YieldingClawHttpAsync`
+    /// `embedded-executor` used for the device-model `YieldingHttpAdapter`
     /// futures (those have no reactor). This keeps it strictly a host backend
     /// (CLIs, integration tests); on-device async HTTP uses the `esp_http_client`
     /// driver in `claw_sys` instead.
     ///
     /// The `reqwest::Client` pools connections, so construct one and reuse it.
     #[derive(Debug, Clone, Default)]
-    pub struct RealHttpAsync {
+    pub struct RealHttp {
         client: reqwest::Client,
         user_agent: Option<String>,
     }
 
-    impl RealHttpAsync {
+    impl RealHttp {
         /// A client with no extra `User-Agent`.
         pub fn new() -> Self {
             Self::default()
@@ -958,7 +874,7 @@ mod realhttp_async {
         }
     }
 
-    impl ClawHttpAsync for RealHttpAsync {
+    impl ClawHttp for RealHttp {
         fn post_json<'a>(
             &'a mut self,
             request: &'a HttpJsonRequest<'a>,
@@ -1005,24 +921,24 @@ mod realhttp_async {
 }
 
 #[cfg(feature = "realhttp")]
-pub use realhttp_async::RealHttpAsync;
+pub use realhttp::RealHttp;
 
 /// Shared host-only test doubles + helpers for the async-seam test modules
 /// below. Kept in one place so the hand-rolled `block_on` tests and the
 /// `embedded-executor` integration tests exercise the same transports.
 ///
 /// Gated on `httpmock` (the home of the `ClawHttp` test doubles) because the
-/// async-seam tests drive [`YieldingClawHttpAsync`], which lives behind that
+/// async-seam tests drive [`YieldingHttpAdapter`], which lives behind that
 /// feature. Run them with `--features httpmock`.
 #[cfg(all(test, feature = "httpmock"))]
 mod async_test_support {
     use super::{
-        ClawHttp, HttpAuth, HttpError, HttpJsonRequest, HttpRequestFailure, HttpResponse,
+        blocking, HttpAuth, HttpError, HttpJsonRequest, HttpRequestFailure, HttpResponse,
         HttpStatusCode,
     };
     use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-    /// `ClawHttp` that echoes the request body back with a fixed status code and
+    /// [`blocking::ClawHttp`] that echoes the request body back with a fixed status code and
     /// counts how many times the (blocking) transport was actually invoked.
     pub struct EchoStatus {
         pub status: HttpStatusCode,
@@ -1038,7 +954,7 @@ mod async_test_support {
         }
     }
 
-    impl ClawHttp for EchoStatus {
+    impl blocking::ClawHttp for EchoStatus {
         fn post_json(
             &mut self,
             request: &HttpJsonRequest,
@@ -1055,10 +971,10 @@ mod async_test_support {
         }
     }
 
-    /// `ClawHttp` that always fails the round with a transport error.
+    /// [`blocking::ClawHttp`] that always fails the round with a transport error.
     pub struct FailingStatus;
 
-    impl ClawHttp for FailingStatus {
+    impl blocking::ClawHttp for FailingStatus {
         fn post_json(
             &mut self,
             _request: &HttpJsonRequest,
@@ -1084,10 +1000,8 @@ mod async_test_support {
 #[cfg(all(test, feature = "httpmock"))]
 mod async_seam_tests {
     use super::async_test_support::{request, EchoStatus, FailingStatus};
-    use super::{
-        BlockingClawHttpAsync, Cancel, ClawHttpAsync, HttpError, HttpStatusCode,
-        YieldingClawHttpAsync,
-    };
+    use super::ClawHttp;
+    use super::{BlockingHttpAdapter, Cancel, HttpError, HttpStatusCode, YieldingHttpAdapter};
     use core::future::Future;
     use core::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -1122,7 +1036,7 @@ mod async_seam_tests {
 
     #[test]
     fn blocking_adapter_drives_clawhttp_through_async_seam() {
-        let mut transport = BlockingClawHttpAsync::new(EchoStatus::new(200));
+        let mut transport = BlockingHttpAdapter::new(EchoStatus::new(200));
         let abort = AtomicBool::new(false);
         let request = request("https://example.test", "ping");
         let response = block_on(transport.post_json(&request, Cancel::new(&abort))).expect("ok");
@@ -1134,8 +1048,8 @@ mod async_seam_tests {
     fn blocking_adapter_is_object_safe() {
         // The async seam stays object-safe; a mutable trait object preserves the
         // single in-flight request guarantee.
-        let mut transport: Box<dyn ClawHttpAsync> =
-            Box::new(BlockingClawHttpAsync::new(EchoStatus::new(204)));
+        let mut transport: Box<dyn ClawHttp> =
+            Box::new(BlockingHttpAdapter::new(EchoStatus::new(204)));
         let abort = AtomicBool::new(false);
         let request = request("https://example.test", "{}");
         let response = block_on(transport.post_json(&request, Cancel::new(&abort))).expect("ok");
@@ -1144,7 +1058,7 @@ mod async_seam_tests {
 
     #[test]
     fn blocking_adapter_resolves_in_a_single_poll() {
-        let mut transport = BlockingClawHttpAsync::new(EchoStatus::new(200));
+        let mut transport = BlockingHttpAdapter::new(EchoStatus::new(200));
         let abort = AtomicBool::new(false);
         let request = request("https://example.test", "{}");
         let (response, polls) =
@@ -1156,7 +1070,7 @@ mod async_seam_tests {
     #[test]
     fn yielding_adapter_yields_before_resolving() {
         let inner = EchoStatus::new(200);
-        let mut transport = YieldingClawHttpAsync::new(inner, 3);
+        let mut transport = YieldingHttpAdapter::new(inner, 3);
         let abort = AtomicBool::new(false);
         let request = request("https://example.test", "payload");
         let (response, polls) =
@@ -1174,7 +1088,7 @@ mod async_seam_tests {
     fn yielding_adapter_zero_yields_resolves_in_one_poll() {
         // Boundary: `yields == 0` must collapse to blocking-adapter behavior —
         // a single poll, inner transport invoked exactly once, no `Pending`.
-        let mut transport = YieldingClawHttpAsync::new(EchoStatus::new(200), 0);
+        let mut transport = YieldingHttpAdapter::new(EchoStatus::new(200), 0);
         let abort = AtomicBool::new(false);
         let request = request("https://example.test", "edge");
         let (response, polls) =
@@ -1187,7 +1101,7 @@ mod async_seam_tests {
 
     #[test]
     fn yielding_adapter_propagates_transport_error() {
-        let mut transport = YieldingClawHttpAsync::new(FailingStatus, 2);
+        let mut transport = YieldingHttpAdapter::new(FailingStatus, 2);
         let abort = AtomicBool::new(false);
         let request = request("https://example.test", "{}");
         let error = block_on(transport.post_json(&request, Cancel::new(&abort))).unwrap_err();
@@ -1196,7 +1110,7 @@ mod async_seam_tests {
 
     #[test]
     fn yielding_adapter_honors_abort() {
-        let mut transport = YieldingClawHttpAsync::new(EchoStatus::new(200), 2);
+        let mut transport = YieldingHttpAdapter::new(EchoStatus::new(200), 2);
         let abort = AtomicBool::new(true);
         let request = request("https://example.test", "{}");
         let error = block_on(transport.post_json(&request, Cancel::new(&abort))).unwrap_err();
@@ -1204,7 +1118,7 @@ mod async_seam_tests {
     }
 }
 
-/// Integration tests proving the [`ClawHttpAsync`] seam is driven correctly by a
+/// Integration tests proving the async HTTP seam is driven correctly by a
 /// real cooperative `no_std`-style executor (`embedded-executor`'s
 /// `AllocExecutor`), not just by the hand-rolled spin `block_on` above. This is
 /// the on-device execution model: a single-threaded executor polling `!Send`
@@ -1215,7 +1129,7 @@ mod async_seam_tests {
 /// `AllocExecutor::run` calls `Sleep::sleep` after every dequeued item while the
 /// registry is non-empty, expecting a `Wake` to have armed the sleep. That holds
 /// for a future that returns `Poll::Pending` *and* re-arms its waker (our
-/// [`YieldingClawHttpAsync`] does, mirroring the on-device EAGAIN loop). It does
+/// [`YieldingHttpAdapter`] does, mirroring the on-device EAGAIN loop). It does
 /// **not** hold the moment a task resolves while a sibling task is still
 /// registered: nothing arms the sleep, so the bundled `SpinSleep` (a blocking
 /// spin-until-woken flag) would deadlock. These tests therefore use a no-op
@@ -1224,13 +1138,13 @@ mod async_seam_tests {
 /// the futures it is already polling.
 ///
 /// Gated on `httpmock` (run with `--features httpmock`): the tests drive
-/// [`YieldingClawHttpAsync`], which lives behind that feature.
+/// [`YieldingHttpAdapter`], which lives behind that feature.
 #[cfg(all(test, feature = "httpmock"))]
 mod embedded_executor_tests {
     use super::async_test_support::{request, EchoStatus, FailingStatus};
+    use super::ClawHttp;
     use super::{
-        BlockingClawHttpAsync, Cancel, ClawHttpAsync, HttpError, HttpResponse, HttpStatusCode,
-        YieldingClawHttpAsync,
+        BlockingHttpAdapter, Cancel, HttpError, HttpResponse, HttpStatusCode, YieldingHttpAdapter,
     };
     use core::sync::atomic::{AtomicBool, Ordering};
     use std::cell::RefCell;
@@ -1292,7 +1206,7 @@ mod embedded_executor_tests {
         abort: AtomicBool,
     ) -> Result<HttpResponse, HttpError>
     where
-        T: ClawHttpAsync + 'static,
+        T: ClawHttp + 'static,
     {
         let sink: Rc<RefCell<Option<Result<HttpResponse, HttpError>>>> =
             Rc::new(RefCell::new(None));
@@ -1312,7 +1226,7 @@ mod embedded_executor_tests {
 
     #[test]
     fn executor_drives_blocking_transport_to_completion() {
-        let transport = BlockingClawHttpAsync::new(EchoStatus::new(200));
+        let transport = BlockingHttpAdapter::new(EchoStatus::new(200));
         let response = run_async(transport, "hello", AtomicBool::new(false)).expect("ok");
         assert_eq!(response.status_code, HttpStatusCode::OK);
         assert_eq!(response.body, "hello");
@@ -1323,7 +1237,7 @@ mod embedded_executor_tests {
         // 5 cooperative yields means the executor must poll, observe
         // `Poll::Pending`, honor the re-armed waker, and re-poll five times
         // before the request resolves — exactly the on-device EAGAIN loop.
-        let transport = YieldingClawHttpAsync::new(EchoStatus::new(200), 5);
+        let transport = YieldingHttpAdapter::new(EchoStatus::new(200), 5);
         let response = run_async(transport, "hello", AtomicBool::new(false)).expect("ok");
         assert_eq!(response.status_code, HttpStatusCode::OK);
         assert_eq!(response.body, "hello");
@@ -1331,14 +1245,14 @@ mod embedded_executor_tests {
 
     #[test]
     fn executor_propagates_transport_error() {
-        let transport = YieldingClawHttpAsync::new(FailingStatus, 3);
+        let transport = YieldingHttpAdapter::new(FailingStatus, 3);
         let error = run_async(transport, "{}", AtomicBool::new(false)).unwrap_err();
         assert!(matches!(error, HttpError::RequestFailed(_)));
     }
 
     #[test]
     fn executor_honors_abort() {
-        let transport = YieldingClawHttpAsync::new(EchoStatus::new(200), 2);
+        let transport = YieldingHttpAdapter::new(EchoStatus::new(200), 2);
         let error = run_async(transport, "{}", AtomicBool::new(true)).unwrap_err();
         assert!(matches!(error, HttpError::Aborted));
     }
@@ -1347,14 +1261,14 @@ mod embedded_executor_tests {
     fn executor_interleaves_concurrent_requests() {
         // Two async requests with different yield counts share one executor.
         // Both must complete, proving the executor cooperatively interleaves
-        // multiple `ClawHttpAsync` futures rather than blocking on the first.
+        // multiple async HTTP futures rather than blocking on the first.
         let captures: Rc<RefCell<Vec<(u32, HttpStatusCode)>>> = Rc::new(RefCell::new(Vec::new()));
 
         let mut executor: TestExecutor = AllocExecutor::new();
         for (id, yields, status) in [(1_u32, 4_u32, 201_u16), (2, 1, 202)] {
             let sink = Rc::clone(&captures);
             executor.spawn(async move {
-                let mut transport = YieldingClawHttpAsync::new(EchoStatus::new(status), yields);
+                let mut transport = YieldingHttpAdapter::new(EchoStatus::new(status), yields);
                 let abort = AtomicBool::new(false);
                 let request = request("https://example.test", "body");
                 if let Ok(response) = transport.post_json(&request, Cancel::new(&abort)).await {
@@ -1373,15 +1287,15 @@ mod embedded_executor_tests {
     }
 }
 
-/// End-to-end tests for the native async host backend [`RealHttpAsync`], driven
+/// End-to-end tests for the native async host backend [`RealHttp`], driven
 /// by a real **tokio** runtime against a one-shot loopback HTTP server. This
 /// exercises the actual `reqwest` async client + tokio reactor — the host's
 /// genuinely non-blocking transport — rather than a blocking bridge.
 #[cfg(all(test, feature = "realhttp"))]
 mod realhttp_async_tests {
+    use super::ClawHttp as _;
     use super::{
-        Cancel, ClawHttpAsync, HttpAuth, HttpError, HttpHeader, HttpJsonRequest, HttpStatusCode,
-        RealHttpAsync,
+        Cancel, HttpAuth, HttpError, HttpHeader, HttpJsonRequest, HttpStatusCode, RealHttp,
     };
     use core::sync::atomic::AtomicBool;
     use std::io::{Read, Write};
@@ -1467,7 +1381,7 @@ mod realhttp_async_tests {
     #[test]
     fn async_reqwest_roundtrip_sends_auth_and_parses_body() {
         let (url, rx, handle) = oneshot_server("200 OK", r#"{"choices":[]}"#);
-        let mut http = RealHttpAsync::new();
+        let mut http = RealHttp::new();
         let abort = AtomicBool::new(false);
         let headers = [HttpHeader {
             name: "X-Trace",
@@ -1495,12 +1409,12 @@ mod realhttp_async_tests {
         handle.join().expect("server thread");
     }
 
-    // ---- status-code range boundary (`RealHttpAsync` treats `200..300` as ok) --
+    // ---- status-code range boundary (`RealHttp` treats `200..300` as ok) --
 
     #[test]
     fn async_reqwest_status_204_no_content_is_success() {
         let (url, _rx, handle) = oneshot_server("204 No Content", "");
-        let mut http = RealHttpAsync::new();
+        let mut http = RealHttp::new();
         let abort = AtomicBool::new(false);
         let response = block_on(http.post_json(&req(&url, "{}"), Cancel::new(&abort))).expect("ok");
         assert_eq!(response.status_code, HttpStatusCode::NO_CONTENT);
@@ -1511,7 +1425,7 @@ mod realhttp_async_tests {
     #[test]
     fn async_reqwest_status_299_upper_edge_is_success() {
         let (url, _rx, handle) = oneshot_server("299 Almost", "edge");
-        let mut http = RealHttpAsync::new();
+        let mut http = RealHttp::new();
         let abort = AtomicBool::new(false);
         let response = block_on(http.post_json(&req(&url, "{}"), Cancel::new(&abort))).expect("ok");
         assert_eq!(response.status_code, HttpStatusCode::new(299));
@@ -1524,7 +1438,7 @@ mod realhttp_async_tests {
         // 300 is the exclusive upper bound of `200..300`; no `Location`, so the
         // default redirect policy does not follow it.
         let (url, _rx, handle) = oneshot_server("300 Multiple Choices", "nope");
-        let mut http = RealHttpAsync::new();
+        let mut http = RealHttp::new();
         let abort = AtomicBool::new(false);
         let error = block_on(http.post_json(&req(&url, "{}"), Cancel::new(&abort))).unwrap_err();
         match error {
@@ -1541,7 +1455,7 @@ mod realhttp_async_tests {
     #[test]
     fn async_reqwest_status_503_is_unexpected_with_body() {
         let (url, _rx, handle) = oneshot_server("503 Service Unavailable", r#"{"error":"down"}"#);
-        let mut http = RealHttpAsync::new();
+        let mut http = RealHttp::new();
         let abort = AtomicBool::new(false);
         let error = block_on(http.post_json(&req(&url, "{}"), Cancel::new(&abort))).unwrap_err();
         match error {
@@ -1560,7 +1474,7 @@ mod realhttp_async_tests {
     #[test]
     fn async_reqwest_api_key_auth_uses_api_key_header() {
         let (url, rx, handle) = oneshot_server("200 OK", "{}");
-        let mut http = RealHttpAsync::new();
+        let mut http = RealHttp::new();
         let abort = AtomicBool::new(false);
         let request = HttpJsonRequest {
             url: &url,
@@ -1579,7 +1493,7 @@ mod realhttp_async_tests {
     #[test]
     fn async_reqwest_auth_none_omits_authorization_even_with_key() {
         let (url, rx, handle) = oneshot_server("200 OK", "{}");
-        let mut http = RealHttpAsync::new();
+        let mut http = RealHttp::new();
         let abort = AtomicBool::new(false);
         let request = HttpJsonRequest {
             url: &url,
@@ -1599,7 +1513,7 @@ mod realhttp_async_tests {
     #[test]
     fn async_reqwest_auth_none_omits_authorization() {
         let (url, rx, handle) = oneshot_server("200 OK", "{}");
-        let mut http = RealHttpAsync::new();
+        let mut http = RealHttp::new();
         let abort = AtomicBool::new(false);
         let request = HttpJsonRequest {
             url: &url,
@@ -1619,7 +1533,7 @@ mod realhttp_async_tests {
     #[test]
     fn async_reqwest_empty_200_body_is_ok() {
         let (url, _rx, handle) = oneshot_server("200 OK", "");
-        let mut http = RealHttpAsync::new();
+        let mut http = RealHttp::new();
         let abort = AtomicBool::new(false);
         let response = block_on(http.post_json(&req(&url, "{}"), Cancel::new(&abort))).expect("ok");
         assert_eq!(response.status_code, HttpStatusCode::OK);
@@ -1633,7 +1547,7 @@ mod realhttp_async_tests {
         // so the client must accumulate the full Content-Length.
         let big = "a".repeat(64 * 1024);
         let (url, _rx, handle) = oneshot_server("200 OK", big.clone());
-        let mut http = RealHttpAsync::new();
+        let mut http = RealHttp::new();
         let abort = AtomicBool::new(false);
         let response = block_on(http.post_json(&req(&url, "{}"), Cancel::new(&abort))).expect("ok");
         assert_eq!(response.status_code, HttpStatusCode::OK);
@@ -1646,7 +1560,7 @@ mod realhttp_async_tests {
 
     #[test]
     fn async_reqwest_honors_abort_before_send() {
-        let mut http = RealHttpAsync::new();
+        let mut http = RealHttp::new();
         let abort = AtomicBool::new(true);
         let error =
             block_on(http.post_json(&req("http://127.0.0.1:9/never", "{}"), Cancel::new(&abort)))
@@ -1657,7 +1571,7 @@ mod realhttp_async_tests {
     #[test]
     fn async_reqwest_connection_refused_is_request_failed() {
         let url = refused_url();
-        let mut http = RealHttpAsync::new();
+        let mut http = RealHttp::new();
         let abort = AtomicBool::new(false);
         let error = block_on(http.post_json(&req(&url, "{}"), Cancel::new(&abort))).unwrap_err();
         assert!(matches!(error, HttpError::RequestFailed(_)), "{error:?}");
@@ -1666,7 +1580,7 @@ mod realhttp_async_tests {
     #[test]
     fn async_reqwest_timeout_is_request_failed() {
         let url = stalling_server(2_000);
-        let mut http = RealHttpAsync::new();
+        let mut http = RealHttp::new();
         let abort = AtomicBool::new(false);
         let request = HttpJsonRequest {
             url: &url,
@@ -1681,7 +1595,7 @@ mod realhttp_async_tests {
 
     #[test]
     fn async_reqwest_invalid_url_is_request_failed() {
-        let mut http = RealHttpAsync::new();
+        let mut http = RealHttp::new();
         let abort = AtomicBool::new(false);
         let error =
             block_on(http.post_json(&req("not a url", "{}"), Cancel::new(&abort))).unwrap_err();

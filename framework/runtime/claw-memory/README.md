@@ -47,7 +47,7 @@ host-testable.
 
 **Compaction is not the store's concern.** In `claw-core`, a
 `RollingSummaryContextAdapter` reads aged turns via `turns_snapshot()`,
-summarizes them off the tick path through an injected `Compactor`, and a
+summarizes them through an injected `Compactor`, and a
 `RecentMessagesContextAdapter` renders the verbatim tail. The two coordinate
 through a shared cursor marking the boundary between the summarized prefix and
 the verbatim tail. Bounding on-disk growth (retention) is likewise a separate,

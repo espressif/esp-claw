@@ -47,12 +47,15 @@ struct ChannelState<T> {
 impl<T> AsyncSender<T> {
     /// Queue one value and wake the receiver if it is waiting.
     pub fn send(&self, value: T) -> Result<(), AsyncSendError<T>> {
-        let mut state = lock(&self.shared);
-        if state.closed {
-            return Err(AsyncSendError(value));
-        }
-        state.queue.push_back(value);
-        if let Some(waker) = state.receiver_waker.take() {
+        let waker = {
+            let mut state = lock(&self.shared);
+            if state.closed {
+                return Err(AsyncSendError(value));
+            }
+            state.queue.push_back(value);
+            state.receiver_waker.take()
+        };
+        if let Some(waker) = waker {
             waker.wake();
         }
         Ok(())
@@ -72,13 +75,18 @@ impl<T> Clone for AsyncSender<T> {
 
 impl<T> Drop for AsyncSender<T> {
     fn drop(&mut self) {
-        let mut state = lock(&self.shared);
-        state.sender_count = state.sender_count.saturating_sub(1);
-        if state.sender_count == 0 {
-            state.closed = true;
-            if let Some(waker) = state.receiver_waker.take() {
-                waker.wake();
+        let waker = {
+            let mut state = lock(&self.shared);
+            state.sender_count = state.sender_count.saturating_sub(1);
+            if state.sender_count == 0 {
+                state.closed = true;
+                state.receiver_waker.take()
+            } else {
+                None
             }
+        };
+        if let Some(waker) = waker {
+            waker.wake();
         }
     }
 }
@@ -92,9 +100,12 @@ impl<T> AsyncReceiver<T> {
 
     /// Close the channel. Already queued values can still be drained.
     pub fn close(&self) {
-        let mut state = lock(&self.shared);
-        state.closed = true;
-        if let Some(waker) = state.receiver_waker.take() {
+        let waker = {
+            let mut state = lock(&self.shared);
+            state.closed = true;
+            state.receiver_waker.take()
+        };
+        if let Some(waker) = waker {
             waker.wake();
         }
     }
@@ -164,13 +175,16 @@ impl<T> AsyncOneshotSender<T> {
         let Some(shared) = self.shared.take() else {
             return Err(AsyncSendError(value));
         };
-        let mut state = lock(&shared);
-        if state.closed || state.value.is_some() {
-            return Err(AsyncSendError(value));
-        }
-        state.value = Some(value);
-        state.closed = true;
-        if let Some(waker) = state.waker.take() {
+        let waker = {
+            let mut state = lock(&shared);
+            if state.closed || state.value.is_some() {
+                return Err(AsyncSendError(value));
+            }
+            state.value = Some(value);
+            state.closed = true;
+            state.waker.take()
+        };
+        if let Some(waker) = waker {
             waker.wake();
         }
         Ok(())
@@ -182,9 +196,12 @@ impl<T> Drop for AsyncOneshotSender<T> {
         let Some(shared) = self.shared.take() else {
             return;
         };
-        let mut state = lock(&shared);
-        state.closed = true;
-        if let Some(waker) = state.waker.take() {
+        let waker = {
+            let mut state = lock(&shared);
+            state.closed = true;
+            state.waker.take()
+        };
+        if let Some(waker) = waker {
             waker.wake();
         }
     }

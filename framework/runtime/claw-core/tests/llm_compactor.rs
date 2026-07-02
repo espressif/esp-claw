@@ -7,7 +7,8 @@ use std::sync::atomic::AtomicBool;
 use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
 use claw_core::LlmCompactor;
 use claw_interface::http::{
-    BlockingClawHttpAsync, ClawHttp, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode,
+    blocking::ClawHttp, BlockingHttpAdapter, HttpError, HttpJsonRequest, HttpResponse,
+    HttpStatusCode,
 };
 use claw_interface::ImmediateTimer;
 use claw_memory::Compactor;
@@ -32,7 +33,7 @@ impl ClawHttp for CannedHttp {
     }
 }
 
-fn api_replying(reply: &str) -> ClawApiAsync<BlockingClawHttpAsync<CannedHttp>, ImmediateTimer> {
+fn api_replying(reply: &str) -> ClawApiAsync<BlockingHttpAdapter<CannedHttp>, ImmediateTimer> {
     let body = json!({
         "choices": [{ "message": { "role": "assistant", "content": reply } }]
     })
@@ -45,7 +46,7 @@ fn api_replying(reply: &str) -> ClawApiAsync<BlockingClawHttpAsync<CannedHttp>, 
             "model-x",
             "https://api.example.com/v1",
         ),
-        BlockingClawHttpAsync::new(http),
+        BlockingHttpAdapter::new(http),
         ImmediateTimer,
     )
     .expect("init ClawApiAsync")

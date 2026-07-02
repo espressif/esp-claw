@@ -73,9 +73,10 @@ pub trait ClawFile {
 /// Byte-oriented persistence injection point: a filesystem that hands out
 /// [`ClawFile`] handles.
 ///
-/// Implementations must be safe to share across threads: a single `ClawFs` is
-/// handed to the memory task pool, whose worker threads open handles and write
-/// off the foreground path.
+/// Implementations must be safe to share across threads: the same filesystem
+/// backend can be held by stores, skill registries, and tool/capability paths
+/// driven from different runtime boundaries. File handles remain per-operation;
+/// sharing the filesystem object must not imply sharing one open handle.
 ///
 /// Two write disciplines coexist:
 /// - [`open_append`](ClawFs::open) + [`read_exact_at`](ClawFile::read_exact_at)
@@ -212,10 +213,10 @@ mod memfs {
     /// (the `Arc`) is an internal detail, so callers pass `MemFs` by value to a
     /// generic `F: ClawFs` bound and never wrap it in an `Arc` themselves.
     ///
-    /// Hermetic and thread-safe, so host tests can exercise persistence (shared
-    /// across the task pool's worker threads) without touching the real
-    /// filesystem. `list_dir` derives entries from the key prefixes, mirroring a
-    /// real directory tree.
+    /// Hermetic and thread-safe, so host tests can exercise persistence through
+    /// cloned store/registry handles without touching the real filesystem.
+    /// `list_dir` derives entries from the key prefixes, mirroring a real
+    /// directory tree.
     ///
     /// [`DiskFs`]: super::DiskFs
     #[derive(Debug, Clone, Default)]

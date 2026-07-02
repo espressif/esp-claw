@@ -53,7 +53,7 @@ pub use claw_api::RetryPolicy;
 use core::future::Future;
 use core::pin::Pin;
 
-use claw_interface::{ClawHttpAsync, ClawTimer};
+use claw_interface::{ClawHttp, ClawTimer};
 
 pub type AgentTickFuture<'a> = Pin<Box<dyn Future<Output = TickOutcome> + 'a>>;
 
@@ -65,7 +65,7 @@ pub type AgentTickFuture<'a> = Pin<Box<dyn Future<Output = TickOutcome> + 'a>>;
 /// [`deliver_child_result`](Agent::deliver_child_result) — the channel a parent
 /// receives a finished subagent's result on (a separate port rather than a new
 /// [`AgentCommand`] variant, so the base command vocabulary stays untouched).
-pub trait Agent: Send {
+pub trait Agent {
     /// This agent's stable identity.
     fn id(&self) -> AgentId;
 
@@ -89,7 +89,7 @@ pub trait Agent: Send {
 /// Child results re-enter the conversation as information the model re-decides
 /// over (no counting, no gating); both semantic agents handle them identically,
 /// so the formatting lives here once.
-fn append_child_result<H: ClawHttpAsync, Timer: ClawTimer>(
+fn append_child_result<H: ClawHttp, Timer: ClawTimer>(
     base: &mut BaseAgent<H, Timer>,
     child: AgentId,
     text: String,

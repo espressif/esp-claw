@@ -16,9 +16,8 @@
 
 use core::sync::atomic::AtomicBool;
 
-use claw_interface::{
-    ClawFs, ClawHttp, HttpAuth, HttpHeader, HttpJsonRequest, MemFs, ScriptedHttp,
-};
+use claw_interface::http::blocking::ClawHttp as _;
+use claw_interface::{ClawFs, HttpAuth, HttpHeader, HttpJsonRequest, MemFs, ScriptedHttp};
 
 fn main() -> anyhow::Result<()> {
     filesystem_seam()?;

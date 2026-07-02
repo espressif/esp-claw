@@ -13,7 +13,6 @@
 //! id-addressed operations (`update`/`forget`): the prefix is opaque to the
 //! model but lets the adapter send an edit back to the store that owns the item.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use claw_context::{Block, BlockKind, ContextSink};
@@ -23,10 +22,9 @@ use claw_memory::{
     StoreOutcome,
 };
 use claw_tool::ToolGroup;
-use claw_utils::SharedTaskPool;
 use serde_json::Value;
 
-use crate::memory::traits::{ContextAdapter, ContextAdapterInput, History};
+use crate::memory::traits::{ContextAdapter, ContextAdapterFuture, ContextAdapterInput, History};
 
 mod async_llm;
 mod extraction;
@@ -61,11 +59,10 @@ pub fn agent_store<F: ClawFs + 'static>(dir: &str, fs: F) -> LongTermMemory<F> {
 }
 
 /// The two stores plus the routing policy, shared (by cheap clone) between the
-/// adapter, the extraction job, and every memory tool handler.
+/// adapter and every memory tool handler.
 ///
 /// Every clone refers to the same underlying stores (each [`LongTermMemory`] is
-/// `Arc`-backed), so a tool call on the tick thread and an extraction job on a
-/// pool worker write the same data.
+/// `Arc`-backed), so tool calls and extraction write the same data.
 pub(crate) struct MemoryStores<F: ClawFs + 'static> {
     global: LongTermMemory<F>,
     agent: LongTermMemory<F>,
@@ -142,21 +139,15 @@ pub struct LongTermMemoryContextAdapter<F: ClawFs + 'static> {
     id: String,
     stores: MemoryStores<F>,
     extractor: Arc<dyn Extractor>,
-    pool: Arc<SharedTaskPool>,
     /// Cached rendered catalog blocks, rebuilt by [`refresh`](Self::refresh) only
     /// when a store's version advances — so an unchanged store re-lends its blocks
     /// with no work. Plain fields: the agent calls `refresh` under `&mut self`, so
     /// no interior lock is needed.
     catalog: CatalogCache,
-    /// Highest transcript [`History::version`] already handed to an extraction
-    /// job. Refresh schedules a fresh extraction only when the transcript has
-    /// advanced past this, so an unchanged conversation costs nothing.
+    /// Highest transcript [`History::version`] already handed to extraction.
+    /// Refresh extracts only when the transcript has advanced past this, so an
+    /// unchanged conversation costs nothing.
     extract_cursor: u64,
-    /// Single-flight guard: at most one extraction job in the pool at a time.
-    /// New transcript content that lands while one runs simply re-triggers on a
-    /// later refresh, coalescing a busy multi-round turn into roughly one job.
-    /// `Arc` so the pool job can clear it on completion off the tick thread.
-    extraction_in_flight: Arc<AtomicBool>,
 }
 
 /// The adapter's rendered-catalog cache, keyed on each store's change version.
@@ -172,14 +163,13 @@ struct CatalogCache {
 }
 
 impl<F: ClawFs + 'static> LongTermMemoryContextAdapter<F> {
-    /// Build an adapter over the two stores, a tier `classifier`, an `extractor`,
-    /// and the shared memory `pool` that runs extraction off the tick path.
+    /// Build an adapter over the two stores, a tier `classifier`, and an
+    /// `extractor`.
     pub fn new(
         agent: LongTermMemory<F>,
         global: LongTermMemory<F>,
         classifier: Arc<dyn TierClassifier>,
         extractor: Arc<dyn Extractor>,
-        pool: Arc<SharedTaskPool>,
     ) -> Self {
         Self {
             id: DEFAULT_MEMORY_ID.to_string(),
@@ -189,58 +179,43 @@ impl<F: ClawFs + 'static> LongTermMemoryContextAdapter<F> {
                 classifier,
             },
             extractor,
-            pool,
             catalog: CatalogCache::default(),
             extract_cursor: 0,
-            extraction_in_flight: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// Schedule a background extraction when the transcript has advanced.
+    /// Run extraction when the transcript has advanced.
     ///
     /// Pull, not push: called from [`contribute`](ContextAdapter::contribute) on
     /// the tick thread, it self-detects new conversation via [`History::version`]
-    /// against [`extract_cursor`](Self::extract_cursor). It snapshots only when
-    /// it actually schedules (a cheap `Arc` clone of the canonical transcript),
-    /// and the single-flight guard coalesces a busy multi-round turn into roughly
-    /// one job. Dedup in the store absorbs facts re-extracted across turns.
-    fn maybe_schedule_extraction(&mut self, history: &dyn History) {
+    /// against [`extract_cursor`](Self::extract_cursor). Dedup in the store
+    /// absorbs facts re-extracted across turns.
+    async fn maybe_schedule_extraction(&mut self, history: &dyn History) {
         let version = history.version();
         if version == self.extract_cursor {
             return; // transcript unchanged since the last extraction
         }
-        if self.extraction_in_flight.swap(true, Ordering::AcqRel) {
-            return; // one already running; a later refresh re-triggers
-        }
         self.extract_cursor = version;
 
         let snapshot = history.messages();
-        let extractor = Arc::clone(&self.extractor);
-        let stores = self.stores.clone();
-        let memory_id = self.id.clone();
-        let in_flight = Arc::clone(&self.extraction_in_flight);
-        self.pool.submit_async(Box::new(move || {
-            Box::pin(async move {
-                let transcript = flatten_transcript(&snapshot);
-                if !transcript.trim().is_empty() {
-                    match extractor.extract(&transcript).await {
-                        Ok(items) => {
-                            for item in items {
-                                let draft = MemoryDraft::new(item.content)
-                                    .with_tags(item.tags)
-                                    .with_keywords(item.keywords)
-                                    .with_source("extracted");
-                                stores.store(draft, item.tier);
-                            }
-                        }
-                        Err(error) => {
-                            tracing::warn!(%error, memory = %memory_id, "memory extraction failed")
-                        }
-                    }
+        let transcript = flatten_transcript(&snapshot);
+        if transcript.trim().is_empty() {
+            return;
+        }
+        match self.extractor.extract(&transcript).await {
+            Ok(items) => {
+                for item in items {
+                    let draft = MemoryDraft::new(item.content)
+                        .with_tags(item.tags)
+                        .with_keywords(item.keywords)
+                        .with_source("extracted");
+                    self.stores.store(draft, item.tier);
                 }
-                in_flight.store(false, Ordering::Release);
-            })
-        }));
+            }
+            Err(error) => {
+                tracing::warn!(%error, memory = %self.id, "memory extraction failed")
+            }
+        }
     }
 
     fn refresh_catalog(&mut self) {
@@ -268,11 +243,16 @@ impl<F: ClawFs + 'static> ContextAdapter for LongTermMemoryContextAdapter<F> {
         &self.id
     }
 
-    fn contribute(&mut self, input: ContextAdapterInput<'_>, output: &mut ContextSink<'_>) {
-        // Pull, not push: reading the transcript here is also where this adapter
-        // decides whether new conversation warrants a background extraction.
-        self.maybe_schedule_extraction(input.history);
-        self.refresh_catalog();
+    fn prepare<'a>(&'a mut self, input: ContextAdapterInput<'a>) -> ContextAdapterFuture<'a> {
+        Box::pin(async move {
+            // Pull, not push: reading the transcript here is where this adapter
+            // decides whether new conversation warrants extraction.
+            self.maybe_schedule_extraction(input.history).await;
+            self.refresh_catalog();
+        })
+    }
+
+    fn contribute(&mut self, _input: ContextAdapterInput<'_>, output: &mut ContextSink<'_>) {
         // Borrow the cached strings into the blocks — `Context::with` copies them
         // only on a real change, so an unchanged catalog allocates nothing here.
         // An empty catalog renders to an empty block, which clears that section.

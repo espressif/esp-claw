@@ -9,7 +9,8 @@ use core::sync::atomic::AtomicBool;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use claw_interface::{Cancel, ClawHttp, ClawHttpAsync, ClawTimer};
+use claw_interface::http::blocking::ClawHttp as BlockingClawHttp;
+use claw_interface::{Cancel, ClawHttp, ClawTimer};
 
 use super::backends::Backend;
 use super::errors::{ChatError, ChatJsonError, ClawApiError, InferMediaError, InitError};
@@ -59,15 +60,15 @@ const ABORTED_DURING_BACKOFF: &str = "LLM request aborted during retry backoff";
 /// let resp = api.chat(&ChatRequest::new("sys", &msgs), &abort)?;
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub struct ClawApi<H: ClawHttp> {
+pub struct ClawApi<H: BlockingClawHttp> {
     profile: ModelProfile,
     backend: Backend,
     http: H,
 }
 
 /// Async LLM client: a resolved backend + model profile behind an injected
-/// [`ClawHttpAsync`] transport and [`ClawTimer`] backoff timer.
-pub struct ClawApiAsync<H: ClawHttpAsync, Timer: ClawTimer> {
+/// [`ClawHttp`] transport and [`ClawTimer`] backoff timer.
+pub struct ClawApiAsync<H: ClawHttp, Timer: ClawTimer> {
     profile: ModelProfile,
     backend: Backend,
     http: H,
@@ -92,7 +93,7 @@ fn resolve_config(config: ClawApiConfig) -> Result<(ModelProfile, Backend), Init
     Ok((profile, backend))
 }
 
-fn parse_chat_json_response<T: DeserializeOwned + Send>(
+fn parse_chat_json_response<T: DeserializeOwned>(
     response: LlmResponse,
 ) -> Result<ChatJsonResponse<T>, ChatJsonError> {
     let output = match response.text {
@@ -115,7 +116,7 @@ fn parse_chat_json_response<T: DeserializeOwned + Send>(
     })
 }
 
-impl<H: ClawHttp> ClawApi<H> {
+impl<H: BlockingClawHttp> ClawApi<H> {
     /// Validate `config`, select the built-in backend, and bind the `http`
     /// transport. (Port of `claw_llm_runtime_init`.)
     ///
@@ -266,7 +267,7 @@ impl<H: ClawHttp> ClawApi<H> {
     /// }
     /// # Ok::<(), claw_api::ChatJsonError>(())
     /// ```
-    pub fn chat_json<T: DeserializeOwned + Send>(
+    pub fn chat_json<T: DeserializeOwned>(
         &mut self,
         request: &ChatJsonRequest<'_>,
         abort: &AtomicBool,
@@ -360,7 +361,7 @@ impl<H: ClawHttp> ClawApi<H> {
     }
 }
 
-impl<H: ClawHttpAsync, Timer: ClawTimer> ClawApiAsync<H, Timer> {
+impl<H: ClawHttp, Timer: ClawTimer> ClawApiAsync<H, Timer> {
     /// Validate `config`, select the built-in backend, and bind the async HTTP
     /// transport plus timer used for retry backoff.
     pub fn init(
@@ -378,7 +379,7 @@ impl<H: ClawHttpAsync, Timer: ClawTimer> ClawApiAsync<H, Timer> {
         })
     }
 
-    /// Async chat completion over [`ClawHttpAsync`].
+    /// Async chat completion over [`ClawHttp`].
     pub async fn chat(
         &mut self,
         request: &ChatRequest<'_>,
@@ -410,8 +411,8 @@ impl<H: ClawHttpAsync, Timer: ClawTimer> ClawApiAsync<H, Timer> {
         }
     }
 
-    /// Async structured JSON chat over [`ClawHttpAsync`].
-    pub async fn chat_json<T: DeserializeOwned + Send>(
+    /// Async structured JSON chat over [`ClawHttp`].
+    pub async fn chat_json<T: DeserializeOwned>(
         &mut self,
         request: &ChatJsonRequest<'_>,
         cancel: Cancel<'_>,
@@ -464,7 +465,7 @@ impl<H: ClawHttpAsync, Timer: ClawTimer> ClawApiAsync<H, Timer> {
         }
     }
 
-    /// Async one-shot image inference over [`ClawHttpAsync`].
+    /// Async one-shot image inference over [`ClawHttp`].
     pub async fn infer_media(
         &mut self,
         request: &MediaRequest<'_>,

@@ -150,7 +150,6 @@ dependencies = [
  "claw-interface",
  "claw-log",
  "claw-memory",
- "claw-utils",
  "dotenvy",
  "owo-colors",
  "serde_json",
@@ -329,7 +328,6 @@ dependencies = [
 name = "claw-utils"
 version = "0.1.0"
 dependencies = [
- "claw-interface",
  "thiserror",
 ]
 

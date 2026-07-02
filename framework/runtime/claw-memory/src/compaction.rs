@@ -44,9 +44,6 @@ pub enum CompactError {
 /// fold the chunk into a single message or a small handful. Returning an empty
 /// `Vec` is allowed but produces an empty segment; prefer a concise summary.
 ///
-/// Implementations must be `Send + Sync`: the call runs on a memory-pool worker,
-/// off the agent's tick path, and may block (e.g. on the network).
-///
 /// # Examples
 ///
 /// A trivial compactor that records how many messages it folded:
@@ -72,7 +69,7 @@ pub enum CompactError {
 /// assert_eq!(summary[0]["content"], "summary of 1 earlier messages");
 /// # Ok::<(), CompactError>(())
 /// ```
-pub trait Compactor: Send + Sync {
+pub trait Compactor {
     /// Summarize one chunk of aged messages into the messages of a single
     /// compact segment.
     fn compact<'a>(&'a self, window: &'a [Value]) -> CompactFuture<'a>;
@@ -80,10 +77,10 @@ pub trait Compactor: Send + Sync {
 
 /// A [`Compactor`] that never compacts: every call yields an empty segment.
 ///
-/// For wiring where background summarization is undesired or irrelevant — host
-/// CLIs that keep the full transcript, and tests that need a memory without an
-/// LLM. Behind the `compactor-stub` feature so it is never built into firmware
-/// unless explicitly opted in.
+/// For wiring where summarization is undesired or irrelevant — host CLIs that
+/// keep the full transcript, and tests that need a memory without an LLM. Behind
+/// the `compactor-stub` feature so it is never built into firmware unless
+/// explicitly opted in.
 #[cfg(feature = "compactor-stub")]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoopCompactor;

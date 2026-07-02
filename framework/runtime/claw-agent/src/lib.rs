@@ -54,9 +54,9 @@ use claw_core::{
     global_store, ChannelEgress, ChannelEgressHub, CompactionPolicy, LlmCompactor, LlmExtractor,
     Orchestrator, RecordingTransport, RuleBasedTierClassifier,
 };
-use claw_interface::{ClawHttpAsync, ClawTimer};
+use claw_interface::{ClawHttp, ClawTimer};
 #[cfg(feature = "dev")]
-use claw_interface::{RealHttpAsync, StdThread, TokioTimer};
+use claw_interface::{RealHttp, StdThread, TokioTimer};
 use claw_memory::{ProfileConfig, ProfileStore};
 
 // Re-exported so callers can configure the system without depending on the lower
@@ -83,11 +83,6 @@ pub use claw_tool::{
 // their own `ClawFs` through `AgentSystem::builder::<F, H, Timer>()`.
 #[cfg(feature = "dev")]
 pub use claw_interface::DiskFs;
-// The one process-wide background worker pool callers configure and inject
-// (owned by `claw-utils` so non-memory subsystems can share it). The
-// per-conversation memory bundle and the compaction policy stay internal — this
-// crate assembles them.
-pub use claw_utils::{PoolConfig, SharedTaskPool};
 
 /// The channel id outbound replies are routed through. Callers never see it; it
 /// only needs to be stable so the egress transport and reply route agree.
@@ -141,12 +136,6 @@ pub enum AgentError {
     /// No per-agent long-term memory directories were provided to the builder.
     #[error("at least one agent long-term memory directory is required")]
     MissingAgentLongTermDirs,
-    /// No shared task pool was provided to the builder.
-    #[error("a shared task pool is required")]
-    MissingTaskPool,
-    /// The background memory task pool could not start (e.g. thread spawn failed).
-    #[error("failed to start the shared task pool: {0}")]
-    MemoryPool(#[from] std::io::Error),
     /// The fixed tool-call executor could not start.
     #[error("failed to start the tool executor: {0}")]
     ToolExecutor(#[source] std::io::Error),
@@ -183,7 +172,7 @@ impl AgentSystem {
     /// long-term memory) and `H` is the concrete async HTTP transport every LLM
     /// client speaks through. The system constructs both internally via
     /// [`Default`], so callers choose them by *type* — [`DiskFs`] +
-    /// [`RealHttpAsync`] on a host, in-memory/scripted doubles in tests — and
+    /// [`RealHttp`] on a host, in-memory/scripted doubles in tests — and
     /// never pass an instance; pair `F` with
     /// [`persistence`](AgentSystemBuilder::persistence), which fixes where files
     /// land. Each minted client (one per agent, plus the compaction and
@@ -191,8 +180,8 @@ impl AgentSystem {
     pub fn builder<F, H, Timer>() -> AgentSystemBuilder<F, H, Timer>
     where
         F: ClawFs + Clone + Default + 'static,
-        H: ClawHttpAsync + Default + Send + 'static,
-        Timer: ClawTimer + Default + Send + 'static,
+        H: ClawHttp + Default + 'static,
+        Timer: ClawTimer + Default + 'static,
     {
         AgentSystemBuilder::default()
     }
@@ -204,24 +193,20 @@ impl AgentSystem {
     /// long-term memory, and each agent kind's long-term memory.
     ///
     /// Dev convenience (requires the default `dev` feature): it constructs the
-    /// [`DiskFs`] / [`RealHttpAsync`] / [`StdThread`] backends directly. Device builds
+    /// [`DiskFs`] / [`RealHttp`] / [`StdThread`] backends directly. Device builds
     /// disable `dev` and use [`AgentSystem::builder::<F, H, Timer>()`](Self::builder)
     /// with injected backends instead.
     ///
     /// # Errors
     ///
-    /// Returns [`AgentError::MemoryPool`] if the background memory task pool
-    /// cannot be created.
     #[cfg(feature = "dev")]
     pub fn on_disk(
         llm: ClawApiConfig,
         persistence: AgentPersistenceConfig,
     ) -> Result<AgentSystem, AgentError> {
         init_tool_executor(StdThread).map_err(AgentError::ToolExecutor)?;
-        let pool = Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread)?);
-        AgentSystem::builder::<DiskFs, RealHttpAsync, TokioTimer>()
+        AgentSystem::builder::<DiskFs, RealHttp, TokioTimer>()
             .llm(llm)
-            .task_pool(pool)
             .persistence(persistence)
             .build()
     }
@@ -311,8 +296,8 @@ impl AgentSystem {
     }
 }
 
-/// Builder for [`AgentSystem`]. Required: an LLM config, explicit persistence
-/// directories, and a [`task_pool`](Self::task_pool). Optional: the capability
+/// Builder for [`AgentSystem`]. Required: an LLM config and explicit persistence
+/// directories. Optional: the capability
 /// [`Registry`](Self::capabilities) (or a raw [`AgentResolver`](Self::resolver))
 /// and the egress channel id. Long-term memory is always on; the
 /// conversation-compaction policy is internal — callers do not supply one.
@@ -328,8 +313,8 @@ impl AgentSystem {
 pub struct AgentSystemBuilder<F, H, Timer>
 where
     F: ClawFs + Clone + Default + 'static,
-    H: ClawHttpAsync + Default + Send + 'static,
-    Timer: ClawTimer + Default + Send + 'static,
+    H: ClawHttp + Default + 'static,
+    Timer: ClawTimer + Default + 'static,
 {
     llm_config: Option<ClawApiConfig>,
     resolver: Option<Arc<dyn AgentResolver>>,
@@ -340,21 +325,19 @@ where
     profile_dir: Option<String>,
     global_long_term_dir: Option<String>,
     agent_long_term_dirs: AgentLongTermDirs,
-    /// The process-wide background worker pool.
-    task_pool: Option<Arc<SharedTaskPool>>,
     channel: String,
     /// Carries the persistence + async runtime types; the builder stores no
     /// `F`/`H`/`Timer` value (all are built via `Default` in
-    /// [`build`](Self::build)). `fn() -> …` so the marker is unconditionally
-    /// `Send + Sync`.
+    /// [`build`](Self::build)). `fn() -> …` keeps the marker independent of
+    /// owning runtime values.
     marker: PhantomData<fn() -> (F, H, Timer)>,
 }
 
 impl<F, H, Timer> Default for AgentSystemBuilder<F, H, Timer>
 where
     F: ClawFs + Clone + Default + 'static,
-    H: ClawHttpAsync + Default + Send + 'static,
-    Timer: ClawTimer + Default + Send + 'static,
+    H: ClawHttp + Default + 'static,
+    Timer: ClawTimer + Default + 'static,
 {
     fn default() -> Self {
         Self {
@@ -365,7 +348,6 @@ where
             profile_dir: None,
             global_long_term_dir: None,
             agent_long_term_dirs: AgentLongTermDirs::new(),
-            task_pool: None,
             channel: DEFAULT_CHANNEL.to_string(),
             marker: PhantomData,
         }
@@ -375,8 +357,8 @@ where
 impl<F, H, Timer> AgentSystemBuilder<F, H, Timer>
 where
     F: ClawFs + Clone + Default + 'static,
-    H: ClawHttpAsync + Default + Send + 'static,
-    Timer: ClawTimer + Default + Send + 'static,
+    H: ClawHttp + Default + 'static,
+    Timer: ClawTimer + Default + 'static,
 {
     /// Required: the LLM client config every agent is minted from.
     pub fn llm(mut self, config: ClawApiConfig) -> Self {
@@ -439,14 +421,6 @@ where
         self
     }
 
-    /// Required: the process-wide [`SharedTaskPool`] that background jobs
-    /// (conversation compaction, long-term extraction) run on. Build it once at
-    /// boot with your platform's thread spawner and share it across the system.
-    pub fn task_pool(mut self, pool: Arc<SharedTaskPool>) -> Self {
-        self.task_pool = Some(pool);
-        self
-    }
-
     /// Override the egress channel id (default: `"claw"`). Rarely needed.
     pub fn channel(mut self, channel: impl Into<String>) -> Self {
         self.channel = channel.into();
@@ -460,10 +434,9 @@ where
     /// Returns [`AgentError::MissingLlmConfig`],
     /// [`AgentError::MissingTranscriptDir`], [`AgentError::MissingProfileDir`],
     /// [`AgentError::MissingGlobalLongTermDir`],
-    /// [`AgentError::MissingAgentLongTermDirs`], or
-    /// [`AgentError::MissingTaskPool`] when a required input was not set;
-    /// [`AgentError::CompactorLlm`] / [`AgentError::ExtractionLlm`] if an internal
-    /// LLM client fails to init.
+    /// [`AgentError::MissingAgentLongTermDirs`] when a required input was not
+    /// set; [`AgentError::CompactorLlm`] / [`AgentError::ExtractionLlm`] if an
+    /// internal LLM client fails to init.
     pub fn build(self) -> Result<AgentSystem, AgentError> {
         let llm_config = self.llm_config.ok_or(AgentError::MissingLlmConfig)?;
         let transcript_dir = self
@@ -479,7 +452,6 @@ where
         // The persistence backend is built from its type — the caller chose `F`
         // via `builder::<F>()` and never passes an instance.
         let fs = F::default();
-        let pool = self.task_pool.ok_or(AgentError::MissingTaskPool)?;
         // A capability registry, when given, is the source of truth for tools
         // (and its channels are registered as egress transports below); it
         // supersedes any explicit `resolver`.
@@ -510,7 +482,6 @@ where
         let compaction_llm = ClawApiAsync::init(llm_config.clone(), H::default(), Timer::default())
             .map_err(|error| AgentError::CompactorLlm(error.to_string()))?;
         let compaction = CompactionDeps {
-            pool,
             compactor: Arc::new(LlmCompactor::new(compaction_llm)),
             policy: CompactionPolicy::new(6000, 2000, 1500),
         };

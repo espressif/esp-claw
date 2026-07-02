@@ -1,7 +1,8 @@
 //! In-memory channel implementations for host tests and default wiring.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::Arc;
 
 use super::egress::{ChannelEgress, ChannelTransport};
 use super::ingress::{ChannelIngress, ChannelIngressSink, IngressFuture};
@@ -9,8 +10,8 @@ use super::message::{ChannelError, InboundCommand, InboundMessage, OutboundMessa
 
 /// In-memory ingress: separate user-message and command queues.
 pub struct LocalChannelIngress {
-    user_messages: Mutex<VecDeque<InboundMessage>>,
-    commands: Mutex<VecDeque<InboundCommand>>,
+    user_messages: RefCell<VecDeque<InboundMessage>>,
+    commands: RefCell<VecDeque<InboundCommand>>,
 }
 
 impl Default for LocalChannelIngress {
@@ -22,8 +23,8 @@ impl Default for LocalChannelIngress {
 impl LocalChannelIngress {
     pub fn new() -> Self {
         Self {
-            user_messages: Mutex::new(VecDeque::new()),
-            commands: Mutex::new(VecDeque::new()),
+            user_messages: RefCell::new(VecDeque::new()),
+            commands: RefCell::new(VecDeque::new()),
         }
     }
 }
@@ -31,14 +32,14 @@ impl LocalChannelIngress {
 impl ChannelIngressSink for LocalChannelIngress {
     fn push_user_message(&self, msg: InboundMessage) -> IngressFuture<'_> {
         Box::pin(async move {
-            self.user_messages.lock().unwrap().push_back(msg);
+            self.user_messages.borrow_mut().push_back(msg);
             Ok(())
         })
     }
 
     fn push_command(&self, command: InboundCommand) -> IngressFuture<'_> {
         Box::pin(async move {
-            self.commands.lock().unwrap().push_back(command);
+            self.commands.borrow_mut().push_back(command);
             Ok(())
         })
     }
@@ -46,18 +47,18 @@ impl ChannelIngressSink for LocalChannelIngress {
 
 impl ChannelIngress for LocalChannelIngress {
     fn drain_user_messages(&mut self) -> Vec<InboundMessage> {
-        self.user_messages.lock().unwrap().drain(..).collect()
+        self.user_messages.borrow_mut().drain(..).collect()
     }
 
     fn drain_commands(&mut self) -> Vec<InboundCommand> {
-        self.commands.lock().unwrap().drain(..).collect()
+        self.commands.borrow_mut().drain(..).collect()
     }
 }
 
 /// Routes outbound messages to registered [`ChannelTransport`] adapters.
 pub struct ChannelEgressHub {
-    transports: RwLock<HashMap<String, Arc<dyn ChannelTransport>>>,
-    unrouted: Mutex<Vec<OutboundMessage>>,
+    transports: RefCell<HashMap<String, Arc<dyn ChannelTransport>>>,
+    unrouted: RefCell<Vec<OutboundMessage>>,
 }
 
 impl Default for ChannelEgressHub {
@@ -69,33 +70,28 @@ impl Default for ChannelEgressHub {
 impl ChannelEgressHub {
     pub fn new() -> Self {
         Self {
-            transports: RwLock::new(HashMap::new()),
-            unrouted: Mutex::new(Vec::new()),
+            transports: RefCell::new(HashMap::new()),
+            unrouted: RefCell::new(Vec::new()),
         }
     }
 
     pub fn register(&self, transport: Arc<dyn ChannelTransport>) {
         let id = transport.id().to_string();
-        if let Ok(mut transports) = self.transports.write() {
-            transports.insert(id, transport);
-        }
+        self.transports.borrow_mut().insert(id, transport);
     }
 
     pub fn drain_unrouted(&self) -> Vec<OutboundMessage> {
-        self.unrouted.lock().unwrap().drain(..).collect()
+        self.unrouted.borrow_mut().drain(..).collect()
     }
 }
 
 impl ChannelEgress for ChannelEgressHub {
     fn send(&self, msg: &OutboundMessage) -> Result<(), ChannelError> {
-        let transports = self
-            .transports
-            .read()
-            .map_err(|_| ChannelError::SendFailed("transport registry poisoned".into()))?;
-        if let Some(transport) = transports.get(&msg.channel) {
+        let transport = self.transports.borrow().get(&msg.channel).cloned();
+        if let Some(transport) = transport {
             transport.send(msg)
         } else {
-            self.unrouted.lock().unwrap().push(msg.clone());
+            self.unrouted.borrow_mut().push(msg.clone());
             Ok(())
         }
     }
@@ -104,19 +100,19 @@ impl ChannelEgress for ChannelEgressHub {
 /// Records outbound messages for assertions (host tests).
 pub struct RecordingTransport {
     id: String,
-    sent: Mutex<Vec<OutboundMessage>>,
+    sent: RefCell<Vec<OutboundMessage>>,
 }
 
 impl RecordingTransport {
     pub fn new(id: impl Into<String>) -> Arc<Self> {
         Arc::new(Self {
             id: id.into(),
-            sent: Mutex::new(Vec::new()),
+            sent: RefCell::new(Vec::new()),
         })
     }
 
     pub fn drain_sent(&self) -> Vec<OutboundMessage> {
-        self.sent.lock().unwrap().drain(..).collect()
+        self.sent.borrow_mut().drain(..).collect()
     }
 }
 
@@ -126,7 +122,7 @@ impl ChannelTransport for RecordingTransport {
     }
 
     fn send(&self, msg: &OutboundMessage) -> Result<(), ChannelError> {
-        self.sent.lock().unwrap().push(msg.clone());
+        self.sent.borrow_mut().push(msg.clone());
         Ok(())
     }
 }

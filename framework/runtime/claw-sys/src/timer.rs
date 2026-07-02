@@ -122,7 +122,8 @@ fn timer_thread(deadline: Instant, state: Arc<SleepState>) {
         );
     }
     state.fired.store(true, Ordering::Release);
-    if let Some(waker) = lock(&state.waker).take() {
+    let waker = lock(&state.waker).take();
+    if let Some(waker) = waker {
         waker.wake();
     }
 }

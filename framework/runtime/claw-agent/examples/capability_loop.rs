@@ -25,10 +25,10 @@ use std::sync::{Arc, Mutex};
 
 use claw_agent::{
     init_tool_executor, AgentSystem, BackendKind, Capability, CapabilityError, ChannelAdapter,
-    ClawApiConfig, InboundMessage, OutboundMessage, PoolConfig, Registry, SharedTaskPool, Tool,
-    ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
+    ClawApiConfig, InboundMessage, OutboundMessage, Registry, Tool, ToolHandler, ToolInvocation,
+    ToolInvokeError, ToolOutput,
 };
-use claw_interface::{BlockingClawHttpAsync, ImmediateTimer, MemFs, SharedScriptHttp, StdThread};
+use claw_interface::{BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp, StdThread};
 
 /// The channel id this device talks on. Inbound messages carry it, and replies
 /// are routed back to the matching channel capability.
@@ -138,20 +138,18 @@ async fn main() -> anyhow::Result<()> {
     // 2. Build the system from the registry. Hermetic backends (in-memory fs +
     //    scripted LLM) keep the example offline and deterministic.
     init_tool_executor(StdThread)?;
-    let pool = Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread)?);
     SharedScriptHttp::install(vec![assistant_text(
         "Hello from the agent — the local time is 2026-06-29T17:00:00Z.",
     )]);
 
     let system =
-        AgentSystem::builder::<MemFs, BlockingClawHttpAsync<SharedScriptHttp>, ImmediateTimer>()
+        AgentSystem::builder::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>()
             .llm(scripted_llm())
             .transcript_dir("/mem/sessions")
             .profile_dir("/mem/profile")
             .global_long_term_dir("/mem/long_term/global")
             .agent_long_term_dir("conversation", "/mem/long_term/agents/conversation")
             .agent_long_term_dir("worker", "/mem/long_term/agents/worker")
-            .task_pool(pool)
             .capabilities(Arc::clone(&registry))
             .build()?;
 

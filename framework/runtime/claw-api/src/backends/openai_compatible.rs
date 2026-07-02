@@ -4,7 +4,7 @@ use core::sync::atomic::AtomicBool;
 
 use serde_json::{json, Value};
 
-use claw_interface::http::{Cancel, ClawHttp, ClawHttpAsync, HttpAuth};
+use claw_interface::http::{blocking::ClawHttp as BlockingClawHttp, Cancel, ClawHttp, HttpAuth};
 
 use super::super::errors::{ChatError, ClawApiError, InferMediaError, InitError};
 use super::super::media::prepare_asset;
@@ -116,7 +116,7 @@ impl OpenAiCompatible {
 
 impl BackendImpl for OpenAiCompatible {
     /// `openai_compatible_chat`
-    fn chat<H: ClawHttp>(
+    fn chat<H: BlockingClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -136,7 +136,7 @@ impl BackendImpl for OpenAiCompatible {
         Ok(parse_openai_chat_response(&response.body)?)
     }
 
-    fn chat_json<H: ClawHttp>(
+    fn chat_json<H: BlockingClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -164,7 +164,7 @@ impl BackendImpl for OpenAiCompatible {
     }
 
     /// `openai_compatible_infer_media`
-    fn infer_media<H: ClawHttp>(
+    fn infer_media<H: BlockingClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -218,7 +218,7 @@ impl BackendImpl for OpenAiCompatible {
         }
     }
 
-    async fn chat_async<H: ClawHttpAsync>(
+    async fn chat_async<H: ClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -238,7 +238,7 @@ impl BackendImpl for OpenAiCompatible {
         Ok(parse_openai_chat_response(&response.body)?)
     }
 
-    async fn chat_json_async<H: ClawHttpAsync>(
+    async fn chat_json_async<H: ClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -265,7 +265,7 @@ impl BackendImpl for OpenAiCompatible {
         parse_openai_chat_response(&response.body).map_err(ChatError::from)
     }
 
-    async fn infer_media_async<H: ClawHttpAsync>(
+    async fn infer_media_async<H: ClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,

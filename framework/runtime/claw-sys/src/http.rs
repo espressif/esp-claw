@@ -62,8 +62,8 @@ pub use espidf_driver::EspIdfHttp;
 mod espidf_driver {
     use super::{build_auth_header, parse_error_message_body};
     use claw_interface::http::{
-        Cancel, ClawHttp, ClawHttpAsync, HttpError, HttpGetRequest, HttpJsonRequest,
-        HttpRequestFailure, HttpResponse, HttpResponseFuture, HttpStatusCode,
+        blocking, Cancel, ClawHttp, HttpError, HttpGetRequest, HttpJsonRequest, HttpRequestFailure,
+        HttpResponse, HttpResponseFuture, HttpStatusCode,
     };
     use core::ffi::{c_char, c_int, c_void};
     use core::future::Future;
@@ -629,8 +629,8 @@ mod espidf_driver {
         }
     }
 
-    /// `esp_http_client`-backed transport implementing both [`ClawHttp`]
-    /// (blocking, cancelled via the in-band abort flag) and [`ClawHttpAsync`]
+    /// `esp_http_client`-backed transport implementing both [`blocking::ClawHttp`]
+    /// (blocking, cancelled via the in-band abort flag) and [`ClawHttp`]
     /// (non-blocking `config.is_async` mode).
     ///
     /// The transport owns one persistent keep-alive [`EspClient`] created at
@@ -639,15 +639,6 @@ mod espidf_driver {
     pub struct EspIdfHttp {
         conn: EspClient,
     }
-
-    // SAFETY: `EspIdfHttp` is an owning transport handle. The raw
-    // `esp_http_client` pointer and its `RequestCtx` are never shared or cloned,
-    // and every transfer requires `&mut self`, so the Rust API prevents
-    // concurrent access to the C handle. The async request future borrows that
-    // `&mut self` and is intentionally not `Send`, so an in-flight request is not
-    // moved to another thread for polling. This impl only permits moving the
-    // idle owning transport between tasks/threads between requests.
-    unsafe impl Send for EspIdfHttp {}
 
     impl EspIdfHttp {
         /// Create a transport with a configured reusable ESP-IDF client handle.
@@ -672,7 +663,7 @@ mod espidf_driver {
         }
     }
 
-    impl ClawHttp for EspIdfHttp {
+    impl blocking::ClawHttp for EspIdfHttp {
         fn post_json(
             &mut self,
             request: &HttpJsonRequest,
@@ -702,7 +693,7 @@ mod espidf_driver {
         YieldOnce(false).await
     }
 
-    impl ClawHttpAsync for EspIdfHttp {
+    impl ClawHttp for EspIdfHttp {
         fn post_json<'a>(
             &'a mut self,
             request: &'a HttpJsonRequest<'a>,

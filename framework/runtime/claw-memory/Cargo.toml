@@ -13,12 +13,11 @@ crate-type = ["rlib"]
 compactor-stub = []
 
 [dependencies]
-# Core crate: depends only on the inbound trait crate plus `claw-utils` (for the
-# shared `SharedTaskPool`). The concrete `ClawFs` and `Compactor` (e.g.
-# `claw_core::LlmCompactor`) are passed in by the caller, so this crate pulls in
-# neither the platform boundary (`claw-sys`) nor the LLM client (`claw-api`).
+# Core crate: depends only on the inbound trait crate. The concrete `ClawFs` and
+# `Compactor` (e.g. `claw_core::LlmCompactor`) are passed in by the caller, so
+# this crate pulls in neither the platform boundary (`claw-sys`) nor the LLM
+# client (`claw-api`).
 claw-interface = { path = "../claw-interface" }
-claw-utils = { path = "../claw-utils" }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -26,9 +25,9 @@ thiserror = "2"
 
 [dev-dependencies]
 # Host-only doubles shared from claw-interface (tests/examples/doctests only).
-# diskfs-pretty implies diskfs and pretty-prints on-disk JSON for inspection;
-# stdthread provides `StdThread`, the host spawner that examples/tests pass to
-# `SharedTaskPool::new`. None of these reach the device build (dev-deps only).
+# diskfs-pretty implies diskfs and pretty-prints on-disk JSON for inspection.
+# None of these reach the device build (dev-deps only).
 claw-interface = { path = "../claw-interface", features = ["memfs", "diskfs-pretty", "stdthread"] }
+claw-utils = { path = "../claw-utils" }
 # Ergonomic error handling for the `conversation` example (host-only).
 anyhow = "1"

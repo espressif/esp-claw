@@ -13,9 +13,8 @@
 //!   [`contribute`](ContextAdapter::contribute) it looks at the committed turns
 //!   past the shared [`SummaryCursor`] and, once their token estimate crosses the
 //!   trigger budget, summarizes the oldest aged turns (keeping a verbatim tail)
-//!   by running the injected [`Compactor`] on the shared pool, off the tick path.
-//!   The finished summary segment is parked and spliced in at the next tick,
-//!   which advances the cursor — so the sibling recent-tail adapter stops
+//!   by running the injected [`Compactor`] on the agent's local runtime, which
+//!   advances the cursor immediately — so the sibling recent-tail adapter stops
 //!   rendering the now-summarized turns. No gap, no overlap.
 //! - **Render (read):** it surfaces its accumulated summary segments as history
 //!   messages tagged [`BlockKind::ConversationSummary`]. The recent verbatim tail
@@ -32,22 +31,16 @@
 //! fresh process. Persisting it as a re-derivable cache (to avoid re-summarizing
 //! on boot) is a future optimization — losing it can never lose conversation
 //! data, since the verbatim turns it covered are still in the store.
-//!
-//! A single-flight guard (plus refusing to select a new window while a finished
-//! summary is still parked) keeps at most one compaction job in flight and stops
-//! the same turns being summarized twice.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use claw_context::{BlockKind, ContextSink};
 use claw_interface::ClawFs;
 use claw_memory::{Compactor, TranscriptStore, Turn, TurnId};
-use claw_utils::SharedTaskPool;
 use serde_json::Value;
 
 use crate::memory::summary_cursor::SummaryCursor;
-use crate::memory::traits::{ContextAdapter, ContextAdapterInput};
+use crate::memory::traits::{ContextAdapter, ContextAdapterFuture, ContextAdapterInput};
 
 /// Stable id for this adapter, used in logs.
 const ADAPTER_ID: &str = "rolling_summary";
@@ -67,7 +60,7 @@ pub struct CompactionPolicy {
     /// Token budget for the verbatim tail kept out of every summary (the newest
     /// turns the model always sees word-for-word).
     pub keep_recent_tokens: usize,
-    /// Max tokens summarized per background job (one summary segment).
+    /// Max tokens summarized per compaction pass (one summary segment).
     pub segment_token_budget: usize,
 }
 
@@ -86,21 +79,12 @@ impl CompactionPolicy {
     }
 }
 
-/// A finished summary a pool worker produced, parked until the next tick applies
-/// it (pushes the segment and advances the shared cursor).
-struct ParkedSummary {
-    id_end: TurnId,
-    messages: Vec<Value>,
-}
-
 /// Owns conversation compaction and contributes the rolling summary to the
 /// history channel. See the module docs.
 pub struct RollingSummaryContextAdapter<F: ClawFs + 'static> {
     /// A clone of the agent's transcript store (shares the same `Arc`-backed state
     /// the transcript writes to): read for committed turns. Never mutated here.
     store: TranscriptStore<F>,
-    /// Shared worker pool the summarization runs on, off the tick path.
-    pool: Arc<SharedTaskPool>,
     /// How aged windows are turned into a summary.
     compactor: Arc<dyn Compactor>,
     /// When/what to compact.
@@ -109,101 +93,59 @@ pub struct RollingSummaryContextAdapter<F: ClawFs + 'static> {
     /// adapter so it stops rendering them verbatim.
     cursor: SummaryCursor,
     /// Accumulated summary segments (each a segment's messages), ascending by
-    /// coverage. Only the tick thread touches this (applies parked results), so it
-    /// needs no lock. The shared cursor — not these — tracks how far coverage
-    /// reaches.
+    /// coverage. Only the tick thread touches this, so it needs no lock. The
+    /// shared cursor — not these — tracks how far coverage reaches.
     segments: Vec<Vec<Value>>,
-    /// A finished summary a pool worker deposited, applied on the next tick. The
-    /// `Arc<Mutex<_>>` is the hand-off from the off-tick worker to the tick thread.
-    parked: Arc<Mutex<Option<ParkedSummary>>>,
-    /// Single-flight guard: at most one compaction job in the pool at a time.
-    /// `Arc` so the pool job can clear it on completion off the tick thread.
-    in_flight: Arc<AtomicBool>,
-    /// Cached summary snapshot (all segments flattened), rebuilt only when a
-    /// parked segment is applied, then emitted into the context sink.
+    /// Cached summary snapshot (all segments flattened), rebuilt when a new
+    /// segment is produced, then emitted into the context sink.
     cached: Arc<Value>,
 }
 
 impl<F: ClawFs + 'static> RollingSummaryContextAdapter<F> {
     /// Build the adapter over a clone of the agent's transcript `store`, the
-    /// shared `pool`, the `compactor`, the compaction `policy`, and the shared
-    /// `cursor` the recent-tail adapter reads.
+    /// `compactor`, the compaction `policy`, and the shared `cursor` the
+    /// recent-tail adapter reads.
     pub fn new(
         store: TranscriptStore<F>,
-        pool: Arc<SharedTaskPool>,
         compactor: Arc<dyn Compactor>,
         policy: CompactionPolicy,
         cursor: SummaryCursor,
     ) -> Self {
         Self {
             store,
-            pool,
             compactor,
             policy,
             cursor,
             segments: Vec::new(),
-            parked: Arc::new(Mutex::new(None)),
-            in_flight: Arc::new(AtomicBool::new(false)),
             cached: Arc::new(Value::Array(Vec::new())),
         }
     }
 
-    /// Apply a parked summary, if one is waiting: append the segment, advance the
-    /// shared cursor past the turns it covers, and rebuild the cached snapshot.
-    /// Returns whether anything was applied.
-    fn apply_parked(&mut self) -> bool {
-        let Some(parked) = self
-            .parked
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .take()
-        else {
-            return false;
-        };
-        self.cursor.advance_to(parked.id_end);
-        self.segments.push(parked.messages);
-        let flat: Vec<Value> = self
-            .segments
-            .iter()
-            .flat_map(|segment| segment.iter().cloned())
-            .collect();
-        self.cached = Arc::new(Value::Array(flat));
-        true
-    }
-
     /// Select the next window of aged committed turns to summarize and run the
-    /// [`Compactor`] on it on the pool, when the verbatim history has outgrown the
-    /// trigger budget and nothing is already in flight or parked.
+    /// [`Compactor`] on the local runtime when the verbatim history has outgrown
+    /// the trigger budget.
     ///
     /// Pull, not push: called from [`contribute`](ContextAdapter::contribute) on
-    /// the tick thread *after* any parked result has been applied, so the cursor
-    /// is current and the same turns are never selected twice.
-    fn maybe_schedule_compaction(&mut self) {
-        if self.in_flight.load(Ordering::Acquire) {
-            return; // a job is running; its result will land first
-        }
+    /// the tick thread, so the cursor is current and the same turns are never
+    /// selected twice.
+    async fn maybe_schedule_compaction(&mut self) {
         let Some((id_end, window_messages)) = self.select_window() else {
             return;
         };
-        if self.in_flight.swap(true, Ordering::AcqRel) {
-            return; // raced with another scheduler; let the other one run
-        }
 
-        let compactor = Arc::clone(&self.compactor);
-        let parked = Arc::clone(&self.parked);
-        let in_flight = Arc::clone(&self.in_flight);
-        self.pool.submit_async(Box::new(move || {
-            Box::pin(async move {
-                match compactor.compact(&window_messages).await {
-                    Ok(messages) => {
-                        *parked.lock().unwrap_or_else(|poison| poison.into_inner()) =
-                            Some(ParkedSummary { id_end, messages });
-                    }
-                    Err(error) => tracing::warn!(%error, "conversation compaction skipped"),
-                }
-                in_flight.store(false, Ordering::Release);
-            })
-        }));
+        match self.compactor.compact(&window_messages).await {
+            Ok(messages) => {
+                self.cursor.advance_to(id_end);
+                self.segments.push(messages);
+                let flat: Vec<Value> = self
+                    .segments
+                    .iter()
+                    .flat_map(|segment| segment.iter().cloned())
+                    .collect();
+                self.cached = Arc::new(Value::Array(flat));
+            }
+            Err(error) => tracing::warn!(%error, "conversation compaction skipped"),
+        }
     }
 
     /// Pick the oldest aged turns to summarize next, or `None` when there is
@@ -259,12 +201,13 @@ impl<F: ClawFs + 'static> ContextAdapter for RollingSummaryContextAdapter<F> {
         ADAPTER_ID
     }
 
+    fn prepare<'a>(&'a mut self, _input: ContextAdapterInput<'a>) -> ContextAdapterFuture<'a> {
+        Box::pin(async move {
+            self.maybe_schedule_compaction().await;
+        })
+    }
+
     fn contribute(&mut self, _input: ContextAdapterInput<'_>, output: &mut ContextSink<'_>) {
-        // Apply any finished summary first (advances the cursor), then decide
-        // whether to start the next one. Order matters: scheduling reads the
-        // freshly advanced cursor, so a turn is never summarized twice.
-        self.apply_parked();
-        self.maybe_schedule_compaction();
         if let Some(items) = self.cached.as_array() {
             for message in items {
                 output.message(BlockKind::ConversationSummary, message);

@@ -11,7 +11,7 @@ mod shared;
 
 use core::{fmt, str::FromStr, sync::atomic::AtomicBool};
 
-use claw_interface::http::{Cancel, ClawHttp, ClawHttpAsync};
+use claw_interface::http::{blocking::ClawHttp as BlockingClawHttp, Cancel, ClawHttp};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -125,7 +125,7 @@ impl FromStr for BackendKind {
 }
 
 trait BackendImpl {
-    fn chat<H: ClawHttp>(
+    fn chat<H: BlockingClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -133,7 +133,7 @@ trait BackendImpl {
         abort: &AtomicBool,
     ) -> Result<LlmResponse, ChatError>;
 
-    fn chat_json<H: ClawHttp>(
+    fn chat_json<H: BlockingClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -143,7 +143,7 @@ trait BackendImpl {
         abort: &AtomicBool,
     ) -> Result<LlmResponse, ChatError>;
 
-    fn infer_media<H: ClawHttp>(
+    fn infer_media<H: BlockingClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -151,7 +151,7 @@ trait BackendImpl {
         abort: &AtomicBool,
     ) -> Result<String, InferMediaError>;
 
-    async fn chat_async<H: ClawHttpAsync>(
+    async fn chat_async<H: ClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -159,7 +159,7 @@ trait BackendImpl {
         cancel: Cancel<'_>,
     ) -> Result<LlmResponse, ChatError>;
 
-    async fn chat_json_async<H: ClawHttpAsync>(
+    async fn chat_json_async<H: ClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -169,7 +169,7 @@ trait BackendImpl {
         cancel: Cancel<'_>,
     ) -> Result<LlmResponse, ChatError>;
 
-    async fn infer_media_async<H: ClawHttpAsync>(
+    async fn infer_media_async<H: ClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -187,7 +187,7 @@ enum BackendInner {
 }
 
 impl Backend {
-    pub(crate) fn chat<H: ClawHttp>(
+    pub(crate) fn chat<H: BlockingClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -206,7 +206,7 @@ impl Backend {
 
     /// Structured JSON chat. OpenAI uses API `response_format` when supported;
     /// Anthropic and others use prompt fallback until API-level support lands.
-    pub(crate) fn chat_json<H: ClawHttp>(
+    pub(crate) fn chat_json<H: BlockingClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -225,7 +225,7 @@ impl Backend {
         }
     }
 
-    pub(crate) fn infer_media<H: ClawHttp>(
+    pub(crate) fn infer_media<H: BlockingClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -242,7 +242,7 @@ impl Backend {
         }
     }
 
-    pub(crate) async fn chat_async<H: ClawHttpAsync>(
+    pub(crate) async fn chat_async<H: ClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -259,7 +259,7 @@ impl Backend {
         }
     }
 
-    pub(crate) async fn chat_json_async<H: ClawHttpAsync>(
+    pub(crate) async fn chat_json_async<H: ClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -296,7 +296,7 @@ impl Backend {
         }
     }
 
-    pub(crate) async fn infer_media_async<H: ClawHttpAsync>(
+    pub(crate) async fn infer_media_async<H: ClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,

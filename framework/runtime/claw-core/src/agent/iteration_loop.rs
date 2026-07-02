@@ -13,7 +13,7 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use claw_api::{ChatError, ChatRequest, ClawApiAsync, ClawApiError, LlmResponse, RetryPolicy};
-use claw_interface::{Cancel, ClawHttpAsync, ClawTimer};
+use claw_interface::{Cancel, ClawHttp, ClawTimer};
 use claw_tool::{ApprovalNeeded, CallOutcome, ToolGate, ToolInvocation, ToolRunner, ToolSet};
 
 use claw_utils::TruncatedText;
@@ -161,12 +161,12 @@ pub struct PreemptedOutcome {
 
 /// User interrupt surface for one in-flight iteration. No message payloads here.
 ///
-/// Contract with [`claw_interface::http::ClawHttpAsync`]:
+/// Contract with [`claw_interface::http::ClawHttp`]:
 /// - Upper layer sets `interrupt_flag` to request cooperative abort.
 /// - HTTP polls the flag and returns [`claw_interface::http::HttpError::Aborted`]
 ///   without clearing it (`claw_sys` / ESP HTTP keeps the flag intact).
 /// - [`IterationLoop`] consumes the flag via `swap(false)` when ending preempted.
-pub trait InterruptionControl: Send + Sync {
+pub trait InterruptionControl {
     /// Polled at checkpoints (consume) and passed to in-flight LLM HTTP (cooperative abort).
     fn interrupt_flag(&self) -> &Arc<AtomicBool>;
 }
@@ -176,21 +176,21 @@ pub trait InterruptionControl: Send + Sync {
 /// Generic over the HTTP transport `H` so the LLM call stays statically
 /// dispatched. The loop borrows the agent's [`ClawApiAsync`] mutably for exactly one
 /// `chat` round, so it is consumed by [`run`](Self::run).
-pub struct IterationLoop<'a, H: ClawHttpAsync, Timer: ClawTimer> {
+pub struct IterationLoop<'a, H: ClawHttp, Timer: ClawTimer> {
     pub llm: &'a mut ClawApiAsync<H, Timer>,
     pub interruption: &'a dyn InterruptionControl,
     /// Retry policy applied to this iteration's LLM call (see [`RetryPolicy`]).
     pub retry: RetryPolicy,
 }
 
-impl<H: ClawHttpAsync, Timer: ClawTimer> IterationLoop<'_, H, Timer> {
+impl<H: ClawHttp, Timer: ClawTimer> IterationLoop<'_, H, Timer> {
     /// Execute exactly one iteration: LLM chat → optional tool execution.
     pub async fn run(self, step: IterationStep<'_>) -> IterationResult {
         run_one_iteration(self, step).await
     }
 }
 
-async fn run_one_iteration<H: ClawHttpAsync, Timer: ClawTimer>(
+async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
     loop_: IterationLoop<'_, H, Timer>,
     step: IterationStep<'_>,
 ) -> IterationResult {
@@ -841,11 +841,10 @@ mod behavior_tests {
 
     use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig, RetryPolicy};
     use claw_interface::http::{
-        ClawHttp, HttpError, HttpJsonRequest, HttpRequestFailure, HttpResponse, HttpStatusCode,
+        blocking::{ClawHttp as BlockingClawHttp, RealHttp},
+        HttpError, HttpJsonRequest, HttpRequestFailure, HttpResponse, HttpStatusCode,
     };
-    use claw_interface::{
-        BlockingClawHttpAsync, ClawHttpAsync, ClawTimer, ImmediateTimer, RealHttp, StdThread,
-    };
+    use claw_interface::{BlockingHttpAdapter, ClawHttp, ClawTimer, ImmediateTimer, StdThread};
     use claw_tool::{
         init_tool_executor, Tool, ToolError, ToolGroup, ToolHandler, ToolInvocation,
         ToolInvokeError, ToolOutput, ToolSet,
@@ -865,7 +864,7 @@ mod behavior_tests {
 
     const TOOL_CALL_EMPTY_NAME_BODY: &str = r#"{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"t1","function":{"name":"","arguments":"{}"}}]}}]}"#;
 
-    type TestLlm<H> = ClawApiAsync<BlockingClawHttpAsync<H>, ImmediateTimer>;
+    type TestLlm<H> = ClawApiAsync<BlockingHttpAdapter<H>, ImmediateTimer>;
 
     struct NoopWake;
 
@@ -932,7 +931,7 @@ mod behavior_tests {
         bodies: Mutex<VecDeque<String>>,
     }
 
-    impl ClawHttp for ScriptedHttp {
+    impl BlockingClawHttp for ScriptedHttp {
         fn post_json(
             &mut self,
             _request: &HttpJsonRequest,
@@ -953,7 +952,7 @@ mod behavior_tests {
 
     struct FailingHttp;
 
-    impl ClawHttp for FailingHttp {
+    impl BlockingClawHttp for FailingHttp {
         fn post_json(
             &mut self,
             _request: &HttpJsonRequest,
@@ -976,7 +975,7 @@ mod behavior_tests {
                 "gpt-test",
                 "https://example.invalid",
             ),
-            BlockingClawHttpAsync::new(http),
+            BlockingHttpAdapter::new(http),
             ImmediateTimer,
         )
         .expect("test llm init")
@@ -1026,7 +1025,7 @@ mod behavior_tests {
         }
     }
 
-    impl ClawHttp for ArmInterruptAfterResponseHttp {
+    impl BlockingClawHttp for ArmInterruptAfterResponseHttp {
         fn post_json(
             &mut self,
             _request: &HttpJsonRequest,
@@ -1052,7 +1051,7 @@ mod behavior_tests {
         interrupt: Arc<AtomicBool>,
     }
 
-    impl ClawHttp for AbortDuringHttp {
+    impl BlockingClawHttp for AbortDuringHttp {
         fn post_json(
             &mut self,
             _request: &HttpJsonRequest,
@@ -1120,7 +1119,7 @@ mod behavior_tests {
         ToolSet::from_groups([ToolGroup::new("test", [Tool::new(tool)])]).expect("tool set")
     }
 
-    fn test_llm_with_http<H: ClawHttp>(http: H) -> TestLlm<H> {
+    fn test_llm_with_http<H: BlockingClawHttp>(http: H) -> TestLlm<H> {
         ClawApiAsync::init(
             ClawApiConfig::new(
                 BackendKind::OpenAiCompatible,
@@ -1128,13 +1127,13 @@ mod behavior_tests {
                 "gpt-test",
                 "https://example.invalid",
             ),
-            BlockingClawHttpAsync::new(http),
+            BlockingHttpAdapter::new(http),
             ImmediateTimer,
         )
         .expect("test llm init")
     }
 
-    fn run_step<H: ClawHttpAsync, Timer: ClawTimer>(
+    fn run_step<H: ClawHttp, Timer: ClawTimer>(
         llm: &mut ClawApiAsync<H, Timer>,
         control: &MockControl,
         tools: Option<&ToolSet>,
@@ -1432,7 +1431,7 @@ mod behavior_tests {
                 config.timeout_ms = 60_000;
                 config
             },
-            BlockingClawHttpAsync::new(http),
+            BlockingHttpAdapter::new(http),
             ImmediateTimer,
         )
         .expect("live llm init");

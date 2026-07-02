@@ -18,7 +18,7 @@ crate-type = ["rlib"]
 # - `diskfs-pretty`: pretty-print `.json` writes via serde_json (implies diskfs).
 # - `httpmock`:     scripted / failing / never-called ClawHttp test doubles.
 # - `timermock`:    immediate/yielding ClawTimer test doubles.
-# - `realhttp`:     reqwest ClawHttp/ClawHttpAsync backends for host CLIs / live tests.
+# - `realhttp`:     reqwest ClawHttp and blocking::ClawHttp backends for host CLIs / live tests.
 # - `tokiotimer`:   tokio-backed ClawTimer for host async clients.
 memfs = []
 diskfs = []

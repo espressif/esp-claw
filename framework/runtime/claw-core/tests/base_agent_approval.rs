@@ -36,7 +36,7 @@ fn echo_tools() -> ToolSet {
 
 /// A `BaseAgentBuilder` wired with the echo tool, the ask-everything policy, and
 /// an identity — ready to `.build()`.
-fn asking_builder<H: claw_interface::http::ClawHttp>(
+fn asking_builder<H: claw_interface::http::blocking::ClawHttp>(
     llm: TestLlm<H>,
     dir: impl AsRef<str>,
 ) -> TestAgentBuilder<H> {
@@ -47,7 +47,10 @@ fn asking_builder<H: claw_interface::http::ClawHttp>(
 }
 
 /// Build an asking agent over fresh disk memory with the given scripted LLM.
-fn build_agent<H: claw_interface::http::ClawHttp>(name: &str, llm: TestLlm<H>) -> TestAgent<H> {
+fn build_agent<H: claw_interface::http::blocking::ClawHttp>(
+    name: &str,
+    llm: TestLlm<H>,
+) -> TestAgent<H> {
     let dir = common::test_output_dir(name);
     asking_builder(llm, dir.display().to_string())
         .build()

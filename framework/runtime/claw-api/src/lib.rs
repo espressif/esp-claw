@@ -44,7 +44,7 @@
 //! ```no_run
 //! use std::sync::atomic::AtomicBool;
 //! use claw_api::{BackendKind, ChatRequest, ClawApi, ClawApiConfig, RetryPolicy};
-//! use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
+//! use claw_interface::http::{blocking::ClawHttp, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
 //!
 //! // 1. Provide an HTTP transport. On device this wraps `esp_http_client`;
 //! //    here we stub a fixed OpenAI-shaped reply.
@@ -120,12 +120,10 @@ mod tests {
         ClawApiError, InitError, RetryPolicy,
     };
     use claw_interface::http::{
-        ClawHttp, HttpError, HttpJsonRequest, HttpRequestFailure, HttpResponse, HttpResponseFuture,
-        HttpStatusCode,
+        blocking::ClawHttp as BlockingClawHttp, ClawHttp, HttpError, HttpJsonRequest,
+        HttpRequestFailure, HttpResponse, HttpResponseFuture, HttpStatusCode,
     };
-    use claw_interface::{
-        Cancel, ClawHttpAsync, ClawTimer, ImmediateTimer, SleepOutcome, TimerFuture,
-    };
+    use claw_interface::{Cancel, ClawTimer, ImmediateTimer, SleepOutcome, TimerFuture};
     use core::future::Future;
     use core::sync::atomic::AtomicBool;
     use core::task::{Context, Poll};
@@ -203,7 +201,7 @@ mod tests {
     /// while keeping its own handle to assert on what was sent.
     struct Owned<T>(Arc<T>);
 
-    impl ClawHttp for Owned<MockHttp> {
+    impl BlockingClawHttp for Owned<MockHttp> {
         fn post_json(
             &mut self,
             request: &HttpJsonRequest,
@@ -218,9 +216,9 @@ mod tests {
         }
     }
 
-    impl<T> ClawHttpAsync for Owned<T>
+    impl<T> ClawHttp for Owned<T>
     where
-        Owned<T>: ClawHttp,
+        Owned<T>: BlockingClawHttp,
     {
         fn post_json<'a>(
             &'a mut self,
@@ -232,7 +230,7 @@ mod tests {
                     return Err(HttpError::Aborted);
                 }
                 let never = AtomicBool::new(false);
-                let result = ClawHttp::post_json(self, request, &never);
+                let result = BlockingClawHttp::post_json(self, request, &never);
                 if cancel.is_cancelled() {
                     return Err(HttpError::Aborted);
                 }
@@ -653,7 +651,7 @@ mod tests {
         }
     }
 
-    impl ClawHttp for Owned<FlakyHttp> {
+    impl BlockingClawHttp for Owned<FlakyHttp> {
         fn post_json(
             &mut self,
             _request: &HttpJsonRequest,

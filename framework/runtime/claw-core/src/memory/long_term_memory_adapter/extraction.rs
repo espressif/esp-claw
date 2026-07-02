@@ -32,9 +32,8 @@ pub struct ExtractedItem {
 
 /// Failure from an [`Extractor`].
 ///
-/// Extraction is best-effort and runs off the tick path: on error the adapter
-/// logs the reason and keeps the existing memory, so a displayable string is all
-/// a caller needs.
+/// Extraction is best-effort: on error the adapter logs the reason and keeps the
+/// existing memory, so a displayable string is all a caller needs.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ExtractError {
     /// The extraction backend (e.g. the LLM client) failed.
@@ -49,19 +48,16 @@ pub type ExtractFuture<'a> =
 ///
 /// `transcript` is a flattened, self-contained snapshot of the recent
 /// conversation. Returning an empty `Vec` is normal — most turns hold nothing
-/// worth remembering. Implementations must be `Send + Sync`: the call runs on a
-/// memory-pool worker, off the agent's tick path, and may block (e.g. on the
-/// network).
-pub trait Extractor: Send + Sync {
+/// worth remembering.
+pub trait Extractor {
     /// Extract durable facts from `transcript`.
     fn extract<'a>(&'a self, transcript: &'a str) -> ExtractFuture<'a>;
 }
 
 /// An [`Extractor`] that never extracts: every call yields no facts.
 ///
-/// For wiring where background extraction is undesired or irrelevant — host CLIs
-/// that keep only the transcript, and tests that need a memory adapter without an
-/// LLM.
+/// For wiring where extraction is undesired or irrelevant — host CLIs that keep
+/// only the transcript, and tests that need a memory adapter without an LLM.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoopExtractor;
 

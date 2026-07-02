@@ -24,7 +24,10 @@ fn echo_tools() -> ToolSet {
 }
 
 /// Build an agent over the given LLM with a unique on-disk transcript dir.
-fn build_agent<H: claw_interface::http::ClawHttp>(name: &str, llm: TestLlm<H>) -> TestAgent<H> {
+fn build_agent<H: claw_interface::http::blocking::ClawHttp>(
+    name: &str,
+    llm: TestLlm<H>,
+) -> TestAgent<H> {
     let dir = common::test_output_dir(name);
     agent_builder(llm, AgentId(1), dir.display().to_string())
         .build()

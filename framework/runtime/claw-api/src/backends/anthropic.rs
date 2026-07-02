@@ -11,7 +11,9 @@ use core::sync::atomic::AtomicBool;
 
 use serde_json::{json, Map, Value};
 
-use claw_interface::http::{Cancel, ClawHttp, ClawHttpAsync, HttpAuth, HttpHeader};
+use claw_interface::http::{
+    blocking::ClawHttp as BlockingClawHttp, Cancel, ClawHttp, HttpAuth, HttpHeader,
+};
 
 use super::super::errors::{ChatError, ClawApiError, InferMediaError, InitError};
 use super::super::media::prepare_asset;
@@ -403,7 +405,7 @@ impl Anthropic {
 
 impl BackendImpl for Anthropic {
     /// `anthropic_chat`
-    fn chat<H: ClawHttp>(
+    fn chat<H: BlockingClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -421,7 +423,7 @@ impl BackendImpl for Anthropic {
         Ok(parse_chat_response(&response.body)?)
     }
 
-    fn chat_json<H: ClawHttp>(
+    fn chat_json<H: BlockingClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -448,7 +450,7 @@ impl BackendImpl for Anthropic {
     }
 
     /// `anthropic_infer_media`
-    fn infer_media<H: ClawHttp>(
+    fn infer_media<H: BlockingClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -506,7 +508,7 @@ impl BackendImpl for Anthropic {
         }
     }
 
-    async fn chat_async<H: ClawHttpAsync>(
+    async fn chat_async<H: ClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -524,7 +526,7 @@ impl BackendImpl for Anthropic {
         Ok(parse_chat_response(&response.body)?)
     }
 
-    async fn chat_json_async<H: ClawHttpAsync>(
+    async fn chat_json_async<H: ClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,
@@ -550,7 +552,7 @@ impl BackendImpl for Anthropic {
         Ok(parse_chat_response(&response.body)?)
     }
 
-    async fn infer_media_async<H: ClawHttpAsync>(
+    async fn infer_media_async<H: ClawHttp>(
         &self,
         http: &mut H,
         profile: &ModelProfile,

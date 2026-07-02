@@ -9,8 +9,8 @@
 //! - [`LongTermMemory`] — the durable fact store.
 //!
 //! As a core crate it depends only on the [`claw_interface`] inbound traits — the
-//! [`ClawFs`](claw_interface::ClawFs) persistence seam — and on `claw-utils`,
-//! never on the platform boundary (`claw-sys`) or on the LLM client (`claw-api`).
+//! [`ClawFs`](claw_interface::ClawFs) persistence seam — never on the platform
+//! boundary (`claw-sys`) or on the LLM client (`claw-api`).
 //!
 //! # Compaction is *not* here
 //!

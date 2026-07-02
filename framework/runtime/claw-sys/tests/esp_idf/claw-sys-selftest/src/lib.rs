@@ -4,7 +4,7 @@
 //! The C side is a thin entrypoint: each `#[no_mangle]` function below runs a
 //! whole scenario in Rust and returns a small integer the C test asserts on.
 //! The point is to prove the Rust crate links and behaves correctly *through the
-//! C ABI* on real hardware, including the async `ClawHttpAsync` seam driven by
+//! C ABI* on real hardware, including the async `ClawHttp` seam driven by
 //! `edge-executor`'s `LocalExecutor`.
 //!
 //! The entire crate is gated on the `espidf` target so a host
@@ -19,7 +19,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use claw_interface::http::{
-    Cancel, ClawHttp, ClawHttpAsync, HttpAuth, HttpJsonRequest, HttpStatusCode,
+    blocking::ClawHttp as BlockingClawHttp, Cancel, ClawHttp, HttpAuth, HttpJsonRequest,
+    HttpStatusCode,
 };
 use claw_interface::{ClawThread, CoreAffinity, Priority};
 use claw_sys::{EspIdfHttp, EspIdfThread};
@@ -138,7 +139,7 @@ pub unsafe extern "C" fn claw_sys_selftest_sync_http_post(
     let Ok(mut http) = EspIdfHttp::new(url) else {
         return ERR_HTTP;
     };
-    match ClawHttp::post_json(&mut http, &request, &abort) {
+    match BlockingClawHttp::post_json(&mut http, &request, &abort) {
         Ok(response) => {
             write_cstr(&response.body, out, out_len);
             // c_int and i32 are the same type on xtensa-esp32s3; no cast needed.
@@ -151,7 +152,7 @@ pub unsafe extern "C" fn claw_sys_selftest_sync_http_post(
     }
 }
 
-/// Run three concurrent POSTs through the async `ClawHttpAsync` seam, driven by
+/// Run three concurrent POSTs through the async `ClawHttp` seam, driven by
 /// `edge-executor`'s `LocalExecutor`. `LocalExecutor` accepts `!Send` futures
 /// (required because `esp_http_client` handles are thread-local). Returns the
 /// number of requests that returned HTTP 200 (expect 3), or a negative error.
@@ -189,7 +190,7 @@ pub unsafe extern "C" fn claw_sys_selftest_run_three_async_http_posts(url: *cons
             let Ok(mut http) = EspIdfHttp::new(&url) else {
                 return;
             };
-            let pending = ClawHttpAsync::post_json(&mut http, &request, Cancel::new(&abort));
+            let pending = ClawHttp::post_json(&mut http, &request, Cancel::new(&abort));
             if let Ok(response) = pending.await {
                 if response.status_code == HttpStatusCode::OK {
                     sink.set(sink.get().saturating_add(1));
@@ -347,7 +348,7 @@ pub unsafe extern "C" fn claw_sys_selftest_resource_sync_http(url: *const c_char
     let Ok(mut http) = EspIdfHttp::new(url) else {
         return ERR_HTTP;
     };
-    let result = ClawHttp::post_json(&mut http, &request, &abort);
+    let result = BlockingClawHttp::post_json(&mut http, &request, &abort);
 
     let during = resource::HeapSnapshot::take();
     resource::print_snapshot("sync_http:during_response", &during);
@@ -417,7 +418,7 @@ pub unsafe extern "C" fn claw_sys_selftest_resource_async_http(url: *const c_cha
                 let Ok(mut http) = EspIdfHttp::new(&url) else {
                     return;
                 };
-                let pending = ClawHttpAsync::post_json(&mut http, &request, Cancel::new(&abort));
+                let pending = ClawHttp::post_json(&mut http, &request, Cancel::new(&abort));
                 if let Ok(response) = pending.await {
                     if response.status_code == HttpStatusCode::OK {
                         sink.set(sink.get().saturating_add(1));
@@ -495,7 +496,7 @@ pub unsafe extern "C" fn claw_sys_selftest_resource_summary(
     let Ok(mut sync_http) = EspIdfHttp::new(http_url) else {
         return ERR_HTTP;
     };
-    let sync_result = ClawHttp::post_json(&mut sync_http, &sync_req, &abort);
+    let sync_result = BlockingClawHttp::post_json(&mut sync_http, &sync_req, &abort);
     let after_sync_resp = resource::HeapSnapshot::take();
     drop(sync_result);
     let after_sync_clean = resource::HeapSnapshot::take();
@@ -533,7 +534,7 @@ pub unsafe extern "C" fn claw_sys_selftest_resource_summary(
         let Ok(mut http) = EspIdfHttp::new(&url_owned) else {
             return;
         };
-        let pending = ClawHttpAsync::post_json(&mut http, &request, Cancel::new(&abort));
+        let pending = ClawHttp::post_json(&mut http, &request, Cancel::new(&abort));
         let _ = pending.await;
         peak_ref.set(Some(resource::HeapSnapshot::take()));
     });

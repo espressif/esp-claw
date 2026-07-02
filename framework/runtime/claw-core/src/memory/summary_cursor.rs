@@ -11,16 +11,13 @@
 //!   the **verbatim tail**: the committed turns *after* this cursor, plus the open
 //!   turn.
 //!
-//! Because summarization runs asynchronously (on the shared pool), "how far the
-//! summary has advanced" is a live progress value, not something either adapter
-//! can derive independently — render against a stale boundary and a turn would
-//! fall into neither half (a gap). So the cursor is a single, explicit,
-//! shared coordination channel both adapters hold a clone of: the summary
-//! adapter writes it (monotonically), the recent adapter reads it. The transcript
-//! store itself never sees it — compaction is entirely an agent-layer,
-//! request-assembly concern.
+//! The cursor is a single, explicit coordination channel both adapters hold a
+//! clone of: the summary adapter writes it (monotonically), the recent adapter
+//! reads it. The transcript store itself never sees it — compaction is entirely
+//! an agent-layer, request-assembly concern.
 
-use std::sync::{Arc, Mutex};
+use std::cell::Cell;
+use std::rc::Rc;
 
 use claw_memory::TurnId;
 
@@ -28,9 +25,11 @@ use claw_memory::TurnId;
 /// between the summary and recent-tail adapters. `0` means nothing is summarized
 /// yet (turn ids are 1-based), so the whole transcript renders verbatim.
 ///
-/// Cheap to clone (an `Arc` bump); both adapters hold the same underlying value.
+/// Cheap to clone (an `Rc` bump); both adapters hold the same underlying value.
+/// This is intentionally local to the agent's context assembly path, not a
+/// cross-thread coordination primitive.
 #[derive(Clone, Default)]
-pub struct SummaryCursor(Arc<Mutex<u64>>);
+pub struct SummaryCursor(Rc<Cell<u64>>);
 
 impl SummaryCursor {
     /// A fresh cursor at `0` — nothing summarized yet.
@@ -43,10 +42,7 @@ impl SummaryCursor {
     /// The recent-tail adapter renders committed turns whose id is strictly
     /// greater than this.
     pub fn covered_through(&self) -> u64 {
-        *self
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.0.get()
     }
 
     /// Advance the cursor to cover through `id`, monotonically.
@@ -55,10 +51,6 @@ impl SummaryCursor {
     /// boundary backwards (which would re-expose already-summarized turns as
     /// verbatim, duplicating them against the summary).
     pub fn advance_to(&self, id: TurnId) {
-        let mut covered = self
-            .0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *covered = (*covered).max(id.0);
+        self.0.set(self.0.get().max(id.0));
     }
 }

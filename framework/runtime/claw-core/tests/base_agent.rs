@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 
 use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
 use claw_core::agent::{AgentId, BaseAgent, CancelReason, TickOutcome};
-use claw_interface::{BlockingClawHttpAsync, ImmediateTimer, RealHttp};
+use claw_interface::http::blocking::RealHttp;
+use claw_interface::{BlockingHttpAdapter, ImmediateTimer};
 use claw_tool::{Tool, ToolGroup, ToolSet};
 use serde_json::{json, Value};
 
@@ -97,7 +98,7 @@ fn live_llm() -> common::TestLlm<RealHttp> {
     config.timeout_ms = 60_000;
     ClawApiAsync::init(
         config,
-        BlockingClawHttpAsync::new(RealHttp::new()),
+        BlockingHttpAdapter::new(RealHttp::new()),
         ImmediateTimer,
     )
     .expect("live llm")

@@ -15,7 +15,7 @@ use std::sync::atomic::AtomicBool;
 use serde_json::{json, Value};
 
 use claw_api::{ChatRequest, ClawApiAsync};
-use claw_interface::{Cancel, ClawHttpAsync, ClawTimer};
+use claw_interface::{Cancel, ClawHttp, ClawTimer};
 use claw_memory::{CompactError, CompactFuture, Compactor};
 
 use super::async_llm::SharedAsyncLlm;
@@ -35,11 +35,11 @@ const SUMMARY_USER_PREFIX: &str = "Summarize the following conversation transcri
 /// rolling-summary adapter as an `Arc<dyn Compactor>`, while
 /// [`ClawApiAsync::chat`] needs `&mut self`, so calls borrow the client
 /// exclusively without holding a mutex while the future is running.
-pub struct LlmCompactor<H: ClawHttpAsync, Timer: ClawTimer> {
+pub struct LlmCompactor<H: ClawHttp, Timer: ClawTimer> {
     api: SharedAsyncLlm<H, Timer>,
 }
 
-impl<H: ClawHttpAsync, Timer: ClawTimer> LlmCompactor<H, Timer> {
+impl<H: ClawHttp, Timer: ClawTimer> LlmCompactor<H, Timer> {
     /// Build a compactor that owns the given LLM client.
     ///
     /// The `api` is its own [`ClawApiAsync`] (with its own transport `H`), wired
@@ -53,11 +53,11 @@ impl<H: ClawHttpAsync, Timer: ClawTimer> LlmCompactor<H, Timer> {
     ///
     /// use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
     /// use claw_core::LlmCompactor;
-    /// # use claw_interface::http::{BlockingClawHttpAsync, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
-    /// # use claw_interface::{Cancel, ClawHttpAsync, ImmediateTimer};
+    /// # use claw_interface::http::{BlockingHttpAdapter, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
+    /// # use claw_interface::{Cancel, ClawHttp, ImmediateTimer};
     /// # #[derive(Default)]
     /// # struct StubHttp;
-    /// # impl ClawHttpAsync for StubHttp {
+    /// # impl ClawHttp for StubHttp {
     /// #     fn post_json<'a>(&'a mut self, _: &'a HttpJsonRequest<'a>, _: Cancel<'a>) -> claw_interface::HttpResponseFuture<'a> {
     /// #         Box::pin(async {
     /// #         Ok(HttpResponse { status_code: HttpStatusCode::OK, body: "{}".into() })
@@ -87,7 +87,7 @@ impl<H: ClawHttpAsync, Timer: ClawTimer> LlmCompactor<H, Timer> {
     }
 }
 
-impl<H: ClawHttpAsync + Send, Timer: ClawTimer + Send> Compactor for LlmCompactor<H, Timer> {
+impl<H: ClawHttp, Timer: ClawTimer> Compactor for LlmCompactor<H, Timer> {
     fn compact<'a>(&'a self, window: &'a [Value]) -> CompactFuture<'a> {
         Box::pin(async move {
             let transcript = render_transcript(window);
