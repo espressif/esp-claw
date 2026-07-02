@@ -83,9 +83,6 @@ pub enum SkillError {
     /// Listing a skills root directory failed (root, cause).
     #[error("failed to scan skills root '{0}': {1}")]
     ScanFailed(String, FsError),
-    /// Two skills (across the scanned roots) declare the same id.
-    #[error("duplicate skill id: {0}")]
-    DuplicateId(SkillId),
     /// Reading a skill's `SKILL.md` failed (skill id, cause).
     #[error("failed to read skill '{0}': {1}")]
     ReadFailed(SkillId, FsError),

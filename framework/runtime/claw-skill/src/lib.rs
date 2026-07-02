@@ -2,8 +2,9 @@
 //!
 //! - [`SkillRegistry`] / [`FsSkillRegistry`] — the catalog source: scans one or
 //!   more skills directories, reads each `SKILL.md`'s front-matter for the
-//!   catalog, and reads full documents on demand. Skill ids are unique across
-//!   all roots; a collision is a hard error ([`SkillError::DuplicateId`]).
+//!   catalog, and reads full documents on demand. Roots are priority ordered:
+//!   if the same id appears in more than one root, the earlier root shadows
+//!   later copies.
 //! - Skill domain types — [`SkillId`], [`SkillMetadata`].
 //! - [`SkillSet`] / [`SkillGroup`] — the agent's loaded skills plus two
 //!   dirty-cached, borrowed prompt fragments: [`catalog`](SkillSet::catalog)

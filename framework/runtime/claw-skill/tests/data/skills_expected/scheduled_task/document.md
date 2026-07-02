@@ -6,7 +6,7 @@ Use this skill when the user asks to add a scheduled task, timer, periodic remin
 Run exactly one bundled Lua script with `lua_run_script`:
 
 ```json
-{"path":"{CUR_SKILL_DIR}/scripts/add_scheduled_task.lua","args":{},"timeout_ms":60000}
+{"path":"skills/scheduled_task/scripts/add_scheduled_task.lua","args":{},"timeout_ms":60000}
 ```
 
 If script execution returns an error, report that error directly to the user.
@@ -82,19 +82,19 @@ Do not retry with changed arguments or run another script in the same turn unles
 Send a fixed IM message every day at 17:06:
 
 ```json
-{"path":"{CUR_SKILL_DIR}/scripts/add_scheduled_task.lua","args":{"task_id":"drink_water_reminder","kind":"cron","cron_expr":"6 17 * * *","mode":"send_message","text":"该喝水了","chat_channel":"feishu","chat_id":"ou_xxx","trigger_count":0},"timeout_ms":60000}
+{"path":"skills/scheduled_task/scripts/add_scheduled_task.lua","args":{"task_id":"drink_water_reminder","kind":"cron","cron_expr":"6 17 * * *","mode":"send_message","text":"该喝水了","chat_channel":"feishu","chat_id":"ou_xxx","trigger_count":0},"timeout_ms":60000}
 ```
 
 Wake the agent every day at 17:09:
 
 ```json
-{"path":"{CUR_SKILL_DIR}/scripts/add_scheduled_task.lua","args":{"task_id":"weather_outfit_reminder","kind":"cron","cron_expr":"9 17 * * *","mode":"wake_agent","text":"查询今天的天气，然后根据天气情况告诉我应该穿什么衣服。","chat_channel":"feishu","chat_id":"ou_xxx","trigger_count":0},"timeout_ms":60000}
+{"path":"skills/scheduled_task/scripts/add_scheduled_task.lua","args":{"task_id":"weather_outfit_reminder","kind":"cron","cron_expr":"9 17 * * *","mode":"wake_agent","text":"查询今天的天气，然后根据天气情况告诉我应该穿什么衣服。","chat_channel":"feishu","chat_id":"ou_xxx","trigger_count":0},"timeout_ms":60000}
 ```
 
 Run a Lua script every 120 seconds:
 
 ```json
-{"path":"{CUR_SKILL_DIR}/scripts/add_scheduled_task.lua","args":{"task_id":"hello_world_timer","kind":"interval","interval_ms":120000,"mode":"run_script","text":"hello world timer","script_path":"/absolute/path/to/your_script.lua","script_args":{},"trigger_count":3},"timeout_ms":60000}
+{"path":"skills/scheduled_task/scripts/add_scheduled_task.lua","args":{"task_id":"hello_world_timer","kind":"interval","interval_ms":120000,"mode":"run_script","text":"hello world timer","script_path":"/absolute/path/to/your_script.lua","script_args":{},"trigger_count":3},"timeout_ms":60000}
 ```
 
 ## Behavior
@@ -129,5 +129,5 @@ After the script succeeds, summarize what was added: `task_id`, mode, schedule k
 3. Choose exactly one `mode`: `wake_agent`, `send_message`, or `run_script`.
 4. Fill the mode-specific required arguments and resolve `trigger_count`.
 5. Tell the user the execution strategy and trigger count before making changes.
-6. Run `{CUR_SKILL_DIR}/scripts/add_scheduled_task.lua` with `lua_run_script` and `timeout_ms: 60000`.
+6. Run `skills/scheduled_task/scripts/add_scheduled_task.lua` with `lua_run_script` and `timeout_ms: 60000`.
 7. Report the script result or error directly to the user, including the created scheduler and router behavior.

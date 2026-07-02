@@ -5,8 +5,11 @@
 //! (metadata) is read by parsing only each file's front-matter head; full
 //! documents are read lazily, on demand, when a skill is placed in context.
 //!
-//! Skill ids are unique across every scanned root — the same id in two roots is
-//! a hard [`SkillError::DuplicateId`], not a silent override.
+//! Roots are scanned in priority order. If the same skill id appears in more
+//! than one root, the first root wins and later copies are ignored. This keeps
+//! the runtime model aligned with the firmware layout: writable/user skills can
+//! shadow firmware-baked read-only skills without introducing a sandbox path
+//! rewrite layer.
 //!
 //! The catalog is **mutable at runtime**: [`reload`](FsSkillRegistry::reload)
 //! re-scans the roots and atomically swaps in a fresh [`CatalogSnapshot`].
@@ -20,7 +23,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
-use claw_interface::ClawFs;
+use claw_interface::{ClawFs, FsError};
 
 use super::skill::{parse_front_matter, strip_front_matter, SkillError, SkillId, SkillMetadata};
 
@@ -30,6 +33,7 @@ use super::skill::{parse_front_matter, strip_front_matter, SkillError, SkillId, 
 /// scan from reading large document bodies. A header that does not close within
 /// this window is treated as malformed.
 const METADATA_PREFIX_BYTES: u64 = 2048;
+const CUR_SKILL_DIR_PLACEHOLDER: &str = "{CUR_SKILL_DIR}";
 
 /// An immutable, point-in-time view of a registry's catalog.
 ///
@@ -173,8 +177,7 @@ impl<F: ClawFs> FsSkillRegistry<F> {
     ///
     /// # Errors
     ///
-    /// - [`SkillError::ScanFailed`] if a root directory cannot be listed.
-    /// - [`SkillError::DuplicateId`] if two skills (in any root) share an id.
+    /// - [`SkillError::ScanFailed`] if a present root directory cannot be listed.
     /// - [`SkillError::ReadFailed`] / [`SkillError::InvalidUtf8`] if a skill's
     ///   head cannot be read or decoded.
     /// - [`SkillError::MissingOpeningFence`] / [`SkillError::MissingClosingFence`]
@@ -197,17 +200,22 @@ impl<F: ClawFs> FsSkillRegistry<F> {
         let mut entries = Vec::new();
         let mut root_by_id: HashMap<SkillId, String> = HashMap::new();
         for root in roots {
-            let names = fs
-                .list_dir(root)
-                .map_err(|error| SkillError::ScanFailed(root.clone(), error))?;
+            let names = match fs.list_dir(root) {
+                Ok(names) => names,
+                // A root may legitimately be absent on some firmware layouts.
+                Err(FsError::NotFound) => continue,
+                Err(error) => return Err(SkillError::ScanFailed(root.clone(), error)),
+            };
             for name in names {
                 let id = SkillId::new(name);
+                // Earlier roots have higher priority; later same-id skills are
+                // shadowed, matching the pre-Rust claw_skill implementation.
+                if root_by_id.contains_key(&id) {
+                    continue;
+                }
                 let path = skill_document_path(root, id.as_str());
                 if !fs.exists(&path) {
                     continue;
-                }
-                if root_by_id.contains_key(&id) {
-                    return Err(SkillError::DuplicateId(id));
                 }
                 let head = read_head(fs, &id, &path)?;
                 let metadata = parse_front_matter(id.clone(), &head)?;
@@ -238,7 +246,8 @@ impl<F: ClawFs> SkillRegistry for FsSkillRegistry<F> {
         let root = snapshot
             .root_of(id)
             .ok_or_else(|| SkillError::NotFound(id.clone()))?;
-        let path = skill_document_path(root, id.as_str());
+        let skill_dir = skill_directory_path(root, id.as_str());
+        let path = format!("{skill_dir}/SKILL.md");
         let bytes = self
             .fs
             .read(&path)
@@ -246,7 +255,7 @@ impl<F: ClawFs> SkillRegistry for FsSkillRegistry<F> {
         // `from_utf8` reuses the read buffer's allocation (no extra alloc); the
         // body slice is then copied straight into the caller's buffer.
         let text = String::from_utf8(bytes).map_err(|_| SkillError::InvalidUtf8(id.clone()))?;
-        out.push_str(strip_front_matter(id, &text)?);
+        append_with_cur_skill_dir_expanded(strip_front_matter(id, &text)?, &skill_dir, out);
         Ok(())
     }
 
@@ -278,7 +287,22 @@ impl<F: ClawFs> SkillRegistry for FsSkillRegistry<F> {
 }
 
 fn skill_document_path(root: &str, id: &str) -> String {
-    format!("{}/{}/SKILL.md", root.trim_end_matches('/'), id)
+    format!("{}/SKILL.md", skill_directory_path(root, id))
+}
+
+fn skill_directory_path(root: &str, id: &str) -> String {
+    format!("{}/{}", root.trim_end_matches('/'), id)
+}
+
+fn append_with_cur_skill_dir_expanded(body: &str, skill_dir: &str, out: &mut String) {
+    let mut pieces = body.split(CUR_SKILL_DIR_PLACEHOLDER);
+    if let Some(first) = pieces.next() {
+        out.push_str(first);
+    }
+    for piece in pieces {
+        out.push_str(skill_dir);
+        out.push_str(piece);
+    }
 }
 
 /// Read just the front-matter head of a `SKILL.md`.

@@ -1,7 +1,7 @@
 //! Registry + skill-set tests over a hermetic in-memory `ClawFs` (`MemFs`).
 //!
 //! No on-disk fixtures: each test builds the exact skill tree it needs, so the
-//! decided behaviours are pinned in one place — unique ids across roots, no
+//! decided behaviours are pinned in one place — root-priority shadowing,
 //! `{CUR_SKILL_DIR}` expansion, and the two borrowed prompt fragments.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -55,27 +55,49 @@ fn scan_builds_catalog_sorted_by_id() {
 }
 
 #[test]
-fn document_strips_front_matter_and_keeps_placeholder_literal() {
+fn document_strips_front_matter_and_expands_cur_skill_dir() {
     let registry = FsSkillRegistry::scan(two_skill_fs(), "skills").unwrap();
     let document = registry.document(&SkillId::new("alpha")).unwrap();
     assert!(!document.starts_with("---"), "front-matter not stripped");
     assert!(document.contains("# Alpha"), "body missing");
-    // {CUR_SKILL_DIR} expansion was dropped: the placeholder stays verbatim.
     assert!(
-        document.contains("{CUR_SKILL_DIR}/scripts/a.lua"),
-        "placeholder must be left untouched"
+        document.contains("skills/alpha/scripts/a.lua"),
+        "placeholder must expand to the skill directory"
+    );
+    assert!(
+        !document.contains("{CUR_SKILL_DIR}"),
+        "placeholder must not be left in loaded documents"
     );
 }
 
 #[test]
-fn duplicate_id_across_roots_is_an_error() {
+fn earlier_root_shadows_later_duplicate_id() {
     let fs = MemFs::new();
-    fs.write_atomic("system/shared/SKILL.md", &skill_md("from system", "# S"))
+    fs.write_atomic("data/shared/SKILL.md", &skill_md("from data", "# Data"))
         .unwrap();
-    fs.write_atomic("data/shared/SKILL.md", &skill_md("from data", "# S"))
-        .unwrap();
-    let result = FsSkillRegistry::scan_roots(fs, ["system", "data"]);
-    assert!(matches!(result, Err(SkillError::DuplicateId(id)) if id.as_str() == "shared"));
+    fs.write_atomic(
+        "system/shared/SKILL.md",
+        &skill_md("from system", "# System"),
+    )
+    .unwrap();
+    let registry = FsSkillRegistry::scan_roots(fs, ["data", "system"]).unwrap();
+    assert_eq!(
+        registry
+            .metadata(&SkillId::new("shared"))
+            .unwrap()
+            .description(),
+        "from data"
+    );
+    assert!(registry
+        .document(&SkillId::new("shared"))
+        .unwrap()
+        .contains("# Data"));
+}
+
+#[test]
+fn missing_roots_are_skipped() {
+    let registry = FsSkillRegistry::scan_roots(two_skill_fs(), ["missing", "skills"]).unwrap();
+    assert_eq!(registry.catalog().entries().len(), 2);
 }
 
 #[test]

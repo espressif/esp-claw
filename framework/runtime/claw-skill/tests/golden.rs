@@ -5,9 +5,8 @@
 //!   `tests/data/skills_expected/<id>/document.md`
 //!
 //! The registry is scanned over a `DiskFs` rooted at `tests/data` with the
-//! virtual root `skills`. Document bodies are returned verbatim (front-matter
-//! stripped) — there is no `{CUR_SKILL_DIR}` expansion, so any such placeholder
-//! is preserved literally in the golden.
+//! virtual root `skills`. Document bodies are returned with front-matter
+//! stripped and `{CUR_SKILL_DIR}` expanded to the current skill directory.
 //!
 //! The whole skills folder is discovered dynamically (nothing is hard-coded per
 //! skill), so dropping a new skill into `tests/data/skills/` and regenerating the

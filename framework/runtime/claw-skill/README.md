@@ -41,13 +41,18 @@ Re-exported from the crate root:
 | `FsSkillRegistry` | `SkillRegistry` backed by one or more `ClawFs` skills roots: `scan()`, `scan_roots()`, `reload()` (re-scans and atomically swaps in a fresh snapshot, on `&self`). |
 | `SkillSet` | An agent's loaded skills + two dirty-cached, borrowed prompt fragments: `catalog()` (the available-skills menu) and `context()` (the loaded bodies). Mutable at runtime: `load()`, `load_group()`, `unload()`. |
 | `SkillGroup` | A named bundle of skill ids to load together. The name tags provenance in the assembled context. |
-| `SkillError` | Failure enum: `ScanFailed`, `DuplicateId`, `ReadFailed`, `InvalidUtf8`, `MissingOpeningFence`, `MissingClosingFence`, `InvalidJson`, `NotFound`. |
+| `SkillError` | Failure enum: `ScanFailed`, `ReadFailed`, `InvalidUtf8`, `MissingOpeningFence`, `MissingClosingFence`, `InvalidJson`, `NotFound`. |
 
 ### Design notes
 
-- **Ids are unique across all roots.** Scanning multiple roots merges their
-  catalogs; the same id in two roots is a hard `SkillError::DuplicateId`, not a
-  silent override.
+- **Roots are priority ordered.** Scanning multiple roots merges their catalogs;
+  if the same id appears in more than one root, the earlier root wins and later
+  copies are ignored. Pass the writable DATA skills root before read-only SYSTEM
+  skills when user-installed skills should shadow firmware-baked ones.
+- **Skill-local paths are resolved when loaded.** `{CUR_SKILL_DIR}` in the
+  markdown body expands to the concrete directory for that skill, for example
+  `/system/skills/light_switch` or `<DATA>/skills/light_switch`. There is no
+  separate data-root placeholder expansion in this crate.
 - **Allocation-frugal context.** `SkillRegistry::write_document` appends a
   body straight into a caller-owned buffer, and `SkillSet` reuses one buffer
   across rebuilds — no `String` per document per rebuild.
