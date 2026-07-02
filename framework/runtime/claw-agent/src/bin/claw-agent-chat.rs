@@ -1,6 +1,6 @@
 //! `claw-agent-chat` — a minimal REPL that drives the whole agent system through
-//! the public [`claw_agent`] API: build an [`AgentSystem`], open a [`Chat`], and
-//! print each turn's replies.
+//! the public [`claw_agent`] API: build an [`AgentSystem`], create a session,
+//! and print each turn's replies.
 //!
 //! LLM config is read from `claw-core/.env.local` (the same file the integration
 //! tests use): `CLAW_LLM_API_KEY`, `CLAW_LLM_BASE_URL`, `CLAW_LLM_MODEL`. Memory
@@ -10,8 +10,6 @@
 //! cargo run -p claw-agent --bin claw-agent-chat --target x86_64-unknown-linux-gnu
 //! ```
 //!
-//! [`Chat`]: claw_agent::Chat
-
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 
@@ -32,9 +30,9 @@ async fn run() -> Result<()> {
     load_env();
 
     let system = AgentSystem::on_disk(llm_config()?, MEMORY_DIR)?;
-    let chat = system.chat();
+    let session = system.new_session();
 
-    eprintln!("Session: {}", chat.session().to_wire());
+    eprintln!("Session: {}", session.to_wire());
     eprintln!("Memory:  {MEMORY_DIR}");
     eprintln!("Type your message and press Enter. Empty line or Ctrl-D to quit.\n");
 
@@ -52,7 +50,7 @@ async fn run() -> Result<()> {
             break;
         }
 
-        let replies = chat.send(input).await;
+        let replies = system.send(session, input).await?;
         if replies.is_empty() {
             println!("\n(no reply)\n");
         }

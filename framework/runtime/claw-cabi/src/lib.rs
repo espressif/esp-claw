@@ -40,11 +40,13 @@ use claw_agent::{
     init_tool_executor, AgentSystem, BackendKind, ClawApiConfig, PoolConfig, SessionId,
     SharedTaskPool,
 };
-use claw_agent::{CapabilityError, ChannelIngressSink, InboundMessage, Registry};
+use claw_agent::{
+    CapabilityError, ChannelIngressSink, DeliverError, InboundMessage, Registry, SessionError,
+};
 #[cfg(target_os = "espidf")]
 use claw_interface::{ClawThread, CoreAffinity, Priority, WorkerHandle};
 #[cfg(target_os = "espidf")]
-use claw_sys::{EspIdfFs, EspIdfHttpOneShot, EspIdfThread, EspIdfTimer};
+use claw_sys::{EspIdfFs, EspIdfHttp, EspIdfThread, EspIdfTimer};
 #[cfg(target_os = "espidf")]
 use claw_utils::{async_channel, AsyncReceiver, AsyncSender};
 #[cfg(target_os = "espidf")]
@@ -83,6 +85,8 @@ fn block_on<F: Future>(future: F) -> F::Output {
 
 #[cfg(target_os = "espidf")]
 const AGENT_WORKER_STACK_SIZE: usize = 64 * 1024;
+#[cfg(target_os = "espidf")]
+const SESSION_ID_BUFFER_MIN_CAPACITY: usize = 32;
 
 #[cfg(target_os = "espidf")]
 struct RuntimeSendReply {
@@ -93,8 +97,15 @@ struct RuntimeSendReply {
 #[cfg(target_os = "espidf")]
 enum RuntimeCommand {
     Inbound(InboundMessage),
+    SessionCreate {
+        reply: mpsc::Sender<Result<SessionId, CapabilityError>>,
+    },
+    SessionDelete {
+        session: SessionId,
+        reply: mpsc::Sender<Result<(), CapabilityError>>,
+    },
     Send {
-        requested_session: Option<String>,
+        session: SessionId,
         text: String,
         reply: mpsc::Sender<Result<RuntimeSendReply, CapabilityError>>,
     },
@@ -219,28 +230,27 @@ async fn agent_worker_loop(
     system: AgentSystem,
     receiver: AsyncReceiver<RuntimeCommand>,
 ) -> AgentSystem {
-    let mut default_session: Option<SessionId> = None;
     while let Some(command) = receiver.recv().await {
         match command {
             RuntimeCommand::Inbound(message) => {
-                system.ingress().push_user_message(message).await;
+                let _ = system.ingress().push_user_message(message).await;
+            }
+            RuntimeCommand::SessionCreate { reply } => {
+                let _ = reply.send(Ok(system.new_session()));
+            }
+            RuntimeCommand::SessionDelete { session, reply } => {
+                let _ = reply.send(system.delete_session(session).map_err(map_session_error));
             }
             RuntimeCommand::Send {
-                requested_session,
+                session,
                 text,
                 reply,
             } => {
-                let result = match resolve_worker_session(
-                    &system,
-                    &mut default_session,
-                    requested_session,
-                ) {
-                    Ok(session) => Ok(RuntimeSendReply {
-                        session,
-                        replies: system.send(session, text).await,
-                    }),
-                    Err(error) => Err(error),
-                };
+                let result = system
+                    .send(session, text)
+                    .await
+                    .map(|replies| RuntimeSendReply { session, replies })
+                    .map_err(map_deliver_error);
                 let _ = reply.send(result);
             }
             RuntimeCommand::Shutdown => break,
@@ -249,26 +259,24 @@ async fn agent_worker_loop(
     system
 }
 
-#[cfg(target_os = "espidf")]
-fn resolve_worker_session(
-    system: &AgentSystem,
-    default_session: &mut Option<SessionId>,
-    requested: Option<String>,
-) -> Result<SessionId, CapabilityError> {
-    if matches!(requested.as_deref(), None | Some("default")) {
-        let session = match *default_session {
-            Some(session) => session,
-            None => {
-                let session = system.new_session();
-                *default_session = Some(session);
-                session
-            }
-        };
-        return Ok(session);
+fn map_session_error(error: SessionError) -> CapabilityError {
+    match error {
+        SessionError::NotFound(_) => CapabilityError::NotFound,
+        SessionError::AlreadyExists(_) => CapabilityError::AlreadyExists,
     }
+}
 
-    let session_id = requested.ok_or(CapabilityError::InvalidArg)?;
-    SessionId::from_wire(&session_id).map_err(|error| CapabilityError::Failed(error.to_string()))
+fn map_deliver_error(error: DeliverError) -> CapabilityError {
+    match error {
+        DeliverError::MissingSessionId | DeliverError::InvalidSessionId(_) => {
+            CapabilityError::InvalidArg
+        }
+        DeliverError::SessionNotFound(_) => CapabilityError::NotFound,
+        DeliverError::NoReplyRoute(_) | DeliverError::Channel(_) => {
+            CapabilityError::Failed(error.to_string())
+        }
+        DeliverError::Session(error) => map_session_error(error),
+    }
 }
 
 /// Opaque agent runtime handle.
@@ -441,7 +449,7 @@ unsafe fn agent_system_create_inner(
             .map_err(|error| CapabilityError::Failed(error.to_string()))?,
     );
 
-    let mut builder = AgentSystem::builder::<EspIdfFs, EspIdfHttpOneShot, EspIdfTimer>()
+    let mut builder = AgentSystem::builder::<EspIdfFs, EspIdfHttp, EspIdfTimer>()
         .llm(llm)
         .memory_dir(memory_dir)
         .task_pool(pool)
@@ -582,11 +590,103 @@ fn store_agent_system(
 }
 
 #[cfg(target_os = "espidf")]
+/// Create a fresh conversation session and copy its wire id into
+/// `session_id_buffer`.
+///
+/// # Safety
+/// `system` must be a live system handle. `session_id_buffer` must be writable
+/// for `session_id_capacity` bytes, and `session_id_length` must be a valid
+/// out-pointer.
+#[no_mangle]
+pub unsafe extern "C" fn claw_agent_system_session_create(
+    system: *mut ClawAgentSystem,
+    session_id_buffer: *mut c_char,
+    session_id_capacity: usize,
+    session_id_length: *mut usize,
+) -> ClawCapabilityResult {
+    guard(|| {
+        from_result(unsafe {
+            agent_system_session_create_inner(
+                system,
+                session_id_buffer,
+                session_id_capacity,
+                session_id_length,
+            )
+        })
+    })
+}
+
+#[cfg(target_os = "espidf")]
+unsafe fn agent_system_session_create_inner(
+    system: *mut ClawAgentSystem,
+    session_id_buffer: *mut c_char,
+    session_id_capacity: usize,
+    session_id_length: *mut usize,
+) -> Result<(), CapabilityError> {
+    let handle = system.as_ref().ok_or(CapabilityError::InvalidArg)?;
+    validate_session_id_output_buffer(session_id_buffer, session_id_capacity, session_id_length)?;
+    let (reply_tx, reply_rx) = mpsc::channel();
+    {
+        let runtime = handle
+            .runtime
+            .lock()
+            .map_err(|_| CapabilityError::Failed("agent runtime lock poisoned".to_string()))?;
+        runtime.send_command(RuntimeCommand::SessionCreate { reply: reply_tx })?;
+    }
+    let session = reply_rx.recv().map_err(|_| {
+        CapabilityError::Failed("agent runtime stopped before creating session".to_string())
+    })??;
+    copy_string_to_c_buffer(
+        &session.to_wire(),
+        session_id_buffer,
+        session_id_capacity,
+        session_id_length,
+    )
+}
+
+#[cfg(target_os = "espidf")]
+/// Delete a conversation session and drop its live agent graph.
+///
+/// # Safety
+/// `system` must be a live system handle. `session_id` must be a valid
+/// NUL-terminated UTF-8 `session-N` string.
+#[no_mangle]
+pub unsafe extern "C" fn claw_agent_system_session_delete(
+    system: *mut ClawAgentSystem,
+    session_id: *const c_char,
+) -> ClawCapabilityResult {
+    guard(|| from_result(unsafe { agent_system_session_delete_inner(system, session_id) }))
+}
+
+#[cfg(target_os = "espidf")]
+unsafe fn agent_system_session_delete_inner(
+    system: *mut ClawAgentSystem,
+    session_id: *const c_char,
+) -> Result<(), CapabilityError> {
+    let handle = system.as_ref().ok_or(CapabilityError::InvalidArg)?;
+    let session = required_session_id(session_id)?;
+    let (reply_tx, reply_rx) = mpsc::channel();
+    {
+        let runtime = handle
+            .runtime
+            .lock()
+            .map_err(|_| CapabilityError::Failed("agent runtime lock poisoned".to_string()))?;
+        runtime.send_command(RuntimeCommand::SessionDelete {
+            session,
+            reply: reply_tx,
+        })?;
+    }
+    reply_rx.recv().map_err(|_| {
+        CapabilityError::Failed("agent runtime stopped before deleting session".to_string())
+    })?
+}
+
+#[cfg(target_os = "espidf")]
 /// Send one text prompt synchronously through the Rust agent runtime.
 ///
-/// `session_id` may be null, empty, or `"default"` to use an ABI-owned default
-/// session. When `session_id_buffer` is provided, the actual session id is
-/// copied back as `session-N`.
+/// `session_id` must name an existing `session-N` created through
+/// [`claw_agent_system_session_create`]. No default session is created
+/// implicitly.
 ///
 /// # Safety
 /// `system` must be a live system handle. String pointers must be valid
@@ -636,7 +736,7 @@ unsafe fn agent_system_send_inner(
 ) -> Result<(), CapabilityError> {
     let handle = system.as_ref().ok_or(CapabilityError::InvalidArg)?;
     let text = required_string(text)?;
-    let requested_session = optional_string(session_id)?;
+    let session = required_session_id(session_id)?;
     let (reply_tx, reply_rx) = mpsc::channel();
     {
         let runtime = handle
@@ -644,7 +744,7 @@ unsafe fn agent_system_send_inner(
             .lock()
             .map_err(|_| CapabilityError::Failed("agent runtime lock poisoned".to_string()))?;
         runtime.send_command(RuntimeCommand::Send {
-            requested_session,
+            session,
             text,
             reply: reply_tx,
         })?;
@@ -730,6 +830,36 @@ unsafe fn optional_string(pointer: *const c_char) -> Result<Option<String>, Capa
     } else {
         Ok(Some(value))
     }
+}
+
+/// Copy and parse a required session id.
+///
+/// # Safety
+/// `pointer` must be a valid NUL-terminated UTF-8 `session-N` string.
+#[cfg(target_os = "espidf")]
+unsafe fn required_session_id(pointer: *const c_char) -> Result<SessionId, CapabilityError> {
+    let value = required_string(pointer)?;
+    if value == "default" {
+        return Err(CapabilityError::InvalidArg);
+    }
+    SessionId::from_wire(&value).map_err(|_| CapabilityError::InvalidArg)
+}
+
+#[cfg(target_os = "espidf")]
+fn validate_session_id_output_buffer(
+    buffer: *mut c_char,
+    capacity: usize,
+    output_length: *mut usize,
+) -> Result<(), CapabilityError> {
+    if buffer.is_null() || output_length.is_null() {
+        return Err(CapabilityError::InvalidArg);
+    }
+    if capacity < SESSION_ID_BUFFER_MIN_CAPACITY {
+        return Err(CapabilityError::Failed(
+            "session id buffer too small".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Copy a Rust string into a writable C buffer and NUL-terminate it.
@@ -838,8 +968,7 @@ unsafe fn ingress_push_inner(
     let inbound: InboundMessage = unsafe { build_inbound(descriptor)? };
     match &handle.target {
         IngressTarget::Direct(sink) => {
-            block_on(sink.push_user_message(inbound));
-            Ok(())
+            block_on(sink.push_user_message(inbound)).map_err(map_deliver_error)
         }
         #[cfg(target_os = "espidf")]
         IngressTarget::Runtime(runtime) => {
@@ -1037,10 +1166,10 @@ mod tests {
     impl ChannelIngressSink for RecordingSink {
         fn push_user_message(&self, message: InboundMessage) -> claw_agent::IngressFuture<'_> {
             self.messages.lock().unwrap().push(message);
-            Box::pin(async {})
+            Box::pin(async { Ok(()) })
         }
         fn push_command(&self, _command: InboundCommand) -> claw_agent::IngressFuture<'_> {
-            Box::pin(async {})
+            Box::pin(async { Ok(()) })
         }
     }
 

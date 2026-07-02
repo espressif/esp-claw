@@ -3,15 +3,16 @@ name = "claw-agent"
 authors = ["Finn(Ziheng) Sheng"]
 version = "0.1.0"
 edition = "2021"
-description = "Concise agent API over the orchestrator: build an agent system, open a chat, send a message, get replies"
+description = "Concise agent API over the orchestrator: build an agent system, create a session, send messages, get replies"
 
 [lib]
 name = "claw_agent"
 path = "src/lib.rs"
 
 # A minimal REPL that drives the whole agent system through the public API
-# (`AgentSystem` -> `Chat::send`) against a live LLM with on-disk memory. It uses
-# the dev backends (`AgentSystem::on_disk`), so it is gated on the `dev` feature.
+# (`AgentSystem::new_session` -> `AgentSystem::send`) against a live LLM with
+# on-disk memory. It uses the dev backends (`AgentSystem::on_disk`), so it is
+# gated on the `dev` feature.
 [[bin]]
 name = "claw-agent-chat"
 path = "src/bin/claw-agent-chat.rs"

@@ -5,10 +5,11 @@
 //! it and delivers into orchestrator callbacks on push.
 
 use super::message::{InboundCommand, InboundMessage};
+use crate::session::DeliverError;
 use core::future::Future;
 use core::pin::Pin;
 
-pub type IngressFuture<'a> = Pin<Box<dyn Future<Output = ()> + 'a>>;
+pub type IngressFuture<'a> = Pin<Box<dyn Future<Output = Result<(), DeliverError>> + 'a>>;
 
 /// Producer side: adapters push inbound work here.
 pub trait ChannelIngressSink: Send + Sync {

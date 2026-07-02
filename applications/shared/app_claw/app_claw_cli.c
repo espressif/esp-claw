@@ -7,6 +7,7 @@
 #include "app_claw.h"
 
 #include <inttypes.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -38,7 +39,7 @@
 
 static const char *TAG = "app_claw_cli";
 
-static char s_current_session_id[64] = "default";
+static char s_current_session_id[64] = {0};
 
 static char *join_prompt_args(int argc, char **argv)
 {
@@ -103,8 +104,6 @@ static int submit_and_print(const char *prompt, const char *session_id)
     claw_agent_system_t *system = app_claw_get_agent_system();
     char *output = NULL;
     size_t output_length = 0;
-    char session_id_buffer[64] = {0};
-    size_t session_id_length = 0;
     claw_capability_result_t result;
 
     if (!system) {
@@ -128,21 +127,79 @@ static int submit_and_print(const char *prompt, const char *session_id)
                                     output,
                                     CLAW_CAPABILITY_TOOL_OUTPUT_CAPACITY,
                                     &output_length,
-                                    session_id_buffer,
-                                    sizeof(session_id_buffer),
-                                    &session_id_length);
+                                    NULL,
+                                    0,
+                                    NULL);
     if (!claw_capability_is_ok(result)) {
         printf("agent send failed: %s\n", result.message ? result.message : "unknown error");
         free(output);
         return 1;
     }
 
-    if (session_id_buffer[0]) {
-        strlcpy(s_current_session_id, session_id_buffer, sizeof(s_current_session_id));
-    }
-
     printf("%s\n", output);
     free(output);
+    return 0;
+}
+
+static int create_session(char *session_id, size_t session_id_size)
+{
+    claw_agent_system_t *system = app_claw_get_agent_system();
+    size_t session_id_length = 0;
+    claw_capability_result_t result;
+
+    if (!system) {
+        printf("AgentSystem is not configured\n");
+        return 1;
+    }
+    if (!session_id || session_id_size == 0) {
+        printf("missing session buffer\n");
+        return 1;
+    }
+
+    result = claw_agent_system_session_create(system,
+                                              session_id,
+                                              session_id_size,
+                                              &session_id_length);
+    if (!claw_capability_is_ok(result)) {
+        printf("session create failed: %s\n", result.message ? result.message : "unknown error");
+        return 1;
+    }
+
+    return 0;
+}
+
+static int ensure_current_session(void)
+{
+    if (s_current_session_id[0]) {
+        return 0;
+    }
+    if (create_session(s_current_session_id, sizeof(s_current_session_id)) != 0) {
+        return 1;
+    }
+    printf("Created session: %s\n", s_current_session_id);
+    return 0;
+}
+
+static int delete_session(const char *session_id)
+{
+    claw_agent_system_t *system = app_claw_get_agent_system();
+    claw_capability_result_t result;
+
+    if (!system) {
+        printf("AgentSystem is not configured\n");
+        return 1;
+    }
+    if (!session_id || !session_id[0]) {
+        printf("session id cannot be empty\n");
+        return 1;
+    }
+
+    result = claw_agent_system_session_delete(system, session_id);
+    if (!claw_capability_is_ok(result)) {
+        printf("session delete failed: %s\n", result.message ? result.message : "unknown error");
+        return 1;
+    }
+
     return 0;
 }
 
@@ -161,6 +218,11 @@ static int cmd_ask(int argc, char **argv)
         return 1;
     }
 
+    if (ensure_current_session() != 0) {
+        free(prompt);
+        return 1;
+    }
+
     argc = submit_and_print(prompt, s_current_session_id);
     free(prompt);
     return argc;
@@ -168,25 +230,69 @@ static int cmd_ask(int argc, char **argv)
 
 static int cmd_ask_once(int argc, char **argv)
 {
-    (void)argv;
+    char session_id[64] = {0};
+    char *prompt = NULL;
+    int result;
+
     if (argc < 2) {
         printf("Usage: ask_once <prompt>\n");
         return 1;
     }
 
-    printf("ask_once is not available until claw-cabi exposes explicit session create/delete\n");
-    return 1;
+    prompt = join_prompt_args(argc, argv);
+    if (!prompt) {
+        printf("Out of memory\n");
+        return 1;
+    }
+
+    if (create_session(session_id, sizeof(session_id)) != 0) {
+        free(prompt);
+        return 1;
+    }
+
+    result = submit_and_print(prompt, session_id);
+    if (delete_session(session_id) != 0) {
+        result = 1;
+    }
+
+    free(prompt);
+    return result;
 }
 
 static int cmd_session(int argc, char **argv)
 {
     if (argc == 1) {
-        printf("Current session: %s\n", s_current_session_id);
+        printf("Current session: %s\n", s_current_session_id[0] ? s_current_session_id : "(none)");
+        return 0;
+    }
+
+    if (argc == 2 && strcmp(argv[1], "new") == 0) {
+        if (create_session(s_current_session_id, sizeof(s_current_session_id)) != 0) {
+            return 1;
+        }
+        printf("Created session: %s\n", s_current_session_id);
+        return 0;
+    }
+
+    if ((argc == 2 || argc == 3) && strcmp(argv[1], "delete") == 0) {
+        const char *session_id = argc == 3 ? argv[2] : s_current_session_id;
+        char deleted_id[64] = {0};
+        bool deleting_current;
+
+        strlcpy(deleted_id, session_id ? session_id : "", sizeof(deleted_id));
+        if (delete_session(session_id) != 0) {
+            return 1;
+        }
+        deleting_current = strcmp(deleted_id, s_current_session_id) == 0;
+        if (deleting_current) {
+            s_current_session_id[0] = '\0';
+        }
+        printf("Deleted session: %s\n", deleted_id);
         return 0;
     }
 
     if (argc != 2) {
-        printf("Usage: session [id]\n");
+        printf("Usage: session [id|new|delete [id]]\n");
         return 1;
     }
 
@@ -622,7 +728,7 @@ esp_err_t app_claw_cli_start(void)
     {
         esp_console_cmd_t ask_once_cmd = {
             .command = "ask_once",
-            .help = "Submit a single-turn prompt without session history: ask_once <prompt>",
+            .help = "Submit a single-turn prompt in a temporary session: ask_once <prompt>",
             .func = cmd_ask_once,
         };
         ESP_ERROR_CHECK(esp_console_cmd_register(&ask_once_cmd));
@@ -631,7 +737,7 @@ esp_err_t app_claw_cli_start(void)
     {
         esp_console_cmd_t session_cmd = {
             .command = "session",
-            .help = "Show or switch the current session: session [id]",
+            .help = "Show, switch, create, or delete sessions: session [id|new|delete [id]]",
             .func = cmd_session,
         };
         ESP_ERROR_CHECK(esp_console_cmd_register(&session_cmd));

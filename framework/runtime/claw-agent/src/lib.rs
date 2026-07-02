@@ -6,11 +6,10 @@
 //! - [`AgentSystem`] is a ready-to-drive agent runtime. Build it with the
 //!   host-friendly [`AgentSystem::on_disk`] (real disk memory + live HTTP) or the
 //!   fully injectable [`AgentSystem::builder`] (for tests / custom backends).
-//! - [`Chat`] is a single conversation: [`Chat::send`] hands the model a message
-//!   and returns its reply text(s). A [`Chat`] owns its own session, so several
-//!   chats on one [`AgentSystem`] stay isolated.
+//! - Sessions are explicit: create one with [`AgentSystem::new_session`], then
+//!   pass that [`SessionId`] to [`AgentSystem::send`].
 //!
-//! Internally a message goes: [`Chat::send`] -> [`AgentSystem`] ingress ->
+//! Internally a message goes: [`AgentSystem::send`] -> [`AgentSystem`] ingress ->
 //! `claw_core::Orchestrator` (drives the per-session agent graph) -> egress ->
 //! reply text returned to the caller.
 //!
@@ -20,7 +19,7 @@
 //! use claw_agent::{AgentSystem, BackendKind, ClawApiConfig};
 //!
 //! # #[tokio::main]
-//! # async fn main() -> Result<(), claw_agent::AgentError> {
+//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let llm = ClawApiConfig::new(
 //!     BackendKind::OpenAiCompatible,
 //!     "sk-...",
@@ -29,8 +28,8 @@
 //! );
 //!
 //! let system = AgentSystem::on_disk(llm, "/tmp/claw-mem")?;
-//! let chat = system.chat();
-//! for reply in chat.send("hello").await {
+//! let session = system.new_session();
+//! for reply in system.send(session, "hello").await? {
 //!     println!("{reply}");
 //! }
 //! # Ok(())
@@ -63,7 +62,8 @@ pub use claw_capability::{
 };
 pub use claw_core::agent::{AgentResolver, MapAgentResolver};
 pub use claw_core::{
-    ChannelIngressSink, ChannelTransport, InboundCommand, InboundMessage, IngressFuture, SessionId,
+    ChannelIngressSink, ChannelTransport, DeliverError, InboundCommand, InboundMessage,
+    IngressFuture, SessionError, SessionId, SessionRecord,
 };
 pub use claw_interface::ClawFs;
 pub use claw_tool::{
@@ -113,9 +113,8 @@ pub enum AgentError {
 /// A ready-to-drive agent runtime.
 ///
 /// Wraps a `claw_core::Orchestrator` plus the egress transport replies come back
-/// on. Open a [`Chat`] with [`chat`](AgentSystem::chat) (one session) or drive
-/// raw sessions with [`new_session`](AgentSystem::new_session) +
-/// [`send`](AgentSystem::send).
+/// on. Create sessions explicitly with [`new_session`](AgentSystem::new_session)
+/// and drive them with [`send`](AgentSystem::send).
 pub struct AgentSystem {
     orchestrator: Arc<Orchestrator>,
     /// Records outbound replies; drained after each `send`.
@@ -210,13 +209,18 @@ impl AgentSystem {
         self.orchestrator.session_create()
     }
 
-    /// Open a new [`Chat`] (its own session) on this system.
-    pub fn chat(&self) -> Chat<'_> {
-        let session = self.new_session();
-        Chat {
-            system: self,
-            session,
-        }
+    /// Return the live conversation sessions.
+    pub fn list_sessions(&self) -> Vec<SessionRecord> {
+        self.orchestrator.session_list()
+    }
+
+    /// Delete a conversation session and drop its live agent graph.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError::NotFound`] when `session` is not live.
+    pub fn delete_session(&self, session: SessionId) -> Result<(), SessionError> {
+        self.orchestrator.session_delete(session)
     }
 
     /// Deliver `text` to `session` and return the reply text(s) the agent
@@ -225,7 +229,16 @@ impl AgentSystem {
     /// By the time this future resolves every reply (and any surfaced approval
     /// prompt) for this turn has been routed and is collected here. Pending
     /// approvals appear as reply text tagged `[approval needed ...]`.
-    pub async fn send(&self, session: SessionId, text: impl Into<String>) -> Vec<String> {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DeliverError`] when `claw_core` rejects the inbound message,
+    /// including when `session` is not live.
+    pub async fn send(
+        &self,
+        session: SessionId,
+        text: impl Into<String>,
+    ) -> Result<Vec<String>, DeliverError> {
         let id = {
             let mut next = self
                 .next_message_id
@@ -244,33 +257,13 @@ impl AgentSystem {
                 session_id: session.to_wire(),
                 text: text.into(),
             })
-            .await;
-        self.transport
+            .await?;
+        Ok(self
+            .transport
             .drain_sent()
             .into_iter()
             .map(|message| message.text)
-            .collect()
-    }
-}
-
-/// A single conversation bound to one session of an [`AgentSystem`].
-///
-/// Borrows the system so several chats can run against it without giving up
-/// ownership; each chat keeps its own [`SessionId`].
-pub struct Chat<'system> {
-    system: &'system AgentSystem,
-    session: SessionId,
-}
-
-impl Chat<'_> {
-    /// This chat's underlying session id.
-    pub fn session(&self) -> SessionId {
-        self.session
-    }
-
-    /// Send a message and return the agent's reply text(s) for this turn.
-    pub async fn send(&self, text: impl Into<String>) -> Vec<String> {
-        self.system.send(self.session, text).await
+            .collect())
     }
 }
 
@@ -357,7 +350,7 @@ where
     /// channels is registered as an outbound transport. Channels then exchange
     /// messages with the built system through
     /// [`AgentSystem::ingress`] (inbound) and their own
-    /// [`ChannelAdapter`](claw_capability::ChannelAdapter) (outbound).
+    /// [`ChannelAdapter`] (outbound).
     pub fn capabilities(mut self, registry: Arc<Registry>) -> Self {
         self.capabilities = Some(registry);
         self

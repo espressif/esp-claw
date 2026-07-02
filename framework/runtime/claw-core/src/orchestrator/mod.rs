@@ -16,7 +16,8 @@ use crate::channels::{
     ChannelEgress, ChannelIngressSink, Command, InboundCommand, InboundMessage, IngressFuture,
 };
 use crate::session::{
-    DeliverError, SessionError, SessionId, SessionMessage, SessionOut, SessionRoutes, SessionStore,
+    DeliverError, SessionError, SessionId, SessionMessage, SessionOut, SessionRecord,
+    SessionRoutes, SessionStore,
 };
 
 use self::instance::{DriveOutput, OrchestratorInstance};
@@ -183,6 +184,12 @@ impl Orchestrator {
         self.sessions.create().id
     }
 
+    pub fn session_list(&self) -> Vec<SessionRecord> {
+        let mut sessions = self.sessions.list();
+        sessions.sort_by_key(|record| record.id.0);
+        sessions
+    }
+
     pub fn session_delete(&self, session_id: SessionId) -> Result<(), SessionError> {
         self.sessions.delete(session_id)?;
         self.routes.remove(session_id);
@@ -206,19 +213,11 @@ impl Orchestrator {
 
 impl ChannelIngressSink for Orchestrator {
     fn push_user_message(&self, msg: InboundMessage) -> IngressFuture<'_> {
-        Box::pin(async move {
-            if let Err(err) = self.deliver_user_message(msg).await {
-                tracing::warn!(error = %err, "ingress user message deliver failed");
-            }
-        })
+        Box::pin(async move { self.deliver_user_message(msg).await })
     }
 
     fn push_command(&self, command: InboundCommand) -> IngressFuture<'_> {
-        Box::pin(async move {
-            if let Err(err) = self.deliver_command(command) {
-                tracing::warn!(error = %err, "ingress command deliver failed");
-            }
-        })
+        Box::pin(async move { self.deliver_command(command) })
     }
 }
 
@@ -493,7 +492,7 @@ mod tests {
         let (orch, transport) = orchestrator_with_factory(Arc::new(EchoFactory));
         let session = orch.session_create();
 
-        block_on(orch.push_user_message(user_msg(session, "hi")));
+        assert!(block_on(orch.push_user_message(user_msg(session, "hi"))).is_ok());
 
         let sent = transport.drain_sent();
         assert_eq!(sent.len(), 1);
@@ -505,8 +504,8 @@ mod tests {
         let (orch, transport) = orchestrator_with_factory(Arc::new(EchoFactory));
         let session = orch.session_create();
 
-        block_on(orch.push_user_message(user_msg(session, "first")));
-        block_on(orch.push_user_message(user_msg(session, "second")));
+        assert!(block_on(orch.push_user_message(user_msg(session, "first"))).is_ok());
+        assert!(block_on(orch.push_user_message(user_msg(session, "second"))).is_ok());
 
         let sent = transport.drain_sent();
         assert_eq!(
@@ -525,7 +524,7 @@ mod tests {
         // The first message parks the root on an approval, surfaced as a message.
         // (Resolving an approval is an internal concern — there is no public
         // resolve entry point on the orchestrator.)
-        block_on(orch.push_user_message(user_msg(session, "do it")));
+        assert!(block_on(orch.push_user_message(user_msg(session, "do it"))).is_ok());
         let surfaced = transport.drain_sent();
         assert_eq!(surfaced.len(), 1);
         assert!(
@@ -541,8 +540,8 @@ mod tests {
         let s1 = orch.session_create();
         let s2 = orch.session_create();
 
-        block_on(orch.push_user_message(user_msg(s1, "one")));
-        block_on(orch.push_user_message(user_msg(s2, "two")));
+        assert!(block_on(orch.push_user_message(user_msg(s1, "one"))).is_ok());
+        assert!(block_on(orch.push_user_message(user_msg(s2, "two"))).is_ok());
 
         // One isolated instance per session.
         assert_eq!(orch.instances.lock().unwrap().len(), 2);

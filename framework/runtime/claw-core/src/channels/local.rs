@@ -32,12 +32,14 @@ impl ChannelIngressSink for LocalChannelIngress {
     fn push_user_message(&self, msg: InboundMessage) -> IngressFuture<'_> {
         Box::pin(async move {
             self.user_messages.lock().unwrap().push_back(msg);
+            Ok(())
         })
     }
 
     fn push_command(&self, command: InboundCommand) -> IngressFuture<'_> {
         Box::pin(async move {
             self.commands.lock().unwrap().push_back(command);
+            Ok(())
         })
     }
 }

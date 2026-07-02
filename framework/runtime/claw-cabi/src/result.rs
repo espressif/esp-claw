@@ -95,18 +95,17 @@ pub(crate) fn from_error(error: CapabilityError) -> ClawCapabilityResult {
         ),
         CapabilityError::NotFound => with_static(
             ClawCapabilityErrorKind::NotFound,
-            c"capability or group not found",
+            c"requested object not found",
         ),
         CapabilityError::AlreadyExists => with_static(
             ClawCapabilityErrorKind::AlreadyExists,
-            c"capability or group already exists",
+            c"requested object already exists",
         ),
         CapabilityError::InvalidState => with_static(
             ClawCapabilityErrorKind::InvalidState,
             c"invalid state for this operation",
         ),
         CapabilityError::Failed(message) => failed(&message),
-        _ => failed("unknown capability error"),
     }
 }
 

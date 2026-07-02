@@ -41,8 +41,8 @@ extern "C" {
 typedef enum {
     CLAW_CAPABILITY_OK = 0,          /* success; `message` is NULL            */
     CLAW_CAPABILITY_INVALID_ARGUMENT,
-    CLAW_CAPABILITY_NOT_FOUND,
-    CLAW_CAPABILITY_ALREADY_EXISTS,
+    CLAW_CAPABILITY_NOT_FOUND,       /* requested object not found             */
+    CLAW_CAPABILITY_ALREADY_EXISTS,  /* requested object already exists        */
     CLAW_CAPABILITY_INVALID_STATE,
     CLAW_CAPABILITY_FAILED,          /* catch-all: panic guard / callback failure */
 } claw_capability_error_kind_t;
@@ -248,11 +248,31 @@ claw_capability_result_t claw_agent_system_stop(claw_agent_system_t *system);
 claw_capability_result_t claw_agent_system_destroy(claw_agent_system_t *system);
 
 /*
+ * Explicit session lifecycle.
+ *
+ * `claw_agent_system_session_create` writes the new session id ("session-N")
+ * into `session_id_buffer` and sets `session_id_length` to the required byte
+ * length, excluding the trailing NUL. `session_id_capacity` must be at least
+ * 32 bytes. The function returns CLAW_CAPABILITY_FAILED before creating a
+ * session if the buffer is too small.
+ *
+ * `claw_agent_system_session_delete` removes the session and drops its live
+ * agent graph. Deleting an unknown session returns CLAW_CAPABILITY_NOT_FOUND.
+ */
+claw_capability_result_t claw_agent_system_session_create(claw_agent_system_t *system,
+                                                          char *session_id_buffer,
+                                                          size_t session_id_capacity,
+                                                          size_t *session_id_length);
+claw_capability_result_t claw_agent_system_session_delete(claw_agent_system_t *system,
+                                                          const char *session_id);
+
+/*
  * Synchronous local send helper for firmware-side CLI/local callers.
  *
- * `session_id` may be NULL, empty, or "default" to use the ABI-owned default
- * session. When `session_id_buffer` is non-NULL, the actual session id
- * ("session-N") is written back there.
+ * `session_id` must be an existing id returned by
+ * `claw_agent_system_session_create`. No session is created implicitly.
+ * When `session_id_buffer` is non-NULL, the actual session id ("session-N") is
+ * written back there.
  *
  * `output_length` receives the required response byte length. If
  * `output_buffer` is too small the function returns CLAW_CAPABILITY_FAILED
