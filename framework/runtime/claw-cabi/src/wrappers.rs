@@ -9,9 +9,9 @@ use std::ffi::CString;
 use std::sync::Arc;
 
 use claw_agent::{
-    tool_invoke_err, Capability, CapabilityError, CapabilityGroup, CapabilityRole, ChannelAdapter,
-    InboundMessage, Lifecycle, OutboundMessage, Tool, ToolError, ToolHandler, ToolInvocation,
-    ToolInvokeError, ToolOutput,
+    tool_invoke_err, Capability, CapabilityError, CapabilityGroup, ChannelAdapter, InboundMessage,
+    Lifecycle, OutboundMessage, Tool, ToolError, ToolHandler, ToolInvocation, ToolInvokeError,
+    ToolOutput,
 };
 
 use crate::abi::{
@@ -250,15 +250,21 @@ pub(crate) unsafe fn build_capability(
     let id = required_id(descriptor.id)?;
     let description = optional_string(descriptor.description)?;
     let user_context = UserContext(descriptor.user_context);
+    let lifecycle = build_lifecycle(&descriptor.lifecycle, user_context);
 
-    let role = match descriptor.role {
-        ClawCapabilityRole::None => CapabilityRole::None,
+    // ROLE_NONE with no lifecycle would do nothing — reject it.
+    if matches!(descriptor.role, ClawCapabilityRole::None) && lifecycle.is_none() {
+        return Err(CapabilityError::InvalidArg);
+    }
+
+    let mut capability = match descriptor.role {
+        ClawCapabilityRole::None => Capability::none(id),
         ClawCapabilityRole::Tool => {
             // SAFETY: role == Tool means the `tool` arm is the live one.
             let tool = unsafe { descriptor.role_data.tool };
             let execute = tool.execute.ok_or(CapabilityError::InvalidArg)?;
             let schema = required_string(tool.schema_json)?;
-            CapabilityRole::Tool(Tool::new(CTool {
+            Capability::tool(Tool::new(CTool {
                 name: id.clone(),
                 schema,
                 execute,
@@ -269,7 +275,7 @@ pub(crate) unsafe fn build_capability(
             // SAFETY: role == Channel means the `channel` arm is the live one.
             let channel = unsafe { descriptor.role_data.channel };
             let send = channel.send.ok_or(CapabilityError::InvalidArg)?;
-            CapabilityRole::Channel(Arc::new(CChannel {
+            Capability::channel(Arc::new(CChannel {
                 channel_id: id.clone(),
                 send,
                 user_context,
@@ -277,18 +283,13 @@ pub(crate) unsafe fn build_capability(
         }
     };
 
-    let lifecycle = build_lifecycle(&descriptor.lifecycle, user_context);
-    // ROLE_NONE with no lifecycle would do nothing — reject it.
-    if matches!(descriptor.role, ClawCapabilityRole::None) && lifecycle.is_none() {
-        return Err(CapabilityError::InvalidArg);
+    if let Some(description) = description {
+        capability = capability.with_description(description);
     }
-
-    Ok(Capability {
-        id,
-        description,
-        role,
-        lifecycle,
-    })
+    if let Some(lifecycle) = lifecycle {
+        capability = capability.with_lifecycle(lifecycle);
+    }
+    Ok(capability)
 }
 
 /// Validate and convert a C group descriptor into a [`CapabilityGroup`].
@@ -311,11 +312,11 @@ pub(crate) unsafe fn build_group(
     }
 
     let lifecycle = build_lifecycle(&group.lifecycle, UserContext(group.user_context));
-    Ok(CapabilityGroup {
-        id,
-        members,
-        lifecycle,
-    })
+    let mut group = CapabilityGroup::new(id, members);
+    if let Some(lifecycle) = lifecycle {
+        group = group.with_lifecycle(lifecycle);
+    }
+    Ok(group)
 }
 
 /// Validate and convert a C inbound message into an [`InboundMessage`].

@@ -152,7 +152,9 @@ The internal `CapabilityRole` enum (`Tool` / `Channel` / `None`) is mirrored
 mutually exclusive payloads. "Both Tool and Channel" is therefore impossible to
 express (the arms share storage), instead of being a runtime-rejected mistake.
 `lifecycle` and `user_context` are orthogonal common fields and stay outside the
-union — matching the Rust `Capability { id, description, role, lifecycle }`.
+union — matching the Rust `Capability` model (`id`, `description`, role, and
+optional lifecycle) without exposing Rust's internal struct fields across the C
+ABI.
 
 ```c
 typedef claw_capability_result_t (*claw_capability_lifecycle_callback_t)(void* user_context);

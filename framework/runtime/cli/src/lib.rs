@@ -2,7 +2,7 @@
 //!
 //! Both binaries in this crate (`base-agent` and `generic-agent-chat`) drive
 //! a real agent against a live LLM with on-disk conversation memory. The platform
-//! dependencies are identical, so the real-disk [`ClawFs`], live [`ClawHttp`], the
+//! dependencies are identical, so the real-disk [`ClawFs`], live async HTTP, the
 //! no-op [`Compactor`], and the env/LLM/memory wiring live here once.
 //!
 //! LLM config is read from `claw-core/.env.local` (the same file the integration
@@ -11,14 +11,14 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use claw_api::{BackendKind, ClawApi, ClawApiConfig};
+use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
 use claw_core::agent::{CompactionDeps, LongTermDeps};
 use claw_core::{global_store, CompactionPolicy, LlmExtractor, RuleBasedTierClassifier};
-use claw_interface::{DiskFs, RealHttp, StdThread};
+use claw_interface::{DiskFs, RealHttpAsync, StdThread, TokioTimer};
 use claw_memory::{NoopCompactor, TranscriptConfig, TranscriptStore};
 use claw_utils::{PoolConfig, SharedTaskPool};
 
-// The real network transport is `claw_interface::RealHttp` (the `realhttp`
+// The real network transport is `claw_interface::RealHttpAsync` (the `realhttp`
 // feature); background summarisation is disabled via claw-memory's
 // `NoopCompactor` (the `compactor-stub` feature).
 
@@ -68,9 +68,9 @@ pub fn make_llm_config() -> ClawApiConfig {
     config
 }
 
-/// The live network transport ([`RealHttp`]). Each LLM client owns its own.
-pub fn make_http() -> RealHttp {
-    RealHttp::new()
+/// The live network transport ([`RealHttpAsync`]). Each LLM client owns its own.
+pub fn make_http() -> RealHttpAsync {
+    RealHttpAsync::new()
 }
 
 /// Build a live LLM client from the `CLAW_LLM_*` environment variables.
@@ -78,8 +78,9 @@ pub fn make_http() -> RealHttp {
 /// # Panics
 ///
 /// If any required `CLAW_LLM_*` variable is missing, or the client cannot init.
-pub fn make_llm() -> ClawApi<RealHttp> {
-    ClawApi::init(make_llm_config(), make_http()).expect("failed to init LLM client")
+pub fn make_llm() -> ClawApiAsync<RealHttpAsync, TokioTimer> {
+    ClawApiAsync::init(make_llm_config(), make_http(), TokioTimer)
+        .expect("failed to init LLM client")
 }
 
 /// The real disk storage backend the CLI runs its transcripts over. `DiskFs` is

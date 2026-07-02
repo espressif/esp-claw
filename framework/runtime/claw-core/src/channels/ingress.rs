@@ -5,11 +5,15 @@
 //! it and delivers into orchestrator callbacks on push.
 
 use super::message::{InboundCommand, InboundMessage};
+use core::future::Future;
+use core::pin::Pin;
+
+pub type IngressFuture<'a> = Pin<Box<dyn Future<Output = ()> + 'a>>;
 
 /// Producer side: adapters push inbound work here.
 pub trait ChannelIngressSink: Send + Sync {
-    fn push_user_message(&self, msg: InboundMessage);
-    fn push_command(&self, command: InboundCommand);
+    fn push_user_message(&self, msg: InboundMessage) -> IngressFuture<'_>;
+    fn push_command(&self, command: InboundCommand) -> IngressFuture<'_>;
 }
 
 /// Consumer side: orchestrator drains user text and commands (separate queues, not an enum).

@@ -9,8 +9,8 @@ mod common;
 
 use claw_core::agent::{AgentId, CancelReason, RetryPolicy, TickOutcome};
 use common::{
-    agent_builder, body_end_conversation, body_plain_text, capturing_llm, run_to_completion,
-    scripted_llm, scripted_llm_steps,
+    agent_builder, block_on, body_end_conversation, body_plain_text, capturing_llm,
+    run_to_completion, scripted_llm, scripted_llm_steps,
 };
 
 /// A plain-text answer is non-terminal: the agent yields, goes idle, and the next
@@ -24,11 +24,11 @@ fn yield_is_non_terminal_then_continues() {
         .expect("build");
 
     agent.run("first");
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { text } if text == "a1"));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Yielded { text } if text == "a1"));
     assert!(!agent.is_running());
 
     agent.append_message("second");
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { text } if text == "a2"));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Yielded { text } if text == "a2"));
 
     assert_eq!(http.call_count(), 2);
     let second_body = http.captured_bodies()[1].to_string();
@@ -49,9 +49,9 @@ fn idle_after_yield_makes_no_llm_call() {
     .expect("build");
 
     agent.run("go");
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { text } if text == "x"));
-    assert!(matches!(agent.tick(), TickOutcome::Idle));
-    assert!(matches!(agent.tick(), TickOutcome::Idle));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Yielded { text } if text == "x"));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Idle));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Idle));
 }
 
 /// `end_conversation` is terminal; after it the agent is idle and a new `run`
@@ -71,7 +71,7 @@ fn retask_after_ended() {
     .expect("build");
 
     agent.run("a");
-    let out = agent.tick();
+    let out = block_on(agent.tick());
     assert!(matches!(out, TickOutcome::Ended { ref final_message } if final_message == "bye"));
     assert!(out.is_terminal());
 
@@ -95,7 +95,7 @@ fn retask_after_cancelled() {
     agent
         .cancel(CancelReason::UserRequested)
         .expect("cancel accepted");
-    let out = agent.tick();
+    let out = block_on(agent.tick());
     assert!(matches!(
         out,
         TickOutcome::Cancelled {
@@ -105,7 +105,7 @@ fn retask_after_cancelled() {
     assert!(out.is_terminal());
 
     agent.run("b");
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { text } if text == "answer"));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Yielded { text } if text == "answer"));
 }
 
 /// A failed LLM round is terminal; the agent goes idle and a new `run` recovers.
@@ -127,13 +127,13 @@ fn retask_after_failed() {
     .expect("build");
 
     agent.run("a");
-    let out = agent.tick();
+    let out = block_on(agent.tick());
     assert!(matches!(out, TickOutcome::Failed(_)));
     assert!(out.is_terminal());
     assert!(!agent.is_running());
 
     agent.run("b");
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { text } if text == "recovered"));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Yielded { text } if text == "recovered"));
 }
 
 /// `is_terminal` classifies the terminal outcomes from the non-terminal ones.
@@ -168,9 +168,9 @@ fn abort_before_iteration_reruns_next_tick() {
 
     agent.run("hi");
     agent.abort_handle().abort();
-    assert!(matches!(agent.tick(), TickOutcome::Working));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Working));
     assert!(agent.is_running());
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { text } if text == "pong"));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Yielded { text } if text == "pong"));
 }
 
 /// A cloned `AgentAbortHandle` shares the same flag, so aborting via the clone
@@ -190,6 +190,6 @@ fn cloned_abort_handle_shares_flag() {
     let handle = agent.abort_handle();
     let cloned = handle.clone();
     cloned.abort();
-    assert!(matches!(agent.tick(), TickOutcome::Working));
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { text } if text == "pong"));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Working));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Yielded { text } if text == "pong"));
 }

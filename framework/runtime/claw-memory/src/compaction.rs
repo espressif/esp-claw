@@ -13,6 +13,11 @@
 //! crate depends on the `ClawFs` trait and never on its implementation.
 
 use serde_json::Value;
+use std::future::Future;
+use std::pin::Pin;
+
+/// Future returned by [`Compactor::compact`].
+pub type CompactFuture<'a> = Pin<Box<dyn Future<Output = Result<Vec<Value>, CompactError>> + 'a>>;
 
 /// Failure from a [`Compactor`].
 ///
@@ -48,28 +53,29 @@ pub enum CompactError {
 ///
 /// ```
 /// use claw_memory::{CompactError, Compactor};
+/// use claw_utils::block_on;
 /// use serde_json::{json, Value};
 ///
 /// struct CountingCompactor;
 ///
 /// impl Compactor for CountingCompactor {
-///     fn compact(&self, window: &[Value]) -> Result<Vec<Value>, CompactError> {
-///         Ok(vec![json!({
+///     fn compact<'a>(&'a self, window: &'a [Value]) -> claw_memory::CompactFuture<'a> {
+///         Box::pin(async move { Ok(vec![json!({
 ///             "role": "system",
 ///             "content": format!("summary of {} earlier messages", window.len()),
-///         })])
+///         })]) })
 ///     }
 /// }
 ///
-/// let summary = CountingCompactor
-///     .compact(&[json!({ "role": "user", "content": "hi" })])
-///     .unwrap();
+/// let summary = block_on(CountingCompactor
+///     .compact(&[json!({ "role": "user", "content": "hi" })]))?;
 /// assert_eq!(summary[0]["content"], "summary of 1 earlier messages");
+/// # Ok::<(), CompactError>(())
 /// ```
 pub trait Compactor: Send + Sync {
     /// Summarize one chunk of aged messages into the messages of a single
     /// compact segment.
-    fn compact(&self, window: &[Value]) -> Result<Vec<Value>, CompactError>;
+    fn compact<'a>(&'a self, window: &'a [Value]) -> CompactFuture<'a>;
 }
 
 /// A [`Compactor`] that never compacts: every call yields an empty segment.
@@ -84,7 +90,7 @@ pub struct NoopCompactor;
 
 #[cfg(feature = "compactor-stub")]
 impl Compactor for NoopCompactor {
-    fn compact(&self, _window: &[Value]) -> Result<Vec<Value>, CompactError> {
-        Ok(Vec::new())
+    fn compact<'a>(&'a self, _window: &'a [Value]) -> CompactFuture<'a> {
+        Box::pin(async { Ok(Vec::new()) })
     }
 }

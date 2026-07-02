@@ -18,8 +18,9 @@ use claw_core::agent::{
 use claw_permission::{AskAtOrAbove, PermissionPolicy, RiskClass};
 use claw_tool::{Tool, ToolGroup, ToolSet};
 use common::{
-    agent_builder, body_echo_call, body_echo_call_id, body_plain_text, builder_with_view,
-    capturing_llm, scripted_llm, transcript_contents, EchoTool, TestAgent, TestFs,
+    agent_builder, block_on, body_echo_call, body_echo_call_id, body_plain_text, builder_with_view,
+    capturing_llm, scripted_llm, transcript_contents, EchoTool, TestAgent, TestAgentBuilder,
+    TestLlm,
 };
 
 /// A policy that asks for approval on every tool call (every action is at least
@@ -36,9 +37,9 @@ fn echo_tools() -> ToolSet {
 /// A `BaseAgentBuilder` wired with the echo tool, the ask-everything policy, and
 /// an identity — ready to `.build()`.
 fn asking_builder<H: claw_interface::http::ClawHttp>(
-    llm: claw_api::ClawApi<H>,
+    llm: TestLlm<H>,
     dir: impl Into<String>,
-) -> claw_core::agent::BaseAgentBuilder<TestFs, H> {
+) -> TestAgentBuilder<H> {
     agent_builder(llm, AgentId(1), dir)
         .with_tools(echo_tools())
         .with_permission_policy(ask_everything())
@@ -46,10 +47,7 @@ fn asking_builder<H: claw_interface::http::ClawHttp>(
 }
 
 /// Build an asking agent over fresh disk memory with the given scripted LLM.
-fn build_agent<H: claw_interface::http::ClawHttp>(
-    name: &str,
-    llm: claw_api::ClawApi<H>,
-) -> TestAgent<H> {
+fn build_agent<H: claw_interface::http::ClawHttp>(name: &str, llm: TestLlm<H>) -> TestAgent<H> {
     let dir = common::test_output_dir(name);
     asking_builder(llm, dir.display().to_string())
         .build()
@@ -67,7 +65,7 @@ fn risky_tool_pauses_for_approval() {
 
     agent.run("do it");
     assert!(matches!(
-        agent.tick(),
+        block_on(agent.tick()),
         TickOutcome::AwaitingApproval { ref summary, .. } if summary.contains("echo")
     ));
     assert!(!agent.is_running());
@@ -89,7 +87,7 @@ fn approve_resumes_and_records_decision() {
         .expect("build");
 
     agent.run("go");
-    let id = match agent.tick() {
+    let id = match block_on(agent.tick()) {
         TickOutcome::AwaitingApproval { id, .. } => id,
         other => panic!("expected AwaitingApproval, got {other:?}"),
     };
@@ -98,7 +96,7 @@ fn approve_resumes_and_records_decision() {
         .resolve_approval(id, ApprovalDecision::Approved)
         .expect("resolve accepted");
 
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { text } if text == "done"));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Yielded { text } if text == "done"));
     let transcript = transcript_contents(&view);
     assert!(transcript
         .iter()
@@ -121,7 +119,7 @@ fn reject_resumes_and_records_reason() {
         .expect("build");
 
     agent.run("go");
-    let id = match agent.tick() {
+    let id = match block_on(agent.tick()) {
         TickOutcome::AwaitingApproval { id, .. } => id,
         other => panic!("expected AwaitingApproval, got {other:?}"),
     };
@@ -130,7 +128,7 @@ fn reject_resumes_and_records_reason() {
         .resolve_approval(id, ApprovalDecision::Rejected("too risky".into()))
         .expect("resolve accepted");
 
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { text } if text == "ok"));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Yielded { text } if text == "ok"));
     let transcript = transcript_contents(&view);
     assert!(transcript
         .iter()
@@ -159,7 +157,7 @@ fn grant_lets_retried_call_run() {
         .expect("build");
 
     agent.run("go");
-    let id = match agent.tick() {
+    let id = match block_on(agent.tick()) {
         TickOutcome::AwaitingApproval { id, .. } => id,
         other => panic!("expected AwaitingApproval, got {other:?}"),
     };
@@ -187,7 +185,7 @@ fn wrong_approval_id_is_rejected_and_stays_awaiting() {
     );
 
     agent.run("go");
-    let id = match agent.tick() {
+    let id = match block_on(agent.tick()) {
         TickOutcome::AwaitingApproval { id, .. } => id,
         other => panic!("expected AwaitingApproval, got {other:?}"),
     };
@@ -201,12 +199,12 @@ fn wrong_approval_id_is_rejected_and_stays_awaiting() {
     );
 
     // Still awaiting: no iteration runs, no scripted body is consumed.
-    assert!(matches!(agent.tick(), TickOutcome::Idle));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Idle));
 
     agent
         .resolve_approval(id, ApprovalDecision::Approved)
         .expect("resolve accepted");
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { text } if text == "after"));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Yielded { text } if text == "after"));
 }
 
 #[test]
@@ -217,7 +215,7 @@ fn approve_twice_is_rejected() {
     );
 
     agent.run("go");
-    let id = match agent.tick() {
+    let id = match block_on(agent.tick()) {
         TickOutcome::AwaitingApproval { id, .. } => id,
         other => panic!("expected AwaitingApproval, got {other:?}"),
     };
@@ -263,7 +261,7 @@ fn cancel_while_awaiting_clears_pending_and_records_marker() {
         .expect("build");
 
     agent.run("go");
-    let id = match agent.tick() {
+    let id = match block_on(agent.tick()) {
         TickOutcome::AwaitingApproval { id, .. } => id,
         other => panic!("expected AwaitingApproval, got {other:?}"),
     };
@@ -273,7 +271,7 @@ fn cancel_while_awaiting_clears_pending_and_records_marker() {
         .expect("cancel accepted");
 
     assert!(matches!(
-        agent.tick(),
+        block_on(agent.tick()),
         TickOutcome::Cancelled {
             reason: CancelReason::UserRequested
         }
@@ -300,7 +298,7 @@ fn append_while_awaiting_is_included_after_approval() {
         .expect("build");
 
     agent.run("go");
-    let id = match agent.tick() {
+    let id = match block_on(agent.tick()) {
         TickOutcome::AwaitingApproval { id, .. } => id,
         other => panic!("expected AwaitingApproval, got {other:?}"),
     };
@@ -310,7 +308,7 @@ fn append_while_awaiting_is_included_after_approval() {
         .resolve_approval(id, ApprovalDecision::Approved)
         .expect("resolve accepted");
 
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { text } if text == "final"));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Yielded { text } if text == "final"));
 
     assert_eq!(http.call_count(), 2);
     let second_body = http.captured_bodies()[1].to_string();

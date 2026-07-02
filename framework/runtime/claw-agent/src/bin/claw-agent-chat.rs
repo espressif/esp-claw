@@ -20,14 +20,15 @@ use claw_agent::{AgentSystem, BackendKind, ClawApiConfig};
 
 const MEMORY_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/output/claw-agent-chat");
 
-fn main() {
-    if let Err(error) = run() {
+#[tokio::main]
+async fn main() {
+    if let Err(error) = run().await {
         eprintln!("error: {error}");
         std::process::exit(1);
     }
 }
 
-fn run() -> Result<()> {
+async fn run() -> Result<()> {
     load_env();
 
     let system = AgentSystem::on_disk(llm_config()?, MEMORY_DIR)?;
@@ -51,7 +52,7 @@ fn run() -> Result<()> {
             break;
         }
 
-        let replies = chat.send(input);
+        let replies = chat.send(input).await;
         if replies.is_empty() {
             println!("\n(no reply)\n");
         }

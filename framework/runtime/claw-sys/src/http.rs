@@ -56,7 +56,7 @@ pub(crate) fn truncate(s: &str, max: usize) -> &str {
 }
 
 #[cfg(target_os = "espidf")]
-pub use espidf_driver::EspIdfHttp;
+pub use espidf_driver::{EspIdfHttp, EspIdfHttpOneShot};
 
 #[cfg(target_os = "espidf")]
 mod espidf_driver {
@@ -71,6 +71,8 @@ mod espidf_driver {
     use core::sync::atomic::{AtomicBool, Ordering};
     use core::task::{Context, Poll};
     use std::ffi::CString;
+
+    const DEFAULT_INITIAL_URL: &str = "http://127.0.0.1/";
 
     // `esp_err_t` sentinels from components/esp_common/include/esp_err.h.
     const ESP_OK: c_int = 0;
@@ -568,6 +570,15 @@ mod espidf_driver {
         }
     }
 
+    impl Default for EspIdfHttp {
+        fn default() -> Self {
+            match Self::new(DEFAULT_INITIAL_URL) {
+                Ok(http) => http,
+                Err(_) => std::process::abort(),
+            }
+        }
+    }
+
     impl ClawHttp for EspIdfHttp {
         fn post_json(
             &mut self,
@@ -575,6 +586,27 @@ mod espidf_driver {
             abort: &AtomicBool,
         ) -> Result<HttpResponse, HttpError> {
             self.conn.execute_blocking(request, abort)
+        }
+    }
+
+    /// Stateless ESP-IDF HTTP transport that creates a fresh client handle for
+    /// each request.
+    ///
+    /// Use this when the transport value itself must cross a Rust thread
+    /// boundary before requests are executed. The concrete `esp_http_client`
+    /// handle is still created and driven inside the task that performs the
+    /// request.
+    #[derive(Clone, Copy, Default)]
+    pub struct EspIdfHttpOneShot;
+
+    impl ClawHttp for EspIdfHttpOneShot {
+        fn post_json(
+            &mut self,
+            request: &HttpJsonRequest,
+            abort: &AtomicBool,
+        ) -> Result<HttpResponse, HttpError> {
+            let mut http = EspIdfHttp::new(request.url)?;
+            ClawHttp::post_json(&mut http, request, abort)
         }
     }
 
@@ -605,6 +637,19 @@ mod espidf_driver {
             cancel: Cancel<'a>,
         ) -> HttpResponseFuture<'a> {
             Box::pin(async move { self.conn.execute_async(request, cancel).await })
+        }
+    }
+
+    impl ClawHttpAsync for EspIdfHttpOneShot {
+        fn post_json<'a>(
+            &'a mut self,
+            request: &'a HttpJsonRequest<'a>,
+            cancel: Cancel<'a>,
+        ) -> HttpResponseFuture<'a> {
+            Box::pin(async move {
+                let mut http = EspIdfHttp::new(request.url)?;
+                ClawHttpAsync::post_json(&mut http, request, cancel).await
+            })
         }
     }
 }

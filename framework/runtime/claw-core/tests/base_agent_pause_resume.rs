@@ -13,7 +13,8 @@ mod common;
 use claw_core::agent::{AgentCommandError, AgentId, AgentState, CancelReason, TickOutcome};
 use claw_tool::{Tool, ToolGroup, ToolSet};
 use common::{
-    agent_builder, body_echo_call, body_plain_text, capturing_llm, scripted_llm, TestAgent,
+    agent_builder, block_on, body_echo_call, body_plain_text, capturing_llm, scripted_llm,
+    TestAgent, TestLlm,
 };
 
 /// A `ToolSet` exposing only the `echo` test tool.
@@ -23,10 +24,7 @@ fn echo_tools() -> ToolSet {
 }
 
 /// Build an agent over the given LLM with a unique on-disk transcript dir.
-fn build_agent<H: claw_interface::http::ClawHttp>(
-    name: &str,
-    llm: claw_api::ClawApi<H>,
-) -> TestAgent<H> {
+fn build_agent<H: claw_interface::http::ClawHttp>(name: &str, llm: TestLlm<H>) -> TestAgent<H> {
     let dir = common::test_output_dir(name);
     agent_builder(llm, AgentId(1), dir.display().to_string())
         .build()
@@ -44,7 +42,7 @@ fn pause_before_first_tick_prevents_iteration() {
         .expect("pause accepted while Running (projected)");
 
     assert!(!agent.is_running());
-    assert!(matches!(agent.tick(), TickOutcome::Idle));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Idle));
 }
 
 #[test]
@@ -56,10 +54,10 @@ fn resume_runs_the_pending_task() {
 
     agent.run("work");
     agent.pause().expect("pause accepted");
-    assert!(matches!(agent.tick(), TickOutcome::Idle));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Idle));
 
     agent.resume().expect("resume accepted");
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { text } if text == "pong"));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Yielded { text } if text == "pong"));
     assert!(!agent.is_running());
 }
 
@@ -80,15 +78,15 @@ fn pause_midway_through_a_multi_iteration_task() {
 
     agent.run("work");
     // First iteration is a tool round: stays Running and reports Working.
-    assert!(matches!(agent.tick(), TickOutcome::Working));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Working));
     assert!(agent.is_running());
 
     agent.pause().expect("pause accepted");
     // No second LLM call is consumed while paused.
-    assert!(matches!(agent.tick(), TickOutcome::Idle));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Idle));
 
     agent.resume().expect("resume accepted");
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { text } if text == "done"));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Yielded { text } if text == "done"));
 }
 
 #[test]
@@ -98,12 +96,12 @@ fn append_while_paused_is_included_after_resume() {
 
     agent.run("first goal");
     agent.pause().expect("pause accepted");
-    assert!(matches!(agent.tick(), TickOutcome::Idle));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Idle));
 
     // The appended message is queued and joins the current task on resume.
     agent.append_message("extra context");
     agent.resume().expect("resume accepted");
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { text } if text == "answer"));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Yielded { text } if text == "answer"));
 
     // Exactly one LLM call, carrying both the original goal and the appended text.
     assert_eq!(http.call_count(), 1);
@@ -162,7 +160,7 @@ fn cancel_while_paused_reports_cancelled() {
         .expect("cancel accepted while paused");
 
     assert!(matches!(
-        agent.tick(),
+        block_on(agent.tick()),
         TickOutcome::Cancelled {
             reason: CancelReason::UserRequested
         }

@@ -50,7 +50,12 @@ pub use resolver::{AgentResolver, MapAgentResolver};
 #[doc(no_inline)]
 pub use claw_api::RetryPolicy;
 
-use claw_interface::http::ClawHttp;
+use core::future::Future;
+use core::pin::Pin;
+
+use claw_interface::{ClawHttpAsync, ClawTimer};
+
+pub type AgentTickFuture<'a> = Pin<Box<dyn Future<Output = TickOutcome> + 'a>>;
 
 /// The unified contract a scheduler drives any agent through.
 ///
@@ -75,7 +80,7 @@ pub trait Agent: Send {
     fn deliver_child_result(&mut self, child: AgentId, text: String, ok: bool);
 
     /// Advance the agent by one step and report what happened. See [`TickOutcome`].
-    fn tick(&mut self) -> TickOutcome;
+    fn tick(&mut self) -> AgentTickFuture<'_>;
 }
 
 /// Shared: present a subagent's result as a provenance-tagged message and append
@@ -84,8 +89,8 @@ pub trait Agent: Send {
 /// Child results re-enter the conversation as information the model re-decides
 /// over (no counting, no gating); both semantic agents handle them identically,
 /// so the formatting lives here once.
-fn append_child_result<H: ClawHttp>(
-    base: &mut BaseAgent<H>,
+fn append_child_result<H: ClawHttpAsync, Timer: ClawTimer>(
+    base: &mut BaseAgent<H, Timer>,
     child: AgentId,
     text: String,
     ok: bool,

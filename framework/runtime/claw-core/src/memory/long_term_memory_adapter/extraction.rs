@@ -9,6 +9,8 @@
 //! *transformation*, so it stays free of any storage concern.
 
 use super::tier::MemoryTier;
+use core::future::Future;
+use core::pin::Pin;
 
 /// One fact an [`Extractor`] distilled from a transcript.
 ///
@@ -40,6 +42,9 @@ pub enum ExtractError {
     Backend(String),
 }
 
+pub type ExtractFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<ExtractedItem>, ExtractError>> + 'a>>;
+
 /// Turns a conversation transcript into zero or more durable facts.
 ///
 /// `transcript` is a flattened, self-contained snapshot of the recent
@@ -49,7 +54,7 @@ pub enum ExtractError {
 /// network).
 pub trait Extractor: Send + Sync {
     /// Extract durable facts from `transcript`.
-    fn extract(&self, transcript: &str) -> Result<Vec<ExtractedItem>, ExtractError>;
+    fn extract<'a>(&'a self, transcript: &'a str) -> ExtractFuture<'a>;
 }
 
 /// An [`Extractor`] that never extracts: every call yields no facts.
@@ -61,7 +66,7 @@ pub trait Extractor: Send + Sync {
 pub struct NoopExtractor;
 
 impl Extractor for NoopExtractor {
-    fn extract(&self, _transcript: &str) -> Result<Vec<ExtractedItem>, ExtractError> {
-        Ok(Vec::new())
+    fn extract<'a>(&'a self, _transcript: &'a str) -> ExtractFuture<'a> {
+        Box::pin(async { Ok(Vec::new()) })
     }
 }

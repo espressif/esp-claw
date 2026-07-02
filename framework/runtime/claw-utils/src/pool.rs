@@ -14,13 +14,24 @@
 //! that needs to report back captures its own `Arc`/channel.
 
 use std::collections::VecDeque;
+use std::future::Future;
 use std::io;
+use std::pin::Pin;
 use std::sync::{Arc, Condvar, Mutex};
 
 use claw_interface::{ClawThread, CoreAffinity, Priority, WorkerHandle};
 
+use crate::block_on;
+
 /// A unit of background work. Runs to completion on one worker thread.
 pub type PoolJob = Box<dyn FnOnce() + Send + 'static>;
+
+/// A future created and driven on a background worker.
+pub type PoolFuture = Pin<Box<dyn Future<Output = ()> + 'static>>;
+
+/// A factory for async background work. The factory crosses to the worker
+/// thread; the future itself is created there, so it does not need to be `Send`.
+pub type PoolAsyncJob = Box<dyn FnOnce() -> PoolFuture + Send + 'static>;
 
 /// Default worker stack size.
 ///
@@ -147,6 +158,12 @@ impl SharedTaskPool {
         queue.jobs.push_back(job);
         drop(queue);
         self.shared.signal.notify_one();
+    }
+
+    /// Enqueue an async job. A pool worker creates and drives the future to
+    /// completion, parking between wakeups.
+    pub fn submit_async(&self, job: PoolAsyncJob) {
+        self.submit(Box::new(move || block_on(job())));
     }
 }
 

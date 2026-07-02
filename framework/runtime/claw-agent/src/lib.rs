@@ -11,14 +11,16 @@
 //!   chats on one [`AgentSystem`] stay isolated.
 //!
 //! Internally a message goes: [`Chat::send`] -> [`AgentSystem`] ingress ->
-//! `claw_core::Orchestrator` (drives the per-session agent graph synchronously)
-//! -> egress -> reply text returned to the caller.
+//! `claw_core::Orchestrator` (drives the per-session agent graph) -> egress ->
+//! reply text returned to the caller.
 //!
 //! # Examples
 //!
 //! ```no_run
 //! use claw_agent::{AgentSystem, BackendKind, ClawApiConfig};
 //!
+//! # #[tokio::main]
+//! # async fn main() -> Result<(), claw_agent::AgentError> {
 //! let llm = ClawApiConfig::new(
 //!     BackendKind::OpenAiCompatible,
 //!     "sk-...",
@@ -28,10 +30,11 @@
 //!
 //! let system = AgentSystem::on_disk(llm, "/tmp/claw-mem")?;
 //! let chat = system.chat();
-//! for reply in chat.send("hello") {
+//! for reply in chat.send("hello").await {
 //!     println!("{reply}");
 //! }
-//! # Ok::<(), claw_agent::AgentError>(())
+//! # Ok(())
+//! # }
 //! ```
 
 mod capability;
@@ -44,30 +47,32 @@ use claw_core::{
     global_store, ChannelEgress, ChannelEgressHub, CompactionPolicy, LlmCompactor, LlmExtractor,
     Orchestrator, RecordingTransport, RuleBasedTierClassifier,
 };
-use claw_interface::http::ClawHttp;
+use claw_interface::{ClawHttpAsync, ClawTimer};
 #[cfg(feature = "dev")]
-use claw_interface::{RealHttp, StdThread};
+use claw_interface::{RealHttpAsync, StdThread, TokioTimer};
 
 // Re-exported so callers can configure the system without depending on the lower
 // crates directly. These names are also used internally below.
 pub use capability::{register_channels, RegistryChannelTransport, RegistryResolver};
 // The capability surface callers build their device from — re-exported so they
 // depend on `claw_agent` alone, not the lower crates.
-pub use claw_api::{BackendKind, ClawApi, ClawApiConfig};
+pub use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
 pub use claw_capability::{
     Capability, CapabilityError, CapabilityGroup, CapabilityRole, CapabilityState, ChannelAdapter,
     Lifecycle, OutboundMessage, Registry,
 };
 pub use claw_core::agent::{AgentResolver, MapAgentResolver};
 pub use claw_core::{
-    ChannelIngressSink, ChannelTransport, InboundCommand, InboundMessage, SessionId,
+    ChannelIngressSink, ChannelTransport, InboundCommand, InboundMessage, IngressFuture, SessionId,
 };
 pub use claw_interface::ClawFs;
 pub use claw_tool::{
-    tool_invoke_err, Tool, ToolError, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
+    tool_invoke_err, tool_invoke_err_with_retries, tool_metadata, AsyncToolHandler, Tool,
+    ToolError, ToolFuture, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
+    ToolRetryCount,
 };
 // The on-disk filesystem backend is a dev convenience; device builds inject
-// their own `ClawFs` through `AgentSystem::builder::<F, H>()`.
+// their own `ClawFs` through `AgentSystem::builder::<F, H, Timer>()`.
 #[cfg(feature = "dev")]
 pub use claw_interface::DiskFs;
 // The one process-wide background worker pool callers configure and inject
@@ -111,7 +116,7 @@ pub enum AgentError {
 /// [`send`](AgentSystem::send).
 pub struct AgentSystem {
     orchestrator: Arc<Orchestrator>,
-    /// Records outbound replies; drained after each synchronous `send`.
+    /// Records outbound replies; drained after each `send`.
     transport: Arc<RecordingTransport>,
     /// The egress hub replies route through. Held so callers can register extra
     /// channel transports after construction (see [`register_transport`]).
@@ -126,17 +131,19 @@ impl AgentSystem {
     /// for the common host case prefer [`AgentSystem::on_disk`].
     ///
     /// `F` is the concrete [`ClawFs`] backing all persistence (conversation and
-    /// long-term memory) and `H` is the concrete [`ClawHttp`] transport every LLM
+    /// long-term memory) and `H` is the concrete async HTTP transport every LLM
     /// client speaks through. The system constructs both internally via
-    /// [`Default`], so callers choose them by *type* — [`DiskFs`] + [`RealHttp`]
-    /// on a host, in-memory/scripted doubles in tests — and never pass an
-    /// instance; pair `F` with [`memory_dir`](AgentSystemBuilder::memory_dir),
-    /// which fixes where files land. Each minted client (one per agent, plus the
-    /// compaction and extraction clients) gets its own `H::default()`.
-    pub fn builder<F, H>() -> AgentSystemBuilder<F, H>
+    /// [`Default`], so callers choose them by *type* — [`DiskFs`] +
+    /// [`RealHttpAsync`] on a host, in-memory/scripted doubles in tests — and
+    /// never pass an instance; pair `F` with
+    /// [`memory_dir`](AgentSystemBuilder::memory_dir), which fixes where files
+    /// land. Each minted client (one per agent, plus the compaction and
+    /// extraction clients) gets its own `H::default()` and `Timer::default()`.
+    pub fn builder<F, H, Timer>() -> AgentSystemBuilder<F, H, Timer>
     where
         F: ClawFs + Clone + Default + 'static,
-        H: ClawHttp + Default + Send + 'static,
+        H: ClawHttpAsync + Default + Send + 'static,
+        Timer: ClawTimer + Default + Send + 'static,
     {
         AgentSystemBuilder::default()
     }
@@ -148,8 +155,8 @@ impl AgentSystem {
     /// conversation files.
     ///
     /// Dev convenience (requires the default `dev` feature): it constructs the
-    /// [`DiskFs`] / [`RealHttp`] / [`StdThread`] backends directly. Device builds
-    /// disable `dev` and use [`AgentSystem::builder::<F, H>()`](Self::builder)
+    /// [`DiskFs`] / [`RealHttpAsync`] / [`StdThread`] backends directly. Device builds
+    /// disable `dev` and use [`AgentSystem::builder::<F, H, Timer>()`](Self::builder)
     /// with injected backends instead.
     ///
     /// # Errors
@@ -166,14 +173,14 @@ impl AgentSystem {
         // `DiskFs::default()` is verbatim-path mode; `memory_dir` is already an
         // absolute host path, so conversation files land beneath it and long-term
         // memory (always on) lands under `<memory_dir>/long_term`.
-        AgentSystem::builder::<DiskFs, RealHttp>()
+        AgentSystem::builder::<DiskFs, RealHttpAsync, TokioTimer>()
             .llm(llm)
             .task_pool(pool)
             .memory_dir(memory_dir)
             .build()
     }
 
-    /// The inbound seam: where channels push user messages into the system.
+    /// Where channels push user messages into the system.
     ///
     /// Returns the orchestrator as a [`ChannelIngressSink`]. A channel
     /// capability (or any transport) calls
@@ -212,11 +219,10 @@ impl AgentSystem {
     /// Deliver `text` to `session` and return the reply text(s) the agent
     /// produced this turn.
     ///
-    /// The orchestrator drives the session's agent graph synchronously, so by the
-    /// time this returns every reply (and any surfaced approval prompt) for this
-    /// turn has been routed and is collected here. Pending approvals appear as
-    /// reply text tagged `[approval needed ...]`.
-    pub fn send(&self, session: SessionId, text: impl Into<String>) -> Vec<String> {
+    /// By the time this future resolves every reply (and any surfaced approval
+    /// prompt) for this turn has been routed and is collected here. Pending
+    /// approvals appear as reply text tagged `[approval needed ...]`.
+    pub async fn send(&self, session: SessionId, text: impl Into<String>) -> Vec<String> {
         let id = {
             let mut next = self
                 .next_message_id
@@ -226,14 +232,16 @@ impl AgentSystem {
             *next = next.saturating_add(1);
             id
         };
-        self.orchestrator.push_user_message(InboundMessage {
-            message_id: format!("m{id}"),
-            channel: self.channel.clone(),
-            chat_id: session.to_wire(),
-            sender_id: None,
-            session_id: session.to_wire(),
-            text: text.into(),
-        });
+        self.orchestrator
+            .push_user_message(InboundMessage {
+                message_id: format!("m{id}"),
+                channel: self.channel.clone(),
+                chat_id: session.to_wire(),
+                sender_id: None,
+                session_id: session.to_wire(),
+                text: text.into(),
+            })
+            .await;
         self.transport
             .drain_sent()
             .into_iter()
@@ -258,8 +266,8 @@ impl Chat<'_> {
     }
 
     /// Send a message and return the agent's reply text(s) for this turn.
-    pub fn send(&self, text: impl Into<String>) -> Vec<String> {
-        self.system.send(self.session, text)
+    pub async fn send(&self, text: impl Into<String>) -> Vec<String> {
+        self.system.send(self.session, text).await
     }
 }
 
@@ -270,14 +278,16 @@ impl Chat<'_> {
 /// `<memory_dir>/long_term`; the conversation-compaction policy is internal —
 /// callers do not supply one.
 ///
-/// The persistence backend `F` and HTTP transport `H` are type parameters chosen
-/// at [`AgentSystem::builder::<F, H>()`](AgentSystem::builder) and constructed
-/// internally via [`Default`]; the builder stores no filesystem or transport
-/// instance.
-pub struct AgentSystemBuilder<F, H>
+/// The persistence backend `F`, async HTTP transport `H`, and `Timer` are type
+/// parameters chosen at
+/// [`AgentSystem::builder::<F, H, Timer>()`](AgentSystem::builder) and
+/// constructed internally via [`Default`]; the builder stores no filesystem,
+/// transport, or timer instance.
+pub struct AgentSystemBuilder<F, H, Timer>
 where
     F: ClawFs + Clone + Default + 'static,
-    H: ClawHttp + Default + Send + 'static,
+    H: ClawHttpAsync + Default + Send + 'static,
+    Timer: ClawTimer + Default + Send + 'static,
 {
     llm_config: Option<ClawApiConfig>,
     resolver: Option<Arc<dyn AgentResolver>>,
@@ -285,19 +295,21 @@ where
     /// every available channel as an egress transport.
     capabilities: Option<Arc<Registry>>,
     memory_dir: Option<String>,
-    /// The process-wide background worker pool (a system-level seam).
+    /// The process-wide background worker pool.
     task_pool: Option<Arc<SharedTaskPool>>,
     channel: String,
-    /// Carries the persistence + transport types; the builder stores no `F`/`H`
-    /// value (both are built via `Default` in [`build`](Self::build)). `fn() -> …`
-    /// so the marker is unconditionally `Send + Sync`.
-    marker: PhantomData<fn() -> (F, H)>,
+    /// Carries the persistence + async runtime types; the builder stores no
+    /// `F`/`H`/`Timer` value (all are built via `Default` in
+    /// [`build`](Self::build)). `fn() -> …` so the marker is unconditionally
+    /// `Send + Sync`.
+    marker: PhantomData<fn() -> (F, H, Timer)>,
 }
 
-impl<F, H> Default for AgentSystemBuilder<F, H>
+impl<F, H, Timer> Default for AgentSystemBuilder<F, H, Timer>
 where
     F: ClawFs + Clone + Default + 'static,
-    H: ClawHttp + Default + Send + 'static,
+    H: ClawHttpAsync + Default + Send + 'static,
+    Timer: ClawTimer + Default + Send + 'static,
 {
     fn default() -> Self {
         Self {
@@ -312,10 +324,11 @@ where
     }
 }
 
-impl<F, H> AgentSystemBuilder<F, H>
+impl<F, H, Timer> AgentSystemBuilder<F, H, Timer>
 where
     F: ClawFs + Clone + Default + 'static,
-    H: ClawHttp + Default + Send + 'static,
+    H: ClawHttpAsync + Default + Send + 'static,
+    Timer: ClawTimer + Default + Send + 'static,
 {
     /// Required: the LLM client config every agent is minted from.
     pub fn llm(mut self, config: ClawApiConfig) -> Self {
@@ -396,8 +409,9 @@ where
         let long_term_dir = format!("{}/long_term", memory_dir.trim_end_matches('/'));
         let long_term = {
             let global = global_store(format!("{long_term_dir}/global"), fs.clone());
-            let extraction_llm = ClawApi::init(llm_config.clone(), H::default())
-                .map_err(|error| AgentError::ExtractionLlm(error.to_string()))?;
+            let extraction_llm =
+                ClawApiAsync::init(llm_config.clone(), H::default(), Timer::default())
+                    .map_err(|error| AgentError::ExtractionLlm(error.to_string()))?;
             let extractor = LlmExtractor::shared(extraction_llm);
             let classifier = RuleBasedTierClassifier::shared();
             LongTermDeps::new(
@@ -411,7 +425,7 @@ where
         // The single conversation-compaction policy: summarize the aged window
         // through the configured LLM. One shared client backs every agent's
         // conversation memory; callers never choose or see it.
-        let compaction_llm = ClawApi::init(llm_config.clone(), H::default())
+        let compaction_llm = ClawApiAsync::init(llm_config.clone(), H::default(), Timer::default())
             .map_err(|error| AgentError::CompactorLlm(error.to_string()))?;
         let compaction = CompactionDeps {
             pool,
@@ -419,7 +433,7 @@ where
             policy: CompactionPolicy::new(6000, 2000, 1500),
         };
 
-        let factory = Arc::new(FsAgentFactory::<F, H>::new(
+        let factory = Arc::new(FsAgentFactory::<F, H, Timer>::new(
             resolver, llm_config, memory_dir, fs, compaction, long_term,
         ));
 

@@ -681,6 +681,12 @@ mod httpmock {
         }
     }
 
+    impl<T: Default> Default for BlockingClawHttpAsync<T> {
+        fn default() -> Self {
+            Self(T::default())
+        }
+    }
+
     impl<T: ClawHttp> ClawHttpAsync for BlockingClawHttpAsync<T> {
         fn post_json<'a>(
             &'a mut self,
@@ -692,14 +698,11 @@ mod httpmock {
                     return Err(HttpError::Aborted);
                 }
                 // A blocking call cannot be interrupted mid-flight, so no abort
-                // flag is threaded in. Cancellation is honored before the call
-                // starts and after it returns.
+                // flag is threaded in. Once it returns Ok, cancellation belongs
+                // to the caller's next checkpoint rather than being rewritten as
+                // an HTTP abort.
                 let never = AtomicBool::new(false);
-                let result = self.0.post_json(request, &never);
-                if cancel.is_cancelled() {
-                    return Err(HttpError::Aborted);
-                }
-                result
+                self.0.post_json(request, &never)
             })
         }
     }

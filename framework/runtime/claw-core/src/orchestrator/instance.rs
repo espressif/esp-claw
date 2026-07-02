@@ -27,6 +27,9 @@
 //! shape supports concurrent async ticking later (each future locks only its
 //! agent).
 
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
@@ -35,11 +38,12 @@ use claw_context::Block;
 use crate::agent::factory::AgentFactory;
 use crate::agent::registry::{AgentIdAllocator, AgentRegistry};
 use crate::agent::{
-    AgentCommand, AgentCommandError, AgentId, AgentKind, AgentSnapshot, AgentStatus,
+    Agent, AgentCommand, AgentCommandError, AgentId, AgentKind, AgentSnapshot, AgentStatus,
     ApprovalDecision, ApprovalId, ApprovalVerdict, GraphEffect, GraphHost, TerminationPolicy,
     TickOutcome,
 };
 use crate::session::SessionId;
+use tracing::Instrument;
 
 /// The kind instantiated as a session's user-facing root agent.
 const ROOT_AGENT_KIND: &str = "conversation";
@@ -151,6 +155,81 @@ type EffectQueue = Arc<Mutex<VecDeque<(AgentId, GraphEffect)>>>;
 /// start of each tick so an agent's `list_subagents` / `watch_subagent` tools see
 /// a consistent view.
 type SnapshotView = Arc<Mutex<HashMap<AgentId, AgentSnapshot>>>;
+
+type AgentTickBoxFuture = Pin<Box<dyn Future<Output = TickedAgent>>>;
+
+struct ReadyAgent {
+    id: AgentId,
+    kind: AgentKind,
+    depth: u16,
+    agent: Box<dyn Agent>,
+}
+
+struct TickedAgent {
+    id: AgentId,
+    agent: Box<dyn Agent>,
+    outcome: TickOutcome,
+}
+
+struct TickBatch {
+    futures: Vec<Option<AgentTickBoxFuture>>,
+    outputs: Vec<Option<TickedAgent>>,
+}
+
+impl TickBatch {
+    fn new(futures: Vec<AgentTickBoxFuture>) -> Self {
+        let len = futures.len();
+        Self {
+            futures: futures.into_iter().map(Some).collect(),
+            outputs: std::iter::repeat_with(|| None).take(len).collect(),
+        }
+    }
+}
+
+impl Future for TickBatch {
+    type Output = Vec<TickedAgent>;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        let mut pending = false;
+        for (future_slot, output_slot) in this.futures.iter_mut().zip(this.outputs.iter_mut()) {
+            let Some(future) = future_slot else {
+                continue;
+            };
+            match future.as_mut().poll(context) {
+                Poll::Ready(output) => {
+                    *output_slot = Some(output);
+                    *future_slot = None;
+                }
+                Poll::Pending => pending = true,
+            }
+        }
+        if pending {
+            Poll::Pending
+        } else {
+            Poll::Ready(this.outputs.drain(..).filter_map(|output| output).collect())
+        }
+    }
+}
+
+fn tick_agent(ready: ReadyAgent) -> AgentTickBoxFuture {
+    Box::pin(async move {
+        let ReadyAgent {
+            id,
+            kind,
+            depth,
+            mut agent,
+        } = ready;
+        let span = tracing::info_span!(
+            "agent",
+            conversation.agent = %id,
+            kind = %kind,
+            depth = depth
+        );
+        let outcome = agent.tick().instrument(span).await;
+        TickedAgent { id, agent, outcome }
+    })
+}
 
 /// The instance's [`GraphHost`]: hands agents process-unique ids, queues the
 /// graph effects they emit, and serves the current snapshot. Cheap to clone (a
@@ -348,13 +427,10 @@ impl OrchestratorInstance {
     /// Drive this session's agents until none is ready, collecting every reply and
     /// pending approval. An agent parked on an approval is *not* ready, so the loop
     /// terminates with that approval surfaced for a human decision.
-    pub(crate) fn drive(&mut self) -> DriveOutput {
+    pub(crate) async fn drive(&mut self) -> DriveOutput {
         let mut output = DriveOutput::default();
-        // Each `tick_once` drains and applies the effects its tick emitted (before
-        // routing the outcome and re-enqueueing), so the ready queue is the single
-        // source of truth for "more work to do".
         while self.has_ready() {
-            output.absorb(self.tick_once());
+            output.absorb(self.tick_ready_batch().await);
         }
         output
     }
@@ -373,13 +449,9 @@ impl OrchestratorInstance {
         approval: ApprovalId,
         decision: ApprovalDecision,
     ) -> Result<(), ResolveApprovalError> {
-        let handle = self
-            .registry
-            .get(agent)
-            .ok_or(ResolveApprovalError::UnknownAgent(agent))?;
-        handle
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
+        self.registry
+            .get_mut(agent)
+            .ok_or(ResolveApprovalError::UnknownAgent(agent))?
             .send_command(AgentCommand::ApprovalResult {
                 id: approval,
                 decision,
@@ -389,58 +461,60 @@ impl OrchestratorInstance {
         Ok(())
     }
 
-    /// Tick one ready agent and apply the consequences: apply any graph effects it
-    /// emitted this tick (spawns, approval verdicts), then route its outcome (a
-    /// subagent result bubbles to its parent; a root reply or pending approval is
-    /// surfaced). Returns what to route this step (empty when nothing was ready).
-    fn tick_once(&mut self) -> DriveOutput {
-        let Some(id) = self.ready.pop_front() else {
+    /// Tick every currently-ready agent as one async batch, then apply the graph
+    /// consequences in queue order.
+    async fn tick_ready_batch(&mut self) -> DriveOutput {
+        let ready = self.drain_ready_batch();
+        if ready.is_empty() {
             return DriveOutput::default();
-        };
-        let (kind, depth) = match self.meta.get(&id) {
-            Some(meta) => (meta.kind.clone(), meta.depth),
-            // The node left the graph since being queued (e.g. a finished child).
-            None => return DriveOutput::default(),
-        };
-        let Some(handle) = self.registry.get(id) else {
-            return DriveOutput::default();
-        };
-
-        // Publish a consistent graph view before the agent runs, so its
-        // `list_subagents` / `watch_subagent` tools read current state.
+        }
         self.refresh_snapshots();
 
-        let outcome = {
-            // One span per ticked agent; iteration/tool spans nest beneath it.
-            // `session` is inherited from the enclosing session span.
-            let _span = tracing::info_span!(
-                "agent",
-                conversation.agent = %id,
-                kind = %kind,
-                depth = depth
-            )
-            .entered();
-            let mut agent = handle.lock().unwrap_or_else(|poison| poison.into_inner());
-            agent.tick()
-        };
+        let futures = ready.into_iter().map(tick_agent).collect();
+        let ticked = TickBatch::new(futures).await;
+        let mut outcomes = Vec::with_capacity(ticked.len());
+        for TickedAgent { id, agent, outcome } in ticked {
+            self.registry.insert(id, agent);
+            outcomes.push((id, outcome));
+        }
 
-        // Borrow-safe: the tool calls only emitted effects onto the queue, never
-        // touching an agent. Apply them now that no agent is borrowed.
         self.apply_effects();
-        self.route_outcome(id, outcome)
+        let mut output = DriveOutput::default();
+        for (id, outcome) in outcomes {
+            if self.meta.contains_key(&id) {
+                output.absorb(self.route_outcome(id, outcome));
+            }
+        }
+        output
+    }
+
+    fn drain_ready_batch(&mut self) -> Vec<ReadyAgent> {
+        let mut batch = Vec::new();
+        while let Some(id) = self.ready.pop_front() {
+            let Some(meta) = self.meta.get(&id) else {
+                continue;
+            };
+            let Some(agent) = self.registry.take(id) else {
+                continue;
+            };
+            batch.push(ReadyAgent {
+                id,
+                kind: meta.kind.clone(),
+                depth: meta.depth,
+                agent,
+            });
+        }
+        batch
     }
 
     /// Append a user message to the agent `id` and mark it ready. Returns `false`
     /// if no such agent exists.
     fn deliver_message(&mut self, id: AgentId, text: impl Into<String>) -> bool {
-        let Some(handle) = self.registry.get(id) else {
+        let Some(agent) = self.registry.get_mut(id) else {
             return false;
         };
         // `AppendMessage` is accepted in every state, so this cannot fail.
-        let _ = handle
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .send_command(AgentCommand::AppendMessage(text.into()));
+        let _ = agent.send_command(AgentCommand::AppendMessage(text.into()));
         self.enqueue(id);
         true
     }
@@ -719,11 +793,8 @@ impl OrchestratorInstance {
         };
 
         tracing::info!(child_agent = %id, parent_agent = %parent_id, ok, ?termination, "subagent result -> parent");
-        if let Some(parent_handle) = self.registry.get(parent_id) {
-            parent_handle
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .deliver_child_result(id, text, ok);
+        if let Some(parent_agent) = self.registry.get_mut(parent_id) {
+            parent_agent.deliver_child_result(id, text, ok);
             self.enqueue(parent_id);
         }
 
@@ -784,12 +855,15 @@ impl OrchestratorInstance {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 mod tests {
+    use core::future::Future;
+    use core::task::{Context, Poll};
     use std::collections::VecDeque;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
+    use std::task::{Wake, Waker};
 
     use super::*;
     use crate::agent::factory::AgentFactory;
-    use crate::agent::{Agent, AgentCommand, AgentContext, TickOutcome};
+    use crate::agent::{Agent, AgentCommand, AgentContext, AgentTickFuture, TickOutcome};
 
     /// The kind every test child is spawned as.
     const TEST_KIND: &str = "worker";
@@ -800,6 +874,24 @@ mod tests {
     /// Shared, inspectable record of `(child, text, ok)` results delivered to
     /// parents.
     type DeliveredLog = Arc<Mutex<Vec<(AgentId, String, bool)>>>;
+    type TickLog = Arc<Mutex<Vec<(AgentId, &'static str)>>>;
+
+    struct NoopWake;
+
+    impl Wake for NoopWake {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let mut future = Box::pin(future);
+        let waker = Waker::from(Arc::new(NoopWake));
+        let mut context = Context::from_waker(&waker);
+        loop {
+            if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
+                return value;
+            }
+        }
+    }
 
     /// One scripted action a [`FakeAgent`] performs on a `tick`.
     enum Step {
@@ -818,6 +910,8 @@ mod tests {
         Delete(AgentId),
         /// Return `Yielded { text }`.
         Yield(String),
+        /// Yield once before returning `Yielded { text }`.
+        YieldAfterOnePending(String),
     }
 
     /// A test agent that replays scripted [`Step`]s, records every command it
@@ -829,6 +923,7 @@ mod tests {
         context: AgentContext,
         delivered: DeliveredLog,
         received: CommandLog,
+        ticks: TickLog,
     }
 
     impl Agent for FakeAgent {
@@ -845,8 +940,19 @@ mod tests {
             self.delivered.lock().unwrap().push((child, text, ok));
         }
 
-        fn tick(&mut self) -> TickOutcome {
-            match self.steps.pop_front() {
+        fn tick(&mut self) -> AgentTickFuture<'_> {
+            if matches!(self.steps.front(), Some(Step::YieldAfterOnePending(_))) {
+                if let Some(Step::YieldAfterOnePending(text)) = self.steps.pop_front() {
+                    return Box::pin(PendingOnceYield {
+                        id: self.id,
+                        text: Some(text),
+                        ticks: Arc::clone(&self.ticks),
+                        pending_emitted: false,
+                    });
+                }
+            }
+            self.ticks.lock().unwrap().push((self.id, "tick"));
+            let outcome = match self.steps.pop_front() {
                 Some(Step::Work) => TickOutcome::Working,
                 Some(Step::Spawn(goal, termination)) => {
                     self.context
@@ -866,8 +972,36 @@ mod tests {
                     TickOutcome::Working
                 }
                 Some(Step::Yield(text)) => TickOutcome::Yielded { text },
+                Some(Step::YieldAfterOnePending(_)) => TickOutcome::Idle,
                 None => TickOutcome::Idle,
+            };
+            Box::pin(async move { outcome })
+        }
+    }
+
+    struct PendingOnceYield {
+        id: AgentId,
+        text: Option<String>,
+        ticks: TickLog,
+        pending_emitted: bool,
+    }
+
+    impl Future for PendingOnceYield {
+        type Output = TickOutcome;
+
+        fn poll(
+            mut self: std::pin::Pin<&mut Self>,
+            context: &mut Context<'_>,
+        ) -> Poll<Self::Output> {
+            if !self.pending_emitted {
+                self.pending_emitted = true;
+                self.ticks.lock().unwrap().push((self.id, "pending"));
+                context.waker().wake_by_ref();
+                return Poll::Pending;
             }
+            self.ticks.lock().unwrap().push((self.id, "ready"));
+            let text = self.text.take().unwrap_or_default();
+            Poll::Ready(TickOutcome::Yielded { text })
         }
     }
 
@@ -887,6 +1021,7 @@ mod tests {
     struct FakeFactory {
         delivered: DeliveredLog,
         received: CommandLog,
+        ticks: TickLog,
         bubble_verdict: ApprovalVerdict,
         bubble_note: Option<String>,
     }
@@ -896,6 +1031,7 @@ mod tests {
             Self {
                 delivered: Arc::new(Mutex::new(Vec::new())),
                 received: Arc::new(Mutex::new(Vec::new())),
+                ticks: Arc::new(Mutex::new(Vec::new())),
                 bubble_verdict: ApprovalVerdict::Yes,
                 bubble_note: None,
             }
@@ -906,6 +1042,9 @@ mod tests {
             if let Some(rest) = goal.strip_prefix("spawn:") {
                 steps.push_back(Step::Spawn(rest.to_string(), TerminationPolicy::AutoOnIdle));
                 steps.push_back(Step::Yield("final answer".into()));
+            } else if let Some(rest) = goal.strip_prefix("concurrent:") {
+                steps.push_back(Step::Spawn(rest.to_string(), TerminationPolicy::Manual));
+                steps.push_back(Step::Yield("root-done".into()));
             } else if let Some(rest) = goal.strip_prefix("spawnmanual:") {
                 steps.push_back(Step::Spawn(rest.to_string(), TerminationPolicy::Manual));
                 steps.push_back(Step::Yield("final answer".into()));
@@ -947,6 +1086,8 @@ mod tests {
                     self.bubble_note.clone(),
                 ));
                 steps.push_back(Step::Yield("root-done".into()));
+            } else if goal == "slowleaf" {
+                steps.push_back(Step::YieldAfterOnePending("done:slowleaf".into()));
             } else {
                 steps.push_back(Step::Yield(format!("done:{goal}")));
             }
@@ -970,6 +1111,7 @@ mod tests {
                 context: AgentContext::new(id, host),
                 delivered: Arc::clone(&self.delivered),
                 received: Arc::clone(&self.received),
+                ticks: Arc::clone(&self.ticks),
             }))
         }
     }
@@ -987,7 +1129,7 @@ mod tests {
         instance.deliver("hi").unwrap();
         assert!(instance.root.is_some());
 
-        let output = instance.drive();
+        let output = block_on(instance.drive());
         assert_eq!(output.replies.len(), 1);
         assert_eq!(output.replies[0].text, "done:hi");
         assert_eq!(output.replies[0].session, SessionId(1));
@@ -1001,7 +1143,7 @@ mod tests {
         let mut instance = instance_with(Arc::clone(&factory), SessionId(1));
         instance.deliver("spawn:subtask").unwrap();
 
-        let output = instance.drive();
+        let output = block_on(instance.drive());
 
         assert_eq!(
             output.replies,
@@ -1024,12 +1166,44 @@ mod tests {
     }
 
     #[test]
+    fn ready_agents_are_polled_in_the_same_async_batch() {
+        let factory = Arc::new(FakeFactory::new());
+        let ticks = Arc::clone(&factory.ticks);
+        let mut instance = instance_with(Arc::clone(&factory), SessionId(11));
+        instance.deliver("concurrent:slowleaf").unwrap();
+
+        let output = block_on(instance.drive());
+
+        assert_eq!(output.replies.len(), 1);
+        assert_eq!(output.replies[0].text, "root-done");
+        let ticks = ticks.lock().unwrap();
+        let child_pending = ticks
+            .iter()
+            .position(|entry| *entry == (AgentId(2), "pending"))
+            .expect("child should yield pending once");
+        let root_tick = ticks
+            .iter()
+            .enumerate()
+            .find(|(index, entry)| *index > child_pending && **entry == (AgentId(1), "tick"))
+            .map(|(index, _)| index)
+            .expect("root should be polled");
+        let child_ready = ticks
+            .iter()
+            .position(|entry| *entry == (AgentId(2), "ready"))
+            .expect("child should complete after pending");
+        assert!(
+            child_pending < root_tick && root_tick < child_ready,
+            "tick order should show root polled while child is pending: {ticks:?}"
+        );
+    }
+
+    #[test]
     fn subagent_can_itself_spawn_a_grandchild() {
         let factory = Arc::new(FakeFactory::new());
         let mut instance = instance_with(Arc::clone(&factory), SessionId(2));
         instance.deliver("spawn:deep:leaf").unwrap();
 
-        let output = instance.drive();
+        let output = block_on(instance.drive());
 
         assert_eq!(output.replies.len(), 1);
         assert_eq!(output.replies[0].session, SessionId(2));
@@ -1056,7 +1230,7 @@ mod tests {
         // The root spawns a `manual` child, which yields `done:work` and stays.
         instance.deliver("spawnmanual:work").unwrap();
 
-        let output = instance.drive();
+        let output = block_on(instance.drive());
 
         assert_eq!(output.replies.len(), 1);
         assert_eq!(output.replies[0].text, "final answer");
@@ -1081,7 +1255,7 @@ mod tests {
         // persistent grandchild with it.
         instance.deliver("spawn:deepmanual:leaf").unwrap();
 
-        let output = instance.drive();
+        let output = block_on(instance.drive());
 
         assert_eq!(output.replies.len(), 1);
         let delivered = factory.delivered.lock().unwrap();
@@ -1106,7 +1280,7 @@ mod tests {
         let mut instance = instance_with(Arc::clone(&factory), SessionId(8));
         instance.deliver("reap").unwrap();
 
-        let output = instance.drive();
+        let output = block_on(instance.drive());
 
         assert_eq!(output.replies.len(), 1);
         assert_eq!(output.replies[0].text, "reaped");
@@ -1120,7 +1294,7 @@ mod tests {
         let mut instance = instance_with(Arc::clone(&factory), SessionId(9));
         instance.deliver("baddelete").unwrap();
 
-        let output = instance.drive();
+        let output = block_on(instance.drive());
 
         assert_eq!(output.replies.len(), 1);
         // The bogus delete touched nothing: root + its manual child both survive.
@@ -1133,7 +1307,7 @@ mod tests {
         let mut instance = instance_with(Arc::clone(&factory), SessionId(10));
         // root (agent-1) spawns a persistent child (agent-2) that stays idle.
         instance.deliver("spawnmanual:work").unwrap();
-        instance.drive();
+        block_on(instance.drive());
 
         instance.refresh_snapshots();
         let snapshots = instance.snapshots.lock().unwrap();
@@ -1158,7 +1332,7 @@ mod tests {
         let root_id = instance.root.unwrap();
 
         // First drive parks on the approval: no reply, one surfaced request.
-        let output = instance.drive();
+        let output = block_on(instance.drive());
         assert!(output.replies.is_empty());
         assert_eq!(
             output.approvals,
@@ -1174,7 +1348,7 @@ mod tests {
         instance
             .resolve_approval(root_id, ApprovalId(1), ApprovalDecision::Approved)
             .expect("resolve approval");
-        let output = instance.drive();
+        let output = block_on(instance.drive());
         assert_eq!(output.replies.len(), 1);
         assert_eq!(output.replies[0].text, "done");
     }
@@ -1205,7 +1379,7 @@ mod tests {
         instance.deliver("bubble").unwrap();
         // The root is agent-1; the child it spawns is agent-2 (deterministic).
         assert_eq!(instance.root, Some(AgentId(1)));
-        let output = instance.drive();
+        let output = block_on(instance.drive());
         (received, output)
     }
 

@@ -27,7 +27,8 @@ const MEMORY_DIR: &str = concat!(
 );
 const AGENT_ID: usize = 1;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     load_env();
 
     let (transcript_config, memory_fs, compaction) = make_memory_ingredients(MEMORY_DIR);
@@ -92,7 +93,7 @@ fn main() {
         }
 
         loop {
-            match agent.tick() {
+            match agent.tick().await {
                 TickOutcome::Working => continue,
                 TickOutcome::Yielded { text } => {
                     println!("\n{text}");

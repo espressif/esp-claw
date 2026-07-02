@@ -61,6 +61,7 @@ claw-interface = { path = "../claw-interface", features = [
     "memfs",
     "diskfs",
     "httpmock",
+    "timermock",
     "realhttp",
     "stdthread",
 ] }

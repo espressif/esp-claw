@@ -34,7 +34,7 @@ use claw_core::{
     ChannelEgress, ChannelEgressHub, ChannelIngressSink, ChannelTransport, InboundMessage,
     Orchestrator, RecordingTransport,
 };
-use claw_interface::RealHttp;
+use claw_interface::{RealHttpAsync, TokioTimer};
 
 const MEMORY_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -67,7 +67,8 @@ fn log_output_from_args() -> claw_log::LogOutput {
     claw_log::LogOutput::Stderr
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     load_env();
 
     // `--log-file <PATH>` redirects all log/trace output to a file (overwritten);
@@ -98,7 +99,7 @@ fn main() {
     // Empty resolver: the built-in conversation/worker manifests declare no extra
     // capabilities, so no name->handler mapping is needed yet.
     let resolver = Arc::new(MapAgentResolver::new());
-    let factory = Arc::new(FsAgentFactory::<CliFs, RealHttp>::new(
+    let factory = Arc::new(FsAgentFactory::<CliFs, RealHttpAsync, TokioTimer>::new(
         resolver,
         make_llm_config(),
         MEMORY_DIR,
@@ -146,14 +147,16 @@ fn main() {
         }
 
         turn += 1;
-        orchestrator.push_user_message(InboundMessage {
-            message_id: format!("m{turn}"),
-            channel: CHANNEL.into(),
-            chat_id: CHAT_ID.into(),
-            sender_id: None,
-            session_id: session.to_wire(),
-            text: input.to_string(),
-        });
+        orchestrator
+            .push_user_message(InboundMessage {
+                message_id: format!("m{turn}"),
+                channel: CHANNEL.into(),
+                chat_id: CHAT_ID.into(),
+                sender_id: None,
+                session_id: session.to_wire(),
+                text: input.to_string(),
+            })
+            .await;
 
         // The orchestrator drives the graph synchronously inside `push_user_message`
         // and routes every reply/approval through our transport.

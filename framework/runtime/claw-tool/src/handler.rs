@@ -1,12 +1,23 @@
-//! Defining a tool: the [`ToolHandler`] trait, the [`tool_metadata!`] macro that
-//! bakes its metadata from `resources/tools/<name>/`, and the cheap-to-clone
-//! [`Tool`] value built from a handler.
+//! Defining a tool: the [`ToolHandler`] / [`AsyncToolHandler`] traits, the
+//! [`tool_metadata!`] macro that bakes its metadata from
+//! `resources/tools/<name>/`, and the cheap-to-clone [`Tool`] value built from a
+//! handler.
 
+use core::future::Future;
+use core::pin::Pin;
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use claw_permission::{Action, RiskClass};
 use thiserror::Error;
+
+/// Boxed future returned by [`AsyncToolHandler::invoke_async`].
+///
+/// The future borrows the handler and invocation, so it cannot outlive either.
+/// It intentionally does not require `Send`: the agent/tool runner is designed
+/// to be driven by a single cooperative task, and runtime boundaries that cross
+/// threads can add stricter requirements there.
+pub type ToolFuture<'a> = Pin<Box<dyn Future<Output = Result<ToolOutput, ToolInvokeError>> + 'a>>;
 
 /// One model tool_call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,9 +57,9 @@ pub enum ToolError {
 ///
 /// # Roadmap
 ///
-/// Today the retry budget is honored by a synchronous, immediate re-invoke loop
-/// (no backoff, no preemption between attempts). It is the seam the planned
-/// async, fair-scheduling tool runner grows into — see the workspace ROADMAP
+/// Today the retry budget is honored by an immediate re-invoke loop (no backoff,
+/// no preemption between attempts). It is the boundary the planned async,
+/// fair-scheduling tool runner grows into — see the workspace ROADMAP
 /// (`framework/runtime/ROADMAP.md`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub struct ToolRetryCount(Option<NonZeroU32>);
@@ -207,8 +218,42 @@ pub trait ToolHandler: Send + Sync {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError>;
 }
 
+/// Async model-callable tool implemented in Rust.
+///
+/// C-backed tools keep using [`ToolHandler`]. This trait is the Rust-side async
+/// surface: the metadata/classification methods intentionally mirror
+/// [`ToolHandler`] so a [`Tool`] can hide whether the implementation is sync or
+/// async from the aggregate/runner layers.
+pub trait AsyncToolHandler: Send + Sync {
+    /// The tool's name. Must match the `name` field inside [`schema`](Self::schema)
+    /// and what the model emits in its `tool_call`.
+    fn name(&self) -> &str;
+
+    /// This tool's OpenAI function schema as JSON text.
+    fn schema(&self) -> &str;
+
+    /// This tool's soft-tools prompt prose, or `None` when it has none.
+    fn usage(&self) -> Option<&str> {
+        None
+    }
+
+    /// Whether this tool is safe to run concurrently with other calls in a batch.
+    fn concurrent(&self) -> bool {
+        false
+    }
+
+    /// Describe what this specific call does as a permission [`Action`].
+    fn classify(&self, _call: &ToolInvocation<'_>) -> Action {
+        Action::new(self.name(), RiskClass::Safe)
+    }
+
+    /// Execute one model `tool_call` addressed to this tool.
+    fn invoke_async<'a>(&'a self, call: &'a ToolInvocation<'_>) -> ToolFuture<'a>;
+}
+
 /// Generate the `name()`, `schema()`, and `usage()` methods of a [`ToolHandler`]
-/// impl from the tool's baked directory `resources/tools/<name>/`.
+/// or [`AsyncToolHandler`] impl from the tool's baked directory
+/// `resources/tools/<name>/`.
 ///
 /// `name()` returns the given literal; `schema()` embeds, at compile time,
 /// `resources/tools/<name>/schema.json`; `usage()` embeds
@@ -261,44 +306,102 @@ macro_rules! tool_metadata {
 /// ```
 #[derive(Clone)]
 pub struct Tool {
-    handler: Arc<dyn ToolHandler>,
+    handler: ToolKind,
+}
+
+#[derive(Clone)]
+enum ToolKind {
+    Sync(Arc<dyn ToolHandler>),
+    Async(Arc<dyn AsyncToolHandler>),
 }
 
 impl Tool {
     /// Wrap a [`ToolHandler`] into a shareable `Tool` value.
     pub fn new(handler: impl ToolHandler + 'static) -> Self {
         Self {
-            handler: Arc::new(handler),
+            handler: ToolKind::Sync(Arc::new(handler)),
+        }
+    }
+
+    /// Wrap an [`AsyncToolHandler`] into a shareable `Tool` value.
+    pub fn new_async(handler: impl AsyncToolHandler + 'static) -> Self {
+        Self {
+            handler: ToolKind::Async(Arc::new(handler)),
         }
     }
 
     /// The tool's name (delegates to the handler).
     pub fn name(&self) -> &str {
-        self.handler.name()
+        match &self.handler {
+            ToolKind::Sync(handler) => handler.name(),
+            ToolKind::Async(handler) => handler.name(),
+        }
     }
 
     /// The tool's function schema as JSON text (delegates to the handler).
     pub fn schema(&self) -> &str {
-        self.handler.schema()
+        match &self.handler {
+            ToolKind::Sync(handler) => handler.schema(),
+            ToolKind::Async(handler) => handler.schema(),
+        }
     }
 
     /// The tool's soft-tools prompt prose, if any (delegates to the handler).
     pub fn usage(&self) -> Option<&str> {
-        self.handler.usage()
+        match &self.handler {
+            ToolKind::Sync(handler) => handler.usage(),
+            ToolKind::Async(handler) => handler.usage(),
+        }
     }
 
     /// Whether this tool may run concurrently in a batch (delegates to the handler).
     pub fn concurrent(&self) -> bool {
-        self.handler.concurrent()
+        match &self.handler {
+            ToolKind::Sync(handler) => handler.concurrent(),
+            ToolKind::Async(handler) => handler.concurrent(),
+        }
     }
 
     /// The permission [`Action`] this call represents (delegates to the handler).
     pub fn classify(&self, call: &ToolInvocation<'_>) -> Action {
-        self.handler.classify(call)
+        match &self.handler {
+            ToolKind::Sync(handler) => handler.classify(call),
+            ToolKind::Async(handler) => handler.classify(call),
+        }
     }
 
-    /// Execute one `tool_call` (delegates to the handler).
+    /// Execute one `tool_call` through the synchronous surface.
+    ///
+    /// Async-only tools cannot be driven safely from this path: blocking on an
+    /// async future here would defeat the cooperative runner and can deadlock if
+    /// the future needs executor progress. Use [`invoke_async`](Self::invoke_async)
+    /// for tools created with [`new_async`](Self::new_async).
     pub fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
-        self.handler.invoke(call)
+        match &self.handler {
+            ToolKind::Sync(handler) => handler.invoke(call),
+            ToolKind::Async(_) => Err(tool_invoke_err(ToolError::invoke_rejected(
+                "async tool requires the async tool runner",
+            ))),
+        }
+    }
+
+    /// Execute one `tool_call` through the async surface.
+    ///
+    /// The concrete handler body runs on the fixed tool executor, so a sync/C
+    /// handler cannot block the main agent executor while the caller awaits this
+    /// future. The handler future itself is created on that worker and therefore
+    /// does not need to be `Send`.
+    pub fn invoke_async<'a>(&'a self, call: &'a ToolInvocation<'_>) -> ToolFuture<'a> {
+        crate::executor::invoke_on_global_executor(self.clone(), call)
+    }
+
+    pub(crate) fn invoke_inline_async<'a>(
+        &'a self,
+        call: &'a ToolInvocation<'_>,
+    ) -> ToolFuture<'a> {
+        match &self.handler {
+            ToolKind::Sync(handler) => Box::pin(async move { handler.invoke(call) }),
+            ToolKind::Async(handler) => handler.invoke_async(call),
+        }
     }
 }

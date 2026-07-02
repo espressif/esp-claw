@@ -23,10 +23,9 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use claw_api::{ClawApi, ClawApiConfig};
+use claw_api::{ClawApiAsync, ClawApiConfig};
 use claw_context::Block;
-use claw_interface::http::ClawHttp;
-use claw_interface::ClawFs;
+use claw_interface::{ClawFs, ClawHttpAsync, ClawTimer};
 use claw_memory::{LongTermMemory, TranscriptConfig};
 
 use crate::agent::base_agent::{AgentCommand, AgentId};
@@ -119,7 +118,11 @@ impl<F: ClawFs + Clone + 'static> LongTermDeps<F> {
 /// Construct one and hand it to the orchestrator via
 /// [`with_agent_factory`](crate::OrchestratorBuilder::with_agent_factory); the
 /// registry then uses it for every agent in every session.
-pub struct FsAgentFactory<F: ClawFs + Clone + 'static, H: ClawHttp + Default + 'static> {
+pub struct FsAgentFactory<
+    F: ClawFs + Clone + 'static,
+    H: ClawHttpAsync + Default + 'static,
+    Timer: ClawTimer + Default + 'static,
+> {
     /// Maps a manifest's capability/skill *names* to handler code.
     resolver: Arc<dyn AgentResolver>,
     /// Template for the per-agent LLM client. Each agent gets its own `ClawApi`
@@ -129,6 +132,8 @@ pub struct FsAgentFactory<F: ClawFs + Clone + 'static, H: ClawHttp + Default + '
     /// Marks the HTTP transport type minted per agent. `fn() -> H` so the marker
     /// is unconditionally `Send + Sync` (the factory only *produces* `H`).
     _http: PhantomData<fn() -> H>,
+    /// Timer type minted per agent for async retry backoff.
+    _timer: PhantomData<fn() -> Timer>,
     /// Base directory for conversation files; each agent keys its own files by id.
     memory_dir: String,
     /// Storage backend cloned into each agent's [`TranscriptStore`] (and its
@@ -146,7 +151,12 @@ pub struct FsAgentFactory<F: ClawFs + Clone + 'static, H: ClawHttp + Default + '
     long_term: LongTermDeps<F>,
 }
 
-impl<F: ClawFs + Clone + 'static, H: ClawHttp + Default + 'static> FsAgentFactory<F, H> {
+impl<
+        F: ClawFs + Clone + 'static,
+        H: ClawHttpAsync + Default + 'static,
+        Timer: ClawTimer + Default + 'static,
+    > FsAgentFactory<F, H, Timer>
+{
     /// Build a factory over the injected `resolver`, an LLM `llm_config`, and the
     /// memory base dir + collaborators. The HTTP transport `H` is chosen by type
     /// (like `F`); each agent gets its own `H::default()` instance.
@@ -168,6 +178,7 @@ impl<F: ClawFs + Clone + 'static, H: ClawHttp + Default + 'static> FsAgentFactor
             resolver,
             llm_config,
             _http: PhantomData,
+            _timer: PhantomData,
             memory_dir: memory_dir.into(),
             memory_fs,
             compaction,
@@ -178,8 +189,8 @@ impl<F: ClawFs + Clone + 'static, H: ClawHttp + Default + 'static> FsAgentFactor
     /// Mint a fresh LLM client for one agent: the shared config plus this
     /// factory's transport type, freshly constructed so each agent owns an
     /// independent `H`.
-    fn mint_llm(&self) -> Result<ClawApi<H>, String> {
-        ClawApi::init(self.llm_config.clone(), H::default())
+    fn mint_llm(&self) -> Result<ClawApiAsync<H, Timer>, String> {
+        ClawApiAsync::init(self.llm_config.clone(), H::default(), Timer::default())
             .map_err(|error| format!("initializing LLM: {error}"))
     }
 
@@ -194,8 +205,11 @@ impl<F: ClawFs + Clone + 'static, H: ClawHttp + Default + 'static> FsAgentFactor
     }
 }
 
-impl<F: ClawFs + Clone + 'static, H: ClawHttp + Default + Send + 'static> AgentFactory
-    for FsAgentFactory<F, H>
+impl<
+        F: ClawFs + Clone + 'static,
+        H: ClawHttpAsync + Default + Send + 'static,
+        Timer: ClawTimer + Default + Send + 'static,
+    > AgentFactory for FsAgentFactory<F, H, Timer>
 {
     fn create_agent(
         &self,
@@ -260,8 +274,15 @@ impl<F: ClawFs + Clone + 'static, H: ClawHttp + Default + Send + 'static> AgentF
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use core::future::Future;
+    use core::task::{Context, Poll};
+    use std::sync::Arc;
+    use std::task::{Wake, Waker};
+
     use claw_api::BackendKind;
-    use claw_interface::{MemFs, SharedScriptHttp, StdThread};
+    use claw_interface::{
+        BlockingClawHttpAsync, ImmediateTimer, MemFs, SharedScriptHttp, StdThread,
+    };
     use claw_memory::NoopCompactor;
     use claw_utils::{PoolConfig, SharedTaskPool};
     use serde_json::json;
@@ -272,6 +293,22 @@ mod tests {
     use crate::memory::{global_store, CompactionPolicy, NoopExtractor, RuleBasedTierClassifier};
     use claw_skill::{SkillError, SkillId, SkillSet};
     use claw_tool::Tool;
+
+    struct NoopWake;
+    impl Wake for NoopWake {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let mut future = Box::pin(future);
+        let waker = Waker::from(Arc::new(NoopWake));
+        let mut context = Context::from_waker(&waker);
+        loop {
+            if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
+                return value;
+            }
+        }
+    }
 
     /// A resolver with no capabilities or skills — enough for the built-in
     /// manifests, whose capability/skill lists are currently empty.
@@ -304,7 +341,9 @@ mod tests {
     /// The factory mints each agent's transport internally via `H::default()`, so
     /// the script can't be injected as an instance — it is installed into the
     /// thread-local `SharedScriptHttp` script that every minted client shares.
-    fn factory(bodies: Vec<String>) -> FsAgentFactory<MemFs, SharedScriptHttp> {
+    fn factory(
+        bodies: Vec<String>,
+    ) -> FsAgentFactory<MemFs, BlockingClawHttpAsync<SharedScriptHttp>, ImmediateTimer> {
         SharedScriptHttp::install(bodies);
         let llm_config = ClawApiConfig::new(
             BackendKind::OpenAiCompatible,
@@ -328,7 +367,7 @@ mod tests {
             RuleBasedTierClassifier::shared(),
             Arc::new(NoopExtractor),
         );
-        FsAgentFactory::<MemFs, SharedScriptHttp>::new(
+        FsAgentFactory::<MemFs, BlockingClawHttpAsync<SharedScriptHttp>, ImmediateTimer>::new(
             Arc::new(EmptyResolver),
             llm_config,
             "/mem/agents",
@@ -354,7 +393,7 @@ mod tests {
 
         // The goal was seeded, so ticking drives straight to the scripted reply.
         let outcome = loop {
-            match agent.tick() {
+            match block_on(agent.tick()) {
                 TickOutcome::Working => continue,
                 other => break other,
             }

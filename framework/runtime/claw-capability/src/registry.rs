@@ -8,6 +8,7 @@
 //! / soft-hide) from the [`tools`](Registry::tools) it exposes.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use claw_tool::Tool;
@@ -70,9 +71,28 @@ struct MemberPlan {
 /// drive lifecycle with [`start_all`](Registry::start_all) /
 /// [`enable_group`](Registry::enable_group), and read out internal
 /// representations via [`tools`](Registry::tools) / [`channels`](Registry::channels).
-#[derive(Default)]
 pub struct Registry {
     inner: Mutex<RegistryState>,
+}
+
+impl Default for Registry {
+    fn default() -> Self {
+        Self {
+            inner: Mutex::new(RegistryState::default()),
+        }
+    }
+}
+
+impl fmt::Debug for Registry {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let state = self.state();
+        formatter
+            .debug_struct("Registry")
+            .field("group_count", &state.groups.len())
+            .field("member_count", &state.members.len())
+            .field("started", &state.started)
+            .finish()
+    }
 }
 
 impl Registry {
@@ -89,7 +109,7 @@ impl Registry {
 
     /// Register a single capability as a one-member group keyed by its id.
     pub fn register(&self, capability: Capability) -> Result<(), CapabilityError> {
-        let id = capability.id.clone();
+        let id = capability.id().to_string();
         self.register_group(CapabilityGroup::new(id, [capability]))
     }
 
@@ -103,17 +123,22 @@ impl Registry {
     ///   already exists (including a duplicate within the group itself).
     ///
     /// If the registry is already started, the group is enabled immediately
-    /// (its lifecycle runs), matching the historical auto-enable behavior.
+    /// (its lifecycle runs), matching the historical auto-enable behavior. If
+    /// that enable fails, registration is rolled back and the group is absent.
     pub fn register_group(&self, group: CapabilityGroup) -> Result<(), CapabilityError> {
-        let group_id = group.id.clone();
-        {
+        let (group_id, members, lifecycle) = group.into_parts();
+        let was_started = {
             let mut state = self.state();
-            Self::validate_group(&state, &group)?;
+            Self::validate_group_parts(&state, &group_id, &members)?;
 
-            let member_ids: Vec<String> = group.members.iter().map(|m| m.id.clone()).collect();
-            for capability in group.members {
+            let member_ids: Vec<String> = members
+                .iter()
+                .map(|member| member.id().to_string())
+                .collect();
+            for capability in members {
+                let member_id = capability.id().to_string();
                 state.members.insert(
-                    capability.id.clone(),
+                    member_id,
                     MemberEntry {
                         group_id: group_id.clone(),
                         init_called: false,
@@ -125,38 +150,55 @@ impl Registry {
                 group_id.clone(),
                 GroupEntry {
                     member_ids,
-                    lifecycle: group.lifecycle,
+                    lifecycle,
                     init_called: false,
                     state: CapabilityState::Registered,
                 },
             );
-        }
+            state.started
+        };
 
-        if self.state().started {
-            self.enable_group(&group_id)?;
+        if was_started {
+            if let Err(error) = self.enable_group(&group_id) {
+                return Err(self.rollback_failed_registration(&group_id, error));
+            }
         }
         Ok(())
     }
 
-    fn validate_group(
+    fn rollback_failed_registration(
+        &self,
+        group_id: &str,
+        enable_error: CapabilityError,
+    ) -> CapabilityError {
+        match self.unregister_group(group_id) {
+            Ok(()) => enable_error,
+            Err(rollback_error) => CapabilityError::Failed(format!(
+                "enable failed: {enable_error}; rollback failed: {rollback_error}"
+            )),
+        }
+    }
+
+    fn validate_group_parts(
         state: &RegistryState,
-        group: &CapabilityGroup,
+        group_id: &str,
+        members: &[Capability],
     ) -> Result<(), CapabilityError> {
-        if group.id.is_empty() || group.members.is_empty() {
+        if group_id.is_empty() || members.is_empty() {
             return Err(CapabilityError::InvalidArg);
         }
-        if state.groups.contains_key(&group.id) {
+        if state.groups.contains_key(group_id) {
             return Err(CapabilityError::AlreadyExists);
         }
         let mut seen_ids: HashSet<&str> = HashSet::new();
-        for member in &group.members {
-            if member.id.is_empty() {
+        for member in members {
+            if member.id().is_empty() {
                 return Err(CapabilityError::InvalidArg);
             }
-            if state.members.contains_key(&member.id) {
+            if state.members.contains_key(member.id()) {
                 return Err(CapabilityError::AlreadyExists);
             }
-            if !seen_ids.insert(member.id.as_str()) {
+            if !seen_ids.insert(member.id()) {
                 return Err(CapabilityError::AlreadyExists);
             }
         }
@@ -259,7 +301,7 @@ impl Registry {
                     .filter_map(|id| {
                         state.members.get(id).map(|member| MemberPlan {
                             id: id.clone(),
-                            lifecycle: member.capability.lifecycle.clone(),
+                            lifecycle: member.capability.lifecycle().cloned(),
                             init_pending: !member.init_called,
                         })
                     })
@@ -318,7 +360,7 @@ impl Registry {
                     state
                         .members
                         .get(id)
-                        .and_then(|member| member.capability.lifecycle.clone())
+                        .and_then(|member| member.capability.lifecycle().cloned())
                 })
                 .collect();
             Self::set_group_state(&mut state, group_id, CapabilityState::Disabled);
@@ -363,7 +405,7 @@ impl Registry {
                         .members
                         .remove(id)
                         .filter(|member| member.init_called)
-                        .and_then(|member| member.capability.lifecycle)
+                        .and_then(|member| member.capability.into_lifecycle())
                 })
                 .collect();
             let group_deinit = group.init_called.then_some(group.lifecycle).flatten();
@@ -467,7 +509,7 @@ impl Registry {
         state
             .members
             .values()
-            .filter(|member| state.member_group_state(member).is_available())
+            .filter(|member| state.member_group_state(member).is_available(state.started))
             .filter_map(|member| member.capability.as_tool().cloned())
             .collect()
     }
@@ -478,7 +520,7 @@ impl Registry {
         let member = state.members.get(id)?;
         state
             .member_group_state(member)
-            .is_available()
+            .is_available(state.started)
             .then(|| member.capability.as_tool().cloned())
             .flatten()
     }
@@ -489,7 +531,7 @@ impl Registry {
         state
             .members
             .values()
-            .filter(|member| state.member_group_state(member).is_available())
+            .filter(|member| state.member_group_state(member).is_available(state.started))
             .filter_map(|member| member.capability.as_channel().cloned())
             .collect()
     }
@@ -500,7 +542,7 @@ impl Registry {
         let member = state.members.get(id)?;
         state
             .member_group_state(member)
-            .is_available()
+            .is_available(state.started)
             .then(|| member.capability.as_channel().cloned())
             .flatten()
     }
@@ -509,13 +551,18 @@ impl Registry {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use core::future::Future;
+    use core::task::{Context, Poll};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::task::{Wake, Waker};
 
-    use claw_tool::{Tool, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput};
+    use claw_tool::{
+        AsyncToolHandler, Tool, ToolFuture, ToolHandler, ToolInvocation, ToolInvokeError,
+        ToolOutput,
+    };
 
     use super::*;
-    use crate::capability::{Capability, CapabilityRole};
-    use crate::channel::OutboundMessage;
+    use crate::{Capability, CapabilityRole, OutboundMessage};
 
     /// A trivial tool whose id/name is `name`.
     struct DummyTool {
@@ -544,6 +591,54 @@ mod tests {
                 output: format!("ran:{}", self.name),
                 ok: true,
             })
+        }
+    }
+
+    struct AsyncDummyTool {
+        name: String,
+        schema: String,
+    }
+
+    impl AsyncDummyTool {
+        fn new(name: &str) -> Self {
+            Self {
+                schema: format!(r#"{{"type":"function","function":{{"name":"{name}"}}}}"#),
+                name: name.to_string(),
+            }
+        }
+    }
+
+    impl AsyncToolHandler for AsyncDummyTool {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn schema(&self) -> &str {
+            &self.schema
+        }
+        fn invoke_async<'a>(&'a self, _call: &'a ToolInvocation<'_>) -> ToolFuture<'a> {
+            Box::pin(async move {
+                Ok(ToolOutput {
+                    output: format!("async-ran:{}", self.name),
+                    ok: true,
+                })
+            })
+        }
+    }
+
+    struct NoopWake;
+
+    impl Wake for NoopWake {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let mut future = Box::pin(future);
+        let waker = Waker::from(Arc::new(NoopWake));
+        let mut context = Context::from_waker(&waker);
+        loop {
+            if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
+                return value;
+            }
         }
     }
 
@@ -580,6 +675,20 @@ mod tests {
     impl Lifecycle for FailingStart {
         fn start(&self) -> Result<(), CapabilityError> {
             Err(CapabilityError::Failed("boom".into()))
+        }
+    }
+
+    /// A lifecycle whose `start` and rollback `deinit` both fail.
+    struct FailingStartAndDeinit;
+    impl Lifecycle for FailingStartAndDeinit {
+        fn init(&self) -> Result<(), CapabilityError> {
+            Ok(())
+        }
+        fn start(&self) -> Result<(), CapabilityError> {
+            Err(CapabilityError::Failed("start failed".into()))
+        }
+        fn deinit(&self) -> Result<(), CapabilityError> {
+            Err(CapabilityError::Failed("deinit failed".into()))
         }
     }
 
@@ -625,6 +734,25 @@ mod tests {
             })
             .unwrap();
         assert_eq!(output.output, "ran:echo");
+    }
+
+    #[test]
+    fn register_then_expose_async_tool() {
+        let registry = Registry::new();
+        registry
+            .register(Capability::async_tool(AsyncDummyTool::new("async_echo")))
+            .unwrap();
+        registry.start_all().unwrap();
+
+        assert_eq!(registry.tools().len(), 1);
+        let tool = registry.tool("async_echo").unwrap();
+        let output = block_on(tool.invoke_async(&ToolInvocation {
+            id: None,
+            name: "async_echo",
+            arguments_json: "{}",
+        }))
+        .unwrap();
+        assert_eq!(output.output, "async-ran:async_echo");
     }
 
     #[test]
@@ -763,6 +891,41 @@ mod tests {
     }
 
     #[test]
+    fn register_while_started_rolls_back_on_start_failure() {
+        let registry = Registry::new();
+        registry.start_all().unwrap();
+
+        assert_eq!(
+            registry.register(Capability::none("late").with_lifecycle(Arc::new(FailingStart)),),
+            Err(CapabilityError::Failed("boom".into()))
+        );
+
+        assert!(!registry.contains("late"));
+        assert!(!registry.group_exists("late"));
+    }
+
+    #[test]
+    fn register_while_started_reports_rollback_failure() {
+        let registry = Registry::new();
+        registry.start_all().unwrap();
+
+        assert_eq!(
+            registry.register(
+                Capability::none("late")
+                    .with_lifecycle(Arc::new(FailingStartAndDeinit)),
+            ),
+            Err(CapabilityError::Failed(
+                "enable failed: capability operation failed: start failed; \
+                 rollback failed: capability operation failed: deinit failed"
+                    .into()
+            ))
+        );
+
+        assert!(!registry.contains("late"));
+        assert!(!registry.group_exists("late"));
+    }
+
+    #[test]
     fn failing_start_leaves_group_disabled() {
         let registry = Registry::new();
         registry
@@ -778,6 +941,35 @@ mod tests {
             registry.group_state("svc").unwrap(),
             CapabilityState::Disabled
         );
+    }
+
+    #[test]
+    fn failed_started_group_hides_tool_role() {
+        let registry = Registry::new();
+        registry
+            .register(
+                Capability::tool(DummyTool::tool("flaky")).with_lifecycle(Arc::new(FailingStart)),
+            )
+            .unwrap();
+
+        assert_eq!(
+            registry.start_all(),
+            Err(CapabilityError::Failed("boom".into()))
+        );
+
+        assert!(registry.tools().is_empty());
+        assert!(registry.tool("flaky").is_none());
+    }
+
+    #[test]
+    fn registered_tools_are_visible_before_start_for_wiring() {
+        let registry = Registry::new();
+        registry
+            .register(Capability::tool(DummyTool::tool("boot")))
+            .unwrap();
+
+        assert_eq!(registry.tools().len(), 1);
+        assert!(registry.tool("boot").is_some());
     }
 
     #[test]

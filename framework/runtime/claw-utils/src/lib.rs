@@ -6,9 +6,16 @@ use core::fmt;
 
 use thiserror::Error;
 
+pub mod async_channel;
+pub mod block_on;
 pub mod pool;
 
-pub use pool::{PoolConfig, PoolJob, SharedTaskPool};
+pub use async_channel::{
+    async_channel, async_oneshot, AsyncOneshotReceiver, AsyncOneshotSender, AsyncReceiver,
+    AsyncSendError, AsyncSender,
+};
+pub use block_on::block_on;
+pub use pool::{PoolAsyncJob, PoolConfig, PoolFuture, PoolJob, SharedTaskPool};
 
 /// Default byte ceiling for [`TruncatedText::new`]. On device, keep trace/log
 /// lines compact (flash + UART bandwidth); on host, print the full text so the

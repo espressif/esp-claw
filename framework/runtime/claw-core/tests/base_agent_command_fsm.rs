@@ -13,7 +13,7 @@ use claw_core::agent::{
     AgentCommand, AgentCommandError, AgentId, AgentState, ApprovalDecision, ApprovalId,
     CancelReason, TickOutcome,
 };
-use common::{agent_builder, body_plain_text, scripted_llm, TestAgent};
+use common::{agent_builder, block_on, body_plain_text, scripted_llm, TestAgent};
 
 fn idle_agent(name: &str) -> TestAgent<claw_interface::ScriptedHttp> {
     let dir = common::test_output_dir(name);
@@ -35,7 +35,7 @@ fn pause_from_idle_is_rejected() {
     );
     // Unchanged: still idle, no LLM call (empty script would panic if called).
     assert!(!agent.is_running());
-    assert!(matches!(agent.tick(), TickOutcome::Idle));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Idle));
 }
 
 #[test]
@@ -47,7 +47,7 @@ fn resume_from_idle_is_rejected() {
             state: AgentState::Idle
         })
     );
-    assert!(matches!(agent.tick(), TickOutcome::Idle));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Idle));
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn cancel_from_idle_is_rejected() {
         agent.cancel(CancelReason::UserRequested),
         Err(AgentCommandError::NothingToCancel)
     );
-    assert!(matches!(agent.tick(), TickOutcome::Idle));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Idle));
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn resolve_approval_from_idle_is_rejected() {
             state: AgentState::Idle
         })
     );
-    assert!(matches!(agent.tick(), TickOutcome::Idle));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Idle));
 }
 
 // -- Projected-state rejections (no tick between commands) -------------------
@@ -155,7 +155,7 @@ fn a_batch_validated_in_order_then_runs() {
     agent.resume().expect("resume accepted (projected Paused)");
 
     // The single tick drains the batch (ending Running) and runs one iteration.
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { text } if text == "pong"));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Yielded { text } if text == "pong"));
     assert!(!agent.is_running());
 }
 
@@ -181,7 +181,7 @@ fn rejected_command_does_not_enqueue() {
     );
     // ...so a normal task afterwards behaves exactly as if it never happened.
     agent.run("do work");
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { text } if text == "pong"));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Yielded { text } if text == "pong"));
 }
 
 #[test]
@@ -194,5 +194,5 @@ fn send_command_is_the_validating_funnel() {
             state: AgentState::Idle
         })
     );
-    assert!(matches!(agent.tick(), TickOutcome::Idle));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Idle));
 }

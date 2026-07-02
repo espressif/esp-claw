@@ -9,13 +9,16 @@ pub mod fs;
 pub mod http;
 pub mod log_sink;
 pub mod thread;
+pub mod timer;
 
 #[cfg(target_os = "espidf")]
 pub use fs::{EspIdfFile, EspIdfFs};
 #[cfg(target_os = "espidf")]
-pub use http::EspIdfHttp;
+pub use http::{EspIdfHttp, EspIdfHttpOneShot};
 #[cfg(target_os = "espidf")]
 pub use thread::EspIdfThread;
+#[cfg(target_os = "espidf")]
+pub use timer::EspIdfTimer;
 
 #[cfg(test)]
 mod tests {

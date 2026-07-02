@@ -13,7 +13,7 @@ mod session;
 pub use agent::IterationId;
 pub use channels::{
     ChannelEgress, ChannelEgressHub, ChannelError, ChannelIngress, ChannelIngressSink,
-    ChannelTransport, Command, InboundCommand, InboundMessage, LocalChannelIngress,
+    ChannelTransport, Command, InboundCommand, InboundMessage, IngressFuture, LocalChannelIngress,
     OutboundMessage, RecordingTransport, ReplyRoute,
 };
 pub use claw_utils::{define_prefixed_id, IdParseError};

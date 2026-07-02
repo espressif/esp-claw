@@ -8,7 +8,9 @@ orthogonal, optional **lifecycle**.
 
 - **Role** — what the capability exposes when used:
   - `Tool` — a model-callable tool. It *is* a [`claw_tool::Tool`]; this crate adds
-    no dispatch, schema, or visibility logic of its own.
+    no dispatch, schema, or visibility logic of its own. Rust tools may be
+    synchronous (`Capability::tool(claw_tool::Tool::new(...))`) or async
+    (`Capability::async_tool(...)` with a `claw_tool::AsyncToolHandler`).
   - `Channel` — a message transport (outbound egress; inbound via its lifecycle task).
   - `None` — no invocation surface; the capability exists only for its lifecycle.
 - **Lifecycle** — optional resource management, available to *any* role (a `Tool`
@@ -31,6 +33,7 @@ re-entering this layer.
 |------|------|
 | `Registry` | Owns capability identity + lifecycle: `register` / `register_group`, `start_all` / `stop_all`, `enable_group` / `disable_group`, `unregister[_group]`, plus role-based access (`tools`, `channels`) and state queries. |
 | `Capability` / `CapabilityRole` | One capability (id, description, role, optional lifecycle) and its role (`Tool` / `Channel` / `None`). |
+| `Capability::tool` / `Capability::async_tool` | Rust-side tool registration entry points. Tool authoring types stay in `claw_tool`; C descriptors keep the synchronous callback path. |
 | `CapabilityGroup` | A registrable bundle of capabilities with an optional **shared** lifecycle (e.g. one runtime backing several tools). |
 | `Lifecycle` | The orthogonal hooks on any capability or group: the one-time `init`/`deinit` pair and the per-activation `start`/`stop` pair (`init → (start → stop)* → deinit`). |
 | `CapabilityState` | Lifecycle state: `Registered` / `Started` / `Disabled`. |
@@ -40,8 +43,6 @@ re-entering this layer.
 ## Example
 
 ```rust
-use std::sync::Arc;
-
 use claw_capability::{Capability, Registry};
 use claw_tool::{Tool, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput};
 

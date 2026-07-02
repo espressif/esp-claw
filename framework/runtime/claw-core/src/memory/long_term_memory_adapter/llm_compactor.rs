@@ -1,4 +1,4 @@
-//! [`LlmCompactor`] — a [`Compactor`] backed by [`ClawApi`].
+//! [`LlmCompactor`] — a [`Compactor`] backed by [`ClawApiAsync`].
 //!
 //! It flattens the aged window into a plain `role: content` transcript and asks
 //! the model for a concise recap, returned as a single `system` summary message.
@@ -11,13 +11,14 @@
 //! rolling-summary adapter.
 
 use std::sync::atomic::AtomicBool;
-use std::sync::Mutex;
 
 use serde_json::{json, Value};
 
-use claw_api::{ChatRequest, ClawApi};
-use claw_interface::http::ClawHttp;
-use claw_memory::{CompactError, Compactor};
+use claw_api::{ChatRequest, ClawApiAsync};
+use claw_interface::{Cancel, ClawHttpAsync, ClawTimer};
+use claw_memory::{CompactError, CompactFuture, Compactor};
+
+use super::async_llm::SharedAsyncLlm;
 
 /// System prompt steering the summarization.
 const SUMMARY_SYSTEM_PROMPT: &str = "You compress conversation history. Produce a \
@@ -30,19 +31,19 @@ const SUMMARY_USER_PREFIX: &str = "Summarize the following conversation transcri
 
 /// A [`Compactor`] that summarizes the aged window via the LLM client.
 ///
-/// Owns its own [`ClawApi`] transport (`H`) behind a [`Mutex`]: the compactor is
-/// shared across every agent's rolling-summary adapter as an `Arc<dyn Compactor>`,
-/// while [`ClawApi::chat`] needs `&mut self`, so the mutex serializes the
-/// (infrequent, off-tick) compaction calls.
-pub struct LlmCompactor<H: ClawHttp> {
-    api: Mutex<ClawApi<H>>,
+/// Owns its own async LLM client. The compactor is shared across every agent's
+/// rolling-summary adapter as an `Arc<dyn Compactor>`, while
+/// [`ClawApiAsync::chat`] needs `&mut self`, so calls borrow the client
+/// exclusively without holding a mutex while the future is running.
+pub struct LlmCompactor<H: ClawHttpAsync, Timer: ClawTimer> {
+    api: SharedAsyncLlm<H, Timer>,
 }
 
-impl<H: ClawHttp> LlmCompactor<H> {
+impl<H: ClawHttpAsync, Timer: ClawTimer> LlmCompactor<H, Timer> {
     /// Build a compactor that owns the given LLM client.
     ///
-    /// The `api` is its own [`ClawApi`] (with its own transport `H`), wired into
-    /// `CompactionDeps.compactor` so compaction summarizes through the
+    /// The `api` is its own [`ClawApiAsync`] (with its own transport `H`), wired
+    /// into `CompactionDeps.compactor` so compaction summarizes through the
     /// configured backend.
     ///
     /// # Examples
@@ -50,19 +51,20 @@ impl<H: ClawHttp> LlmCompactor<H> {
     /// ```
     /// use std::sync::Arc;
     ///
-    /// use claw_api::{BackendKind, ClawApi, ClawApiConfig};
+    /// use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
     /// use claw_core::LlmCompactor;
-    /// use claw_memory::Compactor;
-    /// # use std::sync::atomic::AtomicBool;
-    /// # use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
+    /// # use claw_interface::http::{BlockingClawHttpAsync, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
+    /// # use claw_interface::{Cancel, ClawHttpAsync, ImmediateTimer};
     /// # #[derive(Default)]
     /// # struct StubHttp;
-    /// # impl ClawHttp for StubHttp {
-    /// #     fn post_json(&mut self, _: &HttpJsonRequest, _: &AtomicBool) -> Result<HttpResponse, HttpError> {
+    /// # impl ClawHttpAsync for StubHttp {
+    /// #     fn post_json<'a>(&'a mut self, _: &'a HttpJsonRequest<'a>, _: Cancel<'a>) -> claw_interface::HttpResponseFuture<'a> {
+    /// #         Box::pin(async {
     /// #         Ok(HttpResponse { status_code: HttpStatusCode::OK, body: "{}".into() })
+    /// #         })
     /// #     }
     /// # }
-    /// let api = ClawApi::init(
+    /// let api = ClawApiAsync::init(
     ///     ClawApiConfig::new(
     ///         BackendKind::OpenAiCompatible,
     ///         "sk-test",
@@ -70,48 +72,54 @@ impl<H: ClawHttp> LlmCompactor<H> {
     ///         "https://api.openai.com/v1",
     ///     ),
     ///     StubHttp::default(),
+    ///     ImmediateTimer,
     /// )
     /// .expect("init");
     ///
     /// // A ready-to-inject `Compactor`.
-    /// let compactor: Arc<dyn Compactor> = Arc::new(LlmCompactor::new(api));
+    /// let compactor = Arc::new(LlmCompactor::new(api));
     /// # let _ = compactor;
     /// ```
-    pub fn new(api: ClawApi<H>) -> Self {
+    pub fn new(api: ClawApiAsync<H, Timer>) -> Self {
         Self {
-            api: Mutex::new(api),
+            api: SharedAsyncLlm::new(api),
         }
     }
 }
 
-impl<H: ClawHttp + Send> Compactor for LlmCompactor<H> {
-    fn compact(&self, window: &[Value]) -> Result<Vec<Value>, CompactError> {
-        let transcript = render_transcript(window);
-        let messages = json!([
-            { "role": "user", "content": format!("{SUMMARY_USER_PREFIX}\n\n{transcript}") }
-        ]);
+impl<H: ClawHttpAsync + Send, Timer: ClawTimer + Send> Compactor for LlmCompactor<H, Timer> {
+    fn compact<'a>(&'a self, window: &'a [Value]) -> CompactFuture<'a> {
+        Box::pin(async move {
+            let transcript = render_transcript(window);
+            let messages = json!([
+                { "role": "user", "content": format!("{SUMMARY_USER_PREFIX}\n\n{transcript}") }
+            ]);
 
-        // todo: thread a real abort flag once the `Compactor` trait carries one;
-        // for now a compaction summarization request is not cancellable.
-        let abort = AtomicBool::new(false);
-        let response = self
-            .api
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .chat(&ChatRequest::new(SUMMARY_SYSTEM_PROMPT, &messages), &abort)
-            .map_err(|err| CompactError::Backend(err.to_string()))?;
+            // todo: thread a real abort flag once the `Compactor` trait carries one;
+            // for now a compaction summarization request is not cancellable.
+            let abort = AtomicBool::new(false);
+            let mut lease = self.api.lease().await;
+            let response = lease
+                .api_mut()
+                .chat(
+                    &ChatRequest::new(SUMMARY_SYSTEM_PROMPT, &messages),
+                    Cancel::new(&abort),
+                )
+                .await
+                .map_err(|err| CompactError::Backend(err.to_string()))?;
 
-        let summary = response.text.unwrap_or_default();
-        if summary.trim().is_empty() {
-            return Err(CompactError::Backend(
-                "model returned an empty summary".to_string(),
-            ));
-        }
+            let summary = response.text.unwrap_or_default();
+            if summary.trim().is_empty() {
+                return Err(CompactError::Backend(
+                    "model returned an empty summary".to_string(),
+                ));
+            }
 
-        Ok(vec![json!({
-            "role": "system",
-            "content": format!("Summary of earlier conversation:\n{summary}"),
-        })])
+            Ok(vec![json!({
+                "role": "system",
+                "content": format!("Summary of earlier conversation:\n{summary}"),
+            })])
+        })
     }
 }
 

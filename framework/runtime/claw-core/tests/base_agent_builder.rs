@@ -10,7 +10,7 @@ use claw_tool::{
     Tool, ToolGroup, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput, ToolSet,
 };
 use common::{
-    agent_builder, body_echo_call, body_end_conversation, body_plain_text, capturing_llm,
+    agent_builder, block_on, body_echo_call, body_end_conversation, body_plain_text, capturing_llm,
     run_to_completion, scripted_llm, test_output_dir,
 };
 
@@ -50,8 +50,8 @@ fn build_with_tools_runs_a_tool_round() {
     agent.run("use the echo tool");
     // First round issues the tool call (still working); the tool result feeds the
     // next LLM round, which yields the final text.
-    assert!(matches!(agent.tick(), TickOutcome::Working));
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { text } if text == "done"));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Working));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Yielded { text } if text == "done"));
 }
 
 #[test]
@@ -68,7 +68,7 @@ fn built_in_end_conversation_is_available_with_tools() {
 
     agent.run("wrap up");
     assert!(matches!(
-        agent.tick(),
+        block_on(agent.tick()),
         TickOutcome::Ended { final_message } if final_message == "bye"
     ));
 }

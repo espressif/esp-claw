@@ -1,9 +1,8 @@
 //! [`AgentRegistry`] — the per-session agent **store**.
 //!
 //! The registry owns exactly one thing: the live agents of a session, keyed by
-//! [`AgentId`], each behind an `Arc<Mutex<_>>` handle so the scheduler can drive
-//! them (and, later, tick several concurrently). It is a dumb map: insert, get a
-//! handle, remove, count. Nothing else.
+//! [`AgentId`]. It is a dumb map: insert, get a mutable agent, remove, count.
+//! Nothing else.
 //!
 //! Everything *about* the agents — identity allocation, the factory that builds
 //! them, the parent/child graph, scheduling, outcome routing, approval handling,
@@ -13,8 +12,8 @@
 //!
 //! This module also defines the shared [`AgentIdAllocator`] (process-unique ids),
 //! used by the instance, not by the store itself: it is colocated here because it
-//! is agent-identity infrastructure. The companion construction seam — how an
-//! agent of a kind is built — is [`AgentFactory`](crate::agent::factory::AgentFactory).
+//! is agent-identity infrastructure. Agent construction lives in
+//! [`AgentFactory`](crate::agent::factory::AgentFactory).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -24,15 +23,6 @@ use crate::agent::Agent;
 
 /// The first [`AgentId`] handed out (0 reads like "unset").
 const FIRST_AGENT_ID: AgentId = AgentId(1);
-
-/// A live agent behind a shared, lockable handle.
-///
-/// The instance obtains a handle by id and locks it to tick or command the agent;
-/// the registry keeps an equal handle as the agent's owner of record (dropped on
-/// [`remove`](AgentRegistry::remove)). The `Mutex` satisfies the borrow checker
-/// for one-at-a-time access today and is the seam for concurrent async ticking
-/// later (each future locks only its own agent).
-pub(crate) type AgentHandle = Arc<Mutex<Box<dyn Agent>>>;
 
 /// Hands out process-unique [`AgentId`]s from a shared counter.
 ///
@@ -68,7 +58,7 @@ impl AgentIdAllocator {
 
 /// The per-session agent store: a flat map of agents keyed by [`AgentId`].
 pub(crate) struct AgentRegistry {
-    agents: HashMap<AgentId, AgentHandle>,
+    agents: HashMap<AgentId, Box<dyn Agent>>,
 }
 
 impl AgentRegistry {
@@ -79,26 +69,26 @@ impl AgentRegistry {
         }
     }
 
-    /// Store `agent` under `id`, returning its handle. An existing agent under the
-    /// same id is replaced (the instance allocates unique ids, so this does not
-    /// happen in practice).
-    pub(crate) fn insert(&mut self, id: AgentId, agent: Box<dyn Agent>) -> AgentHandle {
-        let handle: AgentHandle = Arc::new(Mutex::new(agent));
-        self.agents.insert(id, Arc::clone(&handle));
-        handle
+    /// Store `agent` under `id`. An existing agent under the same id is replaced
+    /// (the instance allocates unique ids, so this does not happen in practice).
+    pub(crate) fn insert(&mut self, id: AgentId, agent: Box<dyn Agent>) {
+        self.agents.insert(id, agent);
     }
 
-    /// A handle to the agent `id`, or `None` if no such agent is stored. The
-    /// returned `Arc` clone holds no borrow of the store, so callers may obtain
-    /// several handles and lock each independently.
-    pub(crate) fn get(&self, id: AgentId) -> Option<AgentHandle> {
-        self.agents.get(&id).map(Arc::clone)
+    /// Mutable access to the agent `id`, or `None` if no such agent is stored.
+    pub(crate) fn get_mut(&mut self, id: AgentId) -> Option<&mut Box<dyn Agent>> {
+        self.agents.get_mut(&id)
     }
 
     /// Drop the agent `id` from the store. Returns `false` if no such agent
     /// existed.
     pub(crate) fn remove(&mut self, id: AgentId) -> bool {
         self.agents.remove(&id).is_some()
+    }
+
+    /// Take ownership of the agent `id` out of the store.
+    pub(crate) fn take(&mut self, id: AgentId) -> Option<Box<dyn Agent>> {
+        self.agents.remove(&id)
     }
 
     /// The number of live agents in the store. Used by the instance's test-only
@@ -114,6 +104,7 @@ impl AgentRegistry {
 mod tests {
     use super::*;
     use crate::agent::base_agent::{AgentCommand, AgentCommandError, TickOutcome};
+    use crate::agent::AgentTickFuture;
 
     /// A trivial agent: does nothing, always idle. Enough to exercise the store.
     struct NoopAgent {
@@ -128,8 +119,8 @@ mod tests {
             Ok(())
         }
         fn deliver_child_result(&mut self, _child: AgentId, _text: String, _ok: bool) {}
-        fn tick(&mut self) -> TickOutcome {
-            TickOutcome::Idle
+        fn tick(&mut self) -> AgentTickFuture<'_> {
+            Box::pin(async { TickOutcome::Idle })
         }
     }
 
@@ -139,14 +130,14 @@ mod tests {
         assert_eq!(registry.count(), 0);
 
         let id = AgentId(1);
-        let handle = registry.insert(id, Box::new(NoopAgent { id }));
+        registry.insert(id, Box::new(NoopAgent { id }));
         assert_eq!(registry.count(), 1);
-        assert!(registry.get(id).is_some());
-        assert_eq!(handle.lock().unwrap().id(), id);
+        assert!(registry.get_mut(id).is_some());
+        assert_eq!(registry.get_mut(id).unwrap().id(), id);
 
         assert!(registry.remove(id));
         assert!(!registry.remove(id));
-        assert!(registry.get(id).is_none());
+        assert!(registry.get_mut(id).is_none());
         assert_eq!(registry.count(), 0);
     }
 

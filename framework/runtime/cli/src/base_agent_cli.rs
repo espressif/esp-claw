@@ -16,7 +16,8 @@ const MEMORY_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../claw-core/outp
 const SYSTEM_PROMPT: &str = "You are a helpful, concise assistant.";
 const AGENT_ID: usize = 1;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     load_env();
 
     let (memory, memory_view) = make_memory(AGENT_ID, MEMORY_DIR);
@@ -57,7 +58,7 @@ fn main() {
         agent.run(input);
 
         loop {
-            match agent.tick() {
+            match agent.tick().await {
                 TickOutcome::Working => continue,
                 TickOutcome::Yielded { text } => {
                     println!("\n{text}\n");

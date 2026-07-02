@@ -1,13 +1,17 @@
 //! Integration tests for [`LlmCompactor`].
 //!
-//! A canned `ClawHttp` stands in for the network so the test is hermetic.
+//! A canned async HTTP wrapper stands in for the network so the test is hermetic.
 
 use std::sync::atomic::AtomicBool;
 
-use claw_api::{BackendKind, ClawApi, ClawApiConfig};
+use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
 use claw_core::LlmCompactor;
-use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
+use claw_interface::http::{
+    BlockingClawHttpAsync, ClawHttp, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode,
+};
+use claw_interface::ImmediateTimer;
 use claw_memory::Compactor;
+use claw_utils::block_on;
 use serde_json::json;
 
 /// Returns a fixed OpenAI-shaped reply with `content` set to `reply`.
@@ -28,22 +32,23 @@ impl ClawHttp for CannedHttp {
     }
 }
 
-fn api_replying(reply: &str) -> ClawApi<CannedHttp> {
+fn api_replying(reply: &str) -> ClawApiAsync<BlockingClawHttpAsync<CannedHttp>, ImmediateTimer> {
     let body = json!({
         "choices": [{ "message": { "role": "assistant", "content": reply } }]
     })
     .to_string();
     let http = CannedHttp { body };
-    ClawApi::init(
+    ClawApiAsync::init(
         ClawApiConfig::new(
             BackendKind::OpenAiCompatible,
             "key",
             "model-x",
             "https://api.example.com/v1",
         ),
-        http,
+        BlockingClawHttpAsync::new(http),
+        ImmediateTimer,
     )
-    .expect("init ClawApi")
+    .expect("init ClawApiAsync")
 }
 
 #[test]
@@ -55,7 +60,7 @@ fn summarizes_window_into_one_system_message() {
         json!({ "role": "user", "content": "remember the budget is $50" }),
     ];
 
-    let out = compactor.compact(&window).expect("compaction succeeds");
+    let out = block_on(compactor.compact(&window)).expect("compaction succeeds");
 
     assert_eq!(out.len(), 1);
     assert_eq!(out[0]["role"], "system");
@@ -70,5 +75,5 @@ fn empty_summary_is_an_error() {
     let compactor = LlmCompactor::new(api_replying(""));
     let window = vec![json!({ "role": "user", "content": "x" })];
 
-    assert!(compactor.compact(&window).is_err());
+    assert!(block_on(compactor.compact(&window)).is_err());
 }

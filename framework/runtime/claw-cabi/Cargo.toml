@@ -29,6 +29,9 @@ claw-agent = { path = "../claw-agent", default-features = false }
 [target.'cfg(target_os = "espidf")'.dependencies]
 # Device backends used by the C-created agent runtime.
 claw-sys = { path = "../claw-sys" }
+claw-interface = { path = "../claw-interface" }
+claw-utils = { path = "../claw-utils" }
+edge-executor = { version = "0.4.1", default-features = true }
 
 [lints.rust]
 # THE ONE EXCEPTION in the workspace: this crate is the FFI boundary, so it must

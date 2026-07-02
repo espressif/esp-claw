@@ -13,6 +13,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 claw-permission = { path = "../claw-permission" }
+claw-utils = { path = "../claw-utils" }
 # Used only by the build-time `bake` module (called from dependent crates' build
 # scripts). Nothing in the firmware call graph references `bake`, so the linker
 # garbage-collects it and its `anyhow` usage out of the device image.

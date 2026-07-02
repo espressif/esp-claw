@@ -35,8 +35,10 @@ dev = [
     "claw-interface/diskfs",
     "claw-interface/realhttp",
     "claw-interface/stdthread",
+    "claw-interface/tokiotimer",
     "dep:dotenvy",
     "dep:anyhow",
+    "dep:tokio",
 ]
 
 [dependencies]
@@ -61,9 +63,10 @@ thiserror = "2"
 anyhow = { version = "1", optional = true }
 # Dev-only: the `claw-agent-chat` bin loads `claw-core/.env.local`.
 dotenvy = { version = "0.15", optional = true }
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"], optional = true }
 
 [dev-dependencies]
 # In-memory fs + scripted HTTP doubles so the end-to-end tests run hermetically
 # (no network, no API key) entirely through the public API.
-claw-interface = { path = "../claw-interface", features = ["memfs", "httpmock"] }
+claw-interface = { path = "../claw-interface", features = ["memfs", "httpmock", "timermock"] }
 serde_json = "1"

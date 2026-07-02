@@ -8,13 +8,17 @@
 #![allow(dead_code)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use core::future::Future;
+use core::task::{Context, Poll};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::task::{Wake, Waker};
 
-use claw_api::{BackendKind, ClawApi, ClawApiConfig};
+use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
 use claw_core::agent::{AgentId, BaseAgent, BaseAgentBuilder, TickOutcome};
 use claw_interface::{
-    CapturingHttp, ClawHttp, DiskFs, FailingHttp, NeverHttp, ScriptStep, ScriptedHttp, StdThread,
+    BlockingClawHttpAsync, CapturingHttp, ClawHttp, DiskFs, FailingHttp, ImmediateTimer, NeverHttp,
+    ScriptStep, ScriptedHttp, StdThread,
 };
 use claw_memory::{TranscriptConfig, TranscriptStore};
 use claw_tool::{ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput};
@@ -78,40 +82,42 @@ pub fn body_echo_call_id(id: &str, input: &str) -> String {
 // LLM builders
 // ===========================================================================
 
-fn build_llm<H: ClawHttp>(http: H) -> ClawApi<H> {
+pub type TestLlm<H> = ClawApiAsync<BlockingClawHttpAsync<H>, ImmediateTimer>;
+
+fn build_llm<H: ClawHttp>(http: H) -> TestLlm<H> {
     let config = ClawApiConfig::new(
         BackendKind::OpenAiCompatible,
         "sk-test",
         "gpt-test",
         "https://example.invalid",
     );
-    ClawApi::init(config, http).expect("init llm")
+    ClawApiAsync::init(config, BlockingClawHttpAsync::new(http), ImmediateTimer).expect("init llm")
 }
 
 /// Tool-capable LLM serving the given plain bodies in order (strict).
-pub fn scripted_llm(bodies: Vec<String>) -> ClawApi<ScriptedHttp> {
+pub fn scripted_llm(bodies: Vec<String>) -> TestLlm<ScriptedHttp> {
     build_llm(ScriptedHttp::new(bodies))
 }
 
 /// Tool-capable LLM whose rounds may be successes or transport errors (strict).
-pub fn scripted_llm_steps(steps: Vec<ScriptStep>) -> ClawApi<ScriptedHttp> {
+pub fn scripted_llm_steps(steps: Vec<ScriptStep>) -> TestLlm<ScriptedHttp> {
     build_llm(ScriptedHttp::with_steps(steps))
 }
 
 /// Tool-capable LLM that records requests; returns the API plus the capture handle.
-pub fn capturing_llm(bodies: Vec<String>) -> (ClawApi<Arc<CapturingHttp>>, Arc<CapturingHttp>) {
+pub fn capturing_llm(bodies: Vec<String>) -> (TestLlm<Arc<CapturingHttp>>, Arc<CapturingHttp>) {
     let http = CapturingHttp::new(bodies);
     let llm = build_llm(Arc::clone(&http));
     (llm, http)
 }
 
 /// Tool-capable LLM whose every round fails.
-pub fn failing_llm() -> ClawApi<FailingHttp> {
+pub fn failing_llm() -> TestLlm<FailingHttp> {
     build_llm(FailingHttp)
 }
 
 /// Tool-capable LLM that must never be called (panics if it is).
-pub fn never_called_llm() -> ClawApi<NeverHttp> {
+pub fn never_called_llm() -> TestLlm<NeverHttp> {
     build_llm(NeverHttp)
 }
 
@@ -169,7 +175,9 @@ pub type TestFs = DiskFs;
 
 /// A disk-backed [`BaseAgent`] for the integration tests, generic over the HTTP
 /// transport `H` the test's LLM double uses.
-pub type TestAgent<H> = BaseAgent<H>;
+pub type TestAgent<H> = BaseAgent<BlockingClawHttpAsync<H>, ImmediateTimer>;
+
+pub type TestAgentBuilder<H> = BaseAgentBuilder<TestFs, BlockingClawHttpAsync<H>, ImmediateTimer>;
 
 /// A disk-backed [`TranscriptStore`] view for the integration tests.
 pub type TestMemory = TranscriptStore<TestFs>;
@@ -181,20 +189,20 @@ pub fn test_memory(agent_id: AgentId, dir: impl Into<String>) -> TestMemory {
 
 /// A `BaseAgentBuilder` over a fresh disk transcript store.
 pub fn agent_builder<H: ClawHttp>(
-    llm: ClawApi<H>,
+    llm: TestLlm<H>,
     agent_id: AgentId,
     dir: impl Into<String>,
-) -> BaseAgentBuilder<TestFs, H> {
+) -> TestAgentBuilder<H> {
     BaseAgent::builder(llm, test_memory(agent_id, dir))
 }
 
 /// A builder plus a cloned read-only view of the same store, so a test can
 /// inspect the committed transcript without going through the agent.
 pub fn builder_with_view<H: ClawHttp>(
-    llm: ClawApi<H>,
+    llm: TestLlm<H>,
     agent_id: AgentId,
     dir: impl Into<String>,
-) -> (BaseAgentBuilder<TestFs, H>, TestMemory) {
+) -> (TestAgentBuilder<H>, TestMemory) {
     let store = test_memory(agent_id, dir);
     let view = store.clone();
     (BaseAgent::builder(llm, store), view)
@@ -204,12 +212,29 @@ pub fn builder_with_view<H: ClawHttp>(
 // Drivers / assertions
 // ===========================================================================
 
+struct NoopWake;
+
+impl Wake for NoopWake {
+    fn wake(self: Arc<Self>) {}
+}
+
+pub fn block_on<F: Future>(future: F) -> F::Output {
+    let mut future = Box::pin(future);
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut context = Context::from_waker(&waker);
+    loop {
+        if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
+            return value;
+        }
+    }
+}
+
 /// Pump until the task hands back an answer (`Yielded`) or ends (`Ended`),
 /// returning that text. Panics on `Failed` or any other non-progress outcome so
 /// an unexpected pause/approval/cancel surfaces instead of hanging.
-pub fn run_to_completion<H: ClawHttp>(agent: &mut BaseAgent<H>) -> String {
+pub fn run_to_completion<H: ClawHttp>(agent: &mut TestAgent<H>) -> String {
     loop {
-        match agent.tick() {
+        match block_on(agent.tick()) {
             TickOutcome::Working => continue,
             TickOutcome::Yielded { text } => return text,
             TickOutcome::Ended { final_message } => return final_message,

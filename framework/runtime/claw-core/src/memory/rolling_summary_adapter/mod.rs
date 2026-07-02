@@ -192,15 +192,17 @@ impl<F: ClawFs + 'static> RollingSummaryContextAdapter<F> {
         let compactor = Arc::clone(&self.compactor);
         let parked = Arc::clone(&self.parked);
         let in_flight = Arc::clone(&self.in_flight);
-        self.pool.submit(Box::new(move || {
-            match compactor.compact(&window_messages) {
-                Ok(messages) => {
-                    *parked.lock().unwrap_or_else(|poison| poison.into_inner()) =
-                        Some(ParkedSummary { id_end, messages });
+        self.pool.submit_async(Box::new(move || {
+            Box::pin(async move {
+                match compactor.compact(&window_messages).await {
+                    Ok(messages) => {
+                        *parked.lock().unwrap_or_else(|poison| poison.into_inner()) =
+                            Some(ParkedSummary { id_end, messages });
+                    }
+                    Err(error) => tracing::warn!(%error, "conversation compaction skipped"),
                 }
-                Err(error) => tracing::warn!(%error, "conversation compaction skipped"),
-            }
-            in_flight.store(false, Ordering::Release);
+                in_flight.store(false, Ordering::Release);
+            })
         }));
     }
 

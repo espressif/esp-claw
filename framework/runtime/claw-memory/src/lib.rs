@@ -62,7 +62,7 @@ pub mod transcript_store;
 
 #[cfg(feature = "compactor-stub")]
 pub use compaction::NoopCompactor;
-pub use compaction::{CompactError, Compactor};
+pub use compaction::{CompactError, CompactFuture, Compactor};
 pub use long_term_memory::{
     LongTermConfig, LongTermError, LongTermMemory, MemoryDraft, MemoryId, MemoryItem, MemoryPatch,
     StoreOutcome,

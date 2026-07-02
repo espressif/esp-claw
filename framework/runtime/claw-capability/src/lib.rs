@@ -16,12 +16,14 @@
 //! an agent sees, and *when*, is decided by `claw-core` (composing per-agent
 //! `ToolSet`s with skills / soft-hide), never re-entering this layer.
 //!
+//! Rust capabilities can expose async model-callable tools through
+//! [`Capability::async_tool`]. C-backed descriptors stay on the synchronous
+//! callback ABI; the async surface is for Rust implementations.
+//!
 //! # Example
 //!
 //! ```
-//! use std::sync::Arc;
-//!
-//! use claw_capability::{Capability, CapabilityGroup, Lifecycle, Registry};
+//! use claw_capability::{Capability, Registry};
 //! use claw_tool::{Tool, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput};
 //!
 //! struct Clock;
@@ -45,11 +47,11 @@
 //! assert_eq!(registry.tools().len(), 1);
 //! ```
 
-pub mod capability;
-pub mod channel;
-pub mod error;
-pub mod lifecycle;
-pub mod registry;
+mod capability;
+mod channel;
+mod error;
+mod lifecycle;
+mod registry;
 
 pub use capability::{Capability, CapabilityGroup, CapabilityRole};
 pub use channel::{ChannelAdapter, OutboundMessage};

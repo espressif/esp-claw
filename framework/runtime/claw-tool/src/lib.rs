@@ -5,9 +5,10 @@
 //! The crate sits below `claw-core` (and beside `claw-permission`): it knows
 //! nothing about agents or the orchestrator, only about *tools*. Four layers:
 //!
-//! - **define** ([`handler`]): the [`ToolHandler`] trait and the
-//!   [`tool_metadata!`] macro that bakes a tool's `name`/`schema`/`usage` from
-//!   `resources/tools/<name>/`, plus the cheap-to-clone [`Tool`] value.
+//! - **define** ([`handler`]): the sync [`ToolHandler`] and Rust-side
+//!   [`AsyncToolHandler`] traits, plus the [`tool_metadata!`] macro that bakes a
+//!   tool's `name`/`schema`/`usage` from `resources/tools/<name>/`, and the
+//!   cheap-to-clone [`Tool`] value.
 //! - **aggregate** ([`set`]): [`ToolGroup`] and the per-agent [`ToolSet`] —
 //!   combined schema JSON + flat dispatch, plus the **soft-tools** state it fully
 //!   owns: the [`AllowedTools`] phase allow-set ([`set_active_tools`](ToolSet::set_active_tools)
@@ -16,9 +17,9 @@
 //!   [`extra_tool_context`](ToolSet::extra_tool_context) phase note.
 //! - **registry** ([`registry`]): the [`ToolRegistry`] pool that both baked and
 //!   runtime-registered tools live in; [`ToolSet`]s are assembled from it.
-//! - **execute** ([`runner`]): the [`ToolRunner`] seam — soft-hide gating, the
-//!   permission [`ToolGate`], and dispatch — shaped for future async concurrency,
-//!   with [`PermissionGate`] (in [`gate`]) the policy-backed `ToolGate` the agent
+//! - **execute** ([`runner`]): the [`ToolRunner`] boundary — soft-hide gating, the
+//!   permission [`ToolGate`], and dispatch — shaped for future async concurrency.
+//!   [`PermissionGate`] (in [`gate`]) is the policy-backed `ToolGate` the agent
 //!   installs.
 //! - **block policy** ([`block`]): [`BlockPolicy`], the soft-hide "retry then
 //!   fail" streak counter. It is *conversation state* the agent owns, kept out of
@@ -33,6 +34,7 @@
 pub mod bake;
 
 mod block;
+mod executor;
 mod gate;
 mod handler;
 mod registry;
@@ -43,8 +45,8 @@ mod validate;
 pub use block::{BlockPolicy, ToolBlockVerdict, DEFAULT_BLOCK_RETRIES};
 pub use gate::PermissionGate;
 pub use handler::{
-    tool_invoke_err, tool_invoke_err_with_retries, Tool, ToolError, ToolHandler, ToolInvocation,
-    ToolInvokeError, ToolOutput, ToolRetryCount,
+    tool_invoke_err, tool_invoke_err_with_retries, AsyncToolHandler, Tool, ToolError, ToolFuture,
+    ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput, ToolRetryCount,
 };
 pub use registry::ToolRegistry;
 pub use runner::{ApprovalNeeded, CallOutcome, ToolGate, ToolRunner};

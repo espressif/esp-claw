@@ -1,4 +1,4 @@
-//! [`LlmExtractor`] — an [`Extractor`] backed by [`ClawApi`].
+//! [`LlmExtractor`] — an [`Extractor`] backed by [`ClawApiAsync`].
 //!
 //! It asks the model to read a conversation transcript and return a JSON array of
 //! durable facts. Like [`LlmCompactor`](crate::memory::LlmCompactor), it lives in
@@ -7,14 +7,15 @@
 //! injected into the long-term memory adapter.
 
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use serde_json::{json, Value};
 
-use claw_api::{ChatRequest, ClawApi};
-use claw_interface::http::ClawHttp;
+use claw_api::{ChatRequest, ClawApiAsync};
+use claw_interface::{Cancel, ClawHttpAsync, ClawTimer};
 
-use super::extraction::{ExtractError, ExtractedItem, Extractor};
+use super::async_llm::SharedAsyncLlm;
+use super::extraction::{ExtractError, ExtractFuture, ExtractedItem, Extractor};
 
 /// System prompt steering the extraction. Asks for stable, third-person facts and
 /// nothing else, so the result is parseable JSON.
@@ -32,45 +33,51 @@ const EXTRACT_USER_PREFIX: &str = "Extract durable memory from this transcript:"
 
 /// An [`Extractor`] that distills facts via the LLM client.
 ///
-/// Owns its own [`ClawApi`] transport (`H`) behind a [`Mutex`]: the extractor is
-/// shared across agents as an `Arc<dyn Extractor>`, while [`ClawApi::chat`] needs
-/// `&mut self`, so the mutex serializes the (off-tick) extraction calls.
-pub struct LlmExtractor<H: ClawHttp> {
-    api: Mutex<ClawApi<H>>,
+/// Owns its own async LLM client. The extractor is shared across agents as an
+/// `Arc<dyn Extractor>`, while [`ClawApiAsync::chat`] needs `&mut self`, so
+/// calls borrow the client exclusively without holding a mutex while the future
+/// is running.
+pub struct LlmExtractor<H: ClawHttpAsync, Timer: ClawTimer> {
+    api: SharedAsyncLlm<H, Timer>,
 }
 
-impl<H: ClawHttp + Send + 'static> LlmExtractor<H> {
+impl<H: ClawHttpAsync + Send + 'static, Timer: ClawTimer + Send + 'static> LlmExtractor<H, Timer> {
     /// Build an extractor that owns the given LLM client.
-    pub fn new(api: ClawApi<H>) -> Self {
+    pub fn new(api: ClawApiAsync<H, Timer>) -> Self {
         Self {
-            api: Mutex::new(api),
+            api: SharedAsyncLlm::new(api),
         }
     }
 
     /// A ready-to-inject [`Extractor`] over `api`.
-    pub fn shared(api: ClawApi<H>) -> Arc<dyn Extractor> {
+    pub fn shared(api: ClawApiAsync<H, Timer>) -> Arc<dyn Extractor> {
         Arc::new(Self::new(api))
     }
 }
 
-impl<H: ClawHttp + Send> Extractor for LlmExtractor<H> {
-    fn extract(&self, transcript: &str) -> Result<Vec<ExtractedItem>, ExtractError> {
-        let messages = json!([
-            { "role": "user", "content": format!("{EXTRACT_USER_PREFIX}\n\n{transcript}") }
-        ]);
+impl<H: ClawHttpAsync + Send, Timer: ClawTimer + Send> Extractor for LlmExtractor<H, Timer> {
+    fn extract<'a>(&'a self, transcript: &'a str) -> ExtractFuture<'a> {
+        Box::pin(async move {
+            let messages = json!([
+                { "role": "user", "content": format!("{EXTRACT_USER_PREFIX}\n\n{transcript}") }
+            ]);
 
-        // Extraction runs on a pool worker, off the tick path; it is not tied to
-        // the agent's interrupt flag, so it uses its own (never-set) abort flag.
-        let abort = AtomicBool::new(false);
-        let response = self
-            .api
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .chat(&ChatRequest::new(EXTRACT_SYSTEM_PROMPT, &messages), &abort)
-            .map_err(|error| ExtractError::Backend(error.to_string()))?;
+            // Extraction runs off the tick path; it is not tied to the agent's
+            // interrupt flag, so it uses its own (never-set) abort flag.
+            let abort = AtomicBool::new(false);
+            let mut lease = self.api.lease().await;
+            let response = lease
+                .api_mut()
+                .chat(
+                    &ChatRequest::new(EXTRACT_SYSTEM_PROMPT, &messages),
+                    Cancel::new(&abort),
+                )
+                .await
+                .map_err(|error| ExtractError::Backend(error.to_string()))?;
 
-        let text = response.text.unwrap_or_default();
-        Ok(parse_items(&text))
+            let text = response.text.unwrap_or_default();
+            Ok(parse_items(&text))
+        })
     }
 }
 

@@ -28,6 +28,7 @@ use serde_json::Value;
 
 use crate::memory::traits::{ContextAdapter, ContextAdapterInput, History};
 
+mod async_llm;
 mod extraction;
 mod llm_compactor;
 mod llm_extractor;
@@ -218,25 +219,27 @@ impl<F: ClawFs + 'static> LongTermMemoryContextAdapter<F> {
         let stores = self.stores.clone();
         let memory_id = self.id.clone();
         let in_flight = Arc::clone(&self.extraction_in_flight);
-        self.pool.submit(Box::new(move || {
-            let transcript = flatten_transcript(&snapshot);
-            if !transcript.trim().is_empty() {
-                match extractor.extract(&transcript) {
-                    Ok(items) => {
-                        for item in items {
-                            let draft = MemoryDraft::new(item.content)
-                                .with_tags(item.tags)
-                                .with_keywords(item.keywords)
-                                .with_source("extracted");
-                            stores.store(draft, item.tier);
+        self.pool.submit_async(Box::new(move || {
+            Box::pin(async move {
+                let transcript = flatten_transcript(&snapshot);
+                if !transcript.trim().is_empty() {
+                    match extractor.extract(&transcript).await {
+                        Ok(items) => {
+                            for item in items {
+                                let draft = MemoryDraft::new(item.content)
+                                    .with_tags(item.tags)
+                                    .with_keywords(item.keywords)
+                                    .with_source("extracted");
+                                stores.store(draft, item.tier);
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, memory = %memory_id, "memory extraction failed")
                         }
                     }
-                    Err(error) => {
-                        tracing::warn!(%error, memory = %memory_id, "memory extraction failed")
-                    }
                 }
-            }
-            in_flight.store(false, Ordering::Release);
+                in_flight.store(false, Ordering::Release);
+            })
         }));
     }
 

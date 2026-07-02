@@ -106,6 +106,7 @@ pub(crate) fn from_error(error: CapabilityError) -> ClawCapabilityResult {
             c"invalid state for this operation",
         ),
         CapabilityError::Failed(message) => failed(&message),
+        _ => failed("unknown capability error"),
     }
 }
 

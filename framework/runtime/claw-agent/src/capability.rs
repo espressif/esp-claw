@@ -2,7 +2,7 @@
 //!
 //! Callers describe their device in terms of one concept — the [`Capability`]
 //! (a tool, a channel, or a pure lifecycle service) — and register them in a
-//! [`Registry`]. This module adapts that registry onto the two internal seams
+//! [`Registry`]. This module adapts that registry onto the two internal boundaries
 //! the runtime actually consumes:
 //!
 //! - [`RegistryResolver`] — an [`AgentResolver`] whose tools are the registry's
@@ -139,7 +139,10 @@ mod tests {
     use std::sync::Mutex;
 
     use claw_capability::{Capability, CapabilityError};
-    use claw_tool::{ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput};
+    use claw_tool::{
+        AsyncToolHandler, ToolFuture, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
+        ToolRunner, ToolSet,
+    };
 
     struct DummyTool;
     impl ToolHandler for DummyTool {
@@ -157,6 +160,26 @@ mod tests {
         }
     }
 
+    struct AsyncDummyTool;
+    impl AsyncToolHandler for AsyncDummyTool {
+        fn name(&self) -> &str {
+            "do_async"
+        }
+
+        fn schema(&self) -> &str {
+            r#"{"type":"function","function":{"name":"do_async","parameters":{"type":"object","properties":{}}}}"#
+        }
+
+        fn invoke_async<'a>(&'a self, _call: &'a ToolInvocation<'_>) -> ToolFuture<'a> {
+            Box::pin(async {
+                Ok(ToolOutput {
+                    output: "async-ok".into(),
+                    ok: true,
+                })
+            })
+        }
+    }
+
     #[test]
     fn resolver_resolves_registered_tool() {
         let registry = Arc::new(Registry::new());
@@ -167,6 +190,31 @@ mod tests {
         let resolver = RegistryResolver::new(Arc::clone(&registry));
         assert!(resolver.resolve_tool("do_thing").is_some());
         assert!(resolver.resolve_tool("missing").is_none());
+    }
+
+    #[test]
+    fn resolver_runs_registered_async_tool_capability() {
+        let registry = Arc::new(Registry::new());
+        registry
+            .register(Capability::async_tool(AsyncDummyTool))
+            .unwrap();
+        registry.start_all().unwrap();
+
+        let resolver = RegistryResolver::new(Arc::clone(&registry));
+        let tool = resolver
+            .resolve_tool("do_async")
+            .expect("async capability should resolve as a tool");
+        let tools = ToolSet::new([tool]).unwrap();
+        let runner = ToolRunner::new(&tools, None);
+
+        let outcome = claw_utils::block_on(runner.run_one_async(&ToolInvocation {
+            id: Some("t1"),
+            name: "do_async",
+            arguments_json: "{}",
+        }));
+
+        assert!(outcome.ok);
+        assert_eq!(outcome.content, "async-ok");
     }
 
     #[test]

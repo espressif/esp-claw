@@ -1,4 +1,4 @@
-//! The tool-execution seam: per-call gating and dispatch, isolated from the
+//! The tool-execution boundary: per-call gating and dispatch, isolated from the
 //! caller's orchestration (preemption checkpoints, tracing spans, and message
 //! assembly stay in the iteration loop that drives this).
 //!
@@ -7,15 +7,15 @@
 //! deny it?), then **execution**. The runner returns a neutral [`CallOutcome`]
 //! the caller turns into a tool message and a per-call record.
 //!
-//! ## Async / concurrency seam
+//! ## Async / concurrency boundary
 //!
-//! Today every call runs synchronously, in the model's order. The shape here —
-//! *classify → gate → execute*, with a per-tool [`concurrent`](crate::ToolSet::concurrent)
-//! hint surfaced via [`is_concurrent`](ToolRunner::is_concurrent) — is the seam a
-//! future async runner grows into: side-effect-free `concurrent` calls awaited
+//! Today the loop still preserves model order. The shape here — *classify → gate
+//! → execute*, with a per-tool [`concurrent`](crate::ToolSet::concurrent) hint
+//! surfaced via [`is_concurrent`](ToolRunner::is_concurrent) — is the boundary a
+//! future batch scheduler grows into: side-effect-free `concurrent` calls awaited
 //! together, serializing ones run in order. Keeping that decision *here* means the
 //! caller does not change when concurrency lands. The per-call retry budget
-//! (`invoke_with_retries`) is the other half of that seam. See the workspace
+//! (`invoke_with_retries`) is the other half of that boundary. See the workspace
 //! `ROADMAP.md` ("Async, fair-scheduling tool runner") for the planned backoff,
 //! preemption, and fair-scheduling work.
 
@@ -24,7 +24,7 @@ use claw_permission::{Action, PermissionDecision};
 use crate::handler::{ToolError, ToolInvocation, ToolInvokeError, ToolOutput};
 use crate::set::ToolSet;
 
-/// The permission seam the runner consults before executing a classified call.
+/// The permission boundary the runner consults before executing a classified call.
 ///
 /// Implemented by the agent layer that owns the permission policy, the grant
 /// store, and the acting agent's identity — the runner stays agnostic of all
@@ -86,7 +86,7 @@ impl<'a> ToolRunner<'a> {
         Self { tools, gate }
     }
 
-    /// Whether `name`'s tool may run concurrently (the async-seam hint; unknown
+    /// Whether `name`'s tool may run concurrently (the async scheduling hint; unknown
     /// tools are treated as serializing).
     ///
     /// Reserved for the future async runner (see the module docs): today every
@@ -104,15 +104,46 @@ impl<'a> ToolRunner<'a> {
     /// back as `ok = false` content the model can self-correct from, never as an
     /// error that aborts the iteration.
     pub fn run_one(&self, call: &ToolInvocation<'_>) -> CallOutcome {
+        if let Some(outcome) = self.outcome_before_execution(call) {
+            return outcome;
+        }
+
+        // Execute — optional per-call automatic re-invocation when the handler
+        // returns a non-empty [`ToolRetryCount`]; otherwise surface a tool message.
+        match invoke_with_retries(self.tools, call) {
+            Ok(ToolOutput { output, ok }) => CallOutcome::ran(output, ok),
+            Err(error) => invoke_failure_to_outcome(call, error),
+        }
+    }
+
+    /// Async counterpart of [`run_one`](Self::run_one).
+    ///
+    /// The gating path stays synchronous policy work; only tool execution yields.
+    /// This lets the agent layer switch to an async runner without changing the
+    /// model-facing outcomes or permission semantics.
+    pub async fn run_one_async(&self, call: &ToolInvocation<'_>) -> CallOutcome {
+        if let Some(outcome) = self.outcome_before_execution(call) {
+            return outcome;
+        }
+
+        match invoke_with_retries_async(self.tools, call).await {
+            Ok(ToolOutput { output, ok }) => CallOutcome::ran(output, ok),
+            Err(error) => invoke_failure_to_outcome(call, error),
+        }
+    }
+
+    /// Return the final outcome for calls stopped before tool execution, or
+    /// `None` when execution should proceed.
+    fn outcome_before_execution(&self, call: &ToolInvocation<'_>) -> Option<CallOutcome> {
         // 1. Soft-hide gating: the schema superset reached the model, but a tool
         //    the set does not currently allow must not run this phase.
         if !self.tools.is_allowed(call.name) {
-            return CallOutcome {
+            return Some(CallOutcome {
                 content: blocked_tool_message(call.name),
                 ok: false,
                 blocked: true,
                 approval: None,
-            };
+            });
         }
 
         // 2. Permission gating: classify the call and ask the policy. An unknown
@@ -122,10 +153,13 @@ impl<'a> ToolRunner<'a> {
             match gate.decide(&action) {
                 PermissionDecision::Allow => {}
                 PermissionDecision::Deny { reason } => {
-                    return CallOutcome::ran(denied_tool_message(call.name, &reason), false);
+                    return Some(CallOutcome::ran(
+                        denied_tool_message(call.name, &reason),
+                        false,
+                    ));
                 }
                 PermissionDecision::Ask { reason } => {
-                    return CallOutcome {
+                    return Some(CallOutcome {
                         content: ask_tool_message(call.name),
                         ok: false,
                         blocked: false,
@@ -133,17 +167,12 @@ impl<'a> ToolRunner<'a> {
                             summary: reason,
                             signature: action.signature(),
                         }),
-                    };
+                    });
                 }
             }
         }
 
-        // 3. Execute — optional per-call automatic re-invocation when the handler
-        // returns a non-empty [`ToolRetryCount`]; otherwise surface a tool message.
-        match invoke_with_retries(self.tools, call) {
-            Ok(ToolOutput { output, ok }) => CallOutcome::ran(output, ok),
-            Err(error) => invoke_failure_to_outcome(call, error),
-        }
+        None
     }
 }
 
@@ -157,6 +186,26 @@ fn invoke_with_retries(
     let mut extra_attempts = 0u32;
     loop {
         match tools.invoke(call) {
+            Ok(output) => return Ok(output),
+            Err(ToolInvokeError { error, retries }) => {
+                if extra_attempts < retries.get() {
+                    extra_attempts = extra_attempts.saturating_add(1);
+                    continue;
+                }
+                return Err(error);
+            }
+        }
+    }
+}
+
+/// Async form of [`invoke_with_retries`].
+async fn invoke_with_retries_async(
+    tools: &ToolSet,
+    call: &ToolInvocation<'_>,
+) -> Result<ToolOutput, ToolError> {
+    let mut extra_attempts = 0u32;
+    loop {
+        match tools.invoke_async(call).await {
             Ok(output) => return Ok(output),
             Err(ToolInvokeError { error, retries }) => {
                 if extra_attempts < retries.get() {
@@ -218,11 +267,16 @@ fn display_name(name: &str) -> &str {
 mod tests {
     use super::*;
     use crate::handler::{
-        tool_invoke_err_with_retries, Tool, ToolHandler, ToolInvokeError, ToolOutput,
-        ToolRetryCount,
+        tool_invoke_err_with_retries, AsyncToolHandler, Tool, ToolFuture, ToolHandler,
+        ToolInvokeError, ToolOutput, ToolRetryCount,
     };
     use crate::set::{AllowedTools, ToolGroup};
     use claw_permission::{Action, RiskClass};
+    use core::future::Future;
+    use core::task::{Context, Poll};
+    use std::sync::{mpsc, Arc, Mutex};
+    use std::task::{Wake, Waker};
+    use std::time::Duration;
 
     /// A tool that records nothing and returns a fixed result; risk-classified so
     /// the permission path can be exercised.
@@ -262,6 +316,22 @@ mod tests {
             id: Some("t1"),
             name: "risky",
             arguments_json: "{}",
+        }
+    }
+
+    struct NoopWake;
+    impl Wake for NoopWake {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let mut future = Box::pin(future);
+        let waker = Waker::from(Arc::new(NoopWake));
+        let mut context = Context::from_waker(&waker);
+        loop {
+            if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
+                return value;
+            }
         }
     }
 
@@ -325,6 +395,62 @@ mod tests {
     }
 
     #[test]
+    fn async_runner_offloads_sync_tool_work() {
+        struct BlockingTool {
+            started: Mutex<Option<mpsc::Sender<()>>>,
+            release: Mutex<mpsc::Receiver<()>>,
+        }
+
+        impl ToolHandler for BlockingTool {
+            fn name(&self) -> &str {
+                "blocking"
+            }
+
+            fn schema(&self) -> &str {
+                r#"{"type":"function","function":{"name":"blocking","parameters":{"type":"object","properties":{}}}}"#
+            }
+
+            fn invoke(&self, _call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
+                if let Some(started) = self.started.lock().unwrap().take() {
+                    let _ = started.send(());
+                }
+                let _ = self.release.lock().unwrap().recv();
+                Ok(ToolOutput {
+                    output: "unblocked".into(),
+                    ok: true,
+                })
+            }
+        }
+
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let tools = ToolSet::new([Tool::new(BlockingTool {
+            started: Mutex::new(Some(started_tx)),
+            release: Mutex::new(release_rx),
+        })])
+        .unwrap();
+        let runner = ToolRunner::new(&tools, None);
+        let invocation = ToolInvocation {
+            id: Some("t1"),
+            name: "blocking",
+            arguments_json: "{}",
+        };
+        let mut future = Box::pin(runner.run_one_async(&invocation));
+        let waker = Waker::from(Arc::new(NoopWake));
+        let mut context = Context::from_waker(&waker);
+
+        assert!(matches!(future.as_mut().poll(&mut context), Poll::Pending));
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("tool should start on the tool executor");
+        release_tx.send(()).expect("release blocking tool");
+
+        let outcome = block_on(future);
+        assert!(outcome.ok);
+        assert_eq!(outcome.content, "unblocked");
+    }
+
+    #[test]
     fn invalid_arguments_json_becomes_recoverable_tool_message() {
         struct JsonTool;
         impl ToolHandler for JsonTool {
@@ -360,6 +486,40 @@ mod tests {
         });
         assert!(!outcome.ok);
         assert!(outcome.content.contains("not valid JSON"));
+    }
+
+    #[test]
+    fn async_runner_executes_async_tool() {
+        struct AsyncTool;
+        impl AsyncToolHandler for AsyncTool {
+            fn name(&self) -> &str {
+                "async_tool"
+            }
+
+            fn schema(&self) -> &str {
+                r#"{"type":"function","function":{"name":"async_tool","parameters":{"type":"object","properties":{}}}}"#
+            }
+
+            fn invoke_async<'a>(&'a self, _call: &'a ToolInvocation<'_>) -> ToolFuture<'a> {
+                Box::pin(async {
+                    Ok(ToolOutput {
+                        output: "async ran".into(),
+                        ok: true,
+                    })
+                })
+            }
+        }
+
+        let tools = ToolSet::new([Tool::new_async(AsyncTool)]).unwrap();
+        let runner = ToolRunner::new(&tools, None);
+        let outcome = block_on(runner.run_one_async(&ToolInvocation {
+            id: Some("t1"),
+            name: "async_tool",
+            arguments_json: "{}",
+        }));
+
+        assert!(outcome.ok);
+        assert_eq!(outcome.content, "async ran");
     }
 
     #[test]

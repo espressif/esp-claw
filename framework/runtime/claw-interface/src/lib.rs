@@ -35,4 +35,6 @@ pub use thread::StdThread;
 pub use thread::{ClawThread, CoreAffinity, Priority, WorkerHandle};
 #[cfg(feature = "timermock")]
 pub use timer::mock::{ImmediateTimer, YieldingTimer};
+#[cfg(feature = "tokiotimer")]
+pub use timer::tokio_timer::TokioTimer;
 pub use timer::{ClawTimer, SleepOutcome, TimerFuture};

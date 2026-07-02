@@ -54,6 +54,7 @@ pub trait Lifecycle: Send + Sync {
 /// not happen in this layer (tools are invoked through `claw-tool`), so there is
 /// nothing in flight to serialize against unregister.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum CapabilityState {
     /// Registered but not started (registry not started, or group disabled-then-registered).
     #[default]
@@ -74,8 +75,16 @@ impl CapabilityState {
         }
     }
 
-    /// Available to list / hand out: registered or started (not disabled).
-    pub(crate) fn is_available(self) -> bool {
-        matches!(self, CapabilityState::Registered | CapabilityState::Started)
+    /// Available to list / hand out for the registry's current lifecycle phase.
+    ///
+    /// Before the registry is globally started, `Registered` roles remain visible
+    /// so the host can wire transports during construction. Once started, only
+    /// groups whose lifecycle reached `Started` are visible.
+    pub(crate) fn is_available(self, registry_started: bool) -> bool {
+        if registry_started {
+            matches!(self, CapabilityState::Started)
+        } else {
+            matches!(self, CapabilityState::Registered | CapabilityState::Started)
+        }
     }
 }

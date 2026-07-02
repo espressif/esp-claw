@@ -12,7 +12,9 @@ use claw_context::Block;
 
 use crate::agent::factory::AgentFactory;
 use crate::agent::registry::AgentIdAllocator;
-use crate::channels::{ChannelEgress, ChannelIngressSink, Command, InboundCommand, InboundMessage};
+use crate::channels::{
+    ChannelEgress, ChannelIngressSink, Command, InboundCommand, InboundMessage, IngressFuture,
+};
 use crate::session::{
     DeliverError, SessionError, SessionId, SessionMessage, SessionOut, SessionRoutes, SessionStore,
 };
@@ -28,10 +30,10 @@ pub struct Orchestrator {
     /// Global agent-id allocator shared by every per-session registry so ids are
     /// unique across the whole process, not merely within one session.
     next_agent_id: AgentIdAllocator,
-    /// One isolated agent graph per session. Each instance is behind its own
-    /// lock so driving one session does not serialize the others; the outer lock
-    /// guards only insert/lookup/remove on the map.
-    instances: Mutex<HashMap<SessionId, Arc<Mutex<OrchestratorInstance>>>>,
+    /// One isolated agent graph per session. The map lock is held only while an
+    /// instance is inserted, removed, or taken for driving; it is not held while
+    /// the agent graph awaits LLM/tool work.
+    instances: Mutex<HashMap<SessionId, OrchestratorInstance>>,
     sessions: SessionStore,
     routes: SessionRoutes,
     /// Process-wide (Global scope) prose injected into every session's agents.
@@ -45,13 +47,9 @@ impl Orchestrator {
     // Inbound callbacks — edit these
     // -----------------------------------------------------------------------
 
-    fn on_user_message(&self, session_id: SessionId, msg: &SessionMessage) {
-        // Take only the session's own lock for the deliver+drive; the global map
-        // lock is released first so a slow LLM call in one session does not block
-        // ingress/drive for the others (see `instance_for`).
-        let instance = self.instance_for(session_id);
+    async fn on_user_message(&self, session_id: SessionId, msg: &SessionMessage) {
+        let mut instance = self.take_instance(session_id);
         let output = {
-            let mut instance = instance.lock().unwrap_or_else(|poison| poison.into_inner());
             let turn = instance.next_turn();
             // session > turn: the session span opens `conversation.session`, the
             // turn span opens `conversation.turn`. Every agent/iteration/tool span
@@ -67,33 +65,38 @@ impl Orchestrator {
             .entered();
             if let Err(error) = instance.deliver(msg.text.clone()) {
                 tracing::warn!(session = %session_id, %error, "failed to build/deliver root");
+                self.put_instance(session_id, instance);
                 return;
             }
-            instance.drive()
+            instance.drive().await
         };
 
+        self.put_instance(session_id, instance);
         self.surface_output(output);
     }
 
-    /// Get the session's agent graph, creating it on first use.
-    ///
-    /// Holds the global `instances` map lock only long enough to look up or insert
-    /// the per-session [`OrchestratorInstance`], then hands back a clone of its
-    /// `Arc<Mutex<_>>` so callers lock the session — not the whole map — while
-    /// driving it.
-    fn instance_for(&self, session_id: SessionId) -> Arc<Mutex<OrchestratorInstance>> {
-        let mut instances = self
-            .instances
+    /// Move the session's agent graph out of the map so it can be driven without
+    /// holding the map lock across `.await`.
+    fn take_instance(&self, session_id: SessionId) -> OrchestratorInstance {
+        self.instances
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        Arc::clone(instances.entry(session_id).or_insert_with(|| {
-            Arc::new(Mutex::new(OrchestratorInstance::new(
-                session_id,
-                Arc::clone(&self.factory),
-                self.next_agent_id.clone(),
-                Arc::clone(&self.global_context),
-            )))
-        }))
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(&session_id)
+            .unwrap_or_else(|| {
+                OrchestratorInstance::new(
+                    session_id,
+                    Arc::clone(&self.factory),
+                    self.next_agent_id.clone(),
+                    Arc::clone(&self.global_context),
+                )
+            })
+    }
+
+    fn put_instance(&self, session_id: SessionId, instance: OrchestratorInstance) {
+        self.instances
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .insert(session_id, instance);
     }
 
     /// Route a [`DriveOutput`] to the session's egress: replies as messages, and
@@ -148,7 +151,7 @@ impl Orchestrator {
             .map_err(Into::into)
     }
 
-    fn deliver_user_message(&self, msg: InboundMessage) -> Result<(), DeliverError> {
+    async fn deliver_user_message(&self, msg: InboundMessage) -> Result<(), DeliverError> {
         if msg.session_id.trim().is_empty() {
             return Err(DeliverError::MissingSessionId);
         }
@@ -160,7 +163,7 @@ impl Orchestrator {
 
         self.routes.update_from_inbound(session_id, &msg);
         let session_msg = SessionMessage::from_inbound(&msg);
-        self.on_user_message(session_id, &session_msg);
+        self.on_user_message(session_id, &session_msg).await;
         Ok(())
     }
 
@@ -202,16 +205,20 @@ impl Orchestrator {
 }
 
 impl ChannelIngressSink for Orchestrator {
-    fn push_user_message(&self, msg: InboundMessage) {
-        if let Err(err) = self.deliver_user_message(msg) {
-            tracing::warn!(error = %err, "ingress user message deliver failed");
-        }
+    fn push_user_message(&self, msg: InboundMessage) -> IngressFuture<'_> {
+        Box::pin(async move {
+            if let Err(err) = self.deliver_user_message(msg).await {
+                tracing::warn!(error = %err, "ingress user message deliver failed");
+            }
+        })
     }
 
-    fn push_command(&self, command: InboundCommand) {
-        if let Err(err) = self.deliver_command(command) {
-            tracing::warn!(error = %err, "ingress command deliver failed");
-        }
+    fn push_command(&self, command: InboundCommand) -> IngressFuture<'_> {
+        Box::pin(async move {
+            if let Err(err) = self.deliver_command(command) {
+                tracing::warn!(error = %err, "ingress command deliver failed");
+            }
+        })
     }
 }
 
@@ -307,15 +314,36 @@ impl OrchestratorBuilder<ChannelsEgressOnly, FactorySet> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 mod tests {
+    use core::future::Future;
+    use core::task::{Context, Poll};
     use std::collections::VecDeque;
+    use std::sync::Arc;
+    use std::task::{Wake, Waker};
 
     use super::*;
     use crate::agent::factory::AgentFactory;
     use crate::agent::{
-        Agent, AgentCommand, AgentCommandError, AgentId, AgentKind, ApprovalId, GraphHost,
-        TickOutcome,
+        Agent, AgentCommand, AgentCommandError, AgentId, AgentKind, AgentTickFuture, ApprovalId,
+        GraphHost, TickOutcome,
     };
     use crate::channels::{ChannelEgressHub, ChannelTransport, RecordingTransport};
+
+    struct NoopWake;
+
+    impl Wake for NoopWake {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let mut future = Box::pin(future);
+        let waker = Waker::from(Arc::new(NoopWake));
+        let mut context = Context::from_waker(&waker);
+        loop {
+            if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
+                return value;
+            }
+        }
+    }
 
     // -- A fake factory + agent that echoes each delivered message --------------
 
@@ -340,13 +368,14 @@ mod tests {
 
         fn deliver_child_result(&mut self, _child: AgentId, _text: String, _ok: bool) {}
 
-        fn tick(&mut self) -> TickOutcome {
-            match self.pending.pop_front() {
+        fn tick(&mut self) -> AgentTickFuture<'_> {
+            let outcome = match self.pending.pop_front() {
                 Some(message) => TickOutcome::Yielded {
                     text: format!("echo:{message}"),
                 },
                 None => TickOutcome::Idle,
-            }
+            };
+            Box::pin(async move { outcome })
         }
     }
 
@@ -393,21 +422,22 @@ mod tests {
 
         fn deliver_child_result(&mut self, _child: AgentId, _text: String, _ok: bool) {}
 
-        fn tick(&mut self) -> TickOutcome {
-            if !self.asked {
+        fn tick(&mut self) -> AgentTickFuture<'_> {
+            let outcome = if !self.asked {
                 self.asked = true;
-                return TickOutcome::AwaitingApproval {
+                TickOutcome::AwaitingApproval {
                     id: ApprovalId(1),
                     summary: "ok?".into(),
-                };
-            }
-            if self.approved && !self.done {
+                }
+            } else if self.approved && !self.done {
                 self.done = true;
-                return TickOutcome::Yielded {
+                TickOutcome::Yielded {
                     text: "approved-done".into(),
-                };
-            }
-            TickOutcome::Idle
+                }
+            } else {
+                TickOutcome::Idle
+            };
+            Box::pin(async move { outcome })
         }
     }
 
@@ -463,7 +493,7 @@ mod tests {
         let (orch, transport) = orchestrator_with_factory(Arc::new(EchoFactory));
         let session = orch.session_create();
 
-        orch.push_user_message(user_msg(session, "hi"));
+        block_on(orch.push_user_message(user_msg(session, "hi")));
 
         let sent = transport.drain_sent();
         assert_eq!(sent.len(), 1);
@@ -475,8 +505,8 @@ mod tests {
         let (orch, transport) = orchestrator_with_factory(Arc::new(EchoFactory));
         let session = orch.session_create();
 
-        orch.push_user_message(user_msg(session, "first"));
-        orch.push_user_message(user_msg(session, "second"));
+        block_on(orch.push_user_message(user_msg(session, "first")));
+        block_on(orch.push_user_message(user_msg(session, "second")));
 
         let sent = transport.drain_sent();
         assert_eq!(
@@ -495,7 +525,7 @@ mod tests {
         // The first message parks the root on an approval, surfaced as a message.
         // (Resolving an approval is an internal concern — there is no public
         // resolve entry point on the orchestrator.)
-        orch.push_user_message(user_msg(session, "do it"));
+        block_on(orch.push_user_message(user_msg(session, "do it")));
         let surfaced = transport.drain_sent();
         assert_eq!(surfaced.len(), 1);
         assert!(
@@ -511,8 +541,8 @@ mod tests {
         let s1 = orch.session_create();
         let s2 = orch.session_create();
 
-        orch.push_user_message(user_msg(s1, "one"));
-        orch.push_user_message(user_msg(s2, "two"));
+        block_on(orch.push_user_message(user_msg(s1, "one")));
+        block_on(orch.push_user_message(user_msg(s2, "two")));
 
         // One isolated instance per session.
         assert_eq!(orch.instances.lock().unwrap().len(), 2);

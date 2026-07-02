@@ -4,7 +4,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex, RwLock};
 
 use super::egress::{ChannelEgress, ChannelTransport};
-use super::ingress::{ChannelIngress, ChannelIngressSink};
+use super::ingress::{ChannelIngress, ChannelIngressSink, IngressFuture};
 use super::message::{ChannelError, InboundCommand, InboundMessage, OutboundMessage};
 
 /// In-memory ingress: separate user-message and command queues.
@@ -29,12 +29,16 @@ impl LocalChannelIngress {
 }
 
 impl ChannelIngressSink for LocalChannelIngress {
-    fn push_user_message(&self, msg: InboundMessage) {
-        self.user_messages.lock().unwrap().push_back(msg);
+    fn push_user_message(&self, msg: InboundMessage) -> IngressFuture<'_> {
+        Box::pin(async move {
+            self.user_messages.lock().unwrap().push_back(msg);
+        })
     }
 
-    fn push_command(&self, command: InboundCommand) {
-        self.commands.lock().unwrap().push_back(command);
+    fn push_command(&self, command: InboundCommand) -> IngressFuture<'_> {
+        Box::pin(async move {
+            self.commands.lock().unwrap().push_back(command);
+        })
     }
 }
 

@@ -10,6 +10,7 @@
 /// [`Tool`](crate::CapabilityRole::Tool) role is a [`claw_tool::Tool`], so its
 /// argument/handler errors are [`claw_tool::ToolInvokeError`].
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
 pub enum CapabilityError {
     #[error("invalid argument")]
     InvalidArg,

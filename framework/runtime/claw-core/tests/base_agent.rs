@@ -7,15 +7,15 @@
 
 use std::path::{Path, PathBuf};
 
-use claw_api::{BackendKind, ClawApi, ClawApiConfig};
+use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
 use claw_core::agent::{AgentId, BaseAgent, CancelReason, TickOutcome};
-use claw_interface::RealHttp;
+use claw_interface::{BlockingClawHttpAsync, ImmediateTimer, RealHttp};
 use claw_tool::{Tool, ToolGroup, ToolSet};
 use serde_json::{json, Value};
 
 mod common;
 use common::{
-    agent_builder, capturing_llm, failing_llm, run_to_completion,
+    agent_builder, block_on, capturing_llm, failing_llm, run_to_completion,
     scripted_llm as common_scripted_llm, test_memory, test_output_dir, EchoTool,
 };
 
@@ -82,11 +82,11 @@ const END_CONVERSATION_BODY: &str = r#"{"choices":[{"message":{"role":"assistant
 
 /// Tool-capable strict scripted LLM over `&str` bodies (thin wrapper over the
 /// shared [`common::scripted_llm`], which takes owned `String`s).
-fn scripted_llm(bodies: Vec<&str>) -> ClawApi<claw_interface::ScriptedHttp> {
+fn scripted_llm(bodies: Vec<&str>) -> common::TestLlm<claw_interface::ScriptedHttp> {
     common_scripted_llm(bodies.into_iter().map(String::from).collect())
 }
 
-fn live_llm() -> ClawApi<RealHttp> {
+fn live_llm() -> common::TestLlm<RealHttp> {
     let api_key = require_local_api_key();
     let mut config = ClawApiConfig::new(
         BackendKind::OpenAiCompatible,
@@ -95,7 +95,12 @@ fn live_llm() -> ClawApi<RealHttp> {
         local_base_url(),
     );
     config.timeout_ms = 60_000;
-    ClawApi::init(config, RealHttp::new()).expect("live llm")
+    ClawApiAsync::init(
+        config,
+        BlockingClawHttpAsync::new(RealHttp::new()),
+        ImmediateTimer,
+    )
+    .expect("live llm")
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +134,7 @@ fn tick_returns_idle_before_run() {
         .expect("build");
 
     assert!(!agent.is_running());
-    assert!(matches!(agent.tick(), TickOutcome::Idle));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Idle));
 }
 
 #[test]
@@ -147,7 +152,7 @@ fn cancel_reports_cancelled_and_goes_idle() {
     // The first tick drains AppendMessage then Cancel, never calling the LLM (so
     // the empty script is fine).
     assert!(matches!(
-        agent.tick(),
+        block_on(agent.tick()),
         TickOutcome::Cancelled {
             reason: CancelReason::UserRequested
         }
@@ -168,7 +173,10 @@ fn cancel_records_interruption_marker_in_memory() {
     agent
         .cancel(CancelReason::UserRequested)
         .expect("cancel accepted while a task is queued");
-    assert!(matches!(agent.tick(), TickOutcome::Cancelled { .. }));
+    assert!(matches!(
+        block_on(agent.tick()),
+        TickOutcome::Cancelled { .. }
+    ));
 
     let messages = view.messages();
     let items = messages.as_array().expect("messages is an array");
@@ -225,11 +233,14 @@ fn tool_round_works_then_yields() {
     agent.run("use the echo tool then answer");
 
     // First tick: append + tool round → Working (tool detail stays internal).
-    assert!(matches!(agent.tick(), TickOutcome::Working));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Working));
     assert!(agent.is_running());
 
     // Second tick: plain text → Yielded → idle.
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { .. }));
+    assert!(matches!(
+        block_on(agent.tick()),
+        TickOutcome::Yielded { .. }
+    ));
     assert!(!agent.is_running());
 }
 
@@ -249,7 +260,7 @@ fn end_conversation_tool_ends_task() {
     // The internal end_conversation tool runs and the signal it raises ends the
     // task in the same tick.
     assert!(matches!(
-        agent.tick(),
+        block_on(agent.tick()),
         TickOutcome::Ended { final_message } if final_message == "all done"
     ));
     assert!(!agent.is_running());
@@ -264,7 +275,7 @@ fn append_after_end_starts_fresh_task() {
         .expect("build");
 
     agent.run("first");
-    assert!(agent.tick().is_terminal());
+    assert!(block_on(agent.tick()).is_terminal());
 
     // Re-task the same (now idle) agent: AppendMessage starts a fresh task.
     agent.run("second");
@@ -282,7 +293,7 @@ fn failed_http_reports_failed_and_goes_idle() {
 
     agent.run("hello");
 
-    assert!(matches!(agent.tick(), TickOutcome::Failed(_)));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Failed(_)));
     assert!(!agent.is_running());
 }
 
@@ -301,11 +312,14 @@ fn abort_before_iteration_reruns_next_tick() {
     agent.abort_handle().abort();
 
     // Preempted before the LLM call: stays running and re-iterates next tick.
-    assert!(matches!(agent.tick(), TickOutcome::Working));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Working));
     assert!(agent.is_running());
 
     // The flag was consumed; the next tick reaches the LLM and yields.
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { .. }));
+    assert!(matches!(
+        block_on(agent.tick()),
+        TickOutcome::Yielded { .. }
+    ));
     assert!(!agent.is_running());
 }
 
@@ -321,11 +335,14 @@ fn tick_stays_idle_after_yield() {
     .expect("build");
 
     agent.run("hi");
-    assert!(matches!(agent.tick(), TickOutcome::Yielded { .. }));
+    assert!(matches!(
+        block_on(agent.tick()),
+        TickOutcome::Yielded { .. }
+    ));
 
     // No further work and no new input: subsequent ticks stay idle (no LLM call).
-    assert!(matches!(agent.tick(), TickOutcome::Idle));
-    assert!(matches!(agent.tick(), TickOutcome::Idle));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Idle));
+    assert!(matches!(block_on(agent.tick()), TickOutcome::Idle));
 }
 
 // ---------------------------------------------------------------------------

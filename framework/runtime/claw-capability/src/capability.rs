@@ -1,18 +1,20 @@
 //! The external "capability" vocabulary: a slim descriptor that decomposes into
 //! an internal *role* (Tool / Channel / none) plus an orthogonal *lifecycle*.
 
+use std::fmt;
 use std::sync::Arc;
 
-use claw_tool::Tool;
+use claw_tool::{AsyncToolHandler, Tool};
 
 use crate::channel::ChannelAdapter;
 use crate::lifecycle::Lifecycle;
 
 /// What a capability exposes when it is *used*. Orthogonal to its
-/// [`Lifecycle`](crate::Lifecycle): any role may also own resources, and
+/// [`Lifecycle`]: any role may also own resources, and
 /// [`None`](CapabilityRole::None) is a capability that exists *only* for its
 /// lifecycle.
 #[derive(Clone)]
+#[non_exhaustive]
 pub enum CapabilityRole {
     /// A model-callable tool. A capability with this role *is* a
     /// [`claw_tool::Tool`]; this crate adds no dispatch, schema, or visibility
@@ -26,19 +28,39 @@ pub enum CapabilityRole {
     None,
 }
 
+impl fmt::Debug for CapabilityRole {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Tool(tool) => formatter.debug_tuple("Tool").field(&tool.name()).finish(),
+            Self::Channel(channel) => formatter
+                .debug_tuple("Channel")
+                .field(&channel.channel_id())
+                .finish(),
+            Self::None => formatter.write_str("None"),
+        }
+    }
+}
+
 /// One registered capability: identity, an optional description, a role, and an
 /// optional lifecycle.
 #[derive(Clone)]
 pub struct Capability {
-    /// Stable unique id.
-    pub id: String,
-    /// Human/model-readable description (catalog + tool prompt).
-    pub description: Option<String>,
-    /// What this capability exposes when used.
-    pub role: CapabilityRole,
-    /// Optional per-capability resource lifecycle (a gateway's transport task,
-    /// an MCP server). Shared group resources go on [`CapabilityGroup::lifecycle`].
-    pub lifecycle: Option<Arc<dyn Lifecycle>>,
+    id: String,
+    description: Option<String>,
+    role: CapabilityRole,
+    lifecycle: Option<Arc<dyn Lifecycle>>,
+}
+
+impl fmt::Debug for Capability {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Capability")
+            .field("id", &self.id)
+            .field("description", &self.description)
+            .field("role", &self.role)
+            .field("has_lifecycle", &self.lifecycle.is_some())
+            .finish()
+    }
 }
 
 impl Capability {
@@ -52,9 +74,24 @@ impl Capability {
         }
     }
 
+    /// A lifecycle-only capability with the given id.
+    pub fn none(id: impl Into<String>) -> Self {
+        Self::new(id, CapabilityRole::None)
+    }
+
     /// A [`Tool`](CapabilityRole::Tool) capability whose id is the tool's name.
     pub fn tool(tool: Tool) -> Self {
         Self::new(tool.name().to_string(), CapabilityRole::Tool(tool))
+    }
+
+    /// A Rust async [`Tool`](CapabilityRole::Tool) capability whose id is the
+    /// async handler's tool name.
+    ///
+    /// C-backed capabilities intentionally keep using the synchronous descriptor
+    /// callback path; this constructor is only for Rust capability
+    /// implementations.
+    pub fn async_tool(handler: impl AsyncToolHandler + 'static) -> Self {
+        Self::tool(Tool::new_async(handler))
     }
 
     /// A [`Channel`](CapabilityRole::Channel) capability whose id is the channel id.
@@ -79,7 +116,32 @@ impl Capability {
         self
     }
 
-    /// The [`Tool`](claw_tool::Tool) this capability exposes, or `None` for the
+    /// Stable unique id.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Human/model-readable description (catalog + tool prompt).
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    /// What this capability exposes when used.
+    pub fn role(&self) -> &CapabilityRole {
+        &self.role
+    }
+
+    /// Optional per-capability resource lifecycle (a gateway's transport task,
+    /// an MCP server). Shared group resources go on [`CapabilityGroup`].
+    pub fn lifecycle(&self) -> Option<&Arc<dyn Lifecycle>> {
+        self.lifecycle.as_ref()
+    }
+
+    pub(crate) fn into_lifecycle(self) -> Option<Arc<dyn Lifecycle>> {
+        self.lifecycle
+    }
+
+    /// The [`Tool`] this capability exposes, or `None` for the
     /// `Channel`/`None` roles.
     pub fn as_tool(&self) -> Option<&Tool> {
         match &self.role {
@@ -105,12 +167,20 @@ impl Capability {
 /// [`Registry::register`](crate::Registry::register).
 #[derive(Clone)]
 pub struct CapabilityGroup {
-    /// Group id: provenance label + the enable/disable handle.
-    pub id: String,
-    /// Member capabilities, validated and registered together.
-    pub members: Vec<Capability>,
-    /// Optional shared lifecycle, run around the members' own lifecycles.
-    pub lifecycle: Option<Arc<dyn Lifecycle>>,
+    id: String,
+    members: Vec<Capability>,
+    lifecycle: Option<Arc<dyn Lifecycle>>,
+}
+
+impl fmt::Debug for CapabilityGroup {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("CapabilityGroup")
+            .field("id", &self.id)
+            .field("members", &self.members)
+            .field("has_lifecycle", &self.lifecycle.is_some())
+            .finish()
+    }
 }
 
 impl CapabilityGroup {
@@ -128,5 +198,24 @@ impl CapabilityGroup {
     pub fn with_lifecycle(mut self, lifecycle: Arc<dyn Lifecycle>) -> Self {
         self.lifecycle = Some(lifecycle);
         self
+    }
+
+    /// Group id: provenance label plus the enable/disable handle.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Member capabilities, validated and registered together.
+    pub fn members(&self) -> &[Capability] {
+        &self.members
+    }
+
+    /// Optional shared lifecycle, run around the members' own lifecycles.
+    pub fn lifecycle(&self) -> Option<&Arc<dyn Lifecycle>> {
+        self.lifecycle.as_ref()
+    }
+
+    pub(crate) fn into_parts(self) -> (String, Vec<Capability>, Option<Arc<dyn Lifecycle>>) {
+        (self.id, self.members, self.lifecycle)
     }
 }

@@ -28,7 +28,7 @@ use claw_agent::{
     InboundMessage, OutboundMessage, PoolConfig, Registry, SharedTaskPool, Tool, ToolHandler,
     ToolInvocation, ToolInvokeError, ToolOutput,
 };
-use claw_interface::{MemFs, SharedScriptHttp, StdThread};
+use claw_interface::{BlockingClawHttpAsync, ImmediateTimer, MemFs, SharedScriptHttp, StdThread};
 
 /// The channel id this device talks on. Inbound messages carry it, and replies
 /// are routed back to the matching channel capability.
@@ -112,7 +112,8 @@ fn scripted_llm() -> ClawApiConfig {
     )
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     // 1. Describe the device as capabilities.
     let local = Arc::new(LocalChannel::new(LOCAL_CHANNEL));
     let replies = local.received();
@@ -141,24 +142,28 @@ fn main() -> anyhow::Result<()> {
         "Hello from the agent — the local time is 2026-06-29T17:00:00Z.",
     )]);
 
-    let system = AgentSystem::builder::<MemFs, SharedScriptHttp>()
-        .llm(scripted_llm())
-        .memory_dir("/mem/agents")
-        .task_pool(pool)
-        .capabilities(Arc::clone(&registry))
-        .build()?;
+    let system =
+        AgentSystem::builder::<MemFs, BlockingClawHttpAsync<SharedScriptHttp>, ImmediateTimer>()
+            .llm(scripted_llm())
+            .memory_dir("/mem/agents")
+            .task_pool(pool)
+            .capabilities(Arc::clone(&registry))
+            .build()?;
 
     // 3. Drive the loop: open a session, then push an inbound message *as the
     //    channel would*. The reply is routed back out to `LocalChannel::send`.
     let session = system.new_session();
-    system.ingress().push_user_message(InboundMessage {
-        message_id: "m1".into(),
-        channel: LOCAL_CHANNEL.into(),
-        chat_id: session.to_wire(),
-        sender_id: Some("user".into()),
-        session_id: session.to_wire(),
-        text: "Hi, what time is it?".into(),
-    });
+    system
+        .ingress()
+        .push_user_message(InboundMessage {
+            message_id: "m1".into(),
+            channel: LOCAL_CHANNEL.into(),
+            chat_id: session.to_wire(),
+            sender_id: Some("user".into()),
+            session_id: session.to_wire(),
+            text: "Hi, what time is it?".into(),
+        })
+        .await;
 
     // The orchestrator drives the turn synchronously, so the reply has already
     // been delivered to the channel by the time `push_user_message` returns.

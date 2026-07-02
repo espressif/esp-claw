@@ -14,21 +14,20 @@
 
 use std::sync::Arc;
 
-use claw_api::ClawApi;
+use claw_api::ClawApiAsync;
 use claw_context::Block;
-use claw_interface::http::ClawHttp;
-use claw_interface::ClawFs;
+use claw_interface::{ClawFs, ClawHttpAsync, ClawTimer};
 use claw_memory::{Compactor, TranscriptConfig, TranscriptStore};
 use claw_utils::SharedTaskPool;
 
 use crate::agent::base_agent::{
-    AgentCommand, AgentCommandError, AgentId, BaseAgent, BaseAgentBuildError, TickOutcome,
+    AgentCommand, AgentCommandError, AgentId, BaseAgent, BaseAgentBuildError,
 };
 use crate::agent::config::AgentConfig;
 use crate::agent::graph::{AgentContext, GraphHost};
 use crate::agent::kind::AgentKind;
 use crate::agent::tools::{respond_to_approval_tool_group, subagent_tool_group};
-use crate::agent::{append_child_result, Agent};
+use crate::agent::{append_child_result, Agent, AgentTickFuture};
 use crate::memory::{
     CompactionPolicy, ContextAdapter, History, RollingSummaryContextAdapter, SummaryCursor,
 };
@@ -57,13 +56,13 @@ pub struct CompactionDeps {
 
 /// The one agent type: a flat ReAct loop over a [`BaseAgent`], configured by an
 /// [`AgentConfig`]. No semantic FSM — `tick` forwards straight to the base.
-pub struct GenericAgent<H: ClawHttp> {
+pub struct GenericAgent<H: ClawHttpAsync, Timer: ClawTimer> {
     id: AgentId,
     kind: AgentKind,
-    base: BaseAgent<H>,
+    base: BaseAgent<H, Timer>,
 }
 
-impl<H: ClawHttp> GenericAgent<H> {
+impl<H: ClawHttpAsync, Timer: ClawTimer> GenericAgent<H, Timer> {
     /// Build a generic agent with `id` over `llm`, configured by `config`.
     ///
     /// The agent constructs its **own** [`TranscriptStore`] from the injected
@@ -94,7 +93,7 @@ impl<H: ClawHttp> GenericAgent<H> {
     /// [`GenericAgentBuildError`] when tool assembly or base construction fails.
     pub fn new<F: ClawFs + 'static>(
         id: AgentId,
-        llm: ClawApi<H>,
+        llm: ClawApiAsync<H, Timer>,
         transcript_config: TranscriptConfig,
         fs: F,
         compaction: CompactionDeps,
@@ -194,7 +193,7 @@ impl<H: ClawHttp> GenericAgent<H> {
     }
 }
 
-impl<H: ClawHttp + Send> Agent for GenericAgent<H> {
+impl<H: ClawHttpAsync + Send, Timer: ClawTimer + Send> Agent for GenericAgent<H, Timer> {
     fn id(&self) -> AgentId {
         self.id
     }
@@ -207,9 +206,9 @@ impl<H: ClawHttp + Send> Agent for GenericAgent<H> {
         append_child_result(&mut self.base, child, text, ok);
     }
 
-    fn tick(&mut self) -> TickOutcome {
+    fn tick(&mut self) -> AgentTickFuture<'_> {
         // Flat: no FSM, no per-phase gating — the model drives its own flow.
-        self.base.tick()
+        Box::pin(async move { self.base.tick().await })
     }
 }
 
@@ -227,25 +226,55 @@ pub enum GenericAgentBuildError {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 mod tests {
+    use core::future::Future;
+    use core::task::{Context, Poll};
     use std::sync::{Arc, Mutex};
+    use std::task::{Wake, Waker};
 
-    use claw_api::{BackendKind, ClawApi, ClawApiConfig, RetryPolicy};
-    use claw_interface::{MemFs, ScriptedHttp, StdThread};
+    use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig, RetryPolicy};
+    use claw_interface::{
+        BlockingClawHttpAsync, ClawHttpAsync, ClawTimer, ImmediateTimer, MemFs, ScriptedHttp,
+        StdThread,
+    };
     use claw_memory::NoopCompactor;
     use claw_utils::{PoolConfig, SharedTaskPool};
     use serde_json::{json, Value};
 
     use super::*;
     use crate::agent::graph::{GraphEffect, SpawnPolicy};
+    use crate::agent::TickOutcome;
 
-    fn scripted_llm(bodies: Vec<String>) -> ClawApi<ScriptedHttp> {
+    type TestLlm = ClawApiAsync<BlockingClawHttpAsync<ScriptedHttp>, ImmediateTimer>;
+
+    fn scripted_llm(bodies: Vec<String>) -> TestLlm {
         let config = ClawApiConfig::new(
             BackendKind::OpenAiCompatible,
             "sk-test",
             "gpt-test",
             "https://example.invalid",
         );
-        ClawApi::init(config, ScriptedHttp::new(bodies)).expect("init llm")
+        ClawApiAsync::init(
+            config,
+            BlockingClawHttpAsync::new(ScriptedHttp::new(bodies)),
+            ImmediateTimer,
+        )
+        .expect("init llm")
+    }
+
+    struct NoopWake;
+    impl Wake for NoopWake {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let mut future = Box::pin(future);
+        let waker = Waker::from(Arc::new(NoopWake));
+        let mut context = Context::from_waker(&waker);
+        loop {
+            if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
+                return value;
+            }
+        }
     }
 
     /// The ingredients [`GenericAgent::new`] needs to build its own transcript: a
@@ -298,13 +327,17 @@ mod tests {
             .unwrap_or_default()
     }
 
-    fn drive<H: ClawHttp + Send>(agent: &mut GenericAgent<H>) -> TickOutcome {
-        loop {
-            match agent.tick() {
-                TickOutcome::Working => continue,
-                other => return other,
+    fn drive<H: ClawHttpAsync + Send, Timer: ClawTimer + Send>(
+        agent: &mut GenericAgent<H, Timer>,
+    ) -> TickOutcome {
+        block_on(async {
+            loop {
+                match agent.tick().await {
+                    TickOutcome::Working => continue,
+                    other => return other,
+                }
             }
-        }
+        })
     }
 
     /// A bare config for `kind` with no tools/skills — the in-crate test seam now

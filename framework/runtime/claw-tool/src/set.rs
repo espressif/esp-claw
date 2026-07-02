@@ -402,6 +402,25 @@ impl ToolSet {
             None => Err(tool_invoke_err(ToolError::NotFound(call.name.to_string()))),
         }
     }
+
+    /// Async dispatch for one model `tool_call`.
+    ///
+    /// This follows the same validation and lookup rules as [`invoke`](Self::invoke)
+    /// but drives tools through [`Tool::invoke_async`]. The tool value is cloned
+    /// before awaiting so the dispatch-map borrow is not held across `.await`.
+    pub async fn invoke_async(
+        &self,
+        call: &ToolInvocation<'_>,
+    ) -> Result<ToolOutput, ToolInvokeError> {
+        let tool = match self.by_name.get(call.name) {
+            Some(entry) => {
+                parse_arguments_json(call.arguments_json)?;
+                entry.tool.clone()
+            }
+            None => return Err(tool_invoke_err(ToolError::NotFound(call.name.to_string()))),
+        };
+        tool.invoke_async(call).await
+    }
 }
 
 /// The set of tool names allowed to *execute* in the current phase ("soft-hide"
@@ -474,7 +493,11 @@ impl<'a> FromIterator<&'a str> for AllowedTools {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::handler::{ToolHandler, ToolInvokeError};
+    use crate::handler::{AsyncToolHandler, ToolFuture, ToolHandler, ToolInvokeError};
+    use core::future::Future;
+    use core::task::{Context, Poll};
+    use std::sync::Arc;
+    use std::task::{Wake, Waker};
 
     /// A handler whose `name()` deliberately disagrees with the `function.name`
     /// inside its schema — the inconsistency `tool_metadata!` cannot catch.
@@ -539,6 +562,22 @@ mod tests {
                 output: String::new(),
                 ok: true,
             })
+        }
+    }
+
+    struct NoopWake;
+    impl Wake for NoopWake {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let mut future = Box::pin(future);
+        let waker = Waker::from(Arc::new(NoopWake));
+        let mut context = Context::from_waker(&waker);
+        loop {
+            if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
+                return value;
+            }
         }
     }
 
@@ -611,6 +650,68 @@ mod tests {
         set.clear_active_tools();
         assert!(set.is_allowed("read"));
         assert_eq!(set.extra_tool_context(), None);
+    }
+
+    #[test]
+    fn sync_tool_invokes_through_async_dispatch() {
+        let set = ToolSet::new([Tool::new(UsageTool::new("read", None))]).unwrap();
+        let output = block_on(set.invoke_async(&ToolInvocation {
+            id: Some("t1"),
+            name: "read",
+            arguments_json: "{}",
+        }))
+        .unwrap();
+
+        assert!(output.ok);
+        assert_eq!(output.output, "");
+    }
+
+    struct AsyncEchoTool;
+    impl AsyncToolHandler for AsyncEchoTool {
+        fn name(&self) -> &str {
+            "async_echo"
+        }
+
+        fn schema(&self) -> &str {
+            r#"{"type":"function","function":{"name":"async_echo"}}"#
+        }
+
+        fn invoke_async<'a>(&'a self, call: &'a ToolInvocation<'_>) -> ToolFuture<'a> {
+            Box::pin(async move {
+                Ok(ToolOutput {
+                    output: format!("async:{}", call.arguments_json),
+                    ok: true,
+                })
+            })
+        }
+    }
+
+    #[test]
+    fn async_tool_invokes_through_async_dispatch() {
+        let set = ToolSet::new([Tool::new_async(AsyncEchoTool)]).unwrap();
+        let output = block_on(set.invoke_async(&ToolInvocation {
+            id: Some("t1"),
+            name: "async_echo",
+            arguments_json: r#"{"message":"hi"}"#,
+        }))
+        .unwrap();
+
+        assert!(output.ok);
+        assert_eq!(output.output, r#"async:{"message":"hi"}"#);
+    }
+
+    #[test]
+    fn sync_dispatch_rejects_async_only_tool() {
+        let set = ToolSet::new([Tool::new_async(AsyncEchoTool)]).unwrap();
+        let error = set
+            .invoke(&ToolInvocation {
+                id: Some("t1"),
+                name: "async_echo",
+                arguments_json: "{}",
+            })
+            .unwrap_err();
+
+        assert!(matches!(error.error, ToolError::InvokeRejected(_)));
     }
 
     #[test]

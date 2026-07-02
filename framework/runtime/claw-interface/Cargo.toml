@@ -18,13 +18,15 @@ crate-type = ["rlib"]
 # - `diskfs-pretty`: pretty-print `.json` writes via serde_json (implies diskfs).
 # - `httpmock`:     scripted / failing / never-called ClawHttp test doubles.
 # - `timermock`:    immediate/yielding ClawTimer test doubles.
-# - `realhttp`:     blocking reqwest ClawHttp backend for host CLIs / live tests.
+# - `realhttp`:     reqwest ClawHttp/ClawHttpAsync backends for host CLIs / live tests.
+# - `tokiotimer`:   tokio-backed ClawTimer for host async clients.
 memfs = []
 diskfs = []
 diskfs-pretty = ["diskfs", "dep:serde_json"]
 httpmock = ["dep:serde_json"]
 timermock = []
 realhttp = ["dep:reqwest"]
+tokiotimer = ["dep:tokio"]
 # `StdThread`: a plain `std::thread` host implementation of `ClawThread` (host
 # only; the device build uses `claw-sys`'s `EspIdfThread`).
 stdthread = []
@@ -33,6 +35,7 @@ stdthread = []
 thiserror = "2"
 serde_json = { version = "1", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"], optional = true }
+tokio = { version = "1.52.3", default-features = false, features = ["time"], optional = true }
 
 [dev-dependencies]
 embedded-executor = "0.6.1"

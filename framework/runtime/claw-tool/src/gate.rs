@@ -1,6 +1,6 @@
 //! The permission gate: the [`ToolGate`] implementation the runner consults.
 //!
-//! A [`PermissionGate`] bridges the runner's [`ToolGate`] seam to a
+//! A [`PermissionGate`] bridges the runner's [`ToolGate`] boundary to a
 //! [`PermissionPolicy`]: it carries the policy, the acting agent's identity, and
 //! the [`GrantStore`] of recorded human decisions. It lives here (beside the
 //! `ToolGate` trait) rather than in the agent layer so all tool *may-it-run*

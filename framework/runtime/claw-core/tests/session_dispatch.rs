@@ -1,16 +1,36 @@
 //! Session isolation and ingress validation tests.
 
+use core::future::Future;
+use core::task::{Context, Poll};
 use std::sync::Arc;
+use std::task::{Wake, Waker};
 
 use claw_context::Block;
 use claw_core::agent::{
-    Agent, AgentCommand, AgentCommandError, AgentFactory, AgentId, AgentKind, GraphHost,
-    TickOutcome,
+    Agent, AgentCommand, AgentCommandError, AgentFactory, AgentId, AgentKind, AgentTickFuture,
+    GraphHost, TickOutcome,
 };
 use claw_core::{
     ChannelEgressHub, ChannelIngressSink, InboundMessage, Orchestrator, RecordingTransport,
     SessionId,
 };
+
+struct NoopWake;
+
+impl Wake for NoopWake {
+    fn wake(self: Arc<Self>) {}
+}
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    let mut future = Box::pin(future);
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut context = Context::from_waker(&waker);
+    loop {
+        if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
+            return value;
+        }
+    }
+}
 
 /// An agent that never produces output. These tests only exercise ingress
 /// validation (no message reaches a live session's graph), so the factory below
@@ -30,8 +50,8 @@ impl Agent for IdleAgent {
 
     fn deliver_child_result(&mut self, _child: AgentId, _text: String, _ok: bool) {}
 
-    fn tick(&mut self) -> TickOutcome {
-        TickOutcome::Idle
+    fn tick(&mut self) -> AgentTickFuture<'_> {
+        Box::pin(async { TickOutcome::Idle })
     }
 }
 
@@ -96,7 +116,7 @@ fn delete_session_rejects_push() {
     let sid = orch.session_create();
     orch.session_delete(sid).unwrap();
 
-    orch.push_user_message(user_msg(sid, "ghost"));
+    block_on(orch.push_user_message(user_msg(sid, "ghost")));
     assert!(transport.drain_sent().is_empty());
 }
 
@@ -104,14 +124,14 @@ fn delete_session_rejects_push() {
 fn push_without_session_id_is_rejected() {
     let (orch, transport) = test_orchestrator();
 
-    orch.push_user_message(InboundMessage {
+    block_on(orch.push_user_message(InboundMessage {
         message_id: "m1".into(),
         channel: "qq".into(),
         chat_id: "route-chat".into(),
         sender_id: None,
         session_id: String::new(),
         text: "via-route".into(),
-    });
+    }));
 
     assert!(transport.drain_sent().is_empty());
 }
@@ -120,5 +140,5 @@ fn push_without_session_id_is_rejected() {
 fn push_with_unknown_session_id_is_rejected() {
     let (orch, _) = test_orchestrator();
 
-    orch.push_user_message(user_msg(SessionId(99), "orphan"));
+    block_on(orch.push_user_message(user_msg(SessionId(99), "orphan")));
 }
