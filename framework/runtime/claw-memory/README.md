@@ -2,13 +2,13 @@
 
 The agent memory subsystem.
 
-Two independent pieces live here: the **`TranscriptStore`** — a pure,
-append-only verbatim record of a conversation's turns — and **long-term
-memory** (durable facts). The store knows nothing about summarization,
-compaction, token budgets, or retirement: it only appends turns and persists
-them. Assembling an LLM context window (deciding what is recent, what gets
-summarized, and where the boundary sits) is the *agent layer's* job, built on
-top of the store via context adapters in `claw-core`.
+Three independent pieces live here: the **`TranscriptStore`** — a pure,
+append-only verbatim record of a conversation's turns — **`ProfileStore`** for
+editable global profile documents (`soul.md`, `identity.md`, `user.md`), and
+**long-term memory** (durable facts). These stores know nothing about prompt
+assembly, summarization, token budgets, or agent tools. Assembling an LLM
+context window is the *agent layer's* job, built on top of the stores via
+context adapters in `claw-core`.
 
 The crate only defines the `Compactor` **seam** — the contract for folding an
 aged window of messages into a shorter summary. It carries no LLM dependency;
@@ -31,6 +31,7 @@ host-testable.
 | `Turn` / `TurnId` | A committed turn (`id` + `messages`) and its monotonic logical id, exposed by `turns_snapshot()` so adapters can read committed turns. |
 | `GroupGuard` | One turn, returned by `group()`. `append_user`, `append_assistant`, `append_tool_result`, `append_patch`. Commits the whole turn as one record on drop. |
 | `Compactor` / `CompactError` | The summarization seam: fold an aged message window into a shorter summary. Driven by the agent layer, **not** the store. |
+| `ProfileStore` and friends | Editable global profile documents: `Soul`, assistant identity, and user profile. Pure whole-file storage over `ClawFs`; projected into context by `claw-core`. |
 | `LongTermMemory` and friends | Durable per-agent / global fact storage. |
 | `NoopCompactor` | *(feature `compactor-stub`)* A never-compacts stub for host CLIs and tests. |
 

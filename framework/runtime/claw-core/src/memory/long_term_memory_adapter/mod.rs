@@ -51,12 +51,12 @@ pub const AGENT_ID_PREFIX: &str = "a-";
 const DEFAULT_MEMORY_ID: &str = "long_term";
 
 /// Build a global long-term store under `dir` (minting `g-` ids).
-pub fn global_store<F: ClawFs + 'static>(dir: impl Into<String>, fs: F) -> LongTermMemory<F> {
+pub fn global_store<F: ClawFs + 'static>(dir: &str, fs: F) -> LongTermMemory<F> {
     LongTermMemory::new(LongTermConfig::new(dir, GLOBAL_ID_PREFIX), fs)
 }
 
 /// Build a per-agent long-term store under `dir` (minting `a-` ids).
-pub fn agent_store<F: ClawFs + 'static>(dir: impl Into<String>, fs: F) -> LongTermMemory<F> {
+pub fn agent_store<F: ClawFs + 'static>(dir: &str, fs: F) -> LongTermMemory<F> {
     LongTermMemory::new(LongTermConfig::new(dir, AGENT_ID_PREFIX), fs)
 }
 

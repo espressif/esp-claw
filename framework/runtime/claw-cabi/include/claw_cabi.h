@@ -235,7 +235,11 @@ typedef struct {
     bool supports_tools;
     bool supports_vision;
     bool image_remote_url_only;
-    const char *memory_dir;         /* required DATA-rooted directory */
+    const char *transcript_dir;              /* required DATA-rooted directory */
+    const char *profile_dir;                 /* required DATA-rooted directory */
+    const char *global_long_term_dir;        /* required DATA-rooted directory */
+    const char *conversation_long_term_dir;  /* required DATA-rooted directory */
+    const char *worker_long_term_dir;        /* required DATA-rooted directory */
     const char *default_channel;    /* nullable => "claw" */
 } claw_agent_system_config_t;
 

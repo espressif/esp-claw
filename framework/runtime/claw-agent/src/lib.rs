@@ -17,6 +17,7 @@
 //!
 //! ```no_run
 //! use claw_agent::{AgentSystem, BackendKind, ClawApiConfig};
+//! use claw_agent::AgentPersistenceConfig;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -27,7 +28,14 @@
 //!     "https://api.openai.com/v1",
 //! );
 //!
-//! let system = AgentSystem::on_disk(llm, "/tmp/claw-mem")?;
+//! let persistence = AgentPersistenceConfig::new(
+//!     "/tmp/claw/sessions",
+//!     "/tmp/claw/profile",
+//!     "/tmp/claw/long_term/global",
+//! )
+//! .with_agent_long_term_dir("conversation", "/tmp/claw/long_term/agents/conversation")
+//! .with_agent_long_term_dir("worker", "/tmp/claw/long_term/agents/worker");
+//! let system = AgentSystem::on_disk(llm, persistence)?;
 //! let session = system.new_session();
 //! for reply in system.send(session, "hello").await? {
 //!     println!("{reply}");
@@ -41,7 +49,7 @@ mod capability;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 
-use claw_core::agent::{CompactionDeps, FsAgentFactory, LongTermDeps};
+use claw_core::agent::{AgentLongTermDirs, CompactionDeps, FsAgentFactory, LongTermDeps};
 use claw_core::{
     global_store, ChannelEgress, ChannelEgressHub, CompactionPolicy, LlmCompactor, LlmExtractor,
     Orchestrator, RecordingTransport, RuleBasedTierClassifier,
@@ -49,6 +57,7 @@ use claw_core::{
 use claw_interface::{ClawHttpAsync, ClawTimer};
 #[cfg(feature = "dev")]
 use claw_interface::{RealHttpAsync, StdThread, TokioTimer};
+use claw_memory::{ProfileConfig, ProfileStore};
 
 // Re-exported so callers can configure the system without depending on the lower
 // crates directly. These names are also used internally below.
@@ -84,15 +93,54 @@ pub use claw_utils::{PoolConfig, SharedTaskPool};
 /// only needs to be stable so the egress transport and reply route agree.
 const DEFAULT_CHANNEL: &str = "claw";
 
+/// Explicit persistence directories for an [`AgentSystem`].
+///
+/// This type carries final directories only. The framework does not derive
+/// profile, transcript, or long-term-memory paths from a base directory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentPersistenceConfig {
+    transcript_dir: String,
+    profile_dir: String,
+    global_long_term_dir: String,
+    agent_long_term_dirs: AgentLongTermDirs,
+}
+
+impl AgentPersistenceConfig {
+    /// Build persistence config from final directories.
+    pub fn new(transcript_dir: &str, profile_dir: &str, global_long_term_dir: &str) -> Self {
+        Self {
+            transcript_dir: transcript_dir.to_string(),
+            profile_dir: profile_dir.to_string(),
+            global_long_term_dir: global_long_term_dir.to_string(),
+            agent_long_term_dirs: AgentLongTermDirs::new(),
+        }
+    }
+
+    /// Add the final long-term-memory directory for one agent kind.
+    pub fn with_agent_long_term_dir(mut self, kind: &str, dir: &str) -> Self {
+        self.agent_long_term_dirs.insert(kind, dir);
+        self
+    }
+}
+
 /// What can go wrong while building an [`AgentSystem`].
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
     /// No LLM config was provided to the builder.
     #[error("LLM config is required")]
     MissingLlmConfig,
-    /// No memory base directory was provided to the builder.
-    #[error("memory directory is required")]
-    MissingMemoryDir,
+    /// No transcript directory was provided to the builder.
+    #[error("transcript directory is required")]
+    MissingTranscriptDir,
+    /// No profile directory was provided to the builder.
+    #[error("profile directory is required")]
+    MissingProfileDir,
+    /// No global long-term memory directory was provided to the builder.
+    #[error("global long-term memory directory is required")]
+    MissingGlobalLongTermDir,
+    /// No per-agent long-term memory directories were provided to the builder.
+    #[error("at least one agent long-term memory directory is required")]
+    MissingAgentLongTermDirs,
     /// No shared task pool was provided to the builder.
     #[error("a shared task pool is required")]
     MissingTaskPool,
@@ -137,7 +185,7 @@ impl AgentSystem {
     /// [`Default`], so callers choose them by *type* — [`DiskFs`] +
     /// [`RealHttpAsync`] on a host, in-memory/scripted doubles in tests — and
     /// never pass an instance; pair `F` with
-    /// [`memory_dir`](AgentSystemBuilder::memory_dir), which fixes where files
+    /// [`persistence`](AgentSystemBuilder::persistence), which fixes where files
     /// land. Each minted client (one per agent, plus the compaction and
     /// extraction clients) gets its own `H::default()` and `Timer::default()`.
     pub fn builder<F, H, Timer>() -> AgentSystemBuilder<F, H, Timer>
@@ -152,8 +200,8 @@ impl AgentSystem {
     /// Build a dev agent system backed by real disk memory and a live HTTP
     /// transport, with no extra capabilities/skills resolver.
     ///
-    /// `memory_dir` is the base directory under which each agent keys its own
-    /// conversation files.
+    /// `persistence` provides final directories for transcript, profile, global
+    /// long-term memory, and each agent kind's long-term memory.
     ///
     /// Dev convenience (requires the default `dev` feature): it constructs the
     /// [`DiskFs`] / [`RealHttpAsync`] / [`StdThread`] backends directly. Device builds
@@ -167,18 +215,14 @@ impl AgentSystem {
     #[cfg(feature = "dev")]
     pub fn on_disk(
         llm: ClawApiConfig,
-        memory_dir: impl Into<String>,
+        persistence: AgentPersistenceConfig,
     ) -> Result<AgentSystem, AgentError> {
         init_tool_executor(StdThread).map_err(AgentError::ToolExecutor)?;
         let pool = Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread)?);
-        let memory_dir = memory_dir.into();
-        // `DiskFs::default()` is verbatim-path mode; `memory_dir` is already an
-        // absolute host path, so conversation files land beneath it and long-term
-        // memory (always on) lands under `<memory_dir>/long_term`.
         AgentSystem::builder::<DiskFs, RealHttpAsync, TokioTimer>()
             .llm(llm)
             .task_pool(pool)
-            .memory_dir(memory_dir)
+            .persistence(persistence)
             .build()
     }
 
@@ -267,12 +311,11 @@ impl AgentSystem {
     }
 }
 
-/// Builder for [`AgentSystem`]. Required: an LLM config, a memory directory, and
-/// a [`task_pool`](Self::task_pool). Optional: the capability
+/// Builder for [`AgentSystem`]. Required: an LLM config, explicit persistence
+/// directories, and a [`task_pool`](Self::task_pool). Optional: the capability
 /// [`Registry`](Self::capabilities) (or a raw [`AgentResolver`](Self::resolver))
-/// and the egress channel id. Long-term memory is always on, rooted at
-/// `<memory_dir>/long_term`; the conversation-compaction policy is internal —
-/// callers do not supply one.
+/// and the egress channel id. Long-term memory is always on; the
+/// conversation-compaction policy is internal — callers do not supply one.
 /// Custom runtimes that drive tools must also initialize the fixed tool executor
 /// once at boot with [`init_tool_executor`] and their platform `ClawThread`
 /// backend; [`on_disk`](AgentSystem::on_disk) does this for the dev host path.
@@ -293,7 +336,10 @@ where
     /// Capability registry; when set it supplies the tool resolver and registers
     /// every available channel as an egress transport.
     capabilities: Option<Arc<Registry>>,
-    memory_dir: Option<String>,
+    transcript_dir: Option<String>,
+    profile_dir: Option<String>,
+    global_long_term_dir: Option<String>,
+    agent_long_term_dirs: AgentLongTermDirs,
     /// The process-wide background worker pool.
     task_pool: Option<Arc<SharedTaskPool>>,
     channel: String,
@@ -315,7 +361,10 @@ where
             llm_config: None,
             resolver: None,
             capabilities: None,
-            memory_dir: None,
+            transcript_dir: None,
+            profile_dir: None,
+            global_long_term_dir: None,
+            agent_long_term_dirs: AgentLongTermDirs::new(),
             task_pool: None,
             channel: DEFAULT_CHANNEL.to_string(),
             marker: PhantomData,
@@ -356,9 +405,37 @@ where
         self
     }
 
-    /// Required: base directory for conversation memory.
-    pub fn memory_dir(mut self, dir: impl Into<String>) -> Self {
-        self.memory_dir = Some(dir.into());
+    /// Required: set all persistence directories at once.
+    pub fn persistence(mut self, config: AgentPersistenceConfig) -> Self {
+        self.transcript_dir = Some(config.transcript_dir);
+        self.profile_dir = Some(config.profile_dir);
+        self.global_long_term_dir = Some(config.global_long_term_dir);
+        self.agent_long_term_dirs = config.agent_long_term_dirs;
+        self
+    }
+
+    /// Required: final directory for transcript files.
+    pub fn transcript_dir(mut self, dir: &str) -> Self {
+        self.transcript_dir = Some(dir.to_string());
+        self
+    }
+
+    /// Required: final directory for editable profile documents.
+    pub fn profile_dir(mut self, dir: &str) -> Self {
+        self.profile_dir = Some(dir.to_string());
+        self
+    }
+
+    /// Required: final directory for global long-term memory.
+    pub fn global_long_term_dir(mut self, dir: &str) -> Self {
+        self.global_long_term_dir = Some(dir.to_string());
+        self
+    }
+
+    /// Required for every agent kind the runtime may build: final directory for
+    /// that kind's private long-term memory.
+    pub fn agent_long_term_dir(mut self, kind: &str, dir: &str) -> Self {
+        self.agent_long_term_dirs.insert(kind, dir);
         self
     }
 
@@ -380,13 +457,25 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`AgentError::MissingLlmConfig`], [`AgentError::MissingMemoryDir`],
-    /// or [`AgentError::MissingTaskPool`] when a required input was not set;
+    /// Returns [`AgentError::MissingLlmConfig`],
+    /// [`AgentError::MissingTranscriptDir`], [`AgentError::MissingProfileDir`],
+    /// [`AgentError::MissingGlobalLongTermDir`],
+    /// [`AgentError::MissingAgentLongTermDirs`], or
+    /// [`AgentError::MissingTaskPool`] when a required input was not set;
     /// [`AgentError::CompactorLlm`] / [`AgentError::ExtractionLlm`] if an internal
     /// LLM client fails to init.
     pub fn build(self) -> Result<AgentSystem, AgentError> {
         let llm_config = self.llm_config.ok_or(AgentError::MissingLlmConfig)?;
-        let memory_dir = self.memory_dir.ok_or(AgentError::MissingMemoryDir)?;
+        let transcript_dir = self
+            .transcript_dir
+            .ok_or(AgentError::MissingTranscriptDir)?;
+        let profile_dir = self.profile_dir.ok_or(AgentError::MissingProfileDir)?;
+        let global_long_term_dir = self
+            .global_long_term_dir
+            .ok_or(AgentError::MissingGlobalLongTermDir)?;
+        if self.agent_long_term_dirs.is_empty() {
+            return Err(AgentError::MissingAgentLongTermDirs);
+        }
         // The persistence backend is built from its type — the caller chose `F`
         // via `builder::<F>()` and never passes an instance.
         let fs = F::default();
@@ -402,24 +491,18 @@ where
                 .unwrap_or_else(|| Arc::new(MapAgentResolver::new())),
         };
 
-        // Long-term memory is mandatory and always lives under the memory dir, so
-        // it is built unconditionally before `fs` is moved into the memory deps
-        // (the global store shares the same filesystem backend).
-        let long_term_dir = format!("{}/long_term", memory_dir.trim_end_matches('/'));
+        // Long-term memory is mandatory and built from explicit final
+        // directories before `fs` is moved into the memory deps.
         let long_term = {
-            let global = global_store(format!("{long_term_dir}/global"), fs.clone());
+            let global = global_store(&global_long_term_dir, fs.clone());
             let extraction_llm =
                 ClawApiAsync::init(llm_config.clone(), H::default(), Timer::default())
                     .map_err(|error| AgentError::ExtractionLlm(error.to_string()))?;
             let extractor = LlmExtractor::shared(extraction_llm);
             let classifier = RuleBasedTierClassifier::shared();
-            LongTermDeps::new(
-                global,
-                format!("{long_term_dir}/agents"),
-                classifier,
-                extractor,
-            )
+            LongTermDeps::new(global, self.agent_long_term_dirs, classifier, extractor)
         };
+        let profile = ProfileStore::new(ProfileConfig::new(&profile_dir), fs.clone());
 
         // The single conversation-compaction policy: summarize the aged window
         // through the configured LLM. One shared client backs every agent's
@@ -433,7 +516,13 @@ where
         };
 
         let factory = Arc::new(FsAgentFactory::<F, H, Timer>::new(
-            resolver, llm_config, memory_dir, fs, compaction, long_term,
+            resolver,
+            llm_config,
+            &transcript_dir,
+            fs,
+            compaction,
+            long_term,
+            profile,
         ));
 
         let transport = RecordingTransport::new(self.channel.clone());

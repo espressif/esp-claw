@@ -21,11 +21,14 @@ use super::extraction::{ExtractError, ExtractFuture, ExtractedItem, Extractor};
 /// nothing else, so the result is parseable JSON.
 const EXTRACT_SYSTEM_PROMPT: &str = "You maintain an AI assistant's long-term memory. \
 Read the conversation transcript and extract only durable facts worth remembering \
-across future conversations: the user's identity, standing preferences, important \
-commitments, and stable context. Ignore transient chit-chat, one-off requests, and \
-anything already obvious. Write each fact concisely in the third person. Respond with \
-ONLY a JSON array of objects, each: {\"content\": string, \"tags\": [string], \
-\"keywords\": [string]}. Use short topic tags (e.g. \"preference\", \"identity\", \
+across future conversations: concrete user/device facts, standing factual \
+preferences, important commitments, and stable operational context. Do NOT extract \
+assistant persona, assistant identity, user profile document edits, tone/style \
+instructions, or requests to change long-term behavior; those belong in profile \
+documents, not long-term fact memory. Ignore transient chit-chat, one-off requests, \
+and anything already obvious. Write each fact concisely in the third person. Respond \
+with ONLY a JSON array of objects, each: {\"content\": string, \"tags\": [string], \
+\"keywords\": [string]}. Use short topic tags (e.g. \"preference\", \"device\", \
 \"fact\"). If nothing is worth remembering, respond with [].";
 
 /// Instruction prefacing the transcript handed to the model.

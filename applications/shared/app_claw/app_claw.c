@@ -123,6 +123,14 @@ static esp_err_t build_storage_paths(app_claw_storage_paths_t *paths)
                         TAG, "session root path too long");
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "memory", paths->memory_root_dir, sizeof(paths->memory_root_dir)),
                         TAG, "memory root path too long");
+    ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "memory/profile", paths->profile_dir, sizeof(paths->profile_dir)),
+                        TAG, "profile path too long");
+    ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "memory/long_term/global", paths->global_long_term_dir, sizeof(paths->global_long_term_dir)),
+                        TAG, "global long-term memory path too long");
+    ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "memory/long_term/agents/conversation", paths->conversation_long_term_dir, sizeof(paths->conversation_long_term_dir)),
+                        TAG, "conversation long-term memory path too long");
+    ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "memory/long_term/agents/worker", paths->worker_long_term_dir, sizeof(paths->worker_long_term_dir)),
+                        TAG, "worker long-term memory path too long");
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "skills", paths->skills_root_dir, sizeof(paths->skills_root_dir)),
                         TAG, "skills root path too long");
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "scripts", paths->lua_root_dir, sizeof(paths->lua_root_dir)),
@@ -224,7 +232,11 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
             .supports_tools = app_claw_bool_is_true(config->llm_supports_tools),
             .supports_vision = app_claw_bool_is_true(config->llm_supports_vision),
             .image_remote_url_only = app_claw_bool_is_true(config->llm_image_remote_url_only),
-            .memory_dir = paths.memory_root_dir,
+            .transcript_dir = paths.memory_session_root,
+            .profile_dir = paths.profile_dir,
+            .global_long_term_dir = paths.global_long_term_dir,
+            .conversation_long_term_dir = paths.conversation_long_term_dir,
+            .worker_long_term_dir = paths.worker_long_term_dir,
             .default_channel = "claw",
         };
 

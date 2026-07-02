@@ -4,6 +4,8 @@
 //!
 //! - [`TranscriptStore`] — the complete, append-only verbatim conversation
 //!   record (the source of truth for what was said).
+//! - [`ProfileStore`] — the editable global profile documents (`soul.md`,
+//!   `identity.md`, `user.md`).
 //! - [`LongTermMemory`] — the durable fact store.
 //!
 //! As a core crate it depends only on the [`claw_interface`] inbound traits — the
@@ -58,6 +60,7 @@
 
 pub mod compaction;
 pub mod long_term_memory;
+pub mod profile;
 pub mod transcript_store;
 
 #[cfg(feature = "compactor-stub")]
@@ -66,5 +69,10 @@ pub use compaction::{CompactError, CompactFuture, Compactor};
 pub use long_term_memory::{
     LongTermConfig, LongTermError, LongTermMemory, MemoryDraft, MemoryId, MemoryItem, MemoryPatch,
     StoreOutcome,
+};
+pub use profile::{
+    ParseProfileDocumentError, ProfileConfig, ProfileDocument, ProfileError, ProfileSnapshot,
+    ProfileStore, ASSISTANT_IDENTITY_FILE, DEFAULT_PROFILE_DOCUMENT_MAX_BYTES, SOUL_FILE,
+    USER_PROFILE_FILE,
 };
 pub use transcript_store::{GroupGuard, TranscriptConfig, TranscriptStore, Turn, TurnId};

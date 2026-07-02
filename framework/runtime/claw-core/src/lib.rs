@@ -20,8 +20,8 @@ pub use claw_utils::{define_prefixed_id, IdParseError};
 pub use memory::{
     agent_store, global_store, CompactionPolicy, ContextAdapter, ContextAdapterInput, ExtractError,
     ExtractedItem, Extractor, History, LlmCompactor, LlmExtractor, LongTermMemoryContextAdapter,
-    MemoryTier, NoopExtractor, RuleBasedTierClassifier, TierClassifier, Transcript,
-    AGENT_ID_PREFIX, GLOBAL_ID_PREFIX,
+    MemoryTier, NoopExtractor, ProfileContextAdapter, ProfileTools, RuleBasedTierClassifier,
+    TierClassifier, Transcript, AGENT_ID_PREFIX, GLOBAL_ID_PREFIX,
 };
 pub use orchestrator::{
     ChannelsEgressOnly, ChannelsUnset, FactorySet, FactoryUnset, Orchestrator, OrchestratorBuilder,

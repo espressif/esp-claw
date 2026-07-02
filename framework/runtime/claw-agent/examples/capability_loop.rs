@@ -146,7 +146,11 @@ async fn main() -> anyhow::Result<()> {
     let system =
         AgentSystem::builder::<MemFs, BlockingClawHttpAsync<SharedScriptHttp>, ImmediateTimer>()
             .llm(scripted_llm())
-            .memory_dir("/mem/agents")
+            .transcript_dir("/mem/sessions")
+            .profile_dir("/mem/profile")
+            .global_long_term_dir("/mem/long_term/global")
+            .agent_long_term_dir("conversation", "/mem/long_term/agents/conversation")
+            .agent_long_term_dir("worker", "/mem/long_term/agents/worker")
             .task_pool(pool)
             .capabilities(Arc::clone(&registry))
             .build()?;
@@ -164,7 +168,7 @@ async fn main() -> anyhow::Result<()> {
             session_id: session.to_wire(),
             text: "Hi, what time is it?".into(),
         })
-        .await;
+        .await?;
 
     // The orchestrator drives the turn synchronously, so the reply has already
     // been delivered to the channel by the time `push_user_message` returns.

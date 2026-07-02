@@ -32,8 +32,9 @@ pub trait TierClassifier: Send + Sync {
 }
 
 /// Tags that, by default, mark a fact as globally shared (user-level, not
-/// task-level): identity and standing preferences belong to every agent.
-const DEFAULT_GLOBAL_TAGS: &[&str] = &["profile", "preference", "identity", "user"];
+/// task-level). Persona/profile/assistant identity changes are intentionally not
+/// here; those belong to the profile documents and tools.
+const DEFAULT_GLOBAL_TAGS: &[&str] = &["preference", "user", "device", "fact", "shared"];
 
 /// The default [`TierClassifier`]: honor a `hint`, else route to
 /// [`Global`](MemoryTier::Global) when any tag is in the global set, otherwise
@@ -47,9 +48,9 @@ const DEFAULT_GLOBAL_TAGS: &[&str] = &["profile", "preference", "identity", "use
 ///
 /// let classifier = RuleBasedTierClassifier::default();
 ///
-/// // A profile fact (no hint) routes to the global store.
-/// let profile = MemoryDraft::new("Name is Ada").with_tags(["profile".into()]);
-/// assert_eq!(classifier.classify(&profile, None), MemoryTier::Global);
+/// // A user-level fact (no hint) routes to the global store.
+/// let preference = MemoryDraft::new("Uses Home Assistant").with_tags(["preference".into()]);
+/// assert_eq!(classifier.classify(&preference, None), MemoryTier::Global);
 ///
 /// // A task note routes to the agent store.
 /// let note = MemoryDraft::new("Deploy step needs sudo").with_tags(["task".into()]);

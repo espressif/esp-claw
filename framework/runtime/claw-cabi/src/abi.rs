@@ -159,8 +159,16 @@ pub struct ClawAgentSystemConfig {
     pub supports_tools: bool,
     pub supports_vision: bool,
     pub image_remote_url_only: bool,
-    /// DATA-rooted directory for agent conversation and long-term memory.
-    pub memory_dir: *const c_char,
+    /// DATA-rooted directory for transcript files.
+    pub transcript_dir: *const c_char,
+    /// DATA-rooted directory for editable profile documents.
+    pub profile_dir: *const c_char,
+    /// DATA-rooted directory for global long-term memory.
+    pub global_long_term_dir: *const c_char,
+    /// DATA-rooted directory for the conversation agent's long-term memory.
+    pub conversation_long_term_dir: *const c_char,
+    /// DATA-rooted directory for the worker agent's long-term memory.
+    pub worker_long_term_dir: *const c_char,
     /// Default egress channel id. Nullable => "claw".
     pub default_channel: *const c_char,
 }

@@ -19,6 +19,7 @@
 //!   context and keep their model-callable tools with the source they mutate.
 
 mod long_term_memory_adapter;
+mod profile_adapter;
 mod recent_messages_adapter;
 mod rolling_summary_adapter;
 mod skill_adapter;
@@ -31,6 +32,7 @@ pub use long_term_memory_adapter::{
     LongTermMemoryContextAdapter, MemoryTier, NoopExtractor, RuleBasedTierClassifier,
     TierClassifier, AGENT_ID_PREFIX, GLOBAL_ID_PREFIX,
 };
+pub use profile_adapter::{ProfileContextAdapter, ProfileTools};
 pub use recent_messages_adapter::RecentMessagesContextAdapter;
 pub use rolling_summary_adapter::{CompactionPolicy, RollingSummaryContextAdapter};
 #[cfg(test)]

@@ -183,15 +183,19 @@ pub type TestAgentBuilder<H> = BaseAgentBuilder<TestFs, BlockingClawHttpAsync<H>
 pub type TestMemory = TranscriptStore<TestFs>;
 
 /// Real disk-backed transcript store.
-pub fn test_memory(agent_id: AgentId, dir: impl Into<String>) -> TestMemory {
-    TranscriptStore::new(agent_id.0, TranscriptConfig::new(dir), DiskFs::absolute())
+pub fn test_memory(agent_id: AgentId, dir: impl AsRef<str>) -> TestMemory {
+    TranscriptStore::new(
+        agent_id.0,
+        TranscriptConfig::new(dir.as_ref()),
+        DiskFs::absolute(),
+    )
 }
 
 /// A `BaseAgentBuilder` over a fresh disk transcript store.
 pub fn agent_builder<H: ClawHttp>(
     llm: TestLlm<H>,
     agent_id: AgentId,
-    dir: impl Into<String>,
+    dir: impl AsRef<str>,
 ) -> TestAgentBuilder<H> {
     BaseAgent::builder(llm, test_memory(agent_id, dir))
 }
@@ -201,7 +205,7 @@ pub fn agent_builder<H: ClawHttp>(
 pub fn builder_with_view<H: ClawHttp>(
     llm: TestLlm<H>,
     agent_id: AgentId,
-    dir: impl Into<String>,
+    dir: impl AsRef<str>,
 ) -> (TestAgentBuilder<H>, TestMemory) {
     let store = test_memory(agent_id, dir);
     let view = store.clone();

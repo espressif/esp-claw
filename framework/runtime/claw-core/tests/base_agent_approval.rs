@@ -38,7 +38,7 @@ fn echo_tools() -> ToolSet {
 /// an identity — ready to `.build()`.
 fn asking_builder<H: claw_interface::http::ClawHttp>(
     llm: TestLlm<H>,
-    dir: impl Into<String>,
+    dir: impl AsRef<str>,
 ) -> TestAgentBuilder<H> {
     agent_builder(llm, AgentId(1), dir)
         .with_tools(echo_tools())

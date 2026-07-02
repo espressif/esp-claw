@@ -1633,9 +1633,10 @@ mod gating_tests {
     }
 
     fn test_store(agent_id: AgentId) -> TranscriptStore<MemFs> {
+        let transcript_dir = format!("/mem/agent-{}", agent_id.0);
         TranscriptStore::new(
             agent_id.0,
-            TranscriptConfig::new(format!("/mem/agent-{}", agent_id.0)),
+            TranscriptConfig::new(&transcript_dir),
             MemFs::default(),
         )
     }

@@ -12,10 +12,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
-use claw_core::agent::{CompactionDeps, LongTermDeps};
+use claw_core::agent::{AgentLongTermDirs, CompactionDeps, LongTermDeps};
 use claw_core::{global_store, CompactionPolicy, LlmExtractor, RuleBasedTierClassifier};
 use claw_interface::{DiskFs, RealHttpAsync, StdThread, TokioTimer};
-use claw_memory::{NoopCompactor, TranscriptConfig, TranscriptStore};
+use claw_memory::{NoopCompactor, ProfileConfig, ProfileStore, TranscriptConfig, TranscriptStore};
 use claw_utils::{PoolConfig, SharedTaskPool};
 
 // The real network transport is `claw_interface::RealHttpAsync` (the `realhttp`
@@ -110,17 +110,17 @@ pub fn make_compaction() -> CompactionDeps {
     }
 }
 
-/// Build an on-disk [`TranscriptStore`] at `memory_dir` plus a cloned read-only
+/// Build an on-disk [`TranscriptStore`] at `transcript_dir` plus a cloned read-only
 /// view of the same store (handy for a `/messages` command). For agents that
 /// build their own store (e.g. [`claw_core::agent::GenericAgent`]), use
 /// [`make_memory_ingredients`] instead.
 pub fn make_memory(
     agent_id: usize,
-    memory_dir: &str,
+    transcript_dir: &str,
 ) -> (TranscriptStore<CliFs>, TranscriptStore<CliFs>) {
     let store = TranscriptStore::new(
         agent_id,
-        TranscriptConfig::new(memory_dir),
+        TranscriptConfig::new(transcript_dir),
         make_memory_fs(),
     );
     let view = store.clone();
@@ -128,38 +128,44 @@ pub fn make_memory(
 }
 
 /// Build the ingredients a [`claw_core::agent::GenericAgent`] needs to construct
-/// its own on-disk transcript store at `memory_dir`: the transcript config, the
+/// its own on-disk transcript store at `transcript_dir`: the transcript config, the
 /// storage backend, and the compaction collaborators. The agent keys the
 /// conversation by its own id, so no id is needed here.
 ///
 /// # Panics
 ///
 /// If the background task pool cannot be created.
-pub fn make_memory_ingredients(memory_dir: &str) -> (TranscriptConfig, CliFs, CompactionDeps) {
+pub fn make_memory_ingredients(transcript_dir: &str) -> (TranscriptConfig, CliFs, CompactionDeps) {
     (
-        TranscriptConfig::new(memory_dir),
+        TranscriptConfig::new(transcript_dir),
         make_memory_fs(),
         make_compaction(),
     )
 }
 
-/// Build the long-term-memory collaborators rooted at `base_dir` — mandatory for
-/// every agent a [`claw_core::agent::FsAgentFactory`] builds: one shared global
-/// store under `<base_dir>/global`, per-agent stores under `<base_dir>/agents`,
-/// rule-based tier routing, and LLM-backed background extraction over a fresh
-/// client.
+/// Build the long-term-memory collaborators from explicit final directories —
+/// mandatory for every agent a [`claw_core::agent::FsAgentFactory`] builds: one
+/// shared global store, explicit per-kind agent stores, rule-based tier routing,
+/// and LLM-backed background extraction over a fresh client.
 ///
 /// # Panics
 ///
 /// If the extraction LLM client cannot init (missing `CLAW_LLM_*`).
-pub fn make_long_term_deps(base_dir: &str) -> LongTermDeps<CliFs> {
-    let base_dir = base_dir.trim_end_matches('/');
-    let global = global_store(format!("{base_dir}/global"), DiskFs::absolute());
+pub fn make_long_term_deps(
+    global_long_term_dir: &str,
+    agent_long_term_dirs: AgentLongTermDirs,
+) -> LongTermDeps<CliFs> {
+    let global = global_store(global_long_term_dir, DiskFs::absolute());
     let extractor = LlmExtractor::shared(make_llm());
     LongTermDeps::new(
         global,
-        format!("{base_dir}/agents"),
+        agent_long_term_dirs,
         RuleBasedTierClassifier::shared(),
         extractor,
     )
+}
+
+/// Build the editable profile store rooted at `profile_dir`.
+pub fn make_profile_store(profile_dir: &str) -> ProfileStore<CliFs> {
+    ProfileStore::new(ProfileConfig::new(profile_dir), DiskFs::absolute())
 }

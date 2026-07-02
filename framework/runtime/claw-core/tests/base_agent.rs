@@ -163,7 +163,8 @@ fn cancel_reports_cancelled_and_goes_idle() {
 #[test]
 fn cancel_records_interruption_marker_in_memory() {
     let dir = test_output_dir("cancel_records_interruption_marker_in_memory");
-    let store = test_memory(AgentId(1), dir.display().to_string());
+    let dir = dir.display().to_string();
+    let store = test_memory(AgentId(1), &dir);
     let view = store.clone();
     let mut agent = BaseAgent::builder(scripted_llm(vec![]), store)
         .build()
@@ -417,16 +418,14 @@ fn second_turn_includes_first_turn_context() {
 #[test]
 fn live_two_turn_chat_uses_memory() {
     let dir = test_output_dir("live_two_turn_chat_uses_memory");
+    let dir = dir.display().to_string();
 
     // Turn 1 — plant a memorable fact.
     {
-        let mut agent = BaseAgent::builder(
-            live_llm(),
-            test_memory(AgentId(1), dir.display().to_string()),
-        )
-        .with_system_prompt("You are a test assistant. Be brief and exact.")
-        .build()
-        .expect("build");
+        let mut agent = BaseAgent::builder(live_llm(), test_memory(AgentId(1), &dir))
+            .with_system_prompt("You are a test assistant. Be brief and exact.")
+            .build()
+            .expect("build");
         agent.run("Remember this code word: FLAMINGO. Reply with exactly: acknowledged");
 
         let text = run_to_completion(&mut agent);
@@ -438,13 +437,10 @@ fn live_two_turn_chat_uses_memory() {
 
     // Turn 2 — new agent instance loads the persisted transcript and recalls the fact.
     {
-        let mut agent = BaseAgent::builder(
-            live_llm(),
-            test_memory(AgentId(1), dir.display().to_string()),
-        )
-        .with_system_prompt("You are a test assistant. Be brief and exact.")
-        .build()
-        .expect("build");
+        let mut agent = BaseAgent::builder(live_llm(), test_memory(AgentId(1), &dir))
+            .with_system_prompt("You are a test assistant. Be brief and exact.")
+            .build()
+            .expect("build");
         agent.run("What was the code word I gave you?");
 
         let text = run_to_completion(&mut agent);

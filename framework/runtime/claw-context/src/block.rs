@@ -68,6 +68,8 @@ pub enum BlockKind {
     ToolPolicy,
     // Band 2 — Durable state.
     Soul,
+    AssistantIdentity,
+    UserProfile,
     GlobalMemory,
     SessionContext,
     SessionMemory,
@@ -95,6 +97,8 @@ impl BlockKind {
         match self {
             BlockKind::AgentInstruction | BlockKind::ToolPolicy => Band::Static,
             BlockKind::Soul
+            | BlockKind::AssistantIdentity
+            | BlockKind::UserProfile
             | BlockKind::GlobalMemory
             | BlockKind::SessionContext
             | BlockKind::SessionMemory
@@ -114,7 +118,10 @@ impl BlockKind {
     /// e.g. `OutputContract` sorts in the `Turn` tail by design.)
     pub fn scope(&self) -> Scope {
         match self {
-            BlockKind::GlobalMemory | BlockKind::Soul => Scope::Global,
+            BlockKind::GlobalMemory
+            | BlockKind::Soul
+            | BlockKind::AssistantIdentity
+            | BlockKind::UserProfile => Scope::Global,
             BlockKind::SessionContext | BlockKind::SessionMemory => Scope::Session,
             BlockKind::AgentInstruction
             | BlockKind::ToolPolicy
@@ -136,7 +143,9 @@ impl BlockKind {
             BlockKind::ToolPolicy => 1,
             // Band 2
             BlockKind::Soul => 0,
-            BlockKind::GlobalMemory => 1,
+            BlockKind::AssistantIdentity => 1,
+            BlockKind::UserProfile => 2,
+            BlockKind::GlobalMemory => 3,
             BlockKind::SessionContext => 0,
             BlockKind::SessionMemory => 1,
             BlockKind::AgentMemory => 0,

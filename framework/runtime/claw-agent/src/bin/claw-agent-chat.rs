@@ -14,9 +14,29 @@ use std::io::{self, BufRead, Write};
 use std::path::Path;
 
 use anyhow::{bail, Result};
-use claw_agent::{AgentSystem, BackendKind, ClawApiConfig};
+use claw_agent::{AgentPersistenceConfig, AgentSystem, BackendKind, ClawApiConfig};
 
 const MEMORY_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/output/claw-agent-chat");
+const TRANSCRIPT_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/output/claw-agent-chat/sessions"
+);
+const PROFILE_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/output/claw-agent-chat/profile"
+);
+const GLOBAL_LONG_TERM_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/output/claw-agent-chat/long_term/global"
+);
+const CONVERSATION_LONG_TERM_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/output/claw-agent-chat/long_term/agents/conversation"
+);
+const WORKER_LONG_TERM_DIR: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/output/claw-agent-chat/long_term/agents/worker"
+);
 
 #[tokio::main]
 async fn main() {
@@ -29,7 +49,11 @@ async fn main() {
 async fn run() -> Result<()> {
     load_env();
 
-    let system = AgentSystem::on_disk(llm_config()?, MEMORY_DIR)?;
+    let persistence =
+        AgentPersistenceConfig::new(TRANSCRIPT_DIR, PROFILE_DIR, GLOBAL_LONG_TERM_DIR)
+            .with_agent_long_term_dir("conversation", CONVERSATION_LONG_TERM_DIR)
+            .with_agent_long_term_dir("worker", WORKER_LONG_TERM_DIR);
+    let system = AgentSystem::on_disk(llm_config()?, persistence)?;
     let session = system.new_session();
 
     eprintln!("Session: {}", session.to_wire());

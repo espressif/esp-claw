@@ -129,7 +129,7 @@ Artifacts are combinations:
 | baked common preamble + `agents/<role>/instruction.md` | Agent | Push | Immutable |
 | ToolPolicy prose | Agent | Push | Immutable |
 | ToolReminder phase note | Agent | Push reminder | Volatile |
-| `soul.md` | Global/Agent | Push | Durable-mutable |
+| `soul.md` / `identity.md` / `user.md` | Global | Push | Durable-mutable |
 | `MEMORY.md` (one per level) | Global/Session/Agent | Push | Durable-mutable |
 | `ConversationSummary` | Conversation | Push | Durable-mutable |
 | long-term memory recall, `RetrievedDocs` lookup | any | Pull via tool | tool result is Volatile |
@@ -166,7 +166,11 @@ query-specific *slice* into the tail.
 
 Group, scope, source, and extension points. (Mutability / band in Part B.)
 
-- **Soul** — *Core, Global or Agent.* Persona/identity. `soul.md`.
+- **Soul** — *Core, Global.* Persona, behavior principles, and style. `soul.md`.
+- **AssistantIdentity** — *Core, Global.* Assistant/device role, capabilities, and
+  boundaries. `identity.md`.
+- **UserProfile** — *Core, Global.* The single user's stable preferences and
+  interaction agreements. `user.md`.
 - **AgentInstruction** — *Core, Agent.* Role and boundaries.
   Runtime text is `resources/agents/common/instructions.md` folded together with
   `resources/agents/<kind>/instructions.md` at build time. *Extends:* frontend /
@@ -215,7 +219,7 @@ BAND 1 — STATIC INSTRUCTIONS   (immutable; the long shared prefix, never buste
   AgentInstruction · ToolPolicy
 
 BAND 2 — DURABLE STATE         (slowly mutable; broad→narrow scope; an edit busts only Bands 2–3)
-  Soul · GlobalMemory · SessionContext · SessionMemory · AgentMemory
+  Soul · AssistantIdentity · UserProfile · GlobalMemory · SessionContext · SessionMemory · AgentMemory
   ActiveSkills · ModeFraming · ConversationSummary
 
 BAND 3 — VOLATILE TAIL         (rebuilt each iteration; append-only between compactions)
@@ -249,7 +253,7 @@ Regions below the provider minimum (~1024 tokens on OpenAI) won't cache alone.
 | AgentInstruction | Agent | Immutable | 1 |
 | ToolPolicy | Agent | Immutable | 1 |
 | ToolReminder | Agent | Volatile reminder | 3 |
-| Soul | Global/Agent | Durable-mutable | 2 |
+| Soul / AssistantIdentity / UserProfile | Global | Durable-mutable | 2 |
 | GlobalMemory | Global | Durable-mutable | 2 |
 | SessionContext / SessionMemory | Session | Durable-mutable | 2 |
 | AgentMemory | Agent | Durable-mutable | 2 |
@@ -270,17 +274,15 @@ content above Band 1.
 
 Product calls; each lists the default the layout assumes.
 
-1. **Soul scope** — default Global. Band 2 either way; scope only shifts position
-   within Band 2.
-2. **Memory write cadence** — default: written via tool at a boundary (write lands
+1. **Memory write cadence** — default: written via tool at a boundary (write lands
    in tail; injected copy refreshes next turn → stable-within-turn). A live
    per-iteration scratchpad is Volatile and moves to Band 3.
-3. **`RetrievedDocs` injection** — default *pull* through a tool call, so it is a
+2. **`RetrievedDocs` injection** — default *pull* through a tool call, so it is a
    tool result in history. For system-initiated prefetch without a tool call, use
    a `Custom` volatile block or reminder. Do not add a `PulledKnowledge` kind.
-4. **ActiveSkills vs ModeFraming order** in Band 2 — default `ActiveSkills` first;
+3. **ActiveSkills vs ModeFraming order** in Band 2 — default `ActiveSkills` first;
    swap if framing proves more stable.
-5. **`SessionContext`** — confirm what session-wide framing exists beyond
+4. **`SessionContext`** — confirm what session-wide framing exists beyond
    `SessionMemory`, or drop it.
 
 ## Legacy C Mapping and Rust Integration Backlog
@@ -293,7 +295,7 @@ blocks:
 
 | Context | Legacy behavior on `master` | Rust status / direction |
 |---|---|---|
-| Soul | `claw_memory_profile_provider` pushed editable profile files (`user.md`, `soul.md`, `identity.md`) into the system prompt. | Missing. Implement a profile/soul context adapter. Map `soul.md` to `Soul`; decide whether `user.md` and `identity.md` fold into `Soul` or become named durable `Custom` blocks. |
+| Soul / AssistantIdentity / UserProfile | `claw_memory_profile_provider` pushed editable profile files (`user.md`, `soul.md`, `identity.md`) into the system prompt. | Implemented as first-class global blocks backed by `ProfileStore` and `ProfileContextAdapter`. |
 | SessionContext | No clear legacy equivalent beyond request metadata such as source channel/chat. | Product decision. Implement only if sessions gain stable shared framing; otherwise drop the block kind. |
 | SessionMemory | No durable session-scope `MEMORY.md` equivalent. Legacy Session History was transcript storage, not session memory. | Missing by design. Implement only if we need session-wide durable notes distinct from conversation transcript/summary. |
 | ModeFraming | Root/subagent role and subagent type prompts were folded into the agent system prompt by the agent manager. | Mostly absorbed by `AgentInstruction` today. Extract to `ModeFraming` only when conversation/working/review/etc. modes need to swap framing independently of agent identity. |

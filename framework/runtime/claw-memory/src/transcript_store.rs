@@ -178,8 +178,7 @@ impl TranscriptConfig {
     /// Config for conversation files under `dir`, with default tuning otherwise.
     ///
     /// `dir` is the base directory for the per-conversation files; the filenames
-    /// themselves are derived from the conversation id. Accepts anything
-    /// `Into<String>` (`&str`, `String`, …).
+    /// themselves are derived from the conversation id.
     ///
     /// # Examples
     ///
@@ -189,9 +188,9 @@ impl TranscriptConfig {
     /// let config = TranscriptConfig::new("/data/conversations");
     /// assert_eq!(config.dir, "/data/conversations");
     /// ```
-    pub fn new(dir: impl Into<String>) -> Self {
+    pub fn new(dir: &str) -> Self {
         Self {
-            dir: dir.into(),
+            dir: dir.to_string(),
             persist_debounce: DEFAULT_PERSIST_DEBOUNCE,
         }
     }

@@ -37,8 +37,8 @@ use std::task::{Wake, Waker};
 
 #[cfg(target_os = "espidf")]
 use claw_agent::{
-    init_tool_executor, AgentSystem, BackendKind, ClawApiConfig, PoolConfig, SessionId,
-    SharedTaskPool,
+    init_tool_executor, AgentPersistenceConfig, AgentSystem, BackendKind, ClawApiConfig,
+    PoolConfig, SessionId, SharedTaskPool,
 };
 use claw_agent::{
     CapabilityError, ChannelIngressSink, DeliverError, InboundMessage, Registry, SessionError,
@@ -442,7 +442,15 @@ unsafe fn agent_system_create_inner(
 
     let registry = Arc::clone(&registry_handle.registry);
     let llm = build_llm_config(config)?;
-    let memory_dir = unsafe { required_string(config.memory_dir)? };
+    let transcript_dir = unsafe { required_string(config.transcript_dir)? };
+    let profile_dir = unsafe { required_string(config.profile_dir)? };
+    let global_long_term_dir = unsafe { required_string(config.global_long_term_dir)? };
+    let conversation_long_term_dir = unsafe { required_string(config.conversation_long_term_dir)? };
+    let worker_long_term_dir = unsafe { required_string(config.worker_long_term_dir)? };
+    let persistence =
+        AgentPersistenceConfig::new(&transcript_dir, &profile_dir, &global_long_term_dir)
+            .with_agent_long_term_dir("conversation", &conversation_long_term_dir)
+            .with_agent_long_term_dir("worker", &worker_long_term_dir);
     init_tool_executor(EspIdfThread).map_err(|error| CapabilityError::Failed(error.to_string()))?;
     let pool = Arc::new(
         SharedTaskPool::new(PoolConfig::default(), EspIdfThread)
@@ -451,7 +459,7 @@ unsafe fn agent_system_create_inner(
 
     let mut builder = AgentSystem::builder::<EspIdfFs, EspIdfHttp, EspIdfTimer>()
         .llm(llm)
-        .memory_dir(memory_dir)
+        .persistence(persistence)
         .task_pool(pool)
         .capabilities(Arc::clone(&registry));
     if let Some(channel) = unsafe { optional_string(config.default_channel)? } {

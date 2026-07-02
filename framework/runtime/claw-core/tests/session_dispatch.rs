@@ -116,7 +116,7 @@ fn delete_session_rejects_push() {
     let sid = orch.session_create();
     orch.session_delete(sid).unwrap();
 
-    block_on(orch.push_user_message(user_msg(sid, "ghost")));
+    assert!(block_on(orch.push_user_message(user_msg(sid, "ghost"))).is_err());
     assert!(transport.drain_sent().is_empty());
 }
 
@@ -124,14 +124,15 @@ fn delete_session_rejects_push() {
 fn push_without_session_id_is_rejected() {
     let (orch, transport) = test_orchestrator();
 
-    block_on(orch.push_user_message(InboundMessage {
+    assert!(block_on(orch.push_user_message(InboundMessage {
         message_id: "m1".into(),
         channel: "qq".into(),
         chat_id: "route-chat".into(),
         sender_id: None,
         session_id: String::new(),
         text: "via-route".into(),
-    }));
+    }))
+    .is_err());
 
     assert!(transport.drain_sent().is_empty());
 }
@@ -140,5 +141,5 @@ fn push_without_session_id_is_rejected() {
 fn push_with_unknown_session_id_is_rejected() {
     let (orch, _) = test_orchestrator();
 
-    block_on(orch.push_user_message(user_msg(SessionId(99), "orphan")));
+    assert!(block_on(orch.push_user_message(user_msg(SessionId(99), "orphan"))).is_err());
 }

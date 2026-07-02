@@ -383,6 +383,21 @@ mod tests {
     }
 
     #[test]
+    fn profile_blocks_render_before_global_memory() {
+        let mut context = Context::new();
+        context
+            .with(Block::new(BlockKind::GlobalMemory, "MEMORY"))
+            .with(Block::new(BlockKind::UserProfile, "USER"))
+            .with(Block::new(BlockKind::Soul, "SOUL"))
+            .with(Block::new(BlockKind::AssistantIdentity, "IDENTITY"));
+
+        assert_eq!(
+            system_of(&mut context),
+            "SOUL\n\nIDENTITY\n\nUSER\n\nMEMORY"
+        );
+    }
+
+    #[test]
     fn empty_content_is_absent_and_drops_the_key() {
         let mut context = Context::new();
         context

@@ -195,10 +195,10 @@ pub struct LongTermConfig {
 impl LongTermConfig {
     /// Config for a store under `dir` minting ids with `id_prefix`, default
     /// tuning otherwise.
-    pub fn new(dir: impl Into<String>, id_prefix: impl Into<String>) -> Self {
+    pub fn new(dir: &str, id_prefix: &str) -> Self {
         Self {
-            dir: dir.into(),
-            id_prefix: id_prefix.into(),
+            dir: dir.to_string(),
+            id_prefix: id_prefix.to_string(),
             compact_dead_threshold: DEFAULT_COMPACT_DEAD_THRESHOLD,
         }
     }

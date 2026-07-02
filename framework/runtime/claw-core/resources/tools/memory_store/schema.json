@@ -2,7 +2,7 @@
   "type": "function",
   "function": {
     "name": "memory_store",
-    "description": "Remember a durable fact for the long term (e.g. a user preference, identity detail, or standing commitment). Use this only for information worth recalling in future conversations, not transient task details.",
+    "description": "Remember a durable factual memory for the long term (e.g. a concrete user/device fact, operational preference, or standing commitment). Do not use this for assistant persona, assistant identity, or editable user profile documents.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -13,7 +13,7 @@
         "tags": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Short topic labels to file this memory under (e.g. \"preference\", \"identity\"). You recall by these labels later."
+          "description": "Short topic labels to file this memory under (e.g. \"preference\", \"device\", \"fact\"). You recall by these labels later."
         },
         "keywords": {
           "type": "array",

@@ -285,8 +285,9 @@ mod tests {
     fn memory_ingredients(agent_id: AgentId) -> (TranscriptConfig, MemFs, CompactionDeps) {
         let pool =
             Arc::new(SharedTaskPool::new(PoolConfig::default(), StdThread).expect("memory pool"));
+        let transcript_dir = format!("/mem/agent-{}", agent_id.0);
         (
-            TranscriptConfig::new(format!("/mem/agent-{}", agent_id.0)),
+            TranscriptConfig::new(&transcript_dir),
             MemFs::default(),
             CompactionDeps {
                 pool,
