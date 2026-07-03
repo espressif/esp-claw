@@ -29,8 +29,6 @@ pub enum IterationLoopError {
     MissingAssistantMessage,
     #[error("LLM raw assistant message JSON is not valid JSON")]
     MalformedAssistantMessage,
-    #[error("LLM issued tool calls but no tools port was supplied")]
-    MissingTools,
     #[error(transparent)]
     Chat(#[from] ChatError),
 }
@@ -67,15 +65,12 @@ impl AppendedMessages {
         Self(Value::Array(Vec::new()))
     }
 
-    fn as_produced_snapshot(&self) -> Option<AppendedMessages> {
-        match self.0.as_array() {
-            Some(items) if !items.is_empty() => Some(self.clone()),
-            _ => None,
-        }
+    pub fn is_empty(&self) -> bool {
+        self.0.as_array().is_none_or(Vec::is_empty)
     }
 }
 
-/// Inputs for exactly one [`IterationLoop::run`]: chat fields + optional tools.
+/// Inputs for exactly one [`IterationLoop::run`]: chat fields + tools.
 pub struct IterationStep<'a> {
     pub iteration_id: IterationId,
     pub system_prompt: SystemPrompt<'a>,
@@ -87,11 +82,11 @@ pub struct IterationStep<'a> {
     /// (see [`ToolSet::set_active_tools`]): the full schema is always sent
     /// (cache-stable), but a call to a tool the set does not currently allow is
     /// refused with a tool error rather than invoked — see [`ToolRun::blocked`].
-    pub tools: Option<&'a ToolSet>,
-    /// Permission gate consulted before each call after soft-hide passes (`None`
-    /// = no permission layer). On `Deny` the call is refused; on `Ask` it is held
-    /// for human approval (surfaced via [`ToolRun::approval`]) and not run.
-    pub gate: Option<&'a dyn ToolGate>,
+    pub tools: &'a ToolSet,
+    /// Permission gate consulted before each call after soft-hide passes. On
+    /// `Deny` the call is refused; on `Ask` it is held for human approval
+    /// (surfaced via [`ToolRun::approval`]) and not run.
+    pub gate: &'a dyn ToolGate,
 }
 
 /// Terminal outcome of exactly one [`IterationLoop::run`] (completed or preempted).
@@ -122,15 +117,32 @@ pub enum CompletedKind {
 pub struct ToolRun {
     pub name: String,
     pub ok: bool,
+    disposition: ToolRunDisposition,
+}
+
+impl ToolRun {
     /// True when the call was refused by soft-hide gating (not in the tool set's
-    /// active allow-set) instead of being invoked. A blocked run is always
-    /// `ok == false`; upper layers use this to drive the "retry then fail"
-    /// policy without treating it as a normal tool failure.
-    pub blocked: bool,
-    /// `Some` when the permission policy asked for human approval: the tool did
-    /// not run and the agent layer raises + resolves the request. Crate-internal
-    /// payload — observers outside the crate only see that approval is pending.
-    pub(crate) approval: Option<ApprovalNeeded>,
+    /// active allow-set) instead of being invoked.
+    pub fn is_blocked(&self) -> bool {
+        matches!(self.disposition, ToolRunDisposition::Blocked)
+    }
+
+    pub(crate) fn approval(&self) -> Option<&ApprovalNeeded> {
+        match &self.disposition {
+            ToolRunDisposition::AwaitingApproval(approval) => Some(approval),
+            ToolRunDisposition::Executed | ToolRunDisposition::Blocked => None,
+        }
+    }
+}
+
+/// Why a tool run did or did not execute. This keeps mutually exclusive
+/// execution states in one field instead of pairing booleans with optional
+/// payloads.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ToolRunDisposition {
+    Executed,
+    Blocked,
+    AwaitingApproval(ApprovalNeeded),
 }
 
 /// The model issued tool calls and they were executed.
@@ -156,7 +168,7 @@ pub struct PlainTextOutcome {
 pub struct PreemptedOutcome {
     pub iteration_id: IterationId,
     pub checkpoint: IterationCheckpoint,
-    pub produced: Option<AppendedMessages>,
+    pub produced: AppendedMessages,
 }
 
 /// User interrupt surface for one in-flight iteration. No message payloads here.
@@ -204,7 +216,7 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
         loop_.interruption,
         iteration_id,
         IterationCheckpoint::BeforeLlmHttp,
-        None,
+        AppendedMessages::empty(),
     ) {
         return Ok(IterationOutcome::Preempted(outcome));
     }
@@ -213,7 +225,7 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
         system_prompt: step.system_prompt.as_ref(),
         messages: step.messages.0,
         reminders: step.reminders,
-        tools_json: step.tools.and_then(|t| t.schemas_json()),
+        tools_json: step.tools.schemas_json(),
         retry: loop_.retry,
     };
     let cancel = Cancel::new(loop_.interruption.interrupt_flag().as_ref());
@@ -224,7 +236,7 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
                 return Ok(IterationOutcome::Preempted(PreemptedOutcome {
                     iteration_id,
                     checkpoint: IterationCheckpoint::InLlmHttpAbort,
-                    produced: None,
+                    produced: AppendedMessages::empty(),
                 }));
             }
             return Err(IterationLoopError::Chat(llm_err));
@@ -236,7 +248,7 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
             loop_.interruption,
             iteration_id,
             IterationCheckpoint::AfterLlmBeforeTool,
-            None,
+            AppendedMessages::empty(),
         ) {
             return Ok(IterationOutcome::Preempted(outcome));
         }
@@ -269,22 +281,18 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
         loop_.interruption,
         iteration_id,
         IterationCheckpoint::AfterLlmBeforeTool,
-        None,
+        AppendedMessages::empty(),
     ) {
         return Ok(IterationOutcome::Preempted(outcome));
     }
 
     log_tool_call_names(iteration_id, &llm_response);
 
-    let Some(tools) = step.tools else {
-        return Err(IterationLoopError::MissingTools);
-    };
-
     if let Err(err) = append_assistant_tool_calls(&mut appended.0, &llm_response) {
         return Err(err);
     }
 
-    let runner = ToolRunner::new(tools, step.gate);
+    let runner = ToolRunner::new(step.tools, Some(step.gate));
     match run_tool_calls(
         loop_.interruption,
         &runner,
@@ -328,7 +336,7 @@ fn check_preempt_at_checkpoint(
     interruption: &dyn InterruptionControl,
     iteration_id: IterationId,
     checkpoint: IterationCheckpoint,
-    produced: Option<AppendedMessages>,
+    produced: AppendedMessages,
 ) -> Option<PreemptedOutcome> {
     if !take_interrupt(interruption) {
         return None;
@@ -384,7 +392,7 @@ async fn run_tool_calls(
             interruption,
             iteration_id,
             IterationCheckpoint::BeforeTool,
-            appended.as_produced_snapshot(),
+            appended.clone(),
         ) {
             return ToolRoundResult::Preempted(outcome);
         }
@@ -433,6 +441,11 @@ async fn run_tool_calls(
             return ToolRoundResult::Failed(IterationLoopError::MessagesNotArray);
         };
         runtime_arr.push(tool_message);
+        let disposition = match approval {
+            Some(approval) => ToolRunDisposition::AwaitingApproval(approval),
+            None if blocked => ToolRunDisposition::Blocked,
+            None => ToolRunDisposition::Executed,
+        };
         runs.push(ToolRun {
             name: if tc.name.is_empty() {
                 "(null)".to_string()
@@ -440,8 +453,7 @@ async fn run_tool_calls(
                 tc.name.clone()
             },
             ok,
-            blocked,
-            approval,
+            disposition,
         });
     }
 
@@ -535,12 +547,12 @@ mod tests {
             &interruption,
             IterationId(1),
             IterationCheckpoint::AfterLlmBeforeTool,
-            None,
+            AppendedMessages::empty(),
         )
         .expect("preempt");
 
         assert_eq!(outcome.checkpoint, IterationCheckpoint::AfterLlmBeforeTool);
-        assert!(outcome.produced.is_none());
+        assert!(outcome.produced.is_empty());
         assert!(!interruption.interrupt_flag().load(Ordering::Acquire));
     }
 
@@ -557,12 +569,11 @@ mod tests {
             &interruption,
             IterationId(1),
             IterationCheckpoint::BeforeTool,
-            produced.as_produced_snapshot(),
+            produced.clone(),
         )
         .expect("preempt");
 
-        let produced = outcome.produced.expect("produced");
-        let items = produced.0.as_array().expect("array");
+        let items = outcome.produced.0.as_array().expect("array");
         assert_eq!(items.len(), 2);
     }
 
@@ -695,7 +706,7 @@ mod tests {
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].name, "(null)");
         assert!(!runs[0].ok);
-        assert!(!runs[0].blocked);
+        assert!(!runs[0].is_blocked());
         assert_eq!(appended.0[1]["is_error"], true);
     }
 
@@ -759,7 +770,7 @@ mod tests {
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].name, "writer");
         assert!(!runs[0].ok);
-        assert!(runs[0].blocked);
+        assert!(runs[0].is_blocked());
         // The tool message is present (id matched, no dangling) and is an error.
         assert_eq!(appended.0[1]["tool_call_id"], "t1");
         assert_eq!(appended.0[1]["is_error"], true);
@@ -845,9 +856,10 @@ mod behavior_tests {
         HttpError, HttpJsonRequest, HttpRequestFailure, HttpResponse, HttpStatusCode,
     };
     use claw_interface::{BlockingHttpAdapter, ClawHttp, ClawTimer, ImmediateTimer, StdThread};
+    use claw_permission::AllowAll;
     use claw_tool::{
-        init_tool_executor, Tool, ToolError, ToolGroup, ToolHandler, ToolInvocation,
-        ToolInvokeError, ToolOutput, ToolSet,
+        init_tool_executor, PermissionGate, Tool, ToolError, ToolGroup, ToolHandler,
+        ToolInvocation, ToolInvokeError, ToolOutput, ToolSet,
     };
     use serde_json::{json, Value};
 
@@ -1136,18 +1148,19 @@ mod behavior_tests {
     fn run_step<H: ClawHttp, Timer: ClawTimer>(
         llm: &mut ClawApiAsync<H, Timer>,
         control: &MockControl,
-        tools: Option<&ToolSet>,
+        tools: &ToolSet,
         iteration_id: IterationId,
         messages: &Value,
         system_prompt: &str,
     ) -> IterationResult {
+        let gate = PermissionGate::new(Arc::new(AllowAll));
         let step = IterationStep {
             iteration_id,
             system_prompt: SystemPrompt(system_prompt),
             messages: ChatMessages(messages),
             reminders: &[],
             tools,
-            gate: None,
+            gate: &gate,
         };
         block_on(
             IterationLoop {
@@ -1157,6 +1170,17 @@ mod behavior_tests {
             }
             .run(step),
         )
+    }
+
+    fn run_step_without_tools<H: ClawHttp, Timer: ClawTimer>(
+        llm: &mut ClawApiAsync<H, Timer>,
+        control: &MockControl,
+        iteration_id: IterationId,
+        messages: &Value,
+        system_prompt: &str,
+    ) -> IterationResult {
+        let tools = ToolSet::empty();
+        run_step(llm, control, &tools, iteration_id, messages, system_prompt)
     }
 
     #[test]
@@ -1177,14 +1201,8 @@ mod behavior_tests {
         let control = MockControl::new();
         let messages = json!([{"role":"user","content":"hi"}]);
 
-        let result = run_step(
-            &mut llm,
-            &control,
-            None,
-            TEST_ITERATION_ID,
-            &messages,
-            "system",
-        );
+        let result =
+            run_step_without_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
 
         let Ok(IterationOutcome::Completed(outcome)) = result else {
             panic!("expected Completed, got {result:?}");
@@ -1208,7 +1226,7 @@ mod behavior_tests {
         let result = run_step(
             &mut llm,
             &control,
-            Some(&echo),
+            &echo,
             TEST_ITERATION_ID,
             &messages,
             "system",
@@ -1242,38 +1260,41 @@ mod behavior_tests {
         control.signal_interrupt();
         let messages = json!([]);
 
-        let result = run_step(
-            &mut llm,
-            &control,
-            None,
-            TEST_ITERATION_ID,
-            &messages,
-            "system",
-        );
+        let result =
+            run_step_without_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
 
         let Ok(IterationOutcome::Preempted(outcome)) = result else {
             panic!("expected Preempted, got {result:?}");
         };
         assert_eq!(outcome.checkpoint, IterationCheckpoint::BeforeLlmHttp);
-        assert!(outcome.produced.is_none());
+        assert!(outcome.produced.is_empty());
     }
 
     #[test]
-    fn run_errors_when_tool_calls_without_tools_port() {
+    fn run_records_unknown_tool_with_empty_tool_set() {
         let mut llm = test_llm(vec![TOOL_CALL_BODY]);
         let control = MockControl::new();
         let messages = json!([]);
 
-        let result = run_step(
-            &mut llm,
-            &control,
-            None,
-            TEST_ITERATION_ID,
-            &messages,
-            "system",
-        );
+        let result =
+            run_step_without_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
 
-        assert!(matches!(result, Err(IterationLoopError::MissingTools)));
+        let Ok(IterationOutcome::Completed(outcome)) = result else {
+            panic!("expected Completed, got {result:?}");
+        };
+        let CompletedKind::Tools(tool_outcome) = outcome.kind else {
+            panic!("expected Tools, got {:?}", outcome.kind);
+        };
+        assert_eq!(tool_outcome.runs.len(), 1);
+        assert_eq!(tool_outcome.runs[0].name, "files");
+        assert!(!tool_outcome.runs[0].ok);
+        let appended = tool_outcome.appended.0.as_array().unwrap();
+        assert_eq!(appended.len(), 2);
+        assert_eq!(appended[1]["is_error"], true);
+        assert!(appended[1]["content"]
+            .as_str()
+            .unwrap()
+            .contains("not registered"));
     }
 
     #[test]
@@ -1287,20 +1308,14 @@ mod behavior_tests {
         let mut llm = test_llm_with_http(http);
         let messages = json!([]);
 
-        let result = run_step(
-            &mut llm,
-            &control,
-            None,
-            TEST_ITERATION_ID,
-            &messages,
-            "system",
-        );
+        let result =
+            run_step_without_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
 
         let Ok(IterationOutcome::Preempted(outcome)) = result else {
             panic!("expected Preempted, got {result:?}");
         };
         assert_eq!(outcome.checkpoint, IterationCheckpoint::AfterLlmBeforeTool);
-        assert!(outcome.produced.is_none());
+        assert!(outcome.produced.is_empty());
     }
 
     #[test]
@@ -1311,20 +1326,14 @@ mod behavior_tests {
         });
         let messages = json!([]);
 
-        let result = run_step(
-            &mut llm,
-            &control,
-            None,
-            TEST_ITERATION_ID,
-            &messages,
-            "system",
-        );
+        let result =
+            run_step_without_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
 
         let Ok(IterationOutcome::Preempted(outcome)) = result else {
             panic!("expected Preempted, got {result:?}");
         };
         assert_eq!(outcome.checkpoint, IterationCheckpoint::InLlmHttpAbort);
-        assert!(outcome.produced.is_none());
+        assert!(outcome.produced.is_empty());
     }
 
     #[test]
@@ -1333,14 +1342,8 @@ mod behavior_tests {
         let control = MockControl::new();
         let messages = json!([]);
 
-        let result = run_step(
-            &mut llm,
-            &control,
-            None,
-            TEST_ITERATION_ID,
-            &messages,
-            "system",
-        );
+        let result =
+            run_step_without_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
 
         assert!(matches!(result, Err(IterationLoopError::Chat(_))));
     }
@@ -1355,7 +1358,7 @@ mod behavior_tests {
         let result = run_step(
             &mut llm,
             &control,
-            Some(&soft_fail),
+            &soft_fail,
             TEST_ITERATION_ID,
             &messages,
             "system",
@@ -1388,7 +1391,7 @@ mod behavior_tests {
         let result = run_step(
             &mut llm,
             &control,
-            Some(&failing),
+            &failing,
             TEST_ITERATION_ID,
             &messages,
             "system",
@@ -1439,10 +1442,9 @@ mod behavior_tests {
         let control = MockControl::new();
         let messages = json!([{"role":"user","content":"Reply with exactly: pong"}]);
 
-        let result = run_step(
+        let result = run_step_without_tools(
             &mut llm,
             &control,
-            None,
             TEST_ITERATION_ID,
             &messages,
             "You are a test assistant. Be brief.",

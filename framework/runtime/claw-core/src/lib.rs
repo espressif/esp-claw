@@ -2,22 +2,29 @@
 //!
 //! Layer 1: [`Orchestrator`]
 
-#![allow(non_camel_case_types)]
-
 pub mod agent;
+// NOTE: the `memory` context-adapter surface is consumed only by in-repo dev
+// tools/tests (the boundary `claw-agent` wires it entirely through
+// `FsAgentFactory`), so it is a candidate for the same `dev`-gating as the agent
+// concrete impls. That narrowing is deferred to the Batch F memory restructure
+// (rename to `context-adapters`, move `Compactor`) to avoid churning it twice.
 pub mod memory;
 mod orchestrator;
 mod session;
 
 pub use agent::IterationId;
-pub use claw_utils::{define_prefixed_id, IdParseError};
+pub use claw_utils::{define_id_allocator, define_prefixed_id, IdParseError};
 pub use memory::{
-    agent_store, global_store, CompactionPolicy, ContextAdapter, ContextAdapterInput, ExtractError,
-    ExtractedItem, Extractor, History, LlmCompactor, LlmExtractor, LongTermMemoryContextAdapter,
-    MemoryTier, NoopExtractor, ProfileContextAdapter, ProfileTools, RuleBasedTierClassifier,
-    TierClassifier, Transcript, AGENT_ID_PREFIX, GLOBAL_ID_PREFIX,
+    agent_store, global_store, AssistantCommit, ContextAdapter, ContextAdapterInput, ExtractError,
+    ExtractedItem, ExtractionInput, Extractor, History, LlmCompactor, LlmExtractor,
+    LongTermMemoryContextAdapter, MemoryOp, MemorySnapshot, MemoryTier, MemoryTierHint,
+    NoopExtractor, ProfileContextAdapter, ProfileTools, RuleBasedTierClassifier, TierClassifier,
+    Transcript, AGENT_ID_PREFIX, GLOBAL_ID_PREFIX,
 };
-pub use orchestrator::{ApprovalRequest, DriveOutput, Orchestrator, RootReply};
+pub use orchestrator::{
+    ApprovalRequest, DriveOutput, DriveStop, Orchestrator, RootReply, SessionControl,
+};
 pub use session::{
-    DeliverError, SessionError, SessionId, SessionMessage, SessionRecord, SessionStore,
+    DeliverError, DeliveryKind, FsSessionRegistry, SessionBinding, SessionError, SessionId,
+    SessionMessage, SessionRecord, SessionRegistryStore, SessionStore,
 };

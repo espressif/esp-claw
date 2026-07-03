@@ -40,7 +40,7 @@
 //!     conversation_id,
 //!     TranscriptConfig::new("/data/conversations"),
 //!     fs,
-//! );
+//! ).expect("a fresh MemFs has no data log, so the conversation starts empty");
 //!
 //! // Drive it from the agent loop. One turn = one `group()`; the whole turn is
 //! // committed as a single record when the guard drops.
@@ -67,12 +67,14 @@ pub mod transcript_store;
 pub use compaction::NoopCompactor;
 pub use compaction::{CompactError, CompactFuture, Compactor};
 pub use long_term_memory::{
-    LongTermConfig, LongTermError, LongTermMemory, MemoryDraft, MemoryId, MemoryItem, MemoryPatch,
-    StoreOutcome,
+    LongTermConfig, LongTermError, LongTermInitError, LongTermMemory, MemoryDraft, MemoryId,
+    MemoryItem, MemoryPatch, StoreOutcome,
 };
 pub use profile::{
     ParseProfileDocumentError, ProfileConfig, ProfileDocument, ProfileError, ProfileSnapshot,
     ProfileStore, ASSISTANT_IDENTITY_FILE, DEFAULT_PROFILE_DOCUMENT_MAX_BYTES, SOUL_FILE,
     USER_PROFILE_FILE,
 };
-pub use transcript_store::{GroupGuard, TranscriptConfig, TranscriptStore, Turn, TurnId};
+pub use transcript_store::{
+    GroupGuard, TranscriptConfig, TranscriptInitError, TranscriptStore, Turn, TurnId,
+};

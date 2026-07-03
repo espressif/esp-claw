@@ -29,11 +29,11 @@ use claw_memory::TurnId;
 /// This is intentionally local to the agent's context assembly path, not a
 /// cross-thread coordination primitive.
 #[derive(Clone, Default)]
-pub struct SummaryCursor(Rc<Cell<u64>>);
+pub(crate) struct SummaryCursor(Rc<Cell<u64>>);
 
 impl SummaryCursor {
     /// A fresh cursor at `0` — nothing summarized yet.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
@@ -41,7 +41,7 @@ impl SummaryCursor {
     ///
     /// The recent-tail adapter renders committed turns whose id is strictly
     /// greater than this.
-    pub fn covered_through(&self) -> u64 {
+    pub(crate) fn covered_through(&self) -> u64 {
         self.0.get()
     }
 
@@ -50,7 +50,7 @@ impl SummaryCursor {
     /// Uses a max update so an out-of-order or stale update can never move the
     /// boundary backwards (which would re-expose already-summarized turns as
     /// verbatim, duplicating them against the summary).
-    pub fn advance_to(&self, id: TurnId) {
+    pub(crate) fn advance_to(&self, id: TurnId) {
         self.0.set(self.0.get().max(id.0));
     }
 }

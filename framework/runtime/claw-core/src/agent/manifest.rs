@@ -80,8 +80,9 @@ pub struct AgentManifest {
     pub allowed_kinds: &'static [AgentKind],
     /// LLM retry budget per iteration (`runtime.retries`).
     pub retries: RetryCount,
-    /// Consecutive gating-blocked tool rounds to tolerate (`runtime.tool_block_retries`).
-    pub tool_block_retries: Option<RetryCount>,
+    /// Consecutive gating-blocked tool rounds to tolerate
+    /// (`runtime.tool_block_retries`; defaults to 0 in the build-time parser).
+    pub tool_block_retries: RetryCount,
     /// Capability (tool) names this kind uses, resolved to handlers at runtime.
     pub capabilities: &'static [CapabilityName],
     /// Skill ids this kind loads, resolved to a skill set at runtime.

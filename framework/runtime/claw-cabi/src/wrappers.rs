@@ -272,7 +272,6 @@ pub(crate) unsafe fn build_capability(
     descriptor: &ClawCapability,
 ) -> Result<Capability, CapabilityError> {
     let id = required_id(descriptor.id)?;
-    let description = optional_string(descriptor.description)?;
     let user_context = UserContext(descriptor.user_context);
     let lifecycle = build_lifecycle(&descriptor.lifecycle, user_context);
 
@@ -288,7 +287,7 @@ pub(crate) unsafe fn build_capability(
             let tool = unsafe { descriptor.role_data.tool };
             let execute = tool.execute.ok_or(CapabilityError::InvalidArg)?;
             let schema = required_string(tool.schema_json)?;
-            Capability::tool(Tool::new(CTool {
+            Capability::from_tool(Tool::new(CTool {
                 name: id.clone(),
                 schema,
                 execute,
@@ -311,9 +310,6 @@ pub(crate) unsafe fn build_capability(
         }
     };
 
-    if let Some(description) = description {
-        capability = capability.with_description(description);
-    }
     if let Some(lifecycle) = lifecycle {
         capability = capability.with_lifecycle(lifecycle);
     }
@@ -361,5 +357,9 @@ pub(crate) unsafe fn build_inbound(
         chat_id: required_id(message.chat_id)?,
         sender_id: optional_string(message.sender_id)?,
         text: required_string(message.text)?,
+        // The C ABI has no extra-context field yet, so `extra_context` defaults to
+        // `None`, which the boundary resolves to `DeliveryKind::Append` (inbound
+        // messages append to any running task by default).
+        ..Default::default()
     })
 }

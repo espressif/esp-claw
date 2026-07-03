@@ -11,7 +11,7 @@ pub mod block_on;
 
 pub use async_channel::{
     async_channel, async_oneshot, AsyncOneshotReceiver, AsyncOneshotSender, AsyncReceiver,
-    AsyncSendError, AsyncSender,
+    AsyncRecv, AsyncSendError, AsyncSender,
 };
 pub use block_on::block_on;
 
@@ -73,7 +73,7 @@ pub fn parse_prefixed_id(
     value: &str,
     prefix: &str,
     kind: &'static str,
-) -> Result<usize, IdParseError> {
+) -> Result<u32, IdParseError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err(IdParseError::Empty);
@@ -86,7 +86,7 @@ pub fn parse_prefixed_id(
             value: value.to_string(),
         })?;
 
-    rest.parse::<usize>().map_err(|_| IdParseError::Invalid {
+    rest.parse::<u32>().map_err(|_| IdParseError::Invalid {
         kind,
         value: value.to_string(),
     })
@@ -97,19 +97,19 @@ pub fn parse_prefixed_id(
 macro_rules! define_prefixed_id {
     ($name:ident, $prefix:literal, $kind:literal) => {
         #[doc = concat!(
-            "A `usize` newtype id whose wire form is prefixed with `",
+            "A `u32` newtype id whose wire form is prefixed with `",
             $prefix,
             "` (e.g. `", $prefix, "1`). Compares, hashes, displays, and (de)serializes by that wire form."
         )]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
         pub struct $name(
             /// The raw numeric id; the wire form prepends the type prefix.
-            pub usize,
+            pub u32,
         );
 
         impl $name {
             /// Construct from a raw numeric id.
-            pub const fn new(id: usize) -> Self {
+            pub const fn new(id: u32) -> Self {
                 Self(id)
             }
 
@@ -143,8 +143,8 @@ macro_rules! define_prefixed_id {
             }
         }
 
-        impl From<usize> for $name {
-            fn from(value: usize) -> Self {
+        impl From<u32> for $name {
+            fn from(value: u32) -> Self {
                 Self(value)
             }
         }
@@ -161,6 +161,98 @@ macro_rules! define_prefixed_id {
             ) -> Result<Self, D::Error> {
                 let value = String::deserialize(deserializer)?;
                 Self::from_wire(&value).map_err(::serde::de::Error::custom)
+            }
+        }
+    };
+}
+
+/// Define a **lock-free** counter that hands out monotonically increasing ids of
+/// a [`define_prefixed_id!`]-style newtype.
+///
+/// The counter is stored as the id newtype itself (not a bare integer) so it
+/// follows the id's representation. It deliberately carries **no synchronization
+/// and is not `Clone`/`Copy`**: an allocator's whole job is to never repeat, and
+/// a copied counter would silently fork into two owners that hand out the same
+/// ids. `next` takes `&mut self`, so the borrow checker enforces one live
+/// mutator.
+///
+/// **Synchronization is the caller's decision, added at the caller's layer** —
+/// the macro does not bake in an `Arc<Mutex<_>>`, so it never dictates a locking
+/// policy or forces a second lock onto a caller that already has one:
+/// - **Single `&mut self` owner** → hold it as a plain field; the `&mut` is the
+///   exclusivity. No lock at all.
+/// - **One field of an already-locked state** (e.g. a store that also owns a map
+///   behind a `Mutex`) → put the counter *inside that same lock* so allocation
+///   and the state mutation are one critical section — don't add a second lock.
+/// - **Genuinely shared across independent owners with no common enclosing lock**
+///   (cloned into several holders) → wrap it in the caller's own
+///   `Arc<Mutex<_>>` at that one shared owner.
+///
+/// `next` post-increments: the stored value is the *next* id to hand out. [`new`]
+/// starts at `first`; `starting_at` resumes past a known id (e.g. the highest id
+/// restored from persistence).
+///
+/// ```
+/// use claw_utils::define_id_allocator;
+///
+/// // Any `define_prefixed_id!` newtype works; here is a minimal stand-in with
+/// // the two things the macro needs: a public `.0` field and a `new` ctor.
+/// #[derive(Clone, Copy, Debug, PartialEq)]
+/// struct WidgetId(u32);
+/// impl WidgetId {
+///     const fn new(value: u32) -> Self {
+///         Self(value)
+///     }
+/// }
+///
+/// define_id_allocator!(WidgetIdAllocator(WidgetId), WidgetId(1));
+///
+/// let mut alloc = WidgetIdAllocator::new();
+/// assert_eq!(alloc.next(), WidgetId(1));
+/// assert_eq!(alloc.next(), WidgetId(2));
+/// // To share one counter across owners, wrap it caller-side, e.g.
+/// // `Arc<Mutex<WidgetIdAllocator>>`; the macro itself stays lock-free.
+/// ```
+#[macro_export]
+macro_rules! define_id_allocator {
+    ($(#[$meta:meta])* $vis:vis $name:ident($id:ty), $first:expr $(,)?) => {
+        $(#[$meta])*
+        #[derive(Debug)]
+        $vis struct $name($id);
+
+        impl $name {
+            /// Start a fresh allocator whose first handed-out id is the macro's
+            /// configured first id.
+            $vis fn new() -> Self {
+                Self::starting_at($first)
+            }
+
+            /// Start an allocator whose *next* handed-out id is `first` — the
+            /// persistence path: persist the next id, then read it off disk and
+            /// pass it here to resume without ever reusing a handed-out id.
+            $vis fn starting_at(first: $id) -> Self {
+                Self(first)
+            }
+
+            /// The id that [`next`](Self::next) will hand out, without advancing.
+            ///
+            /// Used to persist the allocator's position: write this to disk, then
+            /// restore with [`starting_at`](Self::starting_at).
+            $vis fn peek(&self) -> $id {
+                self.0
+            }
+
+            /// Allocate the next id, advancing the counter.
+            $vis fn next(&mut self) -> $id {
+                let id = self.0;
+                self.0 = <$id>::new(id.0.saturating_add(1));
+                id
+            }
+        }
+
+        impl ::std::default::Default for $name {
+            fn default() -> Self {
+                Self::new()
             }
         }
     };

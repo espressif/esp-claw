@@ -6,9 +6,8 @@
 //! This lives in `claw_core` (the agent wiring layer) rather than in
 //! `claw-memory`: `claw-memory` owns only the [`Compactor`] *seam* and stays free
 //! of any LLM dependency, exactly like it depends on the `ClawThread` /  `ClawFs`
-//! traits and never on their implementations. The concrete compactor is injected
-//! into `CompactionDeps.compactor` by whoever wires the agent's
-//! rolling-summary adapter.
+//! traits and never on their implementations. The concrete compactor is wired by
+//! the agent layer's rolling-summary adapter.
 
 use std::sync::atomic::AtomicBool;
 
@@ -42,9 +41,9 @@ pub struct LlmCompactor<H: ClawHttp, Timer: ClawTimer> {
 impl<H: ClawHttp, Timer: ClawTimer> LlmCompactor<H, Timer> {
     /// Build a compactor that owns the given LLM client.
     ///
-    /// The `api` is its own [`ClawApiAsync`] (with its own transport `H`), wired
-    /// into `CompactionDeps.compactor` so compaction summarizes through the
-    /// configured backend.
+    /// The `api` is its own [`ClawApiAsync`] (with its own transport `H`), so
+    /// compaction summarizes through the configured backend without sharing the
+    /// main conversation client.
     ///
     /// # Examples
     ///

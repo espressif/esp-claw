@@ -18,6 +18,8 @@ compactor-stub = []
 # this crate pulls in neither the platform boundary (`claw-sys`) nor the LLM
 # client (`claw-api`).
 claw-interface = { path = "../claw-interface" }
+# Shared id/allocator macros (`define_id_allocator!` for the `TurnId` counter).
+claw-utils = { path = "../claw-utils" }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -28,6 +30,5 @@ thiserror = "2"
 # double, `diskfs-pretty` is a disk-backed inspection backend, and `stdthread`
 # drives background work on the host target. None of these reach device builds.
 claw-interface = { path = "../claw-interface", features = ["memfs", "diskfs-pretty", "stdthread"] }
-claw-utils = { path = "../claw-utils" }
 # Ergonomic error handling for the host dev workflow `conversation` example.
 anyhow = "1"

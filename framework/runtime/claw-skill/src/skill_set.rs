@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use super::registry::{CatalogSnapshot, SkillRegistry};
+use super::registry::{CatalogSnapshot, EmptySkillRegistry, SkillRegistry};
 use super::skill::{SkillError, SkillId};
 
 /// A named bundle of skills to load together (parallels `ToolGroup`).
@@ -58,6 +58,15 @@ pub struct SkillSet {
 }
 
 impl SkillSet {
+    /// An empty set over an empty registry.
+    ///
+    /// This is the registry-backed zero value for callers that have no skill
+    /// catalog to provide. Loading any skill id from it returns
+    /// [`SkillError::NotFound`].
+    pub fn empty() -> Self {
+        Self::new(Arc::new(EmptySkillRegistry))
+    }
+
     /// An empty set over `registry` — no skills loaded yet.
     pub fn new(registry: Arc<dyn SkillRegistry>) -> Self {
         Self {

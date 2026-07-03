@@ -38,10 +38,7 @@ fn render_entry(kind: &ParsedManifest) -> TokenStream {
     let spawn_enabled = kind.spawn_enabled;
     let allowed_kinds = kind.allowed_kinds.iter();
     let retries = kind.retries;
-    let tool_block_retries = match kind.tool_block_retries {
-        Some(value) => quote! { ::core::option::Option::Some(RetryCount::new(#value)) },
-        None => quote! { ::core::option::Option::None },
-    };
+    let tool_block_retries = kind.tool_block_retries;
     let capabilities = kind.capabilities.iter();
     let skills = kind.skills.iter();
     let instructions = render_instructions(kind);
@@ -53,7 +50,7 @@ fn render_entry(kind: &ParsedManifest) -> TokenStream {
             spawn_enabled: #spawn_enabled,
             allowed_kinds: &[#(AgentKind::from_static(#allowed_kinds)),*],
             retries: RetryCount::new(#retries),
-            tool_block_retries: #tool_block_retries,
+            tool_block_retries: RetryCount::new(#tool_block_retries),
             capabilities: &[#(CapabilityName::new(#capabilities)),*],
             skills: &[#(SkillId::from_static(#skills)),*],
             instructions: #instructions,
@@ -67,22 +64,15 @@ fn render_entry(kind: &ParsedManifest) -> TokenStream {
 /// Both files are pulled in with `include_str!` and joined by `concat!` at
 /// compile time, so no instruction bytes are duplicated into the generated
 /// source. (`AgentConfig::resolve` trims the joined result, so an empty preamble
-/// contributes nothing.) The preamble path is always present once `inherit_base`
-/// has folded the common base in; a missing one would be a generator bug, so we
-/// fall back to the kind's own instructions alone rather than emitting nothing.
+/// contributes nothing.)
 fn render_instructions(kind: &ParsedManifest) -> TokenStream {
     let own = kind
         .instructions_path
         .to_str()
         .expect("instructions.md path is valid UTF-8");
-
-    match &kind.common_instructions_path {
-        Some(preamble) => {
-            let preamble = preamble
-                .to_str()
-                .expect("common/instructions.md path is valid UTF-8");
-            quote! { concat!(include_str!(#preamble), "\n\n", include_str!(#own)) }
-        }
-        None => quote! { include_str!(#own) },
-    }
+    let preamble = kind
+        .common_instructions_path
+        .to_str()
+        .expect("common/instructions.md path is valid UTF-8");
+    quote! { concat!(include_str!(#preamble), "\n\n", include_str!(#own)) }
 }

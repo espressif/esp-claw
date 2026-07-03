@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{bail, Result};
 use claw_agent::{
     AgentPersistenceConfig, AgentSystem, BackendKind, Capability, CapabilityError, ChannelAdapter,
-    ChannelRuntime, ClawApiConfig, InboundMessage, OutboundMessage, Registry,
+    ChannelRuntime, ClawApiConfig, HostAgentSystem, InboundMessage, OutboundMessage, Registry,
 };
 
 const MEMORY_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/output/claw-agent-chat");
@@ -67,13 +67,13 @@ impl ChannelAdapter for CliChannel {
 }
 
 struct ChatDriver {
-    system: AgentSystem,
+    system: HostAgentSystem,
     channel: Arc<CliChannel>,
     next_message_id: u64,
 }
 
 impl ChatDriver {
-    fn new(system: AgentSystem, channel: Arc<CliChannel>) -> Self {
+    fn new(system: HostAgentSystem, channel: Arc<CliChannel>) -> Self {
         Self {
             system,
             channel,
@@ -91,6 +91,7 @@ impl ChatDriver {
                 chat_id: CHAT_ID.into(),
                 sender_id: None,
                 text: text.into(),
+                ..Default::default()
             })
             .await?;
         Ok(self.channel.drain())

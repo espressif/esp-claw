@@ -13,42 +13,55 @@
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
-use claw_agent_cli::{load_env, make_llm, make_memory_ingredients};
+use claw_agent_cli::{load_env, make_llm_config, make_memory_ingredients};
 use claw_core::agent::{
-    Agent, AgentCommand, AgentConfig, AgentId, GenericAgent, MapAgentResolver, TickOutcome,
+    Agent, AgentCommand, AgentConfig, AgentId, AgentSnapshot, ApprovalDecision, GenericAgent,
+    GraphEffect, GraphHost, MapAgentResolver, TickOutcome,
 };
-use claw_core::History;
-use owo_colors::OwoColorize;
-use serde_json::Value;
+use claw_interface::{RealHttp, TokioTimer};
+use claw_memory::TranscriptStore;
 
 const MEMORY_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../claw-core/output/generic-chat"
 );
-const AGENT_ID: usize = 1;
+const AGENT_ID: u32 = 1;
+
+struct NoopGraphHost;
+
+impl GraphHost for NoopGraphHost {
+    fn next_id(&self) -> AgentId {
+        AgentId(0)
+    }
+
+    fn emit(&self, _requester: AgentId, _effect: GraphEffect) {}
+
+    fn snapshot(&self) -> Vec<AgentSnapshot> {
+        Vec::new()
+    }
+}
 
 #[tokio::main]
 async fn main() {
     load_env();
 
-    let (transcript_config, storage, compaction) = make_memory_ingredients(MEMORY_DIR);
+    let (transcript_config, storage) = make_memory_ingredients(MEMORY_DIR);
+    let store = TranscriptStore::new(AGENT_ID, transcript_config, storage)
+        .expect("failed to open transcript store");
     // The config (system prompt, capabilities, skills) comes from the baked
     // `conversation` manifest. An empty resolver suffices here: the kind declares
     // no capability/skill names, and the base agent merges its own control tools.
     let resolver = MapAgentResolver::new();
     let config =
         AgentConfig::resolve("conversation", &resolver).expect("resolve conversation config");
-    // No graph host is wired here, so the single agent gets neither the
-    // `spawn_subagent` nor `respond_to_approval` tool — this is the single-agent
-    // path on purpose.
-    let mut agent = GenericAgent::new(
+    // No real orchestrator graph is wired here. The no-op host keeps this manual
+    // CLI focused on one agent without exposing the agent's internal transcript.
+    let mut agent = GenericAgent::<RealHttp, TokioTimer>::new(
         AgentId(AGENT_ID),
-        make_llm(),
-        transcript_config,
-        storage,
-        compaction,
+        make_llm_config(),
+        store,
         config,
-        None,
+        Arc::new(NoopGraphHost),
         false,
         Arc::from([]),
     )
@@ -72,21 +85,6 @@ async fn main() {
             break;
         }
 
-        if input == "/messages" {
-            let messages = agent.history().messages();
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&*messages)
-                    .unwrap_or_else(|e| format!("(serialize error: {e})"))
-            );
-            println!();
-            continue;
-        }
-
-        // Remember where the transcript ends so we can show the tool calls this
-        // turn appends, after the reply.
-        let turn_start = message_count(agent.history());
-
         if let Err(error) = agent.send_command(AgentCommand::AppendMessage(input.to_string())) {
             eprintln!("could not accept input: {error}");
             continue;
@@ -108,55 +106,21 @@ async fn main() {
                     break;
                 }
                 TickOutcome::AwaitingApproval { id, summary } => {
-                    // The Agent trait does not expose approval resolution, so this
-                    // CLI cannot grant it; report and return to the prompt.
-                    eprintln!(
-                        "approval requested [{id}]: {summary} — not supported in this CLI; \
-                         returning to prompt"
-                    );
-                    break;
+                    eprintln!("approval requested [{id}]: {summary} — auto-approving");
+                    if let Err(error) = agent.send_command(AgentCommand::ApprovalResult {
+                        id,
+                        decision: ApprovalDecision::Approved,
+                    }) {
+                        eprintln!("failed to resolve approval [{id}]: {error}");
+                        break;
+                    }
+                    // Keep pumping so the queued decision resolves next tick.
                 }
                 TickOutcome::Cancelled { .. } | TickOutcome::Idle => break,
             }
         }
-
-        print_tool_calls_since(&agent.history().messages(), turn_start);
         println!();
     }
 
     eprintln!("Goodbye.");
-}
-
-/// Number of messages currently in the transcript.
-fn message_count(history: &dyn History) -> usize {
-    history.messages().as_array().map_or(0, Vec::len)
-}
-
-/// Print, in gray under the model's reply, every tool call recorded after index
-/// `start` — the calls the model made while producing this turn's answer.
-fn print_tool_calls_since(messages: &Value, start: usize) {
-    let Some(items) = messages.as_array() else {
-        return;
-    };
-    for message in items.iter().skip(start) {
-        let Some(calls) = message.get("tool_calls").and_then(Value::as_array) else {
-            continue;
-        };
-        for call in calls {
-            let function = call.get("function");
-            let name = function
-                .and_then(|f| f.get("name"))
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            if name.is_empty() {
-                continue;
-            }
-            let arguments = match function.and_then(|f| f.get("arguments")) {
-                Some(Value::String(s)) => s.clone(),
-                Some(value) => value.to_string(),
-                None => String::new(),
-            };
-            println!("{}", format!("  ↳ {name}({arguments})").bright_black());
-        }
-    }
 }

@@ -1,8 +1,8 @@
 //! Skill context adapter.
 //!
 //! This adapter owns the runtime [`SkillSet`] source for an agent. It projects
-//! the loaded skill bodies into `BlockKind::ActiveSkills` and, when enabled,
-//! exposes the skill-management tools that mutate the same source.
+//! the loaded skill bodies into `BlockKind::ActiveSkills` and exposes the
+//! skill-management tools that mutate the same source.
 
 mod tools;
 
@@ -17,23 +17,14 @@ use super::traits::{ContextAdapter, ContextAdapterInput};
 const ADAPTER_ID: &str = "skills";
 const MODEL_SKILL_GROUP: &str = "model";
 
-/// Whether this adapter should expose model-callable skill-management tools.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum SkillTools {
-    Enabled,
-    Disabled,
-}
-
 pub(crate) struct SkillContextAdapter {
     state: Arc<SkillAdapterState>,
-    tools: SkillTools,
 }
 
 impl SkillContextAdapter {
-    pub(crate) fn new(skills: SkillSet, tools: SkillTools) -> Self {
+    pub(crate) fn new(skills: SkillSet) -> Self {
         Self {
             state: Arc::new(SkillAdapterState::new(skills)),
-            tools,
         }
     }
 }
@@ -55,11 +46,8 @@ impl ContextAdapter for SkillContextAdapter {
         }
     }
 
-    fn tools(&self) -> Option<ToolGroup> {
-        match self.tools {
-            SkillTools::Enabled => Some(tools::skill_tool_group(Arc::clone(&self.state))),
-            SkillTools::Disabled => None,
-        }
+    fn tools(&self) -> Vec<ToolGroup> {
+        vec![tools::skill_tool_group(Arc::clone(&self.state))]
     }
 }
 

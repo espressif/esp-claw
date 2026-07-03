@@ -35,7 +35,7 @@ const ADAPTER_ID: &str = "recent_messages";
 
 /// Contributes the conversation's verbatim recent tail to the history channel.
 /// See the module docs.
-pub struct RecentMessagesContextAdapter<F: ClawFs + 'static> {
+pub(crate) struct RecentMessagesContextAdapter<F: ClawFs + 'static> {
     /// A clone of the agent's transcript store (shares the same `Arc`-backed
     /// state the transcript writes to), read for its committed turns + open turn.
     store: TranscriptStore<F>,
@@ -58,7 +58,7 @@ pub struct RecentMessagesContextAdapter<F: ClawFs + 'static> {
 impl<F: ClawFs + 'static> RecentMessagesContextAdapter<F> {
     /// Build the adapter over a clone of the agent's transcript `store` and the
     /// shared `cursor` the rolling-summary adapter advances.
-    pub fn new(store: TranscriptStore<F>, cursor: SummaryCursor) -> Self {
+    pub(crate) fn new(store: TranscriptStore<F>, cursor: SummaryCursor) -> Self {
         Self {
             store,
             cursor,

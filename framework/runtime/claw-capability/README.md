@@ -8,9 +8,9 @@ orthogonal, optional **lifecycle**.
 
 - **Role** — what the capability exposes when used:
   - `Tool` — a model-callable tool. It *is* a [`claw_tool::Tool`]; this crate adds
-    no dispatch, schema, or visibility logic of its own. Rust tools may be
-    synchronous (`Capability::tool(claw_tool::Tool::new(...))`) or async
-    (`Capability::async_tool(...)` with a `claw_tool::AsyncToolHandler`).
+    no dispatch, schema, or visibility logic of its own. Build the `Tool` with
+    `Tool::new(...)` (sync handler) or `Tool::new_async(...)` (async handler) and
+    hand it to `Capability::from_tool(...)`.
   - `Channel` — a bidirectional message channel adapter.
   - `None` — no invocation surface; the capability exists only for its lifecycle.
 - **Lifecycle** — optional resource management, available to *any* role (a `Tool`
@@ -32,13 +32,15 @@ re-entering this layer.
 | Item | Role |
 |------|------|
 | `Registry` | Owns capability identity + lifecycle: `register` / `register_group`, `start_all` / `stop_all`, `enable_group` / `disable_group`, `unregister[_group]`, plus role-based access (`tools`, `channels`) and state queries. |
-| `Capability` / `CapabilityRole` | One capability (id, description, role, optional lifecycle) and its role (`Tool` / `Channel` / `None`). |
-| `Capability::tool` / `Capability::async_tool` | Rust-side tool registration entry points. Tool authoring types stay in `claw_tool`; C descriptors keep the synchronous callback path. |
+| `Capability` / `CapabilityRole` | One capability (id, role, optional lifecycle) and its role (`Tool` / `Channel` / `None`). |
+| `Capability::from_tool` | The single tool-capability constructor. Build the `Tool` with `Tool::new` / `Tool::new_async`; the tool-authoring vocabulary is re-exported here (incl. `Tool`), so callers depend on `claw-capability` alone. |
 | `CapabilityGroup` | A registrable bundle of capabilities with an optional **shared** lifecycle (e.g. one runtime backing several tools). |
 | `Lifecycle` | The orthogonal hooks on any capability or group: the one-time `init`/`deinit` pair and the per-activation `start`/`stop` pair (`init → (start → stop)* → deinit`). |
 | `CapabilityState` | Lifecycle state: `Registered` / `Started` / `Disabled`. |
+| `CapabilityObserver` / `CapabilityChange` | Observer notified (outside the registry lock) of `Registered` / `Unregistered` / `StateChanged` events; wired via `Registry::with_observer` / `add_observer`. |
+| `CapabilityStateStore` / `FsCapabilityStateStore` | Persists the disabled-group deny-list across reboots; wired via `Registry::with_state_store`. |
 | `ChannelAdapter` / `ChannelRuntime` / `InboundMessage` / `OutboundMessage` | Bidirectional message channel contract. |
-| `CapabilityError` | Registration / lifecycle failure. |
+| `CapabilityError` | Registration / lifecycle / persistence failure. |
 
 ## Example
 
@@ -57,7 +59,7 @@ impl ToolHandler for Clock {
 
 let registry = Registry::new();
 registry
-    .register(Capability::tool(Tool::new(Clock)).with_description("Current time"))
+    .register(Capability::from_tool(Tool::new(Clock)))
     .expect("register clock");
 registry.start_all().expect("start");
 

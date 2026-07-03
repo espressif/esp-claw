@@ -66,7 +66,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use claw_interface::{ClawFile, ClawFs};
+use claw_interface::{ClawFile, ClawFs, FsError};
 
 /// Minimum gap between persistence writes (flash-wear debounce).
 const DEFAULT_PERSIST_DEBOUNCE: Duration = Duration::from_secs(5);
@@ -90,11 +90,27 @@ const MANIFEST_VERSION: u32 = 1;
 pub struct TurnId(pub u64);
 
 impl TurnId {
+    /// Wrap a raw turn number. Named `new` so [`TurnIdAllocator`] can construct
+    /// ids generically.
+    const fn new(value: u64) -> Self {
+        TurnId(value)
+    }
+
     /// The id that immediately follows this one.
     fn next(self) -> TurnId {
         TurnId(self.0.saturating_add(1))
     }
 }
+
+claw_utils::define_id_allocator!(
+    /// Hands out this conversation's [`TurnId`]s. Single-owner (a `StoreState`
+    /// field mutated under the store lock), so the lock it needs is that outer
+    /// one, not one of its own. Its position is persisted via
+    /// [`peek`](TurnIdAllocator::peek) into the manifest and restored with
+    /// [`starting_at`](TurnIdAllocator::starting_at).
+    TurnIdAllocator(TurnId),
+    TurnId(0)
+);
 
 /// A byte position within the data log. Addressing only — never compared for
 /// chronology (that is [`TurnId`]'s job).
@@ -261,7 +277,7 @@ struct StoreState {
     groups: Vec<StoredGroup>,
     /// The in-progress turn's messages — not yet committed (volatile, no id).
     open_group: Vec<Value>,
-    next_id: TurnId,
+    ids: TurnIdAllocator,
 
     /// Records appended in memory but not yet written to the `.jsonl`.
     pending: Vec<Pending>,
@@ -285,6 +301,18 @@ struct StoreState {
     version: u64,
 
     last_persist: Option<Instant>,
+
+    /// The last data/index write failure, if any, cleared on the next successful
+    /// persist. Persistence is best-effort (in-memory turns stay authoritative),
+    /// but a caller can observe a failed write via
+    /// [`TranscriptStore::last_persist_error`] instead of only a log line.
+    last_persist_error: Option<FsError>,
+
+    /// Whether a [`GroupGuard`] currently holds an open turn. Guards the
+    /// single-open-turn invariant: two live guards would interleave their
+    /// messages in the one `open_group` buffer. Set in [`TranscriptStore::group`],
+    /// cleared when the guard commits/drops.
+    turn_open: bool,
 }
 
 impl StoreState {
@@ -300,7 +328,7 @@ impl StoreState {
 /// Shared inner state — held behind an `Arc` so a context adapter can keep its
 /// own clone of the store and read the same transcript the agent writes.
 struct StoreInner<F: ClawFs + 'static> {
-    conversation_id: usize,
+    conversation_id: u32,
     data_path: String,
     index_path: String,
     state: Mutex<StoreState>,
@@ -327,7 +355,7 @@ struct StoreInner<F: ClawFs + 'static> {
 ///     42,
 ///     TranscriptConfig::new("/data/conversations"),
 ///     MemFs::new(),
-/// );
+/// ).expect("a fresh MemFs has no data log, so the conversation starts empty");
 ///
 /// // One turn = one `group()`; the whole turn commits when the guard drops.
 /// {
@@ -342,6 +370,26 @@ struct StoreInner<F: ClawFs + 'static> {
 /// ```
 pub struct TranscriptStore<F: ClawFs + 'static> {
     inner: Arc<StoreInner<F>>,
+}
+
+/// Failure building a [`TranscriptStore`] from its on-disk log.
+///
+/// A *missing* conversation is not an error (it starts empty); a mismatched or
+/// unreadable *index* is recovered by rebuilding from the data log. This is
+/// returned only when the data log itself exists but cannot be read, so a real
+/// I/O failure is never silently mistaken for an empty conversation (which would
+/// then be overwritten on the next turn).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum TranscriptInitError {
+    /// The conversation data log exists but could not be read.
+    #[error("conversation data log {path} is unreadable: {source}")]
+    Unreadable {
+        /// The data-log path that failed to load.
+        path: String,
+        /// The underlying filesystem error.
+        #[source]
+        source: FsError,
+    },
 }
 
 // Manual `Clone`: only the `Arc` is cloned, so this is cheap and does **not**
@@ -371,18 +419,34 @@ impl<F: ClawFs + 'static> TranscriptStore<F> {
     ///     7,
     ///     TranscriptConfig::new("/data/conversations"),
     ///     MemFs::new(),
-    /// );
+    /// ).expect("a fresh MemFs has no data log, so the conversation starts empty");
     /// assert_eq!(store.conversation_id(), 7);
     /// assert!(store.messages().as_array().unwrap().is_empty()); // missing files start empty
     /// ```
-    pub fn new(conversation_id: usize, config: TranscriptConfig, fs: F) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// [`TranscriptInitError::Unreadable`] when the conversation *data log*
+    /// exists but cannot be read. A missing conversation starts empty, and a
+    /// corrupt/mismatched *index* is transparently rebuilt from the data log.
+    pub fn new(
+        conversation_id: u32,
+        config: TranscriptConfig,
+        fs: F,
+    ) -> Result<Self, TranscriptInitError> {
         let data_path = conversation_path(&config.dir, conversation_id, DATA_EXT);
         let index_path = conversation_path(&config.dir, conversation_id, INDEX_EXT);
-        let (mut state, needs_rebuild) = load_state(&fs, &data_path, &index_path);
+        let (mut state, needs_rebuild) =
+            load_state(&fs, &data_path, &index_path).map_err(|source| {
+                TranscriptInitError::Unreadable {
+                    path: data_path.clone(),
+                    source,
+                }
+            })?;
         if needs_rebuild {
             write_live_set_to_files(&fs, &data_path, &index_path, &mut state, conversation_id);
         }
-        Self {
+        Ok(Self {
             inner: Arc::new(StoreInner {
                 conversation_id,
                 data_path,
@@ -391,11 +455,11 @@ impl<F: ClawFs + 'static> TranscriptStore<F> {
                 config,
                 fs,
             }),
-        }
+        })
     }
 
     /// This store's conversation id.
-    pub fn conversation_id(&self) -> usize {
+    pub fn conversation_id(&self) -> u32 {
         self.inner.conversation_id
     }
 
@@ -414,10 +478,43 @@ impl<F: ClawFs + 'static> TranscriptStore<F> {
     ///
     /// Takes `&self` (the open turn buffers in the `Arc`-backed state), but a
     /// single store must be driven from one thread.
+    ///
+    /// Only one turn may be open at a time: a second overlapping `group()` would
+    /// interleave its messages into the single `open_group` buffer. That is a
+    /// caller bug (turns are opened and driven sequentially), caught by a
+    /// `debug_assert!` and logged in release rather than silently corrupting the
+    /// turn.
     pub fn group(&self) -> GroupGuard<F> {
+        {
+            let mut state = self.lock_state();
+            debug_assert!(
+                !state.turn_open,
+                "conversation {}: group() called while a turn is already open",
+                self.inner.conversation_id
+            );
+            if state.turn_open {
+                log::warn!(
+                    "conversation {}: group() called while a turn is already open; \
+                     messages will interleave",
+                    self.inner.conversation_id
+                );
+            }
+            state.turn_open = true;
+        }
         GroupGuard {
             inner: Arc::clone(&self.inner),
         }
+    }
+
+    /// The last persistence failure, if any.
+    ///
+    /// Data/index writes are best-effort: a failure leaves the in-memory turns
+    /// authoritative and logs, but the write did not land. This exposes that
+    /// failure so a caller can react (retry [`flush`](Self::flush), warn) instead
+    /// of discovering the loss only on the next reboot. Cleared on the next
+    /// successful persist.
+    pub fn last_persist_error(&self) -> Option<FsError> {
+        self.lock_state().last_persist_error.clone()
     }
 
     /// Append a user message to the current open turn.
@@ -563,7 +660,7 @@ impl<F: ClawFs + 'static> TranscriptStore<F> {
 /// # use claw_interface::MemFs;
 /// # use claw_memory::{TranscriptConfig, TranscriptStore};
 /// # use serde_json::json;
-/// # let store = TranscriptStore::new(1, TranscriptConfig::new("/data/conversations"), MemFs::new());
+/// # let store = TranscriptStore::new(1, TranscriptConfig::new("/data/conversations"), MemFs::new()).unwrap();
 /// let turn = store.group();
 /// turn.append_user("call the weather tool");
 /// turn.append_patch(&json!([
@@ -627,6 +724,8 @@ impl<F: ClawFs + 'static> GroupGuard<F> {
 impl<F: ClawFs + 'static> Drop for GroupGuard<F> {
     fn drop(&mut self) {
         self.commit();
+        // Release the single-open-turn claim so the next `group()` is valid.
+        lock_state(&self.inner).turn_open = false;
     }
 }
 
@@ -666,7 +765,7 @@ fn commit_open_turn<F: ClawFs + 'static>(inner: &StoreInner<F>) {
             return;
         }
         let msgs = std::mem::take(&mut state.open_group);
-        let id = next_id(&mut state);
+        let id = state.ids.next();
         enqueue(&mut state, id, msgs.clone(), inner.conversation_id);
         state.groups.push(StoredGroup {
             id,
@@ -683,15 +782,8 @@ fn commit_open_turn<F: ClawFs + 'static>(inner: &StoreInner<F>) {
     }
 }
 
-/// Allocate the next monotonic id.
-fn next_id(state: &mut StoreState) -> TurnId {
-    let id = state.next_id;
-    state.next_id = id.next();
-    id
-}
-
 /// Serialize a group record to a data line and queue it for the next append.
-fn enqueue(state: &mut StoreState, id: TurnId, msgs: Vec<Value>, conversation_id: usize) {
+fn enqueue(state: &mut StoreState, id: TurnId, msgs: Vec<Value>, conversation_id: u32) {
     let record = LogRecord::Group { id, msgs };
     match serde_json::to_vec(&record) {
         Ok(mut line) => {
@@ -729,6 +821,7 @@ fn persist<F: ClawFs + 'static>(inner: &StoreInner<F>, force_manifest: bool) {
                 "conversation {}: data append failed: {err}",
                 inner.conversation_id
             );
+            state.last_persist_error = Some(err);
             return;
         }
         state.data_len = off.as_len();
@@ -741,11 +834,17 @@ fn persist<F: ClawFs + 'static>(inner: &StoreInner<F>, force_manifest: bool) {
 
     if let Some(bytes) = build_manifest_bytes(&state, inner.conversation_id) {
         match inner.fs.write_atomic(&inner.index_path, &bytes) {
-            Ok(()) => state.manifest_covered_len = state.data_len,
-            Err(err) => log::warn!(
-                "conversation {}: index write failed: {err}",
-                inner.conversation_id
-            ),
+            Ok(()) => {
+                state.manifest_covered_len = state.data_len;
+                state.last_persist_error = None;
+            }
+            Err(err) => {
+                log::warn!(
+                    "conversation {}: index write failed: {err}",
+                    inner.conversation_id
+                );
+                state.last_persist_error = Some(err);
+            }
         }
     }
 }
@@ -757,7 +856,7 @@ fn write_live_set_to_files(
     data_path: &str,
     index_path: &str,
     state: &mut StoreState,
-    conversation_id: usize,
+    conversation_id: u32,
 ) {
     let mut data_buf = Vec::new();
     let mut live = Vec::new();
@@ -784,7 +883,7 @@ fn write_live_set_to_files(
     let manifest = Manifest {
         version: MANIFEST_VERSION,
         covered_len: off.as_len(),
-        next_id: state.next_id,
+        next_id: state.ids.peek(),
         live,
     };
     let manifest_bytes = match serde_json::to_vec(&manifest) {
@@ -799,11 +898,15 @@ fn write_live_set_to_files(
 
     if let Err(err) = fs.write_atomic(data_path, &data_buf) {
         log::warn!("conversation {conversation_id}: write_live data write failed: {err}");
+        state.last_persist_error = Some(err);
         return;
     }
     if let Err(err) = fs.write_atomic(index_path, &manifest_bytes) {
         log::warn!("conversation {conversation_id}: write_live index write failed: {err}");
+        state.last_persist_error = Some(err);
         // Data file is the fresh truth; stale manifest is rebuilt on next load.
+    } else {
+        state.last_persist_error = None;
     }
 
     state.pending.clear();
@@ -818,7 +921,7 @@ fn write_live_set_to_files(
 }
 
 /// Serialize `record` into `buf` with a trailing newline; returns the line length.
-fn append_line(buf: &mut Vec<u8>, record: &LogRecord, conversation_id: usize) -> Option<ByteLen> {
+fn append_line(buf: &mut Vec<u8>, record: &LogRecord, conversation_id: u32) -> Option<ByteLen> {
     match serde_json::to_vec(record) {
         Ok(mut line) => {
             line.push(b'\n');
@@ -841,7 +944,7 @@ fn set_loc(state: &mut StoreState, id: TurnId, off: ByteOffset, len: ByteLen) {
 }
 
 /// Build the manifest of the current turns (those already on disk).
-fn build_manifest_bytes(state: &StoreState, conversation_id: usize) -> Option<Vec<u8>> {
+fn build_manifest_bytes(state: &StoreState, conversation_id: u32) -> Option<Vec<u8>> {
     let mut live = Vec::new();
     for group in &state.groups {
         if let Some((off, len)) = group.loc {
@@ -855,7 +958,7 @@ fn build_manifest_bytes(state: &StoreState, conversation_id: usize) -> Option<Ve
     let manifest = Manifest {
         version: MANIFEST_VERSION,
         covered_len: state.data_len,
-        next_id: state.next_id,
+        next_id: state.ids.peek(),
         live,
     };
     match serde_json::to_vec(&manifest) {
@@ -887,15 +990,32 @@ fn verify_entry(entry: &IndexEntry, record: &LogRecord) -> bool {
 /// Load and rehydrate persisted state. Returns `(state, needs_rebuild)`.
 /// `needs_rebuild` is true when a manifest existed but its entries did not match
 /// the data log — the caller should rewrite both files from the recovered state.
-fn load_state(fs: &impl ClawFs, data_path: &str, index_path: &str) -> (StoreState, bool) {
+///
+/// # Errors
+///
+/// [`FsError`] when the data log exists but cannot be opened. A *missing* data
+/// log ([`FsError::NotFound`]) yields an empty state, and index problems are
+/// recovered from the data log rather than surfaced — so a genuine data-log I/O
+/// fault is never silently treated as an empty conversation.
+fn load_state(
+    fs: &impl ClawFs,
+    data_path: &str,
+    index_path: &str,
+) -> Result<(StoreState, bool), FsError> {
     let mut state = StoreState::default();
     let mut covered_len = ByteLen::default();
     let mut manifest_next_id = TurnId::default();
     let mut mismatch = false;
 
     // One handle to the data log, reused for every indexed record read and the
-    // tail scan below, instead of reopening the file per access.
-    let mut data_file = fs.open(data_path).ok();
+    // tail scan below, instead of reopening the file per access. A missing log is
+    // a fresh conversation; any other open failure is a real fault, surfaced so
+    // the empty state is not mistaken for "no conversation".
+    let mut data_file = match fs.open(data_path) {
+        Ok(file) => Some(file),
+        Err(FsError::NotFound) => None,
+        Err(error) => return Err(error),
+    };
 
     if let Ok(bytes) = fs.read(index_path) {
         if let Ok(manifest) = serde_json::from_slice::<Manifest>(&bytes) {
@@ -973,8 +1093,8 @@ fn load_state(fs: &impl ClawFs, data_path: &str, index_path: &str) -> (StoreStat
     state.data_len = data_len;
     state.manifest_covered_len = covered_len;
     state.groups.sort_by_key(|g| g.id);
-    state.next_id = manifest_next_id.max(max_seen_id(&state).next());
-    (state, mismatch)
+    state.ids = TurnIdAllocator::starting_at(manifest_next_id.max(max_seen_id(&state).next()));
+    Ok((state, mismatch))
 }
 
 /// Parse a newline-delimited tail buffer, applying each complete record.
@@ -1029,7 +1149,7 @@ fn parse_record(bytes: &[u8]) -> Option<LogRecord> {
 }
 
 /// Build a per-conversation path from the base dir, id, and extension.
-fn conversation_path(dir: &str, conversation_id: usize, ext: &str) -> String {
+fn conversation_path(dir: &str, conversation_id: u32, ext: &str) -> String {
     format!(
         "{}/{FILE_PREFIX}{conversation_id}{ext}",
         dir.trim_end_matches('/')

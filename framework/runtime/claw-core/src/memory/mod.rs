@@ -28,16 +28,16 @@ mod tool_policy_adapter;
 mod traits;
 
 pub use long_term_memory_adapter::{
-    agent_store, global_store, ExtractError, ExtractedItem, Extractor, LlmCompactor, LlmExtractor,
-    LongTermMemoryContextAdapter, MemoryTier, NoopExtractor, RuleBasedTierClassifier,
-    TierClassifier, AGENT_ID_PREFIX, GLOBAL_ID_PREFIX,
+    agent_store, global_store, ExtractError, ExtractedItem, ExtractionInput, Extractor,
+    LlmCompactor, LlmExtractor, LongTermMemoryContextAdapter, MemoryOp, MemorySnapshot, MemoryTier,
+    MemoryTierHint, NoopExtractor, RuleBasedTierClassifier, TierClassifier, AGENT_ID_PREFIX,
+    GLOBAL_ID_PREFIX,
 };
 pub use profile_adapter::{ProfileContextAdapter, ProfileTools};
-pub use recent_messages_adapter::RecentMessagesContextAdapter;
-pub use rolling_summary_adapter::{CompactionPolicy, RollingSummaryContextAdapter};
-#[cfg(test)]
-pub(crate) use skill_adapter::test_support as skill_test_support;
-pub(crate) use skill_adapter::{SkillContextAdapter, SkillTools};
-pub use summary_cursor::SummaryCursor;
+pub(crate) use recent_messages_adapter::RecentMessagesContextAdapter;
+pub(crate) use rolling_summary_adapter::CompactionPolicy;
+pub(crate) use rolling_summary_adapter::RollingSummaryContextAdapter;
+pub(crate) use skill_adapter::SkillContextAdapter;
+pub(crate) use summary_cursor::SummaryCursor;
 pub(crate) use tool_policy_adapter::ToolPolicyContextAdapter;
-pub use traits::{ContextAdapter, ContextAdapterInput, History, Transcript};
+pub use traits::{AssistantCommit, ContextAdapter, ContextAdapterInput, History, Transcript};

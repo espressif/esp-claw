@@ -10,16 +10,32 @@ use anyhow::{anyhow, bail, Context, Result};
 
 use crate::model::{AgentJson, CapabilitiesJson, SkillsJson};
 
-/// A fully-parsed, validated manifest — the build-time counterpart to the
-/// runtime `AgentManifest`. Strings are owned here; [`crate::codegen`] renders
-/// them into `&'static` data.
+/// One fully-parsed, validated kind directory before the shared `common/` base is
+/// inherited. Strings are owned here; [`crate::agent_manifests::inherit_base`]
+/// folds in common entries and produces a [`ParsedManifest`] ready for codegen.
+pub struct ParsedKind {
+    pub kind: String,
+    pub description: String,
+    pub spawn_enabled: bool,
+    pub allowed_kinds: Vec<String>,
+    pub retries: u32,
+    pub tool_block_retries: u32,
+    pub capabilities: Vec<String>,
+    pub skills: Vec<String>,
+    /// Absolute path to `instructions.md`, embedded via `include_str!` in the
+    /// generated code so the bytes are not duplicated into the generated source.
+    pub instructions_path: PathBuf,
+}
+
+/// A fully-parsed manifest after the shared `common/` base has been inherited —
+/// the build-time counterpart to the runtime `AgentManifest`.
 pub struct ParsedManifest {
     pub kind: String,
     pub description: String,
     pub spawn_enabled: bool,
     pub allowed_kinds: Vec<String>,
     pub retries: u32,
-    pub tool_block_retries: Option<u32>,
+    pub tool_block_retries: u32,
     pub capabilities: Vec<String>,
     pub skills: Vec<String>,
     /// Absolute path to `instructions.md`, embedded via `include_str!` in the
@@ -27,9 +43,7 @@ pub struct ParsedManifest {
     pub instructions_path: PathBuf,
     /// Absolute path to the shared `common/instructions.md` preamble, prepended
     /// (via `include_str!`) before this kind's own instructions at codegen.
-    /// `None` until [`crate::agent_manifests::inherit_base`] folds the common base
-    /// in; `Some` for every kind in the emitted output.
-    pub common_instructions_path: Option<PathBuf>,
+    pub common_instructions_path: PathBuf,
 }
 
 /// The manifest files expected in every kind directory; also the set the build
@@ -124,7 +138,7 @@ pub fn parse_common(common_dir: &Path) -> Result<CommonBase> {
 ///
 /// The directory name is the source of truth for the kind: `agent.json`'s
 /// declared `kind` must match it, otherwise the build fails.
-pub fn parse_kind(dir: &Path) -> Result<ParsedManifest> {
+pub fn parse_kind(dir: &Path) -> Result<ParsedKind> {
     let dir_name = dir
         .file_name()
         .and_then(|name| name.to_str())
@@ -158,7 +172,7 @@ pub fn parse_kind(dir: &Path) -> Result<ParsedManifest> {
         );
     }
 
-    Ok(ParsedManifest {
+    Ok(ParsedKind {
         kind: agent.kind,
         description: agent.description,
         spawn_enabled: agent.spawn.enabled,
@@ -168,8 +182,6 @@ pub fn parse_kind(dir: &Path) -> Result<ParsedManifest> {
         capabilities: capabilities.capabilities,
         skills: skills.skills,
         instructions_path,
-        // Filled in by `inherit_base` once the common base is parsed.
-        common_instructions_path: None,
     })
 }
 

@@ -1,25 +1,20 @@
 //! Shared scaffolding for the agent CLIs.
 //!
-//! Both binaries in this crate (`base-agent` and `generic-agent-chat`) drive
-//! a real agent against a live LLM with on-disk conversation memory. The platform
-//! dependencies are identical, so the real-disk [`ClawFs`], live async HTTP, the
-//! no-op [`Compactor`], and the env/LLM/memory wiring live here once.
+//! The binaries in this crate drive real agents against a live LLM with on-disk
+//! conversation memory. The platform dependencies are identical, so the real-disk
+//! [`ClawFs`], live async HTTP, and the env/LLM/memory wiring live here once.
 //!
 //! LLM config is read from `claw-core/.env.local` (the same file the integration
 //! tests use): `CLAW_LLM_API_KEY`, `CLAW_LLM_BASE_URL`, `CLAW_LLM_MODEL`.
 
 use std::path::Path;
-use std::sync::Arc;
 
 use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
-use claw_core::agent::CompactionDeps;
-use claw_core::CompactionPolicy;
 use claw_interface::{DiskFs, RealHttp, TokioTimer};
-use claw_memory::{NoopCompactor, TranscriptConfig, TranscriptStore};
+use claw_memory::TranscriptConfig;
 
 // The real network transport is `claw_interface::RealHttp` (the `realhttp`
-// feature); summarisation is disabled via claw-memory's `NoopCompactor` (the
-// `compactor-stub` feature).
+// feature). GenericAgent owns its internal conversation compaction wiring.
 
 /// The concrete `ClawFs` the CLI runs over: the real disk backend. `DiskFs` is
 /// itself a cheap clone handle (just a base path), so each agent gets a clone
@@ -88,45 +83,8 @@ pub fn make_storage() -> CliFs {
     DiskFs::absolute()
 }
 
-/// Build the compaction collaborators an agent's rolling-summary adapter needs:
-/// the no-op compactor (summarisation is disabled in the CLI), and the default
-/// compaction policy. These belong to the
-/// agent layer, not the transcript store, which never compacts.
-///
-/// Public for CLIs that build a single [`claw_core::agent::GenericAgent`]
-/// directly. [`claw_core::agent::FsAgentFactory`] owns this wiring internally.
-pub fn make_compaction() -> CompactionDeps {
-    CompactionDeps {
-        compactor: Arc::new(NoopCompactor),
-        policy: CompactionPolicy::new(6000, 2000, 1500),
-    }
-}
-
-/// Build an on-disk [`TranscriptStore`] at `transcript_dir` plus a cloned read-only
-/// view of the same store (handy for a `/messages` command). For agents that
-/// build their own store (e.g. [`claw_core::agent::GenericAgent`]), use
-/// [`make_memory_ingredients`] instead.
-pub fn make_memory(
-    agent_id: usize,
-    transcript_dir: &str,
-) -> (TranscriptStore<CliFs>, TranscriptStore<CliFs>) {
-    let store = TranscriptStore::new(
-        agent_id,
-        TranscriptConfig::new(transcript_dir),
-        make_storage(),
-    );
-    let view = store.clone();
-    (store, view)
-}
-
-/// Build the ingredients a [`claw_core::agent::GenericAgent`] needs to construct
-/// its own on-disk transcript store at `transcript_dir`: the transcript config, the
-/// storage backend, and the compaction collaborators. The agent keys the
-/// conversation by its own id, so no id is needed here.
-pub fn make_memory_ingredients(transcript_dir: &str) -> (TranscriptConfig, CliFs, CompactionDeps) {
-    (
-        TranscriptConfig::new(transcript_dir),
-        make_storage(),
-        make_compaction(),
-    )
+/// Build the ingredients a CLI needs to construct an on-disk transcript store at
+/// `transcript_dir`: the transcript config and storage backend.
+pub fn make_memory_ingredients(transcript_dir: &str) -> (TranscriptConfig, CliFs) {
+    (TranscriptConfig::new(transcript_dir), make_storage())
 }

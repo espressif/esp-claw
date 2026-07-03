@@ -3,59 +3,104 @@
 //!
 //! A baked manifest only carries *names*; the handlers live in firmware (or a
 //! test double). [`AgentResolver`] is the injected boundary that turns each name
-//! into a real [`Tool`] / [`SkillSet`], and [`MapAgentResolver`] is the resolver
-//! firmware (and tests) hand to an [`FsAgentFactory`](crate::agent::FsAgentFactory):
-//! a capability-name -> [`Tool`] map plus an optional [`SkillRegistry`] backing.
-//! An unknown name is never silently dropped — `resolve_tool` returns `None` (so
-//! the config build fails with `UnknownCapability`) and `build_skills` returns
+//! into a real [`Capability`] / [`SkillSet`], and [`MapAgentResolver`] is the
+//! resolver firmware (and tests) hand to an
+//! [`FsAgentFactory`](crate::agent::FsAgentFactory): a capability-name ->
+//! [`Capability`] map plus a [`SkillRegistry`] backing. An unknown name
+//! is never silently dropped — `resolve_capability` returns `None` (so the config
+//! build fails with `UnknownCapability`) and `build_skills` returns
 //! [`SkillError::NotFound`].
+//!
+//! The seam speaks [`Capability`] rather than the internal `claw_tool::Tool`:
+//! callers describe their device in one vocabulary, and `claw-core` decomposes a
+//! resolved capability into its tool internally (see `AgentConfig::resolve`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use claw_skill::{SkillError, SkillId, SkillRegistry, SkillSet};
-use claw_tool::Tool;
+use claw_capability::Capability;
+use claw_skill::{EmptySkillRegistry, SkillError, SkillId, SkillRegistry, SkillSet};
 
 /// Resolves the *names* in a manifest to the *code* that backs them.
 ///
 /// A manifest only carries capability/skill names; the handlers live in firmware
 /// (or a test double). The resolver is the injected boundary that turns each name
-/// into a real [`Tool`] / [`SkillSet`]. An unknown name is **not** silently
+/// into a real [`Capability`] / [`SkillSet`]. An unknown name is **not** silently
 /// dropped — the resolver returns `None`/an error and resolution fails.
 pub trait AgentResolver {
-    /// Resolve a capability name to its [`Tool`], or `None` if this resolver has
-    /// no such capability.
-    fn resolve_tool(&self, name: &str) -> Option<Tool>;
+    /// Resolve a capability name to its [`Capability`], or `None` if this
+    /// resolver has no such (tool) capability. `claw-core` extracts the tool from
+    /// the returned capability; a non-tool capability resolves as if absent.
+    fn resolve_capability(&self, name: &str) -> Option<Capability>;
 
-    /// Build a [`SkillSet`] with `skill_ids` loaded.
+    /// The [`SkillRegistry`] this resolver loads manifest skills from.
     ///
-    /// Returns `Ok(None)` when no skills are configured (`skill_ids` empty) or the
-    /// resolver has no skill support; `Ok(Some(set))` once the ids are loaded.
+    /// Override to add skill support; the default is an empty registry, so no
+    /// skills configured is represented by an empty [`SkillSet`], while any
+    /// requested id still fails with [`SkillError::NotFound`].
+    fn skill_registry(&self) -> Arc<dyn SkillRegistry> {
+        Arc::new(EmptySkillRegistry)
+    }
+
+    /// Build a [`SkillSet`] with `skill_ids` loaded from
+    /// [`skill_registry`](Self::skill_registry).
+    ///
+    /// Returns an empty set when no skills are configured (`skill_ids` empty), or a
+    /// set with the requested ids loaded.
+    /// The default implementation is shared by every resolver; override only for
+    /// genuinely different behavior.
     ///
     /// # Errors
     ///
     /// [`SkillError`] if a requested skill id is unknown to the resolver.
-    fn build_skills(&self, skill_ids: &[SkillId]) -> Result<Option<SkillSet>, SkillError>;
+    fn build_skills(&self, skill_ids: &[SkillId]) -> Result<SkillSet, SkillError> {
+        build_manifest_skills(self.skill_registry(), skill_ids)
+    }
 }
 
 /// Group label applied to every skill a manifest asks for (parallels a
 /// `ToolGroup` name — it tags provenance in the assembled skill context).
 const MANIFEST_SKILL_GROUP: &str = "manifest";
 
-/// Maps capability names to [`Tool`]s and skill ids to a [`SkillRegistry`].
+/// Load `skill_ids` from `registry` into a fresh [`SkillSet`], the shared body
+/// behind [`AgentResolver::build_skills`].
+///
+/// Returns an empty set when no ids are requested. A resolver without skill
+/// backing uses an empty registry, so requested ids still surface as
+/// [`SkillError::NotFound`] rather than being silently dropped.
+fn build_manifest_skills(
+    registry: Arc<dyn SkillRegistry>,
+    skill_ids: &[SkillId],
+) -> Result<SkillSet, SkillError> {
+    let mut set = SkillSet::new(registry);
+    for id in skill_ids {
+        set.load(MANIFEST_SKILL_GROUP, id.clone())?;
+    }
+    Ok(set)
+}
+
+/// Maps capability names to [`Capability`]s and skill ids to a [`SkillRegistry`].
 ///
 /// Built up with the `with_*` methods (easy default + readable overrides), then
 /// shared as `Arc<dyn AgentResolver>`:
 ///
 /// ```ignore
 /// let resolver = MapAgentResolver::new()
-///     .with_tool(Tool::new(MyCapability))
+///     .with_capability(Capability::from_tool(Tool::new(MyToolHandler)))
 ///     .with_skill_registry(registry);
 /// ```
-#[derive(Default)]
 pub struct MapAgentResolver {
-    tools: HashMap<String, Tool>,
-    skills: Option<Arc<dyn SkillRegistry>>,
+    capabilities: HashMap<String, Capability>,
+    skills: Arc<dyn SkillRegistry>,
+}
+
+impl Default for MapAgentResolver {
+    fn default() -> Self {
+        Self {
+            capabilities: HashMap::new(),
+            skills: Arc::new(EmptySkillRegistry),
+        }
+    }
 }
 
 impl MapAgentResolver {
@@ -64,27 +109,34 @@ impl MapAgentResolver {
         Self::default()
     }
 
-    /// Register `tool` under its own [`name`](Tool::name) — the name a manifest
-    /// references it by. Replaces any tool already registered under that name.
+    /// Register `capability` under its own [`id`](Capability::id) — the name a
+    /// manifest references it by. Replaces any capability already under that name.
     #[must_use]
-    pub fn with_tool(mut self, tool: Tool) -> Self {
-        self.tools.insert(tool.name().to_string(), tool);
+    pub fn with_capability(mut self, capability: Capability) -> Self {
+        self.capabilities
+            .insert(capability.id().to_string(), capability);
         self
     }
 
-    /// Register `tool` under an explicit `name` (when the manifest name differs
-    /// from the tool's own function name).
+    /// Register `capability` under an explicit `name` (when the manifest name
+    /// differs from the capability's own id).
     #[must_use]
-    pub fn with_named_tool(mut self, name: impl Into<String>, tool: Tool) -> Self {
-        self.tools.insert(name.into(), tool);
+    pub fn with_named_capability(
+        mut self,
+        name: impl Into<String>,
+        capability: Capability,
+    ) -> Self {
+        self.capabilities.insert(name.into(), capability);
         self
     }
 
-    /// Register every tool in `tools`, each keyed by its own [`name`](Tool::name).
+    /// Register every capability in `capabilities`, each keyed by its own
+    /// [`id`](Capability::id).
     #[must_use]
-    pub fn with_tools(mut self, tools: impl IntoIterator<Item = Tool>) -> Self {
-        for tool in tools {
-            self.tools.insert(tool.name().to_string(), tool);
+    pub fn with_capabilities(mut self, capabilities: impl IntoIterator<Item = Capability>) -> Self {
+        for capability in capabilities {
+            self.capabilities
+                .insert(capability.id().to_string(), capability);
         }
         self
     }
@@ -92,31 +144,18 @@ impl MapAgentResolver {
     /// Back skills with `registry`: manifest skill ids are loaded from it.
     #[must_use]
     pub fn with_skill_registry(mut self, registry: Arc<dyn SkillRegistry>) -> Self {
-        self.skills = Some(registry);
+        self.skills = registry;
         self
     }
 }
 
 impl AgentResolver for MapAgentResolver {
-    fn resolve_tool(&self, name: &str) -> Option<Tool> {
-        self.tools.get(name).cloned()
+    fn resolve_capability(&self, name: &str) -> Option<Capability> {
+        self.capabilities.get(name).cloned()
     }
 
-    fn build_skills(&self, skill_ids: &[SkillId]) -> Result<Option<SkillSet>, SkillError> {
-        // No ids requested: a genuine "no skills", not an error.
-        let Some(first) = skill_ids.first() else {
-            return Ok(None);
-        };
-        // Ids requested but no registry to load them from is a misconfiguration,
-        // not "no skills" — surface the first offender rather than dropping it.
-        let Some(registry) = self.skills.clone() else {
-            return Err(SkillError::NotFound(first.clone()));
-        };
-        let mut set = SkillSet::new(registry);
-        for id in skill_ids {
-            set.load(MANIFEST_SKILL_GROUP, id.clone())?;
-        }
-        Ok(Some(set))
+    fn skill_registry(&self) -> Arc<dyn SkillRegistry> {
+        Arc::clone(&self.skills)
     }
 }
 
@@ -124,7 +163,7 @@ impl AgentResolver for MapAgentResolver {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use claw_tool::{ToolHandler, ToolInvocation, ToolOutput};
+    use claw_capability::{Tool, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput};
 
     struct DummyTool;
 
@@ -135,10 +174,7 @@ mod tests {
         fn schema(&self) -> &str {
             r#"{"type":"function","function":{"name":"do_thing"}}"#
         }
-        fn invoke(
-            &self,
-            _call: &ToolInvocation<'_>,
-        ) -> Result<ToolOutput, claw_tool::ToolInvokeError> {
+        fn invoke(&self, _call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
             Ok(ToolOutput {
                 output: "ok".into(),
                 ok: true,
@@ -148,23 +184,25 @@ mod tests {
 
     #[test]
     fn known_capability_resolves_unknown_is_none() {
-        let resolver = MapAgentResolver::new().with_tool(Tool::new(DummyTool));
-        assert!(resolver.resolve_tool("do_thing").is_some());
-        assert!(resolver.resolve_tool("missing").is_none());
+        let resolver =
+            MapAgentResolver::new().with_capability(Capability::from_tool(Tool::new(DummyTool)));
+        assert!(resolver.resolve_capability("do_thing").is_some());
+        assert!(resolver.resolve_capability("missing").is_none());
     }
 
     #[test]
     fn named_alias_overrides_the_key() {
-        let resolver = MapAgentResolver::new().with_named_tool("aliased", Tool::new(DummyTool));
-        assert!(resolver.resolve_tool("aliased").is_some());
-        // The tool's own name is not registered when an alias is used.
-        assert!(resolver.resolve_tool("do_thing").is_none());
+        let resolver = MapAgentResolver::new()
+            .with_named_capability("aliased", Capability::from_tool(Tool::new(DummyTool)));
+        assert!(resolver.resolve_capability("aliased").is_some());
+        // The capability's own id is not registered when an alias is used.
+        assert!(resolver.resolve_capability("do_thing").is_none());
     }
 
     #[test]
-    fn no_skills_requested_is_ok_none() {
+    fn no_skills_requested_is_an_empty_set() {
         let resolver = MapAgentResolver::new();
-        assert!(resolver.build_skills(&[]).unwrap().is_none());
+        assert!(resolver.build_skills(&[]).unwrap().is_empty());
     }
 
     #[test]

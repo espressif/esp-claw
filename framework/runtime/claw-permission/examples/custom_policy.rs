@@ -61,7 +61,7 @@ fn main() {
     ];
 
     for action in &cases {
-        let request = PermissionRequest::new(7, "worker", action);
+        let request = PermissionRequest::new(action);
         let label = match action.resource() {
             Some(Resource::Path(path)) => path.clone(),
             _ => "(no resource)".to_string(),

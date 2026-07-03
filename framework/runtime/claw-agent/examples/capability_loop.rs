@@ -23,9 +23,9 @@
 use std::sync::{Arc, Mutex};
 
 use claw_agent::{
-    init_tool_executor, AgentSystem, BackendKind, Capability, CapabilityError, ChannelAdapter,
-    ChannelRuntime, ClawApiConfig, InboundMessage, OutboundMessage, Registry, Tool, ToolHandler,
-    ToolInvocation, ToolInvokeError, ToolOutput,
+    AgentSystem, BackendKind, Capability, CapabilityError, ChannelAdapter, ChannelRuntime,
+    ClawApiConfig, InboundMessage, OutboundMessage, Registry, Tool, ToolHandler, ToolInvocation,
+    ToolInvokeError, ToolOutput,
 };
 use claw_interface::{BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp, StdThread};
 
@@ -127,7 +127,7 @@ async fn main() -> anyhow::Result<()> {
     let replies = local.received();
 
     let registry = Arc::new(Registry::new());
-    registry.register(Capability::tool(Tool::new(TimeNowTool)))?;
+    registry.register(Capability::from_tool(Tool::new(TimeNowTool)))?;
     registry.register(Capability::channel(
         Arc::clone(&local) as Arc<dyn ChannelAdapter>
     ))?;
@@ -138,17 +138,23 @@ async fn main() -> anyhow::Result<()> {
     );
     println!(
         "`time_now` resolves: {}",
-        registry.tool("time_now").is_some()
+        registry.tool_capability("time_now").is_some()
     );
 
     // 2. Build the system from the registry. Hermetic backends (in-memory fs +
-    //    scripted LLM) keep the example offline and deterministic.
-    init_tool_executor(StdThread)?;
+    //    scripted LLM) keep the example offline and deterministic. The tool
+    //    executor is initialized inside `AgentSystem::new` from the `StdThread`
+    //    type argument.
     SharedScriptHttp::install(vec![assistant_text(
         "Hello from the agent — the local time is 2026-06-29T17:00:00Z.",
     )]);
 
-    let system = AgentSystem::new::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>(
+    let system = AgentSystem::new::<
+        MemFs,
+        BlockingHttpAdapter<SharedScriptHttp>,
+        ImmediateTimer,
+        StdThread,
+    >(
         scripted_llm(),
         claw_agent::AgentPersistenceConfig::new("/mem"),
         Arc::clone(&registry),
@@ -167,6 +173,7 @@ async fn main() -> anyhow::Result<()> {
             chat_id: "chat".into(),
             sender_id: Some("user".into()),
             text: "Hi, what time is it?".into(),
+            ..Default::default()
         })
         .await?;
 

@@ -65,10 +65,10 @@ impl<F: ClawFs + Clone + 'static> ContextAdapter for ProfileContextAdapter<F> {
         }
     }
 
-    fn tools(&self) -> Option<ToolGroup> {
+    fn tools(&self) -> Vec<ToolGroup> {
         match self.tools {
-            ProfileTools::Disabled => None,
-            ProfileTools::Writable => Some(profile_tool_group(self.store.clone())),
+            ProfileTools::Disabled => Vec::new(),
+            ProfileTools::Writable => vec![profile_tool_group(self.store.clone())],
         }
     }
 }
@@ -89,6 +89,7 @@ mod tests {
     use claw_context::Context;
     use claw_interface::MemFs;
     use claw_memory::ProfileConfig;
+    use claw_tool::ToolSet;
     use serde_json::Value;
 
     use super::*;
@@ -124,11 +125,12 @@ mod tests {
         let mut adapter = ProfileContextAdapter::new(store, ProfileTools::Disabled);
         let mut context = Context::new();
         let history = EmptyHistory;
+        let tools = ToolSet::empty();
         let mut sink = context.sink();
         adapter.contribute(
             ContextAdapterInput {
                 history: &history,
-                tools: None,
+                tools: &tools,
             },
             &mut sink,
         );
@@ -145,12 +147,13 @@ mod tests {
         let mut context = Context::new();
         context.with(Block::new(BlockKind::Soul, "OLD"));
         let history = EmptyHistory;
+        let tools = ToolSet::empty();
 
         let mut sink = context.sink();
         adapter.contribute(
             ContextAdapterInput {
                 history: &history,
-                tools: None,
+                tools: &tools,
             },
             &mut sink,
         );

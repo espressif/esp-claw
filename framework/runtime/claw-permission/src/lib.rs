@@ -23,7 +23,7 @@
 //! let policy = PolicyChain::new().with(AskAtOrAbove::new(RiskClass::Moderate));
 //! let action = Action::new("write_file", RiskClass::Moderate)
 //!     .with_resource(Resource::Path("/data/x".into()));
-//! let request = PermissionRequest::new(1, "worker", &action);
+//! let request = PermissionRequest::new(&action);
 //!
 //! // First time: the policy asks for approval.
 //! assert!(matches!(policy.evaluate(&request), PermissionDecision::Ask { .. }));

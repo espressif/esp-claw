@@ -53,6 +53,15 @@ pub trait History {
     fn version(&self) -> u64;
 }
 
+/// Assistant message shape to commit into the transcript.
+pub enum AssistantCommit<'a> {
+    /// Backend-shaped assistant message JSON returned by the LLM.
+    RawJson(&'a str),
+    /// Plain assistant text; the transcript layer wraps it as an assistant
+    /// message object.
+    PlainText(&'a str),
+}
+
 /// The write face of the transcript owner, driven by the agent at each turn
 /// boundary. Extends [`History`]: one object reads and writes the single
 /// transcript, so a write is always visible to the next read.
@@ -66,9 +75,8 @@ pub trait Transcript: History {
     /// task starts a fresh group.
     fn append_user(&self, text: &str, starts_task: bool);
 
-    /// Commit the model's plain-text answer, closing the open turn. Uses the raw
-    /// assistant message JSON when present, else builds one from `text`.
-    fn commit_assistant(&self, text: &str, raw_json: Option<&str>);
+    /// Commit the model's answer, closing the open turn.
+    fn commit_assistant(&self, commit: AssistantCommit<'_>);
 
     /// Commit a materialized assistant+tool patch (a JSON array), closing the
     /// open turn.
@@ -106,10 +114,12 @@ impl<F: ClawFs + 'static> Transcript for TranscriptStore<F> {
         self.push_user_message(text);
     }
 
-    fn commit_assistant(&self, text: &str, raw_json: Option<&str>) {
-        match raw_json {
-            Some(raw) => self.push_assistant_message(raw),
-            None => self.push_patch(&json!([{ "role": "assistant", "content": text }])),
+    fn commit_assistant(&self, commit: AssistantCommit<'_>) {
+        match commit {
+            AssistantCommit::RawJson(raw) => self.push_assistant_message(raw),
+            AssistantCommit::PlainText(text) => {
+                self.push_patch(&json!([{ "role": "assistant", "content": text }]));
+            }
         }
         self.commit_open_turn();
     }
@@ -139,8 +149,8 @@ impl<F: ClawFs + 'static> Transcript for TranscriptStore<F> {
 pub struct ContextAdapterInput<'a> {
     /// The conversation transcript read view.
     pub history: &'a dyn History,
-    /// The current tool set, if this agent has tool support.
-    pub tools: Option<&'a ToolSet>,
+    /// The current tool set. It may be empty when this agent has no tools.
+    pub tools: &'a ToolSet,
 }
 
 /// Future returned by [`ContextAdapter::prepare`].
@@ -171,12 +181,12 @@ pub trait ContextAdapter {
     /// Project this source into the request context for the current iteration.
     fn contribute(&mut self, input: ContextAdapterInput<'_>, output: &mut ContextSink<'_>);
 
-    /// The model-callable tools this adapter provides, if any.
+    /// The model-callable tool groups this adapter provides.
     ///
     /// Merged into the agent's tool set when the adapter is registered. Tool names
     /// must be globally unique across the agent's tools (a clash is rejected at
-    /// registration). The default provides none.
-    fn tools(&self) -> Option<ToolGroup> {
-        None
+    /// registration). The default provides no groups.
+    fn tools(&self) -> Vec<ToolGroup> {
+        Vec::new()
     }
 }

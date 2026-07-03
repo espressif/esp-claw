@@ -77,15 +77,12 @@ pub enum GraphEffect {
         /// What becomes of the child once it yields (one-shot vs. persistent).
         termination: TerminationPolicy,
     },
-    /// Resolve `target`'s pending approval with the root's classified `verdict`
-    /// (and optional free-text `note`).
+    /// Resolve `target`'s pending approval with the root's classified verdict.
     ResolveApproval {
         /// The agent whose pending approval is being resolved.
         target: AgentId,
         /// The root's classification of the user's reply.
         verdict: ApprovalVerdict,
-        /// The user's words / reason, used when rejecting.
-        note: Option<String>,
     },
     /// Remove `target` and its whole subtree. The instance honors this only when
     /// `target` is a descendant of the emitter (an agent may reap its own
@@ -213,22 +210,10 @@ impl AgentContext {
         child
     }
 
-    /// Report the root's `verdict` (with optional `note`) for `target`'s pending
-    /// approval.
-    pub(crate) fn respond_to_approval(
-        &self,
-        target: AgentId,
-        verdict: ApprovalVerdict,
-        note: Option<String>,
-    ) {
-        self.host.emit(
-            self.id,
-            GraphEffect::ResolveApproval {
-                target,
-                verdict,
-                note,
-            },
-        );
+    /// Report the root's `verdict` for `target`'s pending approval.
+    pub(crate) fn respond_to_approval(&self, target: AgentId, verdict: ApprovalVerdict) {
+        self.host
+            .emit(self.id, GraphEffect::ResolveApproval { target, verdict });
     }
 
     /// Request removal of `target` (and its subtree). The instance ignores it
@@ -282,15 +267,15 @@ fn is_strict_descendant(all: &[AgentSnapshot], ancestor: AgentId, node: AgentId)
 }
 
 /// The root's classification of a user's reply to a pending approval.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ApprovalVerdict {
     /// A clear yes — the waiting agent is approved.
     Yes,
-    /// A clear no — the waiting agent is rejected (with the note as the reason).
-    No,
+    /// A clear no — the waiting agent is rejected with this reason.
+    No(String),
     /// Neither a clear yes nor no — treated as a rejection carrying the user's
     /// words, so the waiting agent can reconsider.
-    Other,
+    Other(String),
 }
 
 /// Which kinds an agent may spawn — the resolved, runtime form of a manifest's
@@ -375,21 +360,20 @@ pub(crate) mod test_support {
     use std::sync::Mutex;
 
     use super::*;
+    use crate::agent::AgentIdAllocator;
 
     /// A [`GraphHost`] that records every emitted effect, hands out ascending ids
-    /// from a private counter, and returns a preset snapshot.
+    /// from a shared [`AgentIdAllocator`], and returns a preset snapshot.
     #[derive(Default)]
     pub(crate) struct RecordingHost {
-        next: Mutex<usize>,
+        next: AgentIdAllocator,
         pub(crate) effects: Mutex<Vec<(AgentId, GraphEffect)>>,
         snapshot: Mutex<Vec<AgentSnapshot>>,
     }
 
     impl GraphHost for RecordingHost {
         fn next_id(&self) -> AgentId {
-            let mut next = self.next.lock().unwrap();
-            *next += 1;
-            AgentId(*next)
+            self.next.next()
         }
         fn emit(&self, requester: AgentId, effect: GraphEffect) {
             self.effects.lock().unwrap().push((requester, effect));
@@ -400,7 +384,7 @@ pub(crate) mod test_support {
     }
 
     /// A minimal snapshot of `id` parented to `parent` for the read-path tests.
-    pub(crate) fn snap(id: usize, parent: Option<usize>, depth: u16) -> AgentSnapshot {
+    pub(crate) fn snap(id: u32, parent: Option<u32>, depth: u16) -> AgentSnapshot {
         AgentSnapshot {
             id: AgentId(id),
             kind: AgentKind::new("worker"),
@@ -455,11 +439,11 @@ mod tests {
         let host = host_with_tree(tree);
 
         let ctx1 = context_for(Arc::clone(&host) as Arc<dyn GraphHost>, AgentId(1));
-        let ids: Vec<usize> = ctx1.list_subagents().iter().map(|s| s.id.0).collect();
+        let ids: Vec<u32> = ctx1.list_subagents().iter().map(|s| s.id.0).collect();
         assert_eq!(ids, vec![2, 3]);
 
         let ctx2 = context_for(host as Arc<dyn GraphHost>, AgentId(2));
-        let ids: Vec<usize> = ctx2.list_subagents().iter().map(|s| s.id.0).collect();
+        let ids: Vec<u32> = ctx2.list_subagents().iter().map(|s| s.id.0).collect();
         assert_eq!(ids, vec![3]);
     }
 

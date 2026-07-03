@@ -13,28 +13,27 @@
 //! Spawning is a model-callable `spawn_subagent(kind, goal)` tool in the
 //! crate-internal tool module. It emits a [`GraphEffect`] through a [`GraphHost`];
 //! the crate-internal orchestrator instance owns the flattened agent graph and
-//! materializes children through an [`AgentFactory`].
+//! materializes children through [`FsAgentFactory`].
 
 mod base_agent;
 mod config;
-pub(crate) mod factory;
+mod factory;
 mod generic_agent;
-pub(crate) mod graph;
+mod graph;
 mod iteration_loop;
-pub(crate) mod kind;
+mod kind;
 mod manifest;
-pub(crate) mod registry;
-pub(crate) mod resolver;
-pub(crate) mod tools;
+mod registry;
+mod resolver;
+mod tools;
 
 pub use base_agent::{
-    AgentAbortHandle, AgentCommand, AgentCommandError, AgentId, AgentRunError, AgentState,
-    ApprovalDecision, ApprovalId, BaseAgent, BaseAgentBuildError, BaseAgentBuilder, CancelReason,
-    TickOutcome,
+    AgentAbortHandle, AgentCommand, AgentCommandError, AgentId, ApprovalDecision, ApprovalId,
+    CancelReason, TickOutcome,
 };
 pub use config::{AgentConfig, AgentConfigError};
-pub use factory::{AgentFactory, FsAgentFactory, FsAgentFactoryError};
-pub use generic_agent::{CompactionDeps, GenericAgent, GenericAgentBuildError};
+pub use factory::{AgentPlacement, FsAgentFactory, FsAgentFactoryError};
+pub use generic_agent::{GenericAgent, GenericAgentBuildError};
 pub use graph::{
     AgentSnapshot, AgentStatus, ApprovalVerdict, GraphEffect, GraphHost, TerminationPolicy,
 };
@@ -45,6 +44,7 @@ pub use iteration_loop::IterationId;
 #[cfg(test)]
 pub(crate) use graph::AgentContext;
 pub use kind::AgentKind;
+pub(crate) use registry::{AgentIdAllocator, AgentRegistry};
 pub use resolver::{AgentResolver, MapAgentResolver};
 
 #[doc(no_inline)]
@@ -52,8 +52,6 @@ pub use claw_api::RetryPolicy;
 
 use core::future::Future;
 use core::pin::Pin;
-
-use claw_interface::{ClawHttp, ClawTimer};
 
 pub type AgentTickFuture<'a> = Pin<Box<dyn Future<Output = TickOutcome> + 'a>>;
 
@@ -79,22 +77,18 @@ pub trait Agent {
     /// (it does not preempt or gate anything); the agent owns how it is presented.
     fn deliver_child_result(&mut self, child: AgentId, text: String, ok: bool);
 
+    /// A cloneable handle to abort this agent's in-flight LLM/tool round from
+    /// another task.
+    ///
+    /// The handle shares the `Arc<AtomicBool>` the iteration loop polls at its
+    /// checkpoints, so it can stop a `tick` blocked on the LLM HTTP call. Grab it
+    /// **before** driving (you cannot borrow the agent while a `tick` holds
+    /// `&mut self`); it stays valid even while the agent is moved into a tick
+    /// future, because it is just an `Arc` clone of the flag — not a borrow of the
+    /// agent. It is plumbing for stopping a now-stale call; the *content* of any
+    /// new input still arrives as an [`AgentCommand`].
+    fn abort_handle(&self) -> AgentAbortHandle;
+
     /// Advance the agent by one step and report what happened. See [`TickOutcome`].
     fn tick(&mut self) -> AgentTickFuture<'_>;
-}
-
-/// Shared: present a subagent's result as a provenance-tagged message and append
-/// it to the agent's base memory.
-///
-/// Child results re-enter the conversation as information the model re-decides
-/// over (no counting, no gating); both semantic agents handle them identically,
-/// so the formatting lives here once.
-fn append_child_result<H: ClawHttp, Timer: ClawTimer>(
-    base: &mut BaseAgent<H, Timer>,
-    child: AgentId,
-    text: String,
-    ok: bool,
-) {
-    let status = if ok { "ok" } else { "failed" };
-    base.append_message(format!("[subagent {child} {status}] {text}"));
 }

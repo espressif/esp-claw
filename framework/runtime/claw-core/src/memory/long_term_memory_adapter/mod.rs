@@ -18,8 +18,8 @@ use std::sync::Arc;
 use claw_context::{Block, BlockKind, ContextSink};
 use claw_interface::ClawFs;
 use claw_memory::{
-    LongTermConfig, LongTermError, LongTermMemory, MemoryDraft, MemoryId, MemoryItem, MemoryPatch,
-    StoreOutcome,
+    LongTermConfig, LongTermError, LongTermInitError, LongTermMemory, MemoryDraft, MemoryId,
+    MemoryItem, MemoryPatch, StoreOutcome,
 };
 use claw_tool::ToolGroup;
 use serde_json::Value;
@@ -33,10 +33,13 @@ mod llm_extractor;
 mod tier;
 mod tools;
 
-pub use extraction::{ExtractError, ExtractedItem, Extractor, NoopExtractor};
+pub use extraction::{
+    ExtractError, ExtractedItem, ExtractionInput, Extractor, MemoryOp, MemorySnapshot,
+    NoopExtractor,
+};
 pub use llm_compactor::LlmCompactor;
 pub use llm_extractor::LlmExtractor;
-pub use tier::{MemoryTier, RuleBasedTierClassifier, TierClassifier};
+pub use tier::{MemoryTier, MemoryTierHint, RuleBasedTierClassifier, TierClassifier};
 
 use self::tools::memory_tool_group;
 
@@ -48,13 +51,44 @@ pub const AGENT_ID_PREFIX: &str = "a-";
 /// Default memory id used in logs.
 const DEFAULT_MEMORY_ID: &str = "long_term";
 
+/// Extraction throttle: after the first extraction, the transcript
+/// [`version`](History::version) must advance by at least this much before the
+/// next extraction runs.
+///
+/// Extraction is an LLM round-trip triggered from `contribute`, which runs on
+/// every iteration (including each tool-loop step within one turn). Without a
+/// gate a long tool loop would re-extract several times per turn. This bounds
+/// that to at most once per `EXTRACT_MIN_VERSION_DELTA` transcript changes.
+///
+/// It is a *coarse* cost bound, not an exact per-turn count (one turn bumps the
+/// version by a few appends). Skipping never loses a fact: the transcript is
+/// durable, so the accumulated tail is picked up by a later turn — or, since the
+/// cursor resets on restart, re-extracted whole on the next boot — and store
+/// dedup absorbs the overlap. The very first extraction is never throttled, so a
+/// short conversation still records its facts promptly.
+const EXTRACT_MIN_VERSION_DELTA: u64 = 8;
+
 /// Build a global long-term store under `dir` (minting `g-` ids).
-pub fn global_store<F: ClawFs + 'static>(dir: &str, fs: F) -> LongTermMemory<F> {
+///
+/// # Errors
+///
+/// Propagates [`LongTermInitError`] when the journal exists but is unreadable.
+pub fn global_store<F: ClawFs + 'static>(
+    dir: &str,
+    fs: F,
+) -> Result<LongTermMemory<F>, LongTermInitError> {
     LongTermMemory::new(LongTermConfig::new(dir, GLOBAL_ID_PREFIX), fs)
 }
 
 /// Build a per-agent long-term store under `dir` (minting `a-` ids).
-pub fn agent_store<F: ClawFs + 'static>(dir: &str, fs: F) -> LongTermMemory<F> {
+///
+/// # Errors
+///
+/// Propagates [`LongTermInitError`] when the journal exists but is unreadable.
+pub fn agent_store<F: ClawFs + 'static>(
+    dir: &str,
+    fs: F,
+) -> Result<LongTermMemory<F>, LongTermInitError> {
     LongTermMemory::new(LongTermConfig::new(dir, AGENT_ID_PREFIX), fs)
 }
 
@@ -81,8 +115,8 @@ impl<F: ClawFs + 'static> Clone for MemoryStores<F> {
 
 impl<F: ClawFs + 'static> MemoryStores<F> {
     /// Store a draft, routing it to a tier via the classifier (`hint` from an
-    /// extractor, or `None` for a manual store).
-    pub(crate) fn store(&self, draft: MemoryDraft, hint: Option<MemoryTier>) -> StoreOutcome {
+    /// extractor, or [`MemoryTierHint::Auto`] for a manual store).
+    pub(crate) fn store(&self, draft: MemoryDraft, hint: MemoryTierHint) -> StoreOutcome {
         match self.classifier.classify(&draft, hint) {
             MemoryTier::Global => self.global.store(draft),
             MemoryTier::Agent => self.agent.store(draft),
@@ -107,6 +141,19 @@ impl<F: ClawFs + 'static> MemoryStores<F> {
         let mut items = self.global.list();
         items.extend(self.agent.list());
         items
+    }
+
+    /// A compact `id`/`content`/`tags` view of every stored fact, for handing to
+    /// the [`Extractor`] so it can cite an id when proposing an edit/removal.
+    pub(crate) fn snapshot(&self) -> Vec<MemorySnapshot> {
+        self.list()
+            .into_iter()
+            .map(|item| MemorySnapshot {
+                id: item.id,
+                content: item.content,
+                tags: item.tags,
+            })
+            .collect()
     }
 
     /// Apply a patch to the item with `id`, routing by its prefix.
@@ -195,25 +242,69 @@ impl<F: ClawFs + 'static> LongTermMemoryContextAdapter<F> {
         if version == self.extract_cursor {
             return; // transcript unchanged since the last extraction
         }
-        self.extract_cursor = version;
+        // Throttle re-extraction: after the first pass, require the transcript to
+        // have advanced by a minimum before spending another LLM round-trip. The
+        // first extraction (`extract_cursor == 0`) always runs so short
+        // conversations still record their facts.
+        if self.extract_cursor != 0
+            && version.saturating_sub(self.extract_cursor) < EXTRACT_MIN_VERSION_DELTA
+        {
+            return;
+        }
 
         let snapshot = history.messages();
         let transcript = flatten_transcript(&snapshot);
         if transcript.trim().is_empty() {
+            // Nothing to extract yet; leave the cursor so the first real content
+            // still counts as the (unthrottled) first extraction.
             return;
         }
-        match self.extractor.extract(&transcript).await {
-            Ok(items) => {
-                for item in items {
-                    let draft = MemoryDraft::new(item.content)
-                        .with_tags(item.tags)
-                        .with_keywords(item.keywords)
-                        .with_source("extracted");
-                    self.stores.store(draft, item.tier);
+        self.extract_cursor = version;
+        // Hand the extractor the current memory so it can propose edits/removals
+        // (by id), not only additions.
+        let existing = self.stores.snapshot();
+        let input = ExtractionInput {
+            transcript: &transcript,
+            existing: &existing,
+        };
+        match self.extractor.extract(input).await {
+            Ok(ops) => {
+                for op in ops {
+                    self.apply_op(op);
                 }
             }
             Err(error) => {
                 tracing::warn!(%error, memory = %self.id, "memory extraction failed")
+            }
+        }
+    }
+
+    /// Apply one extractor-proposed [`MemoryOp`] to the stores. Best-effort: an
+    /// edit/removal naming an id the store no longer holds is logged, not fatal
+    /// (the model may cite a fact a concurrent tool call already changed).
+    fn apply_op(&self, op: MemoryOp) {
+        match op {
+            MemoryOp::Add(item) => {
+                let draft = MemoryDraft::new(item.content)
+                    .with_tags(item.tags)
+                    .with_keywords(item.keywords)
+                    .with_source("extracted");
+                self.stores.store(draft, item.tier);
+            }
+            MemoryOp::Replace { id, item } => {
+                let patch = MemoryPatch {
+                    content: Some(item.content),
+                    tags: Some(item.tags),
+                    keywords: Some(item.keywords),
+                };
+                if let Err(error) = self.stores.update(&id, patch) {
+                    tracing::warn!(%error, memory = %self.id, "memory replace skipped");
+                }
+            }
+            MemoryOp::Forget { id } => {
+                if let Err(error) = self.stores.forget(&id) {
+                    tracing::warn!(%error, memory = %self.id, "memory forget skipped");
+                }
             }
         }
     }
@@ -266,8 +357,8 @@ impl<F: ClawFs + 'static> ContextAdapter for LongTermMemoryContextAdapter<F> {
         ));
     }
 
-    fn tools(&self) -> Option<ToolGroup> {
-        Some(memory_tool_group(self.stores.clone()))
+    fn tools(&self) -> Vec<ToolGroup> {
+        vec![memory_tool_group(self.stores.clone())]
     }
 }
 
@@ -308,5 +399,149 @@ fn render_catalog(header: &str, labels: &[String]) -> String {
         String::new()
     } else {
         format!("{header}: {}", labels.join(", "))
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+mod tests {
+    use super::extraction::ExtractFuture;
+    use super::*;
+    use crate::memory::History;
+    use claw_interface::MemFs;
+    use claw_memory::MemoryId;
+    use core::future::Future;
+    use core::task::{Context, Poll};
+    use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::task::{Wake, Waker};
+
+    struct NoopWake;
+    impl Wake for NoopWake {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let mut future = Box::pin(future);
+        let waker = Waker::from(Arc::new(NoopWake));
+        let mut context = Context::from_waker(&waker);
+        loop {
+            if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
+                return value;
+            }
+        }
+    }
+
+    /// A fixed-version transcript view for driving `maybe_schedule_extraction`.
+    struct FakeHistory {
+        version: u64,
+    }
+    impl History for FakeHistory {
+        fn messages(&self) -> Arc<Value> {
+            Arc::new(json!([{ "role": "user", "content": "remember this" }]))
+        }
+        fn version(&self) -> u64 {
+            self.version
+        }
+    }
+
+    /// An [`Extractor`] that counts calls and extracts nothing.
+    struct CountingExtractor {
+        calls: Arc<AtomicUsize>,
+    }
+    impl Extractor for CountingExtractor {
+        fn extract<'a>(&'a self, _input: ExtractionInput<'a>) -> ExtractFuture<'a> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
+    fn adapter() -> LongTermMemoryContextAdapter<MemFs> {
+        let fs = MemFs::default();
+        LongTermMemoryContextAdapter::new(
+            agent_store("/m/agent", fs.clone()).expect("agent store"),
+            global_store("/m/global", fs).expect("global store"),
+            RuleBasedTierClassifier::shared(),
+            Arc::new(NoopExtractor),
+        )
+    }
+
+    fn fact(content: &str) -> ExtractedItem {
+        ExtractedItem {
+            content: content.to_string(),
+            tags: vec!["fact".to_string()],
+            keywords: Vec::new(),
+            tier: MemoryTierHint::Auto,
+        }
+    }
+
+    #[test]
+    fn apply_add_replace_forget_round_trip() {
+        let adapter = adapter();
+
+        adapter.apply_op(MemoryOp::Add(fact("Lives in Berlin")));
+        let items = adapter.stores.list();
+        assert_eq!(items.len(), 1);
+        let id = items[0].id.clone();
+        assert_eq!(items[0].content, "Lives in Berlin");
+
+        // Replace edits the cited fact in place.
+        adapter.apply_op(MemoryOp::Replace {
+            id: id.clone(),
+            item: fact("Lives in Munich"),
+        });
+        let items = adapter.stores.list();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].content, "Lives in Munich");
+
+        // Forget removes it.
+        adapter.apply_op(MemoryOp::Forget { id });
+        assert!(adapter.stores.list().is_empty());
+    }
+
+    #[test]
+    fn apply_edit_on_unknown_id_is_a_noop() {
+        let adapter = adapter();
+        adapter.apply_op(MemoryOp::Add(fact("Has a dog")));
+
+        // An id the store never held is logged and skipped — never a panic, and
+        // the live set is untouched.
+        adapter.apply_op(MemoryOp::Forget {
+            id: MemoryId::from("g-999"),
+        });
+        adapter.apply_op(MemoryOp::Replace {
+            id: MemoryId::from("a-999"),
+            item: fact("ghost edit"),
+        });
+        assert_eq!(adapter.stores.list().len(), 1);
+    }
+
+    #[test]
+    fn extraction_is_throttled_after_the_first_pass() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let fs = MemFs::default();
+        let mut adapter = LongTermMemoryContextAdapter::new(
+            agent_store("/m/agent", fs.clone()).expect("agent store"),
+            global_store("/m/global", fs).expect("global store"),
+            RuleBasedTierClassifier::shared(),
+            Arc::new(CountingExtractor {
+                calls: Arc::clone(&calls),
+            }),
+        );
+
+        // The first non-empty transcript always extracts.
+        block_on(adapter.maybe_schedule_extraction(&FakeHistory { version: 3 }));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        // A small advance is below the delta and is throttled away.
+        block_on(adapter.maybe_schedule_extraction(&FakeHistory { version: 5 }));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        // Crossing the delta since the last extraction runs it again.
+        block_on(adapter.maybe_schedule_extraction(&FakeHistory {
+            version: 3 + EXTRACT_MIN_VERSION_DELTA,
+        }));
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

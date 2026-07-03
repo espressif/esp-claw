@@ -16,6 +16,6 @@ mod registry;
 mod skill;
 mod skill_set;
 
-pub use registry::{CatalogSnapshot, FsSkillRegistry, SkillRegistry};
+pub use registry::{CatalogSnapshot, EmptySkillRegistry, FsSkillRegistry, SkillRegistry};
 pub use skill::{SkillError, SkillId, SkillMetadata};
 pub use skill_set::{SkillGroup, SkillSet};

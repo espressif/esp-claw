@@ -39,7 +39,7 @@ Re-exported from the crate root:
 | `RiskClass` | `Safe < Low < Moderate < High`, ordered so policies can threshold on it. |
 | `PermissionDecision` | The verdict: `Allow`, `Ask { reason }`, or `Deny { reason }`. |
 | `PermissionPolicy` | The policy trait — pure classification, no side effects. Object-safe, so a chain holds `Box<dyn PermissionPolicy>`. |
-| `PermissionRequest` | One action to evaluate plus the acting agent (`agent_id` / `agent_kind` as borrowed primitives, keeping this crate below `claw-core`). |
+| `PermissionRequest` | One action to evaluate. Agent identity is not carried (no built-in policy keys on it); add it back as borrowed primitives if a policy needs the acting principal, keeping this crate below `claw-core`. |
 | `AllowAll` | The permissive base: allows everything. |
 | `AskAtOrAbove` | Asks for approval at or above a risk threshold; allows the rest. |
 | `PolicyChain` | Composes policies, **most-restrictive-wins**: any `Deny` short-circuits, else any `Ask`, else `Allow`. Empty chain allows everything. |
@@ -70,7 +70,7 @@ use claw_permission::{
 let policy = PolicyChain::new().with(AskAtOrAbove::new(RiskClass::Moderate));
 let action = Action::new("write_file", RiskClass::Moderate)
     .with_resource(Resource::Path("/data/x".into()));
-let request = PermissionRequest::new(1, "worker", &action);
+let request = PermissionRequest::new(&action);
 
 // First time: the policy asks for approval.
 assert!(matches!(policy.evaluate(&request), PermissionDecision::Ask { .. }));

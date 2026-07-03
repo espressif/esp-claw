@@ -6,8 +6,10 @@ use claw_capability::{
     OutboundMessage, Registry,
 };
 use claw_core::{
-    DeliverError, DriveOutput, Orchestrator, SessionId, SessionMessage, SessionRecord,
+    DeliverError, DeliveryKind, DriveOutput, DriveStop, Orchestrator, SessionBinding,
+    SessionControl, SessionId, SessionMessage, SessionRecord,
 };
+use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::AgentError;
 
@@ -51,17 +53,27 @@ impl SessionChannelRoute {
     }
 }
 
-pub struct ChannelRouter {
-    orchestrator: Arc<Orchestrator>,
+pub struct ChannelRouter<F, H, Timer>
+where
+    F: ClawFs + Clone + Default + 'static,
+    H: ClawHttp + Default + 'static,
+    Timer: ClawTimer + Default + 'static,
+{
+    orchestrator: Arc<Orchestrator<F, H, Timer>>,
     channels: HashMap<String, Arc<dyn ChannelAdapter>>,
     chat_sessions: Mutex<HashMap<ChannelChatKey, SessionId>>,
     session_routes: Mutex<HashMap<SessionId, SessionChannelRoute>>,
     open: Mutex<bool>,
 }
 
-impl ChannelRouter {
+impl<F, H, Timer> ChannelRouter<F, H, Timer>
+where
+    F: ClawFs + Clone + Default + 'static,
+    H: ClawHttp + Default + 'static,
+    Timer: ClawTimer + Default + 'static,
+{
     pub fn new(
-        orchestrator: Arc<Orchestrator>,
+        orchestrator: Arc<Orchestrator<F, H, Timer>>,
         registry: &Registry,
     ) -> Result<Arc<Self>, AgentError> {
         let mut channels = HashMap::new();
@@ -75,11 +87,33 @@ impl ChannelRouter {
             }
         }
 
+        // Rebuild the in-memory routing tables from whatever session bindings the
+        // orchestrator currently exposes. Only bindings for channels this router
+        // actually has are restored; a binding whose channel is gone is dropped.
+        // The per-message `reply_to_message_id` is ephemeral — the next inbound
+        // message repopulates it.
+        let mut chat_sessions = HashMap::new();
+        let mut session_routes = HashMap::new();
+        for record in orchestrator.session_list() {
+            if let Some(binding) = &record.binding {
+                if channels.contains_key(&binding.channel) {
+                    chat_sessions.insert(
+                        ChannelChatKey::new(&binding.channel, &binding.chat_id),
+                        record.id,
+                    );
+                    session_routes.insert(
+                        record.id,
+                        SessionChannelRoute::new(&binding.channel, &binding.chat_id),
+                    );
+                }
+            }
+        }
+
         Ok(Arc::new(Self {
             orchestrator,
             channels,
-            chat_sessions: Mutex::new(HashMap::new()),
-            session_routes: Mutex::new(HashMap::new()),
+            chat_sessions: Mutex::new(chat_sessions),
+            session_routes: Mutex::new(session_routes),
             open: Mutex::new(false),
         }))
     }
@@ -137,20 +171,99 @@ impl ChannelRouter {
     }
 
     pub async fn push_message(&self, message: InboundMessage) -> Result<(), CapabilityError> {
-        self.validate_inbound(&message)?;
-        let session = self.session_for(&message)?;
-        self.session_routes()
-            .insert(session, SessionChannelRoute::from_inbound(&message));
+        // Transport path: the delivery mode is derived from the message's opaque
+        // `extra_context` hint at this boundary (the transport layer never names a
+        // `DeliveryKind`).
+        let kind = DeliveryKind::from_extra_context(message.extra_context.as_deref());
+        self.push_with_kind(message, kind).await
+    }
 
-        let output = self
+    /// Push `message` with an explicit [`DeliveryKind`], bypassing
+    /// `extra_context` derivation. Used by the `interrupt`/`cancel` facades, which
+    /// already know the mode as a value.
+    pub(crate) async fn push_with_kind(
+        &self,
+        message: InboundMessage,
+        kind: DeliveryKind,
+    ) -> Result<(), CapabilityError> {
+        let session = self.resolve_session(&message)?;
+        // A stand-alone control: callers of `push_message` drive serially and
+        // cannot signal it mid-flight, but routing through `deliver_interruptible`
+        // still honours the `DeliveryKind` (notably `Cancel`, which supersedes a
+        // lingering task before this message starts fresh).
+        let control = SessionControl::new();
+        self.deliver_controlled(session, message, kind, &control)
+            .await?;
+        Ok(())
+    }
+
+    /// Resolve and record the reply route for `message`, returning its bound
+    /// session. Separated so a concurrent driver can learn the target session
+    /// before starting an interruptible drive.
+    ///
+    /// # Errors
+    ///
+    /// [`CapabilityError::InvalidArg`] for an ill-formed message,
+    /// [`CapabilityError::NotFound`] when the channel is unknown or the chat is
+    /// not bound to a session.
+    pub fn resolve_session(&self, message: &InboundMessage) -> Result<SessionId, CapabilityError> {
+        self.validate_inbound(message)?;
+        let session = self.session_for(message)?;
+        self.session_routes()
+            .insert(session, SessionChannelRoute::from_inbound(message));
+        Ok(session)
+    }
+
+    /// Deliver `message` to its (already resolved) `session` under an out-of-band
+    /// [`SessionControl`], driving interruptibly and surfacing any output.
+    /// Returns why the drive stopped.
+    ///
+    /// # Errors
+    ///
+    /// Maps [`DeliverError`] to [`CapabilityError`].
+    pub async fn deliver_controlled(
+        &self,
+        session: SessionId,
+        message: InboundMessage,
+        kind: DeliveryKind,
+        control: &SessionControl,
+    ) -> Result<DriveStop, CapabilityError> {
+        let (output, stop) = self
             .orchestrator
-            .deliver(
+            .deliver_interruptible(session, session_message(message, kind), control)
+            .await
+            .map_err(map_deliver_error)?;
+        self.surface_output(output)?;
+        Ok(stop)
+    }
+
+    /// Continue a gracefully-interrupted `session`: record the interruption
+    /// marker, then deliver `message` (the interrupting input) as the
+    /// continuation, driving interruptibly and surfacing output.
+    ///
+    /// # Errors
+    ///
+    /// Maps [`DeliverError`] to [`CapabilityError`].
+    pub async fn continue_interrupted(
+        &self,
+        session: SessionId,
+        message: InboundMessage,
+        control: &SessionControl,
+    ) -> Result<DriveStop, CapabilityError> {
+        // The interrupting input is delivered as the continuation; the
+        // orchestrator's `continue_interrupted` ignores the delivery kind, so it
+        // is appended.
+        let (output, stop) = self
+            .orchestrator
+            .continue_interrupted(
                 session,
-                SessionMessage::new(message.text, message.message_id, message.sender_id),
+                session_message(message, DeliveryKind::Append),
+                control,
             )
             .await
             .map_err(map_deliver_error)?;
-        self.surface_output(output)
+        self.surface_output(output)?;
+        Ok(stop)
     }
 
     pub fn new_session(&self) -> SessionId {
@@ -189,6 +302,14 @@ impl ChannelRouter {
 
         chat_sessions.insert(key, session);
         session_routes.insert(session, SessionChannelRoute::new(channel, chat_id));
+
+        // Record the binding onto the session record so this router (or another
+        // one over the same orchestrator) can rebuild routes from `session_list`.
+        // The session was just validated to exist, so this does not fail in
+        // practice; a lost write is logged inside the store, not fatal here.
+        self.orchestrator
+            .session_set_binding(session, channel, chat_id)
+            .map_err(|error| CapabilityError::Failed(error.to_string()))?;
         Ok(())
     }
 
@@ -199,8 +320,10 @@ impl ChannelRouter {
             .into_iter()
             .map(|mut record| {
                 if let Some(route) = routes.get(&record.id) {
-                    record.channel = Some(route.channel.clone());
-                    record.chat_id = Some(route.chat_id.clone());
+                    record.binding = Some(SessionBinding::new(
+                        route.channel.clone(),
+                        route.chat_id.clone(),
+                    ));
                 }
                 record
             })
@@ -290,10 +413,23 @@ impl ChannelRouter {
     }
 }
 
-impl ChannelRuntime for ChannelRouter {
+impl<F, H, Timer> ChannelRuntime for ChannelRouter<F, H, Timer>
+where
+    F: ClawFs + Clone + Default + 'static,
+    H: ClawHttp + Default + 'static,
+    Timer: ClawTimer + Default + 'static,
+{
     fn push_message(&self, message: InboundMessage) -> ChannelFuture<'_> {
         Box::pin(async move { ChannelRouter::push_message(self, message).await })
     }
+}
+
+/// Build the orchestrator's [`SessionMessage`] from an inbound transport
+/// message, stamping the resolved [`DeliveryKind`](claw_core::DeliveryKind). The
+/// kind is decided at this boundary (from `extra_context` on the transport path,
+/// or forced by the caller), never carried on the transport message itself.
+fn session_message(message: InboundMessage, kind: DeliveryKind) -> SessionMessage {
+    SessionMessage::new(message.text, message.message_id, message.sender_id).with_kind(kind)
 }
 
 fn map_deliver_error(error: DeliverError) -> CapabilityError {
@@ -312,11 +448,15 @@ mod tests {
     use std::sync::Arc;
     use std::task::{Wake, Waker};
 
+    use claw_api::{BackendKind, ClawApiConfig};
     use claw_capability::{Capability, Registry};
-    use claw_context::Block;
-    use claw_core::agent::{Agent, AgentFactory, AgentId, AgentKind, GraphHost};
+    use claw_core::agent::MapAgentResolver;
+    use claw_interface::{BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp};
 
     use super::*;
+
+    type TestOrchestrator =
+        Orchestrator<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>;
 
     struct NoopWake;
 
@@ -332,22 +472,6 @@ mod tests {
             if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
                 return value;
             }
-        }
-    }
-
-    struct NeverFactory;
-
-    impl AgentFactory for NeverFactory {
-        fn create_agent(
-            &self,
-            _id: AgentId,
-            _kind: &AgentKind,
-            _goal: String,
-            _host: Arc<dyn GraphHost>,
-            _is_root: bool,
-            _inherited_context: Arc<[Block<'static>]>,
-        ) -> Result<Box<dyn Agent>, String> {
-            Err("unbound inbound must not create an agent".to_string())
         }
     }
 
@@ -371,13 +495,58 @@ mod tests {
         }
     }
 
+    fn web_registry() -> Registry {
+        let registry = Registry::new();
+        registry
+            .register(Capability::channel(Arc::new(TestChannel)))
+            .unwrap();
+        registry
+    }
+
+    fn test_orchestrator() -> Arc<TestOrchestrator> {
+        let llm_config = ClawApiConfig::new(
+            BackendKind::OpenAiCompatible,
+            "sk-test",
+            "gpt-test",
+            "https://example.invalid",
+        );
+        Orchestrator::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new(
+            Arc::new(MapAgentResolver::new()),
+            llm_config,
+            "/channel-router-test",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn bindings_rebuild_from_orchestrator_session_list() {
+        let orchestrator = test_orchestrator();
+        let first_router = ChannelRouter::new(Arc::clone(&orchestrator), &web_registry()).unwrap();
+        let sid = first_router.new_session();
+        first_router.bind_session(sid, "web", "chat-1").unwrap();
+
+        // A fresh router over the same orchestrator rebuilds its routing tables
+        // from the orchestrator's session records.
+        let router = ChannelRouter::new(orchestrator, &web_registry()).unwrap();
+
+        // The binding was rebuilt: the session reappears with its channel/chat.
+        let sessions = router.list_sessions();
+        assert_eq!(sessions.len(), 1);
+        let record = sessions.first().unwrap();
+        assert_eq!(record.id, sid);
+        assert_eq!(
+            record.binding.as_ref(),
+            Some(&SessionBinding::new("web", "chat-1"))
+        );
+    }
+
     #[test]
     fn unbound_inbound_does_not_create_session() {
         let registry = Registry::new();
         registry
             .register(Capability::channel(Arc::new(TestChannel)))
             .unwrap();
-        let orchestrator = Orchestrator::new(Arc::new(NeverFactory));
+        let orchestrator = test_orchestrator();
         let router = ChannelRouter::new(orchestrator, &registry).unwrap();
         let existing = router.new_session();
 
@@ -387,6 +556,7 @@ mod tests {
             chat_id: "chat".into(),
             sender_id: None,
             text: "hello".into(),
+            ..Default::default()
         }))
         .unwrap_err();
 

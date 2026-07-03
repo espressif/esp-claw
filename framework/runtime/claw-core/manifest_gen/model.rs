@@ -36,7 +36,7 @@ pub struct RuntimeJson {
     pub retries: u32,
     /// Consecutive gating-blocked tool rounds to tolerate.
     #[serde(default)]
-    pub tool_block_retries: Option<u32>,
+    pub tool_block_retries: u32,
 }
 
 /// `capabilities/capabilities.json` — the capability (tool) names this kind uses.

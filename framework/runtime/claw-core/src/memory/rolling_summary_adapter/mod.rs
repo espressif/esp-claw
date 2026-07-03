@@ -54,7 +54,7 @@ const CHARS_PER_TOKEN: usize = 4;
 /// Built from the agent's memory tuning at construction. The transcript store
 /// does not read these — only this adapter does.
 #[derive(Clone, Copy, Debug)]
-pub struct CompactionPolicy {
+pub(crate) struct CompactionPolicy {
     /// Start compacting once the verbatim history past the cursor exceeds this.
     pub trigger_tokens: usize,
     /// Token budget for the verbatim tail kept out of every summary (the newest
@@ -81,7 +81,7 @@ impl CompactionPolicy {
 
 /// Owns conversation compaction and contributes the rolling summary to the
 /// history channel. See the module docs.
-pub struct RollingSummaryContextAdapter<F: ClawFs + 'static> {
+pub(crate) struct RollingSummaryContextAdapter<F: ClawFs + 'static> {
     /// A clone of the agent's transcript store (shares the same `Arc`-backed state
     /// the transcript writes to): read for committed turns. Never mutated here.
     store: TranscriptStore<F>,
@@ -105,7 +105,7 @@ impl<F: ClawFs + 'static> RollingSummaryContextAdapter<F> {
     /// Build the adapter over a clone of the agent's transcript `store`, the
     /// `compactor`, the compaction `policy`, and the shared `cursor` the
     /// recent-tail adapter reads.
-    pub fn new(
+    pub(crate) fn new(
         store: TranscriptStore<F>,
         compactor: Arc<dyn Compactor>,
         policy: CompactionPolicy,

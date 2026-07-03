@@ -4,7 +4,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use claw_tool::{AsyncToolHandler, Tool};
+use claw_tool::Tool;
 
 use crate::channel::ChannelAdapter;
 use crate::lifecycle::Lifecycle;
@@ -21,9 +21,8 @@ pub enum CapabilityRole {
     Tool(Tool),
     /// A bidirectional message channel adapter.
     Channel(Arc<dyn ChannelAdapter>),
-    /// No invocation surface; the capability exists only for its
-    /// [`lifecycle`](Capability::lifecycle) (e.g. an MCP server managed purely
-    /// by enable/disable).
+    /// No invocation surface; the capability exists only for its [`Lifecycle`]
+    /// (e.g. an MCP server managed purely by enable/disable).
     None,
 }
 
@@ -40,12 +39,10 @@ impl fmt::Debug for CapabilityRole {
     }
 }
 
-/// One registered capability: identity, an optional description, a role, and an
-/// optional lifecycle.
+/// One registered capability: identity, a role, and an optional lifecycle.
 #[derive(Clone)]
 pub struct Capability {
     id: String,
-    description: Option<String>,
     role: CapabilityRole,
     lifecycle: Option<Arc<dyn Lifecycle>>,
 }
@@ -55,7 +52,6 @@ impl fmt::Debug for Capability {
         formatter
             .debug_struct("Capability")
             .field("id", &self.id)
-            .field("description", &self.description)
             .field("role", &self.role)
             .field("has_lifecycle", &self.lifecycle.is_some())
             .finish()
@@ -63,11 +59,18 @@ impl fmt::Debug for Capability {
 }
 
 impl Capability {
-    /// A capability with the given id and role, no description, no lifecycle.
-    pub fn new(id: impl Into<String>, role: CapabilityRole) -> Self {
+    /// A capability with the given id and role, no lifecycle.
+    ///
+    /// Internal seam: callers build capabilities through the semantic
+    /// constructors ([`from_tool`](Self::from_tool), [`channel`](Self::channel),
+    /// [`none`](Self::none)) so they never name the internal [`CapabilityRole`]
+    /// payloads.
+    ///
+    /// Tools, channels, and services share **one flat id namespace** — ids are
+    /// taken verbatim (a tool and a channel with the same id collide).
+    pub(crate) fn new(id: impl Into<String>, role: CapabilityRole) -> Self {
         Self {
             id: id.into(),
-            description: None,
             role,
             lifecycle: None,
         }
@@ -78,19 +81,13 @@ impl Capability {
         Self::new(id, CapabilityRole::None)
     }
 
-    /// A [`Tool`](CapabilityRole::Tool) capability whose id is the tool's name.
-    pub fn tool(tool: Tool) -> Self {
-        Self::new(tool.name().to_string(), CapabilityRole::Tool(tool))
-    }
-
-    /// A Rust async [`Tool`](CapabilityRole::Tool) capability whose id is the
-    /// async handler's tool name.
+    /// A [`Tool`]-role capability whose id is the tool name.
     ///
-    /// C-backed capabilities intentionally keep using the synchronous descriptor
-    /// callback path; this constructor is only for Rust capability
-    /// implementations.
-    pub fn async_tool(handler: impl AsyncToolHandler + 'static) -> Self {
-        Self::tool(Tool::new_async(handler))
+    /// Build the [`Tool`] with [`Tool::new`] (sync handler) or [`Tool::new_async`]
+    /// (async handler) — that is where the sync/async choice lives, so `Capability`
+    /// keeps a single tool constructor.
+    pub fn from_tool(tool: Tool) -> Self {
+        Self::new(tool.name().to_string(), CapabilityRole::Tool(tool))
     }
 
     /// A [`Channel`](CapabilityRole::Channel) capability whose id is the channel id.
@@ -99,13 +96,6 @@ impl Capability {
             adapter.channel_id().to_string(),
             CapabilityRole::Channel(adapter),
         )
-    }
-
-    /// Sets the description.
-    #[must_use]
-    pub fn with_description(mut self, description: impl Into<String>) -> Self {
-        self.description = Some(description.into());
-        self
     }
 
     /// Attaches a per-capability lifecycle.
@@ -120,11 +110,6 @@ impl Capability {
         &self.id
     }
 
-    /// Human/model-readable description (catalog + tool prompt).
-    pub fn description(&self) -> Option<&str> {
-        self.description.as_deref()
-    }
-
     /// What this capability exposes when used.
     pub fn role(&self) -> &CapabilityRole {
         &self.role
@@ -132,7 +117,7 @@ impl Capability {
 
     /// Optional per-capability resource lifecycle (a gateway's transport task,
     /// an MCP server). Shared group resources go on [`CapabilityGroup`].
-    pub fn lifecycle(&self) -> Option<&Arc<dyn Lifecycle>> {
+    pub(crate) fn lifecycle(&self) -> Option<&Arc<dyn Lifecycle>> {
         self.lifecycle.as_ref()
     }
 
@@ -142,7 +127,10 @@ impl Capability {
 
     /// The [`Tool`] this capability exposes, or `None` for the
     /// `Channel`/`None` roles.
-    pub fn as_tool(&self) -> Option<&Tool> {
+    ///
+    /// Internal accessor: `claw-core` composes these into per-agent tool sets.
+    /// External callers describe a capability through [`role`](Self::role).
+    pub(crate) fn as_tool(&self) -> Option<&Tool> {
         match &self.role {
             CapabilityRole::Tool(tool) => Some(tool),
             _ => None,
@@ -150,7 +138,7 @@ impl Capability {
     }
 
     /// The [`ChannelAdapter`] this capability exposes, or `None` otherwise.
-    pub fn as_channel(&self) -> Option<&Arc<dyn ChannelAdapter>> {
+    pub(crate) fn as_channel(&self) -> Option<&Arc<dyn ChannelAdapter>> {
         match &self.role {
             CapabilityRole::Channel(channel) => Some(channel),
             _ => None,
@@ -197,21 +185,6 @@ impl CapabilityGroup {
     pub fn with_lifecycle(mut self, lifecycle: Arc<dyn Lifecycle>) -> Self {
         self.lifecycle = Some(lifecycle);
         self
-    }
-
-    /// Group id: provenance label plus the enable/disable handle.
-    pub fn id(&self) -> &str {
-        &self.id
-    }
-
-    /// Member capabilities, validated and registered together.
-    pub fn members(&self) -> &[Capability] {
-        &self.members
-    }
-
-    /// Optional shared lifecycle, run around the members' own lifecycles.
-    pub fn lifecycle(&self) -> Option<&Arc<dyn Lifecycle>> {
-        self.lifecycle.as_ref()
     }
 
     pub(crate) fn into_parts(self) -> (String, Vec<Capability>, Option<Arc<dyn Lifecycle>>) {

@@ -16,7 +16,7 @@ use claw_tool::{
 };
 use serde_json::Value;
 
-use super::MemoryStores;
+use super::{MemoryStores, MemoryTierHint};
 
 /// Group label for the long-term memory tools (provenance only).
 pub(crate) const MEMORY_TOOL_GROUP: &str = "memory";
@@ -63,7 +63,7 @@ impl<F: ClawFs + 'static> ToolHandler for MemoryStoreTool<F> {
             .with_keywords(string_array(&args, "keywords"))
             .with_source("manual");
 
-        let output = match self.stores.store(draft, None) {
+        let output = match self.stores.store(draft, MemoryTierHint::Auto) {
             StoreOutcome::Created(item) => format!("Stored memory {}.", item.id),
             StoreOutcome::Duplicate(item) => {
                 format!("Already remembered (as {}); nothing changed.", item.id)

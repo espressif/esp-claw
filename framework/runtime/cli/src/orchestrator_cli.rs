@@ -27,7 +27,7 @@ use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
 use claw_agent_cli::{load_env, make_llm_config, CliFs};
-use claw_core::agent::{FsAgentFactory, MapAgentResolver};
+use claw_core::agent::MapAgentResolver;
 use claw_core::{Orchestrator, SessionMessage};
 use claw_interface::{RealHttp, TokioTimer};
 
@@ -89,19 +89,17 @@ async fn main() {
     // Empty resolver: the built-in conversation/worker manifests declare no extra
     // capabilities, so no name->handler mapping is needed yet.
     let resolver = Arc::new(MapAgentResolver::new());
-    let factory = match FsAgentFactory::<CliFs, RealHttp, TokioTimer>::new(
+    let orchestrator = match Orchestrator::<CliFs, RealHttp, TokioTimer>::new(
         resolver,
         make_llm_config(),
         MEMORY_DIR,
     ) {
-        Ok(factory) => Arc::new(factory),
+        Ok(orchestrator) => orchestrator,
         Err(error) => {
-            eprintln!("failed to build agent factory: {error}");
+            eprintln!("failed to build orchestrator: {error}");
             std::process::exit(1);
         }
     };
-
-    let orchestrator = Orchestrator::new(factory);
     let session = orchestrator.session_create();
 
     eprintln!("Memory:  {MEMORY_DIR}");

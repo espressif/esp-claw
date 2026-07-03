@@ -23,4 +23,9 @@ pub enum CapabilityError {
     /// registry forwards the message unchanged; it does not interpret it.
     #[error("capability operation failed: {0}")]
     Failed(String),
+    /// Loading or persisting enable/disable state through the injected
+    /// [`CapabilityStateStore`](crate::CapabilityStateStore) failed (an IO or
+    /// (de)serialization error). The message is forwarded unchanged.
+    #[error("capability state persistence failed: {0}")]
+    Persistence(String),
 }

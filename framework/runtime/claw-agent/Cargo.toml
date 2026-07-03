@@ -51,9 +51,11 @@ dev = [
 claw-core = { path = "../claw-core" }
 claw-api = { path = "../claw-api" }
 claw-skill = { path = "../claw-skill" }
-claw-tool = { path = "../claw-tool" }
 # The capability surface: callers register tools/channels as `Capability`s in a
-# `Registry`; this crate bridges it onto the orchestrator and channel router.
+# `Registry`; this crate bridges it onto the orchestrator and channel router. The
+# tool framework (`claw-tool`) stays behind this vocabulary — `AgentSystem` even
+# reaches the executor initializer through `claw-capability`, so `claw-tool` is a
+# dev-only dependency here (tests/examples that assemble `ToolSet`s directly).
 claw-capability = { path = "../claw-capability" }
 # Conversation/long-term memory. The compaction policy is wired internally
 # (the LLM-backed `LlmCompactor`), so no stub-compactor feature is needed.
@@ -71,6 +73,9 @@ tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"], optional
 
 [dev-dependencies]
 claw-context = { path = "../claw-context" }
+# Tests and examples assemble `ToolSet`s / drive the `ToolRunner` directly, and
+# init the executor; the library itself no longer depends on `claw-tool`.
+claw-tool = { path = "../claw-tool" }
 # In-memory fs + scripted HTTP doubles so the end-to-end tests run hermetically
 # (no network, no API key) entirely through the public API; `stdthread` is the
 # host-target executor backend used by capability/tool tests.

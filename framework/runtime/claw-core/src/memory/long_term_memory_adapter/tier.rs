@@ -4,7 +4,7 @@
 //! Tiering is a policy the agent must never expose to the model: the memory
 //! tools take no `scope`/`tier` parameter, so the LLM cannot be misdirected into
 //! choosing a store. Instead every new fact passes through a [`TierClassifier`]
-//! that decides deterministically — honoring an optional upstream `hint` (e.g.
+//! that decides deterministically — honoring an upstream [`MemoryTierHint`] (e.g.
 //! from an extractor) and otherwise falling back to a rule over the fact's tags.
 
 use std::sync::Arc;
@@ -20,15 +20,25 @@ pub enum MemoryTier {
     Agent,
 }
 
+/// Routing hint for a new memory item.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MemoryTierHint {
+    /// Let the classifier decide from the draft.
+    #[default]
+    Auto,
+    /// Store in this tier regardless of classifier rules.
+    Fixed(MemoryTier),
+}
+
 /// Routes a new fact to a [`MemoryTier`].
 ///
 /// Kept as an injectable seam so the routing policy can be swapped (a smarter
-/// classifier, a test double) without touching the adapter. A `hint` lets an
-/// upstream producer (an extractor that already reasoned about scope) override
-/// the rule; `None` means "decide for me".
+/// classifier, a test double) without touching the adapter. A [`Fixed`](MemoryTierHint::Fixed)
+/// hint lets an upstream producer (an extractor that already reasoned about
+/// scope) override the rule; [`Auto`](MemoryTierHint::Auto) means "decide for me".
 pub trait TierClassifier: Send + Sync {
     /// Decide the tier for `draft`, preferring `hint` when present.
-    fn classify(&self, draft: &MemoryDraft, hint: Option<MemoryTier>) -> MemoryTier;
+    fn classify(&self, draft: &MemoryDraft, hint: MemoryTierHint) -> MemoryTier;
 }
 
 /// Tags that, by default, mark a fact as globally shared (user-level, not
@@ -43,21 +53,26 @@ const DEFAULT_GLOBAL_TAGS: &[&str] = &["preference", "user", "device", "fact", "
 /// # Examples
 ///
 /// ```
-/// use claw_core::memory::{MemoryTier, RuleBasedTierClassifier, TierClassifier};
+/// use claw_core::memory::{
+///     MemoryTier, MemoryTierHint, RuleBasedTierClassifier, TierClassifier,
+/// };
 /// use claw_memory::MemoryDraft;
 ///
 /// let classifier = RuleBasedTierClassifier::default();
 ///
 /// // A user-level fact (no hint) routes to the global store.
 /// let preference = MemoryDraft::new("Uses Home Assistant").with_tags(["preference".into()]);
-/// assert_eq!(classifier.classify(&preference, None), MemoryTier::Global);
+/// assert_eq!(classifier.classify(&preference, MemoryTierHint::Auto), MemoryTier::Global);
 ///
 /// // A task note routes to the agent store.
 /// let note = MemoryDraft::new("Deploy step needs sudo").with_tags(["task".into()]);
-/// assert_eq!(classifier.classify(&note, None), MemoryTier::Agent);
+/// assert_eq!(classifier.classify(&note, MemoryTierHint::Auto), MemoryTier::Agent);
 ///
 /// // An explicit hint always wins.
-/// assert_eq!(classifier.classify(&note, Some(MemoryTier::Global)), MemoryTier::Global);
+/// assert_eq!(
+///     classifier.classify(&note, MemoryTierHint::Fixed(MemoryTier::Global)),
+///     MemoryTier::Global
+/// );
 /// ```
 #[derive(Clone, Debug)]
 pub struct RuleBasedTierClassifier {
@@ -90,9 +105,9 @@ impl Default for RuleBasedTierClassifier {
 }
 
 impl TierClassifier for RuleBasedTierClassifier {
-    fn classify(&self, draft: &MemoryDraft, hint: Option<MemoryTier>) -> MemoryTier {
-        if let Some(hint) = hint {
-            return hint;
+    fn classify(&self, draft: &MemoryDraft, hint: MemoryTierHint) -> MemoryTier {
+        if let MemoryTierHint::Fixed(tier) = hint {
+            return tier;
         }
         let is_global = draft.tags.iter().any(|tag| {
             self.global_tags

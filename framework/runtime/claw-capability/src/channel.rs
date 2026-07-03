@@ -16,13 +16,19 @@ pub type ChannelFuture<'a> = Pin<Box<dyn Future<Output = Result<(), CapabilityEr
 ///
 /// `session_id` is intentionally absent: the agent runtime accepts this message
 /// only after `(channel, chat_id)` has been explicitly bound to a session.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct InboundMessage {
     pub message_id: String,
     pub channel: String,
     pub chat_id: String,
     pub sender_id: Option<String>,
     pub text: String,
+    /// Opaque, transport-neutral extra context for this message. Carried through
+    /// to the orchestrator boundary, where the driving layer interprets it (e.g.
+    /// resolving a delivery mode such as interrupt/cancel). Kept a bare string so
+    /// the transport layer stays free of any orchestration/scheduling vocabulary;
+    /// `None` when the transport has nothing extra to say.
+    pub extra_context: Option<String>,
 }
 
 /// An agent reply routed back out through a channel transport.

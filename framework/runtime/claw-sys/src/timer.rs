@@ -61,9 +61,12 @@ impl<'cancel> EspIdfSleep<'cancel> {
         }
     }
 
-    fn start(&mut self) {
+    /// Start the backoff thread. Returns `false` if the thread could not be
+    /// spawned, so the caller can resolve the sleep as `Completed` (skip the
+    /// backoff) instead of hanging — a spawn failure is surfaced, never fatal.
+    fn start(&mut self) -> bool {
         if self.started {
-            return;
+            return true;
         }
         self.started = true;
 
@@ -73,8 +76,10 @@ impl<'cancel> EspIdfSleep<'cancel> {
             .name("claw_timer".to_string())
             .spawn(move || timer_thread(deadline, state));
         if spawn_result.is_err() {
-            std::process::abort();
+            log::warn!("claw_timer thread spawn failed; skipping backoff sleep");
+            return false;
         }
+        true
     }
 }
 
@@ -93,7 +98,11 @@ impl Future for EspIdfSleep<'_> {
         }
 
         *lock(&self.state.waker) = Some(context.waker().clone());
-        self.start();
+        if !self.start() {
+            // Could not spawn the backoff thread; resolve as completed so the
+            // retry proceeds without waiting rather than stalling forever.
+            return Poll::Ready(SleepOutcome::Completed);
+        }
         Poll::Pending
     }
 }

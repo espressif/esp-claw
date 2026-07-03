@@ -19,7 +19,7 @@ fn main() -> anyhow::Result<()> {
         conversation_id,
         TranscriptConfig::new("/data/conversations"),
         MemFs::new(),
-    );
+    )?;
 
     // One turn = one `group()`. The whole turn commits as a single record when
     // the guard drops at the end of the scope.

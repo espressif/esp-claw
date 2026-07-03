@@ -33,7 +33,7 @@ fn main() {
 
     let action = Action::new("write_file", RiskClass::Moderate)
         .with_resource(Resource::Path("/data/report.txt".into()));
-    let request = PermissionRequest::new(7, "worker", &action);
+    let request = PermissionRequest::new(&action);
     println!("signature: {}\n", action.signature());
 
     // 1. First attempt — nothing recorded, so the policy asks.
@@ -53,7 +53,7 @@ fn main() {
     // A denial works the same way: the reason flows back to the model.
     let risky = Action::new("delete_file", RiskClass::High)
         .with_resource(Resource::Path("/data/report.txt".into()));
-    let risky_request = PermissionRequest::new(7, "worker", &risky);
+    let risky_request = PermissionRequest::new(&risky);
     grants.deny(risky.signature(), "destructive, never auto-run");
     let denied = resolve(&policy, &grants, &risky_request);
     println!("\ndelete_file (after denial): {denied:?}");

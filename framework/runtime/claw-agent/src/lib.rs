@@ -1,7 +1,8 @@
 //! `claw_agent` — the concise external interface to the claw agent system.
 //!
 //! Everything under `rust/` (the orchestrator, the agent factory, channels,
-//! memory, and the LLM client) is wired together here behind one small surface:
+//! scratch memory, and the LLM client) is wired together here behind one small
+//! surface:
 //!
 //! - [`AgentSystem`] is a ready-to-drive agent runtime. Build it with the
 //!   host-backend [`AgentSystem::on_disk`] (real disk memory + live HTTP,
@@ -46,6 +47,7 @@
 //!     chat_id: "chat".into(),
 //!     sender_id: None,
 //!     text: "hello".into(),
+//!     ..Default::default()
 //! }).await?;
 //! # Ok(())
 //! # }
@@ -58,9 +60,10 @@ mod channel_router;
 use std::sync::Arc;
 
 use channel_router::ChannelRouter;
-use claw_core::agent::{AgentResolver, FsAgentFactory, FsAgentFactoryError};
+use claw_capability::init_tool_executor;
+use claw_core::agent::{AgentResolver, FsAgentFactoryError};
 use claw_core::Orchestrator;
-use claw_interface::{ClawHttp, ClawTimer};
+use claw_interface::{ClawHttp, ClawThread, ClawTimer, FsError};
 #[cfg(feature = "host-backends")]
 use claw_interface::{RealHttp, StdThread, TokioTimer};
 
@@ -74,29 +77,41 @@ pub use claw_capability::{
     Capability, CapabilityError, CapabilityGroup, CapabilityRole, CapabilityState, ChannelAdapter,
     ChannelFuture, ChannelRuntime, InboundMessage, Lifecycle, OutboundMessage, Registry,
 };
-pub use claw_core::{DeliverError, SessionError, SessionId, SessionRecord};
-pub use claw_interface::ClawFs;
-pub use claw_tool::{
-    init_tool_executor, tool_metadata, AsyncToolHandler, Tool, ToolError, ToolFuture, ToolHandler,
-    ToolInvocation, ToolInvokeError, ToolOutput, ToolRetryCount,
+// The tool-authoring vocabulary, re-exported *through* `claw_capability` (not
+// `claw_tool`). A caller builds a Tool capability by implementing one of these
+// handler traits, wrapping it with `Tool::new` / `Tool::new_async`, and handing
+// that to `Capability::from_tool`; the rest of the tool framework (`ToolSet`, the
+// executor) stays internal.
+pub use claw_capability::{
+    tool_metadata, AsyncToolHandler, Tool, ToolError, ToolFuture, ToolHandler, ToolInvocation,
+    ToolInvokeError, ToolOutput, ToolRetryCount,
 };
+pub use claw_core::{
+    DeliverError, DeliveryKind, DriveStop, SessionBinding, SessionControl, SessionError, SessionId,
+    SessionRecord,
+};
+pub use claw_interface::ClawFs;
 // The on-disk filesystem backend is a host-target convenience; device builds
-// inject their own `ClawFs` through `AgentSystem::new::<F, H, Timer>(...)`.
+// inject their own `ClawFs` through `AgentSystem::<F, H, Timer>::new::<Thread>(...)`.
 #[cfg(feature = "host-backends")]
 pub use claw_interface::DiskFs;
 
-/// Explicit persistence root for an [`AgentSystem`].
+#[cfg(feature = "host-backends")]
+pub type HostAgentSystem = AgentSystem<DiskFs, RealHttp, TokioTimer>;
+
+/// Explicit storage root for an [`AgentSystem`].
 ///
-/// Callers provide one directory. The agent system owns the layout below it:
-/// transcripts live under `sessions`, editable profile documents under
-/// `profile`, and long-term memory under `long_term`.
+/// Callers provide one directory. The agent system clears it on construction and
+/// owns the layout below it for the running process: transcripts live under
+/// `sessions`, editable profile documents under `profile`, and long-term memory
+/// under `long_term`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentPersistenceConfig {
     dir: String,
 }
 
 impl AgentPersistenceConfig {
-    /// Build persistence config from the required root directory.
+    /// Build storage config from the required root directory.
     pub fn new(dir: &str) -> Self {
         Self {
             dir: dir.to_string(),
@@ -107,15 +122,12 @@ impl AgentPersistenceConfig {
 /// What can go wrong while building an [`AgentSystem`].
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
-    /// No persistence directory was provided.
-    #[error("persistence directory is required")]
+    /// No storage directory was provided.
+    #[error("agent storage directory is required")]
     MissingPersistenceDir,
     /// The fixed tool-call executor could not start.
     #[error("failed to start the tool executor: {0}")]
     ToolExecutor(#[source] std::io::Error),
-    /// The shared conversation-compaction LLM client failed to init.
-    #[error("failed to initialize the compaction LLM client: {0}")]
-    CompactorLlm(String),
     /// The dedicated extraction LLM client (for long-term memory) failed to init.
     #[error("failed to initialize the extraction LLM client: {0}")]
     ExtractionLlm(String),
@@ -125,14 +137,24 @@ pub enum AgentError {
     /// Two registered channel capabilities used the same id.
     #[error("duplicate channel id: {0}")]
     DuplicateChannel(String),
+    /// A long-term memory journal exists but could not be read at startup.
+    #[error("failed to load long-term memory: {0}")]
+    LongTermInit(String),
+    /// The scratch storage root could not be cleared before startup.
+    #[error("failed to clear agent storage at {path}: {source}")]
+    StorageClear {
+        path: String,
+        #[source]
+        source: FsError,
+    },
 }
 
 impl From<FsAgentFactoryError> for AgentError {
     fn from(error: FsAgentFactoryError) -> Self {
         match error {
             FsAgentFactoryError::MissingPersistenceDir => Self::MissingPersistenceDir,
-            FsAgentFactoryError::CompactorLlm(message) => Self::CompactorLlm(message),
             FsAgentFactoryError::ExtractionLlm(message) => Self::ExtractionLlm(message),
+            FsAgentFactoryError::LongTermInit(source) => Self::LongTermInit(source.to_string()),
         }
     }
 }
@@ -142,95 +164,114 @@ impl From<FsAgentFactoryError> for AgentError {
 /// Wraps a channel router plus a `claw_core::Orchestrator`. Registered channel
 /// capabilities are opened through [`start`](AgentSystem::start); event-router
 /// style direct submissions use [`push_message`](AgentSystem::push_message).
-pub struct AgentSystem {
+pub struct AgentSystem<F, H, Timer>
+where
+    F: ClawFs + Clone + Default + 'static,
+    H: ClawHttp + Default + 'static,
+    Timer: ClawTimer + Default + 'static,
+{
     registry: Arc<Registry>,
-    router: Arc<ChannelRouter>,
+    router: Arc<ChannelRouter<F, H, Timer>>,
 }
 
-impl AgentSystem {
+impl<F, H, Timer> AgentSystem<F, H, Timer>
+where
+    F: ClawFs + Clone + Default + 'static,
+    H: ClawHttp + Default + 'static,
+    Timer: ClawTimer + Default + 'static,
+{
     /// Build a fully injectable agent system. Use this for device builds, tests,
     /// or custom backends; for the common host case prefer
     /// [`AgentSystem::on_disk`].
     ///
-    /// `F` is the concrete [`ClawFs`] backing all persistence (conversation and
-    /// long-term memory) and `H` is the concrete async HTTP transport every LLM
-    /// client speaks through. The system constructs both internally via
-    /// [`Default`], so callers choose them by *type* — [`DiskFs`] +
-    /// [`RealHttp`] on a host, in-memory/scripted doubles in tests — and
-    /// never pass an instance; pair `F` with
-    /// the required [`AgentPersistenceConfig`], which fixes where files land.
-    /// A [`Registry`] is also required; pass an empty registry when no external
-    /// capabilities are available. Each minted client (one per agent, plus the
-    /// compaction and extraction clients) gets its own `H::default()` and
-    /// `Timer::default()`.
-    /// Custom runtimes that drive tools must also initialize the fixed tool
-    /// executor once at boot with [`init_tool_executor`] and their platform
-    /// `ClawThread` backend; [`on_disk`](AgentSystem::on_disk) does this for the
-    /// host-backends path.
+    /// `F` is the concrete [`ClawFs`] backing the agent system's scratch storage
+    /// (conversation transcripts and long-term memory) and `H` is the concrete
+    /// async HTTP transport every LLM client speaks through. The system constructs
+    /// both internally via [`Default`], so callers choose them by *type* —
+    /// [`DiskFs`] + [`RealHttp`] on a host, in-memory/scripted doubles in tests —
+    /// and never pass an instance; pair `F` with the required
+    /// [`AgentPersistenceConfig`], which fixes where files land. The storage root
+    /// is cleared before any agent/session state is built, so the current runtime
+    /// does not resume sessions across boot. A [`Registry`] is also required; pass
+    /// an empty registry when no external capabilities are available. Each minted
+    /// client (one per agent, plus the extraction client) gets its own
+    /// `H::default()` and `Timer::default()`.
+    ///
+    /// The fixed tool executor is initialized here from `Thread::default()`, so
+    /// callers never touch it directly — the tool framework stays an internal
+    /// detail of the agent system.
     ///
     /// # Errors
     ///
-    /// Returns [`AgentError::MissingPersistenceDir`] when the required
-    /// persistence root is blank;
-    /// [`AgentError::CompactorLlm`] / [`AgentError::ExtractionLlm`] if an
-    /// internal LLM client fails to init.
-    pub fn new<F, H, Timer>(
+    /// Returns [`AgentError::MissingPersistenceDir`] when the required storage
+    /// root is blank; [`AgentError::StorageClear`] if boot cleanup fails;
+    /// [`AgentError::ToolExecutor`] if the tool executor thread cannot start;
+    /// [`AgentError::ExtractionLlm`] if the extraction LLM client fails to init.
+    pub fn new<Thread>(
         llm_config: ClawApiConfig,
         persistence: AgentPersistenceConfig,
         registry: Arc<Registry>,
     ) -> Result<Self, AgentError>
     where
-        F: ClawFs + Clone + Default + 'static,
-        H: ClawHttp + Default + 'static,
-        Timer: ClawTimer + Default + 'static,
+        Thread: ClawThread + Default + 'static,
     {
         let persistence_dir = persistence.dir;
         if persistence_dir.trim().is_empty() {
             return Err(AgentError::MissingPersistenceDir);
         }
+        let storage = F::default();
+        clear_storage_tree(&storage, &persistence_dir)?;
+
+        // Own the fixed tool executor from within the system so callers never
+        // initialize global tool state themselves. Idempotent: a repeated init
+        // (e.g. multiple systems in one process) is a no-op.
+        init_tool_executor(Thread::default()).map_err(AgentError::ToolExecutor)?;
         // The capability registry is the source of truth for tools and channel
         // transports.
         let resolver: Arc<dyn AgentResolver> =
             Arc::new(RegistryResolver::new(Arc::clone(&registry)));
 
-        let factory = Arc::new(FsAgentFactory::<F, H, Timer>::new(
-            resolver,
-            llm_config,
-            &persistence_dir,
-        )?);
-
-        let orchestrator = Orchestrator::new(factory);
+        let orchestrator =
+            Orchestrator::<F, H, Timer>::new(resolver, llm_config, &persistence_dir)?;
         let router = ChannelRouter::new(orchestrator, registry.as_ref())?;
 
         Ok(Self { registry, router })
     }
+}
 
+#[cfg(feature = "host-backends")]
+impl AgentSystem<DiskFs, RealHttp, TokioTimer> {
     /// Build a host-target agent system backed by real disk memory and live HTTP
     /// transport.
     ///
-    /// `persistence` provides the agent system's root persistence directory.
-    /// The system derives its internal layout below that root. `registry`
-    /// supplies every device capability/channel; pass an empty registry when no
-    /// capabilities should be exposed.
+    /// `persistence` provides the agent system's root storage directory. The
+    /// system clears it on construction and derives its internal layout below
+    /// that root. `registry` supplies every device capability/channel; pass an
+    /// empty registry when no capabilities should be exposed.
     ///
     /// Host-target convenience (requires the `host-backends` feature): it
     /// constructs the [`DiskFs`] / [`RealHttp`] / [`StdThread`] backends
     /// directly. Device builds use
-    /// [`AgentSystem::new::<F, H, Timer>(...)`](Self::new) with injected
-    /// ESP-IDF backends instead.
+    /// [`AgentSystem::<F, H, Timer>::new::<Thread>(...)`](Self::new) with
+    /// injected ESP-IDF backends instead.
     ///
     /// # Errors
     ///
-    #[cfg(feature = "host-backends")]
     pub fn on_disk(
         llm: ClawApiConfig,
         persistence: AgentPersistenceConfig,
         registry: Arc<Registry>,
-    ) -> Result<AgentSystem, AgentError> {
-        init_tool_executor(StdThread).map_err(AgentError::ToolExecutor)?;
-        AgentSystem::new::<DiskFs, RealHttp, TokioTimer>(llm, persistence, registry)
+    ) -> Result<Self, AgentError> {
+        Self::new::<StdThread>(llm, persistence, registry)
     }
+}
 
+impl<F, H, Timer> AgentSystem<F, H, Timer>
+where
+    F: ClawFs + Clone + Default + 'static,
+    H: ClawHttp + Default + 'static,
+    Timer: ClawTimer + Default + 'static,
+{
     /// Open all registered channels and start capability lifecycles.
     ///
     /// # Errors
@@ -291,6 +332,80 @@ impl AgentSystem {
         self.router.push_message(message).await
     }
 
+    /// Resolve the session an inbound message routes to (recording its reply
+    /// route). Lets a concurrent driver learn the target session before starting
+    /// an interruptible drive so it can match follow-up messages to it.
+    ///
+    /// # Errors
+    ///
+    /// [`CapabilityError::InvalidArg`] for an ill-formed message, or
+    /// [`CapabilityError::NotFound`] when the channel is unknown or the chat is
+    /// not bound to a session.
+    pub fn resolve_session(&self, message: &InboundMessage) -> Result<SessionId, CapabilityError> {
+        self.router.resolve_session(message)
+    }
+
+    /// Deliver `message` to its resolved `session` under an out-of-band
+    /// [`SessionControl`], driving interruptibly. Returns why the drive stopped
+    /// so the caller can run the interrupt/cancel continuation.
+    ///
+    /// # Errors
+    ///
+    /// Maps [`DeliverError`] to [`CapabilityError`].
+    pub async fn deliver_controlled(
+        &self,
+        session: SessionId,
+        message: InboundMessage,
+        kind: DeliveryKind,
+        control: &SessionControl,
+    ) -> Result<DriveStop, CapabilityError> {
+        self.router
+            .deliver_controlled(session, message, kind, control)
+            .await
+    }
+
+    /// Continue a gracefully-interrupted `session` with `message` (the
+    /// interrupting input), driving interruptibly.
+    ///
+    /// # Errors
+    ///
+    /// Maps [`DeliverError`] to [`CapabilityError`].
+    pub async fn continue_interrupted(
+        &self,
+        session: SessionId,
+        message: InboundMessage,
+        control: &SessionControl,
+    ) -> Result<DriveStop, CapabilityError> {
+        self.router
+            .continue_interrupted(session, message, control)
+            .await
+    }
+
+    /// Submit `message` with [`DeliveryKind::Interrupt`]. In-flight effect (cutting
+    /// a running drive short) requires the concurrent worker; a serial caller sees
+    /// this as an ordinary append when nothing is running.
+    ///
+    /// # Errors
+    ///
+    /// See [`push_message`](Self::push_message).
+    pub async fn interrupt(&self, message: InboundMessage) -> Result<(), CapabilityError> {
+        self.router
+            .push_with_kind(message, DeliveryKind::Interrupt)
+            .await
+    }
+
+    /// Submit `message` with [`DeliveryKind::Cancel`], superseding any active task
+    /// in the resolved session before this message starts a fresh one.
+    ///
+    /// # Errors
+    ///
+    /// See [`push_message`](Self::push_message).
+    pub async fn cancel(&self, message: InboundMessage) -> Result<(), CapabilityError> {
+        self.router
+            .push_with_kind(message, DeliveryKind::Cancel)
+            .await
+    }
+
     /// Create a fresh, isolated conversation session and return its id.
     pub fn new_session(&self) -> SessionId {
         self.router.new_session()
@@ -327,5 +442,66 @@ impl AgentSystem {
     /// Returns [`SessionError::NotFound`] when `session` is not live.
     pub fn delete_session(&self, session: SessionId) -> Result<(), CapabilityError> {
         self.router.delete_session(session)
+    }
+}
+
+fn join_storage_path(parent: &str, child: &str) -> String {
+    if parent == "/" {
+        return format!("/{child}");
+    }
+    let parent = parent.trim_end_matches('/');
+    if parent.is_empty() {
+        child.to_string()
+    } else {
+        format!("{parent}/{child}")
+    }
+}
+
+fn clear_storage_tree<F: ClawFs>(fs: &F, path: &str) -> Result<(), AgentError> {
+    match fs.list_dir(path) {
+        Ok(entries) => {
+            for entry in entries {
+                let child = join_storage_path(path, &entry);
+                clear_storage_tree(fs, &child)?;
+            }
+            // `ClawFs` has no portable directory-delete operation. Removing the
+            // exact path clears flat backends when this is a file key; directory
+            // errors are ignored after their contents have been removed.
+            let _ = fs.remove(path);
+            Ok(())
+        }
+        Err(FsError::NotFound) => fs.remove(path).map_err(|source| AgentError::StorageClear {
+            path: path.to_string(),
+            source,
+        }),
+        Err(source) => Err(AgentError::StorageClear {
+            path: path.to_string(),
+            source,
+        }),
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use claw_interface::MemFs;
+
+    use super::*;
+
+    #[test]
+    fn clear_storage_tree_removes_nested_files() {
+        let fs = MemFs::default();
+        fs.write_atomic("/agent/sessions/roots/conversation-1.jsonl", b"root")
+            .unwrap();
+        fs.write_atomic("/agent/sessions/agents/conversation-2.jsonl", b"sub")
+            .unwrap();
+        fs.write_atomic("/agent/profile/user.md", b"profile")
+            .unwrap();
+
+        clear_storage_tree(&fs, "/agent").unwrap();
+
+        assert!(!fs.exists("/agent/sessions/roots/conversation-1.jsonl"));
+        assert!(!fs.exists("/agent/sessions/agents/conversation-2.jsonl"));
+        assert!(!fs.exists("/agent/profile/user.md"));
     }
 }

@@ -17,6 +17,8 @@ use crate::capability::{Capability, CapabilityGroup};
 use crate::channel::ChannelAdapter;
 use crate::error::CapabilityError;
 use crate::lifecycle::{CapabilityState, Lifecycle};
+use crate::observer::{CapabilityChange, CapabilityObserver};
+use crate::state_store::CapabilityStateStore;
 
 /// One registered capability plus its bookkeeping.
 struct MemberEntry {
@@ -40,6 +42,10 @@ struct RegistryState {
     groups: HashMap<String, GroupEntry>,
     members: HashMap<String, MemberEntry>,
     started: bool,
+    /// Consumers notified after each mutation (empty = nobody listening).
+    observers: Vec<Arc<dyn CapabilityObserver>>,
+    /// Durable enable/disable deny-list backing, if injected.
+    store: Option<Arc<dyn CapabilityStateStore>>,
 }
 
 impl RegistryState {
@@ -105,6 +111,102 @@ impl Registry {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    // --- Wiring: observers & persistence (dependency-injected) ----------
+
+    /// Attach a [`CapabilityObserver`] before sharing the registry (builder form).
+    ///
+    /// The observer is notified (lock released) after every real mutation. For an
+    /// already-shared `Arc<Registry>`, use [`add_observer`](Self::add_observer).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::{Arc, Mutex};
+    /// use claw_capability::{CapabilityChange, CapabilityObserver, Registry};
+    ///
+    /// #[derive(Default)]
+    /// struct Log(Mutex<Vec<CapabilityChange>>);
+    /// impl CapabilityObserver for Log {
+    ///     fn on_change(&self, change: &CapabilityChange) {
+    ///         self.0.lock().expect("lock").push(change.clone());
+    ///     }
+    /// }
+    ///
+    /// let registry = Registry::new().with_observer(Arc::new(Log::default()));
+    /// let _ = registry; // register capabilities to see events.
+    /// ```
+    #[must_use]
+    pub fn with_observer(self, observer: Arc<dyn CapabilityObserver>) -> Self {
+        self.add_observer(observer);
+        self
+    }
+
+    /// Attach a [`CapabilityObserver`] to an already-shared registry.
+    pub fn add_observer(&self, observer: Arc<dyn CapabilityObserver>) {
+        self.state().observers.push(observer);
+    }
+
+    /// Set the [`CapabilityStateStore`] the registry persists its enable/disable
+    /// deny-list through (builder form).
+    ///
+    /// Set it before [`start_all`](Self::start_all) so the persisted overlay is
+    /// applied at bring-up. See [`CapabilityStateStore`] for an example.
+    #[must_use]
+    pub fn with_state_store(self, store: Arc<dyn CapabilityStateStore>) -> Self {
+        self.state().store = Some(store);
+        self
+    }
+
+    /// Fire `change` on every observer with **no** registry lock held, so a
+    /// callback may read back from the registry without deadlocking (the `Arc`
+    /// clones are cheap).
+    fn notify(&self, change: CapabilityChange) {
+        let observers = self.state().observers.clone();
+        for observer in &observers {
+            observer.on_change(&change);
+        }
+    }
+
+    fn store(&self) -> Option<Arc<dyn CapabilityStateStore>> {
+        self.state().store.clone()
+    }
+
+    /// The persisted disabled deny-list (empty when no store is set).
+    fn load_persisted_disabled(&self) -> Result<Vec<String>, CapabilityError> {
+        match self.store() {
+            Some(store) => store.load(),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Ensure `group_id` is absent from the persisted deny-list (enable intent);
+    /// writes only when it was present.
+    fn persist_enabled(&self, group_id: &str) -> Result<(), CapabilityError> {
+        let Some(store) = self.store() else {
+            return Ok(());
+        };
+        let mut disabled = store.load()?;
+        if let Some(position) = disabled.iter().position(|id| id == group_id) {
+            disabled.remove(position);
+            store.save(&disabled)?;
+        }
+        Ok(())
+    }
+
+    /// Ensure `group_id` is present in the persisted deny-list (disable intent);
+    /// writes only when it was absent.
+    fn persist_disabled(&self, group_id: &str) -> Result<(), CapabilityError> {
+        let Some(store) = self.store() else {
+            return Ok(());
+        };
+        let mut disabled = store.load()?;
+        if !disabled.iter().any(|id| id == group_id) {
+            disabled.push(group_id.to_string());
+            store.save(&disabled)?;
+        }
+        Ok(())
+    }
+
     // --- Registration ---------------------------------------------------
 
     /// Register a single capability as a one-member group keyed by its id.
@@ -159,10 +261,11 @@ impl Registry {
         };
 
         if was_started {
-            if let Err(error) = self.enable_group(&group_id) {
+            if let Err(error) = self.enable_core(&group_id) {
                 return Err(self.rollback_failed_registration(&group_id, error));
             }
         }
+        self.notify(CapabilityChange::Registered(group_id));
         Ok(())
     }
 
@@ -171,7 +274,7 @@ impl Registry {
         group_id: &str,
         enable_error: CapabilityError,
     ) -> CapabilityError {
-        match self.unregister_group(group_id) {
+        match self.unregister_group_core(group_id) {
             Ok(()) => enable_error,
             Err(rollback_error) => CapabilityError::Failed(format!(
                 "enable failed: {enable_error}; rollback failed: {rollback_error}"
@@ -211,10 +314,20 @@ impl Registry {
     ///
     /// Returns the first enable error encountered, after attempting all groups.
     pub fn start_all(&self) -> Result<(), CapabilityError> {
+        // Apply the persisted enable/disable overlay before deciding what to bring
+        // up: any registered group the operator previously disabled is marked
+        // `Disabled` so the enable loop skips it. Loaded with no lock held (it may
+        // touch the filesystem).
+        let persisted_disabled = self.load_persisted_disabled()?;
         let to_enable: Vec<String> = {
             let mut state = self.state();
             if state.started {
                 return Ok(());
+            }
+            for group_id in &persisted_disabled {
+                if state.groups.contains_key(group_id) {
+                    Self::set_group_state(&mut state, group_id, CapabilityState::Disabled);
+                }
             }
             state.started = true;
             state
@@ -226,7 +339,7 @@ impl Registry {
         };
         let mut first_error = None;
         for group_id in to_enable {
-            if let Err(error) = self.enable_group(&group_id) {
+            if let Err(error) = self.enable_core(&group_id) {
                 first_error.get_or_insert(error);
             }
         }
@@ -248,7 +361,7 @@ impl Registry {
         };
         let mut first_error = None;
         for group_id in to_disable {
-            if let Err(error) = self.disable_group(&group_id) {
+            if let Err(error) = self.disable_core(&group_id) {
                 first_error.get_or_insert(error);
             }
         }
@@ -260,9 +373,38 @@ impl Registry {
     /// `Started`. If the registry is not yet started, only marks it `Registered`
     /// (lifecycle runs later, at [`start_all`](Registry::start_all)).
     ///
-    /// On any lifecycle failure the group is left `Disabled` and the error is
-    /// propagated.
+    /// On success the group is removed from the persisted disabled deny-list (if a
+    /// [`CapabilityStateStore`](crate::CapabilityStateStore) is set) and any
+    /// [`CapabilityObserver`](crate::CapabilityObserver) is notified of the state
+    /// change. On a lifecycle failure the group is left `Disabled` and the error
+    /// is propagated (no persistence, no notification).
+    ///
+    /// # Errors
+    ///
+    /// - [`CapabilityError::NotFound`] if `group_id` is unknown.
+    /// - A `Lifecycle` hook failure from `init`/`start`, propagated unchanged.
+    /// - [`CapabilityError::Persistence`] if the deny-list write fails after the
+    ///   group was already enabled in memory.
     pub fn enable_group(&self, group_id: &str) -> Result<(), CapabilityError> {
+        let before = self.group_state(group_id).ok();
+        self.enable_core(group_id)?;
+        let after = self.group_state(group_id).ok();
+        self.persist_enabled(group_id)?;
+        if before != after {
+            if let Some(state) = after {
+                self.notify(CapabilityChange::StateChanged {
+                    group_id: group_id.to_string(),
+                    state,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// The lifecycle work of [`enable_group`](Self::enable_group), without
+    /// persistence or observer notification. Used by [`start_all`](Self::start_all)
+    /// and [`register_group`](Self::register_group).
+    fn enable_core(&self, group_id: &str) -> Result<(), CapabilityError> {
         let plan = {
             let mut state = self.state();
             let group = state
@@ -339,9 +481,39 @@ impl Registry {
     }
 
     /// Disable a group: run member then group `stop` (best-effort, reverse
-    /// order), and mark it `Disabled`. The first stop error is returned after
-    /// teardown completes.
+    /// order), and mark it `Disabled`.
+    ///
+    /// On success the group is added to the persisted disabled deny-list (if a
+    /// [`CapabilityStateStore`](crate::CapabilityStateStore) is set) and any
+    /// [`CapabilityObserver`](crate::CapabilityObserver) is notified. The first
+    /// stop error is returned after teardown completes.
+    ///
+    /// # Errors
+    ///
+    /// - [`CapabilityError::NotFound`] if `group_id` is unknown.
+    /// - The first `stop` hook failure, if any.
+    /// - [`CapabilityError::Persistence`] if the deny-list write fails after the
+    ///   group was already disabled in memory.
     pub fn disable_group(&self, group_id: &str) -> Result<(), CapabilityError> {
+        let before = self.group_state(group_id).ok();
+        self.disable_core(group_id)?;
+        let after = self.group_state(group_id).ok();
+        self.persist_disabled(group_id)?;
+        if before != after {
+            if let Some(state) = after {
+                self.notify(CapabilityChange::StateChanged {
+                    group_id: group_id.to_string(),
+                    state,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// The teardown work of [`disable_group`](Self::disable_group), without
+    /// persistence or observer notification. Used by [`stop_all`](Self::stop_all)
+    /// and [`unregister_group`](Self::unregister_group).
+    fn disable_core(&self, group_id: &str) -> Result<(), CapabilityError> {
         let (group_lifecycle, member_lifecycles) = {
             let mut state = self.state();
             let group = state
@@ -384,11 +556,31 @@ impl Registry {
     /// Disable then remove a group and all its members, running the one-time
     /// `deinit` teardown (members then group, reverse order) for any whose
     /// `init` previously ran.
+    ///
+    /// On removal any [`CapabilityObserver`](crate::CapabilityObserver) is notified
+    /// with [`CapabilityChange::Unregistered`](crate::CapabilityChange). Unregister
+    /// does **not** touch the persisted disabled deny-list: a stale id left there
+    /// is ignored at the next [`start_all`](Self::start_all) and pruned on the next
+    /// enable/disable write.
+    ///
+    /// # Errors
+    ///
+    /// [`CapabilityError::NotFound`] if `group_id` is unknown; otherwise the first
+    /// `stop`/`deinit` hook failure.
     pub fn unregister_group(&self, group_id: &str) -> Result<(), CapabilityError> {
+        let existed = self.group_exists(group_id);
+        let result = self.unregister_group_core(group_id);
+        if existed && !self.group_exists(group_id) {
+            self.notify(CapabilityChange::Unregistered(group_id.to_string()));
+        }
+        result
+    }
+
+    fn unregister_group_core(&self, group_id: &str) -> Result<(), CapabilityError> {
         if !self.state().groups.contains_key(group_id) {
             return Err(CapabilityError::NotFound);
         }
-        let disable_result = self.disable_group(group_id);
+        let disable_result = self.disable_core(group_id);
 
         // Remove from the registry and collect the deinit hooks owed (init ran).
         let (group_deinit, member_deinits) = {
@@ -471,32 +663,20 @@ impl Registry {
         }
     }
 
-    // --- Queries --------------------------------------------------------
+    // --- Queries (crate-internal; lifecycle drivers read these) ---------
 
     /// Whether a group is registered.
-    pub fn group_exists(&self, group_id: &str) -> bool {
+    pub(crate) fn group_exists(&self, group_id: &str) -> bool {
         self.state().groups.contains_key(group_id)
     }
 
-    /// Whether a capability is registered.
-    pub fn contains(&self, id: &str) -> bool {
-        self.state().members.contains_key(id)
-    }
-
     /// Current lifecycle state of a group.
-    pub fn group_state(&self, group_id: &str) -> Result<CapabilityState, CapabilityError> {
+    pub(crate) fn group_state(&self, group_id: &str) -> Result<CapabilityState, CapabilityError> {
         self.state()
             .groups
             .get(group_id)
             .map(|group| group.state)
             .ok_or(CapabilityError::NotFound)
-    }
-
-    /// Current lifecycle state of a capability (inherited from its group).
-    pub fn state_of(&self, id: &str) -> Result<CapabilityState, CapabilityError> {
-        let state = self.state();
-        let member = state.members.get(id).ok_or(CapabilityError::NotFound)?;
-        Ok(state.member_group_state(member))
     }
 
     // --- Role-based access (the internal representations) ----------------
@@ -514,15 +694,18 @@ impl Registry {
             .collect()
     }
 
-    /// One [`Tool`] by capability id, if it is an available tool capability.
-    pub fn tool(&self, id: &str) -> Option<Tool> {
+    /// One available tool-role [`Capability`] by id.
+    ///
+    /// Hands back the whole [`Capability`] (which `claw-core` decomposes into its
+    /// internal `Tool` via [`CapabilityRole`](crate::CapabilityRole)) so the
+    /// resolver seam never names the tool framework directly. Returns `None` for
+    /// an unknown id, a disabled group, or a non-tool role.
+    pub fn tool_capability(&self, id: &str) -> Option<Capability> {
         let state = self.state();
         let member = state.members.get(id)?;
-        state
-            .member_group_state(member)
-            .is_available(state.started)
-            .then(|| member.capability.as_tool().cloned())
-            .flatten()
+        (state.member_group_state(member).is_available(state.started)
+            && member.capability.as_tool().is_some())
+        .then(|| member.capability.clone())
     }
 
     /// Every available [`Channel`](crate::CapabilityRole::Channel)-role adapter.
@@ -535,17 +718,6 @@ impl Registry {
             .filter_map(|member| member.capability.as_channel().cloned())
             .collect()
     }
-
-    /// One [`ChannelAdapter`] by capability id, if it is an available channel.
-    pub fn channel(&self, id: &str) -> Option<Arc<dyn ChannelAdapter>> {
-        let state = self.state();
-        let member = state.members.get(id)?;
-        state
-            .member_group_state(member)
-            .is_available(state.started)
-            .then(|| member.capability.as_channel().cloned())
-            .flatten()
-    }
 }
 
 #[cfg(test)]
@@ -557,12 +729,15 @@ mod tests {
     use std::task::{Wake, Waker};
 
     use claw_tool::{
-        AsyncToolHandler, Tool, ToolFuture, ToolHandler, ToolInvocation, ToolInvokeError,
-        ToolOutput,
+        AsyncToolHandler, ToolFuture, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
     };
 
+    use std::sync::Weak;
+
+    use claw_interface::{ClawFs, MemFs};
+
     use super::*;
-    use crate::{Capability, CapabilityRole, ChannelRuntime, OutboundMessage};
+    use crate::{Capability, ChannelRuntime, FsCapabilityStateStore, OutboundMessage};
 
     /// A trivial tool whose id/name is `name`.
     struct DummyTool {
@@ -571,11 +746,11 @@ mod tests {
     }
 
     impl DummyTool {
-        fn tool(name: &str) -> Tool {
-            Tool::new(Self {
+        fn named(name: &str) -> Self {
+            Self {
                 schema: format!(r#"{{"type":"function","function":{{"name":"{name}"}}}}"#),
                 name: name.to_string(),
-            })
+            }
         }
     }
 
@@ -724,17 +899,63 @@ mod tests {
         }
     }
 
+    /// Records every change the registry pushes to it.
+    #[derive(Default)]
+    struct RecordingObserver {
+        changes: Mutex<Vec<CapabilityChange>>,
+    }
+    impl CapabilityObserver for RecordingObserver {
+        fn on_change(&self, change: &CapabilityChange) {
+            self.changes.lock().unwrap().push(change.clone());
+        }
+    }
+
+    /// Reads back from the registry inside the callback — hangs if `notify` still
+    /// holds the registry lock when it fires.
+    #[derive(Default)]
+    struct ReentrantObserver {
+        registry: Mutex<Weak<Registry>>,
+        tool_counts: Mutex<Vec<usize>>,
+    }
+    impl CapabilityObserver for ReentrantObserver {
+        fn on_change(&self, _change: &CapabilityChange) {
+            if let Some(registry) = self.registry.lock().unwrap().upgrade() {
+                let count = registry.tools().len();
+                self.tool_counts.lock().unwrap().push(count);
+            }
+        }
+    }
+
+    /// A store whose `save` always fails, to prove persistence errors propagate.
+    struct FailingStore;
+    impl CapabilityStateStore for FailingStore {
+        fn load(&self) -> Result<Vec<String>, CapabilityError> {
+            Ok(Vec::new())
+        }
+        fn save(&self, _disabled_groups: &[String]) -> Result<(), CapabilityError> {
+            Err(CapabilityError::Persistence("disk full".into()))
+        }
+    }
+
+    fn fs_store(fs: MemFs, path: &str) -> Arc<dyn CapabilityStateStore> {
+        Arc::new(FsCapabilityStateStore::new(fs, path.to_string()))
+    }
+
     #[test]
     fn register_then_expose_tool() {
         let registry = Registry::new();
         registry
-            .register(Capability::tool(DummyTool::tool("echo")))
+            .register(Capability::from_tool(Tool::new(DummyTool::named("echo"))))
             .unwrap();
         registry.start_all().unwrap();
 
-        assert!(registry.contains("echo"));
+        assert!(registry.tool_capability("echo").is_some());
         assert_eq!(registry.tools().len(), 1);
-        let tool = registry.tool("echo").unwrap();
+        let tool = registry
+            .tools()
+            .into_iter()
+            .find(|tool| tool.name() == "echo")
+            .unwrap();
         let output = tool
             .invoke(&ToolInvocation {
                 id: None,
@@ -751,12 +972,18 @@ mod tests {
 
         let registry = Registry::new();
         registry
-            .register(Capability::async_tool(AsyncDummyTool::new("async_echo")))
+            .register(Capability::from_tool(Tool::new_async(AsyncDummyTool::new(
+                "async_echo",
+            ))))
             .unwrap();
         registry.start_all().unwrap();
 
         assert_eq!(registry.tools().len(), 1);
-        let tool = registry.tool("async_echo").unwrap();
+        let tool = registry
+            .tools()
+            .into_iter()
+            .find(|tool| tool.name() == "async_echo")
+            .unwrap();
         let output = block_on(tool.invoke_async(&ToolInvocation {
             id: None,
             name: "async_echo",
@@ -770,10 +997,10 @@ mod tests {
     fn duplicate_id_conflicts() {
         let registry = Registry::new();
         registry
-            .register(Capability::tool(DummyTool::tool("dup")))
+            .register(Capability::from_tool(Tool::new(DummyTool::named("dup"))))
             .unwrap();
         assert_eq!(
-            registry.register(Capability::tool(DummyTool::tool("dup"))),
+            registry.register(Capability::from_tool(Tool::new(DummyTool::named("dup")))),
             Err(CapabilityError::AlreadyExists)
         );
     }
@@ -784,8 +1011,8 @@ mod tests {
         let group = CapabilityGroup::new(
             "g",
             [
-                Capability::tool(DummyTool::tool("a")),
-                Capability::tool(DummyTool::tool("a")),
+                Capability::from_tool(Tool::new(DummyTool::named("a"))),
+                Capability::from_tool(Tool::new(DummyTool::named("a"))),
             ],
         );
         assert_eq!(
@@ -800,7 +1027,7 @@ mod tests {
         assert_eq!(
             registry.register_group(CapabilityGroup::new(
                 "",
-                [Capability::tool(DummyTool::tool("a"))]
+                [Capability::from_tool(Tool::new(DummyTool::named("a")))]
             )),
             Err(CapabilityError::InvalidArg)
         );
@@ -815,9 +1042,7 @@ mod tests {
         let lifecycle = Arc::new(CountingLifecycle::default());
         let registry = Registry::new();
         registry
-            .register(
-                Capability::new("svc", CapabilityRole::None).with_lifecycle(lifecycle.clone()),
-            )
+            .register(Capability::none("svc").with_lifecycle(lifecycle.clone()))
             .unwrap();
 
         // Not started yet: nothing runs.
@@ -840,9 +1065,7 @@ mod tests {
         let lifecycle = Arc::new(CountingLifecycle::default());
         let registry = Registry::new();
         registry
-            .register(
-                Capability::new("svc", CapabilityRole::None).with_lifecycle(lifecycle.clone()),
-            )
+            .register(Capability::none("svc").with_lifecycle(lifecycle.clone()))
             .unwrap();
         registry.start_all().unwrap();
         registry.disable_group("svc").unwrap();
@@ -868,10 +1091,8 @@ mod tests {
             .register_group(
                 CapabilityGroup::new(
                     "lua",
-                    [
-                        Capability::tool(DummyTool::tool("run"))
-                            .with_lifecycle(member_life.clone()),
-                    ],
+                    [Capability::from_tool(Tool::new(DummyTool::named("run")))
+                        .with_lifecycle(member_life.clone())],
                 )
                 .with_lifecycle(group_life.clone()),
             )
@@ -889,9 +1110,7 @@ mod tests {
         let registry = Registry::new();
         registry.start_all().unwrap();
         registry
-            .register(
-                Capability::new("late", CapabilityRole::None).with_lifecycle(lifecycle.clone()),
-            )
+            .register(Capability::none("late").with_lifecycle(lifecycle.clone()))
             .unwrap();
 
         assert_eq!(lifecycle.start.load(Ordering::SeqCst), 1);
@@ -911,7 +1130,6 @@ mod tests {
             Err(CapabilityError::Failed("boom".into()))
         );
 
-        assert!(!registry.contains("late"));
         assert!(!registry.group_exists("late"));
     }
 
@@ -932,7 +1150,6 @@ mod tests {
             ))
         );
 
-        assert!(!registry.contains("late"));
         assert!(!registry.group_exists("late"));
     }
 
@@ -940,9 +1157,7 @@ mod tests {
     fn failing_start_leaves_group_disabled() {
         let registry = Registry::new();
         registry
-            .register(
-                Capability::new("svc", CapabilityRole::None).with_lifecycle(Arc::new(FailingStart)),
-            )
+            .register(Capability::none("svc").with_lifecycle(Arc::new(FailingStart)))
             .unwrap();
         assert_eq!(
             registry.start_all(),
@@ -959,7 +1174,8 @@ mod tests {
         let registry = Registry::new();
         registry
             .register(
-                Capability::tool(DummyTool::tool("flaky")).with_lifecycle(Arc::new(FailingStart)),
+                Capability::from_tool(Tool::new(DummyTool::named("flaky")))
+                    .with_lifecycle(Arc::new(FailingStart)),
             )
             .unwrap();
 
@@ -969,32 +1185,32 @@ mod tests {
         );
 
         assert!(registry.tools().is_empty());
-        assert!(registry.tool("flaky").is_none());
+        assert!(registry.tool_capability("flaky").is_none());
     }
 
     #[test]
     fn registered_tools_are_visible_before_start_for_wiring() {
         let registry = Registry::new();
         registry
-            .register(Capability::tool(DummyTool::tool("boot")))
+            .register(Capability::from_tool(Tool::new(DummyTool::named("boot"))))
             .unwrap();
 
         assert_eq!(registry.tools().len(), 1);
-        assert!(registry.tool("boot").is_some());
+        assert!(registry.tool_capability("boot").is_some());
     }
 
     #[test]
     fn disabled_group_hides_tools() {
         let registry = Registry::new();
         registry
-            .register(Capability::tool(DummyTool::tool("t")))
+            .register(Capability::from_tool(Tool::new(DummyTool::named("t"))))
             .unwrap();
         registry.start_all().unwrap();
         assert_eq!(registry.tools().len(), 1);
 
         registry.disable_group("t").unwrap();
         assert!(registry.tools().is_empty());
-        assert!(registry.tool("t").is_none());
+        assert!(registry.tool_capability("t").is_none());
     }
 
     #[test]
@@ -1011,7 +1227,11 @@ mod tests {
 
         assert!(registry.tools().is_empty());
         assert_eq!(registry.channels().len(), 1);
-        let adapter = registry.channel("local").unwrap();
+        let adapter = registry
+            .channels()
+            .into_iter()
+            .find(|channel| channel.channel_id() == "local")
+            .unwrap();
         adapter
             .send(&OutboundMessage {
                 channel: "local".into(),
@@ -1027,10 +1247,9 @@ mod tests {
     fn unregister_single_member_then_gone() {
         let registry = Registry::new();
         registry
-            .register(Capability::tool(DummyTool::tool("solo")))
+            .register(Capability::from_tool(Tool::new(DummyTool::named("solo"))))
             .unwrap();
         registry.unregister("solo").unwrap();
-        assert!(!registry.contains("solo"));
         assert!(!registry.group_exists("solo"));
     }
 
@@ -1039,9 +1258,7 @@ mod tests {
         let lifecycle = Arc::new(CountingLifecycle::default());
         let registry = Registry::new();
         registry
-            .register(
-                Capability::new("svc", CapabilityRole::None).with_lifecycle(lifecycle.clone()),
-            )
+            .register(Capability::none("svc").with_lifecycle(lifecycle.clone()))
             .unwrap();
         registry.start_all().unwrap();
         registry.unregister("svc").unwrap();
@@ -1059,9 +1276,7 @@ mod tests {
         let registry = Registry::new();
         // Registered but never started, so init never ran.
         registry
-            .register(
-                Capability::new("svc", CapabilityRole::None).with_lifecycle(lifecycle.clone()),
-            )
+            .register(Capability::none("svc").with_lifecycle(lifecycle.clone()))
             .unwrap();
         registry.unregister("svc").unwrap();
 
@@ -1076,8 +1291,8 @@ mod tests {
             .register_group(CapabilityGroup::new(
                 "pair",
                 [
-                    Capability::tool(DummyTool::tool("x")),
-                    Capability::tool(DummyTool::tool("y")),
+                    Capability::from_tool(Tool::new(DummyTool::named("x"))),
+                    Capability::from_tool(Tool::new(DummyTool::named("y"))),
                 ],
             ))
             .unwrap();
@@ -1096,5 +1311,131 @@ mod tests {
             Err(CapabilityError::NotFound)
         );
         assert_eq!(registry.group_state("nope"), Err(CapabilityError::NotFound));
+    }
+
+    // --- Observer -------------------------------------------------------
+
+    #[test]
+    fn observer_sees_one_change_per_real_mutation() {
+        let observer = Arc::new(RecordingObserver::default());
+        let registry = Registry::new().with_observer(observer.clone());
+
+        registry
+            .register(Capability::from_tool(Tool::new(DummyTool::named("t"))))
+            .unwrap();
+        registry.start_all().unwrap(); // start_all does not notify per group
+        registry.disable_group("t").unwrap();
+        registry.disable_group("t").unwrap(); // no-op: already Disabled
+        registry.enable_group("t").unwrap();
+        registry.enable_group("t").unwrap(); // no-op: already Started
+        registry.unregister("t").unwrap();
+
+        let changes = observer.changes.lock().unwrap().clone();
+        assert_eq!(
+            changes,
+            vec![
+                CapabilityChange::Registered("t".into()),
+                CapabilityChange::StateChanged {
+                    group_id: "t".into(),
+                    state: CapabilityState::Disabled,
+                },
+                CapabilityChange::StateChanged {
+                    group_id: "t".into(),
+                    state: CapabilityState::Started,
+                },
+                CapabilityChange::Unregistered("t".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn observer_callback_runs_without_registry_lock() {
+        let observer = Arc::new(ReentrantObserver::default());
+        let registry = Arc::new(Registry::new());
+        *observer.registry.lock().unwrap() = Arc::downgrade(&registry);
+        registry.add_observer(observer.clone());
+
+        // Each of these fires the callback, which locks the registry again. If
+        // `notify` held the lock, this test would deadlock.
+        registry
+            .register(Capability::from_tool(Tool::new(DummyTool::named("a"))))
+            .unwrap();
+        registry.start_all().unwrap();
+        registry
+            .register(Capability::from_tool(Tool::new(DummyTool::named("b"))))
+            .unwrap(); // started -> auto-enable, tools() now sees both
+
+        let counts = observer.tool_counts.lock().unwrap().clone();
+        // Registered("a") saw 1 tool; Registered("b") saw 2.
+        assert_eq!(counts, vec![1, 2]);
+    }
+
+    // --- Persistence ----------------------------------------------------
+
+    #[test]
+    fn disabled_state_survives_restart() {
+        let fs = MemFs::new();
+
+        let registry = Registry::new().with_state_store(fs_store(fs.clone(), "state.json"));
+        registry
+            .register(Capability::from_tool(Tool::new(DummyTool::named("t"))))
+            .unwrap();
+        registry.start_all().unwrap();
+        registry.disable_group("t").unwrap();
+
+        // Fresh registry, same backing store: the group replays as Disabled.
+        let restarted = Registry::new().with_state_store(fs_store(fs.clone(), "state.json"));
+        restarted
+            .register(Capability::from_tool(Tool::new(DummyTool::named("t"))))
+            .unwrap();
+        restarted.start_all().unwrap();
+        assert_eq!(
+            restarted.group_state("t").unwrap(),
+            CapabilityState::Disabled
+        );
+        assert!(restarted.tools().is_empty());
+
+        // Re-enabling clears the deny-list, so the next restart is Started.
+        restarted.enable_group("t").unwrap();
+        let after_enable = Registry::new().with_state_store(fs_store(fs.clone(), "state.json"));
+        after_enable
+            .register(Capability::from_tool(Tool::new(DummyTool::named("t"))))
+            .unwrap();
+        after_enable.start_all().unwrap();
+        assert_eq!(
+            after_enable.group_state("t").unwrap(),
+            CapabilityState::Started
+        );
+    }
+
+    #[test]
+    fn persisted_unknown_group_is_ignored_at_start() {
+        let fs = MemFs::new();
+        fs.write_atomic("state.json", br#"["ghost"]"#).unwrap();
+
+        let registry = Registry::new().with_state_store(fs_store(fs.clone(), "state.json"));
+        registry
+            .register(Capability::from_tool(Tool::new(DummyTool::named("real"))))
+            .unwrap();
+        registry.start_all().unwrap();
+
+        assert_eq!(
+            registry.group_state("real").unwrap(),
+            CapabilityState::Started
+        );
+    }
+
+    #[test]
+    fn save_failure_propagates_from_disable() {
+        let registry = Registry::new().with_state_store(Arc::new(FailingStore));
+        registry
+            .register(Capability::from_tool(Tool::new(DummyTool::named("t"))))
+            .unwrap();
+        registry.start_all().unwrap();
+
+        assert!(matches!(
+            registry.disable_group("t"),
+            Err(CapabilityError::Persistence(_))
+        ));
     }
 }

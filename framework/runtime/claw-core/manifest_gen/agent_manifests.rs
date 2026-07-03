@@ -16,7 +16,7 @@ use anyhow::{anyhow, bail, Context, Result};
 
 use crate::codegen;
 use crate::parse::{
-    parse_common, parse_kind, CommonBase, ParsedManifest, COMMON_FILES, MANIFEST_FILES,
+    parse_common, parse_kind, CommonBase, ParsedKind, ParsedManifest, COMMON_FILES, MANIFEST_FILES,
 };
 
 /// The generated file's name within `OUT_DIR`.
@@ -51,11 +51,11 @@ pub fn generate(manifest_dir: &Path, out_dir: &Path) -> Result<()> {
     }
     let common = parse_common(&common_dir)?;
 
-    let mut kinds = collect_kinds(&agents_dir)?;
     // Every kind inherits the common base: its own entries extend the base.
-    for kind in &mut kinds {
-        inherit_base(kind, &common);
-    }
+    let mut kinds: Vec<ParsedManifest> = collect_kinds(&agents_dir)?
+        .into_iter()
+        .map(|kind| inherit_base(kind, &common))
+        .collect();
     // Deterministic output regardless of directory iteration order.
     kinds.sort_by(|left, right| left.kind.cmp(&right.kind));
 
@@ -73,7 +73,7 @@ pub fn generate(manifest_dir: &Path, out_dir: &Path) -> Result<()> {
 /// Parse every kind subdirectory under `agents_dir`, registering each manifest
 /// file for `rerun-if-changed`. Hidden directories and the reserved shared-data
 /// folder are skipped; only proper kind directories carry a manifest.
-fn collect_kinds(agents_dir: &Path) -> Result<Vec<ParsedManifest>> {
+fn collect_kinds(agents_dir: &Path) -> Result<Vec<ParsedKind>> {
     let mut kinds = Vec::new();
     for entry in
         fs::read_dir(agents_dir).with_context(|| format!("reading {}", agents_dir.display()))?
@@ -114,10 +114,19 @@ fn collect_kinds(agents_dir: &Path) -> Result<Vec<ParsedManifest>> {
 /// or skill already in the base without it appearing twice. The shared
 /// instructions preamble is recorded so codegen can prepend it to the kind's own
 /// prompt.
-fn inherit_base(kind: &mut ParsedManifest, common: &CommonBase) {
-    kind.capabilities = merge_unique(&common.capabilities, &kind.capabilities);
-    kind.skills = merge_unique(&common.skills, &kind.skills);
-    kind.common_instructions_path = Some(common.instructions_path.clone());
+fn inherit_base(kind: ParsedKind, common: &CommonBase) -> ParsedManifest {
+    ParsedManifest {
+        kind: kind.kind,
+        description: kind.description,
+        spawn_enabled: kind.spawn_enabled,
+        allowed_kinds: kind.allowed_kinds,
+        retries: kind.retries,
+        tool_block_retries: kind.tool_block_retries,
+        capabilities: merge_unique(&common.capabilities, &kind.capabilities),
+        skills: merge_unique(&common.skills, &kind.skills),
+        instructions_path: kind.instructions_path,
+        common_instructions_path: common.instructions_path.clone(),
+    }
 }
 
 /// Concatenate `base` then `own`, preserving first-seen order and dropping later

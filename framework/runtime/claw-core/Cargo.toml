@@ -26,6 +26,10 @@ claw-memory = { path = "../claw-memory" }
 claw-skill = { path = "../claw-skill" }
 claw-context = { path = "../claw-context" }
 claw-permission = { path = "../claw-permission" }
+# The capability vocabulary. `claw-core` consumes resolved capabilities across
+# the `AgentResolver` seam (decomposing each into its internal `Tool` via
+# `CapabilityRole`), so the resolver boundary speaks `Capability`, not `Tool`.
+claw-capability = { path = "../claw-capability" }
 # The tool framework (traits, `Tool`/`ToolSet`, the runner, the `tool_metadata!`
 # macro). The concrete tools and their `resources/tools/` assets stay in this
 # crate; claw-tool only provides the framework they plug into.
@@ -66,6 +70,5 @@ claw-interface = { path = "../claw-interface", features = [
 ] }
 # Never-compacts `NoopCompactor` shared from claw-memory (tests only).
 claw-memory = { path = "../claw-memory", features = ["compactor-stub"] }
-claw-capability = { path = "../claw-capability" }
 dotenvy = "0.15"
 serde_json = "1"

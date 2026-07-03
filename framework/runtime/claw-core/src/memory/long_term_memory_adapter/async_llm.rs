@@ -70,10 +70,12 @@ pub(super) struct AsyncLlmLease<'owner, H: ClawHttp, Timer: ClawTimer> {
 
 impl<H: ClawHttp, Timer: ClawTimer> AsyncLlmLease<'_, H, Timer> {
     pub(super) fn api_mut(&mut self) -> &mut ClawApiAsync<H, Timer> {
-        match self.api.as_mut() {
-            Some(api) => api,
-            None => std::process::abort(),
-        }
+        // Invariant: a live lease always owns the api until it is moved out in
+        // `Drop`. `api` is only `None` after drop, when this method is
+        // unreachable, so this is a bug marker, not an expected error path.
+        self.api
+            .as_mut()
+            .expect("AsyncLlmLease holds its api until Drop")
     }
 }
 

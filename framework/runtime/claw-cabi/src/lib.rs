@@ -40,10 +40,10 @@ use std::task::{Wake, Waker};
 
 #[cfg(target_os = "espidf")]
 use claw_agent::{
-    init_tool_executor, AgentPersistenceConfig, AgentSystem, BackendKind, ClawApiConfig, SessionId,
-    SessionRecord,
+    AgentPersistenceConfig, AgentSystem, BackendKind, ClawApiConfig, DeliveryKind, DriveStop,
+    SessionControl, SessionId, SessionRecord,
 };
-use claw_agent::{CapabilityError, ChannelRuntime, Registry};
+use claw_agent::{CapabilityError, ChannelRuntime, Registry, ToolInvocation};
 #[cfg(target_os = "espidf")]
 use claw_agent::{ChannelFuture, InboundMessage};
 #[cfg(target_os = "espidf")]
@@ -51,12 +51,15 @@ use claw_interface::{ClawThread, CoreAffinity, Priority, WorkerHandle};
 #[cfg(target_os = "espidf")]
 use claw_sys::{EspIdfFs, EspIdfHttp, EspIdfThread, EspIdfTimer};
 #[cfg(target_os = "espidf")]
-use claw_utils::{async_channel, AsyncReceiver, AsyncSender};
+use claw_utils::{async_channel, AsyncReceiver, AsyncRecv, AsyncSender};
 #[cfg(target_os = "espidf")]
-use core::{
-    ffi::{c_char, c_void, CStr},
-    ptr,
-};
+use core::ffi::c_void;
+use core::ffi::{c_char, CStr};
+#[cfg(target_os = "espidf")]
+use core::pin::Pin;
+use core::ptr;
+#[cfg(target_os = "espidf")]
+use std::collections::VecDeque;
 #[cfg(target_os = "espidf")]
 use std::ffi::CString;
 
@@ -74,6 +77,9 @@ pub use result::{ClawCapabilityErrorKind, ClawCapabilityResult};
 use crate::result::into_result;
 use crate::result::{from_result, guard};
 use crate::wrappers::{build_capability, build_group, build_inbound};
+
+#[cfg(target_os = "espidf")]
+type EspAgentSystem = AgentSystem<EspIdfFs, EspIdfHttp, EspIdfTimer>;
 
 struct NoopWake;
 
@@ -287,8 +293,8 @@ fn run_agent_executor(
 }
 
 #[cfg(target_os = "espidf")]
-fn build_agent_system(config: &AgentRuntimeConfig) -> Result<AgentSystem, CapabilityError> {
-    AgentSystem::new::<EspIdfFs, EspIdfHttp, EspIdfTimer>(
+fn build_agent_system(config: &AgentRuntimeConfig) -> Result<EspAgentSystem, CapabilityError> {
+    AgentSystem::<EspIdfFs, EspIdfHttp, EspIdfTimer>::new::<EspIdfThread>(
         config.llm.clone(),
         config.persistence.clone(),
         Arc::clone(&config.registry),
@@ -296,12 +302,216 @@ fn build_agent_system(config: &AgentRuntimeConfig) -> Result<AgentSystem, Capabi
     .map_err(|error| CapabilityError::Failed(error.to_string()))
 }
 
+/// Biased race between an in-flight drive and the next queued command.
+///
+/// Polls `drive` first (so a completing drive always wins over a just-arrived
+/// command), then the command receiver. When the drive wins, the receiver future
+/// is dropped without consuming a queued command — [`AsyncRecv`] only removes a
+/// value on the poll that returns `Ready`, so a message that arrived on the same
+/// tick stays queued for the next `recv`.
 #[cfg(target_os = "espidf")]
-async fn agent_worker_loop(system: AgentSystem, receiver: AsyncReceiver<RuntimeCommand>) {
-    while let Some(command) = receiver.recv().await {
+struct DriveOrCommand<'borrow, 'obj: 'borrow, 'recv> {
+    drive: Pin<&'borrow mut (dyn Future<Output = Result<DriveStop, CapabilityError>> + 'obj)>,
+    recv: AsyncRecv<'recv, RuntimeCommand>,
+}
+
+#[cfg(target_os = "espidf")]
+enum Raced {
+    DriveDone(Result<DriveStop, CapabilityError>),
+    Command(Option<RuntimeCommand>),
+}
+
+#[cfg(target_os = "espidf")]
+impl Future for DriveOrCommand<'_, '_, '_> {
+    type Output = Raced;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        // `DriveOrCommand` is `Unpin` (its fields are a pinned reference and an
+        // `Unpin` receiver future), so `get_mut` is sound.
+        let this = self.get_mut();
+        if let Poll::Ready(output) = this.drive.as_mut().poll(context) {
+            return Poll::Ready(Raced::DriveDone(output));
+        }
+        if let Poll::Ready(command) = Pin::new(&mut this.recv).poll(context) {
+            return Poll::Ready(Raced::Command(command));
+        }
+        Poll::Pending
+    }
+}
+
+/// How the next drive in a delivery chain should be started.
+#[cfg(target_os = "espidf")]
+enum DriveStep {
+    /// Deliver as-is, resolving the delivery mode from the message's own
+    /// `extra_context` hint at the boundary.
+    Fresh(InboundMessage),
+    /// Continue a gracefully-interrupted task with this message.
+    ContinueInterrupted(InboundMessage),
+    /// Supersede the current task, then start fresh from this message.
+    ContinueCancelled(InboundMessage),
+}
+
+#[cfg(target_os = "espidf")]
+fn start_drive<'system>(
+    system: &'system EspAgentSystem,
+    session: SessionId,
+    step: DriveStep,
+    control: &'system SessionControl,
+) -> Pin<Box<dyn Future<Output = Result<DriveStop, CapabilityError>> + 'system>> {
+    match step {
+        DriveStep::Fresh(message) => {
+            // Deliver as-is: the delivery mode is derived from the message's own
+            // opaque `extra_context` hint at the boundary.
+            let kind = DeliveryKind::from_extra_context(message.extra_context.as_deref());
+            Box::pin(system.deliver_controlled(session, message, kind, control))
+        }
+        DriveStep::ContinueCancelled(message) => {
+            Box::pin(system.deliver_controlled(session, message, DeliveryKind::Cancel, control))
+        }
+        DriveStep::ContinueInterrupted(message) => {
+            Box::pin(system.continue_interrupted(session, message, control))
+        }
+    }
+}
+
+/// Route a command that arrived while a drive for `session` is in flight.
+///
+/// A same-session `Interrupt`/`Cancel` signals `control` and is carried to run as
+/// the continuation once the drive stops. Everything else (a same-session
+/// `Append`, a message for another session, or a lifecycle command) is buffered
+/// to `pending` for after the current delivery.
+#[cfg(target_os = "espidf")]
+fn route_during_drive(
+    system: &EspAgentSystem,
+    session: SessionId,
+    command: RuntimeCommand,
+    control: &SessionControl,
+    carried: &mut Option<InboundMessage>,
+    pending: &mut VecDeque<RuntimeCommand>,
+) {
+    let message = match command {
+        RuntimeCommand::Inbound(message) => message,
+        // Lifecycle command mid-drive: defer until the drive ends.
+        other => {
+            pending.push_back(other);
+            return;
+        }
+    };
+    let same_session = matches!(system.resolve_session(&message), Ok(other) if other == session);
+    if !same_session {
+        pending.push_back(RuntimeCommand::Inbound(message));
+        return;
+    }
+    // One in-flight interrupt/cancel at a time; extras are deferred so none is
+    // lost by overwriting `carried`.
+    if carried.is_some() {
+        pending.push_back(RuntimeCommand::Inbound(message));
+        return;
+    }
+    // The delivery mode is derived from the message's opaque `extra_context` hint
+    // at this boundary; the transport message carries no `DeliveryKind`.
+    match DeliveryKind::from_extra_context(message.extra_context.as_deref()) {
+        DeliveryKind::Cancel => {
+            control.request_cancel();
+            *carried = Some(message);
+        }
+        DeliveryKind::Interrupt => {
+            control.request_interrupt();
+            *carried = Some(message);
+        }
+        // An append cannot fold into an already checked-out drive; deliver it as
+        // the next step once this drive quiesces.
+        DeliveryKind::Append => pending.push_back(RuntimeCommand::Inbound(message)),
+    }
+}
+
+/// Deliver `message` for its session and drive it, servicing new commands
+/// concurrently so a same-session interrupt/cancel can stop the drive in flight.
+/// Interrupt/cancel continuations chain until the session reaches a quiescent
+/// drive with no carried follow-up.
+#[cfg(target_os = "espidf")]
+async fn deliver_with_interruption(
+    system: &EspAgentSystem,
+    message: InboundMessage,
+    receiver: &AsyncReceiver<RuntimeCommand>,
+    pending: &mut VecDeque<RuntimeCommand>,
+) {
+    let session = match system.resolve_session(&message) {
+        Ok(session) => session,
+        Err(_) => {
+            // Ill-formed or unbound: fall back to the plain path for consistent
+            // error handling.
+            let _ = system.push_message(message).await;
+            return;
+        }
+    };
+
+    let mut step = DriveStep::Fresh(message);
+    loop {
+        let control = SessionControl::new();
+        let mut drive = start_drive(system, session, step, &control);
+        let mut carried: Option<InboundMessage> = None;
+
+        let stop = loop {
+            let raced = DriveOrCommand {
+                drive: drive.as_mut(),
+                recv: receiver.recv(),
+            }
+            .await;
+            match raced {
+                Raced::DriveDone(result) => break result,
+                // Channel closed mid-drive: let the drive finish, then stop.
+                Raced::Command(None) => break drive.as_mut().await,
+                Raced::Command(Some(command)) => {
+                    route_during_drive(system, session, command, &control, &mut carried, pending);
+                }
+            }
+        };
+
+        // Drop the drive future (and its borrow of `control`) before deciding the
+        // next step.
+        drop(drive);
+
+        let stop = match stop {
+            Ok(stop) => stop,
+            // The delivery error was already surfaced/mapped inside the router.
+            Err(_) => return,
+        };
+
+        match (stop, carried) {
+            // No follow-up arrived: this delivery chain is done.
+            (_, None) => return,
+            (DriveStop::Interrupted, Some(next)) => {
+                step = DriveStep::ContinueInterrupted(next);
+            }
+            (DriveStop::Cancelled, Some(next)) => {
+                step = DriveStep::ContinueCancelled(next);
+            }
+            // The signal landed after the drive finished naturally; deliver the
+            // carried message as a fresh delivery honouring its own kind.
+            (DriveStop::Quiescent, Some(next)) => {
+                step = DriveStep::Fresh(next);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "espidf")]
+async fn agent_worker_loop(system: EspAgentSystem, receiver: AsyncReceiver<RuntimeCommand>) {
+    // Commands deferred while a drive was in flight are drained before blocking on
+    // the channel, so buffering never reorders a command behind a later arrival.
+    let mut pending: VecDeque<RuntimeCommand> = VecDeque::new();
+    loop {
+        let command = match pending.pop_front() {
+            Some(command) => command,
+            None => match receiver.recv().await {
+                Some(command) => command,
+                None => break,
+            },
+        };
         match command {
             RuntimeCommand::Inbound(message) => {
-                let _ = system.push_message(message).await;
+                deliver_with_interruption(&system, message, &receiver, &mut pending).await;
             }
             RuntimeCommand::SessionCreate { reply } => {
                 let _ = reply.send(Ok(system.new_session()));
@@ -485,7 +695,6 @@ unsafe fn agent_system_create_inner(
     let llm = build_llm_config(config)?;
     let persistence_dir = unsafe { required_string(config.persistence_dir)? };
     let persistence = AgentPersistenceConfig::new(&persistence_dir);
-    init_tool_executor(EspIdfThread).map_err(|error| CapabilityError::Failed(error.to_string()))?;
 
     let runtime_config = AgentRuntimeConfig {
         llm,
@@ -893,7 +1102,6 @@ fn validate_session_id_output_buffer(
 /// # Safety
 /// `buffer` must be writable for `capacity` bytes and `output_length` must be a
 /// valid out-pointer.
-#[cfg(target_os = "espidf")]
 unsafe fn copy_string_to_c_buffer(
     value: &str,
     buffer: *mut c_char,
@@ -965,6 +1173,108 @@ unsafe fn register_group_inner(
     let descriptor = group.as_ref().ok_or(CapabilityError::InvalidArg)?;
     let group = unsafe { build_group(descriptor)? };
     handle.registry.register_group(group)
+}
+
+/// Invoke a registered tool-role capability by name, synchronously.
+///
+/// This is the C-facing "call a capability by name and get its output" seam —
+/// the replacement for the old C `claw_cap_call`. It is used by non-agent
+/// callers (the event router `call_cap` / `run_script` / `send_message`
+/// actions and Lua `capability.call`) that need to run a capability directly
+/// rather than through the agent's tool loop.
+///
+/// Only **synchronous** tool capabilities are callable here — every
+/// C-registered tool is synchronous, so this covers all C capabilities.
+/// Async Rust-native tools return [`CLAW_CAPABILITY_FAILED`]; those are driven
+/// only by the agent's async tool runner.
+///
+/// On success the tool's output text is copied into `output_buffer` (NUL
+/// terminated), `*output_length` is set to the output byte length, and
+/// `*output_success` is set to the tool's own success flag. An unknown
+/// capability returns [`CLAW_CAPABILITY_NOT_FOUND`]; output that does not fit
+/// returns [`CLAW_CAPABILITY_FAILED`] with `*output_length` set to the required
+/// byte length.
+///
+/// # Safety
+/// `registry` must be a live registry handle. `cap_name` must be a valid
+/// NUL-terminated UTF-8 string. `arguments_json` must be null (treated as
+/// `"{}"`) or a valid NUL-terminated UTF-8 string. `output_buffer` must be
+/// writable for `output_capacity` bytes; `output_length` and `output_success`
+/// must be valid out-pointers.
+#[no_mangle]
+pub unsafe extern "C" fn claw_capability_invoke(
+    registry: *mut ClawCapabilityRegistry,
+    cap_name: *const c_char,
+    arguments_json: *const c_char,
+    output_buffer: *mut c_char,
+    output_capacity: usize,
+    output_length: *mut usize,
+    output_success: *mut bool,
+) -> ClawCapabilityResult {
+    guard(|| {
+        from_result(unsafe {
+            capability_invoke_inner(
+                registry,
+                cap_name,
+                arguments_json,
+                output_buffer,
+                output_capacity,
+                output_length,
+                output_success,
+            )
+        })
+    })
+}
+
+unsafe fn capability_invoke_inner(
+    registry: *mut ClawCapabilityRegistry,
+    cap_name: *const c_char,
+    arguments_json: *const c_char,
+    output_buffer: *mut c_char,
+    output_capacity: usize,
+    output_length: *mut usize,
+    output_success: *mut bool,
+) -> Result<(), CapabilityError> {
+    let handle = registry.as_ref().ok_or(CapabilityError::InvalidArg)?;
+    let success_out = output_success.as_mut().ok_or(CapabilityError::InvalidArg)?;
+    *success_out = false;
+
+    if cap_name.is_null() {
+        return Err(CapabilityError::InvalidArg);
+    }
+    let name = CStr::from_ptr(cap_name)
+        .to_str()
+        .map_err(|_| CapabilityError::InvalidArg)?;
+    if name.is_empty() {
+        return Err(CapabilityError::InvalidArg);
+    }
+    let arguments = if arguments_json.is_null() {
+        "{}"
+    } else {
+        CStr::from_ptr(arguments_json)
+            .to_str()
+            .map_err(|_| CapabilityError::InvalidArg)?
+    };
+
+    let tool = handle
+        .registry
+        .tool(name)
+        .ok_or(CapabilityError::NotFound)?;
+    let output = tool
+        .invoke(&ToolInvocation {
+            id: None,
+            name,
+            arguments_json: arguments,
+        })
+        .map_err(|error| CapabilityError::Failed(error.to_string()))?;
+
+    *success_out = output.ok;
+    copy_string_to_c_buffer(
+        &output.output,
+        output_buffer,
+        output_capacity,
+        output_length,
+    )
 }
 
 #[cfg(test)]
@@ -1065,6 +1375,63 @@ mod tests {
             .unwrap();
         assert_eq!(output.output, "echoed");
         assert!(output.ok);
+
+        unsafe { ClawCapabilityRegistry::drop_raw(handle) };
+    }
+
+    #[test]
+    fn invoke_by_name_runs_tool_and_copies_output() {
+        let registry = Arc::new(Registry::new());
+        let handle = ClawCapabilityRegistry::into_raw(Arc::clone(&registry));
+
+        let descriptor = tool_descriptor(c"echo".as_ptr(), c"{}".as_ptr(), Some(echo_execute));
+        assert_eq!(
+            unsafe { claw_capability_register(handle, &descriptor) }.kind,
+            ClawCapabilityErrorKind::Ok
+        );
+
+        let mut buffer = [0u8; 64];
+        let mut output_length: usize = 0;
+        let mut output_success = false;
+        let result = unsafe {
+            claw_capability_invoke(
+                handle,
+                c"echo".as_ptr(),
+                c"{}".as_ptr(),
+                buffer.as_mut_ptr().cast::<c_char>(),
+                buffer.len(),
+                &mut output_length,
+                &mut output_success,
+            )
+        };
+        assert_eq!(result.kind, ClawCapabilityErrorKind::Ok);
+        assert!(output_success);
+        assert_eq!(&buffer[..output_length], b"echoed");
+
+        unsafe { ClawCapabilityRegistry::drop_raw(handle) };
+    }
+
+    #[test]
+    fn invoke_unknown_capability_is_not_found() {
+        let registry = Arc::new(Registry::new());
+        let handle = ClawCapabilityRegistry::into_raw(Arc::clone(&registry));
+
+        let mut buffer = [0u8; 16];
+        let mut output_length: usize = 0;
+        let mut output_success = true;
+        let result = unsafe {
+            claw_capability_invoke(
+                handle,
+                c"missing".as_ptr(),
+                ptr::null(),
+                buffer.as_mut_ptr().cast::<c_char>(),
+                buffer.len(),
+                &mut output_length,
+                &mut output_success,
+            )
+        };
+        assert_eq!(result.kind, ClawCapabilityErrorKind::NotFound);
+        assert!(!output_success);
 
         unsafe { ClawCapabilityRegistry::drop_raw(handle) };
     }

@@ -23,16 +23,10 @@ impl ContextAdapter for ToolPolicyContextAdapter {
     }
 
     fn contribute(&mut self, input: ContextAdapterInput<'_>, output: &mut ContextSink<'_>) {
-        let Some(tools) = input.tools else {
-            output.block(Block::new(BlockKind::ToolPolicy, ""));
-            output.reminder(BlockKind::ToolReminder, None);
-            return;
-        };
-
         output.block(Block::new(
             BlockKind::ToolPolicy,
-            tools.tool_context().unwrap_or_default(),
+            input.tools.tool_context().unwrap_or_default(),
         ));
-        output.reminder(BlockKind::ToolReminder, tools.extra_tool_context());
+        output.reminder(BlockKind::ToolReminder, input.tools.extra_tool_context());
     }
 }

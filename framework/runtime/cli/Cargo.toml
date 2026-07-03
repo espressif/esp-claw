@@ -3,15 +3,11 @@ name = "claw-agent-cli"
 authors = ["Finn(Ziheng) Sheng"]
 version = "0.1.0"
 edition = "2021"
-description = "Host CLIs that drive the claw agents (BaseAgent, GenericAgent) against a live LLM with on-disk memory for off-device manual testing"
+description = "Host CLIs that drive claw agents against a live LLM with on-disk memory for off-device manual testing"
 
 [lib]
 name = "claw_agent_cli"
 path = "src/lib.rs"
-
-[[bin]]
-name = "base-agent-chat"
-path = "src/base_agent_cli.rs"
 
 [[bin]]
 name = "generic-agent-chat"
@@ -25,7 +21,7 @@ path = "src/orchestrator_cli.rs"
 claw-core = { path = "../claw-core" }
 claw-log = { path = "../claw-log" }
 claw-api = { path = "../claw-api" }
-claw-memory = { path = "../claw-memory", features = ["compactor-stub"] }
+claw-memory = { path = "../claw-memory" }
 claw-interface = { path = "../claw-interface", features = ["host-backends"] }
 dotenvy = "0.15"
 owo-colors = "4"

@@ -37,7 +37,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
 
-use claw_interface::ClawFs;
+use claw_interface::{ClawFs, FsError};
 
 /// Journal filename under [`LongTermConfig::dir`].
 const RECORDS_FILE: &str = "memory_records.jsonl";
@@ -169,6 +169,24 @@ pub enum LongTermError {
     NotFound(MemoryId),
 }
 
+/// Failure building a [`LongTermMemory`] from its on-disk journal.
+///
+/// A *missing* journal is not an error (the store starts empty); this is
+/// returned only when a journal is present but cannot be read, so a genuine I/O
+/// failure is never silently mistaken for an empty store.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum LongTermInitError {
+    /// The journal exists but could not be read.
+    #[error("long-term memory journal {path} is unreadable: {source}")]
+    Unreadable {
+        /// The journal path that failed to load.
+        path: String,
+        /// The underlying filesystem error.
+        #[source]
+        source: FsError,
+    },
+}
+
 /// Tuning for a [`LongTermMemory`].
 ///
 /// Build with [`LongTermConfig::new`] for defaults, then override fields.
@@ -229,6 +247,11 @@ struct State {
     /// set. Lets a reader (e.g. a context renderer) cache derived output and
     /// rebuild only when this advances, without diffing the items.
     version: u64,
+    /// The last journal write/append failure, if any, cleared on the next
+    /// successful persist. Best-effort writes keep in-memory state authoritative,
+    /// but a caller can observe a persistence failure via
+    /// [`LongTermMemory::last_persist_error`] instead of only seeing a log line.
+    last_persist_error: Option<FsError>,
 }
 
 struct Inner<F: ClawFs + 'static> {
@@ -250,7 +273,8 @@ struct Inner<F: ClawFs + 'static> {
 /// use claw_interface::MemFs;
 /// use claw_memory::{LongTermConfig, LongTermMemory, MemoryDraft, StoreOutcome};
 ///
-/// let memory = LongTermMemory::new(LongTermConfig::new("/m", "g-"), MemFs::new());
+/// let memory = LongTermMemory::new(LongTermConfig::new("/m", "g-"), MemFs::new())
+///     .expect("a fresh MemFs has no journal, so the store starts empty");
 ///
 /// // Store a fact tagged `preference`, then recall by that label.
 /// let stored = memory.store(
@@ -280,9 +304,15 @@ impl<F: ClawFs + 'static> Clone for LongTermMemory<F> {
 }
 
 impl<F: ClawFs + 'static> LongTermMemory<F> {
-    /// Build the store, restoring its journal if present (a missing or
-    /// unreadable journal starts empty). Best-effort creates [`LongTermConfig::dir`].
-    pub fn new(config: LongTermConfig, fs: F) -> Self {
+    /// Build the store, restoring its journal if present. Best-effort creates
+    /// [`LongTermConfig::dir`].
+    ///
+    /// # Errors
+    ///
+    /// [`LongTermInitError::Unreadable`] when the journal exists but cannot be
+    /// read — a genuine I/O failure is never silently mistaken for an empty
+    /// store. A *missing* journal is not an error: the store starts empty.
+    pub fn new(config: LongTermConfig, fs: F) -> Result<Self, LongTermInitError> {
         let path = journal_path(&config.dir);
         if let Err(error) = fs.create_dir_all(&config.dir) {
             log::warn!(
@@ -290,15 +320,29 @@ impl<F: ClawFs + 'static> LongTermMemory<F> {
                 config.dir
             );
         }
-        let state = load_state(&fs, &path);
-        Self {
+        let state = load_state(&fs, &path).map_err(|source| LongTermInitError::Unreadable {
+            path: path.clone(),
+            source,
+        })?;
+        Ok(Self {
             inner: Arc::new(Inner {
                 path,
                 config,
                 fs,
                 state: Mutex::new(state),
             }),
-        }
+        })
+    }
+
+    /// The last journal persistence failure, if any.
+    ///
+    /// Journal appends are best-effort: a failure leaves the in-memory state
+    /// authoritative and logs, but the write did not land. This exposes that
+    /// failure so a caller can react (retry, surface a warning) instead of
+    /// discovering the loss only on the next reboot. Cleared on the next
+    /// successful persist.
+    pub fn last_persist_error(&self) -> Option<FsError> {
+        self.lock().last_persist_error.clone()
     }
 
     /// Store a new fact, or return the existing near-duplicate unchanged.
@@ -330,7 +374,7 @@ impl<F: ClawFs + 'static> LongTermMemory<F> {
         state.items.push(item.clone());
         state.catalog_cache = None;
         state.version = state.version.saturating_add(1);
-        self.append_record(&Record::Put(item.clone()));
+        state.last_persist_error = self.append_record(&Record::Put(item.clone())).err();
         StoreOutcome::Created(item)
     }
 
@@ -389,7 +433,7 @@ impl<F: ClawFs + 'static> LongTermMemory<F> {
         state.catalog_cache = None;
         state.version = state.version.saturating_add(1);
         state.dead = state.dead.saturating_add(1);
-        self.append_record(&Record::Put(updated.clone()));
+        state.last_persist_error = self.append_record(&Record::Put(updated.clone())).err();
         self.maybe_compact(&mut state);
         Ok(updated)
     }
@@ -408,7 +452,7 @@ impl<F: ClawFs + 'static> LongTermMemory<F> {
         state.catalog_cache = None;
         state.version = state.version.saturating_add(1);
         state.dead = state.dead.saturating_add(1);
-        self.append_record(&Record::Del { id: id.clone() });
+        state.last_persist_error = self.append_record(&Record::Del { id: id.clone() }).err();
         self.maybe_compact(&mut state);
         Ok(())
     }
@@ -456,29 +500,24 @@ impl<F: ClawFs + 'static> LongTermMemory<F> {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Append one serialized record to the journal (best-effort: a write failure
-    /// is logged but leaves the in-memory state authoritative until reboot).
-    fn append_record(&self, record: &Record) {
-        let mut line = match serde_json::to_vec(record) {
-            Ok(line) => line,
-            Err(error) => {
-                log::warn!(
-                    "long-term memory {}: serialize failed: {error}",
-                    self.inner.path
-                );
-                return;
-            }
-        };
+    /// Append one serialized record to the journal.
+    ///
+    /// Best-effort at the storage layer: the in-memory state stays authoritative
+    /// on failure, but the error is returned so the caller can record it in
+    /// [`State::last_persist_error`] rather than silently dropping it. A
+    /// serialize failure (a bug — records always serialize) is reported as
+    /// [`FsError::Io`].
+    fn append_record(&self, record: &Record) -> Result<(), FsError> {
+        let mut line = serde_json::to_vec(record)
+            .map_err(|error| FsError::Io(format!("serialize record failed: {error}")))?;
         line.push(b'\n');
-        if let Err(error) = self.inner.fs.append(&self.inner.path, &line) {
-            log::warn!(
-                "long-term memory {}: append failed: {error}",
-                self.inner.path
-            );
-        }
+        self.inner.fs.append(&self.inner.path, &line)
     }
 
     /// Rewrite the journal from the live set when dead lines pass the threshold.
+    ///
+    /// Records any write failure in [`State::last_persist_error`] and leaves the
+    /// dead count untouched so a later mutation retries the rewrite.
     fn maybe_compact(&self, state: &mut State) {
         if state.dead < self.inner.config.compact_dead_threshold {
             return;
@@ -495,16 +534,24 @@ impl<F: ClawFs + 'static> LongTermMemory<F> {
                         "long-term memory {}: compaction serialize failed: {error}",
                         self.inner.path
                     );
+                    state.last_persist_error =
+                        Some(FsError::Io(format!("compaction serialize failed: {error}")));
                     return;
                 }
             }
         }
         match self.inner.fs.write_atomic(&self.inner.path, &buffer) {
-            Ok(()) => state.dead = 0,
-            Err(error) => log::warn!(
-                "long-term memory {}: compaction write failed: {error}",
-                self.inner.path
-            ),
+            Ok(()) => {
+                state.dead = 0;
+                state.last_persist_error = None;
+            }
+            Err(error) => {
+                log::warn!(
+                    "long-term memory {}: compaction write failed: {error}",
+                    self.inner.path
+                );
+                state.last_persist_error = Some(error);
+            }
         }
     }
 }
@@ -514,11 +561,18 @@ fn journal_path(dir: &str) -> String {
     format!("{}/{}", dir.trim_end_matches('/'), RECORDS_FILE)
 }
 
-/// Replay the journal into the live set (missing/unreadable starts empty).
-fn load_state<F: ClawFs>(fs: &F, path: &str) -> State {
+/// Replay the journal into the live set.
+///
+/// A missing journal ([`FsError::NotFound`]) yields an empty state; any other
+/// read failure is returned as an error so a genuine I/O fault is not silently
+/// mistaken for an empty store. A torn trailing line (crash mid-append) still
+/// fails to parse and is skipped without aborting the replay.
+fn load_state<F: ClawFs>(fs: &F, path: &str) -> Result<State, FsError> {
     let mut state = State::default();
-    let Ok(bytes) = fs.read(path) else {
-        return state;
+    let bytes = match fs.read(path) {
+        Ok(bytes) => bytes,
+        Err(FsError::NotFound) => return Ok(state),
+        Err(error) => return Err(error),
     };
     for line in bytes.split(|byte| *byte == b'\n') {
         if line.is_empty() {
@@ -544,7 +598,7 @@ fn load_state<F: ClawFs>(fs: &F, path: &str) -> State {
             Err(_) => {}
         }
     }
-    state
+    Ok(state)
 }
 
 /// Normalize content for dedup: lowercase, collapse runs of whitespace.
@@ -574,7 +628,7 @@ mod tests {
     /// A store over a `MemFs` handle; a `clone()` (reload tests) shares the same
     /// in-memory backing.
     fn memory(fs: MemFs) -> LongTermMemory<MemFs> {
-        LongTermMemory::new(LongTermConfig::new("/m", "g-"), fs)
+        LongTermMemory::new(LongTermConfig::new("/m", "g-"), fs).expect("load empty store")
     }
 
     fn fresh_fs() -> MemFs {
@@ -667,7 +721,8 @@ mod tests {
     fn state_survives_reload_from_journal() {
         let fs = fresh_fs();
         {
-            let memory = LongTermMemory::new(LongTermConfig::new("/m", "g-"), fs.clone());
+            let memory = LongTermMemory::new(LongTermConfig::new("/m", "g-"), fs.clone())
+                .expect("load empty store");
             memory.store(draft("Persistent", &["fact"]));
             let id = memory
                 .store(draft("To be edited", &["fact"]))
@@ -685,7 +740,8 @@ mod tests {
                 .expect("update");
         }
         // A fresh handle over the same backend replays the journal.
-        let reloaded = LongTermMemory::new(LongTermConfig::new("/m", "g-"), fs);
+        let reloaded =
+            LongTermMemory::new(LongTermConfig::new("/m", "g-"), fs).expect("replay journal");
         assert_eq!(reloaded.len(), 2);
         let edited = reloaded.recall(&[], Some("edited"), 10);
         assert_eq!(edited.len(), 1);
@@ -710,7 +766,8 @@ mod tests {
                 ..LongTermConfig::new("/m", "g-")
             },
             fs.clone(),
-        );
+        )
+        .expect("load empty store");
         let id = memory.store(draft("Churned", &["x"])).item().id.clone();
         // Three updates produce three dead lines, tripping compaction.
         for content in ["v1", "v2", "v3"] {
@@ -725,7 +782,8 @@ mod tests {
                 .expect("update");
         }
         // The live set is intact and a reload sees only the compacted journal.
-        let reloaded = LongTermMemory::new(LongTermConfig::new("/m", "g-"), fs);
+        let reloaded =
+            LongTermMemory::new(LongTermConfig::new("/m", "g-"), fs).expect("replay journal");
         assert_eq!(reloaded.len(), 1);
         assert_eq!(reloaded.list()[0].content, "v3");
     }

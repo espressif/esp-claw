@@ -185,6 +185,30 @@ claw_capability_result_t claw_capability_register(claw_capability_registry_t *re
 claw_capability_result_t claw_capability_register_group(claw_capability_registry_t *registry,
                                                         const claw_capability_group_t *group);
 
+/*
+ * Invoke a registered TOOL-role capability by name, synchronously — the C-facing
+ * "call a capability by name" seam (the replacement for the old claw_cap_call).
+ *
+ * For non-agent callers that must run a capability directly rather than through
+ * the agent's tool loop: the event router (call_cap / run_script / send_message)
+ * and Lua `capability.call`. Only synchronous tools are callable here; every
+ * C-registered tool is synchronous, so this covers all C capabilities.
+ *
+ * On success the tool's output text is copied into `output_buffer` (NUL
+ * terminated), `*output_length` is set to the output byte length (excluding the
+ * NUL), and `*output_success` is set to the tool's own success flag. `arguments_json`
+ * may be NULL (treated as "{}"). An unknown capability returns
+ * CLAW_CAPABILITY_NOT_FOUND; output that does not fit `output_capacity` returns
+ * CLAW_CAPABILITY_FAILED with `*output_length` set to the required byte length.
+ */
+claw_capability_result_t claw_capability_invoke(claw_capability_registry_t *registry,
+                                                const char *cap_name,
+                                                const char *arguments_json,
+                                                char *output_buffer,
+                                                size_t output_capacity,
+                                                size_t *output_length,
+                                                bool *output_success);
+
 /* ------------------------------------------------------------------------- */
 /* Data plane: inbound channel messages.                                     */
 /*                                                                           */

@@ -24,30 +24,24 @@ pub enum PermissionDecision {
     },
 }
 
-/// One action to evaluate: who is acting (agent identity, as primitives to keep
-/// this crate free of any `claw-core` dependency) and what they want to do.
+/// One action to evaluate.
 ///
-/// `agent_id` / `agent_kind` are borrowed primitives rather than `claw-core`'s
-/// `AgentId` / `AgentKind` precisely so the permission layer sits *below* the
-/// core and the dependency stays one-directional.
+/// Currently this is just the action itself. Agent identity (who is acting) is
+/// deliberately *not* carried here: no built-in policy keys on it, so threading
+/// it through would be a dead parameter. When a policy needs the acting
+/// principal, add it back as borrowed primitives (not `claw-core`'s `AgentId` /
+/// `AgentKind`) so this crate stays *below* the core and the dependency stays
+/// one-directional.
 #[derive(Clone, Copy, Debug)]
 pub struct PermissionRequest<'a> {
-    /// The acting agent's numeric id.
-    pub agent_id: u64,
-    /// The acting agent's kind (role/template name).
-    pub agent_kind: &'a str,
     /// The action being requested.
     pub action: &'a Action,
 }
 
 impl<'a> PermissionRequest<'a> {
-    /// Build a request for `action` by agent `agent_id` of `agent_kind`.
-    pub fn new(agent_id: u64, agent_kind: &'a str, action: &'a Action) -> Self {
-        Self {
-            agent_id,
-            agent_kind,
-            action,
-        }
+    /// Build a request for `action`.
+    pub fn new(action: &'a Action) -> Self {
+        Self { action }
     }
 }
 
@@ -79,7 +73,7 @@ impl<'a> PermissionRequest<'a> {
 /// }
 ///
 /// let action = Action::new("rm", RiskClass::High);
-/// let request = PermissionRequest::new(1, "worker", &action);
+/// let request = PermissionRequest::new(&action);
 /// assert!(matches!(DenyVerb("rm").evaluate(&request), PermissionDecision::Deny { .. }));
 /// ```
 pub trait PermissionPolicy: Send + Sync {
@@ -113,11 +107,11 @@ impl PermissionPolicy for AllowAll {
 /// let risky = Action::new("delete", RiskClass::High);
 ///
 /// assert_eq!(
-///     policy.evaluate(&PermissionRequest::new(1, "worker", &safe)),
+///     policy.evaluate(&PermissionRequest::new(&safe)),
 ///     PermissionDecision::Allow,
 /// );
 /// assert!(matches!(
-///     policy.evaluate(&PermissionRequest::new(1, "worker", &risky)),
+///     policy.evaluate(&PermissionRequest::new(&risky)),
 ///     PermissionDecision::Ask { .. },
 /// ));
 /// ```
@@ -170,7 +164,7 @@ impl PermissionPolicy for AskAtOrAbove {
 /// // Ask + Allow -> Ask: the more restrictive verdict wins.
 /// let action = Action::new("write", RiskClass::Moderate);
 /// assert!(matches!(
-///     chain.evaluate(&PermissionRequest::new(1, "worker", &action)),
+///     chain.evaluate(&PermissionRequest::new(&action)),
 ///     PermissionDecision::Ask { .. },
 /// ));
 /// ```
@@ -231,7 +225,7 @@ mod tests {
     }
 
     fn request_for(action: &Action) -> PermissionRequest<'_> {
-        PermissionRequest::new(1, "worker", action)
+        PermissionRequest::new(action)
     }
 
     #[test]

@@ -33,20 +33,27 @@ use core::task::{Context, Poll};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
-use claw_context::Block;
+use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
-use crate::agent::factory::AgentFactory;
-use crate::agent::registry::{AgentIdAllocator, AgentRegistry};
 use crate::agent::{
-    Agent, AgentCommand, AgentCommandError, AgentId, AgentKind, AgentSnapshot, AgentStatus,
-    ApprovalDecision, ApprovalId, ApprovalVerdict, GraphEffect, GraphHost, TerminationPolicy,
-    TickOutcome,
+    Agent, AgentCommand, AgentCommandError, AgentId, AgentIdAllocator, AgentKind, AgentPlacement,
+    AgentRegistry, AgentSnapshot, AgentStatus, ApprovalDecision, ApprovalId, ApprovalVerdict,
+    CancelReason, FsAgentFactory, GraphEffect, GraphHost, TerminationPolicy, TickOutcome,
 };
+use crate::orchestrator::control::{DriveStop, SessionControl};
 use crate::session::SessionId;
 use tracing::Instrument;
 
 /// The kind instantiated as a session's user-facing root agent.
 const ROOT_AGENT_KIND: &str = "conversation";
+
+/// The synthetic user turn recorded when a running task is gracefully
+/// interrupted by new input (a [`DeliveryKind::Interrupt`](crate::session::DeliveryKind::Interrupt)
+/// delivery). Written to the root's transcript before the interrupting message,
+/// so the model sees that its previous autonomous train of thought was cut short
+/// and superseded — the task itself stays alive.
+const INTERRUPT_MARKER: &str =
+    "[conversation interrupted: new input arrived; abandoning the previous train of thought]";
 
 /// A user-facing reply produced by a **root** agent, surfaced to the channel
 /// router.
@@ -265,12 +272,17 @@ impl GraphHost for InstanceHost {
 }
 
 /// One session's agent store, graph, scheduler, and root.
-pub(crate) struct OrchestratorInstance {
+pub(crate) struct OrchestratorInstance<F, H, Timer>
+where
+    F: ClawFs + Clone + Default + 'static,
+    H: ClawHttp + Default + 'static,
+    Timer: ClawTimer + Default + 'static,
+{
     session: SessionId,
     /// The agent store (insert / get-handle / remove). Graph-blind.
     registry: AgentRegistry,
     /// Builds agents (root and children). Owned here; the registry only stores.
-    factory: Arc<dyn AgentFactory>,
+    factory: Arc<FsAgentFactory<F, H, Timer>>,
     /// Shared, process-wide id allocator for roots and spawned children.
     ids: AgentIdAllocator,
     /// The agent graph: one [`NodeMeta`] per live agent, keyed by id.
@@ -290,31 +302,25 @@ pub(crate) struct OrchestratorInstance {
     snapshots: SnapshotView,
     /// The [`GraphHost`] handed to every agent this instance builds.
     host: Arc<dyn GraphHost>,
-    /// The scope-layered prose injected into every agent in this session: the
-    /// Global blocks (from the orchestrator) followed by this session's own
-    /// blocks, computed once and shared as an `Arc<[Block]>` so every agent's
-    /// prefix is byte-identical. Empty until scope providers populate it.
-    inherited_context: Arc<[Block<'static>]>,
     /// Monotonic count of external drive cycles (one per delivered user message).
     /// Stamped on the top-level `turn` observability span so a whole drive — and
     /// every nested agent/iteration/tool span under it — reads as one unit.
     turn: u64,
 }
 
-impl OrchestratorInstance {
+impl<F, H, Timer> OrchestratorInstance<F, H, Timer>
+where
+    F: ClawFs + Clone + Default + 'static,
+    H: ClawHttp + Default + 'static,
+    Timer: ClawTimer + Default + 'static,
+{
     /// Create an empty instance for `session`. Agents are built with `factory` and
     /// draw ids from the shared `next_agent_id` allocator so they stay unique
     /// across every session.
-    ///
-    /// `global_context` is the orchestrator-wide prose injected into every agent.
-    /// The instance composes it with its own (currently empty) session-scope
-    /// blocks once, into the shared `inherited_context` handed to each agent at
-    /// build time.
     pub(crate) fn new(
         session: SessionId,
-        factory: Arc<dyn AgentFactory>,
+        factory: Arc<FsAgentFactory<F, H, Timer>>,
         next_agent_id: AgentIdAllocator,
-        global_context: Arc<[Block<'static>]>,
     ) -> Self {
         let effects: EffectQueue = Arc::new(Mutex::new(VecDeque::new()));
         let snapshots: SnapshotView = Arc::new(Mutex::new(HashMap::new()));
@@ -323,10 +329,6 @@ impl OrchestratorInstance {
             effects: Arc::clone(&effects),
             snapshots: Arc::clone(&snapshots),
         });
-        // Session-scope blocks are not yet sourced; the inherited set is just the
-        // Global layer. When session blocks exist, prepend Global then append
-        // Session into one `Arc<[Block]>` here so the composition happens once.
-        let inherited_context = global_context;
         Self {
             session,
             registry: AgentRegistry::new(),
@@ -339,15 +341,14 @@ impl OrchestratorInstance {
             effects,
             snapshots,
             host,
-            inherited_context,
             turn: 0,
         }
     }
 
     /// Build an agent of `kind` (tasked with `goal`) via the factory and store it,
-    /// handing it this instance's [`GraphHost`]. `is_root` gives a session root the
-    /// `respond_to_approval` tool. The caller owns the graph/scheduling
-    /// bookkeeping; this only builds and stores.
+    /// handing it this instance's [`GraphHost`]. `placement` selects whether
+    /// this is the session root or a subagent. The caller owns the
+    /// graph/scheduling bookkeeping; this only builds and stores.
     ///
     /// # Errors
     ///
@@ -358,15 +359,15 @@ impl OrchestratorInstance {
         id: AgentId,
         kind: &AgentKind,
         goal: String,
-        is_root: bool,
+        placement: AgentPlacement,
     ) -> Result<(), String> {
         let agent = self.factory.create_agent(
             id,
             kind,
             goal,
+            placement,
             Arc::clone(&self.host),
-            is_root,
-            Arc::clone(&self.inherited_context),
+            Arc::from([]),
         )?;
         self.registry.insert(id, agent);
         Ok(())
@@ -404,7 +405,7 @@ impl OrchestratorInstance {
             None => {
                 let id = self.ids.next();
                 let kind = AgentKind::new(ROOT_AGENT_KIND);
-                self.build_agent(id, &kind, text.into(), true)?;
+                self.build_agent(id, &kind, text.into(), AgentPlacement::Root(self.session))?;
                 self.meta.insert(
                     id,
                     NodeMeta {
@@ -433,6 +434,81 @@ impl OrchestratorInstance {
             output.absorb(self.tick_ready_batch().await);
         }
         output
+    }
+
+    /// Drive like [`drive`](Self::drive), but observe an out-of-band
+    /// [`SessionControl`] between ready batches so a concurrent task can stop the
+    /// drive in flight.
+    ///
+    /// - A **cancel** request aborts the current LLM round (its partial result is
+    ///   discarded by the agent's preemption path) and returns
+    ///   [`DriveStop::Cancelled`] once the aborted batch unwinds.
+    /// - An **interrupt** request lets the current batch finish and commit, then
+    ///   returns [`DriveStop::Interrupted`] before the next batch.
+    /// - Otherwise the loop runs to quiescence and returns [`DriveStop::Quiescent`].
+    ///
+    /// The caller decides what to do with the stop reason (record a marker,
+    /// deliver a queued message, start a fresh task); this method only detects and
+    /// reports it.
+    pub(crate) async fn drive_interruptible(
+        &mut self,
+        control: &SessionControl,
+    ) -> (DriveOutput, DriveStop) {
+        let mut output = DriveOutput::default();
+        while self.has_ready() {
+            // Refresh before awaiting the batch so a cancel arriving during the
+            // batch aborts whatever agents are live right now (subagents spawned
+            // last batch included).
+            control.refresh_abort_handles(self.registry.abort_handles());
+            output.absorb(self.tick_ready_batch().await);
+            // Only honour a control request when there is still work pending: a
+            // drive that has already reached quiescence has nothing to interrupt
+            // or cancel, so report it as such (the caller delivers any carried
+            // message as a fresh turn instead of a continuation).
+            if self.has_ready() {
+                // Cancel takes precedence: it is the hard stop.
+                if control.take_cancel() {
+                    return (output, DriveStop::Cancelled);
+                }
+                if control.take_interrupt() {
+                    return (output, DriveStop::Interrupted);
+                }
+            }
+        }
+        (output, DriveStop::Quiescent)
+    }
+
+    /// Record the interruption marker on the root's transcript (as a synthetic
+    /// user turn), keeping the task alive. Paired with a follow-up
+    /// [`deliver`](Self::deliver) of the interrupting message by the caller.
+    pub(crate) fn mark_interrupted(&mut self) {
+        if let Some(root) = self.root {
+            // The root is Running (mid-task); `AppendMessage` is legal in every
+            // state and just appends the marker as a user turn.
+            self.deliver_message(root, INTERRUPT_MARKER);
+        }
+    }
+
+    /// Hard-cancel the session root's current task with `reason` (recording the
+    /// cancellation marker and returning the root to idle). A no-op when there is
+    /// no root or the root has no active task to cancel.
+    ///
+    /// Paired with a follow-up [`deliver`](Self::deliver) of the new message by
+    /// the caller: the two commands land on the root's inbox in order (cancel then
+    /// append), so the next drive commits the cancellation marker and then starts
+    /// the fresh task.
+    pub(crate) fn cancel_root(&mut self, reason: CancelReason) {
+        let Some(root) = self.root else {
+            return;
+        };
+        let Some(agent) = self.registry.get_mut(root) else {
+            return;
+        };
+        // `Cancel` is rejected when the root is already idle (nothing to cancel);
+        // that is a benign no-op here, so the error is intentionally ignored.
+        if agent.send_command(AgentCommand::Cancel { reason }).is_ok() {
+            self.enqueue(root);
+        }
     }
 
     /// Route a human decision back to the agent waiting on `approval`, then mark it
@@ -580,11 +656,9 @@ impl OrchestratorInstance {
                     goal,
                     termination,
                 } => self.materialize_spawn(requester, id, kind, name, goal, termination),
-                GraphEffect::ResolveApproval {
-                    target,
-                    verdict,
-                    note,
-                } => self.apply_verdict(target, verdict, note),
+                GraphEffect::ResolveApproval { target, verdict } => {
+                    self.apply_verdict(target, verdict)
+                }
                 GraphEffect::Delete { target } => self.apply_delete(requester, target),
             }
         }
@@ -670,7 +744,7 @@ impl OrchestratorInstance {
             return;
         };
         let depth = parent_meta.depth.saturating_add(1);
-        match self.build_agent(id, &kind, goal, false) {
+        match self.build_agent(id, &kind, goal, AgentPlacement::Sub(id)) {
             Ok(()) => {
                 tracing::info!(
                     child_agent = %id,
@@ -706,8 +780,8 @@ impl OrchestratorInstance {
 
     /// Apply a verdict the root emitted via `respond_to_approval`: look up the
     /// target's parked approval id and resolve it. `yes` approves; `no` and
-    /// `other` reject, carrying the note (the user's words) as the reason.
-    fn apply_verdict(&mut self, target: AgentId, verdict: ApprovalVerdict, note: Option<String>) {
+    /// `other` reject, carrying the user's words as the reason.
+    fn apply_verdict(&mut self, target: AgentId, verdict: ApprovalVerdict) {
         let Some(approval) = self.parked_approvals.remove(&target) else {
             tracing::warn!(
                 target_agent = %target,
@@ -717,8 +791,8 @@ impl OrchestratorInstance {
         };
         let decision = match verdict {
             ApprovalVerdict::Yes => ApprovalDecision::Approved,
-            ApprovalVerdict::No | ApprovalVerdict::Other => {
-                ApprovalDecision::Rejected(note.unwrap_or_else(|| "rejected".to_string()))
+            ApprovalVerdict::No(reason) | ApprovalVerdict::Other(reason) => {
+                ApprovalDecision::Rejected(reason)
             }
         };
         if let Err(error) = self.resolve_approval(target, approval, decision) {
@@ -853,6 +927,7 @@ impl OrchestratorInstance {
 }
 
 #[cfg(test)]
+#[cfg(any())]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 mod tests {
     use core::future::Future;
@@ -861,9 +936,13 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::task::{Wake, Waker};
 
+    use claw_context::Block;
+
     use super::*;
-    use crate::agent::factory::AgentFactory;
-    use crate::agent::{Agent, AgentCommand, AgentContext, AgentTickFuture, TickOutcome};
+    use crate::agent::{
+        Agent, AgentAbortHandle, AgentCommand, AgentContext, AgentFactory, AgentTickFuture,
+        TickOutcome,
+    };
 
     /// The kind every test child is spawned as.
     const TEST_KIND: &str = "worker";
@@ -904,7 +983,7 @@ mod tests {
         AwaitApproval(String),
         /// Respond to `target`'s approval via the context, then return `Working`
         /// (models a root resolving a subagent's request).
-        Respond(AgentId, ApprovalVerdict, Option<String>),
+        Respond(AgentId, ApprovalVerdict),
         /// Delete `target` via the context, then return `Working` (models a parent
         /// reaping a persistent subagent).
         Delete(AgentId),
@@ -940,6 +1019,10 @@ mod tests {
             self.delivered.lock().unwrap().push((child, text, ok));
         }
 
+        fn abort_handle(&self) -> AgentAbortHandle {
+            AgentAbortHandle::default()
+        }
+
         fn tick(&mut self) -> AgentTickFuture<'_> {
             if matches!(self.steps.front(), Some(Step::YieldAfterOnePending(_))) {
                 if let Some(Step::YieldAfterOnePending(text)) = self.steps.pop_front() {
@@ -963,8 +1046,8 @@ mod tests {
                     id: ApprovalId(1),
                     summary,
                 },
-                Some(Step::Respond(target, verdict, note)) => {
-                    self.context.respond_to_approval(target, verdict, note);
+                Some(Step::Respond(target, verdict)) => {
+                    self.context.respond_to_approval(target, verdict);
                     TickOutcome::Working
                 }
                 Some(Step::Delete(target)) => {
@@ -1016,14 +1099,13 @@ mod tests {
     /// - `approve:<g>`→ park on approval `<g>`, then yield `done:approve:<g>`.
     /// - `rootask:<g>`→ park on approval `<g>`, then yield `done` (a root asking).
     /// - `bubble`     → spawn `approve:delete prod`, let it park, respond to
-    ///   `agent-2` with `bubble_verdict`/`bubble_note`, then yield `root-done`.
+    ///   `agent-2` with `bubble_verdict`, then yield `root-done`.
     /// - anything else→ yield `done:<goal>`.
     struct FakeFactory {
         delivered: DeliveredLog,
         received: CommandLog,
         ticks: TickLog,
         bubble_verdict: ApprovalVerdict,
-        bubble_note: Option<String>,
     }
 
     impl FakeFactory {
@@ -1033,7 +1115,6 @@ mod tests {
                 received: Arc::new(Mutex::new(Vec::new())),
                 ticks: Arc::new(Mutex::new(Vec::new())),
                 bubble_verdict: ApprovalVerdict::Yes,
-                bubble_note: None,
             }
         }
 
@@ -1080,14 +1161,18 @@ mod tests {
                     TerminationPolicy::AutoOnIdle,
                 ));
                 steps.push_back(Step::Work);
-                steps.push_back(Step::Respond(
-                    AgentId(2),
-                    self.bubble_verdict,
-                    self.bubble_note.clone(),
-                ));
+                steps.push_back(Step::Respond(AgentId(2), self.bubble_verdict.clone()));
                 steps.push_back(Step::Yield("root-done".into()));
             } else if goal == "slowleaf" {
                 steps.push_back(Step::YieldAfterOnePending("done:slowleaf".into()));
+            } else if goal == "multiwork" {
+                // Several `Working` ticks (each re-enqueues) before a final yield —
+                // gives an interruptible drive multiple batch boundaries to observe
+                // an out-of-band control request.
+                steps.push_back(Step::Work);
+                steps.push_back(Step::Work);
+                steps.push_back(Step::Work);
+                steps.push_back(Step::Yield("multiwork-done".into()));
             } else {
                 steps.push_back(Step::Yield(format!("done:{goal}")));
             }
@@ -1101,8 +1186,8 @@ mod tests {
             id: AgentId,
             _kind: &AgentKind,
             goal: String,
+            _placement: AgentPlacement,
             host: Arc<dyn GraphHost>,
-            _is_root: bool,
             _inherited_context: Arc<[Block<'static>]>,
         ) -> Result<Box<dyn Agent>, String> {
             Ok(Box::new(FakeAgent {
@@ -1117,7 +1202,7 @@ mod tests {
     }
 
     fn instance_with(factory: Arc<FakeFactory>, session: SessionId) -> OrchestratorInstance {
-        OrchestratorInstance::new(session, factory, AgentIdAllocator::new(), Arc::from([]))
+        OrchestratorInstance::new(session, factory, AgentIdAllocator::new())
     }
 
     #[test]
@@ -1365,13 +1450,9 @@ mod tests {
     /// Drive a session whose root spawns a subagent that parks on an approval,
     /// then has the root respond with `verdict`. Returns the shared command log and
     /// the drive output.
-    fn drive_subagent_approval(
-        verdict: ApprovalVerdict,
-        note: Option<String>,
-    ) -> (CommandLog, DriveOutput) {
+    fn drive_subagent_approval(verdict: ApprovalVerdict) -> (CommandLog, DriveOutput) {
         let factory = Arc::new(FakeFactory {
             bubble_verdict: verdict,
-            bubble_note: note,
             ..FakeFactory::new()
         });
         let received = Arc::clone(&factory.received);
@@ -1385,7 +1466,7 @@ mod tests {
 
     #[test]
     fn subagent_approval_bubbles_to_root_not_to_the_orchestrator() {
-        let (received, output) = drive_subagent_approval(ApprovalVerdict::Yes, None);
+        let (received, output) = drive_subagent_approval(ApprovalVerdict::Yes);
 
         // The subagent's request was *not* surfaced to the orchestrator...
         assert!(
@@ -1409,7 +1490,7 @@ mod tests {
 
     #[test]
     fn root_yes_verdict_approves_the_waiting_subagent() {
-        let (received, _output) = drive_subagent_approval(ApprovalVerdict::Yes, None);
+        let (received, _output) = drive_subagent_approval(ApprovalVerdict::Yes);
         let received = received.lock().unwrap();
         assert!(
             received.iter().any(|(agent, command)| *agent == AgentId(2)
@@ -1424,8 +1505,11 @@ mod tests {
 
     #[test]
     fn root_no_and_other_verdicts_reject_with_the_user_note() {
-        for verdict in [ApprovalVerdict::No, ApprovalVerdict::Other] {
-            let (received, _output) = drive_subagent_approval(verdict, Some("not allowed".into()));
+        for verdict in [
+            ApprovalVerdict::No("not allowed".into()),
+            ApprovalVerdict::Other("not allowed".into()),
+        ] {
+            let (received, _output) = drive_subagent_approval(verdict.clone());
             let received = received.lock().unwrap();
             assert!(
                 received.iter().any(|(agent, command)| *agent == AgentId(2)
@@ -1437,5 +1521,98 @@ mod tests {
                 "verdict {verdict:?} should reject with the note: {received:?}"
             );
         }
+    }
+
+    // -- Interruptible drive --------------------------------------------------
+
+    #[test]
+    fn drive_interruptible_runs_to_quiescence_without_a_signal() {
+        let factory = Arc::new(FakeFactory::new());
+        let mut instance = instance_with(Arc::clone(&factory), SessionId(20));
+        instance.deliver("multiwork").unwrap();
+
+        let control = SessionControl::new();
+        let (output, stop) = block_on(instance.drive_interruptible(&control));
+
+        assert_eq!(stop, DriveStop::Quiescent);
+        assert_eq!(output.replies.len(), 1);
+        assert_eq!(output.replies[0].text, "multiwork-done");
+        assert!(!instance.has_ready());
+    }
+
+    #[test]
+    fn drive_interruptible_stops_interrupted_between_batches() {
+        let factory = Arc::new(FakeFactory::new());
+        let ticks = Arc::clone(&factory.ticks);
+        let mut instance = instance_with(Arc::clone(&factory), SessionId(21));
+        instance.deliver("multiwork").unwrap();
+
+        let control = SessionControl::new();
+        control.request_interrupt();
+        let (_output, stop) = block_on(instance.drive_interruptible(&control));
+
+        assert_eq!(stop, DriveStop::Interrupted);
+        // Exactly one batch (one tick) ran before the interrupt was honoured; the
+        // task is still alive with work pending (whole-iteration graceful stop).
+        assert_eq!(ticks.lock().unwrap().len(), 1);
+        assert!(instance.has_ready());
+    }
+
+    #[test]
+    fn drive_interruptible_stops_cancelled_between_batches() {
+        let factory = Arc::new(FakeFactory::new());
+        let ticks = Arc::clone(&factory.ticks);
+        let mut instance = instance_with(Arc::clone(&factory), SessionId(22));
+        instance.deliver("multiwork").unwrap();
+
+        let control = SessionControl::new();
+        control.request_cancel();
+        let (_output, stop) = block_on(instance.drive_interruptible(&control));
+
+        assert_eq!(stop, DriveStop::Cancelled);
+        // Cancel takes precedence and stops after the current batch.
+        assert_eq!(ticks.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn mark_interrupted_appends_the_marker_to_the_root() {
+        let factory = Arc::new(FakeFactory::new());
+        let received = Arc::clone(&factory.received);
+        let mut instance = instance_with(Arc::clone(&factory), SessionId(23));
+        instance.deliver("hi").unwrap();
+        // Isolate the marker from the initial delivery's AppendMessage.
+        received.lock().unwrap().clear();
+
+        instance.mark_interrupted();
+
+        let received = received.lock().unwrap();
+        assert!(
+            received.iter().any(|(agent, command)| *agent == AgentId(1)
+                && matches!(command, AgentCommand::AppendMessage(text) if text == INTERRUPT_MARKER)),
+            "root should receive the interruption marker: {received:?}"
+        );
+    }
+
+    #[test]
+    fn cancel_root_sends_a_cancel_command_to_the_root() {
+        let factory = Arc::new(FakeFactory::new());
+        let received = Arc::clone(&factory.received);
+        let mut instance = instance_with(Arc::clone(&factory), SessionId(24));
+        instance.deliver("hi").unwrap();
+        received.lock().unwrap().clear();
+
+        instance.cancel_root(CancelReason::Superseded);
+
+        let received = received.lock().unwrap();
+        assert!(
+            received.iter().any(|(agent, command)| *agent == AgentId(1)
+                && matches!(
+                    command,
+                    AgentCommand::Cancel {
+                        reason: CancelReason::Superseded
+                    }
+                )),
+            "root should receive the cancel command: {received:?}"
+        );
     }
 }

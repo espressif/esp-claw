@@ -19,7 +19,8 @@
 //! ```
 //!
 //! - [`AgentResolver`] is the injected boundary that turns a capability/skill
-//!   *name* into a real [`Tool`] / [`SkillSet`].
+//!   *name* into a real [`Capability`](claw_capability::Capability) / [`SkillSet`];
+//!   `claw-core` then decomposes the capability into its internal `Tool`.
 //! - [`AgentConfig`] is the fully-resolved, runnable result; [`GenericAgent`] consumes
 //!   only this and never touches a manifest or the filesystem.
 
@@ -30,6 +31,7 @@ use crate::agent::graph::SpawnPolicy;
 use crate::agent::kind::AgentKind;
 use crate::agent::manifest::{AgentManifest, RetryCount};
 use crate::agent::resolver::AgentResolver;
+use claw_capability::CapabilityRole;
 use claw_tool::Tool;
 
 /// A fully-resolved agent configuration — the typed seam between a baked manifest
@@ -45,7 +47,7 @@ pub struct AgentConfig {
     pub(in crate::agent) kind: AgentKind,
     pub(in crate::agent) system_prompt: String,
     pub(in crate::agent) tools: Vec<Tool>,
-    pub(in crate::agent) skills: Option<SkillSet>,
+    pub(in crate::agent) skills: SkillSet,
     /// Whether this kind may spawn subagents (the manifest's `spawn.enabled`). The
     /// `spawn_subagent` tool is attached only when this is set *and* the agent has
     /// a graph host.
@@ -55,7 +57,7 @@ pub struct AgentConfig {
     /// only when `spawn_enabled`.
     pub(in crate::agent) spawn_policy: SpawnPolicy,
     pub(in crate::agent) retry_policy: RetryPolicy,
-    pub(in crate::agent) tool_block_retries: Option<u32>,
+    pub(in crate::agent) tool_block_retries: RetryCount,
 }
 
 impl AgentConfig {
@@ -86,11 +88,18 @@ impl AgentConfig {
             .ok_or_else(|| AgentConfigError::UnknownKind(kind.to_string()))?;
 
         let mut tools = Vec::with_capacity(manifest.capabilities.len());
-        for capability in manifest.capabilities {
-            let tool = resolver.resolve_tool(capability.as_str()).ok_or_else(|| {
-                AgentConfigError::UnknownCapability(capability.as_str().to_string())
-            })?;
-            tools.push(tool);
+        for capability_name in manifest.capabilities {
+            let name = capability_name.as_str();
+            // The resolver speaks the `Capability` vocabulary; `claw-core`
+            // decomposes it into the internal `Tool`. A missing name or a
+            // resolved non-tool capability is a config error (never dropped).
+            let capability = resolver
+                .resolve_capability(name)
+                .ok_or_else(|| AgentConfigError::UnknownCapability(name.to_string()))?;
+            let CapabilityRole::Tool(tool) = capability.role() else {
+                return Err(AgentConfigError::UnknownCapability(name.to_string()));
+            };
+            tools.push(tool.clone());
         }
 
         let skills = resolver.build_skills(manifest.skills)?;
@@ -103,7 +112,7 @@ impl AgentConfig {
             spawn_enabled: manifest.spawn_enabled,
             spawn_policy: SpawnPolicy::from_allowed_kinds(manifest.allowed_kinds),
             retry_policy: RetryPolicy::new(manifest.retries.get()),
-            tool_block_retries: manifest.tool_block_retries.map(RetryCount::get),
+            tool_block_retries: manifest.tool_block_retries,
         })
     }
 
@@ -136,17 +145,18 @@ pub enum AgentConfigError {
 mod tests {
     use super::*;
     use crate::agent::manifest::MANIFESTS;
+    use claw_capability::Capability;
     use claw_skill::SkillId;
 
     /// A test resolver that maps names to no tools and supports no skills.
     struct StaticResolver;
 
     impl AgentResolver for StaticResolver {
-        fn resolve_tool(&self, _name: &str) -> Option<Tool> {
+        fn resolve_capability(&self, _name: &str) -> Option<Capability> {
             None
         }
-        fn build_skills(&self, _skill_ids: &[SkillId]) -> Result<Option<SkillSet>, SkillError> {
-            Ok(None)
+        fn build_skills(&self, _skill_ids: &[SkillId]) -> Result<SkillSet, SkillError> {
+            Ok(SkillSet::empty())
         }
     }
 

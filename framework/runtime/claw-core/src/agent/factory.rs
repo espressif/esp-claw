@@ -1,11 +1,7 @@
-//! Building an agent of a kind: the [`AgentFactory`] seam and its production
-//! implementation [`FsAgentFactory`].
+//! Building an agent of a kind through the production [`FsAgentFactory`].
 //!
-//! [`AgentFactory`] is the injected boundary the orchestrator instance calls to
-//! construct every root and subagent, so the runtime stays free of LLM/memory
-//! wiring and unit-testable with a fake factory. [`FsAgentFactory`] is the
-//! concrete counterpart to those test factories: it turns a kind into a real,
-//! running [`GenericAgent`] by tying four pieces together:
+//! [`FsAgentFactory`] turns a kind into a real, running [`GenericAgent`] by tying
+//! four pieces together:
 //!
 //! 1. the kind's compile-time-baked [`AgentManifest`](super::manifest::AgentManifest)
 //!    (pure data: prompt + capability/skill *names*),
@@ -14,11 +10,10 @@
 //! 4. the factory-owned memory layout below one persistence root: transcripts,
 //!    editable profile documents, and long-term memory.
 //!
-//! The orchestrator instance calls
-//! [`create_agent`](AgentFactory::create_agent) for every root and subagent,
-//! handing it the graph host (always) and the root flag (only a session root gets
-//! the `respond_to_approval` tool). The `goal` is seeded as the agent's first
-//! user message so it starts working immediately.
+//! The orchestrator instance calls [`FsAgentFactory::create_agent`] for every
+//! root and subagent, handing it the graph host and an [`AgentPlacement`] that
+//! identifies either the session root or a spawned subagent. The `goal` is
+//! seeded as the agent's first user message so it starts working immediately.
 
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -26,64 +21,70 @@ use std::sync::Arc;
 use claw_api::{ClawApiAsync, ClawApiConfig};
 use claw_context::Block;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
-use claw_memory::{LongTermMemory, ProfileConfig, ProfileStore, TranscriptConfig};
+use claw_memory::{
+    LongTermInitError, LongTermMemory, ProfileConfig, ProfileStore, TranscriptConfig,
+    TranscriptStore,
+};
 
 use crate::agent::base_agent::{AgentCommand, AgentId};
 use crate::agent::config::AgentConfig;
-use crate::agent::generic_agent::{CompactionDeps, GenericAgent};
+use crate::agent::generic_agent::GenericAgent;
 use crate::agent::graph::GraphHost;
 use crate::agent::kind::AgentKind;
 use crate::agent::resolver::AgentResolver;
 use crate::agent::Agent;
 use crate::memory::{
-    agent_store, global_store, CompactionPolicy, Extractor, LlmCompactor, LlmExtractor,
-    LongTermMemoryContextAdapter, ProfileContextAdapter, ProfileTools, RuleBasedTierClassifier,
-    TierClassifier,
+    agent_store, global_store, Extractor, LlmExtractor, LongTermMemoryContextAdapter,
+    ProfileContextAdapter, ProfileTools, RuleBasedTierClassifier, TierClassifier,
 };
+use crate::session::SessionId;
 
 const TRANSCRIPT_DIR: &str = "sessions";
 const PROFILE_DIR: &str = "profile";
 const LONG_TERM_DIR: &str = "long_term";
 const GLOBAL_LONG_TERM_DIR: &str = "global";
 const AGENT_LONG_TERM_DIR: &str = "agents";
-const COMPACTION_TRIGGER_TOKENS: usize = 6000;
-const COMPACTION_KEEP_RECENT_TOKENS: usize = 2000;
-const COMPACTION_SEGMENT_TOKEN_BUDGET: usize = 1500;
+/// Subdirectory of the sessions root holding durable session-root transcripts,
+/// keyed by [`SessionId`] so they survive restarts.
+const ROOT_TRANSCRIPT_DIR: &str = "roots";
+/// Subdirectory of the sessions root holding ephemeral subagent transcripts,
+/// keyed by [`AgentId`] (subagent graphs never resume across a restart).
+const SUB_TRANSCRIPT_DIR: &str = "agents";
 
-/// Creates a concrete agent for a goal.
+/// Where a built agent sits in a session graph.
 ///
-/// Injected so the agent runtime stays free of LLM/memory wiring and
-/// unit-testable with a fake factory. The factory wires the new agent's tools to
-/// the provided [`GraphHost`] so it can spawn children and (for a root) resolve
-/// approvals.
-pub trait AgentFactory {
-    /// Build an agent of `kind` with id `id` already tasked with `goal`, handing
-    /// it `host` as its back-channel to the agent graph. Used for both spawned
-    /// subagents and a session's root agent.
-    ///
-    /// `is_root` is `true` only for a session **root**: the root is the one agent
-    /// that talks to the user, so it (and only it) gets the `respond_to_approval`
-    /// tool to feed user verdicts back to waiting subagents. Subagents pass
-    /// `false`.
-    ///
-    /// `inherited_context` carries the scope-layered prose blocks injected from
-    /// above (Global -> Session), shared as an `Arc<[Block]>` so every agent in a
-    /// session references one computed set for byte-identical prefixes. Empty for
-    /// a standalone agent.
-    ///
-    /// # Errors
-    ///
-    /// Returns a human-readable error string when `kind` is unknown or the agent
-    /// cannot be assembled; the caller logs it and drops the spawn.
-    fn create_agent(
-        &self,
-        id: AgentId,
-        kind: &AgentKind,
-        goal: String,
-        host: Arc<dyn GraphHost>,
-        is_root: bool,
-        inherited_context: Arc<[Block<'static>]>,
-    ) -> Result<Box<dyn Agent>, String>;
+/// This is not just a transcript selector: it is the single source of truth for
+/// root-only tool/profile permissions and for transcript placement. The
+/// transcript store key is deliberately decoupled from the volatile [`AgentId`]:
+/// a session **root**'s record is keyed by the stable [`SessionId`] so it is found
+/// again when the session is rehydrated after a restart, while a **subagent**'s
+/// record is keyed by its [`AgentId`] (its graph is rebuilt from scratch on the
+/// next boot and never resumes, so a fresh key is correct).
+///
+/// The two live under separate subdirectories so the numeric id spaces never
+/// collide.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentPlacement {
+    /// A session's user-facing root; its transcript key is the session id.
+    Root(SessionId),
+    /// A spawned subagent; its transcript key is the agent id.
+    Sub(AgentId),
+}
+
+impl AgentPlacement {
+    /// Whether this placement belongs to the session root.
+    fn is_root(self) -> bool {
+        matches!(self, AgentPlacement::Root(_))
+    }
+
+    /// The `(subdirectory, conversation_id)` this placement maps to under the
+    /// sessions transcript root.
+    fn location(self) -> (&'static str, u32) {
+        match self {
+            AgentPlacement::Root(session) => (ROOT_TRANSCRIPT_DIR, session.0),
+            AgentPlacement::Sub(agent) => (SUB_TRANSCRIPT_DIR, agent.0),
+        }
+    }
 }
 
 /// The long-term-memory collaborators shared across every agent a factory
@@ -116,15 +117,15 @@ impl<F: ClawFs + Clone + 'static> LongTermDeps<F> {
         fs: F,
         classifier: Arc<dyn TierClassifier>,
         extractor: Arc<dyn Extractor>,
-    ) -> Self {
+    ) -> Result<Self, LongTermInitError> {
         let global_dir = join_storage_path(long_term_dir, GLOBAL_LONG_TERM_DIR);
         let agent_root_dir = join_storage_path(long_term_dir, AGENT_LONG_TERM_DIR);
-        Self {
-            global: global_store(&global_dir, fs),
+        Ok(Self {
+            global: global_store(&global_dir, fs)?,
             agent_root_dir,
             classifier,
             extractor,
-        }
+        })
     }
 
     fn agent_dir_for(&self, kind: &AgentKind) -> String {
@@ -154,12 +155,12 @@ pub enum FsAgentFactoryError {
     /// No persistence directory was provided to the factory.
     #[error("persistence directory is required")]
     MissingPersistenceDir,
-    /// The shared conversation-compaction LLM client failed to init.
-    #[error("failed to initialize the compaction LLM client: {0}")]
-    CompactorLlm(String),
     /// The dedicated extraction LLM client (for long-term memory) failed to init.
     #[error("failed to initialize the extraction LLM client: {0}")]
     ExtractionLlm(String),
+    /// A long-term memory journal exists but could not be read at startup.
+    #[error("failed to load long-term memory: {0}")]
+    LongTermInit(#[from] LongTermInitError),
 }
 
 fn join_storage_path(parent: &str, child: &str) -> String {
@@ -202,10 +203,6 @@ pub struct FsAgentFactory<
     /// must be `Clone` because every agent gets its own handle (use
     /// `Arc<ConcreteFs>` for a shared backend — `Arc<T>` is itself `ClawFs`).
     storage: F,
-    /// Compaction collaborators cloned into each agent's rolling-summary adapter.
-    /// These belong to the agent layer, not the transcript store, which never
-    /// compacts.
-    compaction: CompactionDeps,
     /// Long-term-memory collaborators, shared across every agent this factory
     /// builds. Required: every agent gets a private store plus a clone of the
     /// shared global store, fronted by one [`LongTermMemoryContextAdapter`].
@@ -232,10 +229,8 @@ impl<
     /// # Errors
     ///
     /// Returns [`FsAgentFactoryError::MissingPersistenceDir`] when the
-    /// persistence root is blank, or
-    /// [`FsAgentFactoryError::CompactorLlm`] /
-    /// [`FsAgentFactoryError::ExtractionLlm`] if one of the internal LLM clients
-    /// cannot be initialized.
+    /// persistence root is blank, or [`FsAgentFactoryError::ExtractionLlm`] if the
+    /// internal extraction LLM client cannot be initialized.
     pub fn new(
         resolver: Arc<dyn AgentResolver>,
         llm_config: ClawApiConfig,
@@ -254,20 +249,9 @@ impl<
             storage.clone(),
             RuleBasedTierClassifier::shared(),
             LlmExtractor::shared(extraction_llm),
-        );
+        )?;
 
         let profile = ProfileStore::new(ProfileConfig::new(&layout.profile_dir), storage.clone());
-
-        let compaction_llm = ClawApiAsync::init(llm_config.clone(), H::default(), Timer::default())
-            .map_err(|error| FsAgentFactoryError::CompactorLlm(error.to_string()))?;
-        let compaction = CompactionDeps {
-            compactor: Arc::new(LlmCompactor::new(compaction_llm)),
-            policy: CompactionPolicy::new(
-                COMPACTION_TRIGGER_TOKENS,
-                COMPACTION_KEEP_RECENT_TOKENS,
-                COMPACTION_SEGMENT_TOKEN_BUDGET,
-            ),
-        };
 
         Ok(Self {
             resolver,
@@ -276,27 +260,9 @@ impl<
             _timer: PhantomData,
             transcript_dir: layout.transcript_dir,
             storage,
-            compaction,
             long_term,
             profile,
         })
-    }
-
-    /// Mint a fresh LLM client for one agent: the shared config plus this
-    /// factory's transport type, freshly constructed so each agent owns an
-    /// independent `H`.
-    fn mint_llm(&self) -> Result<ClawApiAsync<H, Timer>, String> {
-        ClawApiAsync::init(self.llm_config.clone(), H::default(), Timer::default())
-            .map_err(|error| format!("initializing LLM: {error}"))
-    }
-
-    /// A fresh [`CompactionDeps`] sharing this factory's collaborators (`Arc`
-    /// clone of the compactor plus the `Copy` policy).
-    fn clone_compaction(&self) -> CompactionDeps {
-        CompactionDeps {
-            compactor: Arc::clone(&self.compaction.compactor),
-            policy: self.compaction.policy,
-        }
     }
 }
 
@@ -304,46 +270,62 @@ impl<
         F: ClawFs + Clone + Default + 'static,
         H: ClawHttp + Default + 'static,
         Timer: ClawTimer + Default + 'static,
-    > AgentFactory for FsAgentFactory<F, H, Timer>
+    > FsAgentFactory<F, H, Timer>
 {
-    fn create_agent(
+    /// Build an agent of `kind` with id `id` already tasked with `goal`, handing
+    /// it `host` as its back-channel to the agent graph. Used for both spawned
+    /// subagents and a session's root agent.
+    ///
+    /// `placement` selects the durable transcript this agent attaches to: a
+    /// root keys its record by the stable [`SessionId`] (so it resumes across
+    /// restarts), a subagent by its [`AgentId`]. It also decides root-only tool
+    /// wiring, so root/subagent identity has one source of truth.
+    ///
+    /// # Errors
+    ///
+    /// Returns a human-readable error string when `kind` is unknown or the agent
+    /// cannot be assembled; the caller logs it and drops the spawn.
+    pub(crate) fn create_agent(
         &self,
         id: AgentId,
         kind: &AgentKind,
         goal: String,
+        placement: AgentPlacement,
         host: Arc<dyn GraphHost>,
-        is_root: bool,
         inherited_context: Arc<[Block<'static>]>,
     ) -> Result<Box<dyn Agent>, String> {
         // The config is pure data; which graph tools attach is decided in
         // `GenericAgent::new` from the manifest's `spawn.enabled`, the host's
-        // presence, and `is_root`.
+        // presence, and whether the placement is the session root.
         let config = AgentConfig::resolve(kind.as_str(), self.resolver.as_ref())
             .map_err(|error| format!("resolving config for kind '{kind}': {error}"))?;
+        let is_root = placement.is_root();
 
-        let llm = self
-            .mint_llm()
-            .map_err(|error| format!("{error} for {id}"))?;
-        let supports_tools = llm.profile().supports_tools();
-
-        let transcript_config = TranscriptConfig::new(&self.transcript_dir);
-        let mut agent = GenericAgent::new(
+        // Roots and subagents live in separate subtrees keyed by session id vs
+        // agent id, so a root transcript is found again on restart while subagent
+        // transcripts stay ephemeral (and their id space never collides).
+        let (subdir, conversation_id) = placement.location();
+        let transcript_dir = join_storage_path(&self.transcript_dir, subdir);
+        let transcript_config = TranscriptConfig::new(&transcript_dir);
+        let store = TranscriptStore::new(conversation_id, transcript_config, self.storage.clone())
+            .map_err(|error| format!("opening transcript for {kind} agent {id}: {error}"))?;
+        // The LLM client (and its transport) is built inside the agent from this
+        // shared config plus the factory's transport type; nothing is minted here.
+        let mut agent = GenericAgent::<H, Timer>::new(
             id,
-            llm,
-            transcript_config,
-            self.storage.clone(),
-            self.clone_compaction(),
+            self.llm_config.clone(),
+            store,
             config,
-            Some(host),
+            host,
             is_root,
             inherited_context,
         )
         .map_err(|error| format!("building {kind} agent {id}: {error}"))?;
 
         // Attach editable global profile context to every agent. Only a root agent
-        // with tool-capable LLM gets the mutation tools; subagents read profile
-        // through context but do not write it directly.
-        let profile_tools = if is_root && supports_tools {
+        // gets the mutation tools; subagents read profile through context but do
+        // not write it directly.
+        let profile_tools = if is_root {
             ProfileTools::Writable
         } else {
             ProfileTools::Disabled
@@ -358,7 +340,8 @@ impl<
         let long_term = &self.long_term;
         let agent_dir = long_term.agent_dir_for(kind);
         let adapter = LongTermMemoryContextAdapter::new(
-            agent_store(&agent_dir, self.storage.clone()),
+            agent_store(&agent_dir, self.storage.clone())
+                .map_err(|error| format!("loading long-term memory for {id}: {error}"))?,
             long_term.global.clone(),
             Arc::clone(&long_term.classifier),
             Arc::clone(&long_term.extractor),
@@ -394,8 +377,9 @@ mod tests {
     use super::*;
     use crate::agent::base_agent::TickOutcome;
     use crate::agent::graph::GraphEffect;
+    use claw_capability::Capability;
     use claw_skill::{SkillError, SkillId, SkillSet};
-    use claw_tool::{init_tool_executor, Tool};
+    use claw_tool::init_tool_executor;
 
     struct NoopWake;
     impl Wake for NoopWake {
@@ -418,11 +402,11 @@ mod tests {
     /// manifests, whose capability/skill lists are currently empty.
     struct EmptyResolver;
     impl AgentResolver for EmptyResolver {
-        fn resolve_tool(&self, _name: &str) -> Option<Tool> {
+        fn resolve_capability(&self, _name: &str) -> Option<Capability> {
             None
         }
-        fn build_skills(&self, _ids: &[SkillId]) -> Result<Option<SkillSet>, SkillError> {
-            Ok(None)
+        fn build_skills(&self, _ids: &[SkillId]) -> Result<SkillSet, SkillError> {
+            Ok(SkillSet::empty())
         }
     }
 
@@ -476,8 +460,8 @@ mod tests {
                 AgentId(1),
                 &AgentKind::new("conversation"),
                 "say hi".into(),
+                AgentPlacement::Root(SessionId(1)),
                 Arc::new(NoopHost),
-                true,
                 Arc::from([]),
             )
             .expect("agent builds");
@@ -502,8 +486,8 @@ mod tests {
             AgentId(1),
             &AgentKind::new("nope"),
             "x".into(),
+            AgentPlacement::Sub(AgentId(1)),
             Arc::new(NoopHost),
-            false,
             Arc::from([]),
         );
         assert!(result.is_err());
@@ -516,8 +500,8 @@ mod tests {
             AgentId(1),
             &AgentKind::new("worker"),
             "x".into(),
+            AgentPlacement::Sub(AgentId(1)),
             Arc::new(NoopHost),
-            false,
             Arc::from([]),
         );
         assert!(result.is_ok());

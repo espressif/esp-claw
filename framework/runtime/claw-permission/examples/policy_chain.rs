@@ -37,7 +37,7 @@ fn main() {
 
     println!("== AskAtOrAbove(Moderate) over a permissive base ==");
     for action in &actions {
-        let request = PermissionRequest::new(7, "worker", action);
+        let request = PermissionRequest::new(action);
         println!(
             "{:<12} risk={:?}  ->  {}",
             action.verb(),

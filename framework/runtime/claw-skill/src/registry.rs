@@ -139,6 +139,24 @@ pub trait SkillRegistry: Send + Sync {
     }
 }
 
+/// A registry with an empty catalog and no documents.
+///
+/// Used when an agent has no skill backing. This keeps "no skills" represented as
+/// an empty [`SkillSet`](crate::SkillSet) instead of an `Option<SkillSet>` while
+/// still surfacing requested skill ids as [`SkillError::NotFound`].
+#[derive(Debug, Default)]
+pub struct EmptySkillRegistry;
+
+impl SkillRegistry for EmptySkillRegistry {
+    fn catalog(&self) -> Arc<CatalogSnapshot> {
+        Arc::new(CatalogSnapshot::default())
+    }
+
+    fn write_document(&self, id: &SkillId, _out: &mut String) -> Result<(), SkillError> {
+        Err(SkillError::NotFound(id.clone()))
+    }
+}
+
 /// A [`SkillRegistry`] backed by one or more [`ClawFs`] skills directories.
 ///
 /// The scanned catalog lives behind an `RwLock<Arc<…>>` so it can be replaced at

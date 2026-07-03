@@ -22,6 +22,18 @@ use crate::agent::graph::{AgentContext, ApprovalVerdict};
 
 use super::{agent_resource, string_argument};
 
+const DEFAULT_REJECTION_REASON: &str = "rejected";
+
+fn rejection_reason(arguments_json: &str) -> Result<String, ToolError> {
+    let note = string_argument(arguments_json, "note")?;
+    let note = note.trim();
+    Ok(if note.is_empty() {
+        DEFAULT_REJECTION_REASON.to_string()
+    } else {
+        note.to_string()
+    })
+}
+
 /// Reports the root's verdict on a pending approval through the graph context.
 pub(crate) struct RespondToApprovalTool {
     context: Arc<AgentContext>,
@@ -54,8 +66,8 @@ impl ToolHandler for RespondToApprovalTool {
         let verdict_raw = string_argument(call.arguments_json, "verdict")?;
         let verdict = match verdict_raw.trim() {
             "yes" => ApprovalVerdict::Yes,
-            "no" => ApprovalVerdict::No,
-            "other" => ApprovalVerdict::Other,
+            "no" => ApprovalVerdict::No(rejection_reason(call.arguments_json)?),
+            "other" => ApprovalVerdict::Other(rejection_reason(call.arguments_json)?),
             other => {
                 return Err(ToolError::invoke_rejected(format!(
                     "respond_to_approval 'verdict' must be one of yes|no|other, got '{other}'"
@@ -64,10 +76,7 @@ impl ToolHandler for RespondToApprovalTool {
             }
         };
 
-        let note_raw = string_argument(call.arguments_json, "note")?;
-        let note = (!note_raw.trim().is_empty()).then_some(note_raw);
-
-        self.context.respond_to_approval(target, verdict, note);
+        self.context.respond_to_approval(target, verdict);
         Ok(ToolOutput {
             output: format!("Recorded '{verdict_raw}' for {target}."),
             ok: true,
@@ -110,8 +119,7 @@ mod tests {
                 AgentId(1),
                 GraphEffect::ResolveApproval {
                     target: AgentId(7),
-                    verdict: ApprovalVerdict::No,
-                    note: Some("not allowed".to_string()),
+                    verdict: ApprovalVerdict::No("not allowed".to_string()),
                 }
             )]
         );

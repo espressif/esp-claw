@@ -13,46 +13,46 @@
 //! This module also defines the shared [`AgentIdAllocator`] (process-unique ids),
 //! used by the instance, not by the store itself: it is colocated here because it
 //! is agent-identity infrastructure. Agent construction lives in
-//! [`AgentFactory`](crate::agent::factory::AgentFactory).
+//! [`FsAgentFactory`](crate::agent::FsAgentFactory).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::agent::base_agent::AgentId;
+use crate::agent::base_agent::{AgentAbortHandle, AgentId};
 use crate::agent::Agent;
 
-/// The first [`AgentId`] handed out (0 reads like "unset").
-const FIRST_AGENT_ID: AgentId = AgentId(1);
+crate::define_id_allocator!(
+    /// The lock-free core counter behind [`AgentIdAllocator`]. The first
+    /// handed-out id is `agent-1` (0 reads like "unset").
+    AgentIdCounter(AgentId),
+    AgentId(1)
+);
 
-/// Hands out process-unique [`AgentId`]s from a shared counter.
+/// Hands out process-unique [`AgentId`]s from one shared counter.
 ///
-/// The counter is the **next** [`AgentId`] to hand out, stored as an `AgentId`
-/// (not a bare integer) so the allocator follows [`AgentId`]'s representation if
-/// it ever changes — there is no independent `usize` assumption here. Cloning
-/// shares the same counter, so several per-session instances draw
-/// globally-unique ids from one allocator. id allocation is not a hot path (once
-/// per spawn / per session root), so a `Mutex` is sufficient.
-#[derive(Clone, Debug)]
-pub(crate) struct AgentIdAllocator(Arc<Mutex<AgentId>>);
-
-impl Default for AgentIdAllocator {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+/// This is the **shared / cloned** allocator case: it is cloned into every
+/// per-session instance (see [`OrchestratorInstance`](crate::orchestrator)) and
+/// drawn from while a session drives with the orchestrator's map lock released,
+/// so there is no common enclosing lock to piggyback on. The synchronization the
+/// [`define_id_allocator!`](claw_utils::define_id_allocator) core deliberately
+/// omits therefore lives here, at the one shared owner: an `Arc<Mutex<_>>` whose
+/// clones all draw from the same counter. Id allocation runs once per spawn, so a
+/// `Mutex` is more than sufficient.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct AgentIdAllocator(Arc<Mutex<AgentIdCounter>>);
 
 impl AgentIdAllocator {
     /// Start a fresh allocator whose first handed-out id is `agent-1`.
     pub(crate) fn new() -> Self {
-        Self(Arc::new(Mutex::new(FIRST_AGENT_ID)))
+        Self::default()
     }
 
-    /// Allocate the next process-unique [`AgentId`].
+    /// Allocate the next id, advancing the shared counter.
     pub(crate) fn next(&self) -> AgentId {
-        let mut next = self.0.lock().unwrap_or_else(|poison| poison.into_inner());
-        let id = *next;
-        *next = AgentId(id.0.saturating_add(1));
-        id
+        self.0
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .next()
     }
 }
 
@@ -91,6 +91,20 @@ impl AgentRegistry {
         self.agents.remove(&id)
     }
 
+    /// An abort handle for every currently-stored agent.
+    ///
+    /// The instance collects these before each ready batch so an out-of-band
+    /// cancel can abort whatever agents are live (see
+    /// [`SessionControl`](crate::orchestrator::SessionControl)). Handles are
+    /// `Arc`-backed clones, so they stay valid even after an agent is
+    /// [`take`](Self::take)n out for a tick.
+    pub(crate) fn abort_handles(&self) -> Vec<AgentAbortHandle> {
+        self.agents
+            .values()
+            .map(|agent| agent.abort_handle())
+            .collect()
+    }
+
     /// The number of live agents in the store. Used by the instance's test-only
     /// `agent_count`; a non-test caller arrives with Part B's resource caps.
     #[cfg(test)]
@@ -103,7 +117,9 @@ impl AgentRegistry {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use crate::agent::base_agent::{AgentCommand, AgentCommandError, TickOutcome};
+    use crate::agent::base_agent::{
+        AgentAbortHandle, AgentCommand, AgentCommandError, TickOutcome,
+    };
     use crate::agent::AgentTickFuture;
 
     /// A trivial agent: does nothing, always idle. Enough to exercise the store.
@@ -119,6 +135,9 @@ mod tests {
             Ok(())
         }
         fn deliver_child_result(&mut self, _child: AgentId, _text: String, _ok: bool) {}
+        fn abort_handle(&self) -> AgentAbortHandle {
+            AgentAbortHandle::default()
+        }
         fn tick(&mut self) -> AgentTickFuture<'_> {
             Box::pin(async { TickOutcome::Idle })
         }
