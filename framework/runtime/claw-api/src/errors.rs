@@ -62,9 +62,6 @@ pub enum InitError {
 /// Failures from a structured JSON chat completion request.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ChatJsonError {
-    /// Tools were requested but the profile does not support them.
-    #[error("selected backend does not support tool calls")]
-    ToolsUnsupported,
     /// Model returned neither parseable JSON nor tool calls.
     #[error("LLM returned empty structured output")]
     EmptyText,
@@ -109,9 +106,6 @@ impl ChatJsonError {
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ChatError {
-    /// The selected backend/profile does not support tool calls.
-    #[error("selected backend does not support tool calls")]
-    ToolsUnsupported,
     /// The caller-supplied tools JSON was invalid.
     #[error("invalid tools JSON")]
     InvalidToolsJson,
@@ -132,9 +126,6 @@ impl ChatError {
 /// pipeline used only by this call).
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum InferMediaError {
-    /// The selected profile does not support vision/media.
-    #[error("selected profile does not support media inference")]
-    VisionUnsupported,
     /// The request was missing a prompt or media asset.
     #[error("media request is incomplete")]
     IncompleteRequest,

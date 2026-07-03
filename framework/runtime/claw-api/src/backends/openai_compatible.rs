@@ -8,40 +8,27 @@ use claw_interface::http::{blocking::ClawHttp as BlockingClawHttp, Cancel, ClawH
 
 use super::super::errors::{ChatError, ClawApiError, InferMediaError, InitError};
 use super::super::media::prepare_asset;
-use super::super::types::{
-    ChatJsonRequest, ChatRequest, ClawApiConfig, LlmResponse, MediaRequest, ModelProfile,
-};
+use super::super::types::{ChatJsonRequest, ChatRequest, ClawApiConfig, LlmResponse, MediaRequest};
 use super::shared::{
     insert_tools_into_body, parse_openai_chat_response, post_json, post_json_async,
-    single_media_asset, BackendContext, ChatJsonPromptFallback,
+    single_media_asset, BackendContext,
 };
 use super::BackendImpl;
 
-pub(super) const ID: &str = "openai_compatible";
-pub(super) const CHAT_PATH: &str = "/chat/completions";
-pub(super) const DEFAULT_MAX_TOKENS_FIELD: &str = "max_tokens";
+/// Chat endpoint path appended to the base URL.
+const CHAT_PATH: &str = "/chat/completions";
+/// Provider field name that carries the max-tokens value.
+const MAX_TOKENS_FIELD: &str = "max_tokens";
+/// Whether media prep must reject local/inline images (remote URLs only).
+const IMAGE_REMOTE_URL_ONLY: bool = false;
 
 pub(super) struct OpenAiCompatible {
     context: BackendContext,
 }
 
-/// `openai_compatible_init`
-///
-/// Credential/config validation is centralized in [`crate::ClawApi::init`];
-/// `api_key`, `model`, and `base_url` are guaranteed non-empty here.
 impl OpenAiCompatible {
-    pub(super) fn make(config: &ClawApiConfig) -> Result<Self, InitError> {
-        Ok(OpenAiCompatible {
-            context: BackendContext::from_config(config),
-        })
-    }
-
     /// `build_chat_body`
-    fn build_chat_body(
-        &self,
-        profile: &ModelProfile,
-        request: &ChatRequest,
-    ) -> Result<String, ChatError> {
+    fn build_chat_body(&self, request: &ChatRequest) -> Result<String, ChatError> {
         let mut messages: Vec<Value> = Vec::new();
         if !request.system_prompt.is_empty() {
             messages.push(json!({"role": "system", "content": request.system_prompt}));
@@ -55,13 +42,13 @@ impl OpenAiCompatible {
         let mut body = serde_json::Map::new();
         body.insert("model".to_string(), json!(self.context.model()));
         body.insert(
-            profile.max_tokens_field().to_string(),
+            MAX_TOKENS_FIELD.to_string(),
             json!(self.context.max_tokens()),
         );
         body.insert("messages".to_string(), Value::Array(messages));
 
         if let Some(tools_json) = request.tools_json.filter(|s| !s.is_empty()) {
-            insert_tools_into_body(&mut body, profile, tools_json)?;
+            insert_tools_into_body(&mut body, tools_json)?;
         }
 
         serde_json::to_string(&Value::Object(body)).map_err(|_| {
@@ -71,7 +58,6 @@ impl OpenAiCompatible {
 
     fn build_chat_json_body(
         &self,
-        profile: &ModelProfile,
         request: &ChatJsonRequest<'_>,
         schema_name: &str,
         schema: &Value,
@@ -89,7 +75,7 @@ impl OpenAiCompatible {
         let mut body = serde_json::Map::new();
         body.insert("model".to_string(), json!(self.context.model()));
         body.insert(
-            profile.max_tokens_field().to_string(),
+            MAX_TOKENS_FIELD.to_string(),
             json!(self.context.max_tokens()),
         );
         body.insert("messages".to_string(), Value::Array(messages));
@@ -105,7 +91,7 @@ impl OpenAiCompatible {
             }),
         );
         if let Some(tools_json) = request.tools_json.filter(|s| !s.is_empty()) {
-            insert_tools_into_body(&mut body, profile, tools_json)?;
+            insert_tools_into_body(&mut body, tools_json)?;
         }
 
         serde_json::to_string(&Value::Object(body)).map_err(|_| {
@@ -115,16 +101,22 @@ impl OpenAiCompatible {
 }
 
 impl BackendImpl for OpenAiCompatible {
+    /// `openai_compatible_init`
+    fn make(config: &ClawApiConfig) -> Result<Self, InitError> {
+        Ok(OpenAiCompatible {
+            context: BackendContext::from_config(config),
+        })
+    }
+
     /// `openai_compatible_chat`
     fn chat<H: BlockingClawHttp>(
         &self,
         http: &mut H,
-        profile: &ModelProfile,
         request: &ChatRequest,
         abort: &AtomicBool,
     ) -> Result<LlmResponse, ChatError> {
-        let post_data = self.build_chat_body(profile, request)?;
-        let url = self.context.endpoint_url(profile);
+        let post_data = self.build_chat_body(request)?;
+        let url = self.context.endpoint_url(CHAT_PATH);
 
         let http_request = self.context.json_request(
             &url,
@@ -139,20 +131,13 @@ impl BackendImpl for OpenAiCompatible {
     fn chat_json<H: BlockingClawHttp>(
         &self,
         http: &mut H,
-        profile: &ModelProfile,
         request: &ChatJsonRequest<'_>,
         schema_name: &str,
         schema: &Value,
         abort: &AtomicBool,
     ) -> Result<LlmResponse, ChatError> {
-        if !profile.supports_json_schema() {
-            let fallback = ChatJsonPromptFallback::new(request, schema);
-            let chat_req = fallback.chat_request();
-            return self.chat(http, profile, &chat_req, abort);
-        }
-
-        let post_data = self.build_chat_json_body(profile, request, schema_name, schema)?;
-        let url = self.context.endpoint_url(profile);
+        let post_data = self.build_chat_json_body(request, schema_name, schema)?;
+        let url = self.context.endpoint_url(CHAT_PATH);
         let http_request = self.context.json_request(
             &url,
             &post_data,
@@ -167,25 +152,21 @@ impl BackendImpl for OpenAiCompatible {
     fn infer_media<H: BlockingClawHttp>(
         &self,
         http: &mut H,
-        profile: &ModelProfile,
         request: &MediaRequest,
         abort: &AtomicBool,
     ) -> Result<String, InferMediaError> {
-        if !profile.supports_vision() {
-            return Err(InferMediaError::VisionUnsupported);
-        }
         let user_prompt = request.user_prompt.unwrap_or("");
         if user_prompt.is_empty() {
             return Err(InferMediaError::IncompleteRequest);
         }
         let asset = single_media_asset(request.media)?;
 
-        let prepared = prepare_asset(asset, profile, self.context.image_max_bytes())?;
+        let prepared = prepare_asset(asset, IMAGE_REMOTE_URL_ONLY, self.context.image_max_bytes())?;
 
         let mut body = serde_json::Map::new();
         body.insert("model".to_string(), json!(self.context.model()));
         body.insert(
-            profile.max_tokens_field().to_string(),
+            MAX_TOKENS_FIELD.to_string(),
             json!(self.context.max_tokens()),
         );
         let mut messages: Vec<Value> = Vec::new();
@@ -201,7 +182,7 @@ impl BackendImpl for OpenAiCompatible {
 
         let post_data = serde_json::to_string(&Value::Object(body))
             .map_err(|_| ClawApiError::ApiError("out of memory serializing media request"))?;
-        let url = self.context.endpoint_url(profile);
+        let url = self.context.endpoint_url(CHAT_PATH);
 
         let http_request = self.context.json_request(
             &url,
@@ -221,12 +202,11 @@ impl BackendImpl for OpenAiCompatible {
     async fn chat_async<H: ClawHttp>(
         &self,
         http: &mut H,
-        profile: &ModelProfile,
         request: &ChatRequest<'_>,
         cancel: Cancel<'_>,
     ) -> Result<LlmResponse, ChatError> {
-        let post_data = self.build_chat_body(profile, request)?;
-        let url = self.context.endpoint_url(profile);
+        let post_data = self.build_chat_body(request)?;
+        let url = self.context.endpoint_url(CHAT_PATH);
 
         let http_request = self.context.json_request(
             &url,
@@ -241,20 +221,13 @@ impl BackendImpl for OpenAiCompatible {
     async fn chat_json_async<H: ClawHttp>(
         &self,
         http: &mut H,
-        profile: &ModelProfile,
         request: &ChatJsonRequest<'_>,
         schema_name: &str,
         schema: &Value,
         cancel: Cancel<'_>,
     ) -> Result<LlmResponse, ChatError> {
-        if !profile.supports_json_schema() {
-            let fallback = ChatJsonPromptFallback::new(request, schema);
-            let chat_req = fallback.chat_request();
-            return self.chat_async(http, profile, &chat_req, cancel).await;
-        }
-
-        let post_data = self.build_chat_json_body(profile, request, schema_name, schema)?;
-        let url = self.context.endpoint_url(profile);
+        let post_data = self.build_chat_json_body(request, schema_name, schema)?;
+        let url = self.context.endpoint_url(CHAT_PATH);
         let http_request = self.context.json_request(
             &url,
             &post_data,
@@ -268,25 +241,21 @@ impl BackendImpl for OpenAiCompatible {
     async fn infer_media_async<H: ClawHttp>(
         &self,
         http: &mut H,
-        profile: &ModelProfile,
         request: &MediaRequest<'_>,
         cancel: Cancel<'_>,
     ) -> Result<String, InferMediaError> {
-        if !profile.supports_vision() {
-            return Err(InferMediaError::VisionUnsupported);
-        }
         let user_prompt = request.user_prompt.unwrap_or("");
         if user_prompt.is_empty() {
             return Err(InferMediaError::IncompleteRequest);
         }
         let asset = single_media_asset(request.media)?;
 
-        let prepared = prepare_asset(asset, profile, self.context.image_max_bytes())?;
+        let prepared = prepare_asset(asset, IMAGE_REMOTE_URL_ONLY, self.context.image_max_bytes())?;
 
         let mut body = serde_json::Map::new();
         body.insert("model".to_string(), json!(self.context.model()));
         body.insert(
-            profile.max_tokens_field().to_string(),
+            MAX_TOKENS_FIELD.to_string(),
             json!(self.context.max_tokens()),
         );
         let mut messages: Vec<Value> = Vec::new();
@@ -302,7 +271,7 @@ impl BackendImpl for OpenAiCompatible {
 
         let post_data = serde_json::to_string(&Value::Object(body))
             .map_err(|_| ClawApiError::ApiError("out of memory serializing media request"))?;
-        let url = self.context.endpoint_url(profile);
+        let url = self.context.endpoint_url(CHAT_PATH);
 
         let http_request = self.context.json_request(
             &url,

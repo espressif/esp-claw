@@ -4,8 +4,7 @@
 //! parses the Anthropic content-block response back into a [`LlmResponse`].
 //!
 //! Structured JSON ([`crate::ClawApi::chat_json`]) uses Anthropic
-//! `output_config.format` when [`crate::ModelProfile::supports_json_schema`]
-//! is set; otherwise it falls back to schema-in-prompt.
+//! `output_config.format` (this backend supports provider-native JSON schema).
 
 use core::sync::atomic::AtomicBool;
 
@@ -18,17 +17,18 @@ use claw_interface::http::{
 use super::super::errors::{ChatError, ClawApiError, InferMediaError, InitError};
 use super::super::media::prepare_asset;
 use super::super::types::{
-    ChatJsonRequest, ChatRequest, ClawApiConfig, LlmResponse, MediaRequest, ModelProfile, ToolCall,
+    ChatJsonRequest, ChatRequest, ClawApiConfig, LlmResponse, MediaRequest, ToolCall,
 };
-use super::shared::{
-    post_json, post_json_async, single_media_asset, BackendContext, ChatJsonPromptFallback,
-};
+use super::shared::{post_json, post_json_async, single_media_asset, BackendContext};
 use super::BackendImpl;
 
-pub(super) const ID: &str = "anthropic_compatible";
-pub(super) const CHAT_PATH: &str = "/messages";
-pub(super) const DEFAULT_MAX_TOKENS_FIELD: &str = "max_tokens";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+/// Chat endpoint path appended to the base URL.
+const CHAT_PATH: &str = "/messages";
+/// Provider field name that carries the max-tokens value.
+const MAX_TOKENS_FIELD: &str = "max_tokens";
+/// Whether media prep must reject local/inline images (remote URLs only).
+const IMAGE_REMOTE_URL_ONLY: bool = false;
 
 pub(super) struct Anthropic {
     context: BackendContext,
@@ -315,19 +315,16 @@ fn parse_chat_response(body: &str) -> Result<LlmResponse, ClawApiError> {
 }
 
 impl Anthropic {
-    pub(super) fn make(config: &ClawApiConfig) -> Result<Self, InitError> {
-        Ok(Anthropic {
-            context: BackendContext::from_config(config),
-        })
-    }
-
     /// `build_chat_body`
     fn build_chat_body(&self, request: &ChatRequest) -> Result<String, ChatError> {
         let messages = convert_messages_to_anthropic(request.messages, request.reminders)?;
 
         let mut body = Map::new();
         body.insert("model".to_string(), json!(self.context.model()));
-        body.insert("max_tokens".to_string(), json!(self.context.max_tokens()));
+        body.insert(
+            MAX_TOKENS_FIELD.to_string(),
+            json!(self.context.max_tokens()),
+        );
         if !request.system_prompt.is_empty() {
             body.insert("system".to_string(), json!(request.system_prompt));
         }
@@ -349,7 +346,10 @@ impl Anthropic {
 
         let mut body = Map::new();
         body.insert("model".to_string(), json!(self.context.model()));
-        body.insert("max_tokens".to_string(), json!(self.context.max_tokens()));
+        body.insert(
+            MAX_TOKENS_FIELD.to_string(),
+            json!(self.context.max_tokens()),
+        );
         if !request.system_prompt.is_empty() {
             body.insert("system".to_string(), json!(request.system_prompt));
         }
@@ -404,16 +404,22 @@ impl Anthropic {
 }
 
 impl BackendImpl for Anthropic {
+    /// `anthropic_init`
+    fn make(config: &ClawApiConfig) -> Result<Self, InitError> {
+        Ok(Anthropic {
+            context: BackendContext::from_config(config),
+        })
+    }
+
     /// `anthropic_chat`
     fn chat<H: BlockingClawHttp>(
         &self,
         http: &mut H,
-        profile: &ModelProfile,
         request: &ChatRequest,
         abort: &AtomicBool,
     ) -> Result<LlmResponse, ChatError> {
         let post_data = self.build_chat_body(request)?;
-        let url = self.context.endpoint_url(profile);
+        let url = self.context.endpoint_url(CHAT_PATH);
         let headers = self.headers();
 
         let http_request = self
@@ -426,20 +432,13 @@ impl BackendImpl for Anthropic {
     fn chat_json<H: BlockingClawHttp>(
         &self,
         http: &mut H,
-        profile: &ModelProfile,
         request: &ChatJsonRequest<'_>,
         _schema_name: &str,
         schema: &Value,
         abort: &AtomicBool,
     ) -> Result<LlmResponse, ChatError> {
-        if !profile.supports_json_schema() {
-            let fallback = ChatJsonPromptFallback::new(request, schema);
-            let chat_req = fallback.chat_request();
-            return self.chat(http, profile, &chat_req, abort);
-        }
-
         let post_data = self.build_chat_json_body(request, schema)?;
-        let url = self.context.endpoint_url(profile);
+        let url = self.context.endpoint_url(CHAT_PATH);
         let headers = self.headers();
 
         let http_request = self
@@ -453,20 +452,16 @@ impl BackendImpl for Anthropic {
     fn infer_media<H: BlockingClawHttp>(
         &self,
         http: &mut H,
-        profile: &ModelProfile,
         request: &MediaRequest,
         abort: &AtomicBool,
     ) -> Result<String, InferMediaError> {
-        if !profile.supports_vision() {
-            return Err(InferMediaError::VisionUnsupported);
-        }
         let user_prompt = request.user_prompt.unwrap_or("");
         if user_prompt.is_empty() {
             return Err(InferMediaError::IncompleteRequest);
         }
         let asset = single_media_asset(request.media)?;
 
-        let prepared = prepare_asset(asset, profile, self.context.image_max_bytes())?;
+        let prepared = prepare_asset(asset, IMAGE_REMOTE_URL_ONLY, self.context.image_max_bytes())?;
         if !prepared.is_data_url() {
             return Err(InferMediaError::RequiresLocalImage);
         }
@@ -475,7 +470,10 @@ impl BackendImpl for Anthropic {
 
         let mut body = Map::new();
         body.insert("model".to_string(), json!(self.context.model()));
-        body.insert("max_tokens".to_string(), json!(self.context.max_tokens()));
+        body.insert(
+            MAX_TOKENS_FIELD.to_string(),
+            json!(self.context.max_tokens()),
+        );
         let system = request.system_prompt.unwrap_or("");
         if !system.is_empty() {
             body.insert("system".to_string(), json!(system));
@@ -493,7 +491,7 @@ impl BackendImpl for Anthropic {
         let body = Value::Object(body);
         let post_data = serde_json::to_string(&body)
             .map_err(|_| ClawApiError::ApiError("out of memory serializing media request"))?;
-        let url = self.context.endpoint_url(profile);
+        let url = self.context.endpoint_url(CHAT_PATH);
         let headers = self.headers();
 
         let http_request = self
@@ -511,12 +509,11 @@ impl BackendImpl for Anthropic {
     async fn chat_async<H: ClawHttp>(
         &self,
         http: &mut H,
-        profile: &ModelProfile,
         request: &ChatRequest<'_>,
         cancel: Cancel<'_>,
     ) -> Result<LlmResponse, ChatError> {
         let post_data = self.build_chat_body(request)?;
-        let url = self.context.endpoint_url(profile);
+        let url = self.context.endpoint_url(CHAT_PATH);
         let headers = self.headers();
 
         let http_request = self
@@ -529,20 +526,13 @@ impl BackendImpl for Anthropic {
     async fn chat_json_async<H: ClawHttp>(
         &self,
         http: &mut H,
-        profile: &ModelProfile,
         request: &ChatJsonRequest<'_>,
         _schema_name: &str,
         schema: &Value,
         cancel: Cancel<'_>,
     ) -> Result<LlmResponse, ChatError> {
-        if !profile.supports_json_schema() {
-            let fallback = ChatJsonPromptFallback::new(request, schema);
-            let chat_req = fallback.chat_request();
-            return self.chat_async(http, profile, &chat_req, cancel).await;
-        }
-
         let post_data = self.build_chat_json_body(request, schema)?;
-        let url = self.context.endpoint_url(profile);
+        let url = self.context.endpoint_url(CHAT_PATH);
         let headers = self.headers();
 
         let http_request = self
@@ -555,20 +545,16 @@ impl BackendImpl for Anthropic {
     async fn infer_media_async<H: ClawHttp>(
         &self,
         http: &mut H,
-        profile: &ModelProfile,
         request: &MediaRequest<'_>,
         cancel: Cancel<'_>,
     ) -> Result<String, InferMediaError> {
-        if !profile.supports_vision() {
-            return Err(InferMediaError::VisionUnsupported);
-        }
         let user_prompt = request.user_prompt.unwrap_or("");
         if user_prompt.is_empty() {
             return Err(InferMediaError::IncompleteRequest);
         }
         let asset = single_media_asset(request.media)?;
 
-        let prepared = prepare_asset(asset, profile, self.context.image_max_bytes())?;
+        let prepared = prepare_asset(asset, IMAGE_REMOTE_URL_ONLY, self.context.image_max_bytes())?;
         if !prepared.is_data_url() {
             return Err(InferMediaError::RequiresLocalImage);
         }
@@ -577,7 +563,10 @@ impl BackendImpl for Anthropic {
 
         let mut body = Map::new();
         body.insert("model".to_string(), json!(self.context.model()));
-        body.insert("max_tokens".to_string(), json!(self.context.max_tokens()));
+        body.insert(
+            MAX_TOKENS_FIELD.to_string(),
+            json!(self.context.max_tokens()),
+        );
         let system = request.system_prompt.unwrap_or("");
         if !system.is_empty() {
             body.insert("system".to_string(), json!(system));
@@ -595,7 +584,7 @@ impl BackendImpl for Anthropic {
         let body = Value::Object(body);
         let post_data = serde_json::to_string(&body)
             .map_err(|_| ClawApiError::ApiError("out of memory serializing media request"))?;
-        let url = self.context.endpoint_url(profile);
+        let url = self.context.endpoint_url(CHAT_PATH);
         let headers = self.headers();
 
         let http_request = self

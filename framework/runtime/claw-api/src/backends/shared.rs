@@ -9,23 +9,13 @@ use claw_interface::http::{
 use serde_json::{Map, Value};
 
 use super::super::errors::{ChatError, ClawApiError, InferMediaError};
-use super::super::types::{
-    ChatJsonRequest, ChatRequest, ClawApiConfig, LlmResponse, MediaAsset, ModelProfile, ToolCall,
-};
+use super::super::types::{ClawApiConfig, LlmResponse, MediaAsset, ToolCall};
 
 /// HTTP statuses that indicate a transient, retryable server condition.
 const STATUS_REQUEST_TIMEOUT: u16 = 408;
 const STATUS_TOO_MANY_REQUESTS: u16 = 429;
 const STATUS_SERVER_ERROR_MIN: u16 = 500;
 const STATUS_SERVER_ERROR_MAX: u16 = 599;
-
-/// Append a JSON-schema instruction block to the system prompt (prompt fallback).
-fn augment_system_with_schema(system_prompt: &str, schema: &Value) -> String {
-    let schema_text = serde_json::to_string(schema).unwrap_or_else(|_| "{}".to_string());
-    format!(
-        "{system_prompt}\n\nRespond with a single JSON object matching this schema (no markdown, no prose):\n{schema_text}"
-    )
-}
 
 #[derive(Clone, Debug)]
 pub(super) struct BackendContext {
@@ -65,8 +55,8 @@ impl BackendContext {
         self.image_max_bytes
     }
 
-    pub(super) fn endpoint_url(&self, profile: &ModelProfile) -> String {
-        join_url(&self.base_url, profile.chat_path())
+    pub(super) fn endpoint_url(&self, chat_path: &str) -> String {
+        join_url(&self.base_url, chat_path)
     }
 
     pub(super) fn json_request<'a>(
@@ -83,33 +73,6 @@ impl BackendContext {
             timeout_ms: self.timeout_ms,
             headers,
         }
-    }
-}
-
-pub(super) struct ChatJsonPromptFallback<'a> {
-    system: String,
-    messages: &'a Value,
-    reminders: &'a [Value],
-    tools_json: Option<&'a str>,
-}
-
-impl<'a> ChatJsonPromptFallback<'a> {
-    pub(super) fn new(request: &ChatJsonRequest<'a>, schema: &Value) -> Self {
-        Self {
-            system: augment_system_with_schema(request.system_prompt, schema),
-            messages: request.messages,
-            reminders: request.reminders,
-            tools_json: request.tools_json.filter(|s| !s.is_empty()),
-        }
-    }
-
-    pub(super) fn chat_request(&self) -> ChatRequest<'_> {
-        let mut request =
-            ChatRequest::new(&self.system, self.messages).with_reminders(self.reminders);
-        if let Some(tools_json) = self.tools_json {
-            request = request.with_tools(tools_json);
-        }
-        request
     }
 }
 
@@ -245,12 +208,8 @@ pub(super) fn parse_openai_chat_response(body: &str) -> Result<LlmResponse, Claw
 /// Insert OpenAI-style `tools` into a chat request body map.
 pub(super) fn insert_tools_into_body(
     body: &mut Map<String, Value>,
-    profile: &ModelProfile,
     tools_json: &str,
 ) -> Result<(), ChatError> {
-    if !profile.supports_tools() {
-        return Err(ChatError::ToolsUnsupported);
-    }
     let tools: Value = serde_json::from_str(tools_json).map_err(|_| ChatError::InvalidToolsJson)?;
     if !tools.is_array() {
         return Err(ChatError::InvalidToolsJson);

@@ -17,7 +17,6 @@ use super::errors::{ChatError, ChatJsonError, ClawApiError, InferMediaError, Ini
 use super::retry::{run_with_retry, sleep_abortable_async};
 use super::types::{
     ChatJsonRequest, ChatJsonResponse, ChatRequest, ClawApiConfig, LlmResponse, MediaRequest,
-    ModelProfile,
 };
 
 /// Message used when the abort flag fires during a retry backoff sleep. Kept
@@ -42,7 +41,8 @@ const ABORTED_DURING_BACKOFF: &str = "LLM request aborted during retry backoff";
 /// ```no_run
 /// use std::sync::atomic::AtomicBool;
 /// use claw_api::{BackendKind, ChatRequest, ClawApi, ClawApiConfig};
-/// # use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
+/// # use claw_interface::http::blocking::ClawHttp;
+/// # use claw_interface::http::{HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
 /// # struct H; impl ClawHttp for H {
 /// #   fn post_json(&mut self, _r: &HttpJsonRequest, _a: &AtomicBool) -> Result<HttpResponse, HttpError> {
 /// #     Ok(HttpResponse { status_code: HttpStatusCode::OK, body: r#"{"choices":[{"message":{"role":"assistant","content":"ok"}}]}"#.into() }) } }
@@ -61,21 +61,19 @@ const ABORTED_DURING_BACKOFF: &str = "LLM request aborted during retry backoff";
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub struct ClawApi<H: BlockingClawHttp> {
-    profile: ModelProfile,
     backend: Backend,
     http: H,
 }
 
-/// Async LLM client: a resolved backend + model profile behind an injected
-/// [`ClawHttp`] transport and [`ClawTimer`] backoff timer.
+/// Async LLM client: a resolved backend behind an injected [`ClawHttp`]
+/// transport and [`ClawTimer`] backoff timer.
 pub struct ClawApiAsync<H: ClawHttp, Timer: ClawTimer> {
-    profile: ModelProfile,
     backend: Backend,
     http: H,
     timer: Timer,
 }
 
-fn resolve_config(config: ClawApiConfig) -> Result<(ModelProfile, Backend), InitError> {
+fn resolve_config(config: ClawApiConfig) -> Result<Backend, InitError> {
     // Centralized credential/config validation. Backends trust that these are
     // present and non-empty once `init` returns Ok.
     if config.api_key.is_empty() {
@@ -87,10 +85,7 @@ fn resolve_config(config: ClawApiConfig) -> Result<(ModelProfile, Backend), Init
     if config.base_url.is_empty() {
         return Err(InitError::MissingBaseUrl);
     }
-    let backend_kind = config.backend;
-    let profile = backend_kind.profile();
-    let backend = backend_kind.make(&config)?;
-    Ok((profile, backend))
+    config.backend.make(&config)
 }
 
 fn parse_chat_json_response<T: DeserializeOwned>(
@@ -133,7 +128,8 @@ impl<H: BlockingClawHttp> ClawApi<H> {
     /// ```
     /// use std::sync::atomic::AtomicBool;
     /// use claw_api::{ClawApi, ClawApiConfig, InitError};
-    /// # use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
+    /// # use claw_interface::http::blocking::ClawHttp;
+    /// # use claw_interface::http::{HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
     /// # struct H; impl ClawHttp for H {
     /// #   fn post_json(&mut self, _r: &HttpJsonRequest, _a: &AtomicBool) -> Result<HttpResponse, HttpError> {
     /// #     Ok(HttpResponse { status_code: HttpStatusCode::OK, body: "{}".into() }) } }
@@ -150,13 +146,9 @@ impl<H: BlockingClawHttp> ClawApi<H> {
     /// assert!(matches!(result, Err(InitError::MissingApiKey)));
     /// ```
     pub fn init(config: ClawApiConfig, http: H) -> Result<ClawApi<H>, InitError> {
-        let (profile, backend) = resolve_config(config)?;
+        let backend = resolve_config(config)?;
 
-        Ok(ClawApi {
-            profile,
-            backend,
-            http,
-        })
+        Ok(ClawApi { backend, http })
     }
 
     /// Run a chat completion. (Port of `claw_llm_runtime_chat`.)
@@ -177,7 +169,8 @@ impl<H: BlockingClawHttp> ClawApi<H> {
     /// ```no_run
     /// use std::sync::atomic::AtomicBool;
     /// use claw_api::{ChatRequest, ClawApi, RetryPolicy};
-    /// # use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse};
+    /// # use claw_interface::http::blocking::ClawHttp;
+    /// # use claw_interface::http::{HttpError, HttpJsonRequest, HttpResponse};
     /// # struct H; impl ClawHttp for H { fn post_json(&mut self, _r: &HttpJsonRequest, _a: &AtomicBool) -> Result<HttpResponse, HttpError> { unimplemented!() } }
     /// # let mut api: ClawApi<H> = unimplemented!();
     /// let messages = serde_json::json!([
@@ -201,14 +194,13 @@ impl<H: BlockingClawHttp> ClawApi<H> {
     ) -> Result<LlmResponse, ChatError> {
         let policy = request.retry;
         let backend = &self.backend;
-        let profile = &self.profile;
         let http = &mut self.http;
         run_with_retry(
             &policy,
             abort,
             ChatError::is_retryable,
             || ChatError::Api(ClawApiError::Transport(ABORTED_DURING_BACKOFF.to_string())),
-            || backend.chat(&mut *http, profile, request, abort),
+            || backend.chat(&mut *http, request, abort),
         )
     }
 
@@ -217,9 +209,8 @@ impl<H: BlockingClawHttp> ClawApi<H> {
     /// `T` only needs [`serde::Deserialize`]. The request **must** carry an
     /// output schema via
     /// [`ChatJsonRequest::with_output_schema`](crate::ChatJsonRequest::with_output_schema).
-    /// Backends that advertise JSON-schema support (OpenAI `response_format`,
-    /// Anthropic `output_config`) use it natively; others fall back to embedding
-    /// the schema in the system prompt.
+    /// The backend sends the schema natively (OpenAI `response_format`,
+    /// Anthropic `output_config`).
     ///
     /// `output` is `None` when the model returned only tool calls (and no JSON).
     /// Retry behaves as [`chat`](ClawApi::chat): only transient transport errors
@@ -238,7 +229,8 @@ impl<H: BlockingClawHttp> ClawApi<H> {
     /// ```no_run
     /// use std::sync::atomic::AtomicBool;
     /// use claw_api::{ChatJsonRequest, ClawApi};
-    /// # use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse};
+    /// # use claw_interface::http::blocking::ClawHttp;
+    /// # use claw_interface::http::{HttpError, HttpJsonRequest, HttpResponse};
     /// # struct H; impl ClawHttp for H { fn post_json(&mut self, _r: &HttpJsonRequest, _a: &AtomicBool) -> Result<HttpResponse, HttpError> { unimplemented!() } }
     /// # let mut api: ClawApi<H> = unimplemented!();
     ///
@@ -277,14 +269,9 @@ impl<H: BlockingClawHttp> ClawApi<H> {
             .ok_or(ChatJsonError::MissingOutputSchema)?;
         let schema: Value = serde_json::from_str(spec.json)
             .map_err(|err| ChatJsonError::InvalidOutput(format!("invalid schema json: {err}")))?;
-        if request.tools_json.filter(|s| !s.is_empty()).is_some() && !self.profile.supports_tools()
-        {
-            return Err(ChatJsonError::ToolsUnsupported);
-        }
 
         let policy = request.retry;
         let backend = &self.backend;
-        let profile = &self.profile;
         let http = &mut self.http;
         run_with_retry(
             &policy,
@@ -297,7 +284,7 @@ impl<H: BlockingClawHttp> ClawApi<H> {
             },
             || {
                 let response = backend
-                    .chat_json(&mut *http, profile, request, spec.name, &schema, abort)
+                    .chat_json(&mut *http, request, spec.name, &schema, abort)
                     .map_err(ChatJsonError::from)?;
                 parse_chat_json_response(response)
             },
@@ -323,7 +310,8 @@ impl<H: BlockingClawHttp> ClawApi<H> {
     /// ```no_run
     /// use std::sync::atomic::AtomicBool;
     /// use claw_api::{ClawApi, MediaAsset, MediaRequest};
-    /// # use claw_interface::http::{ClawHttp, HttpError, HttpJsonRequest, HttpResponse};
+    /// # use claw_interface::http::blocking::ClawHttp;
+    /// # use claw_interface::http::{HttpError, HttpJsonRequest, HttpResponse};
     /// # struct H; impl ClawHttp for H { fn post_json(&mut self, _r: &HttpJsonRequest, _a: &AtomicBool) -> Result<HttpResponse, HttpError> { unimplemented!() } }
     /// # let mut api: ClawApi<H> = unimplemented!();
     /// let assets = [MediaAsset::local_path("/sdcard/photo.jpg")];
@@ -342,22 +330,14 @@ impl<H: BlockingClawHttp> ClawApi<H> {
     ) -> Result<String, InferMediaError> {
         let policy = request.retry;
         let backend = &self.backend;
-        let profile = &self.profile;
         let http = &mut self.http;
         run_with_retry(
             &policy,
             abort,
             InferMediaError::is_retryable,
             || InferMediaError::Api(ClawApiError::Transport(ABORTED_DURING_BACKOFF.to_string())),
-            || backend.infer_media(&mut *http, profile, request, abort),
+            || backend.infer_media(&mut *http, request, abort),
         )
-    }
-
-    /// The resolved [`ModelProfile`](crate::ModelProfile), after backend
-    /// defaults are applied in [`init`](ClawApi::init).
-    #[must_use]
-    pub fn profile(&self) -> &ModelProfile {
-        &self.profile
     }
 }
 
@@ -369,10 +349,9 @@ impl<H: ClawHttp, Timer: ClawTimer> ClawApiAsync<H, Timer> {
         http: H,
         timer: Timer,
     ) -> Result<ClawApiAsync<H, Timer>, InitError> {
-        let (profile, backend) = resolve_config(config)?;
+        let backend = resolve_config(config)?;
 
         Ok(ClawApiAsync {
-            profile,
             backend,
             http,
             timer,
@@ -390,7 +369,7 @@ impl<H: ClawHttp, Timer: ClawTimer> ClawApiAsync<H, Timer> {
         loop {
             match self
                 .backend
-                .chat_async(&mut self.http, &self.profile, request, cancel)
+                .chat_async(&mut self.http, request, cancel)
                 .await
             {
                 Ok(response) => return Ok(response),
@@ -422,24 +401,13 @@ impl<H: ClawHttp, Timer: ClawTimer> ClawApiAsync<H, Timer> {
             .ok_or(ChatJsonError::MissingOutputSchema)?;
         let schema: Value = serde_json::from_str(spec.json)
             .map_err(|err| ChatJsonError::InvalidOutput(format!("invalid schema json: {err}")))?;
-        if request.tools_json.filter(|s| !s.is_empty()).is_some() && !self.profile.supports_tools()
-        {
-            return Err(ChatJsonError::ToolsUnsupported);
-        }
 
         let policy = request.retry;
         let mut attempt = 0u32;
         loop {
             let result = match self
                 .backend
-                .chat_json_async(
-                    &mut self.http,
-                    &self.profile,
-                    request,
-                    spec.name,
-                    &schema,
-                    cancel,
-                )
+                .chat_json_async(&mut self.http, request, spec.name, &schema, cancel)
                 .await
             {
                 Ok(response) => parse_chat_json_response(response),
@@ -476,7 +444,7 @@ impl<H: ClawHttp, Timer: ClawTimer> ClawApiAsync<H, Timer> {
         loop {
             match self
                 .backend
-                .infer_media_async(&mut self.http, &self.profile, request, cancel)
+                .infer_media_async(&mut self.http, request, cancel)
                 .await
             {
                 Ok(response) => return Ok(response),
@@ -495,11 +463,5 @@ impl<H: ClawHttp, Timer: ClawTimer> ClawApiAsync<H, Timer> {
                 }
             }
         }
-    }
-
-    /// The resolved [`ModelProfile`](crate::ModelProfile).
-    #[must_use]
-    pub fn profile(&self) -> &ModelProfile {
-        &self.profile
     }
 }

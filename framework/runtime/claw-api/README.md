@@ -17,7 +17,6 @@ Build a `ClawApi` once from a `ClawApiConfig` plus an HTTP transport (any
 | `ClawApi::chat` | `ChatRequest` | `LlmResponse` (text + reasoning + tool calls) |
 | `ClawApi::chat_json` | `ChatJsonRequest` | `ChatJsonResponse` (parsed `T` + tool calls) |
 | `ClawApi::infer_media` | `MediaRequest` | `String` (model text about the image) |
-| `ClawApi::profile` | — | `&ModelProfile` (negotiated capabilities) |
 
 Both `openai_compatible` and `anthropic_compatible` backends are supported; the
 crate converts the unified request shape (and tool definitions, tool-call /
@@ -55,7 +54,7 @@ pipeline, retry loop — are private):
 - Config / requests: `ClawApiConfig`, `BackendKind`, `ChatRequest`, `ChatJsonRequest`,
   `MediaRequest`, `RetryPolicy`, `StaticOutputSchema`
 - Responses / values: `LlmResponse`, `ChatJsonResponse`, `ToolCall`,
-  `ModelProfile`, `MediaAsset`, `AssetKind`
+  `MediaAsset`
 - Errors: `ClawApiError`, `ChatError`, `ChatJsonError`, `InferMediaError`,
   `InitError`, `ParseBackendKindError`
 

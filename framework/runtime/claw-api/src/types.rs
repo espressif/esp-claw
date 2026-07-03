@@ -216,81 +216,6 @@ impl RetryPolicy {
     }
 }
 
-/// The resolved model capabilities and derived endpoint settings, as computed
-/// by [`crate::ClawApi::init`]. Read it back via [`crate::ClawApi::profile`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ModelProfile {
-    /// Chat endpoint path appended to the base URL (e.g. `"/chat/completions"`).
-    ///
-    /// Backend plumbing detail; not part of the public surface.
-    chat_path: String,
-    /// The provider field name carrying the max-tokens value.
-    ///
-    /// Backend plumbing detail; not part of the public surface.
-    max_tokens_field: String,
-    /// Whether tool calls may be sent.
-    supports_tools: bool,
-    /// Whether image/media inference is available.
-    supports_vision: bool,
-    /// Whether API-level JSON schema is used (vs. schema-in-prompt fallback).
-    supports_json_schema: bool,
-    /// Whether only remote image URLs are accepted.
-    image_remote_url_only: bool,
-}
-
-impl ModelProfile {
-    pub(crate) fn new(
-        chat_path: impl Into<String>,
-        max_tokens_field: impl Into<String>,
-        supports_tools: bool,
-        supports_vision: bool,
-        supports_json_schema: bool,
-        image_remote_url_only: bool,
-    ) -> Self {
-        Self {
-            chat_path: chat_path.into(),
-            max_tokens_field: max_tokens_field.into(),
-            supports_tools,
-            supports_vision,
-            supports_json_schema,
-            image_remote_url_only,
-        }
-    }
-
-    pub(crate) fn chat_path(&self) -> &str {
-        &self.chat_path
-    }
-
-    pub(crate) fn max_tokens_field(&self) -> &str {
-        &self.max_tokens_field
-    }
-
-    /// Whether the selected backend can send tool definitions and receive tool
-    /// calls.
-    #[must_use]
-    pub const fn supports_tools(&self) -> bool {
-        self.supports_tools
-    }
-
-    /// Whether the selected backend can handle media/image inference.
-    #[must_use]
-    pub const fn supports_vision(&self) -> bool {
-        self.supports_vision
-    }
-
-    /// Whether the selected backend uses provider-native JSON schema output.
-    #[must_use]
-    pub const fn supports_json_schema(&self) -> bool {
-        self.supports_json_schema
-    }
-
-    /// Whether local/inline media must be rejected in favor of remote URLs.
-    #[must_use]
-    pub const fn image_remote_url_only(&self) -> bool {
-        self.image_remote_url_only
-    }
-}
-
 /// A named JSON Schema for structured output, attached to a
 /// [`ChatJsonRequest`] via [`ChatJsonRequest::with_output_schema`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -467,21 +392,13 @@ impl<'a> ChatRequest<'a> {
     }
 }
 
-/// How a [`MediaAsset`] supplies its image data.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AssetKind {
-    /// An absolute local file path (read + base64-encoded into a data URL).
-    LocalPath,
-    /// A remote image URL (passed through to the provider).
-    RemoteUrl,
-    /// Inline bytes (base64-encoded into a data URL; requires explicit MIME type).
-    InlineBytes,
-}
-
 /// An image input for [`crate::ClawApi::infer_media`].
 ///
-/// Construct with [`MediaAsset::local_path`], [`MediaAsset::remote_url`], or
-/// [`MediaAsset::inline_bytes`]. Supported local types: jpg/jpeg/png/gif/webp.
+/// Each variant carries exactly the data its input mode needs, so mutually
+/// exclusive states (a file path *and* inline bytes at once, inline bytes with
+/// no MIME) are unrepresentable. Construct with [`MediaAsset::local_path`],
+/// [`MediaAsset::remote_url`], or [`MediaAsset::inline_bytes`]. Supported local
+/// types: jpg/jpeg/png/gif/webp.
 ///
 /// ```
 /// use claw_api::MediaAsset;
@@ -490,28 +407,34 @@ pub enum AssetKind {
 /// # let _ = (a, b);
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MediaAsset {
-    /// Which of the fields below is populated.
-    pub kind: AssetKind,
-    /// Absolute file path, for [`AssetKind::LocalPath`].
-    pub path: Option<String>,
-    /// Image URL, for [`AssetKind::RemoteUrl`].
-    pub url: Option<String>,
-    /// Raw bytes, for [`AssetKind::InlineBytes`].
-    pub bytes: Option<Vec<u8>>,
-    /// MIME type override; otherwise inferred from the file extension.
-    pub mime_type: Option<String>,
+pub enum MediaAsset {
+    /// An absolute local file path, read and base64-encoded into a data URL.
+    LocalPath {
+        /// Absolute file path.
+        path: String,
+        /// MIME override; otherwise inferred from the file extension.
+        mime_type: Option<String>,
+    },
+    /// A remote image URL, passed through to the provider unchanged.
+    RemoteUrl {
+        /// Image URL.
+        url: String,
+    },
+    /// Inline image bytes, base64-encoded into a data URL.
+    InlineBytes {
+        /// Raw image bytes.
+        bytes: Vec<u8>,
+        /// Explicit MIME type (inline bytes have no extension to infer from).
+        mime_type: String,
+    },
 }
 
 impl MediaAsset {
-    /// An asset backed by a local file path.
+    /// An asset backed by an absolute local file path.
     #[must_use]
     pub fn local_path(path: impl Into<String>) -> Self {
-        MediaAsset {
-            kind: AssetKind::LocalPath,
-            path: Some(path.into()),
-            url: None,
-            bytes: None,
+        Self::LocalPath {
+            path: path.into(),
             mime_type: None,
         }
     }
@@ -519,31 +442,32 @@ impl MediaAsset {
     /// An asset referenced by a remote URL.
     #[must_use]
     pub fn remote_url(url: impl Into<String>) -> Self {
-        MediaAsset {
-            kind: AssetKind::RemoteUrl,
-            path: None,
-            url: Some(url.into()),
-            bytes: None,
-            mime_type: None,
-        }
+        Self::RemoteUrl { url: url.into() }
     }
 
     /// An asset carrying inline bytes with an explicit MIME type.
     #[must_use]
     pub fn inline_bytes(bytes: Vec<u8>, mime_type: impl Into<String>) -> Self {
-        MediaAsset {
-            kind: AssetKind::InlineBytes,
-            path: None,
-            url: None,
-            bytes: Some(bytes),
-            mime_type: Some(mime_type.into()),
+        Self::InlineBytes {
+            bytes,
+            mime_type: mime_type.into(),
         }
     }
 
-    /// Override the MIME type (otherwise inferred from the file extension).
+    /// Override the MIME type: sets the override for [`MediaAsset::LocalPath`]
+    /// and replaces it for [`MediaAsset::InlineBytes`]. A remote URL carries no
+    /// MIME (the provider fetches and sniffs it), so this is a no-op there.
     #[must_use]
     pub fn with_mime_type(mut self, mime_type: impl Into<String>) -> Self {
-        self.mime_type = Some(mime_type.into());
+        match &mut self {
+            Self::LocalPath {
+                mime_type: slot, ..
+            } => *slot = Some(mime_type.into()),
+            Self::InlineBytes {
+                mime_type: slot, ..
+            } => *slot = mime_type.into(),
+            Self::RemoteUrl { .. } => {}
+        }
         self
     }
 }

@@ -109,8 +109,8 @@ pub use backends::{BackendKind, ParseBackendKindError};
 pub use client::{ClawApi, ClawApiAsync};
 pub use errors::{ChatError, ChatJsonError, ClawApiError, InferMediaError, InitError};
 pub use types::{
-    AssetKind, ChatJsonRequest, ChatJsonResponse, ChatRequest, ClawApiConfig, LlmResponse,
-    MediaAsset, MediaRequest, ModelProfile, RetryPolicy, StaticOutputSchema, ToolCall,
+    ChatJsonRequest, ChatJsonResponse, ChatRequest, ClawApiConfig, LlmResponse, MediaAsset,
+    MediaRequest, RetryPolicy, StaticOutputSchema, ToolCall,
 };
 
 #[cfg(test)]
@@ -492,7 +492,6 @@ mod tests {
             Owned(http.clone()),
         )
         .unwrap();
-        assert!(rt.profile().supports_json_schema());
 
         let messages = json!([{"role": "user", "content": "go"}]);
         let abort = AtomicBool::new(false);
@@ -522,7 +521,6 @@ mod tests {
             Owned(http.clone()),
         )
         .unwrap();
-        assert!(rt.profile().supports_json_schema());
 
         let messages = json!([{"role": "user", "content": "go"}]);
         let abort = AtomicBool::new(false);
