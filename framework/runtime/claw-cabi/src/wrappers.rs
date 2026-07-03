@@ -358,8 +358,8 @@ pub(crate) unsafe fn build_inbound(
         sender_id: optional_string(message.sender_id)?,
         text: required_string(message.text)?,
         // The C ABI has no extra-context field yet, so `extra_context` defaults to
-        // `None`, which the boundary resolves to `DeliveryKind::Append` (inbound
-        // messages append to any running task by default).
+        // `None`, which the boundary resolves to `DeliveryKind::Append` (the
+        // driver defers append delivery until the session is idle).
         ..Default::default()
     })
 }

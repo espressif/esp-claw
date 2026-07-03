@@ -1,8 +1,8 @@
 # BaseAgent — caller-side FSM
 
 How a driver sees `BaseAgent`: **command in, outcome out**. The caller drives the
-agent with [`AgentCommand`]s (via `send_command` or its wrappers) and pumps it
-with `tick()`, which returns exactly one `TickOutcome` per call.
+agent with [`AgentCommand`]s via `send_command` and pumps it with `tick()`, which
+returns exactly one `TickOutcome` per call.
 
 There are two kinds of transition, and they are validated/observed at different
 moments:
@@ -16,18 +16,19 @@ moments:
 - **Tick transitions** (labeled `tick / …` below). These happen *inside* `tick()`
   when an iteration runs, and are reported as the returned `TickOutcome`.
 
-`run` / `append_message` are infallible (an append is legal in every state);
-`cancel` / `pause` / `resume` / `resolve_approval` / `send_command` return
-`Result<(), AgentCommandError>`.
+`AppendMessage` is accepted only at an idle boundary and starts a fresh task.
+`Interrupt` is accepted in every state: it records an interruption marker plus
+the newer user message, but keeps the task alive. `Cancel` and `ApprovalResult`
+are stateful and may return `AgentCommandError`.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Idle
 
     Idle --> Running: AppendMessage (fresh task)
+    Idle --> Running: Interrupt (marker + fresh task)
 
-    Running --> Running: AppendMessage (join)
-    Running --> Paused: Pause
+    Running --> Running: Interrupt (marker + message)
     Running --> Idle: Cancel (tick / Cancelled, terminal)
     Running --> Running: tick / Working (tool round or preempt)
     Running --> Idle: tick / Yielded (answer, non-terminal)
@@ -35,52 +36,52 @@ stateDiagram-v2
     Running --> Idle: tick / Failed (terminal)
     Running --> AwaitingApproval: tick / AwaitingApproval (permission Ask)
 
-    Paused --> Running: Resume
-    Paused --> Idle: Cancel (tick / Cancelled, terminal)
-    Paused --> Paused: AppendMessage (queued until resume)
-
     AwaitingApproval --> Running: ApprovalResult (matching id)
     AwaitingApproval --> Idle: Cancel (tick / Cancelled, terminal)
-    AwaitingApproval --> AwaitingApproval: AppendMessage (queued)
+    AwaitingApproval --> AwaitingApproval: Interrupt (marker + message queued)
 ```
 
 ## Command validity per state
 
 Cell = resulting next state, or the `AgentCommandError` variant the caller gets
-back. `AppendMessage` covers `run` / `append_message`; `ApprovalResult` covers
-`resolve_approval`.
+back.
 
-| State              | AppendMessage             | Cancel               | Pause          | Resume          | ApprovalResult                                    |
-| ------------------ | ------------------------- | -------------------- | -------------- | --------------- | ------------------------------------------------- |
-| `Idle`             | → `Running` (fresh task)  | `NothingToCancel`    | `CannotPause`  | `CannotResume`  | `NotAwaitingApproval`                             |
-| `Running`          | → `Running` (join)        | → `Idle` (Cancelled) | → `Paused`     | `CannotResume`  | `NotAwaitingApproval`                             |
-| `Paused`           | → `Paused` (queued)       | → `Idle` (Cancelled) | `CannotPause`  | → `Running`     | `NotAwaitingApproval`                             |
-| `AwaitingApproval` | → `AwaitingApproval` (queued) | → `Idle` (Cancelled) | `CannotPause`  | `CannotResume`  | match → `Running`; other id → `ApprovalMismatch` |
+| State              | AppendMessage                 | Interrupt                         | Cancel               | ApprovalResult                                    |
+| ------------------ | ----------------------------- | --------------------------------- | -------------------- | ------------------------------------------------- |
+| `Idle`             | → `Running` (fresh task)      | → `Running` (marker + fresh task) | `NothingToCancel`    | `NotAwaitingApproval`                             |
+| `Running`          | `CannotAppend`                | → `Running` (marker + message)    | → `Idle` (Cancelled) | `NotAwaitingApproval`                             |
+| `AwaitingApproval` | `CannotAppend`                | → `AwaitingApproval` (queued)     | → `Idle` (Cancelled) | match → `Running`; other id → `ApprovalMismatch` |
 
 `Cancel` is a *command*, but the `TickOutcome::Cancelled` it produces is reported
-on the next `tick` that drains it (it sets the state to `Idle` immediately at
-validation/queue time).
+on the next `tick` that drains it. `send_command` moves the projected state to
+`Idle` synchronously so the rest of the batch validates correctly; the committed
+lifecycle, open-turn discard, and outcome are applied by `tick()`.
+
+When a caller batches `Cancel` followed by `AppendMessage` or `Interrupt`, the
+same drain first discards the old open turn, then starts the replacement task.
+In that supersede path the cancellation outcome is cleared by the fresh task; a
+bare `Cancel` still reports `Cancelled`.
 
 ### Cancel and memory
 
-The non-disruptive commands leave no special trace: `Pause`/`Resume` only toggle
-state, `AppendMessage` adds normal user content, and `ApprovalResult` records the
-human's decision as ordinary conversation content. `Cancel` is the one
-**disruptive** action — it ends a task abruptly with no closing message — so it
-**records an interruption marker** in memory, keyed on the `CancelReason`
-(`cancelled by the user` / `superseded by a new task` / `the agent is shutting
-down`). The abandoned but still-open turn is **not lost**: it is committed
-together with the marker as one group, so the next task sees an explained gap
-rather than a half-finished exchange.
+`AppendMessage` opens a fresh task from idle. The non-disruptive active-task
+commands keep the task alive: `Interrupt` records a synthetic interruption marker
+followed by the newer user message, and `ApprovalResult` records the human's
+decision as ordinary conversation content. Internal graph events (such as
+subagent results) enter through a crate-private task-input path, not through the
+external append command. `Cancel` is the one **disruptive** action: it ends a
+task abruptly, discards the abandoned open turn, and writes no cancellation
+marker.
+Already committed turns remain; uncommitted partial user/assistant/tool messages
+from the cancelled task do not leak into later model context.
 
 ## What `tick()` does per state
 
-| State              | `tick()` behavior                                                                                                                                                                                 |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Idle`             | No iteration. Returns `Idle` (or `Cancelled` if a `Cancel` was just drained).                                                                                                                      |
-| `Running`          | Runs one iteration and returns one of: `Working` (tool round or a preempt — stays `Running`), `Yielded` (plain answer → `Idle`, **non-terminal**), `Ended`/`Failed` (→ `Idle`, **terminal**), or `AwaitingApproval` (→ `AwaitingApproval`). |
-| `Paused`           | No iteration while paused. Returns `Idle`.                                                                                                                                                         |
-| `AwaitingApproval` | No iteration while awaiting. Returns `Idle`.                                                                                                                                                       |
+| State              | `tick()` behavior                                                                                                                                                                                                                       |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Idle`             | No iteration. Returns `Idle`.                                                                                                                                                                                                           |
+| `Running`          | Drains commands first. A bare queued `Cancel` returns `Cancelled` without running another iteration; `Cancel` followed by replacement content discards the old open turn and runs the new task. Otherwise runs one iteration and returns one of: `Working` (tool round or a preempt — stays `Running`), `Yielded` (plain answer → `Idle`, **non-terminal**), `Ended`/`Failed` (→ `Idle`, **terminal**), or `AwaitingApproval` (→ `AwaitingApproval`). |
+| `AwaitingApproval` | Drains commands first. A matching `ApprovalResult` continues iteration in the same tick; otherwise no iteration while awaiting and returns `Idle`.                                                                                       |
 
 ## Terminal vs reusable
 

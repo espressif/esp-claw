@@ -322,22 +322,23 @@ impl SessionStore {
 /// an opaque `extra_context` hint, which is resolved into a `DeliveryKind` at the
 /// transport→session boundary via [`from_extra_context`](Self::from_extra_context).
 ///
-/// See [`Orchestrator::deliver_interruptible`](crate::orchestrator::Orchestrator::deliver_interruptible)
-/// for how `Interrupt`/`Cancel` reach an in-flight drive.
+/// See [`Orchestrator::submit`](crate::orchestrator::Orchestrator::submit) for
+/// how `Append`/`Interrupt`/`Cancel` are sequenced against an in-flight drive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum DeliveryKind {
-    /// Add the message as information and let the agent re-decide. When the
-    /// session is idle this starts a fresh task; while it is running the message
-    /// joins the in-progress task and is folded into the next iteration.
+    /// Add the message as ordinary input at the next delivery boundary. When the
+    /// session is idle this starts a fresh task; if a drive is already in flight,
+    /// the concurrent driver defers the append until that drive settles.
     #[default]
     Append,
     /// Graceful, whole-iteration interruption: let the current iteration finish
-    /// and commit, then pause the drive, record an interruption marker, deliver
-    /// this message, and keep the task alive.
+    /// and commit, then stop the drive. The continuation is delivered through
+    /// the root agent's interrupt command, which records an interruption marker
+    /// and keeps the task alive.
     Interrupt,
     /// Hard interruption: abort the in-flight LLM round (discarding its partial
-    /// result), terminate the current task with a cancellation marker, then start
-    /// a fresh task from this message.
+    /// result), terminate the current task without committing its open turn, then
+    /// start a fresh task from this message.
     Cancel,
 }
 
@@ -412,6 +413,8 @@ impl SessionMessage {
 pub enum DeliverError {
     #[error("session not found: {0}")]
     SessionNotFound(SessionId),
+    #[error("session submission superseded by a newer control message")]
+    Superseded,
     #[error("agent delivery failed: {0}")]
     Agent(String),
     #[error(transparent)]

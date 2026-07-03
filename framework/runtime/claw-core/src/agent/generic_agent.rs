@@ -179,6 +179,10 @@ impl<H: ClawHttp, Timer: ClawTimer> Agent for GenericAgent<H, Timer> {
         append_child_result(&mut self.base, child, text, ok);
     }
 
+    fn deliver_child_input(&mut self, child: AgentId, text: String) {
+        append_child_input(&mut self.base, child, text);
+    }
+
     fn abort_handle(&self) -> AgentAbortHandle {
         self.base.abort_handle()
     }
@@ -217,7 +221,14 @@ fn append_child_result<H: ClawHttp, Timer: ClawTimer>(
     ok: bool,
 ) {
     let status = if ok { "ok" } else { "failed" };
-    let _ = base.send_command(AgentCommand::AppendMessage(format!(
-        "[subagent {child} {status}] {text}"
-    )));
+    base.push_task_input(format!("[subagent {child} {status}] {text}"));
+}
+
+/// Shared: present a non-result child graph event as task input.
+fn append_child_input<H: ClawHttp, Timer: ClawTimer>(
+    base: &mut BaseAgent<H, Timer>,
+    _child: AgentId,
+    text: String,
+) {
+    base.push_task_input(text);
 }

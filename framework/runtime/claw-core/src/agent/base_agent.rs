@@ -42,11 +42,12 @@
 //! agent decides so itself (the built-in `end_conversation` tool →
 //! [`Ended`](TickOutcome::Ended)), when the orchestrator hard-stops it
 //! ([`Cancel`](AgentCommand::Cancel) → [`Cancelled`](TickOutcome::Cancelled)), or
-//! on [`Failed`](TickOutcome::Failed). The outside never preempts the agent's
-//! reasoning; it only appends information and lets the agent re-decide. A terminal
-//! outcome is reported once and leaves the agent **idle and reusable** — the next
+//! on [`Failed`](TickOutcome::Failed). Out-of-band preemption is only an abort
+//! signal for the in-flight iteration; task content and task-level control still
+//! enter through [`AgentCommand`]. A terminal outcome is reported once and leaves
+//! the agent **idle and reusable** — the next
 //! [`AppendMessage`](AgentCommand::AppendMessage) starts a fresh task over the
-//! same memory and identity.
+//! same memory and identity once the driver has observed the agent is idle.
 
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -94,31 +95,43 @@ crate::define_id_allocator!(
 // Public command / outcome vocabulary
 // ===========================================================================
 
+/// The synthetic user turn recorded before an interrupting message.
+///
+/// It tells the next model iteration that the previous autonomous path was cut
+/// short by newer input while keeping the task alive.
+const INTERRUPT_MARKER: &str =
+    "[conversation interrupted: new input arrived; abandoning the previous train of thought]";
+
 /// Inbound: a control input handed to the agent. This is the agent's entire
 /// external surface — the outside drives the agent only through these.
 ///
-/// Notably there is **no `Preempt`**: outside input never ends or interrupts the
-/// agent's reasoning, it only adds information ([`AppendMessage`](Self::AppendMessage))
-/// and lets the agent re-decide. Hard termination is [`Cancel`](Self::Cancel).
+/// Notably there is **no `Preempt` command**: the cooperative abort path is the
+/// separate [`AgentAbortHandle`] and carries no message payload. New information
+/// arrives as [`AppendMessage`](Self::AppendMessage) only at an idle boundary, or
+/// as [`Interrupt`](Self::Interrupt) when it supersedes active work; hard task
+/// termination is [`Cancel`](Self::Cancel).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentCommand {
-    /// Append a user message. Starts a fresh task when the agent is idle;
-    /// otherwise it joins the in-progress task.
+    /// Start a fresh task with a user message. This is valid only when the agent
+    /// is idle; the orchestrator is responsible for deferring append delivery
+    /// until that boundary.
     AppendMessage(String),
-    /// Abandon the current task. (Orchestrator-initiated hard stop — distinct from
-    /// the agent ending itself via `end_conversation`.) Being disruptive, it
-    /// commits the abandoned turn and records an interruption marker (keyed on the
-    /// [`CancelReason`]) in memory, so the next task does not inherit an
-    /// unexplained, half-finished exchange.
+    /// Gracefully interrupt the current task with a newer user message. The
+    /// agent records an interruption marker, appends `message`, and re-decides on
+    /// the next iteration. Unlike [`Cancel`](Self::Cancel), this does not abort
+    /// the in-flight LLM/tool round and does not end the task.
+    Interrupt {
+        /// The newer user message that interrupted the current train of thought.
+        message: String,
+    },
+    /// Abandon the current task. (Orchestrator-initiated hard stop — distinct
+    /// from the agent ending itself via `end_conversation`.) Being disruptive,
+    /// it discards the still-open turn instead of writing a marker, so cancelled
+    /// partial work leaves no transcript trace.
     Cancel {
-        /// Why the task is being abandoned; selects the recorded interruption marker.
+        /// Why the task is being abandoned; carried on the cancelled outcome.
         reason: CancelReason,
     },
-    /// Stop scheduling iterations until [`Resume`](Self::Resume). No-op unless the
-    /// agent is actively running.
-    Pause,
-    /// Resume a [`Pause`](Self::Pause)d agent.
-    Resume,
     /// Deliver a human decision for a pending [`TickOutcome::AwaitingApproval`].
     /// Ignored unless the agent is awaiting this exact approval.
     ApprovalResult {
@@ -141,9 +154,7 @@ pub enum AgentState {
     Idle,
     /// A task is actively iterating.
     Running,
-    /// A running task whose iteration scheduling is [`Pause`](AgentCommand::Pause)d.
-    Paused,
-    /// Paused on a permission-policy `Ask`, awaiting an
+    /// Waiting on a permission-policy `Ask`, awaiting an
     /// [`ApprovalResult`](AgentCommand::ApprovalResult).
     AwaitingApproval,
 }
@@ -155,7 +166,6 @@ pub enum AgentState {
 enum AgentLifecycle {
     Idle,
     Running,
-    Paused,
     AwaitingApproval(ApprovalId),
 }
 
@@ -164,7 +174,6 @@ impl AgentLifecycle {
         match self {
             Self::Idle => AgentState::Idle,
             Self::Running => AgentState::Running,
-            Self::Paused => AgentState::Paused,
             Self::AwaitingApproval(_) => AgentState::AwaitingApproval,
         }
     }
@@ -174,26 +183,20 @@ impl AgentLifecycle {
 /// [`AgentState`].
 ///
 /// The agent is a state machine; not every command is meaningful in every
-/// state (e.g. [`Resume`](AgentCommand::Resume) after a
-/// [`Cancel`](AgentCommand::Cancel) left the agent idle). A rejected command is
+/// state (e.g. [`Cancel`](AgentCommand::Cancel) while the agent is already
+/// idle). A rejected command is
 /// **not** enqueued and the agent is left unchanged, so the caller can react
 /// without racing a `tick`. Validation is against the state the agent *will* be
 /// in once already-queued commands are applied, so batching commands between
 /// ticks is sound.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum AgentCommandError {
-    /// [`Pause`](AgentCommand::Pause) is only valid while
-    /// [`Running`](AgentState::Running).
-    #[error("cannot pause: the agent is {state:?}, not running")]
-    CannotPause {
-        /// The state the agent was in when the pause was rejected.
-        state: AgentState,
-    },
-    /// [`Resume`](AgentCommand::Resume) is only valid while
-    /// [`Paused`](AgentState::Paused).
-    #[error("cannot resume: the agent is {state:?}, not paused")]
-    CannotResume {
-        /// The state the agent was in when the resume was rejected.
+    /// [`AppendMessage`](AgentCommand::AppendMessage) is only accepted at an idle
+    /// boundary. Active-task input must use [`Interrupt`](AgentCommand::Interrupt)
+    /// or be deferred by the driver.
+    #[error("cannot append: the agent is {state:?}, not idle")]
+    CannotAppend {
+        /// The state the agent was in when append was rejected.
         state: AgentState,
     },
     /// [`Cancel`](AgentCommand::Cancel) has nothing to act on while
@@ -232,7 +235,7 @@ pub enum CancelReason {
 /// A human's answer to an approval request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ApprovalDecision {
-    /// The human approved; the agent resumes and proceeds.
+    /// The human approved; the agent continues.
     Approved,
     /// The human rejected, with a reason recorded for the agent to reconsider.
     Rejected(String),
@@ -248,7 +251,7 @@ pub enum ApprovalDecision {
 pub enum TickOutcome {
     /// Progress was made; call `tick` again promptly.
     Working,
-    /// Nothing to do right now (waiting for input, paused, or awaiting approval).
+    /// Nothing to do right now (waiting for input or awaiting approval).
     Idle,
     /// The model returned a user-facing answer and handed control back.
     /// **Non-terminal** — the agent goes idle awaiting the next message.
@@ -256,10 +259,10 @@ pub enum TickOutcome {
         /// The model's user-facing answer.
         text: String,
     },
-    /// A tool call's permission policy returned `Ask`; the agent is paused for a
-    /// human decision. Resolve it with [`resolve_approval`](BaseAgent::resolve_approval).
+    /// A tool call's permission policy returned `Ask`; the agent is waiting for a
+    /// human decision. Resolve it by sending [`AgentCommand::ApprovalResult`].
     AwaitingApproval {
-        /// The id to pass back via [`resolve_approval`](BaseAgent::resolve_approval).
+        /// The id to pass back in [`AgentCommand::ApprovalResult`].
         id: ApprovalId,
         /// A human-readable description of what needs approving.
         summary: String,
@@ -343,6 +346,7 @@ pub enum BaseAgentBuildError {
 /// one reducer, but only `Command` is constructible by outside callers.
 enum Inbound {
     Command(AgentCommand),
+    TaskInput(String),
     Control(ControlSignal),
 }
 
@@ -433,8 +437,8 @@ pub struct BaseAgent<H: ClawHttp, Timer: ClawTimer> {
     retry_policy: RetryPolicy,
     interruption: AgentInterruption,
     /// The conversation transcript's sole owner. The agent **writes** it directly
-    /// at each boundary (a user message, a committed answer/tool patch, an
-    /// end/cancel marker) and **reads** it to assemble each request
+    /// at each boundary (a user message, a committed answer/tool patch, or an
+    /// explicit end marker) and **reads** it to assemble each request
     /// ([`run_iteration`](Self::run_iteration)); it also lends the read view
     /// ([`Transcript::as_history`]) to each [`ContextAdapter`] so they can pull
     /// from it.
@@ -601,7 +605,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         })
     }
 
-    // -- Inbound: the kernel + ergonomic wrappers ---------------------------
+    // -- Inbound: the command inbox -----------------------------------------
 
     /// Queue a command. The single inbound entry point; everything else wraps it.
     ///
@@ -613,8 +617,9 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// # Errors
     ///
     /// [`AgentCommandError`] when the command is not legal for the projected
-    /// state — e.g. [`Resume`](AgentCommand::Resume) when not paused, or
-    /// [`Cancel`](AgentCommand::Cancel) when already idle.
+    /// state — e.g. [`Cancel`](AgentCommand::Cancel) when already idle, or an
+    /// [`ApprovalResult`](AgentCommand::ApprovalResult) when no approval is
+    /// pending.
     ///
     /// # Examples
     ///
@@ -626,11 +631,11 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// agent.send_command(AgentCommand::Cancel { reason: CancelReason::UserRequested })?;
     ///
     /// // Validated against the *projected* state (the batch so far), before any
-    /// // tick runs: resuming the now-idle agent is rejected and the agent is
+    /// // tick runs: cancelling the now-idle agent is rejected and the agent is
     /// // left unchanged.
     /// assert!(matches!(
-    ///     agent.send_command(AgentCommand::Resume),
-    ///     Err(AgentCommandError::CannotResume { .. }),
+    ///     agent.send_command(AgentCommand::Cancel { reason: CancelReason::UserRequested }),
+    ///     Err(AgentCommandError::NothingToCancel),
     /// ));
     /// # Ok::<(), AgentCommandError>(())
     /// ```
@@ -639,6 +644,16 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         self.projected_lifecycle = next;
         self.inbox.push_back(Inbound::Command(command));
         Ok(())
+    }
+
+    /// Queue internal task input from the agent graph (for example a subagent
+    /// result). This is deliberately not an [`AgentCommand`]: external user
+    /// append is idle-only, while graph events are part of the active task.
+    pub(crate) fn push_task_input(&mut self, text: impl Into<String>) {
+        if self.projected_lifecycle == AgentLifecycle::Idle {
+            self.projected_lifecycle = AgentLifecycle::Running;
+        }
+        self.inbox.push_back(Inbound::TaskInput(text.into()));
     }
 
     /// A handle to abort this agent's in-flight iteration from another task. Grab
@@ -833,23 +848,26 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// always legal in the state that raised them.
     fn apply_inbound(&mut self, inbound: Inbound) {
         match inbound {
-            Inbound::Command(AgentCommand::AppendMessage(text)) => {
+            Inbound::Command(AgentCommand::AppendMessage(text)) | Inbound::TaskInput(text) => {
+                self.append_task_input(&text);
+            }
+            Inbound::Command(AgentCommand::Interrupt { message }) => {
                 let starts_task = self.lifecycle == AgentLifecycle::Idle;
                 if starts_task {
-                    // A fresh task: reset the iteration counter.
-                    self.iterations = IterationIdAllocator::new();
-                    self.lifecycle = AgentLifecycle::Running;
+                    // A graceful interrupt can arrive after the prior drive
+                    // quiesced by race; in that case it starts a normal fresh
+                    // task, but still records why this message was treated as an
+                    // interrupt by the caller.
+                    self.start_task();
                 }
-                // Write the user turn directly; `starts_task` lets the transcript
-                // flush any turn a prior task left open before opening a new one.
-                self.transcript.append_user(&text, starts_task);
+                self.transcript.append_user(INTERRUPT_MARKER, starts_task);
+                self.transcript.append_user(&message, false);
             }
             Inbound::Command(AgentCommand::Cancel { reason }) => {
-                // Cancel is *disruptive* (unlike pause/resume/append/approve, which
-                // are normal flow): record why the task was abandoned so the next
-                // task does not inherit an unexplained, half-finished exchange. The
-                // transcript writes the marker (and flushes any open turn).
-                self.transcript.commit_cancellation(cancel_marker(&reason));
+                // Cancel is *disruptive* (unlike append/interrupt/approve, which
+                // are normal flow): discard the open turn so partial work leaves
+                // no transcript trace.
+                self.transcript.discard_open_turn();
                 self.pending_grant_signatures.clear();
                 // A cancel abandons any in-flight round. If an out-of-band abort
                 // set the interruption flag to stop that round but no checkpoint
@@ -859,12 +877,6 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
                 self.interruption.flag.store(false, Ordering::Release);
                 self.lifecycle = AgentLifecycle::Idle;
                 self.outcome = Some(TickOutcome::Cancelled { reason });
-            }
-            Inbound::Command(AgentCommand::Pause) => {
-                self.lifecycle = AgentLifecycle::Paused;
-            }
-            Inbound::Command(AgentCommand::Resume) => {
-                self.lifecycle = AgentLifecycle::Running;
             }
             Inbound::Command(AgentCommand::ApprovalResult { id, decision }) => {
                 // The verdict re-enters the transcript as a synthetic user turn.
@@ -909,7 +921,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
                     // call. Write the patch directly.
                     self.transcript.commit_patch(&tools.appended.0);
                     self.apply_tool_block_policy(&tools.runs);
-                    // A permission `Ask` pauses the agent for a human decision
+                    // A permission `Ask` makes the agent wait for a human decision
                     // (unless the round already failed the task via the block
                     // policy above, which leaves `self.outcome` set).
                     self.maybe_raise_approval(&tools.runs);
@@ -944,7 +956,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         }
     }
 
-    /// Pause for a human decision when the permission policy asked about any call
+    /// Wait for a human decision when the permission policy asked about any call
     /// this round. No-op if the round already produced an outcome (e.g. the block
     /// policy failed the task) or no call needs approval.
     ///
@@ -1015,16 +1027,25 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     fn allocate_approval_id(&mut self) -> ApprovalId {
         self.approvals.next()
     }
-}
 
-/// The interruption marker recorded for a cancelled task, keyed on the
-/// [`CancelReason`]. Written via [`Transcript::commit_cancellation`] as the
-/// abandoned turn's closing note.
-fn cancel_marker(reason: &CancelReason) -> &'static str {
-    match reason {
-        CancelReason::UserRequested => "[conversation interrupted: cancelled by the user]",
-        CancelReason::Superseded => "[conversation interrupted: superseded by a new task]",
-        CancelReason::Shutdown => "[conversation interrupted: the agent is shutting down]",
+    /// Append one task input turn, starting a new task only when the agent was
+    /// idle. Used by both idle-only external append and internal graph events.
+    fn append_task_input(&mut self, text: &str) {
+        let starts_task = self.lifecycle == AgentLifecycle::Idle;
+        if starts_task {
+            self.start_task();
+        }
+        // Write the user turn directly; `starts_task` lets the transcript flush
+        // any turn a prior task left open before opening a new one.
+        self.transcript.append_user(text, starts_task);
+    }
+
+    /// Enter a fresh task from idle, resetting per-task counters and clearing any
+    /// same-tick terminal outcome from a superseded task.
+    fn start_task(&mut self) {
+        self.iterations = IterationIdAllocator::new();
+        self.lifecycle = AgentLifecycle::Running;
+        self.outcome = None;
     }
 }
 
@@ -1142,34 +1163,22 @@ fn classify(
     use AgentCommand as Command;
     use AgentLifecycle as State;
     match (state, command) {
-        // AppendMessage is accepted in every state: from idle it starts a
-        // fresh task (-> Running); otherwise it joins without changing state.
+        // External append starts a fresh task only at an idle boundary. Active
+        // task input must arrive as Interrupt, or as crate-internal TaskInput
+        // through the agent graph rather than as an AgentCommand.
         (State::Idle, Command::AppendMessage(_)) => Ok(State::Running),
-        (State::Running, Command::AppendMessage(_)) => Ok(State::Running),
-        (State::Paused, Command::AppendMessage(_)) => Ok(State::Paused),
-        (State::AwaitingApproval(id), Command::AppendMessage(_)) => Ok(State::AwaitingApproval(id)),
+        (state @ (State::Running | State::AwaitingApproval(_)), Command::AppendMessage(_)) => {
+            Err(AgentCommandError::CannotAppend {
+                state: state.public(),
+            })
+        }
+        (State::Idle, Command::Interrupt { .. }) => Ok(State::Running),
+        (State::Running, Command::Interrupt { .. }) => Ok(State::Running),
+        (State::AwaitingApproval(id), Command::Interrupt { .. }) => Ok(State::AwaitingApproval(id)),
 
         // Cancel ends an active task; there is nothing to cancel when idle.
         (State::Idle, Command::Cancel { .. }) => Err(AgentCommandError::NothingToCancel),
-        (State::Running | State::Paused | State::AwaitingApproval(_), Command::Cancel { .. }) => {
-            Ok(State::Idle)
-        }
-
-        // Pause only makes sense while actively running.
-        (State::Running, Command::Pause) => Ok(State::Paused),
-        (state @ (State::Idle | State::Paused | State::AwaitingApproval(_)), Command::Pause) => {
-            Err(AgentCommandError::CannotPause {
-                state: state.public(),
-            })
-        }
-
-        // Resume only from a paused task.
-        (State::Paused, Command::Resume) => Ok(State::Running),
-        (state @ (State::Idle | State::Running | State::AwaitingApproval(_)), Command::Resume) => {
-            Err(AgentCommandError::CannotResume {
-                state: state.public(),
-            })
-        }
+        (State::Running | State::AwaitingApproval(_), Command::Cancel { .. }) => Ok(State::Idle),
 
         // An approval result needs a matching pending request.
         (State::AwaitingApproval(pending), Command::ApprovalResult { id, .. }) => {
@@ -1182,11 +1191,79 @@ fn classify(
                 })
             }
         }
-        (
-            state @ (State::Idle | State::Running | State::Paused),
-            Command::ApprovalResult { .. },
-        ) => Err(AgentCommandError::NotAwaitingApproval {
-            state: state.public(),
-        }),
+        (state @ (State::Idle | State::Running), Command::ApprovalResult { .. }) => {
+            Err(AgentCommandError::NotAwaitingApproval {
+                state: state.public(),
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn append_starts_only_from_idle() {
+        let command = AgentCommand::AppendMessage("new task".to_string());
+        let approval = ApprovalId(7);
+
+        assert_eq!(
+            classify(AgentLifecycle::Idle, &command),
+            Ok(AgentLifecycle::Running)
+        );
+        assert_eq!(
+            classify(AgentLifecycle::Running, &command),
+            Err(AgentCommandError::CannotAppend {
+                state: AgentState::Running,
+            })
+        );
+        assert_eq!(
+            classify(AgentLifecycle::AwaitingApproval(approval), &command),
+            Err(AgentCommandError::CannotAppend {
+                state: AgentState::AwaitingApproval,
+            })
+        );
+    }
+
+    #[test]
+    fn interrupt_is_a_content_command_in_every_state() {
+        let command = AgentCommand::Interrupt {
+            message: "newer input".to_string(),
+        };
+        let approval = ApprovalId(7);
+
+        assert_eq!(
+            classify(AgentLifecycle::Idle, &command),
+            Ok(AgentLifecycle::Running)
+        );
+        assert_eq!(
+            classify(AgentLifecycle::Running, &command),
+            Ok(AgentLifecycle::Running)
+        );
+        assert_eq!(
+            classify(AgentLifecycle::AwaitingApproval(approval), &command),
+            Ok(AgentLifecycle::AwaitingApproval(approval))
+        );
+    }
+
+    #[test]
+    fn cancel_is_a_hard_stop_only_for_active_tasks() {
+        let command = AgentCommand::Cancel {
+            reason: CancelReason::UserRequested,
+        };
+
+        assert_eq!(
+            classify(AgentLifecycle::Idle, &command),
+            Err(AgentCommandError::NothingToCancel)
+        );
+        assert_eq!(
+            classify(AgentLifecycle::Running, &command),
+            Ok(AgentLifecycle::Idle)
+        );
+        assert_eq!(
+            classify(AgentLifecycle::AwaitingApproval(ApprovalId(3)), &command),
+            Ok(AgentLifecycle::Idle)
+        );
     }
 }

@@ -85,9 +85,11 @@ pub trait Transcript: History {
     /// Commit the agent's closing message (from `end_conversation`).
     fn commit_ended(&self, final_message: &str);
 
-    /// Record a cancellation `marker` as a user message and commit it together
-    /// with any abandoned (still-open) turn.
-    fn commit_cancellation(&self, marker: &str);
+    /// Discard the still-open turn without committing any of its messages.
+    ///
+    /// Used by hard cancellation: cancelled work should not leak partial user,
+    /// assistant, or tool messages into later model context.
+    fn discard_open_turn(&self);
 
     /// Borrow the read-only [`History`] view to hand to adapters.
     ///
@@ -134,9 +136,8 @@ impl<F: ClawFs + 'static> Transcript for TranscriptStore<F> {
         self.commit_open_turn();
     }
 
-    fn commit_cancellation(&self, marker: &str) {
-        self.push_user_message(marker);
-        self.commit_open_turn();
+    fn discard_open_turn(&self) {
+        TranscriptStore::discard_open_turn(self);
     }
 
     fn as_history(&self) -> &dyn History {

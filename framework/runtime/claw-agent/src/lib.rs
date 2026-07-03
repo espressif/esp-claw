@@ -87,8 +87,7 @@ pub use claw_capability::{
     ToolInvokeError, ToolOutput, ToolRetryCount,
 };
 pub use claw_core::{
-    DeliverError, DeliveryKind, DriveStop, SessionBinding, SessionControl, SessionError, SessionId,
-    SessionRecord,
+    DeliverError, DeliveryKind, SessionBinding, SessionError, SessionId, SessionRecord,
 };
 pub use claw_interface::ClawFs;
 // The on-disk filesystem backend is a host-target convenience; device builds
@@ -174,6 +173,20 @@ where
     router: Arc<ChannelRouter<F, H, Timer>>,
 }
 
+impl<F, H, Timer> Clone for AgentSystem<F, H, Timer>
+where
+    F: ClawFs + Clone + Default + 'static,
+    H: ClawHttp + Default + 'static,
+    Timer: ClawTimer + Default + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            registry: Arc::clone(&self.registry),
+            router: Arc::clone(&self.router),
+        }
+    }
+}
+
 impl<F, H, Timer> AgentSystem<F, H, Timer>
 where
     F: ClawFs + Clone + Default + 'static,
@@ -231,8 +244,11 @@ where
         let resolver: Arc<dyn AgentResolver> =
             Arc::new(RegistryResolver::new(Arc::clone(&registry)));
 
-        let orchestrator =
-            Orchestrator::<F, H, Timer>::new(resolver, llm_config, &persistence_dir)?;
+        let orchestrator = Arc::new(Orchestrator::<F, H, Timer>::new(
+            resolver,
+            llm_config,
+            &persistence_dir,
+        )?);
         let router = ChannelRouter::new(orchestrator, registry.as_ref())?;
 
         Ok(Self { registry, router })
@@ -330,55 +346,6 @@ where
     /// registered channel capability or the chat is not bound to a session.
     pub async fn push_message(&self, message: InboundMessage) -> Result<(), CapabilityError> {
         self.router.push_message(message).await
-    }
-
-    /// Resolve the session an inbound message routes to (recording its reply
-    /// route). Lets a concurrent driver learn the target session before starting
-    /// an interruptible drive so it can match follow-up messages to it.
-    ///
-    /// # Errors
-    ///
-    /// [`CapabilityError::InvalidArg`] for an ill-formed message, or
-    /// [`CapabilityError::NotFound`] when the channel is unknown or the chat is
-    /// not bound to a session.
-    pub fn resolve_session(&self, message: &InboundMessage) -> Result<SessionId, CapabilityError> {
-        self.router.resolve_session(message)
-    }
-
-    /// Deliver `message` to its resolved `session` under an out-of-band
-    /// [`SessionControl`], driving interruptibly. Returns why the drive stopped
-    /// so the caller can run the interrupt/cancel continuation.
-    ///
-    /// # Errors
-    ///
-    /// Maps [`DeliverError`] to [`CapabilityError`].
-    pub async fn deliver_controlled(
-        &self,
-        session: SessionId,
-        message: InboundMessage,
-        kind: DeliveryKind,
-        control: &SessionControl,
-    ) -> Result<DriveStop, CapabilityError> {
-        self.router
-            .deliver_controlled(session, message, kind, control)
-            .await
-    }
-
-    /// Continue a gracefully-interrupted `session` with `message` (the
-    /// interrupting input), driving interruptibly.
-    ///
-    /// # Errors
-    ///
-    /// Maps [`DeliverError`] to [`CapabilityError`].
-    pub async fn continue_interrupted(
-        &self,
-        session: SessionId,
-        message: InboundMessage,
-        control: &SessionControl,
-    ) -> Result<DriveStop, CapabilityError> {
-        self.router
-            .continue_interrupted(session, message, control)
-            .await
     }
 
     /// Submit `message` with [`DeliveryKind::Interrupt`]. In-flight effect (cutting

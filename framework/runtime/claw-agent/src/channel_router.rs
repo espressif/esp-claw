@@ -6,8 +6,8 @@ use claw_capability::{
     OutboundMessage, Registry,
 };
 use claw_core::{
-    DeliverError, DeliveryKind, DriveOutput, DriveStop, Orchestrator, SessionBinding,
-    SessionControl, SessionId, SessionMessage, SessionRecord,
+    DeliverError, DeliveryKind, DriveOutput, Orchestrator, SessionBinding, SessionId,
+    SessionMessage, SessionRecord,
 };
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
@@ -187,13 +187,12 @@ where
         kind: DeliveryKind,
     ) -> Result<(), CapabilityError> {
         let session = self.resolve_session(&message)?;
-        // A stand-alone control: callers of `push_message` drive serially and
-        // cannot signal it mid-flight, but routing through `deliver_interruptible`
-        // still honours the `DeliveryKind` (notably `Cancel`, which supersedes a
-        // lingering task before this message starts fresh).
-        let control = SessionControl::new();
-        self.deliver_controlled(session, message, kind, &control)
-            .await?;
+        let output = self
+            .orchestrator
+            .submit(session, session_message(message, kind))
+            .await
+            .map_err(map_deliver_error)?;
+        self.surface_output(output)?;
         Ok(())
     }
 
@@ -206,64 +205,12 @@ where
     /// [`CapabilityError::InvalidArg`] for an ill-formed message,
     /// [`CapabilityError::NotFound`] when the channel is unknown or the chat is
     /// not bound to a session.
-    pub fn resolve_session(&self, message: &InboundMessage) -> Result<SessionId, CapabilityError> {
+    fn resolve_session(&self, message: &InboundMessage) -> Result<SessionId, CapabilityError> {
         self.validate_inbound(message)?;
         let session = self.session_for(message)?;
         self.session_routes()
             .insert(session, SessionChannelRoute::from_inbound(message));
         Ok(session)
-    }
-
-    /// Deliver `message` to its (already resolved) `session` under an out-of-band
-    /// [`SessionControl`], driving interruptibly and surfacing any output.
-    /// Returns why the drive stopped.
-    ///
-    /// # Errors
-    ///
-    /// Maps [`DeliverError`] to [`CapabilityError`].
-    pub async fn deliver_controlled(
-        &self,
-        session: SessionId,
-        message: InboundMessage,
-        kind: DeliveryKind,
-        control: &SessionControl,
-    ) -> Result<DriveStop, CapabilityError> {
-        let (output, stop) = self
-            .orchestrator
-            .deliver_interruptible(session, session_message(message, kind), control)
-            .await
-            .map_err(map_deliver_error)?;
-        self.surface_output(output)?;
-        Ok(stop)
-    }
-
-    /// Continue a gracefully-interrupted `session`: record the interruption
-    /// marker, then deliver `message` (the interrupting input) as the
-    /// continuation, driving interruptibly and surfacing output.
-    ///
-    /// # Errors
-    ///
-    /// Maps [`DeliverError`] to [`CapabilityError`].
-    pub async fn continue_interrupted(
-        &self,
-        session: SessionId,
-        message: InboundMessage,
-        control: &SessionControl,
-    ) -> Result<DriveStop, CapabilityError> {
-        // The interrupting input is delivered as the continuation; the
-        // orchestrator's `continue_interrupted` ignores the delivery kind, so it
-        // is appended.
-        let (output, stop) = self
-            .orchestrator
-            .continue_interrupted(
-                session,
-                session_message(message, DeliveryKind::Append),
-                control,
-            )
-            .await
-            .map_err(map_deliver_error)?;
-        self.surface_output(output)?;
-        Ok(stop)
     }
 
     pub fn new_session(&self) -> SessionId {
@@ -281,7 +228,7 @@ where
         if channel.is_empty() || chat_id.is_empty() {
             return Err(CapabilityError::InvalidArg);
         }
-        if !self.channels.contains_key(channel) || !self.orchestrator.session_exists(session) {
+        if !self.channels.contains_key(channel) {
             return Err(CapabilityError::NotFound);
         }
 
@@ -300,16 +247,14 @@ where
             }
         }
 
-        chat_sessions.insert(key, session);
-        session_routes.insert(session, SessionChannelRoute::new(channel, chat_id));
-
         // Record the binding onto the session record so this router (or another
         // one over the same orchestrator) can rebuild routes from `session_list`.
-        // The session was just validated to exist, so this does not fail in
-        // practice; a lost write is logged inside the store, not fatal here.
         self.orchestrator
             .session_set_binding(session, channel, chat_id)
-            .map_err(|error| CapabilityError::Failed(error.to_string()))?;
+            .map_err(map_session_error)?;
+
+        chat_sessions.insert(key, session);
+        session_routes.insert(session, SessionChannelRoute::new(channel, chat_id));
         Ok(())
     }
 
@@ -333,7 +278,7 @@ where
     pub fn delete_session(&self, session: SessionId) -> Result<(), CapabilityError> {
         self.orchestrator
             .session_delete(session)
-            .map_err(|error| CapabilityError::Failed(error.to_string()))?;
+            .map_err(map_session_error)?;
         self.session_routes().remove(&session);
         self.chat_sessions()
             .retain(|_, routed_session| *routed_session != session);
@@ -435,8 +380,16 @@ fn session_message(message: InboundMessage, kind: DeliveryKind) -> SessionMessag
 fn map_deliver_error(error: DeliverError) -> CapabilityError {
     match error {
         DeliverError::SessionNotFound(_) => CapabilityError::NotFound,
+        DeliverError::Superseded => CapabilityError::InvalidState,
         DeliverError::Agent(message) => CapabilityError::Failed(message),
         DeliverError::Session(error) => CapabilityError::Failed(error.to_string()),
+    }
+}
+
+fn map_session_error(error: claw_core::SessionError) -> CapabilityError {
+    match error {
+        claw_core::SessionError::NotFound(_) => CapabilityError::NotFound,
+        claw_core::SessionError::AlreadyExists(_) => CapabilityError::AlreadyExists,
     }
 }
 
@@ -510,12 +463,14 @@ mod tests {
             "gpt-test",
             "https://example.invalid",
         );
-        Orchestrator::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new(
-            Arc::new(MapAgentResolver::new()),
-            llm_config,
-            "/channel-router-test",
+        Arc::new(
+            Orchestrator::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new(
+                Arc::new(MapAgentResolver::new()),
+                llm_config,
+                "/channel-router-test",
+            )
+            .unwrap(),
         )
-        .unwrap()
     }
 
     #[test]

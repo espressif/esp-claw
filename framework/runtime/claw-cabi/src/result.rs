@@ -105,7 +105,9 @@ pub(crate) fn from_error(error: CapabilityError) -> ClawCapabilityResult {
             ClawCapabilityErrorKind::InvalidState,
             c"invalid state for this operation",
         ),
-        CapabilityError::Failed(message) => failed(&message),
+        CapabilityError::Failed(message) | CapabilityError::Persistence(message) => {
+            failed(&message)
+        }
     }
 }
 

@@ -38,11 +38,6 @@ pub use graph::{
     AgentSnapshot, AgentStatus, ApprovalVerdict, GraphEffect, GraphHost, TerminationPolicy,
 };
 pub use iteration_loop::IterationId;
-// Re-exported only so the orchestrator instance's tests (outside the `agent`
-// module) can build agents over an `AgentContext`; the runtime uses it via the
-// in-module path.
-#[cfg(test)]
-pub(crate) use graph::AgentContext;
 pub use kind::AgentKind;
 pub(crate) use registry::{AgentIdAllocator, AgentRegistry};
 pub use resolver::{AgentResolver, MapAgentResolver};
@@ -59,10 +54,9 @@ pub type AgentTickFuture<'a> = Pin<Box<dyn Future<Output = TickOutcome> + 'a>>;
 ///
 /// Object-safe so heterogeneous agents can be held as `Box<dyn Agent>`. The
 /// surface mirrors [`BaseAgent`]: commands go in via [`send_command`](Agent::send_command),
-/// outcomes come out via [`tick`](Agent::tick). The one multi-agent extension is
-/// [`deliver_child_result`](Agent::deliver_child_result) — the channel a parent
-/// receives a finished subagent's result on (a separate port rather than a new
-/// [`AgentCommand`] variant, so the base command vocabulary stays untouched).
+/// outcomes come out via [`tick`](Agent::tick). Multi-agent graph inputs use
+/// separate child ports rather than [`AgentCommand`] variants, so the external
+/// command vocabulary stays untouched.
 pub trait Agent {
     /// This agent's stable identity.
     fn id(&self) -> AgentId;
@@ -76,6 +70,13 @@ pub trait Agent {
     /// The result re-enters as ordinary information for the model to reason over
     /// (it does not preempt or gate anything); the agent owns how it is presented.
     fn deliver_child_result(&mut self, child: AgentId, text: String, ok: bool);
+
+    /// Deliver a non-result child graph event back to this parent agent.
+    ///
+    /// Used for active-task graph messages such as subagent approval requests.
+    /// This intentionally bypasses [`AgentCommand::AppendMessage`], whose
+    /// external append semantics are idle-only.
+    fn deliver_child_input(&mut self, child: AgentId, text: String);
 
     /// A cloneable handle to abort this agent's in-flight LLM/tool round from
     /// another task.

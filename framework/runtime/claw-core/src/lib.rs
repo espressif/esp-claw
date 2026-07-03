@@ -21,9 +21,7 @@ pub use memory::{
     NoopExtractor, ProfileContextAdapter, ProfileTools, RuleBasedTierClassifier, TierClassifier,
     Transcript, AGENT_ID_PREFIX, GLOBAL_ID_PREFIX,
 };
-pub use orchestrator::{
-    ApprovalRequest, DriveOutput, DriveStop, Orchestrator, RootReply, SessionControl,
-};
+pub use orchestrator::{ApprovalRequest, DriveOutput, Orchestrator, RootReply};
 pub use session::{
     DeliverError, DeliveryKind, FsSessionRegistry, SessionBinding, SessionError, SessionId,
     SessionMessage, SessionRecord, SessionRegistryStore, SessionStore,

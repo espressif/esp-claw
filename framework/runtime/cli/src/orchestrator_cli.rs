@@ -94,7 +94,7 @@ async fn main() {
         make_llm_config(),
         MEMORY_DIR,
     ) {
-        Ok(orchestrator) => orchestrator,
+        Ok(orchestrator) => Arc::new(orchestrator),
         Err(error) => {
             eprintln!("failed to build orchestrator: {error}");
             std::process::exit(1);
@@ -127,7 +127,7 @@ async fn main() {
 
         turn += 1;
         let output = match orchestrator
-            .deliver(
+            .submit(
                 session,
                 SessionMessage::new(input.to_string(), format!("m{turn}"), None),
             )

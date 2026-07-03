@@ -41,6 +41,9 @@
 //!
 //! Both paths write the same open turn and commit it as a single record, so readers
 //! see one transcript regardless of the writer style.
+//! A hard cancellation can instead call
+//! [`discard_open_turn`](TranscriptStore::discard_open_turn) to drop the volatile
+//! open turn without committing it.
 //!
 //! # Threading
 //!
@@ -567,6 +570,15 @@ impl<F: ClawFs + 'static> TranscriptStore<F> {
         commit_open_turn(&self.inner);
     }
 
+    /// Discard the current open turn without committing or persisting it.
+    ///
+    /// No-ops when the open turn is empty. This is for hard cancellation paths
+    /// where partially materialized user/assistant/tool messages must not become
+    /// part of conversation history.
+    pub fn discard_open_turn(&self) {
+        discard_open_turn(&self.inner);
+    }
+
     /// The current messages, ready to send to the model in chronological order:
     /// every committed turn's messages followed by the in-progress open turn.
     /// Returns a shared, internally consistent JSON array snapshot.
@@ -780,6 +792,15 @@ fn commit_open_turn<F: ClawFs + 'static>(inner: &StoreInner<F>) {
     if due {
         persist(inner, false);
     }
+}
+
+fn discard_open_turn<F: ClawFs + 'static>(inner: &StoreInner<F>) {
+    let mut state = lock_state(inner);
+    if state.open_group.is_empty() {
+        return;
+    }
+    state.open_group.clear();
+    state.mark_changed();
 }
 
 /// Serialize a group record to a data line and queue it for the next append.
@@ -1161,4 +1182,48 @@ fn lock_state<F: ClawFs + 'static>(inner: &StoreInner<F>) -> MutexGuard<'_, Stor
         .state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+    use claw_interface::MemFs;
+
+    fn store() -> TranscriptStore<MemFs> {
+        TranscriptStore::new(
+            1,
+            TranscriptConfig::new("/transcript-store-tests"),
+            MemFs::new(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn discard_open_turn_drops_uncommitted_messages() {
+        let store = store();
+        store.push_user_message("partial");
+        let before = store.version();
+
+        store.discard_open_turn();
+
+        assert!(store.version() > before);
+        assert!(store.messages().as_array().unwrap().is_empty());
+        assert!(store.open_turn_messages().is_empty());
+    }
+
+    #[test]
+    fn discard_open_turn_keeps_committed_history() {
+        let store = store();
+        store.push_user_message("committed");
+        store.commit_open_turn();
+
+        store.push_user_message("partial");
+        store.discard_open_turn();
+
+        let messages = store.messages();
+        let messages = messages.as_array().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["content"], "committed");
+    }
 }

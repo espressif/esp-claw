@@ -5,11 +5,12 @@
 mod control;
 mod instance;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use claw_api::ClawApiConfig;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
+use claw_utils::{async_oneshot, AsyncOneshotSender};
 
 use crate::agent::{
     AgentIdAllocator, AgentResolver, CancelReason, FsAgentFactory, FsAgentFactoryError,
@@ -19,10 +20,32 @@ use crate::session::{
     SessionStore,
 };
 
-pub use self::control::{DriveStop, SessionControl};
 pub use self::instance::{ApprovalRequest, DriveOutput, RootReply};
 
+use self::control::{DriveStop, SessionControl};
 use self::instance::OrchestratorInstance;
+
+type SubmitReply = AsyncOneshotSender<Result<DriveOutput, DeliverError>>;
+
+struct QueuedSubmission {
+    msg: SessionMessage,
+    reply: SubmitReply,
+}
+
+#[derive(Default)]
+struct SessionDrive {
+    active: bool,
+    control: Option<SessionControl>,
+    carried: Option<QueuedSubmission>,
+    pending: VecDeque<QueuedSubmission>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StartMode {
+    Fresh,
+    Interrupted,
+    Cancelled,
+}
 
 /// RAII checkout of a session's [`OrchestratorInstance`]: holds the instance out
 /// of the map while it is driven and reinserts it on drop, so no exit path (an
@@ -83,6 +106,9 @@ where
     /// instance is inserted, removed, or taken for driving; it is not held while
     /// the agent graph awaits LLM/tool work.
     instances: Mutex<HashMap<SessionId, OrchestratorInstance<F, H, Timer>>>,
+    /// Per-session delivery state. This is the owner of append/interrupt/cancel
+    /// sequencing while an instance is checked out and awaiting LLM/tool work.
+    drives: Mutex<HashMap<SessionId, SessionDrive>>,
     sessions: SessionStore,
 }
 
@@ -105,31 +131,157 @@ where
         resolver: Arc<dyn AgentResolver>,
         llm_config: ClawApiConfig,
         persistence_dir: &str,
-    ) -> Result<Arc<Self>, FsAgentFactoryError> {
+    ) -> Result<Self, FsAgentFactoryError> {
         let factory = Arc::new(FsAgentFactory::<F, H, Timer>::new(
             resolver,
             llm_config,
             persistence_dir,
         )?);
-        Ok(Arc::new(Self {
+        Ok(Self {
             factory,
             next_agent_id: AgentIdAllocator::new(),
             instances: Mutex::new(HashMap::new()),
+            drives: Mutex::new(HashMap::new()),
             sessions: SessionStore::new(),
-        }))
+        })
     }
 
-    /// Deliver one user message to a live session and drive that session's agent
-    /// graph until it has no ready work.
+    /// Submit one message to a live session.
     ///
-    /// The returned [`DriveOutput`] is intentionally channel-free. The caller is
-    /// responsible for routing replies and approvals to whatever transport
-    /// delivered the message.
-    pub async fn deliver(
+    /// This is the only public delivery entry point. It owns the per-session
+    /// sequencing for [`DeliveryKind::Append`], [`DeliveryKind::Interrupt`], and
+    /// [`DeliveryKind::Cancel`]: append waits for the active drive to settle,
+    /// interrupt asks the active drive to stop after its current batch, and cancel
+    /// aborts the active batch through the session's cancel hook.
+    pub async fn submit(
         &self,
         session_id: SessionId,
         msg: SessionMessage,
     ) -> Result<DriveOutput, DeliverError> {
+        if !self.sessions.contains(session_id) {
+            return Err(DeliverError::SessionNotFound(session_id));
+        }
+
+        let (reply, receiver) = async_oneshot();
+        let should_drive = self.enqueue_submission(session_id, QueuedSubmission { msg, reply });
+
+        if should_drive {
+            self.drive_submissions(session_id).await;
+        }
+
+        receiver.await.unwrap_or_else(|| {
+            Err(DeliverError::Agent(
+                "session submit driver ended before replying".to_string(),
+            ))
+        })
+    }
+
+    fn enqueue_submission(&self, session_id: SessionId, submission: QueuedSubmission) -> bool {
+        let mut drives = self
+            .drives
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let drive = drives.entry(session_id).or_default();
+        if drive.active {
+            match submission.msg.kind {
+                DeliveryKind::Append => drive.pending.push_back(submission),
+                DeliveryKind::Interrupt if drive.carried.is_none() => {
+                    if let Some(control) = &drive.control {
+                        control.request_interrupt();
+                    }
+                    drive.carried = Some(submission);
+                }
+                DeliveryKind::Interrupt => {
+                    drive.pending.push_back(submission);
+                }
+                DeliveryKind::Cancel => {
+                    if let Some(control) = &drive.control {
+                        control.request_cancel();
+                    }
+                    if let Some(replaced) = drive.carried.replace(submission) {
+                        let _ = replaced.reply.send(Err(DeliverError::Superseded));
+                    }
+                }
+            }
+            false
+        } else {
+            drive.active = true;
+            drive.pending.push_back(submission);
+            true
+        }
+    }
+
+    async fn drive_submissions(&self, session_id: SessionId) {
+        let mut mode = StartMode::Fresh;
+        loop {
+            let Some(submission) = self.take_next_submission(session_id) else {
+                self.finish_drive(session_id);
+                return;
+            };
+            let (result, stop) = match self
+                .drive_one_submission(session_id, submission.msg.clone(), mode)
+                .await
+            {
+                Ok((output, stop)) => (Ok(output), stop),
+                Err(error) => (Err(error), DriveStop::Quiescent),
+            };
+            let _ = submission.reply.send(result);
+            mode = match stop {
+                DriveStop::Quiescent => StartMode::Fresh,
+                DriveStop::Interrupted => StartMode::Interrupted,
+                DriveStop::Cancelled => StartMode::Cancelled,
+            };
+        }
+    }
+
+    fn take_next_submission(&self, session_id: SessionId) -> Option<QueuedSubmission> {
+        let mut drives = self
+            .drives
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let drive = drives.get_mut(&session_id)?;
+        if let Some(submission) = drive.carried.take() {
+            return Some(submission);
+        }
+        drive.pending.pop_front()
+    }
+
+    fn finish_drive(&self, session_id: SessionId) {
+        let mut drives = self
+            .drives
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if let Some(drive) = drives.get_mut(&session_id) {
+            drive.active = false;
+            drive.control = None;
+        }
+    }
+
+    fn set_active_control(&self, session_id: SessionId, control: Option<SessionControl>) {
+        let mut drives = self
+            .drives
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if let Some(drive) = drives.get_mut(&session_id) {
+            if let Some(control) = &control {
+                if let Some(submission) = &drive.carried {
+                    match submission.msg.kind {
+                        DeliveryKind::Interrupt => control.request_interrupt(),
+                        DeliveryKind::Cancel => control.request_cancel(),
+                        DeliveryKind::Append => {}
+                    }
+                }
+            }
+            drive.control = control;
+        }
+    }
+
+    async fn drive_one_submission(
+        &self,
+        session_id: SessionId,
+        msg: SessionMessage,
+        mode: StartMode,
+    ) -> Result<(DriveOutput, DriveStop), DeliverError> {
         if !self.sessions.contains(session_id) {
             return Err(DeliverError::SessionNotFound(session_id));
         }
@@ -159,101 +311,34 @@ where
             cause = "message"
         )
         .entered();
-        instance
-            .deliver(msg.text.clone())
-            .map_err(DeliverError::Agent)?;
-        Ok(instance.drive().await)
-    }
 
-    /// Deliver `msg` and drive the session, but observe an out-of-band
-    /// [`SessionControl`] so a concurrent task can interrupt or cancel the drive
-    /// while it is in flight.
-    ///
-    /// The message's [`DeliveryKind`] shapes how the *starting* delivery treats a
-    /// task from a previous drive: [`DeliveryKind::Cancel`] supersedes it (a
-    /// cancellation marker is recorded and the task is reset) before this message
-    /// starts a fresh one; [`DeliveryKind::Append`] and [`DeliveryKind::Interrupt`]
-    /// just append (there is nothing running to interrupt at the boundary).
-    ///
-    /// In-flight `Interrupt`/`Cancel` — a message arriving *while this drive is
-    /// running* — is delivered by the caller through `control`, and its
-    /// continuation is handled with [`continue_interrupted`](Self::continue_interrupted)
-    /// (interrupt) or another `deliver_interruptible` with a `Cancel` kind
-    /// (cancel).
-    ///
-    /// # Errors
-    ///
-    /// [`DeliverError::SessionNotFound`] if the session is not registered, or
-    /// [`DeliverError::Agent`] if the root agent cannot be built.
-    pub async fn deliver_interruptible(
-        &self,
-        session_id: SessionId,
-        msg: SessionMessage,
-        control: &SessionControl,
-    ) -> Result<(DriveOutput, DriveStop), DeliverError> {
-        if !self.sessions.contains(session_id) {
-            return Err(DeliverError::SessionNotFound(session_id));
+        match mode {
+            StartMode::Fresh => {
+                if msg.kind == DeliveryKind::Cancel {
+                    instance.cancel_root(CancelReason::Superseded);
+                }
+                instance
+                    .deliver(msg.text.clone())
+                    .map_err(DeliverError::Agent)?;
+            }
+            StartMode::Interrupted => {
+                instance
+                    .interrupt_root(msg.text.clone())
+                    .map_err(DeliverError::Agent)?;
+            }
+            StartMode::Cancelled => {
+                instance.cancel_root(CancelReason::Superseded);
+                instance
+                    .deliver(msg.text.clone())
+                    .map_err(DeliverError::Agent)?;
+            }
         }
-        let mut slot = self.checkout_instance(session_id);
-        let instance = slot.get_mut();
-        let turn = instance.next_turn();
-        let _session_span =
-            tracing::info_span!("session", conversation.session = %session_id).entered();
-        let _turn_span = tracing::info_span!(
-            "turn",
-            conversation.turn = turn,
-            message_id = %msg.message_id,
-            cause = "message"
-        )
-        .entered();
-        // A Cancel-kind delivery supersedes any lingering task before this
-        // message starts a fresh one. `cancel_root` and the following `deliver`
-        // land on the root's inbox in order, so the next drive commits the
-        // cancellation marker and then starts the new task.
-        if msg.kind == DeliveryKind::Cancel {
-            instance.cancel_root(CancelReason::Superseded);
-        }
-        instance
-            .deliver(msg.text.clone())
-            .map_err(DeliverError::Agent)?;
-        Ok(instance.drive_interruptible(control).await)
-    }
 
-    /// Continue a session whose in-flight drive was gracefully interrupted:
-    /// record the interruption marker, deliver `msg` (the interrupting input) as
-    /// the continuation, and drive again (interruptibly) so the still-alive task
-    /// re-decides with the new input.
-    ///
-    /// # Errors
-    ///
-    /// [`DeliverError::SessionNotFound`] if the session is not registered, or
-    /// [`DeliverError::Agent`] if delivery fails.
-    pub async fn continue_interrupted(
-        &self,
-        session_id: SessionId,
-        msg: SessionMessage,
-        control: &SessionControl,
-    ) -> Result<(DriveOutput, DriveStop), DeliverError> {
-        if !self.sessions.contains(session_id) {
-            return Err(DeliverError::SessionNotFound(session_id));
-        }
-        let mut slot = self.checkout_instance(session_id);
-        let instance = slot.get_mut();
-        let turn = instance.next_turn();
-        let _session_span =
-            tracing::info_span!("session", conversation.session = %session_id).entered();
-        let _turn_span = tracing::info_span!(
-            "turn",
-            conversation.turn = turn,
-            message_id = %msg.message_id,
-            cause = "interrupt-continue"
-        )
-        .entered();
-        instance.mark_interrupted();
-        instance
-            .deliver(msg.text.clone())
-            .map_err(DeliverError::Agent)?;
-        Ok(instance.drive_interruptible(control).await)
+        let control = SessionControl::new();
+        self.set_active_control(session_id, Some(control.clone()));
+        let output = instance.drive_interruptible(&control).await;
+        self.set_active_control(session_id, None);
+        Ok(output)
     }
 
     /// Check the session's agent graph out of the map (building a fresh instance
@@ -280,6 +365,9 @@ where
     }
 
     fn put_instance(&self, session_id: SessionId, instance: OrchestratorInstance<F, H, Timer>) {
+        if !self.sessions.contains(session_id) {
+            return;
+        }
         self.instances
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
@@ -294,10 +382,6 @@ where
         let mut sessions = self.sessions.list();
         sessions.sort_by_key(|record| record.id.0);
         sessions
-    }
-
-    pub fn session_exists(&self, session_id: SessionId) -> bool {
-        self.sessions.contains(session_id)
     }
 
     /// Persist `session_id`'s channel binding so it can be rebuilt after a
@@ -323,279 +407,10 @@ where
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .remove(&session_id);
+        self.drives
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .remove(&session_id);
         Ok(())
-    }
-}
-
-#[cfg(test)]
-#[cfg(any())]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
-mod tests {
-    use core::future::Future;
-    use core::task::{Context, Poll};
-    use std::collections::VecDeque;
-    use std::sync::Arc;
-    use std::task::{Wake, Waker};
-
-    use claw_context::Block;
-
-    use super::*;
-    use crate::agent::{
-        Agent, AgentAbortHandle, AgentCommand, AgentCommandError, AgentFactory, AgentId, AgentKind,
-        AgentPlacement, AgentTickFuture, ApprovalId, GraphHost, TickOutcome,
-    };
-
-    struct NoopWake;
-
-    impl Wake for NoopWake {
-        fn wake(self: Arc<Self>) {}
-    }
-
-    fn block_on<F: Future>(future: F) -> F::Output {
-        let mut future = Box::pin(future);
-        let waker = Waker::from(Arc::new(NoopWake));
-        let mut context = Context::from_waker(&waker);
-        loop {
-            if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
-                return value;
-            }
-        }
-    }
-
-    // -- A fake factory + agent that echoes each delivered message --------------
-
-    /// A scripted agent: every message it receives is echoed back as
-    /// `echo:<message>` on the next tick, then it goes idle.
-    struct EchoAgent {
-        id: AgentId,
-        pending: VecDeque<String>,
-    }
-
-    impl Agent for EchoAgent {
-        fn id(&self) -> AgentId {
-            self.id
-        }
-
-        fn send_command(&mut self, command: AgentCommand) -> Result<(), AgentCommandError> {
-            if let AgentCommand::AppendMessage(message) = command {
-                self.pending.push_back(message);
-            }
-            Ok(())
-        }
-
-        fn deliver_child_result(&mut self, _child: AgentId, _text: String, _ok: bool) {}
-
-        fn abort_handle(&self) -> AgentAbortHandle {
-            AgentAbortHandle::default()
-        }
-
-        fn tick(&mut self) -> AgentTickFuture<'_> {
-            let outcome = match self.pending.pop_front() {
-                Some(message) => TickOutcome::Yielded {
-                    text: format!("echo:{message}"),
-                },
-                None => TickOutcome::Idle,
-            };
-            Box::pin(async move { outcome })
-        }
-    }
-
-    /// Builds [`EchoAgent`]s seeded with the goal as their first message.
-    struct EchoFactory;
-
-    impl AgentFactory for EchoFactory {
-        fn create_agent(
-            &self,
-            id: AgentId,
-            _kind: &AgentKind,
-            goal: String,
-            _placement: AgentPlacement,
-            _host: Arc<dyn GraphHost>,
-            _inherited_context: Arc<[Block<'static>]>,
-        ) -> Result<Box<dyn Agent>, String> {
-            Ok(Box::new(EchoAgent {
-                id,
-                pending: VecDeque::from([goal]),
-            }))
-        }
-    }
-
-    /// An agent that parks on an approval the first time it ticks, then yields
-    /// once the decision arrives — to exercise the approval round-trip.
-    struct ApprovalAgent {
-        id: AgentId,
-        asked: bool,
-        approved: bool,
-        done: bool,
-    }
-
-    impl Agent for ApprovalAgent {
-        fn id(&self) -> AgentId {
-            self.id
-        }
-
-        fn send_command(&mut self, command: AgentCommand) -> Result<(), AgentCommandError> {
-            if matches!(command, AgentCommand::ApprovalResult { .. }) {
-                self.approved = true;
-            }
-            Ok(())
-        }
-
-        fn deliver_child_result(&mut self, _child: AgentId, _text: String, _ok: bool) {}
-
-        fn abort_handle(&self) -> AgentAbortHandle {
-            AgentAbortHandle::default()
-        }
-
-        fn tick(&mut self) -> AgentTickFuture<'_> {
-            let outcome = if !self.asked {
-                self.asked = true;
-                TickOutcome::AwaitingApproval {
-                    id: ApprovalId(1),
-                    summary: "ok?".into(),
-                }
-            } else if self.approved && !self.done {
-                self.done = true;
-                TickOutcome::Yielded {
-                    text: "approved-done".into(),
-                }
-            } else {
-                TickOutcome::Idle
-            };
-            Box::pin(async move { outcome })
-        }
-    }
-
-    struct ApprovalFactory;
-
-    impl AgentFactory for ApprovalFactory {
-        fn create_agent(
-            &self,
-            id: AgentId,
-            _kind: &AgentKind,
-            _goal: String,
-            _placement: AgentPlacement,
-            _host: Arc<dyn GraphHost>,
-            _inherited_context: Arc<[Block<'static>]>,
-        ) -> Result<Box<dyn Agent>, String> {
-            Ok(Box::new(ApprovalAgent {
-                id,
-                asked: false,
-                approved: false,
-                done: false,
-            }))
-        }
-    }
-
-    fn user_msg(text: &str) -> SessionMessage {
-        SessionMessage::new(text, "m1", None)
-    }
-
-    fn orchestrator_with_factory(factory: Arc<dyn AgentFactory>) -> Arc<Orchestrator> {
-        Orchestrator::new(factory)
-    }
-
-    #[test]
-    fn user_message_drives_root_and_replies() {
-        let orch = orchestrator_with_factory(Arc::new(EchoFactory));
-        let session = orch.session_create();
-
-        let output = block_on(orch.deliver(session, user_msg("hi"))).unwrap();
-
-        assert_eq!(output.replies.len(), 1);
-        assert_eq!(output.replies[0].text, "echo:hi");
-    }
-
-    #[test]
-    fn deliver_interruptible_append_matches_plain_deliver() {
-        let orch = orchestrator_with_factory(Arc::new(EchoFactory));
-        let session = orch.session_create();
-
-        let control = SessionControl::new();
-        let (output, stop) =
-            block_on(orch.deliver_interruptible(session, user_msg("hi"), &control)).unwrap();
-
-        // With no out-of-band signal, an Append delivery drives to quiescence just
-        // like `deliver`.
-        assert_eq!(stop, DriveStop::Quiescent);
-        assert_eq!(output.replies.len(), 1);
-        assert_eq!(output.replies[0].text, "echo:hi");
-    }
-
-    #[test]
-    fn deliver_interruptible_cancel_kind_supersedes_before_delivering() {
-        let orch = orchestrator_with_factory(Arc::new(EchoFactory));
-        let session = orch.session_create();
-
-        // Seed a task, then deliver a Cancel-kind message: it supersedes the prior
-        // task and starts fresh from the new text.
-        let _ = block_on(orch.deliver(session, user_msg("first"))).unwrap();
-        let control = SessionControl::new();
-        let (output, stop) = block_on(orch.deliver_interruptible(
-            session,
-            user_msg("second").with_kind(DeliveryKind::Cancel),
-            &control,
-        ))
-        .unwrap();
-
-        assert_eq!(stop, DriveStop::Quiescent);
-        assert_eq!(output.replies.len(), 1);
-        assert_eq!(output.replies[0].text, "echo:second");
-    }
-
-    #[test]
-    fn second_message_reuses_the_same_session_root() {
-        let orch = orchestrator_with_factory(Arc::new(EchoFactory));
-        let session = orch.session_create();
-
-        let first = block_on(orch.deliver(session, user_msg("first"))).unwrap();
-        let second = block_on(orch.deliver(session, user_msg("second"))).unwrap();
-
-        assert_eq!(
-            first
-                .replies
-                .into_iter()
-                .chain(second.replies)
-                .map(|reply| reply.text)
-                .collect::<Vec<_>>(),
-            vec!["echo:first".to_string(), "echo:second".to_string()]
-        );
-        // Exactly one instance was created for the session.
-        assert_eq!(orch.instances.lock().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn root_approval_is_surfaced_as_a_message() {
-        let orch = orchestrator_with_factory(Arc::new(ApprovalFactory));
-        let session = orch.session_create();
-
-        // The first message parks the root on an approval, surfaced in
-        // DriveOutput for the channel router.
-        // (Resolving an approval is an internal concern — there is no public
-        // resolve entry point on the orchestrator.)
-        let output = block_on(orch.deliver(session, user_msg("do it"))).unwrap();
-        assert_eq!(output.approvals.len(), 1);
-        assert_eq!(output.approvals[0].summary, "ok?");
-    }
-
-    #[test]
-    fn two_sessions_have_independent_graphs() {
-        let orch = orchestrator_with_factory(Arc::new(EchoFactory));
-        let s1 = orch.session_create();
-        let s2 = orch.session_create();
-
-        let one = block_on(orch.deliver(s1, user_msg("one"))).unwrap();
-        let two = block_on(orch.deliver(s2, user_msg("two"))).unwrap();
-
-        // One isolated instance per session.
-        assert_eq!(orch.instances.lock().unwrap().len(), 2);
-        let texts: Vec<String> = one
-            .replies
-            .into_iter()
-            .chain(two.replies)
-            .map(|reply| reply.text)
-            .collect();
-        assert!(texts.contains(&"echo:one".to_string()));
-        assert!(texts.contains(&"echo:two".to_string()));
     }
 }

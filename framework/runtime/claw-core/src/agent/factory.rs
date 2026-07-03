@@ -178,8 +178,8 @@ fn join_storage_path(parent: &str, child: &str) -> String {
 /// Builds real [`GenericAgent`]s from compile-time manifests, an injected
 /// resolver, a shared LLM config/transport, and shared memory collaborators.
 ///
-/// Construct one and hand it to [`Orchestrator::new`](crate::Orchestrator::new);
-/// the registry then uses it for every agent in every session.
+/// Constructed by [`Orchestrator::new`](crate::Orchestrator::new); each
+/// per-session instance uses it for root agents and spawned subagents.
 pub struct FsAgentFactory<
     F: ClawFs + Clone + Default + 'static,
     H: ClawHttp + Default + 'static,

@@ -93,9 +93,8 @@ impl AgentRegistry {
 
     /// An abort handle for every currently-stored agent.
     ///
-    /// The instance collects these before each ready batch so an out-of-band
-    /// cancel can abort whatever agents are live (see
-    /// [`SessionControl`](crate::orchestrator::SessionControl)). Handles are
+    /// The instance captures these in a batch-local cancel hook so an
+    /// out-of-band cancel can abort whatever agents are live. Handles are
     /// `Arc`-backed clones, so they stay valid even after an agent is
     /// [`take`](Self::take)n out for a tick.
     pub(crate) fn abort_handles(&self) -> Vec<AgentAbortHandle> {
@@ -135,6 +134,7 @@ mod tests {
             Ok(())
         }
         fn deliver_child_result(&mut self, _child: AgentId, _text: String, _ok: bool) {}
+        fn deliver_child_input(&mut self, _child: AgentId, _text: String) {}
         fn abort_handle(&self) -> AgentAbortHandle {
             AgentAbortHandle::default()
         }

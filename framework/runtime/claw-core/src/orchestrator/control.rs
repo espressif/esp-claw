@@ -1,12 +1,10 @@
 //! Out-of-band control for an in-flight session drive.
 //!
-//! [`Orchestrator::deliver`](crate::orchestrator::Orchestrator::deliver) drives a
-//! session to quiescence and, being `.await`ed to completion, cannot be signalled
-//! from the outside once started. [`SessionControl`] is the escape hatch: the
-//! driving layer creates one per drive, hands `&SessionControl` to
-//! [`Orchestrator::deliver_interruptible`](crate::orchestrator::Orchestrator::deliver_interruptible),
-//! and keeps a clone to signal from a concurrent task (e.g. the executor's
-//! `select!` arm servicing new input while a drive is in flight).
+//! [`Orchestrator::submit`](crate::orchestrator::Orchestrator::submit) owns
+//! per-session delivery. While a session drive is awaiting LLM/tool work, the
+//! orchestrator stores a [`SessionControl`] for that drive so concurrent
+//! submissions can request an interrupt or cancel without exposing the drive
+//! protocol outside this module.
 //!
 //! Everything is behind `Arc`/atomics so a shared `&SessionControl` can both be
 //! observed by the drive loop and mutated by the control arm without a mutable
@@ -15,12 +13,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::agent::AgentAbortHandle;
+type CancelHook = Arc<dyn Fn() + Send + Sync + 'static>;
 
-/// Why a [`drive_interruptible`](crate::orchestrator::Orchestrator::deliver_interruptible)
-/// loop stopped.
+/// Why an interruptible instance drive stopped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DriveStop {
+pub(crate) enum DriveStop {
     /// No agent was ready: the drive ran to natural quiescence (the ordinary
     /// end of an `Append` delivery).
     Quiescent,
@@ -37,7 +34,7 @@ pub enum DriveStop {
 /// See the [module docs](self). Cloning shares one underlying state, so the
 /// drive loop and a concurrent control arm coordinate through the same flags.
 #[derive(Clone, Default)]
-pub struct SessionControl {
+pub(crate) struct SessionControl {
     inner: Arc<ControlInner>,
 }
 
@@ -45,15 +42,15 @@ pub struct SessionControl {
 struct ControlInner {
     interrupt: AtomicBool,
     cancel: AtomicBool,
-    /// Abort handles for the session's currently-live agents, refreshed by the
-    /// drive loop before each ready batch. A cancel request sets them so an
-    /// in-flight LLM round is aborted cooperatively at its next checkpoint.
-    abort_handles: Mutex<Vec<AgentAbortHandle>>,
+    /// Action for aborting the currently in-flight work. The drive loop replaces
+    /// this before each ready batch; `request_cancel` only calls it and stays
+    /// decoupled from the concrete agent implementation.
+    cancel_hook: Mutex<Option<CancelHook>>,
 }
 
 impl SessionControl {
-    /// A fresh control surface with no request pending and no live handles.
-    pub fn new() -> Self {
+    /// A fresh control surface with no request pending and no cancel hook.
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
@@ -61,31 +58,24 @@ impl SessionControl {
     /// left to finish and commit, then the drive loop stops with
     /// [`DriveStop::Interrupted`]. Does not touch the abort flag, so the current
     /// LLM/tool round is never cut short.
-    pub fn request_interrupt(&self) {
+    pub(crate) fn request_interrupt(&self) {
         self.inner.interrupt.store(true, Ordering::Release);
     }
 
-    /// Request a hard cancel: abort every currently-known in-flight round now
-    /// (discarding its partial result), and stop the drive loop with
-    /// [`DriveStop::Cancelled`] once the aborted round unwinds.
-    pub fn request_cancel(&self) {
+    /// Request a hard cancel: fire the currently registered in-flight cancel
+    /// hook, then stop the drive loop with [`DriveStop::Cancelled`] once the
+    /// aborted round unwinds.
+    pub(crate) fn request_cancel(&self) {
         self.inner.cancel.store(true, Ordering::Release);
-        for handle in self
+        let hook = self
             .inner
-            .abort_handles
+            .cancel_hook
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
-            .iter()
-        {
-            handle.abort();
+            .clone();
+        if let Some(hook) = hook {
+            hook();
         }
-    }
-
-    /// Whether any interrupt or cancel has been requested. A cheap check for the
-    /// driving layer to decide whether the completed drive needs special
-    /// handling.
-    pub fn is_requested(&self) -> bool {
-        self.inner.interrupt.load(Ordering::Acquire) || self.inner.cancel.load(Ordering::Acquire)
     }
 
     /// Read-and-clear the interrupt request.
@@ -98,14 +88,31 @@ impl SessionControl {
         self.inner.cancel.swap(false, Ordering::AcqRel)
     }
 
-    /// Replace the live abort handles a cancel request will fire. The drive loop
-    /// refreshes these before each ready batch so a cancel aborts whatever agents
-    /// are currently running (including subagents spawned mid-drive).
-    pub(crate) fn refresh_abort_handles(&self, handles: Vec<AgentAbortHandle>) {
+    /// Replace the action a cancel request will fire. The drive loop refreshes
+    /// this before each ready batch so a cancel aborts whatever work is currently
+    /// running (including subagents spawned mid-drive).
+    pub(crate) fn set_cancel_hook<F>(&self, hook: F)
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        let hook: CancelHook = Arc::new(hook);
+        let should_fire = self.inner.cancel.load(Ordering::Acquire);
         *self
             .inner
-            .abort_handles
+            .cancel_hook
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner()) = handles;
+            .unwrap_or_else(|poison| poison.into_inner()) = Some(Arc::clone(&hook));
+        if should_fire {
+            hook();
+        }
+    }
+
+    /// Clear any batch-local cancel action once the drive has no in-flight batch.
+    pub(crate) fn clear_cancel_hook(&self) {
+        *self
+            .inner
+            .cancel_hook
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = None;
     }
 }

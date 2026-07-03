@@ -163,8 +163,7 @@ fn distinct_ids_persist_independently() {
     let fs = MemFs::default();
     let dir = "/sessions";
 
-    let make =
-        |id: u32| TranscriptStore::new(id, TranscriptConfig::new(dir), fs.clone()).unwrap();
+    let make = |id: u32| TranscriptStore::new(id, TranscriptConfig::new(dir), fs.clone()).unwrap();
 
     let one = make(1);
     let two = make(2);

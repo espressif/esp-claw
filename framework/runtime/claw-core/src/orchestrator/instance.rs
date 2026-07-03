@@ -16,8 +16,8 @@
 //! Sessions are isolated — one session's agents never appear in another's store —
 //! while a single global id allocator (shared at construction) keeps every
 //! [`AgentId`] unique across the whole process. The root is built lazily on the
-//! first delivered message (that message is its goal); later messages append to
-//! it.
+//! first delivered message (that message is its goal); later append deliveries
+//! are accepted only once the root has returned to an idle boundary.
 //!
 //! Borrow safety: a tick may emit [`GraphEffect`]s (spawn a child, resolve an
 //! approval) through the agent's [`GraphHost`], but those only push onto the
@@ -46,14 +46,6 @@ use tracing::Instrument;
 
 /// The kind instantiated as a session's user-facing root agent.
 const ROOT_AGENT_KIND: &str = "conversation";
-
-/// The synthetic user turn recorded when a running task is gracefully
-/// interrupted by new input (a [`DeliveryKind::Interrupt`](crate::session::DeliveryKind::Interrupt)
-/// delivery). Written to the root's transcript before the interrupting message,
-/// so the model sees that its previous autonomous train of thought was cut short
-/// and superseded — the task itself stays alive.
-const INTERRUPT_MARKER: &str =
-    "[conversation interrupted: new input arrived; abandoning the previous train of thought]";
 
 /// A user-facing reply produced by a **root** agent, surfaced to the channel
 /// router.
@@ -381,12 +373,6 @@ where
         self.turn
     }
 
-    /// The number of live agents in this session.
-    #[cfg(test)]
-    pub(crate) fn agent_count(&self) -> usize {
-        self.registry.count()
-    }
-
     /// Deliver a user message to this session's root.
     ///
     /// Builds the root on the first call (the message becomes its goal); appends to
@@ -398,10 +384,9 @@ where
     /// Propagates the factory's error string when the root cannot be built.
     pub(crate) fn deliver(&mut self, text: impl Into<String>) -> Result<(), String> {
         match self.root {
-            Some(root) => {
-                self.deliver_message(root, text);
-                Ok(())
-            }
+            Some(root) => self
+                .deliver_message(root, text)
+                .map_err(|error| format!("delivering to root {root}: {error}")),
             None => {
                 let id = self.ids.next();
                 let kind = AgentKind::new(ROOT_AGENT_KIND);
@@ -425,20 +410,9 @@ where
         }
     }
 
-    /// Drive this session's agents until none is ready, collecting every reply and
-    /// pending approval. An agent parked on an approval is *not* ready, so the loop
-    /// terminates with that approval surfaced for a human decision.
-    pub(crate) async fn drive(&mut self) -> DriveOutput {
-        let mut output = DriveOutput::default();
-        while self.has_ready() {
-            output.absorb(self.tick_ready_batch().await);
-        }
-        output
-    }
-
-    /// Drive like [`drive`](Self::drive), but observe an out-of-band
-    /// [`SessionControl`] between ready batches so a concurrent task can stop the
-    /// drive in flight.
+    /// Drive until no agent is ready, observing an out-of-band [`SessionControl`]
+    /// between ready batches so a concurrent submission can stop the drive in
+    /// flight.
     ///
     /// - A **cancel** request aborts the current LLM round (its partial result is
     ///   discarded by the agent's preemption path) and returns
@@ -447,19 +421,23 @@ where
     ///   returns [`DriveStop::Interrupted`] before the next batch.
     /// - Otherwise the loop runs to quiescence and returns [`DriveStop::Quiescent`].
     ///
-    /// The caller decides what to do with the stop reason (record a marker,
-    /// deliver a queued message, start a fresh task); this method only detects and
-    /// reports it.
+    /// The caller decides the next delivery path from the stop reason; this
+    /// method only detects and reports it.
     pub(crate) async fn drive_interruptible(
         &mut self,
         control: &SessionControl,
     ) -> (DriveOutput, DriveStop) {
         let mut output = DriveOutput::default();
         while self.has_ready() {
-            // Refresh before awaiting the batch so a cancel arriving during the
+            // Register before awaiting the batch so a cancel arriving during the
             // batch aborts whatever agents are live right now (subagents spawned
             // last batch included).
-            control.refresh_abort_handles(self.registry.abort_handles());
+            let abort_handles = self.registry.abort_handles();
+            control.set_cancel_hook(move || {
+                for handle in &abort_handles {
+                    handle.abort();
+                }
+            });
             output.absorb(self.tick_ready_batch().await);
             // Only honour a control request when there is still work pending: a
             // drive that has already reached quiescence has nothing to interrupt
@@ -468,35 +446,45 @@ where
             if self.has_ready() {
                 // Cancel takes precedence: it is the hard stop.
                 if control.take_cancel() {
+                    control.clear_cancel_hook();
                     return (output, DriveStop::Cancelled);
                 }
                 if control.take_interrupt() {
+                    control.clear_cancel_hook();
                     return (output, DriveStop::Interrupted);
                 }
             }
         }
+        control.clear_cancel_hook();
         (output, DriveStop::Quiescent)
     }
 
-    /// Record the interruption marker on the root's transcript (as a synthetic
-    /// user turn), keeping the task alive. Paired with a follow-up
-    /// [`deliver`](Self::deliver) of the interrupting message by the caller.
-    pub(crate) fn mark_interrupted(&mut self) {
-        if let Some(root) = self.root {
-            // The root is Running (mid-task); `AppendMessage` is legal in every
-            // state and just appends the marker as a user turn.
-            self.deliver_message(root, INTERRUPT_MARKER);
-        }
+    /// Gracefully interrupt the session root with a newer user message, keeping
+    /// the task alive. The interruption marker and the message are recorded by
+    /// the root agent itself so interrupt semantics stay in the agent layer.
+    pub(crate) fn interrupt_root(&mut self, message: impl Into<String>) -> Result<(), String> {
+        let message = message.into();
+        let Some(root) = self.root else {
+            return self.deliver(message);
+        };
+        let Some(agent) = self.registry.get_mut(root) else {
+            return self.deliver(message);
+        };
+        agent
+            .send_command(AgentCommand::Interrupt { message })
+            .map_err(|error| error.to_string())?;
+        self.enqueue(root);
+        Ok(())
     }
 
-    /// Hard-cancel the session root's current task with `reason` (recording the
-    /// cancellation marker and returning the root to idle). A no-op when there is
-    /// no root or the root has no active task to cancel.
+    /// Hard-cancel the session root's current task with `reason` (discarding the
+    /// root's open turn and returning it to idle). A no-op when there is no root
+    /// or the root has no active task to cancel.
     ///
     /// Paired with a follow-up [`deliver`](Self::deliver) of the new message by
     /// the caller: the two commands land on the root's inbox in order (cancel then
-    /// append), so the next drive commits the cancellation marker and then starts
-    /// the fresh task.
+    /// append), so the next drive discards the old open turn and then starts the
+    /// fresh task.
     pub(crate) fn cancel_root(&mut self, reason: CancelReason) {
         let Some(root) = self.root else {
             return;
@@ -583,16 +571,16 @@ where
         batch
     }
 
-    /// Append a user message to the agent `id` and mark it ready. Returns `false`
-    /// if no such agent exists.
-    fn deliver_message(&mut self, id: AgentId, text: impl Into<String>) -> bool {
+    /// Append a user message to the idle agent `id` and mark it ready.
+    fn deliver_message(&mut self, id: AgentId, text: impl Into<String>) -> Result<(), String> {
         let Some(agent) = self.registry.get_mut(id) else {
-            return false;
+            return Err(format!("no such agent {id}"));
         };
-        // `AppendMessage` is accepted in every state, so this cannot fail.
-        let _ = agent.send_command(AgentCommand::AppendMessage(text.into()));
+        agent
+            .send_command(AgentCommand::AppendMessage(text.into()))
+            .map_err(|error| error.to_string())?;
         self.enqueue(id);
-        true
+        Ok(())
     }
 
     /// Record `agent` as parked on `approval`, then either bubble its request to
@@ -624,10 +612,20 @@ where
         // the requester's id so the root can address it in `respond_to_approval`.
         match self.root {
             Some(root_id) => {
-                self.deliver_message(
-                    root_id,
-                    format!("[approval request from {agent}] {summary}"),
-                );
+                if let Some(root_agent) = self.registry.get_mut(root_id) {
+                    root_agent.deliver_child_input(
+                        agent,
+                        format!("[approval request from {agent}] {summary}"),
+                    );
+                    self.enqueue(root_id);
+                } else {
+                    tracing::warn!(
+                        session = %self.session,
+                        agent = %agent,
+                        root_agent = %root_id,
+                        "root missing; cannot route subagent approval request"
+                    );
+                }
             }
             None => {
                 tracing::warn!(session = %self.session, agent = %agent, "no root for session; cannot route approval")
@@ -825,12 +823,7 @@ where
             TickOutcome::Ended { final_message } => {
                 DriveOutput::replies(self.route_result(id, final_message, true, true))
             }
-            TickOutcome::Cancelled { reason } => DriveOutput::replies(self.route_result(
-                id,
-                format!("[cancelled: {reason:?}]"),
-                false,
-                true,
-            )),
+            TickOutcome::Cancelled { reason } => self.route_cancelled(id, reason),
             TickOutcome::Failed(error) => DriveOutput::replies(self.route_result(
                 id,
                 format!("[failed: {error:?}]"),
@@ -883,6 +876,25 @@ where
         Vec::new()
     }
 
+    /// Route a hard cancellation. Cancellation is intentionally silent: no root
+    /// reply and no parent message. A cancelled subagent is removed so the graph
+    /// does not retain dead work; a cancelled root stays as the reusable session
+    /// root.
+    fn route_cancelled(&mut self, id: AgentId, reason: CancelReason) -> DriveOutput {
+        let Some(parent) = self.meta.get(&id).and_then(|meta| meta.parent) else {
+            tracing::info!(agent = %id, ?reason, "root task cancelled");
+            return DriveOutput::default();
+        };
+        tracing::info!(
+            agent = %id,
+            parent_agent = %parent,
+            ?reason,
+            "subagent task cancelled"
+        );
+        self.delete_subtree(id);
+        DriveOutput::default()
+    }
+
     /// Remove `root` and every descendant from the store, the graph, the ready
     /// queue, and any parked approvals. Used both for one-shot cleanup and for an
     /// explicit/cascading delete; a parent's removal never leaves orphans.
@@ -923,696 +935,5 @@ where
     /// True while any agent has work queued.
     fn has_ready(&self) -> bool {
         !self.ready.is_empty()
-    }
-}
-
-#[cfg(test)]
-#[cfg(any())]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
-mod tests {
-    use core::future::Future;
-    use core::task::{Context, Poll};
-    use std::collections::VecDeque;
-    use std::sync::{Arc, Mutex};
-    use std::task::{Wake, Waker};
-
-    use claw_context::Block;
-
-    use super::*;
-    use crate::agent::{
-        Agent, AgentAbortHandle, AgentCommand, AgentContext, AgentFactory, AgentTickFuture,
-        TickOutcome,
-    };
-
-    /// The kind every test child is spawned as.
-    const TEST_KIND: &str = "worker";
-
-    /// Shared, inspectable record of `(agent, command)` pairs every fake agent
-    /// received via `send_command`.
-    type CommandLog = Arc<Mutex<Vec<(AgentId, AgentCommand)>>>;
-    /// Shared, inspectable record of `(child, text, ok)` results delivered to
-    /// parents.
-    type DeliveredLog = Arc<Mutex<Vec<(AgentId, String, bool)>>>;
-    type TickLog = Arc<Mutex<Vec<(AgentId, &'static str)>>>;
-
-    struct NoopWake;
-
-    impl Wake for NoopWake {
-        fn wake(self: Arc<Self>) {}
-    }
-
-    fn block_on<F: Future>(future: F) -> F::Output {
-        let mut future = Box::pin(future);
-        let waker = Waker::from(Arc::new(NoopWake));
-        let mut context = Context::from_waker(&waker);
-        loop {
-            if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
-                return value;
-            }
-        }
-    }
-
-    /// One scripted action a [`FakeAgent`] performs on a `tick`.
-    enum Step {
-        /// Return `Working` (more to do).
-        Work,
-        /// Spawn a child via the context with `goal` and `termination`, then return
-        /// `Working`.
-        Spawn(String, TerminationPolicy),
-        /// Return `AwaitingApproval { id: approval-1, summary }`.
-        AwaitApproval(String),
-        /// Respond to `target`'s approval via the context, then return `Working`
-        /// (models a root resolving a subagent's request).
-        Respond(AgentId, ApprovalVerdict),
-        /// Delete `target` via the context, then return `Working` (models a parent
-        /// reaping a persistent subagent).
-        Delete(AgentId),
-        /// Return `Yielded { text }`.
-        Yield(String),
-        /// Yield once before returning `Yielded { text }`.
-        YieldAfterOnePending(String),
-    }
-
-    /// A test agent that replays scripted [`Step`]s, records every command it
-    /// receives, and records delivered child results — all into shared vecs. Graph
-    /// actions (spawn / respond) go through its [`AgentContext`].
-    struct FakeAgent {
-        id: AgentId,
-        steps: VecDeque<Step>,
-        context: AgentContext,
-        delivered: DeliveredLog,
-        received: CommandLog,
-        ticks: TickLog,
-    }
-
-    impl Agent for FakeAgent {
-        fn id(&self) -> AgentId {
-            self.id
-        }
-
-        fn send_command(&mut self, command: AgentCommand) -> Result<(), AgentCommandError> {
-            self.received.lock().unwrap().push((self.id, command));
-            Ok(())
-        }
-
-        fn deliver_child_result(&mut self, child: AgentId, text: String, ok: bool) {
-            self.delivered.lock().unwrap().push((child, text, ok));
-        }
-
-        fn abort_handle(&self) -> AgentAbortHandle {
-            AgentAbortHandle::default()
-        }
-
-        fn tick(&mut self) -> AgentTickFuture<'_> {
-            if matches!(self.steps.front(), Some(Step::YieldAfterOnePending(_))) {
-                if let Some(Step::YieldAfterOnePending(text)) = self.steps.pop_front() {
-                    return Box::pin(PendingOnceYield {
-                        id: self.id,
-                        text: Some(text),
-                        ticks: Arc::clone(&self.ticks),
-                        pending_emitted: false,
-                    });
-                }
-            }
-            self.ticks.lock().unwrap().push((self.id, "tick"));
-            let outcome = match self.steps.pop_front() {
-                Some(Step::Work) => TickOutcome::Working,
-                Some(Step::Spawn(goal, termination)) => {
-                    self.context
-                        .spawn(AgentKind::new(TEST_KIND), None, goal, termination);
-                    TickOutcome::Working
-                }
-                Some(Step::AwaitApproval(summary)) => TickOutcome::AwaitingApproval {
-                    id: ApprovalId(1),
-                    summary,
-                },
-                Some(Step::Respond(target, verdict)) => {
-                    self.context.respond_to_approval(target, verdict);
-                    TickOutcome::Working
-                }
-                Some(Step::Delete(target)) => {
-                    self.context.delete_subagent(target);
-                    TickOutcome::Working
-                }
-                Some(Step::Yield(text)) => TickOutcome::Yielded { text },
-                Some(Step::YieldAfterOnePending(_)) => TickOutcome::Idle,
-                None => TickOutcome::Idle,
-            };
-            Box::pin(async move { outcome })
-        }
-    }
-
-    struct PendingOnceYield {
-        id: AgentId,
-        text: Option<String>,
-        ticks: TickLog,
-        pending_emitted: bool,
-    }
-
-    impl Future for PendingOnceYield {
-        type Output = TickOutcome;
-
-        fn poll(
-            mut self: std::pin::Pin<&mut Self>,
-            context: &mut Context<'_>,
-        ) -> Poll<Self::Output> {
-            if !self.pending_emitted {
-                self.pending_emitted = true;
-                self.ticks.lock().unwrap().push((self.id, "pending"));
-                context.waker().wake_by_ref();
-                return Poll::Pending;
-            }
-            self.ticks.lock().unwrap().push((self.id, "ready"));
-            let text = self.text.take().unwrap_or_default();
-            Poll::Ready(TickOutcome::Yielded { text })
-        }
-    }
-
-    /// A factory that scripts agents from their goal, sharing one delivered/received
-    /// log across every agent it builds (root and children alike).
-    ///
-    /// Goal grammar:
-    /// - `spawn:<g>`  → spawn one child for `<g>`, then yield `final answer`
-    ///   (a root that delegates one subtask).
-    /// - `deep:<g>`   → spawn one child for `<g>`, then yield `done:deep:<g>`
-    ///   (a subagent that itself spawns).
-    /// - `approve:<g>`→ park on approval `<g>`, then yield `done:approve:<g>`.
-    /// - `rootask:<g>`→ park on approval `<g>`, then yield `done` (a root asking).
-    /// - `bubble`     → spawn `approve:delete prod`, let it park, respond to
-    ///   `agent-2` with `bubble_verdict`, then yield `root-done`.
-    /// - anything else→ yield `done:<goal>`.
-    struct FakeFactory {
-        delivered: DeliveredLog,
-        received: CommandLog,
-        ticks: TickLog,
-        bubble_verdict: ApprovalVerdict,
-    }
-
-    impl FakeFactory {
-        fn new() -> Self {
-            Self {
-                delivered: Arc::new(Mutex::new(Vec::new())),
-                received: Arc::new(Mutex::new(Vec::new())),
-                ticks: Arc::new(Mutex::new(Vec::new())),
-                bubble_verdict: ApprovalVerdict::Yes,
-            }
-        }
-
-        fn script(&self, goal: &str) -> VecDeque<Step> {
-            let mut steps = VecDeque::new();
-            if let Some(rest) = goal.strip_prefix("spawn:") {
-                steps.push_back(Step::Spawn(rest.to_string(), TerminationPolicy::AutoOnIdle));
-                steps.push_back(Step::Yield("final answer".into()));
-            } else if let Some(rest) = goal.strip_prefix("concurrent:") {
-                steps.push_back(Step::Spawn(rest.to_string(), TerminationPolicy::Manual));
-                steps.push_back(Step::Yield("root-done".into()));
-            } else if let Some(rest) = goal.strip_prefix("spawnmanual:") {
-                steps.push_back(Step::Spawn(rest.to_string(), TerminationPolicy::Manual));
-                steps.push_back(Step::Yield("final answer".into()));
-            } else if let Some(rest) = goal.strip_prefix("deep:") {
-                steps.push_back(Step::Spawn(rest.to_string(), TerminationPolicy::AutoOnIdle));
-                steps.push_back(Step::Yield(format!("done:{goal}")));
-            } else if let Some(rest) = goal.strip_prefix("deepmanual:") {
-                steps.push_back(Step::Spawn(rest.to_string(), TerminationPolicy::Manual));
-                steps.push_back(Step::Yield(format!("done:{goal}")));
-            } else if let Some(rest) = goal.strip_prefix("approve:") {
-                steps.push_back(Step::AwaitApproval(rest.to_string()));
-                steps.push_back(Step::Yield(format!("done:{goal}")));
-            } else if let Some(rest) = goal.strip_prefix("rootask:") {
-                steps.push_back(Step::AwaitApproval(rest.to_string()));
-                steps.push_back(Step::Yield("done".into()));
-            } else if goal == "reap" {
-                // Spawn a persistent child (agent-2), let it settle idle, then
-                // delete it and finish.
-                steps.push_back(Step::Spawn("leaf".into(), TerminationPolicy::Manual));
-                steps.push_back(Step::Work);
-                steps.push_back(Step::Delete(AgentId(2)));
-                steps.push_back(Step::Yield("reaped".into()));
-            } else if goal == "baddelete" {
-                // Spawn a persistent child (agent-2), then try to delete a
-                // non-descendant id, which must be ignored.
-                steps.push_back(Step::Spawn("leaf".into(), TerminationPolicy::Manual));
-                steps.push_back(Step::Work);
-                steps.push_back(Step::Delete(AgentId(999)));
-                steps.push_back(Step::Yield("done".into()));
-            } else if goal == "bubble" {
-                steps.push_back(Step::Spawn(
-                    "approve:delete prod".into(),
-                    TerminationPolicy::AutoOnIdle,
-                ));
-                steps.push_back(Step::Work);
-                steps.push_back(Step::Respond(AgentId(2), self.bubble_verdict.clone()));
-                steps.push_back(Step::Yield("root-done".into()));
-            } else if goal == "slowleaf" {
-                steps.push_back(Step::YieldAfterOnePending("done:slowleaf".into()));
-            } else if goal == "multiwork" {
-                // Several `Working` ticks (each re-enqueues) before a final yield —
-                // gives an interruptible drive multiple batch boundaries to observe
-                // an out-of-band control request.
-                steps.push_back(Step::Work);
-                steps.push_back(Step::Work);
-                steps.push_back(Step::Work);
-                steps.push_back(Step::Yield("multiwork-done".into()));
-            } else {
-                steps.push_back(Step::Yield(format!("done:{goal}")));
-            }
-            steps
-        }
-    }
-
-    impl AgentFactory for FakeFactory {
-        fn create_agent(
-            &self,
-            id: AgentId,
-            _kind: &AgentKind,
-            goal: String,
-            _placement: AgentPlacement,
-            host: Arc<dyn GraphHost>,
-            _inherited_context: Arc<[Block<'static>]>,
-        ) -> Result<Box<dyn Agent>, String> {
-            Ok(Box::new(FakeAgent {
-                id,
-                steps: self.script(&goal),
-                context: AgentContext::new(id, host),
-                delivered: Arc::clone(&self.delivered),
-                received: Arc::clone(&self.received),
-                ticks: Arc::clone(&self.ticks),
-            }))
-        }
-    }
-
-    fn instance_with(factory: Arc<FakeFactory>, session: SessionId) -> OrchestratorInstance {
-        OrchestratorInstance::new(session, factory, AgentIdAllocator::new())
-    }
-
-    #[test]
-    fn first_message_builds_root_and_drives_it() {
-        let factory = Arc::new(FakeFactory::new());
-        let mut instance = instance_with(Arc::clone(&factory), SessionId(1));
-        assert!(instance.root.is_none());
-
-        instance.deliver("hi").unwrap();
-        assert!(instance.root.is_some());
-
-        let output = block_on(instance.drive());
-        assert_eq!(output.replies.len(), 1);
-        assert_eq!(output.replies[0].text, "done:hi");
-        assert_eq!(output.replies[0].session, SessionId(1));
-        // The root persists for the next message.
-        assert_eq!(instance.agent_count(), 1);
-    }
-
-    #[test]
-    fn root_spawns_child_and_receives_its_result() {
-        let factory = Arc::new(FakeFactory::new());
-        let mut instance = instance_with(Arc::clone(&factory), SessionId(1));
-        instance.deliver("spawn:subtask").unwrap();
-
-        let output = block_on(instance.drive());
-
-        assert_eq!(
-            output.replies,
-            vec![RootReply {
-                session: SessionId(1),
-                text: "final answer".into(),
-                ended: false,
-            }]
-        );
-        assert!(output.approvals.is_empty());
-        // The child's result bubbled back to the root.
-        assert!(factory
-            .delivered
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(_, text, ok)| text == "done:subtask" && *ok));
-        // The one-shot child was removed; only the root remains.
-        assert_eq!(instance.agent_count(), 1);
-    }
-
-    #[test]
-    fn ready_agents_are_polled_in_the_same_async_batch() {
-        let factory = Arc::new(FakeFactory::new());
-        let ticks = Arc::clone(&factory.ticks);
-        let mut instance = instance_with(Arc::clone(&factory), SessionId(11));
-        instance.deliver("concurrent:slowleaf").unwrap();
-
-        let output = block_on(instance.drive());
-
-        assert_eq!(output.replies.len(), 1);
-        assert_eq!(output.replies[0].text, "root-done");
-        let ticks = ticks.lock().unwrap();
-        let child_pending = ticks
-            .iter()
-            .position(|entry| *entry == (AgentId(2), "pending"))
-            .expect("child should yield pending once");
-        let root_tick = ticks
-            .iter()
-            .enumerate()
-            .find(|(index, entry)| *index > child_pending && **entry == (AgentId(1), "tick"))
-            .map(|(index, _)| index)
-            .expect("root should be polled");
-        let child_ready = ticks
-            .iter()
-            .position(|entry| *entry == (AgentId(2), "ready"))
-            .expect("child should complete after pending");
-        assert!(
-            child_pending < root_tick && root_tick < child_ready,
-            "tick order should show root polled while child is pending: {ticks:?}"
-        );
-    }
-
-    #[test]
-    fn subagent_can_itself_spawn_a_grandchild() {
-        let factory = Arc::new(FakeFactory::new());
-        let mut instance = instance_with(Arc::clone(&factory), SessionId(2));
-        instance.deliver("spawn:deep:leaf").unwrap();
-
-        let output = block_on(instance.drive());
-
-        assert_eq!(output.replies.len(), 1);
-        assert_eq!(output.replies[0].session, SessionId(2));
-        let delivered = factory.delivered.lock().unwrap();
-        assert!(
-            delivered.iter().any(|(_, text, _)| text == "done:leaf"),
-            "grandchild result should reach its parent (the child)"
-        );
-        assert!(
-            delivered
-                .iter()
-                .any(|(_, text, _)| text == "done:deep:leaf"),
-            "child result should reach the root"
-        );
-        drop(delivered);
-        // All subagents are one-shot and removed; only the root remains.
-        assert_eq!(instance.agent_count(), 1);
-    }
-
-    #[test]
-    fn manual_subagent_persists_after_yielding_its_result() {
-        let factory = Arc::new(FakeFactory::new());
-        let mut instance = instance_with(Arc::clone(&factory), SessionId(6));
-        // The root spawns a `manual` child, which yields `done:work` and stays.
-        instance.deliver("spawnmanual:work").unwrap();
-
-        let output = block_on(instance.drive());
-
-        assert_eq!(output.replies.len(), 1);
-        assert_eq!(output.replies[0].text, "final answer");
-        // The child still delivered its result to the root...
-        assert!(factory
-            .delivered
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(_, text, _)| text == "done:work"));
-        // ...but, being `manual`, it was kept alive — root + child remain.
-        assert_eq!(instance.agent_count(), 2);
-    }
-
-    #[test]
-    fn removing_a_parent_cascades_to_its_persistent_child() {
-        let factory = Arc::new(FakeFactory::new());
-        let mut instance = instance_with(Arc::clone(&factory), SessionId(7));
-        // root --spawn(auto)--> child --spawn(manual)--> grandchild.
-        // The grandchild is `manual`, so it would survive its own yield; but its
-        // `auto` parent (child) is removed on yield, which must cascade and take the
-        // persistent grandchild with it.
-        instance.deliver("spawn:deepmanual:leaf").unwrap();
-
-        let output = block_on(instance.drive());
-
-        assert_eq!(output.replies.len(), 1);
-        let delivered = factory.delivered.lock().unwrap();
-        assert!(
-            delivered.iter().any(|(_, text, _)| text == "done:leaf"),
-            "grandchild result should reach its parent (the child)"
-        );
-        assert!(
-            delivered
-                .iter()
-                .any(|(_, text, _)| text == "done:deepmanual:leaf"),
-            "child result should reach the root"
-        );
-        drop(delivered);
-        // Cascade removed both the auto child and its manual grandchild.
-        assert_eq!(instance.agent_count(), 1);
-    }
-
-    #[test]
-    fn agent_can_delete_its_manual_subagent() {
-        let factory = Arc::new(FakeFactory::new());
-        let mut instance = instance_with(Arc::clone(&factory), SessionId(8));
-        instance.deliver("reap").unwrap();
-
-        let output = block_on(instance.drive());
-
-        assert_eq!(output.replies.len(), 1);
-        assert_eq!(output.replies[0].text, "reaped");
-        // The persistent child existed, then was deleted — only the root remains.
-        assert_eq!(instance.agent_count(), 1);
-    }
-
-    #[test]
-    fn delete_of_a_non_descendant_is_ignored() {
-        let factory = Arc::new(FakeFactory::new());
-        let mut instance = instance_with(Arc::clone(&factory), SessionId(9));
-        instance.deliver("baddelete").unwrap();
-
-        let output = block_on(instance.drive());
-
-        assert_eq!(output.replies.len(), 1);
-        // The bogus delete touched nothing: root + its manual child both survive.
-        assert_eq!(instance.agent_count(), 2);
-    }
-
-    #[test]
-    fn refresh_snapshots_reflects_the_live_graph() {
-        let factory = Arc::new(FakeFactory::new());
-        let mut instance = instance_with(Arc::clone(&factory), SessionId(10));
-        // root (agent-1) spawns a persistent child (agent-2) that stays idle.
-        instance.deliver("spawnmanual:work").unwrap();
-        block_on(instance.drive());
-
-        instance.refresh_snapshots();
-        let snapshots = instance.snapshots.lock().unwrap();
-        assert_eq!(snapshots.len(), 2);
-
-        let root = snapshots.get(&AgentId(1)).expect("root snapshot");
-        assert_eq!(root.parent, None);
-        assert_eq!(root.depth, 0);
-
-        let child = snapshots.get(&AgentId(2)).expect("child snapshot");
-        assert_eq!(child.parent, Some(AgentId(1)));
-        assert_eq!(child.depth, 1);
-        assert_eq!(child.termination, TerminationPolicy::Manual);
-        assert_eq!(child.status, AgentStatus::Idle);
-    }
-
-    #[test]
-    fn root_approval_is_surfaced_then_resolved_resumes_the_agent() {
-        let factory = Arc::new(FakeFactory::new());
-        let mut instance = instance_with(Arc::clone(&factory), SessionId(3));
-        instance.deliver("rootask:delete prod?").unwrap();
-        let root_id = instance.root.unwrap();
-
-        // First drive parks on the approval: no reply, one surfaced request.
-        let output = block_on(instance.drive());
-        assert!(output.replies.is_empty());
-        assert_eq!(
-            output.approvals,
-            vec![ApprovalRequest {
-                session: SessionId(3),
-                agent: root_id,
-                approval: ApprovalId(1),
-                summary: "delete prod?".into(),
-            }]
-        );
-
-        // Resolving re-enqueues the agent; the next drive produces the reply.
-        instance
-            .resolve_approval(root_id, ApprovalId(1), ApprovalDecision::Approved)
-            .expect("resolve approval");
-        let output = block_on(instance.drive());
-        assert_eq!(output.replies.len(), 1);
-        assert_eq!(output.replies[0].text, "done");
-    }
-
-    #[test]
-    fn resolve_approval_for_unknown_agent_errors() {
-        let factory = Arc::new(FakeFactory::new());
-        let mut instance = instance_with(factory, SessionId(4));
-        let result =
-            instance.resolve_approval(AgentId(999), ApprovalId(1), ApprovalDecision::Approved);
-        assert!(matches!(result, Err(ResolveApprovalError::UnknownAgent(_))));
-    }
-
-    /// Drive a session whose root spawns a subagent that parks on an approval,
-    /// then has the root respond with `verdict`. Returns the shared command log and
-    /// the drive output.
-    fn drive_subagent_approval(verdict: ApprovalVerdict) -> (CommandLog, DriveOutput) {
-        let factory = Arc::new(FakeFactory {
-            bubble_verdict: verdict,
-            ..FakeFactory::new()
-        });
-        let received = Arc::clone(&factory.received);
-        let mut instance = instance_with(factory, SessionId(5));
-        instance.deliver("bubble").unwrap();
-        // The root is agent-1; the child it spawns is agent-2 (deterministic).
-        assert_eq!(instance.root, Some(AgentId(1)));
-        let output = block_on(instance.drive());
-        (received, output)
-    }
-
-    #[test]
-    fn subagent_approval_bubbles_to_root_not_to_the_orchestrator() {
-        let (received, output) = drive_subagent_approval(ApprovalVerdict::Yes);
-
-        // The subagent's request was *not* surfaced to the orchestrator...
-        assert!(
-            output.approvals.is_empty(),
-            "a subagent approval must bubble to the root, not surface"
-        );
-        // ...it was delivered to the root as a provenance-tagged message.
-        let received = received.lock().unwrap();
-        assert!(
-            received.iter().any(|(agent, command)| *agent == AgentId(1)
-                && *command
-                    == AgentCommand::AppendMessage(
-                        "[approval request from agent-2] delete prod".into()
-                    )),
-            "root should receive the bubbled approval request: {received:?}"
-        );
-        // The root still produced its own reply afterwards.
-        assert_eq!(output.replies.len(), 1);
-        assert_eq!(output.replies[0].text, "root-done");
-    }
-
-    #[test]
-    fn root_yes_verdict_approves_the_waiting_subagent() {
-        let (received, _output) = drive_subagent_approval(ApprovalVerdict::Yes);
-        let received = received.lock().unwrap();
-        assert!(
-            received.iter().any(|(agent, command)| *agent == AgentId(2)
-                && *command
-                    == AgentCommand::ApprovalResult {
-                        id: ApprovalId(1),
-                        decision: ApprovalDecision::Approved,
-                    }),
-            "subagent should be approved: {received:?}"
-        );
-    }
-
-    #[test]
-    fn root_no_and_other_verdicts_reject_with_the_user_note() {
-        for verdict in [
-            ApprovalVerdict::No("not allowed".into()),
-            ApprovalVerdict::Other("not allowed".into()),
-        ] {
-            let (received, _output) = drive_subagent_approval(verdict.clone());
-            let received = received.lock().unwrap();
-            assert!(
-                received.iter().any(|(agent, command)| *agent == AgentId(2)
-                    && *command
-                        == AgentCommand::ApprovalResult {
-                            id: ApprovalId(1),
-                            decision: ApprovalDecision::Rejected("not allowed".into()),
-                        }),
-                "verdict {verdict:?} should reject with the note: {received:?}"
-            );
-        }
-    }
-
-    // -- Interruptible drive --------------------------------------------------
-
-    #[test]
-    fn drive_interruptible_runs_to_quiescence_without_a_signal() {
-        let factory = Arc::new(FakeFactory::new());
-        let mut instance = instance_with(Arc::clone(&factory), SessionId(20));
-        instance.deliver("multiwork").unwrap();
-
-        let control = SessionControl::new();
-        let (output, stop) = block_on(instance.drive_interruptible(&control));
-
-        assert_eq!(stop, DriveStop::Quiescent);
-        assert_eq!(output.replies.len(), 1);
-        assert_eq!(output.replies[0].text, "multiwork-done");
-        assert!(!instance.has_ready());
-    }
-
-    #[test]
-    fn drive_interruptible_stops_interrupted_between_batches() {
-        let factory = Arc::new(FakeFactory::new());
-        let ticks = Arc::clone(&factory.ticks);
-        let mut instance = instance_with(Arc::clone(&factory), SessionId(21));
-        instance.deliver("multiwork").unwrap();
-
-        let control = SessionControl::new();
-        control.request_interrupt();
-        let (_output, stop) = block_on(instance.drive_interruptible(&control));
-
-        assert_eq!(stop, DriveStop::Interrupted);
-        // Exactly one batch (one tick) ran before the interrupt was honoured; the
-        // task is still alive with work pending (whole-iteration graceful stop).
-        assert_eq!(ticks.lock().unwrap().len(), 1);
-        assert!(instance.has_ready());
-    }
-
-    #[test]
-    fn drive_interruptible_stops_cancelled_between_batches() {
-        let factory = Arc::new(FakeFactory::new());
-        let ticks = Arc::clone(&factory.ticks);
-        let mut instance = instance_with(Arc::clone(&factory), SessionId(22));
-        instance.deliver("multiwork").unwrap();
-
-        let control = SessionControl::new();
-        control.request_cancel();
-        let (_output, stop) = block_on(instance.drive_interruptible(&control));
-
-        assert_eq!(stop, DriveStop::Cancelled);
-        // Cancel takes precedence and stops after the current batch.
-        assert_eq!(ticks.lock().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn mark_interrupted_appends_the_marker_to_the_root() {
-        let factory = Arc::new(FakeFactory::new());
-        let received = Arc::clone(&factory.received);
-        let mut instance = instance_with(Arc::clone(&factory), SessionId(23));
-        instance.deliver("hi").unwrap();
-        // Isolate the marker from the initial delivery's AppendMessage.
-        received.lock().unwrap().clear();
-
-        instance.mark_interrupted();
-
-        let received = received.lock().unwrap();
-        assert!(
-            received.iter().any(|(agent, command)| *agent == AgentId(1)
-                && matches!(command, AgentCommand::AppendMessage(text) if text == INTERRUPT_MARKER)),
-            "root should receive the interruption marker: {received:?}"
-        );
-    }
-
-    #[test]
-    fn cancel_root_sends_a_cancel_command_to_the_root() {
-        let factory = Arc::new(FakeFactory::new());
-        let received = Arc::clone(&factory.received);
-        let mut instance = instance_with(Arc::clone(&factory), SessionId(24));
-        instance.deliver("hi").unwrap();
-        received.lock().unwrap().clear();
-
-        instance.cancel_root(CancelReason::Superseded);
-
-        let received = received.lock().unwrap();
-        assert!(
-            received.iter().any(|(agent, command)| *agent == AgentId(1)
-                && matches!(
-                    command,
-                    AgentCommand::Cancel {
-                        reason: CancelReason::Superseded
-                    }
-                )),
-            "root should receive the cancel command: {received:?}"
-        );
     }
 }

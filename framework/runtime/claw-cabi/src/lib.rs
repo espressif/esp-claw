@@ -40,10 +40,9 @@ use std::task::{Wake, Waker};
 
 #[cfg(target_os = "espidf")]
 use claw_agent::{
-    AgentPersistenceConfig, AgentSystem, BackendKind, ClawApiConfig, DeliveryKind, DriveStop,
-    SessionControl, SessionId, SessionRecord,
+    AgentPersistenceConfig, AgentSystem, BackendKind, ClawApiConfig, SessionId, SessionRecord,
 };
-use claw_agent::{CapabilityError, ChannelRuntime, Registry, ToolInvocation};
+use claw_agent::{CapabilityError, CapabilityRole, ChannelRuntime, Registry, ToolInvocation};
 #[cfg(target_os = "espidf")]
 use claw_agent::{ChannelFuture, InboundMessage};
 #[cfg(target_os = "espidf")]
@@ -302,238 +301,180 @@ fn build_agent_system(config: &AgentRuntimeConfig) -> Result<EspAgentSystem, Cap
     .map_err(|error| CapabilityError::Failed(error.to_string()))
 }
 
-/// Biased race between an in-flight drive and the next queued command.
-///
-/// Polls `drive` first (so a completing drive always wins over a just-arrived
-/// command), then the command receiver. When the drive wins, the receiver future
-/// is dropped without consuming a queued command — [`AsyncRecv`] only removes a
-/// value on the poll that returns `Ready`, so a message that arrived on the same
-/// tick stays queued for the next `recv`.
 #[cfg(target_os = "espidf")]
-struct DriveOrCommand<'borrow, 'obj: 'borrow, 'recv> {
-    drive: Pin<&'borrow mut (dyn Future<Output = Result<DriveStop, CapabilityError>> + 'obj)>,
-    recv: AsyncRecv<'recv, RuntimeCommand>,
+type InflightCommand = Pin<Box<dyn Future<Output = ()>>>;
+
+#[cfg(target_os = "espidf")]
+struct InflightOrCommand<'futures, 'recv> {
+    inflight: &'futures mut Vec<Option<InflightCommand>>,
+    recv: Option<AsyncRecv<'recv, RuntimeCommand>>,
 }
 
 #[cfg(target_os = "espidf")]
-enum Raced {
-    DriveDone(Result<DriveStop, CapabilityError>),
+enum RuntimeEvent {
+    InflightDone,
     Command(Option<RuntimeCommand>),
 }
 
 #[cfg(target_os = "espidf")]
-impl Future for DriveOrCommand<'_, '_, '_> {
-    type Output = Raced;
+impl Future for InflightOrCommand<'_, '_> {
+    type Output = RuntimeEvent;
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-        // `DriveOrCommand` is `Unpin` (its fields are a pinned reference and an
-        // `Unpin` receiver future), so `get_mut` is sound.
+        // `InflightOrCommand` is `Unpin` (its fields are an exclusive vector
+        // borrow and an `Unpin` receiver future), so `get_mut` is sound.
         let this = self.get_mut();
-        if let Poll::Ready(output) = this.drive.as_mut().poll(context) {
-            return Poll::Ready(Raced::DriveDone(output));
+        for slot in this.inflight.iter_mut() {
+            let Some(future) = slot else {
+                continue;
+            };
+            if future.as_mut().poll(context).is_ready() {
+                *slot = None;
+                return Poll::Ready(RuntimeEvent::InflightDone);
+            }
         }
-        if let Poll::Ready(command) = Pin::new(&mut this.recv).poll(context) {
-            return Poll::Ready(Raced::Command(command));
+        if let Some(recv) = &mut this.recv {
+            if let Poll::Ready(command) = Pin::new(recv).poll(context) {
+                return Poll::Ready(RuntimeEvent::Command(command));
+            }
         }
         Poll::Pending
     }
 }
 
-/// How the next drive in a delivery chain should be started.
 #[cfg(target_os = "espidf")]
-enum DriveStep {
-    /// Deliver as-is, resolving the delivery mode from the message's own
-    /// `extra_context` hint at the boundary.
-    Fresh(InboundMessage),
-    /// Continue a gracefully-interrupted task with this message.
-    ContinueInterrupted(InboundMessage),
-    /// Supersede the current task, then start fresh from this message.
-    ContinueCancelled(InboundMessage),
+fn start_inbound(system: &EspAgentSystem, message: InboundMessage) -> InflightCommand {
+    let system = system.clone();
+    Box::pin(async move {
+        let _ = system.push_message(message).await;
+    })
 }
 
 #[cfg(target_os = "espidf")]
-fn start_drive<'system>(
-    system: &'system EspAgentSystem,
-    session: SessionId,
-    step: DriveStep,
-    control: &'system SessionControl,
-) -> Pin<Box<dyn Future<Output = Result<DriveStop, CapabilityError>> + 'system>> {
-    match step {
-        DriveStep::Fresh(message) => {
-            // Deliver as-is: the delivery mode is derived from the message's own
-            // opaque `extra_context` hint at the boundary.
-            let kind = DeliveryKind::from_extra_context(message.extra_context.as_deref());
-            Box::pin(system.deliver_controlled(session, message, kind, control))
-        }
-        DriveStep::ContinueCancelled(message) => {
-            Box::pin(system.deliver_controlled(session, message, DeliveryKind::Cancel, control))
-        }
-        DriveStep::ContinueInterrupted(message) => {
-            Box::pin(system.continue_interrupted(session, message, control))
-        }
-    }
+fn has_inflight(inflight: &[Option<InflightCommand>]) -> bool {
+    inflight.iter().any(Option::is_some)
 }
 
-/// Route a command that arrived while a drive for `session` is in flight.
-///
-/// A same-session `Interrupt`/`Cancel` signals `control` and is carried to run as
-/// the continuation once the drive stops. Everything else (a same-session
-/// `Append`, a message for another session, or a lifecycle command) is buffered
-/// to `pending` for after the current delivery.
 #[cfg(target_os = "espidf")]
-fn route_during_drive(
+fn compact_inflight(inflight: &mut Vec<Option<InflightCommand>>) {
+    inflight.retain(Option::is_some);
+}
+
+#[cfg(target_os = "espidf")]
+fn handle_worker_command(
     system: &EspAgentSystem,
-    session: SessionId,
     command: RuntimeCommand,
-    control: &SessionControl,
-    carried: &mut Option<InboundMessage>,
+    inflight: &mut Vec<Option<InflightCommand>>,
     pending: &mut VecDeque<RuntimeCommand>,
-) {
-    let message = match command {
-        RuntimeCommand::Inbound(message) => message,
-        // Lifecycle command mid-drive: defer until the drive ends.
-        other => {
-            pending.push_back(other);
-            return;
+    defer_lifecycle: bool,
+) -> bool {
+    match command {
+        RuntimeCommand::Inbound(message) => {
+            inflight.push(Some(start_inbound(system, message)));
+            false
         }
-    };
-    let same_session = matches!(system.resolve_session(&message), Ok(other) if other == session);
-    if !same_session {
-        pending.push_back(RuntimeCommand::Inbound(message));
-        return;
-    }
-    // One in-flight interrupt/cancel at a time; extras are deferred so none is
-    // lost by overwriting `carried`.
-    if carried.is_some() {
-        pending.push_back(RuntimeCommand::Inbound(message));
-        return;
-    }
-    // The delivery mode is derived from the message's opaque `extra_context` hint
-    // at this boundary; the transport message carries no `DeliveryKind`.
-    match DeliveryKind::from_extra_context(message.extra_context.as_deref()) {
-        DeliveryKind::Cancel => {
-            control.request_cancel();
-            *carried = Some(message);
+        RuntimeCommand::Shutdown if defer_lifecycle => {
+            pending.push_back(RuntimeCommand::Shutdown);
+            false
         }
-        DeliveryKind::Interrupt => {
-            control.request_interrupt();
-            *carried = Some(message);
+        RuntimeCommand::SessionCreate { reply } if defer_lifecycle => {
+            pending.push_back(RuntimeCommand::SessionCreate { reply });
+            false
         }
-        // An append cannot fold into an already checked-out drive; deliver it as
-        // the next step once this drive quiesces.
-        DeliveryKind::Append => pending.push_back(RuntimeCommand::Inbound(message)),
-    }
-}
-
-/// Deliver `message` for its session and drive it, servicing new commands
-/// concurrently so a same-session interrupt/cancel can stop the drive in flight.
-/// Interrupt/cancel continuations chain until the session reaches a quiescent
-/// drive with no carried follow-up.
-#[cfg(target_os = "espidf")]
-async fn deliver_with_interruption(
-    system: &EspAgentSystem,
-    message: InboundMessage,
-    receiver: &AsyncReceiver<RuntimeCommand>,
-    pending: &mut VecDeque<RuntimeCommand>,
-) {
-    let session = match system.resolve_session(&message) {
-        Ok(session) => session,
-        Err(_) => {
-            // Ill-formed or unbound: fall back to the plain path for consistent
-            // error handling.
-            let _ = system.push_message(message).await;
-            return;
+        RuntimeCommand::SessionList { reply } if defer_lifecycle => {
+            pending.push_back(RuntimeCommand::SessionList { reply });
+            false
         }
-    };
-
-    let mut step = DriveStep::Fresh(message);
-    loop {
-        let control = SessionControl::new();
-        let mut drive = start_drive(system, session, step, &control);
-        let mut carried: Option<InboundMessage> = None;
-
-        let stop = loop {
-            let raced = DriveOrCommand {
-                drive: drive.as_mut(),
-                recv: receiver.recv(),
-            }
-            .await;
-            match raced {
-                Raced::DriveDone(result) => break result,
-                // Channel closed mid-drive: let the drive finish, then stop.
-                Raced::Command(None) => break drive.as_mut().await,
-                Raced::Command(Some(command)) => {
-                    route_during_drive(system, session, command, &control, &mut carried, pending);
-                }
-            }
-        };
-
-        // Drop the drive future (and its borrow of `control`) before deciding the
-        // next step.
-        drop(drive);
-
-        let stop = match stop {
-            Ok(stop) => stop,
-            // The delivery error was already surfaced/mapped inside the router.
-            Err(_) => return,
-        };
-
-        match (stop, carried) {
-            // No follow-up arrived: this delivery chain is done.
-            (_, None) => return,
-            (DriveStop::Interrupted, Some(next)) => {
-                step = DriveStep::ContinueInterrupted(next);
-            }
-            (DriveStop::Cancelled, Some(next)) => {
-                step = DriveStep::ContinueCancelled(next);
-            }
-            // The signal landed after the drive finished naturally; deliver the
-            // carried message as a fresh delivery honouring its own kind.
-            (DriveStop::Quiescent, Some(next)) => {
-                step = DriveStep::Fresh(next);
-            }
+        RuntimeCommand::SessionBind {
+            session,
+            channel,
+            chat_id,
+            reply,
+        } if defer_lifecycle => {
+            pending.push_back(RuntimeCommand::SessionBind {
+                session,
+                channel,
+                chat_id,
+                reply,
+            });
+            false
+        }
+        RuntimeCommand::SessionDelete { session, reply } if defer_lifecycle => {
+            pending.push_back(RuntimeCommand::SessionDelete { session, reply });
+            false
+        }
+        RuntimeCommand::SessionCreate { reply } => {
+            let _ = reply.send(Ok(system.new_session()));
+            false
+        }
+        RuntimeCommand::SessionList { reply } => {
+            let _ = reply.send(Ok(system.list_sessions()));
+            false
+        }
+        RuntimeCommand::SessionBind {
+            session,
+            channel,
+            chat_id,
+            reply,
+        } => {
+            let _ = reply.send(system.bind_session(session, &channel, &chat_id));
+            false
+        }
+        RuntimeCommand::SessionDelete { session, reply } => {
+            let _ = reply.send(system.delete_session(session));
+            false
+        }
+        RuntimeCommand::Shutdown => {
+            let _ = system.stop();
+            true
         }
     }
 }
 
 #[cfg(target_os = "espidf")]
 async fn agent_worker_loop(system: EspAgentSystem, receiver: AsyncReceiver<RuntimeCommand>) {
-    // Commands deferred while a drive was in flight are drained before blocking on
-    // the channel, so buffering never reorders a command behind a later arrival.
+    // Lifecycle commands are deferred while message submissions are in flight.
+    // Inbound messages are always started immediately; the core orchestrator owns
+    // per-session append/interrupt/cancel sequencing.
     let mut pending: VecDeque<RuntimeCommand> = VecDeque::new();
+    let mut inflight: Vec<Option<InflightCommand>> = Vec::new();
+    let mut receiver_open = true;
     loop {
-        let command = match pending.pop_front() {
-            Some(command) => command,
-            None => match receiver.recv().await {
-                Some(command) => command,
-                None => break,
-            },
-        };
-        match command {
-            RuntimeCommand::Inbound(message) => {
-                deliver_with_interruption(&system, message, &receiver, &mut pending).await;
+        compact_inflight(&mut inflight);
+        if !has_inflight(&inflight) {
+            if let Some(command) = pending.pop_front() {
+                if handle_worker_command(&system, command, &mut inflight, &mut pending, false) {
+                    break;
+                }
+                continue;
             }
-            RuntimeCommand::SessionCreate { reply } => {
-                let _ = reply.send(Ok(system.new_session()));
-            }
-            RuntimeCommand::SessionList { reply } => {
-                let _ = reply.send(Ok(system.list_sessions()));
-            }
-            RuntimeCommand::SessionBind {
-                session,
-                channel,
-                chat_id,
-                reply,
-            } => {
-                let _ = reply.send(system.bind_session(session, &channel, &chat_id));
-            }
-            RuntimeCommand::SessionDelete { session, reply } => {
-                let _ = reply.send(system.delete_session(session));
-            }
-            RuntimeCommand::Shutdown => {
-                let _ = system.stop();
+            if !receiver_open {
                 break;
             }
+            match receiver.recv().await {
+                Some(command) => {
+                    if handle_worker_command(&system, command, &mut inflight, &mut pending, false) {
+                        break;
+                    }
+                }
+                None => break,
+            }
+            continue;
+        }
+
+        let event = InflightOrCommand {
+            inflight: &mut inflight,
+            recv: receiver_open.then(|| receiver.recv()),
+        }
+        .await;
+        match event {
+            RuntimeEvent::InflightDone => {}
+            RuntimeEvent::Command(Some(command)) => {
+                if handle_worker_command(&system, command, &mut inflight, &mut pending, true) {
+                    break;
+                }
+            }
+            RuntimeEvent::Command(None) => receiver_open = false,
         }
     }
 }
@@ -971,8 +912,15 @@ unsafe fn call_session_list_callback(
 ) -> Result<(), CapabilityError> {
     let session_id = CString::new(session.id.to_wire())
         .map_err(|_| CapabilityError::Failed("session id contains interior nul".to_string()))?;
-    let channel = optional_c_string(session.channel.as_deref(), "session channel")?;
-    let chat_id = optional_c_string(session.chat_id.as_deref(), "session chat id")?;
+    let binding = session.binding.as_ref();
+    let channel = optional_c_string(
+        binding.map(|binding| binding.channel.as_str()),
+        "session channel",
+    )?;
+    let chat_id = optional_c_string(
+        binding.map(|binding| binding.chat_id.as_str()),
+        "session chat id",
+    )?;
     let record = ClawAgentSessionRecord {
         session_id: session_id.as_ptr(),
         channel: channel.as_ref().map_or(ptr::null(), |value| value.as_ptr()),
@@ -1258,7 +1206,11 @@ unsafe fn capability_invoke_inner(
 
     let tool = handle
         .registry
-        .tool(name)
+        .tool_capability(name)
+        .and_then(|capability| match capability.role().clone() {
+            CapabilityRole::Tool(tool) => Some(tool),
+            _ => None,
+        })
         .ok_or(CapabilityError::NotFound)?;
     let output = tool
         .invoke(&ToolInvocation {
