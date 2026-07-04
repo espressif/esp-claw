@@ -26,7 +26,7 @@ use crate::agent::base_agent::{
 };
 use crate::agent::config::AgentConfig;
 use crate::agent::graph::{AgentContext, GraphHost};
-use crate::agent::tools::{respond_to_approval_tool_group, subagent_tool_group};
+use crate::agent::tools::subagent_tool_group;
 use crate::agent::{Agent, AgentTickFuture};
 use crate::memory::{
     CompactionPolicy, ContextAdapter, LlmCompactor, RecentMessagesContextAdapter,
@@ -66,10 +66,9 @@ impl<H: ClawHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
     /// history adapter and rolling-summary adapter as one internal strategy.
     ///
     /// The config's capability tools are merged with the graph tools that require
-    /// a [`GraphHost`]: `spawn_subagent` when `config.spawn_enabled`, and
-    /// `respond_to_approval` when `is_root`. With no `host` (a standalone agent,
-    /// no graph) neither is attached. The base agent then adds its built-in
-    /// self-control tool (`end_conversation`).
+    /// a [`GraphHost`]: `spawn_subagent` and its inspection/delete siblings when
+    /// `config.spawn_enabled`. The base agent then adds its built-in self-control
+    /// tool (`end_conversation`).
     ///
     /// `inherited_context` is the scope-layered prose injected from above
     /// (Global -> Session), handed straight to the base agent so it renders ahead
@@ -84,7 +83,7 @@ impl<H: ClawHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
         store: TranscriptStore<F>,
         config: AgentConfig,
         host: Arc<dyn GraphHost>,
-        is_root: bool,
+        _is_root: bool,
         inherited_context: Arc<[Block<'static>]>,
     ) -> Result<Self, GenericAgentBuildError>
     where
@@ -101,17 +100,13 @@ impl<H: ClawHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
         let rolling_summary_store = store.clone();
 
         let mut tool_set = ToolSet::new(config.tools)?;
-        // Graph-affecting tools need a back-channel; without one (standalone agent)
-        // the agent simply has no spawn/approval-routing tools.
+        // Graph-affecting tools need a back-channel.
         let context = Arc::new(AgentContext::new(id, host));
         if config.spawn_enabled {
             tool_set.extend_with_group(subagent_tool_group(
                 Arc::clone(&context),
                 config.spawn_policy,
             ))?;
-        }
-        if is_root {
-            tool_set.extend_with_group(respond_to_approval_tool_group(context))?;
         }
 
         // The soft-hide "retry then fail" budget is the agent's BlockPolicy.

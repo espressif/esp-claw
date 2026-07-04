@@ -52,8 +52,8 @@ const DEFAULT_GLOBAL_TAGS: &[&str] = &["preference", "user", "device", "fact", "
 ///
 /// # Examples
 ///
-/// ```
-/// use claw_core::memory::{
+/// ```ignore
+/// # use super::{
 ///     MemoryTier, MemoryTierHint, RuleBasedTierClassifier, TierClassifier,
 /// };
 /// use claw_memory::MemoryDraft;

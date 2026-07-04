@@ -1,20 +1,16 @@
 //! Shared scaffolding for the agent CLIs.
 //!
-//! The binaries in this crate drive real agents against a live LLM with on-disk
-//! conversation memory. The platform dependencies are identical, so the real-disk
-//! [`ClawFs`], live async HTTP, and the env/LLM/memory wiring live here once.
+//! The binaries in this crate drive the orchestrator against a live LLM with
+//! on-disk memory. The real-disk [`ClawFs`] backend and env/LLM config wiring
+//! live here once.
 //!
 //! LLM config is read from `claw-core/.env.local` (the same file the integration
 //! tests use): `CLAW_LLM_API_KEY`, `CLAW_LLM_BASE_URL`, `CLAW_LLM_MODEL`.
 
 use std::path::Path;
 
-use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
-use claw_interface::{DiskFs, RealHttp, TokioTimer};
-use claw_memory::TranscriptConfig;
-
-// The real network transport is `claw_interface::RealHttp` (the `realhttp`
-// feature). GenericAgent owns its internal conversation compaction wiring.
+use claw_api::{BackendKind, ClawApiConfig};
+use claw_interface::DiskFs;
 
 /// The concrete `ClawFs` the CLI runs over: the real disk backend. `DiskFs` is
 /// itself a cheap clone handle (just a base path), so each agent gets a clone
@@ -41,9 +37,8 @@ pub fn load_env() {
 
 /// Build the LLM client config from the `CLAW_LLM_*` environment variables.
 ///
-/// Returned separately from the transport so callers that mint clients
-/// themselves (e.g. [`claw_core::agent::FsAgentFactory`], which inits one client
-/// per agent) can reuse this config.
+/// Returned separately from the transport so the orchestrator can mint its own
+/// per-agent clients.
 ///
 /// # Panics
 ///
@@ -60,31 +55,4 @@ pub fn make_llm_config() -> ClawApiConfig {
     let mut config = ClawApiConfig::new(BackendKind::OpenAiCompatible, api_key, model, base_url);
     config.timeout_ms = 60_000;
     config
-}
-
-/// The live network transport ([`RealHttp`]). Each LLM client owns its own.
-pub fn make_http() -> RealHttp {
-    RealHttp::new()
-}
-
-/// Build a live LLM client from the `CLAW_LLM_*` environment variables.
-///
-/// # Panics
-///
-/// If any required `CLAW_LLM_*` variable is missing, or the client cannot init.
-pub fn make_llm() -> ClawApiAsync<RealHttp, TokioTimer> {
-    ClawApiAsync::init(make_llm_config(), make_http(), TokioTimer)
-        .expect("failed to init LLM client")
-}
-
-/// The real disk storage backend the CLI runs its transcripts over. `DiskFs` is
-/// a cheap clone handle (just a base path), so each agent gets its own clone.
-pub fn make_storage() -> CliFs {
-    DiskFs::absolute()
-}
-
-/// Build the ingredients a CLI needs to construct an on-disk transcript store at
-/// `transcript_dir`: the transcript config and storage backend.
-pub fn make_memory_ingredients(transcript_dir: &str) -> (TranscriptConfig, CliFs) {
-    (TranscriptConfig::new(transcript_dir), make_storage())
 }

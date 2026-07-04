@@ -150,10 +150,8 @@ dependencies = [
  "claw-core",
  "claw-interface",
  "claw-log",
- "claw-memory",
  "dotenvy",
  "owo-colors",
- "serde_json",
  "tokio",
 ]
 

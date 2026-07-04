@@ -5,7 +5,7 @@
 //!   remove), graph-blind and schedule-blind;
 //! - `meta` — the agent **graph** (parent edge, depth, kind) keyed by [`AgentId`],
 //!   owned here so all relationship algorithms are local and lock-free;
-//! - the **scheduler** state (`ready`, `parked_approvals`) and the drive loop;
+//! - the **scheduler** state (`ready`, pending approvals) and the drive loop;
 //! - `root` — the session's user-facing agent.
 //!
 //! Responsibility line: the instance decides *when* agents run, *what* their tick
@@ -19,13 +19,12 @@
 //! first delivered message (that message is its goal); later append deliveries
 //! are accepted only once the root has returned to an idle boundary.
 //!
-//! Borrow safety: a tick may emit [`GraphEffect`]s (spawn a child, resolve an
-//! approval) through the agent's [`GraphHost`], but those only push onto the
-//! instance's effect queue. The instance ticks one agent (locking just that
-//! agent's handle), then — with no agent borrowed — drains and applies the queued
-//! effects and routes the outcome. Today the drive loop is sequential; the same
-//! shape supports concurrent async ticking later (each future locks only its
-//! agent).
+//! Borrow safety: a tick may emit [`GraphEffect`]s through the agent's
+//! [`GraphHost`], but those only push onto the instance's effect queue. The
+//! instance ticks one agent (locking just that agent's handle), then — with no
+//! agent borrowed — drains and applies the queued effects and routes the outcome.
+//! Today the drive loop is sequential; the same shape supports concurrent async
+//! ticking later (each future locks only its agent).
 
 use core::future::Future;
 use core::pin::Pin;
@@ -37,8 +36,8 @@ use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::agent::{
     Agent, AgentCommand, AgentCommandError, AgentId, AgentIdAllocator, AgentKind, AgentPlacement,
-    AgentRegistry, AgentSnapshot, AgentStatus, ApprovalDecision, ApprovalId, ApprovalVerdict,
-    CancelReason, FsAgentFactory, GraphEffect, GraphHost, TerminationPolicy, TickOutcome,
+    AgentRegistry, AgentSnapshot, AgentStatus, ApprovalDecision, ApprovalId, CancelReason,
+    FsAgentFactory, GraphEffect, GraphHost, TerminationPolicy, TickOutcome,
 };
 use crate::orchestrator::control::{DriveStop, SessionControl};
 use crate::session::SessionId;
@@ -60,28 +59,22 @@ pub struct RootReply {
     pub ended: bool,
 }
 
-/// A pending human decision surfaced out of the graph.
-///
-/// A **subagent**'s pending approval (a permission `Ask`) never reaches here — it
-/// bubbles to the session root (the only agent that talks to the user), which
-/// classifies the
-/// reply and resolves it with `respond_to_approval`. Only a **root**'s own
-/// approval is surfaced as an `ApprovalRequest`, to be resolved via
-/// [`OrchestratorInstance::resolve_approval`].
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ApprovalRequest {
-    /// The session the requesting agent belongs to.
-    pub session: SessionId,
-    /// The agent awaiting the decision (the resolution target).
-    pub agent: AgentId,
-    /// The pending approval id to pass back when resolving.
-    pub approval: ApprovalId,
-    /// Human-readable description of what needs approving.
+pub(crate) struct PendingApproval {
+    pub(crate) agent: AgentId,
+    pub(crate) approval: ApprovalId,
     pub summary: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ParkedApproval {
+    approval: ApprovalId,
+    summary: String,
+    prompted: bool,
+}
+
 /// Everything one [`drive`](OrchestratorInstance::drive) surfaced to the
-/// orchestrator: user-facing replies and pending approvals.
+/// orchestrator: user-facing replies only.
 ///
 /// An `Idle`/`Working`/parked tick contributes nothing, so an empty `DriveOutput`
 /// means "nothing to route this drive".
@@ -89,36 +82,35 @@ pub struct ApprovalRequest {
 pub struct DriveOutput {
     /// Replies a root produced.
     pub replies: Vec<RootReply>,
-    /// Approvals any agent is waiting on.
-    pub approvals: Vec<ApprovalRequest>,
 }
 
 impl DriveOutput {
     /// Fold another step's output into this one.
-    fn absorb(&mut self, other: DriveOutput) {
+    pub(crate) fn absorb(&mut self, other: DriveOutput) {
         self.replies.extend(other.replies);
-        self.approvals.extend(other.approvals);
     }
 
     fn replies(replies: Vec<RootReply>) -> Self {
-        Self {
-            replies,
-            approvals: Vec::new(),
-        }
+        Self { replies }
     }
 
-    fn approval(approval: ApprovalRequest) -> Self {
+    fn reply(session: SessionId, text: String, ended: bool) -> Self {
         Self {
-            replies: Vec::new(),
-            approvals: vec![approval],
+            replies: vec![RootReply {
+                session,
+                text,
+                ended,
+            }],
         }
     }
 }
 
-/// Failure routing a human decision back to an agent via
-/// [`OrchestratorInstance::resolve_approval`].
+/// Failure routing a human decision back to the active parked approval.
 #[derive(Clone, Debug, thiserror::Error)]
-pub(crate) enum ResolveApprovalError {
+pub(crate) enum ApprovalResolutionError {
+    /// The session has no active approval to resolve.
+    #[error("no active approval to resolve")]
+    NoActiveApproval,
     /// No live agent with the given id (e.g. a finished subagent was removed).
     #[error("no agent {0} to resolve approval for")]
     UnknownAgent(AgentId),
@@ -281,9 +273,11 @@ where
     meta: HashMap<AgentId, NodeMeta>,
     /// Agents with work queued, in service order.
     ready: VecDeque<AgentId>,
-    /// The pending approval id for each agent currently parked on a decision, so a
-    /// root can resolve it by agent id alone (it never sees the approval id).
-    parked_approvals: HashMap<AgentId, ApprovalId>,
+    /// Pending permission requests, keyed by the parked agent.
+    parked_approvals: HashMap<AgentId, ParkedApproval>,
+    /// FIFO order for user-facing approval prompts. The front is the only reply
+    /// the next user message may resolve.
+    approval_queue: VecDeque<AgentId>,
     /// The root agent's id, set when the first message builds it.
     root: Option<AgentId>,
     /// Graph effects emitted by agents during the current/last tick, applied after
@@ -329,6 +323,7 @@ where
             meta: HashMap::new(),
             ready: VecDeque::new(),
             parked_approvals: HashMap::new(),
+            approval_queue: VecDeque::new(),
             root: None,
             effects,
             snapshots,
@@ -456,6 +451,7 @@ where
             }
         }
         control.clear_cancel_hook();
+        output.absorb(self.take_next_approval_prompt());
         (output, DriveStop::Quiescent)
     }
 
@@ -499,28 +495,77 @@ where
         }
     }
 
+    pub(crate) fn active_approval(&self) -> Option<PendingApproval> {
+        let agent = *self.approval_queue.front()?;
+        let pending = self.parked_approvals.get(&agent)?;
+        Some(PendingApproval {
+            agent,
+            approval: pending.approval,
+            summary: pending.summary.clone(),
+        })
+    }
+
+    pub(crate) fn resolve_active_approval(
+        &mut self,
+        decision: ApprovalDecision,
+    ) -> Result<(), ApprovalResolutionError> {
+        let pending = self
+            .pop_active_approval()
+            .ok_or(ApprovalResolutionError::NoActiveApproval)?;
+        self.send_approval_decision(pending.agent, pending.approval, decision)
+    }
+
+    pub(crate) fn cancel_active_approval(&mut self, reason: CancelReason) {
+        let Some(pending) = self.pop_active_approval() else {
+            return;
+        };
+        let Some(agent) = self.registry.get_mut(pending.agent) else {
+            return;
+        };
+        if agent.send_command(AgentCommand::Cancel { reason }).is_ok() {
+            self.enqueue(pending.agent);
+        }
+    }
+
+    pub(crate) fn take_next_approval_prompt(&mut self) -> DriveOutput {
+        loop {
+            let Some(agent) = self.approval_queue.front().copied() else {
+                return DriveOutput::default();
+            };
+            let Some(pending) = self.parked_approvals.get_mut(&agent) else {
+                self.approval_queue.pop_front();
+                continue;
+            };
+            if pending.prompted {
+                return DriveOutput::default();
+            }
+            pending.prompted = true;
+            return DriveOutput::reply(self.session, approval_prompt(&pending.summary), false);
+        }
+    }
+
     /// Route a human decision back to the agent waiting on `approval`, then mark it
-    /// ready so the next [`drive`](Self::drive) resumes it.
+    /// ready so the next drive resumes it.
     ///
     /// # Errors
     ///
-    /// [`ResolveApprovalError::UnknownAgent`] if no live agent has `agent` (e.g. a
-    /// finished subagent), or [`ResolveApprovalError::Command`] if the agent is not
+    /// [`ApprovalResolutionError::UnknownAgent`] if no live agent has `agent` (e.g. a
+    /// finished subagent), or [`ApprovalResolutionError::Command`] if the agent is not
     /// awaiting this approval.
-    pub(crate) fn resolve_approval(
+    fn send_approval_decision(
         &mut self,
         agent: AgentId,
         approval: ApprovalId,
         decision: ApprovalDecision,
-    ) -> Result<(), ResolveApprovalError> {
+    ) -> Result<(), ApprovalResolutionError> {
         self.registry
             .get_mut(agent)
-            .ok_or(ResolveApprovalError::UnknownAgent(agent))?
+            .ok_or(ApprovalResolutionError::UnknownAgent(agent))?
             .send_command(AgentCommand::ApprovalResult {
                 id: approval,
                 decision,
             })
-            .map_err(ResolveApprovalError::Command)?;
+            .map_err(ApprovalResolutionError::Command)?;
         self.enqueue(agent);
         Ok(())
     }
@@ -583,8 +628,8 @@ where
         Ok(())
     }
 
-    /// Record `agent` as parked on `approval`, then either bubble its request to
-    /// the session root (a subagent) or surface it to the orchestrator (a root).
+    /// Record `agent` as parked on `approval`, then surface a normal root reply
+    /// prompt when this request becomes the active approval for the session.
     fn park_approval(
         &mut self,
         agent: AgentId,
@@ -595,49 +640,25 @@ where
             return DriveOutput::default();
         };
         let is_root = meta.parent.is_none();
-        self.parked_approvals.insert(agent, approval);
-        tracing::info!(agent = %agent, is_root, session = %self.session, "approval parked");
-
-        if is_root {
-            // The root talks to the user directly; surface it for a human reply.
-            return DriveOutput::approval(ApprovalRequest {
-                session: self.session,
-                agent,
+        self.parked_approvals.insert(
+            agent,
+            ParkedApproval {
                 approval,
                 summary,
-            });
+                prompted: false,
+            },
+        );
+        if !self.approval_queue.contains(&agent) {
+            self.approval_queue.push_back(agent);
         }
+        tracing::info!(agent = %agent, is_root, session = %self.session, "approval parked");
 
-        // A subagent: hand the request to the session root to classify, tagged with
-        // the requester's id so the root can address it in `respond_to_approval`.
-        match self.root {
-            Some(root_id) => {
-                if let Some(root_agent) = self.registry.get_mut(root_id) {
-                    root_agent.deliver_child_input(
-                        agent,
-                        format!("[approval request from {agent}] {summary}"),
-                    );
-                    self.enqueue(root_id);
-                } else {
-                    tracing::warn!(
-                        session = %self.session,
-                        agent = %agent,
-                        root_agent = %root_id,
-                        "root missing; cannot route subagent approval request"
-                    );
-                }
-            }
-            None => {
-                tracing::warn!(session = %self.session, agent = %agent, "no root for session; cannot route approval")
-            }
-        }
-        DriveOutput::default()
+        self.take_next_approval_prompt()
     }
 
     /// Drain and apply every graph effect agents emitted since the last drain.
-    /// `Spawn` builds and enqueues a child; `ResolveApproval` resolves a waiting
-    /// agent. Applied at a borrow-safe point (no agent is locked), so mutating the
-    /// graph is safe.
+    /// Applied at a borrow-safe point (no agent is locked), so mutating the graph
+    /// is safe.
     fn apply_effects(&mut self) {
         let effects: Vec<(AgentId, GraphEffect)> = self
             .effects
@@ -654,9 +675,6 @@ where
                     goal,
                     termination,
                 } => self.materialize_spawn(requester, id, kind, name, goal, termination),
-                GraphEffect::ResolveApproval { target, verdict } => {
-                    self.apply_verdict(target, verdict)
-                }
                 GraphEffect::Delete { target } => self.apply_delete(requester, target),
             }
         }
@@ -776,28 +794,6 @@ where
         }
     }
 
-    /// Apply a verdict the root emitted via `respond_to_approval`: look up the
-    /// target's parked approval id and resolve it. `yes` approves; `no` and
-    /// `other` reject, carrying the user's words as the reason.
-    fn apply_verdict(&mut self, target: AgentId, verdict: ApprovalVerdict) {
-        let Some(approval) = self.parked_approvals.remove(&target) else {
-            tracing::warn!(
-                target_agent = %target,
-                "respond_to_approval but no approval is parked"
-            );
-            return;
-        };
-        let decision = match verdict {
-            ApprovalVerdict::Yes => ApprovalDecision::Approved,
-            ApprovalVerdict::No(reason) | ApprovalVerdict::Other(reason) => {
-                ApprovalDecision::Rejected(reason)
-            }
-        };
-        if let Err(error) = self.resolve_approval(target, approval, decision) {
-            tracing::warn!(target_agent = %target, %error, "failed to resolve approval");
-        }
-    }
-
     /// Map a tick outcome to graph actions.
     fn route_outcome(&mut self, id: AgentId, outcome: TickOutcome) -> DriveOutput {
         match outcome {
@@ -808,10 +804,8 @@ where
             }
             // Waiting for input: leave it parked (no longer ready).
             TickOutcome::Idle => DriveOutput::default(),
-            // Parked on a human decision. A subagent can't talk to the user, so its
-            // request bubbles to the session root for classification; only a root's
-            // own approval is surfaced. Either way the agent stays un-enqueued
-            // (parked) until resolved.
+            // Parked on a human decision. The agent stays un-enqueued until the
+            // orchestrator resolves the queued approval from a user reply.
             TickOutcome::AwaitingApproval {
                 id: approval,
                 summary,
@@ -906,6 +900,8 @@ where
             self.parked_approvals.remove(victim);
         }
         self.ready.retain(|queued| !victims.contains(queued));
+        self.approval_queue
+            .retain(|queued| !victims.contains(queued));
         tracing::info!(root_agent = %root, removed = victims.len(), session = %self.session, "subtree deleted");
     }
 
@@ -936,4 +932,22 @@ where
     fn has_ready(&self) -> bool {
         !self.ready.is_empty()
     }
+
+    fn pop_active_approval(&mut self) -> Option<PendingApproval> {
+        while let Some(agent) = self.approval_queue.pop_front() {
+            let Some(pending) = self.parked_approvals.remove(&agent) else {
+                continue;
+            };
+            return Some(PendingApproval {
+                agent,
+                approval: pending.approval,
+                summary: pending.summary,
+            });
+        }
+        None
+    }
+}
+
+fn approval_prompt(summary: &str) -> String {
+    format!("Permission approval needed:\n{summary}\n\nReply with approval or rejection.")
 }

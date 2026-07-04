@@ -236,7 +236,7 @@ flowchart BT
 | `claw-context` | Prompt `Block` / `BlockKind` 组装与缓存；`RequestContext` |
 | `claw-capability` | C `claw_cap` 的 Rust registry（迁移中，**当前不在 `claw-core` 运行时依赖链**） |
 | `claw-sandbox` | 沙箱 FS：限制 agent 文件访问虚拟根（`/sandbox`, `/shared`, `/system`） |
-| `cli` | Host CLI：`generic-agent-chat` / `orchestrator-chat` |
+| `cli` | Host CLI：`orchestrator-chat` |
 
 ---
 

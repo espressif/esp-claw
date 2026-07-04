@@ -47,11 +47,11 @@ impl<H: ClawHttp, Timer: ClawTimer> LlmCompactor<H, Timer> {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use std::sync::Arc;
     ///
     /// use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
-    /// use claw_core::LlmCompactor;
+    /// # use super::LlmCompactor;
     /// # use claw_interface::http::{BlockingHttpAdapter, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
     /// # use claw_interface::{Cancel, ClawHttp, ImmediateTimer};
     /// # #[derive(Default)]

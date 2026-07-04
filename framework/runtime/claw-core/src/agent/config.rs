@@ -68,10 +68,9 @@ impl AgentConfig {
     /// The manifest's JSON was already parsed and validated at build time, so this
     /// does only the runtime-only half: turning names into handlers.
     ///
-    /// The result is pure data: whether the `spawn_subagent` /
-    /// `respond_to_approval` tools actually attach is decided later by
-    /// [`GenericAgent::new`](crate::agent::GenericAgent) from `spawn_enabled`, the
-    /// presence of a graph host, and the root flag.
+    /// The result is pure data: whether the `spawn_subagent` family actually
+    /// attaches is decided later by [`GenericAgent::new`](crate::agent::GenericAgent)
+    /// from `spawn_enabled` and the presence of a graph host.
     ///
     /// # Errors
     ///

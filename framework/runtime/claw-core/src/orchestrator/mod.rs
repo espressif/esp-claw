@@ -2,6 +2,7 @@
 //!
 //! Channel routing is owned by the layer above this crate.
 
+mod approval;
 mod control;
 mod instance;
 
@@ -13,22 +14,22 @@ use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_utils::{async_oneshot, AsyncOneshotSender};
 
 use crate::agent::{
-    AgentIdAllocator, AgentResolver, CancelReason, FsAgentFactory, FsAgentFactoryError,
+    AgentIdAllocator, AgentResolver, ApprovalDecision, CancelReason, FsAgentFactory,
+    FsAgentFactoryError,
 };
-use crate::session::{
-    DeliverError, DeliveryKind, SessionError, SessionId, SessionMessage, SessionRecord,
-    SessionStore,
-};
+use crate::session::{DeliverError, DeliveryKind, SessionError, SessionId, SessionStore};
 
-pub use self::instance::{ApprovalRequest, DriveOutput, RootReply};
+pub use self::instance::{DriveOutput, RootReply};
 
+use self::approval::{ApprovalResolverError, PermissionReplyResolution};
 use self::control::{DriveStop, SessionControl};
-use self::instance::OrchestratorInstance;
+use self::instance::{OrchestratorInstance, PendingApproval};
 
 type SubmitReply = AsyncOneshotSender<Result<DriveOutput, DeliverError>>;
 
 struct QueuedSubmission {
-    msg: SessionMessage,
+    text: String,
+    kind: DeliveryKind,
     reply: SubmitReply,
 }
 
@@ -45,6 +46,30 @@ enum StartMode {
     Fresh,
     Interrupted,
     Cancelled,
+}
+
+/// What can go wrong while building an [`Orchestrator`].
+#[derive(Debug, thiserror::Error)]
+pub enum OrchestratorBuildError {
+    /// No persistence directory was provided.
+    #[error("persistence directory is required")]
+    MissingPersistenceDir,
+    /// The dedicated extraction LLM client (for long-term memory) failed to init.
+    #[error("failed to initialize the extraction LLM client: {0}")]
+    ExtractionLlm(String),
+    /// A long-term memory journal exists but could not be read at startup.
+    #[error("failed to load long-term memory: {0}")]
+    LongTermInit(String),
+}
+
+impl From<FsAgentFactoryError> for OrchestratorBuildError {
+    fn from(error: FsAgentFactoryError) -> Self {
+        match error {
+            FsAgentFactoryError::MissingPersistenceDir => Self::MissingPersistenceDir,
+            FsAgentFactoryError::ExtractionLlm(message) => Self::ExtractionLlm(message),
+            FsAgentFactoryError::LongTermInit(source) => Self::LongTermInit(source.to_string()),
+        }
+    }
 }
 
 /// RAII checkout of a session's [`OrchestratorInstance`]: holds the instance out
@@ -99,6 +124,10 @@ where
     /// time: the orchestrator owns no LLM client of its own — the factory holds
     /// whatever an agent needs to run.
     factory: Arc<FsAgentFactory<F, H, Timer>>,
+    /// Config used by the orchestrator's one-shot natural-language approval
+    /// resolver. It builds its own short-lived LLM client so permission answers
+    /// never go through an agent-facing tool.
+    approval_llm_config: ClawApiConfig,
     /// Global agent-id allocator shared by every per-session registry so ids are
     /// unique across the whole process, not merely within one session.
     next_agent_id: AgentIdAllocator,
@@ -126,19 +155,20 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`FsAgentFactoryError`] when the factory cannot be assembled.
+    /// Returns [`OrchestratorBuildError`] when the factory cannot be assembled.
     pub fn new(
         resolver: Arc<dyn AgentResolver>,
         llm_config: ClawApiConfig,
         persistence_dir: &str,
-    ) -> Result<Self, FsAgentFactoryError> {
+    ) -> Result<Self, OrchestratorBuildError> {
         let factory = Arc::new(FsAgentFactory::<F, H, Timer>::new(
             resolver,
-            llm_config,
+            llm_config.clone(),
             persistence_dir,
         )?);
         Ok(Self {
             factory,
+            approval_llm_config: llm_config,
             next_agent_id: AgentIdAllocator::new(),
             instances: Mutex::new(HashMap::new()),
             drives: Mutex::new(HashMap::new()),
@@ -156,14 +186,16 @@ where
     pub async fn submit(
         &self,
         session_id: SessionId,
-        msg: SessionMessage,
+        text: String,
+        kind: DeliveryKind,
     ) -> Result<DriveOutput, DeliverError> {
         if !self.sessions.contains(session_id) {
             return Err(DeliverError::SessionNotFound(session_id));
         }
 
         let (reply, receiver) = async_oneshot();
-        let should_drive = self.enqueue_submission(session_id, QueuedSubmission { msg, reply });
+        let should_drive =
+            self.enqueue_submission(session_id, QueuedSubmission { text, kind, reply });
 
         if should_drive {
             self.drive_submissions(session_id).await;
@@ -183,7 +215,7 @@ where
             .unwrap_or_else(|poison| poison.into_inner());
         let drive = drives.entry(session_id).or_default();
         if drive.active {
-            match submission.msg.kind {
+            match submission.kind {
                 DeliveryKind::Append => drive.pending.push_back(submission),
                 DeliveryKind::Interrupt if drive.carried.is_none() => {
                     if let Some(control) = &drive.control {
@@ -219,7 +251,7 @@ where
                 return;
             };
             let (result, stop) = match self
-                .drive_one_submission(session_id, submission.msg.clone(), mode)
+                .drive_one_submission(session_id, submission.text.clone(), submission.kind, mode)
                 .await
             {
                 Ok((output, stop)) => (Ok(output), stop),
@@ -265,7 +297,7 @@ where
         if let Some(drive) = drives.get_mut(&session_id) {
             if let Some(control) = &control {
                 if let Some(submission) = &drive.carried {
-                    match submission.msg.kind {
+                    match submission.kind {
                         DeliveryKind::Interrupt => control.request_interrupt(),
                         DeliveryKind::Cancel => control.request_cancel(),
                         DeliveryKind::Append => {}
@@ -279,7 +311,8 @@ where
     async fn drive_one_submission(
         &self,
         session_id: SessionId,
-        msg: SessionMessage,
+        text: String,
+        kind: DeliveryKind,
         mode: StartMode,
     ) -> Result<(DriveOutput, DriveStop), DeliverError> {
         if !self.sessions.contains(session_id) {
@@ -307,29 +340,41 @@ where
         let _turn_span = tracing::info_span!(
             "turn",
             conversation.turn = turn,
-            message_id = %msg.message_id,
-            cause = "message"
+            cause = "message",
+            delivery_kind = ?kind
         )
         .entered();
 
+        if kind == DeliveryKind::Cancel {
+            instance.cancel_active_approval(CancelReason::Superseded);
+        } else if let Some(pending) = instance.active_approval() {
+            let control = SessionControl::new();
+            self.set_active_control(session_id, Some(control.clone()));
+            let result = self
+                .resolve_pending_approval(session_id, instance, pending, &text, &control)
+                .await;
+            self.set_active_control(session_id, None);
+            return result;
+        }
+
         match mode {
             StartMode::Fresh => {
-                if msg.kind == DeliveryKind::Cancel {
+                if kind == DeliveryKind::Cancel {
                     instance.cancel_root(CancelReason::Superseded);
                 }
                 instance
-                    .deliver(msg.text.clone())
+                    .deliver(text.clone())
                     .map_err(DeliverError::Agent)?;
             }
             StartMode::Interrupted => {
                 instance
-                    .interrupt_root(msg.text.clone())
+                    .interrupt_root(text.clone())
                     .map_err(DeliverError::Agent)?;
             }
             StartMode::Cancelled => {
                 instance.cancel_root(CancelReason::Superseded);
                 instance
-                    .deliver(msg.text.clone())
+                    .deliver(text.clone())
                     .map_err(DeliverError::Agent)?;
             }
         }
@@ -339,6 +384,62 @@ where
         let output = instance.drive_interruptible(&control).await;
         self.set_active_control(session_id, None);
         Ok(output)
+    }
+
+    async fn resolve_pending_approval(
+        &self,
+        session_id: SessionId,
+        instance: &mut OrchestratorInstance<F, H, Timer>,
+        pending: PendingApproval,
+        user_reply: &str,
+        control: &SessionControl,
+    ) -> Result<(DriveOutput, DriveStop), DeliverError> {
+        let resolution = match approval::resolve_permission_reply::<H, Timer>(
+            self.approval_llm_config.clone(),
+            &pending.summary,
+            user_reply,
+            control,
+        )
+        .await
+        {
+            Ok(resolution) => resolution,
+            Err(ApprovalResolverError::Cancelled) => {
+                return Ok((DriveOutput::default(), DriveStop::Cancelled));
+            }
+            Err(error) => return Err(DeliverError::Agent(error.to_string())),
+        };
+
+        let Some(decision) = resolution.clone().into_decision() else {
+            let PermissionReplyResolution::Clarify(message) = resolution else {
+                unreachable!("non-clarification resolutions map to approval decisions")
+            };
+            return Ok((
+                DriveOutput {
+                    replies: vec![RootReply {
+                        session: session_id,
+                        text: message,
+                        ended: false,
+                    }],
+                },
+                DriveStop::Quiescent,
+            ));
+        };
+
+        let decision_label = match &decision {
+            ApprovalDecision::Approved => "approved",
+            ApprovalDecision::Rejected(_) => "rejected",
+        };
+        tracing::info!(
+            session = %session_id,
+            agent = %pending.agent,
+            approval = %pending.approval,
+            decision = decision_label,
+            "approval resolved from user reply"
+        );
+        instance
+            .resolve_active_approval(decision)
+            .map_err(|error| DeliverError::Agent(error.to_string()))?;
+        Ok(instance.drive_interruptible(control).await)
     }
 
     /// Check the session's agent graph out of the map (building a fresh instance
@@ -375,28 +476,13 @@ where
     }
 
     pub fn session_create(&self) -> SessionId {
-        self.sessions.create().id
+        self.sessions.create()
     }
 
-    pub fn session_list(&self) -> Vec<SessionRecord> {
+    pub fn session_list(&self) -> Vec<SessionId> {
         let mut sessions = self.sessions.list();
-        sessions.sort_by_key(|record| record.id.0);
+        sessions.sort_by_key(|id| id.0);
         sessions
-    }
-
-    /// Persist `session_id`'s channel binding so it can be rebuilt after a
-    /// restart. See [`SessionStore::set_binding`].
-    ///
-    /// # Errors
-    ///
-    /// [`SessionError::NotFound`] when `session_id` is not registered.
-    pub fn session_set_binding(
-        &self,
-        session_id: SessionId,
-        channel: impl Into<String>,
-        chat_id: impl Into<String>,
-    ) -> Result<(), SessionError> {
-        self.sessions.set_binding(session_id, channel, chat_id)
     }
 
     pub fn session_delete(&self, session_id: SessionId) -> Result<(), SessionError> {

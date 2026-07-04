@@ -8,8 +8,8 @@
 //! Two seams reach the graph:
 //! - **self-affecting** control (`end_conversation`) goes through the agent's own
 //!   `ControlSink` (in [`tools`](crate::agent::tools)), not this module;
-//! - **graph-affecting** actions (spawn / resolve-approval / delete) are emitted
-//!   as a [`GraphEffect`] through a [`GraphHost`], queued and applied by the
+//! - **graph-affecting** actions (spawn / delete) are emitted as a
+//!   [`GraphEffect`] through a [`GraphHost`], queued and applied by the
 //!   orchestrator instance *after* the tick, so a tool never mutates the live
 //!   graph mid-tick. Read-only queries ([`GraphHost::snapshot`]) return
 //!   synchronously.
@@ -76,13 +76,6 @@ pub enum GraphEffect {
         goal: String,
         /// What becomes of the child once it yields (one-shot vs. persistent).
         termination: TerminationPolicy,
-    },
-    /// Resolve `target`'s pending approval with the root's classified verdict.
-    ResolveApproval {
-        /// The agent whose pending approval is being resolved.
-        target: AgentId,
-        /// The root's classification of the user's reply.
-        verdict: ApprovalVerdict,
     },
     /// Remove `target` and its whole subtree. The instance honors this only when
     /// `target` is a descendant of the emitter (an agent may reap its own
@@ -168,7 +161,7 @@ pub trait GraphHost: Send + Sync {
 ///
 /// One per agent, built at construction over the agent's own id and its
 /// [`GraphHost`]. It is the ergonomic façade over [`GraphHost`]: tools call typed
-/// methods ([`spawn`](Self::spawn), [`respond_to_approval`](Self::respond_to_approval))
+/// methods ([`spawn`](Self::spawn), [`delete_subagent`](Self::delete_subagent))
 /// and never touch [`GraphEffect`] or the queue directly. Self-affecting control
 /// (`end_conversation`) does *not* go through here — it stays on the agent's own
 /// `ControlSink`. Approval is not a tool: it is raised by the permission policy
@@ -208,12 +201,6 @@ impl AgentContext {
             },
         );
         child
-    }
-
-    /// Report the root's `verdict` for `target`'s pending approval.
-    pub(crate) fn respond_to_approval(&self, target: AgentId, verdict: ApprovalVerdict) {
-        self.host
-            .emit(self.id, GraphEffect::ResolveApproval { target, verdict });
     }
 
     /// Request removal of `target` (and its subtree). The instance ignores it
@@ -264,18 +251,6 @@ fn is_strict_descendant(all: &[AgentSnapshot], ancestor: AgentId, node: AgentId)
         current = snapshot_parent(all, parent);
     }
     false
-}
-
-/// The root's classification of a user's reply to a pending approval.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ApprovalVerdict {
-    /// A clear yes — the waiting agent is approved.
-    Yes,
-    /// A clear no — the waiting agent is rejected with this reason.
-    No(String),
-    /// Neither a clear yes nor no — treated as a rejection carrying the user's
-    /// words, so the waiting agent can reconsider.
-    Other(String),
 }
 
 /// Which kinds an agent may spawn — the resolved, runtime form of a manifest's
@@ -416,7 +391,7 @@ pub(crate) mod test_support {
             .iter()
             .filter_map(|(_, effect)| match effect {
                 GraphEffect::Spawn { kind, .. } => Some(kind.clone()),
-                GraphEffect::ResolveApproval { .. } | GraphEffect::Delete { .. } => None,
+                GraphEffect::Delete { .. } => None,
             })
             .collect()
     }

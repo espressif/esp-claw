@@ -61,8 +61,7 @@ use std::sync::Arc;
 
 use channel_router::ChannelRouter;
 use claw_capability::init_tool_executor;
-use claw_core::agent::{AgentResolver, FsAgentFactoryError};
-use claw_core::Orchestrator;
+use claw_core::{AgentResolver, Orchestrator, OrchestratorBuildError};
 use claw_interface::{ClawHttp, ClawThread, ClawTimer, FsError};
 #[cfg(feature = "host-backends")]
 use claw_interface::{RealHttp, StdThread, TokioTimer};
@@ -86,9 +85,7 @@ pub use claw_capability::{
     tool_metadata, AsyncToolHandler, Tool, ToolError, ToolFuture, ToolHandler, ToolInvocation,
     ToolInvokeError, ToolOutput, ToolRetryCount,
 };
-pub use claw_core::{
-    DeliverError, DeliveryKind, SessionBinding, SessionError, SessionId, SessionRecord,
-};
+pub use claw_core::{DeliverError, DeliveryKind, SessionError, SessionId};
 pub use claw_interface::ClawFs;
 // The on-disk filesystem backend is a host-target convenience; device builds
 // inject their own `ClawFs` through `AgentSystem::<F, H, Timer>::new::<Thread>(...)`.
@@ -116,6 +113,29 @@ impl AgentPersistenceConfig {
             dir: dir.to_string(),
         }
     }
+}
+
+/// External channel/chat bound to a live agent session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionBinding {
+    pub channel: String,
+    pub chat_id: String,
+}
+
+impl SessionBinding {
+    pub fn new(channel: impl Into<String>, chat_id: impl Into<String>) -> Self {
+        Self {
+            channel: channel.into(),
+            chat_id: chat_id.into(),
+        }
+    }
+}
+
+/// One live conversation session as exposed by [`AgentSystem`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionRecord {
+    pub id: SessionId,
+    pub binding: Option<SessionBinding>,
 }
 
 /// What can go wrong while building an [`AgentSystem`].
@@ -148,12 +168,12 @@ pub enum AgentError {
     },
 }
 
-impl From<FsAgentFactoryError> for AgentError {
-    fn from(error: FsAgentFactoryError) -> Self {
+impl From<OrchestratorBuildError> for AgentError {
+    fn from(error: OrchestratorBuildError) -> Self {
         match error {
-            FsAgentFactoryError::MissingPersistenceDir => Self::MissingPersistenceDir,
-            FsAgentFactoryError::ExtractionLlm(message) => Self::ExtractionLlm(message),
-            FsAgentFactoryError::LongTermInit(source) => Self::LongTermInit(source.to_string()),
+            OrchestratorBuildError::MissingPersistenceDir => Self::MissingPersistenceDir,
+            OrchestratorBuildError::ExtractionLlm(message) => Self::ExtractionLlm(message),
+            OrchestratorBuildError::LongTermInit(message) => Self::LongTermInit(message),
         }
     }
 }

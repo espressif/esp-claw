@@ -5,13 +5,10 @@ use claw_capability::{
     CapabilityError, ChannelAdapter, ChannelFuture, ChannelRuntime, InboundMessage,
     OutboundMessage, Registry,
 };
-use claw_core::{
-    DeliverError, DeliveryKind, DriveOutput, Orchestrator, SessionBinding, SessionId,
-    SessionMessage, SessionRecord,
-};
+use claw_core::{DeliverError, DeliveryKind, DriveOutput, Orchestrator, SessionId};
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
-use crate::AgentError;
+use crate::{AgentError, SessionBinding, SessionRecord};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct ChannelChatKey {
@@ -87,33 +84,11 @@ where
             }
         }
 
-        // Rebuild the in-memory routing tables from whatever session bindings the
-        // orchestrator currently exposes. Only bindings for channels this router
-        // actually has are restored; a binding whose channel is gone is dropped.
-        // The per-message `reply_to_message_id` is ephemeral — the next inbound
-        // message repopulates it.
-        let mut chat_sessions = HashMap::new();
-        let mut session_routes = HashMap::new();
-        for record in orchestrator.session_list() {
-            if let Some(binding) = &record.binding {
-                if channels.contains_key(&binding.channel) {
-                    chat_sessions.insert(
-                        ChannelChatKey::new(&binding.channel, &binding.chat_id),
-                        record.id,
-                    );
-                    session_routes.insert(
-                        record.id,
-                        SessionChannelRoute::new(&binding.channel, &binding.chat_id),
-                    );
-                }
-            }
-        }
-
         Ok(Arc::new(Self {
             orchestrator,
             channels,
-            chat_sessions: Mutex::new(chat_sessions),
-            session_routes: Mutex::new(session_routes),
+            chat_sessions: Mutex::new(HashMap::new()),
+            session_routes: Mutex::new(HashMap::new()),
             open: Mutex::new(false),
         }))
     }
@@ -189,7 +164,7 @@ where
         let session = self.resolve_session(&message)?;
         let output = self
             .orchestrator
-            .submit(session, session_message(message, kind))
+            .submit(session, message.text, kind)
             .await
             .map_err(map_deliver_error)?;
         self.surface_output(output)?;
@@ -234,24 +209,21 @@ where
 
         let key = ChannelChatKey::new(channel, chat_id);
         let mut chat_sessions = self.chat_sessions();
+        let mut session_routes = self.session_routes();
+        if !self.orchestrator.session_list().contains(&session) {
+            return Err(CapabilityError::NotFound);
+        }
         if let Some(existing) = chat_sessions.get(&key) {
             if *existing != session {
                 return Err(CapabilityError::AlreadyExists);
             }
         }
 
-        let mut session_routes = self.session_routes();
         if let Some(existing) = session_routes.get(&session) {
             if existing.channel != channel || existing.chat_id != chat_id {
                 return Err(CapabilityError::AlreadyExists);
             }
         }
-
-        // Record the binding onto the session record so this router (or another
-        // one over the same orchestrator) can rebuild routes from `session_list`.
-        self.orchestrator
-            .session_set_binding(session, channel, chat_id)
-            .map_err(map_session_error)?;
 
         chat_sessions.insert(key, session);
         session_routes.insert(session, SessionChannelRoute::new(channel, chat_id));
@@ -263,14 +235,11 @@ where
         self.orchestrator
             .session_list()
             .into_iter()
-            .map(|mut record| {
-                if let Some(route) = routes.get(&record.id) {
-                    record.binding = Some(SessionBinding::new(
-                        route.channel.clone(),
-                        route.chat_id.clone(),
-                    ));
-                }
-                record
+            .map(|id| {
+                let binding = routes
+                    .get(&id)
+                    .map(|route| SessionBinding::new(route.channel.clone(), route.chat_id.clone()));
+                SessionRecord { id, binding }
             })
             .collect()
     }
@@ -310,15 +279,6 @@ where
     fn surface_output(&self, output: DriveOutput) -> Result<(), CapabilityError> {
         for reply in output.replies {
             self.send_to_session(reply.session, reply.text)?;
-        }
-        for approval in output.approvals {
-            self.send_to_session(
-                approval.session,
-                format!(
-                    "[approval needed: {} {}] {}",
-                    approval.agent, approval.approval, approval.summary
-                ),
-            )?;
         }
         Ok(())
     }
@@ -369,14 +329,6 @@ where
     }
 }
 
-/// Build the orchestrator's [`SessionMessage`] from an inbound transport
-/// message, stamping the resolved [`DeliveryKind`](claw_core::DeliveryKind). The
-/// kind is decided at this boundary (from `extra_context` on the transport path,
-/// or forced by the caller), never carried on the transport message itself.
-fn session_message(message: InboundMessage, kind: DeliveryKind) -> SessionMessage {
-    SessionMessage::new(message.text, message.message_id, message.sender_id).with_kind(kind)
-}
-
 fn map_deliver_error(error: DeliverError) -> CapabilityError {
     match error {
         DeliverError::SessionNotFound(_) => CapabilityError::NotFound,
@@ -389,7 +341,6 @@ fn map_deliver_error(error: DeliverError) -> CapabilityError {
 fn map_session_error(error: claw_core::SessionError) -> CapabilityError {
     match error {
         claw_core::SessionError::NotFound(_) => CapabilityError::NotFound,
-        claw_core::SessionError::AlreadyExists(_) => CapabilityError::AlreadyExists,
     }
 }
 
@@ -403,7 +354,7 @@ mod tests {
 
     use claw_api::{BackendKind, ClawApiConfig};
     use claw_capability::{Capability, Registry};
-    use claw_core::agent::MapAgentResolver;
+    use claw_core::MapAgentResolver;
     use claw_interface::{BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp};
 
     use super::*;
@@ -474,17 +425,12 @@ mod tests {
     }
 
     #[test]
-    fn bindings_rebuild_from_orchestrator_session_list() {
+    fn list_sessions_projects_router_bindings() {
         let orchestrator = test_orchestrator();
-        let first_router = ChannelRouter::new(Arc::clone(&orchestrator), &web_registry()).unwrap();
-        let sid = first_router.new_session();
-        first_router.bind_session(sid, "web", "chat-1").unwrap();
-
-        // A fresh router over the same orchestrator rebuilds its routing tables
-        // from the orchestrator's session records.
         let router = ChannelRouter::new(orchestrator, &web_registry()).unwrap();
+        let sid = router.new_session();
+        router.bind_session(sid, "web", "chat-1").unwrap();
 
-        // The binding was rebuilt: the session reappears with its channel/chat.
         let sessions = router.list_sessions();
         assert_eq!(sessions.len(), 1);
         let record = sessions.first().unwrap();

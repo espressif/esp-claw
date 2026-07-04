@@ -27,28 +27,25 @@ mod registry;
 mod resolver;
 mod tools;
 
-pub use base_agent::{
+pub(crate) use base_agent::{
     AgentAbortHandle, AgentCommand, AgentCommandError, AgentId, ApprovalDecision, ApprovalId,
     CancelReason, TickOutcome,
 };
-pub use config::{AgentConfig, AgentConfigError};
-pub use factory::{AgentPlacement, FsAgentFactory, FsAgentFactoryError};
-pub use generic_agent::{GenericAgent, GenericAgentBuildError};
-pub use graph::{
-    AgentSnapshot, AgentStatus, ApprovalVerdict, GraphEffect, GraphHost, TerminationPolicy,
+pub(crate) use factory::{AgentPlacement, FsAgentFactory, FsAgentFactoryError};
+pub(crate) use graph::{AgentSnapshot, AgentStatus, GraphEffect, GraphHost, TerminationPolicy};
+pub(crate) use iteration_loop::IterationId;
+pub(crate) use iteration_loop::{
+    ChatMessages, CompletedKind, InterruptionControl, IterationLoop, IterationLoopError,
+    IterationOutcome, IterationStep, SystemPrompt,
 };
-pub use iteration_loop::IterationId;
-pub use kind::AgentKind;
+pub(crate) use kind::AgentKind;
 pub(crate) use registry::{AgentIdAllocator, AgentRegistry};
 pub use resolver::{AgentResolver, MapAgentResolver};
-
-#[doc(no_inline)]
-pub use claw_api::RetryPolicy;
 
 use core::future::Future;
 use core::pin::Pin;
 
-pub type AgentTickFuture<'a> = Pin<Box<dyn Future<Output = TickOutcome> + 'a>>;
+pub(crate) type AgentTickFuture<'a> = Pin<Box<dyn Future<Output = TickOutcome> + 'a>>;
 
 /// The unified contract a scheduler drives any agent through.
 ///
@@ -57,7 +54,7 @@ pub type AgentTickFuture<'a> = Pin<Box<dyn Future<Output = TickOutcome> + 'a>>;
 /// outcomes come out via [`tick`](Agent::tick). Multi-agent graph inputs use
 /// separate child ports rather than [`AgentCommand`] variants, so the external
 /// command vocabulary stays untouched.
-pub trait Agent {
+pub(crate) trait Agent {
     /// This agent's stable identity.
     fn id(&self) -> AgentId;
 

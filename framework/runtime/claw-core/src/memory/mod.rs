@@ -27,17 +27,17 @@ mod summary_cursor;
 mod tool_policy_adapter;
 mod traits;
 
-pub use long_term_memory_adapter::{
-    agent_store, global_store, ExtractError, ExtractedItem, ExtractionInput, Extractor,
-    LlmCompactor, LlmExtractor, LongTermMemoryContextAdapter, MemoryOp, MemorySnapshot, MemoryTier,
-    MemoryTierHint, NoopExtractor, RuleBasedTierClassifier, TierClassifier, AGENT_ID_PREFIX,
-    GLOBAL_ID_PREFIX,
+pub(crate) use long_term_memory_adapter::{
+    agent_store, global_store, Extractor, LlmCompactor, LlmExtractor, LongTermMemoryContextAdapter,
+    RuleBasedTierClassifier, TierClassifier,
 };
-pub use profile_adapter::{ProfileContextAdapter, ProfileTools};
+pub(crate) use profile_adapter::{ProfileContextAdapter, ProfileTools};
 pub(crate) use recent_messages_adapter::RecentMessagesContextAdapter;
 pub(crate) use rolling_summary_adapter::CompactionPolicy;
 pub(crate) use rolling_summary_adapter::RollingSummaryContextAdapter;
 pub(crate) use skill_adapter::SkillContextAdapter;
 pub(crate) use summary_cursor::SummaryCursor;
 pub(crate) use tool_policy_adapter::ToolPolicyContextAdapter;
-pub use traits::{AssistantCommit, ContextAdapter, ContextAdapterInput, History, Transcript};
+#[cfg(test)]
+pub(crate) use traits::History;
+pub(crate) use traits::{AssistantCommit, ContextAdapter, ContextAdapterInput, Transcript};

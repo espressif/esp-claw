@@ -8,19 +8,17 @@
 //! - **self-affecting** control (`end_conversation`) pushes a [`ControlSignal`]
 //!   onto the agent's own [`ControlSink`], drained each tick;
 //! - **graph-affecting** actions (`spawn_subagent`, `list_subagents`,
-//!   `watch_subagent`, `delete_subagent`, `respond_to_approval`) call the
+//!   `watch_subagent`, `delete_subagent`) call the
 //!   [`AgentContext`](crate::agent::graph::AgentContext) façade, which emits a
 //!   [`GraphEffect`](crate::agent::graph::GraphEffect) (or reads a snapshot) via
 //!   the [`GraphHost`](crate::agent::graph::GraphHost) — applied by the
 //!   orchestrator instance at a borrow-safe point.
 //!
 //! Human approval is **not** a tool: it is raised by the permission layer (an
-//! `Ask` decision in `base_agent`), not requested by the model. Only the
-//! root-side `respond_to_approval` (the human's verdict) remains a tool.
+//! `Ask` decision in `base_agent`), not requested or resolved by the model.
 //!
 //! Which tools an agent actually gets is a build-time knob: `spawn_subagent` and
-//! its siblings only when its manifest enables spawning, `respond_to_approval`
-//! only for a session root.
+//! its siblings only when its manifest enables spawning.
 //!
 //! Keeping these here means the iteration loop stays fully agnostic: it runs them
 //! like ordinary tools and never learns their meaning.
@@ -29,7 +27,6 @@ mod delete_subagent;
 mod end_conversation;
 mod list_spawnable_agents;
 mod list_subagents;
-mod respond_to_approval;
 mod spawn_subagent;
 mod watch_subagent;
 
@@ -46,7 +43,6 @@ use delete_subagent::DeleteSubagentTool;
 use end_conversation::EndConversationTool;
 use list_spawnable_agents::ListSpawnableAgentsTool;
 use list_subagents::ListSubagentsTool;
-use respond_to_approval::RespondToApprovalTool;
 use spawn_subagent::SpawnSubagentTool;
 use watch_subagent::WatchSubagentTool;
 
@@ -55,9 +51,6 @@ pub(crate) const INTERNAL_TOOL_GROUP: &str = "agent";
 
 /// Group label for the subagent-management tools (provenance only).
 pub(crate) const SUBAGENT_TOOL_GROUP: &str = "subagents";
-
-/// Group label for the approval-response tool (provenance only).
-pub(crate) const APPROVAL_TOOL_GROUP: &str = "approval";
 
 // -- Self-control seam ------------------------------------------------------
 
@@ -156,15 +149,6 @@ pub(crate) fn subagent_tool_group(context: Arc<AgentContext>, policy: SpawnPolic
             Tool::new(WatchSubagentTool::new(Arc::clone(&context))),
             Tool::new(DeleteSubagentTool::new(context)),
         ],
-    )
-}
-
-/// Build the approval-response tool group: a `respond_to_approval` tool that
-/// reports verdicts through `context`.
-pub(crate) fn respond_to_approval_tool_group(context: Arc<AgentContext>) -> ToolGroup {
-    ToolGroup::new(
-        APPROVAL_TOOL_GROUP,
-        [Tool::new(RespondToApprovalTool::new(context))],
     )
 }
 

@@ -1,16 +1,14 @@
 //! Interactive chat CLI backed by the full [`Orchestrator`] (Layer 1).
 //!
-//! Unlike `generic-agent-chat` (which drives a single [`GenericAgent`]
-//! directly), this goes through the real orchestrator path: one session, a
-//! per-session agent graph built by [`FsAgentFactory`], replies routed back
-//! through the channel egress. The root is a `conversation` agent that can spawn
-//! `worker` subagents, so this exercises multi-agent spawning end to end.
+//! This goes through the real orchestrator path: one session, a per-session
+//! agent graph, and replies routed back through the channel egress. The root is
+//! a `conversation` agent that can spawn `worker` subagents, so this exercises
+//! multi-agent spawning end to end.
 //!
 //! Capabilities/skills come from each kind's compile-time manifest; the resolver
 //! is empty here (the built-in kinds declare no extra capabilities — agents still
-//! get their built-in control/spawn tools). Approval requests are surfaced as
-//! ordinary messages; this simple loop does not resolve them (matching the other
-//! CLIs).
+//! get their built-in control/spawn tools). Approval requests and replies flow as
+//! ordinary chat messages through the orchestrator.
 //!
 //! LLM config is read from `claw-core/.env.local`; memory is written to
 //! `claw-core/output/orchestrator-chat/`.
@@ -27,8 +25,7 @@ use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
 use claw_agent_cli::{load_env, make_llm_config, CliFs};
-use claw_core::agent::MapAgentResolver;
-use claw_core::{Orchestrator, SessionMessage};
+use claw_core::{DeliveryKind, MapAgentResolver, Orchestrator};
 use claw_interface::{RealHttp, TokioTimer};
 
 const MEMORY_DIR: &str = concat!(
@@ -110,7 +107,6 @@ async fn main() {
     eprintln!("Type your message and press Enter. Empty line or Ctrl-D to quit.\n");
 
     let stdin = io::stdin();
-    let mut turn: u64 = 0;
     loop {
         print!("> ");
         io::stdout().flush().expect("flush stdout");
@@ -125,12 +121,8 @@ async fn main() {
             break;
         }
 
-        turn += 1;
         let output = match orchestrator
-            .submit(
-                session,
-                SessionMessage::new(input.to_string(), format!("m{turn}"), None),
-            )
+            .submit(session, input.to_string(), DeliveryKind::Append)
             .await
         {
             Ok(output) => output,
@@ -140,17 +132,11 @@ async fn main() {
             }
         };
 
-        if output.replies.is_empty() && output.approvals.is_empty() {
+        if output.replies.is_empty() {
             println!("\n(no reply)");
         }
         for reply in output.replies {
             println!("\n{}", reply.text);
-        }
-        for approval in output.approvals {
-            println!(
-                "\n[approval needed: {} {}] {}",
-                approval.agent, approval.approval, approval.summary
-            );
         }
         println!();
     }

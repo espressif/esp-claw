@@ -17,7 +17,7 @@
 use std::sync::Arc;
 
 use claw_capability::{Capability, Registry};
-use claw_core::agent::AgentResolver;
+use claw_core::AgentResolver;
 use claw_skill::{EmptySkillRegistry, SkillRegistry};
 
 /// An [`AgentResolver`] backed by the capability [`Registry`].

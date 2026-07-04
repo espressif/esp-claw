@@ -624,7 +624,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// # Examples
     ///
     /// ```ignore
-    /// use claw_core::agent::{AgentCommand, AgentCommandError, CancelReason};
+    /// # use super::{AgentCommand, AgentCommandError, CancelReason};
     ///
     /// // projected state -> Running, then -> Idle
     /// agent.send_command(AgentCommand::AppendMessage("summarize the news".into()))?;
@@ -737,7 +737,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// # Examples
     ///
     /// ```ignore
-    /// use claw_core::agent::{AgentCommand, TickOutcome};
+    /// # use super::{AgentCommand, TickOutcome};
     ///
     /// agent.send_command(AgentCommand::AppendMessage("summarize today's news".into()))?;
     /// loop {

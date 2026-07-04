@@ -1,0 +1,26 @@
+{
+  "type": "function",
+  "function": {
+    "name": "resolve_permission_reply",
+    "description": "Resolve a user's natural-language reply to one pending permission request.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": ["approve", "reject", "clarify"],
+          "description": "approve for clear consent, reject for clear refusal, clarify when the reply is ambiguous or asks a question."
+        },
+        "note": {
+          "type": "string",
+          "description": "Optional rejection reason. Used only when decision is reject."
+        },
+        "message": {
+          "type": "string",
+          "description": "Clarifying message to send back to the user. Used only when decision is clarify."
+        }
+      },
+      "required": ["decision"]
+    }
+  }
+}

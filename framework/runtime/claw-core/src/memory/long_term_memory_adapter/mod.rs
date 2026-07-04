@@ -33,10 +33,9 @@ mod llm_extractor;
 mod tier;
 mod tools;
 
-pub use extraction::{
-    ExtractError, ExtractedItem, ExtractionInput, Extractor, MemoryOp, MemorySnapshot,
-    NoopExtractor,
-};
+#[cfg(test)]
+use extraction::{ExtractedItem, NoopExtractor};
+pub use extraction::{ExtractionInput, Extractor, MemoryOp, MemorySnapshot};
 pub use llm_compactor::LlmCompactor;
 pub use llm_extractor::LlmExtractor;
 pub use tier::{MemoryTier, MemoryTierHint, RuleBasedTierClassifier, TierClassifier};
