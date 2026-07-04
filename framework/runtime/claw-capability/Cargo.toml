@@ -20,6 +20,7 @@ claw-interface = { path = "../claw-interface" }
 # Serializes the persisted enable/disable deny-list (a JSON array of group ids).
 serde_json = "1"
 thiserror = "2"
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # `memfs`: hermetic in-memory `ClawFs` double for persistence round-trip tests.

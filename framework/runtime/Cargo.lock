@@ -197,6 +197,7 @@ dependencies = [
  "claw-tool",
  "serde_json",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]
