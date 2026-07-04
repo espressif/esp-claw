@@ -12,9 +12,12 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use claw_api::{ChatError, ChatRequest, ClawApiAsync, ClawApiError, LlmResponse, RetryPolicy};
+use claw_api::{ChatError, ChatRequest, ClawApiAsync, LlmResponse, RetryPolicy};
+use claw_capability::{
+    ApprovalNeeded, RawToolInvocation, ToolGate, ToolInvocation, ToolRunOutcome, ToolRunner,
+    ToolSetError, ToolSetHandle,
+};
 use claw_interface::{Cancel, ClawHttp, ClawTimer};
-use claw_tool::{ApprovalNeeded, CallOutcome, ToolGate, ToolInvocation, ToolRunner, ToolSet};
 
 use claw_utils::TruncatedText;
 
@@ -31,6 +34,8 @@ pub enum IterationLoopError {
     MalformedAssistantMessage,
     #[error(transparent)]
     Chat(#[from] ChatError),
+    #[error(transparent)]
+    Tools(#[from] ToolSetError),
 }
 
 /// Checkpoint where preemption was detected. The iteration is terminal at this point.
@@ -78,11 +83,8 @@ pub struct IterationStep<'a> {
     /// Ephemeral trailing messages for this request only (never persisted),
     /// appended after `messages`. Empty when there is nothing to nudge.
     pub reminders: &'a [Value],
-    /// The tool set for this step. It also carries its own soft-hide allow-set
-    /// (see [`ToolSet::set_active_tools`]): the full schema is always sent
-    /// (cache-stable), but a call to a tool the set does not currently allow is
-    /// refused with a tool error rather than invoked — see [`ToolRun::blocked`].
-    pub tools: &'a ToolSet,
+    /// The tool view for this step. It stays stable for the whole iteration.
+    pub tools: &'a ToolSetHandle<'a>,
     /// Permission gate consulted before each call after soft-hide passes. On
     /// `Deny` the call is refused; on `Ask` it is held for human approval
     /// (surfaced via [`ToolRun::approval`]) and not run.
@@ -225,7 +227,7 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
         system_prompt: step.system_prompt.as_ref(),
         messages: step.messages.0,
         reminders: step.reminders,
-        tools_json: step.tools.schemas_json(),
+        tools_json: Some(step.tools.schemas_json()),
         retry: loop_.retry,
     };
     let cancel = Cancel::new(loop_.interruption.interrupt_flag().as_ref());
@@ -326,10 +328,7 @@ fn llm_http_preempted(interruption: &dyn InterruptionControl, err: &ChatError) -
     if take_interrupt(interruption) {
         return true;
     }
-    matches!(
-        err,
-        ChatError::Api(ClawApiError::Transport(msg)) if msg.contains("aborted")
-    )
+    err.is_aborted()
 }
 
 fn check_preempt_at_checkpoint(
@@ -397,17 +396,12 @@ async fn run_tool_calls(
             return ToolRoundResult::Preempted(outcome);
         }
 
-        let display_name = if tc.name.is_empty() {
-            "(null)"
-        } else {
-            tc.name.as_str()
-        };
         // One span per tool call, covering gating + invoke + result. It lives
         // here (not in the runner / `ToolSet::invoke`) so a call refused by
         // soft-hide or permission gating — which never reaches `invoke` — is still
         // represented, and the "tool done" event below carries this span's `span=`.
         let _span =
-            tracing::info_span!("toolcall", tool = display_name, call_id = %tc.id).entered();
+            tracing::info_span!("toolcall", tool = tc.display_name(), call_id = %tc.id).entered();
         // Tool arguments are arbitrary JSON (spaces/commas) -> message slot.
         tracing::debug!("{}", TruncatedText::new(&tc.arguments_json));
 
@@ -415,49 +409,78 @@ async fn run_tool_calls(
         // loop owns preemption, spans, message assembly. A matched tool message is
         // emitted for every call (even refused ones), so the patch stays
         // well-formed (no dangling tool_call ids).
-        let CallOutcome {
-            content,
-            ok,
-            blocked,
-            approval,
-        } = runner
-            .run_one_async(&ToolInvocation {
-                id: Some(&tc.id),
-                name: &tc.name,
-                arguments_json: &tc.arguments_json,
-            })
-            .await;
+        let call = match ToolInvocation::try_from(RawToolInvocation {
+            id: Some(&tc.id),
+            name: &tc.name,
+            arguments_json: &tc.arguments_json,
+        }) {
+            Ok(call) => call,
+            Err(error) => {
+                let content = error.to_string();
+                tracing::info!(
+                    ok = false,
+                    blocked = false,
+                    "{}",
+                    TruncatedText::new(&content)
+                );
+                if let Err(error) = push_tool_message(appended, &tc.id, content, false) {
+                    return ToolRoundResult::Failed(error);
+                }
+                runs.push(ToolRun {
+                    name: tc.display_name().to_string(),
+                    ok: false,
+                    disposition: ToolRunDisposition::Executed,
+                });
+                continue;
+            }
+        };
+        let outcome = runner.run(&call).await;
+        let (content, ok, blocked, approval) = match outcome {
+            ToolRunOutcome::Ran { content, ok } => (content, ok, false, None),
+            ToolRunOutcome::Blocked { content } => (content, false, true, None),
+            ToolRunOutcome::ApprovalNeeded { content, approval } => {
+                (content, false, false, Some(approval))
+            }
+        };
         // Tool output is free-form text -> message slot; keep ok/blocked as fields.
         tracing::info!(ok, blocked, "{}", TruncatedText::new(&content));
 
-        let tool_message = serde_json::json!({
-            "role": "tool",
-            "tool_call_id": tc.id,
-            "content": content,
-            "is_error": !ok,
-        });
-
-        let Some(runtime_arr) = appended.0.as_array_mut() else {
-            return ToolRoundResult::Failed(IterationLoopError::MessagesNotArray);
-        };
-        runtime_arr.push(tool_message);
+        if let Err(error) = push_tool_message(appended, &tc.id, content, ok) {
+            return ToolRoundResult::Failed(error);
+        }
         let disposition = match approval {
             Some(approval) => ToolRunDisposition::AwaitingApproval(approval),
             None if blocked => ToolRunDisposition::Blocked,
             None => ToolRunDisposition::Executed,
         };
         runs.push(ToolRun {
-            name: if tc.name.is_empty() {
-                "(null)".to_string()
-            } else {
-                tc.name.clone()
-            },
+            name: tc.display_name().to_string(),
             ok,
             disposition,
         });
     }
 
     ToolRoundResult::Completed { runs }
+}
+
+fn push_tool_message(
+    appended: &mut AppendedMessages,
+    id: &str,
+    content: String,
+    ok: bool,
+) -> Result<(), IterationLoopError> {
+    let tool_message = serde_json::json!({
+        "role": "tool",
+        "tool_call_id": id,
+        "content": content,
+        "is_error": !ok,
+    });
+
+    let Some(runtime_arr) = appended.0.as_array_mut() else {
+        return Err(IterationLoopError::MessagesNotArray);
+    };
+    runtime_arr.push(tool_message);
+    Ok(())
 }
 
 fn log_tool_call_names(iteration_id: IterationId, response: &LlmResponse) {
@@ -467,13 +490,7 @@ fn log_tool_call_names(iteration_id: IterationId, response: &LlmResponse) {
     let names: Vec<&str> = response
         .tool_calls
         .iter()
-        .map(|tc| {
-            if tc.name.is_empty() {
-                "(null)"
-            } else {
-                tc.name.as_str()
-            }
-        })
+        .map(|tc| tc.display_name())
         .collect();
     tracing::debug!(
         iteration = %iteration_id,
@@ -492,10 +509,9 @@ mod tests {
     use std::task::{Wake, Waker};
 
     use super::*;
-    use claw_api::ToolCall;
-    use claw_interface::StdThread;
-    use claw_tool::{
-        init_tool_executor, AllowedTools, Tool, ToolGroup, ToolHandler, ToolInvokeError, ToolOutput,
+    use claw_api::{ClawApiError, ToolCall};
+    use claw_capability::{
+        CapabilityRegistry, SyncToolHandler, Tool, ToolInvokeError, ToolOutput, ToolSet, ToolSpec,
     };
     use serde_json::json;
 
@@ -505,7 +521,6 @@ mod tests {
     }
 
     fn block_on<F: Future>(future: F) -> F::Output {
-        init_tool_executor(StdThread).expect("tool executor");
         let mut future = Box::pin(future);
         let waker = Waker::from(Arc::new(NoopWake));
         let mut context = Context::from_waker(&waker);
@@ -514,6 +529,13 @@ mod tests {
                 return value;
             }
         }
+    }
+
+    fn tool_set(tool: impl SyncToolHandler + 'static) -> ToolSet {
+        let registry = CapabilityRegistry::new();
+        let mut tools = registry.tool_set();
+        tools.add_tool(Tool::from_sync(tool)).expect("tool set");
+        tools
     }
 
     struct FlagControl {
@@ -637,7 +659,7 @@ mod tests {
         // The model emits an empty tool name; register a tool under that name so
         // dispatch lands and we exercise the "(null)" display + is_error path.
         struct FailingTool;
-        impl ToolHandler for FailingTool {
+        impl ToolSpec for FailingTool {
             fn name(&self) -> &str {
                 ""
             }
@@ -645,7 +667,9 @@ mod tests {
             fn schema(&self) -> &str {
                 r#"{"type":"function","function":{"name":""}}"#
             }
+        }
 
+        impl SyncToolHandler for FailingTool {
             fn invoke(&self, _call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
                 Ok(ToolOutput {
                     output: "done".into(),
@@ -655,8 +679,8 @@ mod tests {
         }
 
         let interruption = FlagControl::new();
-        let tools = ToolSet::from_groups([ToolGroup::new("g", [Tool::new(FailingTool)])])
-            .expect("tool set");
+        let mut tools = tool_set(FailingTool);
+        let tools = tools.begin().expect("tool set");
         let iteration_id = IterationId(1);
         let response = LlmResponse {
             text: None,
@@ -714,13 +738,16 @@ mod tests {
     fn run_tool_calls_blocks_tool_not_in_allowed_set() {
         // A tool that would succeed if invoked; gating must refuse it instead.
         struct OkTool;
-        impl ToolHandler for OkTool {
+        impl ToolSpec for OkTool {
             fn name(&self) -> &str {
                 "writer"
             }
             fn schema(&self) -> &str {
                 r#"{"type":"function","function":{"name":"writer"}}"#
             }
+        }
+
+        impl SyncToolHandler for OkTool {
             fn invoke(&self, _call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
                 Ok(ToolOutput {
                     output: "wrote".into(),
@@ -730,9 +757,11 @@ mod tests {
         }
 
         let interruption = FlagControl::new();
-        let mut tools =
-            ToolSet::from_groups([ToolGroup::new("g", [Tool::new(OkTool)])]).expect("tool set");
-        tools.set_active_tools(AllowedTools::new(["reader"])); // "writer" is not permitted
+        let mut tools = tool_set(OkTool);
+        tools
+            .temporarily_disable_tool("writer".to_string())
+            .expect("writer tool");
+        let tools = tools.begin().expect("tool set");
         let response = LlmResponse {
             text: None,
             reasoning_content: None,
@@ -851,16 +880,16 @@ mod behavior_tests {
     use std::task::{Wake, Waker};
 
     use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig, RetryPolicy};
+    use claw_capability::{
+        CapabilityRegistry, SyncToolHandler, Tool, ToolError, ToolGate, ToolInvocation,
+        ToolInvokeError, ToolOutput, ToolSet, ToolSpec,
+    };
     use claw_interface::http::{
         blocking::{ClawHttp as BlockingClawHttp, RealHttp},
         HttpError, HttpJsonRequest, HttpRequestFailure, HttpResponse, HttpStatusCode,
     };
-    use claw_interface::{BlockingHttpAdapter, ClawHttp, ClawTimer, ImmediateTimer, StdThread};
-    use claw_permission::AllowAll;
-    use claw_tool::{
-        init_tool_executor, PermissionGate, Tool, ToolError, ToolGroup, ToolHandler,
-        ToolInvocation, ToolInvokeError, ToolOutput, ToolSet,
-    };
+    use claw_interface::{BlockingHttpAdapter, ClawHttp, ClawTimer, ImmediateTimer};
+    use claw_permission::{Action, PermissionDecision};
     use serde_json::{json, Value};
 
     use super::{
@@ -885,7 +914,6 @@ mod behavior_tests {
     }
 
     fn block_on<F: Future>(future: F) -> F::Output {
-        init_tool_executor(StdThread).expect("tool executor");
         let mut future = Box::pin(future);
         let waker = Waker::from(Arc::new(NoopWake));
         let mut context = Context::from_waker(&waker);
@@ -893,6 +921,14 @@ mod behavior_tests {
             if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
                 return value;
             }
+        }
+    }
+
+    struct AllowGate;
+
+    impl ToolGate for AllowGate {
+        fn decide(&self, _action: &Action) -> PermissionDecision {
+            PermissionDecision::Allow
         }
     }
 
@@ -1077,16 +1113,19 @@ mod behavior_tests {
     /// Tool named `files` that echoes `name:args` and succeeds.
     struct EchoTool;
 
-    impl ToolHandler for EchoTool {
+    impl ToolSpec for EchoTool {
         fn name(&self) -> &str {
             "files"
         }
         fn schema(&self) -> &str {
             r#"{"type":"function","function":{"name":"files"}}"#
         }
+    }
+
+    impl SyncToolHandler for EchoTool {
         fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
             Ok(ToolOutput {
-                output: format!("{}:{}", call.name, call.arguments_json),
+                output: format!("{}:{}", call.name(), call.arguments_json()),
                 ok: true,
             })
         }
@@ -1095,15 +1134,38 @@ mod behavior_tests {
     /// Tool named `files` whose invoke fails, to test error propagation.
     struct FailingTool;
 
-    impl ToolHandler for FailingTool {
+    impl ToolSpec for FailingTool {
         fn name(&self) -> &str {
             "files"
         }
         fn schema(&self) -> &str {
             r#"{"type":"function","function":{"name":"files"}}"#
         }
+    }
+
+    impl SyncToolHandler for FailingTool {
         fn invoke(&self, _call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
             Err(ToolError::NotFound("files".into()).into())
+        }
+    }
+
+    struct OtherTool;
+
+    impl ToolSpec for OtherTool {
+        fn name(&self) -> &str {
+            "other"
+        }
+        fn schema(&self) -> &str {
+            r#"{"type":"function","function":{"name":"other"}}"#
+        }
+    }
+
+    impl SyncToolHandler for OtherTool {
+        fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
+            Ok(ToolOutput {
+                output: call.arguments_json().to_owned(),
+                ok: true,
+            })
         }
     }
 
@@ -1111,24 +1173,30 @@ mod behavior_tests {
     /// returns `ok: false`, to test the soft-fail / "(null)" display path.
     struct SoftFailTool;
 
-    impl ToolHandler for SoftFailTool {
+    impl ToolSpec for SoftFailTool {
         fn name(&self) -> &str {
             ""
         }
         fn schema(&self) -> &str {
             r#"{"type":"function","function":{"name":""}}"#
         }
+    }
+
+    impl SyncToolHandler for SoftFailTool {
         fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
             Ok(ToolOutput {
-                output: format!("soft-fail:{}:{}", call.name, call.arguments_json),
+                output: format!("soft-fail:{}:{}", call.name(), call.arguments_json()),
                 ok: false,
             })
         }
     }
 
-    /// Wrap a single tool in a one-group [`ToolSet`] for tests.
-    fn tool_set(tool: impl ToolHandler + 'static) -> ToolSet {
-        ToolSet::from_groups([ToolGroup::new("test", [Tool::new(tool)])]).expect("tool set")
+    /// Wrap a single local tool in a [`ToolSet`] for tests.
+    fn tool_set(tool: impl SyncToolHandler + 'static) -> ToolSet {
+        let registry = CapabilityRegistry::new();
+        let mut tools = registry.tool_set();
+        tools.add_tool(Tool::from_sync(tool)).expect("tool set");
+        tools
     }
 
     fn test_llm_with_http<H: BlockingClawHttp>(http: H) -> TestLlm<H> {
@@ -1148,18 +1216,19 @@ mod behavior_tests {
     fn run_step<H: ClawHttp, Timer: ClawTimer>(
         llm: &mut ClawApiAsync<H, Timer>,
         control: &MockControl,
-        tools: &ToolSet,
+        tools: &mut ToolSet,
         iteration_id: IterationId,
         messages: &Value,
         system_prompt: &str,
     ) -> IterationResult {
-        let gate = PermissionGate::new(Arc::new(AllowAll));
+        let gate = AllowGate;
+        let tools = tools.begin()?;
         let step = IterationStep {
             iteration_id,
             system_prompt: SystemPrompt(system_prompt),
             messages: ChatMessages(messages),
             reminders: &[],
-            tools,
+            tools: &tools,
             gate: &gate,
         };
         block_on(
@@ -1172,15 +1241,22 @@ mod behavior_tests {
         )
     }
 
-    fn run_step_without_tools<H: ClawHttp, Timer: ClawTimer>(
+    fn run_step_with_default_tools<H: ClawHttp, Timer: ClawTimer>(
         llm: &mut ClawApiAsync<H, Timer>,
         control: &MockControl,
         iteration_id: IterationId,
         messages: &Value,
         system_prompt: &str,
     ) -> IterationResult {
-        let tools = ToolSet::empty();
-        run_step(llm, control, &tools, iteration_id, messages, system_prompt)
+        let mut tools = tool_set(EchoTool);
+        run_step(
+            llm,
+            control,
+            &mut tools,
+            iteration_id,
+            messages,
+            system_prompt,
+        )
     }
 
     #[test]
@@ -1202,7 +1278,7 @@ mod behavior_tests {
         let messages = json!([{"role":"user","content":"hi"}]);
 
         let result =
-            run_step_without_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
+            run_step_with_default_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
 
         let Ok(IterationOutcome::Completed(outcome)) = result else {
             panic!("expected Completed, got {result:?}");
@@ -1220,13 +1296,13 @@ mod behavior_tests {
     fn run_executes_tools_and_records_runs() {
         let mut llm = test_llm(vec![TOOL_CALL_BODY]);
         let control = MockControl::new();
-        let echo = tool_set(EchoTool);
+        let mut echo = tool_set(EchoTool);
         let messages = json!([]);
 
         let result = run_step(
             &mut llm,
             &control,
-            &echo,
+            &mut echo,
             TEST_ITERATION_ID,
             &messages,
             "system",
@@ -1261,7 +1337,7 @@ mod behavior_tests {
         let messages = json!([]);
 
         let result =
-            run_step_without_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
+            run_step_with_default_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
 
         let Ok(IterationOutcome::Preempted(outcome)) = result else {
             panic!("expected Preempted, got {result:?}");
@@ -1271,13 +1347,20 @@ mod behavior_tests {
     }
 
     #[test]
-    fn run_records_unknown_tool_with_empty_tool_set() {
+    fn run_records_unknown_tool_with_unmatched_tool_set() {
         let mut llm = test_llm(vec![TOOL_CALL_BODY]);
         let control = MockControl::new();
+        let mut other = tool_set(OtherTool);
         let messages = json!([]);
 
-        let result =
-            run_step_without_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
+        let result = run_step(
+            &mut llm,
+            &control,
+            &mut other,
+            TEST_ITERATION_ID,
+            &messages,
+            "system",
+        );
 
         let Ok(IterationOutcome::Completed(outcome)) = result else {
             panic!("expected Completed, got {result:?}");
@@ -1294,7 +1377,7 @@ mod behavior_tests {
         assert!(appended[1]["content"]
             .as_str()
             .unwrap()
-            .contains("not registered"));
+            .contains("tool not found"));
     }
 
     #[test]
@@ -1309,7 +1392,7 @@ mod behavior_tests {
         let messages = json!([]);
 
         let result =
-            run_step_without_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
+            run_step_with_default_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
 
         let Ok(IterationOutcome::Preempted(outcome)) = result else {
             panic!("expected Preempted, got {result:?}");
@@ -1327,7 +1410,7 @@ mod behavior_tests {
         let messages = json!([]);
 
         let result =
-            run_step_without_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
+            run_step_with_default_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
 
         let Ok(IterationOutcome::Preempted(outcome)) = result else {
             panic!("expected Preempted, got {result:?}");
@@ -1343,7 +1426,7 @@ mod behavior_tests {
         let messages = json!([]);
 
         let result =
-            run_step_without_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
+            run_step_with_default_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
 
         assert!(matches!(result, Err(IterationLoopError::Chat(_))));
     }
@@ -1352,13 +1435,13 @@ mod behavior_tests {
     fn run_records_soft_failing_tool_with_null_name() {
         let mut llm = test_llm(vec![TOOL_CALL_EMPTY_NAME_BODY]);
         let control = MockControl::new();
-        let soft_fail = tool_set(SoftFailTool);
+        let mut soft_fail = tool_set(SoftFailTool);
         let messages = json!([]);
 
         let result = run_step(
             &mut llm,
             &control,
-            &soft_fail,
+            &mut soft_fail,
             TEST_ITERATION_ID,
             &messages,
             "system",
@@ -1385,13 +1468,13 @@ mod behavior_tests {
     fn run_recovers_from_invoke_errors_as_tool_message() {
         let mut llm = test_llm(vec![TOOL_CALL_BODY]);
         let control = MockControl::new();
-        let failing = tool_set(FailingTool);
+        let mut failing = tool_set(FailingTool);
         let messages = json!([]);
 
         let result = run_step(
             &mut llm,
             &control,
-            &failing,
+            &mut failing,
             TEST_ITERATION_ID,
             &messages,
             "system",
@@ -1411,7 +1494,7 @@ mod behavior_tests {
                 assert!(messages[1]["content"]
                     .as_str()
                     .unwrap()
-                    .contains("not registered"));
+                    .contains("tool not found"));
                 assert_eq!(messages[1]["is_error"], true);
             }
             other => panic!("expected Completed, got {other:?}"),
@@ -1442,7 +1525,7 @@ mod behavior_tests {
         let control = MockControl::new();
         let messages = json!([{"role":"user","content":"Reply with exactly: pong"}]);
 
-        let result = run_step_without_tools(
+        let result = run_step_with_default_tools(
             &mut llm,
             &control,
             TEST_ITERATION_ID,

@@ -15,14 +15,14 @@
 //!                              AgentConfig (runnable)
 //!                                     │
 //!                                     ▼
-//!            GenericAgent::new(id, llm, memory, config)  // the running agent
+//!            FsAgentFactory builds ToolSet, then GenericAgent::new(...)
 //! ```
 //!
 //! - [`AgentResolver`] is the injected boundary that turns a capability/skill
 //!   *name* into a real [`Capability`](claw_capability::Capability) / [`SkillSet`];
 //!   `claw-core` then decomposes the capability into its internal `Tool`.
-//! - [`AgentConfig`] is the fully-resolved, runnable result; [`GenericAgent`] consumes
-//!   only this and never touches a manifest or the filesystem.
+//! - [`AgentConfig`] is the resolved manifest data. The factory consumes its
+//!   local tools into a `ToolSet` before constructing [`GenericAgent`].
 
 use claw_api::RetryPolicy;
 use claw_skill::{SkillError, SkillSet};
@@ -31,12 +31,11 @@ use crate::agent::graph::SpawnPolicy;
 use crate::agent::kind::AgentKind;
 use crate::agent::manifest::{AgentManifest, RetryCount};
 use crate::agent::resolver::AgentResolver;
-use claw_capability::CapabilityRole;
-use claw_tool::Tool;
+use claw_capability::{Capability, Tool};
 
 /// A fully-resolved agent configuration — the typed seam between a baked manifest
-/// and the agent that runs it. [`GenericAgent`](crate::agent::GenericAgent)
-/// consumes only this and never touches a manifest or the filesystem.
+/// and the agent factory that builds it. The factory consumes local tools from
+/// this config into a `ToolSet` before constructing the generic agent.
 ///
 /// The only way to build one is [`AgentConfig::resolve`]: every config originates
 /// from a compile-time-baked manifest, so there is no hand-rolled builder. The
@@ -68,9 +67,8 @@ impl AgentConfig {
     /// The manifest's JSON was already parsed and validated at build time, so this
     /// does only the runtime-only half: turning names into handlers.
     ///
-    /// The result is pure data: whether the `spawn_subagent` family actually
-    /// attaches is decided later by [`GenericAgent::new`](crate::agent::GenericAgent)
-    /// from `spawn_enabled` and the presence of a graph host.
+    /// The result is pure data: local manifest tools are consumed by the factory,
+    /// while graph tools are attached later from `spawn_enabled`.
     ///
     /// # Errors
     ///
@@ -95,10 +93,8 @@ impl AgentConfig {
             let capability = resolver
                 .resolve_capability(name)
                 .ok_or_else(|| AgentConfigError::UnknownCapability(name.to_string()))?;
-            let CapabilityRole::Tool(tool) = capability.role() else {
-                return Err(AgentConfigError::UnknownCapability(name.to_string()));
-            };
-            tools.push(tool.clone());
+            let Capability::Tool(tool) = capability;
+            tools.push(tool);
         }
 
         let skills = resolver.build_skills(manifest.skills)?;

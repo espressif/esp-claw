@@ -10,6 +10,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use claw_api::ClawApiConfig;
+use claw_capability::CapabilityRegistry;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_utils::{async_oneshot, AsyncOneshotSender};
 
@@ -158,11 +159,13 @@ where
     /// Returns [`OrchestratorBuildError`] when the factory cannot be assembled.
     pub fn new(
         resolver: Arc<dyn AgentResolver>,
+        capabilities: Arc<CapabilityRegistry>,
         llm_config: ClawApiConfig,
         persistence_dir: &str,
     ) -> Result<Self, OrchestratorBuildError> {
         let factory = Arc::new(FsAgentFactory::<F, H, Timer>::new(
             resolver,
+            capabilities,
             llm_config.clone(),
             persistence_dir,
         )?);

@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use claw_api::{ClawApiAsync, ClawApiConfig, InitError};
+use claw_capability::{ToolSet, ToolSetError};
 use claw_context::{Block, BlockKind};
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::{Compactor, TranscriptStore};
@@ -26,13 +27,12 @@ use crate::agent::base_agent::{
 };
 use crate::agent::config::AgentConfig;
 use crate::agent::graph::{AgentContext, GraphHost};
-use crate::agent::tools::subagent_tool_group;
+use crate::agent::tools::subagent_tools;
 use crate::agent::{Agent, AgentTickFuture};
 use crate::memory::{
     CompactionPolicy, ContextAdapter, LlmCompactor, RecentMessagesContextAdapter,
     RollingSummaryContextAdapter, SummaryCursor,
 };
-use claw_tool::{ToolSet, ToolSetError};
 
 const COMPACTION_TRIGGER_TOKENS: usize = 6000;
 const COMPACTION_KEEP_RECENT_TOKENS: usize = 2000;
@@ -65,8 +65,9 @@ impl<H: ClawHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
     /// store remains verbatim storage, while this constructor wires the recent
     /// history adapter and rolling-summary adapter as one internal strategy.
     ///
-    /// The config's capability tools are merged with the graph tools that require
-    /// a [`GraphHost`]: `spawn_subagent` and its inspection/delete siblings when
+    /// `tools` is prepared by the factory from the central capability registry
+    /// plus manifest-local tools. This layer only adds graph tools that require a
+    /// [`GraphHost`]: `spawn_subagent` and its inspection/delete siblings when
     /// `config.spawn_enabled`. The base agent then adds its built-in self-control
     /// tool (`end_conversation`).
     ///
@@ -82,6 +83,7 @@ impl<H: ClawHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
         llm_config: ClawApiConfig,
         store: TranscriptStore<F>,
         config: AgentConfig,
+        mut tools: ToolSet,
         host: Arc<dyn GraphHost>,
         _is_root: bool,
         inherited_context: Arc<[Block<'static>]>,
@@ -99,21 +101,19 @@ impl<H: ClawHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
         let recent = RecentMessagesContextAdapter::new(store.clone(), cursor.clone());
         let rolling_summary_store = store.clone();
 
-        let mut tool_set = ToolSet::new(config.tools)?;
         // Graph-affecting tools need a back-channel.
         let context = Arc::new(AgentContext::new(id, host));
         if config.spawn_enabled {
-            tool_set.extend_with_group(subagent_tool_group(
-                Arc::clone(&context),
-                config.spawn_policy,
-            ))?;
+            for tool in subagent_tools(Arc::clone(&context), config.spawn_policy) {
+                tools.add_tool(tool)?;
+            }
         }
 
         // The soft-hide "retry then fail" budget is the agent's BlockPolicy.
         let base_config = BaseAgentConfig {
             llm_config,
             store,
-            tools: tool_set,
+            tools,
             skills: config.skills,
             agent_instruction: Block::new(BlockKind::AgentInstruction, config.system_prompt),
             inherited_context,

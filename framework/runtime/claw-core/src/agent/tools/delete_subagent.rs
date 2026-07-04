@@ -2,10 +2,11 @@
 
 use std::sync::Arc;
 
-use claw_permission::{Action, RiskClass};
-use claw_tool::{
-    tool_metadata, ToolError, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
+use claw_capability::{
+    tool_metadata, SyncToolHandler, ToolError, ToolInvocation, ToolInvokeError, ToolOutput,
+    ToolSpec,
 };
+use claw_permission::{Action, RiskClass};
 
 use crate::agent::base_agent::AgentId;
 use crate::agent::graph::AgentContext;
@@ -24,7 +25,7 @@ impl DeleteSubagentTool {
     }
 }
 
-impl ToolHandler for DeleteSubagentTool {
+impl ToolSpec for DeleteSubagentTool {
     tool_metadata!("delete_subagent");
 
     fn classify(&self, call: &ToolInvocation<'_>) -> Action {
@@ -35,11 +36,13 @@ impl ToolHandler for DeleteSubagentTool {
             None => action,
         }
     }
+}
 
+impl SyncToolHandler for DeleteSubagentTool {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
-        let agent = string_argument(call.arguments_json, "agent")?;
+        let agent = string_argument(call.arguments_json(), "agent")?;
         let target = AgentId::from_wire(agent.trim()).map_err(|error| {
-            ToolError::invoke_rejected(format!("invalid agent id '{agent}': {error}"))
+            ToolError::InvokeRejected(format!("invalid agent id '{agent}': {error}"))
         })?;
         // Authorize against the same subtree view watch uses, so the refusal is
         // immediate (the instance re-checks before actually removing).
@@ -60,10 +63,19 @@ impl ToolHandler for DeleteSubagentTool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::super::{subagent_tool_group, test_support::tool_named};
     use super::*;
     use crate::agent::graph::test_support::{context_for, host_with_tree, snap};
-    use crate::agent::graph::{GraphEffect, GraphHost, SpawnPolicy};
+    use crate::agent::graph::{GraphEffect, GraphHost};
+    use claw_capability::RawToolInvocation;
+
+    fn call<'a>(id: &'a str, arguments_json: &'a str) -> ToolInvocation<'a> {
+        ToolInvocation::try_from(RawToolInvocation {
+            id: Some(id),
+            name: "delete_subagent",
+            arguments_json,
+        })
+        .unwrap()
+    }
 
     #[test]
     fn delete_subagent_emits_only_for_a_descendant() {
@@ -73,26 +85,15 @@ mod tests {
             snap(3, Some(2), 2),
         ]);
         let context = context_for(Arc::clone(&host) as Arc<dyn GraphHost>, AgentId(2));
-        let delete = tool_named(
-            &subagent_tool_group(context, SpawnPolicy::Any),
-            "delete_subagent",
-        );
+        let delete = DeleteSubagentTool::new(context);
 
         let ok = delete
-            .invoke(&ToolInvocation {
-                id: Some("d1"),
-                name: "delete_subagent",
-                arguments_json: r#"{"agent":"agent-3"}"#,
-            })
+            .invoke(&call("d1", r#"{"agent":"agent-3"}"#))
             .unwrap();
         assert!(ok.ok);
 
         let refused = delete
-            .invoke(&ToolInvocation {
-                id: Some("d2"),
-                name: "delete_subagent",
-                arguments_json: r#"{"agent":"agent-1"}"#,
-            })
+            .invoke(&call("d2", r#"{"agent":"agent-1"}"#))
             .unwrap();
         assert!(!refused.ok);
 

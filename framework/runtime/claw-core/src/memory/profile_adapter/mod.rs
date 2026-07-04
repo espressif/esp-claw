@@ -3,16 +3,16 @@
 //! The store lives in `claw-memory`; this adapter is the agent-runtime layer that
 //! maps documents to `BlockKind`s and optionally exposes profile-specific tools.
 
+use claw_capability::Tool;
 use claw_context::{Block, BlockKind, ContextSink};
 use claw_interface::ClawFs;
 use claw_memory::{ProfileDocument, ProfileStore};
-use claw_tool::ToolGroup;
 
 use crate::memory::traits::{ContextAdapter, ContextAdapterInput};
 
 mod tools;
 
-use self::tools::profile_tool_group;
+use self::tools::profile_tools;
 
 const PROFILE_ADAPTER_ID: &str = "profile";
 
@@ -65,10 +65,10 @@ impl<F: ClawFs + Clone + 'static> ContextAdapter for ProfileContextAdapter<F> {
         }
     }
 
-    fn tools(&self) -> Vec<ToolGroup> {
+    fn tools(&self) -> Vec<Tool> {
         match self.tools {
             ProfileTools::Disabled => Vec::new(),
-            ProfileTools::Writable => vec![profile_tool_group(self.store.clone())],
+            ProfileTools::Writable => profile_tools(self.store.clone()),
         }
     }
 }
@@ -89,7 +89,6 @@ mod tests {
     use claw_context::Context;
     use claw_interface::MemFs;
     use claw_memory::ProfileConfig;
-    use claw_tool::ToolSet;
     use serde_json::Value;
 
     use super::*;
@@ -125,15 +124,8 @@ mod tests {
         let mut adapter = ProfileContextAdapter::new(store, ProfileTools::Disabled);
         let mut context = Context::new();
         let history = EmptyHistory;
-        let tools = ToolSet::empty();
         let mut sink = context.sink();
-        adapter.contribute(
-            ContextAdapterInput {
-                history: &history,
-                tools: &tools,
-            },
-            &mut sink,
-        );
+        adapter.contribute(ContextAdapterInput { history: &history }, &mut sink);
         drop(sink);
 
         assert_eq!(system_of(&mut context), "SOUL\n\nIDENTITY\n\nUSER");
@@ -147,16 +139,8 @@ mod tests {
         let mut context = Context::new();
         context.with(Block::new(BlockKind::Soul, "OLD"));
         let history = EmptyHistory;
-        let tools = ToolSet::empty();
-
         let mut sink = context.sink();
-        adapter.contribute(
-            ContextAdapterInput {
-                history: &history,
-                tools: &tools,
-            },
-            &mut sink,
-        );
+        adapter.contribute(ContextAdapterInput { history: &history }, &mut sink);
         drop(sink);
 
         assert_eq!(system_of(&mut context), "");

@@ -8,9 +8,9 @@ mod tools;
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use claw_capability::Tool;
 use claw_context::{Block, BlockKind, ContextSink};
 use claw_skill::{SkillError, SkillId, SkillRegistry, SkillSet};
-use claw_tool::ToolGroup;
 
 use super::traits::{ContextAdapter, ContextAdapterInput};
 
@@ -46,8 +46,8 @@ impl ContextAdapter for SkillContextAdapter {
         }
     }
 
-    fn tools(&self) -> Vec<ToolGroup> {
-        vec![tools::skill_tool_group(Arc::clone(&self.state))]
+    fn tools(&self) -> Vec<Tool> {
+        tools::skill_tools(Arc::clone(&self.state))
     }
 }
 
@@ -86,14 +86,14 @@ impl SkillAdapterState {
 pub(crate) mod test_support {
     use std::sync::Arc;
 
+    use claw_capability::Tool;
     use claw_interface::{ClawFs, MemFs};
     use claw_skill::{FsSkillRegistry, SkillRegistry, SkillSet};
-    use claw_tool::{Tool, ToolGroup};
 
-    use super::{tools::skill_tool_group, SkillAdapterState};
+    use super::{tools::skill_tools, SkillAdapterState};
 
-    pub(crate) fn skill_tool_group_for_test(skills: SkillSet) -> ToolGroup {
-        skill_tool_group(Arc::new(SkillAdapterState::new(skills)))
+    pub(crate) fn skill_tools_for_test(skills: SkillSet) -> Vec<Tool> {
+        skill_tools(Arc::new(SkillAdapterState::new(skills)))
     }
 
     /// Write a minimal `SKILL.md` for `id` under the `skills` root of `fs`, so
@@ -124,10 +124,9 @@ pub(crate) mod test_support {
         (fs, registry)
     }
 
-    /// The tool named `name` in `group` (cloned), panicking if absent.
-    pub(crate) fn tool_named(group: &ToolGroup, name: &str) -> Tool {
-        group
-            .tools()
+    /// The tool named `name` in `tools` (cloned), panicking if absent.
+    pub(crate) fn tool_named(tools: &[Tool], name: &str) -> Tool {
+        tools
             .iter()
             .find(|tool| tool.name() == name)
             .unwrap()

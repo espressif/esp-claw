@@ -84,6 +84,18 @@ impl ToolInvokeError {
     }
 }
 
+impl fmt::Display for ToolInvokeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.error.fmt(formatter)
+    }
+}
+
+impl std::error::Error for ToolInvokeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
+}
+
 impl From<ToolError> for ToolInvokeError {
     fn from(error: ToolError) -> Self {
         Self::new(error)
@@ -127,7 +139,7 @@ pub trait ToolSpec: Send + Sync {
     }
 
     fn classify(&self, _call: &ToolInvocation<'_>) -> Action {
-        Action::new(self.name(), RiskClass::Safe)
+        Action::new(self.name(), RiskClass::High)
     }
 }
 

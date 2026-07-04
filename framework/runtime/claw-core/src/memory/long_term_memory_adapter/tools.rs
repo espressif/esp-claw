@@ -8,42 +8,36 @@
 //! returned by recall/list, which the adapter routes back to the owning store by
 //! its prefix.
 
+use claw_capability::{
+    tool_metadata, SyncToolHandler, Tool, ToolError, ToolInvocation, ToolInvokeError, ToolOutput,
+    ToolSpec,
+};
 use claw_interface::ClawFs;
 use claw_memory::{MemoryDraft, MemoryId, MemoryItem, MemoryPatch, StoreOutcome};
-use claw_tool::{
-    tool_metadata, Tool, ToolError, ToolGroup, ToolHandler, ToolInvocation, ToolInvokeError,
-    ToolOutput,
-};
 use serde_json::Value;
 
 use super::{MemoryStores, MemoryTierHint};
 
-/// Group label for the long-term memory tools (provenance only).
-pub(crate) const MEMORY_TOOL_GROUP: &str = "memory";
-
 /// Default `memory_recall` / `memory_list` result cap when the model omits one.
 const DEFAULT_RECALL_LIMIT: usize = 20;
 
-/// Build the long-term memory tool group over the shared stores.
-pub(crate) fn memory_tool_group<F: ClawFs + 'static>(stores: MemoryStores<F>) -> ToolGroup {
-    ToolGroup::new(
-        MEMORY_TOOL_GROUP,
-        [
-            Tool::new(MemoryStoreTool {
-                stores: stores.clone(),
-            }),
-            Tool::new(MemoryRecallTool {
-                stores: stores.clone(),
-            }),
-            Tool::new(MemoryListTool {
-                stores: stores.clone(),
-            }),
-            Tool::new(MemoryUpdateTool {
-                stores: stores.clone(),
-            }),
-            Tool::new(MemoryForgetTool { stores }),
-        ],
-    )
+/// Build the long-term memory tools over the shared stores.
+pub(crate) fn memory_tools<F: ClawFs + 'static>(stores: MemoryStores<F>) -> Vec<Tool> {
+    vec![
+        Tool::from_sync(MemoryStoreTool {
+            stores: stores.clone(),
+        }),
+        Tool::from_sync(MemoryRecallTool {
+            stores: stores.clone(),
+        }),
+        Tool::from_sync(MemoryListTool {
+            stores: stores.clone(),
+        }),
+        Tool::from_sync(MemoryUpdateTool {
+            stores: stores.clone(),
+        }),
+        Tool::from_sync(MemoryForgetTool { stores }),
+    ]
 }
 
 // -- memory_store -----------------------------------------------------------
@@ -52,9 +46,11 @@ struct MemoryStoreTool<F: ClawFs + 'static> {
     stores: MemoryStores<F>,
 }
 
-impl<F: ClawFs + 'static> ToolHandler for MemoryStoreTool<F> {
+impl<F: ClawFs + 'static> ToolSpec for MemoryStoreTool<F> {
     tool_metadata!("memory_store");
+}
 
+impl<F: ClawFs + 'static> SyncToolHandler for MemoryStoreTool<F> {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let args = parse_object(call)?;
         let content = required_string(&args, "content")?;
@@ -79,9 +75,11 @@ struct MemoryRecallTool<F: ClawFs + 'static> {
     stores: MemoryStores<F>,
 }
 
-impl<F: ClawFs + 'static> ToolHandler for MemoryRecallTool<F> {
+impl<F: ClawFs + 'static> ToolSpec for MemoryRecallTool<F> {
     tool_metadata!("memory_recall");
+}
 
+impl<F: ClawFs + 'static> SyncToolHandler for MemoryRecallTool<F> {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let args = parse_object(call)?;
         let labels = string_array(&args, "labels");
@@ -102,9 +100,11 @@ struct MemoryListTool<F: ClawFs + 'static> {
     stores: MemoryStores<F>,
 }
 
-impl<F: ClawFs + 'static> ToolHandler for MemoryListTool<F> {
+impl<F: ClawFs + 'static> ToolSpec for MemoryListTool<F> {
     tool_metadata!("memory_list");
+}
 
+impl<F: ClawFs + 'static> SyncToolHandler for MemoryListTool<F> {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let args = parse_object(call)?;
         let limit = optional_limit(&args);
@@ -123,9 +123,11 @@ struct MemoryUpdateTool<F: ClawFs + 'static> {
     stores: MemoryStores<F>,
 }
 
-impl<F: ClawFs + 'static> ToolHandler for MemoryUpdateTool<F> {
+impl<F: ClawFs + 'static> ToolSpec for MemoryUpdateTool<F> {
     tool_metadata!("memory_update");
+}
 
+impl<F: ClawFs + 'static> SyncToolHandler for MemoryUpdateTool<F> {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let args = parse_object(call)?;
         let id = MemoryId::from(required_string(&args, "id")?.as_str());
@@ -153,9 +155,11 @@ struct MemoryForgetTool<F: ClawFs + 'static> {
     stores: MemoryStores<F>,
 }
 
-impl<F: ClawFs + 'static> ToolHandler for MemoryForgetTool<F> {
+impl<F: ClawFs + 'static> ToolSpec for MemoryForgetTool<F> {
     tool_metadata!("memory_forget");
+}
 
+impl<F: ClawFs + 'static> SyncToolHandler for MemoryForgetTool<F> {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let args = parse_object(call)?;
         let id = MemoryId::from(required_string(&args, "id")?.as_str());
@@ -177,10 +181,10 @@ impl<F: ClawFs + 'static> ToolHandler for MemoryForgetTool<F> {
 /// Parse a call's arguments into a JSON object (arguments are already schema-
 /// validated by the tool set, but parse defensively).
 fn parse_object(call: &ToolInvocation<'_>) -> Result<Value, ToolInvokeError> {
-    if call.arguments_json.trim().is_empty() {
+    if call.arguments_json().trim().is_empty() {
         return Ok(Value::Object(serde_json::Map::new()));
     }
-    serde_json::from_str(call.arguments_json)
+    serde_json::from_str(call.arguments_json())
         .map_err(|error| ToolInvokeError::new(ToolError::InvalidArgumentsJson(error.to_string())))
 }
 
@@ -192,7 +196,7 @@ fn required_string(args: &Value, key: &str) -> Result<String, ToolInvokeError> {
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .ok_or_else(|| {
-            ToolInvokeError::new(ToolError::invoke_rejected(format!(
+            ToolInvokeError::new(ToolError::InvokeRejected(format!(
                 "missing required string field '{key}'"
             )))
         })?;

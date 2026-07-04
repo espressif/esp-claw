@@ -75,40 +75,17 @@ impl<'a> ToolRunner<'a> {
 }
 
 fn render_before_permission(error: ToolInvokeError) -> ToolRunOutcome {
-    match error.error {
-        ToolError::InvokeRejected(message) => ToolRunOutcome::Blocked { content: message },
-        error => render_after_execution(ToolInvokeError { error }),
+    match &error.error {
+        ToolError::InvokeRejected(message) => ToolRunOutcome::Blocked {
+            content: message.clone(),
+        },
+        _ => render_after_execution(error),
     }
 }
 
 fn render_after_execution(error: ToolInvokeError) -> ToolRunOutcome {
     ToolRunOutcome::Ran {
-        content: render_tool_error(error.error),
+        content: error.to_string(),
         ok: false,
-    }
-}
-
-fn render_tool_error(error: ToolError) -> String {
-    match error {
-        ToolError::NotFound(name) => {
-            let mut text = String::from("tool not found: ");
-            text.push_str(&name);
-            text
-        }
-        ToolError::InvalidArgumentsJson(message) => {
-            let mut text = String::from("invalid arguments json: ");
-            text.push_str(&message);
-            text
-        }
-        ToolError::InvalidArguments(message) => {
-            let mut text = String::from("invalid arguments: ");
-            text.push_str(&message);
-            text
-        }
-        ToolError::InvokeRejected(message) => {
-            let mut text = String::from("tool invocation rejected: ");
-            text.push_str(&message);
-            text
-        }
     }
 }

@@ -11,7 +11,7 @@
 //! build fails with `UnknownCapability`) and `build_skills` returns
 //! [`SkillError::NotFound`].
 //!
-//! The seam speaks [`Capability`] rather than the internal `claw_tool::Tool`:
+//! The seam speaks [`Capability`] rather than the internal `claw_capability::Tool`:
 //! callers describe their device in one vocabulary, and `claw-core` decomposes a
 //! resolved capability into its tool internally (see `AgentConfig::resolve`).
 
@@ -59,7 +59,7 @@ pub trait AgentResolver {
 }
 
 /// Group label applied to every skill a manifest asks for (parallels a
-/// `ToolGroup` name — it tags provenance in the assembled skill context).
+/// skill group name — it tags provenance in the assembled skill context.
 const MANIFEST_SKILL_GROUP: &str = "manifest";
 
 /// Load `skill_ids` from `registry` into a fresh [`SkillSet`], the shared body
@@ -86,7 +86,7 @@ fn build_manifest_skills(
 ///
 /// ```ignore
 /// let resolver = MapAgentResolver::new()
-///     .with_capability(Capability::from_tool(Tool::new(MyToolHandler)))
+///     .with_capability(Capability::from_tool(Tool::from_sync(MyTool)))
 ///     .with_skill_registry(registry);
 /// ```
 pub struct MapAgentResolver {
@@ -163,17 +163,22 @@ impl AgentResolver for MapAgentResolver {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use claw_capability::{Tool, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput};
+    use claw_capability::{
+        SyncToolHandler, Tool, ToolInvocation, ToolInvokeError, ToolOutput, ToolSpec,
+    };
 
     struct DummyTool;
 
-    impl ToolHandler for DummyTool {
+    impl ToolSpec for DummyTool {
         fn name(&self) -> &str {
             "do_thing"
         }
         fn schema(&self) -> &str {
             r#"{"type":"function","function":{"name":"do_thing"}}"#
         }
+    }
+
+    impl SyncToolHandler for DummyTool {
         fn invoke(&self, _call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
             Ok(ToolOutput {
                 output: "ok".into(),
@@ -184,8 +189,8 @@ mod tests {
 
     #[test]
     fn known_capability_resolves_unknown_is_none() {
-        let resolver =
-            MapAgentResolver::new().with_capability(Capability::from_tool(Tool::new(DummyTool)));
+        let resolver = MapAgentResolver::new()
+            .with_capability(Capability::from_tool(Tool::from_sync(DummyTool)));
         assert!(resolver.resolve_capability("do_thing").is_some());
         assert!(resolver.resolve_capability("missing").is_none());
     }
@@ -193,7 +198,7 @@ mod tests {
     #[test]
     fn named_alias_overrides_the_key() {
         let resolver = MapAgentResolver::new()
-            .with_named_capability("aliased", Capability::from_tool(Tool::new(DummyTool)));
+            .with_named_capability("aliased", Capability::from_tool(Tool::from_sync(DummyTool)));
         assert!(resolver.resolve_capability("aliased").is_some());
         // The capability's own id is not registered when an alias is used.
         assert!(resolver.resolve_capability("do_thing").is_none());

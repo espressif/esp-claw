@@ -26,7 +26,7 @@ Action  ──evaluate──>  PermissionPolicy  ──>  PermissionDecision
 
 The permission layer never sees the tool itself — only the `Action` it
 produces. A tool builds an `Action` for each call in its `classify` method
-(over in `claw-tool`); this crate classifies it.
+(over in `claw-capability::tool`); this crate classifies it.
 
 ## Public API
 
@@ -94,6 +94,6 @@ cargo run --example custom_policy  --target x86_64-unknown-linux-gnu
 ## Where it fits
 
 `claw-permission` is a pure-Rust core crate with no platform dependencies. In the
-firmware, `claw-tool`'s `PermissionGate` wraps a `PermissionPolicy` plus a
-`GrantStore` and implements `claw-tool`'s `ToolGate`, which the `ToolRunner`
-consults before executing each classified tool call.
+agent runtime, `base_agent` wraps a `PermissionPolicy` plus a `GrantStore` and
+implements `claw-capability`'s `ToolGate`, which the `ToolRunner` consults
+before executing each classified tool call.

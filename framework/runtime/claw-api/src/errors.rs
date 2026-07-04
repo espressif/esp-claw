@@ -45,6 +45,12 @@ impl ClawApiError {
     pub fn is_retryable(&self) -> bool {
         matches!(self, ClawApiError::TransientTransport(_))
     }
+
+    /// Whether this failure came from aborting an in-flight request.
+    #[must_use]
+    pub fn is_aborted(&self) -> bool {
+        matches!(self, ClawApiError::Transport(message) if message.contains("aborted"))
+    }
 }
 
 /// Failures from constructing a [`crate::ClawApi`] (config validation + backend
@@ -119,6 +125,12 @@ impl ChatError {
     #[must_use]
     pub fn is_retryable(&self) -> bool {
         matches!(self, ChatError::Api(err) if err.is_retryable())
+    }
+
+    /// Whether this chat request was aborted by the caller.
+    #[must_use]
+    pub fn is_aborted(&self) -> bool {
+        matches!(self, ChatError::Api(err) if err.is_aborted())
     }
 }
 

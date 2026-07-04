@@ -134,7 +134,6 @@ dependencies = [
  "claw-interface",
  "claw-memory",
  "claw-skill",
- "claw-tool",
  "claw-utils",
  "dotenvy",
  "serde_json",
@@ -219,7 +218,6 @@ dependencies = [
  "claw-memory",
  "claw-permission",
  "claw-skill",
- "claw-tool",
  "claw-utils",
  "dotenvy",
  "proc-macro2",
@@ -312,18 +310,6 @@ dependencies = [
  "claw-sys",
  "edge-executor",
  "log",
-]
-
-[[package]]
-name = "claw-tool"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "claw-interface",
- "claw-permission",
- "claw-utils",
- "serde_json",
- "thiserror",
 ]
 
 [[package]]

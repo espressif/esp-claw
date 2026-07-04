@@ -15,7 +15,6 @@ members = [
     "claw-memory",
     "claw-context",
     "claw-permission",
-    "claw-tool",
     "claw-sandbox",
     # Device-only (`#![cfg(target_os = "espidf")]`) staticlib crates that back
     # the on-device ESP-IDF integration test apps. They build to empty archives

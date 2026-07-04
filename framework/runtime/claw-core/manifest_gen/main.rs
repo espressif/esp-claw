@@ -6,10 +6,9 @@
 //! - [`agent_manifests`] turns `resources/agents/<kind>/` into typed
 //!   `AgentManifest` statics in `$OUT_DIR/manifests.rs` (`include!`-d by
 //!   `agent::manifest`).
-//! - `claw_tool::bake` validates the `resources/tools/<function.name>/` layout
+//! - `claw_capability::bake` validates the `resources/tools/<function.name>/` layout
 //!   (`schema.json` + `usage.md`) that the `tool_metadata!` macro `include_str!`s.
-//!   The validator lives in `claw-tool` (a `bake`-only build dependency) so it
-//!   stays in lockstep with that crate's runtime macro.
+//!   The validator lives with the tool runtime.
 //!
 //! To add another generator, give it its own module exposing a `generate(...)`
 //! entry and call it here; keep this function free of generation logic.
@@ -45,9 +44,8 @@ fn main() -> Result<()> {
 
     // Generators run as independent steps; add more calls here as needed.
     agent_manifests::generate(&manifest_dir, &out_dir)?;
-    // The tool-directory contract is enforced by claw-tool (the same crate whose
-    // `tool_metadata!` macro reads these files at runtime).
-    claw_tool::bake::validate_tools_dir(&manifest_dir.join("resources/tools"))?;
+    // The tool-directory contract is enforced by the tool runtime.
+    claw_capability::bake::validate_tools_dir(&manifest_dir.join("resources/tools"))?;
 
     Ok(())
 }

@@ -19,6 +19,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use claw_api::{ClawApiAsync, ClawApiConfig};
+use claw_capability::CapabilityRegistry;
 use claw_context::Block;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::{
@@ -191,6 +192,8 @@ pub struct FsAgentFactory<
     /// minted from this config plus a freshly constructed `H::default()`
     /// transport, so no transport instance is shared between agents.
     llm_config: ClawApiConfig,
+    /// Central capability registry used to seed each agent tool set.
+    capabilities: Arc<CapabilityRegistry>,
     /// Marks the HTTP transport type minted per agent. `fn() -> H` so the marker
     /// is independent of owning an `H` value (the factory only *produces* `H`).
     _http: PhantomData<fn() -> H>,
@@ -233,6 +236,7 @@ impl<
     /// internal extraction LLM client cannot be initialized.
     pub fn new(
         resolver: Arc<dyn AgentResolver>,
+        capabilities: Arc<CapabilityRegistry>,
         llm_config: ClawApiConfig,
         persistence_dir: &str,
     ) -> Result<Self, FsAgentFactoryError> {
@@ -256,6 +260,7 @@ impl<
         Ok(Self {
             resolver,
             llm_config,
+            capabilities,
             _http: PhantomData,
             _timer: PhantomData,
             transcript_dir: layout.transcript_dir,
@@ -294,12 +299,17 @@ impl<
         host: Arc<dyn GraphHost>,
         inherited_context: Arc<[Block<'static>]>,
     ) -> Result<Box<dyn Agent>, String> {
-        // The config is pure data; which graph tools attach is decided in
-        // `GenericAgent::new` from the manifest's `spawn.enabled`, the host's
-        // presence, and whether the placement is the session root.
-        let config = AgentConfig::resolve(kind.as_str(), self.resolver.as_ref())
+        // The config is pure data. Registry tools are projected here, then
+        // manifest tools are added as local tools before the agent sees them.
+        let mut config = AgentConfig::resolve(kind.as_str(), self.resolver.as_ref())
             .map_err(|error| format!("resolving config for kind '{kind}': {error}"))?;
         let is_root = placement.is_root();
+        let mut tools = self.capabilities.tool_set();
+        for tool in config.tools.drain(..) {
+            tools
+                .add_tool(tool)
+                .map_err(|error| format!("assembling tools for {kind} agent {id}: {error}"))?;
+        }
 
         // Roots and subagents live in separate subtrees keyed by session id vs
         // agent id, so a root transcript is found again on restart while subagent
@@ -316,6 +326,7 @@ impl<
             self.llm_config.clone(),
             store,
             config,
+            tools,
             host,
             is_root,
             inherited_context,
@@ -371,15 +382,14 @@ mod tests {
     use std::task::{Wake, Waker};
 
     use claw_api::BackendKind;
-    use claw_interface::{BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp, StdThread};
+    use claw_interface::{BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp};
     use serde_json::json;
 
     use super::*;
     use crate::agent::base_agent::TickOutcome;
     use crate::agent::graph::GraphEffect;
-    use claw_capability::Capability;
+    use claw_capability::{Capability, CapabilityRegistry};
     use claw_skill::{SkillError, SkillId, SkillSet};
-    use claw_tool::init_tool_executor;
 
     struct NoopWake;
     impl Wake for NoopWake {
@@ -387,7 +397,6 @@ mod tests {
     }
 
     fn block_on<F: Future>(future: F) -> F::Output {
-        init_tool_executor(StdThread).expect("tool executor");
         let mut future = Box::pin(future);
         let waker = Waker::from(Arc::new(NoopWake));
         let mut context = Context::from_waker(&waker);
@@ -446,6 +455,7 @@ mod tests {
         );
         FsAgentFactory::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new(
             Arc::new(EmptyResolver),
+            Arc::new(CapabilityRegistry::new()),
             llm_config,
             "/mem",
         )

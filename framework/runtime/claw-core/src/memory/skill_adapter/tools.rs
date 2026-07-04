@@ -2,28 +2,23 @@
 
 use std::sync::Arc;
 
-use claw_skill::{SkillError, SkillId, SkillRegistry};
-use claw_tool::{
-    tool_metadata, Tool, ToolError, ToolGroup, ToolHandler, ToolInvocation, ToolInvokeError,
-    ToolOutput,
+use claw_capability::{
+    tool_metadata, SyncToolHandler, Tool, ToolError, ToolInvocation, ToolInvokeError, ToolOutput,
+    ToolSpec,
 };
+use claw_skill::{SkillError, SkillId, SkillRegistry};
 use serde_json::Value;
 
 use super::SkillAdapterState;
 
-const SKILL_TOOL_GROUP: &str = "skills";
-
-pub(super) fn skill_tool_group(state: Arc<SkillAdapterState>) -> ToolGroup {
+pub(super) fn skill_tools(state: Arc<SkillAdapterState>) -> Vec<Tool> {
     let registry = state.registry();
-    ToolGroup::new(
-        SKILL_TOOL_GROUP,
-        [
-            Tool::new(ListSkillsTool::new(Arc::clone(&registry))),
-            Tool::new(LoadSkillTool::new(Arc::clone(&state))),
-            Tool::new(UnloadSkillTool::new(state)),
-            Tool::new(ReloadSkillsTool::new(registry)),
-        ],
-    )
+    vec![
+        Tool::from_sync(ListSkillsTool::new(Arc::clone(&registry))),
+        Tool::from_sync(LoadSkillTool::new(Arc::clone(&state))),
+        Tool::from_sync(UnloadSkillTool::new(state)),
+        Tool::from_sync(ReloadSkillsTool::new(registry)),
+    ]
 }
 
 fn string_argument(arguments_json: &str, key: &str) -> Result<String, ToolError> {
@@ -51,9 +46,11 @@ impl ListSkillsTool {
     }
 }
 
-impl ToolHandler for ListSkillsTool {
+impl ToolSpec for ListSkillsTool {
     tool_metadata!("list_skills");
+}
 
+impl SyncToolHandler for ListSkillsTool {
     fn invoke(&self, _call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let snapshot = self.registry.catalog();
         let entries = snapshot.entries();
@@ -85,15 +82,17 @@ impl LoadSkillTool {
     }
 }
 
-impl ToolHandler for LoadSkillTool {
+impl ToolSpec for LoadSkillTool {
     tool_metadata!("load_skill");
+}
 
+impl SyncToolHandler for LoadSkillTool {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
-        let skill = string_argument(call.arguments_json, "skill")?;
+        let skill = string_argument(call.arguments_json(), "skill")?;
         let skill = skill.trim();
         if skill.is_empty() {
-            return Err(ToolError::invoke_rejected(
-                "`skill` is required: pass the id of a skill from list_skills.",
+            return Err(ToolError::InvokeRejected(
+                "`skill` is required: pass the id of a skill from list_skills.".to_string(),
             )
             .into());
         }
@@ -103,7 +102,7 @@ impl ToolHandler for LoadSkillTool {
                 output: format!("Skill \"{skill}\" loaded; its guidance is now in context."),
                 ok: true,
             }),
-            Err(SkillError::NotFound(_)) => Err(ToolError::invoke_rejected(format!(
+            Err(SkillError::NotFound(_)) => Err(ToolError::InvokeRejected(format!(
                 "unknown skill \"{skill}\"; call list_skills to see what is available."
             ))
             .into()),
@@ -126,15 +125,17 @@ impl UnloadSkillTool {
     }
 }
 
-impl ToolHandler for UnloadSkillTool {
+impl ToolSpec for UnloadSkillTool {
     tool_metadata!("unload_skill");
+}
 
+impl SyncToolHandler for UnloadSkillTool {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
-        let skill = string_argument(call.arguments_json, "skill")?;
+        let skill = string_argument(call.arguments_json(), "skill")?;
         let skill = skill.trim();
         if skill.is_empty() {
-            return Err(ToolError::invoke_rejected(
-                "`skill` is required: pass the id of a loaded skill.",
+            return Err(ToolError::InvokeRejected(
+                "`skill` is required: pass the id of a loaded skill.".to_string(),
             )
             .into());
         }
@@ -157,9 +158,11 @@ impl ReloadSkillsTool {
     }
 }
 
-impl ToolHandler for ReloadSkillsTool {
+impl ToolSpec for ReloadSkillsTool {
     tool_metadata!("reload_skills");
+}
 
+impl SyncToolHandler for ReloadSkillsTool {
     fn invoke(&self, _call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         if let Err(error) = self.registry.reload() {
             return Ok(ToolOutput {
@@ -178,36 +181,48 @@ impl ToolHandler for ReloadSkillsTool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use claw_capability::{CapabilityRegistry, RawToolInvocation};
     use claw_interface::ClawFs;
     use claw_skill::{SkillId, SkillSet};
 
     use super::super::test_support::{
-        skill_registry, skill_registry_with_fs, skill_tool_group_for_test, tool_named, write_skill,
+        skill_registry, skill_registry_with_fs, skill_tools_for_test, tool_named, write_skill,
     };
     use super::*;
 
-    fn invoke(tool: &claw_tool::Tool, name: &str) -> ToolOutput {
-        tool.invoke(&ToolInvocation {
+    fn call<'a>(name: &'a str, arguments_json: &'a str) -> ToolInvocation<'a> {
+        ToolInvocation::try_from(RawToolInvocation {
             id: Some("t1"),
             name,
-            arguments_json: "{}",
+            arguments_json,
         })
         .unwrap()
+    }
+
+    fn invoke_result(
+        tool: &claw_capability::Tool,
+        name: &str,
+        arguments_json: &str,
+    ) -> Result<ToolOutput, ToolInvokeError> {
+        let registry = CapabilityRegistry::new();
+        let mut tools = registry.tool_set();
+        tools.add_tool(tool.clone()).unwrap();
+        let handle = tools.begin().unwrap();
+        let call = call(name, arguments_json);
+        claw_utils::block_on(handle.invoke(&call))
+    }
+
+    fn invoke(tool: &claw_capability::Tool, name: &str) -> ToolOutput {
+        invoke_result(tool, name, "{}").unwrap()
     }
 
     #[test]
     fn lists_every_available_skill() {
         let registry = skill_registry(&[("alpha", "First skill"), ("beta", "Second skill")]);
-        let group = skill_tool_group_for_test(SkillSet::new(registry));
-        let tool = tool_named(&group, "list_skills");
+        let tools = skill_tools_for_test(SkillSet::new(registry));
+        let tool = tool_named(&tools, "list_skills");
 
-        let output = tool
-            .invoke(&ToolInvocation {
-                id: Some("t1"),
-                name: "list_skills",
-                arguments_json: "{}",
-            })
-            .unwrap();
+        let output = invoke(&tool, "list_skills");
         assert!(output.ok);
         assert!(output.output.contains("alpha: First skill"));
         assert!(output.output.contains("beta: Second skill"));
@@ -215,16 +230,10 @@ mod tests {
 
     #[test]
     fn reports_when_no_skills_are_available() {
-        let group = skill_tool_group_for_test(SkillSet::new(skill_registry(&[])));
-        let tool = tool_named(&group, "list_skills");
+        let tools = skill_tools_for_test(SkillSet::new(skill_registry(&[])));
+        let tool = tool_named(&tools, "list_skills");
 
-        let output = tool
-            .invoke(&ToolInvocation {
-                id: Some("t1"),
-                name: "list_skills",
-                arguments_json: "{}",
-            })
-            .unwrap();
+        let output = invoke(&tool, "list_skills");
         assert!(output.ok);
         assert!(output.output.contains("No skills are available"));
     }
@@ -235,16 +244,10 @@ mod tests {
             "alpha",
             "First skill",
         )]))));
-        let group = skill_tool_group(Arc::clone(&state));
-        let tool = tool_named(&group, "load_skill");
+        let tools = skill_tools(Arc::clone(&state));
+        let tool = tool_named(&tools, "load_skill");
 
-        let output = tool
-            .invoke(&ToolInvocation {
-                id: Some("t1"),
-                name: "load_skill",
-                arguments_json: r#"{"skill":"alpha"}"#,
-            })
-            .unwrap();
+        let output = invoke_result(&tool, "load_skill", r#"{"skill":"alpha"}"#).unwrap();
         assert!(output.ok);
 
         let loaded = state.lock().context().unwrap().to_string();
@@ -257,33 +260,21 @@ mod tests {
             "alpha",
             "First skill",
         )]))));
-        let group = skill_tool_group(Arc::clone(&state));
-        let tool = tool_named(&group, "load_skill");
+        let tools = skill_tools(Arc::clone(&state));
+        let tool = tool_named(&tools, "load_skill");
 
-        let error = tool
-            .invoke(&ToolInvocation {
-                id: Some("t1"),
-                name: "load_skill",
-                arguments_json: r#"{"skill":"missing"}"#,
-            })
-            .unwrap_err();
+        let error = invoke_result(&tool, "load_skill", r#"{"skill":"missing"}"#).unwrap_err();
         assert!(matches!(error.error, ToolError::InvokeRejected(_)));
         assert!(state.lock().is_empty());
     }
 
     #[test]
     fn blank_load_skill_is_rejected() {
-        let group =
-            skill_tool_group_for_test(SkillSet::new(skill_registry(&[("alpha", "First skill")])));
-        let tool = tool_named(&group, "load_skill");
+        let tools =
+            skill_tools_for_test(SkillSet::new(skill_registry(&[("alpha", "First skill")])));
+        let tool = tool_named(&tools, "load_skill");
 
-        let error = tool
-            .invoke(&ToolInvocation {
-                id: Some("t1"),
-                name: "load_skill",
-                arguments_json: r#"{"skill":"   "}"#,
-            })
-            .unwrap_err();
+        let error = invoke_result(&tool, "load_skill", r#"{"skill":"   "}"#).unwrap_err();
         assert!(matches!(error.error, ToolError::InvokeRejected(_)));
     }
 
@@ -293,41 +284,29 @@ mod tests {
         let mut skills = SkillSet::new(registry);
         skills.load("test", SkillId::new("alpha")).unwrap();
         let state = Arc::new(SkillAdapterState::new(skills));
-        let group = skill_tool_group(Arc::clone(&state));
-        let tool = tool_named(&group, "unload_skill");
+        let tools = skill_tools(Arc::clone(&state));
+        let tool = tool_named(&tools, "unload_skill");
 
-        let output = tool
-            .invoke(&ToolInvocation {
-                id: Some("t1"),
-                name: "unload_skill",
-                arguments_json: r#"{"skill":"alpha"}"#,
-            })
-            .unwrap();
+        let output = invoke_result(&tool, "unload_skill", r#"{"skill":"alpha"}"#).unwrap();
         assert!(output.ok);
         assert!(state.lock().is_empty());
     }
 
     #[test]
     fn blank_unload_skill_is_rejected() {
-        let group = skill_tool_group_for_test(SkillSet::new(skill_registry(&[])));
-        let tool = tool_named(&group, "unload_skill");
+        let tools = skill_tools_for_test(SkillSet::new(skill_registry(&[])));
+        let tool = tool_named(&tools, "unload_skill");
 
-        let error = tool
-            .invoke(&ToolInvocation {
-                id: Some("t1"),
-                name: "unload_skill",
-                arguments_json: r#"{"skill":""}"#,
-            })
-            .unwrap_err();
+        let error = invoke_result(&tool, "unload_skill", r#"{"skill":""}"#).unwrap_err();
         assert!(matches!(error.error, ToolError::InvokeRejected(_)));
     }
 
     #[test]
     fn reload_exposes_a_filesystem_addition_to_list_skills() {
         let (fs, registry) = skill_registry_with_fs(&[("alpha", "First skill")]);
-        let group = skill_tool_group_for_test(SkillSet::new(registry));
-        let reload = tool_named(&group, "reload_skills");
-        let list = tool_named(&group, "list_skills");
+        let tools = skill_tools_for_test(SkillSet::new(registry));
+        let reload = tool_named(&tools, "reload_skills");
+        let list = tool_named(&tools, "list_skills");
 
         write_skill(&fs, "gamma", "Late skill");
         assert!(!invoke(&list, "list_skills").output.contains("gamma"));
@@ -342,8 +321,8 @@ mod tests {
     #[test]
     fn reload_reports_failure_without_panicking() {
         let (fs, registry) = skill_registry_with_fs(&[("alpha", "First skill")]);
-        let group = skill_tool_group_for_test(SkillSet::new(registry));
-        let reload = tool_named(&group, "reload_skills");
+        let tools = skill_tools_for_test(SkillSet::new(registry));
+        let reload = tool_named(&tools, "reload_skills");
 
         fs.write_atomic("skills/broken/SKILL.md", b"no front matter here")
             .unwrap();

@@ -15,13 +15,13 @@
 
 use std::sync::Arc;
 
+use claw_capability::Tool;
 use claw_context::{Block, BlockKind, ContextSink};
 use claw_interface::ClawFs;
 use claw_memory::{
     LongTermConfig, LongTermError, LongTermInitError, LongTermMemory, MemoryDraft, MemoryId,
     MemoryItem, MemoryPatch, StoreOutcome,
 };
-use claw_tool::ToolGroup;
 use serde_json::Value;
 
 use crate::memory::traits::{ContextAdapter, ContextAdapterFuture, ContextAdapterInput, History};
@@ -40,7 +40,7 @@ pub use llm_compactor::LlmCompactor;
 pub use llm_extractor::LlmExtractor;
 pub use tier::{MemoryTier, MemoryTierHint, RuleBasedTierClassifier, TierClassifier};
 
-use self::tools::memory_tool_group;
+use self::tools::memory_tools;
 
 /// Id prefix for the shared global store.
 pub const GLOBAL_ID_PREFIX: &str = "g-";
@@ -356,8 +356,8 @@ impl<F: ClawFs + 'static> ContextAdapter for LongTermMemoryContextAdapter<F> {
         ));
     }
 
-    fn tools(&self) -> Vec<ToolGroup> {
-        vec![memory_tool_group(self.stores.clone())]
+    fn tools(&self) -> Vec<Tool> {
+        memory_tools(self.stores.clone())
     }
 }
 

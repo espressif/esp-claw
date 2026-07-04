@@ -3,10 +3,11 @@
 
 use std::sync::Arc;
 
-use claw_permission::{Action, RiskClass};
-use claw_tool::{
-    tool_metadata, ToolError, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput,
+use claw_capability::{
+    tool_metadata, SyncToolHandler, ToolError, ToolInvocation, ToolInvokeError, ToolOutput,
+    ToolSpec,
 };
+use claw_permission::{Action, RiskClass};
 
 use crate::agent::graph::{AgentContext, SpawnPolicy, TerminationPolicy};
 use crate::agent::kind::AgentKind;
@@ -26,7 +27,7 @@ fn non_blank_argument(arguments_json: &str, key: &str) -> Result<String, ToolErr
     }
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err(ToolError::invoke_rejected(format!(
+        return Err(ToolError::InvokeRejected(format!(
             "spawn_subagent '{key}' must not be blank"
         )));
     }
@@ -43,7 +44,7 @@ fn parse_termination(raw: &str) -> Result<TerminationPolicy, ToolError> {
     match raw.trim() {
         "" | "auto" => Ok(TerminationPolicy::AutoOnIdle),
         "manual" => Ok(TerminationPolicy::Manual),
-        other => Err(ToolError::invoke_rejected(format!(
+        other => Err(ToolError::InvokeRejected(format!(
             "spawn_subagent 'termination' must be one of auto|manual, got '{other}'"
         ))),
     }
@@ -66,16 +67,18 @@ impl SpawnSubagentTool {
     }
 }
 
-impl ToolHandler for SpawnSubagentTool {
+impl ToolSpec for SpawnSubagentTool {
     tool_metadata!("spawn_subagent");
 
     fn classify(&self, _call: &ToolInvocation<'_>) -> Action {
         // Creating a child mutates the graph — worth a policy look, but reversible.
         Action::new("spawn_subagent", RiskClass::Moderate)
     }
+}
 
+impl SyncToolHandler for SpawnSubagentTool {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
-        let kind = AgentKind::new(non_blank_argument(call.arguments_json, "kind")?);
+        let kind = AgentKind::new(non_blank_argument(call.arguments_json(), "kind")?);
 
         // Enforce the manifest's `allowed_kinds`. A disallowed kind is refused with
         // a matched tool error (`ok = false`, like soft-hide gating) so the model
@@ -123,11 +126,12 @@ impl ToolHandler for SpawnSubagentTool {
             });
         }
 
-        let name = non_blank_argument(call.arguments_json, "name")?;
-        let goal = non_blank_argument(call.arguments_json, "goal")?;
+        let name = non_blank_argument(call.arguments_json(), "name")?;
+        let goal = non_blank_argument(call.arguments_json(), "goal")?;
         // Optional lifecycle policy: default one-shot (`auto`); `manual` keeps the
         // child alive and idle after it yields so this agent can supervise it.
-        let termination = parse_termination(&string_argument(call.arguments_json, "termination")?)?;
+        let termination =
+            parse_termination(&string_argument(call.arguments_json(), "termination")?)?;
         let child = self
             .context
             .spawn(kind, Some(name.clone()), goal, termination);
@@ -143,16 +147,24 @@ impl ToolHandler for SpawnSubagentTool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use super::super::{subagent_tool_group, test_support::tool_named};
     use super::*;
     use crate::agent::base_agent::AgentId;
     use crate::agent::graph::test_support::{context_for, spawned_kinds, RecordingHost};
     use crate::agent::graph::{GraphEffect, GraphHost};
-    use claw_tool::ToolSet;
+    use claw_capability::RawToolInvocation;
 
-    fn spawn_tool(host: Arc<RecordingHost>, policy: SpawnPolicy) -> claw_tool::Tool {
+    fn spawn_tool(host: Arc<RecordingHost>, policy: SpawnPolicy) -> SpawnSubagentTool {
         let context = context_for(host as Arc<dyn GraphHost>, AgentId(1));
-        tool_named(&subagent_tool_group(context, policy), "spawn_subagent")
+        SpawnSubagentTool::new(context, policy)
+    }
+
+    fn call<'a>(arguments_json: &'a str) -> ToolInvocation<'a> {
+        ToolInvocation::try_from(RawToolInvocation {
+            id: Some("t1"),
+            name: "spawn_subagent",
+            arguments_json,
+        })
+        .unwrap()
     }
 
     #[test]
@@ -184,11 +196,7 @@ mod tests {
         );
 
         let output = tool
-            .invoke(&ToolInvocation {
-                id: Some("t1"),
-                name: "spawn_subagent",
-                arguments_json: r#"{"kind":"researcher","name":"r","goal":"x"}"#,
-            })
+            .invoke(&call(r#"{"kind":"researcher","name":"r","goal":"x"}"#))
             .unwrap();
 
         // Refused as a matched tool error (not Err), and no spawn was emitted.
@@ -207,11 +215,7 @@ mod tests {
         );
 
         let output = tool
-            .invoke(&ToolInvocation {
-                id: Some("t1"),
-                name: "spawn_subagent",
-                arguments_json: r#"{"kind":"worker","name":"w","goal":"x"}"#,
-            })
+            .invoke(&call(r#"{"kind":"worker","name":"w","goal":"x"}"#))
             .unwrap();
 
         assert!(output.ok);
@@ -226,11 +230,7 @@ mod tests {
         // `conversation` is a baked kind outside any `Only` allow-set, so it
         // exercises `Any` permitting kinds beyond a fixed list.
         let output = tool
-            .invoke(&ToolInvocation {
-                id: Some("t1"),
-                name: "spawn_subagent",
-                arguments_json: r#"{"kind":"conversation","name":"chat","goal":"x"}"#,
-            })
+            .invoke(&call(r#"{"kind":"conversation","name":"chat","goal":"x"}"#))
             .unwrap();
 
         assert!(output.ok);
@@ -246,11 +246,7 @@ mod tests {
         );
 
         let output = tool
-            .invoke(&ToolInvocation {
-                id: Some("t1"),
-                name: "spawn_subagent",
-                arguments_json: r#"{"kind":"worker","name":"  scout  ","goal":"x"}"#,
-            })
+            .invoke(&call(r#"{"kind":"worker","name":"  scout  ","goal":"x"}"#))
             .unwrap();
 
         assert!(output.ok);
@@ -270,30 +266,18 @@ mod tests {
     #[test]
     fn spawn_requires_name_in_handler_validation() {
         let host = Arc::new(RecordingHost::default());
-        let context = context_for(Arc::clone(&host) as Arc<dyn GraphHost>, AgentId(1));
-        let set = ToolSet::from_groups([subagent_tool_group(
-            context,
+        let tool = spawn_tool(
+            Arc::clone(&host),
             SpawnPolicy::Only(vec![AgentKind::new("worker")]),
-        )])
-        .unwrap();
+        );
 
-        let missing_name = set.invoke(&ToolInvocation {
-            id: Some("t1"),
-            name: "spawn_subagent",
-            arguments_json: r#"{"kind":"worker","goal":"x"}"#,
-        });
+        let missing_name = tool.invoke(&call(r#"{"kind":"worker","goal":"x"}"#));
         let missing_name = missing_name.unwrap_err();
         assert!(matches!(missing_name.error, ToolError::InvalidArguments(_)));
-        assert!(missing_name.retries.is_none());
 
-        let empty_name = set.invoke(&ToolInvocation {
-            id: Some("t2"),
-            name: "spawn_subagent",
-            arguments_json: r#"{"kind":"worker","name":"","goal":"x"}"#,
-        });
+        let empty_name = tool.invoke(&call(r#"{"kind":"worker","name":"","goal":"x"}"#));
         let empty_name = empty_name.unwrap_err();
         assert!(matches!(empty_name.error, ToolError::InvalidArguments(_)));
-        assert!(empty_name.retries.is_none());
 
         assert!(host.effects.lock().unwrap().is_empty());
     }
@@ -301,23 +285,16 @@ mod tests {
     #[test]
     fn spawn_rejects_whitespace_only_name_after_trim() {
         let host = Arc::new(RecordingHost::default());
-        let context = context_for(Arc::clone(&host) as Arc<dyn GraphHost>, AgentId(1));
-        let set = ToolSet::from_groups([subagent_tool_group(
-            context,
+        let tool = spawn_tool(
+            Arc::clone(&host),
             SpawnPolicy::Only(vec![AgentKind::new("worker")]),
-        )])
-        .unwrap();
+        );
 
         // Schema `minLength` accepts whitespace; invoke trims and rejects blank.
-        let error = set
-            .invoke(&ToolInvocation {
-                id: Some("t1"),
-                name: "spawn_subagent",
-                arguments_json: r#"{"kind":"worker","name":"   ","goal":"x"}"#,
-            })
+        let error = tool
+            .invoke(&call(r#"{"kind":"worker","name":"   ","goal":"x"}"#))
             .unwrap_err();
         assert!(matches!(error.error, ToolError::InvokeRejected(_)));
-        assert!(error.retries.is_none());
         assert!(host.effects.lock().unwrap().is_empty());
     }
 
@@ -329,11 +306,7 @@ mod tests {
         // `Any` permits any string, but a non-baked kind cannot be built — it must
         // be refused here, not "spawned" and then silently dropped at materialize.
         let output = tool
-            .invoke(&ToolInvocation {
-                id: Some("t1"),
-                name: "spawn_subagent",
-                arguments_json: r#"{"kind":"ghost","name":"g","goal":"x"}"#,
-            })
+            .invoke(&call(r#"{"kind":"ghost","name":"g","goal":"x"}"#))
             .unwrap();
 
         assert!(!output.ok);

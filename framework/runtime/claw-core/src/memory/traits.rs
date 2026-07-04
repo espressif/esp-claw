@@ -21,10 +21,10 @@ use core::future::Future;
 use core::pin::Pin;
 use std::sync::Arc;
 
+use claw_capability::Tool;
 use claw_context::ContextSink;
 use claw_interface::ClawFs;
 use claw_memory::TranscriptStore;
-use claw_tool::{ToolGroup, ToolSet};
 use serde_json::{json, Value};
 
 /// The read view of the conversation transcript: the one capability request
@@ -150,8 +150,6 @@ impl<F: ClawFs + 'static> Transcript for TranscriptStore<F> {
 pub struct ContextAdapterInput<'a> {
     /// The conversation transcript read view.
     pub history: &'a dyn History,
-    /// The current tool set. It may be empty when this agent has no tools.
-    pub tools: &'a ToolSet,
 }
 
 /// Future returned by [`ContextAdapter::prepare`].
@@ -182,12 +180,12 @@ pub trait ContextAdapter {
     /// Project this source into the request context for the current iteration.
     fn contribute(&mut self, input: ContextAdapterInput<'_>, output: &mut ContextSink<'_>);
 
-    /// The model-callable tool groups this adapter provides.
+    /// The model-callable tools this adapter provides.
     ///
-    /// Merged into the agent's tool set when the adapter is registered. Tool names
+    /// Added into the agent's tool set when the adapter is registered. Tool names
     /// must be globally unique across the agent's tools (a clash is rejected at
-    /// registration). The default provides no groups.
-    fn tools(&self) -> Vec<ToolGroup> {
+    /// registration). The default provides no tools.
+    fn tools(&self) -> Vec<Tool> {
         Vec::new()
     }
 }

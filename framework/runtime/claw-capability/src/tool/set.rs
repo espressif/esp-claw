@@ -8,6 +8,10 @@ use super::tool::{Tool, ToolError, ToolInvocation, ToolOutput, ToolResult};
 
 pub type ToolName = String;
 
+const NO_SCHEMAS: &str = "no schemas";
+const NO_TOOL_CONTEXT: &str = "no tool context";
+const NO_EXTRA_TOOL_CONTEXT: &str = "no extra tool context";
+
 #[derive(Debug, Default, PartialEq, Eq)]
 struct ToolSetCache {
     schemas_json: Option<String>,
@@ -307,25 +311,28 @@ pub struct ToolSetHandle<'a> {
 }
 
 impl<'a> ToolSetHandle<'a> {
-    pub fn schemas_json(&self) -> Option<&str> {
+    pub fn schemas_json(&self) -> &str {
         self.cache
             .schemas_json
             .as_deref()
             .filter(|text| !text.is_empty())
+            .unwrap_or(NO_SCHEMAS)
     }
 
-    pub fn tool_context(&self) -> Option<&str> {
+    pub fn tool_context(&self) -> &str {
         self.cache
             .tool_context
             .as_deref()
             .filter(|text| !text.is_empty())
+            .unwrap_or(NO_TOOL_CONTEXT)
     }
 
-    pub fn extra_tool_context(&self) -> Option<&str> {
+    pub fn extra_tool_context(&self) -> &str {
         self.cache
             .extra_tool_context
             .as_deref()
             .filter(|text| !text.is_empty())
+            .unwrap_or(NO_EXTRA_TOOL_CONTEXT)
     }
 
     pub(crate) fn classify(&self, call: &ToolInvocation<'_>) -> ToolResult<Action> {

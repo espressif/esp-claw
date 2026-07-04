@@ -64,15 +64,16 @@ use super::iteration_loop::{
     SystemPrompt, ToolRun,
 };
 use crate::agent::manifest::RetryCount;
-use crate::agent::tools::{internal_tool_group, ControlSignal, ControlSink};
+use crate::agent::tools::{internal_tools, ControlSignal, ControlSink};
 use crate::memory::{
-    AssistantCommit, ContextAdapter, ContextAdapterInput, SkillContextAdapter,
-    ToolPolicyContextAdapter, Transcript,
+    AssistantCommit, ContextAdapter, ContextAdapterInput, SkillContextAdapter, Transcript,
 };
-use claw_context::{Block, Context};
-use claw_permission::{Grant, PermissionPolicy};
+use claw_capability::{ToolGate, ToolSet, ToolSetError};
+use claw_context::{Block, BlockKind, Context};
+use claw_permission::{
+    Action, Grant, GrantStore, PermissionDecision, PermissionPolicy, PermissionRequest,
+};
 use claw_skill::SkillSet;
-use claw_tool::{BlockPolicy, PermissionGate, ToolBlockVerdict, ToolGate, ToolSet, ToolSetError};
 
 crate::define_prefixed_id!(AgentId, "agent-", "agent");
 crate::define_prefixed_id!(ApprovalId, "approval-", "approval");
@@ -304,9 +305,12 @@ pub enum AgentRunError {
     /// The LLM chat request failed.
     #[error(transparent)]
     Chat(#[from] ChatError),
+    /// Rebuilding the tool projection for this iteration failed.
+    #[error(transparent)]
+    Tools(#[from] ToolSetError),
     /// The model kept calling a tool that soft-hide gating does not permit this
     /// phase, past the allowed retry budget (the agent's
-    /// [`BlockPolicy`](claw_tool::BlockPolicy)).
+    /// [`BlockPolicy`](claw_capability::BlockPolicy)).
     #[error("tool not permitted in the current phase: {name}")]
     ToolNotPermitted {
         /// The name of the refused tool.
@@ -321,6 +325,7 @@ impl From<IterationLoopError> for AgentRunError {
             IterationLoopError::MissingAssistantMessage => Self::MissingAssistantMessage,
             IterationLoopError::MalformedAssistantMessage => Self::MalformedAssistantMessage,
             IterationLoopError::Chat(error) => Self::Chat(error),
+            IterationLoopError::Tools(error) => Self::Tools(error),
         }
     }
 }
@@ -394,6 +399,74 @@ impl InterruptionControl for AgentInterruption {
     }
 }
 
+struct PermissionGate {
+    policy: Arc<dyn PermissionPolicy>,
+    grants: GrantStore,
+}
+
+impl PermissionGate {
+    fn new(policy: Arc<dyn PermissionPolicy>) -> Self {
+        Self {
+            policy,
+            grants: GrantStore::new(),
+        }
+    }
+
+    fn record_decision(&mut self, signatures: &[String], grant: &Grant) {
+        for signature in signatures {
+            match grant {
+                Grant::Granted => self.grants.grant(signature.clone()),
+                Grant::Denied(reason) => self.grants.deny(signature.clone(), reason.clone()),
+            }
+        }
+    }
+}
+
+impl ToolGate for PermissionGate {
+    fn decide(&self, action: &Action) -> PermissionDecision {
+        match self.grants.lookup(&action.signature()) {
+            Some(Grant::Granted) => PermissionDecision::Allow,
+            Some(Grant::Denied(reason)) => PermissionDecision::Deny {
+                reason: reason.clone(),
+            },
+            None => self.policy.evaluate(&PermissionRequest::new(action)),
+        }
+    }
+}
+
+struct BlockPolicy {
+    retries: u32,
+    blocked_rounds: u32,
+}
+
+impl BlockPolicy {
+    fn new(retries: u32) -> Self {
+        Self {
+            retries,
+            blocked_rounds: 0,
+        }
+    }
+
+    fn record_round(&mut self, blocked: &[&str]) -> ToolBlockVerdict {
+        if blocked.is_empty() {
+            self.blocked_rounds = 0;
+            return ToolBlockVerdict::Continue;
+        }
+        self.blocked_rounds = self.blocked_rounds.saturating_add(1);
+        if self.blocked_rounds > self.retries {
+            return ToolBlockVerdict::Exhausted {
+                name: blocked[0].to_string(),
+            };
+        }
+        ToolBlockVerdict::Continue
+    }
+}
+
+enum ToolBlockVerdict {
+    Continue,
+    Exhausted { name: String },
+}
+
 // ===========================================================================
 // BaseAgent
 // ===========================================================================
@@ -465,7 +538,7 @@ pub struct BaseAgent<H: ClawHttp, Timer: ClawTimer> {
     /// [`Context::request`] renders lazily. Change detection, wire ordering, and
     /// reminder rendering all live in the context.
     context: Context,
-    /// The permission gate consulted per tool call. A `claw-tool` type owning the
+    /// The permission gate consulted per tool call. A `claw-capability` type owning the
     /// policy and grant store of human decisions; mutated when an
     /// [`ApprovalResult`](AgentCommand::ApprovalResult) resolves a pending ask.
     gate: PermissionGate,
@@ -508,8 +581,8 @@ fn install_context_adapter(
     tools: &mut ToolSet,
     adapter: Box<dyn ContextAdapter>,
 ) -> Result<(), BaseAgentBuildError> {
-    for group in adapter.tools() {
-        tools.extend_with_group(group)?;
+    for tool in adapter.tools() {
+        tools.add_tool(tool)?;
     }
     adapters.push(adapter);
     Ok(())
@@ -557,14 +630,15 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         let llm = ClawApiAsync::init(config.llm_config, H::default(), Timer::default())?;
 
         let mut tools = config.tools;
-        tools.extend_with_group(internal_tool_group(Arc::clone(&control)))?;
+        for tool in internal_tools(Arc::clone(&control)) {
+            tools.add_tool(tool)?;
+        }
 
         let gate = PermissionGate::new(config.permission_policy);
 
         // Declare the construction-time blocks the context owns up front: the
         // inherited (Global/Session) blocks and the agent's own instruction block.
-        // Tool policy is projected by its adapter from the current ToolSet, so tool
-        // mutations never need to manually sync prompt prose here.
+        // Tool policy is projected from the current ToolSet in `run_iteration`.
         let mut context = Context::new();
         for block in config.inherited_context.iter() {
             context.with(block.clone());
@@ -572,14 +646,12 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         context.with(config.agent_instruction);
 
         // This is the only place `F` is erased. Conversation-history projection
-        // is an agent-layer policy, so BaseAgent only installs the policy/skill
-        // adapters that are intrinsic to its command/tool loop.
-        let tool_policy: Box<dyn ContextAdapter> = Box::new(ToolPolicyContextAdapter::new());
+        // is an agent-layer policy, so BaseAgent only installs the intrinsic
+        // adapters that carry their own sources and optional tools.
         let skill_adapter: Box<dyn ContextAdapter> =
             Box::new(SkillContextAdapter::new(config.skills));
         let transcript: Box<dyn Transcript> = Box::new(config.store);
         let mut adapters = Vec::new();
-        install_context_adapter(&mut adapters, &mut tools, tool_policy)?;
         install_context_adapter(&mut adapters, &mut tools, skill_adapter)?;
 
         Ok(BaseAgent {
@@ -696,13 +768,14 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
 
     /// Let adapters refresh any async state before the request context is
     /// rendered.
-    async fn prepare_adapter_context(&mut self) {
-        let history_view = self.transcript.as_history();
-        for adapter in &mut self.adapters {
+    async fn prepare_adapter_context(
+        adapters: &mut [Box<dyn ContextAdapter>],
+        history_view: &dyn crate::memory::History,
+    ) {
+        for adapter in adapters {
             adapter
                 .prepare(ContextAdapterInput {
                     history: history_view,
-                    tools: &self.tools,
                 })
                 .await;
         }
@@ -714,14 +787,16 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// reminders are applied directly to [`Context`]; history messages are cloned
     /// into the request-local sink and ordered by `claw-context` using
     /// [`BlockKind::sort_key`].
-    fn render_adapter_context(&mut self) -> Value {
-        let history_view = self.transcript.as_history();
-        let mut sink = self.context.sink();
-        for adapter in &mut self.adapters {
+    fn render_adapter_context(
+        adapters: &mut [Box<dyn ContextAdapter>],
+        history_view: &dyn crate::memory::History,
+        context: &mut Context,
+    ) -> Value {
+        let mut sink = context.sink();
+        for adapter in adapters {
             adapter.contribute(
                 ContextAdapterInput {
                     history: history_view,
-                    tools: &self.tools,
                 },
                 &mut sink,
             );
@@ -791,10 +866,16 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// stitching happens anywhere else; reminders are never written to memory, so
     /// the cached system/history prefix is untouched.
     async fn run_iteration(&mut self, iteration_id: IterationId) -> IterationResult {
-        self.prepare_adapter_context().await;
+        let tools = self.tools.begin()?;
+        let history_view = self.transcript.as_history();
+        Self::prepare_adapter_context(&mut self.adapters, history_view).await;
+        self.context
+            .with(Block::new(BlockKind::ToolPolicy, tools.tool_context()))
+            .with_reminder(BlockKind::ToolReminder, Some(tools.extra_tool_context()));
         // Pull each adapter's blocks into the private context and assemble the
         // model's history channel from the adapter `messages()` contributions.
-        let history = self.render_adapter_context();
+        let history =
+            Self::render_adapter_context(&mut self.adapters, history_view, &mut self.context);
         // Take the disjoint field borrows first, then borrow `context` mutably for
         // the (lazily rebuilt) request. `request` takes `&mut self.context`, so the
         // permission gate must be derived from `self.gate` directly here rather
@@ -811,7 +892,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
             system_prompt: SystemPrompt(context.system()),
             messages: ChatMessages(context.history()),
             reminders: context.reminders(),
-            tools: &self.tools,
+            tools: &tools,
             gate,
         };
         iteration_loop.run(step).await
@@ -987,7 +1068,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// retried calls resolve directly. No-op without a permission gate.
     ///
     /// The agent's [`ApprovalDecision`] is mapped to the permission-layer
-    /// [`Grant`] the gate stores (`claw-tool`/`claw-permission` know nothing of
+    /// [`Grant`] the gate stores (`claw-capability`/`claw-permission` know nothing of
     /// the agent's command vocabulary).
     fn record_grants(&mut self, decision: &ApprovalDecision) {
         let signatures = std::mem::take(&mut self.pending_grant_signatures);
@@ -1119,8 +1200,8 @@ pub struct BaseAgentConfig<F: ClawFs + 'static> {
     /// The caller-owned transcript store — the only place the filesystem type `F`
     /// enters; the built agent erases it behind trait objects.
     pub store: TranscriptStore<F>,
-    /// The agent's tools; [`ToolSet::empty`] for none. The built-in control tool
-    /// group is always merged in during [`BaseAgent::build`].
+    /// The agent's tools. The built-in control tool is added during
+    /// [`BaseAgent::build`].
     pub tools: ToolSet,
     /// The agent's skills; [`SkillSet::empty`] for no skills.
     pub skills: SkillSet,

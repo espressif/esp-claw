@@ -8,12 +8,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use claw_api::{ClawApiAsync, ClawApiConfig, InitError, RetryPolicy};
-use claw_interface::{ClawHttp, ClawTimer};
-use claw_permission::{Action, AllowAll, RiskClass};
-use claw_tool::{
-    tool_metadata, PermissionGate, Tool, ToolError, ToolHandler, ToolInvocation, ToolInvokeError,
-    ToolOutput, ToolSet, ToolSetError,
+use claw_capability::{
+    tool_metadata, CapabilityRegistry, SyncToolHandler, Tool, ToolError, ToolGate, ToolInvocation,
+    ToolInvokeError, ToolOutput, ToolSetError, ToolSpec,
 };
+use claw_interface::{ClawHttp, ClawTimer};
+use claw_permission::{Action, PermissionDecision, RiskClass};
 use serde_json::{json, Value};
 
 use crate::agent::{
@@ -97,15 +97,17 @@ impl ResolvePermissionReplyTool {
     }
 }
 
-impl ToolHandler for ResolvePermissionReplyTool {
+impl ToolSpec for ResolvePermissionReplyTool {
     tool_metadata!("resolve_permission_reply");
 
     fn classify(&self, _call: &ToolInvocation<'_>) -> Action {
         Action::new("resolve_permission_reply", RiskClass::Safe)
     }
+}
 
+impl SyncToolHandler for ResolvePermissionReplyTool {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
-        let args = parse_arguments(call.arguments_json)?;
+        let args = parse_arguments(call.arguments_json())?;
         let decision = string_field(&args, "decision");
         let resolution = match decision.trim() {
             "approve" => PermissionReplyResolution::Approved,
@@ -138,6 +140,14 @@ impl ToolHandler for ResolvePermissionReplyTool {
     }
 }
 
+struct AllowGate;
+
+impl ToolGate for AllowGate {
+    fn decide(&self, _action: &Action) -> PermissionDecision {
+        PermissionDecision::Allow
+    }
+}
+
 pub(crate) async fn resolve_permission_reply<H, Timer>(
     llm_config: ClawApiConfig,
     summary: &str,
@@ -150,10 +160,13 @@ where
 {
     let mut llm = ClawApiAsync::init(llm_config, H::default(), Timer::default())?;
     let resolution = Arc::new(Mutex::new(None));
-    let tools = ToolSet::new([Tool::new(ResolvePermissionReplyTool::new(Arc::clone(
-        &resolution,
-    )))])?;
-    let gate = PermissionGate::new(Arc::new(AllowAll));
+    let registry = CapabilityRegistry::new();
+    let mut tools = registry.tool_set();
+    tools.add_tool(Tool::from_sync(ResolvePermissionReplyTool::new(
+        Arc::clone(&resolution),
+    )))?;
+    let tools = tools.begin()?;
+    let gate = AllowGate;
     let resolver_control = ApprovalResolverControl::new();
     let cancel_handle = resolver_control.cancel_handle();
     control.set_cancel_hook(move || {
@@ -238,16 +251,18 @@ fn non_empty_str(value: &str, default: &str) -> String {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use claw_capability::RawToolInvocation;
 
     fn resolve_from_tool(arguments_json: &str) -> Result<PermissionReplyResolution, ToolError> {
         let resolution = Arc::new(Mutex::new(None));
         let tool = ResolvePermissionReplyTool::new(Arc::clone(&resolution));
-        tool.invoke(&ToolInvocation {
+        let call = ToolInvocation::try_from(RawToolInvocation {
             id: Some("call-1"),
             name: "resolve_permission_reply",
             arguments_json,
         })
-        .map_err(|error| error.error)?;
+        .unwrap();
+        tool.invoke(&call).map_err(|error| error.error)?;
         let resolved = resolution.lock().unwrap().clone().unwrap();
         Ok(resolved)
     }

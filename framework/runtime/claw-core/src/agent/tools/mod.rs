@@ -1,4 +1,4 @@
-//! The agent's built-in tools — one [`ToolHandler`](claw_tool::ToolHandler) per
+//! The agent's built-in tools — one [`SyncToolHandler`](claw_capability::SyncToolHandler) per
 //! file — and the small seams they share.
 //!
 //! Internal tools are model-callable like any other tool, but instead of
@@ -33,11 +33,11 @@ mod watch_subagent;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use claw_capability::{Tool, ToolError, ToolInvocation};
 use claw_permission::Resource;
-use claw_tool::{Tool, ToolError, ToolGroup, ToolInvocation};
 use serde_json::Value;
 
-use crate::agent::graph::{AgentContext, AgentSnapshot, SpawnPolicy};
+use crate::agent::graph::{AgentContext, SpawnPolicy};
 
 use delete_subagent::DeleteSubagentTool;
 use end_conversation::EndConversationTool;
@@ -45,12 +45,6 @@ use list_spawnable_agents::ListSpawnableAgentsTool;
 use list_subagents::ListSubagentsTool;
 use spawn_subagent::SpawnSubagentTool;
 use watch_subagent::WatchSubagentTool;
-
-/// Group label for the agent's built-in tools (provenance only).
-pub(crate) const INTERNAL_TOOL_GROUP: &str = "agent";
-
-/// Group label for the subagent-management tools (provenance only).
-pub(crate) const SUBAGENT_TOOL_GROUP: &str = "subagents";
 
 // -- Self-control seam ------------------------------------------------------
 
@@ -67,7 +61,7 @@ pub(crate) enum ControlSignal {
 /// The shared queue internal tools push [`ControlSignal`]s onto.
 ///
 /// The agent owns one; each internal tool handler holds a clone. A `Mutex`
-/// (not a bare cell) because [`ToolHandler`](claw_tool::ToolHandler) is
+/// (not a bare cell) because [`SyncToolHandler`](claw_capability::SyncToolHandler) is
 /// `Send + Sync`; contention is nil in the single-driver-thread model.
 pub(crate) type ControlSink = Arc<Mutex<VecDeque<ControlSignal>>>;
 
@@ -104,52 +98,33 @@ pub(crate) fn string_argument(arguments_json: &str, key: &str) -> Result<String,
 /// classification only — a missing/malformed id just yields `None` (the verb
 /// alone still classifies; `invoke` is where a bad id is reported).
 fn agent_resource(call: &ToolInvocation<'_>) -> Option<Resource> {
-    let raw = string_argument(call.arguments_json, "agent").ok()?;
+    let raw = string_argument(call.arguments_json(), "agent").ok()?;
     let trimmed = raw.trim();
     (!trimmed.is_empty()).then(|| Resource::Agent(trimmed.to_string()))
 }
 
-/// Render a snapshot as a compact JSON object for the model to read.
-fn snapshot_json(snapshot: &AgentSnapshot) -> Value {
-    serde_json::json!({
-        "agent": snapshot.id.to_string(),
-        "kind": snapshot.kind.as_str(),
-        "name": snapshot.name,
-        "parent": snapshot.parent.map(|parent| parent.to_string()),
-        "depth": snapshot.depth,
-        "status": snapshot.status.as_str(),
-        "termination": snapshot.termination.as_str(),
-    })
+// -- Tool builders ----------------------------------------------------------
+
+/// Build the agent's built-in tools over a control sink.
+pub(crate) fn internal_tools(sink: ControlSink) -> [Tool; 1] {
+    [Tool::from_sync(EndConversationTool::new(sink))]
 }
 
-// -- Group builders ---------------------------------------------------------
-
-/// Build the agent's built-in tool group over a control sink.
-pub(crate) fn internal_tool_group(sink: ControlSink) -> ToolGroup {
-    ToolGroup::new(
-        INTERNAL_TOOL_GROUP,
-        [Tool::new(EndConversationTool::new(sink))],
-    )
-}
-
-/// Build the subagent-management tool group, all scoped by the context's agent
+/// Build the subagent-management tools, all scoped by the context's agent
 /// (or, for `list_spawnable_agents`, by that agent's spawn `policy`):
 /// - `list_spawnable_agents` — the menu of kinds this agent may spawn;
 /// - `spawn_subagent` — create a child (restricted to `policy`'s allowed kinds);
 /// - `list_subagents` — enumerate this agent's subtree;
 /// - `watch_subagent` — snapshot one descendant;
 /// - `delete_subagent` — remove one descendant (and its subtree).
-pub(crate) fn subagent_tool_group(context: Arc<AgentContext>, policy: SpawnPolicy) -> ToolGroup {
-    ToolGroup::new(
-        SUBAGENT_TOOL_GROUP,
-        [
-            Tool::new(ListSpawnableAgentsTool::new(policy.clone())),
-            Tool::new(SpawnSubagentTool::new(Arc::clone(&context), policy)),
-            Tool::new(ListSubagentsTool::new(Arc::clone(&context))),
-            Tool::new(WatchSubagentTool::new(Arc::clone(&context))),
-            Tool::new(DeleteSubagentTool::new(context)),
-        ],
-    )
+pub(crate) fn subagent_tools(context: Arc<AgentContext>, policy: SpawnPolicy) -> [Tool; 5] {
+    [
+        Tool::from_sync(ListSpawnableAgentsTool::new(policy.clone())),
+        Tool::from_sync(SpawnSubagentTool::new(Arc::clone(&context), policy)),
+        Tool::from_sync(ListSubagentsTool::new(Arc::clone(&context))),
+        Tool::from_sync(WatchSubagentTool::new(Arc::clone(&context))),
+        Tool::from_sync(DeleteSubagentTool::new(context)),
+    ]
 }
 
 #[cfg(test)]
@@ -161,7 +136,7 @@ pub(crate) mod test_support {
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
-    use claw_tool::{Tool, ToolGroup};
+    use claw_capability::Tool;
 
     use super::ControlSink;
 
@@ -170,10 +145,9 @@ pub(crate) mod test_support {
         Arc::new(Mutex::new(VecDeque::new()))
     }
 
-    /// The tool named `name` in `group` (cloned), panicking if absent.
-    pub(crate) fn tool_named(group: &ToolGroup, name: &str) -> Tool {
-        group
-            .tools()
+    /// The tool named `name` in `tools` (cloned), panicking if absent.
+    pub(crate) fn tool_named(tools: &[Tool], name: &str) -> Tool {
+        tools
             .iter()
             .find(|tool| tool.name() == name)
             .unwrap()

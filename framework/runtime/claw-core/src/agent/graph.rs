@@ -2,7 +2,7 @@
 //!
 //! This module is the *non-tool* half of multi-agent control: the back-channel an
 //! agent's tools reach the orchestrator through, plus the value types that travel
-//! over it. It holds no [`ToolHandler`](claw_tool::ToolHandler)s — those live in
+//! over it. It holds no [`SyncToolHandler`](claw_capability::SyncToolHandler)s — those live in
 //! [`tools`](crate::agent::tools) and call into the [`AgentContext`] façade here.
 //!
 //! Two seams reach the graph:
@@ -15,6 +15,9 @@
 //!   synchronously.
 
 use std::sync::Arc;
+
+use serde::ser::{SerializeStruct, Serializer};
+use serde::Serialize;
 
 use crate::agent::base_agent::AgentId;
 use crate::agent::kind::AgentKind;
@@ -133,6 +136,20 @@ pub struct AgentSnapshot {
     pub termination: TerminationPolicy,
     /// Its coarse lifecycle state.
     pub status: AgentStatus,
+}
+
+impl Serialize for AgentSnapshot {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut state = serializer.serialize_struct("AgentSnapshot", 7)?;
+        state.serialize_field("agent", &self.id)?;
+        state.serialize_field("kind", self.kind.as_str())?;
+        state.serialize_field("name", &self.name)?;
+        state.serialize_field("parent", &self.parent)?;
+        state.serialize_field("depth", &self.depth)?;
+        state.serialize_field("status", self.status.as_str())?;
+        state.serialize_field("termination", self.termination.as_str())?;
+        state.end()
+    }
 }
 
 /// The services an agent's graph owner exposes to that agent's internal tools.

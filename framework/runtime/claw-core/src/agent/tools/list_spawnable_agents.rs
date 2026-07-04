@@ -6,7 +6,9 @@
 //! guessing a kind and learning by rejection — and unlike baking the catalog into
 //! `spawn_subagent`'s schema, it costs nothing in the always-sent prompt prefix.
 
-use claw_tool::{tool_metadata, ToolHandler, ToolInvocation, ToolInvokeError, ToolOutput};
+use claw_capability::{
+    tool_metadata, SyncToolHandler, ToolInvocation, ToolInvokeError, ToolOutput, ToolSpec,
+};
 
 use crate::agent::graph::SpawnPolicy;
 
@@ -23,14 +25,16 @@ impl ListSpawnableAgentsTool {
     }
 }
 
-impl ToolHandler for ListSpawnableAgentsTool {
+impl ToolSpec for ListSpawnableAgentsTool {
     tool_metadata!("list_spawnable_agents");
 
     // A pure read of static policy/manifest data — safe to run alongside others.
     fn concurrent(&self) -> bool {
         true
     }
+}
 
+impl SyncToolHandler for ListSpawnableAgentsTool {
     fn invoke(&self, _call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let kinds: Vec<serde_json::Value> = self
             .policy
@@ -52,16 +56,20 @@ impl ToolHandler for ListSpawnableAgentsTool {
 mod tests {
     use super::*;
     use crate::agent::kind::AgentKind;
+    use claw_capability::RawToolInvocation;
+
+    fn call() -> ToolInvocation<'static> {
+        ToolInvocation::try_from(RawToolInvocation {
+            id: Some("t1"),
+            name: "list_spawnable_agents",
+            arguments_json: "{}",
+        })
+        .unwrap()
+    }
 
     fn spawnable(policy: SpawnPolicy) -> serde_json::Value {
         let tool = ListSpawnableAgentsTool::new(policy);
-        let output = tool
-            .invoke(&ToolInvocation {
-                id: Some("t1"),
-                name: "list_spawnable_agents",
-                arguments_json: "{}",
-            })
-            .unwrap();
+        let output = tool.invoke(&call()).unwrap();
         assert!(output.ok);
         serde_json::from_str(&output.output).unwrap()
     }

@@ -17,6 +17,17 @@ pub struct ToolCall {
     pub arguments_json: String,
 }
 
+impl ToolCall {
+    /// Tool name for logs and run records.
+    pub fn display_name(&self) -> &str {
+        if self.name.is_empty() {
+            "(null)"
+        } else {
+            &self.name
+        }
+    }
+}
+
 /// The result of [`crate::ClawApi::chat`].
 ///
 /// `text` is the assistant message (may be `None` when the model only returned

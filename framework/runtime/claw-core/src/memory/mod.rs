@@ -15,8 +15,8 @@
 //! - the [`Extractor`] seam and tier policy ([`TierClassifier`]);
 //! - the [`LongTermMemoryContextAdapter`] that fronts the dual-tier store as one
 //!   [`ContextAdapter`] with its five model-callable tools;
-//! - the skill and tool-policy adapters, which project runtime sources into
-//!   context and keep their model-callable tools with the source they mutate.
+//! - the skill adapter, which projects runtime sources into context and keeps its
+//!   model-callable tools with the source they mutate.
 
 mod long_term_memory_adapter;
 mod profile_adapter;
@@ -24,7 +24,6 @@ mod recent_messages_adapter;
 mod rolling_summary_adapter;
 mod skill_adapter;
 mod summary_cursor;
-mod tool_policy_adapter;
 mod traits;
 
 pub(crate) use long_term_memory_adapter::{
@@ -37,7 +36,6 @@ pub(crate) use rolling_summary_adapter::CompactionPolicy;
 pub(crate) use rolling_summary_adapter::RollingSummaryContextAdapter;
 pub(crate) use skill_adapter::SkillContextAdapter;
 pub(crate) use summary_cursor::SummaryCursor;
-pub(crate) use tool_policy_adapter::ToolPolicyContextAdapter;
-#[cfg(test)]
-pub(crate) use traits::History;
-pub(crate) use traits::{AssistantCommit, ContextAdapter, ContextAdapterInput, Transcript};
+pub(crate) use traits::{
+    AssistantCommit, ContextAdapter, ContextAdapterInput, History, Transcript,
+};

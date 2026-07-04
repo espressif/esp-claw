@@ -6,8 +6,8 @@ pub use registry::{
 };
 pub use tool::bake;
 pub use tool::{
-    ApprovalNeeded, AsyncToolHandler, RetryCount, SyncToolHandler, Tool, ToolError, ToolFuture,
-    ToolGate, ToolInvocation, ToolInvokeError, ToolName, ToolOutput, ToolRegistry,
-    ToolRegistryError, ToolRegistryVersion, ToolResult, ToolRunOutcome, ToolRunner, ToolSet,
-    ToolSetError, ToolSetHandle, ToolSpec,
+    ApprovalNeeded, AsyncToolHandler, RawToolInvocation, RetryCount, SyncToolHandler, Tool,
+    ToolError, ToolFuture, ToolGate, ToolInvocation, ToolInvokeError, ToolName, ToolOutput,
+    ToolRegistry, ToolRegistryError, ToolRegistryVersion, ToolResult, ToolRunOutcome, ToolRunner,
+    ToolSet, ToolSetError, ToolSetHandle, ToolSpec,
 };

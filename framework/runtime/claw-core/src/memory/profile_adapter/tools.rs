@@ -2,39 +2,33 @@
 
 use core::str::FromStr;
 
+use claw_capability::{
+    tool_metadata, SyncToolHandler, Tool, ToolError, ToolInvocation, ToolInvokeError, ToolOutput,
+    ToolSpec,
+};
 use claw_interface::ClawFs;
 use claw_memory::{ProfileDocument, ProfileStore};
 use claw_permission::{Action, Resource, RiskClass};
-use claw_tool::{
-    tool_metadata, Tool, ToolError, ToolGroup, ToolHandler, ToolInvocation, ToolInvokeError,
-    ToolOutput,
-};
 use serde_json::Value;
 
-/// Group label for profile tools.
-pub(crate) const PROFILE_TOOL_GROUP: &str = "profile";
-
-/// Build the writable profile tool group.
-pub(crate) fn profile_tool_group<F: ClawFs + Clone + 'static>(store: ProfileStore<F>) -> ToolGroup {
-    ToolGroup::new(
-        PROFILE_TOOL_GROUP,
-        [
-            Tool::new(ProfileReadTool {
-                store: store.clone(),
-            }),
-            Tool::new(ProfileReplaceTool {
-                store: store.clone(),
-            }),
-            Tool::new(ProfileClearTool { store }),
-        ],
-    )
+/// Build the writable profile tools.
+pub(crate) fn profile_tools<F: ClawFs + Clone + 'static>(store: ProfileStore<F>) -> Vec<Tool> {
+    vec![
+        Tool::from_sync(ProfileReadTool {
+            store: store.clone(),
+        }),
+        Tool::from_sync(ProfileReplaceTool {
+            store: store.clone(),
+        }),
+        Tool::from_sync(ProfileClearTool { store }),
+    ]
 }
 
 struct ProfileReadTool<F: ClawFs + Clone + 'static> {
     store: ProfileStore<F>,
 }
 
-impl<F: ClawFs + Clone + 'static> ToolHandler for ProfileReadTool<F> {
+impl<F: ClawFs + Clone + 'static> ToolSpec for ProfileReadTool<F> {
     tool_metadata!("profile_read");
 
     fn concurrent(&self) -> bool {
@@ -44,7 +38,9 @@ impl<F: ClawFs + Clone + 'static> ToolHandler for ProfileReadTool<F> {
     fn classify(&self, call: &ToolInvocation<'_>) -> Action {
         profile_action(call, "profile_read", RiskClass::Safe, &self.store)
     }
+}
 
+impl<F: ClawFs + Clone + 'static> SyncToolHandler for ProfileReadTool<F> {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let args = parse_object(call)?;
         let document = document_from_args(&args)?;
@@ -69,13 +65,15 @@ struct ProfileReplaceTool<F: ClawFs + Clone + 'static> {
     store: ProfileStore<F>,
 }
 
-impl<F: ClawFs + Clone + 'static> ToolHandler for ProfileReplaceTool<F> {
+impl<F: ClawFs + Clone + 'static> ToolSpec for ProfileReplaceTool<F> {
     tool_metadata!("profile_replace");
 
     fn classify(&self, call: &ToolInvocation<'_>) -> Action {
         profile_action(call, "profile_replace", RiskClass::High, &self.store)
     }
+}
 
+impl<F: ClawFs + Clone + 'static> SyncToolHandler for ProfileReplaceTool<F> {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let args = parse_object(call)?;
         let document = document_from_args(&args)?;
@@ -97,13 +95,15 @@ struct ProfileClearTool<F: ClawFs + Clone + 'static> {
     store: ProfileStore<F>,
 }
 
-impl<F: ClawFs + Clone + 'static> ToolHandler for ProfileClearTool<F> {
+impl<F: ClawFs + Clone + 'static> ToolSpec for ProfileClearTool<F> {
     tool_metadata!("profile_clear");
 
     fn classify(&self, call: &ToolInvocation<'_>) -> Action {
         profile_action(call, "profile_clear", RiskClass::High, &self.store)
     }
+}
 
+impl<F: ClawFs + Clone + 'static> SyncToolHandler for ProfileClearTool<F> {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let args = parse_object(call)?;
         let document = document_from_args(&args)?;
@@ -137,17 +137,17 @@ fn profile_action<F: ClawFs + Clone + 'static>(
 }
 
 fn parse_object(call: &ToolInvocation<'_>) -> Result<Value, ToolInvokeError> {
-    if call.arguments_json.trim().is_empty() {
+    if call.arguments_json().trim().is_empty() {
         return Ok(Value::Object(serde_json::Map::new()));
     }
-    serde_json::from_str(call.arguments_json)
+    serde_json::from_str(call.arguments_json())
         .map_err(|error| ToolInvokeError::new(ToolError::InvalidArgumentsJson(error.to_string())))
 }
 
 fn document_from_args(args: &Value) -> Result<ProfileDocument, ToolInvokeError> {
     let document = required_trimmed_string(args, "document")?;
     ProfileDocument::from_str(&document).map_err(|error| {
-        ToolInvokeError::new(ToolError::invoke_rejected(format!(
+        ToolInvokeError::new(ToolError::InvokeRejected(format!(
             "{error}; expected one of: soul, assistant_identity, user_profile"
         )))
     })
@@ -160,7 +160,7 @@ fn required_trimmed_string(args: &Value, key: &str) -> Result<String, ToolInvoke
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .ok_or_else(|| {
-            ToolInvokeError::new(ToolError::invoke_rejected(format!(
+            ToolInvokeError::new(ToolError::InvokeRejected(format!(
                 "missing required string field '{key}'"
             )))
         })?;
@@ -169,7 +169,7 @@ fn required_trimmed_string(args: &Value, key: &str) -> Result<String, ToolInvoke
 
 fn required_raw_string<'a>(args: &'a Value, key: &str) -> Result<&'a str, ToolInvokeError> {
     args.get(key).and_then(Value::as_str).ok_or_else(|| {
-        ToolInvokeError::new(ToolError::invoke_rejected(format!(
+        ToolInvokeError::new(ToolError::InvokeRejected(format!(
             "missing required string field '{key}'"
         )))
     })
@@ -185,6 +185,7 @@ fn render_document(document: ProfileDocument, content: &str) -> String {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use claw_capability::RawToolInvocation;
     use claw_interface::MemFs;
     use claw_memory::ProfileConfig;
 
@@ -194,17 +195,22 @@ mod tests {
         ProfileStore::new(ProfileConfig::new("/memory"), MemFs::new())
     }
 
+    fn call<'a>(name: &'a str, arguments_json: &'a str) -> ToolInvocation<'a> {
+        ToolInvocation::try_from(RawToolInvocation {
+            id: None,
+            name,
+            arguments_json,
+        })
+        .unwrap()
+    }
+
     #[test]
     fn read_returns_document_content() {
         let store = store();
         store.replace(ProfileDocument::Soul, "SOUL").unwrap();
         let tool = ProfileReadTool { store };
         let output = tool
-            .invoke(&ToolInvocation {
-                id: None,
-                name: "profile_read",
-                arguments_json: r#"{"document":"soul"}"#,
-            })
+            .invoke(&call("profile_read", r#"{"document":"soul"}"#))
             .unwrap();
         assert!(output.ok);
         assert!(output.output.contains("SOUL"));
@@ -217,11 +223,10 @@ mod tests {
             store: store.clone(),
         };
         let output = tool
-            .invoke(&ToolInvocation {
-                id: None,
-                name: "profile_replace",
-                arguments_json: r#"{"document":"user_profile","content":"USER"}"#,
-            })
+            .invoke(&call(
+                "profile_replace",
+                r#"{"document":"user_profile","content":"USER"}"#,
+            ))
             .unwrap();
         assert!(output.ok);
         assert_eq!(
@@ -240,11 +245,10 @@ mod tests {
             store: store.clone(),
         };
         let output = tool
-            .invoke(&ToolInvocation {
-                id: None,
-                name: "profile_clear",
-                arguments_json: r#"{"document":"assistant_identity"}"#,
-            })
+            .invoke(&call(
+                "profile_clear",
+                r#"{"document":"assistant_identity"}"#,
+            ))
             .unwrap();
         assert!(output.ok);
         assert_eq!(
