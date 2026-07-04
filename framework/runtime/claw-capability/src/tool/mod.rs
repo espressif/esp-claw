@@ -3,7 +3,7 @@ mod runner;
 mod set;
 mod tool;
 
-pub use registry::{RegistryVersion, ToolRegistry, ToolRegistryError};
+pub use registry::{ToolRegistry, ToolRegistryError, ToolRegistryVersion};
 pub use runner::{ApprovalNeeded, ToolGate, ToolRunOutcome, ToolRunner};
 pub use set::{ToolName, ToolSet, ToolSetError, ToolSetHandle};
 pub use tool::{

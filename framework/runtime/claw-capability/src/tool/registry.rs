@@ -5,7 +5,7 @@ use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use super::set::{ToolName, ToolSet};
 use super::tool::Tool;
 
-pub type RegistryVersion = u64;
+pub type ToolRegistryVersion = u64;
 
 #[derive(Default)]
 pub struct ToolRegistry {
@@ -16,7 +16,7 @@ pub struct ToolRegistry {
 struct ToolRegistryState {
     tools: HashMap<ToolName, ToolRegistryEntry>,
     started: bool,
-    version: RegistryVersion,
+    version: ToolRegistryVersion,
 }
 
 struct ToolRegistryEntry {
@@ -25,7 +25,7 @@ struct ToolRegistryEntry {
 }
 
 pub(super) struct ToolProjection {
-    pub registry_version: RegistryVersion,
+    pub registry_version: ToolRegistryVersion,
     pub tools: Vec<ToolProjectionEntry>,
 }
 
@@ -115,7 +115,7 @@ impl ToolRegistry {
         ToolSet::new(self.clone())
     }
 
-    pub fn version(&self) -> RegistryVersion {
+    pub fn tool_version(&self) -> ToolRegistryVersion {
         self.read_state().version
     }
 

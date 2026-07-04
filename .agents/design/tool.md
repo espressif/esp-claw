@@ -3,16 +3,17 @@
 ```rust
 struct CapabilityRegistry {
     pub fn register(capability: Capability) -> Result<()> // central registration; creates a one-member group
-    pub fn register_group(group: CapabilityGroup) -> Result<()> // central registration; group is the enable/disable unit
-    pub fn enable_group(group_id: &str) -> Result<()> // central enable; affects every projection's next handle
-    pub fn disable_group(group_id: &str) -> Result<()> // central disable; overrides every projection-local enable
     pub fn enable(capability_id:CapabilityId) -> Result<()>
     pub fn disable(capability_id:CapabilityId) -> Result<()>
     pub fn start_all() -> Result<()> // starts lifecycle for centrally-enabled groups
     pub fn stop_all() -> Result<()> // stops lifecycle for started groups
     pub fn tool_set() -> ToolSet // ToolSet must come from the registry
     pub fn channel_set() -> ChannelSet // ChannelSet must come from the registry
-    pub fn version() -> u64 // increments after every central visibility/catalog mutation
+}
+
+struct ToolProjection {
+    registry_version: ToolRegistryVersion
+    tools: Vec<ToolProjectionEntry>
 }
 
 struct ToolInvocation<'a> {
@@ -41,12 +42,6 @@ struct ToolInvokeError {
 struct ToolRetryCount {
     pub fn none() -> ToolRetryCount
     pub fn extra(extra_attempts: u32) -> ToolRetryCount
-}
-
-struct ToolGroup {
-    pub fn new(name: ToolGroupName, tools: impl IntoIterator<Item = Tool>) -> ToolGroup // local grouping/provenance
-    pub fn name() -> ToolGroupName // group label, not a dispatch namespace
-    pub fn tools() -> &[Tool] // borrowed tools in this group
 }
 
 trait ToolSpec {
@@ -93,19 +88,18 @@ struct ToolSet {
     registry: Arc<CapabilityRegistry>,
     tools: HashMap<ToolName, (Tool, ToolSource, ToolState)>,
     cache: ToolSetCache,
-    registry_version: u32,
+    registry_version: ToolRegistryVersion,
 
-    pub fn add_group(group: ToolGroup) -> Result<()> // projection-local add group
     pub fn add_tool(tool: Tool) -> Result<()> // projection-local add; never writes to CapabilityRegistry
-    pub fn remove_tool(name: impl IntoIterator<Item = ToolName>) -> Result<()> // projection-local hide; central registry remains unchanged
-    pub fn enable_tool(name: impl IntoIterator<Item = ToolName>) -> Result<()> // clears projection-local disable; cannot override central disable
-    pub fn disable_tool(name: impl IntoIterator<Item = ToolName>) -> Result<()> // projection-local disable; only this ToolSet is affected
-    pub fn temporarily_enable_tools(names: impl IntoIterator<Item = ToolName>) // soft tools; affects reminders only
-    pub fn temporarily_disable_tools(names: impl IntoIterator<Item = ToolName>) // proposed convenience; not in current code
+    pub fn remove_tool(name: ToolName) -> Result<()> // projection-local remove; local tools only
+    pub fn enable_tool(name: ToolName) -> Result<()> // clears projection-local disable; cannot override central disable
+    pub fn disable_tool(name: ToolName) -> Result<()> // projection-local disable; only this ToolSet is affected
+    pub fn temporarily_enable_tool(name: ToolName) -> Result<()> // soft tools; affects reminders only
+    pub fn temporarily_disable_tool(name: ToolName) -> Result<()> // soft tools; affects reminders only
     pub fn clear_temporary_tools() // clears soft-tool phase gating
     pub fn begin() -> Result<ToolSetHandle> // RAII boundary; auto-refreshes then freezes a snapshot
 
-    fn rebuild() -> ToolSetCache
+    fn rebuild()
 }
 
 struct ToolSetHandle {

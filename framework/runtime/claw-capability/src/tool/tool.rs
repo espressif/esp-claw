@@ -138,10 +138,6 @@ impl Tool {
         self.spec().usage()
     }
 
-    pub(crate) fn concurrent(&self) -> bool {
-        self.spec().concurrent()
-    }
-
     pub(crate) fn classify(&self, call: &ToolInvocation<'_>) -> Action {
         self.spec().classify(call)
     }

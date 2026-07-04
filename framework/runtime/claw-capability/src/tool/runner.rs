@@ -63,10 +63,7 @@ impl<'a> ToolRunner<'a> {
             .unwrap_or(PermissionDecision::Allow)
     }
 
-    async fn invoke_with_retry<'call>(
-        &self,
-        call: &'call ToolInvocation<'call>,
-    ) -> ToolRunOutcome {
+    async fn invoke_with_retry<'call>(&self, call: &'call ToolInvocation<'call>) -> ToolRunOutcome {
         let mut retries = None;
         loop {
             match self.tools.invoke(call).await {
@@ -77,8 +74,7 @@ impl<'a> ToolRunner<'a> {
                     };
                 }
                 Err(error) => {
-                    let remaining =
-                        retries.get_or_insert_with(|| error.retries.extra_attempts());
+                    let remaining = retries.get_or_insert_with(|| error.retries.extra_attempts());
                     if *remaining == 0 {
                         return render_after_execution(error);
                     }

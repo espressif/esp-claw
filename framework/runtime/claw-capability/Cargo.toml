@@ -3,28 +3,15 @@ name = "claw-capability"
 authors = ["Finn(Ziheng) Sheng"]
 version = "0.1.0"
 edition = "2021"
-description = "Capability adapter: maps capabilities to internal tool and channel roles plus an orthogonal lifecycle"
+description = "Capability registry and tool projection"
 
 [lib]
 crate-type = ["rlib"]
 
 [dependencies]
-# The tool framework. A capability with the Tool role *is* a `claw_tool::Tool`;
-# this crate adapts/classifies, it does not re-implement tool dispatch, schema
-# rendering, or visibility (those live in claw-tool / claw-core).
-claw-tool = { path = "../claw-tool" }
-# `channel.rs` models a channel's outbound `DeliveryKind`; the shared enum lives
-# in claw-interface (no features needed for the type alone). Its `ClawFs` trait
-# also backs `FsCapabilityStateStore` for enable/disable persistence.
-claw-interface = { path = "../claw-interface" }
-# Serializes the persisted enable/disable deny-list (a JSON array of group ids).
-serde_json = "1"
+claw-permission = { path = "../claw-permission" }
 thiserror = "2"
 tracing = { version = "0.1", default-features = false, features = ["std"] }
-
-[dev-dependencies]
-# `memfs`: hermetic in-memory `ClawFs` double for persistence round-trip tests.
-claw-interface = { path = "../claw-interface", features = ["stdthread", "memfs"] }
 
 [lints.rust]
 unsafe_code = "forbid"

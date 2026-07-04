@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use claw_permission::Action;
 
-use super::registry::{RegistryVersion, ToolProjection, ToolRegistry};
+use super::registry::{ToolRegistry, ToolRegistryVersion};
 use super::tool::{Tool, ToolError, ToolInvocation, ToolOutput, ToolResult};
 
 pub type ToolName = String;
@@ -43,7 +43,7 @@ pub struct ToolSet {
     registry: Arc<ToolRegistry>,
     tools: HashMap<ToolName, (Tool, ToolSource, ToolState)>,
     cache: ToolSetCache,
-    registry_version: RegistryVersion,
+    registry_version: ToolRegistryVersion,
     should_rebuild_temporary_tool: bool,
     should_rebuild_tool: bool,
 }
@@ -167,7 +167,7 @@ impl ToolSet {
     }
 
     pub fn begin(&mut self) -> Result<ToolSetHandle<'_>, ToolSetError> {
-        let registry_version = self.registry.version();
+        let registry_version = self.registry.tool_version();
         if self.registry_version != registry_version {
             self.rebuild();
         } else if self.should_rebuild_tool {
