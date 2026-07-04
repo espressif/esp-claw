@@ -169,6 +169,12 @@ dependencies:
       - if: $CONFIG{ESP_BOARD_DEV_CAMERA_SUPPORT} == True
     path: ../../../framework/lua_modules/module_camera
 
+  module_call_capability:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
+      - if: $CONFIG{APP_CLAW_LUA_MODULE_CAPABILITY} == True
+    path: ../../../framework/lua_modules/module_call_capability
+
   module_delay:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True

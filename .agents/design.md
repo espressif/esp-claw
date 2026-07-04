@@ -10,9 +10,7 @@ If a behavior can live in a capability group, Lua module, skill, router rule, bo
 
 ## Extend through capabilities and skills
 
-Capabilities live under `framework/capabilities/` and are registered through `applications/shared/app_claw/app_capabilities.c`. Each capability group should keep its setup, credentials, storage paths, and registration local to that group.
-
-Skills are user-facing instructions and assets. Built-in skill sources live under component `skills/` directories and are synced into the read-only SYSTEM image at build time. Prefer skills for model know-how and workflows; prefer capabilities for callable firmware functions.
+[tool.md](design/tool.md)
 
 ## Keep Lua modules modular
 

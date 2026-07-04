@@ -42,6 +42,11 @@ claw_agent_system_t *app_claw_get_agent_system(void)
     return s_agent_system;
 }
 
+claw_capability_registry_t *app_claw_get_capability_registry(void)
+{
+    return s_registry;
+}
+
 esp_err_t app_claw_ui_start(void)
 {
 #if defined(CONFIG_APP_CLAW_ENABLE_EMOTE)
@@ -228,6 +233,8 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
         ESP_LOGI(TAG, "AgentSystem ready");
     }
 
+    ESP_RETURN_ON_ERROR(claw_event_router_set_runtime_handles(s_registry, s_agent_system), TAG,
+                        "Failed to bind runtime handles to event router");
     ESP_RETURN_ON_ERROR(claw_event_router_start(), TAG, "Failed to start event router");
 #if CONFIG_APP_CLAW_CAP_SCHEDULER
     ESP_RETURN_ON_ERROR(cap_scheduler_start(), TAG, "Failed to start scheduler");

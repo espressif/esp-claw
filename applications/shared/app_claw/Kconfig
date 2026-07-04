@@ -251,6 +251,13 @@ menu "App Claw Config"
                 Enable the camera Lua module and keep app_claw's direct dependency
                 on lua_module_camera when Lua capability is enabled.
 
+        config APP_CLAW_LUA_MODULE_CAPABILITY
+            bool "Enable capability Lua module"
+            default y
+            help
+                Enable the capability Lua module and keep app_claw's direct
+                dependency on module_call_capability when Lua capability is enabled.
+
         config APP_CLAW_LUA_MODULE_DELAY
             bool "Enable delay Lua module"
             default y

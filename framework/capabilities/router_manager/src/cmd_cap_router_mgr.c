@@ -13,12 +13,15 @@
 
 #include "argtable3/argtable3.h"
 #include "cJSON.h"
-#include "claw_cap.h"
+#include "claw_cabi.h"
+#include "claw_cabi_esp.h"
 #include "claw_event_publisher.h"
 #include "claw_event_router.h"
 #include "esp_console.h"
 
 #define CMD_CAP_ROUTER_MGR_OUTPUT_SIZE 4096
+
+static claw_capability_registry_t *s_registry;
 
 static struct {
     struct arg_lit *reload;
@@ -157,12 +160,15 @@ static esp_err_t event_router_prepare_argv(int argc,
 static int call_router_mgr_cap(const char *cap_name, const char *input_json)
 {
     char *output = NULL;
-    claw_cap_call_context_t ctx = {
-        .caller = CLAW_CAP_CALLER_CONSOLE,
-        .session_id = "default",
-    };
+    size_t output_length = 0;
+    bool output_success = false;
     esp_err_t err;
     int rc = 1;
+
+    if (!s_registry) {
+        printf("capability registry is not configured\n");
+        return 1;
+    }
 
     output = calloc(1, CMD_CAP_ROUTER_MGR_OUTPUT_SIZE);
     if (!output) {
@@ -170,8 +176,10 @@ static int call_router_mgr_cap(const char *cap_name, const char *input_json)
         return 1;
     }
 
-    err = claw_cap_call(cap_name, input_json, &ctx, output, CMD_CAP_ROUTER_MGR_OUTPUT_SIZE);
-    if (err == ESP_OK) {
+    err = claw_cabi_result_to_esp(claw_capability_invoke(s_registry, cap_name, input_json, output,
+                                                         CMD_CAP_ROUTER_MGR_OUTPUT_SIZE,
+                                                         &output_length, &output_success));
+    if (err == ESP_OK && output_success) {
         printf("%s\n", output);
         rc = 0;
         goto cleanup;
@@ -431,8 +439,9 @@ static int event_router_func(int argc, char **argv)
     return 0;
 }
 
-void register_cap_router_mgr(void)
+void register_cap_router_mgr(claw_capability_registry_t *registry)
 {
+    s_registry = registry;
     router_args.reload = arg_lit0(NULL, "reload", "Reload automation rules from disk");
     router_args.rules = arg_lit0(NULL, "rules", "List all automation rules");
     router_args.rule = arg_str0(NULL, "rule", "<id>", "Show one automation rule");

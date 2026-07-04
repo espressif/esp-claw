@@ -13,7 +13,8 @@
 
 #include "cap_router_mgr.h"
 #include "cmd_cap_router_mgr.h"
-#include "claw_cap.h"
+#include "claw_cabi.h"
+#include "claw_cabi_esp.h"
 #include "claw_event_router.h"
 #include "esp_check.h"
 #include "esp_console.h"
@@ -33,6 +34,7 @@ static const char *TAG = "event_router_test";
 #define TEST_RULES_PATH            TEST_AUTOMATION_DIR "/rules"
 
 static wl_handle_t s_wl_handle = WL_INVALID_HANDLE;
+static claw_capability_registry_t *s_registry;
 
 static const char *s_seed_rules_json =
     "[]\n";
@@ -125,10 +127,11 @@ static esp_err_t init_console(void)
 
     ESP_RETURN_ON_ERROR(esp_console_init(&console_config), TAG, "Failed to init console");
     esp_console_register_help_command();
-    ESP_RETURN_ON_ERROR(claw_cap_init(), TAG, "Failed to init claw_cap");
-    ESP_RETURN_ON_ERROR(cap_router_mgr_register_group(), TAG, "Failed to register router manager cap");
-    ESP_RETURN_ON_ERROR(claw_cap_start_all(), TAG, "Failed to start capabilities");
-    register_cap_router_mgr();
+    ESP_RETURN_ON_ERROR(claw_cabi_result_to_esp(claw_capability_registry_create(&s_registry)), TAG,
+                        "Failed to create capability registry");
+    ESP_RETURN_ON_ERROR(cap_router_mgr_register_group(s_registry), TAG,
+                        "Failed to register router manager cap");
+    register_cap_router_mgr(s_registry);
     return ESP_OK;
 }
 

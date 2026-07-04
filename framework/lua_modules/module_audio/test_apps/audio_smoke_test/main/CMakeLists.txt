@@ -7,7 +7,7 @@ idf_component_register(
         "lua/harness.lua"
     PRIV_REQUIRES
         lua_runtime
-        claw_cap
+        runtime
         esp_codec_dev
         fatfs
         http_reuse

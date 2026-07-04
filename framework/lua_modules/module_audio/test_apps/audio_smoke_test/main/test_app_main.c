@@ -13,7 +13,8 @@
 #include "audio_codec_if.h"
 #include "audio_private.h"
 #include "cap_lua.h"
-#include "claw_cap.h"
+#include "claw_cabi.h"
+#include "claw_cabi_esp.h"
 #include "esp_codec_dev.h"
 #include "esp_err.h"
 #include "esp_http_client.h"
@@ -36,6 +37,7 @@
 
 static const char *TEST_TAG = "audio_test_app";
 static wl_handle_t s_wl_handle = WL_INVALID_HANDLE;
+static claw_capability_registry_t *s_registry;
 static char s_lua_case_output[TEST_OUTPUT_SIZE];
 
 esp_http_client_handle_t __wrap_esp_http_client_init(const esp_http_client_config_t *config);
@@ -435,9 +437,9 @@ static int luaopen_audio_test(lua_State *L)
 
 static esp_err_t init_lua_runtime(void)
 {
-    esp_err_t err = claw_cap_init();
+    esp_err_t err = claw_cabi_result_to_esp(claw_capability_registry_create(&s_registry));
     if (err != ESP_OK) {
-        ESP_LOGE(TEST_TAG, "claw_cap_init failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TEST_TAG, "claw_capability_registry_create failed: %s", esp_err_to_name(err));
         return err;
     }
     err = lua_module_audio_register();
@@ -450,14 +452,9 @@ static esp_err_t init_lua_runtime(void)
         ESP_LOGE(TEST_TAG, "audio_test module register failed: %s", esp_err_to_name(err));
         return err;
     }
-    err = cap_lua_register_group();
+    err = cap_lua_register_group(s_registry);
     if (err != ESP_OK) {
         ESP_LOGE(TEST_TAG, "cap_lua_register_group failed: %s", esp_err_to_name(err));
-        return err;
-    }
-    err = claw_cap_start_all();
-    if (err != ESP_OK) {
-        ESP_LOGE(TEST_TAG, "claw_cap_start_all failed: %s", esp_err_to_name(err));
     }
     return err;
 }

@@ -9,7 +9,12 @@
 extern "C" {
 #endif
 
-void register_cap_web_search(void);
+typedef struct claw_capability_registry claw_capability_registry_t;
+
+/* Register the `web_search` console command. `registry` is the claw-cabi
+ * capability registry the command dispatches against; it must outlive the
+ * console. */
+void register_cap_web_search(claw_capability_registry_t *registry);
 
 #ifdef __cplusplus
 }

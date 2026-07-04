@@ -9,7 +9,12 @@
 extern "C" {
 #endif
 
-void register_cap_router_mgr(void);
+typedef struct claw_capability_registry claw_capability_registry_t;
+
+/* Register the `event_router` console command. `registry` is the claw-cabi
+ * capability registry the rule sub-commands dispatch against; it must outlive
+ * the console. */
+void register_cap_router_mgr(claw_capability_registry_t *registry);
 
 #ifdef __cplusplus
 }

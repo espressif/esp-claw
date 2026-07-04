@@ -75,8 +75,9 @@ struct MemberPlan {
 /// The capability registry. Construct with [`Registry::new`] / [`Default`],
 /// register via [`register`](Registry::register) / [`register_group`](Registry::register_group),
 /// drive lifecycle with [`start_all`](Registry::start_all) /
-/// [`enable_group`](Registry::enable_group), and read out internal
-/// representations via [`tools`](Registry::tools) / [`channels`](Registry::channels).
+/// [`enable_group`](Registry::enable_group) / [`disable_group`](Registry::disable_group),
+/// and read out internal representations via [`tools`](Registry::tools) /
+/// [`channels`](Registry::channels).
 pub struct Registry {
     inner: Mutex<RegistryState>,
 }
@@ -274,7 +275,7 @@ impl Registry {
         group_id: &str,
         enable_error: CapabilityError,
     ) -> CapabilityError {
-        match self.unregister_group_core(group_id) {
+        match self.rollback_registered_group(group_id) {
             Ok(()) => enable_error,
             Err(rollback_error) => CapabilityError::Failed(format!(
                 "enable failed: {enable_error}; rollback failed: {rollback_error}"
@@ -512,7 +513,7 @@ impl Registry {
 
     /// The teardown work of [`disable_group`](Self::disable_group), without
     /// persistence or observer notification. Used by [`stop_all`](Self::stop_all)
-    /// and [`unregister_group`](Self::unregister_group).
+    /// and registration rollback.
     fn disable_core(&self, group_id: &str) -> Result<(), CapabilityError> {
         let (group_lifecycle, member_lifecycles) = {
             let mut state = self.state();
@@ -553,30 +554,12 @@ impl Registry {
         first_error.map_or(Ok(()), Err)
     }
 
-    /// Disable then remove a group and all its members, running the one-time
-    /// `deinit` teardown (members then group, reverse order) for any whose
-    /// `init` previously ran.
+    /// Remove a group that was just registered but failed to enable.
     ///
-    /// On removal any [`CapabilityObserver`](crate::CapabilityObserver) is notified
-    /// with [`CapabilityChange::Unregistered`](crate::CapabilityChange). Unregister
-    /// does **not** touch the persisted disabled deny-list: a stale id left there
-    /// is ignored at the next [`start_all`](Self::start_all) and pruned on the next
-    /// enable/disable write.
-    ///
-    /// # Errors
-    ///
-    /// [`CapabilityError::NotFound`] if `group_id` is unknown; otherwise the first
-    /// `stop`/`deinit` hook failure.
-    pub fn unregister_group(&self, group_id: &str) -> Result<(), CapabilityError> {
-        let existed = self.group_exists(group_id);
-        let result = self.unregister_group_core(group_id);
-        if existed && !self.group_exists(group_id) {
-            self.notify(CapabilityChange::Unregistered(group_id.to_string()));
-        }
-        result
-    }
-
-    fn unregister_group_core(&self, group_id: &str) -> Result<(), CapabilityError> {
+    /// This is not a public operation: a live registry owns a static capability
+    /// set after registration. The rollback path only cleans up a failed
+    /// registration before it is observable as usable.
+    fn rollback_registered_group(&self, group_id: &str) -> Result<(), CapabilityError> {
         if !self.state().groups.contains_key(group_id) {
             return Err(CapabilityError::NotFound);
         }
@@ -618,31 +601,6 @@ impl Registry {
         first_error.map_or(Ok(()), Err)
     }
 
-    /// Unregister a single capability — only when it is the sole member of its
-    /// group (multi-member groups must be removed as a whole).
-    ///
-    /// # Errors
-    ///
-    /// [`CapabilityError::NotFound`] if no capability has `id`;
-    /// [`CapabilityError::InvalidState`] if it shares its group with others.
-    pub fn unregister(&self, id: &str) -> Result<(), CapabilityError> {
-        let group_id = {
-            let state = self.state();
-            let member = state.members.get(id).ok_or(CapabilityError::NotFound)?;
-            let group_id = member.group_id.clone();
-            let member_count = state
-                .groups
-                .get(&group_id)
-                .map(|group| group.member_ids.len())
-                .unwrap_or(0);
-            if member_count != 1 {
-                return Err(CapabilityError::InvalidState);
-            }
-            group_id
-        };
-        self.unregister_group(&group_id)
-    }
-
     // --- State mutators (locked, tiny) ----------------------------------
 
     fn set_group_state(state: &mut RegistryState, group_id: &str, new_state: CapabilityState) {
@@ -664,11 +622,6 @@ impl Registry {
     }
 
     // --- Queries (crate-internal; lifecycle drivers read these) ---------
-
-    /// Whether a group is registered.
-    pub(crate) fn group_exists(&self, group_id: &str) -> bool {
-        self.state().groups.contains_key(group_id)
-    }
 
     /// Current lifecycle state of a group.
     pub(crate) fn group_state(&self, group_id: &str) -> Result<CapabilityState, CapabilityError> {
@@ -1130,7 +1083,7 @@ mod tests {
             Err(CapabilityError::Failed("boom".into()))
         );
 
-        assert!(!registry.group_exists("late"));
+        assert_eq!(registry.group_state("late"), Err(CapabilityError::NotFound));
     }
 
     #[test]
@@ -1150,7 +1103,7 @@ mod tests {
             ))
         );
 
-        assert!(!registry.group_exists("late"));
+        assert_eq!(registry.group_state("late"), Err(CapabilityError::NotFound));
     }
 
     #[test]
@@ -1244,62 +1197,6 @@ mod tests {
     }
 
     #[test]
-    fn unregister_single_member_then_gone() {
-        let registry = Registry::new();
-        registry
-            .register(Capability::from_tool(Tool::new(DummyTool::named("solo"))))
-            .unwrap();
-        registry.unregister("solo").unwrap();
-        assert!(!registry.group_exists("solo"));
-    }
-
-    #[test]
-    fn unregister_runs_deinit_after_init() {
-        let lifecycle = Arc::new(CountingLifecycle::default());
-        let registry = Registry::new();
-        registry
-            .register(Capability::none("svc").with_lifecycle(lifecycle.clone()))
-            .unwrap();
-        registry.start_all().unwrap();
-        registry.unregister("svc").unwrap();
-
-        // Full symmetric cycle: init -> start -> stop -> deinit, each once.
-        assert_eq!(lifecycle.init.load(Ordering::SeqCst), 1);
-        assert_eq!(lifecycle.start.load(Ordering::SeqCst), 1);
-        assert_eq!(lifecycle.stop.load(Ordering::SeqCst), 1);
-        assert_eq!(lifecycle.deinit.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
-    fn unregister_without_init_skips_deinit() {
-        let lifecycle = Arc::new(CountingLifecycle::default());
-        let registry = Registry::new();
-        // Registered but never started, so init never ran.
-        registry
-            .register(Capability::none("svc").with_lifecycle(lifecycle.clone()))
-            .unwrap();
-        registry.unregister("svc").unwrap();
-
-        assert_eq!(lifecycle.init.load(Ordering::SeqCst), 0);
-        assert_eq!(lifecycle.deinit.load(Ordering::SeqCst), 0);
-    }
-
-    #[test]
-    fn unregister_member_of_multi_group_is_rejected() {
-        let registry = Registry::new();
-        registry
-            .register_group(CapabilityGroup::new(
-                "pair",
-                [
-                    Capability::from_tool(Tool::new(DummyTool::named("x"))),
-                    Capability::from_tool(Tool::new(DummyTool::named("y"))),
-                ],
-            ))
-            .unwrap();
-        assert_eq!(registry.unregister("x"), Err(CapabilityError::InvalidState));
-    }
-
-    #[test]
     fn enable_disable_unknown_group_errors() {
         let registry = Registry::new();
         assert_eq!(
@@ -1328,7 +1225,6 @@ mod tests {
         registry.disable_group("t").unwrap(); // no-op: already Disabled
         registry.enable_group("t").unwrap();
         registry.enable_group("t").unwrap(); // no-op: already Started
-        registry.unregister("t").unwrap();
 
         let changes = observer.changes.lock().unwrap().clone();
         assert_eq!(
@@ -1343,7 +1239,6 @@ mod tests {
                     group_id: "t".into(),
                     state: CapabilityState::Started,
                 },
-                CapabilityChange::Unregistered("t".into()),
             ]
         );
     }

@@ -15,14 +15,14 @@ use crate::error::CapabilityError;
 /// life:
 ///
 /// ```text
-/// init  →  ( start → stop )*  →  deinit
+/// init  →  ( start → stop )*
 /// ```
 ///
-/// - `init` / `deinit` are the **one-time** pair: `init` runs at most once
-///   (before the first `start`); `deinit` runs at most once (after the last
-///   `stop`, when the capability is unregistered), and only if `init` ran.
+/// - `init` is one-time: it runs at most once before the first `start`.
 /// - `start` / `stop` are the **per-activation** pair: they run on every
 ///   enable / disable cycle.
+/// - `deinit` is reserved for registration rollback after a failed start. Normal
+///   runtime control uses enable / disable, not removal.
 pub trait Lifecycle: Send + Sync {
     /// One-time initialization, run at most once before the first `start`.
     fn init(&self) -> Result<(), CapabilityError> {
@@ -39,9 +39,9 @@ pub trait Lifecycle: Send + Sync {
         Ok(())
     }
 
-    /// One-time teardown, the counterpart to `init`. Run at most once when the
-    /// capability is unregistered, after the final `stop`, and only if `init`
-    /// previously ran. Best-effort, reverse order.
+    /// One-time rollback teardown, the counterpart to `init`. Used only when a
+    /// just-registered capability fails to start and must be removed before the
+    /// registration completes.
     fn deinit(&self) -> Result<(), CapabilityError> {
         Ok(())
     }
@@ -51,8 +51,8 @@ pub trait Lifecycle: Send + Sync {
 ///
 /// A capability is `Registered` (known, not serving), `Started` (serving), or
 /// `Disabled` (administratively off). There is no draining state: dispatch does
-/// not happen in this layer (tools are invoked through `claw-tool`), so there is
-/// nothing in flight to serialize against unregister.
+/// not happen in this layer (tools are invoked through `claw-tool`), so
+/// availability is just the registered group's lifecycle state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum CapabilityState {
     /// Registered but not started (registry not started, or group disabled-then-registered).

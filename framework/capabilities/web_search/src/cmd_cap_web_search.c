@@ -10,7 +10,8 @@
 
 #include "argtable3/argtable3.h"
 #include "cJSON.h"
-#include "claw_cap.h"
+#include "claw_cabi.h"
+#include "claw_cabi_esp.h"
 #include "esp_console.h"
 
 static struct {
@@ -18,16 +19,22 @@ static struct {
     struct arg_end *end;
 } web_search_args;
 
+static claw_capability_registry_t *s_registry;
+
 static int web_search_func(int argc, char **argv)
 {
     cJSON *root = NULL;
     char *input_json = NULL;
     char *output = NULL;
+    size_t output_length = 0;
+    bool output_success = false;
     esp_err_t err;
-    claw_cap_call_context_t ctx = {
-        .caller = CLAW_CAP_CALLER_CONSOLE,
-    };
     int nerrors = arg_parse(argc, argv, (void **)&web_search_args);
+
+    if (!s_registry) {
+        printf("capability registry is not configured\n");
+        return 1;
+    }
 
     if (nerrors != 0) {
         arg_print_errors(stderr, web_search_args.end, argv[0]);
@@ -60,7 +67,9 @@ static int web_search_func(int argc, char **argv)
         return 1;
     }
 
-    err = claw_cap_call("web_search", input_json, &ctx, output, 4096);
+    err = claw_cabi_result_to_esp(claw_capability_invoke(s_registry, "web_search", input_json,
+                                                         output, 4096, &output_length,
+                                                         &output_success));
     if (err != ESP_OK) {
         printf("%s\n", output[0] ? output : esp_err_to_name(err));
     } else {
@@ -69,11 +78,13 @@ static int web_search_func(int argc, char **argv)
 
     free(output);
     free(input_json);
-    return err == ESP_OK ? 0 : 1;
+    return (err == ESP_OK && output_success) ? 0 : 1;
 }
 
-void register_cap_web_search(void)
+void register_cap_web_search(claw_capability_registry_t *registry)
 {
+    s_registry = registry;
+
     web_search_args.query = arg_str1("q", "query", "<query>", "Search query");
     web_search_args.end = arg_end(4);
 

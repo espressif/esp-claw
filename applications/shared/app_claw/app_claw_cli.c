@@ -30,6 +30,16 @@
 #if CONFIG_APP_CLAW_CAP_SCHEDULER
 #include "cmd_cap_scheduler.h"
 #endif
+#if CONFIG_APP_CLAW_CAP_LLM_INSPECT
+#include "cmd_cap_llm_inspect.h"
+#endif
+#if CONFIG_APP_CLAW_CAP_ROUTER_MGR
+#include "cmd_cap_router_mgr.h"
+#endif
+#if CONFIG_APP_CLAW_CAP_WEB_SEARCH
+#include "cmd_cap_web_search.h"
+#endif
+#include "app_claw.h"
 #include "claw_cabi_esp.h"
 #include "claw_event_publisher.h"
 #include "claw_event_router.h"
@@ -349,16 +359,62 @@ static int cmd_cap_list(int argc, char **argv)
     return 1;
 }
 
+#define CMD_CAP_CALL_OUTPUT_SIZE (8 * 1024)
+
 static int cmd_cap_call(int argc, char **argv)
 {
-    (void)argv;
+    claw_capability_registry_t *registry = app_claw_get_capability_registry();
+    const char *cap_name;
+    char *input_json = NULL;
+    char *output = NULL;
+    size_t output_length = 0;
+    bool output_success = false;
+    esp_err_t err;
+
     if (argc < 3) {
         printf("Usage: cap_call <name> <json>\n");
         return 1;
     }
+    if (!registry) {
+        printf("capability registry is not configured\n");
+        return 1;
+    }
 
-    printf("cap call is not exposed by claw-cabi yet\n");
-    return 1;
+    cap_name = argv[1];
+    input_json = join_args_from(argc, argv, 2);
+    if (!input_json) {
+        printf("out of memory\n");
+        return 1;
+    }
+
+    output = calloc(1, CMD_CAP_CALL_OUTPUT_SIZE);
+    if (!output) {
+        free(input_json);
+        printf("out of memory\n");
+        return 1;
+    }
+
+    err = claw_cabi_result_to_esp(claw_capability_invoke(registry,
+                                                         cap_name,
+                                                         input_json,
+                                                         output,
+                                                         CMD_CAP_CALL_OUTPUT_SIZE,
+                                                         &output_length,
+                                                         &output_success));
+    free(input_json);
+
+    if (err != ESP_OK) {
+        printf("cap_call %s failed: %s\n", cap_name, esp_err_to_name(err));
+        if (output[0]) {
+            printf("%s\n", output);
+        }
+        free(output);
+        return 1;
+    }
+
+    printf("[%s] %s\n", output_success ? "ok" : "error", output);
+    free(output);
+    return output_success ? 0 : 1;
 }
 
 static int cmd_cap_groups(int argc, char **argv)
@@ -719,6 +775,15 @@ static void register_cap_cli_commands(void)
 #endif
 #if CONFIG_APP_CLAW_CAP_SCHEDULER
     register_cap_scheduler();
+#endif
+#if CONFIG_APP_CLAW_CAP_LLM_INSPECT
+    register_cap_llm_inspect(app_claw_get_capability_registry());
+#endif
+#if CONFIG_APP_CLAW_CAP_ROUTER_MGR
+    register_cap_router_mgr(app_claw_get_capability_registry());
+#endif
+#if CONFIG_APP_CLAW_CAP_WEB_SEARCH
+    register_cap_web_search(app_claw_get_capability_registry());
 #endif
 }
 

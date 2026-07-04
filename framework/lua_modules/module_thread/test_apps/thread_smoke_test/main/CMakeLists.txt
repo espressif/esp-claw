@@ -16,7 +16,7 @@ idf_component_register(
         "lua/sync_echo.lua"
     PRIV_REQUIRES
         lua_runtime
-        claw_cap
+        runtime
         esp_timer
         fatfs
         module_delay

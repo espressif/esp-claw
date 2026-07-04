@@ -55,6 +55,10 @@
 #if CONFIG_APP_CLAW_LUA_MODULE_CAMERA && defined(CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT)
 #include "lua_module_camera.h"
 #endif
+#if CONFIG_APP_CLAW_LUA_MODULE_CAPABILITY
+#include "app_claw.h"
+#include "lua_module_capability.h"
+#endif
 #if CONFIG_APP_CLAW_LUA_MODULE_DELAY
 #include "lua_module_delay.h"
 #endif
@@ -346,6 +350,14 @@ static esp_err_t app_lua_register_camera(const char *fatfs_base_path)
 }
 #endif
 
+#if CONFIG_APP_CLAW_LUA_MODULE_CAPABILITY
+static esp_err_t app_lua_register_capability(const char *fatfs_base_path)
+{
+    (void)fatfs_base_path;
+    return lua_module_capability_register(app_claw_get_capability_registry());
+}
+#endif
+
 #if CONFIG_APP_CLAW_LUA_MODULE_DELAY
 static esp_err_t app_lua_register_delay(const char *fatfs_base_path)
 {
@@ -548,6 +560,9 @@ static const app_lua_module_entry_t s_lua_module_entries[] = {
 #if CONFIG_APP_CLAW_LUA_MODULE_CAMERA && defined(CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT)
     { "camera", "Camera", app_lua_register_camera },
 #endif
+#if CONFIG_APP_CLAW_LUA_MODULE_CAPABILITY
+    { "capability", "Capability", app_lua_register_capability },
+#endif
 #if CONFIG_APP_CLAW_LUA_MODULE_DELAY
     { "delay", "Delay", app_lua_register_delay },
 #endif
@@ -651,6 +666,9 @@ static const app_lua_module_info_t s_lua_module_infos[] = {
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_CAMERA && defined(CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT)
     { "camera", "Camera" },
+#endif
+#if CONFIG_APP_CLAW_LUA_MODULE_CAPABILITY
+    { "capability", "Capability" },
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_DELAY
     { "delay", "Delay" },

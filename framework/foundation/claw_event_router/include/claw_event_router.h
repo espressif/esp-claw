@@ -17,6 +17,12 @@
 extern "C" {
 #endif
 
+/* Opaque claw-cabi handles the router calls into for action execution. These
+ * typedefs mirror the ones in claw_cabi.h exactly; C11 permits the identical
+ * redefinition when a translation unit includes both headers. */
+typedef struct claw_capability_registry claw_capability_registry_t;
+typedef struct claw_agent_system claw_agent_system_t;
+
 typedef enum {
     CLAW_EVENT_ROUTER_ROUTE_PASS = 0,
     CLAW_EVENT_ROUTER_ROUTE_CONSUMED = 1,
@@ -110,6 +116,20 @@ typedef struct {
 } claw_event_router_rule_t;
 
 esp_err_t claw_event_router_init(const claw_event_router_config_t *config);
+
+/*
+ * Inject the claw-cabi runtime handles the router uses to execute actions:
+ *   - `registry` backs CALL_CAP / RUN_SCRIPT / SEND_MESSAGE via
+ *     claw_capability_invoke() (invoke a capability by name).
+ *   - `agent_system` backs RUN_AGENT via claw_agent_system_push_message().
+ *
+ * Call once after the registry (and, if enabled, the agent system) are created,
+ * before claw_event_router_start(). Either handle may be NULL when the
+ * corresponding feature is disabled; actions needing a missing handle fail with
+ * ESP_ERR_INVALID_STATE. The router borrows the handles and never frees them.
+ */
+esp_err_t claw_event_router_set_runtime_handles(claw_capability_registry_t *registry,
+                                                claw_agent_system_t *agent_system);
 esp_err_t claw_event_router_start(void);
 esp_err_t claw_event_router_stop(void);
 esp_err_t claw_event_router_reload(void);

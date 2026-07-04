@@ -55,6 +55,7 @@ typedef struct {
 
 esp_err_t app_claw_start(const app_claw_config_t *config);
 claw_agent_system_t *app_claw_get_agent_system(void);
+claw_capability_registry_t *app_claw_get_capability_registry(void);
 esp_err_t app_claw_ui_start(void);
 esp_err_t app_claw_set_network_status(bool sta_connected, const char *ap_ssid);
 

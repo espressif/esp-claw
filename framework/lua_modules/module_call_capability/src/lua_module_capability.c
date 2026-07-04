@@ -12,7 +12,8 @@
 
 #include "cJSON.h"
 #include "cap_lua.h"
-#include "claw_cap.h"
+#include "claw_cabi.h"
+#include "claw_cabi_esp.h"
 #include "esp_err.h"
 #include "lauxlib.h"
 
@@ -20,53 +21,9 @@
 #define LUA_MODULE_CAPABILITY_DEFAULT_OUTPUT_SIZE (64 * 1024)
 #define LUA_MODULE_CAPABILITY_MAX_OUTPUT_SIZE     (256 * 1024)
 
-static const char *lua_module_capability_get_string_field(lua_State *L,
-                                                          int index,
-                                                          const char *field_name)
-{
-    const char *value = NULL;
-
-    index = lua_absindex(L, index);
-    lua_getfield(L, index, field_name);
-    if (lua_isnil(L, -1)) {
-        lua_pop(L, 1);
-        return NULL;
-    }
-    if (!lua_isstring(L, -1)) {
-        lua_pop(L, 1);
-        luaL_error(L, "field '%s' must be a string", field_name);
-    }
-
-    value = lua_tostring(L, -1);
-    lua_pop(L, 1);
-    return value;
-}
-
-static const char *lua_module_capability_get_args_string_field(lua_State *L,
-                                                               const char *field_name)
-{
-    const char *value = NULL;
-
-    lua_getglobal(L, "args");
-    if (!lua_istable(L, -1)) {
-        lua_pop(L, 1);
-        return NULL;
-    }
-
-    lua_getfield(L, -1, field_name);
-    if (lua_isnil(L, -1)) {
-        lua_pop(L, 2);
-        return NULL;
-    }
-    if (!lua_isstring(L, -1)) {
-        lua_pop(L, 2);
-        luaL_error(L, "global args.%s must be a string", field_name);
-    }
-
-    value = lua_tostring(L, -1);
-    lua_pop(L, 2);
-    return value;
-}
+/* Registry handle injected at registration time; the invoke ABI is stateless
+ * and dispatches by capability name against this registry. */
+static claw_capability_registry_t *s_capability_registry;
 
 static size_t lua_module_capability_get_size_field(lua_State *L,
                                                    int index,
@@ -246,77 +203,22 @@ static char *lua_module_capability_build_payload_json(lua_State *L, int index)
     return payload_json;
 }
 
-static void lua_module_capability_fill_context(lua_State *L, int opts_index, claw_cap_call_context_t *ctx)
-{
-    const char *value = NULL;
-
-    memset(ctx, 0, sizeof(*ctx));
-    ctx->caller = CLAW_CAP_CALLER_SYSTEM;
-
-    if (!lua_isnoneornil(L, opts_index)) {
-        if (!lua_istable(L, opts_index)) {
-            luaL_error(L, "opts must be a table");
-        }
-
-        value = lua_module_capability_get_string_field(L, opts_index, "session_id");
-        if (value && value[0]) {
-            ctx->session_id = value;
-        }
-
-        value = lua_module_capability_get_string_field(L, opts_index, "channel");
-        if (value && value[0]) {
-            ctx->channel = value;
-        }
-
-        value = lua_module_capability_get_string_field(L, opts_index, "chat_id");
-        if (value && value[0]) {
-            ctx->chat_id = value;
-        }
-
-        value = lua_module_capability_get_string_field(L, opts_index, "source_cap");
-        if (value && value[0]) {
-            ctx->source_cap = value;
-        }
-    }
-
-    if (!ctx->session_id) {
-        value = lua_module_capability_get_args_string_field(L, "session_id");
-        if (value && value[0]) {
-            ctx->session_id = value;
-        }
-    }
-    if (!ctx->channel) {
-        value = lua_module_capability_get_args_string_field(L, "channel");
-        if (value && value[0]) {
-            ctx->channel = value;
-        }
-    }
-    if (!ctx->chat_id) {
-        value = lua_module_capability_get_args_string_field(L, "chat_id");
-        if (value && value[0]) {
-            ctx->chat_id = value;
-        }
-    }
-    if (!ctx->source_cap) {
-        value = lua_module_capability_get_args_string_field(L, "source_cap");
-        if (value && value[0]) {
-            ctx->source_cap = value;
-        }
-    }
-}
-
 static int lua_module_capability_call(lua_State *L)
 {
     const char *cap_name = luaL_checkstring(L, 1);
-    claw_cap_call_context_t ctx = {0};
     char *payload_json = NULL;
     char *output = NULL;
     size_t output_size;
+    size_t output_length = 0;
+    bool output_success = false;
     esp_err_t err;
 
-    /* Parse the opts (which can raise -> longjmp) before allocating any heap
+    if (!s_capability_registry) {
+        return luaL_error(L, "capability registry not available");
+    }
+
+    /* Read the opts size (which can raise -> longjmp) before allocating any heap
      * buffers, otherwise a bad opts field would leak payload_json. */
-    lua_module_capability_fill_context(L, 3, &ctx);
     output_size = lua_module_capability_get_size_field(L,
                                                        3,
                                                        "max_output_bytes",
@@ -332,10 +234,16 @@ static int lua_module_capability_call(lua_State *L)
         return luaL_error(L, "out of memory");
     }
 
-    err = claw_cap_call(cap_name, payload_json, &ctx, output, output_size);
+    err = claw_cabi_result_to_esp(claw_capability_invoke(s_capability_registry,
+                                                         cap_name,
+                                                         payload_json,
+                                                         output,
+                                                         output_size,
+                                                         &output_length,
+                                                         &output_success));
     free(payload_json);
 
-    if (err == ESP_OK) {
+    if (err == ESP_OK && output_success) {
         lua_pushboolean(L, 1);
         lua_pushstring(L, output);
         lua_pushnil(L);
@@ -364,7 +272,11 @@ int luaopen_capability(lua_State *L)
     return 1;
 }
 
-esp_err_t lua_module_capability_register(void)
+esp_err_t lua_module_capability_register(claw_capability_registry_t *registry)
 {
+    if (!registry) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    s_capability_registry = registry;
     return cap_lua_register_module(LUA_MODULE_CAPABILITY_NAME, luaopen_capability);
 }
