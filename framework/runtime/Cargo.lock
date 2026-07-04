@@ -193,7 +193,9 @@ dependencies = [
 name = "claw-capability"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "claw-permission",
+ "serde_json",
  "thiserror",
  "tracing",
 ]

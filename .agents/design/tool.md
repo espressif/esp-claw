@@ -16,10 +16,22 @@ struct ToolProjection {
     tools: Vec<ToolProjectionEntry>
 }
 
-struct ToolInvocation<'a> {
+struct RawToolInvocation<'a> {
     pub id: Option<&'a str> // raw model/tool-call id; transport metadata only
     pub name: &'a str // raw model-emitted name; not guaranteed to exist in the ToolSet
-    pub arguments_json: &'a str // raw JSON object text; not validated until dispatch
+    pub arguments_json: &'a str // raw JSON object text; validated by ToolInvocation::try_from
+}
+
+struct ToolInvocation<'a> {
+    id: Option<&'a str>
+    name: &'a str
+    arguments_json: &'a str
+
+    pub fn try_from(raw: RawToolInvocation<'a>) -> Result<ToolInvocation<'a>> // validates arguments_json as a JSON object
+    pub fn id() -> Option<&str>
+    pub fn name() -> &str
+    pub fn arguments_json() -> &str
+    pub fn arguments_value() -> Result<Value>
 }
 
 struct ToolOutput {
@@ -36,12 +48,11 @@ enum ToolError {
 
 struct ToolInvokeError {
     pub error: ToolError
-    pub retries: ToolRetryCount
 }
 
-struct ToolRetryCount {
-    pub fn none() -> ToolRetryCount
-    pub fn extra(extra_attempts: u32) -> ToolRetryCount
+struct RetryCount {
+    pub fn none() -> RetryCount
+    pub fn extra(extra_attempts: u32) -> RetryCount
 }
 
 trait ToolSpec {
@@ -49,6 +60,7 @@ trait ToolSpec {
     fn schema(&self) -> &str // may return static text or borrow metadata owned by the handler
     fn usage(&self) -> Option<&str> // may return static text or borrow metadata owned by the handler
     fn concurrent(&self) -> bool // internal scheduling hint; runner uses it, callers do not
+    fn retry_count(&self) -> RetryCount // tool-owned retry policy; runner does not know retry
     fn classify(&self, call: &ToolInvocation<'_>) -> Action // describes the call; permission decides the Action
 }
 
@@ -59,6 +71,12 @@ trait SyncToolHandler: ToolSpec {
 trait AsyncToolHandler: ToolSpec {
     fn invoke<'a>(&'a self, call: &'a ToolInvocation<'_>) -> ToolFuture<'a>
 }
+
+mod bake {
+    pub fn validate_tools_dir(tools_dir: &Path) -> Result<usize> // build-time check for resources/tools
+}
+
+macro_rules! tool_metadata // generates name/schema/usage from resources/tools/<name>
 
 struct Tool {
     pub fn from_sync(handler: impl SyncToolHandler + 'static) -> Tool // adapter for C/immediate tools

@@ -45,7 +45,7 @@ impl<'a> ToolRunner<'a> {
         };
 
         match self.decide(&action) {
-            PermissionDecision::Allow => self.invoke_with_retry(call).await,
+            PermissionDecision::Allow => self.invoke(call).await,
             PermissionDecision::Ask { reason } => ToolRunOutcome::ApprovalNeeded {
                 content: reason.clone(),
                 approval: ApprovalNeeded {
@@ -63,33 +63,21 @@ impl<'a> ToolRunner<'a> {
             .unwrap_or(PermissionDecision::Allow)
     }
 
-    async fn invoke_with_retry<'call>(&self, call: &'call ToolInvocation<'call>) -> ToolRunOutcome {
-        let mut retries = None;
-        loop {
-            match self.tools.invoke(call).await {
-                Ok(output) => {
-                    return ToolRunOutcome::Ran {
-                        content: output.output,
-                        ok: output.ok,
-                    };
-                }
-                Err(error) => {
-                    let remaining = retries.get_or_insert_with(|| error.retries.extra_attempts());
-                    if *remaining == 0 {
-                        return render_after_execution(error);
-                    }
-                    *remaining = (*remaining).saturating_sub(1);
-                }
-            }
+    async fn invoke<'call>(&self, call: &'call ToolInvocation<'call>) -> ToolRunOutcome {
+        match self.tools.invoke(call).await {
+            Ok(output) => ToolRunOutcome::Ran {
+                content: output.output,
+                ok: output.ok,
+            },
+            Err(error) => render_after_execution(error),
         }
     }
 }
 
 fn render_before_permission(error: ToolInvokeError) -> ToolRunOutcome {
-    let ToolInvokeError { error, retries } = error;
-    match error {
+    match error.error {
         ToolError::InvokeRejected(message) => ToolRunOutcome::Blocked { content: message },
-        error => render_after_execution(ToolInvokeError { error, retries }),
+        error => render_after_execution(ToolInvokeError { error }),
     }
 }
 

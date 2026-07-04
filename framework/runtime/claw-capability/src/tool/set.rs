@@ -329,15 +329,15 @@ impl<'a> ToolSetHandle<'a> {
     }
 
     pub(crate) fn classify(&self, call: &ToolInvocation<'_>) -> ToolResult<Action> {
-        match self.tools.get(call.name) {
+        match self.tools.get(call.name()) {
             Some((tool, _, ToolState::Enabled | ToolState::TemporailyEnabled)) => {
                 Ok(tool.classify(call))
             }
             Some((_, _, ToolState::TemporailyDisabled)) => {
-                Err(ToolError::InvokeRejected(unavailable_message(call.name)).into())
+                Err(ToolError::InvokeRejected(unavailable_message(call.name())).into())
             }
             Some((_, _, ToolState::Disabled)) | None => {
-                Err(ToolError::NotFound(call.name.to_owned()).into())
+                Err(ToolError::NotFound(call.name().to_owned()).into())
             }
         }
     }
@@ -346,15 +346,15 @@ impl<'a> ToolSetHandle<'a> {
         &self,
         call: &'call ToolInvocation<'call>,
     ) -> ToolResult<ToolOutput> {
-        match self.tools.get(call.name) {
+        match self.tools.get(call.name()) {
             Some((tool, _, ToolState::Enabled | ToolState::TemporailyEnabled)) => {
                 tool.invoke(call).await
             }
             Some((_, _, ToolState::TemporailyDisabled)) => {
-                Err(ToolError::InvokeRejected(unavailable_message(call.name)).into())
+                Err(ToolError::InvokeRejected(unavailable_message(call.name())).into())
             }
             Some((_, _, ToolState::Disabled)) | None => {
-                Err(ToolError::NotFound(call.name.to_owned()).into())
+                Err(ToolError::NotFound(call.name().to_owned()).into())
             }
         }
     }

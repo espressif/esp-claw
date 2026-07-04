@@ -1,7 +1,7 @@
 use std::fmt;
 use std::sync::Arc;
 
-use crate::tool::{Tool, ToolRegistry, ToolRegistryError, ToolRegistryVersion, ToolSet};
+use crate::tool::{Tool, ToolRegistry, ToolRegistryError, ToolSet};
 
 pub type CapabilityId = String;
 pub type CapabilityResult<T> = Result<T, CapabilityRegistryError>;
