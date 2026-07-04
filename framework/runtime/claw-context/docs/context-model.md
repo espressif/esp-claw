@@ -61,7 +61,7 @@ nesting.
 
 ```
 Context
-├── Core        Soul · AgentInstruction · ToolPolicy · ToolReminder · ActiveSkills
+├── Core        Soul · AgentInstruction · ToolPolicy · ToolReminder · SkillList
 ├── Mode        ConversationModeContext | WorkingModeContext
 ├── Knowledge   GlobalMemory/SessionMemory/AgentMemory (push)
 │               retrieved knowledge is tool-call output in History (pull)
@@ -182,8 +182,8 @@ Group, scope, source, and extension points. (Mutability / band in Part B.)
 - **ToolReminder** — *Core, Agent.* Ephemeral tool phase note (e.g. the current
   soft-hide allow-set), rendered as a reminder tail item. It is not persisted and
   does not move the cached system prefix.
-- **ActiveSkills** — *Core, Agent.* Activated `SKILL.md` text only; metadata
-  (`skill.toml`) is router-only. *Extends:* 0–N active; full/degraded/short modes.
+- **SkillList** — *Core, Agent.* Available skill catalog rendered as prompt
+  guidance. Full skill documents are returned by skill activation tools.
 - **ModeFraming** — *Mode, Agent.* Stable half of `ModeContext` (see Mode Model).
 - **GlobalMemory / SessionMemory / AgentMemory** — *Knowledge.* `MEMORY.md` per
   scope, pushed whole. *Extends:* `team_memory` / `device_docs` / `hardware_specs`.
@@ -220,7 +220,7 @@ BAND 1 — STATIC INSTRUCTIONS   (immutable; the long shared prefix, never buste
 
 BAND 2 — DURABLE STATE         (slowly mutable; broad→narrow scope; an edit busts only Bands 2–3)
   Soul · AssistantIdentity · UserProfile · GlobalMemory · SessionContext · SessionMemory · AgentMemory
-  ActiveSkills · ModeFraming · ConversationSummary
+  SkillList · ModeFraming · ConversationSummary
 
 BAND 3 — VOLATILE TAIL         (rebuilt each iteration; append-only between compactions)
   ToolReminder                 (dynamic tool phase note, reminder tail)
@@ -257,7 +257,7 @@ Regions below the provider minimum (~1024 tokens on OpenAI) won't cache alone.
 | GlobalMemory | Global | Durable-mutable | 2 |
 | SessionContext / SessionMemory | Session | Durable-mutable | 2 |
 | AgentMemory | Agent | Durable-mutable | 2 |
-| ActiveSkills | Agent | Durable-mutable | 2 |
+| SkillList | Agent | Durable-mutable | 2 |
 | ModeFraming | Agent | Durable-mutable | 2 |
 | ConversationSummary | Conversation | Durable-mutable | 2 |
 | RecentContext / LiveState / ToolResults | Turn | Volatile | 3 |
@@ -280,7 +280,7 @@ Product calls; each lists the default the layout assumes.
 2. **`RetrievedDocs` injection** — default *pull* through a tool call, so it is a
    tool result in history. For system-initiated prefetch without a tool call, use
    a `Custom` volatile block or reminder. Do not add a `PulledKnowledge` kind.
-3. **ActiveSkills vs ModeFraming order** in Band 2 — default `ActiveSkills` first;
+3. **SkillList vs ModeFraming order** in Band 2 — default `SkillList` first;
    swap if framing proves more stable.
 4. **`SessionContext`** — confirm what session-wide framing exists beyond
    `SessionMemory`, or drop it.

@@ -1,43 +1,23 @@
 //! Skill identity, catalog metadata, and `SKILL.md` front-matter parsing.
-//!
-//! A skill lives in `<root>/<id>/SKILL.md`, whose head is a JSON front-matter
-//! block fenced by `---` lines:
-//!
-//! ```text
-//! ---
-//! { "name": "...", "description": "..." }
-//! ---
-//! # markdown body …
-//! ```
-//!
-//! Only `description` is read into the catalog; the id comes from the skill
-//! directory name. Any other front-matter keys (tooling/Skills-Lab fields) are
-//! ignored. The catalog lives entirely in that head, so it is read without
-//! touching the potentially large body.
 
 use std::borrow::Cow;
+use std::fmt;
 
 use claw_interface::FsError;
 use serde::Deserialize;
 use thiserror::Error;
 
-/// A skill's identity — its directory name under the skills root.
-///
-/// Backed by `Cow<'static, str>` so a compile-time-baked id (from a generated
-/// agent manifest) borrows a `&'static str` with no allocation, while a runtime
-/// id owns its `String`. Both compare equal by content, so a baked id matches a
-/// runtime-loaded one.
+/// A skill's identity: its directory name under a skills root.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SkillId(Cow<'static, str>);
 
 impl SkillId {
-    /// Wrap a runtime directory name as a skill id (owns its `String`).
+    /// Wrap a runtime directory name as a skill id.
     pub fn new(id: impl Into<String>) -> Self {
         Self(Cow::Owned(id.into()))
     }
 
-    /// Wrap a `&'static str` as a skill id in a `const` context (no allocation) —
-    /// used by build-script-generated manifests.
+    /// Wrap a static id without allocation.
     pub const fn from_static(id: &'static str) -> Self {
         Self(Cow::Borrowed(id))
     }
@@ -48,42 +28,151 @@ impl SkillId {
     }
 }
 
-impl std::fmt::Display for SkillId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+impl fmt::Display for SkillId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
     }
 }
 
-/// Cheap catalog row for one skill — everything except the document body.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SkillMetadata {
-    id: SkillId,
-    description: String,
+/// Runtime interpretation of `metadata.manage_mode`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SkillManageMode {
+    /// `"readonly"` and `"web"` are both treated as read-only on device.
+    Readonly,
+    /// `"runtime"` skills may be owned by runtime installers.
+    Runtime,
 }
 
-impl SkillMetadata {
-    /// The skill's identity.
+impl SkillManageMode {
+    /// Stable string used in JSON catalog output.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Readonly => "readonly",
+            Self::Runtime => "runtime",
+        }
+    }
+}
+
+/// Metadata nested under the `metadata` key in `SKILL.md` front-matter.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SkillFrontmatterMetadata {
+    cap_groups: Vec<String>,
+    manage_mode: SkillManageMode,
+    category: Vec<String>,
+    peripherals: Vec<String>,
+    tags: Vec<String>,
+}
+
+impl SkillFrontmatterMetadata {
+    /// Capability groups declared by this skill. Parsed but not wired to tool
+    /// visibility in this Rust implementation pass.
+    pub fn cap_groups(&self) -> &[String] {
+        &self.cap_groups
+    }
+
+    /// Skill management mode after device-side normalization.
+    pub fn manage_mode(&self) -> SkillManageMode {
+        self.manage_mode
+    }
+
+    /// Optional category labels from Skills Lab metadata.
+    pub fn category(&self) -> &[String] {
+        &self.category
+    }
+
+    /// Optional peripheral labels from Skills Lab metadata.
+    pub fn peripherals(&self) -> &[String] {
+        &self.peripherals
+    }
+
+    /// Optional search tags from Skills Lab metadata.
+    pub fn tags(&self) -> &[String] {
+        &self.tags
+    }
+}
+
+impl Default for SkillManageMode {
+    fn default() -> Self {
+        Self::Readonly
+    }
+}
+
+/// One catalog entry plus the document source needed for activation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Skill {
+    id: SkillId,
+    name: String,
+    description: String,
+    author: Option<String>,
+    metadata: SkillFrontmatterMetadata,
+    file: String,
+    pub(crate) root: String,
+}
+
+impl Skill {
+    /// The skill id, equal to the containing directory name.
     pub fn id(&self) -> &SkillId {
         &self.id
     }
 
-    /// One-line summary shown in the skills catalog.
+    /// The `name` declared in front-matter.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// One-line description shown in the catalog.
     pub fn description(&self) -> &str {
         &self.description
+    }
+
+    /// Optional front-matter author.
+    pub fn author(&self) -> Option<&str> {
+        self.author.as_deref()
+    }
+
+    /// Relative document path, normally `<id>/SKILL.md`.
+    pub fn file(&self) -> &str {
+        &self.file
+    }
+
+    /// Parsed front-matter metadata.
+    pub fn metadata(&self) -> &SkillFrontmatterMetadata {
+        &self.metadata
+    }
+}
+
+/// An activated skill document snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkillDocument {
+    content: String,
+}
+
+impl SkillDocument {
+    pub(crate) fn new(content: String) -> Self {
+        Self { content }
+    }
+
+    /// Processed document content returned by `activate_skill`.
+    pub fn content(&self) -> &str {
+        &self.content
+    }
+
+    /// Consume the snapshot and return the owned content.
+    pub fn into_content(self) -> String {
+        self.content
     }
 }
 
 /// Failure reading, parsing, or resolving a skill.
-///
-/// Each variant pins down a specific failure so a caller can tell a missing
-/// directory from malformed front-matter from a JSON error — and the underlying
-/// [`FsError`] is wrapped, not flattened into a string.
 #[derive(Clone, Debug, PartialEq, Eq, Error)]
 pub enum SkillError {
-    /// Listing a skills root directory failed (root, cause).
+    /// No skill with the given id is registered.
+    #[error("skill not found: {0}")]
+    NotFound(SkillId),
+    /// Listing a skills root directory failed.
     #[error("failed to scan skills root '{0}': {1}")]
     ScanFailed(String, FsError),
-    /// Reading a skill's `SKILL.md` failed (skill id, cause).
+    /// Reading a skill's `SKILL.md` failed.
     #[error("failed to read skill '{0}': {1}")]
     ReadFailed(SkillId, FsError),
     /// A skill's `SKILL.md` bytes were not valid UTF-8.
@@ -95,43 +184,84 @@ pub enum SkillError {
     /// A skill's front-matter is missing its closing `---` fence.
     #[error("skill '{0}' is missing the closing '---' front-matter fence")]
     MissingClosingFence(SkillId),
-    /// A skill's front-matter block is not valid JSON (skill id, parser message).
+    /// A skill's front-matter block is not valid JSON.
     #[error("skill '{0}' has invalid front-matter JSON: {1}")]
     InvalidJson(SkillId, String),
-    /// No skill with the given id is registered.
-    #[error("skill not found: {0}")]
-    NotFound(SkillId),
+    /// A skill's front-matter is valid JSON but violates the skill contract.
+    #[error("skill '{0}' has invalid front-matter: {1}")]
+    InvalidFrontmatter(SkillId, String),
 }
 
-/// The JSON shape of a `SKILL.md` front-matter block. Unknown keys are ignored.
 #[derive(Deserialize)]
-struct FrontMatter {
-    #[serde(default)]
-    description: String,
+struct RawFrontMatter {
+    name: Option<String>,
+    description: Option<String>,
+    author: Option<String>,
+    metadata: Option<RawMetadata>,
 }
 
-/// Parse the front-matter block at the head of a `SKILL.md` into a [`SkillMetadata`].
-///
-/// `head` must begin with the file's first bytes (a bounded prefix is enough —
-/// the metadata lives between the first two `---` fences). The `id` comes from
-/// the skill directory name, not the file.
-///
-/// # Errors
-///
-/// - [`SkillError::MissingOpeningFence`] / [`SkillError::MissingClosingFence`] if
-///   the `---` fences are absent.
-/// - [`SkillError::InvalidJson`] if the fenced block is not valid JSON.
-pub(crate) fn parse_front_matter(id: SkillId, head: &str) -> Result<SkillMetadata, SkillError> {
+#[derive(Default, Deserialize)]
+struct RawMetadata {
+    #[serde(default)]
+    cap_groups: Vec<String>,
+    manage_mode: Option<String>,
+    #[serde(default)]
+    category: Vec<String>,
+    #[serde(default)]
+    peripherals: Vec<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+pub(crate) fn parse_front_matter(id: SkillId, root: &str, head: &str) -> Result<Skill, SkillError> {
     let json = front_matter_json(&id, head)?;
-    let front_matter: FrontMatter = serde_json::from_str(json.trim())
+    let front_matter: RawFrontMatter = serde_json::from_str(json.trim())
         .map_err(|error| SkillError::InvalidJson(id.clone(), error.to_string()))?;
-    Ok(SkillMetadata {
+
+    let name = required_string(&id, "name", front_matter.name)?;
+    if name != id.as_str() {
+        return Err(SkillError::InvalidFrontmatter(
+            id,
+            format!("front-matter name '{name}' must match the skill directory name"),
+        ));
+    }
+    let description = required_string(&id, "description", front_matter.description)?;
+    let raw_metadata = front_matter
+        .metadata
+        .ok_or_else(|| SkillError::InvalidFrontmatter(id.clone(), "missing metadata".into()))?;
+    let metadata = parse_metadata(&id, raw_metadata)?;
+    let file = format!("{}/SKILL.md", id.as_str());
+
+    Ok(Skill {
         id,
-        description: front_matter.description,
+        name,
+        description,
+        author: front_matter.author,
+        metadata,
+        file,
+        root: root.to_owned(),
     })
 }
 
-/// The JSON text between the opening and closing `---` fences.
+pub(crate) fn strip_front_matter<'a>(id: &SkillId, text: &'a str) -> Result<&'a str, SkillError> {
+    let after_open = text
+        .trim_start()
+        .strip_prefix("---")
+        .ok_or_else(|| SkillError::MissingOpeningFence(id.clone()))?;
+    let close = after_open
+        .find("\n---")
+        .ok_or_else(|| SkillError::MissingClosingFence(id.clone()))?;
+    let from_fence = after_open.get(close..).unwrap_or("");
+    let body = from_fence
+        .get(1..)
+        .and_then(|line| {
+            line.find('\n')
+                .and_then(|newline_index| line.get(newline_index.saturating_add(1)..))
+        })
+        .unwrap_or("");
+    Ok(body)
+}
+
 fn front_matter_json<'a>(id: &SkillId, text: &'a str) -> Result<&'a str, SkillError> {
     let after_open = text
         .trim_start()
@@ -143,65 +273,87 @@ fn front_matter_json<'a>(id: &SkillId, text: &'a str) -> Result<&'a str, SkillEr
     Ok(after_open.get(..close).unwrap_or(""))
 }
 
-/// Return the markdown body of a `SKILL.md` — everything after the closing fence.
-///
-/// # Errors
-///
-/// [`SkillError::MissingOpeningFence`] / [`SkillError::MissingClosingFence`] if
-/// the `---` fences are absent.
-pub(crate) fn strip_front_matter<'a>(id: &SkillId, text: &'a str) -> Result<&'a str, SkillError> {
-    let after_open = text
-        .trim_start()
-        .strip_prefix("---")
-        .ok_or_else(|| SkillError::MissingOpeningFence(id.clone()))?;
-    let close = after_open
-        .find("\n---")
-        .ok_or_else(|| SkillError::MissingClosingFence(id.clone()))?;
-    // From the closing fence, skip the rest of that fence line, then the body.
-    let from_fence = after_open.get(close..).unwrap_or("");
-    let body = from_fence
-        .get(1..) // drop the leading '\n' so the fence line starts the slice
-        .and_then(|line| {
-            line.find('\n')
-                .and_then(|newline_index| line.get(newline_index.saturating_add(1)..))
-        })
-        .unwrap_or("");
-    Ok(body)
+fn required_string(
+    id: &SkillId,
+    field: &'static str,
+    value: Option<String>,
+) -> Result<String, SkillError> {
+    let value = value
+        .ok_or_else(|| SkillError::InvalidFrontmatter(id.clone(), format!("missing {field}")))?;
+    if value.trim().is_empty() {
+        return Err(SkillError::InvalidFrontmatter(
+            id.clone(),
+            format!("{field} must not be empty"),
+        ));
+    }
+    Ok(value)
 }
 
-// Parser error/edge paths only — degenerate inputs, no skill fixtures. Real
-// `SKILL.md` parsing is covered in `tests/registry.rs` over an in-memory fs.
+fn parse_metadata(id: &SkillId, raw: RawMetadata) -> Result<SkillFrontmatterMetadata, SkillError> {
+    let manage_mode = match raw.manage_mode.as_deref().unwrap_or("readonly") {
+        "readonly" | "web" => SkillManageMode::Readonly,
+        "runtime" => SkillManageMode::Runtime,
+        value => {
+            return Err(SkillError::InvalidFrontmatter(
+                id.clone(),
+                format!("unsupported metadata.manage_mode '{value}'"),
+            ));
+        }
+    };
+
+    Ok(SkillFrontmatterMetadata {
+        cap_groups: raw.cap_groups,
+        manage_mode,
+        category: raw.category,
+        peripherals: raw.peripherals,
+        tags: raw.tags,
+    })
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
+    fn skill_md(name: &str) -> String {
+        format!(
+            "---\n{{\"name\":\"{name}\",\"description\":\"d\",\"metadata\":{{\"manage_mode\":\"web\"}}}}\n---\nbody"
+        )
+    }
+
+    #[test]
+    fn parses_master_front_matter_shape() {
+        let skill = parse_front_matter(SkillId::new("x"), "skills", &skill_md("x")).unwrap();
+        assert_eq!(skill.id().as_str(), "x");
+        assert_eq!(skill.name(), "x");
+        assert_eq!(skill.description(), "d");
+        assert_eq!(skill.metadata().manage_mode(), SkillManageMode::Readonly);
+        assert_eq!(skill.file(), "x/SKILL.md");
+    }
+
     #[test]
     fn missing_opening_fence_errors() {
-        let error = parse_front_matter(SkillId::new("x"), "no front matter").unwrap_err();
+        let error = parse_front_matter(SkillId::new("x"), "skills", "no front matter").unwrap_err();
         assert!(matches!(error, SkillError::MissingOpeningFence(_)));
     }
 
     #[test]
     fn missing_close_fence_errors() {
-        let error = parse_front_matter(SkillId::new("x"), "---\n{}\n").unwrap_err();
+        let error = parse_front_matter(SkillId::new("x"), "skills", "---\n{}\n").unwrap_err();
         assert!(matches!(error, SkillError::MissingClosingFence(_)));
     }
 
     #[test]
     fn invalid_json_errors() {
-        let error = parse_front_matter(SkillId::new("x"), "---\nnot json\n---\nbody").unwrap_err();
+        let error = parse_front_matter(SkillId::new("x"), "skills", "---\nnot json\n---\nbody")
+            .unwrap_err();
         assert!(matches!(error, SkillError::InvalidJson(_, _)));
     }
 
     #[test]
-    fn parses_description_and_ignores_unknown_keys() {
-        let metadata = parse_front_matter(
-            SkillId::new("x"),
-            "---\n{\"description\":\"d\",\"metadata\":{\"cap_groups\":[\"x\"]}}\n---\nbody",
-        )
-        .unwrap();
-        assert_eq!(metadata.description(), "d");
-        assert_eq!(metadata.id().as_str(), "x");
+    fn front_matter_name_must_match_directory() {
+        let error =
+            parse_front_matter(SkillId::new("x"), "skills", &skill_md("other")).unwrap_err();
+        assert!(matches!(error, SkillError::InvalidFrontmatter(_, _)));
     }
 }

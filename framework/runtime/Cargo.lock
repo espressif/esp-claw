@@ -133,7 +133,6 @@ dependencies = [
  "claw-core",
  "claw-interface",
  "claw-memory",
- "claw-skill",
  "claw-utils",
  "dotenvy",
  "serde_json",
@@ -146,6 +145,7 @@ name = "claw-agent-cli"
 version = "0.1.0"
 dependencies = [
  "claw-api",
+ "claw-capability",
  "claw-core",
  "claw-interface",
  "claw-log",

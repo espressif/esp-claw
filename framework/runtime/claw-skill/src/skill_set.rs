@@ -1,224 +1,194 @@
-//! The per-agent [`SkillSet`]: which skills are loaded into context, plus the
-//! two borrowed prompt fragments the agent reads.
-//!
-//! - [`catalog`](SkillSet::catalog) — every *available* skill as a one-line
-//!   menu (id + description), so the model knows what it can load.
-//! - [`context`](SkillSet::context) — the full bodies of the skills currently
-//!   *loaded*, assembled into one fragment.
-//!
-//! A `SkillSet` is **mutable**: skills load and unload at runtime without
-//! restarting the agent. Both fragments are **dirty-cached** — reads when
-//! nothing changed are O(1) and hand back a borrowed `&str`. The catalog cache
-//! is keyed on the registry's current [`CatalogSnapshot`] identity, so a
-//! [`reload`](crate::FsSkillRegistry::reload) that swaps in a new snapshot
-//! invalidates it; the context cache is rebuilt whenever the loaded set changes.
+//! Per-agent skill projection and reusable render buffers.
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
-use super::registry::{CatalogSnapshot, EmptySkillRegistry, SkillRegistry};
-use super::skill::{SkillError, SkillId};
+use super::registry::{
+    CatalogSnapshot, EmptySkillRegistry, SkillRegistryBackend, SkillRegistryVersion,
+};
+use super::skill::{SkillDocument, SkillError, SkillId};
 
-/// A named bundle of skills to load together (parallels `ToolGroup`).
-pub struct SkillGroup {
-    name: &'static str,
-    skills: Vec<SkillId>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CatalogBufferKind {
+    Empty,
+    ListJson,
+    Context,
 }
 
-impl SkillGroup {
-    /// Bundle `skills` under the group identity `name`.
-    pub fn new(name: &'static str, skills: impl IntoIterator<Item = SkillId>) -> Self {
-        Self {
-            name,
-            skills: skills.into_iter().collect(),
-        }
-    }
-
-    /// The group's identity.
-    pub fn name(&self) -> &'static str {
-        self.name
-    }
-}
-
-/// One loaded skill plus the group it was loaded under.
-struct Loaded {
-    group: &'static str,
-    id: SkillId,
-}
-
-/// The agent's loaded skills and their cached, assembled prompt fragments.
+/// Per-agent skill view and cache.
 pub struct SkillSet {
-    registry: Arc<dyn SkillRegistry>,
-    loaded: Vec<Loaded>,
-    /// Rendered available-skills menu, paired with the snapshot it was rendered
-    /// from so a registry reload (new snapshot identity) invalidates it.
-    catalog_cache: Option<(Arc<CatalogSnapshot>, String)>,
-    /// Assembled context for the loaded skills; valid only when `!dirty`.
-    context_cache: String,
-    dirty: bool,
+    registry: Arc<dyn SkillRegistryBackend>,
+    catalog_version: SkillRegistryVersion,
+    catalog_buffer_kind: CatalogBufferKind,
+    catalog_buffer: String,
+    document_buffer: String,
 }
 
 impl SkillSet {
-    /// An empty set over an empty registry.
-    ///
-    /// This is the registry-backed zero value for callers that have no skill
-    /// catalog to provide. Loading any skill id from it returns
-    /// [`SkillError::NotFound`].
+    /// A skill set over an empty registry.
     pub fn empty() -> Self {
-        Self::new(Arc::new(EmptySkillRegistry))
+        Self::from_registry(Arc::new(EmptySkillRegistry))
     }
 
-    /// An empty set over `registry` — no skills loaded yet.
-    pub fn new(registry: Arc<dyn SkillRegistry>) -> Self {
+    pub(crate) fn from_registry(registry: Arc<dyn SkillRegistryBackend>) -> Self {
         Self {
             registry,
-            loaded: Vec::new(),
-            catalog_cache: None,
-            context_cache: String::new(),
-            dirty: false,
+            catalog_version: 0,
+            catalog_buffer_kind: CatalogBufferKind::Empty,
+            catalog_buffer: String::new(),
+            document_buffer: String::new(),
         }
     }
 
-    /// True when no skills are loaded.
-    pub fn is_empty(&self) -> bool {
-        self.loaded.is_empty()
+    /// Re-scan the backing registry. The next catalog render observes the new
+    /// snapshot version and refreshes its cache.
+    pub fn reload(&self) -> Result<(), SkillError> {
+        self.registry.reload()
     }
 
-    /// A handle to the catalog source this set reads from (a cheap `Arc` clone).
-    ///
-    /// Lets a runtime skill tool validate an id and render the available-skills
-    /// menu against the same registry without taking a borrow on the set.
-    pub fn registry(&self) -> Arc<dyn SkillRegistry> {
-        Arc::clone(&self.registry)
-    }
-
-    /// Load one skill under `group`. No-op if already loaded.
-    ///
-    /// # Errors
-    ///
-    /// [`SkillError::NotFound`] if the registry has no such skill, so a bad id
-    /// surfaces here rather than at the next context rebuild.
-    pub fn load(&mut self, group: &'static str, id: SkillId) -> Result<(), SkillError> {
-        if self.registry.metadata(&id).is_none() {
-            return Err(SkillError::NotFound(id));
-        }
-        if self.loaded.iter().any(|loaded| loaded.id == id) {
-            return Ok(());
-        }
-        self.loaded.push(Loaded { group, id });
-        self.dirty = true;
-        Ok(())
-    }
-
-    /// Load every skill in `group`.
-    ///
-    /// # Errors
-    ///
-    /// [`SkillError::NotFound`] for the first skill in the group the registry
-    /// does not have (later skills in the group are not loaded).
-    pub fn load_group(&mut self, group: SkillGroup) -> Result<(), SkillError> {
-        let name = group.name;
-        for id in group.skills {
-            self.load(name, id)?;
-        }
-        Ok(())
-    }
-
-    /// Unload a skill by id. No-op if it was not loaded.
-    pub fn unload(&mut self, id: &SkillId) {
-        let before = self.loaded.len();
-        self.loaded.retain(|loaded| &loaded.id != id);
-        if self.loaded.len() != before {
-            self.dirty = true;
-        }
-    }
-
-    /// The available-skills menu (every catalog entry as `- <id>: <description>`),
-    /// borrowed from a cache.
-    ///
-    /// `&mut self` so the cache can be filled in place. The cache is keyed on the
-    /// registry's current snapshot identity: a [`reload`](crate::FsSkillRegistry::reload)
-    /// swaps in a new [`CatalogSnapshot`], which the [`Arc::ptr_eq`] check below
-    /// detects, triggering a re-render.
-    pub fn catalog(&mut self) -> &str {
+    /// JSON catalog for tool output. The returned borrow is valid until the next
+    /// mutable method call on this `SkillSet`.
+    pub fn list_skill(&mut self) -> Result<&str, SkillError> {
         let snapshot = self.registry.catalog();
-        let fresh = self
-            .catalog_cache
-            .as_ref()
-            .is_some_and(|(cached, _)| Arc::ptr_eq(cached, &snapshot));
-        if !fresh {
-            let rendered = render_catalog(&snapshot);
-            self.catalog_cache = Some((snapshot, rendered));
+        if !self.catalog_cache_is_fresh(&snapshot, CatalogBufferKind::ListJson) {
+            self.render_list_json(&snapshot);
         }
-        self.catalog_cache
-            .as_ref()
-            .map(|(_, rendered)| rendered.as_str())
-            .unwrap_or_default()
+        Ok(&self.catalog_buffer)
     }
 
-    /// The assembled context for the loaded skills, rebuilt only if stale.
-    ///
-    /// Borrowed from the internal cache — no owned copy is handed out. `&mut self`
-    /// because a stale cache is rebuilt in place; the agent calls this inside its
-    /// `tick(&mut self)`.
-    ///
-    /// Unlike [`catalog`](Self::catalog), this cache tracks the **loaded set**,
-    /// not the registry snapshot: it is invalidated by [`load`](Self::load) /
-    /// [`unload`](Self::unload), *not* by a [`reload`](crate::FsSkillRegistry::reload).
-    /// That is deliberate — each fragment tracks the state it projects (this one
-    /// projects what the agent loaded, the menu projects what the registry offers).
-    /// Consequence: if a loaded skill's document changes or is removed on disk and
-    /// the registry reloads, this keeps serving the cached body until the next
-    /// load/unload forces a rebuild (at which point a now-missing skill surfaces as
-    /// [`SkillError::NotFound`]).
-    ///
-    /// # Errors
-    ///
-    /// Any [`SkillError`] from [`SkillRegistry::write_document`] when a loaded
-    /// skill's document is (re)read during a rebuild — e.g. [`SkillError::ReadFailed`]
-    /// or a malformed-front-matter error. On error `dirty` stays set so the next
-    /// read retries (the partially written buffer is cleared and rebuilt).
-    ///
-    /// The buffer is **reused** across rebuilds: `clear()` retains its capacity,
-    /// and each document body is appended straight into it via
-    /// [`SkillRegistry::write_document`], so a rebuild does not free the previous
-    /// buffer nor allocate a `String` per document.
-    pub fn context(&mut self) -> Result<&str, SkillError> {
-        if self.dirty {
-            // Borrow disjoint fields: `&self.loaded` (iter), `&self.registry`,
-            // and `&mut self.context_cache` are distinct fields, so this is a
-            // single in-place rebuild with no temporary buffer.
-            self.context_cache.clear();
-            for loaded in &self.loaded {
-                self.context_cache.push_str("## Skill: ");
-                self.context_cache.push_str(loaded.id.as_str());
-                self.context_cache.push_str(" (");
-                self.context_cache.push_str(loaded.group);
-                self.context_cache.push_str(")\n\n");
-                let body_start = self.context_cache.len();
-                self.registry
-                    .write_document(&loaded.id, &mut self.context_cache)?;
-                // Trim the just-appended body's trailing whitespace in place
-                // (real `SKILL.md` bodies carry no leading blank line) without
-                // allocating an intermediate trimmed `String`.
-                let trimmed_len = self.context_cache.trim_end().len().max(body_start);
-                self.context_cache.truncate(trimmed_len);
-                self.context_cache.push_str("\n\n");
-            }
-            self.dirty = false;
+    /// Prompt-facing catalog summary. The returned borrow is valid until the
+    /// next mutable method call on this `SkillSet`.
+    pub fn catalog_context(&mut self) -> &str {
+        let snapshot = self.registry.catalog();
+        if !self.catalog_cache_is_fresh(&snapshot, CatalogBufferKind::Context) {
+            self.render_catalog_context(&snapshot);
         }
-        Ok(&self.context_cache)
+        &self.catalog_buffer
+    }
+
+    /// Read and render one activated skill document.
+    pub fn activate_skill(&mut self, id: &SkillId) -> Result<SkillDocument, SkillError> {
+        self.document_buffer.clear();
+        self.registry
+            .load_document_into(id, &mut self.document_buffer)?;
+        Ok(SkillDocument::new(self.document_buffer.clone()))
+    }
+
+    fn catalog_cache_is_fresh(&self, snapshot: &CatalogSnapshot, kind: CatalogBufferKind) -> bool {
+        self.catalog_version == snapshot.version() && self.catalog_buffer_kind == kind
+    }
+
+    fn render_list_json(&mut self, snapshot: &CatalogSnapshot) {
+        self.catalog_buffer.clear();
+        self.catalog_buffer.push('[');
+        for (index, skill) in snapshot.skills().iter().enumerate() {
+            if index > 0 {
+                self.catalog_buffer.push(',');
+            }
+            self.catalog_buffer.push('{');
+            push_json_field(&mut self.catalog_buffer, "id", skill.id().as_str(), false);
+            push_json_field(&mut self.catalog_buffer, "name", skill.name(), true);
+            push_json_field(
+                &mut self.catalog_buffer,
+                "description",
+                skill.description(),
+                true,
+            );
+            if let Some(author) = skill.author() {
+                push_json_field(&mut self.catalog_buffer, "author", author, true);
+            }
+            push_json_field(&mut self.catalog_buffer, "file", skill.file(), true);
+            self.catalog_buffer.push_str(",\"metadata\":{");
+            push_json_array_field(
+                &mut self.catalog_buffer,
+                "cap_groups",
+                skill.metadata().cap_groups(),
+                false,
+            );
+            push_json_field(
+                &mut self.catalog_buffer,
+                "manage_mode",
+                skill.metadata().manage_mode().as_str(),
+                true,
+            );
+            push_json_array_field(
+                &mut self.catalog_buffer,
+                "category",
+                skill.metadata().category(),
+                true,
+            );
+            push_json_array_field(
+                &mut self.catalog_buffer,
+                "peripherals",
+                skill.metadata().peripherals(),
+                true,
+            );
+            push_json_array_field(
+                &mut self.catalog_buffer,
+                "tags",
+                skill.metadata().tags(),
+                true,
+            );
+            self.catalog_buffer.push_str("}}");
+        }
+        self.catalog_buffer.push(']');
+        self.catalog_version = snapshot.version();
+        self.catalog_buffer_kind = CatalogBufferKind::ListJson;
+    }
+
+    fn render_catalog_context(&mut self, snapshot: &CatalogSnapshot) {
+        self.catalog_buffer.clear();
+        self.catalog_buffer.push_str("Available skills:\n");
+        for skill in snapshot.skills() {
+            self.catalog_buffer.push_str("- ");
+            self.catalog_buffer.push_str(skill.id().as_str());
+            self.catalog_buffer.push_str(": ");
+            self.catalog_buffer.push_str(skill.description());
+            self.catalog_buffer.push('\n');
+        }
+        self.catalog_version = snapshot.version();
+        self.catalog_buffer_kind = CatalogBufferKind::Context;
     }
 }
 
-/// Render the catalog as a one-line-per-skill menu for the prompt.
-fn render_catalog(snapshot: &CatalogSnapshot) -> String {
-    let mut out = String::from("Available skills:\n");
-    for metadata in snapshot.entries() {
-        out.push_str("- ");
-        out.push_str(metadata.id().as_str());
-        out.push_str(": ");
-        out.push_str(metadata.description());
-        out.push('\n');
+fn push_json_field(out: &mut String, key: &str, value: &str, comma: bool) {
+    if comma {
+        out.push(',');
     }
-    out
+    push_json_string(out, key);
+    out.push(':');
+    push_json_string(out, value);
+}
+
+fn push_json_array_field(out: &mut String, key: &str, values: &[String], comma: bool) {
+    if comma {
+        out.push(',');
+    }
+    push_json_string(out, key);
+    out.push_str(":[");
+    for (index, value) in values.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        push_json_string(out, value);
+    }
+    out.push(']');
+}
+
+fn push_json_string(out: &mut String, value: &str) {
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if ch.is_control() => {
+                let _ = write!(out, "\\u{:04x}", ch as u32);
+            }
+            ch => out.push(ch),
+        }
+    }
+    out.push('"');
 }

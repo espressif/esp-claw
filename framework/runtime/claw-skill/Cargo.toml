@@ -3,7 +3,7 @@ name = "claw-skill"
 authors = ["Finn(Ziheng) Sheng"]
 version = "0.1.0"
 edition = "2021"
-description = "Skill registry and per-agent loaded set: scans SKILL.md skills over a ClawFs, renders the catalog, and assembles loaded skill documents into prompt context"
+description = "Filesystem-backed skill registry and per-agent catalog/document activation cache"
 
 [dependencies]
 claw-interface = { path = "../claw-interface" }

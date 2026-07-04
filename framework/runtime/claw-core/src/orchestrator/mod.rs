@@ -15,8 +15,7 @@ use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_utils::{async_oneshot, AsyncOneshotSender};
 
 use crate::agent::{
-    AgentIdAllocator, AgentResolver, ApprovalDecision, CancelReason, FsAgentFactory,
-    FsAgentFactoryError,
+    AgentIdAllocator, ApprovalDecision, CancelReason, FsAgentFactory, FsAgentFactoryError,
 };
 use crate::session::{DeliverError, DeliveryKind, SessionError, SessionId, SessionStore};
 
@@ -150,7 +149,6 @@ where
 {
     /// Build an orchestrator and its concrete filesystem-backed agent factory.
     ///
-    /// `resolver` maps manifest-declared capability names to handlers,
     /// `llm_config` is cloned into every agent, and `persistence_dir` is the
     /// storage root the factory owns below this orchestrator.
     ///
@@ -158,13 +156,11 @@ where
     ///
     /// Returns [`OrchestratorBuildError`] when the factory cannot be assembled.
     pub fn new(
-        resolver: Arc<dyn AgentResolver>,
         capabilities: Arc<CapabilityRegistry>,
         llm_config: ClawApiConfig,
         persistence_dir: &str,
     ) -> Result<Self, OrchestratorBuildError> {
         let factory = Arc::new(FsAgentFactory::<F, H, Timer>::new(
-            resolver,
             capabilities,
             llm_config.clone(),
             persistence_dir,

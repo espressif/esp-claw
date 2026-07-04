@@ -9,7 +9,6 @@ mod session;
 
 pub(crate) use claw_utils::{define_id_allocator, define_prefixed_id};
 
-pub use agent::{AgentResolver, MapAgentResolver};
 pub use claw_utils::IdParseError;
 pub use orchestrator::{DriveOutput, Orchestrator, OrchestratorBuildError, RootReply};
 pub use session::{DeliverError, DeliveryKind, SessionError, SessionId};

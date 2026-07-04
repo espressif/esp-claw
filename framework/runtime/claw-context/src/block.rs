@@ -74,7 +74,7 @@ pub enum BlockKind {
     SessionContext,
     SessionMemory,
     AgentMemory,
-    ActiveSkills,
+    SkillList,
     ModeFraming,
     ConversationSummary,
     // Band 3 — Volatile tail.
@@ -103,7 +103,7 @@ impl BlockKind {
             | BlockKind::SessionContext
             | BlockKind::SessionMemory
             | BlockKind::AgentMemory
-            | BlockKind::ActiveSkills
+            | BlockKind::SkillList
             | BlockKind::ModeFraming
             | BlockKind::ConversationSummary => Band::Durable,
             BlockKind::ToolReminder | BlockKind::RecentContext | BlockKind::OutputContract => {
@@ -126,7 +126,7 @@ impl BlockKind {
             BlockKind::AgentInstruction
             | BlockKind::ToolPolicy
             | BlockKind::AgentMemory
-            | BlockKind::ActiveSkills
+            | BlockKind::SkillList
             | BlockKind::ModeFraming
             | BlockKind::ToolReminder => Scope::Agent,
             BlockKind::ConversationSummary => Scope::Conversation,
@@ -149,7 +149,7 @@ impl BlockKind {
             BlockKind::SessionContext => 0,
             BlockKind::SessionMemory => 1,
             BlockKind::AgentMemory => 0,
-            BlockKind::ActiveSkills => 1,
+            BlockKind::SkillList => 1,
             BlockKind::ModeFraming => 2,
             BlockKind::ConversationSummary => 0,
             // Band 3

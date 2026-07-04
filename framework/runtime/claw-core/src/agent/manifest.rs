@@ -8,10 +8,8 @@
 //! below), so malformed metadata fails the build, not the device, and nothing is
 //! parsed at runtime.
 //!
-//! Turning a manifest into something runnable is a *separate* concern: see
-//! [`AgentConfig::resolve`](crate::agent::config::AgentConfig::resolve), which
-//! takes a manifest plus an `AgentResolver` and produces an `AgentConfig`. This
-//! module knows nothing about resolution, tools, or the running agent.
+//! Turning a manifest into something runnable is a factory concern. This module
+//! knows nothing about resolution, tools, or the running agent.
 
 use claw_skill::SkillId;
 
@@ -40,9 +38,8 @@ impl RetryCount {
 /// A capability (tool) name a kind requests.
 ///
 /// A newtype over `&'static str` rather than a richer type: `claw_core` has no
-/// concrete capability/`Tool` type at compile time — handlers live in firmware
-/// and are bound at runtime by the resolver — so the *name* is the data. The
-/// newtype just keeps it from being confused with other `&str`s in a manifest.
+/// concrete capability/`Tool` type at compile time, so the *name* is the data.
+/// The newtype keeps it from being confused with other `&str`s in a manifest.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct CapabilityName(&'static str);
 

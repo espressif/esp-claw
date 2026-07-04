@@ -1,110 +1,88 @@
 # claw-skill
 
-Skill registry and per-agent loaded set for the ESP-Claw agent framework.
+Filesystem-backed skill catalog and one-shot document activation for ESP-Claw.
 
-A *skill* is a dynamically loadable chunk of prompt context. Each skill lives in
-its own directory under a skills root and is described by a single `SKILL.md`
-file. `claw-skill` scans those directories into a cheap **catalog**, lets an
-agent **load/unload** skills at runtime, and assembles the loaded skill
-documents into a borrowed prompt-context fragment — all over an injected
-filesystem (`ClawFs`), so the same code runs on-device and in host tests.
+A skill lives at `<root>/<id>/SKILL.md`. `FsSkillRegistry` scans one or more
+priority-ordered roots, keeps a metadata catalog snapshot in memory, and reads
+full documents only when a `SkillSet` activates a skill. Activation returns an
+owned `SkillDocument`; it does not create persistent loaded-skill state.
 
-## `SKILL.md` layout
+## `SKILL.md`
 
-A skill directory is `<root>/<id>/SKILL.md`, where the id is the directory name.
-The file head is a JSON front-matter block fenced by `---` lines, followed by a
-markdown body:
+The front-matter is JSON fenced by `---`:
 
 ```text
 ---
-{ "description": "Turn board lights and LED strips on or off." }
+{
+  "name": "light_switch",
+  "description": "Turn a board light on or off.",
+  "metadata": {
+    "cap_groups": ["cap_lua"],
+    "manage_mode": "readonly"
+  }
+}
 ---
 # Light switch
 Call the light capability ...
 ```
 
-Only `description` is read into the catalog; the id comes from the directory
-name. Any other front-matter keys are ignored. The catalog scan reads only a
-bounded prefix of each file (front-matter is a few hundred bytes), so large
-bodies are never touched until a skill is actually placed in context.
+Required top-level fields: `name`, `description`, and `metadata`. `author` is
+optional. `metadata.manage_mode` accepts `readonly`, `web`, or `runtime`; device
+runtime normalizes `web` to `readonly`. `metadata.cap_groups`,
+`category`, `peripherals`, and `tags` are parsed and retained.
 
-## Public API
-
-Re-exported from the crate root:
+## API Shape
 
 | Type | Role |
 |------|------|
-| `SkillId` | A skill's identity (its directory name). `Cow<'static, str>`-backed, so a build-baked id (`from_static`, `const`) and a runtime id (`new`) share one type and compare equal by content. |
-| `SkillMetadata` | A cheap catalog row: `id()` + `description()`, no document body. |
-| `SkillRegistry` | Trait: the catalog + document source. `catalog()` (returns a shared `Arc<CatalogSnapshot>`), `write_document()`, `document()`, `metadata()`. |
-| `CatalogSnapshot` | An immutable point-in-time view of the catalog: `entries()` + `get()`. Handed out via `Arc` so a concurrent `reload()` can't mutate a reader's view. |
-| `FsSkillRegistry` | `SkillRegistry` backed by one or more `ClawFs` skills roots: `scan()`, `scan_roots()`, `reload()` (re-scans and atomically swaps in a fresh snapshot, on `&self`). |
-| `SkillSet` | An agent's loaded skills + two dirty-cached, borrowed prompt fragments: `catalog()` (the available-skills menu) and `context()` (the loaded bodies). Mutable at runtime: `load()`, `load_group()`, `unload()`. |
-| `SkillGroup` | A named bundle of skill ids to load together. The name tags provenance in the assembled context. |
-| `SkillError` | Failure enum: `ScanFailed`, `ReadFailed`, `InvalidUtf8`, `MissingOpeningFence`, `MissingClosingFence`, `InvalidJson`, `NotFound`. |
-
-### Design notes
-
-- **Roots are priority ordered.** Scanning multiple roots merges their catalogs;
-  if the same id appears in more than one root, the earlier root wins and later
-  copies are ignored. Pass the writable DATA skills root before read-only SYSTEM
-  skills when user-installed skills should shadow firmware-baked ones.
-- **Skill-local paths are resolved when loaded.** `{CUR_SKILL_DIR}` in the
-  markdown body expands to the concrete directory for that skill, for example
-  `/system/skills/light_switch` or `<DATA>/skills/light_switch`. There is no
-  separate data-root placeholder expansion in this crate.
-- **Allocation-frugal context.** `SkillRegistry::write_document` appends a
-  body straight into a caller-owned buffer, and `SkillSet` reuses one buffer
-  across rebuilds — no `String` per document per rebuild.
-- **Dirty-cached fragments.** `catalog()` is cached and keyed on the registry's
-  current snapshot identity (a `reload()` invalidates it); `context()` is rebuilt
-  only when the loaded set changes, so steady-state reads are O(1) and hand back a
-  borrowed `&str`.
+| `FsSkillRegistry` | FS-backed catalog source. Build with `new(fs).set_root(data)?.set_root(system)?`; roots are priority ordered. |
+| `SkillRegistry` | Minimal resolver-facing trait whose public operation is `skill_set()`. |
+| `CatalogSnapshot` | Immutable versioned catalog with `Arc<[Skill]>`. Internal registry scans swap in a new snapshot. |
+| `Skill` | One catalog row: id/name/description/author/metadata/document file. |
+| `SkillSet` | Per-agent cache and tool surface: `catalog_context()`, `list_skill()`, `activate_skill()`, `reload()`. |
+| `SkillDocument` | Owned activated document snapshot. |
 
 ## Usage
 
 ```rust
 use std::sync::Arc;
 
-use claw_interface::ClawFs;
-use claw_skill::{FsSkillRegistry, SkillGroup, SkillId, SkillRegistry, SkillSet};
+use claw_skill::{FsSkillRegistry, SkillId};
 
-fn build(fs: Arc<dyn ClawFs>) -> anyhow::Result<()> {
-    // Scan one or more skills roots into a catalog (only front-matter is read).
-    let registry: Arc<dyn SkillRegistry> = Arc::new(FsSkillRegistry::scan(fs, "skills")?);
+fn build(fs: impl claw_interface::ClawFs + 'static) -> Result<(), claw_skill::SkillError> {
+    let registry = Arc::new(
+        FsSkillRegistry::new(fs)
+            .set_root("data/skills")?
+            .set_root("system/skills")?,
+    );
+    let mut skills = registry.skill_set();
 
-    // The available-skills menu shown to the model.
-    let mut set = SkillSet::new(registry);
-    println!("{}", set.catalog());
+    println!("{}", skills.catalog_context());
+    println!("{}", skills.list_skill()?);
 
-    // Load skills at runtime — individually or as a named group.
-    set.load("manual", SkillId::new("light_switch"))?;
-    set.load_group(SkillGroup::new("hardware", [SkillId::new("board_hardware_info")]))?;
-
-    // Assemble the loaded bodies into one borrowed prompt fragment (cached).
-    println!("{}", set.context()?);
-
-    // Unload without restarting the agent.
-    set.unload(&SkillId::new("light_switch"));
+    let document = skills.activate_skill(&SkillId::new("light_switch"))?;
+    println!("{}", document.content());
     Ok(())
 }
 ```
 
-## Examples
+`activate_skill()` strips front-matter, expands `{CUR_SKILL_DIR}`, and wraps the
+body as:
 
-Runnable on the host with an in-memory `MemFs`:
-
-```bash
-cargo run --example catalog       --target x86_64-unknown-linux-gnu
-cargo run --example load_context  --target x86_64-unknown-linux-gnu
-cargo run --example multi_root    --target x86_64-unknown-linux-gnu
+```xml
+<skill_content name="light_switch">
+...
+</skill_content>
 ```
 
-## Where it fits
+## Notes
 
-`claw-skill` is a pure-Rust core crate: it depends only on the `ClawFs` trait
-from `claw-interface`, never on a platform directly, so it is fully
-host-testable. In the firmware, `claw_core` wraps an `FsSkillRegistry` over the
-on-device filesystem and exposes per-agent load/unload through `BaseAgent`
-(skills declared in a generated manifest are loaded under the `"manifest"`
-group).
+- Skills are filesystem-owned. This crate does not write, register, unregister,
+  load, unload, enable, or disable skills.
+- DATA roots should be added before SYSTEM roots so user-installed skills shadow
+  firmware-baked skills with the same id.
+- `SkillSet` owns reusable `catalog_buffer` and `document_buffer`. Share one
+  `SkillSet` between the context adapter and skill tools, typically behind a
+  mutex, so both paths use the same buffers.
+- `reload()` re-scans the registry roots after external filesystem changes; a
+  failed reload leaves the previous snapshot in place.

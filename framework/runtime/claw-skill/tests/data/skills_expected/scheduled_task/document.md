@@ -1,4 +1,4 @@
-
+<skill_content name="scheduled_task">
 # Scheduled Task
 
 Use this skill when the user asks to add a scheduled task, timer, periodic reminder, timed agent wake-up, fixed IM reminder, or scheduled Lua script run.
@@ -131,3 +131,4 @@ After the script succeeds, summarize what was added: `task_id`, mode, schedule k
 5. Tell the user the execution strategy and trigger count before making changes.
 6. Run `skills/scheduled_task/scripts/add_scheduled_task.lua` with `lua_run_script` and `timeout_ms: 60000`.
 7. Report the script result or error directly to the user, including the created scheduler and router behavior.
+</skill_content>

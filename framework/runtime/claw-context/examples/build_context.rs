@@ -50,7 +50,7 @@ fn main() {
             "Prefers metric units. Has an ESP32-S3 DevKitC.",
         ))
         .with(Block::new(
-            BlockKind::ActiveSkills,
+            BlockKind::SkillList,
             "Skill blink_led: toggle the on-board LED N times.",
         ))
         .with(Block::new(
@@ -83,7 +83,7 @@ fn main() {
     // Re-declaring identical content every tick is a free no-op: the version (and
     // so the cached prefix) does not move.
     context.with(Block::new(
-        BlockKind::ActiveSkills,
+        BlockKind::SkillList,
         "Skill blink_led: toggle the on-board LED N times.",
     ));
     println!(
@@ -93,6 +93,6 @@ fn main() {
     );
 
     // A real change advances the version; the next request re-renders.
-    context.with(Block::new(BlockKind::ActiveSkills, ""));
+    context.with(Block::new(BlockKind::SkillList, ""));
     println!("version after unloading the skill: {}", context.version());
 }

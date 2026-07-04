@@ -8,9 +8,8 @@
 //! it reads, acts, and answers freely, ending a task only via the built-in
 //! `end_conversation` tool.
 //!
-//! Where an [`AgentConfig`] comes from — a compile-time-baked agent manifest
-//! resolved by kind through an [`AgentResolver`] — lives in the crate-internal
-//! `manifest` module. This module only consumes the resolved config.
+//! Where an [`AgentConfig`] comes from lives in the factory. This module only
+//! consumes the resolved config.
 
 use std::sync::Arc;
 

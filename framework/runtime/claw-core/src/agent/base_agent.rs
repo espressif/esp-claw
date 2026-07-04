@@ -609,7 +609,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// agent owns its client and its transports, so callers pass only
     /// configuration — never a pre-built client or transport. The built-in tool
     /// group is merged onto the caller's tools. A configured [`SkillSet`] is
-    /// wrapped by the skill context adapter, which contributes `ActiveSkills` and
+    /// wrapped by the skill context adapter, which contributes `SkillList` and
     /// provides the skill-management tool group.
     ///
     /// # Errors

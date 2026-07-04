@@ -1,0 +1,12 @@
+{
+  "type": "function",
+  "function": {
+    "name": "list_skill",
+    "description": "Return the JSON catalog of available skills, including ids, descriptions, document paths, and metadata. Call reload_skills first if skills changed on disk.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  }
+}

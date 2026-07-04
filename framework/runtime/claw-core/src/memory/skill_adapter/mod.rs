@@ -1,8 +1,8 @@
 //! Skill context adapter.
 //!
 //! This adapter owns the runtime [`SkillSet`] source for an agent. It projects
-//! the loaded skill bodies into `BlockKind::ActiveSkills` and exposes the
-//! skill-management tools that mutate the same source.
+//! the skill catalog into `BlockKind::SkillList` and exposes skill tools that
+//! read from the same buffered source.
 
 mod tools;
 
@@ -10,21 +10,19 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use claw_capability::Tool;
 use claw_context::{Block, BlockKind, ContextSink};
-use claw_skill::{SkillError, SkillId, SkillRegistry, SkillSet};
+use claw_skill::SkillSet;
 
 use super::traits::{ContextAdapter, ContextAdapterInput};
 
 const ADAPTER_ID: &str = "skills";
-const MODEL_SKILL_GROUP: &str = "model";
-
 pub(crate) struct SkillContextAdapter {
-    state: Arc<SkillAdapterState>,
+    skills: Arc<Mutex<SkillSet>>,
 }
 
 impl SkillContextAdapter {
     pub(crate) fn new(skills: SkillSet) -> Self {
         Self {
-            state: Arc::new(SkillAdapterState::new(skills)),
+            skills: Arc::new(Mutex::new(skills)),
         }
     }
 }
@@ -35,72 +33,40 @@ impl ContextAdapter for SkillContextAdapter {
     }
 
     fn contribute(&mut self, _input: ContextAdapterInput<'_>, output: &mut ContextSink<'_>) {
-        let mut skills = self.state.lock();
-        match skills.context() {
-            Ok(rendered) => {
-                output.block(Block::new(BlockKind::ActiveSkills, rendered));
-            }
-            Err(error) => {
-                tracing::warn!(%error, "rebuilding active-skills context failed");
-            }
-        }
+        let mut skills = lock_skill_set(&self.skills);
+        let rendered = skills.catalog_context();
+        output.block(Block::new(BlockKind::SkillList, rendered));
     }
 
     fn tools(&self) -> Vec<Tool> {
-        tools::skill_tools(Arc::clone(&self.state))
+        tools::skill_tools(Arc::clone(&self.skills))
     }
 }
 
-struct SkillAdapterState {
-    skills: Mutex<SkillSet>,
-}
-
-impl SkillAdapterState {
-    fn new(skills: SkillSet) -> Self {
-        Self {
-            skills: Mutex::new(skills),
-        }
-    }
-
-    fn lock(&self) -> MutexGuard<'_, SkillSet> {
-        self.skills
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-    }
-
-    fn registry(&self) -> Arc<dyn SkillRegistry> {
-        self.lock().registry()
-    }
-
-    fn load(&self, id: SkillId) -> Result<(), SkillError> {
-        self.lock().load(MODEL_SKILL_GROUP, id)
-    }
-
-    fn unload(&self, id: &SkillId) {
-        self.lock().unload(id);
-    }
+pub(super) fn lock_skill_set(skills: &Mutex<SkillSet>) -> MutexGuard<'_, SkillSet> {
+    skills.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 pub(crate) mod test_support {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use claw_capability::Tool;
     use claw_interface::{ClawFs, MemFs};
     use claw_skill::{FsSkillRegistry, SkillRegistry, SkillSet};
 
-    use super::{tools::skill_tools, SkillAdapterState};
+    use super::tools::skill_tools;
 
     pub(crate) fn skill_tools_for_test(skills: SkillSet) -> Vec<Tool> {
-        skill_tools(Arc::new(SkillAdapterState::new(skills)))
+        skill_tools(Arc::new(Mutex::new(skills)))
     }
 
     /// Write a minimal `SKILL.md` for `id` under the `skills` root of `fs`, so
     /// both catalog scans and document reads succeed.
     pub(crate) fn write_skill(fs: &MemFs, id: &str, description: &str) {
         let document = format!(
-            "---\n{{\"name\":\"{id}\",\"description\":\"{description}\"}}\n---\n# {id}\n\nBody for {id}.\n"
+            "---\n{{\"name\":\"{id}\",\"description\":\"{description}\",\"metadata\":{{\"manage_mode\":\"readonly\"}}}}\n---\n# {id}\n\nBody for {id}.\n"
         );
         fs.write_atomic(&format!("skills/{id}/SKILL.md"), document.as_bytes())
             .unwrap();
@@ -120,7 +86,7 @@ pub(crate) mod test_support {
         for (id, description) in entries {
             write_skill(&fs, id, description);
         }
-        let registry = Arc::new(FsSkillRegistry::scan(fs.clone(), "skills").unwrap());
+        let registry = Arc::new(FsSkillRegistry::new(fs.clone()).set_root("skills").unwrap());
         (fs, registry)
     }
 

@@ -436,11 +436,11 @@ mod tests {
         let mut context = Context::new();
         context
             .with(Block::new(BlockKind::AgentInstruction, "PERSONA"))
-            .with(Block::new(BlockKind::ActiveSkills, "SKILL"));
+            .with(Block::new(BlockKind::SkillList, "SKILL"));
         assert_eq!(system_of(&mut context), "PERSONA\n\nSKILL");
 
-        // A tick that only updates ActiveSkills leaves AgentInstruction intact.
-        context.with(Block::new(BlockKind::ActiveSkills, "SKILL2"));
+        // A tick that only updates SkillList leaves AgentInstruction intact.
+        context.with(Block::new(BlockKind::SkillList, "SKILL2"));
         assert_eq!(system_of(&mut context), "PERSONA\n\nSKILL2");
     }
 
@@ -449,10 +449,10 @@ mod tests {
         let mut context = Context::new();
         context
             .with(Block::new(BlockKind::AgentInstruction, "PERSONA"))
-            .with(Block::new(BlockKind::ActiveSkills, "SKILL"));
+            .with(Block::new(BlockKind::SkillList, "SKILL"));
         assert_eq!(system_of(&mut context), "PERSONA\n\nSKILL");
 
-        context.with(Block::new(BlockKind::ActiveSkills, ""));
+        context.with(Block::new(BlockKind::SkillList, ""));
         assert_eq!(system_of(&mut context), "PERSONA");
     }
 

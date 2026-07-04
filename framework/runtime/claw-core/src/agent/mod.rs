@@ -4,8 +4,7 @@
 //! semantic agent on top of it — [`GenericAgent`] — a flat ReAct loop with no
 //! built-in FSM. What distinguishes one agent "kind" from another is pure data:
 //! its [`AgentConfig`] (system prompt, tool set, skills, spawning), loaded at
-//! compile time from `resources/agents/<kind>/` and resolved through an
-//! [`AgentResolver`] — see the crate-internal `manifest` module.
+//! compile time from `resources/agents/<kind>/` and assembled by the factory.
 //! [`GenericAgent`] implements
 //! the unified [`Agent`] trait the scheduler drives; the trait never reaches into
 //! internals.
@@ -24,7 +23,6 @@ mod iteration_loop;
 mod kind;
 mod manifest;
 mod registry;
-mod resolver;
 mod tools;
 
 pub(crate) use base_agent::{
@@ -40,7 +38,6 @@ pub(crate) use iteration_loop::{
 };
 pub(crate) use kind::AgentKind;
 pub(crate) use registry::{AgentIdAllocator, AgentRegistry};
-pub use resolver::{AgentResolver, MapAgentResolver};
 
 use core::future::Future;
 use core::pin::Pin;

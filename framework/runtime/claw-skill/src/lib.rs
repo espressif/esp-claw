@@ -1,21 +1,18 @@
-//! Skills: per-agent, dynamically loadable prompt context.
+//! Filesystem-backed skills: catalog context plus one-shot document activation.
 //!
-//! - [`SkillRegistry`] / [`FsSkillRegistry`] — the catalog source: scans one or
-//!   more skills directories, reads each `SKILL.md`'s front-matter for the
-//!   catalog, and reads full documents on demand. Roots are priority ordered:
-//!   if the same id appears in more than one root, the earlier root shadows
-//!   later copies.
-//! - Skill domain types — [`SkillId`], [`SkillMetadata`].
-//! - [`SkillSet`] / [`SkillGroup`] — the agent's loaded skills plus two
-//!   dirty-cached, borrowed prompt fragments: [`catalog`](SkillSet::catalog)
-//!   (every available skill as a menu) and [`context`](SkillSet::context) (the
-//!   full bodies of the skills currently loaded). Mutable at runtime (load /
-//!   unload without restarting the agent).
+//! [`FsSkillRegistry`] scans priority-ordered roots such as DATA then SYSTEM.
+//! [`SkillSet`] is the per-agent projection that renders the catalog and
+//! activates one `SKILL.md` document on demand. Activating a skill returns an
+//! owned [`SkillDocument`]; it does not create persistent loaded-skill state.
 
 mod registry;
 mod skill;
 mod skill_set;
 
-pub use registry::{CatalogSnapshot, EmptySkillRegistry, FsSkillRegistry, SkillRegistry};
-pub use skill::{SkillError, SkillId, SkillMetadata};
-pub use skill_set::{SkillGroup, SkillSet};
+pub use registry::{
+    CatalogSnapshot, EmptySkillRegistry, FsSkillRegistry, SkillRegistry, SkillRegistryVersion,
+};
+pub use skill::{
+    Skill, SkillDocument, SkillError, SkillFrontmatterMetadata, SkillId, SkillManageMode,
+};
+pub use skill_set::SkillSet;

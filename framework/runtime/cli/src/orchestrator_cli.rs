@@ -5,9 +5,8 @@
 //! a `conversation` agent that can spawn `worker` subagents, so this exercises
 //! multi-agent spawning end to end.
 //!
-//! Capabilities/skills come from each kind's compile-time manifest; the resolver
-//! is empty here (the built-in kinds declare no extra capabilities — agents still
-//! get their built-in control/spawn tools). Approval requests and replies flow as
+//! The built-in kinds declare no manifest-local tools here; agents still get
+//! their built-in control/spawn tools. Approval requests and replies flow as
 //! ordinary chat messages through the orchestrator.
 //!
 //! LLM config is read from `claw-core/.env.local`; memory is written to
@@ -25,7 +24,8 @@ use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
 use claw_agent_cli::{load_env, make_llm_config, CliFs};
-use claw_core::{DeliveryKind, MapAgentResolver, Orchestrator};
+use claw_capability::CapabilityRegistry;
+use claw_core::{DeliveryKind, Orchestrator};
 use claw_interface::{RealHttp, TokioTimer};
 
 const MEMORY_DIR: &str = concat!(
@@ -83,11 +83,8 @@ async fn main() {
     )
     .expect("install tracing subscriber");
 
-    // Empty resolver: the built-in conversation/worker manifests declare no extra
-    // capabilities, so no name->handler mapping is needed yet.
-    let resolver = Arc::new(MapAgentResolver::new());
     let orchestrator = match Orchestrator::<CliFs, RealHttp, TokioTimer>::new(
-        resolver,
+        Arc::new(CapabilityRegistry::new()),
         make_llm_config(),
         MEMORY_DIR,
     ) {

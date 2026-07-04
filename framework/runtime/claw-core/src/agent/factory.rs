@@ -5,8 +5,8 @@
 //!
 //! 1. the kind's compile-time-baked [`AgentManifest`](super::manifest::AgentManifest)
 //!    (pure data: prompt + capability/skill *names*),
-//! 2. an injected [`AgentResolver`] that maps those names to handler *code*,
-//! 3. a live LLM client minted per agent from a shared config + transport, and
+//! 2. a live LLM client minted per agent from a shared config + transport,
+//! 3. central capability projection into each agent's `ToolSet`, and
 //! 4. the factory-owned memory layout below one persistence root: transcripts,
 //!    editable profile documents, and long-term memory.
 //!
@@ -19,20 +19,21 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use claw_api::{ClawApiAsync, ClawApiConfig};
-use claw_capability::CapabilityRegistry;
+use claw_capability::{CapabilityRegistry, Tool};
 use claw_context::Block;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::{
     LongTermInitError, LongTermMemory, ProfileConfig, ProfileStore, TranscriptConfig,
     TranscriptStore,
 };
+use claw_skill::SkillSet;
 
 use crate::agent::base_agent::{AgentCommand, AgentId};
-use crate::agent::config::AgentConfig;
+use crate::agent::config::{AgentConfig, AgentConfigError};
 use crate::agent::generic_agent::GenericAgent;
 use crate::agent::graph::GraphHost;
 use crate::agent::kind::AgentKind;
-use crate::agent::resolver::AgentResolver;
+use crate::agent::manifest::AgentManifest;
 use crate::agent::Agent;
 use crate::memory::{
     agent_store, global_store, Extractor, LlmExtractor, LongTermMemoryContextAdapter,
@@ -176,8 +177,7 @@ fn join_storage_path(parent: &str, child: &str) -> String {
     }
 }
 
-/// Builds real [`GenericAgent`]s from compile-time manifests, an injected
-/// resolver, a shared LLM config/transport, and shared memory collaborators.
+/// Builds real [`GenericAgent`]s from compile-time manifests.
 ///
 /// Constructed by [`Orchestrator::new`](crate::Orchestrator::new); each
 /// per-session instance uses it for root agents and spawned subagents.
@@ -186,8 +186,6 @@ pub struct FsAgentFactory<
     H: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 > {
-    /// Maps a manifest's capability/skill *names* to handler code.
-    resolver: Arc<dyn AgentResolver>,
     /// Template for the per-agent LLM client. Each agent gets its own `ClawApi`
     /// minted from this config plus a freshly constructed `H::default()`
     /// transport, so no transport instance is shared between agents.
@@ -221,9 +219,7 @@ impl<
         Timer: ClawTimer + Default + 'static,
     > FsAgentFactory<F, H, Timer>
 {
-    /// Build a factory over the injected `resolver`, an LLM `llm_config`, and one
-    /// persistence root. The HTTP transport `H` is chosen by type (like `F`);
-    /// each agent gets its own `H::default()` instance.
+    /// Build a factory over an LLM `llm_config` and one persistence root.
     ///
     /// The factory owns the memory layout below `persistence_dir`: transcripts,
     /// editable profile documents, and long-term memory. It constructs the
@@ -235,7 +231,6 @@ impl<
     /// persistence root is blank, or [`FsAgentFactoryError::ExtractionLlm`] if the
     /// internal extraction LLM client cannot be initialized.
     pub fn new(
-        resolver: Arc<dyn AgentResolver>,
         capabilities: Arc<CapabilityRegistry>,
         llm_config: ClawApiConfig,
         persistence_dir: &str,
@@ -258,7 +253,6 @@ impl<
         let profile = ProfileStore::new(ProfileConfig::new(&layout.profile_dir), storage.clone());
 
         Ok(Self {
-            resolver,
             llm_config,
             capabilities,
             _http: PhantomData,
@@ -301,7 +295,8 @@ impl<
     ) -> Result<Box<dyn Agent>, String> {
         // The config is pure data. Registry tools are projected here, then
         // manifest tools are added as local tools before the agent sees them.
-        let mut config = AgentConfig::resolve(kind.as_str(), self.resolver.as_ref())
+        let mut config = self
+            .resolve_config(kind)
             .map_err(|error| format!("resolving config for kind '{kind}': {error}"))?;
         let is_root = placement.is_root();
         let mut tools = self.capabilities.tool_set();
@@ -371,6 +366,36 @@ impl<
 
         Ok(Box::new(agent))
     }
+
+    fn resolve_config(&self, kind: &AgentKind) -> Result<AgentConfig, AgentConfigError> {
+        let manifest = AgentManifest::for_kind(kind.as_str())
+            .ok_or_else(|| AgentConfigError::UnknownKind(kind.as_str().to_owned()))?;
+        let tools = Self::resolve_manifest_tools(manifest)?;
+        let skills = Self::resolve_manifest_skills(manifest);
+        Ok(AgentConfig::from_manifest(manifest, tools, skills))
+    }
+
+    fn resolve_manifest_tools(
+        manifest: &'static AgentManifest,
+    ) -> Result<Vec<Tool>, AgentConfigError> {
+        if let Some(name) = manifest.capabilities.first() {
+            return Err(AgentConfigError::UnknownCapability(
+                name.as_str().to_owned(),
+            ));
+        }
+        Ok(Vec::new())
+    }
+
+    fn resolve_manifest_skills(manifest: &'static AgentManifest) -> SkillSet {
+        if !manifest.skills.is_empty() {
+            tracing::debug!(
+                kind = %manifest.kind,
+                count = manifest.skills.len(),
+                "manifest skill ids are catalog-only"
+            );
+        }
+        SkillSet::empty()
+    }
 }
 
 #[cfg(test)]
@@ -388,8 +413,7 @@ mod tests {
     use super::*;
     use crate::agent::base_agent::TickOutcome;
     use crate::agent::graph::GraphEffect;
-    use claw_capability::{Capability, CapabilityRegistry};
-    use claw_skill::{SkillError, SkillId, SkillSet};
+    use claw_capability::CapabilityRegistry;
 
     struct NoopWake;
     impl Wake for NoopWake {
@@ -404,18 +428,6 @@ mod tests {
             if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
                 return value;
             }
-        }
-    }
-
-    /// A resolver with no capabilities or skills — enough for the built-in
-    /// manifests, whose capability/skill lists are currently empty.
-    struct EmptyResolver;
-    impl AgentResolver for EmptyResolver {
-        fn resolve_capability(&self, _name: &str) -> Option<Capability> {
-            None
-        }
-        fn build_skills(&self, _ids: &[SkillId]) -> Result<SkillSet, SkillError> {
-            Ok(SkillSet::empty())
         }
     }
 
@@ -454,7 +466,6 @@ mod tests {
             "https://example.invalid",
         );
         FsAgentFactory::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new(
-            Arc::new(EmptyResolver),
             Arc::new(CapabilityRegistry::new()),
             llm_config,
             "/mem",

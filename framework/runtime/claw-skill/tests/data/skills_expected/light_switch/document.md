@@ -1,4 +1,4 @@
-
+<skill_content name="light_switch">
 # Light Switch
 
 Use this skill when the user asks to turn a board light on or off, change an LED strip color, or adjust light brightness.
@@ -149,3 +149,4 @@ Turn on an active-low GPIO light:
 13. For GPIO lights, ignore color and map `brightness: 0` to off.
 14. If neither LED strip nor GPIO light hardware is listed, inform the user that the board does not declare a controllable light and stop.
 15. Report the result or error directly to the user.
+</skill_content>

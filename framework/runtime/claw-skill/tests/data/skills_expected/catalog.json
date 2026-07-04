@@ -1,14 +1,1 @@
-[
-  {
-    "description": "Turn a board light on or off, set LED strip color or brightness, and control GPIO lights. Requires board_hardware_info skill.",
-    "id": "light_switch"
-  },
-  {
-    "description": "Add timer-based scheduled tasks, periodic reminders, scheduled agent wake-ups, fixed IM messages, or scheduled Lua script runs. Prefer to use this skill rather than calling scheduler_add and add_router_rule directly.",
-    "id": "scheduled_task"
-  },
-  {
-    "description": "How to answer current weather, temperature, and forecast queries through direct web search capabilities.",
-    "id": "weather_search"
-  }
-]
+[{"id":"light_switch","name":"light_switch","description":"Turn a board light on or off, set LED strip color or brightness, and control GPIO lights. Requires board_hardware_info skill.","file":"light_switch/SKILL.md","metadata":{"cap_groups":["cap_lua"],"manage_mode":"readonly","category":[],"peripherals":[],"tags":[]}},{"id":"scheduled_task","name":"scheduled_task","description":"Add timer-based scheduled tasks, periodic reminders, scheduled agent wake-ups, fixed IM messages, or scheduled Lua script runs. Prefer to use this skill rather than calling scheduler_add and add_router_rule directly.","file":"scheduled_task/SKILL.md","metadata":{"cap_groups":["cap_lua","cap_scheduler","cap_router_mgr"],"manage_mode":"readonly","category":[],"peripherals":[],"tags":[]}},{"id":"weather_search","name":"weather_search","description":"How to answer current weather, temperature, and forecast queries through direct web search capabilities.","file":"weather_search/SKILL.md","metadata":{"cap_groups":["cap_time","cap_web_search"],"manage_mode":"readonly","category":[],"peripherals":[],"tags":[]}}]
