@@ -1,19 +1,28 @@
 # Tool
 
 ```rust
-struct CapabilityRegistry {
-    pub fn register(capability: Capability) -> Result<()> // central registration; creates a one-member group
-    pub fn enable(capability_id:CapabilityId) -> Result<()>
-    pub fn disable(capability_id:CapabilityId) -> Result<()>
-    pub fn start_all() -> Result<()> // starts lifecycle for centrally-enabled groups
-    pub fn stop_all() -> Result<()> // stops lifecycle for started groups
-    pub fn tool_set() -> ToolSet // ToolSet must come from the registry
-    pub fn channel_set() -> ChannelSet // ChannelSet must come from the registry
-}
-
 struct ToolProjection {
     registry_version: ToolRegistryVersion
     tools: Vec<ToolProjectionEntry>
+}
+
+struct ToolRegistry {
+    tools: HashMap<ToolName, ToolRegistryEntry>,
+    started: bool,
+    version: ToolRegistryVersion,
+
+    pub fn register(tool: Tool) -> Result<()> // central tool catalog registration
+    pub fn enable(name: &str) -> Result<()> // central visibility enable
+    pub fn disable(name: &str) -> Result<()> // central visibility disable
+    pub fn start_all() -> Result<()> // registered enabled tools become visible to projections
+    pub fn stop_all() -> Result<()> // registry tools disappear from projections
+    pub fn tool_set() -> ToolSet // creates a projection bound to this registry
+    pub fn tool_version() -> ToolRegistryVersion // bumps on catalog/visibility/lifecycle mutation
+}
+
+struct ToolRegistryEntry {
+    tool: Tool,
+    enabled: bool,
 }
 
 struct RawToolInvocation<'a> {
@@ -81,7 +90,7 @@ macro_rules! tool_metadata // generates name/schema/usage from resources/tools/<
 struct Tool {
     pub fn from_sync(handler: impl SyncToolHandler + 'static) -> Tool // adapter for C/immediate tools
     pub fn from_async(handler: impl AsyncToolHandler + 'static) -> Tool // adapter for native async tools
-    pub fn name(&self) -> &str // stable id used by Capability::from_tool
+    pub fn name(&self) -> &str // stable id used by Capability::Tool
 }
 
 struct ToolSetCache{
@@ -103,12 +112,12 @@ enum ToolState{
 }
 
 struct ToolSet {
-    registry: Arc<CapabilityRegistry>,
+    registry: Arc<ToolRegistry>,
     tools: HashMap<ToolName, (Tool, ToolSource, ToolState)>,
     cache: ToolSetCache,
     registry_version: ToolRegistryVersion,
 
-    pub fn add_tool(tool: Tool) -> Result<()> // projection-local add; never writes to CapabilityRegistry
+    pub fn add_tool(tool: Tool) -> Result<()> // projection-local add; never writes to ToolRegistry
     pub fn remove_tool(name: ToolName) -> Result<()> // projection-local remove; local tools only
     pub fn enable_tool(name: ToolName) -> Result<()> // clears projection-local disable; cannot override central disable
     pub fn disable_tool(name: ToolName) -> Result<()> // projection-local disable; only this ToolSet is affected

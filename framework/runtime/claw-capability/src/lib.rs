@@ -1,6 +1,12 @@
+pub mod channel;
 mod registry;
 pub mod tool;
 
+pub use channel::{
+    Channel, ChannelAttachment, ChannelAttachmentKind, ChannelError, ChannelHandler,
+    ChannelInbound, ChannelName, ChannelOutbound, ChannelRegistry, ChannelRegistryError,
+    ChannelResult, ChannelRuntime, ChannelSink, ChannelTarget, ChannelTargetOwned,
+};
 pub use registry::{
     Capability, CapabilityId, CapabilityRegistry, CapabilityRegistryError, CapabilityResult,
 };

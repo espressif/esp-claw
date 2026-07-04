@@ -93,8 +93,12 @@ impl AgentConfig {
             let capability = resolver
                 .resolve_capability(name)
                 .ok_or_else(|| AgentConfigError::UnknownCapability(name.to_string()))?;
-            let Capability::Tool(tool) = capability;
-            tools.push(tool);
+            match capability {
+                Capability::Tool(tool) => tools.push(tool),
+                Capability::Channel(_) => {
+                    return Err(AgentConfigError::UnsupportedCapability(name.to_string()));
+                }
+            }
         }
 
         let skills = resolver.build_skills(manifest.skills)?;
@@ -130,6 +134,9 @@ pub enum AgentConfigError {
     /// A capability name in the manifest has no handler in the resolver.
     #[error("unknown capability: {0}")]
     UnknownCapability(String),
+    /// A manifest capability resolved to a non-tool capability.
+    #[error("unsupported capability: {0}")]
+    UnsupportedCapability(String),
     /// Building the skill set failed (e.g. an unknown skill id).
     #[error(transparent)]
     Skill(#[from] SkillError),

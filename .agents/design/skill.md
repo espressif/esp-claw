@@ -4,87 +4,78 @@
 type SkillId = String
 type SkillRegistryVersion = u32
 
-// A skill is an immutable snapshot discovered from skills/<id>/SKILL.md.
-// Filesystem writes are observed only after SkillRegistry::reload().
+enum SkillManageMode {
+    Readonly, // "readonly"; "web" is accepted in SKILL.md and normalized to Readonly on device
+    Runtime, // "runtime"
+}
+
+struct SkillFrontmatterMetadata {
+    cap_groups: Vec<String> // parsed and preserved; tool visibility is not wired in this design pass
+    manage_mode: SkillManageMode
+    category: Vec<String>
+    peripherals: Vec<String>
+    tags: Vec<String>
+}
+
 struct Skill {
-    id: SkillId // directory name; must match SKILL.md frontmatter name when present
-    name: String // frontmatter name; validation requires it to match id
-    description: String // one-line catalog text shown to the model
+    id: SkillId // directory name; must match SKILL.md frontmatter name
+    name: String
+    description: String
     author: Option<String>
-    metadata: SkillFrontmatterMetadata // cap_groups/manage_mode/category/peripherals/tags
+    metadata: SkillFrontmatterMetadata
+    file: String // relative document path, "<id>/SKILL.md"
 
     pub fn id(&self) -> &str
     pub fn name(&self) -> &str
     pub fn description(&self) -> &str
+    pub fn file(&self) -> &str
+    pub fn metadata(&self) -> &SkillFrontmatterMetadata
 }
 
 struct CatalogSnapshot {
-    registry_version: SkillRegistryVersion
-    skills: Vec<Skill> // sorted by id; root priority already resolved
+    version: SkillRegistryVersion
+    skills: Arc<[Skill]> // sorted by id; root priority already resolved
 
     pub fn version(&self) -> SkillRegistryVersion
     pub fn skills(&self) -> &[Skill]
+    pub fn get(&self, id: &SkillId) -> Option<&Skill>
 }
 
-trait SkillRegistry: Send + Sync {
-    fn catalog(&self) -> Arc<CatalogSnapshot> // cheap snapshot clone; never scans
-    fn reload(&self) -> Result<()> // rereads FS after external writes; never writes skills
+struct SkillDocument {
+    content: Arc<str> // <skill_content name="id">\n...stripped body...\n</skill_content>
+
+    pub fn content(&self) -> &str
 }
 
 struct FsSkillRegistry<F: ClawFs> {
     fs: F
     roots: Vec<String> // priority ordered: DATA before SYSTEM
     snapshot: RwLock<Arc<CatalogSnapshot>>
-    next_version: Atomic<SKillRegistryVersion>
+    next_version: Atomic<SkillRegistryVersion>
 
-    pub fn scan(fs: F, root: impl Into<String>) -> Result<FsSkillRegistry<F>>
-    pub fn scan_roots(fs: F, roots: impl IntoIterator<Item = impl Into<String>>) -> Result<FsSkillRegistry<F>>
-    pub fn reload(&self) -> Result<()> // read roots, build full snapshot, then atomically swap
+    pub fn new(fs: F) -> FsSkillRegistry<F>
+    pub fn set_root(self, root: impl Into<String>) -> Result<FsSkillRegistry<F>> // appends root, reloads snapshot, returns self
+    pub fn skill_set(self: &Arc<Self>) -> SkillSet
+
+    fn catalog(&self) -> Arc<CatalogSnapshot> // cheap snapshot clone; never scans
+    fn reload(&self) -> Result<()> // rereads FS after external writes; never writes skills
+    fn load_document_into(&self, id: &SkillId, out: &mut String) -> Result<()> // strips frontmatter, expands {CUR_SKILL_DIR}, wraps XML
+}
+
+struct SkillSet {
+    registry: Arc<FsSkillRegistry<impl ClawFs>>,
+    catalog_version: SkillRegistryVersion,
+    catalog_buffer: String,
+    document_buffer: String,
+
+    pub fn reload(&self) -> Result<()> // calls registry.reload(); next catalog_context rerenders
+    pub fn list_skill(&mut self) -> Result<Arc<str>> // JSON catalog; reuses catalog_buffer
+    pub fn catalog_context(&mut self) -> &str // prompt text; reuses catalog_buffer while snapshot version is unchanged
+    pub fn activate_skill(&mut self, id: &SkillId) -> Result<SkillDocument> // reuses document_buffer, returns shared immutable content
 }
 
 mod bake {
     pub fn validate_skills_dir(skills_dir: &Path) -> Result<usize> // build-time check for skills/<id>/SKILL.md
-}
-
-struct LoadedSkill {
-    group: String // "manifest", "model", adapter id, etc.
-    id: SkillId
-}
-
-struct SkillSetCache {
-    catalog_context: Option<String>, // "Available skills:\n- id: description\n..."
-    loaded_context: Option<String>, // full bodies of loaded skills
-}
-
-struct SkillSet {
-    registry: Arc<dyn SkillRegistry>,
-    loaded: Vec<LoadedSkill>,
-    cache: SkillSetCache,
-    loaded_version: SkillRegistryVersion,
-    should_rebuild_catalog: bool,
-    should_rebuild_loaded: bool,
-
-    // Existing semantics preserved: loading validates the id; duplicate load is a no-op.
-    pub fn load(&mut self, id: SkillId) -> Result<()>
-    pub fn load_group(&mut self, group: SkillGroup) -> Result<()>
-    pub fn unload(&mut self, id: &SkillId) -> Result<()> // no-op if already unloaded
-    pub fn unload_group(&mut self, group: SkillGroup) -> Result<()> // unloads the group's ids; no-op for ids not loaded
-
-    pub fn begin(&mut self) -> Result<SkillSetHandle> // observes current catalog snapshot, rebuilds dirty caches, freezes view
-
-    fn rebuild_catalog_context(snapshot: &CatalogSnapshot)
-    fn rebuild_loaded_context(snapshot: &CatalogSnapshot) -> Result<()>
-}
-
-struct SkillSetHandle {
-    pub fn catalog_context() -> &str // stable during this handle
-    pub fn loaded_context() -> &str // stable during this handle
-}
-
-struct SkillGroup {
-    pub fn new(group: impl Into<String>, skills: impl IntoIterator<Item = SkillId>) -> SkillGroup
-    pub fn name(&self) -> &str
-    pub fn skills(&self) -> &[SkillId]
 }
 
 enum SkillError {
@@ -101,13 +92,16 @@ enum SkillError {
 
 Notes:
 
-- Skills are written, updated, or removed through the filesystem, not through `claw-skill` APIs or skill tool calls. Writers can be the web UI, installer, recovery copy, tests, or any other FS owner.
-- `SkillRegistry` is filesystem-backed catalog/document access. It has no create/update/delete skill API; after FS writes, callers use `reload()` to make the new filesystem state visible.
-- The registry trait is intentionally small because the skill tools only need `catalog()` for `list_skills` and `reload()` for `reload_skills`. `SkillSet` rebuilds loaded skill bodies from the current `CatalogSnapshot`.
-- `reload()` is the only registry state-change path: read roots, validate frontmatter, resolve root priority, then atomically swap a new `CatalogSnapshot`. It does not write skill files.
-- `SkillSet` only owns per-agent loaded skill ids and prompt caches. Loading/unloading skills changes the loaded skill body context only; it never changes the registry or filesystem.
-- A loaded skill is resident in this `SkillSet`'s context projection. `load()` is not a one-shot document return; every later `begin()` includes the loaded skill bodies until `unload()` / `unload_group()` removes them or the `SkillSet` is dropped.
-- `load()` validates against the current `CatalogSnapshot`. If a skill was just written to FS, callers must `reload()` before loading it.
-- `SkillSet::begin()` is the request/iteration boundary. It observes the current catalog snapshot and freezes `catalog_context` + `loaded_context` for that request.
-- Registry version changes invalidate both catalog and loaded-context caches. If a loaded skill disappeared after `reload()`, the next loaded-context rebuild returns `NotFound`.
-- The filesystem registry owns root priority and `{CUR_SKILL_DIR}` expansion. DATA roots should precede SYSTEM roots.
+- Skills are filesystem-owned. They are written, updated, or removed through FS owners such as the web UI, installer, recovery copy, or tests, not through `claw-skill` APIs.
+- Registry caller-facing API is intentionally small: create a registry, repeatedly `set_root(...)`, then get a `SkillSet` with `skill_set()`. Catalog/reload/document loading are registry internals used by `SkillSet`.
+- Roots are priority ordered. Add DATA roots before SYSTEM roots so DATA skills shadow firmware-baked skills with the same id.
+- `SkillSet` is the agent-facing cache and tool surface. Context adapters and skill tools should receive the shared `SkillSet`, not the registry.
+- Share one `SkillSet` between the context adapter and skill tools, typically as `Arc<Mutex<SkillSet>>`, so `catalog_buffer` and `document_buffer` are reused.
+- `CatalogSnapshot` stores structured skill metadata only, with `Arc<[Skill]>` so cloning `Arc<CatalogSnapshot>` never clones the skill list. Rendered prompt text and JSON list output live in `SkillSet::catalog_buffer`.
+- `list_skill()` returns JSON catalog, matching master behavior. `catalog_context()` returns prompt text such as `Available skills:\n- id: description\n...`.
+- `activate_skill()` strips `SKILL.md` frontmatter, expands `{CUR_SKILL_DIR}`, wraps the result like master's `<skill_content name="skill_id">...</skill_content>`, and returns immutable shared content.
+- `SkillDocument` is immutable and shareable so tool callers can avoid holding a `SkillSet` lock while formatting or returning content.
+- `activate_skill()` is a one-shot document load for the current tool result/context flow. It does not create persistent loaded-skill state in this design pass.
+- `SKILL.md` frontmatter is a JSON object wrapped by `---`. Master requires `name`, `description`, and `metadata`; `author` is optional.
+- `metadata.manage_mode` accepts `readonly`, `web`, or `runtime`; device runtime treats `web` as `readonly`.
+- `metadata.cap_groups` is parsed and retained but tool visibility is intentionally not connected in this design pass.
