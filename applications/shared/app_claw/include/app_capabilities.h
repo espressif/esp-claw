@@ -10,7 +10,6 @@
 
 #include "app_claw.h"
 #include "app_storage_paths.h"
-#include "claw_cabi.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -23,8 +22,7 @@ typedef struct {
 } app_capability_group_info_t;
 
 esp_err_t app_capabilities_init(const app_claw_config_t *config,
-                                const app_claw_storage_paths_t *paths,
-                                claw_capability_registry_t *registry);
+                                const app_claw_storage_paths_t *paths);
 esp_err_t app_capabilities_get_compiled_groups(const app_capability_group_info_t **groups,
                                                size_t *count);
 

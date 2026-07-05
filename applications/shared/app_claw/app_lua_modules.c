@@ -56,7 +56,6 @@
 #include "lua_module_camera.h"
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_CAPABILITY
-#include "app_claw.h"
 #include "lua_module_capability.h"
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_DELAY
@@ -354,7 +353,7 @@ static esp_err_t app_lua_register_camera(const char *fatfs_base_path)
 static esp_err_t app_lua_register_capability(const char *fatfs_base_path)
 {
     (void)fatfs_base_path;
-    return lua_module_capability_register(app_claw_get_capability_registry());
+    return lua_module_capability_register();
 }
 #endif
 

@@ -5,7 +5,7 @@ idf_component_register(
     INCLUDE_DIRS
         "include"
     REQUIRES
-        runtime
+        claw_cap
         json
         claw_event_router
         console

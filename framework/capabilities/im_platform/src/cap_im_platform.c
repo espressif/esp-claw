@@ -21,19 +21,19 @@
 
 static const char *TAG = "cap_im_platform";
 
-esp_err_t cap_im_platform_register_groups(claw_capability_registry_t *registry)
+esp_err_t cap_im_platform_register_groups(void)
 {
 #if CONFIG_APP_CLAW_CAP_IM_FEISHU
-    ESP_RETURN_ON_ERROR(cap_im_feishu_register_group(registry), TAG, "register Feishu IM group failed");
+    ESP_RETURN_ON_ERROR(cap_im_feishu_register_group(), TAG, "register Feishu IM group failed");
 #endif
 #if CONFIG_APP_CLAW_CAP_IM_QQ
-    ESP_RETURN_ON_ERROR(cap_im_qq_register_group(registry), TAG, "register QQ IM group failed");
+    ESP_RETURN_ON_ERROR(cap_im_qq_register_group(), TAG, "register QQ IM group failed");
 #endif
 #if CONFIG_APP_CLAW_CAP_IM_TG
-    ESP_RETURN_ON_ERROR(cap_im_tg_register_group(registry), TAG, "register Telegram IM group failed");
+    ESP_RETURN_ON_ERROR(cap_im_tg_register_group(), TAG, "register Telegram IM group failed");
 #endif
 #if CONFIG_APP_CLAW_CAP_IM_WECHAT
-    ESP_RETURN_ON_ERROR(cap_im_wechat_register_group(registry), TAG, "register WeChat IM group failed");
+    ESP_RETURN_ON_ERROR(cap_im_wechat_register_group(), TAG, "register WeChat IM group failed");
 #endif
     return ESP_OK;
 }

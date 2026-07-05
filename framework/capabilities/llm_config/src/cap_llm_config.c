@@ -11,7 +11,7 @@
 #include <string.h>
 
 #include "cJSON.h"
-#include "claw_cabi_esp.h"
+#include "claw_cap.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -308,6 +308,7 @@ static esp_err_t save_config(cap_llm_config_t *config, char *output, size_t outp
 }
 
 static esp_err_t llm_config_execute(const char *input_json,
+                                    const claw_cap_call_context_t *ctx,
                                     char *output,
                                     size_t output_size)
 {
@@ -322,6 +323,7 @@ static esp_err_t llm_config_execute(const char *input_json,
     if (!output || output_size == 0) {
         return ESP_ERR_INVALID_ARG;
     }
+    (void)ctx;
     output[0] = '\0';
 
     config = calloc(1, sizeof(*config));
@@ -585,24 +587,23 @@ cleanup:
     return err;
 }
 
-CLAW_CABI_ESP_TOOL_CALLBACK(llm_config_execute_cabi, llm_config_execute)
-
-static const claw_capability_t s_llm_config_caps[] = {
+static const claw_cap_descriptor_t s_llm_config_caps[] = {
     {
         .id = "llm_config_command",
+        .name = "llm_config_command",
+        .family = "llm_config",
         .description = "Handle /llm configuration commands.",
-        .role = CLAW_CAPABILITY_ROLE_TOOL,
-        .role_data.tool = {
-            .schema_json = "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}}}",
-            .execute = llm_config_execute_cabi,
-        },
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}}}",
+        .execute = llm_config_execute,
     },
 };
 
-static const claw_capability_group_t s_llm_config_group = {
-    .id = "cap_llm_config",
-    .members = s_llm_config_caps,
-    .member_count = sizeof(s_llm_config_caps) / sizeof(s_llm_config_caps[0]),
+static const claw_cap_group_t s_llm_config_group = {
+    .group_id = "cap_llm_config",
+    .descriptors = s_llm_config_caps,
+    .descriptor_count = sizeof(s_llm_config_caps) / sizeof(s_llm_config_caps[0]),
 };
 
 esp_err_t cap_llm_config_set_provider(const cap_llm_config_provider_t *provider)
@@ -615,14 +616,14 @@ esp_err_t cap_llm_config_set_provider(const cap_llm_config_provider_t *provider)
     return ESP_OK;
 }
 
-esp_err_t cap_llm_config_register_group(claw_capability_registry_t *registry)
+esp_err_t cap_llm_config_register_group(void)
 {
-    if (!registry) {
-        return ESP_ERR_INVALID_ARG;
-    }
     if (!s_provider.get_config || !s_provider.apply_config) {
         return ESP_ERR_INVALID_STATE;
     }
+    if (claw_cap_group_exists(s_llm_config_group.group_id)) {
+        return ESP_OK;
+    }
 
-    return claw_cabi_register_group_esp(registry, &s_llm_config_group);
+    return claw_cap_register_group(&s_llm_config_group);
 }

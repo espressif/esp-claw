@@ -8,7 +8,7 @@ idf_component_register(
     PRIV_INCLUDE_DIRS
         "src/priv_include"
     REQUIRES
-        runtime
+        claw_cap
         esp_http_client
         mcp-c-sdk
         mcp_mdns

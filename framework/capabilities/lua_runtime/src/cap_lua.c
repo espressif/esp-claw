@@ -14,7 +14,8 @@
 #include <time.h>
 
 #include "cJSON.h"
-#include "claw_cabi_esp.h"
+#include "claw_cap.h"
+#include "claw_core.h"
 #include "esp_check.h"
 #include "esp_log.h"
 
@@ -240,7 +241,8 @@ static esp_err_t cap_lua_group_start(void)
     return cap_lua_async_start();
 }
 
-static esp_err_t cap_lua_run_script_execute_impl(const char *input_json,
+static esp_err_t cap_lua_run_script_execute(const char *input_json,
+                                            const claw_cap_call_context_t *ctx,
                                             char *output,
                                             size_t output_size)
 {
@@ -252,6 +254,8 @@ static esp_err_t cap_lua_run_script_execute_impl(const char *input_json,
     uint32_t timeout_ms = 0;
     cap_lua_async_job_t job = {0};
     esp_err_t err;
+
+    (void)ctx;
 
     root = cJSON_Parse(input_json);
     if (!root) {
@@ -315,9 +319,10 @@ static const char *cap_lua_basename_from_path(const char *path)
     return slash ? slash + 1 : path;
 }
 
-static esp_err_t cap_lua_run_script_async_execute_impl(const char *input_json,
-                                            char *output,
-                                            size_t output_size)
+static esp_err_t cap_lua_run_script_async_execute(const char *input_json,
+                                                  const claw_cap_call_context_t *ctx,
+                                                  char *output,
+                                                  size_t output_size)
 {
     cJSON *root = NULL;
     const char *path = NULL;
@@ -336,6 +341,8 @@ static esp_err_t cap_lua_run_script_async_execute_impl(const char *input_json,
     char err_buf[256] = {0};
     bool replace = false;
     esp_err_t err;
+
+    (void)ctx;
 
     root = cJSON_Parse(input_json);
     if (!root) {
@@ -473,15 +480,18 @@ static esp_err_t cap_lua_run_script_async_execute_impl(const char *input_json,
     return ESP_OK;
 }
 
-static esp_err_t cap_lua_stop_async_job_execute_impl(const char *input_json,
-                                            char *output,
-                                            size_t output_size)
+static esp_err_t cap_lua_stop_async_job_execute(const char *input_json,
+                                                const claw_cap_call_context_t *ctx,
+                                                char *output,
+                                                size_t output_size)
 {
     cJSON *root = NULL;
     const char *target = NULL;
     cJSON *wait_item = NULL;
     uint32_t wait_ms = 0;
     esp_err_t err;
+
+    (void)ctx;
 
     root = cJSON_Parse(input_json);
     if (!root) {
@@ -507,15 +517,18 @@ static esp_err_t cap_lua_stop_async_job_execute_impl(const char *input_json,
     return err;
 }
 
-static esp_err_t cap_lua_stop_all_async_jobs_execute_impl(const char *input_json,
-                                            char *output,
-                                            size_t output_size)
+static esp_err_t cap_lua_stop_all_async_jobs_execute(const char *input_json,
+                                                     const claw_cap_call_context_t *ctx,
+                                                     char *output,
+                                                     size_t output_size)
 {
     cJSON *root = NULL;
     const char *exclusive = NULL;
     cJSON *wait_item = NULL;
     uint32_t wait_ms = 0;
     esp_err_t err;
+
+    (void)ctx;
 
     if (input_json && input_json[0]) {
         root = cJSON_Parse(input_json);
@@ -535,13 +548,16 @@ static esp_err_t cap_lua_stop_all_async_jobs_execute_impl(const char *input_json
     return err;
 }
 
-static esp_err_t cap_lua_list_async_jobs_execute_impl(const char *input_json,
-                                            char *output,
-                                            size_t output_size)
+static esp_err_t cap_lua_list_async_jobs_execute(const char *input_json,
+                                                 const claw_cap_call_context_t *ctx,
+                                                 char *output,
+                                                 size_t output_size)
 {
     cJSON *root = NULL;
     const char *status = NULL;
     esp_err_t err;
+
+    (void)ctx;
 
     root = cJSON_Parse(input_json);
     if (root) {
@@ -567,13 +583,16 @@ static esp_err_t cap_lua_list_async_jobs_execute_impl(const char *input_json,
     return err;
 }
 
-static esp_err_t cap_lua_get_async_job_execute_impl(const char *input_json,
-                                            char *output,
-                                            size_t output_size)
+static esp_err_t cap_lua_get_async_job_execute(const char *input_json,
+                                               const claw_cap_call_context_t *ctx,
+                                               char *output,
+                                               size_t output_size)
 {
     cJSON *root = NULL;
     const char *job_id = NULL;
     esp_err_t err;
+
+    (void)ctx;
 
     root = cJSON_Parse(input_json);
     if (!root) {
@@ -596,9 +615,10 @@ static esp_err_t cap_lua_get_async_job_execute_impl(const char *input_json,
     return err;
 }
 
-static esp_err_t cap_lua_tail_async_job_execute_impl(const char *input_json,
-                                            char *output,
-                                            size_t output_size)
+static esp_err_t cap_lua_tail_async_job_execute(const char *input_json,
+                                                const claw_cap_call_context_t *ctx,
+                                                char *output,
+                                                size_t output_size)
 {
     cJSON *root = NULL;
     const char *job_id = NULL;
@@ -608,6 +628,8 @@ static esp_err_t cap_lua_tail_async_job_execute_impl(const char *input_json,
     uint64_t since_seq = 0;
     size_t max_bytes = CAP_LUA_ASYNC_LOG_TAIL_DEFAULT_BYTES;
     esp_err_t err;
+
+    (void)ctx;
 
     root = cJSON_Parse(input_json);
     if (!root) {
@@ -656,29 +678,34 @@ static esp_err_t cap_lua_tail_async_job_execute_impl(const char *input_json,
     return err;
 }
 
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_lua_run_script_execute, cap_lua_run_script_execute_impl)
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_lua_run_script_async_execute, cap_lua_run_script_async_execute_impl)
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_lua_list_async_jobs_execute, cap_lua_list_async_jobs_execute_impl)
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_lua_get_async_job_execute, cap_lua_get_async_job_execute_impl)
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_lua_tail_async_job_execute, cap_lua_tail_async_job_execute_impl)
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_lua_stop_async_job_execute, cap_lua_stop_async_job_execute_impl)
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_lua_stop_all_async_jobs_execute, cap_lua_stop_all_async_jobs_execute_impl)
-CLAW_CABI_ESP_LIFECYCLE_CALLBACK(cap_lua_group_init_cabi, cap_lua_group_init)
-CLAW_CABI_ESP_LIFECYCLE_CALLBACK(cap_lua_group_start_cabi, cap_lua_group_start)
-
-static const claw_capability_t s_lua_descriptors[] = {
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "lua_run_script",
-        "Run a Lua script synchronously with optional args and timeout.",
+static const claw_cap_descriptor_t s_lua_descriptors[] = {
+    {
+        .id = "lua_run_script",
+        .name = "lua_run_script",
+        .family = "automation",
+        .description = "Run a Lua script synchronously with optional args and timeout.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json =
         "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},"
         "\"args\":{\"type\":\"object\","
         "\"description\":\"Lua script arguments object keyed by parameter name.\","
         "\"additionalProperties\":true},"
         "\"timeout_ms\":{\"type\":\"integer\"}},\"required\":[\"path\"]}",
-        cap_lua_run_script_execute),
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "lua_run_script_async",
-        "Run Lua async; returns job id. timeout_ms=0 runs until cancelled. Use name/exclusive for conflicts; replace=true takes over. Read running, final, or failed-job logs with lua_get_async_job or lua_tail_async_job using returned job id.",
+        .execute = cap_lua_run_script_execute,
+    },
+    {
+        .id = "lua_run_script_async",
+        .name = "lua_run_script_async",
+        .family = "automation",
+        .description =
+        "Run Lua async; returns job id. timeout_ms=0 runs until cancelled. "
+        "Use name/exclusive for conflicts; replace=true takes over. Read running, "
+        "final, or failed-job logs with lua_get_async_job or lua_tail_async_job "
+        "using returned job id.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json =
         "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},"
         "\"args\":{\"type\":\"object\","
         "\"description\":\"Lua script arguments object keyed by parameter name.\","
@@ -686,53 +713,90 @@ static const claw_capability_t s_lua_descriptors[] = {
         "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":0},\"log_bytes\":{\"type\":\"integer\","
         "\"minimum\":1024,\"maximum\":16384},\"name\":{\"type\":\"string\"},"
         "\"exclusive\":{\"type\":\"string\"},\"replace\":{\"type\":\"boolean\"}},\"required\":[\"path\"]}",
-        cap_lua_run_script_async_execute),
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "lua_list_async_jobs",
-        "List Lua async jobs by optional status filter.",
+        .execute = cap_lua_run_script_async_execute,
+    },
+    {
+        .id = "lua_list_async_jobs",
+        .name = "lua_list_async_jobs",
+        .family = "automation",
+        .description = "List Lua async jobs by optional status filter.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json =
         "{\"type\":\"object\",\"properties\":{\"status\":{\"type\":\"string\",\"enum\":[\"all\",\"queued\",\"running\",\"done\",\"failed\",\"timeout\",\"stopped\"]}}}",
-        cap_lua_list_async_jobs_execute),
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "lua_get_async_job",
-        "Get status, summary, and recent logs for a Lua async job by job_id or name.",
+        .execute = cap_lua_list_async_jobs_execute,
+    },
+    {
+        .id = "lua_get_async_job",
+        .name = "lua_get_async_job",
+        .family = "automation",
+        .description = "Get status, summary, and recent logs for a Lua async job by job_id or name.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json =
         "{\"type\":\"object\",\"properties\":{\"job_id\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"}}}",
-        cap_lua_get_async_job_execute),
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "lua_tail_async_job",
-        "Read incremental logs for a Lua async job by job_id or name. Pass since_seq from the previous log_next_seq to continue reading only new log text.",
+        .execute = cap_lua_get_async_job_execute,
+    },
+    {
+        .id = "lua_tail_async_job",
+        .name = "lua_tail_async_job",
+        .family = "automation",
+        .description =
+        "Read incremental logs for a Lua async job by job_id or name. Pass since_seq from the "
+        "previous log_next_seq to continue reading only new log text.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json =
         "{\"type\":\"object\",\"properties\":{\"job_id\":{\"type\":\"string\"},"
         "\"name\":{\"type\":\"string\"},\"since_seq\":{\"type\":\"integer\",\"minimum\":0},"
         "\"max_bytes\":{\"type\":\"integer\",\"minimum\":1}}}",
-        cap_lua_tail_async_job_execute),
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "lua_stop_async_job",
-        "Stop a running Lua async job by job_id or name. MUST be called whenever the user asks to stop, cancel, quit or close an async script; replying without calling this leaves the job running. Cooperative; default wait 2000 ms.",
+        .execute = cap_lua_tail_async_job_execute,
+    },
+    {
+        .id = "lua_stop_async_job",
+        .name = "lua_stop_async_job",
+        .family = "automation",
+        .description =
+        "Stop a running Lua async job by job_id or name. MUST be called whenever the user asks "
+        "to stop, cancel, quit or close an async script; replying without calling this leaves "
+        "the job running. Cooperative; default wait 2000 ms.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json =
         "{\"type\":\"object\",\"properties\":{\"job_id\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"wait_ms\":{\"type\":\"integer\",\"minimum\":1}}}",
-        cap_lua_stop_async_job_execute),
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "lua_stop_all_async_jobs",
-        "Stop all running Lua async jobs, optionally filtered by exclusive group (e.g. exclusive='display'). MUST be called when the user asks to clear the screen, stop everything or cancel all background scripts.",
+        .execute = cap_lua_stop_async_job_execute,
+    },
+    {
+        .id = "lua_stop_all_async_jobs",
+        .name = "lua_stop_all_async_jobs",
+        .family = "automation",
+        .description =
+        "Stop all running Lua async jobs, optionally filtered by exclusive group "
+        "(e.g. exclusive='display'). MUST be called when the user asks to clear the screen, "
+        "stop everything or cancel all background scripts.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json =
         "{\"type\":\"object\",\"properties\":{\"exclusive\":{\"type\":\"string\"},\"wait_ms\":{\"type\":\"integer\",\"minimum\":1}}}",
-        cap_lua_stop_all_async_jobs_execute),
-};
-
-static const claw_capability_group_t s_lua_group = {
-    .id = "cap_lua",
-    .members = s_lua_descriptors,
-    .member_count = sizeof(s_lua_descriptors) / sizeof(s_lua_descriptors[0]),
-    .lifecycle = {
-        .init = cap_lua_group_init_cabi,
-        .start = cap_lua_group_start_cabi,
+        .execute = cap_lua_stop_all_async_jobs_execute,
     },
 };
 
-esp_err_t cap_lua_register_group(claw_capability_registry_t *registry)
+static const claw_cap_group_t s_lua_group = {
+    .group_id = "cap_lua",
+    .descriptors = s_lua_descriptors,
+    .descriptor_count = sizeof(s_lua_descriptors) / sizeof(s_lua_descriptors[0]),
+    .group_init = cap_lua_group_init,
+    .group_start = cap_lua_group_start,
+};
+
+esp_err_t cap_lua_register_group(void)
 {
-    if (!registry) {
-        return ESP_ERR_INVALID_ARG;
+    if (claw_cap_group_exists(s_lua_group.group_id)) {
+        return ESP_OK;
     }
 
-    return claw_cabi_register_group_esp(registry, &s_lua_group);
+    return claw_cap_register_group(&s_lua_group);
 }
 
 esp_err_t cap_lua_run_script(const char *path,
@@ -778,7 +842,7 @@ esp_err_t cap_lua_run_script(const char *path,
         return ESP_ERR_NO_MEM;
     }
 
-    err = cap_lua_run_script_execute_impl(input_json, output, output_size);
+    err = cap_lua_run_script_execute(input_json, NULL, output, output_size);
     free(input_json);
     return err;
 }
@@ -841,7 +905,7 @@ esp_err_t cap_lua_run_script_async(const char *path,
         return ESP_ERR_NO_MEM;
     }
 
-    err = cap_lua_run_script_async_execute_impl(input_json, output, output_size);
+    err = cap_lua_run_script_async_execute(input_json, NULL, output, output_size);
     free(input_json);
     return err;
 }
@@ -882,9 +946,10 @@ esp_err_t cap_lua_list_jobs(const char *status, char *output, size_t output_size
         return err;
     }
 
-    err = cap_lua_list_async_jobs_execute_impl(input_json ? input_json : "{}",
-                                               output,
-                                               output_size);
+    err = cap_lua_list_async_jobs_execute(input_json ? input_json : "{}",
+                                          NULL,
+                                          output,
+                                          output_size);
     free(input_json);
     return err;
 }
@@ -909,9 +974,10 @@ esp_err_t cap_lua_get_job(const char *job_id, char *output, size_t output_size)
         return err;
     }
 
-    err = cap_lua_get_async_job_execute_impl(input_json ? input_json : "{}",
-                                             output,
-                                             output_size);
+    err = cap_lua_get_async_job_execute(input_json ? input_json : "{}",
+                                        NULL,
+                                        output,
+                                        output_size);
     free(input_json);
     return err;
 }

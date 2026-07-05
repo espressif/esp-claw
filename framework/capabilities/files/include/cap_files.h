@@ -5,7 +5,6 @@
  */
 #pragma once
 
-#include "claw_cabi.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -25,7 +24,7 @@ extern "C" {
  *         - ESP_ERR_INVALID_STATE if no sandbox root is configured in claw_paths
  *         - other errors from the capability registry
  */
-esp_err_t cap_files_register_group(claw_capability_registry_t *registry);
+esp_err_t cap_files_register_group(void);
 
 #ifdef __cplusplus
 }

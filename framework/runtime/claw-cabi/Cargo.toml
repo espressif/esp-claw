@@ -3,47 +3,31 @@ name = "claw-cabi"
 authors = ["Finn(Ziheng) Sheng"]
 version = "0.1.0"
 edition = "2021"
-description = "The single outbound C ABI (Rust -> C) for the agent/capability stack: C registers capabilities and pushes inbound messages; everything else stays Rust-side"
+description = "C adapter boundary for the Rust agent runtime"
 
 [lib]
-# staticlib: linked into the firmware image as the C ABI.
-# rlib: lets the Rust entry point / host tests link the in-crate bridge that
-# wires the populated Registry into the agent runtime (plain Rust, not ABI).
 name = "claw_cabi"
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-# The single wrapped agent API. claw-cabi turns *its* re-exported types into a C
-# ABI rather than re-wrapping the lower crates itself: the capability surface
-# (`Registry`, `Capability`, `CapabilityRole`, `ChannelAdapter`, `Lifecycle`,
-# `CapabilityError`), the tool surface (`Tool`, `ToolHandler`, `tool_invoke_err`,
-# …), and the channel data-plane message/runtime (`InboundMessage`,
-# `ChannelRuntime`).
-# The Registry -> agent-runtime bridge lives in claw-agent (single source of
-# truth); the firmware Rust entry point wires it via `AgentSystem`.
-#
-# `default-features = false` keeps claw-agent's host development workflow and
-# host-target backends disabled, so reqwest/std-thread never reach the device
-# image; ESP-IDF backends are injected through
-# `AgentSystem::new::<F, H, Timer>(...)` by the Rust entry point.
-claw-agent = { path = "../claw-agent", default-features = false }
 
 [target.'cfg(target_os = "espidf")'.dependencies]
-# Device backends used by the C-created agent runtime.
-claw-sys = { path = "../claw-sys" }
+claw-agent = { path = "../claw-agent" }
+claw-api = { path = "../claw-api" }
+claw-core = { path = "../claw-core" }
 claw-interface = { path = "../claw-interface" }
+claw-sys = { path = "../claw-sys" }
+claw-tool = { path = "../claw-tool" }
 claw-utils = { path = "../claw-utils" }
-edge-executor = { version = "0.4.1", default-features = true }
+embedded-executor = "0.6.1"
+lock_api = "0.4.14"
+serde_json = "1"
+thiserror = "2"
 
 [lints.rust]
-# THE ONE EXCEPTION in the workspace: this crate is the FFI boundary, so it must
-# be allowed to contain `unsafe` / `#[no_mangle] extern "C"`. Every other crate
-# keeps `unsafe_code = "forbid"`.
 unsafe_code = "allow"
 
 [lints.clippy]
-# Panics still must not cross the FFI boundary: a panic is caught and mapped to
-# CLAW_CAPABILITY_FAILED, never unwound into C.
 unwrap_used = "deny"
 expect_used = "deny"
 indexing_slicing = "deny"

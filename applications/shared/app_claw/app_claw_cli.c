@@ -7,12 +7,12 @@
 #include "app_claw.h"
 
 #include <inttypes.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #if CONFIG_APP_CLAW_CAP_IM_QQ
+#include "cap_im_qq.h"
 #include "cmd_cap_im_qq.h"
 #endif
 #if CONFIG_APP_CLAW_CAP_IM_FEISHU
@@ -24,23 +24,30 @@
 #if CONFIG_APP_CLAW_CAP_IM_WECHAT
 #include "cmd_cap_im_wechat.h"
 #endif
-#if CONFIG_APP_CLAW_CAP_LUA
-#include "cmd_cap_lua.h"
-#endif
-#if CONFIG_APP_CLAW_CAP_SCHEDULER
-#include "cmd_cap_scheduler.h"
-#endif
 #if CONFIG_APP_CLAW_CAP_LLM_INSPECT
 #include "cmd_cap_llm_inspect.h"
+#endif
+#if CONFIG_APP_CLAW_CAP_LUA
+#include "cmd_cap_lua.h"
 #endif
 #if CONFIG_APP_CLAW_CAP_ROUTER_MGR
 #include "cmd_cap_router_mgr.h"
 #endif
+#if CONFIG_APP_CLAW_CAP_SCHEDULER
+#include "cmd_cap_scheduler.h"
+#endif
+#if CONFIG_APP_CLAW_CAP_SKILL_MGR
+#include "cmd_cap_skill.h"
+#endif
+#if CONFIG_APP_CLAW_CAP_TIME
+#include "cmd_cap_time.h"
+#endif
 #if CONFIG_APP_CLAW_CAP_WEB_SEARCH
 #include "cmd_cap_web_search.h"
 #endif
-#include "app_claw.h"
-#include "claw_cabi_esp.h"
+#include "claw_cap.h"
+#include "claw_agent_mgr.h"
+#include "claw_core.h"
 #include "claw_event_publisher.h"
 #include "claw_event_router.h"
 #include "cJSON.h"
@@ -48,8 +55,10 @@
 #include "esp_log.h"
 
 static const char *TAG = "app_claw_cli";
+static const size_t CAP_OUTPUT_BUF_SIZE = 1024;
 
-static char s_current_session_id[64] = {0};
+static uint32_t s_next_request_id = 1;
+static char s_current_session_id[64] = "default";
 
 static char *join_prompt_args(int argc, char **argv)
 {
@@ -111,136 +120,48 @@ static char *join_args_from(int argc, char **argv, int start_index)
 
 static int submit_and_print(const char *prompt, const char *session_id)
 {
-    claw_agent_system_t *system = app_claw_get_agent_system();
+    claw_core_response_t response = {0};
+    uint32_t request_id = 0;
+    esp_err_t err;
 
-    (void)prompt;
-
-    if (!system) {
-        printf("AgentSystem is not configured\n");
-        return 1;
+    if (session_id && session_id[0]) {
+        printf("Submitting request %" PRIu32 " [session=%s]...\n",
+               s_next_request_id,
+               session_id);
+    } else {
+        printf("Submitting request %" PRIu32 " [single-turn]...\n", s_next_request_id);
     }
-    if (!session_id || !session_id[0]) {
-        printf("session id cannot be empty\n");
-        return 1;
-    }
 
-    printf("ask is disabled until the CLI registers a console channel "
-           "and submits through claw_agent_system_push_message [session=%s]\n",
-           session_id);
-    return 1;
-}
-
-static int create_session(char *session_id, size_t session_id_size)
-{
-    claw_agent_system_t *system = app_claw_get_agent_system();
-    size_t session_id_length = 0;
-    claw_capability_result_t result;
-
-    if (!system) {
-        printf("AgentSystem is not configured\n");
-        return 1;
-    }
-    if (!session_id || session_id_size == 0) {
-        printf("missing session buffer\n");
+    if (!app_claw_get_core()) {
+        printf("claw_core is not ready\n");
         return 1;
     }
 
-    result = claw_agent_system_session_create(system,
-                                              session_id,
-                                              session_id_size,
-                                              &session_id_length);
-    if (!claw_capability_is_ok(result)) {
-        printf("session create failed: %s\n", result.message ? result.message : "unknown error");
+    err = claw_agent_mgr_submit_root_text(prompt,
+                                          session_id,
+                                          CLAW_CORE_REQUEST_FLAG_PUBLISH_STAGE_MESSAGE,
+                                          5000,
+                                          &request_id);
+    if (err != ESP_OK) {
+        printf("submit failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    s_next_request_id = request_id + 1;
+
+    err = claw_agent_mgr_receive_root_for(request_id, &response, 130000);
+    if (err != ESP_OK) {
+        printf("receive failed: %s\n", esp_err_to_name(err));
         return 1;
     }
 
-    return 0;
-}
-
-static int ensure_current_session(void)
-{
-    if (s_current_session_id[0]) {
-        return 0;
-    }
-    if (create_session(s_current_session_id, sizeof(s_current_session_id)) != 0) {
-        return 1;
-    }
-    printf("Created session: %s\n", s_current_session_id);
-    return 0;
-}
-
-static int delete_session(const char *session_id)
-{
-    claw_agent_system_t *system = app_claw_get_agent_system();
-    claw_capability_result_t result;
-
-    if (!system) {
-        printf("AgentSystem is not configured\n");
-        return 1;
-    }
-    if (!session_id || !session_id[0]) {
-        printf("session id cannot be empty\n");
-        return 1;
+    if (response.status == CLAW_CORE_RESPONSE_STATUS_OK && response.text) {
+        printf("\nassistant> %s\n\n", response.text);
+    } else {
+        printf("\nerror> %s\n\n",
+               response.error_message ? response.error_message : "unknown error");
     }
 
-    result = claw_agent_system_session_delete(system, session_id);
-    if (!claw_capability_is_ok(result)) {
-        printf("session delete failed: %s\n", result.message ? result.message : "unknown error");
-        return 1;
-    }
-
-    return 0;
-}
-
-static claw_capability_result_t print_session_record(const claw_agent_session_record_t *record,
-                                                     void *user_context)
-{
-    bool *printed = (bool *)user_context;
-
-    if (!record || !record->session_id) {
-        return (claw_capability_result_t) {
-            .kind = CLAW_CAPABILITY_INVALID_ARGUMENT,
-            .message = "missing session record",
-        };
-    }
-
-    printf("%s", record->session_id);
-    if (record->channel && record->channel[0]) {
-        printf(" channel=%s", record->channel);
-    }
-    if (record->chat_id && record->chat_id[0]) {
-        printf(" chat_id=%s", record->chat_id);
-    }
-    printf("\n");
-
-    if (printed) {
-        *printed = true;
-    }
-    return (claw_capability_result_t) {
-        .kind = CLAW_CAPABILITY_OK,
-        .message = NULL,
-    };
-}
-
-static int list_sessions(void)
-{
-    claw_agent_system_t *system = app_claw_get_agent_system();
-    bool printed = false;
-    claw_capability_result_t result;
-
-    if (!system) {
-        printf("AgentSystem is not configured\n");
-        return 1;
-    }
-
-    result = claw_agent_system_session_list(system, print_session_record, &printed);
-    if (!claw_capability_is_ok(result)) {
-        printf("session list failed: %s\n", result.message ? result.message : "unknown error");
-        return 1;
-    }
-    if (!printed) {
-        printf("(no sessions)\n");
-    }
+    claw_core_response_free(&response);
     return 0;
 }
 
@@ -259,11 +180,6 @@ static int cmd_ask(int argc, char **argv)
         return 1;
     }
 
-    if (ensure_current_session() != 0) {
-        free(prompt);
-        return 1;
-    }
-
     argc = submit_and_print(prompt, s_current_session_id);
     free(prompt);
     return argc;
@@ -271,9 +187,8 @@ static int cmd_ask(int argc, char **argv)
 
 static int cmd_ask_once(int argc, char **argv)
 {
-    char session_id[64] = {0};
     char *prompt = NULL;
-    int result;
+    int rc;
 
     if (argc < 2) {
         printf("Usage: ask_once <prompt>\n");
@@ -286,58 +201,20 @@ static int cmd_ask_once(int argc, char **argv)
         return 1;
     }
 
-    if (create_session(session_id, sizeof(session_id)) != 0) {
-        free(prompt);
-        return 1;
-    }
-
-    result = submit_and_print(prompt, session_id);
-    if (delete_session(session_id) != 0) {
-        result = 1;
-    }
-
+    rc = submit_and_print(prompt, NULL);
     free(prompt);
-    return result;
+    return rc;
 }
 
 static int cmd_session(int argc, char **argv)
 {
     if (argc == 1) {
-        printf("Current session: %s\n", s_current_session_id[0] ? s_current_session_id : "(none)");
-        return 0;
-    }
-
-    if (argc == 2 && strcmp(argv[1], "new") == 0) {
-        if (create_session(s_current_session_id, sizeof(s_current_session_id)) != 0) {
-            return 1;
-        }
-        printf("Created session: %s\n", s_current_session_id);
-        return 0;
-    }
-
-    if (argc == 2 && strcmp(argv[1], "list") == 0) {
-        return list_sessions();
-    }
-
-    if ((argc == 2 || argc == 3) && strcmp(argv[1], "delete") == 0) {
-        const char *session_id = argc == 3 ? argv[2] : s_current_session_id;
-        char deleted_id[64] = {0};
-        bool deleting_current;
-
-        strlcpy(deleted_id, session_id ? session_id : "", sizeof(deleted_id));
-        if (delete_session(session_id) != 0) {
-            return 1;
-        }
-        deleting_current = strcmp(deleted_id, s_current_session_id) == 0;
-        if (deleting_current) {
-            s_current_session_id[0] = '\0';
-        }
-        printf("Deleted session: %s\n", deleted_id);
+        printf("Current session: %s\n", s_current_session_id);
         return 0;
     }
 
     if (argc != 2) {
-        printf("Usage: session [id|new|list|delete [id]]\n");
+        printf("Usage: session [id]\n");
         return 1;
     }
 
@@ -353,120 +230,183 @@ static int cmd_session(int argc, char **argv)
 
 static int cmd_cap_list(int argc, char **argv)
 {
+    claw_cap_list_t list;
+    size_t i;
+
     (void)argc;
     (void)argv;
-    printf("cap list is not exposed by claw-cabi yet\n");
-    return 1;
-}
 
-#define CMD_CAP_CALL_OUTPUT_SIZE (8 * 1024)
+    list = claw_cap_list();
+    if (list.count == 0) {
+        printf("No capabilities registered\n");
+        return 0;
+    }
+
+    for (i = 0; i < list.count; i++) {
+        const claw_cap_descriptor_t *item = &list.items[i];
+
+        printf("%s [%s] %s\n",
+               item->name,
+               item->family ? item->family : "cap",
+               item->description ? item->description : "");
+    }
+
+    return 0;
+}
 
 static int cmd_cap_call(int argc, char **argv)
 {
-    claw_capability_registry_t *registry = app_claw_get_capability_registry();
-    const char *cap_name;
-    char *input_json = NULL;
     char *output = NULL;
-    size_t output_length = 0;
-    bool output_success = false;
     esp_err_t err;
+    claw_cap_call_context_t ctx = {
+        .caller = CLAW_CAP_CALLER_CONSOLE,
+        .session_id = s_current_session_id,
+        .core = app_claw_get_core(),
+    };
 
     if (argc < 3) {
         printf("Usage: cap_call <name> <json>\n");
         return 1;
     }
-    if (!registry) {
-        printf("capability registry is not configured\n");
-        return 1;
-    }
 
-    cap_name = argv[1];
-    input_json = join_args_from(argc, argv, 2);
-    if (!input_json) {
-        printf("out of memory\n");
-        return 1;
-    }
+    {
+        cJSON *json = cJSON_Parse(argv[2]);
 
-    output = calloc(1, CMD_CAP_CALL_OUTPUT_SIZE);
-    if (!output) {
-        free(input_json);
-        printf("out of memory\n");
-        return 1;
-    }
-
-    err = claw_cabi_result_to_esp(claw_capability_invoke(registry,
-                                                         cap_name,
-                                                         input_json,
-                                                         output,
-                                                         CMD_CAP_CALL_OUTPUT_SIZE,
-                                                         &output_length,
-                                                         &output_success));
-    free(input_json);
-
-    if (err != ESP_OK) {
-        printf("cap_call %s failed: %s\n", cap_name, esp_err_to_name(err));
-        if (output[0]) {
-            printf("%s\n", output);
+        if (!json) {
+            printf("invalid json\n");
+            return 1;
         }
-        free(output);
+        cJSON_Delete(json);
+    }
+
+    output = calloc(1, CAP_OUTPUT_BUF_SIZE);
+    if (!output) {
+        printf("Out of memory\n");
         return 1;
     }
 
-    printf("[%s] %s\n", output_success ? "ok" : "error", output);
+    err = claw_cap_call(argv[1], argv[2], &ctx, output, CAP_OUTPUT_BUF_SIZE);
+    if (err == ESP_OK) {
+        printf("%s\n", output);
+    } else {
+        printf("%s\n", output[0] ? output : esp_err_to_name(err));
+    }
+
     free(output);
-    return output_success ? 0 : 1;
+    return err == ESP_OK ? 0 : 1;
 }
 
 static int cmd_cap_groups(int argc, char **argv)
 {
+    claw_cap_group_list_t list;
+    size_t i;
+
     (void)argc;
     (void)argv;
-    printf("cap groups is not exposed by claw-cabi yet\n");
-    return 1;
+
+    list = claw_cap_list_groups();
+    if (list.count == 0) {
+        printf("No cap groups loaded\n");
+        return 0;
+    }
+
+    for (i = 0; i < list.count; i++) {
+        const claw_cap_group_info_t *item = &list.items[i];
+
+        printf("%s state=%s descriptors=%u plugin=%s version=%s\n",
+               item->group_id ? item->group_id : "(null)",
+               claw_cap_state_to_string(item->state),
+               (unsigned)item->descriptor_count,
+               item->plugin_name ? item->plugin_name : "-",
+               item->version ? item->version : "-");
+    }
+
+    return 0;
 }
 
 static int cmd_cap_enable(int argc, char **argv)
 {
+    esp_err_t err;
+
     if (argc != 2) {
         printf("Usage: cap_enable <group_id>\n");
         return 1;
     }
 
-    printf("cap_enable is not exposed by claw-cabi yet: %s\n", argv[1]);
-    return 1;
+    err = claw_cap_enable_group(argv[1]);
+    if (err != ESP_OK) {
+        printf("cap_enable failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+
+    printf("enabled %s\n", argv[1]);
+    return 0;
 }
 
 static int cmd_cap_disable(int argc, char **argv)
 {
+    esp_err_t err;
+
     if (argc != 2) {
         printf("Usage: cap_disable <group_id>\n");
         return 1;
     }
 
-    printf("cap_disable is not exposed by claw-cabi yet: %s\n", argv[1]);
-    return 1;
+    err = claw_cap_disable_group(argv[1]);
+    if (err != ESP_OK) {
+        printf("cap_disable failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+
+    printf("disabled %s\n", argv[1]);
+    return 0;
 }
 
 static int cmd_cap_unload(int argc, char **argv)
 {
+    esp_err_t err;
+
     if (argc != 2) {
         printf("Usage: cap_unload <group_id>\n");
         return 1;
     }
 
-    printf("cap_unload is not exposed by claw-cabi yet: %s\n", argv[1]);
-    return 1;
+    err = claw_cap_unregister_group(argv[1], 10000);
+    if (err != ESP_OK) {
+        printf("cap_unload failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+
+    printf("unloaded %s\n", argv[1]);
+    return 0;
 }
 
 static int cmd_cap_load(int argc, char **argv)
 {
+    esp_err_t err;
+
     if (argc != 2) {
         printf("Usage: cap_load <plugin>\n");
         return 1;
     }
 
-    printf("cap_load is not exposed by claw-cabi yet: %s\n", argv[1]);
-    return 1;
+#if CONFIG_APP_CLAW_CAP_IM_QQ
+    if (strcmp(argv[1], "qq") == 0 || strcmp(argv[1], "cap_im_qq") == 0) {
+        err = cap_im_qq_register_group();
+    } else
+#endif
+    {
+        printf("unknown plugin: %s\n", argv[1]);
+        return 1;
+    }
+
+    if (err != ESP_OK) {
+        printf("cap_load failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+
+    printf("loaded %s\n", argv[1]);
+    return 0;
 }
 
 static int cmd_cap(int argc, char **argv)
@@ -773,17 +713,23 @@ static void register_cap_cli_commands(void)
 #if CONFIG_APP_CLAW_CAP_LUA
     register_cap_lua();
 #endif
+#if CONFIG_APP_CLAW_CAP_LLM_INSPECT
+    register_cap_llm_inspect();
+#endif
+#if CONFIG_APP_CLAW_CAP_ROUTER_MGR
+    register_cap_router_mgr();
+#endif
 #if CONFIG_APP_CLAW_CAP_SCHEDULER
     register_cap_scheduler();
 #endif
-#if CONFIG_APP_CLAW_CAP_LLM_INSPECT
-    register_cap_llm_inspect(app_claw_get_capability_registry());
+#if CONFIG_APP_CLAW_CAP_SKILL_MGR
+    register_cap_skill();
 #endif
-#if CONFIG_APP_CLAW_CAP_ROUTER_MGR
-    register_cap_router_mgr(app_claw_get_capability_registry());
+#if CONFIG_APP_CLAW_CAP_TIME
+    register_cap_time();
 #endif
 #if CONFIG_APP_CLAW_CAP_WEB_SEARCH
-    register_cap_web_search(app_claw_get_capability_registry());
+    register_cap_web_search();
 #endif
 }
 
@@ -828,7 +774,7 @@ esp_err_t app_claw_cli_start(void)
     {
         esp_console_cmd_t ask_once_cmd = {
             .command = "ask_once",
-            .help = "Submit a single-turn prompt in a temporary session: ask_once <prompt>",
+            .help = "Submit a single-turn prompt without session history: ask_once <prompt>",
             .func = cmd_ask_once,
         };
         ESP_ERROR_CHECK(esp_console_cmd_register(&ask_once_cmd));
@@ -837,7 +783,7 @@ esp_err_t app_claw_cli_start(void)
     {
         esp_console_cmd_t session_cmd = {
             .command = "session",
-            .help = "Show, switch, list, create, or delete sessions: session [id|new|list|delete [id]]",
+            .help = "Show or switch the current session: session [id]",
             .func = cmd_session,
         };
         ESP_ERROR_CHECK(esp_console_cmd_register(&session_cmd));

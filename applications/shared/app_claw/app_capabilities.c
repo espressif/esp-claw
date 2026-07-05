@@ -12,6 +12,9 @@
 #include <stdbool.h>
 #include <string.h>
 
+#if CONFIG_APP_CLAW_CAP_AGENT_MGR
+#include "cap_agent_mgr.h"
+#endif
 #if CONFIG_APP_CLAW_CAP_FILES
 #include "cap_files.h"
 #endif
@@ -39,17 +42,23 @@
 #if CONFIG_APP_CLAW_CAP_MCP_CLIENT
 #include "cap_mcp_client.h"
 #endif
-#if CONFIG_APP_CLAW_CAP_MCP_SERVER
-#include "cap_mcp_server.h"
-#endif
 #if CONFIG_APP_CLAW_CAP_ROUTER_MGR
 #include "cap_router_mgr.h"
 #endif
 #if CONFIG_APP_CLAW_CAP_SCHEDULER
 #include "cap_scheduler.h"
 #endif
+#if CONFIG_APP_CLAW_CAP_SESSION_MGR
+#include "cap_session_mgr.h"
+#endif
+#if CONFIG_APP_CLAW_CAP_SKILL_MGR
+#include "cap_skill_mgr.h"
+#endif
 #if CONFIG_APP_CLAW_CAP_SYSTEM
 #include "cap_system.h"
+#endif
+#if CONFIG_APP_CLAW_CAP_TIME
+#include "cap_time.h"
 #endif
 #if CONFIG_APP_CLAW_CAP_HTTP_REQUEST
 #include "cap_http_request.h"
@@ -57,7 +66,10 @@
 #if CONFIG_APP_CLAW_CAP_WEB_SEARCH
 #include "cap_web_search.h"
 #endif
-#include "claw_cabi_esp.h"
+#include "claw_cap.h"
+#if CONFIG_APP_CLAW_CAP_MEMORY
+#include "claw_memory.h"
+#endif
 #include "claw_paths.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -69,8 +81,7 @@ static const char *TAG = "app_capabilities";
 typedef esp_err_t (*app_cap_prepare_fn)(const app_claw_config_t *config,
                                         const app_claw_storage_paths_t *paths);
 typedef esp_err_t (*app_cap_register_fn)(const app_claw_config_t *config,
-                                         const app_claw_storage_paths_t *paths,
-                                         claw_capability_registry_t *registry);
+                                         const app_claw_storage_paths_t *paths);
 
 typedef struct {
     const char *group_id;
@@ -198,33 +209,41 @@ static esp_err_t app_cap_build_group_map(const char *configured_groups,
 
 static esp_err_t app_cap_register_entry(const app_capability_group_entry_t *entry,
                                         const app_claw_config_t *config,
-                                        const app_claw_storage_paths_t *paths,
-                                        claw_capability_registry_t *registry)
+                                        const app_claw_storage_paths_t *paths)
 {
+    claw_cap_list_t cap_list;
+    claw_cap_group_list_t group_list;
     esp_err_t err;
 
-    if (!entry || !entry->reg || !registry) {
+    if (!entry || !entry->reg) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    err = entry->reg(config, paths, registry);
+    err = entry->reg(config, paths);
+    cap_list = claw_cap_list();
+    group_list = claw_cap_list_groups();
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "%s failed: %s", entry->label, esp_err_to_name(err));
+        ESP_LOGE(TAG, "%s failed: %s (groups=%u, caps=%u)",
+                 entry->label, esp_err_to_name(err),
+                 (unsigned)group_list.count,
+                 (unsigned)cap_list.count);
         return err;
     }
 
-    ESP_LOGI(TAG, "%s ok", entry->label);
+    ESP_LOGI(TAG, "%s ok (groups=%u, caps=%u)",
+             entry->label,
+             (unsigned)group_list.count,
+             (unsigned)cap_list.count);
     return ESP_OK;
 }
 
 #if CONFIG_APP_CLAW_CAP_FILES
 static esp_err_t app_cap_register_files(const app_claw_config_t *config,
-                                        const app_claw_storage_paths_t *paths,
-                                        claw_capability_registry_t *registry)
+                                        const app_claw_storage_paths_t *paths)
 {
     (void)config;
     (void)paths;
-    return cap_files_register_group(registry);
+    return cap_files_register_group();
 }
 #endif
 
@@ -238,10 +257,9 @@ static esp_err_t app_cap_prepare_im_qq(const app_claw_config_t *config,
 }
 
 static esp_err_t app_cap_register_im_qq(const app_claw_config_t *config,
-                                        const app_claw_storage_paths_t *paths,
-                                        claw_capability_registry_t *registry)
+                                        const app_claw_storage_paths_t *paths)
 {
-    ESP_RETURN_ON_ERROR(cap_im_qq_register_group(registry),
+    ESP_RETURN_ON_ERROR(cap_im_qq_register_group(),
                         TAG,
                         "Failed to register QQ group");
 
@@ -277,10 +295,9 @@ static esp_err_t app_cap_prepare_im_feishu(const app_claw_config_t *config,
 }
 
 static esp_err_t app_cap_register_im_feishu(const app_claw_config_t *config,
-                                            const app_claw_storage_paths_t *paths,
-                                            claw_capability_registry_t *registry)
+                                            const app_claw_storage_paths_t *paths)
 {
-    ESP_RETURN_ON_ERROR(cap_im_feishu_register_group(registry),
+    ESP_RETURN_ON_ERROR(cap_im_feishu_register_group(),
                         TAG, "Failed to register Feishu group");
 
     ESP_RETURN_ON_ERROR(cap_im_feishu_set_attachment_config(&(cap_im_feishu_attachment_config_t) {
@@ -310,10 +327,9 @@ static esp_err_t app_cap_prepare_im_tg(const app_claw_config_t *config,
 }
 
 static esp_err_t app_cap_register_im_tg(const app_claw_config_t *config,
-                                        const app_claw_storage_paths_t *paths,
-                                        claw_capability_registry_t *registry)
+                                        const app_claw_storage_paths_t *paths)
 {
-    ESP_RETURN_ON_ERROR(cap_im_tg_register_group(registry),
+    ESP_RETURN_ON_ERROR(cap_im_tg_register_group(),
                         TAG, "Failed to register Telegram group");
 
     ESP_RETURN_ON_ERROR(cap_im_tg_set_attachment_config(&(cap_im_tg_attachment_config_t) {
@@ -357,12 +373,11 @@ static esp_err_t app_cap_prepare_im_wechat(const app_claw_config_t *config,
 }
 
 static esp_err_t app_cap_register_im_wechat(const app_claw_config_t *config,
-                                            const app_claw_storage_paths_t *paths,
-                                            claw_capability_registry_t *registry)
+                                            const app_claw_storage_paths_t *paths)
 {
     (void)config;
     (void)paths;
-    return cap_im_wechat_register_group(registry);
+    return cap_im_wechat_register_group();
 }
 #endif
 
@@ -379,23 +394,21 @@ static esp_err_t app_cap_prepare_im_local(const app_claw_config_t *config,
 }
 
 static esp_err_t app_cap_register_im_local(const app_claw_config_t *config,
-                                           const app_claw_storage_paths_t *paths,
-                                           claw_capability_registry_t *registry)
+                                           const app_claw_storage_paths_t *paths)
 {
     (void)config;
     (void)paths;
-    return cap_im_local_register_group(registry);
+    return cap_im_local_register_group();
 }
 #endif
 
 #if CONFIG_APP_CLAW_CAP_SCHEDULER
 static esp_err_t app_cap_register_scheduler(const app_claw_config_t *config,
-                                            const app_claw_storage_paths_t *paths,
-                                            claw_capability_registry_t *registry)
+                                            const app_claw_storage_paths_t *paths)
 {
     (void)config;
     (void)paths;
-    return cap_scheduler_register_group(registry);
+    return cap_scheduler_register_group();
 }
 #endif
 
@@ -419,56 +432,70 @@ static esp_err_t app_cap_prepare_lua(const app_claw_config_t *config,
 }
 
 static esp_err_t app_cap_register_lua(const app_claw_config_t *config,
-                                      const app_claw_storage_paths_t *paths,
-                                      claw_capability_registry_t *registry)
+                                      const app_claw_storage_paths_t *paths)
 {
     (void)config;
     (void)paths;
-    return cap_lua_register_group(registry);
+    return cap_lua_register_group();
 }
 #endif
 
 #if CONFIG_APP_CLAW_CAP_MCP_CLIENT
 static esp_err_t app_cap_register_mcp_client(const app_claw_config_t *config,
-                                             const app_claw_storage_paths_t *paths,
-                                             claw_capability_registry_t *registry)
+                                             const app_claw_storage_paths_t *paths)
 {
     (void)config;
     (void)paths;
-    return cap_mcp_client_register_group(registry);
+    return cap_mcp_client_register_group();
 }
 #endif
 
-#if CONFIG_APP_CLAW_CAP_MCP_SERVER
-static esp_err_t app_cap_register_mcp_server(const app_claw_config_t *config,
-                                             const app_claw_storage_paths_t *paths,
-                                             claw_capability_registry_t *registry)
+#if CONFIG_APP_CLAW_CAP_SKILL_MGR
+static esp_err_t app_cap_register_skill_mgr(const app_claw_config_t *config,
+                                            const app_claw_storage_paths_t *paths)
 {
     (void)config;
-    (void)paths;
-    return cap_mcp_server_register_group(registry);
+    return cap_skill_mgr_register_group(paths ? paths->skills_root_dir : NULL);
 }
 #endif
 
 #if CONFIG_APP_CLAW_CAP_SYSTEM
 static esp_err_t app_cap_register_system(const app_claw_config_t *config,
-                                         const app_claw_storage_paths_t *paths,
-                                         claw_capability_registry_t *registry)
+                                         const app_claw_storage_paths_t *paths)
 {
     (void)config;
     (void)paths;
-    return cap_system_register_group(registry);
+    return cap_system_register_group();
+}
+#endif
+
+#if CONFIG_APP_CLAW_CAP_MEMORY && CONFIG_APP_CLAW_MEMORY_MODE_FULL
+static esp_err_t app_cap_register_memory(const app_claw_config_t *config,
+                                         const app_claw_storage_paths_t *paths)
+{
+    (void)config;
+    (void)paths;
+    return claw_memory_register_group();
+}
+#endif
+
+#if CONFIG_APP_CLAW_CAP_TIME
+static esp_err_t app_cap_register_time(const app_claw_config_t *config,
+                                       const app_claw_storage_paths_t *paths)
+{
+    (void)config;
+    (void)paths;
+    return cap_time_register_group();
 }
 #endif
 
 #if CONFIG_APP_CLAW_CAP_LLM_INSPECT
 static esp_err_t app_cap_register_llm_inspect(const app_claw_config_t *config,
-                                              const app_claw_storage_paths_t *paths,
-                                              claw_capability_registry_t *registry)
+                                              const app_claw_storage_paths_t *paths)
 {
     (void)config;
     (void)paths;
-    return cap_llm_inspect_register_group(registry);
+    return cap_llm_inspect_register_group();
 }
 #endif
 
@@ -484,12 +511,11 @@ static esp_err_t app_cap_prepare_http_request(const app_claw_config_t *config,
 }
 
 static esp_err_t app_cap_register_http_request(const app_claw_config_t *config,
-                                               const app_claw_storage_paths_t *paths,
-                                               claw_capability_registry_t *registry)
+                                               const app_claw_storage_paths_t *paths)
 {
     (void)config;
     (void)paths;
-    return cap_http_request_register_group(registry);
+    return cap_http_request_register_group();
 }
 #endif
 
@@ -513,27 +539,48 @@ static esp_err_t app_cap_prepare_web_search(const app_claw_config_t *config,
 }
 
 static esp_err_t app_cap_register_web_search(const app_claw_config_t *config,
-                                             const app_claw_storage_paths_t *paths,
-                                             claw_capability_registry_t *registry)
+                                             const app_claw_storage_paths_t *paths)
 {
     (void)config;
     (void)paths;
-    return cap_web_search_register_group(registry);
+    return cap_web_search_register_group();
 }
 #endif
 
 #if CONFIG_APP_CLAW_CAP_ROUTER_MGR
 static esp_err_t app_cap_register_router_mgr(const app_claw_config_t *config,
-                                             const app_claw_storage_paths_t *paths,
-                                             claw_capability_registry_t *registry)
+                                             const app_claw_storage_paths_t *paths)
 {
     (void)config;
     (void)paths;
-    return cap_router_mgr_register_group(registry);
+    return cap_router_mgr_register_group();
+}
+#endif
+
+#if CONFIG_APP_CLAW_CAP_SESSION_MGR
+static esp_err_t app_cap_register_session_mgr(const app_claw_config_t *config,
+                                              const app_claw_storage_paths_t *paths)
+{
+    (void)config;
+    (void)paths;
+    return cap_session_mgr_register_group();
+}
+#endif
+
+#if CONFIG_APP_CLAW_CAP_AGENT_MGR
+static esp_err_t app_cap_register_agent_mgr(const app_claw_config_t *config,
+                                            const app_claw_storage_paths_t *paths)
+{
+    (void)config;
+    (void)paths;
+    return cap_agent_mgr_register_group();
 }
 #endif
 
 static const app_capability_group_entry_t s_capability_group_entries[] = {
+#if CONFIG_APP_CLAW_CAP_AGENT_MGR
+    { "cap_agent_mgr", "Agent Manager", "Register agent manager cap", true, NULL, app_cap_register_agent_mgr },
+#endif
 #if CONFIG_APP_CLAW_CAP_IM_QQ
     { "cap_im_qq", "QQ", "Register QQ cap", false, app_cap_prepare_im_qq, app_cap_register_im_qq },
 #endif
@@ -561,11 +608,17 @@ static const app_capability_group_entry_t s_capability_group_entries[] = {
 #if CONFIG_APP_CLAW_CAP_MCP_CLIENT
     { "cap_mcp_client", "MCP Client", "Register MCP client cap", false, NULL, app_cap_register_mcp_client },
 #endif
-#if CONFIG_APP_CLAW_CAP_MCP_SERVER
-    { "cap_mcp_server", "MCP Server", "Register MCP server cap", false, NULL, app_cap_register_mcp_server },
+#if CONFIG_APP_CLAW_CAP_SKILL_MGR
+    { "cap_skill", "Skill Manager", "Register skill cap", true, NULL, app_cap_register_skill_mgr },
 #endif
 #if CONFIG_APP_CLAW_CAP_SYSTEM
     { "cap_system", "System", "Register system cap", false, NULL, app_cap_register_system },
+#endif
+#if CONFIG_APP_CLAW_CAP_MEMORY && CONFIG_APP_CLAW_MEMORY_MODE_FULL
+    { "claw_memory", "Memory", "Register claw_memory group", true, NULL, app_cap_register_memory },
+#endif
+#if CONFIG_APP_CLAW_CAP_TIME
+    { "cap_time", "Time", "Register time cap", false, NULL, app_cap_register_time },
 #endif
 #if CONFIG_APP_CLAW_CAP_LLM_INSPECT
     { "cap_llm_inspect", "LLM Inspect", "Register LLM inspect cap", true, NULL, app_cap_register_llm_inspect },
@@ -579,9 +632,15 @@ static const app_capability_group_entry_t s_capability_group_entries[] = {
 #if CONFIG_APP_CLAW_CAP_ROUTER_MGR
     { "cap_router_mgr", "Router Manager", "Register router manager cap", true, NULL, app_cap_register_router_mgr },
 #endif
+#if CONFIG_APP_CLAW_CAP_SESSION_MGR
+    { "cap_session_mgr", "Session Manager", "Register session manager cap", false, NULL, app_cap_register_session_mgr },
+#endif
 };
 
 static const app_capability_group_info_t s_capability_group_infos[] = {
+#if CONFIG_APP_CLAW_CAP_AGENT_MGR
+    { "cap_agent_mgr", "Agent Manager", true },
+#endif
 #if CONFIG_APP_CLAW_CAP_IM_QQ
     { "cap_im_qq", "QQ", false },
 #endif
@@ -609,11 +668,17 @@ static const app_capability_group_info_t s_capability_group_infos[] = {
 #if CONFIG_APP_CLAW_CAP_MCP_CLIENT
     { "cap_mcp_client", "MCP Client", false },
 #endif
-#if CONFIG_APP_CLAW_CAP_MCP_SERVER
-    { "cap_mcp_server", "MCP Server", false },
+#if CONFIG_APP_CLAW_CAP_SKILL_MGR
+    { "cap_skill", "Skill Manager", true },
 #endif
 #if CONFIG_APP_CLAW_CAP_SYSTEM
     { "cap_system", "System", true },
+#endif
+#if CONFIG_APP_CLAW_CAP_MEMORY && CONFIG_APP_CLAW_MEMORY_MODE_FULL
+    { "claw_memory", "Memory", true },
+#endif
+#if CONFIG_APP_CLAW_CAP_TIME
+    { "cap_time", "Time", false },
 #endif
 #if CONFIG_APP_CLAW_CAP_LLM_INSPECT
     { "cap_llm_inspect", "LLM Inspect", false },
@@ -627,24 +692,35 @@ static const app_capability_group_info_t s_capability_group_infos[] = {
 #if CONFIG_APP_CLAW_CAP_ROUTER_MGR
     { "cap_router_mgr", "Router Manager", false },
 #endif
+#if CONFIG_APP_CLAW_CAP_SESSION_MGR
+    { "cap_session_mgr", "Session Manager", false },
+#endif
 };
 
 esp_err_t app_capabilities_init(const app_claw_config_t *config,
-                                const app_claw_storage_paths_t *paths,
-                                claw_capability_registry_t *registry)
+                                const app_claw_storage_paths_t *paths)
 {
     const size_t entry_count = sizeof(s_capability_group_entries) / sizeof(s_capability_group_entries[0]);
     bool *enabled_map = NULL;
+    bool *llm_visible_map = NULL;
+    const char **llm_visible_groups = NULL;
+    size_t llm_visible_group_count = 0;
     size_t i;
     esp_err_t ret = ESP_OK;
 
-    if (!config || !paths || !registry) {
+    if (!config || !paths) {
         return ESP_ERR_INVALID_ARG;
     }
 
+    ESP_RETURN_ON_ERROR(claw_cap_init(), TAG, "Failed to init claw_cap");
+
     enabled_map = calloc(entry_count > 0 ? entry_count : 1, sizeof(enabled_map[0]));
-    if (!enabled_map) {
+    llm_visible_map = calloc(entry_count > 0 ? entry_count : 1, sizeof(llm_visible_map[0]));
+    llm_visible_groups = calloc(entry_count > 0 ? entry_count : 1, sizeof(llm_visible_groups[0]));
+    if (!enabled_map || !llm_visible_map || !llm_visible_groups) {
         free(enabled_map);
+        free(llm_visible_map);
+        free(llm_visible_groups);
         return ESP_ERR_NO_MEM;
     }
 
@@ -655,6 +731,13 @@ esp_err_t app_capabilities_init(const app_claw_config_t *config,
                                               true,
                                               false),
                       cleanup, TAG, "Failed to parse capability whitelist");
+    ESP_GOTO_ON_ERROR(app_cap_build_group_map(config->llm_visible_cap_groups,
+                                              s_capability_group_entries,
+                                              entry_count,
+                                              llm_visible_map,
+                                              false,
+                                              true),
+                      cleanup, TAG, "Failed to parse LLM-visible capability groups");
 
     for (i = 0; i < entry_count; i++) {
         const app_capability_group_entry_t *entry = &s_capability_group_entries[i];
@@ -669,12 +752,30 @@ esp_err_t app_capabilities_init(const app_claw_config_t *config,
                               cleanup, TAG, "Failed to prepare %s", entry->group_id);
         }
 
-        ESP_GOTO_ON_ERROR(app_cap_register_entry(entry, config, paths, registry),
+        ESP_GOTO_ON_ERROR(app_cap_register_entry(entry, config, paths),
                           cleanup, TAG, "Failed to register %s", entry->group_id);
+
+        if (llm_visible_map[i]) {
+            llm_visible_groups[llm_visible_group_count++] = entry->group_id;
+        }
+    }
+
+    ret = claw_cap_set_llm_visible_groups(llm_visible_groups, llm_visible_group_count);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to set LLM-visible capability groups: %s", esp_err_to_name(ret));
+        goto cleanup;
+    }
+
+    ret = claw_cap_start_all();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start capabilities: %s", esp_err_to_name(ret));
+        goto cleanup;
     }
 
 cleanup:
     free(enabled_map);
+    free(llm_visible_map);
+    free(llm_visible_groups);
     return ret;
 }
 

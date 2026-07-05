@@ -10,8 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "claw_cabi_esp.h"
-#include "claw_utils_string.h"
+#include "claw_cap.h"
 #include "cJSON.h"
 #include "esp_console.h"
 #include "esp_log.h"
@@ -241,6 +240,7 @@ static esp_err_t cap_cli_capture_run_locked(const char *command_line,
 }
 
 static esp_err_t cap_cli_execute(const char *input_json,
+                                 const claw_cap_call_context_t *ctx,
                                  char *output,
                                  size_t output_size)
 {
@@ -255,6 +255,8 @@ static esp_err_t cap_cli_execute(const char *input_json,
     esp_err_t err;
     esp_err_t run_err = ESP_FAIL;
     int cmd_ret = -1;
+
+    (void)ctx;
 
     if (!output || output_size == 0) {
         return ESP_ERR_INVALID_ARG;
@@ -295,7 +297,7 @@ static esp_err_t cap_cli_execute(const char *input_json,
     captured_len = strlen(captured_output);
     keep_len = captured_len;
     if (s_cli.max_output_bytes > 0 && keep_len > s_cli.max_output_bytes) {
-        keep_len = claw_utils_utf8_prefix_len(captured_output, s_cli.max_output_bytes);
+        keep_len = s_cli.max_output_bytes;
         truncated_suffix = "\n[truncated]";
     }
 
@@ -316,24 +318,23 @@ static esp_err_t cap_cli_execute(const char *input_json,
     return run_err == ESP_OK && cmd_ret == 0 ? ESP_OK : (run_err != ESP_OK ? run_err : ESP_FAIL);
 }
 
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_cli_execute_cabi, cap_cli_execute)
-
-static claw_capability_t s_cli_descriptors[] = {
+static claw_cap_descriptor_t s_cli_descriptors[] = {
     {
         .id = CAP_CLI_NAME,
+        .name = CAP_CLI_NAME,
+        .family = "system",
         .description = NULL,
-        .role = CLAW_CAPABILITY_ROLE_TOOL,
-        .role_data.tool = {
-            .schema_json = CAP_CLI_INPUT_SCHEMA_JSON,
-            .execute = cap_cli_execute_cabi,
-        },
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json = CAP_CLI_INPUT_SCHEMA_JSON,
+        .execute = cap_cli_execute,
     },
 };
 
-static const claw_capability_group_t s_cli_group = {
-    .id = "cap_cli",
-    .members = s_cli_descriptors,
-    .member_count = sizeof(s_cli_descriptors) / sizeof(s_cli_descriptors[0]),
+static const claw_cap_group_t s_cli_group = {
+    .group_id = "cap_cli",
+    .descriptors = s_cli_descriptors,
+    .descriptor_count = sizeof(s_cli_descriptors) / sizeof(s_cli_descriptors[0]),
 };
 
 esp_err_t cap_cli_init(const cap_cli_config_t *config)
@@ -412,15 +413,15 @@ esp_err_t cap_cli_register_command(const cap_cli_command_t *command)
     return ESP_OK;
 }
 
-esp_err_t cap_cli_register_group(claw_capability_registry_t *registry)
+esp_err_t cap_cli_register_group(void)
 {
-    if (!registry) {
-        return ESP_ERR_INVALID_ARG;
-    }
     if (!s_cli.initialized) {
         return ESP_ERR_INVALID_STATE;
     }
+    if (claw_cap_group_exists(s_cli_group.group_id)) {
+        return ESP_OK;
+    }
 
     s_cli_descriptors[0].description = s_cli.tool_description;
-    return claw_cabi_register_group_esp(registry, &s_cli_group);
+    return claw_cap_register_group(&s_cli_group);
 }

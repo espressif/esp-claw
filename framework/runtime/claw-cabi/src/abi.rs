@@ -1,187 +1,119 @@
-//! The `#[repr(C)]` descriptor types and callback signatures, laid out to match
-//! the hand-written `include/claw_cabi.h`. These are the wire structs C fills
-//! in; `wrappers` turns them into the internal `claw_capability` types.
+use core::ffi::{c_char, c_int, c_void};
 
-use core::ffi::{c_char, c_void};
+pub type EspErr = c_int;
 
-use crate::result::ClawCapabilityResult;
-use crate::ClawChannelRuntime;
+pub const ESP_OK: EspErr = 0;
+pub const ESP_FAIL: EspErr = -1;
+pub const ESP_ERR_INVALID_ARG: EspErr = 0x102;
+pub const ESP_ERR_INVALID_STATE: EspErr = 0x103;
 
-/// Size of the buffer the registry hands a tool's `execute` callback to write
-/// its output into. `output_capacity` always equals this value.
-pub const CLAW_CAPABILITY_TOOL_OUTPUT_CAPACITY: usize = 4096;
+pub const CLAW_CAP_KIND_CALLABLE: c_int = 0;
+pub const CLAW_CAP_KIND_HYBRID: c_int = 2;
 
-/// An opaque C `user_context` pointer carried into every callback.
-///
-/// Raw pointers are neither `Send` nor `Sync`; the documented ABI contract is
-/// that the C callbacks and their `user_context` are thread-safe (the registry
-/// is driven from multiple tasks), so we assert it here.
-#[derive(Clone, Copy)]
-pub(crate) struct UserContext(pub(crate) *mut c_void);
+pub const CLAW_CAP_CALLER_AGENT: c_int = 1;
 
-// SAFETY: upheld by the ABI contract documented on the callbacks in
-// `include/claw_cabi.h` ("C callbacks must be thread-safe").
-unsafe impl Send for UserContext {}
-unsafe impl Sync for UserContext {}
+pub const CLAW_CAP_FLAG_CALLABLE_BY_LLM: u32 = 1 << 0;
+pub const CLAW_CAP_FLAG_ROOT_AGENT_ONLY: u32 = 1 << 4;
 
-// The callback type aliases below name each signature for the Rust wrapper /
-// test code (which store the *unwrapped* function pointer). The `#[repr(C)]`
-// descriptor structs deliberately spell the `Option<extern "C" fn ...>` out
-// inline instead of using these aliases: cbindgen renders `Option<FnAlias>` as
-// an opaque struct, but resolves an inline `Option<extern "C" fn>` to a proper
-// nullable C function pointer. The alias and the inline form are the same type.
+pub const TOOL_OUTPUT_CAPACITY: usize = 16 * 1024;
 
-/// `init`/`start`/`stop`/`deinit` hook: `claw_capability_lifecycle_callback_t`.
-pub type ClawCapabilityLifecycleCallback =
-    unsafe extern "C" fn(user_context: *mut c_void) -> ClawCapabilityResult;
-
-/// Tool `execute`: `claw_capability_execute_callback_t`.
-pub type ClawCapabilityExecuteCallback = unsafe extern "C" fn(
-    arguments_json: *const c_char,
-    output_buffer: *mut c_char,
-    output_capacity: usize,
-    output_length: *mut usize,
-    output_success: *mut bool,
-    user_context: *mut c_void,
-) -> ClawCapabilityResult;
-
-/// Channel outbound `send`: `claw_capability_send_callback_t`.
-pub type ClawCapabilitySendCallback = unsafe extern "C" fn(
-    channel: *const c_char,
-    chat_id: *const c_char,
-    text: *const c_char,
-    reply_to_message_id: *const c_char,
-    user_context: *mut c_void,
-) -> ClawCapabilityResult;
-
-/// Channel open hook: `claw_capability_channel_open_callback_t`.
-pub type ClawCapabilityChannelOpenCallback = unsafe extern "C" fn(
-    runtime: *mut ClawChannelRuntime,
-    user_context: *mut c_void,
-) -> ClawCapabilityResult;
-
-/// Channel close hook: `claw_capability_channel_close_callback_t`.
-pub type ClawCapabilityChannelCloseCallback =
-    unsafe extern "C" fn(user_context: *mut c_void) -> ClawCapabilityResult;
-
-/// Session list callback: `claw_agent_session_list_callback_t`.
-pub type ClawAgentSessionListCallback = unsafe extern "C" fn(
-    record: *const ClawAgentSessionRecord,
-    user_context: *mut c_void,
-) -> ClawCapabilityResult;
-
-/// `claw_capability_lifecycle_t`: four nullable hooks.
 #[repr(C)]
-#[derive(Clone, Copy)]
-pub struct ClawCapabilityLifecycle {
-    pub init: Option<unsafe extern "C" fn(user_context: *mut c_void) -> ClawCapabilityResult>,
-    pub start: Option<unsafe extern "C" fn(user_context: *mut c_void) -> ClawCapabilityResult>,
-    pub stop: Option<unsafe extern "C" fn(user_context: *mut c_void) -> ClawCapabilityResult>,
-    pub deinit: Option<unsafe extern "C" fn(user_context: *mut c_void) -> ClawCapabilityResult>,
-}
-
-/// `claw_capability_role_t`: the live arm of [`ClawCapabilityRoleData`].
-#[repr(C)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ClawCapabilityRole {
-    None = 0,
-    Tool = 1,
-    Channel = 2,
-}
-
-/// `claw_capability_tool_t`: the `Tool` role payload.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct ClawCapabilityTool {
-    pub schema_json: *const c_char,
-    pub execute: Option<
-        unsafe extern "C" fn(
-            arguments_json: *const c_char,
-            output_buffer: *mut c_char,
-            output_capacity: usize,
-            output_length: *mut usize,
-            output_success: *mut bool,
-            user_context: *mut c_void,
-        ) -> ClawCapabilityResult,
-    >,
-}
-
-/// `claw_capability_channel_t`: the `Channel` role payload.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct ClawCapabilityChannel {
-    pub open: Option<
-        unsafe extern "C" fn(
-            runtime: *mut ClawChannelRuntime,
-            user_context: *mut c_void,
-        ) -> ClawCapabilityResult,
-    >,
-    pub close: Option<unsafe extern "C" fn(user_context: *mut c_void) -> ClawCapabilityResult>,
-    pub send: Option<
-        unsafe extern "C" fn(
-            channel: *const c_char,
-            chat_id: *const c_char,
-            text: *const c_char,
-            reply_to_message_id: *const c_char,
-            user_context: *mut c_void,
-        ) -> ClawCapabilityResult,
-    >,
-}
-
-/// The role union; the live arm is named by [`ClawCapability::role`].
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub union ClawCapabilityRoleData {
-    pub tool: ClawCapabilityTool,
-    pub channel: ClawCapabilityChannel,
-}
-
-/// `claw_capability_t`: one capability descriptor (tagged union over the role).
-#[repr(C)]
-pub struct ClawCapability {
-    pub id: *const c_char,
-    pub description: *const c_char,
-    pub role: ClawCapabilityRole,
-    pub role_data: ClawCapabilityRoleData,
-    pub lifecycle: ClawCapabilityLifecycle,
-    pub user_context: *mut c_void,
-}
-
-/// `claw_capability_group_t`: a bundle sharing one optional group lifecycle.
-#[repr(C)]
-pub struct ClawCapabilityGroup {
-    pub id: *const c_char,
-    pub members: *const ClawCapability,
-    pub member_count: usize,
-    pub lifecycle: ClawCapabilityLifecycle,
-    pub user_context: *mut c_void,
-}
-
-/// `claw_inbound_message_t`: one channel message submitted to the agent runtime.
-#[repr(C)]
-pub struct ClawInboundMessage {
-    pub message_id: *const c_char,
-    pub channel: *const c_char,
-    pub chat_id: *const c_char,
-    pub sender_id: *const c_char,
-    pub text: *const c_char,
-}
-
-/// `claw_agent_system_config_t`: device runtime build inputs.
-#[repr(C)]
-pub struct ClawAgentSystemConfig {
+pub struct ClawAgentConfig {
     pub api_key: *const c_char,
     pub backend_type: *const c_char,
     pub model: *const c_char,
     pub base_url: *const c_char,
-    /// DATA-rooted persistence directory for the agent system.
     pub persistence_dir: *const c_char,
 }
 
-/// `claw_agent_session_record_t`: one live conversation session.
 #[repr(C)]
-pub struct ClawAgentSessionRecord {
+pub struct ClawAgentInput {
+    pub text: *const c_char,
+    pub source_cap: *const c_char,
+    pub source_channel: *const c_char,
+    pub source_chat_id: *const c_char,
+    pub target_channel: *const c_char,
+    pub target_chat_id: *const c_char,
+}
+
+#[repr(C)]
+pub struct ClawCapCallContext {
+    pub request_id: u32,
     pub session_id: *const c_char,
+    pub agent_id: *const c_char,
+    pub agent_type: *const c_char,
+    pub parent_agent_id: *const c_char,
+    pub parent_session_id: *const c_char,
     pub channel: *const c_char,
     pub chat_id: *const c_char,
+    pub target_channel: *const c_char,
+    pub target_chat_id: *const c_char,
+    pub source_cap: *const c_char,
+    pub correlation_id: *const c_char,
+    pub core: *mut c_void,
+    pub caller: c_int,
+}
+
+impl Default for ClawCapCallContext {
+    fn default() -> Self {
+        Self {
+            request_id: 0,
+            session_id: core::ptr::null(),
+            agent_id: core::ptr::null(),
+            agent_type: core::ptr::null(),
+            parent_agent_id: core::ptr::null(),
+            parent_session_id: core::ptr::null(),
+            channel: core::ptr::null(),
+            chat_id: core::ptr::null(),
+            target_channel: core::ptr::null(),
+            target_chat_id: core::ptr::null(),
+            source_cap: core::ptr::null(),
+            correlation_id: core::ptr::null(),
+            core: core::ptr::null_mut(),
+            caller: CLAW_CAP_CALLER_AGENT,
+        }
+    }
+}
+
+pub type ClawCapLifecycleFn = Option<unsafe extern "C" fn() -> EspErr>;
+
+pub type ClawCapExecuteFn = Option<
+    unsafe extern "C" fn(
+        input_json: *const c_char,
+        ctx: *const ClawCapCallContext,
+        output: *mut c_char,
+        output_size: usize,
+    ) -> EspErr,
+>;
+
+#[repr(C)]
+pub struct ClawCapDescriptor {
+    pub id: *const c_char,
+    pub name: *const c_char,
+    pub family: *const c_char,
+    pub description: *const c_char,
+    pub kind: c_int,
+    pub cap_flags: u32,
+    pub input_schema_json: *const c_char,
+    pub init: ClawCapLifecycleFn,
+    pub start: ClawCapLifecycleFn,
+    pub stop: ClawCapLifecycleFn,
+    pub execute: ClawCapExecuteFn,
+}
+
+#[repr(C)]
+pub struct ClawCapList {
+    pub items: *const ClawCapDescriptor,
+    pub count: usize,
+}
+
+extern "C" {
+    pub fn claw_cap_list() -> ClawCapList;
+    pub fn claw_cap_call(
+        id_or_name: *const c_char,
+        input_json: *const c_char,
+        ctx: *const ClawCapCallContext,
+        output: *mut c_char,
+        output_size: usize,
+    ) -> EspErr;
 }

@@ -57,102 +57,45 @@ static void cap_lua_output_append(cap_lua_exec_ctx_t *ctx,
     }
 }
 
-/* The per-run execution context pointer lives in the lua_State's extra space
- * (lua_getextraspace / LUA_EXTRASPACE), not in a global or a LUA_REGISTRYINDEX
- * entry. This raw memory block is not reachable from Lua at all: not through
- * globals, and -- unlike the registry -- not through debug.getregistry()
- * either (luaL_openlibs opens the debug library, which legitimate scripts rely
- * on for debug.traceback, so the registry cannot be treated as script-private).
- * Keeping the pointer here means a running script can neither read it, nil it,
- * nor overwrite it with a script-controlled userdata. That matters because the
- * instruction-count hook below dereferences this pointer as a
- * cap_lua_exec_ctx_t*; a script-supplied value would be an out-of-bounds read
- * (crash) and a route to disable the timeout/stop.
- *
- * LUA_EXTRASPACE defaults to sizeof(void *), exactly enough for one pointer,
- * and lua_newthread copies the extra space from the main thread, so coroutines
- * spawned by a script observe the same context. */
-static void cap_lua_set_exec_ctx(lua_State *L, cap_lua_exec_ctx_t *ctx)
-{
-    *(cap_lua_exec_ctx_t **)lua_getextraspace(L) = ctx;
-}
-
-static cap_lua_exec_ctx_t *cap_lua_get_exec_ctx(lua_State *L)
-{
-    return *(cap_lua_exec_ctx_t **)lua_getextraspace(L);
-}
-
-/* cJSON's parser allows deep nesting (default limit ~1000); recursing that far
- * on the small Lua task stack would overflow it. Cap the depth of the args ->
- * Lua-table conversion well below any realistic legitimate payload. */
-#define CAP_LUA_JSON_MAX_DEPTH 64
-
-/* Converts one cJSON value into a Lua value pushed on top of L's stack.
- * Returns ESP_OK on success (exactly one value pushed), or
- * ESP_ERR_INVALID_SIZE when the nesting exceeds CAP_LUA_JSON_MAX_DEPTH. On
- * error nothing extra is left on the stack: any partial table built for the
- * current level is popped before returning so the failure can be surfaced to
- * the caller rather than silently truncating the args. */
-static esp_err_t cap_lua_push_json_value_depth(lua_State *L, const cJSON *item, int depth)
+static void cap_lua_push_json_value(lua_State *L, const cJSON *item)
 {
     cJSON *child = NULL;
     int index = 1;
 
     if (!item || cJSON_IsNull(item)) {
         lua_pushnil(L);
-        return ESP_OK;
+        return;
     }
     if (cJSON_IsBool(item)) {
         lua_pushboolean(L, cJSON_IsTrue(item));
-        return ESP_OK;
+        return;
     }
     if (cJSON_IsNumber(item)) {
         lua_pushnumber(L, item->valuedouble);
-        return ESP_OK;
+        return;
     }
     if (cJSON_IsString(item)) {
         lua_pushstring(L, item->valuestring);
-        return ESP_OK;
-    }
-    if (depth >= CAP_LUA_JSON_MAX_DEPTH) {
-        /* Too deep: refuse to descend further rather than risk a C-stack
-         * overflow on the constrained Lua task stack. Report the error so the
-         * caller can fail the run with a diagnosable message instead of
-         * silently dropping the over-deep portion of the args. */
-        return ESP_ERR_INVALID_SIZE;
+        return;
     }
     if (cJSON_IsArray(item)) {
         lua_newtable(L);
         cJSON_ArrayForEach(child, item) {
-            esp_err_t err = cap_lua_push_json_value_depth(L, child, depth + 1);
-            if (err != ESP_OK) {
-                lua_pop(L, 1);
-                return err;
-            }
+            cap_lua_push_json_value(L, child);
             lua_rawseti(L, -2, index++);
         }
-        return ESP_OK;
+        return;
     }
     if (cJSON_IsObject(item)) {
         lua_newtable(L);
         cJSON_ArrayForEach(child, item) {
-            esp_err_t err = cap_lua_push_json_value_depth(L, child, depth + 1);
-            if (err != ESP_OK) {
-                lua_pop(L, 1);
-                return err;
-            }
+            cap_lua_push_json_value(L, child);
             lua_setfield(L, -2, child->string);
         }
-        return ESP_OK;
+        return;
     }
 
     lua_pushnil(L);
-    return ESP_OK;
-}
-
-static esp_err_t cap_lua_push_json_value(lua_State *L, const cJSON *item)
-{
-    return cap_lua_push_json_value_depth(L, item, 0);
 }
 
 static int cap_lua_print_capture(lua_State *L)
@@ -196,7 +139,9 @@ static void cap_lua_timeout_hook(lua_State *L, lua_Debug *ar)
 
     (void)ar;
 
-    ctx = cap_lua_get_exec_ctx(L);
+    lua_getglobal(L, "__cap_lua_exec_ctx");
+    ctx = (cap_lua_exec_ctx_t *)lua_touserdata(L, -1);
+    lua_pop(L, 1);
     if (!ctx) {
         return;
     }
@@ -219,7 +164,9 @@ bool cap_lua_runtime_stop_requested(lua_State *L)
         return false;
     }
 
-    ctx = cap_lua_get_exec_ctx(L);
+    lua_getglobal(L, "__cap_lua_exec_ctx");
+    ctx = (cap_lua_exec_ctx_t *)lua_touserdata(L, -1);
+    lua_pop(L, 1);
     return ctx && ctx->stop_requested && *ctx->stop_requested;
 }
 
@@ -239,27 +186,22 @@ static void cap_lua_load_registered_modules(lua_State *L)
     }
 }
 
-static esp_err_t cap_lua_set_args_global(lua_State *L, const char *args_json)
+static void cap_lua_set_args_global(lua_State *L, const char *args_json)
 {
     cJSON *root = NULL;
-    esp_err_t err = ESP_OK;
 
     if (args_json && args_json[0]) {
         root = cJSON_Parse(args_json);
     }
 
     if (root) {
-        err = cap_lua_push_json_value(L, root);
+        cap_lua_push_json_value(L, root);
         cJSON_Delete(root);
-        if (err != ESP_OK) {
-            return err;
-        }
     } else {
         lua_newtable(L);
     }
 
     lua_setglobal(L, "args");
-    return ESP_OK;
 }
 
 static void cap_lua_run_exit_cleanups(lua_State *L)
@@ -432,14 +374,9 @@ esp_err_t cap_lua_runtime_execute_file(const char *path,
     luaL_openlibs(L);
     cap_lua_load_registered_modules(L);
     cap_lua_add_script_dir_to_package_path(L, path);
-    cap_lua_set_exec_ctx(L, &ctx);
-    if (cap_lua_set_args_global(L, args_json) != ESP_OK) {
-        snprintf(output, output_size,
-                 "Error: Lua args JSON nesting exceeds %d levels",
-                 CAP_LUA_JSON_MAX_DEPTH);
-        lua_close(L);
-        return ESP_ERR_INVALID_SIZE;
-    }
+    lua_pushlightuserdata(L, &ctx);
+    lua_setglobal(L, "__cap_lua_exec_ctx");
+    cap_lua_set_args_global(L, args_json);
     lua_pushlightuserdata(L, &ctx);
     lua_pushcclosure(L, cap_lua_print_capture, 1);
     lua_setglobal(L, "print");

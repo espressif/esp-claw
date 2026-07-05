@@ -13,7 +13,7 @@
 #include <strings.h>
 
 #include "cJSON.h"
-#include "claw_cabi_esp.h"
+#include "claw_cap.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
@@ -343,9 +343,10 @@ static bool cap_http_request_host_allowed(const char *host)
     return false;
 }
 
-static esp_err_t cap_http_request_execute_impl(const char *input_json,
-                                               char *output,
-                                               size_t output_size)
+static esp_err_t cap_http_request_execute(const char *input_json,
+                                          const claw_cap_call_context_t *ctx,
+                                          char *output,
+                                          size_t output_size)
 {
     cJSON *input = NULL;
     cJSON *url_item = NULL;
@@ -369,6 +370,8 @@ static esp_err_t cap_http_request_execute_impl(const char *input_json,
     char *save_path_copy = NULL;
     char *tmp_save_path = NULL;
     char host[128] = {0};
+
+    (void)ctx;
 
     if (!output || output_size == 0) {
         return ESP_ERR_INVALID_ARG;
@@ -637,12 +640,15 @@ static esp_err_t cap_http_request_execute_impl(const char *input_json,
     return ESP_OK;
 }
 
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_http_request_execute, cap_http_request_execute_impl)
-
-static const claw_capability_t s_http_request_descriptors[] = {
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "http_request",
-        "Call a standard HTTP endpoint with allowlist protection.",
+static const claw_cap_descriptor_t s_http_request_descriptors[] = {
+    {
+        .id = "http_request",
+        .name = "http_request",
+        .family = "system",
+        .description = "Call a standard HTTP endpoint with allowlist protection.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json =
         "{\"type\":\"object\",\"properties\":{\"url\":{\"type\":\"string\"},"
         "\"method\":{\"type\":\"string\",\"enum\":[\"GET\",\"POST\",\"PUT\",\"PATCH\",\"DELETE\",\"HEAD\"]},"
         "\"headers\":{\"type\":\"object\",\"additionalProperties\":{\"type\":\"string\"}},"
@@ -652,22 +658,23 @@ static const claw_capability_t s_http_request_descriptors[] = {
         "\"max_body_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":65535},"
         "\"max_file_bytes\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":2147483647}},"
         "\"required\":[\"url\"]}",
-        cap_http_request_execute),
+        .execute = cap_http_request_execute,
+    },
 };
 
-static const claw_capability_group_t s_http_request_group = {
-    .id = "cap_http_request",
-    .members = s_http_request_descriptors,
-    .member_count = sizeof(s_http_request_descriptors) / sizeof(s_http_request_descriptors[0]),
+static const claw_cap_group_t s_http_request_group = {
+    .group_id = "cap_http_request",
+    .descriptors = s_http_request_descriptors,
+    .descriptor_count = sizeof(s_http_request_descriptors) / sizeof(s_http_request_descriptors[0]),
 };
 
-esp_err_t cap_http_request_register_group(claw_capability_registry_t *registry)
+esp_err_t cap_http_request_register_group(void)
 {
-    if (!registry) {
-        return ESP_ERR_INVALID_ARG;
+    if (claw_cap_group_exists(s_http_request_group.group_id)) {
+        return ESP_OK;
     }
 
-    return claw_cabi_register_group_esp(registry, &s_http_request_group);
+    return claw_cap_register_group(&s_http_request_group);
 }
 
 esp_err_t cap_http_request_set_allowlist(const char *allowlist_csv)

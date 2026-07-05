@@ -182,16 +182,15 @@ name = "claw-cabi"
 version = "0.1.0"
 dependencies = [
  "claw-agent",
+ "claw-api",
+ "claw-core",
  "claw-interface",
  "claw-sys",
+ "claw-tool",
  "claw-utils",
- "edge-executor",
-]
-
-[[package]]
-name = "claw-channel"
-version = "0.1.0"
-dependencies = [
+ "embedded-executor",
+ "lock_api",
+ "serde_json",
  "thiserror",
 ]
 

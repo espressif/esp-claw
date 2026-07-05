@@ -10,7 +10,6 @@ members = [
     "claw-log",
     "claw-skill",
     "claw-core",
-    "claw-channel",
     "claw-tool",
     "claw-cabi",
     "claw-memory",

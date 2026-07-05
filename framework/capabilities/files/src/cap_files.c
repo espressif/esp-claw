@@ -16,7 +16,7 @@
 #include <unistd.h>
 
 #include "cJSON.h"
-#include "claw_cabi_esp.h"
+#include "claw_cap.h"
 #include "claw_paths.h"
 #include "esp_log.h"
 
@@ -374,9 +374,10 @@ static esp_err_t cap_files_copy_file_internal(const char *src_path, const char *
     return err;
 }
 
-static esp_err_t cap_files_read_file_execute_impl(const char *input_json,
-                                                  char *output,
-                                                  size_t output_size)
+static esp_err_t cap_files_read_file_execute(const char *input_json,
+                                             const claw_cap_call_context_t *ctx,
+                                             char *output,
+                                             size_t output_size)
 {
     cJSON *root = NULL;
     const char *path = NULL;
@@ -387,6 +388,8 @@ static esp_err_t cap_files_read_file_execute_impl(const char *input_json,
     size_t read_size;
     size_t suffix_len;
     bool will_truncate;
+
+    (void)ctx;
 
     root = cJSON_Parse(input_json);
     if (!root) {
@@ -452,9 +455,10 @@ static esp_err_t cap_files_read_file_execute_impl(const char *input_json,
     return ESP_OK;
 }
 
-static esp_err_t cap_files_write_file_execute_impl(const char *input_json,
-                                                   char *output,
-                                                   size_t output_size)
+static esp_err_t cap_files_write_file_execute(const char *input_json,
+                                              const claw_cap_call_context_t *ctx,
+                                              char *output,
+                                              size_t output_size)
 {
     cJSON *root = NULL;
     const char *path = NULL;
@@ -463,6 +467,8 @@ static esp_err_t cap_files_write_file_execute_impl(const char *input_json,
     FILE *file = NULL;
     size_t content_len;
     size_t written;
+
+    (void)ctx;
 
     root = cJSON_Parse(input_json);
     if (!root) {
@@ -520,14 +526,17 @@ static esp_err_t cap_files_write_file_execute_impl(const char *input_json,
     return ESP_OK;
 }
 
-static esp_err_t cap_files_delete_file_execute_impl(const char *input_json,
-                                                    char *output,
-                                                    size_t output_size)
+static esp_err_t cap_files_delete_file_execute(const char *input_json,
+                                               const claw_cap_call_context_t *ctx,
+                                               char *output,
+                                               size_t output_size)
 {
     cJSON *root = NULL;
     const char *path = NULL;
     char resolved_path[256];
     struct stat st = {0};
+
+    (void)ctx;
 
     root = cJSON_Parse(input_json);
     if (!root) {
@@ -566,9 +575,10 @@ static esp_err_t cap_files_delete_file_execute_impl(const char *input_json,
     return ESP_OK;
 }
 
-static esp_err_t cap_files_copy_file_execute_impl(const char *input_json,
-                                                  char *output,
-                                                  size_t output_size)
+static esp_err_t cap_files_copy_file_execute(const char *input_json,
+                                             const claw_cap_call_context_t *ctx,
+                                             char *output,
+                                             size_t output_size)
 {
     cJSON *root = NULL;
     const char *src_path = NULL;
@@ -576,6 +586,8 @@ static esp_err_t cap_files_copy_file_execute_impl(const char *input_json,
     char resolved_src_path[256];
     char resolved_dst_path[256];
     esp_err_t err;
+
+    (void)ctx;
 
     root = cJSON_Parse(input_json);
     if (!root) {
@@ -618,9 +630,10 @@ static esp_err_t cap_files_copy_file_execute_impl(const char *input_json,
     return ESP_OK;
 }
 
-static esp_err_t cap_files_move_file_execute_impl(const char *input_json,
-                                                  char *output,
-                                                  size_t output_size)
+static esp_err_t cap_files_move_file_execute(const char *input_json,
+                                             const claw_cap_call_context_t *ctx,
+                                             char *output,
+                                             size_t output_size)
 {
     cJSON *root = NULL;
     const char *src_path = NULL;
@@ -628,6 +641,8 @@ static esp_err_t cap_files_move_file_execute_impl(const char *input_json,
     char resolved_src_path[256];
     char resolved_dst_path[256];
     struct stat st = {0};
+
+    (void)ctx;
 
     root = cJSON_Parse(input_json);
     if (!root) {
@@ -701,14 +716,17 @@ static esp_err_t cap_files_move_file_execute_impl(const char *input_json,
     return ESP_OK;
 }
 
-static esp_err_t cap_files_list_dir_execute_impl(const char *input_json,
-                                                 char *output,
-                                                 size_t output_size)
+static esp_err_t cap_files_list_dir_execute(const char *input_json,
+                                            const claw_cap_call_context_t *ctx,
+                                            char *output,
+                                            size_t output_size)
 {
     cJSON *root = NULL;
     const char *keyword = NULL;
     size_t offset = 0;
     int count = 0;
+
+    (void)ctx;
 
     output[0] = '\0';
     root = cJSON_Parse(input_json);
@@ -747,100 +765,84 @@ static esp_err_t cap_files_list_dir_execute_impl(const char *input_json,
     return ESP_OK;
 }
 
-#define CAP_FILES_TOOL_CALLBACK(callback_name, impl_name)                              \
-    static claw_capability_result_t callback_name(const char *input_json,              \
-                                                  char *output,                       \
-                                                  size_t output_size,                 \
-                                                  size_t *output_length,              \
-                                                  bool *output_success,               \
-                                                  void *user_context)                 \
-    {                                                                                 \
-        (void)user_context;                                                           \
-        return claw_cabi_tool_result_from_esp(impl_name(input_json, output, output_size), \
-                                             output,                                  \
-                                             output_size,                             \
-                                             output_length,                           \
-                                             output_success);                         \
-    }
-
-CAP_FILES_TOOL_CALLBACK(cap_files_read_file_execute, cap_files_read_file_execute_impl)
-CAP_FILES_TOOL_CALLBACK(cap_files_write_file_execute, cap_files_write_file_execute_impl)
-CAP_FILES_TOOL_CALLBACK(cap_files_delete_file_execute, cap_files_delete_file_execute_impl)
-CAP_FILES_TOOL_CALLBACK(cap_files_copy_file_execute, cap_files_copy_file_execute_impl)
-CAP_FILES_TOOL_CALLBACK(cap_files_move_file_execute, cap_files_move_file_execute_impl)
-CAP_FILES_TOOL_CALLBACK(cap_files_list_dir_execute, cap_files_list_dir_execute_impl)
-
-static const claw_capability_t s_files_descriptors[] = {
+static const claw_cap_descriptor_t s_files_descriptors[] = {
     {
         .id = "read_file",
+        .name = "read_file",
+        .family = "files",
         .description = "Read a text file.",
-        .role = CLAW_CAPABILITY_ROLE_TOOL,
-        .role_data.tool = {
-            .schema_json = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Absolute path under an allowed directory\"}},\"required\":[\"path\"]}",
-            .execute = cap_files_read_file_execute,
-        },
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Absolute path under an allowed directory\"}},\"required\":[\"path\"]}",
+        .execute = cap_files_read_file_execute,
     },
     {
         .id = "write_file",
+        .name = "write_file",
+        .family = "files",
         .description = "Create or overwrite a text file",
-        .role = CLAW_CAPABILITY_ROLE_TOOL,
-        .role_data.tool = {
-            .schema_json = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Absolute path under a writable directory\"},\"content\":{\"type\":\"string\"}},\"required\":[\"path\",\"content\"]}",
-            .execute = cap_files_write_file_execute,
-        },
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Absolute path under a writable directory\"},\"content\":{\"type\":\"string\"}},\"required\":[\"path\",\"content\"]}",
+        .execute = cap_files_write_file_execute,
     },
     {
         .id = "delete_file",
+        .name = "delete_file",
+        .family = "files",
         .description = "Delete a file.",
-        .role = CLAW_CAPABILITY_ROLE_TOOL,
-        .role_data.tool = {
-            .schema_json = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Absolute path under a writable directory\"}},\"required\":[\"path\"]}",
-            .execute = cap_files_delete_file_execute,
-        },
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Absolute path under a writable directory\"}},\"required\":[\"path\"]}",
+        .execute = cap_files_delete_file_execute,
     },
     {
         .id = "copy_file",
+        .name = "copy_file",
+        .family = "files",
         .description = "Copy a file.",
-        .role = CLAW_CAPABILITY_ROLE_TOOL,
-        .role_data.tool = {
-            .schema_json = "{\"type\":\"object\",\"properties\":{\"src_path\":{\"type\":\"string\",\"description\":\"Absolute source path\"},\"dst_path\":{\"type\":\"string\",\"description\":\"Absolute destination path under a writable directory\"}},\"required\":[\"src_path\",\"dst_path\"]}",
-            .execute = cap_files_copy_file_execute,
-        },
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"src_path\":{\"type\":\"string\",\"description\":\"Absolute source path\"},\"dst_path\":{\"type\":\"string\",\"description\":\"Absolute destination path under a writable directory\"}},\"required\":[\"src_path\",\"dst_path\"]}",
+        .execute = cap_files_copy_file_execute,
     },
     {
         .id = "move_file",
+        .name = "move_file",
+        .family = "files",
         .description = "Move a file.",
-        .role = CLAW_CAPABILITY_ROLE_TOOL,
-        .role_data.tool = {
-            .schema_json = "{\"type\":\"object\",\"properties\":{\"src_path\":{\"type\":\"string\",\"description\":\"Absolute source path under a writable directory\"},\"dst_path\":{\"type\":\"string\",\"description\":\"Absolute destination path under a writable directory\"}},\"required\":[\"src_path\",\"dst_path\"]}",
-            .execute = cap_files_move_file_execute,
-        },
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"src_path\":{\"type\":\"string\",\"description\":\"Absolute source path under a writable directory\"},\"dst_path\":{\"type\":\"string\",\"description\":\"Absolute destination path under a writable directory\"}},\"required\":[\"src_path\",\"dst_path\"]}",
+        .execute = cap_files_move_file_execute,
     },
     {
         .id = "list_dir",
+        .name = "list_dir",
+        .family = "files",
         .description = "Recursively list files, optionally filtered by case-insensitive path keyword.",
-        .role = CLAW_CAPABILITY_ROLE_TOOL,
-        .role_data.tool = {
-            .schema_json = "{\"type\":\"object\",\"properties\":{\"keyword\":{\"type\":\"string\"}}}",
-            .execute = cap_files_list_dir_execute,
-        },
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"keyword\":{\"type\":\"string\"}}}",
+        .execute = cap_files_list_dir_execute,
     },
 };
 
-static const claw_capability_group_t s_files_group = {
-    .id = "cap_files",
-    .members = s_files_descriptors,
-    .member_count = sizeof(s_files_descriptors) / sizeof(s_files_descriptors[0]),
+static const claw_cap_group_t s_files_group = {
+    .group_id = "cap_files",
+    .descriptors = s_files_descriptors,
+    .descriptor_count = sizeof(s_files_descriptors) / sizeof(s_files_descriptors[0]),
 };
 
-esp_err_t cap_files_register_group(claw_capability_registry_t *registry)
+esp_err_t cap_files_register_group(void)
 {
-    if (!registry) {
-        return ESP_ERR_INVALID_ARG;
-    }
     if (!cap_files_any_root_configured()) {
         ESP_LOGE(TAG, "no sandbox root configured in claw_paths");
         return ESP_ERR_INVALID_STATE;
     }
-    return claw_cabi_register_group_esp(registry, &s_files_group);
+    if (claw_cap_group_exists(s_files_group.group_id)) {
+        return ESP_OK;
+    }
+
+    return claw_cap_register_group(&s_files_group);
 }

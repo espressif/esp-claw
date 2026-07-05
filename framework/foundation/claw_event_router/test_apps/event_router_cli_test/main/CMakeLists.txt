@@ -6,7 +6,7 @@ idf_component_register(
     REQUIRES
         router_manager
         claw_event_router
-        runtime
+        claw_cap
         console
         fatfs
         nvs_flash

@@ -5,7 +5,6 @@
  */
 #include "cap_im_qq.h"
 #include "cap_im_attachment.h"
-#include "claw_utils_string.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -18,7 +17,6 @@
 #include <sys/types.h>
 
 #include "cJSON.h"
-#include "claw_cabi_esp.h"
 #include "claw_task.h"
 #include "claw_event_publisher.h"
 #include "esp_crt_bundle.h"
@@ -61,18 +59,6 @@ static const char *TAG = "cap_im_qq";
 #define CAP_IM_QQ_INTENTS ((1 << 30) | (1 << 25))
 #define CAP_IM_QQ_FILE_TYPE_IMAGE 1
 #define CAP_IM_QQ_FILE_TYPE_FILE  4
-
-static esp_err_t cap_im_qq_abort_send_tool_pending_cabi(char *output, size_t output_size)
-{
-    // TODO: Re-enable IM send tools only after claw-cabi channel routing and
-    // explicit-target IM tool semantics are wired without claw_cap_call_context_t.
-    if (output && output_size > 0) {
-        snprintf(output,
-                 output_size,
-                 "Error: QQ IM send tools are disabled during claw-cabi migration");
-    }
-    return ESP_ERR_NOT_SUPPORTED;
-}
 
 typedef struct {
     char *buf;
@@ -481,19 +467,16 @@ static esp_err_t cap_im_qq_get_access_token(void)
         cJSON *expires_json;
         int expires_in;
 
+        free(resp.buf);
         if (!root) {
-            free(resp.buf);
             return ESP_FAIL;
         }
 
         token_json = cJSON_GetObjectItem(root, "access_token");
         expires_json = cJSON_GetObjectItem(root, "expires_in");
         if (!cJSON_IsString(token_json) || !token_json->valuestring) {
-            /* Log the raw body before freeing it (it was previously freed first,
-             * leaving this a use-after-free read). */
             cap_im_qq_log_http_failure("QQ token parse", ESP_FAIL, 200, resp.buf);
             cJSON_Delete(root);
-            free(resp.buf);
             return ESP_FAIL;
         }
 
@@ -501,7 +484,6 @@ static esp_err_t cap_im_qq_get_access_token(void)
         expires_in = cJSON_IsNumber(expires_json) ? expires_json->valueint : 7200;
         s_qq.token_expire_time = now + expires_in - 300;
         cJSON_Delete(root);
-        free(resp.buf);
     }
 
     return ESP_OK;
@@ -579,23 +561,20 @@ retry:
         cJSON *root = cJSON_Parse(resp.buf);
         cJSON *url_json;
 
+        free(resp.buf);
         if (!root) {
-            free(resp.buf);
             return ESP_FAIL;
         }
 
         url_json = cJSON_GetObjectItem(root, "url");
         if (!cJSON_IsString(url_json) || !url_json->valuestring) {
-            /* Log the raw body before freeing it (previously freed first -> UAF). */
             cap_im_qq_log_http_failure("QQ gateway parse", ESP_FAIL, 200, resp.buf);
             cJSON_Delete(root);
-            free(resp.buf);
             return ESP_FAIL;
         }
 
         strlcpy(s_qq.ws_url, url_json->valuestring, sizeof(s_qq.ws_url));
         cJSON_Delete(root);
-        free(resp.buf);
     }
 
     return ESP_OK;
@@ -1178,9 +1157,6 @@ retry:
     config.buffer_size = 1024;
     config.buffer_size_tx = 2048;
     config.crt_bundle_attach = esp_crt_bundle_attach;
-#ifdef CONFIG_HTTP_REUSE_ENABLE
-    config.keep_alive_enable = true;
-#endif
 
     client = esp_http_client_init(&config);
     if (!client) {
@@ -1807,76 +1783,209 @@ static esp_err_t cap_im_qq_gateway_stop(void)
     return ESP_OK;
 }
 
-static esp_err_t cap_im_qq_send_message_execute_impl(const char *input_json,
-                                                     char *output,
-                                                     size_t output_size)
+static esp_err_t cap_im_qq_send_message_execute(const char *input_json,
+                                                const claw_cap_call_context_t *ctx,
+                                                char *output,
+                                                size_t output_size)
 {
-    (void)input_json;
-    return cap_im_qq_abort_send_tool_pending_cabi(output, output_size);
-}
+    cJSON *root = NULL;
+    cJSON *chat_id_json;
+    cJSON *message_json;
+    const char *chat_id = NULL;
+    const char *message = NULL;
+    esp_err_t err;
 
-static esp_err_t cap_im_qq_send_image_execute_impl(const char *input_json,
-                                                   char *output,
-                                                   size_t output_size)
-{
-    (void)input_json;
-    return cap_im_qq_abort_send_tool_pending_cabi(output, output_size);
-}
-
-static esp_err_t cap_im_qq_send_file_execute_impl(const char *input_json,
-                                                  char *output,
-                                                  size_t output_size)
-{
-    (void)input_json;
-    return cap_im_qq_abort_send_tool_pending_cabi(output, output_size);
-}
-
-CLAW_CABI_ESP_LIFECYCLE_CALLBACK(cap_im_qq_gateway_init_cabi, cap_im_qq_gateway_init)
-CLAW_CABI_ESP_LIFECYCLE_CALLBACK(cap_im_qq_gateway_start_cabi, cap_im_qq_gateway_start)
-CLAW_CABI_ESP_LIFECYCLE_CALLBACK(cap_im_qq_gateway_stop_cabi, cap_im_qq_gateway_stop)
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_im_qq_send_message_execute, cap_im_qq_send_message_execute_impl)
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_im_qq_send_image_execute, cap_im_qq_send_image_execute_impl)
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_im_qq_send_file_execute, cap_im_qq_send_file_execute_impl)
-
-static const claw_capability_t s_qq_descriptors[] = {
-    CLAW_CABI_ESP_SERVICE_DESCRIPTOR(
-        "qq_gateway",
-        "Official QQ Bot gateway event source.",
-        cap_im_qq_gateway_init_cabi,
-        cap_im_qq_gateway_start_cabi,
-        cap_im_qq_gateway_stop_cabi,
-        NULL),
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "qq_send_message",
-        "Send a text message to an explicit QQ chat_id.",
-        "{\"type\":\"object\",\"properties\":{\"chat_id\":{\"type\":\"string\"},\"message\":{\"type\":\"string\"}},\"required\":[\"chat_id\",\"message\"]}",
-        cap_im_qq_send_message_execute),
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "qq_send_image",
-        "Send an image file from a local path to a QQ chat.",
-        "{\"type\":\"object\",\"properties\":{\"chat_id\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"caption\":{\"type\":\"string\"}},\"required\":[\"path\"]}",
-        cap_im_qq_send_image_execute),
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "qq_send_file",
-        "Send a file from a local path to a QQ chat.",
-        "{\"type\":\"object\",\"properties\":{\"chat_id\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"caption\":{\"type\":\"string\"}},\"required\":[\"path\"]}",
-        cap_im_qq_send_file_execute),
-};
-
-static const claw_capability_group_t s_qq_group = {
-    .id = "cap_im_qq",
-    .members = s_qq_descriptors,
-    .member_count = sizeof(s_qq_descriptors) / sizeof(s_qq_descriptors[0]),
-};
-
-esp_err_t cap_im_qq_register_group(claw_capability_registry_t *registry)
-{
-    if (!registry) {
+    root = cJSON_Parse(input_json ? input_json : "{}");
+    if (!root) {
+        snprintf(output, output_size, "Error: invalid JSON");
         return ESP_ERR_INVALID_ARG;
     }
+
+    chat_id_json = cJSON_GetObjectItem(root, "chat_id");
+    message_json = cJSON_GetObjectItem(root, "message");
+    if (cJSON_IsString(chat_id_json) && chat_id_json->valuestring && chat_id_json->valuestring[0]) {
+        chat_id = chat_id_json->valuestring;
+    } else if (ctx && ctx->chat_id && ctx->chat_id[0]) {
+        chat_id = ctx->chat_id;
+    }
+    if (cJSON_IsString(message_json) && message_json->valuestring && message_json->valuestring[0]) {
+        message = message_json->valuestring;
+    }
+
+    if (!chat_id || !message) {
+        ESP_LOGW(TAG,
+                 "QQ outbound invalid args chat_id=%s message_present=%s input=%s",
+                 chat_id ? chat_id : "(null)",
+                 message ? "true" : "false",
+                 input_json ? input_json : "(null)");
+        cJSON_Delete(root);
+        snprintf(output,
+                 output_size,
+                 "Error: chat_id and message are required (chat_id may come from ctx)");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    ESP_LOGI(TAG, "QQ outbound text to %s: %.48s%s",
+             chat_id,
+             message,
+             strlen(message) > 48 ? "..." : "");
+
+    err = cap_im_qq_send_text(chat_id, message);
+    cJSON_Delete(root);
+    if (err != ESP_OK) {
+        snprintf(output, output_size, "Error: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    snprintf(output, output_size, "reply already sent to user");
+    return ESP_OK;
+}
+
+static esp_err_t cap_im_qq_send_media_execute(const char *input_json,
+                                              const claw_cap_call_context_t *ctx,
+                                              char *output,
+                                              size_t output_size,
+                                              uint32_t file_type,
+                                              const char *kind)
+{
+    cJSON *root = NULL;
+    cJSON *chat_id_json;
+    cJSON *path_json;
+    cJSON *caption_json;
+    const char *chat_id = NULL;
+    const char *path = NULL;
+    const char *caption = NULL;
+    esp_err_t err;
+
+    root = cJSON_Parse(input_json ? input_json : "{}");
+    if (!root) {
+        snprintf(output, output_size, "Error: invalid JSON");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    chat_id_json = cJSON_GetObjectItem(root, "chat_id");
+    path_json = cJSON_GetObjectItem(root, "path");
+    caption_json = cJSON_GetObjectItem(root, "caption");
+    if (cJSON_IsString(chat_id_json) && chat_id_json->valuestring && chat_id_json->valuestring[0]) {
+        chat_id = chat_id_json->valuestring;
+    } else if (ctx && ctx->chat_id && ctx->chat_id[0]) {
+        chat_id = ctx->chat_id;
+    }
+    if (cJSON_IsString(path_json) && path_json->valuestring && path_json->valuestring[0]) {
+        path = path_json->valuestring;
+    }
+    if (cJSON_IsString(caption_json) && caption_json->valuestring) {
+        caption = caption_json->valuestring;
+    }
+
+    if (!chat_id || !path) {
+        cJSON_Delete(root);
+        snprintf(output,
+                 output_size,
+                 "Error: chat_id and path are required (chat_id may come from ctx)");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = cap_im_qq_send_media(chat_id, path, caption, file_type, kind);
+    cJSON_Delete(root);
+    if (err != ESP_OK) {
+        snprintf(output, output_size, "Error: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    snprintf(output, output_size, "reply already sent to user");
+    return ESP_OK;
+}
+
+static esp_err_t cap_im_qq_send_image_execute(const char *input_json,
+                                              const claw_cap_call_context_t *ctx,
+                                              char *output,
+                                              size_t output_size)
+{
+    return cap_im_qq_send_media_execute(input_json,
+                                        ctx,
+                                        output,
+                                        output_size,
+                                        CAP_IM_QQ_FILE_TYPE_IMAGE,
+                                        "image");
+}
+
+static esp_err_t cap_im_qq_send_file_execute(const char *input_json,
+                                             const claw_cap_call_context_t *ctx,
+                                             char *output,
+                                             size_t output_size)
+{
+    return cap_im_qq_send_media_execute(input_json,
+                                        ctx,
+                                        output,
+                                        output_size,
+                                        CAP_IM_QQ_FILE_TYPE_FILE,
+                                        "file");
+}
+
+static const claw_cap_descriptor_t s_qq_descriptors[] = {
+    {
+        .id = "qq_gateway",
+        .name = "qq_gateway",
+        .family = "im",
+        .description = "Official QQ Bot gateway event source.",
+        .kind = CLAW_CAP_KIND_EVENT_SOURCE,
+        .cap_flags = CLAW_CAP_FLAG_EMITS_EVENTS |
+        CLAW_CAP_FLAG_SUPPORTS_LIFECYCLE,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{}}",
+        .init = cap_im_qq_gateway_init,
+        .start = cap_im_qq_gateway_start,
+        .stop = cap_im_qq_gateway_stop,
+    },
+    {
+        .id = "qq_send_message",
+        .name = "qq_send_message",
+        .family = "im",
+        .description = "Send a text message to an explicit QQ chat_id.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json =
+        "{\"type\":\"object\",\"properties\":{\"chat_id\":{\"type\":\"string\"},\"message\":{\"type\":\"string\"}},\"required\":[\"chat_id\",\"message\"]}",
+        .execute = cap_im_qq_send_message_execute,
+    },
+    {
+        .id = "qq_send_image",
+        .name = "qq_send_image",
+        .family = "im",
+        .description = "Send an image file from a local path to a QQ chat.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json =
+        "{\"type\":\"object\",\"properties\":{\"chat_id\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"caption\":{\"type\":\"string\"}},\"required\":[\"path\"]}",
+        .execute = cap_im_qq_send_image_execute,
+    },
+    {
+        .id = "qq_send_file",
+        .name = "qq_send_file",
+        .family = "im",
+        .description = "Send a file from a local path to a QQ chat.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json =
+        "{\"type\":\"object\",\"properties\":{\"chat_id\":{\"type\":\"string\"},\"path\":{\"type\":\"string\"},\"caption\":{\"type\":\"string\"}},\"required\":[\"path\"]}",
+        .execute = cap_im_qq_send_file_execute,
+    },
+};
+
+static const claw_cap_group_t s_qq_group = {
+    .group_id = "cap_im_qq",
+    .descriptors = s_qq_descriptors,
+    .descriptor_count = sizeof(s_qq_descriptors) / sizeof(s_qq_descriptors[0]),
+};
+
+esp_err_t cap_im_qq_register_group(void)
+{
     cap_im_qq_init_defaults();
 
-    return claw_cabi_register_group_esp(registry, &s_qq_group);
+    if (claw_cap_group_exists(s_qq_group.group_id)) {
+        return ESP_OK;
+    }
+    return claw_cap_register_group(&s_qq_group);
 }
 
 void cap_im_qq_set_msg_type(int msg_type)
@@ -1971,10 +2080,7 @@ esp_err_t cap_im_qq_send_text(const char *chat_id, const char *text)
         esp_err_t err;
 
         if (chunk_len > CAP_IM_QQ_MAX_MSG_LEN) {
-            chunk_len = claw_utils_utf8_prefix_len(text + offset, CAP_IM_QQ_MAX_MSG_LEN);
-            if (chunk_len == 0) {
-                return ESP_ERR_INVALID_ARG;
-            }
+            chunk_len = CAP_IM_QQ_MAX_MSG_LEN;
         }
 
         chunk = calloc(1, chunk_len + 1);

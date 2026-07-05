@@ -10,7 +10,6 @@
 #include <stdint.h>
 
 #include "claw_event_publisher.h"
-#include "claw_cabi.h"
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
 
@@ -87,7 +86,7 @@ typedef struct {
     bool persist_after_fire;
 } cap_scheduler_config_t;
 
-esp_err_t cap_scheduler_register_group(claw_capability_registry_t *registry);
+esp_err_t cap_scheduler_register_group(void);
 esp_err_t cap_scheduler_init(const cap_scheduler_config_t *config);
 esp_err_t cap_scheduler_start(void);
 esp_err_t cap_scheduler_stop(void);

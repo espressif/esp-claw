@@ -8,7 +8,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-#include "claw_cabi.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -21,7 +20,7 @@ typedef struct {
     bool enable_inbound_attachments;
 } cap_im_feishu_attachment_config_t;
 
-esp_err_t cap_im_feishu_register_group(claw_capability_registry_t *registry);
+esp_err_t cap_im_feishu_register_group(void);
 esp_err_t cap_im_feishu_set_credentials(const char *app_id, const char *app_secret);
 esp_err_t cap_im_feishu_set_attachment_config(
     const cap_im_feishu_attachment_config_t *config);

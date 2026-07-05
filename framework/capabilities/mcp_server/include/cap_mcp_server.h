@@ -11,7 +11,6 @@
 #include "esp_err.h"
 #include "esp_mcp_engine.h"
 #include "esp_mcp_property.h"
-#include "claw_cabi.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -99,11 +98,6 @@ esp_err_t cap_mcp_server_deinit(void);
  *         registration.
  */
 esp_err_t cap_mcp_server_add_tool(const cap_mcp_server_tool_def_t *tool_defs, uint16_t tool_count);
-
-/**
- * @brief Register the MCP server lifecycle service into the Rust capability registry.
- */
-esp_err_t cap_mcp_server_register_group(claw_capability_registry_t *registry);
 
 #ifdef __cplusplus
 }

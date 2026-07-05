@@ -16,5 +16,4 @@ idf_component_register(
         "include"
     REQUIRES
         json
-        runtime
 )

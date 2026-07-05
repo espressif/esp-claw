@@ -8,7 +8,8 @@ idf_component_register(
         "include"
         "src"
     REQUIRES
-        runtime
+        claw_cap
+        claw_core
         claw_utils
         json
         console

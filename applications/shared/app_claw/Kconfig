@@ -17,10 +17,12 @@ menu "App Claw Config"
 
     choice APP_CLAW_MEMORY_MODE
         prompt "App Claw memory management mode"
+        depends on APP_CLAW_CAP_MEMORY
         default APP_CLAW_MEMORY_MODE_FULL
         help
             Select whether app_claw uses the current structured memory module
             or a lightweight master-compatible memory flow.
+            Only available when claw_memory subsystem is enabled.
 
     config APP_CLAW_MEMORY_MODE_FULL
         bool "Structured memory management"
@@ -44,8 +46,29 @@ menu "App Claw Config"
                 Enable the files capability and keep app_claw's direct dependency
                 on cap_files.
 
+        config APP_CLAW_CAP_MEMORY
+            bool "Enable claw_memory subsystem"
+            default y
+            help
+                Run claw_memory initialization during app_claw_start and link the
+                claw_memory component.
+
+        config APP_CLAW_CAP_EVENT_ROUTER
+            bool "Enable event router subsystem"
+            default y
+            help
+                Initialize and start claw_event_router (rule dispatch, IM bindings,
+                startup trigger).
+
+        config APP_CLAW_CAP_CORE
+            bool "Enable claw_core (LLM agent runtime)"
+            default y
+            help
+                Initialize and start claw_core when LLM credentials are configured.
+
         config APP_CLAW_CAP_IM_QQ
             bool "Enable QQ capability"
+            select APP_CLAW_CAP_EVENT_ROUTER
             default y
             help
                 Enable the QQ capability and keep app_claw's direct dependency
@@ -53,6 +76,7 @@ menu "App Claw Config"
 
         config APP_CLAW_CAP_IM_FEISHU
             bool "Enable Feishu capability"
+            select APP_CLAW_CAP_EVENT_ROUTER
             default y
             help
                 Enable the Feishu capability and keep app_claw's direct dependency
@@ -60,6 +84,7 @@ menu "App Claw Config"
 
         config APP_CLAW_CAP_IM_TG
             bool "Enable Telegram capability"
+            select APP_CLAW_CAP_EVENT_ROUTER
             default y
             help
                 Enable the Telegram capability and keep app_claw's direct dependency
@@ -67,6 +92,7 @@ menu "App Claw Config"
 
         config APP_CLAW_CAP_IM_WECHAT
             bool "Enable WeChat capability"
+            select APP_CLAW_CAP_EVENT_ROUTER
             default y
             help
                 Enable the WeChat capability and keep app_claw's direct dependency
@@ -74,12 +100,15 @@ menu "App Claw Config"
 
         config APP_CLAW_CAP_IM_LOCAL
             bool "Enable local / Web IM capability (cap_im_local)"
+            select APP_CLAW_CAP_SESSION_MGR
+            select APP_CLAW_CAP_EVENT_ROUTER
             default y
             help
-                Register cap_im_local for in-process IM (e.g. edge_agent Web IM).
+                Register cap_im_local for in-process IM (e.g. edge_agent Web IM). Requires session manager for session_command.
 
         config APP_CLAW_CAP_SCHEDULER
             bool "Enable scheduler capability"
+            select APP_CLAW_CAP_EVENT_ROUTER
             default y
             help
                 Enable the scheduler capability and keep app_claw's direct dependency
@@ -106,12 +135,26 @@ menu "App Claw Config"
                 Enable the MCP server capability and keep app_claw's direct dependency
                 on cap_mcp_server.
 
+        config APP_CLAW_CAP_SKILL_MGR
+            bool "Enable skill manager capability"
+            default y
+            help
+                Enable the skill manager capability and keep app_claw's direct dependency
+                on cap_skill_mgr.
+
         config APP_CLAW_CAP_SYSTEM
             bool "Enable system capability"
             default y
             help
                 Enable the system capability and keep app_claw's direct dependency
                 on cap_system.
+
+        config APP_CLAW_CAP_TIME
+            bool "Enable time capability"
+            default y
+            help
+                Enable the time capability and keep app_claw's direct dependency
+                on cap_time.
 
         config APP_CLAW_CAP_LLM_INSPECT
             bool "Enable LLM inspect capability"
@@ -136,10 +179,25 @@ menu "App Claw Config"
 
         config APP_CLAW_CAP_ROUTER_MGR
             bool "Enable router manager capability"
+            select APP_CLAW_CAP_EVENT_ROUTER
             default y
             help
                 Enable the router manager capability and keep app_claw's direct dependency
                 on cap_router_mgr.
+
+        config APP_CLAW_CAP_SESSION_MGR
+            bool "Enable session manager capability"
+            default y
+            help
+                Enable the session manager capability and keep app_claw's direct dependency
+                on cap_session_mgr.
+
+        config APP_CLAW_CAP_AGENT_MGR
+            bool "Enable agent manager capability"
+            default y if APP_CLAW_CAP_SESSION_MGR && APP_CLAW_CAP_CORE
+            default n
+            help
+                Enable root-only subagent management tools backed by claw_agent_mgr.
 
     endmenu
 
@@ -256,7 +314,7 @@ menu "App Claw Config"
             default y
             help
                 Enable the capability Lua module and keep app_claw's direct
-                dependency on module_call_capability when Lua capability is enabled.
+                dependency on lua_module_call_capability when Lua capability is enabled.
 
         config APP_CLAW_LUA_MODULE_DELAY
             bool "Enable delay Lua module"

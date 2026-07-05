@@ -7,7 +7,6 @@
 
 #include <stddef.h>
 
-#include "claw_cabi.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -29,7 +28,7 @@ typedef struct {
 
 esp_err_t cap_cli_init(const cap_cli_config_t *config);
 esp_err_t cap_cli_register_command(const cap_cli_command_t *command);
-esp_err_t cap_cli_register_group(claw_capability_registry_t *registry);
+esp_err_t cap_cli_register_group(void);
 
 #ifdef __cplusplus
 }

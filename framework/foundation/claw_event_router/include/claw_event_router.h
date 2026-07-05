@@ -9,6 +9,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "claw_cap.h"
 #include "claw_event.h"
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
@@ -16,24 +17,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/* Opaque claw-cabi handles the router calls into for action execution. These
- * typedefs mirror the ones in claw_cabi.h exactly; C11 permits the identical
- * redefinition when a translation unit includes both headers. */
-typedef struct claw_capability_registry claw_capability_registry_t;
-typedef struct claw_agent_system claw_agent_system_t;
-
-typedef enum {
-    CLAW_EVENT_ROUTER_ROUTE_PASS = 0,
-    CLAW_EVENT_ROUTER_ROUTE_CONSUMED = 1,
-    CLAW_EVENT_ROUTER_ROUTE_ERROR = 2,
-} claw_event_router_route_t;
-
-typedef enum {
-    CLAW_EVENT_ROUTER_CALLER_SYSTEM = 0,
-    CLAW_EVENT_ROUTER_CALLER_AGENT = 1,
-    CLAW_EVENT_ROUTER_CALLER_CONSOLE = 2,
-} claw_event_router_caller_t;
 
 typedef esp_err_t (*claw_event_router_outbound_resolver_fn)(const claw_event_t *event,
                                                             const char *target_channel,
@@ -65,7 +48,7 @@ typedef struct {
     int64_t handled_at_ms;
     char first_rule_id[64];
     char ack[256];
-    claw_event_router_route_t route;
+    claw_cap_event_route_t route;
     esp_err_t last_error;
 } claw_event_router_result_t;
 
@@ -98,7 +81,7 @@ typedef struct {
     claw_event_router_action_kind_t kind;
     char cap[64];
     char *input_json;
-    claw_event_router_caller_t caller;
+    claw_cap_caller_t caller;
     bool capture_output;
     bool fail_open;
 } claw_event_router_action_t;
@@ -116,20 +99,6 @@ typedef struct {
 } claw_event_router_rule_t;
 
 esp_err_t claw_event_router_init(const claw_event_router_config_t *config);
-
-/*
- * Inject the claw-cabi runtime handles the router uses to execute actions:
- *   - `registry` backs CALL_CAP / RUN_SCRIPT / SEND_MESSAGE via
- *     claw_capability_invoke() (invoke a capability by name).
- *   - `agent_system` backs RUN_AGENT via claw_agent_system_push_message().
- *
- * Call once after the registry (and, if enabled, the agent system) are created,
- * before claw_event_router_start(). Either handle may be NULL when the
- * corresponding feature is disabled; actions needing a missing handle fail with
- * ESP_ERR_INVALID_STATE. The router borrows the handles and never frees them.
- */
-esp_err_t claw_event_router_set_runtime_handles(claw_capability_registry_t *registry,
-                                                claw_agent_system_t *agent_system);
 esp_err_t claw_event_router_start(void);
 esp_err_t claw_event_router_stop(void);
 esp_err_t claw_event_router_reload(void);

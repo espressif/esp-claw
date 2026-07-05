@@ -5,7 +5,6 @@
  */
 #pragma once
 
-#include "claw_cabi.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -42,7 +41,7 @@ typedef struct {
 } cap_llm_config_provider_t;
 
 esp_err_t cap_llm_config_set_provider(const cap_llm_config_provider_t *provider);
-esp_err_t cap_llm_config_register_group(claw_capability_registry_t *registry);
+esp_err_t cap_llm_config_register_group(void);
 
 #ifdef __cplusplus
 }

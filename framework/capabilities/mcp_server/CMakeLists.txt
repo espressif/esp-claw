@@ -4,7 +4,7 @@ idf_component_register(
     INCLUDE_DIRS
         "include"
     REQUIRES
-        runtime
+        claw_cap
         esp_http_server
         mcp-c-sdk
         mcp_mdns

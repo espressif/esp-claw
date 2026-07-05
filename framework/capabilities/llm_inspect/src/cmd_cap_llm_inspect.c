@@ -10,8 +10,7 @@
 
 #include "argtable3/argtable3.h"
 #include "cJSON.h"
-#include "claw_cabi.h"
-#include "claw_cabi_esp.h"
+#include "claw_cap.h"
 #include "esp_console.h"
 
 static struct {
@@ -20,22 +19,16 @@ static struct {
     struct arg_end *end;
 } inspect_args;
 
-static claw_capability_registry_t *s_registry;
-
 static int llm_inspect_func(int argc, char **argv)
 {
     cJSON *root = NULL;
     char *input_json = NULL;
     char *output = NULL;
-    size_t output_length = 0;
-    bool output_success = false;
     esp_err_t err;
+    claw_cap_call_context_t ctx = {
+        .caller = CLAW_CAP_CALLER_CONSOLE,
+    };
     int nerrors = arg_parse(argc, argv, (void **)&inspect_args);
-
-    if (!s_registry) {
-        printf("capability registry is not configured\n");
-        return 1;
-    }
 
     if (nerrors != 0) {
         arg_print_errors(stderr, inspect_args.end, argv[0]);
@@ -69,9 +62,7 @@ static int llm_inspect_func(int argc, char **argv)
         return 1;
     }
 
-    err = claw_cabi_result_to_esp(claw_capability_invoke(s_registry, "inspect_image", input_json,
-                                                         output, 2048, &output_length,
-                                                         &output_success));
+    err = claw_cap_call("inspect_image", input_json, &ctx, output, 2048);
     if (err != ESP_OK) {
         printf("%s\n", output[0] ? output : esp_err_to_name(err));
     } else {
@@ -80,13 +71,11 @@ static int llm_inspect_func(int argc, char **argv)
 
     free(output);
     free(input_json);
-    return (err == ESP_OK && output_success) ? 0 : 1;
+    return err == ESP_OK ? 0 : 1;
 }
 
-void register_cap_llm_inspect(claw_capability_registry_t *registry)
+void register_cap_llm_inspect(void)
 {
-    s_registry = registry;
-
     inspect_args.path = arg_str1("p", "path", "<path>", "Absolute local image path");
     inspect_args.prompt = arg_str1(NULL, "prompt", "<prompt>", "Inspection prompt");
     inspect_args.end = arg_end(4);

@@ -5,7 +5,6 @@
  */
 #pragma once
 
-#include "claw_cabi.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -13,7 +12,7 @@ extern "C" {
 #endif
 
 /**
- * @brief Register the MCP client capability group with the claw-cabi registry.
+ * @brief Register the MCP client capability group with the claw_cap registry.
  *
  * Registers group id `cap_mcp_client` with callable descriptors `mcp_list_tools`,
  * `mcp_call_tool`, and `mcp_discover` (remote tools/list, tools/call, and local-network
@@ -22,9 +21,9 @@ extern "C" {
  * This only registers capability metadata and callbacks; remote MCP requests are
  * made later when one of those capabilities is invoked.
  *
- * @return ESP_OK on success, or an error code from `claw_capability_register_group()`.
+ * @return ESP_OK on success, or an error code from `claw_cap_register_group()`.
  */
-esp_err_t cap_mcp_client_register_group(claw_capability_registry_t *registry);
+esp_err_t cap_mcp_client_register_group(void);
 
 #ifdef __cplusplus
 }

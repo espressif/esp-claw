@@ -9,7 +9,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "claw_cabi.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -38,7 +37,7 @@ typedef struct {
     bool log_outbound_messages;
 } cap_im_local_config_t;
 
-esp_err_t cap_im_local_register_group(claw_capability_registry_t *registry);
+esp_err_t cap_im_local_register_group(void);
 esp_err_t cap_im_local_set_config(const cap_im_local_config_t *config);
 esp_err_t cap_im_local_set_outbound_callback(cap_im_local_outbound_callback_t callback,
                                              void *user_ctx);

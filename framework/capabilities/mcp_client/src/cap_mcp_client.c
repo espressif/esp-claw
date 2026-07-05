@@ -6,7 +6,7 @@
 #include <string.h>
 
 #include "cJSON.h"
-#include "claw_cabi_esp.h"
+#include "claw_cap.h"
 
 #include "cap_mcp_client.h"
 #include "cap_mcp_client_priv.h"
@@ -61,14 +61,17 @@ static void cap_mcp_extract_content_text(const cJSON *content,
     output[offset] = '\0';
 }
 
-static esp_err_t cap_mcp_call_execute_impl(const char *input_json,
-                                           char *output,
-                                           size_t output_size)
+static esp_err_t cap_mcp_call_execute(const char *input_json,
+                                      const claw_cap_call_context_t *ctx,
+                                      char *output,
+                                      size_t output_size)
 {
     cJSON *result = NULL;
     const char *error_message = NULL;
     cJSON *is_error = NULL;
     esp_err_t err;
+
+    (void)ctx;
 
     err = cap_mcp_call_remote_tool(input_json, &result);
     if (err != ESP_OK) {
@@ -97,9 +100,10 @@ static esp_err_t cap_mcp_call_execute_impl(const char *input_json,
     return ESP_OK;
 }
 
-static esp_err_t cap_mcp_list_execute_impl(const char *input_json,
-                                           char *output,
-                                           size_t output_size)
+static esp_err_t cap_mcp_list_execute(const char *input_json,
+                                      const claw_cap_call_context_t *ctx,
+                                      char *output,
+                                      size_t output_size)
 {
     cJSON *result = NULL;
     const char *error_message = NULL;
@@ -107,6 +111,8 @@ static esp_err_t cap_mcp_list_execute_impl(const char *input_json,
     cJSON *tool = NULL;
     size_t offset = 0;
     esp_err_t err;
+
+    (void)ctx;
 
     err = cap_mcp_list_remote_tools(input_json, &result);
     if (err != ESP_OK) {
@@ -157,9 +163,10 @@ static esp_err_t cap_mcp_list_execute_impl(const char *input_json,
     return ESP_OK;
 }
 
-static esp_err_t cap_mcp_discover_execute_impl(const char *input_json,
-                                               char *output,
-                                               size_t output_size)
+static esp_err_t cap_mcp_discover_execute(const char *input_json,
+                                          const claw_cap_call_context_t *ctx,
+                                          char *output,
+                                          size_t output_size)
 {
     cJSON *root = NULL;
     cJSON *devices = NULL;
@@ -167,6 +174,8 @@ static esp_err_t cap_mcp_discover_execute_impl(const char *input_json,
     size_t offset = 0;
     size_t found = 0;
     esp_err_t err;
+
+    (void)ctx;
 
     err = cap_mcp_discover_services(input_json, &root);
     if (err != ESP_OK) {
@@ -212,43 +221,54 @@ static esp_err_t cap_mcp_discover_execute_impl(const char *input_json,
     return ESP_OK;
 }
 
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_mcp_call_execute, cap_mcp_call_execute_impl)
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_mcp_list_execute, cap_mcp_list_execute_impl)
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_mcp_discover_execute, cap_mcp_discover_execute_impl)
-CLAW_CABI_ESP_LIFECYCLE_CALLBACK(cap_mcp_client_group_init_cabi, cap_mcp_client_group_init)
-
-static const claw_capability_t s_mcp_client_descriptors[] = {
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "mcp_list_tools",
-        "List tools from a remote MCP server.",
+static const claw_cap_descriptor_t s_mcp_client_descriptors[] = {
+    {
+        .id = "mcp_list_tools",
+        .name = "mcp_list_tools",
+        .family = "mcp",
+        .description = "List tools from a remote MCP server.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json =
         "{\"type\":\"object\",\"properties\":{\"server_url\":{\"type\":\"string\"},\"endpoint\":{\"type\":\"string\"},\"cursor\":{\"type\":\"string\"}},\"required\":[\"server_url\"]}",
-        cap_mcp_list_execute),
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "mcp_call_tool",
-        "Call a tool on a remote MCP server.",
+        .execute = cap_mcp_list_execute,
+    },
+    {
+        .id = "mcp_call_tool",
+        .name = "mcp_call_tool",
+        .family = "mcp",
+        .description = "Call a tool on a remote MCP server.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json =
         "{\"type\":\"object\",\"properties\":{\"server_url\":{\"type\":\"string\"},\"endpoint\":{\"type\":\"string\"},\"tool_name\":{\"type\":\"string\"},\"arguments\":{\"type\":\"object\"}},\"required\":[\"server_url\",\"tool_name\"]}",
-        cap_mcp_call_execute),
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "mcp_discover",
-        "Discover MCP servers advertised on the local network.",
+        .execute = cap_mcp_call_execute,
+    },
+    {
+        .id = "mcp_discover",
+        .name = "mcp_discover",
+        .family = "mcp",
+        .description = "Discover MCP servers advertised on the local network.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json =
         "{\"type\":\"object\",\"properties\":{\"timeout_ms\":{\"type\":\"integer\"},\"include_self\":{\"type\":\"boolean\"}}}",
-        cap_mcp_discover_execute),
-};
-
-static const claw_capability_group_t s_mcp_client_group = {
-    .id = "cap_mcp_client",
-    .members = s_mcp_client_descriptors,
-    .member_count = sizeof(s_mcp_client_descriptors) / sizeof(s_mcp_client_descriptors[0]),
-    .lifecycle = {
-        .init = cap_mcp_client_group_init_cabi,
+        .execute = cap_mcp_discover_execute,
     },
 };
 
-esp_err_t cap_mcp_client_register_group(claw_capability_registry_t *registry)
+static const claw_cap_group_t s_mcp_client_group = {
+    .group_id = "cap_mcp_client",
+    .descriptors = s_mcp_client_descriptors,
+    .descriptor_count = sizeof(s_mcp_client_descriptors) / sizeof(s_mcp_client_descriptors[0]),
+    .group_init = cap_mcp_client_group_init,
+};
+
+esp_err_t cap_mcp_client_register_group(void)
 {
-    if (!registry) {
-        return ESP_ERR_INVALID_ARG;
+    if (claw_cap_group_exists(s_mcp_client_group.group_id)) {
+        return ESP_OK;
     }
 
-    return claw_cabi_register_group_esp(registry, &s_mcp_client_group);
+    return claw_cap_register_group(&s_mcp_client_group);
 }

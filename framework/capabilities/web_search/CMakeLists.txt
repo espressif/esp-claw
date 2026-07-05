@@ -5,7 +5,7 @@ idf_component_register(
     INCLUDE_DIRS
         "include"
     REQUIRES
-        runtime
+        claw_cap
         json
         esp_http_client
         console

@@ -9,7 +9,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "claw_cabi.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -47,7 +46,7 @@ typedef struct {
     char base_url[160];
 } cap_im_wechat_qr_login_status_t;
 
-esp_err_t cap_im_wechat_register_group(claw_capability_registry_t *registry);
+esp_err_t cap_im_wechat_register_group(void);
 esp_err_t cap_im_wechat_set_client_config(const cap_im_wechat_client_config_t *config);
 esp_err_t cap_im_wechat_set_attachment_config(
     const cap_im_wechat_attachment_config_t *config);

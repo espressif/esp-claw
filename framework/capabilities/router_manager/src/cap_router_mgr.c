@@ -11,7 +11,7 @@
 #include <string.h>
 
 #include "cJSON.h"
-#include "claw_cabi_esp.h"
+#include "claw_cap.h"
 #include "claw_event_router.h"
 #include "esp_err.h"
 
@@ -192,22 +192,27 @@ static esp_err_t cap_router_mgr_extract_rule_json_id(const char *rule_json,
     return ESP_OK;
 }
 
-static esp_err_t cap_router_mgr_list_execute_impl(const char *input_json,
-                                                  char *output,
-                                                  size_t output_size)
+static esp_err_t cap_router_mgr_list_execute(const char *input_json,
+                                             const claw_cap_call_context_t *ctx,
+                                             char *output,
+                                             size_t output_size)
 {
     (void)input_json;
+    (void)ctx;
     return claw_event_router_list_rules_json(output, output_size);
 }
 
-static esp_err_t cap_router_mgr_get_execute_impl(const char *input_json,
-                                                 char *output,
-                                                 size_t output_size)
+static esp_err_t cap_router_mgr_get_execute(const char *input_json,
+                                            const claw_cap_call_context_t *ctx,
+                                            char *output,
+                                            size_t output_size)
 {
     cJSON *root = NULL;
     const char *id = NULL;
     char id_buf[64] = {0};
     esp_err_t err;
+
+    (void)ctx;
 
     err = cap_router_mgr_parse_input(input_json, &root);
     if (err != ESP_OK) {
@@ -287,10 +292,12 @@ static esp_err_t cap_router_mgr_apply_rule_json(const char *input_json,
     return cap_router_mgr_write_action_result(action, id, output, output_size);
 }
 
-static esp_err_t cap_router_mgr_add_execute_impl(const char *input_json,
-                                                 char *output,
-                                                 size_t output_size)
+static esp_err_t cap_router_mgr_add_execute(const char *input_json,
+                                            const claw_cap_call_context_t *ctx,
+                                            char *output,
+                                            size_t output_size)
 {
+    (void)ctx;
     return cap_router_mgr_apply_rule_json(input_json,
                                           CAP_ROUTER_MGR_ADD,
                                           claw_event_router_add_rule_json,
@@ -298,10 +305,12 @@ static esp_err_t cap_router_mgr_add_execute_impl(const char *input_json,
                                           output_size);
 }
 
-static esp_err_t cap_router_mgr_update_execute_impl(const char *input_json,
-                                                    char *output,
-                                                    size_t output_size)
+static esp_err_t cap_router_mgr_update_execute(const char *input_json,
+                                               const claw_cap_call_context_t *ctx,
+                                               char *output,
+                                               size_t output_size)
 {
+    (void)ctx;
     return cap_router_mgr_apply_rule_json(input_json,
                                           CAP_ROUTER_MGR_UPDATE,
                                           claw_event_router_update_rule_json,
@@ -309,14 +318,17 @@ static esp_err_t cap_router_mgr_update_execute_impl(const char *input_json,
                                           output_size);
 }
 
-static esp_err_t cap_router_mgr_delete_execute_impl(const char *input_json,
-                                                    char *output,
-                                                    size_t output_size)
+static esp_err_t cap_router_mgr_delete_execute(const char *input_json,
+                                               const claw_cap_call_context_t *ctx,
+                                               char *output,
+                                               size_t output_size)
 {
     cJSON *root = NULL;
     const char *id = NULL;
     char id_buf[64] = {0};
     esp_err_t err;
+
+    (void)ctx;
 
     err = cap_router_mgr_parse_input(input_json, &root);
     if (err != ESP_OK) {
@@ -347,13 +359,15 @@ static esp_err_t cap_router_mgr_delete_execute_impl(const char *input_json,
     return cap_router_mgr_write_action_result(CAP_ROUTER_MGR_DELETE, id_buf, output, output_size);
 }
 
-static esp_err_t cap_router_mgr_reload_execute_impl(const char *input_json,
-                                                    char *output,
-                                                    size_t output_size)
+static esp_err_t cap_router_mgr_reload_execute(const char *input_json,
+                                               const claw_cap_call_context_t *ctx,
+                                               char *output,
+                                               size_t output_size)
 {
     esp_err_t err;
 
     (void)input_json;
+    (void)ctx;
 
     err = claw_event_router_reload();
     if (err != ESP_OK) {
@@ -364,57 +378,80 @@ static esp_err_t cap_router_mgr_reload_execute_impl(const char *input_json,
     return cap_router_mgr_write_action_result(CAP_ROUTER_MGR_RELOAD, NULL, output, output_size);
 }
 
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_router_mgr_list_execute, cap_router_mgr_list_execute_impl)
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_router_mgr_get_execute, cap_router_mgr_get_execute_impl)
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_router_mgr_add_execute, cap_router_mgr_add_execute_impl)
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_router_mgr_update_execute, cap_router_mgr_update_execute_impl)
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_router_mgr_delete_execute, cap_router_mgr_delete_execute_impl)
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_router_mgr_reload_execute, cap_router_mgr_reload_execute_impl)
-
-static const claw_capability_t s_router_mgr_descriptors[] = {
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "list_router_rules",
-        "List all automation rules as JSON.",
-        "{\"type\":\"object\",\"properties\":{}}",
-        cap_router_mgr_list_execute),
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "get_router_rule",
-        "Get one automation rule by id as JSON.",
-        "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}",
-        cap_router_mgr_get_execute),
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "add_router_rule",
-        "Add one automation rule from rule JSON.",
-        "{\"type\":\"object\",\"properties\":{\"rule_json\":{\"type\":\"string\"}},\"required\":[\"rule_json\"]}",
-        cap_router_mgr_add_execute),
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "update_router_rule",
-        "Update one automation rule from rule JSON.",
-        "{\"type\":\"object\",\"properties\":{\"rule_json\":{\"type\":\"string\"}},\"required\":[\"rule_json\"]}",
-        cap_router_mgr_update_execute),
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "delete_router_rule",
-        "Delete one automation rule by id.",
-        "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}",
-        cap_router_mgr_delete_execute),
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "reload_router_rules",
-        "Reload automation rules from disk.",
-        "{\"type\":\"object\",\"properties\":{}}",
-        cap_router_mgr_reload_execute),
+static const claw_cap_descriptor_t s_router_mgr_descriptors[] = {
+    {
+        .id = "list_router_rules",
+        .name = "list_router_rules",
+        .family = "router_manager",
+        .description = "List all automation rules as JSON.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{}}",
+        .execute = cap_router_mgr_list_execute,
+    },
+    {
+        .id = "get_router_rule",
+        .name = "get_router_rule",
+        .family = "router_manager",
+        .description = "Get one automation rule by id as JSON.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}",
+        .execute = cap_router_mgr_get_execute,
+    },
+    {
+        .id = "add_router_rule",
+        .name = "add_router_rule",
+        .family = "router_manager",
+        .description = "Add one automation rule from rule JSON.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"rule_json\":{\"type\":\"string\"}},\"required\":[\"rule_json\"]}",
+        .execute = cap_router_mgr_add_execute,
+    },
+    {
+        .id = "update_router_rule",
+        .name = "update_router_rule",
+        .family = "router_manager",
+        .description = "Update one automation rule from rule JSON.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"rule_json\":{\"type\":\"string\"}},\"required\":[\"rule_json\"]}",
+        .execute = cap_router_mgr_update_execute,
+    },
+    {
+        .id = "delete_router_rule",
+        .name = "delete_router_rule",
+        .family = "router_manager",
+        .description = "Delete one automation rule by id.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}",
+        .execute = cap_router_mgr_delete_execute,
+    },
+    {
+        .id = "reload_router_rules",
+        .name = "reload_router_rules",
+        .family = "router_manager",
+        .description = "Reload automation rules from disk.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{}}",
+        .execute = cap_router_mgr_reload_execute,
+    },
 };
 
-static const claw_capability_group_t s_router_mgr_group = {
-    .id = "cap_router_mgr",
-    .members = s_router_mgr_descriptors,
-    .member_count = sizeof(s_router_mgr_descriptors) / sizeof(s_router_mgr_descriptors[0]),
+static const claw_cap_group_t s_router_mgr_group = {
+    .group_id = "cap_router_mgr",
+    .descriptors = s_router_mgr_descriptors,
+    .descriptor_count = sizeof(s_router_mgr_descriptors) / sizeof(s_router_mgr_descriptors[0]),
 };
 
-esp_err_t cap_router_mgr_register_group(claw_capability_registry_t *registry)
+esp_err_t cap_router_mgr_register_group(void)
 {
-    if (!registry) {
-        return ESP_ERR_INVALID_ARG;
+    if (claw_cap_group_exists(s_router_mgr_group.group_id)) {
+        return ESP_OK;
     }
 
-    return claw_cabi_register_group_esp(registry, &s_router_mgr_group);
+    return claw_cap_register_group(&s_router_mgr_group);
 }

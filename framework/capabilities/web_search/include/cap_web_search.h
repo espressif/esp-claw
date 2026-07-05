@@ -5,14 +5,13 @@
  */
 #pragma once
 
-#include "claw_cabi.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-esp_err_t cap_web_search_register_group(claw_capability_registry_t *registry);
+esp_err_t cap_web_search_register_group(void);
 esp_err_t cap_web_search_set_brave_key(const char *api_key);
 esp_err_t cap_web_search_set_tavily_key(const char *api_key);
 

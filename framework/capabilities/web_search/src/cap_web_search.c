@@ -11,7 +11,7 @@
 #include <string.h>
 
 #include "cJSON.h"
-#include "claw_cabi_esp.h"
+#include "claw_cap.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
@@ -237,9 +237,6 @@ static esp_err_t cap_web_search_brave_direct(const char *url, cap_web_search_buf
         .timeout_ms = 15000,
         .buffer_size = 4096,
         .crt_bundle_attach = esp_crt_bundle_attach,
-#ifdef CONFIG_HTTP_REUSE_ENABLE
-        .keep_alive_enable = true,
-#endif
     };
     esp_http_client_handle_t client = NULL;
     esp_err_t err;
@@ -276,9 +273,6 @@ static esp_err_t cap_web_search_tavily_direct(const char *query, cap_web_search_
         .timeout_ms = 15000,
         .buffer_size = 4096,
         .crt_bundle_attach = esp_crt_bundle_attach,
-#ifdef CONFIG_HTTP_REUSE_ENABLE
-        .keep_alive_enable = true,
-#endif
     };
     esp_http_client_handle_t client = NULL;
     char auth[192];
@@ -319,15 +313,18 @@ static esp_err_t cap_web_search_tavily_direct(const char *query, cap_web_search_
     return ESP_OK;
 }
 
-static esp_err_t cap_web_search_execute_impl(const char *input_json,
-                                             char *output,
-                                             size_t output_size)
+static esp_err_t cap_web_search_execute(const char *input_json,
+                                        const claw_cap_call_context_t *ctx,
+                                        char *output,
+                                        size_t output_size)
 {
     cJSON *input = NULL;
     cJSON *query = NULL;
     cap_web_search_buf_t buf = {0};
     cJSON *root = NULL;
     esp_err_t err = ESP_OK;
+
+    (void)ctx;
 
     if (!output || output_size == 0) {
         return ESP_ERR_INVALID_ARG;
@@ -398,30 +395,34 @@ static esp_err_t cap_web_search_execute_impl(const char *input_json,
     return ESP_OK;
 }
 
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_web_search_execute, cap_web_search_execute_impl)
-
-static const claw_capability_t s_web_search_descriptors[] = {
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "web_search",
-        "Search the web with the configured provider and return concise formatted results.",
+static const claw_cap_descriptor_t s_web_search_descriptors[] = {
+    {
+        .id = "web_search",
+        .name = "web_search",
+        .family = "system",
+        .description = "Search the web with the configured provider and return concise formatted results.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json =
         "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}",
-        cap_web_search_execute),
+        .execute = cap_web_search_execute,
+    },
 };
 
-static const claw_capability_group_t s_web_search_group = {
-    .id = "cap_web_search",
-    .members = s_web_search_descriptors,
-    .member_count = sizeof(s_web_search_descriptors) / sizeof(s_web_search_descriptors[0]),
+static const claw_cap_group_t s_web_search_group = {
+    .group_id = "cap_web_search",
+    .descriptors = s_web_search_descriptors,
+    .descriptor_count = sizeof(s_web_search_descriptors) / sizeof(s_web_search_descriptors[0]),
 };
 
-esp_err_t cap_web_search_register_group(claw_capability_registry_t *registry)
+esp_err_t cap_web_search_register_group(void)
 {
-    if (!registry) {
-        return ESP_ERR_INVALID_ARG;
+    if (claw_cap_group_exists(s_web_search_group.group_id)) {
+        return ESP_OK;
     }
 
     cap_web_search_refresh_provider();
-    return claw_cabi_register_group_esp(registry, &s_web_search_group);
+    return claw_cap_register_group(&s_web_search_group);
 }
 
 esp_err_t cap_web_search_set_brave_key(const char *api_key)

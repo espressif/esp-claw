@@ -11,7 +11,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "claw_cabi_esp.h"
+#include "cJSON.h"
+#include "claw_cap.h"
 #include "claw_event_publisher.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -27,18 +28,6 @@ static const char *TAG = "cap_im_local";
 #define CAP_IM_LOCAL_LINK_URL_STACK    256
 #define CAP_IM_LOCAL_LINK_LABEL_STACK  128
 #define CAP_IM_LOCAL_EMIT_COMBINED_MAX 8192
-
-static esp_err_t cap_im_local_abort_send_tool_pending_cabi(char *output, size_t output_size)
-{
-    // TODO: Re-enable local IM send tools only after claw-cabi channel routing is
-    // wired without claw_cap_call_context_t.
-    if (output && output_size > 0) {
-        snprintf(output,
-                 output_size,
-                 "Error: local IM send tools are disabled during claw-cabi migration");
-    }
-    return ESP_ERR_NOT_SUPPORTED;
-}
 
 typedef struct {
     SemaphoreHandle_t lock;
@@ -92,6 +81,13 @@ static void cap_im_local_build_message_id(char *buf, size_t buf_size, const char
              "%s-%" PRId64,
              prefix ? prefix : "local",
              cap_im_local_now_ms());
+}
+
+static const char *cap_im_local_json_string(cJSON *root, const char *key)
+{
+    cJSON *item = cJSON_GetObjectItem(root, key);
+
+    return cJSON_IsString(item) && item->valuestring ? item->valuestring : NULL;
 }
 
 static esp_err_t cap_im_local_gateway_init(void)
@@ -203,47 +199,112 @@ static esp_err_t cap_im_local_send_text_impl(const char *channel,
     return callback(&message, callback_user_ctx);
 }
 
-static esp_err_t cap_im_local_send_message_execute_impl(const char *input_json,
-                                                        char *output,
-                                                        size_t output_size)
+static esp_err_t cap_im_local_send_message_execute(const char *input_json,
+                                                   const claw_cap_call_context_t *ctx,
+                                                   char *output,
+                                                   size_t output_size)
 {
-    (void)input_json;
-    return cap_im_local_abort_send_tool_pending_cabi(output, output_size);
-}
+    cJSON *root = NULL;
+    const char *channel = NULL;
+    const char *chat_id = NULL;
+    const char *message = NULL;
+    const char *message_id = NULL;
+    const char *link_url = NULL;
+    const char *link_label = NULL;
+    static char s_default_channel_buf[16];
+    esp_err_t err;
 
-CLAW_CABI_ESP_LIFECYCLE_CALLBACK(cap_im_local_gateway_init_cabi, cap_im_local_gateway_init)
-CLAW_CABI_ESP_LIFECYCLE_CALLBACK(cap_im_local_gateway_start_cabi, cap_im_local_gateway_start)
-CLAW_CABI_ESP_LIFECYCLE_CALLBACK(cap_im_local_gateway_stop_cabi, cap_im_local_gateway_stop)
-CLAW_CABI_ESP_TOOL_CALLBACK(cap_im_local_send_message_execute, cap_im_local_send_message_execute_impl)
-
-static const claw_capability_t s_local_descriptors[] = {
-    CLAW_CABI_ESP_SERVICE_DESCRIPTOR(
-        "local_gateway",
-        "Local in-process IM gateway event source.",
-        cap_im_local_gateway_init_cabi,
-        cap_im_local_gateway_start_cabi,
-        cap_im_local_gateway_stop_cabi,
-        NULL),
-    CLAW_CABI_ESP_TOOL_DESCRIPTOR(
-        "local_send_message",
-        "Send a text message to a local IM client via registered callback.",
-        "{\"type\":\"object\",\"properties\":{\"channel\":{\"type\":\"string\"},\"chat_id\":{\"type\":\"string\"},\"message_id\":{\"type\":\"string\"},\"message\":{\"type\":\"string\"},\"link_url\":{\"type\":\"string\"},\"link_label\":{\"type\":\"string\"}},\"required\":[\"chat_id\",\"message\"]}",
-        cap_im_local_send_message_execute),
-};
-
-static const claw_capability_group_t s_local_group = {
-    .id = "cap_im_local",
-    .members = s_local_descriptors,
-    .member_count = sizeof(s_local_descriptors) / sizeof(s_local_descriptors[0]),
-};
-
-esp_err_t cap_im_local_register_group(claw_capability_registry_t *registry)
-{
-    if (!registry) {
+    root = cJSON_Parse(input_json ? input_json : "{}");
+    if (!root) {
+        snprintf(output, output_size, "Error: invalid JSON");
         return ESP_ERR_INVALID_ARG;
     }
 
-    return claw_cabi_register_group_esp(registry, &s_local_group);
+    channel = cap_im_local_json_string(root, "channel");
+    chat_id = cap_im_local_json_string(root, "chat_id");
+    message = cap_im_local_json_string(root, "message");
+    message_id = cap_im_local_json_string(root, "message_id");
+    link_url = cap_im_local_json_string(root, "link_url");
+    link_label = cap_im_local_json_string(root, "link_label");
+
+    if ((!chat_id || !chat_id[0]) && ctx && ctx->chat_id && ctx->chat_id[0]) {
+        chat_id = ctx->chat_id;
+    }
+    if (!channel || !channel[0]) {
+        if (ctx && ctx->channel && ctx->channel[0]) {
+            channel = ctx->channel;
+        } else {
+            err = cap_im_local_lock();
+            if (err != ESP_OK) {
+                cJSON_Delete(root);
+                snprintf(output, output_size, "Error: %s", esp_err_to_name(err));
+                return err;
+            }
+            strlcpy(s_default_channel_buf, s_local.default_channel, sizeof(s_default_channel_buf));
+            cap_im_local_unlock();
+            channel = s_default_channel_buf;
+        }
+    }
+
+    if (!chat_id || !chat_id[0] || !message || !message[0]) {
+        cJSON_Delete(root);
+        snprintf(output,
+                 output_size,
+                 "Error: chat_id and message are required (chat_id may come from ctx)");
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = cap_im_local_send_text_with_link(channel, chat_id, message_id, message, link_url, link_label);
+    cJSON_Delete(root);
+    if (err != ESP_OK) {
+        snprintf(output, output_size, "Error: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    snprintf(output, output_size, "reply already sent to local IM");
+    return ESP_OK;
+}
+
+static const claw_cap_descriptor_t s_local_descriptors[] = {
+    {
+        .id = "local_gateway",
+        .name = "local_gateway",
+        .family = "im",
+        .description = "Local in-process IM gateway event source.",
+        .kind = CLAW_CAP_KIND_EVENT_SOURCE,
+        .cap_flags = CLAW_CAP_FLAG_EMITS_EVENTS |
+        CLAW_CAP_FLAG_SUPPORTS_LIFECYCLE,
+        .input_schema_json = "{\"type\":\"object\",\"properties\":{}}",
+        .init = cap_im_local_gateway_init,
+        .start = cap_im_local_gateway_start,
+        .stop = cap_im_local_gateway_stop,
+    },
+    {
+        .id = "local_send_message",
+        .name = "local_send_message",
+        .family = "im",
+        .description = "Send a text message to a local IM client via registered callback.",
+        .kind = CLAW_CAP_KIND_CALLABLE,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .input_schema_json =
+        "{\"type\":\"object\",\"properties\":{\"channel\":{\"type\":\"string\"},\"chat_id\":{\"type\":\"string\"},\"message_id\":{\"type\":\"string\"},\"message\":{\"type\":\"string\"},\"link_url\":{\"type\":\"string\"},\"link_label\":{\"type\":\"string\"}},\"required\":[\"chat_id\",\"message\"]}",
+        .execute = cap_im_local_send_message_execute,
+    },
+};
+
+static const claw_cap_group_t s_local_group = {
+    .group_id = "cap_im_local",
+    .descriptors = s_local_descriptors,
+    .descriptor_count = sizeof(s_local_descriptors) / sizeof(s_local_descriptors[0]),
+};
+
+esp_err_t cap_im_local_register_group(void)
+{
+    if (claw_cap_group_exists(s_local_group.group_id)) {
+        return ESP_OK;
+    }
+
+    return claw_cap_register_group(&s_local_group);
 }
 
 esp_err_t cap_im_local_set_config(const cap_im_local_config_t *config)

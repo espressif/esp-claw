@@ -23,7 +23,6 @@
 #include "mcp_mdns.h"
 
 #include "cap_mcp_server.h"
-#include "claw_cabi_esp.h"
 
 static const char *TAG = "cap_mcp_srv";
 
@@ -233,34 +232,4 @@ esp_err_t cap_mcp_server_deinit(void)
         }
     }
     return ret;
-}
-
-CLAW_CABI_ESP_LIFECYCLE_CALLBACK(cap_mcp_server_init_cabi, cap_mcp_server_init)
-CLAW_CABI_ESP_LIFECYCLE_CALLBACK(cap_mcp_server_start_cabi, cap_mcp_server_start)
-CLAW_CABI_ESP_LIFECYCLE_CALLBACK(cap_mcp_server_stop_cabi, cap_mcp_server_stop)
-CLAW_CABI_ESP_LIFECYCLE_CALLBACK(cap_mcp_server_deinit_cabi, cap_mcp_server_deinit)
-
-static const claw_capability_t s_mcp_server_descriptors[] = {
-    CLAW_CABI_ESP_SERVICE_DESCRIPTOR(
-        "mcp_server",
-        "Lifecycle service for the local MCP HTTP server.",
-        cap_mcp_server_init_cabi,
-        cap_mcp_server_start_cabi,
-        cap_mcp_server_stop_cabi,
-        cap_mcp_server_deinit_cabi),
-};
-
-static const claw_capability_group_t s_mcp_server_group = {
-    .id = "cap_mcp_server",
-    .members = s_mcp_server_descriptors,
-    .member_count = sizeof(s_mcp_server_descriptors) / sizeof(s_mcp_server_descriptors[0]),
-};
-
-esp_err_t cap_mcp_server_register_group(claw_capability_registry_t *registry)
-{
-    if (!registry) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    return claw_cabi_register_group_esp(registry, &s_mcp_server_group);
 }

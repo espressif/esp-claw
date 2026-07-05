@@ -4,7 +4,7 @@ idf_component_register(
     INCLUDE_DIRS
         "include"
     REQUIRES
-        runtime
+        claw_cap
         claw_event_router
         esp_timer
         freertos
