@@ -5,15 +5,15 @@
 //! into the internal [`ApprovalDecision`] it feeds back to the parked agent.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use claw_api::{ClawApiAsync, ClawApiConfig, InitError, RetryPolicy};
-use claw_capability::{
-    tool_metadata, CapabilityRegistry, SyncToolHandler, Tool, ToolError, ToolGate, ToolInvocation,
-    ToolInvokeError, ToolOutput, ToolSetError, ToolSpec,
-};
 use claw_interface::{ClawHttp, ClawTimer};
 use claw_permission::{Action, PermissionDecision, RiskClass};
+use claw_tool::{
+    tool_metadata, SyncToolHandler, Tool, ToolError, ToolGate, ToolInvocation, ToolInvokeError,
+    ToolOutput, ToolRegistry, ToolSetError, ToolSpec,
+};
 use serde_json::{json, Value};
 
 use crate::agent::{
@@ -35,6 +35,8 @@ Do not answer the user directly. The tool result is the only output."#;
 
 const DEFAULT_CLARIFICATION: &str = "Please clearly reply with approval or rejection.";
 const DEFAULT_REJECTION: &str = "rejected";
+static APPROVAL_TOOL_PARENT: LazyLock<Arc<ToolRegistry>> =
+    LazyLock::new(|| Arc::new(ToolRegistry::new()));
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PermissionReplyResolution {
@@ -160,8 +162,8 @@ where
 {
     let mut llm = ClawApiAsync::init(llm_config, H::default(), Timer::default())?;
     let resolution = Arc::new(Mutex::new(None));
-    let registry = CapabilityRegistry::new();
-    let mut tools = registry.tool_set();
+    // Approval classification uses an isolated local tool set.
+    let mut tools = APPROVAL_TOOL_PARENT.tool_set();
     tools.add_tool(Tool::from_sync(ResolvePermissionReplyTool::new(
         Arc::clone(&resolution),
     )))?;
@@ -251,7 +253,7 @@ fn non_empty_str(value: &str, default: &str) -> String {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use claw_capability::RawToolInvocation;
+    use claw_tool::RawToolInvocation;
 
     fn resolve_from_tool(arguments_json: &str) -> Result<PermissionReplyResolution, ToolError> {
         let resolution = Arc::new(Mutex::new(None));

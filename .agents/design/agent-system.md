@@ -4,33 +4,17 @@
 struct AgentSystem<F, H, Timer> {
     capabilities: Arc<CapabilityRegistry>,
     orchestrator: Arc<Orchestrator<F, H, Timer>>,
-    inbox: AgentInbox,
-    chat_sessions: Mutex<HashMap<ChannelChatKey, SessionId>>,
     session_targets: Mutex<HashMap<SessionId, SessionTarget>>,
 
     pub fn capabilities(&self) -> &CapabilityRegistry // registration surface for tools/channels
     pub fn start_all(&self) -> Result<()> // starts tools and stopped registered channels
     pub fn stop_all(&self) -> Result<()> // stops channels then tools
 
-    pub async fn run_inbound(&self) -> Result<()> // drains ChannelSink messages
-    pub async fn submit_channel(&self, input: ChannelInbound) -> Result<()> // direct inbound path
+    pub async fn submit_channel(&self, session: SessionId, input: ChannelInbound) -> Result<()>
 
     pub fn new_session(&self) -> SessionId // explicit session creation
-    pub fn bind_session(session: SessionId, target: ChannelTargetOwned) -> Result<()> // explicit binding
     pub fn list_sessions(&self) -> Vec<SessionRecord>
     pub fn delete_session(session: SessionId) -> Result<()>
-}
-
-struct AgentInbox {
-    sender: AsyncSender<ChannelInbound>,
-    receiver: AsyncReceiver<ChannelInbound>,
-
-    pub fn sink(&self) -> ChannelSink // sync submit, no await in channel callback
-}
-
-struct ChannelChatKey {
-    channel: String,
-    chat_id: String,
 }
 
 struct SessionTarget {
@@ -48,7 +32,7 @@ struct SessionRecord {
 
 ```rust
 // AgentSystem is the channel/session aggregation layer.
-ChannelInbound -> AgentSystem -> Orchestrator::submit
+SessionId + ChannelInbound -> AgentSystem -> Orchestrator::submit
 DriveOutput -> AgentSystem -> ChannelRegistry::send
 
 // Orchestrator never sees channels.
@@ -60,6 +44,10 @@ ChannelRegistry::send(ChannelOutbound)
 
 // Default IM/channel input is an interrupt.
 default_delivery_kind(ChannelInbound) == DeliveryKind::Interrupt
+
+// Session binding policy is not hardcoded here.
+ChannelChatKey -> SessionId // belongs to embedding adapter or claw-cabi
+resolve_or_create_session // forbidden in AgentSystem
 
 // No transport hint decides DeliveryKind.
 DeliveryKind::from_extra_context // forbidden in AgentSystem
@@ -73,11 +61,8 @@ ChannelRouter // removed
 
 ```rust
 fn new(llm_config, persistence) -> Result<AgentSystem> {
-    let inbox = AgentInbox::new()
-    let capabilities = Arc::new(CapabilityRegistry::with_channel_sink(inbox.sink()))
-    let resolver = RegistryResolver::new(Arc::clone(&capabilities))
+    let capabilities = Arc::new(CapabilityRegistry::new())
     let orchestrator = Arc::new(Orchestrator::new(
-        resolver,
         Arc::clone(&capabilities),
         llm_config,
         persistence,
@@ -86,36 +71,59 @@ fn new(llm_config, persistence) -> Result<AgentSystem> {
     Ok(AgentSystem {
         capabilities,
         orchestrator,
-        inbox,
-        chat_sessions: Mutex::new(HashMap::new()),
         session_targets: Mutex::new(HashMap::new()),
     })
 }
 ```
 
+## Agent Resolution
+
+```rust
+struct FsAgentFactory {
+    capabilities: Arc<CapabilityRegistry>,
+
+    fn create_agent(kind: AgentKind, ...) -> Result<Agent> {
+        let manifest = AgentManifest::for_kind(kind)?
+        let mut tools = capabilities.tool_set()
+
+        for name in manifest.capabilities {
+            let tool = bind_tool(name)? // factory-local manifest binding
+            tools.add_tool(tool)?
+        }
+
+        let skills = resolve_skills(manifest.skills)?
+        GenericAgent::new(..., tools, skills, ...)
+    }
+}
+```
+
+Rules:
+
+```rust
+// There is no manifest binding injection above factory.
+AgentSystem::new(resolver, ...) // forbidden
+Orchestrator::new(resolver, ...) // forbidden
+
+// Factory is where baked manifest names become runtime objects.
+AgentManifest.capabilities -> FsAgentFactory::bind_tool -> ToolSet.add_tool
+AgentManifest.skills -> FsAgentFactory::bind_skills -> SkillSet
+
+// The resolved result is used immediately for this agent.
+bind_tool(name) -> Tool
+tools.add_tool(tool)
+```
+
 ## Inbound
 
 ```rust
-fn ChannelSink::submit(input: ChannelInbound) -> Result<()> {
-    inbox.sender.send(input)? // sync wake-up only
-    Ok(())
-}
-
-async fn run_inbound(&self) -> Result<()> {
-    while let Some(input) = inbox.receiver.recv().await {
-        self.submit_channel(input).await?
-    }
-    Ok(())
-}
-
-async fn submit_channel(&self, input: ChannelInbound) -> Result<()> {
+async fn submit_channel(&self, session: SessionId, input: ChannelInbound) -> Result<()> {
+    validate_session_exists(session)?
     validate_channel_input(&input)?
     let Some(text) = session_text(&input) else {
-        remember_target_without_submit(input)
+        remember_target(session, &input)
         return Ok(())
     }
 
-    let session = resolve_or_create_session(&input)
     remember_target(session, &input)
 
     let output = orchestrator
@@ -129,41 +137,23 @@ async fn submit_channel(&self, input: ChannelInbound) -> Result<()> {
 ## Session Binding
 
 ```rust
-fn resolve_or_create_session(input: &ChannelInbound) -> SessionId {
-    let key = ChannelChatKey {
-        channel: input.channel.clone(),
-        chat_id: input.chat_id.clone(),
-    }
-
-    if let Some(session) = chat_sessions.get(&key) {
-        return *session
-    }
-
-    let session = orchestrator.session_create()
-    chat_sessions.insert(key, session)
-    session
-}
-
-fn bind_session(session: SessionId, target: ChannelTargetOwned) -> Result<()> {
-    validate_session_exists(session)?
-    validate_channel_exists(&target.channel)?
-    reject_conflicting_chat_binding(&target)?
-    reject_conflicting_session_target(session, &target)?
-
-    chat_sessions.insert(ChannelChatKey::from(&target), session)
-    session_targets.insert(session, SessionTarget {
-        target,
-        correlation_id: None,
-    })
-    Ok(())
-}
-
 fn delete_session(session: SessionId) -> Result<()> {
     orchestrator.session_delete(session)?
     session_targets.remove(&session)
-    chat_sessions.retain(|_, value| *value != session)
     Ok(())
 }
+```
+
+Rules:
+
+```rust
+// AgentSystem owns sessions, not binding policy.
+new_session() // creates an orchestrator session
+submit_channel(session, input) // caller already chose the session
+
+// These are not AgentSystem APIs.
+bind_session(channel, chat_id, session) // forbidden here
+auto_bind(channel, chat_id) // forbidden here
 ```
 
 ## Target Memory
@@ -242,14 +232,133 @@ Reason:
 ## Async
 
 ```rust
-// Channel callbacks never await.
-ChannelSink::submit(input) // sync enqueue + wake
-
 // AgentSystem awaits only after all binding locks are released.
-resolve_or_create_session(input) // lock only here
 remember_target(session, input) // lock only here
 orchestrator.submit(...).await // no AgentSystem lock held
 ChannelRegistry::send(outbound) // no AgentSystem lock held
+```
+
+## CABI Auto Bind
+
+```rust
+struct CabiChannelQueue {
+    sender: AsyncSender<ChannelInbound>,
+    receiver: AsyncReceiver<ChannelInbound>,
+
+    pub fn new() -> CabiChannelQueue
+    pub fn sink(&self) -> ChannelSink // passed to CapabilityRegistry before AgentSystem exists
+}
+
+struct CabiChannelBridge<F, H, Timer> {
+    system: Arc<AgentSystem<F, H, Timer>>,
+    bindings: Mutex<HashMap<ChannelChatKey, SessionId>>,
+    receiver: AsyncReceiver<ChannelInbound>,
+
+    pub async fn run(&self) -> Result<()> // drains channel messages
+}
+
+struct ChannelChatKey {
+    channel: String,
+    chat_id: String,
+}
+
+fn CabiChannelQueue::sink(&self) -> ChannelSink {
+    let sender = self.sender.clone()
+    ChannelSink::new(move |input| {
+        sender.send(input).map_err(|_| ChannelError::new("agent runtime stopped"))
+    })
+}
+
+async fn CabiChannelBridge::run(&self) -> Result<()> {
+    while let Some(input) = receiver.recv().await {
+        let session = self.resolve_or_create_session(&input)
+        system.submit_channel(session, input).await?
+    }
+    Ok(())
+}
+
+fn resolve_or_create_session(&self, input: &ChannelInbound) -> SessionId {
+    let key = ChannelChatKey {
+        channel: input.channel.clone(),
+        chat_id: input.chat_id.clone(),
+    }
+
+    if let Some(session) = bindings.get(&key) {
+        return *session
+    }
+
+    let session = system.new_session()
+    bindings.insert(key, session)
+    session
+}
+```
+
+Rules:
+
+```rust
+// ESP-IDF C API chooses auto-bind behavior.
+claw-cabi inbound message -> CabiChannelBridge::resolve_or_create_session
+
+// Other embeddings can choose another binding policy.
+host test -> explicit session selection
+app server -> account/thread/router-specific session selection
+```
+
+## CABI Executor
+
+```rust
+struct CabiAgentRuntime<F, H, Timer> {
+    system: Arc<AgentSystem<F, H, Timer>>,
+    bridge: Arc<CabiChannelBridge<F, H, Timer>>,
+    worker: WorkerHandle,
+}
+
+fn start(config) -> Result<CabiAgentRuntime> {
+    let queue = CabiChannelQueue::new()
+
+    let system = Arc::new(AgentSystem::new(
+        config.llm,
+        config.persistence,
+    )?)
+    register_c_capabilities(system.capabilities())?
+
+    let bridge = Arc::new(CabiChannelBridge {
+        system: Arc::clone(&system),
+        bindings: Mutex::new(HashMap::new()),
+        receiver: queue.receiver,
+    })
+
+    let bridge_for_worker = Arc::clone(&bridge)
+    let worker = EspIdfThread.spawn_worker(move || {
+        let executor = edge_executor::LocalExecutor::new()
+        let task = executor.spawn(bridge_for_worker.run())
+        edge_executor::block_on(executor.run(task))
+    })?
+
+    system.start_all()?
+
+    Ok(CabiAgentRuntime { system, bridge, worker })
+}
+```
+
+Rules:
+
+```rust
+// AgentSystem never owns an executor.
+AgentSystem::submit_channel(...) // async API only
+
+// claw-cabi owns the ESP-IDF worker and edge executor.
+claw-cabi worker -> edge_executor -> CabiChannelBridge::run
+
+// C callbacks never await.
+C callback -> ChannelSink::submit -> AsyncSender::send
+
+// The queue may receive before the executor polls.
+AsyncSender<ChannelInbound> // buffers until bridge.run() drains
+
+// No AgentSystem lock is held while the executor awaits.
+CabiChannelBridge::resolve_or_create_session // lock only here
+AgentSystem::submit_channel(...).await // no bridge lock held
 ```
 
 ## Replacement

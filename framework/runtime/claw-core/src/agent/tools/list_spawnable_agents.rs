@@ -6,7 +6,7 @@
 //! guessing a kind and learning by rejection — and unlike baking the catalog into
 //! `spawn_subagent`'s schema, it costs nothing in the always-sent prompt prefix.
 
-use claw_capability::{
+use claw_tool::{
     tool_metadata, SyncToolHandler, ToolInvocation, ToolInvokeError, ToolOutput, ToolSpec,
 };
 
@@ -56,7 +56,7 @@ impl SyncToolHandler for ListSpawnableAgentsTool {
 mod tests {
     use super::*;
     use crate::agent::kind::AgentKind;
-    use claw_capability::RawToolInvocation;
+    use claw_tool::RawToolInvocation;
 
     fn call() -> ToolInvocation<'static> {
         ToolInvocation::try_from(RawToolInvocation {

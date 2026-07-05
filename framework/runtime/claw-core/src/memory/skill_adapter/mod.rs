@@ -8,9 +8,9 @@ mod tools;
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use claw_capability::Tool;
 use claw_context::{Block, BlockKind, ContextSink};
 use claw_skill::SkillSet;
+use claw_tool::Tool;
 
 use super::traits::{ContextAdapter, ContextAdapterInput};
 
@@ -52,9 +52,9 @@ pub(super) fn lock_skill_set(skills: &Mutex<SkillSet>) -> MutexGuard<'_, SkillSe
 pub(crate) mod test_support {
     use std::sync::{Arc, Mutex};
 
-    use claw_capability::Tool;
     use claw_interface::{ClawFs, MemFs};
     use claw_skill::{FsSkillRegistry, SkillRegistry, SkillSet};
+    use claw_tool::Tool;
 
     use super::tools::skill_tools;
 

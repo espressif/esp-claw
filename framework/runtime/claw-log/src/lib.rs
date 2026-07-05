@@ -208,7 +208,7 @@ impl TraceSink for ClawTraceSink {
     }
 }
 
-/// Target prefix for this firmware's own crates (`claw_core`, `claw_capability`,
+/// Target prefix for this firmware's own crates (`claw_core`, `claw_tool`,
 /// `claw_sys`, …). The subscriber traces only these, so dependency `tracing`
 /// noise (reqwest/hyper/h2/rustls on the host CLIs) is dropped.
 const CLAW_TARGET_PREFIX: &str = "claw";

@@ -14,11 +14,11 @@
 use std::sync::Arc;
 
 use claw_api::{ClawApiAsync, ClawApiConfig, InitError};
-use claw_capability::{ToolSet, ToolSetError};
 use claw_context::{Block, BlockKind};
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::{Compactor, TranscriptStore};
 use claw_permission::AllowAll;
+use claw_tool::{ToolSet, ToolSetError};
 
 use crate::agent::base_agent::{
     AgentAbortHandle, AgentCommand, AgentCommandError, AgentId, BaseAgent, BaseAgentBuildError,
@@ -64,8 +64,8 @@ impl<H: ClawHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
     /// store remains verbatim storage, while this constructor wires the recent
     /// history adapter and rolling-summary adapter as one internal strategy.
     ///
-    /// `tools` is prepared by the factory from the central capability registry
-    /// plus manifest-local tools. This layer only adds graph tools that require a
+    /// `tools` is prepared by the factory from the central tool registry plus
+    /// manifest-local tools. This layer only adds graph tools that require a
     /// [`GraphHost`]: `spawn_subagent` and its inspection/delete siblings when
     /// `config.spawn_enabled`. The base agent then adds its built-in self-control
     /// tool (`end_conversation`).

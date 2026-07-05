@@ -128,11 +128,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "claw-api",
- "claw-capability",
+ "claw-channel",
  "claw-context",
  "claw-core",
  "claw-interface",
  "claw-memory",
+ "claw-tool",
  "claw-utils",
  "dotenvy",
  "serde_json",
@@ -145,10 +146,10 @@ name = "claw-agent-cli"
 version = "0.1.0"
 dependencies = [
  "claw-api",
- "claw-capability",
  "claw-core",
  "claw-interface",
  "claw-log",
+ "claw-tool",
  "dotenvy",
  "owo-colors",
  "tokio",
@@ -189,14 +190,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "claw-capability"
+name = "claw-channel"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "claw-permission",
- "serde_json",
  "thiserror",
- "tracing",
 ]
 
 [[package]]
@@ -212,12 +209,12 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "claw-api",
- "claw-capability",
  "claw-context",
  "claw-interface",
  "claw-memory",
  "claw-permission",
  "claw-skill",
+ "claw-tool",
  "claw-utils",
  "dotenvy",
  "proc-macro2",
@@ -310,6 +307,17 @@ dependencies = [
  "claw-sys",
  "edge-executor",
  "log",
+]
+
+[[package]]
+name = "claw-tool"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "claw-permission",
+ "serde_json",
+ "thiserror",
+ "tracing",
 ]
 
 [[package]]

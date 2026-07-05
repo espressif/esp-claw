@@ -28,6 +28,7 @@ struct Skill {
     pub fn id(&self) -> &str
     pub fn name(&self) -> &str
     pub fn description(&self) -> &str
+    pub fn author(&self) -> Option<&str>
     pub fn file(&self) -> &str
     pub fn metadata(&self) -> &SkillFrontmatterMetadata
 }
@@ -42,7 +43,7 @@ struct CatalogSnapshot {
 }
 
 struct SkillDocument {
-    content: Arc<str> // <skill_content name="id">\n...stripped body...\n</skill_content>
+    content: String // <skill_content name="id">\n...stripped body...\n</skill_content>
 
     pub fn content(&self) -> &str
 }
@@ -51,27 +52,38 @@ struct FsSkillRegistry<F: ClawFs> {
     fs: F
     roots: Vec<String> // priority ordered: DATA before SYSTEM
     snapshot: RwLock<Arc<CatalogSnapshot>>
-    next_version: Atomic<SkillRegistryVersion>
+    next_version: AtomicU32
 
     pub fn new(fs: F) -> FsSkillRegistry<F>
     pub fn set_root(self, root: impl Into<String>) -> Result<FsSkillRegistry<F>> // appends root, reloads snapshot, returns self
     pub fn skill_set(self: &Arc<Self>) -> SkillSet
 
-    fn catalog(&self) -> Arc<CatalogSnapshot> // cheap snapshot clone; never scans
-    fn reload(&self) -> Result<()> // rereads FS after external writes; never writes skills
-    fn load_document_into(&self, id: &SkillId, out: &mut String) -> Result<()> // strips frontmatter, expands {CUR_SKILL_DIR}, wraps XML
+    pub(crate) fn catalog(&self) -> Arc<CatalogSnapshot> // cheap snapshot clone; never scans
+    pub(crate) fn reload(&self) -> Result<()> // rereads FS after external writes; never writes skills
+    pub(crate) fn load_document_into(&self, id: &SkillId, out: &mut String) -> Result<()> // strips frontmatter, expands {CUR_SKILL_DIR}, wraps XML
+}
+
+trait SkillRegistry {
+    pub fn skill_set(self: Arc<Self>) -> SkillSet
+}
+
+trait SkillRegistryBackend {
+    fn catalog(&self) -> Arc<CatalogSnapshot>
+    fn reload(&self) -> Result<()>
+    fn load_document_into(&self, id: &SkillId, out: &mut String) -> Result<()>
 }
 
 struct SkillSet {
-    registry: Arc<FsSkillRegistry<impl ClawFs>>,
+    registry: Arc<dyn SkillRegistryBackend>,
     catalog_version: SkillRegistryVersion,
+    catalog_buffer_kind: CatalogBufferKind,
     catalog_buffer: String,
     document_buffer: String,
 
     pub fn reload(&self) -> Result<()> // calls registry.reload(); next catalog_context rerenders
-    pub fn list_skill(&mut self) -> Result<Arc<str>> // JSON catalog; reuses catalog_buffer
+    pub fn list_skill(&mut self) -> Result<&str> // JSON catalog; reuses catalog_buffer; valid until next mutable SkillSet call
     pub fn catalog_context(&mut self) -> &str // prompt text; reuses catalog_buffer while snapshot version is unchanged
-    pub fn activate_skill(&mut self, id: &SkillId) -> Result<SkillDocument> // reuses document_buffer, returns shared immutable content
+    pub fn activate_skill(&mut self, id: &SkillId) -> Result<SkillDocument> // renders through document_buffer, returns an owned snapshot
 }
 
 mod bake {
@@ -98,9 +110,9 @@ Notes:
 - `SkillSet` is the agent-facing cache and tool surface. Context adapters and skill tools should receive the shared `SkillSet`, not the registry.
 - Share one `SkillSet` between the context adapter and skill tools, typically as `Arc<Mutex<SkillSet>>`, so `catalog_buffer` and `document_buffer` are reused.
 - `CatalogSnapshot` stores structured skill metadata only, with `Arc<[Skill]>` so cloning `Arc<CatalogSnapshot>` never clones the skill list. Rendered prompt text and JSON list output live in `SkillSet::catalog_buffer`.
-- `list_skill()` returns JSON catalog, matching master behavior. `catalog_context()` returns prompt text such as `Available skills:\n- id: description\n...`.
-- `activate_skill()` strips `SKILL.md` frontmatter, expands `{CUR_SKILL_DIR}`, wraps the result like master's `<skill_content name="skill_id">...</skill_content>`, and returns immutable shared content.
-- `SkillDocument` is immutable and shareable so tool callers can avoid holding a `SkillSet` lock while formatting or returning content.
+- `list_skill()` returns a borrowed JSON catalog buffer, matching master behavior. Callers that need to release the `SkillSet` lock before returning should copy it into their output. `catalog_context()` returns prompt text such as `Available skills:\n- id: description\n...`.
+- `activate_skill()` strips `SKILL.md` frontmatter, expands `{CUR_SKILL_DIR}`, wraps the result like master's `<skill_content name="skill_id">...</skill_content>`, and returns an owned document snapshot.
+- `SkillDocument` owns its content so tool callers can avoid holding a `SkillSet` lock while formatting or returning content.
 - `activate_skill()` is a one-shot document load for the current tool result/context flow. It does not create persistent loaded-skill state in this design pass.
 - `SKILL.md` frontmatter is a JSON object wrapped by `---`. Master requires `name`, `description`, and `metadata`; `author` is optional.
 - `metadata.manage_mode` accepts `readonly`, `web`, or `runtime`; device runtime treats `web` as `readonly`.

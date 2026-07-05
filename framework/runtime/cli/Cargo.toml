@@ -15,7 +15,7 @@ path = "src/orchestrator_cli.rs"
 
 [dependencies]
 claw-core = { path = "../claw-core" }
-claw-capability = { path = "../claw-capability" }
+claw-tool = { path = "../claw-tool" }
 claw-log = { path = "../claw-log" }
 claw-api = { path = "../claw-api" }
 claw-interface = { path = "../claw-interface", features = ["host-backends"] }

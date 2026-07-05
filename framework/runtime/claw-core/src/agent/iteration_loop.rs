@@ -13,11 +13,11 @@ use std::sync::Arc;
 use serde_json::Value;
 
 use claw_api::{ChatError, ChatRequest, ClawApiAsync, LlmResponse, RetryPolicy};
-use claw_capability::{
+use claw_interface::{Cancel, ClawHttp, ClawTimer};
+use claw_tool::{
     ApprovalNeeded, RawToolInvocation, ToolGate, ToolInvocation, ToolRunOutcome, ToolRunner,
     ToolSetError, ToolSetHandle,
 };
-use claw_interface::{Cancel, ClawHttp, ClawTimer};
 
 use claw_utils::TruncatedText;
 
@@ -510,8 +510,8 @@ mod tests {
 
     use super::*;
     use claw_api::{ClawApiError, ToolCall};
-    use claw_capability::{
-        CapabilityRegistry, SyncToolHandler, Tool, ToolInvokeError, ToolOutput, ToolSet, ToolSpec,
+    use claw_tool::{
+        SyncToolHandler, Tool, ToolInvokeError, ToolOutput, ToolRegistry, ToolSet, ToolSpec,
     };
     use serde_json::json;
 
@@ -532,7 +532,7 @@ mod tests {
     }
 
     fn tool_set(tool: impl SyncToolHandler + 'static) -> ToolSet {
-        let registry = CapabilityRegistry::new();
+        let registry = ToolRegistry::new();
         let mut tools = registry.tool_set();
         tools.add_tool(Tool::from_sync(tool)).expect("tool set");
         tools
@@ -880,16 +880,16 @@ mod behavior_tests {
     use std::task::{Wake, Waker};
 
     use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig, RetryPolicy};
-    use claw_capability::{
-        CapabilityRegistry, SyncToolHandler, Tool, ToolError, ToolGate, ToolInvocation,
-        ToolInvokeError, ToolOutput, ToolSet, ToolSpec,
-    };
     use claw_interface::http::{
         blocking::{ClawHttp as BlockingClawHttp, RealHttp},
         HttpError, HttpJsonRequest, HttpRequestFailure, HttpResponse, HttpStatusCode,
     };
     use claw_interface::{BlockingHttpAdapter, ClawHttp, ClawTimer, ImmediateTimer};
     use claw_permission::{Action, PermissionDecision};
+    use claw_tool::{
+        SyncToolHandler, Tool, ToolError, ToolGate, ToolInvocation, ToolInvokeError, ToolOutput,
+        ToolRegistry, ToolSet, ToolSpec,
+    };
     use serde_json::{json, Value};
 
     use super::{
@@ -1193,7 +1193,7 @@ mod behavior_tests {
 
     /// Wrap a single local tool in a [`ToolSet`] for tests.
     fn tool_set(tool: impl SyncToolHandler + 'static) -> ToolSet {
-        let registry = CapabilityRegistry::new();
+        let registry = ToolRegistry::new();
         let mut tools = registry.tool_set();
         tools.add_tool(Tool::from_sync(tool)).expect("tool set");
         tools

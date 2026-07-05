@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
-use claw_capability::{
+use claw_permission::{Action, RiskClass};
+use claw_tool::{
     tool_metadata, SyncToolHandler, ToolError, ToolInvocation, ToolInvokeError, ToolOutput,
     ToolSpec,
 };
-use claw_permission::{Action, RiskClass};
 
 use crate::agent::base_agent::AgentId;
 use crate::agent::graph::AgentContext;
@@ -73,7 +73,7 @@ mod tests {
     use super::*;
     use crate::agent::graph::test_support::{host_with_tree, snap};
     use crate::agent::graph::GraphHost;
-    use claw_capability::RawToolInvocation;
+    use claw_tool::RawToolInvocation;
 
     fn call<'a>(id: &'a str, arguments_json: &'a str) -> ToolInvocation<'a> {
         ToolInvocation::try_from(RawToolInvocation {

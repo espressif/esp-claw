@@ -18,9 +18,9 @@ name = "claw-agent-chat"
 path = "src/bin/claw-agent-chat.rs"
 required-features = ["dev"]
 
-# The capability-loop reference example uses test doubles plus dev workflow deps.
+# The channel/tool reference example uses test doubles plus dev workflow deps.
 [[example]]
-name = "capability_loop"
+name = "channel_tool_loop"
 required-features = ["dev"]
 
 [features]
@@ -34,7 +34,7 @@ required-features = ["dev"]
 #   host-backends plus CLI/example dependencies.
 #
 # Nothing is enabled by default so library/device consumers must choose their
-# backend explicitly. Firmware uses `AgentSystem::new::<F, H, Timer>(...)` with
+# backend explicitly. Firmware uses `AgentSystem::<F, H, Timer>::new(...)` with
 # ESP-IDF backends injected by `claw-cabi`.
 default = []
 host-backends = [
@@ -50,9 +50,8 @@ dev = [
 [dependencies]
 claw-core = { path = "../claw-core" }
 claw-api = { path = "../claw-api" }
-claw-skill = { path = "../claw-skill" }
-# The capability surface used by the agent system.
-claw-capability = { path = "../claw-capability" }
+claw-channel = { path = "../claw-channel" }
+claw-tool = { path = "../claw-tool" }
 # Conversation/long-term memory. The compaction policy is wired internally
 # (the LLM-backed `LlmCompactor`), so no stub-compactor feature is needed.
 claw-memory = { path = "../claw-memory" }
@@ -71,7 +70,7 @@ tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"], optional
 claw-context = { path = "../claw-context" }
 # In-memory fs + scripted HTTP doubles so the end-to-end tests run hermetically
 # (no network, no API key) entirely through the public API; `stdthread` is the
-# host-target executor backend used by capability/tool tests.
+# host-target executor backend used by channel/tool tests.
 claw-interface = { path = "../claw-interface", features = ["test-doubles", "stdthread"] }
 claw-utils = { path = "../claw-utils" }
 serde_json = "1"

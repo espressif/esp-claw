@@ -1,6 +1,6 @@
 //! `end_conversation(final_message)` — the agent ends the task on its own terms.
 
-use claw_capability::{
+use claw_tool::{
     tool_metadata, SyncToolHandler, ToolInvocation, ToolInvokeError, ToolOutput, ToolSpec,
 };
 
@@ -39,7 +39,7 @@ impl SyncToolHandler for EndConversationTool {
 mod tests {
     use super::super::test_support::sink;
     use super::*;
-    use claw_capability::{RawToolInvocation, ToolError};
+    use claw_tool::{RawToolInvocation, ToolError};
 
     fn call<'a>(arguments_json: &'a str) -> ToolInvocation<'a> {
         ToolInvocation::try_from(RawToolInvocation {

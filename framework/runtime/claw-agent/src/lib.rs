@@ -1,106 +1,32 @@
-//! `claw_agent` — the concise external interface to the claw agent system.
+//! `claw_agent` wires channels and tools to the core orchestrator.
 //!
-//! Everything under `rust/` (the orchestrator, the agent factory, channels,
-//! scratch memory, and the LLM client) is wired together here behind one small
-//! surface:
-//!
-//! - [`AgentSystem`] is a ready-to-drive agent runtime. Build it with the
-//!   host-backend [`AgentSystem::on_disk`] (real disk memory + live HTTP,
-//!   requires `host-backends`) or the fully injectable [`AgentSystem::new`]
-//!   (for device, tests, or custom backends).
-//! - Channels are registered as capabilities and opened with
-//!   [`AgentSystem::start`]. A session must be explicitly bound with
-//!   [`AgentSystem::bind_session`] before channel submissions go through
-//!   [`AgentSystem::push_message`].
-//!
-//! Internally a message goes: channel or event router -> channel router ->
-//! `claw_core::Orchestrator` (drives the per-session agent graph) -> registered
-//! channel.
-//!
-//! # Examples
-//!
-//! ```no_run
-//! # #[cfg(feature = "dev")]
-//! # {
-//! use std::sync::Arc;
-//! use claw_agent::{AgentSystem, BackendKind, ClawApiConfig, InboundMessage, Registry};
-//! use claw_agent::AgentPersistenceConfig;
-//!
-//! # #[tokio::main]
-//! # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let llm = ClawApiConfig::new(
-//!     BackendKind::OpenAiCompatible,
-//!     "sk-...",
-//!     "gpt-4o-mini",
-//!     "https://api.openai.com/v1",
-//! );
-//!
-//! let persistence = AgentPersistenceConfig::new("/tmp/claw");
-//! let registry = Arc::new(Registry::new());
-//! // Register a "local" channel capability in `registry` before starting.
-//! let system = AgentSystem::on_disk(llm, persistence, registry)?;
-//! let session = system.new_session();
-//! system.bind_session(session, "local", "chat")?;
-//! system.push_message(InboundMessage {
-//!     message_id: "m1".into(),
-//!     channel: "local".into(),
-//!     chat_id: "chat".into(),
-//!     sender_id: None,
-//!     text: "hello".into(),
-//!     ..Default::default()
-//! }).await?;
-//! # Ok(())
-//! # }
-//! # }
-//! ```
+//! `AgentSystem` owns sessions and remembers where each session should send
+//! replies. It does not auto-bind channel chats to sessions; embedding layers
+//! choose the session and call `submit_channel`.
 
-mod capability;
-mod channel_router;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, MutexGuard};
 
-use std::sync::Arc;
-
-use channel_router::ChannelRouter;
-use claw_capability::init_tool_executor;
-use claw_core::{AgentResolver, Orchestrator, OrchestratorBuildError};
-use claw_interface::{ClawHttp, ClawThread, ClawTimer, FsError};
-#[cfg(feature = "host-backends")]
-use claw_interface::{RealHttp, StdThread, TokioTimer};
-
-// Re-exported so callers can configure the system without depending on the lower
-// crates directly. These names are also used internally below.
-pub use capability::RegistryResolver;
-// The capability surface callers build their device from — re-exported so they
-// depend on `claw_agent` alone, not the lower crates.
-pub use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
-pub use claw_capability::{
-    Capability, CapabilityError, CapabilityGroup, CapabilityRole, CapabilityState, ChannelAdapter,
-    ChannelFuture, ChannelRuntime, InboundMessage, Lifecycle, OutboundMessage, Registry,
+use claw_api::ClawApiConfig;
+use claw_channel::{
+    ChannelInbound, ChannelOutbound, ChannelRegistry, ChannelRegistryError, ChannelSink,
+    ChannelTarget, ChannelTargetOwned,
 };
-// The tool-authoring vocabulary, re-exported *through* `claw_capability` (not
-// `claw_tool`). A caller builds a Tool capability by implementing one of these
-// handler traits, wrapping it with `Tool::new` / `Tool::new_async`, and handing
-// that to `Capability::from_tool`; the rest of the tool framework (`ToolSet`, the
-// executor) stays internal.
-pub use claw_capability::{
-    tool_metadata, AsyncToolHandler, Tool, ToolError, ToolFuture, ToolHandler, ToolInvocation,
-    ToolInvokeError, ToolOutput, ToolRetryCount,
+use claw_core::{
+    DeliverError, DeliveryKind, DriveOutput, Orchestrator, OrchestratorBuildError, SessionError,
+    SessionId,
 };
-pub use claw_core::{DeliverError, DeliveryKind, SessionError, SessionId};
-pub use claw_interface::ClawFs;
-// The on-disk filesystem backend is a host-target convenience; device builds
-// inject their own `ClawFs` through `AgentSystem::<F, H, Timer>::new::<Thread>(...)`.
+use claw_interface::{ClawFs, ClawHttp, ClawTimer, FsError};
 #[cfg(feature = "host-backends")]
-pub use claw_interface::DiskFs;
+use claw_interface::{DiskFs, RealHttp, TokioTimer};
+use claw_tool::{ToolRegistry, ToolRegistryError};
 
 #[cfg(feature = "host-backends")]
 pub type HostAgentSystem = AgentSystem<DiskFs, RealHttp, TokioTimer>;
 
+pub type AgentResult<T> = Result<T, AgentError>;
+
 /// Explicit storage root for an [`AgentSystem`].
-///
-/// Callers provide one directory. The agent system clears it on construction and
-/// owns the layout below it for the running process: transcripts live under
-/// `sessions`, editable profile documents under `profile`, and long-term memory
-/// under `long_term`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentPersistenceConfig {
     dir: String,
@@ -115,50 +41,49 @@ impl AgentPersistenceConfig {
     }
 }
 
-/// External channel/chat bound to a live agent session.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SessionBinding {
-    pub channel: String,
-    pub chat_id: String,
-}
-
-impl SessionBinding {
-    pub fn new(channel: impl Into<String>, chat_id: impl Into<String>) -> Self {
-        Self {
-            channel: channel.into(),
-            chat_id: chat_id.into(),
-        }
-    }
+struct SessionTarget {
+    target: ChannelTargetOwned,
+    correlation_id: Option<String>,
 }
 
 /// One live conversation session as exposed by [`AgentSystem`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionRecord {
     pub id: SessionId,
-    pub binding: Option<SessionBinding>,
+    pub target: Option<ChannelTargetOwned>,
 }
 
-/// What can go wrong while building an [`AgentSystem`].
+/// What can go wrong while building or driving an [`AgentSystem`].
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
     /// No storage directory was provided.
     #[error("agent storage directory is required")]
     MissingPersistenceDir,
-    /// The fixed tool-call executor could not start.
-    #[error("failed to start the tool executor: {0}")]
-    ToolExecutor(#[source] std::io::Error),
-    /// The dedicated extraction LLM client (for long-term memory) failed to init.
+    /// The dedicated extraction LLM client failed to init.
     #[error("failed to initialize the extraction LLM client: {0}")]
     ExtractionLlm(String),
-    /// A channel capability had an empty id.
-    #[error("channel id is required")]
-    MissingChannelId,
-    /// Two registered channel capabilities used the same id.
-    #[error("duplicate channel id: {0}")]
-    DuplicateChannel(String),
     /// A long-term memory journal exists but could not be read at startup.
     #[error("failed to load long-term memory: {0}")]
     LongTermInit(String),
+    /// A channel input did not carry a usable target.
+    #[error("invalid channel input")]
+    InvalidChannelInput,
+    /// A reply was produced before this session had a target.
+    #[error("no reply target for {0}")]
+    NoReplyTarget(SessionId),
+    /// The tool registry failed.
+    #[error(transparent)]
+    Tool(#[from] ToolRegistryError),
+    /// A channel operation failed.
+    #[error(transparent)]
+    Channel(#[from] ChannelRegistryError),
+    /// Core delivery failed.
+    #[error(transparent)]
+    Deliver(#[from] DeliverError),
+    /// Session operation failed.
+    #[error(transparent)]
+    Session(#[from] SessionError),
     /// The scratch storage root could not be cleared before startup.
     #[error("failed to clear agent storage at {path}: {source}")]
     StorageClear {
@@ -179,18 +104,16 @@ impl From<OrchestratorBuildError> for AgentError {
 }
 
 /// A ready-to-drive agent runtime.
-///
-/// Wraps a channel router plus a `claw_core::Orchestrator`. Registered channel
-/// capabilities are opened through [`start`](AgentSystem::start); event-router
-/// style direct submissions use [`push_message`](AgentSystem::push_message).
 pub struct AgentSystem<F, H, Timer>
 where
     F: ClawFs + Clone + Default + 'static,
     H: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
-    registry: Arc<Registry>,
-    router: Arc<ChannelRouter<F, H, Timer>>,
+    tools: Arc<ToolRegistry>,
+    channels: Arc<ChannelRegistry>,
+    orchestrator: Arc<Orchestrator<F, H, Timer>>,
+    session_targets: Arc<Mutex<HashMap<SessionId, SessionTarget>>>,
 }
 
 impl<F, H, Timer> Clone for AgentSystem<F, H, Timer>
@@ -201,8 +124,10 @@ where
 {
     fn clone(&self) -> Self {
         Self {
-            registry: Arc::clone(&self.registry),
-            router: Arc::clone(&self.router),
+            tools: Arc::clone(&self.tools),
+            channels: Arc::clone(&self.channels),
+            orchestrator: Arc::clone(&self.orchestrator),
+            session_targets: Arc::clone(&self.session_targets),
         }
     }
 }
@@ -213,41 +138,15 @@ where
     H: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
-    /// Build a fully injectable agent system. Use this for device builds, tests,
-    /// or custom backends; for the common host case prefer
-    /// [`AgentSystem::on_disk`].
-    ///
-    /// `F` is the concrete [`ClawFs`] backing the agent system's scratch storage
-    /// (conversation transcripts and long-term memory) and `H` is the concrete
-    /// async HTTP transport every LLM client speaks through. The system constructs
-    /// both internally via [`Default`], so callers choose them by *type* —
-    /// [`DiskFs`] + [`RealHttp`] on a host, in-memory/scripted doubles in tests —
-    /// and never pass an instance; pair `F` with the required
-    /// [`AgentPersistenceConfig`], which fixes where files land. The storage root
-    /// is cleared before any agent/session state is built, so the current runtime
-    /// does not resume sessions across boot. A [`Registry`] is also required; pass
-    /// an empty registry when no external capabilities are available. Each minted
-    /// client (one per agent, plus the extraction client) gets its own
-    /// `H::default()` and `Timer::default()`.
-    ///
-    /// The fixed tool executor is initialized here from `Thread::default()`, so
-    /// callers never touch it directly — the tool framework stays an internal
-    /// detail of the agent system.
+    /// Build a fully injectable agent system.
     ///
     /// # Errors
     ///
-    /// Returns [`AgentError::MissingPersistenceDir`] when the required storage
-    /// root is blank; [`AgentError::StorageClear`] if boot cleanup fails;
-    /// [`AgentError::ToolExecutor`] if the tool executor thread cannot start;
-    /// [`AgentError::ExtractionLlm`] if the extraction LLM client fails to init.
-    pub fn new<Thread>(
+    /// Returns [`AgentError`] when storage cleanup or orchestrator construction fails.
+    pub fn new(
         llm_config: ClawApiConfig,
         persistence: AgentPersistenceConfig,
-        registry: Arc<Registry>,
-    ) -> Result<Self, AgentError>
-    where
-        Thread: ClawThread + Default + 'static,
-    {
+    ) -> AgentResult<Self> {
         let persistence_dir = persistence.dir;
         if persistence_dir.trim().is_empty() {
             return Err(AgentError::MissingPersistenceDir);
@@ -255,180 +154,195 @@ where
         let storage = F::default();
         clear_storage_tree(&storage, &persistence_dir)?;
 
-        // Own the fixed tool executor from within the system so callers never
-        // initialize global tool state themselves. Idempotent: a repeated init
-        // (e.g. multiple systems in one process) is a no-op.
-        init_tool_executor(Thread::default()).map_err(AgentError::ToolExecutor)?;
-        // The capability registry is the source of truth for tools and channel
-        // transports.
-        let resolver: Arc<dyn AgentResolver> =
-            Arc::new(RegistryResolver::new(Arc::clone(&registry)));
-
+        let tools = Arc::new(ToolRegistry::new());
+        let channels = Arc::new(ChannelRegistry::new(ChannelSink::default()));
         let orchestrator = Arc::new(Orchestrator::<F, H, Timer>::new(
-            resolver,
+            Arc::clone(&tools),
             llm_config,
             &persistence_dir,
         )?);
-        let router = ChannelRouter::new(orchestrator, registry.as_ref())?;
 
-        Ok(Self { registry, router })
+        Ok(Self {
+            tools,
+            channels,
+            orchestrator,
+            session_targets: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+
+    /// Tool registry used by this system.
+    pub fn tool_registry(&self) -> &ToolRegistry {
+        &self.tools
+    }
+
+    /// Channel registry used by this system.
+    pub fn channel_registry(&self) -> &ChannelRegistry {
+        &self.channels
+    }
+
+    /// Start every registered tool and stopped channel.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError`] when any registry fails to start.
+    pub fn start_all(&self) -> AgentResult<()> {
+        self.tools.start_all()?;
+        self.channels.start_all()?;
+        Ok(())
+    }
+
+    /// Stop channels, then tools.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError`] when any registry fails to stop.
+    pub fn stop_all(&self) -> AgentResult<()> {
+        self.channels.stop_all()?;
+        self.tools.stop_all()?;
+        Ok(())
+    }
+
+    /// Submit one channel input to an explicitly chosen session.
+    ///
+    /// Channel input defaults to [`DeliveryKind::Interrupt`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError`] when the session, input, delivery, or outbound send fails.
+    pub async fn submit_channel(
+        &self,
+        session: SessionId,
+        input: ChannelInbound,
+    ) -> AgentResult<()> {
+        self.validate_session(session)?;
+        validate_channel_input(&input)?;
+        self.remember_target(session, &input);
+
+        let Some(text) = session_text(&input) else {
+            return Ok(());
+        };
+
+        let output = self
+            .orchestrator
+            .submit(session, text, DeliveryKind::Interrupt)
+            .await?;
+        self.surface_output(output)
+    }
+
+    /// Create a fresh isolated conversation session.
+    pub fn new_session(&self) -> SessionId {
+        self.orchestrator.session_create()
+    }
+
+    /// Return the live conversation sessions.
+    pub fn list_sessions(&self) -> Vec<SessionRecord> {
+        let targets = self.session_targets();
+        self.orchestrator
+            .session_list()
+            .into_iter()
+            .map(|id| SessionRecord {
+                id,
+                target: targets.get(&id).map(|target| target.target.clone()),
+            })
+            .collect()
+    }
+
+    /// Delete a session and forget its channel target.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError::NotFound`] when `session` is not live.
+    pub fn delete_session(&self, session: SessionId) -> AgentResult<()> {
+        self.orchestrator.session_delete(session)?;
+        self.session_targets().remove(&session);
+        Ok(())
+    }
+
+    fn validate_session(&self, session: SessionId) -> AgentResult<()> {
+        if self.orchestrator.session_list().contains(&session) {
+            Ok(())
+        } else {
+            Err(SessionError::NotFound(session).into())
+        }
+    }
+
+    fn remember_target(&self, session: SessionId, input: &ChannelInbound) {
+        let target = input.target.clone().unwrap_or_else(|| ChannelTargetOwned {
+            channel: input.channel.clone(),
+            chat_id: input.chat_id.clone(),
+        });
+        let correlation_id = input
+            .correlation_id
+            .clone()
+            .or_else(|| input.message_id.clone());
+        self.session_targets().insert(
+            session,
+            SessionTarget {
+                target,
+                correlation_id,
+            },
+        );
+    }
+
+    fn surface_output(&self, output: DriveOutput) -> AgentResult<()> {
+        for reply in output.replies {
+            let route = self
+                .session_targets()
+                .get(&reply.session)
+                .cloned()
+                .ok_or(AgentError::NoReplyTarget(reply.session))?;
+            self.channels.send(ChannelOutbound {
+                target: ChannelTarget {
+                    channel: &route.target.channel,
+                    chat_id: &route.target.chat_id,
+                },
+                text: Some(&reply.text),
+                attachments: &[],
+                message_id: None,
+                correlation_id: route.correlation_id.as_deref(),
+                payload_json: None,
+            })?;
+        }
+        Ok(())
+    }
+
+    fn session_targets(&self) -> MutexGuard<'_, HashMap<SessionId, SessionTarget>> {
+        self.session_targets
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
     }
 }
 
 #[cfg(feature = "host-backends")]
 impl AgentSystem<DiskFs, RealHttp, TokioTimer> {
-    /// Build a host-target agent system backed by real disk memory and live HTTP
-    /// transport.
-    ///
-    /// `persistence` provides the agent system's root storage directory. The
-    /// system clears it on construction and derives its internal layout below
-    /// that root. `registry` supplies every device capability/channel; pass an
-    /// empty registry when no capabilities should be exposed.
-    ///
-    /// Host-target convenience (requires the `host-backends` feature): it
-    /// constructs the [`DiskFs`] / [`RealHttp`] / [`StdThread`] backends
-    /// directly. Device builds use
-    /// [`AgentSystem::<F, H, Timer>::new::<Thread>(...)`](Self::new) with
-    /// injected ESP-IDF backends instead.
+    /// Build a host-target agent system backed by disk memory and live HTTP.
     ///
     /// # Errors
     ///
-    pub fn on_disk(
-        llm: ClawApiConfig,
-        persistence: AgentPersistenceConfig,
-        registry: Arc<Registry>,
-    ) -> Result<Self, AgentError> {
-        Self::new::<StdThread>(llm, persistence, registry)
+    /// Returns [`AgentError`] when construction fails.
+    pub fn on_disk(llm: ClawApiConfig, persistence: AgentPersistenceConfig) -> AgentResult<Self> {
+        Self::new(llm, persistence)
     }
 }
 
-impl<F, H, Timer> AgentSystem<F, H, Timer>
-where
-    F: ClawFs + Clone + Default + 'static,
-    H: ClawHttp + Default + 'static,
-    Timer: ClawTimer + Default + 'static,
-{
-    /// Open all registered channels and start capability lifecycles.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CapabilityError`] when a channel refuses to open or a registered
-    /// lifecycle hook fails.
-    pub fn start(&self) -> Result<(), CapabilityError> {
-        self.router.open()?;
-        if let Err(error) = self.registry.start_all() {
-            let _ = self.router.close();
-            return Err(error);
+fn validate_channel_input(input: &ChannelInbound) -> AgentResult<()> {
+    if input.channel.trim().is_empty() || input.chat_id.trim().is_empty() {
+        return Err(AgentError::InvalidChannelInput);
+    }
+    if let Some(target) = &input.target {
+        if target.channel.trim().is_empty() || target.chat_id.trim().is_empty() {
+            return Err(AgentError::InvalidChannelInput);
         }
-        Ok(())
     }
+    Ok(())
+}
 
-    /// Open registered channels with an embedding-provided runtime, then start
-    /// capability lifecycles.
-    ///
-    /// Embedding layers that already own the agent executor use this to hand
-    /// channels a queue/sink runtime instead of the direct in-process router.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CapabilityError`] when a channel refuses to open or a registered
-    /// lifecycle hook fails.
-    pub fn start_with_runtime(
-        &self,
-        runtime: Arc<dyn ChannelRuntime>,
-    ) -> Result<(), CapabilityError> {
-        self.router.open_with_runtime(runtime)?;
-        if let Err(error) = self.registry.start_all() {
-            let _ = self.router.close();
-            return Err(error);
-        }
-        Ok(())
-    }
-
-    /// Stop capability lifecycles and close registered channels.
-    ///
-    /// # Errors
-    ///
-    /// Returns the first close/stop failure.
-    pub fn stop(&self) -> Result<(), CapabilityError> {
-        let close_result = self.router.close();
-        let lifecycle_result = self.registry.stop_all();
-        close_result?;
-        lifecycle_result
-    }
-
-    /// Submit one inbound channel message directly. The `(channel, chat_id)`
-    /// pair must already be explicitly bound to a live session.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CapabilityError::NotFound`] when `message.channel` has no
-    /// registered channel capability or the chat is not bound to a session.
-    pub async fn push_message(&self, message: InboundMessage) -> Result<(), CapabilityError> {
-        self.router.push_message(message).await
-    }
-
-    /// Submit `message` with [`DeliveryKind::Interrupt`]. In-flight effect (cutting
-    /// a running drive short) requires the concurrent worker; a serial caller sees
-    /// this as an ordinary append when nothing is running.
-    ///
-    /// # Errors
-    ///
-    /// See [`push_message`](Self::push_message).
-    pub async fn interrupt(&self, message: InboundMessage) -> Result<(), CapabilityError> {
-        self.router
-            .push_with_kind(message, DeliveryKind::Interrupt)
-            .await
-    }
-
-    /// Submit `message` with [`DeliveryKind::Cancel`], superseding any active task
-    /// in the resolved session before this message starts a fresh one.
-    ///
-    /// # Errors
-    ///
-    /// See [`push_message`](Self::push_message).
-    pub async fn cancel(&self, message: InboundMessage) -> Result<(), CapabilityError> {
-        self.router
-            .push_with_kind(message, DeliveryKind::Cancel)
-            .await
-    }
-
-    /// Create a fresh, isolated conversation session and return its id.
-    pub fn new_session(&self) -> SessionId {
-        self.router.new_session()
-    }
-
-    /// Bind an existing session to an external channel chat.
-    ///
-    /// Inbound channel messages are accepted only after this explicit binding.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CapabilityError::NotFound`] when `session` is not live or
-    /// `channel` is not a registered channel capability, and
-    /// [`CapabilityError::AlreadyExists`] when the session or chat is already
-    /// bound to a different counterpart.
-    pub fn bind_session(
-        &self,
-        session: SessionId,
-        channel: &str,
-        chat_id: &str,
-    ) -> Result<(), CapabilityError> {
-        self.router.bind_session(session, channel, chat_id)
-    }
-
-    /// Return the live conversation sessions.
-    pub fn list_sessions(&self) -> Vec<SessionRecord> {
-        self.router.list_sessions()
-    }
-
-    /// Delete a conversation session and drop its live agent graph.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SessionError::NotFound`] when `session` is not live.
-    pub fn delete_session(&self, session: SessionId) -> Result<(), CapabilityError> {
-        self.router.delete_session(session)
+fn session_text(input: &ChannelInbound) -> Option<String> {
+    let text = input.text.as_ref()?;
+    if text.trim().is_empty() {
+        None
+    } else {
+        Some(text.clone())
     }
 }
 
@@ -444,23 +358,17 @@ fn join_storage_path(parent: &str, child: &str) -> String {
     }
 }
 
-fn clear_storage_tree<F: ClawFs>(fs: &F, path: &str) -> Result<(), AgentError> {
+fn clear_storage_tree<F: ClawFs>(fs: &F, path: &str) -> AgentResult<()> {
     match fs.list_dir(path) {
         Ok(entries) => {
             for entry in entries {
                 let child = join_storage_path(path, &entry);
                 clear_storage_tree(fs, &child)?;
             }
-            // `ClawFs` has no portable directory-delete operation. Removing the
-            // exact path clears flat backends when this is a file key; directory
-            // errors are ignored after their contents have been removed.
             let _ = fs.remove(path);
             Ok(())
         }
-        Err(FsError::NotFound) => fs.remove(path).map_err(|source| AgentError::StorageClear {
-            path: path.to_string(),
-            source,
-        }),
+        Err(FsError::NotFound) => Ok(()),
         Err(source) => Err(AgentError::StorageClear {
             path: path.to_string(),
             source,
@@ -471,9 +379,39 @@ fn clear_storage_tree<F: ClawFs>(fs: &F, path: &str) -> Result<(), AgentError> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use claw_interface::MemFs;
+    use core::future::Future;
+    use core::task::Context;
+    use std::sync::{Arc, Mutex};
+    use std::task::{Wake, Waker};
+
+    use claw_api::{BackendKind, ClawApiConfig};
+    use claw_channel::{
+        Channel, ChannelHandler, ChannelInbound, ChannelOutbound, ChannelResult, ChannelRuntime,
+        ChannelSink, ChannelTargetOwned,
+    };
+    use claw_interface::{BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp};
+    use serde_json::json;
 
     use super::*;
+
+    type TestSystem = AgentSystem<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>;
+
+    struct NoopWake;
+
+    impl Wake for NoopWake {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let mut future = Box::pin(future);
+        let waker = Waker::from(Arc::new(NoopWake));
+        let mut context = Context::from_waker(&waker);
+        loop {
+            if let std::task::Poll::Ready(value) = future.as_mut().poll(&mut context) {
+                return value;
+            }
+        }
+    }
 
     #[test]
     fn clear_storage_tree_removes_nested_files() {
@@ -490,5 +428,110 @@ mod tests {
         assert!(!fs.exists("/agent/sessions/roots/conversation-1.jsonl"));
         assert!(!fs.exists("/agent/sessions/agents/conversation-2.jsonl"));
         assert!(!fs.exists("/agent/profile/user.md"));
+    }
+
+    #[test]
+    fn list_sessions_projects_targets() {
+        let system = test_system(vec![], Arc::new(Mutex::new(Vec::new())));
+        let session = system.new_session();
+        block_on(system.submit_channel(session, inbound(None))).unwrap();
+
+        let sessions = system.list_sessions();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].id, session);
+        assert_eq!(
+            sessions[0].target.as_ref(),
+            Some(&ChannelTargetOwned {
+                channel: "web".into(),
+                chat_id: "chat".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn submit_channel_routes_root_reply_to_target() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let system = test_system(vec![assistant_text("hello there")], Arc::clone(&sent));
+        let session = system.new_session();
+
+        block_on(system.submit_channel(session, inbound(Some("say hi")))).unwrap();
+
+        assert_eq!(sent.lock().unwrap().as_slice(), ["hello there"]);
+    }
+
+    #[test]
+    fn submit_channel_requires_existing_session() {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let system = test_system(vec![], sent);
+        let error = block_on(system.submit_channel(SessionId(9), inbound(Some("x")))).unwrap_err();
+        assert!(
+            matches!(error, AgentError::Session(SessionError::NotFound(id)) if id == SessionId(9))
+        );
+    }
+
+    fn test_system(bodies: Vec<String>, sent: Arc<Mutex<Vec<String>>>) -> TestSystem {
+        let mut script = Vec::with_capacity(bodies.len().saturating_mul(2));
+        for body in bodies {
+            script.push(assistant_text("[]"));
+            script.push(body);
+        }
+        SharedScriptHttp::install(script);
+
+        let system = TestSystem::new(llm_config(), AgentPersistenceConfig::new("/mem")).unwrap();
+        system
+            .channel_registry()
+            .register(Channel::from_handler(TestChannel { sent }))
+            .unwrap();
+        system
+    }
+
+    fn llm_config() -> ClawApiConfig {
+        ClawApiConfig::new(
+            BackendKind::OpenAiCompatible,
+            "sk-test",
+            "gpt-test",
+            "https://example.invalid",
+        )
+    }
+
+    fn assistant_text(text: &str) -> String {
+        json!({ "choices": [{ "message": { "role": "assistant", "content": text } }] }).to_string()
+    }
+
+    fn inbound(text: Option<&str>) -> ChannelInbound {
+        ChannelInbound {
+            channel: "web".into(),
+            chat_id: "chat".into(),
+            text: text.map(str::to_owned),
+            attachments: Vec::new(),
+            sender_id: None,
+            message_id: Some("m1".into()),
+            correlation_id: None,
+            timestamp_ms: None,
+            target: None,
+            content_type: None,
+            payload_json: None,
+        }
+    }
+
+    struct TestChannel {
+        sent: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl ChannelHandler for TestChannel {
+        fn name(&self) -> &str {
+            "web"
+        }
+
+        fn start(&self, _sink: ChannelSink) -> ChannelResult<ChannelRuntime> {
+            Ok(ChannelRuntime::default())
+        }
+
+        fn send(&self, message: ChannelOutbound<'_>) -> ChannelResult<()> {
+            if let Some(text) = message.text {
+                self.sent.lock().unwrap().push(text.to_owned());
+            }
+            Ok(())
+        }
     }
 }

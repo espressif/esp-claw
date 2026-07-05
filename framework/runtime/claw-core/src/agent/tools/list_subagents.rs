@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use claw_capability::{
+use claw_tool::{
     tool_metadata, SyncToolHandler, ToolInvocation, ToolInvokeError, ToolOutput, ToolSpec,
 };
 

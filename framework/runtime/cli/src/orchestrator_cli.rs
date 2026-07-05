@@ -24,9 +24,9 @@ use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 
 use claw_agent_cli::{load_env, make_llm_config, CliFs};
-use claw_capability::CapabilityRegistry;
 use claw_core::{DeliveryKind, Orchestrator};
 use claw_interface::{RealHttp, TokioTimer};
+use claw_tool::ToolRegistry;
 
 const MEMORY_DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -84,7 +84,7 @@ async fn main() {
     .expect("install tracing subscriber");
 
     let orchestrator = match Orchestrator::<CliFs, RealHttp, TokioTimer>::new(
-        Arc::new(CapabilityRegistry::new()),
+        Arc::new(ToolRegistry::new()),
         make_llm_config(),
         MEMORY_DIR,
     ) {

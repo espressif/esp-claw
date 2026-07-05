@@ -3,11 +3,11 @@
 
 use std::sync::Arc;
 
-use claw_capability::{
+use claw_permission::{Action, RiskClass};
+use claw_tool::{
     tool_metadata, SyncToolHandler, ToolError, ToolInvocation, ToolInvokeError, ToolOutput,
     ToolSpec,
 };
-use claw_permission::{Action, RiskClass};
 
 use crate::agent::graph::{AgentContext, SpawnPolicy, TerminationPolicy};
 use crate::agent::kind::AgentKind;
@@ -151,7 +151,7 @@ mod tests {
     use crate::agent::base_agent::AgentId;
     use crate::agent::graph::test_support::{context_for, spawned_kinds, RecordingHost};
     use crate::agent::graph::{GraphEffect, GraphHost};
-    use claw_capability::RawToolInvocation;
+    use claw_tool::RawToolInvocation;
 
     fn spawn_tool(host: Arc<RecordingHost>, policy: SpawnPolicy) -> SpawnSubagentTool {
         let context = context_for(host as Arc<dyn GraphHost>, AgentId(1));

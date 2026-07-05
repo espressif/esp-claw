@@ -1,19 +1,15 @@
 [package]
-name = "claw-capability"
+name = "claw-channel"
 authors = ["Finn(Ziheng) Sheng"]
 version = "0.1.0"
 edition = "2021"
-description = "Capability registry and tool projection"
+description = "Channel registry and channel I/O primitives"
 
 [lib]
 crate-type = ["rlib"]
 
 [dependencies]
-anyhow = "1"
-claw-permission = { path = "../claw-permission" }
-serde_json = "1"
 thiserror = "2"
-tracing = { version = "0.1", default-features = false, features = ["std"] }
 
 [lints.rust]
 unsafe_code = "forbid"

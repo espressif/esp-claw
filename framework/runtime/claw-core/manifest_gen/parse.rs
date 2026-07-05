@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use crate::model::{AgentJson, CapabilitiesJson, SkillsJson};
+use crate::model::{AgentJson, SkillsJson, ToolsJson};
 
 /// One fully-parsed, validated kind directory before the shared `common/` base is
 /// inherited. Strings are owned here; [`crate::agent_manifests::inherit_base`]
@@ -20,7 +20,7 @@ pub struct ParsedKind {
     pub allowed_kinds: Vec<String>,
     pub retries: u32,
     pub tool_block_retries: u32,
-    pub capabilities: Vec<String>,
+    pub tools: Vec<String>,
     pub skills: Vec<String>,
     /// Absolute path to `instructions.md`, embedded via `include_str!` in the
     /// generated code so the bytes are not duplicated into the generated source.
@@ -36,7 +36,7 @@ pub struct ParsedManifest {
     pub allowed_kinds: Vec<String>,
     pub retries: u32,
     pub tool_block_retries: u32,
-    pub capabilities: Vec<String>,
+    pub tools: Vec<String>,
     pub skills: Vec<String>,
     /// Absolute path to `instructions.md`, embedded via `include_str!` in the
     /// generated code so the bytes are not duplicated into the generated source.
@@ -50,7 +50,7 @@ pub struct ParsedManifest {
 /// script registers for `rerun-if-changed`.
 pub const MANIFEST_FILES: &[&str] = &[
     "agent.json",
-    "capabilities/capabilities.json",
+    "tools/tools.json",
     "skills/skills.json",
     "instructions.md",
 ];
@@ -59,7 +59,7 @@ pub const MANIFEST_FILES: &[&str] = &[
 /// is included so that *adding* one re-triggers the build (and fails it, since
 /// the shared base must not declare an agent kind).
 pub const COMMON_FILES: &[&str] = &[
-    "capabilities/capabilities.json",
+    "tools/tools.json",
     "skills/skills.json",
     "instructions.md",
     "agent.json",
@@ -67,23 +67,23 @@ pub const COMMON_FILES: &[&str] = &[
 
 /// The exact top-level entries a kind directory must contain — no more, no less.
 /// Two files plus the two metadata subdirectories; anything else fails the build.
-const KIND_ROOT_ENTRIES: &[&str] = &["agent.json", "instructions.md", "capabilities", "skills"];
+const KIND_ROOT_ENTRIES: &[&str] = &["agent.json", "instructions.md", "tools", "skills"];
 
 /// The exact top-level entries the shared `common/` base must contain: the two
 /// metadata subdirectories plus the shared `instructions.md` preamble prepended
 /// to every kind. No `agent.json` (it is not a kind).
-const COMMON_ROOT_ENTRIES: &[&str] = &["capabilities", "skills", "instructions.md"];
+const COMMON_ROOT_ENTRIES: &[&str] = &["tools", "skills", "instructions.md"];
 
-/// The sole file the `capabilities/` subdirectory may contain.
-const CAPABILITIES_DIR_ENTRIES: &[&str] = &["capabilities.json"];
+/// The sole file the `tools/` subdirectory may contain.
+const TOOLS_DIR_ENTRIES: &[&str] = &["tools.json"];
 
 /// The sole file the `skills/` subdirectory may contain.
 const SKILLS_DIR_ENTRIES: &[&str] = &["skills.json"];
 
-/// The shared `common/` base inherited by every kind: default capability/skill
+/// The shared `common/` base inherited by every kind: default tool/skill
 /// names plus the instructions preamble prepended to each kind's prompt.
 pub struct CommonBase {
-    pub capabilities: Vec<String>,
+    pub tools: Vec<String>,
     pub skills: Vec<String>,
     /// Absolute path to `common/instructions.md`, the shared preamble.
     pub instructions_path: PathBuf,
@@ -91,7 +91,7 @@ pub struct CommonBase {
 
 /// Parse the shared `common/` base at `common_dir`.
 ///
-/// `common/` carries the default `capabilities/`, `skills/`, and the
+/// `common/` carries the default `tools/`, `skills/`, and the
 /// `instructions.md` preamble inherited by every kind. All three are required
 /// (like a kind's), but it must **not** declare an agent kind: an `agent.json`
 /// there is an error.
@@ -99,12 +99,12 @@ pub struct CommonBase {
 /// # Errors
 ///
 /// Errors if `common/` contains `agent.json`, has a missing/stray entry, or if
-/// its `capabilities.json` / `skills.json` is malformed.
+/// its `tools.json` / `skills.json` is malformed.
 pub fn parse_common(common_dir: &Path) -> Result<CommonBase> {
     if common_dir.join("agent.json").is_file() {
         bail!(
             "{} must not contain agent.json: the shared base defines default \
-             capabilities/skills/instructions inherited by all kinds, not an agent kind",
+             tools/skills/instructions inherited by all kinds, not an agent kind",
             common_dir.display()
         );
     }
@@ -113,10 +113,10 @@ pub fn parse_common(common_dir: &Path) -> Result<CommonBase> {
     // holding exactly its one JSON file) plus the instructions preamble — no
     // more, no less.
     ensure_exact_entries(common_dir, COMMON_ROOT_ENTRIES)?;
-    ensure_exact_entries(&common_dir.join("capabilities"), CAPABILITIES_DIR_ENTRIES)?;
+    ensure_exact_entries(&common_dir.join("tools"), TOOLS_DIR_ENTRIES)?;
     ensure_exact_entries(&common_dir.join("skills"), SKILLS_DIR_ENTRIES)?;
 
-    let capabilities: CapabilitiesJson = read_json(common_dir, "capabilities/capabilities.json")?;
+    let tools: ToolsJson = read_json(common_dir, "tools/tools.json")?;
     let skills: SkillsJson = read_json(common_dir, "skills/skills.json")?;
 
     let instructions_path = common_dir.join("instructions.md");
@@ -128,7 +128,7 @@ pub fn parse_common(common_dir: &Path) -> Result<CommonBase> {
     }
 
     Ok(CommonBase {
-        capabilities: capabilities.capabilities,
+        tools: tools.tools,
         skills: skills.skills,
         instructions_path,
     })
@@ -149,7 +149,7 @@ pub fn parse_kind(dir: &Path) -> Result<ParsedKind> {
     // metadata subdirectories, each holding exactly its one JSON file. A missing
     // *or* stray entry fails the build before any content is parsed.
     ensure_exact_entries(dir, KIND_ROOT_ENTRIES)?;
-    ensure_exact_entries(&dir.join("capabilities"), CAPABILITIES_DIR_ENTRIES)?;
+    ensure_exact_entries(&dir.join("tools"), TOOLS_DIR_ENTRIES)?;
     ensure_exact_entries(&dir.join("skills"), SKILLS_DIR_ENTRIES)?;
 
     let agent: AgentJson = read_json(dir, "agent.json")?;
@@ -161,7 +161,7 @@ pub fn parse_kind(dir: &Path) -> Result<ParsedKind> {
         );
     }
 
-    let capabilities: CapabilitiesJson = read_json(dir, "capabilities/capabilities.json")?;
+    let tools: ToolsJson = read_json(dir, "tools/tools.json")?;
     let skills: SkillsJson = read_json(dir, "skills/skills.json")?;
 
     let instructions_path = dir.join("instructions.md");
@@ -179,7 +179,7 @@ pub fn parse_kind(dir: &Path) -> Result<ParsedKind> {
         allowed_kinds: agent.spawn.allowed_kinds,
         retries: agent.runtime.retries,
         tool_block_retries: agent.runtime.tool_block_retries,
-        capabilities: capabilities.capabilities,
+        tools: tools.tools,
         skills: skills.skills,
         instructions_path,
     })

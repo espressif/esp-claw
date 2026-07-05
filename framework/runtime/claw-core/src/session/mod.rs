@@ -96,9 +96,8 @@ impl SessionStore {
 /// This is a **core orchestration** concept, not a transport one: it describes
 /// how the driving layer treats an in-flight task, so it lives in `claw-core`
 /// beside [`Orchestrator`](crate::orchestrator::Orchestrator). Transports never
-/// name it — an [`InboundMessage`](claw_capability::InboundMessage) carries only
-/// an opaque `extra_context` hint, which is resolved into a `DeliveryKind` at the
-/// transport→session boundary via [`from_extra_context`](Self::from_extra_context).
+/// name it. A transport message may carry an opaque hint, which is resolved into
+/// a `DeliveryKind` at the transport/session boundary.
 ///
 /// See [`Orchestrator::submit`](crate::orchestrator::Orchestrator::submit) for
 /// how `Append`/`Interrupt`/`Cancel` are sequenced against an in-flight drive.

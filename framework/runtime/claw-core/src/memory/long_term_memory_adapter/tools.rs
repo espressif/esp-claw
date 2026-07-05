@@ -8,12 +8,12 @@
 //! returned by recall/list, which the adapter routes back to the owning store by
 //! its prefix.
 
-use claw_capability::{
+use claw_interface::ClawFs;
+use claw_memory::{MemoryDraft, MemoryId, MemoryItem, MemoryPatch, StoreOutcome};
+use claw_tool::{
     tool_metadata, SyncToolHandler, Tool, ToolError, ToolInvocation, ToolInvokeError, ToolOutput,
     ToolSpec,
 };
-use claw_interface::ClawFs;
-use claw_memory::{MemoryDraft, MemoryId, MemoryItem, MemoryPatch, StoreOutcome};
 use serde_json::Value;
 
 use super::{MemoryStores, MemoryTierHint};

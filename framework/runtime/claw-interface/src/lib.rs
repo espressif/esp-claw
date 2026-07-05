@@ -5,7 +5,7 @@
 //! dependency-injection traits that abstract over platform facilities —
 //! filesystem ([`ClawFs`](fs::ClawFs)) and networking ([`ClawHttp`](http::ClawHttp)) —
 //! plus the shared types those traits work with. The pure-Rust core crates
-//! (`claw-api`, `claw_core`, `claw-capability`, `claw-memory`, `claw-sandbox`, …)
+//! (`claw-api`, `claw_core`, `claw-tool`, `claw-memory`, `claw-sandbox`, ...)
 //! depend only on these traits, never on a platform directly, so the device
 //! build and host tests can plug in different implementations of the same seam.
 

@@ -2,7 +2,7 @@
 //!
 //! This module is the *non-tool* half of multi-agent control: the back-channel an
 //! agent's tools reach the orchestrator through, plus the value types that travel
-//! over it. It holds no [`SyncToolHandler`](claw_capability::SyncToolHandler)s — those live in
+//! over it. It holds no [`SyncToolHandler`](claw_tool::SyncToolHandler)s — those live in
 //! [`tools`](crate::agent::tools) and call into the [`AgentContext`] façade here.
 //!
 //! Two seams reach the graph:

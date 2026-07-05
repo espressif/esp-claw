@@ -1,4 +1,4 @@
-//! The agent's built-in tools — one [`SyncToolHandler`](claw_capability::SyncToolHandler) per
+//! The agent's built-in tools — one [`SyncToolHandler`](claw_tool::SyncToolHandler) per
 //! file — and the small seams they share.
 //!
 //! Internal tools are model-callable like any other tool, but instead of
@@ -33,8 +33,8 @@ mod watch_subagent;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use claw_capability::{Tool, ToolError, ToolInvocation};
 use claw_permission::Resource;
+use claw_tool::{Tool, ToolError, ToolInvocation};
 use serde_json::Value;
 
 use crate::agent::graph::{AgentContext, SpawnPolicy};
@@ -61,7 +61,7 @@ pub(crate) enum ControlSignal {
 /// The shared queue internal tools push [`ControlSignal`]s onto.
 ///
 /// The agent owns one; each internal tool handler holds a clone. A `Mutex`
-/// (not a bare cell) because [`SyncToolHandler`](claw_capability::SyncToolHandler) is
+/// (not a bare cell) because [`SyncToolHandler`](claw_tool::SyncToolHandler) is
 /// `Send + Sync`; contention is nil in the single-driver-thread model.
 pub(crate) type ControlSink = Arc<Mutex<VecDeque<ControlSignal>>>;
 
@@ -136,7 +136,7 @@ pub(crate) mod test_support {
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
 
-    use claw_capability::Tool;
+    use claw_tool::Tool;
 
     use super::ControlSink;
 

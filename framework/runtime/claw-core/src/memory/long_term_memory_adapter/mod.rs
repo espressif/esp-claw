@@ -15,13 +15,13 @@
 
 use std::sync::Arc;
 
-use claw_capability::Tool;
 use claw_context::{Block, BlockKind, ContextSink};
 use claw_interface::ClawFs;
 use claw_memory::{
     LongTermConfig, LongTermError, LongTermInitError, LongTermMemory, MemoryDraft, MemoryId,
     MemoryItem, MemoryPatch, StoreOutcome,
 };
+use claw_tool::Tool;
 use serde_json::Value;
 
 use crate::memory::traits::{ContextAdapter, ContextAdapterFuture, ContextAdapterInput, History};

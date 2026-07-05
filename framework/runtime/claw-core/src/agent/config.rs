@@ -1,12 +1,12 @@
 //! Runnable agent config assembled by the factory.
 //!
-//! A baked manifest is compile-time data: prompt, capability names, skill ids,
-//! and spawn policy. Runtime binding belongs to `FsAgentFactory`; this module
-//! only stores the resolved config passed to `GenericAgent`.
+//! A baked manifest is compile-time data: prompt, tool names, skill ids, and
+//! spawn policy. Runtime binding belongs to `FsAgentFactory`; this module only
+//! stores the resolved config passed to `GenericAgent`.
 
 use claw_api::RetryPolicy;
-use claw_capability::Tool;
 use claw_skill::SkillSet;
+use claw_tool::Tool;
 
 use crate::agent::graph::SpawnPolicy;
 use crate::agent::kind::AgentKind;
@@ -59,9 +59,9 @@ pub enum AgentConfigError {
     /// No manifest is baked into the firmware for the requested kind.
     #[error("unknown agent kind: {0}")]
     UnknownKind(String),
-    /// A capability name in the manifest has no local tool binding.
-    #[error("unknown capability: {0}")]
-    UnknownCapability(String),
+    /// A tool name in the manifest has no local binding.
+    #[error("unknown tool: {0}")]
+    UnknownTool(String),
 }
 
 #[cfg(test)]

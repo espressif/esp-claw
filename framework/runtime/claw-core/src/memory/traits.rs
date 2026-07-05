@@ -21,16 +21,16 @@ use core::future::Future;
 use core::pin::Pin;
 use std::sync::Arc;
 
-use claw_capability::Tool;
 use claw_context::ContextSink;
 use claw_interface::ClawFs;
 use claw_memory::TranscriptStore;
+use claw_tool::Tool;
 use serde_json::{json, Value};
 
-/// The read view of the conversation transcript: the one capability request
+/// The read view of the conversation transcript: the one interface request
 /// assembly — and every pluggable context adapter — needs from the transcript owner.
 ///
-/// Handed around as `&dyn History` so a reader depends on this narrow capability,
+/// Handed around as `&dyn History` so a reader depends on this narrow view,
 /// never on the concrete conversation-memory type (which would drag its
 /// storage/compaction/persistence — and a filesystem type parameter — along).
 ///

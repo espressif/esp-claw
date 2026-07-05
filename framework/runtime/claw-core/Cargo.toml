@@ -26,8 +26,8 @@ claw-memory = { path = "../claw-memory" }
 claw-skill = { path = "../claw-skill" }
 claw-context = { path = "../claw-context" }
 claw-permission = { path = "../claw-permission" }
-# The capability vocabulary and tool runtime used by core agents.
-claw-capability = { path = "../claw-capability" }
+# The tool runtime used by core agents.
+claw-tool = { path = "../claw-tool" }
 # Observability facade. `claw_core` is now pure `tracing` (no `log` dependency):
 # events/spans are consumed by `claw_sys`'s `FlatTreeSubscriber` (registered at
 # boot / in the CLI), which writes through the same `ESP_LOGx` backend as the
@@ -51,7 +51,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 quote = "1"
 proc-macro2 = "1"
-claw-capability = { path = "../claw-capability" }
+claw-tool = { path = "../claw-tool" }
 
 [dev-dependencies]
 # Host-target live backends (`diskfs`/`realhttp`/`stdthread`) plus hermetic

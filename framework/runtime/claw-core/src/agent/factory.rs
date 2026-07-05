@@ -4,9 +4,9 @@
 //! four pieces together:
 //!
 //! 1. the kind's compile-time-baked [`AgentManifest`](super::manifest::AgentManifest)
-//!    (pure data: prompt + capability/skill *names*),
+//!    (pure data: prompt + tool/skill *names*),
 //! 2. a live LLM client minted per agent from a shared config + transport,
-//! 3. central capability projection into each agent's `ToolSet`, and
+//! 3. central tool projection into each agent's `ToolSet`, and
 //! 4. the factory-owned memory layout below one persistence root: transcripts,
 //!    editable profile documents, and long-term memory.
 //!
@@ -19,7 +19,6 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use claw_api::{ClawApiAsync, ClawApiConfig};
-use claw_capability::{CapabilityRegistry, Tool};
 use claw_context::Block;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::{
@@ -27,6 +26,7 @@ use claw_memory::{
     TranscriptStore,
 };
 use claw_skill::SkillSet;
+use claw_tool::{Tool, ToolRegistry};
 
 use crate::agent::base_agent::{AgentCommand, AgentId};
 use crate::agent::config::{AgentConfig, AgentConfigError};
@@ -190,8 +190,8 @@ pub struct FsAgentFactory<
     /// minted from this config plus a freshly constructed `H::default()`
     /// transport, so no transport instance is shared between agents.
     llm_config: ClawApiConfig,
-    /// Central capability registry used to seed each agent tool set.
-    capabilities: Arc<CapabilityRegistry>,
+    /// Central tool registry used to seed each agent tool set.
+    tools: Arc<ToolRegistry>,
     /// Marks the HTTP transport type minted per agent. `fn() -> H` so the marker
     /// is independent of owning an `H` value (the factory only *produces* `H`).
     _http: PhantomData<fn() -> H>,
@@ -231,7 +231,7 @@ impl<
     /// persistence root is blank, or [`FsAgentFactoryError::ExtractionLlm`] if the
     /// internal extraction LLM client cannot be initialized.
     pub fn new(
-        capabilities: Arc<CapabilityRegistry>,
+        tools: Arc<ToolRegistry>,
         llm_config: ClawApiConfig,
         persistence_dir: &str,
     ) -> Result<Self, FsAgentFactoryError> {
@@ -254,7 +254,7 @@ impl<
 
         Ok(Self {
             llm_config,
-            capabilities,
+            tools,
             _http: PhantomData,
             _timer: PhantomData,
             transcript_dir: layout.transcript_dir,
@@ -299,7 +299,7 @@ impl<
             .resolve_config(kind)
             .map_err(|error| format!("resolving config for kind '{kind}': {error}"))?;
         let is_root = placement.is_root();
-        let mut tools = self.capabilities.tool_set();
+        let mut tools = self.tools.tool_set();
         for tool in config.tools.drain(..) {
             tools
                 .add_tool(tool)
@@ -378,10 +378,8 @@ impl<
     fn resolve_manifest_tools(
         manifest: &'static AgentManifest,
     ) -> Result<Vec<Tool>, AgentConfigError> {
-        if let Some(name) = manifest.capabilities.first() {
-            return Err(AgentConfigError::UnknownCapability(
-                name.as_str().to_owned(),
-            ));
+        if let Some(name) = manifest.tools.first() {
+            return Err(AgentConfigError::UnknownTool(name.as_str().to_owned()));
         }
         Ok(Vec::new())
     }
@@ -413,7 +411,7 @@ mod tests {
     use super::*;
     use crate::agent::base_agent::TickOutcome;
     use crate::agent::graph::GraphEffect;
-    use claw_capability::CapabilityRegistry;
+    use claw_tool::ToolRegistry;
 
     struct NoopWake;
     impl Wake for NoopWake {
@@ -466,7 +464,7 @@ mod tests {
             "https://example.invalid",
         );
         FsAgentFactory::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new(
-            Arc::new(CapabilityRegistry::new()),
+            Arc::new(ToolRegistry::new()),
             llm_config,
             "/mem",
         )

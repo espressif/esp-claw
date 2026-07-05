@@ -110,8 +110,8 @@ fn collect_kinds(agents_dir: &Path) -> Result<Vec<ParsedKind>> {
 }
 
 /// Fold the shared `common` base into one kind: the base entries come first,
-/// then the kind's own, with duplicates dropped so a kind can list a capability
-/// or skill already in the base without it appearing twice. The shared
+/// then the kind's own, with duplicates dropped so a kind can list a tool or
+/// skill already in the base without it appearing twice. The shared
 /// instructions preamble is recorded so codegen can prepend it to the kind's own
 /// prompt.
 fn inherit_base(kind: ParsedKind, common: &CommonBase) -> ParsedManifest {
@@ -122,7 +122,7 @@ fn inherit_base(kind: ParsedKind, common: &CommonBase) -> ParsedManifest {
         allowed_kinds: kind.allowed_kinds,
         retries: kind.retries,
         tool_block_retries: kind.tool_block_retries,
-        capabilities: merge_unique(&common.capabilities, &kind.capabilities),
+        tools: merge_unique(&common.tools, &kind.tools),
         skills: merge_unique(&common.skills, &kind.skills),
         instructions_path: kind.instructions_path,
         common_instructions_path: common.instructions_path.clone(),

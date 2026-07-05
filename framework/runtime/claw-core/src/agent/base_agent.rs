@@ -68,12 +68,12 @@ use crate::agent::tools::{internal_tools, ControlSignal, ControlSink};
 use crate::memory::{
     AssistantCommit, ContextAdapter, ContextAdapterInput, SkillContextAdapter, Transcript,
 };
-use claw_capability::{ToolGate, ToolSet, ToolSetError};
 use claw_context::{Block, BlockKind, Context};
 use claw_permission::{
     Action, Grant, GrantStore, PermissionDecision, PermissionPolicy, PermissionRequest,
 };
 use claw_skill::SkillSet;
+use claw_tool::{ToolGate, ToolSet, ToolSetError};
 
 crate::define_prefixed_id!(AgentId, "agent-", "agent");
 crate::define_prefixed_id!(ApprovalId, "approval-", "approval");
@@ -310,7 +310,7 @@ pub enum AgentRunError {
     Tools(#[from] ToolSetError),
     /// The model kept calling a tool that soft-hide gating does not permit this
     /// phase, past the allowed retry budget (the agent's
-    /// [`BlockPolicy`](claw_capability::BlockPolicy)).
+    /// [`BlockPolicy`](claw_tool::BlockPolicy)).
     #[error("tool not permitted in the current phase: {name}")]
     ToolNotPermitted {
         /// The name of the refused tool.
@@ -538,7 +538,7 @@ pub struct BaseAgent<H: ClawHttp, Timer: ClawTimer> {
     /// [`Context::request`] renders lazily. Change detection, wire ordering, and
     /// reminder rendering all live in the context.
     context: Context,
-    /// The permission gate consulted per tool call. A `claw-capability` type owning the
+    /// The permission gate consulted per tool call. A `claw-tool` type owning the
     /// policy and grant store of human decisions; mutated when an
     /// [`ApprovalResult`](AgentCommand::ApprovalResult) resolves a pending ask.
     gate: PermissionGate,
@@ -1068,7 +1068,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// retried calls resolve directly. No-op without a permission gate.
     ///
     /// The agent's [`ApprovalDecision`] is mapped to the permission-layer
-    /// [`Grant`] the gate stores (`claw-capability`/`claw-permission` know nothing of
+    /// [`Grant`] the gate stores (`claw-tool`/`claw-permission` know nothing of
     /// the agent's command vocabulary).
     fn record_grants(&mut self, decision: &ApprovalDecision) {
         let signatures = std::mem::take(&mut self.pending_grant_signatures);

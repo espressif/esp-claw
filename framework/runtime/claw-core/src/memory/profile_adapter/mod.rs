@@ -3,10 +3,10 @@
 //! The store lives in `claw-memory`; this adapter is the agent-runtime layer that
 //! maps documents to `BlockKind`s and optionally exposes profile-specific tools.
 
-use claw_capability::Tool;
 use claw_context::{Block, BlockKind, ContextSink};
 use claw_interface::ClawFs;
 use claw_memory::{ProfileDocument, ProfileStore};
+use claw_tool::Tool;
 
 use crate::memory::traits::{ContextAdapter, ContextAdapterInput};
 

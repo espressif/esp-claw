@@ -2,11 +2,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use claw_capability::{
+use claw_skill::{SkillError, SkillId, SkillSet};
+use claw_tool::{
     tool_metadata, SyncToolHandler, Tool, ToolError, ToolInvocation, ToolInvokeError, ToolOutput,
     ToolSpec,
 };
-use claw_skill::{SkillError, SkillId, SkillSet};
 use serde_json::Value;
 
 use super::lock_skill_set;
@@ -142,8 +142,8 @@ impl SyncToolHandler for ReloadSkillsTool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use claw_capability::{CapabilityRegistry, RawToolInvocation};
     use claw_interface::ClawFs;
+    use claw_tool::{RawToolInvocation, ToolRegistry};
 
     use super::super::test_support::{
         skill_registry, skill_registry_with_fs, skill_tools_for_test, tool_named, write_skill,
@@ -160,11 +160,11 @@ mod tests {
     }
 
     fn invoke_result(
-        tool: &claw_capability::Tool,
+        tool: &claw_tool::Tool,
         name: &str,
         arguments_json: &str,
     ) -> Result<ToolOutput, ToolInvokeError> {
-        let registry = CapabilityRegistry::new();
+        let registry = ToolRegistry::new();
         let mut tools = registry.tool_set();
         tools.add_tool(tool.clone()).unwrap();
         let handle = tools.begin().unwrap();
@@ -172,7 +172,7 @@ mod tests {
         claw_utils::block_on(handle.invoke(&call))
     }
 
-    fn invoke(tool: &claw_capability::Tool, name: &str) -> ToolOutput {
+    fn invoke(tool: &claw_tool::Tool, name: &str) -> ToolOutput {
         invoke_result(tool, name, "{}").unwrap()
     }
 

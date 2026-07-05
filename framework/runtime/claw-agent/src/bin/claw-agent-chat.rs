@@ -15,10 +15,13 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Result};
-use claw_agent::{
-    AgentPersistenceConfig, AgentSystem, BackendKind, Capability, CapabilityError, ChannelAdapter,
-    ChannelRuntime, ClawApiConfig, HostAgentSystem, InboundMessage, OutboundMessage, Registry,
+use claw_agent::{AgentPersistenceConfig, AgentSystem, HostAgentSystem};
+use claw_api::{BackendKind, ClawApiConfig};
+use claw_channel::{
+    Channel, ChannelError, ChannelHandler, ChannelInbound, ChannelOutbound, ChannelResult,
+    ChannelRuntime, ChannelSink,
 };
+use claw_core::SessionId;
 
 const MEMORY_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/output/claw-agent-chat");
 const CHANNEL: &str = "claw-agent-chat";
@@ -44,55 +47,69 @@ impl CliChannel {
     }
 }
 
-impl ChannelAdapter for CliChannel {
-    fn channel_id(&self) -> &str {
+struct CliChannelHandler {
+    inner: Arc<CliChannel>,
+}
+
+impl ChannelHandler for CliChannelHandler {
+    fn name(&self) -> &str {
         CHANNEL
     }
 
-    fn open(&self, _runtime: Arc<dyn ChannelRuntime>) -> Result<(), CapabilityError> {
-        Ok(())
+    fn start(&self, _sink: ChannelSink) -> ChannelResult<ChannelRuntime> {
+        Ok(ChannelRuntime::default())
     }
 
-    fn close(&self) -> Result<(), CapabilityError> {
-        Ok(())
-    }
-
-    fn send(&self, message: &OutboundMessage) -> Result<(), CapabilityError> {
-        self.received
+    fn send(&self, message: ChannelOutbound<'_>) -> ChannelResult<()> {
+        self.inner
+            .received
             .lock()
-            .map_err(|_| CapabilityError::Failed("cli channel lock poisoned".to_string()))?
-            .push(message.text.clone());
+            .map_err(|_| ChannelError::new("cli channel lock poisoned"))?
+            .push(message.text.unwrap_or_default().to_owned());
         Ok(())
     }
 }
 
 struct ChatDriver {
     system: HostAgentSystem,
+    session: SessionId,
     channel: Arc<CliChannel>,
     next_message_id: u64,
 }
 
 impl ChatDriver {
-    fn new(system: HostAgentSystem, channel: Arc<CliChannel>) -> Self {
+    fn new(system: HostAgentSystem, session: SessionId, channel: Arc<CliChannel>) -> Self {
         Self {
             system,
+            session,
             channel,
             next_message_id: 1,
         }
     }
 
-    async fn send(&mut self, text: impl Into<String>) -> Result<Vec<String>, CapabilityError> {
+    async fn send(
+        &mut self,
+        text: impl Into<String>,
+    ) -> Result<Vec<String>, claw_agent::AgentError> {
         let message_number = self.next_message_id;
         self.next_message_id = self.next_message_id.saturating_add(1);
         self.system
-            .push_message(InboundMessage {
-                message_id: format!("m{message_number}"),
-                channel: CHANNEL.into(),
-                chat_id: CHAT_ID.into(),
-                sender_id: None,
-                text: text.into(),
-                ..Default::default()
-            })
+            .submit_channel(
+                self.session,
+                ChannelInbound {
+                    channel: CHANNEL.into(),
+                    chat_id: CHAT_ID.into(),
+                    text: Some(text.into()),
+                    attachments: Vec::new(),
+                    sender_id: None,
+                    message_id: Some(format!("m{message_number}")),
+                    correlation_id: None,
+                    timestamp_ms: None,
+                    target: None,
+                    content_type: None,
+                    payload_json: None,
+                },
+            )
             .await?;
         Ok(self.channel.drain())
     }
@@ -110,16 +127,16 @@ async fn run() -> Result<()> {
     load_env();
 
     let persistence = AgentPersistenceConfig::new(MEMORY_DIR);
-    let registry = Arc::new(Registry::new());
+    let system = AgentSystem::on_disk(llm_config()?, persistence)?;
     let channel = Arc::new(CliChannel::new());
-    registry.register(Capability::channel(
-        Arc::clone(&channel) as Arc<dyn ChannelAdapter>
-    ))?;
-    let system = AgentSystem::on_disk(llm_config()?, persistence, registry)?;
-    system.start()?;
+    system
+        .channel_registry()
+        .register(Channel::from_handler(CliChannelHandler {
+            inner: Arc::clone(&channel),
+        }))?;
+    system.start_all()?;
     let session = system.new_session();
-    system.bind_session(session, CHANNEL, CHAT_ID)?;
-    let mut chat = ChatDriver::new(system, channel);
+    let mut chat = ChatDriver::new(system, session, channel);
 
     eprintln!("Memory:  {MEMORY_DIR}");
     eprintln!("Type your message and press Enter. Empty line or Ctrl-D to quit.\n");

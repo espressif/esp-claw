@@ -2,13 +2,13 @@
 
 use core::str::FromStr;
 
-use claw_capability::{
-    tool_metadata, SyncToolHandler, Tool, ToolError, ToolInvocation, ToolInvokeError, ToolOutput,
-    ToolSpec,
-};
 use claw_interface::ClawFs;
 use claw_memory::{ProfileDocument, ProfileStore};
 use claw_permission::{Action, Resource, RiskClass};
+use claw_tool::{
+    tool_metadata, SyncToolHandler, Tool, ToolError, ToolInvocation, ToolInvokeError, ToolOutput,
+    ToolSpec,
+};
 use serde_json::Value;
 
 /// Build the writable profile tools.
@@ -185,9 +185,9 @@ fn render_document(document: ProfileDocument, content: &str) -> String {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use claw_capability::RawToolInvocation;
     use claw_interface::MemFs;
     use claw_memory::ProfileConfig;
+    use claw_tool::RawToolInvocation;
 
     use super::*;
 
