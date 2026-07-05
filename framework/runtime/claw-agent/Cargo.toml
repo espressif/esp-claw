@@ -3,24 +3,23 @@ name = "claw-agent"
 authors = ["Finn(Ziheng) Sheng"]
 version = "0.1.0"
 edition = "2021"
-description = "Concise agent API over the orchestrator: build an agent system and drive registered channels"
+description = "Concise agent API over the orchestrator: build an agent system and submit session turns"
 
 [lib]
 name = "claw_agent"
 path = "src/lib.rs"
 
-# A minimal REPL that drives the whole agent system through a registered channel
-# against a live LLM with on-disk memory. It uses the host-target backends
-# (`AgentSystem::on_disk`) and dev workflow dependencies, so it is gated on the
-# `dev` feature.
+# A minimal REPL that drives the whole agent system against a live LLM with
+# on-disk memory. It uses the host-target backends (`AgentSystem::on_disk`) and
+# dev workflow dependencies, so it is gated on the `dev` feature.
 [[bin]]
 name = "claw-agent-chat"
 path = "src/bin/claw-agent-chat.rs"
 required-features = ["dev"]
 
-# The channel/tool reference example uses test doubles plus dev workflow deps.
+# The tool/submit reference example uses test doubles plus dev workflow deps.
 [[example]]
-name = "channel_tool_loop"
+name = "tool_submit_loop"
 required-features = ["dev"]
 
 [features]
@@ -50,7 +49,6 @@ dev = [
 [dependencies]
 claw-core = { path = "../claw-core" }
 claw-api = { path = "../claw-api" }
-claw-channel = { path = "../claw-channel" }
 claw-tool = { path = "../claw-tool" }
 # Conversation/long-term memory. The compaction policy is wired internally
 # (the LLM-backed `LlmCompactor`), so no stub-compactor feature is needed.
@@ -70,7 +68,7 @@ tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"], optional
 claw-context = { path = "../claw-context" }
 # In-memory fs + scripted HTTP doubles so the end-to-end tests run hermetically
 # (no network, no API key) entirely through the public API; `stdthread` is the
-# host-target executor backend used by channel/tool tests.
+# host-target executor backend used by agent tests.
 claw-interface = { path = "../claw-interface", features = ["test-doubles", "stdthread"] }
 claw-utils = { path = "../claw-utils" }
 serde_json = "1"
