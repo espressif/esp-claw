@@ -71,6 +71,7 @@ mod espidf_driver {
     use core::sync::atomic::{AtomicBool, Ordering};
     use core::task::{Context, Poll};
     use std::ffi::CString;
+    use std::time::{Duration, Instant};
 
     const DEFAULT_INITIAL_URL: &str = "http://127.0.0.1/";
 
@@ -168,7 +169,7 @@ mod espidf_driver {
             len: c_int,
         ) -> c_int;
         fn esp_http_client_set_timeout_ms(client: *mut c_void, timeout_ms: c_int) -> c_int;
-        fn esp_http_client_delete_all_headers(client: *mut c_void) -> c_int;
+        fn esp_http_client_delete_header(client: *mut c_void, key: *const c_char) -> c_int;
         fn esp_http_client_reset_redirect_counter(client: *mut c_void) -> c_int;
         fn esp_http_client_cancel_request(client: *mut c_void) -> c_int;
         fn esp_http_client_perform(client: *mut c_void) -> c_int;
@@ -247,6 +248,38 @@ mod espidf_driver {
             HttpError::RequestFailed(HttpRequestFailure::InvalidStatusCode { status })
         })?;
         Ok(HttpStatusCode::new(status))
+    }
+
+    /// Wall-clock deadline for a whole `perform` loop.
+    ///
+    /// `esp_http_client_set_timeout_ms` only bounds a single non-blocking poll,
+    /// not the overall request: after a mid-transfer transport failure (e.g. a
+    /// peer connection reset) `esp_http_client_perform` can keep reporting
+    /// `ESP_ERR_HTTP_EAGAIN` indefinitely, which would spin our step loop
+    /// forever. This deadline gives the loop an overall budget so it aborts
+    /// instead of hanging and flooding logs.
+    struct Deadline {
+        limit: Option<Instant>,
+    }
+
+    impl Deadline {
+        fn new(timeout_ms: u32) -> Self {
+            let limit = (timeout_ms > 0)
+                .then(|| Instant::now().checked_add(Duration::from_millis(u64::from(timeout_ms))))
+                .flatten();
+            Self { limit }
+        }
+
+        fn expired(&self) -> bool {
+            self.limit.is_some_and(|limit| Instant::now() >= limit)
+        }
+    }
+
+    fn timeout_error(timeout_ms: u32) -> HttpError {
+        HttpError::RequestFailed(HttpRequestFailure::driver(
+            "esp_http_client_perform",
+            format!("request timed out after {timeout_ms} ms"),
+        ))
     }
 
     unsafe fn set_header(client: *mut c_void, name: &str, value: &str) -> Result<(), HttpError> {
@@ -331,6 +364,13 @@ mod espidf_driver {
         // so the box must outlive the client and must not move. `Box` keeps the
         // heap payload pinned even when the `EspClient` value itself is moved.
         ctx: Box<RequestCtx>,
+        // Names of the headers this code set on the reused client for the last
+        // request. Before the next request we delete exactly these instead of
+        // wiping every header, so the User-Agent/Host that
+        // `esp_http_client_init` installed survive across requests (matching the
+        // fresh-client C transport). Sending no User-Agent trips bot management
+        // on some LLM API edges (e.g. DeepSeek behind TencentEdgeOne -> 418).
+        applied_headers: Vec<CString>,
     }
 
     impl Drop for EspClient {
@@ -369,7 +409,37 @@ mod espidf_driver {
             if raw.is_null() {
                 return Err(HttpError::ClientInitFailed);
             }
-            Ok(EspClient { raw, ctx })
+            Ok(EspClient {
+                raw,
+                ctx,
+                applied_headers: Vec::new(),
+            })
+        }
+
+        /// Set a request header on the reused client and remember its name so
+        /// the next request can remove it. Leaves headers we never touch (the
+        /// User-Agent/Host from `esp_http_client_init`) in place.
+        fn apply_header(&mut self, name: &str, value: &str) -> Result<(), HttpError> {
+            unsafe { set_header(self.raw, name, value)? };
+            if let Ok(cname) = CString::new(name) {
+                if !self
+                    .applied_headers
+                    .iter()
+                    .any(|existing| existing.as_bytes() == cname.as_bytes())
+                {
+                    self.applied_headers.push(cname);
+                }
+            }
+            Ok(())
+        }
+
+        /// Remove the headers set by the previous request. Best-effort: a header
+        /// may already be absent. Unlike `esp_http_client_delete_all_headers`,
+        /// this preserves the init-time User-Agent/Host.
+        fn clear_applied_headers(&mut self) {
+            for name in self.applied_headers.drain(..) {
+                unsafe { esp_http_client_delete_header(self.raw, name.as_ptr()) };
+            }
         }
 
         /// Apply this request's URL/method/headers/body to the persistent client.
@@ -400,8 +470,11 @@ mod espidf_driver {
                     esp_http_client_set_method(self.raw, HTTP_METHOD_POST),
                     "esp_http_client_set_method",
                 )?;
-                set_header(self.raw, "Content-Type", "application/json")?;
-                self.set_auth_and_extra_headers(request.auth, request.headers)?;
+            }
+            // Auth and extra headers were already applied by
+            // `prepare_base_request`; only the POST content type is added here.
+            self.apply_header("Content-Type", "application/json")?;
+            unsafe {
                 check_client_call(
                     esp_http_client_set_post_field(self.raw, body.as_ptr(), body_len),
                     "esp_http_client_set_post_field",
@@ -440,29 +513,26 @@ mod espidf_driver {
                     esp_http_client_reset_redirect_counter(self.raw),
                     "esp_http_client_reset_redirect_counter",
                 )?;
-                check_client_call(
-                    esp_http_client_delete_all_headers(self.raw),
-                    "esp_http_client_delete_all_headers",
-                )?;
             }
+            // Delete only the headers we added last time, preserving the
+            // init-time User-Agent/Host, then apply this request's headers.
+            self.clear_applied_headers();
             self.set_auth_and_extra_headers(auth, headers)
         }
 
         fn set_auth_and_extra_headers(
-            &self,
+            &mut self,
             auth: claw_interface::HttpAuth<'_>,
             headers: &[claw_interface::HttpHeader<'_>],
         ) -> Result<(), HttpError> {
-            unsafe {
-                if let Some((name, value)) = build_auth_header(auth) {
-                    set_header(self.raw, name, &value)?;
+            if let Some((name, value)) = build_auth_header(auth) {
+                self.apply_header(name, &value)?;
+            }
+            for header in headers {
+                if header.name.is_empty() {
+                    continue;
                 }
-                for header in headers {
-                    if header.name.is_empty() {
-                        continue;
-                    }
-                    set_header(self.raw, header.name, header.value)?;
-                }
+                self.apply_header(header.name, header.value)?;
             }
             Ok(())
         }
@@ -537,6 +607,7 @@ mod espidf_driver {
             abort: &AtomicBool,
         ) -> Result<HttpResponse, HttpError> {
             let _body = self.prepare_request(request, abort as *const _)?;
+            let deadline = Deadline::new(request.timeout_ms);
             let mut started = false;
             loop {
                 if abort.load(Ordering::Relaxed) {
@@ -544,6 +615,10 @@ mod espidf_driver {
                         self.cancel_active_request();
                     }
                     return Err(HttpError::Aborted);
+                }
+                if deadline.expired() {
+                    self.cancel_active_request();
+                    return Err(timeout_error(request.timeout_ms));
                 }
                 match self.perform_step() {
                     Ok(Some(response)) => return Ok(response),
@@ -571,11 +646,16 @@ mod espidf_driver {
                 return Err(HttpError::Aborted);
             }
             let _body = self.prepare_request(request, core::ptr::null())?;
+            let deadline = Deadline::new(request.timeout_ms);
             let mut active = ActiveRequestGuard::new(self.raw);
             loop {
                 if cancel.is_cancelled() {
                     active.cancel();
                     return Err(HttpError::Aborted);
+                }
+                if deadline.expired() {
+                    active.cancel();
+                    return Err(timeout_error(request.timeout_ms));
                 }
                 match self.perform_step() {
                     Ok(Some(response)) => {
@@ -604,11 +684,16 @@ mod espidf_driver {
                 return Err(HttpError::Aborted);
             }
             self.prepare_get_request(request)?;
+            let deadline = Deadline::new(request.timeout_ms);
             let mut active = ActiveRequestGuard::new(self.raw);
             loop {
                 if cancel.is_cancelled() {
                     active.cancel();
                     return Err(HttpError::Aborted);
+                }
+                if deadline.expired() {
+                    active.cancel();
+                    return Err(timeout_error(request.timeout_ms));
                 }
                 match self.perform_step() {
                     Ok(Some(response)) => {
