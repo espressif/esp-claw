@@ -68,44 +68,6 @@ static void cap_time_sync_notification_cb(struct timeval *tv)
     ESP_LOGI(TAG, "SNTP time synchronization event received");
 }
 
-static esp_err_t cap_time_build_prompt_block(char *output, size_t output_size)
-{
-    time_t now = 0;
-    struct tm local_tm = {0};
-    struct timeval tv = {0};
-    char formatted_time[64] = {0};
-    int written;
-    bool time_valid;
-
-    if (!output || output_size == 0) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    time(&now);
-    gettimeofday(&tv, NULL);
-    time_valid = cap_time_is_valid();
-    if (time_valid) {
-        if (!localtime_r(&now, &local_tm)) {
-            return ESP_FAIL;
-        }
-        if (strftime(formatted_time, sizeof(formatted_time), "%Y-%m-%d %H:%M:%S %Z (%A)", &local_tm) == 0) {
-            return ESP_ERR_INVALID_SIZE;
-        }
-    } else {
-        strlcpy(formatted_time, "(invalid)", sizeof(formatted_time));
-    }
-
-    written = snprintf(output, output_size,
-                       "- current_local_time: %s\n"
-                       "- unix_timestamp: %lld\n",
-                       formatted_time, (long long)tv.tv_sec);
-    if (written < 0 || (size_t)written >= output_size) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-
-    return ESP_OK;
-}
-
 static esp_err_t cap_time_format_current_time(char *output, size_t output_size)
 {
     time_t now = 0;
@@ -172,44 +134,6 @@ done:
     }
 
     return err;
-}
-
-static esp_err_t cap_time_context_collect(const claw_core_request_t *request, claw_core_context_t *out_context, void *user_ctx)
-{
-    char *content = NULL;
-    esp_err_t err;
-    const size_t content_size = 384;
-
-    (void)request;
-    (void)user_ctx;
-
-    if (!out_context) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    memset(out_context, 0, sizeof(*out_context));
-
-    content = calloc(1, content_size);
-    if (!content) {
-        return ESP_ERR_NO_MEM;
-    }
-
-    err = cap_time_ensure_mutex();
-    if (err != ESP_OK) {
-        free(content);
-        ESP_LOGE(TAG, "Failed to create time mutex");
-        return err;
-    }
-    xSemaphoreTake(s_time_mutex, portMAX_DELAY);
-    err = cap_time_build_prompt_block(content, content_size);
-    xSemaphoreGive(s_time_mutex);
-    if (err != ESP_OK) {
-        free(content);
-        return err;
-    }
-
-    out_context->kind = CLAW_CORE_CONTEXT_KIND_SYSTEM_PROMPT;
-    out_context->content = content;
-    return ESP_OK;
 }
 
 esp_err_t cap_time_get_current(char *output, size_t output_size)
@@ -430,9 +354,3 @@ esp_err_t cap_time_sync_service_stop(void)
     }
     return ESP_OK;
 }
-
-const claw_core_context_provider_t cap_time_context_provider = {
-    .name = "Time Context",
-    .collect = cap_time_context_collect,
-    .user_ctx = NULL,
-};

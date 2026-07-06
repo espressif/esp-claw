@@ -9,7 +9,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "claw_core.h"
 #include "esp_err.h"
 #include "lua.h"
 

@@ -36,9 +36,6 @@
 #if CONFIG_APP_CLAW_CAP_SCHEDULER
 #include "cmd_cap_scheduler.h"
 #endif
-#if CONFIG_APP_CLAW_CAP_SKILL_MGR
-#include "cmd_cap_skill.h"
-#endif
 #if CONFIG_APP_CLAW_CAP_TIME
 #include "cmd_cap_time.h"
 #endif
@@ -46,8 +43,7 @@
 #include "cmd_cap_web_search.h"
 #endif
 #include "claw_cap.h"
-#include "claw_agent_mgr.h"
-#include "claw_core.h"
+#include "claw_agent.h"
 #include "claw_event_publisher.h"
 #include "claw_event_router.h"
 #include "cJSON.h"
@@ -57,7 +53,6 @@
 static const char *TAG = "app_claw_cli";
 static const size_t CAP_OUTPUT_BUF_SIZE = 1024;
 
-static uint32_t s_next_request_id = 1;
 static char s_current_session_id[64] = "default";
 
 static char *join_prompt_args(int argc, char **argv)
@@ -120,48 +115,41 @@ static char *join_args_from(int argc, char **argv, int start_index)
 
 static int submit_and_print(const char *prompt, const char *session_id)
 {
-    claw_core_response_t response = {0};
+    claw_agent_response_t response = {0};
+    claw_agent_input_t input = {0};
     uint32_t request_id = 0;
     esp_err_t err;
 
     if (session_id && session_id[0]) {
-        printf("Submitting request %" PRIu32 " [session=%s]...\n",
-               s_next_request_id,
-               session_id);
+        printf("Submitting [session=%s]...\n", session_id);
     } else {
-        printf("Submitting request %" PRIu32 " [single-turn]...\n", s_next_request_id);
+        printf("Submitting...\n");
     }
 
-    if (!app_claw_get_core()) {
-        printf("claw_core is not ready\n");
-        return 1;
-    }
-
-    err = claw_agent_mgr_submit_root_text(prompt,
-                                          session_id,
-                                          CLAW_CORE_REQUEST_FLAG_PUBLISH_STAGE_MESSAGE,
-                                          5000,
-                                          &request_id);
+    input.text = prompt;
+    input.source_cap = "app_claw_cli";
+    input.source_channel = "cli";
+    input.source_chat_id = (session_id && session_id[0]) ? session_id : NULL;
+    err = claw_agent_submit(&input, &request_id);
     if (err != ESP_OK) {
         printf("submit failed: %s\n", esp_err_to_name(err));
         return 1;
     }
-    s_next_request_id = request_id + 1;
 
-    err = claw_agent_mgr_receive_root_for(request_id, &response, 130000);
+    err = claw_agent_receive(request_id, &response, 130000);
     if (err != ESP_OK) {
         printf("receive failed: %s\n", esp_err_to_name(err));
         return 1;
     }
 
-    if (response.status == CLAW_CORE_RESPONSE_STATUS_OK && response.text) {
+    if (response.status == CLAW_AGENT_RESPONSE_STATUS_OK && response.text) {
         printf("\nassistant> %s\n\n", response.text);
     } else {
         printf("\nerror> %s\n\n",
                response.error_message ? response.error_message : "unknown error");
     }
 
-    claw_core_response_free(&response);
+    claw_agent_response_free(&response);
     return 0;
 }
 
@@ -261,7 +249,6 @@ static int cmd_cap_call(int argc, char **argv)
     claw_cap_call_context_t ctx = {
         .caller = CLAW_CAP_CALLER_CONSOLE,
         .session_id = s_current_session_id,
-        .core = app_claw_get_core(),
     };
 
     if (argc < 3) {
@@ -721,9 +708,6 @@ static void register_cap_cli_commands(void)
 #endif
 #if CONFIG_APP_CLAW_CAP_SCHEDULER
     register_cap_scheduler();
-#endif
-#if CONFIG_APP_CLAW_CAP_SKILL_MGR
-    register_cap_skill();
 #endif
 #if CONFIG_APP_CLAW_CAP_TIME
     register_cap_time();

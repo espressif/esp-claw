@@ -51,21 +51,3 @@ void claw_event_free(claw_event_t *event)
     free(event->payload_json);
     memset(event, 0, sizeof(*event));
 }
-
-const char *claw_event_session_policy_to_string(claw_session_policy_t policy)
-{
-    switch (policy) {
-    case CLAW_SESSION_POLICY_CHAT:
-        return "chat";
-    case CLAW_SESSION_POLICY_TRIGGER:
-        return "trigger";
-    case CLAW_SESSION_POLICY_GLOBAL:
-        return "global";
-    case CLAW_SESSION_POLICY_EPHEMERAL:
-        return "ephemeral";
-    case CLAW_SESSION_POLICY_NOSAVE:
-        return "nosave";
-    default:
-        return "chat";
-    }
-}

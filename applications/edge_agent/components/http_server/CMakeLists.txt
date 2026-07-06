@@ -30,7 +30,6 @@ set(http_server_requires
     app_config
     app_claw
     im_local
-    runtime
     json
     esp_http_server
     heap

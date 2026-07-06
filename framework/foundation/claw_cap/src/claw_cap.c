@@ -13,7 +13,6 @@
 #include "cJSON.h"
 #include "esp_log.h"
 #include "esp_attr.h"
-#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -25,10 +24,6 @@ static const char *TAG = "claw_cap";
 #define CLAW_CAP_UNLOAD_POLL_MS          20
 
 #define CLAW_CAP_TOOL_DESCRIPTION_MAX 256
-
-#ifndef CLAW_CAP_CORE_OUTPUT_SIZE
-#define CLAW_CAP_CORE_OUTPUT_SIZE (32 * 1024)
-#endif
 
 typedef struct {
     bool occupied;
@@ -156,28 +151,6 @@ static void claw_cap_log_denied_call(const char *cap_name,
              (ctx && ctx->agent_id) ? ctx->agent_id : "",
              (ctx && ctx->agent_type) ? ctx->agent_type : "",
              (ctx && ctx->session_id) ? ctx->session_id : "");
-}
-
-static bool claw_cap_core_user_ctx_is_valid(const claw_cap_core_call_user_ctx_t *user_ctx)
-{
-    return user_ctx && user_ctx->magic == CLAW_CAP_CORE_CALL_USER_CTX_MAGIC;
-}
-
-static void claw_cap_apply_core_user_ctx(claw_cap_call_context_t *ctx,
-                                         const claw_cap_core_call_user_ctx_t *user_ctx)
-{
-    if (!ctx || !claw_cap_core_user_ctx_is_valid(user_ctx)) {
-        return;
-    }
-
-    if (user_ctx->core) {
-        ctx->core = *user_ctx->core;
-    }
-    ctx->caller = user_ctx->caller;
-    ctx->agent_id = user_ctx->agent_id;
-    ctx->agent_type = user_ctx->agent_type;
-    ctx->parent_agent_id = user_ctx->parent_agent_id;
-    ctx->parent_session_id = user_ctx->parent_session_id;
 }
 
 static char *claw_cap_strdup(const char *src)
@@ -437,138 +410,6 @@ char *claw_cap_build_llm_tools_json(const claw_cap_call_context_t *ctx,
     cJSON_Delete(raw_tools);
     return raw_tools_json;
 }
-
-esp_err_t claw_cap_call_from_core(const char *cap_name,
-                                  const char *input_json,
-                                  const claw_core_request_t *request,
-                                  char **out_output,
-                                  void *user_ctx)
-{
-    claw_cap_call_context_t ctx = {0};
-    char *output = NULL;
-    esp_err_t err;
-    const size_t output_size = CLAW_CAP_CORE_OUTPUT_SIZE;
-
-    if (!cap_name || !out_output) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    *out_output = NULL;
-
-    output = heap_caps_calloc_prefer(1, output_size, 2,
-                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
-                                     MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (!output) {
-        return ESP_ERR_NO_MEM;
-    }
-
-    if (request) {
-        ctx.request_id = request->request_id;
-        ctx.session_id = request->session_id;
-        ctx.channel = request->source_channel;
-        ctx.chat_id = request->source_chat_id;
-        ctx.target_channel = request->target_channel;
-        ctx.target_chat_id = request->target_chat_id;
-        ctx.source_cap = request->source_cap;
-        if (user_ctx) {
-            const claw_cap_core_call_user_ctx_t *call_user_ctx =
-                (const claw_cap_core_call_user_ctx_t *)user_ctx;
-
-            if (claw_cap_core_user_ctx_is_valid(call_user_ctx)) {
-                claw_cap_apply_core_user_ctx(&ctx, call_user_ctx);
-            } else {
-                ctx.core = *((claw_core_handle_t *)user_ctx);
-                ctx.caller = CLAW_CAP_CALLER_AGENT;
-            }
-        } else {
-            ctx.caller = CLAW_CAP_CALLER_AGENT;
-        }
-    }
-
-    err = claw_cap_call(cap_name,
-                        input_json ? input_json : "{}",
-                        &ctx,
-                        output,
-                        output_size);
-    if (err != ESP_OK && !output[0]) {
-        snprintf(output, output_size, "%s", esp_err_to_name(err));
-    }
-
-    *out_output = output;
-    return err;
-}
-
-static esp_err_t claw_cap_tools_collect_for_caller(const claw_core_request_t *request,
-                                                   claw_core_context_t *out_context,
-                                                   claw_cap_caller_t caller,
-                                                   void *user_ctx)
-{
-    claw_cap_call_context_t ctx = {0};
-    char *tools_json = NULL;
-
-    if (!request || !out_context) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    memset(out_context, 0, sizeof(*out_context));
-
-    ctx.session_id = request->session_id;
-    ctx.channel = request->source_channel;
-    ctx.chat_id = request->source_chat_id;
-    ctx.target_channel = request->target_channel;
-    ctx.target_chat_id = request->target_chat_id;
-    ctx.source_cap = request->source_cap;
-    ctx.caller = caller;
-    if (claw_cap_core_user_ctx_is_valid((const claw_cap_core_call_user_ctx_t *)user_ctx)) {
-        claw_cap_apply_core_user_ctx(&ctx, (const claw_cap_core_call_user_ctx_t *)user_ctx);
-    }
-
-    tools_json = claw_cap_build_llm_tools_json(&ctx, true);
-    if (!tools_json || !tools_json[0] || strcmp(tools_json, "[]") == 0) {
-        free(tools_json);
-        return ESP_ERR_NOT_FOUND;
-    }
-
-    out_context->kind = CLAW_CORE_CONTEXT_KIND_TOOLS;
-    out_context->content = tools_json;
-    return ESP_OK;
-}
-
-static esp_err_t claw_cap_root_tools_collect(const claw_core_request_t *request,
-                                             claw_core_context_t *out_context,
-                                             void *user_ctx)
-{
-    return claw_cap_tools_collect_for_caller(request,
-                                            out_context,
-                                            CLAW_CAP_CALLER_ROOT_AGENT,
-                                            user_ctx);
-}
-
-static esp_err_t claw_cap_sub_tools_collect(const claw_core_request_t *request,
-                                            claw_core_context_t *out_context,
-                                            void *user_ctx)
-{
-    return claw_cap_tools_collect_for_caller(request,
-                                            out_context,
-                                            CLAW_CAP_CALLER_SUB_AGENT,
-                                            user_ctx);
-}
-
-const claw_core_context_provider_t claw_cap_root_agent_tools_provider = {
-    .name = "cap Tools",
-    .collect = claw_cap_root_tools_collect,
-    .user_ctx = NULL,
-};
-
-const claw_core_context_provider_t claw_cap_sub_agent_tools_provider = {
-    .name = "cap Tools",
-    .collect = claw_cap_sub_tools_collect,
-    .user_ctx = NULL,
-};
-
-const claw_core_context_provider_t claw_cap_tools_provider = {
-    .name = "cap Tools",
-    .collect = claw_cap_root_tools_collect,
-    .user_ctx = NULL,
-};
 
 const char *claw_cap_state_to_string(claw_cap_state_t state)
 {

@@ -32,7 +32,6 @@ event_publisher.publish({
     message_id = "lua_llm_analyze",
     correlation_id = "lua_llm_analyze",
     text = analyze_text,
-    session_policy = "trigger",
     payload = {
         channel = channel,
         chat_id = chat_id,

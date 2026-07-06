@@ -68,7 +68,6 @@ Use this skill when the user needs to inspect or control timer-based schedule ru
 - `source_channel`: event source channel. Defaults to `time`.
 - `chat_id`: optional target chat id when downstream router actions need one.
 - `content_type`: event content type. Defaults to `trigger`.
-- `session_policy`: one of `trigger`, `chat`, `global`, `ephemeral`, `nosave`. Defaults to `trigger`.
 - `text`: optional event text payload. For agent wake-up rules, use this as the instruction text.
 - `payload_json`: optional structured payload. Defaults to `{}`. It may be written either as a JSON string or as a JSON object in the item itself.
 - `max_runs`: max trigger count. `0` means unlimited.
@@ -119,7 +118,7 @@ Trigger every 30 seconds, 3 times in total.
 
 ```json
 {
-  "schedule_json": "{\"id\":\"drink_reminder_30s\",\"enabled\":true,\"kind\":\"interval\",\"interval_ms\":30000,\"event_type\":\"schedule\",\"event_key\":\"drink_reminder\",\"source_channel\":\"time\",\"chat_id\":\"group:example\",\"content_type\":\"trigger\",\"session_policy\":\"trigger\",\"text\":\"drink reminder tick\",\"payload_json\":{\"message\":\"time to drink water\"},\"max_runs\":3}"
+  "schedule_json": "{\"id\":\"drink_reminder_30s\",\"enabled\":true,\"kind\":\"interval\",\"interval_ms\":30000,\"event_type\":\"schedule\",\"event_key\":\"drink_reminder\",\"source_channel\":\"time\",\"chat_id\":\"group:example\",\"content_type\":\"trigger\",\"text\":\"drink reminder tick\",\"payload_json\":{\"message\":\"time to drink water\"},\"max_runs\":3}"
 }
 ```
 
@@ -129,7 +128,7 @@ Trigger every day at 08:00.
 
 ```json
 {
-  "schedule_json": "{\"id\":\"daily_agent_check\",\"enabled\":true,\"kind\":\"cron\",\"cron_expr\":\"0 8 * * *\",\"event_type\":\"schedule\",\"event_key\":\"daily_agent_check\",\"source_channel\":\"time\",\"chat_id\":\"group:example\",\"content_type\":\"trigger\",\"session_policy\":\"trigger\",\"text\":\"Please check the weather today and tell me what I should prepare for going out.\",\"payload_json\":{},\"max_runs\":0}"
+  "schedule_json": "{\"id\":\"daily_agent_check\",\"enabled\":true,\"kind\":\"cron\",\"cron_expr\":\"0 8 * * *\",\"event_type\":\"schedule\",\"event_key\":\"daily_agent_check\",\"source_channel\":\"time\",\"chat_id\":\"group:example\",\"content_type\":\"trigger\",\"text\":\"Please check the weather today and tell me what I should prepare for going out.\",\"payload_json\":{},\"max_runs\":0}"
 }
 ```
 
@@ -139,7 +138,7 @@ Trigger once at a specific timestamp.
 
 ```json
 {
-  "schedule_json": "{\"id\":\"bootstrap_once\",\"enabled\":true,\"kind\":\"once\",\"start_at_ms\":1893456000000,\"event_type\":\"schedule\",\"event_key\":\"bootstrap_once\",\"source_channel\":\"time\",\"content_type\":\"trigger\",\"session_policy\":\"trigger\",\"text\":\"bootstrap once\",\"payload_json\":{\"task\":\"bootstrap\"},\"max_runs\":1}"
+  "schedule_json": "{\"id\":\"bootstrap_once\",\"enabled\":true,\"kind\":\"once\",\"start_at_ms\":1893456000000,\"event_type\":\"schedule\",\"event_key\":\"bootstrap_once\",\"source_channel\":\"time\",\"content_type\":\"trigger\",\"text\":\"bootstrap once\",\"payload_json\":{\"task\":\"bootstrap\"},\"max_runs\":1}"
 }
 ```
 

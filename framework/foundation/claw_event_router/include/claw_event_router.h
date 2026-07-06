@@ -18,6 +18,11 @@
 extern "C" {
 #endif
 
+/* Capability id invoked for the `run_agent` action. The agent runtime registers
+ * a claw_cap descriptor under this id; the router dispatches through
+ * claw_cap_call rather than a direct callback. */
+#define CLAW_EVENT_ROUTER_AGENT_CAP_ID "run_agent"
+
 typedef esp_err_t (*claw_event_router_outbound_resolver_fn)(const claw_event_t *event,
                                                             const char *target_channel,
                                                             const char *target_endpoint,
@@ -34,7 +39,6 @@ typedef struct {
     uint32_t task_stack_size;
     UBaseType_t task_priority;
     BaseType_t task_core;
-    uint32_t agent_submit_timeout_ms;
     bool default_route_messages_to_agent;
     claw_event_router_outbound_resolver_fn outbound_resolver;
     void *outbound_resolver_user_ctx;

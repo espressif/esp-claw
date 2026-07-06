@@ -216,46 +216,6 @@ static char *lua_table_get_payload_json_field(lua_State *L, int index, bool defa
     return payload_json;
 }
 
-static claw_session_policy_t lua_module_event_publisher_parse_session_policy(lua_State *L,
-                                                                                   int index,
-                                                                                   bool *has_value)
-{
-    const char *policy = NULL;
-
-    *has_value = false;
-    lua_getfield(L, index, "session_policy");
-    if (lua_isnil(L, -1)) {
-        lua_pop(L, 1);
-        return CLAW_SESSION_POLICY_CHAT;
-    }
-    if (!lua_isstring(L, -1)) {
-        lua_pop(L, 1);
-        luaL_error(L, "field 'session_policy' must be a string");
-    }
-
-    *has_value = true;
-    policy = lua_tostring(L, -1);
-    lua_pop(L, 1);
-    if (strcmp(policy, "chat") == 0) {
-        return CLAW_SESSION_POLICY_CHAT;
-    }
-    if (strcmp(policy, "trigger") == 0) {
-        return CLAW_SESSION_POLICY_TRIGGER;
-    }
-    if (strcmp(policy, "global") == 0) {
-        return CLAW_SESSION_POLICY_GLOBAL;
-    }
-    if (strcmp(policy, "ephemeral") == 0) {
-        return CLAW_SESSION_POLICY_EPHEMERAL;
-    }
-    if (strcmp(policy, "nosave") == 0) {
-        return CLAW_SESSION_POLICY_NOSAVE;
-    }
-
-    luaL_error(L, "invalid session_policy '%s'", policy);
-    return CLAW_SESSION_POLICY_CHAT;
-}
-
 static void lua_module_event_publisher_copy_field(char *dst,
                                                   size_t dst_size,
                                                   const char *value)
@@ -348,7 +308,6 @@ static int lua_event_publisher_publish(lua_State *L)
     char *payload_json = NULL;
     int64_t timestamp_ms = 0;
     bool has_timestamp = false;
-    bool has_policy = false;
     esp_err_t err;
 
     luaL_checktype(L, 1, LUA_TTABLE);
@@ -387,10 +346,6 @@ static int lua_event_publisher_publish(lua_State *L)
     }
 
     event.timestamp_ms = has_timestamp ? timestamp_ms : (esp_timer_get_time() / 1000);
-    event.session_policy = lua_module_event_publisher_parse_session_policy(L, 1, &has_policy);
-    if (!has_policy && strcmp(event_type, "trigger") == 0) {
-        event.session_policy = CLAW_SESSION_POLICY_TRIGGER;
-    }
 
     /* Build the heap payload last: every option parser above can raise
      * (luaL_error -> longjmp), which would otherwise leak payload_json. */

@@ -24,7 +24,6 @@ extern "C" {
 #define CAP_SCHEDULER_CHANNEL_LEN 16
 #define CAP_SCHEDULER_CHAT_ID_LEN 96
 #define CAP_SCHEDULER_CONTENT_TYPE_LEN 24
-#define CAP_SCHEDULER_SESSION_POLICY_LEN 24
 #define CAP_SCHEDULER_TEXT_LEN 256
 #define CAP_SCHEDULER_PAYLOAD_LEN 512
 
@@ -56,7 +55,6 @@ typedef struct {
     char source_channel[CAP_SCHEDULER_CHANNEL_LEN];
     char chat_id[CAP_SCHEDULER_CHAT_ID_LEN];
     char content_type[CAP_SCHEDULER_CONTENT_TYPE_LEN];
-    char session_policy[CAP_SCHEDULER_SESSION_POLICY_LEN];
     char text[CAP_SCHEDULER_TEXT_LEN];
     char payload_json[CAP_SCHEDULER_PAYLOAD_LEN];
     int max_runs;

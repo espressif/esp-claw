@@ -992,7 +992,6 @@ static esp_err_t cap_im_feishu_publish_attachment_event(const char *chat_id,
     }
     snprintf(event.event_id, sizeof(event.event_id), "feishu-attach-%" PRId64, cap_im_feishu_now_ms());
     event.timestamp_ms = cap_im_feishu_now_ms();
-    event.session_policy = CLAW_SESSION_POLICY_CHAT;
     event.text = "";
     event.payload_json = (char *)payload_json;
     return claw_event_router_publish(&event);

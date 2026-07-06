@@ -8,4 +8,6 @@ idf_component_register(
         json
         esp_http_client
         http_reuse
+    PRIV_REQUIRES
+        mbedtls
 )

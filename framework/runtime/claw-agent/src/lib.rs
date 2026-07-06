@@ -147,7 +147,14 @@ where
         Ok(())
     }
 
-    /// Submit one text input to an explicitly chosen session.
+    /// Drive one text input through an explicitly chosen session.
+    ///
+    /// Awaiting this future waits for the orchestrator to run the submitted turn
+    /// until it produces [`DriveOutput`] or reaches a parked/settled state. This
+    /// is not an enqueue-only submit API. Adapters that need master-style
+    /// submit/receive semantics should enqueue this future in their own
+    /// background worker, acknowledge submit after scheduling, and expose a
+    /// separate receive path for the eventual [`DriveOutput`].
     ///
     /// # Errors
     ///

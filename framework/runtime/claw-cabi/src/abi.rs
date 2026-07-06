@@ -6,6 +6,7 @@ pub const ESP_OK: EspErr = 0;
 pub const ESP_FAIL: EspErr = -1;
 pub const ESP_ERR_INVALID_ARG: EspErr = 0x102;
 pub const ESP_ERR_INVALID_STATE: EspErr = 0x103;
+pub const ESP_ERR_TIMEOUT: EspErr = 0x107;
 
 pub const CLAW_CAP_KIND_CALLABLE: c_int = 0;
 pub const CLAW_CAP_KIND_HYBRID: c_int = 2;
@@ -34,6 +35,17 @@ pub struct ClawAgentInput {
     pub source_chat_id: *const c_char,
     pub target_channel: *const c_char,
     pub target_chat_id: *const c_char,
+}
+
+pub const CLAW_AGENT_RESPONSE_STATUS_OK: c_int = 0;
+pub const CLAW_AGENT_RESPONSE_STATUS_ERROR: c_int = 1;
+
+#[repr(C)]
+pub struct ClawAgentResponse {
+    pub request_id: u32,
+    pub status: c_int,
+    pub text: *mut c_char,
+    pub error_message: *mut c_char,
 }
 
 #[repr(C)]

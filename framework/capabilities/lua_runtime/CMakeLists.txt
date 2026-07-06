@@ -9,7 +9,6 @@ idf_component_register(
         "src"
     REQUIRES
         claw_cap
-        claw_core
         claw_utils
         json
         console

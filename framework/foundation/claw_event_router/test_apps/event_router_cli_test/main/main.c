@@ -259,7 +259,6 @@ static bool run_agent_without_submit_check(void)
         .source_channel = "cli",
         .chat_id = "room_agent",
         .content_type = "text",
-        .session_policy = CLAW_SESSION_POLICY_CHAT,
     };
     claw_event_router_result_t result = {0};
     esp_err_t err;

@@ -751,7 +751,6 @@ static esp_err_t cap_im_wechat_publish_attachment_event(const char *chat_id,
     strlcpy(event.message_id, message_id, sizeof(event.message_id));
     strlcpy(event.content_type, content_type, sizeof(event.content_type));
     event.timestamp_ms = cap_im_wechat_now_ms();
-    event.session_policy = CLAW_SESSION_POLICY_CHAT;
     snprintf(event.event_id, sizeof(event.event_id), "wechat-attach-%" PRId64, event.timestamp_ms);
     event.text = "";
     event.payload_json = (char *)payload_json;

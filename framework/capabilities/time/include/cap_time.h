@@ -9,7 +9,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "claw_core.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -36,8 +35,6 @@ esp_err_t cap_time_sync_now(char *output, size_t output_size);
 bool cap_time_is_valid(void);
 esp_err_t cap_time_sync_service_start(const cap_time_sync_service_config_t *config);
 esp_err_t cap_time_sync_service_stop(void);
-
-extern const claw_core_context_provider_t cap_time_context_provider;
 
 #ifdef __cplusplus
 }

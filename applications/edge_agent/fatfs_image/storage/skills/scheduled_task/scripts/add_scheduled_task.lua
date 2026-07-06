@@ -117,7 +117,6 @@ local function build_schedule(task_id, kind, mode, text)
         source_channel = "time",
         chat_id = "",
         content_type = "trigger",
-        session_policy = mode == "wake_agent" and "chat" or "trigger",
         text = text,
         payload_json = "{}",
         max_runs = max_runs,
@@ -129,7 +128,6 @@ local function build_schedule(task_id, kind, mode, text)
         schedule.source_channel = require_string("chat_channel")
         schedule.chat_id = require_string("chat_id")
         schedule.content_type = "text"
-        schedule.session_policy = "chat"
     end
 
     if kind == "cron" then

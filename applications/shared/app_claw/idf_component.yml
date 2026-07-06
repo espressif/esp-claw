@@ -7,11 +7,6 @@ dependencies:
       - if: $CONFIG{APP_CLAW_CAP_FILES} == True
     path: ../../../framework/capabilities/files
 
-  agent_mgr:
-    rules:
-      - if: $CONFIG{APP_CLAW_CAP_AGENT_MGR} == True
-    path: ../../../framework/capabilities/agent_mgr
-
   im_platform:
     rules:
       - if: >-
@@ -54,16 +49,6 @@ dependencies:
       - if: $CONFIG{APP_CLAW_CAP_SCHEDULER} == True
     path: ../../../framework/capabilities/scheduler
 
-  session_mgr:
-    rules:
-      - if: $CONFIG{APP_CLAW_CAP_SESSION_MGR} == True
-    path: ../../../framework/capabilities/session_mgr
-
-  skill_mgr:
-    rules:
-      - if: $CONFIG{APP_CLAW_CAP_SKILL_MGR} == True
-    path: ../../../framework/capabilities/skill_mgr
-
   system:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_SYSTEM} == True
@@ -92,6 +77,16 @@ dependencies:
 
   claw_event_router:
     path: ../../../framework/foundation/claw_event_router
+
+  runtime:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_CORE} == True
+    path: ../../../framework/runtime
+
+  agent:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_CORE} == True
+    path: ../../../framework/capabilities/agent
 
   skill_builder:
     path: ../../../framework/build_support/skill_builder

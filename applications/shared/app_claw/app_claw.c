@@ -18,23 +18,13 @@
 #if CONFIG_APP_CLAW_CAP_SCHEDULER
 #include "cap_scheduler.h"
 #endif
-#if CONFIG_APP_CLAW_CAP_SESSION_MGR
-#include "cap_session_mgr.h"
-#endif
 #include "claw_paths.h"
 #if CONFIG_APP_CLAW_CAP_CORE
-#include "claw_core.h"
-#include "claw_agent_mgr.h"
+#include "claw_agent.h"
 #endif
 #if CONFIG_APP_CLAW_CAP_EVENT_ROUTER
 #include "claw_event_publisher.h"
 #include "claw_event_router.h"
-#endif
-#if CONFIG_APP_CLAW_CAP_MEMORY
-#include "claw_memory.h"
-#endif
-#if CONFIG_APP_CLAW_CAP_SKILL_MGR
-#include "claw_skill.h"
 #endif
 #include "esp_check.h"
 #include "esp_log.h"
@@ -79,18 +69,7 @@ static const char *APP_STARTUP_EVENT_KEY = "boot_completed";
     "Return concise findings, decisions, changed state, verification results, and blockers. " \
     "Keep detailed intermediate work in your own session and report only what the root needs to continue or answer the user."
 
-#if CONFIG_APP_CLAW_MEMORY_MODE_FULL
-#define APP_SYSTEM_PROMPT_SUFFIX \
-    "When long-term memory is needed, activate the 'memory_ops' skill first and follow its instructions. " \
-    "Do not activate or use the memory skill for ordinary self-introductions or casual preferences unless the user explicitly asks to remember, save, update, or forget something. Automatic extraction will handle durable facts silently after the reply when appropriate. " \
-    "Use memory tools only through that skill. " \
-    "Auto-injected memory context contains summary labels, not full memory bodies. " \
-    "When detailed long-term memory is needed, use exact summary labels with memory_recall. " \
-    "Do not ask whether the user wants you to remember ordinary profile or preference statements when automatic extraction can handle them. Do not offer memory-save help unless the user explicitly asks about memory management. " \
-    "Do not use memory_records.jsonl, memory_index.json, memory_digest.log, or MEMORY.md as direct decision input.\n"
-#else
 #define APP_SYSTEM_PROMPT_SUFFIX "\n"
-#endif
 
 #define APP_SYSTEM_PROMPT \
     APP_SYSTEM_PROMPT_COMMON \
@@ -101,50 +80,6 @@ static bool app_claw_bool_is_true(const char *value)
     return value &&
            (strcmp(value, "true") == 0 || strcmp(value, "1") == 0 || strcmp(value, "yes") == 0);
 }
-
-claw_core_handle_t app_claw_get_core(void)
-{
-#if CONFIG_APP_CLAW_CAP_CORE
-    return claw_agent_mgr_get_root_core();
-#else
-    return NULL;
-#endif
-}
-
-#if CONFIG_APP_CLAW_CAP_SESSION_MGR && (CONFIG_APP_CLAW_CAP_MEMORY || CONFIG_APP_CLAW_CAP_SKILL_MGR)
-static esp_err_t app_claw_delete_session_history(const char *session_id,
-                                                 bool *out_deleted_any,
-                                                 void *user_ctx)
-{
-    bool memory_deleted = false;
-    bool skill_deleted = false;
-    esp_err_t err;
-
-    (void)user_ctx;
-
-    if (!out_deleted_any) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    *out_deleted_any = false;
-
-#if CONFIG_APP_CLAW_CAP_MEMORY
-    err = claw_memory_delete_session_history(session_id, &memory_deleted);
-    if (err != ESP_OK) {
-        return err;
-    }
-#endif
-
-#if CONFIG_APP_CLAW_CAP_SKILL_MGR
-    err = claw_skill_delete_session_state(session_id, &skill_deleted);
-    if (err != ESP_OK) {
-        return err;
-    }
-#endif
-
-    *out_deleted_any = memory_deleted || skill_deleted;
-    return ESP_OK;
-}
-#endif
 
 esp_err_t app_claw_ui_start(void)
 {
@@ -165,61 +100,6 @@ esp_err_t app_claw_set_network_status(bool sta_connected, const char *ap_ssid)
     return ESP_OK;
 #endif
 }
-
-#if CONFIG_APP_CLAW_CAP_MEMORY
-static esp_err_t init_memory(const app_claw_config_t *config,
-                             const app_claw_storage_paths_t *paths,
-                             uint32_t max_tool_iterations)
-{
-    claw_memory_config_t memory_config = {
-        .session_root_dir = paths->memory_session_root,
-        .memory_root_dir = paths->memory_root_dir,
-        .max_message_chars = 4096,
-        .max_tool_iterations = max_tool_iterations,
-        .llm = {
-            .api_key = config->llm_api_key,
-            .backend_type = config->llm_backend_type,
-            .model = config->llm_model,
-            .base_url = config->llm_base_url,
-            .auth_type = config->llm_auth_type,
-            .max_tokens_field = config->llm_max_tokens_field,
-            .timeout_ms = (uint32_t)strtoul(config->llm_timeout_ms, NULL, 10),
-            .max_tokens = (uint32_t)strtoul(config->llm_max_tokens, NULL, 10),
-            .image_max_bytes = (size_t)strtoul(config->llm_default_image_max_bytes, NULL, 10),
-            .supports_tools = app_claw_bool_is_true(config->llm_supports_tools),
-            .supports_vision = app_claw_bool_is_true(config->llm_supports_vision),
-            .image_remote_url_only = app_claw_bool_is_true(config->llm_image_remote_url_only),
-        },
-#if CONFIG_APP_CLAW_MEMORY_MODE_FULL
-        .enable_async_extract_stage_note = true,
-#else
-        .enable_async_extract_stage_note = false,
-#endif
-    };
-    esp_err_t err = claw_memory_init(&memory_config);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to init claw_memory: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    return ESP_OK;
-}
-#endif
-
-#if CONFIG_APP_CLAW_CAP_SKILL_MGR
-static esp_err_t init_skills(const app_claw_storage_paths_t *paths)
-{
-    ESP_RETURN_ON_ERROR(claw_skill_init(&(claw_skill_config_t) {
-                            .session_state_root_dir = paths->memory_session_root,
-                            .max_file_bytes = 20 * 1024,
-                        }),
-                        TAG, "Failed to init claw_skill");
-    /* Register scan roots in priority order*/
-    ESP_RETURN_ON_ERROR(claw_skill_add_directory(paths->system_skills_root_dir), TAG, "Failed to add system skills directory");
-    ESP_RETURN_ON_ERROR(claw_skill_add_directory(paths->skills_root_dir), TAG, "Failed to add skills directory");
-    return ESP_OK;
-}
-#endif
 
 #if CONFIG_APP_CLAW_CAP_EVENT_ROUTER
 static esp_err_t app_claw_publish_startup_event(void)
@@ -279,6 +159,8 @@ static esp_err_t build_storage_paths(app_claw_storage_paths_t *paths)
                         TAG, "skills root path too long");
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "scripts", paths->lua_root_dir, sizeof(paths->lua_root_dir)),
                         TAG, "lua root path too long");
+    ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "agent", paths->agent_persistence_dir, sizeof(paths->agent_persistence_dir)),
+                        TAG, "agent persistence path too long");
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "router_rules/router_rules.json", paths->router_rules_path, sizeof(paths->router_rules_path)),
                         TAG, "router rules path too long");
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "scheduler/schedules.json", paths->scheduler_rules_path, sizeof(paths->scheduler_rules_path)),
@@ -295,19 +177,12 @@ static esp_err_t build_storage_paths(app_claw_storage_paths_t *paths)
 esp_err_t app_claw_start(const app_claw_config_t *config)
 {
     app_claw_storage_paths_t paths;
-#if CONFIG_APP_CLAW_CAP_CORE
-    claw_core_config_t core_config = {0};
-#endif
-#if CONFIG_APP_CLAW_CAP_CORE || CONFIG_APP_CLAW_CAP_MEMORY
-    const uint32_t max_tool_iterations = 32;
-#endif
 #if CONFIG_APP_CLAW_CAP_EVENT_ROUTER
     claw_event_router_config_t router_config = {
         .rules_path = NULL,
         .task_stack_size = 8 * 1024,
         .task_priority = 5,
         .task_core = tskNO_AFFINITY,
-        .agent_submit_timeout_ms = 1000,
         .default_route_messages_to_agent = false,
     };
 #endif
@@ -322,11 +197,6 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
 #if CONFIG_APP_CLAW_CAP_EVENT_ROUTER
     router_config.default_route_messages_to_agent = llm_enabled;
     router_config.rules_path = paths.router_rules_path;
-#endif
-
-#if CONFIG_APP_CLAW_CAP_SESSION_MGR
-    ESP_RETURN_ON_ERROR(cap_session_mgr_set_session_root_dir(paths.memory_session_root),
-                        TAG, "Failed to configure session manager");
 #endif
 
 #if CONFIG_APP_CLAW_CAP_EVENT_ROUTER
@@ -345,16 +215,6 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
                             .persist_after_fire = true,
                         }),
                         TAG, "Failed to init scheduler");
-#endif
-#if CONFIG_APP_CLAW_CAP_MEMORY
-    ESP_RETURN_ON_ERROR(init_memory(config, &paths, max_tool_iterations), TAG, "Failed to init memory");
-#endif
-#if CONFIG_APP_CLAW_CAP_SESSION_MGR && (CONFIG_APP_CLAW_CAP_MEMORY || CONFIG_APP_CLAW_CAP_SKILL_MGR)
-    ESP_RETURN_ON_ERROR(cap_session_mgr_set_delete_session_handler(app_claw_delete_session_history, NULL),
-                        TAG, "Failed to register session delete handler");
-#endif
-#if CONFIG_APP_CLAW_CAP_SKILL_MGR
-    ESP_RETURN_ON_ERROR(init_skills(&paths), TAG, "Failed to init skills");
 #endif
     ESP_RETURN_ON_ERROR(app_capabilities_init(config, &paths), TAG, "Failed to init capabilities");
 #if CONFIG_APP_CLAW_CAP_IM_QQ
@@ -379,74 +239,27 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
 #endif
 
 #if CONFIG_APP_CLAW_CAP_CORE
-    core_config.api_key = config->llm_api_key;
-    core_config.backend_type = config->llm_backend_type;
-    core_config.model = config->llm_model;
-    core_config.base_url = config->llm_base_url;
-    core_config.auth_type = config->llm_auth_type;
-    core_config.max_tokens_field = config->llm_max_tokens_field;
-    core_config.timeout_ms = (uint32_t)strtoul(config->llm_timeout_ms, NULL, 10);
-    core_config.max_tokens = (uint32_t)strtoul(config->llm_max_tokens, NULL, 10);
-    core_config.image_max_bytes = (size_t)strtoul(config->llm_default_image_max_bytes, NULL, 10);
-    core_config.supports_tools = app_claw_bool_is_true(config->llm_supports_tools);
-    core_config.supports_vision = app_claw_bool_is_true(config->llm_supports_vision);
-    core_config.image_remote_url_only = app_claw_bool_is_true(config->llm_image_remote_url_only);
-    core_config.instance_id = 0;
-    core_config.system_prompt = APP_SYSTEM_PROMPT;
-#if CONFIG_APP_CLAW_CAP_MEMORY
-#if CONFIG_APP_CLAW_MEMORY_MODE_FULL
-    core_config.persist_context = claw_memory_persist_context_callback;
-    core_config.request_gate = claw_memory_request_gate_callback;
-    core_config.on_request_start = claw_memory_request_start_callback;
-    core_config.collect_stage_note = claw_memory_stage_note_callback;
-#else
-    core_config.persist_context = claw_memory_persist_context_callback;
-    core_config.request_gate = claw_memory_request_gate_callback;
-#endif
-#endif
-    core_config.call_cap = claw_cap_call_from_core;
-    core_config.cap_user_ctx = NULL;
-    core_config.task_stack_size = 16 * 1024;
-    core_config.task_priority = 5;
-    core_config.task_core = tskNO_AFFINITY;
-    core_config.max_tool_iterations = max_tool_iterations;
-    core_config.request_queue_len = 4;
-    core_config.response_queue_len = 4;
-    core_config.max_context_providers = 8;
     if (!llm_enabled) {
         ESP_LOGW(TAG, "LLM is not fully configured. backend=%s base_url=%s model=%s. "
-                      "The demo will start without claw_core; ask, auto-route-to-agent, and image analysis stay disabled until LLM API key, backend type, and model are set.",
+                      "The demo will start without claw_agent; ask and auto-route-to-agent stay disabled until LLM API key, backend type, and model are set.",
                  config->llm_backend_type[0] ? config->llm_backend_type : "(empty)",
                  config->llm_base_url[0] ? config->llm_base_url : "(empty)",
                  config->llm_model[0] ? config->llm_model : "(empty)");
     } else {
-        claw_core_context_provider_t base_providers[] = {
-            claw_memory_profile_provider,
-#if CONFIG_APP_CLAW_MEMORY_MODE_FULL
-            claw_memory_long_term_provider,
-#else
-            claw_memory_long_term_lightweight_provider,
-#endif
-            claw_memory_session_history_provider,
-            claw_skill_skills_list_provider,
-        };
-        const char *root_agent_id = NULL;
-
         ESP_LOGI(TAG, "Starting LLM backend=%s base_url=%s model=%s",
                  config->llm_backend_type[0] ? config->llm_backend_type : "(default)",
                  config->llm_base_url[0] ? config->llm_base_url : "(empty)",
                  config->llm_model);
-        ESP_RETURN_ON_ERROR(claw_agent_mgr_init(&(claw_agent_mgr_config_t) {
-                                .core_config = &core_config,
-                                .base_context_providers = base_providers,
-                                .base_context_provider_count = sizeof(base_providers) / sizeof(base_providers[0]),
-                                .root_agent_system_prompt = APP_ROOT_AGENT_SYSTEM_PROMPT,
-                                .subagent_system_prompt = APP_SUBAGENT_SYSTEM_PROMPT,
+        ESP_RETURN_ON_ERROR(claw_agent_init(&(claw_agent_config_t) {
+                                .api_key = config->llm_api_key,
+                                .backend_type = config->llm_backend_type,
+                                .model = config->llm_model,
+                                .base_url = config->llm_base_url,
+                                .persistence_dir = paths.agent_persistence_dir,
                             }),
-                            TAG, "Failed to init claw_agent_mgr");
-        ESP_RETURN_ON_ERROR(claw_agent_mgr_create_root_agent(&root_agent_id),
-                            TAG, "Failed to create root agent");
-        ESP_LOGI(TAG, "Root agent ready id=%s", root_agent_id ? root_agent_id : "?");
+                            TAG, "Failed to init claw_agent");
+        ESP_RETURN_ON_ERROR(claw_agent_start(), TAG, "Failed to start claw_agent");
+        ESP_LOGI(TAG, "claw_agent ready");
     }
 #endif
 

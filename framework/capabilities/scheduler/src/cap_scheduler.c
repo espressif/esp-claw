@@ -196,35 +196,6 @@ static const char *cap_scheduler_kind_to_string_local(cap_scheduler_item_kind_t 
     }
 }
 
-static bool cap_scheduler_parse_session_policy_local(const char *value,
-                                                     claw_session_policy_t *out_policy)
-{
-    if (!out_policy) {
-        return false;
-    }
-    if (!value || !value[0] || strcmp(value, "trigger") == 0) {
-        *out_policy = CLAW_SESSION_POLICY_TRIGGER;
-        return true;
-    }
-    if (strcmp(value, "chat") == 0) {
-        *out_policy = CLAW_SESSION_POLICY_CHAT;
-        return true;
-    }
-    if (strcmp(value, "global") == 0) {
-        *out_policy = CLAW_SESSION_POLICY_GLOBAL;
-        return true;
-    }
-    if (strcmp(value, "ephemeral") == 0) {
-        *out_policy = CLAW_SESSION_POLICY_EPHEMERAL;
-        return true;
-    }
-    if (strcmp(value, "nosave") == 0) {
-        *out_policy = CLAW_SESSION_POLICY_NOSAVE;
-        return true;
-    }
-    return false;
-}
-
 static bool cap_scheduler_item_requires_valid_time(const cap_scheduler_item_t *item)
 {
     if (!item) {
@@ -465,9 +436,6 @@ static esp_err_t cap_scheduler_publish_entry_locked(cap_scheduler_entry_t *entry
     event.timestamp_ms = now_ms;
     event.text = entry->item.text[0] ? entry->item.text : NULL;
     event.payload_json = payload_json;
-    if (!cap_scheduler_parse_session_policy_local(entry->item.session_policy, &event.session_policy)) {
-        event.session_policy = CLAW_SESSION_POLICY_TRIGGER;
-    }
 
     entry->status = CAP_SCHEDULER_STATUS_RUNNING;
     publish_err = s_cap_scheduler.config.publish_event(&event);

@@ -19,6 +19,7 @@ use crate::abi::{
 
 #[derive(Clone, Default)]
 pub(crate) struct CapabilityContextData {
+    pub request_id: u32,
     pub channel: Option<String>,
     pub chat_id: Option<String>,
     pub target_channel: Option<String>,
@@ -201,6 +202,7 @@ pub(crate) fn call_capability(
     let source_cap = optional_cstring(context.source_cap.as_deref())?;
     let mut output = vec![0u8; TOOL_OUTPUT_CAPACITY];
     let ctx = ClawCapCallContext {
+        request_id: context.request_id,
         channel: c_ptr(&channel),
         chat_id: c_ptr(&chat_id),
         target_channel: c_ptr(&target_channel),

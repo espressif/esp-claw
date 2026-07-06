@@ -9,4 +9,6 @@ idf_component_register(
         json
         esp_http_client
         console
+    PRIV_REQUIRES
+        mbedtls
 )

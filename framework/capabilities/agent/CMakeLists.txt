@@ -1,11 +1,10 @@
 idf_component_register(
     SRCS
-        "src/cap_llm_inspect.c"
-        "src/cmd_cap_llm_inspect.c"
+        "src/cap_agent.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
         claw_cap
-        json
-        console
+        claw_event_router
+        runtime
 )

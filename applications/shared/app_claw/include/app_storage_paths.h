@@ -25,6 +25,7 @@ typedef struct {
     char skills_root_dir[APP_CLAW_PATH_LEN];          /**< Writable skills root */
     char system_skills_root_dir[APP_CLAW_PATH_LEN];   /**< Read-only firmware-baked skills root */
     char lua_root_dir[APP_CLAW_PATH_LEN];             /**< Lua scripts root */
+    char agent_persistence_dir[APP_CLAW_PATH_LEN];    /**< Rust agent runtime state */
     char router_rules_path[APP_CLAW_FILE_PATH_LEN];   /**< Event router rules file */
     char scheduler_rules_path[APP_CLAW_FILE_PATH_LEN];/**< Scheduler rules file */
     char im_attachment_root[APP_CLAW_PATH_LEN];       /**< IM attachment inbox */

@@ -5,6 +5,6 @@ idf_component_register(
         "src"
     REQUIRES
         lua_runtime
-        runtime
+        claw_cap
         json
 )

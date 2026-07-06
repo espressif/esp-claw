@@ -12,9 +12,6 @@
 #include <stdbool.h>
 #include <string.h>
 
-#if CONFIG_APP_CLAW_CAP_AGENT_MGR
-#include "cap_agent_mgr.h"
-#endif
 #if CONFIG_APP_CLAW_CAP_FILES
 #include "cap_files.h"
 #endif
@@ -48,12 +45,6 @@
 #if CONFIG_APP_CLAW_CAP_SCHEDULER
 #include "cap_scheduler.h"
 #endif
-#if CONFIG_APP_CLAW_CAP_SESSION_MGR
-#include "cap_session_mgr.h"
-#endif
-#if CONFIG_APP_CLAW_CAP_SKILL_MGR
-#include "cap_skill_mgr.h"
-#endif
 #if CONFIG_APP_CLAW_CAP_SYSTEM
 #include "cap_system.h"
 #endif
@@ -66,10 +57,10 @@
 #if CONFIG_APP_CLAW_CAP_WEB_SEARCH
 #include "cap_web_search.h"
 #endif
-#include "claw_cap.h"
-#if CONFIG_APP_CLAW_CAP_MEMORY
-#include "claw_memory.h"
+#if CONFIG_APP_CLAW_CAP_CORE
+#include "cap_agent.h"
 #endif
+#include "claw_cap.h"
 #include "claw_paths.h"
 #include "esp_check.h"
 #include "esp_log.h"
@@ -450,15 +441,6 @@ static esp_err_t app_cap_register_mcp_client(const app_claw_config_t *config,
 }
 #endif
 
-#if CONFIG_APP_CLAW_CAP_SKILL_MGR
-static esp_err_t app_cap_register_skill_mgr(const app_claw_config_t *config,
-                                            const app_claw_storage_paths_t *paths)
-{
-    (void)config;
-    return cap_skill_mgr_register_group(paths ? paths->skills_root_dir : NULL);
-}
-#endif
-
 #if CONFIG_APP_CLAW_CAP_SYSTEM
 static esp_err_t app_cap_register_system(const app_claw_config_t *config,
                                          const app_claw_storage_paths_t *paths)
@@ -469,16 +451,6 @@ static esp_err_t app_cap_register_system(const app_claw_config_t *config,
 }
 #endif
 
-#if CONFIG_APP_CLAW_CAP_MEMORY && CONFIG_APP_CLAW_MEMORY_MODE_FULL
-static esp_err_t app_cap_register_memory(const app_claw_config_t *config,
-                                         const app_claw_storage_paths_t *paths)
-{
-    (void)config;
-    (void)paths;
-    return claw_memory_register_group();
-}
-#endif
-
 #if CONFIG_APP_CLAW_CAP_TIME
 static esp_err_t app_cap_register_time(const app_claw_config_t *config,
                                        const app_claw_storage_paths_t *paths)
@@ -486,6 +458,16 @@ static esp_err_t app_cap_register_time(const app_claw_config_t *config,
     (void)config;
     (void)paths;
     return cap_time_register_group();
+}
+#endif
+
+#if CONFIG_APP_CLAW_CAP_CORE
+static esp_err_t app_cap_register_agent(const app_claw_config_t *config,
+                                        const app_claw_storage_paths_t *paths)
+{
+    (void)config;
+    (void)paths;
+    return cap_agent_register_group();
 }
 #endif
 
@@ -557,30 +539,7 @@ static esp_err_t app_cap_register_router_mgr(const app_claw_config_t *config,
 }
 #endif
 
-#if CONFIG_APP_CLAW_CAP_SESSION_MGR
-static esp_err_t app_cap_register_session_mgr(const app_claw_config_t *config,
-                                              const app_claw_storage_paths_t *paths)
-{
-    (void)config;
-    (void)paths;
-    return cap_session_mgr_register_group();
-}
-#endif
-
-#if CONFIG_APP_CLAW_CAP_AGENT_MGR
-static esp_err_t app_cap_register_agent_mgr(const app_claw_config_t *config,
-                                            const app_claw_storage_paths_t *paths)
-{
-    (void)config;
-    (void)paths;
-    return cap_agent_mgr_register_group();
-}
-#endif
-
 static const app_capability_group_entry_t s_capability_group_entries[] = {
-#if CONFIG_APP_CLAW_CAP_AGENT_MGR
-    { "cap_agent_mgr", "Agent Manager", "Register agent manager cap", true, NULL, app_cap_register_agent_mgr },
-#endif
 #if CONFIG_APP_CLAW_CAP_IM_QQ
     { "cap_im_qq", "QQ", "Register QQ cap", false, app_cap_prepare_im_qq, app_cap_register_im_qq },
 #endif
@@ -608,14 +567,8 @@ static const app_capability_group_entry_t s_capability_group_entries[] = {
 #if CONFIG_APP_CLAW_CAP_MCP_CLIENT
     { "cap_mcp_client", "MCP Client", "Register MCP client cap", false, NULL, app_cap_register_mcp_client },
 #endif
-#if CONFIG_APP_CLAW_CAP_SKILL_MGR
-    { "cap_skill", "Skill Manager", "Register skill cap", true, NULL, app_cap_register_skill_mgr },
-#endif
 #if CONFIG_APP_CLAW_CAP_SYSTEM
     { "cap_system", "System", "Register system cap", false, NULL, app_cap_register_system },
-#endif
-#if CONFIG_APP_CLAW_CAP_MEMORY && CONFIG_APP_CLAW_MEMORY_MODE_FULL
-    { "claw_memory", "Memory", "Register claw_memory group", true, NULL, app_cap_register_memory },
 #endif
 #if CONFIG_APP_CLAW_CAP_TIME
     { "cap_time", "Time", "Register time cap", false, NULL, app_cap_register_time },
@@ -632,15 +585,12 @@ static const app_capability_group_entry_t s_capability_group_entries[] = {
 #if CONFIG_APP_CLAW_CAP_ROUTER_MGR
     { "cap_router_mgr", "Router Manager", "Register router manager cap", true, NULL, app_cap_register_router_mgr },
 #endif
-#if CONFIG_APP_CLAW_CAP_SESSION_MGR
-    { "cap_session_mgr", "Session Manager", "Register session manager cap", false, NULL, app_cap_register_session_mgr },
+#if CONFIG_APP_CLAW_CAP_CORE
+    { "cap_agent", "Agent", "Register agent cap", false, NULL, app_cap_register_agent },
 #endif
 };
 
 static const app_capability_group_info_t s_capability_group_infos[] = {
-#if CONFIG_APP_CLAW_CAP_AGENT_MGR
-    { "cap_agent_mgr", "Agent Manager", true },
-#endif
 #if CONFIG_APP_CLAW_CAP_IM_QQ
     { "cap_im_qq", "QQ", false },
 #endif
@@ -668,14 +618,8 @@ static const app_capability_group_info_t s_capability_group_infos[] = {
 #if CONFIG_APP_CLAW_CAP_MCP_CLIENT
     { "cap_mcp_client", "MCP Client", false },
 #endif
-#if CONFIG_APP_CLAW_CAP_SKILL_MGR
-    { "cap_skill", "Skill Manager", true },
-#endif
 #if CONFIG_APP_CLAW_CAP_SYSTEM
     { "cap_system", "System", true },
-#endif
-#if CONFIG_APP_CLAW_CAP_MEMORY && CONFIG_APP_CLAW_MEMORY_MODE_FULL
-    { "claw_memory", "Memory", true },
 #endif
 #if CONFIG_APP_CLAW_CAP_TIME
     { "cap_time", "Time", false },
@@ -692,8 +636,8 @@ static const app_capability_group_info_t s_capability_group_infos[] = {
 #if CONFIG_APP_CLAW_CAP_ROUTER_MGR
     { "cap_router_mgr", "Router Manager", false },
 #endif
-#if CONFIG_APP_CLAW_CAP_SESSION_MGR
-    { "cap_session_mgr", "Session Manager", false },
+#if CONFIG_APP_CLAW_CAP_CORE
+    { "cap_agent", "Agent", false },
 #endif
 };
 

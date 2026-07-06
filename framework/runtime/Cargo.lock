@@ -188,8 +188,7 @@ dependencies = [
  "claw-sys",
  "claw-tool",
  "claw-utils",
- "embedded-executor",
- "lock_api",
+ "edge-executor",
  "serde_json",
  "thiserror",
 ]

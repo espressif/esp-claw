@@ -105,8 +105,7 @@ Run a Lua script every 120 seconds:
 - For `wake_agent`, the skill script uses only `scheduler_add` through Lua `capability.call`.
 - It does not update existing rules. If an id already exists, the capability error is reported directly.
 - If router rule creation succeeds but scheduler creation fails, the script best-effort deletes the newly added router rule and reports both the scheduler error and rollback result.
-- `wake_agent` sets scheduler `event_type: "message"`, `event_key: "text"`, `source_channel` from `chat_channel`, `chat_id` from `chat_id`, `content_type: "text"`, and `session_policy: "chat"`.
-- `send_message` and `run_script` use `session_policy: "trigger"` in the scheduler entry.
+- `wake_agent` sets scheduler `event_type: "message"`, `event_key: "text"`, `source_channel` from `chat_channel`, `chat_id` from `chat_id`, and `content_type: "text"`.
 - `trigger_count` maps to scheduler `max_runs`; `0` means unlimited. If both `trigger_count` and `max_runs` are provided, `trigger_count` wins.
 
 ## User Reporting

@@ -4,6 +4,7 @@ idf_component_register(
     INCLUDE_DIRS
         "claw-cabi/include"
     REQUIRES
+        claw_cap
         esp_http_client
         esp-tls
         mbedtls

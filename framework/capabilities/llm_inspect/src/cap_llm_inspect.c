@@ -11,34 +11,20 @@
 
 #include "cJSON.h"
 #include "claw_cap.h"
-#include "claw_core_llm.h"
-
-static const char *CAP_LLM_INSPECT_SYSTEM_PROMPT =
-    "You analyze local image files for the ESP32 claw. "
-    "Describe visible content plainly and briefly. "
-    "If the image is unclear, say what is uncertain instead of guessing.";
 
 static esp_err_t cap_llm_inspect_execute(const char *input_json,
                                          const claw_cap_call_context_t *ctx,
                                          char *output,
                                          size_t output_size)
 {
-    claw_media_asset_t asset = {0};
-    claw_llm_media_request_t request = {0};
     cJSON *root = NULL;
     cJSON *path_json = NULL;
     cJSON *prompt_json = NULL;
-    char *analysis = NULL;
-    char *error_message = NULL;
-    esp_err_t err;
 
     if (!input_json || !output || output_size == 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (!ctx || !ctx->core) {
-        snprintf(output, output_size, "Error: claw_core is not ready");
-        return ESP_ERR_INVALID_STATE;
-    }
+    (void)ctx;
 
     root = cJSON_Parse(input_json);
     if (!root) {
@@ -55,29 +41,9 @@ static esp_err_t cap_llm_inspect_execute(const char *input_json,
         return ESP_ERR_INVALID_ARG;
     }
 
-    asset.kind = CLAW_MEDIA_ASSET_KIND_LOCAL_PATH;
-    asset.path = path_json->valuestring;
-    request.system_prompt = CAP_LLM_INSPECT_SYSTEM_PROMPT;
-    request.user_prompt = prompt_json->valuestring;
-    request.media = &asset;
-    request.media_count = 1;
-    err = claw_core_llm_infer_media(ctx->core, &request, &analysis, &error_message);
     cJSON_Delete(root);
-    if (err != ESP_OK) {
-        snprintf(output,
-                 output_size,
-                 "Error: image analysis failed (%s)%s%s",
-                 esp_err_to_name(err),
-                 error_message ? ": " : "",
-                 error_message ? error_message : "");
-        free(error_message);
-        return err;
-    }
-
-    snprintf(output, output_size, "%s", analysis ? analysis : "");
-    free(analysis);
-    free(error_message);
-    return ESP_OK;
+    snprintf(output, output_size, "Error: image inspection is not supported by claw_agent C ABI");
+    return ESP_ERR_NOT_SUPPORTED;
 }
 
 static const claw_cap_descriptor_t s_llm_inspect_descriptors[] = {
@@ -88,7 +54,7 @@ static const claw_cap_descriptor_t s_llm_inspect_descriptors[] = {
         .description =
         "Analyze a local image from an absolute path. Confirm the path first, then provide a prompt describing what to inspect.",
         .kind = CLAW_CAP_KIND_CALLABLE,
-        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+        .cap_flags = 0,
         .input_schema_json =
         "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"prompt\":{\"type\":\"string\"}},\"required\":[\"path\",\"prompt\"]}",
         .execute = cap_llm_inspect_execute,

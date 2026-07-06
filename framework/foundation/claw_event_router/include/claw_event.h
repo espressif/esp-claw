@@ -8,7 +8,6 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "claw_session_mgr.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -29,14 +28,12 @@ typedef struct {
     char correlation_id[96];
     char content_type[24];
     int64_t timestamp_ms;
-    claw_session_policy_t session_policy;
     char *text;
     char *payload_json;
 } claw_event_t;
 
 esp_err_t claw_event_clone(const claw_event_t *src, claw_event_t *dst);
 void claw_event_free(claw_event_t *event);
-const char *claw_event_session_policy_to_string(claw_session_policy_t policy);
 
 #ifdef __cplusplus
 }

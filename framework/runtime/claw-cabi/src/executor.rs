@@ -1,89 +1,64 @@
 use core::future::Future;
-use core::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use core::task::{Context, Poll, Waker};
+use std::sync::{Arc, Condvar, Mutex};
+use std::task::Wake;
 
-use embedded_executor::{AllocExecutor, Sleep, Wake};
-use lock_api::{GuardSend, RawMutex};
-
-type CabiExecutor<'a> = AllocExecutor<'a, RawSpinlock, ParkingSleep>;
+use edge_executor::LocalExecutor;
 
 pub(crate) fn run<F>(future: F)
 where
     F: Future<Output = ()>,
 {
-    let mut executor: CabiExecutor<'_> = AllocExecutor::new();
-    executor.spawn(future);
-    executor.run();
+    let executor = LocalExecutor::<4>::new();
+    block_on(executor.run(future));
 }
 
-struct RawSpinlock(AtomicBool);
-
-// SAFETY: the flag gives one exclusive critical section with acquire/release.
-unsafe impl RawMutex for RawSpinlock {
-    #[allow(clippy::declare_interior_mutable_const)]
-    const INIT: Self = Self(AtomicBool::new(false));
-    type GuardMarker = GuardSend;
-
-    fn lock(&self) {
-        while !self.try_lock() {
-            core::hint::spin_loop();
+fn block_on<F: Future>(future: F) -> F::Output {
+    let parker = Arc::new(Parker::default());
+    let waker = Waker::from(Arc::clone(&parker));
+    let mut cx = Context::from_waker(&waker);
+    let mut future = Box::pin(future);
+    loop {
+        match future.as_mut().poll(&mut cx) {
+            Poll::Ready(output) => return output,
+            Poll::Pending => parker.park(),
         }
     }
-
-    fn try_lock(&self) -> bool {
-        self.0
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_ok()
-    }
-
-    unsafe fn unlock(&self) {
-        self.0.store(false, Ordering::Release);
-    }
-}
-
-#[derive(Clone, Default)]
-struct ParkingSleep {
-    inner: Arc<ParkingState>,
 }
 
 #[derive(Default)]
-struct ParkingState {
+struct Parker {
     notified: Mutex<bool>,
     condvar: Condvar,
 }
 
-impl Wake for ParkingSleep {
-    fn wake(&self) {
-        let mut notified = lock(&self.inner.notified);
-        *notified = true;
-        self.inner.condvar.notify_one();
-    }
-}
-
-impl ParkingSleep {
+impl Parker {
     fn park(&self) {
-        let mut notified = lock(&self.inner.notified);
+        let mut notified = self
+            .notified
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         while !*notified {
-            notified = wait(&self.inner.condvar, notified);
+            notified = self
+                .condvar
+                .wait(notified)
+                .unwrap_or_else(|p| p.into_inner());
         }
         *notified = false;
     }
 }
 
-impl Sleep for ParkingSleep {
-    fn sleep(&self) {
-        self.park();
+impl Wake for Parker {
+    fn wake(self: Arc<Self>) {
+        self.wake_by_ref();
     }
-}
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-fn wait<'a, T>(condvar: &Condvar, guard: MutexGuard<'a, T>) -> MutexGuard<'a, T> {
-    condvar
-        .wait(guard)
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    fn wake_by_ref(self: &Arc<Self>) {
+        let mut notified = self
+            .notified
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        *notified = true;
+        self.condvar.notify_one();
+    }
 }

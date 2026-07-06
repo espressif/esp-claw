@@ -113,34 +113,8 @@
     },
     "actions": [
       {
-        "type": "run_orchestrator",
-        "input": {
-          "target_channel": "{{event.source_channel}}",
-          "session_policy": "chat"
-        }
-      }
-    ]
-  },
-  {
-    "id": "orchestrator_stage_im_notify",
-    "description": "Deliver orchestrator stage progress messages to the original IM chat.",
-    "enabled": true,
-    "consume_on_match": true,
-    "ack": "{{event.source_channel}} orchestrator stage sent",
-    "match": {
-      "source_cap": "claw_orchestrator",
-      "event_type": "orchestrator_stage",
-      "content_type": "text"
-    },
-    "actions": [
-      {
-        "type": "send_message",
-        "input": {
-          "event_type": "{{event.event_type}}",
-          "channel": "{{event.source_channel}}",
-          "chat_id": "{{event.chat_id}}",
-          "message": "{{event.text}}"
-        }
+        "type": "run_agent",
+        "input": {}
       }
     ]
   },

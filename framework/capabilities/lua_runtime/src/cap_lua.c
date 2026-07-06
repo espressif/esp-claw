@@ -15,7 +15,6 @@
 
 #include "cJSON.h"
 #include "claw_cap.h"
-#include "claw_core.h"
 #include "esp_check.h"
 #include "esp_log.h"
 

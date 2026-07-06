@@ -710,10 +710,6 @@ static void cap_scheduler_parse_item_json(const cJSON *node, cap_scheduler_item_
     if (cJSON_IsString(value)) {
         strlcpy(item->content_type, value->valuestring, sizeof(item->content_type));
     }
-    value = cJSON_GetObjectItemCaseSensitive(node, "session_policy");
-    if (cJSON_IsString(value)) {
-        strlcpy(item->session_policy, value->valuestring, sizeof(item->session_policy));
-    }
     value = cJSON_GetObjectItemCaseSensitive(node, "text");
     if (cJSON_IsString(value)) {
         strlcpy(item->text, value->valuestring, sizeof(item->text));
@@ -771,7 +767,6 @@ esp_err_t cap_scheduler_entry_to_json(const cap_scheduler_entry_t *entry, bool i
         cJSON_AddStringToObject(root, "source_channel", entry->item.source_channel);
         cJSON_AddStringToObject(root, "chat_id", entry->item.chat_id);
         cJSON_AddStringToObject(root, "content_type", entry->item.content_type);
-        cJSON_AddStringToObject(root, "session_policy", entry->item.session_policy);
         cJSON_AddStringToObject(root, "text", entry->item.text);
         cJSON_AddStringToObject(root, "payload_json", entry->item.payload_json);
         cJSON_AddNumberToObject(root, "max_runs", entry->item.max_runs);

@@ -160,9 +160,6 @@ void cap_scheduler_apply_defaults(cap_scheduler_item_t *item)
     if (!item->content_type[0]) {
         strlcpy(item->content_type, "trigger", sizeof(item->content_type));
     }
-    if (!item->session_policy[0]) {
-        strlcpy(item->session_policy, "trigger", sizeof(item->session_policy));
-    }
     if (!item->payload_json[0]) {
         strlcpy(item->payload_json, "{}", sizeof(item->payload_json));
     }
