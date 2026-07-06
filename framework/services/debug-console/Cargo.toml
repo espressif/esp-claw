@@ -1,0 +1,27 @@
+[package]
+name = "debug-console"
+authors = ["Finn(Ziheng) Sheng"]
+version = "0.1.0"
+edition = "2021"
+description = "Reusable debug console service for ESP-Claw firmware and tests"
+
+[lib]
+name = "debug_console"
+crate-type = ["rlib"]
+
+[dependencies]
+thiserror = "2"
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+arithmetic_side_effects = "deny"
