@@ -18,8 +18,15 @@ claw-core = { path = "../claw-core" }
 claw-interface = { path = "../claw-interface" }
 claw-sys = { path = "../claw-sys" }
 claw-tool = { path = "../claw-tool" }
-claw-utils = { path = "../claw-utils" }
 edge-executor = { version = "0.4.1", default-features = false }
+# Vetted async MPMC channel (smol family, same lineage as `edge-executor`) for
+# the FFI->worker command queue, replacing the hand-rolled `claw_utils` channel.
+async-channel = "2"
+# The `Stream` trait so the worker loop can poll the command `Receiver` directly.
+futures-core = "0.3"
+# `block_on` for the executor entry point (smol family; edge-executor only
+# re-exports it under its `std` feature, which we keep off).
+futures-lite = "2"
 serde_json = "1"
 thiserror = "2"
 

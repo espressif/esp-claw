@@ -11,8 +11,8 @@ use std::sync::{Arc, Mutex};
 
 use claw_api::ClawApiConfig;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
+use async_channel::{bounded, Sender};
 use claw_tool::ToolRegistry;
-use claw_utils::{async_oneshot, AsyncOneshotSender};
 
 use crate::agent::{
     AgentIdAllocator, ApprovalDecision, CancelReason, FsAgentFactory, FsAgentFactoryError,
@@ -25,7 +25,8 @@ use self::approval::{ApprovalResolverError, PermissionReplyResolution};
 use self::control::{DriveStop, SessionControl};
 use self::instance::{OrchestratorInstance, PendingApproval};
 
-type SubmitReply = AsyncOneshotSender<Result<DriveOutput, DeliverError>>;
+// A `bounded(1)` channel used as a oneshot: exactly one reply per submission.
+type SubmitReply = Sender<Result<DriveOutput, DeliverError>>;
 
 struct QueuedSubmission {
     text: String,
@@ -195,7 +196,7 @@ where
             return Err(DeliverError::SessionNotFound(session_id));
         }
 
-        let (reply, receiver) = async_oneshot();
+        let (reply, receiver) = bounded(1);
         let should_drive =
             self.enqueue_submission(session_id, QueuedSubmission { text, kind, reply });
 
@@ -203,7 +204,7 @@ where
             self.drive_submissions(session_id).await;
         }
 
-        receiver.await.unwrap_or_else(|| {
+        receiver.recv().await.unwrap_or_else(|_| {
             Err(DeliverError::Agent(
                 "session submit driver ended before replying".to_string(),
             ))
@@ -233,7 +234,7 @@ where
                         control.request_cancel();
                     }
                     if let Some(replaced) = drive.carried.replace(submission) {
-                        let _ = replaced.reply.send(Err(DeliverError::Superseded));
+                        let _ = replaced.reply.try_send(Err(DeliverError::Superseded));
                     }
                 }
             }
@@ -259,7 +260,7 @@ where
                 Ok((output, stop)) => (Ok(output), stop),
                 Err(error) => (Err(error), DriveStop::Quiescent),
             };
-            let _ = submission.reply.send(result);
+            let _ = submission.reply.try_send(result);
             mode = match stop {
                 DriveStop::Quiescent => StartMode::Fresh,
                 DriveStop::Interrupted => StartMode::Interrupted,

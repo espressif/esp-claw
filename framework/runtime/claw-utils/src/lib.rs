@@ -1,19 +1,15 @@
 //! Shared helpers for the claw Rust crates: log-safe text truncation, the
-//! prefixed-id newtype macro ([`define_prefixed_id`]), async channel helpers,
-//! and the small host/test `block_on` executor.
+//! prefixed-id newtype macro ([`define_prefixed_id`]), and the id-allocator
+//! macro.
+//!
+//! Async primitives (channels, `block_on`) are intentionally NOT provided here:
+//! use vetted crates instead — `async-channel` for channels and
+//! `futures_lite::future::block_on` / `edge_executor::block_on` for driving a
+//! future to completion.
 
 use core::fmt;
 
 use thiserror::Error;
-
-pub mod async_channel;
-pub mod block_on;
-
-pub use async_channel::{
-    async_channel, async_oneshot, AsyncOneshotReceiver, AsyncOneshotSender, AsyncReceiver,
-    AsyncRecv, AsyncSendError, AsyncSender,
-};
-pub use block_on::block_on;
 
 /// Default byte ceiling for [`TruncatedText::new`]. On device, keep trace/log
 /// lines compact (flash + UART bandwidth); on host, print the full text so the

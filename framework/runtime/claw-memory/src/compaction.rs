@@ -50,7 +50,7 @@ pub enum CompactError {
 ///
 /// ```
 /// use claw_memory::{CompactError, Compactor};
-/// use claw_utils::block_on;
+/// use futures_lite::future::block_on;
 /// use serde_json::{json, Value};
 ///
 /// struct CountingCompactor;

@@ -72,3 +72,5 @@ claw-context = { path = "../claw-context" }
 claw-interface = { path = "../claw-interface", features = ["test-doubles", "stdthread"] }
 claw-utils = { path = "../claw-utils" }
 serde_json = "1"
+# `block_on` for tests (smol family; replaces the removed local spin executor).
+futures-lite = "2"

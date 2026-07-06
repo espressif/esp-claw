@@ -409,28 +409,10 @@ mod tests {
     use crate::memory::History;
     use claw_interface::MemFs;
     use claw_memory::MemoryId;
-    use core::future::Future;
-    use core::task::{Context, Poll};
+    use futures_lite::future::block_on;
     use serde_json::json;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use std::task::{Wake, Waker};
-
-    struct NoopWake;
-    impl Wake for NoopWake {
-        fn wake(self: Arc<Self>) {}
-    }
-
-    fn block_on<F: Future>(future: F) -> F::Output {
-        let mut future = Box::pin(future);
-        let waker = Waker::from(Arc::new(NoopWake));
-        let mut context = Context::from_waker(&waker);
-        loop {
-            if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
-                return value;
-            }
-        }
-    }
 
     /// A fixed-version transcript view for driving `maybe_schedule_extraction`.
     struct FakeHistory {

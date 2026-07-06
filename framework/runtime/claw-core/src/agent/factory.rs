@@ -440,35 +440,17 @@ impl<
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use core::future::Future;
-    use core::task::{Context, Poll};
     use std::sync::Arc;
-    use std::task::{Wake, Waker};
 
     use claw_api::BackendKind;
     use claw_interface::{BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp};
+    use futures_lite::future::block_on;
     use serde_json::json;
 
     use super::*;
     use crate::agent::base_agent::TickOutcome;
     use crate::agent::graph::GraphEffect;
     use claw_tool::ToolRegistry;
-
-    struct NoopWake;
-    impl Wake for NoopWake {
-        fn wake(self: Arc<Self>) {}
-    }
-
-    fn block_on<F: Future>(future: F) -> F::Output {
-        let mut future = Box::pin(future);
-        let waker = Waker::from(Arc::new(NoopWake));
-        let mut context = Context::from_waker(&waker);
-        loop {
-            if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
-                return value;
-            }
-        }
-    }
 
     /// A graph host that is never expected to fire in these single-agent tests.
     struct NoopHost;

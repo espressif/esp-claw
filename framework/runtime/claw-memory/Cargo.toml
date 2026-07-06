@@ -32,3 +32,6 @@ thiserror = "2"
 claw-interface = { path = "../claw-interface", features = ["memfs", "diskfs-pretty", "stdthread"] }
 # Ergonomic error handling for the host dev workflow `conversation` example.
 anyhow = "1"
+# `block_on` for the `Compactor` doctest (smol family; replaces the removed
+# `claw_utils::block_on`).
+futures-lite = "2"

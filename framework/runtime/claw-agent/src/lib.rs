@@ -248,10 +248,7 @@ fn clear_storage_tree<F: ClawFs>(fs: &F, path: &str) -> AgentResult<()> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use core::future::Future;
-    use core::task::Context;
-    use std::sync::Arc;
-    use std::task::{Wake, Waker};
+    use futures_lite::future::block_on;
 
     use claw_api::{BackendKind, ClawApiConfig};
     use claw_interface::{BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp};
@@ -260,23 +257,6 @@ mod tests {
     use super::*;
 
     type TestSystem = AgentSystem<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>;
-
-    struct NoopWake;
-
-    impl Wake for NoopWake {
-        fn wake(self: Arc<Self>) {}
-    }
-
-    fn block_on<F: Future>(future: F) -> F::Output {
-        let mut future = Box::pin(future);
-        let waker = Waker::from(Arc::new(NoopWake));
-        let mut context = Context::from_waker(&waker);
-        loop {
-            if let std::task::Poll::Ready(value) = future.as_mut().poll(&mut context) {
-                return value;
-            }
-        }
-    }
 
     #[test]
     fn clear_storage_tree_removes_nested_files() {

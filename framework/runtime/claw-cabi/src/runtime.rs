@@ -17,12 +17,14 @@ use claw_api::{BackendKind, ClawApiConfig};
 use claw_core::{DeliveryKind, DriveOutput, SessionId};
 use claw_interface::{ClawThread, CoreAffinity, Priority, WorkerHandle};
 use claw_sys::{EspIdfFs, EspIdfHttp, EspIdfThread, EspIdfTimer};
-use claw_utils::{async_channel, AsyncReceiver, AsyncRecv, AsyncSender};
+
+use async_channel::{Receiver, Sender};
+use futures_core::Stream;
 
 use crate::abi::{
     ClawAgentConfig, ClawAgentResponse, EspErr, CLAW_AGENT_RESPONSE_STATUS_ERROR,
-    CLAW_AGENT_RESPONSE_STATUS_OK, ESP_ERR_INVALID_ARG, ESP_ERR_INVALID_STATE, ESP_ERR_TIMEOUT,
-    ESP_FAIL, ESP_OK,
+    CLAW_AGENT_RESPONSE_STATUS_OK, ESP_ERR_INVALID_ARG, ESP_ERR_INVALID_SIZE,
+    ESP_ERR_INVALID_STATE, ESP_ERR_NOT_FOUND, ESP_ERR_TIMEOUT, ESP_FAIL, ESP_OK,
 };
 use crate::executor;
 use crate::tool::{register_capability_tools, with_capability_context, CapabilityContextData};
@@ -45,7 +47,7 @@ struct RuntimeController {
     config: RuntimeConfig,
     responses: Arc<ResponseStore>,
     next_request_id: AtomicU32,
-    sender: Option<AsyncSender<RuntimeCommand>>,
+    sender: Option<Sender<RuntimeCommand>>,
     worker: Option<WorkerHandle>,
 }
 
@@ -167,6 +169,13 @@ enum RuntimeCommand {
     CreateSession {
         reply: mpsc::Sender<Result<SessionId, CabiError>>,
     },
+    ListSessions {
+        reply: mpsc::Sender<Result<Vec<SessionId>, CabiError>>,
+    },
+    DeleteSession {
+        session: SessionId,
+        reply: mpsc::Sender<Result<(), CabiError>>,
+    },
     Stop {
         reply: mpsc::Sender<Result<(), CabiError>>,
     },
@@ -224,6 +233,26 @@ pub unsafe extern "C" fn claw_agent_session_create(out_session_id: *mut u32) -> 
 }
 
 #[no_mangle]
+/// List live numeric sessions.
+///
+/// # Safety
+/// `out_count` must point to writable memory for one usize. `out_session_ids`
+/// must be writable for `capacity` u32 values unless `capacity` is zero.
+pub unsafe extern "C" fn claw_agent_session_list(
+    out_session_ids: *mut u32,
+    capacity: usize,
+    out_count: *mut usize,
+) -> EspErr {
+    ffi_result(|| session_list(out_session_ids, capacity, out_count))
+}
+
+#[no_mangle]
+/// Delete a numeric session.
+pub extern "C" fn claw_agent_session_delete(session_id: u32) -> EspErr {
+    ffi_result(|| session_delete(session_id))
+}
+
+#[no_mangle]
 /// Receive one completed response.
 ///
 /// # Safety
@@ -242,7 +271,7 @@ pub unsafe extern "C" fn claw_agent_session_receive(
 ///
 /// # Safety
 /// `response` must be null or a response returned by `claw_agent_session_receive`.
-pub unsafe extern "C" fn claw_agent_response_free(response: *mut ClawAgentResponse) {
+pub unsafe extern "C" fn claw_agent_session_response_free(response: *mut ClawAgentResponse) {
     free_response(response);
 }
 
@@ -298,7 +327,7 @@ fn start() -> Result<(), CabiError> {
             return Ok(());
         }
 
-        let (sender, receiver) = async_channel();
+        let (sender, receiver) = async_channel::unbounded();
         let (ready_sender, ready_receiver) = mpsc::channel();
         let config = runtime.config.clone();
         let responses = Arc::clone(&runtime.responses);
@@ -384,11 +413,58 @@ fn session_create(out_session_id: *mut u32) -> Result<(), CabiError> {
     let sender = runtime_sender()?;
     let (reply, receiver) = mpsc::channel();
     sender
-        .send(RuntimeCommand::CreateSession { reply })
+        .try_send(RuntimeCommand::CreateSession { reply })
         .map_err(|_| CabiError::InvalidState)?;
     let session = receiver.recv().map_err(|_| CabiError::InvalidState)??;
     *out_session_id = session.0;
     Ok(())
+}
+
+fn session_list(
+    out_session_ids: *mut u32,
+    capacity: usize,
+    out_count: *mut usize,
+) -> Result<(), CabiError> {
+    let out_count = unsafe { out_count.as_mut() }.ok_or(CabiError::InvalidArgument)?;
+    if capacity > 0 && out_session_ids.is_null() {
+        return Err(CabiError::InvalidArgument);
+    }
+
+    let sender = runtime_sender()?;
+    let (reply, receiver) = mpsc::channel();
+    sender
+        .try_send(RuntimeCommand::ListSessions { reply })
+        .map_err(|_| CabiError::InvalidState)?;
+    let sessions = receiver.recv().map_err(|_| CabiError::InvalidState)??;
+    *out_count = sessions.len();
+    if capacity < sessions.len() {
+        return Err(CabiError::InvalidSize);
+    }
+    if capacity == 0 {
+        return Ok(());
+    }
+
+    let out_session_ids = unsafe { core::slice::from_raw_parts_mut(out_session_ids, capacity) };
+    for (slot, session) in out_session_ids.iter_mut().zip(sessions) {
+        *slot = session.0;
+    }
+    Ok(())
+}
+
+fn session_delete(session_id: u32) -> Result<(), CabiError> {
+    if session_id == 0 {
+        return Err(CabiError::InvalidArgument);
+    }
+
+    let sender = runtime_sender()?;
+    let (reply, receiver) = mpsc::channel();
+    sender
+        .try_send(RuntimeCommand::DeleteSession {
+            session: SessionId::new(session_id),
+            reply,
+        })
+        .map_err(|_| CabiError::InvalidState)?;
+    receiver.recv().map_err(|_| CabiError::InvalidState)?
 }
 
 fn submit_owned(
@@ -399,7 +475,7 @@ fn submit_owned(
     let (sender, request_id) = runtime_submit_sender()?;
     let (reply, receiver) = mpsc::channel();
     sender
-        .send(RuntimeCommand::Submit {
+        .try_send(RuntimeCommand::Submit {
             request_id,
             session,
             input,
@@ -428,7 +504,7 @@ fn receive(
 fn run_worker(
     config: RuntimeConfig,
     responses: Arc<ResponseStore>,
-    receiver: AsyncReceiver<RuntimeCommand>,
+    receiver: Receiver<RuntimeCommand>,
     ready: mpsc::Sender<Result<(), CabiError>>,
 ) {
     executor::run(worker_loop(config, responses, receiver, ready));
@@ -437,9 +513,12 @@ fn run_worker(
 async fn worker_loop(
     config: RuntimeConfig,
     responses: Arc<ResponseStore>,
-    receiver: AsyncReceiver<RuntimeCommand>,
+    receiver: Receiver<RuntimeCommand>,
     ready: mpsc::Sender<Result<(), CabiError>>,
 ) {
+    // `async_channel::Receiver` is `!Unpin` (it holds a pinned event listener), so
+    // it must be pinned once before it can be polled as a `Stream` below.
+    let mut receiver = core::pin::pin!(receiver);
     let mut state = match RuntimeState::new(config, responses) {
         Ok(state) => state,
         Err(error) => {
@@ -470,7 +549,7 @@ async fn worker_loop(
             return;
         }
 
-        let recv = receiver_open.then(|| receiver.recv());
+        let recv = receiver_open.then(|| receiver.as_mut());
         match (WorkerPoll {
             inflight: &mut inflight,
             recv,
@@ -502,6 +581,25 @@ async fn worker_loop(
                     let _ = reply.send(Err(CabiError::InvalidState));
                 } else {
                     let _ = reply.send(Ok(state.agent.new_session()));
+                }
+            }
+            WorkerEvent::Command(Some(RuntimeCommand::ListSessions { reply })) => {
+                if stop_reply.is_some() {
+                    let _ = reply.send(Err(CabiError::InvalidState));
+                } else {
+                    let _ = reply.send(Ok(state.agent.list_sessions()));
+                }
+            }
+            WorkerEvent::Command(Some(RuntimeCommand::DeleteSession { session, reply })) => {
+                if stop_reply.is_some() {
+                    let _ = reply.send(Err(CabiError::InvalidState));
+                } else {
+                    let _ = reply.send(
+                        state
+                            .agent
+                            .delete_session(session)
+                            .map_err(|_| CabiError::NotFound),
+                    );
                 }
             }
             WorkerEvent::Command(Some(RuntimeCommand::Stop { reply })) => {
@@ -563,6 +661,9 @@ impl RuntimeState {
         session: SessionId,
         input: SubmitInput,
     ) -> Result<SubmitTask, CabiError> {
+        if !self.agent.list_sessions().contains(&session) {
+            return Err(CabiError::NotFound);
+        }
         let capability_context = CapabilityContextData {
             request_id,
             ..CapabilityContextData::default()
@@ -619,12 +720,12 @@ async fn run_submit(task: SubmitTask, store_response: bool) -> CompletedSubmit {
     }
 }
 
-struct WorkerPoll<'a, 'receiver> {
+struct WorkerPoll<'a> {
     inflight: &'a mut VecDeque<InflightSubmit>,
-    recv: Option<AsyncRecv<'receiver, RuntimeCommand>>,
+    recv: Option<Pin<&'a mut Receiver<RuntimeCommand>>>,
 }
 
-impl Future for WorkerPoll<'_, '_> {
+impl Future for WorkerPoll<'_> {
     type Output = WorkerEvent;
 
     fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
@@ -639,16 +740,19 @@ impl Future for WorkerPoll<'_, '_> {
             self.inflight.push_back(future);
         }
 
+        // Poll the command `Receiver` as a `Stream`: `Some(cmd)` for a queued
+        // command, `None` once every sender has dropped (same "closed" signal the
+        // old channel gave).
         match self.recv.as_mut() {
-            Some(recv) => Pin::new(recv).poll(context).map(WorkerEvent::Command),
+            Some(receiver) => receiver.as_mut().poll_next(context).map(WorkerEvent::Command),
             None => Poll::Pending,
         }
     }
 }
 
-fn stop_worker(sender: AsyncSender<RuntimeCommand>, worker: WorkerHandle) -> Result<(), CabiError> {
+fn stop_worker(sender: Sender<RuntimeCommand>, worker: WorkerHandle) -> Result<(), CabiError> {
     let (reply, receiver) = mpsc::channel();
-    let result = match sender.send(RuntimeCommand::Stop { reply }) {
+    let result = match sender.try_send(RuntimeCommand::Stop { reply }) {
         Ok(()) => receiver.recv().map_err(|_| CabiError::InvalidState)?,
         Err(_) => Err(CabiError::InvalidState),
     };
@@ -657,7 +761,7 @@ fn stop_worker(sender: AsyncSender<RuntimeCommand>, worker: WorkerHandle) -> Res
     result
 }
 
-fn take_running() -> Result<Option<(AsyncSender<RuntimeCommand>, WorkerHandle)>, CabiError> {
+fn take_running() -> Result<Option<(Sender<RuntimeCommand>, WorkerHandle)>, CabiError> {
     let _guard = lock_runtime();
     let runtime = runtime_mut()?;
     let Some(sender) = runtime.sender.take() else {
@@ -669,7 +773,7 @@ fn take_running() -> Result<Option<(AsyncSender<RuntimeCommand>, WorkerHandle)>,
     Ok(Some((sender, worker)))
 }
 
-fn runtime_submit_sender() -> Result<(AsyncSender<RuntimeCommand>, u32), CabiError> {
+fn runtime_submit_sender() -> Result<(Sender<RuntimeCommand>, u32), CabiError> {
     let _guard = lock_runtime();
     let runtime = runtime_mut()?;
     let sender = runtime.sender.clone().ok_or(CabiError::InvalidState)?;
@@ -680,7 +784,7 @@ fn runtime_submit_sender() -> Result<(AsyncSender<RuntimeCommand>, u32), CabiErr
     Ok((sender, request_id))
 }
 
-fn runtime_sender() -> Result<AsyncSender<RuntimeCommand>, CabiError> {
+fn runtime_sender() -> Result<Sender<RuntimeCommand>, CabiError> {
     let _guard = lock_runtime();
     let runtime = runtime_mut()?;
     runtime.sender.clone().ok_or(CabiError::InvalidState)
@@ -789,6 +893,10 @@ enum CabiError {
     InvalidArgument,
     #[error("invalid state")]
     InvalidState,
+    #[error("invalid size")]
+    InvalidSize,
+    #[error("not found")]
+    NotFound,
     #[error("timeout")]
     Timeout,
     #[error(transparent)]
@@ -806,6 +914,8 @@ impl CabiError {
         match self {
             Self::InvalidArgument => ESP_ERR_INVALID_ARG,
             Self::InvalidState => ESP_ERR_INVALID_STATE,
+            Self::InvalidSize => ESP_ERR_INVALID_SIZE,
+            Self::NotFound => ESP_ERR_NOT_FOUND,
             Self::Timeout => ESP_ERR_TIMEOUT,
             Self::Thread(_) | Self::Agent(_) | Self::Tool(_) | Self::CapTool(_) => ESP_FAIL,
         }

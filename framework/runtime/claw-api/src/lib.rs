@@ -124,12 +124,10 @@ mod tests {
         HttpRequestFailure, HttpResponse, HttpResponseFuture, HttpStatusCode,
     };
     use claw_interface::{Cancel, ClawTimer, ImmediateTimer, SleepOutcome, TimerFuture};
-    use core::future::Future;
     use core::sync::atomic::AtomicBool;
-    use core::task::{Context, Poll};
+    use futures_lite::future::block_on;
     use serde_json::{json, Value};
     use std::sync::{Arc, Mutex};
-    use std::task::{Wake, Waker};
     use std::time::Duration;
 
     #[derive(Debug)]
@@ -236,23 +234,6 @@ mod tests {
                 }
                 result
             })
-        }
-    }
-
-    struct NoopWake;
-
-    impl Wake for NoopWake {
-        fn wake(self: Arc<Self>) {}
-    }
-
-    fn block_on<F: Future>(future: F) -> F::Output {
-        let mut future = Box::pin(future);
-        let waker = Waker::from(Arc::new(NoopWake));
-        let mut context = Context::from_waker(&waker);
-        loop {
-            if let Poll::Ready(output) = future.as_mut().poll(&mut context) {
-                return output;
-            }
         }
     }
 

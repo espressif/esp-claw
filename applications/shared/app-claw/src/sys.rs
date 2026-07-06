@@ -152,13 +152,20 @@ mod imp {
             text: *const c_char,
             out_request_id: *mut u32,
         ) -> c_int;
+        fn claw_agent_session_create(out_session_id: *mut u32) -> c_int;
+        fn claw_agent_session_list(
+            out_session_ids: *mut u32,
+            capacity: usize,
+            out_count: *mut usize,
+        ) -> c_int;
+        fn claw_agent_session_delete(session_id: u32) -> c_int;
         fn claw_agent_session_receive(
             session_id: u32,
             request_id: u32,
             out_response: *mut ClawAgentResponse,
             timeout_ms: u32,
         ) -> c_int;
-        fn claw_agent_response_free(response: *mut ClawAgentResponse);
+        fn claw_agent_session_response_free(response: *mut ClawAgentResponse);
         fn esp_err_to_name(error: c_int) -> *const c_char;
     }
 
@@ -342,6 +349,54 @@ mod imp {
         Err(ffi_error("event router emit trigger", err))
     }
 
+    pub(crate) fn agent_session_create() -> Result<String> {
+        let mut session_id = 0_u32;
+        let err = unsafe { claw_agent_session_create(&mut session_id) };
+        if err == ESP_OK {
+            return Ok(format!("session_id={session_id}\n"));
+        }
+        Err(ffi_error("agent session create", err))
+    }
+
+    pub(crate) fn agent_session_list() -> Result<String> {
+        let mut count = 0_usize;
+        let err = unsafe { claw_agent_session_list(core::ptr::null_mut(), 0, &mut count) };
+        if err != ESP_OK {
+            return Err(ffi_error("agent session list", err));
+        }
+        if count == 0 {
+            return Ok("no sessions\n".to_owned());
+        }
+
+        let mut sessions = vec![0_u32; count];
+        let mut actual_count = 0_usize;
+        let err = unsafe {
+            claw_agent_session_list(sessions.as_mut_ptr(), sessions.len(), &mut actual_count)
+        };
+        if err != ESP_OK {
+            return Err(ffi_error("agent session list", err));
+        }
+        sessions.truncate(actual_count);
+
+        let mut output = String::new();
+        for session_id in sessions {
+            let _ = writeln!(output, "{session_id}");
+        }
+        Ok(output)
+    }
+
+    pub(crate) fn agent_session_delete(session_id: u32) -> Result<String> {
+        if session_id == 0 {
+            return Err(Error::Stream("session id must be non-zero".to_owned()));
+        }
+
+        let err = unsafe { claw_agent_session_delete(session_id) };
+        if err == ESP_OK {
+            return Ok(format!("deleted session_id={session_id}\n"));
+        }
+        Err(ffi_error("agent session delete", err))
+    }
+
     #[allow(dead_code)]
     pub(crate) fn agent_submit_session(
         session_id: u32,
@@ -377,7 +432,7 @@ mod imp {
         } else {
             cstr_to_string(response.error_message)
         };
-        unsafe { claw_agent_response_free(&mut response) };
+        unsafe { claw_agent_session_response_free(&mut response) };
 
         if response.status == 0 {
             Ok(output)
@@ -526,6 +581,18 @@ mod imp {
         _timeout_ms: u32,
     ) -> Result<String> {
         unsupported("agent submit")
+    }
+
+    pub(crate) fn agent_session_create() -> Result<String> {
+        unsupported("agent session create")
+    }
+
+    pub(crate) fn agent_session_list() -> Result<String> {
+        unsupported("agent session list")
+    }
+
+    pub(crate) fn agent_session_delete(_session_id: u32) -> Result<String> {
+        unsupported("agent session delete")
     }
 
     fn unsupported(operation: &'static str) -> Result<String> {

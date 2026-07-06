@@ -109,6 +109,26 @@ fn agent_ask(_context: CommandContext<'_>, args: CommandArgs<'_>) -> Result<Stri
     }
 }
 
+fn agent_session_create(_context: CommandContext<'_>, args: CommandArgs<'_>) -> Result<String> {
+    require_no_args(args, "agent session create")?;
+    sys::agent_session_create()
+}
+
+fn agent_session_list(_context: CommandContext<'_>, args: CommandArgs<'_>) -> Result<String> {
+    require_no_args(args, "agent session list")?;
+    sys::agent_session_list()
+}
+
+fn agent_session_delete(_context: CommandContext<'_>, args: CommandArgs<'_>) -> Result<String> {
+    let session_id = require_one_arg(args, "agent session delete <session_id>")?
+        .parse::<u32>()
+        .map_err(|_| usage_error("agent session delete <session_id>"))?;
+    if session_id == 0 {
+        return Err(Error::Stream("session id must be non-zero".to_owned()));
+    }
+    sys::agent_session_delete(session_id)
+}
+
 fn cap_list(_context: CommandContext<'_>, args: CommandArgs<'_>) -> Result<String> {
     require_no_args(args, "cap list")?;
     sys::cap_list()
@@ -308,6 +328,30 @@ fn push_json_string(output: &mut String, value: &str) {
     output.push('"');
 }
 
+static AGENT_SESSION_COMMANDS: &[CommandSpec] = &[
+    CommandSpec {
+        name: "create",
+        help: "Create an agent session",
+        usage: Some("agent session create"),
+        handler: Some(agent_session_create),
+        children: &[],
+    },
+    CommandSpec {
+        name: "list",
+        help: "List agent sessions",
+        usage: Some("agent session list"),
+        handler: Some(agent_session_list),
+        children: &[],
+    },
+    CommandSpec {
+        name: "delete",
+        help: "Delete an agent session",
+        usage: Some("agent session delete <session_id>"),
+        handler: Some(agent_session_delete),
+        children: &[],
+    },
+];
+
 static AGENT_COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         name: "ask",
@@ -318,10 +362,10 @@ static AGENT_COMMANDS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "session",
-        help: "Show one agent session",
-        usage: Some("agent session <session_id>"),
+        help: "Agent session operations",
+        usage: Some("agent session <command>"),
         handler: None,
-        children: &[],
+        children: AGENT_SESSION_COMMANDS,
     },
 ];
 
@@ -536,8 +580,8 @@ mod tests {
     }
 
     #[test]
-    fn leaves_unwired_agent_session_handler_empty() {
-        let mut found = false;
+    fn wires_agent_session_commands_to_numeric_session_api() {
+        let mut found = Vec::new();
 
         for command in COMMANDS {
             if command.name != "agent" {
@@ -547,13 +591,15 @@ mod tests {
                 if child.name != "session" {
                     continue;
                 }
-                found = true;
-                assert_eq!(child.usage, Some("agent session <session_id>"));
                 assert!(child.handler.is_none());
+                for session_child in child.children {
+                    found.push(session_child.name);
+                    assert!(session_child.handler.is_some());
+                }
             }
         }
 
-        assert!(found);
+        assert_eq!(found, ["create", "list", "delete"]);
     }
 
     #[test]

@@ -502,34 +502,16 @@ fn log_tool_call_names(iteration_id: IterationId, response: &LlmResponse) {
 
 #[cfg(test)]
 mod tests {
-    use core::future::Future;
-    use core::task::{Context, Poll};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
-    use std::task::{Wake, Waker};
 
     use super::*;
     use claw_api::{ClawApiError, ToolCall};
     use claw_tool::{
         SyncToolHandler, Tool, ToolInvokeError, ToolOutput, ToolRegistry, ToolSet, ToolSpec,
     };
+    use futures_lite::future::block_on;
     use serde_json::json;
-
-    struct NoopWake;
-    impl Wake for NoopWake {
-        fn wake(self: Arc<Self>) {}
-    }
-
-    fn block_on<F: Future>(future: F) -> F::Output {
-        let mut future = Box::pin(future);
-        let waker = Waker::from(Arc::new(NoopWake));
-        let mut context = Context::from_waker(&waker);
-        loop {
-            if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
-                return value;
-            }
-        }
-    }
 
     fn tool_set(tool: impl SyncToolHandler + 'static) -> ToolSet {
         let registry = ToolRegistry::new();
@@ -871,13 +853,10 @@ mod tests {
 mod behavior_tests {
     //! Internal behavior tests for the iteration loop.
 
-    use core::future::Future;
-    use core::task::{Context, Poll};
     use std::collections::VecDeque;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
-    use std::task::{Wake, Waker};
 
     use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig, RetryPolicy};
     use claw_interface::http::{
@@ -907,22 +886,7 @@ mod behavior_tests {
 
     type TestLlm<H> = ClawApiAsync<BlockingHttpAdapter<H>, ImmediateTimer>;
 
-    struct NoopWake;
-
-    impl Wake for NoopWake {
-        fn wake(self: Arc<Self>) {}
-    }
-
-    fn block_on<F: Future>(future: F) -> F::Output {
-        let mut future = Box::pin(future);
-        let waker = Waker::from(Arc::new(NoopWake));
-        let mut context = Context::from_waker(&waker);
-        loop {
-            if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
-                return value;
-            }
-        }
-    }
+    use futures_lite::future::block_on;
 
     struct AllowGate;
 

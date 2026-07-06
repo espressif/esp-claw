@@ -5,6 +5,7 @@
  */
 #pragma once
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "esp_err.h"
@@ -39,9 +40,9 @@ typedef enum {
 
 typedef struct {
     claw_agent_response_status_t status;
-    /* Owned UTF-8 C string; release with claw_agent_response_free. */
+    /* Owned UTF-8 C string; release with claw_agent_session_response_free. */
     char *text;
-    /* Owned UTF-8 C string; release with claw_agent_response_free. */
+    /* Owned UTF-8 C string; release with claw_agent_session_response_free. */
     char *error_message;
 } claw_agent_response_t;
 
@@ -102,6 +103,7 @@ esp_err_t claw_agent_deinit(void);
  * - ESP_OK after the worker accepts and schedules the request.
  * - ESP_ERR_INVALID_ARG for invalid text/session arguments.
  * - ESP_ERR_INVALID_STATE if the runtime is not started or is stopping.
+ * - ESP_ERR_NOT_FOUND if session_id is not live.
  * - ESP_FAIL for unexpected scheduling failures.
  */
 esp_err_t claw_agent_session_submit(uint32_t session_id,
@@ -121,13 +123,45 @@ esp_err_t claw_agent_session_submit(uint32_t session_id,
 esp_err_t claw_agent_session_create(uint32_t *out_session_id);
 
 /*
+ * List live numeric session ids.
+ *
+ * out_count must be non-NULL. On every successful or ESP_ERR_INVALID_SIZE
+ * return, out_count receives the total live session count. out_session_ids may
+ * be NULL only when capacity is 0.
+ *
+ * Returns:
+ * - ESP_OK on success.
+ * - ESP_ERR_INVALID_ARG if out_count is NULL, or out_session_ids is NULL while
+ *   capacity is non-zero.
+ * - ESP_ERR_INVALID_STATE if the runtime is not started or is stopping.
+ * - ESP_ERR_INVALID_SIZE if capacity is smaller than the live session count.
+ */
+esp_err_t claw_agent_session_list(uint32_t *out_session_ids,
+                                  size_t capacity,
+                                  size_t *out_count);
+
+/*
+ * Delete a live numeric session id.
+ *
+ * session_id must be non-zero. Deleting a session also drops its live agent
+ * graph.
+ *
+ * Returns:
+ * - ESP_OK on success.
+ * - ESP_ERR_INVALID_ARG if session_id is 0.
+ * - ESP_ERR_INVALID_STATE if the runtime is not started or is stopping.
+ * - ESP_ERR_NOT_FOUND if session_id is not live.
+ */
+esp_err_t claw_agent_session_delete(uint32_t session_id);
+
+/*
  * Wait for the completed output of a previous submit request.
  *
  * session_id must be non-zero and match the session used for submit.
  * request_id must be non-zero and must come from a successful submit call
  * whose out_request_id was non-NULL. out_response must be non-NULL. On
  * success, out_response owns text and error_message until
- * claw_agent_response_free. A response can be received only once.
+ * claw_agent_session_response_free. A response can be received only once.
  *
  * timeout_ms == 0 performs a non-blocking poll. Unknown request ids and
  * not-yet-completed requests both return ESP_ERR_TIMEOUT when the timeout
@@ -152,7 +186,7 @@ esp_err_t claw_agent_session_receive(uint32_t session_id,
  * response may be NULL. After return, response->text and
  * response->error_message are set to NULL.
  */
-void claw_agent_response_free(claw_agent_response_t *response);
+void claw_agent_session_response_free(claw_agent_response_t *response);
 
 #ifdef __cplusplus
 }

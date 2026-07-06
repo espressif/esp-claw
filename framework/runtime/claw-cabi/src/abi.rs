@@ -6,6 +6,8 @@ pub const ESP_OK: EspErr = 0;
 pub const ESP_FAIL: EspErr = -1;
 pub const ESP_ERR_INVALID_ARG: EspErr = 0x102;
 pub const ESP_ERR_INVALID_STATE: EspErr = 0x103;
+pub const ESP_ERR_INVALID_SIZE: EspErr = 0x104;
+pub const ESP_ERR_NOT_FOUND: EspErr = 0x105;
 pub const ESP_ERR_TIMEOUT: EspErr = 0x107;
 
 pub const CLAW_CAP_KIND_CALLABLE: c_int = 0;

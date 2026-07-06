@@ -173,7 +173,7 @@ static void cap_agent_reply_task(void *param)
     }
 
 cleanup:
-    claw_agent_response_free(&response);
+    claw_agent_session_response_free(&response);
     free(arg);
     vTaskDelete(NULL);
 }

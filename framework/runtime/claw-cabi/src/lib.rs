@@ -11,8 +11,9 @@ mod tool;
 
 #[cfg(target_os = "espidf")]
 pub use runtime::{
-    claw_agent_deinit, claw_agent_init, claw_agent_response_free, claw_agent_session_create,
-    claw_agent_session_receive, claw_agent_session_submit, claw_agent_start, claw_agent_stop,
+    claw_agent_deinit, claw_agent_init, claw_agent_session_create, claw_agent_session_delete,
+    claw_agent_session_list, claw_agent_session_receive, claw_agent_session_response_free,
+    claw_agent_session_submit, claw_agent_start, claw_agent_stop,
 };
 
 #[cfg(not(target_os = "espidf"))]

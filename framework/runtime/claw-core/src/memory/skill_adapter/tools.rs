@@ -169,7 +169,7 @@ mod tests {
         tools.add_tool(tool.clone()).unwrap();
         let handle = tools.begin().unwrap();
         let call = call(name, arguments_json);
-        claw_utils::block_on(handle.invoke(&call))
+        futures_lite::future::block_on(handle.invoke(&call))
     }
 
     fn invoke(tool: &claw_tool::Tool, name: &str) -> ToolOutput {

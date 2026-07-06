@@ -65,6 +65,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
+name = "async-channel"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "924ed96dd52d1b75e9c1a3e6275715fd320f5f9439fb5a4a11fa51f4221158d2"
+dependencies = [
+ "concurrent-queue",
+ "event-listener-strategy",
+ "futures-core",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "async-task"
 version = "4.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -135,6 +147,7 @@ dependencies = [
  "claw-tool",
  "claw-utils",
  "dotenvy",
+ "futures-lite 2.6.1",
  "serde_json",
  "thiserror",
  "tokio",
@@ -147,6 +160,7 @@ dependencies = [
  "anyhow",
  "base64",
  "claw-interface",
+ "futures-lite 2.6.1",
  "serde",
  "serde_json",
  "thiserror",
@@ -167,14 +181,16 @@ dependencies = [
 name = "claw-cabi"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
  "claw-agent",
  "claw-api",
  "claw-core",
  "claw-interface",
  "claw-sys",
  "claw-tool",
- "claw-utils",
  "edge-executor",
+ "futures-core",
+ "futures-lite 2.6.1",
  "serde_json",
  "thiserror",
 ]
@@ -191,6 +207,7 @@ name = "claw-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
  "claw-api",
  "claw-context",
  "claw-interface",
@@ -200,6 +217,7 @@ dependencies = [
  "claw-tool",
  "claw-utils",
  "dotenvy",
+ "futures-lite 2.6.1",
  "proc-macro2",
  "quote",
  "serde",
@@ -240,6 +258,7 @@ dependencies = [
  "anyhow",
  "claw-interface",
  "claw-utils",
+ "futures-lite 2.6.1",
  "log",
  "serde",
  "serde_json",
@@ -317,6 +336,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
+name = "concurrent-queue"
+version = "2.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
+dependencies = [
+ "crossbeam-utils",
+]
+
+[[package]]
 name = "crossbeam-queue"
 version = "0.3.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -357,7 +385,7 @@ dependencies = [
  "async-task",
  "atomic-waker",
  "crossbeam-queue",
- "futures-lite",
+ "futures-lite 1.13.0",
  "once_cell",
 ]
 
@@ -395,6 +423,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "event-listener"
+version = "5.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e13b66accf52311f30a0db42147dadea9850cb48cd070028831ae5f5d4b856ab"
+dependencies = [
+ "concurrent-queue",
+ "parking",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "event-listener-strategy"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
+dependencies = [
+ "event-listener",
+ "pin-project-lite",
+]
+
+[[package]]
 name = "fastrand"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -402,6 +451,12 @@ checksum = "e51093e27b0797c359783294ca4f0a911c270184cb10f85783b118614a1501be"
 dependencies = [
  "instant",
 ]
+
+[[package]]
+name = "fastrand"
+version = "2.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
 name = "find-msvc-tools"
@@ -460,13 +515,26 @@ version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49a9d51ce47660b1e808d3c990b4709f2f415d928835a17dfd16991515c46bce"
 dependencies = [
- "fastrand",
+ "fastrand 1.9.0",
  "futures-core",
  "futures-io",
  "memchr",
  "parking",
  "pin-project-lite",
  "waker-fn",
+]
+
+[[package]]
+name = "futures-lite"
+version = "2.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f78e10609fe0e0b3f4157ffab1876319b5b0db102a2c60dc4626306dc46b44ad"
+dependencies = [
+ "fastrand 2.4.1",
+ "futures-core",
+ "futures-io",
+ "parking",
+ "pin-project-lite",
 ]
 
 [[package]]
