@@ -101,9 +101,9 @@ This walkthrough uses sample app `applications/edge_agent`, covering entry <Link
 
     Otherwise `claw_core_init` / `claw_core_start` are skipped with a WARN—`ask`, default Agent routing, image inspect, and other core-dependent features stay unavailable until the LLM is configured and the device reboots.
 
-8. **Start Event Router, scheduler, time sync, Console REPL, and startup events**
+8. **Start Event Router, scheduler, time sync, and startup events**
 
-    `claw_event_router_start` begins processing inbound events, then `cap_scheduler_start` starts the scheduler task, then `cap_time_sync_service_start` starts SNTP (first successful sync triggers `cap_scheduler_handle_time_sync` to rebase the scheduler), then `app_claw_cli_start` opens the Console REPL, and finally `startup` / `boot_completed` trigger events are published to notify the system that boot is complete.
+    `claw_event_router_start` begins processing inbound events, then `cap_scheduler_start` starts the scheduler task, then `cap_time_sync_service_start` starts SNTP (first successful sync triggers `cap_scheduler_handle_time_sync` to rebase the scheduler), and finally `startup` / `boot_completed` trigger events are published to notify the system that boot is complete.
 
 </Steps>
 

@@ -11,10 +11,6 @@ if(CONFIG_APP_CLAW_CAP_CORE)
     list(APPEND app_claw_requires runtime)
 endif()
 
-if(CONFIG_APP_CLAW_ENABLE_CLI)
-    list(APPEND app_claw_srcs "app_claw_cli.c")
-endif()
-
 idf_component_register(
     SRCS
         ${app_claw_srcs}

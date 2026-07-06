@@ -1,12 +1,5 @@
 menu "App Claw Config"
 
-    config APP_CLAW_ENABLE_CLI
-        bool "Enable App Claw CLI"
-        default y
-        help
-            Enable the console REPL managed by app_claw. When disabled, app_claw
-            does not build or start the serial CLI.
-
     config APP_CLAW_ENABLE_EMOTE
         bool "Enable App Claw emote"
         depends on ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT

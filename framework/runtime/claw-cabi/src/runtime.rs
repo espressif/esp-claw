@@ -261,7 +261,22 @@ fn init(config: *const ClawAgentConfig) -> Result<(), CabiError> {
         required_string(config.base_url)?,
     );
     let persistence_dir = required_string(config.persistence_dir)?;
-    let persistence = AgentPersistenceConfig::new(&persistence_dir);
+    // Skill roots are scanned in priority order: writable DATA skills first, then
+    // read-only firmware skills. Both are optional; a missing/blank root is simply
+    // skipped so the agent still starts (with fewer skills).
+    let mut skill_roots = Vec::new();
+    for root in [
+        optional_string(config.skills_root_dir)?,
+        optional_string(config.system_skills_root_dir)?,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if !root.trim().is_empty() {
+            skill_roots.push(root);
+        }
+    }
+    let persistence = AgentPersistenceConfig::new(&persistence_dir).with_skill_roots(skill_roots);
 
     let _guard = lock_runtime();
     if !RUNTIME.load(Ordering::Acquire).is_null() {

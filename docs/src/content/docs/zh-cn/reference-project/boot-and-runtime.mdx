@@ -101,9 +101,9 @@ import LinkToSource from '@/components/LinkToSource.astro';
 
     若 LLM 未完整配置，则跳过 `claw_core_init` / `claw_core_start` 并打印 WARN；`ask`、默认路由至 Agent、图片 inspect 等依赖 core 的功能完全不可用，直到 LLM 配置补全并重启。
 
-8. **启动 Event Router、调度器、时间同步、Console REPL 与启动事件**
+8. **启动 Event Router、调度器、时间同步与启动事件**
 
-    调用 `claw_event_router_start` 开始处理入站事件，随后调用 `cap_scheduler_start` 启动调度器任务，再调用 `cap_time_sync_service_start` 启动 SNTP 时间同步服务（首次同步成功时会触发 `cap_scheduler_handle_time_sync` 对调度器进行时间校准），再调用 `app_claw_cli_start` 启动 Console REPL，最后发布 `startup` / `boot_completed` 触发事件通知系统启动完成，装配完毕。
+    调用 `claw_event_router_start` 开始处理入站事件，随后调用 `cap_scheduler_start` 启动调度器任务，再调用 `cap_time_sync_service_start` 启动 SNTP 时间同步服务（首次同步成功时会触发 `cap_scheduler_handle_time_sync` 对调度器进行时间校准），最后发布 `startup` / `boot_completed` 触发事件通知系统启动完成，装配完毕。
 
 </Steps>
 

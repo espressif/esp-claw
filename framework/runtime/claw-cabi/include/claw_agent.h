@@ -26,6 +26,12 @@ typedef struct {
     const char *base_url;
     /* Required non-null UTF-8 C string. */
     const char *persistence_dir;
+    /* Optional UTF-8 C string; may be NULL. Writable DATA skills root, e.g.
+     * "<DATA>/skills". Scanned first so it takes priority over the system root. */
+    const char *skills_root_dir;
+    /* Optional UTF-8 C string; may be NULL. Read-only firmware skills root,
+     * e.g. "/system/skills". Scanned after the DATA root. */
+    const char *system_skills_root_dir;
 } claw_agent_config_t;
 
 typedef struct {

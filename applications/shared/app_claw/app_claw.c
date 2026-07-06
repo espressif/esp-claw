@@ -4,7 +4,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "app_claw.h"
-#include "app_claw_cli.h"
 #include "app_capabilities.h"
 #if CONFIG_APP_CLAW_ENABLE_EMOTE
 #include "emote.h"
@@ -74,12 +73,6 @@ static const char *APP_STARTUP_EVENT_KEY = "boot_completed";
 #define APP_SYSTEM_PROMPT \
     APP_SYSTEM_PROMPT_COMMON \
     APP_SYSTEM_PROMPT_SUFFIX
-
-static bool app_claw_bool_is_true(const char *value)
-{
-    return value &&
-           (strcmp(value, "true") == 0 || strcmp(value, "1") == 0 || strcmp(value, "yes") == 0);
-}
 
 esp_err_t app_claw_ui_start(void)
 {
@@ -256,6 +249,8 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
                                 .model = config->llm_model,
                                 .base_url = config->llm_base_url,
                                 .persistence_dir = paths.agent_persistence_dir,
+                                .skills_root_dir = paths.skills_root_dir,
+                                .system_skills_root_dir = paths.system_skills_root_dir,
                             }),
                             TAG, "Failed to init claw_agent");
         ESP_RETURN_ON_ERROR(claw_agent_start(), TAG, "Failed to start claw_agent");
@@ -281,9 +276,6 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
                     }));
 #endif
 
-#if CONFIG_APP_CLAW_ENABLE_CLI
-    ESP_RETURN_ON_ERROR(app_claw_cli_start(), TAG, "Failed to start CLI");
-#endif
 #if CONFIG_APP_CLAW_CAP_EVENT_ROUTER
     ESP_RETURN_ON_ERROR(app_claw_publish_startup_event(), TAG,
                         "Failed to publish startup event");

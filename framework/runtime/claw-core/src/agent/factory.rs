@@ -25,7 +25,7 @@ use claw_memory::{
     LongTermInitError, LongTermMemory, ProfileConfig, ProfileStore, TranscriptConfig,
     TranscriptStore,
 };
-use claw_skill::SkillSet;
+use claw_skill::{FsSkillRegistry, SkillSet};
 use claw_tool::{Tool, ToolRegistry};
 
 use crate::agent::base_agent::{AgentCommand, AgentId};
@@ -211,6 +211,10 @@ pub struct FsAgentFactory<
     /// Global editable profile documents, fronted by one [`ProfileContextAdapter`]
     /// per agent so file edits are observed on the next context build.
     profile: ProfileStore<F>,
+    /// Shared skill catalog scanned from the configured roots. Cloned (an `Arc`
+    /// bump) into every agent's [`SkillSet`] so all agents share one catalog and a
+    /// reload is observed everywhere.
+    skills: Arc<FsSkillRegistry<F>>,
 }
 
 impl<
@@ -234,6 +238,7 @@ impl<
         tools: Arc<ToolRegistry>,
         llm_config: ClawApiConfig,
         persistence_dir: &str,
+        skill_roots: &[String],
     ) -> Result<Self, FsAgentFactoryError> {
         if persistence_dir.trim().is_empty() {
             return Err(FsAgentFactoryError::MissingPersistenceDir);
@@ -251,6 +256,7 @@ impl<
         )?;
 
         let profile = ProfileStore::new(ProfileConfig::new(&layout.profile_dir), storage.clone());
+        let skills = build_skill_registry(&storage, skill_roots);
 
         Ok(Self {
             llm_config,
@@ -261,8 +267,39 @@ impl<
             storage,
             long_term,
             profile,
+            skills,
         })
     }
+}
+
+/// Build the shared skill catalog from the priority-ordered `skill_roots`.
+///
+/// A missing root is logged and skipped so the agent still starts; a real scan
+/// failure (e.g. a malformed `SKILL.md`) disables skills entirely by falling back
+/// to an empty registry rather than aborting agent construction.
+fn build_skill_registry<F: ClawFs + Clone + 'static>(
+    storage: &F,
+    skill_roots: &[String],
+) -> Arc<FsSkillRegistry<F>> {
+    let mut registry = FsSkillRegistry::new(storage.clone());
+    for root in skill_roots {
+        if !storage.exists(root) {
+            tracing::error!(root = %root, "skill root directory is missing; skipping");
+            continue;
+        }
+        match registry.set_root(root.as_str()) {
+            Ok(next) => registry = next,
+            Err(error) => {
+                tracing::error!(
+                    root = %root,
+                    error = %error,
+                    "failed to scan skill root; disabling filesystem skills"
+                );
+                return Arc::new(FsSkillRegistry::new(storage.clone()));
+            }
+        }
+    }
+    Arc::new(registry)
 }
 
 impl<
@@ -371,7 +408,7 @@ impl<
         let manifest = AgentManifest::for_kind(kind.as_str())
             .ok_or_else(|| AgentConfigError::UnknownKind(kind.as_str().to_owned()))?;
         let tools = Self::resolve_manifest_tools(manifest)?;
-        let skills = Self::resolve_manifest_skills(manifest);
+        let skills = self.resolve_manifest_skills(manifest);
         Ok(AgentConfig::from_manifest(manifest, tools, skills))
     }
 
@@ -384,7 +421,11 @@ impl<
         Ok(Vec::new())
     }
 
-    fn resolve_manifest_skills(manifest: &'static AgentManifest) -> SkillSet {
+    /// Project the shared filesystem skill catalog into a per-agent [`SkillSet`].
+    ///
+    /// The manifest's skill ids are catalog-only today: every agent sees the full
+    /// scanned catalog rather than a manifest-filtered subset.
+    fn resolve_manifest_skills(&self, manifest: &'static AgentManifest) -> SkillSet {
         if !manifest.skills.is_empty() {
             tracing::debug!(
                 kind = %manifest.kind,
@@ -392,7 +433,7 @@ impl<
                 "manifest skill ids are catalog-only"
             );
         }
-        SkillSet::empty()
+        self.skills.skill_set()
     }
 }
 
@@ -467,6 +508,7 @@ mod tests {
             Arc::new(ToolRegistry::new()),
             llm_config,
             "/mem",
+            &[],
         )
         .expect("factory builds")
     }

@@ -149,8 +149,9 @@ where
 {
     /// Build an orchestrator and its concrete filesystem-backed agent factory.
     ///
-    /// `llm_config` is cloned into every agent, and `persistence_dir` is the
-    /// storage root the factory owns below this orchestrator.
+    /// `llm_config` is cloned into every agent, `persistence_dir` is the storage
+    /// root the factory owns below this orchestrator, and `skill_roots` are the
+    /// priority-ordered skill directories every agent's catalog is built from.
     ///
     /// # Errors
     ///
@@ -159,11 +160,13 @@ where
         tools: Arc<ToolRegistry>,
         llm_config: ClawApiConfig,
         persistence_dir: &str,
+        skill_roots: &[String],
     ) -> Result<Self, OrchestratorBuildError> {
         let factory = Arc::new(FsAgentFactory::<F, H, Timer>::new(
             tools,
             llm_config.clone(),
             persistence_dir,
+            skill_roots,
         )?);
         Ok(Self {
             factory,

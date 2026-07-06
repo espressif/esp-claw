@@ -27,7 +27,7 @@ pub enum Error {
     /// Two commands in the same command list have the same name.
     #[error("duplicate command name: {0}")]
     DuplicateCommandName(&'static str),
-    /// A command node has neither a handler nor child commands.
+    /// A matched command node has no handler.
     #[error("missing command handler: {0}")]
     MissingHandler(&'static str),
     /// A command node has children but no selected subcommand.
@@ -218,10 +218,6 @@ impl<S: ByteStream + Default> Default for DebugConsole<S> {
 
 fn validate_command_tree(command: &'static CommandSpec) -> Result<()> {
     validate_command_name(command.name)?;
-
-    if command.handler.is_none() && command.children.is_empty() {
-        return Err(Error::MissingHandler(command.name));
-    }
 
     validate_unique_child_names(command.children)?;
     for child in command.children {
@@ -501,6 +497,14 @@ mod tests {
         children: &[],
     };
 
+    static UNWIRED: CommandSpec = CommandSpec {
+        name: "unwired",
+        help: "Unwired",
+        usage: Some("unwired"),
+        handler: None,
+        children: &[],
+    };
+
     #[test]
     fn dispatches_registered_command() -> Result<()> {
         let mut console = DebugConsole {
@@ -526,6 +530,23 @@ mod tests {
 
         let output = String::from_utf8(console.stream.output).map_err(Error::InvalidUtf8)?;
         assert_eq!(output, "console> hello worldconsole> ");
+        Ok(())
+    }
+
+    #[test]
+    fn allows_unwired_leaf_command() -> Result<()> {
+        let mut console = DebugConsole {
+            commands: Vec::new(),
+            stream: MemoryStream::with_input(b"unwired\n"),
+        };
+        console.register(&UNWIRED)?;
+        console.start()?;
+
+        let output = String::from_utf8(console.stream.output).map_err(Error::InvalidUtf8)?;
+        assert_eq!(
+            output,
+            "console> error: missing command handler: unwired\nconsole> "
+        );
         Ok(())
     }
 }

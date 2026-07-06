@@ -25,6 +25,8 @@ pub struct ClawAgentConfig {
     pub model: *const c_char,
     pub base_url: *const c_char,
     pub persistence_dir: *const c_char,
+    pub skills_root_dir: *const c_char,
+    pub system_skills_root_dir: *const c_char,
 }
 
 #[repr(C)]

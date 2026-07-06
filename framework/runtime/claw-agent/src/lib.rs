@@ -21,18 +21,31 @@ pub type HostAgentSystem = AgentSystem<DiskFs, RealHttp, TokioTimer>;
 
 pub type AgentResult<T> = Result<T, AgentError>;
 
-/// Explicit storage root for an [`AgentSystem`].
+/// Explicit storage root for an [`AgentSystem`], plus the skill roots the agent
+/// factory scans to populate every agent's skill catalog.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentPersistenceConfig {
     dir: String,
+    /// Skill roots in priority order (e.g. DATA before SYSTEM). Empty means no
+    /// filesystem skills are loaded.
+    skill_roots: Vec<String>,
 }
 
 impl AgentPersistenceConfig {
-    /// Build storage config from the required root directory.
+    /// Build storage config from the required root directory. No skill roots are
+    /// attached; use [`AgentPersistenceConfig::with_skill_roots`] to add them.
     pub fn new(dir: &str) -> Self {
         Self {
             dir: dir.to_string(),
+            skill_roots: Vec::new(),
         }
+    }
+
+    /// Attach the skill roots the factory scans, in priority order.
+    #[must_use]
+    pub fn with_skill_roots(mut self, skill_roots: Vec<String>) -> Self {
+        self.skill_roots = skill_roots;
+        self
     }
 }
 
@@ -114,6 +127,7 @@ where
             Arc::clone(&tools),
             llm_config,
             &persistence_dir,
+            &persistence.skill_roots,
         )?);
 
         Ok(Self {
