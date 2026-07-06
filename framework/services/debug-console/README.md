@@ -3,38 +3,23 @@
 Small Rust framework for a byte-stream debug console.
 
 It owns line reading, command parsing, static command registration, command
-lookup, and command dispatch. The caller provides one `ByteStream + Default`
-type and registers command specs.
+lookup, and command dispatch. The caller picks one `ByteStream + Default`
+backend and registers command specs.
+
+Backends:
+
+- `stream::Stdio` with the `stdio` feature
+- `stream::EspIdf` with the `espidf` feature on the ESP-IDF target
+
+`stream::EspIdf` follows the active ESP-IDF console `sdkconfig`:
+UART, USB Serial/JTAG, and USB CDC are selected inside the backend.
 
 ## `main.rs`
 
 ```rust
-use std::io::{self, Read, Write};
-
 use debug_console::{
-    ByteStream, CommandArgs, CommandContext, CommandSpec, DebugConsole, Error, Result,
+    stream::Stdio, CommandArgs, CommandContext, CommandSpec, DebugConsole, Result,
 };
-
-#[derive(Debug, Default)]
-struct Stdio;
-
-fn io_error(error: io::Error) -> Error {
-    Error::Stream(error.to_string())
-}
-
-impl ByteStream for Stdio {
-    fn read(&mut self, bytes: &mut [u8]) -> Result<usize> {
-        io::stdin().read(bytes).map_err(io_error)
-    }
-
-    fn write(&mut self, bytes: &[u8]) -> Result<usize> {
-        io::stdout().write(bytes).map_err(io_error)
-    }
-
-    fn flush(&mut self) -> Result<()> {
-        io::stdout().flush().map_err(io_error)
-    }
-}
 
 fn hello(_context: CommandContext<'_>, args: CommandArgs<'_>) -> Result<String> {
     let name = args.argv.first().copied().unwrap_or("world");

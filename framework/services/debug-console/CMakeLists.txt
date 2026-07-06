@@ -1,0 +1,10 @@
+idf_component_register(
+    SRCS
+        "csrc/debug_console_espidf.c"
+    REQUIRES
+        console
+        esp_driver_uart
+        esp_driver_usb_serial_jtag
+        esp_vfs_console
+        newlib
+)

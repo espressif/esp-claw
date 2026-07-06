@@ -9,11 +9,16 @@ description = "Reusable debug console service for ESP-Claw firmware and tests"
 name = "debug_console"
 crate-type = ["rlib"]
 
+[features]
+default = []
+stdio = []
+espidf = []
+
 [dependencies]
 thiserror = "2"
 
 [lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 missing_docs = "warn"
 
 [lints.clippy]

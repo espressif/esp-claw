@@ -8,6 +8,8 @@ use std::string::FromUtf8Error;
 
 use thiserror::Error;
 
+pub mod stream;
+
 /// Result type used by the debug console framework.
 pub type Result<T> = std::result::Result<T, Error>;
 

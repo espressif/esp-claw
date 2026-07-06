@@ -75,8 +75,11 @@ start(&mut self) // preferred
 start<S: ByteStream>(stream) // forbidden
 Box<dyn ByteStream> // forbidden for normal firmware path
 &mut dyn ByteStream // forbidden for normal firmware path
-HostStdio implements ByteStream + Default // host backend
-EspIdfSerial implements ByteStream + Default // esp-idf backend
+stream::Stdio implements ByteStream + Default // stdio backend
+stream::EspIdf implements ByteStream + Default // espidf backend
+CONFIG_ESP_CONSOLE_UART_DEFAULT/CUSTOM // EspIdf selects UART backend
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG // EspIdf selects USB Serial/JTAG backend
+CONFIG_ESP_CONSOLE_USB_CDC // EspIdf selects USB CDC backend
 
 // Command execution is internal to start().
 dispatch_line(line) -> Result<String> // private command executor
@@ -86,6 +89,9 @@ scrape ESP_LOG output // forbidden for command assertions
 // ESP console is not the dispatch layer.
 esp_console_cmd_register // forbidden
 esp_console_run // forbidden
+esp_console_new_repl_uart // reference behavior only
+esp_console_new_repl_usb_serial_jtag // reference behavior only
+esp_console_new_repl_usb_cdc // reference behavior only
 ByteStream line reader -> dispatch_line // preferred
 
 // Agent access to CLI is a separate allow-listed bridge.
@@ -218,7 +224,7 @@ fn match_longest(command: &'static CommandSpec, argv: &[&str], depth: usize) -> 
 
 ```rust
 fn app_start_debug_console() -> Result<()> {
-    let mut console = DebugConsole::<EspIdfSerial>::new()
+    let mut console = DebugConsole::<debug_console::stream::EspIdf>::new()
 
     app_claw_register_debug_commands(&mut console)?
     edge_agent_register_debug_commands(&mut console)?
@@ -261,13 +267,13 @@ fn start(&mut self) -> Result<ConsoleRuntime> {
     Ok(ConsoleRuntime)
 }
 
-struct HostStdio;
-impl ByteStream for HostStdio;
-impl Default for HostStdio;
+struct Stdio;
+impl ByteStream for Stdio;
+impl Default for Stdio;
 
-struct EspIdfSerial;
-impl ByteStream for EspIdfSerial;
-impl Default for EspIdfSerial;
+struct EspIdf;
+impl ByteStream for EspIdf;
+impl Default for EspIdf;
 ```
 
 ## Open
