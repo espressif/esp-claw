@@ -1,10 +1,12 @@
 idf_component_register(
     SRCS
         "src/cap_agent.c"
+        "src/cap_agent_reply.c"
     INCLUDE_DIRS
         "include"
     REQUIRES
         claw_cap
         claw_event_router
+        json
         runtime
 )

@@ -1,4 +1,4 @@
-use core::ffi::{c_char, c_int, c_void};
+use core::ffi::{c_char, c_int};
 
 pub type EspErr = c_int;
 
@@ -29,22 +29,11 @@ pub struct ClawAgentConfig {
     pub system_skills_root_dir: *const c_char,
 }
 
-#[repr(C)]
-pub struct ClawAgentInput {
-    pub text: *const c_char,
-    pub source_cap: *const c_char,
-    pub source_channel: *const c_char,
-    pub source_chat_id: *const c_char,
-    pub target_channel: *const c_char,
-    pub target_chat_id: *const c_char,
-}
-
 pub const CLAW_AGENT_RESPONSE_STATUS_OK: c_int = 0;
 pub const CLAW_AGENT_RESPONSE_STATUS_ERROR: c_int = 1;
 
 #[repr(C)]
 pub struct ClawAgentResponse {
-    pub request_id: u32,
     pub status: c_int,
     pub text: *mut c_char,
     pub error_message: *mut c_char,
@@ -64,7 +53,6 @@ pub struct ClawCapCallContext {
     pub target_chat_id: *const c_char,
     pub source_cap: *const c_char,
     pub correlation_id: *const c_char,
-    pub core: *mut c_void,
     pub caller: c_int,
 }
 
@@ -83,7 +71,6 @@ impl Default for ClawCapCallContext {
             target_chat_id: core::ptr::null(),
             source_cap: core::ptr::null(),
             correlation_id: core::ptr::null(),
-            core: core::ptr::null_mut(),
             caller: CLAW_CAP_CALLER_AGENT,
         }
     }

@@ -34,10 +34,7 @@ struct Parker {
 
 impl Parker {
     fn park(&self) {
-        let mut notified = self
-            .notified
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let mut notified = self.notified.lock().unwrap_or_else(|p| p.into_inner());
         while !*notified {
             notified = self
                 .condvar
@@ -54,10 +51,7 @@ impl Wake for Parker {
     }
 
     fn wake_by_ref(self: &Arc<Self>) {
-        let mut notified = self
-            .notified
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let mut notified = self.notified.lock().unwrap_or_else(|p| p.into_inner());
         *notified = true;
         self.condvar.notify_one();
     }

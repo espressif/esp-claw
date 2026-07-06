@@ -18,17 +18,14 @@ use claw_core::{DeliveryKind, DriveOutput, SessionId};
 use claw_interface::{ClawThread, CoreAffinity, Priority, WorkerHandle};
 use claw_sys::{EspIdfFs, EspIdfHttp, EspIdfThread, EspIdfTimer};
 use claw_utils::{async_channel, AsyncReceiver, AsyncRecv, AsyncSender};
-use serde_json::json;
 
 use crate::abi::{
-    ClawAgentConfig, ClawAgentInput, ClawAgentResponse, ClawCapCallContext, EspErr,
-    CLAW_AGENT_RESPONSE_STATUS_ERROR, CLAW_AGENT_RESPONSE_STATUS_OK, ESP_ERR_INVALID_ARG,
-    ESP_ERR_INVALID_STATE, ESP_ERR_TIMEOUT, ESP_FAIL, ESP_OK,
+    ClawAgentConfig, ClawAgentResponse, EspErr, CLAW_AGENT_RESPONSE_STATUS_ERROR,
+    CLAW_AGENT_RESPONSE_STATUS_OK, ESP_ERR_INVALID_ARG, ESP_ERR_INVALID_STATE, ESP_ERR_TIMEOUT,
+    ESP_FAIL, ESP_OK,
 };
 use crate::executor;
-use crate::tool::{
-    call_capability, register_capability_tools, with_capability_context, CapabilityContextData,
-};
+use crate::tool::{register_capability_tools, with_capability_context, CapabilityContextData};
 
 type DeviceAgent = Rc<AgentSystem<EspIdfFs, EspIdfHttp, EspIdfTimer>>;
 type InflightSubmit = Pin<Box<dyn Future<Output = CompletedSubmit>>>;
@@ -68,11 +65,21 @@ impl ResponseStore {
         self.ready.notify_all();
     }
 
-    fn receive(&self, request_id: u32, timeout_ms: u32) -> Result<SubmitResponse, CabiError> {
+    fn receive(
+        &self,
+        session_id: u32,
+        request_id: u32,
+        timeout_ms: u32,
+    ) -> Result<SubmitResponse, CabiError> {
         let mut responses = self
             .responses
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
+        if let Some(response) = responses.get(&request_id) {
+            if response.session_id != session_id {
+                return Err(CabiError::InvalidArgument);
+            }
+        }
         if let Some(response) = responses.remove(&request_id) {
             return Ok(response);
         }
@@ -92,6 +99,11 @@ impl ResponseStore {
             let remaining = deadline.duration_since(now);
             let (guard, timed_out) = wait_timeout(&self.ready, responses, remaining);
             responses = guard;
+            if let Some(response) = responses.get(&request_id) {
+                if response.session_id != session_id {
+                    return Err(CabiError::InvalidArgument);
+                }
+            }
             if let Some(response) = responses.remove(&request_id) {
                 return Ok(response);
             }
@@ -116,24 +128,14 @@ fn wait_timeout<'a>(
     }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
-struct RouteKey {
-    channel: String,
-    chat_id: String,
-}
-
 #[derive(Clone, Debug)]
 struct SubmitInput {
     text: String,
-    source_cap: Option<String>,
-    source_channel: Option<String>,
-    source_chat_id: Option<String>,
-    target_channel: Option<String>,
-    target_chat_id: Option<String>,
 }
 
 struct SubmitResponse {
     request_id: u32,
+    session_id: u32,
     status: ResponseStatus,
     text: String,
     error_message: String,
@@ -152,16 +154,18 @@ struct CompletedSubmit {
 struct RuntimeState {
     agent: DeviceAgent,
     responses: Arc<ResponseStore>,
-    routes: HashMap<RouteKey, SessionId>,
-    default_session: Option<SessionId>,
 }
 
 enum RuntimeCommand {
     Submit {
         request_id: u32,
+        session: SessionId,
         input: SubmitInput,
         store_response: bool,
         reply: mpsc::Sender<Result<(), CabiError>>,
+    },
+    CreateSession {
+        reply: mpsc::Sender<Result<SessionId, CabiError>>,
     },
     Stop {
         reply: mpsc::Sender<Result<(), CabiError>>,
@@ -198,34 +202,25 @@ pub extern "C" fn claw_agent_deinit() -> EspErr {
 }
 
 #[no_mangle]
-/// Submit one inbound message to the running agent.
+/// Submit one inbound message to an explicit numeric session.
 ///
 /// # Safety
 /// `input` must point to valid UTF-8 C strings for this call.
-pub unsafe extern "C" fn claw_agent_submit(
-    input: *const ClawAgentInput,
+pub unsafe extern "C" fn claw_agent_session_submit(
+    session_id: u32,
+    text: *const c_char,
     out_request_id: *mut u32,
 ) -> EspErr {
-    ffi_result(|| submit(input, out_request_id))
+    ffi_result(|| submit_session(session_id, text, out_request_id))
 }
 
 #[no_mangle]
-/// Capability entry point that submits one inbound message to the agent.
-///
-/// Matches `claw_cap_execute_fn`: reads `text` from `input_json` and routing
-/// fields from `ctx`, then schedules a fire-and-forget submit. On success the
-/// assigned request id is written to `output` as `request_id=<n>`.
+/// Create a new numeric session.
 ///
 /// # Safety
-/// `input_json` and `ctx` (including its string fields) must be valid for this
-/// call, and `output` must point to `output_size` writable bytes.
-pub unsafe extern "C" fn claw_agent_cap_execute(
-    input_json: *const c_char,
-    ctx: *const ClawCapCallContext,
-    output: *mut c_char,
-    output_size: usize,
-) -> EspErr {
-    ffi_result(|| cap_execute(input_json, ctx, output, output_size))
+/// `out_session_id` must point to writable memory for one u32.
+pub unsafe extern "C" fn claw_agent_session_create(out_session_id: *mut u32) -> EspErr {
+    ffi_result(|| session_create(out_session_id))
 }
 
 #[no_mangle]
@@ -233,19 +228,20 @@ pub unsafe extern "C" fn claw_agent_cap_execute(
 ///
 /// # Safety
 /// `out_response` must point to writable memory for one response.
-pub unsafe extern "C" fn claw_agent_receive(
+pub unsafe extern "C" fn claw_agent_session_receive(
+    session_id: u32,
     request_id: u32,
     out_response: *mut ClawAgentResponse,
     timeout_ms: u32,
 ) -> EspErr {
-    ffi_result(|| receive(request_id, out_response, timeout_ms))
+    ffi_result(|| receive(session_id, request_id, out_response, timeout_ms))
 }
 
 #[no_mangle]
-/// Release strings owned by a response returned from `claw_agent_receive`.
+/// Release strings owned by a response returned from `claw_agent_session_receive`.
 ///
 /// # Safety
-/// `response` must be null or a response returned by `claw_agent_receive`.
+/// `response` must be null or a response returned by `claw_agent_session_receive`.
 pub unsafe extern "C" fn claw_agent_response_free(response: *mut ClawAgentResponse) {
     free_response(response);
 }
@@ -362,16 +358,18 @@ fn deinit() -> Result<(), CabiError> {
     result
 }
 
-fn submit(input: *const ClawAgentInput, out_request_id: *mut u32) -> Result<(), CabiError> {
-    let input = unsafe { input.as_ref() }.ok_or(CabiError::InvalidArgument)?;
+fn submit_session(
+    session_id: u32,
+    text: *const c_char,
+    out_request_id: *mut u32,
+) -> Result<(), CabiError> {
+    if session_id == 0 {
+        return Err(CabiError::InvalidArgument);
+    }
     let request_id = submit_owned(
+        SessionId::new(session_id),
         SubmitInput {
-            text: required_string(input.text)?,
-            source_cap: optional_string(input.source_cap)?,
-            source_channel: optional_string(input.source_channel)?,
-            source_chat_id: optional_string(input.source_chat_id)?,
-            target_channel: optional_string(input.target_channel)?,
-            target_chat_id: optional_string(input.target_chat_id)?,
+            text: required_string(text)?,
         },
         !out_request_id.is_null(),
     )?;
@@ -381,62 +379,29 @@ fn submit(input: *const ClawAgentInput, out_request_id: *mut u32) -> Result<(), 
     Ok(())
 }
 
-fn cap_execute(
-    input_json: *const c_char,
-    ctx: *const ClawCapCallContext,
-    output: *mut c_char,
-    output_size: usize,
-) -> Result<(), CabiError> {
-    let ctx = unsafe { ctx.as_ref() };
-    let input = SubmitInput {
-        text: cap_input_text(input_json)?,
-        source_cap: ctx.and_then(|ctx| optional_string(ctx.source_cap).ok().flatten()),
-        source_channel: ctx.and_then(|ctx| optional_string(ctx.channel).ok().flatten()),
-        source_chat_id: ctx.and_then(|ctx| optional_string(ctx.chat_id).ok().flatten()),
-        target_channel: ctx.and_then(|ctx| optional_string(ctx.target_channel).ok().flatten()),
-        target_chat_id: ctx.and_then(|ctx| optional_string(ctx.target_chat_id).ok().flatten()),
-    };
-    let request_id = submit_owned(input, false)?;
-    write_cap_output(output, output_size, request_id);
+fn session_create(out_session_id: *mut u32) -> Result<(), CabiError> {
+    let out_session_id = unsafe { out_session_id.as_mut() }.ok_or(CabiError::InvalidArgument)?;
+    let sender = runtime_sender()?;
+    let (reply, receiver) = mpsc::channel();
+    sender
+        .send(RuntimeCommand::CreateSession { reply })
+        .map_err(|_| CabiError::InvalidState)?;
+    let session = receiver.recv().map_err(|_| CabiError::InvalidState)??;
+    *out_session_id = session.0;
     Ok(())
 }
 
-fn cap_input_text(input_json: *const c_char) -> Result<String, CabiError> {
-    let Some(raw) = optional_string(input_json)? else {
-        return Ok(String::new());
-    };
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return Ok(String::new());
-    }
-    let value: serde_json::Value =
-        serde_json::from_str(trimmed).map_err(|_| CabiError::InvalidArgument)?;
-    Ok(value
-        .get("text")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_owned())
-}
-
-fn write_cap_output(output: *mut c_char, output_size: usize, request_id: u32) {
-    if output.is_null() || output_size == 0 {
-        return;
-    }
-    let text = format!("request_id={request_id}");
-    let bytes = text.as_bytes();
-    let len = bytes.len().min(output_size - 1);
-    unsafe {
-        ptr::copy_nonoverlapping(bytes.as_ptr(), output.cast::<u8>(), len);
-        *output.add(len) = 0;
-    }
-}
-
-fn submit_owned(input: SubmitInput, store_response: bool) -> Result<u32, CabiError> {
+fn submit_owned(
+    session: SessionId,
+    input: SubmitInput,
+    store_response: bool,
+) -> Result<u32, CabiError> {
     let (sender, request_id) = runtime_submit_sender()?;
     let (reply, receiver) = mpsc::channel();
     sender
         .send(RuntimeCommand::Submit {
             request_id,
+            session,
             input,
             store_response,
             reply,
@@ -447,15 +412,16 @@ fn submit_owned(input: SubmitInput, store_response: bool) -> Result<u32, CabiErr
 }
 
 fn receive(
+    session_id: u32,
     request_id: u32,
     out_response: *mut ClawAgentResponse,
     timeout_ms: u32,
 ) -> Result<(), CabiError> {
-    if request_id == 0 {
+    if session_id == 0 || request_id == 0 {
         return Err(CabiError::InvalidArgument);
     }
     let out_response = unsafe { out_response.as_mut() }.ok_or(CabiError::InvalidArgument)?;
-    let response = runtime_responses()?.receive(request_id, timeout_ms)?;
+    let response = runtime_responses()?.receive(session_id, request_id, timeout_ms)?;
     write_response(out_response, response)
 }
 
@@ -518,6 +484,7 @@ async fn worker_loop(
             }
             WorkerEvent::Command(Some(RuntimeCommand::Submit {
                 request_id,
+                session,
                 input,
                 store_response,
                 reply,
@@ -525,9 +492,16 @@ async fn worker_loop(
                 if stop_reply.is_some() {
                     let _ = reply.send(Err(CabiError::InvalidState));
                 } else if let Some(future) =
-                    state.start_submit(request_id, input, store_response, reply)
+                    state.start_submit(request_id, session, input, store_response, reply)
                 {
                     inflight.push_back(future);
+                }
+            }
+            WorkerEvent::Command(Some(RuntimeCommand::CreateSession { reply })) => {
+                if stop_reply.is_some() {
+                    let _ = reply.send(Err(CabiError::InvalidState));
+                } else {
+                    let _ = reply.send(Ok(state.agent.new_session()));
                 }
             }
             WorkerEvent::Command(Some(RuntimeCommand::Stop { reply })) => {
@@ -544,12 +518,7 @@ impl RuntimeState {
     fn new(config: RuntimeConfig, responses: Arc<ResponseStore>) -> Result<Self, CabiError> {
         let agent = Rc::new(AgentSystem::new(config.api, config.persistence)?);
         register_capability_tools(agent.tool_registry())?;
-        Ok(Self {
-            agent,
-            responses,
-            routes: HashMap::new(),
-            default_session: None,
-        })
+        Ok(Self { agent, responses })
     }
 
     fn start(&self) -> Result<(), CabiError> {
@@ -569,11 +538,12 @@ impl RuntimeState {
     fn start_submit(
         &mut self,
         request_id: u32,
+        session: SessionId,
         input: SubmitInput,
         store_response: bool,
         reply: mpsc::Sender<Result<(), CabiError>>,
     ) -> Option<InflightSubmit> {
-        match self.build_submit(request_id, input) {
+        match self.build_submit(request_id, session, input) {
             Ok(submit) => {
                 let _ = reply.send(Ok(()));
                 Some(Box::pin(
@@ -590,35 +560,18 @@ impl RuntimeState {
     fn build_submit(
         &mut self,
         request_id: u32,
+        session: SessionId,
         input: SubmitInput,
     ) -> Result<SubmitTask, CabiError> {
-        let capability_context = capability_context(request_id, &input);
-        let route = route_key(&input);
-        let session = match route.as_ref() {
-            Some(route) => match self.routes.get(route).copied() {
-                Some(session) => session,
-                None => {
-                    let session = self.agent.new_session();
-                    self.routes.insert(route.clone(), session);
-                    session
-                }
-            },
-            None => match self.default_session {
-                Some(session) => session,
-                None => {
-                    let session = self.agent.new_session();
-                    self.default_session = Some(session);
-                    session
-                }
-            },
+        let capability_context = CapabilityContextData {
+            request_id,
+            ..CapabilityContextData::default()
         };
-        let reply_route = reply_route(&input);
         Ok(SubmitTask {
             request_id,
             agent: Rc::clone(&self.agent),
             session,
             text: input.text,
-            reply_route,
             capability_context,
         })
     }
@@ -629,12 +582,12 @@ struct SubmitTask {
     agent: DeviceAgent,
     session: SessionId,
     text: String,
-    reply_route: Option<RouteKey>,
     capability_context: CapabilityContextData,
 }
 
 async fn run_submit(task: SubmitTask, store_response: bool) -> CompletedSubmit {
     let request_id = task.request_id;
+    let session_id = task.session.0;
     let context = task.capability_context.clone();
     let result: Result<String, CabiError> = with_capability_context(context, async move {
         let output = task
@@ -642,7 +595,6 @@ async fn run_submit(task: SubmitTask, store_response: bool) -> CompletedSubmit {
             .submit(task.session, task.text, DeliveryKind::Interrupt)
             .await?;
         let text = response_text(&output);
-        route_output(task.reply_route.as_ref(), &output, &task.capability_context)?;
         Ok(text)
     })
     .await;
@@ -651,12 +603,14 @@ async fn run_submit(task: SubmitTask, store_response: bool) -> CompletedSubmit {
         response: match result {
             Ok(text) => SubmitResponse {
                 request_id,
+                session_id,
                 status: ResponseStatus::Ok,
                 text,
                 error_message: String::new(),
             },
             Err(error) => SubmitResponse {
                 request_id,
+                session_id,
                 status: ResponseStatus::Error,
                 text: String::new(),
                 error_message: error.to_string(),
@@ -726,6 +680,12 @@ fn runtime_submit_sender() -> Result<(AsyncSender<RuntimeCommand>, u32), CabiErr
     Ok((sender, request_id))
 }
 
+fn runtime_sender() -> Result<AsyncSender<RuntimeCommand>, CabiError> {
+    let _guard = lock_runtime();
+    let runtime = runtime_mut()?;
+    runtime.sender.clone().ok_or(CabiError::InvalidState)
+}
+
 fn runtime_responses() -> Result<Arc<ResponseStore>, CabiError> {
     let _guard = lock_runtime();
     let runtime = runtime_mut()?;
@@ -738,98 +698,6 @@ fn runtime_mut() -> Result<&'static mut RuntimeController, CabiError> {
         return Err(CabiError::InvalidState);
     }
     Ok(unsafe { &mut *ptr })
-}
-
-fn route_output(
-    route: Option<&RouteKey>,
-    output: &DriveOutput,
-    context: &CapabilityContextData,
-) -> Result<(), CabiError> {
-    let Some(route) = route else {
-        return Ok(());
-    };
-    let Some(cap_name) = send_capability(&route.channel) else {
-        return Ok(());
-    };
-
-    for reply in &output.replies {
-        if reply.text.trim().is_empty() {
-            continue;
-        }
-        let arguments = json!({
-            "channel": route.channel,
-            "chat_id": route.chat_id,
-            "message": reply.text,
-        })
-        .to_string();
-        call_capability(cap_name, &arguments, context)?;
-    }
-    Ok(())
-}
-
-fn capability_context(request_id: u32, input: &SubmitInput) -> CapabilityContextData {
-    let route = route_key(input);
-    let target = route_from(
-        input.target_channel.as_deref(),
-        input.target_chat_id.as_deref(),
-    );
-    CapabilityContextData {
-        request_id,
-        channel: route.as_ref().map(|route| route.channel.clone()),
-        chat_id: route.as_ref().map(|route| route.chat_id.clone()),
-        target_channel: target.as_ref().map(|route| route.channel.clone()),
-        target_chat_id: target.as_ref().map(|route| route.chat_id.clone()),
-        source_cap: input.source_cap.clone(),
-    }
-}
-
-fn route_key(input: &SubmitInput) -> Option<RouteKey> {
-    route_from(
-        input.source_channel.as_deref(),
-        input.source_chat_id.as_deref(),
-    )
-    .or_else(|| {
-        route_from(
-            input.target_channel.as_deref(),
-            input.target_chat_id.as_deref(),
-        )
-    })
-}
-
-fn reply_route(input: &SubmitInput) -> Option<RouteKey> {
-    route_from(
-        input.target_channel.as_deref(),
-        input.target_chat_id.as_deref(),
-    )
-    .or_else(|| {
-        route_from(
-            input.source_channel.as_deref(),
-            input.source_chat_id.as_deref(),
-        )
-    })
-}
-
-fn route_from(channel: Option<&str>, chat_id: Option<&str>) -> Option<RouteKey> {
-    let channel = channel?.trim();
-    let chat_id = chat_id?.trim();
-    if channel.is_empty() || chat_id.is_empty() {
-        return None;
-    }
-    Some(RouteKey {
-        channel: channel.to_owned(),
-        chat_id: chat_id.to_owned(),
-    })
-}
-
-fn send_capability(channel: &str) -> Option<&'static str> {
-    match channel {
-        "feishu" => Some("feishu_send_message"),
-        "qq" => Some("qq_send_message"),
-        "tg" | "telegram" => Some("tg_send_message"),
-        "wechat" => Some("wechat_send_message"),
-        "local" | "web" => Some("local_send_message"),
-        _ => None,
-    }
 }
 
 fn response_text(output: &DriveOutput) -> String {
@@ -853,7 +721,6 @@ fn write_response(
     let text = cstring_raw(&response.text)?;
     let error_message = cstring_raw(&response.error_message)?;
     *out_response = ClawAgentResponse {
-        request_id: response.request_id,
         status: match response.status {
             ResponseStatus::Ok => CLAW_AGENT_RESPONSE_STATUS_OK,
             ResponseStatus::Error => CLAW_AGENT_RESPONSE_STATUS_ERROR,
