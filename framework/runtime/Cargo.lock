@@ -182,14 +182,11 @@ dependencies = [
 name = "claw-cabi"
 version = "0.1.0"
 dependencies = [
- "async-channel",
  "claw-agent",
  "claw-api",
- "claw-core",
  "claw-interface",
  "claw-sys",
  "claw-tool",
- "edge-executor",
  "futures-core",
  "futures-lite 2.6.1",
  "serde_json",
@@ -299,6 +296,8 @@ name = "claw-sys"
 version = "0.1.0"
 dependencies = [
  "claw-interface",
+ "edge-executor",
+ "futures-lite 2.6.1",
  "log",
  "serde_json",
 ]

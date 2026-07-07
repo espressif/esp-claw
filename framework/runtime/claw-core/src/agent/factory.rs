@@ -470,10 +470,16 @@ mod tests {
 
     /// The factory mints each agent's transport internally via `H::default()`, so
     /// the script can't be injected as an instance — it is installed into the
-    /// thread-local `SharedScriptHttp` script that every minted client shares.
+    /// process-global `SharedScriptHttp` script that every minted client shares.
+    /// Returns the serialization guard alongside the factory; the caller holds it
+    /// for the whole test so parallel tests never clobber one another's script.
     fn factory(
         bodies: Vec<String>,
-    ) -> FsAgentFactory<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer> {
+    ) -> (
+        FsAgentFactory<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>,
+        std::sync::MutexGuard<'static, ()>,
+    ) {
+        let guard = SharedScriptHttp::serialize();
         let mut script = Vec::with_capacity(bodies.len().saturating_mul(2));
         for body in bodies {
             script.push(body_plain_text("[]"));
@@ -486,18 +492,19 @@ mod tests {
             "gpt-test",
             "https://example.invalid",
         );
-        FsAgentFactory::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new(
+        let factory = FsAgentFactory::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new(
             Arc::new(ToolRegistry::new()),
             llm_config,
             "/mem",
             &[],
         )
-        .expect("factory builds")
+        .expect("factory builds");
+        (factory, guard)
     }
 
     #[test]
     fn builds_a_runnable_agent_seeded_with_its_goal() {
-        let factory = factory(vec![body_plain_text("hello there")]);
+        let (factory, _script) = factory(vec![body_plain_text("hello there")]);
         let mut agent = factory
             .create_agent(
                 AgentId(1),
@@ -525,7 +532,7 @@ mod tests {
 
     #[test]
     fn unknown_kind_is_an_error() {
-        let factory = factory(vec![]);
+        let (factory, _script) = factory(vec![]);
         let result = factory.create_agent(
             AgentId(1),
             &AgentKind::new("nope"),
@@ -539,7 +546,7 @@ mod tests {
 
     #[test]
     fn worker_kind_gets_derived_long_term_dir() {
-        let factory = factory(vec![]);
+        let (factory, _script) = factory(vec![]);
         let result = factory.create_agent(
             AgentId(1),
             &AgentKind::new("worker"),

@@ -1,8 +1,4 @@
-use core::cell::RefCell;
 use core::ffi::{c_char, CStr};
-use core::future::Future;
-use core::pin::Pin;
-use core::task::{Context, Poll};
 use std::ffi::CString;
 
 use claw_tool::{
@@ -17,6 +13,13 @@ use crate::abi::{
     CLAW_CAP_KIND_HYBRID, ESP_OK, TOOL_OUTPUT_CAPACITY,
 };
 
+/// Per-submission context a capability call needs (request id, inbound/target
+/// routing, …). It rides through the core drive as a type-erased
+/// [`claw_tool::SharedContext`] installed by `submit_with_context`, and a
+/// [`CapTool`] reads it back with [`claw_tool::current_context`].
+///
+/// `Send + Sync + 'static` (plain scalars/strings) so it can be stored in a
+/// `SharedContext` and observed on the orchestrator's drive worker thread.
 #[derive(Clone, Default)]
 pub(crate) struct CapabilityContextData {
     pub request_id: u32,
@@ -27,63 +30,12 @@ pub(crate) struct CapabilityContextData {
     pub source_cap: Option<String>,
 }
 
-thread_local! {
-    #[allow(clippy::missing_const_for_thread_local)]
-    static CURRENT_CONTEXT: RefCell<Option<CapabilityContextData>> = const { RefCell::new(None) };
-}
-
-pub(crate) fn with_capability_context<F>(
-    context: CapabilityContextData,
-    future: F,
-) -> CapabilityContextFuture<F>
-where
-    F: Future,
-{
-    CapabilityContextFuture {
-        context,
-        future: Box::pin(future),
-    }
-}
-
-pub(crate) struct CapabilityContextFuture<F> {
-    context: CapabilityContextData,
-    future: Pin<Box<F>>,
-}
-
-impl<F> Future for CapabilityContextFuture<F>
-where
-    F: Future,
-{
-    type Output = F::Output;
-
-    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-        let _guard = CurrentContextGuard::enter(self.context.clone());
-        self.future.as_mut().poll(context)
-    }
-}
-
-struct CurrentContextGuard {
-    previous: Option<CapabilityContextData>,
-}
-
-impl CurrentContextGuard {
-    fn enter(context: CapabilityContextData) -> Self {
-        let previous = CURRENT_CONTEXT.with(|slot| slot.replace(Some(context)));
-        Self { previous }
-    }
-}
-
-impl Drop for CurrentContextGuard {
-    fn drop(&mut self) {
-        let previous = self.previous.take();
-        CURRENT_CONTEXT.with(|slot| {
-            let _ = slot.replace(previous);
-        });
-    }
-}
-
+/// The current capability context installed for the in-flight submission, or a
+/// default (empty) context when none is installed.
 fn current_context() -> CapabilityContextData {
-    CURRENT_CONTEXT.with(|slot| slot.borrow().clone().unwrap_or_default())
+    claw_tool::current_context::<CapabilityContextData>()
+        .map(|context| (*context).clone())
+        .unwrap_or_default()
 }
 
 #[derive(Debug, thiserror::Error)]

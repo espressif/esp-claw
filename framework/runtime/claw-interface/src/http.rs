@@ -414,7 +414,6 @@ fn cancel_on_poll<'a>(
 
 #[cfg(feature = "httpmock")]
 mod httpmock {
-    use core::cell::RefCell;
     use core::future::Future;
     use core::pin::Pin;
     use core::task::{Context, Poll};
@@ -582,11 +581,23 @@ mod httpmock {
         }
     }
 
-    thread_local! {
-        /// The script every [`SharedScriptHttp::default`] on this thread shares.
-        /// Installed by [`SharedScriptHttp::install`]; read once at construction.
-        static SHARED_SCRIPT: RefCell<Option<Arc<Mutex<VecDeque<ScriptStep>>>>> =
-            const { RefCell::new(None) };
+    /// The script every [`SharedScriptHttp::default`] in the process shares.
+    /// Installed by [`SharedScriptHttp::install`]; read at each construction.
+    ///
+    /// Process-global (not thread-local) so a `SharedScriptHttp` built on an
+    /// orchestrator's drive **worker thread** replays the script a test installed
+    /// on its own thread. Tests that install scripts must serialize with
+    /// [`SharedScriptHttp::serialize`] so parallel tests do not clobber it.
+    static SHARED_SCRIPT: Mutex<Option<Arc<Mutex<VecDeque<ScriptStep>>>>> = Mutex::new(None);
+    /// Held by a test (via [`SharedScriptHttp::serialize`]) for the whole span in
+    /// which it owns the process-global script.
+    static SHARED_SCRIPT_LOCK: Mutex<()> = Mutex::new(());
+
+    fn shared_script_slot() -> std::sync::MutexGuard<'static, Option<Arc<Mutex<VecDeque<ScriptStep>>>>>
+    {
+        SHARED_SCRIPT
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
     }
 
     /// A [`Default`]-constructible scripted transport for systems that mint their
@@ -596,10 +607,10 @@ mod httpmock {
     /// A plain [`ScriptedHttp`] can't be injected into those, because the system
     /// constructs each `H::default()` internally. `SharedScriptHttp` bridges the
     /// gap: a test calls [`install`](Self::install) once, then **every**
-    /// `SharedScriptHttp::default()` constructed on that thread shares the one
-    /// script and pops from it in call order — reproducing the single-shared-script
-    /// behavior of an injected [`ScriptedHttp`]. Strict: panics if called more
-    /// times than scripted, or if no script was installed.
+    /// `SharedScriptHttp::default()` in the process shares the one script and pops
+    /// from it in call order — reproducing the single-shared-script behavior of an
+    /// injected [`ScriptedHttp`], including from a drive worker thread. Strict:
+    /// panics if called more times than scripted, or if no script was installed.
     #[derive(Clone)]
     pub struct SharedScriptHttp {
         steps: Option<Arc<Mutex<VecDeque<ScriptStep>>>>,
@@ -607,23 +618,34 @@ mod httpmock {
 
     impl SharedScriptHttp {
         /// Install the script shared by every later `SharedScriptHttp::default()`
-        /// on the current thread. Call once before building the system under test.
+        /// in the process. Call once before building the system under test, while
+        /// holding the [`serialize`](Self::serialize) guard.
         pub fn install(bodies: impl IntoIterator<Item = impl Into<String>>) {
             let steps = Arc::new(Mutex::new(into_steps(bodies)));
-            SHARED_SCRIPT.with(|cell| *cell.borrow_mut() = Some(steps));
+            *shared_script_slot() = Some(steps);
         }
 
         /// Drop the installed script (so a later `default()` with no script fails
         /// loudly rather than replaying a stale one).
         pub fn clear() {
-            SHARED_SCRIPT.with(|cell| *cell.borrow_mut() = None);
+            *shared_script_slot() = None;
+        }
+
+        /// Serialize access to the process-global script. Hold the returned guard
+        /// for the whole test body (install → submit → drain) so parallel tests
+        /// never share one another's script.
+        #[must_use]
+        pub fn serialize() -> std::sync::MutexGuard<'static, ()> {
+            SHARED_SCRIPT_LOCK
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
         }
     }
 
     impl Default for SharedScriptHttp {
         fn default() -> Self {
             Self {
-                steps: SHARED_SCRIPT.with(|cell| cell.borrow().clone()),
+                steps: shared_script_slot().clone(),
             }
         }
     }

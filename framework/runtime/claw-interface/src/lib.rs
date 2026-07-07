@@ -9,11 +9,15 @@
 //! depend only on these traits, never on a platform directly, so the device
 //! build and host tests can plug in different implementations of the same seam.
 
+pub mod executor;
 pub mod fs;
 pub mod http;
 pub mod thread;
 pub mod timer;
 
+pub use executor::ClawExecutor;
+#[cfg(feature = "tokioexecutor")]
+pub use executor::TokioExecutor;
 pub use fs::{ClawFile, ClawFs, FsError};
 #[cfg(feature = "diskfs")]
 pub use fs::{DiskFile, DiskFs};

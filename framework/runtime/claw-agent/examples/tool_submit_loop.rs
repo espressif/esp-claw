@@ -19,7 +19,9 @@
 use claw_agent::{AgentEvent, AgentSystem};
 use claw_api::{BackendKind, ClawApiConfig};
 use claw_core::DeliveryKind;
-use claw_interface::{BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp};
+use claw_interface::{
+    BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp, StdThread, TokioExecutor,
+};
 use claw_tool::{SyncToolHandler, Tool, ToolInvocation, ToolOutput, ToolResult, ToolSpec};
 use futures_lite::StreamExt;
 
@@ -72,10 +74,15 @@ async fn main() -> anyhow::Result<()> {
         "Hello from the agent — the local time is 2026-06-29T17:00:00Z.",
     )]);
 
-    let system = AgentSystem::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new(
-        scripted_llm(),
-        claw_agent::AgentPersistenceConfig::new("/mem"),
-    )?;
+    let system =
+        AgentSystem::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new::<
+            StdThread,
+            TokioExecutor,
+        >(
+            scripted_llm(),
+            claw_agent::AgentPersistenceConfig::new("/mem"),
+            StdThread,
+        )?;
     system
         .tool_registry()
         .register(Tool::from_sync(TimeNowTool))?;

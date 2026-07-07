@@ -3,8 +3,6 @@
 #[cfg(target_os = "espidf")]
 mod abi;
 #[cfg(target_os = "espidf")]
-mod executor;
-#[cfg(target_os = "espidf")]
 mod runtime;
 #[cfg(target_os = "espidf")]
 mod tool;

@@ -1,24 +1,24 @@
 use core::ffi::{c_char, CStr};
-use core::future::Future;
 use core::pin::Pin;
 use core::ptr;
 use core::task::{Context, Poll};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::rc::Rc;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicPtr, AtomicU32, Ordering};
-use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard};
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::task::{Wake, Waker};
+use std::time::Duration;
 
-use claw_agent::{AgentError, AgentPersistenceConfig, AgentSystem};
+use claw_agent::{
+    AgentError, AgentEvent, AgentEventStream as SubmitStream, AgentPersistenceConfig, AgentSystem,
+    DeliveryKind, SessionId,
+};
 use claw_api::{BackendKind, ClawApiConfig};
-use claw_core::{AgentEvent, DeliveryKind, SessionId};
-use claw_interface::{ClawThread, CoreAffinity, Priority, WorkerHandle};
-use claw_sys::{EspIdfFs, EspIdfHttp, EspIdfThread, EspIdfTimer};
+use claw_interface::{Cancel, ClawTimer};
+use claw_sys::{EspIdfExecutor, EspIdfFs, EspIdfHttp, EspIdfThread, EspIdfTimer};
 
-use async_channel::{Receiver, Sender};
 use futures_core::Stream;
 use futures_lite::StreamExt;
 
@@ -27,13 +27,14 @@ use crate::abi::{
     CLAW_AGENT_RESPONSE_STATUS_OK, ESP_ERR_INVALID_ARG, ESP_ERR_INVALID_SIZE,
     ESP_ERR_INVALID_STATE, ESP_ERR_NOT_FOUND, ESP_ERR_TIMEOUT, ESP_FAIL, ESP_OK,
 };
-use crate::executor;
-use crate::tool::{register_capability_tools, with_capability_context, CapabilityContextData};
+use crate::tool::{register_capability_tools, CapabilityContextData};
 
-type DeviceAgent = Rc<AgentSystem<EspIdfFs, EspIdfHttp, EspIdfTimer>>;
-type InflightSubmit = Pin<Box<dyn Future<Output = CompletedSubmit>>>;
-
-const AGENT_WORKER_STACK_SIZE: usize = 64 * 1024;
+/// The device agent runtime. `AgentSystem` is now backend-erased and
+/// `Send + Sync` (its `Orchestrator` handle owns the drive worker), so it is held
+/// directly here and driven concurrently: every `submit` runs on the
+/// orchestrator's own worker thread while the FFI thread only enqueues and later
+/// drains the resulting event stream.
+type DeviceAgent = AgentSystem<EspIdfFs, EspIdfHttp, EspIdfTimer>;
 
 static RUNTIME: AtomicPtr<RuntimeController> = AtomicPtr::new(ptr::null_mut());
 static RUNTIME_LOCK: Mutex<()> = Mutex::new(());
@@ -46,99 +47,27 @@ struct RuntimeConfig {
 
 struct RuntimeController {
     config: RuntimeConfig,
-    responses: Arc<ResponseStore>,
+    /// The running agent, present between `start` and `stop`/`deinit`. Dropping it
+    /// joins the orchestrator's drive worker.
+    agent: Option<DeviceAgent>,
+    /// In-flight submissions keyed by request id: each holds its event stream and
+    /// the reply accumulated so far, drained (lazily, with a timeout) by
+    /// [`receive`].
+    pending: Mutex<HashMap<u32, PendingSubmit>>,
     next_request_id: AtomicU32,
-    sender: Option<Sender<RuntimeCommand>>,
-    worker: Option<WorkerHandle>,
 }
 
-#[derive(Default)]
-struct ResponseStore {
-    responses: Mutex<HashMap<u32, SubmitResponse>>,
-    ready: Condvar,
-}
-
-impl ResponseStore {
-    fn finish(&self, response: SubmitResponse) {
-        let mut responses = self
-            .responses
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        responses.insert(response.request_id, response);
-        self.ready.notify_all();
-    }
-
-    fn receive(
-        &self,
-        session_id: u32,
-        request_id: u32,
-        timeout_ms: u32,
-    ) -> Result<SubmitResponse, CabiError> {
-        let mut responses = self
-            .responses
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        if let Some(response) = responses.get(&request_id) {
-            if response.session_id != session_id {
-                return Err(CabiError::InvalidArgument);
-            }
-        }
-        if let Some(response) = responses.remove(&request_id) {
-            return Ok(response);
-        }
-        if timeout_ms == 0 {
-            return Err(CabiError::Timeout);
-        }
-
-        let timeout = Duration::from_millis(u64::from(timeout_ms));
-        let deadline = Instant::now()
-            .checked_add(timeout)
-            .ok_or(CabiError::InvalidArgument)?;
-        loop {
-            let now = Instant::now();
-            if now >= deadline {
-                return Err(CabiError::Timeout);
-            }
-            let remaining = deadline.duration_since(now);
-            let (guard, timed_out) = wait_timeout(&self.ready, responses, remaining);
-            responses = guard;
-            if let Some(response) = responses.get(&request_id) {
-                if response.session_id != session_id {
-                    return Err(CabiError::InvalidArgument);
-                }
-            }
-            if let Some(response) = responses.remove(&request_id) {
-                return Ok(response);
-            }
-            if timed_out {
-                return Err(CabiError::Timeout);
-            }
-        }
-    }
-}
-
-fn wait_timeout<'a>(
-    ready: &Condvar,
-    guard: MutexGuard<'a, HashMap<u32, SubmitResponse>>,
-    timeout: Duration,
-) -> (MutexGuard<'a, HashMap<u32, SubmitResponse>>, bool) {
-    match ready.wait_timeout(guard, timeout) {
-        Ok((guard, status)) => (guard, status.timed_out()),
-        Err(poison) => {
-            let (guard, status) = poison.into_inner();
-            (guard, status.timed_out())
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct SubmitInput {
-    text: String,
+/// One in-flight submission: its remaining event stream plus the reply
+/// accumulated across (possibly several timed-out) `receive` calls.
+struct PendingSubmit {
+    session_id: u32,
+    stream: SubmitStream,
+    outputs: Vec<String>,
+    error: Option<String>,
+    done: bool,
 }
 
 struct SubmitResponse {
-    request_id: u32,
-    session_id: u32,
     status: ResponseStatus,
     text: String,
     error_message: String,
@@ -147,44 +76,6 @@ struct SubmitResponse {
 enum ResponseStatus {
     Ok,
     Error,
-}
-
-struct CompletedSubmit {
-    store_response: bool,
-    response: SubmitResponse,
-}
-
-struct RuntimeState {
-    agent: DeviceAgent,
-    responses: Arc<ResponseStore>,
-}
-
-enum RuntimeCommand {
-    Submit {
-        request_id: u32,
-        session: SessionId,
-        input: SubmitInput,
-        store_response: bool,
-        reply: mpsc::Sender<Result<(), CabiError>>,
-    },
-    CreateSession {
-        reply: mpsc::Sender<Result<SessionId, CabiError>>,
-    },
-    ListSessions {
-        reply: mpsc::Sender<Result<Vec<SessionId>, CabiError>>,
-    },
-    DeleteSession {
-        session: SessionId,
-        reply: mpsc::Sender<Result<(), CabiError>>,
-    },
-    Stop {
-        reply: mpsc::Sender<Result<(), CabiError>>,
-    },
-}
-
-enum WorkerEvent {
-    Command(Option<RuntimeCommand>),
-    InflightDone(CompletedSubmit),
 }
 
 #[no_mangle]
@@ -311,59 +202,48 @@ fn init(config: *const ClawAgentConfig) -> Result<(), CabiError> {
 
     let runtime = Box::new(RuntimeController {
         config: RuntimeConfig { api, persistence },
-        responses: Arc::new(ResponseStore::default()),
+        agent: None,
+        pending: Mutex::new(HashMap::new()),
         next_request_id: AtomicU32::new(1),
-        sender: None,
-        worker: None,
     });
     RUNTIME.store(Box::into_raw(runtime), Ordering::Release);
     Ok(())
 }
 
 fn start() -> Result<(), CabiError> {
-    let ready_receiver = {
-        let _guard = lock_runtime();
-        let runtime = runtime_mut()?;
-        if runtime.sender.is_some() {
-            return Ok(());
-        }
-
-        let (sender, receiver) = async_channel::unbounded();
-        let (ready_sender, ready_receiver) = mpsc::channel();
-        let config = runtime.config.clone();
-        let responses = Arc::clone(&runtime.responses);
-        let worker = EspIdfThread.spawn_worker(
-            "claw_agent",
-            AGENT_WORKER_STACK_SIZE,
-            Priority::Normal,
-            CoreAffinity::Any,
-            move || run_worker(config, responses, receiver, ready_sender),
-        )?;
-        runtime.sender = Some(sender);
-        runtime.worker = Some(worker);
-        ready_receiver
-    };
-
-    let result = ready_receiver.recv().map_err(|_| CabiError::InvalidState)?;
-    if result.is_err() {
-        let worker = {
-            let _guard = lock_runtime();
-            let runtime = runtime_mut()?;
-            runtime.sender = None;
-            runtime.worker.take()
-        };
-        if let Some(worker) = worker {
-            worker.join();
-        }
+    let _guard = lock_runtime();
+    let runtime = runtime_mut()?;
+    if runtime.agent.is_some() {
+        return Ok(());
     }
-    result
+    // `AgentSystem::new` spawns the orchestrator's drive worker (via `EspIdfThread`)
+    // and blocks until it reports readiness, so a build failure surfaces here.
+    let agent = AgentSystem::<EspIdfFs, EspIdfHttp, EspIdfTimer>::new::<EspIdfThread, EspIdfExecutor>(
+        runtime.config.api.clone(),
+        runtime.config.persistence.clone(),
+        EspIdfThread,
+    )?;
+    register_capability_tools(agent.tool_registry())?;
+    agent.start_all()?;
+    runtime.agent = Some(agent);
+    Ok(())
 }
 
 fn stop() -> Result<(), CabiError> {
-    let Some((sender, worker)) = take_running()? else {
-        return Ok(());
+    // Take the agent out under the lock, then stop/drop it outside so the
+    // orchestrator worker join never happens while holding the runtime lock.
+    let agent = {
+        let _guard = lock_runtime();
+        let runtime = runtime_mut()?;
+        pending_map(runtime).clear();
+        runtime.agent.take()
     };
-    stop_worker(sender, worker)
+    if let Some(agent) = agent {
+        let result = agent.stop_all().map_err(CabiError::from);
+        drop(agent);
+        return result.map(|_| ());
+    }
+    Ok(())
 }
 
 fn deinit() -> Result<(), CabiError> {
@@ -376,16 +256,13 @@ fn deinit() -> Result<(), CabiError> {
     }
 
     let mut runtime = unsafe { Box::from_raw(ptr) };
-    let result = match (runtime.sender.take(), runtime.worker.take()) {
-        (Some(sender), Some(worker)) => stop_worker(sender, worker),
-        (_, Some(worker)) => {
-            worker.join();
-            Ok(())
-        }
-        _ => Ok(()),
-    };
+    let agent = runtime.agent.take();
     drop(runtime);
-    result
+    if let Some(agent) = agent {
+        let _ = agent.stop_all();
+        drop(agent);
+    }
+    Ok(())
 }
 
 fn submit_session(
@@ -398,9 +275,7 @@ fn submit_session(
     }
     let request_id = submit_owned(
         SessionId::new(session_id),
-        SubmitInput {
-            text: required_string(text)?,
-        },
+        required_string(text)?,
         !out_request_id.is_null(),
     )?;
     if let Some(out_request_id) = unsafe { out_request_id.as_mut() } {
@@ -409,15 +284,49 @@ fn submit_session(
     Ok(())
 }
 
+fn submit_owned(session: SessionId, text: String, store_response: bool) -> Result<u32, CabiError> {
+    let _guard = lock_runtime();
+    let runtime = runtime_mut()?;
+    let agent = runtime.agent.as_ref().ok_or(CabiError::InvalidState)?;
+    if !agent.list_sessions().contains(&session) {
+        return Err(CabiError::NotFound);
+    }
+    let request_id = runtime.next_request_id.fetch_add(1, Ordering::AcqRel);
+    if request_id == 0 {
+        return Err(CabiError::InvalidState);
+    }
+    // The per-submission capability context rides through the core drive as a
+    // type-erased `SharedContext`; the engine installs it around this turn so a
+    // `CapTool` deep in the drive reads it back via `claw_tool::current_context`.
+    let context: claw_tool::SharedContext = Arc::new(CapabilityContextData {
+        request_id,
+        ..CapabilityContextData::default()
+    });
+    let stream =
+        agent.submit_with_context(session, text, DeliveryKind::Interrupt, Some(context));
+    if store_response {
+        pending_map(runtime).insert(
+            request_id,
+            PendingSubmit {
+                session_id: session.0,
+                stream,
+                outputs: Vec::new(),
+                error: None,
+                done: false,
+            },
+        );
+    }
+    // When no response is wanted, drop the stream: the orchestrator worker still
+    // drives the turn to completion; the closed channel just discards its events.
+    Ok(request_id)
+}
+
 fn session_create(out_session_id: *mut u32) -> Result<(), CabiError> {
     let out_session_id = unsafe { out_session_id.as_mut() }.ok_or(CabiError::InvalidArgument)?;
-    let sender = runtime_sender()?;
-    let (reply, receiver) = mpsc::channel();
-    sender
-        .try_send(RuntimeCommand::CreateSession { reply })
-        .map_err(|_| CabiError::InvalidState)?;
-    let session = receiver.recv().map_err(|_| CabiError::InvalidState)??;
-    *out_session_id = session.0;
+    let _guard = lock_runtime();
+    let runtime = runtime_mut()?;
+    let agent = runtime.agent.as_ref().ok_or(CabiError::InvalidState)?;
+    *out_session_id = agent.new_session().0;
     Ok(())
 }
 
@@ -431,12 +340,12 @@ fn session_list(
         return Err(CabiError::InvalidArgument);
     }
 
-    let sender = runtime_sender()?;
-    let (reply, receiver) = mpsc::channel();
-    sender
-        .try_send(RuntimeCommand::ListSessions { reply })
-        .map_err(|_| CabiError::InvalidState)?;
-    let sessions = receiver.recv().map_err(|_| CabiError::InvalidState)??;
+    let sessions = {
+        let _guard = lock_runtime();
+        let runtime = runtime_mut()?;
+        let agent = runtime.agent.as_ref().ok_or(CabiError::InvalidState)?;
+        agent.list_sessions()
+    };
     *out_count = sessions.len();
     if capacity < sessions.len() {
         return Err(CabiError::InvalidSize);
@@ -456,36 +365,12 @@ fn session_delete(session_id: u32) -> Result<(), CabiError> {
     if session_id == 0 {
         return Err(CabiError::InvalidArgument);
     }
-
-    let sender = runtime_sender()?;
-    let (reply, receiver) = mpsc::channel();
-    sender
-        .try_send(RuntimeCommand::DeleteSession {
-            session: SessionId::new(session_id),
-            reply,
-        })
-        .map_err(|_| CabiError::InvalidState)?;
-    receiver.recv().map_err(|_| CabiError::InvalidState)?
-}
-
-fn submit_owned(
-    session: SessionId,
-    input: SubmitInput,
-    store_response: bool,
-) -> Result<u32, CabiError> {
-    let (sender, request_id) = runtime_submit_sender()?;
-    let (reply, receiver) = mpsc::channel();
-    sender
-        .try_send(RuntimeCommand::Submit {
-            request_id,
-            session,
-            input,
-            store_response,
-            reply,
-        })
-        .map_err(|_| CabiError::InvalidState)?;
-    receiver.recv().map_err(|_| CabiError::InvalidState)??;
-    Ok(request_id)
+    let _guard = lock_runtime();
+    let runtime = runtime_mut()?;
+    let agent = runtime.agent.as_ref().ok_or(CabiError::InvalidState)?;
+    agent
+        .delete_session(SessionId::new(session_id))
+        .map_err(|_| CabiError::NotFound)
 }
 
 fn receive(
@@ -498,317 +383,143 @@ fn receive(
         return Err(CabiError::InvalidArgument);
     }
     let out_response = unsafe { out_response.as_mut() }.ok_or(CabiError::InvalidArgument)?;
-    let response = runtime_responses()?.receive(session_id, request_id, timeout_ms)?;
-    write_response(out_response, response)
-}
 
-fn run_worker(
-    config: RuntimeConfig,
-    responses: Arc<ResponseStore>,
-    receiver: Receiver<RuntimeCommand>,
-    ready: mpsc::Sender<Result<(), CabiError>>,
-) {
-    executor::run(worker_loop(config, responses, receiver, ready));
-}
-
-async fn worker_loop(
-    config: RuntimeConfig,
-    responses: Arc<ResponseStore>,
-    receiver: Receiver<RuntimeCommand>,
-    ready: mpsc::Sender<Result<(), CabiError>>,
-) {
-    // `async_channel::Receiver` is `!Unpin` (it holds a pinned event listener), so
-    // it must be pinned once before it can be polled as a `Stream` below.
-    let mut receiver = core::pin::pin!(receiver);
-    let mut state = match RuntimeState::new(config, responses) {
-        Ok(state) => state,
-        Err(error) => {
-            let _ = ready.send(Err(error));
-            return;
-        }
+    // Check the submission out so the (possibly long) drain does not hold the
+    // runtime lock; reinsert it if the turn has not finished within the timeout.
+    let Some(mut pending) = take_pending(request_id)? else {
+        // Unknown or already-consumed request id: nothing ready yet.
+        return Err(CabiError::Timeout);
     };
-    if let Err(error) = state.start() {
-        let _ = ready.send(Err(error));
-        return;
+    if pending.session_id != session_id {
+        reinsert_pending(request_id, pending);
+        return Err(CabiError::InvalidArgument);
     }
-    let _ = ready.send(Ok(()));
 
-    let mut inflight = VecDeque::new();
-    let mut receiver_open = true;
-    let mut stop_reply: Option<mpsc::Sender<Result<(), CabiError>>> = None;
+    let done = if timeout_ms == 0 {
+        drain_ready(&mut pending)
+    } else {
+        drain_with_timeout(&mut pending, timeout_ms)
+    };
 
+    if done {
+        let response = finalize(&pending);
+        write_response(out_response, response)
+    } else {
+        reinsert_pending(request_id, pending);
+        Err(CabiError::Timeout)
+    }
+}
+
+/// Drain every event already buffered on the stream without blocking; returns
+/// `true` when the turn is complete.
+fn drain_ready(pending: &mut PendingSubmit) -> bool {
+    if pending.done {
+        return true;
+    }
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut context = Context::from_waker(&waker);
     loop {
-        if stop_reply.is_some() && inflight.is_empty() {
-            let result = state.stop();
-            if let Some(reply) = stop_reply.take() {
-                let _ = reply.send(result);
+        let polled = Pin::new(&mut pending.stream).poll_next(&mut context);
+        match polled {
+            Poll::Ready(Some(event)) => accumulate(&mut pending.outputs, &mut pending.error, event),
+            Poll::Ready(None) => {
+                pending.done = true;
+                return true;
             }
-            return;
-        }
-        if !receiver_open && inflight.is_empty() {
-            let _ = state.stop();
-            return;
-        }
-
-        let recv = receiver_open.then(|| receiver.as_mut());
-        match (WorkerPoll {
-            inflight: &mut inflight,
-            recv,
-        })
-        .await
-        {
-            WorkerEvent::InflightDone(completed) => {
-                if completed.store_response {
-                    state.finish_response(completed.response);
-                }
-            }
-            WorkerEvent::Command(Some(RuntimeCommand::Submit {
-                request_id,
-                session,
-                input,
-                store_response,
-                reply,
-            })) => {
-                if stop_reply.is_some() {
-                    let _ = reply.send(Err(CabiError::InvalidState));
-                } else if let Some(future) =
-                    state.start_submit(request_id, session, input, store_response, reply)
-                {
-                    inflight.push_back(future);
-                }
-            }
-            WorkerEvent::Command(Some(RuntimeCommand::CreateSession { reply })) => {
-                if stop_reply.is_some() {
-                    let _ = reply.send(Err(CabiError::InvalidState));
-                } else {
-                    let _ = reply.send(Ok(state.agent.new_session()));
-                }
-            }
-            WorkerEvent::Command(Some(RuntimeCommand::ListSessions { reply })) => {
-                if stop_reply.is_some() {
-                    let _ = reply.send(Err(CabiError::InvalidState));
-                } else {
-                    let _ = reply.send(Ok(state.agent.list_sessions()));
-                }
-            }
-            WorkerEvent::Command(Some(RuntimeCommand::DeleteSession { session, reply })) => {
-                if stop_reply.is_some() {
-                    let _ = reply.send(Err(CabiError::InvalidState));
-                } else {
-                    let _ = reply.send(
-                        state
-                            .agent
-                            .delete_session(session)
-                            .map_err(|_| CabiError::NotFound),
-                    );
-                }
-            }
-            WorkerEvent::Command(Some(RuntimeCommand::Stop { reply })) => {
-                stop_reply = Some(reply);
-            }
-            WorkerEvent::Command(None) => {
-                receiver_open = false;
-            }
+            Poll::Pending => return false,
         }
     }
 }
 
-impl RuntimeState {
-    fn new(config: RuntimeConfig, responses: Arc<ResponseStore>) -> Result<Self, CabiError> {
-        let agent = Rc::new(AgentSystem::new(config.api, config.persistence)?);
-        register_capability_tools(agent.tool_registry())?;
-        Ok(Self { agent, responses })
+/// Drain the stream to completion, bounded by `timeout_ms`; returns `true` when
+/// the turn finished, `false` when the timeout won (partial output is retained on
+/// `pending` for a later `receive`).
+fn drain_with_timeout(pending: &mut PendingSubmit, timeout_ms: u32) -> bool {
+    if pending.done {
+        return true;
     }
+    let PendingSubmit {
+        stream,
+        outputs,
+        error,
+        done,
+        ..
+    } = pending;
 
-    fn start(&self) -> Result<(), CabiError> {
-        self.agent.start_all()?;
-        Ok(())
-    }
-
-    fn stop(&self) -> Result<(), CabiError> {
-        self.agent.stop_all()?;
-        Ok(())
-    }
-
-    fn finish_response(&self, response: SubmitResponse) {
-        self.responses.finish(response);
-    }
-
-    fn start_submit(
-        &mut self,
-        request_id: u32,
-        session: SessionId,
-        input: SubmitInput,
-        store_response: bool,
-        reply: mpsc::Sender<Result<(), CabiError>>,
-    ) -> Option<InflightSubmit> {
-        match self.build_submit(request_id, session, input) {
-            Ok(submit) => {
-                let _ = reply.send(Ok(()));
-                Some(Box::pin(
-                    async move { run_submit(submit, store_response).await },
-                ))
+    let abort = AtomicBool::new(false);
+    let mut timer = EspIdfTimer;
+    let finished = futures_lite::future::block_on(async {
+        let drain = async {
+            while let Some(event) = stream.next().await {
+                accumulate(outputs, error, event);
             }
-            Err(error) => {
-                let _ = reply.send(Err(error));
-                None
-            }
-        }
-    }
-
-    fn build_submit(
-        &mut self,
-        request_id: u32,
-        session: SessionId,
-        input: SubmitInput,
-    ) -> Result<SubmitTask, CabiError> {
-        if !self.agent.list_sessions().contains(&session) {
-            return Err(CabiError::NotFound);
-        }
-        let capability_context = CapabilityContextData {
-            request_id,
-            ..CapabilityContextData::default()
+            true
         };
-        Ok(SubmitTask {
-            request_id,
-            agent: Rc::clone(&self.agent),
-            session,
-            text: input.text,
-            capability_context,
-        })
+        let timeout = async {
+            let _ = timer
+                .sleep(Duration::from_millis(u64::from(timeout_ms)), Cancel::new(&abort))
+                .await;
+            false
+        };
+        futures_lite::future::or(drain, timeout).await
+    });
+    if finished {
+        *done = true;
     }
+    finished
 }
 
-struct SubmitTask {
-    request_id: u32,
-    agent: DeviceAgent,
-    session: SessionId,
-    text: String,
-    capability_context: CapabilityContextData,
-}
-
-async fn run_submit(task: SubmitTask, store_response: bool) -> CompletedSubmit {
-    let request_id = task.request_id;
-    let session_id = task.session.0;
-    let context = task.capability_context.clone();
-    // Drain the submit event stream: accumulate the turn's `Output` text and
-    // capture the first `Error` (an error ends the turn). All other events
-    // (reasoning, tools, brackets) are not part of the FFI's flat response yet.
-    let response = with_capability_context(context, async move {
-        let mut stream = task
-            .agent
-            .submit(task.session, task.text, DeliveryKind::Interrupt);
-        let mut outputs: Vec<String> = Vec::new();
-        let mut error: Option<String> = None;
-        while let Some(event) = stream.next().await {
-            match event {
-                AgentEvent::Output { text } => outputs.push(text),
-                AgentEvent::Error { message } => {
-                    if error.is_none() {
-                        error = Some(message);
-                    }
-                }
-                _ => {}
+fn accumulate(outputs: &mut Vec<String>, error: &mut Option<String>, event: AgentEvent) {
+    match event {
+        AgentEvent::Output { text } => outputs.push(text),
+        AgentEvent::Error { message } => {
+            if error.is_none() {
+                *error = Some(message);
             }
         }
-        match error {
-            Some(message) => SubmitResponse {
-                request_id,
-                session_id,
-                status: ResponseStatus::Error,
-                text: String::new(),
-                error_message: message,
-            },
-            None => SubmitResponse {
-                request_id,
-                session_id,
-                status: ResponseStatus::Ok,
-                text: join_outputs(&outputs),
-                error_message: String::new(),
-            },
-        }
-    })
-    .await;
-    CompletedSubmit {
-        store_response,
-        response,
+        _ => {}
     }
 }
 
-struct WorkerPoll<'a> {
-    inflight: &'a mut VecDeque<InflightSubmit>,
-    recv: Option<Pin<&'a mut Receiver<RuntimeCommand>>>,
-}
-
-impl Future for WorkerPoll<'_> {
-    type Output = WorkerEvent;
-
-    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-        let count = self.inflight.len();
-        for _ in 0..count {
-            let Some(mut future) = self.inflight.pop_front() else {
-                break;
-            };
-            if let Poll::Ready(completed) = future.as_mut().poll(context) {
-                return Poll::Ready(WorkerEvent::InflightDone(completed));
-            }
-            self.inflight.push_back(future);
-        }
-
-        // Poll the command `Receiver` as a `Stream`: `Some(cmd)` for a queued
-        // command, `None` once every sender has dropped (same "closed" signal the
-        // old channel gave).
-        match self.recv.as_mut() {
-            Some(receiver) => receiver.as_mut().poll_next(context).map(WorkerEvent::Command),
-            None => Poll::Pending,
-        }
+fn finalize(pending: &PendingSubmit) -> SubmitResponse {
+    match &pending.error {
+        Some(message) => SubmitResponse {
+            status: ResponseStatus::Error,
+            text: String::new(),
+            error_message: message.clone(),
+        },
+        None => SubmitResponse {
+            status: ResponseStatus::Ok,
+            text: join_outputs(&pending.outputs),
+            error_message: String::new(),
+        },
     }
 }
 
-fn stop_worker(sender: Sender<RuntimeCommand>, worker: WorkerHandle) -> Result<(), CabiError> {
-    let (reply, receiver) = mpsc::channel();
-    let result = match sender.try_send(RuntimeCommand::Stop { reply }) {
-        Ok(()) => receiver.recv().map_err(|_| CabiError::InvalidState)?,
-        Err(_) => Err(CabiError::InvalidState),
-    };
-    drop(sender);
-    worker.join();
-    result
+struct NoopWake;
+
+impl Wake for NoopWake {
+    fn wake(self: Arc<Self>) {}
 }
 
-fn take_running() -> Result<Option<(Sender<RuntimeCommand>, WorkerHandle)>, CabiError> {
+fn take_pending(request_id: u32) -> Result<Option<PendingSubmit>, CabiError> {
     let _guard = lock_runtime();
     let runtime = runtime_mut()?;
-    let Some(sender) = runtime.sender.take() else {
-        return Ok(None);
-    };
-    let Some(worker) = runtime.worker.take() else {
-        return Ok(None);
-    };
-    Ok(Some((sender, worker)))
+    Ok(pending_map(runtime).remove(&request_id))
 }
 
-fn runtime_submit_sender() -> Result<(Sender<RuntimeCommand>, u32), CabiError> {
+fn reinsert_pending(request_id: u32, pending: PendingSubmit) {
     let _guard = lock_runtime();
-    let runtime = runtime_mut()?;
-    let sender = runtime.sender.clone().ok_or(CabiError::InvalidState)?;
-    let request_id = runtime.next_request_id.fetch_add(1, Ordering::AcqRel);
-    if request_id == 0 {
-        return Err(CabiError::InvalidState);
+    if let Ok(runtime) = runtime_mut() {
+        pending_map(runtime).insert(request_id, pending);
     }
-    Ok((sender, request_id))
 }
 
-fn runtime_sender() -> Result<Sender<RuntimeCommand>, CabiError> {
-    let _guard = lock_runtime();
-    let runtime = runtime_mut()?;
-    runtime.sender.clone().ok_or(CabiError::InvalidState)
-}
-
-fn runtime_responses() -> Result<Arc<ResponseStore>, CabiError> {
-    let _guard = lock_runtime();
-    let runtime = runtime_mut()?;
-    Ok(Arc::clone(&runtime.responses))
+fn pending_map(runtime: &RuntimeController) -> MutexGuard<'_, HashMap<u32, PendingSubmit>> {
+    runtime
+        .pending
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
 }
 
 fn runtime_mut() -> Result<&'static mut RuntimeController, CabiError> {
@@ -917,8 +628,6 @@ enum CabiError {
     #[error("timeout")]
     Timeout,
     #[error(transparent)]
-    Thread(#[from] std::io::Error),
-    #[error(transparent)]
     Agent(#[from] AgentError),
     #[error(transparent)]
     Tool(#[from] claw_tool::ToolInvokeError),
@@ -934,7 +643,7 @@ impl CabiError {
             Self::InvalidSize => ESP_ERR_INVALID_SIZE,
             Self::NotFound => ESP_ERR_NOT_FOUND,
             Self::Timeout => ESP_ERR_TIMEOUT,
-            Self::Thread(_) | Self::Agent(_) | Self::Tool(_) | Self::CapTool(_) => ESP_FAIL,
+            Self::Agent(_) | Self::Tool(_) | Self::CapTool(_) => ESP_FAIL,
         }
     }
 }

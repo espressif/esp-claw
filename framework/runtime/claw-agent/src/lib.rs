@@ -4,18 +4,20 @@
 //! routing, channel inbound/outbound conversion, and reply destinations live in
 //! adapter crates above this layer.
 
+use std::marker::PhantomData;
 use std::sync::Arc;
 
 use claw_api::ClawApiConfig;
-pub use claw_core::{AgentEvent, IterationId, SubmitStream as AgentEventStream};
-use claw_core::{
-    DeliverError, DeliveryKind, Orchestrator, OrchestratorBuildError, SessionError, SessionId,
-    SubmitStream,
+pub use claw_core::{
+    AgentEvent, DeliveryKind, IterationId, SessionId, SubmitStream as AgentEventStream,
 };
-use claw_interface::{ClawFs, ClawHttp, ClawTimer, FsError};
+use claw_core::{
+    DeliverError, Orchestrator, OrchestratorBuildError, SessionError, SubmitStream,
+};
+use claw_interface::{ClawExecutor, ClawFs, ClawHttp, ClawThread, ClawTimer, FsError};
 #[cfg(feature = "host-backends")]
-use claw_interface::{DiskFs, RealHttp, TokioTimer};
-use claw_tool::{ToolRegistry, ToolRegistryError};
+use claw_interface::{DiskFs, RealHttp, StdThread, TokioExecutor, TokioTimer};
+use claw_tool::{SharedContext, ToolRegistry, ToolRegistryError};
 
 #[cfg(feature = "host-backends")]
 pub type HostAgentSystem = AgentSystem<DiskFs, RealHttp, TokioTimer>;
@@ -78,6 +80,9 @@ pub enum AgentError {
         #[source]
         source: FsError,
     },
+    /// The orchestrator's drive worker could not be started.
+    #[error("failed to start the orchestrator worker: {0}")]
+    Worker(String),
 }
 
 impl From<OrchestratorBuildError> for AgentError {
@@ -86,11 +91,17 @@ impl From<OrchestratorBuildError> for AgentError {
             OrchestratorBuildError::MissingPersistenceDir => Self::MissingPersistenceDir,
             OrchestratorBuildError::ExtractionLlm(message) => Self::ExtractionLlm(message),
             OrchestratorBuildError::LongTermInit(message) => Self::LongTermInit(message),
+            OrchestratorBuildError::Worker(message) => Self::Worker(message),
         }
     }
 }
 
 /// A ready-to-drive agent runtime.
+///
+/// The `F`/`H`/`Timer` backends select which concrete filesystem, HTTP, and timer
+/// the orchestrator's drive worker uses; they are only needed at construction, so
+/// they are held as a marker (the built [`Orchestrator`] handle is backend-erased
+/// and `Send + Sync`).
 pub struct AgentSystem<F, H, Timer>
 where
     F: ClawFs + Clone + Default + 'static,
@@ -98,7 +109,8 @@ where
     Timer: ClawTimer + Default + 'static,
 {
     tools: Arc<ToolRegistry>,
-    orchestrator: Arc<Orchestrator<F, H, Timer>>,
+    orchestrator: Orchestrator,
+    _marker: PhantomData<fn() -> (F, H, Timer)>,
 }
 
 impl<F, H, Timer> AgentSystem<F, H, Timer>
@@ -107,15 +119,23 @@ where
     H: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
-    /// Build a fully injectable agent system.
+    /// Build a fully injectable agent system, spawning the orchestrator's drive
+    /// worker via `thread` (a [`ClawThread`] policy: `StdThread` on host,
+    /// `EspIdfThread` on device) and driving its `!Send` engine with the injected
+    /// [`ClawExecutor`] `E` (`TokioExecutor` on host, `EspIdfExecutor` on device).
     ///
     /// # Errors
     ///
     /// Returns [`AgentError`] when storage cleanup or orchestrator construction fails.
-    pub fn new(
+    pub fn new<T, E>(
         llm_config: ClawApiConfig,
         persistence: AgentPersistenceConfig,
-    ) -> AgentResult<Self> {
+        thread: T,
+    ) -> AgentResult<Self>
+    where
+        T: ClawThread,
+        E: ClawExecutor + 'static,
+    {
         let persistence_dir = persistence.dir;
         if persistence_dir.trim().is_empty() {
             return Err(AgentError::MissingPersistenceDir);
@@ -124,16 +144,18 @@ where
         clear_storage_tree(&storage, &persistence_dir)?;
 
         let tools = Arc::new(ToolRegistry::new());
-        let orchestrator = Arc::new(Orchestrator::<F, H, Timer>::new(
+        let orchestrator = Orchestrator::new::<F, H, Timer, T, E>(
             Arc::clone(&tools),
             llm_config,
             &persistence_dir,
             &persistence.skill_roots,
-        )?);
+            &thread,
+        )?;
 
         Ok(Self {
             tools,
             orchestrator,
+            _marker: PhantomData,
         })
     }
 
@@ -175,7 +197,21 @@ where
         text: impl Into<String>,
         kind: DeliveryKind,
     ) -> SubmitStream {
-        self.orchestrator.submit(session, text.into(), kind)
+        self.orchestrator.submit(session, text.into(), kind, None)
+    }
+
+    /// Like [`submit`](Self::submit) but installs a type-erased per-submission
+    /// `context` (via [`claw_tool::current_context`]) for the duration of this
+    /// turn's drive, so tool handlers can read caller-supplied request metadata.
+    pub fn submit_with_context(
+        &self,
+        session: SessionId,
+        text: impl Into<String>,
+        kind: DeliveryKind,
+        context: Option<SharedContext>,
+    ) -> SubmitStream {
+        self.orchestrator
+            .submit(session, text.into(), kind, context)
     }
 
     /// Create a fresh isolated conversation session.
@@ -207,7 +243,7 @@ impl AgentSystem<DiskFs, RealHttp, TokioTimer> {
     ///
     /// Returns [`AgentError`] when construction fails.
     pub fn on_disk(llm: ClawApiConfig, persistence: AgentPersistenceConfig) -> AgentResult<Self> {
-        Self::new(llm, persistence)
+        Self::new::<StdThread, TokioExecutor>(llm, persistence, StdThread)
     }
 }
 
@@ -248,7 +284,9 @@ mod tests {
     use futures_lite::StreamExt;
 
     use claw_api::{BackendKind, ClawApiConfig};
-    use claw_interface::{BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp};
+    use claw_interface::{
+        BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp, StdThread, TokioExecutor,
+    };
     use serde_json::json;
 
     use super::*;
@@ -274,6 +312,7 @@ mod tests {
 
     #[test]
     fn list_sessions_returns_session_ids() {
+        let _script = SharedScriptHttp::serialize();
         let system = test_system(vec![]);
         let session = system.new_session();
 
@@ -288,6 +327,7 @@ mod tests {
 
     #[test]
     fn submit_streams_root_reply_as_output() {
+        let _script = SharedScriptHttp::serialize();
         let system = test_system(vec![assistant_text("hello there")]);
         let session = system.new_session();
 
@@ -307,6 +347,7 @@ mod tests {
 
     #[test]
     fn submit_unknown_session_streams_error() {
+        let _script = SharedScriptHttp::serialize();
         let system = test_system(vec![]);
         let events = drain(system.submit(SessionId(9), "x".to_string(), DeliveryKind::Interrupt));
         assert!(matches!(
@@ -323,7 +364,12 @@ mod tests {
         }
         SharedScriptHttp::install(script);
 
-        TestSystem::new(llm_config(), AgentPersistenceConfig::new("/mem")).unwrap()
+        TestSystem::new::<StdThread, TokioExecutor>(
+            llm_config(),
+            AgentPersistenceConfig::new("/mem"),
+            StdThread,
+        )
+        .unwrap()
     }
 
     fn llm_config() -> ClawApiConfig {

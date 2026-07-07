@@ -5,12 +5,15 @@
 //! The upper-layer logging that drives [`log_sink`] — the `log` facade backend
 //! and the flat-tree `tracing` subscriber — lives in the `claw-log` crate.
 
+pub mod executor;
 pub mod fs;
 pub mod http;
 pub mod log_sink;
 pub mod thread;
 pub mod timer;
 
+#[cfg(target_os = "espidf")]
+pub use executor::EspIdfExecutor;
 #[cfg(target_os = "espidf")]
 pub use fs::{EspIdfFile, EspIdfFs};
 #[cfg(target_os = "espidf")]
