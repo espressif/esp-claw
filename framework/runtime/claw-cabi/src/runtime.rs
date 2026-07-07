@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::task::{Wake, Waker};
 use std::time::Duration;
@@ -29,7 +29,7 @@ use crate::abi::{
     ESP_ERR_INVALID_SIZE, ESP_ERR_INVALID_STATE, ESP_ERR_NOT_FOUND, ESP_ERR_TIMEOUT, ESP_FAIL,
     ESP_OK,
 };
-use crate::tool::{register_capability_tools, CapabilityContextData};
+use crate::tool::register_capability_tools;
 
 /// The device agent runtime. `AgentSystem` is now backend-erased and
 /// `Send + Sync` (its `Orchestrator` handle owns the drive worker), so it is held
@@ -53,8 +53,6 @@ struct RuntimeController {
     agent: Option<DeviceAgent>,
     /// Open sessions keyed by numeric session id.
     sessions: Mutex<HashMap<u32, Arc<OpenSession>>>,
-    /// Internal request id source for per-submit capability context.
-    next_request_id: AtomicU32,
 }
 
 /// One open session connection. The stream is drained incrementally — one
@@ -237,7 +235,6 @@ fn init(config: *const ClawAgentConfig) -> Result<(), CabiError> {
         config: RuntimeConfig { api, persistence },
         agent: None,
         sessions: Mutex::new(HashMap::new()),
-        next_request_id: AtomicU32::new(1),
     });
     RUNTIME.store(Box::into_raw(runtime), Ordering::Release);
     Ok(())
@@ -303,25 +300,13 @@ fn submit_session(session_id: u32, text: *const c_char) -> Result<(), CabiError>
         return Err(CabiError::InvalidArgument);
     }
     let text = required_string(text)?;
-    let (session, request_id) = {
+    let session = {
         let _guard = lock_runtime();
         let runtime = runtime_mut()?;
         runtime.agent.as_ref().ok_or(CabiError::InvalidState)?;
-        let session = get_open_session_locked(runtime, session_id)?.ok_or(CabiError::NotFound)?;
-        let request_id = runtime.next_request_id.fetch_add(1, Ordering::AcqRel);
-        (session, request_id)
+        get_open_session_locked(runtime, session_id)?.ok_or(CabiError::NotFound)?
     };
-    if request_id == 0 {
-        return Err(CabiError::InvalidState);
-    }
-    // The per-submission capability context rides through the core drive as a
-    // type-erased `SharedContext`; the engine installs it around this turn so a
-    // `CapTool` deep in the drive reads it back via `claw_tool::current_context`.
-    let context: claw_tool::SharedContext = Arc::new(CapabilityContextData {
-        request_id,
-        ..CapabilityContextData::default()
-    });
-    futures_lite::future::block_on(session.control.submit_with_context(text, Some(context)))
+    futures_lite::future::block_on(session.control.submit(text))
         .map_err(|_| CabiError::InvalidState)
 }
 

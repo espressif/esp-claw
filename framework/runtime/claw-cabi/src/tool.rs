@@ -13,31 +13,6 @@ use crate::abi::{
     CLAW_CAP_KIND_HYBRID, ESP_OK, TOOL_OUTPUT_CAPACITY,
 };
 
-/// Per-submission context a capability call needs (request id, inbound/target
-/// routing, …). It rides through the core drive as a type-erased
-/// [`claw_tool::SharedContext`] installed by `submit_with_context`, and a
-/// [`CapTool`] reads it back with [`claw_tool::current_context`].
-///
-/// `Send + Sync + 'static` (plain scalars/strings) so it can be stored in a
-/// `SharedContext` and observed on the orchestrator's drive worker thread.
-#[derive(Clone, Default)]
-pub(crate) struct CapabilityContextData {
-    pub request_id: u32,
-    pub channel: Option<String>,
-    pub chat_id: Option<String>,
-    pub target_channel: Option<String>,
-    pub target_chat_id: Option<String>,
-    pub source_cap: Option<String>,
-}
-
-/// The current capability context installed for the in-flight submission, or a
-/// default (empty) context when none is installed.
-fn current_context() -> CapabilityContextData {
-    claw_tool::current_context::<CapabilityContextData>()
-        .map(|context| (*context).clone())
-        .unwrap_or_default()
-}
-
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CapToolError {
     #[error("invalid capability registry list")]
@@ -136,32 +111,15 @@ impl SyncToolHandler for CapTool {
         if call.name() != self.name {
             return Err(ToolError::NotFound(call.name().to_owned()).into());
         }
-        call_capability(&self.name, call.arguments_json(), &current_context())
+        call_capability(&self.name, call.arguments_json())
     }
 }
 
-pub(crate) fn call_capability(
-    name: &str,
-    arguments_json: &str,
-    context: &CapabilityContextData,
-) -> ToolResult<ToolOutput> {
+pub(crate) fn call_capability(name: &str, arguments_json: &str) -> ToolResult<ToolOutput> {
     let name = cstring(name)?;
     let arguments_json = cstring(arguments_json)?;
-    let channel = optional_cstring(context.channel.as_deref())?;
-    let chat_id = optional_cstring(context.chat_id.as_deref())?;
-    let target_channel = optional_cstring(context.target_channel.as_deref())?;
-    let target_chat_id = optional_cstring(context.target_chat_id.as_deref())?;
-    let source_cap = optional_cstring(context.source_cap.as_deref())?;
     let mut output = vec![0u8; TOOL_OUTPUT_CAPACITY];
-    let ctx = ClawCapCallContext {
-        request_id: context.request_id,
-        channel: c_ptr(&channel),
-        chat_id: c_ptr(&chat_id),
-        target_channel: c_ptr(&target_channel),
-        target_chat_id: c_ptr(&target_chat_id),
-        source_cap: c_ptr(&source_cap),
-        ..ClawCapCallContext::default()
-    };
+    let ctx = ClawCapCallContext::default();
     let err = unsafe {
         claw_cap_call(
             name.as_ptr(),
@@ -189,16 +147,6 @@ fn c_string(ptr: *const c_char) -> Option<String> {
 fn cstring(value: &str) -> Result<CString, ToolInvokeError> {
     CString::new(value)
         .map_err(|_| ToolError::InvalidArguments("string contains nul".into()).into())
-}
-
-fn optional_cstring(value: Option<&str>) -> Result<Option<CString>, ToolInvokeError> {
-    value.map(cstring).transpose()
-}
-
-fn c_ptr(value: &Option<CString>) -> *const c_char {
-    value
-        .as_ref()
-        .map_or(core::ptr::null(), |value| value.as_ptr())
 }
 
 fn c_buffer_to_string(buffer: &[u8]) -> String {

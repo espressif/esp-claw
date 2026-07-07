@@ -1,5 +1,4 @@
 pub mod bake;
-mod context;
 mod registry;
 mod runner;
 mod set;
@@ -7,7 +6,6 @@ mod set;
 mod tool;
 mod validate;
 
-pub use context::{current_context, with_context, SharedContext, WithContext};
 pub use registry::{ToolRegistry, ToolRegistryError, ToolRegistryVersion};
 pub use runner::{ApprovalNeeded, ToolGate, ToolRunOutcome, ToolRunner};
 pub use set::{ToolName, ToolSet, ToolSetError, ToolSetHandle};

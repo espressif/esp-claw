@@ -107,16 +107,3 @@ pub trait Extractor {
     /// Propose memory changes from `input` (transcript + current memory).
     fn extract<'a>(&'a self, input: ExtractionInput<'a>) -> ExtractFuture<'a>;
 }
-
-/// An [`Extractor`] that never extracts: every call yields no ops.
-///
-/// For wiring where extraction is undesired or irrelevant — host CLIs that keep
-/// only the transcript, and tests that need a memory adapter without an LLM.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NoopExtractor;
-
-impl Extractor for NoopExtractor {
-    fn extract<'a>(&'a self, _input: ExtractionInput<'a>) -> ExtractFuture<'a> {
-        Box::pin(async { Ok(Vec::new()) })
-    }
-}

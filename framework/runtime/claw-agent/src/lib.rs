@@ -133,7 +133,10 @@ where
         T: ClawThread,
         E: ClawExecutor + 'static,
     {
-        let persistence_dir = persistence.dir;
+        let AgentPersistenceConfig {
+            dir: persistence_dir,
+            skill_roots,
+        } = persistence;
         if persistence_dir.trim().is_empty() {
             return Err(AgentError::MissingPersistenceDir);
         }
@@ -144,8 +147,8 @@ where
         let orchestrator = Orchestrator::new::<F, H, Timer, T, E>(
             Arc::clone(&tools),
             llm_config,
-            &persistence_dir,
-            &persistence.skill_roots,
+            persistence_dir,
+            skill_roots,
         )?;
 
         Ok(Self {

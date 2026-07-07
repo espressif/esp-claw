@@ -29,7 +29,7 @@ use claw_api::ClawApiConfig;
 use claw_interface::{
     ClawExecutor, ClawFs, ClawHttp, ClawThread, ClawTimer, CoreAffinity, Priority, WorkerHandle,
 };
-use claw_tool::{SharedContext, ToolRegistry};
+use claw_tool::ToolRegistry;
 use futures_core::Stream;
 
 use crate::agent::{
@@ -72,9 +72,6 @@ impl ControlOp {
 /// One accepted user input waiting to be handed to the session pump.
 struct SubmittedInput {
     text: String,
-    /// Type-erased per-submit context installed (via [`claw_tool::with_context`])
-    /// for the duration of this turn's drive, so tool handlers can read it back.
-    context: Option<SharedContext>,
 }
 
 #[derive(Default)]
@@ -104,7 +101,6 @@ enum Command {
     Submit {
         session: SessionId,
         text: String,
-        context: Option<SharedContext>,
         ack: Sender<Result<(), SessionControlError>>,
     },
     Control {
@@ -171,22 +167,12 @@ impl SessionControl {
     /// another input internally. User-visible output is delivered on the paired
     /// [`SessionEventStream`].
     pub async fn submit(&self, text: impl Into<String>) -> Result<(), SessionControlError> {
-        self.submit_with_context(text, None).await
-    }
-
-    /// Submit one user input and install per-turn tool context while it drives.
-    pub async fn submit_with_context(
-        &self,
-        text: impl Into<String>,
-        context: Option<SharedContext>,
-    ) -> Result<(), SessionControlError> {
         let text = text.into();
         let (ack_tx, ack_rx) = async_channel::bounded(1);
         self.command_tx
             .send(Command::Submit {
                 session: self.session,
                 text,
-                context,
                 ack: ack_tx,
             })
             .await
@@ -318,7 +304,8 @@ impl Orchestrator {
     ///
     /// `llm_config` is cloned into every agent, `persistence_dir` is the storage
     /// root the engine's factory owns, and `skill_roots` are the priority-ordered
-    /// skill directories every agent's catalog is built from.
+    /// skill directories every agent's catalog is built from. Owned config is
+    /// moved into the worker closure directly so startup does not duplicate it.
     ///
     /// # Errors
     ///
@@ -327,8 +314,8 @@ impl Orchestrator {
     pub fn new<F, H, Timer, T, E>(
         tools: Arc<ToolRegistry>,
         llm_config: ClawApiConfig,
-        persistence_dir: &str,
-        skill_roots: &[String],
+        persistence_dir: String,
+        skill_roots: Vec<String>,
     ) -> Result<Self, OrchestratorBuildError>
     where
         F: ClawFs + Clone + Default + 'static,
@@ -341,8 +328,6 @@ impl Orchestrator {
         let (command_tx, command_rx) = async_channel::unbounded();
         let (ready_tx, ready_rx) = mpsc::channel();
 
-        let persistence_dir = persistence_dir.to_string();
-        let skill_roots = skill_roots.to_vec();
         let sessions_engine = Arc::clone(&sessions);
         let worker = T::spawn_worker(
             "claw_orchestrator",
@@ -583,14 +568,8 @@ where
                     let result = self.open_session_stream(session, events);
                     let _ = ack.try_send(result);
                 }
-                EngineEvent::Command(Some(Command::Submit {
-                    session,
-                    text,
-                    context,
-                    ack,
-                })) => {
-                    let (result, future) =
-                        self.submit_input(session, SubmittedInput { text, context });
+                EngineEvent::Command(Some(Command::Submit { session, text, ack })) => {
+                    let (result, future) = self.submit_input(session, SubmittedInput { text });
                     let _ = ack.try_send(result);
                     if let Some(future) = future {
                         inflight.push_back(future);
@@ -835,11 +814,8 @@ where
         events.emit(SessionEvent::TurnStarted {
             cause: TurnCause::UserSubmit,
         });
-        let drive = claw_tool::with_context(
-            input.context,
-            self.drive_one_input(session_id, input.text, &events),
-        );
-        self.finish_turn(session_id, &events, drive.await);
+        let result = self.drive_one_input(session_id, input.text, &events).await;
+        self.finish_turn(session_id, &events, result);
         self.set_foreground_active(session_id, false);
     }
 
