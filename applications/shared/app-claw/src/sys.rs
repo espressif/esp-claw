@@ -111,9 +111,16 @@ mod imp {
         last_error: c_int,
     }
 
+    const CLAW_AGENT_EVENT_KIND_OUTPUT: c_int = 0;
+    const CLAW_AGENT_EVENT_KIND_REASONING: c_int = 1;
+    const CLAW_AGENT_EVENT_KIND_TOOLS: c_int = 2;
+    const CLAW_AGENT_EVENT_KIND_DONE: c_int = 3;
+    const CLAW_AGENT_EVENT_KIND_ERROR: c_int = 4;
+    const CLAW_AGENT_EVENT_KIND_CLOSED: c_int = 5;
+
     #[repr(C)]
-    struct ClawAgentResponse {
-        status: c_int,
+    struct ClawAgentEvent {
+        kind: c_int,
         text: *mut c_char,
         error_message: *mut c_char,
     }
@@ -147,25 +154,21 @@ mod imp {
             event_key: *const c_char,
             payload_json: *const c_char,
         ) -> c_int;
-        fn claw_agent_session_submit(
-            session_id: u32,
-            text: *const c_char,
-            out_request_id: *mut u32,
-        ) -> c_int;
+        fn claw_agent_session_submit(session_id: u32, text: *const c_char) -> c_int;
+        fn claw_agent_session_open(session_id: u32) -> c_int;
         fn claw_agent_session_create(out_session_id: *mut u32) -> c_int;
         fn claw_agent_session_list(
             out_session_ids: *mut u32,
             capacity: usize,
             out_count: *mut usize,
         ) -> c_int;
-        fn claw_agent_session_delete(session_id: u32) -> c_int;
+        fn claw_agent_session_close(session_id: u32) -> c_int;
         fn claw_agent_session_receive(
             session_id: u32,
-            request_id: u32,
-            out_response: *mut ClawAgentResponse,
+            out_event: *mut ClawAgentEvent,
             timeout_ms: u32,
         ) -> c_int;
-        fn claw_agent_session_response_free(response: *mut ClawAgentResponse);
+        fn claw_agent_event_free(event: *mut ClawAgentEvent);
         fn esp_err_to_name(error: c_int) -> *const c_char;
     }
 
@@ -352,10 +355,14 @@ mod imp {
     pub(crate) fn agent_session_create() -> Result<String> {
         let mut session_id = 0_u32;
         let err = unsafe { claw_agent_session_create(&mut session_id) };
-        if err == ESP_OK {
-            return Ok(format!("session_id={session_id}\n"));
+        if err != ESP_OK {
+            return Err(ffi_error("agent session create", err));
         }
-        Err(ffi_error("agent session create", err))
+        let err = unsafe { claw_agent_session_open(session_id) };
+        if err != ESP_OK {
+            return Err(ffi_error("agent session open", err));
+        }
+        Ok(format!("session_id={session_id}\n"))
     }
 
     pub(crate) fn agent_session_list() -> Result<String> {
@@ -390,7 +397,7 @@ mod imp {
             return Err(Error::Stream("session id must be non-zero".to_owned()));
         }
 
-        let err = unsafe { claw_agent_session_delete(session_id) };
+        let err = unsafe { claw_agent_session_close(session_id) };
         if err == ESP_OK {
             return Ok(format!("deleted session_id={session_id}\n"));
         }
@@ -408,37 +415,46 @@ mod imp {
         }
 
         let text_c = cstring(text, "agent text")?;
-        let mut request_id = 0_u32;
-        let err =
-            unsafe { claw_agent_session_submit(session_id, text_c.as_ptr(), &mut request_id) };
+        let err = unsafe { claw_agent_session_submit(session_id, text_c.as_ptr()) };
         if err != ESP_OK {
             return Err(ffi_error("agent submit", err));
         }
 
-        let mut response = ClawAgentResponse {
-            status: 0,
-            text: core::ptr::null_mut(),
-            error_message: core::ptr::null_mut(),
-        };
-        let err = unsafe {
-            claw_agent_session_receive(session_id, request_id, &mut response, timeout_ms)
-        };
-        if err != ESP_OK {
-            return Err(ffi_error("agent receive", err));
+        let mut output = String::new();
+        loop {
+            let mut event = ClawAgentEvent {
+                kind: 0,
+                text: core::ptr::null_mut(),
+                error_message: core::ptr::null_mut(),
+            };
+            let err = unsafe { claw_agent_session_receive(session_id, &mut event, timeout_ms) };
+            if err != ESP_OK {
+                return Err(ffi_error("agent receive", err));
+            }
+
+            match event.kind {
+                CLAW_AGENT_EVENT_KIND_OUTPUT => output.push_str(&cstr_to_string(event.text)),
+                CLAW_AGENT_EVENT_KIND_REASONING | CLAW_AGENT_EVENT_KIND_TOOLS => {}
+                CLAW_AGENT_EVENT_KIND_DONE => {
+                    unsafe { claw_agent_event_free(&mut event) };
+                    break;
+                }
+                CLAW_AGENT_EVENT_KIND_ERROR => {
+                    let error = cstr_to_string(event.error_message);
+                    unsafe { claw_agent_event_free(&mut event) };
+                    return Err(Error::Stream(error));
+                }
+                CLAW_AGENT_EVENT_KIND_CLOSED => {
+                    unsafe { claw_agent_event_free(&mut event) };
+                    break;
+                }
+                _ => {}
+            }
+
+            unsafe { claw_agent_event_free(&mut event) };
         }
 
-        let output = if response.status == 0 {
-            ensure_trailing_newline(cstr_to_string(response.text))
-        } else {
-            cstr_to_string(response.error_message)
-        };
-        unsafe { claw_agent_session_response_free(&mut response) };
-
-        if response.status == 0 {
-            Ok(output)
-        } else {
-            Err(Error::Stream(output))
-        }
+        Ok(ensure_trailing_newline(output))
     }
 
     unsafe fn slice_from_raw_parts<'a, T>(ptr: *const T, count: usize) -> Result<&'a [T]> {
