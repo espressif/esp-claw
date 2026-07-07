@@ -87,6 +87,10 @@ pub enum CoreAffinity {
 pub trait ClawThread: Send + Sync {
     /// Spawn a worker thread named `name` that runs `f` to completion.
     ///
+    /// An associated function (no `self`): implementors are zero-sized policy
+    /// types selected purely by the `T: ClawThread` type parameter, so callers
+    /// invoke it as `T::spawn_worker(..)` with no value to pass around.
+    ///
     /// `stack_size`, `priority`, and `affinity` are honored on platforms that
     /// support them and ignored where they have no analogue (the host).
     ///
@@ -94,7 +98,6 @@ pub trait ClawThread: Send + Sync {
     ///
     /// Returns the platform [`io::Error`] if the worker thread cannot be spawned.
     fn spawn_worker<F>(
-        &self,
         name: &str,
         stack_size: usize,
         priority: Priority,
@@ -117,7 +120,6 @@ pub struct StdThread;
 #[cfg(feature = "stdthread")]
 impl ClawThread for StdThread {
     fn spawn_worker<F>(
-        &self,
         name: &str,
         stack_size: usize,
         priority: Priority,

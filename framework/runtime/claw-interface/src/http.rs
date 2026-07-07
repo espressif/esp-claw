@@ -593,8 +593,8 @@ mod httpmock {
     /// which it owns the process-global script.
     static SHARED_SCRIPT_LOCK: Mutex<()> = Mutex::new(());
 
-    fn shared_script_slot() -> std::sync::MutexGuard<'static, Option<Arc<Mutex<VecDeque<ScriptStep>>>>>
-    {
+    fn shared_script_slot(
+    ) -> std::sync::MutexGuard<'static, Option<Arc<Mutex<VecDeque<ScriptStep>>>>> {
         SHARED_SCRIPT
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())

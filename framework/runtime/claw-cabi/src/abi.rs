@@ -31,13 +31,27 @@ pub struct ClawAgentConfig {
     pub system_skills_root_dir: *const c_char,
 }
 
-pub const CLAW_AGENT_RESPONSE_STATUS_OK: c_int = 0;
-pub const CLAW_AGENT_RESPONSE_STATUS_ERROR: c_int = 1;
+/// Event kinds delivered by `claw_agent_session_receive`, one event per call.
+///
+/// `OUTPUT`/`REASONING`/`TOOLS` are content events (non-terminal): `text` carries
+/// an append fragment (concatenate across events) — assistant-visible text,
+/// truncated thinking text, or comma-joined tool names respectively. `DONE` and
+/// `ERROR` are terminal: after either, the request id is consumed and further
+/// receives report `ESP_ERR_TIMEOUT`. `ERROR` carries `error_message`.
+pub const CLAW_AGENT_EVENT_KIND_OUTPUT: c_int = 0;
+pub const CLAW_AGENT_EVENT_KIND_REASONING: c_int = 1;
+pub const CLAW_AGENT_EVENT_KIND_TOOLS: c_int = 2;
+pub const CLAW_AGENT_EVENT_KIND_DONE: c_int = 3;
+pub const CLAW_AGENT_EVENT_KIND_ERROR: c_int = 4;
 
 #[repr(C)]
-pub struct ClawAgentResponse {
-    pub status: c_int,
+pub struct ClawAgentEvent {
+    pub kind: c_int,
+    /// Owned UTF-8 fragment for content events (`OUTPUT`/`REASONING`/`TOOLS`);
+    /// null for `DONE`/`ERROR`. Released by `claw_agent_event_free`.
     pub text: *mut c_char,
+    /// Owned UTF-8 message for `ERROR`; null otherwise. Released by
+    /// `claw_agent_event_free`.
     pub error_message: *mut c_char,
 }
 

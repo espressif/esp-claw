@@ -60,8 +60,10 @@ struct EspTimerCreateArgs {
 
 #[cfg(target_os = "espidf")]
 extern "C" {
-    fn esp_timer_create(create_args: *const EspTimerCreateArgs, out_handle: *mut EspTimerHandle)
-        -> c_int;
+    fn esp_timer_create(
+        create_args: *const EspTimerCreateArgs,
+        out_handle: *mut EspTimerHandle,
+    ) -> c_int;
     fn esp_timer_start_once(timer: EspTimerHandle, timeout_us: u64) -> c_int;
     fn esp_timer_stop(timer: EspTimerHandle) -> c_int;
     fn esp_timer_delete(timer: EspTimerHandle) -> c_int;

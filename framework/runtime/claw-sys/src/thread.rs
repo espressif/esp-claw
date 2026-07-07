@@ -35,7 +35,6 @@ pub struct EspIdfThread;
 #[cfg(target_os = "espidf")]
 impl ClawThread for EspIdfThread {
     fn spawn_worker<F>(
-        &self,
         name: &str,
         stack_size: usize,
         priority: Priority,

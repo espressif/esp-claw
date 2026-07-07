@@ -74,15 +74,10 @@ async fn main() -> anyhow::Result<()> {
         "Hello from the agent — the local time is 2026-06-29T17:00:00Z.",
     )]);
 
-    let system =
-        AgentSystem::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new::<
+    let system =         AgentSystem::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new::<
             StdThread,
             TokioExecutor,
-        >(
-            scripted_llm(),
-            claw_agent::AgentPersistenceConfig::new("/mem"),
-            StdThread,
-        )?;
+        >(scripted_llm(), claw_agent::AgentPersistenceConfig::new("/mem"))?;
     system
         .tool_registry()
         .register(Tool::from_sync(TimeNowTool))?;

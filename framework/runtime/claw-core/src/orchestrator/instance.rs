@@ -21,10 +21,9 @@
 //!
 //! Borrow safety: a tick may emit [`GraphEffect`]s through the agent's
 //! [`GraphHost`], but those only push onto the instance's effect queue. The
-//! instance ticks one agent (locking just that agent's handle), then — with no
-//! agent borrowed — drains and applies the queued effects and routes the outcome.
-//! Today the drive loop is sequential; the same shape supports concurrent async
-//! ticking later (each future locks only its agent).
+//! instance starts ready agents as owned futures, then — with no agent borrowed —
+//! drains and applies queued effects and routes each completed outcome. Pending
+//! ticks remain in flight, so a slow subagent does not hide completed root output.
 
 use core::future::Future;
 use core::pin::Pin;
@@ -35,11 +34,11 @@ use std::sync::{Arc, Mutex};
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::agent::{
-    Agent, AgentCommand, AgentCommandError, AgentId, AgentIdAllocator, AgentKind, AgentPlacement,
-    AgentRegistry, AgentSnapshot, AgentStatus, ApprovalDecision, ApprovalId, CancelReason,
-    FsAgentFactory, GraphEffect, GraphHost, TerminationPolicy, TickOutcome,
+    Agent, AgentAbortHandle, AgentCommand, AgentCommandError, AgentId, AgentIdAllocator, AgentKind,
+    AgentPlacement, AgentRegistry, AgentSnapshot, AgentStatus, ApprovalDecision, ApprovalId,
+    CancelReason, FsAgentFactory, GraphEffect, GraphHost, TerminationPolicy, TickOutcome,
 };
-use crate::event::EventSink;
+use crate::event::{AgentEvent, EventSink};
 use crate::orchestrator::control::{DriveStop, SessionControl};
 use crate::session::SessionId;
 use tracing::Instrument;
@@ -166,43 +165,100 @@ struct TickedAgent {
     outcome: TickOutcome,
 }
 
-struct TickBatch {
-    futures: Vec<Option<AgentTickBoxFuture>>,
-    outputs: Vec<Option<TickedAgent>>,
+/// A completed subagent result waiting to be delivered to its parent.
+///
+/// The parent may be unavailable when the child finishes because the parent is
+/// itself in flight, or because it is parked on approval. The scheduler keeps
+/// the result here and flushes it when the parent can accept task input again.
+struct SubagentResult {
+    parent: AgentId,
+    child: AgentId,
+    text: String,
+    ok: bool,
 }
 
-impl TickBatch {
-    fn new(futures: Vec<AgentTickBoxFuture>) -> Self {
-        let len = futures.len();
+/// Session-local table of agent ticks currently in flight.
+///
+/// This is not a batch barrier: polling resolves as soon as any task completes,
+/// leaving slower tasks in the table.
+struct InflightAgentTasks {
+    entries: Vec<Option<InflightAgentTask>>,
+}
+
+struct InflightAgentTask {
+    id: AgentId,
+    abort: AgentAbortHandle,
+    future: AgentTickBoxFuture,
+}
+
+impl InflightAgentTasks {
+    fn spawn(&mut self, id: AgentId, abort: AgentAbortHandle, future: AgentTickBoxFuture) {
+        self.entries
+            .push(Some(InflightAgentTask { id, abort, future }));
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    fn abort_handles(&self) -> Vec<AgentAbortHandle> {
+        self.entries
+            .iter()
+            .filter_map(|entry| entry.as_ref().map(|entry| entry.abort.clone()))
+            .collect()
+    }
+
+    fn retain_live(&mut self, meta: &HashMap<AgentId, NodeMeta>) {
+        self.entries.retain(|entry| {
+            entry
+                .as_ref()
+                .is_some_and(|entry| meta.contains_key(&entry.id))
+        });
+    }
+
+    fn next_completed(&mut self) -> CompletedAgentTicks<'_> {
+        CompletedAgentTicks { tasks: self }
+    }
+}
+
+impl Default for InflightAgentTasks {
+    fn default() -> Self {
         Self {
-            futures: futures.into_iter().map(Some).collect(),
-            outputs: std::iter::repeat_with(|| None).take(len).collect(),
+            entries: Vec::new(),
         }
     }
 }
 
-impl Future for TickBatch {
+struct CompletedAgentTicks<'a> {
+    tasks: &'a mut InflightAgentTasks,
+}
+
+impl Future for CompletedAgentTicks<'_> {
     type Output = Vec<TickedAgent>;
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
+        let mut completed = Vec::new();
         let mut pending = false;
-        for (future_slot, output_slot) in this.futures.iter_mut().zip(this.outputs.iter_mut()) {
-            let Some(future) = future_slot else {
+        for entry_slot in &mut this.tasks.entries {
+            let Some(entry) = entry_slot else {
                 continue;
             };
-            match future.as_mut().poll(context) {
+            match entry.future.as_mut().poll(context) {
                 Poll::Ready(output) => {
-                    *output_slot = Some(output);
-                    *future_slot = None;
+                    completed.push(output);
+                    *entry_slot = None;
                 }
                 Poll::Pending => pending = true,
             }
         }
-        if pending {
+        this.tasks.entries.retain(Option::is_some);
+        if !completed.is_empty() {
+            Poll::Ready(completed)
+        } else if pending {
             Poll::Pending
         } else {
-            Poll::Ready(this.outputs.drain(..).filter_map(|output| output).collect())
+            Poll::Ready(Vec::new())
         }
     }
 }
@@ -283,6 +339,9 @@ where
     /// FIFO order for user-facing approval prompts. The front is the only reply
     /// the next user message may resolve.
     approval_queue: VecDeque<AgentId>,
+    /// Finished subagent results whose parent cannot be borrowed yet because it
+    /// is either in flight or parked on approval.
+    subagent_result_mailbox: VecDeque<SubagentResult>,
     /// The root agent's id, set when the first message builds it.
     root: Option<AgentId>,
     /// Graph effects emitted by agents during the current/last tick, applied after
@@ -329,6 +388,7 @@ where
             ready: VecDeque::new(),
             parked_approvals: HashMap::new(),
             approval_queue: VecDeque::new(),
+            subagent_result_mailbox: VecDeque::new(),
             root: None,
             effects,
             snapshots,
@@ -410,15 +470,15 @@ where
         }
     }
 
-    /// Drive until no agent is ready, observing an out-of-band [`SessionControl`]
-    /// between ready batches so a concurrent submission can stop the drive in
-    /// flight.
+    /// Drive until no automatic work remains, observing an out-of-band
+    /// [`SessionControl`] between completed ticks so a concurrent submission can
+    /// stop the drive in flight.
     ///
-    /// - A **cancel** request aborts the current LLM round (its partial result is
-    ///   discarded by the agent's preemption path) and returns
-    ///   [`DriveStop::Cancelled`] once the aborted batch unwinds.
-    /// - An **interrupt** request lets the current batch finish and commit, then
-    ///   returns [`DriveStop::Interrupted`] before the next batch.
+    /// - A **cancel** request aborts in-flight LLM rounds (partial results are
+    ///   discarded by the agents' preemption paths) and returns
+    ///   [`DriveStop::Cancelled`] once currently in-flight ticks unwind.
+    /// - An **interrupt** request lets in-flight ticks finish and commit, then
+    ///   returns [`DriveStop::Interrupted`] before starting more work.
     /// - Otherwise the loop runs to quiescence and returns [`DriveStop::Quiescent`].
     ///
     /// The caller decides the next delivery path from the stop reason; this
@@ -429,31 +489,49 @@ where
         events: &EventSink,
     ) -> (DriveOutput, DriveStop) {
         let mut output = DriveOutput::default();
-        while self.has_ready() {
-            // Register before awaiting the batch so a cancel arriving during the
-            // batch aborts whatever agents are live right now (subagents spawned
-            // last batch included).
-            let abort_handles = self.registry.abort_handles();
+        let mut inflight = InflightAgentTasks::default();
+        let mut cancel_requested = false;
+        let mut interrupt_requested = false;
+
+        loop {
+            if !cancel_requested && !interrupt_requested {
+                self.start_ready_agent_tasks(&mut inflight, events);
+            }
+
+            if inflight.is_empty() {
+                if cancel_requested && self.has_ready() {
+                    control.clear_cancel_hook();
+                    return (output, DriveStop::Cancelled);
+                }
+                if interrupt_requested && self.has_ready() {
+                    control.clear_cancel_hook();
+                    return (output, DriveStop::Interrupted);
+                }
+                if self.has_ready() {
+                    continue;
+                }
+                break;
+            }
+
+            // Register before awaiting in-flight ticks so a cancel arriving
+            // during LLM/tool work aborts the agents that have been taken out of
+            // the registry as well as agents still stored there.
+            let mut abort_handles = self.registry.abort_handles();
+            abort_handles.extend(inflight.abort_handles());
             control.set_cancel_hook(move || {
                 for handle in &abort_handles {
                     handle.abort();
                 }
             });
-            output.absorb(self.tick_ready_batch(events).await);
-            // Only honour a control request when there is still work pending: a
-            // drive that has already reached quiescence has nothing to interrupt
-            // or cancel, so report it as such (the caller delivers any carried
-            // message as a fresh turn instead of a continuation).
-            if self.has_ready() {
-                // Cancel takes precedence: it is the hard stop.
-                if control.take_cancel() {
-                    control.clear_cancel_hook();
-                    return (output, DriveStop::Cancelled);
-                }
-                if control.take_interrupt() {
-                    control.clear_cancel_hook();
-                    return (output, DriveStop::Interrupted);
-                }
+
+            let ticked = inflight.next_completed().await;
+            self.route_ticked_agents(ticked, &mut inflight, events);
+
+            if control.take_cancel() {
+                cancel_requested = true;
+            }
+            if control.take_interrupt() {
+                interrupt_requested = true;
             }
         }
         control.clear_cancel_hook();
@@ -576,47 +654,60 @@ where
         Ok(())
     }
 
-    /// Tick every currently-ready agent as one async batch, then apply the graph
-    /// consequences in queue order.
-    async fn tick_ready_batch(&mut self, events: &EventSink) -> DriveOutput {
-        let ready = self.drain_ready_batch();
+    /// Start every currently-ready agent and retain its future in `inflight`.
+    fn start_ready_agent_tasks(&mut self, inflight: &mut InflightAgentTasks, events: &EventSink) {
+        self.flush_subagent_result_mailbox();
+        let ready = self.drain_ready_agents();
         if ready.is_empty() {
-            return DriveOutput::default();
+            return;
         }
         self.refresh_snapshots();
 
         // The root ticks with the live submission sink; every subagent gets a
         // disabled one, so only root iteration events reach the stream.
-        let futures = ready
-            .into_iter()
-            .map(|ready| {
-                let sink = if ready.is_root {
-                    events.clone()
-                } else {
-                    EventSink::disabled()
-                };
-                tick_agent(ready, sink)
-            })
-            .collect();
-        let ticked = TickBatch::new(futures).await;
+        for ready in ready {
+            let id = ready.id;
+            let abort = ready.agent.abort_handle();
+            let sink = if ready.is_root {
+                events.clone()
+            } else {
+                EventSink::disabled()
+            };
+            inflight.spawn(id, abort, tick_agent(ready, sink));
+        }
+    }
+
+    /// Reinsert completed agents, apply effects, then route completed outcomes.
+    ///
+    /// Root-visible replies are emitted immediately so a fast foreground agent is
+    /// not hidden behind slower in-flight subagents. Approval prompts are held
+    /// until quiescence by `take_next_approval_prompt`.
+    fn route_ticked_agents(
+        &mut self,
+        ticked: Vec<TickedAgent>,
+        inflight: &mut InflightAgentTasks,
+        events: &EventSink,
+    ) {
         let mut outcomes = Vec::with_capacity(ticked.len());
         for TickedAgent { id, agent, outcome } in ticked {
-            self.registry.insert(id, agent);
-            outcomes.push((id, outcome));
+            if self.meta.contains_key(&id) {
+                self.registry.insert(id, agent);
+                outcomes.push((id, outcome));
+            }
         }
 
         self.apply_effects();
-        let mut output = DriveOutput::default();
         for (id, outcome) in outcomes {
             if self.meta.contains_key(&id) {
-                output.absorb(self.route_outcome(id, outcome));
+                emit_drive_output(events, self.route_outcome(id, outcome));
             }
         }
-        output
+        inflight.retain_live(&self.meta);
+        self.flush_subagent_result_mailbox();
     }
 
-    fn drain_ready_batch(&mut self) -> Vec<ReadyAgent> {
-        let mut batch = Vec::new();
+    fn drain_ready_agents(&mut self) -> Vec<ReadyAgent> {
+        let mut ready_agents = Vec::new();
         while let Some(id) = self.ready.pop_front() {
             let Some(meta) = self.meta.get(&id) else {
                 continue;
@@ -624,7 +715,7 @@ where
             let Some(agent) = self.registry.take(id) else {
                 continue;
             };
-            batch.push(ReadyAgent {
+            ready_agents.push(ReadyAgent {
                 id,
                 kind: meta.kind.clone(),
                 depth: meta.depth,
@@ -632,7 +723,7 @@ where
                 agent,
             });
         }
-        batch
+        ready_agents
     }
 
     /// Append a user message to the idle agent `id` and mark it ready.
@@ -647,8 +738,11 @@ where
         Ok(())
     }
 
-    /// Record `agent` as parked on `approval`, then surface a normal root reply
-    /// prompt when this request becomes the active approval for the session.
+    /// Record `agent` as parked on `approval`.
+    ///
+    /// The user-facing prompt is surfaced only once the session has no automatic
+    /// work left to drive, so an approval in one branch does not hide unrelated
+    /// in-flight progress.
     fn park_approval(
         &mut self,
         agent: AgentId,
@@ -672,7 +766,7 @@ where
         }
         tracing::info!(agent = %agent, is_root, session = %self.session, "approval parked");
 
-        self.take_next_approval_prompt()
+        DriveOutput::default()
     }
 
     /// Drain and apply every graph effect agents emitted since the last drain.
@@ -873,10 +967,7 @@ where
         };
 
         tracing::info!(child_agent = %id, parent_agent = %parent_id, ok, ?termination, "subagent result -> parent");
-        if let Some(parent_agent) = self.registry.get_mut(parent_id) {
-            parent_agent.deliver_child_result(id, text, ok);
-            self.enqueue(parent_id);
-        }
+        self.deliver_or_mailbox_subagent_result(parent_id, id, text, ok);
 
         // Keep a `Manual` subagent alive only on an ordinary yield; otherwise remove
         // it (and its subtree, so a persistent grandchild is never left orphaned).
@@ -921,7 +1012,65 @@ where
         self.ready.retain(|queued| !victims.contains(queued));
         self.approval_queue
             .retain(|queued| !victims.contains(queued));
+        self.subagent_result_mailbox
+            .retain(|result| !victims.contains(&result.parent));
         tracing::info!(root_agent = %root, removed = victims.len(), session = %self.session, "subtree deleted");
+    }
+
+    fn deliver_or_mailbox_subagent_result(
+        &mut self,
+        parent: AgentId,
+        child: AgentId,
+        text: String,
+        ok: bool,
+    ) {
+        if !self.meta.contains_key(&parent) {
+            return;
+        }
+        if self.parked_approvals.contains_key(&parent) {
+            self.subagent_result_mailbox.push_back(SubagentResult {
+                parent,
+                child,
+                text,
+                ok,
+            });
+            return;
+        }
+        if let Some(parent_agent) = self.registry.get_mut(parent) {
+            parent_agent.deliver_child_result(child, text, ok);
+            self.enqueue(parent);
+        } else {
+            self.subagent_result_mailbox.push_back(SubagentResult {
+                parent,
+                child,
+                text,
+                ok,
+            });
+        }
+    }
+
+    fn flush_subagent_result_mailbox(&mut self) {
+        if self.subagent_result_mailbox.is_empty() {
+            return;
+        }
+        let mut pending = VecDeque::new();
+        while let Some(result) = self.subagent_result_mailbox.pop_front() {
+            if !self.meta.contains_key(&result.parent) {
+                continue;
+            }
+            if self.parked_approvals.contains_key(&result.parent) {
+                pending.push_back(result);
+                continue;
+            }
+            let parent = result.parent;
+            if let Some(parent_agent) = self.registry.get_mut(parent) {
+                parent_agent.deliver_child_result(result.child, result.text, result.ok);
+                self.enqueue(parent);
+            } else {
+                pending.push_back(result);
+            }
+        }
+        self.subagent_result_mailbox = pending;
     }
 
     /// Collect `root` and all of its descendants (a breadth-first walk of the
@@ -969,4 +1118,234 @@ where
 
 fn approval_prompt(summary: &str) -> String {
     format!("Permission approval needed:\n{summary}\n\nReply with approval or rejection.")
+}
+
+fn emit_drive_output(events: &EventSink, output: DriveOutput) {
+    for reply in output.replies {
+        events.emit(AgentEvent::Output { text: reply.text });
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+    use crate::agent::{AgentCommand, AgentCommandError, AgentTickFuture};
+    use claw_api::{BackendKind, ClawApiConfig};
+    use claw_interface::{BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp};
+    use claw_tool::ToolRegistry;
+    use std::sync::{Arc, Mutex};
+    use std::task::{Wake, Waker};
+
+    type TestFactory = FsAgentFactory<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>;
+    type TestInstance =
+        OrchestratorInstance<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>;
+    type ChildEvents = Arc<Mutex<Vec<(AgentId, String, bool)>>>;
+
+    struct NoopAgent {
+        id: AgentId,
+    }
+
+    impl Agent for NoopAgent {
+        fn id(&self) -> AgentId {
+            self.id
+        }
+
+        fn send_command(&mut self, _command: AgentCommand) -> Result<(), AgentCommandError> {
+            Ok(())
+        }
+
+        fn deliver_child_result(&mut self, _child: AgentId, _text: String, _ok: bool) {}
+
+        fn deliver_child_input(&mut self, _child: AgentId, _text: String) {}
+
+        fn abort_handle(&self) -> AgentAbortHandle {
+            AgentAbortHandle::default()
+        }
+
+        fn tick(&mut self, _events: EventSink) -> AgentTickFuture<'_> {
+            Box::pin(async { TickOutcome::Idle })
+        }
+    }
+
+    struct RecordingAgent {
+        id: AgentId,
+        child_events: ChildEvents,
+    }
+
+    impl Agent for RecordingAgent {
+        fn id(&self) -> AgentId {
+            self.id
+        }
+
+        fn send_command(&mut self, _command: AgentCommand) -> Result<(), AgentCommandError> {
+            Ok(())
+        }
+
+        fn deliver_child_result(&mut self, child: AgentId, text: String, ok: bool) {
+            self.child_events
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .push((child, text, ok));
+        }
+
+        fn deliver_child_input(&mut self, _child: AgentId, _text: String) {}
+
+        fn abort_handle(&self) -> AgentAbortHandle {
+            AgentAbortHandle::default()
+        }
+
+        fn tick(&mut self, _events: EventSink) -> AgentTickFuture<'_> {
+            Box::pin(async { TickOutcome::Idle })
+        }
+    }
+
+    struct PendingOnce {
+        output: Option<TickedAgent>,
+        pending: bool,
+    }
+
+    impl PendingOnce {
+        fn new(output: TickedAgent) -> Self {
+            Self {
+                output: Some(output),
+                pending: true,
+            }
+        }
+    }
+
+    impl Future for PendingOnce {
+        type Output = TickedAgent;
+
+        fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+            let this = self.get_mut();
+            if this.pending {
+                this.pending = false;
+                context.waker().wake_by_ref();
+                return Poll::Pending;
+            }
+            Poll::Ready(this.output.take().expect("pending future output present"))
+        }
+    }
+
+    struct NoopWake;
+
+    impl Wake for NoopWake {
+        fn wake(self: Arc<Self>) {}
+    }
+
+    fn ticked_agent(id: AgentId) -> TickedAgent {
+        TickedAgent {
+            id,
+            agent: Box::new(NoopAgent { id }),
+            outcome: TickOutcome::Idle,
+        }
+    }
+
+    fn test_factory() -> Arc<TestFactory> {
+        let llm_config = ClawApiConfig::new(
+            BackendKind::OpenAiCompatible,
+            "sk-test",
+            "gpt-test",
+            "https://example.invalid",
+        );
+        Arc::new(
+            TestFactory::new(Arc::new(ToolRegistry::new()), llm_config, "/mem", &[])
+                .expect("factory builds"),
+        )
+    }
+
+    fn test_instance() -> TestInstance {
+        OrchestratorInstance::new(SessionId(1), test_factory(), AgentIdAllocator::new())
+    }
+
+    fn insert_meta(instance: &mut TestInstance, id: AgentId, parent: Option<AgentId>, depth: u16) {
+        instance.meta.insert(
+            id,
+            NodeMeta {
+                parent,
+                depth,
+                kind: AgentKind::new("conversation"),
+                name: None,
+                termination: TerminationPolicy::AutoOnIdle,
+            },
+        );
+    }
+
+    #[test]
+    fn inflight_tasks_return_completed_entries_without_waiting_for_pending_entries() {
+        let ready_id = AgentId(1);
+        let pending_id = AgentId(2);
+        let mut inflight = InflightAgentTasks::default();
+        inflight.spawn(
+            ready_id,
+            AgentAbortHandle::default(),
+            Box::pin(async move { ticked_agent(ready_id) }),
+        );
+        inflight.spawn(
+            pending_id,
+            AgentAbortHandle::default(),
+            Box::pin(PendingOnce::new(ticked_agent(pending_id))),
+        );
+
+        let waker = Waker::from(Arc::new(NoopWake));
+        let mut context = Context::from_waker(&waker);
+
+        let first = {
+            let mut next = inflight.next_completed();
+            Pin::new(&mut next).poll(&mut context)
+        };
+        let first = match first {
+            Poll::Ready(outputs) => outputs,
+            Poll::Pending => panic!("ready tick should not wait for pending tick"),
+        };
+        assert_eq!(first.len(), 1);
+        assert_eq!(first.into_iter().next().expect("one output").id, ready_id);
+        assert!(!inflight.is_empty());
+
+        let second = {
+            let mut next = inflight.next_completed();
+            Pin::new(&mut next).poll(&mut context)
+        };
+        let second = match second {
+            Poll::Ready(outputs) => outputs,
+            Poll::Pending => panic!("pending-once tick should complete on second poll"),
+        };
+        assert_eq!(second.len(), 1);
+        assert_eq!(
+            second.into_iter().next().expect("one output").id,
+            pending_id
+        );
+        assert!(inflight.is_empty());
+    }
+
+    #[test]
+    fn subagent_result_mailbox_wakes_parent_after_in_flight_tick_returns() {
+        let parent = AgentId(10);
+        let child = AgentId(11);
+        let child_events = Arc::new(Mutex::new(Vec::new()));
+        let mut instance = test_instance();
+        insert_meta(&mut instance, parent, None, 0);
+        insert_meta(&mut instance, child, Some(parent), 1);
+
+        instance.deliver_or_mailbox_subagent_result(parent, child, "done".to_string(), true);
+        assert_eq!(instance.subagent_result_mailbox.len(), 1);
+        assert!(!instance.has_ready());
+
+        instance.registry.insert(
+            parent,
+            Box::new(RecordingAgent {
+                id: parent,
+                child_events: Arc::clone(&child_events),
+            }),
+        );
+        instance.flush_subagent_result_mailbox();
+
+        assert!(instance.subagent_result_mailbox.is_empty());
+        assert_eq!(instance.ready.pop_front(), Some(parent));
+        let delivered = child_events
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        assert_eq!(delivered.as_slice(), &[(child, "done".to_string(), true)]);
+    }
 }

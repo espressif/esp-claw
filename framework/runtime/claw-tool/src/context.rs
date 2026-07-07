@@ -132,10 +132,9 @@ mod tests {
     fn current_context_is_visible_inside_the_scope_and_gone_outside() {
         assert!(current_context::<Ctx>().is_none());
 
-        let observed = block_on(with_context(
-            Some(Arc::new(Ctx { request_id: 7 })),
-            async { current_context::<Ctx>() },
-        ));
+        let observed = block_on(with_context(Some(Arc::new(Ctx { request_id: 7 })), async {
+            current_context::<Ctx>()
+        }));
         assert_eq!(observed.as_deref(), Some(&Ctx { request_id: 7 }));
 
         // Restored to empty once the scope's future resolves.

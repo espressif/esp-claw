@@ -11,9 +11,7 @@ use claw_api::ClawApiConfig;
 pub use claw_core::{
     AgentEvent, DeliveryKind, IterationId, SessionId, SubmitStream as AgentEventStream,
 };
-use claw_core::{
-    DeliverError, Orchestrator, OrchestratorBuildError, SessionError, SubmitStream,
-};
+use claw_core::{DeliverError, Orchestrator, OrchestratorBuildError, SessionError, SubmitStream};
 use claw_interface::{ClawExecutor, ClawFs, ClawHttp, ClawThread, ClawTimer, FsError};
 #[cfg(feature = "host-backends")]
 use claw_interface::{DiskFs, RealHttp, StdThread, TokioExecutor, TokioTimer};
@@ -120,9 +118,11 @@ where
     Timer: ClawTimer + Default + 'static,
 {
     /// Build a fully injectable agent system, spawning the orchestrator's drive
-    /// worker via `thread` (a [`ClawThread`] policy: `StdThread` on host,
+    /// worker via the [`ClawThread`] policy `T` (`StdThread` on host,
     /// `EspIdfThread` on device) and driving its `!Send` engine with the injected
     /// [`ClawExecutor`] `E` (`TokioExecutor` on host, `EspIdfExecutor` on device).
+    /// Both are zero-sized policies selected purely by type parameter, like the
+    /// `F`/`H`/`Timer` backends.
     ///
     /// # Errors
     ///
@@ -130,7 +130,6 @@ where
     pub fn new<T, E>(
         llm_config: ClawApiConfig,
         persistence: AgentPersistenceConfig,
-        thread: T,
     ) -> AgentResult<Self>
     where
         T: ClawThread,
@@ -149,7 +148,6 @@ where
             llm_config,
             &persistence_dir,
             &persistence.skill_roots,
-            &thread,
         )?;
 
         Ok(Self {
@@ -243,7 +241,7 @@ impl AgentSystem<DiskFs, RealHttp, TokioTimer> {
     ///
     /// Returns [`AgentError`] when construction fails.
     pub fn on_disk(llm: ClawApiConfig, persistence: AgentPersistenceConfig) -> AgentResult<Self> {
-        Self::new::<StdThread, TokioExecutor>(llm, persistence, StdThread)
+        Self::new::<StdThread, TokioExecutor>(llm, persistence)
     }
 }
 
@@ -364,12 +362,8 @@ mod tests {
         }
         SharedScriptHttp::install(script);
 
-        TestSystem::new::<StdThread, TokioExecutor>(
-            llm_config(),
-            AgentPersistenceConfig::new("/mem"),
-            StdThread,
-        )
-        .unwrap()
+        TestSystem::new::<StdThread, TokioExecutor>(llm_config(), AgentPersistenceConfig::new("/mem"))
+            .unwrap()
     }
 
     fn llm_config() -> ClawApiConfig {

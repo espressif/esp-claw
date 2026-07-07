@@ -189,9 +189,13 @@ never blocks. Bounding for on-device memory (with a drop policy that may shed
   no longer spawns a worker of its own. It holds the (now `Send + Sync`)
   `AgentSystem` directly; `submit` enqueues onto the orchestrator (returning a
   request id) and stores the returned `SubmitStream` keyed by request id, and
-  `receive` **drains that stream lazily** — bounded by the caller's `timeout_ms`
-  via a `block_on(or(drain, EspIdfTimer::sleep))` — accumulating `Output`/`Error`
-  into the flat FFI response and re-parking partial progress on timeout.
+  `receive` **pulls that stream one event at a time** — bounded by the caller's
+  `timeout_ms` via a `block_on(or(next_event, EspIdfTimer::sleep))`. Content
+  events (`Output`/`Reasoning`/`Tools`) are surfaced incrementally as
+  `claw_agent_event_t` (an append fragment per call) while the turn is still
+  running; `TurnEnded`/`Error` map to terminal `DONE`/`ERROR` and consume the
+  request id. Bracket events (`TurnStarted`/`Iteration*`) are skipped. A timeout
+  re-parks the stream for a later `receive`.
   `EspIdfTimer` is backed by the shared `esp_timer` one-shot service (a single
   system timer task dispatches all callbacks), so the timeout costs one timer
   object, never a spawned thread — the retry-backoff path benefits identically.

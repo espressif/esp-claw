@@ -492,13 +492,14 @@ mod tests {
             "gpt-test",
             "https://example.invalid",
         );
-        let factory = FsAgentFactory::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new(
-            Arc::new(ToolRegistry::new()),
-            llm_config,
-            "/mem",
-            &[],
-        )
-        .expect("factory builds");
+        let factory =
+            FsAgentFactory::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new(
+                Arc::new(ToolRegistry::new()),
+                llm_config,
+                "/mem",
+                &[],
+            )
+            .expect("factory builds");
         (factory, guard)
     }
 

@@ -23,9 +23,10 @@ use futures_core::Stream;
 use futures_lite::StreamExt;
 
 use crate::abi::{
-    ClawAgentConfig, ClawAgentResponse, EspErr, CLAW_AGENT_RESPONSE_STATUS_ERROR,
-    CLAW_AGENT_RESPONSE_STATUS_OK, ESP_ERR_INVALID_ARG, ESP_ERR_INVALID_SIZE,
-    ESP_ERR_INVALID_STATE, ESP_ERR_NOT_FOUND, ESP_ERR_TIMEOUT, ESP_FAIL, ESP_OK,
+    ClawAgentConfig, ClawAgentEvent, EspErr, CLAW_AGENT_EVENT_KIND_DONE,
+    CLAW_AGENT_EVENT_KIND_ERROR, CLAW_AGENT_EVENT_KIND_OUTPUT, CLAW_AGENT_EVENT_KIND_REASONING,
+    CLAW_AGENT_EVENT_KIND_TOOLS, ESP_ERR_INVALID_ARG, ESP_ERR_INVALID_SIZE, ESP_ERR_INVALID_STATE,
+    ESP_ERR_NOT_FOUND, ESP_ERR_TIMEOUT, ESP_FAIL, ESP_OK,
 };
 use crate::tool::{register_capability_tools, CapabilityContextData};
 
@@ -50,32 +51,53 @@ struct RuntimeController {
     /// The running agent, present between `start` and `stop`/`deinit`. Dropping it
     /// joins the orchestrator's drive worker.
     agent: Option<DeviceAgent>,
-    /// In-flight submissions keyed by request id: each holds its event stream and
-    /// the reply accumulated so far, drained (lazily, with a timeout) by
-    /// [`receive`].
+    /// In-flight submissions keyed by request id: each holds its remaining event
+    /// stream, pulled one event at a time (lazily, with a timeout) by [`receive`].
     pending: Mutex<HashMap<u32, PendingSubmit>>,
     next_request_id: AtomicU32,
 }
 
-/// One in-flight submission: its remaining event stream plus the reply
-/// accumulated across (possibly several timed-out) `receive` calls.
+/// One in-flight submission: the session it belongs to and its remaining event
+/// stream. The stream is drained incrementally — one [`AgentEvent`] per
+/// `receive` — and the entry is removed once a terminal event (done/error) is
+/// delivered.
 struct PendingSubmit {
     session_id: u32,
     stream: SubmitStream,
-    outputs: Vec<String>,
-    error: Option<String>,
-    done: bool,
 }
 
-struct SubmitResponse {
-    status: ResponseStatus,
-    text: String,
-    error_message: String,
+/// One event handed across the FFI, mapped from an [`AgentEvent`].
+///
+/// [`Done`](Self::Done) and [`Error`](Self::Error) are terminal: after either,
+/// the submission is dropped from `pending`.
+enum FfiEvent {
+    Output(String),
+    Reasoning(String),
+    Tools(String),
+    Done,
+    Error(String),
 }
 
-enum ResponseStatus {
-    Ok,
-    Error,
+impl FfiEvent {
+    fn is_terminal(&self) -> bool {
+        matches!(self, FfiEvent::Done | FfiEvent::Error(_))
+    }
+}
+
+/// Map a stream event to its FFI form. `None` marks a bracket/meta event
+/// (`TurnStarted`, `IterationStarted`/`IterationEnded`) that C does not surface;
+/// the puller skips it and pulls the next.
+fn map_event(event: AgentEvent) -> Option<FfiEvent> {
+    match event {
+        AgentEvent::Output { text } => Some(FfiEvent::Output(text)),
+        AgentEvent::Reasoning { text } => Some(FfiEvent::Reasoning(text)),
+        AgentEvent::Tools { names } => Some(FfiEvent::Tools(names.join(", "))),
+        AgentEvent::Error { message } => Some(FfiEvent::Error(message)),
+        AgentEvent::TurnEnded => Some(FfiEvent::Done),
+        AgentEvent::TurnStarted
+        | AgentEvent::IterationStarted { .. }
+        | AgentEvent::IterationEnded => None,
+    }
 }
 
 #[no_mangle]
@@ -145,26 +167,26 @@ pub extern "C" fn claw_agent_session_delete(session_id: u32) -> EspErr {
 }
 
 #[no_mangle]
-/// Receive one completed response.
+/// Receive the next event of a submitted turn (one event per call).
 ///
 /// # Safety
-/// `out_response` must point to writable memory for one response.
+/// `out_event` must point to writable memory for one event.
 pub unsafe extern "C" fn claw_agent_session_receive(
     session_id: u32,
     request_id: u32,
-    out_response: *mut ClawAgentResponse,
+    out_event: *mut ClawAgentEvent,
     timeout_ms: u32,
 ) -> EspErr {
-    ffi_result(|| receive(session_id, request_id, out_response, timeout_ms))
+    ffi_result(|| receive(session_id, request_id, out_event, timeout_ms))
 }
 
 #[no_mangle]
-/// Release strings owned by a response returned from `claw_agent_session_receive`.
+/// Release strings owned by an event returned from `claw_agent_session_receive`.
 ///
 /// # Safety
-/// `response` must be null or a response returned by `claw_agent_session_receive`.
-pub unsafe extern "C" fn claw_agent_session_response_free(response: *mut ClawAgentResponse) {
-    free_response(response);
+/// `event` must be null or an event returned by `claw_agent_session_receive`.
+pub unsafe extern "C" fn claw_agent_event_free(event: *mut ClawAgentEvent) {
+    free_event(event);
 }
 
 fn init(config: *const ClawAgentConfig) -> Result<(), CabiError> {
@@ -218,11 +240,11 @@ fn start() -> Result<(), CabiError> {
     }
     // `AgentSystem::new` spawns the orchestrator's drive worker (via `EspIdfThread`)
     // and blocks until it reports readiness, so a build failure surfaces here.
-    let agent = AgentSystem::<EspIdfFs, EspIdfHttp, EspIdfTimer>::new::<EspIdfThread, EspIdfExecutor>(
-        runtime.config.api.clone(),
-        runtime.config.persistence.clone(),
-        EspIdfThread,
-    )?;
+    let agent =
+        AgentSystem::<EspIdfFs, EspIdfHttp, EspIdfTimer>::new::<EspIdfThread, EspIdfExecutor>(
+            runtime.config.api.clone(),
+            runtime.config.persistence.clone(),
+        )?;
     register_capability_tools(agent.tool_registry())?;
     agent.start_all()?;
     runtime.agent = Some(agent);
@@ -302,17 +324,13 @@ fn submit_owned(session: SessionId, text: String, store_response: bool) -> Resul
         request_id,
         ..CapabilityContextData::default()
     });
-    let stream =
-        agent.submit_with_context(session, text, DeliveryKind::Interrupt, Some(context));
+    let stream = agent.submit_with_context(session, text, DeliveryKind::Interrupt, Some(context));
     if store_response {
         pending_map(runtime).insert(
             request_id,
             PendingSubmit {
                 session_id: session.0,
                 stream,
-                outputs: Vec::new(),
-                error: None,
-                done: false,
             },
         );
     }
@@ -376,18 +394,18 @@ fn session_delete(session_id: u32) -> Result<(), CabiError> {
 fn receive(
     session_id: u32,
     request_id: u32,
-    out_response: *mut ClawAgentResponse,
+    out_event: *mut ClawAgentEvent,
     timeout_ms: u32,
 ) -> Result<(), CabiError> {
     if session_id == 0 || request_id == 0 {
         return Err(CabiError::InvalidArgument);
     }
-    let out_response = unsafe { out_response.as_mut() }.ok_or(CabiError::InvalidArgument)?;
+    let out_event = unsafe { out_event.as_mut() }.ok_or(CabiError::InvalidArgument)?;
 
-    // Check the submission out so the (possibly long) drain does not hold the
-    // runtime lock; reinsert it if the turn has not finished within the timeout.
+    // Check the submission out so the (possibly long) wait does not hold the
+    // runtime lock; reinsert it unless we just delivered a terminal event.
     let Some(mut pending) = take_pending(request_id)? else {
-        // Unknown or already-consumed request id: nothing ready yet.
+        // Unknown or already-consumed request id: nothing to deliver.
         return Err(CabiError::Timeout);
     };
     if pending.session_id != session_id {
@@ -395,105 +413,79 @@ fn receive(
         return Err(CabiError::InvalidArgument);
     }
 
-    let done = if timeout_ms == 0 {
-        drain_ready(&mut pending)
+    let next = if timeout_ms == 0 {
+        next_ready(&mut pending.stream)
     } else {
-        drain_with_timeout(&mut pending, timeout_ms)
+        next_within(&mut pending.stream, timeout_ms)
     };
 
-    if done {
-        let response = finalize(&pending);
-        write_response(out_response, response)
-    } else {
-        reinsert_pending(request_id, pending);
-        Err(CabiError::Timeout)
+    match next {
+        Some(event) => {
+            let terminal = event.is_terminal();
+            write_event(out_event, event)?;
+            // Keep the stream alive for the next pull unless this was the last
+            // event; a terminal event drops `pending` so the id is consumed.
+            if !terminal {
+                reinsert_pending(request_id, pending);
+            }
+            Ok(())
+        }
+        None => {
+            reinsert_pending(request_id, pending);
+            Err(CabiError::Timeout)
+        }
     }
 }
 
-/// Drain every event already buffered on the stream without blocking; returns
-/// `true` when the turn is complete.
-fn drain_ready(pending: &mut PendingSubmit) -> bool {
-    if pending.done {
-        return true;
-    }
+/// Pull the next surfaced event already buffered on the stream without blocking.
+/// Returns `None` when nothing is ready yet; skips bracket/meta events; maps a
+/// closed stream to [`FfiEvent::Done`].
+fn next_ready(stream: &mut SubmitStream) -> Option<FfiEvent> {
     let waker = Waker::from(Arc::new(NoopWake));
     let mut context = Context::from_waker(&waker);
     loop {
-        let polled = Pin::new(&mut pending.stream).poll_next(&mut context);
-        match polled {
-            Poll::Ready(Some(event)) => accumulate(&mut pending.outputs, &mut pending.error, event),
-            Poll::Ready(None) => {
-                pending.done = true;
-                return true;
+        match Pin::new(&mut *stream).poll_next(&mut context) {
+            Poll::Ready(Some(event)) => {
+                if let Some(mapped) = map_event(event) {
+                    return Some(mapped);
+                }
             }
-            Poll::Pending => return false,
+            Poll::Ready(None) => return Some(FfiEvent::Done),
+            Poll::Pending => return None,
         }
     }
 }
 
-/// Drain the stream to completion, bounded by `timeout_ms`; returns `true` when
-/// the turn finished, `false` when the timeout won (partial output is retained on
-/// `pending` for a later `receive`).
-fn drain_with_timeout(pending: &mut PendingSubmit, timeout_ms: u32) -> bool {
-    if pending.done {
-        return true;
-    }
-    let PendingSubmit {
-        stream,
-        outputs,
-        error,
-        done,
-        ..
-    } = pending;
-
+/// Pull the next surfaced event, waiting up to `timeout_ms`. Returns `None` on
+/// timeout (the stream is retained for a later `receive`); skips bracket/meta
+/// events; maps a closed stream to [`FfiEvent::Done`].
+fn next_within(stream: &mut SubmitStream, timeout_ms: u32) -> Option<FfiEvent> {
     let abort = AtomicBool::new(false);
     let mut timer = EspIdfTimer;
-    let finished = futures_lite::future::block_on(async {
-        let drain = async {
-            while let Some(event) = stream.next().await {
-                accumulate(outputs, error, event);
+    futures_lite::future::block_on(async {
+        let pull = async {
+            loop {
+                match stream.next().await {
+                    Some(event) => {
+                        if let Some(mapped) = map_event(event) {
+                            return Some(mapped);
+                        }
+                    }
+                    None => return Some(FfiEvent::Done),
+                }
             }
-            true
         };
         let timeout = async {
             let _ = timer
-                .sleep(Duration::from_millis(u64::from(timeout_ms)), Cancel::new(&abort))
+                .sleep(
+                    Duration::from_millis(u64::from(timeout_ms)),
+                    Cancel::new(&abort),
+                )
                 .await;
-            false
+            None::<FfiEvent>
         };
-        futures_lite::future::or(drain, timeout).await
-    });
-    if finished {
-        *done = true;
-    }
-    finished
-}
-
-fn accumulate(outputs: &mut Vec<String>, error: &mut Option<String>, event: AgentEvent) {
-    match event {
-        AgentEvent::Output { text } => outputs.push(text),
-        AgentEvent::Error { message } => {
-            if error.is_none() {
-                *error = Some(message);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn finalize(pending: &PendingSubmit) -> SubmitResponse {
-    match &pending.error {
-        Some(message) => SubmitResponse {
-            status: ResponseStatus::Error,
-            text: String::new(),
-            error_message: message.clone(),
-        },
-        None => SubmitResponse {
-            status: ResponseStatus::Ok,
-            text: join_outputs(&pending.outputs),
-            error_message: String::new(),
-        },
-    }
+        futures_lite::future::or(pull, timeout).await
+    })
 }
 
 struct NoopWake;
@@ -530,47 +522,40 @@ fn runtime_mut() -> Result<&'static mut RuntimeController, CabiError> {
     Ok(unsafe { &mut *ptr })
 }
 
-/// Join a turn's `Output` fragments into the FFI's flat response text, skipping
-/// blank fragments and separating the rest with a blank line.
-fn join_outputs(outputs: &[String]) -> String {
-    let mut text = String::new();
-    for output in outputs {
-        if output.trim().is_empty() {
-            continue;
-        }
-        if !text.is_empty() {
-            text.push_str("\n\n");
-        }
-        text.push_str(output);
-    }
-    text
-}
-
-fn write_response(
-    out_response: &mut ClawAgentResponse,
-    response: SubmitResponse,
-) -> Result<(), CabiError> {
-    let text = cstring_raw(&response.text)?;
-    let error_message = cstring_raw(&response.error_message)?;
-    *out_response = ClawAgentResponse {
-        status: match response.status {
-            ResponseStatus::Ok => CLAW_AGENT_RESPONSE_STATUS_OK,
-            ResponseStatus::Error => CLAW_AGENT_RESPONSE_STATUS_ERROR,
-        },
+/// Marshal one [`FfiEvent`] into the C event struct: content events fill `text`,
+/// an error fills `error_message`, and the rest stay null.
+fn write_event(out_event: &mut ClawAgentEvent, event: FfiEvent) -> Result<(), CabiError> {
+    let (kind, text, error_message) = match event {
+        FfiEvent::Output(text) => (CLAW_AGENT_EVENT_KIND_OUTPUT, Some(text), None),
+        FfiEvent::Reasoning(text) => (CLAW_AGENT_EVENT_KIND_REASONING, Some(text), None),
+        FfiEvent::Tools(text) => (CLAW_AGENT_EVENT_KIND_TOOLS, Some(text), None),
+        FfiEvent::Done => (CLAW_AGENT_EVENT_KIND_DONE, None, None),
+        FfiEvent::Error(message) => (CLAW_AGENT_EVENT_KIND_ERROR, None, Some(message)),
+    };
+    let text = match text {
+        Some(value) => cstring_raw(&value)?,
+        None => ptr::null_mut(),
+    };
+    let error_message = match error_message {
+        Some(value) => cstring_raw(&value)?,
+        None => ptr::null_mut(),
+    };
+    *out_event = ClawAgentEvent {
+        kind,
         text,
         error_message,
     };
     Ok(())
 }
 
-fn free_response(response: *mut ClawAgentResponse) {
-    let Some(response) = (unsafe { response.as_mut() }) else {
+fn free_event(event: *mut ClawAgentEvent) {
+    let Some(event) = (unsafe { event.as_mut() }) else {
         return;
     };
-    free_cstring(response.text);
-    free_cstring(response.error_message);
-    response.text = ptr::null_mut();
-    response.error_message = ptr::null_mut();
+    free_cstring(event.text);
+    free_cstring(event.error_message);
+    event.text = ptr::null_mut();
+    event.error_message = ptr::null_mut();
 }
 
 fn cstring_raw(value: &str) -> Result<*mut c_char, CabiError> {

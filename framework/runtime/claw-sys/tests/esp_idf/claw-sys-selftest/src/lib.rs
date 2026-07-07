@@ -88,7 +88,7 @@ pub extern "C" fn claw_sys_selftest_thread() -> c_int {
     let counter = Arc::new(AtomicU32::new(0));
     let worker_counter = Arc::clone(&counter);
 
-    let handle = EspIdfThread.spawn_worker(
+    let handle = EspIdfThread::spawn_worker(
         "claw_sys_test_worker",
         4096,
         Priority::Normal,

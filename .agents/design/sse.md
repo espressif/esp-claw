@@ -157,8 +157,12 @@ Landed (full stack):
   `instance` hands the live sink only to the **root** agent's tick; every subagent
   (and the internal approval resolver) ticks with a disabled sink, so only the
   root's iterations reach the stream.
-- Call sites updated: `claw_agent::AgentSystem::submit`, the CLI, the example, and
-  the FFI `run_submit` (drains the stream, joins `Output`, first `Error` fails).
+- Call sites updated: `claw_agent::AgentSystem::submit`, the CLI, and the example
+  drain the stream directly. The C FFI (`claw-cabi`) surfaces it **incrementally**:
+  `claw_agent_session_receive` returns one event per call as a `claw_agent_event_t`
+  (`OUTPUT`/`REASONING`/`TOOLS` content fragments, terminal `DONE`/`ERROR`), so a C
+  consumer streams a turn as it runs instead of blocking for the whole turn. See
+  `claw-cabi/include/claw_agent.h`.
 
 ## Rules
 

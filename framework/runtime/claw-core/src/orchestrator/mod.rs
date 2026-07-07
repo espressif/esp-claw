@@ -173,8 +173,8 @@ pub struct Orchestrator {
 }
 
 impl Orchestrator {
-    /// Build an orchestrator: spawn the drive worker (via `thread`), construct the
-    /// engine inside it, and wait for it to report readiness.
+    /// Build an orchestrator: spawn the drive worker (via `T::spawn_worker`),
+    /// construct the engine inside it, and wait for it to report readiness.
     ///
     /// `llm_config` is cloned into every agent, `persistence_dir` is the storage
     /// root the engine's factory owns, and `skill_roots` are the priority-ordered
@@ -189,7 +189,6 @@ impl Orchestrator {
         llm_config: ClawApiConfig,
         persistence_dir: &str,
         skill_roots: &[String],
-        thread: &T,
     ) -> Result<Self, OrchestratorBuildError>
     where
         F: ClawFs + Clone + Default + 'static,
@@ -205,25 +204,24 @@ impl Orchestrator {
         let persistence_dir = persistence_dir.to_string();
         let skill_roots = skill_roots.to_vec();
         let sessions_engine = Arc::clone(&sessions);
-        let worker = thread
-            .spawn_worker(
-                "claw_orchestrator",
-                ENGINE_WORKER_STACK_SIZE,
-                Priority::Normal,
-                CoreAffinity::Any,
-                move || {
-                    run_engine::<F, H, Timer, E>(
-                        tools,
-                        llm_config,
-                        persistence_dir,
-                        skill_roots,
-                        sessions_engine,
-                        command_rx,
-                        ready_tx,
-                    );
-                },
-            )
-            .map_err(|error| OrchestratorBuildError::Worker(error.to_string()))?;
+        let worker = T::spawn_worker(
+            "claw_orchestrator",
+            ENGINE_WORKER_STACK_SIZE,
+            Priority::Normal,
+            CoreAffinity::Any,
+            move || {
+                run_engine::<F, H, Timer, E>(
+                    tools,
+                    llm_config,
+                    persistence_dir,
+                    skill_roots,
+                    sessions_engine,
+                    command_rx,
+                    ready_tx,
+                );
+            },
+        )
+        .map_err(|error| OrchestratorBuildError::Worker(error.to_string()))?;
 
         match ready_rx.recv() {
             Ok(Ok(())) => Ok(Self {
@@ -304,9 +302,9 @@ impl Orchestrator {
     /// Returns [`SessionError::NotFound`] when `session_id` is not live.
     pub fn session_delete(&self, session_id: SessionId) -> Result<(), SessionError> {
         self.sessions.delete(session_id)?;
-        let _ = self
-            .command_tx
-            .try_send(Command::DeleteSession { session: session_id });
+        let _ = self.command_tx.try_send(Command::DeleteSession {
+            session: session_id,
+        });
         Ok(())
     }
 }
@@ -343,8 +341,13 @@ fn run_engine<F, H, Timer, E>(
     Timer: ClawTimer + Default + 'static,
     E: ClawExecutor,
 {
-    let engine = match Engine::<F, H, Timer>::new(tools, llm_config, &persistence_dir, &skill_roots, sessions)
-    {
+    let engine = match Engine::<F, H, Timer>::new(
+        tools,
+        llm_config,
+        &persistence_dir,
+        &skill_roots,
+        sessions,
+    ) {
         Ok(engine) => Rc::new(engine),
         Err(error) => {
             let _ = ready.send(Err(error));
@@ -650,7 +653,9 @@ where
                 if kind == DeliveryKind::Cancel {
                     instance.cancel_root(CancelReason::Superseded);
                 }
-                instance.deliver(text.clone()).map_err(DeliverError::Agent)?;
+                instance
+                    .deliver(text.clone())
+                    .map_err(DeliverError::Agent)?;
             }
             StartMode::Interrupted => {
                 instance
@@ -659,7 +664,9 @@ where
             }
             StartMode::Cancelled => {
                 instance.cancel_root(CancelReason::Superseded);
-                instance.deliver(text.clone()).map_err(DeliverError::Agent)?;
+                instance
+                    .deliver(text.clone())
+                    .map_err(DeliverError::Agent)?;
             }
         }
 
@@ -836,7 +843,10 @@ impl Future for EnginePoll<'_> {
         }
 
         match self.recv.as_mut() {
-            Some(receiver) => receiver.as_mut().poll_next(context).map(EngineEvent::Command),
+            Some(receiver) => receiver
+                .as_mut()
+                .poll_next(context)
+                .map(EngineEvent::Command),
             None => Poll::Pending,
         }
     }
