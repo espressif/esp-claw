@@ -1,10 +1,11 @@
-//! The event vocabulary a [`submit`](crate::Orchestrator::submit) stream yields.
+//! The event vocabulary a session event stream yields.
 //!
-//! One `submit` == one session == one turn, so the stream *is* that scope: events
-//! carry no session/turn id. Only the **root** agent is externally visible, and a
-//! root's iterations are sequential, so events carry no agent id either — the
-//! `iteration` id is emitted once (on [`AgentEvent::IterationStarted`]) and the
-//! following content events belong to it by position.
+//! One open session has one long-lived stream. User submits and background
+//! subagent completions both create root-visible turns on that stream. Only the
+//! **root** agent is externally visible, and a root's iterations are sequential,
+//! so events carry no agent id: the `iteration` id is emitted once (on
+//! [`SessionEvent::IterationStarted`]) and the following content events belong
+//! to it by position.
 //!
 //! See `.agents/design/sse.md` for the full model (ordering, SSE forward-compat).
 
@@ -33,7 +34,7 @@ compile_error!(
     "enable only one reasoning tier feature: `reasoning_short`, `reasoning_medium`, or `reasoning_long`"
 );
 
-/// Byte budget for a [`AgentEvent::Reasoning`] payload.
+/// Byte budget for a [`SessionEvent::Reasoning`] payload.
 ///
 /// Reasoning text can be very long; the stream truncates it to this cap to keep
 /// event payloads bounded. Output is never truncated. The cap is chosen at
@@ -50,7 +51,16 @@ const REASONING_EVENT_LIMIT: usize = 8_000;
 ))]
 const REASONING_EVENT_LIMIT: usize = 32_000;
 
-/// One item in a submission's event stream.
+/// Why a root-visible turn started.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TurnCause {
+    /// A user input accepted through [`SessionControl::submit`](crate::SessionControl::submit).
+    UserSubmit,
+    /// A background subagent completed and made the root ready again.
+    BackgroundResult,
+}
+
+/// One item in a session's event stream.
 ///
 /// Content variants ([`Reasoning`](Self::Reasoning), [`Output`](Self::Output),
 /// [`Tools`](Self::Tools)) are mutually exclusive per event and, within one
@@ -58,9 +68,12 @@ const REASONING_EVENT_LIMIT: usize = 32_000;
 /// present). The `text` fields are **append fragments**: non-streaming emits one
 /// fragment holding the whole string; a future SSE transport emits many.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AgentEvent {
-    /// The turn (one drive of one submitted message) started.
-    TurnStarted,
+pub enum SessionEvent {
+    /// A root-visible turn started.
+    TurnStarted {
+        /// What made this turn runnable.
+        cause: TurnCause,
+    },
     /// A root LLM round started. Carries the only iteration id on the stream.
     IterationStarted {
         /// The iteration this bracket opens.
@@ -86,28 +99,30 @@ pub enum AgentEvent {
     IterationEnded,
     /// The turn ended.
     TurnEnded,
-    /// This submit failed (a task failure or a submit precondition error).
+    /// This session work item failed.
     Error {
         /// A human-readable failure message.
         message: String,
     },
+    /// The session was closed and no more events will be sent.
+    Closed,
 }
 
-/// Where per-turn [`AgentEvent`]s are pushed while a submission is driven.
+/// Where [`SessionEvent`]s are pushed while a session is driven.
 ///
 /// Cheap to clone (an `Arc`-backed channel sender). A
 /// [`disabled`](Self::disabled) sink drops every event — handed to subagents so
-/// only the root's events reach the stream, and used when a submission has no
+/// only the root's events reach the stream, and used when a session has no
 /// live subscriber.
 #[derive(Clone)]
 pub struct EventSink {
-    tx: Option<async_channel::Sender<AgentEvent>>,
+    tx: Option<async_channel::Sender<SessionEvent>>,
 }
 
 impl EventSink {
     /// A sink that forwards events to `tx`, truncating reasoning to
     /// [`REASONING_EVENT_LIMIT`].
-    pub(crate) fn new(tx: async_channel::Sender<AgentEvent>) -> Self {
+    pub(crate) fn new(tx: async_channel::Sender<SessionEvent>) -> Self {
         Self { tx: Some(tx) }
     }
 
@@ -123,19 +138,19 @@ impl EventSink {
     }
 
     /// Push one event. A no-op on a disabled sink or a closed channel.
-    pub(crate) fn emit(&self, event: AgentEvent) {
+    pub(crate) fn emit(&self, event: SessionEvent) {
         if let Some(tx) = &self.tx {
             let _ = tx.try_send(event);
         }
     }
 
-    /// Emit a [`AgentEvent::Reasoning`] with `full` truncated to
+    /// Emit a [`SessionEvent::Reasoning`] with `full` truncated to
     /// [`REASONING_EVENT_LIMIT`]. A no-op when disabled or `full` is empty.
     pub(crate) fn emit_reasoning(&self, full: &str) {
         if self.tx.is_none() || full.is_empty() {
             return;
         }
-        self.emit(AgentEvent::Reasoning {
+        self.emit(SessionEvent::Reasoning {
             text: TruncatedText::with_limit(full, REASONING_EVENT_LIMIT).to_string(),
         });
     }
@@ -149,7 +164,9 @@ mod tests {
     fn disabled_sink_drops_events() {
         let sink = EventSink::disabled();
         assert!(!sink.is_enabled());
-        sink.emit(AgentEvent::TurnStarted);
+        sink.emit(SessionEvent::TurnStarted {
+            cause: TurnCause::UserSubmit,
+        });
         sink.emit_reasoning("thinking hard");
     }
 
@@ -157,17 +174,24 @@ mod tests {
     fn enabled_sink_forwards_and_truncates() {
         let (tx, rx) = async_channel::unbounded();
         let sink = EventSink::new(tx);
-        sink.emit(AgentEvent::TurnStarted);
+        sink.emit(SessionEvent::TurnStarted {
+            cause: TurnCause::UserSubmit,
+        });
         let long = "a".repeat(REASONING_EVENT_LIMIT + 10);
         sink.emit_reasoning(&long);
         sink.emit_reasoning("");
         drop(sink);
 
-        assert_eq!(rx.try_recv().unwrap(), AgentEvent::TurnStarted);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            SessionEvent::TurnStarted {
+                cause: TurnCause::UserSubmit
+            }
+        );
         // `TruncatedText` caps at the limit and appends "..." when it truncates.
         assert_eq!(
             rx.try_recv().unwrap(),
-            AgentEvent::Reasoning {
+            SessionEvent::Reasoning {
                 text: format!("{}...", "a".repeat(REASONING_EVENT_LIMIT))
             }
         );

@@ -18,7 +18,7 @@ crate-type = ["rlib"]
 # Mirrors CONFIG_CLAW_CORE_STAGE_VERBOSITY_VERBOSE (default off == "Simple").
 stage_verbose = []
 
-# Compile-time byte cap on each `AgentEvent::Reasoning` payload. EXACTLY ONE may
+# Compile-time byte cap on each `SessionEvent::Reasoning` payload. EXACTLY ONE may
 # be enabled (event.rs emits a compile_error! for zero or multiple). Default is
 # `reasoning_short`; to change the tier, disable defaults (`default-features =
 # false`) and pick one.
@@ -32,11 +32,11 @@ claw-interface = { path = "../claw-interface" }
 claw-utils = { path = "../claw-utils" }
 claw-api = { path = "../claw-api" }
 # Vetted async MPMC channel (smol family, same lineage as `edge-executor`). Each
-# `submit` gets one unbounded channel that carries its `AgentEvent` stream; the
-# paired `Receiver` is the `SubmitStream` the caller drains.
+# open session gets one unbounded channel that carries its `SessionEvent` stream.
 async-channel = "2"
-# The `Stream` trait `async_channel::Receiver` implements, so `SubmitStream` can
-# poll it. `default-features = false` keeps this `no_std`-friendly for the device.
+# The `Stream` trait `async_channel::Receiver` implements, so
+# `SessionEventStream` can poll it. `default-features = false` keeps this
+# `no_std`-friendly for the device.
 futures-core = { version = "0.3", default-features = false }
 # NOTE: the `block_on` backend for the orchestrator worker is injected as a
 # `ClawExecutor` (edge-executor on device via `claw-sys`, tokio on host via

@@ -12,8 +12,8 @@ use std::task::{Wake, Waker};
 use std::time::Duration;
 
 use claw_agent::{
-    AgentError, AgentEvent, AgentEventStream as SubmitStream, AgentPersistenceConfig, AgentSystem,
-    SessionId, SubmitControl,
+    AgentError, AgentPersistenceConfig, AgentSystem, OpenSessionError, SessionControl,
+    SessionEvent, SessionEventStream, SessionId,
 };
 use claw_api::{BackendKind, ClawApiConfig};
 use claw_interface::{Cancel, ClawTimer};
@@ -23,18 +23,18 @@ use futures_core::Stream;
 use futures_lite::StreamExt;
 
 use crate::abi::{
-    ClawAgentConfig, ClawAgentEvent, EspErr, CLAW_AGENT_EVENT_KIND_DONE,
-    CLAW_AGENT_EVENT_KIND_ERROR, CLAW_AGENT_EVENT_KIND_OUTPUT, CLAW_AGENT_EVENT_KIND_REASONING,
-    CLAW_AGENT_EVENT_KIND_TOOLS, ESP_ERR_INVALID_ARG, ESP_ERR_INVALID_SIZE, ESP_ERR_INVALID_STATE,
-    ESP_ERR_NOT_FOUND, ESP_ERR_TIMEOUT, ESP_FAIL, ESP_OK,
+    ClawAgentConfig, ClawAgentEvent, EspErr, CLAW_AGENT_EVENT_KIND_CLOSED,
+    CLAW_AGENT_EVENT_KIND_DONE, CLAW_AGENT_EVENT_KIND_ERROR, CLAW_AGENT_EVENT_KIND_OUTPUT,
+    CLAW_AGENT_EVENT_KIND_REASONING, CLAW_AGENT_EVENT_KIND_TOOLS, ESP_ERR_INVALID_ARG,
+    ESP_ERR_INVALID_SIZE, ESP_ERR_INVALID_STATE, ESP_ERR_NOT_FOUND, ESP_ERR_TIMEOUT, ESP_FAIL,
+    ESP_OK,
 };
 use crate::tool::{register_capability_tools, CapabilityContextData};
 
 /// The device agent runtime. `AgentSystem` is now backend-erased and
 /// `Send + Sync` (its `Orchestrator` handle owns the drive worker), so it is held
-/// directly here and driven concurrently: every `submit` runs on the
-/// orchestrator's own worker thread while the FFI thread only enqueues and later
-/// drains the resulting event stream.
+/// directly here and driven concurrently: every open session has one event
+/// stream while the FFI thread only enqueues commands and drains events.
 type DeviceAgent = AgentSystem<EspIdfFs, EspIdfHttp, EspIdfTimer>;
 
 static RUNTIME: AtomicPtr<RuntimeController> = AtomicPtr::new(ptr::null_mut());
@@ -51,60 +51,50 @@ struct RuntimeController {
     /// The running agent, present between `start` and `stop`/`deinit`. Dropping it
     /// joins the orchestrator's drive worker.
     agent: Option<DeviceAgent>,
-    /// In-flight submissions keyed by request id: each holds its remaining event
-    /// stream, pulled one event at a time (lazily, with a timeout) by [`receive`].
-    pending: Mutex<HashMap<u32, Arc<PendingSubmit>>>,
+    /// Open sessions keyed by numeric session id.
+    sessions: Mutex<HashMap<u32, Arc<OpenSession>>>,
+    /// Internal request id source for per-submit capability context.
     next_request_id: AtomicU32,
 }
 
-/// One in-flight submission: the session it belongs to and its remaining event
-/// stream. The stream is drained incrementally — one [`AgentEvent`] per
-/// `receive` — and the entry is removed once a terminal event (done/error) is
-/// delivered.
-struct PendingSubmit {
-    session_id: u32,
-    stream: Mutex<SubmitStream>,
-    control: SubmitControl,
+/// One open session connection. The stream is drained incrementally — one
+/// [`SessionEvent`] per `receive` — while commands use the cloneable control half.
+struct OpenSession {
+    stream: Mutex<SessionEventStream>,
+    control: SessionControl,
     terminal: AtomicBool,
 }
 
-/// One event handed across the FFI, mapped from an [`AgentEvent`].
-///
-/// [`Done`](Self::Done) and [`Error`](Self::Error) are terminal: after either,
-/// the submission is dropped from `pending`.
+/// One event handed across the FFI, mapped from a [`SessionEvent`].
 enum FfiEvent {
     Output(String),
     Reasoning(String),
     Tools(String),
     Done,
     Error(String),
-}
-
-#[derive(Clone, Copy)]
-enum ControlAction {
-    Interrupt,
-    Cancel,
+    Closed,
 }
 
 impl FfiEvent {
     fn is_terminal(&self) -> bool {
-        matches!(self, FfiEvent::Done | FfiEvent::Error(_))
+        matches!(self, FfiEvent::Closed)
     }
 }
 
 /// Map a stream event to its FFI form. `None` marks a bracket/meta event
 /// (`TurnStarted`, `IterationStarted`/`IterationEnded`) that C does not surface;
 /// the puller skips it and pulls the next.
-fn map_event(event: AgentEvent) -> Option<FfiEvent> {
+fn map_event(event: SessionEvent) -> Option<FfiEvent> {
     match event {
-        AgentEvent::Output { text } => Some(FfiEvent::Output(text)),
-        AgentEvent::Reasoning { text } => Some(FfiEvent::Reasoning(text)),
-        AgentEvent::Tools { names } => Some(FfiEvent::Tools(names.join(", "))),
-        AgentEvent::Error { message } => Some(FfiEvent::Error(message)),
-        AgentEvent::TurnEnded => Some(FfiEvent::Done),
-        AgentEvent::TurnStarted
-        | AgentEvent::IterationStarted { .. }
-        | AgentEvent::IterationEnded => None,
+        SessionEvent::Output { text } => Some(FfiEvent::Output(text)),
+        SessionEvent::Reasoning { text } => Some(FfiEvent::Reasoning(text)),
+        SessionEvent::Tools { names } => Some(FfiEvent::Tools(names.join(", "))),
+        SessionEvent::Error { message } => Some(FfiEvent::Error(message)),
+        SessionEvent::TurnEnded => Some(FfiEvent::Done),
+        SessionEvent::Closed => Some(FfiEvent::Closed),
+        SessionEvent::TurnStarted { .. }
+        | SessionEvent::IterationStarted { .. }
+        | SessionEvent::IterationEnded => None,
     }
 }
 
@@ -137,12 +127,14 @@ pub extern "C" fn claw_agent_deinit() -> EspErr {
 ///
 /// # Safety
 /// `input` must point to valid UTF-8 C strings for this call.
-pub unsafe extern "C" fn claw_agent_session_submit(
-    session_id: u32,
-    text: *const c_char,
-    out_request_id: *mut u32,
-) -> EspErr {
-    ffi_result(|| submit_session(session_id, text, out_request_id))
+pub unsafe extern "C" fn claw_agent_session_submit(session_id: u32, text: *const c_char) -> EspErr {
+    ffi_result(|| submit_session(session_id, text))
+}
+
+#[no_mangle]
+/// Open a numeric session's event stream.
+pub extern "C" fn claw_agent_session_open(session_id: u32) -> EspErr {
+    ffi_result(|| session_open(session_id))
 }
 
 #[no_mangle]
@@ -169,35 +161,34 @@ pub unsafe extern "C" fn claw_agent_session_list(
 }
 
 #[no_mangle]
-/// Delete a numeric session.
-pub extern "C" fn claw_agent_session_delete(session_id: u32) -> EspErr {
-    ffi_result(|| session_delete(session_id))
+/// Close a numeric session.
+pub extern "C" fn claw_agent_session_close(session_id: u32) -> EspErr {
+    ffi_result(|| session_close(session_id))
 }
 
 #[no_mangle]
-/// Receive the next event of a submitted turn (one event per call).
+/// Receive the next event from an open session (one event per call).
 ///
 /// # Safety
 /// `out_event` must point to writable memory for one event.
 pub unsafe extern "C" fn claw_agent_session_receive(
     session_id: u32,
-    request_id: u32,
     out_event: *mut ClawAgentEvent,
     timeout_ms: u32,
 ) -> EspErr {
-    ffi_result(|| receive(session_id, request_id, out_event, timeout_ms))
+    ffi_result(|| receive(session_id, out_event, timeout_ms))
 }
 
 #[no_mangle]
-/// Request graceful interruption of an in-flight submitted turn.
-pub extern "C" fn claw_agent_session_interrupt(session_id: u32, request_id: u32) -> EspErr {
-    ffi_result(|| control_pending(session_id, request_id, ControlAction::Interrupt))
+/// Request graceful interruption of the active foreground turn.
+pub extern "C" fn claw_agent_session_interrupt(session_id: u32) -> EspErr {
+    ffi_result(|| session_interrupt(session_id))
 }
 
 #[no_mangle]
-/// Request hard cancellation of an in-flight submitted turn.
-pub extern "C" fn claw_agent_session_cancel(session_id: u32, request_id: u32) -> EspErr {
-    ffi_result(|| control_pending(session_id, request_id, ControlAction::Cancel))
+/// Request hard cancellation of foreground and background session work.
+pub extern "C" fn claw_agent_session_cancel(session_id: u32) -> EspErr {
+    ffi_result(|| session_cancel(session_id))
 }
 
 #[no_mangle]
@@ -245,7 +236,7 @@ fn init(config: *const ClawAgentConfig) -> Result<(), CabiError> {
     let runtime = Box::new(RuntimeController {
         config: RuntimeConfig { api, persistence },
         agent: None,
-        pending: Mutex::new(HashMap::new()),
+        sessions: Mutex::new(HashMap::new()),
         next_request_id: AtomicU32::new(1),
     });
     RUNTIME.store(Box::into_raw(runtime), Ordering::Release);
@@ -277,7 +268,7 @@ fn stop() -> Result<(), CabiError> {
     let agent = {
         let _guard = lock_runtime();
         let runtime = runtime_mut()?;
-        pending_map(runtime).clear();
+        open_sessions(runtime).clear();
         runtime.agent.take()
     };
     if let Some(agent) = agent {
@@ -307,33 +298,19 @@ fn deinit() -> Result<(), CabiError> {
     Ok(())
 }
 
-fn submit_session(
-    session_id: u32,
-    text: *const c_char,
-    out_request_id: *mut u32,
-) -> Result<(), CabiError> {
+fn submit_session(session_id: u32, text: *const c_char) -> Result<(), CabiError> {
     if session_id == 0 {
         return Err(CabiError::InvalidArgument);
     }
-    let request_id = submit_owned(
-        SessionId::new(session_id),
-        required_string(text)?,
-        !out_request_id.is_null(),
-    )?;
-    if let Some(out_request_id) = unsafe { out_request_id.as_mut() } {
-        *out_request_id = request_id;
-    }
-    Ok(())
-}
-
-fn submit_owned(session: SessionId, text: String, store_response: bool) -> Result<u32, CabiError> {
-    let _guard = lock_runtime();
-    let runtime = runtime_mut()?;
-    let agent = runtime.agent.as_ref().ok_or(CabiError::InvalidState)?;
-    if !agent.list_sessions().contains(&session) {
-        return Err(CabiError::NotFound);
-    }
-    let request_id = runtime.next_request_id.fetch_add(1, Ordering::AcqRel);
+    let text = required_string(text)?;
+    let (session, request_id) = {
+        let _guard = lock_runtime();
+        let runtime = runtime_mut()?;
+        runtime.agent.as_ref().ok_or(CabiError::InvalidState)?;
+        let session = get_open_session_locked(runtime, session_id)?.ok_or(CabiError::NotFound)?;
+        let request_id = runtime.next_request_id.fetch_add(1, Ordering::AcqRel);
+        (session, request_id)
+    };
     if request_id == 0 {
         return Err(CabiError::InvalidState);
     }
@@ -344,22 +321,32 @@ fn submit_owned(session: SessionId, text: String, store_response: bool) -> Resul
         request_id,
         ..CapabilityContextData::default()
     });
-    let stream = agent.submit_with_context(session, text, Some(context));
-    if store_response {
-        let control = stream.control();
-        pending_map(runtime).insert(
-            request_id,
-            Arc::new(PendingSubmit {
-                session_id: session.0,
-                stream: Mutex::new(stream),
-                control,
-                terminal: AtomicBool::new(false),
-            }),
-        );
+    futures_lite::future::block_on(session.control.submit_with_context(text, Some(context)))
+        .map_err(|_| CabiError::InvalidState)
+}
+
+fn session_open(session_id: u32) -> Result<(), CabiError> {
+    if session_id == 0 {
+        return Err(CabiError::InvalidArgument);
     }
-    // When no response is wanted, drop the stream: the orchestrator worker still
-    // drives the turn to completion; the closed channel just discards its events.
-    Ok(request_id)
+    let _guard = lock_runtime();
+    let runtime = runtime_mut()?;
+    let agent = runtime.agent.as_ref().ok_or(CabiError::InvalidState)?;
+    if open_sessions(runtime).contains_key(&session_id) {
+        return Err(CabiError::InvalidState);
+    }
+    let (control, stream) = agent
+        .open_session(SessionId::new(session_id))
+        .map_err(open_session_error)?;
+    open_sessions(runtime).insert(
+        session_id,
+        Arc::new(OpenSession {
+            stream: Mutex::new(stream),
+            control,
+            terminal: AtomicBool::new(false),
+        }),
+    );
+    Ok(())
 }
 
 fn session_create(out_session_id: *mut u32) -> Result<(), CabiError> {
@@ -402,46 +389,38 @@ fn session_list(
     Ok(())
 }
 
-fn session_delete(session_id: u32) -> Result<(), CabiError> {
+fn session_close(session_id: u32) -> Result<(), CabiError> {
     if session_id == 0 {
         return Err(CabiError::InvalidArgument);
     }
-    let _guard = lock_runtime();
-    let runtime = runtime_mut()?;
-    let agent = runtime.agent.as_ref().ok_or(CabiError::InvalidState)?;
-    agent
-        .delete_session(SessionId::new(session_id))
-        .map_err(|_| CabiError::NotFound)
+    let session = get_open_session(session_id)?.ok_or(CabiError::NotFound)?;
+    futures_lite::future::block_on(session.control.close_session())
+        .map_err(|_| CabiError::InvalidState)
 }
 
 fn receive(
     session_id: u32,
-    request_id: u32,
     out_event: *mut ClawAgentEvent,
     timeout_ms: u32,
 ) -> Result<(), CabiError> {
-    if session_id == 0 || request_id == 0 {
+    if session_id == 0 {
         return Err(CabiError::InvalidArgument);
     }
     let out_event = unsafe { out_event.as_mut() }.ok_or(CabiError::InvalidArgument)?;
 
-    let Some(pending) = get_pending(request_id)? else {
-        // Unknown or already-consumed request id: nothing to deliver.
-        return Err(CabiError::Timeout);
+    let Some(session) = get_open_session(session_id)? else {
+        return Err(CabiError::NotFound);
     };
-    if pending.session_id != session_id {
-        return Err(CabiError::InvalidArgument);
-    }
-    if pending.terminal.load(Ordering::Acquire) {
+    if session.terminal.load(Ordering::Acquire) {
         return Err(CabiError::Timeout);
     }
 
     let next = {
-        let mut stream = pending
+        let mut stream = session
             .stream
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
-        if pending.terminal.load(Ordering::Acquire) {
+        if session.terminal.load(Ordering::Acquire) {
             return Err(CabiError::Timeout);
         }
         if timeout_ms == 0 {
@@ -456,8 +435,8 @@ fn receive(
             let terminal = event.is_terminal();
             write_event(out_event, event)?;
             if terminal {
-                pending.terminal.store(true, Ordering::Release);
-                remove_pending(request_id, &pending);
+                session.terminal.store(true, Ordering::Release);
+                remove_open_session(session_id, &session);
             }
             Ok(())
         }
@@ -465,32 +444,32 @@ fn receive(
     }
 }
 
-fn control_pending(
-    session_id: u32,
-    request_id: u32,
-    action: ControlAction,
-) -> Result<(), CabiError> {
-    if session_id == 0 || request_id == 0 {
+fn session_interrupt(session_id: u32) -> Result<(), CabiError> {
+    if session_id == 0 {
         return Err(CabiError::InvalidArgument);
     }
-    let pending = get_pending(request_id)?.ok_or(CabiError::NotFound)?;
-    if pending.session_id != session_id {
-        return Err(CabiError::InvalidArgument);
-    }
-    if pending.terminal.load(Ordering::Acquire) {
+    let session = get_open_session(session_id)?.ok_or(CabiError::NotFound)?;
+    if session.terminal.load(Ordering::Acquire) {
         return Err(CabiError::NotFound);
     }
-    match action {
-        ControlAction::Interrupt => pending.control.interrupt(),
-        ControlAction::Cancel => pending.control.cancel(),
+    futures_lite::future::block_on(session.control.interrupt()).map_err(|_| CabiError::InvalidState)
+}
+
+fn session_cancel(session_id: u32) -> Result<(), CabiError> {
+    if session_id == 0 {
+        return Err(CabiError::InvalidArgument);
     }
-    .map_err(|_| CabiError::InvalidState)
+    let session = get_open_session(session_id)?.ok_or(CabiError::NotFound)?;
+    if session.terminal.load(Ordering::Acquire) {
+        return Err(CabiError::NotFound);
+    }
+    futures_lite::future::block_on(session.control.cancel()).map_err(|_| CabiError::InvalidState)
 }
 
 /// Pull the next surfaced event already buffered on the stream without blocking.
 /// Returns `None` when nothing is ready yet; skips bracket/meta events; maps a
 /// closed stream to [`FfiEvent::Done`].
-fn next_ready(stream: &mut SubmitStream) -> Option<FfiEvent> {
+fn next_ready(stream: &mut SessionEventStream) -> Option<FfiEvent> {
     let waker = Waker::from(Arc::new(NoopWake));
     let mut context = Context::from_waker(&waker);
     loop {
@@ -500,7 +479,7 @@ fn next_ready(stream: &mut SubmitStream) -> Option<FfiEvent> {
                     return Some(mapped);
                 }
             }
-            Poll::Ready(None) => return Some(FfiEvent::Done),
+            Poll::Ready(None) => return Some(FfiEvent::Closed),
             Poll::Pending => return None,
         }
     }
@@ -509,7 +488,7 @@ fn next_ready(stream: &mut SubmitStream) -> Option<FfiEvent> {
 /// Pull the next surfaced event, waiting up to `timeout_ms`. Returns `None` on
 /// timeout (the stream is retained for a later `receive`); skips bracket/meta
 /// events; maps a closed stream to [`FfiEvent::Done`].
-fn next_within(stream: &mut SubmitStream, timeout_ms: u32) -> Option<FfiEvent> {
+fn next_within(stream: &mut SessionEventStream, timeout_ms: u32) -> Option<FfiEvent> {
     let abort = AtomicBool::new(false);
     let mut timer = EspIdfTimer;
     futures_lite::future::block_on(async {
@@ -521,7 +500,7 @@ fn next_within(stream: &mut SubmitStream, timeout_ms: u32) -> Option<FfiEvent> {
                             return Some(mapped);
                         }
                     }
-                    None => return Some(FfiEvent::Done),
+                    None => return Some(FfiEvent::Closed),
                 }
             }
         };
@@ -544,28 +523,35 @@ impl Wake for NoopWake {
     fn wake(self: Arc<Self>) {}
 }
 
-fn get_pending(request_id: u32) -> Result<Option<Arc<PendingSubmit>>, CabiError> {
+fn get_open_session(session_id: u32) -> Result<Option<Arc<OpenSession>>, CabiError> {
     let _guard = lock_runtime();
     let runtime = runtime_mut()?;
-    Ok(pending_map(runtime).get(&request_id).cloned())
+    get_open_session_locked(runtime, session_id)
 }
 
-fn remove_pending(request_id: u32, pending: &Arc<PendingSubmit>) {
+fn get_open_session_locked(
+    runtime: &RuntimeController,
+    session_id: u32,
+) -> Result<Option<Arc<OpenSession>>, CabiError> {
+    Ok(open_sessions(runtime).get(&session_id).cloned())
+}
+
+fn remove_open_session(session_id: u32, session: &Arc<OpenSession>) {
     let _guard = lock_runtime();
     if let Ok(runtime) = runtime_mut() {
-        let mut pending_map = pending_map(runtime);
-        if pending_map
-            .get(&request_id)
-            .is_some_and(|stored| Arc::ptr_eq(stored, pending))
+        let mut sessions = open_sessions(runtime);
+        if sessions
+            .get(&session_id)
+            .is_some_and(|stored| Arc::ptr_eq(stored, session))
         {
-            pending_map.remove(&request_id);
+            sessions.remove(&session_id);
         }
     }
 }
 
-fn pending_map(runtime: &RuntimeController) -> MutexGuard<'_, HashMap<u32, Arc<PendingSubmit>>> {
+fn open_sessions(runtime: &RuntimeController) -> MutexGuard<'_, HashMap<u32, Arc<OpenSession>>> {
     runtime
-        .pending
+        .sessions
         .lock()
         .unwrap_or_else(|poison| poison.into_inner())
 }
@@ -587,6 +573,7 @@ fn write_event(out_event: &mut ClawAgentEvent, event: FfiEvent) -> Result<(), Ca
         FfiEvent::Tools(text) => (CLAW_AGENT_EVENT_KIND_TOOLS, Some(text), None),
         FfiEvent::Done => (CLAW_AGENT_EVENT_KIND_DONE, None, None),
         FfiEvent::Error(message) => (CLAW_AGENT_EVENT_KIND_ERROR, None, Some(message)),
+        FfiEvent::Closed => (CLAW_AGENT_EVENT_KIND_CLOSED, None, None),
     };
     let text = match text {
         Some(value) => cstring_raw(&value)?,
@@ -640,6 +627,15 @@ fn optional_string(ptr: *const c_char) -> Result<Option<String>, CabiError> {
         .to_str()
         .map_err(|_| CabiError::InvalidArgument)?;
     Ok(Some(text.to_owned()))
+}
+
+fn open_session_error(error: AgentError) -> CabiError {
+    match error {
+        AgentError::OpenSession(OpenSessionError::SessionNotFound(_)) => CabiError::NotFound,
+        AgentError::OpenSession(OpenSessionError::AlreadyOpen(_)) => CabiError::InvalidState,
+        AgentError::OpenSession(OpenSessionError::WorkerStopped) => CabiError::InvalidState,
+        other => CabiError::Agent(other),
+    }
 }
 
 fn lock_runtime() -> MutexGuard<'static, ()> {

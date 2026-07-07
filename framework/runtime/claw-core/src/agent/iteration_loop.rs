@@ -21,20 +21,20 @@ use claw_tool::{
 
 use claw_utils::TruncatedText;
 
-use crate::event::{AgentEvent, EventSink};
+use crate::event::{EventSink, SessionEvent};
 
 crate::define_prefixed_id!(IterationId, "iteration-", "iteration");
 
-/// Emits [`AgentEvent::IterationEnded`] when dropped, so every `run_one_iteration`
+/// Emits [`SessionEvent::IterationEnded`] when dropped, so every `run_one_iteration`
 /// exit path (plain answer, tool round, preempt, or error) closes the bracket its
-/// [`AgentEvent::IterationStarted`] opened.
+/// [`SessionEvent::IterationStarted`] opened.
 struct IterationBracket<'a> {
     events: &'a EventSink,
 }
 
 impl Drop for IterationBracket<'_> {
     fn drop(&mut self) {
-        self.events.emit(AgentEvent::IterationEnded);
+        self.events.emit(SessionEvent::IterationEnded);
     }
 }
 
@@ -210,7 +210,7 @@ pub struct IterationLoop<'a, H: ClawHttp, Timer: ClawTimer> {
     pub interruption: &'a dyn InterruptionControl,
     /// Retry policy applied to this iteration's LLM call (see [`RetryPolicy`]).
     pub retry: RetryPolicy,
-    /// Where this iteration's [`AgentEvent`]s are pushed. Disabled for subagents
+    /// Where this iteration's [`SessionEvent`]s are pushed. Disabled for subagents
     /// (and the internal approval resolver), so only the root's iteration events
     /// reach a submission's stream.
     pub events: &'a EventSink,
@@ -234,7 +234,7 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
     // Open the iteration event bracket; the guard closes it (IterationEnded) on
     // every return path below.
     let events = loop_.events;
-    events.emit(AgentEvent::IterationStarted {
+    events.emit(SessionEvent::IterationStarted {
         iteration: iteration_id,
     });
     let _bracket = IterationBracket { events };
@@ -326,7 +326,7 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
     // Tool names for this iteration. Only build the payload when the sink will
     // keep it (disabled subagent sinks would drop the clones).
     if events.is_enabled() {
-        events.emit(AgentEvent::Tools {
+        events.emit(SessionEvent::Tools {
             names: llm_response
                 .tool_calls
                 .iter()

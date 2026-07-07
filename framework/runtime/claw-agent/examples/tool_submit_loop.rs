@@ -6,7 +6,8 @@
 //!
 //! 1. Build an [`AgentSystem`] and register a **tool**.
 //! 2. Start the registered runtime objects.
-//! 3. Submit user text to an explicit session and read the returned replies.
+//! 3. Open a session, submit user text through its control half, and read the
+//!    returned replies from its event half.
 //!
 //! The LLM is a scripted in-memory double and the filesystem is in-memory, so the
 //! example runs hermetically (no network, no API key):
@@ -16,7 +17,7 @@
 //!   --target x86_64-unknown-linux-gnu
 //! ```
 
-use claw_agent::{AgentEvent, AgentSystem};
+use claw_agent::{AgentSystem, SessionEvent};
 use claw_api::{BackendKind, ClawApiConfig};
 use claw_interface::{
     BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp, StdThread, TokioExecutor,
@@ -87,21 +88,22 @@ async fn main() -> anyhow::Result<()> {
     system.start_all()?;
     let session = system.new_session();
 
-    // 2. Drive the loop: explicit session id selects the agent session. `submit`
-    //    returns a stream of `AgentEvent`s; draining it runs the turn.
-    let mut stream = system.submit(session, "Hi, what time is it?".to_string());
+    // 2. Drive the loop: explicit session id selects the agent session.
+    let (control, mut events) = system.open_session(session)?;
+    control.submit("Hi, what time is it?").await?;
 
     println!("\nsession `{session}` events:");
     let mut outputs = Vec::new();
-    while let Some(event) = stream.next().await {
+    while let Some(event) = events.next().await {
         match event {
-            AgentEvent::Output { text } => {
+            SessionEvent::Output { text } => {
                 println!("  > {text}");
                 outputs.push(text);
             }
-            AgentEvent::Reasoning { text } => println!("  [thinking] {text}"),
-            AgentEvent::Tools { names } => println!("  [tools] {}", names.join(", ")),
-            AgentEvent::Error { message } => println!("  [error] {message}"),
+            SessionEvent::Reasoning { text } => println!("  [thinking] {text}"),
+            SessionEvent::Tools { names } => println!("  [tools] {}", names.join(", ")),
+            SessionEvent::Error { message } => println!("  [error] {message}"),
+            SessionEvent::TurnEnded => break,
             other => println!("  [{other:?}]"),
         }
     }

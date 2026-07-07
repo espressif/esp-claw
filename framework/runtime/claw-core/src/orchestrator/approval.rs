@@ -21,7 +21,7 @@ use crate::agent::{
     IterationLoopError, IterationOutcome, IterationStep, SystemPrompt,
 };
 use crate::event::EventSink;
-use crate::orchestrator::control::SessionControl;
+use crate::orchestrator::control::DriveControl;
 
 const APPROVAL_RESOLVER_PROMPT: &str = r#"You resolve a user's natural-language reply to one pending permission request.
 
@@ -155,7 +155,7 @@ pub(crate) async fn resolve_permission_reply<H, Timer>(
     llm_config: ClawApiConfig,
     summary: &str,
     user_reply: &str,
-    control: &SessionControl,
+    control: &DriveControl,
 ) -> Result<PermissionReplyResolution, ApprovalResolverError>
 where
     H: ClawHttp + Default + 'static,

@@ -38,8 +38,9 @@ use crate::agent::{
     AgentPlacement, AgentRegistry, AgentSnapshot, AgentStatus, ApprovalDecision, ApprovalId,
     CancelReason, FsAgentFactory, GraphEffect, GraphHost, TerminationPolicy, TickOutcome,
 };
-use crate::event::{AgentEvent, EventSink};
-use crate::orchestrator::control::{DriveStop, SessionControl};
+use crate::event::{EventSink, SessionEvent};
+use crate::orchestrator::control::{DriveControl, DriveStop};
+use crate::orchestrator::InstanceWork;
 use crate::session::SessionId;
 use tracing::Instrument;
 
@@ -147,7 +148,7 @@ struct ReadyAgent {
     kind: AgentKind,
     depth: u16,
     /// Whether this is the session root. Only the root's iteration events are
-    /// forwarded to the submission stream; subagents tick with a disabled sink.
+    /// forwarded to the session stream; subagents tick with a disabled sink.
     is_root: bool,
     agent: Box<dyn Agent>,
 }
@@ -180,18 +181,37 @@ struct InflightAgentTasks {
 
 struct InflightAgentTask {
     id: AgentId,
+    is_root: bool,
     abort: AgentAbortHandle,
     future: AgentTickBoxFuture,
 }
 
 impl InflightAgentTasks {
-    fn spawn(&mut self, id: AgentId, abort: AgentAbortHandle, future: AgentTickBoxFuture) {
-        self.entries
-            .push(Some(InflightAgentTask { id, abort, future }));
+    fn spawn(
+        &mut self,
+        id: AgentId,
+        is_root: bool,
+        abort: AgentAbortHandle,
+        future: AgentTickBoxFuture,
+    ) {
+        self.entries.push(Some(InflightAgentTask {
+            id,
+            is_root,
+            abort,
+            future,
+        }));
     }
 
     fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    fn has_root(&self) -> bool {
+        self.entries.iter().flatten().any(|entry| entry.is_root)
+    }
+
+    fn has_background(&self) -> bool {
+        self.entries.iter().flatten().any(|entry| !entry.is_root)
     }
 
     fn abort_handles(&self) -> Vec<AgentAbortHandle> {
@@ -209,8 +229,11 @@ impl InflightAgentTasks {
         });
     }
 
-    fn next_completed(&mut self) -> CompletedAgentTicks<'_> {
-        CompletedAgentTicks { tasks: self }
+    fn next_completed<'a>(&'a mut self, control: &'a DriveControl) -> CompletedAgentTicks<'a> {
+        CompletedAgentTicks {
+            tasks: self,
+            control,
+        }
     }
 }
 
@@ -224,6 +247,7 @@ impl Default for InflightAgentTasks {
 
 struct CompletedAgentTicks<'a> {
     tasks: &'a mut InflightAgentTasks,
+    control: &'a DriveControl,
 }
 
 impl Future for CompletedAgentTicks<'_> {
@@ -231,6 +255,10 @@ impl Future for CompletedAgentTicks<'_> {
 
     fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
+        this.control.set_waker(context.waker().clone());
+        if this.control.has_signal() {
+            return Poll::Ready(Vec::new());
+        }
         let mut completed = Vec::new();
         let mut pending = false;
         for entry_slot in &mut this.tasks.entries {
@@ -327,6 +355,9 @@ where
     meta: HashMap<AgentId, NodeMeta>,
     /// Agents with work queued, in service order.
     ready: VecDeque<AgentId>,
+    /// Agent ticks currently in flight. Kept on the session instance so a root
+    /// turn can end while background subagents continue running.
+    inflight: InflightAgentTasks,
     /// Pending permission requests, keyed by the parked agent.
     parked_approvals: HashMap<AgentId, ParkedApproval>,
     /// FIFO order for user-facing approval prompts. The front is the only reply
@@ -379,6 +410,7 @@ where
             ids: next_agent_id,
             meta: HashMap::new(),
             ready: VecDeque::new(),
+            inflight: InflightAgentTasks::default(),
             parked_approvals: HashMap::new(),
             approval_queue: VecDeque::new(),
             subagent_result_mailbox: VecDeque::new(),
@@ -430,7 +462,7 @@ where
     ///
     /// Builds the root on the first call (the message becomes its goal); delivers
     /// to the existing idle root afterwards. The agent is left ready; call
-    /// [`drive_interruptible`](Self::drive_interruptible) to run it.
+    /// [`drive_root_turn`](Self::drive_root_turn) to run it.
     ///
     /// # Errors
     ///
@@ -463,43 +495,58 @@ where
         }
     }
 
-    /// Drive until no automatic work remains, observing an out-of-band
-    /// [`SessionControl`] between completed ticks so a concurrent submission can
-    /// stop the drive in flight.
-    ///
-    /// - A **cancel** request aborts in-flight LLM rounds (partial results are
-    ///   discarded by the agents' preemption paths) and returns
-    ///   [`DriveStop::Cancelled`] once currently in-flight ticks unwind.
-    /// - An **interrupt** request lets in-flight ticks finish and commit, then
-    ///   returns [`DriveStop::Interrupted`] before starting more work.
-    /// - Otherwise the loop runs to quiescence and returns [`DriveStop::Quiescent`].
-    ///
-    /// The caller decides the next delivery path from the stop reason; this
-    /// method only detects and reports it.
-    pub(crate) async fn drive_interruptible(
+    /// What kind of automatic work can currently advance.
+    pub(crate) fn work(&self) -> InstanceWork {
+        if self.has_root_work() || self.has_unprompted_approval() {
+            InstanceWork::Root
+        } else if self.has_background_work() {
+            InstanceWork::Background
+        } else {
+            InstanceWork::None
+        }
+    }
+
+    /// Drive the root-visible foreground turn until the root is no longer ready
+    /// or in flight. Background subagents may remain in flight after this
+    /// returns; they stay on the instance and continue through
+    /// [`drive_background_until_root_ready`](Self::drive_background_until_root_ready).
+    pub(crate) async fn drive_root_turn(
         &mut self,
-        control: &SessionControl,
+        control: &DriveControl,
         events: &EventSink,
     ) -> (DriveOutput, DriveStop) {
         let mut output = DriveOutput::default();
-        let mut inflight = InflightAgentTasks::default();
         let mut cancel_requested = false;
         let mut interrupt_requested = false;
 
         loop {
+            if control.take_cancel() {
+                cancel_requested = true;
+            }
+            if control.take_interrupt() {
+                interrupt_requested = true;
+            }
+            let _ = control.take_wake();
+
             if !cancel_requested && !interrupt_requested {
-                self.start_ready_agent_tasks(&mut inflight, events);
+                self.start_ready_agent_tasks(events);
             }
 
-            if inflight.is_empty() {
-                if cancel_requested && self.has_ready() {
+            if cancel_requested {
+                if self.inflight.is_empty() {
                     control.clear_cancel_hook();
                     return (output, DriveStop::Cancelled);
                 }
-                if interrupt_requested && self.has_ready() {
+            } else if interrupt_requested {
+                if !self.inflight.has_root() {
                     control.clear_cancel_hook();
                     return (output, DriveStop::Interrupted);
                 }
+            } else if !self.has_root_work() && !self.has_unprompted_approval() {
+                break;
+            }
+
+            if self.inflight.is_empty() {
                 if self.has_ready() {
                     continue;
                 }
@@ -509,45 +556,101 @@ where
             // Register before awaiting in-flight ticks so a cancel arriving
             // during LLM/tool work aborts the agents that have been taken out of
             // the registry as well as agents still stored there.
-            let mut abort_handles = self.registry.abort_handles();
-            abort_handles.extend(inflight.abort_handles());
-            control.set_cancel_hook(move || {
-                for handle in &abort_handles {
-                    handle.abort();
-                }
-            });
+            self.set_cancel_hook(control);
 
-            let ticked = inflight.next_completed().await;
-            self.route_ticked_agents(ticked, &mut inflight, events);
-
-            if control.take_cancel() {
-                cancel_requested = true;
-            }
-            if control.take_interrupt() {
-                interrupt_requested = true;
-            }
+            let ticked = self.inflight.next_completed(control).await;
+            self.route_ticked_agents(ticked, events);
         }
         control.clear_cancel_hook();
         output.absorb(self.take_next_approval_prompt());
         (output, DriveStop::Quiescent)
     }
 
-    /// Gracefully interrupt the session root with a newer user message, keeping
-    /// the task alive. The interruption marker and the message are recorded by
-    /// the root agent itself so interrupt semantics stay in the agent layer.
-    pub(crate) fn interrupt_root(&mut self, message: impl Into<String>) -> Result<(), String> {
-        let message = message.into();
-        let Some(root) = self.root else {
-            return self.deliver(message);
-        };
-        let Some(agent) = self.registry.get_mut(root) else {
-            return self.deliver(message);
-        };
-        agent
-            .send_command(AgentCommand::Interrupt { message })
-            .map_err(|error| error.to_string())?;
-        self.enqueue(root);
-        Ok(())
+    /// Poll background agents until they either make the root ready, run out of
+    /// work, or are woken by a newer user command.
+    pub(crate) async fn drive_background_until_root_ready(
+        &mut self,
+        control: &DriveControl,
+        events: &EventSink,
+    ) -> DriveStop {
+        loop {
+            if control.take_cancel() {
+                control.clear_cancel_hook();
+                return DriveStop::Cancelled;
+            }
+            if control.take_interrupt() {
+                control.clear_cancel_hook();
+                return DriveStop::Interrupted;
+            }
+            if control.take_wake() {
+                control.clear_cancel_hook();
+                return DriveStop::Interrupted;
+            }
+            if self.has_root_work() || self.has_unprompted_approval() {
+                control.clear_cancel_hook();
+                return DriveStop::Quiescent;
+            }
+
+            self.start_ready_agent_tasks(events);
+            if self.has_root_work() || self.has_unprompted_approval() {
+                control.clear_cancel_hook();
+                return DriveStop::Quiescent;
+            }
+
+            if self.inflight.is_empty() {
+                if self.has_ready() {
+                    continue;
+                }
+                break;
+            }
+
+            self.set_cancel_hook(control);
+
+            let ticked = self.inflight.next_completed(control).await;
+            self.route_ticked_agents(ticked, events);
+            if self.has_unprompted_approval() {
+                control.clear_cancel_hook();
+                return DriveStop::Quiescent;
+            }
+        }
+        control.clear_cancel_hook();
+        DriveStop::Quiescent
+    }
+
+    /// Drive cancellation cleanup until no queued or in-flight work remains.
+    pub(crate) async fn drive_cancelled(
+        &mut self,
+        control: &DriveControl,
+        events: &EventSink,
+    ) -> (DriveOutput, DriveStop) {
+        let output = DriveOutput::default();
+        loop {
+            let _ = control.take_cancel();
+            let _ = control.take_interrupt();
+            let _ = control.take_wake();
+            self.start_ready_agent_tasks(events);
+            if self.inflight.is_empty() {
+                if self.has_ready() {
+                    continue;
+                }
+                break;
+            }
+            self.set_cancel_hook(control);
+            let ticked = self.inflight.next_completed(control).await;
+            self.route_ticked_agents(ticked, events);
+        }
+        control.clear_cancel_hook();
+        (output, DriveStop::Cancelled)
+    }
+
+    fn set_cancel_hook(&self, control: &DriveControl) {
+        let mut abort_handles = self.registry.abort_handles();
+        abort_handles.extend(self.inflight.abort_handles());
+        control.set_cancel_hook(move || {
+            for handle in &abort_handles {
+                handle.abort();
+            }
+        });
     }
 
     pub(crate) fn active_approval(&self) -> Option<PendingApproval> {
@@ -570,9 +673,9 @@ where
         self.send_approval_decision(pending.agent, pending.approval, decision)
     }
 
-    /// Hard-cancel every live agent that currently has work. Used by
-    /// `SubmitStream::cancel` cleanup after in-flight ticks have unwound, so the
-    /// submitted turn does not leave dormant root/subagent work behind.
+    /// Hard-cancel every live agent that currently has work. Used by session
+    /// cancellation cleanup so the session does not leave dormant root/subagent
+    /// work behind.
     pub(crate) fn cancel_all(&mut self, reason: CancelReason) {
         let agents: Vec<AgentId> = self.meta.keys().copied().collect();
         for agent_id in agents {
@@ -633,8 +736,9 @@ where
         Ok(())
     }
 
-    /// Start every currently-ready agent and retain its future in `inflight`.
-    fn start_ready_agent_tasks(&mut self, inflight: &mut InflightAgentTasks, events: &EventSink) {
+    /// Start every currently-ready agent and retain its future in the session's
+    /// in-flight table.
+    fn start_ready_agent_tasks(&mut self, events: &EventSink) {
         self.flush_subagent_result_mailbox();
         let ready = self.drain_ready_agents();
         if ready.is_empty() {
@@ -646,13 +750,15 @@ where
         // disabled one, so only root iteration events reach the stream.
         for ready in ready {
             let id = ready.id;
+            let is_root = ready.is_root;
             let abort = ready.agent.abort_handle();
             let sink = if ready.is_root {
                 events.clone()
             } else {
                 EventSink::disabled()
             };
-            inflight.spawn(id, abort, tick_agent(ready, sink));
+            self.inflight
+                .spawn(id, is_root, abort, tick_agent(ready, sink));
         }
     }
 
@@ -661,12 +767,7 @@ where
     /// Root-visible replies are emitted immediately so a fast foreground agent is
     /// not hidden behind slower in-flight subagents. Approval prompts are held
     /// until quiescence by `take_next_approval_prompt`.
-    fn route_ticked_agents(
-        &mut self,
-        ticked: Vec<TickedAgent>,
-        inflight: &mut InflightAgentTasks,
-        events: &EventSink,
-    ) {
+    fn route_ticked_agents(&mut self, ticked: Vec<TickedAgent>, events: &EventSink) {
         let mut outcomes = Vec::with_capacity(ticked.len());
         for TickedAgent { id, agent, outcome } in ticked {
             if self.meta.contains_key(&id) {
@@ -681,7 +782,7 @@ where
                 emit_drive_output(events, self.route_outcome(id, outcome));
             }
         }
-        inflight.retain_live(&self.meta);
+        self.inflight.retain_live(&self.meta);
         self.flush_subagent_result_mailbox();
     }
 
@@ -1081,6 +1182,26 @@ where
         !self.ready.is_empty()
     }
 
+    fn has_root_work(&self) -> bool {
+        let Some(root) = self.root else {
+            return false;
+        };
+        self.ready.contains(&root) || self.inflight.has_root()
+    }
+
+    fn has_background_work(&self) -> bool {
+        let root = self.root;
+        self.ready.iter().any(|id| Some(*id) != root) || self.inflight.has_background()
+    }
+
+    fn has_unprompted_approval(&self) -> bool {
+        self.approval_queue.iter().any(|agent| {
+            self.parked_approvals
+                .get(agent)
+                .is_some_and(|pending| !pending.prompted)
+        })
+    }
+
     fn pop_active_approval(&mut self) -> Option<PendingApproval> {
         while let Some(agent) = self.approval_queue.pop_front() {
             let Some(pending) = self.parked_approvals.remove(&agent) else {
@@ -1102,7 +1223,7 @@ fn approval_prompt(summary: &str) -> String {
 
 fn emit_drive_output(events: &EventSink, output: DriveOutput) {
     for reply in output.replies {
-        events.emit(AgentEvent::Output { text: reply.text });
+        events.emit(SessionEvent::Output { text: reply.text });
     }
 }
 
@@ -1114,6 +1235,7 @@ mod tests {
     use claw_api::{BackendKind, ClawApiConfig};
     use claw_interface::{BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp};
     use claw_tool::ToolRegistry;
+    use futures_lite::future::block_on;
     use std::sync::{Arc, Mutex};
     use std::task::{Wake, Waker};
 
@@ -1180,6 +1302,81 @@ mod tests {
         }
     }
 
+    struct PendingTickAgent {
+        id: AgentId,
+    }
+
+    impl Agent for PendingTickAgent {
+        fn id(&self) -> AgentId {
+            self.id
+        }
+
+        fn send_command(&mut self, _command: AgentCommand) -> Result<(), AgentCommandError> {
+            Ok(())
+        }
+
+        fn deliver_child_result(&mut self, _child: AgentId, _text: String, _ok: bool) {}
+
+        fn deliver_child_input(&mut self, _child: AgentId, _text: String) {}
+
+        fn abort_handle(&self) -> AgentAbortHandle {
+            AgentAbortHandle::default()
+        }
+
+        fn tick(&mut self, _events: EventSink) -> AgentTickFuture<'_> {
+            Box::pin(PendingTick { pending: true })
+        }
+    }
+
+    struct ApprovalAgent {
+        id: AgentId,
+    }
+
+    impl Agent for ApprovalAgent {
+        fn id(&self) -> AgentId {
+            self.id
+        }
+
+        fn send_command(&mut self, _command: AgentCommand) -> Result<(), AgentCommandError> {
+            Ok(())
+        }
+
+        fn deliver_child_result(&mut self, _child: AgentId, _text: String, _ok: bool) {}
+
+        fn deliver_child_input(&mut self, _child: AgentId, _text: String) {}
+
+        fn abort_handle(&self) -> AgentAbortHandle {
+            AgentAbortHandle::default()
+        }
+
+        fn tick(&mut self, _events: EventSink) -> AgentTickFuture<'_> {
+            Box::pin(async {
+                TickOutcome::AwaitingApproval {
+                    id: ApprovalId(7),
+                    summary: "run protected tool".to_string(),
+                }
+            })
+        }
+    }
+
+    struct PendingTick {
+        pending: bool,
+    }
+
+    impl Future for PendingTick {
+        type Output = TickOutcome;
+
+        fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+            if self.pending {
+                self.pending = false;
+                context.waker().wake_by_ref();
+                Poll::Pending
+            } else {
+                Poll::Ready(TickOutcome::Idle)
+            }
+        }
+    }
+
     struct PendingOnce {
         output: Option<TickedAgent>,
         pending: bool,
@@ -1215,10 +1412,14 @@ mod tests {
     }
 
     fn ticked_agent(id: AgentId) -> TickedAgent {
+        ticked_agent_with_outcome(id, TickOutcome::Idle)
+    }
+
+    fn ticked_agent_with_outcome(id: AgentId, outcome: TickOutcome) -> TickedAgent {
         TickedAgent {
             id,
             agent: Box::new(NoopAgent { id }),
-            outcome: TickOutcome::Idle,
+            outcome,
         }
     }
 
@@ -1259,20 +1460,23 @@ mod tests {
         let mut inflight = InflightAgentTasks::default();
         inflight.spawn(
             ready_id,
+            true,
             AgentAbortHandle::default(),
             Box::pin(async move { ticked_agent(ready_id) }),
         );
         inflight.spawn(
             pending_id,
+            false,
             AgentAbortHandle::default(),
             Box::pin(PendingOnce::new(ticked_agent(pending_id))),
         );
 
         let waker = Waker::from(Arc::new(NoopWake));
         let mut context = Context::from_waker(&waker);
+        let control = DriveControl::new();
 
         let first = {
-            let mut next = inflight.next_completed();
+            let mut next = inflight.next_completed(&control);
             Pin::new(&mut next).poll(&mut context)
         };
         let first = match first {
@@ -1284,7 +1488,7 @@ mod tests {
         assert!(!inflight.is_empty());
 
         let second = {
-            let mut next = inflight.next_completed();
+            let mut next = inflight.next_completed(&control);
             Pin::new(&mut next).poll(&mut context)
         };
         let second = match second {
@@ -1327,5 +1531,87 @@ mod tests {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         assert_eq!(delivered.as_slice(), &[(child, "done".to_string(), true)]);
+    }
+
+    #[test]
+    fn root_turn_can_end_while_background_subagent_remains_inflight() {
+        let root = AgentId(20);
+        let child = AgentId(21);
+        let mut instance = test_instance();
+        insert_meta(&mut instance, root, None, 0);
+        insert_meta(&mut instance, child, Some(root), 1);
+        instance.root = Some(root);
+        instance
+            .registry
+            .insert(root, Box::new(NoopAgent { id: root }));
+        instance
+            .registry
+            .insert(child, Box::new(PendingTickAgent { id: child }));
+        instance.enqueue(root);
+        instance.enqueue(child);
+
+        let (tx, _rx) = async_channel::unbounded();
+        let events = EventSink::new(tx);
+        let control = DriveControl::new();
+        let (_output, stop) = block_on(instance.drive_root_turn(&control, &events));
+
+        assert_eq!(stop, DriveStop::Quiescent);
+        assert_eq!(instance.work(), InstanceWork::Background);
+        assert!(instance.has_background_work());
+    }
+
+    #[test]
+    fn interrupt_after_working_root_tick_stops_before_restarting_ready_root() {
+        let root = AgentId(30);
+        let mut instance = test_instance();
+        insert_meta(&mut instance, root, None, 0);
+        instance.root = Some(root);
+        instance.inflight.spawn(
+            root,
+            true,
+            AgentAbortHandle::default(),
+            Box::pin(async move { ticked_agent_with_outcome(root, TickOutcome::Working) }),
+        );
+
+        let (tx, _rx) = async_channel::unbounded();
+        let events = EventSink::new(tx);
+        let control = DriveControl::new();
+        control.request_interrupt();
+        let (_output, stop) = block_on(instance.drive_root_turn(&control, &events));
+
+        assert_eq!(stop, DriveStop::Interrupted);
+        assert!(instance.ready.contains(&root));
+        assert!(!instance.inflight.has_root());
+    }
+
+    #[test]
+    fn background_approval_surfaces_as_root_work_prompt() {
+        let root = AgentId(40);
+        let child = AgentId(41);
+        let mut instance = test_instance();
+        insert_meta(&mut instance, root, None, 0);
+        insert_meta(&mut instance, child, Some(root), 1);
+        instance.root = Some(root);
+        instance
+            .registry
+            .insert(child, Box::new(ApprovalAgent { id: child }));
+        instance.enqueue(child);
+
+        let (tx, _rx) = async_channel::unbounded();
+        let events = EventSink::new(tx);
+        let control = DriveControl::new();
+        let stop = block_on(instance.drive_background_until_root_ready(&control, &events));
+
+        assert_eq!(stop, DriveStop::Quiescent);
+        assert_eq!(instance.work(), InstanceWork::Root);
+
+        let (output, stop) = block_on(instance.drive_root_turn(&control, &events));
+
+        assert_eq!(stop, DriveStop::Quiescent);
+        assert_eq!(output.replies.len(), 1);
+        assert!(output.replies[0]
+            .text
+            .contains("Permission approval needed:\nrun protected tool"));
+        assert_eq!(instance.work(), InstanceWork::None);
     }
 }

@@ -12,9 +12,9 @@ pub(crate) use claw_utils::{define_id_allocator, define_prefixed_id};
 
 pub use agent::IterationId;
 pub use claw_utils::IdParseError;
-pub use event::AgentEvent;
+pub use event::{SessionEvent, TurnCause};
 pub use orchestrator::{
-    DriveOutput, Orchestrator, OrchestratorBuildError, RootReply, SubmitControl,
-    SubmitControlError, SubmitStream,
+    DriveOutput, OpenSessionError, Orchestrator, OrchestratorBuildError, RootReply, SessionControl,
+    SessionControlError, SessionEventStream,
 };
-pub use session::{DeliverError, SessionError, SessionId};
+pub use session::{DeliverError, SessionId};

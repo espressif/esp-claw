@@ -15,43 +15,51 @@ use std::path::Path;
 
 use anstyle::{AnsiColor, Style};
 use anyhow::{bail, Result};
-use claw_agent::{AgentEvent, AgentPersistenceConfig, AgentSystem, HostAgentSystem};
+use claw_agent::{
+    AgentPersistenceConfig, AgentSystem, SessionControl, SessionEvent, SessionEventStream,
+};
 use claw_api::{BackendKind, ClawApiConfig};
-use claw_core::SessionId;
 use futures_lite::StreamExt;
 
 const MEMORY_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/output/claw-agent-chat");
 
 struct ChatDriver {
-    system: HostAgentSystem,
-    session: SessionId,
+    control: SessionControl,
+    events: SessionEventStream,
 }
 
 impl ChatDriver {
-    fn new(system: HostAgentSystem, session: SessionId) -> Self {
-        Self { system, session }
+    fn new(control: SessionControl, events: SessionEventStream) -> Self {
+        Self { control, events }
     }
 
-    /// Drive one turn, printing each streamed [`AgentEvent`] as it arrives.
+    /// Submit one input and print events until that user-visible turn ends.
     /// Returns whether the turn produced any assistant-visible output.
     async fn send(&mut self, text: impl Into<String>) -> bool {
-        let mut stream = self.system.submit(self.session, text.into());
+        if let Err(error) = self.control.submit(text.into()).await {
+            print_event("error", &error.to_string(), EventStyle::Error);
+            return false;
+        }
         let mut saw_output = false;
-        while let Some(event) = stream.next().await {
+        while let Some(event) = self.events.next().await {
             match event {
-                AgentEvent::Reasoning { text } => print_event("think", &text, EventStyle::Thinking),
-                AgentEvent::Tools { names } => {
+                SessionEvent::Reasoning { text } => {
+                    print_event("think", &text, EventStyle::Thinking);
+                }
+                SessionEvent::Tools { names } => {
                     print_event("tools", &names.join(", "), EventStyle::Tools);
                 }
-                AgentEvent::Output { text } => {
+                SessionEvent::Output { text } => {
                     saw_output = true;
                     println!("\n{text}\n");
                 }
-                AgentEvent::Error { message } => print_event("error", &message, EventStyle::Error),
-                AgentEvent::TurnStarted
-                | AgentEvent::TurnEnded
-                | AgentEvent::IterationStarted { .. }
-                | AgentEvent::IterationEnded => {}
+                SessionEvent::Error { message } => {
+                    print_event("error", &message, EventStyle::Error)
+                }
+                SessionEvent::TurnEnded | SessionEvent::Closed => break,
+                SessionEvent::TurnStarted { .. }
+                | SessionEvent::IterationStarted { .. }
+                | SessionEvent::IterationEnded => {}
             }
         }
         saw_output
@@ -107,7 +115,8 @@ async fn run() -> Result<()> {
     let system = AgentSystem::on_disk(llm_config()?, persistence)?;
     system.start_all()?;
     let session = system.new_session();
-    let mut chat = ChatDriver::new(system, session);
+    let (control, events) = system.open_session(session)?;
+    let mut chat = ChatDriver::new(control, events);
 
     eprintln!("Memory:  {MEMORY_DIR}");
     eprintln!("Type your message and press Enter. Empty line or Ctrl-D to quit.\n");

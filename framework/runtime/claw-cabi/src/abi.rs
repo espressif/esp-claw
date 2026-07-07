@@ -33,16 +33,17 @@ pub struct ClawAgentConfig {
 
 /// Event kinds delivered by `claw_agent_session_receive`, one event per call.
 ///
-/// `OUTPUT`/`REASONING`/`TOOLS` are content events (non-terminal): `text` carries
-/// an append fragment (concatenate across events) — assistant-visible text,
-/// truncated thinking text, or comma-joined tool names respectively. `DONE` and
-/// `ERROR` are terminal: after either, the request id is consumed and further
-/// receives report `ESP_ERR_TIMEOUT`. `ERROR` carries `error_message`.
+/// `OUTPUT`/`REASONING`/`TOOLS` are content events: `text` carries an append
+/// fragment (concatenate across events) — assistant-visible text, truncated
+/// thinking text, or comma-joined tool names respectively. `DONE` marks one
+/// root-visible turn ending; the session stream stays open. `ERROR` carries
+/// `error_message`. `CLOSED` is terminal for the open session stream.
 pub const CLAW_AGENT_EVENT_KIND_OUTPUT: c_int = 0;
 pub const CLAW_AGENT_EVENT_KIND_REASONING: c_int = 1;
 pub const CLAW_AGENT_EVENT_KIND_TOOLS: c_int = 2;
 pub const CLAW_AGENT_EVENT_KIND_DONE: c_int = 3;
 pub const CLAW_AGENT_EVENT_KIND_ERROR: c_int = 4;
+pub const CLAW_AGENT_EVENT_KIND_CLOSED: c_int = 5;
 
 #[repr(C)]
 pub struct ClawAgentEvent {

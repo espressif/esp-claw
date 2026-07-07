@@ -34,15 +34,14 @@ typedef struct {
 } claw_agent_config_t;
 
 typedef enum {
-    /* Content events (non-terminal). `text` is an append fragment: concatenate
+    /* Content events. `text` is an append fragment: concatenate
      * across events to reconstruct the full string. */
     CLAW_AGENT_EVENT_KIND_OUTPUT = 0,    /* assistant-visible answer text */
     CLAW_AGENT_EVENT_KIND_REASONING = 1, /* model thinking text (truncated) */
     CLAW_AGENT_EVENT_KIND_TOOLS = 2,     /* comma-joined tool names of a round */
-    /* Terminal events: after either, the request id is consumed and further
-     * receives return ESP_ERR_TIMEOUT. */
-    CLAW_AGENT_EVENT_KIND_DONE = 3,  /* turn finished successfully */
-    CLAW_AGENT_EVENT_KIND_ERROR = 4, /* turn failed; see error_message */
+    CLAW_AGENT_EVENT_KIND_DONE = 3,   /* one root-visible turn finished */
+    CLAW_AGENT_EVENT_KIND_ERROR = 4,  /* session work failed; see error_message */
+    CLAW_AGENT_EVENT_KIND_CLOSED = 5, /* session stream closed; terminal */
 } claw_agent_event_kind_t;
 
 typedef struct {
@@ -97,61 +96,63 @@ esp_err_t claw_agent_stop(void);
 esp_err_t claw_agent_deinit(void);
 
 /*
- * Enqueue input for an explicit numeric session id.
+ * Open a numeric session's event stream.
  *
  * session_id must be non-zero and refer to a live session returned by
  * claw_agent_session_create().
  *
+ * Returns:
+ * - ESP_OK on success.
+ * - ESP_ERR_INVALID_ARG for invalid session arguments.
+ * - ESP_ERR_INVALID_STATE if the runtime is not started or the session is
+ *   already open.
+ * - ESP_ERR_NOT_FOUND if session_id is not live.
+ */
+esp_err_t claw_agent_session_open(uint32_t session_id);
+
+/*
+ * Submit input for an open numeric session id.
+ *
+ * session_id must be non-zero and already opened with claw_agent_session_open().
+ *
  * text must be a non-NULL UTF-8 string.
  *
- * out_request_id may be NULL. If NULL, the request is fire-and-forget and no
- * response is retained for claw_agent_session_receive. If non-NULL, it is
- * written only on ESP_OK and the completed response can be received once.
- *
  * Returns:
- * - ESP_OK after the worker accepts and schedules the request.
+ * - ESP_OK after the worker accepts the input.
  * - ESP_ERR_INVALID_ARG for invalid text/session arguments.
- * - ESP_ERR_INVALID_STATE if the runtime is not started or is stopping.
- * - ESP_ERR_NOT_FOUND if session_id is not live.
+ * - ESP_ERR_INVALID_STATE if the runtime is not started, is stopping, or the
+ *   session already has an active foreground submit.
+ * - ESP_ERR_NOT_FOUND if session_id is not open.
  * - ESP_FAIL for unexpected scheduling failures.
  */
-esp_err_t claw_agent_session_submit(uint32_t session_id,
-                                    const char *text,
-                                    uint32_t *out_request_id);
+esp_err_t claw_agent_session_submit(uint32_t session_id, const char *text);
 
 /*
- * Request graceful interruption of a submitted turn.
+ * Request graceful interruption of the active foreground turn.
  *
- * The request is keyed by the request id returned from
- * claw_agent_session_submit(), so a late interrupt cannot affect a newer
- * submission in the same session. The stream may not end immediately; keep
- * receiving until DONE or ERROR.
+ * The stream may not emit DONE immediately; keep receiving session events.
  *
  * Returns:
  * - ESP_OK if the request was accepted or already unnecessary.
- * - ESP_ERR_INVALID_ARG for invalid ids.
+ * - ESP_ERR_INVALID_ARG for invalid session id.
  * - ESP_ERR_INVALID_STATE if the runtime is not started.
- * - ESP_ERR_NOT_FOUND if request_id is no longer pending.
+ * - ESP_ERR_NOT_FOUND if session_id is not open.
  */
-esp_err_t claw_agent_session_interrupt(uint32_t session_id,
-                                       uint32_t request_id);
+esp_err_t claw_agent_session_interrupt(uint32_t session_id);
 
 /*
- * Request hard cancellation of a submitted turn.
+ * Request hard cancellation of foreground and background work in a session.
  *
- * The request is keyed by the request id returned from
- * claw_agent_session_submit(), so a late cancel cannot affect a newer
- * submission in the same session. The stream may not end immediately; keep
- * receiving until DONE or ERROR.
+ * The stream may not emit DONE/CLOSED immediately; keep receiving session
+ * events.
  *
  * Returns:
  * - ESP_OK if the request was accepted or already unnecessary.
- * - ESP_ERR_INVALID_ARG for invalid ids.
+ * - ESP_ERR_INVALID_ARG for invalid session id.
  * - ESP_ERR_INVALID_STATE if the runtime is not started.
- * - ESP_ERR_NOT_FOUND if request_id is no longer pending.
+ * - ESP_ERR_NOT_FOUND if session_id is not open.
  */
-esp_err_t claw_agent_session_cancel(uint32_t session_id,
-                                    uint32_t request_id);
+esp_err_t claw_agent_session_cancel(uint32_t session_id);
 
 /*
  * Create a new numeric session id.
@@ -184,46 +185,43 @@ esp_err_t claw_agent_session_list(uint32_t *out_session_ids,
                                   size_t *out_count);
 
 /*
- * Delete a live numeric session id.
+ * Close a live numeric session id.
  *
- * session_id must be non-zero. Deleting a session also drops its live agent
- * graph.
+ * session_id must be non-zero and open. Closing cancels live work, deletes the
+ * session, and eventually yields CLAW_AGENT_EVENT_KIND_CLOSED.
  *
  * Returns:
  * - ESP_OK on success.
  * - ESP_ERR_INVALID_ARG if session_id is 0.
  * - ESP_ERR_INVALID_STATE if the runtime is not started or is stopping.
- * - ESP_ERR_NOT_FOUND if session_id is not live.
+ * - ESP_ERR_NOT_FOUND if session_id is not open.
  */
-esp_err_t claw_agent_session_delete(uint32_t session_id);
+esp_err_t claw_agent_session_close(uint32_t session_id);
 
 /*
- * Receive the next event of a submitted turn, one event per call.
+ * Receive the next event from an open session, one event per call.
  *
- * A turn is consumed incrementally: call this in a loop, handling each event as
- * it arrives (content events stream out while the turn is still running), until
- * a terminal event (CLAW_AGENT_EVENT_KIND_DONE or _ERROR) is delivered.
+ * A session is consumed incrementally: call this in a loop, handling each event
+ * as it arrives. CLAW_AGENT_EVENT_KIND_DONE means one turn ended; continue
+ * receiving for future user submits or background results. _CLOSED is terminal.
  *
- * session_id must be non-zero and match the session used for submit. request_id
- * must be non-zero and must come from a successful submit call whose
- * out_request_id was non-NULL. out_event must be non-NULL. On ESP_OK, out_event
- * owns text/error_message until claw_agent_event_free.
+ * session_id must be non-zero and open. out_event must be non-NULL. On ESP_OK,
+ * out_event owns text/error_message until claw_agent_event_free.
  *
  * timeout_ms == 0 performs a non-blocking poll (returns the next buffered event
  * or ESP_ERR_TIMEOUT immediately). Otherwise it waits up to timeout_ms for the
- * next event; on timeout the turn is retained and a later call resumes it.
- * Unknown/consumed request ids also return ESP_ERR_TIMEOUT.
+ * next event; on timeout the session stream is retained and a later call
+ * resumes it.
  *
  * Returns:
  * - ESP_OK with out_event populated (inspect out_event->kind).
- * - ESP_ERR_INVALID_ARG if session_id/request_id is 0, session_id does not
- *   match request_id, or out_event is NULL.
+ * - ESP_ERR_INVALID_ARG if session_id is 0 or out_event is NULL.
  * - ESP_ERR_INVALID_STATE if the runtime is not initialized.
+ * - ESP_ERR_NOT_FOUND if session_id is not open.
  * - ESP_ERR_TIMEOUT if no event is available before timeout_ms.
  * - ESP_FAIL for unexpected event allocation failures.
  */
 esp_err_t claw_agent_session_receive(uint32_t session_id,
-                                     uint32_t request_id,
                                      claw_agent_event_t *out_event,
                                      uint32_t timeout_ms);
 

@@ -1,6 +1,6 @@
 //! `claw_agent` wires tools and sessions to the core orchestrator.
 //!
-//! `AgentSystem` owns sessions and exposes direct session submission. Transport
+//! `AgentSystem` owns sessions and exposes session connections. Transport
 //! routing, channel inbound/outbound conversion, and reply destinations live in
 //! adapter crates above this layer.
 
@@ -9,14 +9,14 @@ use std::sync::Arc;
 
 use claw_api::ClawApiConfig;
 pub use claw_core::{
-    AgentEvent, IterationId, SessionId, SubmitControl, SubmitControlError,
-    SubmitStream as AgentEventStream,
+    IterationId, OpenSessionError, SessionControl, SessionControlError, SessionEvent,
+    SessionEventStream, SessionId, TurnCause,
 };
-use claw_core::{DeliverError, Orchestrator, OrchestratorBuildError, SessionError, SubmitStream};
+use claw_core::{Orchestrator, OrchestratorBuildError};
 use claw_interface::{ClawExecutor, ClawFs, ClawHttp, ClawThread, ClawTimer, FsError};
 #[cfg(feature = "host-backends")]
 use claw_interface::{DiskFs, RealHttp, StdThread, TokioExecutor, TokioTimer};
-use claw_tool::{SharedContext, ToolRegistry, ToolRegistryError};
+use claw_tool::{ToolRegistry, ToolRegistryError};
 
 #[cfg(feature = "host-backends")]
 pub type HostAgentSystem = AgentSystem<DiskFs, RealHttp, TokioTimer>;
@@ -66,12 +66,9 @@ pub enum AgentError {
     /// The tool registry failed.
     #[error(transparent)]
     Tool(#[from] ToolRegistryError),
-    /// Core delivery failed.
+    /// Opening a session event stream failed.
     #[error(transparent)]
-    Deliver(#[from] DeliverError),
-    /// Session operation failed.
-    #[error(transparent)]
-    Session(#[from] SessionError),
+    OpenSession(#[from] OpenSessionError),
     /// The scratch storage root could not be cleared before startup.
     #[error("failed to clear agent storage at {path}: {source}")]
     StorageClear {
@@ -183,28 +180,21 @@ where
         Ok(())
     }
 
-    /// Submit one text input to an explicitly chosen session and stream its turn.
+    /// Open a live session's command and event halves.
     ///
-    /// Returns immediately with a [`SubmitStream`]: an async stream of
-    /// [`AgentEvent`]s. The turn runs as the caller drains the stream, which ends
-    /// when the turn finishes. A submit to an unknown session, or to a session
-    /// that already has an active submission, surfaces as a single
-    /// [`AgentEvent::Error`] before the stream ends, so this method is infallible
-    /// at the call boundary.
-    pub fn submit(&self, session: SessionId, text: impl Into<String>) -> SubmitStream {
-        self.orchestrator.submit(session, text.into(), None)
-    }
-
-    /// Like [`submit`](Self::submit) but installs a type-erased per-submission
-    /// `context` (via [`claw_tool::current_context`]) for the duration of this
-    /// turn's drive, so tool handlers can read caller-supplied request metadata.
-    pub fn submit_with_context(
+    /// The returned [`SessionControl`] accepts user inputs and session control
+    /// commands; the returned [`SessionEventStream`] is the only user-visible
+    /// event outlet for the session.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OpenSessionError`] when the session is missing, already open, or
+    /// the orchestrator worker is stopped.
+    pub fn open_session(
         &self,
         session: SessionId,
-        text: impl Into<String>,
-        context: Option<SharedContext>,
-    ) -> SubmitStream {
-        self.orchestrator.submit(session, text.into(), context)
+    ) -> AgentResult<(SessionControl, SessionEventStream)> {
+        Ok(self.orchestrator.open_session(session)?)
     }
 
     /// Create a fresh isolated conversation session.
@@ -215,16 +205,6 @@ where
     /// Return the live conversation sessions.
     pub fn list_sessions(&self) -> Vec<SessionId> {
         self.orchestrator.session_list()
-    }
-
-    /// Delete a session.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SessionError::NotFound`] when `session` is not live.
-    pub fn delete_session(&self, session: SessionId) -> AgentResult<()> {
-        self.orchestrator.session_delete(session)?;
-        Ok(())
     }
 }
 
@@ -364,38 +344,41 @@ mod tests {
         assert_eq!(sessions[0], session);
     }
 
-    fn drain(stream: SubmitStream) -> Vec<AgentEvent> {
-        block_on(stream.collect())
-    }
-
-    fn drain_until_turn_ended(mut stream: SubmitStream) -> Vec<AgentEvent> {
+    fn drain_until_turn_ended(events: &mut SessionEventStream) -> Vec<SessionEvent> {
         block_on(async move {
-            let mut events = Vec::new();
-            while let Some(event) = stream.next().await {
-                let ended = event == AgentEvent::TurnEnded;
-                events.push(event);
+            let mut collected = Vec::new();
+            while let Some(event) = events.next().await {
+                let ended = event == SessionEvent::TurnEnded;
+                collected.push(event);
                 if ended {
                     break;
                 }
             }
-            events
+            collected
         })
     }
 
     #[test]
-    fn submit_streams_root_reply_as_output() {
+    fn session_streams_root_reply_as_output() {
         let _script = SharedScriptHttp::serialize();
         let system = test_system(vec![assistant_text("hello there")]);
         let session = system.new_session();
+        let (control, mut events) = system.open_session(session).unwrap();
 
-        let events = drain(system.submit(session, "say hi".to_string()));
+        block_on(control.submit("say hi")).unwrap();
+        let events = drain_until_turn_ended(&mut events);
 
-        assert_eq!(events.first(), Some(&AgentEvent::TurnStarted));
-        assert_eq!(events.last(), Some(&AgentEvent::TurnEnded));
+        assert_eq!(
+            events.first(),
+            Some(&SessionEvent::TurnStarted {
+                cause: TurnCause::UserSubmit
+            })
+        );
+        assert_eq!(events.last(), Some(&SessionEvent::TurnEnded));
         let outputs: Vec<&str> = events
             .iter()
             .filter_map(|event| match event {
-                AgentEvent::Output { text } => Some(text.as_str()),
+                SessionEvent::Output { text } => Some(text.as_str()),
                 _ => None,
             })
             .collect();
@@ -403,99 +386,101 @@ mod tests {
     }
 
     #[test]
-    fn submit_unknown_session_streams_error() {
+    fn open_unknown_session_returns_error() {
         let _script = SharedScriptHttp::serialize();
         let system = test_system(vec![]);
-        let events = drain(system.submit(SessionId(9), "x".to_string()));
         assert!(matches!(
-            events.as_slice(),
-            [AgentEvent::Error { message }] if message.contains("session-9")
+            system.open_session(SessionId(9)),
+            Err(AgentError::OpenSession(OpenSessionError::SessionNotFound(
+                SessionId(9)
+            )))
         ));
     }
 
     #[test]
-    fn concurrent_submit_to_same_session_streams_error() {
-        let _script = SharedScriptHttp::serialize();
-        let system = slow_test_system(vec![assistant_text("first")]);
-        let session = system.new_session();
-
-        let first = system.submit(session, "first".to_string());
-        let second_events = drain(system.submit(session, "second".to_string()));
-        let first_events = drain(first);
-
-        assert!(matches!(
-            second_events.as_slice(),
-            [AgentEvent::Error { message }] if message.contains("active submission")
-        ));
-        assert!(first_events
-            .iter()
-            .any(|event| matches!(event, AgentEvent::Output { text } if text == "first")));
-    }
-
-    #[test]
-    fn submit_stream_control_methods_are_idempotent() {
-        let _script = SharedScriptHttp::serialize();
-        let system = slow_test_system(vec![assistant_text("cancelled")]);
-        let session = system.new_session();
-        let stream = system.submit(session, "cancel me".to_string());
-
-        assert!(stream.interrupt().is_ok());
-        assert!(stream.interrupt().is_ok());
-        assert!(stream.cancel().is_ok());
-        assert!(stream.cancel().is_ok());
-
-        let events = drain(stream);
-        assert_eq!(events.first(), Some(&AgentEvent::TurnStarted));
-        assert_eq!(events.last(), Some(&AgentEvent::TurnEnded));
-    }
-
-    #[test]
-    fn delete_session_cancels_active_stream() {
-        let _script = SharedScriptHttp::serialize();
-        let system = slow_test_system(vec![assistant_text("should not surface")]);
-        let session = system.new_session();
-        let stream = system.submit(session, "delete me".to_string());
-
-        system.delete_session(session).unwrap();
-        let after_delete = drain(system.submit(session, "after delete".to_string()));
-        let events = drain(stream);
-
-        assert!(matches!(
-            after_delete.as_slice(),
-            [AgentEvent::Error { message }] if message.contains("session-")
-        ));
-        assert_eq!(events.first(), Some(&AgentEvent::TurnStarted));
-        assert_eq!(events.last(), Some(&AgentEvent::TurnEnded));
-        assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event, AgentEvent::Output { .. })),
-            "deleted stream should be cancelled without output: {events:?}"
-        );
-    }
-
-    #[test]
-    fn stale_stream_control_does_not_cancel_new_submission() {
+    fn second_submit_returns_busy_until_current_turn_ends() {
         let _script = SharedScriptHttp::serialize();
         let system = slow_test_system(vec![assistant_text("first"), assistant_text("second")]);
         let session = system.new_session();
+        let (control, mut events) = system.open_session(session).unwrap();
 
-        let first = system.submit(session, "first".to_string());
-        let stale_control = first.control();
-        let first_events = drain_until_turn_ended(first);
+        block_on(async {
+            control.submit("first").await.unwrap();
+            assert_eq!(
+                control.submit("second").await,
+                Err(SessionControlError::Busy(session))
+            );
+        });
+        let first_events = drain_until_turn_ended(&mut events);
+
         assert!(first_events
             .iter()
-            .any(|event| matches!(event, AgentEvent::Output { text } if text == "first")));
+            .any(|event| matches!(event, SessionEvent::Output { text } if text == "first")));
+        block_on(control.submit("second")).unwrap();
+        let second_events = drain_until_turn_ended(&mut events);
+        assert!(second_events
+            .iter()
+            .any(|event| matches!(event, SessionEvent::Output { text } if text == "second")));
+    }
 
-        let second = system.submit(session, "second".to_string());
-        assert!(stale_control.cancel().is_ok());
-        let second_events = drain(second);
+    #[test]
+    fn session_control_methods_are_idempotent() {
+        let _script = SharedScriptHttp::serialize();
+        let system = slow_test_system(vec![assistant_text("cancelled")]);
+        let session = system.new_session();
+        let (control, mut events) = system.open_session(session).unwrap();
 
+        block_on(async {
+            control.submit("cancel me").await.unwrap();
+            control.interrupt().await.unwrap();
+            control.interrupt().await.unwrap();
+            control.cancel().await.unwrap();
+            control.cancel().await.unwrap();
+        });
+
+        let events = drain_until_turn_ended(&mut events);
+        assert!(matches!(
+            events.first(),
+            Some(SessionEvent::TurnStarted {
+                cause: TurnCause::UserSubmit
+            })
+        ));
+        assert_eq!(events.last(), Some(&SessionEvent::TurnEnded));
+    }
+
+    #[test]
+    fn close_session_cancels_active_work_and_closes_events() {
+        let _script = SharedScriptHttp::serialize();
+        let system = slow_test_system(vec![assistant_text("should not surface")]);
+        let session = system.new_session();
+        let (control, mut events) = system.open_session(session).unwrap();
+
+        block_on(async {
+            control.submit("delete me").await.unwrap();
+            control.close_session().await.unwrap();
+        });
+        let events = block_on(async {
+            let mut collected = Vec::new();
+            while let Some(event) = events.next().await {
+                let closed = event == SessionEvent::Closed;
+                collected.push(event);
+                if closed {
+                    break;
+                }
+            }
+            collected
+        });
+
+        assert_eq!(events.last(), Some(&SessionEvent::Closed));
         assert!(
-            second_events
+            !events
                 .iter()
-                .any(|event| matches!(event, AgentEvent::Output { text } if text == "second")),
-            "second events: {second_events:?}"
+                .any(|event| matches!(event, SessionEvent::Output { .. })),
+            "deleted stream should be cancelled without output: {events:?}"
+        );
+        assert!(
+            block_on(control.submit("after close")).is_err(),
+            "closed session should reject new submits"
         );
     }
 

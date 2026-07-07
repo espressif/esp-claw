@@ -3,8 +3,6 @@
 use std::collections::HashSet;
 use std::sync::{Mutex, MutexGuard};
 
-use thiserror::Error;
-
 crate::define_prefixed_id!(SessionId, "session-", "session");
 
 crate::define_id_allocator!(
@@ -16,12 +14,6 @@ crate::define_id_allocator!(
 // ---------------------------------------------------------------------------
 // Session registry
 // ---------------------------------------------------------------------------
-
-#[derive(Clone, Debug, PartialEq, Eq, Error)]
-pub enum SessionError {
-    #[error("session not found: {0}")]
-    NotFound(SessionId),
-}
 
 /// The store's mutable state, guarded by a single lock.
 ///
@@ -73,12 +65,9 @@ impl SessionStore {
         self.lock_registry().sessions.iter().copied().collect()
     }
 
-    pub fn delete(&self, session_id: SessionId) -> Result<(), SessionError> {
+    pub fn delete(&self, session_id: SessionId) -> bool {
         let mut registry = self.lock_registry();
-        if !registry.sessions.remove(&session_id) {
-            return Err(SessionError::NotFound(session_id));
-        }
-        Ok(())
+        registry.sessions.remove(&session_id)
     }
 
     pub fn contains(&self, session_id: SessionId) -> bool {
@@ -87,16 +76,12 @@ impl SessionStore {
 }
 
 // ---------------------------------------------------------------------------
-#[derive(Debug, Error, PartialEq, Eq)]
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum DeliverError {
     #[error("session not found: {0}")]
     SessionNotFound(SessionId),
-    #[error("session already has an active submission: {0}")]
-    ConcurrentSubmit(SessionId),
     #[error("agent delivery failed: {0}")]
     Agent(String),
-    #[error(transparent)]
-    Session(#[from] SessionError),
 }
 
 #[cfg(test)]

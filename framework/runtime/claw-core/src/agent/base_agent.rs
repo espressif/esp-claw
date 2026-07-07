@@ -97,35 +97,19 @@ crate::define_id_allocator!(
 // Public command / outcome vocabulary
 // ===========================================================================
 
-/// The synthetic user turn recorded before an interrupting message.
-///
-/// It tells the next model iteration that the previous autonomous path was cut
-/// short by newer input while keeping the task alive.
-const INTERRUPT_MARKER: &str =
-    "[conversation interrupted: new input arrived; abandoning the previous train of thought]";
-
 /// Inbound: a control input handed to the agent. This is the agent's entire
 /// external surface — the outside drives the agent only through these.
 ///
 /// Notably there is **no `Preempt` command**: the cooperative abort path is the
 /// separate [`AgentAbortHandle`] and carries no message payload. New information
-/// arrives as [`AppendMessage`](Self::AppendMessage) only at an idle boundary, or
-/// as [`Interrupt`](Self::Interrupt) when it supersedes active work; hard task
-/// termination is [`Cancel`](Self::Cancel).
+/// arrives as [`AppendMessage`](Self::AppendMessage) only at an idle boundary;
+/// hard task termination is [`Cancel`](Self::Cancel).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentCommand {
     /// Start a fresh task with a user message. This is valid only when the agent
     /// is idle; the orchestrator is responsible for deferring append delivery
     /// until that boundary.
     AppendMessage(String),
-    /// Gracefully interrupt the current task with a newer user message. The
-    /// agent records an interruption marker, appends `message`, and re-decides on
-    /// the next iteration. Unlike [`Cancel`](Self::Cancel), this does not abort
-    /// the in-flight LLM/tool round and does not end the task.
-    Interrupt {
-        /// The newer user message that interrupted the current train of thought.
-        message: String,
-    },
     /// Abandon the current task. (Orchestrator-initiated hard stop — distinct
     /// from the agent ending itself via `end_conversation`.) Being disruptive,
     /// it discards the still-open turn instead of writing a marker, so cancelled
@@ -194,8 +178,7 @@ impl AgentLifecycle {
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum AgentCommandError {
     /// [`AppendMessage`](AgentCommand::AppendMessage) is only accepted at an idle
-    /// boundary. Active-task input must use [`Interrupt`](AgentCommand::Interrupt)
-    /// or be deferred by the driver.
+    /// boundary. Active-task input must be deferred by the driver.
     #[error("cannot append: the agent is {state:?}, not idle")]
     CannotAppend {
         /// The state the agent was in when append was rejected.
@@ -936,18 +919,6 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
             Inbound::Command(AgentCommand::AppendMessage(text)) | Inbound::TaskInput(text) => {
                 self.append_task_input(&text);
             }
-            Inbound::Command(AgentCommand::Interrupt { message }) => {
-                let starts_task = self.lifecycle == AgentLifecycle::Idle;
-                if starts_task {
-                    // A graceful interrupt can arrive after the prior drive
-                    // quiesced by race; in that case it starts a normal fresh
-                    // task, but still records why this message was treated as an
-                    // interrupt by the caller.
-                    self.start_task();
-                }
-                self.transcript.append_user(INTERRUPT_MARKER, starts_task);
-                self.transcript.append_user(&message, false);
-            }
             Inbound::Command(AgentCommand::Cancel { reason }) => {
                 // Cancel is *disruptive* (unlike append/interrupt/approve, which
                 // are normal flow): discard the open turn so partial work leaves
@@ -1249,18 +1220,13 @@ fn classify(
     use AgentLifecycle as State;
     match (state, command) {
         // External append starts a fresh task only at an idle boundary. Active
-        // task input must arrive as Interrupt, or as crate-internal TaskInput
-        // through the agent graph rather than as an AgentCommand.
+        // task input is queued by the orchestrator until that boundary.
         (State::Idle, Command::AppendMessage(_)) => Ok(State::Running),
         (state @ (State::Running | State::AwaitingApproval(_)), Command::AppendMessage(_)) => {
             Err(AgentCommandError::CannotAppend {
                 state: state.public(),
             })
         }
-        (State::Idle, Command::Interrupt { .. }) => Ok(State::Running),
-        (State::Running, Command::Interrupt { .. }) => Ok(State::Running),
-        (State::AwaitingApproval(id), Command::Interrupt { .. }) => Ok(State::AwaitingApproval(id)),
-
         // Cancel ends an active task; there is nothing to cancel when idle.
         (State::Idle, Command::Cancel { .. }) => Err(AgentCommandError::NothingToCancel),
         (State::Running | State::AwaitingApproval(_), Command::Cancel { .. }) => Ok(State::Idle),
@@ -1308,27 +1274,6 @@ mod tests {
             Err(AgentCommandError::CannotAppend {
                 state: AgentState::AwaitingApproval,
             })
-        );
-    }
-
-    #[test]
-    fn interrupt_is_a_content_command_in_every_state() {
-        let command = AgentCommand::Interrupt {
-            message: "newer input".to_string(),
-        };
-        let approval = ApprovalId(7);
-
-        assert_eq!(
-            classify(AgentLifecycle::Idle, &command),
-            Ok(AgentLifecycle::Running)
-        );
-        assert_eq!(
-            classify(AgentLifecycle::Running, &command),
-            Ok(AgentLifecycle::Running)
-        );
-        assert_eq!(
-            classify(AgentLifecycle::AwaitingApproval(approval), &command),
-            Ok(AgentLifecycle::AwaitingApproval(approval))
         );
     }
 
