@@ -18,14 +18,26 @@ crate-type = ["rlib"]
 # Mirrors CONFIG_CLAW_CORE_STAGE_VERBOSITY_VERBOSE (default off == "Simple").
 stage_verbose = []
 
+# Compile-time byte cap on each `AgentEvent::Reasoning` payload. EXACTLY ONE may
+# be enabled (event.rs emits a compile_error! for zero or multiple). Default is
+# `reasoning_short`; to change the tier, disable defaults (`default-features =
+# false`) and pick one.
+default = ["reasoning_short"]
+reasoning_short = []  # 2000 bytes
+reasoning_medium = [] # 8000 bytes
+reasoning_long = []   # 32000 bytes
+
 [dependencies]
 claw-interface = { path = "../claw-interface" }
 claw-utils = { path = "../claw-utils" }
 claw-api = { path = "../claw-api" }
-# Vetted async MPMC channel (smol family, same lineage as `edge-executor`). Used
-# for the per-submission reply oneshot as a `bounded(1)` channel, replacing the
-# hand-rolled `claw_utils::async_oneshot`.
+# Vetted async MPMC channel (smol family, same lineage as `edge-executor`). Each
+# `submit` gets one unbounded channel that carries its `AgentEvent` stream; the
+# paired `Receiver` is the `SubmitStream` the caller drains.
 async-channel = "2"
+# The `Stream` trait `async_channel::Receiver` implements, so `SubmitStream` can
+# poll it. `default-features = false` keeps this `no_std`-friendly for the device.
+futures-core = { version = "0.3", default-features = false }
 claw-memory = { path = "../claw-memory" }
 claw-skill = { path = "../claw-skill" }
 claw-context = { path = "../claw-context" }

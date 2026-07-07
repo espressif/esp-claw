@@ -21,7 +21,22 @@ use claw_tool::{
 
 use claw_utils::TruncatedText;
 
+use crate::event::{AgentEvent, EventSink};
+
 crate::define_prefixed_id!(IterationId, "iteration-", "iteration");
+
+/// Emits [`AgentEvent::IterationEnded`] when dropped, so every `run_one_iteration`
+/// exit path (plain answer, tool round, preempt, or error) closes the bracket its
+/// [`AgentEvent::IterationStarted`] opened.
+struct IterationBracket<'a> {
+    events: &'a EventSink,
+}
+
+impl Drop for IterationBracket<'_> {
+    fn drop(&mut self) {
+        self.events.emit(AgentEvent::IterationEnded);
+    }
+}
 
 /// Errors from one [`IterationLoop::run`] step.
 #[derive(Clone, Debug, thiserror::Error)]
@@ -195,6 +210,10 @@ pub struct IterationLoop<'a, H: ClawHttp, Timer: ClawTimer> {
     pub interruption: &'a dyn InterruptionControl,
     /// Retry policy applied to this iteration's LLM call (see [`RetryPolicy`]).
     pub retry: RetryPolicy,
+    /// Where this iteration's [`AgentEvent`]s are pushed. Disabled for subagents
+    /// (and the internal approval resolver), so only the root's iteration events
+    /// reach a submission's stream.
+    pub events: &'a EventSink,
 }
 
 impl<H: ClawHttp, Timer: ClawTimer> IterationLoop<'_, H, Timer> {
@@ -212,6 +231,13 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
     // One span per iteration; tool-call spans nest beneath it.
     let _span =
         tracing::info_span!("iteration_loop", conversation.iteration = %iteration_id).entered();
+    // Open the iteration event bracket; the guard closes it (IterationEnded) on
+    // every return path below.
+    let events = loop_.events;
+    events.emit(AgentEvent::IterationStarted {
+        iteration: iteration_id,
+    });
+    let _bracket = IterationBracket { events };
     let mut appended = AppendedMessages::empty();
 
     if let Some(outcome) = check_preempt_at_checkpoint(
@@ -244,6 +270,13 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
             return Err(IterationLoopError::Chat(llm_err));
         }
     };
+
+    // Reasoning is emitted first within the iteration (before any tools), matching
+    // the provider ordering `reasoning -> msg? -> tools?`. A no-op when empty or
+    // the sink is disabled.
+    if let Some(reasoning) = llm_response.reasoning_content.as_deref() {
+        events.emit_reasoning(reasoning);
+    }
 
     if llm_response.tool_calls.is_empty() {
         if let Some(outcome) = check_preempt_at_checkpoint(
@@ -289,6 +322,18 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
     }
 
     log_tool_call_names(iteration_id, &llm_response);
+
+    // Tool names for this iteration. Only build the payload when the sink will
+    // keep it (disabled subagent sinks would drop the clones).
+    if events.is_enabled() {
+        events.emit(AgentEvent::Tools {
+            names: llm_response
+                .tool_calls
+                .iter()
+                .map(|tc| tc.display_name().to_string())
+                .collect(),
+        });
+    }
 
     if let Err(err) = append_assistant_tool_calls(&mut appended.0, &llm_response) {
         return Err(err);
@@ -514,7 +559,7 @@ mod tests {
     use serde_json::json;
 
     fn tool_set(tool: impl SyncToolHandler + 'static) -> ToolSet {
-        let registry = ToolRegistry::new();
+        let registry = Arc::new(ToolRegistry::new());
         let mut tools = registry.tool_set();
         tools.add_tool(Tool::from_sync(tool)).expect("tool set");
         tools
@@ -1157,7 +1202,7 @@ mod behavior_tests {
 
     /// Wrap a single local tool in a [`ToolSet`] for tests.
     fn tool_set(tool: impl SyncToolHandler + 'static) -> ToolSet {
-        let registry = ToolRegistry::new();
+        let registry = Arc::new(ToolRegistry::new());
         let mut tools = registry.tool_set();
         tools.add_tool(Tool::from_sync(tool)).expect("tool set");
         tools
@@ -1195,11 +1240,13 @@ mod behavior_tests {
             tools: &tools,
             gate: &gate,
         };
+        let events = crate::event::EventSink::disabled();
         block_on(
             IterationLoop {
                 llm,
                 interruption: control,
                 retry: RetryPolicy::default(),
+                events: &events,
             }
             .run(step),
         )

@@ -7,9 +7,10 @@
 use std::sync::Arc;
 
 use claw_api::ClawApiConfig;
+pub use claw_core::{AgentEvent, IterationId, SubmitStream as AgentEventStream};
 use claw_core::{
-    DeliverError, DeliveryKind, DriveOutput, Orchestrator, OrchestratorBuildError, SessionError,
-    SessionId,
+    DeliverError, DeliveryKind, Orchestrator, OrchestratorBuildError, SessionError, SessionId,
+    SubmitStream,
 };
 use claw_interface::{ClawFs, ClawHttp, ClawTimer, FsError};
 #[cfg(feature = "host-backends")]
@@ -161,25 +162,20 @@ where
         Ok(())
     }
 
-    /// Drive one text input through an explicitly chosen session.
+    /// Submit one text input to an explicitly chosen session and stream its turn.
     ///
-    /// Awaiting this future waits for the orchestrator to run the submitted turn
-    /// until it produces [`DriveOutput`] or reaches a parked/settled state. This
-    /// is not an enqueue-only submit API. Adapters that need master-style
-    /// submit/receive semantics should enqueue this future in their own
-    /// background worker, acknowledge submit after scheduling, and expose a
-    /// separate receive path for the eventual [`DriveOutput`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AgentError`] when the session or delivery fails.
-    pub async fn submit(
+    /// Returns immediately with a [`SubmitStream`]: an async stream of
+    /// [`AgentEvent`]s. The turn runs as the caller drains the stream, which ends
+    /// when the turn finishes. A submit to an unknown session or a superseded
+    /// submission surfaces as a single [`AgentEvent::Error`] before the stream
+    /// ends, so this method is infallible at the call boundary.
+    pub fn submit(
         &self,
         session: SessionId,
         text: impl Into<String>,
         kind: DeliveryKind,
-    ) -> AgentResult<DriveOutput> {
-        Ok(self.orchestrator.submit(session, text.into(), kind).await?)
+    ) -> SubmitStream {
+        self.orchestrator.submit(session, text.into(), kind)
     }
 
     /// Create a fresh isolated conversation session.
@@ -249,6 +245,7 @@ fn clear_storage_tree<F: ClawFs>(fs: &F, path: &str) -> AgentResult<()> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use futures_lite::future::block_on;
+    use futures_lite::StreamExt;
 
     use claw_api::{BackendKind, ClawApiConfig};
     use claw_interface::{BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp};
@@ -285,27 +282,37 @@ mod tests {
         assert_eq!(sessions[0], session);
     }
 
-    #[test]
-    fn submit_returns_root_replies() {
-        let system = test_system(vec![assistant_text("hello there")]);
-        let session = system.new_session();
-
-        let output =
-            block_on(system.submit(session, "say hi".to_string(), DeliveryKind::Interrupt))
-                .unwrap();
-
-        assert_eq!(output.replies.len(), 1);
-        assert_eq!(output.replies[0].text, "hello there");
+    fn drain(stream: SubmitStream) -> Vec<AgentEvent> {
+        block_on(stream.collect())
     }
 
     #[test]
-    fn submit_requires_existing_session() {
+    fn submit_streams_root_reply_as_output() {
+        let system = test_system(vec![assistant_text("hello there")]);
+        let session = system.new_session();
+
+        let events = drain(system.submit(session, "say hi".to_string(), DeliveryKind::Interrupt));
+
+        assert_eq!(events.first(), Some(&AgentEvent::TurnStarted));
+        assert_eq!(events.last(), Some(&AgentEvent::TurnEnded));
+        let outputs: Vec<&str> = events
+            .iter()
+            .filter_map(|event| match event {
+                AgentEvent::Output { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(outputs, vec!["hello there"]);
+    }
+
+    #[test]
+    fn submit_unknown_session_streams_error() {
         let system = test_system(vec![]);
-        let error = block_on(system.submit(SessionId(9), "x".to_string(), DeliveryKind::Interrupt))
-            .unwrap_err();
-        assert!(
-            matches!(error, AgentError::Deliver(DeliverError::SessionNotFound(id)) if id == SessionId(9))
-        );
+        let events = drain(system.submit(SessionId(9), "x".to_string(), DeliveryKind::Interrupt));
+        assert!(matches!(
+            events.as_slice(),
+            [AgentEvent::Error { message }] if message.contains("session-9")
+        ));
     }
 
     fn test_system(bodies: Vec<String>) -> TestSystem {

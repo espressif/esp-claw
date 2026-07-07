@@ -6,17 +6,23 @@ mod approval;
 mod control;
 mod instance;
 
+use core::cell::RefCell;
+use core::future::Future;
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use claw_api::ClawApiConfig;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
-use async_channel::{bounded, Sender};
+use futures_core::Stream;
 use claw_tool::ToolRegistry;
 
 use crate::agent::{
     AgentIdAllocator, ApprovalDecision, CancelReason, FsAgentFactory, FsAgentFactoryError,
 };
+use crate::event::{AgentEvent, EventSink};
 use crate::session::{DeliverError, DeliveryKind, SessionError, SessionId, SessionStore};
 
 pub use self::instance::{DriveOutput, RootReply};
@@ -25,13 +31,19 @@ use self::approval::{ApprovalResolverError, PermissionReplyResolution};
 use self::control::{DriveStop, SessionControl};
 use self::instance::{OrchestratorInstance, PendingApproval};
 
-// A `bounded(1)` channel used as a oneshot: exactly one reply per submission.
-type SubmitReply = Sender<Result<DriveOutput, DeliverError>>;
+/// A session's in-flight drive, shared by every live [`SubmitStream`] for that
+/// session so any of them advances it (the "who polls first drives" rule). The
+/// future drains the whole submission queue; it is `None` once complete. Single
+/// threaded (`Rc`/`RefCell`): the orchestrator is already `!Send` (its instances
+/// hold `Box<dyn Agent>`), so a live drive is polled from one executor thread.
+type SharedDrive = Rc<RefCell<Option<Pin<Box<dyn Future<Output = ()>>>>>>;
 
 struct QueuedSubmission {
     text: String,
     kind: DeliveryKind,
-    reply: SubmitReply,
+    /// This submission's event channel, wrapped as a sink. Dropping it closes the
+    /// channel, which ends the paired [`SubmitStream`].
+    events: EventSink,
 }
 
 #[derive(Default)]
@@ -40,6 +52,56 @@ struct SessionDrive {
     control: Option<SessionControl>,
     carried: Option<QueuedSubmission>,
     pending: VecDeque<QueuedSubmission>,
+    /// The active drive future while `active`, shared with every live
+    /// [`SubmitStream`] for this session. `None` between drives.
+    shared: Option<SharedDrive>,
+}
+
+/// The async stream one [`Orchestrator::submit`] returns.
+///
+/// One `submit` == one turn == one session, so the stream *is* that scope. The
+/// caller drains it to completion; it ends when this submission's turn finishes
+/// (its event channel closes). Every live stream for a session cooperatively
+/// advances the session's shared drive future, so a caller that only polls its
+/// own stream still makes the whole session progress.
+pub struct SubmitStream {
+    /// This submission's event channel. `async_channel::Receiver` is `!Unpin`
+    /// (it holds a pinned listener), so it is box-pinned once here.
+    events: Pin<Box<async_channel::Receiver<AgentEvent>>>,
+    /// The session's shared drive future (see [`SharedDrive`]).
+    drive: SharedDrive,
+}
+
+impl Stream for SubmitStream {
+    type Item = AgentEvent;
+
+    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<AgentEvent>> {
+        let this = self.get_mut();
+        // Advance the session's shared drive so events get produced. `try_borrow_mut`
+        // never contends here (single-threaded, no reentrancy: the drive future
+        // does not poll streams), but it keeps the impossible case panic-free.
+        if let Ok(mut slot) = this.drive.try_borrow_mut() {
+            if let Some(future) = slot.as_mut() {
+                if future.as_mut().poll(context).is_ready() {
+                    *slot = None;
+                }
+            }
+        }
+        // Then yield one buffered event. `poll_next` registers our waker on the
+        // receiver, so an event pushed by another stream's drive poll wakes us.
+        this.events.as_mut().poll_next(context)
+    }
+}
+
+impl SubmitStream {
+    /// A stream that yields the already-buffered contents of `events` then ends.
+    /// Used for a submit that fails its precondition (no drive to share).
+    fn settled(events: async_channel::Receiver<AgentEvent>) -> Self {
+        Self {
+            events: Box::pin(events),
+            drive: Rc::new(RefCell::new(None)),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -179,39 +241,53 @@ where
         })
     }
 
-    /// Submit one message to a live session.
+    /// Submit one message to a live session and stream its turn as
+    /// [`AgentEvent`]s.
     ///
-    /// This is the only public delivery entry point. It owns the per-session
-    /// sequencing for [`DeliveryKind::Append`], [`DeliveryKind::Interrupt`], and
-    /// [`DeliveryKind::Cancel`]: append waits for the active drive to settle,
-    /// interrupt asks the active drive to stop after its current batch, and cancel
-    /// aborts the active batch through the session's cancel hook.
-    pub async fn submit(
-        &self,
+    /// This is the only public delivery entry point. It returns immediately with a
+    /// [`SubmitStream`]; the turn only runs as the caller drains it. The stream
+    /// ends when this submission's turn finishes.
+    ///
+    /// It owns the per-session sequencing for [`DeliveryKind::Append`],
+    /// [`DeliveryKind::Interrupt`], and [`DeliveryKind::Cancel`]: append waits for
+    /// the active drive to settle, interrupt asks the active drive to stop after
+    /// its current batch, and cancel aborts the active batch through the session's
+    /// cancel hook. A superseded submission's stream ends with a single
+    /// [`AgentEvent::Error`]. A submit to an unknown session yields one
+    /// [`AgentEvent::Error`] and ends.
+    pub fn submit(
+        self: &Arc<Self>,
         session_id: SessionId,
         text: String,
         kind: DeliveryKind,
-    ) -> Result<DriveOutput, DeliverError> {
+    ) -> SubmitStream {
+        let (sender, receiver) = async_channel::unbounded();
         if !self.sessions.contains(session_id) {
-            return Err(DeliverError::SessionNotFound(session_id));
+            let _ = sender.try_send(AgentEvent::Error {
+                message: DeliverError::SessionNotFound(session_id).to_string(),
+            });
+            // `sender` drops here, closing the channel so the stream ends after
+            // yielding the error.
+            return SubmitStream::settled(receiver);
         }
 
-        let (reply, receiver) = bounded(1);
-        let should_drive =
-            self.enqueue_submission(session_id, QueuedSubmission { text, kind, reply });
-
-        if should_drive {
-            self.drive_submissions(session_id).await;
+        let sink = EventSink::new(sender);
+        let drive = self.enqueue_submission(session_id, QueuedSubmission { text, kind, events: sink });
+        SubmitStream {
+            events: Box::pin(receiver),
+            drive,
         }
-
-        receiver.recv().await.unwrap_or_else(|_| {
-            Err(DeliverError::Agent(
-                "session submit driver ended before replying".to_string(),
-            ))
-        })
     }
 
-    fn enqueue_submission(&self, session_id: SessionId, submission: QueuedSubmission) -> bool {
+    /// Queue `submission` for `session_id` and return the session's shared drive
+    /// future. When the session has no active drive, this starts one (creating the
+    /// future); otherwise it folds the submission into the active drive per its
+    /// [`DeliveryKind`] and returns the existing shared future.
+    fn enqueue_submission(
+        self: &Arc<Self>,
+        session_id: SessionId,
+        submission: QueuedSubmission,
+    ) -> SharedDrive {
         let mut drives = self
             .drives
             .lock()
@@ -234,15 +310,26 @@ where
                         control.request_cancel();
                     }
                     if let Some(replaced) = drive.carried.replace(submission) {
-                        let _ = replaced.reply.try_send(Err(DeliverError::Superseded));
+                        replaced.events.emit(AgentEvent::Error {
+                            message: DeliverError::Superseded.to_string(),
+                        });
                     }
                 }
             }
-            false
+            drive
+                .shared
+                .clone()
+                .expect("an active drive always has a shared future")
         } else {
             drive.active = true;
             drive.pending.push_back(submission);
-            true
+            let orchestrator = Arc::clone(self);
+            let future: Pin<Box<dyn Future<Output = ()>>> = Box::pin(async move {
+                orchestrator.drive_submissions(session_id).await;
+            });
+            let shared: SharedDrive = Rc::new(RefCell::new(Some(future)));
+            drive.shared = Some(Rc::clone(&shared));
+            shared
         }
     }
 
@@ -253,14 +340,29 @@ where
                 self.finish_drive(session_id);
                 return;
             };
-            let (result, stop) = match self
-                .drive_one_submission(session_id, submission.text.clone(), submission.kind, mode)
+            let QueuedSubmission { text, kind, events } = submission;
+            events.emit(AgentEvent::TurnStarted);
+            let stop = match self
+                .drive_one_submission(session_id, text, kind, mode, &events)
                 .await
             {
-                Ok((output, stop)) => (Ok(output), stop),
-                Err(error) => (Err(error), DriveStop::Quiescent),
+                Ok((output, stop)) => {
+                    for reply in output.replies {
+                        events.emit(AgentEvent::Output { text: reply.text });
+                    }
+                    stop
+                }
+                Err(error) => {
+                    events.emit(AgentEvent::Error {
+                        message: error.to_string(),
+                    });
+                    DriveStop::Quiescent
+                }
             };
-            let _ = submission.reply.try_send(result);
+            events.emit(AgentEvent::TurnEnded);
+            // Drop this submission's sink so its channel closes and the paired
+            // stream ends; later submissions keep their own channels alive.
+            drop(events);
             mode = match stop {
                 DriveStop::Quiescent => StartMode::Fresh,
                 DriveStop::Interrupted => StartMode::Interrupted,
@@ -289,6 +391,9 @@ where
         if let Some(drive) = drives.get_mut(&session_id) {
             drive.active = false;
             drive.control = None;
+            // Drop the map's handle to the finished future. Any live stream still
+            // holds its own `Rc` and will observe the future's completion.
+            drive.shared = None;
         }
     }
 
@@ -317,6 +422,7 @@ where
         text: String,
         kind: DeliveryKind,
         mode: StartMode,
+        events: &EventSink,
     ) -> Result<(DriveOutput, DriveStop), DeliverError> {
         if !self.sessions.contains(session_id) {
             return Err(DeliverError::SessionNotFound(session_id));
@@ -354,7 +460,7 @@ where
             let control = SessionControl::new();
             self.set_active_control(session_id, Some(control.clone()));
             let result = self
-                .resolve_pending_approval(session_id, instance, pending, &text, &control)
+                .resolve_pending_approval(session_id, instance, pending, &text, &control, events)
                 .await;
             self.set_active_control(session_id, None);
             return result;
@@ -384,7 +490,7 @@ where
 
         let control = SessionControl::new();
         self.set_active_control(session_id, Some(control.clone()));
-        let output = instance.drive_interruptible(&control).await;
+        let output = instance.drive_interruptible(&control, events).await;
         self.set_active_control(session_id, None);
         Ok(output)
     }
@@ -396,6 +502,7 @@ where
         pending: PendingApproval,
         user_reply: &str,
         control: &SessionControl,
+        events: &EventSink,
     ) -> Result<(DriveOutput, DriveStop), DeliverError> {
         let resolution = match approval::resolve_permission_reply::<H, Timer>(
             self.approval_llm_config.clone(),
@@ -442,7 +549,7 @@ where
         instance
             .resolve_active_approval(decision)
             .map_err(|error| DeliverError::Agent(error.to_string()))?;
-        Ok(instance.drive_interruptible(control).await)
+        Ok(instance.drive_interruptible(control, events).await)
     }
 
     /// Check the session's agent graph out of the map (building a fresh instance

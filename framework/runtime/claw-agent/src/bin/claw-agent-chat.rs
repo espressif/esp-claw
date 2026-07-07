@@ -10,13 +10,15 @@
 //! cargo run -p claw-agent --features dev --bin claw-agent-chat --target x86_64-unknown-linux-gnu
 //! ```
 //!
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::Path;
 
+use anstyle::{AnsiColor, Style};
 use anyhow::{bail, Result};
-use claw_agent::{AgentPersistenceConfig, AgentSystem, HostAgentSystem};
+use claw_agent::{AgentEvent, AgentPersistenceConfig, AgentSystem, HostAgentSystem};
 use claw_api::{BackendKind, ClawApiConfig};
 use claw_core::{DeliveryKind, SessionId};
+use futures_lite::StreamExt;
 
 const MEMORY_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/output/claw-agent-chat");
 
@@ -30,22 +32,72 @@ impl ChatDriver {
         Self { system, session }
     }
 
-    async fn send(
-        &mut self,
-        text: impl Into<String>,
-    ) -> Result<Vec<String>, claw_agent::AgentError> {
-        let output = self
+    /// Drive one turn, printing each streamed [`AgentEvent`] as it arrives.
+    /// Returns whether the turn produced any assistant-visible output.
+    async fn send(&mut self, text: impl Into<String>) -> bool {
+        let mut stream = self
             .system
-            .submit(self.session, text.into(), DeliveryKind::Interrupt)
-            .await?;
-        Ok(output.replies.into_iter().map(|reply| reply.text).collect())
+            .submit(self.session, text.into(), DeliveryKind::Interrupt);
+        let mut saw_output = false;
+        while let Some(event) = stream.next().await {
+            match event {
+                AgentEvent::Reasoning { text } => print_event("think", &text, EventStyle::Thinking),
+                AgentEvent::Tools { names } => {
+                    print_event("tools", &names.join(", "), EventStyle::Tools);
+                }
+                AgentEvent::Output { text } => {
+                    saw_output = true;
+                    println!("\n{text}\n");
+                }
+                AgentEvent::Error { message } => print_event("error", &message, EventStyle::Error),
+                AgentEvent::TurnStarted
+                | AgentEvent::TurnEnded
+                | AgentEvent::IterationStarted { .. }
+                | AgentEvent::IterationEnded => {}
+            }
+        }
+        saw_output
+    }
+}
+
+enum EventStyle {
+    Thinking,
+    Tools,
+    Error,
+}
+
+impl EventStyle {
+    fn style(&self) -> Style {
+        if !io::stderr().is_terminal() {
+            return Style::new();
+        }
+
+        match self {
+            Self::Thinking => Style::new().dimmed().fg_color(Some(AnsiColor::Cyan.into())),
+            Self::Tools => Style::new().bold().fg_color(Some(AnsiColor::Green.into())),
+            Self::Error => Style::new().bold().fg_color(Some(AnsiColor::Red.into())),
+        }
+    }
+}
+
+fn print_event(label: &str, message: &str, event_style: EventStyle) {
+    let style = event_style.style();
+    let mut lines = message.lines();
+    let Some(first) = lines.next() else {
+        eprintln!("  {style}{label:<5}{style:#}");
+        return;
+    };
+
+    eprintln!("  {style}{label:<5}{style:#}  {first}");
+    for line in lines {
+        eprintln!("         {line}");
     }
 }
 
 #[tokio::main]
 async fn main() {
     if let Err(error) = run().await {
-        eprintln!("error: {error}");
+        print_event("error", &error.to_string(), EventStyle::Error);
         std::process::exit(1);
     }
 }
@@ -76,12 +128,8 @@ async fn run() -> Result<()> {
             break;
         }
 
-        let replies = chat.send(input).await?;
-        if replies.is_empty() {
+        if !chat.send(input).await {
             println!("\n(no reply)\n");
-        }
-        for reply in replies {
-            println!("\n{reply}\n");
         }
     }
 

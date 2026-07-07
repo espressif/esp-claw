@@ -20,6 +20,7 @@ use crate::agent::{
     ApprovalDecision, ChatMessages, CompletedKind, InterruptionControl, IterationId, IterationLoop,
     IterationLoopError, IterationOutcome, IterationStep, SystemPrompt,
 };
+use crate::event::EventSink;
 use crate::orchestrator::control::SessionControl;
 
 const APPROVAL_RESOLVER_PROMPT: &str = r#"You resolve a user's natural-language reply to one pending permission request.
@@ -177,10 +178,14 @@ where
 
     let messages = approval_messages(summary, user_reply);
     let reminders: [Value; 0] = [];
+    // The approval resolver is an internal one-shot, not a visible root iteration,
+    // so its iteration events are dropped.
+    let events = EventSink::disabled();
     let outcome = IterationLoop {
         llm: &mut llm,
         interruption: &resolver_control,
         retry: RetryPolicy::none(),
+        events: &events,
     }
     .run(IterationStep {
         iteration_id: IterationId(1),

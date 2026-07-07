@@ -164,7 +164,7 @@ mod tests {
         name: &str,
         arguments_json: &str,
     ) -> Result<ToolOutput, ToolInvokeError> {
-        let registry = ToolRegistry::new();
+        let registry = std::sync::Arc::new(ToolRegistry::new());
         let mut tools = registry.tool_set();
         tools.add_tool(tool.clone()).unwrap();
         let handle = tools.begin().unwrap();

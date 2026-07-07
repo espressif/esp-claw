@@ -28,6 +28,7 @@ use crate::agent::config::AgentConfig;
 use crate::agent::graph::{AgentContext, GraphHost};
 use crate::agent::tools::subagent_tools;
 use crate::agent::{Agent, AgentTickFuture};
+use crate::event::EventSink;
 use crate::memory::{
     CompactionPolicy, ContextAdapter, LlmCompactor, RecentMessagesContextAdapter,
     RollingSummaryContextAdapter, SummaryCursor,
@@ -181,9 +182,9 @@ impl<H: ClawHttp, Timer: ClawTimer> Agent for GenericAgent<H, Timer> {
         self.base.abort_handle()
     }
 
-    fn tick(&mut self) -> AgentTickFuture<'_> {
+    fn tick(&mut self, events: EventSink) -> AgentTickFuture<'_> {
         // Flat: no FSM, no per-phase gating — the model drives its own flow.
-        Box::pin(async move { self.base.tick().await })
+        Box::pin(async move { self.base.tick(&events).await })
     }
 }
 

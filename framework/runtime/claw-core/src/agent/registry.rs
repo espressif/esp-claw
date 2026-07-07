@@ -138,7 +138,7 @@ mod tests {
         fn abort_handle(&self) -> AgentAbortHandle {
             AgentAbortHandle::default()
         }
-        fn tick(&mut self) -> AgentTickFuture<'_> {
+        fn tick(&mut self, _events: crate::event::EventSink) -> AgentTickFuture<'_> {
             Box::pin(async { TickOutcome::Idle })
         }
     }

@@ -510,8 +510,9 @@ mod tests {
             .expect("agent builds");
 
         // The goal was seeded, so ticking drives straight to the scripted reply.
+        let events = crate::event::EventSink::disabled();
         let outcome = loop {
-            match block_on(agent.tick()) {
+            match block_on(agent.tick(events.clone())) {
                 TickOutcome::Working => continue,
                 other => break other,
             }

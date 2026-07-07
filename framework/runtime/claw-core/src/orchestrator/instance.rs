@@ -39,6 +39,7 @@ use crate::agent::{
     AgentRegistry, AgentSnapshot, AgentStatus, ApprovalDecision, ApprovalId, CancelReason,
     FsAgentFactory, GraphEffect, GraphHost, TerminationPolicy, TickOutcome,
 };
+use crate::event::EventSink;
 use crate::orchestrator::control::{DriveStop, SessionControl};
 use crate::session::SessionId;
 use tracing::Instrument;
@@ -153,6 +154,9 @@ struct ReadyAgent {
     id: AgentId,
     kind: AgentKind,
     depth: u16,
+    /// Whether this is the session root. Only the root's iteration events are
+    /// forwarded to the submission stream; subagents tick with a disabled sink.
+    is_root: bool,
     agent: Box<dyn Agent>,
 }
 
@@ -203,12 +207,13 @@ impl Future for TickBatch {
     }
 }
 
-fn tick_agent(ready: ReadyAgent) -> AgentTickBoxFuture {
+fn tick_agent(ready: ReadyAgent, events: EventSink) -> AgentTickBoxFuture {
     Box::pin(async move {
         let ReadyAgent {
             id,
             kind,
             depth,
+            is_root: _,
             mut agent,
         } = ready;
         let span = tracing::info_span!(
@@ -217,7 +222,7 @@ fn tick_agent(ready: ReadyAgent) -> AgentTickBoxFuture {
             kind = %kind,
             depth = depth
         );
-        let outcome = agent.tick().instrument(span).await;
+        let outcome = agent.tick(events).instrument(span).await;
         TickedAgent { id, agent, outcome }
     })
 }
@@ -421,6 +426,7 @@ where
     pub(crate) async fn drive_interruptible(
         &mut self,
         control: &SessionControl,
+        events: &EventSink,
     ) -> (DriveOutput, DriveStop) {
         let mut output = DriveOutput::default();
         while self.has_ready() {
@@ -433,7 +439,7 @@ where
                     handle.abort();
                 }
             });
-            output.absorb(self.tick_ready_batch().await);
+            output.absorb(self.tick_ready_batch(events).await);
             // Only honour a control request when there is still work pending: a
             // drive that has already reached quiescence has nothing to interrupt
             // or cancel, so report it as such (the caller delivers any carried
@@ -572,14 +578,26 @@ where
 
     /// Tick every currently-ready agent as one async batch, then apply the graph
     /// consequences in queue order.
-    async fn tick_ready_batch(&mut self) -> DriveOutput {
+    async fn tick_ready_batch(&mut self, events: &EventSink) -> DriveOutput {
         let ready = self.drain_ready_batch();
         if ready.is_empty() {
             return DriveOutput::default();
         }
         self.refresh_snapshots();
 
-        let futures = ready.into_iter().map(tick_agent).collect();
+        // The root ticks with the live submission sink; every subagent gets a
+        // disabled one, so only root iteration events reach the stream.
+        let futures = ready
+            .into_iter()
+            .map(|ready| {
+                let sink = if ready.is_root {
+                    events.clone()
+                } else {
+                    EventSink::disabled()
+                };
+                tick_agent(ready, sink)
+            })
+            .collect();
         let ticked = TickBatch::new(futures).await;
         let mut outcomes = Vec::with_capacity(ticked.len());
         for TickedAgent { id, agent, outcome } in ticked {
@@ -610,6 +628,7 @@ where
                 id,
                 kind: meta.kind.clone(),
                 depth: meta.depth,
+                is_root: self.root == Some(id),
                 agent,
             });
         }

@@ -44,6 +44,8 @@ dev = [
     "dep:dotenvy",
     "dep:anyhow",
     "dep:tokio",
+    "dep:futures-lite",
+    "dep:anstyle",
 ]
 
 [dependencies]
@@ -63,6 +65,10 @@ anyhow = { version = "1", optional = true }
 # Dev-only: the `claw-agent-chat` bin loads `claw-core/.env.local`.
 dotenvy = { version = "0.15", optional = true }
 tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"], optional = true }
+# Dev-only: `StreamExt` to drain the `SubmitStream` in the REPL/examples.
+futures-lite = { version = "2", optional = true }
+# Dev-only: colored, aligned event labels for the `claw-agent-chat` REPL.
+anstyle = { version = "1", optional = true }
 
 [dev-dependencies]
 claw-context = { path = "../claw-context" }

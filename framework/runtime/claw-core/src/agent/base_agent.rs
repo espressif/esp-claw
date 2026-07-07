@@ -65,6 +65,7 @@ use super::iteration_loop::{
 };
 use crate::agent::manifest::RetryCount;
 use crate::agent::tools::{internal_tools, ControlSignal, ControlSink};
+use crate::event::EventSink;
 use crate::memory::{
     AssistantCommit, ContextAdapter, ContextAdapterInput, SkillContextAdapter, Transcript,
 };
@@ -826,7 +827,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     ///     }
     /// }
     /// ```
-    pub async fn tick(&mut self) -> TickOutcome {
+    pub async fn tick(&mut self, events: &EventSink) -> TickOutcome {
         self.outcome = None;
 
         // 1. External commands.
@@ -839,7 +840,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
             // Context assembly is owned by `claw-context`: `run_iteration` calls
             // `Context::request`, which re-renders the prefix only if a block
             // changed since last tick. Nothing to prepare or degrade here.
-            let outcome = self.run_iteration(iteration_id).await;
+            let outcome = self.run_iteration(iteration_id, events).await;
             self.reduce_outcome(outcome);
             // 3. Internal-tool signals raised during the iteration, folded
             //    back through the same reducer.
@@ -865,7 +866,11 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// `RequestContext`, re-rendering the prefix only on a real change. No request
     /// stitching happens anywhere else; reminders are never written to memory, so
     /// the cached system/history prefix is untouched.
-    async fn run_iteration(&mut self, iteration_id: IterationId) -> IterationResult {
+    async fn run_iteration(
+        &mut self,
+        iteration_id: IterationId,
+        events: &EventSink,
+    ) -> IterationResult {
         let tools = self.tools.begin()?;
         let history_view = self.transcript.as_history();
         Self::prepare_adapter_context(&mut self.adapters, history_view).await;
@@ -884,6 +889,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
             llm: &mut self.llm,
             interruption: &self.interruption,
             retry: self.retry_policy,
+            events,
         };
         let gate = &self.gate as &dyn ToolGate;
         let context = self.context.request(&history);

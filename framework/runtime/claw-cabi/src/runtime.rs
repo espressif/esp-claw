@@ -14,12 +14,13 @@ use std::time::{Duration, Instant};
 
 use claw_agent::{AgentError, AgentPersistenceConfig, AgentSystem};
 use claw_api::{BackendKind, ClawApiConfig};
-use claw_core::{DeliveryKind, DriveOutput, SessionId};
+use claw_core::{AgentEvent, DeliveryKind, SessionId};
 use claw_interface::{ClawThread, CoreAffinity, Priority, WorkerHandle};
 use claw_sys::{EspIdfFs, EspIdfHttp, EspIdfThread, EspIdfTimer};
 
 use async_channel::{Receiver, Sender};
 use futures_core::Stream;
+use futures_lite::StreamExt;
 
 use crate::abi::{
     ClawAgentConfig, ClawAgentResponse, EspErr, CLAW_AGENT_RESPONSE_STATUS_ERROR,
@@ -690,33 +691,47 @@ async fn run_submit(task: SubmitTask, store_response: bool) -> CompletedSubmit {
     let request_id = task.request_id;
     let session_id = task.session.0;
     let context = task.capability_context.clone();
-    let result: Result<String, CabiError> = with_capability_context(context, async move {
-        let output = task
+    // Drain the submit event stream: accumulate the turn's `Output` text and
+    // capture the first `Error` (an error ends the turn). All other events
+    // (reasoning, tools, brackets) are not part of the FFI's flat response yet.
+    let response = with_capability_context(context, async move {
+        let mut stream = task
             .agent
-            .submit(task.session, task.text, DeliveryKind::Interrupt)
-            .await?;
-        let text = response_text(&output);
-        Ok(text)
-    })
-    .await;
-    CompletedSubmit {
-        store_response,
-        response: match result {
-            Ok(text) => SubmitResponse {
-                request_id,
-                session_id,
-                status: ResponseStatus::Ok,
-                text,
-                error_message: String::new(),
-            },
-            Err(error) => SubmitResponse {
+            .submit(task.session, task.text, DeliveryKind::Interrupt);
+        let mut outputs: Vec<String> = Vec::new();
+        let mut error: Option<String> = None;
+        while let Some(event) = stream.next().await {
+            match event {
+                AgentEvent::Output { text } => outputs.push(text),
+                AgentEvent::Error { message } => {
+                    if error.is_none() {
+                        error = Some(message);
+                    }
+                }
+                _ => {}
+            }
+        }
+        match error {
+            Some(message) => SubmitResponse {
                 request_id,
                 session_id,
                 status: ResponseStatus::Error,
                 text: String::new(),
-                error_message: error.to_string(),
+                error_message: message,
             },
-        },
+            None => SubmitResponse {
+                request_id,
+                session_id,
+                status: ResponseStatus::Ok,
+                text: join_outputs(&outputs),
+                error_message: String::new(),
+            },
+        }
+    })
+    .await;
+    CompletedSubmit {
+        store_response,
+        response,
     }
 }
 
@@ -804,16 +819,18 @@ fn runtime_mut() -> Result<&'static mut RuntimeController, CabiError> {
     Ok(unsafe { &mut *ptr })
 }
 
-fn response_text(output: &DriveOutput) -> String {
+/// Join a turn's `Output` fragments into the FFI's flat response text, skipping
+/// blank fragments and separating the rest with a blank line.
+fn join_outputs(outputs: &[String]) -> String {
     let mut text = String::new();
-    for reply in &output.replies {
-        if reply.text.trim().is_empty() {
+    for output in outputs {
+        if output.trim().is_empty() {
             continue;
         }
         if !text.is_empty() {
             text.push_str("\n\n");
         }
-        text.push_str(&reply.text);
+        text.push_str(output);
     }
     text
 }

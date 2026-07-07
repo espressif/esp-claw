@@ -138,6 +138,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 name = "claw-agent"
 version = "0.1.0"
 dependencies = [
+ "anstyle",
  "anyhow",
  "claw-api",
  "claw-context",
@@ -217,6 +218,7 @@ dependencies = [
  "claw-tool",
  "claw-utils",
  "dotenvy",
+ "futures-core",
  "futures-lite 2.6.1",
  "proc-macro2",
  "quote",

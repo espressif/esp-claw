@@ -16,11 +16,12 @@
 //!   --target x86_64-unknown-linux-gnu
 //! ```
 
-use claw_agent::AgentSystem;
+use claw_agent::{AgentEvent, AgentSystem};
 use claw_api::{BackendKind, ClawApiConfig};
 use claw_core::DeliveryKind;
 use claw_interface::{BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp};
 use claw_tool::{SyncToolHandler, Tool, ToolInvocation, ToolOutput, ToolResult, ToolSpec};
+use futures_lite::StreamExt;
 
 /// A tool: returns a fixed timestamp. Registering it makes `time_now`
 /// resolvable by the agent; whether the model calls it is up to the prompt.
@@ -82,24 +83,29 @@ async fn main() -> anyhow::Result<()> {
     system.start_all()?;
     let session = system.new_session();
 
-    // 2. Drive the loop: explicit session id selects the agent session.
-    let output = system
-        .submit(
-            session,
-            "Hi, what time is it?".to_string(),
-            DeliveryKind::Interrupt,
-        )
-        .await?;
-
-    println!(
-        "\nsession `{}` received {} reply(ies):",
+    // 2. Drive the loop: explicit session id selects the agent session. `submit`
+    //    returns a stream of `AgentEvent`s; draining it runs the turn.
+    let mut stream = system.submit(
         session,
-        output.replies.len()
+        "Hi, what time is it?".to_string(),
+        DeliveryKind::Interrupt,
     );
-    for reply in &output.replies {
-        println!("  > {}", reply.text);
+
+    println!("\nsession `{session}` events:");
+    let mut outputs = Vec::new();
+    while let Some(event) = stream.next().await {
+        match event {
+            AgentEvent::Output { text } => {
+                println!("  > {text}");
+                outputs.push(text);
+            }
+            AgentEvent::Reasoning { text } => println!("  [thinking] {text}"),
+            AgentEvent::Tools { names } => println!("  [tools] {}", names.join(", ")),
+            AgentEvent::Error { message } => println!("  [error] {message}"),
+            other => println!("  [{other:?}]"),
+        }
     }
-    assert_eq!(output.replies.len(), 1, "expected exactly one reply");
+    assert_eq!(outputs.len(), 1, "expected exactly one output");
 
     Ok(())
 }

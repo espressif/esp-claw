@@ -31,13 +31,15 @@ pub(crate) use base_agent::{
 };
 pub(crate) use factory::{AgentPlacement, FsAgentFactory, FsAgentFactoryError};
 pub(crate) use graph::{AgentSnapshot, AgentStatus, GraphEffect, GraphHost, TerminationPolicy};
-pub(crate) use iteration_loop::IterationId;
+pub use iteration_loop::IterationId;
 pub(crate) use iteration_loop::{
     ChatMessages, CompletedKind, InterruptionControl, IterationLoop, IterationLoopError,
     IterationOutcome, IterationStep, SystemPrompt,
 };
 pub(crate) use kind::AgentKind;
 pub(crate) use registry::{AgentIdAllocator, AgentRegistry};
+
+use crate::event::EventSink;
 
 use core::future::Future;
 use core::pin::Pin;
@@ -85,5 +87,10 @@ pub(crate) trait Agent {
     fn abort_handle(&self) -> AgentAbortHandle;
 
     /// Advance the agent by one step and report what happened. See [`TickOutcome`].
-    fn tick(&mut self) -> AgentTickFuture<'_>;
+    ///
+    /// `events` is the per-turn [`EventSink`] this agent's iteration should emit to.
+    /// The instance hands the **root** agent the submission's live sink and every
+    /// subagent a [disabled](EventSink::disabled) one, so only the root's
+    /// iteration events reach the stream.
+    fn tick(&mut self, events: EventSink) -> AgentTickFuture<'_>;
 }
