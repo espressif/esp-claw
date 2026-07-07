@@ -123,6 +123,11 @@ static esp_err_t cap_agent_get_route_session(const char *channel,
         cap_agent_unlock_routes();
         return err;
     }
+    err = claw_agent_session_open(*out_session_id);
+    if (err != ESP_OK) {
+        cap_agent_unlock_routes();
+        return err;
+    }
 
     cap_agent_route_session_t *entry = &s_route_sessions[free_slot];
     entry->occupied = true;
@@ -202,7 +207,6 @@ static esp_err_t cap_agent_execute(const char *input_json,
     const char *reply_chat_id = NULL;
     const char *correlation_id = NULL;
     uint32_t session_id = 0;
-    uint32_t request_id = 0;
     bool route_reply = false;
     esp_err_t err;
 
@@ -229,7 +233,7 @@ static esp_err_t cap_agent_execute(const char *input_json,
     }
     route_reply = cap_agent_reply_route_supported(reply_channel, reply_chat_id);
 
-    err = claw_agent_session_submit(session_id, text, route_reply ? &request_id : NULL);
+    err = claw_agent_session_submit(session_id, text);
     cJSON_Delete(root);
     if (err != ESP_OK) {
         if (output && output_size > 0) {
@@ -240,7 +244,6 @@ static esp_err_t cap_agent_execute(const char *input_json,
 
     if (route_reply) {
         err = cap_agent_reply_start(session_id,
-                                    request_id,
                                     reply_channel,
                                     reply_chat_id,
                                     correlation_id);
@@ -254,8 +257,7 @@ static esp_err_t cap_agent_execute(const char *input_json,
 
     if (output && output_size > 0) {
         if (route_reply) {
-            snprintf(output, output_size, "request_id=%" PRIu32 " session_id=%" PRIu32,
-                     request_id, session_id);
+            snprintf(output, output_size, "session_id=%" PRIu32 " reply_routed", session_id);
         } else {
             snprintf(output, output_size, "session_id=%" PRIu32 " reply_unrouted", session_id);
         }

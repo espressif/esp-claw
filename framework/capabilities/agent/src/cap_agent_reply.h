@@ -17,7 +17,6 @@ extern "C" {
 bool cap_agent_reply_route_supported(const char *channel, const char *chat_id);
 
 esp_err_t cap_agent_reply_start(uint32_t session_id,
-                                uint32_t request_id,
                                 const char *channel,
                                 const char *chat_id,
                                 const char *correlation_id);

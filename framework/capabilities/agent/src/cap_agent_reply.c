@@ -30,7 +30,6 @@ static const char *TAG = "cap_agent_reply";
 
 typedef struct {
     uint32_t session_id;
-    uint32_t request_id;
     char channel[CAP_AGENT_REPLY_FIELD_LEN];
     char chat_id[CAP_AGENT_REPLY_FIELD_LEN];
     char correlation_id[CAP_AGENT_REPLY_FIELD_LEN];
@@ -115,7 +114,6 @@ static esp_err_t cap_agent_send_reply(const cap_agent_reply_task_arg_t *arg,
     }
 
     snprintf(session_id, sizeof(session_id), "%" PRIu32, arg->session_id);
-    call_ctx.request_id = arg->request_id;
     call_ctx.session_id = session_id;
     call_ctx.channel = arg->channel;
     call_ctx.chat_id = arg->chat_id;
@@ -127,10 +125,9 @@ static esp_err_t cap_agent_send_reply(const cap_agent_reply_task_arg_t *arg,
 
     err = claw_cap_call(cap_name, payload, &call_ctx, output, CAP_AGENT_REPLY_OUTPUT_SIZE);
     ESP_LOGI(TAG,
-             "send_reply cap=%s session=%" PRIu32 " request=%" PRIu32 " err=%s output=%s",
+             "send_reply cap=%s session=%" PRIu32 " err=%s output=%s",
              cap_name,
              arg->session_id,
-             arg->request_id,
              esp_err_to_name(err),
              output[0] ? output : "-");
 
@@ -172,24 +169,21 @@ static void cap_agent_reply_task(void *param)
     while (!done) {
         claw_agent_event_t event = {0};
         esp_err_t err = claw_agent_session_receive(arg->session_id,
-                                                   arg->request_id,
                                                    &event,
                                                    CAP_AGENT_REPLY_RECV_SLICE_MS);
         if (err == ESP_ERR_TIMEOUT) {
             if ((xTaskGetTickCount() - start) >= pdMS_TO_TICKS(CAP_AGENT_REPLY_TIMEOUT_MS)) {
                 ESP_LOGW(TAG,
-                         "receive overall timeout session=%" PRIu32 " request=%" PRIu32,
-                         arg->session_id,
-                         arg->request_id);
+                         "receive overall timeout session=%" PRIu32,
+                         arg->session_id);
                 break;
             }
             continue;
         }
         if (err != ESP_OK) {
             ESP_LOGW(TAG,
-                     "receive failed session=%" PRIu32 " request=%" PRIu32 " err=%s",
+                     "receive failed session=%" PRIu32 " err=%s",
                      arg->session_id,
-                     arg->request_id,
                      esp_err_to_name(err));
             break;
         }
@@ -197,7 +191,7 @@ static void cap_agent_reply_task(void *param)
         switch (event.kind) {
         case CLAW_AGENT_EVENT_KIND_OUTPUT:
             if (!cap_agent_reply_append(&message, &message_len, event.text)) {
-                ESP_LOGW(TAG, "reply buffer alloc failed request=%" PRIu32, arg->request_id);
+                ESP_LOGW(TAG, "reply buffer alloc failed session=%" PRIu32, arg->session_id);
                 failed = true;
                 done = true;
             }
@@ -205,22 +199,21 @@ static void cap_agent_reply_task(void *param)
         case CLAW_AGENT_EVENT_KIND_REASONING:
         case CLAW_AGENT_EVENT_KIND_TOOLS:
             ESP_LOGI(TAG,
-                     "progress session=%" PRIu32 " request=%" PRIu32 " kind=%d %s",
+                     "progress session=%" PRIu32 " kind=%d %s",
                      arg->session_id,
-                     arg->request_id,
                      (int)event.kind,
                      event.text ? event.text : "-");
             break;
         case CLAW_AGENT_EVENT_KIND_ERROR:
             ESP_LOGW(TAG,
-                     "agent error session=%" PRIu32 " request=%" PRIu32 " error=%s",
+                     "agent error session=%" PRIu32 " error=%s",
                      arg->session_id,
-                     arg->request_id,
                      event.error_message ? event.error_message : "-");
             failed = true;
             done = true;
             break;
         case CLAW_AGENT_EVENT_KIND_DONE:
+        case CLAW_AGENT_EVENT_KIND_CLOSED:
             done = true;
             break;
         default:
@@ -234,9 +227,8 @@ static void cap_agent_reply_task(void *param)
         esp_err_t err = cap_agent_send_reply(arg, message);
         if (err != ESP_OK) {
             ESP_LOGW(TAG,
-                     "reply send failed session=%" PRIu32 " request=%" PRIu32 " err=%s",
+                     "reply send failed session=%" PRIu32 " err=%s",
                      arg->session_id,
-                     arg->request_id,
                      esp_err_to_name(err));
         }
     }
@@ -247,14 +239,13 @@ static void cap_agent_reply_task(void *param)
 }
 
 esp_err_t cap_agent_reply_start(uint32_t session_id,
-                                uint32_t request_id,
                                 const char *channel,
                                 const char *chat_id,
                                 const char *correlation_id)
 {
     cap_agent_reply_task_arg_t *arg = NULL;
 
-    if (session_id == 0 || request_id == 0) {
+    if (session_id == 0) {
         return ESP_ERR_INVALID_ARG;
     }
     if (!cap_agent_reply_route_supported(channel, chat_id)) {
@@ -266,7 +257,6 @@ esp_err_t cap_agent_reply_start(uint32_t session_id,
         return ESP_ERR_NO_MEM;
     }
     arg->session_id = session_id;
-    arg->request_id = request_id;
     strlcpy(arg->channel, channel, sizeof(arg->channel));
     strlcpy(arg->chat_id, chat_id, sizeof(arg->chat_id));
     if (correlation_id) {
