@@ -16,8 +16,8 @@
 //! Sessions are isolated — one session's agents never appear in another's store —
 //! while a single global id allocator (shared at construction) keeps every
 //! [`AgentId`] unique across the whole process. The root is built lazily on the
-//! first delivered message (that message is its goal); later append deliveries
-//! are accepted only once the root has returned to an idle boundary.
+//! first delivered message (that message is its goal); later messages are
+//! accepted only once the root has returned to an idle boundary.
 //!
 //! Borrow safety: a tick may emit [`GraphEffect`]s through the agent's
 //! [`GraphHost`], but those only push onto the instance's effect queue. The
@@ -54,9 +54,6 @@ pub struct RootReply {
     pub session: SessionId,
     /// The reply text.
     pub text: String,
-    /// True when the root *ended* the conversation (via `end_conversation`),
-    /// false for an ordinary yielded answer.
-    pub ended: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -94,13 +91,9 @@ impl DriveOutput {
         Self { replies }
     }
 
-    fn reply(session: SessionId, text: String, ended: bool) -> Self {
+    fn reply(session: SessionId, text: String) -> Self {
         Self {
-            replies: vec![RootReply {
-                session,
-                text,
-                ended,
-            }],
+            replies: vec![RootReply { session, text }],
         }
     }
 }
@@ -435,9 +428,9 @@ where
 
     /// Deliver a user message to this session's root.
     ///
-    /// Builds the root on the first call (the message becomes its goal); appends to
-    /// the existing root afterwards. The agent is left ready; call
-    /// [`drive`](Self::drive) to run it.
+    /// Builds the root on the first call (the message becomes its goal); delivers
+    /// to the existing idle root afterwards. The agent is left ready; call
+    /// [`drive_interruptible`](Self::drive_interruptible) to run it.
     ///
     /// # Errors
     ///
@@ -557,28 +550,6 @@ where
         Ok(())
     }
 
-    /// Hard-cancel the session root's current task with `reason` (discarding the
-    /// root's open turn and returning it to idle). A no-op when there is no root
-    /// or the root has no active task to cancel.
-    ///
-    /// Paired with a follow-up [`deliver`](Self::deliver) of the new message by
-    /// the caller: the two commands land on the root's inbox in order (cancel then
-    /// append), so the next drive discards the old open turn and then starts the
-    /// fresh task.
-    pub(crate) fn cancel_root(&mut self, reason: CancelReason) {
-        let Some(root) = self.root else {
-            return;
-        };
-        let Some(agent) = self.registry.get_mut(root) else {
-            return;
-        };
-        // `Cancel` is rejected when the root is already idle (nothing to cancel);
-        // that is a benign no-op here, so the error is intentionally ignored.
-        if agent.send_command(AgentCommand::Cancel { reason }).is_ok() {
-            self.enqueue(root);
-        }
-    }
-
     pub(crate) fn active_approval(&self) -> Option<PendingApproval> {
         let agent = *self.approval_queue.front()?;
         let pending = self.parked_approvals.get(&agent)?;
@@ -599,15 +570,23 @@ where
         self.send_approval_decision(pending.agent, pending.approval, decision)
     }
 
-    pub(crate) fn cancel_active_approval(&mut self, reason: CancelReason) {
-        let Some(pending) = self.pop_active_approval() else {
-            return;
-        };
-        let Some(agent) = self.registry.get_mut(pending.agent) else {
-            return;
-        };
-        if agent.send_command(AgentCommand::Cancel { reason }).is_ok() {
-            self.enqueue(pending.agent);
+    /// Hard-cancel every live agent that currently has work. Used by
+    /// `SubmitStream::cancel` cleanup after in-flight ticks have unwound, so the
+    /// submitted turn does not leave dormant root/subagent work behind.
+    pub(crate) fn cancel_all(&mut self, reason: CancelReason) {
+        let agents: Vec<AgentId> = self.meta.keys().copied().collect();
+        for agent_id in agents {
+            let Some(agent) = self.registry.get_mut(agent_id) else {
+                continue;
+            };
+            if agent
+                .send_command(AgentCommand::Cancel {
+                    reason: reason.clone(),
+                })
+                .is_ok()
+            {
+                self.enqueue(agent_id);
+            }
         }
     }
 
@@ -624,7 +603,7 @@ where
                 return DriveOutput::default();
             }
             pending.prompted = true;
-            return DriveOutput::reply(self.session, approval_prompt(&pending.summary), false);
+            return DriveOutput::reply(self.session, approval_prompt(&pending.summary));
         }
     }
 
@@ -958,11 +937,12 @@ where
         };
         let Some(parent_id) = parent else {
             // A root stays alive (the session persists); cleanup is the
-            // orchestrator's job when it deletes the session.
+            // orchestrator's job when it deletes the session. `ended` (an
+            // `end_conversation` close) is just a normal turn end for a root — it
+            // carries no distinct externally-visible signal.
             return vec![RootReply {
                 session: self.session,
                 text,
-                ended,
             }];
         };
 

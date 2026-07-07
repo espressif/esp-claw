@@ -1,4 +1,4 @@
-//! In-memory session registry, delivery modes, and delivery errors.
+//! In-memory session registry and delivery errors.
 
 use std::collections::HashSet;
 use std::sync::{Mutex, MutexGuard};
@@ -87,78 +87,12 @@ impl SessionStore {
 }
 
 // ---------------------------------------------------------------------------
-// Session message types
-// ---------------------------------------------------------------------------
-
-/// How a delivered message should interact with any task already running in the
-/// target session.
-///
-/// This is a **core orchestration** concept, not a transport one: it describes
-/// how the driving layer treats an in-flight task, so it lives in `claw-core`
-/// beside [`Orchestrator`](crate::orchestrator::Orchestrator). Transports never
-/// name it. A transport message may carry an opaque hint, which is resolved into
-/// a `DeliveryKind` at the transport/session boundary.
-///
-/// See [`Orchestrator::submit`](crate::orchestrator::Orchestrator::submit) for
-/// how `Append`/`Interrupt`/`Cancel` are sequenced against an in-flight drive.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum DeliveryKind {
-    /// Add the message as ordinary input at the next delivery boundary. When the
-    /// session is idle this starts a fresh task; if a drive is already in flight,
-    /// the concurrent driver defers the append until that drive settles.
-    #[default]
-    Append,
-    /// Graceful, whole-iteration interruption: let the current iteration finish
-    /// and commit, then stop the drive. The continuation is delivered through
-    /// the root agent's interrupt command, which records an interruption marker
-    /// and keeps the task alive.
-    Interrupt,
-    /// Hard interruption: abort the in-flight LLM round (discarding its partial
-    /// result), terminate the current task without committing its open turn, then
-    /// start a fresh task from this message.
-    Cancel,
-}
-
-impl DeliveryKind {
-    /// The recognized `extra_context` hint tokens. `Append` is the default and
-    /// needs no token (a missing hint means "append").
-    const HINT_INTERRUPT: &str = "interrupt";
-    const HINT_CANCEL: &str = "cancel";
-
-    /// Resolve a transport message's optional `extra_context` hint into a
-    /// `DeliveryKind` at the transport→session boundary.
-    ///
-    /// `extra_context` is a broader, opaque transport hint; the delivery kind is
-    /// only one thing inferred from it. A missing hint (`None`) or one that does
-    /// not name a known delivery mode falls back to [`Append`](Self::Append) — the
-    /// safe "queue and let the agent decide" default — and is traced so a
-    /// malformed hint stays visible. (This fallback is intentional and requested;
-    /// it is not a silent config substitution.)
-    pub fn from_extra_context(extra_context: Option<&str>) -> Self {
-        let Some(hint) = extra_context.map(str::trim) else {
-            tracing::trace!("inbound message carried no extra_context; delivering as Append");
-            return Self::Append;
-        };
-        if hint == Self::HINT_INTERRUPT {
-            Self::Interrupt
-        } else if hint == Self::HINT_CANCEL {
-            Self::Cancel
-        } else {
-            tracing::trace!(
-                extra_context = hint,
-                "extra_context names no known delivery mode; delivering as Append"
-            );
-            Self::Append
-        }
-    }
-}
-
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum DeliverError {
     #[error("session not found: {0}")]
     SessionNotFound(SessionId),
-    #[error("session submission superseded by a newer control message")]
-    Superseded,
+    #[error("session already has an active submission: {0}")]
+    ConcurrentSubmit(SessionId),
     #[error("agent delivery failed: {0}")]
     Agent(String),
     #[error(transparent)]

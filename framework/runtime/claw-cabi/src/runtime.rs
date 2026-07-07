@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use claw_agent::{
     AgentError, AgentEvent, AgentEventStream as SubmitStream, AgentPersistenceConfig, AgentSystem,
-    DeliveryKind, SessionId,
+    SessionId, SubmitControl,
 };
 use claw_api::{BackendKind, ClawApiConfig};
 use claw_interface::{Cancel, ClawTimer};
@@ -53,7 +53,7 @@ struct RuntimeController {
     agent: Option<DeviceAgent>,
     /// In-flight submissions keyed by request id: each holds its remaining event
     /// stream, pulled one event at a time (lazily, with a timeout) by [`receive`].
-    pending: Mutex<HashMap<u32, PendingSubmit>>,
+    pending: Mutex<HashMap<u32, Arc<PendingSubmit>>>,
     next_request_id: AtomicU32,
 }
 
@@ -63,7 +63,9 @@ struct RuntimeController {
 /// delivered.
 struct PendingSubmit {
     session_id: u32,
-    stream: SubmitStream,
+    stream: Mutex<SubmitStream>,
+    control: SubmitControl,
+    terminal: AtomicBool,
 }
 
 /// One event handed across the FFI, mapped from an [`AgentEvent`].
@@ -76,6 +78,12 @@ enum FfiEvent {
     Tools(String),
     Done,
     Error(String),
+}
+
+#[derive(Clone, Copy)]
+enum ControlAction {
+    Interrupt,
+    Cancel,
 }
 
 impl FfiEvent {
@@ -178,6 +186,18 @@ pub unsafe extern "C" fn claw_agent_session_receive(
     timeout_ms: u32,
 ) -> EspErr {
     ffi_result(|| receive(session_id, request_id, out_event, timeout_ms))
+}
+
+#[no_mangle]
+/// Request graceful interruption of an in-flight submitted turn.
+pub extern "C" fn claw_agent_session_interrupt(session_id: u32, request_id: u32) -> EspErr {
+    ffi_result(|| control_pending(session_id, request_id, ControlAction::Interrupt))
+}
+
+#[no_mangle]
+/// Request hard cancellation of an in-flight submitted turn.
+pub extern "C" fn claw_agent_session_cancel(session_id: u32, request_id: u32) -> EspErr {
+    ffi_result(|| control_pending(session_id, request_id, ControlAction::Cancel))
 }
 
 #[no_mangle]
@@ -324,14 +344,17 @@ fn submit_owned(session: SessionId, text: String, store_response: bool) -> Resul
         request_id,
         ..CapabilityContextData::default()
     });
-    let stream = agent.submit_with_context(session, text, DeliveryKind::Interrupt, Some(context));
+    let stream = agent.submit_with_context(session, text, Some(context));
     if store_response {
+        let control = stream.control();
         pending_map(runtime).insert(
             request_id,
-            PendingSubmit {
+            Arc::new(PendingSubmit {
                 session_id: session.0,
-                stream,
-            },
+                stream: Mutex::new(stream),
+                control,
+                terminal: AtomicBool::new(false),
+            }),
         );
     }
     // When no response is wanted, drop the stream: the orchestrator worker still
@@ -402,39 +425,66 @@ fn receive(
     }
     let out_event = unsafe { out_event.as_mut() }.ok_or(CabiError::InvalidArgument)?;
 
-    // Check the submission out so the (possibly long) wait does not hold the
-    // runtime lock; reinsert it unless we just delivered a terminal event.
-    let Some(mut pending) = take_pending(request_id)? else {
+    let Some(pending) = get_pending(request_id)? else {
         // Unknown or already-consumed request id: nothing to deliver.
         return Err(CabiError::Timeout);
     };
     if pending.session_id != session_id {
-        reinsert_pending(request_id, pending);
         return Err(CabiError::InvalidArgument);
     }
+    if pending.terminal.load(Ordering::Acquire) {
+        return Err(CabiError::Timeout);
+    }
 
-    let next = if timeout_ms == 0 {
-        next_ready(&mut pending.stream)
-    } else {
-        next_within(&mut pending.stream, timeout_ms)
+    let next = {
+        let mut stream = pending
+            .stream
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if pending.terminal.load(Ordering::Acquire) {
+            return Err(CabiError::Timeout);
+        }
+        if timeout_ms == 0 {
+            next_ready(&mut stream)
+        } else {
+            next_within(&mut stream, timeout_ms)
+        }
     };
 
     match next {
         Some(event) => {
             let terminal = event.is_terminal();
             write_event(out_event, event)?;
-            // Keep the stream alive for the next pull unless this was the last
-            // event; a terminal event drops `pending` so the id is consumed.
-            if !terminal {
-                reinsert_pending(request_id, pending);
+            if terminal {
+                pending.terminal.store(true, Ordering::Release);
+                remove_pending(request_id, &pending);
             }
             Ok(())
         }
-        None => {
-            reinsert_pending(request_id, pending);
-            Err(CabiError::Timeout)
-        }
+        None => Err(CabiError::Timeout),
     }
+}
+
+fn control_pending(
+    session_id: u32,
+    request_id: u32,
+    action: ControlAction,
+) -> Result<(), CabiError> {
+    if session_id == 0 || request_id == 0 {
+        return Err(CabiError::InvalidArgument);
+    }
+    let pending = get_pending(request_id)?.ok_or(CabiError::NotFound)?;
+    if pending.session_id != session_id {
+        return Err(CabiError::InvalidArgument);
+    }
+    if pending.terminal.load(Ordering::Acquire) {
+        return Err(CabiError::NotFound);
+    }
+    match action {
+        ControlAction::Interrupt => pending.control.interrupt(),
+        ControlAction::Cancel => pending.control.cancel(),
+    }
+    .map_err(|_| CabiError::InvalidState)
 }
 
 /// Pull the next surfaced event already buffered on the stream without blocking.
@@ -494,20 +544,26 @@ impl Wake for NoopWake {
     fn wake(self: Arc<Self>) {}
 }
 
-fn take_pending(request_id: u32) -> Result<Option<PendingSubmit>, CabiError> {
+fn get_pending(request_id: u32) -> Result<Option<Arc<PendingSubmit>>, CabiError> {
     let _guard = lock_runtime();
     let runtime = runtime_mut()?;
-    Ok(pending_map(runtime).remove(&request_id))
+    Ok(pending_map(runtime).get(&request_id).cloned())
 }
 
-fn reinsert_pending(request_id: u32, pending: PendingSubmit) {
+fn remove_pending(request_id: u32, pending: &Arc<PendingSubmit>) {
     let _guard = lock_runtime();
     if let Ok(runtime) = runtime_mut() {
-        pending_map(runtime).insert(request_id, pending);
+        let mut pending_map = pending_map(runtime);
+        if pending_map
+            .get(&request_id)
+            .is_some_and(|stored| Arc::ptr_eq(stored, pending))
+        {
+            pending_map.remove(&request_id);
+        }
     }
 }
 
-fn pending_map(runtime: &RuntimeController) -> MutexGuard<'_, HashMap<u32, PendingSubmit>> {
+fn pending_map(runtime: &RuntimeController) -> MutexGuard<'_, HashMap<u32, Arc<PendingSubmit>>> {
     runtime
         .pending
         .lock()

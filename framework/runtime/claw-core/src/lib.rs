@@ -14,6 +14,7 @@ pub use agent::IterationId;
 pub use claw_utils::IdParseError;
 pub use event::AgentEvent;
 pub use orchestrator::{
-    DriveOutput, Orchestrator, OrchestratorBuildError, RootReply, SubmitStream,
+    DriveOutput, Orchestrator, OrchestratorBuildError, RootReply, SubmitControl,
+    SubmitControlError, SubmitStream,
 };
-pub use session::{DeliverError, DeliveryKind, SessionError, SessionId};
+pub use session::{DeliverError, SessionError, SessionId};

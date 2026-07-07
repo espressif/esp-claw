@@ -18,7 +18,6 @@
 
 use claw_agent::{AgentEvent, AgentSystem};
 use claw_api::{BackendKind, ClawApiConfig};
-use claw_core::DeliveryKind;
 use claw_interface::{
     BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp, StdThread, TokioExecutor,
 };
@@ -74,10 +73,13 @@ async fn main() -> anyhow::Result<()> {
         "Hello from the agent — the local time is 2026-06-29T17:00:00Z.",
     )]);
 
-    let system =         AgentSystem::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new::<
-            StdThread,
-            TokioExecutor,
-        >(scripted_llm(), claw_agent::AgentPersistenceConfig::new("/mem"))?;
+    let system = AgentSystem::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new::<
+        StdThread,
+        TokioExecutor,
+    >(
+        scripted_llm(),
+        claw_agent::AgentPersistenceConfig::new("/mem"),
+    )?;
     system
         .tool_registry()
         .register(Tool::from_sync(TimeNowTool))?;
@@ -87,11 +89,7 @@ async fn main() -> anyhow::Result<()> {
 
     // 2. Drive the loop: explicit session id selects the agent session. `submit`
     //    returns a stream of `AgentEvent`s; draining it runs the turn.
-    let mut stream = system.submit(
-        session,
-        "Hi, what time is it?".to_string(),
-        DeliveryKind::Interrupt,
-    );
+    let mut stream = system.submit(session, "Hi, what time is it?".to_string());
 
     println!("\nsession `{session}` events:");
     let mut outputs = Vec::new();

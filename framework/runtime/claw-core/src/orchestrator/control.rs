@@ -2,9 +2,9 @@
 //!
 //! [`Orchestrator::submit`](crate::orchestrator::Orchestrator::submit) owns
 //! per-session delivery. While a session drive is awaiting LLM/tool work, the
-//! orchestrator stores a [`SessionControl`] for that drive so concurrent
-//! submissions can request an interrupt or cancel without exposing the drive
-//! protocol outside this module.
+//! orchestrator stores a [`SessionControl`] for that drive so the active
+//! [`SubmitStream`](crate::orchestrator::SubmitStream) can request an interrupt
+//! or cancel without exposing the drive protocol outside this module.
 //!
 //! Everything is behind `Arc`/atomics so a shared `&SessionControl` can both be
 //! observed by the drive loop and mutated by the control arm without a mutable
@@ -18,8 +18,7 @@ type CancelHook = Arc<dyn Fn() + Send + Sync + 'static>;
 /// Why an interruptible instance drive stopped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DriveStop {
-    /// No agent was ready: the drive ran to natural quiescence (the ordinary
-    /// end of an `Append` delivery).
+    /// No agent was ready: the drive ran to natural quiescence.
     Quiescent,
     /// A graceful interrupt was honoured: the in-flight iteration finished and
     /// committed, then the loop stopped before starting the next one.

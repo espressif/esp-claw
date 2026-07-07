@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use claw_api::ClawApiConfig;
 pub use claw_core::{
-    AgentEvent, DeliveryKind, IterationId, SessionId, SubmitStream as AgentEventStream,
+    AgentEvent, IterationId, SessionId, SubmitControl, SubmitControlError,
+    SubmitStream as AgentEventStream,
 };
 use claw_core::{DeliverError, Orchestrator, OrchestratorBuildError, SessionError, SubmitStream};
 use claw_interface::{ClawExecutor, ClawFs, ClawHttp, ClawThread, ClawTimer, FsError};
@@ -186,16 +187,12 @@ where
     ///
     /// Returns immediately with a [`SubmitStream`]: an async stream of
     /// [`AgentEvent`]s. The turn runs as the caller drains the stream, which ends
-    /// when the turn finishes. A submit to an unknown session or a superseded
-    /// submission surfaces as a single [`AgentEvent::Error`] before the stream
-    /// ends, so this method is infallible at the call boundary.
-    pub fn submit(
-        &self,
-        session: SessionId,
-        text: impl Into<String>,
-        kind: DeliveryKind,
-    ) -> SubmitStream {
-        self.orchestrator.submit(session, text.into(), kind, None)
+    /// when the turn finishes. A submit to an unknown session, or to a session
+    /// that already has an active submission, surfaces as a single
+    /// [`AgentEvent::Error`] before the stream ends, so this method is infallible
+    /// at the call boundary.
+    pub fn submit(&self, session: SessionId, text: impl Into<String>) -> SubmitStream {
+        self.orchestrator.submit(session, text.into(), None)
     }
 
     /// Like [`submit`](Self::submit) but installs a type-erased per-submission
@@ -205,11 +202,9 @@ where
         &self,
         session: SessionId,
         text: impl Into<String>,
-        kind: DeliveryKind,
         context: Option<SharedContext>,
     ) -> SubmitStream {
-        self.orchestrator
-            .submit(session, text.into(), kind, context)
+        self.orchestrator.submit(session, text.into(), context)
     }
 
     /// Create a fresh isolated conversation session.
@@ -278,18 +273,68 @@ fn clear_storage_tree<F: ClawFs>(fs: &F, path: &str) -> AgentResult<()> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use core::future::Future;
+    use core::pin::Pin;
+    use core::task::{Context, Poll};
+
     use futures_lite::future::block_on;
     use futures_lite::StreamExt;
 
     use claw_api::{BackendKind, ClawApiConfig};
     use claw_interface::{
-        BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp, StdThread, TokioExecutor,
+        BlockingHttpAdapter, Cancel, ClawHttp, HttpError, HttpJsonRequest, HttpResponseFuture,
+        ImmediateTimer, MemFs, SharedScriptHttp, StdThread, TokioExecutor,
     };
     use serde_json::json;
 
     use super::*;
 
     type TestSystem = AgentSystem<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>;
+    type SlowTestSystem = AgentSystem<MemFs, SlowScriptHttp, ImmediateTimer>;
+
+    #[derive(Default)]
+    struct SlowScriptHttp;
+
+    impl ClawHttp for SlowScriptHttp {
+        fn post_json<'a>(
+            &'a mut self,
+            request: &'a HttpJsonRequest<'a>,
+            cancel: Cancel<'a>,
+        ) -> HttpResponseFuture<'a> {
+            Box::pin(async move {
+                YieldTimes::new(16).await;
+                if cancel.is_cancelled() {
+                    return Err(HttpError::Aborted);
+                }
+                let mut inner = BlockingHttpAdapter::new(SharedScriptHttp::default());
+                inner.post_json(request, cancel).await
+            })
+        }
+    }
+
+    struct YieldTimes {
+        remaining: u32,
+    }
+
+    impl YieldTimes {
+        const fn new(remaining: u32) -> Self {
+            Self { remaining }
+        }
+    }
+
+    impl Future for YieldTimes {
+        type Output = ();
+
+        fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+            if self.remaining == 0 {
+                Poll::Ready(())
+            } else {
+                self.remaining -= 1;
+                context.waker().wake_by_ref();
+                Poll::Pending
+            }
+        }
+    }
 
     #[test]
     fn clear_storage_tree_removes_nested_files() {
@@ -323,13 +368,27 @@ mod tests {
         block_on(stream.collect())
     }
 
+    fn drain_until_turn_ended(mut stream: SubmitStream) -> Vec<AgentEvent> {
+        block_on(async move {
+            let mut events = Vec::new();
+            while let Some(event) = stream.next().await {
+                let ended = event == AgentEvent::TurnEnded;
+                events.push(event);
+                if ended {
+                    break;
+                }
+            }
+            events
+        })
+    }
+
     #[test]
     fn submit_streams_root_reply_as_output() {
         let _script = SharedScriptHttp::serialize();
         let system = test_system(vec![assistant_text("hello there")]);
         let session = system.new_session();
 
-        let events = drain(system.submit(session, "say hi".to_string(), DeliveryKind::Interrupt));
+        let events = drain(system.submit(session, "say hi".to_string()));
 
         assert_eq!(events.first(), Some(&AgentEvent::TurnStarted));
         assert_eq!(events.last(), Some(&AgentEvent::TurnEnded));
@@ -347,23 +406,126 @@ mod tests {
     fn submit_unknown_session_streams_error() {
         let _script = SharedScriptHttp::serialize();
         let system = test_system(vec![]);
-        let events = drain(system.submit(SessionId(9), "x".to_string(), DeliveryKind::Interrupt));
+        let events = drain(system.submit(SessionId(9), "x".to_string()));
         assert!(matches!(
             events.as_slice(),
             [AgentEvent::Error { message }] if message.contains("session-9")
         ));
     }
 
+    #[test]
+    fn concurrent_submit_to_same_session_streams_error() {
+        let _script = SharedScriptHttp::serialize();
+        let system = slow_test_system(vec![assistant_text("first")]);
+        let session = system.new_session();
+
+        let first = system.submit(session, "first".to_string());
+        let second_events = drain(system.submit(session, "second".to_string()));
+        let first_events = drain(first);
+
+        assert!(matches!(
+            second_events.as_slice(),
+            [AgentEvent::Error { message }] if message.contains("active submission")
+        ));
+        assert!(first_events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Output { text } if text == "first")));
+    }
+
+    #[test]
+    fn submit_stream_control_methods_are_idempotent() {
+        let _script = SharedScriptHttp::serialize();
+        let system = slow_test_system(vec![assistant_text("cancelled")]);
+        let session = system.new_session();
+        let stream = system.submit(session, "cancel me".to_string());
+
+        assert!(stream.interrupt().is_ok());
+        assert!(stream.interrupt().is_ok());
+        assert!(stream.cancel().is_ok());
+        assert!(stream.cancel().is_ok());
+
+        let events = drain(stream);
+        assert_eq!(events.first(), Some(&AgentEvent::TurnStarted));
+        assert_eq!(events.last(), Some(&AgentEvent::TurnEnded));
+    }
+
+    #[test]
+    fn delete_session_cancels_active_stream() {
+        let _script = SharedScriptHttp::serialize();
+        let system = slow_test_system(vec![assistant_text("should not surface")]);
+        let session = system.new_session();
+        let stream = system.submit(session, "delete me".to_string());
+
+        system.delete_session(session).unwrap();
+        let after_delete = drain(system.submit(session, "after delete".to_string()));
+        let events = drain(stream);
+
+        assert!(matches!(
+            after_delete.as_slice(),
+            [AgentEvent::Error { message }] if message.contains("session-")
+        ));
+        assert_eq!(events.first(), Some(&AgentEvent::TurnStarted));
+        assert_eq!(events.last(), Some(&AgentEvent::TurnEnded));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, AgentEvent::Output { .. })),
+            "deleted stream should be cancelled without output: {events:?}"
+        );
+    }
+
+    #[test]
+    fn stale_stream_control_does_not_cancel_new_submission() {
+        let _script = SharedScriptHttp::serialize();
+        let system = slow_test_system(vec![assistant_text("first"), assistant_text("second")]);
+        let session = system.new_session();
+
+        let first = system.submit(session, "first".to_string());
+        let stale_control = first.control();
+        let first_events = drain_until_turn_ended(first);
+        assert!(first_events
+            .iter()
+            .any(|event| matches!(event, AgentEvent::Output { text } if text == "first")));
+
+        let second = system.submit(session, "second".to_string());
+        assert!(stale_control.cancel().is_ok());
+        let second_events = drain(second);
+
+        assert!(
+            second_events
+                .iter()
+                .any(|event| matches!(event, AgentEvent::Output { text } if text == "second")),
+            "second events: {second_events:?}"
+        );
+    }
+
     fn test_system(bodies: Vec<String>) -> TestSystem {
-        let mut script = Vec::with_capacity(bodies.len().saturating_mul(2));
-        for body in bodies {
+        install_script(bodies);
+        TestSystem::new::<StdThread, TokioExecutor>(
+            llm_config(),
+            AgentPersistenceConfig::new("/mem"),
+        )
+        .unwrap()
+    }
+
+    fn slow_test_system(bodies: Vec<String>) -> SlowTestSystem {
+        install_script(bodies);
+        SlowTestSystem::new::<StdThread, TokioExecutor>(
+            llm_config(),
+            AgentPersistenceConfig::new("/mem"),
+        )
+        .unwrap()
+    }
+
+    fn install_script(bodies: Vec<String>) {
+        let mut script = Vec::with_capacity(bodies.len().saturating_add(1));
+        if !bodies.is_empty() {
             script.push(assistant_text("[]"));
+        }
+        for body in bodies {
             script.push(body);
         }
         SharedScriptHttp::install(script);
-
-        TestSystem::new::<StdThread, TokioExecutor>(llm_config(), AgentPersistenceConfig::new("/mem"))
-            .unwrap()
     }
 
     fn llm_config() -> ClawApiConfig {

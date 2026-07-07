@@ -17,7 +17,7 @@ use anstyle::{AnsiColor, Style};
 use anyhow::{bail, Result};
 use claw_agent::{AgentEvent, AgentPersistenceConfig, AgentSystem, HostAgentSystem};
 use claw_api::{BackendKind, ClawApiConfig};
-use claw_core::{DeliveryKind, SessionId};
+use claw_core::SessionId;
 use futures_lite::StreamExt;
 
 const MEMORY_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/output/claw-agent-chat");
@@ -35,9 +35,7 @@ impl ChatDriver {
     /// Drive one turn, printing each streamed [`AgentEvent`] as it arrives.
     /// Returns whether the turn produced any assistant-visible output.
     async fn send(&mut self, text: impl Into<String>) -> bool {
-        let mut stream = self
-            .system
-            .submit(self.session, text.into(), DeliveryKind::Interrupt);
+        let mut stream = self.system.submit(self.session, text.into());
         let mut saw_output = false;
         while let Some(event) = stream.next().await {
             match event {

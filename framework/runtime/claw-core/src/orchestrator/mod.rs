@@ -19,8 +19,9 @@ use core::cell::RefCell;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
@@ -36,7 +37,7 @@ use crate::agent::{
     AgentIdAllocator, ApprovalDecision, CancelReason, FsAgentFactory, FsAgentFactoryError,
 };
 use crate::event::{AgentEvent, EventSink};
-use crate::session::{DeliverError, DeliveryKind, SessionError, SessionId, SessionStore};
+use crate::session::{DeliverError, SessionError, SessionId, SessionStore};
 
 pub use self::instance::{DriveOutput, RootReply};
 
@@ -54,11 +55,35 @@ const ENGINE_WORKER_STACK_SIZE: usize = 64 * 1024;
 /// it captures.
 type DriveFuture = Pin<Box<dyn Future<Output = ()>>>;
 
-/// One queued unit of delivery for a session, carrying its own event channel and
-/// the invocation context to install while its turn drives.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct SubmissionId(u64);
+
+impl SubmissionId {
+    fn next(counter: &AtomicU64) -> Self {
+        Self(counter.fetch_add(1, Ordering::AcqRel))
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ControlOp {
+    Interrupt,
+    Cancel,
+}
+
+impl ControlOp {
+    fn merge(existing: Option<Self>, incoming: Self) -> Self {
+        match (existing, incoming) {
+            (Some(Self::Cancel), _) | (_, Self::Cancel) => Self::Cancel,
+            _ => Self::Interrupt,
+        }
+    }
+}
+
+/// One submitted turn for a session, carrying its own event channel and the
+/// invocation context to install while it drives.
 struct QueuedSubmission {
+    id: SubmissionId,
     text: String,
-    kind: DeliveryKind,
     /// This submission's event channel, wrapped as a sink. Dropping it closes the
     /// channel, which ends the paired [`SubmitStream`].
     events: EventSink,
@@ -69,10 +94,11 @@ struct QueuedSubmission {
 
 #[derive(Default)]
 struct SessionDrive {
-    active: bool,
+    active: Option<SubmissionId>,
     control: Option<SessionControl>,
-    carried: Option<QueuedSubmission>,
-    pending: VecDeque<QueuedSubmission>,
+    requested_control: Option<ControlOp>,
+    next_mode: StartMode,
+    deleting: bool,
 }
 
 /// A command the [`Orchestrator`] handle sends to its engine worker.
@@ -83,11 +109,16 @@ struct SessionDrive {
 /// shutdown drain in-flight drives and exit the run loop so the worker joins.
 enum Command {
     Submit {
+        submission: SubmissionId,
         session: SessionId,
         text: String,
-        kind: DeliveryKind,
         events: EventSink,
         context: Option<SharedContext>,
+    },
+    Control {
+        session: SessionId,
+        submission: SubmissionId,
+        op: ControlOp,
     },
     DeleteSession {
         session: SessionId,
@@ -95,23 +126,197 @@ enum Command {
     Stop,
 }
 
+const SUBMIT_CONTROL_RUNNING: u8 = 0;
+const SUBMIT_CONTROL_INTERRUPT_REQUESTED: u8 = 1;
+const SUBMIT_CONTROL_CANCEL_REQUESTED: u8 = 2;
+const SUBMIT_CONTROL_FINISHED: u8 = 3;
+
+/// Failure sending a control request for a [`SubmitStream`].
+#[derive(Debug, thiserror::Error)]
+pub enum SubmitControlError {
+    /// The orchestrator worker is gone, so the control request could not be
+    /// delivered.
+    #[error("orchestrator worker is not running")]
+    WorkerStopped,
+}
+
+/// Cloneable control handle for one submitted turn.
+///
+/// The main public surface is still [`SubmitStream::interrupt`] /
+/// [`SubmitStream::cancel`]. This handle exists so adapters that split event
+/// receiving from request control (for example a C ABI pending-request table)
+/// can keep the control half available while another caller is blocked waiting
+/// for the next stream event.
+#[derive(Clone)]
+pub struct SubmitControl {
+    session: SessionId,
+    submission: SubmissionId,
+    command_tx: Sender<Command>,
+    state: Arc<AtomicU8>,
+}
+
+impl SubmitControl {
+    fn new(
+        session: SessionId,
+        submission: SubmissionId,
+        command_tx: Sender<Command>,
+        state: u8,
+    ) -> Self {
+        Self {
+            session,
+            submission,
+            command_tx,
+            state: Arc::new(AtomicU8::new(state)),
+        }
+    }
+
+    /// Gracefully stop this submission at the next drive boundary.
+    ///
+    /// This method is idempotent. If cancellation was already requested, the
+    /// stronger cancellation request is kept. `Ok(())` means the request was
+    /// accepted or was already unnecessary; the caller should continue draining
+    /// the stream to observe when it actually ends.
+    pub fn interrupt(&self) -> Result<(), SubmitControlError> {
+        loop {
+            match self.state.load(Ordering::Acquire) {
+                SUBMIT_CONTROL_RUNNING => {
+                    if self
+                        .state
+                        .compare_exchange(
+                            SUBMIT_CONTROL_RUNNING,
+                            SUBMIT_CONTROL_INTERRUPT_REQUESTED,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        return self.send_control(ControlOp::Interrupt, SUBMIT_CONTROL_RUNNING);
+                    }
+                }
+                SUBMIT_CONTROL_INTERRUPT_REQUESTED
+                | SUBMIT_CONTROL_CANCEL_REQUESTED
+                | SUBMIT_CONTROL_FINISHED => return Ok(()),
+                _ => return Ok(()),
+            }
+        }
+    }
+
+    /// Hard-cancel this submission, aborting in-flight LLM/tool work.
+    ///
+    /// This method is idempotent. A cancellation upgrades a previously requested
+    /// interrupt. `Ok(())` means the request was accepted or was already
+    /// unnecessary; the caller should continue draining the stream to observe
+    /// when it actually ends.
+    pub fn cancel(&self) -> Result<(), SubmitControlError> {
+        loop {
+            match self.state.load(Ordering::Acquire) {
+                SUBMIT_CONTROL_RUNNING => {
+                    if self
+                        .state
+                        .compare_exchange(
+                            SUBMIT_CONTROL_RUNNING,
+                            SUBMIT_CONTROL_CANCEL_REQUESTED,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        return self.send_control(ControlOp::Cancel, SUBMIT_CONTROL_RUNNING);
+                    }
+                }
+                SUBMIT_CONTROL_INTERRUPT_REQUESTED => {
+                    if self
+                        .state
+                        .compare_exchange(
+                            SUBMIT_CONTROL_INTERRUPT_REQUESTED,
+                            SUBMIT_CONTROL_CANCEL_REQUESTED,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        return self
+                            .send_control(ControlOp::Cancel, SUBMIT_CONTROL_INTERRUPT_REQUESTED);
+                    }
+                }
+                SUBMIT_CONTROL_CANCEL_REQUESTED | SUBMIT_CONTROL_FINISHED => return Ok(()),
+                _ => return Ok(()),
+            }
+        }
+    }
+
+    fn finish(&self) {
+        self.state.store(SUBMIT_CONTROL_FINISHED, Ordering::Release);
+    }
+
+    fn send_control(&self, op: ControlOp, restore_state: u8) -> Result<(), SubmitControlError> {
+        match self.command_tx.try_send(Command::Control {
+            session: self.session,
+            submission: self.submission,
+            op,
+        }) {
+            Ok(()) => Ok(()),
+            Err(_) => {
+                self.state.store(restore_state, Ordering::Release);
+                Err(SubmitControlError::WorkerStopped)
+            }
+        }
+    }
+}
+
 /// The async stream one [`Orchestrator::submit`] returns.
 ///
 /// One `submit` == one turn == one session, so the stream *is* that scope. It is
 /// a thin wrapper over this submission's event `Receiver`: the engine worker
 /// produces the events; the caller just drains them. The stream ends when this
-/// submission's turn finishes (its event channel closes).
+/// submission's turn finishes (its event channel closes). The stream also owns
+/// control over that submission: [`interrupt`](Self::interrupt) and
+/// [`cancel`](Self::cancel) request that this specific stream finish early.
 pub struct SubmitStream {
+    control: SubmitControl,
     /// This submission's event channel. `async_channel::Receiver` is `!Unpin`
     /// (it holds a pinned listener), so it is box-pinned once here.
     events: Pin<Box<Receiver<AgentEvent>>>,
 }
 
 impl SubmitStream {
-    fn new(events: Receiver<AgentEvent>) -> Self {
+    fn new(
+        session: SessionId,
+        submission: SubmissionId,
+        command_tx: Sender<Command>,
+        events: Receiver<AgentEvent>,
+        control_state: u8,
+    ) -> Self {
         Self {
+            control: SubmitControl::new(session, submission, command_tx, control_state),
             events: Box::pin(events),
         }
+    }
+
+    /// Return a cloneable control handle for this submitted turn.
+    #[must_use]
+    pub fn control(&self) -> SubmitControl {
+        self.control.clone()
+    }
+
+    /// Gracefully stop this submission at the next drive boundary.
+    ///
+    /// This method is idempotent. If cancellation was already requested, the
+    /// stronger cancellation request is kept. `Ok(())` means the request was
+    /// accepted or was already unnecessary; the caller should continue draining
+    /// the stream to observe when it actually ends.
+    pub fn interrupt(&self) -> Result<(), SubmitControlError> {
+        self.control.interrupt()
+    }
+
+    /// Hard-cancel this submission, aborting in-flight LLM/tool work.
+    ///
+    /// This method is idempotent. A cancellation upgrades a previously requested
+    /// interrupt. `Ok(())` means the request was accepted or was already
+    /// unnecessary; the caller should continue draining the stream to observe
+    /// when it actually ends.
+    pub fn cancel(&self) -> Result<(), SubmitControlError> {
+        self.control.cancel()
     }
 }
 
@@ -119,15 +324,30 @@ impl Stream for SubmitStream {
     type Item = AgentEvent;
 
     fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<AgentEvent>> {
-        self.get_mut().events.as_mut().poll_next(context)
+        let this = self.get_mut();
+        match this.events.as_mut().poll_next(context) {
+            Poll::Ready(None) => {
+                this.control.finish();
+                Poll::Ready(None)
+            }
+            other => other,
+        }
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum StartMode {
+    #[default]
     Fresh,
     Interrupted,
-    Cancelled,
+}
+
+fn apply_control(control: &SessionControl, op: Option<ControlOp>) {
+    match op {
+        Some(ControlOp::Interrupt) => control.request_interrupt(),
+        Some(ControlOp::Cancel) => control.request_cancel(),
+        None => {}
+    }
 }
 
 /// What can go wrong while building an [`Orchestrator`].
@@ -167,6 +387,10 @@ pub struct Orchestrator {
     sessions: Arc<SessionStore>,
     /// Outbound command channel to the engine worker.
     command_tx: Sender<Command>,
+    /// Process-local id source for submissions. The id travels with
+    /// `SubmitStream` control requests so an old stream cannot cancel a newer
+    /// stream in the same session.
+    next_submission_id: AtomicU64,
     /// The drive worker, joined on drop. `Mutex<Option<..>>` so `Drop` can take
     /// it out behind a shared borrow.
     worker: Mutex<Option<WorkerHandle>>,
@@ -227,6 +451,7 @@ impl Orchestrator {
             Ok(Ok(())) => Ok(Self {
                 sessions,
                 command_tx,
+                next_submission_id: AtomicU64::new(1),
                 worker: Mutex::new(Some(worker)),
             }),
             Ok(Err(error)) => {
@@ -254,22 +479,29 @@ impl Orchestrator {
         &self,
         session_id: SessionId,
         text: String,
-        kind: DeliveryKind,
         context: Option<SharedContext>,
     ) -> SubmitStream {
         let (sender, receiver) = async_channel::unbounded();
+        let submission = SubmissionId::next(&self.next_submission_id);
         if !self.sessions.contains(session_id) {
             let _ = sender.try_send(AgentEvent::Error {
                 message: DeliverError::SessionNotFound(session_id).to_string(),
             });
-            return SubmitStream::new(receiver);
+            return SubmitStream::new(
+                session_id,
+                submission,
+                self.command_tx.clone(),
+                receiver,
+                SUBMIT_CONTROL_FINISHED,
+            );
         }
 
         let events = EventSink::new(sender);
+        let mut control_state = SUBMIT_CONTROL_RUNNING;
         if let Err(error) = self.command_tx.try_send(Command::Submit {
+            submission,
             session: session_id,
             text,
-            kind,
             events,
             context,
         }) {
@@ -279,8 +511,15 @@ impl Orchestrator {
                     message: "orchestrator worker is not running".to_string(),
                 });
             }
+            control_state = SUBMIT_CONTROL_FINISHED;
         }
-        SubmitStream::new(receiver)
+        SubmitStream::new(
+            session_id,
+            submission,
+            self.command_tx.clone(),
+            receiver,
+            control_state,
+        )
     }
 
     /// Create a fresh isolated conversation session.
@@ -377,8 +616,13 @@ where
     /// One isolated agent graph per session. Single-owner interior mutability
     /// (`RefCell`): the engine is `!Send` and driven from one thread.
     instances: RefCell<HashMap<SessionId, OrchestratorInstance<F, H, Timer>>>,
-    /// Per-session delivery state (append/interrupt/cancel sequencing).
+    /// Per-session submission state. A session can have at most one active
+    /// `SubmitStream`; control requests are scoped by that stream's submission id.
     drives: RefCell<HashMap<SessionId, SessionDrive>>,
+    /// Sessions for which the engine has already processed `DeleteSession`.
+    /// Session ids are process-unique, so this tombstone set does not need reuse
+    /// handling.
+    deleted_sessions: RefCell<HashSet<SessionId>>,
     /// Session id truth source, shared with the handle.
     sessions: Arc<SessionStore>,
 }
@@ -408,15 +652,15 @@ where
             next_agent_id: AgentIdAllocator::new(),
             instances: RefCell::new(HashMap::new()),
             drives: RefCell::new(HashMap::new()),
+            deleted_sessions: RefCell::new(HashSet::new()),
             sessions,
         })
     }
 
     /// Multiplex every in-flight session drive plus the command channel on one
     /// thread. Each active session is one entry in `inflight`; the command
-    /// receiver is polled alongside them (same hand-rolled shape as the agent
-    /// tick batch), so a new submit/interrupt/cancel is observed between the
-    /// cooperative yields of any running drive.
+    /// receiver is polled alongside them, so a submit or stream control request
+    /// is observed between cooperative yields of any running drive.
     async fn run(self: &Rc<Self>, command_rx: Receiver<Command>) {
         let mut command_rx = core::pin::pin!(command_rx);
         let mut inflight: VecDeque<DriveFuture> = VecDeque::new();
@@ -453,17 +697,23 @@ where
             {
                 EngineEvent::DriveDone => {}
                 EngineEvent::Command(Some(Command::Submit {
+                    submission,
                     session,
                     text,
-                    kind,
                     events,
                     context,
                 })) => {
+                    if self.deleted_sessions.borrow().contains(&session) {
+                        events.emit(AgentEvent::Error {
+                            message: DeliverError::SessionNotFound(session).to_string(),
+                        });
+                        continue;
+                    }
                     if let Some(future) = self.begin_submission(
                         session,
                         QueuedSubmission {
+                            id: submission,
                             text,
-                            kind,
                             events,
                             context,
                         },
@@ -471,6 +721,11 @@ where
                         inflight.push_back(future);
                     }
                 }
+                EngineEvent::Command(Some(Command::Control {
+                    session,
+                    submission,
+                    op,
+                })) => self.control_submission(session, submission, op),
                 EngineEvent::Command(Some(Command::DeleteSession { session })) => {
                     self.drop_session(session);
                 }
@@ -480,10 +735,9 @@ where
         }
     }
 
-    /// Queue `submission` for `session_id`. When the session has no active drive,
-    /// start one and return its future for the run loop to poll; otherwise fold
-    /// the submission into the active drive per its [`DeliveryKind`] and return
-    /// `None`.
+    /// Start `submission` for `session_id` if the session is idle. A second
+    /// concurrent submit is rejected on its own stream instead of being treated
+    /// as legacy delivery control.
     fn begin_submission(
         self: &Rc<Self>,
         session_id: SessionId,
@@ -491,101 +745,118 @@ where
     ) -> Option<DriveFuture> {
         let mut drives = self.drives.borrow_mut();
         let drive = drives.entry(session_id).or_default();
-        if drive.active {
-            match submission.kind {
-                DeliveryKind::Append => drive.pending.push_back(submission),
-                DeliveryKind::Interrupt if drive.carried.is_none() => {
-                    if let Some(control) = &drive.control {
-                        control.request_interrupt();
-                    }
-                    drive.carried = Some(submission);
-                }
-                DeliveryKind::Interrupt => {
-                    drive.pending.push_back(submission);
-                }
-                DeliveryKind::Cancel => {
-                    if let Some(control) = &drive.control {
-                        control.request_cancel();
-                    }
-                    if let Some(replaced) = drive.carried.replace(submission) {
-                        replaced.events.emit(AgentEvent::Error {
-                            message: DeliverError::Superseded.to_string(),
-                        });
-                    }
-                }
-            }
+        if drive.active.is_some() {
+            submission.events.emit(AgentEvent::Error {
+                message: DeliverError::ConcurrentSubmit(session_id).to_string(),
+            });
             None
         } else {
-            drive.active = true;
-            drive.pending.push_back(submission);
+            drive.active = Some(submission.id);
+            drive.control = None;
+            drive.requested_control = None;
             drop(drives);
             let engine = Rc::clone(self);
             Some(Box::pin(async move {
-                engine.drive_submissions(session_id).await;
+                engine.drive_submission(session_id, submission).await;
             }))
         }
     }
 
-    async fn drive_submissions(&self, session_id: SessionId) {
-        let mut mode = StartMode::Fresh;
-        loop {
-            let Some(submission) = self.take_next_submission(session_id) else {
-                self.finish_drive(session_id);
-                return;
-            };
-            let QueuedSubmission {
-                text,
-                kind,
-                events,
-                context,
-            } = submission;
-            events.emit(AgentEvent::TurnStarted);
-            // Install this submission's context for the duration of its turn so
-            // tool handlers deep in the drive can read it back.
-            let drive = claw_tool::with_context(
-                context,
-                self.drive_one_submission(session_id, text, kind, mode, &events),
-            );
-            let stop = match drive.await {
-                Ok((output, stop)) => {
-                    for reply in output.replies {
-                        events.emit(AgentEvent::Output { text: reply.text });
-                    }
-                    stop
-                }
-                Err(error) => {
-                    events.emit(AgentEvent::Error {
-                        message: error.to_string(),
-                    });
-                    DriveStop::Quiescent
-                }
-            };
-            events.emit(AgentEvent::TurnEnded);
-            // Drop this submission's sink so its channel closes and the paired
-            // stream ends; later submissions keep their own channels alive.
-            drop(events);
-            mode = match stop {
-                DriveStop::Quiescent => StartMode::Fresh,
-                DriveStop::Interrupted => StartMode::Interrupted,
-                DriveStop::Cancelled => StartMode::Cancelled,
-            };
-        }
-    }
-
-    fn take_next_submission(&self, session_id: SessionId) -> Option<QueuedSubmission> {
+    fn control_submission(&self, session_id: SessionId, submission: SubmissionId, op: ControlOp) {
         let mut drives = self.drives.borrow_mut();
-        let drive = drives.get_mut(&session_id)?;
-        if let Some(submission) = drive.carried.take() {
-            return Some(submission);
+        let Some(drive) = drives.get_mut(&session_id) else {
+            return;
+        };
+        if drive.active == Some(submission) {
+            drive.requested_control = Some(ControlOp::merge(drive.requested_control, op));
+            if let Some(control) = &drive.control {
+                apply_control(control, drive.requested_control);
+            }
+            return;
         }
-        drive.pending.pop_front()
+
+        // The control belongs to an old or already-finished stream, or to a
+        // submit that was rejected before it became active. Ignore it: submission
+        // ids are precisely what prevents a late control from touching a newer
+        // stream in the same session.
     }
 
-    fn finish_drive(&self, session_id: SessionId) {
+    async fn drive_submission(&self, session_id: SessionId, submission: QueuedSubmission) {
+        let mode = self.take_start_mode(session_id);
+        let QueuedSubmission {
+            id,
+            text,
+            events,
+            context,
+        } = submission;
+        self.set_active_submission(session_id, id);
+        events.emit(AgentEvent::TurnStarted);
+        // Install this submission's context for the duration of its turn so tool
+        // handlers deep in the drive can read it back.
+        let drive = claw_tool::with_context(
+            context,
+            self.drive_one_submission(session_id, text, mode, &events),
+        );
+        let stop = match drive.await {
+            Ok((output, stop)) => {
+                for reply in output.replies {
+                    events.emit(AgentEvent::Output { text: reply.text });
+                }
+                stop
+            }
+            Err(error) => {
+                events.emit(AgentEvent::Error {
+                    message: error.to_string(),
+                });
+                DriveStop::Quiescent
+            }
+        };
+        events.emit(AgentEvent::TurnEnded);
+        // Drop this submission's sink so its channel closes and the paired
+        // stream ends.
+        drop(events);
+        let next_mode = match stop {
+            DriveStop::Quiescent | DriveStop::Cancelled => StartMode::Fresh,
+            DriveStop::Interrupted => StartMode::Interrupted,
+        };
+        self.finish_drive(session_id, next_mode);
+    }
+
+    fn take_start_mode(&self, session_id: SessionId) -> StartMode {
+        let mut drives = self.drives.borrow_mut();
+        let drive = drives.entry(session_id).or_default();
+        let mode = drive.next_mode;
+        drive.next_mode = StartMode::Fresh;
+        mode
+    }
+
+    fn set_active_submission(&self, session_id: SessionId, submission: SubmissionId) {
         let mut drives = self.drives.borrow_mut();
         if let Some(drive) = drives.get_mut(&session_id) {
-            drive.active = false;
+            let previous = drive.active;
+            drive.active = Some(submission);
             drive.control = None;
+            if previous != Some(submission) {
+                drive.requested_control = None;
+            }
+        }
+    }
+
+    fn finish_drive(&self, session_id: SessionId, next_mode: StartMode) {
+        let mut drives = self.drives.borrow_mut();
+        let remove_drive = match drives.get_mut(&session_id) {
+            Some(drive) if drive.deleting => true,
+            Some(drive) => {
+                drive.active = None;
+                drive.control = None;
+                drive.requested_control = None;
+                drive.next_mode = next_mode;
+                false
+            }
+            None => false,
+        };
+        if remove_drive {
+            drives.remove(&session_id);
         }
     }
 
@@ -593,13 +864,7 @@ where
         let mut drives = self.drives.borrow_mut();
         if let Some(drive) = drives.get_mut(&session_id) {
             if let Some(control) = &control {
-                if let Some(submission) = &drive.carried {
-                    match submission.kind {
-                        DeliveryKind::Interrupt => control.request_interrupt(),
-                        DeliveryKind::Cancel => control.request_cancel(),
-                        DeliveryKind::Append => {}
-                    }
-                }
+                apply_control(control, drive.requested_control);
             }
             drive.control = control;
         }
@@ -609,14 +874,9 @@ where
         &self,
         session_id: SessionId,
         text: String,
-        kind: DeliveryKind,
         mode: StartMode,
         events: &EventSink,
     ) -> Result<(DriveOutput, DriveStop), DeliverError> {
-        if !self.sessions.contains(session_id) {
-            return Err(DeliverError::SessionNotFound(session_id));
-        }
-
         // The instance is checked out of the map so it can be driven without
         // holding a `RefCell` borrow across `.await`. `InstanceSlot` is an RAII
         // guard: it reinserts the (possibly mutated) instance on every exit path.
@@ -632,13 +892,11 @@ where
             "turn",
             conversation.turn = turn,
             cause = "message",
-            delivery_kind = ?kind
+            start_mode = ?mode
         )
         .entered();
 
-        if kind == DeliveryKind::Cancel {
-            instance.cancel_active_approval(CancelReason::Superseded);
-        } else if let Some(pending) = instance.active_approval() {
+        if let Some(pending) = instance.active_approval() {
             let control = SessionControl::new();
             self.set_active_control(session_id, Some(control.clone()));
             let result = self
@@ -650,9 +908,6 @@ where
 
         match mode {
             StartMode::Fresh => {
-                if kind == DeliveryKind::Cancel {
-                    instance.cancel_root(CancelReason::Superseded);
-                }
                 instance
                     .deliver(text.clone())
                     .map_err(DeliverError::Agent)?;
@@ -662,19 +917,19 @@ where
                     .interrupt_root(text.clone())
                     .map_err(DeliverError::Agent)?;
             }
-            StartMode::Cancelled => {
-                instance.cancel_root(CancelReason::Superseded);
-                instance
-                    .deliver(text.clone())
-                    .map_err(DeliverError::Agent)?;
-            }
         }
 
         let control = SessionControl::new();
         self.set_active_control(session_id, Some(control.clone()));
-        let output = instance.drive_interruptible(&control, events).await;
+        let (mut output, stop) = instance.drive_interruptible(&control, events).await;
         self.set_active_control(session_id, None);
-        Ok(output)
+        if stop == DriveStop::Cancelled {
+            instance.cancel_all(CancelReason::UserRequested);
+            let cleanup_control = SessionControl::new();
+            let (cleanup_output, _) = instance.drive_interruptible(&cleanup_control, events).await;
+            output.absorb(cleanup_output);
+        }
+        Ok((output, stop))
     }
 
     async fn resolve_pending_approval(
@@ -696,7 +951,11 @@ where
         {
             Ok(resolution) => resolution,
             Err(ApprovalResolverError::Cancelled) => {
-                return Ok((DriveOutput::default(), DriveStop::Cancelled));
+                instance.cancel_all(CancelReason::UserRequested);
+                let cleanup_control = SessionControl::new();
+                let (cleanup_output, _) =
+                    instance.drive_interruptible(&cleanup_control, events).await;
+                return Ok((cleanup_output, DriveStop::Cancelled));
             }
             Err(error) => return Err(DeliverError::Agent(error.to_string())),
         };
@@ -710,7 +969,6 @@ where
                     replies: vec![RootReply {
                         session: session_id,
                         text: message,
-                        ended: false,
                     }],
                 },
                 DriveStop::Quiescent,
@@ -763,10 +1021,29 @@ where
         self.instances.borrow_mut().insert(session_id, instance);
     }
 
-    /// Drop a deleted session's live agent graph and drive state.
+    /// Delete a session's live agent graph and drive state.
+    ///
+    /// If the session has an active stream, deletion first requests cancellation
+    /// on that stream's in-flight drive. The active future owns the stream sink,
+    /// so it must be allowed to unwind and close the stream itself; removing the
+    /// drive table entry here would only orphan the future.
     fn drop_session(&self, session_id: SessionId) {
+        self.deleted_sessions.borrow_mut().insert(session_id);
+        let mut drives = self.drives.borrow_mut();
+        if let Some(drive) = drives.get_mut(&session_id) {
+            if drive.active.is_some() {
+                drive.deleting = true;
+                drive.requested_control =
+                    Some(ControlOp::merge(drive.requested_control, ControlOp::Cancel));
+                if let Some(control) = &drive.control {
+                    apply_control(control, drive.requested_control);
+                }
+                return;
+            }
+        }
+        drives.remove(&session_id);
+        drop(drives);
         self.instances.borrow_mut().remove(&session_id);
-        self.drives.borrow_mut().remove(&session_id);
     }
 }
 
@@ -820,8 +1097,8 @@ enum EngineEvent {
 }
 
 /// Polls every in-flight drive future (rotating the queue, dropping any that
-/// finished) and then the command receiver, mirroring the agent tick batch's
-/// hand-rolled multiplexing so the engine needs no per-session task.
+/// finished) and then the command receiver. This keeps one worker thread while
+/// still letting session drives and stream controls make cooperative progress.
 struct EnginePoll<'a> {
     inflight: &'a mut VecDeque<DriveFuture>,
     recv: Option<Pin<&'a mut Receiver<Command>>>,

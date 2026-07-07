@@ -228,8 +228,6 @@ pub enum AgentCommandError {
 pub enum CancelReason {
     /// A human asked to stop.
     UserRequested,
-    /// The orchestrator replaced this task with a newer one.
-    Superseded,
     /// The host is shutting the agent down.
     Shutdown,
 }

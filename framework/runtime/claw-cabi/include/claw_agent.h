@@ -120,6 +120,40 @@ esp_err_t claw_agent_session_submit(uint32_t session_id,
                                     uint32_t *out_request_id);
 
 /*
+ * Request graceful interruption of a submitted turn.
+ *
+ * The request is keyed by the request id returned from
+ * claw_agent_session_submit(), so a late interrupt cannot affect a newer
+ * submission in the same session. The stream may not end immediately; keep
+ * receiving until DONE or ERROR.
+ *
+ * Returns:
+ * - ESP_OK if the request was accepted or already unnecessary.
+ * - ESP_ERR_INVALID_ARG for invalid ids.
+ * - ESP_ERR_INVALID_STATE if the runtime is not started.
+ * - ESP_ERR_NOT_FOUND if request_id is no longer pending.
+ */
+esp_err_t claw_agent_session_interrupt(uint32_t session_id,
+                                       uint32_t request_id);
+
+/*
+ * Request hard cancellation of a submitted turn.
+ *
+ * The request is keyed by the request id returned from
+ * claw_agent_session_submit(), so a late cancel cannot affect a newer
+ * submission in the same session. The stream may not end immediately; keep
+ * receiving until DONE or ERROR.
+ *
+ * Returns:
+ * - ESP_OK if the request was accepted or already unnecessary.
+ * - ESP_ERR_INVALID_ARG for invalid ids.
+ * - ESP_ERR_INVALID_STATE if the runtime is not started.
+ * - ESP_ERR_NOT_FOUND if request_id is no longer pending.
+ */
+esp_err_t claw_agent_session_cancel(uint32_t session_id,
+                                    uint32_t request_id);
+
+/*
  * Create a new numeric session id.
  *
  * out_session_id must be non-NULL.
