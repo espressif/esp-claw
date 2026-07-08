@@ -142,7 +142,7 @@ impl SyncToolHandler for ReloadSkillsTool {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use claw_interface::ClawFs;
+    use claw_interface::{ClawFs, MemFs};
     use claw_tool::{RawToolInvocation, ToolRegistry};
 
     use super::super::test_support::{
@@ -249,12 +249,11 @@ mod tests {
 
     #[test]
     fn reload_reports_failure_without_panicking() {
-        let (fs, registry) = skill_registry_with_fs(&[("alpha", "First skill")]);
+        let (_fs, registry) = skill_registry_with_fs(&[("alpha", "First skill")]);
         let tools = skill_tools_for_test(registry.skill_set());
         let reload = tool_named(&tools, "reload_skills");
 
-        fs.write_atomic("skills/broken/SKILL.md", b"no front matter here")
-            .unwrap();
+        MemFs::write_atomic("skills/broken/SKILL.md", b"no front matter here").unwrap();
         let output = invoke(&reload, "reload_skills");
         assert!(!output.ok);
         assert!(output.output.contains("Could not refresh skills"));

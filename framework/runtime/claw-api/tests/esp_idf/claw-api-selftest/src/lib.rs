@@ -59,6 +59,7 @@ unsafe fn write_cstr(text: &str, out: *mut c_char, out_len: usize) {
     *out.add(copy) = 0;
 }
 
+#[derive(Default)]
 struct NoDelayTimer;
 
 impl ClawTimer for NoDelayTimer {
@@ -156,7 +157,6 @@ pub unsafe extern "C" fn claw_api_selftest_chat_async(
 
     let mut config = ClawApiConfig::new(BackendKind::OpenAiCompatible, api_key, model, base_url);
     config.max_tokens = 64;
-    let base_url = base_url.to_string();
     let user_message = user_message.to_string();
 
     let executor: edge_executor::LocalExecutor = Default::default();
@@ -165,10 +165,7 @@ pub unsafe extern "C" fn claw_api_selftest_chat_async(
 
     let task = executor.spawn(async move {
         let abort = AtomicBool::new(false);
-        let Ok(http) = EspIdfHttp::new(&base_url) else {
-            return (ERR_INIT, "failed to create http client".to_string());
-        };
-        let Ok(mut api) = ClawApiAsync::init(config, http, NoDelayTimer) else {
+        let Ok(mut api) = ClawApiAsync::<EspIdfHttp, NoDelayTimer>::init_default(config) else {
             return (ERR_INIT, "failed to initialize async api".to_string());
         };
         let messages = json!([{ "role": "user", "content": user_message }]);

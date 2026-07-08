@@ -31,11 +31,10 @@ use claw_interface::{
 };
 use claw_tool::ToolRegistry;
 use futures_core::Stream;
+use strum::IntoStaticStr;
 use tracing::Instrument as _;
 
-use crate::agent::{
-    AgentIdAllocator, ApprovalDecision, CancelReason, FsAgentFactory, FsAgentFactoryError,
-};
+use crate::agent::{AgentIdAllocator, CancelReason, FsAgentFactory, FsAgentFactoryError};
 use crate::event::{EventSink, SessionEvent, TurnCause};
 use crate::session::{DeliverError, SessionId, SessionStore, TurnId, TurnIdAllocator};
 
@@ -55,9 +54,11 @@ const ENGINE_WORKER_STACK_SIZE: usize = 64 * 1024;
 /// it captures.
 type DriveFuture = Pin<Box<dyn Future<Output = ()>>>;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq)]
 enum ControlOp {
+    #[strum(serialize = "interrupt")]
     Interrupt,
+    #[strum(serialize = "cancel")]
     Cancel,
 }
 
@@ -301,7 +302,7 @@ impl From<FsAgentFactoryError> for OrchestratorBuildError {
     fn from(error: FsAgentFactoryError) -> Self {
         match error {
             FsAgentFactoryError::MissingPersistenceDir => Self::MissingPersistenceDir,
-            FsAgentFactoryError::ExtractionLlm(message) => Self::ExtractionLlm(message),
+            FsAgentFactoryError::ExtractionLlm(message) => Self::ExtractionLlm(message.to_string()),
             FsAgentFactoryError::LongTermInit(source) => Self::LongTermInit(source.to_string()),
         }
     }
@@ -343,7 +344,7 @@ impl Orchestrator {
         skill_roots: Vec<String>,
     ) -> Result<Self, OrchestratorBuildError>
     where
-        Filesystem: ClawFs + Clone + Default + 'static,
+        Filesystem: ClawFs + 'static,
         Http: ClawHttp + Default + 'static,
         Timer: ClawTimer + Default + 'static,
         Thread: ClawThread,
@@ -547,7 +548,7 @@ fn run_engine<Filesystem, Http, Timer, Executor>(
     command_rx: Receiver<Command>,
     ready: mpsc::Sender<Result<(), OrchestratorBuildError>>,
 ) where
-    Filesystem: ClawFs + Clone + Default + 'static,
+    Filesystem: ClawFs + 'static,
     Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
     Executor: ClawExecutor,
@@ -555,8 +556,8 @@ fn run_engine<Filesystem, Http, Timer, Executor>(
     let engine = match Engine::<Filesystem, Http, Timer>::new(
         tools,
         llm_config,
-        &persistence_dir,
-        &skill_roots,
+        persistence_dir,
+        skill_roots,
         sessions,
     ) {
         Ok(engine) => Rc::new(engine),
@@ -575,7 +576,7 @@ fn run_engine<Filesystem, Http, Timer, Executor>(
 /// state; runs on one worker thread and multiplexes every live session.
 struct Engine<Filesystem, Http, Timer>
 where
-    Filesystem: ClawFs + Clone + Default + 'static,
+    Filesystem: ClawFs + 'static,
     Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
@@ -596,15 +597,15 @@ where
 
 impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
 where
-    Filesystem: ClawFs + Clone + Default + 'static,
+    Filesystem: ClawFs + 'static,
     Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     fn new(
         tools: Arc<ToolRegistry>,
         llm_config: ClawApiConfig,
-        persistence_dir: &str,
-        skill_roots: &[String],
+        persistence_dir: String,
+        skill_roots: Vec<String>,
         sessions: Arc<SessionStore>,
     ) -> Result<Self, OrchestratorBuildError> {
         let factory = Arc::new(FsAgentFactory::<Filesystem, Http, Timer>::new(
@@ -804,10 +805,7 @@ where
         session_id: SessionId,
         op: ControlOp,
     ) -> (Result<(), SessionControlError>, Option<DriveFuture>) {
-        let op_name = match op {
-            ControlOp::Interrupt => "interrupt",
-            ControlOp::Cancel => "cancel",
-        };
+        let op_name: &'static str = (&op).into();
         let span = tracing::info_span!("session", run.session = %session_id);
         let _enter = span.enter();
         if !self.sessions.contains(session_id) {
@@ -1126,10 +1124,7 @@ where
                 }
             }
             Err(error) => {
-                let kind = match &error {
-                    DeliverError::SessionNotFound(_) => "session_not_found",
-                    DeliverError::Agent(_) => "agent",
-                };
+                let kind: &'static str = (&error).into();
                 tracing::error!(name: "error", kind);
                 events.emit(SessionEvent::Error {
                     message: error.to_string(),
@@ -1322,10 +1317,7 @@ where
             ));
         };
 
-        let decision_name = match &decision {
-            ApprovalDecision::Approved => "approved",
-            ApprovalDecision::Rejected(_) => "rejected",
-        };
+        let decision_name: &'static str = (&decision).into();
         tracing::info!(name: "approval_resolved", decision = decision_name);
         instance
             .resolve_active_approval(decision)
@@ -1409,7 +1401,7 @@ pub(crate) enum InstanceWork {
 /// early `?`, a panic while driving, or normal return) can drop the graph.
 struct InstanceSlot<'a, Filesystem, Http, Timer>
 where
-    Filesystem: ClawFs + Clone + Default + 'static,
+    Filesystem: ClawFs + 'static,
     Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
@@ -1420,7 +1412,7 @@ where
 
 impl<Filesystem, Http, Timer> InstanceSlot<'_, Filesystem, Http, Timer>
 where
-    Filesystem: ClawFs + Clone + Default + 'static,
+    Filesystem: ClawFs + 'static,
     Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
@@ -1435,7 +1427,7 @@ where
 
 impl<Filesystem, Http, Timer> Drop for InstanceSlot<'_, Filesystem, Http, Timer>
 where
-    Filesystem: ClawFs + Clone + Default + 'static,
+    Filesystem: ClawFs + 'static,
     Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {

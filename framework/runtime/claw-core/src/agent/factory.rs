@@ -18,7 +18,7 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use claw_api::{ClawApiAsync, ClawApiConfig};
+use claw_api::{ClawApiAsync, ClawApiConfig, InitError};
 use claw_context::Block;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::{
@@ -37,7 +37,7 @@ use crate::agent::manifest::AgentManifest;
 use crate::agent::Agent;
 use crate::memory::{
     agent_store, global_store, Extractor, LlmExtractor, LongTermMemoryContextAdapter,
-    ProfileContextAdapter, ProfileTools, RuleBasedTierClassifier, TierClassifier,
+    ProfileContextAdapter, RuleBasedTierClassifier, TierClassifier,
 };
 use crate::session::SessionId;
 
@@ -97,7 +97,7 @@ impl AgentPlacement {
 /// store under `<long_term_dir>/agents/<kind>` plus a clone of the shared global
 /// store under `<long_term_dir>/global`, fronted by one
 /// [`LongTermMemoryContextAdapter`].
-struct LongTermDeps<F: ClawFs + Clone + 'static> {
+struct LongTermDeps<F: ClawFs + 'static> {
     /// The single store shared by every agent (user-level facts). Cloned (an
     /// `Arc` bump) into each agent's adapter so all agents read/write one store.
     global: LongTermMemory<F>,
@@ -109,21 +109,20 @@ struct LongTermDeps<F: ClawFs + Clone + 'static> {
     extractor: Arc<dyn Extractor>,
 }
 
-impl<F: ClawFs + Clone + 'static> LongTermDeps<F> {
+impl<F: ClawFs + 'static> LongTermDeps<F> {
     /// Build the shared long-term collaborators from the explicit long-term
     /// memory root. The Rust memory runtime owns the internal layout below that
     /// root: `global` for shared facts and `agents/<kind>` for each baked agent
     /// kind's private memory.
     fn from_root(
         long_term_dir: &str,
-        fs: F,
         classifier: Arc<dyn TierClassifier>,
         extractor: Arc<dyn Extractor>,
     ) -> Result<Self, LongTermInitError> {
         let global_dir = join_storage_path(long_term_dir, GLOBAL_LONG_TERM_DIR);
         let agent_root_dir = join_storage_path(long_term_dir, AGENT_LONG_TERM_DIR);
         Ok(Self {
-            global: global_store(&global_dir, fs)?,
+            global: global_store::<F>(&global_dir)?,
             agent_root_dir,
             classifier,
             extractor,
@@ -142,11 +141,11 @@ struct FsAgentFactoryLayout {
 }
 
 impl FsAgentFactoryLayout {
-    fn new(root: &str) -> Self {
+    fn new(root: String) -> Self {
         Self {
-            transcript_dir: join_storage_path(root, TRANSCRIPT_DIR),
-            profile_dir: join_storage_path(root, PROFILE_DIR),
-            long_term_dir: join_storage_path(root, LONG_TERM_DIR),
+            transcript_dir: join_storage_path(&root, TRANSCRIPT_DIR),
+            profile_dir: join_storage_path(&root, PROFILE_DIR),
+            long_term_dir: join_storage_path(&root, LONG_TERM_DIR),
         }
     }
 }
@@ -159,7 +158,7 @@ pub enum FsAgentFactoryError {
     MissingPersistenceDir,
     /// The dedicated extraction LLM client (for long-term memory) failed to init.
     #[error("failed to initialize the extraction LLM client: {0}")]
-    ExtractionLlm(String),
+    ExtractionLlm(#[from] InitError),
     /// A long-term memory journal exists but could not be read at startup.
     #[error("failed to load long-term memory: {0}")]
     LongTermInit(#[from] LongTermInitError),
@@ -182,7 +181,7 @@ fn join_storage_path(parent: &str, child: &str) -> String {
 /// Constructed by [`Orchestrator::new`](crate::Orchestrator::new); each
 /// per-session instance uses it for root agents and spawned subagents.
 pub struct FsAgentFactory<
-    Filesystem: ClawFs + Clone + Default + 'static,
+    Filesystem: ClawFs + 'static,
     Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 > {
@@ -200,12 +199,6 @@ pub struct FsAgentFactory<
     _timer: PhantomData<fn() -> Timer>,
     /// Directory for transcript files; each agent keys its own files by id.
     transcript_dir: String,
-    /// Storage backend cloned into each agent's [`TranscriptStore`] (and its
-    /// long-term store). `Filesystem` is a concrete, statically dispatched
-    /// [`ClawFs`]; it must be `Clone` because every agent gets its own handle
-    /// (use `Arc<ConcreteFs>` for a shared backend -- `Arc<T>` is itself
-    /// `ClawFs`).
-    storage: Filesystem,
     /// Long-term-memory collaborators, shared across every agent this factory
     /// builds. Required: every agent gets a private store plus a clone of the
     /// shared global store, fronted by one [`LongTermMemoryContextAdapter`].
@@ -220,7 +213,7 @@ pub struct FsAgentFactory<
 }
 
 impl<
-        Filesystem: ClawFs + Clone + Default + 'static,
+        Filesystem: ClawFs + 'static,
         Http: ClawHttp + Default + 'static,
         Timer: ClawTimer + Default + 'static,
     > FsAgentFactory<Filesystem, Http, Timer>
@@ -228,9 +221,8 @@ impl<
     /// Build a factory over an LLM `llm_config` and one persistence root.
     ///
     /// The factory owns the memory layout below `persistence_dir`: transcripts,
-    /// editable profile documents, and long-term memory. It constructs the
-    /// storage backend with `Filesystem::default()` and clones that handle per
-    /// agent.
+    /// editable profile documents, and long-term memory. `Filesystem` selects
+    /// the static filesystem HAL backend used by those stores.
     ///
     /// # Errors
     ///
@@ -240,8 +232,8 @@ impl<
     pub fn new(
         tools: Arc<ToolRegistry>,
         llm_config: ClawApiConfig,
-        persistence_dir: &str,
-        skill_roots: &[String],
+        persistence_dir: String,
+        skill_roots: Vec<String>,
     ) -> Result<Self, FsAgentFactoryError> {
         let span = tracing::info_span!("agent.factory");
         let _enter = span.enter();
@@ -250,19 +242,16 @@ impl<
             return Err(FsAgentFactoryError::MissingPersistenceDir);
         }
         let layout = FsAgentFactoryLayout::new(persistence_dir);
-        let storage = Filesystem::default();
 
-        let extraction_llm =
-            match ClawApiAsync::init(llm_config.clone(), Http::default(), Timer::default()) {
-                Ok(llm) => llm,
-                Err(error) => {
-                    tracing::error!(name: "extraction_llm_init_failed", kind = "init");
-                    return Err(FsAgentFactoryError::ExtractionLlm(error.to_string()));
-                }
-            };
+        let extraction_llm = match ClawApiAsync::<Http, Timer>::init_default(llm_config.clone()) {
+            Ok(llm) => llm,
+            Err(error) => {
+                tracing::error!(name: "extraction_llm_init_failed", kind = "init");
+                return Err(FsAgentFactoryError::ExtractionLlm(error));
+            }
+        };
         let long_term = match LongTermDeps::from_root(
             &layout.long_term_dir,
-            storage.clone(),
             RuleBasedTierClassifier::shared(),
             LlmExtractor::shared(extraction_llm),
         ) {
@@ -273,8 +262,8 @@ impl<
             }
         };
 
-        let profile = ProfileStore::new(ProfileConfig::new(&layout.profile_dir), storage.clone());
-        let skills = build_skill_registry(&storage, skill_roots);
+        let profile = ProfileStore::new(ProfileConfig::new(&layout.profile_dir));
+        let skills = build_skill_registry::<Filesystem>(skill_roots);
 
         Ok(Self {
             llm_config,
@@ -282,7 +271,6 @@ impl<
             _http: PhantomData,
             _timer: PhantomData,
             transcript_dir: layout.transcript_dir,
-            storage,
             long_term,
             profile,
             skills,
@@ -295,15 +283,12 @@ impl<
 /// A missing root is skipped so the agent still starts; a real scan
 /// failure (e.g. a malformed `SKILL.md`) disables skills entirely by falling back
 /// to an empty registry rather than aborting agent construction.
-fn build_skill_registry<F: ClawFs + Clone + 'static>(
-    storage: &F,
-    skill_roots: &[String],
-) -> Arc<FsSkillRegistry<F>> {
+fn build_skill_registry<F: ClawFs + 'static>(skill_roots: Vec<String>) -> Arc<FsSkillRegistry<F>> {
     let span = tracing::info_span!("skill.catalog");
     let _enter = span.enter();
-    let mut registry = FsSkillRegistry::new(storage.clone());
+    let mut registry = FsSkillRegistry::<F>::new();
     for root in skill_roots {
-        if !storage.exists(root) {
+        if !F::exists(root.as_str()) {
             tracing::warn!(name: "root_missing", "");
             continue;
         }
@@ -311,7 +296,7 @@ fn build_skill_registry<F: ClawFs + Clone + 'static>(
             Ok(next) => registry = next,
             Err(_) => {
                 tracing::warn!(name: "scan_failed", kind = "set_root");
-                return Arc::new(FsSkillRegistry::new(storage.clone()));
+                return Arc::new(FsSkillRegistry::<F>::new());
             }
         }
     }
@@ -319,7 +304,7 @@ fn build_skill_registry<F: ClawFs + Clone + 'static>(
 }
 
 impl<
-        Filesystem: ClawFs + Clone + Default + 'static,
+        Filesystem: ClawFs + 'static,
         Http: ClawHttp + Default + 'static,
         Timer: ClawTimer + Default + 'static,
     > FsAgentFactory<Filesystem, Http, Timer>
@@ -387,18 +372,17 @@ impl<
         let (subdir, conversation_id) = placement.location();
         let transcript_dir = join_storage_path(&self.transcript_dir, subdir);
         let transcript_config = TranscriptConfig::new(&transcript_dir);
-        let store =
-            match TranscriptStore::new(conversation_id, transcript_config, self.storage.clone()) {
-                Ok(store) => store,
-                Err(error) => {
-                    tracing::error!(
-                        name: "transcript_open_failed",
-                        agent = %id,
-                        kind = %kind.as_str(),
-                    );
-                    return Err(format!("opening transcript for {kind} agent {id}: {error}"));
-                }
-            };
+        let store = match TranscriptStore::<Filesystem>::new(conversation_id, transcript_config) {
+            Ok(store) => store,
+            Err(error) => {
+                tracing::error!(
+                    name: "transcript_open_failed",
+                    agent = %id,
+                    kind = %kind.as_str(),
+                );
+                return Err(format!("opening transcript for {kind} agent {id}: {error}"));
+            }
+        };
         // The LLM client (and its transport) is built inside the agent from this
         // shared config plus the factory's transport type; nothing is minted here.
         let mut agent = match GenericAgent::<Http, Timer>::new(
@@ -422,15 +406,7 @@ impl<
             }
         };
 
-        // Attach editable global profile context to every agent. Only a root agent
-        // gets the mutation tools; subagents read profile through context but do
-        // not write it directly.
-        let profile_tools = if is_root {
-            ProfileTools::Writable
-        } else {
-            ProfileTools::Disabled
-        };
-        let profile_adapter = ProfileContextAdapter::new(self.profile.clone(), profile_tools);
+        let profile_adapter = ProfileContextAdapter::new(self.profile.clone(), is_root);
         if let Err(error) = agent.register_context_adapter(Box::new(profile_adapter)) {
             tracing::error!(
                 name: "context_adapter_attach_failed",
@@ -446,7 +422,7 @@ impl<
         let long_term = &self.long_term;
         let agent_dir = long_term.agent_dir_for(kind);
         let adapter = LongTermMemoryContextAdapter::new(
-            match agent_store(&agent_dir, self.storage.clone()) {
+            match agent_store::<Filesystem>(&agent_dir) {
                 Ok(store) => store,
                 Err(error) => {
                     tracing::error!(
@@ -580,8 +556,8 @@ mod tests {
             FsAgentFactory::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new(
                 Arc::new(ToolRegistry::new()),
                 llm_config,
-                "/mem",
-                &[],
+                "/mem".to_string(),
+                Vec::new(),
             )
             .expect("factory builds");
         (factory, guard)

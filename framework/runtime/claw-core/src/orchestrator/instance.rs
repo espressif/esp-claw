@@ -296,10 +296,7 @@ fn tick_agent(ready: ReadyAgent, events: EventSink) -> AgentTickBoxFuture {
                 tracing::info!(name: "awaiting_approval", approval = %id);
             }
             TickOutcome::Cancelled { reason } => {
-                let reason = match reason {
-                    CancelReason::UserRequested => "user_requested",
-                    CancelReason::Shutdown => "shutdown",
-                };
+                let reason: &'static str = reason.into();
                 if is_root {
                     tracing::warn!(name: "root_cancelled", reason);
                 } else {
@@ -351,7 +348,7 @@ impl GraphHost for InstanceHost {
 /// One session's agent store, graph, scheduler, and root.
 pub(crate) struct OrchestratorInstance<Filesystem, Http, Timer>
 where
-    Filesystem: ClawFs + Clone + Default + 'static,
+    Filesystem: ClawFs + 'static,
     Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
@@ -391,7 +388,7 @@ where
 
 impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
 where
-    Filesystem: ClawFs + Clone + Default + 'static,
+    Filesystem: ClawFs + 'static,
     Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
@@ -722,10 +719,7 @@ where
         approval: ApprovalId,
         decision: ApprovalDecision,
     ) -> Result<(), ApprovalResolutionError> {
-        let decision_name = match &decision {
-            ApprovalDecision::Approved => "approved",
-            ApprovalDecision::Rejected(_) => "rejected",
-        };
+        let decision_name: &'static str = (&decision).into();
         self.registry
             .get_mut(agent)
             .ok_or(ApprovalResolutionError::UnknownAgent(agent))?
@@ -1460,8 +1454,13 @@ mod tests {
             "https://example.invalid",
         );
         Arc::new(
-            TestFactory::new(Arc::new(ToolRegistry::new()), llm_config, "/mem", &[])
-                .expect("factory builds"),
+            TestFactory::new(
+                Arc::new(ToolRegistry::new()),
+                llm_config,
+                "/mem".to_string(),
+                Vec::new(),
+            )
+            .expect("factory builds"),
         )
     }
 

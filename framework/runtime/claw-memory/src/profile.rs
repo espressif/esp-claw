@@ -6,6 +6,8 @@
 
 use core::str::FromStr;
 
+use std::marker::PhantomData;
+
 use claw_interface::{ClawFs, FsError};
 
 /// Filename for the assistant soul/persona document.
@@ -158,22 +160,25 @@ pub struct ProfileSnapshot {
 /// Pure storage for the editable profile documents.
 pub struct ProfileStore<F: ClawFs + 'static> {
     config: ProfileConfig,
-    fs: F,
+    _fs: PhantomData<fn() -> F>,
 }
 
-impl<F: ClawFs + Clone + 'static> Clone for ProfileStore<F> {
+impl<F: ClawFs + 'static> Clone for ProfileStore<F> {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
-            fs: self.fs.clone(),
+            _fs: PhantomData,
         }
     }
 }
 
 impl<F: ClawFs + 'static> ProfileStore<F> {
-    /// Build a store over `config` and an injected filesystem.
-    pub fn new(config: ProfileConfig, fs: F) -> Self {
-        Self { config, fs }
+    /// Build a store over `config` and the selected filesystem backend.
+    pub fn new(config: ProfileConfig) -> Self {
+        Self {
+            config,
+            _fs: PhantomData,
+        }
     }
 
     /// The configured profile directory.
@@ -189,7 +194,7 @@ impl<F: ClawFs + 'static> ProfileStore<F> {
     /// Read one document. Missing files are normal absence, not an error.
     pub fn read(&self, document: ProfileDocument) -> Result<Option<String>, ProfileError> {
         let path = self.path(document);
-        let bytes = match self.fs.read(&path) {
+        let bytes = match F::read(&path) {
             Ok(bytes) => bytes,
             Err(FsError::NotFound) => return Ok(None),
             Err(source) => return Err(ProfileError::File { document, source }),
@@ -215,9 +220,7 @@ impl<F: ClawFs + 'static> ProfileStore<F> {
         let bytes = content.as_ref().as_bytes();
         self.check_size(document, bytes.len())?;
         let path = self.path(document);
-        self.fs
-            .write_atomic(&path, bytes)
-            .map_err(|source| ProfileError::File { document, source })
+        F::write_atomic(&path, bytes).map_err(|source| ProfileError::File { document, source })
     }
 
     /// Create a document with `content` only when it does not already exist.
@@ -228,7 +231,7 @@ impl<F: ClawFs + 'static> ProfileStore<F> {
         document: ProfileDocument,
         content: impl AsRef<str>,
     ) -> Result<bool, ProfileError> {
-        if self.fs.exists(&self.path(document)) {
+        if F::exists(&self.path(document)) {
             return Ok(false);
         }
         self.replace(document, content)?;
@@ -277,23 +280,20 @@ mod tests {
     use super::*;
     use claw_interface::MemFs;
 
-    fn store() -> (ProfileStore<MemFs>, MemFs) {
-        let fs = MemFs::new();
-        (
-            ProfileStore::new(ProfileConfig::new("/memory"), fs.clone()),
-            fs,
-        )
+    fn store() -> ProfileStore<MemFs> {
+        MemFs::new();
+        ProfileStore::new(ProfileConfig::new("/memory"))
     }
 
     #[test]
     fn missing_document_is_absent() {
-        let (store, _fs) = store();
+        let store = store();
         assert_eq!(store.read(ProfileDocument::Soul).unwrap(), None);
     }
 
     #[test]
     fn replace_and_read_round_trip() {
-        let (store, _fs) = store();
+        let store = store();
         store.replace(ProfileDocument::Soul, "Be concise.").unwrap();
         assert_eq!(
             store.read(ProfileDocument::Soul).unwrap(),
@@ -303,7 +303,7 @@ mod tests {
 
     #[test]
     fn clear_keeps_file_but_returns_empty_content() {
-        let (store, _fs) = store();
+        let store = store();
         store
             .replace(ProfileDocument::UserProfile, "Use Chinese.")
             .unwrap();
@@ -316,14 +316,11 @@ mod tests {
 
     #[test]
     fn rejects_too_large_document() {
-        let fs = MemFs::new();
-        let store = ProfileStore::new(
-            ProfileConfig {
-                max_document_bytes: 2,
-                ..ProfileConfig::new("/memory")
-            },
-            fs,
-        );
+        MemFs::new();
+        let store = ProfileStore::<MemFs>::new(ProfileConfig {
+            max_document_bytes: 2,
+            ..ProfileConfig::new("/memory")
+        });
         let error = store
             .replace(ProfileDocument::AssistantIdentity, "abc")
             .unwrap_err();
@@ -332,8 +329,8 @@ mod tests {
 
     #[test]
     fn invalid_utf8_is_an_error() {
-        let (store, fs) = store();
-        fs.write_atomic("/memory/soul.md", &[0xff]).unwrap();
+        let store = store();
+        MemFs::write_atomic("/memory/soul.md", &[0xff]).unwrap();
         let error = store.read(ProfileDocument::Soul).unwrap_err();
         assert!(matches!(error, ProfileError::InvalidUtf8 { .. }));
     }

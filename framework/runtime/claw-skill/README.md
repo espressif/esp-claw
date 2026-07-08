@@ -35,7 +35,7 @@ runtime normalizes `web` to `readonly`. `metadata.cap_groups`,
 
 | Type | Role |
 |------|------|
-| `FsSkillRegistry` | FS-backed catalog source. Build with `new(fs).set_root(data)?.set_root(system)?`; roots are priority ordered. |
+| `FsSkillRegistry` | FS-backed catalog source. Build with `FsSkillRegistry::<F>::new().set_root(data)?.set_root(system)?`; roots are priority ordered. |
 | `SkillRegistry` | Minimal resolver-facing trait whose public operation is `skill_set()`. |
 | `CatalogSnapshot` | Immutable versioned catalog with `Arc<[Skill]>`. Internal registry scans swap in a new snapshot. |
 | `Skill` | One catalog row: id/name/description/author/metadata/document file. |
@@ -47,11 +47,12 @@ runtime normalizes `web` to `readonly`. `metadata.cap_groups`,
 ```rust
 use std::sync::Arc;
 
+use claw_interface::MemFs;
 use claw_skill::{FsSkillRegistry, SkillId};
 
-fn build(fs: impl claw_interface::ClawFs + 'static) -> Result<(), claw_skill::SkillError> {
+fn build() -> Result<(), claw_skill::SkillError> {
     let registry = Arc::new(
-        FsSkillRegistry::new(fs)
+        FsSkillRegistry::<MemFs>::new()
             .set_root("data/skills")?
             .set_root("system/skills")?,
     );

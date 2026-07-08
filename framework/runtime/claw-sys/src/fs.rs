@@ -77,13 +77,13 @@ mod espidf {
     impl ClawFs for EspIdfFs {
         type File = EspIdfFile;
 
-        fn open(&self, path: &str) -> Result<Self::File, FsError> {
+        fn open(path: &str) -> Result<Self::File, FsError> {
             std::fs::File::open(path)
                 .map(|file| EspIdfFile { file })
                 .map_err(map_io)
         }
 
-        fn create(&self, path: &str) -> Result<Self::File, FsError> {
+        fn create(path: &str) -> Result<Self::File, FsError> {
             let full = std::path::Path::new(path);
             Self::ensure_parent(full)?;
             std::fs::File::create(full)
@@ -91,7 +91,7 @@ mod espidf {
                 .map_err(|error| FsError::Io(error.to_string()))
         }
 
-        fn open_append(&self, path: &str) -> Result<Self::File, FsError> {
+        fn open_append(path: &str) -> Result<Self::File, FsError> {
             let full = std::path::Path::new(path);
             Self::ensure_parent(full)?;
             std::fs::OpenOptions::new()
@@ -102,19 +102,19 @@ mod espidf {
                 .map_err(|error| FsError::Io(error.to_string()))
         }
 
-        fn rename(&self, from: &str, to: &str) -> Result<(), FsError> {
+        fn rename(from: &str, to: &str) -> Result<(), FsError> {
             std::fs::rename(from, to).map_err(map_io)
         }
 
-        fn create_dir_all(&self, path: &str) -> Result<(), FsError> {
+        fn create_dir_all(path: &str) -> Result<(), FsError> {
             std::fs::create_dir_all(path).map_err(|error| FsError::Io(error.to_string()))
         }
 
-        fn exists(&self, path: &str) -> bool {
+        fn exists(path: &str) -> bool {
             std::path::Path::new(path).exists()
         }
 
-        fn remove(&self, path: &str) -> Result<(), FsError> {
+        fn remove(path: &str) -> Result<(), FsError> {
             match std::fs::remove_file(path) {
                 Ok(()) => Ok(()),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -122,7 +122,7 @@ mod espidf {
             }
         }
 
-        fn list_dir(&self, path: &str) -> Result<Vec<String>, FsError> {
+        fn list_dir(path: &str) -> Result<Vec<String>, FsError> {
             let entries = std::fs::read_dir(path).map_err(map_io)?;
             let mut names = Vec::new();
             for entry in entries {
@@ -134,13 +134,13 @@ mod espidf {
             Ok(names)
         }
 
-        fn len(&self, path: &str) -> Result<u64, FsError> {
+        fn len(path: &str) -> Result<u64, FsError> {
             std::fs::metadata(path)
                 .map(|metadata| metadata.len())
                 .map_err(map_io)
         }
 
-        fn write_atomic(&self, path: &str, data: &[u8]) -> Result<(), FsError> {
+        fn write_atomic(path: &str, data: &[u8]) -> Result<(), FsError> {
             let full = std::path::Path::new(path);
             Self::ensure_parent(full)?;
             let tmp = format!("{path}.tmp");

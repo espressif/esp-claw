@@ -127,6 +127,7 @@ mod tests {
     use core::sync::atomic::AtomicBool;
     use futures_lite::future::block_on;
     use serde_json::{json, Value};
+    use std::cell::RefCell;
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
@@ -198,6 +199,27 @@ mod tests {
     /// test wraps a cloned `Arc` in this newtype to hand ownership to the client
     /// while keeping its own handle to assert on what was sent.
     struct Owned<T>(Arc<T>);
+
+    thread_local! {
+        static DEFAULT_MOCK_HTTP: RefCell<Option<Arc<MockHttp>>> = RefCell::new(None);
+    }
+
+    fn install_mock_http(http: Arc<MockHttp>) {
+        DEFAULT_MOCK_HTTP.with(|slot| *slot.borrow_mut() = Some(http));
+    }
+
+    impl Default for Owned<MockHttp> {
+        fn default() -> Self {
+            DEFAULT_MOCK_HTTP.with(|slot| {
+                Self(
+                    slot.borrow()
+                        .as_ref()
+                        .expect("install mock http before init_default")
+                        .clone(),
+                )
+            })
+        }
+    }
 
     impl BlockingClawHttp for Owned<MockHttp> {
         fn post_json(
@@ -306,11 +328,11 @@ mod tests {
     fn async_openai_chat_text() -> TestResult {
         let http =
             MockHttp::new(r#"{"choices":[{"message":{"role":"assistant","content":"hi async"}}]}"#);
-        let mut rt = ClawApiAsync::init(
-            cfg(BackendKind::OpenAiCompatible, "https://api.example.com/v1"),
-            Owned(http.clone()),
-            ImmediateTimer,
-        )?;
+        install_mock_http(Arc::clone(&http));
+        let mut rt = ClawApiAsync::<Owned<MockHttp>, ImmediateTimer>::init_default(cfg(
+            BackendKind::OpenAiCompatible,
+            "https://api.example.com/v1",
+        ))?;
         let messages = json!([{"role": "user", "content": "hello"}]);
         let abort = AtomicBool::new(false);
 
@@ -630,6 +652,27 @@ mod tests {
         }
     }
 
+    thread_local! {
+        static DEFAULT_FLAKY_HTTP: RefCell<Option<Arc<FlakyHttp>>> = RefCell::new(None);
+    }
+
+    fn install_flaky_http(http: Arc<FlakyHttp>) {
+        DEFAULT_FLAKY_HTTP.with(|slot| *slot.borrow_mut() = Some(http));
+    }
+
+    impl Default for Owned<FlakyHttp> {
+        fn default() -> Self {
+            DEFAULT_FLAKY_HTTP.with(|slot| {
+                Self(
+                    slot.borrow()
+                        .as_ref()
+                        .expect("install flaky http before init_default")
+                        .clone(),
+                )
+            })
+        }
+    }
+
     impl BlockingClawHttp for Owned<FlakyHttp> {
         fn post_json(
             &mut self,
@@ -654,11 +697,26 @@ mod tests {
         sleeps: Arc<Mutex<Vec<Duration>>>,
     }
 
-    impl RecordingTimer {
-        fn new() -> Self {
-            Self {
-                sleeps: Arc::new(Mutex::new(Vec::new())),
-            }
+    thread_local! {
+        static DEFAULT_RECORDING_SLEEPS: RefCell<Option<Arc<Mutex<Vec<Duration>>>>> =
+            RefCell::new(None);
+    }
+
+    fn install_recording_timer() -> Arc<Mutex<Vec<Duration>>> {
+        let sleeps = Arc::new(Mutex::new(Vec::new()));
+        DEFAULT_RECORDING_SLEEPS.with(|slot| *slot.borrow_mut() = Some(Arc::clone(&sleeps)));
+        sleeps
+    }
+
+    impl Default for RecordingTimer {
+        fn default() -> Self {
+            DEFAULT_RECORDING_SLEEPS.with(|slot| Self {
+                sleeps: slot
+                    .borrow()
+                    .as_ref()
+                    .expect("install recording timer before init_default")
+                    .clone(),
+            })
         }
     }
 
@@ -750,13 +808,12 @@ mod tests {
             transport_error("connection reset"),
             r#"{"choices":[{"message":{"role":"assistant","content":"ok"}}]}"#,
         );
-        let timer = RecordingTimer::new();
-        let sleeps = Arc::clone(&timer.sleeps);
-        let mut rt = ClawApiAsync::init(
-            cfg(BackendKind::OpenAiCompatible, "https://api.example.com"),
-            Owned(http.clone()),
-            timer,
-        )
+        install_flaky_http(Arc::clone(&http));
+        let sleeps = install_recording_timer();
+        let mut rt = ClawApiAsync::<Owned<FlakyHttp>, RecordingTimer>::init_default(cfg(
+            BackendKind::OpenAiCompatible,
+            "https://api.example.com",
+        ))
         .unwrap();
         let messages = json!([{"role": "user", "content": "hi"}]);
         let abort = AtomicBool::new(false);

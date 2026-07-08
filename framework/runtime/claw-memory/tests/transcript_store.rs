@@ -26,8 +26,8 @@ fn instant_config(dir: &str) -> TranscriptConfig {
 }
 
 /// A store with default tuning, conversation id 1, and a fresh in-memory fs.
-fn store_with<F: ClawFs + 'static>(fs: F) -> TranscriptStore<F> {
-    TranscriptStore::new(1, TranscriptConfig::new("/conversations"), fs).unwrap()
+fn store_with<F: ClawFs + 'static>(_fs: F) -> TranscriptStore<F> {
+    TranscriptStore::new(1, TranscriptConfig::new("/conversations")).unwrap()
 }
 
 /// Poll `predicate` until it holds or a generous deadline passes (persistence
@@ -160,10 +160,10 @@ fn version_advances_on_append_and_commit() {
 
 #[test]
 fn distinct_ids_persist_independently() {
-    let fs = MemFs::default();
+    MemFs::default();
     let dir = "/sessions";
 
-    let make = |id: u32| TranscriptStore::new(id, TranscriptConfig::new(dir), fs.clone()).unwrap();
+    let make = |id: u32| TranscriptStore::<MemFs>::new(id, TranscriptConfig::new(dir)).unwrap();
 
     let one = make(1);
     let two = make(2);
@@ -173,10 +173,10 @@ fn distinct_ids_persist_independently() {
     two.flush();
 
     // Each id wrote its own data log (and, after flush, its index manifest).
-    assert!(fs.exists("/sessions/conversation-1.jsonl"));
-    assert!(fs.exists("/sessions/conversation-2.jsonl"));
-    assert!(fs.exists("/sessions/conversation-1.json"));
-    assert!(fs.exists("/sessions/conversation-2.json"));
+    assert!(MemFs::exists("/sessions/conversation-1.jsonl"));
+    assert!(MemFs::exists("/sessions/conversation-2.jsonl"));
+    assert!(MemFs::exists("/sessions/conversation-1.json"));
+    assert!(MemFs::exists("/sessions/conversation-2.json"));
 
     // Reloading by id restores only that conversation's transcript.
     let reloaded_one = make(1);
@@ -186,15 +186,16 @@ fn distinct_ids_persist_independently() {
 
 #[test]
 fn missing_persist_file_starts_empty() {
-    let store = TranscriptStore::new(7, TranscriptConfig::new("/empty"), MemFs::default()).unwrap();
+    MemFs::default();
+    let store = TranscriptStore::<MemFs>::new(7, TranscriptConfig::new("/empty")).unwrap();
     assert!(messages(&store).is_empty());
 }
 
 #[test]
 fn reloads_via_manifest() {
-    let fs = MemFs::default();
+    MemFs::default();
 
-    let store = TranscriptStore::new(1, instant_config("/c"), fs.clone()).unwrap();
+    let store = TranscriptStore::<MemFs>::new(1, instant_config("/c")).unwrap();
     for i in 0..6 {
         store.group().append_user(format!("m{i}"));
     }
@@ -202,7 +203,7 @@ fn reloads_via_manifest() {
     let before = messages(&store);
 
     // A fresh store restores the same view from the manifest + data log.
-    let reloaded = TranscriptStore::new(1, instant_config("/c"), fs.clone()).unwrap();
+    let reloaded = TranscriptStore::<MemFs>::new(1, instant_config("/c")).unwrap();
     let after = messages(&reloaded);
     assert_eq!(
         after, before,
@@ -213,9 +214,9 @@ fn reloads_via_manifest() {
 
 #[test]
 fn reloads_from_data_log_without_manifest() {
-    let fs = MemFs::default();
+    MemFs::default();
 
-    let store = TranscriptStore::new(3, instant_config("/c"), fs.clone()).unwrap();
+    let store = TranscriptStore::<MemFs>::new(3, instant_config("/c")).unwrap();
     store.group().append_user("a");
     store.group().append_user("b");
     store.group().append_user("c");
@@ -223,31 +224,27 @@ fn reloads_from_data_log_without_manifest() {
     // Simulate the no-manifest scenario (e.g. process crash after append but
     // before the manifest is synced). A fresh load must reconstruct purely from a
     // data-log scan.
-    fs.remove("/c/conversation-3.json").ok();
+    MemFs::remove("/c/conversation-3.json").ok();
 
-    let fs_for_reload = fs.clone();
     assert!(wait_until(move || {
-        let reloaded =
-            TranscriptStore::new(3, TranscriptConfig::new("/c"), fs_for_reload.clone()).unwrap();
+        let reloaded = TranscriptStore::<MemFs>::new(3, TranscriptConfig::new("/c")).unwrap();
         messages(&reloaded).len() == 3
     }));
-    assert!(fs.exists("/c/conversation-3.jsonl"));
+    assert!(MemFs::exists("/c/conversation-3.jsonl"));
 }
 
 #[test]
 fn reload_tail_scans_appends_after_manifest() {
-    let fs = MemFs::default();
+    MemFs::default();
 
-    let store = TranscriptStore::new(4, instant_config("/c"), fs.clone()).unwrap();
+    let store = TranscriptStore::<MemFs>::new(4, instant_config("/c")).unwrap();
     store.group().append_user("a");
     store.group().append_user("b");
     store.flush(); // manifest now covers a, b
     store.group().append_user("c"); // appended past covered_len; manifest left stale
 
-    let fs_for_reload = fs.clone();
     assert!(wait_until(move || {
-        let reloaded =
-            TranscriptStore::new(4, TranscriptConfig::new("/c"), fs_for_reload.clone()).unwrap();
+        let reloaded = TranscriptStore::<MemFs>::new(4, TranscriptConfig::new("/c")).unwrap();
         let m = messages(&reloaded);
         m.len() == 3 && m[2]["content"] == "c"
     }));
@@ -255,7 +252,7 @@ fn reload_tail_scans_appends_after_manifest() {
 
 #[test]
 fn torn_trailing_line_is_ignored_on_load() {
-    let fs = MemFs::default();
+    MemFs::default();
 
     // One complete record line, then a torn (newline-less) partial record.
     let mut data = serde_json::to_vec(
@@ -264,9 +261,9 @@ fn torn_trailing_line_is_ignored_on_load() {
     .unwrap();
     data.push(b'\n');
     data.extend_from_slice(br#"{"t":"group","id":1,"msgs":[{"role":"#);
-    fs.append("/c/conversation-9.jsonl", &data).unwrap();
+    MemFs::append("/c/conversation-9.jsonl", &data).unwrap();
 
-    let store = TranscriptStore::new(9, TranscriptConfig::new("/c"), fs.clone()).unwrap();
+    let store = TranscriptStore::<MemFs>::new(9, TranscriptConfig::new("/c")).unwrap();
     let m = messages(&store);
     assert_eq!(m.len(), 1);
     assert_eq!(m[0]["content"], "ok");
@@ -311,7 +308,7 @@ fn messages_are_in_id_order() {
 
 #[test]
 fn mismatched_manifest_triggers_rebuild_and_recovers_all_turns() {
-    let fs = MemFs::default();
+    MemFs::default();
 
     // Write 3 valid groups to the data log.
     let line0 = group_line(0, "g0");
@@ -321,7 +318,7 @@ fn mismatched_manifest_triggers_rebuild_and_recovers_all_turns() {
     data.extend_from_slice(&line0);
     data.extend_from_slice(&line1);
     data.extend_from_slice(&line2);
-    fs.append("/c/conversation-1.jsonl", &data).unwrap();
+    MemFs::append("/c/conversation-1.jsonl", &data).unwrap();
 
     // Write a manifest that claims the record at offset 0 has id=99 (wrong).
     let fake_manifest = serde_json::json!({
@@ -330,7 +327,7 @@ fn mismatched_manifest_triggers_rebuild_and_recovers_all_turns() {
         "next_id": 3,
         "live": [{ "t": "group", "id": 99, "off": 0, "len": line0.len() }]
     });
-    fs.write_atomic(
+    MemFs::write_atomic(
         "/c/conversation-1.json",
         &serde_json::to_vec(&fake_manifest).unwrap(),
     )
@@ -338,7 +335,7 @@ fn mismatched_manifest_triggers_rebuild_and_recovers_all_turns() {
 
     // Load: detects the mismatch, falls back to full scan, recovers all 3 groups,
     // and rewrites both files.
-    let store = TranscriptStore::new(1, TranscriptConfig::new("/c"), fs.clone()).unwrap();
+    let store = TranscriptStore::<MemFs>::new(1, TranscriptConfig::new("/c")).unwrap();
     let msgs = messages(&store);
     assert_eq!(msgs.len(), 3, "all 3 turns recovered after rebuild");
     assert_eq!(msgs[0]["content"], "g0");
@@ -346,7 +343,7 @@ fn mismatched_manifest_triggers_rebuild_and_recovers_all_turns() {
     assert_eq!(msgs[2]["content"], "g2");
 
     // The rebuilt files should be self-consistent: reloading must give the same view.
-    let reloaded = TranscriptStore::new(1, TranscriptConfig::new("/c"), fs.clone()).unwrap();
+    let reloaded = TranscriptStore::<MemFs>::new(1, TranscriptConfig::new("/c")).unwrap();
     let reloaded_msgs = messages(&reloaded);
     assert_eq!(reloaded_msgs.len(), 3);
     assert_eq!(reloaded_msgs[0]["content"], "g0");
@@ -372,8 +369,8 @@ fn writes_inspectable_output_files() {
     std::fs::remove_dir_all(&disk_dir).ok();
     std::fs::create_dir_all(&disk_dir).expect("create disk_dir");
 
-    let fs = DiskFs::rooted(output_root).with_pretty_json(true);
-    let store = TranscriptStore::new(1, instant_config(virtual_dir), fs.clone()).unwrap();
+    DiskFs::rooted(output_root).with_pretty_json(true);
+    let store = TranscriptStore::<DiskFs>::new(1, instant_config(virtual_dir)).unwrap();
 
     // Commit 6 turns; each has a user question and an assistant answer.
     for i in 0..6u32 {

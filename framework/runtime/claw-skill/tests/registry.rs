@@ -14,9 +14,9 @@ fn skill_md(id: &str, description: &str, body: &str) -> Vec<u8> {
     .into_bytes()
 }
 
-fn two_skill_fs() -> MemFs {
-    let fs = MemFs::new();
-    fs.write_atomic(
+fn two_skill_fs() {
+    MemFs::new();
+    MemFs::write_atomic(
         "skills/alpha/SKILL.md",
         &skill_md(
             "alpha",
@@ -25,21 +25,21 @@ fn two_skill_fs() -> MemFs {
         ),
     )
     .unwrap();
-    fs.write_atomic(
+    MemFs::write_atomic(
         "skills/beta/SKILL.md",
         &skill_md("beta", "Beta skill", "# Beta\nBeta body\n"),
     )
     .unwrap();
-    fs
 }
 
-fn registry(fs: MemFs, root: &str) -> Arc<FsSkillRegistry<MemFs>> {
-    Arc::new(FsSkillRegistry::new(fs).set_root(root).unwrap())
+fn registry(root: &str) -> Arc<FsSkillRegistry<MemFs>> {
+    two_skill_fs();
+    Arc::new(FsSkillRegistry::<MemFs>::new().set_root(root).unwrap())
 }
 
 #[test]
 fn set_root_builds_catalog_sorted_by_id() {
-    let registry = registry(two_skill_fs(), "skills");
+    let registry = registry("skills");
     let mut set = registry.skill_set();
     let catalog = set.catalog_context().to_string();
     assert!(catalog.starts_with("Available skills:\n"));
@@ -50,7 +50,7 @@ fn set_root_builds_catalog_sorted_by_id() {
 
 #[test]
 fn list_skill_returns_json_catalog() {
-    let registry = registry(two_skill_fs(), "skills");
+    let registry = registry("skills");
     let mut set = registry.skill_set();
     let catalog = set.list_skill().unwrap().to_string();
     assert!(catalog.starts_with('['));
@@ -61,7 +61,7 @@ fn list_skill_returns_json_catalog() {
 
 #[test]
 fn activate_skill_strips_front_matter_expands_cur_skill_dir_and_wraps_xml() {
-    let registry = registry(two_skill_fs(), "skills");
+    let registry = registry("skills");
     let mut set = registry.skill_set();
     let document = set.activate_skill(&SkillId::new("alpha")).unwrap();
     let content = document.content();
@@ -81,19 +81,19 @@ fn activate_skill_strips_front_matter_expands_cur_skill_dir_and_wraps_xml() {
 
 #[test]
 fn earlier_root_shadows_later_duplicate_id() {
-    let fs = MemFs::new();
-    fs.write_atomic(
+    MemFs::new();
+    MemFs::write_atomic(
         "data/shared/SKILL.md",
         &skill_md("shared", "from data", "# Data"),
     )
     .unwrap();
-    fs.write_atomic(
+    MemFs::write_atomic(
         "system/shared/SKILL.md",
         &skill_md("shared", "from system", "# System"),
     )
     .unwrap();
     let registry = Arc::new(
-        FsSkillRegistry::new(fs)
+        FsSkillRegistry::<MemFs>::new()
             .set_root("data")
             .unwrap()
             .set_root("system")
@@ -108,8 +108,9 @@ fn earlier_root_shadows_later_duplicate_id() {
 
 #[test]
 fn missing_roots_are_skipped() {
+    two_skill_fs();
     let registry = Arc::new(
-        FsSkillRegistry::new(two_skill_fs())
+        FsSkillRegistry::<MemFs>::new()
             .set_root("missing")
             .unwrap()
             .set_root("skills")
@@ -123,7 +124,7 @@ fn missing_roots_are_skipped() {
 
 #[test]
 fn activating_unknown_skill_is_not_found() {
-    let registry = registry(two_skill_fs(), "skills");
+    let registry = registry("skills");
     let mut set = registry.skill_set();
     let error = set.activate_skill(&SkillId::new("missing")).unwrap_err();
     assert!(matches!(error, SkillError::NotFound(_)));
@@ -131,12 +132,11 @@ fn activating_unknown_skill_is_not_found() {
 
 #[test]
 fn reload_picks_up_a_newly_added_skill() {
-    let fs = two_skill_fs();
-    let registry = registry(fs.clone(), "skills");
+    let registry = registry("skills");
     let mut set = registry.skill_set();
     assert!(!set.catalog_context().contains("gamma"));
 
-    fs.write_atomic(
+    MemFs::write_atomic(
         "skills/gamma/SKILL.md",
         &skill_md("gamma", "Gamma skill", "# Gamma"),
     )

@@ -18,15 +18,15 @@ client). The store is never asked to compact.
 
 As a core crate it depends only on the `claw-interface` `ClawFs` persistence
 seam, never on the platform boundary (`claw-sys`). The concrete filesystem is
-**injected** by the caller (device firmware passes its real FS; host CLIs and
-tests pass `claw_interface::MemFs` / `DiskFs`), so the crate is fully
-host-testable.
+selected by the store type parameter (device firmware uses its real FS type;
+host CLIs and tests use `claw_interface::MemFs` / `DiskFs`), so the crate is
+fully host-testable.
 
 ## Public API
 
 | Item | Role |
 |---|---|
-| `TranscriptStore` | The per-conversation verbatim transcript. `new(id, config, fs)`, `group()`, `messages()`, `turns_snapshot()`, `open_turn_messages()`, `version()`, `flush()`. Pure append-only — never compacts. |
+| `TranscriptStore` | The per-conversation verbatim transcript. `TranscriptStore::<F>::new(id, config)`, `group()`, `messages()`, `turns_snapshot()`, `open_turn_messages()`, `version()`, `flush()`. Pure append-only — never compacts. |
 | `TranscriptConfig` | Tuning: `dir`, `persist_debounce`. Build with `TranscriptConfig::new(dir)`. |
 | `Turn` / `TurnId` | A committed turn (`id` + `messages`) and its monotonic logical id, exposed by `turns_snapshot()` so adapters can read committed turns. |
 | `GroupGuard` | One turn, returned by `group()`. `append_user`, `append_assistant`, `append_tool_result`, `append_patch`. Commits the whole turn as one record on drop. |

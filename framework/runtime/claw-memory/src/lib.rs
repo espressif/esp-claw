@@ -32,14 +32,13 @@
 //! // A filesystem for persistence. On device this is the espidf `ClawFs` over
 //! // the DATA root; here it is the in-memory host double. The store holds the
 //! // type parameter `F`.
-//! let fs = MemFs::new();
+//! MemFs::new();
 //!
 //! // Build the store for one conversation id. Typically one per agent instance.
 //! let conversation_id = 42;
-//! let mut store = TranscriptStore::new(
+//! let mut store = TranscriptStore::<MemFs>::new(
 //!     conversation_id,
 //!     TranscriptConfig::new("/data/conversations"),
-//!     fs,
 //! ).expect("a fresh MemFs has no data log, so the conversation starts empty");
 //!
 //! // Drive it from the agent loop. One turn = one `group()`; the whole turn is

@@ -34,7 +34,7 @@ mod tier;
 mod tools;
 
 #[cfg(test)]
-use extraction::{ExtractedItem, NoopExtractor};
+use extraction::ExtractedItem;
 pub use extraction::{ExtractionInput, Extractor, MemoryOp, MemorySnapshot};
 pub use llm_compactor::LlmCompactor;
 pub use llm_extractor::LlmExtractor;
@@ -74,9 +74,8 @@ const EXTRACT_MIN_VERSION_DELTA: u64 = 8;
 /// Propagates [`LongTermInitError`] when the journal exists but is unreadable.
 pub fn global_store<F: ClawFs + 'static>(
     dir: &str,
-    fs: F,
 ) -> Result<LongTermMemory<F>, LongTermInitError> {
-    LongTermMemory::new(LongTermConfig::new(dir, GLOBAL_ID_PREFIX), fs)
+    LongTermMemory::new(LongTermConfig::new(dir, GLOBAL_ID_PREFIX))
 }
 
 /// Build a per-agent long-term store under `dir` (minting `a-` ids).
@@ -84,11 +83,8 @@ pub fn global_store<F: ClawFs + 'static>(
 /// # Errors
 ///
 /// Propagates [`LongTermInitError`] when the journal exists but is unreadable.
-pub fn agent_store<F: ClawFs + 'static>(
-    dir: &str,
-    fs: F,
-) -> Result<LongTermMemory<F>, LongTermInitError> {
-    LongTermMemory::new(LongTermConfig::new(dir, AGENT_ID_PREFIX), fs)
+pub fn agent_store<F: ClawFs + 'static>(dir: &str) -> Result<LongTermMemory<F>, LongTermInitError> {
+    LongTermMemory::new(LongTermConfig::new(dir, AGENT_ID_PREFIX))
 }
 
 /// The two stores plus the routing policy, shared (by cheap clone) between the
@@ -432,11 +428,19 @@ mod tests {
         }
     }
 
+    struct NoopExtractor;
+
+    impl Extractor for NoopExtractor {
+        fn extract<'a>(&'a self, _input: ExtractionInput<'a>) -> ExtractFuture<'a> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+    }
+
     fn adapter() -> LongTermMemoryContextAdapter<MemFs> {
-        let fs = MemFs::default();
+        MemFs::default();
         LongTermMemoryContextAdapter::new(
-            agent_store("/m/agent", fs.clone()).expect("agent store"),
-            global_store("/m/global", fs).expect("global store"),
+            agent_store::<MemFs>("/m/agent").expect("agent store"),
+            global_store::<MemFs>("/m/global").expect("global store"),
             RuleBasedTierClassifier::shared(),
             Arc::new(NoopExtractor),
         )
@@ -495,10 +499,10 @@ mod tests {
     #[test]
     fn extraction_is_throttled_after_the_first_pass() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let fs = MemFs::default();
+        MemFs::default();
         let mut adapter = LongTermMemoryContextAdapter::new(
-            agent_store("/m/agent", fs.clone()).expect("agent store"),
-            global_store("/m/global", fs).expect("global store"),
+            agent_store::<MemFs>("/m/agent").expect("agent store"),
+            global_store::<MemFs>("/m/global").expect("global store"),
             RuleBasedTierClassifier::shared(),
             Arc::new(CountingExtractor {
                 calls: Arc::clone(&calls),

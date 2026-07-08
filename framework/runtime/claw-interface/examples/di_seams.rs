@@ -28,22 +28,25 @@ fn main() -> anyhow::Result<()> {
 /// `ClawFs`: byte-oriented persistence. The in-memory `MemFs` behaves like the
 /// on-device FATFS backend for the operations the modules rely on.
 fn filesystem_seam() -> anyhow::Result<()> {
-    let fs = MemFs::new();
+    MemFs::new();
 
-    fs.create_dir_all("/data/conversations")?;
-    fs.write_atomic("/data/conversations/42.json", b"{\"version\":1}")?;
-    fs.append("/data/conversations/42.jsonl", b"{\"t\":\"group\"}\n")?;
+    MemFs::create_dir_all("/data/conversations")?;
+    MemFs::write_atomic("/data/conversations/42.json", b"{\"version\":1}")?;
+    MemFs::append("/data/conversations/42.jsonl", b"{\"t\":\"group\"}\n")?;
 
     println!("== ClawFs (MemFs) ==");
-    println!("exists  -> {}", fs.exists("/data/conversations/42.json"));
+    println!(
+        "exists  -> {}",
+        MemFs::exists("/data/conversations/42.json")
+    );
     println!(
         "len     -> {} bytes",
-        fs.len("/data/conversations/42.jsonl")?
+        MemFs::len("/data/conversations/42.jsonl")?
     );
-    println!("listing -> {:?}", fs.list_dir("/data/conversations")?);
+    println!("listing -> {:?}", MemFs::list_dir("/data/conversations")?);
 
     // A missing path is a typed error, not a panic.
-    println!("missing -> {:?}", fs.read("/data/conversations/none"));
+    println!("missing -> {:?}", MemFs::read("/data/conversations/none"));
     Ok(())
 }
 

@@ -1,5 +1,6 @@
 //! Filesystem-backed skill registry.
 
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -82,20 +83,20 @@ impl SkillRegistryBackend for EmptySkillRegistry {
 
 /// Filesystem-backed registry over one or more priority-ordered skill roots.
 pub struct FsSkillRegistry<F: ClawFs> {
-    fs: F,
     roots: Vec<String>,
     snapshot: RwLock<Arc<CatalogSnapshot>>,
     next_version: AtomicU32,
+    _fs: PhantomData<fn() -> F>,
 }
 
 impl<F: ClawFs> FsSkillRegistry<F> {
     /// Create an empty registry builder.
-    pub fn new(fs: F) -> Self {
+    pub fn new() -> Self {
         Self {
-            fs,
             roots: Vec::new(),
             snapshot: RwLock::new(Arc::new(CatalogSnapshot::empty())),
             next_version: AtomicU32::new(1),
+            _fs: PhantomData,
         }
     }
 
@@ -140,8 +141,7 @@ impl<F: ClawFs> FsSkillRegistry<F> {
         let skill_dir = skill_directory_path(&skill.root, id.as_str());
         let path = format!("{skill_dir}/SKILL.md");
         let bytes = self
-            .fs
-            .read(&path)
+            .read_skill_document(&path)
             .map_err(|error| SkillError::ReadFailed(id.clone(), error))?;
         let text = String::from_utf8(bytes).map_err(|_| SkillError::InvalidUtf8(id.clone()))?;
         append_wrapped_document(id, strip_front_matter(id, &text)?, &skill_dir, out);
@@ -150,7 +150,11 @@ impl<F: ClawFs> FsSkillRegistry<F> {
 
     fn scan_catalog_next_version(&self) -> Result<CatalogSnapshot, SkillError> {
         let version = self.next_version.fetch_add(1, Ordering::Relaxed);
-        scan_catalog(&self.fs, &self.roots, version)
+        scan_catalog::<F>(&self.roots, version)
+    }
+
+    fn read_skill_document(&self, path: &str) -> Result<Vec<u8>, FsError> {
+        F::read(path)
     }
 
     fn read_snapshot(&self) -> RwLockReadGuard<'_, Arc<CatalogSnapshot>> {
@@ -186,13 +190,12 @@ impl<F: ClawFs> SkillRegistryBackend for FsSkillRegistry<F> {
 }
 
 fn scan_catalog<F: ClawFs>(
-    fs: &F,
     roots: &[String],
     version: SkillRegistryVersion,
 ) -> Result<CatalogSnapshot, SkillError> {
     let mut skills = Vec::new();
     for root in roots {
-        let names = match fs.list_dir(root) {
+        let names = match F::list_dir(root) {
             Ok(names) => names,
             Err(FsError::NotFound) => continue,
             Err(error) => return Err(SkillError::ScanFailed(root.clone(), error)),
@@ -203,10 +206,10 @@ fn scan_catalog<F: ClawFs>(
                 continue;
             }
             let path = skill_document_path(root, id.as_str());
-            if !fs.exists(&path) {
+            if !F::exists(&path) {
                 continue;
             }
-            let head = read_head(fs, &id, &path)?;
+            let head = read_head::<F>(&id, &path)?;
             skills.push(parse_front_matter(id, root, &head)?);
         }
     }
@@ -257,10 +260,10 @@ fn append_xml_attribute_escaped(text: &str, out: &mut String) {
     }
 }
 
-fn read_head<F: ClawFs>(fs: &F, id: &SkillId, path: &str) -> Result<String, SkillError> {
+fn read_head<F: ClawFs>(id: &SkillId, path: &str) -> Result<String, SkillError> {
     let read_failed = |error| SkillError::ReadFailed(id.clone(), error);
-    let size = fs.len(path).map_err(read_failed)?;
+    let size = F::len(path).map_err(read_failed)?;
     let take = usize::try_from(size.min(METADATA_PREFIX_BYTES)).unwrap_or(usize::MAX);
-    let bytes = fs.read_at(path, 0, take).map_err(read_failed)?;
+    let bytes = F::read_at(path, 0, take).map_err(read_failed)?;
     String::from_utf8(bytes).map_err(|_| SkillError::InvalidUtf8(id.clone()))
 }

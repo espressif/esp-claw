@@ -3,6 +3,8 @@
 use std::collections::HashSet;
 use std::sync::{Mutex, MutexGuard};
 
+use strum::IntoStaticStr;
+
 crate::define_prefixed_id!(SessionId, "session-", "session");
 crate::define_prefixed_id!(TurnId, "turn-", "turn");
 
@@ -83,10 +85,12 @@ impl SessionStore {
 }
 
 // ---------------------------------------------------------------------------
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, IntoStaticStr, thiserror::Error, PartialEq, Eq)]
 pub enum DeliverError {
+    #[strum(serialize = "session_not_found")]
     #[error("session not found: {0}")]
     SessionNotFound(SessionId),
+    #[strum(serialize = "agent")]
     #[error("agent delivery failed: {0}")]
     Agent(String),
 }

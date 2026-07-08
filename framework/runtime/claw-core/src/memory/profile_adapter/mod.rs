@@ -18,7 +18,7 @@ const PROFILE_ADAPTER_ID: &str = "profile";
 
 /// Whether this adapter exposes profile mutation tools to its agent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ProfileTools {
+enum ProfileTools {
     /// No profile tools. The adapter still contributes profile context.
     Disabled,
     /// Expose profile read/replace/clear tools.
@@ -26,15 +26,25 @@ pub enum ProfileTools {
 }
 
 /// Pulls global profile documents into the current agent context.
-pub struct ProfileContextAdapter<F: ClawFs + Clone + 'static> {
+pub struct ProfileContextAdapter<F: ClawFs + 'static> {
     store: ProfileStore<F>,
     tools: ProfileTools,
 }
 
-impl<F: ClawFs + Clone + 'static> ProfileContextAdapter<F> {
+impl<F: ClawFs + 'static> ProfileContextAdapter<F> {
     /// Build an adapter over `store`.
-    pub fn new(store: ProfileStore<F>, tools: ProfileTools) -> Self {
-        Self { store, tools }
+    pub fn new(store: ProfileStore<F>, is_root: bool) -> Self {
+        // Attach editable global profile context to every agent. Only a root agent
+        // gets the mutation tools; subagents read profile through context but do
+        // not write it directly.
+        Self {
+            store,
+            tools: if is_root {
+                ProfileTools::Writable
+            } else {
+                ProfileTools::Disabled
+            },
+        }
     }
 
     fn contribute_document(&self, document: ProfileDocument, output: &mut ContextSink<'_>) {
@@ -53,7 +63,7 @@ impl<F: ClawFs + Clone + 'static> ProfileContextAdapter<F> {
     }
 }
 
-impl<F: ClawFs + Clone + 'static> ContextAdapter for ProfileContextAdapter<F> {
+impl<F: ClawFs + 'static> ContextAdapter for ProfileContextAdapter<F> {
     fn id(&self) -> &str {
         PROFILE_ADAPTER_ID
     }
@@ -112,15 +122,15 @@ mod tests {
 
     #[test]
     fn contributes_profile_documents_in_context_order() {
-        let fs = MemFs::new();
-        let store = ProfileStore::new(ProfileConfig::new("/memory"), fs);
+        MemFs::new();
+        let store = ProfileStore::<MemFs>::new(ProfileConfig::new("/memory"));
         store.replace(ProfileDocument::UserProfile, "USER").unwrap();
         store.replace(ProfileDocument::Soul, "SOUL").unwrap();
         store
             .replace(ProfileDocument::AssistantIdentity, "IDENTITY")
             .unwrap();
 
-        let mut adapter = ProfileContextAdapter::new(store, ProfileTools::Disabled);
+        let mut adapter = ProfileContextAdapter::new(store, false);
         let mut context = Context::new();
         let history = EmptyHistory;
         let mut sink = context.sink();
@@ -132,9 +142,9 @@ mod tests {
 
     #[test]
     fn missing_document_clears_existing_block() {
-        let fs = MemFs::new();
-        let store = ProfileStore::new(ProfileConfig::new("/memory"), fs);
-        let mut adapter = ProfileContextAdapter::new(store, ProfileTools::Disabled);
+        MemFs::new();
+        let store = ProfileStore::<MemFs>::new(ProfileConfig::new("/memory"));
+        let mut adapter = ProfileContextAdapter::new(store, false);
         let mut context = Context::new();
         context.with(Block::new(BlockKind::Soul, "OLD"));
         let history = EmptyHistory;

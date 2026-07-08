@@ -20,8 +20,8 @@ fn skill_md(id: &str, description: &str, body: &str) -> Vec<u8> {
 
 fn main() -> anyhow::Result<()> {
     // Lay out two skills under the `skills` root.
-    let fs = MemFs::new();
-    fs.write_atomic(
+    MemFs::new();
+    MemFs::write_atomic(
         "skills/weather_search/SKILL.md",
         &skill_md(
             "weather_search",
@@ -29,7 +29,7 @@ fn main() -> anyhow::Result<()> {
             "# Weather\n...",
         ),
     )?;
-    fs.write_atomic(
+    MemFs::write_atomic(
         "skills/light_switch/SKILL.md",
         &skill_md(
             "light_switch",
@@ -38,7 +38,7 @@ fn main() -> anyhow::Result<()> {
         ),
     )?;
 
-    let registry = Arc::new(FsSkillRegistry::new(fs).set_root("skills")?);
+    let registry = Arc::new(FsSkillRegistry::<MemFs>::new().set_root("skills")?);
     let mut set = registry.skill_set();
 
     println!("== JSON catalog ==");

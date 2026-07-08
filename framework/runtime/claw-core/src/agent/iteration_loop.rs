@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde_json::Value;
+use strum::IntoStaticStr;
 use tracing::Instrument as _;
 
 use claw_api::{ChatError, ChatRequest, ClawApiAsync, LlmResponse, RetryPolicy};
@@ -38,16 +39,21 @@ impl Drop for IterationBracket<'_> {
 }
 
 /// Errors from one [`IterationLoop::run`] step.
-#[derive(Clone, Debug, thiserror::Error)]
+#[derive(Clone, Debug, IntoStaticStr, thiserror::Error)]
 pub enum IterationLoopError {
+    #[strum(serialize = "messages_not_array")]
     #[error("messages must be a JSON array")]
     MessagesNotArray,
+    #[strum(serialize = "missing_assistant_message")]
     #[error("LLM tool-call response missing raw assistant message JSON")]
     MissingAssistantMessage,
+    #[strum(serialize = "malformed_assistant_message")]
     #[error("LLM raw assistant message JSON is not valid JSON")]
     MalformedAssistantMessage,
+    #[strum(serialize = "chat")]
     #[error(transparent)]
     Chat(#[from] ChatError),
+    #[strum(serialize = "tools")]
     #[error(transparent)]
     Tools(#[from] ToolSetError),
 }
@@ -328,13 +334,7 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
     }
 
     if let Err(err) = append_assistant_tool_calls(&mut appended.0, &llm_response) {
-        let kind = match &err {
-            IterationLoopError::MessagesNotArray => "messages_not_array",
-            IterationLoopError::MissingAssistantMessage => "missing_assistant_message",
-            IterationLoopError::MalformedAssistantMessage => "malformed_assistant_message",
-            IterationLoopError::Chat(_) => "chat",
-            IterationLoopError::Tools(_) => "tools",
-        };
+        let kind: &'static str = (&err).into();
         tracing::error!(name: "assistant_tool_calls_invalid", kind);
         return Err(err);
     }
@@ -361,13 +361,7 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
             Ok(IterationOutcome::Preempted(outcome))
         }
         ToolRoundResult::Failed(err) => {
-            let kind = match &err {
-                IterationLoopError::MessagesNotArray => "messages_not_array",
-                IterationLoopError::MissingAssistantMessage => "missing_assistant_message",
-                IterationLoopError::MalformedAssistantMessage => "malformed_assistant_message",
-                IterationLoopError::Chat(_) => "chat",
-                IterationLoopError::Tools(_) => "tools",
-            };
+            let kind: &'static str = (&err).into();
             tracing::error!(name: "tool_round_failed", kind);
             Err(err)
         }
@@ -867,6 +861,7 @@ mod tests {
 mod behavior_tests {
     //! Internal behavior tests for the iteration loop.
 
+    use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::path::Path;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -957,6 +952,25 @@ mod behavior_tests {
         bodies: Mutex<VecDeque<String>>,
     }
 
+    thread_local! {
+        static DEFAULT_SCRIPTED_BODIES: RefCell<VecDeque<String>> = RefCell::new(VecDeque::new());
+    }
+
+    fn install_scripted_bodies(bodies: Vec<&str>) {
+        DEFAULT_SCRIPTED_BODIES.with(|slot| {
+            *slot.borrow_mut() = bodies.into_iter().map(str::to_string).collect();
+        });
+    }
+
+    impl Default for ScriptedHttp {
+        fn default() -> Self {
+            let bodies = DEFAULT_SCRIPTED_BODIES.with(|slot| slot.replace(VecDeque::new()));
+            Self {
+                bodies: Mutex::new(bodies),
+            }
+        }
+    }
+
     impl BlockingClawHttp for ScriptedHttp {
         fn post_json(
             &mut self,
@@ -976,6 +990,7 @@ mod behavior_tests {
         }
     }
 
+    #[derive(Default)]
     struct FailingHttp;
 
     impl BlockingClawHttp for FailingHttp {
@@ -991,18 +1006,14 @@ mod behavior_tests {
     }
 
     fn test_llm(bodies: Vec<&str>) -> TestLlm<ScriptedHttp> {
-        let http = ScriptedHttp {
-            bodies: Mutex::new(bodies.into_iter().map(str::to_string).collect()),
-        };
-        ClawApiAsync::init(
+        install_scripted_bodies(bodies);
+        ClawApiAsync::<BlockingHttpAdapter<ScriptedHttp>, ImmediateTimer>::init_default(
             ClawApiConfig::new(
                 BackendKind::OpenAiCompatible,
                 "sk-test",
                 "gpt-test",
                 "https://example.invalid",
             ),
-            BlockingHttpAdapter::new(http),
-            ImmediateTimer,
         )
         .expect("test llm init")
     }
@@ -1037,17 +1048,39 @@ mod behavior_tests {
         arm: AtomicBool,
     }
 
-    impl ArmInterruptAfterResponseHttp {
-        fn new(interrupt: Arc<AtomicBool>, bodies: Vec<&str>) -> Self {
-            Self {
-                bodies: Mutex::new(bodies.into_iter().map(str::to_string).collect()),
-                interrupt,
-                arm: AtomicBool::new(false),
-            }
-        }
+    struct ArmInterruptAfterResponseFixture {
+        bodies: VecDeque<String>,
+        interrupt: Arc<AtomicBool>,
+        armed: bool,
+    }
 
-        fn arm(&self) {
-            self.arm.store(true, Ordering::Release);
+    thread_local! {
+        static DEFAULT_ARM_INTERRUPT_AFTER_RESPONSE: RefCell<Option<ArmInterruptAfterResponseFixture>> =
+            RefCell::new(None);
+    }
+
+    impl ArmInterruptAfterResponseHttp {
+        fn install(interrupt: Arc<AtomicBool>, bodies: Vec<&str>, armed: bool) {
+            DEFAULT_ARM_INTERRUPT_AFTER_RESPONSE.with(|slot| {
+                *slot.borrow_mut() = Some(ArmInterruptAfterResponseFixture {
+                    bodies: bodies.into_iter().map(str::to_string).collect(),
+                    interrupt,
+                    armed,
+                });
+            });
+        }
+    }
+
+    impl Default for ArmInterruptAfterResponseHttp {
+        fn default() -> Self {
+            let fixture = DEFAULT_ARM_INTERRUPT_AFTER_RESPONSE
+                .with(|slot| slot.borrow_mut().take())
+                .expect("install ArmInterruptAfterResponseHttp before init_default");
+            Self {
+                bodies: Mutex::new(fixture.bodies),
+                interrupt: fixture.interrupt,
+                arm: AtomicBool::new(fixture.armed),
+            }
         }
     }
 
@@ -1075,6 +1108,26 @@ mod behavior_tests {
 
     struct AbortDuringHttp {
         interrupt: Arc<AtomicBool>,
+    }
+
+    thread_local! {
+        static DEFAULT_ABORT_DURING_HTTP: RefCell<Option<Arc<AtomicBool>>> = RefCell::new(None);
+    }
+
+    impl AbortDuringHttp {
+        fn install(interrupt: Arc<AtomicBool>) {
+            DEFAULT_ABORT_DURING_HTTP.with(|slot| *slot.borrow_mut() = Some(interrupt));
+        }
+    }
+
+    impl Default for AbortDuringHttp {
+        fn default() -> Self {
+            Self {
+                interrupt: DEFAULT_ABORT_DURING_HTTP
+                    .with(|slot| slot.borrow_mut().take())
+                    .expect("install AbortDuringHttp before init_default"),
+            }
+        }
     }
 
     impl BlockingClawHttp for AbortDuringHttp {
@@ -1177,17 +1230,13 @@ mod behavior_tests {
         tools
     }
 
-    fn test_llm_with_http<H: BlockingClawHttp>(http: H) -> TestLlm<H> {
-        ClawApiAsync::init(
-            ClawApiConfig::new(
-                BackendKind::OpenAiCompatible,
-                "sk-test",
-                "gpt-test",
-                "https://example.invalid",
-            ),
-            BlockingHttpAdapter::new(http),
-            ImmediateTimer,
-        )
+    fn test_llm_with_http<H: BlockingClawHttp + Default>() -> TestLlm<H> {
+        ClawApiAsync::<BlockingHttpAdapter<H>, ImmediateTimer>::init_default(ClawApiConfig::new(
+            BackendKind::OpenAiCompatible,
+            "sk-test",
+            "gpt-test",
+            "https://example.invalid",
+        ))
         .expect("test llm init")
     }
 
@@ -1363,12 +1412,12 @@ mod behavior_tests {
     #[test]
     fn run_returns_preempted_after_llm_before_tool_execution() {
         let control = MockControl::new();
-        let http = ArmInterruptAfterResponseHttp::new(
+        ArmInterruptAfterResponseHttp::install(
             control.interrupt_flag().clone(),
             vec![TOOL_CALL_BODY],
+            true,
         );
-        http.arm();
-        let mut llm = test_llm_with_http(http);
+        let mut llm = test_llm_with_http::<ArmInterruptAfterResponseHttp>();
         let messages = json!([]);
 
         let result =
@@ -1384,9 +1433,8 @@ mod behavior_tests {
     #[test]
     fn run_returns_preempted_when_http_aborted() {
         let control = MockControl::new();
-        let mut llm = test_llm_with_http(AbortDuringHttp {
-            interrupt: control.interrupt_flag().clone(),
-        });
+        AbortDuringHttp::install(control.interrupt_flag().clone());
+        let mut llm = test_llm_with_http::<AbortDuringHttp>();
         let messages = json!([]);
 
         let result =
@@ -1401,7 +1449,7 @@ mod behavior_tests {
 
     #[test]
     fn run_propagates_chat_errors_without_interrupt() {
-        let mut llm = test_llm_with_http(FailingHttp);
+        let mut llm = test_llm_with_http::<FailingHttp>();
         let control = MockControl::new();
         let messages = json!([]);
 
@@ -1485,9 +1533,8 @@ mod behavior_tests {
     fn live_plain_text_when_api_key_configured() {
         let api_key = require_local_api_key();
 
-        let http = RealHttp::new();
-        let mut llm = ClawApiAsync::init(
-            {
+        let mut llm =
+            ClawApiAsync::<BlockingHttpAdapter<RealHttp>, ImmediateTimer>::init_default({
                 let mut config = ClawApiConfig::new(
                     BackendKind::OpenAiCompatible,
                     api_key,
@@ -1496,11 +1543,8 @@ mod behavior_tests {
                 );
                 config.timeout_ms = 60_000;
                 config
-            },
-            BlockingHttpAdapter::new(http),
-            ImmediateTimer,
-        )
-        .expect("live llm init");
+            })
+            .expect("live llm init");
 
         let control = MockControl::new();
         let messages = json!([{"role":"user","content":"Reply with exactly: pong"}]);

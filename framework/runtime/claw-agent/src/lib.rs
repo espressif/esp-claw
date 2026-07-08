@@ -62,7 +62,7 @@ pub enum AgentError {
 /// is backend-erased and `Send + Sync`).
 pub struct AgentSystem<Filesystem, Http, Timer>
 where
-    Filesystem: ClawFs + Clone + Default + 'static,
+    Filesystem: ClawFs + 'static,
     Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
@@ -73,7 +73,7 @@ where
 
 impl<Filesystem, Http, Timer> AgentSystem<Filesystem, Http, Timer>
 where
-    Filesystem: ClawFs + Clone + Default + 'static,
+    Filesystem: ClawFs + 'static,
     Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
@@ -190,6 +190,31 @@ impl AgentSystem<DiskFs, RealHttp, TokioTimer> {
 }
 
 #[cfg(test)]
+fn clear_storage_tree<F: ClawFs>(root: &str) -> Result<(), FsError> {
+    for child in F::list_dir(root)? {
+        let path = join_storage_path(root, &child);
+        if F::list_dir(&path).is_ok_and(|entries| !entries.is_empty()) {
+            clear_storage_tree::<F>(&path)?;
+        }
+        F::remove(&path)?;
+    }
+    F::remove(root)
+}
+
+#[cfg(test)]
+fn join_storage_path(parent: &str, child: &str) -> String {
+    if parent == "/" {
+        return format!("/{child}");
+    }
+    let parent = parent.trim_end_matches('/');
+    if parent.is_empty() {
+        child.to_string()
+    } else {
+        format!("{parent}/{child}")
+    }
+}
+
+#[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use core::future::Future;
@@ -257,19 +282,18 @@ mod tests {
 
     #[test]
     fn clear_storage_tree_removes_nested_files() {
-        let fs = MemFs::default();
-        fs.write_atomic("/agent/sessions/roots/conversation-1.jsonl", b"root")
-            .unwrap();
-        fs.write_atomic("/agent/sessions/agents/conversation-2.jsonl", b"sub")
-            .unwrap();
-        fs.write_atomic("/agent/profile/user.md", b"profile")
-            .unwrap();
+        MemFs::default();
+        MemFs::write_atomic("/agent/sessions/roots/conversation-1.jsonl", b"root").unwrap();
+        MemFs::write_atomic("/agent/sessions/agents/conversation-2.jsonl", b"sub").unwrap();
+        MemFs::write_atomic("/agent/profile/user.md", b"profile").unwrap();
 
-        clear_storage_tree(&fs, "/agent").unwrap();
+        clear_storage_tree::<MemFs>("/agent").unwrap();
 
-        assert!(!fs.exists("/agent/sessions/roots/conversation-1.jsonl"));
-        assert!(!fs.exists("/agent/sessions/agents/conversation-2.jsonl"));
-        assert!(!fs.exists("/agent/profile/user.md"));
+        assert!(!MemFs::exists("/agent/sessions/roots/conversation-1.jsonl"));
+        assert!(!MemFs::exists(
+            "/agent/sessions/agents/conversation-2.jsonl"
+        ));
+        assert!(!MemFs::exists("/agent/profile/user.md"));
     }
 
     #[test]

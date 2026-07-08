@@ -161,7 +161,7 @@ where
     H: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
-    let mut llm = ClawApiAsync::init(llm_config, H::default(), Timer::default())?;
+    let mut llm = ClawApiAsync::<H, Timer>::init_default(llm_config)?;
     let resolution = Arc::new(Mutex::new(None));
     // Approval classification uses an isolated local tool set.
     let mut tools = APPROVAL_TOOL_PARENT.tool_set();

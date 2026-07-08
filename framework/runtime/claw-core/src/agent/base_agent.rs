@@ -57,6 +57,7 @@ use claw_api::{ChatError, ClawApiAsync, ClawApiConfig, InitError, RetryPolicy};
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::TranscriptStore;
 use serde_json::Value;
+use strum::IntoStaticStr;
 
 use super::iteration_loop::{
     ChatMessages, CompletedKind, CompletedOutcome, InterruptionControl, IterationId, IterationLoop,
@@ -207,20 +208,24 @@ pub enum AgentCommandError {
 
 /// Why a task was [`Cancel`](AgentCommand::Cancel)led, carried on the resulting
 /// [`TickOutcome::Cancelled`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, IntoStaticStr, PartialEq, Eq)]
 pub enum CancelReason {
     /// A human asked to stop.
+    #[strum(serialize = "user_requested")]
     UserRequested,
     /// The host is shutting the agent down.
+    #[strum(serialize = "shutdown")]
     Shutdown,
 }
 
 /// A human's answer to an approval request.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, IntoStaticStr, PartialEq, Eq)]
 pub enum ApprovalDecision {
     /// The human approved; the agent continues.
+    #[strum(serialize = "approved")]
     Approved,
     /// The human rejected, with a reason recorded for the agent to reconsider.
+    #[strum(serialize = "rejected")]
     Rejected(String),
 }
 
@@ -580,19 +585,18 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// clone to inspect the conversation without going through `BaseAgent`:
     ///
     /// ```ignore
-    /// let store = TranscriptStore::new(agent_id, config, fs);
+    /// let store = TranscriptStore::<MemFs>::new(agent_id, config);
     /// let view = store.clone();
     /// let agent = BaseAgent::build(BaseAgentConfig { llm_config, store, ..config })?;
     /// // later: let messages = view.messages();
     /// ```
     ///
     /// The LLM client is constructed here from [`BaseAgentConfig::llm_config`]
-    /// over freshly built `H::default()` / `Timer::default()` transports: the
-    /// agent owns its client and its transports, so callers pass only
-    /// configuration — never a pre-built client or transport. The built-in tool
-    /// group is merged onto the caller's tools. A configured [`SkillSet`] is
-    /// wrapped by the skill context adapter, which contributes `SkillList` and
-    /// provides the skill-management tool group.
+    /// via [`ClawApiAsync::init_default`]: the agent owns its client and its
+    /// transports, so callers pass only configuration — never a pre-built client
+    /// or transport. The built-in tool group is merged onto the caller's tools.
+    /// A configured [`SkillSet`] is wrapped by the skill context adapter, which
+    /// contributes `SkillList` and provides the skill-management tool group.
     ///
     /// # Errors
     ///
@@ -609,7 +613,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     {
         let control: ControlSink = Arc::new(Mutex::new(VecDeque::new()));
 
-        let llm = ClawApiAsync::init(config.llm_config, H::default(), Timer::default())?;
+        let llm = ClawApiAsync::<H, Timer>::init_default(config.llm_config)?;
 
         let mut tools = config.tools;
         for tool in internal_tools(Arc::clone(&control)) {
@@ -1179,9 +1183,9 @@ fn has_dangling_tool_calls(patch: &Value) -> bool {
 /// ```
 pub struct BaseAgentConfig<F: ClawFs + 'static> {
     /// Config for the per-agent LLM client. [`BaseAgent::build`] builds the client
-    /// (and its `H::default()` / `Timer::default()` transports) internally, so the
-    /// caller supplies configuration, not a pre-constructed client: building the
-    /// client outside only to hand it in adds no value.
+    /// internally via [`ClawApiAsync::init_default`], so the caller supplies
+    /// configuration, not a pre-constructed client: building the client outside
+    /// only to hand it in adds no value.
     pub llm_config: ClawApiConfig,
     /// The caller-owned transcript store — the only place the filesystem type `F`
     /// enters; the built agent erases it behind trait objects.

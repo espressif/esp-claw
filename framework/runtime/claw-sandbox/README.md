@@ -26,7 +26,7 @@ Re-exported from the crate root:
 
 | Item | Role |
 |---|---|
-| `Sandbox` | The sandbox over a backing `ClawFs`: `Sandbox::new(fs, instance_dir, RealRoots { .. })`. |
+| `Sandbox` | The sandbox over a backing `ClawFs`: `Sandbox::<F>::new(instance_dir, RealRoots { .. })`. |
 | `RealRoots` | The real backing paths each shared/system virtual root maps to (`shared_skills`, `shared_tmp`, `shared_data`, `system_skills`). |
 | `SandboxFs` | The confined filesystem surface (read / write / list / … over virtual paths), mirroring `ClawFs`. |
 | `SandboxError` | Why an access was denied or failed. |

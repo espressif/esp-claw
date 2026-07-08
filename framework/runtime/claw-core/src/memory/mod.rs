@@ -30,7 +30,7 @@ pub(crate) use long_term_memory_adapter::{
     agent_store, global_store, Extractor, LlmCompactor, LlmExtractor, LongTermMemoryContextAdapter,
     RuleBasedTierClassifier, TierClassifier,
 };
-pub(crate) use profile_adapter::{ProfileContextAdapter, ProfileTools};
+pub(crate) use profile_adapter::ProfileContextAdapter;
 pub(crate) use recent_messages_adapter::RecentMessagesContextAdapter;
 pub(crate) use rolling_summary_adapter::CompactionPolicy;
 pub(crate) use rolling_summary_adapter::RollingSummaryContextAdapter;

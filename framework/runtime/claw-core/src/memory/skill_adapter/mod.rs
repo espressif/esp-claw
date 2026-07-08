@@ -64,12 +64,11 @@ pub(crate) mod test_support {
 
     /// Write a minimal `SKILL.md` for `id` under the `skills` root of `fs`, so
     /// both catalog scans and document reads succeed.
-    pub(crate) fn write_skill(fs: &MemFs, id: &str, description: &str) {
+    pub(crate) fn write_skill(_fs: &MemFs, id: &str, description: &str) {
         let document = format!(
             "---\n{{\"name\":\"{id}\",\"description\":\"{description}\",\"metadata\":{{\"manage_mode\":\"readonly\"}}}}\n---\n# {id}\n\nBody for {id}.\n"
         );
-        fs.write_atomic(&format!("skills/{id}/SKILL.md"), document.as_bytes())
-            .unwrap();
+        MemFs::write_atomic(&format!("skills/{id}/SKILL.md"), document.as_bytes()).unwrap();
     }
 
     /// An in-memory skill registry seeded with `(id, description)` rows.
@@ -86,7 +85,7 @@ pub(crate) mod test_support {
         for (id, description) in entries {
             write_skill(&fs, id, description);
         }
-        let registry = Arc::new(FsSkillRegistry::new(fs.clone()).set_root("skills").unwrap());
+        let registry = Arc::new(FsSkillRegistry::<MemFs>::new().set_root("skills").unwrap());
         (fs, registry)
     }
 

@@ -33,6 +33,7 @@
 //! handle. The store itself is thread-safe; higher layers decide whether a
 //! particular extraction or tool path is local or worker-driven.
 
+use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use serde::{Deserialize, Serialize};
@@ -257,7 +258,7 @@ struct State {
 struct Inner<F: ClawFs + 'static> {
     path: String,
     config: LongTermConfig,
-    fs: F,
+    _fs: PhantomData<fn() -> F>,
     state: Mutex<State>,
 }
 
@@ -273,7 +274,8 @@ struct Inner<F: ClawFs + 'static> {
 /// use claw_interface::MemFs;
 /// use claw_memory::{LongTermConfig, LongTermMemory, MemoryDraft, StoreOutcome};
 ///
-/// let memory = LongTermMemory::new(LongTermConfig::new("/m", "g-"), MemFs::new())
+/// # MemFs::new();
+/// let memory = LongTermMemory::<MemFs>::new(LongTermConfig::new("/m", "g-"))
 ///     .expect("a fresh MemFs has no journal, so the store starts empty");
 ///
 /// // Store a fact tagged `preference`, then recall by that label.
@@ -312,15 +314,15 @@ impl<F: ClawFs + 'static> LongTermMemory<F> {
     /// [`LongTermInitError::Unreadable`] when the journal exists but cannot be
     /// read — a genuine I/O failure is never silently mistaken for an empty
     /// store. A *missing* journal is not an error: the store starts empty.
-    pub fn new(config: LongTermConfig, fs: F) -> Result<Self, LongTermInitError> {
+    pub fn new(config: LongTermConfig) -> Result<Self, LongTermInitError> {
         let path = journal_path(&config.dir);
-        if let Err(error) = fs.create_dir_all(&config.dir) {
+        if let Err(error) = F::create_dir_all(&config.dir) {
             log::warn!(
                 "long-term memory {}: create dir failed: {error}",
                 config.dir
             );
         }
-        let state = load_state(&fs, &path).map_err(|source| LongTermInitError::Unreadable {
+        let state = load_state::<F>(&path).map_err(|source| LongTermInitError::Unreadable {
             path: path.clone(),
             source,
         })?;
@@ -328,7 +330,7 @@ impl<F: ClawFs + 'static> LongTermMemory<F> {
             inner: Arc::new(Inner {
                 path,
                 config,
-                fs,
+                _fs: PhantomData,
                 state: Mutex::new(state),
             }),
         })
@@ -511,7 +513,7 @@ impl<F: ClawFs + 'static> LongTermMemory<F> {
         let mut line = serde_json::to_vec(record)
             .map_err(|error| FsError::Io(format!("serialize record failed: {error}")))?;
         line.push(b'\n');
-        self.inner.fs.append(&self.inner.path, &line)
+        F::append(&self.inner.path, &line)
     }
 
     /// Rewrite the journal from the live set when dead lines pass the threshold.
@@ -540,7 +542,7 @@ impl<F: ClawFs + 'static> LongTermMemory<F> {
                 }
             }
         }
-        match self.inner.fs.write_atomic(&self.inner.path, &buffer) {
+        match F::write_atomic(&self.inner.path, &buffer) {
             Ok(()) => {
                 state.dead = 0;
                 state.last_persist_error = None;
@@ -567,9 +569,9 @@ fn journal_path(dir: &str) -> String {
 /// read failure is returned as an error so a genuine I/O fault is not silently
 /// mistaken for an empty store. A torn trailing line (crash mid-append) still
 /// fails to parse and is skipped without aborting the replay.
-fn load_state<F: ClawFs>(fs: &F, path: &str) -> Result<State, FsError> {
+fn load_state<F: ClawFs>(path: &str) -> Result<State, FsError> {
     let mut state = State::default();
-    let bytes = match fs.read(path) {
+    let bytes = match F::read(path) {
         Ok(bytes) => bytes,
         Err(FsError::NotFound) => return Ok(state),
         Err(error) => return Err(error),
@@ -625,14 +627,13 @@ mod tests {
     use super::*;
     use claw_interface::MemFs;
 
-    /// A store over a `MemFs` handle; a `clone()` (reload tests) shares the same
-    /// in-memory backing.
-    fn memory(fs: MemFs) -> LongTermMemory<MemFs> {
-        LongTermMemory::new(LongTermConfig::new("/m", "g-"), fs).expect("load empty store")
+    /// A store over the current thread's `MemFs` fixture.
+    fn memory() -> LongTermMemory<MemFs> {
+        LongTermMemory::new(LongTermConfig::new("/m", "g-")).expect("load empty store")
     }
 
-    fn fresh_fs() -> MemFs {
-        MemFs::default()
+    fn reset_fs() {
+        MemFs::new();
     }
 
     fn draft(content: &str, tags: &[&str]) -> MemoryDraft {
@@ -641,7 +642,8 @@ mod tests {
 
     #[test]
     fn store_mints_prefixed_ids_in_order() {
-        let memory = memory(fresh_fs());
+        reset_fs();
+        let memory = memory();
         let first = memory.store(draft("Likes tea", &["preference"]));
         let second = memory.store(draft("Lives in Berlin", &["fact"]));
         assert_eq!(first.item().id.as_str(), "g-0");
@@ -650,7 +652,8 @@ mod tests {
 
     #[test]
     fn store_dedups_by_normalized_content() {
-        let memory = memory(fresh_fs());
+        reset_fs();
+        let memory = memory();
         assert!(matches!(
             memory.store(draft("Likes  TEA", &["preference"])),
             StoreOutcome::Created(_)
@@ -665,7 +668,8 @@ mod tests {
 
     #[test]
     fn recall_filters_by_label_and_query_newest_first() {
-        let memory = memory(fresh_fs());
+        reset_fs();
+        let memory = memory();
         memory.store(draft("Likes tea", &["preference"]));
         memory.store(draft("Likes coffee too", &["preference"]));
         memory.store(draft("Has a dog", &["fact"]));
@@ -685,7 +689,8 @@ mod tests {
 
     #[test]
     fn update_replaces_only_supplied_fields() {
-        let memory = memory(fresh_fs());
+        reset_fs();
+        let memory = memory();
         let id = memory.store(draft("Old", &["x"])).item().id.clone();
         let updated = memory
             .update(
@@ -707,7 +712,8 @@ mod tests {
 
     #[test]
     fn forget_removes_the_item() {
-        let memory = memory(fresh_fs());
+        reset_fs();
+        let memory = memory();
         let id = memory.store(draft("Ephemeral", &["x"])).item().id.clone();
         memory.forget(&id).expect("forget");
         assert!(memory.is_empty());
@@ -719,9 +725,9 @@ mod tests {
 
     #[test]
     fn state_survives_reload_from_journal() {
-        let fs = fresh_fs();
+        reset_fs();
         {
-            let memory = LongTermMemory::new(LongTermConfig::new("/m", "g-"), fs.clone())
+            let memory = LongTermMemory::<MemFs>::new(LongTermConfig::new("/m", "g-"))
                 .expect("load empty store");
             memory.store(draft("Persistent", &["fact"]));
             let id = memory
@@ -739,9 +745,9 @@ mod tests {
                 )
                 .expect("update");
         }
-        // A fresh handle over the same backend replays the journal.
+        // A fresh store over the same backend replays the journal.
         let reloaded =
-            LongTermMemory::new(LongTermConfig::new("/m", "g-"), fs).expect("replay journal");
+            LongTermMemory::<MemFs>::new(LongTermConfig::new("/m", "g-")).expect("replay journal");
         assert_eq!(reloaded.len(), 2);
         let edited = reloaded.recall(&[], Some("edited"), 10);
         assert_eq!(edited.len(), 1);
@@ -759,14 +765,11 @@ mod tests {
 
     #[test]
     fn compaction_rewrites_journal_and_preserves_live_set() {
-        let fs = fresh_fs();
-        let memory = LongTermMemory::new(
-            LongTermConfig {
-                compact_dead_threshold: 3,
-                ..LongTermConfig::new("/m", "g-")
-            },
-            fs.clone(),
-        )
+        reset_fs();
+        let memory = LongTermMemory::<MemFs>::new(LongTermConfig {
+            compact_dead_threshold: 3,
+            ..LongTermConfig::new("/m", "g-")
+        })
         .expect("load empty store");
         let id = memory.store(draft("Churned", &["x"])).item().id.clone();
         // Three updates produce three dead lines, tripping compaction.
@@ -783,7 +786,7 @@ mod tests {
         }
         // The live set is intact and a reload sees only the compacted journal.
         let reloaded =
-            LongTermMemory::new(LongTermConfig::new("/m", "g-"), fs).expect("replay journal");
+            LongTermMemory::<MemFs>::new(LongTermConfig::new("/m", "g-")).expect("replay journal");
         assert_eq!(reloaded.len(), 1);
         assert_eq!(reloaded.list()[0].content, "v3");
     }

@@ -1,4 +1,4 @@
-//! Async [`ClawApiAsync`] surface: `init`, `chat`, `chat_json`, and
+//! Async [`ClawApiAsync`] surface: `init_default`, `chat`, `chat_json`, and
 //! `infer_media` driven over the injected async [`ClawHttp`] transport and
 //! [`ClawTimer`] backoff seam.
 //!
@@ -33,6 +33,7 @@ use serde_json::json;
 
 /// Async transport: same body-sniffing canned replies as the blocking example,
 /// resolved immediately in a single poll.
+#[derive(Default)]
 struct StubHttp;
 
 impl ClawHttp for StubHttp {
@@ -62,6 +63,7 @@ impl ClawHttp for StubHttp {
 }
 
 /// A [`ClawTimer`] that never actually waits (retry backoff completes at once).
+#[derive(Default)]
 struct ImmediateTimer;
 
 impl ClawTimer for ImmediateTimer {
@@ -110,7 +112,7 @@ fn main() -> anyhow::Result<()> {
         "gpt-4o-mini",
         "https://api.example.com/v1",
     );
-    let mut api = ClawApiAsync::init(config, StubHttp, ImmediateTimer)?;
+    let mut api = ClawApiAsync::<StubHttp, ImmediateTimer>::init_default(config)?;
 
     let abort = AtomicBool::new(false);
     let cancel = Cancel::new(&abort);

@@ -341,23 +341,25 @@ impl<H: BlockingClawHttp> ClawApi<H> {
     }
 }
 
-impl<H: ClawHttp, Timer: ClawTimer> ClawApiAsync<H, Timer> {
-    /// Validate `config`, select the built-in backend, and bind the async HTTP
-    /// transport plus timer used for retry backoff.
-    pub fn init(
-        config: ClawApiConfig,
-        http: H,
-        timer: Timer,
-    ) -> Result<ClawApiAsync<H, Timer>, InitError> {
+impl<H, Timer> ClawApiAsync<H, Timer>
+where
+    H: ClawHttp + Default,
+    Timer: ClawTimer + Default,
+{
+    /// Validate `config`, select the built-in backend, and bind default async
+    /// HTTP/timer transports.
+    pub fn init_default(config: ClawApiConfig) -> Result<Self, InitError> {
         let backend = resolve_config(config)?;
 
-        Ok(ClawApiAsync {
+        Ok(Self {
             backend,
-            http,
-            timer,
+            http: H::default(),
+            timer: Timer::default(),
         })
     }
+}
 
+impl<H: ClawHttp, Timer: ClawTimer> ClawApiAsync<H, Timer> {
     /// Async chat completion over [`ClawHttp`].
     pub async fn chat(
         &mut self,

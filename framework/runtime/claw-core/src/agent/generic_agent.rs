@@ -122,9 +122,8 @@ impl<H: ClawHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
             block_retries: config.tool_block_retries,
         };
         let mut base = BaseAgent::build(base_config)?;
-        let compaction_llm =
-            ClawApiAsync::init(compaction_llm_config, H::default(), Timer::default())
-                .map_err(GenericAgentBuildError::CompactionLlm)?;
+        let compaction_llm = ClawApiAsync::<H, Timer>::init_default(compaction_llm_config)
+            .map_err(GenericAgentBuildError::CompactionLlm)?;
         let compactor: Arc<dyn Compactor> = Arc::new(LlmCompactor::new(compaction_llm));
         let rolling_summary = RollingSummaryContextAdapter::new(
             rolling_summary_store,

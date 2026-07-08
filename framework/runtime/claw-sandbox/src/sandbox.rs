@@ -9,6 +9,8 @@
 //! directory whose `skills/` and `tmp/` subdirectories are materialized when the
 //! sandbox is constructed.
 
+use std::marker::PhantomData;
+
 use claw_interface::ClawFs;
 
 use crate::fs::{SandboxError, SandboxFs};
@@ -47,12 +49,12 @@ struct Route {
 /// Construct with [`Sandbox::new`], then use it through the [`SandboxFs`] trait.
 #[derive(Debug)]
 pub struct Sandbox<F: ClawFs> {
-    backend: F,
     routes: Vec<Route>,
+    _fs: PhantomData<fn() -> F>,
 }
 
 impl<F: ClawFs> Sandbox<F> {
-    /// Build a sandbox over `backend`.
+    /// Build a sandbox over the backing filesystem type `F`.
     ///
     /// `sandbox_host_dir` is the real directory backing the private, ephemeral
     /// `/sandbox` root; `real` supplies the fixed real paths for the shared and
@@ -62,11 +64,7 @@ impl<F: ClawFs> Sandbox<F> {
     ///
     /// Returns [`SandboxError::Fs`] if materializing the scratch directories
     /// fails.
-    pub fn new(
-        backend: F,
-        sandbox_host_dir: impl Into<String>,
-        real: RealRoots,
-    ) -> Result<Self, SandboxError> {
+    pub fn new(sandbox_host_dir: impl Into<String>, real: RealRoots) -> Result<Self, SandboxError> {
         let host = trim_trailing_slash(&sandbox_host_dir.into());
         let routes = vec![
             Route {
@@ -95,10 +93,13 @@ impl<F: ClawFs> Sandbox<F> {
                 read_only: true,
             },
         ];
-        let sandbox = Self { backend, routes };
+        let sandbox = Self {
+            routes,
+            _fs: PhantomData,
+        };
         for scratch in ["/sandbox/skills", "/sandbox/tmp"] {
             let (_, real_path) = sandbox.route(scratch)?;
-            sandbox.backend.create_dir_all(&real_path)?;
+            F::create_dir_all(&real_path)?;
         }
         Ok(sandbox)
     }
@@ -134,42 +135,42 @@ impl<F: ClawFs> Sandbox<F> {
 impl<F: ClawFs> SandboxFs for Sandbox<F> {
     fn read(&self, path: &str) -> Result<Vec<u8>, SandboxError> {
         let (_, real_path) = self.route(path)?;
-        Ok(self.backend.read(&real_path)?)
+        Ok(F::read(&real_path)?)
     }
 
     fn read_at(&self, path: &str, offset: u64, len: usize) -> Result<Vec<u8>, SandboxError> {
         let (_, real_path) = self.route(path)?;
-        Ok(self.backend.read_at(&real_path, offset, len)?)
+        Ok(F::read_at(&real_path, offset, len)?)
     }
 
     fn len(&self, path: &str) -> Result<u64, SandboxError> {
         let (_, real_path) = self.route(path)?;
-        Ok(self.backend.len(&real_path)?)
+        Ok(F::len(&real_path)?)
     }
 
     fn write_atomic(&self, path: &str, data: &[u8]) -> Result<(), SandboxError> {
         let real_path = self.route_mut(path)?;
-        Ok(self.backend.write_atomic(&real_path, data)?)
+        Ok(F::write_atomic(&real_path, data)?)
     }
 
     fn append(&self, path: &str, data: &[u8]) -> Result<(), SandboxError> {
         let real_path = self.route_mut(path)?;
-        Ok(self.backend.append(&real_path, data)?)
+        Ok(F::append(&real_path, data)?)
     }
 
     fn exists(&self, path: &str) -> Result<bool, SandboxError> {
         let (_, real_path) = self.route(path)?;
-        Ok(self.backend.exists(&real_path))
+        Ok(F::exists(&real_path))
     }
 
     fn remove(&self, path: &str) -> Result<(), SandboxError> {
         let real_path = self.route_mut(path)?;
-        Ok(self.backend.remove(&real_path)?)
+        Ok(F::remove(&real_path)?)
     }
 
     fn list_dir(&self, path: &str) -> Result<Vec<String>, SandboxError> {
         let (_, real_path) = self.route(path)?;
-        Ok(self.backend.list_dir(&real_path)?)
+        Ok(F::list_dir(&real_path)?)
     }
 }
 
@@ -217,20 +218,21 @@ mod tests {
     };
 
     fn sandbox() -> Sandbox<MemFs> {
-        Sandbox::new(MemFs::new(), "/real/sandbox/inst-1", REAL).unwrap()
+        MemFs::new();
+        Sandbox::<MemFs>::new("/real/sandbox/inst-1", REAL).unwrap()
     }
 
     #[test]
     fn routes_each_visible_root_to_its_real_path() {
-        let backend = MemFs::new();
-        let sb = Sandbox::new(backend.clone(), "/host/sandbox", REAL).unwrap();
+        MemFs::new();
+        let sb = Sandbox::<MemFs>::new("/host/sandbox", REAL).unwrap();
 
         sb.write_atomic("/sandbox/tmp/a", b"1").unwrap();
         sb.write_atomic("/shared/data/b", b"2").unwrap();
 
         // Writes land at the routed real paths in the backing store.
-        assert_eq!(backend.read("/host/sandbox/tmp/a").unwrap(), b"1");
-        assert_eq!(backend.read("/real/shared/data/b").unwrap(), b"2");
+        assert_eq!(MemFs::read("/host/sandbox/tmp/a").unwrap(), b"1");
+        assert_eq!(MemFs::read("/real/shared/data/b").unwrap(), b"2");
     }
 
     #[test]
@@ -299,11 +301,9 @@ mod tests {
 
     #[test]
     fn system_root_is_readable() {
-        let backend = MemFs::new();
-        backend
-            .write_atomic("/real/system/skills/doc", b"hi")
-            .unwrap();
-        let sb = Sandbox::new(backend, "/host/sandbox", REAL).unwrap();
+        MemFs::new();
+        MemFs::write_atomic("/real/system/skills/doc", b"hi").unwrap();
+        let sb = Sandbox::<MemFs>::new("/host/sandbox", REAL).unwrap();
         assert_eq!(sb.read("/system/skills/doc").unwrap(), b"hi");
     }
 

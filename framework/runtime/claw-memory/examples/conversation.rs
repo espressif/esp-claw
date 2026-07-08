@@ -15,10 +15,10 @@ use claw_memory::{TranscriptConfig, TranscriptStore};
 
 fn main() -> anyhow::Result<()> {
     let conversation_id = 42;
-    let store = TranscriptStore::new(
+    MemFs::new();
+    let store = TranscriptStore::<MemFs>::new(
         conversation_id,
         TranscriptConfig::new("/data/conversations"),
-        MemFs::new(),
     )?;
 
     // One turn = one `group()`. The whole turn commits as a single record when

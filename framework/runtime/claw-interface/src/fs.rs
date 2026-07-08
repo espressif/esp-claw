@@ -6,13 +6,14 @@
 //! root (FATFS / SD card), while host tests provide `std::fs` or an in-memory
 //! map. Modules never touch `std::fs` directly so they stay portable.
 //!
-//! # Two layers: a filesystem that produces file handles
+//! # Two layers: a filesystem backend that produces file handles
 //!
-//! The seam is shaped like a (statically dispatched) `vfs`:
-//! - [`ClawFs`] is the *filesystem* — it locates paths and produces handles
-//!   ([`open`](ClawFs::open) / [`create`](ClawFs::create) /
-//!   [`open_append`](ClawFs::open_append)) and performs whole-path operations
-//!   that have no handle (`rename`, `remove`, `list_dir`, …).
+//! The seam is shaped like a statically dispatched `std::fs` HAL:
+//! - [`ClawFs`] is the platform filesystem backend selected by type. It locates
+//!   paths and produces handles ([`open`](ClawFs::open) /
+//!   [`create`](ClawFs::create) / [`open_append`](ClawFs::open_append)) and
+//!   performs whole-path operations that have no handle (`rename`, `remove`,
+//!   `list_dir`, …).
 //! - [`ClawFile`] is an *open handle*: read/seek/write against one file without
 //!   reopening it. Callers that touch the same file repeatedly (e.g. loading a
 //!   conversation log record-by-record) hold one handle and seek within it,
@@ -70,35 +71,35 @@ pub trait ClawFile {
     fn write_all(&mut self, data: &[u8]) -> Result<(), FsError>;
 }
 
-/// Byte-oriented persistence injection point: a filesystem that hands out
+/// Byte-oriented persistence injection point: a filesystem backend that hands out
 /// [`ClawFile`] handles.
 ///
-/// Implementations must be safe to share across threads: the same filesystem
-/// backend can be held by stores, skill registries, and tool/capability paths
-/// driven from different runtime boundaries. File handles remain per-operation;
-/// sharing the filesystem object must not imply sharing one open handle.
+/// This is a `std::fs`-like HAL: operations are associated functions on the
+/// selected backend type rather than methods on a runtime-owned filesystem
+/// handle. Per-platform state such as mount tables, DATA roots, or test fixtures
+/// lives behind the implementation.
 ///
 /// Two write disciplines coexist:
-/// - [`open_append`](ClawFs::open) + [`read_exact_at`](ClawFile::read_exact_at)
-///   for append-only journals (e.g. the conversation data `.jsonl`), where each
-///   turn appends a record and load reads back only the live records by byte
-///   offset.
+/// - [`open_append`](ClawFs::open_append) +
+///   [`read_exact_at`](ClawFile::read_exact_at) for append-only journals (e.g.
+///   the conversation data `.jsonl`), where each turn appends a record and load
+///   reads back only the live records by byte offset.
 /// - [`write_atomic`](ClawFs::write_atomic) for whole-file checkpoints that must
 ///   replace the target tear-free: the small index manifest (`.json`) rewritten
 ///   on compaction/collapse, and the `.jsonl` itself when a collapse rewrites it
 ///   to drop dead records. The default implementation writes a temporary sibling
 ///   then [`rename`](ClawFs::rename)s it over the target.
-pub trait ClawFs: Send + Sync {
+pub trait ClawFs: Send + Sync + 'static {
     /// The open-file handle this filesystem produces.
     type File: ClawFile;
 
     /// Open an existing file for reading. Returns [`FsError::NotFound`] when
     /// `path` is absent.
-    fn open(&self, path: &str) -> Result<Self::File, FsError>;
+    fn open(path: &str) -> Result<Self::File, FsError>;
 
     /// Create (or truncate) `path` for writing, creating parent directories as
     /// needed. The returned handle starts empty at offset 0.
-    fn create(&self, path: &str) -> Result<Self::File, FsError>;
+    fn create(path: &str) -> Result<Self::File, FsError>;
 
     /// Open `path` for appending, creating it (and parents) if absent.
     ///
@@ -106,7 +107,7 @@ pub trait ClawFs: Send + Sync {
     /// prior records are never rewritten. A crash mid-append may leave a torn
     /// trailing record, which readers discard; it must never corrupt earlier
     /// records.
-    fn open_append(&self, path: &str) -> Result<Self::File, FsError>;
+    fn open_append(path: &str) -> Result<Self::File, FsError>;
 
     /// Rename `from` to `to`, replacing `to` if it exists. Returns
     /// [`FsError::NotFound`] when `from` is absent.
@@ -114,7 +115,7 @@ pub trait ClawFs: Send + Sync {
     /// This is the atomic-replace primitive behind
     /// [`write_atomic`](Self::write_atomic): a crash mid-rename leaves either the
     /// old target or the new one, never a torn mix.
-    fn rename(&self, from: &str, to: &str) -> Result<(), FsError>;
+    fn rename(from: &str, to: &str) -> Result<(), FsError>;
 
     /// Recursively create directory `path`, including any missing parents.
     ///
@@ -123,13 +124,13 @@ pub trait ClawFs: Send + Sync {
     /// no-op — their directories exist implicitly the moment a file is written
     /// beneath them, and [`list_dir`](ClawFs::list_dir) on such a path already
     /// reports an empty listing rather than [`FsError::NotFound`].
-    fn create_dir_all(&self, path: &str) -> Result<(), FsError>;
+    fn create_dir_all(path: &str) -> Result<(), FsError>;
 
     /// Whether `path` currently exists.
-    fn exists(&self, path: &str) -> bool;
+    fn exists(path: &str) -> bool;
 
     /// Remove `path`. Removing a missing path succeeds (idempotent).
-    fn remove(&self, path: &str) -> Result<(), FsError>;
+    fn remove(path: &str) -> Result<(), FsError>;
 
     /// List the immediate entry names within directory `path`.
     ///
@@ -137,7 +138,7 @@ pub trait ClawFs: Send + Sync {
     /// not joined paths, and in unspecified order — callers that need ordering
     /// sort themselves. Both files and subdirectories are included. Returns
     /// [`FsError::NotFound`] when `path` does not exist.
-    fn list_dir(&self, path: &str) -> Result<Vec<String>, FsError>;
+    fn list_dir(path: &str) -> Result<Vec<String>, FsError>;
 
     // ----------------------------------------------------------------------
     // Path-addressed conveniences (default methods over the handle primitives).
@@ -149,25 +150,25 @@ pub trait ClawFs: Send + Sync {
     // ----------------------------------------------------------------------
 
     /// Read the whole file. Returns [`FsError::NotFound`] when `path` is absent.
-    fn read(&self, path: &str) -> Result<Vec<u8>, FsError> {
-        self.open(path)?.read_to_end()
+    fn read(path: &str) -> Result<Vec<u8>, FsError> {
+        Self::open(path)?.read_to_end()
     }
 
     /// Read `len` bytes starting at byte `offset` (a one-shot
     /// [`open`](Self::open) + [`read_exact_at`](ClawFile::read_exact_at)).
-    fn read_at(&self, path: &str, offset: u64, len: usize) -> Result<Vec<u8>, FsError> {
-        self.open(path)?.read_exact_at(offset, len)
+    fn read_at(path: &str, offset: u64, len: usize) -> Result<Vec<u8>, FsError> {
+        Self::open(path)?.read_exact_at(offset, len)
     }
 
     /// Byte length of `path`. Returns [`FsError::NotFound`] when absent.
-    fn len(&self, path: &str) -> Result<u64, FsError> {
-        self.open(path)?.size()
+    fn len(path: &str) -> Result<u64, FsError> {
+        Self::open(path)?.size()
     }
 
     /// Append `data` to the end of `path`, creating it if absent (a one-shot
     /// [`open_append`](Self::open_append) + [`write_all`](ClawFile::write_all)).
-    fn append(&self, path: &str, data: &[u8]) -> Result<(), FsError> {
-        self.open_append(path)?.write_all(data)
+    fn append(path: &str, data: &[u8]) -> Result<(), FsError> {
+        Self::open_append(path)?.write_all(data)
     }
 
     /// Durably replace `path` with `data`.
@@ -176,13 +177,13 @@ pub trait ClawFs: Send + Sync {
     /// [`rename`](Self::rename)s it over the target so a crash mid-write never
     /// leaves a half-written file — the file is either the old contents or the
     /// new contents, never a torn mix.
-    fn write_atomic(&self, path: &str, data: &[u8]) -> Result<(), FsError> {
+    fn write_atomic(path: &str, data: &[u8]) -> Result<(), FsError> {
         let tmp = format!("{path}.tmp");
         {
-            let mut file = self.create(&tmp)?;
+            let mut file = Self::create(&tmp)?;
             file.write_all(data)?;
         }
-        self.rename(&tmp, path)
+        Self::rename(&tmp, path)
     }
 }
 
@@ -200,38 +201,64 @@ pub trait ClawFs: Send + Sync {
 
 #[cfg(feature = "memfs")]
 mod memfs {
+    use std::cell::RefCell;
     use std::collections::{BTreeSet, HashMap};
     use std::sync::{Arc, Mutex, MutexGuard};
 
     use super::{ClawFile, ClawFs, FsError};
 
-    /// In-memory [`ClawFs`] backed by a path → bytes map.
+    type Files = Arc<Mutex<HashMap<String, Vec<u8>>>>;
+
+    thread_local! {
+        static FILES: RefCell<Files> = RefCell::new(Arc::new(Mutex::new(HashMap::new())));
+    }
+
+    /// In-memory [`ClawFs`] backed by a thread-local path → bytes map.
     ///
-    /// A cheap, `Clone`able handle over a shared store, mirroring how [`DiskFs`]
-    /// is a handle over the on-disk filesystem: cloning a `MemFs` does not copy
-    /// the contents, it yields another handle to the *same* store. The sharing
-    /// (the `Arc`) is an internal detail, so callers pass `MemFs` by value to a
-    /// generic `F: ClawFs` bound and never wrap it in an `Arc` themselves.
+    /// `MemFs` is a backend type, not a storage handle. [`MemFs::new`] resets the
+    /// current thread's test fixture and returns the zero-sized selector. File
+    /// handles keep an `Arc` to the fixture they were opened against, so already
+    /// opened handles remain valid even if a later test reset installs a fresh
+    /// fixture.
     ///
-    /// Hermetic and thread-safe, so host tests can exercise persistence through
-    /// cloned store/registry handles without touching the real filesystem.
+    /// Hermetic per test thread, so host tests can exercise persistence without
+    /// touching the real filesystem.
     /// `list_dir` derives entries from the key prefixes, mirroring a real
     /// directory tree.
     ///
     /// [`DiskFs`]: super::DiskFs
-    #[derive(Debug, Clone, Default)]
-    pub struct MemFs {
-        files: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    #[derive(Debug, Clone, Copy)]
+    pub struct MemFs;
+
+    impl Default for MemFs {
+        fn default() -> Self {
+            Self::new()
+        }
     }
 
     impl MemFs {
         /// An empty filesystem.
         pub fn new() -> Self {
-            Self::default()
+            FILES.with(|slot| *slot.borrow_mut() = Arc::new(Mutex::new(HashMap::new())));
+            Self
         }
 
-        fn lock(&self) -> MutexGuard<'_, HashMap<String, Vec<u8>>> {
-            self.files
+        /// Clear the current thread's in-memory filesystem fixture.
+        pub fn clear() {
+            FILES.with(|slot| {
+                slot.borrow()
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clear();
+            });
+        }
+
+        fn files() -> Files {
+            FILES.with(|slot| Arc::clone(&slot.borrow()))
+        }
+
+        fn lock(files: &Files) -> MutexGuard<'_, HashMap<String, Vec<u8>>> {
+            files
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
         }
@@ -250,9 +277,7 @@ mod memfs {
 
     impl MemFile {
         fn lock(&self) -> MutexGuard<'_, HashMap<String, Vec<u8>>> {
-            self.files
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
+            MemFs::lock(&self.files)
         }
     }
 
@@ -298,10 +323,11 @@ mod memfs {
     impl ClawFs for MemFs {
         type File = MemFile;
 
-        fn open(&self, path: &str) -> Result<Self::File, FsError> {
-            if self.lock().contains_key(path) {
+        fn open(path: &str) -> Result<Self::File, FsError> {
+            let files = Self::files();
+            if Self::lock(&files).contains_key(path) {
                 Ok(MemFile {
-                    files: Arc::clone(&self.files),
+                    files,
                     path: path.to_string(),
                 })
             } else {
@@ -309,50 +335,57 @@ mod memfs {
             }
         }
 
-        fn create(&self, path: &str) -> Result<Self::File, FsError> {
+        fn create(path: &str) -> Result<Self::File, FsError> {
+            let files = Self::files();
             // Truncate: an empty entry that subsequent `write_all`s extend.
-            self.lock().insert(path.to_string(), Vec::new());
+            Self::lock(&files).insert(path.to_string(), Vec::new());
             Ok(MemFile {
-                files: Arc::clone(&self.files),
+                files,
                 path: path.to_string(),
             })
         }
 
-        fn open_append(&self, path: &str) -> Result<Self::File, FsError> {
-            self.lock().entry(path.to_string()).or_default();
+        fn open_append(path: &str) -> Result<Self::File, FsError> {
+            let files = Self::files();
+            Self::lock(&files).entry(path.to_string()).or_default();
             Ok(MemFile {
-                files: Arc::clone(&self.files),
+                files,
                 path: path.to_string(),
             })
         }
 
-        fn rename(&self, from: &str, to: &str) -> Result<(), FsError> {
-            let mut files = self.lock();
+        fn rename(from: &str, to: &str) -> Result<(), FsError> {
+            let files = Self::files();
+            let mut files = Self::lock(&files);
             let bytes = files.remove(from).ok_or(FsError::NotFound)?;
             files.insert(to.to_string(), bytes);
             Ok(())
         }
 
-        fn create_dir_all(&self, _path: &str) -> Result<(), FsError> {
+        fn create_dir_all(_path: &str) -> Result<(), FsError> {
             // Flat key→bytes map: directories are implicit in key prefixes, so
             // there is nothing to materialize. `list_dir` of an empty prefix
             // already returns an empty listing.
             Ok(())
         }
 
-        fn exists(&self, path: &str) -> bool {
-            self.lock().contains_key(path)
+        fn exists(path: &str) -> bool {
+            let files = Self::files();
+            let exists = Self::lock(&files).contains_key(path);
+            exists
         }
 
-        fn remove(&self, path: &str) -> Result<(), FsError> {
-            self.lock().remove(path);
+        fn remove(path: &str) -> Result<(), FsError> {
+            let files = Self::files();
+            Self::lock(&files).remove(path);
             Ok(())
         }
 
-        fn list_dir(&self, path: &str) -> Result<Vec<String>, FsError> {
+        fn list_dir(path: &str) -> Result<Vec<String>, FsError> {
             let prefix = format!("{}/", path.trim_end_matches('/'));
             let mut names = BTreeSet::new();
-            for key in self.lock().keys() {
+            let files = Self::files();
+            for key in Self::lock(&files).keys() {
                 if let Some(rest) = key.strip_prefix(&prefix) {
                     if let Some(name) = rest.split('/').next().filter(|name| !name.is_empty()) {
                         names.insert(name.to_string());
@@ -366,6 +399,7 @@ mod memfs {
 
 #[cfg(feature = "diskfs")]
 mod diskfs {
+    use std::cell::RefCell;
     use std::io::{Read, Seek, SeekFrom, Write};
     use std::path::PathBuf;
 
@@ -379,6 +413,17 @@ mod diskfs {
         }
     }
 
+    #[derive(Debug, Clone, Default)]
+    struct DiskConfig {
+        base: Option<PathBuf>,
+        #[cfg(feature = "diskfs-pretty")]
+        pretty_json: bool,
+    }
+
+    thread_local! {
+        static CONFIG: RefCell<DiskConfig> = RefCell::new(DiskConfig::default());
+    }
+
     /// Host [`ClawFs`] over `std::fs`.
     ///
     /// Two addressing modes share one durable write discipline (write to a `.tmp`
@@ -389,42 +434,42 @@ mod diskfs {
     ///   leading `/` is stripped so absolute-looking virtual paths stay inside the
     ///   root), keeping on-disk fixtures portable. Used by the skill-registry
     ///   tests.
-    #[derive(Debug, Clone, Default)]
-    pub struct DiskFs {
-        base: Option<PathBuf>,
-        #[cfg(feature = "diskfs-pretty")]
-        pretty_json: bool,
-    }
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct DiskFs;
 
     impl DiskFs {
         /// Verbatim-path mode: the trait `path` is the on-disk path.
         pub fn absolute() -> Self {
-            Self::default()
+            CONFIG.with(|slot| *slot.borrow_mut() = DiskConfig::default());
+            Self
         }
 
         /// Rooted mode: the trait `path` is joined onto `base` (leading `/`
         /// stripped) so virtual paths resolve inside the root.
         pub fn rooted(base: impl Into<PathBuf>) -> Self {
-            Self {
-                base: Some(base.into()),
-                #[cfg(feature = "diskfs-pretty")]
-                pretty_json: false,
-            }
+            CONFIG.with(|slot| {
+                *slot.borrow_mut() = DiskConfig {
+                    base: Some(base.into()),
+                    #[cfg(feature = "diskfs-pretty")]
+                    pretty_json: false,
+                };
+            });
+            Self
         }
 
         /// Pretty-print `.json` writes so the on-disk files are readable when
         /// inspecting a test's output directory. Off by default.
         #[cfg(feature = "diskfs-pretty")]
-        pub fn with_pretty_json(mut self, enabled: bool) -> Self {
-            self.pretty_json = enabled;
+        pub fn with_pretty_json(self, enabled: bool) -> Self {
+            CONFIG.with(|slot| slot.borrow_mut().pretty_json = enabled);
             self
         }
 
-        fn resolve(&self, path: &str) -> PathBuf {
-            match &self.base {
+        fn resolve(path: &str) -> PathBuf {
+            CONFIG.with(|slot| match &slot.borrow().base {
                 Some(base) => base.join(path.trim_start_matches('/')),
                 None => PathBuf::from(path),
-            }
+            })
         }
 
         /// Ensure the parent directory of `full` exists before a write.
@@ -478,22 +523,22 @@ mod diskfs {
     impl ClawFs for DiskFs {
         type File = DiskFile;
 
-        fn open(&self, path: &str) -> Result<Self::File, FsError> {
-            std::fs::File::open(self.resolve(path))
+        fn open(path: &str) -> Result<Self::File, FsError> {
+            std::fs::File::open(Self::resolve(path))
                 .map(|file| DiskFile { file })
                 .map_err(map_io)
         }
 
-        fn create(&self, path: &str) -> Result<Self::File, FsError> {
-            let full = self.resolve(path);
+        fn create(path: &str) -> Result<Self::File, FsError> {
+            let full = Self::resolve(path);
             Self::ensure_parent(&full)?;
             std::fs::File::create(&full)
                 .map(|file| DiskFile { file })
                 .map_err(|error| FsError::Io(error.to_string()))
         }
 
-        fn open_append(&self, path: &str) -> Result<Self::File, FsError> {
-            let full = self.resolve(path);
+        fn open_append(path: &str) -> Result<Self::File, FsError> {
+            let full = Self::resolve(path);
             Self::ensure_parent(&full)?;
             std::fs::OpenOptions::new()
                 .create(true)
@@ -503,29 +548,29 @@ mod diskfs {
                 .map_err(|error| FsError::Io(error.to_string()))
         }
 
-        fn rename(&self, from: &str, to: &str) -> Result<(), FsError> {
-            std::fs::rename(self.resolve(from), self.resolve(to)).map_err(map_io)
+        fn rename(from: &str, to: &str) -> Result<(), FsError> {
+            std::fs::rename(Self::resolve(from), Self::resolve(to)).map_err(map_io)
         }
 
-        fn create_dir_all(&self, path: &str) -> Result<(), FsError> {
-            std::fs::create_dir_all(self.resolve(path))
+        fn create_dir_all(path: &str) -> Result<(), FsError> {
+            std::fs::create_dir_all(Self::resolve(path))
                 .map_err(|error| FsError::Io(error.to_string()))
         }
 
-        fn exists(&self, path: &str) -> bool {
-            self.resolve(path).exists()
+        fn exists(path: &str) -> bool {
+            Self::resolve(path).exists()
         }
 
-        fn remove(&self, path: &str) -> Result<(), FsError> {
-            match std::fs::remove_file(self.resolve(path)) {
+        fn remove(path: &str) -> Result<(), FsError> {
+            match std::fs::remove_file(Self::resolve(path)) {
                 Ok(()) => Ok(()),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
                 Err(error) => Err(FsError::Io(error.to_string())),
             }
         }
 
-        fn list_dir(&self, path: &str) -> Result<Vec<String>, FsError> {
-            let entries = std::fs::read_dir(self.resolve(path)).map_err(map_io)?;
+        fn list_dir(path: &str) -> Result<Vec<String>, FsError> {
+            let entries = std::fs::read_dir(Self::resolve(path)).map_err(map_io)?;
             let mut names = Vec::new();
             for entry in entries {
                 let entry = entry.map_err(|error| FsError::Io(error.to_string()))?;
@@ -537,8 +582,8 @@ mod diskfs {
         }
 
         /// Byte length via `stat`, avoiding an open just to read metadata.
-        fn len(&self, path: &str) -> Result<u64, FsError> {
-            std::fs::metadata(self.resolve(path))
+        fn len(path: &str) -> Result<u64, FsError> {
+            std::fs::metadata(Self::resolve(path))
                 .map(|metadata| metadata.len())
                 .map_err(map_io)
         }
@@ -546,11 +591,11 @@ mod diskfs {
         /// Durable whole-file replace: write a `.tmp` sibling, then `rename` it
         /// over the target. Overrides the trait default to add optional
         /// pretty-printing of `.json` payloads (the `diskfs-pretty` feature).
-        fn write_atomic(&self, path: &str, data: &[u8]) -> Result<(), FsError> {
-            let full = self.resolve(path);
+        fn write_atomic(path: &str, data: &[u8]) -> Result<(), FsError> {
+            let full = Self::resolve(path);
             Self::ensure_parent(&full)?;
             #[cfg(feature = "diskfs-pretty")]
-            let payload = self.render(path, data);
+            let payload = Self::render(path, data);
             #[cfg(not(feature = "diskfs-pretty"))]
             let payload = std::borrow::Cow::Borrowed(data);
             let mut tmp = full.clone().into_os_string();
@@ -565,8 +610,9 @@ mod diskfs {
     #[cfg(feature = "diskfs-pretty")]
     impl DiskFs {
         /// Pretty-print `.json` payloads when enabled; otherwise pass through.
-        fn render<'data>(&self, path: &str, data: &'data [u8]) -> std::borrow::Cow<'data, [u8]> {
-            if self.pretty_json && path.ends_with(".json") {
+        fn render<'data>(path: &str, data: &'data [u8]) -> std::borrow::Cow<'data, [u8]> {
+            let pretty_json = CONFIG.with(|slot| slot.borrow().pretty_json);
+            if pretty_json && path.ends_with(".json") {
                 serde_json::from_slice::<serde_json::Value>(data)
                     .ok()
                     .and_then(|value| serde_json::to_vec_pretty(&value).ok())

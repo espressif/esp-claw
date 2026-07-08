@@ -18,18 +18,18 @@ fn skill_md(id: &str, description: &str) -> Vec<u8> {
 
 fn main() -> anyhow::Result<()> {
     // Two distinct roots, each contributing different skills.
-    let fs = MemFs::new();
-    fs.write_atomic(
+    MemFs::new();
+    MemFs::write_atomic(
         "system/time/SKILL.md",
         &skill_md("time", "Built-in time helper."),
     )?;
-    fs.write_atomic(
+    MemFs::write_atomic(
         "data/notes/SKILL.md",
         &skill_md("notes", "User-installed notes skill."),
     )?;
 
     let registry = std::sync::Arc::new(
-        FsSkillRegistry::new(fs)
+        FsSkillRegistry::<MemFs>::new()
             .set_root("data")?
             .set_root("system")?,
     );
@@ -39,13 +39,13 @@ fn main() -> anyhow::Result<()> {
 
     // Now use a collision: the same id `time` exists in both roots, and the
     // earlier DATA root shadows the later SYSTEM root.
-    let clashing = MemFs::new();
-    clashing.write_atomic("system/time/SKILL.md", &skill_md("time", "baked"))?;
-    clashing.write_atomic("data/time/SKILL.md", &skill_md("time", "installed"))?;
+    MemFs::new();
+    MemFs::write_atomic("system/time/SKILL.md", &skill_md("time", "baked"))?;
+    MemFs::write_atomic("data/time/SKILL.md", &skill_md("time", "installed"))?;
 
     println!("\n== scanning roots with a clashing id ==");
     let registry = std::sync::Arc::new(
-        FsSkillRegistry::new(clashing)
+        FsSkillRegistry::<MemFs>::new()
             .set_root("data")?
             .set_root("system")?,
     );

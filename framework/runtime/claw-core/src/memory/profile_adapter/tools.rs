@@ -12,7 +12,7 @@ use claw_tool::{
 use serde_json::Value;
 
 /// Build the writable profile tools.
-pub(crate) fn profile_tools<F: ClawFs + Clone + 'static>(store: ProfileStore<F>) -> Vec<Tool> {
+pub(crate) fn profile_tools<F: ClawFs + 'static>(store: ProfileStore<F>) -> Vec<Tool> {
     vec![
         Tool::from_sync(ProfileReadTool {
             store: store.clone(),
@@ -24,11 +24,11 @@ pub(crate) fn profile_tools<F: ClawFs + Clone + 'static>(store: ProfileStore<F>)
     ]
 }
 
-struct ProfileReadTool<F: ClawFs + Clone + 'static> {
+struct ProfileReadTool<F: ClawFs + 'static> {
     store: ProfileStore<F>,
 }
 
-impl<F: ClawFs + Clone + 'static> ToolSpec for ProfileReadTool<F> {
+impl<F: ClawFs + 'static> ToolSpec for ProfileReadTool<F> {
     tool_metadata!("profile_read");
 
     fn concurrent(&self) -> bool {
@@ -40,7 +40,7 @@ impl<F: ClawFs + Clone + 'static> ToolSpec for ProfileReadTool<F> {
     }
 }
 
-impl<F: ClawFs + Clone + 'static> SyncToolHandler for ProfileReadTool<F> {
+impl<F: ClawFs + 'static> SyncToolHandler for ProfileReadTool<F> {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let args = parse_object(call)?;
         let document = document_from_args(&args)?;
@@ -61,11 +61,11 @@ impl<F: ClawFs + Clone + 'static> SyncToolHandler for ProfileReadTool<F> {
     }
 }
 
-struct ProfileReplaceTool<F: ClawFs + Clone + 'static> {
+struct ProfileReplaceTool<F: ClawFs + 'static> {
     store: ProfileStore<F>,
 }
 
-impl<F: ClawFs + Clone + 'static> ToolSpec for ProfileReplaceTool<F> {
+impl<F: ClawFs + 'static> ToolSpec for ProfileReplaceTool<F> {
     tool_metadata!("profile_replace");
 
     fn classify(&self, call: &ToolInvocation<'_>) -> Action {
@@ -73,7 +73,7 @@ impl<F: ClawFs + Clone + 'static> ToolSpec for ProfileReplaceTool<F> {
     }
 }
 
-impl<F: ClawFs + Clone + 'static> SyncToolHandler for ProfileReplaceTool<F> {
+impl<F: ClawFs + 'static> SyncToolHandler for ProfileReplaceTool<F> {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let args = parse_object(call)?;
         let document = document_from_args(&args)?;
@@ -91,11 +91,11 @@ impl<F: ClawFs + Clone + 'static> SyncToolHandler for ProfileReplaceTool<F> {
     }
 }
 
-struct ProfileClearTool<F: ClawFs + Clone + 'static> {
+struct ProfileClearTool<F: ClawFs + 'static> {
     store: ProfileStore<F>,
 }
 
-impl<F: ClawFs + Clone + 'static> ToolSpec for ProfileClearTool<F> {
+impl<F: ClawFs + 'static> ToolSpec for ProfileClearTool<F> {
     tool_metadata!("profile_clear");
 
     fn classify(&self, call: &ToolInvocation<'_>) -> Action {
@@ -103,7 +103,7 @@ impl<F: ClawFs + Clone + 'static> ToolSpec for ProfileClearTool<F> {
     }
 }
 
-impl<F: ClawFs + Clone + 'static> SyncToolHandler for ProfileClearTool<F> {
+impl<F: ClawFs + 'static> SyncToolHandler for ProfileClearTool<F> {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let args = parse_object(call)?;
         let document = document_from_args(&args)?;
@@ -120,7 +120,7 @@ impl<F: ClawFs + Clone + 'static> SyncToolHandler for ProfileClearTool<F> {
     }
 }
 
-fn profile_action<F: ClawFs + Clone + 'static>(
+fn profile_action<F: ClawFs + 'static>(
     call: &ToolInvocation<'_>,
     verb: &str,
     risk: RiskClass,
@@ -192,7 +192,8 @@ mod tests {
     use super::*;
 
     fn store() -> ProfileStore<MemFs> {
-        ProfileStore::new(ProfileConfig::new("/memory"), MemFs::new())
+        MemFs::new();
+        ProfileStore::new(ProfileConfig::new("/memory"))
     }
 
     fn call<'a>(name: &'a str, arguments_json: &'a str) -> ToolInvocation<'a> {

@@ -63,15 +63,13 @@ impl<H: ClawHttp, Timer: ClawTimer> LlmCompactor<H, Timer> {
     /// #         })
     /// #     }
     /// # }
-    /// let api = ClawApiAsync::init(
+    /// let api = ClawApiAsync::<StubHttp, ImmediateTimer>::init_default(
     ///     ClawApiConfig::new(
     ///         BackendKind::OpenAiCompatible,
     ///         "sk-test",
     ///         "gpt-4o-mini",
     ///         "https://api.openai.com/v1",
     ///     ),
-    ///     StubHttp::default(),
-    ///     ImmediateTimer,
     /// )
     /// .expect("init");
     ///

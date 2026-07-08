@@ -15,8 +15,8 @@ fn skill_md(id: &str, description: &str, body: &str) -> Vec<u8> {
 }
 
 fn main() -> anyhow::Result<()> {
-    let fs = MemFs::new();
-    fs.write_atomic(
+    MemFs::new();
+    MemFs::write_atomic(
         "skills/board_hardware_info/SKILL.md",
         &skill_md(
             "board_hardware_info",
@@ -24,7 +24,7 @@ fn main() -> anyhow::Result<()> {
             "# Board hardware\nGPIO map ...",
         ),
     )?;
-    fs.write_atomic(
+    MemFs::write_atomic(
         "skills/light_switch/SKILL.md",
         &skill_md(
             "light_switch",
@@ -33,7 +33,7 @@ fn main() -> anyhow::Result<()> {
         ),
     )?;
 
-    let registry = Arc::new(FsSkillRegistry::new(fs).set_root("skills")?);
+    let registry = Arc::new(FsSkillRegistry::<MemFs>::new().set_root("skills")?);
     let mut set = registry.skill_set();
 
     println!("== catalog context ==\n{}", set.catalog_context());

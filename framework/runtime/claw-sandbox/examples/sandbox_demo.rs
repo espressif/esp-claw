@@ -14,13 +14,11 @@ use claw_interface::{ClawFs, MemFs};
 use claw_sandbox::{RealRoots, Sandbox, SandboxError, SandboxFs};
 
 fn main() -> anyhow::Result<()> {
-    // The real backing store. `MemFs` is a cheap clone handle to the same store,
-    // so we keep a clone to peek at the raw real paths and see where the sandbox
-    // actually routed each write.
-    let backend = MemFs::new();
+    // The real backing store. `MemFs` stores data behind its static HAL, so we
+    // can peek at the raw real paths and see where the sandbox routed writes.
+    MemFs::new();
 
-    let sandbox = Sandbox::new(
-        backend.clone(),
+    let sandbox = Sandbox::<MemFs>::new(
         "/data/sandboxes/inst-1",
         RealRoots {
             shared_skills: "/data/shared/skills",
@@ -40,7 +38,7 @@ fn main() -> anyhow::Result<()> {
     );
 
     // It really lands under the per-instance host dir in the backing store:
-    let raw = backend.read("/data/sandboxes/inst-1/tmp/scratch.txt")?;
+    let raw = MemFs::read("/data/sandboxes/inst-1/tmp/scratch.txt")?;
     println!("  (backing real path holds {} bytes)", raw.len());
 
     // The scratch roots were materialized at construction, so they list empty
@@ -54,7 +52,7 @@ fn main() -> anyhow::Result<()> {
     // A result the agent wants to hand back across the sandbox boundary.
     sandbox.write_atomic("/shared/data/report.md", b"# Result\n")?;
     // The host, outside the sandbox, reads it at the shared real path:
-    let from_host = backend.read("/data/shared/data/report.md")?;
+    let from_host = MemFs::read("/data/shared/data/report.md")?;
     println!(
         "host sees /shared/data/report.md ({} bytes)",
         from_host.len()
@@ -62,7 +60,7 @@ fn main() -> anyhow::Result<()> {
 
     // --- The read-only system root ----------------------------------------
     // System content is readable...
-    backend.write_atomic("/system/skills/builtin.md", b"baked-in skill")?;
+    MemFs::write_atomic("/system/skills/builtin.md", b"baked-in skill")?;
     println!(
         "/system/skills/builtin.md -> {:?}",
         String::from_utf8_lossy(&sandbox.read("/system/skills/builtin.md")?)
