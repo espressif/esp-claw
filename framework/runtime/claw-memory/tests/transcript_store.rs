@@ -4,10 +4,8 @@
 //! pure verbatim storage — it never compacts — so these tests assert only on the
 //! full transcript being preserved across writes and reloads.
 
-use std::time::{Duration, Instant};
-
 use claw_interface::{ClawFs, DiskFs, MemFs};
-use claw_memory::{TranscriptConfig, TranscriptStore};
+use claw_memory::TranscriptStore;
 use serde_json::{json, Value};
 
 // --- test doubles --------------------------------------------------------
@@ -17,31 +15,9 @@ use serde_json::{json, Value};
 
 // --- helpers -------------------------------------------------------------
 
-/// Config with an instant persist (no debounce) so appends hit disk per turn.
-fn instant_config(dir: &str) -> TranscriptConfig {
-    TranscriptConfig {
-        persist_debounce: Duration::ZERO,
-        ..TranscriptConfig::new(dir)
-    }
-}
-
 /// A store with default tuning, conversation id 1, and a fresh in-memory fs.
 fn store_with<F: ClawFs + 'static>(_fs: F) -> TranscriptStore<F> {
-    TranscriptStore::new(1, TranscriptConfig::new("/conversations")).unwrap()
-}
-
-/// Poll `predicate` until it holds or a generous deadline passes (persistence
-/// may settle asynchronously on a debounce; tests use instant configs but keep
-/// the helper for the no-manifest crash-recovery cases).
-fn wait_until(predicate: impl Fn() -> bool) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        if predicate() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    predicate()
+    TranscriptStore::new(1, "/conversations").unwrap()
 }
 
 fn messages<F: ClawFs + 'static>(store: &TranscriptStore<F>) -> Vec<Value> {
@@ -163,7 +139,7 @@ fn distinct_ids_persist_independently() {
     MemFs::default();
     let dir = "/sessions";
 
-    let make = |id: u32| TranscriptStore::<MemFs>::new(id, TranscriptConfig::new(dir)).unwrap();
+    let make = |id: u32| TranscriptStore::<MemFs>::new(id, dir).unwrap();
 
     let one = make(1);
     let two = make(2);
@@ -187,7 +163,7 @@ fn distinct_ids_persist_independently() {
 #[test]
 fn missing_persist_file_starts_empty() {
     MemFs::default();
-    let store = TranscriptStore::<MemFs>::new(7, TranscriptConfig::new("/empty")).unwrap();
+    let store = TranscriptStore::<MemFs>::new(7, "/empty").unwrap();
     assert!(messages(&store).is_empty());
 }
 
@@ -195,7 +171,7 @@ fn missing_persist_file_starts_empty() {
 fn reloads_via_manifest() {
     MemFs::default();
 
-    let store = TranscriptStore::<MemFs>::new(1, instant_config("/c")).unwrap();
+    let store = TranscriptStore::<MemFs>::new(1, "/c").unwrap();
     for i in 0..6 {
         store.group().append_user(format!("m{i}"));
     }
@@ -203,7 +179,7 @@ fn reloads_via_manifest() {
     let before = messages(&store);
 
     // A fresh store restores the same view from the manifest + data log.
-    let reloaded = TranscriptStore::<MemFs>::new(1, instant_config("/c")).unwrap();
+    let reloaded = TranscriptStore::<MemFs>::new(1, "/c").unwrap();
     let after = messages(&reloaded);
     assert_eq!(
         after, before,
@@ -216,20 +192,18 @@ fn reloads_via_manifest() {
 fn reloads_from_data_log_without_manifest() {
     MemFs::default();
 
-    let store = TranscriptStore::<MemFs>::new(3, instant_config("/c")).unwrap();
+    let store = TranscriptStore::<MemFs>::new(3, "/c").unwrap();
     store.group().append_user("a");
     store.group().append_user("b");
     store.group().append_user("c");
+    store.flush();
 
-    // Simulate the no-manifest scenario (e.g. process crash after append but
-    // before the manifest is synced). A fresh load must reconstruct purely from a
+    // Simulate a missing manifest. A fresh load must reconstruct purely from a
     // data-log scan.
     MemFs::remove("/c/conversation-3.json").ok();
 
-    assert!(wait_until(move || {
-        let reloaded = TranscriptStore::<MemFs>::new(3, TranscriptConfig::new("/c")).unwrap();
-        messages(&reloaded).len() == 3
-    }));
+    let reloaded = TranscriptStore::<MemFs>::new(3, "/c").unwrap();
+    assert_eq!(messages(&reloaded).len(), 3);
     assert!(MemFs::exists("/c/conversation-3.jsonl"));
 }
 
@@ -237,17 +211,16 @@ fn reloads_from_data_log_without_manifest() {
 fn reload_tail_scans_appends_after_manifest() {
     MemFs::default();
 
-    let store = TranscriptStore::<MemFs>::new(4, instant_config("/c")).unwrap();
+    let store = TranscriptStore::<MemFs>::new(4, "/c").unwrap();
     store.group().append_user("a");
     store.group().append_user("b");
     store.flush(); // manifest now covers a, b
-    store.group().append_user("c"); // appended past covered_len; manifest left stale
+    MemFs::append("/c/conversation-4.jsonl", &group_line(3, "c")).unwrap();
 
-    assert!(wait_until(move || {
-        let reloaded = TranscriptStore::<MemFs>::new(4, TranscriptConfig::new("/c")).unwrap();
-        let m = messages(&reloaded);
-        m.len() == 3 && m[2]["content"] == "c"
-    }));
+    let reloaded = TranscriptStore::<MemFs>::new(4, "/c").unwrap();
+    let m = messages(&reloaded);
+    assert_eq!(m.len(), 3);
+    assert_eq!(m[2]["content"], "c");
 }
 
 #[test]
@@ -263,7 +236,7 @@ fn torn_trailing_line_is_ignored_on_load() {
     data.extend_from_slice(br#"{"t":"group","id":1,"msgs":[{"role":"#);
     MemFs::append("/c/conversation-9.jsonl", &data).unwrap();
 
-    let store = TranscriptStore::<MemFs>::new(9, TranscriptConfig::new("/c")).unwrap();
+    let store = TranscriptStore::<MemFs>::new(9, "/c").unwrap();
     let m = messages(&store);
     assert_eq!(m.len(), 1);
     assert_eq!(m[0]["content"], "ok");
@@ -335,7 +308,7 @@ fn mismatched_manifest_triggers_rebuild_and_recovers_all_turns() {
 
     // Load: detects the mismatch, falls back to full scan, recovers all 3 groups,
     // and rewrites both files.
-    let store = TranscriptStore::<MemFs>::new(1, TranscriptConfig::new("/c")).unwrap();
+    let store = TranscriptStore::<MemFs>::new(1, "/c").unwrap();
     let msgs = messages(&store);
     assert_eq!(msgs.len(), 3, "all 3 turns recovered after rebuild");
     assert_eq!(msgs[0]["content"], "g0");
@@ -343,7 +316,7 @@ fn mismatched_manifest_triggers_rebuild_and_recovers_all_turns() {
     assert_eq!(msgs[2]["content"], "g2");
 
     // The rebuilt files should be self-consistent: reloading must give the same view.
-    let reloaded = TranscriptStore::<MemFs>::new(1, TranscriptConfig::new("/c")).unwrap();
+    let reloaded = TranscriptStore::<MemFs>::new(1, "/c").unwrap();
     let reloaded_msgs = messages(&reloaded);
     assert_eq!(reloaded_msgs.len(), 3);
     assert_eq!(reloaded_msgs[0]["content"], "g0");
@@ -361,7 +334,7 @@ fn mismatched_manifest_triggers_rebuild_and_recovers_all_turns() {
 #[allow(clippy::unwrap_used)]
 fn writes_inspectable_output_files() {
     let output_root = concat!(env!("CARGO_MANIFEST_DIR"), "/output");
-    // Virtual dir used by TranscriptConfig; maps to output/data/ on disk.
+    // Virtual dir used by TranscriptStore; maps to output/data/ on disk.
     let virtual_dir = "/data";
 
     // Clear any files from a previous run so the output reflects exactly this test.
@@ -370,7 +343,7 @@ fn writes_inspectable_output_files() {
     std::fs::create_dir_all(&disk_dir).expect("create disk_dir");
 
     DiskFs::rooted(output_root).with_pretty_json(true);
-    let store = TranscriptStore::<DiskFs>::new(1, instant_config(virtual_dir)).unwrap();
+    let store = TranscriptStore::<DiskFs>::new(1, virtual_dir).unwrap();
 
     // Commit 6 turns; each has a user question and an assistant answer.
     for i in 0..6u32 {

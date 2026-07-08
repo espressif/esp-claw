@@ -74,33 +74,13 @@ const DEFAULT_GLOBAL_TAGS: &[&str] = &["preference", "user", "device", "fact", "
 ///     MemoryTier::Global
 /// );
 /// ```
-#[derive(Clone, Debug)]
-pub struct RuleBasedTierClassifier {
-    global_tags: Vec<String>,
-}
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RuleBasedTierClassifier;
 
 impl RuleBasedTierClassifier {
-    /// Classifier with a custom set of global-marking tags.
-    pub fn new(global_tags: impl IntoIterator<Item = String>) -> Self {
-        Self {
-            global_tags: global_tags.into_iter().collect(),
-        }
-    }
-
     /// A ready-to-share classifier with the default global tags.
     pub fn shared() -> Arc<dyn TierClassifier> {
-        Arc::new(Self::default())
-    }
-}
-
-impl Default for RuleBasedTierClassifier {
-    fn default() -> Self {
-        Self {
-            global_tags: DEFAULT_GLOBAL_TAGS
-                .iter()
-                .map(|tag| tag.to_string())
-                .collect(),
-        }
+        Arc::new(Self)
     }
 }
 
@@ -110,7 +90,7 @@ impl TierClassifier for RuleBasedTierClassifier {
             return tier;
         }
         let is_global = draft.tags.iter().any(|tag| {
-            self.global_tags
+            DEFAULT_GLOBAL_TAGS
                 .iter()
                 .any(|known| known.eq_ignore_ascii_case(tag))
         });

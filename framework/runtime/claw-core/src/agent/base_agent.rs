@@ -585,7 +585,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// clone to inspect the conversation without going through `BaseAgent`:
     ///
     /// ```ignore
-    /// let store = TranscriptStore::<MemFs>::new(agent_id, config);
+    /// let store = TranscriptStore::<MemFs>::new(agent_id, "/data/conversations");
     /// let view = store.clone();
     /// let agent = BaseAgent::build(BaseAgentConfig { llm_config, store, ..config })?;
     /// // later: let messages = view.messages();

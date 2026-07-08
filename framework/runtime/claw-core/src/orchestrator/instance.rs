@@ -37,7 +37,8 @@ use tracing::Instrument as _;
 use crate::agent::{
     Agent, AgentAbortHandle, AgentCommand, AgentCommandError, AgentId, AgentIdAllocator, AgentKind,
     AgentPlacement, AgentRegistry, AgentSnapshot, AgentStatus, ApprovalDecision, ApprovalId,
-    CancelReason, FsAgentFactory, GraphEffect, GraphHost, TerminationPolicy, TickOutcome,
+    CancelReason, FsAgentCreateError, FsAgentFactory, GraphEffect, GraphHost, TerminationPolicy,
+    TickOutcome,
 };
 use crate::event::{EventSink, SessionEvent};
 use crate::orchestrator::control::{DriveControl, DriveStop};
@@ -111,6 +112,34 @@ pub(crate) enum ApprovalResolutionError {
     /// The agent rejected the decision (e.g. it is not awaiting this approval).
     #[error(transparent)]
     Command(AgentCommandError),
+}
+
+/// Failure accepting user text into this session's root agent.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum InstanceDeliverError {
+    /// The lazy root agent could not be built for the first message.
+    #[error("failed to build root agent: {0}")]
+    Create(#[from] FsAgentCreateError),
+    /// Existing-root delivery failed.
+    #[error("failed to deliver to root {root}: {source}")]
+    Root {
+        /// The root agent id.
+        root: AgentId,
+        /// The delivery failure.
+        #[source]
+        source: AgentMessageDeliveryError,
+    },
+}
+
+/// Failure appending a message to one live agent.
+#[derive(Clone, Debug, thiserror::Error)]
+pub(crate) enum AgentMessageDeliveryError {
+    /// No live agent with the given id.
+    #[error("no such agent: {0}")]
+    UnknownAgent(AgentId),
+    /// The agent rejected the append command in its current state.
+    #[error(transparent)]
+    Command(#[from] AgentCommandError),
 }
 
 /// One agent's graph edges — the relationship data the instance owns and runs all
@@ -432,7 +461,7 @@ where
     ///
     /// # Errors
     ///
-    /// Propagates the factory's error string when the agent cannot be built
+    /// Propagates the factory's typed error when the agent cannot be built
     /// (nothing is stored in that case).
     fn build_agent(
         &mut self,
@@ -440,7 +469,7 @@ where
         kind: &AgentKind,
         goal: String,
         placement: AgentPlacement,
-    ) -> Result<(), String> {
+    ) -> Result<(), FsAgentCreateError> {
         let agent = self.factory.create_agent(
             id,
             kind,
@@ -461,12 +490,13 @@ where
     ///
     /// # Errors
     ///
-    /// Propagates the factory's error string when the root cannot be built.
-    pub(crate) fn deliver(&mut self, text: impl Into<String>) -> Result<(), String> {
+    /// Propagates the typed delivery error when the root cannot be built or
+    /// cannot accept the message.
+    pub(crate) fn deliver(&mut self, text: impl Into<String>) -> Result<(), InstanceDeliverError> {
         match self.root {
             Some(root) => self
                 .deliver_message(root, text)
-                .map_err(|error| format!("delivering to root {root}: {error}")),
+                .map_err(|source| InstanceDeliverError::Root { root, source }),
             None => {
                 let id = self.ids.next();
                 let kind = AgentKind::new(ROOT_AGENT_KIND);
@@ -819,13 +849,15 @@ where
     }
 
     /// Append a user message to the idle agent `id` and mark it ready.
-    fn deliver_message(&mut self, id: AgentId, text: impl Into<String>) -> Result<(), String> {
+    fn deliver_message(
+        &mut self,
+        id: AgentId,
+        text: impl Into<String>,
+    ) -> Result<(), AgentMessageDeliveryError> {
         let Some(agent) = self.registry.get_mut(id) else {
-            return Err(format!("no such agent {id}"));
+            return Err(AgentMessageDeliveryError::UnknownAgent(id));
         };
-        agent
-            .send_command(AgentCommand::AppendMessage(text.into()))
-            .map_err(|error| error.to_string())?;
+        agent.send_command(AgentCommand::AppendMessage(text.into()))?;
         self.enqueue(id);
         Ok(())
     }
@@ -984,12 +1016,13 @@ where
                 );
                 self.enqueue(id);
             }
-            Err(_) => {
+            Err(error) => {
                 tracing::error!(
                     name: "spawn_dropped",
                     parent_agent = %parent,
                     kind = %kind.as_str(),
                     reason = "build_failed",
+                    error = %error,
                 );
             }
         }

@@ -92,7 +92,7 @@ impl<H: ClawHttp, Timer: ClawTimer> Extractor for LlmExtractor<H, Timer> {
                     Cancel::new(&abort),
                 )
                 .await
-                .map_err(|error| ExtractError::Backend(error.to_string()))?;
+                .map_err(ExtractError::from)?;
 
             let text = response.text.unwrap_or_default();
             Ok(parse_ops(&text))

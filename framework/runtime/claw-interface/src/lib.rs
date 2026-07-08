@@ -18,7 +18,7 @@ pub mod timer;
 pub use executor::ClawExecutor;
 #[cfg(feature = "tokioexecutor")]
 pub use executor::TokioExecutor;
-pub use fs::{ClawFile, ClawFs, FsError};
+pub use fs::{ClawFile, ClawFs, FsError, FsIoError};
 #[cfg(feature = "diskfs")]
 pub use fs::{DiskFile, DiskFs};
 #[cfg(feature = "memfs")]

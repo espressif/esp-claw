@@ -29,7 +29,7 @@ pub(crate) use base_agent::{
     AgentAbortHandle, AgentCommand, AgentCommandError, AgentId, ApprovalDecision, ApprovalId,
     CancelReason, TickOutcome,
 };
-pub(crate) use factory::{AgentPlacement, FsAgentFactory, FsAgentFactoryError};
+pub(crate) use factory::{AgentPlacement, FsAgentCreateError, FsAgentFactory, FsAgentFactoryError};
 pub(crate) use graph::{AgentSnapshot, AgentStatus, GraphEffect, GraphHost, TerminationPolicy};
 pub use iteration_loop::IterationId;
 pub(crate) use iteration_loop::{

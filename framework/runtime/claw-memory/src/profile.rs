@@ -41,7 +41,7 @@ impl ProfileDocument {
         }
     }
 
-    /// On-disk filename under [`ProfileConfig::dir`].
+    /// On-disk filename under the profile store directory.
     pub fn file_name(self) -> &'static str {
         match self {
             ProfileDocument::Soul => SOUL_FILE,
@@ -97,25 +97,6 @@ pub struct ParseProfileDocumentError {
     value: String,
 }
 
-/// Tuning for [`ProfileStore`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProfileConfig {
-    /// Directory holding `soul.md`, `identity.md`, and `user.md`.
-    pub dir: String,
-    /// Maximum accepted byte length for each profile document.
-    pub max_document_bytes: usize,
-}
-
-impl ProfileConfig {
-    /// Build a profile config rooted at `dir`.
-    pub fn new(dir: &str) -> Self {
-        Self {
-            dir: dir.to_string(),
-            max_document_bytes: DEFAULT_PROFILE_DOCUMENT_MAX_BYTES,
-        }
-    }
-}
-
 /// Failure from a profile document operation.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ProfileError {
@@ -159,36 +140,41 @@ pub struct ProfileSnapshot {
 
 /// Pure storage for the editable profile documents.
 pub struct ProfileStore<F: ClawFs + 'static> {
-    config: ProfileConfig,
+    /// Directory holding `soul.md`, `identity.md`, and `user.md`.
+    dir: String,
+    /// Maximum accepted byte length for each profile document.
+    max_document_bytes: usize,
     _fs: PhantomData<fn() -> F>,
 }
 
 impl<F: ClawFs + 'static> Clone for ProfileStore<F> {
     fn clone(&self) -> Self {
         Self {
-            config: self.config.clone(),
+            dir: self.dir.clone(),
+            max_document_bytes: self.max_document_bytes,
             _fs: PhantomData,
         }
     }
 }
 
 impl<F: ClawFs + 'static> ProfileStore<F> {
-    /// Build a store over `config` and the selected filesystem backend.
-    pub fn new(config: ProfileConfig) -> Self {
+    /// Build a store rooted at `dir` over the selected filesystem backend.
+    pub fn new(dir: &str) -> Self {
         Self {
-            config,
+            dir: dir.to_string(),
+            max_document_bytes: DEFAULT_PROFILE_DOCUMENT_MAX_BYTES,
             _fs: PhantomData,
         }
     }
 
     /// The configured profile directory.
     pub fn dir(&self) -> &str {
-        &self.config.dir
+        &self.dir
     }
 
     /// Full path to a document.
     pub fn path(&self, document: ProfileDocument) -> String {
-        join_path(&self.config.dir, document.file_name())
+        join_path(&self.dir, document.file_name())
     }
 
     /// Read one document. Missing files are normal absence, not an error.
@@ -254,10 +240,10 @@ impl<F: ClawFs + 'static> ProfileStore<F> {
         document: ProfileDocument,
         actual_bytes: usize,
     ) -> Result<(), ProfileError> {
-        if actual_bytes > self.config.max_document_bytes {
+        if actual_bytes > self.max_document_bytes {
             return Err(ProfileError::TooLarge {
                 document,
-                max_bytes: self.config.max_document_bytes,
+                max_bytes: self.max_document_bytes,
                 actual_bytes,
             });
         }
@@ -282,7 +268,7 @@ mod tests {
 
     fn store() -> ProfileStore<MemFs> {
         MemFs::new();
-        ProfileStore::new(ProfileConfig::new("/memory"))
+        ProfileStore::new("/memory")
     }
 
     #[test]
@@ -316,13 +302,10 @@ mod tests {
 
     #[test]
     fn rejects_too_large_document() {
-        MemFs::new();
-        let store = ProfileStore::<MemFs>::new(ProfileConfig {
-            max_document_bytes: 2,
-            ..ProfileConfig::new("/memory")
-        });
+        let store = store();
+        let content = "x".repeat(DEFAULT_PROFILE_DOCUMENT_MAX_BYTES + 1);
         let error = store
-            .replace(ProfileDocument::AssistantIdentity, "abc")
+            .replace(ProfileDocument::AssistantIdentity, content)
             .unwrap_err();
         assert!(matches!(error, ProfileError::TooLarge { .. }));
     }

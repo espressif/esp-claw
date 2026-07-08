@@ -97,7 +97,6 @@ mod tests {
 
     use claw_context::Context;
     use claw_interface::MemFs;
-    use claw_memory::ProfileConfig;
     use serde_json::Value;
 
     use super::*;
@@ -123,7 +122,7 @@ mod tests {
     #[test]
     fn contributes_profile_documents_in_context_order() {
         MemFs::new();
-        let store = ProfileStore::<MemFs>::new(ProfileConfig::new("/memory"));
+        let store = ProfileStore::<MemFs>::new("/memory");
         store.replace(ProfileDocument::UserProfile, "USER").unwrap();
         store.replace(ProfileDocument::Soul, "SOUL").unwrap();
         store
@@ -143,7 +142,7 @@ mod tests {
     #[test]
     fn missing_document_clears_existing_block() {
         MemFs::new();
-        let store = ProfileStore::<MemFs>::new(ProfileConfig::new("/memory"));
+        let store = ProfileStore::<MemFs>::new("/memory");
         let mut adapter = ProfileContextAdapter::new(store, false);
         let mut context = Context::new();
         context.with(Block::new(BlockKind::Soul, "OLD"));

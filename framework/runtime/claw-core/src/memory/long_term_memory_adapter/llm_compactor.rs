@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 
 use claw_api::{ChatRequest, ClawApiAsync};
 use claw_interface::{Cancel, ClawHttp, ClawTimer};
-use claw_memory::{CompactError, CompactFuture, Compactor};
+use claw_memory::{CompactBackendError, CompactError, CompactFuture, Compactor};
 
 use super::async_llm::SharedAsyncLlm;
 
@@ -103,13 +103,11 @@ impl<H: ClawHttp, Timer: ClawTimer> Compactor for LlmCompactor<H, Timer> {
                     Cancel::new(&abort),
                 )
                 .await
-                .map_err(|err| CompactError::Backend(err.to_string()))?;
+                .map_err(|error| CompactError::Backend(CompactBackendError::new(error)))?;
 
             let summary = response.text.unwrap_or_default();
             if summary.trim().is_empty() {
-                return Err(CompactError::Backend(
-                    "model returned an empty summary".to_string(),
-                ));
+                return Err(CompactError::EmptySummary);
             }
 
             Ok(vec![json!({

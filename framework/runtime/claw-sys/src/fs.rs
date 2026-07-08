@@ -12,11 +12,7 @@ mod espidf {
     use claw_interface::{ClawFile, ClawFs, FsError};
 
     fn map_io(error: std::io::Error) -> FsError {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            FsError::NotFound
-        } else {
-            FsError::Io(error.to_string())
-        }
+        FsError::from(error)
     }
 
     /// Device filesystem backend over ESP-IDF VFS paths.
@@ -29,7 +25,7 @@ mod espidf {
     impl EspIdfFs {
         fn ensure_parent(path: &std::path::Path) -> Result<(), FsError> {
             if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).map_err(|error| FsError::Io(error.to_string()))?;
+                std::fs::create_dir_all(parent).map_err(FsError::from)?;
             }
             Ok(())
         }
@@ -43,20 +39,16 @@ mod espidf {
     impl ClawFile for EspIdfFile {
         fn read_to_end(&mut self) -> Result<Vec<u8>, FsError> {
             let mut buffer = Vec::new();
-            self.file
-                .read_to_end(&mut buffer)
-                .map_err(|error| FsError::Io(error.to_string()))?;
+            self.file.read_to_end(&mut buffer).map_err(FsError::from)?;
             Ok(buffer)
         }
 
         fn read_exact_at(&mut self, offset: u64, len: usize) -> Result<Vec<u8>, FsError> {
             self.file
                 .seek(SeekFrom::Start(offset))
-                .map_err(|error| FsError::Io(error.to_string()))?;
+                .map_err(FsError::from)?;
             let mut buffer = vec![0u8; len];
-            self.file
-                .read_exact(&mut buffer)
-                .map_err(|error| FsError::Io(error.to_string()))?;
+            self.file.read_exact(&mut buffer).map_err(FsError::from)?;
             Ok(buffer)
         }
 
@@ -68,9 +60,7 @@ mod espidf {
         }
 
         fn write_all(&mut self, data: &[u8]) -> Result<(), FsError> {
-            self.file
-                .write_all(data)
-                .map_err(|error| FsError::Io(error.to_string()))
+            self.file.write_all(data).map_err(FsError::from)
         }
     }
 
@@ -88,7 +78,7 @@ mod espidf {
             Self::ensure_parent(full)?;
             std::fs::File::create(full)
                 .map(|file| EspIdfFile { file })
-                .map_err(|error| FsError::Io(error.to_string()))
+                .map_err(FsError::from)
         }
 
         fn open_append(path: &str) -> Result<Self::File, FsError> {
@@ -99,7 +89,7 @@ mod espidf {
                 .append(true)
                 .open(full)
                 .map(|file| EspIdfFile { file })
-                .map_err(|error| FsError::Io(error.to_string()))
+                .map_err(FsError::from)
         }
 
         fn rename(from: &str, to: &str) -> Result<(), FsError> {
@@ -107,7 +97,7 @@ mod espidf {
         }
 
         fn create_dir_all(path: &str) -> Result<(), FsError> {
-            std::fs::create_dir_all(path).map_err(|error| FsError::Io(error.to_string()))
+            std::fs::create_dir_all(path).map_err(FsError::from)
         }
 
         fn exists(path: &str) -> bool {
@@ -118,7 +108,7 @@ mod espidf {
             match std::fs::remove_file(path) {
                 Ok(()) => Ok(()),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(error) => Err(FsError::Io(error.to_string())),
+                Err(error) => Err(FsError::from(error)),
             }
         }
 
@@ -126,7 +116,7 @@ mod espidf {
             let entries = std::fs::read_dir(path).map_err(map_io)?;
             let mut names = Vec::new();
             for entry in entries {
-                let entry = entry.map_err(|error| FsError::Io(error.to_string()))?;
+                let entry = entry.map_err(FsError::from)?;
                 if let Some(name) = entry.file_name().to_str() {
                     names.push(name.to_string());
                 }
@@ -144,8 +134,8 @@ mod espidf {
             let full = std::path::Path::new(path);
             Self::ensure_parent(full)?;
             let tmp = format!("{path}.tmp");
-            std::fs::write(&tmp, data).map_err(|error| FsError::Io(error.to_string()))?;
-            std::fs::rename(&tmp, full).map_err(|error| FsError::Io(error.to_string()))
+            std::fs::write(&tmp, data).map_err(FsError::from)?;
+            std::fs::rename(&tmp, full).map_err(FsError::from)
         }
     }
 }

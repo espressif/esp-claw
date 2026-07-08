@@ -30,6 +30,10 @@
 //!
 //! [`ClawHttp`]: crate::http::ClawHttp
 
+use std::error::Error;
+use std::fmt;
+use std::sync::Arc;
+
 /// Filesystem failure.
 ///
 /// Deliberately coarse: callers either retry, log, or fall back to an empty
@@ -41,8 +45,83 @@ pub enum FsError {
     #[error("path not found")]
     NotFound,
     #[error("filesystem io error: {0}")]
-    Io(String),
+    Io(#[from] FsIoError),
 }
+
+impl FsError {
+    /// Preserve a concrete filesystem-adjacent failure.
+    pub fn io(error: impl Error + Send + Sync + 'static) -> Self {
+        Self::Io(FsIoError::new(error))
+    }
+
+    /// Build an I/O error for synthetic filesystem failures that have no lower
+    /// source error.
+    pub fn io_message(message: impl Into<String>) -> Self {
+        Self::Io(FsIoError::message(message))
+    }
+}
+
+impl From<std::io::Error> for FsError {
+    fn from(error: std::io::Error) -> Self {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            Self::NotFound
+        } else {
+            Self::io(error)
+        }
+    }
+}
+
+/// Source-preserving filesystem I/O failure.
+#[derive(Debug, Clone)]
+pub struct FsIoError {
+    source: Arc<dyn Error + Send + Sync + 'static>,
+}
+
+impl FsIoError {
+    /// Preserve a concrete underlying error.
+    pub fn new(error: impl Error + Send + Sync + 'static) -> Self {
+        Self {
+            source: Arc::new(error),
+        }
+    }
+
+    /// Create a synthetic source for filesystem failures raised by validation
+    /// logic rather than a lower I/O API.
+    pub fn message(message: impl Into<String>) -> Self {
+        Self::new(FsMessageError(message.into()))
+    }
+}
+
+impl fmt::Display for FsIoError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.source.fmt(formatter)
+    }
+}
+
+impl Error for FsIoError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.source.as_ref())
+    }
+}
+
+impl PartialEq for FsIoError {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.source, &other.source)
+            || match (
+                self.source.as_ref().downcast_ref::<FsMessageError>(),
+                other.source.as_ref().downcast_ref::<FsMessageError>(),
+            ) {
+                (Some(left), Some(right)) => left == right,
+                _ => false,
+            }
+    }
+}
+
+impl Eq for FsIoError {}
+
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+struct FsMessageError(String);
 
 /// An open file handle produced by a [`ClawFs`].
 ///
@@ -293,15 +372,15 @@ mod memfs {
             let files = self.lock();
             let bytes = files.get(&self.path).ok_or(FsError::NotFound)?;
             let start =
-                usize::try_from(offset).map_err(|_| FsError::Io("offset overflow".into()))?;
+                usize::try_from(offset).map_err(|_| FsError::io_message("offset overflow"))?;
             let end = start
                 .checked_add(len)
                 .filter(|end| *end <= bytes.len())
-                .ok_or_else(|| FsError::Io("read_at past end of file".into()))?;
+                .ok_or_else(|| FsError::io_message("read_at past end of file"))?;
             bytes
                 .get(start..end)
                 .map(<[u8]>::to_vec)
-                .ok_or_else(|| FsError::Io("read_at past end of file".into()))
+                .ok_or_else(|| FsError::io_message("read_at past end of file"))
         }
 
         fn size(&self) -> Result<u64, FsError> {
@@ -406,11 +485,7 @@ mod diskfs {
     use super::{ClawFile, ClawFs, FsError};
 
     fn map_io(error: std::io::Error) -> FsError {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            FsError::NotFound
-        } else {
-            FsError::Io(error.to_string())
-        }
+        FsError::from(error)
     }
 
     #[derive(Debug, Clone, Default)]
@@ -475,7 +550,7 @@ mod diskfs {
         /// Ensure the parent directory of `full` exists before a write.
         fn ensure_parent(full: &std::path::Path) -> Result<(), FsError> {
             if let Some(parent) = full.parent() {
-                std::fs::create_dir_all(parent).map_err(|error| FsError::Io(error.to_string()))?;
+                std::fs::create_dir_all(parent).map_err(FsError::from)?;
             }
             Ok(())
         }
@@ -489,20 +564,16 @@ mod diskfs {
     impl ClawFile for DiskFile {
         fn read_to_end(&mut self) -> Result<Vec<u8>, FsError> {
             let mut buffer = Vec::new();
-            self.file
-                .read_to_end(&mut buffer)
-                .map_err(|error| FsError::Io(error.to_string()))?;
+            self.file.read_to_end(&mut buffer).map_err(FsError::from)?;
             Ok(buffer)
         }
 
         fn read_exact_at(&mut self, offset: u64, len: usize) -> Result<Vec<u8>, FsError> {
             self.file
                 .seek(SeekFrom::Start(offset))
-                .map_err(|error| FsError::Io(error.to_string()))?;
+                .map_err(FsError::from)?;
             let mut buffer = vec![0u8; len];
-            self.file
-                .read_exact(&mut buffer)
-                .map_err(|error| FsError::Io(error.to_string()))?;
+            self.file.read_exact(&mut buffer).map_err(FsError::from)?;
             Ok(buffer)
         }
 
@@ -514,9 +585,7 @@ mod diskfs {
         }
 
         fn write_all(&mut self, data: &[u8]) -> Result<(), FsError> {
-            self.file
-                .write_all(data)
-                .map_err(|error| FsError::Io(error.to_string()))
+            self.file.write_all(data).map_err(FsError::from)
         }
     }
 
@@ -534,7 +603,7 @@ mod diskfs {
             Self::ensure_parent(&full)?;
             std::fs::File::create(&full)
                 .map(|file| DiskFile { file })
-                .map_err(|error| FsError::Io(error.to_string()))
+                .map_err(FsError::from)
         }
 
         fn open_append(path: &str) -> Result<Self::File, FsError> {
@@ -545,7 +614,7 @@ mod diskfs {
                 .append(true)
                 .open(&full)
                 .map(|file| DiskFile { file })
-                .map_err(|error| FsError::Io(error.to_string()))
+                .map_err(FsError::from)
         }
 
         fn rename(from: &str, to: &str) -> Result<(), FsError> {
@@ -553,8 +622,7 @@ mod diskfs {
         }
 
         fn create_dir_all(path: &str) -> Result<(), FsError> {
-            std::fs::create_dir_all(Self::resolve(path))
-                .map_err(|error| FsError::Io(error.to_string()))
+            std::fs::create_dir_all(Self::resolve(path)).map_err(FsError::from)
         }
 
         fn exists(path: &str) -> bool {
@@ -565,7 +633,7 @@ mod diskfs {
             match std::fs::remove_file(Self::resolve(path)) {
                 Ok(()) => Ok(()),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                Err(error) => Err(FsError::Io(error.to_string())),
+                Err(error) => Err(FsError::from(error)),
             }
         }
 
@@ -573,7 +641,7 @@ mod diskfs {
             let entries = std::fs::read_dir(Self::resolve(path)).map_err(map_io)?;
             let mut names = Vec::new();
             for entry in entries {
-                let entry = entry.map_err(|error| FsError::Io(error.to_string()))?;
+                let entry = entry.map_err(FsError::from)?;
                 if let Some(name) = entry.file_name().to_str() {
                     names.push(name.to_string());
                 }
@@ -601,9 +669,8 @@ mod diskfs {
             let mut tmp = full.clone().into_os_string();
             tmp.push(".tmp");
             let tmp = PathBuf::from(tmp);
-            std::fs::write(&tmp, payload.as_ref())
-                .map_err(|error| FsError::Io(error.to_string()))?;
-            std::fs::rename(&tmp, &full).map_err(|error| FsError::Io(error.to_string()))
+            std::fs::write(&tmp, payload.as_ref()).map_err(FsError::from)?;
+            std::fs::rename(&tmp, &full).map_err(FsError::from)
         }
     }
 

@@ -27,7 +27,7 @@
 //!
 //! ```no_run
 //! use claw_interface::MemFs;
-//! use claw_memory::{TranscriptConfig, TranscriptStore};
+//! use claw_memory::TranscriptStore;
 //!
 //! // A filesystem for persistence. On device this is the espidf `ClawFs` over
 //! // the DATA root; here it is the in-memory host double. The store holds the
@@ -36,10 +36,8 @@
 //!
 //! // Build the store for one conversation id. Typically one per agent instance.
 //! let conversation_id = 42;
-//! let mut store = TranscriptStore::<MemFs>::new(
-//!     conversation_id,
-//!     TranscriptConfig::new("/data/conversations"),
-//! ).expect("a fresh MemFs has no data log, so the conversation starts empty");
+//! let mut store = TranscriptStore::<MemFs>::new(conversation_id, "/data/conversations")
+//!     .expect("a fresh MemFs has no data log, so the conversation starts empty");
 //!
 //! // Drive it from the agent loop. One turn = one `group()`; the whole turn is
 //! // committed as a single record when the guard drops.
@@ -64,16 +62,13 @@ pub mod transcript_store;
 
 #[cfg(feature = "compactor-stub")]
 pub use compaction::NoopCompactor;
-pub use compaction::{CompactError, CompactFuture, Compactor};
+pub use compaction::{CompactBackendError, CompactError, CompactFuture, Compactor};
 pub use long_term_memory::{
-    LongTermConfig, LongTermError, LongTermInitError, LongTermMemory, MemoryDraft, MemoryId,
-    MemoryItem, MemoryPatch, StoreOutcome,
+    LongTermError, LongTermInitError, LongTermMemory, MemoryDraft, MemoryId, MemoryItem,
+    MemoryPatch, StoreOutcome,
 };
 pub use profile::{
-    ParseProfileDocumentError, ProfileConfig, ProfileDocument, ProfileError, ProfileSnapshot,
-    ProfileStore, ASSISTANT_IDENTITY_FILE, DEFAULT_PROFILE_DOCUMENT_MAX_BYTES, SOUL_FILE,
-    USER_PROFILE_FILE,
+    ParseProfileDocumentError, ProfileDocument, ProfileError, ProfileSnapshot, ProfileStore,
+    ASSISTANT_IDENTITY_FILE, DEFAULT_PROFILE_DOCUMENT_MAX_BYTES, SOUL_FILE, USER_PROFILE_FILE,
 };
-pub use transcript_store::{
-    GroupGuard, TranscriptConfig, TranscriptInitError, TranscriptStore, Turn, TurnId,
-};
+pub use transcript_store::{GroupGuard, TranscriptInitError, TranscriptStore, Turn, TurnId};

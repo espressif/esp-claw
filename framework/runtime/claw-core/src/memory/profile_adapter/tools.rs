@@ -186,14 +186,13 @@ fn render_document(document: ProfileDocument, content: &str) -> String {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use claw_interface::MemFs;
-    use claw_memory::ProfileConfig;
     use claw_tool::RawToolInvocation;
 
     use super::*;
 
     fn store() -> ProfileStore<MemFs> {
         MemFs::new();
-        ProfileStore::new(ProfileConfig::new("/memory"))
+        ProfileStore::new("/memory")
     }
 
     fn call<'a>(name: &'a str, arguments_json: &'a str) -> ToolInvocation<'a> {

@@ -22,15 +22,14 @@ use claw_api::{ClawApiAsync, ClawApiConfig, InitError};
 use claw_context::Block;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::{
-    LongTermInitError, LongTermMemory, ProfileConfig, ProfileStore, TranscriptConfig,
-    TranscriptStore,
+    LongTermInitError, LongTermMemory, ProfileStore, TranscriptInitError, TranscriptStore,
 };
 use claw_skill::{FsSkillRegistry, SkillSet};
-use claw_tool::{Tool, ToolRegistry};
+use claw_tool::{Tool, ToolRegistry, ToolSetError};
 
-use crate::agent::base_agent::{AgentCommand, AgentId};
+use crate::agent::base_agent::{AgentCommand, AgentCommandError, AgentId, BaseAgentBuildError};
 use crate::agent::config::{AgentConfig, AgentConfigError};
-use crate::agent::generic_agent::GenericAgent;
+use crate::agent::generic_agent::{GenericAgent, GenericAgentBuildError};
 use crate::agent::graph::GraphHost;
 use crate::agent::kind::AgentKind;
 use crate::agent::manifest::AgentManifest;
@@ -164,6 +163,35 @@ pub enum FsAgentFactoryError {
     LongTermInit(#[from] LongTermInitError),
 }
 
+/// What can go wrong while building one concrete agent from the factory.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum FsAgentCreateError {
+    /// The baked manifest could not be resolved into an agent config.
+    #[error("failed to resolve agent config: {0}")]
+    Config(#[from] AgentConfigError),
+    /// The agent's local tools could not be added to the tool set.
+    #[error("failed to assemble agent tools: {0}")]
+    Tools(#[from] ToolSetError),
+    /// The transcript store for this placement could not be opened.
+    #[error("failed to open transcript: {0}")]
+    Transcript(#[from] TranscriptInitError),
+    /// The generic agent failed to build.
+    #[error("failed to build agent: {0}")]
+    Agent(#[from] GenericAgentBuildError),
+    /// The profile context adapter could not be attached.
+    #[error("failed to attach profile context: {0}")]
+    ProfileContext(#[source] BaseAgentBuildError),
+    /// The per-agent long-term memory store could not be opened.
+    #[error("failed to load long-term memory: {0}")]
+    LongTerm(#[from] LongTermInitError),
+    /// The long-term memory context adapter could not be attached.
+    #[error("failed to attach long-term memory context: {0}")]
+    LongTermContext(#[source] BaseAgentBuildError),
+    /// The initial goal could not be enqueued.
+    #[error("failed to seed initial goal: {0}")]
+    Goal(#[from] AgentCommandError),
+}
+
 fn join_storage_path(parent: &str, child: &str) -> String {
     if parent == "/" {
         return format!("/{child}");
@@ -262,7 +290,7 @@ impl<
             }
         };
 
-        let profile = ProfileStore::new(ProfileConfig::new(&layout.profile_dir));
+        let profile = ProfileStore::new(&layout.profile_dir);
         let skills = build_skill_registry::<Filesystem>(skill_roots);
 
         Ok(Self {
@@ -320,8 +348,9 @@ impl<
     ///
     /// # Errors
     ///
-    /// Returns a human-readable error string when `kind` is unknown or the agent
-    /// cannot be assembled; the caller logs it and drops the spawn.
+    /// Returns a typed error when `kind` is unknown or the agent cannot be
+    /// assembled; callers decide where to render it for logs or user-facing
+    /// errors.
     pub(crate) fn create_agent(
         &self,
         id: AgentId,
@@ -330,29 +359,26 @@ impl<
         placement: AgentPlacement,
         host: Arc<dyn GraphHost>,
         inherited_context: Arc<[Block<'static>]>,
-    ) -> Result<Box<dyn Agent>, String> {
+    ) -> Result<Box<dyn Agent>, FsAgentCreateError> {
         let span = tracing::info_span!("agent.create");
         let _enter = span.enter();
         // The config is pure data. Registry tools are projected here, then
         // manifest tools are added as local tools before the agent sees them.
-        let mut config = match self.resolve_config(kind) {
-            Ok(config) => config,
-            Err(error) => {
-                match &error {
-                    AgentConfigError::UnknownKind(_) => {
-                        tracing::error!(name: "unknown_kind", kind = %kind.as_str());
-                    }
-                    AgentConfigError::UnknownTool(tool) => {
-                        tracing::error!(
-                            name: "unknown_tool",
-                            kind = %kind.as_str(),
-                            tool = %tool,
-                        );
-                    }
+        let mut config = self.resolve_config(kind).map_err(|error| {
+            match &error {
+                AgentConfigError::UnknownKind(_) => {
+                    tracing::error!(name: "unknown_kind", kind = %kind.as_str());
                 }
-                return Err(format!("resolving config for kind '{kind}': {error}"));
+                AgentConfigError::UnknownTool(tool) => {
+                    tracing::error!(
+                        name: "unknown_tool",
+                        kind = %kind.as_str(),
+                        tool = %tool,
+                    );
+                }
             }
-        };
+            FsAgentCreateError::Config(error)
+        })?;
         let is_root = placement.is_root();
         let mut tools = self.tools.tool_set();
         for tool in config.tools.drain(..) {
@@ -362,7 +388,7 @@ impl<
                     kind = %kind.as_str(),
                     tool = "registry",
                 );
-                return Err(format!("assembling tools for {kind} agent {id}: {error}"));
+                return Err(FsAgentCreateError::Tools(error));
             }
         }
 
@@ -371,8 +397,7 @@ impl<
         // transcripts stay ephemeral (and their id space never collides).
         let (subdir, conversation_id) = placement.location();
         let transcript_dir = join_storage_path(&self.transcript_dir, subdir);
-        let transcript_config = TranscriptConfig::new(&transcript_dir);
-        let store = match TranscriptStore::<Filesystem>::new(conversation_id, transcript_config) {
+        let store = match TranscriptStore::<Filesystem>::new(conversation_id, &transcript_dir) {
             Ok(store) => store,
             Err(error) => {
                 tracing::error!(
@@ -380,7 +405,7 @@ impl<
                     agent = %id,
                     kind = %kind.as_str(),
                 );
-                return Err(format!("opening transcript for {kind} agent {id}: {error}"));
+                return Err(FsAgentCreateError::Transcript(error));
             }
         };
         // The LLM client (and its transport) is built inside the agent from this
@@ -402,7 +427,7 @@ impl<
                     agent = %id,
                     kind = %kind.as_str(),
                 );
-                return Err(format!("building {kind} agent {id}: {error}"));
+                return Err(FsAgentCreateError::Agent(error));
             }
         };
 
@@ -414,26 +439,27 @@ impl<
                 adapter = "profile",
                 kind = %kind.as_str(),
             );
-            return Err(format!("attaching profile context to {id}: {error}"));
+            return Err(FsAgentCreateError::ProfileContext(error));
         }
 
         // Attach long-term memory (always): a per-agent-kind store derived from
         // the explicit long-term root plus a clone of the shared global store.
         let long_term = &self.long_term;
         let agent_dir = long_term.agent_dir_for(kind);
+        let agent_memory = match agent_store::<Filesystem>(&agent_dir) {
+            Ok(store) => store,
+            Err(error) => {
+                tracing::error!(
+                    name: "context_adapter_attach_failed",
+                    agent = %id,
+                    adapter = "long_term",
+                    kind = %kind.as_str(),
+                );
+                return Err(FsAgentCreateError::LongTerm(error));
+            }
+        };
         let adapter = LongTermMemoryContextAdapter::new(
-            match agent_store::<Filesystem>(&agent_dir) {
-                Ok(store) => store,
-                Err(error) => {
-                    tracing::error!(
-                        name: "context_adapter_attach_failed",
-                        agent = %id,
-                        adapter = "long_term",
-                        kind = %kind.as_str(),
-                    );
-                    return Err(format!("loading long-term memory for {id}: {error}"));
-                }
-            },
+            agent_memory,
             long_term.global.clone(),
             Arc::clone(&long_term.classifier),
             Arc::clone(&long_term.extractor),
@@ -445,7 +471,7 @@ impl<
                 adapter = "long_term",
                 kind = %kind.as_str(),
             );
-            return Err(format!("attaching long-term memory to {id}: {error}"));
+            return Err(FsAgentCreateError::LongTermContext(error));
         }
 
         // The goal is the agent's first task: seed it as a user message so the
@@ -457,7 +483,7 @@ impl<
                     agent = %id,
                     kind = %kind.as_str(),
                 );
-                return Err(format!("seeding goal for {id}: {error}"));
+                return Err(FsAgentCreateError::Goal(error));
             }
         }
 
@@ -602,7 +628,10 @@ mod tests {
             Arc::new(NoopHost),
             Arc::from([]),
         );
-        assert!(result.is_err());
+        assert!(matches!(
+            result,
+            Err(FsAgentCreateError::Config(AgentConfigError::UnknownKind(_)))
+        ));
     }
 
     #[test]

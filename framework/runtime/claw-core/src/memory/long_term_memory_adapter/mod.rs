@@ -18,8 +18,8 @@ use std::sync::Arc;
 use claw_context::{Block, BlockKind, ContextSink};
 use claw_interface::ClawFs;
 use claw_memory::{
-    LongTermConfig, LongTermError, LongTermInitError, LongTermMemory, MemoryDraft, MemoryId,
-    MemoryItem, MemoryPatch, StoreOutcome,
+    LongTermError, LongTermInitError, LongTermMemory, MemoryDraft, MemoryId, MemoryItem,
+    MemoryPatch, StoreOutcome,
 };
 use claw_tool::Tool;
 use serde_json::Value;
@@ -75,7 +75,7 @@ const EXTRACT_MIN_VERSION_DELTA: u64 = 8;
 pub fn global_store<F: ClawFs + 'static>(
     dir: &str,
 ) -> Result<LongTermMemory<F>, LongTermInitError> {
-    LongTermMemory::new(LongTermConfig::new(dir, GLOBAL_ID_PREFIX))
+    LongTermMemory::new(dir, GLOBAL_ID_PREFIX)
 }
 
 /// Build a per-agent long-term store under `dir` (minting `a-` ids).
@@ -84,7 +84,7 @@ pub fn global_store<F: ClawFs + 'static>(
 ///
 /// Propagates [`LongTermInitError`] when the journal exists but is unreadable.
 pub fn agent_store<F: ClawFs + 'static>(dir: &str) -> Result<LongTermMemory<F>, LongTermInitError> {
-    LongTermMemory::new(LongTermConfig::new(dir, AGENT_ID_PREFIX))
+    LongTermMemory::new(dir, AGENT_ID_PREFIX)
 }
 
 /// The two stores plus the routing policy, shared (by cheap clone) between the

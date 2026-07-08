@@ -26,8 +26,7 @@ fully host-testable.
 
 | Item | Role |
 |---|---|
-| `TranscriptStore` | The per-conversation verbatim transcript. `TranscriptStore::<F>::new(id, config)`, `group()`, `messages()`, `turns_snapshot()`, `open_turn_messages()`, `version()`, `flush()`. Pure append-only — never compacts. |
-| `TranscriptConfig` | Tuning: `dir`, `persist_debounce`. Build with `TranscriptConfig::new(dir)`. |
+| `TranscriptStore` | The per-conversation verbatim transcript. `TranscriptStore::<F>::new(id, dir)`, `group()`, `messages()`, `turns_snapshot()`, `open_turn_messages()`, `version()`, `flush()`. Pure append-only — never compacts. |
 | `Turn` / `TurnId` | A committed turn (`id` + `messages`) and its monotonic logical id, exposed by `turns_snapshot()` so adapters can read committed turns. |
 | `GroupGuard` | One turn, returned by `group()`. `append_user`, `append_assistant`, `append_tool_result`, `append_patch`. Commits the whole turn as one record on drop. |
 | `Compactor` / `CompactError` | The summarization seam: fold an aged message window into a shorter summary. Driven by the agent layer, **not** the store. |

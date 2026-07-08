@@ -20,15 +20,17 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use std::collections::{HashMap, VecDeque};
+use std::io;
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use async_channel::{Receiver, Sender};
-use claw_api::ClawApiConfig;
+use claw_api::{ClawApiConfig, InitError};
 use claw_interface::{
     ClawExecutor, ClawFs, ClawHttp, ClawThread, ClawTimer, CoreAffinity, Priority, WorkerHandle,
 };
+use claw_memory::LongTermInitError;
 use claw_tool::ToolRegistry;
 use futures_core::Stream;
 use strum::IntoStaticStr;
@@ -36,13 +38,15 @@ use tracing::Instrument as _;
 
 use crate::agent::{AgentIdAllocator, CancelReason, FsAgentFactory, FsAgentFactoryError};
 use crate::event::{EventSink, SessionEvent, TurnCause};
-use crate::session::{DeliverError, SessionId, SessionStore, TurnId, TurnIdAllocator};
+use crate::session::{SessionId, SessionStore, TurnId, TurnIdAllocator};
 
 pub use self::instance::{DriveOutput, RootReply};
 
 use self::approval::{ApprovalResolverError, PermissionReplyResolution};
 use self::control::{DriveControl, DriveStop};
-use self::instance::{OrchestratorInstance, PendingApproval};
+use self::instance::{
+    ApprovalResolutionError, InstanceDeliverError, OrchestratorInstance, PendingApproval,
+};
 
 /// Stack for the orchestrator's single drive worker. It runs the whole agent
 /// graph (context building, LLM round-trips, tool calls), so it matches the
@@ -289,23 +293,39 @@ pub enum OrchestratorBuildError {
     MissingPersistenceDir,
     /// The dedicated extraction LLM client (for long-term memory) failed to init.
     #[error("failed to initialize the extraction LLM client: {0}")]
-    ExtractionLlm(String),
+    ExtractionLlm(#[from] InitError),
     /// A long-term memory journal exists but could not be read at startup.
     #[error("failed to load long-term memory: {0}")]
-    LongTermInit(String),
-    /// The drive worker thread could not be spawned or reported a build failure.
-    #[error("failed to start the orchestrator worker: {0}")]
-    Worker(String),
+    LongTermInit(#[from] LongTermInitError),
+    /// The drive worker thread could not be spawned.
+    #[error("failed to spawn the orchestrator worker: {0}")]
+    WorkerSpawn(#[from] io::Error),
+    /// The drive worker exited before reporting startup success or failure.
+    #[error("orchestrator worker exited before signalling readiness")]
+    WorkerExitedBeforeReady,
 }
 
 impl From<FsAgentFactoryError> for OrchestratorBuildError {
     fn from(error: FsAgentFactoryError) -> Self {
         match error {
             FsAgentFactoryError::MissingPersistenceDir => Self::MissingPersistenceDir,
-            FsAgentFactoryError::ExtractionLlm(message) => Self::ExtractionLlm(message.to_string()),
-            FsAgentFactoryError::LongTermInit(source) => Self::LongTermInit(source.to_string()),
+            FsAgentFactoryError::ExtractionLlm(source) => Self::ExtractionLlm(source),
+            FsAgentFactoryError::LongTermInit(source) => Self::LongTermInit(source),
         }
     }
+}
+
+#[derive(Debug, IntoStaticStr, thiserror::Error)]
+enum DeliverError {
+    #[strum(serialize = "agent")]
+    #[error(transparent)]
+    Instance(#[from] InstanceDeliverError),
+    #[strum(serialize = "agent")]
+    #[error(transparent)]
+    ApprovalResolver(#[from] ApprovalResolverError),
+    #[strum(serialize = "agent")]
+    #[error(transparent)]
+    ApprovalResolution(#[from] ApprovalResolutionError),
 }
 
 /// A `Send + Sync` handle to a running orchestrator.
@@ -371,8 +391,7 @@ impl Orchestrator {
                     ready_tx,
                 );
             },
-        )
-        .map_err(|error| OrchestratorBuildError::Worker(error.to_string()))?;
+        )?;
 
         match ready_rx.recv() {
             Ok(Ok(())) => Ok(Self {
@@ -386,9 +405,7 @@ impl Orchestrator {
             }
             Err(_) => {
                 worker.join();
-                Err(OrchestratorBuildError::Worker(
-                    "worker exited before signalling readiness".to_string(),
-                ))
+                Err(OrchestratorBuildError::WorkerExitedBeforeReady)
             }
         }
     }
@@ -1157,7 +1174,7 @@ where
             return result;
         }
 
-        instance.deliver(text).map_err(DeliverError::Agent)?;
+        instance.deliver(text)?;
         self.drive_root_ready_in_slot(session_id, instance, events)
             .await
     }
@@ -1298,7 +1315,7 @@ where
                 let (cleanup_output, _) = instance.drive_cancelled(&cleanup_control, events).await;
                 return Ok((cleanup_output, DriveStop::Cancelled));
             }
-            Err(error) => return Err(DeliverError::Agent(error.to_string())),
+            Err(error) => return Err(error.into()),
         };
 
         let Some(decision) = resolution.clone().into_decision() else {
@@ -1321,7 +1338,7 @@ where
         tracing::info!(name: "approval_resolved", decision = decision_name);
         instance
             .resolve_active_approval(decision)
-            .map_err(|error| DeliverError::Agent(error.to_string()))?;
+            .map_err(DeliverError::from)?;
         Ok(instance.drive_root_turn(control, events).await)
     }
 

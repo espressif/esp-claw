@@ -14,17 +14,17 @@
 //!
 //! # Storage layout
 //!
-//! A single append-only journal, `memory_records.jsonl`, under
-//! [`LongTermConfig::dir`]. Each line is one [`Record`]:
+//! A single append-only journal, `memory_records.jsonl`, under the `dir` passed
+//! to [`LongTermMemory::new`]. Each line is one [`Record`]:
 //! - `Put` — a full snapshot of an item (a fresh store *or* an update). On
 //!   replay, the last `Put` for an id wins, so an update just appends.
 //! - `Del` — a tombstone removing an id.
 //!
 //! Load replays the journal into the live set in memory; a torn trailing line
 //! (crash mid-append) fails to parse and is skipped. When superseded `Put`s and
-//! tombstones (`dead` records) pile up past
-//! [`LongTermConfig::compact_dead_threshold`], the journal is rewritten
-//! atomically from the live set, dropping the dead lines.
+//! tombstones (`dead` records) pile up past the internal compaction threshold,
+//! the journal is rewritten atomically from the live set, dropping the dead
+//! lines.
 //!
 //! # Concurrency
 //!
@@ -40,7 +40,7 @@ use serde::{Deserialize, Serialize};
 
 use claw_interface::{ClawFs, FsError};
 
-/// Journal filename under [`LongTermConfig::dir`].
+/// Journal filename under the store directory.
 const RECORDS_FILE: &str = "memory_records.jsonl";
 /// Default number of dead journal lines tolerated before a rewrite.
 const DEFAULT_COMPACT_DEAD_THRESHOLD: u32 = 32;
@@ -188,41 +188,6 @@ pub enum LongTermInitError {
     },
 }
 
-/// Tuning for a [`LongTermMemory`].
-///
-/// Build with [`LongTermConfig::new`] for defaults, then override fields.
-///
-/// # Examples
-///
-/// ```
-/// use claw_memory::LongTermConfig;
-///
-/// let config = LongTermConfig::new("/data/memory/global", "g-");
-/// assert_eq!(config.dir, "/data/memory/global");
-/// assert_eq!(config.id_prefix, "g-");
-/// ```
-pub struct LongTermConfig {
-    /// Directory holding this store's journal, already resolved against the
-    /// DATA root by the caller.
-    pub dir: String,
-    /// Prefix for minted [`MemoryId`]s (e.g. `"g-"` global, `"a-"` agent).
-    pub id_prefix: String,
-    /// Dead journal lines tolerated before the journal is rewritten.
-    pub compact_dead_threshold: u32,
-}
-
-impl LongTermConfig {
-    /// Config for a store under `dir` minting ids with `id_prefix`, default
-    /// tuning otherwise.
-    pub fn new(dir: &str, id_prefix: &str) -> Self {
-        Self {
-            dir: dir.to_string(),
-            id_prefix: id_prefix.to_string(),
-            compact_dead_threshold: DEFAULT_COMPACT_DEAD_THRESHOLD,
-        }
-    }
-}
-
 /// One line of the journal.
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
@@ -231,6 +196,14 @@ enum Record {
     Put(MemoryItem),
     /// A tombstone removing an id.
     Del { id: MemoryId },
+}
+
+#[derive(Debug, thiserror::Error)]
+enum LongTermPersistError {
+    #[error("serialize record failed: {0}")]
+    SerializeRecord(#[source] serde_json::Error),
+    #[error("compaction serialize failed: {0}")]
+    CompactSerialize(#[source] serde_json::Error),
 }
 
 /// The lock-protected contents of the store.
@@ -257,7 +230,7 @@ struct State {
 
 struct Inner<F: ClawFs + 'static> {
     path: String,
-    config: LongTermConfig,
+    id_prefix: String,
     _fs: PhantomData<fn() -> F>,
     state: Mutex<State>,
 }
@@ -272,10 +245,10 @@ struct Inner<F: ClawFs + 'static> {
 ///
 /// ```
 /// use claw_interface::MemFs;
-/// use claw_memory::{LongTermConfig, LongTermMemory, MemoryDraft, StoreOutcome};
+/// use claw_memory::{LongTermMemory, MemoryDraft, StoreOutcome};
 ///
 /// # MemFs::new();
-/// let memory = LongTermMemory::<MemFs>::new(LongTermConfig::new("/m", "g-"))
+/// let memory = LongTermMemory::<MemFs>::new("/m", "g-")
 ///     .expect("a fresh MemFs has no journal, so the store starts empty");
 ///
 /// // Store a fact tagged `preference`, then recall by that label.
@@ -307,20 +280,17 @@ impl<F: ClawFs + 'static> Clone for LongTermMemory<F> {
 
 impl<F: ClawFs + 'static> LongTermMemory<F> {
     /// Build the store, restoring its journal if present. Best-effort creates
-    /// [`LongTermConfig::dir`].
+    /// `dir`.
     ///
     /// # Errors
     ///
     /// [`LongTermInitError::Unreadable`] when the journal exists but cannot be
     /// read — a genuine I/O failure is never silently mistaken for an empty
     /// store. A *missing* journal is not an error: the store starts empty.
-    pub fn new(config: LongTermConfig) -> Result<Self, LongTermInitError> {
-        let path = journal_path(&config.dir);
-        if let Err(error) = F::create_dir_all(&config.dir) {
-            log::warn!(
-                "long-term memory {}: create dir failed: {error}",
-                config.dir
-            );
+    pub fn new(dir: &str, id_prefix: &str) -> Result<Self, LongTermInitError> {
+        let path = journal_path(dir);
+        if let Err(error) = F::create_dir_all(dir) {
+            log::warn!("long-term memory {dir}: create dir failed: {error}");
         }
         let state = load_state::<F>(&path).map_err(|source| LongTermInitError::Unreadable {
             path: path.clone(),
@@ -329,7 +299,7 @@ impl<F: ClawFs + 'static> LongTermMemory<F> {
         Ok(Self {
             inner: Arc::new(Inner {
                 path,
-                config,
+                id_prefix: id_prefix.to_string(),
                 _fs: PhantomData,
                 state: Mutex::new(state),
             }),
@@ -366,7 +336,7 @@ impl<F: ClawFs + 'static> LongTermMemory<F> {
         let seq = state.next_seq;
         state.next_seq = seq.saturating_add(1);
         let item = MemoryItem {
-            id: MemoryId(format!("{}{}", self.inner.config.id_prefix, seq)),
+            id: MemoryId(format!("{}{}", self.inner.id_prefix, seq)),
             content: draft.content,
             tags: draft.tags,
             keywords: draft.keywords,
@@ -507,11 +477,11 @@ impl<F: ClawFs + 'static> LongTermMemory<F> {
     /// Best-effort at the storage layer: the in-memory state stays authoritative
     /// on failure, but the error is returned so the caller can record it in
     /// [`State::last_persist_error`] rather than silently dropping it. A
-    /// serialize failure (a bug — records always serialize) is reported as
-    /// [`FsError::Io`].
+    /// serialize failure (a bug — records always serialize) is reported as a
+    /// source-preserving [`FsError::Io`].
     fn append_record(&self, record: &Record) -> Result<(), FsError> {
         let mut line = serde_json::to_vec(record)
-            .map_err(|error| FsError::Io(format!("serialize record failed: {error}")))?;
+            .map_err(|error| FsError::io(LongTermPersistError::SerializeRecord(error)))?;
         line.push(b'\n');
         F::append(&self.inner.path, &line)
     }
@@ -521,7 +491,7 @@ impl<F: ClawFs + 'static> LongTermMemory<F> {
     /// Records any write failure in [`State::last_persist_error`] and leaves the
     /// dead count untouched so a later mutation retries the rewrite.
     fn maybe_compact(&self, state: &mut State) {
-        if state.dead < self.inner.config.compact_dead_threshold {
+        if state.dead < DEFAULT_COMPACT_DEAD_THRESHOLD {
             return;
         }
         let mut buffer = Vec::new();
@@ -537,7 +507,7 @@ impl<F: ClawFs + 'static> LongTermMemory<F> {
                         self.inner.path
                     );
                     state.last_persist_error =
-                        Some(FsError::Io(format!("compaction serialize failed: {error}")));
+                        Some(FsError::io(LongTermPersistError::CompactSerialize(error)));
                     return;
                 }
             }
@@ -629,7 +599,7 @@ mod tests {
 
     /// A store over the current thread's `MemFs` fixture.
     fn memory() -> LongTermMemory<MemFs> {
-        LongTermMemory::new(LongTermConfig::new("/m", "g-")).expect("load empty store")
+        LongTermMemory::new("/m", "g-").expect("load empty store")
     }
 
     fn reset_fs() {
@@ -727,8 +697,7 @@ mod tests {
     fn state_survives_reload_from_journal() {
         reset_fs();
         {
-            let memory = LongTermMemory::<MemFs>::new(LongTermConfig::new("/m", "g-"))
-                .expect("load empty store");
+            let memory = LongTermMemory::<MemFs>::new("/m", "g-").expect("load empty store");
             memory.store(draft("Persistent", &["fact"]));
             let id = memory
                 .store(draft("To be edited", &["fact"]))
@@ -746,8 +715,7 @@ mod tests {
                 .expect("update");
         }
         // A fresh store over the same backend replays the journal.
-        let reloaded =
-            LongTermMemory::<MemFs>::new(LongTermConfig::new("/m", "g-")).expect("replay journal");
+        let reloaded = LongTermMemory::<MemFs>::new("/m", "g-").expect("replay journal");
         assert_eq!(reloaded.len(), 2);
         let edited = reloaded.recall(&[], Some("edited"), 10);
         assert_eq!(edited.len(), 1);
@@ -766,28 +734,27 @@ mod tests {
     #[test]
     fn compaction_rewrites_journal_and_preserves_live_set() {
         reset_fs();
-        let memory = LongTermMemory::<MemFs>::new(LongTermConfig {
-            compact_dead_threshold: 3,
-            ..LongTermConfig::new("/m", "g-")
-        })
-        .expect("load empty store");
+        let memory = LongTermMemory::<MemFs>::new("/m", "g-").expect("load empty store");
         let id = memory.store(draft("Churned", &["x"])).item().id.clone();
-        // Three updates produce three dead lines, tripping compaction.
-        for content in ["v1", "v2", "v3"] {
+        // DEFAULT_COMPACT_DEAD_THRESHOLD updates produce enough dead lines to
+        // trip compaction without exposing the threshold as public API.
+        for update in 0..DEFAULT_COMPACT_DEAD_THRESHOLD {
             memory
                 .update(
                     &id,
                     MemoryPatch {
-                        content: Some(content.to_string()),
+                        content: Some(format!("v{update}")),
                         ..Default::default()
                     },
                 )
                 .expect("update");
         }
         // The live set is intact and a reload sees only the compacted journal.
-        let reloaded =
-            LongTermMemory::<MemFs>::new(LongTermConfig::new("/m", "g-")).expect("replay journal");
+        let reloaded = LongTermMemory::<MemFs>::new("/m", "g-").expect("replay journal");
         assert_eq!(reloaded.len(), 1);
-        assert_eq!(reloaded.list()[0].content, "v3");
+        assert_eq!(
+            reloaded.list()[0].content,
+            format!("v{}", DEFAULT_COMPACT_DEAD_THRESHOLD - 1)
+        );
     }
 }

@@ -15,6 +15,7 @@
 //! one the user retracted, instead of only ever adding.
 
 use super::tier::MemoryTierHint;
+use claw_api::ChatError;
 use claw_memory::MemoryId;
 use core::future::Future;
 use core::pin::Pin;
@@ -88,12 +89,12 @@ pub enum MemoryOp {
 /// Failure from an [`Extractor`].
 ///
 /// Extraction is best-effort: on error the adapter logs the reason and keeps the
-/// existing memory, so a displayable string is all a caller needs.
+/// existing memory, but the concrete source is still preserved for diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ExtractError {
     /// The extraction backend (e.g. the LLM client) failed.
     #[error("extraction backend failed: {0}")]
-    Backend(String),
+    Backend(#[from] ChatError),
 }
 
 pub type ExtractFuture<'a> =

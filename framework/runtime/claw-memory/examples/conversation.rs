@@ -11,15 +11,12 @@
 //! in-memory [`MemFs`]; on device the same code runs over the DATA root.
 
 use claw_interface::MemFs;
-use claw_memory::{TranscriptConfig, TranscriptStore};
+use claw_memory::TranscriptStore;
 
 fn main() -> anyhow::Result<()> {
     let conversation_id = 42;
     MemFs::new();
-    let store = TranscriptStore::<MemFs>::new(
-        conversation_id,
-        TranscriptConfig::new("/data/conversations"),
-    )?;
+    let store = TranscriptStore::<MemFs>::new(conversation_id, "/data/conversations")?;
 
     // One turn = one `group()`. The whole turn commits as a single record when
     // the guard drops at the end of the scope.

@@ -54,8 +54,8 @@
 //!
 //! # Identity and persistence
 //!
-//! Each store is keyed by a `conversation_id`. Two files under
-//! [`TranscriptConfig::dir`]:
+//! Each store is keyed by a `conversation_id`. Two files under the `dir` passed
+//! to [`TranscriptStore::new`]:
 //!
 //! - `conversation-<id>.jsonl` — the **data log**: one JSON record per line
 //!   (`group`), **append-only**. The source of truth.
@@ -162,57 +162,6 @@ impl ByteLen {
     /// 32-bit device can only address `usize` bytes; conversation files are tiny).
     fn from_file_len(len: u64) -> ByteLen {
         ByteLen(usize::try_from(len).unwrap_or(usize::MAX))
-    }
-}
-
-/// Tuning for a [`TranscriptStore`].
-///
-/// Construct with [`TranscriptConfig::new`] for sensible defaults, then override
-/// individual fields as needed. There are deliberately **no** token budgets here:
-/// the store does not compact, so it has nothing to tune about summarization.
-///
-/// # Examples
-///
-/// ```
-/// use std::time::Duration;
-///
-/// use claw_memory::TranscriptConfig;
-///
-/// // Defaults, then disable the write debounce.
-/// let config = TranscriptConfig {
-///     persist_debounce: Duration::ZERO,
-///     ..TranscriptConfig::new("/data/conversations")
-/// };
-///
-/// assert_eq!(config.dir, "/data/conversations");
-/// ```
-pub struct TranscriptConfig {
-    /// Base directory for per-conversation files, already resolved against the
-    /// DATA root by the caller. The filenames are derived from the conversation id.
-    pub dir: String,
-    /// Minimum interval between filesystem writes.
-    pub persist_debounce: Duration,
-}
-
-impl TranscriptConfig {
-    /// Config for conversation files under `dir`, with default tuning otherwise.
-    ///
-    /// `dir` is the base directory for the per-conversation files; the filenames
-    /// themselves are derived from the conversation id.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use claw_memory::TranscriptConfig;
-    ///
-    /// let config = TranscriptConfig::new("/data/conversations");
-    /// assert_eq!(config.dir, "/data/conversations");
-    /// ```
-    pub fn new(dir: &str) -> Self {
-        Self {
-            dir: dir.to_string(),
-            persist_debounce: DEFAULT_PERSIST_DEBOUNCE,
-        }
     }
 }
 
@@ -336,7 +285,6 @@ struct StoreInner<F: ClawFs + 'static> {
     data_path: String,
     index_path: String,
     state: Mutex<StoreState>,
-    config: TranscriptConfig,
     _fs: PhantomData<fn() -> F>,
 }
 
@@ -353,12 +301,10 @@ struct StoreInner<F: ClawFs + 'static> {
 ///
 /// ```
 /// # use claw_interface::MemFs;
-/// # use claw_memory::{TranscriptConfig, TranscriptStore};
+/// # use claw_memory::TranscriptStore;
 /// MemFs::new();
-/// let mut store = TranscriptStore::<MemFs>::new(
-///     42,
-///     TranscriptConfig::new("/data/conversations"),
-/// ).expect("a fresh MemFs has no data log, so the conversation starts empty");
+/// let mut store = TranscriptStore::<MemFs>::new(42, "/data/conversations")
+///     .expect("a fresh MemFs has no data log, so the conversation starts empty");
 ///
 /// // One turn = one `group()`; the whole turn commits when the guard drops.
 /// {
@@ -409,20 +355,18 @@ impl<F: ClawFs + 'static> TranscriptStore<F> {
     /// Build the store for `conversation_id`, restoring its persisted contents if
     /// present (missing or unreadable files start empty).
     ///
-    /// Different ids map to different files under [`TranscriptConfig::dir`], so
-    /// each conversation is stored independently. A mismatched or unreadable index
-    /// is rebuilt from the data log during construction.
+    /// Different ids map to different files under `dir`, so each conversation is
+    /// stored independently. A mismatched or unreadable index is rebuilt from the
+    /// data log during construction.
     ///
     /// # Examples
     ///
     /// ```
     /// # use claw_interface::MemFs;
-    /// # use claw_memory::{TranscriptConfig, TranscriptStore};
+    /// # use claw_memory::TranscriptStore;
     /// MemFs::new();
-    /// let store = TranscriptStore::<MemFs>::new(
-    ///     7,
-    ///     TranscriptConfig::new("/data/conversations"),
-    /// ).expect("a fresh MemFs has no data log, so the conversation starts empty");
+    /// let store = TranscriptStore::<MemFs>::new(7, "/data/conversations")
+    ///     .expect("a fresh MemFs has no data log, so the conversation starts empty");
     /// assert_eq!(store.conversation_id(), 7);
     /// assert!(store.messages().as_array().unwrap().is_empty()); // missing files start empty
     /// ```
@@ -432,12 +376,9 @@ impl<F: ClawFs + 'static> TranscriptStore<F> {
     /// [`TranscriptInitError::Unreadable`] when the conversation *data log*
     /// exists but cannot be read. A missing conversation starts empty, and a
     /// corrupt/mismatched *index* is transparently rebuilt from the data log.
-    pub fn new(
-        conversation_id: u32,
-        config: TranscriptConfig,
-    ) -> Result<Self, TranscriptInitError> {
-        let data_path = conversation_path(&config.dir, conversation_id, DATA_EXT);
-        let index_path = conversation_path(&config.dir, conversation_id, INDEX_EXT);
+    pub fn new(conversation_id: u32, dir: &str) -> Result<Self, TranscriptInitError> {
+        let data_path = conversation_path(dir, conversation_id, DATA_EXT);
+        let index_path = conversation_path(dir, conversation_id, INDEX_EXT);
         let (mut state, needs_rebuild) =
             load_state::<F>(&data_path, &index_path).map_err(|source| {
                 TranscriptInitError::Unreadable {
@@ -454,7 +395,6 @@ impl<F: ClawFs + 'static> TranscriptStore<F> {
                 data_path,
                 index_path,
                 state: Mutex::new(state),
-                config,
                 _fs: PhantomData,
             }),
         })
@@ -669,10 +609,10 @@ impl<F: ClawFs + 'static> TranscriptStore<F> {
 ///
 /// ```
 /// # use claw_interface::MemFs;
-/// # use claw_memory::{TranscriptConfig, TranscriptStore};
+/// # use claw_memory::TranscriptStore;
 /// # use serde_json::json;
 /// # MemFs::new();
-/// # let store = TranscriptStore::<MemFs>::new(1, TranscriptConfig::new("/data/conversations")).unwrap();
+/// # let store = TranscriptStore::<MemFs>::new(1, "/data/conversations").unwrap();
 /// let turn = store.group();
 /// turn.append_user("call the weather tool");
 /// turn.append_patch(&json!([
@@ -787,7 +727,7 @@ fn commit_open_turn<F: ClawFs + 'static>(inner: &StoreInner<F>) {
         // A committed turn changes the turn-structured snapshot (a new turn
         // appears), so invalidate caches and bump the version.
         state.mark_changed();
-        persist_due(inner, &state)
+        persist_due(&state)
     };
     if due {
         persist(inner, false);
@@ -990,13 +930,13 @@ fn build_manifest_bytes(state: &StoreState, conversation_id: u32) -> Option<Vec<
     }
 }
 
-fn persist_due<F: ClawFs + 'static>(inner: &StoreInner<F>, state: &StoreState) -> bool {
+fn persist_due(state: &StoreState) -> bool {
     if state.pending.is_empty() {
         return false;
     }
     match state.last_persist {
         None => true,
-        Some(at) => at.elapsed() >= inner.config.persist_debounce,
+        Some(at) => at.elapsed() >= DEFAULT_PERSIST_DEBOUNCE,
     }
 }
 
@@ -1187,7 +1127,7 @@ mod tests {
 
     fn store() -> TranscriptStore<MemFs> {
         MemFs::new();
-        TranscriptStore::new(1, TranscriptConfig::new("/transcript-store-tests")).unwrap()
+        TranscriptStore::new(1, "/transcript-store-tests").unwrap()
     }
 
     #[test]

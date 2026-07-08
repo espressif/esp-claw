@@ -13,6 +13,7 @@
 //! crate depends on the `ClawFs` trait and never on its implementation.
 
 use serde_json::Value;
+use std::error::Error;
 use std::future::Future;
 use std::pin::Pin;
 
@@ -22,14 +23,37 @@ pub type CompactFuture<'a> = Pin<Box<dyn Future<Output = Result<Vec<Value>, Comp
 /// Failure from a [`Compactor`].
 ///
 /// Compaction is best-effort: on error the tape keeps the un-compacted groups
-/// and tries again later, so the only thing a caller needs is a displayable
-/// reason for logs.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+/// and tries again later, but concrete backend failures still keep their source
+/// chain for diagnostics.
+#[derive(Debug, thiserror::Error)]
 pub enum CompactError {
-    /// The summarization backend (e.g. the LLM client) failed; carries a
-    /// displayable reason for logging.
-    #[error("compaction backend failed: {0}")]
-    Backend(String),
+    /// The summarization backend (e.g. the LLM client) failed.
+    #[error("compaction backend failed")]
+    Backend(#[from] CompactBackendError),
+    /// The backend returned no summary text.
+    #[error("compaction backend returned an empty summary")]
+    EmptySummary,
+}
+
+/// Backend failure captured by the backend-agnostic [`Compactor`] seam.
+///
+/// `claw-memory` deliberately has no dependency on any LLM crate, so concrete
+/// compactor implementations wrap their native error here instead of flattening
+/// it into a string.
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct CompactBackendError {
+    #[from]
+    source: Box<dyn Error + Send + Sync + 'static>,
+}
+
+impl CompactBackendError {
+    /// Preserve a concrete backend error behind the backend-agnostic seam.
+    pub fn new(error: impl Error + Send + Sync + 'static) -> Self {
+        Self {
+            source: Box::new(error),
+        }
+    }
 }
 
 /// Turns one chunk of aged chat messages into a compact summary.
