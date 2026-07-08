@@ -185,10 +185,11 @@ esp_err_t claw_agent_session_list(uint32_t *out_session_ids,
                                   size_t *out_count);
 
 /*
- * Close a live numeric session id.
+ * Close an open numeric session stream.
  *
- * session_id must be non-zero and open. Closing cancels live work, deletes the
- * session, and eventually yields CLAW_AGENT_EVENT_KIND_CLOSED.
+ * session_id must be non-zero and open. Closing cancels live work associated
+ * with the open stream and eventually yields CLAW_AGENT_EVENT_KIND_CLOSED. The
+ * session id remains live and may be opened again.
  *
  * Returns:
  * - ESP_OK on success.
@@ -197,6 +198,20 @@ esp_err_t claw_agent_session_list(uint32_t *out_session_ids,
  * - ESP_ERR_NOT_FOUND if session_id is not open.
  */
 esp_err_t claw_agent_session_close(uint32_t session_id);
+
+/*
+ * Delete a live numeric session id.
+ *
+ * session_id must be non-zero and live. If the session has an open stream,
+ * deletion cancels live work and eventually yields CLAW_AGENT_EVENT_KIND_CLOSED.
+ *
+ * Returns:
+ * - ESP_OK on success.
+ * - ESP_ERR_INVALID_ARG if session_id is 0.
+ * - ESP_ERR_INVALID_STATE if the runtime is not started or is stopping.
+ * - ESP_ERR_NOT_FOUND if session_id is not live.
+ */
+esp_err_t claw_agent_session_delete(uint32_t session_id);
 
 /*
  * Receive the next event from an open session, one event per call.

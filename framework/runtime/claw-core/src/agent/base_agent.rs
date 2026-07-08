@@ -1004,6 +1004,9 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
             .filter(|run| run.is_blocked())
             .map(|run| run.name.as_str())
             .collect();
+        if !blocked.is_empty() {
+            tracing::warn!(name: "tool_gate_blocked", count = blocked.len() as u64);
+        }
         if let ToolBlockVerdict::Exhausted { name } = self.block_policy.record_round(&blocked) {
             self.fail_with(AgentRunError::ToolNotPermitted { name });
         }
@@ -1070,6 +1073,19 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
             return;
         }
         if has_dangling_tool_calls(&outcome.produced.0) {
+            let tool_call_count = outcome
+                .produced
+                .0
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|message| message.get("tool_calls").and_then(Value::as_array))
+                .map(|calls| calls.len())
+                .sum::<usize>();
+            tracing::warn!(
+                name: "preempt_patch_dropped",
+                tool_call_count = tool_call_count as u64,
+            );
             return;
         }
         self.transcript.commit_patch(&outcome.produced.0);

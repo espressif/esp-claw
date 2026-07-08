@@ -85,6 +85,7 @@ impl SyncToolHandler for SpawnSubagentTool {
         // can pick a permitted kind or do the work itself — not as `Err`, which
         // would fail the whole iteration and rob the model of self-correction.
         if !self.policy.allows(&kind) {
+            tracing::warn!(name: "spawn_kind_rejected", kind = %kind.as_str());
             return Ok(ToolOutput {
                 output: format!(
                     "spawn_subagent: kind '{kind}' is not permitted for this agent. \
@@ -102,6 +103,7 @@ impl SyncToolHandler for SpawnSubagentTool {
         // then silently dropped at `materialize_spawn`. Refuse it as a matched tool
         // error (like a disallowed kind) so the model can pick a real one.
         if AgentManifest::for_kind(kind.as_str()).is_none() {
+            tracing::warn!(name: "spawn_unknown_kind_rejected", kind = %kind.as_str());
             let available = self
                 .policy
                 .catalog()

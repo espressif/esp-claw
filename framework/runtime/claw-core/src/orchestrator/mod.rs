@@ -31,10 +31,13 @@ use claw_interface::{
 };
 use claw_tool::ToolRegistry;
 use futures_core::Stream;
+use tracing::Instrument as _;
 
-use crate::agent::{AgentIdAllocator, CancelReason, FsAgentFactory, FsAgentFactoryError};
+use crate::agent::{
+    AgentIdAllocator, ApprovalDecision, CancelReason, FsAgentFactory, FsAgentFactoryError,
+};
 use crate::event::{EventSink, SessionEvent, TurnCause};
-use crate::session::{DeliverError, SessionId, SessionStore};
+use crate::session::{DeliverError, SessionId, SessionStore, TurnId, TurnIdAllocator};
 
 pub use self::instance::{DriveOutput, RootReply};
 
@@ -72,24 +75,42 @@ struct SubmittedInput {
     text: String,
 }
 
-#[derive(Default)]
 struct SessionDrive {
     events: Option<EventSink>,
+    turns: TurnIdAllocator,
     pending_input: Option<SubmittedInput>,
     running: bool,
     foreground_active: bool,
     control: Option<DriveControl>,
     requested_control: Option<ControlOp>,
     closing: bool,
+    close_cancels: bool,
+}
+
+impl Default for SessionDrive {
+    fn default() -> Self {
+        Self {
+            events: None,
+            turns: TurnIdAllocator::new(),
+            pending_input: None,
+            running: false,
+            foreground_active: false,
+            control: None,
+            requested_control: None,
+            closing: false,
+            close_cancels: false,
+        }
+    }
 }
 
 /// A command the [`Orchestrator`] handle sends to its engine worker.
 ///
 /// Session create/list live entirely on the handle (`SessionStore` is shared and
 /// synchronous), so they need no command. `CloseSession` is a command because
-/// the engine must cancel live work, close the event stream, and drop the agent
-/// graph. `Stop` lets shutdown drain in-flight drives and exit the run loop so
-/// the worker joins.
+/// the engine must detach the live event stream and cancel active work.
+/// `DeleteSession` removes the registry entry and session runtime state. `Stop`
+/// lets shutdown drain in-flight drives and exit the run loop so the worker
+/// joins.
 enum Command {
     OpenSession {
         session: SessionId,
@@ -107,6 +128,10 @@ enum Command {
         ack: Sender<Result<(), SessionControlError>>,
     },
     CloseSession {
+        session: SessionId,
+        ack: Sender<Result<(), SessionControlError>>,
+    },
+    DeleteSession {
         session: SessionId,
         ack: Sender<Result<(), SessionControlError>>,
     },
@@ -191,8 +216,9 @@ impl SessionControl {
         self.send_control(ControlOp::Cancel).await
     }
 
-    /// Close this session: cancel live work, close the event stream, and remove
-    /// the session from the registry.
+    /// Close this open session stream. The session id remains live and can be
+    /// opened again later; deleting the session is handled by
+    /// [`Orchestrator::session_delete`].
     pub async fn close_session(&self) -> Result<(), SessionControlError> {
         let (ack_tx, ack_rx) = async_channel::bounded(1);
         self.command_tx
@@ -287,7 +313,7 @@ impl From<FsAgentFactoryError> for OrchestratorBuildError {
 /// and joins it on drop. Wrap it in an `Arc` to share.
 pub struct Orchestrator {
     /// The session id truth source, shared with the engine so the handle can
-    /// validate submits/deletes synchronously without a round-trip.
+    /// validate opens/deletes before forwarding work.
     sessions: Arc<SessionStore>,
     /// Outbound command channel to the engine worker.
     command_tx: Sender<Command>,
@@ -379,7 +405,10 @@ impl Orchestrator {
         &self,
         session_id: SessionId,
     ) -> Result<(SessionControl, SessionEventStream), OpenSessionError> {
+        let span = tracing::info_span!("session", run.session = %session_id);
+        let _enter = span.enter();
         if !self.sessions.contains(session_id) {
+            tracing::warn!(name: "open_rejected", reason = "session_not_found");
             return Err(OpenSessionError::SessionNotFound(session_id));
         }
         let (sender, receiver) = async_channel::unbounded();
@@ -391,20 +420,46 @@ impl Orchestrator {
                 events,
                 ack: ack_tx,
             })
-            .map_err(|_| OpenSessionError::WorkerStopped)?;
+            .map_err(|_| {
+                tracing::error!(name: "open_rejected", reason = "worker_stopped");
+                OpenSessionError::WorkerStopped
+            })?;
         match ack_rx.recv_blocking() {
-            Ok(Ok(())) => Ok((
-                SessionControl::new(session_id, self.command_tx.clone()),
-                SessionEventStream::new(receiver),
-            )),
-            Ok(Err(error)) => Err(error),
-            Err(_) => Err(OpenSessionError::WorkerStopped),
+            Ok(Ok(())) => {
+                tracing::info!(name: "opened", "");
+                Ok((
+                    SessionControl::new(session_id, self.command_tx.clone()),
+                    SessionEventStream::new(receiver),
+                ))
+            }
+            Ok(Err(error)) => {
+                match &error {
+                    OpenSessionError::SessionNotFound(_) => {
+                        tracing::warn!(name: "open_rejected", reason = "session_not_found");
+                    }
+                    OpenSessionError::AlreadyOpen(_) => {
+                        tracing::warn!(name: "open_rejected", reason = "already_open");
+                    }
+                    OpenSessionError::WorkerStopped => {
+                        tracing::error!(name: "open_rejected", reason = "worker_stopped");
+                    }
+                }
+                Err(error)
+            }
+            Err(_) => {
+                tracing::error!(name: "open_rejected", reason = "worker_stopped");
+                Err(OpenSessionError::WorkerStopped)
+            }
         }
     }
 
     /// Create a fresh isolated conversation session.
     pub fn session_create(&self) -> SessionId {
-        self.sessions.create()
+        let span = tracing::info_span!("session.create");
+        let _enter = span.enter();
+        let session = self.sessions.create();
+        tracing::info!(name: "created", session = %session);
+        session
     }
 
     /// The live conversation sessions, sorted by id.
@@ -412,6 +467,56 @@ impl Orchestrator {
         let mut sessions = self.sessions.list();
         sessions.sort_by_key(|id| id.0);
         sessions
+    }
+
+    /// Delete a live session id and remove any associated runtime state.
+    ///
+    /// If the session has an open event stream, the stream receives
+    /// [`SessionEvent::Closed`] before it terminates.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionControlError::SessionClosed`] when the session id is not
+    /// live, or [`SessionControlError::WorkerStopped`] if the engine worker is
+    /// gone.
+    pub fn session_delete(&self, session_id: SessionId) -> Result<(), SessionControlError> {
+        let span = tracing::info_span!("session.delete", run.session = %session_id);
+        let _enter = span.enter();
+        if !self.sessions.contains(session_id) {
+            tracing::warn!(name: "delete_rejected", reason = "session_closed");
+            return Err(SessionControlError::SessionClosed(session_id));
+        }
+        let (ack_tx, ack_rx) = async_channel::bounded(1);
+        self.command_tx
+            .try_send(Command::DeleteSession {
+                session: session_id,
+                ack: ack_tx,
+            })
+            .map_err(|_| {
+                tracing::error!(name: "delete_rejected", reason = "worker_stopped");
+                SessionControlError::WorkerStopped
+            })?;
+        match ack_rx.recv_blocking() {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => {
+                match &error {
+                    SessionControlError::SessionClosed(_) => {
+                        tracing::warn!(name: "delete_rejected", reason = "session_closed");
+                    }
+                    SessionControlError::Busy(_) => {
+                        tracing::warn!(name: "delete_rejected", reason = "busy");
+                    }
+                    SessionControlError::WorkerStopped => {
+                        tracing::error!(name: "delete_rejected", reason = "worker_stopped");
+                    }
+                }
+                Err(error)
+            }
+            Err(_) => {
+                tracing::error!(name: "delete_rejected", reason = "worker_stopped");
+                Err(SessionControlError::WorkerStopped)
+            }
+        }
     }
 }
 
@@ -541,7 +646,8 @@ where
                             }
                             Command::Submit { ack, .. }
                             | Command::Control { ack, .. }
-                            | Command::CloseSession { ack, .. } => {
+                            | Command::CloseSession { ack, .. }
+                            | Command::DeleteSession { ack, .. } => {
                                 let _ = ack.try_send(Err(SessionControlError::WorkerStopped));
                             }
                             Command::Stop => {}
@@ -588,6 +694,13 @@ where
                         inflight.push_back(future);
                     }
                 }
+                EngineEvent::Command(Some(Command::DeleteSession { session, ack })) => {
+                    let (result, future) = self.delete_session(session);
+                    let _ = ack.try_send(result);
+                    if let Some(future) = future {
+                        inflight.push_back(future);
+                    }
+                }
                 EngineEvent::Command(Some(Command::Stop)) => stopping = true,
                 EngineEvent::Command(None) => rx_open = false,
             }
@@ -604,11 +717,12 @@ where
         }
         let mut drives = self.drives.borrow_mut();
         let drive = drives.entry(session_id).or_default();
-        if drive.events.is_some() && !drive.closing {
+        if drive.events.is_some() || drive.closing {
             return Err(OpenSessionError::AlreadyOpen(session_id));
         }
         drive.events = Some(events);
         drive.closing = false;
+        drive.close_cancels = false;
         Ok(())
     }
 
@@ -617,21 +731,57 @@ where
         session_id: SessionId,
         input: SubmittedInput,
     ) -> (Result<(), SessionControlError>, Option<DriveFuture>) {
+        let has_text = !input.text.is_empty();
+        let text_bytes = input.text.len() as u64;
+        let span = tracing::info_span!("session", run.session = %session_id);
+        let _enter = span.enter();
         if !self.sessions.contains(session_id) {
+            tracing::warn!(
+                name: "submit_rejected",
+                reason = "session_closed",
+                has_text,
+                text_bytes,
+                attachment_count = 0_u64,
+                attachment_kinds = "none",
+            );
             return (Err(SessionControlError::SessionClosed(session_id)), None);
         }
         {
             let mut drives = self.drives.borrow_mut();
             let Some(drive) = drives.get_mut(&session_id) else {
+                tracing::warn!(
+                    name: "submit_rejected",
+                    reason = "session_closed",
+                    has_text,
+                    text_bytes,
+                    attachment_count = 0_u64,
+                    attachment_kinds = "none",
+                );
                 return (Err(SessionControlError::SessionClosed(session_id)), None);
             };
             if drive.events.is_none() || drive.closing {
+                tracing::warn!(
+                    name: "submit_rejected",
+                    reason = "session_closed",
+                    has_text,
+                    text_bytes,
+                    attachment_count = 0_u64,
+                    attachment_kinds = "none",
+                );
                 return (Err(SessionControlError::SessionClosed(session_id)), None);
             }
             if drive.pending_input.is_some()
                 || drive.foreground_active
                 || self.instance_has_root_work(session_id)
             {
+                tracing::warn!(
+                    name: "submit_rejected",
+                    reason = "busy",
+                    has_text,
+                    text_bytes,
+                    attachment_count = 0_u64,
+                    attachment_kinds = "none",
+                );
                 return (Err(SessionControlError::Busy(session_id)), None);
             }
             drive.pending_input = Some(input);
@@ -639,6 +789,13 @@ where
                 control.request_wake();
             }
         }
+        tracing::info!(
+            name: "submit_accepted",
+            has_text,
+            text_bytes,
+            attachment_count = 0_u64,
+            attachment_kinds = "none",
+        );
         (Ok(()), self.ensure_session_drive(session_id))
     }
 
@@ -647,15 +804,36 @@ where
         session_id: SessionId,
         op: ControlOp,
     ) -> (Result<(), SessionControlError>, Option<DriveFuture>) {
+        let op_name = match op {
+            ControlOp::Interrupt => "interrupt",
+            ControlOp::Cancel => "cancel",
+        };
+        let span = tracing::info_span!("session", run.session = %session_id);
+        let _enter = span.enter();
         if !self.sessions.contains(session_id) {
+            tracing::warn!(
+                name: "control_rejected",
+                op = op_name,
+                reason = "session_closed",
+            );
             return (Err(SessionControlError::SessionClosed(session_id)), None);
         }
         {
             let mut drives = self.drives.borrow_mut();
             let Some(drive) = drives.get_mut(&session_id) else {
+                tracing::warn!(
+                    name: "control_rejected",
+                    op = op_name,
+                    reason = "session_closed",
+                );
                 return (Err(SessionControlError::SessionClosed(session_id)), None);
             };
             if drive.events.is_none() || drive.closing {
+                tracing::warn!(
+                    name: "control_rejected",
+                    op = op_name,
+                    reason = "session_closed",
+                );
                 return (Err(SessionControlError::SessionClosed(session_id)), None);
             }
             if op == ControlOp::Cancel {
@@ -666,6 +844,7 @@ where
                 apply_control(control, drive.requested_control);
             }
         }
+        tracing::info!(name: "control_requested", op = op_name);
         (Ok(()), self.ensure_session_drive(session_id))
     }
 
@@ -673,22 +852,78 @@ where
         self: &Rc<Self>,
         session_id: SessionId,
     ) -> (Result<(), SessionControlError>, Option<DriveFuture>) {
-        let existed = self.sessions.delete(session_id);
+        let session_span = tracing::info_span!("session", run.session = %session_id);
+        let _session_enter = session_span.enter();
+        if !self.sessions.contains(session_id) {
+            tracing::warn!(name: "close_rejected", reason = "session_closed");
+            return (Err(SessionControlError::SessionClosed(session_id)), None);
+        }
+        {
+            let drives = self.drives.borrow();
+            let Some(drive) = drives.get(&session_id) else {
+                tracing::warn!(name: "close_rejected", reason = "not_open");
+                return (Err(SessionControlError::SessionClosed(session_id)), None);
+            };
+            if drive.events.is_none() {
+                tracing::warn!(name: "close_rejected", reason = "not_open");
+                return (Err(SessionControlError::SessionClosed(session_id)), None);
+            }
+            if drive.closing {
+                tracing::info!(name: "close_requested", "");
+                return (Ok(()), None);
+            }
+            tracing::info!(name: "close_requested", "");
+        }
+        (Ok(()), self.session_shutdown(session_id))
+    }
+
+    fn delete_session(
+        self: &Rc<Self>,
+        session_id: SessionId,
+    ) -> (Result<(), SessionControlError>, Option<DriveFuture>) {
+        let session_span = tracing::info_span!("session", run.session = %session_id);
+        let _session_enter = session_span.enter();
+        let delete_span = tracing::info_span!("session.delete", run.session = %session_id);
+        let existed = delete_span.in_scope(|| {
+            let existed = self.sessions.delete(session_id);
+            if existed {
+                tracing::info!(name: "delete_requested", "");
+                tracing::info!(name: "registry_removed", "");
+            } else {
+                tracing::warn!(name: "delete_rejected", reason = "session_closed");
+            }
+            existed
+        });
+        if !existed {
+            return (Err(SessionControlError::SessionClosed(session_id)), None);
+        }
+        {
+            let drives = self.drives.borrow();
+            if !drives.contains_key(&session_id) {
+                drop(drives);
+                self.instances.borrow_mut().remove(&session_id);
+                tracing::info_span!("session.delete", run.session = %session_id).in_scope(|| {
+                    tracing::info!(name: "runtime_state_removed", "");
+                });
+                return (Ok(()), None);
+            };
+        }
+        (Ok(()), self.session_shutdown(session_id))
+    }
+
+    fn session_shutdown(self: &Rc<Self>, session_id: SessionId) -> Option<DriveFuture> {
+        let has_root_work = self.instance_has_root_work(session_id);
         let mut should_start = false;
         {
             let mut drives = self.drives.borrow_mut();
-            let Some(drive) = drives.get_mut(&session_id) else {
-                drop(drives);
-                self.instances.borrow_mut().remove(&session_id);
-                let result = if existed {
-                    Ok(())
-                } else {
-                    Err(SessionControlError::SessionClosed(session_id))
-                };
-                return (result, None);
-            };
+            let drive = drives.get_mut(&session_id)?;
+            let had_pending_input = drive.pending_input.take().is_some();
+            drive.close_cancels = drive.close_cancels
+                || drive.running
+                || drive.foreground_active
+                || had_pending_input
+                || has_root_work;
             drive.closing = true;
-            drive.pending_input = None;
             drive.requested_control = Some(ControlOp::Cancel);
             if let Some(control) = &drive.control {
                 apply_control(control, drive.requested_control);
@@ -698,13 +933,15 @@ where
                 should_start = true;
             }
         }
-        let future = should_start.then(|| {
+        should_start.then(|| {
             let engine = Rc::clone(self);
-            Box::pin(async move {
-                engine.drive_session(session_id).await;
-            }) as DriveFuture
-        });
-        (Ok(()), future)
+            Box::pin(
+                async move {
+                    engine.drive_session(session_id).await;
+                }
+                .instrument(tracing::info_span!("session", run.session = %session_id)),
+            ) as DriveFuture
+        })
     }
 
     fn ensure_session_drive(self: &Rc<Self>, session_id: SessionId) -> Option<DriveFuture> {
@@ -720,15 +957,18 @@ where
             drive.running = true;
         }
         let engine = Rc::clone(self);
-        Some(Box::pin(async move {
-            engine.drive_session(session_id).await;
-        }))
+        Some(Box::pin(
+            async move {
+                engine.drive_session(session_id).await;
+            }
+            .instrument(tracing::info_span!("session", run.session = %session_id)),
+        ))
     }
 
     async fn drive_session(&self, session_id: SessionId) {
         loop {
             if self.session_is_closing(session_id) {
-                self.cancel_and_close_session(session_id).await;
+                self.finish_closing_session(session_id).await;
                 return;
             }
 
@@ -809,47 +1049,94 @@ where
         let Some(events) = self.session_events(session_id) else {
             return;
         };
-        self.set_foreground_active(session_id, true);
-        events.emit(SessionEvent::TurnStarted {
-            cause: TurnCause::UserSubmit,
-        });
-        let result = self.drive_one_input(session_id, input.text, &events).await;
-        self.finish_turn(session_id, &events, result);
-        self.set_foreground_active(session_id, false);
+        let Some(turn) = self
+            .drives
+            .borrow_mut()
+            .get_mut(&session_id)
+            .map(|drive| drive.turns.next())
+        else {
+            return;
+        };
+        let has_text = !input.text.is_empty();
+        let text_bytes = input.text.len() as u64;
+        async {
+            self.set_foreground_active(session_id, true);
+            events.emit(SessionEvent::TurnStarted {
+                turn,
+                cause: TurnCause::UserSubmit,
+            });
+            tracing::info!(
+                name: "input_delivered",
+                has_text,
+                text_bytes,
+                attachment_count = 0_u64,
+                attachment_kinds = "none",
+            );
+            let result = self.drive_one_input(session_id, input.text, &events).await;
+            self.finish_turn(session_id, turn, &events, result);
+            self.set_foreground_active(session_id, false);
+        }
+        .instrument(tracing::info_span!("turn", run.turn = %turn, cause = "user_submit"))
+        .await;
     }
 
     async fn drive_background_result_turn(&self, session_id: SessionId) {
         let Some(events) = self.session_events(session_id) else {
             return;
         };
-        self.set_foreground_active(session_id, true);
-        events.emit(SessionEvent::TurnStarted {
-            cause: TurnCause::BackgroundResult,
-        });
-        let result = self.drive_root_ready(session_id, &events).await;
-        self.finish_turn(session_id, &events, result);
-        self.set_foreground_active(session_id, false);
+        let Some(turn) = self
+            .drives
+            .borrow_mut()
+            .get_mut(&session_id)
+            .map(|drive| drive.turns.next())
+        else {
+            return;
+        };
+        async {
+            self.set_foreground_active(session_id, true);
+            events.emit(SessionEvent::TurnStarted {
+                turn,
+                cause: TurnCause::BackgroundResult,
+            });
+            tracing::info!(name: "background_result", "");
+            let result = self.drive_root_ready(session_id, &events).await;
+            self.finish_turn(session_id, turn, &events, result);
+            self.set_foreground_active(session_id, false);
+        }
+        .instrument(tracing::info_span!(
+            "turn",
+            run.turn = %turn,
+            cause = "background_result"
+        ))
+        .await;
     }
 
     fn finish_turn(
         &self,
         session_id: SessionId,
+        turn: TurnId,
         events: &EventSink,
         result: Result<(DriveOutput, DriveStop), DeliverError>,
     ) {
         match result {
             Ok((output, _stop)) => {
                 for reply in output.replies {
+                    tracing::info!(name: "output", text_bytes = reply.text.len() as u64);
                     events.emit(SessionEvent::Output { text: reply.text });
                 }
             }
             Err(error) => {
+                let kind = match &error {
+                    DeliverError::SessionNotFound(_) => "session_not_found",
+                    DeliverError::Agent(_) => "agent",
+                };
+                tracing::error!(name: "error", kind);
                 events.emit(SessionEvent::Error {
                     message: error.to_string(),
                 });
             }
         }
-        events.emit(SessionEvent::TurnEnded);
+        events.emit(SessionEvent::TurnEnded { turn });
         let _ = session_id;
     }
 
@@ -907,6 +1194,7 @@ where
             cleanup_control.request_cancel();
             let (cleanup_output, _) = instance.drive_cancelled(&cleanup_control, events).await;
             output.absorb(cleanup_output);
+            tracing::warn!(name: "cancelled_cleanup", "");
         }
         Ok((output, stop))
     }
@@ -936,20 +1224,58 @@ where
         }
     }
 
-    async fn cancel_and_close_session(&self, session_id: SessionId) {
-        if let Some(events) = self.session_events(session_id) {
+    async fn finish_closing_session(&self, session_id: SessionId) {
+        let (events, should_cancel, deleted) = {
+            let drives = self.drives.borrow();
+            let Some(drive) = drives.get(&session_id) else {
+                return;
+            };
+            (
+                drive.events.clone(),
+                drive.close_cancels,
+                !self.sessions.contains(session_id),
+            )
+        };
+
+        let cleanup_events = events.clone().unwrap_or_else(EventSink::disabled);
+        if should_cancel {
             if let Some(mut slot) = self.checkout_existing_instance(session_id) {
                 slot.get_mut().cancel_all(CancelReason::UserRequested);
                 let control = DriveControl::new();
                 control.request_cancel();
                 self.set_active_control(session_id, Some(control.clone()));
-                let _ = slot.get_mut().drive_cancelled(&control, &events).await;
+                let _ = slot
+                    .get_mut()
+                    .drive_cancelled(&control, &cleanup_events)
+                    .await;
                 self.set_active_control(session_id, None);
             }
+        }
+
+        if let Some(events) = events {
+            tracing::info!(name: "closed", "");
             events.emit(SessionEvent::Closed);
         }
-        self.drives.borrow_mut().remove(&session_id);
-        self.instances.borrow_mut().remove(&session_id);
+
+        if deleted {
+            tracing::info_span!("session.delete", run.session = %session_id).in_scope(|| {
+                tracing::info!(name: "runtime_state_removed", "");
+            });
+            self.drives.borrow_mut().remove(&session_id);
+            self.instances.borrow_mut().remove(&session_id);
+            return;
+        }
+
+        if let Some(drive) = self.drives.borrow_mut().get_mut(&session_id) {
+            drive.events = None;
+            drive.pending_input = None;
+            drive.running = false;
+            drive.foreground_active = false;
+            drive.control = None;
+            drive.requested_control = None;
+            drive.closing = false;
+            drive.close_cancels = false;
+        }
     }
 
     async fn resolve_pending_approval(
@@ -984,6 +1310,7 @@ where
             let PermissionReplyResolution::Clarify(message) = resolution else {
                 unreachable!("non-clarification resolutions map to approval decisions")
             };
+            tracing::info!(name: "approval_clarification", reason = "clarify");
             return Ok((
                 DriveOutput {
                     replies: vec![RootReply {
@@ -995,6 +1322,11 @@ where
             ));
         };
 
+        let decision_name = match &decision {
+            ApprovalDecision::Approved => "approved",
+            ApprovalDecision::Rejected(_) => "rejected",
+        };
+        tracing::info!(name: "approval_resolved", decision = decision_name);
         instance
             .resolve_active_approval(decision)
             .map_err(|error| DeliverError::Agent(error.to_string()))?;

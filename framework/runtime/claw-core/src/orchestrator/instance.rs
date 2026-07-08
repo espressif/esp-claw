@@ -32,6 +32,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
+use tracing::Instrument as _;
 
 use crate::agent::{
     Agent, AgentAbortHandle, AgentCommand, AgentCommandError, AgentId, AgentIdAllocator, AgentKind,
@@ -285,11 +286,31 @@ fn tick_agent(ready: ReadyAgent, events: EventSink) -> AgentTickBoxFuture {
     Box::pin(async move {
         let ReadyAgent {
             id,
-            is_root: _,
+            is_root,
             mut agent,
             ..
         } = ready;
         let outcome = agent.tick(events).await;
+        match &outcome {
+            TickOutcome::AwaitingApproval { id, .. } => {
+                tracing::info!(name: "awaiting_approval", approval = %id);
+            }
+            TickOutcome::Cancelled { reason } => {
+                let reason = match reason {
+                    CancelReason::UserRequested => "user_requested",
+                    CancelReason::Shutdown => "shutdown",
+                };
+                if is_root {
+                    tracing::warn!(name: "root_cancelled", reason);
+                } else {
+                    tracing::warn!(name: "subagent_cancelled", agent = %id, reason);
+                }
+            }
+            TickOutcome::Failed(_) => {
+                tracing::error!(name: "task_failed", "");
+            }
+            _ => {}
+        }
         TickedAgent { id, agent, outcome }
     })
 }
@@ -701,6 +722,10 @@ where
         approval: ApprovalId,
         decision: ApprovalDecision,
     ) -> Result<(), ApprovalResolutionError> {
+        let decision_name = match &decision {
+            ApprovalDecision::Approved => "approved",
+            ApprovalDecision::Rejected(_) => "rejected",
+        };
         self.registry
             .get_mut(agent)
             .ok_or(ApprovalResolutionError::UnknownAgent(agent))?
@@ -709,6 +734,11 @@ where
                 decision,
             })
             .map_err(ApprovalResolutionError::Command)?;
+        tracing::info!(
+            name: "approval_resolved",
+            approval = %approval,
+            decision = decision_name,
+        );
         self.enqueue(agent);
         Ok(())
     }
@@ -734,8 +764,21 @@ where
             } else {
                 EventSink::disabled()
             };
-            self.inflight
-                .spawn(id, is_root, abort, tick_agent(ready, sink));
+            let Some(meta) = self.meta.get(&id) else {
+                continue;
+            };
+            let span = tracing::info_span!(
+                "agent",
+                run.agent = %id,
+                kind = %meta.kind.as_str(),
+                depth = meta.depth as u64,
+            );
+            self.inflight.spawn(
+                id,
+                is_root,
+                abort,
+                Box::pin(tick_agent(ready, sink).instrument(span)),
+            );
         }
     }
 
@@ -851,6 +894,11 @@ where
     /// subagents, never an ancestor, sibling, or unrelated node).
     fn apply_delete(&mut self, requester: AgentId, target: AgentId) {
         if !self.is_descendant(requester, target) {
+            tracing::warn!(
+                name: "delete_ignored",
+                target_agent = %target,
+                reason = "not_descendant",
+            );
             return;
         }
         self.delete_subtree(target);
@@ -913,11 +961,23 @@ where
         termination: TerminationPolicy,
     ) {
         let Some(parent_meta) = self.meta.get(&parent) else {
+            tracing::warn!(
+                name: "spawn_dropped",
+                parent_agent = %parent,
+                kind = %kind.as_str(),
+                reason = "missing_parent",
+            );
             return;
         };
         let depth = parent_meta.depth.saturating_add(1);
         match self.build_agent(id, &kind, goal, AgentPlacement::Sub(id)) {
             Ok(()) => {
+                tracing::info!(
+                    name: "spawn_materialized",
+                    parent_agent = %parent,
+                    child_agent = %id,
+                    kind = %kind.as_str(),
+                );
                 self.meta.insert(
                     id,
                     NodeMeta {
@@ -930,7 +990,14 @@ where
                 );
                 self.enqueue(id);
             }
-            Err(_) => {}
+            Err(_) => {
+                tracing::error!(
+                    name: "spawn_dropped",
+                    parent_agent = %parent,
+                    kind = %kind.as_str(),
+                    reason = "build_failed",
+                );
+            }
         }
     }
 
@@ -999,6 +1066,9 @@ where
         // Keep a `Manual` subagent alive only on an ordinary yield; otherwise remove
         // it (and its subtree, so a persistent grandchild is never left orphaned).
         let keep_alive = termination == TerminationPolicy::Manual && ok && !ended;
+        if keep_alive {
+            tracing::info!(name: "manual_yielded", "");
+        }
         if !keep_alive {
             self.delete_subtree(id);
         }
@@ -1022,6 +1092,11 @@ where
     /// explicit/cascading delete; a parent's removal never leaves orphans.
     fn delete_subtree(&mut self, root: AgentId) {
         let victims = self.subtree_ids(root);
+        tracing::info!(
+            name: "subtree_deleted",
+            root_agent = %root,
+            count = victims.len() as u64,
+        );
         for victim in &victims {
             self.registry.remove(*victim);
             self.meta.remove(victim);
@@ -1045,6 +1120,12 @@ where
             return;
         }
         if self.parked_approvals.contains_key(&parent) {
+            tracing::info!(
+                name: "result_to_parent",
+                parent_agent = %parent,
+                child_agent = %child,
+                queued = true,
+            );
             self.subagent_result_mailbox.push_back(SubagentResult {
                 parent,
                 child,
@@ -1056,7 +1137,19 @@ where
         if let Some(parent_agent) = self.registry.get_mut(parent) {
             parent_agent.deliver_child_result(child, text, ok);
             self.enqueue(parent);
+            tracing::info!(
+                name: "result_to_parent",
+                parent_agent = %parent,
+                child_agent = %child,
+                queued = false,
+            );
         } else {
+            tracing::info!(
+                name: "result_to_parent",
+                parent_agent = %parent,
+                child_agent = %child,
+                queued = true,
+            );
             self.subagent_result_mailbox.push_back(SubagentResult {
                 parent,
                 child,

@@ -13,10 +13,11 @@ use std::time::Duration;
 
 use claw_agent::{
     AgentError, AgentPersistenceConfig, AgentSystem, OpenSessionError, SessionControl,
-    SessionEvent, SessionEventStream, SessionId,
+    SessionControlError, SessionEvent, SessionEventStream, SessionId,
 };
 use claw_api::{BackendKind, ClawApiConfig};
 use claw_interface::{Cancel, ClawTimer};
+use claw_log::{LevelFilter, LogOutput, TracingConfig};
 use claw_sys::{EspIdfExecutor, EspIdfFs, EspIdfHttp, EspIdfThread, EspIdfTimer};
 
 use futures_core::Stream;
@@ -88,7 +89,7 @@ fn map_event(event: SessionEvent) -> Option<FfiEvent> {
         SessionEvent::Reasoning { text } => Some(FfiEvent::Reasoning(text)),
         SessionEvent::Tools { names } => Some(FfiEvent::Tools(names.join(", "))),
         SessionEvent::Error { message } => Some(FfiEvent::Error(message)),
-        SessionEvent::TurnEnded => Some(FfiEvent::Done),
+        SessionEvent::TurnEnded { .. } => Some(FfiEvent::Done),
         SessionEvent::Closed => Some(FfiEvent::Closed),
         SessionEvent::TurnStarted { .. }
         | SessionEvent::IterationStarted { .. }
@@ -159,9 +160,15 @@ pub unsafe extern "C" fn claw_agent_session_list(
 }
 
 #[no_mangle]
-/// Close a numeric session.
+/// Close a numeric session stream.
 pub extern "C" fn claw_agent_session_close(session_id: u32) -> EspErr {
     ffi_result(|| session_close(session_id))
+}
+
+#[no_mangle]
+/// Delete a numeric session id.
+pub extern "C" fn claw_agent_session_delete(session_id: u32) -> EspErr {
+    ffi_result(|| session_delete(session_id))
 }
 
 #[no_mangle]
@@ -199,6 +206,12 @@ pub unsafe extern "C" fn claw_agent_event_free(event: *mut ClawAgentEvent) {
 }
 
 fn init(config: *const ClawAgentConfig) -> Result<(), CabiError> {
+    let _ = claw_log::init_logger(LevelFilter::Info, LogOutput::Stderr);
+    let _ = claw_log::init_tracing(
+        TracingConfig::default()
+            .with_context_group_keys("run", ["session", "turn", "agent", "iteration"]),
+    );
+
     let config = unsafe { config.as_ref() }.ok_or(CabiError::InvalidArgument)?;
     let backend_type = required_string(config.backend_type)?;
     let backend = BackendKind::from_str(&backend_type).map_err(|_| CabiError::InvalidArgument)?;
@@ -382,8 +395,19 @@ fn session_close(session_id: u32) -> Result<(), CabiError> {
         return Err(CabiError::InvalidArgument);
     }
     let session = get_open_session(session_id)?.ok_or(CabiError::NotFound)?;
-    futures_lite::future::block_on(session.control.close_session())
-        .map_err(|_| CabiError::InvalidState)
+    futures_lite::future::block_on(session.control.close_session()).map_err(session_control_error)
+}
+
+fn session_delete(session_id: u32) -> Result<(), CabiError> {
+    if session_id == 0 {
+        return Err(CabiError::InvalidArgument);
+    }
+    let _guard = lock_runtime();
+    let runtime = runtime_mut()?;
+    let agent = runtime.agent.as_ref().ok_or(CabiError::InvalidState)?;
+    agent
+        .delete_session(SessionId::new(session_id))
+        .map_err(session_control_error)
 }
 
 fn receive(
@@ -456,7 +480,7 @@ fn session_cancel(session_id: u32) -> Result<(), CabiError> {
 
 /// Pull the next surfaced event already buffered on the stream without blocking.
 /// Returns `None` when nothing is ready yet; skips bracket/meta events; maps a
-/// closed stream to [`FfiEvent::Done`].
+/// closed stream to [`FfiEvent::Closed`].
 fn next_ready(stream: &mut SessionEventStream) -> Option<FfiEvent> {
     let waker = Waker::from(Arc::new(NoopWake));
     let mut context = Context::from_waker(&waker);
@@ -475,7 +499,7 @@ fn next_ready(stream: &mut SessionEventStream) -> Option<FfiEvent> {
 
 /// Pull the next surfaced event, waiting up to `timeout_ms`. Returns `None` on
 /// timeout (the stream is retained for a later `receive`); skips bracket/meta
-/// events; maps a closed stream to [`FfiEvent::Done`].
+/// events; maps a closed stream to [`FfiEvent::Closed`].
 fn next_within(stream: &mut SessionEventStream, timeout_ms: u32) -> Option<FfiEvent> {
     let abort = AtomicBool::new(false);
     let mut timer = EspIdfTimer;
@@ -623,6 +647,15 @@ fn open_session_error(error: AgentError) -> CabiError {
         AgentError::OpenSession(OpenSessionError::AlreadyOpen(_)) => CabiError::InvalidState,
         AgentError::OpenSession(OpenSessionError::WorkerStopped) => CabiError::InvalidState,
         other => CabiError::Agent(other),
+    }
+}
+
+fn session_control_error(error: SessionControlError) -> CabiError {
+    match error {
+        SessionControlError::SessionClosed(_) => CabiError::NotFound,
+        SessionControlError::Busy(_) | SessionControlError::WorkerStopped => {
+            CabiError::InvalidState
+        }
     }
 }
 

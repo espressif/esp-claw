@@ -57,7 +57,7 @@ pub enum InitLoggerError {
     },
     /// A global `log` logger was already installed (`log` allows exactly one).
     #[error("a global logger is already installed")]
-    SetLogger(#[from] log::SetLoggerError),
+    SetLogger,
 }
 
 /// Device-only `log::Log` backend: bridges the `log` facade to `claw_sys`'s
@@ -117,7 +117,7 @@ pub fn init_logger(max_level: LevelFilter, output: LogOutput) -> Result<(), Init
 fn install_logger(max_level: LevelFilter, _output: LogOutput) -> Result<(), InitLoggerError> {
     // Device output always goes through `ESP_LOGx`; `_output` (file redirection)
     // is a host-target convenience and is intentionally ignored here.
-    log::set_logger(&LOGGER)?;
+    log::set_logger(&LOGGER).map_err(|_| InitLoggerError::SetLogger)?;
     log::set_max_level(max_level);
     Ok(())
 }
@@ -178,7 +178,7 @@ fn install_logger(max_level: LevelFilter, output: LogOutput) -> Result<(), InitL
             .write_style(env_logger::WriteStyle::Never);
     }
 
-    builder.try_init()?;
+    builder.try_init().map_err(|_| InitLoggerError::SetLogger)?;
     Ok(())
 }
 

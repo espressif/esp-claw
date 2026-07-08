@@ -11,6 +11,7 @@ idf_component_register(
         newlib
         freertos
         pthread
+    WHOLE_ARCHIVE
 )
 
 set(claw_rust_target "xtensa-esp32s3-espidf")

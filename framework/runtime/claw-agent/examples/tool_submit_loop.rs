@@ -22,6 +22,7 @@ use claw_api::{BackendKind, ClawApiConfig};
 use claw_interface::{
     BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp, StdThread, TokioExecutor,
 };
+use claw_log::{LevelFilter, LogOutput, TracingConfig};
 use claw_tool::{SyncToolHandler, Tool, ToolInvocation, ToolOutput, ToolResult, ToolSpec};
 use futures_lite::StreamExt;
 
@@ -68,6 +69,12 @@ fn scripted_llm() -> ClawApiConfig {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    claw_log::init_logger(LevelFilter::Info, LogOutput::Stderr)?;
+    claw_log::init_tracing(
+        TracingConfig::default()
+            .with_context_group_keys("run", ["session", "turn", "agent", "iteration"]),
+    )?;
+
     // 1. Build the system. Hermetic backends (in-memory fs + scripted LLM) keep
     //    the example offline and deterministic.
     SharedScriptHttp::install(vec![assistant_text(
@@ -79,7 +86,10 @@ async fn main() -> anyhow::Result<()> {
         TokioExecutor,
     >(
         scripted_llm(),
-        claw_agent::AgentPersistenceConfig::new("/mem"),
+        claw_agent::AgentPersistenceConfig {
+            persistence_root: "/mem".to_string(),
+            skill_roots: Vec::new(),
+        },
     )?;
     system
         .tool_registry()
@@ -103,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
             SessionEvent::Reasoning { text } => println!("  [thinking] {text}"),
             SessionEvent::Tools { names } => println!("  [tools] {}", names.join(", ")),
             SessionEvent::Error { message } => println!("  [error] {message}"),
-            SessionEvent::TurnEnded => break,
+            SessionEvent::TurnEnded { .. } => break,
             other => println!("  [{other:?}]"),
         }
     }

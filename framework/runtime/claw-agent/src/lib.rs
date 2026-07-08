@@ -10,7 +10,7 @@ use std::sync::Arc;
 use claw_api::ClawApiConfig;
 pub use claw_core::{
     IterationId, OpenSessionError, SessionControl, SessionControlError, SessionEvent,
-    SessionEventStream, SessionId, TurnCause,
+    SessionEventStream, SessionId, TurnCause, TurnId,
 };
 use claw_core::{Orchestrator, OrchestratorBuildError};
 use claw_interface::{ClawExecutor, ClawFs, ClawHttp, ClawThread, ClawTimer, FsError};
@@ -162,6 +162,19 @@ where
     pub fn list_sessions(&self) -> Vec<SessionId> {
         self.orchestrator.session_list()
     }
+
+    /// Delete a live conversation session.
+    ///
+    /// If the session is currently open, its event stream receives
+    /// [`SessionEvent::Closed`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionControlError`] when the session is already gone or the
+    /// orchestrator worker is stopped.
+    pub fn delete_session(&self, session: SessionId) -> Result<(), SessionControlError> {
+        self.orchestrator.session_delete(session)
+    }
 }
 
 #[cfg(feature = "host-backends")]
@@ -274,9 +287,23 @@ mod tests {
         block_on(async move {
             let mut collected = Vec::new();
             while let Some(event) = events.next().await {
-                let ended = event == SessionEvent::TurnEnded;
+                let ended = matches!(event, SessionEvent::TurnEnded { .. });
                 collected.push(event);
                 if ended {
+                    break;
+                }
+            }
+            collected
+        })
+    }
+
+    fn drain_until_closed(events: &mut SessionEventStream) -> Vec<SessionEvent> {
+        block_on(async move {
+            let mut collected = Vec::new();
+            while let Some(event) = events.next().await {
+                let closed = event == SessionEvent::Closed;
+                collected.push(event);
+                if closed {
                     break;
                 }
             }
@@ -297,10 +324,14 @@ mod tests {
         assert_eq!(
             events.first(),
             Some(&SessionEvent::TurnStarted {
+                turn: TurnId(1),
                 cause: TurnCause::UserSubmit
             })
         );
-        assert_eq!(events.last(), Some(&SessionEvent::TurnEnded));
+        assert_eq!(
+            events.last(),
+            Some(&SessionEvent::TurnEnded { turn: TurnId(1) })
+        );
         let outputs: Vec<&str> = events
             .iter()
             .filter_map(|event| match event {
@@ -368,10 +399,14 @@ mod tests {
         assert!(matches!(
             events.first(),
             Some(SessionEvent::TurnStarted {
+                turn: TurnId(1),
                 cause: TurnCause::UserSubmit
             })
         ));
-        assert_eq!(events.last(), Some(&SessionEvent::TurnEnded));
+        assert_eq!(
+            events.last(),
+            Some(&SessionEvent::TurnEnded { turn: TurnId(1) })
+        );
     }
 
     #[test]
@@ -382,32 +417,43 @@ mod tests {
         let (control, mut events) = system.open_session(session).unwrap();
 
         block_on(async {
-            control.submit("delete me").await.unwrap();
+            control.submit("close me").await.unwrap();
             control.close_session().await.unwrap();
         });
-        let events = block_on(async {
-            let mut collected = Vec::new();
-            while let Some(event) = events.next().await {
-                let closed = event == SessionEvent::Closed;
-                collected.push(event);
-                if closed {
-                    break;
-                }
-            }
-            collected
-        });
+        let events = drain_until_closed(&mut events);
 
         assert_eq!(events.last(), Some(&SessionEvent::Closed));
         assert!(
             !events
                 .iter()
                 .any(|event| matches!(event, SessionEvent::Output { .. })),
-            "deleted stream should be cancelled without output: {events:?}"
+            "closed stream should be cancelled without output: {events:?}"
         );
+        assert!(system.list_sessions().contains(&session));
         assert!(
             block_on(control.submit("after close")).is_err(),
-            "closed session should reject new submits"
+            "closed control should reject new submits"
         );
+    }
+
+    #[test]
+    fn delete_session_removes_session_and_closes_open_stream() {
+        let _script = SharedScriptHttp::serialize();
+        let system = test_system(vec![]);
+        let session = system.new_session();
+        let (_control, mut events) = system.open_session(session).unwrap();
+
+        system.delete_session(session).unwrap();
+        let events = drain_until_closed(&mut events);
+
+        assert_eq!(events.last(), Some(&SessionEvent::Closed));
+        assert!(!system.list_sessions().contains(&session));
+        assert!(matches!(
+            system.open_session(session),
+            Err(AgentError::OpenSession(OpenSessionError::SessionNotFound(
+                missing
+            ))) if missing == session
+        ));
     }
 
     fn test_system(bodies: Vec<String>) -> TestSystem {

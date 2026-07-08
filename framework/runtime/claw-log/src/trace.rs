@@ -56,7 +56,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::{self, Write as _};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -165,6 +164,10 @@ fn id_or_none(id: u64) -> String {
     } else {
         id.to_string()
     }
+}
+
+fn raw_id(id: &Id) -> u64 {
+    id.into_u64()
 }
 
 /// Refcounted slot in the global span map (`tracing` may `clone_span`).
@@ -308,7 +311,9 @@ fn sanitize_token(input: &str) -> String {
 pub struct FlatTreeSubscriber<S: TraceSink> {
     /// Anchor for the monotonic `<ts>` column (ms since this subscriber was built).
     start: Instant,
-    next_id: AtomicU64,
+    /// Monotonic span id allocator. Use a mutex, not `AtomicU64`: ESP targets do
+    /// not consistently provide native 64-bit atomics.
+    next_id: Mutex<u64>,
     spans: Mutex<HashMap<u64, SpanSlot>>,
     sink: S,
     /// Target-prefix allowlist. Empty means "accept every target"; otherwise a
@@ -334,7 +339,7 @@ impl<S: TraceSink> FlatTreeSubscriber<S> {
         Self {
             start: Instant::now(),
             // `span::Id` must be non-zero; start at 1 and reserve 0 for "no span".
-            next_id: AtomicU64::new(1),
+            next_id: Mutex::new(1),
             spans: Mutex::new(HashMap::new()),
             sink,
             allowed_prefixes: Vec::new(),
@@ -391,6 +396,16 @@ impl<S: TraceSink> FlatTreeSubscriber<S> {
         self.spans
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
+    }
+
+    fn next_span_id(&self) -> u64 {
+        let mut next_id = self
+            .next_id
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        let id = *next_id;
+        *next_id = next_id.saturating_add(1);
+        id
     }
 
     /// Milliseconds since the subscriber was built (the `<ts>` column).
@@ -457,7 +472,7 @@ impl<S: TraceSink + 'static> Subscriber for FlatTreeSubscriber<S> {
         let parent_context = self.normalize_context(parent_context);
         let context = merge_grouped_context(parent_context.clone(), visitor.context);
 
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let id = self.next_span_id();
 
         // `enter` line == span creation (one pair per span; not per poll). The
         // span is pushed onto the stack later, in the `enter` callback.
@@ -534,7 +549,7 @@ impl<S: TraceSink + 'static> Subscriber for FlatTreeSubscriber<S> {
         // No line here: the `enter` line is emitted at creation. This only
         // maintains the per-thread stack so events resolve their enclosing span
         // and children inherit context.
-        let id = span.into_u64();
+        let id = raw_id(span);
         let record = self.lock().get(&id).map(|slot| slot.record.clone());
         if let Some(record) = record {
             STACK.with(|stack| stack.borrow_mut().push((id, record)));
@@ -545,7 +560,7 @@ impl<S: TraceSink + 'static> Subscriber for FlatTreeSubscriber<S> {
         // No line here: the `exit` line is emitted at close. This only pops the
         // per-thread stack. Spans are entered/exited LIFO per thread (RAII
         // guards), so the top is this span; guard against a mismatch just in case.
-        let id = span.into_u64();
+        let id = raw_id(span);
         STACK.with(|stack| {
             let mut stack = stack.borrow_mut();
             if matches!(stack.last(), Some((top, _)) if *top == id) {
@@ -555,14 +570,15 @@ impl<S: TraceSink + 'static> Subscriber for FlatTreeSubscriber<S> {
     }
 
     fn clone_span(&self, id: &Id) -> Id {
-        if let Some(slot) = self.lock().get_mut(&id.into_u64()) {
+        let raw = raw_id(id);
+        if let Some(slot) = self.lock().get_mut(&raw) {
             slot.refs = slot.refs.saturating_add(1);
         }
         id.clone()
     }
 
     fn try_close(&self, id: Id) -> bool {
-        let raw = id.into_u64();
+        let raw = raw_id(&id);
         // Drop the last reference under the lock; emit the `exit` line (span
         // destruction == one pair per span) only when the span is actually gone.
         let closed = {

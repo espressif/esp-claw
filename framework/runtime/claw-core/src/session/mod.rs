@@ -4,11 +4,18 @@ use std::collections::HashSet;
 use std::sync::{Mutex, MutexGuard};
 
 crate::define_prefixed_id!(SessionId, "session-", "session");
+crate::define_prefixed_id!(TurnId, "turn-", "turn");
 
 crate::define_id_allocator!(
     /// Hands out process-unique [`SessionId`]s for the current runtime.
     SessionIdAllocator(SessionId),
     SessionId(1)
+);
+
+crate::define_id_allocator!(
+    /// Hands out session-local [`TurnId`]s for one open session.
+    pub(crate) TurnIdAllocator(TurnId),
+    TurnId(1)
 );
 
 // ---------------------------------------------------------------------------
@@ -112,5 +119,11 @@ mod tests {
     #[test]
     fn session_id_display_matches_wire_format() {
         assert_eq!(SessionId(1).to_string(), "session-1");
+    }
+
+    #[test]
+    fn turn_id_serializes_to_prefixed_string() {
+        let value = serde_json::to_value(TurnId(1)).unwrap();
+        assert_eq!(value, json!("turn-1"));
     }
 }

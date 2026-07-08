@@ -42,6 +42,7 @@ host-backends = [
 ]
 dev = [
     "host-backends",
+    "dep:claw-log",
     "dep:dotenvy",
     "dep:anyhow",
     "dep:tokio",
@@ -60,6 +61,7 @@ claw-memory = { path = "../claw-memory" }
 # host-target backends are pulled in only by `host-backends`/`dev`, so the device
 # build (via claw-cabi) stays free of reqwest/std-thread.
 claw-interface = { path = "../claw-interface" }
+claw-log = { path = "../claw-log", optional = true }
 thiserror = "2"
 # Dev-only: ergonomic errors for the `claw-agent-chat` bin and the examples.
 anyhow = { version = "1", optional = true }

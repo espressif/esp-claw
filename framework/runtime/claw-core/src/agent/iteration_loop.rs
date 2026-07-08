@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde_json::Value;
+use tracing::Instrument as _;
 
 use claw_api::{ChatError, ChatRequest, ClawApiAsync, LlmResponse, RetryPolicy};
 use claw_interface::{Cancel, ClawHttp, ClawTimer};
@@ -217,7 +218,8 @@ pub struct IterationLoop<'a, H: ClawHttp, Timer: ClawTimer> {
 impl<H: ClawHttp, Timer: ClawTimer> IterationLoop<'_, H, Timer> {
     /// Execute exactly one iteration: LLM chat → optional tool execution.
     pub async fn run(self, step: IterationStep<'_>) -> IterationResult {
-        run_one_iteration(self, step).await
+        let span = tracing::info_span!("iteration_loop", run.iteration = %step.iteration_id);
+        run_one_iteration(self, step).instrument(span).await
     }
 }
 
@@ -241,6 +243,7 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
         IterationCheckpoint::BeforeLlmHttp,
         AppendedMessages::empty(),
     ) {
+        tracing::warn!(name: "preempted", checkpoint = "before_llm_http");
         return Ok(IterationOutcome::Preempted(outcome));
     }
 
@@ -256,12 +259,14 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
         Ok(resp) => resp,
         Err(llm_err) => {
             if llm_http_preempted(loop_.interruption, &llm_err) {
+                tracing::warn!(name: "preempted", checkpoint = "in_llm_http_abort");
                 return Ok(IterationOutcome::Preempted(PreemptedOutcome {
                     iteration_id,
                     checkpoint: IterationCheckpoint::InLlmHttpAbort,
                     produced: AppendedMessages::empty(),
                 }));
             }
+            tracing::error!(name: "chat_failed", kind = "chat");
             return Err(IterationLoopError::Chat(llm_err));
         }
     };
@@ -280,10 +285,12 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
             IterationCheckpoint::AfterLlmBeforeTool,
             AppendedMessages::empty(),
         ) {
+            tracing::warn!(name: "preempted", checkpoint = "after_llm_before_tool");
             return Ok(IterationOutcome::Preempted(outcome));
         }
 
         let text = llm_response.text.clone().unwrap_or_default();
+        tracing::info!(name: "completed", output_bytes = text.len() as u64);
         return Ok(IterationOutcome::Completed(CompletedOutcome {
             iteration_id,
             kind: CompletedKind::PlainText(PlainTextOutcome {
@@ -299,8 +306,14 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
         IterationCheckpoint::AfterLlmBeforeTool,
         AppendedMessages::empty(),
     ) {
+        tracing::warn!(name: "preempted", checkpoint = "after_llm_before_tool");
         return Ok(IterationOutcome::Preempted(outcome));
     }
+
+    tracing::info!(
+        name: "tool_calls",
+        count = llm_response.tool_calls.len() as u64,
+    );
 
     // Tool names for this iteration. Only build the payload when the sink will
     // keep it (disabled subagent sinks would drop the clones).
@@ -315,6 +328,14 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
     }
 
     if let Err(err) = append_assistant_tool_calls(&mut appended.0, &llm_response) {
+        let kind = match &err {
+            IterationLoopError::MessagesNotArray => "messages_not_array",
+            IterationLoopError::MissingAssistantMessage => "missing_assistant_message",
+            IterationLoopError::MalformedAssistantMessage => "malformed_assistant_message",
+            IterationLoopError::Chat(_) => "chat",
+            IterationLoopError::Tools(_) => "tools",
+        };
+        tracing::error!(name: "assistant_tool_calls_invalid", kind);
         return Err(err);
     }
 
@@ -328,12 +349,28 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
     )
     .await
     {
-        ToolRoundResult::Completed { runs } => Ok(IterationOutcome::Completed(CompletedOutcome {
-            iteration_id,
-            kind: CompletedKind::Tools(ToolsOutcome { appended, runs }),
-        })),
-        ToolRoundResult::Preempted(outcome) => Ok(IterationOutcome::Preempted(outcome)),
-        ToolRoundResult::Failed(err) => Err(err),
+        ToolRoundResult::Completed { runs } => {
+            tracing::info!(name: "tool_round_completed", count = runs.len() as u64);
+            Ok(IterationOutcome::Completed(CompletedOutcome {
+                iteration_id,
+                kind: CompletedKind::Tools(ToolsOutcome { appended, runs }),
+            }))
+        }
+        ToolRoundResult::Preempted(outcome) => {
+            tracing::warn!(name: "preempted", checkpoint = "before_tool");
+            Ok(IterationOutcome::Preempted(outcome))
+        }
+        ToolRoundResult::Failed(err) => {
+            let kind = match &err {
+                IterationLoopError::MessagesNotArray => "messages_not_array",
+                IterationLoopError::MissingAssistantMessage => "missing_assistant_message",
+                IterationLoopError::MalformedAssistantMessage => "malformed_assistant_message",
+                IterationLoopError::Chat(_) => "chat",
+                IterationLoopError::Tools(_) => "tools",
+            };
+            tracing::error!(name: "tool_round_failed", kind);
+            Err(err)
+        }
     }
 }
 
@@ -409,14 +446,24 @@ async fn run_tool_calls(
     let mut runs: Vec<ToolRun> = Vec::with_capacity(response.tool_calls.len());
 
     for tc in &response.tool_calls {
+        let span = tracing::info_span!("toolcall", tool = %tc.display_name());
         if let Some(outcome) = check_preempt_at_checkpoint(
             interruption,
             iteration_id,
             IterationCheckpoint::BeforeTool,
             appended.clone(),
         ) {
+            span.in_scope(|| {
+                tracing::warn!(name: "preempted", checkpoint = "before_tool");
+            });
             return ToolRoundResult::Preempted(outcome);
         }
+        span.in_scope(|| {
+            tracing::info!(
+                name: "arguments",
+                argument_bytes = tc.arguments_json.len() as u64,
+            );
+        });
 
         // The runner owns the decision (soft-hide -> permission -> execute); the
         // loop owns preemption and message assembly. A matched tool message is
@@ -429,10 +476,16 @@ async fn run_tool_calls(
         }) {
             Ok(call) => call,
             Err(error) => {
+                span.in_scope(|| {
+                    tracing::warn!(name: "parse_failed", kind = "invalid_invocation");
+                });
                 let content = error.to_string();
                 if let Err(error) = push_tool_message(appended, &tc.id, content, false) {
                     return ToolRoundResult::Failed(error);
                 }
+                span.in_scope(|| {
+                    tracing::info!(name: "result", ok = false, blocked = false);
+                });
                 runs.push(ToolRun {
                     name: tc.display_name().to_string(),
                     ok: false,
@@ -441,7 +494,7 @@ async fn run_tool_calls(
                 continue;
             }
         };
-        let outcome = runner.run(&call).await;
+        let outcome = runner.run(&call).instrument(span.clone()).await;
         let (content, ok, blocked, approval) = match outcome {
             ToolRunOutcome::Ran { content, ok } => (content, ok, false, None),
             ToolRunOutcome::Blocked { content } => (content, false, true, None),
@@ -449,6 +502,13 @@ async fn run_tool_calls(
                 (content, false, false, Some(approval))
             }
         };
+        span.in_scope(|| {
+            if blocked || (!ok && approval.is_none()) {
+                tracing::warn!(name: "result", ok, blocked);
+            } else {
+                tracing::info!(name: "result", ok, blocked);
+            }
+        });
 
         if let Err(error) = push_tool_message(appended, &tc.id, content, ok) {
             return ToolRoundResult::Failed(error);

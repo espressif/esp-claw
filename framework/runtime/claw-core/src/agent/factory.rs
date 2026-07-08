@@ -243,21 +243,35 @@ impl<
         persistence_dir: &str,
         skill_roots: &[String],
     ) -> Result<Self, FsAgentFactoryError> {
+        let span = tracing::info_span!("agent.factory");
+        let _enter = span.enter();
         if persistence_dir.trim().is_empty() {
+            tracing::error!(name: "missing_persistence_dir", reason = "empty");
             return Err(FsAgentFactoryError::MissingPersistenceDir);
         }
         let layout = FsAgentFactoryLayout::new(persistence_dir);
         let storage = Filesystem::default();
 
         let extraction_llm =
-            ClawApiAsync::init(llm_config.clone(), Http::default(), Timer::default())
-                .map_err(|error| FsAgentFactoryError::ExtractionLlm(error.to_string()))?;
-        let long_term = LongTermDeps::from_root(
+            match ClawApiAsync::init(llm_config.clone(), Http::default(), Timer::default()) {
+                Ok(llm) => llm,
+                Err(error) => {
+                    tracing::error!(name: "extraction_llm_init_failed", kind = "init");
+                    return Err(FsAgentFactoryError::ExtractionLlm(error.to_string()));
+                }
+            };
+        let long_term = match LongTermDeps::from_root(
             &layout.long_term_dir,
             storage.clone(),
             RuleBasedTierClassifier::shared(),
             LlmExtractor::shared(extraction_llm),
-        )?;
+        ) {
+            Ok(deps) => deps,
+            Err(error) => {
+                tracing::error!(name: "long_term_memory_init_failed", kind = "init");
+                return Err(error.into());
+            }
+        };
 
         let profile = ProfileStore::new(ProfileConfig::new(&layout.profile_dir), storage.clone());
         let skills = build_skill_registry(&storage, skill_roots);
@@ -285,14 +299,18 @@ fn build_skill_registry<F: ClawFs + Clone + 'static>(
     storage: &F,
     skill_roots: &[String],
 ) -> Arc<FsSkillRegistry<F>> {
+    let span = tracing::info_span!("skill.catalog");
+    let _enter = span.enter();
     let mut registry = FsSkillRegistry::new(storage.clone());
     for root in skill_roots {
         if !storage.exists(root) {
+            tracing::warn!(name: "root_missing", "");
             continue;
         }
         match registry.set_root(root.as_str()) {
             Ok(next) => registry = next,
             Err(_) => {
+                tracing::warn!(name: "scan_failed", kind = "set_root");
                 return Arc::new(FsSkillRegistry::new(storage.clone()));
             }
         }
@@ -328,17 +346,39 @@ impl<
         host: Arc<dyn GraphHost>,
         inherited_context: Arc<[Block<'static>]>,
     ) -> Result<Box<dyn Agent>, String> {
+        let span = tracing::info_span!("agent.create");
+        let _enter = span.enter();
         // The config is pure data. Registry tools are projected here, then
         // manifest tools are added as local tools before the agent sees them.
-        let mut config = self
-            .resolve_config(kind)
-            .map_err(|error| format!("resolving config for kind '{kind}': {error}"))?;
+        let mut config = match self.resolve_config(kind) {
+            Ok(config) => config,
+            Err(error) => {
+                match &error {
+                    AgentConfigError::UnknownKind(_) => {
+                        tracing::error!(name: "unknown_kind", kind = %kind.as_str());
+                    }
+                    AgentConfigError::UnknownTool(tool) => {
+                        tracing::error!(
+                            name: "unknown_tool",
+                            kind = %kind.as_str(),
+                            tool = %tool,
+                        );
+                    }
+                }
+                return Err(format!("resolving config for kind '{kind}': {error}"));
+            }
+        };
         let is_root = placement.is_root();
         let mut tools = self.tools.tool_set();
         for tool in config.tools.drain(..) {
-            tools
-                .add_tool(tool)
-                .map_err(|error| format!("assembling tools for {kind} agent {id}: {error}"))?;
+            if let Err(error) = tools.add_tool(tool) {
+                tracing::error!(
+                    name: "unknown_tool",
+                    kind = %kind.as_str(),
+                    tool = "registry",
+                );
+                return Err(format!("assembling tools for {kind} agent {id}: {error}"));
+            }
         }
 
         // Roots and subagents live in separate subtrees keyed by session id vs
@@ -347,11 +387,21 @@ impl<
         let (subdir, conversation_id) = placement.location();
         let transcript_dir = join_storage_path(&self.transcript_dir, subdir);
         let transcript_config = TranscriptConfig::new(&transcript_dir);
-        let store = TranscriptStore::new(conversation_id, transcript_config, self.storage.clone())
-            .map_err(|error| format!("opening transcript for {kind} agent {id}: {error}"))?;
+        let store =
+            match TranscriptStore::new(conversation_id, transcript_config, self.storage.clone()) {
+                Ok(store) => store,
+                Err(error) => {
+                    tracing::error!(
+                        name: "transcript_open_failed",
+                        agent = %id,
+                        kind = %kind.as_str(),
+                    );
+                    return Err(format!("opening transcript for {kind} agent {id}: {error}"));
+                }
+            };
         // The LLM client (and its transport) is built inside the agent from this
         // shared config plus the factory's transport type; nothing is minted here.
-        let mut agent = GenericAgent::<Http, Timer>::new(
+        let mut agent = match GenericAgent::<Http, Timer>::new(
             id,
             self.llm_config.clone(),
             store,
@@ -360,8 +410,17 @@ impl<
             host,
             is_root,
             inherited_context,
-        )
-        .map_err(|error| format!("building {kind} agent {id}: {error}"))?;
+        ) {
+            Ok(agent) => agent,
+            Err(error) => {
+                tracing::error!(
+                    name: "agent_build_failed",
+                    agent = %id,
+                    kind = %kind.as_str(),
+                );
+                return Err(format!("building {kind} agent {id}: {error}"));
+            }
+        };
 
         // Attach editable global profile context to every agent. Only a root agent
         // gets the mutation tools; subagents read profile through context but do
@@ -372,33 +431,61 @@ impl<
             ProfileTools::Disabled
         };
         let profile_adapter = ProfileContextAdapter::new(self.profile.clone(), profile_tools);
-        agent
-            .register_context_adapter(Box::new(profile_adapter))
-            .map_err(|error| format!("attaching profile context to {id}: {error}"))?;
+        if let Err(error) = agent.register_context_adapter(Box::new(profile_adapter)) {
+            tracing::error!(
+                name: "context_adapter_attach_failed",
+                agent = %id,
+                adapter = "profile",
+                kind = %kind.as_str(),
+            );
+            return Err(format!("attaching profile context to {id}: {error}"));
+        }
 
         // Attach long-term memory (always): a per-agent-kind store derived from
         // the explicit long-term root plus a clone of the shared global store.
         let long_term = &self.long_term;
         let agent_dir = long_term.agent_dir_for(kind);
         let adapter = LongTermMemoryContextAdapter::new(
-            agent_store(&agent_dir, self.storage.clone())
-                .map_err(|error| format!("loading long-term memory for {id}: {error}"))?,
+            match agent_store(&agent_dir, self.storage.clone()) {
+                Ok(store) => store,
+                Err(error) => {
+                    tracing::error!(
+                        name: "context_adapter_attach_failed",
+                        agent = %id,
+                        adapter = "long_term",
+                        kind = %kind.as_str(),
+                    );
+                    return Err(format!("loading long-term memory for {id}: {error}"));
+                }
+            },
             long_term.global.clone(),
             Arc::clone(&long_term.classifier),
             Arc::clone(&long_term.extractor),
         );
-        agent
-            .register_context_adapter(Box::new(adapter))
-            .map_err(|error| format!("attaching long-term memory to {id}: {error}"))?;
+        if let Err(error) = agent.register_context_adapter(Box::new(adapter)) {
+            tracing::error!(
+                name: "context_adapter_attach_failed",
+                agent = %id,
+                adapter = "long_term",
+                kind = %kind.as_str(),
+            );
+            return Err(format!("attaching long-term memory to {id}: {error}"));
+        }
 
         // The goal is the agent's first task: seed it as a user message so the
         // agent has something to work on as soon as it is ticked.
         if !goal.trim().is_empty() {
-            agent
-                .send_command(AgentCommand::AppendMessage(goal))
-                .map_err(|error| format!("seeding goal for {id}: {error}"))?;
+            if let Err(error) = agent.send_command(AgentCommand::AppendMessage(goal)) {
+                tracing::error!(
+                    name: "goal_seed_failed",
+                    agent = %id,
+                    kind = %kind.as_str(),
+                );
+                return Err(format!("seeding goal for {id}: {error}"));
+            }
         }
 
+        tracing::info!(name: "created", agent = %id, kind = %kind.as_str());
         Ok(Box::new(agent))
     }
 
@@ -423,7 +510,13 @@ impl<
     ///
     /// The manifest's skill ids are catalog-only today: every agent sees the full
     /// scanned catalog rather than a manifest-filtered subset.
-    fn resolve_manifest_skills(&self, _manifest: &'static AgentManifest) -> SkillSet {
+    fn resolve_manifest_skills(&self, manifest: &'static AgentManifest) -> SkillSet {
+        if !manifest.skills.is_empty() {
+            tracing::info!(
+                name: "manifest_ids_catalog_only",
+                count = manifest.skills.len() as u64,
+            );
+        }
         self.skills.skill_set()
     }
 }

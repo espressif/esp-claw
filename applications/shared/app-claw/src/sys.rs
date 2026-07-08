@@ -163,6 +163,7 @@ mod imp {
             out_count: *mut usize,
         ) -> c_int;
         fn claw_agent_session_close(session_id: u32) -> c_int;
+        fn claw_agent_session_delete(session_id: u32) -> c_int;
         fn claw_agent_session_receive(
             session_id: u32,
             out_event: *mut ClawAgentEvent,
@@ -397,7 +398,7 @@ mod imp {
             return Err(Error::Stream("session id must be non-zero".to_owned()));
         }
 
-        let err = unsafe { claw_agent_session_close(session_id) };
+        let err = unsafe { claw_agent_session_delete(session_id) };
         if err == ESP_OK {
             return Ok(format!("deleted session_id={session_id}\n"));
         }

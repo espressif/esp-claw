@@ -16,4 +16,4 @@ pub use orchestrator::{
     OpenSessionError, Orchestrator, OrchestratorBuildError, SessionControl, SessionControlError,
     SessionEventStream,
 };
-pub use session::{DeliverError, SessionId};
+pub use session::{DeliverError, SessionId, TurnId};

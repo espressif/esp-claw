@@ -19,6 +19,7 @@ use claw_agent::{
     AgentPersistenceConfig, AgentSystem, SessionControl, SessionEvent, SessionEventStream,
 };
 use claw_api::{BackendKind, ClawApiConfig};
+use claw_log::{LevelFilter, LogOutput, TracingConfig};
 use futures_lite::StreamExt;
 
 const MEMORY_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/output/claw-agent-chat");
@@ -56,7 +57,7 @@ impl ChatDriver {
                 SessionEvent::Error { message } => {
                     print_event("error", &message, EventStyle::Error)
                 }
-                SessionEvent::TurnEnded | SessionEvent::Closed => break,
+                SessionEvent::TurnEnded { .. } | SessionEvent::Closed => break,
                 SessionEvent::TurnStarted { .. }
                 | SessionEvent::IterationStarted { .. }
                 | SessionEvent::IterationEnded => {}
@@ -109,6 +110,11 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
+    claw_log::init_logger(LevelFilter::Info, LogOutput::Stderr)?;
+    claw_log::init_tracing(
+        TracingConfig::default()
+            .with_context_group_keys("run", ["session", "turn", "agent", "iteration"]),
+    )?;
     load_env();
 
     let persistence = AgentPersistenceConfig {

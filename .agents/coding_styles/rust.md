@@ -55,3 +55,7 @@ unsafe_code = "forbid"
 - `forbid`: Strongest — `unsafe` code triggers a compile error and cannot be overridden with `allow`
 - `deny`: `unsafe` triggers a compile error but can be overridden with `allow` in specific modules
 - `warn` / `allow`: Not recommended for firmware where safety is critical
+
+## Reducing Boilerplate Code
+
+For converting enum members to strings (ignoring fields in the member), use `strum = { version = "0.28", features = ["derive"] }` and then use `#[derive(IntoStaticStr)]` for the enum member and you can call `(&your_enum).into()` to get static lifetime str.

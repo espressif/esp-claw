@@ -12,6 +12,7 @@
 use claw_utils::TruncatedText;
 
 use crate::agent::IterationId;
+use crate::session::TurnId;
 
 // The reasoning cap is a compile-time tier, not a runtime knob. Exactly one of
 // the mutually-exclusive `reasoning_short` / `reasoning_medium` / `reasoning_long`
@@ -71,6 +72,8 @@ pub enum TurnCause {
 pub enum SessionEvent {
     /// A root-visible turn started.
     TurnStarted {
+        /// The session-local turn this bracket opens.
+        turn: TurnId,
         /// What made this turn runnable.
         cause: TurnCause,
     },
@@ -98,7 +101,10 @@ pub enum SessionEvent {
     /// The current root iteration ended.
     IterationEnded,
     /// The turn ended.
-    TurnEnded,
+    TurnEnded {
+        /// The session-local turn this bracket closes.
+        turn: TurnId,
+    },
     /// This session work item failed.
     Error {
         /// A human-readable failure message.
@@ -165,6 +171,7 @@ mod tests {
         let sink = EventSink::disabled();
         assert!(!sink.is_enabled());
         sink.emit(SessionEvent::TurnStarted {
+            turn: TurnId(1),
             cause: TurnCause::UserSubmit,
         });
         sink.emit_reasoning("thinking hard");
@@ -175,6 +182,7 @@ mod tests {
         let (tx, rx) = async_channel::unbounded();
         let sink = EventSink::new(tx);
         sink.emit(SessionEvent::TurnStarted {
+            turn: TurnId(1),
             cause: TurnCause::UserSubmit,
         });
         let long = "a".repeat(REASONING_EVENT_LIMIT + 10);
@@ -185,6 +193,7 @@ mod tests {
         assert_eq!(
             rx.try_recv().unwrap(),
             SessionEvent::TurnStarted {
+                turn: TurnId(1),
                 cause: TurnCause::UserSubmit
             }
         );

@@ -15,6 +15,7 @@ crate-type = ["staticlib", "rlib"]
 claw-agent = { path = "../claw-agent" }
 claw-api = { path = "../claw-api" }
 claw-interface = { path = "../claw-interface" }
+claw-log = { path = "../claw-log" }
 claw-sys = { path = "../claw-sys" }
 claw-tool = { path = "../claw-tool" }
 # The `Stream` trait so `receive` can poll a submission's event stream directly.
