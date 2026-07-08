@@ -272,14 +272,12 @@ impl<F: ClawFs + 'static> LongTermMemoryContextAdapter<F> {
                     self.apply_op(op);
                 }
             }
-            Err(error) => {
-                tracing::warn!(%error, memory = %self.id, "memory extraction failed")
-            }
+            Err(_) => {}
         }
     }
 
     /// Apply one extractor-proposed [`MemoryOp`] to the stores. Best-effort: an
-    /// edit/removal naming an id the store no longer holds is logged, not fatal
+    /// edit/removal naming an id the store no longer holds is skipped, not fatal
     /// (the model may cite a fact a concurrent tool call already changed).
     fn apply_op(&self, op: MemoryOp) {
         match op {
@@ -296,14 +294,10 @@ impl<F: ClawFs + 'static> LongTermMemoryContextAdapter<F> {
                     tags: Some(item.tags),
                     keywords: Some(item.keywords),
                 };
-                if let Err(error) = self.stores.update(&id, patch) {
-                    tracing::warn!(%error, memory = %self.id, "memory replace skipped");
-                }
+                let _ = self.stores.update(&id, patch);
             }
             MemoryOp::Forget { id } => {
-                if let Err(error) = self.stores.forget(&id) {
-                    tracing::warn!(%error, memory = %self.id, "memory forget skipped");
-                }
+                let _ = self.stores.forget(&id);
             }
         }
     }
@@ -486,7 +480,7 @@ mod tests {
         let adapter = adapter();
         adapter.apply_op(MemoryOp::Add(fact("Has a dog")));
 
-        // An id the store never held is logged and skipped — never a panic, and
+        // An id the store never held is skipped — never a panic, and
         // the live set is untouched.
         adapter.apply_op(MemoryOp::Forget {
             id: MemoryId::from("g-999"),

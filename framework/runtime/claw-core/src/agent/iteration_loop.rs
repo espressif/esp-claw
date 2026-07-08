@@ -19,8 +19,6 @@ use claw_tool::{
     ToolSetError, ToolSetHandle,
 };
 
-use claw_utils::TruncatedText;
-
 use crate::event::{EventSink, SessionEvent};
 
 crate::define_prefixed_id!(IterationId, "iteration-", "iteration");
@@ -228,9 +226,6 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
     step: IterationStep<'_>,
 ) -> IterationResult {
     let iteration_id = step.iteration_id;
-    // One span per iteration; tool-call spans nest beneath it.
-    let _span =
-        tracing::info_span!("iteration_loop", conversation.iteration = %iteration_id).entered();
     // Open the iteration event bracket; the guard closes it (IterationEnded) on
     // every return path below.
     let events = loop_.events;
@@ -288,21 +283,7 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
             return Ok(IterationOutcome::Preempted(outcome));
         }
 
-        // Always emit a `toolcall` span so the trace keeps the consistent
-        // turn > agent > iteration_loop > toolcall shape. With no tool call this
-        // iteration, `tool=none` (and no `call_id`) marks the placeholder; a real
-        // call carries `tool=<name>,call_id=<id>` — same `tool=` key either way.
-        tracing::info_span!("toolcall", tool = "none").in_scope(|| {});
-
         let text = llm_response.text.clone().unwrap_or_default();
-        // Free-form model text goes in the message slot (after ` | `, line end):
-        // it may contain spaces/commas, which would break the `key=value` fields.
-        tracing::info!(
-            iteration = %iteration_id,
-            status = "done",
-            "{}",
-            TruncatedText::new(&text)
-        );
         return Ok(IterationOutcome::Completed(CompletedOutcome {
             iteration_id,
             kind: CompletedKind::PlainText(PlainTextOutcome {
@@ -320,8 +301,6 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
     ) {
         return Ok(IterationOutcome::Preempted(outcome));
     }
-
-    log_tool_call_names(iteration_id, &llm_response);
 
     // Tool names for this iteration. Only build the payload when the sink will
     // keep it (disabled subagent sinks would drop the clones).
@@ -386,8 +365,6 @@ fn check_preempt_at_checkpoint(
         return None;
     }
 
-    tracing::info!(iteration = %iteration_id, checkpoint = ?checkpoint, "iteration preempted");
-
     Some(PreemptedOutcome {
         iteration_id,
         checkpoint,
@@ -441,19 +418,10 @@ async fn run_tool_calls(
             return ToolRoundResult::Preempted(outcome);
         }
 
-        // One span per tool call, covering gating + invoke + result. It lives
-        // here (not in the runner / `ToolSet::invoke`) so a call refused by
-        // soft-hide or permission gating — which never reaches `invoke` — is still
-        // represented, and the "tool done" event below carries this span's `span=`.
-        let _span =
-            tracing::info_span!("toolcall", tool = tc.display_name(), call_id = %tc.id).entered();
-        // Tool arguments are arbitrary JSON (spaces/commas) -> message slot.
-        tracing::debug!("{}", TruncatedText::new(&tc.arguments_json));
-
         // The runner owns the decision (soft-hide -> permission -> execute); the
-        // loop owns preemption, spans, message assembly. A matched tool message is
-        // emitted for every call (even refused ones), so the patch stays
-        // well-formed (no dangling tool_call ids).
+        // loop owns preemption and message assembly. A matched tool message is
+        // emitted for every call (even refused ones), so the patch stays well-formed
+        // (no dangling tool_call ids).
         let call = match ToolInvocation::try_from(RawToolInvocation {
             id: Some(&tc.id),
             name: &tc.name,
@@ -462,12 +430,6 @@ async fn run_tool_calls(
             Ok(call) => call,
             Err(error) => {
                 let content = error.to_string();
-                tracing::info!(
-                    ok = false,
-                    blocked = false,
-                    "{}",
-                    TruncatedText::new(&content)
-                );
                 if let Err(error) = push_tool_message(appended, &tc.id, content, false) {
                     return ToolRoundResult::Failed(error);
                 }
@@ -487,8 +449,6 @@ async fn run_tool_calls(
                 (content, false, false, Some(approval))
             }
         };
-        // Tool output is free-form text -> message slot; keep ok/blocked as fields.
-        tracing::info!(ok, blocked, "{}", TruncatedText::new(&content));
 
         if let Err(error) = push_tool_message(appended, &tc.id, content, ok) {
             return ToolRoundResult::Failed(error);
@@ -526,23 +486,6 @@ fn push_tool_message(
     };
     runtime_arr.push(tool_message);
     Ok(())
-}
-
-fn log_tool_call_names(iteration_id: IterationId, response: &LlmResponse) {
-    if response.tool_calls.is_empty() {
-        return;
-    }
-    let names: Vec<&str> = response
-        .tool_calls
-        .iter()
-        .map(|tc| tc.display_name())
-        .collect();
-    tracing::debug!(
-        iteration = %iteration_id,
-        count = response.tool_calls.len(),
-        names = %names.join(","),
-        "llm tool calls"
-    );
 }
 
 #[cfg(test)]
@@ -830,40 +773,6 @@ mod tests {
         // The tool message is present (id matched, no dangling) and is an error.
         assert_eq!(appended.0[1]["tool_call_id"], "t1");
         assert_eq!(appended.0[1]["is_error"], true);
-    }
-
-    #[test]
-    fn log_tool_call_names_handles_empty_and_null_names() {
-        log_tool_call_names(
-            IterationId(1),
-            &LlmResponse {
-                text: None,
-                reasoning_content: None,
-                raw_message_json: None,
-                tool_calls: vec![],
-            },
-        );
-
-        log_tool_call_names(
-            IterationId(2),
-            &LlmResponse {
-                text: None,
-                reasoning_content: None,
-                raw_message_json: None,
-                tool_calls: vec![
-                    ToolCall {
-                        id: "t1".into(),
-                        name: String::new(),
-                        arguments_json: "{}".into(),
-                    },
-                    ToolCall {
-                        id: "t2".into(),
-                        name: "files".into(),
-                        arguments_json: "{}".into(),
-                    },
-                ],
-            },
-        );
     }
 
     #[test]

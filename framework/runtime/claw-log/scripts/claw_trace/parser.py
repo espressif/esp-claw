@@ -29,7 +29,7 @@ from typing import Iterable, Iterator, Optional
 from .adapters import LineAdapter
 
 # The leading token of an incremental-context block names its group:
-# ``<context=conversation …>``.
+# ``<context=run …>``.
 _CONTEXT_GROUP_KEY = 'context'
 
 # Sentinel a record uses for "no span" / "no parent".
@@ -64,7 +64,7 @@ class TraceRecord:
 
     ``context`` is the incremental context this ``enter`` *opens*, grouped by
     context group: ``{group: {key: value}}`` (e.g.
-    ``{"conversation": {"session": "session-1"}}``). Empty for ``exit``/``event``
+    ``{"run": {"session": "session-1"}}``). Empty for ``exit``/``event``
     and for ``enter`` lines that open no group.
     """
 

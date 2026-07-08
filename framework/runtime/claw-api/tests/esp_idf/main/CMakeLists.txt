@@ -38,7 +38,7 @@ set(claw_api_rust_lib
 # toolchain accepts -Z).
 add_custom_target(claw_api_selftest_build
     BYPRODUCTS "${claw_api_rust_lib}"
-    COMMAND cargo build --${claw_api_rust_profile} -p claw-api-selftest
+    COMMAND cargo +esp build --${claw_api_rust_profile} -p claw-api-selftest
             --target ${claw_api_rust_target} -Z build-std=std,panic_abort
     WORKING_DIRECTORY "${claw_api_rust_dir}"
     COMMENT "Building claw-api-selftest Rust staticlib (${claw_api_rust_target})"

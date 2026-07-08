@@ -27,42 +27,18 @@ pub type AgentResult<T> = Result<T, AgentError>;
 /// factory scans to populate every agent's skill catalog.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentPersistenceConfig {
-    dir: String,
+    pub persistence_root: String,
     /// Skill roots in priority order (e.g. DATA before SYSTEM). Empty means no
     /// filesystem skills are loaded.
-    skill_roots: Vec<String>,
-}
-
-impl AgentPersistenceConfig {
-    /// Build storage config from the required root directory. No skill roots are
-    /// attached; use [`AgentPersistenceConfig::with_skill_roots`] to add them.
-    pub fn new(dir: &str) -> Self {
-        Self {
-            dir: dir.to_string(),
-            skill_roots: Vec::new(),
-        }
-    }
-
-    /// Attach the skill roots the factory scans, in priority order.
-    #[must_use]
-    pub fn with_skill_roots(mut self, skill_roots: Vec<String>) -> Self {
-        self.skill_roots = skill_roots;
-        self
-    }
+    pub skill_roots: Vec<String>,
 }
 
 /// What can go wrong while building or driving an [`AgentSystem`].
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
-    /// No storage directory was provided.
-    #[error("agent storage directory is required")]
-    MissingPersistenceDir,
-    /// The dedicated extraction LLM client failed to init.
-    #[error("failed to initialize the extraction LLM client: {0}")]
-    ExtractionLlm(String),
-    /// A long-term memory journal exists but could not be read at startup.
-    #[error("failed to load long-term memory: {0}")]
-    LongTermInit(String),
+    /// Building the core orchestrator failed.
+    #[error(transparent)]
+    Orchestrator(#[from] OrchestratorBuildError),
     /// The tool registry failed.
     #[error(transparent)]
     Tool(#[from] ToolRegistryError),
@@ -76,79 +52,56 @@ pub enum AgentError {
         #[source]
         source: FsError,
     },
-    /// The orchestrator's drive worker could not be started.
-    #[error("failed to start the orchestrator worker: {0}")]
-    Worker(String),
-}
-
-impl From<OrchestratorBuildError> for AgentError {
-    fn from(error: OrchestratorBuildError) -> Self {
-        match error {
-            OrchestratorBuildError::MissingPersistenceDir => Self::MissingPersistenceDir,
-            OrchestratorBuildError::ExtractionLlm(message) => Self::ExtractionLlm(message),
-            OrchestratorBuildError::LongTermInit(message) => Self::LongTermInit(message),
-            OrchestratorBuildError::Worker(message) => Self::Worker(message),
-        }
-    }
 }
 
 /// A ready-to-drive agent runtime.
 ///
-/// The `F`/`H`/`Timer` backends select which concrete filesystem, HTTP, and timer
-/// the orchestrator's drive worker uses; they are only needed at construction, so
-/// they are held as a marker (the built [`Orchestrator`] handle is backend-erased
-/// and `Send + Sync`).
-pub struct AgentSystem<F, H, Timer>
+/// The `Filesystem`/`Http`/`Timer` backends select which concrete filesystem,
+/// HTTP, and timer the orchestrator's drive worker uses; they are only needed at
+/// construction, so they are held as a marker (the built [`Orchestrator`] handle
+/// is backend-erased and `Send + Sync`).
+pub struct AgentSystem<Filesystem, Http, Timer>
 where
-    F: ClawFs + Clone + Default + 'static,
-    H: ClawHttp + Default + 'static,
+    Filesystem: ClawFs + Clone + Default + 'static,
+    Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     tools: Arc<ToolRegistry>,
     orchestrator: Orchestrator,
-    _marker: PhantomData<fn() -> (F, H, Timer)>,
+    _marker: PhantomData<fn() -> (Filesystem, Http, Timer)>,
 }
 
-impl<F, H, Timer> AgentSystem<F, H, Timer>
+impl<Filesystem, Http, Timer> AgentSystem<Filesystem, Http, Timer>
 where
-    F: ClawFs + Clone + Default + 'static,
-    H: ClawHttp + Default + 'static,
+    Filesystem: ClawFs + Clone + Default + 'static,
+    Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     /// Build a fully injectable agent system, spawning the orchestrator's drive
-    /// worker via the [`ClawThread`] policy `T` (`StdThread` on host,
+    /// worker via the [`ClawThread`] policy `Thread` (`StdThread` on host,
     /// `EspIdfThread` on device) and driving its `!Send` engine with the injected
-    /// [`ClawExecutor`] `E` (`TokioExecutor` on host, `EspIdfExecutor` on device).
+    /// [`ClawExecutor`] `Executor` (`TokioExecutor` on host,
+    /// `EspIdfExecutor` on device).
     /// Both are zero-sized policies selected purely by type parameter, like the
-    /// `F`/`H`/`Timer` backends.
+    /// `Filesystem`/`Http`/`Timer` backends.
     ///
     /// # Errors
     ///
     /// Returns [`AgentError`] when storage cleanup or orchestrator construction fails.
-    pub fn new<T, E>(
+    pub fn new<Thread, Executor>(
         llm_config: ClawApiConfig,
         persistence: AgentPersistenceConfig,
     ) -> AgentResult<Self>
     where
-        T: ClawThread,
-        E: ClawExecutor + 'static,
+        Thread: ClawThread,
+        Executor: ClawExecutor + 'static,
     {
-        let AgentPersistenceConfig {
-            dir: persistence_dir,
-            skill_roots,
-        } = persistence;
-        if persistence_dir.trim().is_empty() {
-            return Err(AgentError::MissingPersistenceDir);
-        }
-        let storage = F::default();
-        clear_storage_tree(&storage, &persistence_dir)?;
-
         let tools = Arc::new(ToolRegistry::new());
-        let orchestrator = Orchestrator::new::<F, H, Timer, T, E>(
+        let orchestrator = Orchestrator::new::<Filesystem, Http, Timer, Thread, Executor>(
             Arc::clone(&tools),
             llm_config,
-            persistence_dir,
-            skill_roots,
+            persistence.persistence_root,
+            persistence.skill_roots,
         )?;
 
         Ok(Self {
@@ -220,36 +173,6 @@ impl AgentSystem<DiskFs, RealHttp, TokioTimer> {
     /// Returns [`AgentError`] when construction fails.
     pub fn on_disk(llm: ClawApiConfig, persistence: AgentPersistenceConfig) -> AgentResult<Self> {
         Self::new::<StdThread, TokioExecutor>(llm, persistence)
-    }
-}
-
-fn join_storage_path(parent: &str, child: &str) -> String {
-    if parent == "/" {
-        return format!("/{child}");
-    }
-    let parent = parent.trim_end_matches('/');
-    if parent.is_empty() {
-        child.to_string()
-    } else {
-        format!("{parent}/{child}")
-    }
-}
-
-fn clear_storage_tree<F: ClawFs>(fs: &F, path: &str) -> AgentResult<()> {
-    match fs.list_dir(path) {
-        Ok(entries) => {
-            for entry in entries {
-                let child = join_storage_path(path, &entry);
-                clear_storage_tree(fs, &child)?;
-            }
-            let _ = fs.remove(path);
-            Ok(())
-        }
-        Err(FsError::NotFound) => Ok(()),
-        Err(source) => Err(AgentError::StorageClear {
-            path: path.to_string(),
-            source,
-        }),
     }
 }
 
@@ -491,7 +414,10 @@ mod tests {
         install_script(bodies);
         TestSystem::new::<StdThread, TokioExecutor>(
             llm_config(),
-            AgentPersistenceConfig::new("/mem"),
+            AgentPersistenceConfig {
+                persistence_root: "/mem".to_string(),
+                skill_roots: Vec::new(),
+            },
         )
         .unwrap()
     }
@@ -500,7 +426,10 @@ mod tests {
         install_script(bodies);
         SlowTestSystem::new::<StdThread, TokioExecutor>(
             llm_config(),
-            AgentPersistenceConfig::new("/mem"),
+            AgentPersistenceConfig {
+                persistence_root: "/mem".to_string(),
+                skill_roots: Vec::new(),
+            },
         )
         .unwrap()
     }

@@ -144,7 +144,7 @@ impl<F: ClawFs + 'static> RollingSummaryContextAdapter<F> {
                     .collect();
                 self.cached = Arc::new(Value::Array(flat));
             }
-            Err(error) => tracing::warn!(%error, "conversation compaction skipped"),
+            Err(_) => {}
         }
     }
 

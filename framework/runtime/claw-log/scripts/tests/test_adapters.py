@@ -73,7 +73,7 @@ def test_chain_composes_and_short_circuits() -> None:
 def test_build_forest_forwards_adapter() -> None:
     text = '\n'.join(
         [
-            'I (1) t: TRACE 1 enter <span=1 parent=none task=main span-name=s target=t> <context=conversation session=x>',
+            'I (1) t: TRACE 1 enter <span=1 parent=none task=main span-name=s target=t> <context=run session=x>',
             'I (2) t: TRACE 2 exit <span=1 task=main>',
         ]
     )

@@ -1,23 +1,11 @@
-# Built as a `std` static library for the ESP32-S3 (xtensa) and linked into the
-# ESP-IDF firmware by CMake. ESP-IDF-specific symbols (heap_caps_*, esp_vfs_*,
-# esp_http_client_*, esp_log_write, FreeRTOS, newlib/pthread) are resolved at
-# link time by the IDF image; newlib/POSIX types come from the `libc` crate.
+# Device builds pass `--target xtensa-esp32s3-espidf` explicitly from CMake or
+# fmt_lint_build.sh. Keep the workspace default target unset so a plain
+# `cargo check` remains a fast host check during normal Rust development.
 #
-# We target `xtensa-esp32s3-espidf` (not `*-none-elf`) because that is the
-# target for which `libc` and `std` use the correct newlib/ESP-IDF ABI
-# (`target_os = "espidf"`). The `esp` toolchain does NOT ship a precompiled
-# `std` for this target, so the device build compiles it from source with
-# `-Zbuild-std=std,panic_abort` (the `esp` channel is a nightly fork, and
-# `rust-src` is pinned in rust-toolchain.toml).
-#
-# `build-std` is passed on the cargo command line (see the claw_core CMake and
-# the device-build docs), NOT in an `[unstable]` table here: this workspace is
-# also unit-tested on the host with `cargo +stable --target
-# x86_64-unknown-linux-gnu`, and stable cargo rejects `-Z` flags coming from
-# config. Producing a staticlib does not invoke a linker, so no `ldproxy` is
-# needed for `cargo build`; final linking happens in the IDF image.
-[build]
-target = "xtensa-esp32s3-espidf"
+# The ESP target is `xtensa-esp32s3-espidf` (not `*-none-elf`) because that is
+# the target for which `libc` and `std` use the correct newlib/ESP-IDF ABI
+# (`target_os = "espidf"`). Device builds use the Espressif Rust toolchain and
+# `-Zbuild-std=std,panic_abort`; final linking happens in the IDF image.
 
 [target.xtensa-esp32s3-espidf]
 # ESP-IDF v5+ uses a 64-bit time_t; this makes `libc` agree.

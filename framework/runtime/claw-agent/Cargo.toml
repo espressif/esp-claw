@@ -33,8 +33,9 @@ required-features = ["dev"]
 #   host-backends plus CLI/example dependencies.
 #
 # Nothing is enabled by default so library/device consumers must choose their
-# backend explicitly. Firmware uses `AgentSystem::<F, H, Timer>::new(...)` with
-# ESP-IDF backends injected by `claw-cabi`.
+# backend explicitly. Firmware uses
+# `AgentSystem::<Filesystem, Http, Timer>::new(...)` with ESP-IDF backends
+# injected by `claw-cabi`.
 default = []
 host-backends = [
     "claw-interface/host-backends",

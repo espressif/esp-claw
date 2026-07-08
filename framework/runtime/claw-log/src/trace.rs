@@ -79,7 +79,7 @@ pub trait TraceSink: Send + Sync {
 /// A named, ordered set of inherited-context keys (see [`with_context_group_keys`]).
 ///
 /// `claw-log` itself bakes in **no** group; the caller registers each one at
-/// subscriber init (e.g. `claw_core` registers `"conversation"` with
+/// subscriber init (e.g. `claw_core` registers `"run"` with
 /// `["session", "turn", "agent", "iteration"]`). A span field named `group.key`
 /// whose `group` matches `name` and whose `key` is in `keys` becomes this group's
 /// incremental context.
@@ -360,7 +360,7 @@ impl<S: TraceSink> FlatTreeSubscriber<S> {
     /// A span field named `name.<key>` then becomes this group's incremental
     /// context, rendered once (as a `<context=<name> …>` block) on the `enter`
     /// line of the span that opens it. `claw-log` bakes in no group; the caller
-    /// declares them — e.g. `claw_core` registers `"conversation"` with
+    /// declares them — e.g. `claw_core` registers `"run"` with
     /// `["session", "turn", "agent", "iteration"]`.
     pub fn with_context_group_keys(
         mut self,
@@ -633,10 +633,10 @@ mod tests {
         line.split(' ').nth(2)
     }
 
-    /// A subscriber registering the standard `conversation` group, for tests.
-    fn conversation_subscriber(sink: VecSink) -> FlatTreeSubscriber<VecSink> {
+    /// A subscriber registering the standard `run` group, for tests.
+    fn run_subscriber(sink: VecSink) -> FlatTreeSubscriber<VecSink> {
         FlatTreeSubscriber::with_sink(sink)
-            .with_context_group_keys("conversation", ["session", "turn", "agent", "iteration"])
+            .with_context_group_keys("run", ["session", "turn", "agent", "iteration"])
     }
 
     #[test]
@@ -652,12 +652,12 @@ mod tests {
     #[test]
     fn field_visitor_routes_group_keys_and_keeps_others_custom() {
         let groups = vec![ContextGroup {
-            name: "conversation",
+            name: "run",
             keys: vec!["session", "agent"],
         }];
         let mut visitor = FieldVisitor::new(&groups);
         visitor.push("a", format_args!("1"));
-        visitor.push("conversation.session", format_args!("s-1"));
+        visitor.push("run.session", format_args!("s-1"));
         visitor.push("message", format_args!("hello world"));
         visitor.push("b", format_args!("2"));
         // Dotted but unregistered prefix → ordinary custom context.
@@ -671,8 +671,8 @@ mod tests {
     #[test]
     fn enter_line_carries_timestamp_and_type() {
         let sink = VecSink::default();
-        tracing::subscriber::with_default(conversation_subscriber(sink.clone()), || {
-            tracing::info_span!("session", conversation.session = "s-1").in_scope(|| {});
+        tracing::subscriber::with_default(run_subscriber(sink.clone()), || {
+            tracing::info_span!("session", run.session = "s-1").in_scope(|| {});
         });
 
         let enter = sink
@@ -690,12 +690,12 @@ mod tests {
     fn nested_spans_and_event_carry_ids_parent_edges_and_grouped_context() {
         let sink = VecSink::default();
 
-        tracing::subscriber::with_default(conversation_subscriber(sink.clone()), || {
-            let session = tracing::info_span!("session", conversation.session = "s-1");
+        tracing::subscriber::with_default(run_subscriber(sink.clone()), || {
+            let session = tracing::info_span!("session", run.session = "s-1");
             let _session = session.enter();
             tracing::info!(name: "thinking", "root thinking");
             {
-                let agent = tracing::info_span!("agent", conversation.agent = "a-2", depth = 1u64);
+                let agent = tracing::info_span!("agent", run.agent = "a-2", depth = 1u64);
                 let _agent = agent.enter();
                 tracing::info!(name: "tool_call", tool = "files", "calling tool");
             }
@@ -708,8 +708,8 @@ mod tests {
             .find(|l| line_type(l) == Some("enter") && token(l, "span-name") == Some("session"))
             .expect("session enter line");
         assert_eq!(token(session_enter, "parent"), Some("none"));
-        // The session span opens the `conversation` group's `session` key.
-        assert_eq!(token(session_enter, "context"), Some("conversation"));
+        // The session span opens the `run` group's `session` key.
+        assert_eq!(token(session_enter, "context"), Some("run"));
         assert_eq!(token(session_enter, "session"), Some("s-1"));
         let session_id = token(session_enter, "span").expect("session span");
 

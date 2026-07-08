@@ -111,7 +111,10 @@ async fn main() {
 async fn run() -> Result<()> {
     load_env();
 
-    let persistence = AgentPersistenceConfig::new(MEMORY_DIR);
+    let persistence = AgentPersistenceConfig {
+        persistence_root: MEMORY_DIR.to_string(),
+        skill_roots: Vec::new(),
+    };
     let system = AgentSystem::on_disk(llm_config()?, persistence)?;
     system.start_all()?;
     let session = system.new_session();

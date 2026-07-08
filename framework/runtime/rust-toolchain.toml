@@ -1,5 +1,5 @@
-# ESP32-S3 is an xtensa core, which is only supported by Espressif's fork of
-# the Rust compiler. Install it with `espup install` (see the esp-rs book).
+# Default to the stable host toolchain for normal `cargo check`/`cargo test`.
+# ESP32-S3 firmware builds call `cargo +esp ...` explicitly because xtensa is
+# only supported by Espressif's fork of Rust. Install it with `espup install`.
 [toolchain]
-channel = "esp"
-components = ["rust-src"]
+channel = "stable"

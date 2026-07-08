@@ -12,7 +12,7 @@ fn main() -> anyhow::Result<()> {
     claw_log::init_logger(LevelFilter::Trace, claw_log::LogOutput::Stderr)?;
     claw_log::init_tracing(
         claw_log::TracingConfig::default()
-            .with_context_group_keys("conversation", ["session", "turn", "agent", "iteration"]),
+            .with_context_group_keys("run", ["session", "turn", "agent", "iteration"]),
     )?;
 
     // `log` facade records (the path `claw-memory` still uses).
@@ -23,7 +23,7 @@ fn main() -> anyhow::Result<()> {
 
     // `tracing` spans/events flow through the same backend, so they share the
     // format (the leading `<L> (<ms>) <tag>:` then the flat-tree `TR …` line).
-    tracing::info_span!("turn", conversation.session = "s-1").in_scope(|| {
+    tracing::info_span!("turn", run.session = "s-1").in_scope(|| {
         tracing::info!(tool = "files", "calling tool via tracing");
     });
 

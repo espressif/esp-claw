@@ -224,7 +224,10 @@ fn init(config: *const ClawAgentConfig) -> Result<(), CabiError> {
             skill_roots.push(root);
         }
     }
-    let persistence = AgentPersistenceConfig::new(&persistence_dir).with_skill_roots(skill_roots);
+    let persistence = AgentPersistenceConfig {
+        persistence_root: persistence_dir,
+        skill_roots,
+    };
 
     let _guard = lock_runtime();
     if !RUNTIME.load(Ordering::Acquire).is_null() {

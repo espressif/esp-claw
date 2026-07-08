@@ -224,7 +224,7 @@ const CLAW_TARGET_PREFIX: &str = "claw";
 /// use claw_log::TracingConfig;
 ///
 /// let config = TracingConfig::default()
-///     .with_context_group_keys("conversation", ["session", "turn", "agent", "iteration"]);
+///     .with_context_group_keys("run", ["session", "turn", "agent", "iteration"]);
 /// ```
 ///
 /// [`with_context_group_keys`]: TracingConfig::with_context_group_keys

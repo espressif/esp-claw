@@ -1004,9 +1004,6 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
             .filter(|run| run.is_blocked())
             .map(|run| run.name.as_str())
             .collect();
-        if !blocked.is_empty() {
-            tracing::warn!(tools = ?blocked, "tool gate blocked");
-        }
         if let ToolBlockVerdict::Exhausted { name } = self.block_policy.record_round(&blocked) {
             self.fail_with(AgentRunError::ToolNotPermitted { name });
         }
@@ -1056,7 +1053,6 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
 
     /// End the task with a failure outcome, leaving the agent idle and reusable.
     fn fail_with(&mut self, error: AgentRunError) {
-        tracing::warn!(%error, "base_agent task failed");
         self.lifecycle = AgentLifecycle::Idle;
         self.outcome = Some(TickOutcome::Failed(error));
     }
@@ -1074,7 +1070,6 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
             return;
         }
         if has_dangling_tool_calls(&outcome.produced.0) {
-            tracing::info!("dropping preempted partial patch: unmatched tool_calls");
             return;
         }
         self.transcript.commit_patch(&outcome.produced.0);

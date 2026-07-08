@@ -61,7 +61,7 @@ def test_process_and_thread_metadata_emitted_once() -> None:
 def test_numeric_event_fields_become_counter() -> None:
     log = '\n'.join(
         [
-            'TRACE 10 enter <span=1 parent=none task=main span-name=iteration_loop target=t> <context=conversation iteration=i-0>',
+            'TRACE 10 enter <span=1 parent=none task=main span-name=iteration_loop target=t> <context=run iteration=i-0>',
             'TRACE 12 event <span=1 task=main event-name=ram target=claw_ram> free_heap=120000 min_free=90000',
             'TRACE 20 exit <span=1 task=main>',
         ]
@@ -89,7 +89,7 @@ def test_write_chrome_trace_produces_valid_json_array(tmp_path) -> None:
 
 
 def test_unclosed_span_becomes_duration_begin(tmp_path) -> None:
-    log = 'TRACE 5 enter <span=1 parent=none task=main span-name=turn target=t> <context=conversation turn=1>'
+    log = 'TRACE 5 enter <span=1 parent=none task=main span-name=turn target=t> <context=run turn=1>'
     events = chrome_trace_events(build_forest(log))
     begins = _by_phase(events, 'B')
     assert len(begins) == 1

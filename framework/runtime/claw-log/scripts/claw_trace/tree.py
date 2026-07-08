@@ -36,7 +36,7 @@ def _merge_context(ancestor: GroupedContext, opened: GroupedContext) -> GroupedC
 def flatten_context(context: GroupedContext) -> dict[str, str]:
     """Flatten a grouped context into a single ``{key: value}`` map (group names
     dropped). Convenient for display/args when keys do not collide across
-    groups (as with the ``conversation`` group's session/turn/agent/iteration)."""
+    groups (as with the ``run`` group's session/turn/agent/iteration)."""
     flat: dict[str, str] = {}
     for fields in context.values():
         flat.update(fields)

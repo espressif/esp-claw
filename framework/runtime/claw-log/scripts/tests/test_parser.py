@@ -11,7 +11,7 @@ def test_enter_with_incremental_block_and_custom() -> None:
     line = (
         'TRACE 2105 enter '
         '<span=2 parent=1 task=main span-name=turn target=claw_core::orchestrator> '
-        '<context=conversation turn=7> message_id=m1 cause=message'
+        '<context=run turn=7> message_id=m1 cause=message'
     )
     record = parse_line(line)
     assert record is not None
@@ -22,30 +22,30 @@ def test_enter_with_incremental_block_and_custom() -> None:
     assert record.task == 'main'
     assert record.name == 'turn'
     assert record.target == 'claw_core::orchestrator'
-    assert record.context == {'conversation': {'turn': '7'}}
+    assert record.context == {'run': {'turn': '7'}}
     assert record.custom == 'message_id=m1 cause=message'
 
 
 def test_parent_none_becomes_none() -> None:
     record = parse_line(
         'TRACE 2100 enter <span=1 parent=none task=main span-name=session target=t> '
-        '<context=conversation session=s-1>'
+        '<context=run session=s-1>'
     )
     assert record is not None
     assert record.parent is None
     assert record.span == 1
-    assert record.context == {'conversation': {'session': 's-1'}}
+    assert record.context == {'run': {'session': 's-1'}}
 
 
 def test_multiple_incremental_groups() -> None:
     line = (
         'TRACE 7 enter <span=3 parent=2 task=main span-name=req target=t> '
-        '<context=conversation agent=a-1> <context=http method=GET> url=/x'
+        '<context=run agent=a-1> <context=http method=GET> url=/x'
     )
     record = parse_line(line)
     assert record is not None
     assert record.context == {
-        'conversation': {'agent': 'a-1'},
+        'run': {'agent': 'a-1'},
         'http': {'method': 'GET'},
     }
     assert record.custom == 'url=/x'

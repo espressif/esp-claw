@@ -37,7 +37,7 @@ set(claw_sys_rust_lib
 # *-espidf, so it is built from source (the pinned `esp` toolchain accepts -Z).
 add_custom_target(claw_sys_selftest_build
     BYPRODUCTS "${claw_sys_rust_lib}"
-    COMMAND cargo build --${claw_sys_rust_profile} -p claw-sys-selftest
+    COMMAND cargo +esp build --${claw_sys_rust_profile} -p claw-sys-selftest
             --target ${claw_sys_rust_target} -Z build-std=std,panic_abort
     WORKING_DIRECTORY "${claw_sys_rust_dir}"
     COMMENT "Building claw-sys-selftest Rust staticlib (${claw_sys_rust_target})"

@@ -32,9 +32,7 @@ use claw_interface::{
 use claw_tool::ToolRegistry;
 use futures_core::Stream;
 
-use crate::agent::{
-    AgentIdAllocator, ApprovalDecision, CancelReason, FsAgentFactory, FsAgentFactoryError,
-};
+use crate::agent::{AgentIdAllocator, CancelReason, FsAgentFactory, FsAgentFactoryError};
 use crate::event::{EventSink, SessionEvent, TurnCause};
 use crate::session::{DeliverError, SessionId, SessionStore};
 
@@ -299,8 +297,9 @@ pub struct Orchestrator {
 }
 
 impl Orchestrator {
-    /// Build an orchestrator: spawn the drive worker (via `T::spawn_worker`),
-    /// construct the engine inside it, and wait for it to report readiness.
+    /// Build an orchestrator: spawn the drive worker (via
+    /// `Thread::spawn_worker`), construct the engine inside it, and wait for it
+    /// to report readiness.
     ///
     /// `llm_config` is cloned into every agent, `persistence_dir` is the storage
     /// root the engine's factory owns, and `skill_roots` are the priority-ordered
@@ -311,31 +310,31 @@ impl Orchestrator {
     ///
     /// Returns [`OrchestratorBuildError`] when the worker cannot be spawned or the
     /// engine (factory) cannot be assembled inside it.
-    pub fn new<F, H, Timer, T, E>(
+    pub fn new<Filesystem, Http, Timer, Thread, Executor>(
         tools: Arc<ToolRegistry>,
         llm_config: ClawApiConfig,
         persistence_dir: String,
         skill_roots: Vec<String>,
     ) -> Result<Self, OrchestratorBuildError>
     where
-        F: ClawFs + Clone + Default + 'static,
-        H: ClawHttp + Default + 'static,
+        Filesystem: ClawFs + Clone + Default + 'static,
+        Http: ClawHttp + Default + 'static,
         Timer: ClawTimer + Default + 'static,
-        T: ClawThread,
-        E: ClawExecutor + 'static,
+        Thread: ClawThread,
+        Executor: ClawExecutor + 'static,
     {
         let sessions = Arc::new(SessionStore::new());
         let (command_tx, command_rx) = async_channel::unbounded();
         let (ready_tx, ready_rx) = mpsc::channel();
 
         let sessions_engine = Arc::clone(&sessions);
-        let worker = T::spawn_worker(
+        let worker = Thread::spawn_worker(
             "claw_orchestrator",
             ENGINE_WORKER_STACK_SIZE,
             Priority::Normal,
             CoreAffinity::Any,
             move || {
-                run_engine::<F, H, Timer, E>(
+                run_engine::<Filesystem, Http, Timer, Executor>(
                     tools,
                     llm_config,
                     persistence_dir,
@@ -434,7 +433,7 @@ impl Drop for Orchestrator {
 /// Worker entry point: build the `!Send` engine from `Send` config, signal
 /// readiness, then `block_on` its run loop until the command channel closes or a
 /// `Stop` drains it.
-fn run_engine<F, H, Timer, E>(
+fn run_engine<Filesystem, Http, Timer, Executor>(
     tools: Arc<ToolRegistry>,
     llm_config: ClawApiConfig,
     persistence_dir: String,
@@ -443,12 +442,12 @@ fn run_engine<F, H, Timer, E>(
     command_rx: Receiver<Command>,
     ready: mpsc::Sender<Result<(), OrchestratorBuildError>>,
 ) where
-    F: ClawFs + Clone + Default + 'static,
-    H: ClawHttp + Default + 'static,
+    Filesystem: ClawFs + Clone + Default + 'static,
+    Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
-    E: ClawExecutor,
+    Executor: ClawExecutor,
 {
-    let engine = match Engine::<F, H, Timer>::new(
+    let engine = match Engine::<Filesystem, Http, Timer>::new(
         tools,
         llm_config,
         &persistence_dir,
@@ -464,36 +463,36 @@ fn run_engine<F, H, Timer, E>(
     let _ = ready.send(Ok(()));
     // Drive the `!Send` engine to completion on this worker thread via the
     // injected executor (`edge-executor` on device, tokio on host).
-    E::block_on(engine.run(command_rx));
+    Executor::block_on(engine.run(command_rx));
 }
 
 /// The `!Send` drive engine. Sole owner of the session instances and their drive
 /// state; runs on one worker thread and multiplexes every live session.
-struct Engine<F, H, Timer>
+struct Engine<Filesystem, Http, Timer>
 where
-    F: ClawFs + Clone + Default + 'static,
-    H: ClawHttp + Default + 'static,
+    Filesystem: ClawFs + Clone + Default + 'static,
+    Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     /// Builds agents for every session's registry.
-    factory: Arc<FsAgentFactory<F, H, Timer>>,
+    factory: Arc<FsAgentFactory<Filesystem, Http, Timer>>,
     /// Config for the one-shot natural-language approval resolver.
     approval_llm_config: ClawApiConfig,
     /// Global agent-id allocator shared by every per-session registry.
     next_agent_id: AgentIdAllocator,
     /// One isolated agent graph per session. Single-owner interior mutability
     /// (`RefCell`): the engine is `!Send` and driven from one thread.
-    instances: RefCell<HashMap<SessionId, OrchestratorInstance<F, H, Timer>>>,
+    instances: RefCell<HashMap<SessionId, OrchestratorInstance<Filesystem, Http, Timer>>>,
     /// Per-session connection, accepted input slot, and active drive control state.
     drives: RefCell<HashMap<SessionId, SessionDrive>>,
     /// Session id truth source, shared with the handle.
     sessions: Arc<SessionStore>,
 }
 
-impl<F, H, Timer> Engine<F, H, Timer>
+impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
 where
-    F: ClawFs + Clone + Default + 'static,
-    H: ClawHttp + Default + 'static,
+    Filesystem: ClawFs + Clone + Default + 'static,
+    Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     fn new(
@@ -503,7 +502,7 @@ where
         skill_roots: &[String],
         sessions: Arc<SessionStore>,
     ) -> Result<Self, OrchestratorBuildError> {
-        let factory = Arc::new(FsAgentFactory::<F, H, Timer>::new(
+        let factory = Arc::new(FsAgentFactory::<Filesystem, Http, Timer>::new(
             tools,
             llm_config.clone(),
             persistence_dir,
@@ -865,14 +864,6 @@ where
         // guard: it reinserts the (possibly mutated) instance on every exit path.
         let mut slot = self.checkout_instance(session_id);
         let instance = slot.get_mut();
-        let turn = instance.next_turn();
-        // session > turn: the session span opens `conversation.session`, the
-        // turn span opens `conversation.turn`. Every agent/iteration/tool span
-        // produced while driving nests under them, so one drive reads as a unit.
-        let _session_span =
-            tracing::info_span!("session", conversation.session = %session_id).entered();
-        let _turn_span =
-            tracing::info_span!("turn", conversation.turn = turn, cause = "message",).entered();
 
         if let Some(pending) = instance.active_approval() {
             let control = DriveControl::new();
@@ -896,15 +887,6 @@ where
     ) -> Result<(DriveOutput, DriveStop), DeliverError> {
         let mut slot = self.checkout_instance(session_id);
         let instance = slot.get_mut();
-        let turn = instance.next_turn();
-        let _session_span =
-            tracing::info_span!("session", conversation.session = %session_id).entered();
-        let _turn_span = tracing::info_span!(
-            "turn",
-            conversation.turn = turn,
-            cause = "background_result",
-        )
-        .entered();
         self.drive_root_ready_in_slot(session_id, instance, events)
             .await
     }
@@ -912,7 +894,7 @@ where
     async fn drive_root_ready_in_slot(
         &self,
         session_id: SessionId,
-        instance: &mut OrchestratorInstance<F, H, Timer>,
+        instance: &mut OrchestratorInstance<Filesystem, Http, Timer>,
         events: &EventSink,
     ) -> Result<(DriveOutput, DriveStop), DeliverError> {
         let control = DriveControl::new();
@@ -973,13 +955,13 @@ where
     async fn resolve_pending_approval(
         &self,
         session_id: SessionId,
-        instance: &mut OrchestratorInstance<F, H, Timer>,
+        instance: &mut OrchestratorInstance<Filesystem, Http, Timer>,
         pending: PendingApproval,
         user_reply: &str,
         control: &DriveControl,
         events: &EventSink,
     ) -> Result<(DriveOutput, DriveStop), DeliverError> {
-        let resolution = match approval::resolve_permission_reply::<H, Timer>(
+        let resolution = match approval::resolve_permission_reply::<Http, Timer>(
             self.approval_llm_config.clone(),
             &pending.summary,
             user_reply,
@@ -1013,17 +995,6 @@ where
             ));
         };
 
-        let decision_label = match &decision {
-            ApprovalDecision::Approved => "approved",
-            ApprovalDecision::Rejected(_) => "rejected",
-        };
-        tracing::info!(
-            session = %session_id,
-            agent = %pending.agent,
-            approval = %pending.approval,
-            decision = decision_label,
-            "approval resolved from user reply"
-        );
         instance
             .resolve_active_approval(decision)
             .map_err(|error| DeliverError::Agent(error.to_string()))?;
@@ -1048,7 +1019,10 @@ where
     /// Check the session's agent graph out of the map (building a fresh instance
     /// when the session has none yet), wrapped in an [`InstanceSlot`] that
     /// reinserts it on drop.
-    fn checkout_instance(&self, session_id: SessionId) -> InstanceSlot<'_, F, H, Timer> {
+    fn checkout_instance(
+        &self,
+        session_id: SessionId,
+    ) -> InstanceSlot<'_, Filesystem, Http, Timer> {
         let instance = self
             .instances
             .borrow_mut()
@@ -1070,7 +1044,7 @@ where
     fn checkout_existing_instance(
         &self,
         session_id: SessionId,
-    ) -> Option<InstanceSlot<'_, F, H, Timer>> {
+    ) -> Option<InstanceSlot<'_, Filesystem, Http, Timer>> {
         let instance = self.instances.borrow_mut().remove(&session_id)?;
         Some(InstanceSlot {
             engine: self,
@@ -1079,7 +1053,11 @@ where
         })
     }
 
-    fn put_instance(&self, session_id: SessionId, instance: OrchestratorInstance<F, H, Timer>) {
+    fn put_instance(
+        &self,
+        session_id: SessionId,
+        instance: OrchestratorInstance<Filesystem, Http, Timer>,
+    ) {
         if !self.sessions.contains(session_id) {
             return;
         }
@@ -1097,24 +1075,24 @@ pub(crate) enum InstanceWork {
 /// RAII checkout of a session's [`OrchestratorInstance`]: holds the instance out
 /// of the map while it is driven and reinserts it on drop, so no exit path (an
 /// early `?`, a panic while driving, or normal return) can drop the graph.
-struct InstanceSlot<'a, F, H, Timer>
+struct InstanceSlot<'a, Filesystem, Http, Timer>
 where
-    F: ClawFs + Clone + Default + 'static,
-    H: ClawHttp + Default + 'static,
+    Filesystem: ClawFs + Clone + Default + 'static,
+    Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
-    engine: &'a Engine<F, H, Timer>,
+    engine: &'a Engine<Filesystem, Http, Timer>,
     session_id: SessionId,
-    instance: Option<OrchestratorInstance<F, H, Timer>>,
+    instance: Option<OrchestratorInstance<Filesystem, Http, Timer>>,
 }
 
-impl<F, H, Timer> InstanceSlot<'_, F, H, Timer>
+impl<Filesystem, Http, Timer> InstanceSlot<'_, Filesystem, Http, Timer>
 where
-    F: ClawFs + Clone + Default + 'static,
-    H: ClawHttp + Default + 'static,
+    Filesystem: ClawFs + Clone + Default + 'static,
+    Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
-    fn get_mut(&mut self) -> &mut OrchestratorInstance<F, H, Timer> {
+    fn get_mut(&mut self) -> &mut OrchestratorInstance<Filesystem, Http, Timer> {
         // Invariant: `instance` is `Some` for the whole lifetime of the slot;
         // it is only taken in `Drop`, after which the slot is unreachable.
         self.instance
@@ -1123,10 +1101,10 @@ where
     }
 }
 
-impl<F, H, Timer> Drop for InstanceSlot<'_, F, H, Timer>
+impl<Filesystem, Http, Timer> Drop for InstanceSlot<'_, Filesystem, Http, Timer>
 where
-    F: ClawFs + Clone + Default + 'static,
-    H: ClawHttp + Default + 'static,
+    Filesystem: ClawFs + Clone + Default + 'static,
+    Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     fn drop(&mut self) {

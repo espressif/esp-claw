@@ -19,7 +19,7 @@ set(claw_rust_lib "${CMAKE_CURRENT_SOURCE_DIR}/target/${claw_rust_target}/${claw
 
 add_custom_target(claw_rust_build
     BYPRODUCTS "${claw_rust_lib}"
-    COMMAND cargo build --release -p claw-cabi
+    COMMAND cargo +esp build --release -p claw-cabi
             --target ${claw_rust_target} -Z build-std=std,panic_abort
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     COMMENT "Building claw-cabi Rust staticlib (${claw_rust_target})"

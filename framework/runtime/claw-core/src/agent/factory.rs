@@ -182,52 +182,55 @@ fn join_storage_path(parent: &str, child: &str) -> String {
 /// Constructed by [`Orchestrator::new`](crate::Orchestrator::new); each
 /// per-session instance uses it for root agents and spawned subagents.
 pub struct FsAgentFactory<
-    F: ClawFs + Clone + Default + 'static,
-    H: ClawHttp + Default + 'static,
+    Filesystem: ClawFs + Clone + Default + 'static,
+    Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 > {
     /// Template for the per-agent LLM client. Each agent gets its own `ClawApi`
-    /// minted from this config plus a freshly constructed `H::default()`
+    /// minted from this config plus a freshly constructed `Http::default()`
     /// transport, so no transport instance is shared between agents.
     llm_config: ClawApiConfig,
     /// Central tool registry used to seed each agent tool set.
     tools: Arc<ToolRegistry>,
-    /// Marks the HTTP transport type minted per agent. `fn() -> H` so the marker
-    /// is independent of owning an `H` value (the factory only *produces* `H`).
-    _http: PhantomData<fn() -> H>,
+    /// Marks the HTTP transport type minted per agent. `fn() -> Http` so the
+    /// marker is independent of owning an `Http` value (the factory only
+    /// produces `Http`).
+    _http: PhantomData<fn() -> Http>,
     /// Timer type minted per agent for async retry backoff.
     _timer: PhantomData<fn() -> Timer>,
     /// Directory for transcript files; each agent keys its own files by id.
     transcript_dir: String,
     /// Storage backend cloned into each agent's [`TranscriptStore`] (and its
-    /// long-term store). `F` is a concrete, statically dispatched [`ClawFs`]; it
-    /// must be `Clone` because every agent gets its own handle (use
-    /// `Arc<ConcreteFs>` for a shared backend — `Arc<T>` is itself `ClawFs`).
-    storage: F,
+    /// long-term store). `Filesystem` is a concrete, statically dispatched
+    /// [`ClawFs`]; it must be `Clone` because every agent gets its own handle
+    /// (use `Arc<ConcreteFs>` for a shared backend -- `Arc<T>` is itself
+    /// `ClawFs`).
+    storage: Filesystem,
     /// Long-term-memory collaborators, shared across every agent this factory
     /// builds. Required: every agent gets a private store plus a clone of the
     /// shared global store, fronted by one [`LongTermMemoryContextAdapter`].
-    long_term: LongTermDeps<F>,
+    long_term: LongTermDeps<Filesystem>,
     /// Global editable profile documents, fronted by one [`ProfileContextAdapter`]
     /// per agent so file edits are observed on the next context build.
-    profile: ProfileStore<F>,
+    profile: ProfileStore<Filesystem>,
     /// Shared skill catalog scanned from the configured roots. Cloned (an `Arc`
     /// bump) into every agent's [`SkillSet`] so all agents share one catalog and a
     /// reload is observed everywhere.
-    skills: Arc<FsSkillRegistry<F>>,
+    skills: Arc<FsSkillRegistry<Filesystem>>,
 }
 
 impl<
-        F: ClawFs + Clone + Default + 'static,
-        H: ClawHttp + Default + 'static,
+        Filesystem: ClawFs + Clone + Default + 'static,
+        Http: ClawHttp + Default + 'static,
         Timer: ClawTimer + Default + 'static,
-    > FsAgentFactory<F, H, Timer>
+    > FsAgentFactory<Filesystem, Http, Timer>
 {
     /// Build a factory over an LLM `llm_config` and one persistence root.
     ///
     /// The factory owns the memory layout below `persistence_dir`: transcripts,
     /// editable profile documents, and long-term memory. It constructs the
-    /// storage backend with `F::default()` and clones that handle per agent.
+    /// storage backend with `Filesystem::default()` and clones that handle per
+    /// agent.
     ///
     /// # Errors
     ///
@@ -244,10 +247,11 @@ impl<
             return Err(FsAgentFactoryError::MissingPersistenceDir);
         }
         let layout = FsAgentFactoryLayout::new(persistence_dir);
-        let storage = F::default();
+        let storage = Filesystem::default();
 
-        let extraction_llm = ClawApiAsync::init(llm_config.clone(), H::default(), Timer::default())
-            .map_err(|error| FsAgentFactoryError::ExtractionLlm(error.to_string()))?;
+        let extraction_llm =
+            ClawApiAsync::init(llm_config.clone(), Http::default(), Timer::default())
+                .map_err(|error| FsAgentFactoryError::ExtractionLlm(error.to_string()))?;
         let long_term = LongTermDeps::from_root(
             &layout.long_term_dir,
             storage.clone(),
@@ -274,7 +278,7 @@ impl<
 
 /// Build the shared skill catalog from the priority-ordered `skill_roots`.
 ///
-/// A missing root is logged and skipped so the agent still starts; a real scan
+/// A missing root is skipped so the agent still starts; a real scan
 /// failure (e.g. a malformed `SKILL.md`) disables skills entirely by falling back
 /// to an empty registry rather than aborting agent construction.
 fn build_skill_registry<F: ClawFs + Clone + 'static>(
@@ -284,17 +288,11 @@ fn build_skill_registry<F: ClawFs + Clone + 'static>(
     let mut registry = FsSkillRegistry::new(storage.clone());
     for root in skill_roots {
         if !storage.exists(root) {
-            tracing::error!(root = %root, "skill root directory is missing; skipping");
             continue;
         }
         match registry.set_root(root.as_str()) {
             Ok(next) => registry = next,
-            Err(error) => {
-                tracing::error!(
-                    root = %root,
-                    error = %error,
-                    "failed to scan skill root; disabling filesystem skills"
-                );
+            Err(_) => {
                 return Arc::new(FsSkillRegistry::new(storage.clone()));
             }
         }
@@ -303,10 +301,10 @@ fn build_skill_registry<F: ClawFs + Clone + 'static>(
 }
 
 impl<
-        F: ClawFs + Clone + Default + 'static,
-        H: ClawHttp + Default + 'static,
+        Filesystem: ClawFs + Clone + Default + 'static,
+        Http: ClawHttp + Default + 'static,
         Timer: ClawTimer + Default + 'static,
-    > FsAgentFactory<F, H, Timer>
+    > FsAgentFactory<Filesystem, Http, Timer>
 {
     /// Build an agent of `kind` with id `id` already tasked with `goal`, handing
     /// it `host` as its back-channel to the agent graph. Used for both spawned
@@ -353,7 +351,7 @@ impl<
             .map_err(|error| format!("opening transcript for {kind} agent {id}: {error}"))?;
         // The LLM client (and its transport) is built inside the agent from this
         // shared config plus the factory's transport type; nothing is minted here.
-        let mut agent = GenericAgent::<H, Timer>::new(
+        let mut agent = GenericAgent::<Http, Timer>::new(
             id,
             self.llm_config.clone(),
             store,
@@ -425,14 +423,7 @@ impl<
     ///
     /// The manifest's skill ids are catalog-only today: every agent sees the full
     /// scanned catalog rather than a manifest-filtered subset.
-    fn resolve_manifest_skills(&self, manifest: &'static AgentManifest) -> SkillSet {
-        if !manifest.skills.is_empty() {
-            tracing::debug!(
-                kind = %manifest.kind,
-                count = manifest.skills.len(),
-                "manifest skill ids are catalog-only"
-            );
-        }
+    fn resolve_manifest_skills(&self, _manifest: &'static AgentManifest) -> SkillSet {
         self.skills.skill_set()
     }
 }
@@ -468,8 +459,8 @@ mod tests {
         json!({ "choices": [{ "message": { "role": "assistant", "content": text } }] }).to_string()
     }
 
-    /// The factory mints each agent's transport internally via `H::default()`, so
-    /// the script can't be injected as an instance — it is installed into the
+    /// The factory mints each agent's transport internally from the HTTP backend,
+    /// so the script can't be injected as an instance; it is installed into the
     /// process-global `SharedScriptHttp` script that every minted client shares.
     /// Returns the serialization guard alongside the factory; the caller holds it
     /// for the whole test so parallel tests never clobber one another's script.

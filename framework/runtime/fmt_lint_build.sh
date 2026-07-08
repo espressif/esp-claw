@@ -4,16 +4,15 @@
 # device target.
 #
 # Pipeline:
-#   1. cargo fmt   - format every crate in the workspace (in place).
-#   2. cargo clippy - lint the device dependency tree (pass --strict to deny warnings).
-#   3. cargo build  - build the device staticlib dependency tree.
+#   1. cargo +stable fmt - format every crate in the workspace (in place).
+#   2. cargo +esp clippy - lint the device dependency tree (pass --strict to deny warnings).
+#   3. cargo +esp build  - build the device staticlib dependency tree.
 #
-# "The rust target" is the firmware target xtensa-esp32s3-espidf (see
-# .cargo/config.toml). `std` is not shipped precompiled for *-espidf, so it is
-# built from source with `-Z build-std`; the pinned `esp` toolchain
-# (rust-toolchain.toml) accepts the -Z flag. Only the `claw_capi` aggregator and
-# its dependency tree are device code (the `cli` crate is host-only and cannot
-# cross-compile to xtensa), so clippy/build are scoped to that package.
+# "The rust target" is the firmware target xtensa-esp32s3-espidf. `std` is not
+# shipped precompiled for *-espidf, so it is built from source with
+# `-Z build-std`; the explicit `+esp` toolchain accepts the -Z flag. Only the
+# `claw-cabi` aggregator and its dependency tree are device code, so
+# clippy/build are scoped to that package.
 #
 # Usage:
 #   ./fmt_lint_build.sh            # release profile (matches the firmware image)
@@ -28,11 +27,11 @@ cd "${SCRIPT_DIR}"
 
 # Device firmware target and the aggregator package that the IDF image links.
 RUST_TARGET="xtensa-esp32s3-espidf"
-DEVICE_PACKAGE="claw_capi"
+DEVICE_PACKAGE="claw-cabi"
 BUILD_STD="-Z build-std=std,panic_abort"
 
 # Default to the release profile so this matches the firmware image build
-# (see ../../claw_core/CMakeLists.txt).
+# (see CMakeLists.txt).
 PROFILE_FLAG="--release"
 PROFILE_NAME="release"
 if [[ "${1:-}" == "--debug" ]]; then
@@ -41,7 +40,7 @@ if [[ "${1:-}" == "--debug" ]]; then
 fi
 
 echo "==> [1/3] cargo fmt (workspace)"
-cargo fmt --all
+cargo +stable fmt --all
 
 echo "==> [2/3] cargo clippy (${DEVICE_PACKAGE}, target ${RUST_TARGET}, ${PROFILE_NAME})"
 # No blanket `-D warnings`: lints the crates intentionally set to `deny` in their
@@ -51,14 +50,14 @@ CLIPPY_EXTRA=()
 if [[ " $* " == *" --strict "* ]]; then
     CLIPPY_EXTRA=(-- -D warnings)
 fi
-cargo clippy -p "${DEVICE_PACKAGE}" \
+cargo +esp clippy -p "${DEVICE_PACKAGE}" \
     --target "${RUST_TARGET}" \
     ${PROFILE_FLAG} \
     ${BUILD_STD} \
     "${CLIPPY_EXTRA[@]}"
 
 echo "==> [3/3] cargo build (${DEVICE_PACKAGE}, target ${RUST_TARGET}, ${PROFILE_NAME})"
-cargo build -p "${DEVICE_PACKAGE}" \
+cargo +esp build -p "${DEVICE_PACKAGE}" \
     --target "${RUST_TARGET}" \
     ${PROFILE_FLAG} \
     ${BUILD_STD}

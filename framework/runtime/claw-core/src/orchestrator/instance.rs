@@ -42,7 +42,6 @@ use crate::event::{EventSink, SessionEvent};
 use crate::orchestrator::control::{DriveControl, DriveStop};
 use crate::orchestrator::InstanceWork;
 use crate::session::SessionId;
-use tracing::Instrument;
 
 /// The kind instantiated as a session's user-facing root agent.
 const ROOT_AGENT_KIND: &str = "conversation";
@@ -145,8 +144,6 @@ type AgentTickBoxFuture = Pin<Box<dyn Future<Output = TickedAgent>>>;
 
 struct ReadyAgent {
     id: AgentId,
-    kind: AgentKind,
-    depth: u16,
     /// Whether this is the session root. Only the root's iteration events are
     /// forwarded to the session stream; subagents tick with a disabled sink.
     is_root: bool,
@@ -288,18 +285,11 @@ fn tick_agent(ready: ReadyAgent, events: EventSink) -> AgentTickBoxFuture {
     Box::pin(async move {
         let ReadyAgent {
             id,
-            kind,
-            depth,
             is_root: _,
             mut agent,
+            ..
         } = ready;
-        let span = tracing::info_span!(
-            "agent",
-            conversation.agent = %id,
-            kind = %kind,
-            depth = depth
-        );
-        let outcome = agent.tick(events).instrument(span).await;
+        let outcome = agent.tick(events).await;
         TickedAgent { id, agent, outcome }
     })
 }
@@ -338,17 +328,17 @@ impl GraphHost for InstanceHost {
 }
 
 /// One session's agent store, graph, scheduler, and root.
-pub(crate) struct OrchestratorInstance<F, H, Timer>
+pub(crate) struct OrchestratorInstance<Filesystem, Http, Timer>
 where
-    F: ClawFs + Clone + Default + 'static,
-    H: ClawHttp + Default + 'static,
+    Filesystem: ClawFs + Clone + Default + 'static,
+    Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     session: SessionId,
     /// The agent store (insert / get-handle / remove). Graph-blind.
     registry: AgentRegistry,
     /// Builds agents (root and children). Owned here; the registry only stores.
-    factory: Arc<FsAgentFactory<F, H, Timer>>,
+    factory: Arc<FsAgentFactory<Filesystem, Http, Timer>>,
     /// Shared, process-wide id allocator for roots and spawned children.
     ids: AgentIdAllocator,
     /// The agent graph: one [`NodeMeta`] per live agent, keyed by id.
@@ -376,16 +366,12 @@ where
     snapshots: SnapshotView,
     /// The [`GraphHost`] handed to every agent this instance builds.
     host: Arc<dyn GraphHost>,
-    /// Monotonic count of external drive cycles (one per delivered user message).
-    /// Stamped on the top-level `turn` observability span so a whole drive — and
-    /// every nested agent/iteration/tool span under it — reads as one unit.
-    turn: u64,
 }
 
-impl<F, H, Timer> OrchestratorInstance<F, H, Timer>
+impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
 where
-    F: ClawFs + Clone + Default + 'static,
-    H: ClawHttp + Default + 'static,
+    Filesystem: ClawFs + Clone + Default + 'static,
+    Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     /// Create an empty instance for `session`. Agents are built with `factory` and
@@ -393,7 +379,7 @@ where
     /// across every session.
     pub(crate) fn new(
         session: SessionId,
-        factory: Arc<FsAgentFactory<F, H, Timer>>,
+        factory: Arc<FsAgentFactory<Filesystem, Http, Timer>>,
         next_agent_id: AgentIdAllocator,
     ) -> Self {
         let effects: EffectQueue = Arc::new(Mutex::new(VecDeque::new()));
@@ -418,7 +404,6 @@ where
             effects,
             snapshots,
             host,
-            turn: 0,
         }
     }
 
@@ -448,14 +433,6 @@ where
         )?;
         self.registry.insert(id, agent);
         Ok(())
-    }
-
-    /// Advance to the next turn and return its number. A "turn" is one external
-    /// drive cycle (a delivered user message); callers stamp it on the top-level
-    /// observability span.
-    pub(crate) fn next_turn(&mut self) -> u64 {
-        self.turn = self.turn.saturating_add(1);
-        self.turn
     }
 
     /// Deliver a user message to this session's root.
@@ -789,16 +766,14 @@ where
     fn drain_ready_agents(&mut self) -> Vec<ReadyAgent> {
         let mut ready_agents = Vec::new();
         while let Some(id) = self.ready.pop_front() {
-            let Some(meta) = self.meta.get(&id) else {
+            if !self.meta.contains_key(&id) {
                 continue;
-            };
+            }
             let Some(agent) = self.registry.take(id) else {
                 continue;
             };
             ready_agents.push(ReadyAgent {
                 id,
-                kind: meta.kind.clone(),
-                depth: meta.depth,
                 is_root: self.root == Some(id),
                 agent,
             });
@@ -829,10 +804,9 @@ where
         approval: ApprovalId,
         summary: String,
     ) -> DriveOutput {
-        let Some(meta) = self.meta.get(&agent) else {
+        if !self.meta.contains_key(&agent) {
             return DriveOutput::default();
-        };
-        let is_root = meta.parent.is_none();
+        }
         self.parked_approvals.insert(
             agent,
             ParkedApproval {
@@ -844,7 +818,6 @@ where
         if !self.approval_queue.contains(&agent) {
             self.approval_queue.push_back(agent);
         }
-        tracing::info!(agent = %agent, is_root, session = %self.session, "approval parked");
 
         DriveOutput::default()
     }
@@ -878,11 +851,6 @@ where
     /// subagents, never an ancestor, sibling, or unrelated node).
     fn apply_delete(&mut self, requester: AgentId, target: AgentId) {
         if !self.is_descendant(requester, target) {
-            tracing::warn!(
-                requester_agent = %requester,
-                target_agent = %target,
-                "delete of a non-descendant ignored"
-            );
             return;
         }
         self.delete_subtree(target);
@@ -945,25 +913,11 @@ where
         termination: TerminationPolicy,
     ) {
         let Some(parent_meta) = self.meta.get(&parent) else {
-            tracing::warn!(
-                parent_agent = %parent,
-                child_agent = %id,
-                "spawn parent is gone; dropping child"
-            );
             return;
         };
         let depth = parent_meta.depth.saturating_add(1);
         match self.build_agent(id, &kind, goal, AgentPlacement::Sub(id)) {
             Ok(()) => {
-                tracing::info!(
-                    child_agent = %id,
-                    parent_agent = %parent,
-                    kind = %kind,
-                    depth,
-                    termination = ?termination,
-                    session = %self.session,
-                    "subagent materialized"
-                );
                 self.meta.insert(
                     id,
                     NodeMeta {
@@ -976,14 +930,7 @@ where
                 );
                 self.enqueue(id);
             }
-            Err(error) => {
-                tracing::warn!(
-                    child_agent = %id,
-                    kind = %kind,
-                    %error,
-                    "failed to create subagent; dropping spawn"
-                );
-            }
+            Err(_) => {}
         }
     }
 
@@ -1047,15 +994,12 @@ where
             }];
         };
 
-        tracing::info!(child_agent = %id, parent_agent = %parent_id, ok, ?termination, "subagent result -> parent");
         self.deliver_or_mailbox_subagent_result(parent_id, id, text, ok);
 
         // Keep a `Manual` subagent alive only on an ordinary yield; otherwise remove
         // it (and its subtree, so a persistent grandchild is never left orphaned).
         let keep_alive = termination == TerminationPolicy::Manual && ok && !ended;
-        if keep_alive {
-            tracing::debug!(agent = %id, "manual subagent yielded; kept alive (idle)");
-        } else {
+        if !keep_alive {
             self.delete_subtree(id);
         }
         Vec::new()
@@ -1065,17 +1009,10 @@ where
     /// reply and no parent message. A cancelled subagent is removed so the graph
     /// does not retain dead work; a cancelled root stays as the reusable session
     /// root.
-    fn route_cancelled(&mut self, id: AgentId, reason: CancelReason) -> DriveOutput {
-        let Some(parent) = self.meta.get(&id).and_then(|meta| meta.parent) else {
-            tracing::info!(agent = %id, ?reason, "root task cancelled");
+    fn route_cancelled(&mut self, id: AgentId, _reason: CancelReason) -> DriveOutput {
+        if self.meta.get(&id).and_then(|meta| meta.parent).is_none() {
             return DriveOutput::default();
-        };
-        tracing::info!(
-            agent = %id,
-            parent_agent = %parent,
-            ?reason,
-            "subagent task cancelled"
-        );
+        }
         self.delete_subtree(id);
         DriveOutput::default()
     }
@@ -1095,7 +1032,6 @@ where
             .retain(|queued| !victims.contains(queued));
         self.subagent_result_mailbox
             .retain(|result| !victims.contains(&result.parent));
-        tracing::info!(root_agent = %root, removed = victims.len(), session = %self.session, "subtree deleted");
     }
 
     fn deliver_or_mailbox_subagent_result(
