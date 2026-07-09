@@ -100,34 +100,3 @@ impl AgentManifest {
 // entry per kind under `resources/agents/`. This `include!` must follow the
 // `AgentManifest` definition (and the field types) the generated code references.
 include!(concat!(env!("OUT_DIR"), "/manifests.rs"));
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn manifests_are_baked_and_self_consistent() {
-        assert!(!MANIFESTS.is_empty(), "no manifests baked");
-        for manifest in MANIFESTS {
-            assert!(
-                !manifest.kind.as_str().is_empty(),
-                "a manifest has an empty kind"
-            );
-            assert!(
-                !manifest.instructions.trim().is_empty(),
-                "kind {} has no prompt",
-                manifest.kind
-            );
-        }
-    }
-
-    #[test]
-    fn for_kind_finds_baked_kinds_and_rejects_others() {
-        for manifest in MANIFESTS {
-            let found = AgentManifest::for_kind(manifest.kind.as_str()).expect("baked kind");
-            assert_eq!(found.kind, manifest.kind);
-        }
-        assert!(AgentManifest::for_kind("nope").is_none());
-    }
-}

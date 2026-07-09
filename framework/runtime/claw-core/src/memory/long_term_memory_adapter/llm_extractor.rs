@@ -20,7 +20,6 @@ use super::extraction::{
     ExtractError, ExtractFuture, ExtractedItem, ExtractionInput, Extractor, MemoryOp,
     MemorySnapshot,
 };
-use super::MemoryTierHint;
 
 /// System prompt steering the extraction. Asks the model to reconcile memory
 /// against the conversation and reply with ONLY a JSON array of ops.
@@ -94,7 +93,12 @@ impl<H: ClawHttp, Timer: ClawTimer> Extractor for LlmExtractor<H, Timer> {
                 .await
                 .map_err(ExtractError::from)?;
 
-            let text = response.text.unwrap_or_default();
+            let Some(text) = response.text else {
+                return Err(ExtractError::EmptyOutput);
+            };
+            if text.trim().is_empty() {
+                return Err(ExtractError::EmptyOutput);
+            }
             Ok(parse_ops(&text))
         })
     }
@@ -121,10 +125,8 @@ fn render_existing(existing: &[MemorySnapshot]) -> String {
 
 /// Parse the model's reply into ops, tolerating prose around the JSON array.
 ///
-/// Best-effort: a reply with no parseable array yields no ops; a malformed
-/// individual entry is skipped rather than failing the whole batch. An entry
-/// with no `op` field defaults to `add`. A `replace`/`forget` missing a usable
-/// `id` is dropped (it cannot name a target).
+/// Best-effort: a reply with no parseable array yields no ops, and malformed
+/// individual entries are skipped rather than failing the whole batch.
 fn parse_ops(text: &str) -> Vec<MemoryOp> {
     let Some(array) = extract_json_array(text) else {
         return Vec::new();
@@ -136,8 +138,7 @@ fn parse_ops(text: &str) -> Vec<MemoryOp> {
 fn parse_op(entry: &Value) -> Option<MemoryOp> {
     let op = entry
         .get("op")
-        .and_then(Value::as_str)
-        .unwrap_or("add")
+        .and_then(Value::as_str)?
         .to_ascii_lowercase();
     match op.as_str() {
         "forget" => Some(MemoryOp::Forget {
@@ -147,8 +148,8 @@ fn parse_op(entry: &Value) -> Option<MemoryOp> {
             id: parse_id(entry)?,
             item: parse_item(entry)?,
         }),
-        // Default (and explicit "add").
-        _ => Some(MemoryOp::Add(parse_item(entry)?)),
+        "add" => Some(MemoryOp::Add(parse_item(entry)?)),
+        _ => None,
     }
 }
 
@@ -167,11 +168,8 @@ fn parse_item(entry: &Value) -> Option<ExtractedItem> {
     }
     Some(ExtractedItem {
         content: content.to_string(),
-        tags: string_array(entry.get("tags")),
-        keywords: string_array(entry.get("keywords")),
-        // The LLM is intentionally not asked to choose a tier; the classifier
-        // decides from the tags.
-        tier: MemoryTierHint::Auto,
+        tags: string_array(entry.get("tags"))?,
+        keywords: string_array(entry.get("keywords"))?,
     })
 }
 
@@ -189,91 +187,18 @@ fn extract_json_array(text: &str) -> Option<Vec<Value>> {
         })
 }
 
-/// Read a JSON string array, dropping non-string and empty entries.
-fn string_array(value: Option<&Value>) -> Vec<String> {
-    value
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::trim)
-                .filter(|item| !item.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-#[cfg(test)]
-#[allow(clippy::indexing_slicing)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn add_op_defaults_when_op_field_absent() {
-        let text = r#"[{"content":"Likes tea","tags":["preference"],"keywords":["tea"]}]"#;
-        let ops = parse_ops(text);
-        assert_eq!(ops.len(), 1);
-        match &ops[0] {
-            MemoryOp::Add(item) => {
-                assert_eq!(item.content, "Likes tea");
-                assert_eq!(item.tags, vec!["preference".to_string()]);
-                assert_eq!(item.keywords, vec!["tea".to_string()]);
-                assert_eq!(item.tier, MemoryTierHint::Auto);
-            }
-            other => panic!("expected add, got {other:?}"),
+/// Read an optional JSON string array. Missing is empty; malformed is rejected.
+fn string_array(value: Option<&Value>) -> Option<Vec<String>> {
+    let Some(value) = value else {
+        return Some(Vec::new());
+    };
+    let items = value.as_array()?;
+    let mut strings = Vec::with_capacity(items.len());
+    for item in items {
+        let text = item.as_str()?.trim();
+        if !text.is_empty() {
+            strings.push(text.to_string());
         }
     }
-
-    #[test]
-    fn explicit_add_replace_and_forget_parse() {
-        let text = r#"[
-            {"op":"add","content":"Has a dog"},
-            {"op":"replace","id":"g-2","content":"Lives in Berlin","tags":["fact"]},
-            {"op":"forget","id":"a-5"}
-        ]"#;
-        let ops = parse_ops(text);
-        assert_eq!(ops.len(), 3);
-        assert!(matches!(&ops[0], MemoryOp::Add(item) if item.content == "Has a dog"));
-        match &ops[1] {
-            MemoryOp::Replace { id, item } => {
-                assert_eq!(id.as_str(), "g-2");
-                assert_eq!(item.content, "Lives in Berlin");
-            }
-            other => panic!("expected replace, got {other:?}"),
-        }
-        assert!(matches!(&ops[2], MemoryOp::Forget { id } if id.as_str() == "a-5"));
-    }
-
-    #[test]
-    fn tolerates_prose_around_the_array() {
-        let text = "Sure! Here is what I found:\n[{\"content\":\"Name is Ada\"}]\nHope that helps.";
-        let ops = parse_ops(text);
-        assert_eq!(ops.len(), 1);
-        assert!(matches!(&ops[0], MemoryOp::Add(item) if item.content == "Name is Ada"));
-    }
-
-    #[test]
-    fn empty_array_yields_no_ops() {
-        assert!(parse_ops("[]").is_empty());
-        assert!(parse_ops("nothing worth remembering").is_empty());
-    }
-
-    #[test]
-    fn drops_malformed_entries() {
-        // add without content, replace/forget without an id: each is unusable and
-        // dropped, leaving only the one real fact.
-        let text = r#"[
-            {"tags":["x"]},
-            {"content":"  "},
-            {"op":"replace","content":"no id here"},
-            {"op":"forget"},
-            {"op":"forget","id":"  "},
-            {"content":"real fact"}
-        ]"#;
-        let ops = parse_ops(text);
-        assert_eq!(ops.len(), 1);
-        assert!(matches!(&ops[0], MemoryOp::Add(item) if item.content == "real fact"));
-    }
+    Some(strings)
 }

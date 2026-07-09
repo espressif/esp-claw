@@ -42,42 +42,35 @@ fn str_field<'a>(obj: &'a Value, key: &str) -> Option<&'a str> {
     obj.get(key).and_then(|v| v.as_str())
 }
 
-/// `anthropic_make_text_block`
-fn make_text_block(text: &str) -> Option<Value> {
-    if text.is_empty() {
-        return None;
-    }
-    Some(json!({"type": "text", "text": text}))
-}
-
 /// `anthropic_make_tool_use_block`
-fn make_tool_use_block(tool_call: &Value) -> Option<Value> {
+fn make_tool_use_block(tool_call: &Value) -> Result<Value, ClawApiError> {
     if !tool_call.is_object() {
-        return None;
+        return Err(ClawApiError::ApiError(
+            "invalid tool call in message history",
+        ));
     }
-    let id = str_field(tool_call, "id")?;
+    let id = str_field(tool_call, "id")
+        .filter(|id| !id.is_empty())
+        .ok_or(ClawApiError::ApiError(
+            "invalid tool call in message history",
+        ))?;
     let function = tool_call.get("function");
     let name = function
         .and_then(|f| f.get("name"))
-        .and_then(|n| n.as_str())?;
+        .and_then(|n| n.as_str())
+        .filter(|name| !name.is_empty())
+        .ok_or(ClawApiError::ApiError(
+            "invalid tool call in message history",
+        ))?;
     let args = function
         .and_then(|f| f.get("arguments"))
         .and_then(|a| a.as_str());
     let input = match args {
-        Some(s) if !s.is_empty() => serde_json::from_str::<Value>(s).unwrap_or_else(|_| json!({})),
+        Some(s) if !s.is_empty() => serde_json::from_str::<Value>(s)
+            .map_err(|_| ClawApiError::ApiError("invalid tool call arguments json"))?,
         _ => json!({}),
     };
-    Some(json!({"type": "tool_use", "id": id, "name": name, "input": input}))
-}
-
-/// `anthropic_duplicate_supported_block`
-fn duplicate_supported_block(block: &Value) -> Option<Value> {
-    let ty = str_field(block, "type")?;
-    matches!(
-        ty,
-        "text" | "tool_use" | "tool_result" | "thinking" | "redacted_thinking"
-    )
-    .then(|| block.clone())
+    Ok(json!({"type": "tool_use", "id": id, "name": name, "input": input}))
 }
 
 /// `convert_messages_to_anthropic`
@@ -106,7 +99,9 @@ fn convert_messages_to_anthropic(
         // Merge consecutive "tool"-role messages into one "user" message.
         if role == "tool" {
             let mut tool_blocks: Vec<Value> = Vec::new();
-            push_tool_result_block(msg, &mut tool_blocks);
+            if let Some(block) = make_tool_result_block(msg) {
+                tool_blocks.push(block);
+            }
             while iter
                 .peek()
                 .is_some_and(|next| str_field(next, "role") == Some("tool"))
@@ -114,7 +109,12 @@ fn convert_messages_to_anthropic(
                 let Some(inner) = iter.next() else {
                     break;
                 };
-                push_tool_result_block(inner, &mut tool_blocks);
+                if let Some(block) = make_tool_result_block(inner) {
+                    tool_blocks.push(block);
+                }
+            }
+            if tool_blocks.is_empty() {
+                continue;
             }
             out.push(json!({"role": "user", "content": tool_blocks}));
             continue;
@@ -128,14 +128,15 @@ fn convert_messages_to_anthropic(
         let content = msg.get("content");
         match content {
             Some(Value::String(s)) if !s.is_empty() => {
-                if let Some(b) = make_text_block(s) {
-                    blocks.push(b);
-                }
+                blocks.push(json!({"type": "text", "text": s}));
             }
             Some(Value::Array(items)) => {
                 for block in items {
-                    if let Some(dup) = duplicate_supported_block(block) {
-                        blocks.push(dup);
+                    if let Some(
+                        "text" | "tool_use" | "tool_result" | "thinking" | "redacted_thinking",
+                    ) = str_field(block, "type")
+                    {
+                        blocks.push(block.clone());
                     }
                 }
             }
@@ -148,12 +149,7 @@ fn convert_messages_to_anthropic(
             }
             if let Some(tool_calls) = msg.get("tool_calls").and_then(|t| t.as_array()) {
                 for tc in tool_calls {
-                    match make_tool_use_block(tc) {
-                        Some(b) => blocks.push(b),
-                        None => {
-                            return Err(ClawApiError::ApiError("out of memory converting messages"))
-                        }
-                    }
+                    blocks.push(make_tool_use_block(tc)?);
                 }
             }
         }
@@ -168,19 +164,16 @@ fn convert_messages_to_anthropic(
     Ok(Value::Array(out))
 }
 
-fn push_tool_result_block(message: &Value, tool_blocks: &mut Vec<Value>) {
-    let tid = str_field(message, "tool_call_id").unwrap_or("");
-    let content = str_field(message, "content").unwrap_or("");
-    let is_error = message
-        .get("is_error")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    tool_blocks.push(json!({
+fn make_tool_result_block(message: &Value) -> Option<Value> {
+    let tid = str_field(message, "tool_call_id").filter(|id| !id.is_empty())?;
+    let content = str_field(message, "content")?;
+    let is_error = message.get("is_error").and_then(|v| v.as_bool()) == Some(true);
+    Some(json!({
         "type": "tool_result",
         "tool_use_id": tid,
         "content": content,
         "is_error": is_error,
-    }));
+    }))
 }
 
 /// `convert_tools_to_anthropic`. Returns `None` when there are no tools or the
@@ -377,11 +370,11 @@ impl Anthropic {
         strict: bool,
     ) -> Result<(), ChatError> {
         let tools = convert_tools_to_anthropic(tools_json, strict);
-        if tools_json.map(|s| !s.is_empty()).unwrap_or(false) && tools.is_none() {
+        if tools_json.is_some_and(|s| !s.is_empty()) && tools.is_none() {
             return Err(ChatError::InvalidToolsJson);
         }
         if let Some(tools) = tools {
-            if tools.as_array().map(|a| !a.is_empty()).unwrap_or(false) {
+            if tools.as_array().is_some_and(|a| !a.is_empty()) {
                 body.insert("tools".to_string(), tools);
                 body.insert("tool_choice".to_string(), json!({"type": "auto"}));
             }
@@ -455,10 +448,9 @@ impl BackendImpl for Anthropic {
         request: &MediaRequest,
         abort: &AtomicBool,
     ) -> Result<String, InferMediaError> {
-        let user_prompt = request.user_prompt.unwrap_or("");
-        if user_prompt.is_empty() {
+        let Some(user_prompt) = request.user_prompt.filter(|prompt| !prompt.is_empty()) else {
             return Err(InferMediaError::IncompleteRequest);
-        }
+        };
         let asset = single_media_asset(request.media)?;
 
         let prepared = prepare_asset(asset, IMAGE_REMOTE_URL_ONLY, self.context.image_max_bytes())?;
@@ -474,8 +466,7 @@ impl BackendImpl for Anthropic {
             MAX_TOKENS_FIELD.to_string(),
             json!(self.context.max_tokens()),
         );
-        let system = request.system_prompt.unwrap_or("");
-        if !system.is_empty() {
+        if let Some(system) = request.system_prompt.filter(|prompt| !prompt.is_empty()) {
             body.insert("system".to_string(), json!(system));
         }
         body.insert(
@@ -548,10 +539,9 @@ impl BackendImpl for Anthropic {
         request: &MediaRequest<'_>,
         cancel: Cancel<'_>,
     ) -> Result<String, InferMediaError> {
-        let user_prompt = request.user_prompt.unwrap_or("");
-        if user_prompt.is_empty() {
+        let Some(user_prompt) = request.user_prompt.filter(|prompt| !prompt.is_empty()) else {
             return Err(InferMediaError::IncompleteRequest);
-        }
+        };
         let asset = single_media_asset(request.media)?;
 
         let prepared = prepare_asset(asset, IMAGE_REMOTE_URL_ONLY, self.context.image_max_bytes())?;
@@ -567,8 +557,7 @@ impl BackendImpl for Anthropic {
             MAX_TOKENS_FIELD.to_string(),
             json!(self.context.max_tokens()),
         );
-        let system = request.system_prompt.unwrap_or("");
-        if !system.is_empty() {
+        if let Some(system) = request.system_prompt.filter(|prompt| !prompt.is_empty()) {
             body.insert("system".to_string(), json!(system));
         }
         body.insert(

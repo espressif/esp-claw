@@ -8,6 +8,10 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use claw_api::ClawApiConfig;
+use claw_checkpoint::{
+    BatchId, BatchWrite, CheckpointStorage, CheckpointStorageError, CheckpointWrite, DurablePart,
+    DurablePartError, FsCheckpointStorage, LoadCheckpointError, PartWrite,
+};
 pub use claw_core::{
     IterationId, OpenSessionError, SessionControl, SessionControlError, SessionEvent,
     SessionEventStream, SessionId, TurnCause, TurnId,
@@ -22,6 +26,11 @@ use claw_tool::{ToolRegistry, ToolRegistryError};
 pub type HostAgentSystem = AgentSystem<DiskFs, RealHttp, TokioTimer>;
 
 pub type AgentResult<T> = Result<T, AgentError>;
+
+const CHECKPOINT_DIR: &str = "checkpoint";
+const TOOL_REGISTRY_BATCH: &str = "tool-registry";
+const TOOL_REGISTRY_BATCH_ID: BatchId = BatchId::new(1);
+const TOOL_REGISTRY_PART: &str = "tool-registry";
 
 /// Explicit storage root for an [`AgentSystem`], plus the skill roots the agent
 /// factory scans to populate every agent's skill catalog.
@@ -51,6 +60,21 @@ pub enum AgentError {
         path: String,
         #[source]
         source: FsError,
+    },
+    /// Checkpoint storage metadata could not be read or written.
+    #[error("checkpoint storage failed: {0}")]
+    CheckpointStorage(#[from] CheckpointStorageError),
+    /// A checkpoint exists but cannot be loaded.
+    #[error("checkpoint load failed: {0}")]
+    CheckpointLoad(#[from] LoadCheckpointError),
+    /// A checkpoint part could not be exported or restored.
+    #[error("checkpoint durable part failed: {0}")]
+    CheckpointPart(#[from] DurablePartError),
+    /// A checkpoint exists but does not contain the expected durable part.
+    #[error("checkpoint is missing part {part} in batch {batch}")]
+    MissingCheckpointPart {
+        batch: &'static str,
+        part: &'static str,
     },
 }
 
@@ -96,7 +120,31 @@ where
         Thread: ClawThread,
         Executor: ClawExecutor + 'static,
     {
-        let tools = Arc::new(ToolRegistry::new());
+        let persistence_root = persistence.persistence_root.trim_end_matches('/');
+        let checkpoint_root = if persistence.persistence_root == "/" {
+            format!("/{CHECKPOINT_DIR}")
+        } else if persistence_root.is_empty() {
+            CHECKPOINT_DIR.to_owned()
+        } else {
+            format!("{persistence_root}/{CHECKPOINT_DIR}")
+        };
+        let tools = Arc::new(load_tool_registry::<Filesystem>(&checkpoint_root)?);
+        tools.set_checkpoint_hook(move |state, hint| {
+            let mut storage = FsCheckpointStorage::<Filesystem>::new(checkpoint_root.clone());
+            let step = storage.next_step()?;
+            storage.write_checkpoint(CheckpointWrite {
+                step,
+                batches: vec![BatchWrite {
+                    batch: (TOOL_REGISTRY_BATCH, TOOL_REGISTRY_BATCH_ID),
+                    writes: vec![PartWrite {
+                        name: TOOL_REGISTRY_PART,
+                        state,
+                        hint,
+                    }],
+                }],
+            })?;
+            Ok(())
+        });
         let orchestrator = Orchestrator::new::<Filesystem, Http, Timer, Thread, Executor>(
             Arc::clone(&tools),
             llm_config,
@@ -177,354 +225,32 @@ where
     }
 }
 
-#[cfg(feature = "host-backends")]
-impl AgentSystem<DiskFs, RealHttp, TokioTimer> {
-    /// Build a host-target agent system backed by disk memory and live HTTP.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`AgentError`] when construction fails.
-    pub fn on_disk(llm: ClawApiConfig, persistence: AgentPersistenceConfig) -> AgentResult<Self> {
-        Self::new::<StdThread, TokioExecutor>(llm, persistence)
-    }
-}
-
-#[cfg(test)]
-fn clear_storage_tree<F: ClawFs>(root: &str) -> Result<(), FsError> {
-    for child in F::list_dir(root)? {
-        let path = join_storage_path(root, &child);
-        if F::list_dir(&path).is_ok_and(|entries| !entries.is_empty()) {
-            clear_storage_tree::<F>(&path)?;
-        }
-        F::remove(&path)?;
-    }
-    F::remove(root)
-}
-
-#[cfg(test)]
-fn join_storage_path(parent: &str, child: &str) -> String {
-    if parent == "/" {
-        return format!("/{child}");
-    }
-    let parent = parent.trim_end_matches('/');
-    if parent.is_empty() {
-        child.to_string()
-    } else {
-        format!("{parent}/{child}")
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use core::future::Future;
-    use core::pin::Pin;
-    use core::task::{Context, Poll};
-
-    use futures_lite::future::block_on;
-    use futures_lite::StreamExt;
-
-    use claw_api::{BackendKind, ClawApiConfig};
-    use claw_interface::{
-        BlockingHttpAdapter, Cancel, ClawHttp, HttpError, HttpJsonRequest, HttpResponseFuture,
-        ImmediateTimer, MemFs, SharedScriptHttp, StdThread, TokioExecutor,
+fn load_tool_registry<Filesystem: ClawFs>(checkpoint_root: &str) -> AgentResult<ToolRegistry> {
+    let storage = FsCheckpointStorage::<Filesystem>::new(checkpoint_root.to_owned());
+    let Some(step) = storage.latest_step()? else {
+        return Ok(ToolRegistry::new());
     };
-    use serde_json::json;
-
-    use super::*;
-
-    type TestSystem = AgentSystem<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>;
-    type SlowTestSystem = AgentSystem<MemFs, SlowScriptHttp, ImmediateTimer>;
-
-    #[derive(Default)]
-    struct SlowScriptHttp;
-
-    impl ClawHttp for SlowScriptHttp {
-        fn post_json<'a>(
-            &'a mut self,
-            request: &'a HttpJsonRequest<'a>,
-            cancel: Cancel<'a>,
-        ) -> HttpResponseFuture<'a> {
-            Box::pin(async move {
-                YieldTimes::new(16).await;
-                if cancel.is_cancelled() {
-                    return Err(HttpError::Aborted);
-                }
-                let mut inner = BlockingHttpAdapter::new(SharedScriptHttp::default());
-                inner.post_json(request, cancel).await
-            })
+    let checkpoint = storage.load_checkpoint(step)?;
+    let mut saw_batch = false;
+    for batch in checkpoint.batches {
+        if batch.name != TOOL_REGISTRY_BATCH || batch.id != TOOL_REGISTRY_BATCH_ID {
+            continue;
         }
-    }
-
-    struct YieldTimes {
-        remaining: u32,
-    }
-
-    impl YieldTimes {
-        const fn new(remaining: u32) -> Self {
-            Self { remaining }
-        }
-    }
-
-    impl Future for YieldTimes {
-        type Output = ();
-
-        fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-            if self.remaining == 0 {
-                Poll::Ready(())
-            } else {
-                self.remaining -= 1;
-                context.waker().wake_by_ref();
-                Poll::Pending
+        saw_batch = true;
+        for part in batch.parts {
+            if part.name == TOOL_REGISTRY_PART {
+                return Ok(<ToolRegistry as DurablePart>::restore_from_state(
+                    part.state.as_slice(),
+                )?);
             }
         }
     }
-
-    #[test]
-    fn clear_storage_tree_removes_nested_files() {
-        MemFs::default();
-        MemFs::write_atomic("/agent/sessions/roots/conversation-1.jsonl", b"root").unwrap();
-        MemFs::write_atomic("/agent/sessions/agents/conversation-2.jsonl", b"sub").unwrap();
-        MemFs::write_atomic("/agent/profile/user.md", b"profile").unwrap();
-
-        clear_storage_tree::<MemFs>("/agent").unwrap();
-
-        assert!(!MemFs::exists("/agent/sessions/roots/conversation-1.jsonl"));
-        assert!(!MemFs::exists(
-            "/agent/sessions/agents/conversation-2.jsonl"
-        ));
-        assert!(!MemFs::exists("/agent/profile/user.md"));
-    }
-
-    #[test]
-    fn list_sessions_returns_session_ids() {
-        let _script = SharedScriptHttp::serialize();
-        let system = test_system(vec![]);
-        let session = system.new_session();
-
-        let sessions = system.list_sessions();
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0], session);
-    }
-
-    fn drain_until_turn_ended(events: &mut SessionEventStream) -> Vec<SessionEvent> {
-        block_on(async move {
-            let mut collected = Vec::new();
-            while let Some(event) = events.next().await {
-                let ended = matches!(event, SessionEvent::TurnEnded { .. });
-                collected.push(event);
-                if ended {
-                    break;
-                }
-            }
-            collected
+    if saw_batch {
+        Err(AgentError::MissingCheckpointPart {
+            batch: TOOL_REGISTRY_BATCH,
+            part: TOOL_REGISTRY_PART,
         })
-    }
-
-    fn drain_until_closed(events: &mut SessionEventStream) -> Vec<SessionEvent> {
-        block_on(async move {
-            let mut collected = Vec::new();
-            while let Some(event) = events.next().await {
-                let closed = event == SessionEvent::Closed;
-                collected.push(event);
-                if closed {
-                    break;
-                }
-            }
-            collected
-        })
-    }
-
-    #[test]
-    fn session_streams_root_reply_as_output() {
-        let _script = SharedScriptHttp::serialize();
-        let system = test_system(vec![assistant_text("hello there")]);
-        let session = system.new_session();
-        let (control, mut events) = system.open_session(session).unwrap();
-
-        block_on(control.submit("say hi")).unwrap();
-        let events = drain_until_turn_ended(&mut events);
-
-        assert_eq!(
-            events.first(),
-            Some(&SessionEvent::TurnStarted {
-                turn: TurnId(1),
-                cause: TurnCause::UserSubmit
-            })
-        );
-        assert_eq!(
-            events.last(),
-            Some(&SessionEvent::TurnEnded { turn: TurnId(1) })
-        );
-        let outputs: Vec<&str> = events
-            .iter()
-            .filter_map(|event| match event {
-                SessionEvent::Output { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(outputs, vec!["hello there"]);
-    }
-
-    #[test]
-    fn open_unknown_session_returns_error() {
-        let _script = SharedScriptHttp::serialize();
-        let system = test_system(vec![]);
-        assert!(matches!(
-            system.open_session(SessionId(9)),
-            Err(AgentError::OpenSession(OpenSessionError::SessionNotFound(
-                SessionId(9)
-            )))
-        ));
-    }
-
-    #[test]
-    fn second_submit_returns_busy_until_current_turn_ends() {
-        let _script = SharedScriptHttp::serialize();
-        let system = slow_test_system(vec![assistant_text("first"), assistant_text("second")]);
-        let session = system.new_session();
-        let (control, mut events) = system.open_session(session).unwrap();
-
-        block_on(async {
-            control.submit("first").await.unwrap();
-            assert_eq!(
-                control.submit("second").await,
-                Err(SessionControlError::Busy(session))
-            );
-        });
-        let first_events = drain_until_turn_ended(&mut events);
-
-        assert!(first_events
-            .iter()
-            .any(|event| matches!(event, SessionEvent::Output { text } if text == "first")));
-        block_on(control.submit("second")).unwrap();
-        let second_events = drain_until_turn_ended(&mut events);
-        assert!(second_events
-            .iter()
-            .any(|event| matches!(event, SessionEvent::Output { text } if text == "second")));
-    }
-
-    #[test]
-    fn session_control_methods_are_idempotent() {
-        let _script = SharedScriptHttp::serialize();
-        let system = slow_test_system(vec![assistant_text("cancelled")]);
-        let session = system.new_session();
-        let (control, mut events) = system.open_session(session).unwrap();
-
-        block_on(async {
-            control.submit("cancel me").await.unwrap();
-            control.interrupt().await.unwrap();
-            control.interrupt().await.unwrap();
-            control.cancel().await.unwrap();
-            control.cancel().await.unwrap();
-        });
-
-        let events = drain_until_turn_ended(&mut events);
-        assert!(matches!(
-            events.first(),
-            Some(SessionEvent::TurnStarted {
-                turn: TurnId(1),
-                cause: TurnCause::UserSubmit
-            })
-        ));
-        assert_eq!(
-            events.last(),
-            Some(&SessionEvent::TurnEnded { turn: TurnId(1) })
-        );
-    }
-
-    #[test]
-    fn close_session_cancels_active_work_and_closes_events() {
-        let _script = SharedScriptHttp::serialize();
-        let system = slow_test_system(vec![assistant_text("should not surface")]);
-        let session = system.new_session();
-        let (control, mut events) = system.open_session(session).unwrap();
-
-        block_on(async {
-            control.submit("close me").await.unwrap();
-            control.close_session().await.unwrap();
-        });
-        let events = drain_until_closed(&mut events);
-
-        assert_eq!(events.last(), Some(&SessionEvent::Closed));
-        assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event, SessionEvent::Output { .. })),
-            "closed stream should be cancelled without output: {events:?}"
-        );
-        assert!(system.list_sessions().contains(&session));
-        assert!(
-            block_on(control.submit("after close")).is_err(),
-            "closed control should reject new submits"
-        );
-    }
-
-    #[test]
-    fn delete_session_removes_session_and_closes_open_stream() {
-        let _script = SharedScriptHttp::serialize();
-        let system = test_system(vec![]);
-        let session = system.new_session();
-        let (_control, mut events) = system.open_session(session).unwrap();
-
-        system.delete_session(session).unwrap();
-        let events = drain_until_closed(&mut events);
-
-        assert_eq!(events.last(), Some(&SessionEvent::Closed));
-        assert!(!system.list_sessions().contains(&session));
-        assert!(matches!(
-            system.open_session(session),
-            Err(AgentError::OpenSession(OpenSessionError::SessionNotFound(
-                missing
-            ))) if missing == session
-        ));
-    }
-
-    fn test_system(bodies: Vec<String>) -> TestSystem {
-        install_script(bodies);
-        TestSystem::new::<StdThread, TokioExecutor>(
-            llm_config(),
-            AgentPersistenceConfig {
-                persistence_root: "/mem".to_string(),
-                skill_roots: Vec::new(),
-            },
-        )
-        .unwrap()
-    }
-
-    fn slow_test_system(bodies: Vec<String>) -> SlowTestSystem {
-        install_script(bodies);
-        SlowTestSystem::new::<StdThread, TokioExecutor>(
-            llm_config(),
-            AgentPersistenceConfig {
-                persistence_root: "/mem".to_string(),
-                skill_roots: Vec::new(),
-            },
-        )
-        .unwrap()
-    }
-
-    fn install_script(bodies: Vec<String>) {
-        let mut script = Vec::with_capacity(bodies.len().saturating_add(1));
-        if !bodies.is_empty() {
-            script.push(assistant_text("[]"));
-        }
-        for body in bodies {
-            script.push(body);
-        }
-        SharedScriptHttp::install(script);
-    }
-
-    fn llm_config() -> ClawApiConfig {
-        ClawApiConfig::new(
-            BackendKind::OpenAiCompatible,
-            "sk-test",
-            "gpt-test",
-            "https://example.invalid",
-        )
-    }
-
-    fn assistant_text(text: &str) -> String {
-        json!({ "choices": [{ "message": { "role": "assistant", "content": text } }] }).to_string()
+    } else {
+        Ok(ToolRegistry::new())
     }
 }

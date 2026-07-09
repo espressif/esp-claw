@@ -28,10 +28,18 @@
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
-use std::collections::{HashMap, VecDeque};
+use std::borrow::Cow;
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::error::Error;
+use std::fmt;
 use std::sync::{Arc, Mutex};
 
+use claw_checkpoint::{
+    ChangePatternHint, DurablePart, DurablePartError, DurableState, DurableStateCodec,
+    PartGeneration, PartStateBlob, PartStateSlice, SchemaVersion, StorageHint, StorageSizeHint,
+};
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
+use serde::{Deserialize, Serialize};
 use tracing::Instrument as _;
 
 use crate::agent::{
@@ -131,6 +139,74 @@ pub(crate) enum InstanceDeliverError {
     },
 }
 
+#[derive(Debug)]
+pub struct OrchestratorInstanceRestoreError {
+    kind: OrchestratorInstanceRestoreErrorKind,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum OrchestratorInstanceRestoreErrorKind {
+    #[error("failed to rebuild checkpointed agent {agent}: {source}")]
+    Agent {
+        agent: AgentId,
+        #[source]
+        source: FsAgentCreateError,
+    },
+    #[error("checkpointed agent is missing after rebuild: {0}")]
+    MissingAgent(AgentId),
+    #[error("unknown checkpointed agent part {part} for {agent}")]
+    UnknownPart { agent: AgentId, part: String },
+    #[error("failed to restore checkpointed agent part {part} for {agent}: {source}")]
+    DurablePart {
+        agent: AgentId,
+        part: String,
+        #[source]
+        source: DurablePartError,
+    },
+}
+
+impl OrchestratorInstanceRestoreError {
+    fn agent(agent: AgentId, source: FsAgentCreateError) -> Self {
+        Self {
+            kind: OrchestratorInstanceRestoreErrorKind::Agent { agent, source },
+        }
+    }
+
+    fn missing_agent(agent: AgentId) -> Self {
+        Self {
+            kind: OrchestratorInstanceRestoreErrorKind::MissingAgent(agent),
+        }
+    }
+
+    fn unknown_part(agent: AgentId, part: String) -> Self {
+        Self {
+            kind: OrchestratorInstanceRestoreErrorKind::UnknownPart { agent, part },
+        }
+    }
+
+    fn durable_part(agent: AgentId, part: String, source: DurablePartError) -> Self {
+        Self {
+            kind: OrchestratorInstanceRestoreErrorKind::DurablePart {
+                agent,
+                part,
+                source,
+            },
+        }
+    }
+}
+
+impl fmt::Display for OrchestratorInstanceRestoreError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.kind.fmt(formatter)
+    }
+}
+
+impl Error for OrchestratorInstanceRestoreError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.kind.source()
+    }
+}
+
 /// Failure appending a message to one live agent.
 #[derive(Clone, Debug, thiserror::Error)]
 pub(crate) enum AgentMessageDeliveryError {
@@ -145,6 +221,7 @@ pub(crate) enum AgentMessageDeliveryError {
 /// One agent's graph edges — the relationship data the instance owns and runs all
 /// graph algorithms over. The agent itself (behind a registry handle) never sees
 /// this.
+#[derive(Clone)]
 struct NodeMeta {
     /// The creator; `None` for a root.
     parent: Option<AgentId>,
@@ -202,6 +279,7 @@ struct SubagentResult {
 ///
 /// This is not a batch barrier: polling resolves as soon as any task completes,
 /// leaving slower tasks in the table.
+#[derive(Default)]
 struct InflightAgentTasks {
     entries: Vec<Option<InflightAgentTask>>,
 }
@@ -248,7 +326,7 @@ impl InflightAgentTasks {
             .collect()
     }
 
-    fn retain_live(&mut self, meta: &HashMap<AgentId, NodeMeta>) {
+    fn retain_live(&mut self, meta: &BTreeMap<AgentId, NodeMeta>) {
         self.entries.retain(|entry| {
             entry
                 .as_ref()
@@ -260,14 +338,6 @@ impl InflightAgentTasks {
         CompletedAgentTicks {
             tasks: self,
             control,
-        }
-    }
-}
-
-impl Default for InflightAgentTasks {
-    fn default() -> Self {
-        Self {
-            entries: Vec::new(),
         }
     }
 }
@@ -347,14 +417,14 @@ fn tick_agent(ready: ReadyAgent, events: EventSink) -> AgentTickBoxFuture {
 /// reads the shared snapshot, so a tool may call it freely mid-tick.
 #[derive(Clone)]
 struct InstanceHost {
-    ids: AgentIdAllocator,
+    agent_id_allocator: AgentIdAllocator,
     effects: EffectQueue,
     snapshots: SnapshotView,
 }
 
 impl GraphHost for InstanceHost {
     fn next_id(&self) -> AgentId {
-        self.ids.next()
+        self.agent_id_allocator.next()
     }
 
     fn emit(&self, requester: AgentId, effect: GraphEffect) {
@@ -382,29 +452,15 @@ where
     Timer: ClawTimer + Default + 'static,
 {
     session: SessionId,
-    /// The agent store (insert / get-handle / remove). Graph-blind.
-    registry: AgentRegistry,
     /// Builds agents (root and children). Owned here; the registry only stores.
     factory: Arc<FsAgentFactory<Filesystem, Http, Timer>>,
     /// Shared, process-wide id allocator for roots and spawned children.
-    ids: AgentIdAllocator,
-    /// The agent graph: one [`NodeMeta`] per live agent, keyed by id.
-    meta: HashMap<AgentId, NodeMeta>,
-    /// Agents with work queued, in service order.
-    ready: VecDeque<AgentId>,
+    agent_id_allocator: AgentIdAllocator,
+    /// Durable graph and scheduler state.
+    state: DurableState<OrchestratorInstanceState>,
     /// Agent ticks currently in flight. Kept on the session instance so a root
     /// turn can end while background subagents continue running.
     inflight: InflightAgentTasks,
-    /// Pending permission requests, keyed by the parked agent.
-    parked_approvals: HashMap<AgentId, ParkedApproval>,
-    /// FIFO order for user-facing approval prompts. The front is the only reply
-    /// the next user message may resolve.
-    approval_queue: VecDeque<AgentId>,
-    /// Finished subagent results whose parent cannot be borrowed yet because it
-    /// is either in flight or parked on approval.
-    subagent_result_mailbox: VecDeque<SubagentResult>,
-    /// The root agent's id, set when the first message builds it.
-    root: Option<AgentId>,
     /// Graph effects emitted by agents during the current/last tick, applied after
     /// it at a borrow-safe point. Shared with every agent's [`GraphHost`].
     effects: EffectQueue,
@@ -415,6 +471,247 @@ where
     host: Arc<dyn GraphHost>,
 }
 
+#[derive(Default)]
+pub(crate) struct OrchestratorInstanceState {
+    /// The agent store (insert / get-handle / remove). Graph-blind.
+    registry: AgentRegistry,
+    /// The root agent's id, set when the first message builds it.
+    root: Option<AgentId>,
+    /// The agent graph: one [`NodeMeta`] per live agent, keyed by id.
+    meta: BTreeMap<AgentId, NodeMeta>,
+    /// Agents with work queued, in service order.
+    ready: VecDeque<AgentId>,
+    /// Pending permission requests, keyed by the parked agent.
+    parked_approvals: BTreeMap<AgentId, ParkedApproval>,
+    /// FIFO order for user-facing approval prompts. The front is the only reply
+    /// the next user message may resolve.
+    approval_queue: VecDeque<AgentId>,
+    /// Finished subagent results whose parent cannot be borrowed yet because it
+    /// is either in flight or parked on approval.
+    subagent_result_mailbox: VecDeque<SubagentResult>,
+    /// Agent durable payloads decoded from checkpoint and awaiting runtime
+    /// agent reconstruction.
+    pending_agent_parts: BTreeMap<AgentId, Vec<AgentPartState>>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct OrchestratorInstanceSnapshot {
+    root: Option<AgentId>,
+    agents: Vec<AgentNodeSnapshot>,
+    ready_queue: Vec<AgentId>,
+    parked_approvals: Vec<ParkedApprovalSnapshot>,
+    approval_queue: Vec<AgentId>,
+    subagent_result_mailbox: Vec<SubagentResultSnapshot>,
+    #[serde(default)]
+    agent_parts: Vec<AgentPartsSnapshot>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct AgentNodeSnapshot {
+    id: AgentId,
+    parent: Option<AgentId>,
+    depth: u16,
+    kind: String,
+    name: Option<String>,
+    termination_policy: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct ParkedApprovalSnapshot {
+    agent: AgentId,
+    approval: ApprovalId,
+    summary: String,
+    prompted: bool,
+}
+
+#[derive(Deserialize, Serialize)]
+struct SubagentResultSnapshot {
+    parent: AgentId,
+    child: AgentId,
+    text: String,
+    ok: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct AgentPartsSnapshot {
+    id: AgentId,
+    parts: Vec<AgentPartState>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct AgentPartState {
+    name: String,
+    schema_version: SchemaVersion,
+    bytes: Vec<u8>,
+}
+
+impl Serialize for OrchestratorInstanceState {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::Error as _;
+
+        let mut agents = Vec::with_capacity(self.meta.len());
+        for (&id, meta) in &self.meta {
+            agents.push(AgentNodeSnapshot {
+                id,
+                parent: meta.parent,
+                depth: meta.depth,
+                kind: meta.kind.as_str().to_string(),
+                name: meta.name.clone(),
+                termination_policy: meta.termination.as_str().to_string(),
+            });
+        }
+        let parked_approvals: Vec<ParkedApprovalSnapshot> = self
+            .parked_approvals
+            .iter()
+            .map(|(&agent, pending)| ParkedApprovalSnapshot {
+                agent,
+                approval: pending.approval,
+                summary: pending.summary.clone(),
+                prompted: pending.prompted,
+            })
+            .collect();
+
+        OrchestratorInstanceSnapshot {
+            root: self.root,
+            agents,
+            ready_queue: self.ready.iter().copied().collect(),
+            parked_approvals,
+            approval_queue: self.approval_queue.iter().copied().collect(),
+            subagent_result_mailbox: self
+                .subagent_result_mailbox
+                .iter()
+                .map(|result| SubagentResultSnapshot {
+                    parent: result.parent,
+                    child: result.child,
+                    text: result.text.clone(),
+                    ok: result.ok,
+                })
+                .collect(),
+            agent_parts: self
+                .registry
+                .iter()
+                .map(|(id, agent)| {
+                    let parts = agent
+                        .durable_parts()
+                        .into_iter()
+                        .map(|part| {
+                            let state = part.export_state().map_err(S::Error::custom)?;
+                            Ok(AgentPartState {
+                                name: part.name().to_owned(),
+                                schema_version: state.schema_version,
+                                bytes: state.bytes.into_owned(),
+                            })
+                        })
+                        .collect::<Result<Vec<_>, S::Error>>()?;
+                    Ok(AgentPartsSnapshot { id, parts })
+                })
+                .collect::<Result<Vec<_>, S::Error>>()?,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl DurableStateCodec for OrchestratorInstanceState {
+    fn encode_state(&self) -> Result<PartStateBlob<'_>, DurablePartError> {
+        let bytes = serde_json::to_vec(self).map_err(DurablePartError::Encode)?;
+        Ok(PartStateBlob {
+            schema_version: 1,
+            bytes: Cow::Owned(bytes),
+        })
+    }
+
+    fn decode_state(state: PartStateSlice<'_>) -> Result<Self, DurablePartError> {
+        let snapshot: OrchestratorInstanceSnapshot =
+            serde_json::from_slice(state.bytes).map_err(DurablePartError::Decode)?;
+        let mut meta = BTreeMap::new();
+        for agent in snapshot.agents {
+            meta.insert(
+                agent.id,
+                NodeMeta {
+                    parent: agent.parent,
+                    depth: agent.depth,
+                    kind: AgentKind::new(agent.kind),
+                    name: agent.name,
+                    termination: match agent.termination_policy.as_str() {
+                        "auto" => TerminationPolicy::AutoOnIdle,
+                        "manual" => TerminationPolicy::Manual,
+                        _ => {
+                            return Err(DurablePartError::InvalidState(
+                                "unknown termination policy",
+                            ))
+                        }
+                    },
+                },
+            );
+        }
+        let parked_approvals = snapshot
+            .parked_approvals
+            .into_iter()
+            .map(|approval| {
+                (
+                    approval.agent,
+                    ParkedApproval {
+                        approval: approval.approval,
+                        summary: approval.summary,
+                        prompted: approval.prompted,
+                    },
+                )
+            })
+            .collect();
+        let subagent_result_mailbox = snapshot
+            .subagent_result_mailbox
+            .into_iter()
+            .map(|result| SubagentResult {
+                parent: result.parent,
+                child: result.child,
+                text: result.text,
+                ok: result.ok,
+            })
+            .collect();
+        let pending_agent_parts = snapshot
+            .agent_parts
+            .into_iter()
+            .map(|agent| (agent.id, agent.parts))
+            .collect();
+        Ok(Self {
+            registry: AgentRegistry::new(),
+            root: snapshot.root,
+            meta,
+            ready: snapshot.ready_queue.into(),
+            parked_approvals,
+            approval_queue: snapshot.approval_queue.into(),
+            subagent_result_mailbox,
+            pending_agent_parts,
+        })
+    }
+}
+
+impl<Filesystem, Http, Timer> DurablePart for OrchestratorInstance<Filesystem, Http, Timer>
+where
+    Filesystem: ClawFs + 'static,
+    Http: ClawHttp + Default + 'static,
+    Timer: ClawTimer + Default + 'static,
+{
+    fn name(&self) -> &'static str {
+        "orchestrator-instance"
+    }
+
+    fn generation(&self) -> PartGeneration {
+        self.state.generation()
+    }
+
+    fn export_state(&self) -> Result<PartStateBlob<'_>, DurablePartError> {
+        self.state.export_state()
+    }
+
+    fn storage_hint(&self) -> StorageHint {
+        StorageHint {
+            size: StorageSizeHint::Large,
+            change: ChangePatternHint::Arbitrary,
+        }
+    }
+}
+
 impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
@@ -422,36 +719,97 @@ where
     Timer: ClawTimer + Default + 'static,
 {
     /// Create an empty instance for `session`. Agents are built with `factory` and
-    /// draw ids from the shared `next_agent_id` allocator so they stay unique
+    /// draw ids from the shared agent id allocator so they stay unique
     /// across every session.
     pub(crate) fn new(
         session: SessionId,
         factory: Arc<FsAgentFactory<Filesystem, Http, Timer>>,
-        next_agent_id: AgentIdAllocator,
+        agent_id_allocator: AgentIdAllocator,
+        state: OrchestratorInstanceState,
     ) -> Self {
         let effects: EffectQueue = Arc::new(Mutex::new(VecDeque::new()));
         let snapshots: SnapshotView = Arc::new(Mutex::new(HashMap::new()));
         let host: Arc<dyn GraphHost> = Arc::new(InstanceHost {
-            ids: next_agent_id.clone(),
+            agent_id_allocator: agent_id_allocator.clone(),
             effects: Arc::clone(&effects),
             snapshots: Arc::clone(&snapshots),
         });
         Self {
             session,
-            registry: AgentRegistry::new(),
             factory,
-            ids: next_agent_id,
-            meta: HashMap::new(),
-            ready: VecDeque::new(),
+            agent_id_allocator,
+            state: DurableState::new(state),
             inflight: InflightAgentTasks::default(),
-            parked_approvals: HashMap::new(),
-            approval_queue: VecDeque::new(),
-            subagent_result_mailbox: VecDeque::new(),
-            root: None,
             effects,
             snapshots,
             host,
         }
+    }
+
+    pub(crate) fn from_restored_state(
+        session: SessionId,
+        factory: Arc<FsAgentFactory<Filesystem, Http, Timer>>,
+        agent_id_allocator: AgentIdAllocator,
+        state: OrchestratorInstanceState,
+    ) -> Result<Self, OrchestratorInstanceRestoreError> {
+        let mut instance = Self::new(session, factory, agent_id_allocator, state);
+        instance.restore_agents_from_pending_parts()?;
+        Ok(instance)
+    }
+
+    fn restore_agents_from_pending_parts(
+        &mut self,
+    ) -> Result<(), OrchestratorInstanceRestoreError> {
+        let pending = std::mem::take(&mut self.state.get_mut().pending_agent_parts);
+        let agents = self
+            .state
+            .get()
+            .meta
+            .iter()
+            .map(|(&id, meta)| (id, meta.clone()))
+            .collect::<Vec<_>>();
+        for (id, meta) in agents {
+            let placement = if self.state.get().root == Some(id) {
+                AgentPlacement::Root(self.session)
+            } else {
+                AgentPlacement::Sub(id)
+            };
+            self.build_agent(id, &meta.kind, String::new(), placement)
+                .map_err(|source| OrchestratorInstanceRestoreError::agent(id, source))?;
+
+            let Some(parts) = pending.get(&id) else {
+                continue;
+            };
+            let state = self.state.get_mut();
+            let agent = state
+                .registry
+                .get_mut(id)
+                .ok_or_else(|| OrchestratorInstanceRestoreError::missing_agent(id))?;
+            for part in parts {
+                let restored = agent
+                    .restore_durable_part(
+                        &part.name,
+                        PartStateSlice {
+                            schema_version: part.schema_version,
+                            bytes: &part.bytes,
+                        },
+                    )
+                    .map_err(|source| {
+                        OrchestratorInstanceRestoreError::durable_part(
+                            id,
+                            part.name.clone(),
+                            source,
+                        )
+                    })?;
+                if !restored {
+                    return Err(OrchestratorInstanceRestoreError::unknown_part(
+                        id,
+                        part.name.clone(),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Build an agent of `kind` (tasked with `goal`) via the factory and store it,
@@ -478,7 +836,7 @@ where
             Arc::clone(&self.host),
             Arc::from([]),
         )?;
-        self.registry.insert(id, agent);
+        self.state.get_mut().registry.insert(id, agent);
         Ok(())
     }
 
@@ -493,15 +851,15 @@ where
     /// Propagates the typed delivery error when the root cannot be built or
     /// cannot accept the message.
     pub(crate) fn deliver(&mut self, text: impl Into<String>) -> Result<(), InstanceDeliverError> {
-        match self.root {
+        match self.state.get().root {
             Some(root) => self
                 .deliver_message(root, text)
                 .map_err(|source| InstanceDeliverError::Root { root, source }),
             None => {
-                let id = self.ids.next();
+                let id = self.agent_id_allocator.next();
                 let kind = AgentKind::new(ROOT_AGENT_KIND);
                 self.build_agent(id, &kind, text.into(), AgentPlacement::Root(self.session))?;
-                self.meta.insert(
+                self.state.get_mut().meta.insert(
                     id,
                     NodeMeta {
                         parent: None,
@@ -513,7 +871,7 @@ where
                         termination: TerminationPolicy::AutoOnIdle,
                     },
                 );
-                self.root = Some(id);
+                self.state.get_mut().root = Some(id);
                 self.enqueue(id);
                 Ok(())
             }
@@ -669,7 +1027,7 @@ where
     }
 
     fn set_cancel_hook(&self, control: &DriveControl) {
-        let mut abort_handles = self.registry.abort_handles();
+        let mut abort_handles = self.state.get().registry.abort_handles();
         abort_handles.extend(self.inflight.abort_handles());
         control.set_cancel_hook(move || {
             for handle in &abort_handles {
@@ -679,8 +1037,8 @@ where
     }
 
     pub(crate) fn active_approval(&self) -> Option<PendingApproval> {
-        let agent = *self.approval_queue.front()?;
-        let pending = self.parked_approvals.get(&agent)?;
+        let agent = *self.state.get().approval_queue.front()?;
+        let pending = self.state.get().parked_approvals.get(&agent)?;
         Some(PendingApproval {
             agent,
             approval: pending.approval,
@@ -702,9 +1060,9 @@ where
     /// cancellation cleanup so the session does not leave dormant root/subagent
     /// work behind.
     pub(crate) fn cancel_all(&mut self, reason: CancelReason) {
-        let agents: Vec<AgentId> = self.meta.keys().copied().collect();
+        let agents: Vec<AgentId> = self.state.get().meta.keys().copied().collect();
         for agent_id in agents {
-            let Some(agent) = self.registry.get_mut(agent_id) else {
+            let Some(agent) = self.state.get_mut().registry.get_mut(agent_id) else {
                 continue;
             };
             if agent
@@ -720,18 +1078,24 @@ where
 
     pub(crate) fn take_next_approval_prompt(&mut self) -> DriveOutput {
         loop {
-            let Some(agent) = self.approval_queue.front().copied() else {
+            let Some(agent) = self.state.get().approval_queue.front().copied() else {
                 return DriveOutput::default();
             };
-            let Some(pending) = self.parked_approvals.get_mut(&agent) else {
-                self.approval_queue.pop_front();
+            let Some(pending) = self.state.get_mut().parked_approvals.get_mut(&agent) else {
+                self.state.get_mut().approval_queue.pop_front();
                 continue;
             };
             if pending.prompted {
                 return DriveOutput::default();
             }
+            let summary = pending.summary.clone();
             pending.prompted = true;
-            return DriveOutput::reply(self.session, approval_prompt(&pending.summary));
+            return DriveOutput::reply(
+                self.session,
+                format!(
+                    "Permission approval needed:\n{summary}\n\nReply with approval or rejection."
+                ),
+            );
         }
     }
 
@@ -750,7 +1114,9 @@ where
         decision: ApprovalDecision,
     ) -> Result<(), ApprovalResolutionError> {
         let decision_name: &'static str = (&decision).into();
-        self.registry
+        self.state
+            .get_mut()
+            .registry
             .get_mut(agent)
             .ok_or(ApprovalResolutionError::UnknownAgent(agent))?
             .send_command(AgentCommand::ApprovalResult {
@@ -788,7 +1154,7 @@ where
             } else {
                 EventSink::disabled()
             };
-            let Some(meta) = self.meta.get(&id) else {
+            let Some(meta) = self.state.get().meta.get(&id) else {
                 continue;
             };
             let span = tracing::info_span!(
@@ -814,38 +1180,48 @@ where
     fn route_ticked_agents(&mut self, ticked: Vec<TickedAgent>, events: &EventSink) {
         let mut outcomes = Vec::with_capacity(ticked.len());
         for TickedAgent { id, agent, outcome } in ticked {
-            if self.meta.contains_key(&id) {
-                self.registry.insert(id, agent);
+            if self.state.get().meta.contains_key(&id) {
+                self.state.get_mut().registry.insert(id, agent);
                 outcomes.push((id, outcome));
             }
         }
 
         self.apply_effects();
         for (id, outcome) in outcomes {
-            if self.meta.contains_key(&id) {
-                emit_drive_output(events, self.route_outcome(id, outcome));
+            if self.state.get().meta.contains_key(&id) {
+                let output = self.route_outcome(id, outcome);
+                for reply in output.replies {
+                    events.emit(SessionEvent::Output { text: reply.text });
+                }
             }
         }
-        self.inflight.retain_live(&self.meta);
+        self.inflight.retain_live(&self.state.get().meta);
         self.flush_subagent_result_mailbox();
     }
 
     fn drain_ready_agents(&mut self) -> Vec<ReadyAgent> {
         let mut ready_agents = Vec::new();
-        while let Some(id) = self.ready.pop_front() {
-            if !self.meta.contains_key(&id) {
+        while let Some(id) = self.pop_ready() {
+            if !self.state.get().meta.contains_key(&id) {
                 continue;
             }
-            let Some(agent) = self.registry.take(id) else {
+            let Some(agent) = self.state.get_mut().registry.take(id) else {
                 continue;
             };
             ready_agents.push(ReadyAgent {
                 id,
-                is_root: self.root == Some(id),
+                is_root: self.state.get().root == Some(id),
                 agent,
             });
         }
         ready_agents
+    }
+
+    fn pop_ready(&mut self) -> Option<AgentId> {
+        if self.state.get().ready.is_empty() {
+            return None;
+        }
+        self.state.get_mut().ready.pop_front()
     }
 
     /// Append a user message to the idle agent `id` and mark it ready.
@@ -854,7 +1230,7 @@ where
         id: AgentId,
         text: impl Into<String>,
     ) -> Result<(), AgentMessageDeliveryError> {
-        let Some(agent) = self.registry.get_mut(id) else {
+        let Some(agent) = self.state.get_mut().registry.get_mut(id) else {
             return Err(AgentMessageDeliveryError::UnknownAgent(id));
         };
         agent.send_command(AgentCommand::AppendMessage(text.into()))?;
@@ -873,10 +1249,10 @@ where
         approval: ApprovalId,
         summary: String,
     ) -> DriveOutput {
-        if !self.meta.contains_key(&agent) {
+        if !self.state.get().meta.contains_key(&agent) {
             return DriveOutput::default();
         }
-        self.parked_approvals.insert(
+        self.state.get_mut().parked_approvals.insert(
             agent,
             ParkedApproval {
                 approval,
@@ -884,8 +1260,8 @@ where
                 prompted: false,
             },
         );
-        if !self.approval_queue.contains(&agent) {
-            self.approval_queue.push_back(agent);
+        if !self.state.get().approval_queue.contains(&agent) {
+            self.state.get_mut().approval_queue.push_back(agent);
         }
 
         DriveOutput::default()
@@ -933,12 +1309,22 @@ where
     /// Whether `node` is a strict descendant of `ancestor` (walking parent edges
     /// in `meta`). `false` when `node == ancestor` or the chain never reaches it.
     fn is_descendant(&self, ancestor: AgentId, node: AgentId) -> bool {
-        let mut current = self.meta.get(&node).and_then(|meta| meta.parent);
+        let mut current = self
+            .state
+            .get()
+            .meta
+            .get(&node)
+            .and_then(|meta| meta.parent);
         while let Some(parent) = current {
             if parent == ancestor {
                 return true;
             }
-            current = self.meta.get(&parent).and_then(|meta| meta.parent);
+            current = self
+                .state
+                .get()
+                .meta
+                .get(&parent)
+                .and_then(|meta| meta.parent);
         }
         false
     }
@@ -952,10 +1338,10 @@ where
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         snapshots.clear();
-        for (&id, meta) in &self.meta {
-            let status = if self.parked_approvals.contains_key(&id) {
+        for (&id, meta) in &self.state.get().meta {
+            let status = if self.state.get().parked_approvals.contains_key(&id) {
                 AgentStatus::AwaitingApproval
-            } else if self.ready.contains(&id) {
+            } else if self.state.get().ready.contains(&id) {
                 AgentStatus::Ready
             } else {
                 AgentStatus::Idle
@@ -986,7 +1372,7 @@ where
         goal: String,
         termination: TerminationPolicy,
     ) {
-        let Some(parent_meta) = self.meta.get(&parent) else {
+        let Some(parent_meta) = self.state.get().meta.get(&parent) else {
             tracing::warn!(
                 name: "spawn_dropped",
                 parent_agent = %parent,
@@ -1004,7 +1390,7 @@ where
                     child_agent = %id,
                     kind = %kind.as_str(),
                 );
-                self.meta.insert(
+                self.state.get_mut().meta.insert(
                     id,
                     NodeMeta {
                         parent: Some(parent),
@@ -1071,6 +1457,8 @@ where
     /// deletable, but is still removed on a terminal outcome.
     fn route_result(&mut self, id: AgentId, text: String, ok: bool, ended: bool) -> Vec<RootReply> {
         let Some((parent, termination)) = self
+            .state
+            .get()
             .meta
             .get(&id)
             .map(|meta| (meta.parent, meta.termination))
@@ -1107,7 +1495,14 @@ where
     /// does not retain dead work; a cancelled root stays as the reusable session
     /// root.
     fn route_cancelled(&mut self, id: AgentId, _reason: CancelReason) -> DriveOutput {
-        if self.meta.get(&id).and_then(|meta| meta.parent).is_none() {
+        if self
+            .state
+            .get()
+            .meta
+            .get(&id)
+            .and_then(|meta| meta.parent)
+            .is_none()
+        {
             return DriveOutput::default();
         }
         self.delete_subtree(id);
@@ -1125,14 +1520,21 @@ where
             count = victims.len() as u64,
         );
         for victim in &victims {
-            self.registry.remove(*victim);
-            self.meta.remove(victim);
-            self.parked_approvals.remove(victim);
+            self.state.get_mut().registry.remove(*victim);
+            self.state.get_mut().meta.remove(victim);
+            self.state.get_mut().parked_approvals.remove(victim);
         }
-        self.ready.retain(|queued| !victims.contains(queued));
-        self.approval_queue
+        self.state
+            .get_mut()
+            .ready
             .retain(|queued| !victims.contains(queued));
-        self.subagent_result_mailbox
+        self.state
+            .get_mut()
+            .approval_queue
+            .retain(|queued| !victims.contains(queued));
+        self.state
+            .get_mut()
+            .subagent_result_mailbox
             .retain(|result| !victims.contains(&result.parent));
     }
 
@@ -1143,25 +1545,28 @@ where
         text: String,
         ok: bool,
     ) {
-        if !self.meta.contains_key(&parent) {
+        if !self.state.get().meta.contains_key(&parent) {
             return;
         }
-        if self.parked_approvals.contains_key(&parent) {
+        if self.state.get().parked_approvals.contains_key(&parent) {
             tracing::info!(
                 name: "result_to_parent",
                 parent_agent = %parent,
                 child_agent = %child,
                 queued = true,
             );
-            self.subagent_result_mailbox.push_back(SubagentResult {
-                parent,
-                child,
-                text,
-                ok,
-            });
+            self.state
+                .get_mut()
+                .subagent_result_mailbox
+                .push_back(SubagentResult {
+                    parent,
+                    child,
+                    text,
+                    ok,
+                });
             return;
         }
-        if let Some(parent_agent) = self.registry.get_mut(parent) {
+        if let Some(parent_agent) = self.state.get_mut().registry.get_mut(parent) {
             parent_agent.deliver_child_result(child, text, ok);
             self.enqueue(parent);
             tracing::info!(
@@ -1177,37 +1582,52 @@ where
                 child_agent = %child,
                 queued = true,
             );
-            self.subagent_result_mailbox.push_back(SubagentResult {
-                parent,
-                child,
-                text,
-                ok,
-            });
+            self.state
+                .get_mut()
+                .subagent_result_mailbox
+                .push_back(SubagentResult {
+                    parent,
+                    child,
+                    text,
+                    ok,
+                });
         }
     }
 
     fn flush_subagent_result_mailbox(&mut self) {
-        if self.subagent_result_mailbox.is_empty() {
+        if self.state.get().subagent_result_mailbox.is_empty() {
             return;
         }
         let mut pending = VecDeque::new();
-        while let Some(result) = self.subagent_result_mailbox.pop_front() {
-            if !self.meta.contains_key(&result.parent) {
+        while let Some(result) = self.pop_subagent_result_mailbox() {
+            if !self.state.get().meta.contains_key(&result.parent) {
                 continue;
             }
-            if self.parked_approvals.contains_key(&result.parent) {
+            if self
+                .state
+                .get()
+                .parked_approvals
+                .contains_key(&result.parent)
+            {
                 pending.push_back(result);
                 continue;
             }
             let parent = result.parent;
-            if let Some(parent_agent) = self.registry.get_mut(parent) {
+            if let Some(parent_agent) = self.state.get_mut().registry.get_mut(parent) {
                 parent_agent.deliver_child_result(result.child, result.text, result.ok);
                 self.enqueue(parent);
             } else {
                 pending.push_back(result);
             }
         }
-        self.subagent_result_mailbox = pending;
+        self.state.get_mut().subagent_result_mailbox = pending;
+    }
+
+    fn pop_subagent_result_mailbox(&mut self) -> Option<SubagentResult> {
+        if self.state.get().subagent_result_mailbox.is_empty() {
+            return None;
+        }
+        self.state.get_mut().subagent_result_mailbox.pop_front()
     }
 
     /// Collect `root` and all of its descendants (a breadth-first walk of the
@@ -1216,7 +1636,7 @@ where
         let mut out = vec![root];
         let mut frontier = VecDeque::from([root]);
         while let Some(current) = frontier.pop_front() {
-            for (&id, meta) in &self.meta {
+            for (&id, meta) in &self.state.get().meta {
                 if meta.parent == Some(current) {
                     out.push(id);
                     frontier.push_back(id);
@@ -1228,39 +1648,41 @@ where
 
     /// Mark `id` ready, avoiding duplicate queue entries.
     fn enqueue(&mut self, id: AgentId) {
-        if !self.ready.contains(&id) {
-            self.ready.push_back(id);
+        if !self.state.get().ready.contains(&id) {
+            self.state.get_mut().ready.push_back(id);
         }
     }
 
     /// True while any agent has work queued.
     fn has_ready(&self) -> bool {
-        !self.ready.is_empty()
+        !self.state.get().ready.is_empty()
     }
 
     fn has_root_work(&self) -> bool {
-        let Some(root) = self.root else {
+        let Some(root) = self.state.get().root else {
             return false;
         };
-        self.ready.contains(&root) || self.inflight.has_root()
+        self.state.get().ready.contains(&root) || self.inflight.has_root()
     }
 
     fn has_background_work(&self) -> bool {
-        let root = self.root;
-        self.ready.iter().any(|id| Some(*id) != root) || self.inflight.has_background()
+        let root = self.state.get().root;
+        self.state.get().ready.iter().any(|id| Some(*id) != root) || self.inflight.has_background()
     }
 
     fn has_unprompted_approval(&self) -> bool {
-        self.approval_queue.iter().any(|agent| {
-            self.parked_approvals
+        self.state.get().approval_queue.iter().any(|agent| {
+            self.state
+                .get()
+                .parked_approvals
                 .get(agent)
                 .is_some_and(|pending| !pending.prompted)
         })
     }
 
     fn pop_active_approval(&mut self) -> Option<PendingApproval> {
-        while let Some(agent) = self.approval_queue.pop_front() {
-            let Some(pending) = self.parked_approvals.remove(&agent) else {
+        while let Some(agent) = self.pop_approval_queue() {
+            let Some(pending) = self.state.get_mut().parked_approvals.remove(&agent) else {
                 continue;
             };
             return Some(PendingApproval {
@@ -1271,408 +1693,11 @@ where
         }
         None
     }
-}
 
-fn approval_prompt(summary: &str) -> String {
-    format!("Permission approval needed:\n{summary}\n\nReply with approval or rejection.")
-}
-
-fn emit_drive_output(events: &EventSink, output: DriveOutput) {
-    for reply in output.replies {
-        events.emit(SessionEvent::Output { text: reply.text });
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::expect_used)]
-mod tests {
-    use super::*;
-    use crate::agent::{AgentCommand, AgentCommandError, AgentTickFuture};
-    use claw_api::{BackendKind, ClawApiConfig};
-    use claw_interface::{BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp};
-    use claw_tool::ToolRegistry;
-    use futures_lite::future::block_on;
-    use std::sync::{Arc, Mutex};
-    use std::task::{Wake, Waker};
-
-    type TestFactory = FsAgentFactory<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>;
-    type TestInstance =
-        OrchestratorInstance<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>;
-    type ChildEvents = Arc<Mutex<Vec<(AgentId, String, bool)>>>;
-
-    struct NoopAgent {
-        id: AgentId,
-    }
-
-    impl Agent for NoopAgent {
-        fn id(&self) -> AgentId {
-            self.id
+    fn pop_approval_queue(&mut self) -> Option<AgentId> {
+        if self.state.get().approval_queue.is_empty() {
+            return None;
         }
-
-        fn send_command(&mut self, _command: AgentCommand) -> Result<(), AgentCommandError> {
-            Ok(())
-        }
-
-        fn deliver_child_result(&mut self, _child: AgentId, _text: String, _ok: bool) {}
-
-        fn deliver_child_input(&mut self, _child: AgentId, _text: String) {}
-
-        fn abort_handle(&self) -> AgentAbortHandle {
-            AgentAbortHandle::default()
-        }
-
-        fn tick(&mut self, _events: EventSink) -> AgentTickFuture<'_> {
-            Box::pin(async { TickOutcome::Idle })
-        }
-    }
-
-    struct RecordingAgent {
-        id: AgentId,
-        child_events: ChildEvents,
-    }
-
-    impl Agent for RecordingAgent {
-        fn id(&self) -> AgentId {
-            self.id
-        }
-
-        fn send_command(&mut self, _command: AgentCommand) -> Result<(), AgentCommandError> {
-            Ok(())
-        }
-
-        fn deliver_child_result(&mut self, child: AgentId, text: String, ok: bool) {
-            self.child_events
-                .lock()
-                .unwrap_or_else(|poison| poison.into_inner())
-                .push((child, text, ok));
-        }
-
-        fn deliver_child_input(&mut self, _child: AgentId, _text: String) {}
-
-        fn abort_handle(&self) -> AgentAbortHandle {
-            AgentAbortHandle::default()
-        }
-
-        fn tick(&mut self, _events: EventSink) -> AgentTickFuture<'_> {
-            Box::pin(async { TickOutcome::Idle })
-        }
-    }
-
-    struct PendingTickAgent {
-        id: AgentId,
-    }
-
-    impl Agent for PendingTickAgent {
-        fn id(&self) -> AgentId {
-            self.id
-        }
-
-        fn send_command(&mut self, _command: AgentCommand) -> Result<(), AgentCommandError> {
-            Ok(())
-        }
-
-        fn deliver_child_result(&mut self, _child: AgentId, _text: String, _ok: bool) {}
-
-        fn deliver_child_input(&mut self, _child: AgentId, _text: String) {}
-
-        fn abort_handle(&self) -> AgentAbortHandle {
-            AgentAbortHandle::default()
-        }
-
-        fn tick(&mut self, _events: EventSink) -> AgentTickFuture<'_> {
-            Box::pin(PendingTick { pending: true })
-        }
-    }
-
-    struct ApprovalAgent {
-        id: AgentId,
-    }
-
-    impl Agent for ApprovalAgent {
-        fn id(&self) -> AgentId {
-            self.id
-        }
-
-        fn send_command(&mut self, _command: AgentCommand) -> Result<(), AgentCommandError> {
-            Ok(())
-        }
-
-        fn deliver_child_result(&mut self, _child: AgentId, _text: String, _ok: bool) {}
-
-        fn deliver_child_input(&mut self, _child: AgentId, _text: String) {}
-
-        fn abort_handle(&self) -> AgentAbortHandle {
-            AgentAbortHandle::default()
-        }
-
-        fn tick(&mut self, _events: EventSink) -> AgentTickFuture<'_> {
-            Box::pin(async {
-                TickOutcome::AwaitingApproval {
-                    id: ApprovalId(7),
-                    summary: "run protected tool".to_string(),
-                }
-            })
-        }
-    }
-
-    struct PendingTick {
-        pending: bool,
-    }
-
-    impl Future for PendingTick {
-        type Output = TickOutcome;
-
-        fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-            if self.pending {
-                self.pending = false;
-                context.waker().wake_by_ref();
-                Poll::Pending
-            } else {
-                Poll::Ready(TickOutcome::Idle)
-            }
-        }
-    }
-
-    struct PendingOnce {
-        output: Option<TickedAgent>,
-        pending: bool,
-    }
-
-    impl PendingOnce {
-        fn new(output: TickedAgent) -> Self {
-            Self {
-                output: Some(output),
-                pending: true,
-            }
-        }
-    }
-
-    impl Future for PendingOnce {
-        type Output = TickedAgent;
-
-        fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
-            let this = self.get_mut();
-            if this.pending {
-                this.pending = false;
-                context.waker().wake_by_ref();
-                return Poll::Pending;
-            }
-            Poll::Ready(this.output.take().expect("pending future output present"))
-        }
-    }
-
-    struct NoopWake;
-
-    impl Wake for NoopWake {
-        fn wake(self: Arc<Self>) {}
-    }
-
-    fn ticked_agent(id: AgentId) -> TickedAgent {
-        ticked_agent_with_outcome(id, TickOutcome::Idle)
-    }
-
-    fn ticked_agent_with_outcome(id: AgentId, outcome: TickOutcome) -> TickedAgent {
-        TickedAgent {
-            id,
-            agent: Box::new(NoopAgent { id }),
-            outcome,
-        }
-    }
-
-    fn test_factory() -> Arc<TestFactory> {
-        let llm_config = ClawApiConfig::new(
-            BackendKind::OpenAiCompatible,
-            "sk-test",
-            "gpt-test",
-            "https://example.invalid",
-        );
-        Arc::new(
-            TestFactory::new(
-                Arc::new(ToolRegistry::new()),
-                llm_config,
-                "/mem".to_string(),
-                Vec::new(),
-            )
-            .expect("factory builds"),
-        )
-    }
-
-    fn test_instance() -> TestInstance {
-        OrchestratorInstance::new(SessionId(1), test_factory(), AgentIdAllocator::new())
-    }
-
-    fn insert_meta(instance: &mut TestInstance, id: AgentId, parent: Option<AgentId>, depth: u16) {
-        instance.meta.insert(
-            id,
-            NodeMeta {
-                parent,
-                depth,
-                kind: AgentKind::new("conversation"),
-                name: None,
-                termination: TerminationPolicy::AutoOnIdle,
-            },
-        );
-    }
-
-    #[test]
-    fn inflight_tasks_return_completed_entries_without_waiting_for_pending_entries() {
-        let ready_id = AgentId(1);
-        let pending_id = AgentId(2);
-        let mut inflight = InflightAgentTasks::default();
-        inflight.spawn(
-            ready_id,
-            true,
-            AgentAbortHandle::default(),
-            Box::pin(async move { ticked_agent(ready_id) }),
-        );
-        inflight.spawn(
-            pending_id,
-            false,
-            AgentAbortHandle::default(),
-            Box::pin(PendingOnce::new(ticked_agent(pending_id))),
-        );
-
-        let waker = Waker::from(Arc::new(NoopWake));
-        let mut context = Context::from_waker(&waker);
-        let control = DriveControl::new();
-
-        let first = {
-            let mut next = inflight.next_completed(&control);
-            Pin::new(&mut next).poll(&mut context)
-        };
-        let first = match first {
-            Poll::Ready(outputs) => outputs,
-            Poll::Pending => panic!("ready tick should not wait for pending tick"),
-        };
-        assert_eq!(first.len(), 1);
-        assert_eq!(first.into_iter().next().expect("one output").id, ready_id);
-        assert!(!inflight.is_empty());
-
-        let second = {
-            let mut next = inflight.next_completed(&control);
-            Pin::new(&mut next).poll(&mut context)
-        };
-        let second = match second {
-            Poll::Ready(outputs) => outputs,
-            Poll::Pending => panic!("pending-once tick should complete on second poll"),
-        };
-        assert_eq!(second.len(), 1);
-        assert_eq!(
-            second.into_iter().next().expect("one output").id,
-            pending_id
-        );
-        assert!(inflight.is_empty());
-    }
-
-    #[test]
-    fn subagent_result_mailbox_wakes_parent_after_in_flight_tick_returns() {
-        let parent = AgentId(10);
-        let child = AgentId(11);
-        let child_events = Arc::new(Mutex::new(Vec::new()));
-        let mut instance = test_instance();
-        insert_meta(&mut instance, parent, None, 0);
-        insert_meta(&mut instance, child, Some(parent), 1);
-
-        instance.deliver_or_mailbox_subagent_result(parent, child, "done".to_string(), true);
-        assert_eq!(instance.subagent_result_mailbox.len(), 1);
-        assert!(!instance.has_ready());
-
-        instance.registry.insert(
-            parent,
-            Box::new(RecordingAgent {
-                id: parent,
-                child_events: Arc::clone(&child_events),
-            }),
-        );
-        instance.flush_subagent_result_mailbox();
-
-        assert!(instance.subagent_result_mailbox.is_empty());
-        assert_eq!(instance.ready.pop_front(), Some(parent));
-        let delivered = child_events
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        assert_eq!(delivered.as_slice(), &[(child, "done".to_string(), true)]);
-    }
-
-    #[test]
-    fn root_turn_can_end_while_background_subagent_remains_inflight() {
-        let root = AgentId(20);
-        let child = AgentId(21);
-        let mut instance = test_instance();
-        insert_meta(&mut instance, root, None, 0);
-        insert_meta(&mut instance, child, Some(root), 1);
-        instance.root = Some(root);
-        instance
-            .registry
-            .insert(root, Box::new(NoopAgent { id: root }));
-        instance
-            .registry
-            .insert(child, Box::new(PendingTickAgent { id: child }));
-        instance.enqueue(root);
-        instance.enqueue(child);
-
-        let (tx, _rx) = async_channel::unbounded();
-        let events = EventSink::new(tx);
-        let control = DriveControl::new();
-        let (_output, stop) = block_on(instance.drive_root_turn(&control, &events));
-
-        assert_eq!(stop, DriveStop::Quiescent);
-        assert_eq!(instance.work(), InstanceWork::Background);
-        assert!(instance.has_background_work());
-    }
-
-    #[test]
-    fn interrupt_after_working_root_tick_stops_before_restarting_ready_root() {
-        let root = AgentId(30);
-        let mut instance = test_instance();
-        insert_meta(&mut instance, root, None, 0);
-        instance.root = Some(root);
-        instance.inflight.spawn(
-            root,
-            true,
-            AgentAbortHandle::default(),
-            Box::pin(async move { ticked_agent_with_outcome(root, TickOutcome::Working) }),
-        );
-
-        let (tx, _rx) = async_channel::unbounded();
-        let events = EventSink::new(tx);
-        let control = DriveControl::new();
-        control.request_interrupt();
-        let (_output, stop) = block_on(instance.drive_root_turn(&control, &events));
-
-        assert_eq!(stop, DriveStop::Interrupted);
-        assert!(instance.ready.contains(&root));
-        assert!(!instance.inflight.has_root());
-    }
-
-    #[test]
-    fn background_approval_surfaces_as_root_work_prompt() {
-        let root = AgentId(40);
-        let child = AgentId(41);
-        let mut instance = test_instance();
-        insert_meta(&mut instance, root, None, 0);
-        insert_meta(&mut instance, child, Some(root), 1);
-        instance.root = Some(root);
-        instance
-            .registry
-            .insert(child, Box::new(ApprovalAgent { id: child }));
-        instance.enqueue(child);
-
-        let (tx, _rx) = async_channel::unbounded();
-        let events = EventSink::new(tx);
-        let control = DriveControl::new();
-        let stop = block_on(instance.drive_background_until_root_ready(&control, &events));
-
-        assert_eq!(stop, DriveStop::Quiescent);
-        assert_eq!(instance.work(), InstanceWork::Root);
-
-        let (output, stop) = block_on(instance.drive_root_turn(&control, &events));
-
-        assert_eq!(stop, DriveStop::Quiescent);
-        assert_eq!(output.replies.len(), 1);
-        assert!(output.replies[0]
-            .text
-            .contains("Permission approval needed:\nrun protected tool"));
-        assert_eq!(instance.work(), InstanceWork::None);
+        self.state.get_mut().approval_queue.pop_front()
     }
 }

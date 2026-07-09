@@ -37,8 +37,18 @@ extern "C" {
 /// of its own (the `log` / `tracing` layers and ESP-IDF's runtime level do that).
 #[cfg(target_os = "espidf")]
 pub fn write(level: Level, tag: &str, msg: &str) {
-    let tag_c = CString::new(tag).unwrap_or_else(|_| CString::new("rust").unwrap());
-    let msg_c = CString::new(msg).unwrap_or_else(|_| CString::new("(invalid log)").unwrap());
+    let c_string = |text: &str, replacement: u8| {
+        let mut bytes = text.as_bytes().to_vec();
+        for byte in &mut bytes {
+            if *byte == 0 {
+                *byte = replacement;
+            }
+        }
+        // SAFETY: every interior NUL byte was replaced above.
+        unsafe { CString::from_vec_unchecked(bytes) }
+    };
+    let tag_c = c_string(tag, b'_');
+    let msg_c = c_string(msg, b' ');
     let (tag_ptr, msg_ptr) = (tag_c.as_ptr(), msg_c.as_ptr());
     // SAFETY: both pointers reference NUL-terminated C strings that stay alive
     // for the whole call; the shims only read them and return.

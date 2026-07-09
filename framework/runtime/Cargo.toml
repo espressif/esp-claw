@@ -13,6 +13,7 @@ members = [
     "claw-cabi",
     "claw-memory",
     "claw-context",
+    "claw-checkpoint",
     "claw-permission",
     "claw-sandbox",
     # Device-only (`#![cfg(target_os = "espidf")]`) staticlib crates that back

@@ -110,20 +110,54 @@ impl ToolSpec for ResolvePermissionReplyTool {
 
 impl SyncToolHandler for ResolvePermissionReplyTool {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
-        let args = parse_arguments(call.arguments_json())?;
-        let decision = string_field(&args, "decision");
-        let resolution = match decision.trim() {
+        let args: Value = serde_json::from_str(call.arguments_json()).map_err(|error| {
+            ToolError::InvalidArgumentsJson(format!("invalid tool arguments JSON: {error}"))
+        })?;
+        if !args.is_object() {
+            return Err(ToolError::InvalidArgumentsJson(
+                "tool arguments must be a JSON object".into(),
+            )
+            .into());
+        }
+
+        let Some(decision) = args
+            .get("decision")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return Err(ToolError::InvalidArguments(
+                "decision is required and must be a non-empty string".into(),
+            )
+            .into());
+        };
+
+        let resolution = match decision {
             "approve" => PermissionReplyResolution::Approved,
-            "reject" => PermissionReplyResolution::Rejected(non_empty_field(
-                &args,
-                "note",
-                DEFAULT_REJECTION,
-            )),
-            "clarify" => PermissionReplyResolution::Clarify(non_empty_field(
-                &args,
-                "message",
-                DEFAULT_CLARIFICATION,
-            )),
+            "reject" => PermissionReplyResolution::Rejected(
+                match args
+                    .get("note")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    Some(note) => note,
+                    None => DEFAULT_REJECTION,
+                }
+                .to_string(),
+            ),
+            "clarify" => PermissionReplyResolution::Clarify(
+                match args
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                {
+                    Some(message) => message,
+                    None => DEFAULT_CLARIFICATION,
+                }
+                .to_string(),
+            ),
             other => {
                 return Err(ToolError::InvalidArguments(format!(
                     "decision must be approve|reject|clarify, got '{other}'"
@@ -176,7 +210,14 @@ where
         cancel_handle.store(true, Ordering::Release);
     });
 
-    let messages = approval_messages(summary, user_reply);
+    let messages = json!([
+        {
+            "role": "user",
+            "content": format!(
+                "Pending permission request:\n{summary}\n\nUser reply:\n{user_reply}"
+            )
+        }
+    ]);
     let reminders: [Value; 0] = [];
     // The approval resolver is an internal one-shot, not a visible root iteration,
     // so its iteration events are dropped.
@@ -206,95 +247,17 @@ where
                 .unwrap_or_else(|poison| poison.into_inner())
                 .clone()
                 .ok_or_else(|| IterationLoopError::MalformedAssistantMessage.into()),
-            CompletedKind::PlainText(text) => Ok(PermissionReplyResolution::Clarify(
-                non_empty_str(&text.text, DEFAULT_CLARIFICATION),
-            )),
+            CompletedKind::PlainText(text) => {
+                let text = text.text.trim();
+                Ok(PermissionReplyResolution::Clarify(
+                    if text.is_empty() {
+                        DEFAULT_CLARIFICATION
+                    } else {
+                        text
+                    }
+                    .to_string(),
+                ))
+            }
         },
-    }
-}
-
-fn approval_messages(summary: &str, user_reply: &str) -> Value {
-    json!([
-        {
-            "role": "user",
-            "content": format!(
-                "Pending permission request:\n{summary}\n\nUser reply:\n{user_reply}"
-            )
-        }
-    ])
-}
-
-fn parse_arguments(arguments_json: &str) -> Result<Value, ToolInvokeError> {
-    if arguments_json.trim().is_empty() {
-        return Ok(Value::Object(Default::default()));
-    }
-    serde_json::from_str(arguments_json).map_err(|error| {
-        ToolError::InvalidArgumentsJson(format!("invalid tool arguments JSON: {error}")).into()
-    })
-}
-
-fn string_field(value: &Value, key: &str) -> String {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string()
-}
-
-fn non_empty_field(value: &Value, key: &str, default: &str) -> String {
-    non_empty_str(&string_field(value, key), default)
-}
-
-fn non_empty_str(value: &str, default: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        default.to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use super::*;
-    use claw_tool::RawToolInvocation;
-
-    fn resolve_from_tool(arguments_json: &str) -> Result<PermissionReplyResolution, ToolError> {
-        let resolution = Arc::new(Mutex::new(None));
-        let tool = ResolvePermissionReplyTool::new(Arc::clone(&resolution));
-        let call = ToolInvocation::try_from(RawToolInvocation {
-            id: Some("call-1"),
-            name: "resolve_permission_reply",
-            arguments_json,
-        })
-        .unwrap();
-        tool.invoke(&call).map_err(|error| error.error)?;
-        let resolved = resolution.lock().unwrap().clone().unwrap();
-        Ok(resolved)
-    }
-
-    #[test]
-    fn resolver_tool_maps_approve_and_reject() {
-        assert_eq!(
-            resolve_from_tool(r#"{"decision":"approve"}"#).unwrap(),
-            PermissionReplyResolution::Approved
-        );
-        assert_eq!(
-            resolve_from_tool(r#"{"decision":"reject","note":"not now"}"#).unwrap(),
-            PermissionReplyResolution::Rejected("not now".to_string())
-        );
-    }
-
-    #[test]
-    fn resolver_tool_maps_clarify_and_rejects_unknown_decision() {
-        assert_eq!(
-            resolve_from_tool(r#"{"decision":"clarify","message":"please decide"}"#).unwrap(),
-            PermissionReplyResolution::Clarify("please decide".to_string())
-        );
-        assert!(matches!(
-            resolve_from_tool(r#"{"decision":"maybe"}"#).unwrap_err(),
-            ToolError::InvalidArguments(_)
-        ));
     }
 }

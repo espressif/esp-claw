@@ -11,14 +11,20 @@
 //! Where an [`AgentConfig`] comes from lives in the factory. This module only
 //! consumes the resolved config.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use claw_api::{ClawApiAsync, ClawApiConfig, InitError};
+use claw_checkpoint::{
+    ChangePatternHint, DurablePart, DurablePartError, DurableState, DurableStateCodec,
+    PartGeneration, PartStateBlob, PartStateSlice, StorageHint, StorageSizeHint,
+};
 use claw_context::{Block, BlockKind};
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::{Compactor, TranscriptStore};
 use claw_permission::AllowAll;
 use claw_tool::{ToolSet, ToolSetError};
+use serde::{Deserialize, Serialize};
 
 use crate::agent::base_agent::{
     AgentAbortHandle, AgentCommand, AgentCommandError, AgentId, BaseAgent, BaseAgentBuildError,
@@ -45,8 +51,33 @@ const COMPACTION_SEGMENT_TOKEN_BUDGET: usize = 1500;
 /// The one agent type: a flat ReAct loop over a [`BaseAgent`], configured by an
 /// [`AgentConfig`]. No semantic FSM — `tick` forwards straight to the base.
 pub struct GenericAgent<H: ClawHttp, Timer: ClawTimer> {
-    id: AgentId,
+    state: DurableState<GenericAgentState>,
     base: BaseAgent<H, Timer>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+struct GenericAgentState {
+    id: AgentId,
+}
+
+impl Default for GenericAgentState {
+    fn default() -> Self {
+        Self { id: AgentId(0) }
+    }
+}
+
+impl DurableStateCodec for GenericAgentState {
+    fn encode_state(&self) -> Result<PartStateBlob<'_>, DurablePartError> {
+        let bytes = serde_json::to_vec(self).map_err(DurablePartError::Encode)?;
+        Ok(PartStateBlob {
+            schema_version: 1,
+            bytes: Cow::Owned(bytes),
+        })
+    }
+
+    fn decode_state(state: PartStateSlice<'_>) -> Result<Self, DurablePartError> {
+        serde_json::from_slice(state.bytes).map_err(DurablePartError::Decode)
+    }
 }
 
 impl<H: ClawHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
@@ -140,7 +171,10 @@ impl<H: ClawHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
         base.register_context_adapter(Box::new(recent))?;
         base.register_context_adapter(Box::new(rolling_summary))?;
 
-        Ok(Self { id, base })
+        Ok(Self {
+            state: DurableState::new(GenericAgentState { id }),
+            base,
+        })
     }
 
     /// Register a pluggable [`ContextAdapter`] on the underlying base agent.
@@ -158,32 +192,75 @@ impl<H: ClawHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
     ) -> Result<(), BaseAgentBuildError> {
         self.base.register_context_adapter(adapter)
     }
+
+    pub(crate) fn restore_state(
+        &mut self,
+        state: PartStateSlice<'_>,
+    ) -> Result<(), DurablePartError> {
+        self.state = DurableState::restore_state(state)?;
+        Ok(())
+    }
 }
 
 impl<H: ClawHttp, Timer: ClawTimer> Agent for GenericAgent<H, Timer> {
-    fn id(&self) -> AgentId {
-        self.id
-    }
-
     fn send_command(&mut self, command: AgentCommand) -> Result<(), AgentCommandError> {
         self.base.send_command(command)
     }
 
     fn deliver_child_result(&mut self, child: AgentId, text: String, ok: bool) {
-        append_child_result(&mut self.base, child, text, ok);
-    }
-
-    fn deliver_child_input(&mut self, child: AgentId, text: String) {
-        append_child_input(&mut self.base, child, text);
+        let status = if ok { "ok" } else { "failed" };
+        self.base
+            .push_task_input(format!("[subagent {child} {status}] {text}"));
     }
 
     fn abort_handle(&self) -> AgentAbortHandle {
         self.base.abort_handle()
     }
 
+    fn durable_parts(&self) -> Vec<&dyn DurablePart> {
+        let mut parts: Vec<&dyn DurablePart> = vec![self];
+        parts.extend(self.base.durable_parts());
+        parts
+    }
+
+    fn restore_durable_part(
+        &mut self,
+        name: &str,
+        state: PartStateSlice<'_>,
+    ) -> Result<bool, DurablePartError> {
+        match name {
+            "generic-agent" => {
+                self.restore_state(state)?;
+                Ok(true)
+            }
+            _ => self.base.restore_durable_part(name, state),
+        }
+    }
+
     fn tick(&mut self, events: EventSink) -> AgentTickFuture<'_> {
         // Flat: no FSM, no per-phase gating — the model drives its own flow.
         Box::pin(async move { self.base.tick(&events).await })
+    }
+}
+
+impl<H: ClawHttp, Timer: ClawTimer> DurablePart for GenericAgent<H, Timer> {
+    fn name(&self) -> &'static str {
+        "generic-agent"
+    }
+
+    fn generation(&self) -> PartGeneration {
+        self.state.generation()
+    }
+
+    fn export_state(&self) -> Result<PartStateBlob<'_>, DurablePartError> {
+        self.state.export_state()
+    }
+
+    fn storage_hint(&self) -> StorageHint {
+        StorageHint {
+            size: StorageSizeHint::Large,
+            change: ChangePatternHint::Arbitrary,
+        }
     }
 }
 
@@ -200,29 +277,4 @@ pub enum GenericAgentBuildError {
     /// [`ClawApiConfig`].
     #[error("failed to initialize the compaction LLM client: {0}")]
     CompactionLlm(#[source] InitError),
-}
-
-/// Shared: present a subagent's result as a provenance-tagged message and append
-/// it to the agent's base memory.
-///
-/// Child results re-enter the conversation as information the model re-decides
-/// over (no counting, no gating); both semantic agents handle them identically,
-/// so the formatting lives here once.
-fn append_child_result<H: ClawHttp, Timer: ClawTimer>(
-    base: &mut BaseAgent<H, Timer>,
-    child: AgentId,
-    text: String,
-    ok: bool,
-) {
-    let status = if ok { "ok" } else { "failed" };
-    base.push_task_input(format!("[subagent {child} {status}] {text}"));
-}
-
-/// Shared: present a non-result child graph event as task input.
-fn append_child_input<H: ClawHttp, Timer: ClawTimer>(
-    base: &mut BaseAgent<H, Timer>,
-    _child: AgentId,
-    text: String,
-) {
-    base.push_task_input(text);
 }

@@ -19,6 +19,7 @@ use core::cell::RefCell;
 use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
+use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::rc::Rc;
@@ -27,31 +28,50 @@ use std::sync::{Arc, Mutex};
 
 use async_channel::{Receiver, Sender};
 use claw_api::{ClawApiConfig, InitError};
+use claw_checkpoint::{
+    BatchId, BatchWrite, ChangePatternHint, CheckpointStorage, CheckpointStorageError,
+    CheckpointWrite, DurablePart, DurablePartError, DurableState, DurableStateCodec,
+    FsCheckpointStorage, LoadCheckpointError, PartGeneration, PartStateBlob, PartStateSlice,
+    PartWrite, StorageHint, StorageSizeHint,
+};
 use claw_interface::{
     ClawExecutor, ClawFs, ClawHttp, ClawThread, ClawTimer, CoreAffinity, Priority, WorkerHandle,
 };
 use claw_memory::LongTermInitError;
+use claw_skill::SkillError;
 use claw_tool::ToolRegistry;
 use futures_core::Stream;
+use serde::{Deserialize, Serialize};
 use strum::IntoStaticStr;
 use tracing::Instrument as _;
 
 use crate::agent::{AgentIdAllocator, CancelReason, FsAgentFactory, FsAgentFactoryError};
 use crate::event::{EventSink, SessionEvent, TurnCause};
-use crate::session::{SessionId, SessionStore, TurnId, TurnIdAllocator};
+use crate::session::{SessionId, SessionStore, SessionStoreState, TurnId, TurnIdAllocator};
 
 pub use self::instance::{DriveOutput, RootReply};
 
 use self::approval::{ApprovalResolverError, PermissionReplyResolution};
 use self::control::{DriveControl, DriveStop};
 use self::instance::{
-    ApprovalResolutionError, InstanceDeliverError, OrchestratorInstance, PendingApproval,
+    ApprovalResolutionError, InstanceDeliverError, OrchestratorInstance,
+    OrchestratorInstanceRestoreError, OrchestratorInstanceState, PendingApproval,
 };
 
 /// Stack for the orchestrator's single drive worker. It runs the whole agent
 /// graph (context building, LLM round-trips, tool calls), so it matches the
 /// device agent worker's budget.
 const ENGINE_WORKER_STACK_SIZE: usize = 64 * 1024;
+const CHECKPOINT_DIR: &str = "checkpoint";
+const ENGINE_BATCH: &str = "engine";
+const ENGINE_BATCH_ID: BatchId = BatchId::new(1);
+const ENGINE_PART: &str = "engine";
+const SESSION_REGISTRY_BATCH: &str = "session-registry";
+const SESSION_REGISTRY_BATCH_ID: BatchId = BatchId::new(1);
+const SESSION_STORE_PART: &str = "session-store";
+const SESSION_RUNTIME_BATCH: &str = "session-runtime";
+const SESSION_DRIVE_PART: &str = "session-drive";
+const ORCHESTRATOR_INSTANCE_PART: &str = "orchestrator-instance";
 
 /// A per-session drive future owned by the engine's run loop while it is in
 /// flight. `!Send`/`!'static`-free: it borrows nothing outside the `Rc<Engine>`
@@ -76,34 +96,109 @@ impl ControlOp {
 }
 
 /// One accepted user input waiting to be handed to the session pump.
+#[derive(Deserialize, Serialize)]
 struct SubmittedInput {
     text: String,
 }
 
+#[derive(Deserialize, Serialize)]
+struct SessionDriveState {
+    pending_input: Option<SubmittedInput>,
+    next_turn_id: TurnId,
+}
+
+impl Default for SessionDriveState {
+    fn default() -> Self {
+        Self {
+            pending_input: None,
+            next_turn_id: TurnIdAllocator::new().peek(),
+        }
+    }
+}
+
+impl DurableStateCodec for SessionDriveState {
+    fn encode_state(&self) -> Result<PartStateBlob<'_>, DurablePartError> {
+        let bytes = serde_json::to_vec(self).map_err(DurablePartError::Encode)?;
+        Ok(PartStateBlob {
+            schema_version: 1,
+            bytes: Cow::Owned(bytes),
+        })
+    }
+
+    fn decode_state(state: PartStateSlice<'_>) -> Result<Self, DurablePartError> {
+        serde_json::from_slice(state.bytes).map_err(DurablePartError::Decode)
+    }
+}
+
 struct SessionDrive {
     events: Option<EventSink>,
-    turns: TurnIdAllocator,
-    pending_input: Option<SubmittedInput>,
     running: bool,
     foreground_active: bool,
     control: Option<DriveControl>,
     requested_control: Option<ControlOp>,
     closing: bool,
     close_cancels: bool,
+    state: DurableState<SessionDriveState>,
 }
 
-impl Default for SessionDrive {
-    fn default() -> Self {
+impl SessionDrive {
+    fn new(state: SessionDriveState) -> Self {
         Self {
             events: None,
-            turns: TurnIdAllocator::new(),
-            pending_input: None,
             running: false,
             foreground_active: false,
             control: None,
             requested_control: None,
             closing: false,
             close_cancels: false,
+            state: DurableState::new(state),
+        }
+    }
+
+    fn has_pending_input(&self) -> bool {
+        self.state.get().pending_input.is_some()
+    }
+
+    fn set_pending_input(&mut self, input: SubmittedInput) {
+        self.state.get_mut().pending_input = Some(input);
+    }
+
+    fn take_pending_input(&mut self) -> Option<SubmittedInput> {
+        if self.state.get().pending_input.is_none() {
+            return None;
+        }
+        self.state.get_mut().pending_input.take()
+    }
+
+    fn next_turn(&mut self) -> TurnId {
+        let state = self.state.get_mut();
+        let turn = state.next_turn_id;
+        state.next_turn_id = TurnId::new(turn.0.saturating_add(1));
+        turn
+    }
+}
+
+impl DurablePart for SessionDrive {
+    fn name(&self) -> &'static str {
+        "session-drive"
+    }
+
+    fn generation(&self) -> PartGeneration {
+        self.state.generation()
+    }
+
+    fn export_state(&self) -> Result<PartStateBlob<'_>, DurablePartError> {
+        self.state.export_state()
+    }
+
+    fn restore_from_state(state: PartStateSlice<'_>) -> Result<Self, DurablePartError> {
+        Ok(Self::new(SessionDriveState::decode_state(state)?))
+    }
+
+    fn storage_hint(&self) -> StorageHint {
+        StorageHint {
+            size: StorageSizeHint::Small,
+            change: ChangePatternHint::Arbitrary,
         }
     }
 }
@@ -205,10 +300,10 @@ impl SessionControl {
             })
             .await
             .map_err(|_| SessionControlError::WorkerStopped)?;
-        ack_rx
-            .recv()
-            .await
-            .unwrap_or(Err(SessionControlError::WorkerStopped))
+        match ack_rx.recv().await {
+            Ok(result) => result,
+            Err(_) => Err(SessionControlError::WorkerStopped),
+        }
     }
 
     /// Gracefully stop the current foreground drive at the next safe boundary.
@@ -233,10 +328,10 @@ impl SessionControl {
             })
             .await
             .map_err(|_| SessionControlError::WorkerStopped)?;
-        ack_rx
-            .recv()
-            .await
-            .unwrap_or(Err(SessionControlError::WorkerStopped))
+        match ack_rx.recv().await {
+            Ok(result) => result,
+            Err(_) => Err(SessionControlError::WorkerStopped),
+        }
     }
 
     async fn send_control(&self, op: ControlOp) -> Result<(), SessionControlError> {
@@ -249,10 +344,10 @@ impl SessionControl {
             })
             .await
             .map_err(|_| SessionControlError::WorkerStopped)?;
-        ack_rx
-            .recv()
-            .await
-            .unwrap_or(Err(SessionControlError::WorkerStopped))
+        match ack_rx.recv().await {
+            Ok(result) => result,
+            Err(_) => Err(SessionControlError::WorkerStopped),
+        }
     }
 }
 
@@ -297,6 +392,27 @@ pub enum OrchestratorBuildError {
     /// A long-term memory journal exists but could not be read at startup.
     #[error("failed to load long-term memory: {0}")]
     LongTermInit(#[from] LongTermInitError),
+    /// The configured skill catalog could not be scanned.
+    #[error("failed to load skill catalog: {0}")]
+    SkillRegistry(#[from] SkillError),
+    /// Checkpoint storage metadata could not be read while booting.
+    #[error("failed to read checkpoint storage: {0}")]
+    CheckpointStorage(#[from] CheckpointStorageError),
+    /// The latest checkpoint exists but cannot be loaded.
+    #[error("failed to load checkpoint: {0}")]
+    CheckpointLoad(#[from] LoadCheckpointError),
+    /// A checkpoint part exists but cannot be decoded into runtime state.
+    #[error("failed to restore checkpoint part: {0}")]
+    CheckpointRestore(#[from] DurablePartError),
+    /// A session instance checkpoint exists but cannot be restored.
+    #[error("failed to restore checkpointed session instance: {0}")]
+    CheckpointInstanceRestore(#[from] OrchestratorInstanceRestoreError),
+    /// A checkpoint batch exists but does not contain the expected durable part.
+    #[error("checkpoint is missing part {part} in batch {batch}")]
+    MissingCheckpointPart {
+        batch: &'static str,
+        part: &'static str,
+    },
     /// The drive worker thread could not be spawned.
     #[error("failed to spawn the orchestrator worker: {0}")]
     WorkerSpawn(#[from] io::Error),
@@ -311,8 +427,162 @@ impl From<FsAgentFactoryError> for OrchestratorBuildError {
             FsAgentFactoryError::MissingPersistenceDir => Self::MissingPersistenceDir,
             FsAgentFactoryError::ExtractionLlm(source) => Self::ExtractionLlm(source),
             FsAgentFactoryError::LongTermInit(source) => Self::LongTermInit(source),
+            FsAgentFactoryError::SkillRegistry(source) => Self::SkillRegistry(source),
         }
     }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum SessionRegistryCheckpointError {
+    #[error(transparent)]
+    Storage(#[from] CheckpointStorageError),
+    #[error(transparent)]
+    Export(#[from] DurablePartError),
+}
+
+#[derive(Debug, thiserror::Error)]
+enum RuntimeCheckpointError {
+    #[error(transparent)]
+    Storage(#[from] CheckpointStorageError),
+    #[error(transparent)]
+    Export(#[from] DurablePartError),
+}
+
+fn load_session_store_state<Filesystem: ClawFs>(
+    checkpoint_dir: &str,
+) -> Result<SessionStoreState, OrchestratorBuildError> {
+    let storage = FsCheckpointStorage::<Filesystem>::new(checkpoint_dir.to_owned());
+    let Some(step) = storage.latest_step()? else {
+        return Ok(SessionStoreState::default());
+    };
+    let checkpoint = storage.load_checkpoint(step)?;
+    let mut saw_batch = false;
+    for batch in checkpoint.batches {
+        if batch.name != SESSION_REGISTRY_BATCH || batch.id != SESSION_REGISTRY_BATCH_ID {
+            continue;
+        }
+        saw_batch = true;
+        for part in batch.parts {
+            if part.name == SESSION_STORE_PART {
+                return Ok(SessionStoreState::decode_state(part.state.as_slice())?);
+            }
+        }
+    }
+    if saw_batch {
+        Err(OrchestratorBuildError::MissingCheckpointPart {
+            batch: SESSION_REGISTRY_BATCH,
+            part: SESSION_STORE_PART,
+        })
+    } else {
+        Ok(SessionStoreState::default())
+    }
+}
+
+fn load_engine_state<Filesystem: ClawFs>(
+    checkpoint_dir: &str,
+) -> Result<EngineState, OrchestratorBuildError> {
+    let storage = FsCheckpointStorage::<Filesystem>::new(checkpoint_dir.to_owned());
+    let Some(step) = storage.latest_step()? else {
+        return Ok(EngineState::default());
+    };
+    let checkpoint = storage.load_checkpoint(step)?;
+    let mut saw_batch = false;
+    for batch in checkpoint.batches {
+        if batch.name != ENGINE_BATCH || batch.id != ENGINE_BATCH_ID {
+            continue;
+        }
+        saw_batch = true;
+        for part in batch.parts {
+            if part.name == ENGINE_PART {
+                return Ok(EngineState::decode_state(part.state.as_slice())?);
+            }
+        }
+    }
+    if saw_batch {
+        Err(OrchestratorBuildError::MissingCheckpointPart {
+            batch: ENGINE_BATCH,
+            part: ENGINE_PART,
+        })
+    } else {
+        Ok(EngineState::default())
+    }
+}
+
+fn load_session_drives<Filesystem: ClawFs>(
+    checkpoint_dir: &str,
+    sessions: &SessionStore,
+) -> Result<HashMap<SessionId, SessionDrive>, OrchestratorBuildError> {
+    let storage = FsCheckpointStorage::<Filesystem>::new(checkpoint_dir.to_owned());
+    let Some(step) = storage.latest_step()? else {
+        return Ok(HashMap::new());
+    };
+    let checkpoint = storage.load_checkpoint(step)?;
+    let mut drives = HashMap::new();
+    for batch in checkpoint.batches {
+        if batch.name != SESSION_RUNTIME_BATCH {
+            continue;
+        }
+        let session = SessionId::new(batch.id.0);
+        if !sessions.contains(session) {
+            continue;
+        }
+        let mut saw_drive = false;
+        for part in batch.parts {
+            if part.name == SESSION_DRIVE_PART {
+                saw_drive = true;
+                let state = SessionDriveState::decode_state(part.state.as_slice())?;
+                drives.insert(session, SessionDrive::new(state));
+            }
+        }
+        if !saw_drive {
+            return Err(OrchestratorBuildError::MissingCheckpointPart {
+                batch: SESSION_RUNTIME_BATCH,
+                part: SESSION_DRIVE_PART,
+            });
+        }
+    }
+    Ok(drives)
+}
+
+fn load_session_instances<Filesystem, Http, Timer>(
+    checkpoint_dir: &str,
+    sessions: &SessionStore,
+    factory: Arc<FsAgentFactory<Filesystem, Http, Timer>>,
+    agent_id_allocator: AgentIdAllocator,
+) -> Result<HashMap<SessionId, OrchestratorInstance<Filesystem, Http, Timer>>, OrchestratorBuildError>
+where
+    Filesystem: ClawFs + 'static,
+    Http: ClawHttp + Default + 'static,
+    Timer: ClawTimer + Default + 'static,
+{
+    let storage = FsCheckpointStorage::<Filesystem>::new(checkpoint_dir.to_owned());
+    let Some(step) = storage.latest_step()? else {
+        return Ok(HashMap::new());
+    };
+    let checkpoint = storage.load_checkpoint(step)?;
+    let mut instances = HashMap::new();
+    for batch in checkpoint.batches {
+        if batch.name != SESSION_RUNTIME_BATCH {
+            continue;
+        }
+        let session = SessionId::new(batch.id.0);
+        if !sessions.contains(session) {
+            continue;
+        }
+        for part in batch.parts {
+            if part.name == ORCHESTRATOR_INSTANCE_PART {
+                let state = OrchestratorInstanceState::decode_state(part.state.as_slice())?;
+                let instance = OrchestratorInstance::from_restored_state(
+                    session,
+                    Arc::clone(&factory),
+                    agent_id_allocator.clone(),
+                    state,
+                )?;
+                instances.insert(session, instance);
+            }
+        }
+    }
+    Ok(instances)
 }
 
 #[derive(Debug, IntoStaticStr, thiserror::Error)]
@@ -341,6 +611,8 @@ pub struct Orchestrator {
     /// The drive worker, joined on drop. `Mutex<Option<..>>` so `Drop` can take
     /// it out behind a shared borrow.
     worker: Mutex<Option<WorkerHandle>>,
+    checkpoint_sessions:
+        Box<dyn Fn(&SessionStore) -> Result<(), SessionRegistryCheckpointError> + Send + Sync>,
 }
 
 impl Orchestrator {
@@ -370,9 +642,38 @@ impl Orchestrator {
         Thread: ClawThread,
         Executor: ClawExecutor + 'static,
     {
-        let sessions = Arc::new(SessionStore::new());
+        let persistence_root = persistence_dir.trim_end_matches('/');
+        let checkpoint_dir = if persistence_dir == "/" {
+            format!("/{CHECKPOINT_DIR}")
+        } else if persistence_root.is_empty() {
+            CHECKPOINT_DIR.to_owned()
+        } else {
+            format!("{persistence_root}/{CHECKPOINT_DIR}")
+        };
+        let session_state = load_session_store_state::<Filesystem>(&checkpoint_dir)?;
+        let sessions = Arc::new(SessionStore::new(session_state));
         let (command_tx, command_rx) = async_channel::unbounded();
         let (ready_tx, ready_rx) = mpsc::channel();
+        let checkpoint_sessions_dir = checkpoint_dir.clone();
+        let checkpoint_sessions = Box::new(move |sessions: &SessionStore| {
+            let mut storage =
+                FsCheckpointStorage::<Filesystem>::new(checkpoint_sessions_dir.clone());
+            let step = storage.next_step()?;
+            let state = sessions.export_state()?;
+            let hint = sessions.storage_hint();
+            storage.write_checkpoint(CheckpointWrite {
+                step,
+                batches: vec![BatchWrite {
+                    batch: (SESSION_REGISTRY_BATCH, SESSION_REGISTRY_BATCH_ID),
+                    writes: vec![PartWrite {
+                        name: SESSION_STORE_PART,
+                        state,
+                        hint,
+                    }],
+                }],
+            })?;
+            Ok(())
+        });
 
         let sessions_engine = Arc::clone(&sessions);
         let worker = Thread::spawn_worker(
@@ -385,6 +686,7 @@ impl Orchestrator {
                     tools,
                     llm_config,
                     persistence_dir,
+                    checkpoint_dir,
                     skill_roots,
                     sessions_engine,
                     command_rx,
@@ -398,6 +700,7 @@ impl Orchestrator {
                 sessions,
                 command_tx,
                 worker: Mutex::new(Some(worker)),
+                checkpoint_sessions,
             }),
             Ok(Err(error)) => {
                 worker.join();
@@ -476,6 +779,9 @@ impl Orchestrator {
         let span = tracing::info_span!("session.create");
         let _enter = span.enter();
         let session = self.sessions.create();
+        if let Err(error) = (self.checkpoint_sessions)(&self.sessions) {
+            tracing::error!(name: "checkpoint_failed", target = "session_registry", error = %error);
+        }
         tracing::info!(name: "created", session = %session);
         session
     }
@@ -515,7 +821,16 @@ impl Orchestrator {
                 SessionControlError::WorkerStopped
             })?;
         match ack_rx.recv_blocking() {
-            Ok(Ok(())) => Ok(()),
+            Ok(Ok(())) => {
+                if let Err(error) = (self.checkpoint_sessions)(&self.sessions) {
+                    tracing::error!(
+                        name: "checkpoint_failed",
+                        target = "session_registry",
+                        error = %error
+                    );
+                }
+                Ok(())
+            }
             Ok(Err(error)) => {
                 match &error {
                     SessionControlError::SessionClosed(_) => {
@@ -560,6 +875,7 @@ fn run_engine<Filesystem, Http, Timer, Executor>(
     tools: Arc<ToolRegistry>,
     llm_config: ClawApiConfig,
     persistence_dir: String,
+    checkpoint_dir: String,
     skill_roots: Vec<String>,
     sessions: Arc<SessionStore>,
     command_rx: Receiver<Command>,
@@ -570,12 +886,21 @@ fn run_engine<Filesystem, Http, Timer, Executor>(
     Timer: ClawTimer + Default + 'static,
     Executor: ClawExecutor,
 {
+    let engine_state = match load_engine_state::<Filesystem>(&checkpoint_dir) {
+        Ok(state) => state,
+        Err(error) => {
+            let _ = ready.send(Err(error));
+            return;
+        }
+    };
     let engine = match Engine::<Filesystem, Http, Timer>::new(
         tools,
         llm_config,
         persistence_dir,
+        checkpoint_dir,
         skill_roots,
         sessions,
+        engine_state,
     ) {
         Ok(engine) => Rc::new(engine),
         Err(error) => {
@@ -601,8 +926,8 @@ where
     factory: Arc<FsAgentFactory<Filesystem, Http, Timer>>,
     /// Config for the one-shot natural-language approval resolver.
     approval_llm_config: ClawApiConfig,
-    /// Global agent-id allocator shared by every per-session registry.
-    next_agent_id: AgentIdAllocator,
+    /// Checkpoint storage root owned by the orchestrator runtime.
+    checkpoint_dir: String,
     /// One isolated agent graph per session. Single-owner interior mutability
     /// (`RefCell`): the engine is `!Send` and driven from one thread.
     instances: RefCell<HashMap<SessionId, OrchestratorInstance<Filesystem, Http, Timer>>>,
@@ -610,6 +935,61 @@ where
     drives: RefCell<HashMap<SessionId, SessionDrive>>,
     /// Session id truth source, shared with the handle.
     sessions: Arc<SessionStore>,
+    /// Durable engine state.
+    state: DurableState<EngineState>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct EngineState {
+    agent_id_allocator: AgentIdAllocator,
+}
+
+impl Default for EngineState {
+    fn default() -> Self {
+        Self {
+            agent_id_allocator: AgentIdAllocator::new(),
+        }
+    }
+}
+
+impl DurableStateCodec for EngineState {
+    fn encode_state(&self) -> Result<PartStateBlob<'_>, DurablePartError> {
+        let bytes = serde_json::to_vec(self).map_err(DurablePartError::Encode)?;
+        Ok(PartStateBlob {
+            schema_version: 1,
+            bytes: Cow::Owned(bytes),
+        })
+    }
+
+    fn decode_state(state: PartStateSlice<'_>) -> Result<Self, DurablePartError> {
+        serde_json::from_slice(state.bytes).map_err(DurablePartError::Decode)
+    }
+}
+
+impl<Filesystem, Http, Timer> DurablePart for Engine<Filesystem, Http, Timer>
+where
+    Filesystem: ClawFs + 'static,
+    Http: ClawHttp + Default + 'static,
+    Timer: ClawTimer + Default + 'static,
+{
+    fn name(&self) -> &'static str {
+        "engine"
+    }
+
+    fn generation(&self) -> PartGeneration {
+        u64::from(self.state.get().agent_id_allocator.peek().0)
+    }
+
+    fn export_state(&self) -> Result<PartStateBlob<'_>, DurablePartError> {
+        self.state.export_state()
+    }
+
+    fn storage_hint(&self) -> StorageHint {
+        StorageHint {
+            size: StorageSizeHint::Small,
+            change: ChangePatternHint::Arbitrary,
+        }
+    }
 }
 
 impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
@@ -622,8 +1002,10 @@ where
         tools: Arc<ToolRegistry>,
         llm_config: ClawApiConfig,
         persistence_dir: String,
+        checkpoint_dir: String,
         skill_roots: Vec<String>,
         sessions: Arc<SessionStore>,
+        state: EngineState,
     ) -> Result<Self, OrchestratorBuildError> {
         let factory = Arc::new(FsAgentFactory::<Filesystem, Http, Timer>::new(
             tools,
@@ -631,14 +1013,86 @@ where
             persistence_dir,
             skill_roots,
         )?);
+        let drives = load_session_drives::<Filesystem>(&checkpoint_dir, sessions.as_ref())?;
+        let instances = load_session_instances::<Filesystem, Http, Timer>(
+            &checkpoint_dir,
+            sessions.as_ref(),
+            Arc::clone(&factory),
+            state.agent_id_allocator.clone(),
+        )?;
         Ok(Self {
             factory,
             approval_llm_config: llm_config,
-            next_agent_id: AgentIdAllocator::new(),
-            instances: RefCell::new(HashMap::new()),
-            drives: RefCell::new(HashMap::new()),
+            checkpoint_dir,
+            instances: RefCell::new(instances),
+            drives: RefCell::new(drives),
             sessions,
+            state: DurableState::new(state),
         })
+    }
+
+    fn checkpoint_session_runtime(
+        &self,
+        session_id: SessionId,
+    ) -> Result<(), RuntimeCheckpointError> {
+        let engine_state = self.export_state()?;
+        let engine_hint = self.storage_hint();
+        let drive_write = {
+            let drives = self.drives.borrow();
+            let Some(drive) = drives.get(&session_id) else {
+                return Ok(());
+            };
+            let state = drive.export_state()?;
+            PartWrite {
+                name: SESSION_DRIVE_PART,
+                state: PartStateBlob {
+                    schema_version: state.schema_version,
+                    bytes: Cow::Owned(state.bytes.into_owned()),
+                },
+                hint: drive.storage_hint(),
+            }
+        };
+        let instance_write = {
+            let instances = self.instances.borrow();
+            if let Some(instance) = instances.get(&session_id) {
+                let state = instance.export_state()?;
+                Some(PartWrite {
+                    name: ORCHESTRATOR_INSTANCE_PART,
+                    state: PartStateBlob {
+                        schema_version: state.schema_version,
+                        bytes: Cow::Owned(state.bytes.into_owned()),
+                    },
+                    hint: instance.storage_hint(),
+                })
+            } else {
+                None
+            }
+        };
+        let mut session_writes = vec![drive_write];
+        if let Some(instance_write) = instance_write {
+            session_writes.push(instance_write);
+        }
+
+        let mut storage = FsCheckpointStorage::<Filesystem>::new(self.checkpoint_dir.clone());
+        let step = storage.next_step()?;
+        storage.write_checkpoint(CheckpointWrite {
+            step,
+            batches: vec![
+                BatchWrite {
+                    batch: (ENGINE_BATCH, ENGINE_BATCH_ID),
+                    writes: vec![PartWrite {
+                        name: ENGINE_PART,
+                        state: engine_state,
+                        hint: engine_hint,
+                    }],
+                },
+                BatchWrite {
+                    batch: (SESSION_RUNTIME_BATCH, BatchId::new(session_id.0)),
+                    writes: session_writes,
+                },
+            ],
+        })?;
+        Ok(())
     }
 
     /// Multiplex every active session pump plus the command channel on one
@@ -675,7 +1129,7 @@ where
                 return;
             }
             // Once stopping, stop accepting new commands; just drain in-flight.
-            let recv = (rx_open && !stopping).then(|| command_rx.as_mut());
+            let recv = (rx_open && !stopping).then_some(command_rx.as_mut());
             match (EnginePoll {
                 inflight: &mut inflight,
                 recv,
@@ -688,8 +1142,11 @@ where
                     events,
                     ack,
                 })) => {
-                    let result = self.open_session_stream(session, events);
+                    let (result, future) = self.open_session_stream(session, events);
                     let _ = ack.try_send(result);
+                    if let Some(future) = future {
+                        inflight.push_back(future);
+                    }
                 }
                 EngineEvent::Command(Some(Command::Submit { session, text, ack })) => {
                     let (result, future) = self.submit_input(session, SubmittedInput { text });
@@ -726,22 +1183,32 @@ where
     }
 
     fn open_session_stream(
-        &self,
+        self: &Rc<Self>,
         session_id: SessionId,
         events: EventSink,
-    ) -> Result<(), OpenSessionError> {
+    ) -> (Result<(), OpenSessionError>, Option<DriveFuture>) {
         if !self.sessions.contains(session_id) {
-            return Err(OpenSessionError::SessionNotFound(session_id));
+            return (Err(OpenSessionError::SessionNotFound(session_id)), None);
         }
-        let mut drives = self.drives.borrow_mut();
-        let drive = drives.entry(session_id).or_default();
-        if drive.events.is_some() || drive.closing {
-            return Err(OpenSessionError::AlreadyOpen(session_id));
-        }
-        drive.events = Some(events);
-        drive.closing = false;
-        drive.close_cancels = false;
-        Ok(())
+        let has_pending_input = {
+            let mut drives = self.drives.borrow_mut();
+            let drive = drives
+                .entry(session_id)
+                .or_insert_with(|| SessionDrive::new(SessionDriveState::default()));
+            if drive.events.is_some() || drive.closing {
+                return (Err(OpenSessionError::AlreadyOpen(session_id)), None);
+            }
+            drive.events = Some(events);
+            drive.closing = false;
+            drive.close_cancels = false;
+            drive.has_pending_input()
+        };
+        let should_start =
+            has_pending_input || !matches!(self.instance_work(session_id), InstanceWork::None);
+        let future = should_start
+            .then(|| self.ensure_session_drive(session_id))
+            .flatten();
+        (Ok(()), future)
     }
 
     fn submit_input(
@@ -788,7 +1255,7 @@ where
                 );
                 return (Err(SessionControlError::SessionClosed(session_id)), None);
             }
-            if drive.pending_input.is_some()
+            if drive.has_pending_input()
                 || drive.foreground_active
                 || self.instance_has_root_work(session_id)
             {
@@ -802,7 +1269,7 @@ where
                 );
                 return (Err(SessionControlError::Busy(session_id)), None);
             }
-            drive.pending_input = Some(input);
+            drive.set_pending_input(input);
             if let Some(control) = &drive.control {
                 control.request_wake();
             }
@@ -814,6 +1281,9 @@ where
             attachment_count = 0_u64,
             attachment_kinds = "none",
         );
+        if let Err(error) = self.checkpoint_session_runtime(session_id) {
+            tracing::error!(name: "checkpoint_failed", target = "session_runtime", error = %error);
+        }
         (Ok(()), self.ensure_session_drive(session_id))
     }
 
@@ -852,7 +1322,7 @@ where
                 return (Err(SessionControlError::SessionClosed(session_id)), None);
             }
             if op == ControlOp::Cancel {
-                drive.pending_input = None;
+                let _ = drive.take_pending_input();
             }
             drive.requested_control = Some(ControlOp::merge(drive.requested_control, op));
             if let Some(control) = &drive.control {
@@ -932,7 +1402,7 @@ where
         {
             let mut drives = self.drives.borrow_mut();
             let drive = drives.get_mut(&session_id)?;
-            let had_pending_input = drive.pending_input.take().is_some();
+            let had_pending_input = drive.take_pending_input().is_some();
             drive.close_cancels = drive.close_cancels
                 || drive.running
                 || drive.foreground_active
@@ -1022,7 +1492,7 @@ where
         if drive.closing {
             return None;
         }
-        drive.pending_input.take()
+        drive.take_pending_input()
     }
 
     fn session_events(&self, session_id: SessionId) -> Option<EventSink> {
@@ -1068,7 +1538,7 @@ where
             .drives
             .borrow_mut()
             .get_mut(&session_id)
-            .map(|drive| drive.turns.next())
+            .map(SessionDrive::next_turn)
         else {
             return;
         };
@@ -1103,7 +1573,7 @@ where
             .drives
             .borrow_mut()
             .get_mut(&session_id)
-            .map(|drive| drive.turns.next())
+            .map(SessionDrive::next_turn)
         else {
             return;
         };
@@ -1148,8 +1618,13 @@ where
                 });
             }
         }
+        if let Err(error) = self.checkpoint_session_runtime(session_id) {
+            tracing::error!(name: "checkpoint_failed", target = "session_runtime", error = %error);
+            events.emit(SessionEvent::Error {
+                message: error.to_string(),
+            });
+        }
         events.emit(SessionEvent::TurnEnded { turn });
-        let _ = session_id;
     }
 
     async fn drive_one_input(
@@ -1249,7 +1724,10 @@ where
             )
         };
 
-        let cleanup_events = events.clone().unwrap_or_else(EventSink::disabled);
+        let cleanup_events = match events.clone() {
+            Some(events) => events,
+            None => EventSink::disabled(),
+        };
         if should_cancel {
             if let Some(mut slot) = self.checkout_existing_instance(session_id) {
                 slot.get_mut().cancel_all(CancelReason::UserRequested);
@@ -1280,13 +1758,16 @@ where
 
         if let Some(drive) = self.drives.borrow_mut().get_mut(&session_id) {
             drive.events = None;
-            drive.pending_input = None;
+            let _ = drive.take_pending_input();
             drive.running = false;
             drive.foreground_active = false;
             drive.control = None;
             drive.requested_control = None;
             drive.closing = false;
             drive.close_cancels = false;
+        }
+        if let Err(error) = self.checkpoint_session_runtime(session_id) {
+            tracing::error!(name: "checkpoint_failed", target = "session_runtime", error = %error);
         }
     }
 
@@ -1343,11 +1824,10 @@ where
     }
 
     fn instance_work(&self, session_id: SessionId) -> InstanceWork {
-        self.instances
-            .borrow()
-            .get(&session_id)
-            .map(OrchestratorInstance::work)
-            .unwrap_or(InstanceWork::None)
+        match self.instances.borrow().get(&session_id) {
+            Some(instance) => instance.work(),
+            None => InstanceWork::None,
+        }
     }
 
     fn instance_has_root_work(&self, session_id: SessionId) -> bool {
@@ -1364,17 +1844,15 @@ where
         &self,
         session_id: SessionId,
     ) -> InstanceSlot<'_, Filesystem, Http, Timer> {
-        let instance = self
-            .instances
-            .borrow_mut()
-            .remove(&session_id)
-            .unwrap_or_else(|| {
-                OrchestratorInstance::new(
-                    session_id,
-                    Arc::clone(&self.factory),
-                    self.next_agent_id.clone(),
-                )
-            });
+        let instance = match self.instances.borrow_mut().remove(&session_id) {
+            Some(instance) => instance,
+            None => OrchestratorInstance::new(
+                session_id,
+                Arc::clone(&self.factory),
+                self.state.get().agent_id_allocator.clone(),
+                OrchestratorInstanceState::default(),
+            ),
+        };
         InstanceSlot {
             engine: self,
             session_id,

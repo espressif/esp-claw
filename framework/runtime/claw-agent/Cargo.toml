@@ -53,6 +53,7 @@ dev = [
 [dependencies]
 claw-core = { path = "../claw-core" }
 claw-api = { path = "../claw-api" }
+claw-checkpoint = { path = "../claw-checkpoint" }
 claw-tool = { path = "../claw-tool" }
 # Conversation/long-term memory. The compaction policy is wired internally
 # (the LLM-backed `LlmCompactor`), so no stub-compactor feature is needed.
@@ -80,6 +81,7 @@ claw-context = { path = "../claw-context" }
 # host-target executor backend used by agent tests.
 claw-interface = { path = "../claw-interface", features = [
     "test-doubles",
+    "diskfs",
     "stdthread",
     "tokioexecutor",
 ] }
@@ -87,3 +89,4 @@ claw-utils = { path = "../claw-utils" }
 serde_json = "1"
 # `block_on` for tests (smol family; replaces the removed local spin executor).
 futures-lite = "2"
+tempdir = "0.3"

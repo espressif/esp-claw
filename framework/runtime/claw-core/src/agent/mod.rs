@@ -41,6 +41,7 @@ pub(crate) use registry::{AgentIdAllocator, AgentRegistry};
 
 use crate::event::EventSink;
 
+use claw_checkpoint::{DurablePart, DurablePartError, PartStateSlice};
 use core::future::Future;
 use core::pin::Pin;
 
@@ -53,10 +54,7 @@ pub(crate) type AgentTickFuture<'a> = Pin<Box<dyn Future<Output = TickOutcome> +
 /// outcomes come out via [`tick`](Agent::tick). Multi-agent graph inputs use
 /// separate child ports rather than [`AgentCommand`] variants, so the external
 /// command vocabulary stays untouched.
-pub(crate) trait Agent {
-    /// This agent's stable identity.
-    fn id(&self) -> AgentId;
-
+pub(crate) trait Agent: DurablePart {
     /// Hand the agent one command. See [`AgentCommand`] for the vocabulary and
     /// [`AgentCommandError`] for when a command is illegal in the current state.
     fn send_command(&mut self, command: AgentCommand) -> Result<(), AgentCommandError>;
@@ -66,13 +64,6 @@ pub(crate) trait Agent {
     /// The result re-enters as ordinary information for the model to reason over
     /// (it does not preempt or gate anything); the agent owns how it is presented.
     fn deliver_child_result(&mut self, child: AgentId, text: String, ok: bool);
-
-    /// Deliver a non-result child graph event back to this parent agent.
-    ///
-    /// Used for active-task graph messages such as subagent approval requests.
-    /// This intentionally bypasses [`AgentCommand::AppendMessage`], whose
-    /// external append semantics are idle-only.
-    fn deliver_child_input(&mut self, child: AgentId, text: String);
 
     /// A cloneable handle to abort this agent's in-flight LLM/tool round from
     /// another task.
@@ -85,6 +76,25 @@ pub(crate) trait Agent {
     /// agent. It is plumbing for stopping a now-stale call; the *content* of any
     /// new input still arrives as an [`AgentCommand`].
     fn abort_handle(&self) -> AgentAbortHandle;
+
+    /// Durable subparts owned by this agent.
+    ///
+    /// The agent trait stays crate-private, so this is an orchestrator/checkpoint
+    /// contract rather than public object introspection.
+    fn durable_parts(&self) -> Vec<&dyn DurablePart> {
+        Vec::new()
+    }
+
+    /// Restore one durable subpart by name. Returns `Ok(false)` when the name is
+    /// not owned by this agent implementation.
+    fn restore_durable_part(
+        &mut self,
+        name: &str,
+        state: PartStateSlice<'_>,
+    ) -> Result<bool, DurablePartError> {
+        let _ = (name, state);
+        Ok(false)
+    }
 
     /// Advance the agent by one step and report what happened. See [`TickOutcome`].
     ///

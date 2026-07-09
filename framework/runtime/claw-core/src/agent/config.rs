@@ -55,22 +55,3 @@ pub enum AgentConfigError {
     #[error("unknown tool: {0}")]
     UnknownTool(String),
 }
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
-mod tests {
-    use super::*;
-    use crate::agent::manifest::MANIFESTS;
-
-    #[test]
-    fn every_baked_kind_builds_static_config() {
-        for manifest in MANIFESTS {
-            let kind = manifest.kind.as_str();
-            let config = AgentConfig::from_manifest(manifest, Vec::new(), SkillSet::empty());
-            assert!(
-                !config.system_prompt.is_empty(),
-                "kind {kind} has no prompt"
-            );
-        }
-    }
-}

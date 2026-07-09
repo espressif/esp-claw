@@ -10,14 +10,7 @@ use crate::agent::graph::AgentContext;
 
 /// Reads the agent's subtree snapshot through the graph context.
 pub(crate) struct ListSubagentsTool {
-    context: Arc<AgentContext>,
-}
-
-impl ListSubagentsTool {
-    /// Build the tool over the agent's `context`.
-    pub(crate) fn new(context: Arc<AgentContext>) -> Self {
-        Self { context }
-    }
+    pub(super) context: Arc<AgentContext>,
 }
 
 impl ToolSpec for ListSubagentsTool {

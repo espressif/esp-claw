@@ -32,6 +32,14 @@ Rust Best Practices by Finn(Ziheng) Sheng.
 - Keep configuration fields on the type that owns the behavior unless a separate config type has real semantic weight. Do not create `FooConfig` just to carry one or two fields that are only used by `FooStore`/`FooClient`; put those fields on `FooStore`/`FooClient` and expose the smallest constructor that represents the real product API.
 - Do not expose public API only to make tests convenient. A test needing a smaller limit, an alternate timeout, or an artificial knob is not enough reason to add `with_*`, builder methods, or extra config structs. Prefer testing through the real default behavior, private/internal test helpers, or inputs that naturally exercise the branch. Public API entropy must come from product requirements, not test setup.
 
+## Durable State Layout
+
+- For persistence-enabled Rust objects, put durable fields in an `XxxState` struct and keep non-durable runtime fields as ordinary fields on `Xxx`; do not invent a `Deps` wrapper just to pass non-durable fields.
+- The object owns `state: XxxState` and mutates durable data through that field. Keep a single constructor path: `Xxx::new(existing_args..., state: XxxState)`, with boot code passing checkpoint-loaded state or `XxxState::default()` when the checkpoint part is absent.
+- `XxxState` is the checkpoint contract. Implement `Default` for cold boot, and let the state type choose its stable encoding. Use zero-copy/raw binary only for fixed-layout POD state; use JSON, postcard, or custom binary encoding for dynamic fields such as `String`, `Vec`, maps, `Arc`, or pointer-owning types.
+- `export_state` should encode `self.state` directly instead of rebuilding ad hoc snapshots from scattered fields. Checkpoint restore should produce `XxxState`; runtime resources such as filesystem, HTTP, timers, factories, handles, and config remain normal constructor inputs.
+- Missing checkpoint data may fall back to `XxxState::default()`. Corrupt, schema-mismatched, or integrity-failed checkpoint data must be surfaced or resolved by loading an older valid checkpoint, not silently defaulted.
+
 ## Clippy Lints for Panic Detection
 
 Enable these restriction lints in `Cargo.toml` to catch panicking functions at compile time:

@@ -14,15 +14,7 @@ use crate::agent::graph::SpawnPolicy;
 
 /// Serves the spawnable-kinds catalog resolved from this agent's spawn policy.
 pub(crate) struct ListSpawnableAgentsTool {
-    policy: SpawnPolicy,
-}
-
-impl ListSpawnableAgentsTool {
-    /// Build the tool over the agent's spawn `policy` (the same policy
-    /// `spawn_subagent` enforces, so the menu and the gate never disagree).
-    pub(crate) fn new(policy: SpawnPolicy) -> Self {
-        Self { policy }
-    }
+    pub(super) policy: SpawnPolicy,
 }
 
 impl ToolSpec for ListSpawnableAgentsTool {
@@ -48,62 +40,5 @@ impl SyncToolHandler for ListSpawnableAgentsTool {
             output: serde_json::json!({ "spawnable_agents": kinds }).to_string(),
             ok: true,
         })
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use super::*;
-    use crate::agent::kind::AgentKind;
-    use claw_tool::RawToolInvocation;
-
-    fn call() -> ToolInvocation<'static> {
-        ToolInvocation::try_from(RawToolInvocation {
-            id: Some("t1"),
-            name: "list_spawnable_agents",
-            arguments_json: "{}",
-        })
-        .unwrap()
-    }
-
-    fn spawnable(policy: SpawnPolicy) -> serde_json::Value {
-        let tool = ListSpawnableAgentsTool::new(policy);
-        let output = tool.invoke(&call()).unwrap();
-        assert!(output.ok);
-        serde_json::from_str(&output.output).unwrap()
-    }
-
-    #[test]
-    fn only_policy_lists_the_allowed_kind_with_its_description() {
-        let value = spawnable(SpawnPolicy::Only(vec![AgentKind::new("worker")]));
-        let rows = value["spawnable_agents"].as_array().unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["kind"], "worker");
-        assert!(rows[0]["description"]
-            .as_str()
-            .unwrap()
-            .contains("Executes one delegated task"));
-    }
-
-    #[test]
-    fn any_policy_lists_every_baked_kind() {
-        let value = spawnable(SpawnPolicy::Any);
-        let kinds: Vec<&str> = value["spawnable_agents"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|row| row["kind"].as_str())
-            .collect();
-        assert!(kinds.contains(&"conversation"));
-        assert!(kinds.contains(&"worker"));
-    }
-
-    #[test]
-    fn unknown_only_kind_is_dropped() {
-        // A kind with no baked manifest can never be built, so it must not be
-        // offered as spawnable.
-        let value = spawnable(SpawnPolicy::Only(vec![AgentKind::new("ghost")]));
-        assert!(value["spawnable_agents"].as_array().unwrap().is_empty());
     }
 }

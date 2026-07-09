@@ -11,10 +11,6 @@ mod espidf {
 
     use claw_interface::{ClawFile, ClawFs, FsError};
 
-    fn map_io(error: std::io::Error) -> FsError {
-        FsError::from(error)
-    }
-
     /// Device filesystem backend over ESP-IDF VFS paths.
     ///
     /// Paths are used verbatim. The caller is responsible for passing paths
@@ -56,7 +52,7 @@ mod espidf {
             self.file
                 .metadata()
                 .map(|metadata| metadata.len())
-                .map_err(map_io)
+                .map_err(FsError::from)
         }
 
         fn write_all(&mut self, data: &[u8]) -> Result<(), FsError> {
@@ -70,7 +66,7 @@ mod espidf {
         fn open(path: &str) -> Result<Self::File, FsError> {
             std::fs::File::open(path)
                 .map(|file| EspIdfFile { file })
-                .map_err(map_io)
+                .map_err(FsError::from)
         }
 
         fn create(path: &str) -> Result<Self::File, FsError> {
@@ -93,7 +89,7 @@ mod espidf {
         }
 
         fn rename(from: &str, to: &str) -> Result<(), FsError> {
-            std::fs::rename(from, to).map_err(map_io)
+            std::fs::rename(from, to).map_err(FsError::from)
         }
 
         fn create_dir_all(path: &str) -> Result<(), FsError> {
@@ -113,7 +109,7 @@ mod espidf {
         }
 
         fn list_dir(path: &str) -> Result<Vec<String>, FsError> {
-            let entries = std::fs::read_dir(path).map_err(map_io)?;
+            let entries = std::fs::read_dir(path).map_err(FsError::from)?;
             let mut names = Vec::new();
             for entry in entries {
                 let entry = entry.map_err(FsError::from)?;

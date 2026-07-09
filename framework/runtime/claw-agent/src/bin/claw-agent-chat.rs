@@ -115,13 +115,25 @@ async fn run() -> Result<()> {
         TracingConfig::default()
             .with_context_group_keys("run", ["session", "turn", "agent", "iteration"]),
     )?;
-    load_env();
+    let env_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../claw-core/.env.local");
+    if env_path.is_file() {
+        if let Err(error) = dotenvy::from_path(&env_path) {
+            eprintln!("warning: failed to load {}: {error}", env_path.display());
+        }
+    }
 
     let persistence = AgentPersistenceConfig {
         persistence_root: MEMORY_DIR.to_string(),
         skill_roots: Vec::new(),
     };
-    let system = AgentSystem::on_disk(llm_config()?, persistence)?;
+    let mut llm_config = ClawApiConfig::new(
+        BackendKind::OpenAiCompatible,
+        required("CLAW_LLM_API_KEY")?,
+        required("CLAW_LLM_MODEL")?,
+        required("CLAW_LLM_BASE_URL")?,
+    );
+    llm_config.timeout_ms = 60_000;
+    let system = AgentSystem::on_disk(llm_config, persistence)?;
     system.start_all()?;
     let session = system.new_session();
     let (control, events) = system.open_session(session)?;
@@ -151,30 +163,6 @@ async fn run() -> Result<()> {
 
     eprintln!("Goodbye.");
     Ok(())
-}
-
-/// Load `claw-core/.env.local` into the process environment if present. A parse
-/// failure is surfaced (not swallowed) but does not abort: the missing variables
-/// are then reported precisely by [`llm_config`].
-fn load_env() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../claw-core/.env.local");
-    if path.is_file() {
-        if let Err(error) = dotenvy::from_path(&path) {
-            eprintln!("warning: failed to load {}: {error}", path.display());
-        }
-    }
-}
-
-/// Build the LLM client config from the required `CLAW_LLM_*` variables.
-fn llm_config() -> Result<ClawApiConfig> {
-    let mut config = ClawApiConfig::new(
-        BackendKind::OpenAiCompatible,
-        required("CLAW_LLM_API_KEY")?,
-        required("CLAW_LLM_MODEL")?,
-        required("CLAW_LLM_BASE_URL")?,
-    );
-    config.timeout_ms = 60_000;
-    Ok(config)
 }
 
 /// Read a required, non-empty environment variable or fail with a clear message.

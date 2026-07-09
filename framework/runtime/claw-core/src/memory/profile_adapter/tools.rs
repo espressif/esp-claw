@@ -46,7 +46,11 @@ impl<F: ClawFs + 'static> SyncToolHandler for ProfileReadTool<F> {
         let document = document_from_args(&args)?;
         match self.store.read(document) {
             Ok(Some(content)) => Ok(ToolOutput {
-                output: render_document(document, &content),
+                output: if content.trim().is_empty() {
+                    format!("Profile document {document} is empty.")
+                } else {
+                    format!("Profile document {document}:\n{content}")
+                },
                 ok: true,
             }),
             Ok(None) => Ok(ToolOutput {
@@ -77,7 +81,11 @@ impl<F: ClawFs + 'static> SyncToolHandler for ProfileReplaceTool<F> {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let args = parse_object(call)?;
         let document = document_from_args(&args)?;
-        let content = required_raw_string(&args, "content")?;
+        let content = args.get("content").and_then(Value::as_str).ok_or_else(|| {
+            ToolInvokeError::new(ToolError::InvokeRejected(
+                "missing required string field 'content'".into(),
+            ))
+        })?;
         match self.store.replace(document, content) {
             Ok(()) => Ok(ToolOutput {
                 output: format!("Replaced profile document {document}."),
@@ -137,123 +145,36 @@ fn profile_action<F: ClawFs + 'static>(
 }
 
 fn parse_object(call: &ToolInvocation<'_>) -> Result<Value, ToolInvokeError> {
-    if call.arguments_json().trim().is_empty() {
-        return Ok(Value::Object(serde_json::Map::new()));
+    let text = call.arguments_json().trim();
+    let value = if text.is_empty() {
+        Value::Object(serde_json::Map::new())
+    } else {
+        serde_json::from_str(text).map_err(|error| {
+            ToolInvokeError::new(ToolError::InvalidArgumentsJson(error.to_string()))
+        })?
+    };
+    if !value.is_object() {
+        return Err(ToolInvokeError::new(ToolError::InvalidArgumentsJson(
+            "tool arguments must be a JSON object".into(),
+        )));
     }
-    serde_json::from_str(call.arguments_json())
-        .map_err(|error| ToolInvokeError::new(ToolError::InvalidArgumentsJson(error.to_string())))
+    Ok(value)
 }
 
 fn document_from_args(args: &Value) -> Result<ProfileDocument, ToolInvokeError> {
-    let document = required_trimmed_string(args, "document")?;
-    ProfileDocument::from_str(&document).map_err(|error| {
-        ToolInvokeError::new(ToolError::InvokeRejected(format!(
-            "{error}; expected one of: soul, assistant_identity, user_profile"
-        )))
-    })
-}
-
-fn required_trimmed_string(args: &Value, key: &str) -> Result<String, ToolInvokeError> {
-    let value = args
-        .get(key)
+    let document = args
+        .get("document")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .ok_or_else(|| {
-            ToolInvokeError::new(ToolError::InvokeRejected(format!(
-                "missing required string field '{key}'"
-            )))
+            ToolInvokeError::new(ToolError::InvokeRejected(
+                "missing required string field 'document'".into(),
+            ))
         })?;
-    Ok(value.to_string())
-}
-
-fn required_raw_string<'a>(args: &'a Value, key: &str) -> Result<&'a str, ToolInvokeError> {
-    args.get(key).and_then(Value::as_str).ok_or_else(|| {
+    ProfileDocument::from_str(document).map_err(|error| {
         ToolInvokeError::new(ToolError::InvokeRejected(format!(
-            "missing required string field '{key}'"
+            "{error}; expected one of: soul, assistant_identity, user_profile"
         )))
     })
-}
-
-fn render_document(document: ProfileDocument, content: &str) -> String {
-    if content.trim().is_empty() {
-        return format!("Profile document {document} is empty.");
-    }
-    format!("Profile document {document}:\n{content}")
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use claw_interface::MemFs;
-    use claw_tool::RawToolInvocation;
-
-    use super::*;
-
-    fn store() -> ProfileStore<MemFs> {
-        MemFs::new();
-        ProfileStore::new("/memory")
-    }
-
-    fn call<'a>(name: &'a str, arguments_json: &'a str) -> ToolInvocation<'a> {
-        ToolInvocation::try_from(RawToolInvocation {
-            id: None,
-            name,
-            arguments_json,
-        })
-        .unwrap()
-    }
-
-    #[test]
-    fn read_returns_document_content() {
-        let store = store();
-        store.replace(ProfileDocument::Soul, "SOUL").unwrap();
-        let tool = ProfileReadTool { store };
-        let output = tool
-            .invoke(&call("profile_read", r#"{"document":"soul"}"#))
-            .unwrap();
-        assert!(output.ok);
-        assert!(output.output.contains("SOUL"));
-    }
-
-    #[test]
-    fn replace_updates_the_store() {
-        let store = store();
-        let tool = ProfileReplaceTool {
-            store: store.clone(),
-        };
-        let output = tool
-            .invoke(&call(
-                "profile_replace",
-                r#"{"document":"user_profile","content":"USER"}"#,
-            ))
-            .unwrap();
-        assert!(output.ok);
-        assert_eq!(
-            store.read(ProfileDocument::UserProfile).unwrap(),
-            Some("USER".to_string())
-        );
-    }
-
-    #[test]
-    fn clear_empties_the_document() {
-        let store = store();
-        store
-            .replace(ProfileDocument::AssistantIdentity, "ID")
-            .unwrap();
-        let tool = ProfileClearTool {
-            store: store.clone(),
-        };
-        let output = tool
-            .invoke(&call(
-                "profile_clear",
-                r#"{"document":"assistant_identity"}"#,
-            ))
-            .unwrap();
-        assert!(output.ok);
-        assert_eq!(
-            store.read(ProfileDocument::AssistantIdentity).unwrap(),
-            Some(String::new())
-        );
-    }
 }

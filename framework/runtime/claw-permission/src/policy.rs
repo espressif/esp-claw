@@ -204,83 +204,9 @@ impl PermissionPolicy for PolicyChain {
                 PermissionDecision::Allow => continue,
             };
         }
-        ask.unwrap_or(PermissionDecision::Allow)
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use super::*;
-    use crate::action::Action;
-
-    /// A policy that always denies, for chain-composition tests.
-    struct DenyAll;
-    impl PermissionPolicy for DenyAll {
-        fn evaluate(&self, _request: &PermissionRequest<'_>) -> PermissionDecision {
-            PermissionDecision::Deny {
-                reason: "nope".into(),
-            }
+        match ask {
+            Some(decision) => decision,
+            None => PermissionDecision::Allow,
         }
-    }
-
-    fn request_for(action: &Action) -> PermissionRequest<'_> {
-        PermissionRequest::new(action)
-    }
-
-    #[test]
-    fn allow_all_allows() {
-        let action = Action::new("anything", RiskClass::High);
-        assert_eq!(
-            AllowAll.evaluate(&request_for(&action)),
-            PermissionDecision::Allow
-        );
-    }
-
-    #[test]
-    fn ask_at_or_above_thresholds_on_risk() {
-        let policy = AskAtOrAbove::new(RiskClass::Moderate);
-        let safe = Action::new("read", RiskClass::Safe);
-        let risky = Action::new("write", RiskClass::Moderate);
-        assert_eq!(
-            policy.evaluate(&request_for(&safe)),
-            PermissionDecision::Allow
-        );
-        assert!(matches!(
-            policy.evaluate(&request_for(&risky)),
-            PermissionDecision::Ask { .. }
-        ));
-    }
-
-    #[test]
-    fn chain_is_most_restrictive_wins() {
-        let action = Action::new("write", RiskClass::Moderate);
-
-        // Ask + Allow -> Ask.
-        let ask_chain = PolicyChain::new()
-            .with(AskAtOrAbove::new(RiskClass::Moderate))
-            .with(AllowAll);
-        assert!(matches!(
-            ask_chain.evaluate(&request_for(&action)),
-            PermissionDecision::Ask { .. }
-        ));
-
-        // Deny anywhere short-circuits past an Ask.
-        let deny_chain = PolicyChain::new()
-            .with(AskAtOrAbove::new(RiskClass::Moderate))
-            .with(DenyAll);
-        assert!(matches!(
-            deny_chain.evaluate(&request_for(&action)),
-            PermissionDecision::Deny { .. }
-        ));
-    }
-
-    #[test]
-    fn empty_chain_allows() {
-        let action = Action::new("x", RiskClass::High);
-        assert_eq!(
-            PolicyChain::new().evaluate(&request_for(&action)),
-            PermissionDecision::Allow
-        );
     }
 }

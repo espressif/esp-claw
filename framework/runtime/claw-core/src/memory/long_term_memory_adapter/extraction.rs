@@ -14,7 +14,6 @@
 //! id to [`Replace`](MemoryOp::Replace) a stale fact or [`Forget`](MemoryOp::Forget)
 //! one the user retracted, instead of only ever adding.
 
-use super::tier::MemoryTierHint;
 use claw_api::ChatError;
 use claw_memory::MemoryId;
 use core::future::Future;
@@ -22,10 +21,7 @@ use core::pin::Pin;
 
 /// One fact an [`Extractor`] distilled from a transcript.
 ///
-/// Carries the same shape a [`MemoryDraft`](claw_memory::MemoryDraft) needs, plus
-/// a [`tier`](Self::tier) hint the
-/// [`TierClassifier`](crate::memory::TierClassifier) may honor. The adapter
-/// converts this into a draft and routes it.
+/// Carries the same shape a [`MemoryDraft`](claw_memory::MemoryDraft) needs.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ExtractedItem {
     /// The distilled fact, in concise third person.
@@ -34,8 +30,6 @@ pub struct ExtractedItem {
     pub tags: Vec<String>,
     /// Extra search terms.
     pub keywords: Vec<String>,
-    /// Routing hint; [`MemoryTierHint::Auto`] lets the classifier decide.
-    pub tier: MemoryTierHint,
 }
 
 /// A compact view of one already-stored fact, handed to the [`Extractor`] so it
@@ -95,6 +89,9 @@ pub enum ExtractError {
     /// The extraction backend (e.g. the LLM client) failed.
     #[error("extraction backend failed: {0}")]
     Backend(#[from] ChatError),
+    /// The extraction backend produced no usable text.
+    #[error("extraction backend returned empty output")]
+    EmptyOutput,
 }
 
 pub type ExtractFuture<'a> =

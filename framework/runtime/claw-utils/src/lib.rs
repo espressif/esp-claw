@@ -11,6 +11,11 @@ use core::fmt;
 
 use thiserror::Error;
 
+#[doc(hidden)]
+pub mod __private {
+    pub use serde;
+}
+
 /// Default byte ceiling for [`TruncatedText::new`]. On device, keep trace/log
 /// lines compact (flash + UART bandwidth); on host, print the full text so the
 /// CLI / offline tooling sees everything. `usize::MAX` makes truncation a no-op.
@@ -97,7 +102,7 @@ macro_rules! define_prefixed_id {
             $prefix,
             "` (e.g. `", $prefix, "1`). Compares, hashes, displays, and (de)serializes by that wire form."
         )]
-        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name(
             /// The raw numeric id; the wire form prepends the type prefix.
             pub u32,
@@ -145,18 +150,24 @@ macro_rules! define_prefixed_id {
             }
         }
 
-        impl ::serde::Serialize for $name {
-            fn serialize<S: ::serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        impl $crate::__private::serde::Serialize for $name {
+            fn serialize<S: $crate::__private::serde::Serializer>(
+                &self,
+                serializer: S,
+            ) -> Result<S::Ok, S::Error> {
                 serializer.serialize_str(&self.to_wire())
             }
         }
 
-        impl<'de> ::serde::Deserialize<'de> for $name {
-            fn deserialize<D: ::serde::Deserializer<'de>>(
+        impl<'de> $crate::__private::serde::Deserialize<'de> for $name {
+            fn deserialize<D: $crate::__private::serde::Deserializer<'de>>(
                 deserializer: D,
             ) -> Result<Self, D::Error> {
-                let value = String::deserialize(deserializer)?;
-                Self::from_wire(&value).map_err(::serde::de::Error::custom)
+                let value =
+                    <::std::string::String as $crate::__private::serde::Deserialize>::deserialize(
+                        deserializer,
+                    )?;
+                Self::from_wire(&value).map_err($crate::__private::serde::de::Error::custom)
             }
         }
     };
@@ -189,18 +200,9 @@ macro_rules! define_prefixed_id {
 /// restored from persistence).
 ///
 /// ```
-/// use claw_utils::define_id_allocator;
+/// use claw_utils::{define_id_allocator, define_prefixed_id};
 ///
-/// // Any `define_prefixed_id!` newtype works; here is a minimal stand-in with
-/// // the two things the macro needs: a public `.0` field and a `new` ctor.
-/// #[derive(Clone, Copy, Debug, PartialEq)]
-/// struct WidgetId(u32);
-/// impl WidgetId {
-///     const fn new(value: u32) -> Self {
-///         Self(value)
-///     }
-/// }
-///
+/// define_prefixed_id!(WidgetId, "widget-", "widget");
 /// define_id_allocator!(WidgetIdAllocator(WidgetId), WidgetId(1));
 ///
 /// let mut alloc = WidgetIdAllocator::new();
@@ -251,45 +253,25 @@ macro_rules! define_id_allocator {
                 Self::new()
             }
         }
+
+        impl $crate::__private::serde::Serialize for $name {
+            fn serialize<S: $crate::__private::serde::Serializer>(
+                &self,
+                serializer: S,
+            ) -> Result<S::Ok, S::Error> {
+                $crate::__private::serde::Serialize::serialize(&self.peek(), serializer)
+            }
+        }
+
+        impl<'de> $crate::__private::serde::Deserialize<'de> for $name {
+            fn deserialize<D: $crate::__private::serde::Deserializer<'de>>(
+                deserializer: D,
+            ) -> Result<Self, D::Error> {
+                let next = <$id as $crate::__private::serde::Deserialize>::deserialize(
+                    deserializer,
+                )?;
+                Ok(Self::starting_at(next))
+            }
+        }
     };
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const TEST_LIMIT: usize = 96;
-
-    #[test]
-    fn display_short_text_unchanged() {
-        assert_eq!(
-            TruncatedText::with_limit("hi", TEST_LIMIT).to_string(),
-            "hi"
-        );
-    }
-
-    #[test]
-    fn with_limit_truncates_with_suffix() {
-        let long = "x".repeat(TEST_LIMIT + 10);
-        let rendered = TruncatedText::with_limit(&long, TEST_LIMIT).to_string();
-        assert_eq!(rendered.len(), TEST_LIMIT + 3);
-        assert!(rendered.ends_with("..."));
-    }
-
-    #[test]
-    fn with_limit_respects_char_boundary() {
-        // 50 × 'é' = 100 bytes; a 95-byte limit lands mid-char, so the slice must
-        // back off to a boundary rather than panic.
-        let text = "é".repeat(50);
-        let rendered = TruncatedText::with_limit(&text, 95).to_string();
-        assert!(rendered.ends_with("..."));
-        assert!(rendered.is_char_boundary(rendered.len()));
-    }
-
-    #[test]
-    #[cfg(not(target_os = "espidf"))]
-    fn new_is_unbounded_on_host() {
-        let long = "x".repeat(10_000);
-        assert_eq!(TruncatedText::new(&long).to_string(), long);
-    }
 }

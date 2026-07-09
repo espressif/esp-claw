@@ -4,21 +4,13 @@
 //! host-testable; only the `esp_http_client` plumbing is gated to the espidf
 //! target.
 
-use claw_interface::http::{HttpAuth, HttpStatusCode};
-
-/// Decide the auth header `(name, value)` for the given auth mode.
-///
-/// Mirrors `build_auth_header_value` + `auth_header_name`.
-#[cfg_attr(not(any(test, target_os = "espidf")), allow(dead_code))]
-pub(crate) fn build_auth_header(auth: HttpAuth<'_>) -> Option<(&'static str, String)> {
-    auth.header()
-}
+use claw_interface::http::HttpStatusCode;
 
 /// Build the error message for a non-200 response, mirroring
 /// `parse_error_message_body`: prefer `error.message`, then top-level
 /// `message`, else a truncated body echo.
-#[cfg_attr(not(any(test, target_os = "espidf")), allow(dead_code))]
-pub(crate) fn parse_error_message_body(body: &str, status: HttpStatusCode) -> String {
+#[cfg_attr(not(target_os = "espidf"), allow(dead_code))]
+fn parse_error_message_body(body: &str, status: HttpStatusCode) -> String {
     if body.is_empty() {
         return format!("HTTP {status}");
     }
@@ -32,7 +24,7 @@ pub(crate) fn parse_error_message_body(body: &str, status: HttpStatusCode) -> St
 }
 
 /// First non-empty string among `error.message` then top-level `message`.
-#[cfg_attr(not(any(test, target_os = "espidf")), allow(dead_code))]
+#[cfg_attr(not(target_os = "espidf"), allow(dead_code))]
 fn extract_message(root: &serde_json::Value) -> Option<String> {
     let nested = root.get("error").and_then(|e| e.get("message"));
     [nested, root.get("message")]
@@ -43,8 +35,8 @@ fn extract_message(root: &serde_json::Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-#[cfg_attr(not(any(test, target_os = "espidf")), allow(dead_code))]
-pub(crate) fn truncate(s: &str, max: usize) -> &str {
+#[cfg_attr(not(target_os = "espidf"), allow(dead_code))]
+fn truncate(s: &str, max: usize) -> &str {
     if s.len() <= max {
         return s;
     }
@@ -60,7 +52,7 @@ pub use espidf_driver::EspIdfHttp;
 
 #[cfg(target_os = "espidf")]
 mod espidf_driver {
-    use super::{build_auth_header, parse_error_message_body};
+    use super::parse_error_message_body;
     use claw_interface::http::{
         blocking, Cancel, ClawHttp, HttpError, HttpGetRequest, HttpJsonRequest, HttpRequestFailure,
         HttpResponse, HttpResponseFuture, HttpStatusCode,
@@ -525,7 +517,7 @@ mod espidf_driver {
             auth: claw_interface::HttpAuth<'_>,
             headers: &[claw_interface::HttpHeader<'_>],
         ) -> Result<(), HttpError> {
-            if let Some((name, value)) = build_auth_header(auth) {
+            if let Some((name, value)) = auth.header() {
                 self.apply_header(name, &value)?;
             }
             for header in headers {

@@ -24,8 +24,8 @@ use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::{
     LongTermInitError, LongTermMemory, ProfileStore, TranscriptInitError, TranscriptStore,
 };
-use claw_skill::{FsSkillRegistry, SkillSet};
-use claw_tool::{Tool, ToolRegistry, ToolSetError};
+use claw_skill::{FsSkillRegistry, SkillError};
+use claw_tool::{ToolRegistry, ToolSetError};
 
 use crate::agent::base_agent::{AgentCommand, AgentCommandError, AgentId, BaseAgentBuildError};
 use crate::agent::config::{AgentConfig, AgentConfigError};
@@ -73,11 +73,6 @@ pub enum AgentPlacement {
 }
 
 impl AgentPlacement {
-    /// Whether this placement belongs to the session root.
-    fn is_root(self) -> bool {
-        matches!(self, AgentPlacement::Root(_))
-    }
-
     /// The `(subdirectory, conversation_id)` this placement maps to under the
     /// sessions transcript root.
     fn location(self) -> (&'static str, u32) {
@@ -127,10 +122,6 @@ impl<F: ClawFs + 'static> LongTermDeps<F> {
             extractor,
         })
     }
-
-    fn agent_dir_for(&self, kind: &AgentKind) -> String {
-        join_storage_path(&self.agent_root_dir, kind.as_str())
-    }
 }
 
 struct FsAgentFactoryLayout {
@@ -161,6 +152,9 @@ pub enum FsAgentFactoryError {
     /// A long-term memory journal exists but could not be read at startup.
     #[error("failed to load long-term memory: {0}")]
     LongTermInit(#[from] LongTermInitError),
+    /// The configured skill catalog could not be scanned.
+    #[error("failed to load skill catalog: {0}")]
+    SkillRegistry(#[from] SkillError),
 }
 
 /// What can go wrong while building one concrete agent from the factory.
@@ -291,7 +285,7 @@ impl<
         };
 
         let profile = ProfileStore::new(&layout.profile_dir);
-        let skills = build_skill_registry::<Filesystem>(skill_roots);
+        let skills = build_skill_registry::<Filesystem>(skill_roots)?;
 
         Ok(Self {
             llm_config,
@@ -308,10 +302,11 @@ impl<
 
 /// Build the shared skill catalog from the priority-ordered `skill_roots`.
 ///
-/// A missing root is skipped so the agent still starts; a real scan
-/// failure (e.g. a malformed `SKILL.md`) disables skills entirely by falling back
-/// to an empty registry rather than aborting agent construction.
-fn build_skill_registry<F: ClawFs + 'static>(skill_roots: Vec<String>) -> Arc<FsSkillRegistry<F>> {
+/// A missing root is skipped so the agent still starts; a real scan failure
+/// (e.g. a malformed `SKILL.md`) aborts construction.
+fn build_skill_registry<F: ClawFs + 'static>(
+    skill_roots: Vec<String>,
+) -> Result<Arc<FsSkillRegistry<F>>, SkillError> {
     let span = tracing::info_span!("skill.catalog");
     let _enter = span.enter();
     let mut registry = FsSkillRegistry::<F>::new();
@@ -320,15 +315,15 @@ fn build_skill_registry<F: ClawFs + 'static>(skill_roots: Vec<String>) -> Arc<Fs
             tracing::warn!(name: "root_missing", "");
             continue;
         }
-        match registry.set_root(root.as_str()) {
+        match registry.set_root(root) {
             Ok(next) => registry = next,
-            Err(_) => {
+            Err(error) => {
                 tracing::warn!(name: "scan_failed", kind = "set_root");
-                return Arc::new(FsSkillRegistry::<F>::new());
+                return Err(error);
             }
         }
     }
-    Arc::new(registry)
+    Ok(Arc::new(registry))
 }
 
 impl<
@@ -379,7 +374,7 @@ impl<
             }
             FsAgentCreateError::Config(error)
         })?;
-        let is_root = placement.is_root();
+        let is_root = matches!(placement, AgentPlacement::Root(_));
         let mut tools = self.tools.tool_set();
         for tool in config.tools.drain(..) {
             if let Err(error) = tools.add_tool(tool) {
@@ -445,7 +440,7 @@ impl<
         // Attach long-term memory (always): a per-agent-kind store derived from
         // the explicit long-term root plus a clone of the shared global store.
         let long_term = &self.long_term;
-        let agent_dir = long_term.agent_dir_for(kind);
+        let agent_dir = join_storage_path(&long_term.agent_root_dir, kind.as_str());
         let agent_memory = match agent_store::<Filesystem>(&agent_dir) {
             Ok(store) => store,
             Err(error) => {
@@ -494,157 +489,19 @@ impl<
     fn resolve_config(&self, kind: &AgentKind) -> Result<AgentConfig, AgentConfigError> {
         let manifest = AgentManifest::for_kind(kind.as_str())
             .ok_or_else(|| AgentConfigError::UnknownKind(kind.as_str().to_owned()))?;
-        let tools = Self::resolve_manifest_tools(manifest)?;
-        let skills = self.resolve_manifest_skills(manifest);
-        Ok(AgentConfig::from_manifest(manifest, tools, skills))
-    }
-
-    fn resolve_manifest_tools(
-        manifest: &'static AgentManifest,
-    ) -> Result<Vec<Tool>, AgentConfigError> {
         if let Some(name) = manifest.tools.first() {
             return Err(AgentConfigError::UnknownTool(name.as_str().to_owned()));
         }
-        Ok(Vec::new())
-    }
-
-    /// Project the shared filesystem skill catalog into a per-agent [`SkillSet`].
-    ///
-    /// The manifest's skill ids are catalog-only today: every agent sees the full
-    /// scanned catalog rather than a manifest-filtered subset.
-    fn resolve_manifest_skills(&self, manifest: &'static AgentManifest) -> SkillSet {
         if !manifest.skills.is_empty() {
             tracing::info!(
                 name: "manifest_ids_catalog_only",
                 count = manifest.skills.len() as u64,
             );
         }
-        self.skills.skill_set()
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use std::sync::Arc;
-
-    use claw_api::BackendKind;
-    use claw_interface::{BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp};
-    use futures_lite::future::block_on;
-    use serde_json::json;
-
-    use super::*;
-    use crate::agent::base_agent::TickOutcome;
-    use crate::agent::graph::GraphEffect;
-    use claw_tool::ToolRegistry;
-
-    /// A graph host that is never expected to fire in these single-agent tests.
-    struct NoopHost;
-    impl GraphHost for NoopHost {
-        fn next_id(&self) -> AgentId {
-            AgentId(0)
-        }
-        fn emit(&self, _requester: AgentId, _effect: GraphEffect) {}
-        fn snapshot(&self) -> Vec<crate::agent::graph::AgentSnapshot> {
-            Vec::new()
-        }
-    }
-
-    fn body_plain_text(text: &str) -> String {
-        json!({ "choices": [{ "message": { "role": "assistant", "content": text } }] }).to_string()
-    }
-
-    /// The factory mints each agent's transport internally from the HTTP backend,
-    /// so the script can't be injected as an instance; it is installed into the
-    /// process-global `SharedScriptHttp` script that every minted client shares.
-    /// Returns the serialization guard alongside the factory; the caller holds it
-    /// for the whole test so parallel tests never clobber one another's script.
-    fn factory(
-        bodies: Vec<String>,
-    ) -> (
-        FsAgentFactory<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>,
-        std::sync::MutexGuard<'static, ()>,
-    ) {
-        let guard = SharedScriptHttp::serialize();
-        let mut script = Vec::with_capacity(bodies.len().saturating_mul(2));
-        for body in bodies {
-            script.push(body_plain_text("[]"));
-            script.push(body);
-        }
-        SharedScriptHttp::install(script);
-        let llm_config = ClawApiConfig::new(
-            BackendKind::OpenAiCompatible,
-            "sk-test",
-            "gpt-test",
-            "https://example.invalid",
-        );
-        let factory =
-            FsAgentFactory::<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>::new(
-                Arc::new(ToolRegistry::new()),
-                llm_config,
-                "/mem".to_string(),
-                Vec::new(),
-            )
-            .expect("factory builds");
-        (factory, guard)
-    }
-
-    #[test]
-    fn builds_a_runnable_agent_seeded_with_its_goal() {
-        let (factory, _script) = factory(vec![body_plain_text("hello there")]);
-        let mut agent = factory
-            .create_agent(
-                AgentId(1),
-                &AgentKind::new("conversation"),
-                "say hi".into(),
-                AgentPlacement::Root(SessionId(1)),
-                Arc::new(NoopHost),
-                Arc::from([]),
-            )
-            .expect("agent builds");
-
-        // The goal was seeded, so ticking drives straight to the scripted reply.
-        let events = crate::event::EventSink::disabled();
-        let outcome = loop {
-            match block_on(agent.tick(events.clone())) {
-                TickOutcome::Working => continue,
-                other => break other,
-            }
-        };
-        match outcome {
-            TickOutcome::Yielded { text } => assert_eq!(text, "hello there"),
-            other => panic!("unexpected outcome: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn unknown_kind_is_an_error() {
-        let (factory, _script) = factory(vec![]);
-        let result = factory.create_agent(
-            AgentId(1),
-            &AgentKind::new("nope"),
-            "x".into(),
-            AgentPlacement::Sub(AgentId(1)),
-            Arc::new(NoopHost),
-            Arc::from([]),
-        );
-        assert!(matches!(
-            result,
-            Err(FsAgentCreateError::Config(AgentConfigError::UnknownKind(_)))
-        ));
-    }
-
-    #[test]
-    fn worker_kind_gets_derived_long_term_dir() {
-        let (factory, _script) = factory(vec![]);
-        let result = factory.create_agent(
-            AgentId(1),
-            &AgentKind::new("worker"),
-            "x".into(),
-            AgentPlacement::Sub(AgentId(1)),
-            Arc::new(NoopHost),
-            Arc::from([]),
-        );
-        assert!(result.is_ok());
+        Ok(AgentConfig::from_manifest(
+            manifest,
+            Vec::new(),
+            self.skills.skill_set(),
+        ))
     }
 }

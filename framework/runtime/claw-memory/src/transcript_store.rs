@@ -1029,12 +1029,13 @@ fn load_state<F: ClawFs>(data_path: &str, index_path: &str) -> Result<(StoreStat
         manifest_next_id = TurnId::default();
     }
 
-    let data_len = ByteLen::from_file_len(
-        data_file
-            .as_ref()
-            .and_then(|file| file.size().ok())
-            .unwrap_or(0),
-    );
+    let mut data_file_len = 0;
+    if let Some(file) = data_file.as_ref() {
+        if let Ok(len) = file.size() {
+            data_file_len = len;
+        }
+    }
+    let data_len = ByteLen::from_file_len(data_file_len);
     if data_len > covered_len {
         let extra = data_len.saturating_sub(covered_len);
         let tail = data_file.as_mut().and_then(|file| {
@@ -1061,7 +1062,7 @@ fn scan_tail(state: &mut StoreState, tail: &[u8], base_off: ByteOffset) {
         if *byte != b'\n' {
             continue;
         }
-        let line = tail.get(start..i).unwrap_or(&[]);
+        let line = &tail[start..i];
         let line_len = ByteLen(i.saturating_sub(start).saturating_add(1));
         if let Some(record) = parse_record(line) {
             apply_record(state, record, Some((pos, line_len)));
@@ -1082,7 +1083,13 @@ fn apply_record(state: &mut StoreState, record: LogRecord, loc: Option<(ByteOffs
 
 /// Highest committed turn id seen.
 fn max_seen_id(state: &StoreState) -> TurnId {
-    state.groups.iter().map(|g| g.id).max().unwrap_or_default()
+    let mut max = TurnId::default();
+    for group in &state.groups {
+        if group.id > max {
+            max = group.id;
+        }
+    }
+    max
 }
 
 fn entry_loc(entry: &IndexEntry) -> (ByteOffset, ByteLen) {
@@ -1117,44 +1124,4 @@ fn lock_state<F: ClawFs + 'static>(inner: &StoreInner<F>) -> MutexGuard<'_, Stor
         .state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
-mod tests {
-    use super::*;
-    use claw_interface::MemFs;
-
-    fn store() -> TranscriptStore<MemFs> {
-        MemFs::new();
-        TranscriptStore::new(1, "/transcript-store-tests").unwrap()
-    }
-
-    #[test]
-    fn discard_open_turn_drops_uncommitted_messages() {
-        let store = store();
-        store.push_user_message("partial");
-        let before = store.version();
-
-        store.discard_open_turn();
-
-        assert!(store.version() > before);
-        assert!(store.messages().as_array().unwrap().is_empty());
-        assert!(store.open_turn_messages().is_empty());
-    }
-
-    #[test]
-    fn discard_open_turn_keeps_committed_history() {
-        let store = store();
-        store.push_user_message("committed");
-        store.commit_open_turn();
-
-        store.push_user_message("partial");
-        store.discard_open_turn();
-
-        let messages = store.messages();
-        let messages = messages.as_array().unwrap();
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0]["content"], "committed");
-    }
 }

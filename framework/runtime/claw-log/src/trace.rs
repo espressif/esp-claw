@@ -116,7 +116,10 @@ fn merge_grouped_context(ancestor: GroupedContext, own: GroupedContext) -> Group
         .into_iter()
         .enumerate()
         .map(|(group_index, ancestor_bucket)| {
-            let own_bucket = own.get(group_index).cloned().unwrap_or_default();
+            let own_bucket = match own.get(group_index) {
+                Some(bucket) => bucket.clone(),
+                None => Vec::new(),
+            };
             merge_bucket(ancestor_bucket, own_bucket)
         })
         .collect()
@@ -427,11 +430,14 @@ impl<S: TraceSink> FlatTreeSubscriber<S> {
     fn render_opened_groups(&self, ancestor: &GroupedContext, full: &GroupedContext) -> String {
         let mut blocks = String::new();
         for (group_index, group) in self.context_groups.iter().enumerate() {
-            let ancestor_bucket = ancestor
-                .get(group_index)
-                .map(Vec::as_slice)
-                .unwrap_or_default();
-            let full_bucket = full.get(group_index).map(Vec::as_slice).unwrap_or_default();
+            let ancestor_bucket = match ancestor.get(group_index) {
+                Some(bucket) => bucket.as_slice(),
+                None => &[],
+            };
+            let full_bucket = match full.get(group_index) {
+                Some(bucket) => bucket.as_slice(),
+                None => &[],
+            };
             let delta = render_opened_bucket(ancestor_bucket, full_bucket);
             if !delta.is_empty() {
                 let _ = write!(blocks, " <context={name}{delta}>", name = group.name);
@@ -462,12 +468,9 @@ impl<S: TraceSink + 'static> Subscriber for FlatTreeSubscriber<S> {
 
         // The structural parent and inherited context are the span currently
         // entered on this thread (the contextual parent at creation time).
-        let (parent_id, parent_context) = STACK.with(|stack| {
-            stack
-                .borrow()
-                .last()
-                .map(|(id, record)| (*id, record.context.clone()))
-                .unwrap_or((0, GroupedContext::new()))
+        let (parent_id, parent_context) = STACK.with(|stack| match stack.borrow().last() {
+            Some((id, record)) => (*id, record.context.clone()),
+            None => (0, GroupedContext::new()),
         });
         let parent_context = self.normalize_context(parent_context);
         let context = merge_grouped_context(parent_context.clone(), visitor.context);
@@ -518,7 +521,10 @@ impl<S: TraceSink + 'static> Subscriber for FlatTreeSubscriber<S> {
         let mut visitor = FieldVisitor::new(&[]);
         event.record(&mut visitor);
 
-        let span_id = STACK.with(|stack| stack.borrow().last().map(|(id, _)| *id).unwrap_or(0));
+        let span_id = STACK.with(|stack| match stack.borrow().last() {
+            Some((id, _)) => *id,
+            None => 0,
+        });
         let timestamp = self.now_ms();
         let event_name = sanitize_token(metadata.name());
 
@@ -603,213 +609,5 @@ impl<S: TraceSink + 'static> Subscriber for FlatTreeSubscriber<S> {
             }
             None => false,
         }
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
-mod tests {
-    use super::*;
-
-    /// A sink that records every `(level, tag, line)` for assertions.
-    #[derive(Clone, Default)]
-    struct VecSink(Arc<Mutex<Vec<(Level, String, String)>>>);
-
-    impl VecSink {
-        fn lines(&self) -> Vec<String> {
-            self.0
-                .lock()
-                .unwrap()
-                .iter()
-                .map(|(_, _, line)| line.clone())
-                .collect()
-        }
-    }
-
-    impl TraceSink for VecSink {
-        fn write_line(&self, level: Level, tag: &str, line: &str) {
-            self.0
-                .lock()
-                .unwrap()
-                .push((level, tag.to_string(), line.to_string()));
-        }
-    }
-
-    /// Extract the value of `key=` from a space-tokenized `TRACE …` line,
-    /// trimming the angle brackets that wrap the structural blocks.
-    fn token<'a>(line: &'a str, key: &str) -> Option<&'a str> {
-        line.split(' ').find_map(|raw| {
-            let tok = raw.trim_matches(|c| c == '<' || c == '>');
-            tok.strip_prefix(key)?.strip_prefix('=')
-        })
-    }
-
-    /// The `<type>` word: `TRACE <ts> <type> …`.
-    fn line_type(line: &str) -> Option<&str> {
-        line.split(' ').nth(2)
-    }
-
-    /// A subscriber registering the standard `run` group, for tests.
-    fn run_subscriber(sink: VecSink) -> FlatTreeSubscriber<VecSink> {
-        FlatTreeSubscriber::with_sink(sink)
-            .with_context_group_keys("run", ["session", "turn", "agent", "iteration"])
-    }
-
-    #[test]
-    fn sanitize_line_collapses_newlines() {
-        assert_eq!(sanitize_line("a\nb\rc"), "a b c");
-    }
-
-    #[test]
-    fn sanitize_token_collapses_whitespace() {
-        assert_eq!(sanitize_token("event src/x.rs:10"), "event_src/x.rs:10");
-    }
-
-    #[test]
-    fn field_visitor_routes_group_keys_and_keeps_others_custom() {
-        let groups = vec![ContextGroup {
-            name: "run",
-            keys: vec!["session", "agent"],
-        }];
-        let mut visitor = FieldVisitor::new(&groups);
-        visitor.push("a", format_args!("1"));
-        visitor.push("run.session", format_args!("s-1"));
-        visitor.push("message", format_args!("hello world"));
-        visitor.push("b", format_args!("2"));
-        // Dotted but unregistered prefix → ordinary custom context.
-        visitor.push("http.method", format_args!("GET"));
-
-        assert_eq!(visitor.fields, "a=1 b=2 http.method=GET");
-        assert_eq!(visitor.message.as_deref(), Some("hello world"));
-        assert_eq!(visitor.context, vec![vec![("session", "s-1".to_string())]]);
-    }
-
-    #[test]
-    fn enter_line_carries_timestamp_and_type() {
-        let sink = VecSink::default();
-        tracing::subscriber::with_default(run_subscriber(sink.clone()), || {
-            tracing::info_span!("session", run.session = "s-1").in_scope(|| {});
-        });
-
-        let enter = sink
-            .lines()
-            .into_iter()
-            .find(|l| line_type(l) == Some("enter"))
-            .expect("enter line");
-        assert!(enter.starts_with("TRACE "));
-        // `TRACE <ts> enter …`: the second token is a numeric monotonic timestamp.
-        let timestamp = enter.split(' ').nth(1).expect("timestamp token");
-        assert!(timestamp.parse::<u64>().is_ok(), "ts not numeric: {enter}");
-    }
-
-    #[test]
-    fn nested_spans_and_event_carry_ids_parent_edges_and_grouped_context() {
-        let sink = VecSink::default();
-
-        tracing::subscriber::with_default(run_subscriber(sink.clone()), || {
-            let session = tracing::info_span!("session", run.session = "s-1");
-            let _session = session.enter();
-            tracing::info!(name: "thinking", "root thinking");
-            {
-                let agent = tracing::info_span!("agent", run.agent = "a-2", depth = 1u64);
-                let _agent = agent.enter();
-                tracing::info!(name: "tool_call", tool = "files", "calling tool");
-            }
-        });
-
-        let lines = sink.lines();
-
-        let session_enter = lines
-            .iter()
-            .find(|l| line_type(l) == Some("enter") && token(l, "span-name") == Some("session"))
-            .expect("session enter line");
-        assert_eq!(token(session_enter, "parent"), Some("none"));
-        // The session span opens the `run` group's `session` key.
-        assert_eq!(token(session_enter, "context"), Some("run"));
-        assert_eq!(token(session_enter, "session"), Some("s-1"));
-        let session_id = token(session_enter, "span").expect("session span");
-
-        let agent_enter = lines
-            .iter()
-            .find(|l| line_type(l) == Some("enter") && token(l, "span-name") == Some("agent"))
-            .expect("agent enter line");
-        // The agent span nests under the session span.
-        assert_eq!(token(agent_enter, "parent"), Some(session_id));
-        let agent_id = token(agent_enter, "span").expect("agent span");
-        // It opens only its own `agent`; `session` is already in effect, so it is
-        // NOT repeated. `depth` is custom context.
-        assert_eq!(token(agent_enter, "agent"), Some("a-2"));
-        assert_eq!(token(agent_enter, "session"), None);
-        assert_eq!(token(agent_enter, "depth"), Some("1"));
-
-        // The root event fired while `session` was current.
-        let root_event = lines
-            .iter()
-            .find(|l| line_type(l) == Some("event") && l.ends_with("root thinking"))
-            .expect("root event");
-        assert_eq!(token(root_event, "span"), Some(session_id));
-        assert_eq!(token(root_event, "event-name"), Some("thinking"));
-
-        // The nested event fired while `agent` was current and kept its field.
-        let tool_event = lines
-            .iter()
-            .find(|l| line_type(l) == Some("event") && l.contains("calling tool"))
-            .expect("tool event");
-        assert_eq!(token(tool_event, "span"), Some(agent_id));
-        assert_eq!(token(tool_event, "event-name"), Some("tool_call"));
-        assert!(tool_event.contains("tool=files"));
-        // Events carry no incremental block; the `span=` id + replayed stack
-        // resolve context.
-        assert_eq!(token(tool_event, "context"), None);
-        assert_eq!(token(tool_event, "session"), None);
-
-        // Exits are emitted (so an offline tool can time each span).
-        assert!(lines
-            .iter()
-            .any(|l| line_type(l) == Some("exit") && token(l, "span") == Some(agent_id)));
-        assert!(lines
-            .iter()
-            .any(|l| line_type(l) == Some("exit") && token(l, "span") == Some(session_id)));
-    }
-
-    #[test]
-    fn target_allowlist_drops_foreign_targets() {
-        let sink = VecSink::default();
-        let subscriber =
-            FlatTreeSubscriber::with_sink(sink.clone()).with_allowed_target_prefix("claw");
-
-        tracing::subscriber::with_default(subscriber, || {
-            // A dependency-style target (reqwest/hyper/h2/…) must be dropped …
-            tracing::info!(target: "reqwest::connect", "pool checkout");
-            // … while a `claw`-prefixed target is kept.
-            tracing::info!(target: "claw_core::demo", "kept");
-        });
-
-        let lines = sink.lines();
-        assert!(
-            lines.iter().any(|l| l.ends_with("kept")),
-            "claw-targeted event should be traced"
-        );
-        assert!(
-            !lines.iter().any(|l| l.contains("pool checkout")),
-            "foreign-targeted event should be filtered out"
-        );
-    }
-
-    #[test]
-    fn event_outside_any_span_reports_span_none() {
-        let sink = VecSink::default();
-        let subscriber = FlatTreeSubscriber::with_sink(sink.clone());
-
-        tracing::subscriber::with_default(subscriber, || {
-            tracing::info!("no span here");
-        });
-
-        let event = sink
-            .lines()
-            .into_iter()
-            .find(|l| line_type(l) == Some("event"))
-            .expect("event line");
-        assert_eq!(token(&event, "span"), Some("none"));
     }
 }

@@ -67,6 +67,10 @@ impl CapTool {
         let input_schema =
             c_string(descriptor.input_schema_json).ok_or(CapToolError::InvalidDescriptor)?;
         let description = c_string(descriptor.description);
+        let description_text = match description.as_deref() {
+            Some(description) => description,
+            None => "",
+        };
 
         let parameters = serde_json::from_str::<serde_json::Value>(&input_schema)
             .map_err(|error| CapToolError::InvalidSchema(error.to_string()))?;
@@ -74,7 +78,7 @@ impl CapTool {
             "type": "function",
             "function": {
                 "name": &name,
-                "description": description.as_deref().unwrap_or(""),
+                "description": description_text,
                 "parameters": parameters,
             }
         })
@@ -150,10 +154,10 @@ fn cstring(value: &str) -> Result<CString, ToolInvokeError> {
 }
 
 fn c_buffer_to_string(buffer: &[u8]) -> String {
-    let len = buffer
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(buffer.len());
+    let len = match buffer.iter().position(|byte| *byte == 0) {
+        Some(len) => len,
+        None => buffer.len(),
+    };
     let payload = match buffer.get(..len) {
         Some(payload) => payload,
         None => buffer,

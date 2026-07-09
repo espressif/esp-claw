@@ -16,7 +16,7 @@ use claw_tool::{
 };
 use serde_json::Value;
 
-use super::{MemoryStores, MemoryTierHint};
+use super::MemoryStores;
 
 /// Default `memory_recall` / `memory_list` result cap when the model omits one.
 const DEFAULT_RECALL_LIMIT: usize = 20;
@@ -55,11 +55,11 @@ impl<F: ClawFs + 'static> SyncToolHandler for MemoryStoreTool<F> {
         let args = parse_object(call)?;
         let content = required_string(&args, "content")?;
         let draft = MemoryDraft::new(content)
-            .with_tags(string_array(&args, "tags"))
-            .with_keywords(string_array(&args, "keywords"))
+            .with_tags(string_array(&args, "tags")?)
+            .with_keywords(string_array(&args, "keywords")?)
             .with_source("manual");
 
-        let output = match self.stores.store(draft, MemoryTierHint::Auto) {
+        let output = match self.stores.store(draft) {
             StoreOutcome::Created(item) => format!("Stored memory {}.", item.id),
             StoreOutcome::Duplicate(item) => {
                 format!("Already remembered (as {}); nothing changed.", item.id)
@@ -82,9 +82,9 @@ impl<F: ClawFs + 'static> ToolSpec for MemoryRecallTool<F> {
 impl<F: ClawFs + 'static> SyncToolHandler for MemoryRecallTool<F> {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let args = parse_object(call)?;
-        let labels = string_array(&args, "labels");
-        let query = optional_string(&args, "query");
-        let limit = optional_limit(&args);
+        let labels = string_array(&args, "labels")?;
+        let query = optional_string(&args, "query")?;
+        let limit = optional_limit(&args)?;
 
         let items = self.stores.recall(&labels, query.as_deref(), limit);
         Ok(ToolOutput {
@@ -107,7 +107,7 @@ impl<F: ClawFs + 'static> ToolSpec for MemoryListTool<F> {
 impl<F: ClawFs + 'static> SyncToolHandler for MemoryListTool<F> {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let args = parse_object(call)?;
-        let limit = optional_limit(&args);
+        let limit = optional_limit(&args)?;
         let mut items = self.stores.list();
         items.truncate(limit);
         Ok(ToolOutput {
@@ -132,9 +132,9 @@ impl<F: ClawFs + 'static> SyncToolHandler for MemoryUpdateTool<F> {
         let args = parse_object(call)?;
         let id = MemoryId::from(required_string(&args, "id")?.as_str());
         let patch = MemoryPatch {
-            content: optional_string(&args, "content"),
-            tags: optional_string_array(&args, "tags"),
-            keywords: optional_string_array(&args, "keywords"),
+            content: optional_string(&args, "content")?,
+            tags: optional_string_array(&args, "tags")?,
+            keywords: optional_string_array(&args, "keywords")?,
         };
         match self.stores.update(&id, patch) {
             Ok(item) => Ok(ToolOutput {
@@ -181,11 +181,20 @@ impl<F: ClawFs + 'static> SyncToolHandler for MemoryForgetTool<F> {
 /// Parse a call's arguments into a JSON object (arguments are already schema-
 /// validated by the tool set, but parse defensively).
 fn parse_object(call: &ToolInvocation<'_>) -> Result<Value, ToolInvokeError> {
-    if call.arguments_json().trim().is_empty() {
-        return Ok(Value::Object(serde_json::Map::new()));
+    let text = call.arguments_json().trim();
+    let value = if text.is_empty() {
+        Value::Object(serde_json::Map::new())
+    } else {
+        serde_json::from_str(text).map_err(|error| {
+            ToolInvokeError::new(ToolError::InvalidArgumentsJson(error.to_string()))
+        })?
+    };
+    if !value.is_object() {
+        return Err(ToolInvokeError::new(ToolError::InvalidArgumentsJson(
+            "tool arguments must be a JSON object".into(),
+        )));
     }
-    serde_json::from_str(call.arguments_json())
-        .map_err(|error| ToolInvokeError::new(ToolError::InvalidArgumentsJson(error.to_string())))
+    Ok(value)
 }
 
 /// A required non-empty string field.
@@ -204,39 +213,74 @@ fn required_string(args: &Value, key: &str) -> Result<String, ToolInvokeError> {
 }
 
 /// An optional non-empty string field.
-fn optional_string(args: &Value, key: &str) -> Option<String> {
-    args.get(key)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|text| !text.is_empty())
-        .map(str::to_string)
+fn optional_string(args: &Value, key: &str) -> Result<Option<String>, ToolInvokeError> {
+    match args.get(key) {
+        Some(Value::String(value)) => {
+            let value = value.trim();
+            if value.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(value.to_string()))
+            }
+        }
+        Some(_) => Err(ToolInvokeError::new(ToolError::InvalidArguments(format!(
+            "'{key}' must be a string"
+        )))),
+        None => Ok(None),
+    }
 }
 
-/// A string array field (absent or non-array yields an empty vec).
-fn string_array(args: &Value, key: &str) -> Vec<String> {
-    optional_string_array(args, key).unwrap_or_default()
+/// A string array field (absent yields an empty vec).
+fn string_array(args: &Value, key: &str) -> Result<Vec<String>, ToolInvokeError> {
+    match optional_string_array(args, key)? {
+        Some(values) => Ok(values),
+        None => Ok(Vec::new()),
+    }
 }
 
 /// An optional string array field; `None` when the key is absent.
-fn optional_string_array(args: &Value, key: &str) -> Option<Vec<String>> {
-    args.get(key).and_then(Value::as_array).map(|items| {
-        items
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::trim)
-            .filter(|text| !text.is_empty())
-            .map(str::to_string)
-            .collect()
-    })
+fn optional_string_array(args: &Value, key: &str) -> Result<Option<Vec<String>>, ToolInvokeError> {
+    let Some(value) = args.get(key) else {
+        return Ok(None);
+    };
+    let Some(items) = value.as_array() else {
+        return Err(ToolInvokeError::new(ToolError::InvalidArguments(format!(
+            "'{key}' must be an array of strings"
+        ))));
+    };
+    let mut strings = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(text) = item.as_str() else {
+            return Err(ToolInvokeError::new(ToolError::InvalidArguments(format!(
+                "'{key}' must be an array of strings"
+            ))));
+        };
+        let text = text.trim();
+        if !text.is_empty() {
+            strings.push(text.to_string());
+        }
+    }
+    Ok(Some(strings))
 }
 
 /// The `limit` field, clamped to a sensible default when absent or zero.
-fn optional_limit(args: &Value) -> usize {
-    args.get("limit")
-        .and_then(Value::as_u64)
-        .and_then(|limit| usize::try_from(limit).ok())
-        .filter(|limit| *limit > 0)
-        .unwrap_or(DEFAULT_RECALL_LIMIT)
+fn optional_limit(args: &Value) -> Result<usize, ToolInvokeError> {
+    let Some(value) = args.get("limit") else {
+        return Ok(DEFAULT_RECALL_LIMIT);
+    };
+    let Some(limit) = value.as_u64() else {
+        return Err(ToolInvokeError::new(ToolError::InvalidArguments(
+            "'limit' must be an unsigned integer".into(),
+        )));
+    };
+    if limit == 0 {
+        return Ok(DEFAULT_RECALL_LIMIT);
+    }
+    usize::try_from(limit).map_err(|_| {
+        ToolInvokeError::new(ToolError::InvalidArguments(
+            "'limit' is too large for this platform".into(),
+        ))
+    })
 }
 
 /// Render a list of memory items for the model, one per line with its id and

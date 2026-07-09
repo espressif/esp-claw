@@ -12,6 +12,7 @@ name = "claw_permission"
 crate-type = ["rlib"]
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 
 [lints.rust]

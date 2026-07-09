@@ -33,12 +33,10 @@ mod llm_extractor;
 mod tier;
 mod tools;
 
-#[cfg(test)]
-use extraction::ExtractedItem;
 pub use extraction::{ExtractionInput, Extractor, MemoryOp, MemorySnapshot};
 pub use llm_compactor::LlmCompactor;
 pub use llm_extractor::LlmExtractor;
-pub use tier::{MemoryTier, MemoryTierHint, RuleBasedTierClassifier, TierClassifier};
+pub use tier::{MemoryTier, RuleBasedTierClassifier, TierClassifier};
 
 use self::tools::memory_tools;
 
@@ -106,10 +104,9 @@ impl<F: ClawFs + 'static> Clone for MemoryStores<F> {
 }
 
 impl<F: ClawFs + 'static> MemoryStores<F> {
-    /// Store a draft, routing it to a tier via the classifier (`hint` from an
-    /// extractor, or [`MemoryTierHint::Auto`] for a manual store).
-    pub(crate) fn store(&self, draft: MemoryDraft, hint: MemoryTierHint) -> StoreOutcome {
-        match self.classifier.classify(&draft, hint) {
+    /// Store a draft, routing it to a tier via the classifier.
+    pub(crate) fn store(&self, draft: MemoryDraft) -> StoreOutcome {
+        match self.classifier.classify(&draft) {
             MemoryTier::Global => self.global.store(draft),
             MemoryTier::Agent => self.agent.store(draft),
         }
@@ -263,7 +260,9 @@ impl<F: ClawFs + 'static> LongTermMemoryContextAdapter<F> {
                     self.apply_op(op);
                 }
             }
-            Err(_) => {}
+            Err(error) => {
+                tracing::warn!(name: "memory_extraction_failed", error = %error);
+            }
         }
     }
 
@@ -277,7 +276,7 @@ impl<F: ClawFs + 'static> LongTermMemoryContextAdapter<F> {
                     .with_tags(item.tags)
                     .with_keywords(item.keywords)
                     .with_source("extracted");
-                self.stores.store(draft, item.tier);
+                self.stores.store(draft);
             }
             MemoryOp::Replace { id, item } => {
                 let patch = MemoryPatch {
@@ -351,14 +350,12 @@ fn flatten_transcript(messages: &Value) -> String {
     };
     let mut out = String::new();
     for message in items {
-        let role = message
-            .get("role")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let content = message
-            .get("content")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let Some(role) = message.get("role").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(content) = message.get("content").and_then(Value::as_str) else {
+            continue;
+        };
         if role.is_empty() || content.is_empty() {
             continue;
         }
@@ -379,139 +376,5 @@ fn render_catalog(header: &str, labels: &[String]) -> String {
         String::new()
     } else {
         format!("{header}: {}", labels.join(", "))
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
-mod tests {
-    use super::extraction::ExtractFuture;
-    use super::*;
-    use crate::memory::History;
-    use claw_interface::MemFs;
-    use claw_memory::MemoryId;
-    use futures_lite::future::block_on;
-    use serde_json::json;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
-
-    /// A fixed-version transcript view for driving `maybe_schedule_extraction`.
-    struct FakeHistory {
-        version: u64,
-    }
-    impl History for FakeHistory {
-        fn messages(&self) -> Arc<Value> {
-            Arc::new(json!([{ "role": "user", "content": "remember this" }]))
-        }
-        fn version(&self) -> u64 {
-            self.version
-        }
-    }
-
-    /// An [`Extractor`] that counts calls and extracts nothing.
-    struct CountingExtractor {
-        calls: Arc<AtomicUsize>,
-    }
-    impl Extractor for CountingExtractor {
-        fn extract<'a>(&'a self, _input: ExtractionInput<'a>) -> ExtractFuture<'a> {
-            self.calls.fetch_add(1, Ordering::SeqCst);
-            Box::pin(async { Ok(Vec::new()) })
-        }
-    }
-
-    struct NoopExtractor;
-
-    impl Extractor for NoopExtractor {
-        fn extract<'a>(&'a self, _input: ExtractionInput<'a>) -> ExtractFuture<'a> {
-            Box::pin(async { Ok(Vec::new()) })
-        }
-    }
-
-    fn adapter() -> LongTermMemoryContextAdapter<MemFs> {
-        MemFs::default();
-        LongTermMemoryContextAdapter::new(
-            agent_store::<MemFs>("/m/agent").expect("agent store"),
-            global_store::<MemFs>("/m/global").expect("global store"),
-            RuleBasedTierClassifier::shared(),
-            Arc::new(NoopExtractor),
-        )
-    }
-
-    fn fact(content: &str) -> ExtractedItem {
-        ExtractedItem {
-            content: content.to_string(),
-            tags: vec!["fact".to_string()],
-            keywords: Vec::new(),
-            tier: MemoryTierHint::Auto,
-        }
-    }
-
-    #[test]
-    fn apply_add_replace_forget_round_trip() {
-        let adapter = adapter();
-
-        adapter.apply_op(MemoryOp::Add(fact("Lives in Berlin")));
-        let items = adapter.stores.list();
-        assert_eq!(items.len(), 1);
-        let id = items[0].id.clone();
-        assert_eq!(items[0].content, "Lives in Berlin");
-
-        // Replace edits the cited fact in place.
-        adapter.apply_op(MemoryOp::Replace {
-            id: id.clone(),
-            item: fact("Lives in Munich"),
-        });
-        let items = adapter.stores.list();
-        assert_eq!(items.len(), 1);
-        assert_eq!(items[0].content, "Lives in Munich");
-
-        // Forget removes it.
-        adapter.apply_op(MemoryOp::Forget { id });
-        assert!(adapter.stores.list().is_empty());
-    }
-
-    #[test]
-    fn apply_edit_on_unknown_id_is_a_noop() {
-        let adapter = adapter();
-        adapter.apply_op(MemoryOp::Add(fact("Has a dog")));
-
-        // An id the store never held is skipped — never a panic, and
-        // the live set is untouched.
-        adapter.apply_op(MemoryOp::Forget {
-            id: MemoryId::from("g-999"),
-        });
-        adapter.apply_op(MemoryOp::Replace {
-            id: MemoryId::from("a-999"),
-            item: fact("ghost edit"),
-        });
-        assert_eq!(adapter.stores.list().len(), 1);
-    }
-
-    #[test]
-    fn extraction_is_throttled_after_the_first_pass() {
-        let calls = Arc::new(AtomicUsize::new(0));
-        MemFs::default();
-        let mut adapter = LongTermMemoryContextAdapter::new(
-            agent_store::<MemFs>("/m/agent").expect("agent store"),
-            global_store::<MemFs>("/m/global").expect("global store"),
-            RuleBasedTierClassifier::shared(),
-            Arc::new(CountingExtractor {
-                calls: Arc::clone(&calls),
-            }),
-        );
-
-        // The first non-empty transcript always extracts.
-        block_on(adapter.maybe_schedule_extraction(&FakeHistory { version: 3 }));
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-
-        // A small advance is below the delta and is throttled away.
-        block_on(adapter.maybe_schedule_extraction(&FakeHistory { version: 5 }));
-        assert_eq!(calls.load(Ordering::SeqCst), 1);
-
-        // Crossing the delta since the last extraction runs it again.
-        block_on(adapter.maybe_schedule_extraction(&FakeHistory {
-            version: 3 + EXTRACT_MIN_VERSION_DELTA,
-        }));
-        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 }

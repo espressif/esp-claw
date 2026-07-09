@@ -10,4 +10,5 @@ name = "claw_utils"
 crate-type = ["rlib"]
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
 thiserror = "2"

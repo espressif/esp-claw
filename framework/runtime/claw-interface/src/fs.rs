@@ -680,11 +680,13 @@ mod diskfs {
         fn render<'data>(path: &str, data: &'data [u8]) -> std::borrow::Cow<'data, [u8]> {
             let pretty_json = CONFIG.with(|slot| slot.borrow().pretty_json);
             if pretty_json && path.ends_with(".json") {
-                serde_json::from_slice::<serde_json::Value>(data)
+                match serde_json::from_slice::<serde_json::Value>(data)
                     .ok()
                     .and_then(|value| serde_json::to_vec_pretty(&value).ok())
-                    .map(std::borrow::Cow::Owned)
-                    .unwrap_or(std::borrow::Cow::Borrowed(data))
+                {
+                    Some(pretty) => std::borrow::Cow::Owned(pretty),
+                    None => std::borrow::Cow::Borrowed(data),
+                }
             } else {
                 std::borrow::Cow::Borrowed(data)
             }

@@ -1,7 +1,7 @@
 use claw_permission::{Action, PermissionDecision};
 
 use super::set::ToolSetHandle;
-use super::tool::{ToolError, ToolInvocation, ToolInvokeError};
+use super::tool::{ToolError, ToolInvocation};
 
 pub trait ToolGate {
     fn decide(&self, action: &Action) -> PermissionDecision;
@@ -41,10 +41,24 @@ impl<'a> ToolRunner<'a> {
     pub async fn run<'call>(&self, call: &'call ToolInvocation<'call>) -> ToolRunOutcome {
         let action = match self.tools.classify(call) {
             Ok(action) => action,
-            Err(error) => return render_before_permission(error),
+            Err(error) => {
+                return match &error.error {
+                    ToolError::InvokeRejected(message) => ToolRunOutcome::Blocked {
+                        content: message.clone(),
+                    },
+                    _ => ToolRunOutcome::Ran {
+                        content: error.to_string(),
+                        ok: false,
+                    },
+                };
+            }
         };
 
-        match self.decide(&action) {
+        let decision = match self.gate {
+            Some(gate) => gate.decide(&action),
+            None => PermissionDecision::Allow,
+        };
+        match decision {
             PermissionDecision::Allow => self.invoke(call).await,
             PermissionDecision::Ask { reason } => ToolRunOutcome::ApprovalNeeded {
                 content: reason.clone(),
@@ -57,35 +71,16 @@ impl<'a> ToolRunner<'a> {
         }
     }
 
-    fn decide(&self, action: &Action) -> PermissionDecision {
-        self.gate
-            .map(|gate| gate.decide(action))
-            .unwrap_or(PermissionDecision::Allow)
-    }
-
     async fn invoke<'call>(&self, call: &'call ToolInvocation<'call>) -> ToolRunOutcome {
         match self.tools.invoke(call).await {
             Ok(output) => ToolRunOutcome::Ran {
                 content: output.output,
                 ok: output.ok,
             },
-            Err(error) => render_after_execution(error),
+            Err(error) => ToolRunOutcome::Ran {
+                content: error.to_string(),
+                ok: false,
+            },
         }
-    }
-}
-
-fn render_before_permission(error: ToolInvokeError) -> ToolRunOutcome {
-    match &error.error {
-        ToolError::InvokeRejected(message) => ToolRunOutcome::Blocked {
-            content: message.clone(),
-        },
-        _ => render_after_execution(error),
-    }
-}
-
-fn render_after_execution(error: ToolInvokeError) -> ToolRunOutcome {
-    ToolRunOutcome::Ran {
-        content: error.to_string(),
-        ok: false,
     }
 }

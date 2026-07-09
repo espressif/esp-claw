@@ -105,7 +105,9 @@ impl<H: ClawHttp, Timer: ClawTimer> Compactor for LlmCompactor<H, Timer> {
                 .await
                 .map_err(|error| CompactError::Backend(CompactBackendError::new(error)))?;
 
-            let summary = response.text.unwrap_or_default();
+            let Some(summary) = response.text else {
+                return Err(CompactError::EmptySummary);
+            };
             if summary.trim().is_empty() {
                 return Err(CompactError::EmptySummary);
             }
@@ -126,12 +128,17 @@ impl<H: ClawHttp, Timer: ClawTimer> Compactor for LlmCompactor<H, Timer> {
 fn render_transcript(window: &[Value]) -> String {
     let mut out = String::new();
     for message in window {
-        let role = message.get("role").and_then(Value::as_str).unwrap_or("?");
+        let Some(role) = message.get("role").and_then(Value::as_str) else {
+            continue;
+        };
         let content = match message.get("content") {
             Some(Value::String(text)) => text.clone(),
             Some(other) => other.to_string(),
-            None => String::new(),
+            None => continue,
         };
+        if content.is_empty() {
+            continue;
+        }
         out.push_str(role);
         out.push_str(": ");
         out.push_str(&content);

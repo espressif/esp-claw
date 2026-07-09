@@ -35,6 +35,7 @@ use std::sync::{Arc, Mutex};
 
 use claw_permission::Resource;
 use claw_tool::{Tool, ToolError, ToolInvocation};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::agent::graph::{AgentContext, SpawnPolicy};
@@ -52,7 +53,7 @@ use watch_subagent::WatchSubagentTool;
 ///
 /// This is *internal*: it is not part of the public `AgentCommand` surface, so a
 /// caller cannot forge an end-of-conversation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub(crate) enum ControlSignal {
     /// The agent decided it is done; carries its closing message.
     EndConversation { final_message: String },
@@ -65,40 +66,47 @@ pub(crate) enum ControlSignal {
 /// `Send + Sync`; contention is nil in the single-driver-thread model.
 pub(crate) type ControlSink = Arc<Mutex<VecDeque<ControlSignal>>>;
 
-/// Push `signal` onto `sink`, recovering a poisoned lock (the queue is plain data).
-fn push(sink: &ControlSink, signal: ControlSignal) {
-    sink.lock()
-        .unwrap_or_else(|poison| poison.into_inner())
-        .push_back(signal);
-}
-
 // -- Shared argument / rendering helpers -------------------------------------
 
-/// Read one string argument out of a tool call, or `""` when it is absent.
+/// Read one optional string argument out of a tool call.
 ///
 /// # Errors
 ///
 /// [`ToolError::InvalidArgumentsJson`] if the arguments are present but not valid JSON —
 /// a malformed call is surfaced, not swallowed.
-pub(crate) fn string_argument(arguments_json: &str, key: &str) -> Result<String, ToolError> {
-    if arguments_json.trim().is_empty() {
-        return Ok(String::new());
+pub(crate) fn optional_string_argument(
+    arguments_json: &str,
+    key: &str,
+) -> Result<Option<String>, ToolError> {
+    let text = arguments_json.trim();
+    let value = if text.is_empty() {
+        Value::Object(serde_json::Map::new())
+    } else {
+        serde_json::from_str(text).map_err(|error| {
+            ToolError::InvalidArgumentsJson(format!("invalid tool arguments JSON: {error}"))
+        })?
+    };
+    if !value.is_object() {
+        return Err(ToolError::InvalidArgumentsJson(
+            "tool arguments must be a JSON object".into(),
+        ));
     }
-    let value: Value = serde_json::from_str(arguments_json).map_err(|error| {
-        ToolError::InvalidArgumentsJson(format!("invalid tool arguments JSON: {error}"))
-    })?;
-    Ok(value
-        .get(key)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string())
+    match value.get(key) {
+        Some(Value::String(text)) => Ok(Some(text.to_string())),
+        Some(_) => Err(ToolError::InvalidArguments(format!(
+            "'{key}' must be a string"
+        ))),
+        None => Ok(None),
+    }
 }
 
 /// Best-effort [`Resource::Agent`] for a tool call's `agent` argument, for
 /// classification only — a missing/malformed id just yields `None` (the verb
 /// alone still classifies; `invoke` is where a bad id is reported).
 fn agent_resource(call: &ToolInvocation<'_>) -> Option<Resource> {
-    let raw = string_argument(call.arguments_json(), "agent").ok()?;
+    let raw = optional_string_argument(call.arguments_json(), "agent")
+        .ok()
+        .flatten()?;
     let trimmed = raw.trim();
     (!trimmed.is_empty()).then(|| Resource::Agent(trimmed.to_string()))
 }
@@ -107,7 +115,7 @@ fn agent_resource(call: &ToolInvocation<'_>) -> Option<Resource> {
 
 /// Build the agent's built-in tools over a control sink.
 pub(crate) fn internal_tools(sink: ControlSink) -> [Tool; 1] {
-    [Tool::from_sync(EndConversationTool::new(sink))]
+    [Tool::from_sync(EndConversationTool { sink })]
 }
 
 /// Build the subagent-management tools, all scoped by the context's agent
@@ -119,38 +127,19 @@ pub(crate) fn internal_tools(sink: ControlSink) -> [Tool; 1] {
 /// - `delete_subagent` — remove one descendant (and its subtree).
 pub(crate) fn subagent_tools(context: Arc<AgentContext>, policy: SpawnPolicy) -> [Tool; 5] {
     [
-        Tool::from_sync(ListSpawnableAgentsTool::new(policy.clone())),
-        Tool::from_sync(SpawnSubagentTool::new(Arc::clone(&context), policy)),
-        Tool::from_sync(ListSubagentsTool::new(Arc::clone(&context))),
-        Tool::from_sync(WatchSubagentTool::new(Arc::clone(&context))),
-        Tool::from_sync(DeleteSubagentTool::new(context)),
+        Tool::from_sync(ListSpawnableAgentsTool {
+            policy: policy.clone(),
+        }),
+        Tool::from_sync(SpawnSubagentTool {
+            context: Arc::clone(&context),
+            policy,
+        }),
+        Tool::from_sync(ListSubagentsTool {
+            context: Arc::clone(&context),
+        }),
+        Tool::from_sync(WatchSubagentTool {
+            context: Arc::clone(&context),
+        }),
+        Tool::from_sync(DeleteSubagentTool { context }),
     ]
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-pub(crate) mod test_support {
-    //! Shared tool test helpers (the graph doubles live in
-    //! [`graph::test_support`](crate::agent::graph::test_support)).
-
-    use std::collections::VecDeque;
-    use std::sync::{Arc, Mutex};
-
-    use claw_tool::Tool;
-
-    use super::ControlSink;
-
-    /// A fresh, empty control sink.
-    pub(crate) fn sink() -> ControlSink {
-        Arc::new(Mutex::new(VecDeque::new()))
-    }
-
-    /// The tool named `name` in `tools` (cloned), panicking if absent.
-    pub(crate) fn tool_named(tools: &[Tool], name: &str) -> Tool {
-        tools
-            .iter()
-            .find(|tool| tool.name() == name)
-            .unwrap()
-            .clone()
-    }
 }

@@ -155,10 +155,9 @@ impl BackendImpl for OpenAiCompatible {
         request: &MediaRequest,
         abort: &AtomicBool,
     ) -> Result<String, InferMediaError> {
-        let user_prompt = request.user_prompt.unwrap_or("");
-        if user_prompt.is_empty() {
+        let Some(user_prompt) = request.user_prompt.filter(|prompt| !prompt.is_empty()) else {
             return Err(InferMediaError::IncompleteRequest);
-        }
+        };
         let asset = single_media_asset(request.media)?;
 
         let prepared = prepare_asset(asset, IMAGE_REMOTE_URL_ONLY, self.context.image_max_bytes())?;
@@ -170,8 +169,7 @@ impl BackendImpl for OpenAiCompatible {
             json!(self.context.max_tokens()),
         );
         let mut messages: Vec<Value> = Vec::new();
-        let system = request.system_prompt.unwrap_or("");
-        if !system.is_empty() {
+        if let Some(system) = request.system_prompt.filter(|prompt| !prompt.is_empty()) {
             messages.push(json!({"role": "system", "content": system}));
         }
         messages.push(json!({"role": "user", "content": [
@@ -244,10 +242,9 @@ impl BackendImpl for OpenAiCompatible {
         request: &MediaRequest<'_>,
         cancel: Cancel<'_>,
     ) -> Result<String, InferMediaError> {
-        let user_prompt = request.user_prompt.unwrap_or("");
-        if user_prompt.is_empty() {
+        let Some(user_prompt) = request.user_prompt.filter(|prompt| !prompt.is_empty()) else {
             return Err(InferMediaError::IncompleteRequest);
-        }
+        };
         let asset = single_media_asset(request.media)?;
 
         let prepared = prepare_asset(asset, IMAGE_REMOTE_URL_ONLY, self.context.image_max_bytes())?;
@@ -259,8 +256,7 @@ impl BackendImpl for OpenAiCompatible {
             json!(self.context.max_tokens()),
         );
         let mut messages: Vec<Value> = Vec::new();
-        let system = request.system_prompt.unwrap_or("");
-        if !system.is_empty() {
+        if let Some(system) = request.system_prompt.filter(|prompt| !prompt.is_empty()) {
             messages.push(json!({"role": "system", "content": system}));
         }
         messages.push(json!({"role": "user", "content": [

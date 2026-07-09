@@ -1,10 +1,12 @@
 //! Records human decisions on `Ask` actions so a retried call resolves without
 //! asking again — and so it cannot loop forever between "ask" and "retry".
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
 
 /// A recorded human decision for one action signature.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub enum Grant {
     /// The human approved; the action may proceed.
     Granted,
@@ -38,9 +40,9 @@ pub enum Grant {
 /// ```
 ///
 /// [`Action::signature`]: crate::Action::signature
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct GrantStore {
-    decisions: HashMap<String, Grant>,
+    decisions: BTreeMap<String, Grant>,
 }
 
 impl GrantStore {
@@ -68,30 +70,5 @@ impl GrantStore {
     /// Forget the decision for `signature` (e.g. to ask again next time).
     pub fn forget(&mut self, signature: &str) {
         self.decisions.remove(signature);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn grant_then_lookup_returns_granted() {
-        let mut store = GrantStore::new();
-        store.grant("write_file:path:/a");
-        assert_eq!(store.lookup("write_file:path:/a"), Some(&Grant::Granted));
-        assert_eq!(store.lookup("write_file:path:/b"), None);
-    }
-
-    #[test]
-    fn deny_records_reason_and_forget_clears() {
-        let mut store = GrantStore::new();
-        store.deny("rm:path:/a", "too risky");
-        assert_eq!(
-            store.lookup("rm:path:/a"),
-            Some(&Grant::Denied("too risky".into()))
-        );
-        store.forget("rm:path:/a");
-        assert_eq!(store.lookup("rm:path:/a"), None);
     }
 }

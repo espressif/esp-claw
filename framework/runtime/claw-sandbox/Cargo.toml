@@ -24,8 +24,6 @@ anyhow = "1"
 [lints.rust]
 unsafe_code = "forbid"
 
-# `deny` (not `forbid`) on the restriction lints so the in-crate `#[cfg(test)]`
-# module can `#[allow(clippy::unwrap_used)]` where panicking is acceptable.
 [lints.clippy]
 unwrap_used = "deny"
 expect_used = "deny"

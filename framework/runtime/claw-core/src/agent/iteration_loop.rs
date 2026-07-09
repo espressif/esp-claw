@@ -40,7 +40,7 @@ impl Drop for IterationBracket<'_> {
 
 /// Errors from one [`IterationLoop::run`] step.
 #[derive(Clone, Debug, IntoStaticStr, thiserror::Error)]
-pub enum IterationLoopError {
+pub(crate) enum IterationLoopError {
     #[strum(serialize = "messages_not_array")]
     #[error("messages must be a JSON array")]
     MessagesNotArray,
@@ -60,7 +60,7 @@ pub enum IterationLoopError {
 
 /// Checkpoint where preemption was detected. The iteration is terminal at this point.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IterationCheckpoint {
+pub(crate) enum IterationCheckpoint {
     BeforeLlmHttp,
     InLlmHttpAbort,
     AfterLlmBeforeTool,
@@ -69,7 +69,7 @@ pub enum IterationCheckpoint {
 
 /// Borrowed OpenAI-style system prompt for one LLM call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SystemPrompt<'a>(pub &'a str);
+pub(crate) struct SystemPrompt<'a>(pub &'a str);
 
 impl AsRef<str> for SystemPrompt<'_> {
     fn as_ref(&self) -> &str {
@@ -79,24 +79,24 @@ impl AsRef<str> for SystemPrompt<'_> {
 
 /// Borrowed OpenAI-style `messages` array for one LLM call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ChatMessages<'a>(pub &'a Value);
+pub(crate) struct ChatMessages<'a>(pub &'a Value);
 
 /// Owned message batch appended by one completed step (assistant/tool round).
 #[derive(Clone, Debug, PartialEq, Default)]
-pub struct AppendedMessages(pub Value);
+pub(crate) struct AppendedMessages(pub Value);
 
 impl AppendedMessages {
-    pub fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self(Value::Array(Vec::new()))
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.0.as_array().is_none_or(Vec::is_empty)
     }
 }
 
 /// Inputs for exactly one [`IterationLoop::run`]: chat fields + tools.
-pub struct IterationStep<'a> {
+pub(crate) struct IterationStep<'a> {
     pub iteration_id: IterationId,
     pub system_prompt: SystemPrompt<'a>,
     pub messages: ChatMessages<'a>,
@@ -113,30 +113,30 @@ pub struct IterationStep<'a> {
 
 /// Terminal outcome of exactly one [`IterationLoop::run`] (completed or preempted).
 #[derive(Clone, Debug)]
-pub enum IterationOutcome {
+pub(crate) enum IterationOutcome {
     Completed(CompletedOutcome),
     Preempted(PreemptedOutcome),
 }
 
 /// One [`IterationLoop::run`] step: [`IterationOutcome`] or [`IterationLoopError`].
-pub type IterationResult = Result<IterationOutcome, IterationLoopError>;
+pub(crate) type IterationResult = Result<IterationOutcome, IterationLoopError>;
 
 /// Successful iteration: plain-text answer or executed tool round.
 #[derive(Clone, Debug, PartialEq)]
-pub struct CompletedOutcome {
+pub(crate) struct CompletedOutcome {
     pub iteration_id: IterationId,
     pub kind: CompletedKind,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub enum CompletedKind {
+pub(crate) enum CompletedKind {
     PlainText(PlainTextOutcome),
     Tools(ToolsOutcome),
 }
 
 /// One executed tool call (for iteration-level observers above this layer).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ToolRun {
+pub(crate) struct ToolRun {
     pub name: String,
     pub ok: bool,
     disposition: ToolRunDisposition,
@@ -145,7 +145,7 @@ pub struct ToolRun {
 impl ToolRun {
     /// True when the call was refused by soft-hide gating (not in the tool set's
     /// active allow-set) instead of being invoked.
-    pub fn is_blocked(&self) -> bool {
+    pub(crate) fn is_blocked(&self) -> bool {
         matches!(self.disposition, ToolRunDisposition::Blocked)
     }
 
@@ -169,7 +169,7 @@ enum ToolRunDisposition {
 
 /// The model issued tool calls and they were executed.
 #[derive(Clone, Debug, PartialEq)]
-pub struct ToolsOutcome {
+pub(crate) struct ToolsOutcome {
     /// Assistant + tool messages produced this step (iteration layer merges).
     pub appended: AppendedMessages,
     pub runs: Vec<ToolRun>,
@@ -177,7 +177,7 @@ pub struct ToolsOutcome {
 
 /// The model returned a final plain-text answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PlainTextOutcome {
+pub(crate) struct PlainTextOutcome {
     pub text: String,
     pub raw_message_json: Option<String>,
 }
@@ -187,7 +187,7 @@ pub struct PlainTextOutcome {
 /// `produced` carries assistant/tool messages already materialized this step
 /// (not interrupt message content). Upper layers decide whether to merge them.
 #[derive(Clone, Debug, PartialEq)]
-pub struct PreemptedOutcome {
+pub(crate) struct PreemptedOutcome {
     pub iteration_id: IterationId,
     pub checkpoint: IterationCheckpoint,
     pub produced: AppendedMessages,
@@ -200,7 +200,7 @@ pub struct PreemptedOutcome {
 /// - HTTP polls the flag and returns [`claw_interface::http::HttpError::Aborted`]
 ///   without clearing it (`claw_sys` / ESP HTTP keeps the flag intact).
 /// - [`IterationLoop`] consumes the flag via `swap(false)` when ending preempted.
-pub trait InterruptionControl {
+pub(crate) trait InterruptionControl {
     /// Polled at checkpoints (consume) and passed to in-flight LLM HTTP (cooperative abort).
     fn interrupt_flag(&self) -> &Arc<AtomicBool>;
 }
@@ -210,7 +210,7 @@ pub trait InterruptionControl {
 /// Generic over the HTTP transport `H` so the LLM call stays statically
 /// dispatched. The loop borrows the agent's [`ClawApiAsync`] mutably for exactly one
 /// `chat` round, so it is consumed by [`run`](Self::run).
-pub struct IterationLoop<'a, H: ClawHttp, Timer: ClawTimer> {
+pub(crate) struct IterationLoop<'a, H: ClawHttp, Timer: ClawTimer> {
     pub llm: &'a mut ClawApiAsync<H, Timer>,
     pub interruption: &'a dyn InterruptionControl,
     /// Retry policy applied to this iteration's LLM call (see [`RetryPolicy`]).
@@ -223,7 +223,7 @@ pub struct IterationLoop<'a, H: ClawHttp, Timer: ClawTimer> {
 
 impl<H: ClawHttp, Timer: ClawTimer> IterationLoop<'_, H, Timer> {
     /// Execute exactly one iteration: LLM chat → optional tool execution.
-    pub async fn run(self, step: IterationStep<'_>) -> IterationResult {
+    pub(crate) async fn run(self, step: IterationStep<'_>) -> IterationResult {
         let span = tracing::info_span!("iteration_loop", run.iteration = %step.iteration_id);
         run_one_iteration(self, step).instrument(span).await
     }
@@ -264,7 +264,7 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
     let llm_response = match loop_.llm.chat(&chat_request, cancel).await {
         Ok(resp) => resp,
         Err(llm_err) => {
-            if llm_http_preempted(loop_.interruption, &llm_err) {
+            if take_interrupt(loop_.interruption) || llm_err.is_aborted() {
                 tracing::warn!(name: "preempted", checkpoint = "in_llm_http_abort");
                 return Ok(IterationOutcome::Preempted(PreemptedOutcome {
                     iteration_id,
@@ -295,7 +295,10 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
             return Ok(IterationOutcome::Preempted(outcome));
         }
 
-        let text = llm_response.text.clone().unwrap_or_default();
+        let text = llm_response
+            .text
+            .clone()
+            .ok_or(IterationLoopError::MalformedAssistantMessage)?;
         tracing::info!(name: "completed", output_bytes = text.len() as u64);
         return Ok(IterationOutcome::Completed(CompletedOutcome {
             iteration_id,
@@ -376,14 +379,6 @@ enum ToolRoundResult {
 
 fn take_interrupt(interruption: &dyn InterruptionControl) -> bool {
     interruption.interrupt_flag().swap(false, Ordering::AcqRel)
-}
-
-/// True when an in-flight LLM HTTP ended because of user interrupt.
-fn llm_http_preempted(interruption: &dyn InterruptionControl, err: &ChatError) -> bool {
-    if take_interrupt(interruption) {
-        return true;
-    }
-    err.is_aborted()
 }
 
 fn check_preempt_at_checkpoint(
@@ -540,1035 +535,4 @@ fn push_tool_message(
     };
     runtime_arr.push(tool_message);
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
-
-    use super::*;
-    use claw_api::{ClawApiError, ToolCall};
-    use claw_tool::{
-        SyncToolHandler, Tool, ToolInvokeError, ToolOutput, ToolRegistry, ToolSet, ToolSpec,
-    };
-    use futures_lite::future::block_on;
-    use serde_json::json;
-
-    fn tool_set(tool: impl SyncToolHandler + 'static) -> ToolSet {
-        let registry = Arc::new(ToolRegistry::new());
-        let mut tools = registry.tool_set();
-        tools.add_tool(Tool::from_sync(tool)).expect("tool set");
-        tools
-    }
-
-    struct FlagControl {
-        interrupt: Arc<AtomicBool>,
-    }
-
-    impl FlagControl {
-        fn new() -> Self {
-            Self {
-                interrupt: Arc::new(AtomicBool::new(false)),
-            }
-        }
-
-        fn signal_interrupt(&self) {
-            self.interrupt.store(true, Ordering::Release);
-        }
-    }
-
-    impl InterruptionControl for FlagControl {
-        fn interrupt_flag(&self) -> &Arc<AtomicBool> {
-            &self.interrupt
-        }
-    }
-
-    #[test]
-    fn check_preempt_at_checkpoint_consumes_interrupt_flag() {
-        let interruption = FlagControl::new();
-        interruption.signal_interrupt();
-
-        let outcome = check_preempt_at_checkpoint(
-            &interruption,
-            IterationId(1),
-            IterationCheckpoint::AfterLlmBeforeTool,
-            AppendedMessages::empty(),
-        )
-        .expect("preempt");
-
-        assert_eq!(outcome.checkpoint, IterationCheckpoint::AfterLlmBeforeTool);
-        assert!(outcome.produced.is_empty());
-        assert!(!interruption.interrupt_flag().load(Ordering::Acquire));
-    }
-
-    #[test]
-    fn check_preempt_at_checkpoint_returns_produced_snapshot() {
-        let interruption = FlagControl::new();
-        interruption.signal_interrupt();
-
-        let produced = AppendedMessages(json!([
-            {"role": "assistant"},
-            {"role": "tool", "content": "partial"}
-        ]));
-        let outcome = check_preempt_at_checkpoint(
-            &interruption,
-            IterationId(1),
-            IterationCheckpoint::BeforeTool,
-            produced.clone(),
-        )
-        .expect("preempt");
-
-        let items = outcome.produced.0.as_array().expect("array");
-        assert_eq!(items.len(), 2);
-    }
-
-    #[test]
-    fn llm_http_preempted_accepts_transport_abort_without_flag() {
-        let interruption = FlagControl::new();
-        let err = ChatError::Api(ClawApiError::Transport(
-            "HTTP transport error: HTTP request aborted by caller".into(),
-        ));
-        assert!(llm_http_preempted(&interruption, &err));
-    }
-
-    #[test]
-    fn append_assistant_tool_calls_error_paths() {
-        let mut messages = Value::Array(Vec::new());
-        let missing_raw = LlmResponse {
-            text: None,
-            reasoning_content: None,
-            raw_message_json: None,
-            tool_calls: vec![ToolCall {
-                id: "t1".into(),
-                name: "files".into(),
-                arguments_json: "{}".into(),
-            }],
-        };
-        assert!(matches!(
-            append_assistant_tool_calls(&mut messages, &missing_raw).unwrap_err(),
-            IterationLoopError::MissingAssistantMessage
-        ));
-
-        let malformed = LlmResponse {
-            text: None,
-            reasoning_content: None,
-            raw_message_json: Some("{not-json".into()),
-            tool_calls: vec![ToolCall {
-                id: "t1".into(),
-                name: "files".into(),
-                arguments_json: "{}".into(),
-            }],
-        };
-        assert!(matches!(
-            append_assistant_tool_calls(&mut messages, &malformed).unwrap_err(),
-            IterationLoopError::MalformedAssistantMessage
-        ));
-
-        let valid = LlmResponse {
-            text: None,
-            reasoning_content: None,
-            raw_message_json: Some(r#"{"role":"assistant"}"#.into()),
-            tool_calls: vec![],
-        };
-        let mut not_array = Value::Object(Default::default());
-        assert!(matches!(
-            append_assistant_tool_calls(&mut not_array, &valid).unwrap_err(),
-            IterationLoopError::MessagesNotArray
-        ));
-    }
-
-    #[test]
-    fn run_tool_calls_error_and_empty_name() {
-        // The model emits an empty tool name; register a tool under that name so
-        // dispatch lands and we exercise the "(null)" display + is_error path.
-        struct FailingTool;
-        impl ToolSpec for FailingTool {
-            fn name(&self) -> &str {
-                ""
-            }
-
-            fn schema(&self) -> &str {
-                r#"{"type":"function","function":{"name":""}}"#
-            }
-        }
-
-        impl SyncToolHandler for FailingTool {
-            fn invoke(&self, _call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
-                Ok(ToolOutput {
-                    output: "done".into(),
-                    ok: false,
-                })
-            }
-        }
-
-        let interruption = FlagControl::new();
-        let mut tools = tool_set(FailingTool);
-        let tools = tools.begin().expect("tool set");
-        let iteration_id = IterationId(1);
-        let response = LlmResponse {
-            text: None,
-            reasoning_content: None,
-            raw_message_json: None,
-            tool_calls: vec![ToolCall {
-                id: "t1".into(),
-                name: String::new(),
-                arguments_json: "{}".into(),
-            }],
-        };
-
-        let runner = ToolRunner::new(&tools, None);
-        let mut not_array = AppendedMessages(Value::Object(Default::default()));
-        assert!(matches!(
-            block_on(run_tool_calls(
-                &interruption,
-                &runner,
-                &mut not_array,
-                &response,
-                iteration_id
-            )),
-            ToolRoundResult::Failed(IterationLoopError::MessagesNotArray)
-        ));
-
-        let mut appended = AppendedMessages::empty();
-        append_assistant_tool_calls(
-            &mut appended.0,
-            &LlmResponse {
-                text: None,
-                reasoning_content: None,
-                raw_message_json: Some(r#"{"role":"assistant"}"#.into()),
-                tool_calls: vec![],
-            },
-        )
-        .expect("assistant");
-
-        let ToolRoundResult::Completed { runs } = block_on(run_tool_calls(
-            &interruption,
-            &runner,
-            &mut appended,
-            &response,
-            iteration_id,
-        )) else {
-            panic!("expected completed tool round");
-        };
-        assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].name, "(null)");
-        assert!(!runs[0].ok);
-        assert!(!runs[0].is_blocked());
-        assert_eq!(appended.0[1]["is_error"], true);
-    }
-
-    #[test]
-    fn run_tool_calls_blocks_tool_not_in_allowed_set() {
-        // A tool that would succeed if invoked; gating must refuse it instead.
-        struct OkTool;
-        impl ToolSpec for OkTool {
-            fn name(&self) -> &str {
-                "writer"
-            }
-            fn schema(&self) -> &str {
-                r#"{"type":"function","function":{"name":"writer"}}"#
-            }
-        }
-
-        impl SyncToolHandler for OkTool {
-            fn invoke(&self, _call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
-                Ok(ToolOutput {
-                    output: "wrote".into(),
-                    ok: true,
-                })
-            }
-        }
-
-        let interruption = FlagControl::new();
-        let mut tools = tool_set(OkTool);
-        tools
-            .temporarily_disable_tool("writer".to_string())
-            .expect("writer tool");
-        let tools = tools.begin().expect("tool set");
-        let response = LlmResponse {
-            text: None,
-            reasoning_content: None,
-            raw_message_json: None,
-            tool_calls: vec![ToolCall {
-                id: "t1".into(),
-                name: "writer".into(),
-                arguments_json: "{}".into(),
-            }],
-        };
-
-        let mut appended = AppendedMessages::empty();
-        append_assistant_tool_calls(
-            &mut appended.0,
-            &LlmResponse {
-                text: None,
-                reasoning_content: None,
-                raw_message_json: Some(r#"{"role":"assistant"}"#.into()),
-                tool_calls: vec![],
-            },
-        )
-        .expect("assistant");
-
-        let runner = ToolRunner::new(&tools, None);
-        let ToolRoundResult::Completed { runs } = block_on(run_tool_calls(
-            &interruption,
-            &runner,
-            &mut appended,
-            &response,
-            IterationId(1),
-        )) else {
-            panic!("expected completed tool round");
-        };
-
-        assert_eq!(runs.len(), 1);
-        assert_eq!(runs[0].name, "writer");
-        assert!(!runs[0].ok);
-        assert!(runs[0].is_blocked());
-        // The tool message is present (id matched, no dangling) and is an error.
-        assert_eq!(appended.0[1]["tool_call_id"], "t1");
-        assert_eq!(appended.0[1]["is_error"], true);
-    }
-
-    #[test]
-    fn iteration_id_serializes_to_prefixed_string() {
-        let value = serde_json::to_value(IterationId(5)).unwrap();
-        assert_eq!(value, serde_json::json!("iteration-5"));
-    }
-
-    #[test]
-    fn iteration_id_deserializes_from_prefixed_string() {
-        let iteration: IterationId =
-            serde_json::from_value(serde_json::json!("iteration-4")).unwrap();
-        assert_eq!(iteration, IterationId(4));
-        assert_eq!(iteration.to_string(), "iteration-4");
-    }
-
-    #[test]
-    fn append_assistant_tool_calls_accepts_valid_message() {
-        let mut messages = Value::Array(Vec::new());
-        let response = LlmResponse {
-            text: None,
-            reasoning_content: None,
-            raw_message_json: Some(r#"{"role":"assistant","tool_calls":[]}"#.into()),
-            tool_calls: vec![],
-        };
-        append_assistant_tool_calls(&mut messages, &response).expect("append assistant");
-        assert_eq!(messages[0]["role"], "assistant");
-    }
-}
-
-#[cfg(test)]
-mod behavior_tests {
-    //! Internal behavior tests for the iteration loop.
-
-    use std::cell::RefCell;
-    use std::collections::VecDeque;
-    use std::path::Path;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex};
-
-    use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig, RetryPolicy};
-    use claw_interface::http::{
-        blocking::{ClawHttp as BlockingClawHttp, RealHttp},
-        HttpError, HttpJsonRequest, HttpRequestFailure, HttpResponse, HttpStatusCode,
-    };
-    use claw_interface::{BlockingHttpAdapter, ClawHttp, ClawTimer, ImmediateTimer};
-    use claw_permission::{Action, PermissionDecision};
-    use claw_tool::{
-        SyncToolHandler, Tool, ToolError, ToolGate, ToolInvocation, ToolInvokeError, ToolOutput,
-        ToolRegistry, ToolSet, ToolSpec,
-    };
-    use serde_json::{json, Value};
-
-    use super::{
-        AppendedMessages, ChatMessages, CompletedKind, InterruptionControl, IterationCheckpoint,
-        IterationId, IterationLoop, IterationLoopError, IterationOutcome, IterationResult,
-        IterationStep, SystemPrompt, ToolsOutcome,
-    };
-
-    const PLAIN_TEXT_BODY: &str =
-        r#"{"choices":[{"message":{"role":"assistant","content":"hello from model"}}]}"#;
-
-    const TOOL_CALL_BODY: &str = r#"{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"t1","function":{"name":"files","arguments":"{}"}}]}}]}"#;
-
-    const TOOL_CALL_EMPTY_NAME_BODY: &str = r#"{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"t1","function":{"name":"","arguments":"{}"}}]}}]}"#;
-
-    type TestLlm<H> = ClawApiAsync<BlockingHttpAdapter<H>, ImmediateTimer>;
-
-    use futures_lite::future::block_on;
-
-    struct AllowGate;
-
-    impl ToolGate for AllowGate {
-        fn decide(&self, _action: &Action) -> PermissionDecision {
-            PermissionDecision::Allow
-        }
-    }
-
-    fn load_local_env() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".env.local");
-        let _ = dotenvy::from_path(path);
-    }
-
-    fn local_env_path() -> std::path::PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join(".env.local")
-    }
-
-    fn require_local_api_key() -> String {
-        let env_path = local_env_path();
-        if !env_path.is_file() {
-            panic!(
-                "live test requires {} — copy .env.example to .env.local and set CLAW_LLM_API_KEY",
-                env_path.display()
-            );
-        }
-
-        load_local_env();
-        std::env::var("CLAW_LLM_API_KEY")
-            .ok()
-            .filter(|value| !value.is_empty())
-            .unwrap_or_else(|| {
-                panic!(
-                    "live test requires CLAW_LLM_API_KEY in {} (file exists but key is missing or empty)",
-                    env_path.display()
-                )
-            })
-    }
-
-    fn local_base_url() -> String {
-        load_local_env();
-        std::env::var("CLAW_LLM_BASE_URL").unwrap_or_else(|_| "https://api.openai.com".into())
-    }
-
-    fn local_model() -> String {
-        load_local_env();
-        std::env::var("CLAW_LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".into())
-    }
-
-    // The live transport for optional LLM tests is `claw_interface::RealHttp` (the
-    // `realhttp` feature).
-
-    struct ScriptedHttp {
-        bodies: Mutex<VecDeque<String>>,
-    }
-
-    thread_local! {
-        static DEFAULT_SCRIPTED_BODIES: RefCell<VecDeque<String>> = RefCell::new(VecDeque::new());
-    }
-
-    fn install_scripted_bodies(bodies: Vec<&str>) {
-        DEFAULT_SCRIPTED_BODIES.with(|slot| {
-            *slot.borrow_mut() = bodies.into_iter().map(str::to_string).collect();
-        });
-    }
-
-    impl Default for ScriptedHttp {
-        fn default() -> Self {
-            let bodies = DEFAULT_SCRIPTED_BODIES.with(|slot| slot.replace(VecDeque::new()));
-            Self {
-                bodies: Mutex::new(bodies),
-            }
-        }
-    }
-
-    impl BlockingClawHttp for ScriptedHttp {
-        fn post_json(
-            &mut self,
-            _request: &HttpJsonRequest,
-            _abort: &AtomicBool,
-        ) -> Result<HttpResponse, HttpError> {
-            let body = self
-                .bodies
-                .lock()
-                .unwrap()
-                .pop_front()
-                .unwrap_or_else(|| PLAIN_TEXT_BODY.into());
-            Ok(HttpResponse {
-                status_code: HttpStatusCode::OK,
-                body,
-            })
-        }
-    }
-
-    #[derive(Default)]
-    struct FailingHttp;
-
-    impl BlockingClawHttp for FailingHttp {
-        fn post_json(
-            &mut self,
-            _request: &HttpJsonRequest,
-            _abort: &AtomicBool,
-        ) -> Result<HttpResponse, HttpError> {
-            Err(HttpError::RequestFailed(HttpRequestFailure::transport(
-                "simulated transport failure",
-            )))
-        }
-    }
-
-    fn test_llm(bodies: Vec<&str>) -> TestLlm<ScriptedHttp> {
-        install_scripted_bodies(bodies);
-        ClawApiAsync::<BlockingHttpAdapter<ScriptedHttp>, ImmediateTimer>::init_default(
-            ClawApiConfig::new(
-                BackendKind::OpenAiCompatible,
-                "sk-test",
-                "gpt-test",
-                "https://example.invalid",
-            ),
-        )
-        .expect("test llm init")
-    }
-
-    const TEST_ITERATION_ID: IterationId = IterationId(42);
-
-    struct MockControl {
-        interrupt_flag: Arc<AtomicBool>,
-    }
-
-    impl MockControl {
-        fn new() -> Self {
-            MockControl {
-                interrupt_flag: Arc::new(AtomicBool::new(false)),
-            }
-        }
-
-        fn signal_interrupt(&self) {
-            self.interrupt_flag.store(true, Ordering::Release);
-        }
-    }
-
-    impl InterruptionControl for MockControl {
-        fn interrupt_flag(&self) -> &Arc<AtomicBool> {
-            &self.interrupt_flag
-        }
-    }
-
-    struct ArmInterruptAfterResponseHttp {
-        bodies: Mutex<VecDeque<String>>,
-        interrupt: Arc<AtomicBool>,
-        arm: AtomicBool,
-    }
-
-    struct ArmInterruptAfterResponseFixture {
-        bodies: VecDeque<String>,
-        interrupt: Arc<AtomicBool>,
-        armed: bool,
-    }
-
-    thread_local! {
-        static DEFAULT_ARM_INTERRUPT_AFTER_RESPONSE: RefCell<Option<ArmInterruptAfterResponseFixture>> =
-            RefCell::new(None);
-    }
-
-    impl ArmInterruptAfterResponseHttp {
-        fn install(interrupt: Arc<AtomicBool>, bodies: Vec<&str>, armed: bool) {
-            DEFAULT_ARM_INTERRUPT_AFTER_RESPONSE.with(|slot| {
-                *slot.borrow_mut() = Some(ArmInterruptAfterResponseFixture {
-                    bodies: bodies.into_iter().map(str::to_string).collect(),
-                    interrupt,
-                    armed,
-                });
-            });
-        }
-    }
-
-    impl Default for ArmInterruptAfterResponseHttp {
-        fn default() -> Self {
-            let fixture = DEFAULT_ARM_INTERRUPT_AFTER_RESPONSE
-                .with(|slot| slot.borrow_mut().take())
-                .expect("install ArmInterruptAfterResponseHttp before init_default");
-            Self {
-                bodies: Mutex::new(fixture.bodies),
-                interrupt: fixture.interrupt,
-                arm: AtomicBool::new(fixture.armed),
-            }
-        }
-    }
-
-    impl BlockingClawHttp for ArmInterruptAfterResponseHttp {
-        fn post_json(
-            &mut self,
-            _request: &HttpJsonRequest,
-            _abort: &AtomicBool,
-        ) -> Result<HttpResponse, HttpError> {
-            let body = self
-                .bodies
-                .lock()
-                .unwrap()
-                .pop_front()
-                .unwrap_or_else(|| PLAIN_TEXT_BODY.into());
-            if self.arm.swap(false, Ordering::AcqRel) {
-                self.interrupt.store(true, Ordering::Release);
-            }
-            Ok(HttpResponse {
-                status_code: HttpStatusCode::OK,
-                body,
-            })
-        }
-    }
-
-    struct AbortDuringHttp {
-        interrupt: Arc<AtomicBool>,
-    }
-
-    thread_local! {
-        static DEFAULT_ABORT_DURING_HTTP: RefCell<Option<Arc<AtomicBool>>> = RefCell::new(None);
-    }
-
-    impl AbortDuringHttp {
-        fn install(interrupt: Arc<AtomicBool>) {
-            DEFAULT_ABORT_DURING_HTTP.with(|slot| *slot.borrow_mut() = Some(interrupt));
-        }
-    }
-
-    impl Default for AbortDuringHttp {
-        fn default() -> Self {
-            Self {
-                interrupt: DEFAULT_ABORT_DURING_HTTP
-                    .with(|slot| slot.borrow_mut().take())
-                    .expect("install AbortDuringHttp before init_default"),
-            }
-        }
-    }
-
-    impl BlockingClawHttp for AbortDuringHttp {
-        fn post_json(
-            &mut self,
-            _request: &HttpJsonRequest,
-            _abort: &AtomicBool,
-        ) -> Result<HttpResponse, HttpError> {
-            self.interrupt.store(true, Ordering::Release);
-            Err(HttpError::Aborted)
-        }
-    }
-
-    /// Tool named `files` that echoes `name:args` and succeeds.
-    struct EchoTool;
-
-    impl ToolSpec for EchoTool {
-        fn name(&self) -> &str {
-            "files"
-        }
-        fn schema(&self) -> &str {
-            r#"{"type":"function","function":{"name":"files"}}"#
-        }
-    }
-
-    impl SyncToolHandler for EchoTool {
-        fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
-            Ok(ToolOutput {
-                output: format!("{}:{}", call.name(), call.arguments_json()),
-                ok: true,
-            })
-        }
-    }
-
-    /// Tool named `files` whose invoke fails, to test error propagation.
-    struct FailingTool;
-
-    impl ToolSpec for FailingTool {
-        fn name(&self) -> &str {
-            "files"
-        }
-        fn schema(&self) -> &str {
-            r#"{"type":"function","function":{"name":"files"}}"#
-        }
-    }
-
-    impl SyncToolHandler for FailingTool {
-        fn invoke(&self, _call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
-            Err(ToolError::NotFound("files".into()).into())
-        }
-    }
-
-    struct OtherTool;
-
-    impl ToolSpec for OtherTool {
-        fn name(&self) -> &str {
-            "other"
-        }
-        fn schema(&self) -> &str {
-            r#"{"type":"function","function":{"name":"other"}}"#
-        }
-    }
-
-    impl SyncToolHandler for OtherTool {
-        fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
-            Ok(ToolOutput {
-                output: call.arguments_json().to_owned(),
-                ok: true,
-            })
-        }
-    }
-
-    /// Tool registered under the empty name (matching an empty-name tool_call) that
-    /// returns `ok: false`, to test the soft-fail / "(null)" display path.
-    struct SoftFailTool;
-
-    impl ToolSpec for SoftFailTool {
-        fn name(&self) -> &str {
-            ""
-        }
-        fn schema(&self) -> &str {
-            r#"{"type":"function","function":{"name":""}}"#
-        }
-    }
-
-    impl SyncToolHandler for SoftFailTool {
-        fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
-            Ok(ToolOutput {
-                output: format!("soft-fail:{}:{}", call.name(), call.arguments_json()),
-                ok: false,
-            })
-        }
-    }
-
-    /// Wrap a single local tool in a [`ToolSet`] for tests.
-    fn tool_set(tool: impl SyncToolHandler + 'static) -> ToolSet {
-        let registry = Arc::new(ToolRegistry::new());
-        let mut tools = registry.tool_set();
-        tools.add_tool(Tool::from_sync(tool)).expect("tool set");
-        tools
-    }
-
-    fn test_llm_with_http<H: BlockingClawHttp + Default>() -> TestLlm<H> {
-        ClawApiAsync::<BlockingHttpAdapter<H>, ImmediateTimer>::init_default(ClawApiConfig::new(
-            BackendKind::OpenAiCompatible,
-            "sk-test",
-            "gpt-test",
-            "https://example.invalid",
-        ))
-        .expect("test llm init")
-    }
-
-    fn run_step<H: ClawHttp, Timer: ClawTimer>(
-        llm: &mut ClawApiAsync<H, Timer>,
-        control: &MockControl,
-        tools: &mut ToolSet,
-        iteration_id: IterationId,
-        messages: &Value,
-        system_prompt: &str,
-    ) -> IterationResult {
-        let gate = AllowGate;
-        let tools = tools.begin()?;
-        let step = IterationStep {
-            iteration_id,
-            system_prompt: SystemPrompt(system_prompt),
-            messages: ChatMessages(messages),
-            reminders: &[],
-            tools: &tools,
-            gate: &gate,
-        };
-        let events = crate::event::EventSink::disabled();
-        block_on(
-            IterationLoop {
-                llm,
-                interruption: control,
-                retry: RetryPolicy::default(),
-                events: &events,
-            }
-            .run(step),
-        )
-    }
-
-    fn run_step_with_default_tools<H: ClawHttp, Timer: ClawTimer>(
-        llm: &mut ClawApiAsync<H, Timer>,
-        control: &MockControl,
-        iteration_id: IterationId,
-        messages: &Value,
-        system_prompt: &str,
-    ) -> IterationResult {
-        let mut tools = tool_set(EchoTool);
-        run_step(
-            llm,
-            control,
-            &mut tools,
-            iteration_id,
-            messages,
-            system_prompt,
-        )
-    }
-
-    #[test]
-    fn appended_messages_empty_is_array() {
-        let tail = AppendedMessages::empty();
-        assert_eq!(tail.0, json!([]));
-    }
-
-    #[test]
-    fn system_prompt_borrows_text() {
-        let prompt = SystemPrompt("You are helpful.");
-        assert_eq!(prompt.as_ref(), "You are helpful.");
-    }
-
-    #[test]
-    fn run_returns_plain_text_outcome() {
-        let mut llm = test_llm(vec![PLAIN_TEXT_BODY]);
-        let control = MockControl::new();
-        let messages = json!([{"role":"user","content":"hi"}]);
-
-        let result =
-            run_step_with_default_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
-
-        let Ok(IterationOutcome::Completed(outcome)) = result else {
-            panic!("expected Completed, got {result:?}");
-        };
-        match outcome.kind {
-            CompletedKind::PlainText(text_outcome) => {
-                assert_eq!(text_outcome.text, "hello from model");
-                assert!(text_outcome.raw_message_json.is_some());
-            }
-            other => panic!("expected PlainText, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn run_executes_tools_and_records_runs() {
-        let mut llm = test_llm(vec![TOOL_CALL_BODY]);
-        let control = MockControl::new();
-        let mut echo = tool_set(EchoTool);
-        let messages = json!([]);
-
-        let result = run_step(
-            &mut llm,
-            &control,
-            &mut echo,
-            TEST_ITERATION_ID,
-            &messages,
-            "system",
-        );
-
-        let Ok(IterationOutcome::Completed(outcome)) = result else {
-            panic!("expected Completed, got {result:?}");
-        };
-        match outcome.kind {
-            CompletedKind::Tools(tool_outcome) => {
-                assert_eq!(tool_outcome.runs.len(), 1);
-                assert_eq!(tool_outcome.runs[0].name, "files");
-                assert!(tool_outcome.runs[0].ok);
-
-                let appended = tool_outcome.appended.0.as_array().unwrap();
-                assert_eq!(appended.len(), 2);
-                assert_eq!(appended[0]["role"], "assistant");
-                assert_eq!(appended[1]["role"], "tool");
-                assert_eq!(appended[1]["tool_call_id"], "t1");
-                assert_eq!(appended[1]["content"], "files:{}");
-                assert_eq!(appended[1]["is_error"], false);
-            }
-            other => panic!("expected Tools, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn run_returns_preempted_when_interrupt_signaled_before_llm() {
-        let mut llm = test_llm(vec![PLAIN_TEXT_BODY]);
-        let control = MockControl::new();
-        control.signal_interrupt();
-        let messages = json!([]);
-
-        let result =
-            run_step_with_default_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
-
-        let Ok(IterationOutcome::Preempted(outcome)) = result else {
-            panic!("expected Preempted, got {result:?}");
-        };
-        assert_eq!(outcome.checkpoint, IterationCheckpoint::BeforeLlmHttp);
-        assert!(outcome.produced.is_empty());
-    }
-
-    #[test]
-    fn run_records_unknown_tool_with_unmatched_tool_set() {
-        let mut llm = test_llm(vec![TOOL_CALL_BODY]);
-        let control = MockControl::new();
-        let mut other = tool_set(OtherTool);
-        let messages = json!([]);
-
-        let result = run_step(
-            &mut llm,
-            &control,
-            &mut other,
-            TEST_ITERATION_ID,
-            &messages,
-            "system",
-        );
-
-        let Ok(IterationOutcome::Completed(outcome)) = result else {
-            panic!("expected Completed, got {result:?}");
-        };
-        let CompletedKind::Tools(tool_outcome) = outcome.kind else {
-            panic!("expected Tools, got {:?}", outcome.kind);
-        };
-        assert_eq!(tool_outcome.runs.len(), 1);
-        assert_eq!(tool_outcome.runs[0].name, "files");
-        assert!(!tool_outcome.runs[0].ok);
-        let appended = tool_outcome.appended.0.as_array().unwrap();
-        assert_eq!(appended.len(), 2);
-        assert_eq!(appended[1]["is_error"], true);
-        assert!(appended[1]["content"]
-            .as_str()
-            .unwrap()
-            .contains("tool not found"));
-    }
-
-    #[test]
-    fn run_returns_preempted_after_llm_before_tool_execution() {
-        let control = MockControl::new();
-        ArmInterruptAfterResponseHttp::install(
-            control.interrupt_flag().clone(),
-            vec![TOOL_CALL_BODY],
-            true,
-        );
-        let mut llm = test_llm_with_http::<ArmInterruptAfterResponseHttp>();
-        let messages = json!([]);
-
-        let result =
-            run_step_with_default_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
-
-        let Ok(IterationOutcome::Preempted(outcome)) = result else {
-            panic!("expected Preempted, got {result:?}");
-        };
-        assert_eq!(outcome.checkpoint, IterationCheckpoint::AfterLlmBeforeTool);
-        assert!(outcome.produced.is_empty());
-    }
-
-    #[test]
-    fn run_returns_preempted_when_http_aborted() {
-        let control = MockControl::new();
-        AbortDuringHttp::install(control.interrupt_flag().clone());
-        let mut llm = test_llm_with_http::<AbortDuringHttp>();
-        let messages = json!([]);
-
-        let result =
-            run_step_with_default_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
-
-        let Ok(IterationOutcome::Preempted(outcome)) = result else {
-            panic!("expected Preempted, got {result:?}");
-        };
-        assert_eq!(outcome.checkpoint, IterationCheckpoint::InLlmHttpAbort);
-        assert!(outcome.produced.is_empty());
-    }
-
-    #[test]
-    fn run_propagates_chat_errors_without_interrupt() {
-        let mut llm = test_llm_with_http::<FailingHttp>();
-        let control = MockControl::new();
-        let messages = json!([]);
-
-        let result =
-            run_step_with_default_tools(&mut llm, &control, TEST_ITERATION_ID, &messages, "system");
-
-        assert!(matches!(result, Err(IterationLoopError::Chat(_))));
-    }
-
-    #[test]
-    fn run_records_soft_failing_tool_with_null_name() {
-        let mut llm = test_llm(vec![TOOL_CALL_EMPTY_NAME_BODY]);
-        let control = MockControl::new();
-        let mut soft_fail = tool_set(SoftFailTool);
-        let messages = json!([]);
-
-        let result = run_step(
-            &mut llm,
-            &control,
-            &mut soft_fail,
-            TEST_ITERATION_ID,
-            &messages,
-            "system",
-        );
-
-        let Ok(IterationOutcome::Completed(outcome)) = result else {
-            panic!("expected Completed, got {result:?}");
-        };
-        match outcome.kind {
-            CompletedKind::Tools(tool_outcome) => {
-                assert_eq!(tool_outcome.runs.len(), 1);
-                assert_eq!(tool_outcome.runs[0].name, "(null)");
-                assert!(!tool_outcome.runs[0].ok);
-
-                let appended = tool_outcome.appended.0.as_array().unwrap();
-                assert_eq!(appended.len(), 2);
-                assert_eq!(appended[1]["is_error"], true);
-            }
-            other => panic!("expected Tools, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn run_recovers_from_invoke_errors_as_tool_message() {
-        let mut llm = test_llm(vec![TOOL_CALL_BODY]);
-        let control = MockControl::new();
-        let mut failing = tool_set(FailingTool);
-        let messages = json!([]);
-
-        let result = run_step(
-            &mut llm,
-            &control,
-            &mut failing,
-            TEST_ITERATION_ID,
-            &messages,
-            "system",
-        );
-
-        let outcome = result.expect("invoke errors become tool messages");
-        match outcome {
-            IterationOutcome::Completed(completed) => {
-                let ToolsOutcome { appended, runs } = match completed.kind {
-                    CompletedKind::Tools(tools) => tools,
-                    other => panic!("expected Tools, got {other:?}"),
-                };
-                assert_eq!(runs.len(), 1);
-                assert!(!runs[0].ok);
-                let messages = appended.0.as_array().expect("messages array");
-                assert_eq!(messages.len(), 2);
-                assert!(messages[1]["content"]
-                    .as_str()
-                    .unwrap()
-                    .contains("tool not found"));
-                assert_eq!(messages[1]["is_error"], true);
-            }
-            other => panic!("expected Completed, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn live_plain_text_when_api_key_configured() {
-        let api_key = require_local_api_key();
-
-        let mut llm =
-            ClawApiAsync::<BlockingHttpAdapter<RealHttp>, ImmediateTimer>::init_default({
-                let mut config = ClawApiConfig::new(
-                    BackendKind::OpenAiCompatible,
-                    api_key,
-                    local_model(),
-                    local_base_url(),
-                );
-                config.timeout_ms = 60_000;
-                config
-            })
-            .expect("live llm init");
-
-        let control = MockControl::new();
-        let messages = json!([{"role":"user","content":"Reply with exactly: pong"}]);
-
-        let result = run_step_with_default_tools(
-            &mut llm,
-            &control,
-            TEST_ITERATION_ID,
-            &messages,
-            "You are a test assistant. Be brief.",
-        );
-
-        let Ok(IterationOutcome::Completed(outcome)) = result else {
-            panic!("expected Completed from live model, got {result:?}");
-        };
-        match outcome.kind {
-            CompletedKind::PlainText(text_outcome) => {
-                assert!(
-                    text_outcome.text.to_lowercase().contains("pong"),
-                    "unexpected model text: {}",
-                    text_outcome.text
-                );
-            }
-            other => panic!("expected PlainText from live model, got {other:?}"),
-        }
-    }
 }

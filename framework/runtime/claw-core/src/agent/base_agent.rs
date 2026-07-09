@@ -49,13 +49,19 @@
 //! [`AppendMessage`](AgentCommand::AppendMessage) starts a fresh task over the
 //! same memory and identity once the driver has observed the agent is idle.
 
+use std::borrow::Cow;
 use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use claw_api::{ChatError, ClawApiAsync, ClawApiConfig, InitError, RetryPolicy};
+use claw_api::{ClawApiAsync, ClawApiConfig, InitError, RetryPolicy};
+use claw_checkpoint::{
+    ChangePatternHint, DurablePart, DurablePartError, DurableState, DurableStateCodec,
+    PartGeneration, PartStateBlob, PartStateSlice, StorageHint, StorageSizeHint,
+};
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::TranscriptStore;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use strum::IntoStaticStr;
 
@@ -105,8 +111,8 @@ crate::define_id_allocator!(
 /// separate [`AgentAbortHandle`] and carries no message payload. New information
 /// arrives as [`AppendMessage`](Self::AppendMessage) only at an idle boundary;
 /// hard task termination is [`Cancel`](Self::Cancel).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AgentCommand {
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub(crate) enum AgentCommand {
     /// Start a fresh task with a user message. This is valid only when the agent
     /// is idle; the orchestrator is responsible for deferring append delivery
     /// until that boundary.
@@ -136,7 +142,7 @@ pub enum AgentCommand {
 /// before the first task and after one finishes (terminal outcomes leave the
 /// agent idle and reusable).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AgentState {
+pub(crate) enum AgentState {
     /// No active iteration; waiting for an [`AppendMessage`](AgentCommand::AppendMessage).
     Idle,
     /// A task is actively iterating.
@@ -149,7 +155,7 @@ pub enum AgentState {
 /// Internal lifecycle state. Unlike the public [`AgentState`], this carries the
 /// pending approval id in the state variant so the agent cannot be
 /// `AwaitingApproval` without knowing which request it is waiting for.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 enum AgentLifecycle {
     Idle,
     Running,
@@ -177,7 +183,7 @@ impl AgentLifecycle {
 /// in once already-queued commands are applied, so batching commands between
 /// ticks is sound.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-pub enum AgentCommandError {
+pub(crate) enum AgentCommandError {
     /// [`AppendMessage`](AgentCommand::AppendMessage) is only accepted at an idle
     /// boundary. Active-task input must be deferred by the driver.
     #[error("cannot append: the agent is {state:?}, not idle")]
@@ -208,8 +214,8 @@ pub enum AgentCommandError {
 
 /// Why a task was [`Cancel`](AgentCommand::Cancel)led, carried on the resulting
 /// [`TickOutcome::Cancelled`].
-#[derive(Clone, Debug, IntoStaticStr, PartialEq, Eq)]
-pub enum CancelReason {
+#[derive(Clone, Debug, Deserialize, IntoStaticStr, PartialEq, Eq, Serialize)]
+pub(crate) enum CancelReason {
     /// A human asked to stop.
     #[strum(serialize = "user_requested")]
     UserRequested,
@@ -219,8 +225,8 @@ pub enum CancelReason {
 }
 
 /// A human's answer to an approval request.
-#[derive(Clone, Debug, IntoStaticStr, PartialEq, Eq)]
-pub enum ApprovalDecision {
+#[derive(Clone, Debug, Deserialize, IntoStaticStr, PartialEq, Eq, Serialize)]
+pub(crate) enum ApprovalDecision {
     /// The human approved; the agent continues.
     #[strum(serialize = "approved")]
     Approved,
@@ -236,7 +242,7 @@ pub enum ApprovalDecision {
 /// one of these (tool execution is internal — it shows up only as `Working`).
 #[derive(Clone, Debug)]
 #[must_use]
-pub enum TickOutcome {
+pub(crate) enum TickOutcome {
     /// Progress was made; call `tick` again promptly.
     Working,
     /// Nothing to do right now (waiting for input or awaiting approval).
@@ -278,23 +284,10 @@ pub enum TickOutcome {
 /// [`Context::request`] is infallible, so the tick never fails on context
 /// assembly.
 #[derive(Clone, Debug, thiserror::Error)]
-pub enum AgentRunError {
-    /// Request history was not a JSON array.
-    #[error("messages must be a JSON array")]
-    MessagesNotArray,
-    /// The LLM returned tool calls without the raw assistant message needed for
-    /// transcript persistence.
-    #[error("LLM tool-call response missing raw assistant message JSON")]
-    MissingAssistantMessage,
-    /// The raw assistant message returned by the LLM was not valid JSON.
-    #[error("LLM raw assistant message JSON is not valid JSON")]
-    MalformedAssistantMessage,
-    /// The LLM chat request failed.
+pub(crate) enum AgentRunError {
+    /// One LLM/tool iteration failed.
     #[error(transparent)]
-    Chat(#[from] ChatError),
-    /// Rebuilding the tool projection for this iteration failed.
-    #[error(transparent)]
-    Tools(#[from] ToolSetError),
+    Iteration(#[from] IterationLoopError),
     /// The model kept calling a tool that soft-hide gating does not permit this
     /// phase, past the allowed retry budget (the agent's
     /// [`BlockPolicy`](claw_tool::BlockPolicy)).
@@ -305,21 +298,9 @@ pub enum AgentRunError {
     },
 }
 
-impl From<IterationLoopError> for AgentRunError {
-    fn from(error: IterationLoopError) -> Self {
-        match error {
-            IterationLoopError::MessagesNotArray => Self::MessagesNotArray,
-            IterationLoopError::MissingAssistantMessage => Self::MissingAssistantMessage,
-            IterationLoopError::MalformedAssistantMessage => Self::MalformedAssistantMessage,
-            IterationLoopError::Chat(error) => Self::Chat(error),
-            IterationLoopError::Tools(error) => Self::Tools(error),
-        }
-    }
-}
-
 /// Failure assembling a [`BaseAgent`] in [`BaseAgent::build`].
 #[derive(Clone, Debug, thiserror::Error)]
-pub enum BaseAgentBuildError {
+pub(crate) enum BaseAgentBuildError {
     /// The per-agent LLM client could not be initialized from the supplied
     /// [`ClawApiConfig`](BaseAgentConfig::llm_config).
     #[error(transparent)]
@@ -336,6 +317,7 @@ pub enum BaseAgentBuildError {
 /// One item on the agent's inbox: either an external [`AgentCommand`] or an
 /// internal [`ControlSignal`] raised by a built-in tool. Both flow through the
 /// one reducer, but only `Command` is constructible by outside callers.
+#[derive(Clone, Deserialize, Serialize)]
 enum Inbound {
     Command(AgentCommand),
     TaskInput(String),
@@ -351,7 +333,7 @@ enum Inbound {
 /// stop a `tick` blocked on the LLM HTTP. It is plumbing for stopping a now-stale
 /// call — the *content* of the new input still arrives as an [`AgentCommand`].
 #[derive(Clone)]
-pub struct AgentAbortHandle {
+pub(crate) struct AgentAbortHandle {
     flag: Arc<AtomicBool>,
 }
 
@@ -386,30 +368,12 @@ impl InterruptionControl for AgentInterruption {
     }
 }
 
-struct PermissionGate {
-    policy: Arc<dyn PermissionPolicy>,
-    grants: GrantStore,
+struct PermissionGate<'a> {
+    policy: &'a dyn PermissionPolicy,
+    grants: &'a GrantStore,
 }
 
-impl PermissionGate {
-    fn new(policy: Arc<dyn PermissionPolicy>) -> Self {
-        Self {
-            policy,
-            grants: GrantStore::new(),
-        }
-    }
-
-    fn record_decision(&mut self, signatures: &[String], grant: &Grant) {
-        for signature in signatures {
-            match grant {
-                Grant::Granted => self.grants.grant(signature.clone()),
-                Grant::Denied(reason) => self.grants.deny(signature.clone(), reason.clone()),
-            }
-        }
-    }
-}
-
-impl ToolGate for PermissionGate {
+impl ToolGate for PermissionGate<'_> {
     fn decide(&self, action: &Action) -> PermissionDecision {
         match self.grants.lookup(&action.signature()) {
             Some(Grant::Granted) => PermissionDecision::Allow,
@@ -421,6 +385,7 @@ impl ToolGate for PermissionGate {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct BlockPolicy {
     retries: u32,
     blocked_rounds: u32,
@@ -449,9 +414,56 @@ impl BlockPolicy {
     }
 }
 
+impl Default for BlockPolicy {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
 enum ToolBlockVerdict {
     Continue,
     Exhausted { name: String },
+}
+
+#[derive(Deserialize, Serialize)]
+struct BaseAgentState {
+    block_policy: BlockPolicy,
+    permission_grants: GrantStore,
+    pending_grant_signatures: Vec<String>,
+    iterations: IterationIdAllocator,
+    approvals: ApprovalIdAllocator,
+    lifecycle: AgentLifecycle,
+    projected_lifecycle: AgentLifecycle,
+    inbox: VecDeque<Inbound>,
+}
+
+impl Default for BaseAgentState {
+    fn default() -> Self {
+        Self {
+            block_policy: BlockPolicy::default(),
+            permission_grants: GrantStore::new(),
+            pending_grant_signatures: Vec::new(),
+            iterations: IterationIdAllocator::new(),
+            approvals: ApprovalIdAllocator::new(),
+            lifecycle: AgentLifecycle::Idle,
+            projected_lifecycle: AgentLifecycle::Idle,
+            inbox: VecDeque::new(),
+        }
+    }
+}
+
+impl DurableStateCodec for BaseAgentState {
+    fn encode_state(&self) -> Result<PartStateBlob<'_>, DurablePartError> {
+        let bytes = serde_json::to_vec(self).map_err(DurablePartError::Encode)?;
+        Ok(PartStateBlob {
+            schema_version: 1,
+            bytes: Cow::Owned(bytes),
+        })
+    }
+
+    fn decode_state(state: PartStateSlice<'_>) -> Result<Self, DurablePartError> {
+        serde_json::from_slice(state.bytes).map_err(DurablePartError::Decode)
+    }
 }
 
 // ===========================================================================
@@ -491,7 +503,7 @@ enum ToolBlockVerdict {
 ///     }
 /// }
 /// ```
-pub struct BaseAgent<H: ClawHttp, Timer: ClawTimer> {
+pub(crate) struct BaseAgent<H: ClawHttp, Timer: ClawTimer> {
     llm: ClawApiAsync<H, Timer>,
     /// Retry policy applied to every per-iteration LLM call.
     retry_policy: RetryPolicy,
@@ -508,16 +520,11 @@ pub struct BaseAgent<H: ClawHttp, Timer: ClawTimer> {
     /// handle and only calls `&self` methods; the underlying store's own
     /// `Arc<StoreInner>` already provides the sharing the read adapters need.
     transcript: Box<dyn Transcript>,
-    /// The agent's tools, including soft-hide phase gating (which tools may run
-    /// now via [`ToolSet::is_allowed`]). The full schema is always sent
-    /// regardless, so the cached prompt prefix stays stable. The agent only reads
-    /// the set's two prompt surfaces (placed via the `context` cache).
+    /// The agent's tools, including soft-hide phase gating. The registry/tools
+    /// are runtime handles; only the tool-state projection is exported.
     tools: ToolSet,
-    /// The soft-hide "retry then fail" streak counter. Kept beside the tool set
-    /// (not inside it) because it is conversation state, while [`ToolSet`] owns the
-    /// immutable catalog and the once-rendered, cached wire surfaces. Fed each tool
-    /// round by [`apply_tool_block_policy`](Self::apply_tool_block_policy).
-    block_policy: BlockPolicy,
+    /// Runtime permission policy; durable human decisions live in `state`.
+    permission_policy: Arc<dyn PermissionPolicy>,
     /// The agent's context assembly, owned wholesale by `claw-context`: inherited
     /// blocks, the agent instruction, adapter-projected blocks/reminders, the
     /// cached system prefix, and the ephemeral reminder tail. The agent does not
@@ -525,54 +532,16 @@ pub struct BaseAgent<H: ClawHttp, Timer: ClawTimer> {
     /// [`Context::request`] renders lazily. Change detection, wire ordering, and
     /// reminder rendering all live in the context.
     context: Context,
-    /// The permission gate consulted per tool call. A `claw-tool` type owning the
-    /// policy and grant store of human decisions; mutated when an
-    /// [`ApprovalResult`](AgentCommand::ApprovalResult) resolves a pending ask.
-    gate: PermissionGate,
-    /// Action signatures awaiting the current human decision — the calls the
-    /// permission policy asked about this tick. Recorded into the gate's grant
-    /// store when the [`ApprovalResult`](AgentCommand::ApprovalResult) arrives,
-    /// then cleared.
-    pending_grant_signatures: Vec<String>,
-    iterations: IterationIdAllocator,
-    /// Hands out this agent's [`ApprovalId`]s.
-    approvals: ApprovalIdAllocator,
-    /// The committed lifecycle state, advanced as the inbox is drained in `tick`.
-    lifecycle: AgentLifecycle,
-    /// The lifecycle state the agent *will* be in once every command already on
-    /// the inbox is applied. Commands are validated against this (not `lifecycle`)
-    /// so a batch enqueued between ticks is checked in order; it is reset to
-    /// `lifecycle` at the end of each `tick`. No `tick` can run between two
-    /// `send_command` calls (both need `&mut self`), so this is the only thing
-    /// that moves the lifecycle between ticks and the projection stays exact.
-    projected_lifecycle: AgentLifecycle,
+    /// Durable agent state. Runtime dependencies stay on [`BaseAgent`].
+    state: DurableState<BaseAgentState>,
     /// The actionable outcome produced during the current tick, if any. Reset at
     /// the start of each tick; a single tick produces at most one.
     outcome: Option<TickOutcome>,
     /// Sink the built-in tools push [`ControlSignal`]s onto; drained each tick.
     control: ControlSink,
-    /// Registered context adapters. Each pulls the transcript and contributes
-    /// context (blocks and/or messages) before every iteration, and may have added
-    /// its tools to [`tools`](Self::tools) at registration. The conversation
-    /// transcript is **not** here (it is [`transcript`](Self::transcript), the
-    /// thing these adapters read *from*); these are pure readers (e.g. long-term
-    /// memory) added via [`register_context_adapter`](Self::register_context_adapter).
-    /// Owned (not shared) so they can be refreshed under `&mut`; driven only from
-    /// this tick thread.
+    /// Registered context adapters. They are request-time projectors; any
+    /// authoritative external store they read from is durable on its own.
     adapters: Vec<Box<dyn ContextAdapter>>,
-    inbox: VecDeque<Inbound>,
-}
-
-fn install_context_adapter(
-    adapters: &mut Vec<Box<dyn ContextAdapter>>,
-    tools: &mut ToolSet,
-    adapter: Box<dyn ContextAdapter>,
-) -> Result<(), BaseAgentBuildError> {
-    for tool in adapter.tools() {
-        tools.add_tool(tool)?;
-    }
-    adapters.push(adapter);
-    Ok(())
 }
 
 impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
@@ -620,7 +589,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
             tools.add_tool(tool)?;
         }
 
-        let gate = PermissionGate::new(config.permission_policy);
+        let permission_policy = config.permission_policy;
 
         // Declare the construction-time blocks the context owns up front: the
         // inherited (Global/Session) blocks and the agent's own instruction block.
@@ -637,8 +606,10 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         let skill_adapter: Box<dyn ContextAdapter> =
             Box::new(SkillContextAdapter::new(config.skills));
         let transcript: Box<dyn Transcript> = Box::new(config.store);
-        let mut adapters = Vec::new();
-        install_context_adapter(&mut adapters, &mut tools, skill_adapter)?;
+        for tool in skill_adapter.tools() {
+            tools.add_tool(tool)?;
+        }
+        let adapters = vec![skill_adapter];
 
         Ok(BaseAgent {
             llm,
@@ -648,18 +619,21 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
             },
             transcript,
             tools,
-            block_policy: BlockPolicy::new(config.block_retries.get()),
+            permission_policy,
             context,
-            gate,
-            pending_grant_signatures: Vec::new(),
-            iterations: IterationIdAllocator::new(),
-            approvals: ApprovalIdAllocator::new(),
-            lifecycle: AgentLifecycle::Idle,
-            projected_lifecycle: AgentLifecycle::Idle,
+            state: DurableState::new(BaseAgentState {
+                block_policy: BlockPolicy::new(config.block_retries.get()),
+                permission_grants: GrantStore::new(),
+                pending_grant_signatures: Vec::new(),
+                iterations: IterationIdAllocator::new(),
+                approvals: ApprovalIdAllocator::new(),
+                lifecycle: AgentLifecycle::Idle,
+                projected_lifecycle: AgentLifecycle::Idle,
+                inbox: VecDeque::new(),
+            }),
             outcome: None,
             control,
             adapters,
-            inbox: VecDeque::new(),
         })
     }
 
@@ -698,9 +672,10 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// # Ok::<(), AgentCommandError>(())
     /// ```
     pub fn send_command(&mut self, command: AgentCommand) -> Result<(), AgentCommandError> {
-        let next = classify(self.projected_lifecycle, &command)?;
-        self.projected_lifecycle = next;
-        self.inbox.push_back(Inbound::Command(command));
+        let next = classify(self.state.get().projected_lifecycle, &command)?;
+        let state = self.state.get_mut();
+        state.projected_lifecycle = next;
+        state.inbox.push_back(Inbound::Command(command));
         Ok(())
     }
 
@@ -708,10 +683,11 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// result). This is deliberately not an [`AgentCommand`]: external user
     /// append is idle-only, while graph events are part of the active task.
     pub(crate) fn push_task_input(&mut self, text: impl Into<String>) {
-        if self.projected_lifecycle == AgentLifecycle::Idle {
-            self.projected_lifecycle = AgentLifecycle::Running;
+        let state = self.state.get_mut();
+        if state.projected_lifecycle == AgentLifecycle::Idle {
+            state.projected_lifecycle = AgentLifecycle::Running;
         }
-        self.inbox.push_back(Inbound::TaskInput(text.into()));
+        state.inbox.push_back(Inbound::TaskInput(text.into()));
     }
 
     /// A handle to abort this agent's in-flight iteration from another task. Grab
@@ -749,7 +725,43 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         &mut self,
         adapter: Box<dyn ContextAdapter>,
     ) -> Result<(), BaseAgentBuildError> {
-        install_context_adapter(&mut self.adapters, &mut self.tools, adapter)
+        for tool in adapter.tools() {
+            self.tools.add_tool(tool)?;
+        }
+        self.adapters.push(adapter);
+        Ok(())
+    }
+
+    pub(crate) fn restore_state(
+        &mut self,
+        state: PartStateSlice<'_>,
+    ) -> Result<(), DurablePartError> {
+        self.state = DurableState::restore_state(state)?;
+        self.outcome = None;
+        self.interruption.flag.store(false, Ordering::Release);
+        Ok(())
+    }
+
+    pub(crate) fn durable_parts(&self) -> Vec<&dyn DurablePart> {
+        vec![self, &self.tools]
+    }
+
+    pub(crate) fn restore_durable_part(
+        &mut self,
+        name: &str,
+        state: PartStateSlice<'_>,
+    ) -> Result<bool, DurablePartError> {
+        match name {
+            "base-agent" => {
+                self.restore_state(state)?;
+                Ok(true)
+            }
+            "tool-set" => {
+                self.tools.restore_state(state)?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
     }
 
     /// Let adapters refresh any async state before the request context is
@@ -819,8 +831,8 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         self.drain_inbox();
 
         // 2. One iteration, if running.
-        if self.lifecycle == AgentLifecycle::Running {
-            let iteration_id = self.iterations.next();
+        if self.state.get().lifecycle == AgentLifecycle::Running {
+            let iteration_id = self.state.get_mut().iterations.next();
 
             // Context assembly is owned by `claw-context`: `run_iteration` calls
             // `Context::request`, which re-renders the prefix only if a block
@@ -835,12 +847,18 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
 
         // The inbox is now drained; realign the projection with the committed
         // state so the next batch of commands is validated against the truth.
-        self.projected_lifecycle = self.lifecycle;
+        let lifecycle = self.state.get().lifecycle;
+        if self.state.get().projected_lifecycle != lifecycle {
+            self.state.get_mut().projected_lifecycle = lifecycle;
+        }
 
-        self.outcome.take().unwrap_or_else(|| match self.lifecycle {
-            AgentLifecycle::Running => TickOutcome::Working,
-            _ => TickOutcome::Idle,
-        })
+        match self.outcome.take() {
+            Some(outcome) => outcome,
+            None => match self.state.get().lifecycle {
+                AgentLifecycle::Running => TickOutcome::Working,
+                _ => TickOutcome::Idle,
+            },
+        }
     }
 
     /// Run exactly one [`IterationLoop`] round over current context.
@@ -867,16 +885,20 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         let history =
             Self::render_adapter_context(&mut self.adapters, history_view, &mut self.context);
         // Take the disjoint field borrows first, then borrow `context` mutably for
-        // the (lazily rebuilt) request. `request` takes `&mut self.context`, so the
-        // permission gate must be derived from `self.gate` directly here rather
-        // than through a whole-`&self` helper.
+        // the (lazily rebuilt) request. Permission policy is a runtime dependency;
+        // only the grants it has recorded are durable state.
         let iteration_loop = IterationLoop {
             llm: &mut self.llm,
             interruption: &self.interruption,
             retry: self.retry_policy,
             events,
         };
-        let gate = &self.gate as &dyn ToolGate;
+        let state = self.state.get();
+        let permission_gate = PermissionGate {
+            policy: self.permission_policy.as_ref(),
+            grants: &state.permission_grants,
+        };
+        let gate = &permission_gate as &dyn ToolGate;
         let context = self.context.request(&history);
         let step = IterationStep {
             iteration_id,
@@ -892,7 +914,15 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     // -- Reducer: the single state-mutation funnel for inbound --------------
 
     fn drain_inbox(&mut self) {
-        while let Some(inbound) = self.inbox.pop_front() {
+        loop {
+            let inbound = if self.state.get().inbox.is_empty() {
+                None
+            } else {
+                self.state.get_mut().inbox.pop_front()
+            };
+            let Some(inbound) = inbound else {
+                break;
+            };
             self.apply_inbound(inbound);
         }
     }
@@ -906,8 +936,11 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
                 .unwrap_or_else(|poison| poison.into_inner());
             sink.drain(..).collect()
         };
-        for signal in signals {
-            self.inbox.push_back(Inbound::Control(signal));
+        if !signals.is_empty() {
+            let state = self.state.get_mut();
+            for signal in signals {
+                state.inbox.push_back(Inbound::Control(signal));
+            }
         }
     }
 
@@ -928,28 +961,35 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
                 // are normal flow): discard the open turn so partial work leaves
                 // no transcript trace.
                 self.transcript.discard_open_turn();
-                self.pending_grant_signatures.clear();
+                self.state.get_mut().pending_grant_signatures.clear();
                 // A cancel abandons any in-flight round. If an out-of-band abort
                 // set the interruption flag to stop that round but no checkpoint
                 // consumed it (e.g. the tick finished before the abort landed),
                 // clear it here so it cannot preempt the next task's first
                 // iteration.
                 self.interruption.flag.store(false, Ordering::Release);
-                self.lifecycle = AgentLifecycle::Idle;
+                self.state.get_mut().lifecycle = AgentLifecycle::Idle;
                 self.outcome = Some(TickOutcome::Cancelled { reason });
             }
             Inbound::Command(AgentCommand::ApprovalResult { id, decision }) => {
                 // The verdict re-enters the transcript as a synthetic user turn.
-                let marker = approval_marker(id, &decision);
+                let marker = match &decision {
+                    ApprovalDecision::Approved => {
+                        format!("[approval {id}] approved by the human.")
+                    }
+                    ApprovalDecision::Rejected(reason) => {
+                        format!("[approval {id}] rejected by the human: {reason}")
+                    }
+                };
                 self.transcript.append_user(&marker, false);
                 // Record the decision against the asked-about actions so the
                 // retried tool calls resolve without asking again.
                 self.record_grants(&decision);
-                self.lifecycle = AgentLifecycle::Running;
+                self.state.get_mut().lifecycle = AgentLifecycle::Running;
             }
             Inbound::Control(ControlSignal::EndConversation { final_message }) => {
                 self.transcript.commit_ended(&final_message);
-                self.lifecycle = AgentLifecycle::Idle;
+                self.state.get_mut().lifecycle = AgentLifecycle::Idle;
                 self.outcome = Some(TickOutcome::Ended { final_message });
             }
         }
@@ -969,7 +1009,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
                     };
                     self.transcript.commit_assistant(commit);
                     // Non-terminal: hand back to the caller, go idle for next input.
-                    self.lifecycle = AgentLifecycle::Idle;
+                    self.state.get_mut().lifecycle = AgentLifecycle::Idle;
                     self.outcome = Some(TickOutcome::Yielded { text: answer.text });
                 }
                 CompletedKind::Tools(tools) => {
@@ -1011,7 +1051,9 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         if !blocked.is_empty() {
             tracing::warn!(name: "tool_gate_blocked", count = blocked.len() as u64);
         }
-        if let ToolBlockVerdict::Exhausted { name } = self.block_policy.record_round(&blocked) {
+        if let ToolBlockVerdict::Exhausted { name } =
+            self.state.get_mut().block_policy.record_round(&blocked)
+        {
             self.fail_with(AgentRunError::ToolNotPermitted { name });
         }
     }
@@ -1037,9 +1079,13 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         let Some((summary, _)) = pending.first().cloned() else {
             return;
         };
-        self.pending_grant_signatures = pending.into_iter().map(|(_, sig)| sig).collect();
-        let id = self.allocate_approval_id();
-        self.lifecycle = AgentLifecycle::AwaitingApproval(id);
+        let id = {
+            let state = self.state.get_mut();
+            state.pending_grant_signatures = pending.into_iter().map(|(_, sig)| sig).collect();
+            let id = state.approvals.next();
+            state.lifecycle = AgentLifecycle::AwaitingApproval(id);
+            id
+        };
         self.outcome = Some(TickOutcome::AwaitingApproval { id, summary });
     }
 
@@ -1050,17 +1096,24 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// [`Grant`] the gate stores (`claw-tool`/`claw-permission` know nothing of
     /// the agent's command vocabulary).
     fn record_grants(&mut self, decision: &ApprovalDecision) {
-        let signatures = std::mem::take(&mut self.pending_grant_signatures);
+        let state = self.state.get_mut();
+        let signatures = std::mem::take(&mut state.pending_grant_signatures);
         let grant = match decision {
             ApprovalDecision::Approved => Grant::Granted,
             ApprovalDecision::Rejected(reason) => Grant::Denied(reason.clone()),
         };
-        self.gate.record_decision(&signatures, &grant);
+        let grants = &mut state.permission_grants;
+        for signature in signatures {
+            match &grant {
+                Grant::Granted => grants.grant(signature),
+                Grant::Denied(reason) => grants.deny(signature, reason.clone()),
+            }
+        }
     }
 
     /// End the task with a failure outcome, leaving the agent idle and reusable.
     fn fail_with(&mut self, error: AgentRunError) {
-        self.lifecycle = AgentLifecycle::Idle;
+        self.state.get_mut().lifecycle = AgentLifecycle::Idle;
         self.outcome = Some(TickOutcome::Failed(error));
     }
 
@@ -1095,38 +1148,39 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         self.transcript.commit_patch(&outcome.produced.0);
     }
 
-    fn allocate_approval_id(&mut self) -> ApprovalId {
-        self.approvals.next()
-    }
-
     /// Append one task input turn, starting a new task only when the agent was
     /// idle. Used by both idle-only external append and internal graph events.
     fn append_task_input(&mut self, text: &str) {
-        let starts_task = self.lifecycle == AgentLifecycle::Idle;
+        let starts_task = self.state.get().lifecycle == AgentLifecycle::Idle;
         if starts_task {
-            self.start_task();
+            let state = self.state.get_mut();
+            state.iterations = IterationIdAllocator::new();
+            state.lifecycle = AgentLifecycle::Running;
+            self.outcome = None;
         }
         // Write the user turn directly; `starts_task` lets the transcript flush
         // any turn a prior task left open before opening a new one.
         self.transcript.append_user(text, starts_task);
     }
-
-    /// Enter a fresh task from idle, resetting per-task counters and clearing any
-    /// same-tick terminal outcome from a superseded task.
-    fn start_task(&mut self) {
-        self.iterations = IterationIdAllocator::new();
-        self.lifecycle = AgentLifecycle::Running;
-        self.outcome = None;
-    }
 }
 
-/// The synthetic user-turn text recording a human approval decision, so the
-/// retried iteration sees the verdict. Written via [`Transcript::append_user`].
-fn approval_marker(id: ApprovalId, decision: &ApprovalDecision) -> String {
-    match decision {
-        ApprovalDecision::Approved => format!("[approval {id}] approved by the human."),
-        ApprovalDecision::Rejected(reason) => {
-            format!("[approval {id}] rejected by the human: {reason}")
+impl<H: ClawHttp, Timer: ClawTimer> DurablePart for BaseAgent<H, Timer> {
+    fn name(&self) -> &'static str {
+        "base-agent"
+    }
+
+    fn generation(&self) -> PartGeneration {
+        self.state.generation()
+    }
+
+    fn export_state(&self) -> Result<PartStateBlob<'_>, DurablePartError> {
+        self.state.export_state()
+    }
+
+    fn storage_hint(&self) -> StorageHint {
+        StorageHint {
+            size: StorageSizeHint::Large,
+            change: ChangePatternHint::Arbitrary,
         }
     }
 }
@@ -1181,7 +1235,7 @@ fn has_dangling_tool_calls(patch: &Value) -> bool {
 /// };
 /// let agent = BaseAgent::build(config)?;
 /// ```
-pub struct BaseAgentConfig<F: ClawFs + 'static> {
+pub(crate) struct BaseAgentConfig<F: ClawFs + 'static> {
     /// Config for the per-agent LLM client. [`BaseAgent::build`] builds the client
     /// internally via [`ClawApiAsync::init_default`], so the caller supplies
     /// configuration, not a pre-constructed client: building the client outside
@@ -1262,53 +1316,5 @@ fn classify(
                 state: state.public(),
             })
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn append_starts_only_from_idle() {
-        let command = AgentCommand::AppendMessage("new task".to_string());
-        let approval = ApprovalId(7);
-
-        assert_eq!(
-            classify(AgentLifecycle::Idle, &command),
-            Ok(AgentLifecycle::Running)
-        );
-        assert_eq!(
-            classify(AgentLifecycle::Running, &command),
-            Err(AgentCommandError::CannotAppend {
-                state: AgentState::Running,
-            })
-        );
-        assert_eq!(
-            classify(AgentLifecycle::AwaitingApproval(approval), &command),
-            Err(AgentCommandError::CannotAppend {
-                state: AgentState::AwaitingApproval,
-            })
-        );
-    }
-
-    #[test]
-    fn cancel_is_a_hard_stop_only_for_active_tasks() {
-        let command = AgentCommand::Cancel {
-            reason: CancelReason::UserRequested,
-        };
-
-        assert_eq!(
-            classify(AgentLifecycle::Idle, &command),
-            Err(AgentCommandError::NothingToCancel)
-        );
-        assert_eq!(
-            classify(AgentLifecycle::Running, &command),
-            Ok(AgentLifecycle::Idle)
-        );
-        assert_eq!(
-            classify(AgentLifecycle::AwaitingApproval(ApprovalId(3)), &command),
-            Ok(AgentLifecycle::Idle)
-        );
     }
 }

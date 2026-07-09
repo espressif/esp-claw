@@ -6,7 +6,7 @@ use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use claw_interface::{ClawFs, FsError};
 
-use super::skill::{parse_front_matter, strip_front_matter, Skill, SkillError, SkillId};
+use super::skill::{front_matter_sections, parse_front_matter, Skill, SkillError, SkillId};
 use super::skill_set::SkillSet;
 
 pub type SkillRegistryVersion = u32;
@@ -144,7 +144,8 @@ impl<F: ClawFs> FsSkillRegistry<F> {
             .read_skill_document(&path)
             .map_err(|error| SkillError::ReadFailed(id.clone(), error))?;
         let text = String::from_utf8(bytes).map_err(|_| SkillError::InvalidUtf8(id.clone()))?;
-        append_wrapped_document(id, strip_front_matter(id, &text)?, &skill_dir, out);
+        let (_, body) = front_matter_sections(id, &text)?;
+        append_wrapped_document(id, body, &skill_dir, out);
         Ok(())
     }
 
@@ -263,7 +264,7 @@ fn append_xml_attribute_escaped(text: &str, out: &mut String) {
 fn read_head<F: ClawFs>(id: &SkillId, path: &str) -> Result<String, SkillError> {
     let read_failed = |error| SkillError::ReadFailed(id.clone(), error);
     let size = F::len(path).map_err(read_failed)?;
-    let take = usize::try_from(size.min(METADATA_PREFIX_BYTES)).unwrap_or(usize::MAX);
+    let take = size.min(METADATA_PREFIX_BYTES) as usize;
     let bytes = F::read_at(path, 0, take).map_err(read_failed)?;
     String::from_utf8(bytes).map_err(|_| SkillError::InvalidUtf8(id.clone()))
 }

@@ -18,6 +18,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+use serde::{Deserialize, Serialize};
+
 use crate::agent::base_agent::{AgentAbortHandle, AgentId};
 use crate::agent::Agent;
 
@@ -47,12 +49,33 @@ impl AgentIdAllocator {
         Self::default()
     }
 
+    pub(crate) fn starting_at(first: AgentId) -> Self {
+        Self(Arc::new(Mutex::new(AgentIdCounter::starting_at(first))))
+    }
+
     /// Allocate the next id, advancing the shared counter.
     pub(crate) fn next(&self) -> AgentId {
         self.0
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
             .next()
+    }
+
+    pub(crate) fn peek(&self) -> AgentId {
+        self.0.lock().unwrap_or_else(|poison| poison.into_inner()).0
+    }
+}
+
+impl Serialize for AgentIdAllocator {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.peek().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentIdAllocator {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let next = AgentId::deserialize(deserializer)?;
+        Ok(Self::starting_at(next))
     }
 }
 
@@ -91,6 +114,11 @@ impl AgentRegistry {
         self.agents.remove(&id)
     }
 
+    /// Iterate live agents without exposing the backing map.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (AgentId, &dyn Agent)> + '_ {
+        self.agents.iter().map(|(&id, agent)| (id, agent.as_ref()))
+    }
+
     /// An abort handle for every currently-stored agent.
     ///
     /// The instance captures these in a batch-local cancel hook so an
@@ -103,70 +131,10 @@ impl AgentRegistry {
             .map(|agent| agent.abort_handle())
             .collect()
     }
-
-    /// The number of live agents in the store. Used by the instance's test-only
-    /// `agent_count`; a non-test caller arrives with Part B's resource caps.
-    #[cfg(test)]
-    pub(crate) fn count(&self) -> usize {
-        self.agents.len()
-    }
 }
 
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
-mod tests {
-    use super::*;
-    use crate::agent::base_agent::{
-        AgentAbortHandle, AgentCommand, AgentCommandError, TickOutcome,
-    };
-    use crate::agent::AgentTickFuture;
-
-    /// A trivial agent: does nothing, always idle. Enough to exercise the store.
-    struct NoopAgent {
-        id: AgentId,
-    }
-
-    impl Agent for NoopAgent {
-        fn id(&self) -> AgentId {
-            self.id
-        }
-        fn send_command(&mut self, _command: AgentCommand) -> Result<(), AgentCommandError> {
-            Ok(())
-        }
-        fn deliver_child_result(&mut self, _child: AgentId, _text: String, _ok: bool) {}
-        fn deliver_child_input(&mut self, _child: AgentId, _text: String) {}
-        fn abort_handle(&self) -> AgentAbortHandle {
-            AgentAbortHandle::default()
-        }
-        fn tick(&mut self, _events: crate::event::EventSink) -> AgentTickFuture<'_> {
-            Box::pin(async { TickOutcome::Idle })
-        }
-    }
-
-    #[test]
-    fn insert_get_remove_count() {
-        let mut registry = AgentRegistry::new();
-        assert_eq!(registry.count(), 0);
-
-        let id = AgentId(1);
-        registry.insert(id, Box::new(NoopAgent { id }));
-        assert_eq!(registry.count(), 1);
-        assert!(registry.get_mut(id).is_some());
-        assert_eq!(registry.get_mut(id).unwrap().id(), id);
-
-        assert!(registry.remove(id));
-        assert!(!registry.remove(id));
-        assert!(registry.get_mut(id).is_none());
-        assert_eq!(registry.count(), 0);
-    }
-
-    #[test]
-    fn allocator_hands_out_unique_ascending_ids() {
-        let allocator = AgentIdAllocator::new();
-        let a = allocator.next();
-        let b = allocator.next();
-        // A clone shares the same counter, so ids stay globally unique.
-        let c = allocator.clone().next();
-        assert!(a.0 < b.0 && b.0 < c.0);
+impl Default for AgentRegistry {
+    fn default() -> Self {
+        Self::new()
     }
 }

@@ -141,7 +141,9 @@ impl<F: ClawFs + 'static> RollingSummaryContextAdapter<F> {
                     .collect();
                 self.cached = Arc::new(Value::Array(flat));
             }
-            Err(_) => {}
+            Err(error) => {
+                tracing::warn!(name: "rolling_summary_compaction_failed", error = %error);
+            }
         }
     }
 

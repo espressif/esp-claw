@@ -26,6 +26,7 @@ claw-interface = { path = "../claw-interface", features = ["realhttp", "timermoc
 anyhow = "1"
 # `block_on` for tests (smol family; replaces the removed local spin executor).
 futures-lite = "2"
+tempdir = "0.3"
 
 [lints.rust]
 unsafe_code = "forbid"

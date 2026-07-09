@@ -150,7 +150,14 @@ mod espidf {
                 0
             };
 
-            let cname = CString::new(name).unwrap_or_default();
+            let mut thread_name = name.as_bytes().to_vec();
+            for byte in &mut thread_name {
+                if *byte == 0 {
+                    *byte = b'_';
+                }
+            }
+            // SAFETY: every interior NUL byte was replaced above.
+            let cname = CString::from_vec_unchecked(thread_name);
             let mut cfg = esp_pthread_get_default_config();
             cfg.stack_size = stack_size;
             cfg.prio = freertos_priority(priority);

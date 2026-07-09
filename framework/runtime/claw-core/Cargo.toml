@@ -31,6 +31,7 @@ reasoning_long = []   # 32000 bytes
 claw-interface = { path = "../claw-interface" }
 claw-utils = { path = "../claw-utils" }
 claw-api = { path = "../claw-api" }
+claw-checkpoint = { path = "../claw-checkpoint" }
 # Vetted async MPMC channel (smol family, same lineage as `edge-executor`). Each
 # open session gets one unbounded channel that carries its `SessionEvent` stream.
 async-channel = "2"

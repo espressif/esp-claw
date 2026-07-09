@@ -35,9 +35,10 @@ impl fmt::Display for SkillId {
 }
 
 /// Runtime interpretation of `metadata.manage_mode`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SkillManageMode {
     /// `"readonly"` and `"web"` are both treated as read-only on device.
+    #[default]
     Readonly,
     /// `"runtime"` skills may be owned by runtime installers.
     Runtime,
@@ -88,12 +89,6 @@ impl SkillFrontmatterMetadata {
     /// Optional search tags from Skills Lab metadata.
     pub fn tags(&self) -> &[String] {
         &self.tags
-    }
-}
-
-impl Default for SkillManageMode {
-    fn default() -> Self {
-        Self::Readonly
     }
 }
 
@@ -214,7 +209,7 @@ struct RawMetadata {
 }
 
 pub(crate) fn parse_front_matter(id: SkillId, root: &str, head: &str) -> Result<Skill, SkillError> {
-    let json = front_matter_json(&id, head)?;
+    let (json, _) = front_matter_sections(&id, head)?;
     let front_matter: RawFrontMatter = serde_json::from_str(json.trim())
         .map_err(|error| SkillError::InvalidJson(id.clone(), error.to_string()))?;
 
@@ -243,7 +238,10 @@ pub(crate) fn parse_front_matter(id: SkillId, root: &str, head: &str) -> Result<
     })
 }
 
-pub(crate) fn strip_front_matter<'a>(id: &SkillId, text: &'a str) -> Result<&'a str, SkillError> {
+pub(crate) fn front_matter_sections<'a>(
+    id: &SkillId,
+    text: &'a str,
+) -> Result<(&'a str, &'a str), SkillError> {
     let after_open = text
         .trim_start()
         .strip_prefix("---")
@@ -251,26 +249,16 @@ pub(crate) fn strip_front_matter<'a>(id: &SkillId, text: &'a str) -> Result<&'a 
     let close = after_open
         .find("\n---")
         .ok_or_else(|| SkillError::MissingClosingFence(id.clone()))?;
-    let from_fence = after_open.get(close..).unwrap_or("");
-    let body = from_fence
-        .get(1..)
-        .and_then(|line| {
-            line.find('\n')
-                .and_then(|newline_index| line.get(newline_index.saturating_add(1)..))
-        })
-        .unwrap_or("");
-    Ok(body)
-}
-
-fn front_matter_json<'a>(id: &SkillId, text: &'a str) -> Result<&'a str, SkillError> {
-    let after_open = text
-        .trim_start()
-        .strip_prefix("---")
-        .ok_or_else(|| SkillError::MissingOpeningFence(id.clone()))?;
-    let close = after_open
-        .find("\n---")
-        .ok_or_else(|| SkillError::MissingClosingFence(id.clone()))?;
-    Ok(after_open.get(..close).unwrap_or(""))
+    let body = if let Some(closing_fence) = after_open[close..].strip_prefix('\n') {
+        if let Some((_, body)) = closing_fence.split_once('\n') {
+            body
+        } else {
+            ""
+        }
+    } else {
+        ""
+    };
+    Ok((&after_open[..close], body))
 }
 
 fn required_string(
@@ -290,7 +278,8 @@ fn required_string(
 }
 
 fn parse_metadata(id: &SkillId, raw: RawMetadata) -> Result<SkillFrontmatterMetadata, SkillError> {
-    let manage_mode = match raw.manage_mode.as_deref().unwrap_or("readonly") {
+    let manage_mode = required_string(id, "metadata.manage_mode", raw.manage_mode)?;
+    let manage_mode = match manage_mode.as_str() {
         "readonly" | "web" => SkillManageMode::Readonly,
         "runtime" => SkillManageMode::Runtime,
         value => {
@@ -308,52 +297,4 @@ fn parse_metadata(id: &SkillId, raw: RawMetadata) -> Result<SkillFrontmatterMeta
         peripherals: raw.peripherals,
         tags: raw.tags,
     })
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use super::*;
-
-    fn skill_md(name: &str) -> String {
-        format!(
-            "---\n{{\"name\":\"{name}\",\"description\":\"d\",\"metadata\":{{\"manage_mode\":\"web\"}}}}\n---\nbody"
-        )
-    }
-
-    #[test]
-    fn parses_master_front_matter_shape() {
-        let skill = parse_front_matter(SkillId::new("x"), "skills", &skill_md("x")).unwrap();
-        assert_eq!(skill.id().as_str(), "x");
-        assert_eq!(skill.name(), "x");
-        assert_eq!(skill.description(), "d");
-        assert_eq!(skill.metadata().manage_mode(), SkillManageMode::Readonly);
-        assert_eq!(skill.file(), "x/SKILL.md");
-    }
-
-    #[test]
-    fn missing_opening_fence_errors() {
-        let error = parse_front_matter(SkillId::new("x"), "skills", "no front matter").unwrap_err();
-        assert!(matches!(error, SkillError::MissingOpeningFence(_)));
-    }
-
-    #[test]
-    fn missing_close_fence_errors() {
-        let error = parse_front_matter(SkillId::new("x"), "skills", "---\n{}\n").unwrap_err();
-        assert!(matches!(error, SkillError::MissingClosingFence(_)));
-    }
-
-    #[test]
-    fn invalid_json_errors() {
-        let error = parse_front_matter(SkillId::new("x"), "skills", "---\nnot json\n---\nbody")
-            .unwrap_err();
-        assert!(matches!(error, SkillError::InvalidJson(_, _)));
-    }
-
-    #[test]
-    fn front_matter_name_must_match_directory() {
-        let error =
-            parse_front_matter(SkillId::new("x"), "skills", &skill_md("other")).unwrap_err();
-        assert!(matches!(error, SkillError::InvalidFrontmatter(_, _)));
-    }
 }

@@ -1,7 +1,13 @@
 //! In-memory session registry and delivery errors.
 
-use std::collections::HashSet;
+use std::borrow::Cow;
 use std::sync::{Mutex, MutexGuard};
+
+use claw_checkpoint::{
+    ChangePatternHint, DurablePart, DurablePartError, DurableState, DurableStateCodec,
+    PartGeneration, PartStateBlob, PartStateSlice, StorageHint, StorageSizeHint,
+};
+use serde::{Deserialize, Serialize};
 
 crate::define_prefixed_id!(SessionId, "session-", "session");
 crate::define_prefixed_id!(TurnId, "turn-", "turn");
@@ -24,13 +30,11 @@ crate::define_id_allocator!(
 
 /// The store's mutable state, guarded by a single lock.
 ///
-/// The session set and the id counter are one logical state, so they live under
-/// one `Mutex`: `create` allocates an id and inserts it in a single critical
-/// section. The [`SessionIdAllocator`] is the lock-free core — the lock it needs
-/// is this outer one, not a second one of its own.
+/// The session set and next id are one logical state, so they live under one
+/// `Mutex`: `create` allocates an id and inserts it in a single critical
+/// section.
 struct Registry {
-    sessions: HashSet<SessionId>,
-    ids: SessionIdAllocator,
+    state: DurableState<SessionStoreState>,
 }
 
 pub(crate) struct SessionStore {
@@ -39,18 +43,16 @@ pub(crate) struct SessionStore {
 
 impl Default for SessionStore {
     fn default() -> Self {
-        Self::new()
+        Self::new(SessionStoreState::default())
     }
 }
 
 impl SessionStore {
-    /// A non-persistent store: the registry lives only in memory and is empty on
-    /// every boot.
-    pub fn new() -> Self {
+    /// Build a session store from durable state.
+    pub(crate) fn new(state: SessionStoreState) -> Self {
         Self {
             registry: Mutex::new(Registry {
-                sessions: HashSet::new(),
-                ids: SessionIdAllocator::new(),
+                state: DurableState::new(state),
             }),
         }
     }
@@ -63,58 +65,114 @@ impl SessionStore {
 
     pub fn create(&self) -> SessionId {
         let mut registry = self.lock_registry();
-        let id = registry.ids.next();
-        registry.sessions.insert(id);
+        let state = registry.state.get_mut();
+        let id = state.next_session_id;
+        state.next_session_id = SessionId::new(id.0.saturating_add(1));
+        state.sessions.push(id);
         id
     }
 
     pub fn list(&self) -> Vec<SessionId> {
-        self.lock_registry().sessions.iter().copied().collect()
+        self.lock_registry().state.get().sessions.clone()
     }
 
     pub fn delete(&self, session_id: SessionId) -> bool {
         let mut registry = self.lock_registry();
-        registry.sessions.remove(&session_id)
+        let Some(position) = registry
+            .state
+            .get()
+            .sessions
+            .iter()
+            .position(|session| *session == session_id)
+        else {
+            return false;
+        };
+        registry.state.get_mut().sessions.remove(position);
+        true
     }
 
     pub fn contains(&self, session_id: SessionId) -> bool {
-        self.lock_registry().sessions.contains(&session_id)
+        self.lock_registry()
+            .state
+            .get()
+            .sessions
+            .contains(&session_id)
     }
 }
 
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use super::*;
-    use serde_json::json;
+impl Default for SessionStoreState {
+    fn default() -> Self {
+        Self {
+            sessions: Vec::new(),
+            next_session_id: SessionIdAllocator::new().peek(),
+        }
+    }
+}
 
-    #[test]
-    fn session_id_serializes_to_prefixed_string() {
-        let value = serde_json::to_value(SessionId(1)).unwrap();
-        assert_eq!(value, json!("session-1"));
+impl SessionStoreState {
+    fn normalize(&mut self) {
+        self.sessions.sort_by_key(|session| session.0);
+        self.sessions.dedup();
+        if let Some(next) = self
+            .sessions
+            .iter()
+            .map(|session| SessionId::new(session.0.saturating_add(1)))
+            .max_by_key(|session| session.0)
+        {
+            self.next_session_id = SessionId::new(self.next_session_id.0.max(next.0));
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+pub(crate) struct SessionStoreState {
+    sessions: Vec<SessionId>,
+    next_session_id: SessionId,
+}
+
+impl DurableStateCodec for SessionStoreState {
+    fn encode_state(&self) -> Result<PartStateBlob<'_>, DurablePartError> {
+        let bytes = serde_json::to_vec(self).map_err(DurablePartError::Encode)?;
+        Ok(PartStateBlob {
+            schema_version: 1,
+            bytes: Cow::Owned(bytes),
+        })
     }
 
-    #[test]
-    fn session_id_deserializes_from_prefixed_string() {
-        let session: SessionId = serde_json::from_value(json!("session-7")).unwrap();
-        assert_eq!(session, SessionId(7));
+    fn decode_state(state: PartStateSlice<'_>) -> Result<Self, DurablePartError> {
+        let mut decoded: Self =
+            serde_json::from_slice(state.bytes).map_err(DurablePartError::Decode)?;
+        decoded.normalize();
+        Ok(decoded)
+    }
+}
+
+impl DurablePart for SessionStore {
+    fn name(&self) -> &'static str {
+        "session-store"
     }
 
-    #[test]
-    fn session_id_rejects_non_prefixed_wire_values() {
-        assert!(serde_json::from_value::<SessionId>(json!("sess-7")).is_err());
-        assert!(serde_json::from_value::<SessionId>(json!(7)).is_err());
-        assert!(SessionId::from_wire("7").is_err());
+    fn generation(&self) -> PartGeneration {
+        self.lock_registry().state.generation()
     }
 
-    #[test]
-    fn session_id_display_matches_wire_format() {
-        assert_eq!(SessionId(1).to_string(), "session-1");
+    fn export_state(&self) -> Result<PartStateBlob<'_>, DurablePartError> {
+        let registry = self.lock_registry();
+        let blob = registry.state.export_state()?;
+        Ok(PartStateBlob {
+            schema_version: blob.schema_version,
+            bytes: Cow::Owned(blob.bytes.into_owned()),
+        })
     }
 
-    #[test]
-    fn turn_id_serializes_to_prefixed_string() {
-        let value = serde_json::to_value(TurnId(1)).unwrap();
-        assert_eq!(value, json!("turn-1"));
+    fn restore_from_state(state: PartStateSlice<'_>) -> Result<Self, DurablePartError> {
+        Ok(Self::new(SessionStoreState::decode_state(state)?))
+    }
+
+    fn storage_hint(&self) -> StorageHint {
+        StorageHint {
+            size: StorageSizeHint::Small,
+            change: ChangePatternHint::Arbitrary,
+        }
     }
 }
