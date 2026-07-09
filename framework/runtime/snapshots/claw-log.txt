@@ -1,0 +1,50 @@
+pub mod claw_log
+pub use claw_log::LevelFilter
+pub mod claw_log::trace
+pub struct claw_log::trace::FlatTreeSubscriber<S: claw_log::trace::TraceSink>
+impl<S: claw_log::trace::TraceSink> claw_log::trace::FlatTreeSubscriber<S>
+pub fn claw_log::trace::FlatTreeSubscriber<S>::with_allowed_target_prefix(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn claw_log::trace::FlatTreeSubscriber<S>::with_context_group_keys(self, &'static str, impl core::iter::traits::collect::IntoIterator<Item = &'static str>) -> Self
+pub fn claw_log::trace::FlatTreeSubscriber<S>::with_sink(S) -> Self
+impl<S: claw_log::trace::TraceSink + 'static> tracing_core::subscriber::Subscriber for claw_log::trace::FlatTreeSubscriber<S>
+pub fn claw_log::trace::FlatTreeSubscriber<S>::clone_span(&self, &tracing_core::span::Id) -> tracing_core::span::Id
+pub fn claw_log::trace::FlatTreeSubscriber<S>::enabled(&self, &tracing_core::metadata::Metadata<'_>) -> bool
+pub fn claw_log::trace::FlatTreeSubscriber<S>::enter(&self, &tracing_core::span::Id)
+pub fn claw_log::trace::FlatTreeSubscriber<S>::event(&self, &tracing_core::event::Event<'_>)
+pub fn claw_log::trace::FlatTreeSubscriber<S>::exit(&self, &tracing_core::span::Id)
+pub fn claw_log::trace::FlatTreeSubscriber<S>::new_span(&self, &tracing_core::span::Attributes<'_>) -> tracing_core::span::Id
+pub fn claw_log::trace::FlatTreeSubscriber<S>::record(&self, &tracing_core::span::Id, &tracing_core::span::Record<'_>)
+pub fn claw_log::trace::FlatTreeSubscriber<S>::record_follows_from(&self, &tracing_core::span::Id, &tracing_core::span::Id)
+pub fn claw_log::trace::FlatTreeSubscriber<S>::try_close(&self, tracing_core::span::Id) -> bool
+pub trait claw_log::trace::TraceSink: core::marker::Send + core::marker::Sync
+pub fn claw_log::trace::TraceSink::write_line(&self, tracing_core::metadata::Level, &str, &str)
+pub enum claw_log::InitLoggerError
+pub claw_log::InitLoggerError::OpenLogFile
+pub claw_log::InitLoggerError::OpenLogFile::path: std::path::PathBuf
+pub claw_log::InitLoggerError::OpenLogFile::source: core::io::error::Error
+pub claw_log::InitLoggerError::SetLogger
+pub enum claw_log::LogOutput
+pub claw_log::LogOutput::File(std::path::PathBuf)
+pub claw_log::LogOutput::Stderr
+pub struct claw_log::FlatTreeSubscriber<S: claw_log::trace::TraceSink>
+impl<S: claw_log::trace::TraceSink> claw_log::trace::FlatTreeSubscriber<S>
+pub fn claw_log::trace::FlatTreeSubscriber<S>::with_allowed_target_prefix(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn claw_log::trace::FlatTreeSubscriber<S>::with_context_group_keys(self, &'static str, impl core::iter::traits::collect::IntoIterator<Item = &'static str>) -> Self
+pub fn claw_log::trace::FlatTreeSubscriber<S>::with_sink(S) -> Self
+impl<S: claw_log::trace::TraceSink + 'static> tracing_core::subscriber::Subscriber for claw_log::trace::FlatTreeSubscriber<S>
+pub fn claw_log::trace::FlatTreeSubscriber<S>::clone_span(&self, &tracing_core::span::Id) -> tracing_core::span::Id
+pub fn claw_log::trace::FlatTreeSubscriber<S>::enabled(&self, &tracing_core::metadata::Metadata<'_>) -> bool
+pub fn claw_log::trace::FlatTreeSubscriber<S>::enter(&self, &tracing_core::span::Id)
+pub fn claw_log::trace::FlatTreeSubscriber<S>::event(&self, &tracing_core::event::Event<'_>)
+pub fn claw_log::trace::FlatTreeSubscriber<S>::exit(&self, &tracing_core::span::Id)
+pub fn claw_log::trace::FlatTreeSubscriber<S>::new_span(&self, &tracing_core::span::Attributes<'_>) -> tracing_core::span::Id
+pub fn claw_log::trace::FlatTreeSubscriber<S>::record(&self, &tracing_core::span::Id, &tracing_core::span::Record<'_>)
+pub fn claw_log::trace::FlatTreeSubscriber<S>::record_follows_from(&self, &tracing_core::span::Id, &tracing_core::span::Id)
+pub fn claw_log::trace::FlatTreeSubscriber<S>::try_close(&self, tracing_core::span::Id) -> bool
+pub struct claw_log::TracingConfig
+impl claw_log::TracingConfig
+pub fn claw_log::TracingConfig::with_context_group_keys(self, &'static str, impl core::iter::traits::collect::IntoIterator<Item = &'static str>) -> Self
+pub trait claw_log::TraceSink: core::marker::Send + core::marker::Sync
+pub fn claw_log::TraceSink::write_line(&self, tracing_core::metadata::Level, &str, &str)
+pub fn claw_log::init_logger(log::LevelFilter, claw_log::LogOutput) -> core::result::Result<(), claw_log::InitLoggerError>
+pub fn claw_log::init_tracing(claw_log::TracingConfig) -> core::result::Result<(), tracing_core::dispatcher::SetGlobalDefaultError>

@@ -1,0 +1,279 @@
+pub mod claw_interface
+pub mod claw_interface::executor
+pub trait claw_interface::executor::ClawExecutor
+pub fn claw_interface::executor::ClawExecutor::block_on<Fut: core::future::future::Future>(Fut) -> <Fut as core::future::future::Future>::Output
+pub mod claw_interface::fs
+pub enum claw_interface::fs::FsError
+pub claw_interface::fs::FsError::Io(claw_interface::fs::FsIoError)
+pub claw_interface::fs::FsError::NotFound
+impl claw_interface::fs::FsError
+pub fn claw_interface::fs::FsError::io(impl core::error::Error + core::marker::Send + core::marker::Sync + 'static) -> Self
+pub fn claw_interface::fs::FsError::io_message(impl core::convert::Into<alloc::string::String>) -> Self
+impl core::convert::From<core::io::error::Error> for claw_interface::fs::FsError
+pub fn claw_interface::fs::FsError::from(core::io::error::Error) -> Self
+pub struct claw_interface::fs::FsIoError
+impl claw_interface::fs::FsIoError
+pub fn claw_interface::fs::FsIoError::message(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn claw_interface::fs::FsIoError::new(impl core::error::Error + core::marker::Send + core::marker::Sync + 'static) -> Self
+impl core::cmp::Eq for claw_interface::fs::FsIoError
+impl core::cmp::PartialEq for claw_interface::fs::FsIoError
+pub fn claw_interface::fs::FsIoError::eq(&self, &Self) -> bool
+impl core::error::Error for claw_interface::fs::FsIoError
+pub fn claw_interface::fs::FsIoError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Display for claw_interface::fs::FsIoError
+pub fn claw_interface::fs::FsIoError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub trait claw_interface::fs::ClawFile
+pub fn claw_interface::fs::ClawFile::read_exact_at(&mut self, u64, usize) -> core::result::Result<alloc::vec::Vec<u8>, claw_interface::fs::FsError>
+pub fn claw_interface::fs::ClawFile::read_to_end(&mut self) -> core::result::Result<alloc::vec::Vec<u8>, claw_interface::fs::FsError>
+pub fn claw_interface::fs::ClawFile::size(&self) -> core::result::Result<u64, claw_interface::fs::FsError>
+pub fn claw_interface::fs::ClawFile::write_all(&mut self, &[u8]) -> core::result::Result<(), claw_interface::fs::FsError>
+pub trait claw_interface::fs::ClawFs: core::marker::Send + core::marker::Sync + 'static
+pub type claw_interface::fs::ClawFs::File: claw_interface::fs::ClawFile
+pub fn claw_interface::fs::ClawFs::append(&str, &[u8]) -> core::result::Result<(), claw_interface::fs::FsError>
+pub fn claw_interface::fs::ClawFs::create(&str) -> core::result::Result<Self::File, claw_interface::fs::FsError>
+pub fn claw_interface::fs::ClawFs::create_dir_all(&str) -> core::result::Result<(), claw_interface::fs::FsError>
+pub fn claw_interface::fs::ClawFs::exists(&str) -> bool
+pub fn claw_interface::fs::ClawFs::len(&str) -> core::result::Result<u64, claw_interface::fs::FsError>
+pub fn claw_interface::fs::ClawFs::list_dir(&str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, claw_interface::fs::FsError>
+pub fn claw_interface::fs::ClawFs::open(&str) -> core::result::Result<Self::File, claw_interface::fs::FsError>
+pub fn claw_interface::fs::ClawFs::open_append(&str) -> core::result::Result<Self::File, claw_interface::fs::FsError>
+pub fn claw_interface::fs::ClawFs::read(&str) -> core::result::Result<alloc::vec::Vec<u8>, claw_interface::fs::FsError>
+pub fn claw_interface::fs::ClawFs::read_at(&str, u64, usize) -> core::result::Result<alloc::vec::Vec<u8>, claw_interface::fs::FsError>
+pub fn claw_interface::fs::ClawFs::remove(&str) -> core::result::Result<(), claw_interface::fs::FsError>
+pub fn claw_interface::fs::ClawFs::rename(&str, &str) -> core::result::Result<(), claw_interface::fs::FsError>
+pub fn claw_interface::fs::ClawFs::write_atomic(&str, &[u8]) -> core::result::Result<(), claw_interface::fs::FsError>
+pub mod claw_interface::http
+pub mod claw_interface::http::blocking
+pub trait claw_interface::http::blocking::ClawHttp
+pub fn claw_interface::http::blocking::ClawHttp::post_json(&mut self, &claw_interface::http::HttpJsonRequest<'_>, &core::sync::atomic::AtomicBool) -> core::result::Result<claw_interface::http::HttpResponse, claw_interface::http::HttpError>
+pub enum claw_interface::http::HttpAuth<'a>
+pub claw_interface::http::HttpAuth::ApiKey(&'a str)
+pub claw_interface::http::HttpAuth::Bearer(&'a str)
+pub claw_interface::http::HttpAuth::None
+impl<'a> claw_interface::http::HttpAuth<'a>
+pub fn claw_interface::http::HttpAuth<'a>::header(self) -> core::option::Option<(&'static str, alloc::string::String)>
+pub enum claw_interface::http::HttpError
+pub claw_interface::http::HttpError::Aborted
+pub claw_interface::http::HttpError::ClientInitFailed
+pub claw_interface::http::HttpError::InvalidBody
+pub claw_interface::http::HttpError::InvalidUrl
+pub claw_interface::http::HttpError::RequestFailed(claw_interface::http::HttpRequestFailure)
+pub claw_interface::http::HttpError::UnexpectedStatus
+pub claw_interface::http::HttpError::UnexpectedStatus::message: alloc::string::String
+pub claw_interface::http::HttpError::UnexpectedStatus::status: claw_interface::http::HttpStatusCode
+pub enum claw_interface::http::HttpRequestFailure
+pub claw_interface::http::HttpRequestFailure::BodyTooLarge
+pub claw_interface::http::HttpRequestFailure::BodyTooLarge::len: usize
+pub claw_interface::http::HttpRequestFailure::Driver
+pub claw_interface::http::HttpRequestFailure::Driver::message: alloc::string::String
+pub claw_interface::http::HttpRequestFailure::Driver::operation: &'static str
+pub claw_interface::http::HttpRequestFailure::HeaderContainsNul
+pub claw_interface::http::HttpRequestFailure::HeaderContainsNul::field: &'static str
+pub claw_interface::http::HttpRequestFailure::InvalidStatusCode
+pub claw_interface::http::HttpRequestFailure::InvalidStatusCode::status: i32
+pub claw_interface::http::HttpRequestFailure::TimeoutTooLarge
+pub claw_interface::http::HttpRequestFailure::TimeoutTooLarge::timeout_ms: u32
+pub claw_interface::http::HttpRequestFailure::Transport(alloc::string::String)
+impl claw_interface::http::HttpRequestFailure
+pub fn claw_interface::http::HttpRequestFailure::driver(&'static str, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn claw_interface::http::HttpRequestFailure::transport(impl core::convert::Into<alloc::string::String>) -> Self
+pub struct claw_interface::http::Cancel<'a>(_)
+impl claw_interface::http::Cancel<'static>
+pub fn claw_interface::http::Cancel<'static>::never() -> Self
+impl<'a> claw_interface::http::Cancel<'a>
+pub fn claw_interface::http::Cancel<'a>::is_cancelled(&self) -> bool
+pub fn claw_interface::http::Cancel<'a>::new(&'a core::sync::atomic::AtomicBool) -> Self
+pub struct claw_interface::http::HttpGetRequest<'a>
+pub claw_interface::http::HttpGetRequest::auth: claw_interface::http::HttpAuth<'a>
+pub claw_interface::http::HttpGetRequest::headers: &'a [claw_interface::http::HttpHeader<'a>]
+pub claw_interface::http::HttpGetRequest::timeout_ms: u32
+pub claw_interface::http::HttpGetRequest::url: &'a str
+pub struct claw_interface::http::HttpHeader<'a>
+pub claw_interface::http::HttpHeader::name: &'a str
+pub claw_interface::http::HttpHeader::value: &'a str
+pub struct claw_interface::http::HttpJsonRequest<'a>
+pub claw_interface::http::HttpJsonRequest::auth: claw_interface::http::HttpAuth<'a>
+pub claw_interface::http::HttpJsonRequest::body: &'a str
+pub claw_interface::http::HttpJsonRequest::headers: &'a [claw_interface::http::HttpHeader<'a>]
+pub claw_interface::http::HttpJsonRequest::timeout_ms: u32
+pub claw_interface::http::HttpJsonRequest::url: &'a str
+pub struct claw_interface::http::HttpResponse
+pub claw_interface::http::HttpResponse::body: alloc::string::String
+pub claw_interface::http::HttpResponse::status_code: claw_interface::http::HttpStatusCode
+#[repr(transparent)] pub struct claw_interface::http::HttpStatusCode(_)
+impl claw_interface::http::HttpStatusCode
+pub const claw_interface::http::HttpStatusCode::NO_CONTENT: Self
+pub const claw_interface::http::HttpStatusCode::OK: Self
+pub fn claw_interface::http::HttpStatusCode::as_i32(self) -> i32
+pub const fn claw_interface::http::HttpStatusCode::as_u16(self) -> u16
+pub const fn claw_interface::http::HttpStatusCode::is_success(self) -> bool
+pub const fn claw_interface::http::HttpStatusCode::new(u16) -> Self
+impl core::convert::From<claw_interface::http::HttpStatusCode> for i32
+pub fn i32::from(claw_interface::http::HttpStatusCode) -> Self
+impl core::convert::From<claw_interface::http::HttpStatusCode> for u16
+pub fn u16::from(claw_interface::http::HttpStatusCode) -> Self
+impl core::fmt::Display for claw_interface::http::HttpStatusCode
+pub fn claw_interface::http::HttpStatusCode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub trait claw_interface::http::ClawHttp
+pub fn claw_interface::http::ClawHttp::get_json<'a>(&'a mut self, &'a claw_interface::http::HttpGetRequest<'a>, claw_interface::http::Cancel<'a>) -> claw_interface::http::HttpResponseFuture<'a>
+pub fn claw_interface::http::ClawHttp::post_json<'a>(&'a mut self, &'a claw_interface::http::HttpJsonRequest<'a>, claw_interface::http::Cancel<'a>) -> claw_interface::http::HttpResponseFuture<'a>
+pub type claw_interface::http::HttpResponseFuture<'a> = core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<claw_interface::http::HttpResponse, claw_interface::http::HttpError>> + 'a)>>
+pub mod claw_interface::thread
+pub enum claw_interface::thread::CoreAffinity
+pub claw_interface::thread::CoreAffinity::Any
+pub claw_interface::thread::CoreAffinity::Core(u8)
+pub enum claw_interface::thread::Priority
+pub claw_interface::thread::Priority::High
+pub claw_interface::thread::Priority::Low
+pub claw_interface::thread::Priority::Normal
+pub struct claw_interface::thread::WorkerHandle
+impl claw_interface::thread::WorkerHandle
+pub fn claw_interface::thread::WorkerHandle::join(self)
+pub fn claw_interface::thread::WorkerHandle::new(std::thread::join_handle::JoinHandle<()>) -> Self
+pub trait claw_interface::thread::ClawThread: core::marker::Send + core::marker::Sync
+pub fn claw_interface::thread::ClawThread::spawn_worker<F>(&str, usize, claw_interface::thread::Priority, claw_interface::thread::CoreAffinity, F) -> core::io::error::Result<claw_interface::thread::WorkerHandle> where F: core::ops::function::FnOnce() + core::marker::Send + 'static
+pub mod claw_interface::timer
+pub enum claw_interface::timer::SleepOutcome
+pub claw_interface::timer::SleepOutcome::Cancelled
+pub claw_interface::timer::SleepOutcome::Completed
+impl claw_interface::timer::SleepOutcome
+pub const fn claw_interface::timer::SleepOutcome::is_cancelled(self) -> bool
+pub const fn claw_interface::timer::SleepOutcome::is_completed(self) -> bool
+pub trait claw_interface::timer::ClawTimer
+pub fn claw_interface::timer::ClawTimer::sleep<'a>(&'a mut self, core::time::Duration, claw_interface::http::Cancel<'a>) -> claw_interface::timer::TimerFuture<'a>
+pub type claw_interface::timer::TimerFuture<'a> = core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = claw_interface::timer::SleepOutcome> + 'a)>>
+pub enum claw_interface::CoreAffinity
+pub claw_interface::CoreAffinity::Any
+pub claw_interface::CoreAffinity::Core(u8)
+pub enum claw_interface::FsError
+pub claw_interface::FsError::Io(claw_interface::fs::FsIoError)
+pub claw_interface::FsError::NotFound
+impl claw_interface::fs::FsError
+pub fn claw_interface::fs::FsError::io(impl core::error::Error + core::marker::Send + core::marker::Sync + 'static) -> Self
+pub fn claw_interface::fs::FsError::io_message(impl core::convert::Into<alloc::string::String>) -> Self
+impl core::convert::From<core::io::error::Error> for claw_interface::fs::FsError
+pub fn claw_interface::fs::FsError::from(core::io::error::Error) -> Self
+pub enum claw_interface::HttpAuth<'a>
+pub claw_interface::HttpAuth::ApiKey(&'a str)
+pub claw_interface::HttpAuth::Bearer(&'a str)
+pub claw_interface::HttpAuth::None
+impl<'a> claw_interface::http::HttpAuth<'a>
+pub fn claw_interface::http::HttpAuth<'a>::header(self) -> core::option::Option<(&'static str, alloc::string::String)>
+pub enum claw_interface::HttpError
+pub claw_interface::HttpError::Aborted
+pub claw_interface::HttpError::ClientInitFailed
+pub claw_interface::HttpError::InvalidBody
+pub claw_interface::HttpError::InvalidUrl
+pub claw_interface::HttpError::RequestFailed(claw_interface::http::HttpRequestFailure)
+pub claw_interface::HttpError::UnexpectedStatus
+pub claw_interface::HttpError::UnexpectedStatus::message: alloc::string::String
+pub claw_interface::HttpError::UnexpectedStatus::status: claw_interface::http::HttpStatusCode
+pub enum claw_interface::HttpRequestFailure
+pub claw_interface::HttpRequestFailure::BodyTooLarge
+pub claw_interface::HttpRequestFailure::BodyTooLarge::len: usize
+pub claw_interface::HttpRequestFailure::Driver
+pub claw_interface::HttpRequestFailure::Driver::message: alloc::string::String
+pub claw_interface::HttpRequestFailure::Driver::operation: &'static str
+pub claw_interface::HttpRequestFailure::HeaderContainsNul
+pub claw_interface::HttpRequestFailure::HeaderContainsNul::field: &'static str
+pub claw_interface::HttpRequestFailure::InvalidStatusCode
+pub claw_interface::HttpRequestFailure::InvalidStatusCode::status: i32
+pub claw_interface::HttpRequestFailure::TimeoutTooLarge
+pub claw_interface::HttpRequestFailure::TimeoutTooLarge::timeout_ms: u32
+pub claw_interface::HttpRequestFailure::Transport(alloc::string::String)
+impl claw_interface::http::HttpRequestFailure
+pub fn claw_interface::http::HttpRequestFailure::driver(&'static str, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn claw_interface::http::HttpRequestFailure::transport(impl core::convert::Into<alloc::string::String>) -> Self
+pub enum claw_interface::Priority
+pub claw_interface::Priority::High
+pub claw_interface::Priority::Low
+pub claw_interface::Priority::Normal
+pub enum claw_interface::SleepOutcome
+pub claw_interface::SleepOutcome::Cancelled
+pub claw_interface::SleepOutcome::Completed
+impl claw_interface::timer::SleepOutcome
+pub const fn claw_interface::timer::SleepOutcome::is_cancelled(self) -> bool
+pub const fn claw_interface::timer::SleepOutcome::is_completed(self) -> bool
+pub struct claw_interface::Cancel<'a>(_)
+impl claw_interface::http::Cancel<'static>
+pub fn claw_interface::http::Cancel<'static>::never() -> Self
+impl<'a> claw_interface::http::Cancel<'a>
+pub fn claw_interface::http::Cancel<'a>::is_cancelled(&self) -> bool
+pub fn claw_interface::http::Cancel<'a>::new(&'a core::sync::atomic::AtomicBool) -> Self
+pub struct claw_interface::FsIoError
+impl claw_interface::fs::FsIoError
+pub fn claw_interface::fs::FsIoError::message(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn claw_interface::fs::FsIoError::new(impl core::error::Error + core::marker::Send + core::marker::Sync + 'static) -> Self
+impl core::cmp::Eq for claw_interface::fs::FsIoError
+impl core::cmp::PartialEq for claw_interface::fs::FsIoError
+pub fn claw_interface::fs::FsIoError::eq(&self, &Self) -> bool
+impl core::error::Error for claw_interface::fs::FsIoError
+pub fn claw_interface::fs::FsIoError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Display for claw_interface::fs::FsIoError
+pub fn claw_interface::fs::FsIoError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct claw_interface::HttpGetRequest<'a>
+pub claw_interface::HttpGetRequest::auth: claw_interface::http::HttpAuth<'a>
+pub claw_interface::HttpGetRequest::headers: &'a [claw_interface::http::HttpHeader<'a>]
+pub claw_interface::HttpGetRequest::timeout_ms: u32
+pub claw_interface::HttpGetRequest::url: &'a str
+pub struct claw_interface::HttpHeader<'a>
+pub claw_interface::HttpHeader::name: &'a str
+pub claw_interface::HttpHeader::value: &'a str
+pub struct claw_interface::HttpJsonRequest<'a>
+pub claw_interface::HttpJsonRequest::auth: claw_interface::http::HttpAuth<'a>
+pub claw_interface::HttpJsonRequest::body: &'a str
+pub claw_interface::HttpJsonRequest::headers: &'a [claw_interface::http::HttpHeader<'a>]
+pub claw_interface::HttpJsonRequest::timeout_ms: u32
+pub claw_interface::HttpJsonRequest::url: &'a str
+pub struct claw_interface::HttpResponse
+pub claw_interface::HttpResponse::body: alloc::string::String
+pub claw_interface::HttpResponse::status_code: claw_interface::http::HttpStatusCode
+#[repr(transparent)] pub struct claw_interface::HttpStatusCode(_)
+impl claw_interface::http::HttpStatusCode
+pub const claw_interface::http::HttpStatusCode::NO_CONTENT: Self
+pub const claw_interface::http::HttpStatusCode::OK: Self
+pub fn claw_interface::http::HttpStatusCode::as_i32(self) -> i32
+pub const fn claw_interface::http::HttpStatusCode::as_u16(self) -> u16
+pub const fn claw_interface::http::HttpStatusCode::is_success(self) -> bool
+pub const fn claw_interface::http::HttpStatusCode::new(u16) -> Self
+impl core::convert::From<claw_interface::http::HttpStatusCode> for i32
+pub fn i32::from(claw_interface::http::HttpStatusCode) -> Self
+impl core::convert::From<claw_interface::http::HttpStatusCode> for u16
+pub fn u16::from(claw_interface::http::HttpStatusCode) -> Self
+impl core::fmt::Display for claw_interface::http::HttpStatusCode
+pub fn claw_interface::http::HttpStatusCode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct claw_interface::WorkerHandle
+impl claw_interface::thread::WorkerHandle
+pub fn claw_interface::thread::WorkerHandle::join(self)
+pub fn claw_interface::thread::WorkerHandle::new(std::thread::join_handle::JoinHandle<()>) -> Self
+pub trait claw_interface::ClawExecutor
+pub fn claw_interface::ClawExecutor::block_on<Fut: core::future::future::Future>(Fut) -> <Fut as core::future::future::Future>::Output
+pub trait claw_interface::ClawFile
+pub fn claw_interface::ClawFile::read_exact_at(&mut self, u64, usize) -> core::result::Result<alloc::vec::Vec<u8>, claw_interface::fs::FsError>
+pub fn claw_interface::ClawFile::read_to_end(&mut self) -> core::result::Result<alloc::vec::Vec<u8>, claw_interface::fs::FsError>
+pub fn claw_interface::ClawFile::size(&self) -> core::result::Result<u64, claw_interface::fs::FsError>
+pub fn claw_interface::ClawFile::write_all(&mut self, &[u8]) -> core::result::Result<(), claw_interface::fs::FsError>
+pub trait claw_interface::ClawFs: core::marker::Send + core::marker::Sync + 'static
+pub type claw_interface::ClawFs::File: claw_interface::fs::ClawFile
+pub fn claw_interface::ClawFs::append(&str, &[u8]) -> core::result::Result<(), claw_interface::fs::FsError>
+pub fn claw_interface::ClawFs::create(&str) -> core::result::Result<Self::File, claw_interface::fs::FsError>
+pub fn claw_interface::ClawFs::create_dir_all(&str) -> core::result::Result<(), claw_interface::fs::FsError>
+pub fn claw_interface::ClawFs::exists(&str) -> bool
+pub fn claw_interface::ClawFs::len(&str) -> core::result::Result<u64, claw_interface::fs::FsError>
+pub fn claw_interface::ClawFs::list_dir(&str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, claw_interface::fs::FsError>
+pub fn claw_interface::ClawFs::open(&str) -> core::result::Result<Self::File, claw_interface::fs::FsError>
+pub fn claw_interface::ClawFs::open_append(&str) -> core::result::Result<Self::File, claw_interface::fs::FsError>
+pub fn claw_interface::ClawFs::read(&str) -> core::result::Result<alloc::vec::Vec<u8>, claw_interface::fs::FsError>
+pub fn claw_interface::ClawFs::read_at(&str, u64, usize) -> core::result::Result<alloc::vec::Vec<u8>, claw_interface::fs::FsError>
+pub fn claw_interface::ClawFs::remove(&str) -> core::result::Result<(), claw_interface::fs::FsError>
+pub fn claw_interface::ClawFs::rename(&str, &str) -> core::result::Result<(), claw_interface::fs::FsError>
+pub fn claw_interface::ClawFs::write_atomic(&str, &[u8]) -> core::result::Result<(), claw_interface::fs::FsError>
+pub trait claw_interface::ClawHttp
+pub fn claw_interface::ClawHttp::get_json<'a>(&'a mut self, &'a claw_interface::http::HttpGetRequest<'a>, claw_interface::http::Cancel<'a>) -> claw_interface::http::HttpResponseFuture<'a>
+pub fn claw_interface::ClawHttp::post_json<'a>(&'a mut self, &'a claw_interface::http::HttpJsonRequest<'a>, claw_interface::http::Cancel<'a>) -> claw_interface::http::HttpResponseFuture<'a>
+pub trait claw_interface::ClawThread: core::marker::Send + core::marker::Sync
+pub fn claw_interface::ClawThread::spawn_worker<F>(&str, usize, claw_interface::thread::Priority, claw_interface::thread::CoreAffinity, F) -> core::io::error::Result<claw_interface::thread::WorkerHandle> where F: core::ops::function::FnOnce() + core::marker::Send + 'static
+pub trait claw_interface::ClawTimer
+pub fn claw_interface::ClawTimer::sleep<'a>(&'a mut self, core::time::Duration, claw_interface::http::Cancel<'a>) -> claw_interface::timer::TimerFuture<'a>
+pub type claw_interface::HttpResponseFuture<'a> = core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = core::result::Result<claw_interface::http::HttpResponse, claw_interface::http::HttpError>> + 'a)>>
+pub type claw_interface::TimerFuture<'a> = core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = claw_interface::timer::SleepOutcome> + 'a)>>

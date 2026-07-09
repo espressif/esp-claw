@@ -1,0 +1,172 @@
+pub mod claw_checkpoint
+pub enum claw_checkpoint::ChangePatternHint
+pub claw_checkpoint::ChangePatternHint::AppendLikely
+pub claw_checkpoint::ChangePatternHint::Arbitrary
+pub enum claw_checkpoint::CheckpointCoordinatorInitError
+pub claw_checkpoint::CheckpointCoordinatorInitError::InvalidCheckpointInterval
+pub claw_checkpoint::CheckpointCoordinatorInitError::InvalidHistoryCheckpoints
+pub claw_checkpoint::CheckpointCoordinatorInitError::Storage(claw_checkpoint::CheckpointStorageError)
+pub enum claw_checkpoint::CheckpointError
+pub claw_checkpoint::CheckpointError::ExportPart
+pub claw_checkpoint::CheckpointError::ExportPart::batch: claw_checkpoint::BatchName
+pub claw_checkpoint::CheckpointError::ExportPart::id: claw_checkpoint::BatchId
+pub claw_checkpoint::CheckpointError::ExportPart::part: claw_checkpoint::PartName
+pub claw_checkpoint::CheckpointError::ExportPart::source: claw_checkpoint::DurablePartError
+pub claw_checkpoint::CheckpointError::MissingManagedBatch
+pub claw_checkpoint::CheckpointError::MissingManagedBatch::batch: claw_checkpoint::BatchName
+pub claw_checkpoint::CheckpointError::MissingManagedBatch::id: claw_checkpoint::BatchId
+pub claw_checkpoint::CheckpointError::Storage(claw_checkpoint::CheckpointStorageError)
+pub claw_checkpoint::CheckpointError::UnsatisfiedDependency
+pub claw_checkpoint::CheckpointError::UnsatisfiedDependency::batch: claw_checkpoint::BatchName
+pub claw_checkpoint::CheckpointError::UnsatisfiedDependency::id: claw_checkpoint::BatchId
+pub claw_checkpoint::CheckpointError::UnsatisfiedDependency::required: claw_checkpoint::BatchRef
+pub claw_checkpoint::CheckpointError::UnsatisfiedDependency::requirement: claw_checkpoint::DependencyRequirement
+pub enum claw_checkpoint::CheckpointStorageError
+pub claw_checkpoint::CheckpointStorageError::DecodeIndex(serde_json::error::Error)
+pub claw_checkpoint::CheckpointStorageError::DecodeManifest(serde_json::error::Error)
+pub claw_checkpoint::CheckpointStorageError::EmptyRoot
+pub claw_checkpoint::CheckpointStorageError::EncodeIndex(serde_json::error::Error)
+pub claw_checkpoint::CheckpointStorageError::EncodeManifest(serde_json::error::Error)
+pub claw_checkpoint::CheckpointStorageError::Fs
+pub claw_checkpoint::CheckpointStorageError::Fs::path: alloc::string::String
+pub claw_checkpoint::CheckpointStorageError::Fs::source: claw_interface::fs::FsError
+pub claw_checkpoint::CheckpointStorageError::InvalidHistoryRetention
+pub claw_checkpoint::CheckpointStorageError::InvalidName(alloc::string::String)
+pub claw_checkpoint::CheckpointStorageError::NonIncreasingStep
+pub claw_checkpoint::CheckpointStorageError::NonIncreasingStep::latest: claw_checkpoint::CheckpointStep
+pub claw_checkpoint::CheckpointStorageError::NonIncreasingStep::step: claw_checkpoint::CheckpointStep
+pub enum claw_checkpoint::DependencyRequirement
+pub claw_checkpoint::DependencyRequirement::AtLeast
+pub claw_checkpoint::DependencyRequirement::AtMost
+pub claw_checkpoint::DependencyRequirement::Equal
+pub enum claw_checkpoint::DurablePartError
+pub claw_checkpoint::DurablePartError::Decode(serde_json::error::Error)
+pub claw_checkpoint::DurablePartError::Encode(serde_json::error::Error)
+pub claw_checkpoint::DurablePartError::InvalidState(&'static str)
+pub claw_checkpoint::DurablePartError::UnsupportedRestore
+pub enum claw_checkpoint::LoadCheckpointError
+pub claw_checkpoint::LoadCheckpointError::DecodeIndex(serde_json::error::Error)
+pub claw_checkpoint::LoadCheckpointError::DecodeManifest(serde_json::error::Error)
+pub claw_checkpoint::LoadCheckpointError::EmptyRoot
+pub claw_checkpoint::LoadCheckpointError::Fs
+pub claw_checkpoint::LoadCheckpointError::Fs::path: alloc::string::String
+pub claw_checkpoint::LoadCheckpointError::Fs::source: claw_interface::fs::FsError
+pub claw_checkpoint::LoadCheckpointError::Integrity
+pub claw_checkpoint::LoadCheckpointError::Integrity::path: alloc::string::String
+pub claw_checkpoint::LoadCheckpointError::StepNotFound(claw_checkpoint::CheckpointStep)
+pub claw_checkpoint::LoadCheckpointError::UnsupportedEncoding(alloc::string::String)
+pub enum claw_checkpoint::StorageSizeHint
+pub claw_checkpoint::StorageSizeHint::Large
+pub claw_checkpoint::StorageSizeHint::Small
+pub struct claw_checkpoint::BatchCheckpoint
+pub claw_checkpoint::BatchCheckpoint::id: claw_checkpoint::BatchId
+pub claw_checkpoint::BatchCheckpoint::name: alloc::string::String
+pub claw_checkpoint::BatchCheckpoint::parts: alloc::vec::Vec<claw_checkpoint::LoadedPart>
+pub struct claw_checkpoint::BatchId(pub u32)
+impl claw_checkpoint::BatchId
+pub fn claw_checkpoint::BatchId::from_wire(&str) -> core::result::Result<Self, claw_utils::IdParseError>
+pub const fn claw_checkpoint::BatchId::new(u32) -> Self
+pub fn claw_checkpoint::BatchId::to_wire(&self) -> alloc::string::String
+impl core::convert::From<u32> for claw_checkpoint::BatchId
+pub fn claw_checkpoint::BatchId::from(u32) -> Self
+impl core::fmt::Display for claw_checkpoint::BatchId
+pub fn claw_checkpoint::BatchId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::str::traits::FromStr for claw_checkpoint::BatchId
+pub type claw_checkpoint::BatchId::Err = claw_utils::IdParseError
+pub fn claw_checkpoint::BatchId::from_str(&str) -> core::result::Result<Self, Self::Err>
+impl serde_core::ser::Serialize for claw_checkpoint::BatchId
+pub fn claw_checkpoint::BatchId::serialize<S: serde_core::ser::Serializer>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error>
+impl<'de> serde_core::de::Deserialize<'de> for claw_checkpoint::BatchId
+pub fn claw_checkpoint::BatchId::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
+pub struct claw_checkpoint::BatchRef
+pub claw_checkpoint::BatchRef::generation: claw_checkpoint::BatchGeneration
+pub claw_checkpoint::BatchRef::key: claw_checkpoint::BatchKey
+pub struct claw_checkpoint::BatchWrite<'a>
+pub claw_checkpoint::BatchWrite::batch: claw_checkpoint::BatchKey
+pub claw_checkpoint::BatchWrite::writes: alloc::vec::Vec<claw_checkpoint::PartWrite<'a>>
+pub struct claw_checkpoint::Checkpoint
+pub claw_checkpoint::Checkpoint::batches: alloc::vec::Vec<claw_checkpoint::BatchCheckpoint>
+pub claw_checkpoint::Checkpoint::step: claw_checkpoint::CheckpointStep
+pub struct claw_checkpoint::CheckpointCoordinator<S: claw_checkpoint::CheckpointStorage>
+impl<S: claw_checkpoint::CheckpointStorage> claw_checkpoint::CheckpointCoordinator<S>
+pub fn claw_checkpoint::CheckpointCoordinator<S>::add_batch(&mut self, alloc::boxed::Box<dyn claw_checkpoint::DurableBatch>) -> &mut Self
+pub fn claw_checkpoint::CheckpointCoordinator<S>::maybe_checkpoint(&mut self) -> core::result::Result<(), claw_checkpoint::CheckpointError>
+pub fn claw_checkpoint::CheckpointCoordinator<S>::new(S, claw_checkpoint::CheckpointStep, claw_checkpoint::CheckpointStep) -> core::result::Result<Self, claw_checkpoint::CheckpointCoordinatorInitError>
+pub struct claw_checkpoint::CheckpointWrite<'a>
+pub claw_checkpoint::CheckpointWrite::batches: alloc::vec::Vec<claw_checkpoint::BatchWrite<'a>>
+pub claw_checkpoint::CheckpointWrite::step: claw_checkpoint::CheckpointStep
+pub struct claw_checkpoint::DurableState<T: claw_checkpoint::DurableStateCodec>
+impl<T: claw_checkpoint::DurableStateCodec> claw_checkpoint::DurableState<T>
+pub fn claw_checkpoint::DurableState<T>::export_state(&self) -> core::result::Result<claw_checkpoint::PartStateBlob<'_>, claw_checkpoint::DurablePartError>
+pub fn claw_checkpoint::DurableState<T>::generation(&self) -> claw_checkpoint::PartGeneration
+pub fn claw_checkpoint::DurableState<T>::get(&self) -> &T
+pub fn claw_checkpoint::DurableState<T>::get_mut(&mut self) -> &mut T
+pub fn claw_checkpoint::DurableState<T>::new(T) -> Self
+pub fn claw_checkpoint::DurableState<T>::replace(&mut self, T)
+pub fn claw_checkpoint::DurableState<T>::restore_state(claw_checkpoint::PartStateSlice<'_>) -> core::result::Result<Self, claw_checkpoint::DurablePartError>
+impl<T: claw_checkpoint::DurableStateCodec> core::default::Default for claw_checkpoint::DurableState<T>
+pub fn claw_checkpoint::DurableState<T>::default() -> Self
+pub struct claw_checkpoint::FsCheckpointStorage<F: claw_interface::fs::ClawFs>
+impl<F: claw_interface::fs::ClawFs> claw_checkpoint::CheckpointStorage for claw_checkpoint::FsCheckpointStorage<F>
+pub fn claw_checkpoint::FsCheckpointStorage<F>::latest_step(&self) -> core::result::Result<core::option::Option<claw_checkpoint::CheckpointStep>, claw_checkpoint::CheckpointStorageError>
+pub fn claw_checkpoint::FsCheckpointStorage<F>::load_checkpoint(&self, claw_checkpoint::CheckpointStep) -> core::result::Result<claw_checkpoint::Checkpoint, claw_checkpoint::LoadCheckpointError>
+pub fn claw_checkpoint::FsCheckpointStorage<F>::new(alloc::string::String) -> Self
+pub fn claw_checkpoint::FsCheckpointStorage<F>::next_step(&mut self) -> core::result::Result<claw_checkpoint::CheckpointStep, claw_checkpoint::CheckpointStorageError>
+pub fn claw_checkpoint::FsCheckpointStorage<F>::prune_history(&mut self, claw_checkpoint::CheckpointStep) -> core::result::Result<(), claw_checkpoint::CheckpointStorageError>
+pub fn claw_checkpoint::FsCheckpointStorage<F>::write_checkpoint(&mut self, claw_checkpoint::CheckpointWrite<'_>) -> core::result::Result<(), claw_checkpoint::CheckpointStorageError>
+pub struct claw_checkpoint::LoadedPart
+pub claw_checkpoint::LoadedPart::name: alloc::string::String
+pub claw_checkpoint::LoadedPart::state: claw_checkpoint::PartStateBlob<'static>
+pub struct claw_checkpoint::PartStateBlob<'a>
+pub claw_checkpoint::PartStateBlob::bytes: alloc::borrow::Cow<'a, [u8]>
+pub claw_checkpoint::PartStateBlob::schema_version: claw_checkpoint::SchemaVersion
+impl<'a> claw_checkpoint::PartStateBlob<'a>
+pub fn claw_checkpoint::PartStateBlob<'a>::as_slice(&self) -> claw_checkpoint::PartStateSlice<'_>
+pub fn claw_checkpoint::PartStateBlob<'a>::into_owned(self) -> claw_checkpoint::PartStateBlob<'static>
+pub struct claw_checkpoint::PartStateSlice<'a>
+pub claw_checkpoint::PartStateSlice::bytes: &'a [u8]
+pub claw_checkpoint::PartStateSlice::schema_version: claw_checkpoint::SchemaVersion
+pub struct claw_checkpoint::PartWrite<'a>
+pub claw_checkpoint::PartWrite::hint: claw_checkpoint::StorageHint
+pub claw_checkpoint::PartWrite::name: claw_checkpoint::PartName
+pub claw_checkpoint::PartWrite::state: claw_checkpoint::PartStateBlob<'a>
+pub struct claw_checkpoint::StorageHint
+pub claw_checkpoint::StorageHint::change: claw_checkpoint::ChangePatternHint
+pub claw_checkpoint::StorageHint::size: claw_checkpoint::StorageSizeHint
+pub trait claw_checkpoint::CheckpointStorage
+pub fn claw_checkpoint::CheckpointStorage::latest_step(&self) -> core::result::Result<core::option::Option<claw_checkpoint::CheckpointStep>, claw_checkpoint::CheckpointStorageError>
+pub fn claw_checkpoint::CheckpointStorage::load_checkpoint(&self, claw_checkpoint::CheckpointStep) -> core::result::Result<claw_checkpoint::Checkpoint, claw_checkpoint::LoadCheckpointError>
+pub fn claw_checkpoint::CheckpointStorage::new(alloc::string::String) -> Self where Self: core::marker::Sized
+pub fn claw_checkpoint::CheckpointStorage::next_step(&mut self) -> core::result::Result<claw_checkpoint::CheckpointStep, claw_checkpoint::CheckpointStorageError>
+pub fn claw_checkpoint::CheckpointStorage::prune_history(&mut self, claw_checkpoint::CheckpointStep) -> core::result::Result<(), claw_checkpoint::CheckpointStorageError>
+pub fn claw_checkpoint::CheckpointStorage::write_checkpoint(&mut self, claw_checkpoint::CheckpointWrite<'_>) -> core::result::Result<(), claw_checkpoint::CheckpointStorageError>
+impl<F: claw_interface::fs::ClawFs> claw_checkpoint::CheckpointStorage for claw_checkpoint::FsCheckpointStorage<F>
+pub fn claw_checkpoint::FsCheckpointStorage<F>::latest_step(&self) -> core::result::Result<core::option::Option<claw_checkpoint::CheckpointStep>, claw_checkpoint::CheckpointStorageError>
+pub fn claw_checkpoint::FsCheckpointStorage<F>::load_checkpoint(&self, claw_checkpoint::CheckpointStep) -> core::result::Result<claw_checkpoint::Checkpoint, claw_checkpoint::LoadCheckpointError>
+pub fn claw_checkpoint::FsCheckpointStorage<F>::new(alloc::string::String) -> Self
+pub fn claw_checkpoint::FsCheckpointStorage<F>::next_step(&mut self) -> core::result::Result<claw_checkpoint::CheckpointStep, claw_checkpoint::CheckpointStorageError>
+pub fn claw_checkpoint::FsCheckpointStorage<F>::prune_history(&mut self, claw_checkpoint::CheckpointStep) -> core::result::Result<(), claw_checkpoint::CheckpointStorageError>
+pub fn claw_checkpoint::FsCheckpointStorage<F>::write_checkpoint(&mut self, claw_checkpoint::CheckpointWrite<'_>) -> core::result::Result<(), claw_checkpoint::CheckpointStorageError>
+pub trait claw_checkpoint::DurableBatch
+pub fn claw_checkpoint::DurableBatch::as_ref(&self) -> claw_checkpoint::BatchRef
+pub fn claw_checkpoint::DurableBatch::depends_on(&self) -> alloc::vec::Vec<(claw_checkpoint::BatchRef, claw_checkpoint::DependencyRequirement)>
+pub fn claw_checkpoint::DurableBatch::id(&self) -> claw_checkpoint::BatchId
+pub fn claw_checkpoint::DurableBatch::name(&self) -> claw_checkpoint::BatchName
+pub fn claw_checkpoint::DurableBatch::parts(&self) -> alloc::vec::Vec<&dyn claw_checkpoint::DurablePart>
+pub fn claw_checkpoint::DurableBatch::refresh_generation(&mut self)
+pub trait claw_checkpoint::DurablePart
+pub fn claw_checkpoint::DurablePart::export_state(&self) -> core::result::Result<claw_checkpoint::PartStateBlob<'_>, claw_checkpoint::DurablePartError>
+pub fn claw_checkpoint::DurablePart::generation(&self) -> claw_checkpoint::PartGeneration
+pub fn claw_checkpoint::DurablePart::name(&self) -> claw_checkpoint::PartName
+pub fn claw_checkpoint::DurablePart::restore_from_state(claw_checkpoint::PartStateSlice<'_>) -> core::result::Result<Self, claw_checkpoint::DurablePartError> where Self: core::marker::Sized
+pub fn claw_checkpoint::DurablePart::storage_hint(&self) -> claw_checkpoint::StorageHint
+pub trait claw_checkpoint::DurableStateCodec: core::default::Default
+pub fn claw_checkpoint::DurableStateCodec::decode_state(claw_checkpoint::PartStateSlice<'_>) -> core::result::Result<Self, claw_checkpoint::DurablePartError> where Self: core::marker::Sized
+pub fn claw_checkpoint::DurableStateCodec::encode_state(&self) -> core::result::Result<claw_checkpoint::PartStateBlob<'_>, claw_checkpoint::DurablePartError>
+pub type claw_checkpoint::BatchGeneration = u64
+pub type claw_checkpoint::BatchKey = (claw_checkpoint::BatchName, claw_checkpoint::BatchId)
+pub type claw_checkpoint::BatchName = &'static str
+pub type claw_checkpoint::CheckpointStep = u64
+pub type claw_checkpoint::PartGeneration = u64
+pub type claw_checkpoint::PartName = &'static str
+pub type claw_checkpoint::SchemaVersion = u32

@@ -1,0 +1,63 @@
+pub mod claw_permission
+pub enum claw_permission::Grant
+pub claw_permission::Grant::Denied(alloc::string::String)
+pub claw_permission::Grant::Granted
+pub enum claw_permission::PermissionDecision
+pub claw_permission::PermissionDecision::Allow
+pub claw_permission::PermissionDecision::Ask
+pub claw_permission::PermissionDecision::Ask::reason: alloc::string::String
+pub claw_permission::PermissionDecision::Deny
+pub claw_permission::PermissionDecision::Deny::reason: alloc::string::String
+pub enum claw_permission::Resource
+pub claw_permission::Resource::Agent(alloc::string::String)
+pub claw_permission::Resource::Host(alloc::string::String)
+pub claw_permission::Resource::Path(alloc::string::String)
+impl core::fmt::Display for claw_permission::Resource
+pub fn claw_permission::Resource::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub enum claw_permission::RiskClass
+pub claw_permission::RiskClass::High
+pub claw_permission::RiskClass::Low
+pub claw_permission::RiskClass::Moderate
+pub claw_permission::RiskClass::Safe
+pub struct claw_permission::Action
+impl claw_permission::Action
+pub fn claw_permission::Action::new(impl core::convert::Into<alloc::string::String>, claw_permission::RiskClass) -> Self
+pub fn claw_permission::Action::resource(&self) -> core::option::Option<&claw_permission::Resource>
+pub fn claw_permission::Action::risk(&self) -> claw_permission::RiskClass
+pub fn claw_permission::Action::signature(&self) -> alloc::string::String
+pub fn claw_permission::Action::verb(&self) -> &str
+pub fn claw_permission::Action::with_resource(self, claw_permission::Resource) -> Self
+pub struct claw_permission::AllowAll
+impl claw_permission::PermissionPolicy for claw_permission::AllowAll
+pub fn claw_permission::AllowAll::evaluate(&self, &claw_permission::PermissionRequest<'_>) -> claw_permission::PermissionDecision
+pub struct claw_permission::AskAtOrAbove
+impl claw_permission::AskAtOrAbove
+pub fn claw_permission::AskAtOrAbove::new(claw_permission::RiskClass) -> Self
+impl claw_permission::PermissionPolicy for claw_permission::AskAtOrAbove
+pub fn claw_permission::AskAtOrAbove::evaluate(&self, &claw_permission::PermissionRequest<'_>) -> claw_permission::PermissionDecision
+pub struct claw_permission::GrantStore
+impl claw_permission::GrantStore
+pub fn claw_permission::GrantStore::deny(&mut self, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>)
+pub fn claw_permission::GrantStore::forget(&mut self, &str)
+pub fn claw_permission::GrantStore::grant(&mut self, impl core::convert::Into<alloc::string::String>)
+pub fn claw_permission::GrantStore::lookup(&self, &str) -> core::option::Option<&claw_permission::Grant>
+pub fn claw_permission::GrantStore::new() -> Self
+pub struct claw_permission::PermissionRequest<'a>
+pub claw_permission::PermissionRequest::action: &'a claw_permission::Action
+impl<'a> claw_permission::PermissionRequest<'a>
+pub fn claw_permission::PermissionRequest<'a>::new(&'a claw_permission::Action) -> Self
+pub struct claw_permission::PolicyChain
+impl claw_permission::PolicyChain
+pub fn claw_permission::PolicyChain::new() -> Self
+pub fn claw_permission::PolicyChain::push(&mut self, impl claw_permission::PermissionPolicy + 'static) -> &mut Self
+pub fn claw_permission::PolicyChain::with(self, impl claw_permission::PermissionPolicy + 'static) -> Self
+impl claw_permission::PermissionPolicy for claw_permission::PolicyChain
+pub fn claw_permission::PolicyChain::evaluate(&self, &claw_permission::PermissionRequest<'_>) -> claw_permission::PermissionDecision
+pub trait claw_permission::PermissionPolicy: core::marker::Send + core::marker::Sync
+pub fn claw_permission::PermissionPolicy::evaluate(&self, &claw_permission::PermissionRequest<'_>) -> claw_permission::PermissionDecision
+impl claw_permission::PermissionPolicy for claw_permission::AllowAll
+pub fn claw_permission::AllowAll::evaluate(&self, &claw_permission::PermissionRequest<'_>) -> claw_permission::PermissionDecision
+impl claw_permission::PermissionPolicy for claw_permission::AskAtOrAbove
+pub fn claw_permission::AskAtOrAbove::evaluate(&self, &claw_permission::PermissionRequest<'_>) -> claw_permission::PermissionDecision
+impl claw_permission::PermissionPolicy for claw_permission::PolicyChain
+pub fn claw_permission::PolicyChain::evaluate(&self, &claw_permission::PermissionRequest<'_>) -> claw_permission::PermissionDecision

@@ -1,0 +1,165 @@
+pub mod claw_api
+pub enum claw_api::BackendKind
+pub claw_api::BackendKind::AnthropicCompatible
+pub claw_api::BackendKind::OpenAiCompatible
+impl claw_api::BackendKind
+pub fn claw_api::BackendKind::as_str(self) -> &'static str
+impl core::fmt::Display for claw_api::BackendKind
+pub fn claw_api::BackendKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::str::traits::FromStr for claw_api::BackendKind
+pub type claw_api::BackendKind::Err = claw_api::ParseBackendKindError
+pub fn claw_api::BackendKind::from_str(&str) -> core::result::Result<Self, Self::Err>
+pub enum claw_api::ChatError
+pub claw_api::ChatError::Api(claw_api::ClawApiError)
+pub claw_api::ChatError::InvalidToolsJson
+impl claw_api::ChatError
+pub fn claw_api::ChatError::is_aborted(&self) -> bool
+pub fn claw_api::ChatError::is_retryable(&self) -> bool
+pub enum claw_api::ChatJsonError
+pub claw_api::ChatJsonError::Chat(claw_api::ChatError)
+pub claw_api::ChatJsonError::EmptyText
+pub claw_api::ChatJsonError::InvalidOutput(alloc::string::String)
+pub claw_api::ChatJsonError::MissingOutputSchema
+impl claw_api::ChatJsonError
+pub fn claw_api::ChatJsonError::is_retryable(&self) -> bool
+pub enum claw_api::ClawApiError
+pub claw_api::ClawApiError::ApiError(&'static str)
+pub claw_api::ClawApiError::EmptyResponse
+pub claw_api::ClawApiError::MalformedResponse(&'static str)
+pub claw_api::ClawApiError::Parse
+pub claw_api::ClawApiError::TransientTransport(alloc::string::String)
+pub claw_api::ClawApiError::Transport(alloc::string::String)
+impl claw_api::ClawApiError
+pub fn claw_api::ClawApiError::is_aborted(&self) -> bool
+pub fn claw_api::ClawApiError::is_retryable(&self) -> bool
+pub enum claw_api::InferMediaError
+pub claw_api::InferMediaError::Api(claw_api::ClawApiError)
+pub claw_api::InferMediaError::IncompleteRequest
+pub claw_api::InferMediaError::MediaFileEmpty
+pub claw_api::InferMediaError::MediaNotFound
+pub claw_api::InferMediaError::MediaPathEmpty
+pub claw_api::InferMediaError::MediaPathNotAbsolute
+pub claw_api::InferMediaError::MediaReadFailed
+pub claw_api::InferMediaError::MediaTooLarge
+pub claw_api::InferMediaError::MediaUrlEmpty
+pub claw_api::InferMediaError::MultipleMediaAssetsUnsupported
+pub claw_api::InferMediaError::PayloadPrepFailed
+pub claw_api::InferMediaError::RemoteOnlyProfile
+pub claw_api::InferMediaError::RequiresLocalImage
+pub claw_api::InferMediaError::UnsupportedMediaKind
+pub claw_api::InferMediaError::UnsupportedMediaType
+impl claw_api::InferMediaError
+pub fn claw_api::InferMediaError::is_retryable(&self) -> bool
+pub enum claw_api::InitError
+pub claw_api::InitError::MissingApiKey
+pub claw_api::InitError::MissingBaseUrl
+pub claw_api::InitError::MissingModel
+pub enum claw_api::MediaAsset
+pub claw_api::MediaAsset::InlineBytes
+pub claw_api::MediaAsset::InlineBytes::bytes: alloc::vec::Vec<u8>
+pub claw_api::MediaAsset::InlineBytes::mime_type: alloc::string::String
+pub claw_api::MediaAsset::LocalPath
+pub claw_api::MediaAsset::LocalPath::mime_type: core::option::Option<alloc::string::String>
+pub claw_api::MediaAsset::LocalPath::path: alloc::string::String
+pub claw_api::MediaAsset::RemoteUrl
+pub claw_api::MediaAsset::RemoteUrl::url: alloc::string::String
+impl claw_api::MediaAsset
+pub fn claw_api::MediaAsset::inline_bytes(alloc::vec::Vec<u8>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn claw_api::MediaAsset::local_path(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn claw_api::MediaAsset::remote_url(impl core::convert::Into<alloc::string::String>) -> Self
+pub fn claw_api::MediaAsset::with_mime_type(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub struct claw_api::ChatJsonRequest<'a>
+pub claw_api::ChatJsonRequest::messages: &'a serde_json::value::Value
+pub claw_api::ChatJsonRequest::output_schema: core::option::Option<claw_api::StaticOutputSchema<'a>>
+pub claw_api::ChatJsonRequest::reminders: &'a [serde_json::value::Value]
+pub claw_api::ChatJsonRequest::retry: claw_api::RetryPolicy
+pub claw_api::ChatJsonRequest::system_prompt: &'a str
+pub claw_api::ChatJsonRequest::tools_json: core::option::Option<&'a str>
+impl<'a> claw_api::ChatJsonRequest<'a>
+pub fn claw_api::ChatJsonRequest<'a>::new(&'a str, &'a serde_json::value::Value) -> Self
+pub fn claw_api::ChatJsonRequest<'a>::with_output_schema(self, &'a str, &'a str) -> Self
+pub fn claw_api::ChatJsonRequest<'a>::with_reminders(self, &'a [serde_json::value::Value]) -> Self
+pub fn claw_api::ChatJsonRequest<'a>::with_retry(self, claw_api::RetryPolicy) -> Self
+pub fn claw_api::ChatJsonRequest<'a>::with_tools(self, &'a str) -> Self
+pub struct claw_api::ChatJsonResponse<T>
+pub claw_api::ChatJsonResponse::output: core::option::Option<T>
+pub claw_api::ChatJsonResponse::raw_message_json: core::option::Option<alloc::string::String>
+pub claw_api::ChatJsonResponse::reasoning_content: core::option::Option<alloc::string::String>
+pub claw_api::ChatJsonResponse::tool_calls: alloc::vec::Vec<claw_api::ToolCall>
+pub struct claw_api::ChatRequest<'a>
+pub claw_api::ChatRequest::messages: &'a serde_json::value::Value
+pub claw_api::ChatRequest::reminders: &'a [serde_json::value::Value]
+pub claw_api::ChatRequest::retry: claw_api::RetryPolicy
+pub claw_api::ChatRequest::system_prompt: &'a str
+pub claw_api::ChatRequest::tools_json: core::option::Option<&'a str>
+impl<'a> claw_api::ChatRequest<'a>
+pub fn claw_api::ChatRequest<'a>::new(&'a str, &'a serde_json::value::Value) -> Self
+pub fn claw_api::ChatRequest<'a>::with_reminders(self, &'a [serde_json::value::Value]) -> Self
+pub fn claw_api::ChatRequest<'a>::with_retry(self, claw_api::RetryPolicy) -> Self
+pub fn claw_api::ChatRequest<'a>::with_tools(self, &'a str) -> Self
+pub struct claw_api::ClawApi<H: claw_interface::http::blocking::ClawHttp>
+impl<H: claw_interface::http::blocking::ClawHttp> claw_api::ClawApi<H>
+pub fn claw_api::ClawApi<H>::chat(&mut self, &claw_api::ChatRequest<'_>, &core::sync::atomic::AtomicBool) -> core::result::Result<claw_api::LlmResponse, claw_api::ChatError>
+pub fn claw_api::ClawApi<H>::chat_json<T: serde_core::de::DeserializeOwned>(&mut self, &claw_api::ChatJsonRequest<'_>, &core::sync::atomic::AtomicBool) -> core::result::Result<claw_api::ChatJsonResponse<T>, claw_api::ChatJsonError>
+pub fn claw_api::ClawApi<H>::infer_media(&mut self, &claw_api::MediaRequest<'_>, &core::sync::atomic::AtomicBool) -> core::result::Result<alloc::string::String, claw_api::InferMediaError>
+pub fn claw_api::ClawApi<H>::init(claw_api::ClawApiConfig, H) -> core::result::Result<claw_api::ClawApi<H>, claw_api::InitError>
+pub struct claw_api::ClawApiAsync<H: claw_interface::http::ClawHttp, Timer: claw_interface::timer::ClawTimer>
+impl<H, Timer> claw_api::ClawApiAsync<H, Timer> where H: claw_interface::http::ClawHttp + core::default::Default, Timer: claw_interface::timer::ClawTimer + core::default::Default
+pub fn claw_api::ClawApiAsync<H, Timer>::init_default(claw_api::ClawApiConfig) -> core::result::Result<Self, claw_api::InitError>
+impl<H: claw_interface::http::ClawHttp, Timer: claw_interface::timer::ClawTimer> claw_api::ClawApiAsync<H, Timer>
+pub async fn claw_api::ClawApiAsync<H, Timer>::chat(&mut self, &claw_api::ChatRequest<'_>, claw_interface::http::Cancel<'_>) -> core::result::Result<claw_api::LlmResponse, claw_api::ChatError>
+pub async fn claw_api::ClawApiAsync<H, Timer>::chat_json<T: serde_core::de::DeserializeOwned>(&mut self, &claw_api::ChatJsonRequest<'_>, claw_interface::http::Cancel<'_>) -> core::result::Result<claw_api::ChatJsonResponse<T>, claw_api::ChatJsonError>
+pub async fn claw_api::ClawApiAsync<H, Timer>::infer_media(&mut self, &claw_api::MediaRequest<'_>, claw_interface::http::Cancel<'_>) -> core::result::Result<alloc::string::String, claw_api::InferMediaError>
+pub struct claw_api::ClawApiConfig
+pub claw_api::ClawApiConfig::api_key: alloc::string::String
+pub claw_api::ClawApiConfig::backend: claw_api::BackendKind
+pub claw_api::ClawApiConfig::base_url: alloc::string::String
+pub claw_api::ClawApiConfig::image_max_bytes: usize
+pub claw_api::ClawApiConfig::max_tokens: u32
+pub claw_api::ClawApiConfig::model: alloc::string::String
+pub claw_api::ClawApiConfig::timeout_ms: u32
+impl claw_api::ClawApiConfig
+pub fn claw_api::ClawApiConfig::new(claw_api::BackendKind, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub struct claw_api::LlmResponse
+pub claw_api::LlmResponse::raw_message_json: core::option::Option<alloc::string::String>
+pub claw_api::LlmResponse::reasoning_content: core::option::Option<alloc::string::String>
+pub claw_api::LlmResponse::text: core::option::Option<alloc::string::String>
+pub claw_api::LlmResponse::tool_calls: alloc::vec::Vec<claw_api::ToolCall>
+pub struct claw_api::MediaRequest<'a>
+pub claw_api::MediaRequest::media: &'a [claw_api::MediaAsset]
+pub claw_api::MediaRequest::retry: claw_api::RetryPolicy
+pub claw_api::MediaRequest::system_prompt: core::option::Option<&'a str>
+pub claw_api::MediaRequest::user_prompt: core::option::Option<&'a str>
+impl<'a> claw_api::MediaRequest<'a>
+pub fn claw_api::MediaRequest<'a>::new(&'a [claw_api::MediaAsset]) -> Self
+pub fn claw_api::MediaRequest<'a>::with_retry(self, claw_api::RetryPolicy) -> Self
+pub fn claw_api::MediaRequest<'a>::with_system_prompt(self, &'a str) -> Self
+pub fn claw_api::MediaRequest<'a>::with_user_prompt(self, &'a str) -> Self
+pub struct claw_api::ParseBackendKindError
+impl core::error::Error for claw_api::ParseBackendKindError
+impl core::fmt::Display for claw_api::ParseBackendKindError
+pub fn claw_api::ParseBackendKindError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct claw_api::RetryPolicy
+pub claw_api::RetryPolicy::backoff_multiplier: u32
+pub claw_api::RetryPolicy::initial_backoff_ms: u32
+pub claw_api::RetryPolicy::max_backoff_ms: u32
+pub claw_api::RetryPolicy::max_retries: u32
+impl claw_api::RetryPolicy
+pub fn claw_api::RetryPolicy::backoff_ms(&self, u32) -> u32
+pub const fn claw_api::RetryPolicy::fixed(u32, u32) -> Self
+pub const fn claw_api::RetryPolicy::new(u32) -> Self
+pub const fn claw_api::RetryPolicy::none() -> Self
+pub const fn claw_api::RetryPolicy::with_interval_ms(self, u32) -> Self
+pub const fn claw_api::RetryPolicy::with_max_backoff_ms(self, u32) -> Self
+pub const fn claw_api::RetryPolicy::with_multiplier(self, u32) -> Self
+impl core::default::Default for claw_api::RetryPolicy
+pub fn claw_api::RetryPolicy::default() -> Self
+pub struct claw_api::StaticOutputSchema<'a>
+pub claw_api::StaticOutputSchema::json: &'a str
+pub claw_api::StaticOutputSchema::name: &'a str
+pub struct claw_api::ToolCall
+pub claw_api::ToolCall::arguments_json: alloc::string::String
+pub claw_api::ToolCall::id: alloc::string::String
+pub claw_api::ToolCall::name: alloc::string::String
+impl claw_api::ToolCall
+pub fn claw_api::ToolCall::display_name(&self) -> &str

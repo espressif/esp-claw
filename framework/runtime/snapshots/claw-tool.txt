@@ -1,0 +1,139 @@
+pub mod claw_tool
+pub mod claw_tool::bake
+pub fn claw_tool::bake::validate_tools_dir(&std::path::Path) -> anyhow::Result<usize>
+pub macro claw_tool::tool_metadata!
+pub enum claw_tool::ToolError
+pub claw_tool::ToolError::InvalidArguments(alloc::string::String)
+pub claw_tool::ToolError::InvalidArgumentsJson(alloc::string::String)
+pub claw_tool::ToolError::InvokeRejected(alloc::string::String)
+pub claw_tool::ToolError::NotFound(alloc::string::String)
+impl core::convert::From<claw_tool::ToolError> for claw_tool::ToolInvokeError
+pub fn claw_tool::ToolInvokeError::from(claw_tool::ToolError) -> Self
+pub enum claw_tool::ToolRegistryCheckpointError
+pub claw_tool::ToolRegistryCheckpointError::Part(claw_checkpoint::DurablePartError)
+pub claw_tool::ToolRegistryCheckpointError::Storage(claw_checkpoint::CheckpointStorageError)
+pub enum claw_tool::ToolRegistryError
+pub claw_tool::ToolRegistryError::AlreadyExists(claw_tool::ToolName)
+pub claw_tool::ToolRegistryError::Checkpoint(claw_tool::ToolRegistryCheckpointError)
+pub claw_tool::ToolRegistryError::InvalidTool(claw_tool::ToolName)
+pub claw_tool::ToolRegistryError::NotFound(claw_tool::ToolName)
+pub enum claw_tool::ToolRunOutcome
+pub claw_tool::ToolRunOutcome::ApprovalNeeded
+pub claw_tool::ToolRunOutcome::ApprovalNeeded::approval: claw_tool::ApprovalNeeded
+pub claw_tool::ToolRunOutcome::ApprovalNeeded::content: alloc::string::String
+pub claw_tool::ToolRunOutcome::Blocked
+pub claw_tool::ToolRunOutcome::Blocked::content: alloc::string::String
+pub claw_tool::ToolRunOutcome::Ran
+pub claw_tool::ToolRunOutcome::Ran::content: alloc::string::String
+pub claw_tool::ToolRunOutcome::Ran::ok: bool
+pub enum claw_tool::ToolSetError
+pub claw_tool::ToolSetError::AlreadyExists(claw_tool::ToolName)
+pub claw_tool::ToolSetError::NotFound(claw_tool::ToolName)
+pub claw_tool::ToolSetError::NotLocal(claw_tool::ToolName)
+pub struct claw_tool::ApprovalNeeded
+pub claw_tool::ApprovalNeeded::signature: alloc::string::String
+pub claw_tool::ApprovalNeeded::summary: alloc::string::String
+pub struct claw_tool::RawToolInvocation<'a>
+pub claw_tool::RawToolInvocation::arguments_json: &'a str
+pub claw_tool::RawToolInvocation::id: core::option::Option<&'a str>
+pub claw_tool::RawToolInvocation::name: &'a str
+impl<'a> core::convert::TryFrom<claw_tool::RawToolInvocation<'a>> for claw_tool::ToolInvocation<'a>
+pub type claw_tool::ToolInvocation<'a>::Error = claw_tool::ToolInvokeError
+pub fn claw_tool::ToolInvocation<'a>::try_from(claw_tool::RawToolInvocation<'a>) -> core::result::Result<Self, Self::Error>
+pub struct claw_tool::RetryCount
+impl claw_tool::RetryCount
+pub fn claw_tool::RetryCount::extra(u32) -> Self
+pub fn claw_tool::RetryCount::extra_attempts(self) -> u32
+pub fn claw_tool::RetryCount::none() -> Self
+pub struct claw_tool::Tool
+impl claw_tool::Tool
+pub fn claw_tool::Tool::from_async(impl claw_tool::AsyncToolHandler + 'static) -> Self
+pub fn claw_tool::Tool::from_sync(impl claw_tool::SyncToolHandler + 'static) -> Self
+pub fn claw_tool::Tool::name(&self) -> &str
+pub fn claw_tool::Tool::schema(&self) -> &str
+pub fn claw_tool::Tool::usage(&self) -> core::option::Option<&str>
+impl core::fmt::Debug for claw_tool::Tool
+pub fn claw_tool::Tool::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct claw_tool::ToolInvocation<'a>
+impl<'a> claw_tool::ToolInvocation<'a>
+pub fn claw_tool::ToolInvocation<'a>::arguments_json(&self) -> &str
+pub fn claw_tool::ToolInvocation<'a>::arguments_value(&self) -> claw_tool::ToolResult<serde_json::value::Value>
+pub fn claw_tool::ToolInvocation<'a>::id(&self) -> core::option::Option<&str>
+pub fn claw_tool::ToolInvocation<'a>::name(&self) -> &str
+impl<'a> core::convert::TryFrom<claw_tool::RawToolInvocation<'a>> for claw_tool::ToolInvocation<'a>
+pub type claw_tool::ToolInvocation<'a>::Error = claw_tool::ToolInvokeError
+pub fn claw_tool::ToolInvocation<'a>::try_from(claw_tool::RawToolInvocation<'a>) -> core::result::Result<Self, Self::Error>
+pub struct claw_tool::ToolInvokeError
+pub claw_tool::ToolInvokeError::error: claw_tool::ToolError
+impl claw_tool::ToolInvokeError
+pub fn claw_tool::ToolInvokeError::new(claw_tool::ToolError) -> Self
+impl core::convert::From<claw_tool::ToolError> for claw_tool::ToolInvokeError
+pub fn claw_tool::ToolInvokeError::from(claw_tool::ToolError) -> Self
+impl core::error::Error for claw_tool::ToolInvokeError
+pub fn claw_tool::ToolInvokeError::source(&self) -> core::option::Option<&(dyn core::error::Error + 'static)>
+impl core::fmt::Display for claw_tool::ToolInvokeError
+pub fn claw_tool::ToolInvokeError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct claw_tool::ToolOutput
+pub claw_tool::ToolOutput::ok: bool
+pub claw_tool::ToolOutput::output: alloc::string::String
+pub struct claw_tool::ToolRegistry
+impl claw_tool::ToolRegistry
+pub fn claw_tool::ToolRegistry::disable(&self, &str) -> core::result::Result<(), claw_tool::ToolRegistryError>
+pub fn claw_tool::ToolRegistry::enable(&self, &str) -> core::result::Result<(), claw_tool::ToolRegistryError>
+pub fn claw_tool::ToolRegistry::new() -> Self
+pub fn claw_tool::ToolRegistry::register(&self, claw_tool::Tool) -> core::result::Result<(), claw_tool::ToolRegistryError>
+pub fn claw_tool::ToolRegistry::start_all(&self) -> core::result::Result<(), claw_tool::ToolRegistryError>
+pub fn claw_tool::ToolRegistry::stop_all(&self) -> core::result::Result<(), claw_tool::ToolRegistryError>
+pub fn claw_tool::ToolRegistry::tool_set(&alloc::sync::Arc<Self>) -> claw_tool::ToolSet
+pub fn claw_tool::ToolRegistry::tool_version(&self) -> claw_tool::ToolRegistryVersion
+impl claw_checkpoint::DurablePart for claw_tool::ToolRegistry
+pub fn claw_tool::ToolRegistry::export_state(&self) -> core::result::Result<claw_checkpoint::PartStateBlob<'_>, claw_checkpoint::DurablePartError>
+pub fn claw_tool::ToolRegistry::generation(&self) -> claw_checkpoint::PartGeneration
+pub fn claw_tool::ToolRegistry::name(&self) -> &'static str
+pub fn claw_tool::ToolRegistry::restore_from_state(claw_checkpoint::PartStateSlice<'_>) -> core::result::Result<Self, claw_checkpoint::DurablePartError>
+pub fn claw_tool::ToolRegistry::storage_hint(&self) -> claw_checkpoint::StorageHint
+impl core::fmt::Debug for claw_tool::ToolRegistry
+pub fn claw_tool::ToolRegistry::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct claw_tool::ToolRunner<'a>
+impl<'a> claw_tool::ToolRunner<'a>
+pub fn claw_tool::ToolRunner<'a>::new(&'a claw_tool::ToolSetHandle<'a>, core::option::Option<&'a dyn claw_tool::ToolGate>) -> Self
+pub async fn claw_tool::ToolRunner<'a>::run<'call>(&self, &'call claw_tool::ToolInvocation<'call>) -> claw_tool::ToolRunOutcome
+pub struct claw_tool::ToolSet
+impl claw_tool::ToolSet
+pub fn claw_tool::ToolSet::add_tool(&mut self, claw_tool::Tool) -> core::result::Result<(), claw_tool::ToolSetError>
+pub fn claw_tool::ToolSet::begin(&mut self) -> core::result::Result<claw_tool::ToolSetHandle<'_>, claw_tool::ToolSetError>
+pub fn claw_tool::ToolSet::clear_temporary_tools(&mut self)
+pub fn claw_tool::ToolSet::disable_tool(&mut self, claw_tool::ToolName) -> core::result::Result<(), claw_tool::ToolSetError>
+pub fn claw_tool::ToolSet::enable_tool(&mut self, claw_tool::ToolName) -> core::result::Result<(), claw_tool::ToolSetError>
+pub fn claw_tool::ToolSet::remove_tool(&mut self, claw_tool::ToolName) -> core::result::Result<(), claw_tool::ToolSetError>
+pub fn claw_tool::ToolSet::restore_state(&mut self, claw_checkpoint::PartStateSlice<'_>) -> core::result::Result<(), claw_checkpoint::DurablePartError>
+pub fn claw_tool::ToolSet::temporarily_disable_tool(&mut self, claw_tool::ToolName) -> core::result::Result<(), claw_tool::ToolSetError>
+pub fn claw_tool::ToolSet::temporarily_enable_tool(&mut self, claw_tool::ToolName) -> core::result::Result<(), claw_tool::ToolSetError>
+impl claw_checkpoint::DurablePart for claw_tool::ToolSet
+pub fn claw_tool::ToolSet::export_state(&self) -> core::result::Result<claw_checkpoint::PartStateBlob<'_>, claw_checkpoint::DurablePartError>
+pub fn claw_tool::ToolSet::generation(&self) -> claw_checkpoint::PartGeneration
+pub fn claw_tool::ToolSet::name(&self) -> &'static str
+pub fn claw_tool::ToolSet::storage_hint(&self) -> claw_checkpoint::StorageHint
+pub struct claw_tool::ToolSetHandle<'a>
+impl<'a> claw_tool::ToolSetHandle<'a>
+pub fn claw_tool::ToolSetHandle<'a>::extra_tool_context(&self) -> &str
+pub async fn claw_tool::ToolSetHandle<'a>::invoke<'call>(&self, &'call claw_tool::ToolInvocation<'call>) -> claw_tool::ToolResult<claw_tool::ToolOutput>
+pub fn claw_tool::ToolSetHandle<'a>::schemas_json(&self) -> &str
+pub fn claw_tool::ToolSetHandle<'a>::tool_context(&self) -> &str
+pub trait claw_tool::AsyncToolHandler: claw_tool::ToolSpec
+pub fn claw_tool::AsyncToolHandler::invoke<'a>(&'a self, &'a claw_tool::ToolInvocation<'_>) -> claw_tool::ToolFuture<'a>
+pub trait claw_tool::SyncToolHandler: claw_tool::ToolSpec
+pub fn claw_tool::SyncToolHandler::invoke(&self, &claw_tool::ToolInvocation<'_>) -> claw_tool::ToolResult<claw_tool::ToolOutput>
+pub trait claw_tool::ToolGate
+pub fn claw_tool::ToolGate::decide(&self, &claw_permission::action::Action) -> claw_permission::policy::PermissionDecision
+pub trait claw_tool::ToolSpec: core::marker::Send + core::marker::Sync
+pub fn claw_tool::ToolSpec::classify(&self, &claw_tool::ToolInvocation<'_>) -> claw_permission::action::Action
+pub fn claw_tool::ToolSpec::concurrent(&self) -> bool
+pub fn claw_tool::ToolSpec::name(&self) -> &str
+pub fn claw_tool::ToolSpec::retry_count(&self) -> claw_tool::RetryCount
+pub fn claw_tool::ToolSpec::schema(&self) -> &str
+pub fn claw_tool::ToolSpec::usage(&self) -> core::option::Option<&str>
+pub type claw_tool::ToolFuture<'a> = core::pin::Pin<alloc::boxed::Box<(dyn core::future::future::Future<Output = claw_tool::ToolResult<claw_tool::ToolOutput>> + core::marker::Send + 'a)>>
+pub type claw_tool::ToolName = alloc::string::String
+pub type claw_tool::ToolRegistryVersion = u64
+pub type claw_tool::ToolResult<T> = core::result::Result<T, claw_tool::ToolInvokeError>

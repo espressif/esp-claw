@@ -1,0 +1,15 @@
+pub mod claw_utils
+pub macro claw_utils::define_id_allocator!
+pub macro claw_utils::define_prefixed_id!
+pub enum claw_utils::IdParseError
+pub claw_utils::IdParseError::Empty
+pub claw_utils::IdParseError::Invalid
+pub claw_utils::IdParseError::Invalid::kind: &'static str
+pub claw_utils::IdParseError::Invalid::value: alloc::string::String
+pub struct claw_utils::TruncatedText<T>
+impl<T: core::convert::AsRef<str>> claw_utils::TruncatedText<T>
+pub fn claw_utils::TruncatedText<T>::new(T) -> Self
+pub fn claw_utils::TruncatedText<T>::with_limit(T, usize) -> Self
+impl<T: core::convert::AsRef<str>> core::fmt::Display for claw_utils::TruncatedText<T>
+pub fn claw_utils::TruncatedText<T>::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub fn claw_utils::parse_prefixed_id(&str, &str, &'static str) -> core::result::Result<u32, claw_utils::IdParseError>

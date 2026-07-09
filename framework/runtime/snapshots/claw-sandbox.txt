@@ -1,0 +1,85 @@
+pub mod claw_sandbox
+pub mod claw_sandbox::fs
+pub enum claw_sandbox::fs::SandboxError
+pub claw_sandbox::fs::SandboxError::Fs(claw_interface::fs::FsError)
+pub claw_sandbox::fs::SandboxError::OutsideSandbox(alloc::string::String)
+pub claw_sandbox::fs::SandboxError::ReadOnly(alloc::string::String)
+pub const claw_sandbox::fs::READ_ONLY_PREFIXES: &[&str]
+pub const claw_sandbox::fs::VISIBLE_PREFIXES: &[&str]
+pub trait claw_sandbox::fs::SandboxFs: core::marker::Send + core::marker::Sync
+pub fn claw_sandbox::fs::SandboxFs::append(&self, &str, &[u8]) -> core::result::Result<(), claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::fs::SandboxFs::exists(&self, &str) -> core::result::Result<bool, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::fs::SandboxFs::len(&self, &str) -> core::result::Result<u64, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::fs::SandboxFs::list_dir(&self, &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::fs::SandboxFs::read(&self, &str) -> core::result::Result<alloc::vec::Vec<u8>, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::fs::SandboxFs::read_at(&self, &str, u64, usize) -> core::result::Result<alloc::vec::Vec<u8>, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::fs::SandboxFs::remove(&self, &str) -> core::result::Result<(), claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::fs::SandboxFs::write_atomic(&self, &str, &[u8]) -> core::result::Result<(), claw_sandbox::fs::SandboxError>
+impl<F: claw_interface::fs::ClawFs> claw_sandbox::fs::SandboxFs for claw_sandbox::sandbox::Sandbox<F>
+pub fn claw_sandbox::sandbox::Sandbox<F>::append(&self, &str, &[u8]) -> core::result::Result<(), claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::exists(&self, &str) -> core::result::Result<bool, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::len(&self, &str) -> core::result::Result<u64, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::list_dir(&self, &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::read(&self, &str) -> core::result::Result<alloc::vec::Vec<u8>, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::read_at(&self, &str, u64, usize) -> core::result::Result<alloc::vec::Vec<u8>, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::remove(&self, &str) -> core::result::Result<(), claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::write_atomic(&self, &str, &[u8]) -> core::result::Result<(), claw_sandbox::fs::SandboxError>
+pub mod claw_sandbox::sandbox
+pub struct claw_sandbox::sandbox::RealRoots
+pub claw_sandbox::sandbox::RealRoots::shared_data: &'static str
+pub claw_sandbox::sandbox::RealRoots::shared_skills: &'static str
+pub claw_sandbox::sandbox::RealRoots::shared_tmp: &'static str
+pub claw_sandbox::sandbox::RealRoots::system_skills: &'static str
+pub struct claw_sandbox::sandbox::Sandbox<F: claw_interface::fs::ClawFs>
+impl<F: claw_interface::fs::ClawFs> claw_sandbox::sandbox::Sandbox<F>
+pub fn claw_sandbox::sandbox::Sandbox<F>::new(impl core::convert::Into<alloc::string::String>, claw_sandbox::sandbox::RealRoots) -> core::result::Result<Self, claw_sandbox::fs::SandboxError>
+impl<F: claw_interface::fs::ClawFs> claw_sandbox::fs::SandboxFs for claw_sandbox::sandbox::Sandbox<F>
+pub fn claw_sandbox::sandbox::Sandbox<F>::append(&self, &str, &[u8]) -> core::result::Result<(), claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::exists(&self, &str) -> core::result::Result<bool, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::len(&self, &str) -> core::result::Result<u64, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::list_dir(&self, &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::read(&self, &str) -> core::result::Result<alloc::vec::Vec<u8>, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::read_at(&self, &str, u64, usize) -> core::result::Result<alloc::vec::Vec<u8>, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::remove(&self, &str) -> core::result::Result<(), claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::write_atomic(&self, &str, &[u8]) -> core::result::Result<(), claw_sandbox::fs::SandboxError>
+pub enum claw_sandbox::SandboxError
+pub claw_sandbox::SandboxError::Fs(claw_interface::fs::FsError)
+pub claw_sandbox::SandboxError::OutsideSandbox(alloc::string::String)
+pub claw_sandbox::SandboxError::ReadOnly(alloc::string::String)
+pub struct claw_sandbox::RealRoots
+pub claw_sandbox::RealRoots::shared_data: &'static str
+pub claw_sandbox::RealRoots::shared_skills: &'static str
+pub claw_sandbox::RealRoots::shared_tmp: &'static str
+pub claw_sandbox::RealRoots::system_skills: &'static str
+pub struct claw_sandbox::Sandbox<F: claw_interface::fs::ClawFs>
+impl<F: claw_interface::fs::ClawFs> claw_sandbox::sandbox::Sandbox<F>
+pub fn claw_sandbox::sandbox::Sandbox<F>::new(impl core::convert::Into<alloc::string::String>, claw_sandbox::sandbox::RealRoots) -> core::result::Result<Self, claw_sandbox::fs::SandboxError>
+impl<F: claw_interface::fs::ClawFs> claw_sandbox::fs::SandboxFs for claw_sandbox::sandbox::Sandbox<F>
+pub fn claw_sandbox::sandbox::Sandbox<F>::append(&self, &str, &[u8]) -> core::result::Result<(), claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::exists(&self, &str) -> core::result::Result<bool, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::len(&self, &str) -> core::result::Result<u64, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::list_dir(&self, &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::read(&self, &str) -> core::result::Result<alloc::vec::Vec<u8>, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::read_at(&self, &str, u64, usize) -> core::result::Result<alloc::vec::Vec<u8>, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::remove(&self, &str) -> core::result::Result<(), claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::write_atomic(&self, &str, &[u8]) -> core::result::Result<(), claw_sandbox::fs::SandboxError>
+pub const claw_sandbox::READ_ONLY_PREFIXES: &[&str]
+pub const claw_sandbox::VISIBLE_PREFIXES: &[&str]
+pub trait claw_sandbox::SandboxFs: core::marker::Send + core::marker::Sync
+pub fn claw_sandbox::SandboxFs::append(&self, &str, &[u8]) -> core::result::Result<(), claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::SandboxFs::exists(&self, &str) -> core::result::Result<bool, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::SandboxFs::len(&self, &str) -> core::result::Result<u64, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::SandboxFs::list_dir(&self, &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::SandboxFs::read(&self, &str) -> core::result::Result<alloc::vec::Vec<u8>, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::SandboxFs::read_at(&self, &str, u64, usize) -> core::result::Result<alloc::vec::Vec<u8>, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::SandboxFs::remove(&self, &str) -> core::result::Result<(), claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::SandboxFs::write_atomic(&self, &str, &[u8]) -> core::result::Result<(), claw_sandbox::fs::SandboxError>
+impl<F: claw_interface::fs::ClawFs> claw_sandbox::fs::SandboxFs for claw_sandbox::sandbox::Sandbox<F>
+pub fn claw_sandbox::sandbox::Sandbox<F>::append(&self, &str, &[u8]) -> core::result::Result<(), claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::exists(&self, &str) -> core::result::Result<bool, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::len(&self, &str) -> core::result::Result<u64, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::list_dir(&self, &str) -> core::result::Result<alloc::vec::Vec<alloc::string::String>, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::read(&self, &str) -> core::result::Result<alloc::vec::Vec<u8>, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::read_at(&self, &str, u64, usize) -> core::result::Result<alloc::vec::Vec<u8>, claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::remove(&self, &str) -> core::result::Result<(), claw_sandbox::fs::SandboxError>
+pub fn claw_sandbox::sandbox::Sandbox<F>::write_atomic(&self, &str, &[u8]) -> core::result::Result<(), claw_sandbox::fs::SandboxError>

@@ -1,0 +1,70 @@
+pub mod claw_skill
+pub enum claw_skill::SkillError
+pub claw_skill::SkillError::InvalidFrontmatter(claw_skill::SkillId, alloc::string::String)
+pub claw_skill::SkillError::InvalidJson(claw_skill::SkillId, alloc::string::String)
+pub claw_skill::SkillError::InvalidUtf8(claw_skill::SkillId)
+pub claw_skill::SkillError::MissingClosingFence(claw_skill::SkillId)
+pub claw_skill::SkillError::MissingOpeningFence(claw_skill::SkillId)
+pub claw_skill::SkillError::NotFound(claw_skill::SkillId)
+pub claw_skill::SkillError::ReadFailed(claw_skill::SkillId, claw_interface::fs::FsError)
+pub claw_skill::SkillError::ScanFailed(alloc::string::String, claw_interface::fs::FsError)
+pub enum claw_skill::SkillManageMode
+pub claw_skill::SkillManageMode::Readonly
+pub claw_skill::SkillManageMode::Runtime
+impl claw_skill::SkillManageMode
+pub fn claw_skill::SkillManageMode::as_str(self) -> &'static str
+pub struct claw_skill::CatalogSnapshot
+impl claw_skill::CatalogSnapshot
+pub fn claw_skill::CatalogSnapshot::get(&self, &claw_skill::SkillId) -> core::option::Option<&claw_skill::Skill>
+pub fn claw_skill::CatalogSnapshot::skills(&self) -> &[claw_skill::Skill]
+pub fn claw_skill::CatalogSnapshot::version(&self) -> claw_skill::SkillRegistryVersion
+pub struct claw_skill::EmptySkillRegistry
+impl claw_skill::SkillRegistry for claw_skill::EmptySkillRegistry
+pub fn claw_skill::EmptySkillRegistry::skill_set(alloc::sync::Arc<Self>) -> claw_skill::SkillSet
+pub struct claw_skill::FsSkillRegistry<F: claw_interface::fs::ClawFs>
+impl<F: claw_interface::fs::ClawFs> claw_skill::FsSkillRegistry<F>
+pub fn claw_skill::FsSkillRegistry<F>::new() -> Self
+pub fn claw_skill::FsSkillRegistry<F>::set_root(self, impl core::convert::Into<alloc::string::String>) -> core::result::Result<Self, claw_skill::SkillError>
+pub fn claw_skill::FsSkillRegistry<F>::skill_set(&alloc::sync::Arc<Self>) -> claw_skill::SkillSet where F: 'static
+impl<F: claw_interface::fs::ClawFs + 'static> claw_skill::SkillRegistry for claw_skill::FsSkillRegistry<F>
+pub fn claw_skill::FsSkillRegistry<F>::skill_set(alloc::sync::Arc<Self>) -> claw_skill::SkillSet
+pub struct claw_skill::Skill
+impl claw_skill::Skill
+pub fn claw_skill::Skill::author(&self) -> core::option::Option<&str>
+pub fn claw_skill::Skill::description(&self) -> &str
+pub fn claw_skill::Skill::file(&self) -> &str
+pub fn claw_skill::Skill::id(&self) -> &claw_skill::SkillId
+pub fn claw_skill::Skill::metadata(&self) -> &claw_skill::SkillFrontmatterMetadata
+pub fn claw_skill::Skill::name(&self) -> &str
+pub struct claw_skill::SkillDocument
+impl claw_skill::SkillDocument
+pub fn claw_skill::SkillDocument::content(&self) -> &str
+pub fn claw_skill::SkillDocument::into_content(self) -> alloc::string::String
+pub struct claw_skill::SkillFrontmatterMetadata
+impl claw_skill::SkillFrontmatterMetadata
+pub fn claw_skill::SkillFrontmatterMetadata::cap_groups(&self) -> &[alloc::string::String]
+pub fn claw_skill::SkillFrontmatterMetadata::category(&self) -> &[alloc::string::String]
+pub fn claw_skill::SkillFrontmatterMetadata::manage_mode(&self) -> claw_skill::SkillManageMode
+pub fn claw_skill::SkillFrontmatterMetadata::peripherals(&self) -> &[alloc::string::String]
+pub fn claw_skill::SkillFrontmatterMetadata::tags(&self) -> &[alloc::string::String]
+pub struct claw_skill::SkillId(_)
+impl claw_skill::SkillId
+pub fn claw_skill::SkillId::as_str(&self) -> &str
+pub const fn claw_skill::SkillId::from_static(&'static str) -> Self
+pub fn claw_skill::SkillId::new(impl core::convert::Into<alloc::string::String>) -> Self
+impl core::fmt::Display for claw_skill::SkillId
+pub fn claw_skill::SkillId::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+pub struct claw_skill::SkillSet
+impl claw_skill::SkillSet
+pub fn claw_skill::SkillSet::activate_skill(&mut self, &claw_skill::SkillId) -> core::result::Result<claw_skill::SkillDocument, claw_skill::SkillError>
+pub fn claw_skill::SkillSet::catalog_context(&mut self) -> &str
+pub fn claw_skill::SkillSet::empty() -> Self
+pub fn claw_skill::SkillSet::list_skill(&mut self) -> core::result::Result<&str, claw_skill::SkillError>
+pub fn claw_skill::SkillSet::reload(&self) -> core::result::Result<(), claw_skill::SkillError>
+pub trait claw_skill::SkillRegistry: core::marker::Send + core::marker::Sync
+pub fn claw_skill::SkillRegistry::skill_set(alloc::sync::Arc<Self>) -> claw_skill::SkillSet
+impl claw_skill::SkillRegistry for claw_skill::EmptySkillRegistry
+pub fn claw_skill::EmptySkillRegistry::skill_set(alloc::sync::Arc<Self>) -> claw_skill::SkillSet
+impl<F: claw_interface::fs::ClawFs + 'static> claw_skill::SkillRegistry for claw_skill::FsSkillRegistry<F>
+pub fn claw_skill::FsSkillRegistry<F>::skill_set(alloc::sync::Arc<Self>) -> claw_skill::SkillSet
+pub type claw_skill::SkillRegistryVersion = u32
