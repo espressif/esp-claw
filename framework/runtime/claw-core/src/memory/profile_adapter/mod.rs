@@ -14,8 +14,6 @@ mod tools;
 
 use self::tools::profile_tools;
 
-const PROFILE_ADAPTER_ID: &str = "profile";
-
 /// Whether this adapter exposes profile mutation tools to its agent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ProfileTools {
@@ -64,10 +62,6 @@ impl<F: ClawFs + 'static> ProfileContextAdapter<F> {
 }
 
 impl<F: ClawFs + 'static> ContextAdapter for ProfileContextAdapter<F> {
-    fn id(&self) -> &str {
-        PROFILE_ADAPTER_ID
-    }
-
     fn contribute(&mut self, _input: ContextAdapterInput<'_>, output: &mut ContextSink<'_>) {
         for document in ProfileDocument::all() {
             self.contribute_document(document, output);

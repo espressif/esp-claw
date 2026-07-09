@@ -14,7 +14,6 @@ use claw_tool::Tool;
 
 use super::traits::{ContextAdapter, ContextAdapterInput};
 
-const ADAPTER_ID: &str = "skills";
 pub(crate) struct SkillContextAdapter {
     skills: Arc<Mutex<SkillSet>>,
 }
@@ -28,10 +27,6 @@ impl SkillContextAdapter {
 }
 
 impl ContextAdapter for SkillContextAdapter {
-    fn id(&self) -> &str {
-        ADAPTER_ID
-    }
-
     fn contribute(&mut self, _input: ContextAdapterInput<'_>, output: &mut ContextSink<'_>) {
         let mut skills = lock_skill_set(&self.skills);
         let rendered = skills.catalog_context();

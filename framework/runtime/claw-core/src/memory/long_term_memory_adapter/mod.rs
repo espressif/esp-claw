@@ -47,9 +47,6 @@ pub const GLOBAL_ID_PREFIX: &str = "g-";
 /// Id prefix for the per-agent store.
 pub const AGENT_ID_PREFIX: &str = "a-";
 
-/// Default memory id used in logs.
-const DEFAULT_MEMORY_ID: &str = "long_term";
-
 /// Extraction throttle: after the first extraction, the transcript
 /// [`version`](History::version) must advance by at least this much before the
 /// next extraction runs.
@@ -178,7 +175,6 @@ impl<F: ClawFs + 'static> MemoryStores<F> {
 
 /// A [`ContextAdapter`] over a dual-tier long-term store. See the module docs.
 pub struct LongTermMemoryContextAdapter<F: ClawFs + 'static> {
-    id: String,
     stores: MemoryStores<F>,
     extractor: Arc<dyn Extractor>,
     /// Cached rendered catalog blocks, rebuilt by [`refresh`](Self::refresh) only
@@ -214,7 +210,6 @@ impl<F: ClawFs + 'static> LongTermMemoryContextAdapter<F> {
         extractor: Arc<dyn Extractor>,
     ) -> Self {
         Self {
-            id: DEFAULT_MEMORY_ID.to_string(),
             stores: MemoryStores {
                 global,
                 agent,
@@ -319,10 +314,6 @@ impl<F: ClawFs + 'static> LongTermMemoryContextAdapter<F> {
 }
 
 impl<F: ClawFs + 'static> ContextAdapter for LongTermMemoryContextAdapter<F> {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
     fn prepare<'a>(&'a mut self, input: ContextAdapterInput<'a>) -> ContextAdapterFuture<'a> {
         Box::pin(async move {
             // Pull, not push: reading the transcript here is where this adapter

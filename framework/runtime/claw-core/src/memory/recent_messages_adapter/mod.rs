@@ -30,9 +30,6 @@ use serde_json::Value;
 use crate::memory::summary_cursor::SummaryCursor;
 use crate::memory::traits::{ContextAdapter, ContextAdapterInput};
 
-/// Stable id for this adapter, used in logs.
-const ADAPTER_ID: &str = "recent_messages";
-
 /// Contributes the conversation's verbatim recent tail to the history channel.
 /// See the module docs.
 pub(crate) struct RecentMessagesContextAdapter<F: ClawFs + 'static> {
@@ -94,10 +91,6 @@ impl<F: ClawFs + 'static> RecentMessagesContextAdapter<F> {
 }
 
 impl<F: ClawFs + 'static> ContextAdapter for RecentMessagesContextAdapter<F> {
-    fn id(&self) -> &str {
-        ADAPTER_ID
-    }
-
     fn contribute(&mut self, _input: ContextAdapterInput<'_>, output: &mut ContextSink<'_>) {
         self.refresh_tail();
         if let Some(items) = self.cached.as_array() {

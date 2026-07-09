@@ -42,9 +42,6 @@ use serde_json::Value;
 use crate::memory::summary_cursor::SummaryCursor;
 use crate::memory::traits::{ContextAdapter, ContextAdapterFuture, ContextAdapterInput};
 
-/// Stable id for this adapter, used in logs.
-const ADAPTER_ID: &str = "rolling_summary";
-
 /// Rough bytes-per-token divisor for the size estimate. See
 /// [`estimate_message_tokens`].
 const CHARS_PER_TOKEN: usize = 4;
@@ -197,10 +194,6 @@ impl<F: ClawFs + 'static> RollingSummaryContextAdapter<F> {
 }
 
 impl<F: ClawFs + 'static> ContextAdapter for RollingSummaryContextAdapter<F> {
-    fn id(&self) -> &str {
-        ADAPTER_ID
-    }
-
     fn prepare<'a>(&'a mut self, _input: ContextAdapterInput<'a>) -> ContextAdapterFuture<'a> {
         Box::pin(async move {
             self.maybe_schedule_compaction().await;

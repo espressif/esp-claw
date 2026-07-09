@@ -166,9 +166,6 @@ pub type ContextAdapterFuture<'a> = Pin<Box<dyn Future<Output = ()> + 'a>>;
 /// or ephemeral reminder; each adapter emits the correct item into the sink and
 /// `claw-context` owns placement, ordering, and render caches.
 pub trait ContextAdapter {
-    /// A stable identifier for this adapter, used in logs.
-    fn id(&self) -> &str;
-
     /// Refresh any async state needed for the next contribution.
     ///
     /// Called from the agent's local async tick before [`contribute`](Self::contribute).
