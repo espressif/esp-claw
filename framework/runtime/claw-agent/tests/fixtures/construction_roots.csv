@@ -1,0 +1,6 @@
+case,root_mode,expect_ok,error_contains
+empty,empty,false,persistence directory is required
+blank,blank,false,persistence directory is required
+plain-tempdir,plain,true,
+trailing-slash,trailing,true,
+nested-tempdir,nested,true,

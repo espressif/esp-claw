@@ -973,52 +973,68 @@ fn load_state<F: ClawFs>(data_path: &str, index_path: &str) -> Result<(StoreStat
         Err(error) => return Err(error),
     };
 
-    if let Ok(bytes) = F::read(index_path) {
-        if let Ok(manifest) = serde_json::from_slice::<Manifest>(&bytes) {
-            covered_len = manifest.covered_len;
-            manifest_next_id = manifest.next_id;
-            'entries: for entry in &manifest.live {
-                let (off, len) = entry_loc(entry);
-                let Some(file) = data_file.as_mut() else {
-                    // The manifest references a data log that cannot be opened;
-                    // rebuild from whatever the tail scan recovers.
-                    mismatch = true;
-                    break 'entries;
-                };
-                match file.read_exact_at(off.as_u64(), len.as_usize()) {
-                    Ok(buf) => match parse_record(&buf) {
-                        Some(record) if verify_entry(entry, &record) => {
-                            apply_record(&mut state, record, Some((off, len)));
-                        }
-                        Some(_) => {
-                            log::error!(
-                                "conversation load: manifest entry at offset {} does not match \
-                                 data log record; rebuilding",
-                                off.as_u64()
-                            );
-                            mismatch = true;
-                            break 'entries;
-                        }
-                        None => {
-                            log::error!(
-                                "conversation load: manifest entry at offset {} could not be \
-                                 parsed; rebuilding",
-                                off.as_u64()
-                            );
-                            mismatch = true;
-                            break 'entries;
-                        }
-                    },
-                    Err(err) => {
-                        log::error!(
-                            "conversation load: manifest entry at offset {} could not be read: \
-                             {err}; rebuilding",
-                            off.as_u64()
-                        );
+    match F::read(index_path) {
+        Ok(bytes) => {
+            if let Ok(manifest) = serde_json::from_slice::<Manifest>(&bytes) {
+                covered_len = manifest.covered_len;
+                manifest_next_id = manifest.next_id;
+                'entries: for entry in &manifest.live {
+                    let (off, len) = entry_loc(entry);
+                    let Some(file) = data_file.as_mut() else {
+                        // The manifest references a data log that cannot be opened;
+                        // rebuild from whatever the tail scan recovers.
                         mismatch = true;
                         break 'entries;
+                    };
+                    match file.read_exact_at(off.as_u64(), len.as_usize()) {
+                        Ok(buf) => match parse_record(&buf) {
+                            Some(record) if verify_entry(entry, &record) => {
+                                apply_record(&mut state, record, Some((off, len)));
+                            }
+                            Some(_) => {
+                                log::error!(
+                                    "conversation load: manifest entry at offset {} does not \
+                                     match data log record; rebuilding",
+                                    off.as_u64()
+                                );
+                                mismatch = true;
+                                break 'entries;
+                            }
+                            None => {
+                                log::error!(
+                                    "conversation load: manifest entry at offset {} could not \
+                                     be parsed; rebuilding",
+                                    off.as_u64()
+                                );
+                                mismatch = true;
+                                break 'entries;
+                            }
+                        },
+                        Err(err) => {
+                            log::error!(
+                                "conversation load: manifest entry at offset {} could not be \
+                                 read: {err}; rebuilding",
+                                off.as_u64()
+                            );
+                            mismatch = true;
+                            break 'entries;
+                        }
                     }
                 }
+            } else if data_file.is_some() {
+                log::error!("conversation load: manifest could not be parsed; rebuilding");
+                mismatch = true;
+            }
+        }
+        Err(FsError::NotFound) => {
+            if data_file.is_some() {
+                mismatch = true;
+            }
+        }
+        Err(err) => {
+            log::error!("conversation load: manifest could not be read: {err}; rebuilding");
+            if data_file.is_some() {
+                mismatch = true;
             }
         }
     }
@@ -1038,11 +1054,8 @@ fn load_state<F: ClawFs>(data_path: &str, index_path: &str) -> Result<(StoreStat
     let data_len = ByteLen::from_file_len(data_file_len);
     if data_len > covered_len {
         let extra = data_len.saturating_sub(covered_len);
-        let tail = data_file.as_mut().and_then(|file| {
-            file.read_exact_at(covered_len.as_offset().as_u64(), extra.as_usize())
-                .ok()
-        });
-        if let Some(tail) = tail {
+        if let Some(file) = data_file.as_mut() {
+            let tail = file.read_exact_at(covered_len.as_offset().as_u64(), extra.as_usize())?;
             scan_tail(&mut state, &tail, covered_len.as_offset());
         }
     }
@@ -1124,4 +1137,33 @@ fn lock_state<F: ClawFs + 'static>(inner: &StoreInner<F>) -> MutexGuard<'_, Stor
         .state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use claw_interface::MemFs;
+
+    #[test]
+    fn invalid_index_is_rebuilt_from_data_log() {
+        MemFs::new();
+        let dir = "/transcript-index-rebuild";
+        let index_path = conversation_path(dir, 1, INDEX_EXT);
+
+        let store = TranscriptStore::<MemFs>::new(1, dir).unwrap();
+        {
+            let turn = store.group();
+            turn.append_user("persisted user");
+            turn.append_assistant(r#"{"role":"assistant","content":"persisted reply"}"#);
+        }
+        store.flush();
+        assert!(serde_json::from_slice::<Manifest>(&MemFs::read(&index_path).unwrap()).is_ok());
+
+        MemFs::write_atomic(&index_path, b"{not valid json").unwrap();
+        let rebuilt = TranscriptStore::<MemFs>::new(1, dir).unwrap();
+        let messages = rebuilt.messages().to_string();
+        assert!(messages.contains("persisted user"));
+        assert!(messages.contains("persisted reply"));
+        assert!(serde_json::from_slice::<Manifest>(&MemFs::read(&index_path).unwrap()).is_ok());
+    }
 }

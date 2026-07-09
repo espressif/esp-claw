@@ -1,0 +1,8 @@
+case,fs,api_key,model,base_url,skill_roots_mode,expect_ok,error_contains
+valid_mem_no_skill_roots,mem,sk-test,gpt-test,https://example.invalid,none,true,
+valid_mem_missing_skill_root,mem,sk-test,gpt-test,https://example.invalid,missing,true,
+valid_mem_multiple_missing_skill_roots,mem,sk-test,gpt-test,https://example.invalid,multiple_missing,true,
+valid_disk_existing_empty_skill_root,disk,sk-test,gpt-test,https://example.invalid,existing_empty,true,
+missing_api_key,mem,,gpt-test,https://example.invalid,none,false,LLM API key is empty
+missing_model,mem,sk-test,,https://example.invalid,none,false,LLM model is empty
+missing_base_url,mem,sk-test,gpt-test,,none,false,LLM base URL is empty

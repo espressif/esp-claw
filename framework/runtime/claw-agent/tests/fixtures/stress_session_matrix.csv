@@ -1,0 +1,6 @@
+case,fs,sessions,turns_per_session,output_bytes,reopen_each_turn,rebuild_after
+mem-many-sessions-short-turns,mem,16,2,24,false,false
+mem-single-session-many-turns,mem,1,48,96,false,false
+mem-reopen-each-turn,mem,6,3,40,true,false
+disk-many-sessions-rebuild,disk,10,2,64,false,true
+disk-large-outputs-rebuild,disk,3,5,1024,true,true

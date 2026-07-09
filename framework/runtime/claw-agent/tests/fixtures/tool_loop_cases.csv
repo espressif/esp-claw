@@ -1,0 +1,9 @@
+case,registry_ops,tool_arguments,tool_behavior,final_output,expected_invocations,expected_tool_error_contains
+started_enabled_tool_success,register|start,"{""value"":""alpha""}",echo,tool loop complete,1,
+disabled_tool_reports_not_found,register|disable|start,"{""value"":""beta""}",echo,disabled tool recovered,0,tool not found
+not_started_tool_reports_not_found,register,"{""value"":""gamma""}",echo,not started recovered,0,tool not found
+stopped_after_start_reports_not_found,register|start|stop,"{""value"":""stopped""}",echo,stopped recovered,0,tool not found
+disabled_then_enabled_before_start_runs,register|disable|enable|start,"{""value"":""reenabled""}",echo,reenabled recovered,1,
+handler_rejects_but_loop_continues,register|start,"{""value"":""delta""}",reject,rejection recovered,1,tool invocation rejected
+handler_returns_ok_false,register|start,"{""value"":""epsilon""}",ok_false,soft failure recovered,1,soft-failed
+invalid_arguments_are_returned_as_tool_error,register|start,{not-json,echo,invalid args recovered,0,invalid arguments json

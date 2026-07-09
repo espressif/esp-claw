@@ -1,0 +1,2 @@
+case,setup_final,verify_final,setup_fragments,verify_fragments,verify_context_fragments
+profile-memory-disk-rebuild,setup persisted,verify persisted,Replaced profile document user_profile.|Stored memory g-0.|Stored memory a-0.,Profile document user_profile:|Persistent user profile|Recalled memories:|- [g-0] (fact) Persistent global fact|- [a-0] (task) Persistent task note|All memories:,Persistent user profile|Shared long-term memory topics: fact|Your long-term memory topics: task

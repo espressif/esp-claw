@@ -1,0 +1,9 @@
+case,response_kind,reasoning_bytes,expected_output,expected_error_contains,expected_reasoning_len,expected_reasoning_suffix
+plain_without_reasoning,plain,0,plain ok,,0,
+plain_with_reasoning,plain,32,reasoning ok,,32,
+plain_with_long_reasoning_truncates,plain,2501,long reasoning ok,,2003,...
+missing_message,missing_message,0,,response missing message,0,
+non_assistant_message,non_assistant,0,,response message is not assistant,0,
+empty_assistant_message,empty_message,0,,EmptyResponse,0,
+invalid_json_body,invalid_json,0,,Parse,0,
+malformed_tool_call,malformed_tool_call,0,,malformed tool call,0,

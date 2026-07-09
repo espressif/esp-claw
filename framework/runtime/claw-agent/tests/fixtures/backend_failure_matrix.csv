@@ -1,0 +1,6 @@
+case,backend,expected_error_contains,expected_http_calls,expected_timer_sleeps
+fs-read-fails-at-construction,fs_read_fail,checkpoint storage failed,0,0
+fs-write-fails-on-tool-checkpoint,fs_write_fail,checkpoint storage failed,0,0
+http-permanent-error-no-retry,http_permanent,invalid URL,2,0
+http-transient-then-success,http_transient_then_success,,3,1
+http-transient-exhausts-retries,http_transient_exhausts_retries,retry backoff should be cancelled,6,4

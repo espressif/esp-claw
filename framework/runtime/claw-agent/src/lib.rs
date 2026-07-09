@@ -13,8 +13,9 @@ use claw_checkpoint::{
     DurablePartError, FsCheckpointStorage, LoadCheckpointError, PartWrite,
 };
 pub use claw_core::{
-    IterationId, OpenSessionError, SessionControl, SessionControlError, SessionEvent,
-    SessionEventStream, SessionId, TurnCause, TurnId,
+    AttachmentId, AttachmentKind, AttachmentRecord, AttachmentRef, IterationId, Message,
+    OpenSessionError, SessionControl, SessionControlError, SessionEvent, SessionEventStream,
+    SessionId, TurnCause, TurnId,
 };
 use claw_core::{Orchestrator, OrchestratorBuildError};
 use claw_interface::{ClawExecutor, ClawFs, ClawHttp, ClawThread, ClawTimer, FsError};

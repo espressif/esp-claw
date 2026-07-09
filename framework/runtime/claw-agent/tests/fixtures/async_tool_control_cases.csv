@@ -1,0 +1,3 @@
+case,control,background_output,post_submit_output,tool_output
+cancel-while-async-tool-pending,cancel,,after cancel accepted,async tool finished after cancel
+interrupt-while-async-tool-pending,interrupt,resumed after interrupt,after interrupt accepted,async tool finished after interrupt

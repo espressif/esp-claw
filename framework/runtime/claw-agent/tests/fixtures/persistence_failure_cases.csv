@@ -1,0 +1,4 @@
+case,setup,operation,expected_error,final_output
+global-memory-journal-directory,global_memory_journal_dir,startup,long-term memory journal,
+root-transcript-log-directory,root_transcript_log_dir,submit,conversation data log,
+profile-user-invalid-utf8,profile_user_invalid_utf8,tool,not valid utf-8,profile failure observed

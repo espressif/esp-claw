@@ -1,0 +1,10 @@
+case,operations,expected_version,expected_started,expected_tools,error_contains
+register-start,register:alpha|start,2,true,alpha=true,
+duplicate-register,register:alpha|register:alpha,1,false,alpha=true,tool already exists: alpha
+missing-enable,enable:missing,0,false,,tool not found: missing
+missing-disable,disable:missing,0,false,,tool not found: missing
+empty-name,register:,0,false,,invalid tool: 
+disable-enable-idempotent,register:alpha|disable:alpha|disable:alpha|enable:alpha|enable:alpha,3,false,alpha=true,
+start-stop-idempotent,register:alpha|start|start|stop|stop,3,false,alpha=true,
+disabled-while-started,register:alpha|disable:alpha|start,3,true,alpha=false,
+multiple-tools,register:alpha|register:beta|disable:beta|start,4,true,alpha=true;beta=false,

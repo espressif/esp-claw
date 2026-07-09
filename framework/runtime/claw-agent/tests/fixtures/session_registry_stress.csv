@@ -1,0 +1,5 @@
+case,initial_sessions,delete_stride,extra_sessions
+small-delete-none,8,0,4
+delete-every-second,32,2,16
+delete-every-third,45,3,30
+larger-id-pressure,96,4,64

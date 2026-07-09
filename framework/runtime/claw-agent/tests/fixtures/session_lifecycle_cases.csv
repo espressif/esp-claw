@@ -1,0 +1,7 @@
+case,operation,expected_error
+open-same-session-twice,open_twice,session is already open
+delete-unknown-session,delete_unknown,session is closed: session-404
+reopen-after-close,reopen_after_close,
+interrupt-after-close,interrupt_after_close,session is closed: session-1
+cancel-after-close,cancel_after_close,session is closed: session-1
+delete-after-close,delete_after_close,

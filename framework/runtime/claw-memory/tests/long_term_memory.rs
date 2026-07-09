@@ -1,4 +1,4 @@
-use claw_interface::MemFs;
+use claw_interface::{ClawFs, MemFs};
 use claw_memory::{
     LongTermError, LongTermMemory, MemoryDraft, MemoryId, MemoryPatch, StoreOutcome,
 };
@@ -115,6 +115,29 @@ fn state_survives_reload_from_journal() {
             .id
             .as_str(),
         "g-2"
+    );
+}
+
+#[test]
+fn torn_trailing_journal_record_is_ignored_on_reload() {
+    reset_fs();
+    {
+        let memory = LongTermMemory::<MemFs>::new("/m", "g-").expect("load empty store");
+        memory.store(draft("Committed before crash", &["fact"]));
+    }
+    MemFs::append("/m/memory_records.jsonl", br#"{"torn":"record""#).unwrap();
+
+    let reloaded = LongTermMemory::<MemFs>::new("/m", "g-").expect("replay journal");
+    let items = reloaded.list();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].content, "Committed before crash");
+    assert_eq!(
+        reloaded
+            .store(draft("After crash", &["fact"]))
+            .item()
+            .id
+            .as_str(),
+        "g-1"
     );
 }
 

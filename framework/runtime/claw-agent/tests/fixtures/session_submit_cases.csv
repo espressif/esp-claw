@@ -1,0 +1,10 @@
+case,user_input,assistant_output
+empty-user-input,,
+leading-trailing-spaces,"  keep the boundary spaces  ",saw surrounding spaces
+unicode-and-comma,"你好, agent","收到, agent"
+json-like,"{""action"":""summarize"",""value"":42}","json-ish reply: {""ok"":true}"
+quoted-text,"say ""hello"" to the tool","quoted ""hello"" preserved"
+csv-shaped,"a,b,c","commas are safe"
+long-input,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx,long reply for repeated text
+multiline-output,please send two lines,"first line
+second line"

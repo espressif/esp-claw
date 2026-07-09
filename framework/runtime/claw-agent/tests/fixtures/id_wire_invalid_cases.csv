@@ -1,0 +1,11 @@
+kind,input,error
+session,,empty id string
+session,"   ",empty id string
+session,turn-1,invalid session id: turn-1
+session,session-,invalid session id: session-
+session,session--1,invalid session id: session--1
+session,session-4294967296,invalid session id: session-4294967296
+turn,session-1,invalid turn id: session-1
+turn,turn-abc,invalid turn id: turn-abc
+iteration,iteration-abc,invalid iteration id: iteration-abc
+iteration,iteration-1.5,invalid iteration id: iteration-1.5

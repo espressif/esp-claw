@@ -1,0 +1,4 @@
+case,interrupts,cancels,post_storm_submit
+interrupt-heavy,64,0,true
+cancel-heavy,0,64,true
+mixed-interrupt-cancel,48,16,true
