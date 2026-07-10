@@ -30,7 +30,55 @@ where
                     termination,
                 } => self.materialize_spawn(requester, id, kind, name, goal, termination),
                 GraphEffect::Delete { target } => self.apply_delete(requester, target),
+                GraphEffect::Followup { target, message } => {
+                    self.apply_followup(requester, target, message)
+                }
             }
+        }
+    }
+
+    fn apply_followup(&mut self, requester: AgentId, target: AgentId, message: String) {
+        if !self.is_descendant(requester, target) {
+            tracing::warn!(
+                name: "followup_ignored",
+                target_agent = %target,
+                reason = "not_descendant",
+            );
+            return;
+        }
+        if !self.state.get().meta.contains_key(&target) {
+            tracing::warn!(
+                name: "followup_ignored",
+                target_agent = %target,
+                reason = "missing_target",
+            );
+            return;
+        }
+        if self.inflight.abort_if_present(target) {
+            tracing::info!(
+                name: "followup_deferred",
+                target_agent = %target,
+                reason = "inflight_abort",
+            );
+            self.effects
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .push_back((
+                    requester,
+                    GraphEffect::Followup {
+                        target,
+                        message,
+                    },
+                ));
+            return;
+        }
+        if let Err(error) = self.deliver_followup(target, message) {
+            tracing::warn!(
+                name: "followup_ignored",
+                target_agent = %target,
+                reason = "delivery_failed",
+                error = %error,
+            );
         }
     }
 

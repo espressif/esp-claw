@@ -1,4 +1,4 @@
-//! `subagent.delete(agent)` — remove one descendant (and its subtree) by id.
+//! `subagent_delete(agent)` — remove one descendant (and its subtree) by id.
 
 use std::sync::Arc;
 
@@ -19,11 +19,11 @@ pub(crate) struct DeleteSubagentTool {
 }
 
 impl ToolSpec for DeleteSubagentTool {
-    tool_metadata!("subagent.delete");
+    tool_metadata!("subagent_delete");
 
     fn classify(&self, call: &ToolInvocation<'_>) -> Action {
         // Removing an agent and its subtree is irreversible — high risk.
-        let action = Action::new("subagent.delete", RiskClass::High);
+        let action = Action::new("subagent_delete", RiskClass::High);
         match agent_resource(call) {
             Some(resource) => action.with_resource(resource),
             None => action,
@@ -35,13 +35,13 @@ impl SyncToolHandler for DeleteSubagentTool {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let Some(agent) = optional_string_argument(call.arguments_json(), "agent")? else {
             return Err(
-                ToolError::InvalidArguments("subagent.delete 'agent' is required".into()).into(),
+                ToolError::InvalidArguments("subagent_delete 'agent' is required".into()).into(),
             );
         };
         let agent = agent.trim();
         if agent.is_empty() {
             return Err(
-                ToolError::InvalidArguments("subagent.delete 'agent' is required".into()).into(),
+                ToolError::InvalidArguments("subagent_delete 'agent' is required".into()).into(),
             );
         }
         let target = AgentId::from_wire(agent).map_err(|error| {

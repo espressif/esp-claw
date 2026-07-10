@@ -7,7 +7,7 @@
 //! is written under this crate's `output/claw-agent-chat/`.
 //!
 //! ```
-//! cargo run -p claw-agent --features dev --bin claw-agent-chat --target x86_64-unknown-linux-gnu
+//! cargo run -p claw-agent --features dev --bin claw-agent-chat
 //! ```
 //!
 use std::io::{self, BufRead, IsTerminal, Write};

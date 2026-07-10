@@ -29,7 +29,7 @@ struct ListSkillTool {
 }
 
 impl ToolSpec for ListSkillTool {
-    tool_metadata!("skill.list");
+    tool_metadata!("skill_list");
 }
 
 impl SyncToolHandler for ListSkillTool {
@@ -54,7 +54,7 @@ struct ActivateSkillTool {
 }
 
 impl ToolSpec for ActivateSkillTool {
-    tool_metadata!("skill.activate");
+    tool_metadata!("skill_activate");
 }
 
 impl SyncToolHandler for ActivateSkillTool {
@@ -82,14 +82,14 @@ impl SyncToolHandler for ActivateSkillTool {
             }
             None => {
                 return Err(ToolError::InvokeRejected(
-                    "`skill_id` is required: pass the id of a skill from skill.list.".to_string(),
+                    "`skill_id` is required: pass the id of a skill from skill_list.".to_string(),
                 )
                 .into());
             }
         };
         if skill_id.is_empty() {
             return Err(ToolError::InvokeRejected(
-                "`skill_id` is required: pass the id of a skill from skill.list.".to_string(),
+                "`skill_id` is required: pass the id of a skill from skill_list.".to_string(),
             )
             .into());
         }
@@ -101,7 +101,7 @@ impl SyncToolHandler for ActivateSkillTool {
                 ok: true,
             }),
             Err(SkillError::NotFound(_)) => Err(ToolError::InvokeRejected(format!(
-                "unknown skill \"{skill_id}\"; call skill.list to see what is available."
+                "unknown skill \"{skill_id}\"; call skill_list to see what is available."
             ))
             .into()),
             Err(error) => Ok(ToolOutput {
@@ -118,7 +118,7 @@ struct ReloadSkillsTool {
 }
 
 impl ToolSpec for ReloadSkillsTool {
-    tool_metadata!("skill.reload");
+    tool_metadata!("skill_reload");
 }
 
 impl SyncToolHandler for ReloadSkillsTool {
@@ -131,7 +131,7 @@ impl SyncToolHandler for ReloadSkillsTool {
             });
         }
         Ok(ToolOutput {
-            output: "Skills refreshed. Use skill.list to inspect the catalog.".to_string(),
+            output: "Skills refreshed. Use skill_list to inspect the catalog.".to_string(),
             ok: true,
         })
     }

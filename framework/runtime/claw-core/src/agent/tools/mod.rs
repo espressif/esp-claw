@@ -5,10 +5,10 @@
 //! returning a result to the conversation they steer the *agent graph*. A tool
 //! handler only has `&self`, so it cannot touch state directly — it routes
 //! through one of two seams:
-//! - **self-affecting** control (`conversation.end`) pushes a [`ControlSignal`]
+//! - **self-affecting** control (`conversation_end`) pushes a [`ControlSignal`]
 //!   onto the agent's own [`ControlSink`], drained each tick;
-//! - **graph-affecting** actions (`subagent.spawn`, `subagent.list`,
-//!   `subagent.watch`, `subagent.delete`) call the
+//! - **graph-affecting** actions (`subagent_spawn`, `subagent_list`,
+//!   `subagent_watch`, `subagent_delete`, `subagent_followup`) call the
 //!   [`AgentContext`](crate::agent::graph::AgentContext) façade, which emits a
 //!   [`GraphEffect`](crate::agent::graph::GraphEffect) (or reads a snapshot) via
 //!   the [`GraphHost`](crate::agent::graph::GraphHost) — applied by the
@@ -17,7 +17,7 @@
 //! Human approval is **not** a tool: it is raised by the permission layer (an
 //! `Ask` decision in `base_agent`), not requested or resolved by the model.
 //!
-//! Which tools an agent actually gets is a build-time knob: `subagent.spawn` and
+//! Which tools an agent actually gets is a build-time knob: `subagent_spawn` and
 //! its siblings only when its manifest enables spawning.
 //!
 //! Keeping these here means the iteration loop stays fully agnostic: it runs them
@@ -25,6 +25,7 @@
 
 mod delete_subagent;
 mod end_conversation;
+mod followup_subagent;
 mod list_spawnable_agents;
 mod list_subagents;
 mod spawn_subagent;
@@ -42,6 +43,7 @@ use crate::agent::graph::{AgentContext, SpawnPolicy};
 
 use delete_subagent::DeleteSubagentTool;
 use end_conversation::EndConversationTool;
+use followup_subagent::FollowupSubagentTool;
 use list_spawnable_agents::ListSpawnableAgentsTool;
 use list_subagents::ListSubagentsTool;
 use spawn_subagent::SpawnSubagentTool;
@@ -119,13 +121,14 @@ pub(crate) fn internal_tools(sink: ControlSink) -> [Tool; 1] {
 }
 
 /// Build the subagent-management tools, all scoped by the context's agent
-/// (or, for `subagent.list_spawnable`, by that agent's spawn `policy`):
-/// - `subagent.list_spawnable` — the menu of kinds this agent may spawn;
-/// - `subagent.spawn` — create a child (restricted to `policy`'s allowed kinds);
-/// - `subagent.list` — enumerate this agent's subtree;
-/// - `subagent.watch` — snapshot one descendant;
-/// - `subagent.delete` — remove one descendant (and its subtree).
-pub(crate) fn subagent_tools(context: Arc<AgentContext>, policy: SpawnPolicy) -> [Tool; 5] {
+/// (or, for `subagent_list_spawnable`, by that agent's spawn `policy`):
+/// - `subagent_list_spawnable` — the menu of kinds this agent may spawn;
+/// - `subagent_spawn` — create a child (restricted to `policy`'s allowed kinds);
+/// - `subagent_list` — enumerate this agent's subtree;
+/// - `subagent_watch` — snapshot one descendant;
+/// - `subagent_delete` — remove one descendant (and its subtree);
+/// - `subagent_followup` — cancel the target's current task and retask it.
+pub(crate) fn subagent_tools(context: Arc<AgentContext>, policy: SpawnPolicy) -> [Tool; 6] {
     [
         Tool::from_sync(ListSpawnableAgentsTool {
             policy: policy.clone(),
@@ -140,6 +143,9 @@ pub(crate) fn subagent_tools(context: Arc<AgentContext>, policy: SpawnPolicy) ->
         Tool::from_sync(WatchSubagentTool {
             context: Arc::clone(&context),
         }),
-        Tool::from_sync(DeleteSubagentTool { context }),
+        Tool::from_sync(DeleteSubagentTool {
+            context: Arc::clone(&context),
+        }),
+        Tool::from_sync(FollowupSubagentTool { context }),
     ]
 }

@@ -1,0 +1,21 @@
+{
+  "type": "function",
+  "function": {
+    "name": "subagent_followup",
+    "description": "Cancel a subagent's current task and start a new one with the given message. Use this to retask a persistent (manual) subagent that is still alive. One-shot (auto) subagents finish on their own and report back automatically.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "The id of the subagent to retask (e.g. \"agent-7\"), as returned by subagent_spawn or subagent_list."
+        },
+        "message": {
+          "type": "string",
+          "description": "The new task input for the subagent."
+        }
+      },
+      "required": ["agent", "message"]
+    }
+  }
+}

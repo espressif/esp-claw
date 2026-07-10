@@ -130,6 +130,29 @@ where
         Ok(())
     }
 
+    /// Cancel the target's active task (if any) and start a fresh one.
+    ///
+    /// `Cancel` and `AppendMessage` are batched on the agent inbox so a lone
+    /// cancel never surfaces as [`TickOutcome::Cancelled`] to the lifecycle
+    /// router (which would delete a subagent subtree).
+    pub(in crate::orchestrator::instance) fn deliver_followup(
+        &mut self,
+        id: AgentId,
+        message: impl Into<String>,
+    ) -> Result<(), AgentMessageDeliveryError> {
+        let message = message.into();
+        let Some(agent) = self.state.get_mut().registry.get_mut(id) else {
+            return Err(AgentMessageDeliveryError::UnknownAgent(id));
+        };
+        let _ = agent.send_command(AgentCommand::Cancel {
+            reason: CancelReason::UserRequested,
+        });
+        agent.send_command(AgentCommand::AppendMessage(message))?;
+        self.enqueue(id);
+        tracing::info!(name: "followup_delivered", target_agent = %id);
+        Ok(())
+    }
+
     fn has_background_work(&self) -> bool {
         let root = self.state.get().root;
         self.state.get().ready.iter().any(|id| Some(*id) != root) || self.inflight.has_background()

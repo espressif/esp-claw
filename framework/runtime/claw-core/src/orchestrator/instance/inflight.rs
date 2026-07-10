@@ -76,6 +76,20 @@ impl InflightAgentTasks {
             .collect()
     }
 
+    /// Cooperative-abort one in-flight agent so a queued graph effect can retask it.
+    pub(in crate::orchestrator::instance) fn abort_if_present(&self, id: AgentId) -> bool {
+        for entry in &self.entries {
+            let Some(entry) = entry else {
+                continue;
+            };
+            if entry.id == id {
+                entry.abort.abort();
+                return true;
+            }
+        }
+        false
+    }
+
     pub(super) fn retain_live(&mut self, meta: &BTreeMap<AgentId, NodeMeta>) {
         self.entries.retain(|entry| {
             entry

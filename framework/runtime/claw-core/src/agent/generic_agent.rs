@@ -6,7 +6,7 @@
 //! "kind" from another is its [`AgentConfig`] — the system prompt, the tool set,
 //! the skills, and whether it may spawn. The model drives its own flow (ReAct):
 //! it reads, acts, and answers freely, ending a task only via the built-in
-//! `conversation.end` tool.
+//! `conversation_end` tool.
 //!
 //! Where an [`AgentConfig`] comes from lives in the factory. This module only
 //! consumes the resolved config.
@@ -98,9 +98,9 @@ impl<H: ClawHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
     ///
     /// `tools` is prepared by the factory from the central tool registry plus
     /// manifest-local tools. This layer only adds graph tools that require a
-    /// [`GraphHost`]: `subagent.spawn` and its inspection/delete siblings when
+    /// [`GraphHost`]: `subagent_spawn` and its inspection/delete siblings when
     /// `config.spawn_enabled`. The base agent then adds its built-in self-control
-    /// tool (`conversation.end`).
+    /// tool (`conversation_end`).
     ///
     /// `inherited_context` is the scope-layered prose injected from above
     /// (Global -> Session), handed straight to the base agent so it renders ahead
@@ -117,7 +117,6 @@ impl<H: ClawHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
         config: AgentConfig,
         mut tools: ToolSet,
         host: Arc<dyn GraphHost>,
-        _is_root: bool,
         inherited_context: Arc<[Block<'static>]>,
     ) -> Result<Self, GenericAgentBuildError>
     where

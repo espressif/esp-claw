@@ -9,7 +9,7 @@
 //! the unified [`Agent`] trait the scheduler drives; the trait never reaches into
 //! internals.
 //!
-//! Spawning is a model-callable `subagent.spawn(kind, goal)` tool in the
+//! Spawning is a model-callable `subagent_spawn(kind, goal)` tool in the
 //! crate-internal tool module. It emits a [`GraphEffect`] through a [`GraphHost`];
 //! the crate-internal orchestrator instance owns the flattened agent graph and
 //! materializes children through [`FsAgentFactory`].

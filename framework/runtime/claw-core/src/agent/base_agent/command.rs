@@ -20,7 +20,7 @@ pub(crate) enum AgentCommand {
     /// until that boundary.
     AppendMessage(String),
     /// Abandon the current task. (Orchestrator-initiated hard stop — distinct
-    /// from the agent ending itself via `conversation.end`.) Being disruptive,
+    /// from the agent ending itself via `conversation_end`.) Being disruptive,
     /// it discards the still-open turn instead of writing a marker, so cancelled
     /// partial work leaves no transcript trace.
     Cancel {
@@ -143,7 +143,7 @@ pub(crate) enum TickOutcome {
         /// A human-readable description of what needs approving.
         summary: String,
     },
-    /// Terminal: the agent ended the task itself (via `conversation.end`). The
+    /// Terminal: the agent ended the task itself (via `conversation_end`). The
     /// agent returns to idle and may be re-tasked.
     Ended {
         /// The agent's closing message.

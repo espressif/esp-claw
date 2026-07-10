@@ -252,12 +252,12 @@ struct Inner<F: ClawFs + 'static> {
 ///     .expect("a fresh MemFs has no journal, so the store starts empty");
 ///
 /// // Store a fact tagged `preference`, then recall by that label.
-/// let stored = memory.store(
+/// let stored = memory_store(
 ///     MemoryDraft::new("Prefers tea over coffee").with_tags(["preference".into()]),
 /// );
 /// assert!(matches!(stored, StoreOutcome::Created(_)));
 ///
-/// let hits = memory.recall(&["preference".to_string()], None, 10);
+/// let hits = memory_recall(&["preference".to_string()], None, 10);
 /// assert_eq!(hits.len(), 1);
 /// assert_eq!(hits[0].content, "Prefers tea over coffee");
 ///

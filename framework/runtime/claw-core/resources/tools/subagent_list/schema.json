@@ -1,0 +1,12 @@
+{
+  "type": "function",
+  "function": {
+    "name": "subagent_list",
+    "description": "List the subagents you have spawned (your whole subtree), each with its id, kind, depth, lifecycle status, and termination policy. Use this to supervise persistent (manual) subagents before watching or deleting them.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  }
+}

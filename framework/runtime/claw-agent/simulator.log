@@ -1,152 +1,461 @@
-I (0) claw_core::agent::factory::construction: TRACE 0 enter <span=1 parent=none task=claw_orchestrator span-name=agent.factory target=claw_core::agent::factory::construction>
-I (0) claw_core::agent::factory::construction: TRACE 1 enter <span=2 parent=1 task=claw_orchestrator span-name=skill.catalog target=claw_core::agent::factory::construction>
-I (0) claw_core::agent::factory::construction: TRACE 1 exit <span=2 task=claw_orchestrator>
-I (0) claw_core::agent::factory::construction: TRACE 1 exit <span=1 task=claw_orchestrator>
-I (0) claw_core::orchestrator::handle: TRACE 1 enter <span=3 parent=none task=main span-name=session.create target=claw_core::orchestrator::handle>
-I (1) claw_core::orchestrator::handle: TRACE 2 event <span=3 task=main event-name=created target=claw_core::orchestrator::handle> session=session-6
-I (1) claw_core::orchestrator::handle: TRACE 2 exit <span=3 task=main>
-I (1) claw_core::orchestrator::handle: TRACE 2 enter <span=4 parent=none task=main span-name=session target=claw_core::orchestrator::handle> <context=run session=session-6>
-I (1) claw_core::orchestrator::handle: TRACE 2 event <span=4 task=main event-name=opened target=claw_core::orchestrator::handle>
-I (1) claw_core::orchestrator::handle: TRACE 2 exit <span=4 task=main>
-I (5224) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 5224 enter <span=5 parent=none task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::command_loop::input_commands> <context=run session=session-6>
-I (5224) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 5224 event <span=5 task=claw_orchestrator event-name=submit_accepted target=claw_core::orchestrator::engine::command_loop::input_commands> has_text=true text_bytes=15 attachment_count=0 attachment_kinds=none
-I (5224) claw_core::orchestrator::engine::drive_loop: TRACE 5224 enter <span=6 parent=5 task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::drive_loop>
-I (5224) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 5224 exit <span=5 task=claw_orchestrator>
-I (5224) claw_core::orchestrator::engine::turn: TRACE 5224 enter <span=7 parent=6 task=claw_orchestrator span-name=turn target=claw_core::orchestrator::engine::turn> <context=run turn=turn-1> cause=user_submit
-I (5224) claw_core::orchestrator::engine::turn: TRACE 5225 event <span=7 task=claw_orchestrator event-name=input_delivered target=claw_core::orchestrator::engine::turn> has_text=true text_bytes=15 attachment_count=0 attachment_kinds=none
-I (5224) claw_core::agent::factory::create: TRACE 5225 enter <span=8 parent=7 task=claw_orchestrator span-name=agent.create target=claw_core::agent::factory::create>
-I (5224) claw_core::agent::factory::create: TRACE 5225 event <span=8 task=claw_orchestrator event-name=created target=claw_core::agent::factory::create> agent=agent-1 kind=conversation
-I (5224) claw_core::agent::factory::create: TRACE 5225 exit <span=8 task=claw_orchestrator>
-I (5224) claw_core::orchestrator::instance::drive: TRACE 5225 enter <span=9 parent=7 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
-I (5224) claw_core::agent::base_agent::iteration: TRACE 5225 enter <span=10 parent=9 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-0> adapter_count=5
-I (5224) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 5225 enter <span=11 parent=10 task=claw_orchestrator span-name=context.extract target=claw_core::memory::long_term_memory_adapter::extraction_flow> transcript_version=1 version_delta=1 transcript_bytes=21 existing_count=1
-I (5225) claw_core::memory::long_term_memory_adapter::llm_extractor: TRACE 5225 enter <span=12 parent=11 task=claw_orchestrator span-name=api.chat target=claw_core::memory::long_term_memory_adapter::llm_extractor> purpose=memory_extraction max_attempts=3
-I (5225) claw_api::client: TRACE 5225 enter <span=13 parent=12 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
-I (7793) claw_api::client: TRACE 7793 event <span=13 task=claw_orchestrator event-name=completed target=claw_api::client>
-I (7793) claw_api::client: TRACE 7793 exit <span=13 task=claw_orchestrator>
-I (7793) claw_core::memory::long_term_memory_adapter::llm_extractor: TRACE 7794 exit <span=12 task=claw_orchestrator>
-I (7793) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 7794 event <span=11 task=claw_orchestrator event-name=completed target=claw_core::memory::long_term_memory_adapter::extraction_flow> operation_count=0 add_count=0 replace_count=0 forget_count=0
-I (7793) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 7794 exit <span=11 task=claw_orchestrator>
-I (7793) claw_core::agent::base_agent::iteration: TRACE 7794 enter <span=14 parent=10 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
-I (7793) claw_core::agent::base_agent::iteration: TRACE 7794 exit <span=14 task=claw_orchestrator>
-I (7793) claw_core::agent::base_agent::iteration: TRACE 7794 exit <span=10 task=claw_orchestrator>
-I (7793) claw_core::agent::iteration_loop::run: TRACE 7794 enter <span=15 parent=9 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-0>
-I (7793) claw_core::agent::iteration_loop::run: TRACE 7794 enter <span=16 parent=15 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
-I (7793) claw_api::client: TRACE 7794 enter <span=17 parent=16 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
-I (9785) claw_api::client: TRACE 9785 event <span=17 task=claw_orchestrator event-name=completed target=claw_api::client>
-I (9785) claw_api::client: TRACE 9785 exit <span=17 task=claw_orchestrator>
-I (9785) claw_core::agent::iteration_loop::run: TRACE 9785 exit <span=16 task=claw_orchestrator>
-I (9785) claw_core::agent::iteration_loop::run: TRACE 9785 event <span=15 task=claw_orchestrator event-name=tool_calls target=claw_core::agent::iteration_loop::run> count=1
-I (9785) claw_core::agent::iteration_loop::tool_round: TRACE 9785 enter <span=18 parent=15 task=claw_orchestrator span-name=toolcall target=claw_core::agent::iteration_loop::tool_round> tool=profile_read
-I (9785) claw_core::agent::iteration_loop::tool_round: TRACE 9786 event <span=18 task=claw_orchestrator event-name=arguments target=claw_core::agent::iteration_loop::tool_round> argument_bytes=34
-I (9785) claw_core::agent::iteration_loop::tool_round: TRACE 9786 event <span=18 task=claw_orchestrator event-name=result target=claw_core::agent::iteration_loop::tool_round> ok=true blocked=false
-I (9785) claw_core::agent::iteration_loop::tool_round: TRACE 9786 exit <span=18 task=claw_orchestrator>
-I (9785) claw_core::agent::iteration_loop::run: TRACE 9786 event <span=15 task=claw_orchestrator event-name=tool_round_completed target=claw_core::agent::iteration_loop::run> count=1
-I (9785) claw_core::agent::iteration_loop::run: TRACE 9786 exit <span=15 task=claw_orchestrator>
-I (9785) claw_core::orchestrator::instance::drive: TRACE 9786 exit <span=9 task=claw_orchestrator>
-I (9785) claw_core::orchestrator::instance::drive: TRACE 9786 enter <span=19 parent=7 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
-I (9785) claw_core::agent::base_agent::iteration: TRACE 9786 enter <span=20 parent=19 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-1> adapter_count=5
-I (9785) claw_core::agent::base_agent::iteration: TRACE 9786 enter <span=21 parent=20 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
-I (9785) claw_core::agent::base_agent::iteration: TRACE 9786 exit <span=21 task=claw_orchestrator>
-I (9785) claw_core::agent::base_agent::iteration: TRACE 9786 exit <span=20 task=claw_orchestrator>
-I (9785) claw_core::agent::iteration_loop::run: TRACE 9786 enter <span=22 parent=19 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-1>
-I (9785) claw_core::agent::iteration_loop::run: TRACE 9786 enter <span=23 parent=22 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
-I (9785) claw_api::client: TRACE 9786 enter <span=24 parent=23 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
-I (12944) claw_api::client: TRACE 12944 event <span=24 task=claw_orchestrator event-name=completed target=claw_api::client>
-I (12944) claw_api::client: TRACE 12944 exit <span=24 task=claw_orchestrator>
-I (12944) claw_core::agent::iteration_loop::run: TRACE 12944 exit <span=23 task=claw_orchestrator>
-I (12944) claw_core::agent::iteration_loop::run: TRACE 12945 event <span=22 task=claw_orchestrator event-name=completed target=claw_core::agent::iteration_loop::run> output_bytes=283
-I (12944) claw_core::agent::iteration_loop::run: TRACE 12945 exit <span=22 task=claw_orchestrator>
-I (12944) claw_core::orchestrator::instance::drive: TRACE 12945 exit <span=19 task=claw_orchestrator>
-I (12944) claw_core::orchestrator::engine::turn: TRACE 12945 exit <span=7 task=claw_orchestrator>
-I (12944) claw_core::orchestrator::engine::drive_loop: TRACE 12945 exit <span=6 task=claw_orchestrator>
-I (32219) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 32220 enter <span=25 parent=none task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::command_loop::input_commands> <context=run session=session-6>
-I (32219) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 32220 event <span=25 task=claw_orchestrator event-name=submit_accepted target=claw_core::orchestrator::engine::command_loop::input_commands> has_text=true text_bytes=28 attachment_count=0 attachment_kinds=none
-I (32219) claw_core::orchestrator::engine::drive_loop: TRACE 32220 enter <span=26 parent=25 task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::drive_loop>
-I (32219) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 32220 exit <span=25 task=claw_orchestrator>
-I (32219) claw_core::orchestrator::engine::turn: TRACE 32220 enter <span=27 parent=26 task=claw_orchestrator span-name=turn target=claw_core::orchestrator::engine::turn> <context=run turn=turn-2> cause=user_submit
-I (32220) claw_core::orchestrator::engine::turn: TRACE 32220 event <span=27 task=claw_orchestrator event-name=input_delivered target=claw_core::orchestrator::engine::turn> has_text=true text_bytes=28 attachment_count=0 attachment_kinds=none
-I (32220) claw_core::orchestrator::instance::drive: TRACE 32220 enter <span=28 parent=27 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
-I (32220) claw_core::agent::base_agent::iteration: TRACE 32220 enter <span=29 parent=28 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-0> adapter_count=5
-I (32220) claw_core::agent::base_agent::iteration: TRACE 32220 enter <span=30 parent=29 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
-I (32220) claw_core::agent::base_agent::iteration: TRACE 32220 exit <span=30 task=claw_orchestrator>
-I (32220) claw_core::agent::base_agent::iteration: TRACE 32220 exit <span=29 task=claw_orchestrator>
-I (32220) claw_core::agent::iteration_loop::run: TRACE 32220 enter <span=31 parent=28 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-0>
-I (32220) claw_core::agent::iteration_loop::run: TRACE 32220 enter <span=32 parent=31 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
-I (32220) claw_api::client: TRACE 32221 enter <span=33 parent=32 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
-I (33605) claw_api::client: TRACE 33606 event <span=33 task=claw_orchestrator event-name=completed target=claw_api::client>
-I (33605) claw_api::client: TRACE 33606 exit <span=33 task=claw_orchestrator>
-I (33605) claw_core::agent::iteration_loop::run: TRACE 33606 exit <span=32 task=claw_orchestrator>
-I (33605) claw_core::agent::iteration_loop::run: TRACE 33606 event <span=31 task=claw_orchestrator event-name=completed target=claw_core::agent::iteration_loop::run> output_bytes=43
-I (33605) claw_core::agent::iteration_loop::run: TRACE 33606 exit <span=31 task=claw_orchestrator>
-I (33606) claw_core::orchestrator::instance::drive: TRACE 33606 exit <span=28 task=claw_orchestrator>
-I (33606) claw_core::orchestrator::engine::turn: TRACE 33607 exit <span=27 task=claw_orchestrator>
-I (33606) claw_core::orchestrator::engine::drive_loop: TRACE 33607 exit <span=26 task=claw_orchestrator>
-I (49784) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 49785 enter <span=34 parent=none task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::command_loop::input_commands> <context=run session=session-6>
-I (49784) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 49785 event <span=34 task=claw_orchestrator event-name=submit_accepted target=claw_core::orchestrator::engine::command_loop::input_commands> has_text=true text_bytes=37 attachment_count=0 attachment_kinds=none
-I (49784) claw_core::orchestrator::engine::drive_loop: TRACE 49785 enter <span=35 parent=34 task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::drive_loop>
-I (49784) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 49785 exit <span=34 task=claw_orchestrator>
-I (49785) claw_core::orchestrator::engine::turn: TRACE 49785 enter <span=36 parent=35 task=claw_orchestrator span-name=turn target=claw_core::orchestrator::engine::turn> <context=run turn=turn-3> cause=user_submit
-I (49785) claw_core::orchestrator::engine::turn: TRACE 49785 event <span=36 task=claw_orchestrator event-name=input_delivered target=claw_core::orchestrator::engine::turn> has_text=true text_bytes=37 attachment_count=0 attachment_kinds=none
-I (49785) claw_core::orchestrator::instance::drive: TRACE 49785 enter <span=37 parent=36 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
-I (49785) claw_core::agent::base_agent::iteration: TRACE 49785 enter <span=38 parent=37 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-0> adapter_count=5
-I (49785) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 49785 enter <span=39 parent=38 task=claw_orchestrator span-name=context.extract target=claw_core::memory::long_term_memory_adapter::extraction_flow> transcript_version=9 version_delta=8 transcript_bytes=508 existing_count=1
-I (49785) claw_core::memory::long_term_memory_adapter::llm_extractor: TRACE 49785 enter <span=40 parent=39 task=claw_orchestrator span-name=api.chat target=claw_core::memory::long_term_memory_adapter::llm_extractor> purpose=memory_extraction max_attempts=3
-I (49785) claw_api::client: TRACE 49786 enter <span=41 parent=40 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
-I (53523) claw_api::client: TRACE 53523 event <span=41 task=claw_orchestrator event-name=completed target=claw_api::client>
-I (53523) claw_api::client: TRACE 53524 exit <span=41 task=claw_orchestrator>
-I (53523) claw_core::memory::long_term_memory_adapter::llm_extractor: TRACE 53524 exit <span=40 task=claw_orchestrator>
-I (53523) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 53524 event <span=39 task=claw_orchestrator event-name=completed target=claw_core::memory::long_term_memory_adapter::extraction_flow> operation_count=0 add_count=0 replace_count=0 forget_count=0
-I (53523) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 53524 exit <span=39 task=claw_orchestrator>
-I (53523) claw_core::agent::base_agent::iteration: TRACE 53524 enter <span=42 parent=38 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
-I (53523) claw_core::agent::base_agent::iteration: TRACE 53524 exit <span=42 task=claw_orchestrator>
-I (53523) claw_core::agent::base_agent::iteration: TRACE 53524 exit <span=38 task=claw_orchestrator>
-I (53523) claw_core::agent::iteration_loop::run: TRACE 53524 enter <span=43 parent=37 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-0>
-I (53523) claw_core::agent::iteration_loop::run: TRACE 53524 enter <span=44 parent=43 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
-I (53523) claw_api::client: TRACE 53524 enter <span=45 parent=44 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
-I (55672) claw_api::client: TRACE 55673 event <span=45 task=claw_orchestrator event-name=completed target=claw_api::client>
-I (55672) claw_api::client: TRACE 55673 exit <span=45 task=claw_orchestrator>
-I (55672) claw_core::agent::iteration_loop::run: TRACE 55673 exit <span=44 task=claw_orchestrator>
-I (55672) claw_core::agent::iteration_loop::run: TRACE 55673 event <span=43 task=claw_orchestrator event-name=tool_calls target=claw_core::agent::iteration_loop::run> count=1
-I (55672) claw_core::agent::iteration_loop::tool_round: TRACE 55673 enter <span=46 parent=43 task=claw_orchestrator span-name=toolcall target=claw_core::agent::iteration_loop::tool_round> tool=list_skill
-I (55672) claw_core::agent::iteration_loop::tool_round: TRACE 55673 event <span=46 task=claw_orchestrator event-name=arguments target=claw_core::agent::iteration_loop::tool_round> argument_bytes=2
-I (55672) claw_core::agent::iteration_loop::tool_round: TRACE 55673 event <span=46 task=claw_orchestrator event-name=result target=claw_core::agent::iteration_loop::tool_round> ok=true blocked=false
-I (55672) claw_core::agent::iteration_loop::tool_round: TRACE 55673 exit <span=46 task=claw_orchestrator>
-I (55672) claw_core::agent::iteration_loop::run: TRACE 55673 event <span=43 task=claw_orchestrator event-name=tool_round_completed target=claw_core::agent::iteration_loop::run> count=1
-I (55672) claw_core::agent::iteration_loop::run: TRACE 55673 exit <span=43 task=claw_orchestrator>
-I (55672) claw_core::orchestrator::instance::drive: TRACE 55673 exit <span=37 task=claw_orchestrator>
-I (55673) claw_core::orchestrator::instance::drive: TRACE 55673 enter <span=47 parent=36 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
-I (55673) claw_core::agent::base_agent::iteration: TRACE 55673 enter <span=48 parent=47 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-1> adapter_count=5
-I (55673) claw_core::agent::base_agent::iteration: TRACE 55673 enter <span=49 parent=48 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
-I (55673) claw_core::agent::base_agent::iteration: TRACE 55673 exit <span=49 task=claw_orchestrator>
-I (55673) claw_core::agent::base_agent::iteration: TRACE 55673 exit <span=48 task=claw_orchestrator>
-I (55673) claw_core::agent::iteration_loop::run: TRACE 55673 enter <span=50 parent=47 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-1>
-I (55673) claw_core::agent::iteration_loop::run: TRACE 55673 enter <span=51 parent=50 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
-I (55673) claw_api::client: TRACE 55673 enter <span=52 parent=51 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
-I (58715) claw_api::client: TRACE 58716 event <span=52 task=claw_orchestrator event-name=completed target=claw_api::client>
-I (58715) claw_api::client: TRACE 58716 exit <span=52 task=claw_orchestrator>
-I (58715) claw_core::agent::iteration_loop::run: TRACE 58716 exit <span=51 task=claw_orchestrator>
-I (58715) claw_core::agent::iteration_loop::run: TRACE 58716 event <span=50 task=claw_orchestrator event-name=tool_calls target=claw_core::agent::iteration_loop::run> count=1
-I (58715) claw_core::agent::iteration_loop::tool_round: TRACE 58716 enter <span=53 parent=50 task=claw_orchestrator span-name=toolcall target=claw_core::agent::iteration_loop::tool_round> tool=list_spawnable_agents
-I (58715) claw_core::agent::iteration_loop::tool_round: TRACE 58716 event <span=53 task=claw_orchestrator event-name=arguments target=claw_core::agent::iteration_loop::tool_round> argument_bytes=2
-I (58715) claw_core::agent::iteration_loop::tool_round: TRACE 58716 event <span=53 task=claw_orchestrator event-name=result target=claw_core::agent::iteration_loop::tool_round> ok=true blocked=false
-I (58715) claw_core::agent::iteration_loop::tool_round: TRACE 58716 exit <span=53 task=claw_orchestrator>
-I (58715) claw_core::agent::iteration_loop::run: TRACE 58716 event <span=50 task=claw_orchestrator event-name=tool_round_completed target=claw_core::agent::iteration_loop::run> count=1
-I (58715) claw_core::agent::iteration_loop::run: TRACE 58716 exit <span=50 task=claw_orchestrator>
-I (58715) claw_core::orchestrator::instance::drive: TRACE 58716 exit <span=47 task=claw_orchestrator>
-I (58715) claw_core::orchestrator::instance::drive: TRACE 58716 enter <span=54 parent=36 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
-I (58715) claw_core::agent::base_agent::iteration: TRACE 58716 enter <span=55 parent=54 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-2> adapter_count=5
-I (58716) claw_core::agent::base_agent::iteration: TRACE 58716 enter <span=56 parent=55 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
-I (58716) claw_core::agent::base_agent::iteration: TRACE 58716 exit <span=56 task=claw_orchestrator>
-I (58716) claw_core::agent::base_agent::iteration: TRACE 58716 exit <span=55 task=claw_orchestrator>
-I (58716) claw_core::agent::iteration_loop::run: TRACE 58716 enter <span=57 parent=54 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-2>
-I (58716) claw_core::agent::iteration_loop::run: TRACE 58716 enter <span=58 parent=57 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
-I (58716) claw_api::client: TRACE 58716 enter <span=59 parent=58 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
-I (64231) claw_api::client: TRACE 64232 event <span=59 task=claw_orchestrator event-name=completed target=claw_api::client>
-I (64231) claw_api::client: TRACE 64232 exit <span=59 task=claw_orchestrator>
-I (64231) claw_core::agent::iteration_loop::run: TRACE 64232 exit <span=58 task=claw_orchestrator>
-I (64231) claw_core::agent::iteration_loop::run: TRACE 64232 event <span=57 task=claw_orchestrator event-name=completed target=claw_core::agent::iteration_loop::run> output_bytes=506
-I (64231) claw_core::agent::iteration_loop::run: TRACE 64232 exit <span=57 task=claw_orchestrator>
-I (64231) claw_core::orchestrator::instance::drive: TRACE 64232 exit <span=54 task=claw_orchestrator>
-I (64232) claw_core::orchestrator::engine::turn: TRACE 64232 exit <span=36 task=claw_orchestrator>
-I (64232) claw_core::orchestrator::engine::drive_loop: TRACE 64232 exit <span=35 task=claw_orchestrator>
+I (0) claw_core::agent::factory::construction: TRACE 2 enter <span=1 parent=none task=claw_orchestrator span-name=agent.factory target=claw_core::agent::factory::construction>
+I (1) claw_core::agent::factory::construction: TRACE 3 enter <span=2 parent=1 task=claw_orchestrator span-name=skill.catalog target=claw_core::agent::factory::construction>
+I (1) claw_core::agent::factory::construction: TRACE 3 exit <span=2 task=claw_orchestrator>
+I (1) claw_core::agent::factory::construction: TRACE 3 exit <span=1 task=claw_orchestrator>
+I (1) claw_core::orchestrator::handle: TRACE 3 enter <span=3 parent=none task=main span-name=session.create target=claw_core::orchestrator::handle>
+I (2) claw_core::orchestrator::handle: TRACE 5 event <span=3 task=main event-name=created target=claw_core::orchestrator::handle> session=session-1
+I (2) claw_core::orchestrator::handle: TRACE 5 exit <span=3 task=main>
+I (2) claw_core::orchestrator::handle: TRACE 5 enter <span=4 parent=none task=main span-name=session target=claw_core::orchestrator::handle> <context=run session=session-1>
+I (2) claw_core::orchestrator::handle: TRACE 5 event <span=4 task=main event-name=opened target=claw_core::orchestrator::handle>
+I (2) claw_core::orchestrator::handle: TRACE 5 exit <span=4 task=main>
+I (1254) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 1257 enter <span=5 parent=none task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::command_loop::input_commands> <context=run session=session-1>
+I (1254) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 1257 event <span=5 task=claw_orchestrator event-name=submit_accepted target=claw_core::orchestrator::engine::command_loop::input_commands> has_text=true text_bytes=2 attachment_count=0 attachment_kinds=none
+I (1254) claw_core::orchestrator::engine::drive_loop: TRACE 1257 enter <span=6 parent=5 task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::drive_loop>
+I (1254) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 1257 exit <span=5 task=claw_orchestrator>
+I (1254) claw_core::orchestrator::engine::turn: TRACE 1257 enter <span=7 parent=6 task=claw_orchestrator span-name=turn target=claw_core::orchestrator::engine::turn> <context=run turn=turn-1> cause=user_submit
+I (1255) claw_core::orchestrator::engine::turn: TRACE 1257 event <span=7 task=claw_orchestrator event-name=input_delivered target=claw_core::orchestrator::engine::turn> has_text=true text_bytes=2 attachment_count=0 attachment_kinds=none
+I (1255) claw_core::agent::factory::create: TRACE 1257 enter <span=8 parent=7 task=claw_orchestrator span-name=agent.create target=claw_core::agent::factory::create>
+I (1256) claw_core::agent::factory::create: TRACE 1259 event <span=8 task=claw_orchestrator event-name=created target=claw_core::agent::factory::create> agent=agent-1 kind=conversation
+I (1256) claw_core::agent::factory::create: TRACE 1259 exit <span=8 task=claw_orchestrator>
+I (1256) claw_core::orchestrator::instance::drive: TRACE 1259 enter <span=9 parent=7 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
+I (1256) claw_core::agent::base_agent::iteration: TRACE 1259 enter <span=10 parent=9 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-0> adapter_count=5
+I (1256) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 1259 enter <span=11 parent=10 task=claw_orchestrator span-name=context.extract target=claw_core::memory::long_term_memory_adapter::extraction_flow> transcript_version=1 version_delta=1 transcript_bytes=17 existing_count=0
+I (1256) claw_core::memory::long_term_memory_adapter::llm_extractor: TRACE 1259 enter <span=12 parent=11 task=claw_orchestrator span-name=api.chat target=claw_core::memory::long_term_memory_adapter::llm_extractor> purpose=memory_extraction max_attempts=3
+I (1256) claw_api::client: TRACE 1259 enter <span=13 parent=12 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (3161) claw_api::client: TRACE 3164 event <span=13 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (3161) claw_api::client: TRACE 3164 exit <span=13 task=claw_orchestrator>
+I (3161) claw_core::memory::long_term_memory_adapter::llm_extractor: TRACE 3164 exit <span=12 task=claw_orchestrator>
+I (3161) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 3164 event <span=11 task=claw_orchestrator event-name=completed target=claw_core::memory::long_term_memory_adapter::extraction_flow> operation_count=0 add_count=0 replace_count=0 forget_count=0
+I (3161) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 3164 exit <span=11 task=claw_orchestrator>
+I (3161) claw_core::agent::base_agent::iteration: TRACE 3164 enter <span=14 parent=10 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
+I (3161) claw_core::agent::base_agent::iteration: TRACE 3164 exit <span=14 task=claw_orchestrator>
+I (3161) claw_core::agent::base_agent::iteration: TRACE 3164 exit <span=10 task=claw_orchestrator>
+I (3162) claw_core::agent::iteration_loop::run: TRACE 3164 enter <span=15 parent=9 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-0>
+I (3162) claw_core::agent::iteration_loop::run: TRACE 3164 enter <span=16 parent=15 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
+I (3162) claw_api::client: TRACE 3164 enter <span=17 parent=16 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (5629) claw_api::client: TRACE 5631 event <span=17 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (5629) claw_api::client: TRACE 5631 exit <span=17 task=claw_orchestrator>
+I (5629) claw_core::agent::iteration_loop::run: TRACE 5631 exit <span=16 task=claw_orchestrator>
+I (5629) claw_core::agent::iteration_loop::run: TRACE 5631 event <span=15 task=claw_orchestrator event-name=completed target=claw_core::agent::iteration_loop::run> output_bytes=29
+I (5629) claw_core::agent::iteration_loop::run: TRACE 5631 exit <span=15 task=claw_orchestrator>
+I (5629) claw_core::orchestrator::instance::drive: TRACE 5632 exit <span=9 task=claw_orchestrator>
+I (5629) claw_core::orchestrator::engine::turn: TRACE 5632 exit <span=7 task=claw_orchestrator>
+I (5629) claw_core::orchestrator::engine::drive_loop: TRACE 5632 exit <span=6 task=claw_orchestrator>
+I (16393) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 16395 enter <span=18 parent=none task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::command_loop::input_commands> <context=run session=session-1>
+I (16394) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 16396 event <span=18 task=claw_orchestrator event-name=submit_accepted target=claw_core::orchestrator::engine::command_loop::input_commands> has_text=true text_bytes=31 attachment_count=0 attachment_kinds=none
+I (16395) claw_core::orchestrator::engine::drive_loop: TRACE 16398 enter <span=19 parent=18 task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::drive_loop>
+I (16396) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 16398 exit <span=18 task=claw_orchestrator>
+I (16396) claw_core::orchestrator::engine::turn: TRACE 16398 enter <span=20 parent=19 task=claw_orchestrator span-name=turn target=claw_core::orchestrator::engine::turn> <context=run turn=turn-2> cause=user_submit
+I (16396) claw_core::orchestrator::engine::turn: TRACE 16399 event <span=20 task=claw_orchestrator event-name=input_delivered target=claw_core::orchestrator::engine::turn> has_text=true text_bytes=31 attachment_count=0 attachment_kinds=none
+I (16397) claw_core::orchestrator::instance::drive: TRACE 16399 enter <span=21 parent=20 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
+I (16397) claw_core::agent::base_agent::iteration: TRACE 16399 enter <span=22 parent=21 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-0> adapter_count=5
+I (16397) claw_core::agent::base_agent::iteration: TRACE 16400 enter <span=23 parent=22 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
+I (16398) claw_core::agent::base_agent::iteration: TRACE 16400 exit <span=23 task=claw_orchestrator>
+I (16398) claw_core::agent::base_agent::iteration: TRACE 16400 exit <span=22 task=claw_orchestrator>
+I (16398) claw_core::agent::iteration_loop::run: TRACE 16401 enter <span=24 parent=21 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-0>
+I (16398) claw_core::agent::iteration_loop::run: TRACE 16401 enter <span=25 parent=24 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
+I (16398) claw_api::client: TRACE 16401 enter <span=26 parent=25 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (18516) claw_api::client: TRACE 18518 event <span=26 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (18516) claw_api::client: TRACE 18518 exit <span=26 task=claw_orchestrator>
+I (18516) claw_core::agent::iteration_loop::run: TRACE 18519 exit <span=25 task=claw_orchestrator>
+I (18516) claw_core::agent::iteration_loop::run: TRACE 18519 event <span=24 task=claw_orchestrator event-name=tool_calls target=claw_core::agent::iteration_loop::run> count=3
+I (18516) claw_core::agent::iteration_loop::tool_round: TRACE 18519 enter <span=27 parent=24 task=claw_orchestrator span-name=toolcall target=claw_core::agent::iteration_loop::tool_round> tool=profile_read
+I (18517) claw_core::agent::iteration_loop::tool_round: TRACE 18519 event <span=27 task=claw_orchestrator event-name=arguments target=claw_core::agent::iteration_loop::tool_round> argument_bytes=34
+I (18517) claw_core::agent::iteration_loop::tool_round: TRACE 18519 event <span=27 task=claw_orchestrator event-name=result target=claw_core::agent::iteration_loop::tool_round> ok=true blocked=false
+I (18517) claw_core::agent::iteration_loop::tool_round: TRACE 18520 exit <span=27 task=claw_orchestrator>
+I (18517) claw_core::agent::iteration_loop::tool_round: TRACE 18520 enter <span=28 parent=24 task=claw_orchestrator span-name=toolcall target=claw_core::agent::iteration_loop::tool_round> tool=profile_read
+I (18517) claw_core::agent::iteration_loop::tool_round: TRACE 18520 event <span=28 task=claw_orchestrator event-name=arguments target=claw_core::agent::iteration_loop::tool_round> argument_bytes=20
+I (18518) claw_core::agent::iteration_loop::tool_round: TRACE 18520 event <span=28 task=claw_orchestrator event-name=result target=claw_core::agent::iteration_loop::tool_round> ok=true blocked=false
+I (18518) claw_core::agent::iteration_loop::tool_round: TRACE 18520 exit <span=28 task=claw_orchestrator>
+I (18518) claw_core::agent::iteration_loop::tool_round: TRACE 18520 enter <span=29 parent=24 task=claw_orchestrator span-name=toolcall target=claw_core::agent::iteration_loop::tool_round> tool=skill_list
+I (18518) claw_core::agent::iteration_loop::tool_round: TRACE 18521 event <span=29 task=claw_orchestrator event-name=arguments target=claw_core::agent::iteration_loop::tool_round> argument_bytes=2
+I (18518) claw_core::agent::iteration_loop::tool_round: TRACE 18521 event <span=29 task=claw_orchestrator event-name=result target=claw_core::agent::iteration_loop::tool_round> ok=true blocked=false
+I (18519) claw_core::agent::iteration_loop::tool_round: TRACE 18521 exit <span=29 task=claw_orchestrator>
+I (18519) claw_core::agent::iteration_loop::run: TRACE 18521 event <span=24 task=claw_orchestrator event-name=tool_round_completed target=claw_core::agent::iteration_loop::run> count=3
+I (18519) claw_core::agent::iteration_loop::run: TRACE 18522 exit <span=24 task=claw_orchestrator>
+I (18519) claw_core::orchestrator::instance::drive: TRACE 18522 exit <span=21 task=claw_orchestrator>
+I (18519) claw_core::orchestrator::instance::drive: TRACE 18522 enter <span=30 parent=20 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
+I (18520) claw_core::agent::base_agent::iteration: TRACE 18522 enter <span=31 parent=30 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-1> adapter_count=5
+I (18520) claw_core::agent::base_agent::iteration: TRACE 18522 enter <span=32 parent=31 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
+I (18520) claw_core::agent::base_agent::iteration: TRACE 18523 exit <span=32 task=claw_orchestrator>
+I (18520) claw_core::agent::base_agent::iteration: TRACE 18523 exit <span=31 task=claw_orchestrator>
+I (18521) claw_core::agent::iteration_loop::run: TRACE 18523 enter <span=33 parent=30 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-1>
+I (18521) claw_core::agent::iteration_loop::run: TRACE 18523 enter <span=34 parent=33 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
+I (18521) claw_api::client: TRACE 18523 enter <span=35 parent=34 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (24446) claw_api::client: TRACE 24449 event <span=35 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (24446) claw_api::client: TRACE 24449 exit <span=35 task=claw_orchestrator>
+I (24446) claw_core::agent::iteration_loop::run: TRACE 24449 exit <span=34 task=claw_orchestrator>
+I (24446) claw_core::agent::iteration_loop::run: TRACE 24449 event <span=33 task=claw_orchestrator event-name=completed target=claw_core::agent::iteration_loop::run> output_bytes=1087
+I (24447) claw_core::agent::iteration_loop::run: TRACE 24449 exit <span=33 task=claw_orchestrator>
+I (24448) claw_core::orchestrator::instance::drive: TRACE 24451 exit <span=30 task=claw_orchestrator>
+I (24450) claw_core::orchestrator::engine::turn: TRACE 24452 exit <span=20 task=claw_orchestrator>
+I (24450) claw_core::orchestrator::engine::drive_loop: TRACE 24452 exit <span=19 task=claw_orchestrator>
+I (55691) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 55693 enter <span=36 parent=none task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::command_loop::input_commands> <context=run session=session-1>
+I (55691) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 55694 event <span=36 task=claw_orchestrator event-name=submit_accepted target=claw_core::orchestrator::engine::command_loop::input_commands> has_text=true text_bytes=41 attachment_count=0 attachment_kinds=none
+I (55692) claw_core::orchestrator::engine::drive_loop: TRACE 55694 enter <span=37 parent=36 task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::drive_loop>
+I (55692) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 55694 exit <span=36 task=claw_orchestrator>
+I (55692) claw_core::orchestrator::engine::turn: TRACE 55694 enter <span=38 parent=37 task=claw_orchestrator span-name=turn target=claw_core::orchestrator::engine::turn> <context=run turn=turn-3> cause=user_submit
+I (55692) claw_core::orchestrator::engine::turn: TRACE 55694 event <span=38 task=claw_orchestrator event-name=input_delivered target=claw_core::orchestrator::engine::turn> has_text=true text_bytes=41 attachment_count=0 attachment_kinds=none
+I (55692) claw_core::orchestrator::instance::drive: TRACE 55694 enter <span=39 parent=38 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
+I (55692) claw_core::agent::base_agent::iteration: TRACE 55694 enter <span=40 parent=39 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-0> adapter_count=5
+I (55692) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 55695 enter <span=41 parent=40 task=claw_orchestrator span-name=context.extract target=claw_core::memory::long_term_memory_adapter::extraction_flow> transcript_version=11 version_delta=10 transcript_bytes=1354 existing_count=0
+I (55692) claw_core::memory::long_term_memory_adapter::llm_extractor: TRACE 55695 enter <span=42 parent=41 task=claw_orchestrator span-name=api.chat target=claw_core::memory::long_term_memory_adapter::llm_extractor> purpose=memory_extraction max_attempts=3
+I (55692) claw_api::client: TRACE 55695 enter <span=43 parent=42 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (58592) claw_api::client: TRACE 58595 event <span=43 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (58592) claw_api::client: TRACE 58595 exit <span=43 task=claw_orchestrator>
+I (58592) claw_core::memory::long_term_memory_adapter::llm_extractor: TRACE 58595 exit <span=42 task=claw_orchestrator>
+I (58592) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 58595 event <span=41 task=claw_orchestrator event-name=completed target=claw_core::memory::long_term_memory_adapter::extraction_flow> operation_count=0 add_count=0 replace_count=0 forget_count=0
+I (58592) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 58595 exit <span=41 task=claw_orchestrator>
+I (58592) claw_core::agent::base_agent::iteration: TRACE 58595 enter <span=44 parent=40 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
+I (58593) claw_core::agent::base_agent::iteration: TRACE 58595 exit <span=44 task=claw_orchestrator>
+I (58593) claw_core::agent::base_agent::iteration: TRACE 58595 exit <span=40 task=claw_orchestrator>
+I (58593) claw_core::agent::iteration_loop::run: TRACE 58595 enter <span=45 parent=39 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-0>
+I (58593) claw_core::agent::iteration_loop::run: TRACE 58595 enter <span=46 parent=45 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
+I (58593) claw_api::client: TRACE 58595 enter <span=47 parent=46 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (60268) claw_api::client: TRACE 60270 event <span=47 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (60268) claw_api::client: TRACE 60270 exit <span=47 task=claw_orchestrator>
+I (60268) claw_core::agent::iteration_loop::run: TRACE 60270 exit <span=46 task=claw_orchestrator>
+I (60268) claw_core::agent::iteration_loop::run: TRACE 60270 event <span=45 task=claw_orchestrator event-name=tool_calls target=claw_core::agent::iteration_loop::run> count=1
+I (60268) claw_core::agent::iteration_loop::tool_round: TRACE 60271 enter <span=48 parent=45 task=claw_orchestrator span-name=toolcall target=claw_core::agent::iteration_loop::tool_round> tool=subagent_list_spawnable
+I (60268) claw_core::agent::iteration_loop::tool_round: TRACE 60271 event <span=48 task=claw_orchestrator event-name=arguments target=claw_core::agent::iteration_loop::tool_round> argument_bytes=2
+I (60268) claw_core::agent::iteration_loop::tool_round: TRACE 60271 event <span=48 task=claw_orchestrator event-name=result target=claw_core::agent::iteration_loop::tool_round> ok=true blocked=false
+I (60268) claw_core::agent::iteration_loop::tool_round: TRACE 60271 exit <span=48 task=claw_orchestrator>
+I (60269) claw_core::agent::iteration_loop::run: TRACE 60271 event <span=45 task=claw_orchestrator event-name=tool_round_completed target=claw_core::agent::iteration_loop::run> count=1
+I (60269) claw_core::agent::iteration_loop::run: TRACE 60271 exit <span=45 task=claw_orchestrator>
+I (60269) claw_core::orchestrator::instance::drive: TRACE 60271 exit <span=39 task=claw_orchestrator>
+I (60269) claw_core::orchestrator::instance::drive: TRACE 60271 enter <span=49 parent=38 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
+I (60269) claw_core::agent::base_agent::iteration: TRACE 60271 enter <span=50 parent=49 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-1> adapter_count=5
+I (60269) claw_core::agent::base_agent::iteration: TRACE 60272 enter <span=51 parent=50 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
+I (60269) claw_core::agent::base_agent::iteration: TRACE 60272 exit <span=51 task=claw_orchestrator>
+I (60269) claw_core::agent::base_agent::iteration: TRACE 60272 exit <span=50 task=claw_orchestrator>
+I (60269) claw_core::agent::iteration_loop::run: TRACE 60272 enter <span=52 parent=49 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-1>
+I (60269) claw_core::agent::iteration_loop::run: TRACE 60272 enter <span=53 parent=52 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
+I (60269) claw_api::client: TRACE 60272 enter <span=54 parent=53 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (65605) claw_api::client: TRACE 65607 event <span=54 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (65605) claw_api::client: TRACE 65607 exit <span=54 task=claw_orchestrator>
+I (65605) claw_core::agent::iteration_loop::run: TRACE 65607 exit <span=53 task=claw_orchestrator>
+I (65605) claw_core::agent::iteration_loop::run: TRACE 65607 event <span=52 task=claw_orchestrator event-name=tool_calls target=claw_core::agent::iteration_loop::run> count=2
+I (65605) claw_core::agent::iteration_loop::tool_round: TRACE 65608 enter <span=55 parent=52 task=claw_orchestrator span-name=toolcall target=claw_core::agent::iteration_loop::tool_round> tool=subagent_spawn
+I (65605) claw_core::agent::iteration_loop::tool_round: TRACE 65608 event <span=55 task=claw_orchestrator event-name=arguments target=claw_core::agent::iteration_loop::tool_round> argument_bytes=245
+I (65605) claw_core::agent::iteration_loop::tool_round: TRACE 65608 event <span=55 task=claw_orchestrator event-name=result target=claw_core::agent::iteration_loop::tool_round> ok=true blocked=false
+I (65605) claw_core::agent::iteration_loop::tool_round: TRACE 65608 exit <span=55 task=claw_orchestrator>
+I (65605) claw_core::agent::iteration_loop::tool_round: TRACE 65608 enter <span=56 parent=52 task=claw_orchestrator span-name=toolcall target=claw_core::agent::iteration_loop::tool_round> tool=subagent_spawn
+I (65605) claw_core::agent::iteration_loop::tool_round: TRACE 65608 event <span=56 task=claw_orchestrator event-name=arguments target=claw_core::agent::iteration_loop::tool_round> argument_bytes=207
+I (65605) claw_core::agent::iteration_loop::tool_round: TRACE 65608 event <span=56 task=claw_orchestrator event-name=result target=claw_core::agent::iteration_loop::tool_round> ok=true blocked=false
+I (65605) claw_core::agent::iteration_loop::tool_round: TRACE 65608 exit <span=56 task=claw_orchestrator>
+I (65605) claw_core::agent::iteration_loop::run: TRACE 65608 event <span=52 task=claw_orchestrator event-name=tool_round_completed target=claw_core::agent::iteration_loop::run> count=2
+I (65605) claw_core::agent::iteration_loop::run: TRACE 65608 exit <span=52 task=claw_orchestrator>
+I (65606) claw_core::orchestrator::instance::drive: TRACE 65608 exit <span=49 task=claw_orchestrator>
+I (65606) claw_core::agent::factory::create: TRACE 65608 enter <span=57 parent=38 task=claw_orchestrator span-name=agent.create target=claw_core::agent::factory::create>
+I (65606) claw_core::agent::factory::create: TRACE 65608 event <span=57 task=claw_orchestrator event-name=created target=claw_core::agent::factory::create> agent=agent-2 kind=worker
+I (65606) claw_core::agent::factory::create: TRACE 65608 exit <span=57 task=claw_orchestrator>
+I (65606) claw_core::orchestrator::instance::graph_flow::effects: TRACE 65608 event <span=38 task=claw_orchestrator event-name=spawn_materialized target=claw_core::orchestrator::instance::graph_flow::effects> parent_agent=agent-1 child_agent=agent-2 kind=worker
+I (65606) claw_core::agent::factory::create: TRACE 65609 enter <span=58 parent=38 task=claw_orchestrator span-name=agent.create target=claw_core::agent::factory::create>
+I (65606) claw_core::agent::factory::create: TRACE 65609 event <span=58 task=claw_orchestrator event-name=created target=claw_core::agent::factory::create> agent=agent-3 kind=worker
+I (65606) claw_core::agent::factory::create: TRACE 65609 exit <span=58 task=claw_orchestrator>
+I (65606) claw_core::orchestrator::instance::graph_flow::effects: TRACE 65609 event <span=38 task=claw_orchestrator event-name=spawn_materialized target=claw_core::orchestrator::instance::graph_flow::effects> parent_agent=agent-1 child_agent=agent-3 kind=worker
+I (65606) claw_core::orchestrator::instance::drive: TRACE 65609 enter <span=59 parent=38 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-2> kind=worker depth=1
+I (65606) claw_core::orchestrator::instance::drive: TRACE 65609 enter <span=60 parent=38 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-3> kind=worker depth=1
+I (65606) claw_core::orchestrator::instance::drive: TRACE 65609 enter <span=61 parent=38 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
+I (65606) claw_core::agent::base_agent::iteration: TRACE 65609 enter <span=62 parent=59 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-0> adapter_count=5
+I (65606) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 65609 enter <span=63 parent=62 task=claw_orchestrator span-name=context.extract target=claw_core::memory::long_term_memory_adapter::extraction_flow> transcript_version=1 version_delta=1 transcript_bytes=170 existing_count=0
+I (65607) claw_core::memory::long_term_memory_adapter::llm_extractor: TRACE 65609 enter <span=64 parent=63 task=claw_orchestrator span-name=api.chat target=claw_core::memory::long_term_memory_adapter::llm_extractor> purpose=memory_extraction max_attempts=3
+I (65607) claw_api::client: TRACE 65609 enter <span=65 parent=64 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (65607) claw_core::agent::base_agent::iteration: TRACE 65609 enter <span=66 parent=60 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-0> adapter_count=5
+I (65607) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 65609 enter <span=67 parent=66 task=claw_orchestrator span-name=context.extract target=claw_core::memory::long_term_memory_adapter::extraction_flow> transcript_version=1 version_delta=1 transcript_bytes=124 existing_count=0
+I (65607) claw_core::memory::long_term_memory_adapter::llm_extractor: TRACE 65609 enter <span=68 parent=67 task=claw_orchestrator span-name=api.chat target=claw_core::memory::long_term_memory_adapter::llm_extractor> purpose=memory_extraction max_attempts=3
+I (65607) claw_core::agent::base_agent::iteration: TRACE 65610 enter <span=69 parent=61 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-2> adapter_count=5
+I (65607) claw_core::agent::base_agent::iteration: TRACE 65610 enter <span=70 parent=69 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
+I (65607) claw_core::agent::base_agent::iteration: TRACE 65610 exit <span=70 task=claw_orchestrator>
+I (65607) claw_core::agent::base_agent::iteration: TRACE 65610 exit <span=69 task=claw_orchestrator>
+I (65607) claw_core::agent::iteration_loop::run: TRACE 65610 enter <span=71 parent=61 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-2>
+I (65607) claw_core::agent::iteration_loop::run: TRACE 65610 enter <span=72 parent=71 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
+I (65607) claw_api::client: TRACE 65610 enter <span=73 parent=72 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (67219) claw_api::client: TRACE 67222 event <span=73 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (67219) claw_api::client: TRACE 67222 exit <span=73 task=claw_orchestrator>
+I (67219) claw_core::agent::iteration_loop::run: TRACE 67222 exit <span=72 task=claw_orchestrator>
+I (67220) claw_core::agent::iteration_loop::run: TRACE 67222 event <span=71 task=claw_orchestrator event-name=tool_calls target=claw_core::agent::iteration_loop::run> count=1
+I (67220) claw_core::agent::iteration_loop::tool_round: TRACE 67222 enter <span=74 parent=71 task=claw_orchestrator span-name=toolcall target=claw_core::agent::iteration_loop::tool_round> tool=subagent_list
+I (67220) claw_core::agent::iteration_loop::tool_round: TRACE 67222 event <span=74 task=claw_orchestrator event-name=arguments target=claw_core::agent::iteration_loop::tool_round> argument_bytes=2
+I (67221) claw_core::agent::iteration_loop::tool_round: TRACE 67223 event <span=74 task=claw_orchestrator event-name=result target=claw_core::agent::iteration_loop::tool_round> ok=true blocked=false
+I (67221) claw_core::agent::iteration_loop::tool_round: TRACE 67223 exit <span=74 task=claw_orchestrator>
+I (67221) claw_core::agent::iteration_loop::run: TRACE 67224 event <span=71 task=claw_orchestrator event-name=tool_round_completed target=claw_core::agent::iteration_loop::run> count=1
+I (67221) claw_core::agent::iteration_loop::run: TRACE 67224 exit <span=71 task=claw_orchestrator>
+I (67221) claw_core::orchestrator::instance::drive: TRACE 67224 exit <span=61 task=claw_orchestrator>
+I (67221) claw_core::orchestrator::instance::drive: TRACE 67224 enter <span=75 parent=38 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
+I (67221) claw_core::agent::base_agent::iteration: TRACE 67224 enter <span=76 parent=75 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-3> adapter_count=5
+I (67222) claw_core::agent::base_agent::iteration: TRACE 67224 enter <span=77 parent=76 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
+I (67222) claw_core::agent::base_agent::iteration: TRACE 67224 exit <span=77 task=claw_orchestrator>
+I (67222) claw_core::agent::base_agent::iteration: TRACE 67224 exit <span=76 task=claw_orchestrator>
+I (67222) claw_core::agent::iteration_loop::run: TRACE 67224 enter <span=78 parent=75 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-3>
+I (67222) claw_core::agent::iteration_loop::run: TRACE 67224 enter <span=79 parent=78 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
+I (67222) claw_api::client: TRACE 67224 enter <span=80 parent=79 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (67777) claw_api::client: TRACE 67779 event <span=65 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (67777) claw_api::client: TRACE 67779 exit <span=65 task=claw_orchestrator>
+I (67777) claw_core::memory::long_term_memory_adapter::llm_extractor: TRACE 67780 exit <span=64 task=claw_orchestrator>
+I (67777) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 67780 event <span=63 task=claw_orchestrator event-name=completed target=claw_core::memory::long_term_memory_adapter::extraction_flow> operation_count=0 add_count=0 replace_count=0 forget_count=0
+I (67777) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 67780 exit <span=63 task=claw_orchestrator>
+I (67777) claw_core::agent::base_agent::iteration: TRACE 67780 enter <span=81 parent=62 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
+I (67778) claw_core::agent::base_agent::iteration: TRACE 67780 exit <span=81 task=claw_orchestrator>
+I (67778) claw_core::agent::base_agent::iteration: TRACE 67780 exit <span=62 task=claw_orchestrator>
+I (67778) claw_core::agent::iteration_loop::run: TRACE 67780 enter <span=82 parent=59 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-0>
+I (67778) claw_core::agent::iteration_loop::run: TRACE 67780 enter <span=83 parent=82 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
+I (67778) claw_api::client: TRACE 67781 enter <span=84 parent=83 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (67780) claw_api::client: TRACE 67782 enter <span=85 parent=68 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (69783) claw_api::client: TRACE 69785 event <span=85 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (69783) claw_api::client: TRACE 69785 exit <span=85 task=claw_orchestrator>
+I (69783) claw_core::memory::long_term_memory_adapter::llm_extractor: TRACE 69786 exit <span=68 task=claw_orchestrator>
+I (69783) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 69786 event <span=67 task=claw_orchestrator event-name=completed target=claw_core::memory::long_term_memory_adapter::extraction_flow> operation_count=0 add_count=0 replace_count=0 forget_count=0
+I (69783) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 69786 exit <span=67 task=claw_orchestrator>
+I (69783) claw_core::agent::base_agent::iteration: TRACE 69786 enter <span=86 parent=66 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
+I (69784) claw_core::agent::base_agent::iteration: TRACE 69786 exit <span=86 task=claw_orchestrator>
+I (69784) claw_core::agent::base_agent::iteration: TRACE 69786 exit <span=66 task=claw_orchestrator>
+I (69784) claw_core::agent::iteration_loop::run: TRACE 69786 enter <span=87 parent=60 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-0>
+I (69784) claw_core::agent::iteration_loop::run: TRACE 69786 enter <span=88 parent=87 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
+I (69784) claw_api::client: TRACE 69786 enter <span=89 parent=88 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (71050) claw_api::client: TRACE 71053 event <span=80 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (71050) claw_api::client: TRACE 71053 exit <span=80 task=claw_orchestrator>
+I (71050) claw_core::agent::iteration_loop::run: TRACE 71053 exit <span=79 task=claw_orchestrator>
+I (71050) claw_core::agent::iteration_loop::run: TRACE 71053 event <span=78 task=claw_orchestrator event-name=completed target=claw_core::agent::iteration_loop::run> output_bytes=576
+I (71051) claw_core::agent::iteration_loop::run: TRACE 71053 exit <span=78 task=claw_orchestrator>
+I (71051) claw_core::orchestrator::instance::drive: TRACE 71054 exit <span=75 task=claw_orchestrator>
+I (71052) claw_core::orchestrator::engine::turn: TRACE 71054 exit <span=38 task=claw_orchestrator>
+I (71274) claw_api::client: TRACE 71276 event <span=84 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (71274) claw_api::client: TRACE 71276 exit <span=84 task=claw_orchestrator>
+I (71274) claw_core::agent::iteration_loop::run: TRACE 71276 exit <span=83 task=claw_orchestrator>
+I (71274) claw_core::agent::iteration_loop::run: TRACE 71276 event <span=82 task=claw_orchestrator event-name=completed target=claw_core::agent::iteration_loop::run> output_bytes=134
+I (71274) claw_core::agent::iteration_loop::run: TRACE 71276 exit <span=82 task=claw_orchestrator>
+I (71274) claw_core::orchestrator::instance::drive: TRACE 71277 exit <span=59 task=claw_orchestrator>
+I (71274) claw_core::orchestrator::instance::graph_flow::results: TRACE 71277 event <span=37 task=claw_orchestrator event-name=result_to_parent target=claw_core::orchestrator::instance::graph_flow::results> parent_agent=agent-1 child_agent=agent-2 queued=false
+I (71274) claw_core::orchestrator::instance::graph_flow::effects: TRACE 71277 event <span=37 task=claw_orchestrator event-name=subtree_deleted target=claw_core::orchestrator::instance::graph_flow::effects> root_agent=agent-2 count=1
+I (71275) claw_core::orchestrator::engine::turn: TRACE 71277 enter <span=90 parent=37 task=claw_orchestrator span-name=turn target=claw_core::orchestrator::engine::turn> <context=run turn=turn-4> cause=background_result
+I (71275) claw_core::orchestrator::engine::turn: TRACE 71277 event <span=90 task=claw_orchestrator event-name=background_result target=claw_core::orchestrator::engine::turn>
+I (71275) claw_core::orchestrator::instance::drive: TRACE 71277 enter <span=91 parent=90 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
+I (71275) claw_core::agent::base_agent::iteration: TRACE 71278 enter <span=92 parent=91 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-0> adapter_count=5
+I (71276) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 71279 enter <span=93 parent=92 task=claw_orchestrator span-name=context.extract target=claw_core::memory::long_term_memory_adapter::extraction_flow> transcript_version=21 version_delta=10 transcript_bytes=3231 existing_count=0
+I (71276) claw_core::memory::long_term_memory_adapter::llm_extractor: TRACE 71279 enter <span=94 parent=93 task=claw_orchestrator span-name=api.chat target=claw_core::memory::long_term_memory_adapter::llm_extractor> purpose=memory_extraction max_attempts=3
+I (71276) claw_api::client: TRACE 71279 enter <span=95 parent=94 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (72115) claw_api::client: TRACE 72118 event <span=89 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (72115) claw_api::client: TRACE 72118 exit <span=89 task=claw_orchestrator>
+I (72115) claw_core::agent::iteration_loop::run: TRACE 72118 exit <span=88 task=claw_orchestrator>
+I (72115) claw_core::agent::iteration_loop::run: TRACE 72118 event <span=87 task=claw_orchestrator event-name=completed target=claw_core::agent::iteration_loop::run> output_bytes=51
+I (72115) claw_core::agent::iteration_loop::run: TRACE 72118 exit <span=87 task=claw_orchestrator>
+I (72115) claw_core::orchestrator::instance::drive: TRACE 72118 exit <span=60 task=claw_orchestrator>
+I (72115) claw_core::orchestrator::instance::graph_flow::results: TRACE 72118 event <span=90 task=claw_orchestrator event-name=result_to_parent target=claw_core::orchestrator::instance::graph_flow::results> parent_agent=agent-1 child_agent=agent-3 queued=true
+I (72115) claw_core::orchestrator::instance::graph_flow::results: TRACE 72118 event <span=90 task=claw_orchestrator event-name=manual_yielded target=claw_core::orchestrator::instance::graph_flow::results>
+I (74780) claw_api::client: TRACE 74782 event <span=95 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (74780) claw_api::client: TRACE 74783 exit <span=95 task=claw_orchestrator>
+I (74780) claw_core::memory::long_term_memory_adapter::llm_extractor: TRACE 74783 exit <span=94 task=claw_orchestrator>
+I (74780) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 74783 event <span=93 task=claw_orchestrator event-name=completed target=claw_core::memory::long_term_memory_adapter::extraction_flow> operation_count=0 add_count=0 replace_count=0 forget_count=0
+I (74780) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 74783 exit <span=93 task=claw_orchestrator>
+I (74781) claw_core::agent::base_agent::iteration: TRACE 74783 enter <span=96 parent=92 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
+I (74781) claw_core::agent::base_agent::iteration: TRACE 74784 exit <span=96 task=claw_orchestrator>
+I (74781) claw_core::agent::base_agent::iteration: TRACE 74784 exit <span=92 task=claw_orchestrator>
+I (74781) claw_core::agent::iteration_loop::run: TRACE 74784 enter <span=97 parent=91 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-0>
+I (74781) claw_core::agent::iteration_loop::run: TRACE 74784 enter <span=98 parent=97 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
+I (74781) claw_api::client: TRACE 74784 enter <span=99 parent=98 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (77695) claw_api::client: TRACE 77698 event <span=99 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (77695) claw_api::client: TRACE 77698 exit <span=99 task=claw_orchestrator>
+I (77695) claw_core::agent::iteration_loop::run: TRACE 77698 exit <span=98 task=claw_orchestrator>
+I (77695) claw_core::agent::iteration_loop::run: TRACE 77698 event <span=97 task=claw_orchestrator event-name=tool_calls target=claw_core::agent::iteration_loop::run> count=1
+I (77695) claw_core::agent::iteration_loop::tool_round: TRACE 77698 enter <span=100 parent=97 task=claw_orchestrator span-name=toolcall target=claw_core::agent::iteration_loop::tool_round> tool=subagent_list
+I (77695) claw_core::agent::iteration_loop::tool_round: TRACE 77698 event <span=100 task=claw_orchestrator event-name=arguments target=claw_core::agent::iteration_loop::tool_round> argument_bytes=2
+I (77696) claw_core::agent::iteration_loop::tool_round: TRACE 77698 event <span=100 task=claw_orchestrator event-name=result target=claw_core::agent::iteration_loop::tool_round> ok=true blocked=false
+I (77696) claw_core::agent::iteration_loop::tool_round: TRACE 77698 exit <span=100 task=claw_orchestrator>
+I (77696) claw_core::agent::iteration_loop::run: TRACE 77698 event <span=97 task=claw_orchestrator event-name=tool_round_completed target=claw_core::agent::iteration_loop::run> count=1
+I (77696) claw_core::agent::iteration_loop::run: TRACE 77698 exit <span=97 task=claw_orchestrator>
+I (77696) claw_core::orchestrator::instance::drive: TRACE 77699 exit <span=91 task=claw_orchestrator>
+I (77696) claw_core::orchestrator::instance::drive: TRACE 77699 enter <span=101 parent=90 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
+I (77696) claw_core::agent::base_agent::iteration: TRACE 77699 enter <span=102 parent=101 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-1> adapter_count=5
+I (77697) claw_core::agent::base_agent::iteration: TRACE 77699 enter <span=103 parent=102 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
+I (77697) claw_core::agent::base_agent::iteration: TRACE 77700 exit <span=103 task=claw_orchestrator>
+I (77697) claw_core::agent::base_agent::iteration: TRACE 77700 exit <span=102 task=claw_orchestrator>
+I (77697) claw_core::agent::iteration_loop::run: TRACE 77700 enter <span=104 parent=101 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-1>
+I (77697) claw_core::agent::iteration_loop::run: TRACE 77700 enter <span=105 parent=104 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
+I (77697) claw_api::client: TRACE 77700 enter <span=106 parent=105 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (81653) claw_api::client: TRACE 81656 event <span=106 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (81653) claw_api::client: TRACE 81656 exit <span=106 task=claw_orchestrator>
+I (81654) claw_core::agent::iteration_loop::run: TRACE 81656 exit <span=105 task=claw_orchestrator>
+I (81654) claw_core::agent::iteration_loop::run: TRACE 81656 event <span=104 task=claw_orchestrator event-name=completed target=claw_core::agent::iteration_loop::run> output_bytes=618
+I (81654) claw_core::agent::iteration_loop::run: TRACE 81656 exit <span=104 task=claw_orchestrator>
+I (81654) claw_core::orchestrator::instance::drive: TRACE 81657 exit <span=101 task=claw_orchestrator>
+I (81655) claw_core::orchestrator::engine::turn: TRACE 81657 exit <span=90 task=claw_orchestrator>
+I (81655) claw_core::orchestrator::engine::drive_loop: TRACE 81657 exit <span=37 task=claw_orchestrator>
+I (106156) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 106158 enter <span=107 parent=none task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::command_loop::input_commands> <context=run session=session-1>
+I (106156) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 106159 event <span=107 task=claw_orchestrator event-name=submit_accepted target=claw_core::orchestrator::engine::command_loop::input_commands> has_text=true text_bytes=21 attachment_count=0 attachment_kinds=none
+I (106157) claw_core::orchestrator::engine::drive_loop: TRACE 106160 enter <span=108 parent=107 task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::drive_loop>
+I (106158) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 106160 exit <span=107 task=claw_orchestrator>
+I (106158) claw_core::orchestrator::engine::turn: TRACE 106160 enter <span=109 parent=108 task=claw_orchestrator span-name=turn target=claw_core::orchestrator::engine::turn> <context=run turn=turn-5> cause=user_submit
+I (106158) claw_core::orchestrator::engine::turn: TRACE 106160 event <span=109 task=claw_orchestrator event-name=input_delivered target=claw_core::orchestrator::engine::turn> has_text=true text_bytes=21 attachment_count=0 attachment_kinds=none
+I (106158) claw_core::orchestrator::instance::drive: TRACE 106161 enter <span=110 parent=109 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
+I (106158) claw_core::agent::base_agent::iteration: TRACE 106161 enter <span=111 parent=110 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-0> adapter_count=5
+I (106159) claw_core::agent::base_agent::iteration: TRACE 106162 enter <span=112 parent=111 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
+I (106160) claw_core::agent::base_agent::iteration: TRACE 106162 exit <span=112 task=claw_orchestrator>
+I (106160) claw_core::agent::base_agent::iteration: TRACE 106162 exit <span=111 task=claw_orchestrator>
+I (106160) claw_core::agent::iteration_loop::run: TRACE 106162 enter <span=113 parent=110 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-0>
+I (106160) claw_core::agent::iteration_loop::run: TRACE 106162 enter <span=114 parent=113 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
+I (106160) claw_api::client: TRACE 106162 enter <span=115 parent=114 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (109269) claw_api::client: TRACE 109271 event <span=115 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (109269) claw_api::client: TRACE 109271 exit <span=115 task=claw_orchestrator>
+I (109269) claw_core::agent::iteration_loop::run: TRACE 109271 exit <span=114 task=claw_orchestrator>
+I (109269) claw_core::agent::iteration_loop::run: TRACE 109271 event <span=113 task=claw_orchestrator event-name=completed target=claw_core::agent::iteration_loop::run> output_bytes=442
+I (109269) claw_core::agent::iteration_loop::run: TRACE 109271 exit <span=113 task=claw_orchestrator>
+I (109270) claw_core::orchestrator::instance::drive: TRACE 109272 exit <span=110 task=claw_orchestrator>
+I (109270) claw_core::orchestrator::engine::turn: TRACE 109273 exit <span=109 task=claw_orchestrator>
+I (109270) claw_core::orchestrator::engine::drive_loop: TRACE 109273 exit <span=108 task=claw_orchestrator>
+I (164785) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 164788 enter <span=116 parent=none task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::command_loop::input_commands> <context=run session=session-1>
+I (164786) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 164788 event <span=116 task=claw_orchestrator event-name=submit_accepted target=claw_core::orchestrator::engine::command_loop::input_commands> has_text=true text_bytes=18 attachment_count=0 attachment_kinds=none
+I (164787) claw_core::orchestrator::engine::drive_loop: TRACE 164790 enter <span=117 parent=116 task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::drive_loop>
+I (164787) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 164790 exit <span=116 task=claw_orchestrator>
+I (164788) claw_core::orchestrator::engine::turn: TRACE 164790 enter <span=118 parent=117 task=claw_orchestrator span-name=turn target=claw_core::orchestrator::engine::turn> <context=run turn=turn-6> cause=user_submit
+I (164788) claw_core::orchestrator::engine::turn: TRACE 164790 event <span=118 task=claw_orchestrator event-name=input_delivered target=claw_core::orchestrator::engine::turn> has_text=true text_bytes=18 attachment_count=0 attachment_kinds=none
+I (164788) claw_core::orchestrator::instance::drive: TRACE 164790 enter <span=119 parent=118 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
+I (164788) claw_core::agent::base_agent::iteration: TRACE 164791 enter <span=120 parent=119 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-0> adapter_count=5
+I (164789) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 164792 enter <span=121 parent=120 task=claw_orchestrator span-name=context.extract target=claw_core::memory::long_term_memory_adapter::extraction_flow> transcript_version=30 version_delta=9 transcript_bytes=4890 existing_count=0
+I (164789) claw_core::memory::long_term_memory_adapter::llm_extractor: TRACE 164792 enter <span=122 parent=121 task=claw_orchestrator span-name=api.chat target=claw_core::memory::long_term_memory_adapter::llm_extractor> purpose=memory_extraction max_attempts=3
+I (164789) claw_api::client: TRACE 164792 enter <span=123 parent=122 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (169869) claw_api::client: TRACE 169872 event <span=123 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (169869) claw_api::client: TRACE 169872 exit <span=123 task=claw_orchestrator>
+I (169869) claw_core::memory::long_term_memory_adapter::llm_extractor: TRACE 169872 exit <span=122 task=claw_orchestrator>
+I (169869) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 169872 event <span=121 task=claw_orchestrator event-name=completed target=claw_core::memory::long_term_memory_adapter::extraction_flow> operation_count=0 add_count=0 replace_count=0 forget_count=0
+I (169870) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 169872 exit <span=121 task=claw_orchestrator>
+I (169870) claw_core::agent::base_agent::iteration: TRACE 169872 enter <span=124 parent=120 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
+I (169870) claw_core::agent::base_agent::iteration: TRACE 169872 exit <span=124 task=claw_orchestrator>
+I (169870) claw_core::agent::base_agent::iteration: TRACE 169872 exit <span=120 task=claw_orchestrator>
+I (169870) claw_core::agent::iteration_loop::run: TRACE 169872 enter <span=125 parent=119 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-0>
+I (169870) claw_core::agent::iteration_loop::run: TRACE 169872 enter <span=126 parent=125 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
+I (169870) claw_api::client: TRACE 169872 enter <span=127 parent=126 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (174121) claw_api::client: TRACE 174124 event <span=127 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (174121) claw_api::client: TRACE 174124 exit <span=127 task=claw_orchestrator>
+I (174122) claw_core::agent::iteration_loop::run: TRACE 174124 exit <span=126 task=claw_orchestrator>
+I (174122) claw_core::agent::iteration_loop::run: TRACE 174124 event <span=125 task=claw_orchestrator event-name=tool_calls target=claw_core::agent::iteration_loop::run> count=1
+I (174122) claw_core::agent::iteration_loop::tool_round: TRACE 174124 enter <span=128 parent=125 task=claw_orchestrator span-name=toolcall target=claw_core::agent::iteration_loop::tool_round> tool=subagent_delete
+I (174122) claw_core::agent::iteration_loop::tool_round: TRACE 174124 event <span=128 task=claw_orchestrator event-name=arguments target=claw_core::agent::iteration_loop::tool_round> argument_bytes=20
+I (174122) claw_core::agent::iteration_loop::tool_round: TRACE 174125 event <span=128 task=claw_orchestrator event-name=result target=claw_core::agent::iteration_loop::tool_round> ok=true blocked=false
+I (174122) claw_core::agent::iteration_loop::tool_round: TRACE 174125 exit <span=128 task=claw_orchestrator>
+I (174122) claw_core::agent::iteration_loop::run: TRACE 174125 event <span=125 task=claw_orchestrator event-name=tool_round_completed target=claw_core::agent::iteration_loop::run> count=1
+I (174122) claw_core::agent::iteration_loop::run: TRACE 174125 exit <span=125 task=claw_orchestrator>
+I (174123) claw_core::orchestrator::instance::drive: TRACE 174125 exit <span=119 task=claw_orchestrator>
+I (174123) claw_core::orchestrator::instance::graph_flow::effects: TRACE 174125 event <span=118 task=claw_orchestrator event-name=subtree_deleted target=claw_core::orchestrator::instance::graph_flow::effects> root_agent=agent-3 count=1
+I (174123) claw_core::orchestrator::instance::drive: TRACE 174126 enter <span=129 parent=118 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
+I (174123) claw_core::agent::base_agent::iteration: TRACE 174126 enter <span=130 parent=129 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-1> adapter_count=5
+I (174125) claw_core::agent::base_agent::iteration: TRACE 174127 enter <span=131 parent=130 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
+I (174125) claw_core::agent::base_agent::iteration: TRACE 174128 exit <span=131 task=claw_orchestrator>
+I (174125) claw_core::agent::base_agent::iteration: TRACE 174128 exit <span=130 task=claw_orchestrator>
+I (174125) claw_core::agent::iteration_loop::run: TRACE 174128 enter <span=132 parent=129 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-1>
+I (174125) claw_core::agent::iteration_loop::run: TRACE 174128 enter <span=133 parent=132 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
+I (174126) claw_api::client: TRACE 174128 enter <span=134 parent=133 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (176009) claw_api::client: TRACE 176012 event <span=134 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (176012) claw_api::client: TRACE 176014 exit <span=134 task=claw_orchestrator>
+I (176012) claw_core::agent::iteration_loop::run: TRACE 176014 exit <span=133 task=claw_orchestrator>
+I (176012) claw_core::agent::iteration_loop::run: TRACE 176014 event <span=132 task=claw_orchestrator event-name=tool_calls target=claw_core::agent::iteration_loop::run> count=1
+I (176012) claw_core::agent::iteration_loop::tool_round: TRACE 176014 enter <span=135 parent=132 task=claw_orchestrator span-name=toolcall target=claw_core::agent::iteration_loop::tool_round> tool=subagent_list
+I (176012) claw_core::agent::iteration_loop::tool_round: TRACE 176015 event <span=135 task=claw_orchestrator event-name=arguments target=claw_core::agent::iteration_loop::tool_round> argument_bytes=2
+I (176012) claw_core::agent::iteration_loop::tool_round: TRACE 176015 event <span=135 task=claw_orchestrator event-name=result target=claw_core::agent::iteration_loop::tool_round> ok=true blocked=false
+I (176012) claw_core::agent::iteration_loop::tool_round: TRACE 176015 exit <span=135 task=claw_orchestrator>
+I (176013) claw_core::agent::iteration_loop::run: TRACE 176015 event <span=132 task=claw_orchestrator event-name=tool_round_completed target=claw_core::agent::iteration_loop::run> count=1
+I (176013) claw_core::agent::iteration_loop::run: TRACE 176015 exit <span=132 task=claw_orchestrator>
+I (176013) claw_core::orchestrator::instance::drive: TRACE 176015 exit <span=129 task=claw_orchestrator>
+I (176013) claw_core::orchestrator::instance::drive: TRACE 176016 enter <span=136 parent=118 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
+I (176013) claw_core::agent::base_agent::iteration: TRACE 176016 enter <span=137 parent=136 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-2> adapter_count=5
+I (176014) claw_core::agent::base_agent::iteration: TRACE 176017 enter <span=138 parent=137 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
+I (176015) claw_core::agent::base_agent::iteration: TRACE 176017 exit <span=138 task=claw_orchestrator>
+I (176015) claw_core::agent::base_agent::iteration: TRACE 176017 exit <span=137 task=claw_orchestrator>
+I (176015) claw_core::agent::iteration_loop::run: TRACE 176017 enter <span=139 parent=136 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-2>
+I (176015) claw_core::agent::iteration_loop::run: TRACE 176018 enter <span=140 parent=139 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
+I (176015) claw_api::client: TRACE 176018 enter <span=141 parent=140 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (177827) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 177830 enter <span=142 parent=none task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::command_loop::input_commands> <context=run session=session-1>
+W (177828) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 177830 event <span=142 task=claw_orchestrator event-name=submit_rejected target=claw_core::orchestrator::engine::command_loop::input_commands> reason=busy has_text=true text_bytes=18 attachment_count=0 attachment_kinds=none
+I (177828) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 177830 exit <span=142 task=claw_orchestrator>
+I (179338) claw_api::client: TRACE 179340 event <span=141 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (179341) claw_api::client: TRACE 179344 exit <span=141 task=claw_orchestrator>
+I (179341) claw_core::agent::iteration_loop::run: TRACE 179344 exit <span=140 task=claw_orchestrator>
+I (179341) claw_core::agent::iteration_loop::run: TRACE 179344 event <span=139 task=claw_orchestrator event-name=completed target=claw_core::agent::iteration_loop::run> output_bytes=154
+I (179341) claw_core::agent::iteration_loop::run: TRACE 179344 exit <span=139 task=claw_orchestrator>
+I (179347) claw_core::orchestrator::instance::drive: TRACE 179350 exit <span=136 task=claw_orchestrator>
+I (179348) claw_core::orchestrator::engine::turn: TRACE 179351 exit <span=118 task=claw_orchestrator>
+I (179348) claw_core::orchestrator::engine::drive_loop: TRACE 179351 exit <span=117 task=claw_orchestrator>
+I (196669) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 196672 enter <span=143 parent=none task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::command_loop::input_commands> <context=run session=session-1>
+I (196672) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 196675 event <span=143 task=claw_orchestrator event-name=submit_accepted target=claw_core::orchestrator::engine::command_loop::input_commands> has_text=true text_bytes=18 attachment_count=0 attachment_kinds=none
+I (196673) claw_core::orchestrator::engine::drive_loop: TRACE 196676 enter <span=144 parent=143 task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::drive_loop>
+I (196673) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 196676 exit <span=143 task=claw_orchestrator>
+I (196674) claw_core::orchestrator::engine::turn: TRACE 196676 enter <span=145 parent=144 task=claw_orchestrator span-name=turn target=claw_core::orchestrator::engine::turn> <context=run turn=turn-7> cause=user_submit
+I (196674) claw_core::orchestrator::engine::turn: TRACE 196676 event <span=145 task=claw_orchestrator event-name=input_delivered target=claw_core::orchestrator::engine::turn> has_text=true text_bytes=18 attachment_count=0 attachment_kinds=none
+I (196674) claw_core::orchestrator::instance::drive: TRACE 196676 enter <span=146 parent=145 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
+I (196674) claw_core::agent::base_agent::iteration: TRACE 196677 enter <span=147 parent=146 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-0> adapter_count=5
+I (196675) claw_core::agent::base_agent::iteration: TRACE 196678 enter <span=148 parent=147 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
+I (196676) claw_core::agent::base_agent::iteration: TRACE 196678 exit <span=148 task=claw_orchestrator>
+I (196676) claw_core::agent::base_agent::iteration: TRACE 196678 exit <span=147 task=claw_orchestrator>
+I (196676) claw_core::agent::iteration_loop::run: TRACE 196678 enter <span=149 parent=146 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-0>
+I (196676) claw_core::agent::iteration_loop::run: TRACE 196679 enter <span=150 parent=149 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
+I (196676) claw_api::client: TRACE 196679 enter <span=151 parent=150 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (200093) claw_api::client: TRACE 200095 event <span=151 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (200093) claw_api::client: TRACE 200095 exit <span=151 task=claw_orchestrator>
+I (200093) claw_core::agent::iteration_loop::run: TRACE 200096 exit <span=150 task=claw_orchestrator>
+I (200093) claw_core::agent::iteration_loop::run: TRACE 200096 event <span=149 task=claw_orchestrator event-name=completed target=claw_core::agent::iteration_loop::run> output_bytes=256
+I (200094) claw_core::agent::iteration_loop::run: TRACE 200096 exit <span=149 task=claw_orchestrator>
+I (200096) claw_core::orchestrator::instance::drive: TRACE 200098 exit <span=146 task=claw_orchestrator>
+I (200097) claw_core::orchestrator::engine::turn: TRACE 200099 exit <span=145 task=claw_orchestrator>
+I (200097) claw_core::orchestrator::engine::drive_loop: TRACE 200100 exit <span=144 task=claw_orchestrator>
+I (203086) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 203088 enter <span=152 parent=none task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::command_loop::input_commands> <context=run session=session-1>
+I (203086) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 203089 event <span=152 task=claw_orchestrator event-name=submit_accepted target=claw_core::orchestrator::engine::command_loop::input_commands> has_text=true text_bytes=8 attachment_count=0 attachment_kinds=none
+I (203087) claw_core::orchestrator::engine::drive_loop: TRACE 203090 enter <span=153 parent=152 task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::drive_loop>
+I (203087) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 203090 exit <span=152 task=claw_orchestrator>
+I (203087) claw_core::orchestrator::engine::turn: TRACE 203090 enter <span=154 parent=153 task=claw_orchestrator span-name=turn target=claw_core::orchestrator::engine::turn> <context=run turn=turn-8> cause=user_submit
+I (203087) claw_core::orchestrator::engine::turn: TRACE 203090 event <span=154 task=claw_orchestrator event-name=input_delivered target=claw_core::orchestrator::engine::turn> has_text=true text_bytes=8 attachment_count=0 attachment_kinds=none
+I (203088) claw_core::orchestrator::instance::drive: TRACE 203090 enter <span=155 parent=154 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
+I (203088) claw_core::agent::base_agent::iteration: TRACE 203090 enter <span=156 parent=155 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-0> adapter_count=5
+I (203089) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 203092 enter <span=157 parent=156 task=claw_orchestrator span-name=context.extract target=claw_core::memory::long_term_memory_adapter::extraction_flow> transcript_version=40 version_delta=10 transcript_bytes=5715 existing_count=0
+I (203089) claw_core::memory::long_term_memory_adapter::llm_extractor: TRACE 203092 enter <span=158 parent=157 task=claw_orchestrator span-name=api.chat target=claw_core::memory::long_term_memory_adapter::llm_extractor> purpose=memory_extraction max_attempts=3
+I (203089) claw_api::client: TRACE 203092 enter <span=159 parent=158 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (207952) claw_api::client: TRACE 207954 event <span=159 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (207952) claw_api::client: TRACE 207955 exit <span=159 task=claw_orchestrator>
+I (207952) claw_core::memory::long_term_memory_adapter::llm_extractor: TRACE 207955 exit <span=158 task=claw_orchestrator>
+I (207953) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 207955 event <span=157 task=claw_orchestrator event-name=completed target=claw_core::memory::long_term_memory_adapter::extraction_flow> operation_count=0 add_count=0 replace_count=0 forget_count=0
+I (207953) claw_core::memory::long_term_memory_adapter::extraction_flow: TRACE 207956 exit <span=157 task=claw_orchestrator>
+I (207953) claw_core::agent::base_agent::iteration: TRACE 207956 enter <span=160 parent=156 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
+I (207954) claw_core::agent::base_agent::iteration: TRACE 207957 exit <span=160 task=claw_orchestrator>
+I (207954) claw_core::agent::base_agent::iteration: TRACE 207957 exit <span=156 task=claw_orchestrator>
+I (207954) claw_core::agent::iteration_loop::run: TRACE 207957 enter <span=161 parent=155 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-0>
+I (207955) claw_core::agent::iteration_loop::run: TRACE 207957 enter <span=162 parent=161 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
+I (207955) claw_api::client: TRACE 207957 enter <span=163 parent=162 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (211383) claw_api::client: TRACE 211385 event <span=163 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (211386) claw_api::client: TRACE 211388 exit <span=163 task=claw_orchestrator>
+I (211386) claw_core::agent::iteration_loop::run: TRACE 211388 exit <span=162 task=claw_orchestrator>
+I (211386) claw_core::agent::iteration_loop::run: TRACE 211388 event <span=161 task=claw_orchestrator event-name=tool_calls target=claw_core::agent::iteration_loop::run> count=1
+I (211386) claw_core::agent::iteration_loop::tool_round: TRACE 211388 enter <span=164 parent=161 task=claw_orchestrator span-name=toolcall target=claw_core::agent::iteration_loop::tool_round> tool=conversation_end
+I (211386) claw_core::agent::iteration_loop::tool_round: TRACE 211388 event <span=164 task=claw_orchestrator event-name=arguments target=claw_core::agent::iteration_loop::tool_round> argument_bytes=154
+I (211386) claw_core::agent::iteration_loop::tool_round: TRACE 211388 event <span=164 task=claw_orchestrator event-name=result target=claw_core::agent::iteration_loop::tool_round> ok=true blocked=false
+I (211386) claw_core::agent::iteration_loop::tool_round: TRACE 211388 exit <span=164 task=claw_orchestrator>
+I (211386) claw_core::agent::iteration_loop::run: TRACE 211389 event <span=161 task=claw_orchestrator event-name=tool_round_completed target=claw_core::agent::iteration_loop::run> count=1
+I (211386) claw_core::agent::iteration_loop::run: TRACE 211389 exit <span=161 task=claw_orchestrator>
+I (211387) claw_core::orchestrator::instance::drive: TRACE 211390 exit <span=155 task=claw_orchestrator>
+I (211388) claw_core::orchestrator::engine::turn: TRACE 211390 exit <span=154 task=claw_orchestrator>
+I (211388) claw_core::orchestrator::engine::drive_loop: TRACE 211390 exit <span=153 task=claw_orchestrator>
+I (220527) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 220530 enter <span=165 parent=none task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::command_loop::input_commands> <context=run session=session-1>
+I (220528) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 220530 event <span=165 task=claw_orchestrator event-name=submit_accepted target=claw_core::orchestrator::engine::command_loop::input_commands> has_text=true text_bytes=18 attachment_count=0 attachment_kinds=none
+I (220529) claw_core::orchestrator::engine::drive_loop: TRACE 220531 enter <span=166 parent=165 task=claw_orchestrator span-name=session target=claw_core::orchestrator::engine::drive_loop>
+I (220529) claw_core::orchestrator::engine::command_loop::input_commands: TRACE 220532 exit <span=165 task=claw_orchestrator>
+I (220529) claw_core::orchestrator::engine::turn: TRACE 220532 enter <span=167 parent=166 task=claw_orchestrator span-name=turn target=claw_core::orchestrator::engine::turn> <context=run turn=turn-9> cause=user_submit
+I (220529) claw_core::orchestrator::engine::turn: TRACE 220532 event <span=167 task=claw_orchestrator event-name=input_delivered target=claw_core::orchestrator::engine::turn> has_text=true text_bytes=18 attachment_count=0 attachment_kinds=none
+I (220530) claw_core::orchestrator::instance::drive: TRACE 220532 enter <span=168 parent=167 task=claw_orchestrator span-name=agent target=claw_core::orchestrator::instance::drive> <context=run agent=agent-1> kind=conversation depth=0
+I (220530) claw_core::agent::base_agent::iteration: TRACE 220532 enter <span=169 parent=168 task=claw_orchestrator span-name=iteration.prepare target=claw_core::agent::base_agent::iteration> <context=run iteration=iteration-0> adapter_count=5
+I (220531) claw_core::agent::base_agent::iteration: TRACE 220534 enter <span=170 parent=169 task=claw_orchestrator span-name=context.render target=claw_core::agent::base_agent::iteration> adapter_count=5
+I (220532) claw_core::agent::base_agent::iteration: TRACE 220534 exit <span=170 task=claw_orchestrator>
+I (220532) claw_core::agent::base_agent::iteration: TRACE 220534 exit <span=169 task=claw_orchestrator>
+I (220532) claw_core::agent::iteration_loop::run: TRACE 220534 enter <span=171 parent=168 task=claw_orchestrator span-name=iteration_loop target=claw_core::agent::iteration_loop::run> <context=run iteration=iteration-0>
+I (220532) claw_core::agent::iteration_loop::run: TRACE 220535 enter <span=172 parent=171 task=claw_orchestrator span-name=api.chat target=claw_core::agent::iteration_loop::run> purpose=iteration max_attempts=3
+I (220532) claw_api::client: TRACE 220535 enter <span=173 parent=172 task=claw_orchestrator span-name=api.attempt target=claw_api::client> attempt=1 max_attempts=3
+I (222883) claw_api::client: TRACE 222885 event <span=173 task=claw_orchestrator event-name=completed target=claw_api::client>
+I (222883) claw_api::client: TRACE 222886 exit <span=173 task=claw_orchestrator>
+I (222883) claw_core::agent::iteration_loop::run: TRACE 222886 exit <span=172 task=claw_orchestrator>
+I (222884) claw_core::agent::iteration_loop::run: TRACE 222886 event <span=171 task=claw_orchestrator event-name=tool_calls target=claw_core::agent::iteration_loop::run> count=1
+I (222884) claw_core::agent::iteration_loop::tool_round: TRACE 222886 enter <span=174 parent=171 task=claw_orchestrator span-name=toolcall target=claw_core::agent::iteration_loop::tool_round> tool=conversation_end
+I (222884) claw_core::agent::iteration_loop::tool_round: TRACE 222887 event <span=174 task=claw_orchestrator event-name=arguments target=claw_core::agent::iteration_loop::tool_round> argument_bytes=130
+I (222884) claw_core::agent::iteration_loop::tool_round: TRACE 222887 event <span=174 task=claw_orchestrator event-name=result target=claw_core::agent::iteration_loop::tool_round> ok=true blocked=false
+I (222885) claw_core::agent::iteration_loop::tool_round: TRACE 222887 exit <span=174 task=claw_orchestrator>
+I (222885) claw_core::agent::iteration_loop::run: TRACE 222887 event <span=171 task=claw_orchestrator event-name=tool_round_completed target=claw_core::agent::iteration_loop::run> count=1
+I (222885) claw_core::agent::iteration_loop::run: TRACE 222887 exit <span=171 task=claw_orchestrator>
+I (222887) claw_core::orchestrator::instance::drive: TRACE 222890 exit <span=168 task=claw_orchestrator>
+I (222888) claw_core::orchestrator::engine::turn: TRACE 222891 exit <span=167 task=claw_orchestrator>
+I (222888) claw_core::orchestrator::engine::drive_loop: TRACE 222891 exit <span=166 task=claw_orchestrator>

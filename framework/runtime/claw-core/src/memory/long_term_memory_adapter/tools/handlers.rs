@@ -33,7 +33,7 @@ struct MemoryStoreTool<F: ClawFs + 'static> {
 }
 
 impl<F: ClawFs + 'static> ToolSpec for MemoryStoreTool<F> {
-    tool_metadata!("memory.store");
+    tool_metadata!("memory_store");
 }
 
 impl<F: ClawFs + 'static> SyncToolHandler for MemoryStoreTool<F> {
@@ -60,7 +60,7 @@ struct MemoryRecallTool<F: ClawFs + 'static> {
 }
 
 impl<F: ClawFs + 'static> ToolSpec for MemoryRecallTool<F> {
-    tool_metadata!("memory.recall");
+    tool_metadata!("memory_recall");
 }
 
 impl<F: ClawFs + 'static> SyncToolHandler for MemoryRecallTool<F> {
@@ -83,7 +83,7 @@ struct MemoryListTool<F: ClawFs + 'static> {
 }
 
 impl<F: ClawFs + 'static> ToolSpec for MemoryListTool<F> {
-    tool_metadata!("memory.list");
+    tool_metadata!("memory_list");
 }
 
 impl<F: ClawFs + 'static> SyncToolHandler for MemoryListTool<F> {
@@ -104,7 +104,7 @@ struct MemoryUpdateTool<F: ClawFs + 'static> {
 }
 
 impl<F: ClawFs + 'static> ToolSpec for MemoryUpdateTool<F> {
-    tool_metadata!("memory.update");
+    tool_metadata!("memory_update");
 }
 
 impl<F: ClawFs + 'static> SyncToolHandler for MemoryUpdateTool<F> {
@@ -134,7 +134,7 @@ struct MemoryForgetTool<F: ClawFs + 'static> {
 }
 
 impl<F: ClawFs + 'static> ToolSpec for MemoryForgetTool<F> {
-    tool_metadata!("memory.forget");
+    tool_metadata!("memory_forget");
 }
 
 impl<F: ClawFs + 'static> SyncToolHandler for MemoryForgetTool<F> {

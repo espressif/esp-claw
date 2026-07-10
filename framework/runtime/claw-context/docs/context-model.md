@@ -47,7 +47,7 @@ items land in the ephemeral reminder tail.
 Determinism rule (one home per item): stable prose by scope -> a `Block`
 (prefix); a real, persisted conversation/tool event -> memory `history` (tail);
 a per-request transient nudge -> `reminders` (tail). Tool-retrieved knowledge
-(`memory.recall`, document lookup, web/API calls) is a tool result event in
+(`memory_recall`, document lookup, web/API calls) is a tool result event in
 history, not a separate `PulledKnowledge` block. There is no fourth option.
 
 ---

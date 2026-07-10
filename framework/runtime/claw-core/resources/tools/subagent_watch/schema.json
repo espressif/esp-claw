@@ -1,0 +1,17 @@
+{
+  "type": "function",
+  "function": {
+    "name": "subagent_watch",
+    "description": "Get the current state (a snapshot) of one of your subagents by id: its kind, depth, lifecycle status, and termination policy. Only subagents in your own subtree can be watched.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "The id of the subagent to inspect (e.g. \"agent-7\"), as returned by subagent_spawn or subagent_list."
+        }
+      },
+      "required": ["agent"]
+    }
+  }
+}

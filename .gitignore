@@ -22,6 +22,7 @@ managed_components/
 
 # Environment
 .env
+.env.local
 # Cache / Compiled
 .cache
 *.pyc
@@ -51,3 +52,4 @@ pages/simulator/public/runtime/*
 
 # rust
 target/
+output/

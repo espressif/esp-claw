@@ -40,6 +40,10 @@ pub(crate) enum GraphEffect {
     Delete {
         target: AgentId,
     },
+    Followup {
+        target: AgentId,
+        message: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq)]

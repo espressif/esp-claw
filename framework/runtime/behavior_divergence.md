@@ -63,7 +63,7 @@ Risk:
 
 Current runtime behavior:
 
-- Runtime exposes `skill.list`, `skill.activate`, and `skill.reload`.
+- Runtime exposes `skill_list`, `skill_activate`, and `skill_reload`.
 - No runtime-native `register_skill` or `unregister_skill` tool was found.
 - `activate_skill` returns the processed skill document but does not recreate
   the old persistent per-session active skill state.
@@ -148,10 +148,10 @@ Risk:
 
 Current runtime behavior:
 
-- Runtime internal tools are `subagent.list_spawnable`, `subagent.spawn`,
-  `subagent.list`, `subagent.watch`, `subagent.delete`, and
-  `conversation.end`.
-- `subagent.spawn` accepts `kind`, `name`, `goal`, and optional `termination`.
+- Runtime internal tools are `subagent_list_spawnable`, `subagent_spawn`,
+  `subagent_list`, `subagent_watch`, `subagent_delete`, and
+  `conversation_end`.
+- `subagent_spawn` accepts `kind`, `name`, `goal`, and optional `termination`.
 - Spawn permission is based on agent manifests and graph policy.
 - No direct equivalent was found for `send_agent_followup` or `close_agent`.
 - The runtime C capability wrapper filters out `ROOT_AGENT_ONLY` C capabilities,
@@ -212,9 +212,9 @@ Current runtime behavior:
 
 - Runtime has Rust `ProfileStore`, `LongTermMemory`, `TranscriptStore`, and
   compaction support.
-- Runtime tools include `memory.store`, `memory.recall`, `memory.list`,
-  `memory.update`, `memory.forget`, `profile.read`, `profile.replace`, and
-  `profile.clear`.
+- Runtime tools include `memory_store`, `memory_recall`, `memory_list`,
+  `memory_update`, `memory_forget`, `profile_read`, `profile_replace`, and
+  `profile_clear`.
 - Tool outputs are generally human-readable text rather than the old JSON
   response surface.
 - Store behavior includes duplicate detection.

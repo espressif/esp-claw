@@ -5,4 +5,4 @@ profile_invalid_document,profile_invalid_document,profile invalid done,,"unknown
 memory_agent_store_recall,memory_agent_store_recall,memory recall done,"Stored memory a-0.|Recalled memories:|- [a-0] (task) Task note survives recall",,2
 memory_duplicate_store,memory_duplicate_store,memory duplicate done,"Stored memory a-0.|Already remembered (as a-0)",,2
 memory_global_update_list_forget,memory_global_update_list_forget,memory update done,"Stored memory g-0.|Updated memory g-0.|- [g-0] (fact) Updated global fact|Forgot memory g-0.|No matching memories.",,5
-builtin_subagent_validation,builtin_subagent_validation,subagent validation done,"spawnable_agents|worker|subagents","No subagent agent-999|Cannot delete agent-999|not a known agent kind",5
+builtin_subagent_validation,builtin_subagent_validation,subagent validation done,"spawnable_agents|worker|subagents","No subagent agent-999|Cannot delete agent-999|Cannot follow up agent-999|not a known agent kind",6

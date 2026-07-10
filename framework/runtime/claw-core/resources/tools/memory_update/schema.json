@@ -1,0 +1,31 @@
+{
+  "type": "function",
+  "function": {
+    "name": "memory_update",
+    "description": "Revise a memory you remembered earlier, identified by its id from memory_recall or memory_list. Only the fields you provide are changed.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The id of the memory to revise (as shown in brackets by memory_recall/memory_list)."
+        },
+        "content": {
+          "type": "string",
+          "description": "Replacement content, if changing it."
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Replacement topic labels, if changing them."
+        },
+        "keywords": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Replacement keywords, if changing them."
+        }
+      },
+      "required": ["id"]
+    }
+  }
+}

@@ -9,8 +9,8 @@ use claw_memory::{
 fn store_mints_prefixed_ids_in_order() {
     reset_fs();
     let memory = memory();
-    let first = memory.store(draft("Likes tea", &["preference"]));
-    let second = memory.store(draft("Lives in Berlin", &["fact"]));
+    let first = memory_store(draft("Likes tea", &["preference"]));
+    let second = memory_store(draft("Lives in Berlin", &["fact"]));
     assert_eq!(first.item().id.as_str(), "g-0");
     assert_eq!(second.item().id.as_str(), "g-1");
 }
@@ -20,40 +20,40 @@ fn store_dedups_by_normalized_content() {
     reset_fs();
     let memory = memory();
     assert!(matches!(
-        memory.store(draft("Likes  TEA", &["preference"])),
+        memory_store(draft("Likes  TEA", &["preference"])),
         StoreOutcome::Created(_)
     ));
-    match memory.store(draft("likes tea", &["preference"])) {
+    match memory_store(draft("likes tea", &["preference"])) {
         StoreOutcome::Duplicate(item) => assert_eq!(item.id.as_str(), "g-0"),
         other => panic!("expected duplicate, got {other:?}"),
     }
-    assert_eq!(memory.list().len(), 1);
+    assert_eq!(memory_list().len(), 1);
 }
 
 #[test]
 fn recall_filters_by_label_and_query_newest_first() {
     reset_fs();
     let memory = memory();
-    memory.store(draft("Likes tea", &["preference"]));
-    memory.store(draft("Likes coffee too", &["preference"]));
-    memory.store(draft("Has a dog", &["fact"]));
+    memory_store(draft("Likes tea", &["preference"]));
+    memory_store(draft("Likes coffee too", &["preference"]));
+    memory_store(draft("Has a dog", &["fact"]));
 
-    let prefs = memory.recall(&["preference".to_string()], None, 10);
+    let prefs = memory_recall(&["preference".to_string()], None, 10);
     assert_eq!(prefs.len(), 2);
     assert_eq!(prefs[0].content, "Likes coffee too");
 
-    let tea = memory.recall(&["preference".to_string()], Some("tea"), 10);
+    let tea = memory_recall(&["preference".to_string()], Some("tea"), 10);
     assert_eq!(tea.len(), 1);
     assert_eq!(tea[0].content, "Likes tea");
 
-    assert_eq!(memory.recall(&[], None, 2).len(), 2);
+    assert_eq!(memory_recall(&[], None, 2).len(), 2);
 }
 
 #[test]
 fn update_replaces_only_supplied_fields() {
     reset_fs();
     let memory = memory();
-    let id = memory.store(draft("Old", &["x"])).item().id.clone();
+    let id = memory_store(draft("Old", &["x"])).item().id.clone();
     let updated = memory
         .update(
             &id,
@@ -66,7 +66,7 @@ fn update_replaces_only_supplied_fields() {
     assert_eq!(updated.content, "New");
     assert_eq!(updated.tags, vec!["x".to_string()]);
     assert!(matches!(
-        memory.update(&MemoryId::from("g-999"), MemoryPatch::default()),
+        memory_update(&MemoryId::from("g-999"), MemoryPatch::default()),
         Err(LongTermError::NotFound(_))
     ));
 }
@@ -75,11 +75,11 @@ fn update_replaces_only_supplied_fields() {
 fn forget_removes_the_item() {
     reset_fs();
     let memory = memory();
-    let id = memory.store(draft("Ephemeral", &["x"])).item().id.clone();
-    memory.forget(&id).expect("forget");
-    assert!(memory.list().is_empty());
+    let id = memory_store(draft("Ephemeral", &["x"])).item().id.clone();
+    memory_forget(&id).expect("forget");
+    assert!(memory_list().is_empty());
     assert!(matches!(
-        memory.forget(&id),
+        memory_forget(&id),
         Err(LongTermError::NotFound(_))
     ));
 }
@@ -89,7 +89,7 @@ fn state_survives_reload_from_journal() {
     reset_fs();
     {
         let memory = LongTermMemory::<MemFs>::new("/m", "g-").expect("load empty store");
-        memory.store(draft("Persistent", &["fact"]));
+        memory_store(draft("Persistent", &["fact"]));
         let id = memory
             .store(draft("To be edited", &["fact"]))
             .item()
@@ -125,7 +125,7 @@ fn torn_trailing_journal_record_is_ignored_on_reload() {
     reset_fs();
     {
         let memory = LongTermMemory::<MemFs>::new("/m", "g-").expect("load empty store");
-        memory.store(draft("Committed before crash", &["fact"]));
+        memory_store(draft("Committed before crash", &["fact"]));
     }
     MemFs::append("/m/memory_records.jsonl", br#"{"torn":"record""#).unwrap();
 

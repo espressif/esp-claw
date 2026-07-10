@@ -89,7 +89,7 @@ pub trait Transcript: History {
     /// [`append_user`](Self::append_user) — closes the turn.
     fn append_patch(&self, patch: &Value);
 
-    /// Commit the agent's closing message (from `conversation.end`).
+    /// Commit the agent's closing message (from `conversation_end`).
     fn commit_ended(&self, final_message: &str);
 
     /// Discard the still-open turn without committing any of its messages.

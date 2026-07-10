@@ -2,18 +2,17 @@
 
 ## Stage 1
 
-- [ ] keep everything else unchanged with master but not agent
+- [x] keep everything else unchanged with master but not agent
 - [ ] better context management
 - [ ] cleaned up stale configuration
 - [ ] native multimodal agent
 - [ ] efficient checkpointing system
-- [ ] speeded up agent system perf
+- speeded up agent system perf
   - [ ] max_token optimization (reasoning efforts), and per model
   - [ ] SSE optimization
 - [ ] runtime agent config
 - [ ] tool search
-- [ ] skill search
-- [ ] subagent followup(messsage,action:[cancel, interrupt, append])
+- [x] subagent followup(agent-id, message) — cancel current task and retask
 - [ ] refactor (cleaned up runtime/)
 
 ## Stage 2 - Goal 1

@@ -106,7 +106,6 @@ impl<
             config,
             tools,
             host,
-            is_root,
             inherited_context,
         ) {
             Ok(agent) => agent,

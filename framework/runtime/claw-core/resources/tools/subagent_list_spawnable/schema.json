@@ -1,0 +1,12 @@
+{
+  "type": "function",
+  "function": {
+    "name": "subagent_list_spawnable",
+    "description": "List the kinds of subagent you are allowed to spawn, each with a short description of what it is for. Call this before subagent_spawn to choose the right kind for the goal.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  }
+}

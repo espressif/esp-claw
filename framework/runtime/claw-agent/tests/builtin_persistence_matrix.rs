@@ -38,7 +38,7 @@ fn builtin_profile_and_memory_csv_matrix_survives_disk_rebuild() {
             vec![
                 call(
                     "call_profile_replace",
-                    "profile.replace",
+                    "profile_replace",
                     json!({
                         "document": "user_profile",
                         "content": "Persistent user profile",
@@ -46,7 +46,7 @@ fn builtin_profile_and_memory_csv_matrix_survives_disk_rebuild() {
                 ),
                 call(
                     "call_memory_global_store",
-                    "memory.store",
+                    "memory_store",
                     json!({
                         "content": "Persistent global fact",
                         "tags": ["fact"],
@@ -55,7 +55,7 @@ fn builtin_profile_and_memory_csv_matrix_survives_disk_rebuild() {
                 ),
                 call(
                     "call_memory_agent_store",
-                    "memory.store",
+                    "memory_store",
                     json!({
                         "content": "Persistent task note",
                         "tags": ["task"],
@@ -86,20 +86,20 @@ fn builtin_profile_and_memory_csv_matrix_survives_disk_rebuild() {
             vec![
                 call(
                     "call_profile_read",
-                    "profile.read",
+                    "profile_read",
                     json!({ "document": "user_profile" }),
                 ),
                 call(
                     "call_memory_global_recall",
-                    "memory.recall",
+                    "memory_recall",
                     json!({ "labels": ["fact"], "query": "global", "limit": 5 }),
                 ),
                 call(
                     "call_memory_agent_recall",
-                    "memory.recall",
+                    "memory_recall",
                     json!({ "labels": ["task"], "query": "task", "limit": 5 }),
                 ),
-                call("call_memory_list", "memory.list", json!({ "limit": 5 })),
+                call("call_memory_list", "memory_list", json!({ "limit": 5 })),
             ],
             &fixture.verify_final,
         );
@@ -127,7 +127,7 @@ fn builtin_memory_journal_torn_tail_keeps_committed_records_after_rebuild() {
         "setup memory before torn tail".to_string(),
         vec![call(
             "call_memory_store",
-            "memory.store",
+            "memory_store",
             json!({
                 "content": "Torn-tail durable fact",
                 "tags": ["fact"],
@@ -155,7 +155,7 @@ fn builtin_memory_journal_torn_tail_keeps_committed_records_after_rebuild() {
         "verify memory after torn tail".to_string(),
         vec![call(
             "call_memory_recall",
-            "memory.recall",
+            "memory_recall",
             json!({ "labels": ["fact"], "query": "durable", "limit": 5 }),
         )],
         "verify torn-tail",
@@ -188,7 +188,7 @@ fn builtin_profile_clear_and_memory_update_forget_survive_disk_rebuilds() {
         vec![
             call(
                 "call_profile_replace",
-                "profile.replace",
+                "profile_replace",
                 json!({
                     "document": "user_profile",
                     "content": "Mutable profile content",
@@ -196,7 +196,7 @@ fn builtin_profile_clear_and_memory_update_forget_survive_disk_rebuilds() {
             ),
             call(
                 "call_memory_store",
-                "memory.store",
+                "memory_store",
                 json!({
                     "content": "Mutable global fact",
                     "tags": ["fact"],
@@ -225,17 +225,17 @@ fn builtin_profile_clear_and_memory_update_forget_survive_disk_rebuilds() {
         vec![
             call(
                 "call_profile_clear",
-                "profile.clear",
+                "profile_clear",
                 json!({ "document": "user_profile" }),
             ),
             call(
                 "call_profile_read",
-                "profile.read",
+                "profile_read",
                 json!({ "document": "user_profile" }),
             ),
             call(
                 "call_memory_update",
-                "memory.update",
+                "memory_update",
                 json!({
                     "id": "g-0",
                     "content": "Updated durable global fact",
@@ -245,7 +245,7 @@ fn builtin_profile_clear_and_memory_update_forget_survive_disk_rebuilds() {
             ),
             call(
                 "call_memory_recall_updated",
-                "memory.recall",
+                "memory_recall",
                 json!({ "labels": ["fact"], "query": "updated", "limit": 5 }),
             ),
         ],
@@ -270,27 +270,27 @@ fn builtin_profile_clear_and_memory_update_forget_survive_disk_rebuilds() {
         vec![
             call(
                 "call_profile_read_after_rebuild",
-                "profile.read",
+                "profile_read",
                 json!({ "document": "user_profile" }),
             ),
             call(
                 "call_memory_recall_old",
-                "memory.recall",
+                "memory_recall",
                 json!({ "labels": ["fact"], "query": "mutable", "limit": 5 }),
             ),
             call(
                 "call_memory_list_updated",
-                "memory.list",
+                "memory_list",
                 json!({ "limit": 5 }),
             ),
             call(
                 "call_memory_forget",
-                "memory.forget",
+                "memory_forget",
                 json!({ "id": "g-0" }),
             ),
             call(
                 "call_memory_list_after_forget",
-                "memory.list",
+                "memory_list",
                 json!({ "limit": 5 }),
             ),
         ],
@@ -309,12 +309,12 @@ fn builtin_profile_clear_and_memory_update_forget_survive_disk_rebuilds() {
         vec![
             call(
                 "call_profile_read_empty",
-                "profile.read",
+                "profile_read",
                 json!({ "document": "user_profile" }),
             ),
             call(
                 "call_memory_list_empty",
-                "memory.list",
+                "memory_list",
                 json!({ "limit": 5 }),
             ),
         ],

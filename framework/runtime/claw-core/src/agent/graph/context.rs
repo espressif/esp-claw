@@ -48,6 +48,11 @@ impl AgentContext {
         self.host.emit(self.id, GraphEffect::Delete { target });
     }
 
+    pub(crate) fn followup_subagent(&self, target: AgentId, message: String) {
+        self.host
+            .emit(self.id, GraphEffect::Followup { target, message });
+    }
+
     pub(crate) fn list_subagents(&self) -> Vec<AgentSnapshot> {
         let all = self.host.snapshot();
         let mut descendants: Vec<AgentSnapshot> = all

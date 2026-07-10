@@ -1,0 +1,18 @@
+{
+  "type": "function",
+  "function": {
+    "name": "profile_clear",
+    "description": "Clear one editable global profile document.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "document": {
+          "type": "string",
+          "enum": ["soul", "assistant_identity", "user_profile"],
+          "description": "The profile document to clear."
+        }
+      },
+      "required": ["document"]
+    }
+  }
+}
