@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod support;
+use support::Sse;
 
 use core::future::Future;
 use core::pin::Pin;
@@ -24,7 +25,7 @@ use support::{
     assistant_text, csv_dicts, drain_until_turn_ended, llm_config, mem_root, persistence,
 };
 
-type AsyncToolSystem = AgentSystem<MemFs, AsyncToolHttp, ImmediateTimer>;
+type AsyncToolSystem = AgentSystem<MemFs, Sse<AsyncToolHttp>, ImmediateTimer>;
 
 static ASYNC_TOOL_LOCK: Mutex<()> = Mutex::new(());
 static ASYNC_TOOL_STATE: Mutex<Option<AsyncToolCaseState>> = Mutex::new(None);
@@ -68,7 +69,7 @@ fn async_tool_control_csv_matrix_covers_cancel_and_interrupt_while_tool_is_pendi
         assert_turn(&first_turn, TurnId(1), TurnCause::UserSubmit, &fixture.case);
         assert_eq!(
             tools_events(&first_turn),
-            vec![vec!["async_probe".to_string()]],
+            vec!["async_probe".to_string()],
             "case {}",
             fixture.case
         );
@@ -325,11 +326,11 @@ fn assert_turn(events: &[SessionEvent], turn: TurnId, cause: TurnCause, case: &s
     );
 }
 
-fn tools_events(events: &[SessionEvent]) -> Vec<Vec<String>> {
+fn tools_events(events: &[SessionEvent]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match event {
-            SessionEvent::Tools { names } => Some(names.clone()),
+            SessionEvent::ToolCall { name } => Some(name.clone()),
             _ => None,
         })
         .collect()

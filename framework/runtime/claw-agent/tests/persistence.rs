@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod support;
+use support::Sse;
 
 use std::borrow::Cow;
 use std::collections::VecDeque;
@@ -27,8 +28,9 @@ use support::{
 };
 use tempdir::TempDir;
 
-type DiskAgentSystem = AgentSystem<DiskFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>;
-type RecordingDiskAgentSystem = AgentSystem<DiskFs, RecordingHttp, ImmediateTimer>;
+type DiskAgentSystem =
+    AgentSystem<DiskFs, Sse<BlockingHttpAdapter<SharedScriptHttp>>, ImmediateTimer>;
+type RecordingDiskAgentSystem = AgentSystem<DiskFs, Sse<RecordingHttp>, ImmediateTimer>;
 
 static RECORDING_HTTP_LOCK: Mutex<()> = Mutex::new(());
 static RECORDING_HTTP_REPLIES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());

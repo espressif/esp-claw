@@ -36,6 +36,7 @@ mod persistence;
 use std::sync::Arc;
 
 use claw_checkpoint::DurableState;
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::agent::{AgentIdAllocator, FsAgentFactory, GraphHost};
@@ -53,7 +54,7 @@ pub use self::persistence::OrchestratorInstanceRestoreError;
 pub(crate) struct OrchestratorInstance<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     session: SessionId,

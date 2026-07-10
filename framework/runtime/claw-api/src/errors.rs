@@ -130,6 +130,15 @@ pub enum ChatError {
 }
 
 impl ChatError {
+    /// A streaming response that ended before the provider's terminal marker, so
+    /// no complete [`LlmResponse`](crate::LlmResponse) could be assembled.
+    #[must_use]
+    pub fn truncated_stream() -> Self {
+        ChatError::Api(ClawApiError::MalformedResponse(
+            "stream ended before a complete response",
+        ))
+    }
+
     /// Whether retrying the same request might succeed.
     #[must_use]
     pub fn is_retryable(&self) -> bool {

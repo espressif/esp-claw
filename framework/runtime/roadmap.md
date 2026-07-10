@@ -9,7 +9,7 @@
 - [ ] efficient checkpointing system
 - speeded up agent system perf
   - [ ] max_token optimization (reasoning efforts), and per model
-  - [ ] SSE optimization
+  - [x] SSE optimization
 - [ ] runtime agent config
 - [ ] tool search
 - [x] subagent followup(agent-id, message) — cancel current task and retask
@@ -18,6 +18,7 @@
 ## Stage 2 - Goal 1
 
 - [ ] DAG powered parallelized toolcalls
+- [ ] SSE toocall scheduling
 - [ ] evals
 
 ## Stage 2 - Goal 2

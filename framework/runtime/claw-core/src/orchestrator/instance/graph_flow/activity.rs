@@ -1,3 +1,4 @@
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::agent::{
@@ -14,7 +15,7 @@ use super::super::OrchestratorInstance;
 impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     /// Deliver a user message to this session's root.

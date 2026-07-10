@@ -28,6 +28,36 @@ impl ToolCall {
     }
 }
 
+/// One incremental item yielded by a streaming chat completion
+/// ([`crate::ChatStream`]).
+///
+/// Within a single response, deltas arrive strictly ordered: zero or more
+/// [`Reasoning`](Self::Reasoning), then zero or more [`Output`](Self::Output),
+/// then zero or more [`ToolCall`](Self::ToolCall) — never interleaved or
+/// reordered. `Reasoning`/`Output` carry **append fragments** (concatenate
+/// across deltas). A `ToolCall` is emitted once, when its arguments have
+/// finished streaming, so it always carries the *complete* call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LlmDelta {
+    /// A fragment of provider "thinking"/reasoning text.
+    Reasoning(String),
+    /// A fragment of assistant-visible text.
+    Output(String),
+    /// A complete tool call the model requested. Emitted once the call's
+    /// arguments have fully streamed; the same call also appears in the
+    /// [`LlmResponse`] returned when the stream ends.
+    ToolCall {
+        /// Zero-based position of this call in the response, in call order.
+        index: u32,
+        /// Provider-assigned call id, echoed back with the tool result.
+        id: String,
+        /// The tool/function name the model wants to invoke.
+        name: String,
+        /// Raw JSON arguments object, as a string (may be empty).
+        arguments: String,
+    },
+}
+
 /// The result of [`crate::ClawApi::chat`].
 ///
 /// `text` is the assistant message (may be `None` when the model only returned

@@ -1,3 +1,4 @@
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::agent::{AgentCommand, AgentId, ApprovalDecision, ApprovalId};
@@ -8,7 +9,7 @@ use super::OrchestratorInstance;
 impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     pub(crate) fn active_approval(&self) -> Option<PendingApproval> {

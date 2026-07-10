@@ -13,14 +13,18 @@
 mod anthropic;
 mod openai_compatible;
 mod shared;
+pub(crate) mod sse;
 
 use core::{fmt, str::FromStr, sync::atomic::AtomicBool};
 
-use claw_interface::http::{blocking::ClawHttp as BlockingClawHttp, Cancel, ClawHttp};
+use claw_interface::http::{
+    blocking::ClawHttp as BlockingClawHttp, Cancel, ClawHttp, StreamingHttp,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::errors::{ChatError, InferMediaError, InitError};
+use super::stream::ChatStream;
 use super::types::{ChatJsonRequest, ChatRequest, ClawApiConfig, LlmResponse, MediaRequest};
 
 /// Failed to parse a string backend id into [`BackendKind`].
@@ -95,6 +99,17 @@ trait BackendImpl: Sized {
         request: &MediaRequest<'_>,
         cancel: Cancel<'_>,
     ) -> Result<String, InferMediaError>;
+
+    /// Streaming chat completion over [`StreamingHttp`]. Builds a `stream: true`
+    /// request, and on 2xx wraps the response body stream in a [`ChatStream`]
+    /// backed by this backend's SSE parser; a non-2xx status reads the error body
+    /// and fails.
+    async fn chat_stream_async<'a, 'r, H: StreamingHttp>(
+        &'a self,
+        http: &'a mut H,
+        request: &'r ChatRequest<'r>,
+        cancel: Cancel<'a>,
+    ) -> Result<ChatStream<H::ByteStream>, ChatError>;
 }
 
 /// Constructed backend instance, dispatched by [`BackendKind`].
@@ -227,6 +242,19 @@ macro_rules! define_backends {
                 match &self.0 {
                     $( BackendInner::$variant(backend) =>
                         BackendImpl::infer_media_async(backend, http, request, cancel)
+                            .await, )+
+                }
+            }
+
+            pub(crate) async fn chat_stream_async<'a, 'r, H: StreamingHttp>(
+                &'a self,
+                http: &'a mut H,
+                request: &'r ChatRequest<'r>,
+                cancel: Cancel<'a>,
+            ) -> Result<ChatStream<H::ByteStream>, ChatError> {
+                match &self.0 {
+                    $( BackendInner::$variant(backend) =>
+                        BackendImpl::chat_stream_async(backend, http, request, cancel)
                             .await, )+
                 }
             }

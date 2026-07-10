@@ -2,6 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use claw_checkpoint::{DurableState, PartStateSlice};
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::agent::{
@@ -18,7 +19,7 @@ use super::OrchestratorInstance;
 impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     /// Create an empty instance for `session`.

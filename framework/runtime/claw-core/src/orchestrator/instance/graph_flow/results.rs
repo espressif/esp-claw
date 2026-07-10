@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::agent::{AgentId, CancelReason, TerminationPolicy, TickOutcome};
@@ -10,7 +11,7 @@ use super::super::OrchestratorInstance;
 impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     pub(in crate::orchestrator::instance) fn route_outcome(
@@ -140,9 +141,12 @@ where
             return Vec::new();
         };
         let Some(parent_id) = parent else {
+            // A root plain answer streamed its text as Output fragments during the
+            // iteration; a conversation-end closing message (`ended`) did not.
             return vec![RootReply {
                 session: self.session,
                 text,
+                streamed: !ended,
             }];
         };
 

@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod support;
+use support::Sse;
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -22,9 +23,9 @@ use support::{
 };
 use tempdir::TempDir;
 
-type MemStressSystem = AgentSystem<MemFs, StressScriptHttp, ImmediateTimer>;
-type DiskStressSystem = AgentSystem<DiskFs, StressScriptHttp, ImmediateTimer>;
-type YieldingAgentSystem = AgentSystem<MemFs, YieldingCountingHttp, ImmediateTimer>;
+type MemStressSystem = AgentSystem<MemFs, Sse<StressScriptHttp>, ImmediateTimer>;
+type DiskStressSystem = AgentSystem<DiskFs, Sse<StressScriptHttp>, ImmediateTimer>;
+type YieldingAgentSystem = AgentSystem<MemFs, Sse<YieldingCountingHttp>, ImmediateTimer>;
 
 static STRESS_OUTPUTS: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static YIELDING_HTTP_CALLS: AtomicUsize = AtomicUsize::new(0);

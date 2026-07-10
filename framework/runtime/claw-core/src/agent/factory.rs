@@ -26,6 +26,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use claw_api::ClawApiConfig;
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::ProfileStore;
 use claw_skill::FsSkillRegistry;
@@ -43,7 +44,7 @@ pub(crate) use layout::AgentPlacement;
 /// per-session instance uses it for root agents and spawned subagents.
 pub struct FsAgentFactory<
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 > {
     /// Template for the per-agent LLM client. Each agent gets its own `ClawApi`

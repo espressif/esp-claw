@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use tracing::Instrument as _;
 
@@ -15,7 +16,7 @@ use super::{DriveFuture, Engine, InstanceWork};
 impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     pub(super) fn session_shutdown(self: &Rc<Self>, session_id: SessionId) -> Option<DriveFuture> {

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use claw_context::Block;
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::TranscriptStore;
 
@@ -19,7 +20,7 @@ use super::FsAgentFactory;
 
 impl<
         Filesystem: ClawFs + 'static,
-        Http: ClawHttp + Default + 'static,
+        Http: ClawHttp + StreamingHttp + Default + 'static,
         Timer: ClawTimer + Default + 'static,
     > FsAgentFactory<Filesystem, Http, Timer>
 {

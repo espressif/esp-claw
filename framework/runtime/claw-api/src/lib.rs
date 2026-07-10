@@ -103,12 +103,14 @@ mod client;
 mod errors;
 mod media;
 mod retry;
+mod stream;
 mod types;
 
 pub use backends::{BackendKind, ParseBackendKindError};
 pub use client::{ClawApi, ClawApiAsync};
 pub use errors::{ChatError, ChatJsonError, ClawApiError, InferMediaError, InitError};
+pub use stream::ChatStream;
 pub use types::{
-    ChatJsonRequest, ChatJsonResponse, ChatRequest, ClawApiConfig, LlmResponse, MediaAsset,
-    MediaRequest, RetryPolicy, StaticOutputSchema, ToolCall,
+    ChatJsonRequest, ChatJsonResponse, ChatRequest, ClawApiConfig, LlmDelta, LlmResponse,
+    MediaAsset, MediaRequest, RetryPolicy, StaticOutputSchema, ToolCall,
 };

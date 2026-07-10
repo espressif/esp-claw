@@ -43,28 +43,93 @@ impl ChatDriver {
             return false;
         }
         let mut saw_output = false;
+        let mut reasoning_open = false;
+        let mut reasoning_needs_newline = false;
+        let mut output_open = false;
+        let mut output_needs_newline = false;
         while let Some(event) = self.events.next().await {
             match event {
                 SessionEvent::Reasoning { text } => {
-                    print_event("think", &text, EventStyle::Thinking);
+                    print_reasoning_fragment(
+                        &text,
+                        &mut reasoning_open,
+                        &mut reasoning_needs_newline,
+                    );
                 }
-                SessionEvent::Tools { names } => {
-                    print_event("tools", &names.join(", "), EventStyle::Tools);
+                SessionEvent::ToolCall { name } => {
+                    finish_reasoning_line(reasoning_open, reasoning_needs_newline);
+                    reasoning_open = false;
+                    reasoning_needs_newline = false;
+                    finish_output_line(output_open, output_needs_newline);
+                    output_open = false;
+                    output_needs_newline = false;
+                    print_event("tools", &name, EventStyle::Tools);
                 }
                 SessionEvent::Output { text } => {
+                    finish_reasoning_line(reasoning_open, reasoning_needs_newline);
+                    reasoning_open = false;
+                    reasoning_needs_newline = false;
                     saw_output = true;
-                    println!("\n{text}\n");
+                    output_open = true;
+                    output_needs_newline = !text.ends_with('\n');
+                    print!("{text}");
+                    let _ = io::stdout().flush();
                 }
                 SessionEvent::Error { message } => {
+                    finish_reasoning_line(reasoning_open, reasoning_needs_newline);
+                    reasoning_open = false;
+                    reasoning_needs_newline = false;
+                    finish_output_line(output_open, output_needs_newline);
+                    output_open = false;
+                    output_needs_newline = false;
                     print_event("error", &message, EventStyle::Error)
                 }
-                SessionEvent::TurnEnded { .. } | SessionEvent::Closed => break,
+                SessionEvent::TurnEnded { .. } | SessionEvent::Closed => {
+                    finish_reasoning_line(reasoning_open, reasoning_needs_newline);
+                    finish_output_line(output_open, output_needs_newline);
+                    break;
+                }
                 SessionEvent::TurnStarted { .. }
                 | SessionEvent::IterationStarted { .. }
                 | SessionEvent::IterationEnded => {}
             }
         }
         saw_output
+    }
+}
+
+fn print_reasoning_fragment(
+    fragment: &str,
+    reasoning_open: &mut bool,
+    reasoning_needs_newline: &mut bool,
+) {
+    if fragment.is_empty() {
+        return;
+    }
+
+    let style = EventStyle::Thinking.style();
+    if !*reasoning_open {
+        eprint!("  {style}{:<5}{style:#}  ", "think");
+        *reasoning_open = true;
+    }
+    eprint!("{fragment}");
+    let _ = io::stderr().flush();
+    *reasoning_needs_newline = !fragment.ends_with('\n');
+}
+
+fn finish_reasoning_line(reasoning_open: bool, reasoning_needs_newline: bool) {
+    if reasoning_open && reasoning_needs_newline {
+        eprintln!();
+    } else if reasoning_open {
+        let _ = io::stderr().flush();
+    }
+}
+
+fn finish_output_line(output_open: bool, output_needs_newline: bool) {
+    if output_open && output_needs_newline {
+        println!();
+    } else if output_open {
+        let _ = io::stdout().flush();
     }
 }
 

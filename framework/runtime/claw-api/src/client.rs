@@ -11,11 +11,13 @@ use serde_json::Value;
 use tracing::Instrument as _;
 
 use claw_interface::http::blocking::ClawHttp as BlockingClawHttp;
+use claw_interface::http::StreamingHttp;
 use claw_interface::{Cancel, ClawHttp, ClawTimer};
 
 use super::backends::Backend;
 use super::errors::{ChatError, ChatJsonError, ClawApiError, InferMediaError, InitError};
 use super::retry::{run_with_retry, sleep_abortable_async};
+use super::stream::ChatStream;
 use super::types::{
     ChatJsonRequest, ChatJsonResponse, ChatRequest, ClawApiConfig, LlmResponse, MediaRequest,
 };
@@ -368,6 +370,18 @@ where
     }
 }
 
+impl<H: ClawHttp, Timer: ClawTimer + Default> ClawApiAsync<H, Timer> {
+    /// Validate `config` and select the backend, binding an explicit async HTTP
+    /// transport and a default timer.
+    pub fn init(config: ClawApiConfig, http: H) -> Result<Self, InitError> {
+        Ok(Self {
+            backend: resolve_config(config)?,
+            http,
+            timer: Timer::default(),
+        })
+    }
+}
+
 impl<H: ClawHttp, Timer: ClawTimer> ClawApiAsync<H, Timer> {
     /// Async chat completion over [`ClawHttp`].
     pub async fn chat(
@@ -450,6 +464,26 @@ impl<H: ClawHttp, Timer: ClawTimer> ClawApiAsync<H, Timer> {
                 }
             }
         }
+    }
+
+    /// Streaming chat completion over [`StreamingHttp`].
+    ///
+    /// Yields [`LlmDelta`](crate::LlmDelta) fragments as tokens arrive — reasoning,
+    /// then output, then complete tool calls. Drain it to the end, then call
+    /// [`ChatStream::take_response`] for the assembled [`LlmResponse`]. Unlike
+    /// [`chat`](Self::chat) it does not retry: a stream cannot be resumed
+    /// mid-body, so a failure is surfaced to the caller.
+    pub async fn chat_stream<'a>(
+        &'a mut self,
+        request: &'a ChatRequest<'_>,
+        cancel: Cancel<'a>,
+    ) -> Result<ChatStream<H::ByteStream>, ChatError>
+    where
+        H: StreamingHttp,
+    {
+        self.backend
+            .chat_stream_async(&mut self.http, request, cancel)
+            .await
     }
 
     /// Async structured JSON chat over [`ClawHttp`].

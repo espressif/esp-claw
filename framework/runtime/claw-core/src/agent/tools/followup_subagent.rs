@@ -55,15 +55,17 @@ impl ToolSpec for FollowupSubagentTool {
 impl SyncToolHandler for FollowupSubagentTool {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let Some(agent) = optional_string_argument(call.arguments_json(), "agent")? else {
-            return Err(
-                ToolError::InvalidArguments("subagent_followup 'agent' is required".into()).into(),
-            );
+            return Err(ToolError::InvalidArguments(
+                "subagent_followup 'agent' is required".into(),
+            )
+            .into());
         };
         let agent = agent.trim();
         if agent.is_empty() {
-            return Err(
-                ToolError::InvalidArguments("subagent_followup 'agent' is required".into()).into(),
-            );
+            return Err(ToolError::InvalidArguments(
+                "subagent_followup 'agent' is required".into(),
+            )
+            .into());
         }
         let target = AgentId::from_wire(agent).map_err(|error| {
             ToolError::InvokeRejected(format!("invalid agent id '{agent}': {error}"))
@@ -71,9 +73,7 @@ impl SyncToolHandler for FollowupSubagentTool {
         let message = required_message(call.arguments_json(), "message")?;
         if self.context.get_subagent(target).is_none() {
             return Ok(ToolOutput {
-                output: format!(
-                    "Cannot follow up {target}: it is not a subagent in your subtree."
-                ),
+                output: format!("Cannot follow up {target}: it is not a subagent in your subtree."),
                 ok: false,
             });
         }

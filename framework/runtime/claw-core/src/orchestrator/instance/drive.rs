@@ -1,3 +1,4 @@
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use tracing::Instrument as _;
 
@@ -12,7 +13,7 @@ use super::OrchestratorInstance;
 impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     /// Drive the root-visible foreground turn until the root is no longer ready
@@ -211,7 +212,10 @@ where
             if self.state.get().meta.contains_key(&id) {
                 let output = self.route_outcome(id, outcome);
                 for reply in output.replies {
-                    events.emit(SessionEvent::Output { text: reply.text });
+                    // Plain answers already streamed their Output fragments.
+                    if !reply.streamed {
+                        events.emit(SessionEvent::Output { text: reply.text });
+                    }
                 }
             }
         }

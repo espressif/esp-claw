@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 
 use async_channel::Receiver;
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use futures_core::Stream;
 
@@ -52,7 +53,7 @@ impl Future for EnginePoll<'_> {
 impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     pub(in crate::orchestrator::engine) async fn run(

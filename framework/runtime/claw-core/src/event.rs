@@ -64,10 +64,12 @@ pub enum TurnCause {
 /// One item in a session's event stream.
 ///
 /// Content variants ([`Reasoning`](Self::Reasoning), [`Output`](Self::Output),
-/// [`Tools`](Self::Tools)) are mutually exclusive per event and, within one
-/// iteration, arrive in the order `reasoning -> output -> tools` (whichever are
-/// present). The `text` fields are **append fragments**: non-streaming emits one
-/// fragment holding the whole string; a future SSE transport emits many.
+/// [`ToolCall`](Self::ToolCall)) are mutually exclusive per event and, within one
+/// iteration, arrive in the order `reasoning -> output -> tool calls` (whichever
+/// are present). `Reasoning`/`Output` `text` fields are **append fragments**
+/// (streaming emits many, non-streaming one holding the whole string); each
+/// tool call is emitted as its own complete [`ToolCall`](Self::ToolCall) event,
+/// in call order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionEvent {
     /// A root-visible turn started.
@@ -93,10 +95,11 @@ pub enum SessionEvent {
         /// A fragment of the assistant-visible text (concatenate across events).
         text: String,
     },
-    /// Names of the tools invoked this iteration.
-    Tools {
-        /// Tool names, in call order.
-        names: Vec<String>,
+    /// One complete tool call the model requested this iteration. Emitted once
+    /// per call, in call order (after any `Output`).
+    ToolCall {
+        /// The tool name.
+        name: String,
     },
     /// The current root iteration ended.
     IterationEnded,
@@ -158,6 +161,28 @@ impl EventSink {
         }
         self.emit(SessionEvent::Reasoning {
             text: TruncatedText::with_limit(full, REASONING_EVENT_LIMIT).to_string(),
+        });
+    }
+
+    /// Emit one streamed reasoning fragment, enforcing [`REASONING_EVENT_LIMIT`]
+    /// on the **accumulated** length across fragments. `emitted` is the running
+    /// byte count for the current iteration (the caller owns it, resetting it per
+    /// iteration). A no-op once the cap is reached, when disabled, or empty.
+    pub(crate) fn emit_reasoning_fragment(&self, fragment: &str, emitted: &mut usize) {
+        if self.tx.is_none() || fragment.is_empty() || *emitted >= REASONING_EVENT_LIMIT {
+            return;
+        }
+        let remaining = REASONING_EVENT_LIMIT - *emitted;
+        let mut end = remaining.min(fragment.len());
+        while end > 0 && !fragment.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end == 0 {
+            return;
+        }
+        *emitted += end;
+        self.emit(SessionEvent::Reasoning {
+            text: fragment[..end].to_string(),
         });
     }
 }

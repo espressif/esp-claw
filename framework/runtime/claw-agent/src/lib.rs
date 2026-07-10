@@ -19,6 +19,7 @@ pub use claw_core::{
     SessionId, TurnCause, TurnId,
 };
 use claw_core::{Orchestrator, OrchestratorBuildError};
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawExecutor, ClawFs, ClawHttp, ClawThread, ClawTimer, FsError};
 #[cfg(feature = "host-backends")]
 use claw_interface::{DiskFs, RealHttp, TokioTimer};
@@ -96,7 +97,7 @@ type BackendMarker<Filesystem, Http, Timer> = PhantomData<fn() -> (Filesystem, H
 pub struct AgentSystem<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     tools: Arc<ToolRegistry>,
@@ -107,7 +108,7 @@ where
 impl<Filesystem, Http, Timer> AgentSystem<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     /// Build a fully injectable agent system, spawning the orchestrator's drive

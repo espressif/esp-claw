@@ -6,6 +6,7 @@ use claw_checkpoint::{
     ChangePatternHint, DurablePart, DurablePartError, PartGeneration, PartStateBlob, StorageHint,
     StorageSizeHint,
 };
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use super::OrchestratorInstance;
@@ -16,7 +17,7 @@ pub(in crate::orchestrator::instance) use schema::AgentPartState;
 impl<Filesystem, Http, Timer> DurablePart for OrchestratorInstance<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     fn name(&self) -> &'static str {

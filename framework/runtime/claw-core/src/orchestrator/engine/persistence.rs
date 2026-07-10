@@ -3,6 +3,7 @@ use claw_checkpoint::{
     DurablePartSnapshot, DurableStateCodec, PartGeneration, PartStateBlob, PartStateSlice,
     StorageHint, StorageSizeHint,
 };
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use serde::{Deserialize, Serialize};
 
@@ -43,7 +44,7 @@ impl DurableStateCodec for EngineState {
 impl<Filesystem, Http, Timer> DurablePart for Engine<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     fn name(&self) -> &'static str {
@@ -69,7 +70,7 @@ where
 impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     pub(super) fn checkpoint_session_runtime(

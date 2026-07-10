@@ -39,6 +39,7 @@ async-channel = "2"
 # `SessionEventStream` can poll it. `default-features = false` keeps this
 # `no_std`-friendly for the device.
 futures-core = { version = "0.3", default-features = false }
+futures-lite = { version = "2", default-features = false, features = ["alloc"] }
 # NOTE: the `block_on` backend for the orchestrator worker is injected as a
 # `ClawExecutor` (edge-executor on device via `claw-sys`, tokio on host via
 # `claw-interface`), so `claw-core` no longer depends on a concrete executor.

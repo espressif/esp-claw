@@ -5,13 +5,107 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use claw_agent::{AgentPersistenceConfig, AgentSystem, SessionEvent, SessionEventStream};
 use claw_api::{BackendKind, ClawApiConfig};
+use claw_interface::http::{
+    Cancel, ClawHttp, HttpError, HttpJsonRequest, HttpResponseFuture, HttpStatusCode, SliceChunks,
+    StreamingHttp,
+};
 use claw_interface::{
     BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp, StdThread, TokioExecutor,
 };
 use futures_lite::StreamExt;
-use serde_json::json;
+use serde_json::{json, Value};
 
-pub type MemAgentSystem = AgentSystem<MemFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>;
+pub type MemAgentSystem =
+    AgentSystem<MemFs, Sse<BlockingHttpAdapter<SharedScriptHttp>>, ImmediateTimer>;
+
+/// Wraps any [`ClawHttp`] test double so it can back the streaming iteration
+/// loop: the one-shot seam returns the scripted OpenAI JSON verbatim (for the
+/// memory adapters' `chat`), while the streaming seam converts that same JSON
+/// into a single-shot SSE body (for the iteration loop's `chat_stream`). This
+/// keeps every existing non-streaming fixture usable unchanged, and lives only
+/// in the test harness — the shared `claw-interface` stays format-agnostic.
+#[derive(Default)]
+pub struct Sse<T>(pub T);
+
+impl<T: ClawHttp> ClawHttp for Sse<T> {
+    fn post_json<'a>(
+        &'a mut self,
+        request: &'a HttpJsonRequest<'a>,
+        cancel: Cancel<'a>,
+    ) -> HttpResponseFuture<'a> {
+        self.0.post_json(request, cancel)
+    }
+}
+
+impl<T: ClawHttp> StreamingHttp for Sse<T> {
+    type ByteStream = SliceChunks;
+
+    fn post_json_streaming<'a, 'r>(
+        &'a mut self,
+        request: &'r HttpJsonRequest<'r>,
+        cancel: Cancel<'a>,
+    ) -> impl std::future::Future<Output = Result<(HttpStatusCode, SliceChunks), HttpError>> {
+        async move {
+            let response = self.0.post_json(request, cancel).await?;
+            let sse = openai_json_to_sse(&response.body);
+            Ok((response.status_code, SliceChunks::once(sse.into_bytes())))
+        }
+    }
+}
+
+/// Convert a scripted OpenAI `chat/completions` JSON response into an equivalent
+/// SSE body: reasoning, then content, then one tool-call delta each, then
+/// `[DONE]`. The `OpenAiSse` parser reconstructs the same `LlmResponse`.
+fn openai_json_to_sse(body: &str) -> String {
+    let Ok(root) = serde_json::from_str::<Value>(body) else {
+        return "data: [DONE]\n\n".to_string();
+    };
+    let message = root
+        .get("choices")
+        .and_then(|choices| choices.get(0))
+        .and_then(|choice| choice.get("message"));
+    let Some(message) = message else {
+        return "data: [DONE]\n\n".to_string();
+    };
+
+    let mut out = String::new();
+    let mut frame = |delta: Value| {
+        out.push_str("data: ");
+        out.push_str(&json!({ "choices": [{ "delta": delta }] }).to_string());
+        out.push_str("\n\n");
+    };
+    if let Some(reasoning) = message
+        .get("reasoning_content")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    {
+        frame(json!({ "reasoning_content": reasoning }));
+    }
+    if let Some(content) = message
+        .get("content")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    {
+        frame(json!({ "content": content }));
+    }
+    if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
+        for (index, call) in tool_calls.iter().enumerate() {
+            let function = call.get("function");
+            frame(json!({
+                "tool_calls": [{
+                    "index": index,
+                    "id": call.get("id"),
+                    "function": {
+                        "name": function.and_then(|f| f.get("name")),
+                        "arguments": function.and_then(|f| f.get("arguments")),
+                    },
+                }],
+            }));
+        }
+    }
+    out.push_str("data: [DONE]\n\n");
+    out
+}
 
 static MEM_ROOT_ID: AtomicU64 = AtomicU64::new(1);
 

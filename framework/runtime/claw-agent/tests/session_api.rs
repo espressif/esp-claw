@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod support;
+use support::Sse;
 
 use core::future::Future;
 use core::pin::Pin;
@@ -19,7 +20,7 @@ use support::{
     persistence, serialize_script,
 };
 
-type SlowAgentSystem = AgentSystem<MemFs, SlowScriptHttp, ImmediateTimer>;
+type SlowAgentSystem = AgentSystem<MemFs, Sse<SlowScriptHttp>, ImmediateTimer>;
 
 #[derive(Default)]
 struct SlowScriptHttp;

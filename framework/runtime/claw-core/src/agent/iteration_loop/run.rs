@@ -1,8 +1,10 @@
 use tracing::Instrument as _;
 
-use claw_api::ChatRequest;
+use claw_api::{ChatRequest, LlmDelta};
+use claw_interface::http::StreamingHttp;
 use claw_interface::{Cancel, ClawHttp, ClawTimer};
 use claw_tool::ToolRunner;
+use futures_lite::StreamExt;
 
 use crate::event::{EventSink, SessionEvent};
 
@@ -26,7 +28,7 @@ impl Drop for IterationBracket<'_> {
     }
 }
 
-impl<H: ClawHttp, Timer: ClawTimer> IterationLoop<'_, H, Timer> {
+impl<H: ClawHttp + StreamingHttp, Timer: ClawTimer> IterationLoop<'_, H, Timer> {
     /// Execute exactly one iteration: LLM chat -> optional tool execution.
     pub(crate) async fn run(self, step: IterationStep<'_>) -> IterationResult {
         let span = tracing::info_span!("iteration_loop", run.iteration = %step.iteration_id);
@@ -34,7 +36,7 @@ impl<H: ClawHttp, Timer: ClawTimer> IterationLoop<'_, H, Timer> {
     }
 }
 
-async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
+async fn run_one_iteration<H: ClawHttp + StreamingHttp, Timer: ClawTimer>(
     loop_: IterationLoop<'_, H, Timer>,
     step: IterationStep<'_>,
 ) -> IterationResult {
@@ -68,33 +70,66 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
     let cancel = Cancel::new(loop_.interruption.interrupt_flag().as_ref());
     let max_attempts = u64::from(chat_request.retry.max_retries).saturating_add(1);
     let chat_span = tracing::info_span!("api.chat", purpose = "iteration", max_attempts);
-    let llm_response = match loop_
-        .llm
-        .chat(&chat_request, cancel)
-        .instrument(chat_span)
-        .await
-    {
-        Ok(resp) => resp,
-        Err(llm_err) => {
-            if take_interrupt(loop_.interruption) || llm_err.is_aborted() {
-                tracing::warn!(name: "preempted", checkpoint = "in_llm_http_abort");
-                return Ok(IterationOutcome::Preempted(PreemptedOutcome {
-                    iteration_id,
-                    checkpoint: IterationCheckpoint::InLlmHttpAbort,
-                    produced: AppendedMessages::empty(),
-                }));
-            }
-            tracing::error!(name: "chat_failed", kind = "chat");
-            return Err(IterationLoopError::Chat(llm_err));
+
+    // Interpret a streaming/LLM error: a cooperative interrupt or provider abort
+    // preempts this iteration; anything else is a chat failure.
+    let interpret_chat_error = |llm_err: claw_api::ChatError| -> IterationResult {
+        if take_interrupt(loop_.interruption) || llm_err.is_aborted() {
+            tracing::warn!(name: "preempted", checkpoint = "in_llm_http_abort");
+            return Ok(IterationOutcome::Preempted(PreemptedOutcome {
+                iteration_id,
+                checkpoint: IterationCheckpoint::InLlmHttpAbort,
+                produced: AppendedMessages::empty(),
+            }));
         }
+        tracing::error!(name: "chat_failed", kind = "chat");
+        Err(IterationLoopError::Chat(llm_err))
     };
 
-    // Reasoning is emitted first within the iteration (before any tools), matching
-    // the provider ordering `reasoning -> msg? -> tools?`. A no-op when empty or
-    // the sink is disabled.
-    if let Some(reasoning) = llm_response.reasoning_content.as_deref() {
-        events.emit_reasoning(reasoning);
-    }
+    let llm_response = {
+        let stream_result = loop_
+            .llm
+            .chat_stream(&chat_request, cancel)
+            .instrument(chat_span.clone())
+            .await;
+        let mut stream = match stream_result {
+            Ok(stream) => stream,
+            Err(llm_err) => return interpret_chat_error(llm_err),
+        };
+
+        // Stream content events as tokens arrive: reasoning (cap-truncated across
+        // fragments), then output, then complete tool calls — matching the
+        // provider ordering `reasoning -> output -> tools`. `Output` is emitted
+        // here (not by the orchestrator's routed reply) so plain answers stream;
+        // the orchestrator dedups via `RootReply::streamed`.
+        let mut reasoning_emitted = 0usize;
+        loop {
+            let next = {
+                StreamExt::next(&mut stream)
+                    .instrument(chat_span.clone())
+                    .await
+            };
+            match next {
+                Some(Ok(LlmDelta::Reasoning(text))) => {
+                    events.emit_reasoning_fragment(&text, &mut reasoning_emitted);
+                }
+                Some(Ok(LlmDelta::Output(text))) => {
+                    events.emit(SessionEvent::Output { text });
+                }
+                Some(Ok(LlmDelta::ToolCall { name, .. })) => {
+                    events.emit(SessionEvent::ToolCall { name });
+                }
+                Some(Err(llm_err)) => return interpret_chat_error(llm_err),
+                None => break,
+            }
+        }
+
+        match stream.take_response() {
+            Some(Ok(response)) => response,
+            Some(Err(llm_err)) => return interpret_chat_error(llm_err),
+            None => return interpret_chat_error(claw_api::ChatError::truncated_stream()),
+        }
+    };
 
     if llm_response.tool_calls.is_empty() {
         if let Some(outcome) = check_preempt_at_checkpoint(
@@ -136,17 +171,7 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
         count = llm_response.tool_calls.len() as u64,
     );
 
-    // Tool names for this iteration. Only build the payload when the sink will
-    // keep it (disabled subagent sinks would drop the clones).
-    if events.is_enabled() {
-        events.emit(SessionEvent::Tools {
-            names: llm_response
-                .tool_calls
-                .iter()
-                .map(|tc| tc.display_name().to_string())
-                .collect(),
-        });
-    }
+    // Tool-call events were already emitted per call while streaming above.
 
     if let Err(err) = append_assistant_tool_calls(&mut appended.0, &llm_response) {
         let kind: &'static str = (&err).into();

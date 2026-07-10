@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod support;
+use support::Sse;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, MutexGuard};
@@ -16,7 +17,7 @@ use support::{
     assistant_text, csv_dicts, drain_until_turn_ended, llm_config, mem_root, persistence,
 };
 
-type BuiltinToolSystem = AgentSystem<MemFs, BuiltinToolHttp, ImmediateTimer>;
+type BuiltinToolSystem = AgentSystem<MemFs, Sse<BuiltinToolHttp>, ImmediateTimer>;
 
 static BUILTIN_TOOL_LOCK: Mutex<()> = Mutex::new(());
 static BUILTIN_REPLIES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
@@ -55,10 +56,7 @@ fn builtin_tools_csv_matrix_feeds_profile_memory_and_subagent_results_back_to_ll
             "case {case}"
         );
         assert_eq!(
-            tools_events(&events)
-                .first()
-                .map(Vec::len)
-                .unwrap_or_default(),
+            tools_events(&events).len(),
             parse_usize(&row, "expected_tool_count"),
             "case {case}"
         );
@@ -332,11 +330,11 @@ fn iteration_ids(events: &[SessionEvent]) -> Vec<IterationId> {
         .collect()
 }
 
-fn tools_events(events: &[SessionEvent]) -> Vec<Vec<String>> {
+fn tools_events(events: &[SessionEvent]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match event {
-            SessionEvent::Tools { names } => Some(names.clone()),
+            SessionEvent::ToolCall { name } => Some(name.clone()),
             _ => None,
         })
         .collect()

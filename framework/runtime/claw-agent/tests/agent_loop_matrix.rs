@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod support;
+use support::Sse;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -21,7 +22,7 @@ use support::{
     assistant_text, csv_dicts, drain_until_turn_ended, llm_config, mem_root, persistence,
 };
 
-type MatrixAgentSystem = AgentSystem<MemFs, AgentLoopHttp, ImmediateTimer>;
+type MatrixAgentSystem = AgentSystem<MemFs, Sse<AgentLoopHttp>, ImmediateTimer>;
 
 static AGENT_LOOP_LOCK: Mutex<()> = Mutex::new(());
 static AGENT_REPLIES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
@@ -64,7 +65,7 @@ fn agent_loop_csv_tool_matrix_runs_tools_and_feeds_results_to_next_iteration() {
         );
         assert_eq!(
             tools_events(&events),
-            vec![vec!["matrix_echo".to_string()]],
+            vec!["matrix_echo".to_string()],
             "case {case}"
         );
         assert!(
@@ -473,11 +474,11 @@ fn reasoning_fragments(events: &[SessionEvent]) -> Vec<String> {
         .collect()
 }
 
-fn tools_events(events: &[SessionEvent]) -> Vec<Vec<String>> {
+fn tools_events(events: &[SessionEvent]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match event {
-            SessionEvent::Tools { names } => Some(names.clone()),
+            SessionEvent::ToolCall { name } => Some(name.clone()),
             _ => None,
         })
         .collect()

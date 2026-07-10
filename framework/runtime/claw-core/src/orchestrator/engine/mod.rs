@@ -16,6 +16,7 @@ use std::sync::{mpsc, Arc};
 use async_channel::Receiver;
 use claw_api::ClawApiConfig;
 use claw_checkpoint::{DurableState, FsCheckpointStorage, SharedCheckpointCoordinator};
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawExecutor, ClawFs, ClawHttp, ClawTimer};
 use claw_tool::ToolRegistry;
 
@@ -46,7 +47,7 @@ pub(super) fn run_engine<Filesystem, Http, Timer, Executor>(
     ready: mpsc::Sender<Result<(), OrchestratorBuildError>>,
 ) where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
     Executor: ClawExecutor,
 {
@@ -80,7 +81,7 @@ pub(super) fn run_engine<Filesystem, Http, Timer, Executor>(
 pub(super) struct Engine<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     pub(super) factory: Arc<FsAgentFactory<Filesystem, Http, Timer>>,
@@ -96,7 +97,7 @@ where
 impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     #[allow(clippy::too_many_arguments)]

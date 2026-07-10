@@ -8,6 +8,7 @@ use claw_checkpoint::{
     CheckpointCoordinatorInitError, CheckpointStorage, FsCheckpointStorage,
     SharedCheckpointCoordinator,
 };
+use claw_interface::http::StreamingHttp;
 use claw_interface::{
     ClawExecutor, ClawFs, ClawHttp, ClawThread, ClawTimer, CoreAffinity, Priority, WorkerHandle,
 };
@@ -58,7 +59,7 @@ impl Orchestrator {
     ) -> Result<Self, OrchestratorBuildError>
     where
         Filesystem: ClawFs + 'static,
-        Http: ClawHttp + Default + 'static,
+        Http: ClawHttp + StreamingHttp + Default + 'static,
         Timer: ClawTimer + Default + 'static,
         Thread: ClawThread,
         Executor: ClawExecutor + 'static,
@@ -98,7 +99,7 @@ impl Orchestrator {
     ) -> Result<Self, OrchestratorBuildError>
     where
         Filesystem: ClawFs + 'static,
-        Http: ClawHttp + Default + 'static,
+        Http: ClawHttp + StreamingHttp + Default + 'static,
         Timer: ClawTimer + Default + 'static,
         Thread: ClawThread,
         Executor: ClawExecutor + 'static,

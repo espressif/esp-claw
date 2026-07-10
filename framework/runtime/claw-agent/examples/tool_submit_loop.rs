@@ -111,7 +111,7 @@ async fn main() -> anyhow::Result<()> {
                 outputs.push(text);
             }
             SessionEvent::Reasoning { text } => println!("  [thinking] {text}"),
-            SessionEvent::Tools { names } => println!("  [tools] {}", names.join(", ")),
+            SessionEvent::ToolCall { name } => println!("  [tools] {name}"),
             SessionEvent::Error { message } => println!("  [error] {message}"),
             SessionEvent::TurnEnded { .. } => break,
             other => println!("  [{other:?}]"),

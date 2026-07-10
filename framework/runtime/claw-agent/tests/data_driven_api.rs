@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod support;
+use support::Sse;
 
 use std::collections::BTreeMap;
 
@@ -22,7 +23,8 @@ use support::{
 };
 use tempdir::TempDir;
 
-type DiskAgentSystem = AgentSystem<DiskFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>;
+type DiskAgentSystem =
+    AgentSystem<DiskFs, Sse<BlockingHttpAdapter<SharedScriptHttp>>, ImmediateTimer>;
 
 #[test]
 fn submit_streams_csv_reply_cases() {

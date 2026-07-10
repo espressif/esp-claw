@@ -79,7 +79,7 @@ impl BackendContext {
 /// Map a transport [`HttpError`] to a [`ClawApiError`], classifying whether the
 /// failure is transient (retryable) or permanent. The retry decision is made by
 /// the [`crate::ClawApi`] retry loop via [`ClawApiError::is_retryable`].
-fn map_http_error(err: HttpError) -> ClawApiError {
+pub(super) fn map_http_error(err: HttpError) -> ClawApiError {
     let message = err.to_string();
     if is_transient(&err) {
         ClawApiError::TransientTransport(message)

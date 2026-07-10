@@ -5,6 +5,7 @@ use claw_checkpoint::{
     BatchId, CheckpointError, CheckpointStorage, DurableBatchSnapshot, DurablePartError,
     DurableStateCodec, FsCheckpointStorage, SharedCheckpointCoordinator,
 };
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::agent::{AgentIdAllocator, FsAgentFactory};
@@ -160,7 +161,7 @@ pub(super) fn load_session_instances<Filesystem, Http, Timer>(
 ) -> Result<HashMap<SessionId, OrchestratorInstance<Filesystem, Http, Timer>>, OrchestratorBuildError>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     let storage = FsCheckpointStorage::<Filesystem>::new(checkpoint_dir.to_owned());

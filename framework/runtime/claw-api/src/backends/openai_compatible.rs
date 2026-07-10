@@ -4,15 +4,19 @@ use core::sync::atomic::AtomicBool;
 
 use serde_json::{json, Value};
 
-use claw_interface::http::{blocking::ClawHttp as BlockingClawHttp, Cancel, ClawHttp, HttpAuth};
+use claw_interface::http::{
+    blocking::ClawHttp as BlockingClawHttp, Cancel, ClawHttp, HttpAuth, StreamingHttp,
+};
 
 use super::super::errors::{ChatError, ClawApiError, InferMediaError, InitError};
 use super::super::media::prepare_asset;
+use super::super::stream::{drain_body, ChatStream};
 use super::super::types::{ChatJsonRequest, ChatRequest, ClawApiConfig, LlmResponse, MediaRequest};
 use super::shared::{
-    insert_tools_into_body, parse_openai_chat_response, post_json, post_json_async,
+    insert_tools_into_body, map_http_error, parse_openai_chat_response, post_json, post_json_async,
     single_media_asset, BackendContext,
 };
+use super::sse::{OpenAiSse, ProviderSse};
 use super::BackendImpl;
 
 /// Chat endpoint path appended to the base URL.
@@ -27,8 +31,12 @@ pub(super) struct OpenAiCompatible {
 }
 
 impl OpenAiCompatible {
-    /// `build_chat_body`
-    fn build_chat_body(&self, request: &ChatRequest) -> Result<String, ChatError> {
+    /// The shared request body object for `chat/completions`, without the
+    /// transport-only `stream` flag.
+    fn chat_body_object(
+        &self,
+        request: &ChatRequest,
+    ) -> Result<serde_json::Map<String, Value>, ChatError> {
         let mut messages: Vec<Value> = Vec::new();
         if !request.system_prompt.is_empty() {
             messages.push(json!({"role": "system", "content": request.system_prompt}));
@@ -50,10 +58,20 @@ impl OpenAiCompatible {
         if let Some(tools_json) = request.tools_json.filter(|s| !s.is_empty()) {
             insert_tools_into_body(&mut body, tools_json)?;
         }
+        Ok(body)
+    }
 
-        serde_json::to_string(&Value::Object(body)).map_err(|_| {
-            ChatError::Api(ClawApiError::ApiError("out of memory serializing request"))
-        })
+    /// `build_chat_body`
+    fn build_chat_body(&self, request: &ChatRequest) -> Result<String, ChatError> {
+        serialize_body(self.chat_body_object(request)?)
+    }
+
+    /// Like [`build_chat_body`](Self::build_chat_body) but sets `stream: true` so
+    /// the provider replies with a `text/event-stream` body.
+    fn build_stream_body(&self, request: &ChatRequest) -> Result<String, ChatError> {
+        let mut body = self.chat_body_object(request)?;
+        body.insert("stream".to_string(), json!(true));
+        serialize_body(body)
     }
 
     fn build_chat_json_body(
@@ -283,4 +301,37 @@ impl BackendImpl for OpenAiCompatible {
             _ => Err(ClawApiError::EmptyResponse.into()),
         }
     }
+
+    async fn chat_stream_async<'a, 'r, H: StreamingHttp>(
+        &'a self,
+        http: &'a mut H,
+        request: &'r ChatRequest<'r>,
+        cancel: Cancel<'a>,
+    ) -> Result<ChatStream<H::ByteStream>, ChatError> {
+        let post_data = self.build_stream_body(request)?;
+        let url = self.context.endpoint_url(CHAT_PATH);
+        let http_request = self.context.json_request(
+            &url,
+            &post_data,
+            HttpAuth::Bearer(self.context.api_key()),
+            &[],
+        );
+        let (status, stream) = http
+            .post_json_streaming(&http_request, cancel)
+            .await
+            .map_err(map_http_error)?;
+        if !status.is_success() {
+            let body = drain_body(stream).await;
+            return Err(ClawApiError::Transport(format!("HTTP {status}: {body}")).into());
+        }
+        Ok(ChatStream::new(
+            stream,
+            ProviderSse::OpenAi(OpenAiSse::new()),
+        ))
+    }
+}
+
+fn serialize_body(body: serde_json::Map<String, Value>) -> Result<String, ChatError> {
+    serde_json::to_string(&Value::Object(body))
+        .map_err(|_| ChatError::Api(ClawApiError::ApiError("out of memory serializing request")))
 }

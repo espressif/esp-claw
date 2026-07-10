@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod support;
+use support::Sse;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -19,11 +20,11 @@ use support::{
     assistant_text, csv_dicts, drain_until_turn_ended, llm_config, mem_root, persistence,
 };
 
-type PermanentHttpSystem = AgentSystem<MemFs, PermanentHttp, CountingTimer>;
-type TransientThenSuccessSystem = AgentSystem<MemFs, TransientThenSuccessHttp, CountingTimer>;
-type TransientExhaustSystem = AgentSystem<MemFs, TransientOnlyHttp, CountingTimer>;
-type FsReadFailSystem = AgentSystem<AlwaysFailFs, PermanentHttp, ImmediateTimer>;
-type FsWriteFailSystem = AgentSystem<WriteFailFs, PermanentHttp, ImmediateTimer>;
+type PermanentHttpSystem = AgentSystem<MemFs, Sse<PermanentHttp>, CountingTimer>;
+type TransientThenSuccessSystem = AgentSystem<MemFs, Sse<TransientThenSuccessHttp>, CountingTimer>;
+type TransientExhaustSystem = AgentSystem<MemFs, Sse<TransientOnlyHttp>, CountingTimer>;
+type FsReadFailSystem = AgentSystem<AlwaysFailFs, Sse<PermanentHttp>, ImmediateTimer>;
+type FsWriteFailSystem = AgentSystem<WriteFailFs, Sse<PermanentHttp>, ImmediateTimer>;
 
 static BACKEND_LOCK: Mutex<()> = Mutex::new(());
 static HTTP_CALLS: AtomicUsize = AtomicUsize::new(0);
@@ -318,7 +319,7 @@ fn build_fs_write_fail_system() -> Result<FsWriteFailSystem, AgentError> {
 }
 
 fn drive_one_turn<Filesystem, Http, Timer>(
-    system: &AgentSystem<Filesystem, Http, Timer>,
+    system: &AgentSystem<Filesystem, Sse<Http>, Timer>,
     input: &str,
 ) -> Vec<SessionEvent>
 where

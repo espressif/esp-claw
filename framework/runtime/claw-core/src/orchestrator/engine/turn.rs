@@ -1,3 +1,4 @@
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use tracing::Instrument as _;
 
@@ -15,7 +16,7 @@ use super::Engine;
 impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     pub(super) async fn drive_user_turn(&self, session_id: SessionId, input: SubmittedInput) {
@@ -120,7 +121,10 @@ where
             Ok((output, _stop)) => {
                 for reply in output.replies {
                     tracing::info!(name: "output", text_bytes = reply.text.len() as u64);
-                    events.emit(SessionEvent::Output { text: reply.text });
+                    // Plain answers already streamed their Output fragments.
+                    if !reply.streamed {
+                        events.emit(SessionEvent::Output { text: reply.text });
+                    }
                 }
             }
             Err(error) => {
@@ -234,6 +238,7 @@ where
                     replies: vec![RootReply {
                         session: session_id,
                         text: message,
+                        streamed: false,
                     }],
                 },
                 DriveStop::Quiescent,

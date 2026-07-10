@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use claw_api::{ClawApiAsync, ClawApiConfig, InitError, RetryPolicy};
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawHttp, ClawTimer};
 use claw_permission::{Action, PermissionDecision, RiskClass};
 use claw_tool::{
@@ -192,7 +193,7 @@ pub(crate) async fn resolve_permission_reply<H, Timer>(
     control: &DriveControl,
 ) -> Result<PermissionReplyResolution, ApprovalResolverError>
 where
-    H: ClawHttp + Default + 'static,
+    H: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     let mut llm = ClawApiAsync::<H, Timer>::init_default(llm_config)?;

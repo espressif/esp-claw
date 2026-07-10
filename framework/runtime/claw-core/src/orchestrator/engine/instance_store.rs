@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::session::SessionId;
@@ -18,7 +19,7 @@ pub(crate) enum InstanceWork {
 pub(super) struct InstanceSlot<'a, Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     engine: &'a Engine<Filesystem, Http, Timer>,
@@ -29,7 +30,7 @@ where
 impl<'a, Filesystem, Http, Timer> InstanceSlot<'a, Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     fn new(
@@ -54,7 +55,7 @@ where
 impl<Filesystem, Http, Timer> Drop for InstanceSlot<'_, Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     fn drop(&mut self) {
@@ -67,7 +68,7 @@ where
 impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     pub(super) fn instance_work(&self, session_id: SessionId) -> InstanceWork {

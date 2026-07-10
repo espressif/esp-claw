@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::agent::{AgentId, AgentKind, AgentPlacement, GraphEffect, TerminationPolicy};
@@ -10,7 +11,7 @@ use super::super::OrchestratorInstance;
 impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     pub(in crate::orchestrator::instance) fn apply_effects(&mut self) {
@@ -63,13 +64,7 @@ where
             self.effects
                 .lock()
                 .unwrap_or_else(|poison| poison.into_inner())
-                .push_back((
-                    requester,
-                    GraphEffect::Followup {
-                        target,
-                        message,
-                    },
-                ));
+                .push_back((requester, GraphEffect::Followup { target, message }));
             return;
         }
         if let Err(error) = self.deliver_followup(target, message) {

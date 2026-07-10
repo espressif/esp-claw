@@ -1,4 +1,5 @@
 use claw_context::{Block, BlockKind, Context};
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawHttp, ClawTimer};
 use claw_tool::ToolGate;
 use serde_json::Value;
@@ -14,7 +15,7 @@ use crate::agent::iteration_loop::{
     ChatMessages, IterationId, IterationLoop, IterationResult, IterationStep, SystemPrompt,
 };
 
-impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
+impl<H: ClawHttp + StreamingHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// Process queued commands, advance at most one iteration, and report what
     /// happened as a [`TickOutcome`].
     pub async fn tick(&mut self, events: &EventSink) -> TickOutcome {

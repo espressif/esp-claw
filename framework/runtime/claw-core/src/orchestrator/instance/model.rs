@@ -90,6 +90,12 @@ pub(crate) struct OrchestratorInstanceState {
 pub(crate) struct RootReply {
     pub session: SessionId,
     pub text: String,
+    /// Whether `text` was already emitted to the event stream as streamed
+    /// [`SessionEvent::Output`](crate::event::SessionEvent::Output) fragments by
+    /// the iteration loop (a plain LLM answer). When `true`, the orchestrator
+    /// skips re-emitting `Output` for it (but still routes `text` to channels).
+    /// `false` for texts the orchestrator synthesizes (clarify / system).
+    pub streamed: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -108,7 +114,11 @@ impl DriveOutput {
 
     pub(super) fn reply(session: SessionId, text: String) -> Self {
         Self {
-            replies: vec![RootReply { session, text }],
+            replies: vec![RootReply {
+                session,
+                text,
+                streamed: false,
+            }],
         }
     }
 }

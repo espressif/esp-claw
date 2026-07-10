@@ -20,6 +20,7 @@ use claw_checkpoint::{
     PartGeneration, PartStateBlob, PartStateSlice, StorageHint, StorageSizeHint,
 };
 use claw_context::{Block, BlockKind};
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::{Compactor, TranscriptStore};
 use claw_permission::AllowAll;
@@ -50,7 +51,7 @@ const COMPACTION_SEGMENT_TOKEN_BUDGET: usize = 1500;
 
 /// The one agent type: a flat ReAct loop over a [`BaseAgent`], configured by an
 /// [`AgentConfig`]. No semantic FSM — `tick` forwards straight to the base.
-pub struct GenericAgent<H: ClawHttp, Timer: ClawTimer> {
+pub struct GenericAgent<H: ClawHttp + StreamingHttp, Timer: ClawTimer> {
     state: DurableState<GenericAgentState>,
     base: BaseAgent<H, Timer>,
 }
@@ -80,7 +81,7 @@ impl DurableStateCodec for GenericAgentState {
     }
 }
 
-impl<H: ClawHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
+impl<H: ClawHttp + StreamingHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
     /// Build a generic agent with `id`, configured by `config`.
     ///
     /// The LLM client is built inside the base agent from `llm_config` over the
@@ -202,7 +203,7 @@ impl<H: ClawHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
     }
 }
 
-impl<H: ClawHttp, Timer: ClawTimer> Agent for GenericAgent<H, Timer> {
+impl<H: ClawHttp + StreamingHttp, Timer: ClawTimer> Agent for GenericAgent<H, Timer> {
     fn send_command(&mut self, command: AgentCommand) -> Result<(), AgentCommandError> {
         self.base.send_command(command)
     }
@@ -243,7 +244,7 @@ impl<H: ClawHttp, Timer: ClawTimer> Agent for GenericAgent<H, Timer> {
     }
 }
 
-impl<H: ClawHttp, Timer: ClawTimer> DurablePart for GenericAgent<H, Timer> {
+impl<H: ClawHttp + StreamingHttp, Timer: ClawTimer> DurablePart for GenericAgent<H, Timer> {
     fn name(&self) -> &'static str {
         "generic-agent"
     }

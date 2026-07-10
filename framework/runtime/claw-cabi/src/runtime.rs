@@ -89,7 +89,7 @@ fn map_event(event: SessionEvent) -> Option<FfiEvent> {
     match event {
         SessionEvent::Output { text } => Some(FfiEvent::Output(text)),
         SessionEvent::Reasoning { text } => Some(FfiEvent::Reasoning(text)),
-        SessionEvent::Tools { names } => Some(FfiEvent::Tools(names.join(", "))),
+        SessionEvent::ToolCall { name } => Some(FfiEvent::Tools(name)),
         SessionEvent::Error { message } => Some(FfiEvent::Error(message)),
         SessionEvent::TurnEnded { .. } => Some(FfiEvent::Done),
         SessionEvent::Closed => Some(FfiEvent::Closed),

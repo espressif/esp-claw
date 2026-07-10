@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod support;
+use support::Sse;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, MutexGuard};
@@ -17,7 +18,7 @@ use serde_json::{json, Value};
 use support::{assistant_text, csv_dicts, drain_until_turn_ended, llm_config};
 use tempdir::TempDir;
 
-type SkillToolSystem = AgentSystem<DiskFs, SkillToolHttp, ImmediateTimer>;
+type SkillToolSystem = AgentSystem<DiskFs, Sse<SkillToolHttp>, ImmediateTimer>;
 
 static SKILL_TOOL_LOCK: Mutex<()> = Mutex::new(());
 static SKILL_TOOL_STATE: Mutex<Option<SkillToolCaseState>> = Mutex::new(None);
@@ -64,14 +65,14 @@ fn skill_tools_csv_matrix_scans_roots_reloads_and_activates_documents() {
         );
         assert_eq!(
             tools_events(&events),
-            vec![vec![
+            vec![
                 "skill_list".to_string(),
                 "skill_activate".to_string(),
                 "skill_activate".to_string(),
                 "skill_reload".to_string(),
                 "skill_list".to_string(),
                 "skill_activate".to_string(),
-            ]],
+            ],
             "case {}",
             fixture.case
         );
@@ -382,11 +383,11 @@ fn iteration_ids(events: &[SessionEvent]) -> Vec<IterationId> {
         .collect()
 }
 
-fn tools_events(events: &[SessionEvent]) -> Vec<Vec<String>> {
+fn tools_events(events: &[SessionEvent]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match event {
-            SessionEvent::Tools { names } => Some(names.clone()),
+            SessionEvent::ToolCall { name } => Some(name.clone()),
             _ => None,
         })
         .collect()

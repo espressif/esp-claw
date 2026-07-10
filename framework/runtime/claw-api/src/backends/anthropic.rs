@@ -11,15 +11,19 @@ use core::sync::atomic::AtomicBool;
 use serde_json::{json, Map, Value};
 
 use claw_interface::http::{
-    blocking::ClawHttp as BlockingClawHttp, Cancel, ClawHttp, HttpAuth, HttpHeader,
+    blocking::ClawHttp as BlockingClawHttp, Cancel, ClawHttp, HttpAuth, HttpHeader, StreamingHttp,
 };
 
 use super::super::errors::{ChatError, ClawApiError, InferMediaError, InitError};
 use super::super::media::prepare_asset;
+use super::super::stream::{drain_body, ChatStream};
 use super::super::types::{
     ChatJsonRequest, ChatRequest, ClawApiConfig, LlmResponse, MediaRequest, ToolCall,
 };
-use super::shared::{post_json, post_json_async, single_media_asset, BackendContext};
+use super::shared::{
+    map_http_error, post_json, post_json_async, single_media_asset, BackendContext,
+};
+use super::sse::{AnthropicSse, ProviderSse};
 use super::BackendImpl;
 
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -308,8 +312,8 @@ fn parse_chat_response(body: &str) -> Result<LlmResponse, ClawApiError> {
 }
 
 impl Anthropic {
-    /// `build_chat_body`
-    fn build_chat_body(&self, request: &ChatRequest) -> Result<String, ChatError> {
+    /// The shared request body object, without the transport-only `stream` flag.
+    fn chat_body_object(&self, request: &ChatRequest) -> Result<Map<String, Value>, ChatError> {
         let messages = convert_messages_to_anthropic(request.messages, request.reminders)?;
 
         let mut body = Map::new();
@@ -324,10 +328,19 @@ impl Anthropic {
         body.insert("messages".to_string(), messages);
 
         Self::insert_tools_into_body(&mut body, request.tools_json, false)?;
+        Ok(body)
+    }
 
-        serde_json::to_string(&Value::Object(body)).map_err(|_| {
-            ChatError::Api(ClawApiError::ApiError("out of memory serializing request"))
-        })
+    /// `build_chat_body`
+    fn build_chat_body(&self, request: &ChatRequest) -> Result<String, ChatError> {
+        serialize_body(self.chat_body_object(request)?)
+    }
+
+    /// Like [`build_chat_body`](Self::build_chat_body) but sets `stream: true`.
+    fn build_stream_body(&self, request: &ChatRequest) -> Result<String, ChatError> {
+        let mut body = self.chat_body_object(request)?;
+        body.insert("stream".to_string(), json!(true));
+        serialize_body(body)
     }
 
     fn build_chat_json_body(
@@ -587,4 +600,35 @@ impl BackendImpl for Anthropic {
             _ => Err(ClawApiError::EmptyResponse.into()),
         }
     }
+
+    async fn chat_stream_async<'a, 'r, H: StreamingHttp>(
+        &'a self,
+        http: &'a mut H,
+        request: &'r ChatRequest<'r>,
+        cancel: Cancel<'a>,
+    ) -> Result<ChatStream<H::ByteStream>, ChatError> {
+        let post_data = self.build_stream_body(request)?;
+        let url = self.context.endpoint_url(CHAT_PATH);
+        let headers = self.headers();
+        let http_request = self
+            .context
+            .json_request(&url, &post_data, HttpAuth::None, &headers);
+        let (status, stream) = http
+            .post_json_streaming(&http_request, cancel)
+            .await
+            .map_err(map_http_error)?;
+        if !status.is_success() {
+            let body = drain_body(stream).await;
+            return Err(ClawApiError::Transport(format!("HTTP {status}: {body}")).into());
+        }
+        Ok(ChatStream::new(
+            stream,
+            ProviderSse::Anthropic(AnthropicSse::new()),
+        ))
+    }
+}
+
+fn serialize_body(body: Map<String, Value>) -> Result<String, ChatError> {
+    serde_json::to_string(&Value::Object(body))
+        .map_err(|_| ChatError::Api(ClawApiError::ApiError("out of memory serializing request")))
 }

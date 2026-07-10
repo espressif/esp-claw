@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod support;
+use support::Sse;
 
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -17,7 +18,8 @@ use serde_json::{json, Value};
 use support::{csv_dicts, llm_config, persistence};
 use tempdir::TempDir;
 
-type CheckpointSystem = AgentSystem<DiskFs, BlockingHttpAdapter<SharedScriptHttp>, ImmediateTimer>;
+type CheckpointSystem =
+    AgentSystem<DiskFs, Sse<BlockingHttpAdapter<SharedScriptHttp>>, ImmediateTimer>;
 
 #[test]
 fn checkpoint_recovery_csv_matrix_reports_public_startup_errors() {

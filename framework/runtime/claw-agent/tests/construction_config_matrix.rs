@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod support;
+use support::Sse;
 
 use std::collections::BTreeMap;
 
@@ -15,8 +16,8 @@ use serde_json::Value;
 use support::{assistant_text, csv_dicts, drain_until_turn_ended, mem_root};
 use tempdir::TempDir;
 
-type MemConstructionSystem = AgentSystem<MemFs, ConstructionHttp, ImmediateTimer>;
-type DiskConstructionSystem = AgentSystem<DiskFs, ConstructionHttp, ImmediateTimer>;
+type MemConstructionSystem = AgentSystem<MemFs, Sse<ConstructionHttp>, ImmediateTimer>;
+type DiskConstructionSystem = AgentSystem<DiskFs, Sse<ConstructionHttp>, ImmediateTimer>;
 
 #[test]
 fn construction_csv_config_matrix_validates_llm_config_and_skill_roots() {

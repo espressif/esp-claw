@@ -9,6 +9,8 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::task::Poll;
 
+use futures_core::Stream;
+
 /// A single extra request header (`name: value`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HttpHeader<'a> {
@@ -380,6 +382,42 @@ pub trait ClawHttp {
     }
 }
 
+/// A streaming HTTP transport: POST a JSON body and read the response body as a
+/// stream of raw chunks (for Server-Sent Events).
+///
+/// Kept separate from [`ClawHttp`] so the one-shot seam stays object-safe. This
+/// seam is always used generically (`H: StreamingHttp`), never as `dyn`, which
+/// lets it carry a GAT: **each transport names its own body-stream type**. The
+/// device driver stays allocation-free (a concrete `poll_next` over
+/// `esp_http_client`), and only host transports whose stream type is unnameable
+/// (e.g. `reqwest::Response::bytes_stream`) pay for boxing — inside their own
+/// impl, never in this shared signature or the device build.
+pub trait StreamingHttp {
+    /// This transport's response-body chunk stream. It **owns** its read side
+    /// (e.g. a moved `reqwest::Response`, or a device read handle), so it borrows
+    /// neither the transport nor the request. Cancelling body streaming is done
+    /// by **dropping** the stream, so it carries no cancellation flag.
+    ///
+    /// `Unpin` keeps consumers pin-free; a host stream whose concrete type is
+    /// `!Unpin` (e.g. `reqwest`'s) boxes into `Pin<Box<dyn Stream>>`, which is
+    /// `Unpin` — and it had to box its unnameable type anyway.
+    type ByteStream: Stream<Item = Result<Vec<u8>, HttpError>> + Unpin;
+
+    /// POST `request` and resolve the response status paired with a stream of raw
+    /// body chunks. The status arrives first so the caller can read a non-2xx
+    /// response as an error body; the stream carries only transport read errors.
+    ///
+    /// `cancel` covers the send/header phase only (the returned future observes
+    /// it cooperatively); cancel body streaming by dropping [`Self::ByteStream`].
+    /// `'r` (the request) is independent of `'a` (the transport borrow) so a
+    /// caller may build the request body in a shorter local scope.
+    fn post_json_streaming<'a, 'r>(
+        &'a mut self,
+        request: &'r HttpJsonRequest<'r>,
+        cancel: Cancel<'a>,
+    ) -> impl Future<Output = Result<(HttpStatusCode, Self::ByteStream), HttpError>>;
+}
+
 /// Drive `future` while checking `cancel` before each poll.
 ///
 /// This is a helper for implementations that already have a cancellable
@@ -422,12 +460,123 @@ mod httpmock {
     use std::sync::{Arc, Mutex, MutexGuard};
 
     use super::{
-        blocking, ClawHttp, HttpError, HttpJsonRequest, HttpRequestFailure, HttpResponse,
-        HttpResponseFuture, HttpStatusCode,
+        blocking, Cancel, ClawHttp, HttpError, HttpJsonRequest, HttpRequestFailure, HttpResponse,
+        HttpResponseFuture, HttpStatusCode, Stream, StreamingHttp,
     };
 
     /// One scripted LLM round: a 200 body, or a transport-level error message.
     pub type ScriptStep = Result<String, String>;
+
+    /// A response body served as a queue of raw byte chunks. Names a concrete
+    /// [`Stream`] type so [`ChunkedHttp`] stays allocation-light and mirrors how a
+    /// device transport would name its own stream (no boxing).
+    pub struct SliceChunks {
+        chunks: VecDeque<Vec<u8>>,
+    }
+
+    impl SliceChunks {
+        /// A stream that yields `chunks` in order (format-agnostic).
+        pub fn from_chunks(chunks: impl IntoIterator<Item = Vec<u8>>) -> Self {
+            Self {
+                chunks: chunks.into_iter().collect(),
+            }
+        }
+
+        /// A stream that yields `body` as a single chunk.
+        pub fn once(body: Vec<u8>) -> Self {
+            Self::from_chunks([body])
+        }
+    }
+
+    impl Stream for SliceChunks {
+        type Item = Result<Vec<u8>, HttpError>;
+
+        fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            Poll::Ready(self.chunks.pop_front().map(Ok))
+        }
+    }
+
+    /// Streaming [`StreamingHttp`] double: serves preset response bodies as byte
+    /// chunks, so tests can exercise SSE parsing across arbitrary chunk splits.
+    /// Panics if called more times than scripted.
+    pub struct ChunkedHttp {
+        rounds: Mutex<VecDeque<(HttpStatusCode, Vec<Vec<u8>>)>>,
+    }
+
+    impl ChunkedHttp {
+        /// Each body is served at HTTP 200 in `chunk_size`-byte pieces (the final
+        /// piece may be shorter). `chunk_size == 0` serves each body whole.
+        pub fn new(bodies: impl IntoIterator<Item = impl Into<String>>, chunk_size: usize) -> Self {
+            let rounds = bodies
+                .into_iter()
+                .map(|body| (HttpStatusCode::OK, split_bytes(body.into(), chunk_size)))
+                .collect();
+            Self {
+                rounds: Mutex::new(rounds),
+            }
+        }
+
+        /// Full control: an explicit status and chunk list per round.
+        pub fn with_rounds(
+            rounds: impl IntoIterator<Item = (HttpStatusCode, Vec<Vec<u8>>)>,
+        ) -> Self {
+            Self {
+                rounds: Mutex::new(rounds.into_iter().collect()),
+            }
+        }
+
+        fn serve(&self) -> (HttpStatusCode, SliceChunks) {
+            let (status, chunks) = guard(&self.rounds)
+                .pop_front()
+                .expect("ChunkedHttp: LLM called more times than scripted");
+            (
+                status,
+                SliceChunks {
+                    chunks: chunks.into(),
+                },
+            )
+        }
+    }
+
+    /// `ChunkedHttp` is streaming-only; the one-shot seam rejects so it can still
+    /// stand in as the `H` of a `ClawApiAsync<H, _>` whose only call is `chat_stream`.
+    impl ClawHttp for ChunkedHttp {
+        fn post_json<'a>(
+            &'a mut self,
+            _request: &'a HttpJsonRequest<'a>,
+            _cancel: Cancel<'a>,
+        ) -> HttpResponseFuture<'a> {
+            Box::pin(async {
+                Err(HttpError::RequestFailed(HttpRequestFailure::driver(
+                    "chunked http",
+                    "ChunkedHttp is streaming-only; use chat_stream",
+                )))
+            })
+        }
+    }
+
+    impl StreamingHttp for ChunkedHttp {
+        type ByteStream = SliceChunks;
+
+        async fn post_json_streaming<'a, 'r>(
+            &'a mut self,
+            _request: &'r HttpJsonRequest<'r>,
+            cancel: Cancel<'a>,
+        ) -> Result<(HttpStatusCode, SliceChunks), HttpError> {
+            if cancel.is_cancelled() {
+                return Err(HttpError::Aborted);
+            }
+            Ok(self.serve())
+        }
+    }
+
+    fn split_bytes(body: String, chunk_size: usize) -> Vec<Vec<u8>> {
+        let bytes = body.into_bytes();
+        if chunk_size == 0 || bytes.is_empty() {
+            return vec![bytes];
+        }
+        bytes.chunks(chunk_size).map(<[u8]>::to_vec).collect()
+    }
 
     fn guard<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
         mutex
@@ -839,17 +988,21 @@ mod httpmock {
 
 #[cfg(feature = "httpmock")]
 pub use httpmock::{
-    BlockingHttpAdapter, CapturingHttp, FailingHttp, NeverHttp, NoopHttp, ScriptStep, ScriptedHttp,
-    SharedScriptHttp, YieldingHttpAdapter,
+    BlockingHttpAdapter, CapturingHttp, ChunkedHttp, FailingHttp, NeverHttp, NoopHttp, ScriptStep,
+    ScriptedHttp, SharedScriptHttp, SliceChunks, YieldingHttpAdapter,
 };
 
 #[cfg(feature = "realhttp")]
 mod realhttp {
     use std::time::Duration;
 
+    use core::pin::Pin;
+
+    use futures_lite::StreamExt as _;
+
     use super::{
         cancel_on_poll, Cancel, ClawHttp, HttpError, HttpJsonRequest, HttpRequestFailure,
-        HttpResponse, HttpResponseFuture, HttpStatusCode,
+        HttpResponse, HttpResponseFuture, HttpStatusCode, Stream, StreamingHttp,
     };
 
     /// Host [`ClawHttp`] backed by an **async** `reqwest::Client`.
@@ -933,6 +1086,60 @@ mod realhttp {
                 Ok(HttpResponse { status_code, body })
             });
             cancel_on_poll(transfer, cancel)
+        }
+    }
+
+    impl StreamingHttp for RealHttp {
+        type ByteStream = Pin<Box<dyn Stream<Item = Result<Vec<u8>, HttpError>> + Send>>;
+
+        fn post_json_streaming<'a, 'r>(
+            &'a mut self,
+            request: &'r HttpJsonRequest<'r>,
+            _cancel: Cancel<'a>,
+        ) -> impl core::future::Future<Output = Result<(HttpStatusCode, Self::ByteStream), HttpError>>
+        {
+            // Own every request input up front so the returned future and stream
+            // borrow neither `self` nor `request` (`reqwest::Client` is cheap to
+            // clone — it is `Arc`-backed).
+            let client = self.client.clone();
+            let user_agent = self.user_agent.clone();
+            let url = request.url.to_string();
+            let body = request.body.to_string();
+            let timeout = Duration::from_millis(u64::from(request.timeout_ms));
+            let auth = request.auth.header();
+            let headers: Vec<(String, String)> = request
+                .headers
+                .iter()
+                .map(|header| (header.name.to_string(), header.value.to_string()))
+                .collect();
+
+            async move {
+                let mut builder = client
+                    .post(&url)
+                    .header("Content-Type", "application/json")
+                    .timeout(timeout)
+                    .body(body);
+                if let Some(user_agent) = &user_agent {
+                    builder = builder.header("User-Agent", user_agent);
+                }
+                if let Some((name, value)) = auth {
+                    builder = builder.header(name, value);
+                }
+                for (name, value) in &headers {
+                    builder = builder.header(name, value);
+                }
+
+                let response = builder.send().await.map_err(|error| {
+                    HttpError::RequestFailed(HttpRequestFailure::transport(error.to_string()))
+                })?;
+                let status = HttpStatusCode::new(response.status().as_u16());
+                let stream = response.bytes_stream().map(|chunk| {
+                    chunk.map(|bytes| bytes.to_vec()).map_err(|error| {
+                        HttpError::RequestFailed(HttpRequestFailure::transport(error.to_string()))
+                    })
+                });
+                Ok((status, Box::pin(stream) as Self::ByteStream))
+            }
         }
     }
 }

@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod support;
+use support::Sse;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, MutexGuard};
@@ -15,7 +16,7 @@ use serde_json::{json, Value};
 use support::{assistant_text, csv_dicts, drain_until_turn_ended, llm_config, persistence};
 use tempdir::TempDir;
 
-type PersistenceFailureSystem = AgentSystem<DiskFs, PersistenceFailureHttp, ImmediateTimer>;
+type PersistenceFailureSystem = AgentSystem<DiskFs, Sse<PersistenceFailureHttp>, ImmediateTimer>;
 
 static PERSISTENCE_FAILURE_LOCK: Mutex<()> = Mutex::new(());
 static PERSISTENCE_FAILURE_REPLIES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());

@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod support;
+use support::Sse;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, MutexGuard};
@@ -15,7 +16,7 @@ use serde_json::{json, Value};
 use support::{assistant_text, csv_dicts, drain_until_turn_ended, llm_config, persistence};
 use tempdir::TempDir;
 
-type BuiltinPersistenceSystem = AgentSystem<DiskFs, BuiltinPersistenceHttp, ImmediateTimer>;
+type BuiltinPersistenceSystem = AgentSystem<DiskFs, Sse<BuiltinPersistenceHttp>, ImmediateTimer>;
 
 static BUILTIN_PERSISTENCE_LOCK: Mutex<()> = Mutex::new(());
 static BUILTIN_PERSISTENCE_REPLIES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());

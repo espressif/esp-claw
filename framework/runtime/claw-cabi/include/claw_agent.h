@@ -38,7 +38,7 @@ typedef enum {
      * across events to reconstruct the full string. */
     CLAW_AGENT_EVENT_KIND_OUTPUT = 0,    /* assistant-visible answer text */
     CLAW_AGENT_EVENT_KIND_REASONING = 1, /* model thinking text (truncated) */
-    CLAW_AGENT_EVENT_KIND_TOOLS = 2,     /* comma-joined tool names of a round */
+    CLAW_AGENT_EVENT_KIND_TOOLS = 2,     /* one tool call name (emitted per call) */
     CLAW_AGENT_EVENT_KIND_DONE = 3,   /* one root-visible turn finished */
     CLAW_AGENT_EVENT_KIND_ERROR = 4,  /* session work failed; see error_message */
     CLAW_AGENT_EVENT_KIND_CLOSED = 5, /* session stream closed; terminal */

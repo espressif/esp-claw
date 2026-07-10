@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::orchestrator::SessionControlError;
@@ -12,7 +13,7 @@ use super::super::{DriveFuture, Engine};
 impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
-    Http: ClawHttp + Default + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
     pub(in crate::orchestrator::engine::command_loop) fn submit_input(

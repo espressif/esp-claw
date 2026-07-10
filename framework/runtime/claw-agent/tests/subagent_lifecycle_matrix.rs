@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
 mod support;
+use support::Sse;
 
 use core::future::Future;
 use core::pin::Pin;
@@ -19,7 +20,7 @@ use support::{
     assistant_text, csv_dicts, drain_until_turn_ended, llm_config, mem_root, persistence,
 };
 
-type SubagentSystem = AgentSystem<MemFs, SubagentHttp, ImmediateTimer>;
+type SubagentSystem = AgentSystem<MemFs, Sse<SubagentHttp>, ImmediateTimer>;
 
 static SUBAGENT_LOCK: Mutex<()> = Mutex::new(());
 static SUBAGENT_STATE: Mutex<Option<SubagentCaseState>> = Mutex::new(None);
@@ -52,7 +53,7 @@ fn subagent_lifecycle_csv_matrix_drives_background_results_and_graph_updates() {
         );
         assert_eq!(
             tools_events(&first_turn),
-            vec![vec!["subagent_spawn".to_string()]],
+            vec!["subagent_spawn".to_string()],
             "case {}",
             fixture.case
         );
@@ -100,12 +101,10 @@ fn subagent_lifecycle_csv_matrix_drives_background_results_and_graph_updates() {
         assert_eq!(
             tools_events(&supervision_turn),
             vec![
-                vec![
-                    "subagent_list".to_string(),
-                    "subagent_watch".to_string(),
-                    "subagent_delete".to_string(),
-                ],
-                vec!["subagent_list".to_string()],
+                "subagent_list".to_string(),
+                "subagent_watch".to_string(),
+                "subagent_delete".to_string(),
+                "subagent_list".to_string(),
             ],
             "case {}",
             fixture.case
@@ -484,11 +483,11 @@ fn iteration_ids(events: &[SessionEvent]) -> Vec<IterationId> {
         .collect()
 }
 
-fn tools_events(events: &[SessionEvent]) -> Vec<Vec<String>> {
+fn tools_events(events: &[SessionEvent]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match event {
-            SessionEvent::Tools { names } => Some(names.clone()),
+            SessionEvent::ToolCall { name } => Some(name.clone()),
             _ => None,
         })
         .collect()
