@@ -44,7 +44,7 @@ pnpm typecheck
 
 ### Boot and Runtime Flow
 
-The main entry point is `application/edge_agent/main/main.c`. 
+The main entry point is `application/edge_agent/main/main.c`.
 
 ### Core Data Flow
 
@@ -88,6 +88,8 @@ The firmware uses two logical filesystem roots, configured at boot through `claw
 - Specs (`.agents/spec/`):
   - lua module spec: [lua-module-spec.md](.agents/spec/lua-module-spec.md)
   - claw skill spec: [claw-skill-spec.md](.agents/spec/claw-skill-spec.md)
+- Coding Style: [c.md](.agents/coding_styles/c.md)
+- Coding Style: [rust.md](.agents/coding_styles/rust.md)
 
 ## General Engineering Rules
 
@@ -120,7 +122,7 @@ The firmware uses two logical filesystem roots, configured at boot through `claw
 ## Memory Allocation and Release
 
 - All runtime states must belong to a certain object instance.
-- Avoid creating local variables larger than 128 bytes on task stacks; 
+- Avoid creating local variables larger than 128 bytes on task stacks;
 - Pre-allocated buffers, memory pools or ring buffers should be used in high-frequency scenarios.
 
 ## Testing

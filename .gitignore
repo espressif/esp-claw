@@ -48,3 +48,6 @@ pages/simulator/dist
 pages/simulator/*.log
 pages/simulator/public/runtime/*
 !pages/simulator/public/runtime/.gitkeep
+
+# rust
+target/

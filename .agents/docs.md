@@ -27,12 +27,12 @@ Before editing docs, search both code and docs to find the current source of tru
 - If there are existing docs on a similar topic, review their structure first and reuse the same section shape when it fits.
 - Prefer matching established patterns for headings, intro depth, tables, admonitions, examples, and source-reference placement.
 - Search implementation when wording is unclear:
-  - `rg -n "<feature-name>" components applications/edge_agent`
+  - `rg -n "<feature-name>" components application/edge_agent`
 - Prefer updating an existing page over creating a new one if the topic already has a natural home.
 
 ## Capability Documentation Policy
 
-- Capabilities live under `framework/capabilities/`.
+- Capabilities live under `components/claw_capabilities/`.
 - When a core Capability changes and it is already documented, update the existing doc page.
 - When adding a new Capability, do not create a dedicated doc page by default.
 - Create a standalone Capability page only for representative or high-value Capabilities that help users understand a broader pattern, workflow, or integration style.

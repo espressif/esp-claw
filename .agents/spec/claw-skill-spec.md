@@ -39,9 +39,16 @@ Notes:
   "metadata": {
     "cap_groups": ["cap_lua"],
     "manage_mode": "web",
-    "category": ["utility"],
+    "category": ["utility", "ui"],
     "peripherals": [],
     "tags": ["weather", "forecast"]
+  },
+  "simulator": {
+    "entry": "scripts/action.lua",
+    "files": [
+      "scripts/action.lua",
+      "assets/icon.bin"
+    ]
   }
 }
 ---
@@ -63,11 +70,16 @@ Rules:
 - `metadata.cap_groups` is optional. When present, it must be a JSON array of non-empty unique strings and declares the capability groups that need to be activated.
 - `metadata.manage_mode` must be `readonly`, `web`, or `runtime`. Use `web` for ESP-Claw Skills Lab packaged skills. On device, `web` is treated the same as `readonly` for management (for example unregister rules). `runtime` is reserved for skills registered by the runtime.
 - `metadata.category` must contain at least one value, and every value must be in the category allowlist.
+- `metadata.category` value `ui` marks a Skill as browser-simulator capable. Web tools should only expose simulator entry points for Skills that explicitly include `ui`.
 - `metadata.peripherals` may contain zero or more values, and every value must be in the peripheral allowlist.
 - `metadata.tags` is optional.
 - `metadata.tags`, when present, must be a string array.
 - `metadata.tags` is free-form and is not validated against an allowlist.
 - `metadata.tags` must not repeat any value already present in `metadata.category` or `metadata.peripherals`.
+- If `metadata.category` contains `ui`, the frontmatter must include a `simulator` object.
+- `simulator.entry` is the skill-relative Lua entry script used by the browser simulator, for example `scripts/action.lua`.
+- `simulator.files` is the complete skill-relative file list that the browser simulator must download and mount before running the entry script. It must include `simulator.entry` and any required Lua libraries, assets, fonts, or data files.
+- `simulator.entry` and `simulator.files` must not use absolute paths, `{CUR_SKILL_DIR}`, or `..`; paths are always relative to the skill directory.
 - Additional keys at the root of the frontmatter or inside `metadata` may appear (for example tooling or Skills Lab fields). The device runtime ignores keys it does not read.
 
 ### Description
