@@ -58,11 +58,14 @@ static char *event_router_join_args_from(int argc, char **argv, int start_index)
         return NULL;
     }
 
+    size_t pos = 0;
     for (int i = start_index; i < argc; i++) {
         if (i > start_index) {
-            strcat(joined, " ");
+            joined[pos++] = ' ';
         }
-        strcat(joined, argv[i]);
+        size_t arg_len = strlen(argv[i]);
+        memcpy(joined + pos, argv[i], arg_len);
+        pos += arg_len;
     }
 
     return joined;
