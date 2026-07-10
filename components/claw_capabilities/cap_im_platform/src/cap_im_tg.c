@@ -139,12 +139,18 @@ static bool cap_im_tg_dedup_check_and_record(const char *update_key)
     return false;
 }
 
+#define CAP_IM_TG_MAX_RESP_SIZE (64U * 1024U)
+
 static esp_err_t cap_im_tg_http_event_handler(esp_http_client_event_t *event)
 {
     cap_im_tg_http_resp_t *resp = (cap_im_tg_http_resp_t *)event->user_data;
 
     if (!resp || event->event_id != HTTP_EVENT_ON_DATA || event->data_len <= 0) {
         return ESP_OK;
+    }
+
+    if (resp->len + (size_t)event->data_len + 1 > CAP_IM_TG_MAX_RESP_SIZE) {
+        return ESP_ERR_NO_MEM;
     }
 
     if (resp->len + (size_t)event->data_len + 1 > resp->cap) {
