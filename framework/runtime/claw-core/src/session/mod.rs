@@ -1,5 +1,7 @@
 //! In-memory session registry and delivery errors.
 
+mod message;
+
 use std::borrow::Cow;
 use std::sync::{Mutex, MutexGuard};
 
@@ -11,6 +13,8 @@ use serde::{Deserialize, Serialize};
 
 crate::define_prefixed_id!(SessionId, "session-", "session");
 crate::define_prefixed_id!(TurnId, "turn-", "turn");
+
+pub use message::{AttachmentId, AttachmentKind, AttachmentRecord, AttachmentRef, Message};
 
 crate::define_id_allocator!(
     /// Hands out process-unique [`SessionId`]s for the current runtime.

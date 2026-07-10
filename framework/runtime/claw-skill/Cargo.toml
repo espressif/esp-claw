@@ -9,6 +9,7 @@ description = "Filesystem-backed skill registry and per-agent catalog/document a
 claw-interface = { path = "../claw-interface" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+strum = { version = "0.28", features = ["derive"] }
 thiserror = "2"
 
 [dev-dependencies]

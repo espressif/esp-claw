@@ -5,6 +5,7 @@ use std::fmt;
 
 use claw_interface::FsError;
 use serde::Deserialize;
+use strum::{EnumString, IntoStaticStr};
 use thiserror::Error;
 
 /// A skill's identity: its directory name under a skills root.
@@ -35,22 +36,29 @@ impl fmt::Display for SkillId {
 }
 
 /// Runtime interpretation of `metadata.manage_mode`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, EnumString, IntoStaticStr, PartialEq, Eq)]
+#[strum(
+    parse_err_ty = ParseSkillManageModeError,
+    parse_err_fn = ParseSkillManageModeError::new
+)]
 pub enum SkillManageMode {
     /// `"readonly"` and `"web"` are both treated as read-only on device.
     #[default]
+    #[strum(to_string = "readonly", serialize = "web")]
     Readonly,
     /// `"runtime"` skills may be owned by runtime installers.
+    #[strum(serialize = "runtime")]
     Runtime,
 }
 
-impl SkillManageMode {
-    /// Stable string used in JSON catalog output.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Readonly => "readonly",
-            Self::Runtime => "runtime",
-        }
+/// Failure parsing a skill management mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[error("unknown skill manage mode; expected readonly, web, or runtime")]
+pub struct ParseSkillManageModeError;
+
+impl ParseSkillManageModeError {
+    fn new(_: &str) -> Self {
+        Self
     }
 }
 
@@ -279,16 +287,12 @@ fn required_string(
 
 fn parse_metadata(id: &SkillId, raw: RawMetadata) -> Result<SkillFrontmatterMetadata, SkillError> {
     let manage_mode = required_string(id, "metadata.manage_mode", raw.manage_mode)?;
-    let manage_mode = match manage_mode.as_str() {
-        "readonly" | "web" => SkillManageMode::Readonly,
-        "runtime" => SkillManageMode::Runtime,
-        value => {
-            return Err(SkillError::InvalidFrontmatter(
-                id.clone(),
-                format!("unsupported metadata.manage_mode '{value}'"),
-            ));
-        }
-    };
+    let manage_mode = SkillManageMode::try_from(manage_mode.as_str()).map_err(|_| {
+        SkillError::InvalidFrontmatter(
+            id.clone(),
+            format!("unsupported metadata.manage_mode '{manage_mode}'"),
+        )
+    })?;
 
     Ok(SkillFrontmatterMetadata {
         cap_groups: raw.cap_groups,

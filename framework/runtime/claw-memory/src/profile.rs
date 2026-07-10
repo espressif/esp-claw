@@ -4,11 +4,10 @@
 //! documents edited by users or by profile-specific tools and later projected into
 //! context by `claw-core`.
 
-use core::str::FromStr;
-
 use std::marker::PhantomData;
 
 use claw_interface::{ClawFs, FsError};
+use strum::{EnumString, IntoStaticStr};
 
 /// Filename for the assistant soul/persona document.
 pub const SOUL_FILE: &str = "soul.md";
@@ -21,24 +20,28 @@ pub const USER_PROFILE_FILE: &str = "user.md";
 pub const DEFAULT_PROFILE_DOCUMENT_MAX_BYTES: usize = 8192;
 
 /// One editable global profile document.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, EnumString, IntoStaticStr, PartialEq, Eq, Hash)]
+#[strum(
+    ascii_case_insensitive,
+    parse_err_ty = ParseProfileDocumentError,
+    parse_err_fn = ParseProfileDocumentError::new
+)]
 pub enum ProfileDocument {
     /// Assistant behavior principles, persona, and style.
+    #[strum(serialize = "soul")]
     Soul,
     /// Assistant/device name, role, capabilities, and boundaries.
+    #[strum(to_string = "assistant_identity", serialize = "identity")]
     AssistantIdentity,
     /// The single user's stable preferences and interaction agreements.
+    #[strum(to_string = "user_profile", serialize = "user")]
     UserProfile,
 }
 
 impl ProfileDocument {
     /// Stable document id used in tools and diagnostics.
     pub fn id(self) -> &'static str {
-        match self {
-            ProfileDocument::Soul => "soul",
-            ProfileDocument::AssistantIdentity => "assistant_identity",
-            ProfileDocument::UserProfile => "user_profile",
-        }
+        self.into()
     }
 
     /// On-disk filename under the profile store directory.
@@ -62,31 +65,7 @@ impl ProfileDocument {
 
 impl std::fmt::Display for ProfileDocument {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(self.id())
-    }
-}
-
-impl FromStr for ProfileDocument {
-    type Err = ParseProfileDocumentError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let normalized = value.trim();
-        if normalized.eq_ignore_ascii_case("soul") {
-            return Ok(ProfileDocument::Soul);
-        }
-        if normalized.eq_ignore_ascii_case("identity")
-            || normalized.eq_ignore_ascii_case("assistant_identity")
-        {
-            return Ok(ProfileDocument::AssistantIdentity);
-        }
-        if normalized.eq_ignore_ascii_case("user")
-            || normalized.eq_ignore_ascii_case("user_profile")
-        {
-            return Ok(ProfileDocument::UserProfile);
-        }
-        Err(ParseProfileDocumentError {
-            value: normalized.to_string(),
-        })
+        formatter.write_str((*self).into())
     }
 }
 
@@ -95,6 +74,14 @@ impl FromStr for ProfileDocument {
 #[error("unknown profile document '{value}'")]
 pub struct ParseProfileDocumentError {
     value: String,
+}
+
+impl ParseProfileDocumentError {
+    fn new(value: &str) -> Self {
+        Self {
+            value: value.to_string(),
+        }
+    }
 }
 
 /// Failure from a profile document operation.

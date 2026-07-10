@@ -53,8 +53,27 @@ fn invalid_utf8_is_an_error() {
 #[test]
 fn parses_document_ids() {
     assert_eq!("soul".parse(), Ok(ProfileDocument::Soul));
+    assert_eq!("SOUL".parse(), Ok(ProfileDocument::Soul));
     assert_eq!("identity".parse(), Ok(ProfileDocument::AssistantIdentity));
+    assert_eq!(
+        "assistant_identity".parse(),
+        Ok(ProfileDocument::AssistantIdentity)
+    );
+    assert_eq!("user".parse(), Ok(ProfileDocument::UserProfile));
     assert_eq!("user_profile".parse(), Ok(ProfileDocument::UserProfile));
+}
+
+#[test]
+fn document_ids_use_canonical_labels() {
+    let identity: &'static str = ProfileDocument::AssistantIdentity.into();
+    let user: &'static str = ProfileDocument::UserProfile.into();
+    assert_eq!(identity, "assistant_identity");
+    assert_eq!(user, "user_profile");
+    assert_eq!(
+        ProfileDocument::AssistantIdentity.id(),
+        "assistant_identity"
+    );
+    assert_eq!(ProfileDocument::UserProfile.to_string(), "user_profile");
 }
 
 fn store() -> ProfileStore<MemFs> {

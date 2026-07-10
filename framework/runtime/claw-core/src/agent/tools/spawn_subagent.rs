@@ -115,14 +115,12 @@ impl SyncToolHandler for SpawnSubagentTool {
             .as_deref()
             .map(str::trim)
         {
-            None | Some("") | Some("auto") => TerminationPolicy::AutoOnIdle,
-            Some("manual") => TerminationPolicy::Manual,
-            Some(other) => {
-                return Err(ToolError::InvokeRejected(format!(
-                    "spawn_subagent 'termination' must be one of auto|manual, got '{other}'"
+            None | Some("") => TerminationPolicy::AutoOnIdle,
+            Some(value) => TerminationPolicy::try_from(value).map_err(|_| {
+                ToolError::InvokeRejected(format!(
+                    "spawn_subagent 'termination' must be one of auto|manual, got '{value}'"
                 ))
-                .into())
-            }
+            })?,
         };
         let child = self
             .context

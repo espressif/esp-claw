@@ -279,6 +279,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "strum",
  "thiserror",
 ]
 
@@ -307,6 +308,7 @@ dependencies = [
  "claw-interface",
  "serde",
  "serde_json",
+ "strum",
  "thiserror",
 ]
 

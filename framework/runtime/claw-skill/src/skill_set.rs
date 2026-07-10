@@ -99,18 +99,14 @@ impl SkillSet {
             }
             push_json_field(&mut self.catalog_buffer, "file", skill.file(), true);
             self.catalog_buffer.push_str(",\"metadata\":{");
+            let manage_mode: &'static str = skill.metadata().manage_mode().into();
             push_json_array_field(
                 &mut self.catalog_buffer,
                 "cap_groups",
                 skill.metadata().cap_groups(),
                 false,
             );
-            push_json_field(
-                &mut self.catalog_buffer,
-                "manage_mode",
-                skill.metadata().manage_mode().as_str(),
-                true,
-            );
+            push_json_field(&mut self.catalog_buffer, "manage_mode", manage_mode, true);
             push_json_array_field(
                 &mut self.catalog_buffer,
                 "category",

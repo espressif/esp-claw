@@ -13,6 +13,7 @@ pub use registry::{
     CatalogSnapshot, EmptySkillRegistry, FsSkillRegistry, SkillRegistry, SkillRegistryVersion,
 };
 pub use skill::{
-    Skill, SkillDocument, SkillError, SkillFrontmatterMetadata, SkillId, SkillManageMode,
+    ParseSkillManageModeError, Skill, SkillDocument, SkillError, SkillFrontmatterMetadata, SkillId,
+    SkillManageMode,
 };
 pub use skill_set::SkillSet;

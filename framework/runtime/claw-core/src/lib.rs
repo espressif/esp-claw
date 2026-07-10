@@ -16,4 +16,5 @@ pub use orchestrator::{
     OpenSessionError, Orchestrator, OrchestratorBuildError, SessionControl, SessionControlError,
     SessionEventStream,
 };
+pub use session::{AttachmentId, AttachmentKind, AttachmentRecord, AttachmentRef, Message};
 pub use session::{SessionId, TurnId};

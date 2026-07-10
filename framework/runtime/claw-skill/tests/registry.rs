@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use claw_interface::{ClawFs, MemFs};
-use claw_skill::{FsSkillRegistry, SkillError, SkillId};
+use claw_skill::{FsSkillRegistry, SkillError, SkillId, SkillManageMode};
 
 #[test]
 fn registry_parses_master_front_matter_shape() {
@@ -61,6 +61,24 @@ fn front_matter_name_must_match_directory() {
 
     let error = registry_error();
     assert!(matches!(error, SkillError::InvalidFrontmatter(_, _)));
+}
+
+#[test]
+fn skill_manage_mode_uses_canonical_labels_and_aliases() {
+    let label: &'static str = SkillManageMode::Readonly.into();
+    assert_eq!(label, "readonly");
+    assert_eq!(
+        SkillManageMode::try_from("readonly"),
+        Ok(SkillManageMode::Readonly)
+    );
+    assert_eq!(
+        SkillManageMode::try_from("web"),
+        Ok(SkillManageMode::Readonly)
+    );
+    assert_eq!(
+        SkillManageMode::try_from("runtime"),
+        Ok(SkillManageMode::Runtime)
+    );
 }
 
 fn write_skill(id: &str, document: &str) {

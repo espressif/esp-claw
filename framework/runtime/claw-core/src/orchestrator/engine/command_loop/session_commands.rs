@@ -1,0 +1,109 @@
+use std::rc::Rc;
+
+use claw_interface::{ClawFs, ClawHttp, ClawTimer};
+
+use crate::event::EventSink;
+use crate::orchestrator::{OpenSessionError, SessionControlError};
+use crate::session::SessionId;
+
+use super::super::session_drive::{SessionDrive, SessionDriveState};
+use super::super::{DriveFuture, Engine, InstanceWork};
+
+impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
+where
+    Filesystem: ClawFs + 'static,
+    Http: ClawHttp + Default + 'static,
+    Timer: ClawTimer + Default + 'static,
+{
+    pub(in crate::orchestrator::engine::command_loop) fn open_session_stream(
+        self: &Rc<Self>,
+        session_id: SessionId,
+        events: EventSink,
+    ) -> (Result<(), OpenSessionError>, Option<DriveFuture>) {
+        if !self.sessions.contains(session_id) {
+            return (Err(OpenSessionError::SessionNotFound(session_id)), None);
+        }
+        let has_pending_input = {
+            let mut drives = self.drives.borrow_mut();
+            let drive = drives
+                .entry(session_id)
+                .or_insert_with(|| SessionDrive::new(SessionDriveState::default()));
+            if drive.events.is_some() || drive.closing {
+                return (Err(OpenSessionError::AlreadyOpen(session_id)), None);
+            }
+            drive.events = Some(events);
+            drive.closing = false;
+            drive.close_cancels = false;
+            drive.has_pending_input()
+        };
+        let should_start =
+            has_pending_input || !matches!(self.instance_work(session_id), InstanceWork::None);
+        let future = should_start
+            .then(|| self.ensure_session_drive(session_id))
+            .flatten();
+        (Ok(()), future)
+    }
+
+    pub(in crate::orchestrator::engine::command_loop) fn close_session(
+        self: &Rc<Self>,
+        session_id: SessionId,
+    ) -> (Result<(), SessionControlError>, Option<DriveFuture>) {
+        let session_span = tracing::info_span!("session", run.session = %session_id);
+        let _session_enter = session_span.enter();
+        if !self.sessions.contains(session_id) {
+            tracing::warn!(name: "close_rejected", reason = "session_closed");
+            return (Err(SessionControlError::SessionClosed(session_id)), None);
+        }
+        {
+            let drives = self.drives.borrow();
+            let Some(drive) = drives.get(&session_id) else {
+                tracing::warn!(name: "close_rejected", reason = "not_open");
+                return (Err(SessionControlError::SessionClosed(session_id)), None);
+            };
+            if drive.events.is_none() {
+                tracing::warn!(name: "close_rejected", reason = "not_open");
+                return (Err(SessionControlError::SessionClosed(session_id)), None);
+            }
+            if drive.closing {
+                tracing::info!(name: "close_requested", "");
+                return (Ok(()), None);
+            }
+            tracing::info!(name: "close_requested", "");
+        }
+        (Ok(()), self.session_shutdown(session_id))
+    }
+
+    pub(in crate::orchestrator::engine::command_loop) fn delete_session(
+        self: &Rc<Self>,
+        session_id: SessionId,
+    ) -> (Result<(), SessionControlError>, Option<DriveFuture>) {
+        let session_span = tracing::info_span!("session", run.session = %session_id);
+        let _session_enter = session_span.enter();
+        let delete_span = tracing::info_span!("session.delete", run.session = %session_id);
+        let existed = delete_span.in_scope(|| {
+            let existed = self.sessions.delete(session_id);
+            if existed {
+                tracing::info!(name: "delete_requested", "");
+                tracing::info!(name: "registry_removed", "");
+            } else {
+                tracing::warn!(name: "delete_rejected", reason = "session_closed");
+            }
+            existed
+        });
+        if !existed {
+            return (Err(SessionControlError::SessionClosed(session_id)), None);
+        }
+        {
+            let drives = self.drives.borrow();
+            if !drives.contains_key(&session_id) {
+                drop(drives);
+                self.instances.borrow_mut().remove(&session_id);
+                tracing::info_span!("session.delete", run.session = %session_id).in_scope(|| {
+                    tracing::info!(name: "runtime_state_removed", "");
+                });
+                return (Ok(()), None);
+            };
+        }
+        (Ok(()), self.session_shutdown(session_id))
+    }
+}
