@@ -115,7 +115,10 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
                     self.outcome = Some(TickOutcome::Yielded { text: answer.text });
                 }
                 CompletedKind::Tools(tools) => {
-                    self.transcript.commit_patch(&tools.appended.0);
+                    // A tool round is a non-terminal iteration: keep it in the
+                    // open turn so the whole user request stays one user-started
+                    // group, committed only by the terminal iteration.
+                    self.transcript.append_patch(&tools.appended.0);
                     self.apply_tool_block_policy(&tools.runs);
                     self.maybe_raise_approval(&tools.runs);
                 }
@@ -208,7 +211,10 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
             );
             return;
         }
-        self.transcript.commit_patch(&outcome.produced.0);
+        // Preemption ends the iteration but the turn continues in a fresh
+        // iteration, so keep the salvaged work in the open turn rather than
+        // closing it into its own user-less group.
+        self.transcript.append_patch(&outcome.produced.0);
     }
 
     fn append_task_input(&mut self, text: &str) {

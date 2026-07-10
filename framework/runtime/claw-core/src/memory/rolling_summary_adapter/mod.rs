@@ -38,6 +38,7 @@ use claw_context::{BlockKind, ContextSink};
 use claw_interface::ClawFs;
 use claw_memory::{Compactor, TranscriptStore, Turn, TurnId};
 use serde_json::Value;
+use tracing::Instrument as _;
 
 use crate::memory::summary_cursor::SummaryCursor;
 use crate::memory::traits::{ContextAdapter, ContextAdapterFuture, ContextAdapterInput};
@@ -126,12 +127,25 @@ impl<F: ClawFs + 'static> RollingSummaryContextAdapter<F> {
     /// the tick thread, so the cursor is current and the same turns are never
     /// selected twice.
     async fn maybe_schedule_compaction(&mut self) {
-        let Some((id_end, window_messages)) = self.select_window() else {
+        let Some((id_end, window_messages, estimated_tokens)) = self.select_window() else {
             return;
         };
 
-        match self.compactor.compact(&window_messages).await {
+        let span = tracing::info_span!(
+            "context.compact",
+            message_count = window_messages.len() as u64,
+            estimated_tokens = estimated_tokens as u64,
+        );
+        let result = self
+            .compactor
+            .compact(&window_messages)
+            .instrument(span.clone())
+            .await;
+        match result {
             Ok(messages) => {
+                span.in_scope(|| {
+                    tracing::info!(name: "completed", summary_count = messages.len() as u64);
+                });
                 self.cursor.advance_to(id_end);
                 self.segments.push(messages);
                 let flat: Vec<Value> = self
@@ -142,7 +156,8 @@ impl<F: ClawFs + 'static> RollingSummaryContextAdapter<F> {
                 self.cached = Arc::new(Value::Array(flat));
             }
             Err(error) => {
-                tracing::warn!(name: "rolling_summary_compaction_failed", error = %error);
+                let kind: &'static str = (&error).into();
+                span.in_scope(|| tracing::warn!(name: "failed", kind));
             }
         }
     }
@@ -155,7 +170,7 @@ impl<F: ClawFs + 'static> RollingSummaryContextAdapter<F> {
     /// keeps the newest `keep_recent_tokens` verbatim and packs the oldest of the
     /// rest into a chunk of up to `segment_token_budget` tokens. Returns the chunk
     /// plus the highest turn id it covers.
-    fn select_window(&self) -> Option<(TurnId, Vec<Value>)> {
+    fn select_window(&self) -> Option<(TurnId, Vec<Value>, usize)> {
         let turns = self.store.turns_snapshot();
         let cursor = self.cursor.covered_through();
         let uncovered: Vec<&Turn> = turns.iter().filter(|turn| turn.id.0 > cursor).collect();
@@ -191,7 +206,7 @@ impl<F: ClawFs + 'static> RollingSummaryContextAdapter<F> {
         if window_messages.is_empty() {
             return None;
         }
-        Some((id_end, window_messages))
+        Some((id_end, window_messages, tokens))
     }
 }
 

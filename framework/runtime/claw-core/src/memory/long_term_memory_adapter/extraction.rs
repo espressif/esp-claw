@@ -18,6 +18,7 @@ use claw_api::ChatError;
 use claw_memory::MemoryId;
 use core::future::Future;
 use core::pin::Pin;
+use strum::IntoStaticStr;
 
 /// One fact an [`Extractor`] distilled from a transcript.
 ///
@@ -84,12 +85,14 @@ pub enum MemoryOp {
 ///
 /// Extraction is best-effort: on error the adapter logs the reason and keeps the
 /// existing memory, but the concrete source is still preserved for diagnostics.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, IntoStaticStr, PartialEq, Eq, thiserror::Error)]
 pub enum ExtractError {
     /// The extraction backend (e.g. the LLM client) failed.
+    #[strum(serialize = "backend")]
     #[error("extraction backend failed: {0}")]
     Backend(#[from] ChatError),
     /// The extraction backend produced no usable text.
+    #[strum(serialize = "empty_output")]
     #[error("extraction backend returned empty output")]
     EmptyOutput,
 }

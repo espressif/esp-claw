@@ -243,12 +243,12 @@ fn session_transcript_history_survives_disk_rebuild_and_reenters_llm_context() {
             .any(|event| matches!(event, SessionEvent::Output { text } if text == "first persisted reply")));
         assert_disk_file_contains(
             &root,
-            "sessions/roots/conversation-1.jsonl",
+            "transcript/1.jsonl",
             "first persisted user",
         );
         assert_disk_file_contains(
             &root,
-            "sessions/roots/conversation-1.jsonl",
+            "transcript/1.jsonl",
             "first persisted reply",
         );
         session
@@ -277,8 +277,8 @@ fn session_transcript_history_survives_disk_rebuild_and_reenters_llm_context() {
     assert_contains(&requests[0], "first persisted user");
     assert_contains(&requests[0], "first persisted reply");
     assert_contains(&requests[0], "second user");
-    assert_disk_file_contains(&root, "sessions/roots/conversation-1.jsonl", "second user");
-    assert_disk_file_contains(&root, "sessions/roots/conversation-1.jsonl", "second reply");
+    assert_disk_file_contains(&root, "transcript/1.jsonl", "second user");
+    assert_disk_file_contains(&root, "transcript/1.jsonl", "second reply");
 }
 
 #[test]
@@ -288,7 +288,7 @@ fn corrupt_transcript_index_rebuilds_from_data_log_after_disk_rebuild() {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let root = TempDir::new("claw-agent-transcript-index-rebuild").unwrap();
     let root = root.path().to_string_lossy().into_owned();
-    let index_path = format!("{root}/sessions/roots/conversation-1.json");
+    let index_path = format!("{root}/transcript/1.json");
 
     let session = {
         install_recording_replies(vec![assistant_text("reply before index corruption")]);
@@ -300,7 +300,7 @@ fn corrupt_transcript_index_rebuilds_from_data_log_after_disk_rebuild() {
         assert!(events.iter().any(
             |event| matches!(event, SessionEvent::Output { text } if text == "reply before index corruption")
         ));
-        assert_disk_json_parses(&root, "sessions/roots/conversation-1.json");
+        assert_disk_json_parses(&root, "transcript/1.json");
         DiskFs::write_atomic(&index_path, b"{not valid json").unwrap();
         session
     };
@@ -328,7 +328,7 @@ fn corrupt_transcript_index_rebuilds_from_data_log_after_disk_rebuild() {
     assert_contains(&requests[0], "user before index corruption");
     assert_contains(&requests[0], "reply before index corruption");
     assert_contains(&requests[0], "user after index corruption");
-    assert_disk_json_parses(&root, "sessions/roots/conversation-1.json");
+    assert_disk_json_parses(&root, "transcript/1.json");
 }
 
 #[test]
@@ -395,7 +395,7 @@ fn pending_input_checkpoint_replays_after_disk_rebuild() {
         .iter()
         .any(|event| matches!(event, SessionEvent::Output { text } if text == "recovered")));
     assert_eq!(session_drive_pending_text::<DiskFs>(&root, session), None);
-    assert_disk_file_contains(&root, "sessions/roots/conversation-1.jsonl", "recover me");
+    assert_disk_file_contains(&root, "transcript/1.jsonl", "recover me");
 }
 
 struct CheckpointEchoTool;

@@ -16,6 +16,7 @@ use serde_json::Value;
 use std::error::Error;
 use std::future::Future;
 use std::pin::Pin;
+use strum::IntoStaticStr;
 
 /// Future returned by [`Compactor::compact`].
 pub type CompactFuture<'a> = Pin<Box<dyn Future<Output = Result<Vec<Value>, CompactError>> + 'a>>;
@@ -25,12 +26,14 @@ pub type CompactFuture<'a> = Pin<Box<dyn Future<Output = Result<Vec<Value>, Comp
 /// Compaction is best-effort: on error the tape keeps the un-compacted groups
 /// and tries again later, but concrete backend failures still keep their source
 /// chain for diagnostics.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, IntoStaticStr, thiserror::Error)]
 pub enum CompactError {
     /// The summarization backend (e.g. the LLM client) failed.
+    #[strum(serialize = "backend")]
     #[error("compaction backend failed")]
     Backend(#[from] CompactBackendError),
     /// The backend returned no summary text.
+    #[strum(serialize = "empty_summary")]
     #[error("compaction backend returned an empty summary")]
     EmptySummary,
 }
@@ -113,5 +116,22 @@ pub struct NoopCompactor;
 impl Compactor for NoopCompactor {
     fn compact<'a>(&'a self, _window: &'a [Value]) -> CompactFuture<'a> {
         Box::pin(async { Ok(Vec::new()) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CompactBackendError, CompactError};
+
+    #[test]
+    fn compact_error_converts_variants_to_stable_trace_kinds() {
+        let backend = CompactError::Backend(CompactBackendError::new(std::fmt::Error));
+        let empty_summary = CompactError::EmptySummary;
+
+        let backend_kind: &'static str = (&backend).into();
+        let empty_summary_kind: &'static str = (&empty_summary).into();
+
+        assert_eq!(backend_kind, "backend");
+        assert_eq!(empty_summary_kind, "empty_summary");
     }
 }

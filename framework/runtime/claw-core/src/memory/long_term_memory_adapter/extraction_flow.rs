@@ -1,6 +1,7 @@
 use claw_interface::ClawFs;
 use claw_memory::{MemoryDraft, MemoryPatch};
 use serde_json::Value;
+use tracing::Instrument as _;
 
 use crate::memory::traits::History;
 
@@ -32,20 +33,53 @@ impl<F: ClawFs + 'static> LongTermMemoryContextAdapter<F> {
         if transcript.trim().is_empty() {
             return;
         }
+        let version_delta = version.saturating_sub(self.extract_cursor);
         self.extract_cursor = version;
         let existing = self.stores.snapshot();
         let input = ExtractionInput {
             transcript: &transcript,
             existing: &existing,
         };
-        match self.extractor.extract(input).await {
+        let span = tracing::info_span!(
+            "context.extract",
+            transcript_version = version,
+            version_delta,
+            transcript_bytes = transcript.len() as u64,
+            existing_count = existing.len() as u64,
+        );
+        let result = self.extractor.extract(input).instrument(span.clone()).await;
+        match result {
             Ok(ops) => {
+                let mut add_count = 0u64;
+                let mut replace_count = 0u64;
+                let mut forget_count = 0u64;
+                for op in &ops {
+                    match op {
+                        MemoryOp::Add(_) => add_count = add_count.saturating_add(1),
+                        MemoryOp::Replace { .. } => {
+                            replace_count = replace_count.saturating_add(1);
+                        }
+                        MemoryOp::Forget { .. } => {
+                            forget_count = forget_count.saturating_add(1);
+                        }
+                    }
+                }
+                span.in_scope(|| {
+                    tracing::info!(
+                        name: "completed",
+                        operation_count = ops.len() as u64,
+                        add_count,
+                        replace_count,
+                        forget_count,
+                    );
+                });
                 for op in ops {
                     self.apply_op(op);
                 }
             }
             Err(error) => {
-                tracing::warn!(name: "memory_extraction_failed", error = %error);
+                let kind: &'static str = (&error).into();
+                span.in_scope(|| tracing::warn!(name: "failed", kind));
             }
         }
     }

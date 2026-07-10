@@ -8,6 +8,7 @@ use core::sync::atomic::AtomicBool;
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use tracing::Instrument as _;
 
 use claw_interface::http::blocking::ClawHttp as BlockingClawHttp;
 use claw_interface::{Cancel, ClawHttp, ClawTimer};
@@ -109,6 +110,14 @@ fn parse_chat_json_response<T: DeserializeOwned>(
         reasoning_content: response.reasoning_content,
         raw_message_json: response.raw_message_json,
     })
+}
+
+/// Stable, shape-only trace classification; never expose an error's payload.
+fn chat_error_kind(error: &ChatError) -> &'static str {
+    match error {
+        ChatError::Api(error) => error.into(),
+        other => other.into(),
+    }
 }
 
 impl<H: BlockingClawHttp> ClawApi<H> {
@@ -367,22 +376,73 @@ impl<H: ClawHttp, Timer: ClawTimer> ClawApiAsync<H, Timer> {
         cancel: Cancel<'_>,
     ) -> Result<LlmResponse, ChatError> {
         let policy = request.retry;
-        let mut attempt = 0u32;
+        let max_attempts = u64::from(policy.max_retries).saturating_add(1);
+        let mut retry_attempt = 0u32;
         loop {
-            match self
-                .backend
-                .chat_async(&mut self.http, request, cancel)
-                .await
-            {
+            let attempt = u64::from(retry_attempt).saturating_add(1);
+            let result = async {
+                let result = self
+                    .backend
+                    .chat_async(&mut self.http, request, cancel)
+                    .await;
+                match &result {
+                    Ok(_) => tracing::info!(name: "completed", ""),
+                    Err(error) => {
+                        let kind = chat_error_kind(error);
+                        let retryable = error.is_retryable();
+                        let final_attempt = !retryable || retry_attempt >= policy.max_retries;
+                        if final_attempt {
+                            tracing::error!(
+                                name: "failed",
+                                kind,
+                                retryable,
+                                final = true
+                            );
+                        } else {
+                            tracing::warn!(
+                                name: "failed",
+                                kind,
+                                retryable,
+                                final = false
+                            );
+                        }
+                    }
+                }
+                result
+            }
+            .instrument(tracing::info_span!("api.attempt", attempt, max_attempts))
+            .await;
+
+            match result {
                 Ok(response) => return Ok(response),
                 Err(error) => {
-                    if !error.is_retryable() || attempt >= policy.max_retries {
+                    if !error.is_retryable() || retry_attempt >= policy.max_retries {
                         return Err(error);
                     }
-                    attempt = attempt.saturating_add(1);
-                    if !sleep_abortable_async(policy.backoff_ms(attempt), &mut self.timer, cancel)
-                        .await
-                    {
+                    let error_kind = chat_error_kind(&error);
+                    let failed_attempt = attempt;
+                    retry_attempt = retry_attempt.saturating_add(1);
+                    let next_attempt = u64::from(retry_attempt).saturating_add(1);
+                    let backoff_ms = policy.backoff_ms(retry_attempt);
+                    let completed = async {
+                        let completed =
+                            sleep_abortable_async(backoff_ms, &mut self.timer, cancel).await;
+                        if completed {
+                            tracing::info!(name: "completed", "");
+                        } else {
+                            tracing::warn!(name: "cancelled", "");
+                        }
+                        completed
+                    }
+                    .instrument(tracing::info_span!(
+                        "api.retry",
+                        failed_attempt,
+                        next_attempt,
+                        backoff_ms,
+                        error_kind
+                    ))
+                    .await;
+                    if !completed {
                         return Err(ChatError::Api(ClawApiError::Transport(
                             ABORTED_DURING_BACKOFF.to_string(),
                         )));

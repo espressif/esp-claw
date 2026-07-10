@@ -12,8 +12,10 @@ use claw_interface::{
     Cancel, ClawHttp, ClawTimer, HttpError, HttpJsonRequest, HttpRequestFailure, HttpResponse,
     HttpResponseFuture, HttpStatusCode, ImmediateTimer, SleepOutcome, TimerFuture,
 };
+use claw_log::{FlatTreeSubscriber, TraceSink};
 use futures_lite::future::block_on;
 use serde_json::{json, Value};
+use tracing::Level;
 
 #[derive(Debug)]
 struct TestFailure(String);
@@ -60,6 +62,32 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[derive(Clone, Default)]
+struct RecordingTraceSink(Arc<Mutex<Vec<(Level, String)>>>);
+
+impl RecordingTraceSink {
+    fn records(&self) -> Vec<(Level, String)> {
+        lock(&self.0).clone()
+    }
+}
+
+impl TraceSink for RecordingTraceSink {
+    fn write_line(&self, level: Level, _tag: &str, line: &str) {
+        lock(&self.0).push((level, line.to_string()));
+    }
+}
+
+fn trace_token<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    line.split(' ').find_map(|raw| {
+        let token = raw.trim_matches(|ch| ch == '<' || ch == '>');
+        token.strip_prefix(key)?.strip_prefix('=')
+    })
+}
+
+fn trace_line_type(line: &str) -> Option<&str> {
+    line.split(' ').nth(2)
 }
 
 struct MockHttp {
@@ -605,6 +633,15 @@ impl ClawTimer for RecordingTimer {
     }
 }
 
+#[derive(Default)]
+struct CancelledTimer;
+
+impl ClawTimer for CancelledTimer {
+    fn sleep<'a>(&'a mut self, _duration: Duration, _cancel: Cancel<'a>) -> TimerFuture<'a> {
+        Box::pin(async { SleepOutcome::Cancelled })
+    }
+}
+
 fn transport_error(message: &str) -> HttpError {
     HttpError::RequestFailed(HttpRequestFailure::transport(message))
 }
@@ -697,6 +734,228 @@ fn async_retry_uses_timer_backoff() {
         lock(&sleeps).as_slice(),
         &[Duration::from_millis(250), Duration::from_millis(250)]
     );
+}
+
+#[test]
+fn async_chat_traces_attempts_and_retries_without_payloads() {
+    const SECRET_ERROR: &str = "secret transport detail";
+    const SECRET_PROMPT: &str = "secret user prompt";
+    const SECRET_RESPONSE: &str = "secret model response";
+    const SECRET_URL: &str = "https://secret.example.com/private";
+
+    let http = FlakyHttp::new(
+        2,
+        transport_error(SECRET_ERROR),
+        r#"{"choices":[{"message":{"role":"assistant","content":"secret model response"}}]}"#,
+    );
+    install_flaky_http(Arc::clone(&http));
+    let _sleeps = install_recording_timer();
+    let mut rt =
+        ClawApiAsync::<Owned<FlakyHttp>, RecordingTimer>::init_default(ClawApiConfig::new(
+            BackendKind::OpenAiCompatible,
+            "secret api key",
+            "secret model",
+            SECRET_URL,
+        ))
+        .unwrap();
+    let messages = json!([{"role": "user", "content": SECRET_PROMPT}]);
+    let request =
+        ChatRequest::new("secret system prompt", &messages).with_retry(RetryPolicy::fixed(3, 250));
+    let abort = AtomicBool::new(false);
+    let sink = RecordingTraceSink::default();
+
+    let response =
+        tracing::subscriber::with_default(FlatTreeSubscriber::with_sink(sink.clone()), || {
+            block_on(rt.chat(&request, Cancel::new(&abort)))
+        })
+        .unwrap();
+
+    assert_eq!(response.text.as_deref(), Some(SECRET_RESPONSE));
+    let records = sink.records();
+    let attempts: Vec<&str> = records
+        .iter()
+        .map(|(_, line)| line.as_str())
+        .filter(|line| {
+            trace_line_type(line) == Some("enter")
+                && trace_token(line, "span-name") == Some("api.attempt")
+        })
+        .collect();
+    assert_eq!(attempts.len(), 3);
+    for (index, attempt) in attempts.iter().enumerate() {
+        assert_eq!(
+            trace_token(attempt, "attempt").and_then(|value| value.parse::<usize>().ok()),
+            Some(index + 1)
+        );
+        assert_eq!(trace_token(attempt, "max_attempts"), Some("4"));
+    }
+
+    let retries: Vec<&str> = records
+        .iter()
+        .map(|(_, line)| line.as_str())
+        .filter(|line| {
+            trace_line_type(line) == Some("enter")
+                && trace_token(line, "span-name") == Some("api.retry")
+        })
+        .collect();
+    assert_eq!(retries.len(), 2);
+    for (index, retry) in retries.iter().enumerate() {
+        assert_eq!(
+            trace_token(retry, "failed_attempt").and_then(|value| value.parse::<usize>().ok()),
+            Some(index + 1)
+        );
+        assert_eq!(
+            trace_token(retry, "next_attempt").and_then(|value| value.parse::<usize>().ok()),
+            Some(index + 2)
+        );
+        assert_eq!(trace_token(retry, "backoff_ms"), Some("250"));
+        assert_eq!(
+            trace_token(retry, "error_kind"),
+            Some("transient_transport")
+        );
+    }
+
+    for attempt in attempts.iter().take(2) {
+        let span = trace_token(attempt, "span").expect("attempt span id");
+        let (level, failed) = records
+            .iter()
+            .find(|(_, line)| {
+                trace_line_type(line) == Some("event")
+                    && trace_token(line, "span") == Some(span)
+                    && trace_token(line, "event-name") == Some("failed")
+            })
+            .expect("failed attempt event");
+        assert_eq!(*level, Level::WARN);
+        assert_eq!(trace_token(failed, "kind"), Some("transient_transport"));
+        assert_eq!(trace_token(failed, "retryable"), Some("true"));
+        assert_eq!(trace_token(failed, "final"), Some("false"));
+    }
+
+    for retry in &retries {
+        let span = trace_token(retry, "span").expect("retry span id");
+        assert!(records.iter().any(|(level, line)| {
+            *level == Level::INFO
+                && trace_line_type(line) == Some("event")
+                && trace_token(line, "span") == Some(span)
+                && trace_token(line, "event-name") == Some("completed")
+        }));
+    }
+
+    let final_attempt_span = attempts
+        .last()
+        .and_then(|attempt| trace_token(attempt, "span"))
+        .expect("final attempt span id");
+    assert!(records.iter().any(|(level, line)| {
+        *level == Level::INFO
+            && trace_line_type(line) == Some("event")
+            && trace_token(line, "span") == Some(final_attempt_span)
+            && trace_token(line, "event-name") == Some("completed")
+    }));
+
+    let trace = records
+        .iter()
+        .map(|(_, line)| line.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    for secret in [
+        SECRET_ERROR,
+        SECRET_PROMPT,
+        SECRET_RESPONSE,
+        SECRET_URL,
+        "secret api key",
+        "secret model",
+        "secret system prompt",
+    ] {
+        assert!(!trace.contains(secret), "trace leaked `{secret}`: {trace}");
+    }
+}
+
+#[test]
+fn async_chat_traces_final_nonretryable_failure() {
+    let http = FlakyHttp::new(
+        9,
+        unexpected_status(401, "secret authorization failure"),
+        "{}",
+    );
+    install_flaky_http(Arc::clone(&http));
+    let _sleeps = install_recording_timer();
+    let mut rt = ClawApiAsync::<Owned<FlakyHttp>, RecordingTimer>::init_default(cfg(
+        BackendKind::OpenAiCompatible,
+        "https://api.example.com",
+    ))
+    .unwrap();
+    let messages = json!([{"role": "user", "content": "hi"}]);
+    let request = ChatRequest::new("s", &messages).with_retry(RetryPolicy::fixed(5, 250));
+    let abort = AtomicBool::new(false);
+    let sink = RecordingTraceSink::default();
+
+    let error =
+        tracing::subscriber::with_default(FlatTreeSubscriber::with_sink(sink.clone()), || {
+            block_on(rt.chat(&request, Cancel::new(&abort)))
+        })
+        .unwrap_err();
+
+    assert!(matches!(error, ChatError::Api(ClawApiError::Transport(_))));
+    let records = sink.records();
+    let attempt = records
+        .iter()
+        .map(|(_, line)| line)
+        .find(|line| trace_token(line, "span-name") == Some("api.attempt"))
+        .expect("attempt span");
+    assert_eq!(trace_token(attempt, "attempt"), Some("1"));
+    assert_eq!(trace_token(attempt, "max_attempts"), Some("6"));
+    let attempt_span = trace_token(attempt, "span").expect("attempt span id");
+    let (level, failed) = records
+        .iter()
+        .find(|(_, line)| {
+            trace_line_type(line) == Some("event")
+                && trace_token(line, "span") == Some(attempt_span)
+                && trace_token(line, "event-name") == Some("failed")
+        })
+        .expect("failed event");
+    assert_eq!(*level, Level::ERROR);
+    assert_eq!(trace_token(failed, "kind"), Some("transport"));
+    assert_eq!(trace_token(failed, "retryable"), Some("false"));
+    assert_eq!(trace_token(failed, "final"), Some("true"));
+    assert!(!records
+        .iter()
+        .any(|(_, line)| trace_token(line, "span-name") == Some("api.retry")));
+}
+
+#[test]
+fn async_chat_traces_cancelled_retry_backoff() {
+    let http = FlakyHttp::new(9, transport_error("temporary failure"), "{}");
+    install_flaky_http(Arc::clone(&http));
+    let mut rt = ClawApiAsync::<Owned<FlakyHttp>, CancelledTimer>::init_default(cfg(
+        BackendKind::OpenAiCompatible,
+        "https://api.example.com",
+    ))
+    .unwrap();
+    let messages = json!([{"role": "user", "content": "hi"}]);
+    let request = ChatRequest::new("s", &messages).with_retry(RetryPolicy::fixed(3, 250));
+    let abort = AtomicBool::new(false);
+    let sink = RecordingTraceSink::default();
+
+    let error =
+        tracing::subscriber::with_default(FlatTreeSubscriber::with_sink(sink.clone()), || {
+            block_on(rt.chat(&request, Cancel::new(&abort)))
+        })
+        .unwrap_err();
+
+    assert!(error.is_aborted());
+    assert_eq!(*lock(&http.calls), 1);
+    let records = sink.records();
+    let retry = records
+        .iter()
+        .map(|(_, line)| line)
+        .find(|line| trace_token(line, "span-name") == Some("api.retry"))
+        .expect("retry span");
+    let retry_span = trace_token(retry, "span").expect("retry span id");
+    assert!(records.iter().any(|(level, line)| {
+        *level == Level::WARN
+            && trace_line_type(line) == Some("event")
+            && trace_token(line, "span") == Some(retry_span)
+            && trace_token(line, "event-name") == Some("cancelled")
+    }));
 }
 
 #[test]

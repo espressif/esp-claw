@@ -9,32 +9,39 @@
 //! All variants carry only `&'static str` (or, for the genuinely dynamic HTTP
 //! transport message, an owned `String`); `Display` text comes from `thiserror`.
 
+use strum::IntoStaticStr;
 use thiserror::Error;
 
 /// Failures shared by chat and media calls (transport, response parsing,
 /// allocation). `ApiError` is the static-message catch-all.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, IntoStaticStr, PartialEq, Eq, Error)]
 pub enum ClawApiError {
     /// Permanent transport failure (aborts, bad URL/body, 4xx, ...). Carries the
     /// backend/transport detail (e.g. `"HTTP 401: invalid api key"`), which is
     /// inherently dynamic. Never retried.
+    #[strum(serialize = "transport")]
     #[error("HTTP transport error: {0}")]
     Transport(String),
     /// Transient transport failure (network error, HTTP 408/429/5xx) eligible
     /// for retry by the [`crate::ClawApi`] retry loop.
+    #[strum(serialize = "transient_transport")]
     #[error("transient HTTP transport error: {0}")]
     TransientTransport(String),
     /// The response body was not valid JSON.
+    #[strum(serialize = "parse")]
     #[error("failed to parse LLM JSON response")]
     Parse,
     /// The model returned no usable content.
+    #[strum(serialize = "empty_response")]
     #[error("LLM returned an empty response")]
     EmptyResponse,
     /// The response JSON had an unexpected shape (missing/!assistant message,
     /// missing content, malformed tool call).
+    #[strum(serialize = "malformed_response")]
     #[error("malformed LLM response: {0}")]
     MalformedResponse(&'static str),
     /// Any other API-side failure (allocation, serialization, ...).
+    #[strum(serialize = "api")]
     #[error("{0}")]
     ApiError(&'static str),
 }
@@ -110,12 +117,14 @@ impl ChatJsonError {
 ///     }
 /// }
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, IntoStaticStr, PartialEq, Eq, Error)]
 pub enum ChatError {
     /// The caller-supplied tools JSON was invalid.
+    #[strum(serialize = "invalid_tools_json")]
     #[error("invalid tools JSON")]
     InvalidToolsJson,
     /// A shared API/transport/parse failure.
+    #[strum(serialize = "api")]
     #[error(transparent)]
     Api(#[from] ClawApiError),
 }

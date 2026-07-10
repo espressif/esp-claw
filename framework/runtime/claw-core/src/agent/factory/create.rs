@@ -78,18 +78,24 @@ impl<
             }
         }
 
-        let (subdir, conversation_id) = placement.location();
-        let transcript_dir = join_storage_path(&self.transcript_dir, subdir);
-        let store = match TranscriptStore::<Filesystem>::new(conversation_id, &transcript_dir) {
-            Ok(store) => store,
-            Err(error) => {
-                tracing::error!(
-                    name: "transcript_open_failed",
-                    agent = %id,
-                    kind = %kind.as_str(),
-                );
-                return Err(FsAgentCreateError::Transcript(error));
+        // Every agent gets a transcript for context management; `persists` only
+        // decides whether it is written to disk. Roots persist under
+        // `transcript/<session id>.jsonl`; subagents stay in memory.
+        let transcript_id = placement.transcript_id();
+        let store = if placement.persists() {
+            match TranscriptStore::<Filesystem>::new(transcript_id, &self.transcript_dir) {
+                Ok(store) => store,
+                Err(error) => {
+                    tracing::error!(
+                        name: "transcript_open_failed",
+                        agent = %id,
+                        kind = %kind.as_str(),
+                    );
+                    return Err(FsAgentCreateError::Transcript(error));
+                }
             }
+        } else {
+            TranscriptStore::<Filesystem>::in_memory(transcript_id)
         };
         // The LLM client (and its transport) is built inside the agent from this
         // shared config plus the factory's transport type; nothing is minted here.

@@ -76,6 +76,7 @@ anstyle = { version = "1", optional = true }
 
 [dev-dependencies]
 claw-context = { path = "../claw-context" }
+claw-log = { path = "../claw-log" }
 # In-memory fs + scripted HTTP doubles so the end-to-end tests run hermetically
 # (no network, no API key) entirely through the public API; `stdthread` is the
 # host-target executor backend used by agent tests.
@@ -87,6 +88,7 @@ claw-interface = { path = "../claw-interface", features = [
 ] }
 claw-utils = { path = "../claw-utils" }
 serde_json = "1"
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 # `block_on` for tests (smol family; replaces the removed local spin executor).
 futures-lite = "2"
 tempdir = "0.3"

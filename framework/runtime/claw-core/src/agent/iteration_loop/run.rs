@@ -66,7 +66,14 @@ async fn run_one_iteration<H: ClawHttp, Timer: ClawTimer>(
         retry: loop_.retry,
     };
     let cancel = Cancel::new(loop_.interruption.interrupt_flag().as_ref());
-    let llm_response = match loop_.llm.chat(&chat_request, cancel).await {
+    let max_attempts = u64::from(chat_request.retry.max_retries).saturating_add(1);
+    let chat_span = tracing::info_span!("api.chat", purpose = "iteration", max_attempts);
+    let llm_response = match loop_
+        .llm
+        .chat(&chat_request, cancel)
+        .instrument(chat_span)
+        .await
+    {
         Ok(resp) => resp,
         Err(llm_err) => {
             if take_interrupt(loop_.interruption) || llm_err.is_aborted() {

@@ -3,7 +3,8 @@
 This document defines the `claw-core` trace vocabulary on top of
 `claw-log`'s flat-tree trace format. `claw-log` owns the line grammar
 (`tracing-context`, `incremental-context`, and `custom-context`); this file owns
-the `claw-core` span names, event names, incremental `run.*` keys, and custom
+the first-party runtime span names and event names emitted by `claw-core` and
+its `claw-api` LLM request path, plus incremental `run.*` keys and custom
 context fields.
 
 Trace user data by shape, not by payload. Do not emit raw user text, captions,
@@ -13,7 +14,7 @@ messages and attachments, prefer fields such as `has_text`, `text_bytes`,
 
 ## Levels
 
-`claw-core` trace vocabulary uses only `info`, `warn`, and `error`.
+The runtime trace vocabulary uses only `info`, `warn`, and `error`.
 
 `info`: Expected lifecycle, progress, and successful state transitions.
 `warn`: A request was rejected, optional capability degraded, work was cancelled
@@ -213,7 +214,147 @@ span-name: `agent`
 `tool_gate_blocked`: `count`.
 `preempt_patch_dropped`: `tool_call_count`.
 
-## Iteration
+## Iteration Preparation
+
+### Tracing Context
+
+span-name: `iteration.prepare`
+
+### Incremental Context
+
+`run.iteration`: Iteration id being prepared. This is the same id later opened
+by the sibling `iteration_loop` span.
+
+### Span Fields
+
+`adapter_count`: Number of context adapters prepared and rendered for the request.
+
+This span brackets all work that must complete before `iteration_loop` starts,
+including async context adapters, tool-policy projection, and request-context
+rendering.
+
+## Context Compaction
+
+### Tracing Context
+
+span-name: `context.compact`
+
+The span is emitted only when the rolling-summary policy selected a window to
+compact. It is a child of `iteration.prepare`.
+
+### Span Fields
+
+`message_count`: Number of history messages passed to the compactor.
+`estimated_tokens`: Heuristic token count for the selected window.
+
+### Events
+
+`completed`: The compactor produced a summary segment.
+`failed`: Compaction failed without failing the user-facing iteration.
+
+### Event Fields
+
+`completed`: `summary_count`.
+`failed`: `kind` (`backend` or `empty_summary`).
+
+## Context Extraction
+
+### Tracing Context
+
+span-name: `context.extract`
+
+The span is emitted only when the long-term-memory extraction throttle fires.
+It is a child of `iteration.prepare`.
+
+### Span Fields
+
+`transcript_version`: Transcript version selected for extraction.
+`version_delta`: Change since the previous extraction cursor.
+`transcript_bytes`: Byte length of the flattened transcript; never its text.
+`existing_count`: Number of existing memory items supplied for reconciliation.
+
+### Events
+
+`completed`: Extraction returned zero or more memory operations.
+`failed`: Extraction failed without failing the user-facing iteration.
+
+### Event Fields
+
+`completed`: `operation_count`, `add_count`, `replace_count`, `forget_count`.
+`failed`: `kind` (`backend` or `empty_output`).
+
+## Context Render
+
+### Tracing Context
+
+span-name: `context.render`
+
+This synchronous child of `iteration.prepare` covers adapter contribution,
+context cache updates, and construction of the model-facing request view.
+
+### Span Fields
+
+`adapter_count`: Number of context adapters rendered into the request.
+
+## LLM Chat
+
+### Tracing Context
+
+span-name: `api.chat`
+
+### Span Fields
+
+`purpose`: One of `iteration`, `conversation_compaction`, or
+`memory_extraction`. The auxiliary purposes include any wait to lease their
+shared LLM client.
+`max_attempts`: Maximum HTTP attempts permitted by the request retry policy,
+including the initial attempt.
+
+## LLM Attempt
+
+### Tracing Context
+
+span-name: `api.attempt`
+
+### Span Fields
+
+`attempt`: One-based HTTP attempt number.
+`max_attempts`: Maximum attempts permitted for this chat request.
+
+### Events
+
+`completed`: The attempt produced a valid LLM response.
+`failed`: The attempt failed.
+
+### Event Fields
+
+`failed`: `kind`, `retryable`, `final`.
+
+`kind` is a stable shape-only classification: `invalid_tools_json`,
+`transport`, `transient_transport`, `parse`, `empty_response`,
+`malformed_response`, or `api`. Dynamic transport error text is never traced.
+
+## LLM Retry
+
+### Tracing Context
+
+span-name: `api.retry`
+
+This span covers the actual retry backoff between two `api.attempt` spans.
+
+### Span Fields
+
+`failed_attempt`: Attempt that caused the retry.
+`next_attempt`: Attempt that follows the backoff.
+`backoff_ms`: Requested retry delay in milliseconds.
+`error_kind`: Stable error classification from the failed attempt.
+
+### Events
+
+`completed`: Backoff elapsed and the next attempt may start.
+`cancelled`: Cancellation interrupted the backoff.
+
+## Iteration Loop
 
 ### Tracing Context
 

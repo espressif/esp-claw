@@ -2,6 +2,7 @@ use claw_context::{Block, BlockKind, Context};
 use claw_interface::{ClawHttp, ClawTimer};
 use claw_tool::ToolGate;
 use serde_json::Value;
+use tracing::Instrument as _;
 
 use crate::event::EventSink;
 use crate::memory::{ContextAdapter, ContextAdapterInput};
@@ -90,14 +91,32 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         iteration_id: IterationId,
         events: &EventSink,
     ) -> IterationResult {
-        let tools = self.tools.begin()?;
+        // Context adapters may perform auxiliary LLM work (conversation
+        // compaction and long-term-memory extraction). Keep that work in a
+        // distinct bracket so it cannot disappear into the parent `agent` span
+        // before the user-facing iteration begins.
+        let adapter_count = self.adapters.len() as u64;
+        let prepare_span = tracing::info_span!(
+            "iteration.prepare",
+            run.iteration = %iteration_id,
+            adapter_count,
+        );
+        let tools = prepare_span.in_scope(|| self.tools.begin())?;
         let history_view = self.transcript.as_history();
-        Self::prepare_adapter_context(&mut self.adapters, history_view).await;
-        self.context
-            .with(Block::new(BlockKind::ToolPolicy, tools.tool_context()))
-            .with_reminder(BlockKind::ToolReminder, Some(tools.extra_tool_context()));
-        let history =
-            Self::render_adapter_context(&mut self.adapters, history_view, &mut self.context);
+        Self::prepare_adapter_context(&mut self.adapters, history_view)
+            .instrument(prepare_span.clone())
+            .await;
+        prepare_span.in_scope(|| {
+            self.context
+                .with(Block::new(BlockKind::ToolPolicy, tools.tool_context()))
+                .with_reminder(BlockKind::ToolReminder, Some(tools.extra_tool_context()));
+        });
+
+        let render_span =
+            prepare_span.in_scope(|| tracing::info_span!("context.render", adapter_count));
+        let history = render_span.in_scope(|| {
+            Self::render_adapter_context(&mut self.adapters, history_view, &mut self.context)
+        });
         let iteration_loop = IterationLoop {
             llm: &mut self.llm,
             interruption: &self.interruption,
@@ -110,7 +129,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
             grants: &state.permission_grants,
         };
         let gate = &permission_gate as &dyn ToolGate;
-        let context = self.context.request(&history);
+        let context = render_span.in_scope(|| self.context.request(&history));
         let step = IterationStep {
             iteration_id,
             system_prompt: SystemPrompt(context.system()),
@@ -119,6 +138,8 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
             tools: &tools,
             gate,
         };
+        drop(render_span);
+        drop(prepare_span);
         iteration_loop.run(step).await
     }
 }

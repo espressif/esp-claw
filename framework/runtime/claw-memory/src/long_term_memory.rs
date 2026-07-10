@@ -1,8 +1,8 @@
 //! Long-term memory: a small, durable, label-indexed store of distilled facts.
 //!
-//! Where [`crate::conversation_memory`] holds the *recent transcript* and ages it
+//! Where [`crate::transcript_store`] holds the *recent transcript* and ages it
 //! out through compaction, long-term memory holds the handful of *distilled
-//! facts* that should outlive any one conversation — the user's name, a standing
+//! facts* that should outlive any one transcript — the user's name, a standing
 //! preference, an identity note. It is deliberately tiny (tens of items, not
 //! thousands) and addressed by **labels** (free-form tags): the agent recalls
 //! "everything tagged `preference`" rather than scanning a vector index.

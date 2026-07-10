@@ -155,6 +155,7 @@ dependencies = [
  "tempdir",
  "thiserror",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -164,11 +165,14 @@ dependencies = [
  "anyhow",
  "base64",
  "claw-interface",
+ "claw-log",
  "futures-lite 2.6.1",
  "serde",
  "serde_json",
+ "strum",
  "tempdir",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]

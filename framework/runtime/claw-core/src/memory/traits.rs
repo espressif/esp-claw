@@ -82,6 +82,17 @@ pub trait Transcript: History {
     /// open turn.
     fn commit_patch(&self, patch: &Value);
 
+    /// Append a materialized assistant+tool patch (a JSON array) into the open
+    /// turn **without** closing it.
+    ///
+    /// A single user request can span several iterations (each tool round is its
+    /// own iteration). Those intermediate rounds append here so the whole request
+    /// stays one user-started turn; only the terminal iteration
+    /// ([`commit_assistant`](Self::commit_assistant) /
+    /// [`commit_ended`](Self::commit_ended)) — or the next task's
+    /// [`append_user`](Self::append_user) — closes the turn.
+    fn append_patch(&self, patch: &Value);
+
     /// Commit the agent's closing message (from `end_conversation`).
     fn commit_ended(&self, final_message: &str);
 
@@ -129,6 +140,10 @@ impl<F: ClawFs + 'static> Transcript for TranscriptStore<F> {
     fn commit_patch(&self, patch: &Value) {
         self.push_patch(patch);
         self.commit_open_turn();
+    }
+
+    fn append_patch(&self, patch: &Value) {
+        self.push_patch(patch);
     }
 
     fn commit_ended(&self, final_message: &str) {

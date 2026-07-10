@@ -16,9 +16,10 @@ use std::path::Path;
 use anstyle::{AnsiColor, Style};
 use anyhow::{bail, Result};
 use claw_agent::{
-    AgentPersistenceConfig, AgentSystem, SessionControl, SessionEvent, SessionEventStream,
+    AgentPersistenceConfig, HostAgentSystem, SessionControl, SessionEvent, SessionEventStream,
 };
 use claw_api::{BackendKind, ClawApiConfig};
+use claw_interface::{StdThread, TokioExecutor};
 use claw_log::{LevelFilter, LogOutput, TracingConfig};
 use futures_lite::StreamExt;
 
@@ -110,12 +111,12 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
-    claw_log::init_logger(LevelFilter::Info, LogOutput::Stderr)?;
+    claw_log::init_logger(LevelFilter::Info, LogOutput::File(Path::new(env!("CARGO_MANIFEST_DIR")).join("../claw-agent/simulator.log")))?;
     claw_log::init_tracing(
         TracingConfig::default()
             .with_context_group_keys("run", ["session", "turn", "agent", "iteration"]),
     )?;
-    let env_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../claw-core/.env.local");
+    let env_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../claw-agent/.env.local");
     if env_path.is_file() {
         if let Err(error) = dotenvy::from_path(&env_path) {
             eprintln!("warning: failed to load {}: {error}", env_path.display());
@@ -133,7 +134,7 @@ async fn run() -> Result<()> {
         required("CLAW_LLM_BASE_URL")?,
     );
     llm_config.timeout_ms = 60_000;
-    let system = AgentSystem::on_disk(llm_config, persistence)?;
+    let system = HostAgentSystem::new::<StdThread, TokioExecutor>(llm_config, persistence)?;
     system.start_all()?;
     let session = system.new_session();
     let (control, events) = system.open_session(session)?;

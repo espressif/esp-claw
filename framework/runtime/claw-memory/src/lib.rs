@@ -2,8 +2,8 @@
 //!
 //! Two stores live here, both pure storage:
 //!
-//! - [`TranscriptStore`] — the complete, append-only verbatim conversation
-//!   record (the source of truth for what was said).
+//! - [`TranscriptStore`] — the complete, append-only verbatim transcript
+//!   (the source of truth for what was said).
 //! - [`ProfileStore`] — the editable global profile documents (`soul.md`,
 //!   `identity.md`, `user.md`).
 //! - [`LongTermMemory`] — the durable fact store.
@@ -14,7 +14,7 @@
 //!
 //! # Compaction is *not* here
 //!
-//! Folding an aged conversation prefix into a summary so it fits the model's
+//! Folding an aged transcript prefix into a summary so it fits the model's
 //! context window is a property of the **LLM request**, not of the stored record.
 //! The [`TranscriptStore`] therefore never summarizes or deletes turns; it just
 //! stores them. This crate only defines the [`Compactor`] *seam* — the
@@ -34,10 +34,10 @@
 //! // type parameter `F`.
 //! MemFs::new();
 //!
-//! // Build the store for one conversation id. Typically one per agent instance.
-//! let conversation_id = 42;
-//! let mut store = TranscriptStore::<MemFs>::new(conversation_id, "/data/conversations")
-//!     .expect("a fresh MemFs has no data log, so the conversation starts empty");
+//! // Build the store for one transcript id. Typically one per agent instance.
+//! let transcript_id = 42;
+//! let mut store = TranscriptStore::<MemFs>::new(transcript_id, "/data/transcripts")
+//!     .expect("a fresh MemFs has no data log, so the transcript starts empty");
 //!
 //! // Drive it from the agent loop. One turn = one `group()`; the whole turn is
 //! // committed as a single record when the guard drops.

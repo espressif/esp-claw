@@ -32,6 +32,7 @@ __pycache__/
 .ruff_cache/
 run.log
 trace.json
+simulator.json
 
 # MCP / Memov
 .mcp.json

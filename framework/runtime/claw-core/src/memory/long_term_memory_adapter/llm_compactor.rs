@@ -16,6 +16,7 @@ use serde_json::{json, Value};
 use claw_api::{ChatRequest, ClawApiAsync};
 use claw_interface::{Cancel, ClawHttp, ClawTimer};
 use claw_memory::{CompactBackendError, CompactError, CompactFuture, Compactor};
+use tracing::Instrument as _;
 
 use super::async_llm::SharedAsyncLlm;
 
@@ -95,15 +96,20 @@ impl<H: ClawHttp, Timer: ClawTimer> Compactor for LlmCompactor<H, Timer> {
             // todo: thread a real abort flag once the `Compactor` trait carries one;
             // for now a compaction summarization request is not cancellable.
             let abort = AtomicBool::new(false);
-            let mut lease = self.api.lease().await;
-            let response = lease
-                .api_mut()
-                .chat(
-                    &ChatRequest::new(SUMMARY_SYSTEM_PROMPT, &messages),
-                    Cancel::new(&abort),
-                )
-                .await
-                .map_err(|error| CompactError::Backend(CompactBackendError::new(error)))?;
+            let request = ChatRequest::new(SUMMARY_SYSTEM_PROMPT, &messages);
+            let max_attempts = u64::from(request.retry.max_retries).saturating_add(1);
+            let chat_span = tracing::info_span!(
+                "api.chat",
+                purpose = "conversation_compaction",
+                max_attempts,
+            );
+            let response = async {
+                let mut lease = self.api.lease().await;
+                lease.api_mut().chat(&request, Cancel::new(&abort)).await
+            }
+            .instrument(chat_span)
+            .await
+            .map_err(|error| CompactError::Backend(CompactBackendError::new(error)))?;
 
             let Some(summary) = response.text else {
                 return Err(CompactError::EmptySummary);

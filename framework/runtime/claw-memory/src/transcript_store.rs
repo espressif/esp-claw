@@ -1,4 +1,4 @@
-//! `TranscriptStore` — the agent's complete, append-only conversation record.
+//! `TranscriptStore` — the agent's complete, append-only transcript record.
 //!
 //! This is the **source of truth** for what was said: every committed turn, kept
 //! verbatim, forever (within the store's own lifetime). Its natural unit is a
@@ -21,7 +21,7 @@
 //!
 //! # It does not compact
 //!
-//! Compaction — summarizing an aged prefix so the conversation fits the model's
+//! Compaction — summarizing an aged prefix so the transcript fits the model's
 //! context window — is **not** this store's job. Compaction is a property of the
 //! *LLM request*, not of the record: the summary is a derived artifact assembled
 //! at request time by the agent layer's rolling-summary context adapter, which
@@ -33,7 +33,7 @@
 //!
 //! # Turns are built through a guard
 //!
-//! Conversation content is appended through either:
+//! Transcript content is appended through either:
 //! - a [`GroupGuard`] from [`group`](TranscriptStore::group), for RAII turn
 //!   grouping; or
 //! - the direct `push_*` methods plus [`commit_open_turn`](TranscriptStore::commit_open_turn),
@@ -54,14 +54,19 @@
 //!
 //! # Identity and persistence
 //!
-//! Each store is keyed by a `conversation_id`. Two files under the `dir` passed
-//! to [`TranscriptStore::new`]:
+//! Each store is keyed by a `transcript_id`. A **persisting** store (built with
+//! [`TranscriptStore::new`]) keeps two files under the `dir` it is given:
 //!
-//! - `conversation-<id>.jsonl` — the **data log**: one JSON record per line
-//!   (`group`), **append-only**. The source of truth.
-//! - `conversation-<id>.json` — the **index manifest**: a rebuildable cache
-//!   listing the byte `(off, len)` of every record plus `covered_len` and
-//!   `next_id`, rewritten atomically as turns are appended.
+//! - `<id>.jsonl` — the **data log**: one JSON record per line (`group`),
+//!   **append-only**. The source of truth.
+//! - `<id>.json` — the **index manifest**: a rebuildable cache listing the byte
+//!   `(off, len)` of every record plus `covered_len` and `next_id`, rewritten
+//!   atomically as turns are appended.
+//!
+//! An **in-memory** store (built with [`TranscriptStore::in_memory`]) holds the
+//! same transcript but never touches the filesystem: it starts empty and every
+//! persist is a no-op. Subagents use it — their transcripts are context-management
+//! scratch that is never enumerated or resumed, so it need not survive a restart.
 
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -74,8 +79,7 @@ use claw_interface::{ClawFile, ClawFs, FsError};
 
 /// Minimum gap between persistence writes (flash-wear debounce).
 const DEFAULT_PERSIST_DEBOUNCE: Duration = Duration::from_secs(5);
-/// Per-conversation filenames: `{dir}/{FILE_PREFIX}{id}{DATA_EXT|INDEX_EXT}`.
-const FILE_PREFIX: &str = "conversation-";
+/// Per-transcript filenames: `{dir}/{id}{DATA_EXT|INDEX_EXT}`.
 const DATA_EXT: &str = ".jsonl";
 const INDEX_EXT: &str = ".json";
 /// Manifest schema version, so a future layout change can be detected on load.
@@ -107,7 +111,7 @@ impl TurnId {
 }
 
 claw_utils::define_id_allocator!(
-    /// Hands out this conversation's [`TurnId`]s. Single-owner (a `StoreState`
+    /// Hands out this transcript's [`TurnId`]s. Single-owner (a `StoreState`
     /// field mutated under the store lock), so the lock it needs is that outer
     /// one, not one of its own. Its position is persisted via
     /// [`peek`](TurnIdAllocator::peek) into the manifest and restored with
@@ -159,7 +163,7 @@ impl ByteLen {
         ByteLen(self.0.saturating_sub(other.0))
     }
     /// From a [`ClawFs::len`] result, clamping if it somehow exceeds `usize` (a
-    /// 32-bit device can only address `usize` bytes; conversation files are tiny).
+    /// 32-bit device can only address `usize` bytes; transcript files are tiny).
     fn from_file_len(len: u64) -> ByteLen {
         ByteLen(usize::try_from(len).unwrap_or(usize::MAX))
     }
@@ -281,14 +285,18 @@ impl StoreState {
 /// Shared inner state — held behind an `Arc` so a context adapter can keep its
 /// own clone of the store and read the same transcript the agent writes.
 struct StoreInner<F: ClawFs + 'static> {
-    conversation_id: u32,
+    transcript_id: u32,
     data_path: String,
     index_path: String,
+    /// When true this store is in-memory only: it loads nothing at construction
+    /// and every persist is a no-op, so it never touches the filesystem. The
+    /// paths are unused (left empty) in this mode.
+    volatile: bool,
     state: Mutex<StoreState>,
     _fs: PhantomData<fn() -> F>,
 }
 
-/// The agent's complete conversation transcript: an append-only, verbatim record
+/// The agent's complete transcript: an append-only, verbatim record
 /// of every turn. See the module docs for the storage layout.
 ///
 /// Build one with [`new`](Self::new), append turns through the [`GroupGuard`]
@@ -303,8 +311,8 @@ struct StoreInner<F: ClawFs + 'static> {
 /// # use claw_interface::MemFs;
 /// # use claw_memory::TranscriptStore;
 /// MemFs::new();
-/// let mut store = TranscriptStore::<MemFs>::new(42, "/data/conversations")
-///     .expect("a fresh MemFs has no data log, so the conversation starts empty");
+/// let mut store = TranscriptStore::<MemFs>::new(42, "/data/transcripts")
+///     .expect("a fresh MemFs has no data log, so the transcript starts empty");
 ///
 /// // One turn = one `group()`; the whole turn commits when the guard drops.
 /// {
@@ -323,15 +331,15 @@ pub struct TranscriptStore<F: ClawFs + 'static> {
 
 /// Failure building a [`TranscriptStore`] from its on-disk log.
 ///
-/// A *missing* conversation is not an error (it starts empty); a mismatched or
+/// A *missing* transcript is not an error (it starts empty); a mismatched or
 /// unreadable *index* is recovered by rebuilding from the data log. This is
 /// returned only when the data log itself exists but cannot be read, so a real
-/// I/O failure is never silently mistaken for an empty conversation (which would
+/// I/O failure is never silently mistaken for an empty transcript (which would
 /// then be overwritten on the next turn).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TranscriptInitError {
-    /// The conversation data log exists but could not be read.
-    #[error("conversation data log {path} is unreadable: {source}")]
+    /// The transcript data log exists but could not be read.
+    #[error("transcript data log {path} is unreadable: {source}")]
     Unreadable {
         /// The data-log path that failed to load.
         path: String,
@@ -352,10 +360,10 @@ impl<F: ClawFs + 'static> Clone for TranscriptStore<F> {
 }
 
 impl<F: ClawFs + 'static> TranscriptStore<F> {
-    /// Build the store for `conversation_id`, restoring its persisted contents if
+    /// Build the store for `transcript_id`, restoring its persisted contents if
     /// present (missing or unreadable files start empty).
     ///
-    /// Different ids map to different files under `dir`, so each conversation is
+    /// Different ids map to different files under `dir`, so each transcript is
     /// stored independently. A mismatched or unreadable index is rebuilt from the
     /// data log during construction.
     ///
@@ -365,20 +373,20 @@ impl<F: ClawFs + 'static> TranscriptStore<F> {
     /// # use claw_interface::MemFs;
     /// # use claw_memory::TranscriptStore;
     /// MemFs::new();
-    /// let store = TranscriptStore::<MemFs>::new(7, "/data/conversations")
-    ///     .expect("a fresh MemFs has no data log, so the conversation starts empty");
-    /// assert_eq!(store.conversation_id(), 7);
+    /// let store = TranscriptStore::<MemFs>::new(7, "/data/transcripts")
+    ///     .expect("a fresh MemFs has no data log, so the transcript starts empty");
+    /// assert_eq!(store.transcript_id(), 7);
     /// assert!(store.messages().as_array().unwrap().is_empty()); // missing files start empty
     /// ```
     ///
     /// # Errors
     ///
-    /// [`TranscriptInitError::Unreadable`] when the conversation *data log*
-    /// exists but cannot be read. A missing conversation starts empty, and a
+    /// [`TranscriptInitError::Unreadable`] when the transcript *data log*
+    /// exists but cannot be read. A missing transcript starts empty, and a
     /// corrupt/mismatched *index* is transparently rebuilt from the data log.
-    pub fn new(conversation_id: u32, dir: &str) -> Result<Self, TranscriptInitError> {
-        let data_path = conversation_path(dir, conversation_id, DATA_EXT);
-        let index_path = conversation_path(dir, conversation_id, INDEX_EXT);
+    pub fn new(transcript_id: u32, dir: &str) -> Result<Self, TranscriptInitError> {
+        let data_path = transcript_path(dir, transcript_id, DATA_EXT);
+        let index_path = transcript_path(dir, transcript_id, INDEX_EXT);
         let (mut state, needs_rebuild) =
             load_state::<F>(&data_path, &index_path).map_err(|source| {
                 TranscriptInitError::Unreadable {
@@ -387,22 +395,42 @@ impl<F: ClawFs + 'static> TranscriptStore<F> {
                 }
             })?;
         if needs_rebuild {
-            write_live_set_to_files::<F>(&data_path, &index_path, &mut state, conversation_id);
+            write_live_set_to_files::<F>(&data_path, &index_path, &mut state, transcript_id);
         }
         Ok(Self {
             inner: Arc::new(StoreInner {
-                conversation_id,
+                transcript_id,
                 data_path,
                 index_path,
+                volatile: false,
                 state: Mutex::new(state),
                 _fs: PhantomData,
             }),
         })
     }
 
-    /// This store's conversation id.
-    pub fn conversation_id(&self) -> u32 {
-        self.inner.conversation_id
+    /// Build an **in-memory** store for `transcript_id`: it starts empty, never
+    /// reads or writes the filesystem, and every persist is a no-op.
+    ///
+    /// Used for transcripts that are pure context-management scratch and need not
+    /// survive a restart (subagents), so no `dir` is required. The write/read API
+    /// is otherwise identical to a persisting store.
+    pub fn in_memory(transcript_id: u32) -> Self {
+        Self {
+            inner: Arc::new(StoreInner {
+                transcript_id,
+                data_path: String::new(),
+                index_path: String::new(),
+                volatile: true,
+                state: Mutex::new(StoreState::default()),
+                _fs: PhantomData,
+            }),
+        }
+    }
+
+    /// This store's transcript id.
+    pub fn transcript_id(&self) -> u32 {
+        self.inner.transcript_id
     }
 
     /// A monotonic counter bumped whenever the transcript content changes (an
@@ -431,14 +459,14 @@ impl<F: ClawFs + 'static> TranscriptStore<F> {
             let mut state = self.lock_state();
             debug_assert!(
                 !state.turn_open,
-                "conversation {}: group() called while a turn is already open",
-                self.inner.conversation_id
+                "transcript {}: group() called while a turn is already open",
+                self.inner.transcript_id
             );
             if state.turn_open {
                 log::warn!(
-                    "conversation {}: group() called while a turn is already open; \
+                    "transcript {}: group() called while a turn is already open; \
                      messages will interleave",
-                    self.inner.conversation_id
+                    self.inner.transcript_id
                 );
             }
             state.turn_open = true;
@@ -513,7 +541,7 @@ impl<F: ClawFs + 'static> TranscriptStore<F> {
     ///
     /// No-ops when the open turn is empty. This is for hard cancellation paths
     /// where partially materialized user/assistant/tool messages must not become
-    /// part of conversation history.
+    /// part of transcript history.
     pub fn discard_open_turn(&self) {
         discard_open_turn(&self.inner);
     }
@@ -612,7 +640,7 @@ impl<F: ClawFs + 'static> TranscriptStore<F> {
 /// # use claw_memory::TranscriptStore;
 /// # use serde_json::json;
 /// # MemFs::new();
-/// # let store = TranscriptStore::<MemFs>::new(1, "/data/conversations").unwrap();
+/// # let store = TranscriptStore::<MemFs>::new(1, "/data/transcripts").unwrap();
 /// let turn = store.group();
 /// turn.append_user("call the weather tool");
 /// turn.append_patch(&json!([
@@ -685,8 +713,8 @@ fn push_assistant_message<F: ClawFs + 'static>(inner: &StoreInner<F>, raw_messag
     match serde_json::from_str::<Value>(raw_message_json) {
         Ok(message) => push_open(inner, message),
         Err(err) => log::warn!(
-            "conversation {}: invalid assistant json: {err}",
-            inner.conversation_id
+            "transcript {}: invalid assistant json: {err}",
+            inner.transcript_id
         ),
     }
 }
@@ -694,8 +722,8 @@ fn push_assistant_message<F: ClawFs + 'static>(inner: &StoreInner<F>, raw_messag
 fn push_patch<F: ClawFs + 'static>(inner: &StoreInner<F>, messages: &Value) {
     let Some(items) = messages.as_array() else {
         log::warn!(
-            "conversation {}: append_patch expected a JSON array",
-            inner.conversation_id
+            "transcript {}: append_patch expected a JSON array",
+            inner.transcript_id
         );
         return;
     };
@@ -718,7 +746,11 @@ fn commit_open_turn<F: ClawFs + 'static>(inner: &StoreInner<F>) {
         }
         let msgs = std::mem::take(&mut state.open_group);
         let id = state.ids.next();
-        enqueue(&mut state, id, msgs.clone(), inner.conversation_id);
+        // An in-memory store never flushes, so skip enqueuing a pending line that
+        // would otherwise accumulate unbounded.
+        if !inner.volatile {
+            enqueue(&mut state, id, msgs.clone(), inner.transcript_id);
+        }
         state.groups.push(StoredGroup {
             id,
             msgs,
@@ -744,19 +776,23 @@ fn discard_open_turn<F: ClawFs + 'static>(inner: &StoreInner<F>) {
 }
 
 /// Serialize a group record to a data line and queue it for the next append.
-fn enqueue(state: &mut StoreState, id: TurnId, msgs: Vec<Value>, conversation_id: u32) {
+fn enqueue(state: &mut StoreState, id: TurnId, msgs: Vec<Value>, transcript_id: u32) {
     let record = LogRecord::Group { id, msgs };
     match serde_json::to_vec(&record) {
         Ok(mut line) => {
             line.push(b'\n');
             state.pending.push(Pending { line, id });
         }
-        Err(err) => log::warn!("conversation {conversation_id}: serialize record failed: {err}"),
+        Err(err) => log::warn!("transcript {transcript_id}: serialize record failed: {err}"),
     }
 }
 
 /// Flush pending records (one `append`) and, when needed, rewrite the manifest.
 fn persist<F: ClawFs + 'static>(inner: &StoreInner<F>, force_manifest: bool) {
+    // An in-memory store keeps everything in `state`; it never writes files.
+    if inner.volatile {
+        return;
+    }
     let mut state = lock_state(inner);
     // Pending data always makes the manifest stale: after the append the data log
     // has records the index doesn't know about. Fold that into want_manifest so
@@ -779,8 +815,8 @@ fn persist<F: ClawFs + 'static>(inner: &StoreInner<F>, force_manifest: bool) {
         }
         if let Err(err) = F::append(&inner.data_path, &data_buf) {
             log::warn!(
-                "conversation {}: data append failed: {err}",
-                inner.conversation_id
+                "transcript {}: data append failed: {err}",
+                inner.transcript_id
             );
             state.last_persist_error = Some(err);
             return;
@@ -793,7 +829,7 @@ fn persist<F: ClawFs + 'static>(inner: &StoreInner<F>, force_manifest: bool) {
     }
     state.last_persist = Some(Instant::now());
 
-    if let Some(bytes) = build_manifest_bytes(&state, inner.conversation_id) {
+    if let Some(bytes) = build_manifest_bytes(&state, inner.transcript_id) {
         match F::write_atomic(&inner.index_path, &bytes) {
             Ok(()) => {
                 state.manifest_covered_len = state.data_len;
@@ -801,8 +837,8 @@ fn persist<F: ClawFs + 'static>(inner: &StoreInner<F>, force_manifest: bool) {
             }
             Err(err) => {
                 log::warn!(
-                    "conversation {}: index write failed: {err}",
-                    inner.conversation_id
+                    "transcript {}: index write failed: {err}",
+                    inner.transcript_id
                 );
                 state.last_persist_error = Some(err);
             }
@@ -816,7 +852,7 @@ fn write_live_set_to_files<F: ClawFs>(
     data_path: &str,
     index_path: &str,
     state: &mut StoreState,
-    conversation_id: u32,
+    transcript_id: u32,
 ) {
     let mut data_buf = Vec::new();
     let mut live = Vec::new();
@@ -828,7 +864,7 @@ fn write_live_set_to_files<F: ClawFs>(
             id: group.id,
             msgs: group.msgs.clone(),
         };
-        let Some(len) = append_line(&mut data_buf, &record, conversation_id) else {
+        let Some(len) = append_line(&mut data_buf, &record, transcript_id) else {
             return;
         };
         live.push(IndexEntry::Group {
@@ -850,19 +886,19 @@ fn write_live_set_to_files<F: ClawFs>(
         Ok(bytes) => bytes,
         Err(err) => {
             log::warn!(
-                "conversation {conversation_id}: write_live manifest serialize failed: {err}"
+                "transcript {transcript_id}: write_live manifest serialize failed: {err}"
             );
             return;
         }
     };
 
     if let Err(err) = F::write_atomic(data_path, &data_buf) {
-        log::warn!("conversation {conversation_id}: write_live data write failed: {err}");
+        log::warn!("transcript {transcript_id}: write_live data write failed: {err}");
         state.last_persist_error = Some(err);
         return;
     }
     if let Err(err) = F::write_atomic(index_path, &manifest_bytes) {
-        log::warn!("conversation {conversation_id}: write_live index write failed: {err}");
+        log::warn!("transcript {transcript_id}: write_live index write failed: {err}");
         state.last_persist_error = Some(err);
         // Data file is the fresh truth; stale manifest is rebuilt on next load.
     } else {
@@ -881,7 +917,7 @@ fn write_live_set_to_files<F: ClawFs>(
 }
 
 /// Serialize `record` into `buf` with a trailing newline; returns the line length.
-fn append_line(buf: &mut Vec<u8>, record: &LogRecord, conversation_id: u32) -> Option<ByteLen> {
+fn append_line(buf: &mut Vec<u8>, record: &LogRecord, transcript_id: u32) -> Option<ByteLen> {
     match serde_json::to_vec(record) {
         Ok(mut line) => {
             line.push(b'\n');
@@ -890,7 +926,7 @@ fn append_line(buf: &mut Vec<u8>, record: &LogRecord, conversation_id: u32) -> O
             Some(len)
         }
         Err(err) => {
-            log::warn!("conversation {conversation_id}: serialize record failed: {err}");
+            log::warn!("transcript {transcript_id}: serialize record failed: {err}");
             None
         }
     }
@@ -904,7 +940,7 @@ fn set_loc(state: &mut StoreState, id: TurnId, off: ByteOffset, len: ByteLen) {
 }
 
 /// Build the manifest of the current turns (those already on disk).
-fn build_manifest_bytes(state: &StoreState, conversation_id: u32) -> Option<Vec<u8>> {
+fn build_manifest_bytes(state: &StoreState, transcript_id: u32) -> Option<Vec<u8>> {
     let mut live = Vec::new();
     for group in &state.groups {
         if let Some((off, len)) = group.loc {
@@ -924,7 +960,7 @@ fn build_manifest_bytes(state: &StoreState, conversation_id: u32) -> Option<Vec<
     match serde_json::to_vec(&manifest) {
         Ok(bytes) => Some(bytes),
         Err(err) => {
-            log::warn!("conversation {conversation_id}: manifest serialize failed: {err}");
+            log::warn!("transcript {transcript_id}: manifest serialize failed: {err}");
             None
         }
     }
@@ -956,7 +992,7 @@ fn verify_entry(entry: &IndexEntry, record: &LogRecord) -> bool {
 /// [`FsError`] when the data log exists but cannot be opened. A *missing* data
 /// log ([`FsError::NotFound`]) yields an empty state, and index problems are
 /// recovered from the data log rather than surfaced — so a genuine data-log I/O
-/// fault is never silently treated as an empty conversation.
+/// fault is never silently treated as an empty transcript.
 fn load_state<F: ClawFs>(data_path: &str, index_path: &str) -> Result<(StoreState, bool), FsError> {
     let mut state = StoreState::default();
     let mut covered_len = ByteLen::default();
@@ -965,8 +1001,8 @@ fn load_state<F: ClawFs>(data_path: &str, index_path: &str) -> Result<(StoreStat
 
     // One handle to the data log, reused for every indexed record read and the
     // tail scan below, instead of reopening the file per access. A missing log is
-    // a fresh conversation; any other open failure is a real fault, surfaced so
-    // the empty state is not mistaken for "no conversation".
+    // a fresh transcript; any other open failure is a real fault, surfaced so
+    // the empty state is not mistaken for "no transcript".
     let mut data_file = match F::open(data_path) {
         Ok(file) => Some(file),
         Err(FsError::NotFound) => None,
@@ -993,7 +1029,7 @@ fn load_state<F: ClawFs>(data_path: &str, index_path: &str) -> Result<(StoreStat
                             }
                             Some(_) => {
                                 log::error!(
-                                    "conversation load: manifest entry at offset {} does not \
+                                    "transcript load: manifest entry at offset {} does not \
                                      match data log record; rebuilding",
                                     off.as_u64()
                                 );
@@ -1002,7 +1038,7 @@ fn load_state<F: ClawFs>(data_path: &str, index_path: &str) -> Result<(StoreStat
                             }
                             None => {
                                 log::error!(
-                                    "conversation load: manifest entry at offset {} could not \
+                                    "transcript load: manifest entry at offset {} could not \
                                      be parsed; rebuilding",
                                     off.as_u64()
                                 );
@@ -1012,7 +1048,7 @@ fn load_state<F: ClawFs>(data_path: &str, index_path: &str) -> Result<(StoreStat
                         },
                         Err(err) => {
                             log::error!(
-                                "conversation load: manifest entry at offset {} could not be \
+                                "transcript load: manifest entry at offset {} could not be \
                                  read: {err}; rebuilding",
                                 off.as_u64()
                             );
@@ -1022,7 +1058,7 @@ fn load_state<F: ClawFs>(data_path: &str, index_path: &str) -> Result<(StoreStat
                     }
                 }
             } else if data_file.is_some() {
-                log::error!("conversation load: manifest could not be parsed; rebuilding");
+                log::error!("transcript load: manifest could not be parsed; rebuilding");
                 mismatch = true;
             }
         }
@@ -1032,7 +1068,7 @@ fn load_state<F: ClawFs>(data_path: &str, index_path: &str) -> Result<(StoreStat
             }
         }
         Err(err) => {
-            log::error!("conversation load: manifest could not be read: {err}; rebuilding");
+            log::error!("transcript load: manifest could not be read: {err}; rebuilding");
             if data_file.is_some() {
                 mismatch = true;
             }
@@ -1118,18 +1154,15 @@ fn parse_record(bytes: &[u8]) -> Option<LogRecord> {
     match serde_json::from_slice::<LogRecord>(bytes) {
         Ok(record) => Some(record),
         Err(err) => {
-            log::warn!("conversation load: skipping unparseable record: {err}");
+            log::warn!("transcript load: skipping unparseable record: {err}");
             None
         }
     }
 }
 
-/// Build a per-conversation path from the base dir, id, and extension.
-fn conversation_path(dir: &str, conversation_id: u32, ext: &str) -> String {
-    format!(
-        "{}/{FILE_PREFIX}{conversation_id}{ext}",
-        dir.trim_end_matches('/')
-    )
+/// Build a per-transcript path from the base dir, id, and extension.
+fn transcript_path(dir: &str, transcript_id: u32, ext: &str) -> String {
+    format!("{}/{transcript_id}{ext}", dir.trim_end_matches('/'))
 }
 
 fn lock_state<F: ClawFs + 'static>(inner: &StoreInner<F>) -> MutexGuard<'_, StoreState> {
@@ -1148,7 +1181,7 @@ mod tests {
     fn invalid_index_is_rebuilt_from_data_log() {
         MemFs::new();
         let dir = "/transcript-index-rebuild";
-        let index_path = conversation_path(dir, 1, INDEX_EXT);
+        let index_path = transcript_path(dir, 1, INDEX_EXT);
 
         let store = TranscriptStore::<MemFs>::new(1, dir).unwrap();
         {

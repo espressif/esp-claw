@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use claw_api::{ChatRequest, ClawApiAsync};
 use claw_interface::{Cancel, ClawHttp, ClawTimer};
 use claw_memory::MemoryId;
+use tracing::Instrument as _;
 
 use super::async_llm::SharedAsyncLlm;
 use super::extraction::{
@@ -83,15 +84,17 @@ impl<H: ClawHttp, Timer: ClawTimer> Extractor for LlmExtractor<H, Timer> {
             // Extraction is not tied to the active iteration's interrupt flag,
             // so it uses its own (never-set) abort flag.
             let abort = AtomicBool::new(false);
-            let mut lease = self.api.lease().await;
-            let response = lease
-                .api_mut()
-                .chat(
-                    &ChatRequest::new(EXTRACT_SYSTEM_PROMPT, &messages),
-                    Cancel::new(&abort),
-                )
-                .await
-                .map_err(ExtractError::from)?;
+            let request = ChatRequest::new(EXTRACT_SYSTEM_PROMPT, &messages);
+            let max_attempts = u64::from(request.retry.max_retries).saturating_add(1);
+            let chat_span =
+                tracing::info_span!("api.chat", purpose = "memory_extraction", max_attempts,);
+            let response = async {
+                let mut lease = self.api.lease().await;
+                lease.api_mut().chat(&request, Cancel::new(&abort)).await
+            }
+            .instrument(chat_span)
+            .await
+            .map_err(ExtractError::from)?;
 
             let Some(text) = response.text else {
                 return Err(ExtractError::EmptyOutput);

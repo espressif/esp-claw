@@ -95,7 +95,7 @@ fn setup_disk_state(root: &str, setup: &str) {
                 .unwrap();
         }
         "root_transcript_log_dir" => {
-            DiskFs::create_dir_all(&format!("{root}/sessions/roots/conversation-1.jsonl")).unwrap();
+            DiskFs::create_dir_all(&format!("{root}/transcript/1.jsonl")).unwrap();
         }
         "profile_user_invalid_utf8" => {
             DiskFs::create_dir_all(&format!("{root}/profile")).unwrap();
