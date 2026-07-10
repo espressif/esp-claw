@@ -1,0 +1,167 @@
+set(EDGE_AGENT_PROJECT_LOG_PREFIX "[edge_agent]")
+option(EDGE_AGENT_STRICT_IDF_PATCH "Fail configure when an ESP-IDF patch cannot be verified or applied" ON)
+
+if(NOT DEFINED ENV{IDF_PATH} OR "$ENV{IDF_PATH}" STREQUAL "")
+    message(FATAL_ERROR "${EDGE_AGENT_PROJECT_LOG_PREFIX} IDF_PATH environment variable is not set")
+endif()
+
+function(edge_agent_patch_file_replace FILE_PATH OLD_TEXT NEW_TEXT PATCH_NAME)
+    if(NOT EXISTS "${FILE_PATH}")
+        message(WARNING "${EDGE_AGENT_PROJECT_LOG_PREFIX} ESP-IDF patch '${PATCH_NAME}' skipped: file not found: ${FILE_PATH}")
+        return()
+    endif()
+
+    file(READ "${FILE_PATH}" FILE_CONTENT)
+    string(FIND "${FILE_CONTENT}" "${NEW_TEXT}" FIXED_TEXT_OFFSET)
+    if(NOT FIXED_TEXT_OFFSET EQUAL -1)
+        message(STATUS "${EDGE_AGENT_PROJECT_LOG_PREFIX} ESP-IDF patch '${PATCH_NAME}' already applied")
+        return()
+    endif()
+
+    if(ARGC GREATER 4)
+        math(EXPR FIXED_TEXT_ARGC "${ARGC} - 1")
+        foreach(FIXED_TEXT_ARG_IDX RANGE 4 ${FIXED_TEXT_ARGC})
+            set(FIXED_TEXT "${ARGV${FIXED_TEXT_ARG_IDX}}")
+            string(FIND "${FILE_CONTENT}" "${FIXED_TEXT}" FIXED_TEXT_OFFSET)
+            if(NOT FIXED_TEXT_OFFSET EQUAL -1)
+                message(STATUS "${EDGE_AGENT_PROJECT_LOG_PREFIX} ESP-IDF patch '${PATCH_NAME}' already applied")
+                return()
+            endif()
+        endforeach()
+    endif()
+
+    string(FIND "${FILE_CONTENT}" "${OLD_TEXT}" OLD_TEXT_OFFSET)
+    if(OLD_TEXT_OFFSET EQUAL -1)
+        if(EDGE_AGENT_STRICT_IDF_PATCH)
+            message(FATAL_ERROR "${EDGE_AGENT_PROJECT_LOG_PREFIX} ESP-IDF patch '${PATCH_NAME}' could not be verified or applied: source pattern not found in ${FILE_PATH}")
+        endif()
+        message(WARNING "${EDGE_AGENT_PROJECT_LOG_PREFIX} ESP-IDF patch '${PATCH_NAME}' skipped: source pattern not found in ${FILE_PATH}")
+        return()
+    endif()
+
+    string(REPLACE "${OLD_TEXT}" "${NEW_TEXT}" FILE_CONTENT "${FILE_CONTENT}")
+    file(WRITE "${FILE_PATH}" "${FILE_CONTENT}")
+    message(STATUS "${EDGE_AGENT_PROJECT_LOG_PREFIX} Applied ESP-IDF patch '${PATCH_NAME}'")
+endfunction()
+
+function(edge_agent_patch_file_replace_literal FILE_PATH OLD_TEXT NEW_TEXT PATCH_NAME)
+    set(ALLOW_MISSING_SOURCE OFF)
+    if(ARGC GREATER 4 AND ARGV4 STREQUAL "ALLOW_MISSING")
+        set(ALLOW_MISSING_SOURCE ON)
+    endif()
+
+    if(NOT EXISTS "${FILE_PATH}")
+        message(WARNING "${EDGE_AGENT_PROJECT_LOG_PREFIX} ESP-IDF patch '${PATCH_NAME}' skipped: file not found: ${FILE_PATH}")
+        return()
+    endif()
+
+    file(READ "${FILE_PATH}" FILE_CONTENT)
+    string(FIND "${FILE_CONTENT}" "${NEW_TEXT}" FIXED_TEXT_OFFSET)
+    if(NOT FIXED_TEXT_OFFSET EQUAL -1)
+        message(STATUS "${EDGE_AGENT_PROJECT_LOG_PREFIX} ESP-IDF patch '${PATCH_NAME}' already applied")
+        return()
+    endif()
+
+    string(FIND "${FILE_CONTENT}" "${OLD_TEXT}" OLD_TEXT_OFFSET)
+    if(OLD_TEXT_OFFSET EQUAL -1)
+        if(EDGE_AGENT_STRICT_IDF_PATCH AND NOT ALLOW_MISSING_SOURCE)
+            message(FATAL_ERROR "${EDGE_AGENT_PROJECT_LOG_PREFIX} ESP-IDF patch '${PATCH_NAME}' could not be verified or applied: source pattern not found in ${FILE_PATH}")
+        endif()
+        message(WARNING "${EDGE_AGENT_PROJECT_LOG_PREFIX} ESP-IDF patch '${PATCH_NAME}' skipped: source pattern not found in ${FILE_PATH}")
+        return()
+    endif()
+
+    string(REPLACE "${OLD_TEXT}" "${NEW_TEXT}" FILE_CONTENT "${FILE_CONTENT}")
+    file(WRITE "${FILE_PATH}" "${FILE_CONTENT}")
+    message(STATUS "${EDGE_AGENT_PROJECT_LOG_PREFIX} Applied ESP-IDF patch '${PATCH_NAME}'")
+endfunction()
+
+# Upstream moved this repair from sample_edge NEG to shift_edge NEG later.
+# Treat both as fixed states so v5.5.4, release/v5.5 snapshots, and the
+# upstream fix branch can all configure without relying on a brittle patch file.
+edge_agent_patch_file_replace(
+    "$ENV{IDF_PATH}/components/esp_lcd/parl/esp_lcd_panel_io_parl.c"
+    ".sample_edge = PARLIO_SAMPLE_EDGE_POS"
+    ".sample_edge = PARLIO_SAMPLE_EDGE_NEG"
+    "parlio_tx_edge"
+    ".shift_edge = PARLIO_SHIFT_EDGE_NEG"
+)
+
+edge_agent_patch_file_replace(
+    "$ENV{IDF_PATH}/components/usb/include/usb/usb_types_ch9.h"
+    "#define USB_IAD_DESC_SIZE    9"
+    "#define USB_IAD_DESC_SIZE    8"
+    "usb_iad_desc_size"
+)
+
+# ESP32-S31 XIP maps flash rodata and ext_ram onto the same PSRAM address bus in ESP-IDF 6.1.
+# Keep the current location if NOLOAD rodata has already advanced past the computed reserved end.
+edge_agent_patch_file_replace_literal(
+    "$ENV{IDF_PATH}/components/esp_system/ld/ld.ext_ram.sections"
+    [=[. = _ext_ram_on_same_bus ? ORIGIN(ext_ram_seg) + (_rodata_reserved_end - _flash_rodata_dummy_start) : 0;]=]
+    [=[. = _ext_ram_on_same_bus ? MAX(ABSOLUTE(.), ORIGIN(ext_ram_seg) + (_rodata_reserved_end - _flash_rodata_dummy_start)) : 0;]=]
+    "ext_ram_dummy_same_bus_rodata_noload"
+    ALLOW_MISSING
+)
+
+edge_agent_patch_file_replace_literal(
+    "$ENV{IDF_PATH}/components/esp_system/ld/ld.ext_ram.sections"
+    [=[. = _ext_ram_on_same_bus ? MAX(., ORIGIN(ext_ram_seg) + (_rodata_reserved_end - _flash_rodata_dummy_start)) : 0;]=]
+    [=[. = _ext_ram_on_same_bus ? MAX(ABSOLUTE(.), ORIGIN(ext_ram_seg) + (_rodata_reserved_end - _flash_rodata_dummy_start)) : 0;]=]
+    "ext_ram_dummy_same_bus_rodata_noload_absolute_dot"
+)
+
+# The preprocessed S31 linker script depends on this included fragment, but Ninja only tracks the top-level input.
+file(TOUCH_NOCREATE "$ENV{IDF_PATH}/components/esp_system/ld/esp32s31/sections.ld.in")
+
+# Add esp_http_client_set_event_handler declaration to esp_http_client.c
+edge_agent_patch_file_replace(
+    "$ENV{IDF_PATH}/components/esp_http_client/esp_http_client.c"
+    [=[    client->user_data = data;
+    return ESP_OK;
+}
+
+static esp_err_t _set_config(esp_http_client_handle_t client, const esp_http_client_config_t *config)]=]
+    [=[    client->user_data = data;
+    return ESP_OK;
+}
+
+esp_err_t esp_http_client_set_event_handler(esp_http_client_handle_t client, http_event_handle_cb event_handler)
+{
+    if (client == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    client->event_handler = event_handler;
+    return ESP_OK;
+}
+
+static esp_err_t _set_config(esp_http_client_handle_t client, const esp_http_client_config_t *config)]=]
+    "http_client_set_event_handler_impl"
+    "esp_err_t esp_http_client_set_event_handler(esp_http_client_handle_t client, http_event_handle_cb event_handler)"
+)
+
+edge_agent_patch_file_replace(
+    "$ENV{IDF_PATH}/components/esp_http_client/include/esp_http_client.h"
+    [=[esp_err_t esp_http_client_set_user_data(esp_http_client_handle_t client, void *data);
+
+/**
+ * @brief      Get HTTP client session errno]=]
+    [=[esp_err_t esp_http_client_set_user_data(esp_http_client_handle_t client, void *data);
+
+/**
+ * @brief      Set the event handler for the client
+ *
+ * @param[in]  client  The esp_http_client handle
+ * @param[in]  event_handler     The event handler
+ *
+ * @return
+ *     - ESP_OK
+ *     - ESP_ERR_INVALID_ARG
+ */
+esp_err_t esp_http_client_set_event_handler(esp_http_client_handle_t client, http_event_handle_cb event_handler);
+
+/**
+ * @brief      Get HTTP client session errno]=]
+    "http_client_set_event_handler_decl"
+    "esp_err_t esp_http_client_set_event_handler(esp_http_client_handle_t client, http_event_handle_cb event_handler)"
+)

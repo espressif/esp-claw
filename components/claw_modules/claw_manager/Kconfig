@@ -1,0 +1,10 @@
+menu "Claw Manager"
+
+    config CLAW_AGENT_MGR_MAX_SUBAGENTS
+        int "Maximum concurrent subagents"
+        default 3
+        range 1 8
+        help
+            Maximum number of live subagent runtime slots managed by claw_agent_mgr.
+
+endmenu

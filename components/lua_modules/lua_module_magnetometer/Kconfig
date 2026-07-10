@@ -1,0 +1,25 @@
+menu "Lua Magnetometer Module"
+
+    choice LUA_MODULE_MAGNETOMETER_CHIP
+        prompt "Magnetometer chip model"
+        default LUA_MODULE_MAGNETOMETER_CHIP_BMM350
+        help
+            Select which magnetometer backend this Lua module should build against.
+
+        config LUA_MODULE_MAGNETOMETER_CHIP_BMM350
+            bool "BMM350"
+            help
+                Build the magnetometer Lua module with the BMM350 backend.
+
+        config LUA_MODULE_MAGNETOMETER_CHIP_BMM150
+            bool "BMM150"
+            help
+                Build the magnetometer Lua module with the BMM150 backend.
+
+        config LUA_MODULE_MAGNETOMETER_CHIP_QMC6309
+            bool "QMC6309"
+            help
+                Build the magnetometer Lua module with the QMC6309 backend.
+    endchoice
+
+endmenu

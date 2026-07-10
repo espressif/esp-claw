@@ -1,0 +1,6 @@
+## IDF Component Manager Manifest File
+dependencies:
+  espressif/esp_video: "^2.0.1"
+
+  lua_module_image:
+    path: ../lua_module_image

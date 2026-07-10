@@ -1,0 +1,12 @@
+idf_component_register(
+    SRCS
+        "src/lua_module_ble_hid.c"
+    INCLUDE_DIRS
+        "src"
+    REQUIRES
+        cap_lua
+        bt
+        esp_hid
+        freertos
+        georgik__lua
+)

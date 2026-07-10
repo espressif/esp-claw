@@ -19,7 +19,7 @@ ESP-Claw 是一个**事件驱动**的 Agent 框架，「事件」Event 是每个
 
 Event 是 ESP-Claw 框架中的消息载体，包含了 Event ID、来源、目标、Event 类型、聊天 ID、发送者、文本或 JSON Payload、时间戳、以及 Session 策略等信息。
 
-`claw_event_t`（见 <LinkToSource path="framework/foundation/claw_event_router/include/claw_event.h" />）通过结构体组织上述信息。
+`claw_event_t`（见 <LinkToSource path="components/claw_modules/claw_event_router/include/claw_event.h" />）通过结构体组织上述信息。
 
 ### Event Router
 
@@ -75,7 +75,7 @@ Event 是 ESP-Claw 框架中的消息载体，包含了 Event ID、来源、目�
 
 命中文本相关模板包括 `{{match.text}}`、`{{match.rule}}`、`{{match.remainder}}`。
 
-`edge_agent` 自带简单的 `router_rules.json`，可以处理 IM 消息收发等基础任务。见 <LinkToSource relativePath="applications/edge_agent/fatfs_image/router_rules/router_rules.json" />。
+`edge_agent` 自带简单的 `router_rules.json`，可以处理 IM 消息收发等基础任务。见 <LinkToSource relativePath="application/edge_agent/fatfs_image/router_rules/router_rules.json" />。
 
 `router_rules.json` 的详细语法定义可见 JSON Schema。
 
@@ -204,7 +204,7 @@ fallback_check -> done: "否"
 - 选择 <kbd>Simple</kbd> 时，不在路由层发布 `agent_stage` 事件。
 
 `agent_stage` 事件可以被路由到 IM 等通道，以实时向用户反馈「工作进度」。
-例如 `edge_agent` 默认的 <LinkToSource relativePath="applications/edge_agent/fatfs_image/router_rules/router_rules.json" /> 中定义了规则 `agent_stage_im_notify`，在启用 Verbose 且命中该规则时，会把 `agent_stage` 的 `{{event.text}}` 发回来源 IM 会话。
+例如 `edge_agent` 默认的 <LinkToSource relativePath="application/edge_agent/fatfs_image/router_rules/router_rules.json" /> 中定义了规则 `agent_stage_im_notify`，在启用 Verbose 且命中该规则时，会把 `agent_stage` 的 `{{event.text}}` 发回来源 IM 会话。
 
 ## 定时调度
 

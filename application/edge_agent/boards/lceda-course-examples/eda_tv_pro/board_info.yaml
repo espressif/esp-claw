@@ -1,0 +1,5 @@
+board: eda_tv_pro
+chip: esp32s3
+version: 1.0.0
+description: "EDA TV Pro - ESP32-S3 智能小电视 (INMP441 + MAX98357 + ST7789 LCD)"
+manufacturer: "lceda-course-examples"

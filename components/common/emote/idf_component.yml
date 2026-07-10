@@ -1,0 +1,11 @@
+## IDF Component Manager Manifest File
+dependencies:
+
+  display_arbiter:
+    path: ../display_arbiter
+
+  espressif2022/esp_emote_expression:
+    version: "^1.0.0"
+
+  espressif2022/esp_emote_gfx:
+    version: "3.0.2"

@@ -1,0 +1,119 @@
+version: 1.0.0
+# Peripherals for EDA AI GameBox (掌上游戏机)
+# ST7789 240x320 LCD + 五向按键 + XYAB 按键
+
+peripherals:
+
+  # ST7789 LCD display (SPI3)
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI3_HOST
+        data0_io_num: 13
+        sclk_io_num: 14
+        max_transfer_sz: 153600
+
+  # LCD backlight (LEDC PWM)
+  - name: ledc_backlight
+    type: ledc
+    role: none
+    config:
+      gpio_num: 10
+      freq_hz: 5000
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false
+
+  # 五向按键 - 上 (Front)
+  - name: gpio_dpad_up
+    type: gpio
+    role: io
+    config:
+      pin: 5
+      mode: GPIO_MODE_INPUT
+      default_level: 1
+
+  # 五向按键 - 下 (Back)
+  - name: gpio_dpad_down
+    type: gpio
+    role: io
+    config:
+      pin: 3
+      mode: GPIO_MODE_INPUT
+      default_level: 1
+
+  # 五向按键 - 左 (Left)
+  - name: gpio_dpad_left
+    type: gpio
+    role: io
+    config:
+      pin: 1
+      mode: GPIO_MODE_INPUT
+      default_level: 1
+
+  # 五向按键 - 右 (Right)
+  - name: gpio_dpad_right
+    type: gpio
+    role: io
+    config:
+      pin: 4
+      mode: GPIO_MODE_INPUT
+      default_level: 1
+
+  # 五向按键 - 中 (Center)
+  - name: gpio_dpad_center
+    type: gpio
+    role: io
+    config:
+      pin: 2
+      mode: GPIO_MODE_INPUT
+      default_level: 1
+
+  # XYAB - X
+  - name: gpio_btn_x
+    type: gpio
+    role: io
+    config:
+      pin: 8
+      mode: GPIO_MODE_INPUT
+      default_level: 1
+
+  # XYAB - Y
+  - name: gpio_btn_y
+    type: gpio
+    role: io
+    config:
+      pin: 6
+      mode: GPIO_MODE_INPUT
+      default_level: 1
+
+  # XYAB - A
+  - name: gpio_btn_a
+    type: gpio
+    role: io
+    config:
+      pin: 9
+      mode: GPIO_MODE_INPUT
+      default_level: 1
+
+  # XYAB - B
+  - name: gpio_btn_b
+    type: gpio
+    role: io
+    config:
+      pin: 7
+      mode: GPIO_MODE_INPUT
+      default_level: 1
+
+  # 无源蜂鸣器 (LEDC PWM)
+  - name: ledc_buzzer
+    type: ledc
+    role: none
+    config:
+      gpio_num: 48
+      freq_hz: 2700
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false

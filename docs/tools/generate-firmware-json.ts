@@ -5,46 +5,76 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-type MetadataRecord = {
-  chip?: unknown;
-  rev?: unknown;
-  brand?: unknown;
-  board_brand?: unknown;
-  board?: unknown;
-  console_output?: unknown;
-  merged_binary?: unknown;
-  min_flash_size?: unknown;
-  min_psram_size?: unknown;
-  nvs_info?: unknown;
-};
+interface PartitionEntry {
+  name: string;
+  type: string;
+  subtype: string;
+  offset: string;
+  size: string;
+}
 
-type FirmwareBinaryLinks = Record<string, string>;
+interface FlashSettings {
+  flash_mode: string;
+  flash_freq: string;
+  flash_size: string;
+}
 
-type FirmwareEntry = {
-  features: string[];
-  description: string;
-  merged_binary: FirmwareBinaryLinks;
+interface PackageMeta {
+  refs: string;
+  application: string;
+  chip: string;
+  brand: string;
+  board_name: string;
+  console_output: string;
+  commit_timestamp: string;
+  partition_table: PartitionEntry[];
+  flash_files: Record<string, string>;
+  flash_settings: FlashSettings;
+  min_flash_size: string;
+  nvs_info?: { start_addr: string; size: string };
+}
+
+interface FirmwareConsoleEntry {
+  flash_files: Record<string, string>;
+  flash_settings: FlashSettings;
+  partition_table: PartitionEntry[];
+  nvs_info?: { start_addr: string; size: string };
   min_flash_size: number;
   min_psram_size: number;
-  nvs_info: {
-    start_addr: string;
-    size: string;
-  };
-};
+}
 
-type FirmwareBoards = Record<string, FirmwareEntry>;
-type FirmwareBrands = Record<string, FirmwareBoards>;
-type FirmwareDb = Record<string, FirmwareBrands>;
+type FirmwareBoard = Record<string, FirmwareConsoleEntry>;
+type FirmwareBrand = Record<string, FirmwareBoard>;
+type FirmwareChip = Record<string, FirmwareBrand>;
+type FirmwareDb = Record<string, FirmwareChip>;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DOCS_ROOT = path.resolve(SCRIPT_DIR, "..");
-const TARGET_MERGED_DIR = path.join(DOCS_ROOT, "public", "merged_binary");
+const TARGET_FIRMWARE_DIR = path.join(DOCS_ROOT, "public", "firmware", "master");
 const TARGET_FIRMWARE_JSON = path.join(DOCS_ROOT, "src", "flash-tool", "firmware.json");
+const TARGET_FIRMWARE_META_JSON = path.join(DOCS_ROOT, "src", "flash-tool", "firmware-meta.json");
 
 function log(msg: string): void {
   console.error(msg);
+}
+
+function getMasterRef(): string {
+  try {
+    const desc = execSync("git describe --tags --long --always", { stdio: ["pipe", "pipe", "pipe"] })
+      .toString()
+      .trim();
+    if (desc) return desc;
+  } catch {}
+  try {
+    const hash = execSync("git rev-parse --short HEAD", { stdio: ["pipe", "pipe", "pipe"] })
+      .toString()
+      .trim();
+    if (hash) return hash;
+  } catch {}
+  return new Date().toISOString().slice(0, 19).replace("T", "_").replace(/:/g, "");
 }
 
 function parseFlashMB(value: unknown): number {
@@ -77,72 +107,54 @@ function parseFlashMB(value: unknown): number {
   return num;
 }
 
-function parseRevision(value: unknown): number | null {
-  if (value == null) {
-    return null;
-  }
-  if (typeof value === "number" && Number.isInteger(value)) {
-    return value;
-  }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number.parseInt(value.trim(), 10);
-    if (Number.isInteger(parsed)) {
-      return parsed;
-    }
-  }
-  throw new Error(`unsupported rev value: ${JSON.stringify(value)}`);
+function parseRevision(chip: string, sdkconfigPath: string | null): number | null {
+  // Revision handling is chip-specific; for now only esp32p4 uses it
+  // In per-partition mode, revision info comes from the build metadata
+  return null;
 }
 
-function makeChipSelectorKey(chip: string, rev: number | null): string {
-  return rev == null ? chip : `${chip}|rev${rev}`;
+function makeChipKey(chip: string): string {
+  return chip;
 }
 
-function parseConsoleOutput(value: unknown): string {
-  if (typeof value === "string" && value.trim()) {
-    return value.trim();
-  }
-  return "unknown";
-}
-
-async function loadMetadataFiles(mergedDir: string): Promise<MetadataRecord[]> {
-  const dirEntries = await fs.readdir(mergedDir, { withFileTypes: true });
+async function loadMetadataFiles(firmwareOutputDir: string): Promise<PackageMeta[]> {
+  const dirEntries = await fs.readdir(firmwareOutputDir, { withFileTypes: true });
   const metadataFiles = dirEntries
     .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
     .map((entry) => entry.name)
     .sort((a, b) => a.localeCompare(b));
 
   if (metadataFiles.length === 0) {
-    throw new Error(`No metadata json found in ${mergedDir}`);
+    throw new Error(`No metadata json found in ${firmwareOutputDir}`);
   }
 
-  const records: MetadataRecord[] = [];
+  const records: PackageMeta[] = [];
   for (const fileName of metadataFiles) {
-    const filePath = path.join(mergedDir, fileName);
+    const filePath = path.join(firmwareOutputDir, fileName);
     const raw = await fs.readFile(filePath, "utf8");
     const data = JSON.parse(raw);
     if (!data || typeof data !== "object" || Array.isArray(data)) {
       throw new Error(`Invalid metadata format: ${filePath}`);
     }
-    records.push(data as MetadataRecord);
+    records.push(data as PackageMeta);
   }
 
   return records;
 }
 
-async function copyMergedBinaryDir(sourceMergedDir: string): Promise<void> {
-  await fs.rm(TARGET_MERGED_DIR, { recursive: true, force: true });
-  await fs.mkdir(TARGET_MERGED_DIR, { recursive: true });
-  await fs.cp(sourceMergedDir, TARGET_MERGED_DIR, { recursive: true });
+async function extractTarGz(tarGzPath: string, destDir: string): Promise<void> {
+  await fs.mkdir(destDir, { recursive: true });
+  execSync(`tar xzf "${tarGzPath}" -C "${destDir}"`, { stdio: "pipe" });
 }
 
 function usage(): string {
   return [
     "Usage:",
-    "  node ./docs/tools/generate-firmware-json.ts <merged_binary_dir> [--allow-empty]",
+    "  node ./docs/tools/generate-firmware-json.ts <firmware_output_dir> [--allow-empty]",
     "",
     "Example:",
-    "  node ./docs/tools/generate-firmware-json.ts ./merged_binary",
-    "  node ./docs/tools/generate-firmware-json.ts ./merged_binary --allow-empty",
+    "  node ./docs/tools/generate-firmware-json.ts ./firmware_output",
+    "  node ./docs/tools/generate-firmware-json.ts ./firmware_output --allow-empty",
   ].join("\n");
 }
 
@@ -152,150 +164,152 @@ async function main(): Promise<number> {
   const positional = argv.filter((arg) => !arg.startsWith("--"));
   const sourceArg = positional[0]?.trim();
   if (!sourceArg) {
-    log("Missing <merged_binary_dir> argument.");
+    log("Missing <firmware_output_dir> argument.");
     log(usage());
     return 1;
   }
 
-  const sourceMergedDir = path.resolve(process.cwd(), sourceArg);
+  const firmwareOutputDir = path.resolve(process.cwd(), sourceArg);
   let stat;
   try {
-    stat = await fs.stat(sourceMergedDir);
+    stat = await fs.stat(firmwareOutputDir);
   } catch {
     if (allowEmpty) {
-      log(`warning: merged_binary directory not found, skip generation: ${sourceMergedDir}`);
+      log(`warning: firmware_output directory not found, skip generation: ${firmwareOutputDir}`);
       return 0;
     }
 
-    log(`merged_binary directory not found: ${sourceMergedDir}`);
+    log(`firmware_output directory not found: ${firmwareOutputDir}`);
     return 1;
   }
   if (!stat.isDirectory()) {
-    log(`merged_binary path is not a directory: ${sourceMergedDir}`);
+    log(`firmware_output path is not a directory: ${firmwareOutputDir}`);
     return 1;
   }
 
-  let records: MetadataRecord[];
+  let records: PackageMeta[];
   try {
-    records = await loadMetadataFiles(sourceMergedDir);
+    records = await loadMetadataFiles(firmwareOutputDir);
   } catch (error) {
+    if (allowEmpty) {
+      log(`warning: ${(error as Error).message}, skip generation`);
+      return 0;
+    }
     log((error as Error).message);
     return 1;
   }
 
-  await copyMergedBinaryDir(sourceMergedDir);
+  await fs.rm(TARGET_FIRMWARE_DIR, { recursive: true, force: true });
+  await fs.mkdir(TARGET_FIRMWARE_DIR, { recursive: true });
 
-  const firmware: FirmwareDb = {};
-  for (const record of records) {
-    const chip = record.chip;
-    const rev = record.rev;
-    const brand = record.brand ?? record.board_brand ?? "others";
-    const board = record.board;
-    const consoleOutput = parseConsoleOutput(record.console_output);
-    const mergedBinary = record.merged_binary;
-    const minFlashSize = record.min_flash_size;
-    const nvsInfo = record.nvs_info;
+  // Group by application → chip → brand → board → console_output
+  const firmware: Record<string, FirmwareDb> = {};
 
-    if (typeof chip !== "string" || !chip.trim()) {
-      log(`skip one metadata: invalid chip (${JSON.stringify(record)})`);
+  for (const meta of records) {
+    const { application, chip, brand, board_name, console_output, flash_files, flash_settings, partition_table, nvs_info } = meta;
+
+    if (!chip || !board_name || !brand || !console_output) {
+      log(`skip one metadata: missing required fields (${JSON.stringify(meta)})`);
       continue;
     }
-    if (typeof board !== "string" || !board.trim()) {
-      log(`skip one metadata: invalid board (${JSON.stringify(record)})`);
-      continue;
+
+    const appKey = (application || "default").trim();
+    const tarGzName = `${board_name}__${console_output.replace(/ /g, "_").toLowerCase()}.tar.gz`;
+    const tarGzPath = path.join(firmwareOutputDir, tarGzName);
+
+    const extractDir = path.join(TARGET_FIRMWARE_DIR, board_name, console_output);
+
+    if (await fs.stat(tarGzPath).catch(() => null)) {
+      try {
+        await extractTarGz(tarGzPath, extractDir);
+      } catch (e) {
+        log(`skip: tar extraction failed for ${tarGzName}: ${e}`);
+        continue;
+      }
+    } else {
+      log(`warning: tar.gz not found for ${board_name}/${console_output}, metadata-only entry`);
+      await fs.mkdir(extractDir, { recursive: true });
     }
-    if (typeof brand !== "string" || !brand.trim()) {
-      log(`skip one metadata: invalid brand (${JSON.stringify(record)})`);
-      continue;
-    }
-    if (typeof mergedBinary !== "string" || !mergedBinary.trim()) {
-      log(`skip one metadata: invalid merged_binary (${JSON.stringify(record)})`);
-      continue;
-    }
-    if (!nvsInfo || typeof nvsInfo !== "object" || Array.isArray(nvsInfo)) {
-      log(`skip one metadata: invalid nvs_info (${JSON.stringify(record)})`);
-      continue;
+
+    const basePath = `/firmware/master/${board_name}/${console_output}`;
+    const resolvedFlashFiles: Record<string, string> = {};
+    for (const [offset, filename] of Object.entries(flash_files)) {
+      resolvedFlashFiles[offset] = `${basePath}/${filename}`;
     }
 
     let minFlashMB: number;
-    let minPsramMB: number = 8;
-    let revision: number | null;
     try {
-      minFlashMB = parseFlashMB(minFlashSize);
-      if (record.min_psram_size !== undefined) {
-        minPsramMB = parseFlashMB(record.min_psram_size);
-      }
-      revision = parseRevision(rev);
+      minFlashMB = parseFlashMB(meta.min_flash_size);
     } catch (error) {
-      log(`skip one metadata: invalid metadata (${JSON.stringify(record)}) (${(error as Error).message})`);
+      log(`skip one metadata: invalid min_flash_size (${(error as Error).message})`);
       continue;
     }
 
-    const nvsInfoRecord = nvsInfo as Record<string, unknown>;
-    const item: FirmwareEntry = {
-      features: [],
-      description: "",
-      merged_binary: {
-        [consoleOutput]: `/merged_binary/${mergedBinary}`,
-      },
-      min_flash_size: minFlashMB,
-      min_psram_size: minPsramMB,
-      nvs_info: {
-        start_addr: String(nvsInfoRecord.start_addr ?? ""),
-        size: String(nvsInfoRecord.size ?? ""),
-      },
-    };
-
-    const chipKey = makeChipSelectorKey(chip.trim(), revision);
+    const chipKey = makeChipKey(chip.trim());
     const brandKey = brand.trim();
-    const boardKey = board.trim();
+    const boardKey = board_name.trim();
 
-    if (!firmware[chipKey]) {
-      firmware[chipKey] = {};
+    if (!firmware[appKey]) {
+      firmware[appKey] = {};
     }
-    if (!firmware[chipKey][brandKey]) {
-      firmware[chipKey][brandKey] = {};
+    if (!firmware[appKey][chipKey]) {
+      firmware[appKey][chipKey] = {};
+    }
+    if (!firmware[appKey][chipKey][brandKey]) {
+      firmware[appKey][chipKey][brandKey] = {};
+    }
+    if (!firmware[appKey][chipKey][brandKey][boardKey]) {
+      firmware[appKey][chipKey][brandKey][boardKey] = {};
     }
 
-    const existing = firmware[chipKey][brandKey][boardKey];
-    if (existing) {
-      existing.merged_binary[consoleOutput] = item.merged_binary[consoleOutput];
-      continue;
-    }
-
-    firmware[chipKey][brandKey][boardKey] = item;
+    firmware[appKey][chipKey][brandKey][boardKey][console_output] = {
+      flash_files: resolvedFlashFiles,
+      flash_settings: flash_settings,
+      partition_table: partition_table,
+      nvs_info: nvs_info,
+      min_flash_size: minFlashMB,
+      min_psram_size: 0,
+    };
   }
 
   if (Object.keys(firmware).length === 0) {
-    log("No valid metadata collected from merged_binary/*.json");
+    if (allowEmpty) {
+      log("warning: No valid metadata collected, writing empty firmware.json");
+      await fs.writeFile(TARGET_FIRMWARE_JSON, "{}\n", "utf8");
+      return 0;
+    }
+    log("No valid metadata collected from firmware_output/*.json");
     return 1;
   }
 
-  const sortedFirmware: FirmwareDb = {};
-  for (const chipKey of Object.keys(firmware).sort((a, b) => a.localeCompare(b))) {
-    const brands = firmware[chipKey];
-    const sortedBrands: FirmwareBrands = {};
-    for (const brandKey of Object.keys(brands).sort((a, b) => a.localeCompare(b))) {
-      const boards = brands[brandKey];
-      const sortedBoards: FirmwareBoards = {};
-      for (const boardKey of Object.keys(boards).sort((a, b) => a.localeCompare(b))) {
-        const board = boards[boardKey];
-        sortedBoards[boardKey] = {
-          ...board,
-          merged_binary: Object.fromEntries(
-            Object.entries(board.merged_binary).sort(([left], [right]) => left.localeCompare(right)),
-          ),
-        };
-      }
-      sortedBrands[brandKey] = sortedBoards;
-    }
-    sortedFirmware[chipKey] = sortedBrands;
-  }
+  const sortedFirmware = sortDeep(firmware);
 
   await fs.writeFile(TARGET_FIRMWARE_JSON, `${JSON.stringify(sortedFirmware, null, 2)}\n`, "utf8");
-  console.log(`Copied merged binaries to: ${TARGET_MERGED_DIR}`);
+  console.log(`Extracted firmware files to: ${TARGET_FIRMWARE_DIR}`);
   console.log(`Generated: ${TARGET_FIRMWARE_JSON}`);
+
+  const masterRef = getMasterRef();
+  await fs.writeFile(
+    TARGET_FIRMWARE_META_JSON,
+    `${JSON.stringify({ masterRef }, null, 2)}\n`,
+    "utf8",
+  );
+  console.log(`Generated: ${TARGET_FIRMWARE_META_JSON} (masterRef=${masterRef})`);
+
   return 0;
+}
+
+function sortDeep(obj: Record<string, unknown>): Record<string, unknown> {
+  const sorted: Record<string, unknown> = {};
+  for (const key of Object.keys(obj).sort()) {
+    const val = obj[key];
+    if (val && typeof val === "object" && !Array.isArray(val)) {
+      sorted[key] = sortDeep(val as Record<string, unknown>);
+    } else {
+      sorted[key] = val;
+    }
+  }
+  return sorted;
 }
 
 main()

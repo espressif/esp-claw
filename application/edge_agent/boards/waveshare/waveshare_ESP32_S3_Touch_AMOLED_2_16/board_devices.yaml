@@ -1,0 +1,135 @@
+version: 1.0.0
+# Devices Configuration for Waveshare ESP32-S3-Touch-AMOLED-2.16
+
+devices:
+  # ES8311 speaker playback path.
+  - name: audio_dac
+    chip: es8311
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: false
+      dac_enabled: true
+      dac_max_channel: 1
+      dac_channel_mask: "1"
+      dac_init_gain: 0
+      mclk_enabled: true
+    peripherals:
+      - name: i2s_audio_out
+      - name: i2c_master
+        address: 0x30
+        frequency: 400000
+
+  # ES7210 dual microphone capture path.
+  - name: audio_adc
+    chip: es7210
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      adc_max_channel: 4
+      adc_channel_mask: "0011"
+      adc_init_gain: 0
+    peripherals:
+      - name: i2s_audio_in
+      - name: i2c_master
+        address: 0x80
+        frequency: 400000
+
+  # Optional microSD slot, wired as 1-bit SDMMC in Waveshare's ESP-IDF BSP.
+  - name: fs_sdcard
+    type: fs_fat
+    sub_type: sdmmc
+    version: default
+    config:
+      vfs_config:
+        format_if_mount_failed: false
+        max_files: 5
+      sub_config:
+        bus_width: 1
+        pins:
+          clk: 2
+          cmd: 1
+          d0: 3
+
+  # 2.16-inch 480x480 AMOLED, CO5300 over QSPI.
+  - name: display_lcd
+    chip: co5300
+    type: display_lcd
+    sub_type: spi
+    version: default
+    dependencies:
+      esp_lcd_co5300: "*"
+      esp_lcd_panel_io_additions: "^1"
+    config:
+      x_max: 480
+      y_max: 480
+      swap_xy: true
+      mirror_x: false
+      mirror_y: true
+      io_spi_config:
+        cs_gpio_num: 12
+        dc_gpio_num: -1
+        spi_mode: 0
+        lcd_cmd_bits: 32
+        flags:
+          quad_mode: true
+      lcd_panel_config:
+        reset_gpio_num: 39
+        rgb_ele_order: LCD_RGB_ELEMENT_ORDER_RGB
+        bits_per_pixel: 16
+        data_endian: LCD_RGB_DATA_ENDIAN_BIG
+        vendor_config: NULL
+    peripherals:
+      - name: spi_display
+
+  # Capacitive touch controller used by Waveshare's official BSP.
+  - name: lcd_touch
+    chip: cst9217
+    type: lcd_touch
+    sub_type: i2c
+    version: default
+    dependencies:
+      esp_lcd_touch:
+        version: "*"
+        require: public
+      waveshare/esp_lcd_touch_cst9217: "*"
+    config:
+      io_i2c_config:
+        scl_speed_hz: 400000
+      touch_config:
+        x_max: 480
+        y_max: 480
+        rst_gpio_num: 40
+        int_gpio_num: 11
+    peripherals:
+      - name: i2c_master
+        i2c_addr: [0xB4]
+
+  # Metadata for the onboard QMI8658. ESP-Claw does not yet include a QMI8658
+  # lua_module_imu backend, so this is intentionally not auto-initialized.
+  - name: imu_sensor
+    chip: qmi8658
+    type: custom
+    version: 1.0.0
+    init_skip: true
+    config:
+      i2c_addr: 0x6b
+      frequency: 400000
+      int1_gpio_num: 17
+      int2_gpio_num: 21
+    peripherals:
+      - name: i2c_master
+
+  # Metadata for the onboard AXP2101 PMU. The default hardware rails are left
+  # untouched until a board-specific power manager is added and tested.
+  - name: axp2101_power_manager
+    chip: axp2101
+    type: custom
+    version: 1.0.0
+    init_skip: true
+    config:
+      i2c_addr: 0x34
+      frequency: 400000
+    peripherals:
+      - name: i2c_master

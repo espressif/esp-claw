@@ -26,4 +26,5 @@ include:
   - '.gitlab/ci/pre-check.yml'
   - '.gitlab/ci/build.yml'
   - '.gitlab/ci/build-doc.yml'
+  - '.gitlab/ci/simulator.yml'
   - '.gitlab/ci/deploy.yml'

@@ -1,0 +1,1010 @@
+<html>
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      html, body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        background: #111827;
+        color: #e5e7eb;
+        font-family: Arial, sans-serif;
+      }
+      body {
+        display: grid;
+        grid-template-columns: 1fr 360px;
+        gap: 16px;
+        padding: 16px;
+        box-sizing: border-box;
+      }
+      #stage {
+        display: grid;
+        place-items: center;
+        min-width: 0;
+      }
+      #canvas {
+        width: min(100%, var(--sim-css-width, 800px));
+        aspect-ratio: var(--sim-aspect, 5 / 3);
+        background: black;
+        image-rendering: pixelated;
+      }
+      #side {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        gap: 10px;
+      }
+      select, button {
+        height: 34px;
+      }
+      .actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      .run-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      .resolution {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+        gap: 8px;
+      }
+      .resolution input {
+        min-width: 0;
+        height: 34px;
+        box-sizing: border-box;
+        background: #020617;
+        color: #e5e7eb;
+        border: 1px solid #374151;
+        padding: 0 8px;
+      }
+      input[type="file"] {
+        display: none;
+      }
+      textarea {
+        flex: 1;
+        min-height: 0;
+        resize: none;
+        background: #020617;
+        color: #d1d5db;
+        border: 1px solid #374151;
+        padding: 8px;
+        font-family: Consolas, monospace;
+        font-size: 12px;
+      }
+      @media (max-width: 900px) {
+        body {
+          grid-template-columns: 1fr;
+          grid-template-rows: auto 320px;
+        }
+      }
+      body.embedded {
+        grid-template-columns: 1fr;
+        padding: 0;
+        background: #000;
+      }
+      body.embedded #stage {
+        width: 100%;
+        height: 100%;
+      }
+      body.embedded #canvas {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+      }
+      body.embedded #side {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <main id="stage">
+      <canvas id="canvas" width="800" height="480"></canvas>
+    </main>
+    <aside id="side">
+      <select id="scriptSelect">
+        <option value="">Upload or mount a Lua script</option>
+      </select>
+      <div class="resolution">
+        <input id="widthInput" type="number" min="64" max="2048" step="1" value="800" aria-label="width" />
+        <input id="heightInput" type="number" min="64" max="2048" step="1" value="480" aria-label="height" />
+        <button id="applyResolutionButton">Apply</button>
+      </div>
+      <div class="actions">
+        <button id="luaUploadButton">Lua</button>
+        <button id="fsUploadButton">Files</button>
+      </div>
+      <input id="luaUpload" type="file" accept=".lua,text/x-lua,text/plain" />
+      <input id="fsUpload" type="file" multiple webkitdirectory />
+      <div class="run-actions">
+        <button id="runButton" disabled>Run</button>
+        <button id="stopButton" disabled>Stop</button>
+      </div>
+      <textarea id="log" readonly></textarea>
+    </aside>
+    <script>
+      const appendLog = (text) => {
+        const log = document.getElementById("log");
+        log.value += text + "\n";
+        log.scrollTop = log.scrollHeight;
+      };
+      const formatError = (value) => {
+        if (!value) {
+          return String(value);
+        }
+        if (value.stack) {
+          return value.stack;
+        }
+        if (value.message) {
+          return value.message;
+        }
+        const detail = {};
+        for (const key of ["name", "type", "status", "statusText", "filename", "lineno", "colno"]) {
+          if (value[key] !== undefined) {
+            detail[key] = value[key];
+          }
+        }
+        if (value.target && value.target.src) {
+          detail.src = value.target.src;
+        }
+        try {
+          return JSON.stringify(detail);
+        } catch (err) {
+          return String(value);
+        }
+      };
+      const canvas = document.getElementById("canvas");
+      const widthInput = document.getElementById("widthInput");
+      const heightInput = document.getElementById("heightInput");
+      const applyResolutionButton = document.getElementById("applyResolutionButton");
+      const clampResolution = (value, fallback) => {
+        const parsed = Number.parseInt(value, 10);
+        if (!Number.isFinite(parsed)) {
+          return fallback;
+        }
+        return Math.max(64, Math.min(2048, parsed));
+      };
+      const setResolutionControlsDisabled = (disabled) => {
+        widthInput.disabled = disabled;
+        heightInput.disabled = disabled;
+        applyResolutionButton.disabled = disabled;
+      };
+      const releasedTouchState = (session) => ({ x: 0, y: 0, pressed: false, id: 0, session });
+      const resetInputQueue = () => {
+        if (!Module.__touchEvents) {
+          Module.__touchEvents = [];
+        }
+        Module.__touchEvents.length = 0;
+        Module.__touchState = releasedTouchState(Module.__inputSessionId || 0);
+      };
+      const setInputMode = (mode) => {
+        Module.__inputMode = mode;
+        Module.__inputEnabled = mode === "running";
+      };
+      const startInputSession = () => {
+        Module.__inputSessionId = (Module.__inputSessionId || 0) + 1;
+        setInputMode("starting");
+        resetInputQueue();
+        return Module.__inputSessionId;
+      };
+      const enableInputSession = () => {
+        resetInputQueue();
+        setInputMode("running");
+      };
+      const stopInputSession = () => {
+        setInputMode("stopping");
+        resetInputQueue();
+        setInputMode("stopped");
+      };
+      const setCanvasResolution = (width, height, quiet) => {
+        canvas.width = width;
+        canvas.height = height;
+        widthInput.value = String(width);
+        heightInput.value = String(height);
+        canvas.style.setProperty("--sim-css-width", `${width}px`);
+        canvas.style.setProperty("--sim-aspect", `${width} / ${height}`);
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "black";
+        ctx.fillRect(0, 0, width, height);
+        if (typeof Module !== "undefined") {
+          Module.__lvglCanvas = null;
+          delete Module.__lvglPerf;
+          stopInputSession();
+        }
+        if (!quiet) {
+          appendLog(`[sim] resolution: ${width}x${height}`);
+        }
+      };
+      const createSimServices = () => {
+        const enc = encodeURIComponent;
+        const moduleRef = () => Module;
+        const ensureDir = (dir) => {
+          const FS = moduleRef().FS;
+          const parts = String(dir || "/").split("/").filter(Boolean);
+          let current = "";
+          for (const part of parts) {
+            current += "/" + part;
+            if (!FS.analyzePath(current).exists) {
+              FS.mkdir(current);
+            }
+          }
+        };
+        const writeText = (path, text) => {
+          const normalized = "/" + String(path).replace(/\\/g, "/").replace(/^\/+/, "");
+          ensureDir(normalized.split("/").slice(0, -1).join("/"));
+          moduleRef().FS.writeFile(normalized, new TextEncoder().encode(String(text)));
+        };
+        const audioService = {
+          outputs: new Map(),
+          players: new Map(),
+          nextOutputId: 1,
+          nextPlayerId: 1,
+          proxyBase: "http://127.0.0.1:8092/stream?url=",
+          unlocked: false,
+          audioContext: null,
+          skippedPcmWarned: false,
+          log(message) {
+            appendLog("[audio] " + message);
+          },
+          unlock() {
+            if (this.unlocked) {
+              return;
+            }
+            this.unlocked = true;
+            try {
+              const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+              if (AudioContextCtor) {
+                const ctx = this.audioContext || new AudioContextCtor();
+                this.audioContext = ctx;
+                const resumeResult = ctx.resume?.();
+                const source = ctx.createBufferSource();
+                source.buffer = ctx.createBuffer(1, 1, 22050);
+                source.connect(ctx.destination);
+                source.start(0);
+                if (resumeResult && typeof resumeResult.then === "function") {
+                  resumeResult.catch(() => {});
+                }
+              }
+            } catch (err) {
+              this.log("unlock context failed: " + formatError(err));
+            }
+            try {
+              const audio = new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=");
+              audio.muted = true;
+              audio.play().then(() => {
+                audio.pause();
+              }).catch(() => {});
+            } catch (err) {
+              this.log("unlock element failed: " + formatError(err));
+            }
+          },
+          createOutput(opts = {}) {
+            const id = this.nextOutputId++;
+            this.outputs.set(id, {
+              id,
+              sample_rate: Number(opts.sample_rate || opts.rate || 16000),
+              channels: Number(opts.channels || 1),
+              bits: Number(opts.bits || 16),
+              volume: Number(opts.volume ?? 70),
+              nextTime: 0,
+              closed: false,
+            });
+            return id;
+          },
+          writePcm(outputId, ptr, len) {
+            try {
+              const output = this.outputs.get(Number(outputId));
+              if (!output || output.closed) {
+                return "output_closed";
+              }
+              if (output.bits !== 16) {
+                return `unsupported_bits_${output.bits}`;
+              }
+              const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+              if (!AudioContextCtor) {
+                return "audio_context_unavailable";
+              }
+              const heap = Module.HEAPU8 || globalThis.HEAPU8;
+              if (!heap) {
+                return "heap_unavailable";
+              }
+              const ctx = this.audioContext || new AudioContextCtor();
+              this.audioContext = ctx;
+              const resumeResult = ctx.resume?.();
+              if (resumeResult && typeof resumeResult.then === "function") {
+                resumeResult.catch(() => {});
+              }
+              if (ctx.state !== "running") {
+                if (!this.skippedPcmWarned) {
+                  this.skippedPcmWarned = true;
+                  this.log("pcm skipped until browser audio is unlocked");
+                }
+                return "";
+              }
+              const channels = Math.max(1, Math.min(2, output.channels || 1));
+              const bytesPerFrame = channels * 2;
+              const frameCount = Math.floor(Number(len || 0) / bytesPerFrame);
+              if (frameCount <= 0) {
+                return "";
+              }
+              const sampleRate = Math.max(8000, Math.min(96000, output.sample_rate || 16000));
+              const buffer = ctx.createBuffer(channels, frameCount, sampleRate);
+              for (let ch = 0; ch < channels; ch++) {
+                const data = buffer.getChannelData(ch);
+                for (let i = 0; i < frameCount; i++) {
+                  const off = Number(ptr) + i * bytesPerFrame + ch * 2;
+                  let sample = heap[off] | (heap[off + 1] << 8);
+                  if (sample & 0x8000) {
+                    sample -= 0x10000;
+                  }
+                  data[i] = Math.max(-1, Math.min(1, sample / 32768));
+                }
+              }
+              const gain = ctx.createGain();
+              gain.gain.value = Math.max(0, Math.min(1, output.volume / 100));
+              gain.connect(ctx.destination);
+              const source = ctx.createBufferSource();
+              source.buffer = buffer;
+              source.connect(gain);
+              const startAt = Math.max(ctx.currentTime, output.nextTime || 0);
+              source.start(startAt);
+              output.nextTime = startAt + buffer.duration;
+              return "";
+            } catch (err) {
+              this.log("pcm write failed: " + formatError(err));
+              return "pcm_write_failed";
+            }
+          },
+          setVolume(outputId, volume) {
+            const output = this.outputs.get(Number(outputId));
+            if (!output || output.closed) {
+              return false;
+            }
+            output.volume = Math.max(0, Math.min(100, Number(volume || 0)));
+            for (const player of this.players.values()) {
+              if (player.outputId === output.id && player.audio) {
+                player.audio.volume = output.volume / 100;
+              }
+            }
+            return true;
+          },
+          closeOutput(outputId) {
+            const output = this.outputs.get(Number(outputId));
+            if (output) {
+              output.closed = true;
+            }
+            return true;
+          },
+          createPlayer(outputId) {
+            const id = this.nextPlayerId++;
+            this.players.set(id, {
+              id,
+              outputId: Number(outputId || 0),
+              state: "stopped",
+              url: "",
+              error: "",
+              audio: null,
+            });
+            return id;
+          },
+          resolveStream(url) {
+            const mode = new URLSearchParams(location.search).get("stream") || "localProxy";
+            if (mode === "direct") {
+              return url;
+            }
+            return this.proxyBase + enc(url);
+          },
+          play(playerId, url) {
+            const player = this.players.get(Number(playerId));
+            if (!player) {
+              return "player_not_found";
+            }
+            this.stop(playerId);
+            const output = this.outputs.get(player.outputId);
+            const audio = new Audio();
+            audio.preload = "none";
+            audio.crossOrigin = "anonymous";
+            audio.src = this.resolveStream(url);
+            audio.volume = Math.max(0, Math.min(1, Number((output && output.volume) ?? 70) / 100));
+            player.audio = audio;
+            player.url = url;
+            player.error = "";
+            player.state = "buffering";
+            audio.addEventListener("playing", () => { player.state = "playing"; });
+            audio.addEventListener("waiting", () => { player.state = "buffering"; });
+            audio.addEventListener("ended", () => { player.state = "stopped"; });
+            audio.addEventListener("error", () => {
+              player.state = "error";
+              player.error = audio.error ? `media_error_${audio.error.code}` : "media_error";
+              this.log(`play failed: ${player.error}`);
+            });
+            audio.play().then(() => {
+              player.state = "playing";
+              this.log(`playing ${url}`);
+            }).catch((err) => {
+              player.state = "error";
+              player.error = err && err.message ? err.message : String(err);
+              this.log(`play rejected: ${player.error}`);
+            });
+            return "";
+          },
+          stop(playerId) {
+            const player = this.players.get(Number(playerId));
+            if (!player) {
+              return true;
+            }
+            if (player.audio) {
+              try {
+                player.audio.pause();
+                player.audio.removeAttribute("src");
+                player.audio.load();
+              } catch (err) {
+                this.log(formatError(err));
+              }
+            }
+            player.audio = null;
+            player.state = "stopped";
+            return true;
+          },
+          closePlayer(playerId) {
+            this.stop(playerId);
+            this.players.delete(Number(playerId));
+            return true;
+          },
+          poll(playerId) {
+            const player = this.players.get(Number(playerId));
+            if (!player) {
+              return { state: "stopped", error: "player_not_found" };
+            }
+            return { state: player.state, error: player.error || "", url: player.url || "" };
+          },
+          stopAll() {
+            for (const id of Array.from(this.players.keys())) {
+              this.stop(id);
+            }
+          },
+        };
+        const threadService = {
+          queues: new Map(),
+          locks: new Map(),
+          jobs: new Map(),
+          lastError: "",
+          log(message) {
+            appendLog("[thread] " + message);
+          },
+          queueCreate(name, opts = {}) {
+            if (this.queues.has(name)) {
+              this.lastError = "exists";
+              return false;
+            }
+            this.queues.set(name, { name, depth: Number(opts.depth || 8), items: [] });
+            this.lastError = "";
+            return true;
+          },
+          queueSend(name, text) {
+            const queue = this.queues.get(name);
+            if (!queue) {
+              this.lastError = "not_found";
+              return false;
+            }
+            if (queue.items.length >= queue.depth) {
+              queue.items.shift();
+            }
+            queue.items.push(String(text));
+            this.lastError = "";
+            if (name === "network_radio_cmd") {
+              this.handleNetworkRadioCommand(String(text));
+            }
+            return true;
+          },
+          queueRecv(name) {
+            const queue = this.queues.get(name);
+            if (!queue) {
+              this.lastError = "not_found";
+              return null;
+            }
+            if (!queue.items.length) {
+              this.lastError = "timeout";
+              return null;
+            }
+            this.lastError = "";
+            return queue.items.shift();
+          },
+          lockCreate(name) {
+            if (this.locks.has(name)) {
+              this.lastError = "exists";
+              return false;
+            }
+            this.locks.set(name, false);
+            this.lastError = "";
+            return true;
+          },
+          lock(name) {
+            if (!this.locks.has(name)) {
+              this.lastError = "not_found";
+              return false;
+            }
+            if (this.locks.get(name)) {
+              this.lastError = "timeout";
+              return false;
+            }
+            this.locks.set(name, true);
+            this.lastError = "";
+            return true;
+          },
+          unlock(name) {
+            if (!this.locks.has(name)) {
+              this.lastError = "not_found";
+              return false;
+            }
+            this.locks.set(name, false);
+            this.lastError = "";
+            return true;
+          },
+          start(path, args = {}, opts = {}) {
+            const name = opts.name || path.split("/").pop() || "job";
+            const existing = this.jobs.get(name);
+            if (existing && existing.status === "running" && !opts.replace) {
+              this.lastError = "already running";
+              return false;
+            }
+            const job = { name, path, args, status: "running", output: "status=running backend=service", error: "" };
+            this.jobs.set(name, job);
+            this.lastError = "";
+            this.log(`start ${name}: ${path}`);
+            if (path.endsWith("/radio_player_daemon.lua") || path.endsWith("radio_player_daemon.lua")) {
+              this.startNetworkRadioDaemon(job);
+            }
+            return true;
+          },
+          get(name) {
+            const job = this.jobs.get(name);
+            if (!job) {
+              this.lastError = "not_found";
+              return null;
+            }
+            this.lastError = "";
+            return `name=${job.name} status=${job.status} ${job.output || ""}`;
+          },
+          stopAll() {
+            for (const job of this.jobs.values()) {
+              job.status = "stopped";
+              job.output = "status=stopped";
+            }
+          },
+          ensureNetworkRadioControl() {
+            if (!this.queues.has("network_radio_cmd")) {
+              this.queueCreate("network_radio_cmd", { depth: 2 });
+            }
+            if (!this.queues.has("network_radio_reply")) {
+              this.queueCreate("network_radio_reply", { depth: 2 });
+            }
+            if (!this.locks.has("network_radio_control_lock")) {
+              this.lockCreate("network_radio_control_lock");
+            }
+            ensureDir("/ramfs/network_radio");
+          },
+          startNetworkRadioDaemon(job) {
+            this.ensureNetworkRadioControl();
+            const status = {
+              state: "idle",
+              title: "",
+              url: "",
+              volume: 70,
+              codec_name: "audio_dac",
+              updated_at_ms: Date.now(),
+              command_status: "ready",
+            };
+            job.radio = { status, outputId: 0, playerId: 0 };
+            this.writeNetworkRadioStatus(status);
+          },
+          writeNetworkRadioStatus(status) {
+            status.updated_at_ms = Date.now();
+            writeText("/ramfs/network_radio/status.json", JSON.stringify(status));
+          },
+          findNetworkRadioJob() {
+            return this.jobs.get("network_radio_player");
+          },
+          handleNetworkRadioCommand(text) {
+            const job = this.findNetworkRadioJob();
+            if (!job || job.status !== "running" || !job.radio) {
+              return;
+            }
+            let command;
+            try {
+              command = JSON.parse(text);
+            } catch (err) {
+              this.lastError = "invalid_json";
+              return;
+            }
+            const status = job.radio.status;
+            try {
+              const action = command.action;
+              if (action === "play" || action === "switch") {
+                if (!job.radio.outputId) {
+                  job.radio.outputId = audioService.createOutput({ volume: command.volume ?? status.volume });
+                }
+                audioService.setVolume(job.radio.outputId, command.volume ?? status.volume);
+                if (!job.radio.playerId) {
+                  job.radio.playerId = audioService.createPlayer(job.radio.outputId);
+                }
+                const url = command.url || this.resolveStationUrl(command.station);
+                const title = command.title || command.station || status.title || "";
+                const err = audioService.play(job.radio.playerId, url);
+                if (err) {
+                  throw new Error(err);
+                }
+                Object.assign(status, {
+                  state: "playing",
+                  title,
+                  url,
+                  volume: Number(command.volume ?? status.volume ?? 70),
+                  error: "",
+                  command_id: command.command_id,
+                  command_status: "done",
+                });
+              } else if (action === "volume") {
+                status.volume = Math.max(0, Math.min(100, Number(command.volume ?? status.volume ?? 70)));
+                if (job.radio.outputId) {
+                  audioService.setVolume(job.radio.outputId, status.volume);
+                }
+                Object.assign(status, { command_id: command.command_id, command_status: "done" });
+              } else if (action === "status") {
+                Object.assign(status, { command_id: command.command_id, command_status: "done" });
+              } else if (action === "stop") {
+                if (job.radio.playerId) {
+                  audioService.stop(job.radio.playerId);
+                }
+                Object.assign(status, {
+                  state: "stopped",
+                  title: "",
+                  url: "",
+                  command_id: command.command_id,
+                  command_status: "done",
+                });
+              } else {
+                throw new Error("unknown action: " + action);
+              }
+            } catch (err) {
+              Object.assign(status, {
+                state: status.state === "playing" ? "playing" : "error",
+                error: err && err.message ? err.message : String(err),
+                command_id: command.command_id,
+                command_status: "error",
+              });
+            }
+            this.writeNetworkRadioStatus(status);
+            this.queueSend("network_radio_reply", JSON.stringify(status));
+          },
+          resolveStationUrl(title) {
+            const stations = {
+              "宕傚北921": "http://lhttp.qingting.fm/live/20212426/64k.mp3",
+              "闀挎矙101.7鍩庡競涔嬪０": "http://lhttp.qingting.fm/live/4237/64k.mp3",
+              "涓婃捣缁忓吀947": "http://lhttp.qingting.fm/live/267/64k.mp3",
+              "婀栧寳缁忓吀闊充箰骞挎挱": "http://lhttp.qingting.fm/live/1296/64k.mp3",
+              "鎴愰兘骞翠唬闊充箰鎬€鏃уソ澹伴煶": "http://lhttp.qingting.fm/live/20211686/64k.mp3",
+              "灞变笢缁忓吀闊充箰骞挎挱": "http://lhttp.qingting.fm/live/20240/64k.mp3",
+              "鏉窞90.7": "http://lhttp.qingting.fm/live/15318146/64k.mp3",
+              "澶╂触TIKI 100.5": "http://lhttp.qingting.fm/live/20003/64k.mp3",
+            };
+            return stations[title] || "http://lhttp.qingting.fm/live/15318146/64k.mp3";
+          },
+        };
+        return {
+          runtime: { nextId: 1, currentId: 0 },
+          audio: audioService,
+          thread: threadService,
+          resetForRun(path) {
+            this.runtime.currentId = this.runtime.nextId++;
+            appendLog(`[runtime] start #${this.runtime.currentId}: ${path}`);
+            ensureDir("/app");
+            ensureDir("/storage");
+            ensureDir("/tmp");
+            ensureDir("/uploads");
+            ensureDir("/ramfs");
+            ensureDir("/ramfs/network_radio");
+          },
+          stopAll() {
+            threadService.stopAll();
+            audioService.stopAll();
+            appendLog("[runtime] stopped");
+          },
+        };
+      };
+      applyResolutionButton.addEventListener("click", () => {
+        if (applyResolutionButton.disabled) {
+          return;
+        }
+        const width = clampResolution(widthInput.value, canvas.width || 800);
+        const height = clampResolution(heightInput.value, canvas.height || 480);
+        setCanvasResolution(width, height, false);
+      });
+      setCanvasResolution(canvas.width || 800, canvas.height || 480, true);
+      window.addEventListener("error", (event) => {
+        appendLog("[err] " + (event.message || formatError(event.error || event)));
+      });
+      window.addEventListener("unhandledrejection", (event) => {
+        appendLog("[err] " + formatError(event.reason));
+      });
+      var Module = {
+        canvas,
+        noInitialRun: true,
+        onAbort(reason) {
+          appendLog("[err] abort: " + reason);
+        },
+        print(text) {
+          appendLog(text);
+          console.log(text);
+        },
+        printErr(text) {
+          appendLog("[err] " + text);
+          console.error(text);
+        },
+        onRuntimeInitialized() {
+          Module.__simServices = createSimServices();
+          let touchId = 0;
+          Module.__inputSessionId = 0;
+          Module.__inputMode = "idle";
+          Module.__inputEnabled = false;
+          Module.__touchEvents = [];
+          Module.__touchState = releasedTouchState(0);
+          Module.__takeTouchEvent = () => {
+            const currentSession = Module.__inputSessionId || 0;
+            while (Module.__touchEvents && Module.__touchEvents.length) {
+              const event = Module.__touchEvents.shift();
+              if (event && event.session === currentSession) {
+                Module.__touchState = event;
+                return event;
+              }
+            }
+            if (!Module.__touchState || Module.__touchState.session !== currentSession) {
+              Module.__touchState = releasedTouchState(currentSession);
+            }
+            return null;
+          };
+          const setTouchEvent = (event, pressed) => {
+            if (!Module.__inputEnabled) {
+              return;
+            }
+            if (pressed) {
+              Module.__simServices.audio.unlock();
+            }
+            const rect = Module.canvas.getBoundingClientRect();
+            const x = Math.max(0, Math.min(Module.canvas.width - 1,
+              Math.round((event.clientX - rect.left) * Module.canvas.width / rect.width)));
+            const y = Math.max(0, Math.min(Module.canvas.height - 1,
+              Math.round((event.clientY - rect.top) * Module.canvas.height / rect.height)));
+            const touchEvent = { x, y, pressed, id: ++touchId, session: Module.__inputSessionId };
+            Module.__touchState = touchEvent;
+            Module.__touchEvents.push(touchEvent);
+          };
+          Module.canvas.addEventListener("pointerdown", (event) => {
+            Module.canvas.setPointerCapture?.(event.pointerId);
+            setTouchEvent(event, true);
+            event.preventDefault();
+          });
+          Module.canvas.addEventListener("pointerup", (event) => {
+            setTouchEvent(event, false);
+            event.preventDefault();
+          });
+          Module.canvas.addEventListener("pointermove", (event) => {
+            if (event.buttons || Module.__touchState.pressed) {
+              setTouchEvent(event, true);
+              event.preventDefault();
+            }
+          });
+          Module.canvas.addEventListener("pointercancel", (event) => {
+            setTouchEvent(event, false);
+            event.preventDefault();
+          });
+          const normalizePath = (path) => {
+            const clean = path.replace(/\\/g, "/").replace(/^\/+/, "");
+            return "/" + clean.split("/").filter(Boolean).join("/");
+          };
+          const ensureDir = (dir) => {
+            const parts = dir.split("/").filter(Boolean);
+            let current = "";
+            for (const part of parts) {
+              current += "/" + part;
+              const existing = Module.FS.analyzePath(current);
+              if (!existing.exists) {
+                Module.FS.mkdir(current);
+              }
+            }
+          };
+          const writeFile = async (file, targetPath) => {
+            const path = normalizePath(targetPath);
+            ensureDir(path.split("/").slice(0, -1).join("/"));
+            const bytes = new Uint8Array(await file.arrayBuffer());
+            Module.FS.writeFile(path, bytes);
+            return path;
+          };
+          const writeBytes = (targetPath, bytes) => {
+            const path = normalizePath(targetPath);
+            ensureDir(path.split("/").slice(0, -1).join("/"));
+            Module.FS.writeFile(path, bytes);
+            return path;
+          };
+          const addScriptOption = (path) => {
+            const select = document.getElementById("scriptSelect");
+            const runButton = document.getElementById("runButton");
+            let option = Array.from(select.options).find((item) => item.value === path);
+            if (!option) {
+              option = document.createElement("option");
+              option.value = path;
+              option.textContent = path.replace(/^\/uploads\/scripts\//, "upload/");
+              select.appendChild(option);
+            }
+            select.value = path;
+            runButton.disabled = false;
+          };
+          const runPath = async (path, clearLog) => {
+            const button = document.getElementById("runButton");
+            const stopButton = document.getElementById("stopButton");
+            button.disabled = true;
+            stopButton.disabled = false;
+            Module.__stopRequested = false;
+            startInputSession();
+            setResolutionControlsDisabled(true);
+            const log = document.getElementById("log");
+            if (clearLog !== false) {
+              log.value = "";
+            }
+            try {
+              Module.__simServices.resetForRun(path);
+              enableInputSession();
+              const rc = await Module.ccall("esp_claw_sim_run_file", "number", ["string"], [path], { async: true });
+              Module.print("[sim] exit code: " + rc);
+              return rc;
+            } catch (err) {
+              Module.printErr(err && err.stack ? err.stack : String(err));
+              return 1;
+            } finally {
+              button.disabled = false;
+              stopButton.disabled = true;
+              stopInputSession();
+              setResolutionControlsDisabled(false);
+            }
+          };
+          const run = async () => {
+            Module.__simServices.audio.unlock();
+            const path = document.getElementById("scriptSelect").value;
+            if (!path) {
+              Module.printErr("[sim] no script mounted. Upload a Lua file or launch from Skill Lab.");
+              return;
+            }
+            await runPath(path, true);
+          };
+          window.espClawSim = {
+            mountBytes(path, bytes) {
+              return writeBytes(path, bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+            },
+            mountText(path, text) {
+              return writeBytes(path, new TextEncoder().encode(text));
+            },
+            mountScript(name, text) {
+              const path = writeBytes("/uploads/scripts/" + name, new TextEncoder().encode(text));
+              addScriptOption(path);
+              return path;
+            },
+            runPath,
+            stop() {
+              Module.__stopRequested = true;
+              Module.__simServices.stopAll();
+              setInputMode("stopping");
+              try {
+                Module.ccall("esp_claw_sim_stop", null, [], []);
+              } catch (err) {
+                Module.printErr(err && err.stack ? err.stack : String(err));
+              }
+              Module.print("[sim] stop requested");
+            },
+            exists(path) {
+              try {
+                Module.FS.stat(normalizePath(path));
+                return true;
+              } catch (err) {
+                return false;
+              }
+            }
+          };
+          window.addEventListener("message", async (event) => {
+            const data = event.data || {};
+            try {
+              if (data.type === "esp-claw-sim:mountSkill") {
+                const skill = data.skill || {};
+                const files = Array.isArray(skill.files) ? skill.files : [];
+                for (const file of files) {
+                  if (!file || !file.path) {
+                    continue;
+                  }
+                  if (typeof file.text === "string") {
+                    window.espClawSim.mountText(file.path, file.text);
+                  } else if (Array.isArray(file.bytes)) {
+                    window.espClawSim.mountBytes(file.path, file.bytes);
+                  }
+                }
+                if (skill.entry) {
+                  addScriptOption(normalizePath(skill.entry));
+                }
+                Module.print("[sim] mounted skill: " + (skill.id || "unknown"));
+                event.source && event.source.postMessage({
+                  type: "esp-claw-sim:mounted",
+                  id: skill.id || "",
+                }, event.origin || "*");
+              } else if (data.type === "esp-claw-sim:runSkill") {
+                const path = normalizePath(data.path || "");
+                if (!path || path === "/") {
+                  throw new Error("missing runSkill path");
+                }
+                addScriptOption(path);
+                await window.espClawSim.runPath(path, true);
+              } else if (data.type === "esp-claw-sim:stop") {
+                window.espClawSim.stop();
+              }
+            } catch (err) {
+              Module.printErr(err && err.stack ? err.stack : String(err));
+              event.source && event.source.postMessage({
+                type: "esp-claw-sim:error",
+                error: err && err.message ? err.message : String(err),
+              }, event.origin || "*");
+            }
+          });
+          document.getElementById("runButton").addEventListener("click", run);
+          document.getElementById("stopButton").addEventListener("click", () => window.espClawSim.stop());
+          document.getElementById("luaUploadButton").addEventListener("click", () => {
+            document.getElementById("luaUpload").click();
+          });
+          document.getElementById("fsUploadButton").addEventListener("click", () => {
+            document.getElementById("fsUpload").click();
+          });
+          document.getElementById("luaUpload").addEventListener("change", async (event) => {
+            const file = event.target.files && event.target.files[0];
+            if (!file) {
+              return;
+            }
+            try {
+              const path = await writeFile(file, "/uploads/scripts/" + file.name);
+              addScriptOption(path);
+              Module.print("[sim] mounted script: " + path);
+            } catch (err) {
+              Module.printErr(err && err.stack ? err.stack : String(err));
+            } finally {
+              event.target.value = "";
+            }
+          });
+          document.getElementById("fsUpload").addEventListener("change", async (event) => {
+            const files = Array.from(event.target.files || []);
+            let count = 0;
+            try {
+              for (const file of files) {
+                const rel = file.webkitRelativePath || file.name;
+                const fullPath = normalizePath(rel);
+                await writeFile(file, fullPath);
+                const parts = rel.replace(/\\/g, "/").split("/").filter(Boolean);
+                if (parts.length > 1) {
+                  await writeFile(file, "/" + parts.slice(1).join("/"));
+                }
+                count++;
+              }
+              Module.print("[sim] mounted files: " + count);
+            } catch (err) {
+              Module.printErr(err && err.stack ? err.stack : String(err));
+            } finally {
+              event.target.value = "";
+            }
+          });
+          const shellParams = new URLSearchParams(window.location.search);
+          if (shellParams.get("embedded") === "1") {
+            document.body.classList.add("embedded");
+            window.parent && window.parent.postMessage({ type: "esp-claw-sim:ready" }, "*");
+          }
+        }
+      };
+    </script>
+    {{{ SCRIPT }}}
+  </body>
+</html>

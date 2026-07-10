@@ -1,0 +1,5 @@
+## IDF Component Manager Manifest File
+dependencies:
+  espressif/bme690:
+    version: "*"
+  esp-idf-lib/dht: ^1.2.0

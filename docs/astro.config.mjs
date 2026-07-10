@@ -5,7 +5,8 @@ import { fileURLToPath } from "url";
 
 import starlightThemeNova from "starlight-theme-nova";
 import astroD2 from "astro-d2";
-import { remarkDocLinks } from "./src/plugins/remark-doc-links.ts";
+import { satteri } from "@astrojs/markdown-satteri";
+import { satteriDocLinks } from "./src/plugins/satteri-doc-links.ts";
 
 const BASE = "/";
 
@@ -83,6 +84,7 @@ export default defineConfig({
                 { slug: "reference-cap/implement-capability" },
                 { slug: "reference-cap/cap-im-platform" },
                 { slug: "reference-cap/cap-skill" },
+                { slug: "reference-cap/cap-agent-mgr" },
                 { slug: "reference-cap/cap-llm-inspect" },
                 { slug: "reference-cap/cap-files" },
                 { slug: "reference-cap/cap-system" },
@@ -123,8 +125,11 @@ export default defineConfig({
       ],
     }),
   ],
+  compressHTML: true,
   markdown: {
-    remarkPlugins: [[remarkDocLinks, { base: BASE }]],
+    processor: satteri({
+      mdastPlugins: [satteriDocLinks({ base: BASE })],
+    }),
   },
   vite: {
     resolve: {

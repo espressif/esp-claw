@@ -1,0 +1,10 @@
+idf_component_register(
+    SRCS
+        "src/cap_http_request.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        claw_cap
+        esp_http_client
+        http_reuse
+)

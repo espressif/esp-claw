@@ -1,0 +1,31 @@
+menu "Lua IR Module"
+
+    config LUA_MODULE_IR_DEFAULT_CARRIER_HZ
+        int "Default IR carrier frequency in Hz"
+        default 38000
+        range 30000 56000
+        help
+            Default carrier frequency used when transmitting IR signals.
+
+    config LUA_MODULE_IR_DEFAULT_TX_RESOLUTION_HZ
+        int "Default RMT TX resolution in Hz"
+        default 1000000
+        help
+            Default RMT counter resolution for IR TX, 1MHz means 1 tick = 1us.
+
+    config LUA_MODULE_IR_DEFAULT_RX_RESOLUTION_HZ
+        int "Default RMT RX resolution in Hz"
+        default 1000000
+        help
+            Default RMT counter resolution for IR RX, 1MHz means 1 tick = 1us.
+
+    config LUA_MODULE_IR_RX_MAX_SYMBOLS
+        int "Max symbols per IR RX frame"
+        default 512
+        range 32 2048
+        help
+            Maximum number of RMT symbols stored per learned IR frame.
+            Raise this when learning long protocols (e.g. air-conditioner
+            frames) or capturing repeated NEC bursts in a single shot.
+
+endmenu

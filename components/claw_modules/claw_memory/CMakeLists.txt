@@ -1,0 +1,16 @@
+idf_component_register(
+    SRCS
+        "src/claw_memory.c"
+        "src/claw_memory_cap.c"
+        "src/claw_memory_extract.c"
+        "src/claw_memory_lightweight.c"
+        "src/claw_memory_profile.c"
+        "src/claw_memory_session.c"
+        "src/claw_memory_storage.c"
+        "src/claw_memory_utils.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        claw_cap
+        claw_core
+)

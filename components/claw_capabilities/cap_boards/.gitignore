@@ -1,0 +1,3 @@
+skills/*
+!skills/skills_list.json
+tools/__pycache__/

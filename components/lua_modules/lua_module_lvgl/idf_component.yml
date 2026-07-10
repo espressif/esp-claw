@@ -1,0 +1,6 @@
+## IDF Component Manager Manifest File
+dependencies:
+  display_arbiter:
+    path: ../../common/display_arbiter
+  espressif/esp_lcd_touch: "*"
+  lvgl/lvgl: ^9.5.0

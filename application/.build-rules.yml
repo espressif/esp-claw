@@ -1,0 +1,12 @@
+# Note: All operators are binary operators. For more than two operands, you may use the nested parentheses trick.
+# For example:
+#    *  A == 1 or (B == 2 and C in [1,2,3])
+#    *  (A == 1 and B == 2) or (C not in ["3", "4", 5])
+
+application/edge_agent:
+  enable:
+    - if: INCLUDE_DEFAULT == 1
+
+application/mcp_server_point:
+  enable:
+    - if: INCLUDE_DEFAULT == 1

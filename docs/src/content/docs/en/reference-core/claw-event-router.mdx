@@ -13,9 +13,9 @@ The module is split into three header files:
 
 | Header | Responsibilities |
 |--------|------|
-| <LinkToSource relativePath="framework/foundation/claw_event_router/include/claw_event.h" /> | Event struct `claw_event_t`, session policy enum `claw_event_session_policy_t`, `claw_event_clone`/`claw_event_free`/`claw_event_build_session_id` |
-| <LinkToSource relativePath="framework/foundation/claw_event_router/include/claw_event_publisher.h" /> | Event publishing API: `claw_event_router_publish`/`claw_event_router_publish_message`/`claw_event_router_publish_trigger`, and the `claw_event_publish_fn` callback type |
-| <LinkToSource relativePath="framework/foundation/claw_event_router/include/claw_event_router.h" /> | Router initialization, rule CRUD, configuration, outbound binding, `claw_event_router_handle_event`, etc. (imports `claw_event.h` for types) |
+| <LinkToSource relativePath="components/claw_modules/claw_event_router/include/claw_event.h" /> | Event struct `claw_event_t`, session policy enum `claw_event_session_policy_t`, `claw_event_clone`/`claw_event_free`/`claw_event_build_session_id` |
+| <LinkToSource relativePath="components/claw_modules/claw_event_router/include/claw_event_publisher.h" /> | Event publishing API: `claw_event_router_publish`/`claw_event_router_publish_message`/`claw_event_router_publish_trigger`, and the `claw_event_publish_fn` callback type |
+| <LinkToSource relativePath="components/claw_modules/claw_event_router/include/claw_event_router.h" /> | Router initialization, rule CRUD, configuration, outbound binding, `claw_event_router_handle_event`, etc. (imports `claw_event.h` for types) |
 
 At minimum, include `claw_event_publisher.h` if you only need to publish events (it automatically includes `claw_event.h`).
 

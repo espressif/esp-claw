@@ -1,0 +1,176 @@
+version: 1.0.0
+# Devices Configuration
+devices:
+
+  - name: display_lcd
+    type: display_lcd
+    version: default
+    sub_type: parlio
+    chip: ili9341
+    dependencies:
+      espressif/esp_lcd_ili9341: "*"
+    config:
+      mirror_x: false
+      mirror_y: true
+      swap_xy: true
+      x_max: 284
+      y_max: 240
+      need_reset: true
+      io_parl_config:
+        dc_gpio_num: 7
+        clk_gpio_num: 1
+        cs_gpio_num: 26
+        data_gpio_nums: [0, -1, -1, -1, -1, -1, -1, -1]
+        data_width: 1
+        pclk_hz: 40000000
+        clk_src: PARLIO_CLK_SRC_DEFAULT
+        max_transfer_bytes: 136320
+        dma_burst_size: 32
+        trans_queue_depth: 10
+        lcd_cmd_bits: 8
+        lcd_param_bits: 8
+        dc_levels:
+          dc_cmd_level: 0
+          dc_data_level: 1
+        flags:
+          cs_active_high: false
+      lcd_panel_config:
+        reset_gpio_num: -1
+        rgb_ele_order: LCD_RGB_ELEMENT_ORDER_RGB
+        data_endian: LCD_RGB_DATA_ENDIAN_LITTLE
+        bits_per_pixel: 16
+        flags:
+          reset_active_high: true
+        vendor_config: ""
+
+  - name: lcd_touch
+    chip: cst816s
+    type: lcd_touch
+    sub_type: i2c
+    version: default
+    dependencies:
+      espressif/esp_lcd_touch_cst816s: "*"
+    config:
+      touch_config:
+        x_max: 240
+        y_max: 284
+        int_gpio_num: -1
+        flags:
+          swap_xy: true
+          mirror_x: false
+          mirror_y: true
+    peripherals:
+      - name: i2c_master
+        i2c_addr: [0x2A]
+
+  - name: camera
+    type: camera
+    sub_type: spi
+    config:
+      spi_config:
+        intf: ESP_CAM_CTLR_SPI_CAM_INTF_SPI
+        io_mode: ESP_CAM_CTLR_SPI_CAM_IO_MODE_1BIT
+        spi_port: 1
+        spi_cs_pin: 27
+        spi_sclk_pin: 24
+        spi_data0_io_pin: 25
+        spi_data1_io_pin: -1
+        reset_pin: -1
+        pwdn_pin: -1
+        xclk_source: ESP_CAM_SENSOR_XCLK_LEDC
+        xclk_freq: 24000000
+        xclk_pin: 23
+        xclk_ledc_cfg:
+          timer: 0
+          clk_cfg: LEDC_AUTO_CLK
+          channel: 0
+    peripherals:
+      - name: i2c_master
+        frequency: 100000
+
+  - name: audio_dac
+    chip: internal
+    type: audio_codec
+    version: default
+    config:
+      dac_enabled: true
+    peripherals:
+      - name: i2s_audio_out
+        tx_aux_out_io: 10
+        tx_aux_out_invert: true
+      - name: gpio_pa_control
+        gain: 6
+        active_level: 1
+
+  - name: imu_sensor
+    chip: bmi270
+    type: custom
+    version: 1.0.0
+    init_skip: true
+    config:
+      i2c_addr: 0x68
+      frequency: 400000
+      int_gpio_num: 28
+      sdo_gpio_num: -1
+    peripherals:
+      - name: i2c_master
+
+  - name: magnetometer_sensor
+    chip: bmm150
+    type: custom
+    version: 1.0.0
+    init_skip: true
+    config:
+      i2c_addr: 0x10
+      frequency: 400000
+      int_gpio_num: 28
+      sdo_gpio_num: -1
+    peripherals:
+      - name: i2c_master
+
+  - name: si12t_touch
+    chip: si12t
+    type: custom
+    version: 1.0.0
+    init_skip: true
+    # Si12T 7-bit I2C addr: 0x68 (ID_SEL=GND) or 0x78 (ID_SEL=VDD).
+    # Use 0x78 here to avoid colliding with imu_sensor (BMI270 @ 0x68).
+    # IRQ shares GPIO28 with touch_button / imu_sensor / magnetometer_sensor (wired-OR).
+    # Ditto only routes TS1/TS2/TS3, so disable the rest via `channels`.
+    # `channels` is a comma-separated list of 1-based channel numbers (1..12).
+    # Keeping it as a string forces the board manager auto-generator to emit
+    # it as `const char *`; a numeric mask would have its C type chosen from
+    # the value's magnitude and would break the Lua module's cfg_size check.
+    config:
+      i2c_addr: 0x78
+      frequency: 100000
+      irq_gpio_num: 28
+      threshold: 3
+      channels: "1,2,3"
+    peripherals:
+      - name: i2c_master
+
+  - name: fuel_gauge_sensor
+    chip: bq27220
+    type: custom
+    version: 1.0.0
+    init_skip: true
+    config:
+      i2c_addr: 0x55
+      frequency: 400000
+    peripherals:
+      - name: i2c_master
+
+  - name: audio_adc
+    chip: internal
+    type: audio_codec
+    config:
+      adc_enabled: true
+      dac_enabled: false
+      adc_local_cfg:
+        channel_list: [5]
+        sample_rate_hz: 16000
+        max_store_buf_size: 1024
+        conv_frame_size: 256
+        unit_id: ADC_UNIT_1
+        atten: ADC_ATTEN_DB_0

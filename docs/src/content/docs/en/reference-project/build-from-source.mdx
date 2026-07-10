@@ -29,8 +29,8 @@ import LinkToSource from '@/components/LinkToSource.astro';
    <Aside title="Need to adapt a new development board?" type="tip">
     ESP-Claw uses ESP Board Manager to support multiple development boards.
 
-    To add other boards, see the [ESP Board Manager component](https://github.com/espressif/esp-gmf/blob/main/packages/esp_board_manager/docs/how_to_customize_board.md),
-    and put the board adaptation files in <LinkToSource relativePath="applications/edge_agent/boards/" />.
+    To add other boards, see the [ESP Board Manager component](https://docs.espressif.com/projects/esp-board-manager/en/latest/create-board/index.html),
+    and put the board adaptation files in <LinkToSource relativePath="application/edge_agent/boards/" />.
 
     Welcome to submit the board adaptation code to the ESP-Claw repository via Pull Request.
    </Aside>
@@ -39,7 +39,7 @@ import LinkToSource from '@/components/LinkToSource.astro';
 
    ```bash
    git clone https://github.com/espressif/esp-claw.git
-   cd esp-claw/applications/edge_agent
+   cd esp-claw/application/edge_agent
    ```
 
 3. **Select a development board**
@@ -55,7 +55,7 @@ import LinkToSource from '@/components/LinkToSource.astro';
       idf.py bmgr -c ./boards -l
       ```
 
-      Or check <LinkToSource relativePath="applications/edge_agent/boards/" />.
+      Or check <LinkToSource relativePath="application/edge_agent/boards/" />.
    </Aside>
 
    <Aside type="note" title="Why set-target is not needed">

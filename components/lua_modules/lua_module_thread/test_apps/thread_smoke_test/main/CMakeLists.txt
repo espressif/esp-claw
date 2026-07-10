@@ -1,0 +1,26 @@
+idf_component_register(
+    SRCS
+        "test_app_main.c"
+    INCLUDE_DIRS
+        "."
+    EMBED_TXTFILES
+        "lua/blocking_recv.lua"
+        "lua/child_a.lua"
+        "lua/child_b.lua"
+        "lua/consumer.lua"
+        "lua/echo_child.lua"
+        "lua/harness.lua"
+        "lua/lock_holder.lua"
+        "lua/lock_waiter.lua"
+        "lua/producer.lua"
+        "lua/sync_echo.lua"
+    PRIV_REQUIRES
+        cap_lua
+        claw_cap
+        esp_timer
+        fatfs
+        lua_module_delay
+        lua_module_thread
+        unity
+        wear_levelling
+)

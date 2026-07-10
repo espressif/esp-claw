@@ -13,9 +13,9 @@ import { LinkCard } from 'starlight-theme-nova/components'
 
 | 头文件 | 职责 |
 |--------|------|
-| <LinkToSource relativePath="framework/foundation/claw_event_router/include/claw_event.h" /> | 事件结构体 `claw_event_t`、会话策略枚举 `claw_event_session_policy_t`、`claw_event_clone`/`claw_event_free`/`claw_event_build_session_id` |
-| <LinkToSource relativePath="framework/foundation/claw_event_router/include/claw_event_publisher.h" /> | 事件发布 API：`claw_event_router_publish`/`claw_event_router_publish_message`/`claw_event_router_publish_trigger`，以及 `claw_event_publish_fn` 回调类型 |
-| <LinkToSource relativePath="framework/foundation/claw_event_router/include/claw_event_router.h" /> | 路由器初始化、规则 CRUD、配置、出站绑定、`claw_event_router_handle_event` 等（通过 `#include "claw_event.h"` 引入事件类型） |
+| <LinkToSource relativePath="components/claw_modules/claw_event_router/include/claw_event.h" /> | 事件结构体 `claw_event_t`、会话策略枚举 `claw_event_session_policy_t`、`claw_event_clone`/`claw_event_free`/`claw_event_build_session_id` |
+| <LinkToSource relativePath="components/claw_modules/claw_event_router/include/claw_event_publisher.h" /> | 事件发布 API：`claw_event_router_publish`/`claw_event_router_publish_message`/`claw_event_router_publish_trigger`，以及 `claw_event_publish_fn` 回调类型 |
+| <LinkToSource relativePath="components/claw_modules/claw_event_router/include/claw_event_router.h" /> | 路由器初始化、规则 CRUD、配置、出站绑定、`claw_event_router_handle_event` 等（通过 `#include "claw_event.h"` 引入事件类型） |
 
 仅发布事件时，最少需要包含 `claw_event_publisher.h`（其自动引入 `claw_event.h`）。
 

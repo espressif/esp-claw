@@ -7,7 +7,7 @@ import LinkToSource from '@/components/LinkToSource.astro';
 import { Aside } from '@astrojs/starlight/components';
 import { LinkCard } from 'starlight-theme-nova/components'
 
-Header: <LinkToSource relativePath="framework/foundation/claw_cap/include/claw_cap.h" />
+Header: <LinkToSource relativePath="components/claw_modules/claw_cap/include/claw_cap.h" />
 
 ## Responsibilities
 
@@ -43,7 +43,7 @@ Typical call paths:
 
 `claw_cap_set_llm_visible_groups` applies a **group id allow-list**.
 `edge_agent` defaults to exposing `cap_files`, `cap_scheduler`, `cap_lua`, `cap_skill`, `cap_llm_inspect`, `cap_http_request`, `cap_web_search`, and `cap_router_mgr` to the LLM, and full structured-memory mode also exposes `claw_memory`;
-see the visible-group configuration in <LinkToSource relativePath="applications/shared/app_claw/app_capabilities.c" />.
+see the visible-group configuration in <LinkToSource relativePath="components/common/app_claw/app_capabilities.c" />.
 
 <Aside type="tip">
   Other registered groups (IM, search, MCP, Lua, …) still exist and can be called from Console or automation;

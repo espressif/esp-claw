@@ -1,0 +1,4 @@
+board: waveshare_esp32_s3_zero_n8r8
+chip: esp32s3
+description: "Waveshare ESP32-S3-Zero N8R8 development board with ESP32-S3-PICO-1, RGB LED, and USB-C"
+manufacturer: "Waveshare"

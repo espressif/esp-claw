@@ -1,0 +1,3 @@
+## IDF Component Manager Manifest File
+dependencies:
+  espressif/knob: "^1.0.0"

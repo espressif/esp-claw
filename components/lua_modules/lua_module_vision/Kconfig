@@ -1,0 +1,22 @@
+menu "Lua Vision Module"
+    depends on APP_CLAW_CAP_LUA
+    depends on APP_CLAW_LUA_MODULE_VISION
+    depends on ESP_BOARD_DEV_CAMERA_SUPPORT
+
+    config LUA_MODULE_VISION_MOTION_DETECT
+        bool "Enable motion_detect Lua module"
+        default y
+        help
+            Build and register the lightweight motion_detect Lua module. This is
+            the default vision submodule and does not require ESPDet model
+            runtime support.
+
+    config LUA_MODULE_VISION_ESPDET
+        bool "Enable espdet Lua module"
+        default n
+        help
+            Build and register the ESP-DL-backed espdet Lua module for running
+            ESPDet object detection models from Lua. Enable this only on builds
+            that need ESPDet model inference.
+
+endmenu

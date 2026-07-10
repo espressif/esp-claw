@@ -1,0 +1,38 @@
+## IDF Component Manager Manifest File
+dependencies:
+  espressif/esp_board_manager:
+    version: "^0.5.9"
+    public: true
+
+  espressif/esp_wifi_remote:
+    version: ">=0.10,<2.0"
+    rules:
+      - if: "target in [esp32p4]"
+  espressif/esp_hosted:
+    version: "2.12.3"
+    rules:
+      - if: "target in [esp32p4]"
+
+  app_claw:
+    path: ../../../components/common/app_claw
+
+  app_config:
+    path: ../components/app_config
+
+  http_reuse:
+    path: ../../../components/common/http_reuse
+
+  settings:
+    path: ../../../components/common/settings
+
+  wifi_manager:
+    path: ../../../components/common/wifi_manager
+
+  mcp_server_point_tools:
+    path: ../components/mcp_server_point_tools
+
+  cap_lua:
+    path: ../../../components/claw_capabilities/cap_lua
+
+  cap_mcp_server:
+    path: ../../../components/claw_capabilities/cap_mcp_server

@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "src/cap_skill_mgr.c"
+        "src/cmd_cap_skill.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        claw_cap
+        claw_skill
+        console
+)

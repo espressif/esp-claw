@@ -1,0 +1,18 @@
+{
+  "name": "@esp-claw/simulator-pages",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "tsc -p tsconfig.json && vite build",
+    "copy-runtime": "node scripts/copy-runtime.mjs",
+    "preview": "vite preview --host 0.0.0.0"
+  },
+  "dependencies": {
+    "vite": "^8.0.8",
+    "typescript": "^6.0.3"
+  },
+  "devDependencies": {},
+  "packageManager": "pnpm@11.5.0"
+}

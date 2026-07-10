@@ -1,0 +1,4 @@
+dependencies:
+  mcp_mdns:
+    path: ../../common/mcp_mdns
+  espressif/mcp-c-sdk: "^2.0.0"

@@ -1,0 +1,10 @@
+## IDF Component Manager Manifest File
+dependencies:
+  espressif/bmi270_sensor:
+    version: "*"
+    rules:
+      - if: "$CONFIG{LUA_MODULE_IMU_CHIP_BMI270} == True"
+  espressif/icm42670:
+    version: "*"
+    rules:
+      - if: "$CONFIG{LUA_MODULE_IMU_CHIP_ICM42670} == True"

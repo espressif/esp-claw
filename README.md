@@ -138,7 +138,7 @@ Traditional IoT usually stops at connectivity: devices can connect to the networ
   <img src="docs/src/assets/images/claw-breadboard-photo.jpg" width="80%" alt="ESP-Claw on ESP32-S3 Breadboard" />
 </div>
 
-ESP-Claw now supports a wide range of development boards based on ESP32-S3, ESP32-P4, ESP32-C5, and ESP32-S31, including breadboards, M5Stack CoreS3, and many others. Supported boards in [`./applications/edge_agent/boards/`](./applications/edge_agent/boards/) can be flashed online directly: configuration and flashing are done entirely in the browser, with no need to compile firmware locally or install a development environment first.
+ESP-Claw now supports a wide range of development boards based on ESP32-S3, ESP32-P4, ESP32-C5, and ESP32-S31, including breadboards, M5Stack CoreS3, and many others. Supported boards in [`./application/edge_agent/boards/`](./application/edge_agent/boards/) can be flashed online directly: configuration and flashing are done entirely in the browser, with no need to compile firmware locally or install a development environment first.
 
 <div align="center">
   <a href="https://esp-claw.com/en/flash/">
@@ -174,18 +174,8 @@ ESP-Claw is still under active development. Feel free to open an issue to report
 
 [Click here to view our TODO List (in Chinese)](https://fcn5wbhnyubf.feishu.cn/wiki/SRlgwWUYei4WmykU8uMcUtzTnFf?table=tblWSgzWcyW7jv7B&view=vewaP9B0KX) and vote for the features or issues you care about. That helps us prioritize them sooner.
 
-## Roadmap
 
-- [x] Preempt Base Agent State
-- [ ] Resumable Agents
-- [ ] Permission
-- [ ] Context Management
-- [ ] Evals
-- [ ] GuardRails
-- [ ] Obsevability
-- [ ] Async Runtime (To avoid current multi-agent multithreading tradeoffs)
-- [ ] Virtual Drivers for Hardware Capability
- 
+
 ## 📷 Follow Us
 
 If this project helps you, please consider giving it a star. ⭐⭐⭐⭐⭐

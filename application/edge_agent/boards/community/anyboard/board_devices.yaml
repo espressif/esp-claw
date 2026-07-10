@@ -1,0 +1,98 @@
+version: 1.0.0
+# Devices Configuration for Anyboard
+devices:
+  - name: fake_camera # Just for invoking camera dependencies, no actual camera hardware connected
+    type: camera
+    version: default
+    sub_type: "dvp"
+    init_skip: true
+    peripherals:
+      - name: i2c_master
+        frequency: 100000
+
+  - name: camera
+    type: custom
+    version: default
+    dependencies:
+      espressif/usb_host_uvc: "2.4.2"
+
+  # PDM Microphone (bare PDM mic, no I2C codec IC).
+  # Lua audio reads the already-initialized i2s_audio_in peripheral directly.
+  - name: audio_adc
+    chip: internal
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      dac_enabled: false
+      adc_max_channel: 1
+      adc_channel_mask: "1"
+      adc_init_gain: 0
+    peripherals:
+      - name: i2s_audio_in
+
+  # SPI Display Device (ST7789 320x240 landscape, rotated right from portrait)
+  # SCLK=IO5, SDA=IO7, RST=IO6, DC=IO8, CS=IO4
+  - name: display_lcd
+    chip: st7789
+    type: display_lcd
+    sub_type: spi
+    version: default
+    config:
+      mirror_x: false
+      mirror_y: true
+      swap_xy: true
+      invert_color: true
+      x_max: 320
+      y_max: 200
+      io_spi_config:
+        cs_gpio_num: 4
+        dc_gpio_num: 8
+        spi_mode: 3
+        pclk_hz: 80000000
+
+      lcd_panel_config:
+        reset_gpio_num: 6
+        data_endian: "LCD_RGB_DATA_ENDIAN_BIG"
+        flags:
+          reset_active_high: false
+        vendor_config: NULL
+
+    peripherals:
+    - name: spi_display
+
+  # IMU Sensor (BMI270, I2C SCL=IO40 SDA=IO39, INT=IO18)
+  - name: imu_sensor
+    chip: bmi270
+    type: custom
+    version: 1.0.0
+    init_skip: true
+    config:
+      i2c_addr: 0x68
+      frequency: 400000
+      int_gpio_num: 18
+    peripherals:
+      - name: i2c_master
+
+  # Buttons (active low)
+  # enter=IO41, left=IO42, right=IO0
+  - name: buttons
+    chip: gpio_button
+    type: custom
+    version: 1.0.0
+    init_skip: true
+    config:
+      button_enter_gpio: 41
+      button_left_gpio: 42
+      button_right_gpio: 0
+      active_level: 0
+
+  # Buzzer (IO46)
+  - name: buzzer
+    chip: gpio_buzzer
+    type: custom
+    version: 1.0.0
+    init_skip: true
+    config:
+      gpio_num: 46
+      active_level: 1

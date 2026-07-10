@@ -1,0 +1,14 @@
+idf_component_register(
+    SRCS
+        "src/cap_system.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        claw_cap
+        claw_core
+        esp_netif
+        esp_wifi
+    PRIV_REQUIRES
+        esp_app_format
+        esp_timer
+)

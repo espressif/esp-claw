@@ -1,0 +1,12 @@
+## IDF Component Manager Manifest File
+dependencies:
+  cap_lua:
+    path: ../../claw_capabilities/cap_lua
+
+  lua_module_image:
+    path: ../lua_module_image
+
+  espressif/esp-dl:
+    version: "~3.3.0"
+    rules:
+      - if: "$CONFIG{LUA_MODULE_VISION_ESPDET} == True"

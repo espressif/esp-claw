@@ -21,7 +21,6 @@
       - "**/build*/size.json"
       - "**/build*/build_log.txt"
       - "**/build*/*.bin"
-      # upload to s3 server to save the artifacts size
       - "**/build*/*.map"
       - "**/build*/*.elf"
       - "**/build*/flasher_args.json"
@@ -33,14 +32,12 @@
       - "**/build*/partition_table/*.bin"
       - "**/build*/mmap_build/**/*.bin"
       - "**/build*/**/*.bin"
-      - "merged_binary/*.bin"
-      - "merged_binary/*.json"
+      - "firmware_output/*.tar.gz"
+      - "firmware_output/*.json"
       - size_info.txt
     expire_in: 1 week
   variables:
     IDF_CI_BUILD: "1"
-    # By configuring this macro, you can append the compiled configuration file.
-    # For example, using "sdkconf.etc=default" specifies the default sdkconfig file.
     EXAMPLE_CONFIG: "="
     EXAMPLE_TARGET: ""
     EXAMPLE_APPEND_ARGS: ""
@@ -61,8 +58,9 @@
               -vv \
               --board ${EXAMPLE_BOARD} \
               --board-path ${EXAMPLE_BOARD_PATH} \
+              --ignore-warnings \
               ${EXAMPLE_APPEND_ARGS}
-    - python .gitlab/ci/merge_bin.py
+    - python .gitlab/ci/package_firmware.py
 
 .build_idf_active_release_version:
   parallel:
@@ -74,7 +72,7 @@ build_application_edge_agent:
     - .build_examples_template
     - .rules:build:application_edge_agent
   variables:
-    EXAMPLE_DIR: applications/edge_agent
+    EXAMPLE_DIR: application/edge_agent
   parallel:
     matrix:
       # Hint:
@@ -93,7 +91,7 @@ build_application_edge_agent:
       #   ```
 
       - IMAGE: ["espressif/idf:release-v5.5"]
-        EXAMPLE_BOARD: ["esp32_S3_DevKitC_1", "esp32_S3_DevKitC_1_breadboard"]
+        EXAMPLE_BOARD: ["esp32_S3_DevKitC_1", "esp32_S3_DevKitC_1_breadboard", "esp32_S3_DevKitC_1_N32R16V_breadboard"]
         EXAMPLE_TARGET: esp32s3
         EXAMPLE_BOARD_BRAND: "espressif"
         EXAMPLE_CONFIG: "sdkconfig.console.jtag=jtag"
@@ -150,7 +148,7 @@ build_application_edge_agent:
         EXAMPLE_BOARD_BRAND: "waveshare"
 
       - IMAGE: ["espressif/idf:release-v5.5"]
-        EXAMPLE_BOARD: ["waveshare_ESP32_S3_RLCD_4_2", "waveshare_esp32_s3_geek"]
+        EXAMPLE_BOARD: ["waveshare_ESP32_S3_RLCD_4_2", "waveshare_esp32_s3_geek", "waveshare_esp32_s3_zero_n8r8", "waveshare_ESP32_S3_Touch_AMOLED_2_16"]
         EXAMPLE_TARGET: esp32s3
         EXAMPLE_BOARD_BRAND: "waveshare"
 
@@ -188,3 +186,31 @@ build_application_edge_agent:
         EXAMPLE_BOARD: dfrobot_firebeetle_2_ESP32_C5_for_display
         EXAMPLE_TARGET: esp32c5
         EXAMPLE_BOARD_BRAND: "dfrobot"
+
+      - IMAGE: ["espressif/idf:release-v5.5"]
+        EXAMPLE_BOARD: anyboard
+        EXAMPLE_TARGET: esp32s3
+        EXAMPLE_BOARD_BRAND: "community"
+
+      - IMAGE: ["espressif/idf:release-v5.5"]
+        EXAMPLE_BOARD: ["eda_ai_gamebox", "eda_robot_pro", "eda_super_bear", "eda_tv_pro"]
+        EXAMPLE_TARGET: esp32s3
+        EXAMPLE_BOARD_BRAND: "lceda-course-examples"
+
+      - IMAGE: ["espressif/idf:release-v5.5"]
+        EXAMPLE_BOARD: ["xiao_esp32s3_sense"]
+        EXAMPLE_TARGET: esp32s3
+        EXAMPLE_BOARD_BRAND: "seeedstudio"
+
+build_application_mcp_server_point:
+  extends:
+    - .build_examples_template
+    - .rules:build:application_mcp_server_point
+  variables:
+    IMAGE: espressif/idf:release-v5.5
+    EXAMPLE_DIR: application/mcp_server_point
+  parallel:
+    matrix:
+      - EXAMPLE_BOARD: esp_Ditto
+        EXAMPLE_TARGET: esp32c5
+        EXAMPLE_BOARD_BRAND: "espressif"

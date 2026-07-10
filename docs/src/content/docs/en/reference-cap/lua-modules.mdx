@@ -114,7 +114,7 @@ Below is a minimal `myled` module (single GPIO LED) end-to-end.
 ### 1. Create the component tree
 
 ```
-framework/lua_modules/module_myled/
+components/lua_modules/lua_module_myled/
 ├── CMakeLists.txt
 ├── README.md
 ├── test/
@@ -269,7 +269,7 @@ Sync rules:
 
 ## Case study: `lua_module_gpio`
 
-Source: <LinkToSource relativePath="framework/lua_modules/module_gpio/src/lua_module_gpio.c" />
+Source: <LinkToSource relativePath="components/lua_modules/lua_module_gpio/src/lua_module_gpio.c" />
 
 `lua_module_gpio` is a small but complete C-backed Lua module and a good reference for simple hardware bindings.
 It exposes only three Lua APIs: configure direction, write output level, and read input level.

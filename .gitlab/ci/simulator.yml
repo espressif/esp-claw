@@ -1,0 +1,78 @@
+build_simulator_pages:
+  stage: build
+  tags:
+    - build
+  image: emscripten/emsdk:latest
+  extends:
+    - .rules:build:simulator
+  variables:
+    SIMULATOR_BUILD_DIR: "$CI_PROJECT_DIR/build/lua_lvgl_web_sim"
+    SIMULATOR_RUNTIME_DIR: "$CI_PROJECT_DIR/pages/simulator/public/runtime"
+  script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends cmake ninja-build python3-venv
+    - emcmake cmake -S tools/lua_lvgl_web_sim -B "$SIMULATOR_BUILD_DIR" -G Ninja -DCMAKE_BUILD_TYPE=Release
+    - emmake ninja -C "$SIMULATOR_BUILD_DIR" esp_claw_sim
+    - rm -rf "$SIMULATOR_RUNTIME_DIR"
+    - mkdir -p "$SIMULATOR_RUNTIME_DIR"
+    - cp "$SIMULATOR_BUILD_DIR"/esp_claw_sim.html "$SIMULATOR_RUNTIME_DIR"/
+    - cp "$SIMULATOR_BUILD_DIR"/esp_claw_sim.js "$SIMULATOR_RUNTIME_DIR"/
+    - cp "$SIMULATOR_BUILD_DIR"/esp_claw_sim.wasm "$SIMULATOR_RUNTIME_DIR"/
+    - if [ -f "$SIMULATOR_BUILD_DIR/esp_claw_sim.data" ]; then cp "$SIMULATOR_BUILD_DIR"/esp_claw_sim.data "$SIMULATOR_RUNTIME_DIR"/; fi
+    - cd pages/simulator
+    - corepack enable
+    - pnpm install --frozen-lockfile
+    - pnpm run build
+  artifacts:
+    when: always
+    paths:
+      - pages/simulator/dist/**/*
+      - pages/simulator/public/runtime/esp_claw_sim.*
+    expire_in: 1 week
+
+deploy_simulator_pages:
+  stage: deploy
+  tags:
+    - build
+  image: node:24-alpine
+  variables:
+    GIT_STRATEGY: fetch
+  environment:
+    name: $DEPLOY_ENV_NAME
+    url: $DEPLOY_ENV_URL
+    deployment_tier: $DEPLOY_ENV_TIER
+  rules:
+    - if: '$CI_COMMIT_REF_NAME == "master" && $CI_COMMIT_TAG == null && $CI_PIPELINE_SOURCE == "push"'
+      when: on_success
+      variables:
+        DEPLOY_ENV_NAME: simulator-production
+        DEPLOY_ENV_URL: https://simulator.esp-claw.com
+        DEPLOY_ENV_TIER: production
+        DEPLOY_BRANCH: master
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      changes:
+        - "components/claw_capabilities/cap_lua/**/*"
+        - "components/lua_modules/**/*"
+        - "pages/simulator/**/*"
+        - "tools/lua_lvgl_web_sim/**/*"
+      when: on_success
+      variables:
+        DEPLOY_ENV_NAME: simulator-preview/$CI_COMMIT_REF_SLUG
+        DEPLOY_ENV_URL: https://$CI_COMMIT_REF_SLUG.$PREVIEW_DOMAIN
+        DEPLOY_ENV_TIER: development
+        DEPLOY_BRANCH: $CI_COMMIT_REF_NAME
+    - if: '$CI_MERGE_REQUEST_LABELS =~ /^(?:[^,\n\r]+,)*build(?:,[^,\n\r]+)*$/i'
+      when: on_success
+      variables:
+        DEPLOY_ENV_NAME: simulator-preview/$CI_COMMIT_REF_SLUG
+        DEPLOY_ENV_URL: https://$CI_COMMIT_REF_SLUG.$PREVIEW_DOMAIN
+        DEPLOY_ENV_TIER: development
+        DEPLOY_BRANCH: $CI_COMMIT_REF_NAME
+    - when: never
+  needs:
+    - job: build_simulator_pages
+      artifacts: true
+  script:
+    - cd pages/simulator
+    - corepack enable
+    - pnpx wrangler pages deploy "dist/" --project-name "$SITE_DEPLOY_PROJECT_NAME" --branch="$DEPLOY_BRANCH"

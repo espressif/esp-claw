@@ -1,0 +1,17 @@
+idf_component_register(
+    SRC_DIRS
+        "src"
+    INCLUDE_DIRS
+        "src"
+    REQUIRES
+        cap_lua
+        esp_codec_dev
+        esp-dsp
+        esp_audio_codec
+        esp_audio_simple_player
+        esp_asrc
+        gmf_core
+        gmf_io
+        mbedtls
+        driver
+)

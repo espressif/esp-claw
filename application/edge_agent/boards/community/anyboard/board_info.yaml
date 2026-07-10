@@ -1,0 +1,5 @@
+board: anyboard
+chip: esp32s3
+version: 1.0.0
+description: "Anyboard Development Board"
+manufacturer: "TEMP"

@@ -1,7 +1,7 @@
 import { connect, connectWithPort, type ESPLoader, type Logger } from "tasmota-webserial-esptool";
 
-const FLASH_UART_BAUD_FAST = 921600; // UART speed during stub flash
-const FLASH_UART_BAUD_ROM = 115200; // ROM / console default
+const FLASH_UART_BAUD_FAST = 921600;
+const FLASH_UART_BAUD_ROM = 115200;
 const ESP_USB_JTAG_VID = 0x303a;
 const ESP_USB_JTAG_PID = 0x1001;
 
@@ -9,18 +9,54 @@ const WIFI_STATUS_PROBE_ATTEMPTS = 3;
 const WIFI_STATUS_PROBE_WAIT_MS = 1000;
 const WIFI_STATUS_PROBE_RETRY_GAP_MS = 3000;
 
-type FirmwareBinaryLinks = Record<string, string>;
+const FIRMWARE_SITE_URL = import.meta.env.PUBLIC_FIRMWARE_SITE_URL ?? "https://esp-claw.com/versions";
 
-type FirmwareRecord = {
-  description?: string;
-  merged_binary: FirmwareBinaryLinks;
-  min_flash_size?: number;
-  min_psram_size?: number;
+// ── Types ────────────────────────────────────────────────────────────────────
+
+/** Stub-only APIs exist on EspStubLoader but are not exported by the package. */
+type ESPStubLoader = ESPLoader & {
+  eraseFlash(): Promise<void>;
+  eraseRegion(offset: number, size: number): Promise<void>;
 };
 
-type FirmwareBoards = Record<string, FirmwareRecord>;
-type FirmwareBrands = Record<string, FirmwareBoards>;
-type FirmwareDb = Record<string, FirmwareBrands>;
+type PartitionEntry = {
+  name: string;
+  type: string;
+  subtype: string;
+  offset: string;
+  size: string;
+};
+
+type FlashSettings = {
+  flash_mode: string;
+  flash_freq: string;
+  flash_size: string;
+};
+
+type FirmwareRecord = {
+  flash_files: Record<string, string>;
+  flash_settings: FlashSettings;
+  partition_table: PartitionEntry[];
+  nvs_info?: { start_addr: string; size: string };
+  min_flash_size: number;
+  min_psram_size: number;
+};
+
+type BoardsTree = Record<string, Record<string, Record<string, Record<string, FirmwareRecord>>>>;
+
+type VersionEntry = {
+  commit_timestamp?: string;
+  boards: BoardsTree;
+};
+
+type MergedDb = Record<string, Record<string, VersionEntry>>;
+
+type MasterFirmwareDb = Record<string, BoardsTree>;
+
+type TaggedVersionsDb = Record<string, Record<string, {
+  commit_timestamp: string;
+  boards: BoardsTree;
+}>>;
 
 type Strings = {
   connectBtn: string;
@@ -30,8 +66,6 @@ type Strings = {
   connectedTo: string;
   webSerialUnsupported: string;
   connectErrorPrefix: string;
-  chipSectionTitle: string;
-  boardSectionTitle: string;
   chooseChipLabel: string;
   chooseBrandLabel: string;
   chooseBoardLabel: string;
@@ -40,7 +74,6 @@ type Strings = {
   chooseBrandPlaceholder: string;
   chooseConsoleOutputPlaceholder: string;
   boardAutoHint: string;
-  boardManualHint: string;
   selectedBoardLabel: string;
   noBrandSelected: string;
   noBoardSelected: string;
@@ -74,6 +107,7 @@ type Strings = {
   postFlashReconnectError: string;
   wifiSectionTitle: string;
   wifiPrompt: string;
+  wifiSameNetworkHint: string;
   wifiSsidLabel: string;
   wifiPasswordLabel: string;
   wifiPasswordLengthError: string;
@@ -106,11 +140,29 @@ type Strings = {
   modalStep2Title: string;
   modalStep3Title: string;
   terminalLabel: string;
+  chooseApplicationLabel: string;
+  chooseApplicationPlaceholder: string;
+  chooseVersionLabel: string;
+  chooseVersionPlaceholder: string;
+  versionMaster: string;
+  advancedSettingsLabel: string;
+  flashModeLabel: string;
+  flashModeFullErase: string;
+  flashModeEraseSelectPartitions: string;
+  flashModeSelectPartitions: string;
+  partitionSelectionHintErase: string;
+  partitionSelectionHintPreserve: string;
+  erasingFlash: string;
+  downloadingPartitions: string;
+  flashingPartition: string;
+  loadingVersions: string;
+  loadVersionsError: string;
 };
 
 type BootData = {
   lang: string;
-  firmwareDb: FirmwareDb;
+  firmwareDb: MasterFirmwareDb;
+  masterRef: string;
   strings: Strings;
   boardsHref: string;
 };
@@ -144,14 +196,15 @@ type Waiter<T> = {
   timer: number;
 };
 
+// ── Boot ─────────────────────────────────────────────────────────────────────
+
 const bootEl = document.getElementById("flash-boot");
 if (!bootEl?.textContent) {
   throw new Error("Missing flash boot data");
 }
 
 const boot = JSON.parse(bootEl.textContent) as BootData;
-const { firmwareDb, strings: s } = boot;
-const chipKeys = Object.keys(firmwareDb);
+const s = boot.strings;
 
 const els = {
   unsupportedBanner: must("unsupported-banner"),
@@ -172,6 +225,8 @@ const els = {
   connectError: must("connect-error"),
   selectionCard: must("selection-card"),
   selectionFields: must("selection-fields"),
+  appSelect: must<HTMLSelectElement>("app-select"),
+  versionSelect: must<HTMLSelectElement>("version-select"),
   chipSelect: must<HTMLSelectElement>("chip-select"),
   brandSelect: must<HTMLSelectElement>("brand-select"),
   boardSelect: must<HTMLSelectElement>("board-select"),
@@ -189,8 +244,10 @@ const els = {
   consoleToggleBtnLabel: must("console-toggle-btn-label"),
   noFirmwareCard: must("no-firmware-card"),
   selectedBoardSummary: must("selected-board-summary"),
+  partitionList: must("partition-list"),
+  partitionSelection: must("partition-selection"),
+  partitionSelectionHint: must("partition-selection-hint"),
 
-  // Console content
   consolePanel: must("console-panel"),
   consoleOutput: must("console-output"),
   consoleEmpty: must("console-empty"),
@@ -199,7 +256,6 @@ const els = {
   consoleSendInput: must<HTMLInputElement>("console-send-input"),
   consoleSendBtn: must<HTMLButtonElement>("console-send-btn"),
 
-  // Flash modal
   flashModalBg: must("flash-modal-bg"),
   modalCloseBtn: must<HTMLButtonElement>("modal-close-btn"),
   modalStep1Indicator: must("modal-step1-indicator"),
@@ -254,10 +310,15 @@ const state = {
     flashSizeMb: null,
     psramSizeMb: null,
   } as DeviceInfo,
-  selectedChip: (chipKeys[0] ?? null) as string | null,
+  mergedDb: {} as MergedDb,
+  selectedApp: null as string | null,
+  selectedVersion: null as string | null,
+  selectedChip: null as string | null,
   selectedBrand: null as string | null,
   selectedBoardId: null as string | null,
   selectedConsoleOutput: null as string | null,
+  flashMode: "full-erase" as "full-erase" | "erase-select-partitions" | "select-partitions",
+  selectedPartitions: new Set<string>(),
   visibleBoards: [] as VisibleBoard[],
   detectedConsoleOutput: null as DetectedConsoleOutput,
   readyIp: null as string | null,
@@ -298,11 +359,38 @@ async function init() {
     els.connectBtn.disabled = true;
   }
 
+  buildMergedDb();
+  await loadTaggedVersions();
+
+  const appKeys = getAppKeys();
+  state.selectedApp = appKeys[0] ?? null;
+  state.selectedVersion = "master";
+
+  renderAppOptions();
+  renderVersionOptions();
   renderChipOptions();
   refreshBoards();
   renderActionState();
   renderConsole();
 
+  els.appSelect.addEventListener("change", () => {
+    state.selectedApp = els.appSelect.value || null;
+    state.selectedVersion = "master";
+    state.selectedChip = null;
+    state.selectedBrand = null;
+    state.selectedBoardId = null;
+    renderVersionOptions();
+    renderChipOptions();
+    refreshBoards();
+  });
+  els.versionSelect.addEventListener("change", () => {
+    state.selectedVersion = els.versionSelect.value || null;
+    state.selectedChip = null;
+    state.selectedBrand = null;
+    state.selectedBoardId = null;
+    renderChipOptions();
+    refreshBoards();
+  });
   els.chipSelect.addEventListener("change", () => {
     state.selectedChip = els.chipSelect.value || null;
     state.selectedBrand = null;
@@ -319,66 +407,43 @@ async function init() {
     normalizeConsoleOutputSelection();
     renderConsoleOutputOptions();
     renderSelectedBoard();
+    renderPartitionList();
     renderActionState();
   });
   els.consoleOutputSelect.addEventListener("change", () => {
     state.selectedConsoleOutput = els.consoleOutputSelect.value || null;
     renderSelectedBoard();
+    renderPartitionList();
     renderActionState();
   });
 
-  els.connectBtn.addEventListener("click", () => {
-    void connectDevice();
-  });
-  els.actionConnectBtn.addEventListener("click", () => {
-    void connectDevice();
-  });
-  els.disconnectBtn.addEventListener("click", () => {
-    void disconnectDevice();
-  });
-  els.actionDisconnectBtn.addEventListener("click", () => {
-    void disconnectDevice();
-  });
-  els.flashBtn.addEventListener("click", () => {
-    void flashSelectedFirmware();
-  });
+  for (const radio of document.querySelectorAll<HTMLInputElement>('input[name="flash-mode"]')) {
+    radio.addEventListener("change", () => {
+      state.flashMode = radio.value as typeof state.flashMode;
+      updatePartitionSelectionUi();
+      renderPartitionList();
+    });
+  }
+
+  els.connectBtn.addEventListener("click", () => { void connectDevice(); });
+  els.actionConnectBtn.addEventListener("click", () => { void connectDevice(); });
+  els.disconnectBtn.addEventListener("click", () => { void disconnectDevice(); });
+  els.actionDisconnectBtn.addEventListener("click", () => { void disconnectDevice(); });
+  els.flashBtn.addEventListener("click", () => { void flashSelectedFirmware(); });
   els.consoleToggleBtn.addEventListener("click", () => {
     if (!els.consoleToggleBtn.disabled) {
       switchTab(state.activeTab === "console" ? "flash" : "console");
     }
   });
-
-  // Console
-  els.consoleClearBtn.addEventListener("click", () => {
-    state.consoleText = "";
-    renderConsole();
-  });
-  els.consoleResetBtn.addEventListener("click", () => {
-    void resetDeviceFromConsole();
-  });
-  els.consoleSendBtn.addEventListener("click", () => {
-    void sendConsoleInput();
-  });
+  els.consoleClearBtn.addEventListener("click", () => { state.consoleText = ""; renderConsole(); });
+  els.consoleResetBtn.addEventListener("click", () => { void resetDeviceFromConsole(); });
+  els.consoleSendBtn.addEventListener("click", () => { void sendConsoleInput(); });
   els.consoleSendInput.addEventListener("keydown", (e) => {
-    if ((e as KeyboardEvent).key === "Enter") {
-      void sendConsoleInput();
-    }
+    if ((e as KeyboardEvent).key === "Enter") { void sendConsoleInput(); }
   });
-
-  // Modal wifi submit
-  els.modalWifiSubmitBtn.addEventListener("click", () => {
-    void submitWifiCredentials();
-  });
-  els.modalReconnectBtn.addEventListener("click", () => {
-    void reconnectDeviceAfterReset();
-  });
-
-  // Modal close button
-  els.modalCloseBtn.addEventListener("click", () => {
-    if (state.modalCanClose) closeModal();
-  });
-
-  // Backdrop click to close (only when closeable)
+  els.modalWifiSubmitBtn.addEventListener("click", () => { void submitWifiCredentials(); });
+  els.modalReconnectBtn.addEventListener("click", () => { void reconnectDeviceAfterReset(); });
+  els.modalCloseBtn.addEventListener("click", () => { if (state.modalCanClose) closeModal(); });
   els.flashModalBg.addEventListener("click", (e) => {
     if (e.target === els.flashModalBg && state.modalCanClose) closeModal();
   });
@@ -386,13 +451,69 @@ async function init() {
 
 function must<T extends HTMLElement = HTMLElement>(id: string): T {
   const el = document.getElementById(id);
-  if (!el) {
-    throw new Error(`Missing element #${id}`);
-  }
+  if (!el) throw new Error(`Missing element #${id}`);
   return el as T;
 }
 
-// ── Tab management ──────────────────────────────────────────────────────────
+// ── Data merging ─────────────────────────────────────────────────────────────
+
+function buildMergedDb() {
+  const db: MergedDb = {};
+  for (const [app, boards] of Object.entries(boot.firmwareDb)) {
+    if (!db[app]) db[app] = {};
+    db[app]["master"] = { boards };
+  }
+  state.mergedDb = db;
+}
+
+async function loadTaggedVersions() {
+  if (!FIRMWARE_SITE_URL) return;
+  try {
+    const resp = await fetch(`${FIRMWARE_SITE_URL}/versions.json`);
+    if (!resp.ok) return;
+    const tagged = (await resp.json()) as TaggedVersionsDb;
+    for (const [app, versions] of Object.entries(tagged)) {
+      if (!state.mergedDb[app]) state.mergedDb[app] = {};
+      for (const [refs, entry] of Object.entries(versions)) {
+        state.mergedDb[app][refs] = {
+          commit_timestamp: entry.commit_timestamp,
+          boards: entry.boards,
+        };
+      }
+    }
+  } catch {
+    // versions unavailable, continue with master only
+  }
+}
+
+function getAppKeys(): string[] {
+  return Object.keys(state.mergedDb).sort();
+}
+
+function getVersionKeys(): string[] {
+  const app = state.selectedApp;
+  if (!app || !state.mergedDb[app]) return [];
+  const keys = Object.keys(state.mergedDb[app]);
+  keys.sort((a, b) => {
+    if (a === "master") return -1;
+    if (b === "master") return 1;
+    return b.localeCompare(a);
+  });
+  return keys;
+}
+
+function getCurrentBoardsTree(): BoardsTree {
+  const app = state.selectedApp;
+  const version = state.selectedVersion;
+  if (!app || !version) return {};
+  return state.mergedDb[app]?.[version]?.boards ?? {};
+}
+
+function getChipKeys(): string[] {
+  return Object.keys(getCurrentBoardsTree());
+}
+
+// ── Tab management ───────────────────────────────────────────────────────────
 
 function switchTab(tab: "flash" | "console") {
   state.activeTab = tab;
@@ -424,13 +545,12 @@ function updateConsoleTabState() {
   } else {
     els.consoleToggleBtn.title = s.consoleTabDisabledHint;
   }
-
   if (!enabled && state.activeTab === "console") {
     switchTab("flash");
   }
 }
 
-// ── Modal management ────────────────────────────────────────────────────────
+// ── Modal management ─────────────────────────────────────────────────────────
 
 function openModal() {
   state.modalStep = 1;
@@ -446,44 +566,65 @@ function closeModal() {
 
 function renderModalStep(step: 1 | 2 | 3) {
   state.modalStep = step;
-
-  // Update step indicators
-  const indicators = [
-    els.modalStep1Indicator,
-    els.modalStep2Indicator,
-    els.modalStep3Indicator,
-  ];
+  const indicators = [els.modalStep1Indicator, els.modalStep2Indicator, els.modalStep3Indicator];
   indicators.forEach((el, i) => {
     el.classList.remove("active", "done");
-    if (i + 1 === step) {
-      el.classList.add("active");
-    } else if (i + 1 < step) {
-      el.classList.add("done");
-    }
+    if (i + 1 === step) el.classList.add("active");
+    else if (i + 1 < step) el.classList.add("done");
   });
-
-  // Show/hide step bodies
   els.modalStep1Body.style.display = step === 1 ? "" : "none";
   els.modalStep2Body.style.display = step === 2 ? "" : "none";
   els.modalStep3Body.style.display = step === 3 ? "" : "none";
-
-  // Show terminal only in steps 1 and 2
   els.modalTerminalDetails.style.display = step === 3 ? "none" : "";
 }
 
 function setModalCloseable(closeable: boolean) {
   state.modalCanClose = closeable;
-  if (closeable) {
-    els.modalCloseBtn.classList.add("visible");
-  } else {
-    els.modalCloseBtn.classList.remove("visible");
+  els.modalCloseBtn.classList.toggle("visible", closeable);
+}
+
+// ── Rendering: App / Version / Board selection ───────────────────────────────
+
+function renderAppOptions() {
+  els.appSelect.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = s.chooseApplicationPlaceholder;
+  placeholder.selected = !state.selectedApp;
+  els.appSelect.appendChild(placeholder);
+
+  for (const appKey of getAppKeys()) {
+    const option = document.createElement("option");
+    option.value = appKey;
+    option.textContent = appKey.replace(/_/g, " ");
+    if (appKey === state.selectedApp) option.selected = true;
+    els.appSelect.appendChild(option);
   }
 }
 
-// ── Board rendering ──────────────────────────────────────────────────────────
+function renderVersionOptions() {
+  els.versionSelect.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = s.chooseVersionPlaceholder;
+  placeholder.selected = !state.selectedVersion;
+  els.versionSelect.appendChild(placeholder);
+
+  for (const versionKey of getVersionKeys()) {
+    const option = document.createElement("option");
+    option.value = versionKey;
+    option.textContent = versionKey === "master" ? `master (${boot.masterRef})` : versionKey;
+    if (versionKey === state.selectedVersion) option.selected = true;
+    els.versionSelect.appendChild(option);
+  }
+
+  els.versionSelect.disabled = !state.selectedApp;
+}
 
 function renderChipOptions() {
   els.chipSelect.innerHTML = "";
+  const chipKeys = getChipKeys();
+
   const placeholder = document.createElement("option");
   placeholder.value = "";
   placeholder.textContent = s.chooseChipPlaceholder;
@@ -494,11 +635,11 @@ function renderChipOptions() {
     const option = document.createElement("option");
     option.value = chipKey;
     option.textContent = chipLabel(chipKey);
-    if (chipKey === state.selectedChip) {
-      option.selected = true;
-    }
+    if (chipKey === state.selectedChip) option.selected = true;
     els.chipSelect.appendChild(option);
   }
+
+  els.chipSelect.disabled = chipKeys.length === 0 || Boolean(state.device.chipKey);
 }
 
 function refreshBoards() {
@@ -513,19 +654,19 @@ function refreshBoards() {
   normalizeConsoleOutputSelection();
   renderConsoleOutputOptions();
   renderSelectedBoard();
+  renderPartitionList();
   renderNoFirmwareState();
   renderActionState();
 }
 
 function normalizeSelectionState() {
-  state.selectedChip = getNormalizedSelectedChip();
-
+  const chipKeys = getChipKeys();
+  state.selectedChip = getNormalizedSelectedChip(chipKeys);
   if (!state.selectedChip) {
     state.selectedBrand = null;
     state.selectedBoardId = null;
     return;
   }
-
   const brandKeys = getBrandKeys(state.selectedChip);
   if (!brandKeys.includes(state.selectedBrand ?? "")) {
     state.selectedBrand = brandKeys[0] ?? null;
@@ -540,35 +681,28 @@ function normalizeConsoleOutputSelection() {
   }
 }
 
-function getNormalizedSelectedChip() {
+function getNormalizedSelectedChip(chipKeys: string[]) {
   if (state.device.chipKey) {
-    const compatibleChipKeys = getCompatibleChipKeysForCurrentDevice();
-    if (compatibleChipKeys.includes(state.selectedChip ?? "")) {
-      return state.selectedChip;
-    }
+    const compatibleChipKeys = chipKeys.filter((ck) => hasCompatibleBoardsForChip(ck));
+    if (compatibleChipKeys.includes(state.selectedChip ?? "")) return state.selectedChip;
     return compatibleChipKeys[0] ?? null;
   }
-
-  if (state.selectedChip && chipKeys.includes(state.selectedChip)) {
-    return state.selectedChip;
-  }
+  if (state.selectedChip && chipKeys.includes(state.selectedChip)) return state.selectedChip;
   return chipKeys[0] ?? null;
 }
 
-function getCompatibleChipKeysForCurrentDevice() {
-  return chipKeys.filter((chipKey) => hasCompatibleBoardsForChip(chipKey));
-}
-
 function hasCompatibleBoardsForChip(chipKey: string) {
-  const brands = firmwareDb[chipKey] ?? {};
-  return Object.values(brands).some((boards) =>
-    Object.values(boards).some((firmware) => isCompatibleWithCurrentDevice(chipKey, firmware)),
+  const boards = getCurrentBoardsTree();
+  const brands = boards[chipKey] ?? {};
+  return Object.values(brands).some((boardMap) =>
+    Object.values(boardMap).some((consoles) =>
+      Object.values(consoles).some((fw) => isCompatibleWithCurrentDevice(chipKey, fw)),
+    ),
   );
 }
 
 function renderBrandOptions() {
   els.brandSelect.innerHTML = "";
-
   const placeholder = document.createElement("option");
   placeholder.value = "";
   placeholder.textContent = s.chooseBrandPlaceholder;
@@ -583,12 +717,12 @@ function renderBrandOptions() {
     option.selected = option.value === state.selectedBrand;
     els.brandSelect.appendChild(option);
   }
-
   els.brandSelect.disabled = !state.selectedChip || brandKeys.length === 0;
 }
 
 function getBrandKeys(chipKey: string) {
-  return Object.keys(firmwareDb[chipKey] ?? {}).sort(compareBrandKey);
+  const boards = getCurrentBoardsTree();
+  return Object.keys(boards[chipKey] ?? {}).sort(compareBrandKey);
 }
 
 function compareBrandKey(a: string, b: string) {
@@ -596,69 +730,58 @@ function compareBrandKey(a: string, b: string) {
 }
 
 function brandSortWeight(brandKey: string) {
-  const normalized = brandKey.toLowerCase();
-  if (normalized === "espressif") {
-    return 0;
-  }
-  if (normalized === "m5stack") {
-    return 1;
-  }
+  const n = brandKey.toLowerCase();
+  if (n === "espressif") return 0;
+  if (n === "m5stack") return 1;
   return 2;
 }
 
 function getVisibleBoards(): VisibleBoard[] {
   const chipKey = state.selectedChip;
   const brandKey = state.selectedBrand;
-  if (!chipKey || !brandKey) {
-    return [];
+  if (!chipKey || !brandKey) return [];
+  const boards = getCurrentBoardsTree();
+  const boardMap = boards[chipKey]?.[brandKey] ?? {};
+  const result: VisibleBoard[] = [];
+  for (const [boardKey, consoles] of Object.entries(boardMap)) {
+    const firstConsole = Object.values(consoles)[0];
+    if (firstConsole && isCompatibleWithCurrentDevice(chipKey, firstConsole)) {
+      result.push({ chipKey, brandKey, boardKey, firmware: firstConsole });
+    }
   }
-  const boards = firmwareDb[chipKey]?.[brandKey] ?? {};
-  return Object.entries(boards)
-    .filter(([, firmware]) => isCompatibleWithCurrentDevice(chipKey, firmware))
-    .map(([boardKey, firmware]) => ({ chipKey, brandKey, boardKey, firmware }));
+  return result;
 }
 
 function isCompatibleWithCurrentDevice(chipKey: string, firmware: FirmwareRecord) {
-  if (!state.device.chipKey) {
-    return true;
-  }
-  if (!isChipKeyCompatibleWithCurrentDevice(chipKey)) {
-    return false;
-  }
+  if (!state.device.chipKey) return true;
+  if (!isChipKeyCompatibleWithCurrentDevice(chipKey)) return false;
   if (
     state.device.flashSizeMb != null &&
     firmware.min_flash_size != null &&
     state.device.flashSizeMb < firmware.min_flash_size
-  ) {
-    return false;
-  }
+  ) return false;
   if (
     state.device.psramSizeMb != null &&
     firmware.min_psram_size != null &&
     state.device.psramSizeMb < firmware.min_psram_size
-  ) {
-    return false;
-  }
+  ) return false;
   return true;
 }
 
-function getVisibleConsoleOutputKeys(firmware: FirmwareRecord | null) {
-  if (!firmware) {
-    return [];
-  }
-
-  return Object.keys(firmware.merged_binary)
-    .filter((consoleOutput) => isConsoleOutputVisibleForCurrentDevice(consoleOutput))
+function getVisibleConsoleOutputKeys(firmware: FirmwareRecord | null): string[] {
+  if (!firmware) return [];
+  const selected = getSelectedFirmware();
+  if (!selected) return [];
+  const boards = getCurrentBoardsTree();
+  const consoles = boards[selected.chipKey]?.[selected.brandKey]?.[selected.boardKey] ?? {};
+  return Object.keys(consoles)
+    .filter((co) => isConsoleOutputVisibleForCurrentDevice(co))
     .sort(compareConsoleOutputKey);
 }
 
 function isConsoleOutputVisibleForCurrentDevice(consoleOutput: string) {
-  if (state.detectedConsoleOutput === "JTAG" && !consoleOutput.includes("JTAG")) {
-    return false;
-  }
-  if (state.detectedConsoleOutput === "UART" && consoleOutput.includes("JTAG")) {
-    return false;
-  }
+  if (state.detectedConsoleOutput === "JTAG" && !consoleOutput.includes("JTAG")) return false;
+  if (state.detectedConsoleOutput === "UART" && consoleOutput.includes("JTAG")) return false;
   return true;
 }
 
@@ -666,48 +789,28 @@ function compareConsoleOutputKey(a: string, b: string) {
   return consoleOutputSortWeight(a) - consoleOutputSortWeight(b) || a.localeCompare(b);
 }
 
-function consoleOutputSortWeight(consoleOutput: string) {
-  if (consoleOutput === "UART") {
-    return 0;
-  }
-  if (consoleOutput.includes("JTAG")) {
-    return 1;
-  }
-  if (consoleOutput === "unknown") {
-    return 2;
-  }
+function consoleOutputSortWeight(co: string) {
+  if (co === "UART") return 0;
+  if (co.includes("JTAG")) return 1;
+  if (co === "unknown") return 2;
   return 3;
 }
 
 function isChipKeyCompatibleWithCurrentDevice(chipKey: string) {
-  if (!state.device.chipKey) {
-    return true;
-  }
-
+  if (!state.device.chipKey) return true;
   const parsed = parseChipKey(chipKey);
-  if (parsed.baseChipKey !== state.device.chipKey) {
-    return false;
-  }
-  if (parsed.rev == null) {
-    return true;
-  }
-  if (state.device.chipRevision == null) {
-    return false;
-  }
+  if (parsed.baseChipKey !== state.device.chipKey) return false;
+  if (parsed.rev == null) return true;
+  if (state.device.chipRevision == null) return false;
   if (parsed.baseChipKey === "esp32p4") {
-    if (parsed.rev === 1) {
-      return state.device.chipRevision < 300;
-    }
-    if (parsed.rev === 3) {
-      return state.device.chipRevision >= 300;
-    }
+    if (parsed.rev === 1) return state.device.chipRevision < 300;
+    if (parsed.rev === 3) return state.device.chipRevision >= 300;
   }
   return state.device.chipRevision === parsed.rev;
 }
 
 function renderBoardOptions() {
   els.boardSelect.innerHTML = "";
-
   const placeholder = document.createElement("option");
   placeholder.value = "";
   placeholder.textContent = s.noBoardSelected;
@@ -721,13 +824,11 @@ function renderBoardOptions() {
     option.selected = option.value === state.selectedBoardId;
     els.boardSelect.appendChild(option);
   }
-
   els.boardSelect.disabled = state.visibleBoards.length === 0;
 }
 
 function renderConsoleOutputOptions() {
   els.consoleOutputSelect.innerHTML = "";
-
   const placeholder = document.createElement("option");
   placeholder.value = "";
   placeholder.textContent = s.chooseConsoleOutputPlaceholder;
@@ -736,26 +837,28 @@ function renderConsoleOutputOptions() {
 
   const selected = getSelectedFirmware();
   const consoleOutputs = getVisibleConsoleOutputKeys(selected?.firmware ?? null);
-  for (const consoleOutput of consoleOutputs) {
+  for (const co of consoleOutputs) {
     const option = document.createElement("option");
-    option.value = consoleOutput;
-    option.textContent = consoleOutputLabel(consoleOutput);
+    option.value = co;
+    option.textContent = consoleOutputLabel(co);
     option.selected = option.value === state.selectedConsoleOutput;
     els.consoleOutputSelect.appendChild(option);
   }
-
   els.consoleOutputSelect.disabled = !selected || consoleOutputs.length === 0;
 }
 
 function renderSelectedBoard() {
   const selected = getSelectedFirmware();
-  if (!selected) {
+  const consoleRecord = getSelectedConsoleRecord();
+  if (!selected || !consoleRecord) {
     els.boardSelect.value = "";
     els.selectedBoardSummary.hidden = true;
     els.selectedBoardName.textContent = s.noBoardSelected;
     els.selectedBoardDesc.textContent = "";
     els.selectedBoardMeta.innerHTML = "";
-    updateDownloadButton(null);
+    els.downloadBtn.classList.add("disabled");
+    els.downloadBtn.setAttribute("aria-disabled", "true");
+    els.downloadBtn.href = "#";
     return;
   }
 
@@ -763,23 +866,85 @@ function renderSelectedBoard() {
   els.consoleOutputSelect.value = state.selectedConsoleOutput ?? "";
   els.selectedBoardSummary.hidden = false;
   els.selectedBoardName.textContent = selected.boardKey;
-  const description = selected.firmware.description?.trim() || "";
   els.selectedBoardMeta.innerHTML = `
     <span>
       <strong>${escapeHtml(s.firmwareRequirementsLabel)}:</strong>
-      ${escapeHtml(s.boardFlashMeta)} &gt;= ${escapeHtml(formatSizeRequirement(selected.firmware.min_flash_size))},
-      ${escapeHtml(s.boardPsramMeta)} &gt;= ${escapeHtml(formatSizeRequirement(selected.firmware.min_psram_size))}
+      ${escapeHtml(s.boardFlashMeta)} &gt;= ${escapeHtml(formatSizeRequirement(consoleRecord.min_flash_size))},
+      ${escapeHtml(s.boardPsramMeta)} &gt;= ${escapeHtml(formatSizeRequirement(consoleRecord.min_psram_size))}
     </span>
   `;
-  els.selectedBoardDesc.innerHTML = description
-    ? `<strong>${escapeHtml(s.firmwareDescriptionLabel)}:</strong> ${escapeHtml(description)}`
-    : "";
-  updateDownloadButton(getSelectedMergedBinary(selected.firmware));
+  els.selectedBoardDesc.innerHTML = "";
+
+  // Download button: disabled for per-partition model (individual files)
+  els.downloadBtn.classList.add("disabled");
+  els.downloadBtn.setAttribute("aria-disabled", "true");
+  els.downloadBtn.href = "#";
+}
+
+function updatePartitionSelectionUi() {
+  const visible = state.flashMode === "erase-select-partitions" || state.flashMode === "select-partitions";
+  els.partitionSelection.style.display = visible ? "" : "none";
+  els.partitionSelectionHint.textContent =
+    state.flashMode === "erase-select-partitions"
+      ? s.partitionSelectionHintErase
+      : s.partitionSelectionHintPreserve;
+}
+
+function renderPartitionList() {
+  els.partitionList.innerHTML = "";
+  const record = getSelectedConsoleRecord();
+  if (!record) return;
+
+  state.selectedPartitions.clear();
+  for (const [offset] of Object.entries(record.flash_files)) {
+    state.selectedPartitions.add(offset);
+  }
+
+  for (const [offset, filePath] of Object.entries(record.flash_files)) {
+    const fileName = filePath.split("/").pop() ?? filePath;
+    const partName = findPartitionName(record.partition_table, offset) ?? fileName;
+
+    const label = document.createElement("label");
+    label.className = "partition-item";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = true;
+    checkbox.dataset.offset = offset;
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) state.selectedPartitions.add(offset);
+      else state.selectedPartitions.delete(offset);
+    });
+
+    const offsetSpan = document.createElement("span");
+    offsetSpan.className = "partition-offset";
+    offsetSpan.textContent = offset;
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "partition-name";
+    nameSpan.textContent = partName;
+
+    label.appendChild(checkbox);
+    label.appendChild(offsetSpan);
+    label.appendChild(nameSpan);
+    els.partitionList.appendChild(label);
+  }
+}
+
+function findPartitionName(table: PartitionEntry[], offset: string): string | null {
+  const normalizedOffset = parseHexAddress(offset);
+  if (normalizedOffset === null) return null;
+  for (const entry of table) {
+    const entryOffset = parseHexAddress(entry.offset);
+    if (entryOffset === normalizedOffset) return entry.name;
+  }
+  return null;
 }
 
 function renderNoFirmwareState() {
-  const noCompatibleChips =
-    Boolean(state.device.chipKey) && getCompatibleChipKeysForCurrentDevice().length === 0;
+  const chipKeys = getChipKeys();
+  const noCompatibleChips = Boolean(state.device.chipKey) &&
+    chipKeys.filter((ck) => hasCompatibleBoardsForChip(ck)).length === 0;
   const noVisibleBoards =
     Boolean(state.device.chipKey) && Boolean(state.selectedChip) && state.visibleBoards.length === 0;
   const shouldShow = noCompatibleChips || noVisibleBoards;
@@ -790,33 +955,27 @@ function renderNoFirmwareState() {
 
 function renderActionState() {
   const selected = getSelectedFirmware();
-  const selectedBinary = getSelectedMergedBinary(selected?.firmware ?? null);
+  const consoleRecord = getSelectedConsoleRecord();
   let hint = s.actionReadyHint;
   let flashDisabled = false;
 
   if (!selected) {
     flashDisabled = true;
     hint = state.device.chipKey ? s.flashBtnDisabledNoFirmware : s.flashBtnDisabledNoDevice;
-  } else if (!selectedBinary) {
+  } else if (!consoleRecord) {
     flashDisabled = true;
     hint = s.flashBtnDisabledNoConsoleOutput;
   } else if (!state.device.chipKey) {
     flashDisabled = true;
     hint = s.flashBtnDisabledNoDevice;
-  } else if (!isCompatibleWithCurrentDevice(selected.chipKey, selected.firmware)) {
+  } else if (!isCompatibleWithCurrentDevice(selected.chipKey, consoleRecord)) {
     flashDisabled = true;
     hint = s.flashBtnDisabledNoMatch;
   }
 
-  if (state.serial === "unsupported") {
-    flashDisabled = true;
-  }
-  if (state.serial === "connecting" || state.flash === "downloading" || state.flash === "flashing") {
-    flashDisabled = true;
-  }
-  if (state.activeTab === "console") {
-    flashDisabled = true;
-  }
+  if (state.serial === "unsupported") flashDisabled = true;
+  if (state.serial === "connecting" || state.flash === "downloading" || state.flash === "flashing") flashDisabled = true;
+  if (state.activeTab === "console") flashDisabled = true;
 
   els.flashBtn.disabled = flashDisabled;
   els.flashHint.textContent = hint;
@@ -838,9 +997,7 @@ function renderConnectionState() {
     const chipRevision = formatChipRevision(state.device.chipRevision);
     els.infoRevisionSep.style.display = chipRevision ? "" : "none";
     els.infoRevision.style.display = chipRevision ? "" : "none";
-    if (chipRevision) {
-      els.infoRevision.textContent = `${s.deviceRevisionLabel}: ${chipRevision}`;
-    }
+    if (chipRevision) els.infoRevision.textContent = `${s.deviceRevisionLabel}: ${chipRevision}`;
 
     els.infoFlashSep.style.display = "";
     els.infoFlash.style.display = "";
@@ -849,9 +1006,7 @@ function renderConnectionState() {
     const psramSize = state.device.psramSizeMb;
     els.infoPsramSep.style.display = psramSize != null ? "" : "none";
     els.infoPsram.style.display = psramSize != null ? "" : "none";
-    if (psramSize != null) {
-      els.infoPsram.textContent = `${s.devicePsramLabel}: ${formatSizeRequirement(psramSize)}`;
-    }
+    if (psramSize != null) els.infoPsram.textContent = `${s.devicePsramLabel}: ${formatSizeRequirement(psramSize)}`;
 
     els.chipSelect.disabled = true;
   } else {
@@ -862,18 +1017,15 @@ function renderConnectionState() {
     els.infoFlash.style.display = "none";
     els.infoPsramSep.style.display = "none";
     els.infoPsram.style.display = "none";
-
     els.chipSelect.disabled = false;
   }
 
   els.connectBtn.disabled = state.serial === "connecting";
-  els.connectBtnLabel.textContent =
-    state.serial === "connecting" ? s.connectingMsg : s.connectBtn;
+  els.connectBtnLabel.textContent = state.serial === "connecting" ? s.connectingMsg : s.connectBtn;
   els.actionConnectBtn.style.display = connected ? "none" : "";
   els.actionDisconnectBtn.style.display = connected ? "" : "none";
   els.actionConnectBtn.disabled = state.serial === "connecting";
-  els.actionConnectBtnLabel.textContent =
-    state.serial === "connecting" ? s.connectingMsg : s.connectBtn;
+  els.actionConnectBtnLabel.textContent = state.serial === "connecting" ? s.connectingMsg : s.connectBtn;
 
   renderConsoleSendState();
   updateConsoleTabState();
@@ -883,9 +1035,7 @@ function renderConnectionState() {
 // ── Device connection ────────────────────────────────────────────────────────
 
 async function connectDevice() {
-  if (state.serial === "connecting") {
-    return;
-  }
+  if (state.serial === "connecting") return;
   clearConnectError();
   state.serial = "connecting";
   renderConnectionState();
@@ -896,9 +1046,7 @@ async function connectDevice() {
     await connectingLoader.initialize();
     const activeLoader = await connectingLoader.runStub();
     connectingLoader = activeLoader;
-    if (!activeLoader.flashSize) {
-      await activeLoader.detectFlashSize();
-    }
+    if (!activeLoader.flashSize) await activeLoader.detectFlashSize();
 
     state.loader = activeLoader;
     connectingLoader = null;
@@ -915,11 +1063,7 @@ async function connectDevice() {
     refreshBoards();
   } catch (error) {
     if (connectingLoader) {
-      try {
-        await connectingLoader.disconnect();
-      } catch {
-        // ignore secondary error
-      }
+      try { await connectingLoader.disconnect(); } catch { /* ignore */ }
     }
     await disconnectDevice({ silent: true });
     state.serial = "error";
@@ -929,11 +1073,7 @@ async function connectDevice() {
 }
 
 async function disconnectDevice(options?: { silent?: boolean }) {
-  // Close modal if open
-  if (state.modalStep > 0) {
-    closeModal();
-  }
-
+  if (state.modalStep > 0) closeModal();
   stopConsoleReader();
   rejectWaiters(state.statusWaiters, new Error("Disconnected"));
   rejectWaiters(state.readyWaiters, new Error("Disconnected"));
@@ -948,52 +1088,26 @@ async function disconnectDevice(options?: { silent?: boolean }) {
 
   const loader = state.loader;
   state.loader = null;
-  state.device = {
-    chipName: null,
-    chipKey: null,
-    chipRevision: null,
-    flashSizeMb: null,
-    psramSizeMb: null,
-  };
+  state.device = { chipName: null, chipKey: null, chipRevision: null, flashSizeMb: null, psramSizeMb: null };
   state.detectedConsoleOutput = null;
   state.serial = "idle";
   renderConnectionState();
   refreshBoards();
 
-  // Switch back to flash tab if on console
-  if (state.activeTab === "console") {
-    switchTab("flash");
-  }
-
+  if (state.activeTab === "console") switchTab("flash");
   if (loader) {
-    try {
-      await loader.disconnect();
-    } catch (error) {
-      if (!options?.silent) {
-        console.warn(error);
-      }
-    }
+    try { await loader.disconnect(); } catch (error) { if (!options?.silent) console.warn(error); }
   }
 }
 
-// ── Flash firmware ───────────────────────────────────────────────────────────
+// ── Flash firmware (per-partition) ───────────────────────────────────────────
 
 async function flashSelectedFirmware() {
   const selected = getSelectedFirmware();
-  const selectedBinary = getSelectedMergedBinary(selected?.firmware ?? null);
-  if (!selected) {
-    return;
-  }
-  if (!selectedBinary) {
-    renderActionState();
-    return;
-  }
-  if (!state.loader || !state.device.chipKey) {
-    renderActionState();
-    return;
-  }
+  const record = getSelectedConsoleRecord();
+  if (!selected || !record) { renderActionState(); return; }
+  if (!state.loader || !state.device.chipKey) { renderActionState(); return; }
   if (state.inConsoleMode) {
-    // Show error in a new modal session
     openModal();
     renderModalStep(1);
     showModalFlashError("Please disconnect and reconnect the device before flashing again.");
@@ -1001,10 +1115,8 @@ async function flashSelectedFirmware() {
     return;
   }
 
-  // Open modal at step 1
   openModal();
   setModalCloseable(false);
-
   state.readyIp = null;
   state.progressLines = [];
   state.reconnectingPort = false;
@@ -1014,18 +1126,32 @@ async function flashSelectedFirmware() {
   renderReconnectPrompt(false);
 
   try {
+    const filesToFlash = getFilesToFlash(record);
+    if (filesToFlash.length === 0) {
+      throw new Error("No partition files selected for flashing.");
+    }
+
+    // Download all partition files
     state.flash = "downloading";
     updateConsoleTabState();
-    updateModalProgress(s.downloadingFirmware, 0);
-    const binary = await downloadBinary(selectedBinary, (received, total) => {
-      const pct = total > 0 ? Math.round((received / total) * 100) : 0;
-      updateModalProgress(s.downloadingFirmware, pct);
-    });
+    updateModalProgress(s.downloadingPartitions, 0);
+    addProgressLine(s.downloadingPartitions);
 
+    const downloadedFiles: Array<{ offset: number; data: ArrayBuffer; name: string }> = [];
+    for (let i = 0; i < filesToFlash.length; i++) {
+      const { offset, url, name } = filesToFlash[i];
+      const pctBase = Math.round((i / filesToFlash.length) * 100);
+      updateModalProgress(s.downloadingPartitions, pctBase);
+
+      const resp = await fetch(url);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} downloading ${name}`);
+      const data = await resp.arrayBuffer();
+      downloadedFiles.push({ offset, data, name });
+    }
+    updateModalProgress(s.downloadingPartitions, 100);
+
+    // Flash
     state.flash = "flashing";
-    updateModalProgress(s.writingFlash, 0);
-    addProgressLine(`Flashing ${selected.boardKey} from 0x0`);
-
     const loader = state.loader;
     let fastBaudForFlash = false;
     if (loader.IS_STUB) {
@@ -1037,35 +1163,35 @@ async function flashSelectedFirmware() {
       }
     }
 
-    let lastWritePct = 0;
     try {
-      await loader.flashData(binary, (written, total) => {
-        const pct = total > 0 ? Math.round((written / total) * 100) : 0;
-        lastWritePct = pct;
-        updateModalProgress(s.writingFlash, pct);
-      }, 0x0, true);
-    } catch (flashError) {
-      // On ESP32-P4 (and some other chips) via UART, the stub does not respond
-      // to the ESP_FLASH_BEGIN(0,0) finalization command after a large compressed
-      // write, causing a "Timed out waiting for packet header" error even though
-      // all data blocks were written successfully.  The post-flash reset is done
-      // via hardware DTR/RTS signals and does not rely on flashDeflFinish, so it
-      // is safe to continue the post-flash flow when this specific condition is met.
-      const isFinalizeTimeout =
-        lastWritePct >= 100 &&
-        getErrorMessage(flashError).includes("Timed out waiting for packet");
-      if (!isFinalizeTimeout) {
-        throw flashError;
+      if (state.flashMode === "full-erase" || state.flashMode === "erase-select-partitions") {
+        updateModalProgress(s.erasingFlash, 0);
+        addProgressLine(s.erasingFlash);
+        await (loader as ESPStubLoader).eraseFlash();
+        updateModalProgress(s.erasingFlash, 100);
       }
-      addProgressLine("Note: stub finalization timed out after write; continuing with hardware reset.");
-      updateModalProgress(s.writingFlash, 100);
+
+      const totalBytes = downloadedFiles.reduce((sum, f) => sum + f.data.byteLength, 0);
+      let writtenBefore = 0;
+
+      for (const file of downloadedFiles) {
+        const msg = s.flashingPartition
+          .replace("{name}", file.name)
+          .replace("{offset}", `0x${file.offset.toString(16)}`);
+        addProgressLine(msg);
+
+        await flashBinaryChunk(loader, file.data, file.offset, (segPct) => {
+          const writtenNow = Math.round((file.data.byteLength * segPct) / 100);
+          const totalPct = Math.round(((writtenBefore + writtenNow) / totalBytes) * 100);
+          updateModalProgress(s.writingFlash, totalPct);
+        });
+        writtenBefore += file.data.byteLength;
+        updateModalProgress(s.writingFlash, Math.round((writtenBefore / totalBytes) * 100));
+      }
     } finally {
       if (fastBaudForFlash && loader.IS_STUB) {
-        try {
-          await loader.setBaudrate(FLASH_UART_BAUD_ROM);
-        } catch (restoreErr) {
-          addProgressLine(`UART restore to ${FLASH_UART_BAUD_ROM} failed: ${getErrorMessage(restoreErr)}`);
-        }
+        try { await loader.setBaudrate(FLASH_UART_BAUD_ROM); }
+        catch (restoreErr) { addProgressLine(`UART restore failed: ${getErrorMessage(restoreErr)}`); }
       }
     }
 
@@ -1086,11 +1212,64 @@ async function flashSelectedFirmware() {
   }
 }
 
-async function beginPostFlashFlow() {
-  if (!state.loader) {
-    return;
+function getFilesToFlash(record: FirmwareRecord) {
+  const isFullErase = state.flashMode === "full-erase";
+  const files: Array<{ offset: number; url: string; name: string }> = [];
+
+  for (const [offsetStr, urlPath] of Object.entries(record.flash_files)) {
+    if (!isFullErase && !state.selectedPartitions.has(offsetStr)) continue;
+
+    const offsetNum = Number.parseInt(offsetStr, 0);
+    if (!Number.isFinite(offsetNum) || offsetNum < 0) continue;
+
+    const fileName = urlPath.split("/").pop() ?? urlPath;
+    const url = resolveFileUrl(urlPath);
+    files.push({ offset: offsetNum, url, name: fileName });
   }
 
+  files.sort((a, b) => a.offset - b.offset);
+  return files;
+}
+
+function resolveFileUrl(urlPath: string): string {
+  if (urlPath.startsWith("http://") || urlPath.startsWith("https://")) return urlPath;
+  if (state.selectedVersion && state.selectedVersion !== "master" && FIRMWARE_SITE_URL) {
+    return `${FIRMWARE_SITE_URL}${urlPath}`;
+  }
+  return urlPath;
+}
+
+async function flashBinaryChunk(
+  loader: ESPLoader,
+  binary: ArrayBuffer,
+  flashOffset: number,
+  onProgress: (pct: number) => void,
+) {
+  let lastWritePct = 0;
+  try {
+    await loader.flashData(
+      binary,
+      (written, total) => {
+        const pct = total > 0 ? Math.round((written / total) * 100) : 0;
+        lastWritePct = pct;
+        onProgress(pct);
+      },
+      flashOffset,
+      true,
+    );
+  } catch (flashError) {
+    const isFinalizeTimeout =
+      lastWritePct >= 100 && getErrorMessage(flashError).includes("Timed out waiting for packet");
+    if (!isFinalizeTimeout) throw flashError;
+    addProgressLine("Note: stub finalization timed out after write; continuing with hardware reset.");
+    onProgress(100);
+  }
+}
+
+// ── Post-flash flow ──────────────────────────────────────────────────────────
+
+async function beginPostFlashFlow() {
+  if (!state.loader) return;
   state.flash = "postflash";
   state.provision = "waiting_boot";
   updateConsoleTabState();
@@ -1104,16 +1283,12 @@ async function beginPostFlashFlow() {
     renderReconnectPrompt(true);
     return;
   }
-
   renderReconnectPrompt(false);
   await continuePostFlashConsoleFlow();
 }
 
 async function reconnectDeviceAfterReset() {
-  if (!state.loader || state.reconnectingPort) {
-    return;
-  }
-
+  if (!state.loader || state.reconnectingPort) return;
   state.reconnectingPort = true;
   renderReconnectState();
   els.modalReconnectStatus.textContent = s.postFlashReconnectBusy;
@@ -1125,7 +1300,6 @@ async function reconnectDeviceAfterReset() {
     nextLoader.setConsoleMode(true);
     state.loader = nextLoader;
     state.detectedConsoleOutput = detectConsoleOutputFromLoader(nextLoader);
-
     els.modalReconnectStatus.textContent = s.postFlashReconnectSuccess;
     renderReconnectPrompt(false);
     await continuePostFlashConsoleFlow();
@@ -1144,10 +1318,7 @@ async function reconnectDeviceAfterReset() {
 }
 
 async function continuePostFlashConsoleFlow() {
-  if (!state.loader) {
-    return;
-  }
-
+  if (!state.loader) return;
   state.inConsoleMode = true;
   state.provision = "probing_wifi";
   renderConsoleSendState();
@@ -1157,30 +1328,19 @@ async function continuePostFlashConsoleFlow() {
 
   let status: WifiStatus | null = null;
   for (let attempt = 1; attempt <= WIFI_STATUS_PROBE_ATTEMPTS; attempt++) {
-    const stage = s.wifiStatusProbeAttempt.replace("{current}", String(attempt)).replace("{total}", String(WIFI_STATUS_PROBE_ATTEMPTS));
+    const stage = s.wifiStatusProbeAttempt
+      .replace("{current}", String(attempt))
+      .replace("{total}", String(WIFI_STATUS_PROBE_ATTEMPTS));
     updateModalProgress(stage, 100);
     addProgressLine(stage);
-
     await sendConsoleCommand("wifi --status\n");
     status = await waitForWifiStatus(WIFI_STATUS_PROBE_WAIT_MS).catch(() => null);
-    if (status) {
-      break;
-    }
-    if (attempt < WIFI_STATUS_PROBE_ATTEMPTS) {
-      await sleep(WIFI_STATUS_PROBE_RETRY_GAP_MS);
-    }
+    if (status) break;
+    if (attempt < WIFI_STATUS_PROBE_ATTEMPTS) await sleep(WIFI_STATUS_PROBE_RETRY_GAP_MS);
   }
 
-  if (!status) {
-    state.provision = "error";
-    throw new Error(s.wifiProbeError);
-  }
-
-  if (status.connected && status.configured && status.ip) {
-    handleReady(status.ip);
-    return;
-  }
-
+  if (!status) { state.provision = "error"; throw new Error(s.wifiProbeError); }
+  if (status.connected && status.configured && status.ip) { handleReady(status.ip); return; }
   state.provision = "need_wifi";
   updateConsoleTabState();
   renderModalStep(2);
@@ -1188,16 +1348,10 @@ async function continuePostFlashConsoleFlow() {
 }
 
 async function submitWifiCredentials() {
-  if (!state.loader || !state.inConsoleMode) {
-    return;
-  }
-
+  if (!state.loader || !state.inConsoleMode) return;
   const ssid = els.modalWifiSsid.value.trim();
   const password = els.modalWifiPassword.value;
-  if (!ssid) {
-    els.modalWifiSsid.focus();
-    return;
-  }
+  if (!ssid) { els.modalWifiSsid.focus(); return; }
   if (password.length > 0 && password.length < 8) {
     els.modalWifiPassword.focus();
     els.modalWifiPassword.reportValidity();
@@ -1214,17 +1368,13 @@ async function submitWifiCredentials() {
     await sendConsoleCommand(
       `wifi --set --ssid "${escapeConsoleArgument(ssid)}" --password "${escapeConsoleArgument(password)}" --apply\n`,
     );
-
     const pollTimer = window.setInterval(() => {
       void sendConsoleCommand("wifi --status\n").catch(() => undefined);
     }, 5000);
-
     try {
       const readyIp = await waitForReady(20000);
       handleReady(readyIp);
-    } finally {
-      window.clearInterval(pollTimer);
-    }
+    } finally { window.clearInterval(pollTimer); }
   } catch (error) {
     state.provision = "need_wifi";
     els.modalWifiStatus.textContent = getErrorMessage(error) || s.wifiTimeoutError;
@@ -1237,10 +1387,7 @@ async function submitWifiCredentials() {
 // ── Console reader ───────────────────────────────────────────────────────────
 
 async function startConsoleReader() {
-  if (!state.loader || state.consoleReading || !state.loader.port.readable) {
-    return;
-  }
-
+  if (!state.loader || state.consoleReading || !state.loader.port.readable) return;
   state.consoleReader = state.loader.port.readable.getReader();
   state.consoleReading = true;
   const decoder = new TextDecoder();
@@ -1249,12 +1396,8 @@ async function startConsoleReader() {
     try {
       while (state.consoleReading && state.consoleReader) {
         const { value, done } = await state.consoleReader.read();
-        if (done) {
-          break;
-        }
-        if (!value) {
-          continue;
-        }
+        if (done) break;
+        if (!value) continue;
         const text = decoder.decode(value, { stream: true });
         appendConsole(text);
         processConsoleText(text);
@@ -1264,11 +1407,7 @@ async function startConsoleReader() {
     } finally {
       state.consoleReading = false;
       if (state.consoleReader) {
-        try {
-          state.consoleReader.releaseLock();
-        } catch {
-          // ignore
-        }
+        try { state.consoleReader.releaseLock(); } catch { /* ignore */ }
       }
       state.consoleReader = null;
     }
@@ -1277,67 +1416,45 @@ async function startConsoleReader() {
 
 function stopConsoleReader() {
   state.consoleReading = false;
-  if (state.consoleReader) {
-    void state.consoleReader.cancel().catch(() => undefined);
-  }
+  if (state.consoleReader) void state.consoleReader.cancel().catch(() => undefined);
 }
 
 function processConsoleText(text: string) {
   state.consoleLineBuffer += text;
   const parts = state.consoleLineBuffer.split(/\r?\n/);
   state.consoleLineBuffer = parts.pop() ?? "";
-
   for (const rawLine of parts) {
     const line = rawLine.trim();
-    if (!line) {
-      continue;
-    }
+    if (!line) continue;
     const ip = extractReadyIp(line);
-    if (ip) {
-      handleReady(ip);
-    }
-
+    if (ip) handleReady(ip);
     const status = parseWifiStatus(line);
     if (status) {
       notifyStatusWaiters(status);
-      if (status.connected && status.configured && status.ip) {
-        handleReady(status.ip);
-      }
+      if (status.connected && status.configured && status.ip) handleReady(status.ip);
     }
   }
 }
 
 async function sendConsoleCommand(command: string) {
-  if (!state.loader?.port.writable) {
-    throw new Error(s.wifiProbeError);
-  }
+  if (!state.loader?.port.writable) throw new Error(s.wifiProbeError);
   const writer = state.loader.port.writable.getWriter();
-  try {
-    await writer.write(new TextEncoder().encode(command));
-    appendConsole(`> ${command}`);
-  } finally {
-    writer.releaseLock();
-  }
+  try { await writer.write(new TextEncoder().encode(command)); appendConsole(`> ${command}`); }
+  finally { writer.releaseLock(); }
 }
 
 async function resetDeviceFromConsole() {
-  if (!state.loader || !state.inConsoleMode) {
-    return;
-  }
+  if (!state.loader || !state.inConsoleMode) return;
   try {
-    if (!state.loader.isConsoleResetSupported()) {
-      throw new Error(s.consoleResetUnsupported);
-    }
+    if (!state.loader.isConsoleResetSupported()) throw new Error(s.consoleResetUnsupported);
     await state.loader.resetInConsoleMode();
-  } catch (error) {
-    appendConsole(`[error] ${getErrorMessage(error)}\n`);
-  }
+  } catch (error) { appendConsole(`[error] ${getErrorMessage(error)}\n`); }
 }
 
 function waitForWifiStatus(timeoutMs: number) {
   return new Promise<WifiStatus>((resolve, reject) => {
     const timer = window.setTimeout(() => {
-      state.statusWaiters = state.statusWaiters.filter((waiter) => waiter.timer !== timer);
+      state.statusWaiters = state.statusWaiters.filter((w) => w.timer !== timer);
       reject(new Error(s.wifiProbeError));
     }, timeoutMs);
     state.statusWaiters.push({ resolve, reject, timer });
@@ -1345,13 +1462,10 @@ function waitForWifiStatus(timeoutMs: number) {
 }
 
 function waitForReady(timeoutMs: number) {
-  if (state.readyIp) {
-    return Promise.resolve(state.readyIp);
-  }
-
+  if (state.readyIp) return Promise.resolve(state.readyIp);
   return new Promise<string>((resolve, reject) => {
     const timer = window.setTimeout(() => {
-      state.readyWaiters = state.readyWaiters.filter((waiter) => waiter.timer !== timer);
+      state.readyWaiters = state.readyWaiters.filter((w) => w.timer !== timer);
       reject(new Error(s.wifiTimeoutError));
     }, timeoutMs);
     state.readyWaiters.push({ resolve, reject, timer });
@@ -1361,37 +1475,24 @@ function waitForReady(timeoutMs: number) {
 function notifyStatusWaiters(status: WifiStatus) {
   const waiters = [...state.statusWaiters];
   state.statusWaiters = [];
-  for (const waiter of waiters) {
-    window.clearTimeout(waiter.timer);
-    waiter.resolve(status);
-  }
+  for (const w of waiters) { window.clearTimeout(w.timer); w.resolve(status); }
 }
 
 function handleReady(ip: string) {
-  if (state.readyIp === ip && state.provision === "ready") {
-    return;
-  }
-
+  if (state.readyIp === ip && state.provision === "ready") return;
   state.readyIp = ip;
   state.provision = "ready";
   updateConsoleTabState();
-
   const href = `http://${ip}/#start`;
   els.modalReadyLink.href = href;
   els.modalReadyLink.textContent = s.openDeviceBtn.replace("{ip}", ip);
   els.modalReadyTitle.textContent = s.wifiReadyTitle;
   els.modalReadyDesc.textContent = s.wifiReadyDesc;
-
-  // Advance modal to step 3
   renderModalStep(3);
   setModalCloseable(true);
-
   const waiters = [...state.readyWaiters];
   state.readyWaiters = [];
-  for (const waiter of waiters) {
-    window.clearTimeout(waiter.timer);
-    waiter.resolve(ip);
-  }
+  for (const w of waiters) { window.clearTimeout(w.timer); w.resolve(ip); }
 }
 
 // ── Progress helpers ─────────────────────────────────────────────────────────
@@ -1402,29 +1503,25 @@ function renderModalProgress(visible: boolean) {
 
 function renderReconnectPrompt(visible: boolean) {
   els.modalReconnectPrompt.hidden = !visible;
-  if (!visible) {
-    els.modalReconnectStatus.textContent = "";
-  }
+  if (!visible) els.modalReconnectStatus.textContent = "";
   renderReconnectState();
 }
 
 function renderReconnectState() {
   const visible = !els.modalReconnectPrompt.hidden;
-  els.modalReconnectBtn.disabled =
-    !visible || state.reconnectingPort || !("serial" in navigator);
+  els.modalReconnectBtn.disabled = !visible || state.reconnectingPort || !("serial" in navigator);
 }
 
 function updateModalProgress(stage: string, percent: number) {
   els.modalProgressStage.textContent = stage;
-  els.modalProgressPct.textContent = `${Math.max(0, Math.min(100, percent))}%`;
-  els.modalProgressBar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+  const clamped = Math.max(0, Math.min(100, percent));
+  els.modalProgressPct.textContent = `${clamped}%`;
+  els.modalProgressBar.style.width = `${clamped}%`;
 }
 
 function addProgressLine(line: string) {
   state.progressLines.push(line);
-  if (state.progressLines.length > 60) {
-    state.progressLines = state.progressLines.slice(-60);
-  }
+  if (state.progressLines.length > 60) state.progressLines = state.progressLines.slice(-60);
   els.modalProgressLog.textContent = state.progressLines.join("\n");
   els.modalProgressLog.scrollTop = els.modalProgressLog.scrollHeight;
 }
@@ -1448,14 +1545,11 @@ function hideModalFlashResult() {
 
 function appendConsole(text: string) {
   state.consoleText += text;
-  if (state.consoleText.length > 120000) {
-    state.consoleText = state.consoleText.slice(-120000);
-  }
+  if (state.consoleText.length > 120000) state.consoleText = state.consoleText.slice(-120000);
   renderConsole();
 }
 
 function renderConsole() {
-  // Update console tab output
   if (!state.consoleText) {
     els.consoleOutput.textContent = "";
     els.consoleOutput.appendChild(els.consoleEmpty);
@@ -1463,8 +1557,6 @@ function renderConsole() {
     els.consoleOutput.textContent = state.consoleText;
     els.consoleOutput.scrollTop = els.consoleOutput.scrollHeight;
   }
-
-  // Update modal readonly terminal
   if (!state.consoleText) {
     els.modalTerminalOutput.textContent = "";
     els.modalTerminalOutput.appendChild(els.modalTerminalEmpty);
@@ -1483,16 +1575,13 @@ function renderConsoleSendState() {
     state.flash !== "downloading" &&
     state.flash !== "flashing" &&
     state.provision !== "connecting_wifi";
-
   els.consoleSendInput.disabled = !canSend;
   els.consoleSendBtn.disabled = !canSend;
 }
 
 async function sendConsoleInput() {
   const input = els.consoleSendInput.value.trim();
-  if (!input) {
-    return;
-  }
+  if (!input) return;
   els.consoleSendInput.value = "";
   await sendConsoleCommand(`${input}\n`).catch((error) => {
     appendConsole(`[send-error] ${getErrorMessage(error)}\n`);
@@ -1511,130 +1600,64 @@ function clearConnectError() {
   els.connectError.classList.remove("visible");
 }
 
-// ── Download / button helpers ────────────────────────────────────────────────
-
-async function downloadBinary(
-  url: string,
-  onProgress: (received: number, total: number) => void,
-) {
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status} while downloading firmware`);
-  }
-
-  const total = Number(response.headers.get("content-length") ?? "0");
-  if (!response.body) {
-    const buffer = await response.arrayBuffer();
-    onProgress(buffer.byteLength, buffer.byteLength);
-    return buffer;
-  }
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let received = 0;
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
-    }
-    if (!value) {
-      continue;
-    }
-    chunks.push(value);
-    received += value.byteLength;
-    onProgress(received, total);
-  }
-
-  const merged = new Uint8Array(received);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  onProgress(received, total || received);
-  return merged.buffer;
-}
+// ── Selection helpers ────────────────────────────────────────────────────────
 
 function getSelectedFirmware() {
   const boardId = state.selectedBoardId;
-  if (!boardId) {
-    return null;
-  }
-  return state.visibleBoards.find(
-    ({ chipKey, brandKey, boardKey }) => makeBoardId(chipKey, brandKey, boardKey) === boardId,
-  ) ?? null;
-}
-
-function getSelectedMergedBinary(firmware: FirmwareRecord | null) {
-  const consoleOutput = state.selectedConsoleOutput;
-  if (!firmware || !consoleOutput) {
-    return null;
-  }
-  return firmware.merged_binary[consoleOutput] ?? null;
-}
-
-function updateDownloadButton(binaryLink: string | null) {
-  if (!binaryLink) {
-    els.downloadBtn.classList.add("disabled");
-    els.downloadBtn.setAttribute("aria-disabled", "true");
-    els.downloadBtn.href = "#";
-    els.downloadBtn.removeAttribute("download");
-    return;
-  }
-
-  els.downloadBtn.classList.remove("disabled");
-  els.downloadBtn.setAttribute("aria-disabled", "false");
-  els.downloadBtn.href = binaryLink;
-  els.downloadBtn.download = binaryLink.split("/").pop() || "firmware.bin";
-}
-
-function currentSelectionStillVisible() {
-  if (!state.selectedBoardId) {
-    return true;
-  }
-  return state.visibleBoards.some(
-    ({ chipKey, brandKey, boardKey }) =>
-      makeBoardId(chipKey, brandKey, boardKey) === state.selectedBoardId,
+  if (!boardId) return null;
+  return (
+    state.visibleBoards.find(
+      ({ chipKey, brandKey, boardKey }) => makeBoardId(chipKey, brandKey, boardKey) === boardId,
+    ) ?? null
   );
 }
 
-function consoleOutputLabel(consoleOutput: string) {
-  if (consoleOutput === "unknown") {
-    return "unknown";
-  }
-  return consoleOutput;
+function getSelectedConsoleRecord(): FirmwareRecord | null {
+  const selected = getSelectedFirmware();
+  const co = state.selectedConsoleOutput;
+  if (!selected || !co) return null;
+  const boards = getCurrentBoardsTree();
+  return boards[selected.chipKey]?.[selected.brandKey]?.[selected.boardKey]?.[co] ?? null;
+}
+
+function currentSelectionStillVisible() {
+  if (!state.selectedBoardId) return true;
+  return state.visibleBoards.some(
+    ({ chipKey, brandKey, boardKey }) => makeBoardId(chipKey, brandKey, boardKey) === state.selectedBoardId,
+  );
+}
+
+function consoleOutputLabel(co: string) {
+  return co === "unknown" ? "unknown" : co;
 }
 
 function detectConsoleOutputFromLoader(loader: ESPLoader): DetectedConsoleOutput {
   const info = getPortInfo(loader);
-  if (info?.usbVendorId === ESP_USB_JTAG_VID && info?.usbProductId === ESP_USB_JTAG_PID) {
-    return "JTAG";
-  }
+  if (info?.usbVendorId === ESP_USB_JTAG_VID && info?.usbProductId === ESP_USB_JTAG_PID) return "JTAG";
   return "UART";
 }
 
 function getPortInfo(loader: ESPLoader): SerialPortInfo | null {
-  const port = (loader as ESPLoader & {
-    port?: {
-      getInfo?: () => SerialPortInfo;
-    };
-  }).port;
-  if (!port?.getInfo) {
-    return null;
-  }
-
-  try {
-    return port.getInfo();
-  } catch {
-    return null;
-  }
+  const port = (loader as ESPLoader & { port?: { getInfo?: () => SerialPortInfo } }).port;
+  if (!port?.getInfo) return null;
+  try { return port.getInfo(); } catch { return null; }
 }
 
 // ── Utility ──────────────────────────────────────────────────────────────────
 
 function makeBoardId(chipKey: string, brandKey: string, boardKey: string) {
   return `${chipKey}:${brandKey}:${boardKey}`;
+}
+
+function parseHexAddress(value: string | undefined) {
+  if (!value || !value.trim()) return null;
+  const trimmed = value.trim();
+  const isHex = /^0x[0-9a-f]+$/i.test(trimmed);
+  const isDecimal = /^[0-9]+$/.test(trimmed);
+  if (!isHex && !isDecimal) return null;
+  const parsed = Number.parseInt(trimmed, isHex ? 16 : 10);
+  if (!Number.isFinite(parsed) || !Number.isSafeInteger(parsed) || parsed < 0) return null;
+  return parsed;
 }
 
 function chipLabel(chipKey: string) {
@@ -1651,66 +1674,40 @@ function chipLabel(chipKey: string) {
 function parseChipKey(chipKey: string) {
   const [baseChipKey, revPart] = chipKey.split("|", 2);
   const revMatch = revPart?.match(/^rev(\d+)$/i);
-  return {
-    baseChipKey,
-    rev: revMatch ? Number.parseInt(revMatch[1], 10) : null,
-  };
+  return { baseChipKey, rev: revMatch ? Number.parseInt(revMatch[1], 10) : null };
 }
 
 function normalizeChipKey(chipName: string | null) {
-  if (!chipName) {
-    return null;
-  }
+  if (!chipName) return null;
   return chipName.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 function parseFlashSize(value: string | null) {
-  if (!value) {
-    return null;
-  }
+  if (!value) return null;
   const match = value.match(/^(\d+)(KB|MB)$/i);
-  if (!match) {
-    return null;
-  }
+  if (!match) return null;
   const amount = Number(match[1]);
   return match[2].toUpperCase() === "KB" ? amount / 1024 : amount;
 }
 
 function formatSizeRequirement(sizeMb: number | null | undefined) {
-  if (sizeMb == null) {
-    return s.psramUnknown;
-  }
+  if (sizeMb == null) return s.psramUnknown;
   return `${sizeMb} MB`;
 }
 
 function formatChipRevision(revision: number | null | undefined) {
-  if (revision == null) {
-    return null;
-  }
-  if (revision >= 300) {
-    return `v${Math.floor(revision / 100)}`;
-  }
-  return `v${revision}`;
+  if (revision == null) return null;
+  return revision >= 300 ? `v${Math.floor(revision / 100)}` : `v${revision}`;
 }
 
 function parseWifiStatus(line: string): WifiStatus | null {
-  if (!line.includes("CMD_WIFI:") || !line.includes("cmd=status") || !line.includes("ok=1")) {
-    return null;
-  }
-
+  if (!line.includes("CMD_WIFI:") || !line.includes("cmd=status") || !line.includes("ok=1")) return null;
   const connectedMatch = line.match(/sta_connected=(\d)/);
   const configuredMatch = line.match(/sta_configured=(\d)/);
   const ipMatch = line.match(/sta_ip=([0-9.\-]+)/);
-  if (!connectedMatch || !configuredMatch || !ipMatch) {
-    return null;
-  }
-
+  if (!connectedMatch || !configuredMatch || !ipMatch) return null;
   const ip = isIpv4(ipMatch[1]) ? ipMatch[1] : null;
-  return {
-    connected: connectedMatch[1] === "1",
-    configured: configuredMatch[1] === "1",
-    ip,
-  };
+  return { connected: connectedMatch[1] === "1", configured: configuredMatch[1] === "1", ip };
 }
 
 function extractReadyIp(line: string) {
@@ -1736,30 +1733,18 @@ function copyLoaderMetadata(source: ESPLoader, target: ESPLoader) {
 }
 
 function rejectWaiters<T>(waiters: Waiter<T>[], reason: Error) {
-  for (const waiter of waiters) {
-    window.clearTimeout(waiter.timer);
-    waiter.reject(reason);
-  }
+  for (const w of waiters) { window.clearTimeout(w.timer); w.reject(reason); }
 }
 
 function getErrorMessage(error: unknown) {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
+  return error instanceof Error ? error.message : String(error);
 }
 
 function escapeHtml(text: string) {
-  return text
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
 
 function sleep(ms: number) {
-  return new Promise<void>((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
+  return new Promise<void>((resolve) => { window.setTimeout(resolve, ms); });
 }

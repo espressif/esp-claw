@@ -492,16 +492,14 @@ const currentLocaleLabel =
 
     <!-- Set default theme (document) to dark -->
     <script is:inline lang="ts">
-      const colorTheme = localStorage.getItem("theme-toggle");
-      const hasSetTheme = localStorage.getItem("theme-set");
       const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      if (isDark) {
-        /* no need to set theme */
-        return;
-      }
-      if (!colorTheme || !hasSetTheme) {
-        localStorage.setItem("theme-set", "1");
-        localStorage.setItem("theme-toggle", "dark");
+      if (!isDark) {
+        const colorTheme = localStorage.getItem("theme-toggle");
+        const hasSetTheme = localStorage.getItem("theme-set");
+        if (!colorTheme || !hasSetTheme) {
+          localStorage.setItem("theme-set", "1");
+          localStorage.setItem("theme-toggle", "dark");
+        }
       }
     </script>
 

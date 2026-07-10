@@ -1,0 +1,5 @@
+board: eda_robot_pro
+chip: esp32s3
+version: 1.0.0
+description: "EDA Robot Pro - ESP32-S3 四足机器狗 (INMP441 + MAX98357 + SSD1306)"
+manufacturer: "lceda-course-examples"

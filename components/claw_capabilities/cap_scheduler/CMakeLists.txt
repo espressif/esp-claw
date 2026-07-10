@@ -1,0 +1,14 @@
+idf_component_register(
+    SRCS
+        "src/cap_scheduler.c"
+        "src/cap_scheduler_parser.c"
+        "src/cap_scheduler_store.c"
+        "src/cmd_cap_scheduler.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        claw_cap
+        claw_event_router
+        console
+        nvs_flash
+)

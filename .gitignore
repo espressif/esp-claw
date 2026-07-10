@@ -1,6 +1,5 @@
 # Build output
 build/
-build_*/
 tmp/
 releases/
 
@@ -23,16 +22,9 @@ managed_components/
 
 # Environment
 .env
-.env.local
 # Cache / Compiled
 .cache
 *.pyc
-__pycache__/
-.pytest_cache/
-.ruff_cache/
-run.log
-trace.json
-simulator.json
 
 # MCP / Memov
 .mcp.json
@@ -51,10 +43,8 @@ docs/public/d2
 docs/dist
 docs/.astro
 docs/**/*.bin
-
-# Rust
-target/
-output/
-
-# On-device test secrets (Wi-Fi creds, API keys); copy from test_secrets.h.example
-test_secrets.h
+pages/simulator/node_modules
+pages/simulator/dist
+pages/simulator/*.log
+pages/simulator/public/runtime/*
+!pages/simulator/public/runtime/.gitkeep

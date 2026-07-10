@@ -1,0 +1,17 @@
+dependencies:
+  espressif/esp_lcd_gc9107:
+    version: "*"
+  esp_lcd_gc9b71:
+    version: "*"
+  esp_lcd_gc9d01:
+    version: "*"
+  esp_lcd_co5300:
+    version: "*"
+  esp_lcd_spd2010:
+    version: "*"
+  esp_lcd_sh8601:
+    version: "*"
+  esp_lcd_st77916:
+    version: "*"
+  esp_lcd_st77922:
+    version: "*"

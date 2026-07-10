@@ -1,0 +1,120 @@
+version: 1.0.0
+# Devices Configuration for ESP32-P4-EYE
+devices:
+  # PDM Microphone (bare PDM mic, no I2C codec IC).
+  # Lua audio reads the already-initialized i2s_audio_in peripheral directly.
+  - name: audio_adc
+    chip: internal
+    type: audio_codec
+    power_ctrl_device: mic_power_ctrl
+    version: default
+    config:
+      adc_enabled: true
+      dac_enabled: false
+      adc_max_channel: 1
+      adc_channel_mask: "1"
+      adc_init_gain: 0
+    peripherals:
+      - name: i2s_audio_in
+
+  - name: fs_sdcard
+    type: fs_fat
+    sub_type: sdmmc
+    version: default
+    config:
+      sub_config:
+        slot: SDMMC_HOST_SLOT_0
+        frequency: SDMMC_FREQ_HIGHSPEED
+        bus_width: 4
+        pins:
+          clk: 0
+          cmd: 0
+          d0: 0
+          d1: 0
+          d2: 0
+          d3: 0
+          d4: 0
+          d5: 0
+          d6: 0
+          d7: 0
+        ldo_chan_id: 4
+  # SPI Display Device (ST7789 240x240)
+  - name: display_lcd
+    chip: st7789
+    type: display_lcd
+    sub_type: spi
+    version: default
+    config:
+      mirror_x: false
+      mirror_y: false
+      invert_color: true
+      x_max: 240
+      y_max: 240
+      io_spi_config:
+        cs_gpio_num: 18
+        dc_gpio_num: 19
+        spi_mode: 3
+        pclk_hz: 80000000
+
+      lcd_panel_config:
+        reset_gpio_num: 15
+        data_endian: "LCD_RGB_DATA_ENDIAN_BIG"
+        flags:
+          reset_active_high: false
+        vendor_config: NULL
+
+    peripherals:
+    - name: spi_display
+
+  - name: lcd_brightness
+    type: ledc_ctrl
+    version: default
+    peripherals:
+      - name: ledc_backlight
+
+  - name: camera
+    type: camera
+    version: default
+    sub_type: "csi"
+    config:
+      csi_config:
+        reset_io: 26
+        pwdn_io: -1
+        dont_init_ldo: true
+    peripherals:
+      - name: "i2c_master"
+        frequency: 100000
+      - name: ldo_mipi
+
+  # Rotary encoder knob (GPIO48=A, GPIO47=B, GPIO2=button)
+  - name: knob
+    chip: rotary_encoder
+    type: custom
+    version: 1.0.0
+    init_skip: true
+    config:
+      gpio_encoder_a: 48
+      gpio_encoder_b: 47
+      gpio_button: 2
+
+  # Buttons (active low)
+  - name: buttons
+    chip: gpio_button
+    type: custom
+    version: 1.0.0
+    init_skip: true
+    config:
+      button1_gpio: 3
+      button2_gpio: 4
+      button3_gpio: 5
+      active_level: 0
+
+  # Flashlight LED
+  - name: flashlight
+    chip: gpio_led
+    type: custom
+    version: 1.0.0
+    init_skip: true
+    config:
+      gpio_num: 23
+      active_level: 1

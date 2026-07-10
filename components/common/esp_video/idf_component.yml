@@ -1,0 +1,6 @@
+## this component is temporary for override esp_video component, and will be removed after esp_video update
+dependencies:
+
+  tda-2030/claw_video:
+    version: ^2.1
+    public: true

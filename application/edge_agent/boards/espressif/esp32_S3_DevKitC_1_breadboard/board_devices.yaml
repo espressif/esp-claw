@@ -1,0 +1,81 @@
+version: 1.0.0
+# Devices Configuration
+devices:
+
+  - name: led_strip
+    chip: ws2812
+    type: custom
+    version: default
+    init_skip: true
+    dependencies:
+      espressif/led_strip:
+        version: "^3.0"
+        public: true
+    config:
+      max_leds: 1                  # Number of LEDs in the strip
+    peripherals:
+      - name: rmt_tx               # RMT TX peripheral used by the LED strip
+
+  - name: fake_audio_dac # Just for invoking audio dependencies, no actual DAC hardware connected
+    chip: none
+    type: audio_codec
+    version: default
+    init_skip: true
+    peripherals:
+      - name: i2s_audio_out
+
+  - name: fake_camera # Just for invoking camera dependencies, no actual camera hardware connected
+    type: camera
+    version: default
+    sub_type: "dvp"
+    init_skip: true
+    peripherals:
+      - name: i2c_master                   # Must match a periph_i2c name; provides SCCB i2c_handle to esp_video
+        frequency: 100000                   # SCCB I2C frequency (Hz)
+
+  - name: camera
+    type: custom
+    version: default
+    dependencies:
+      espressif/usb_host_uvc: "2.4.2"
+
+  - name: audio_dac
+    type: custom
+    version: default
+    dependencies:
+      espressif/usb_host_uac: "^1.4.0"
+    config:
+      sample_rate_hz: 16000           # Sample rate in Hz
+
+  - name: audio_adc
+    type: custom
+    version: default
+    config:
+      sample_rate_hz: 16000           # Sample rate in Hz
+
+
+  - name: display_lcd
+    chip: st7789
+    type: display_lcd
+    sub_type: spi
+    version: default
+    config:
+      mirror_x: false
+      mirror_y: true
+      swap_xy: true
+      invert_color: true
+      x_max: 320
+      y_max: 240
+      # esp_lcd_panel_io_spi_config_t fields
+      io_spi_config:
+        cs_gpio_num: 15
+        dc_gpio_num: 7
+        spi_mode: 0
+        pclk_hz: 40000000
+
+      lcd_panel_config:
+        reset_gpio_num: 6
+        data_endian: LCD_RGB_DATA_ENDIAN_BIG
+        vendor_config: NULL
+    peripherals:
+      - name: spi_display

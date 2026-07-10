@@ -15,7 +15,7 @@ build_doc:
     - cd docs
     - corepack enable
     - pnpm ci
-    - pnpm run generate-firmware-json ../merged_binary
+    - pnpm run generate-firmware-json ../firmware_output
     - pnpm run build
   artifacts:
     when: always

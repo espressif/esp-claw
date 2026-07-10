@@ -19,7 +19,7 @@ ESP-Claw is an **event-driven** Agent framework: an **Event** is the trigger for
 
 An Event is the message carrier in ESP-Claw: id, source, target, type, chat id, sender, text or JSON payload, timestamp, session policy, and more.
 
-`claw_event_t` (see <LinkToSource path="framework/foundation/claw_event_router/include/claw_event.h" />) packs those fields.
+`claw_event_t` (see <LinkToSource path="components/claw_modules/claw_event_router/include/claw_event.h" />) packs those fields.
 
 ### Event Router
 
@@ -75,7 +75,7 @@ The **order** of rules in `router_rules.json` is evaluation order. Each rule typ
 
 Matched text templates include `{{match.text}}`, `{{match.rule}}`, and `{{match.remainder}}`.
 
-`edge_agent` ships a starter `router_rules.json` for basic IM flows. See <LinkToSource relativePath="applications/edge_agent/fatfs_image/router_rules/router_rules.json" />.
+`edge_agent` ships a starter `router_rules.json` for basic IM flows. See <LinkToSource relativePath="application/edge_agent/fatfs_image/router_rules/router_rules.json" />.
 
 Full syntax is captured in the JSON Schema.
 
@@ -204,7 +204,7 @@ To auto-publish `agent_stage` events, adjust this menuconfig option: <kbd>(Top)<
 - With <kbd>Simple</kbd>, `agent_stage` events are not published at the routing layer.
 
 `agent_stage` events can be routed to channels such as IM to provide real-time progress updates.
-For example, `edge_agent` includes rule `agent_stage_im_notify` in <LinkToSource relativePath="applications/edge_agent/fatfs_image/router_rules/router_rules.json" />. When Verbose is enabled and this rule matches, it sends `{{event.text}}` from `agent_stage` back to the source IM conversation.
+For example, `edge_agent` includes rule `agent_stage_im_notify` in <LinkToSource relativePath="application/edge_agent/fatfs_image/router_rules/router_rules.json" />. When Verbose is enabled and this rule matches, it sends `{{event.text}}` from `agent_stage` back to the source IM conversation.
 
 ## Scheduled Dispatch
 

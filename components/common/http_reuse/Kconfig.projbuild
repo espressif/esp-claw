@@ -1,0 +1,58 @@
+menu "HTTP Client Reuse"
+
+config HTTP_REUSE_ENABLE
+    bool "Enable HTTP client reuse pool"
+    default y
+    help
+        When enabled, the http_reuse component installs linker --wrap hooks for
+        esp_http_client_init / esp_http_client_cleanup / esp_http_client_perform
+        so that handles are kept in a pool and reused across requests targeting
+        the same endpoint (matched by scheme + host + port), reducing TLS
+        handshake overhead for repeated calls. On a perform failure for a
+        reused connection, the wrapper transparently closes the socket and
+        retries esp_http_client_perform once.
+
+        When disabled, the wrappers forward directly to the real
+        esp_http_client_init / _cleanup / _perform and no pool is maintained.
+
+config HTTP_REUSE_MAX_POOL
+    int "Maximum pooled HTTP clients"
+    depends on HTTP_REUSE_ENABLE
+    range 4 16
+    default 4 if LWIP_MAX_SOCKETS < 8
+    default 6 if LWIP_MAX_SOCKETS < 12
+    default 10 if LWIP_MAX_SOCKETS < 20
+    default 12 if LWIP_MAX_SOCKETS < 32
+    help
+        Upper bound on the number of HTTP clients kept in the pool after
+        requests complete. When the pool is full, the least-recently-used
+        client is closed to make room for a new one.
+
+        Each pooled client may hold an open socket while idle. The preset
+        default grows with Component config -> LWIP -> Max number of open
+        sockets (LWIP_MAX_SOCKETS) so the pool leaves headroom for DNS,
+        MQTT, Wi-Fi management, and other parallel TCP users. If you raise
+        this option a lot, raise LWIP_MAX_SOCKETS (and heap / FD_SETSIZE per
+        LWIP help) accordingly.
+
+        Rough sizing (each concurrent long-lived HTTPS endpoint may hold one
+        pooled client; actual use depends on your code paths):
+        - IM stacks such as QQ or Feishu often need about 1 to 2 clients.
+        - A typical web-search integration often needs about 1 client.
+        - A single LLM HTTP client flow often needs about 2 clients.
+        If you enable more capabilities in parallel, increase this value only
+        as much as you need; each pooled client consumes TLS buffers and heap,
+        so stay within available RAM.
+
+config HTTP_REUSE_IDLE_TIMEOUT_SEC
+    int "Idle pooled client timeout (seconds)"
+    depends on HTTP_REUSE_ENABLE
+    range 5 3600
+    default 60
+    help
+        Maximum idle time for a persistent pooled HTTP client. If a pooled
+        handle stays idle longer than this without being reused by a new
+        session, the reuse layer closes and frees it automatically so the
+        socket, TLS buffers, and heap are not held indefinitely.
+
+endmenu

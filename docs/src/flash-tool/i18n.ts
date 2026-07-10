@@ -101,6 +101,24 @@ export interface Strings {
   modalStep2Title: string;
   modalStep3Title: string;
   terminalLabel: string;
+
+  chooseApplicationLabel: string;
+  chooseApplicationPlaceholder: string;
+  chooseVersionLabel: string;
+  chooseVersionPlaceholder: string;
+  versionMaster: string;
+  advancedSettingsLabel: string;
+  flashModeLabel: string;
+  flashModeFullErase: string;
+  flashModeEraseSelectPartitions: string;
+  flashModeSelectPartitions: string;
+  partitionSelectionHintErase: string;
+  partitionSelectionHintPreserve: string;
+  erasingFlash: string;
+  downloadingPartitions: string;
+  flashingPartition: string;
+  loadingVersions: string;
+  loadVersionsError: string;
 }
 
 const en: Strings = {
@@ -209,6 +227,24 @@ const en: Strings = {
   modalStep2Title: "Wi-Fi Setup",
   modalStep3Title: "Wi-Fi Connected",
   terminalLabel: "Terminal",
+
+  chooseApplicationLabel: "Application",
+  chooseApplicationPlaceholder: "Choose an application",
+  chooseVersionLabel: "Version",
+  chooseVersionPlaceholder: "Choose a version",
+  versionMaster: "Latest (master)",
+  advancedSettingsLabel: "Advanced Settings",
+  flashModeLabel: "Flash Mode",
+  flashModeFullErase: "Erase flash and flash all partitions",
+  flashModeEraseSelectPartitions: "Erase flash and select partitions to flash",
+  flashModeSelectPartitions: "Select partitions to flash (unchanged partitions preserved)",
+  partitionSelectionHintErase: "Select partitions to write. The entire flash will be erased first.",
+  partitionSelectionHintPreserve: "Select partitions to write. Unchecked partitions will not be modified.",
+  erasingFlash: "Erasing flash…",
+  downloadingPartitions: "Downloading partition files…",
+  flashingPartition: "Flashing {name} at {offset}…",
+  loadingVersions: "Loading versions…",
+  loadVersionsError: "Failed to load version list",
 };
 
 const zhCn: Strings = {
@@ -315,6 +351,24 @@ const zhCn: Strings = {
   modalStep2Title: "Wi-Fi 配置",
   modalStep3Title: "联网成功",
   terminalLabel: "终端",
+
+  chooseApplicationLabel: "应用",
+  chooseApplicationPlaceholder: "选择应用",
+  chooseVersionLabel: "版本",
+  chooseVersionPlaceholder: "选择版本",
+  versionMaster: "最新版 (master)",
+  advancedSettingsLabel: "高级设置",
+  flashModeLabel: "烧录模式",
+  flashModeFullErase: "擦除 Flash 并烧写全部分区",
+  flashModeEraseSelectPartitions: "擦除 Flash 并选择需要烧录的分区",
+  flashModeSelectPartitions: "手动选择分区（未选中的分区不会被修改）",
+  partitionSelectionHintErase: "选择需要烧录的分区。烧录前会先擦除整片 Flash。",
+  partitionSelectionHintPreserve: "选择需要烧录的分区。未选中的分区不会被修改。",
+  erasingFlash: "正在擦除 Flash…",
+  downloadingPartitions: "正在下载分区文件…",
+  flashingPartition: "正在烧录 {name} 到 {offset}…",
+  loadingVersions: "正在加载版本列表…",
+  loadVersionsError: "加载版本列表失败",
 };
 
 const strings: Record<Lang, Strings> = {

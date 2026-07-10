@@ -1,0 +1,25 @@
+menu "Lua IMU Module"
+
+    choice LUA_MODULE_IMU_CHIP
+        prompt "IMU chip model"
+        default LUA_MODULE_IMU_CHIP_BMI270
+        help
+            Select which IMU backend this Lua module should build against.
+
+        config LUA_MODULE_IMU_CHIP_BMI270
+            bool "BMI270"
+            help
+                Build the IMU Lua module with the BMI270 backend.
+
+        config LUA_MODULE_IMU_CHIP_MPU6050
+            bool "MPU6050"
+            help
+                Build the IMU Lua module with the MPU6050 backend.
+
+        config LUA_MODULE_IMU_CHIP_ICM42670
+            bool "ICM42670"
+            help
+                Build the IMU Lua module with the ICM42670 backend.
+    endchoice
+
+endmenu

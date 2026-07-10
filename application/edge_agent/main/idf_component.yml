@@ -1,0 +1,42 @@
+## IDF Component Manager Manifest File
+dependencies:
+  espressif/esp_board_manager:
+    version: "^0.6"
+    public: true
+
+  app_claw:
+    path: ../../../components/common/app_claw
+
+  app_config:
+    path: ../components/app_config
+
+  captive_dns:
+    path: ../../../components/common/captive_dns
+
+  espressif/ramfs:
+    version: "^0.1"
+
+  claw_utils:
+    path: ../../../components/claw_modules/claw_utils
+
+  emote:
+    path: ../../../components/common/emote
+    rules:
+      - if: $CONFIG{ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT} == True
+
+  http_reuse:
+    path: ../../../components/common/http_reuse
+
+  http_server:
+    path: ../components/http_server
+
+  settings:
+    path: ../../../components/common/settings
+
+  wifi_manager:
+    path: ../../../components/common/wifi_manager
+
+  esp_video:
+    path: ../../../components/common/esp_video
+    matches:
+    - if: $CONFIG{ESP_BOARD_DEV_CAMERA_SUPPORT} == True

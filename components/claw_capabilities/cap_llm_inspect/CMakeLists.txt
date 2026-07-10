@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "src/cap_llm_inspect.c"
+        "src/cmd_cap_llm_inspect.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        claw_cap
+        claw_core
+        console
+)

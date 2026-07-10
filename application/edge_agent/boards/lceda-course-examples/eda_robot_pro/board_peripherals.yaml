@@ -1,0 +1,119 @@
+version: 1.0.0
+# Peripherals for EDA Robot Pro (四足机器狗)
+# INMP441 mic + MAX98357 speaker + SSD1306 OLED + 4x servo
+
+peripherals:
+
+  # SSD1306 OLED display (I2C)
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 12
+        scl: 13
+
+  # MAX98357 speaker amplifier (I2S STD TX on I2S1)
+  - name: i2s_audio_out
+    type: i2s
+    role: master
+    format: std-out
+    config:
+      port: 1
+      sample_rate_hz: 24000
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_MONO
+      slot_mask: I2S_STD_SLOT_BOTH
+      ws_width: 16
+      pins:
+        mclk: -1
+        bclk: 39
+        ws: 38
+        dout: 40
+        din: -1
+
+  # INMP441 microphone (I2S STD RX on I2S0)
+  - name: i2s_audio_in
+    type: i2s
+    role: master
+    format: std-in
+    config:
+      port: 0
+      sample_rate_hz: 16000
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_MONO
+      slot_mask: I2S_STD_SLOT_BOTH
+      ws_width: 16
+      pins:
+        mclk: -1
+        bclk: 16
+        ws: 17
+        dout: -1
+        din: 18
+
+  # Boot button
+  - name: gpio_boot_btn
+    type: gpio
+    role: io
+    config:
+      pin: 0
+      mode: GPIO_MODE_INPUT
+      default_level: 1
+
+  # Touch button
+  - name: gpio_touch_btn
+    type: gpio
+    role: io
+    config:
+      pin: 14
+      mode: GPIO_MODE_INPUT
+      default_level: 1
+
+  # Servo - left front leg
+  - name: servo_left_front
+    type: ledc
+    role: none
+    config:
+      gpio_num: 47
+      freq_hz: 50
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false
+
+  # Servo - left rear leg
+  - name: servo_left_rear
+    type: ledc
+    role: none
+    config:
+      gpio_num: 21
+      freq_hz: 50
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false
+
+  # Servo - right front leg
+  - name: servo_right_front
+    type: ledc
+    role: none
+    config:
+      gpio_num: 9
+      freq_hz: 50
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false
+
+  # Servo - right rear leg
+  - name: servo_right_rear
+    type: ledc
+    role: none
+    config:
+      gpio_num: 10
+      freq_hz: 50
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false

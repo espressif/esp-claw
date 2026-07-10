@@ -1,0 +1,17 @@
+idf_component_register(
+    SRCS
+        "src/lua_module_lcd.c"
+    INCLUDE_DIRS
+        "src"
+    REQUIRES
+        cap_lua
+        esp_lcd
+        esp_lcd_gc9107
+        esp_lcd_gc9b71
+        esp_lcd_gc9d01
+        esp_lcd_co5300
+        esp_lcd_spd2010
+        esp_lcd_sh8601
+        esp_lcd_st77916
+        esp_lcd_st77922
+)

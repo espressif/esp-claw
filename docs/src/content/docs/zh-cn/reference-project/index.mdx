@@ -9,19 +9,19 @@ import LinkToSource from '@/components/LinkToSource.astro';
 
 ## 整体架构
 
-项目采用 **"应用示例 + 共享应用层 + 通用框架"** 的组织方式：`applications/edge_agent` 是可直接编译运行的 ESP-IDF 示例工程，负责把 Wi-Fi、配置页面、Lua 模块和各类能力组装成一个完整设备；`applications/shared` 沉淀多示例复用的应用装配逻辑，`framework` 沉淀可复用的运行时核心、服务、能力插件和硬件/脚本扩展模块。
+项目采用 **"应用示例 + 通用组件"** 的组织方式：`application/edge_agent` 是可直接编译运行的 ESP-IDF 示例工程，负责把 Wi-Fi、配置页面、Lua 模块和各类能力组装成一个完整设备；`components` 则沉淀可复用的运行时核心、能力插件和硬件/脚本扩展模块，便于后续在不同板型和场景下复用。
 
 当前代码可以分为四个部分：
 
-- **应用装配部分：** <LinkToSource relativePath="applications/edge_agent/main/" /> 与 <LinkToSource relativePath="applications/shared/" />，负责启动入口、应用装配、HTTP 配网页面以及 Demo 级模块注册。
-- **能力部分：** <LinkToSource relativePath="framework/capabilities/" />，负责对外能力封装，包括 IM 通讯、MCP Client/Server、Lua 运行时、调度、文件、时间、Web 搜索等能力。
-- **运行时核心部分：** <LinkToSource relativePath="framework/foundation/" />，负责 Agent 基础设施，包括核心上下文、能力注册、事件路由、记忆管理与技能管理等。
-- **设备与脚本扩展部分：** <LinkToSource relativePath="framework/lua_modules/" />，负责把显示屏、摄像头、音频、按键、GPIO、PWM、存储等外设能力暴露给 Lua 和上层 Agent 使用。
+- **应用装配部分：** <LinkToSource relativePath="application/edge_agent/main/" /> 与 <LinkToSource relativePath="components/common/" />，负责启动入口、网络连接、参数配置、HTTP 配网页面以及 Demo 级模块注册。
+- **能力部分：** <LinkToSource relativePath="components/claw_capabilities/" />，负责对外能力封装，包括 IM 通讯、MCP Client/Server、Lua 运行时、调度、文件、时间、Web 搜索等能力。
+- **运行时核心部分：** <LinkToSource relativePath="components/claw_modules/" />，负责 Agent 基础设施，包括核心上下文、能力注册、事件路由、记忆管理与技能管理等。
+- **设备与脚本扩展部分：** <LinkToSource relativePath="components/lua_modules/" />，负责把显示屏、摄像头、音频、按键、GPIO、PWM、存储等外设能力暴露给 Lua 和上层 Agent 使用。
 
 ## 项目目录结构
 
 <FileTree>
-- applications/edge_agent/ **示例应用** — 把框架与 cap 装配成可烧录固件
+- application/edge_agent/ **示例应用** — 把框架与 cap 装配成可烧录固件
   - main/ 启动入口（`app_main`）
     - main.c 固件入口
   - components/ 应用级组件
@@ -30,37 +30,32 @@ import LinkToSource from '@/components/LinkToSource.astro';
     - cmd_wifi/ Wi-Fi CLI 命令
     - gen_bmgr_codes/ [自动生成]开发板适配所需代码
   - fatfs_image/ 出厂 FATFS 输入：router_rules、memory、scheduler、静态文件与应用自带 Skills
-- applications/shared/ **共享应用组件** — 多示例复用的装配逻辑
+- components/common/ **共享应用组件** — 多示例复用的装配逻辑
   - app_claw/ 应用启动与装配（`app_claw_start`、CLI、Lua 模块注册）
+  - wifi_manager/ Wi-Fi 连接与网络配置
+  - settings/ 本地设置持久化基础库
+  - captive_dns/ Captive DNS（SoftAP 配网）
+  - display_arbiter/ 显示所有权仲裁 [\[详情\]](@lang/reference-cap/lua-modules#显示模块)
   - emote/ 表情显示与网络状态联动
-- framework/
-  - services/ **通用运行时服务**
-    - network/wifi_manager/ Wi-Fi 连接与网络配置
-    - network/captive_dns/ Captive DNS（SoftAP 配网）
-    - settings_store/ NVS-backed key/value 服务
-    - discovery/mcp_mdns/ MCP mDNS 发现与发布
-  - platform/ **平台适配**
-    - esp_idf/http_reuse/ ESP-IDF HTTP client 复用适配
-    - component_overrides/esp_video/ 外部组件 override
-  - ui/ **UI 基础组件**
-    - display_arbiter/ 显示所有权仲裁 [\[详情\]](@lang/reference-cap/lua-modules#显示模块)
-    - esp_painter/ 轻量绘图与字体 primitive
-  - build_support/ **构建期同步辅助**
-    - lua_module_builder/ Lua 模块资源与文档同步
-    - skill_builder/ 组件 Skills 同步
-  - foundation/ **运行时核心**
+  - esp_painter/ 轻量绘图
+  - esp_video/ 视频处理封装
+  - http_reuse/ HTTP 复用基础组件
+  - lua_module_builder/ Lua 模块构建辅助
+  - skill_builder/ Skill 构建辅助
+- components/
+  - claw_modules/ **运行时核心**
     - claw_core/ Agent 核心 — Agent Loop、上下文组装管理、工具调用
     - claw_cap/ Capability 运行时 — 能力抽象、注册与管理
     - claw_event_router/ Event Router 与自动化 — 确定性事件路由
     - claw_memory/ 结构化记忆管理
-    - claw_ramfs/ RAMFS 运行时文件系统支持
     - claw_skill/ Skills 系统 — 技能元数据与加载
-  - capabilities/ **能力 Capability**
-    - im_platform/ 统一 IM 平台组件（飞书、QQ、Telegram、微信能力组）
-    - mcp_client/ 与 mcp_server/ MCP 协议组件
-    - lua_runtime/ Lua 运行时管理
-    - scheduler/ 调度器
-    - router_manager/ `claw_event_router` 的管理接口封装
+  - claw_capabilities/ **能力 Capability**
+    - cap_im_platform/ 统一 IM 平台组件（飞书、QQ、Telegram、微信能力组）
+    - cap_mcp_*/ MCP 协议（MCP Client、MCP Server）
+    - cap_lua/ Lua 运行时管理
+    - cap_skill_mgr/ `claw_skill` 的管理接口封装
+    - cap_scheduler/ 调度器
+    - cap_router_mgr/ `claw_event_router` 的管理接口封装
     - ... 其他工具类 Capability
   - lua_modules/ **设备与脚本扩展层**
     - lua_module_display/ 显示屏
