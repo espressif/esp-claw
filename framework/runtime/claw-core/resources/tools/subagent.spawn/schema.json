@@ -1,0 +1,33 @@
+{
+  "type": "function",
+  "function": {
+    "name": "subagent.spawn",
+    "description": "Delegate a goal to a new subagent that works in parallel. Choose the kind of agent best suited to the goal. Its result is reported back to you when it finishes.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Which kind of agent to spawn (the role best suited to the goal, e.g. \"worker\"). Call subagent.list_spawnable to see the kinds you may spawn."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Required short name for this subagent, shown by subagent.list/subagent.watch so you can tell several subagents of the same kind apart. It is a label only — subagent.delete and everything else still use the returned agent id."
+        },
+        "goal": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The goal to delegate to the subagent."
+        },
+        "termination": {
+          "type": "string",
+          "enum": ["auto", "manual"],
+          "description": "Lifecycle policy. 'auto' (default): one-shot — the subagent is removed as soon as it returns its result. 'manual': persistent — after returning its result the subagent stays alive and idle so you can watch it, give it more work, or delete it with subagent.delete."
+        }
+      },
+      "required": ["kind", "name", "goal"]
+    }
+  }
+}

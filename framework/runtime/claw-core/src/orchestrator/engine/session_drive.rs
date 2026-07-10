@@ -81,9 +81,7 @@ impl SessionDrive {
     }
 
     pub(super) fn take_pending_input(&mut self) -> Option<SubmittedInput> {
-        if self.state.get().pending_input.is_none() {
-            return None;
-        }
+        self.state.get().pending_input.as_ref()?;
         self.state.get_mut().pending_input.take()
     }
 

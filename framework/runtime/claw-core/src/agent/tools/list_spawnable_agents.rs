@@ -1,10 +1,10 @@
-//! `list_spawnable_agents()` — the menu of subagent kinds this agent may spawn.
+//! `subagent.list_spawnable()` — the menu of subagent kinds this agent may spawn.
 //!
 //! A pure read of the agent's own [`SpawnPolicy`], rendered against the baked
 //! manifests into `{kind, description}` rows. It exists so the model can *ask*
-//! what it may spawn (and pick the right `kind` for `spawn_subagent`) instead of
+//! what it may spawn (and pick the right `kind` for `subagent.spawn`) instead of
 //! guessing a kind and learning by rejection — and unlike baking the catalog into
-//! `spawn_subagent`'s schema, it costs nothing in the always-sent prompt prefix.
+//! `subagent.spawn`'s schema, it costs nothing in the always-sent prompt prefix.
 
 use claw_tool::{
     tool_metadata, SyncToolHandler, ToolInvocation, ToolInvokeError, ToolOutput, ToolSpec,
@@ -18,7 +18,7 @@ pub(crate) struct ListSpawnableAgentsTool {
 }
 
 impl ToolSpec for ListSpawnableAgentsTool {
-    tool_metadata!("list_spawnable_agents");
+    tool_metadata!("subagent.list_spawnable");
 
     // A pure read of static policy/manifest data — safe to run alongside others.
     fn concurrent(&self) -> bool {

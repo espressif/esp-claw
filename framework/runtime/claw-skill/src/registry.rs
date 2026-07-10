@@ -169,6 +169,12 @@ impl<F: ClawFs> FsSkillRegistry<F> {
     }
 }
 
+impl<F: ClawFs> Default for FsSkillRegistry<F> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<F: ClawFs + 'static> SkillRegistry for FsSkillRegistry<F> {
     fn skill_set(self: Arc<Self>) -> SkillSet {
         let registry: Arc<dyn SkillRegistryBackend> = self;

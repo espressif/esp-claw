@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 mod support;
 
 use core::future::Future;
@@ -50,7 +52,7 @@ fn subagent_lifecycle_csv_matrix_drives_background_results_and_graph_updates() {
         );
         assert_eq!(
             tools_events(&first_turn),
-            vec![vec!["spawn_subagent".to_string()]],
+            vec![vec!["subagent.spawn".to_string()]],
             "case {}",
             fixture.case
         );
@@ -99,11 +101,11 @@ fn subagent_lifecycle_csv_matrix_drives_background_results_and_graph_updates() {
             tools_events(&supervision_turn),
             vec![
                 vec![
-                    "list_subagents".to_string(),
-                    "watch_subagent".to_string(),
-                    "delete_subagent".to_string(),
+                    "subagent.list".to_string(),
+                    "subagent.watch".to_string(),
+                    "subagent.delete".to_string(),
                 ],
-                vec!["list_subagents".to_string()],
+                vec!["subagent.list".to_string()],
             ],
             "case {}",
             fixture.case
@@ -267,7 +269,7 @@ fn root_response(state: &mut SubagentCaseState, body: &str) -> String {
     match request_index {
         0 => assistant_tool_calls(vec![tool_call(
             "call_spawn",
-            "spawn_subagent",
+            "subagent.spawn",
             json!({
                 "kind": "worker",
                 "name": "helper",
@@ -283,22 +285,22 @@ fn root_response(state: &mut SubagentCaseState, body: &str) -> String {
         3 => {
             let child_id = state.child_id.as_deref().expect("spawn response recorded");
             assistant_tool_calls(vec![
-                tool_call("call_list_before_delete", "list_subagents", json!({})),
+                tool_call("call_list_before_delete", "subagent.list", json!({})),
                 tool_call(
                     "call_watch_before_delete",
-                    "watch_subagent",
+                    "subagent.watch",
                     json!({ "agent": child_id }),
                 ),
                 tool_call(
-                    "call_delete_subagent",
-                    "delete_subagent",
+                    "call_subagent.delete",
+                    "subagent.delete",
                     json!({ "agent": child_id }),
                 ),
             ])
         }
         4 => assistant_tool_calls(vec![tool_call(
             "call_list_after_delete",
-            "list_subagents",
+            "subagent.list",
             json!({}),
         )]),
         5 => assistant_text(&state.fixture.supervision_output),

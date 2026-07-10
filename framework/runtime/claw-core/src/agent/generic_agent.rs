@@ -6,7 +6,7 @@
 //! "kind" from another is its [`AgentConfig`] — the system prompt, the tool set,
 //! the skills, and whether it may spawn. The model drives its own flow (ReAct):
 //! it reads, acts, and answers freely, ending a task only via the built-in
-//! `end_conversation` tool.
+//! `conversation.end` tool.
 //!
 //! Where an [`AgentConfig`] comes from lives in the factory. This module only
 //! consumes the resolved config.
@@ -98,9 +98,9 @@ impl<H: ClawHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
     ///
     /// `tools` is prepared by the factory from the central tool registry plus
     /// manifest-local tools. This layer only adds graph tools that require a
-    /// [`GraphHost`]: `spawn_subagent` and its inspection/delete siblings when
+    /// [`GraphHost`]: `subagent.spawn` and its inspection/delete siblings when
     /// `config.spawn_enabled`. The base agent then adds its built-in self-control
-    /// tool (`end_conversation`).
+    /// tool (`conversation.end`).
     ///
     /// `inherited_context` is the scope-layered prose injected from above
     /// (Global -> Session), handed straight to the base agent so it renders ahead
@@ -109,6 +109,7 @@ impl<H: ClawHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
     /// # Errors
     ///
     /// [`GenericAgentBuildError`] when tool assembly or base construction fails.
+    #[allow(clippy::too_many_arguments)]
     pub fn new<F: ClawFs + 'static>(
         id: AgentId,
         llm_config: ClawApiConfig,

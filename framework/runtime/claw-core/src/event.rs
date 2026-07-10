@@ -87,7 +87,7 @@ pub enum SessionEvent {
         /// A fragment of the reasoning text (concatenate across events).
         text: String,
     },
-    /// Assistant-visible text: a plain-text answer, an `end_conversation` closing
+    /// Assistant-visible text: a plain-text answer, an `conversation.end` closing
     /// message, an approval prompt, or a clarification. Never truncated.
     Output {
         /// A fragment of the assistant-visible text (concatenate across events).

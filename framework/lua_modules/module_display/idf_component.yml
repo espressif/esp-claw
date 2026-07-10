@@ -1,7 +1,0 @@
-## IDF Component Manager Manifest File
-dependencies:
-  esp_painter:
-    path: ../../../framework/ui/esp_painter
-
-  display_arbiter:
-    path: ../../../framework/ui/display_arbiter

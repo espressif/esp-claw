@@ -155,7 +155,7 @@ impl SkillDocument {
         Self { content }
     }
 
-    /// Processed document content returned by `activate_skill`.
+    /// Processed document content returned by `skill.activate`.
     pub fn content(&self) -> &str {
         &self.content
     }

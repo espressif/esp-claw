@@ -31,6 +31,7 @@ impl Message {
     ///
     /// This is a temporary compatibility projection while the lower agent and
     /// transcript layers are still text-only.
+    #[allow(dead_code)]
     pub(crate) fn into_transcript_text(self) -> String {
         let mut rendered = self.text.unwrap_or_default();
         if self.attachments.is_empty() {

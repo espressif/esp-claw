@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use claw_interface::MemFs;
 use claw_memory::TranscriptStore;
 

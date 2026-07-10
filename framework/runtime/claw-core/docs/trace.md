@@ -415,8 +415,8 @@ span-name: `toolcall`
 `parse_failed`: Tool invocation could not be parsed from the model call.
 `result`: Tool completed, was blocked, or requested approval.
 `preempted`: Interrupt was observed before the tool call ran.
-`spawn_kind_rejected`: `spawn_subagent` rejected a kind outside the caller's allowed kinds.
-`spawn_unknown_kind_rejected`: `spawn_subagent` rejected a kind without a baked manifest.
+`spawn_kind_rejected`: `subagent.spawn` rejected a kind outside the caller's allowed kinds.
+`spawn_unknown_kind_rejected`: `subagent.spawn` rejected a kind without a baked manifest.
 
 ### Event Fields
 

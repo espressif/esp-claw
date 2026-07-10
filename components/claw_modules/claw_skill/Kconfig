@@ -1,9 +1,0 @@
-menu "Claw Skill"
-
-config CLAW_SKILL_DEBUG_LOG
-    bool "Enable claw_skill debug logs"
-    default n
-    help
-        Enable internal debug logs for claw_skill.
-
-endmenu

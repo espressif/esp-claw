@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use std::borrow::Cow;
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};

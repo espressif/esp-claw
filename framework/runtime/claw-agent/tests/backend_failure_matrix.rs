@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 mod support;
 
 use std::collections::BTreeMap;
@@ -272,7 +274,7 @@ fn fs_checkpoint_write_failure() -> Option<String> {
 }
 
 fn http_permanent_failure() -> Option<String> {
-    MemFs::default();
+    MemFs::new();
     let system = PermanentHttpSystem::new::<StdThread, TokioExecutor>(
         llm_config(),
         persistence(&mem_root("http-permanent")),
@@ -282,7 +284,7 @@ fn http_permanent_failure() -> Option<String> {
 }
 
 fn http_transient_then_success(case: &str) -> Option<String> {
-    MemFs::default();
+    MemFs::new();
     let system = TransientThenSuccessSystem::new::<StdThread, TokioExecutor>(
         llm_config(),
         persistence(&mem_root("http-transient-success")),
@@ -298,7 +300,7 @@ fn http_transient_then_success(case: &str) -> Option<String> {
 }
 
 fn http_transient_exhausts_retries() -> Option<String> {
-    MemFs::default();
+    MemFs::new();
     let system = TransientExhaustSystem::new::<StdThread, TokioExecutor>(
         llm_config(),
         persistence(&mem_root("transient-exhaust")),

@@ -2,8 +2,7 @@
 
 use core::future::Future;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::Arc;
-use std::task::{Context, Poll, Wake};
+use std::task::{Context, Poll, Waker};
 
 use claw_interface::http::blocking;
 use claw_interface::{
@@ -126,12 +125,6 @@ impl blocking::ClawHttp for FailingStatus {
     }
 }
 
-struct NoopWake;
-
-impl Wake for NoopWake {
-    fn wake(self: Arc<Self>) {}
-}
-
 fn request<'a>(url: &'a str, body: &'a str) -> HttpJsonRequest<'a> {
     HttpJsonRequest {
         url,
@@ -148,8 +141,7 @@ fn block_on<F: Future>(future: F) -> F::Output {
 
 fn block_on_counting<F: Future>(future: F) -> (F::Output, u32) {
     let mut future = Box::pin(future);
-    let waker = Arc::new(NoopWake).into();
-    let mut context = Context::from_waker(&waker);
+    let mut context = Context::from_waker(Waker::noop());
     let mut polls = 0_u32;
     loop {
         polls += 1;

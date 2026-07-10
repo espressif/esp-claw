@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 mod support;
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
@@ -165,7 +167,7 @@ impl ClawHttp for StressScriptHttp {
         _cancel: Cancel<'a>,
     ) -> HttpResponseFuture<'a> {
         Box::pin(async move {
-            let text = if is_agent_iteration_request(&request.body) {
+            let text = if is_agent_iteration_request(request.body) {
                 stress_outputs()
                     .pop_front()
                     .expect("stress root chat called more times than scripted")
@@ -219,7 +221,7 @@ fn run_mem_stress_case(
     expected_outputs: &[String],
 ) {
     let root = mem_root("session-stress");
-    MemFs::default();
+    MemFs::new();
     install_stress_outputs(expected_outputs);
     let system =
         MemStressSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence(&root)).unwrap();
@@ -378,7 +380,7 @@ fn fixed_width_output(case: &str, session: usize, turn: usize, output_bytes: usi
     }
     let mut output = String::with_capacity(output_bytes);
     output.push_str(&prefix);
-    output.extend(std::iter::repeat('x').take(output_bytes - prefix.len()));
+    output.extend(std::iter::repeat_n('x', output_bytes - prefix.len()));
     output
 }
 

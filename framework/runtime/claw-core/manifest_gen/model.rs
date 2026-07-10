@@ -23,7 +23,7 @@ pub struct AgentJson {
 /// The `spawn` block of `agent.json`.
 #[derive(Debug, Deserialize)]
 pub struct SpawnJson {
-    /// Gates the `spawn_subagent` tool.
+    /// Gates the `subagent.spawn` tool.
     pub enabled: bool,
     /// Intended allowlist of kinds this agent may spawn (`"*"` = any).
     pub allowed_kinds: Vec<String>,

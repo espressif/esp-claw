@@ -33,6 +33,7 @@ pub(super) use self::session_io::Command;
 
 pub(super) type DriveFuture = Pin<Box<dyn Future<Output = ()>>>;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn run_engine<Filesystem, Http, Timer, Executor>(
     tools: Arc<ToolRegistry>,
     checkpoints: SharedCheckpointCoordinator<FsCheckpointStorage<Filesystem>>,
@@ -98,6 +99,7 @@ where
     Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         tools: Arc<ToolRegistry>,
         checkpoints: SharedCheckpointCoordinator<FsCheckpointStorage<Filesystem>>,

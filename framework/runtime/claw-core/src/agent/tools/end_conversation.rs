@@ -1,4 +1,4 @@
-//! `end_conversation(final_message)` — the agent ends the task on its own terms.
+//! `conversation.end(final_message)` — the agent ends the task on its own terms.
 
 use claw_tool::{
     tool_metadata, SyncToolHandler, ToolError, ToolInvocation, ToolInvokeError, ToolOutput,
@@ -14,7 +14,7 @@ pub(crate) struct EndConversationTool {
 }
 
 impl ToolSpec for EndConversationTool {
-    tool_metadata!("end_conversation");
+    tool_metadata!("conversation.end");
 }
 
 impl SyncToolHandler for EndConversationTool {
@@ -22,14 +22,14 @@ impl SyncToolHandler for EndConversationTool {
         let Some(final_message) = optional_string_argument(call.arguments_json(), "final_message")?
         else {
             return Err(ToolError::InvalidArguments(
-                "end_conversation 'final_message' is required".into(),
+                "conversation.end 'final_message' is required".into(),
             )
             .into());
         };
         let final_message = final_message.trim();
         if final_message.is_empty() {
             return Err(ToolError::InvalidArguments(
-                "end_conversation 'final_message' is required".into(),
+                "conversation.end 'final_message' is required".into(),
             )
             .into());
         }

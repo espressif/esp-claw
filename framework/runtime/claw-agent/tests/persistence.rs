@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 mod support;
 
 use std::borrow::Cow;
@@ -62,7 +64,7 @@ impl ClawHttp for RecordingHttp {
 #[test]
 fn sessions_restore_from_checkpoint_after_rebuild() {
     let _script = serialize_script();
-    MemFs::default();
+    MemFs::new();
     let root = mem_root("persist-session-registry");
 
     let first = {
@@ -83,7 +85,7 @@ fn sessions_restore_from_checkpoint_after_rebuild() {
 #[test]
 fn tool_registry_start_state_writes_checkpoint() {
     let _script = serialize_script();
-    MemFs::default();
+    MemFs::new();
     let root = mem_root("persist-tool-registry");
     let system = build_mem_system(&root, Vec::new());
 
@@ -97,7 +99,7 @@ fn tool_registry_start_state_writes_checkpoint() {
 #[test]
 fn tool_registry_direct_mutations_checkpoint_and_restore() {
     let _script = serialize_script();
-    MemFs::default();
+    MemFs::new();
     let root = mem_root("persist-tool-registry-direct");
     let tool_name = "checkpoint_echo";
 
@@ -137,7 +139,7 @@ fn tool_registry_direct_mutations_checkpoint_and_restore() {
 #[test]
 fn tool_registry_keeps_only_two_checkpoints_across_fifty_four_registrations() {
     let _script = serialize_script();
-    MemFs::default();
+    MemFs::new();
     let root = mem_root("persist-tool-registry-two-slots");
     let checkpoint_root = format!("{root}/checkpoint");
     let system = build_mem_system(&root, Vec::new());
@@ -241,16 +243,8 @@ fn session_transcript_history_survives_disk_rebuild_and_reenters_llm_context() {
         assert!(events
             .iter()
             .any(|event| matches!(event, SessionEvent::Output { text } if text == "first persisted reply")));
-        assert_disk_file_contains(
-            &root,
-            "transcript/1.jsonl",
-            "first persisted user",
-        );
-        assert_disk_file_contains(
-            &root,
-            "transcript/1.jsonl",
-            "first persisted reply",
-        );
+        assert_disk_file_contains(&root, "transcript/1.jsonl", "first persisted user");
+        assert_disk_file_contains(&root, "transcript/1.jsonl", "first persisted reply");
         session
     };
 

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 mod support;
 
 use std::collections::BTreeMap;
@@ -30,7 +32,7 @@ fn construction_csv_config_matrix_validates_llm_config_and_skill_roots() {
 
         match field(&row, "fs") {
             "mem" => {
-                MemFs::default();
+                MemFs::new();
                 let root = mem_root("construction-config");
                 let persistence = mem_persistence(&root, field(&row, "skill_roots_mode"));
                 assert_construction_case::<MemConstructionSystem>(

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 mod support;
 
 use std::collections::{BTreeMap, VecDeque};
@@ -63,12 +65,12 @@ fn skill_tools_csv_matrix_scans_roots_reloads_and_activates_documents() {
         assert_eq!(
             tools_events(&events),
             vec![vec![
-                "list_skill".to_string(),
-                "activate_skill".to_string(),
-                "activate_skill".to_string(),
-                "reload_skills".to_string(),
-                "list_skill".to_string(),
-                "activate_skill".to_string(),
+                "skill.list".to_string(),
+                "skill.activate".to_string(),
+                "skill.activate".to_string(),
+                "skill.reload".to_string(),
+                "skill.list".to_string(),
+                "skill.activate".to_string(),
             ]],
             "case {}",
             fixture.case
@@ -111,22 +113,22 @@ impl ClawHttp for SkillToolHttp {
                 };
                 match index {
                     0 => assistant_tool_calls(vec![
-                        call("call_list_before_reload", "list_skill", json!({})),
+                        call("call_list_before_reload", "skill.list", json!({})),
                         call(
                             "call_activate_alpha",
-                            "activate_skill",
+                            "skill.activate",
                             json!({ "skill_id": "alpha" }),
                         ),
                         call(
                             "call_activate_missing",
-                            "activate_skill",
+                            "skill.activate",
                             json!({ "skill_id": "ghost" }),
                         ),
-                        call("call_reload", "reload_skills", json!({})),
-                        call("call_list_after_reload", "list_skill", json!({})),
+                        call("call_reload", "skill.reload", json!({})),
+                        call("call_list_after_reload", "skill.list", json!({})),
                         call(
                             "call_activate_gamma",
-                            "activate_skill",
+                            "skill.activate",
                             json!({ "skill_id": "gamma" }),
                         ),
                     ]),

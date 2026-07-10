@@ -1,0 +1,27 @@
+{
+  "type": "function",
+  "function": {
+    "name": "memory.store",
+    "description": "Remember a durable factual memory for the long term (e.g. a concrete user/device fact, operational preference, or standing commitment). Do not use this for assistant persona, assistant identity, or editable user profile documents.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string",
+          "description": "The fact to remember, written concisely in the third person."
+        },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Short topic labels to file this memory under (e.g. \"preference\", \"device\", \"fact\"). You recall by these labels later."
+        },
+        "keywords": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Optional extra search terms that need not appear in the content."
+        }
+      },
+      "required": ["content"]
+    }
+  }
+}

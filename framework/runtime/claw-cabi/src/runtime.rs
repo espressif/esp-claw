@@ -8,7 +8,7 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 use std::sync::{mpsc, Arc, Mutex, MutexGuard};
-use std::task::{Wake, Waker};
+use std::task::Waker;
 use std::time::Duration;
 
 use claw_agent::{
@@ -506,8 +506,7 @@ fn session_cancel(session_id: u32) -> Result<(), CabiError> {
 /// Returns `None` when nothing is ready yet; skips bracket/meta events; maps a
 /// closed stream to [`FfiEvent::Closed`].
 fn next_ready(stream: &mut SessionEventStream) -> Option<FfiEvent> {
-    let waker = Waker::from(Arc::new(NoopWake));
-    let mut context = Context::from_waker(&waker);
+    let mut context = Context::from_waker(Waker::noop());
     loop {
         match Pin::new(&mut *stream).poll_next(&mut context) {
             Poll::Ready(Some(event)) => {
@@ -551,12 +550,6 @@ fn next_within(stream: &mut SessionEventStream, timeout_ms: u32) -> Option<FfiEv
         };
         futures_lite::future::or(pull, timeout).await
     })
-}
-
-struct NoopWake;
-
-impl Wake for NoopWake {
-    fn wake(self: Arc<Self>) {}
 }
 
 fn get_open_session(session_id: u32) -> Result<Option<Arc<OpenSession>>, CabiError> {

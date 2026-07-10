@@ -29,14 +29,14 @@ struct ProfileReadTool<F: ClawFs + 'static> {
 }
 
 impl<F: ClawFs + 'static> ToolSpec for ProfileReadTool<F> {
-    tool_metadata!("profile_read");
+    tool_metadata!("profile.read");
 
     fn concurrent(&self) -> bool {
         true
     }
 
     fn classify(&self, call: &ToolInvocation<'_>) -> Action {
-        profile_action(call, "profile_read", RiskClass::Safe, &self.store)
+        profile_action(call, "profile.read", RiskClass::Safe, &self.store)
     }
 }
 
@@ -70,10 +70,10 @@ struct ProfileReplaceTool<F: ClawFs + 'static> {
 }
 
 impl<F: ClawFs + 'static> ToolSpec for ProfileReplaceTool<F> {
-    tool_metadata!("profile_replace");
+    tool_metadata!("profile.replace");
 
     fn classify(&self, call: &ToolInvocation<'_>) -> Action {
-        profile_action(call, "profile_replace", RiskClass::High, &self.store)
+        profile_action(call, "profile.replace", RiskClass::High, &self.store)
     }
 }
 
@@ -104,10 +104,10 @@ struct ProfileClearTool<F: ClawFs + 'static> {
 }
 
 impl<F: ClawFs + 'static> ToolSpec for ProfileClearTool<F> {
-    tool_metadata!("profile_clear");
+    tool_metadata!("profile.clear");
 
     fn classify(&self, call: &ToolInvocation<'_>) -> Action {
-        profile_action(call, "profile_clear", RiskClass::High, &self.store)
+        profile_action(call, "profile.clear", RiskClass::High, &self.store)
     }
 }
 

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 mod support;
 
 use std::collections::{BTreeMap, VecDeque};
@@ -36,7 +38,7 @@ fn builtin_tools_csv_matrix_feeds_profile_memory_and_subagent_results_back_to_ll
         ]);
 
         let root = mem_root("builtin-tool-matrix");
-        MemFs::default();
+        MemFs::new();
         let system =
             BuiltinToolSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence(&root))
                 .unwrap();
@@ -121,28 +123,28 @@ fn tool_calls_for_sequence(sequence: &str) -> Vec<ToolCallSpec> {
     match sequence {
         "profile_replace_read" => vec![
             call(
-                "profile_replace",
+                "profile.replace",
                 json!({
                     "document": "user_profile",
                     "content": "Uses terse responses",
                 }),
             ),
-            call("profile_read", json!({ "document": "user_profile" })),
+            call("profile.read", json!({ "document": "user_profile" })),
         ],
         "profile_clear_read" => vec![
             call(
-                "profile_replace",
+                "profile.replace",
                 json!({ "document": "soul", "content": "temporary soul" }),
             ),
-            call("profile_clear", json!({ "document": "soul" })),
-            call("profile_read", json!({ "document": "soul" })),
+            call("profile.clear", json!({ "document": "soul" })),
+            call("profile.read", json!({ "document": "soul" })),
         ],
         "profile_invalid_document" => {
-            vec![call("profile_read", json!({ "document": "unknown_doc" }))]
+            vec![call("profile.read", json!({ "document": "unknown_doc" }))]
         }
         "memory_agent_store_recall" => vec![
             call(
-                "memory_store",
+                "memory.store",
                 json!({
                     "content": "Task note survives recall",
                     "tags": ["task"],
@@ -150,23 +152,23 @@ fn tool_calls_for_sequence(sequence: &str) -> Vec<ToolCallSpec> {
                 }),
             ),
             call(
-                "memory_recall",
+                "memory.recall",
                 json!({ "labels": ["task"], "query": "survives", "limit": 5 }),
             ),
         ],
         "memory_duplicate_store" => vec![
             call(
-                "memory_store",
+                "memory.store",
                 json!({ "content": "Duplicate durable note", "tags": ["task"] }),
             ),
             call(
-                "memory_store",
+                "memory.store",
                 json!({ "content": " duplicate   durable NOTE ", "tags": ["task"] }),
             ),
         ],
         "memory_global_update_list_forget" => vec![
             call(
-                "memory_store",
+                "memory.store",
                 json!({
                     "content": "Initial global fact",
                     "tags": ["fact"],
@@ -174,7 +176,7 @@ fn tool_calls_for_sequence(sequence: &str) -> Vec<ToolCallSpec> {
                 }),
             ),
             call(
-                "memory_update",
+                "memory.update",
                 json!({
                     "id": "g-0",
                     "content": "Updated global fact",
@@ -182,17 +184,17 @@ fn tool_calls_for_sequence(sequence: &str) -> Vec<ToolCallSpec> {
                     "keywords": ["global", "updated"],
                 }),
             ),
-            call("memory_list", json!({ "limit": 5 })),
-            call("memory_forget", json!({ "id": "g-0" })),
-            call("memory_list", json!({ "limit": 5 })),
+            call("memory.list", json!({ "limit": 5 })),
+            call("memory.forget", json!({ "id": "g-0" })),
+            call("memory.list", json!({ "limit": 5 })),
         ],
         "builtin_subagent_validation" => vec![
-            call("list_spawnable_agents", json!({})),
-            call("list_subagents", json!({})),
-            call("watch_subagent", json!({ "agent": "agent-999" })),
-            call("delete_subagent", json!({ "agent": "agent-999" })),
+            call("subagent.list_spawnable", json!({})),
+            call("subagent.list", json!({})),
+            call("subagent.watch", json!({ "agent": "agent-999" })),
+            call("subagent.delete", json!({ "agent": "agent-999" })),
             call(
-                "spawn_subagent",
+                "subagent.spawn",
                 json!({
                     "kind": "ghost",
                     "name": "bad",

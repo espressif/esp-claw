@@ -885,9 +885,7 @@ fn write_live_set_to_files<F: ClawFs>(
     let manifest_bytes = match serde_json::to_vec(&manifest) {
         Ok(bytes) => bytes,
         Err(err) => {
-            log::warn!(
-                "transcript {transcript_id}: write_live manifest serialize failed: {err}"
-            );
+            log::warn!("transcript {transcript_id}: write_live manifest serialize failed: {err}");
             return;
         }
     };

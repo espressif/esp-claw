@@ -2,7 +2,7 @@ use core::future::Future;
 use core::task::{Context, Poll};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
-use std::task::Wake;
+use std::task::Waker;
 
 use anyhow::{anyhow, Result};
 use claw_checkpoint::{CheckpointError, CheckpointStorageError, DurablePart};
@@ -142,10 +142,25 @@ fn tool_set_durable_state_tracks_tool_metadata() -> Result<()> {
 
     let blob = tool_set.export_state()?;
     let state: serde_json::Value = serde_json::from_slice(&blob.bytes)?;
-    assert_eq!(state["registry_version"], 0);
-    assert_eq!(state["tools"]["echo"]["source"], "local");
-    assert_eq!(state["tools"]["echo"]["state"], "temporarily_disabled");
-    assert!(state["tools"]["echo"].get("schema").is_none());
+    assert_eq!(
+        state
+            .pointer("/registry_version")
+            .and_then(|value| value.as_u64()),
+        Some(0)
+    );
+    assert_eq!(
+        state
+            .pointer("/tools/echo/source")
+            .and_then(|value| value.as_str()),
+        Some("local")
+    );
+    assert_eq!(
+        state
+            .pointer("/tools/echo/state")
+            .and_then(|value| value.as_str()),
+        Some("temporarily_disabled")
+    );
+    assert!(state.pointer("/tools/echo/schema").is_none());
     Ok(())
 }
 
@@ -206,8 +221,9 @@ fn registry_rolls_back_mutation_when_checkpoint_hook_fails() -> Result<()> {
     ));
     let blob = registry.export_state()?;
     let state: serde_json::Value = serde_json::from_slice(&blob.bytes)?;
-    assert!(state["tools"]
-        .as_object()
+    assert!(state
+        .get("tools")
+        .and_then(|value| value.as_object())
         .filter(|tools| tools.is_empty())
         .is_some());
 
@@ -387,12 +403,6 @@ impl SyncToolHandler for FailBeforeSuccess {
     }
 }
 
-struct NoopWake;
-
-impl Wake for NoopWake {
-    fn wake(self: Arc<Self>) {}
-}
-
 fn invocation(name: &'static str, arguments_json: &'static str) -> Result<ToolInvocation<'static>> {
     ToolInvocation::try_from(RawToolInvocation {
         id: None,
@@ -423,8 +433,7 @@ fn run_retry_tool(retry_count: RetryCount, attempts: Arc<AtomicU32>) -> Result<T
 }
 
 fn poll_ready<T>(future: impl Future<Output = T>) -> Result<T> {
-    let waker = std::task::Waker::from(Arc::new(NoopWake));
-    let mut context = Context::from_waker(&waker);
+    let mut context = Context::from_waker(Waker::noop());
     let mut future = std::pin::pin!(future);
     match future.as_mut().poll(&mut context) {
         Poll::Ready(output) => Ok(output),

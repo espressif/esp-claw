@@ -47,7 +47,7 @@ items land in the ephemeral reminder tail.
 Determinism rule (one home per item): stable prose by scope -> a `Block`
 (prefix); a real, persisted conversation/tool event -> memory `history` (tail);
 a per-request transient nudge -> `reminders` (tail). Tool-retrieved knowledge
-(`memory_recall`, document lookup, web/API calls) is a tool result event in
+(`memory.recall`, document lookup, web/API calls) is a tool result event in
 history, not a separate `PulledKnowledge` block. There is no fourth option.
 
 ---
@@ -196,7 +196,7 @@ Group, scope, source, and extension points. (Mutability / band in Part B.)
 - **RecentContext / LiveState** — *History/Mode, Turn.* Recent raw
   messages/events/results; `LiveState` = volatile half of mode.
 - **OutputContract** — *Output, Agent/mode.* Conversation: NL answer/style.
-  Working: structured JSON (`actions`/`blockers`/`needs_approval`/`memory_updates`/
+  Working: structured JSON (`actions`/`blockers`/`needs_approval`/`memory.updates`/
   `next_step`). *Extends:* per-agent/mode contracts.
 
 ---

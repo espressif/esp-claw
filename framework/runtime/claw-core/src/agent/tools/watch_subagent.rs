@@ -1,4 +1,4 @@
-//! `watch_subagent(agent)` — snapshot one descendant by id.
+//! `subagent.watch(agent)` — snapshot one descendant by id.
 
 use std::sync::Arc;
 
@@ -19,7 +19,7 @@ pub(crate) struct WatchSubagentTool {
 }
 
 impl ToolSpec for WatchSubagentTool {
-    tool_metadata!("watch_subagent");
+    tool_metadata!("subagent.watch");
 
     // A pure read of one snapshot — safe to run alongside other calls.
     fn concurrent(&self) -> bool {
@@ -27,7 +27,7 @@ impl ToolSpec for WatchSubagentTool {
     }
 
     fn classify(&self, call: &ToolInvocation<'_>) -> Action {
-        let action = Action::new("watch_subagent", RiskClass::Safe);
+        let action = Action::new("subagent.watch", RiskClass::Safe);
         match agent_resource(call) {
             Some(resource) => action.with_resource(resource),
             None => action,
@@ -39,13 +39,13 @@ impl SyncToolHandler for WatchSubagentTool {
     fn invoke(&self, call: &ToolInvocation<'_>) -> Result<ToolOutput, ToolInvokeError> {
         let Some(agent) = optional_string_argument(call.arguments_json(), "agent")? else {
             return Err(
-                ToolError::InvalidArguments("watch_subagent 'agent' is required".into()).into(),
+                ToolError::InvalidArguments("subagent.watch 'agent' is required".into()).into(),
             );
         };
         let agent = agent.trim();
         if agent.is_empty() {
             return Err(
-                ToolError::InvalidArguments("watch_subagent 'agent' is required".into()).into(),
+                ToolError::InvalidArguments("subagent.watch 'agent' is required".into()).into(),
             );
         }
         let target = AgentId::from_wire(agent).map_err(|error| {

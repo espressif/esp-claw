@@ -1,4 +1,4 @@
-//! `spawn_subagent(kind, goal, termination)` — request a child agent of `kind`
+//! `subagent.spawn(kind, goal, termination)` — request a child agent of `kind`
 //! to work on `goal`.
 
 use std::sync::Arc;
@@ -21,18 +21,18 @@ use super::optional_string_argument;
 fn non_blank_argument(arguments_json: &str, key: &str) -> Result<String, ToolError> {
     let Some(raw) = optional_string_argument(arguments_json, key)? else {
         return Err(ToolError::InvalidArguments(format!(
-            "spawn_subagent '{key}' is required"
+            "subagent.spawn '{key}' is required"
         )));
     };
     if raw.is_empty() {
         return Err(ToolError::InvalidArguments(format!(
-            "spawn_subagent '{key}' is required"
+            "subagent.spawn '{key}' is required"
         )));
     }
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(ToolError::InvokeRejected(format!(
-            "spawn_subagent '{key}' must not be blank"
+            "subagent.spawn '{key}' must not be blank"
         )));
     }
     Ok(trimmed.to_string())
@@ -44,16 +44,16 @@ pub(crate) struct SpawnSubagentTool {
     pub(super) context: Arc<AgentContext>,
     /// The parent kind's `allowed_kinds`, enforced before any spawn is requested.
     /// The matching menu the model reads up front is served by the sibling
-    /// `list_spawnable_agents` tool, which renders the same policy's catalog.
+    /// `subagent.list_spawnable` tool, which renders the same policy's catalog.
     pub(super) policy: SpawnPolicy,
 }
 
 impl ToolSpec for SpawnSubagentTool {
-    tool_metadata!("spawn_subagent");
+    tool_metadata!("subagent.spawn");
 
     fn classify(&self, _call: &ToolInvocation<'_>) -> Action {
         // Creating a child mutates the graph — worth a policy look, but reversible.
-        Action::new("spawn_subagent", RiskClass::Moderate)
+        Action::new("subagent.spawn", RiskClass::Moderate)
     }
 }
 
@@ -69,7 +69,7 @@ impl SyncToolHandler for SpawnSubagentTool {
             tracing::warn!(name: "spawn_kind_rejected", kind = %kind.as_str());
             return Ok(ToolOutput {
                 output: format!(
-                    "spawn_subagent: kind '{kind}' is not permitted for this agent. \
+                    "subagent.spawn: kind '{kind}' is not permitted for this agent. \
                      Allowed: {}. This is a policy restriction, not a transient error: \
                      pick a permitted kind or handle the work yourself.",
                     self.policy.describe()
@@ -99,8 +99,8 @@ impl SyncToolHandler for SpawnSubagentTool {
             };
             return Ok(ToolOutput {
                 output: format!(
-                    "spawn_subagent: '{kind}' is not a known agent kind, so it cannot be \
-                     created. Spawnable kinds: {available}. Call list_spawnable_agents to see \
+                    "subagent.spawn: '{kind}' is not a known agent kind, so it cannot be \
+                     created. Spawnable kinds: {available}. Call subagent.list_spawnable to see \
                      what you can spawn."
                 ),
                 ok: false,
@@ -118,7 +118,7 @@ impl SyncToolHandler for SpawnSubagentTool {
             None | Some("") => TerminationPolicy::AutoOnIdle,
             Some(value) => TerminationPolicy::try_from(value).map_err(|_| {
                 ToolError::InvokeRejected(format!(
-                    "spawn_subagent 'termination' must be one of auto|manual, got '{value}'"
+                    "subagent.spawn 'termination' must be one of auto|manual, got '{value}'"
                 ))
             })?,
         };

@@ -26,6 +26,10 @@ use super::{
     ENGINE_WORKER_STACK_SIZE,
 };
 
+type CheckpointSessions = dyn Fn(&SessionStore, Option<SessionId>) -> Result<(), SessionRegistryCheckpointError>
+    + Send
+    + Sync;
+
 /// A `Send + Sync` handle to a running orchestrator.
 ///
 /// Cloning is intentionally not provided: the handle owns the worker's lifetime
@@ -35,11 +39,7 @@ pub struct Orchestrator {
     command_tx: Sender<Command>,
     worker: Mutex<Option<WorkerHandle>>,
     pending_runtime_removals: Arc<Mutex<HashSet<SessionId>>>,
-    checkpoint_sessions: Box<
-        dyn Fn(&SessionStore, Option<SessionId>) -> Result<(), SessionRegistryCheckpointError>
-            + Send
-            + Sync,
-    >,
+    checkpoint_sessions: Box<CheckpointSessions>,
 }
 
 impl Orchestrator {

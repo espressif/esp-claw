@@ -3,8 +3,7 @@
 use core::future::Future;
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::task::{Context, Poll};
-use std::sync::Arc;
-use std::task::{Wake, Waker};
+use std::task::Waker;
 use std::time::Duration;
 
 use claw_interface::{Cancel, ClawTimer, ImmediateTimer, SleepOutcome, YieldingTimer};
@@ -55,16 +54,9 @@ fn yielding_timer_observes_cancellation_between_yields() {
     assert_eq!(outcome, SleepOutcome::Cancelled);
 }
 
-struct NoopWake;
-
-impl Wake for NoopWake {
-    fn wake(self: Arc<Self>) {}
-}
-
 fn block_on_counting<F: Future>(future: F) -> (F::Output, u32) {
     let mut future = Box::pin(future);
-    let waker = Waker::from(Arc::new(NoopWake));
-    let mut context = Context::from_waker(&waker);
+    let mut context = Context::from_waker(Waker::noop());
     let mut polls = 0;
     loop {
         polls += 1;

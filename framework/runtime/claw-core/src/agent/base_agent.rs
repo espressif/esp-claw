@@ -39,7 +39,7 @@
 //!
 //! A plain-text answer is [`Yielded`](TickOutcome::Yielded) — **non-terminal** —
 //! and the agent goes idle awaiting the next message. A task ends only when the
-//! agent decides so itself (the built-in `end_conversation` tool →
+//! agent decides so itself (the built-in `conversation.end` tool →
 //! [`Ended`](TickOutcome::Ended)), when the orchestrator hard-stops it
 //! ([`Cancel`](AgentCommand::Cancel) → [`Cancelled`](TickOutcome::Cancelled)), or
 //! on [`Failed`](TickOutcome::Failed). Out-of-band preemption is only an abort

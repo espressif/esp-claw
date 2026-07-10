@@ -1,0 +1,17 @@
+{
+  "type": "function",
+  "function": {
+    "name": "memory.forget",
+    "description": "Forget a memory you no longer need, identified by its id from memory.recall or memory.list. This is permanent.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The id of the memory to forget (as shown in brackets by memory.recall/memory.list)."
+        }
+      },
+      "required": ["id"]
+    }
+  }
+}

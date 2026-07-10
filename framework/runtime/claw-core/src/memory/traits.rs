@@ -78,10 +78,6 @@ pub trait Transcript: History {
     /// Commit the model's answer, closing the open turn.
     fn commit_assistant(&self, commit: AssistantCommit<'_>);
 
-    /// Commit a materialized assistant+tool patch (a JSON array), closing the
-    /// open turn.
-    fn commit_patch(&self, patch: &Value);
-
     /// Append a materialized assistant+tool patch (a JSON array) into the open
     /// turn **without** closing it.
     ///
@@ -93,7 +89,7 @@ pub trait Transcript: History {
     /// [`append_user`](Self::append_user) — closes the turn.
     fn append_patch(&self, patch: &Value);
 
-    /// Commit the agent's closing message (from `end_conversation`).
+    /// Commit the agent's closing message (from `conversation.end`).
     fn commit_ended(&self, final_message: &str);
 
     /// Discard the still-open turn without committing any of its messages.
@@ -134,11 +130,6 @@ impl<F: ClawFs + 'static> Transcript for TranscriptStore<F> {
                 self.push_patch(&json!([{ "role": "assistant", "content": text }]));
             }
         }
-        self.commit_open_turn();
-    }
-
-    fn commit_patch(&self, patch: &Value) {
-        self.push_patch(patch);
         self.commit_open_turn();
     }
 

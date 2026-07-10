@@ -1,0 +1,17 @@
+{
+  "type": "function",
+  "function": {
+    "name": "skill.activate",
+    "description": "Read one skill document by id and return its processed SKILL.md body wrapped in <skill_content>. The document enters context through this tool result.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "skill_id": {
+          "type": "string",
+          "description": "The id of the skill to activate, as shown by skill.list."
+        }
+      },
+      "required": ["skill_id"]
+    }
+  }
+}

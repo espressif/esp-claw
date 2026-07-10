@@ -1,3 +1,0 @@
-## IDF Component Manager Manifest File
-dependencies:
-  espressif/button: "*"

@@ -1,4 +1,4 @@
-//! `list_subagents()` — enumerate this agent's subtree.
+//! `subagent.list()` — enumerate this agent's subtree.
 
 use std::sync::Arc;
 
@@ -14,7 +14,7 @@ pub(crate) struct ListSubagentsTool {
 }
 
 impl ToolSpec for ListSubagentsTool {
-    tool_metadata!("list_subagents");
+    tool_metadata!("subagent.list");
 
     // A pure read of the graph snapshot — safe to run alongside other calls.
     fn concurrent(&self) -> bool {

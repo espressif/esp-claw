@@ -111,7 +111,10 @@ async fn main() {
 }
 
 async fn run() -> Result<()> {
-    claw_log::init_logger(LevelFilter::Info, LogOutput::File(Path::new(env!("CARGO_MANIFEST_DIR")).join("../claw-agent/simulator.log")))?;
+    claw_log::init_logger(
+        LevelFilter::Info,
+        LogOutput::File(Path::new(env!("CARGO_MANIFEST_DIR")).join("../claw-agent/simulator.log")),
+    )?;
     claw_log::init_tracing(
         TracingConfig::default()
             .with_context_group_keys("run", ["session", "turn", "agent", "iteration"]),

@@ -21,7 +21,7 @@ pub use claw_core::{
 use claw_core::{Orchestrator, OrchestratorBuildError};
 use claw_interface::{ClawExecutor, ClawFs, ClawHttp, ClawThread, ClawTimer, FsError};
 #[cfg(feature = "host-backends")]
-use claw_interface::{DiskFs, RealHttp, StdThread, TokioExecutor, TokioTimer};
+use claw_interface::{DiskFs, RealHttp, TokioTimer};
 use claw_tool::{ToolRegistry, ToolRegistryError};
 
 #[cfg(feature = "host-backends")]
@@ -91,6 +91,8 @@ pub enum AgentError {
 /// HTTP, and timer the orchestrator's drive worker uses; they are only needed at
 /// construction, so they are held as a marker (the built [`Orchestrator`] handle
 /// is backend-erased and `Send + Sync`).
+type BackendMarker<Filesystem, Http, Timer> = PhantomData<fn() -> (Filesystem, Http, Timer)>;
+
 pub struct AgentSystem<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
@@ -99,7 +101,7 @@ where
 {
     tools: Arc<ToolRegistry>,
     orchestrator: Orchestrator,
-    _marker: PhantomData<fn() -> (Filesystem, Http, Timer)>,
+    _marker: BackendMarker<Filesystem, Http, Timer>,
 }
 
 impl<Filesystem, Http, Timer> AgentSystem<Filesystem, Http, Timer>

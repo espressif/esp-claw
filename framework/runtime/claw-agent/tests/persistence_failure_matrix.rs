@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 mod support;
 
 use std::collections::{BTreeMap, VecDeque};
@@ -134,7 +136,7 @@ fn assert_tool_error(root: &str, fixture: &Fixture) {
     install_replies(vec![
         assistant_tool_calls(vec![call(
             "call_profile_read",
-            "profile_read",
+            "profile.read",
             json!({ "document": "user_profile" }),
         )]),
         assistant_text(&fixture.final_output),

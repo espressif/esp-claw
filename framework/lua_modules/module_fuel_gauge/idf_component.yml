@@ -1,4 +1,0 @@
-## IDF Component Manager Manifest File
-dependencies:
-  driver_i2c:
-    path: ../driver_i2c

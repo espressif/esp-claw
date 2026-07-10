@@ -16,8 +16,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
-use std::task::{Context, Poll, Wake, Waker};
+use std::task::{Context, Poll, Waker};
 use std::time::Duration;
 
 use claw_api::{
@@ -78,17 +77,9 @@ impl ClawTimer for ImmediateTimer {
     }
 }
 
-/// A no-op waker: the stub futures resolve in a bounded number of polls, so
-/// spinning is enough to drive them to completion.
-struct NoopWake;
-impl Wake for NoopWake {
-    fn wake(self: Arc<Self>) {}
-}
-
 fn block_on<F: Future>(future: F) -> F::Output {
     let mut future = Pin::from(Box::new(future));
-    let waker = Waker::from(Arc::new(NoopWake));
-    let mut context = Context::from_waker(&waker);
+    let mut context = Context::from_waker(Waker::noop());
     loop {
         if let Poll::Ready(output) = future.as_mut().poll(&mut context) {
             return output;

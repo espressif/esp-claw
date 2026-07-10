@@ -25,7 +25,7 @@ use crate::orchestrator::control::DriveControl;
 
 const APPROVAL_RESOLVER_PROMPT: &str = r#"You resolve a user's natural-language reply to one pending permission request.
 
-You must call resolve_permission_reply exactly once.
+You must call permission.resolve_reply exactly once.
 
 Use:
 - decision="approve" only when the user clearly allows the pending request.
@@ -101,10 +101,10 @@ impl ResolvePermissionReplyTool {
 }
 
 impl ToolSpec for ResolvePermissionReplyTool {
-    tool_metadata!("resolve_permission_reply");
+    tool_metadata!("permission.resolve_reply");
 
     fn classify(&self, _call: &ToolInvocation<'_>) -> Action {
-        Action::new("resolve_permission_reply", RiskClass::Safe)
+        Action::new("permission.resolve_reply", RiskClass::Safe)
     }
 }
 

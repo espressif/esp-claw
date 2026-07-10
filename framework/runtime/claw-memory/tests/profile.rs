@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use claw_interface::{ClawFs, MemFs};
 use claw_memory::{
     ProfileDocument, ProfileError, ProfileStore, DEFAULT_PROFILE_DOCUMENT_MAX_BYTES,

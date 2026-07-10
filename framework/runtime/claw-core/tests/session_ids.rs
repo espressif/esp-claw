@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use claw_core::{SessionId, TurnId};
 use serde_json::json;
 

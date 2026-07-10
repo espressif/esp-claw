@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use core::sync::atomic::AtomicBool;
 use std::cell::RefCell;
 use std::sync::{Arc, Mutex};

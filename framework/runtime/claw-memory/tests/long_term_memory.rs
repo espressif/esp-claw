@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use claw_interface::{ClawFs, MemFs};
 use claw_memory::{
     LongTermError, LongTermMemory, MemoryDraft, MemoryId, MemoryPatch, StoreOutcome,
