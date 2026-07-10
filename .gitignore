@@ -30,6 +30,8 @@ managed_components/
 __pycache__/
 .pytest_cache/
 .ruff_cache/
+run.log
+trace.json
 
 # MCP / Memov
 .mcp.json

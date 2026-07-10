@@ -208,7 +208,8 @@ pub trait ClawFs: Send + Sync + 'static {
     /// Whether `path` currently exists.
     fn exists(path: &str) -> bool;
 
-    /// Remove `path`. Removing a missing path succeeds (idempotent).
+    /// Remove a file or empty directory at `path`. Removing a missing path
+    /// succeeds (idempotent).
     fn remove(path: &str) -> Result<(), FsError>;
 
     /// List the immediate entry names within directory `path`.
@@ -630,7 +631,14 @@ mod diskfs {
         }
 
         fn remove(path: &str) -> Result<(), FsError> {
-            match std::fs::remove_file(Self::resolve(path)) {
+            let full = Self::resolve(path);
+            let result = match std::fs::symlink_metadata(&full) {
+                Ok(metadata) if metadata.is_dir() => std::fs::remove_dir(full),
+                Ok(_) => std::fs::remove_file(full),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(FsError::from(error)),
+            };
+            match result {
                 Ok(()) => Ok(()),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
                 Err(error) => Err(FsError::from(error)),

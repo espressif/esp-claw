@@ -1,15 +1,15 @@
 use core::future::Future;
 use core::task::{Context, Poll};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::task::Wake;
 
 use anyhow::{anyhow, Result};
-use claw_checkpoint::{DurablePart, DurablePartError};
+use claw_checkpoint::{CheckpointError, CheckpointStorageError, DurablePart};
 use claw_tool::{
     RawToolInvocation, RetryCount, SyncToolHandler, Tool, ToolError, ToolInvocation,
-    ToolInvokeError, ToolOutput, ToolRegistry, ToolRegistryError, ToolResult, ToolRunOutcome,
-    ToolRunner, ToolSetHandle, ToolSpec,
+    ToolInvokeError, ToolOutput, ToolRegistry, ToolRegistryCheckpointError, ToolRegistryError,
+    ToolResult, ToolRunOutcome, ToolRunner, ToolSetHandle, ToolSpec,
 };
 
 #[test]
@@ -194,13 +194,15 @@ fn restored_registry_reuses_tool_state_without_dirtying_generation() -> Result<(
 #[test]
 fn registry_rolls_back_mutation_when_checkpoint_hook_fails() -> Result<()> {
     let registry = ToolRegistry::new();
-    registry.set_checkpoint_hook(|_, _| {
-        Err(DurablePartError::InvalidState("checkpoint failed").into())
+    registry.set_checkpoint_hook(|_, _, _| {
+        Err(CheckpointError::Storage(CheckpointStorageError::EmptyRoot).into())
     });
 
     assert!(matches!(
         registry.register(Tool::from_sync(EchoTool)),
-        Err(ToolRegistryError::Checkpoint(_))
+        Err(ToolRegistryError::Checkpoint(
+            ToolRegistryCheckpointError::Coordinator(_)
+        ))
     ));
     let blob = registry.export_state()?;
     let state: serde_json::Value = serde_json::from_slice(&blob.bytes)?;
@@ -211,8 +213,59 @@ fn registry_rolls_back_mutation_when_checkpoint_hook_fails() -> Result<()> {
 
     assert!(matches!(
         registry.register(Tool::from_sync(EchoTool)),
-        Err(ToolRegistryError::Checkpoint(_))
+        Err(ToolRegistryError::Checkpoint(
+            ToolRegistryCheckpointError::Coordinator(_)
+        ))
     ));
+    Ok(())
+}
+
+#[test]
+fn registry_checkpoint_hook_receives_matching_generation_and_owned_state() -> Result<()> {
+    let snapshots = Arc::new(Mutex::new(Vec::new()));
+    let hook_snapshots = Arc::clone(&snapshots);
+    let registry = ToolRegistry::new();
+    registry.set_checkpoint_hook(move |generation, state, _| {
+        let owned = matches!(&state.bytes, std::borrow::Cow::Owned(_));
+        hook_snapshots
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push((generation, owned, state.bytes.into_owned()));
+        Ok(())
+    });
+
+    registry.register(Tool::from_sync(EchoTool))?;
+    registry.disable("echo")?;
+
+    let snapshots = snapshots
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert_eq!(snapshots.len(), 2);
+    let registered_snapshot = snapshots
+        .first()
+        .ok_or_else(|| anyhow!("missing registered snapshot"))?;
+    assert_eq!(registered_snapshot.0, 1);
+    assert!(registered_snapshot.1);
+    let registered: serde_json::Value = serde_json::from_slice(&registered_snapshot.2)?;
+    assert_eq!(
+        registered
+            .pointer("/tools/echo")
+            .and_then(serde_json::Value::as_bool),
+        Some(true)
+    );
+
+    let disabled_snapshot = snapshots
+        .get(1)
+        .ok_or_else(|| anyhow!("missing disabled snapshot"))?;
+    assert_eq!(disabled_snapshot.0, 2);
+    assert!(disabled_snapshot.1);
+    let disabled: serde_json::Value = serde_json::from_slice(&disabled_snapshot.2)?;
+    assert_eq!(
+        disabled
+            .pointer("/tools/echo")
+            .and_then(serde_json::Value::as_bool),
+        Some(false)
+    );
     Ok(())
 }
 

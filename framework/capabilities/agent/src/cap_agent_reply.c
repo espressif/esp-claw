@@ -136,36 +136,14 @@ static esp_err_t cap_agent_send_reply(const cap_agent_reply_task_arg_t *arg,
     return err;
 }
 
-/* Append `add` to a growable heap buffer. Returns false on allocation failure
- * (the existing buffer is left intact for the caller to free). */
-static bool cap_agent_reply_append(char **buf, size_t *len, const char *add)
-{
-    if (!add || !add[0]) {
-        return true;
-    }
-    size_t add_len = strlen(add);
-    char *grown = realloc(*buf, *len + add_len + 1);
-    if (!grown) {
-        return false;
-    }
-    memcpy(grown + *len, add, add_len + 1);
-    *len += add_len;
-    *buf = grown;
-    return true;
-}
-
 static void cap_agent_reply_task(void *param)
 {
     cap_agent_reply_task_arg_t *arg = (cap_agent_reply_task_arg_t *)param;
-    char *message = NULL;
-    size_t message_len = 0;
-    bool failed = false;
     bool done = false;
     TickType_t start = xTaskGetTickCount();
 
-    /* Consume the turn's event stream one event at a time. Content events arrive
-     * while the turn is still running; we coalesce OUTPUT fragments into one
-     * coherent IM message and send it once the turn ends (DONE). */
+    /* Consume the turn's event stream one event at a time. Forward each OUTPUT
+     * fragment immediately instead of delaying user-visible text until DONE. */
     while (!done) {
         claw_agent_event_t event = {0};
         esp_err_t err = claw_agent_session_receive(arg->session_id,
@@ -190,13 +168,16 @@ static void cap_agent_reply_task(void *param)
 
         switch (event.kind) {
         case CLAW_AGENT_EVENT_KIND_OUTPUT:
-            if (!cap_agent_reply_append(&message, &message_len, event.text)) {
-                ESP_LOGW(TAG, "reply buffer alloc failed session=%" PRIu32, arg->session_id);
-                failed = true;
-                done = true;
+        case CLAW_AGENT_EVENT_KIND_REASONING: {
+            esp_err_t send_err = cap_agent_send_reply(arg, event.text);
+            if (send_err != ESP_OK) {
+                ESP_LOGW(TAG,
+                         "reply send failed session=%" PRIu32 " err=%s",
+                         arg->session_id,
+                         esp_err_to_name(send_err));
             }
             break;
-        case CLAW_AGENT_EVENT_KIND_REASONING:
+        }
         case CLAW_AGENT_EVENT_KIND_TOOLS:
             ESP_LOGI(TAG,
                      "progress session=%" PRIu32 " kind=%d %s",
@@ -209,7 +190,6 @@ static void cap_agent_reply_task(void *param)
                      "agent error session=%" PRIu32 " error=%s",
                      arg->session_id,
                      event.error_message ? event.error_message : "-");
-            failed = true;
             done = true;
             break;
         case CLAW_AGENT_EVENT_KIND_DONE:
@@ -223,17 +203,6 @@ static void cap_agent_reply_task(void *param)
         claw_agent_event_free(&event);
     }
 
-    if (!failed && message) {
-        esp_err_t err = cap_agent_send_reply(arg, message);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG,
-                     "reply send failed session=%" PRIu32 " err=%s",
-                     arg->session_id,
-                     esp_err_to_name(err));
-        }
-    }
-
-    free(message);
     free(arg);
     vTaskDelete(NULL);
 }

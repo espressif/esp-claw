@@ -9,6 +9,7 @@ pub use claw_agent::SessionId
 pub use claw_agent::TurnCause
 pub use claw_agent::TurnId
 pub enum claw_agent::AgentError
+pub claw_agent::AgentError::CheckpointCoordinatorInit(claw_checkpoint::CheckpointCoordinatorInitError)
 pub claw_agent::AgentError::CheckpointLoad(claw_checkpoint::LoadCheckpointError)
 pub claw_agent::AgentError::CheckpointPart(claw_checkpoint::DurablePartError)
 pub claw_agent::AgentError::CheckpointStorage(claw_checkpoint::CheckpointStorageError)

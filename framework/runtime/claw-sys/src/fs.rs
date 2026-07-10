@@ -25,6 +25,68 @@ mod espidf {
             }
             Ok(())
         }
+
+        fn replace(from: &std::path::Path, to: &std::path::Path) -> Result<(), FsError> {
+            Self::restore_backup_if_needed(to)?;
+            match std::fs::rename(from, to) {
+                Ok(()) => Ok(()),
+                // ESP-IDF's FATFS VFS delegates to `f_rename`, which returns
+                // EEXIST instead of replacing an occupied destination. Move
+                // the old file aside first so a reset between the two renames
+                // can restore it on the next open.
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let backup = Self::backup_path(to);
+                    Self::remove_file_if_exists(&backup)?;
+                    std::fs::rename(to, &backup).map_err(FsError::from)?;
+                    match std::fs::rename(from, to) {
+                        Ok(()) => {
+                            // The new file is committed. A failed best-effort
+                            // cleanup only leaves a recoverable stale backup;
+                            // it must not make the caller roll back live state.
+                            let _ = Self::remove_file_if_exists(&backup);
+                            Ok(())
+                        }
+                        Err(error) => {
+                            let _ = std::fs::rename(&backup, to);
+                            Err(FsError::from(error))
+                        }
+                    }
+                }
+                Err(error) => Err(FsError::from(error)),
+            }
+        }
+
+        fn backup_path(path: &std::path::Path) -> std::path::PathBuf {
+            let mut backup = path.as_os_str().to_owned();
+            backup.push(".bak");
+            std::path::PathBuf::from(backup)
+        }
+
+        fn remove_file_if_exists(path: &std::path::Path) -> Result<(), FsError> {
+            match std::fs::remove_file(path) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(FsError::from(error)),
+            }
+        }
+
+        fn restore_backup_if_needed(path: &std::path::Path) -> Result<(), FsError> {
+            let backup = Self::backup_path(path);
+            match std::fs::metadata(path) {
+                Ok(_) => {
+                    let _ = Self::remove_file_if_exists(&backup);
+                    Ok(())
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    match std::fs::rename(&backup, path) {
+                        Ok(()) => Ok(()),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                        Err(error) => Err(FsError::from(error)),
+                    }
+                }
+                Err(error) => Err(FsError::from(error)),
+            }
+        }
     }
 
     /// Open ESP-IDF VFS file handle.
@@ -64,7 +126,9 @@ mod espidf {
         type File = EspIdfFile;
 
         fn open(path: &str) -> Result<Self::File, FsError> {
-            std::fs::File::open(path)
+            let full = std::path::Path::new(path);
+            Self::restore_backup_if_needed(full)?;
+            std::fs::File::open(full)
                 .map(|file| EspIdfFile { file })
                 .map_err(FsError::from)
         }
@@ -80,6 +144,7 @@ mod espidf {
         fn open_append(path: &str) -> Result<Self::File, FsError> {
             let full = std::path::Path::new(path);
             Self::ensure_parent(full)?;
+            Self::restore_backup_if_needed(full)?;
             std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -89,7 +154,7 @@ mod espidf {
         }
 
         fn rename(from: &str, to: &str) -> Result<(), FsError> {
-            std::fs::rename(from, to).map_err(FsError::from)
+            Self::replace(std::path::Path::new(from), std::path::Path::new(to))
         }
 
         fn create_dir_all(path: &str) -> Result<(), FsError> {
@@ -97,15 +162,26 @@ mod espidf {
         }
 
         fn exists(path: &str) -> bool {
-            std::path::Path::new(path).exists()
+            let full = std::path::Path::new(path);
+            let _ = Self::restore_backup_if_needed(full);
+            full.exists()
         }
 
         fn remove(path: &str) -> Result<(), FsError> {
-            match std::fs::remove_file(path) {
+            // ESP-IDF/FatFS has no symlink semantics to preserve, and Rust's
+            // `symlink_metadata` pulls in the unsupported POSIX `lstat` symbol.
+            let result = match std::fs::metadata(path) {
+                Ok(metadata) if metadata.is_dir() => std::fs::remove_dir(path),
+                Ok(_) => std::fs::remove_file(path),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => return Err(FsError::from(error)),
+            };
+            match result {
                 Ok(()) => Ok(()),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
                 Err(error) => Err(FsError::from(error)),
-            }
+            }?;
+            Self::remove_file_if_exists(&Self::backup_path(std::path::Path::new(path)))
         }
 
         fn list_dir(path: &str) -> Result<Vec<String>, FsError> {
@@ -121,9 +197,11 @@ mod espidf {
         }
 
         fn len(path: &str) -> Result<u64, FsError> {
-            std::fs::metadata(path)
+            let full = std::path::Path::new(path);
+            Self::restore_backup_if_needed(full)?;
+            std::fs::metadata(full)
                 .map(|metadata| metadata.len())
-                .map_err(map_io)
+                .map_err(FsError::from)
         }
 
         fn write_atomic(path: &str, data: &[u8]) -> Result<(), FsError> {
@@ -131,7 +209,7 @@ mod espidf {
             Self::ensure_parent(full)?;
             let tmp = format!("{path}.tmp");
             std::fs::write(&tmp, data).map_err(FsError::from)?;
-            std::fs::rename(&tmp, full).map_err(FsError::from)
+            Self::replace(std::path::Path::new(&tmp), full)
         }
     }
 }

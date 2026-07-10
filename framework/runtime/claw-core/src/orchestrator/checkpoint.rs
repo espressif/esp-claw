@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use claw_checkpoint::{
-    BatchWrite, CheckpointStorage, CheckpointStorageError, CheckpointWrite, DurablePart,
-    DurablePartError, DurableStateCodec, FsCheckpointStorage, PartWrite,
+    BatchId, CheckpointError, CheckpointStorage, DurableBatchSnapshot, DurablePartError,
+    DurableStateCodec, FsCheckpointStorage, SharedCheckpointCoordinator,
 };
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
@@ -21,7 +21,7 @@ use super::{
 #[derive(Debug, thiserror::Error)]
 pub(super) enum SessionRegistryCheckpointError {
     #[error(transparent)]
-    Storage(#[from] CheckpointStorageError),
+    Checkpoint(#[from] CheckpointError),
     #[error(transparent)]
     Export(#[from] DurablePartError),
 }
@@ -29,30 +29,30 @@ pub(super) enum SessionRegistryCheckpointError {
 #[derive(Debug, thiserror::Error)]
 pub(super) enum RuntimeCheckpointError {
     #[error(transparent)]
-    Storage(#[from] CheckpointStorageError),
+    Checkpoint(#[from] CheckpointError),
     #[error(transparent)]
     Export(#[from] DurablePartError),
 }
 
 pub(super) fn checkpoint_session_registry<Filesystem: ClawFs>(
-    checkpoint_dir: &str,
+    checkpoints: &SharedCheckpointCoordinator<FsCheckpointStorage<Filesystem>>,
     sessions: &SessionStore,
+    removed_sessions: &[SessionId],
 ) -> Result<(), SessionRegistryCheckpointError> {
-    let mut storage = FsCheckpointStorage::<Filesystem>::new(checkpoint_dir.to_owned());
-    let step = storage.next_step()?;
-    let state = sessions.export_state()?;
-    let hint = sessions.storage_hint();
-    storage.write_checkpoint(CheckpointWrite {
-        step,
-        batches: vec![BatchWrite {
-            batch: (SESSION_REGISTRY_BATCH, SESSION_REGISTRY_BATCH_ID),
-            writes: vec![PartWrite {
-                name: SESSION_STORE_PART,
-                state,
-                hint,
-            }],
-        }],
-    })?;
+    let removed_batches = removed_sessions
+        .iter()
+        .map(|session| (SESSION_RUNTIME_BATCH, BatchId::new(session.0)))
+        .collect();
+    sessions.with_durable_snapshot(|snapshot| {
+        checkpoints.checkpoint_and_remove(
+            vec![DurableBatchSnapshot::new(
+                SESSION_REGISTRY_BATCH,
+                SESSION_REGISTRY_BATCH_ID,
+                vec![snapshot],
+            )],
+            removed_batches,
+        )
+    })??;
     Ok(())
 }
 

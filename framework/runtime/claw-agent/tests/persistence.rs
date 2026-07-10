@@ -135,6 +135,41 @@ fn tool_registry_direct_mutations_checkpoint_and_restore() {
 }
 
 #[test]
+fn tool_registry_keeps_only_two_checkpoints_across_fifty_four_registrations() {
+    let _script = serialize_script();
+    MemFs::default();
+    let root = mem_root("persist-tool-registry-two-slots");
+    let checkpoint_root = format!("{root}/checkpoint");
+    let system = build_mem_system(&root, Vec::new());
+
+    for index in 1..=54 {
+        system
+            .tool_registry()
+            .register(Tool::from_sync(NumberedCheckpointTool {
+                name: format!("checkpoint-tool-{index}"),
+            }))
+            .unwrap();
+    }
+
+    let storage = FsCheckpointStorage::<MemFs>::new(checkpoint_root.clone());
+    assert_eq!(storage.latest_step().unwrap(), Some(54));
+    assert!(matches!(
+        storage.load_checkpoint(52),
+        Err(claw_checkpoint::LoadCheckpointError::StepNotFound(52))
+    ));
+    assert_eq!(tool_count(&storage.load_checkpoint(53).unwrap()), 53);
+    assert_eq!(tool_count(&storage.load_checkpoint(54).unwrap()), 54);
+
+    let mut step_directories = MemFs::list_dir(&checkpoint_root)
+        .unwrap()
+        .into_iter()
+        .filter(|entry| entry.starts_with("step-"))
+        .collect::<Vec<_>>();
+    step_directories.sort();
+    assert_eq!(step_directories, vec!["step-53", "step-54"]);
+}
+
+#[test]
 fn session_drive_turn_counter_restores_from_disk_checkpoint() {
     let _script = serialize_script();
     let root = TempDir::new("claw-agent-session-drive").unwrap();
@@ -316,6 +351,11 @@ fn deleted_session_does_not_reappear_after_disk_rebuild() {
         system.delete_session(session).unwrap();
         assert_eq!(system.list_sessions(), Vec::<SessionId>::new());
         assert_session_missing(&system, session);
+        let checkpoint = latest_checkpoint::<DiskFs>(&format!("{root}/checkpoint"));
+        assert!(!checkpoint
+            .batches
+            .iter()
+            .any(|batch| batch.name == "session-runtime" && batch.id.0 == session.0));
         session
     };
 
@@ -367,6 +407,29 @@ impl ToolSpec for CheckpointEchoTool {
 
     fn schema(&self) -> &str {
         r#"{"type":"function","function":{"name":"checkpoint_echo"}}"#
+    }
+}
+
+struct NumberedCheckpointTool {
+    name: String,
+}
+
+impl ToolSpec for NumberedCheckpointTool {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn schema(&self) -> &str {
+        r#"{"type":"function","function":{"name":"checkpoint_tool"}}"#
+    }
+}
+
+impl SyncToolHandler for NumberedCheckpointTool {
+    fn invoke(&self, call: &ToolInvocation<'_>) -> ToolResult<ToolOutput> {
+        Ok(ToolOutput {
+            output: call.arguments_json().to_owned(),
+            ok: true,
+        })
     }
 }
 
@@ -444,6 +507,17 @@ fn latest_checkpoint_step<F: ClawFs>(root: &str) -> u64 {
         .latest_step()
         .unwrap()
         .expect("checkpoint manifest has latest step")
+}
+
+fn tool_count(checkpoint: &Checkpoint) -> usize {
+    let state = checkpoint
+        .batches
+        .iter()
+        .find(|batch| batch.name == "tool-registry")
+        .and_then(|batch| batch.parts.iter().find(|part| part.name == "tool-registry"))
+        .expect("tool registry checkpoint part exists");
+    let value: Value = serde_json::from_slice(state.state.bytes.as_ref()).unwrap();
+    value["tools"].as_object().unwrap().len()
 }
 
 fn write_pending_session_checkpoint(root: &str, session: SessionId, text: &str) {

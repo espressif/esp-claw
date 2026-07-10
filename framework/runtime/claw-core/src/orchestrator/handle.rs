@@ -1,8 +1,13 @@
+use std::collections::HashSet;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use async_channel::Sender;
 use claw_api::ClawApiConfig;
+use claw_checkpoint::{
+    CheckpointCoordinatorInitError, CheckpointStorage, FsCheckpointStorage,
+    SharedCheckpointCoordinator,
+};
 use claw_interface::{
     ClawExecutor, ClawFs, ClawHttp, ClawThread, ClawTimer, CoreAffinity, Priority, WorkerHandle,
 };
@@ -17,7 +22,8 @@ use super::checkpoint::{
 use super::engine::{run_engine, Command};
 use super::{
     OpenSessionError, OrchestratorBuildError, SessionControl, SessionControlError,
-    SessionEventStream, CHECKPOINT_DIR, ENGINE_WORKER_STACK_SIZE,
+    SessionEventStream, CHECKPOINT_DIR, CHECKPOINT_HISTORY, CHECKPOINT_INTERVAL,
+    ENGINE_WORKER_STACK_SIZE,
 };
 
 /// A `Send + Sync` handle to a running orchestrator.
@@ -28,8 +34,12 @@ pub struct Orchestrator {
     sessions: Arc<SessionStore>,
     command_tx: Sender<Command>,
     worker: Mutex<Option<WorkerHandle>>,
-    checkpoint_sessions:
-        Box<dyn Fn(&SessionStore) -> Result<(), SessionRegistryCheckpointError> + Send + Sync>,
+    pending_runtime_removals: Arc<Mutex<HashSet<SessionId>>>,
+    checkpoint_sessions: Box<
+        dyn Fn(&SessionStore, Option<SessionId>) -> Result<(), SessionRegistryCheckpointError>
+            + Send
+            + Sync,
+    >,
 }
 
 impl Orchestrator {
@@ -55,14 +65,73 @@ impl Orchestrator {
     {
         let persistence_root = persistence_dir.trim_end_matches('/');
         let checkpoint_dir = format!("{persistence_root}/{CHECKPOINT_DIR}");
+        let checkpoints = SharedCheckpointCoordinator::new(
+            FsCheckpointStorage::<Filesystem>::new(checkpoint_dir),
+            CHECKPOINT_INTERVAL,
+            CHECKPOINT_HISTORY,
+        )
+        .map_err(|error| match error {
+            CheckpointCoordinatorInitError::Storage(source) => {
+                OrchestratorBuildError::CheckpointStorage(source)
+            }
+            CheckpointCoordinatorInitError::InvalidCheckpointInterval
+            | CheckpointCoordinatorInitError::InvalidHistoryCheckpoints => {
+                unreachable!("fixed checkpoint coordinator policy is valid")
+            }
+        })?;
+        Self::new_with_checkpoint_coordinator::<Filesystem, Http, Timer, Thread, Executor>(
+            tools,
+            checkpoints,
+            llm_config,
+            persistence_dir,
+            skill_roots,
+        )
+    }
+
+    #[doc(hidden)]
+    pub fn new_with_checkpoint_coordinator<Filesystem, Http, Timer, Thread, Executor>(
+        tools: Arc<ToolRegistry>,
+        checkpoints: SharedCheckpointCoordinator<FsCheckpointStorage<Filesystem>>,
+        llm_config: ClawApiConfig,
+        persistence_dir: String,
+        skill_roots: Vec<String>,
+    ) -> Result<Self, OrchestratorBuildError>
+    where
+        Filesystem: ClawFs + 'static,
+        Http: ClawHttp + Default + 'static,
+        Timer: ClawTimer + Default + 'static,
+        Thread: ClawThread,
+        Executor: ClawExecutor + 'static,
+    {
+        let persistence_root = persistence_dir.trim_end_matches('/');
+        let checkpoint_dir = format!("{persistence_root}/{CHECKPOINT_DIR}");
         let session_state = load_session_store_state::<Filesystem>(&checkpoint_dir)?;
         let sessions = Arc::new(SessionStore::new(session_state));
         let (command_tx, command_rx) = async_channel::unbounded();
         let (ready_tx, ready_rx) = mpsc::channel();
-        let checkpoint_sessions_dir = checkpoint_dir.clone();
-        let checkpoint_sessions = Box::new(move |sessions: &SessionStore| {
-            checkpoint_session_registry::<Filesystem>(&checkpoint_sessions_dir, sessions)
-        });
+        let checkpoint_sessions_coordinator = checkpoints.clone();
+        let pending_runtime_removals = Arc::new(Mutex::new(HashSet::new()));
+        let checkpoint_pending_removals = Arc::clone(&pending_runtime_removals);
+        let checkpoint_sessions = Box::new(
+            move |sessions: &SessionStore, removed_session: Option<SessionId>| {
+                let mut pending = checkpoint_pending_removals
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Some(session) = removed_session {
+                    pending.insert(session);
+                }
+                let removed_sessions = pending.iter().copied().collect::<Vec<_>>();
+                let result = checkpoint_session_registry::<Filesystem>(
+                    &checkpoint_sessions_coordinator,
+                    sessions,
+                    &removed_sessions,
+                );
+                if result.is_ok() {
+                    pending.clear();
+                }
+                result
+            },
+        );
 
         let sessions_engine = Arc::clone(&sessions);
         let worker = Thread::spawn_worker(
@@ -73,6 +142,7 @@ impl Orchestrator {
             move || {
                 run_engine::<Filesystem, Http, Timer, Executor>(
                     tools,
+                    checkpoints,
                     llm_config,
                     persistence_dir,
                     checkpoint_dir,
@@ -89,6 +159,7 @@ impl Orchestrator {
                 sessions,
                 command_tx,
                 worker: Mutex::new(Some(worker)),
+                pending_runtime_removals,
                 checkpoint_sessions,
             }),
             Ok(Err(error)) => {
@@ -168,7 +239,7 @@ impl Orchestrator {
         let span = tracing::info_span!("session.create");
         let _enter = span.enter();
         let session = self.sessions.create();
-        if let Err(error) = (self.checkpoint_sessions)(&self.sessions) {
+        if let Err(error) = (self.checkpoint_sessions)(&self.sessions, None) {
             tracing::error!(name: "checkpoint_failed", target = "session_registry", error = %error);
         }
         tracing::info!(name: "created", session = %session);
@@ -211,7 +282,7 @@ impl Orchestrator {
             })?;
         match ack_rx.recv_blocking() {
             Ok(Ok(())) => {
-                if let Err(error) = (self.checkpoint_sessions)(&self.sessions) {
+                if let Err(error) = (self.checkpoint_sessions)(&self.sessions, Some(session_id)) {
                     tracing::error!(
                         name: "checkpoint_failed",
                         target = "session_registry",
@@ -244,6 +315,20 @@ impl Orchestrator {
 
 impl Drop for Orchestrator {
     fn drop(&mut self) {
+        let has_pending_removals = !self
+            .pending_runtime_removals
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_empty();
+        if has_pending_removals {
+            if let Err(error) = (self.checkpoint_sessions)(&self.sessions, None) {
+                tracing::error!(
+                    name: "checkpoint_failed",
+                    target = "session_registry_shutdown",
+                    error = %error
+                );
+            }
+        }
         let _ = self.command_tx.try_send(Command::Stop);
         if let Some(worker) = self
             .worker

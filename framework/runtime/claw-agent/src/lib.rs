@@ -9,8 +9,9 @@ use std::sync::Arc;
 
 use claw_api::ClawApiConfig;
 use claw_checkpoint::{
-    BatchId, BatchWrite, CheckpointStorage, CheckpointStorageError, CheckpointWrite, DurablePart,
-    DurablePartError, FsCheckpointStorage, LoadCheckpointError, PartWrite,
+    BatchId, CheckpointCoordinatorInitError, CheckpointStorage, CheckpointStorageError,
+    DurableBatchSnapshot, DurablePart, DurablePartError, DurablePartSnapshot, FsCheckpointStorage,
+    LoadCheckpointError, SharedCheckpointCoordinator,
 };
 pub use claw_core::{
     AttachmentId, AttachmentKind, AttachmentRecord, AttachmentRef, IterationId, Message,
@@ -32,6 +33,8 @@ const CHECKPOINT_DIR: &str = "checkpoint";
 const TOOL_REGISTRY_BATCH: &str = "tool-registry";
 const TOOL_REGISTRY_BATCH_ID: BatchId = BatchId::new(1);
 const TOOL_REGISTRY_PART: &str = "tool-registry";
+const CHECKPOINT_INTERVAL: u64 = 30;
+const CHECKPOINT_HISTORY: u64 = 2;
 
 /// Explicit storage root for an [`AgentSystem`], plus the skill roots the agent
 /// factory scans to populate every agent's skill catalog.
@@ -65,6 +68,9 @@ pub enum AgentError {
     /// Checkpoint storage metadata could not be read or written.
     #[error("checkpoint storage failed: {0}")]
     CheckpointStorage(#[from] CheckpointStorageError),
+    /// The shared checkpoint coordinator could not be initialized.
+    #[error("checkpoint storage failed: coordinator initialization failed: {0}")]
+    CheckpointCoordinatorInit(#[from] CheckpointCoordinatorInitError),
     /// A checkpoint exists but cannot be loaded.
     #[error("checkpoint load failed: {0}")]
     CheckpointLoad(#[from] LoadCheckpointError),
@@ -129,25 +135,35 @@ where
         } else {
             format!("{persistence_root}/{CHECKPOINT_DIR}")
         };
+        let checkpoints = SharedCheckpointCoordinator::new(
+            FsCheckpointStorage::<Filesystem>::new(checkpoint_root.clone()),
+            CHECKPOINT_INTERVAL,
+            CHECKPOINT_HISTORY,
+        )?;
         let tools = Arc::new(load_tool_registry::<Filesystem>(&checkpoint_root)?);
-        tools.set_checkpoint_hook(move |state, hint| {
-            let mut storage = FsCheckpointStorage::<Filesystem>::new(checkpoint_root.clone());
-            let step = storage.next_step()?;
-            storage.write_checkpoint(CheckpointWrite {
-                step,
-                batches: vec![BatchWrite {
-                    batch: (TOOL_REGISTRY_BATCH, TOOL_REGISTRY_BATCH_ID),
-                    writes: vec![PartWrite {
-                        name: TOOL_REGISTRY_PART,
-                        state,
-                        hint,
-                    }],
-                }],
-            })?;
+        let tool_checkpoints = checkpoints.clone();
+        tools.set_checkpoint_hook(move |generation, state, hint| {
+            tool_checkpoints.checkpoint(vec![DurableBatchSnapshot::new(
+                TOOL_REGISTRY_BATCH,
+                TOOL_REGISTRY_BATCH_ID,
+                vec![DurablePartSnapshot::new(
+                    TOOL_REGISTRY_PART,
+                    generation,
+                    state,
+                    hint,
+                )],
+            )])?;
             Ok(())
         });
-        let orchestrator = Orchestrator::new::<Filesystem, Http, Timer, Thread, Executor>(
+        let orchestrator = Orchestrator::new_with_checkpoint_coordinator::<
+            Filesystem,
+            Http,
+            Timer,
+            Thread,
+            Executor,
+        >(
             Arc::clone(&tools),
+            checkpoints,
             llm_config,
             persistence.persistence_root,
             persistence.skill_roots,

@@ -7,7 +7,7 @@ use std::ffi::CString;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{mpsc, Arc, Mutex, MutexGuard};
 use std::task::{Wake, Waker};
 use std::time::Duration;
 
@@ -16,7 +16,7 @@ use claw_agent::{
     SessionControlError, SessionEvent, SessionEventStream, SessionId,
 };
 use claw_api::{BackendKind, ClawApiConfig};
-use claw_interface::{Cancel, ClawTimer};
+use claw_interface::{Cancel, ClawThread, ClawTimer, CoreAffinity, Priority};
 use claw_log::{LevelFilter, LogOutput, TracingConfig};
 use claw_sys::{EspIdfExecutor, EspIdfFs, EspIdfHttp, EspIdfThread, EspIdfTimer};
 
@@ -37,6 +37,8 @@ use crate::tool::register_capability_tools;
 /// directly here and driven concurrently: every open session has one event
 /// stream while the FFI thread only enqueues commands and drains events.
 type DeviceAgent = AgentSystem<EspIdfFs, EspIdfHttp, EspIdfTimer>;
+
+const AGENT_BOOTSTRAP_STACK_SIZE: usize = 64 * 1024;
 
 static RUNTIME: AtomicPtr<RuntimeController> = AtomicPtr::new(ptr::null_mut());
 static RUNTIME_LOCK: Mutex<()> = Mutex::new(());
@@ -262,17 +264,39 @@ fn start() -> Result<(), CabiError> {
     if runtime.agent.is_some() {
         return Ok(());
     }
-    // `AgentSystem::new` spawns the orchestrator's drive worker (via `EspIdfThread`)
-    // and blocks until it reports readiness, so a build failure surfaces here.
-    let agent =
-        AgentSystem::<EspIdfFs, EspIdfHttp, EspIdfTimer>::new::<EspIdfThread, EspIdfExecutor>(
-            runtime.config.api.clone(),
-            runtime.config.persistence.clone(),
-        )?;
-    register_capability_tools(agent.tool_registry())?;
-    agent.start_all()?;
+
+    // Capability registration checkpoints every inserted tool. Keep that deep
+    // serde/filesystem call chain off ESP-IDF's small `main` task stack.
+    let api = runtime.config.api.clone();
+    let persistence = runtime.config.persistence.clone();
+    let (result_tx, result_rx) = mpsc::sync_channel(1);
+    let worker = EspIdfThread::spawn_worker(
+        "claw_bootstrap",
+        AGENT_BOOTSTRAP_STACK_SIZE,
+        Priority::Normal,
+        CoreAffinity::Any,
+        move || {
+            let result = build_agent(api, persistence);
+            let _ = result_tx.send(result);
+        },
+    )
+    .map_err(CabiError::BootstrapSpawn)?;
+
+    let result = result_rx.recv();
+    worker.join();
+    let agent = result.map_err(|_| CabiError::BootstrapExited)??;
     runtime.agent = Some(agent);
     Ok(())
+}
+
+fn build_agent(
+    api: ClawApiConfig,
+    persistence: AgentPersistenceConfig,
+) -> Result<DeviceAgent, CabiError> {
+    let agent = DeviceAgent::new::<EspIdfThread, EspIdfExecutor>(api, persistence)?;
+    register_capability_tools(agent.tool_registry())?;
+    agent.start_all()?;
+    Ok(agent)
 }
 
 fn stop() -> Result<(), CabiError> {
@@ -668,8 +692,17 @@ fn lock_runtime() -> MutexGuard<'static, ()> {
 fn ffi_result(op: impl FnOnce() -> Result<(), CabiError>) -> EspErr {
     match catch_unwind(AssertUnwindSafe(op)) {
         Ok(Ok(())) => ESP_OK,
-        Ok(Err(error)) => error.esp_err(),
-        Err(_) => ESP_FAIL,
+        Ok(Err(error)) => {
+            let esp_err = error.esp_err();
+            if error.should_log() {
+                tracing::error!(target: "claw_cabi", error = %error, "C ABI call failed");
+            }
+            esp_err
+        }
+        Err(_) => {
+            tracing::error!(target: "claw_cabi", "C ABI call panicked");
+            ESP_FAIL
+        }
     }
 }
 
@@ -685,6 +718,10 @@ enum CabiError {
     NotFound,
     #[error("timeout")]
     Timeout,
+    #[error("failed to spawn agent bootstrap worker: {0}")]
+    BootstrapSpawn(#[source] std::io::Error),
+    #[error("agent bootstrap worker exited before returning a result")]
+    BootstrapExited,
     #[error(transparent)]
     Agent(#[from] AgentError),
     #[error(transparent)]
@@ -694,6 +731,17 @@ enum CabiError {
 }
 
 impl CabiError {
+    fn should_log(&self) -> bool {
+        matches!(
+            self,
+            Self::BootstrapSpawn(_)
+                | Self::BootstrapExited
+                | Self::Agent(_)
+                | Self::Tool(_)
+                | Self::CapTool(_)
+        )
+    }
+
     fn esp_err(&self) -> EspErr {
         match self {
             Self::InvalidArgument => ESP_ERR_INVALID_ARG,
@@ -701,7 +749,11 @@ impl CabiError {
             Self::InvalidSize => ESP_ERR_INVALID_SIZE,
             Self::NotFound => ESP_ERR_NOT_FOUND,
             Self::Timeout => ESP_ERR_TIMEOUT,
-            Self::Agent(_) | Self::Tool(_) | Self::CapTool(_) => ESP_FAIL,
+            Self::BootstrapSpawn(_)
+            | Self::BootstrapExited
+            | Self::Agent(_)
+            | Self::Tool(_)
+            | Self::CapTool(_) => ESP_FAIL,
         }
     }
 }

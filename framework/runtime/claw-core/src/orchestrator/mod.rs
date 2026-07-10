@@ -134,6 +134,8 @@ pub struct SessionEventStream {
 /// device agent worker's budget.
 const ENGINE_WORKER_STACK_SIZE: usize = 64 * 1024;
 const CHECKPOINT_DIR: &str = "checkpoint";
+const CHECKPOINT_INTERVAL: u64 = 1;
+const CHECKPOINT_HISTORY: u64 = 2;
 const ENGINE_BATCH: &str = "engine";
 const ENGINE_BATCH_ID: BatchId = BatchId::new(1);
 const ENGINE_PART: &str = "engine";

@@ -196,6 +196,7 @@ dependencies = [
  "futures-lite 2.6.1",
  "serde_json",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]
@@ -206,6 +207,7 @@ dependencies = [
  "claw-utils",
  "serde",
  "serde_json",
+ "tempdir",
  "thiserror",
 ]
 

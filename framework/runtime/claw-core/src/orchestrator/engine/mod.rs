@@ -15,7 +15,7 @@ use std::sync::{mpsc, Arc};
 
 use async_channel::Receiver;
 use claw_api::ClawApiConfig;
-use claw_checkpoint::DurableState;
+use claw_checkpoint::{DurableState, FsCheckpointStorage, SharedCheckpointCoordinator};
 use claw_interface::{ClawExecutor, ClawFs, ClawHttp, ClawTimer};
 use claw_tool::ToolRegistry;
 
@@ -35,6 +35,7 @@ pub(super) type DriveFuture = Pin<Box<dyn Future<Output = ()>>>;
 
 pub(super) fn run_engine<Filesystem, Http, Timer, Executor>(
     tools: Arc<ToolRegistry>,
+    checkpoints: SharedCheckpointCoordinator<FsCheckpointStorage<Filesystem>>,
     llm_config: ClawApiConfig,
     persistence_dir: String,
     checkpoint_dir: String,
@@ -57,6 +58,7 @@ pub(super) fn run_engine<Filesystem, Http, Timer, Executor>(
     };
     let engine = match Engine::<Filesystem, Http, Timer>::new(
         tools,
+        checkpoints,
         llm_config,
         persistence_dir,
         checkpoint_dir,
@@ -82,7 +84,7 @@ where
 {
     pub(super) factory: Arc<FsAgentFactory<Filesystem, Http, Timer>>,
     approval_llm_config: ClawApiConfig,
-    pub(super) checkpoint_dir: String,
+    pub(super) checkpoints: SharedCheckpointCoordinator<FsCheckpointStorage<Filesystem>>,
     pub(super) instances:
         RefCell<HashMap<SessionId, OrchestratorInstance<Filesystem, Http, Timer>>>,
     pub(super) drives: RefCell<HashMap<SessionId, SessionDrive>>,
@@ -98,6 +100,7 @@ where
 {
     fn new(
         tools: Arc<ToolRegistry>,
+        checkpoints: SharedCheckpointCoordinator<FsCheckpointStorage<Filesystem>>,
         llm_config: ClawApiConfig,
         persistence_dir: String,
         checkpoint_dir: String,
@@ -121,7 +124,7 @@ where
         Ok(Self {
             factory,
             approval_llm_config: llm_config,
-            checkpoint_dir,
+            checkpoints,
             instances: RefCell::new(instances),
             drives: RefCell::new(drives),
             sessions,

@@ -169,6 +169,14 @@ impl<F: ClawFs> CheckpointStorage for FsCheckpointStorage<F> {
         &mut self,
         checkpoint: CheckpointWrite<'_>,
     ) -> Result<(), CheckpointStorageError> {
+        self.write_checkpoint_with_removals(checkpoint, &[])
+    }
+
+    fn write_checkpoint_with_removals(
+        &mut self,
+        checkpoint: CheckpointWrite<'_>,
+        removed_batches: &[crate::BatchKey],
+    ) -> Result<(), CheckpointStorageError> {
         self.validate_root()?;
         if let Some(latest) = self.latest_step()? {
             if checkpoint.step <= latest {
@@ -190,6 +198,21 @@ impl<F: ClawFs> CheckpointStorage for FsCheckpointStorage<F> {
         })?;
 
         let mut materialized = self.materialized_index()?;
+        let written_batches = checkpoint
+            .batches
+            .iter()
+            .map(|batch| batch.batch)
+            .collect::<BTreeSet<_>>();
+        for removed in removed_batches {
+            if written_batches.contains(removed) {
+                return Err(CheckpointStorageError::ConflictingBatchMutation {
+                    batch: removed.0,
+                    id: removed.1,
+                });
+            }
+            let name = checked_segment(removed.0)?;
+            materialized.remove(&(name.to_owned(), removed.1));
+        }
         for batch in checkpoint.batches {
             apply_batch_write::<F>(&self.root, checkpoint.step, batch, &mut materialized)?;
         }
@@ -252,11 +275,14 @@ impl<F: ClawFs> CheckpointStorage for FsCheckpointStorage<F> {
             return Ok(());
         };
 
+        let original_history = manifest.history.clone();
         manifest.history.sort_unstable();
         manifest.history.dedup();
         let keep = usize::try_from(max_history).unwrap_or(usize::MAX);
         if manifest.history.len() <= keep {
-            self.write_manifest(&manifest)?;
+            if manifest.history != original_history {
+                self.write_manifest(&manifest)?;
+            }
             return Ok(());
         }
 
@@ -269,21 +295,28 @@ impl<F: ClawFs> CheckpointStorage for FsCheckpointStorage<F> {
         let removed_objects = self.referenced_objects(&removed)?;
         self.write_manifest(&manifest)?;
 
-        for step in removed {
-            let index_path = join_path(&self.step_dir(step), INDEX_FILE);
+        let mut cleanup_dirs = BTreeSet::new();
+        for step in &removed {
+            let step_dir = self.step_dir(*step);
+            let index_path = join_path(&step_dir, INDEX_FILE);
             F::remove(&index_path).map_err(|source| CheckpointStorageError::Fs {
                 path: index_path,
                 source,
             })?;
+            cleanup_dirs.insert(step_dir);
         }
         for object in removed_objects {
             if retained_objects.contains(&object) {
                 continue;
             }
             let path = self.object_path(&object);
-            F::remove(&path).map_err(|source| CheckpointStorageError::Fs { path, source })?;
+            F::remove(&path).map_err(|source| CheckpointStorageError::Fs {
+                path: path.clone(),
+                source,
+            })?;
+            collect_parent_dirs(&self.root, &path, &mut cleanup_dirs);
         }
-        Ok(())
+        self.remove_empty_dirs(cleanup_dirs)
     }
 }
 
@@ -354,20 +387,45 @@ impl<F: ClawFs> FsCheckpointStorage<F> {
         let mut objects = BTreeSet::new();
         for step in steps {
             let index = self.read_index(*step)?;
-            for batch in index.batches {
-                for part in batch.parts {
-                    objects.insert(part.object);
-                    if let PartEncoding::AppendDelta { base_object, .. } = part.encoding {
-                        objects.insert(base_object);
-                    }
-                }
-            }
+            collect_index_objects(index, &mut objects);
         }
         Ok(objects)
+    }
+
+    fn remove_empty_dirs(
+        &self,
+        cleanup_dirs: BTreeSet<String>,
+    ) -> Result<(), CheckpointStorageError> {
+        let mut cleanup_dirs = cleanup_dirs.into_iter().collect::<Vec<_>>();
+        cleanup_dirs.sort_by_key(|path| std::cmp::Reverse(path.len()));
+        for path in cleanup_dirs {
+            let entries = match F::list_dir(&path) {
+                Ok(entries) => entries,
+                Err(FsError::NotFound) => continue,
+                Err(source) => {
+                    return Err(CheckpointStorageError::Fs { path, source });
+                }
+            };
+            if entries.is_empty() {
+                F::remove(&path).map_err(|source| CheckpointStorageError::Fs { path, source })?;
+            }
+        }
+        Ok(())
     }
 }
 
 type MaterializedIndex = BTreeMap<(String, BatchId), BTreeMap<String, PartIndex>>;
+
+fn collect_index_objects(index: CheckpointIndex, objects: &mut BTreeSet<String>) {
+    for batch in index.batches {
+        for part in batch.parts {
+            objects.insert(part.object);
+            if let PartEncoding::AppendDelta { base_object, .. } = part.encoding {
+                objects.insert(base_object);
+            }
+        }
+    }
+}
 
 fn apply_batch_write<F: ClawFs>(
     root: &str,
@@ -584,6 +642,17 @@ fn join_path(parent: &str, child: &str) -> String {
         child.to_owned()
     } else {
         format!("{parent}/{child}")
+    }
+}
+
+fn collect_parent_dirs(root: &str, path: &str, dirs: &mut BTreeSet<String>) {
+    let mut current = path;
+    while let Some((parent, _)) = current.rsplit_once('/') {
+        if parent.is_empty() || parent == root {
+            break;
+        }
+        dirs.insert(parent.to_owned());
+        current = parent;
     }
 }
 

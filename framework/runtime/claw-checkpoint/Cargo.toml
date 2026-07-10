@@ -16,4 +16,5 @@ serde_json = "1"
 thiserror = "2"
 
 [dev-dependencies]
-claw-interface = { path = "../claw-interface", features = ["memfs"] }
+claw-interface = { path = "../claw-interface", features = ["diskfs", "memfs"] }
+tempdir = "0.3"

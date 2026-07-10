@@ -4,8 +4,9 @@ use std::fmt;
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use claw_checkpoint::{
-    ChangePatternHint, CheckpointStorageError, DurablePart, DurablePartError, DurableState,
-    DurableStateCodec, PartGeneration, PartStateBlob, PartStateSlice, StorageHint, StorageSizeHint,
+    ChangePatternHint, CheckpointError, CheckpointStorageError, DurablePart, DurablePartError,
+    DurableState, DurableStateCodec, PartGeneration, PartStateBlob, PartStateSlice, StorageHint,
+    StorageSizeHint,
 };
 use serde::{Deserialize, Serialize};
 
@@ -14,7 +15,11 @@ use super::tool::Tool;
 
 pub type ToolRegistryVersion = u64;
 type CheckpointHook = Arc<
-    dyn Fn(PartStateBlob<'static>, StorageHint) -> Result<(), ToolRegistryCheckpointError>
+    dyn Fn(
+            PartGeneration,
+            PartStateBlob<'static>,
+            StorageHint,
+        ) -> Result<(), ToolRegistryCheckpointError>
         + Send
         + Sync,
 >;
@@ -114,8 +119,9 @@ impl ToolRegistryInner {
         let Some(hook) = self.checkpoint_hook.as_ref() else {
             return Ok(());
         };
+        let generation = self.state.generation();
         let state = self.state.export_state()?.into_owned();
-        hook(state, TOOL_REGISTRY_STORAGE_HINT)
+        hook(generation, state, TOOL_REGISTRY_STORAGE_HINT)
     }
 
     fn checkpoint_or_restore(
@@ -181,6 +187,8 @@ pub enum ToolRegistryError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ToolRegistryCheckpointError {
+    #[error("checkpoint storage failed: coordinator failed: {0}")]
+    Coordinator(#[from] CheckpointError),
     #[error("checkpoint storage failed: {0}")]
     Storage(#[from] CheckpointStorageError),
     #[error("checkpoint durable part failed: {0}")]
@@ -275,7 +283,11 @@ impl ToolRegistry {
     #[doc(hidden)]
     pub fn set_checkpoint_hook(
         &self,
-        hook: impl Fn(PartStateBlob<'static>, StorageHint) -> Result<(), ToolRegistryCheckpointError>
+        hook: impl Fn(
+                PartGeneration,
+                PartStateBlob<'static>,
+                StorageHint,
+            ) -> Result<(), ToolRegistryCheckpointError>
             + Send
             + Sync
             + 'static,

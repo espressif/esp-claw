@@ -6,8 +6,8 @@ use std::borrow::Cow;
 use std::sync::{Mutex, MutexGuard};
 
 use claw_checkpoint::{
-    ChangePatternHint, DurablePart, DurablePartError, DurableState, DurableStateCodec,
-    PartGeneration, PartStateBlob, PartStateSlice, StorageHint, StorageSizeHint,
+    ChangePatternHint, DurablePart, DurablePartError, DurablePartSnapshot, DurableState,
+    DurableStateCodec, PartGeneration, PartStateBlob, PartStateSlice, StorageHint, StorageSizeHint,
 };
 use serde::{Deserialize, Serialize};
 
@@ -101,6 +101,25 @@ impl SessionStore {
             .get()
             .sessions
             .contains(&session_id)
+    }
+
+    pub(crate) fn with_durable_snapshot<T>(
+        &self,
+        use_snapshot: impl FnOnce(DurablePartSnapshot) -> T,
+    ) -> Result<T, DurablePartError> {
+        let registry = self.lock_registry();
+        let generation = registry.state.generation();
+        let state = registry.state.export_state()?.into_owned();
+        let snapshot = DurablePartSnapshot::new(
+            "session-store",
+            generation,
+            state,
+            StorageHint {
+                size: StorageSizeHint::Small,
+                change: ChangePatternHint::Arbitrary,
+            },
+        );
+        Ok(use_snapshot(snapshot))
     }
 }
 

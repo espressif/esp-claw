@@ -74,6 +74,9 @@ mod espidf_driver {
     /// `esp_http_client_perform` return when the non-blocking request is still
     /// in progress (`ESP_ERR_HTTP_BASE + 7`, see `esp_http_client.h`).
     const ESP_ERR_HTTP_EAGAIN: c_int = 0x7007;
+    const ERRNO_NONE: c_int = 0;
+    const ERRNO_EAGAIN: c_int = 11;
+    const ERRNO_EINPROGRESS: c_int = 115;
 
     // --- esp_http_client FFI ------------------------------------------------
     #[repr(C)]
@@ -165,6 +168,7 @@ mod espidf_driver {
         fn esp_http_client_reset_redirect_counter(client: *mut c_void) -> c_int;
         fn esp_http_client_cancel_request(client: *mut c_void) -> c_int;
         fn esp_http_client_perform(client: *mut c_void) -> c_int;
+        fn esp_http_client_get_errno(client: *mut c_void) -> c_int;
         fn esp_http_client_get_status_code(client: *mut c_void) -> c_int;
         fn esp_http_client_close(client: *mut c_void) -> c_int;
         fn esp_http_client_cleanup(client: *mut c_void) -> c_int;
@@ -547,11 +551,22 @@ mod espidf_driver {
 
         /// Run one non-blocking transfer step. `Ok(None)` means the transfer is
         /// still in progress (caller should yield and poll again); `Ok(Some(_))`
-        /// is the finished response.
+        /// is the finished response. An EAGAIN with a non-pending errno means
+        /// the underlying connection has failed.
         fn perform_step(&self) -> Result<Option<HttpResponse>, HttpError> {
             let err = unsafe { esp_http_client_perform(self.raw) };
             if err == ESP_ERR_HTTP_EAGAIN {
-                return Ok(None);
+                let transport_errno = unsafe { esp_http_client_get_errno(self.raw) };
+                if matches!(
+                    transport_errno,
+                    ERRNO_NONE | ERRNO_EAGAIN | ERRNO_EINPROGRESS
+                ) {
+                    return Ok(None);
+                }
+                return Err(HttpError::RequestFailed(HttpRequestFailure::driver(
+                    "esp_http_client_perform",
+                    format!("async transport errno={transport_errno}"),
+                )));
             }
             if err != ESP_OK {
                 return Err(HttpError::RequestFailed(HttpRequestFailure::driver(
@@ -588,6 +603,15 @@ mod espidf_driver {
             if matches!(error, HttpError::RequestFailed(_)) {
                 close_raw_connection(self.raw);
             }
+        }
+
+        /// Replace a failed persistent client with a fresh handle. This keeps
+        /// stale keep-alive recovery inside the HTTP transport.
+        fn reconnect(&mut self, initial_url: &str) -> Result<(), HttpError> {
+            let replacement = Self::new(initial_url)?;
+            let failed = std::mem::replace(self, replacement);
+            drop(failed);
+            Ok(())
         }
 
         /// Blocking compatibility path over the async-mode client. This keeps
@@ -637,31 +661,48 @@ mod espidf_driver {
             if cancel.is_cancelled() {
                 return Err(HttpError::Aborted);
             }
-            let _body = self.prepare_request(request, core::ptr::null())?;
             let deadline = Deadline::new(request.timeout_ms);
-            let mut active = ActiveRequestGuard::new(self.raw);
-            loop {
+            let mut reconnected = false;
+            'connection: loop {
                 if cancel.is_cancelled() {
-                    active.cancel();
                     return Err(HttpError::Aborted);
                 }
                 if deadline.expired() {
-                    active.cancel();
                     return Err(timeout_error(request.timeout_ms));
                 }
-                match self.perform_step() {
-                    Ok(Some(response)) => {
-                        active.finish();
-                        return Ok(response);
+                let body = self.prepare_request(request, core::ptr::null())?;
+                let mut active = ActiveRequestGuard::new(self.raw);
+                loop {
+                    if cancel.is_cancelled() {
+                        active.cancel();
+                        return Err(HttpError::Aborted);
                     }
-                    Ok(None) => {
-                        active.mark_started();
-                        yield_once().await;
+                    if deadline.expired() {
+                        active.cancel();
+                        return Err(timeout_error(request.timeout_ms));
                     }
-                    Err(error) => {
-                        self.close_failed_connection(&error);
-                        active.finish();
-                        return Err(error);
+                    match self.perform_step() {
+                        Ok(Some(response)) => {
+                            active.finish();
+                            return Ok(response);
+                        }
+                        Ok(None) => {
+                            active.mark_started();
+                            yield_once().await;
+                        }
+                        Err(error) => {
+                            if !reconnected && matches!(error, HttpError::RequestFailed(_)) {
+                                active.finish();
+                                drop(body);
+                                drop(active);
+                                self.reconnect(request.url)?;
+                                reconnected = true;
+                                continue 'connection;
+                            }
+                            self.close_failed_connection(&error);
+                            active.finish();
+                            return Err(error);
+                        }
                     }
                 }
             }
@@ -675,31 +716,47 @@ mod espidf_driver {
             if cancel.is_cancelled() {
                 return Err(HttpError::Aborted);
             }
-            self.prepare_get_request(request)?;
             let deadline = Deadline::new(request.timeout_ms);
-            let mut active = ActiveRequestGuard::new(self.raw);
-            loop {
+            let mut reconnected = false;
+            'connection: loop {
                 if cancel.is_cancelled() {
-                    active.cancel();
                     return Err(HttpError::Aborted);
                 }
                 if deadline.expired() {
-                    active.cancel();
                     return Err(timeout_error(request.timeout_ms));
                 }
-                match self.perform_step() {
-                    Ok(Some(response)) => {
-                        active.finish();
-                        return Ok(response);
+                self.prepare_get_request(request)?;
+                let mut active = ActiveRequestGuard::new(self.raw);
+                loop {
+                    if cancel.is_cancelled() {
+                        active.cancel();
+                        return Err(HttpError::Aborted);
                     }
-                    Ok(None) => {
-                        active.mark_started();
-                        yield_once().await;
+                    if deadline.expired() {
+                        active.cancel();
+                        return Err(timeout_error(request.timeout_ms));
                     }
-                    Err(error) => {
-                        self.close_failed_connection(&error);
-                        active.finish();
-                        return Err(error);
+                    match self.perform_step() {
+                        Ok(Some(response)) => {
+                            active.finish();
+                            return Ok(response);
+                        }
+                        Ok(None) => {
+                            active.mark_started();
+                            yield_once().await;
+                        }
+                        Err(error) => {
+                            if !reconnected && matches!(error, HttpError::RequestFailed(_)) {
+                                active.finish();
+                                drop(active);
+                                self.reconnect(request.url)?;
+                                reconnected = true;
+                                continue 'connection;
+                            }
+                            self.close_failed_connection(&error);
+                            active.finish();
+                            return Err(error);
+                        }
                     }
                 }
             }

@@ -10,6 +10,7 @@ pub claw_tool::ToolError::NotFound(alloc::string::String)
 impl core::convert::From<claw_tool::ToolError> for claw_tool::ToolInvokeError
 pub fn claw_tool::ToolInvokeError::from(claw_tool::ToolError) -> Self
 pub enum claw_tool::ToolRegistryCheckpointError
+pub claw_tool::ToolRegistryCheckpointError::Coordinator(claw_checkpoint::CheckpointError)
 pub claw_tool::ToolRegistryCheckpointError::Part(claw_checkpoint::DurablePartError)
 pub claw_tool::ToolRegistryCheckpointError::Storage(claw_checkpoint::CheckpointStorageError)
 pub enum claw_tool::ToolRegistryError
