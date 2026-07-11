@@ -53,3 +53,4 @@ pages/simulator/public/runtime/*
 # rust
 target/
 output/
+simulator.log

@@ -7,10 +7,13 @@ mod tool;
 mod validate;
 
 pub use registry::{
-    ToolRegistry, ToolRegistryCheckpointError, ToolRegistryError, ToolRegistryVersion,
+    ToolGroup, ToolRegistry, ToolRegistryCheckpointError, ToolRegistryError, ToolRegistryVersion,
 };
 pub use runner::{ApprovalNeeded, ToolGate, ToolRunOutcome, ToolRunner};
-pub use set::{ToolName, ToolSet, ToolSetError, ToolSetHandle};
+pub use set::{
+    ToolCatalogEntry, ToolDiscoveryHandle, ToolGroupCatalog, ToolName, ToolSet, ToolSetError,
+    ToolSetHandle,
+};
 pub use tool::{
     AsyncToolHandler, RawToolInvocation, RetryCount, SyncToolHandler, Tool, ToolError, ToolFuture,
     ToolInvocation, ToolInvokeError, ToolOutput, ToolResult, ToolSpec,

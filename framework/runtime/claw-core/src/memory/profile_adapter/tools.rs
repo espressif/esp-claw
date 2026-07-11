@@ -6,22 +6,26 @@ use claw_interface::ClawFs;
 use claw_memory::{ProfileDocument, ProfileStore};
 use claw_permission::{Action, Resource, RiskClass};
 use claw_tool::{
-    tool_metadata, SyncToolHandler, Tool, ToolError, ToolInvocation, ToolInvokeError, ToolOutput,
-    ToolSpec,
+    tool_metadata, SyncToolHandler, Tool, ToolError, ToolGroup, ToolInvocation, ToolInvokeError,
+    ToolOutput, ToolSpec,
 };
 use serde_json::Value;
 
 /// Build the writable profile tools.
-pub(crate) fn profile_tools<F: ClawFs + 'static>(store: ProfileStore<F>) -> Vec<Tool> {
-    vec![
-        Tool::from_sync(ProfileReadTool {
-            store: store.clone(),
-        }),
-        Tool::from_sync(ProfileReplaceTool {
-            store: store.clone(),
-        }),
-        Tool::from_sync(ProfileClearTool { store }),
-    ]
+pub(crate) fn profile_tools<F: ClawFs + 'static>(store: ProfileStore<F>) -> ToolGroup {
+    ToolGroup::new(
+        "profile",
+        true,
+        [
+            Tool::from_sync(ProfileReadTool {
+                store: store.clone(),
+            }),
+            Tool::from_sync(ProfileReplaceTool {
+                store: store.clone(),
+            }),
+            Tool::from_sync(ProfileClearTool { store }),
+        ],
+    )
 }
 
 struct ProfileReadTool<F: ClawFs + 'static> {

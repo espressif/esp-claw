@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use claw_context::{Block, BlockKind, ContextSink};
 use claw_skill::SkillSet;
-use claw_tool::Tool;
+use claw_tool::ToolGroup;
 
 use super::traits::{ContextAdapter, ContextAdapterInput};
 
@@ -33,8 +33,8 @@ impl ContextAdapter for SkillContextAdapter {
         output.block(Block::new(BlockKind::SkillList, rendered));
     }
 
-    fn tools(&self) -> Vec<Tool> {
-        tools::skill_tools(Arc::clone(&self.skills))
+    fn tools(&self) -> Option<ToolGroup> {
+        Some(tools::skill_tools(Arc::clone(&self.skills)))
     }
 }
 

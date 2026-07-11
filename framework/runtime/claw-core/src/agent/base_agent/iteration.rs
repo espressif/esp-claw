@@ -26,6 +26,7 @@ impl<H: ClawHttp + StreamingHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         if self.state.get().lifecycle == AgentLifecycle::Running {
             let iteration_id = self.state.get_mut().iterations.next();
             let outcome = self.run_iteration(iteration_id, events).await;
+            self.tools.apply_pending_tool_loads();
             self.reduce_outcome(outcome);
             self.drain_control_signals();
             self.drain_inbox();
@@ -50,8 +51,8 @@ impl<H: ClawHttp + StreamingHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         &mut self,
         adapter: Box<dyn ContextAdapter>,
     ) -> Result<(), BaseAgentBuildError> {
-        for tool in adapter.tools() {
-            self.tools.add_tool(tool)?;
+        if let Some(group) = adapter.tools() {
+            self.tools.add_group(group)?;
         }
         self.adapters.push(adapter);
         Ok(())

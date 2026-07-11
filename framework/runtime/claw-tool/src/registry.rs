@@ -14,6 +14,7 @@ use super::set::{ToolName, ToolSet};
 use super::tool::Tool;
 
 pub type ToolRegistryVersion = u64;
+pub type ToolGroupId = String;
 type CheckpointHook = Arc<
     dyn Fn(
             PartGeneration,
@@ -36,9 +37,16 @@ pub struct ToolRegistry {
 #[derive(Default)]
 struct ToolRegistryInner {
     tools: HashMap<ToolName, Tool>,
+    groups: HashMap<ToolGroupId, ToolGroupEntry>,
     state: DurableState<ToolRegistryState>,
     runtime_version: ToolRegistryVersion,
     checkpoint_hook: Option<CheckpointHook>,
+}
+
+#[derive(Clone)]
+struct ToolGroupEntry {
+    default_visibility: bool,
+    tools: Vec<ToolName>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
@@ -62,25 +70,37 @@ impl DurableStateCodec for ToolRegistryState {
 }
 
 impl ToolRegistryInner {
-    fn register_tool(
-        &mut self,
-        name: ToolName,
-        tool: Tool,
-    ) -> Result<(), ToolRegistryCheckpointError> {
+    fn register_group(&mut self, group: ToolGroup) -> Result<(), ToolRegistryCheckpointError> {
         let previous_state = self.state.clone();
         let previous_runtime_version = self.runtime_version;
-        let durable_changed = if self.state.get().tools.contains_key(&name) {
-            false
-        } else {
-            self.state.get_mut().tools.insert(name.clone(), true);
-            true
-        };
-        self.tools.insert(name.clone(), tool);
+        let previous_tools = self.tools.clone();
+        let previous_groups = self.groups.clone();
+        let mut durable_changed = false;
+        let default_visibility = group.default_visibility;
+        let mut names = Vec::with_capacity(group.tools.len());
+
+        for tool in group.tools {
+            let name = tool.name().to_owned();
+            if !self.state.get().tools.contains_key(&name) {
+                self.state.get_mut().tools.insert(name.clone(), true);
+                durable_changed = true;
+            }
+            self.tools.insert(name.clone(), tool);
+            names.push(name);
+        }
+        self.groups.insert(
+            group.id,
+            ToolGroupEntry {
+                default_visibility,
+                tools: names,
+            },
+        );
         self.bump_runtime_version();
         if let Err(error) =
             self.checkpoint_or_restore(durable_changed, previous_state, previous_runtime_version)
         {
-            self.tools.remove(&name);
+            self.tools = previous_tools;
+            self.groups = previous_groups;
             return Err(error);
         }
         Ok(())
@@ -144,17 +164,35 @@ impl ToolRegistryInner {
 
     fn tool_projection(&self) -> ToolProjection {
         let state = self.state.get();
+        if !state.started {
+            return ToolProjection {
+                registry_version: self.runtime_version,
+                tools: Vec::new(),
+            };
+        }
+        // Reverse index each tool to its owning group once, rather than
+        // rescanning every group per tool.
+        let mut group_of: HashMap<&ToolName, (&ToolGroupId, bool)> = HashMap::new();
+        for (group_id, group) in &self.groups {
+            for tool_name in &group.tools {
+                group_of.insert(tool_name, (group_id, group.default_visibility));
+            }
+        }
         let mut tools = Vec::with_capacity(self.tools.len());
         for (name, tool) in &self.tools {
-            let Some(enabled) = state.tools.get(name).copied() else {
+            if state.tools.get(name).copied() != Some(true) {
                 continue;
-            };
-            if state.started && enabled {
-                tools.push(ToolProjectionEntry {
-                    name: name.clone(),
-                    tool: tool.clone(),
-                });
             }
+            let (group_id, default_visibility) = group_of
+                .get(name)
+                .map(|(group_id, visibility)| ((*group_id).clone(), *visibility))
+                .unwrap_or_default();
+            tools.push(ToolProjectionEntry {
+                name: name.clone(),
+                group_id,
+                default_visibility,
+                tool: tool.clone(),
+            });
         }
         ToolProjection {
             registry_version: self.runtime_version,
@@ -170,17 +208,51 @@ pub(super) struct ToolProjection {
 
 pub(super) struct ToolProjectionEntry {
     pub name: ToolName,
+    pub group_id: ToolGroupId,
+    pub default_visibility: bool,
     pub tool: Tool,
+}
+
+pub struct ToolGroup {
+    pub(crate) id: ToolGroupId,
+    pub(crate) default_visibility: bool,
+    pub(crate) tools: Vec<Tool>,
+}
+
+impl ToolGroup {
+    pub fn new(
+        id: impl Into<ToolGroupId>,
+        default_visibility: bool,
+        tools: impl IntoIterator<Item = Tool>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            default_visibility,
+            tools: tools.into_iter().collect(),
+        }
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub(crate) fn into_parts(self) -> (ToolGroupId, bool, Vec<Tool>) {
+        (self.id, self.default_visibility, self.tools)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum ToolRegistryError {
     #[error("tool already exists: {0}")]
     AlreadyExists(ToolName),
+    #[error("tool group already exists: {0}")]
+    GroupAlreadyExists(ToolGroupId),
     #[error("tool not found: {0}")]
     NotFound(ToolName),
     #[error("invalid tool: {0}")]
     InvalidTool(ToolName),
+    #[error("invalid tool group: {0}")]
+    InvalidGroup(ToolGroupId),
     #[error(transparent)]
     Checkpoint(#[from] ToolRegistryCheckpointError),
 }
@@ -200,17 +272,25 @@ impl ToolRegistry {
         Self::default()
     }
 
-    pub fn register(&self, tool: Tool) -> Result<(), ToolRegistryError> {
-        let name = tool.name().to_owned();
+    pub fn register_group(&self, group: ToolGroup) -> Result<(), ToolRegistryError> {
         let mut inner = self.write_state();
-        if name.is_empty() {
-            return Err(ToolRegistryError::InvalidTool(name));
+        if group.id.is_empty() || group.tools.is_empty() {
+            return Err(ToolRegistryError::InvalidGroup(group.id));
         }
-        if inner.tools.contains_key(&name) {
-            return Err(ToolRegistryError::AlreadyExists(name));
+        if inner.groups.contains_key(&group.id) {
+            return Err(ToolRegistryError::GroupAlreadyExists(group.id));
+        }
+        for tool in &group.tools {
+            let name = tool.name();
+            if name.is_empty() {
+                return Err(ToolRegistryError::InvalidTool(name.to_owned()));
+            }
+            if inner.tools.contains_key(name) {
+                return Err(ToolRegistryError::AlreadyExists(name.to_owned()));
+            }
         }
 
-        if let Err(error) = inner.register_tool(name.clone(), tool) {
+        if let Err(error) = inner.register_group(group) {
             return Err(error.into());
         }
         Ok(())
@@ -316,6 +396,7 @@ impl DurablePart for ToolRegistry {
         Ok(Self {
             inner: RwLock::new(ToolRegistryInner {
                 tools: HashMap::new(),
+                groups: HashMap::new(),
                 state: DurableState::restore_state(state)?,
                 runtime_version: 0,
                 checkpoint_hook: None,
@@ -335,6 +416,7 @@ impl fmt::Debug for ToolRegistry {
         formatter
             .debug_struct("ToolRegistry")
             .field("tools", &inner.tools.len())
+            .field("groups", &inner.groups.len())
             .field("started", &state.started)
             .field("runtime_version", &inner.runtime_version)
             .field("durable_generation", &inner.state.generation())

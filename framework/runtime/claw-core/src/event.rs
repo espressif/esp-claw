@@ -9,8 +9,6 @@
 //!
 //! See `.agents/design/sse.md` for the full model (ordering, SSE forward-compat).
 
-use claw_utils::TruncatedText;
-
 use crate::agent::IterationId;
 use crate::session::TurnId;
 
@@ -140,28 +138,11 @@ impl EventSink {
         Self { tx: None }
     }
 
-    /// Whether this sink forwards events. Lets emitters skip building payloads
-    /// they would only drop (e.g. cloning tool names for a subagent).
-    pub(crate) fn is_enabled(&self) -> bool {
-        self.tx.is_some()
-    }
-
     /// Push one event. A no-op on a disabled sink or a closed channel.
     pub(crate) fn emit(&self, event: SessionEvent) {
         if let Some(tx) = &self.tx {
             let _ = tx.try_send(event);
         }
-    }
-
-    /// Emit a [`SessionEvent::Reasoning`] with `full` truncated to
-    /// [`REASONING_EVENT_LIMIT`]. A no-op when disabled or `full` is empty.
-    pub(crate) fn emit_reasoning(&self, full: &str) {
-        if self.tx.is_none() || full.is_empty() {
-            return;
-        }
-        self.emit(SessionEvent::Reasoning {
-            text: TruncatedText::with_limit(full, REASONING_EVENT_LIMIT).to_string(),
-        });
     }
 
     /// Emit one streamed reasoning fragment, enforcing [`REASONING_EVENT_LIMIT`]

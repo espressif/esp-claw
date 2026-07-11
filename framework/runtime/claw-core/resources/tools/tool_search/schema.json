@@ -1,0 +1,12 @@
+{
+  "type": "function",
+  "function": {
+    "name": "tool_search",
+    "description": "List hidden tool groups that can be loaded into the current tool context. Returns group ids, tool names, and short descriptions, but not tool schemas. Use tool_load to make a group's tools callable.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  }
+}

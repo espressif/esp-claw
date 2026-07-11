@@ -29,13 +29,15 @@ mod followup_subagent;
 mod list_spawnable_agents;
 mod list_subagents;
 mod spawn_subagent;
+mod tool_load;
+mod tool_search;
 mod watch_subagent;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use claw_permission::Resource;
-use claw_tool::{Tool, ToolError, ToolInvocation};
+use claw_tool::{Tool, ToolDiscoveryHandle, ToolError, ToolGroup, ToolInvocation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -47,6 +49,8 @@ use followup_subagent::FollowupSubagentTool;
 use list_spawnable_agents::ListSpawnableAgentsTool;
 use list_subagents::ListSubagentsTool;
 use spawn_subagent::SpawnSubagentTool;
+use tool_load::ToolLoadTool;
+use tool_search::ToolSearchTool;
 use watch_subagent::WatchSubagentTool;
 
 // -- Self-control seam ------------------------------------------------------
@@ -116,8 +120,32 @@ fn agent_resource(call: &ToolInvocation<'_>) -> Option<Resource> {
 // -- Tool builders ----------------------------------------------------------
 
 /// Build the agent's built-in tools over a control sink.
-pub(crate) fn internal_tools(sink: ControlSink) -> [Tool; 1] {
-    [Tool::from_sync(EndConversationTool { sink })]
+pub(crate) fn internal_tools(sink: ControlSink) -> ToolGroup {
+    ToolGroup::new(
+        "internal",
+        true,
+        [Tool::from_sync(EndConversationTool { sink })],
+    )
+}
+
+/// Build the always-visible tool-discovery tools over a [`ToolSet`]'s discovery
+/// bridge:
+/// - `tool_search` — list the hidden tool groups that can be loaded;
+/// - `tool_load` — reveal one group's tools for the next turn.
+///
+/// These keep the default tool surface small: the rest of an agent's tools stay
+/// registered and searchable but hidden until `tool_load` reveals them.
+pub(crate) fn discovery_tools(discovery: ToolDiscoveryHandle) -> ToolGroup {
+    ToolGroup::new(
+        "tool_discovery",
+        true,
+        [
+            Tool::from_sync(ToolSearchTool {
+                discovery: discovery.clone(),
+            }),
+            Tool::from_sync(ToolLoadTool { discovery }),
+        ],
+    )
 }
 
 /// Build the subagent-management tools, all scoped by the context's agent
@@ -128,24 +156,28 @@ pub(crate) fn internal_tools(sink: ControlSink) -> [Tool; 1] {
 /// - `subagent_watch` — snapshot one descendant;
 /// - `subagent_delete` — remove one descendant (and its subtree);
 /// - `subagent_followup` — cancel the target's current task and retask it.
-pub(crate) fn subagent_tools(context: Arc<AgentContext>, policy: SpawnPolicy) -> [Tool; 6] {
-    [
-        Tool::from_sync(ListSpawnableAgentsTool {
-            policy: policy.clone(),
-        }),
-        Tool::from_sync(SpawnSubagentTool {
-            context: Arc::clone(&context),
-            policy,
-        }),
-        Tool::from_sync(ListSubagentsTool {
-            context: Arc::clone(&context),
-        }),
-        Tool::from_sync(WatchSubagentTool {
-            context: Arc::clone(&context),
-        }),
-        Tool::from_sync(DeleteSubagentTool {
-            context: Arc::clone(&context),
-        }),
-        Tool::from_sync(FollowupSubagentTool { context }),
-    ]
+pub(crate) fn subagent_tools(context: Arc<AgentContext>, policy: SpawnPolicy) -> ToolGroup {
+    ToolGroup::new(
+        "subagent",
+        true,
+        [
+            Tool::from_sync(ListSpawnableAgentsTool {
+                policy: policy.clone(),
+            }),
+            Tool::from_sync(SpawnSubagentTool {
+                context: Arc::clone(&context),
+                policy,
+            }),
+            Tool::from_sync(ListSubagentsTool {
+                context: Arc::clone(&context),
+            }),
+            Tool::from_sync(WatchSubagentTool {
+                context: Arc::clone(&context),
+            }),
+            Tool::from_sync(DeleteSubagentTool {
+                context: Arc::clone(&context),
+            }),
+            Tool::from_sync(FollowupSubagentTool { context }),
+        ],
+    )
 }

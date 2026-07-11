@@ -6,18 +6,14 @@
 
 use claw_api::RetryPolicy;
 use claw_skill::SkillSet;
-use claw_tool::Tool;
 
 use crate::agent::graph::SpawnPolicy;
 use crate::agent::manifest::{AgentManifest, RetryCount};
 
 /// A fully-resolved agent configuration.
 ///
-/// The factory consumes local tools from this config into a `ToolSet` before
-/// constructing the generic agent.
 pub struct AgentConfig {
     pub(in crate::agent) system_prompt: String,
-    pub(in crate::agent) tools: Vec<Tool>,
     pub(in crate::agent) skills: SkillSet,
     /// Whether this kind may spawn subagents.
     pub(in crate::agent) spawn_enabled: bool,
@@ -30,12 +26,10 @@ pub struct AgentConfig {
 impl AgentConfig {
     pub(in crate::agent) fn from_manifest(
         manifest: &'static AgentManifest,
-        tools: Vec<Tool>,
         skills: SkillSet,
     ) -> Self {
         Self {
             system_prompt: manifest.instructions.trim().to_string(),
-            tools,
             skills,
             spawn_enabled: manifest.spawn_enabled,
             spawn_policy: SpawnPolicy::from_allowed_kinds(manifest.allowed_kinds),
@@ -51,7 +45,4 @@ pub enum AgentConfigError {
     /// No manifest is baked into the firmware for the requested kind.
     #[error("unknown agent kind: {0}")]
     UnknownKind(String),
-    /// A tool name in the manifest has no local binding.
-    #[error("unknown tool: {0}")]
-    UnknownTool(String),
 }

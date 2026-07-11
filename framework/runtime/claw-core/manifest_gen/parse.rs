@@ -20,7 +20,7 @@ pub struct ParsedKind {
     pub allowed_kinds: Vec<String>,
     pub retries: u32,
     pub tool_block_retries: u32,
-    pub tools: Vec<String>,
+    pub tool_groups: Vec<String>,
     pub skills: Vec<String>,
     /// Absolute path to `instructions.md`, embedded via `include_str!` in the
     /// generated code so the bytes are not duplicated into the generated source.
@@ -36,7 +36,7 @@ pub struct ParsedManifest {
     pub allowed_kinds: Vec<String>,
     pub retries: u32,
     pub tool_block_retries: u32,
-    pub tools: Vec<String>,
+    pub tool_groups: Vec<String>,
     pub skills: Vec<String>,
     /// Absolute path to `instructions.md`, embedded via `include_str!` in the
     /// generated code so the bytes are not duplicated into the generated source.
@@ -83,7 +83,7 @@ const SKILLS_DIR_ENTRIES: &[&str] = &["skills.json"];
 /// The shared `common/` base inherited by every kind: default tool/skill
 /// names plus the instructions preamble prepended to each kind's prompt.
 pub struct CommonBase {
-    pub tools: Vec<String>,
+    pub tool_groups: Vec<String>,
     pub skills: Vec<String>,
     /// Absolute path to `common/instructions.md`, the shared preamble.
     pub instructions_path: PathBuf,
@@ -128,7 +128,7 @@ pub fn parse_common(common_dir: &Path) -> Result<CommonBase> {
     }
 
     Ok(CommonBase {
-        tools: tools.tools,
+        tool_groups: tools.tool_groups,
         skills: skills.skills,
         instructions_path,
     })
@@ -179,7 +179,7 @@ pub fn parse_kind(dir: &Path) -> Result<ParsedKind> {
         allowed_kinds: agent.spawn.allowed_kinds,
         retries: agent.runtime.retries,
         tool_block_retries: agent.runtime.tool_block_retries,
-        tools: tools.tools,
+        tool_groups: tools.tool_groups,
         skills: skills.skills,
         instructions_path,
     })

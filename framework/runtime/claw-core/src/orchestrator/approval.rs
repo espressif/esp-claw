@@ -12,8 +12,8 @@ use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawHttp, ClawTimer};
 use claw_permission::{Action, PermissionDecision, RiskClass};
 use claw_tool::{
-    tool_metadata, SyncToolHandler, Tool, ToolError, ToolGate, ToolInvocation, ToolInvokeError,
-    ToolOutput, ToolRegistry, ToolSetError, ToolSpec,
+    tool_metadata, SyncToolHandler, Tool, ToolError, ToolGate, ToolGroup, ToolInvocation,
+    ToolInvokeError, ToolOutput, ToolRegistry, ToolSetError, ToolSpec,
 };
 use serde_json::{json, Value};
 
@@ -200,9 +200,13 @@ where
     let resolution = Arc::new(Mutex::new(None));
     // Approval classification uses an isolated local tool set.
     let mut tools = APPROVAL_TOOL_PARENT.tool_set();
-    tools.add_tool(Tool::from_sync(ResolvePermissionReplyTool::new(
-        Arc::clone(&resolution),
-    )))?;
+    tools.add_group(ToolGroup::new(
+        "permission",
+        true,
+        [Tool::from_sync(ResolvePermissionReplyTool::new(
+            Arc::clone(&resolution),
+        ))],
+    ))?;
     let tools = tools.begin()?;
     let gate = AllowGate;
     let resolver_control = ApprovalResolverControl::new();

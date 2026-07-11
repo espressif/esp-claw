@@ -4,23 +4,27 @@ use std::sync::{Arc, Mutex};
 
 use claw_skill::{SkillError, SkillId, SkillSet};
 use claw_tool::{
-    tool_metadata, SyncToolHandler, Tool, ToolError, ToolInvocation, ToolInvokeError, ToolOutput,
-    ToolSpec,
+    tool_metadata, SyncToolHandler, Tool, ToolError, ToolGroup, ToolInvocation, ToolInvokeError,
+    ToolOutput, ToolSpec,
 };
 use serde_json::Value;
 
 use super::lock_skill_set;
 
-pub(super) fn skill_tools(skills: Arc<Mutex<SkillSet>>) -> Vec<Tool> {
-    vec![
-        Tool::from_sync(ListSkillTool {
-            skills: Arc::clone(&skills),
-        }),
-        Tool::from_sync(ActivateSkillTool {
-            skills: Arc::clone(&skills),
-        }),
-        Tool::from_sync(ReloadSkillsTool { skills }),
-    ]
+pub(super) fn skill_tools(skills: Arc<Mutex<SkillSet>>) -> ToolGroup {
+    ToolGroup::new(
+        "skill",
+        true,
+        [
+            Tool::from_sync(ListSkillTool {
+                skills: Arc::clone(&skills),
+            }),
+            Tool::from_sync(ActivateSkillTool {
+                skills: Arc::clone(&skills),
+            }),
+            Tool::from_sync(ReloadSkillsTool { skills }),
+        ],
+    )
 }
 
 /// Serves the available-skills JSON catalog resolved from the agent's SkillSet.

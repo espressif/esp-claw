@@ -1,7 +1,7 @@
 //! Render parsed manifests into Rust source: a single `MANIFESTS` array of typed
 //! `AgentManifest` values. The output is `include!`-d into `crate::agent::manifest`,
-//! so it references the `AgentManifest`, `AgentKind`, `SkillId`, `ToolName`,
-//! and `RetryCount` types defined/imported there.
+//! so it references the `AgentManifest`, `AgentKind`, `SkillId`, and
+//! `RetryCount` types defined/imported there.
 //!
 //! Generation uses `quote` to build a typed `proc_macro2::TokenStream` rather
 //! than hand-concatenating source strings, so string escaping, slice literals,
@@ -39,7 +39,7 @@ fn render_entry(kind: &ParsedManifest) -> TokenStream {
     let allowed_kinds = kind.allowed_kinds.iter();
     let retries = kind.retries;
     let tool_block_retries = kind.tool_block_retries;
-    let tools = kind.tools.iter();
+    let tool_groups = kind.tool_groups.iter();
     let skills = kind.skills.iter();
     let instructions = render_instructions(kind);
 
@@ -51,7 +51,7 @@ fn render_entry(kind: &ParsedManifest) -> TokenStream {
             allowed_kinds: &[#(AgentKind::from_static(#allowed_kinds)),*],
             retries: RetryCount::new(#retries),
             tool_block_retries: RetryCount::new(#tool_block_retries),
-            tools: &[#(ToolName::new(#tools)),*],
+            tool_groups: &[#(#tool_groups),*],
             skills: &[#(SkillId::from_static(#skills)),*],
             instructions: #instructions,
         }

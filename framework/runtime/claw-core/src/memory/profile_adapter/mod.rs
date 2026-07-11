@@ -6,7 +6,7 @@
 use claw_context::{Block, BlockKind, ContextSink};
 use claw_interface::ClawFs;
 use claw_memory::{ProfileDocument, ProfileStore};
-use claw_tool::Tool;
+use claw_tool::ToolGroup;
 
 use crate::memory::traits::{ContextAdapter, ContextAdapterInput};
 
@@ -76,10 +76,10 @@ impl<F: ClawFs + 'static> ContextAdapter for ProfileContextAdapter<F> {
         }
     }
 
-    fn tools(&self) -> Vec<Tool> {
+    fn tools(&self) -> Option<ToolGroup> {
         match self.tools {
-            ProfileTools::Disabled => Vec::new(),
-            ProfileTools::Writable => profile_tools(self.store.clone()),
+            ProfileTools::Disabled => None,
+            ProfileTools::Writable => Some(profile_tools(self.store.clone())),
         }
     }
 }

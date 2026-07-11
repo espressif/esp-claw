@@ -1,7 +1,8 @@
 use claw_interface::ClawFs;
 use claw_memory::{MemoryDraft, MemoryId, MemoryPatch, StoreOutcome};
 use claw_tool::{
-    tool_metadata, SyncToolHandler, Tool, ToolInvocation, ToolInvokeError, ToolOutput, ToolSpec,
+    tool_metadata, SyncToolHandler, Tool, ToolGroup, ToolInvocation, ToolInvokeError, ToolOutput,
+    ToolSpec,
 };
 
 use super::args::{
@@ -10,22 +11,26 @@ use super::args::{
 };
 use crate::memory::long_term_memory_adapter::MemoryStores;
 
-pub(super) fn memory_tools<F: ClawFs + 'static>(stores: MemoryStores<F>) -> Vec<Tool> {
-    vec![
-        Tool::from_sync(MemoryStoreTool {
-            stores: stores.clone(),
-        }),
-        Tool::from_sync(MemoryRecallTool {
-            stores: stores.clone(),
-        }),
-        Tool::from_sync(MemoryListTool {
-            stores: stores.clone(),
-        }),
-        Tool::from_sync(MemoryUpdateTool {
-            stores: stores.clone(),
-        }),
-        Tool::from_sync(MemoryForgetTool { stores }),
-    ]
+pub(super) fn memory_tools<F: ClawFs + 'static>(stores: MemoryStores<F>) -> ToolGroup {
+    ToolGroup::new(
+        "memory",
+        true,
+        [
+            Tool::from_sync(MemoryStoreTool {
+                stores: stores.clone(),
+            }),
+            Tool::from_sync(MemoryRecallTool {
+                stores: stores.clone(),
+            }),
+            Tool::from_sync(MemoryListTool {
+                stores: stores.clone(),
+            }),
+            Tool::from_sync(MemoryUpdateTool {
+                stores: stores.clone(),
+            }),
+            Tool::from_sync(MemoryForgetTool { stores }),
+        ],
+    )
 }
 
 struct MemoryStoreTool<F: ClawFs + 'static> {

@@ -11,6 +11,7 @@ use crate::agent::generic_agent::GenericAgent;
 use crate::agent::graph::GraphHost;
 use crate::agent::kind::AgentKind;
 use crate::agent::manifest::AgentManifest;
+use crate::agent::tools::discovery_tools;
 use crate::agent::Agent;
 use crate::memory::{agent_store, LongTermMemoryContextAdapter, ProfileContextAdapter};
 
@@ -50,34 +51,22 @@ impl<
         let span = tracing::info_span!("agent.create");
         let _enter = span.enter();
         // The config is pure data. Registry tools are projected here, then
-        // manifest tools are added as local tools before the agent sees them.
-        let mut config = self.resolve_config(kind).map_err(|error| {
+        // filtered by the manifest's tool-group allowlist before the agent sees them.
+        let config = self.resolve_config(kind).map_err(|error| {
             match &error {
                 AgentConfigError::UnknownKind(_) => {
                     tracing::error!(name: "unknown_kind", kind = %kind.as_str());
                 }
-                AgentConfigError::UnknownTool(tool) => {
-                    tracing::error!(
-                        name: "unknown_tool",
-                        kind = %kind.as_str(),
-                        tool = %tool,
-                    );
-                }
             }
             FsAgentCreateError::Config(error)
         })?;
+        let manifest = AgentManifest::for_kind(kind.as_str()).ok_or_else(|| {
+            FsAgentCreateError::Config(AgentConfigError::UnknownKind(kind.as_str().to_owned()))
+        })?;
         let is_root = placement.is_root();
         let mut tools = self.tools.tool_set();
-        for tool in config.tools.drain(..) {
-            if let Err(error) = tools.add_tool(tool) {
-                tracing::error!(
-                    name: "unknown_tool",
-                    kind = %kind.as_str(),
-                    tool = "registry",
-                );
-                return Err(FsAgentCreateError::Tools(error));
-            }
-        }
+        tools.retain_registry_groups(manifest.tool_groups);
+        tools.add_group(discovery_tools(tools.discovery()))?;
 
         // Every agent gets a transcript for context management; `persists` only
         // decides whether it is written to disk. Roots persist under
@@ -179,9 +168,6 @@ impl<
     fn resolve_config(&self, kind: &AgentKind) -> Result<AgentConfig, AgentConfigError> {
         let manifest = AgentManifest::for_kind(kind.as_str())
             .ok_or_else(|| AgentConfigError::UnknownKind(kind.as_str().to_owned()))?;
-        if let Some(name) = manifest.tools.first() {
-            return Err(AgentConfigError::UnknownTool(name.as_str().to_owned()));
-        }
         if !manifest.skills.is_empty() {
             tracing::info!(
                 name: "manifest_ids_catalog_only",
@@ -190,7 +176,6 @@ impl<
         }
         Ok(AgentConfig::from_manifest(
             manifest,
-            Vec::new(),
             self.skills.skill_set(),
         ))
     }

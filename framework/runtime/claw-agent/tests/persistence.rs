@@ -19,7 +19,9 @@ use claw_interface::{
     HttpResponseFuture, HttpStatusCode, ImmediateTimer, MemFs, SharedScriptHttp, StdThread,
     TokioExecutor,
 };
-use claw_tool::{SyncToolHandler, Tool, ToolInvocation, ToolOutput, ToolResult, ToolSpec};
+use claw_tool::{
+    SyncToolHandler, Tool, ToolGroup, ToolInvocation, ToolOutput, ToolResult, ToolSpec,
+};
 use futures_lite::future::block_on;
 use serde_json::{json, Value};
 use support::{
@@ -109,7 +111,11 @@ fn tool_registry_direct_mutations_checkpoint_and_restore() {
         let system = build_mem_system(&root, Vec::new());
         system
             .tool_registry()
-            .register(Tool::from_sync(CheckpointEchoTool))
+            .register_group(ToolGroup::new(
+                "checkpoint_echo",
+                true,
+                [Tool::from_sync(CheckpointEchoTool)],
+            ))
             .unwrap();
         assert_eq!(tool_registry_enabled::<MemFs>(&root, tool_name), Some(true));
 
@@ -124,7 +130,11 @@ fn tool_registry_direct_mutations_checkpoint_and_restore() {
     let system = build_mem_system(&root, Vec::new());
     system
         .tool_registry()
-        .register(Tool::from_sync(CheckpointEchoTool))
+        .register_group(ToolGroup::new(
+            "checkpoint_echo",
+            true,
+            [Tool::from_sync(CheckpointEchoTool)],
+        ))
         .unwrap();
     system.tool_registry().disable(tool_name).unwrap();
 
@@ -149,9 +159,13 @@ fn tool_registry_keeps_only_two_checkpoints_across_fifty_four_registrations() {
     for index in 1..=54 {
         system
             .tool_registry()
-            .register(Tool::from_sync(NumberedCheckpointTool {
-                name: format!("checkpoint-tool-{index}"),
-            }))
+            .register_group(ToolGroup::new(
+                format!("checkpoint-tool-{index}"),
+                true,
+                [Tool::from_sync(NumberedCheckpointTool {
+                    name: format!("checkpoint-tool-{index}"),
+                })],
+            ))
             .unwrap();
     }
 

@@ -7,7 +7,7 @@ use std::task::Waker;
 use anyhow::{anyhow, Result};
 use claw_checkpoint::{CheckpointError, CheckpointStorageError, DurablePart};
 use claw_tool::{
-    RawToolInvocation, RetryCount, SyncToolHandler, Tool, ToolError, ToolInvocation,
+    RawToolInvocation, RetryCount, SyncToolHandler, Tool, ToolError, ToolGroup, ToolInvocation,
     ToolInvokeError, ToolOutput, ToolRegistry, ToolRegistryCheckpointError, ToolRegistryError,
     ToolResult, ToolRunOutcome, ToolRunner, ToolSetHandle, ToolSpec,
 };
@@ -16,7 +16,7 @@ use claw_tool::{
 fn local_tool_runs_through_public_tool_surface() -> Result<()> {
     let registry = Arc::new(ToolRegistry::new());
     let mut tool_set = registry.tool_set();
-    tool_set.add_tool(Tool::from_sync(EchoTool))?;
+    tool_set.add_group(ToolGroup::new("local", true, [Tool::from_sync(EchoTool)]))?;
 
     let handle = tool_set.begin()?;
     assert_eq!(
@@ -42,7 +42,7 @@ fn local_tool_runs_through_public_tool_surface() -> Result<()> {
 fn temporary_disable_blocks_runner_but_keeps_tool_context() -> Result<()> {
     let registry = Arc::new(ToolRegistry::new());
     let mut tool_set = registry.tool_set();
-    tool_set.add_tool(Tool::from_sync(EchoTool))?;
+    tool_set.add_group(ToolGroup::new("local", true, [Tool::from_sync(EchoTool)]))?;
 
     tool_set.temporarily_disable_tool("echo".into())?;
 
@@ -87,7 +87,7 @@ fn temporary_disable_blocks_runner_but_keeps_tool_context() -> Result<()> {
 #[test]
 fn registry_tools_appear_only_after_registry_is_started() -> Result<()> {
     let registry = Arc::new(ToolRegistry::new());
-    registry.register(Tool::from_sync(EchoTool))?;
+    registry.register_group(ToolGroup::new("test", true, [Tool::from_sync(EchoTool)]))?;
     let mut tool_set = registry.tool_set();
 
     {
@@ -126,12 +126,134 @@ fn registry_tools_appear_only_after_registry_is_started() -> Result<()> {
 }
 
 #[test]
+fn registry_rejects_duplicate_tools_across_groups() -> Result<()> {
+    let registry = ToolRegistry::new();
+
+    registry.register_group(ToolGroup::new("first", true, [Tool::from_sync(EchoTool)]))?;
+    let err = registry
+        .register_group(ToolGroup::new("second", true, [Tool::from_sync(EchoTool)]))
+        .expect_err("duplicate tool should fail");
+
+    assert!(matches!(err, ToolRegistryError::AlreadyExists(name) if name == "echo"));
+    Ok(())
+}
+
+#[test]
+fn tool_set_can_retain_only_selected_registry_groups() -> Result<()> {
+    let registry = Arc::new(ToolRegistry::new());
+    registry.register_group(ToolGroup::new("allowed", true, [Tool::from_sync(EchoTool)]))?;
+    registry.register_group(ToolGroup::new(
+        "blocked",
+        true,
+        [Tool::from_sync(OtherTool)],
+    ))?;
+    registry.start_all()?;
+
+    let mut tool_set = registry.tool_set();
+    tool_set.retain_registry_groups(&["allowed"]);
+    let handle = tool_set.begin()?;
+
+    let allowed = run_with_default_gate(&handle, &invocation("echo", "{}")?)?;
+    assert_eq!(
+        allowed,
+        ToolRunOutcome::Ran {
+            content: "{}".into(),
+            ok: true,
+        }
+    );
+
+    let blocked = run_with_default_gate(&handle, &invocation("other", "{}")?)?;
+    assert_eq!(
+        blocked,
+        ToolRunOutcome::Ran {
+            content: "tool not found: other".into(),
+            ok: false,
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn tool_set_uses_registry_group_default_visibility() -> Result<()> {
+    let registry = Arc::new(ToolRegistry::new());
+    registry.register_group(ToolGroup::new("hidden", false, [Tool::from_sync(EchoTool)]))?;
+    registry.start_all()?;
+
+    let mut tool_set = registry.tool_set();
+    let handle = tool_set.begin()?;
+    let outcome = run_with_default_gate(&handle, &invocation("echo", "{}")?)?;
+    assert_eq!(
+        outcome,
+        ToolRunOutcome::Ran {
+            content: "tool not found: echo".into(),
+            ok: false,
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn hidden_group_is_searchable_then_loadable() -> Result<()> {
+    let registry = Arc::new(ToolRegistry::new());
+    registry.register_group(ToolGroup::new("visible", true, [Tool::from_sync(OtherTool)]))?;
+    registry.register_group(ToolGroup::new("hidden", false, [Tool::from_sync(EchoTool)]))?;
+    registry.start_all()?;
+
+    let mut tool_set = registry.tool_set();
+    let discovery = tool_set.discovery();
+
+    // The hidden tool is registered but not part of the default schema surface,
+    // so it is not callable yet — only surfaced through the discovery catalog.
+    {
+        let handle = tool_set.begin()?;
+        assert_eq!(
+            handle.schemas_json(),
+            r#"[{"type":"function","function":{"name":"other"}}]"#
+        );
+        let blocked = run_with_default_gate(&handle, &invocation("echo", "{}")?)?;
+        assert_eq!(
+            blocked,
+            ToolRunOutcome::Ran {
+                content: "tool not found: echo".into(),
+                ok: false,
+            }
+        );
+    }
+
+    let catalog = discovery.catalog();
+    assert_eq!(catalog.len(), 1);
+    assert_eq!(catalog[0].id, "hidden");
+    assert_eq!(catalog[0].tools.len(), 1);
+    assert_eq!(catalog[0].tools[0].name, "echo");
+    assert_eq!(catalog[0].tools[0].description, "Echoes the normalized arguments.");
+
+    // Loading the group queues it; the tool becomes callable after the set
+    // applies pending loads.
+    assert!(discovery.request_load("hidden"));
+    assert!(!discovery.request_load("nope"));
+    tool_set.apply_pending_tool_loads();
+
+    let handle = tool_set.begin()?;
+    let outcome = run_with_default_gate(&handle, &invocation("echo", "{}")?)?;
+    assert_eq!(
+        outcome,
+        ToolRunOutcome::Ran {
+            content: "{}".into(),
+            ok: true,
+        }
+    );
+    // Once loaded, the group drops out of the catalog.
+    assert!(discovery.catalog().is_empty());
+    Ok(())
+}
+
+#[test]
 fn tool_set_durable_state_tracks_tool_metadata() -> Result<()> {
     let registry = Arc::new(ToolRegistry::new());
     let mut tool_set = registry.tool_set();
     assert_eq!(tool_set.generation(), 0);
 
-    tool_set.add_tool(Tool::from_sync(EchoTool))?;
+    tool_set.add_group(ToolGroup::new("local", true, [Tool::from_sync(EchoTool)]))?;
     assert_eq!(tool_set.generation(), 1);
 
     tool_set.temporarily_disable_tool("echo".into())?;
@@ -168,12 +290,12 @@ fn tool_set_durable_state_tracks_tool_metadata() -> Result<()> {
 fn restored_tool_set_does_not_dirty_generation() -> Result<()> {
     let registry = Arc::new(ToolRegistry::new());
     let mut tool_set = registry.tool_set();
-    tool_set.add_tool(Tool::from_sync(EchoTool))?;
+    tool_set.add_group(ToolGroup::new("local", true, [Tool::from_sync(EchoTool)]))?;
     tool_set.temporarily_disable_tool("echo".into())?;
     let blob = tool_set.export_state()?;
 
     let mut restored = registry.tool_set();
-    restored.add_tool(Tool::from_sync(EchoTool))?;
+    restored.add_group(ToolGroup::new("local", true, [Tool::from_sync(EchoTool)]))?;
     restored.restore_state(blob.as_slice())?;
     assert_eq!(restored.generation(), 0);
 
@@ -191,14 +313,14 @@ fn restored_tool_set_does_not_dirty_generation() -> Result<()> {
 #[test]
 fn restored_registry_reuses_tool_state_without_dirtying_generation() -> Result<()> {
     let registry = ToolRegistry::new();
-    registry.register(Tool::from_sync(EchoTool))?;
+    registry.register_group(ToolGroup::new("test", true, [Tool::from_sync(EchoTool)]))?;
     registry.disable("echo")?;
 
     let blob = registry.export_state()?;
     let restored = <ToolRegistry as DurablePart>::restore_from_state(blob.as_slice())?;
     assert_eq!(restored.generation(), 0);
 
-    restored.register(Tool::from_sync(EchoTool))?;
+    restored.register_group(ToolGroup::new("test", true, [Tool::from_sync(EchoTool)]))?;
     assert_eq!(restored.generation(), 0);
 
     restored.enable("echo")?;
@@ -214,7 +336,7 @@ fn registry_rolls_back_mutation_when_checkpoint_hook_fails() -> Result<()> {
     });
 
     assert!(matches!(
-        registry.register(Tool::from_sync(EchoTool)),
+        registry.register_group(ToolGroup::new("test", true, [Tool::from_sync(EchoTool)])),
         Err(ToolRegistryError::Checkpoint(
             ToolRegistryCheckpointError::Coordinator(_)
         ))
@@ -228,7 +350,7 @@ fn registry_rolls_back_mutation_when_checkpoint_hook_fails() -> Result<()> {
         .is_some());
 
     assert!(matches!(
-        registry.register(Tool::from_sync(EchoTool)),
+        registry.register_group(ToolGroup::new("test", true, [Tool::from_sync(EchoTool)])),
         Err(ToolRegistryError::Checkpoint(
             ToolRegistryCheckpointError::Coordinator(_)
         ))
@@ -250,7 +372,7 @@ fn registry_checkpoint_hook_receives_matching_generation_and_owned_state() -> Re
         Ok(())
     });
 
-    registry.register(Tool::from_sync(EchoTool))?;
+    registry.register_group(ToolGroup::new("test", true, [Tool::from_sync(EchoTool)]))?;
     registry.disable("echo")?;
 
     let snapshots = snapshots
@@ -370,6 +492,30 @@ impl SyncToolHandler for EchoTool {
     }
 }
 
+struct OtherTool;
+
+impl ToolSpec for OtherTool {
+    fn name(&self) -> &str {
+        "other"
+    }
+
+    fn schema(&self) -> &str {
+        r#"{"type":"function","function":{"name":"other"}}"#
+    }
+}
+
+impl SyncToolHandler for OtherTool {
+    fn invoke(&self, call: &ToolInvocation<'_>) -> ToolResult<ToolOutput> {
+        if call.name() != self.name() {
+            return Err(ToolError::NotFound(call.name().to_owned()).into());
+        }
+        Ok(ToolOutput {
+            output: "other".into(),
+            ok: true,
+        })
+    }
+}
+
 struct FailBeforeSuccess {
     attempts: Arc<AtomicU32>,
     retry_count: RetryCount,
@@ -423,10 +569,14 @@ fn run_with_default_gate(
 fn run_retry_tool(retry_count: RetryCount, attempts: Arc<AtomicU32>) -> Result<ToolRunOutcome> {
     let registry = Arc::new(ToolRegistry::new());
     let mut tool_set = registry.tool_set();
-    tool_set.add_tool(Tool::from_sync(FailBeforeSuccess {
-        attempts,
-        retry_count,
-    }))?;
+    tool_set.add_group(ToolGroup::new(
+        "retry",
+        true,
+        [Tool::from_sync(FailBeforeSuccess {
+            attempts,
+            retry_count,
+        })],
+    ))?;
     let handle = tool_set.begin()?;
     let call = invocation("retry_demo", "{}")?;
     run_with_default_gate(&handle, &call)

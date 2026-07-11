@@ -17,7 +17,7 @@ use claw_interface::{
     ImmediateTimer, MemFs, StdThread, TokioExecutor,
 };
 use claw_tool::{
-    AsyncToolHandler, Tool, ToolFuture, ToolInvocation, ToolOutput, ToolResult, ToolSpec,
+    AsyncToolHandler, Tool, ToolFuture, ToolGroup, ToolInvocation, ToolOutput, ToolResult, ToolSpec,
 };
 use futures_lite::future::block_on;
 use serde_json::{json, Value};
@@ -49,7 +49,11 @@ fn async_tool_control_csv_matrix_covers_cancel_and_interrupt_while_tool_is_pendi
                 .unwrap();
         system
             .tool_registry()
-            .register(Tool::from_async(AsyncProbeTool))
+            .register_group(ToolGroup::new(
+                "async_probe",
+                true,
+                [Tool::from_async(AsyncProbeTool)],
+            ))
             .unwrap();
         system.start_all().unwrap();
 

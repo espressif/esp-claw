@@ -54,9 +54,6 @@ pub(crate) trait SseParse {
     /// Partial frames are buffered until a later call completes them.
     fn push(&mut self, bytes: &[u8], out: &mut Vec<LlmDelta>) -> Result<(), ChatError>;
 
-    /// Whether the provider's terminal sentinel has been observed.
-    fn is_done(&self) -> bool;
-
     /// Assemble the final response, reconstructing the replayable assistant
     /// message JSON in the provider's shape.
     fn finish(self) -> Result<LlmResponse, ChatError>
@@ -221,10 +218,6 @@ impl SseParse for OpenAiSse {
             }
         }
         Ok(())
-    }
-
-    fn is_done(&self) -> bool {
-        self.done
     }
 
     fn finish(self) -> Result<LlmResponse, ChatError> {
@@ -449,10 +442,6 @@ impl SseParse for AnthropicSse {
             }
         }
         Ok(())
-    }
-
-    fn is_done(&self) -> bool {
-        self.done
     }
 
     fn finish(self) -> Result<LlmResponse, ChatError> {

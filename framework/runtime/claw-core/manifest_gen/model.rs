@@ -39,14 +39,14 @@ pub struct RuntimeJson {
     pub tool_block_retries: u32,
 }
 
-/// `tools/tools.json` — the tool names this kind uses.
+/// `tools/tools.json` — the tool groups this kind may use.
 #[derive(Debug, Deserialize)]
 pub struct ToolsJson {
     /// Schema version; reserved for forward-compatibility.
     #[allow(dead_code)]
     pub schema_version: u32,
-    /// Tool names resolved to handlers at runtime.
-    pub tools: Vec<String>,
+    /// Tool group ids allowed for this agent kind.
+    pub tool_groups: Vec<String>,
 }
 
 /// `skills/skills.json` — the skill ids this kind loads.

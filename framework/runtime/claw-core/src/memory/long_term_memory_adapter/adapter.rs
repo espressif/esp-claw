@@ -3,7 +3,7 @@ use std::sync::Arc;
 use claw_context::{Block, BlockKind, ContextSink};
 use claw_interface::ClawFs;
 use claw_memory::LongTermMemory;
-use claw_tool::Tool;
+use claw_tool::ToolGroup;
 
 use crate::memory::traits::{ContextAdapter, ContextAdapterFuture, ContextAdapterInput};
 
@@ -76,7 +76,7 @@ impl<F: ClawFs + 'static> ContextAdapter for LongTermMemoryContextAdapter<F> {
         ));
     }
 
-    fn tools(&self) -> Vec<Tool> {
-        memory_tools(self.stores.clone())
+    fn tools(&self) -> Option<ToolGroup> {
+        Some(memory_tools(self.stores.clone()))
     }
 }

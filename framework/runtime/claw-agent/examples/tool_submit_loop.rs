@@ -23,7 +23,9 @@ use claw_interface::{
     BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp, StdThread, TokioExecutor,
 };
 use claw_log::{LevelFilter, LogOutput, TracingConfig};
-use claw_tool::{SyncToolHandler, Tool, ToolInvocation, ToolOutput, ToolResult, ToolSpec};
+use claw_tool::{
+    SyncToolHandler, Tool, ToolGroup, ToolInvocation, ToolOutput, ToolResult, ToolSpec,
+};
 use futures_lite::StreamExt;
 
 /// A tool: returns a fixed timestamp. Registering it makes `time_now`
@@ -91,9 +93,11 @@ async fn main() -> anyhow::Result<()> {
             skill_roots: Vec::new(),
         },
     )?;
-    system
-        .tool_registry()
-        .register(Tool::from_sync(TimeNowTool))?;
+    system.tool_registry().register_group(ToolGroup::new(
+        "example",
+        true,
+        [Tool::from_sync(TimeNowTool)],
+    ))?;
     println!("registered tool `time_now`");
     system.start_all()?;
     let session = system.new_session();

@@ -1,0 +1,17 @@
+{
+  "type": "function",
+  "function": {
+    "name": "tool_load",
+    "description": "Load one hidden tool group into the current tool context. Its tools become callable on the next model turn. Use the group_id returned by tool_search.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "group_id": {
+          "type": "string",
+          "description": "Tool group id returned by tool_search."
+        }
+      },
+      "required": ["group_id"]
+    }
+  }
+}

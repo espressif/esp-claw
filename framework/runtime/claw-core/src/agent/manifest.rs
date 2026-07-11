@@ -35,32 +35,11 @@ impl RetryCount {
     }
 }
 
-/// A tool name a kind requests.
-///
-/// A newtype over `&'static str` rather than a richer type: baked manifests have
-/// no owned runtime `Tool` value, so the *name* is the data.
-/// The newtype keeps it from being confused with other `&str`s in a manifest.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct ToolName(&'static str);
-
-impl ToolName {
-    /// Wrap a `&'static str` tool name in a `const` context.
-    #[allow(dead_code)]
-    pub const fn new(name: &'static str) -> Self {
-        Self(name)
-    }
-
-    /// The name as a string slice.
-    pub const fn as_str(&self) -> &str {
-        self.0
-    }
-}
-
 /// One agent kind's compile-time-baked definition: the system prompt plus the
 /// validated metadata and the kind's tool/skill lists, as their domain types.
 ///
 /// Names are baked as their typed forms ([`AgentKind`], [`SkillId`],
-/// [`ToolName`]) — each backed by a `&'static str` so the whole value lives
+/// tool group ids) — each backed by a `&'static str` so the whole value lives
 /// in a `const`. This is pure data; binding the tool/skill names to handler
 /// *code* happens elsewhere, at runtime.
 #[derive(Clone, Debug)]
@@ -79,8 +58,8 @@ pub struct AgentManifest {
     /// Consecutive gating-blocked tool rounds to tolerate
     /// (`runtime.tool_block_retries`; defaults to 0 in the build-time parser).
     pub tool_block_retries: RetryCount,
-    /// Tool names this kind uses, resolved to handlers at runtime.
-    pub tools: &'static [ToolName],
+    /// Registry tool groups this kind may use.
+    pub tool_groups: &'static [&'static str],
     /// Skill ids this kind loads, resolved to a skill set at runtime.
     pub skills: &'static [SkillId],
     /// `instructions.md` — the agent's persona/process guidance (system prompt).

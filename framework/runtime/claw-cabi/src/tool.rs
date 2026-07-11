@@ -1,16 +1,18 @@
 use core::ffi::{c_char, CStr};
+use std::collections::BTreeMap;
 use std::ffi::CString;
 
 use claw_tool::{
-    RetryCount, SyncToolHandler, Tool, ToolError, ToolInvocation, ToolInvokeError, ToolOutput,
-    ToolResult, ToolSpec,
+    RetryCount, SyncToolHandler, Tool, ToolError, ToolGroup, ToolInvocation, ToolInvokeError,
+    ToolOutput, ToolResult, ToolSpec,
 };
 use serde_json::json;
 
 use crate::abi::{
-    claw_cap_call, claw_cap_list, ClawCapCallContext, ClawCapDescriptor,
-    CLAW_CAP_FLAG_CALLABLE_BY_LLM, CLAW_CAP_FLAG_ROOT_AGENT_ONLY, CLAW_CAP_KIND_CALLABLE,
-    CLAW_CAP_KIND_HYBRID, ESP_OK, TOOL_OUTPUT_CAPACITY,
+    claw_cap_call, claw_cap_get_descriptor_state, claw_cap_list, ClawCapCallContext,
+    ClawCapDescriptor, ClawCapDescriptorInfo, CLAW_CAP_FLAG_CALLABLE_BY_LLM,
+    CLAW_CAP_FLAG_ROOT_AGENT_ONLY, CLAW_CAP_KIND_CALLABLE, CLAW_CAP_KIND_HYBRID, ESP_OK,
+    TOOL_OUTPUT_CAPACITY,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -33,13 +35,21 @@ pub(crate) fn register_capability_tools(
         return Err(CapToolError::InvalidList);
     }
 
+    let mut groups = BTreeMap::<String, Vec<Tool>>::new();
     for index in 0..list.count {
         let descriptor =
             unsafe { list.items.add(index).as_ref() }.ok_or(CapToolError::InvalidDescriptor)?;
         if !is_llm_tool(descriptor) {
             continue;
         }
-        registry.register(Tool::from_sync(CapTool::try_from(descriptor)?))?;
+        let group_id = descriptor_group_id(descriptor)?;
+        groups
+            .entry(group_id)
+            .or_default()
+            .push(Tool::from_sync(CapTool::try_from(descriptor)?));
+    }
+    for (group_id, tools) in groups {
+        registry.register_group(ToolGroup::new(group_id, false, tools))?;
     }
     Ok(())
 }
@@ -51,6 +61,27 @@ fn is_llm_tool(descriptor: &ClawCapDescriptor) -> bool {
     ) && descriptor.execute.is_some()
         && descriptor.cap_flags & CLAW_CAP_FLAG_CALLABLE_BY_LLM != 0
         && descriptor.cap_flags & CLAW_CAP_FLAG_ROOT_AGENT_ONLY == 0
+}
+
+fn descriptor_group_id(descriptor: &ClawCapDescriptor) -> Result<String, CapToolError> {
+    let name = c_string(descriptor.name)
+        .or_else(|| c_string(descriptor.id))
+        .ok_or(CapToolError::InvalidDescriptor)?;
+    let c_name = CString::new(name).map_err(|_| CapToolError::InvalidDescriptor)?;
+    let mut info = ClawCapDescriptorInfo {
+        id: core::ptr::null(),
+        name: core::ptr::null(),
+        group_id: core::ptr::null(),
+        state: 0,
+        active_calls: 0,
+    };
+    let err = unsafe { claw_cap_get_descriptor_state(c_name.as_ptr(), &mut info) };
+    if err != ESP_OK {
+        return Err(CapToolError::InvalidDescriptor);
+    }
+    c_string(info.group_id)
+        .filter(|group_id| !group_id.is_empty())
+        .ok_or(CapToolError::InvalidDescriptor)
 }
 
 struct CapTool {

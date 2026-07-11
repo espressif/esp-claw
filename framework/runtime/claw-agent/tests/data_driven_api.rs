@@ -13,7 +13,9 @@ use claw_checkpoint::DurablePart;
 use claw_interface::{
     BlockingHttpAdapter, ClawFs, DiskFs, ImmediateTimer, SharedScriptHttp, StdThread, TokioExecutor,
 };
-use claw_tool::{SyncToolHandler, Tool, ToolInvocation, ToolOutput, ToolResult, ToolSpec};
+use claw_tool::{
+    SyncToolHandler, Tool, ToolGroup, ToolInvocation, ToolOutput, ToolResult, ToolSpec,
+};
 use futures_lite::future::block_on;
 use futures_lite::StreamExt;
 use serde_json::Value;
@@ -342,7 +344,11 @@ fn apply_tool_operations(system: &support::MemAgentSystem, operations: &str) -> 
                 let name = &operation["register:".len()..];
                 system
                     .tool_registry()
-                    .register(Tool::from_sync(CsvTool::new(name)))
+                    .register_group(ToolGroup::new(
+                        name,
+                        true,
+                        [Tool::from_sync(CsvTool::new(name))],
+                    ))
                     .map_err(|error| error.to_string())
             }
             _ if operation.starts_with("enable:") => {

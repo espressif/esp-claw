@@ -4,7 +4,7 @@
   "description": "The user-facing root agent for a session. Talks to the user and delegates work to specialist subagents.",
   "spawn": {
     "enabled": true,
-    "allowed_kinds": ["*"]
+    "allowed_kinds": ["worker"]
   },
   "runtime": {
     "retries": 2,

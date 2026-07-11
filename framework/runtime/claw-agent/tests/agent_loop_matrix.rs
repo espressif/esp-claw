@@ -13,8 +13,8 @@ use claw_interface::{
     ImmediateTimer, MemFs, StdThread, TokioExecutor,
 };
 use claw_tool::{
-    SyncToolHandler, Tool, ToolError, ToolInvocation, ToolInvokeError, ToolOutput, ToolResult,
-    ToolSpec,
+    SyncToolHandler, Tool, ToolError, ToolGroup, ToolInvocation, ToolInvokeError, ToolOutput,
+    ToolResult, ToolSpec,
 };
 use futures_lite::future::block_on;
 use serde_json::{json, Value};
@@ -219,7 +219,11 @@ fn apply_registry_ops(system: &MatrixAgentSystem, operations: &str, behavior: Ma
         match operation {
             "register" => system
                 .tool_registry()
-                .register(Tool::from_sync(MatrixTool { behavior }))
+                .register_group(ToolGroup::new(
+                    "matrix",
+                    true,
+                    [Tool::from_sync(MatrixTool { behavior })],
+                ))
                 .unwrap(),
             "start" => system.start_all().unwrap(),
             "stop" => system.stop_all().unwrap(),

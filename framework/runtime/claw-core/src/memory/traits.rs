@@ -24,7 +24,7 @@ use std::sync::Arc;
 use claw_context::ContextSink;
 use claw_interface::ClawFs;
 use claw_memory::TranscriptStore;
-use claw_tool::Tool;
+use claw_tool::ToolGroup;
 use serde_json::{json, Value};
 
 /// The read view of the conversation transcript: the one interface request
@@ -188,7 +188,7 @@ pub trait ContextAdapter {
     /// Added into the agent's tool set when the adapter is registered. Tool names
     /// must be globally unique across the agent's tools (a clash is rejected at
     /// registration). The default provides no tools.
-    fn tools(&self) -> Vec<Tool> {
-        Vec::new()
+    fn tools(&self) -> Option<ToolGroup> {
+        None
     }
 }

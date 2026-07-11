@@ -46,9 +46,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         let llm = ClawApiAsync::<H, Timer>::init_default(config.llm_config)?;
 
         let mut tools = config.tools;
-        for tool in internal_tools(Arc::clone(&control)) {
-            tools.add_tool(tool)?;
-        }
+        tools.add_group(internal_tools(Arc::clone(&control)))?;
 
         let permission_policy = config.permission_policy;
 
@@ -61,8 +59,8 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         let skill_adapter: Box<dyn ContextAdapter> =
             Box::new(SkillContextAdapter::new(config.skills));
         let transcript: Box<dyn Transcript> = Box::new(config.store);
-        for tool in skill_adapter.tools() {
-            tools.add_tool(tool)?;
+        if let Some(group) = skill_adapter.tools() {
+            tools.add_group(group)?;
         }
         let adapters = vec![skill_adapter];
 

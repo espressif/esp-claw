@@ -136,9 +136,7 @@ impl<H: ClawHttp + StreamingHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
         // Graph-affecting tools need a back-channel.
         let context = Arc::new(AgentContext::new(id, host));
         if config.spawn_enabled {
-            for tool in subagent_tools(Arc::clone(&context), config.spawn_policy) {
-                tools.add_tool(tool)?;
-            }
+            tools.add_group(subagent_tools(Arc::clone(&context), config.spawn_policy))?;
         }
 
         // The soft-hide "retry then fail" budget is the agent's BlockPolicy.

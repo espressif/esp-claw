@@ -125,8 +125,21 @@ pub struct ClawCapList {
     pub count: usize,
 }
 
+#[repr(C)]
+pub struct ClawCapDescriptorInfo {
+    pub id: *const c_char,
+    pub name: *const c_char,
+    pub group_id: *const c_char,
+    pub state: c_int,
+    pub active_calls: u32,
+}
+
 extern "C" {
     pub fn claw_cap_list() -> ClawCapList;
+    pub fn claw_cap_get_descriptor_state(
+        id_or_name: *const c_char,
+        info: *mut ClawCapDescriptorInfo,
+    ) -> EspErr;
     pub fn claw_cap_call(
         id_or_name: *const c_char,
         input_json: *const c_char,

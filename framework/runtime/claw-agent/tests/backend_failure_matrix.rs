@@ -14,7 +14,9 @@ use claw_interface::{
     HttpRequestFailure, HttpResponse, HttpResponseFuture, HttpStatusCode, ImmediateTimer, MemFs,
     SleepOutcome, StdThread, TimerFuture, TokioExecutor,
 };
-use claw_tool::{SyncToolHandler, Tool, ToolInvocation, ToolOutput, ToolResult, ToolSpec};
+use claw_tool::{
+    SyncToolHandler, Tool, ToolGroup, ToolInvocation, ToolOutput, ToolResult, ToolSpec,
+};
 use futures_lite::future::block_on;
 use support::{
     assistant_text, csv_dicts, drain_until_turn_ended, llm_config, mem_root, persistence,
@@ -269,7 +271,11 @@ fn fs_checkpoint_write_failure() -> Option<String> {
     let system = build_fs_write_fail_system().unwrap();
     system
         .tool_registry()
-        .register(Tool::from_sync(CheckpointTool))
+        .register_group(ToolGroup::new(
+            "checkpoint",
+            true,
+            [Tool::from_sync(CheckpointTool)],
+        ))
         .err()
         .map(|error| error.to_string())
 }
