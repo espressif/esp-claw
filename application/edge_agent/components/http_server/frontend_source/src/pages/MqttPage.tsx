@@ -109,6 +109,7 @@ export const MqttPage: Component<{ onRestartRequest: () => void }> = (props) => 
     try {
       await saveConfigPatch({ mqtt_uri: '', mqtt_username: '', mqtt_password: '', mqtt_jwt: '' });
       await tab.reload();
+      setTestState('idle');
       pushToast(t('mqttClearDone') as string, 'success');
     } catch (err) {
       pushToast((err as Error).message, 'error');
