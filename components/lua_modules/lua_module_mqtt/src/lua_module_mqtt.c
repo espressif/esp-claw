@@ -207,10 +207,12 @@ static void lua_module_mqtt_event_handler(void *handler_args, esp_event_base_t b
         xEventGroupClearBits(ud->state, LUA_MODULE_MQTT_CONNECTED_BIT);
         break;
     case MQTT_EVENT_DATA: {
-        /* Only the first fragment carries the topic. Larger-than-buffer
-         * payloads arrive fragmented; this binding keeps single-fragment
-         * messages and drops continuation fragments. */
-        if (event->topic_len <= 0 || event->current_data_offset != 0) {
+        /* Only single-fragment messages are delivered to Lua. Multi-fragment
+         * payloads are dropped entirely: continuation fragments lack the topic,
+         * and the first fragment of a split message has data_len < total_data_len
+         * so it would carry a truncated payload. */
+        if (event->topic_len <= 0 || event->current_data_offset != 0 ||
+            event->data_len != event->total_data_len) {
             break;
         }
         lua_module_mqtt_rx_msg_t *msg = calloc(1, sizeof(*msg));
