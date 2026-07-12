@@ -69,14 +69,30 @@ esp_err_t lua_module_mqtt_set_defaults(const char *uri,
                                        const char *password,
                                        const char *client_id)
 {
+    char *new_uri       = lua_module_mqtt_dup_or_null(uri);
+    char *new_username  = lua_module_mqtt_dup_or_null(username);
+    char *new_password  = lua_module_mqtt_dup_or_null(password);
+    char *new_client_id = lua_module_mqtt_dup_or_null(client_id);
+
+    if ((uri       && uri[0]       && !new_uri)       ||
+        (username  && username[0]  && !new_username)  ||
+        (password  && password[0]  && !new_password)  ||
+        (client_id && client_id[0] && !new_client_id)) {
+        free(new_uri);
+        free(new_username);
+        free(new_password);
+        free(new_client_id);
+        return ESP_ERR_NO_MEM;
+    }
+
     free(s_default_uri);
     free(s_default_username);
     free(s_default_password);
     free(s_default_client_id);
-    s_default_uri = lua_module_mqtt_dup_or_null(uri);
-    s_default_username = lua_module_mqtt_dup_or_null(username);
-    s_default_password = lua_module_mqtt_dup_or_null(password);
-    s_default_client_id = lua_module_mqtt_dup_or_null(client_id);
+    s_default_uri       = new_uri;
+    s_default_username  = new_username;
+    s_default_password  = new_password;
+    s_default_client_id = new_client_id;
     return ESP_OK;
 }
 
