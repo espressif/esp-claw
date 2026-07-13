@@ -71,6 +71,11 @@ impl OpenAiCompatible {
     fn build_stream_body(&self, request: &ChatRequest) -> Result<String, ChatError> {
         let mut body = self.chat_body_object(request)?;
         body.insert("stream".to_string(), json!(true));
+        #[cfg(feature = "cache_profile")]
+        body.insert(
+            "stream_options".to_string(),
+            json!({ "include_usage": true }),
+        );
         serialize_body(body)
     }
 
@@ -334,4 +339,29 @@ impl BackendImpl for OpenAiCompatible {
 fn serialize_body(body: serde_json::Map<String, Value>) -> Result<String, ChatError> {
     serde_json::to_string(&Value::Object(body))
         .map_err(|_| ChatError::Api(ClawApiError::ApiError("out of memory serializing request")))
+}
+
+#[cfg(all(test, feature = "cache_profile"))]
+mod tests {
+    use super::*;
+    use crate::BackendKind;
+
+    #[test]
+    fn streaming_requests_ask_provider_to_include_usage() {
+        let backend = OpenAiCompatible::make(&ClawApiConfig::new(
+            BackendKind::OpenAiCompatible,
+            "key",
+            "model",
+            "https://example.invalid/v1",
+        ))
+        .unwrap();
+        let messages = serde_json::json!([]);
+        let body = backend
+            .build_stream_body(&ChatRequest::new("system", &messages))
+            .unwrap();
+        let body: Value = serde_json::from_str(&body).unwrap();
+
+        assert_eq!(body["stream"], true);
+        assert_eq!(body["stream_options"]["include_usage"], true);
+    }
 }

@@ -103,6 +103,11 @@ fn openai_json_to_sse(body: &str) -> String {
             }));
         }
     }
+    if let Some(usage) = root.get("usage") {
+        out.push_str("data: ");
+        out.push_str(&json!({ "choices": [], "usage": usage }).to_string());
+        out.push_str("\n\n");
+    }
     out.push_str("data: [DONE]\n\n");
     out
 }

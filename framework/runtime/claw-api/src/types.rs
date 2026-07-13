@@ -72,6 +72,23 @@ pub struct LlmResponse {
     pub raw_message_json: Option<String>,
     /// Tool calls the model requested, in order.
     pub tool_calls: Vec<ToolCall>,
+    /// Provider token usage, including cache read/write counters.
+    #[cfg(feature = "cache_profile")]
+    pub usage: Option<ApiUsage>,
+}
+
+/// Provider usage counters used for cache profiling.
+#[cfg(feature = "cache_profile")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ApiUsage {
+    /// Input/prompt tokens reported by the provider.
+    pub input_tokens: Option<u64>,
+    /// Output/completion tokens reported by the provider.
+    pub output_tokens: Option<u64>,
+    /// Tokens read from provider prompt cache.
+    pub cache_read_tokens: Option<u64>,
+    /// Tokens written/created in provider prompt cache.
+    pub cache_write_tokens: Option<u64>,
 }
 
 /// Default per-request HTTP timeout, in milliseconds.

@@ -8,6 +8,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use claw_agent::{AgentSystem, IterationId, SessionEvent, TurnCause, TurnId};
+#[cfg(feature = "cache_profile")]
+use claw_api::ApiUsage;
 use claw_interface::{
     Cancel, ClawHttp, HttpJsonRequest, HttpResponse, HttpResponseFuture, HttpStatusCode,
     ImmediateTimer, MemFs, StdThread, TokioExecutor,
@@ -138,6 +140,39 @@ fn agent_loop_csv_llm_response_matrix_reports_errors_and_bounds_reasoning() {
             case,
         );
     }
+}
+
+#[cfg(feature = "cache_profile")]
+#[test]
+fn agent_loop_emits_provider_usage_for_cli_consumers() {
+    let _lock = AGENT_LOOP_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    install_agent_replies(vec![json!({
+        "choices": [{ "message": { "role": "assistant", "content": "done" } }],
+        "usage": {
+            "prompt_tokens": 21,
+            "completion_tokens": 4,
+            "prompt_tokens_details": { "cached_tokens": 13 }
+        }
+    })
+    .to_string()]);
+
+    let root = mem_root("agent-loop-usage");
+    let system = build_matrix_system(&root);
+    let session = system.new_session();
+    let (control, mut events) = system.open_session(session).unwrap();
+    block_on(control.submit("report usage".to_string())).unwrap();
+    let events = drain_until_turn_ended(&mut events);
+
+    assert!(events.contains(&SessionEvent::Usage {
+        usage: ApiUsage {
+            input_tokens: Some(21),
+            output_tokens: Some(4),
+            cache_read_tokens: Some(13),
+            cache_write_tokens: None,
+        },
+    }));
 }
 
 #[derive(Default)]

@@ -233,6 +233,35 @@ fn openai_chat_text() -> TestResult {
     Ok(())
 }
 
+#[cfg(feature = "cache_profile")]
+#[test]
+fn openai_chat_profiles_cache_usage() -> TestResult {
+    let http = MockHttp::new(
+        r#"{
+            "choices":[{"message":{"role":"assistant","content":"hi there"}}],
+            "usage":{
+                "prompt_tokens":128,
+                "completion_tokens":9,
+                "prompt_tokens_details":{"cached_tokens":96},
+                "cache_write_tokens":32
+            }
+        }"#,
+    );
+    let mut rt = ClawApi::init(
+        cfg(BackendKind::OpenAiCompatible, "https://api.example.com/v1"),
+        Owned(http),
+    )?;
+    let messages = json!([{"role": "user", "content": "hello"}]);
+    let abort = AtomicBool::new(false);
+    let resp = rt.chat(&ChatRequest::new("sys", &messages), &abort)?;
+    let usage = resp.usage.ok_or_else(|| fail("missing usage"))?;
+    assert_eq!(usage.input_tokens, Some(128));
+    assert_eq!(usage.output_tokens, Some(9));
+    assert_eq!(usage.cache_read_tokens, Some(96));
+    assert_eq!(usage.cache_write_tokens, Some(32));
+    Ok(())
+}
+
 #[test]
 fn async_openai_chat_text() -> TestResult {
     let http =
@@ -252,6 +281,38 @@ fn async_openai_chat_text() -> TestResult {
         lock(&http.last_url).as_deref(),
         Some("https://api.example.com/v1/chat/completions")
     );
+    Ok(())
+}
+
+#[cfg(feature = "cache_profile")]
+#[test]
+fn anthropic_chat_profiles_cache_usage() -> TestResult {
+    let http = MockHttp::new(
+        r#"{
+            "content":[{"type":"text","text":"done"}],
+            "usage":{
+                "input_tokens":80,
+                "output_tokens":7,
+                "cache_read_input_tokens":64,
+                "cache_creation_input_tokens":16
+            }
+        }"#,
+    );
+    let mut rt = ClawApi::init(
+        cfg(
+            BackendKind::AnthropicCompatible,
+            "https://api.anthropic.com/v1",
+        ),
+        Owned(http),
+    )?;
+    let messages = json!([{"role": "user", "content": "hello"}]);
+    let abort = AtomicBool::new(false);
+    let resp = rt.chat(&ChatRequest::new("sys", &messages), &abort)?;
+    let usage = resp.usage.ok_or_else(|| fail("missing usage"))?;
+    assert_eq!(usage.input_tokens, Some(80));
+    assert_eq!(usage.output_tokens, Some(7));
+    assert_eq!(usage.cache_read_tokens, Some(64));
+    assert_eq!(usage.cache_write_tokens, Some(16));
     Ok(())
 }
 

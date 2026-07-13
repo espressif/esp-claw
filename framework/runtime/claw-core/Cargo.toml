@@ -17,6 +17,9 @@ crate-type = ["rlib"]
 [features]
 # Mirrors CONFIG_CLAW_CORE_STAGE_VERBOSITY_VERBOSE (default off == "Simple").
 stage_verbose = []
+# Host-side API/cache profiling. Kept out of defaults so firmware does not pay
+# for diagnostic-only response fields and session events.
+cache_profile = ["claw-api/cache_profile"]
 
 # Compile-time byte cap on each `SessionEvent::Reasoning` payload. EXACTLY ONE may
 # be enabled (event.rs emits a compile_error! for zero or multiple). Default is

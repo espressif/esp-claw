@@ -11,11 +11,11 @@ path = "src/lib.rs"
 
 # A minimal REPL that drives the whole agent system against a live LLM with
 # on-disk memory. It uses the host-target backends (`AgentSystem::on_disk`) and
-# dev workflow dependencies, so it is gated on the `dev` feature.
+# dev workflow dependencies plus cache profiling, so both features are required.
 [[bin]]
 name = "claw-agent-chat"
 path = "src/bin/claw-agent-chat.rs"
-required-features = ["dev"]
+required-features = ["dev", "cache_profile"]
 
 # The tool/submit reference example uses test doubles plus dev workflow deps.
 [[example]]
@@ -29,8 +29,8 @@ required-features = ["dev"]
 #   `claw-cabi` + `claw-sys`.
 # - `host-backends` enables host-target concrete implementations and the
 #   `AgentSystem::on_disk` constructor.
-# - `dev` is a local workflow bundle for the REPL/examples: it includes
-#   host-backends plus CLI/example dependencies.
+# - `dev` is the shared local workflow bundle for examples and host tools.
+# - `cache_profile` forwards provider usage support; `claw-agent-chat` requires it.
 #
 # Nothing is enabled by default so library/device consumers must choose their
 # backend explicitly. Firmware uses
@@ -48,6 +48,12 @@ dev = [
     "dep:tokio",
     "dep:futures-lite",
     "dep:anstyle",
+]
+# Provider token/cache usage diagnostics, kept separate from `dev` so examples
+# and other host workflows do not enable it implicitly.
+cache_profile = [
+    "claw-api/cache_profile",
+    "claw-core/cache_profile",
 ]
 
 [dependencies]

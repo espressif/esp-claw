@@ -64,7 +64,8 @@ pub enum TurnCause {
 /// Content variants ([`Reasoning`](Self::Reasoning), [`Output`](Self::Output),
 /// [`ToolCall`](Self::ToolCall)) are mutually exclusive per event and, within one
 /// iteration, arrive in the order `reasoning -> output -> tool calls` (whichever
-/// are present). `Reasoning`/`Output` `text` fields are **append fragments**
+/// are present), followed by diagnostic usage when cache profiling is enabled.
+/// `Reasoning`/`Output` `text` fields are **append fragments**
 /// (streaming emits many, non-streaming one holding the whole string); each
 /// tool call is emitted as its own complete [`ToolCall`](Self::ToolCall) event,
 /// in call order.
@@ -98,6 +99,12 @@ pub enum SessionEvent {
     ToolCall {
         /// The tool name.
         name: String,
+    },
+    /// Provider token/cache counters for the completed LLM iteration.
+    #[cfg(feature = "cache_profile")]
+    Usage {
+        /// Counters reported by the provider; individual fields may be absent.
+        usage: claw_api::ApiUsage,
     },
     /// The current root iteration ended.
     IterationEnded,
