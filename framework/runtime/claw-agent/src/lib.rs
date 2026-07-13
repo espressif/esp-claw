@@ -15,8 +15,8 @@ use claw_checkpoint::{
 };
 pub use claw_core::{
     ApiUsage, AttachmentId, AttachmentKind, AttachmentRecord, AttachmentRef, IterationId, Message,
-    OpenSessionError, SessionControl, SessionControlError, SessionEvent, SessionEventStream,
-    SessionId, TurnCause, TurnId,
+    OpenSessionError, ReasoningEffort, SessionControl, SessionControlError, SessionEvent,
+    SessionEventStream, SessionId, TurnCause, TurnId,
 };
 use claw_core::{Orchestrator, OrchestratorBuildError};
 use claw_interface::http::StreamingHttp;

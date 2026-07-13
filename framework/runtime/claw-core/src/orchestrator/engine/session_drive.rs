@@ -117,9 +117,6 @@ impl SessionDrive {
     /// The reasoning effort in force for the current turn. A change requested
     /// mid-turn is not reflected until the next turn begins.
     ///
-    /// Scaffold read-seam: the eventual prompt/api wiring reads the active effort
-    /// here when building a turn's request. Unused until that lands.
-    #[allow(dead_code)]
     pub(super) fn reasoning_effort(&self) -> ReasoningEffort {
         self.state.get().reasoning_effort
     }

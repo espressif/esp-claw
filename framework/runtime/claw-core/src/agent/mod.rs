@@ -42,6 +42,7 @@ pub(crate) use registry::{AgentIdAllocator, AgentRegistry};
 use crate::event::EventSink;
 
 use claw_api::{ClawApiConfig, InitError};
+use claw_context::Block;
 
 use claw_checkpoint::{DurablePart, DurablePartError, PartStateSlice};
 use core::future::Future;
@@ -105,6 +106,9 @@ pub(crate) trait Agent: DurablePart {
     /// config snapshot even if configs are updated mid-turn. Keeps the transport;
     /// only the provider/key/model/base URL change.
     fn set_llm_config(&mut self, config: ClawApiConfig) -> Result<(), InitError>;
+
+    /// Set or replace one system-prefix context block for the upcoming turn.
+    fn set_context_block(&mut self, block: Block<'static>);
 
     /// Advance the agent by one step and report what happened. See [`TickOutcome`].
     ///

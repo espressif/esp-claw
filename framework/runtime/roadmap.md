@@ -7,7 +7,7 @@
 - [ ] cleaned up stale configuration
 - [ ] efficient checkpointing system
 - speeded up agent system perf
-  - [ ] max_token optimization (reasoning efforts), and per model
+  - [x] max_token optimization (reasoning efforts), and per model
   - [x] SSE optimization
 - [x] runtime agent config
 - [x] tool search

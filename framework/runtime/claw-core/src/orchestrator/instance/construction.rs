@@ -2,6 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use claw_checkpoint::{DurableState, PartStateSlice};
+use claw_context::Block;
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
@@ -76,7 +77,7 @@ where
             } else {
                 AgentPlacement::Sub(id)
             };
-            self.build_agent(id, &meta.kind, String::new(), placement)
+            self.build_agent(id, &meta.kind, String::new(), placement, Arc::from([]))
                 .map_err(|source| OrchestratorInstanceRestoreError::agent(id, source))?;
 
             let Some(parts) = pending.get(&id) else {
@@ -120,6 +121,7 @@ where
         kind: &AgentKind,
         goal: String,
         placement: AgentPlacement,
+        inherited_context: Arc<[Block<'static>]>,
     ) -> Result<(), FsAgentCreateError> {
         let agent = self.factory.create_agent(
             id,
@@ -127,7 +129,7 @@ where
             goal,
             placement,
             Arc::clone(&self.host),
-            Arc::from([]),
+            inherited_context,
         )?;
         self.state.get_mut().registry.insert(id, agent);
         Ok(())

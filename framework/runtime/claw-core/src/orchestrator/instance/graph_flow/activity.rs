@@ -1,5 +1,7 @@
+use claw_context::Block;
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
+use std::sync::Arc;
 
 use crate::agent::{
     AgentCommand, AgentId, AgentKind, AgentPlacement, AgentSnapshot, AgentStatus, CancelReason,
@@ -19,15 +21,28 @@ where
     Timer: ClawTimer + Default + 'static,
 {
     /// Deliver a user message to this session's root.
-    pub(crate) fn deliver(&mut self, text: impl Into<String>) -> Result<(), InstanceDeliverError> {
+    pub(crate) fn deliver(
+        &mut self,
+        text: impl Into<String>,
+        reasoning_effort: Block<'static>,
+    ) -> Result<(), InstanceDeliverError> {
         match self.state.get().root {
-            Some(root) => self
-                .deliver_message(root, text)
-                .map_err(|source| InstanceDeliverError::Root { root, source }),
+            Some(root) => {
+                self.set_agent_context_block(root, reasoning_effort)
+                    .map_err(|source| InstanceDeliverError::Root { root, source })?;
+                self.deliver_message(root, text)
+                    .map_err(|source| InstanceDeliverError::Root { root, source })
+            }
             None => {
                 let id = self.agent_id_allocator.next();
                 let kind = AgentKind::new(ROOT_AGENT_KIND);
-                self.build_agent(id, &kind, text.into(), AgentPlacement::Root(self.session))?;
+                self.build_agent(
+                    id,
+                    &kind,
+                    text.into(),
+                    AgentPlacement::Root(self.session),
+                    Arc::from([reasoning_effort]),
+                )?;
                 self.state.get_mut().meta.insert(
                     id,
                     NodeMeta {
@@ -43,6 +58,17 @@ where
                 Ok(())
             }
         }
+    }
+
+    pub(crate) fn set_root_context_block(
+        &mut self,
+        block: Block<'static>,
+    ) -> Result<(), InstanceDeliverError> {
+        let Some(root) = self.state.get().root else {
+            return Ok(());
+        };
+        self.set_agent_context_block(root, block)
+            .map_err(|source| InstanceDeliverError::Root { root, source })
     }
 
     pub(crate) fn cancel_all(&mut self, reason: CancelReason) {
@@ -128,6 +154,18 @@ where
         };
         agent.send_command(AgentCommand::AppendMessage(text.into()))?;
         self.enqueue(id);
+        Ok(())
+    }
+
+    fn set_agent_context_block(
+        &mut self,
+        id: AgentId,
+        block: Block<'static>,
+    ) -> Result<(), AgentMessageDeliveryError> {
+        let Some(agent) = self.state.get_mut().registry.get_mut(id) else {
+            return Err(AgentMessageDeliveryError::UnknownAgent(id));
+        };
+        agent.set_context_block(block);
         Ok(())
     }
 

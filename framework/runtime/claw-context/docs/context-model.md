@@ -185,6 +185,8 @@ Group, scope, source, and extension points. (Mutability / band in Part B.)
 - **SkillList** — *Core, Agent.* Available skill catalog rendered as prompt
   guidance. Full skill documents are returned by skill activation tools.
 - **ModeFraming** — *Mode, Agent.* Stable half of `ModeContext` (see Mode Model).
+- **ReasoningEffort** — *Mode, Agent.* Per-session orchestration guidance for
+  how directly or deliberately the root agent should approach the current turn.
 - **GlobalMemory / SessionMemory / AgentMemory** — *Knowledge.* `MEMORY.md` per
   scope, pushed whole. *Extends:* `team_memory` / `device_docs` / `hardware_specs`.
 - **SessionContext** — *Knowledge, Session.* Session-wide shared framing, if any.
@@ -220,7 +222,7 @@ BAND 1 — STATIC INSTRUCTIONS   (immutable; the long shared prefix, never buste
 
 BAND 2 — DURABLE STATE         (slowly mutable; broad→narrow scope; an edit busts only Bands 2–3)
   Soul · AssistantIdentity · UserProfile · GlobalMemory · SessionContext · SessionMemory · AgentMemory
-  SkillList · ModeFraming · ConversationSummary
+  SkillList · ModeFraming · ReasoningEffort · ConversationSummary
 
 BAND 3 — VOLATILE TAIL         (rebuilt each iteration; append-only between compactions)
   ToolReminder                 (dynamic tool phase note, reminder tail)
@@ -259,6 +261,7 @@ Regions below the provider minimum (~1024 tokens on OpenAI) won't cache alone.
 | AgentMemory | Agent | Durable-mutable | 2 |
 | SkillList | Agent | Durable-mutable | 2 |
 | ModeFraming | Agent | Durable-mutable | 2 |
+| ReasoningEffort | Agent | Durable-mutable | 2 |
 | ConversationSummary | Conversation | Durable-mutable | 2 |
 | RecentContext / LiveState / ToolResults | Turn | Volatile | 3 |
 | OutputContract | Agent/mode | Static (last, by exception) | 3 |

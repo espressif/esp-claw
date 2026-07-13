@@ -4,13 +4,14 @@ use tracing::Instrument as _;
 
 use crate::agent::CancelReason;
 use crate::event::{EventSink, SessionEvent, TurnCause};
+use crate::orchestrator::ReasoningEffort;
 use crate::session::{SessionId, TurnId};
 
 use super::super::approval::{self, ApprovalResolverError, PermissionReplyResolution};
 use super::super::control::{DriveControl, DriveStop};
 use super::super::error::DeliverError;
 use super::super::instance::{DriveOutput, OrchestratorInstance, PendingApproval, RootReply};
-use super::session_drive::{SessionDrive, SubmittedInput};
+use super::session_drive::SubmittedInput;
 use super::Engine;
 
 impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
@@ -23,12 +24,10 @@ where
         let Some(events) = self.session_events(session_id) else {
             return;
         };
-        let Some(turn) = self
-            .drives
-            .borrow_mut()
-            .get_mut(&session_id)
-            .map(SessionDrive::next_turn)
-        else {
+        let Some((turn, effort)) = self.drives.borrow_mut().get_mut(&session_id).map(|drive| {
+            let turn = drive.next_turn();
+            (turn, drive.reasoning_effort())
+        }) else {
             return;
         };
         let has_text = !input.text.is_empty();
@@ -46,7 +45,9 @@ where
                 attachment_count = 0_u64,
                 attachment_kinds = "none",
             );
-            let result = self.drive_one_input(session_id, input.text, &events).await;
+            let result = self
+                .drive_one_input(session_id, input.text, effort, &events)
+                .await;
             self.finish_turn(session_id, turn, &events, result);
             self.set_foreground_active(session_id, false);
         }
@@ -58,12 +59,10 @@ where
         let Some(events) = self.session_events(session_id) else {
             return;
         };
-        let Some(turn) = self
-            .drives
-            .borrow_mut()
-            .get_mut(&session_id)
-            .map(SessionDrive::next_turn)
-        else {
+        let Some((turn, effort)) = self.drives.borrow_mut().get_mut(&session_id).map(|drive| {
+            let turn = drive.next_turn();
+            (turn, drive.reasoning_effort())
+        }) else {
             return;
         };
         async {
@@ -73,7 +72,7 @@ where
                 cause: TurnCause::BackgroundResult,
             });
             tracing::info!(name: "background_result", "");
-            let result = self.drive_root_ready(session_id, &events).await;
+            let result = self.drive_root_ready(session_id, effort, &events).await;
             self.finish_turn(session_id, turn, &events, result);
             self.set_foreground_active(session_id, false);
         }
@@ -148,12 +147,14 @@ where
         &self,
         session_id: SessionId,
         text: String,
+        effort: ReasoningEffort,
         events: &EventSink,
     ) -> Result<(DriveOutput, DriveStop), DeliverError> {
         let mut slot = self.checkout_instance(session_id);
         let instance = slot.get_mut();
 
         if let Some(pending) = instance.active_approval() {
+            instance.set_root_context_block(effort.context_block())?;
             let control = DriveControl::new();
             self.set_active_control(session_id, Some(control.clone()));
             let result = self
@@ -163,7 +164,7 @@ where
             return result;
         }
 
-        instance.deliver(text)?;
+        instance.deliver(text, effort.context_block())?;
         self.drive_root_ready_in_slot(session_id, instance, events)
             .await
     }
@@ -171,10 +172,12 @@ where
     async fn drive_root_ready(
         &self,
         session_id: SessionId,
+        effort: ReasoningEffort,
         events: &EventSink,
     ) -> Result<(DriveOutput, DriveStop), DeliverError> {
         let mut slot = self.checkout_instance(session_id);
         let instance = slot.get_mut();
+        instance.set_root_context_block(effort.context_block())?;
         self.drive_root_ready_in_slot(session_id, instance, events)
             .await
     }

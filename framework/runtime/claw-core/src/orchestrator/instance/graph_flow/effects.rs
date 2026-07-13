@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
@@ -155,7 +156,7 @@ where
             return;
         };
         let depth = parent_meta.depth.saturating_add(1);
-        match self.build_agent(id, &kind, goal, AgentPlacement::Sub(id)) {
+        match self.build_agent(id, &kind, goal, AgentPlacement::Sub(id), Arc::from([])) {
             Ok(()) => {
                 tracing::info!(
                     name: "spawn_materialized",

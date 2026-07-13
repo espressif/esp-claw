@@ -236,6 +236,10 @@ impl<H: ClawHttp + StreamingHttp, Timer: ClawTimer> Agent for GenericAgent<H, Ti
         self.base.set_llm_config(config)
     }
 
+    fn set_context_block(&mut self, block: Block<'static>) {
+        self.base.set_context_block(block);
+    }
+
     fn tick(&mut self, events: EventSink) -> AgentTickFuture<'_> {
         // Flat: no FSM, no per-phase gating — the model drives its own flow.
         Box::pin(async move { self.base.tick(&events).await })

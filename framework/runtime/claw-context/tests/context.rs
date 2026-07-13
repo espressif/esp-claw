@@ -32,6 +32,21 @@ fn profile_blocks_render_before_global_memory() {
 }
 
 #[test]
+fn reasoning_effort_follows_mode_and_precedes_conversation_summary() {
+    let mut context = Context::new();
+    context
+        .with(Block::new(BlockKind::ConversationSummary, "SUMMARY"))
+        .with(Block::new(BlockKind::ReasoningEffort, "EFFORT"))
+        .with(Block::new(BlockKind::SkillList, "SKILLS"))
+        .with(Block::new(BlockKind::ModeFraming, "MODE"));
+
+    assert_eq!(
+        system_of(&mut context),
+        "SKILLS\n\nMODE\n\nEFFORT\n\nSUMMARY"
+    );
+}
+
+#[test]
 fn empty_content_is_absent_and_drops_the_key() {
     let mut context = Context::new();
     context

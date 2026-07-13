@@ -7,6 +7,7 @@ pub use claw_agent::AttachmentRef
 pub use claw_agent::IterationId
 pub use claw_agent::Message
 pub use claw_agent::OpenSessionError
+pub use claw_agent::ReasoningEffort
 pub use claw_agent::SessionControl
 pub use claw_agent::SessionControlError
 pub use claw_agent::SessionEvent

@@ -38,6 +38,10 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         self.llm.set_config(config)
     }
 
+    pub(crate) fn set_context_block(&mut self, block: Block<'static>) {
+        self.context.with(block);
+    }
+
     /// Assemble a runnable agent from a [`BaseAgentConfig`].
     pub fn build<F: ClawFs + 'static>(
         config: BaseAgentConfig<F>,

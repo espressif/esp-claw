@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use claw_agent::{AgentSystem, IterationId, SessionEvent, TurnCause, TurnId};
+use claw_agent::{AgentSystem, IterationId, ReasoningEffort, SessionEvent, TurnCause, TurnId};
 #[cfg(feature = "cache_profile")]
 use claw_api::ApiUsage;
 use claw_interface::{
@@ -140,6 +140,34 @@ fn agent_loop_csv_llm_response_matrix_reports_errors_and_bounds_reasoning() {
             case,
         );
     }
+}
+
+#[test]
+fn reasoning_effort_replaces_the_root_system_prompt_block_on_the_next_turn() {
+    let _lock = AGENT_LOOP_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    install_agent_replies(vec![assistant_text("medium"), assistant_text("high")]);
+
+    let root = mem_root("agent-loop-reasoning-effort");
+    let system = build_matrix_system(&root);
+    let session = system.new_session();
+    let (control, mut events) = system.open_session(session).unwrap();
+
+    block_on(control.submit("first turn")).unwrap();
+    let _ = drain_until_turn_ended(&mut events);
+    block_on(control.set_reasoning_effort(ReasoningEffort::High)).unwrap();
+    block_on(control.submit("second turn")).unwrap();
+    let _ = drain_until_turn_ended(&mut events);
+
+    let bodies = agent_request_bodies().clone();
+    assert_eq!(bodies.len(), 2);
+    let first_system = system_prompt(&bodies[0]);
+    let second_system = system_prompt(&bodies[1]);
+    assert!(first_system.contains("# Reasoning effort: medium"));
+    assert!(!first_system.contains("# Reasoning effort: high"));
+    assert!(second_system.contains("# Reasoning effort: high"));
+    assert!(!second_system.contains("# Reasoning effort: medium"));
 }
 
 #[cfg(feature = "cache_profile")]
@@ -339,6 +367,17 @@ fn is_agent_iteration_request(body: &str) -> bool {
         return false;
     };
     value.get("tools").is_some() && value.get("response_format").is_none()
+}
+
+fn system_prompt(body: &str) -> String {
+    let value: Value = serde_json::from_str(body).unwrap();
+    value["messages"]
+        .as_array()
+        .and_then(|messages| messages.first())
+        .filter(|message| message["role"] == "system")
+        .and_then(|message| message["content"].as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| panic!("agent request has no system prompt: {body}"))
 }
 
 fn assert_agent_request_offered_expected_tool(body: &str, operations: &str, case: &str) {

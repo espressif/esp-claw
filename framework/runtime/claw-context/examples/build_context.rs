@@ -22,13 +22,13 @@ fn main() {
     let mut context = Context::new();
 
     // A custom always-on hardware-docs block, placed at the bottom of the agent
-    // durable group (after ModeFraming, order 2). Query-specific retrieved docs
-    // should normally arrive as tool results in `history`, not as durable blocks.
+    // durable group (after ReasoningEffort, order 3). Query-specific retrieved
+    // docs should normally arrive as tool results in `history`, not as durable blocks.
     let hardware_docs = Block::new(
         BlockKind::Custom {
             band: Band::Durable,
             scope: Scope::Agent,
-            order: 3,
+            order: 4,
             label: Cow::Borrowed("HardwareDocs"),
         },
         "Doc: the GPIO API exposes claw_gpio_set_level(pin, level).",

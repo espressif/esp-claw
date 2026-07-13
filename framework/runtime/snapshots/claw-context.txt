@@ -17,6 +17,7 @@ pub claw_context::BlockKind::GlobalMemory
 pub claw_context::BlockKind::ModeFraming
 pub claw_context::BlockKind::OutputContract
 pub claw_context::BlockKind::RecentContext
+pub claw_context::BlockKind::ReasoningEffort
 pub claw_context::BlockKind::SessionContext
 pub claw_context::BlockKind::SessionMemory
 pub claw_context::BlockKind::SkillList

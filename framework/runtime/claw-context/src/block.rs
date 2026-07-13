@@ -76,6 +76,7 @@ pub enum BlockKind {
     AgentMemory,
     SkillList,
     ModeFraming,
+    ReasoningEffort,
     ConversationSummary,
     // Band 3 — Volatile tail.
     ToolReminder,
@@ -105,6 +106,7 @@ impl BlockKind {
             | BlockKind::AgentMemory
             | BlockKind::SkillList
             | BlockKind::ModeFraming
+            | BlockKind::ReasoningEffort
             | BlockKind::ConversationSummary => Band::Durable,
             BlockKind::ToolReminder | BlockKind::RecentContext | BlockKind::OutputContract => {
                 Band::Volatile
@@ -128,6 +130,7 @@ impl BlockKind {
             | BlockKind::AgentMemory
             | BlockKind::SkillList
             | BlockKind::ModeFraming
+            | BlockKind::ReasoningEffort
             | BlockKind::ToolReminder => Scope::Agent,
             BlockKind::ConversationSummary => Scope::Conversation,
             BlockKind::RecentContext | BlockKind::OutputContract => Scope::Turn,
@@ -151,6 +154,7 @@ impl BlockKind {
             BlockKind::AgentMemory => 0,
             BlockKind::SkillList => 1,
             BlockKind::ModeFraming => 2,
+            BlockKind::ReasoningEffort => 3,
             BlockKind::ConversationSummary => 0,
             // Band 3
             BlockKind::ToolReminder => 0,
