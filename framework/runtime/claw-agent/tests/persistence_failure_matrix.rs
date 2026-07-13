@@ -110,10 +110,7 @@ fn setup_disk_state(root: &str, setup: &str) {
 
 fn assert_startup_error(root: &str, fixture: &Fixture) {
     install_replies(Vec::new());
-    let error = match PersistenceFailureSystem::new::<StdThread, TokioExecutor>(
-        llm_config(),
-        persistence(root),
-    ) {
+    let error = match PersistenceFailureSystem::new::<StdThread, TokioExecutor>(persistence(root)) {
         Ok(_) => panic!("case {}: startup should fail", fixture.case),
         Err(error) => error.to_string(),
     };
@@ -123,8 +120,10 @@ fn assert_startup_error(root: &str, fixture: &Fixture) {
 fn assert_submit_error(root: &str, fixture: &Fixture) {
     install_replies(Vec::new());
     let system =
-        PersistenceFailureSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence(root))
-            .unwrap();
+        PersistenceFailureSystem::new::<StdThread, TokioExecutor>(persistence(root)).unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
     let session = system.new_session();
     let (control, mut events) = system.open_session(session).unwrap();
     block_on(control.submit(format!("trigger {}", fixture.case))).unwrap();
@@ -143,8 +142,10 @@ fn assert_tool_error(root: &str, fixture: &Fixture) {
         assistant_text(&fixture.final_output),
     ]);
     let system =
-        PersistenceFailureSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence(root))
-            .unwrap();
+        PersistenceFailureSystem::new::<StdThread, TokioExecutor>(persistence(root)).unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
     let session = system.new_session();
     let (control, mut events) = system.open_session(session).unwrap();
     block_on(control.submit(format!("trigger {}", fixture.case))).unwrap();

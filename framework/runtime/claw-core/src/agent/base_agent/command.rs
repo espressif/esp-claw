@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use strum::IntoStaticStr;
 
-use claw_api::InitError;
 use claw_tool::ToolSetError;
 
 use super::{ApprovalId, IterationLoopError};
@@ -182,10 +181,6 @@ pub(crate) enum AgentRunError {
 /// Failure assembling a [`super::BaseAgent`] in [`super::BaseAgent::build`].
 #[derive(Clone, Debug, thiserror::Error)]
 pub(crate) enum BaseAgentBuildError {
-    /// The per-agent LLM client could not be initialized from the supplied
-    /// [`ClawApiConfig`](claw_api::ClawApiConfig).
-    #[error(transparent)]
-    Llm(#[from] InitError),
     /// Merging the built-in tool group onto the caller's tools hit a name clash.
     #[error(transparent)]
     Tools(#[from] ToolSetError),

@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use async_channel::Sender;
-use claw_api::ClawApiConfig;
+use claw_api::{ClawApiConfig, InitError};
 use claw_checkpoint::{
     CheckpointCoordinatorInitError, CheckpointStorage, FsCheckpointStorage,
     SharedCheckpointCoordinator,
@@ -14,6 +14,7 @@ use claw_interface::{
 };
 use claw_tool::ToolRegistry;
 
+use crate::config::{ApiUsage, ClawApiManager};
 use crate::event::EventSink;
 use crate::session::{SessionId, SessionStore};
 
@@ -41,6 +42,9 @@ pub struct Orchestrator {
     worker: Mutex<Option<WorkerHandle>>,
     pending_runtime_removals: Arc<Mutex<HashSet<SessionId>>>,
     checkpoint_sessions: Box<CheckpointSessions>,
+    /// Shared with the engine worker: turns read the per-usage config from it at
+    /// their start; this handle side updates it via [`link_api`](Self::link_api).
+    api_manager: Arc<RwLock<ClawApiManager>>,
 }
 
 impl Orchestrator {
@@ -53,7 +57,6 @@ impl Orchestrator {
     /// engine cannot be assembled inside it.
     pub fn new<Filesystem, Http, Timer, Thread, Executor>(
         tools: Arc<ToolRegistry>,
-        llm_config: ClawApiConfig,
         persistence_dir: String,
         skill_roots: Vec<String>,
     ) -> Result<Self, OrchestratorBuildError>
@@ -83,7 +86,6 @@ impl Orchestrator {
         Self::new_with_checkpoint_coordinator::<Filesystem, Http, Timer, Thread, Executor>(
             tools,
             checkpoints,
-            llm_config,
             persistence_dir,
             skill_roots,
         )
@@ -93,7 +95,6 @@ impl Orchestrator {
     pub fn new_with_checkpoint_coordinator<Filesystem, Http, Timer, Thread, Executor>(
         tools: Arc<ToolRegistry>,
         checkpoints: SharedCheckpointCoordinator<FsCheckpointStorage<Filesystem>>,
-        llm_config: ClawApiConfig,
         persistence_dir: String,
         skill_roots: Vec<String>,
     ) -> Result<Self, OrchestratorBuildError>
@@ -134,6 +135,9 @@ impl Orchestrator {
             },
         );
 
+        let api_manager = Arc::new(RwLock::new(ClawApiManager::new()));
+        let api_manager_engine = Arc::clone(&api_manager);
+
         let sessions_engine = Arc::clone(&sessions);
         let worker = Thread::spawn_worker(
             "claw_orchestrator",
@@ -144,13 +148,13 @@ impl Orchestrator {
                 run_engine::<Filesystem, Http, Timer, Executor>(
                     tools,
                     checkpoints,
-                    llm_config,
                     persistence_dir,
                     checkpoint_dir,
                     skill_roots,
                     sessions_engine,
                     command_rx,
                     ready_tx,
+                    api_manager_engine,
                 );
             },
         )?;
@@ -162,6 +166,7 @@ impl Orchestrator {
                 worker: Mutex::new(Some(worker)),
                 pending_runtime_removals,
                 checkpoint_sessions,
+                api_manager,
             }),
             Ok(Err(error)) => {
                 worker.join();
@@ -172,6 +177,27 @@ impl Orchestrator {
                 Err(OrchestratorBuildError::WorkerExitedBeforeReady)
             }
         }
+    }
+
+    /// Register an LLM API config for a usage (see `ClawApiManager::link_api`).
+    ///
+    /// Takes `&self`: the manager is behind an `RwLock`, and updates are picked up
+    /// at the start of the next turn (turns snapshot their config at their start),
+    /// so this never interrupts an in-flight turn.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InitError`] without changing bindings when `api` is invalid.
+    pub fn link_api(
+        &self,
+        api: ClawApiConfig,
+        usage: ApiUsage,
+        default: bool,
+    ) -> Result<(), InitError> {
+        self.api_manager
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .link_api(api, usage, default)
     }
 
     /// Open the session's long-lived event stream and return its write/control

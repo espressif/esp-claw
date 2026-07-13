@@ -36,9 +36,10 @@ fn subagent_lifecycle_csv_matrix_drives_background_results_and_graph_updates() {
         install_case(fixture.clone());
 
         let root = mem_root("subagent-lifecycle");
-        let system =
-            SubagentSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence(&root))
-                .unwrap();
+        let system = SubagentSystem::new::<StdThread, TokioExecutor>(persistence(&root)).unwrap();
+        system
+            .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+            .unwrap();
         let session = system.new_session();
         let (control, mut events) = system.open_session(session).unwrap();
 

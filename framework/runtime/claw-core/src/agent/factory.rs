@@ -23,9 +23,9 @@ mod layout;
 mod long_term;
 
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
-use claw_api::ClawApiConfig;
+use crate::config::ClawApiManager;
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::ProfileStore;
@@ -47,10 +47,9 @@ pub struct FsAgentFactory<
     Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 > {
-    /// Template for the per-agent LLM client. Each agent gets its own `ClawApi`
-    /// minted from this config plus a freshly constructed `Http::default()`
-    /// transport, so no transport instance is shared between agents.
-    llm_config: ClawApiConfig,
+    /// Runtime per-usage config, shared with the orchestrator handle. Read at the
+    /// start of each turn to select that turn's config (see [`Self::config_for`]).
+    api_manager: Arc<RwLock<ClawApiManager>>,
     /// Central tool registry used to seed each agent tool set.
     tools: Arc<ToolRegistry>,
     /// Marks the HTTP transport type minted per agent. `fn() -> Http` so the

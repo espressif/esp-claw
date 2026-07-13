@@ -1,8 +1,8 @@
 //! `ClawApi` — the LLM client, port of `claw_llm_runtime.c`.
 //!
-//! Holds the resolved config, the derived model profile, the constructed
-//! backend, and the injected [`ClawHttp`]. [`ClawApi::init`] applies the same
-//! defaulting logic as the C `claw_llm_runtime_init`.
+//! Owns an injected HTTP transport and an optional resolved backend. Construct a
+//! client with [`ClawApi::new`], then install a complete config with
+//! [`ClawApi::set_config`] before issuing requests.
 
 use core::sync::atomic::AtomicBool;
 
@@ -29,7 +29,8 @@ const ABORTED_DURING_BACKOFF: &str = "LLM request aborted during retry backoff";
 /// The LLM client: a resolved backend + model profile behind an injected
 /// [`ClawHttp`] transport.
 ///
-/// Construct it once with [`ClawApi::init`], then reuse it for many requests.
+/// Construct it once with [`ClawApi::new`], configure it with
+/// [`ClawApi::set_config`], then reuse it for many requests.
 ///
 /// Generic over the concrete transport `H` (static dispatch): the client *owns*
 /// its `H` and drives it through `&mut self`, so a transport may keep and reuse a
@@ -49,45 +50,34 @@ const ABORTED_DURING_BACKOFF: &str = "LLM request aborted during retry backoff";
 /// # struct H; impl ClawHttp for H {
 /// #   fn post_json(&mut self, _r: &HttpJsonRequest, _a: &AtomicBool) -> Result<HttpResponse, HttpError> {
 /// #     Ok(HttpResponse { status_code: HttpStatusCode::OK, body: r#"{"choices":[{"message":{"role":"assistant","content":"ok"}}]}"#.into() }) } }
-/// let mut api = ClawApi::init(
-///     ClawApiConfig::new(
+/// let mut api = ClawApi::new(H);
+/// api.set_config(ClawApiConfig::new(
 ///         BackendKind::OpenAiCompatible,
 ///         "sk-...",
 ///         "gpt-4o-mini",
 ///         "https://api.openai.com/v1",
-///     ),
-///     H,
-/// )?;
+///     ))?;
 /// let msgs = serde_json::json!([{ "role": "user", "content": "hi" }]);
 /// let abort = AtomicBool::new(false);
 /// let resp = api.chat(&ChatRequest::new("sys", &msgs), &abort)?;
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub struct ClawApi<H: BlockingClawHttp> {
-    backend: Backend,
+    backend: Option<Backend>,
     http: H,
 }
 
 /// Async LLM client: a resolved backend behind an injected [`ClawHttp`]
 /// transport and [`ClawTimer`] backoff timer.
 pub struct ClawApiAsync<H: ClawHttp, Timer: ClawTimer> {
-    backend: Backend,
+    backend: Option<Backend>,
     http: H,
     timer: Timer,
 }
 
 fn resolve_config(config: ClawApiConfig) -> Result<Backend, InitError> {
-    // Centralized credential/config validation. Backends trust that these are
-    // present and non-empty once `init` returns Ok.
-    if config.api_key.is_empty() {
-        return Err(InitError::MissingApiKey);
-    }
-    if config.model.is_empty() {
-        return Err(InitError::MissingModel);
-    }
-    if config.base_url.is_empty() {
-        return Err(InitError::MissingBaseUrl);
-    }
+    // Backends trust that required fields are present once `set_config` returns.
+    config.validate()?;
     config.backend.make(&config)
 }
 
@@ -123,43 +113,23 @@ fn chat_error_kind(error: &ChatError) -> &'static str {
 }
 
 impl<H: BlockingClawHttp> ClawApi<H> {
-    /// Validate `config`, select the built-in backend, and bind the `http`
-    /// transport. (Port of `claw_llm_runtime_init`.)
-    ///
-    /// Backend wire details and capability flags come from the selected
-    /// [`BackendKind`](crate::BackendKind). Request policy (`timeout_ms`,
-    /// `max_tokens`, `image_max_bytes`) is carried directly by `config`.
+    /// Construct an unconfigured client over `http`.
+    #[must_use]
+    pub fn new(http: H) -> Self {
+        Self {
+            backend: None,
+            http,
+        }
+    }
+
+    /// Validate and atomically install a complete backend config.
     ///
     /// # Errors
     ///
-    /// Returns [`InitError`] when `api_key`, `model`, or `base_url` is empty.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use std::sync::atomic::AtomicBool;
-    /// use claw_api::{ClawApi, ClawApiConfig, InitError};
-    /// # use claw_interface::http::blocking::ClawHttp;
-    /// # use claw_interface::http::{HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
-    /// # struct H; impl ClawHttp for H {
-    /// #   fn post_json(&mut self, _r: &HttpJsonRequest, _a: &AtomicBool) -> Result<HttpResponse, HttpError> {
-    /// #     Ok(HttpResponse { status_code: HttpStatusCode::OK, body: "{}".into() }) } }
-    /// // Missing api_key is rejected.
-    /// let result = ClawApi::init(
-    ///     ClawApiConfig::new(
-    ///         claw_api::BackendKind::OpenAiCompatible,
-    ///         "",
-    ///         "gpt-4o-mini",
-    ///         "https://api.openai.com/v1",
-    ///     ),
-    ///     H,
-    /// );
-    /// assert!(matches!(result, Err(InitError::MissingApiKey)));
-    /// ```
-    pub fn init(config: ClawApiConfig, http: H) -> Result<ClawApi<H>, InitError> {
-        let backend = resolve_config(config)?;
-
-        Ok(ClawApi { backend, http })
+    /// Returns [`InitError`] when a required config field is empty.
+    pub fn set_config(&mut self, config: ClawApiConfig) -> Result<(), InitError> {
+        self.backend = Some(resolve_config(config)?);
+        Ok(())
     }
 
     /// Run a chat completion. (Port of `claw_llm_runtime_chat`.)
@@ -204,7 +174,7 @@ impl<H: BlockingClawHttp> ClawApi<H> {
         abort: &AtomicBool,
     ) -> Result<LlmResponse, ChatError> {
         let policy = request.retry;
-        let backend = &self.backend;
+        let backend = self.backend.as_ref().ok_or(ClawApiError::NotConfigured)?;
         let http = &mut self.http;
         run_with_retry(
             &policy,
@@ -282,7 +252,11 @@ impl<H: BlockingClawHttp> ClawApi<H> {
             .map_err(|err| ChatJsonError::InvalidOutput(format!("invalid schema json: {err}")))?;
 
         let policy = request.retry;
-        let backend = &self.backend;
+        let backend = self
+            .backend
+            .as_ref()
+            .ok_or(ClawApiError::NotConfigured)
+            .map_err(ChatError::from)?;
         let http = &mut self.http;
         run_with_retry(
             &policy,
@@ -340,7 +314,7 @@ impl<H: BlockingClawHttp> ClawApi<H> {
         abort: &AtomicBool,
     ) -> Result<String, InferMediaError> {
         let policy = request.retry;
-        let backend = &self.backend;
+        let backend = self.backend.as_ref().ok_or(ClawApiError::NotConfigured)?;
         let http = &mut self.http;
         run_with_retry(
             &policy,
@@ -352,53 +326,47 @@ impl<H: BlockingClawHttp> ClawApi<H> {
     }
 }
 
-impl<H, Timer> ClawApiAsync<H, Timer>
-where
-    H: ClawHttp + Default,
-    Timer: ClawTimer + Default,
-{
-    /// Validate `config`, select the built-in backend, and bind default async
-    /// HTTP/timer transports.
-    pub fn init_default(config: ClawApiConfig) -> Result<Self, InitError> {
-        let backend = resolve_config(config)?;
-
-        Ok(Self {
-            backend,
-            http: H::default(),
-            timer: Timer::default(),
-        })
-    }
-}
-
-impl<H: ClawHttp, Timer: ClawTimer + Default> ClawApiAsync<H, Timer> {
-    /// Validate `config` and select the backend, binding an explicit async HTTP
-    /// transport and a default timer.
-    pub fn init(config: ClawApiConfig, http: H) -> Result<Self, InitError> {
-        Ok(Self {
-            backend: resolve_config(config)?,
-            http,
-            timer: Timer::default(),
-        })
-    }
-}
-
 impl<H: ClawHttp, Timer: ClawTimer> ClawApiAsync<H, Timer> {
+    /// Construct an unconfigured client over the supplied transport and timer.
+    #[must_use]
+    pub fn new(http: H, timer: Timer) -> Self {
+        Self {
+            backend: None,
+            http,
+            timer,
+        }
+    }
+
+    /// Rebind this client to a new [`ClawApiConfig`] at runtime, keeping the
+    /// existing HTTP transport and timer (so a keep-alive connection is not torn
+    /// down). Only the backend — provider, key, model, base URL — is rebuilt.
+    ///
+    /// Used to apply a per-turn config selected from a `ClawApiManager` without
+    /// reconstructing the whole client. Returns [`InitError`] if the new config
+    /// is incomplete or invalid.
+    pub fn set_config(&mut self, config: ClawApiConfig) -> Result<(), InitError> {
+        self.backend = Some(resolve_config(config)?);
+        Ok(())
+    }
+
     /// Async chat completion over [`ClawHttp`].
     pub async fn chat(
         &mut self,
         request: &ChatRequest<'_>,
         cancel: Cancel<'_>,
     ) -> Result<LlmResponse, ChatError> {
+        let backend = self
+            .backend
+            .as_ref()
+            .ok_or(ClawApiError::NotConfigured)
+            .map_err(ChatError::from)?;
         let policy = request.retry;
         let max_attempts = u64::from(policy.max_retries).saturating_add(1);
         let mut retry_attempt = 0u32;
         loop {
             let attempt = u64::from(retry_attempt).saturating_add(1);
             let result = async {
-                let result = self
-                    .backend
-                    .chat_async(&mut self.http, request, cancel)
-                    .await;
+                let result = backend.chat_async(&mut self.http, request, cancel).await;
                 match &result {
                     Ok(_) => tracing::info!(name: "completed", ""),
                     Err(error) => {
@@ -482,6 +450,8 @@ impl<H: ClawHttp, Timer: ClawTimer> ClawApiAsync<H, Timer> {
         H: StreamingHttp,
     {
         self.backend
+            .as_ref()
+            .ok_or(ClawApiError::NotConfigured)?
             .chat_stream_async(&mut self.http, request, cancel)
             .await
     }
@@ -492,6 +462,11 @@ impl<H: ClawHttp, Timer: ClawTimer> ClawApiAsync<H, Timer> {
         request: &ChatJsonRequest<'_>,
         cancel: Cancel<'_>,
     ) -> Result<ChatJsonResponse<T>, ChatJsonError> {
+        let backend = self
+            .backend
+            .as_ref()
+            .ok_or(ClawApiError::NotConfigured)
+            .map_err(ChatError::from)?;
         let spec = request
             .output_schema
             .ok_or(ChatJsonError::MissingOutputSchema)?;
@@ -501,8 +476,7 @@ impl<H: ClawHttp, Timer: ClawTimer> ClawApiAsync<H, Timer> {
         let policy = request.retry;
         let mut attempt = 0u32;
         loop {
-            let result = match self
-                .backend
+            let result = match backend
                 .chat_json_async(&mut self.http, request, spec.name, &schema, cancel)
                 .await
             {
@@ -535,11 +509,11 @@ impl<H: ClawHttp, Timer: ClawTimer> ClawApiAsync<H, Timer> {
         request: &MediaRequest<'_>,
         cancel: Cancel<'_>,
     ) -> Result<String, InferMediaError> {
+        let backend = self.backend.as_ref().ok_or(ClawApiError::NotConfigured)?;
         let policy = request.retry;
         let mut attempt = 0u32;
         loop {
-            match self
-                .backend
+            match backend
                 .infer_media_async(&mut self.http, request, cancel)
                 .await
             {

@@ -97,7 +97,8 @@ fn main() -> anyhow::Result<()> {
         "gpt-4o-mini",
         "https://api.example.com/v1",
     );
-    let mut api = ClawApi::init(config, StubHttp)?;
+    let mut api = ClawApi::new(StubHttp);
+    api.set_config(config)?;
     let abort = AtomicBool::new(false);
 
     // 1. Plain chat → free-form assistant text.

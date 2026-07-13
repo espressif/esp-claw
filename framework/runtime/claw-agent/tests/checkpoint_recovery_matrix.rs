@@ -15,7 +15,7 @@ use claw_interface::{
     BlockingHttpAdapter, ClawFs, DiskFs, ImmediateTimer, SharedScriptHttp, StdThread, TokioExecutor,
 };
 use serde_json::{json, Value};
-use support::{csv_dicts, llm_config, persistence};
+use support::{csv_dicts, persistence};
 use tempdir::TempDir;
 
 type CheckpointSystem =
@@ -29,10 +29,7 @@ fn checkpoint_recovery_csv_matrix_reports_public_startup_errors() {
         let root = temp.path().to_string_lossy().into_owned();
         setup_checkpoint(&root, field(&row, "setup"));
 
-        let error = match CheckpointSystem::new::<StdThread, TokioExecutor>(
-            llm_config(),
-            persistence(&root),
-        ) {
+        let error = match CheckpointSystem::new::<StdThread, TokioExecutor>(persistence(&root)) {
             Ok(_) => panic!("case {case}: corrupt checkpoint must reject AgentSystem startup"),
             Err(error) => error.to_string(),
         };

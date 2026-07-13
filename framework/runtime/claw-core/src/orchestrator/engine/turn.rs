@@ -210,7 +210,7 @@ where
         events: &EventSink,
     ) -> Result<(DriveOutput, DriveStop), DeliverError> {
         let resolution = match approval::resolve_permission_reply::<Http, Timer>(
-            self.approval_llm_config.clone(),
+            &self.api_manager,
             &pending.summary,
             user_reply,
             control,

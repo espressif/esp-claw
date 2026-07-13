@@ -454,12 +454,20 @@ impl SyncToolHandler for CheckpointEchoTool {
 
 fn build_disk_system(root: &str, bodies: Vec<String>) -> DiskAgentSystem {
     install_script(bodies);
-    DiskAgentSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence(root)).unwrap()
+    let system = DiskAgentSystem::new::<StdThread, TokioExecutor>(persistence(root)).unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
+    system
 }
 
 fn build_recording_disk_system(root: &str) -> RecordingDiskAgentSystem {
-    RecordingDiskAgentSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence(root))
-        .unwrap()
+    let system =
+        RecordingDiskAgentSystem::new::<StdThread, TokioExecutor>(persistence(root)).unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
+    system
 }
 
 fn install_recording_replies(replies: Vec<String>) {

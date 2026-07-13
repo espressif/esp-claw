@@ -1,6 +1,6 @@
 //! `claw-api` error types.
 //!
-//! Each public entry point ([`crate::ClawApi::init`], [`crate::ClawApi::chat`],
+//! Each public entry point ([`crate::ClawApi::set_config`], [`crate::ClawApi::chat`],
 //! [`crate::ClawApi::infer_media`]) returns its own error enum because their
 //! failure modes are not 1-to-1: config validation, chat-only tool errors, and
 //! the media pipeline are disjoint. The shared API/transport/parse failures live
@@ -16,6 +16,10 @@ use thiserror::Error;
 /// allocation). `ApiError` is the static-message catch-all.
 #[derive(Debug, Clone, IntoStaticStr, PartialEq, Eq, Error)]
 pub enum ClawApiError {
+    /// The client was constructed but no valid config has been installed yet.
+    #[strum(serialize = "not_configured")]
+    #[error("LLM API is not configured")]
+    NotConfigured,
     /// Permanent transport failure (aborts, bad URL/body, 4xx, ...). Carries the
     /// backend/transport detail (e.g. `"HTTP 401: invalid api key"`), which is
     /// inherently dynamic. Never retried.

@@ -124,7 +124,7 @@ impl Default for Owned<MockHttp> {
             Self(
                 slot.borrow()
                     .as_ref()
-                    .expect("install mock http before init_default")
+                    .expect("install mock http before constructing the client")
                     .clone(),
             )
         })
@@ -173,6 +173,25 @@ fn cfg(backend: BackendKind, base_url: &str) -> ClawApiConfig {
     ClawApiConfig::new(backend, "key", "model-x", base_url)
 }
 
+fn configured_api<H: BlockingClawHttp>(
+    config: ClawApiConfig,
+    http: H,
+) -> Result<ClawApi<H>, InitError> {
+    let mut api = ClawApi::new(http);
+    api.set_config(config)?;
+    Ok(api)
+}
+
+fn configured_async<H, Timer>(config: ClawApiConfig) -> Result<ClawApiAsync<H, Timer>, InitError>
+where
+    H: ClawHttp + Default,
+    Timer: ClawTimer + Default,
+{
+    let mut api = ClawApiAsync::new(H::default(), Timer::default());
+    api.set_config(config)?;
+    Ok(api)
+}
+
 fn captured_body(http: &MockHttp) -> Result<Value, TestFailure> {
     let body = lock(&http.last_body);
     let body = body
@@ -208,10 +227,61 @@ fn must_err<T, E>(result: Result<T, E>, context: &str) -> Result<E, TestFailure>
 }
 
 #[test]
+fn blocking_chat_requires_config() {
+    let http = MockHttp::new("unused");
+    let mut api = ClawApi::new(Owned(http));
+    let messages = json!([{"role": "user", "content": "hello"}]);
+    let abort = AtomicBool::new(false);
+
+    let error = api
+        .chat(&ChatRequest::new("sys", &messages), &abort)
+        .unwrap_err();
+
+    assert_eq!(error, ChatError::Api(ClawApiError::NotConfigured));
+}
+
+#[test]
+fn async_chat_requires_config() {
+    let http = MockHttp::new("unused");
+    let mut api = ClawApiAsync::new(Owned(http), ImmediateTimer);
+    let messages = json!([{"role": "user", "content": "hello"}]);
+    let abort = AtomicBool::new(false);
+
+    let error =
+        block_on(api.chat(&ChatRequest::new("sys", &messages), Cancel::new(&abort))).unwrap_err();
+
+    assert_eq!(error, ChatError::Api(ClawApiError::NotConfigured));
+}
+
+#[test]
+fn invalid_reconfiguration_preserves_current_backend() -> TestResult {
+    let http = MockHttp::new(
+        r#"{"choices":[{"message":{"role":"assistant","content":"still configured"}}]}"#,
+    );
+    let mut api = configured_api(
+        cfg(BackendKind::OpenAiCompatible, "https://api.example.com/v1"),
+        Owned(http),
+    )?;
+    let invalid = ClawApiConfig::new(
+        BackendKind::OpenAiCompatible,
+        "",
+        "replacement",
+        "https://replacement.example.com/v1",
+    );
+    assert_eq!(api.set_config(invalid), Err(InitError::MissingApiKey));
+
+    let messages = json!([{"role": "user", "content": "hello"}]);
+    let abort = AtomicBool::new(false);
+    let response = api.chat(&ChatRequest::new("sys", &messages), &abort)?;
+    assert_eq!(response.text.as_deref(), Some("still configured"));
+    Ok(())
+}
+
+#[test]
 fn openai_chat_text() -> TestResult {
     let http =
         MockHttp::new(r#"{"choices":[{"message":{"role":"assistant","content":"hi there"}}]}"#);
-    let mut rt = ClawApi::init(
+    let mut rt = configured_api(
         cfg(BackendKind::OpenAiCompatible, "https://api.example.com/v1"),
         Owned(http.clone()),
     )?;
@@ -238,7 +308,7 @@ fn async_openai_chat_text() -> TestResult {
     let http =
         MockHttp::new(r#"{"choices":[{"message":{"role":"assistant","content":"hi async"}}]}"#);
     install_mock_http(Arc::clone(&http));
-    let mut rt = ClawApiAsync::<Owned<MockHttp>, ImmediateTimer>::init_default(cfg(
+    let mut rt = configured_async::<Owned<MockHttp>, ImmediateTimer>(cfg(
         BackendKind::OpenAiCompatible,
         "https://api.example.com/v1",
     ))?;
@@ -260,7 +330,7 @@ fn openai_tool_calls_parsed() -> TestResult {
     let reply = r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
         {"id":"call_1","function":{"name":"files","arguments":"{\"p\":\"/x\"}"}}]}}]}"#;
     let http = MockHttp::new(reply);
-    let mut rt = ClawApi::init(
+    let mut rt = configured_api(
         cfg(BackendKind::OpenAiCompatible, "https://api.example.com"),
         Owned(http),
     )?;
@@ -283,7 +353,7 @@ fn anthropic_converts_tool_role_to_user_and_parses() -> TestResult {
     let reply = r#"{"content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"done"},
         {"type":"tool_use","id":"tu1","name":"foo","input":{"a":1}}]}"#;
     let http = MockHttp::new(reply);
-    let mut rt = ClawApi::init(
+    let mut rt = configured_api(
         cfg(
             BackendKind::AnthropicCompatible,
             "https://api.anthropic.com/v1",
@@ -335,7 +405,7 @@ fn anthropic_converts_tool_role_to_user_and_parses() -> TestResult {
 #[test]
 fn anthropic_converts_tools() -> TestResult {
     let http = MockHttp::new(r#"{"content":[{"type":"text","text":"ok"}]}"#);
-    let mut rt = ClawApi::init(
+    let mut rt = configured_api(
         cfg(
             BackendKind::AnthropicCompatible,
             "https://api.anthropic.com",
@@ -362,7 +432,7 @@ fn backend_parse_rejects_unknown_and_config_rejects_empty_key() -> TestResult {
 
     let http = MockHttp::new("{}");
     let err = must_err(
-        ClawApi::init(
+        configured_api(
             ClawApiConfig::new(BackendKind::OpenAiCompatible, "", "model-x", "https://x"),
             Owned(http),
         ),
@@ -396,7 +466,7 @@ const DEMO_OUT_SCHEMA: &str = r#"{
 fn openai_chat_json_uses_response_format() {
     let reply = r#"{"choices":[{"message":{"role":"assistant","content":"{\"action\":\"ok\",\"value\":7}"}}]}"#;
     let http = MockHttp::new(reply);
-    let mut rt = ClawApi::init(
+    let mut rt = configured_api(
         cfg(BackendKind::OpenAiCompatible, "https://api.example.com/v1"),
         Owned(http.clone()),
     )
@@ -421,7 +491,7 @@ fn openai_chat_json_uses_response_format() {
 fn anthropic_chat_json_uses_output_config() {
     let reply = r#"{"content":[{"type":"text","text":"{\"action\":\"ok\",\"value\":3}"}]}"#;
     let http = MockHttp::new(reply);
-    let mut rt = ClawApi::init(
+    let mut rt = configured_api(
         cfg(
             BackendKind::AnthropicCompatible,
             "https://api.anthropic.com/v1",
@@ -448,7 +518,7 @@ fn anthropic_chat_json_uses_output_config() {
 fn anthropic_chat_json_sends_tools_with_output_config() {
     let reply = r#"{"content":[{"type":"text","text":"{\"action\":\"ok\",\"value\":5}"}]}"#;
     let http = MockHttp::new(reply);
-    let mut rt = ClawApi::init(
+    let mut rt = configured_api(
         cfg(
             BackendKind::AnthropicCompatible,
             "https://api.anthropic.com/v1",
@@ -476,7 +546,7 @@ fn anthropic_chat_json_sends_tools_with_output_config() {
 fn chat_json_rejects_invalid_output() {
     let reply = r#"{"choices":[{"message":{"role":"assistant","content":"not-json"}}]}"#;
     let http = MockHttp::new(reply);
-    let mut rt = ClawApi::init(
+    let mut rt = configured_api(
         cfg(BackendKind::OpenAiCompatible, "https://api.example.com"),
         Owned(http),
     )
@@ -493,7 +563,7 @@ fn chat_json_rejects_invalid_output() {
 fn openai_chat_json_sends_tools_with_response_format() {
     let reply = r#"{"choices":[{"message":{"role":"assistant","content":"{\"action\":\"ok\",\"value\":1}"}}]}"#;
     let http = MockHttp::new(reply);
-    let mut rt = ClawApi::init(
+    let mut rt = configured_api(
         cfg(BackendKind::OpenAiCompatible, "https://api.example.com/v1"),
         Owned(http.clone()),
     )
@@ -518,7 +588,7 @@ fn chat_json_returns_tool_calls_without_json() {
     let reply = r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
         {"id":"call_1","function":{"name":"files","arguments":"{}"}}]}}]}"#;
     let http = MockHttp::new(reply);
-    let mut rt = ClawApi::init(
+    let mut rt = configured_api(
         cfg(BackendKind::OpenAiCompatible, "https://api.example.com"),
         Owned(http),
     )
@@ -567,7 +637,7 @@ impl Default for Owned<FlakyHttp> {
             Self(
                 slot.borrow()
                     .as_ref()
-                    .expect("install flaky http before init_default")
+                    .expect("install flaky http before constructing the client")
                     .clone(),
             )
         })
@@ -615,7 +685,7 @@ impl Default for RecordingTimer {
             sleeps: slot
                 .borrow()
                 .as_ref()
-                .expect("install recording timer before init_default")
+                .expect("install recording timer before constructing the client")
                 .clone(),
         })
     }
@@ -679,7 +749,7 @@ fn retry_policy_constructors_default_500ms_interval() {
 }
 
 fn flaky_rt(http: Arc<FlakyHttp>) -> ClawApi<Owned<FlakyHttp>> {
-    ClawApi::init(
+    configured_api(
         cfg(BackendKind::OpenAiCompatible, "https://api.example.com"),
         Owned(http),
     )
@@ -716,7 +786,7 @@ fn async_retry_uses_timer_backoff() {
     );
     install_flaky_http(Arc::clone(&http));
     let sleeps = install_recording_timer();
-    let mut rt = ClawApiAsync::<Owned<FlakyHttp>, RecordingTimer>::init_default(cfg(
+    let mut rt = configured_async::<Owned<FlakyHttp>, RecordingTimer>(cfg(
         BackendKind::OpenAiCompatible,
         "https://api.example.com",
     ))
@@ -752,14 +822,13 @@ fn async_chat_traces_attempts_and_retries_without_payloads() {
     );
     install_flaky_http(Arc::clone(&http));
     let _sleeps = install_recording_timer();
-    let mut rt =
-        ClawApiAsync::<Owned<FlakyHttp>, RecordingTimer>::init_default(ClawApiConfig::new(
-            BackendKind::OpenAiCompatible,
-            "secret api key",
-            "secret model",
-            SECRET_URL,
-        ))
-        .unwrap();
+    let mut rt = configured_async::<Owned<FlakyHttp>, RecordingTimer>(ClawApiConfig::new(
+        BackendKind::OpenAiCompatible,
+        "secret api key",
+        "secret model",
+        SECRET_URL,
+    ))
+    .unwrap();
     let messages = json!([{"role": "user", "content": SECRET_PROMPT}]);
     let request =
         ChatRequest::new("secret system prompt", &messages).with_retry(RetryPolicy::fixed(3, 250));
@@ -880,7 +949,7 @@ fn async_chat_traces_final_nonretryable_failure() {
     );
     install_flaky_http(Arc::clone(&http));
     let _sleeps = install_recording_timer();
-    let mut rt = ClawApiAsync::<Owned<FlakyHttp>, RecordingTimer>::init_default(cfg(
+    let mut rt = configured_async::<Owned<FlakyHttp>, RecordingTimer>(cfg(
         BackendKind::OpenAiCompatible,
         "https://api.example.com",
     ))
@@ -927,7 +996,7 @@ fn async_chat_traces_final_nonretryable_failure() {
 fn async_chat_traces_cancelled_retry_backoff() {
     let http = FlakyHttp::new(9, transport_error("temporary failure"), "{}");
     install_flaky_http(Arc::clone(&http));
-    let mut rt = ClawApiAsync::<Owned<FlakyHttp>, CancelledTimer>::init_default(cfg(
+    let mut rt = configured_async::<Owned<FlakyHttp>, CancelledTimer>(cfg(
         BackendKind::OpenAiCompatible,
         "https://api.example.com",
     ))

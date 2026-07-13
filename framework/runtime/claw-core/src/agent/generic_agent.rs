@@ -12,9 +12,9 @@
 //! consumes the resolved config.
 
 use std::borrow::Cow;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
-use claw_api::{ClawApiAsync, ClawApiConfig, InitError};
+use claw_api::{ClawApiConfig, InitError};
 use claw_checkpoint::{
     ChangePatternHint, DurablePart, DurablePartError, DurableState, DurableStateCodec,
     PartGeneration, PartStateBlob, PartStateSlice, StorageHint, StorageSizeHint,
@@ -35,6 +35,7 @@ use crate::agent::config::AgentConfig;
 use crate::agent::graph::{AgentContext, GraphHost};
 use crate::agent::tools::subagent_tools;
 use crate::agent::{Agent, AgentTickFuture};
+use crate::config::ClawApiManager;
 use crate::event::EventSink;
 use crate::memory::{
     CompactionPolicy, ContextAdapter, LlmCompactor, RecentMessagesContextAdapter,
@@ -84,9 +85,8 @@ impl DurableStateCodec for GenericAgentState {
 impl<H: ClawHttp + StreamingHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
     /// Build a generic agent with `id`, configured by `config`.
     ///
-    /// The LLM client is built inside the base agent from `llm_config` over the
-    /// injected `http`/`timer` transports — the caller passes configuration, not a
-    /// pre-constructed client.
+    /// The unconfigured LLM client is built inside the base agent over the
+    /// injected `http`/`timer` transports and configured at turn start.
     ///
     /// The transcript store is supplied by the caller. The factory owns durable
     /// storage layout decisions (root session id vs. subagent id, directory
@@ -113,12 +113,12 @@ impl<H: ClawHttp + StreamingHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
     #[allow(clippy::too_many_arguments)]
     pub fn new<F: ClawFs + 'static>(
         id: AgentId,
-        llm_config: ClawApiConfig,
         store: TranscriptStore<F>,
         config: AgentConfig,
         mut tools: ToolSet,
         host: Arc<dyn GraphHost>,
         inherited_context: Arc<[Block<'static>]>,
+        api_manager: Arc<RwLock<ClawApiManager>>,
     ) -> Result<Self, GenericAgentBuildError>
     where
         H: Default + 'static,
@@ -128,7 +128,6 @@ impl<H: ClawHttp + StreamingHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
         // advances it as it summarizes; the recent-tail adapter renders only the
         // turns past it. This conversation-memory policy belongs to GenericAgent,
         // not BaseAgent.
-        let compaction_llm_config = llm_config.clone();
         let cursor = SummaryCursor::new();
         let recent = RecentMessagesContextAdapter::new(store.clone(), cursor.clone());
         let rolling_summary_store = store.clone();
@@ -141,7 +140,6 @@ impl<H: ClawHttp + StreamingHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
 
         // The soft-hide "retry then fail" budget is the agent's BlockPolicy.
         let base_config = BaseAgentConfig {
-            llm_config,
             store,
             tools,
             skills: config.skills,
@@ -152,9 +150,7 @@ impl<H: ClawHttp + StreamingHttp, Timer: ClawTimer> GenericAgent<H, Timer> {
             block_retries: config.tool_block_retries,
         };
         let mut base = BaseAgent::build(base_config)?;
-        let compaction_llm = ClawApiAsync::<H, Timer>::init_default(compaction_llm_config)
-            .map_err(GenericAgentBuildError::CompactionLlm)?;
-        let compactor: Arc<dyn Compactor> = Arc::new(LlmCompactor::new(compaction_llm));
+        let compactor: Arc<dyn Compactor> = Arc::new(LlmCompactor::<H, Timer>::new(api_manager));
         let rolling_summary = RollingSummaryContextAdapter::new(
             rolling_summary_store,
             compactor,
@@ -236,6 +232,10 @@ impl<H: ClawHttp + StreamingHttp, Timer: ClawTimer> Agent for GenericAgent<H, Ti
         }
     }
 
+    fn set_llm_config(&mut self, config: ClawApiConfig) -> Result<(), InitError> {
+        self.base.set_llm_config(config)
+    }
+
     fn tick(&mut self, events: EventSink) -> AgentTickFuture<'_> {
         // Flat: no FSM, no per-phase gating — the model drives its own flow.
         Box::pin(async move { self.base.tick(&events).await })
@@ -272,8 +272,4 @@ pub enum GenericAgentBuildError {
     /// The underlying [`BaseAgent`] could not be built.
     #[error(transparent)]
     Base(#[from] BaseAgentBuildError),
-    /// The compaction LLM client could not be initialized from the supplied
-    /// [`ClawApiConfig`].
-    #[error("failed to initialize the compaction LLM client: {0}")]
-    CompactionLlm(#[source] InitError),
 }

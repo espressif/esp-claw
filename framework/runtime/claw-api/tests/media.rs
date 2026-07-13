@@ -243,15 +243,13 @@ fn media_rejects_empty_inline_bytes() {
 #[test]
 fn anthropic_requires_local_image_for_remote_url() {
     let http = CaptureHttp::new(r#"{"content":[{"type":"text","text":"unused"}]}"#);
-    let mut api = ClawApi::init(
-        ClawApiConfig::new(
-            BackendKind::AnthropicCompatible,
-            "key",
-            "claude-x",
-            "https://api.anthropic.com/v1",
-        ),
-        Owned(http),
-    )
+    let mut api = ClawApi::new(Owned(http));
+    api.set_config(ClawApiConfig::new(
+        BackendKind::AnthropicCompatible,
+        "key",
+        "claude-x",
+        "https://api.anthropic.com/v1",
+    ))
     .unwrap();
     let assets = [MediaAsset::remote_url("https://example.com/a.png")];
     let abort = AtomicBool::new(false);
@@ -277,7 +275,8 @@ fn openai_api(reply: String, image_max_bytes: Option<usize>) -> (ClawApi<Owned>,
     if let Some(image_max_bytes) = image_max_bytes {
         config.image_max_bytes = image_max_bytes;
     }
-    let api = ClawApi::init(config, Owned(Arc::clone(&http))).unwrap();
+    let mut api = ClawApi::new(Owned(Arc::clone(&http)));
+    api.set_config(config).unwrap();
     (api, http)
 }
 

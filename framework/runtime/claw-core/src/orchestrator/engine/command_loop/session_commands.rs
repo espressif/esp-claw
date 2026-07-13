@@ -4,7 +4,7 @@ use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::event::EventSink;
-use crate::orchestrator::{OpenSessionError, SessionControlError};
+use crate::orchestrator::{OpenSessionError, ReasoningEffort, SessionControlError};
 use crate::session::SessionId;
 
 use super::super::session_drive::{SessionDrive, SessionDriveState};
@@ -43,6 +43,22 @@ where
             .then(|| self.ensure_session_drive(session_id))
             .flatten();
         (Ok(()), future)
+    }
+
+    /// Store a new reasoning effort on the session's drive. Config-only: it
+    /// updates the pending value (applied at the next turn) and never starts or
+    /// disturbs a drive, so there is no follow-up future.
+    pub(in crate::orchestrator::engine::command_loop) fn set_reasoning_effort(
+        self: &Rc<Self>,
+        session_id: SessionId,
+        effort: ReasoningEffort,
+    ) -> Result<(), SessionControlError> {
+        let mut drives = self.drives.borrow_mut();
+        let Some(drive) = drives.get_mut(&session_id) else {
+            return Err(SessionControlError::SessionClosed(session_id));
+        };
+        drive.set_reasoning_effort(effort);
+        Ok(())
     }
 
     pub(in crate::orchestrator::engine::command_loop) fn close_session(

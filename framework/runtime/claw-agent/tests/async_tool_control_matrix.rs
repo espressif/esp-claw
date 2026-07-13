@@ -44,9 +44,10 @@ fn async_tool_control_csv_matrix_covers_cancel_and_interrupt_while_tool_is_pendi
         install_case(fixture.clone());
 
         let root = mem_root("async-tool-control");
-        let system =
-            AsyncToolSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence(&root))
-                .unwrap();
+        let system = AsyncToolSystem::new::<StdThread, TokioExecutor>(persistence(&root)).unwrap();
+        system
+            .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+            .unwrap();
         system
             .tool_registry()
             .register_group(ToolGroup::new(

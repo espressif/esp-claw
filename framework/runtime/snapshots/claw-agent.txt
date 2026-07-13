@@ -1,5 +1,11 @@
 pub mod claw_agent
+pub use claw_agent::ApiUsage
+pub use claw_agent::AttachmentId
+pub use claw_agent::AttachmentKind
+pub use claw_agent::AttachmentRecord
+pub use claw_agent::AttachmentRef
 pub use claw_agent::IterationId
+pub use claw_agent::Message
 pub use claw_agent::OpenSessionError
 pub use claw_agent::SessionControl
 pub use claw_agent::SessionControlError
@@ -13,6 +19,7 @@ pub claw_agent::AgentError::CheckpointCoordinatorInit(claw_checkpoint::Checkpoin
 pub claw_agent::AgentError::CheckpointLoad(claw_checkpoint::LoadCheckpointError)
 pub claw_agent::AgentError::CheckpointPart(claw_checkpoint::DurablePartError)
 pub claw_agent::AgentError::CheckpointStorage(claw_checkpoint::CheckpointStorageError)
+pub claw_agent::AgentError::LlmConfig(claw_api::errors::InitError)
 pub claw_agent::AgentError::MissingCheckpointPart
 pub claw_agent::AgentError::MissingCheckpointPart::batch: &'static str
 pub claw_agent::AgentError::MissingCheckpointPart::part: &'static str
@@ -29,7 +36,8 @@ pub struct claw_agent::AgentSystem<Filesystem, Http, Timer> where Filesystem: cl
 impl<Filesystem, Http, Timer> claw_agent::AgentSystem<Filesystem, Http, Timer> where Filesystem: claw_interface::fs::ClawFs + 'static, Http: claw_interface::http::ClawHttp + core::default::Default + 'static, Timer: claw_interface::timer::ClawTimer + core::default::Default + 'static
 pub fn claw_agent::AgentSystem<Filesystem, Http, Timer>::delete_session(&self, claw_core::session::SessionId) -> core::result::Result<(), claw_core::orchestrator::SessionControlError>
 pub fn claw_agent::AgentSystem<Filesystem, Http, Timer>::list_sessions(&self) -> alloc::vec::Vec<claw_core::session::SessionId>
-pub fn claw_agent::AgentSystem<Filesystem, Http, Timer>::new<Thread, Executor>(claw_api::types::ClawApiConfig, claw_agent::AgentPersistenceConfig) -> claw_agent::AgentResult<Self> where Thread: claw_interface::thread::ClawThread, Executor: claw_interface::executor::ClawExecutor + 'static
+pub fn claw_agent::AgentSystem<Filesystem, Http, Timer>::link_api(&self, claw_api::types::ClawApiConfig, claw_core::config::ApiUsage, bool) -> claw_agent::AgentResult<()>
+pub fn claw_agent::AgentSystem<Filesystem, Http, Timer>::new<Thread, Executor>(claw_agent::AgentPersistenceConfig) -> claw_agent::AgentResult<Self> where Thread: claw_interface::thread::ClawThread, Executor: claw_interface::executor::ClawExecutor + 'static
 pub fn claw_agent::AgentSystem<Filesystem, Http, Timer>::new_session(&self) -> claw_core::session::SessionId
 pub fn claw_agent::AgentSystem<Filesystem, Http, Timer>::open_session(&self, claw_core::session::SessionId) -> claw_agent::AgentResult<(claw_core::orchestrator::SessionControl, claw_core::orchestrator::SessionEventStream)>
 pub fn claw_agent::AgentSystem<Filesystem, Http, Timer>::start_all(&self) -> claw_agent::AgentResult<()>

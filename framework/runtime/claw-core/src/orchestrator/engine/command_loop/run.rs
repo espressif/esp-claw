@@ -103,6 +103,13 @@ where
                         inflight.push_back(future);
                     }
                 }
+                EngineEvent::Command(Some(Command::SetReasoningEffort {
+                    session,
+                    effort,
+                    ack,
+                })) => {
+                    let _ = ack.try_send(self.set_reasoning_effort(session, effort));
+                }
                 EngineEvent::Command(Some(Command::CloseSession { session, ack })) => {
                     let (result, future) = self.close_session(session);
                     let _ = ack.try_send(result);
@@ -134,6 +141,7 @@ where
                 }
                 Command::Submit { ack, .. }
                 | Command::Control { ack, .. }
+                | Command::SetReasoningEffort { ack, .. }
                 | Command::CloseSession { ack, .. }
                 | Command::DeleteSession { ack, .. } => {
                     let _ = ack.try_send(Err(SessionControlError::WorkerStopped));

@@ -18,12 +18,12 @@ mod engine;
 mod error;
 mod handle;
 mod instance;
+mod reasoning;
 
 use core::pin::Pin;
 use std::io;
 
 use async_channel::{Receiver, Sender};
-use claw_api::InitError;
 use claw_checkpoint::{BatchId, CheckpointStorageError, DurablePartError, LoadCheckpointError};
 use claw_memory::LongTermInitError;
 use claw_skill::SkillError;
@@ -33,6 +33,7 @@ use crate::event::SessionEvent;
 use crate::session::SessionId;
 
 pub use self::handle::Orchestrator;
+pub use self::reasoning::ReasoningEffort;
 
 pub(crate) use self::engine::InstanceWork;
 
@@ -42,9 +43,6 @@ pub enum OrchestratorBuildError {
     /// No persistence directory was provided.
     #[error("persistence directory is required")]
     MissingPersistenceDir,
-    /// The dedicated extraction LLM client (for long-term memory) failed to init.
-    #[error("failed to initialize the extraction LLM client: {0}")]
-    ExtractionLlm(#[from] InitError),
     /// A long-term memory journal exists but could not be read at startup.
     #[error("failed to load long-term memory: {0}")]
     LongTermInit(#[from] LongTermInitError),
@@ -81,7 +79,6 @@ impl From<FsAgentFactoryError> for OrchestratorBuildError {
     fn from(error: FsAgentFactoryError) -> Self {
         match error {
             FsAgentFactoryError::MissingPersistenceDir => Self::MissingPersistenceDir,
-            FsAgentFactoryError::ExtractionLlm(source) => Self::ExtractionLlm(source),
             FsAgentFactoryError::LongTermInit(source) => Self::LongTermInit(source),
             FsAgentFactoryError::SkillRegistry(source) => Self::SkillRegistry(source),
         }

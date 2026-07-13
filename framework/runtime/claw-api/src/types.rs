@@ -81,7 +81,7 @@ const DEFAULT_MAX_TOKENS: u32 = 8192;
 /// Default maximum local/inline image size accepted by media inference.
 const DEFAULT_IMAGE_MAX_BYTES: usize = 512 * 1024;
 
-/// Inputs to [`crate::ClawApi::init`].
+/// Inputs to [`crate::ClawApi::set_config`].
 ///
 /// Backend wire details and capability flags are intentionally not configurable
 /// here: [`BackendKind`] owns those decisions. Callers choose the provider
@@ -122,6 +122,23 @@ impl ClawApiConfig {
             max_tokens: DEFAULT_MAX_TOKENS,
             image_max_bytes: DEFAULT_IMAGE_MAX_BYTES,
         }
+    }
+
+    /// Validate the fields required by every backend.
+    ///
+    /// This is the same validation performed by [`crate::ClawApi::set_config`]
+    /// and [`crate::ClawApiAsync::set_config`].
+    pub fn validate(&self) -> Result<(), crate::InitError> {
+        if self.api_key.is_empty() {
+            return Err(crate::InitError::MissingApiKey);
+        }
+        if self.model.is_empty() {
+            return Err(crate::InitError::MissingModel);
+        }
+        if self.base_url.is_empty() {
+            return Err(crate::InitError::MissingBaseUrl);
+        }
+        Ok(())
     }
 }
 

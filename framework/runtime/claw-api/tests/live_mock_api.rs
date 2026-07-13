@@ -91,16 +91,15 @@ const OPENAI_COMPATIBLE_PROVIDERS: &[Provider] = &[
 ];
 
 fn openai_compatible_api(model: &str) -> ClawApi<RealHttp> {
-    ClawApi::init(
-        ClawApiConfig::new(
-            BackendKind::OpenAiCompatible,
-            "mock-key",
-            model,
-            MOCK_BASE_URL,
-        ),
-        openai_http(),
-    )
-    .expect("init openai_compatible")
+    let mut api = ClawApi::new(openai_http());
+    api.set_config(ClawApiConfig::new(
+        BackendKind::OpenAiCompatible,
+        "mock-key",
+        model,
+        MOCK_BASE_URL,
+    ))
+    .expect("configure openai_compatible");
+    api
 }
 
 #[test]
@@ -137,16 +136,14 @@ fn openai_compatible_providers_roundtrip() {
 #[test]
 #[ignore = "hits hosted mock LLM endpoint over the network; run with --ignored"]
 fn anthropic_roundtrip() {
-    let mut api = ClawApi::init(
-        ClawApiConfig::new(
-            BackendKind::AnthropicCompatible,
-            "mock-key",
-            "claude-3-5-sonnet",
-            MOCK_BASE_URL,
-        ),
-        anthropic_http(),
-    )
-    .expect("init anthropic_compatible");
+    let mut api = ClawApi::new(anthropic_http());
+    api.set_config(ClawApiConfig::new(
+        BackendKind::AnthropicCompatible,
+        "mock-key",
+        "claude-3-5-sonnet",
+        MOCK_BASE_URL,
+    ))
+    .expect("configure anthropic_compatible");
 
     let messages = json!([{ "role": "user", "content": "roundtrip-Anthropic" }]);
     let abort = AtomicBool::new(false);

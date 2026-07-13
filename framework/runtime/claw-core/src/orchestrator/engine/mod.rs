@@ -11,16 +11,16 @@ use core::future::Future;
 use core::pin::Pin;
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::{mpsc, Arc};
+use std::sync::{mpsc, Arc, RwLock};
 
 use async_channel::Receiver;
-use claw_api::ClawApiConfig;
 use claw_checkpoint::{DurableState, FsCheckpointStorage, SharedCheckpointCoordinator};
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawExecutor, ClawFs, ClawHttp, ClawTimer};
 use claw_tool::ToolRegistry;
 
 use crate::agent::FsAgentFactory;
+use crate::config::ClawApiManager;
 use crate::session::{SessionId, SessionStore};
 
 use super::checkpoint::{load_engine_state, load_session_drives, load_session_instances};
@@ -38,13 +38,13 @@ pub(super) type DriveFuture = Pin<Box<dyn Future<Output = ()>>>;
 pub(super) fn run_engine<Filesystem, Http, Timer, Executor>(
     tools: Arc<ToolRegistry>,
     checkpoints: SharedCheckpointCoordinator<FsCheckpointStorage<Filesystem>>,
-    llm_config: ClawApiConfig,
     persistence_dir: String,
     checkpoint_dir: String,
     skill_roots: Vec<String>,
     sessions: Arc<SessionStore>,
     command_rx: Receiver<Command>,
     ready: mpsc::Sender<Result<(), OrchestratorBuildError>>,
+    api_manager: Arc<RwLock<ClawApiManager>>,
 ) where
     Filesystem: ClawFs + 'static,
     Http: ClawHttp + StreamingHttp + Default + 'static,
@@ -61,12 +61,12 @@ pub(super) fn run_engine<Filesystem, Http, Timer, Executor>(
     let engine = match Engine::<Filesystem, Http, Timer>::new(
         tools,
         checkpoints,
-        llm_config,
         persistence_dir,
         checkpoint_dir,
         skill_roots,
         sessions,
         engine_state,
+        api_manager,
     ) {
         Ok(engine) => Rc::new(engine),
         Err(error) => {
@@ -85,13 +85,15 @@ where
     Timer: ClawTimer + Default + 'static,
 {
     pub(super) factory: Arc<FsAgentFactory<Filesystem, Http, Timer>>,
-    approval_llm_config: ClawApiConfig,
     pub(super) checkpoints: SharedCheckpointCoordinator<FsCheckpointStorage<Filesystem>>,
     pub(super) instances:
         RefCell<HashMap<SessionId, OrchestratorInstance<Filesystem, Http, Timer>>>,
     pub(super) drives: RefCell<HashMap<SessionId, SessionDrive>>,
     sessions: Arc<SessionStore>,
     pub(super) state: DurableState<EngineState>,
+    /// Per-usage LLM config, shared with the orchestrator handle. Read at the
+    /// start of each turn to pick the config for that turn.
+    pub(super) api_manager: Arc<RwLock<ClawApiManager>>,
 }
 
 impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
@@ -104,18 +106,18 @@ where
     fn new(
         tools: Arc<ToolRegistry>,
         checkpoints: SharedCheckpointCoordinator<FsCheckpointStorage<Filesystem>>,
-        llm_config: ClawApiConfig,
         persistence_dir: String,
         checkpoint_dir: String,
         skill_roots: Vec<String>,
         sessions: Arc<SessionStore>,
         state: EngineState,
+        api_manager: Arc<RwLock<ClawApiManager>>,
     ) -> Result<Self, OrchestratorBuildError> {
         let factory = Arc::new(FsAgentFactory::<Filesystem, Http, Timer>::new(
             tools,
-            llm_config.clone(),
             persistence_dir,
             skill_roots,
+            Arc::clone(&api_manager),
         )?);
         let drives = load_session_drives::<Filesystem>(&checkpoint_dir, sessions.as_ref())?;
         let instances = load_session_instances::<Filesystem, Http, Timer>(
@@ -126,12 +128,12 @@ where
         )?;
         Ok(Self {
             factory,
-            approval_llm_config: llm_config,
             checkpoints,
             instances: RefCell::new(instances),
             drives: RefCell::new(drives),
             sessions,
             state: DurableState::new(state),
+            api_manager,
         })
     }
 }

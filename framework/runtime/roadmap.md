@@ -9,7 +9,7 @@
 - speeded up agent system perf
   - [ ] max_token optimization (reasoning efforts), and per model
   - [x] SSE optimization
-- [ ] runtime agent config
+- [x] runtime agent config
 - [x] tool search
 - [x] subagent followup(agent-id, message) — cancel current task and retask
 - [ ] refactor (cleaned up runtime/)

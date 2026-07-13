@@ -115,7 +115,6 @@ crate::define_id_allocator!(
 ///
 /// ```ignore
 /// let mut agent = BaseAgent::build(BaseAgentConfig {
-///     llm_config,
 ///     store: memory,
 ///     tools,
 ///     skills: SkillSet::empty(),

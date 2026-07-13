@@ -202,7 +202,8 @@ async fn run() -> Result<()> {
         required("CLAW_LLM_BASE_URL")?,
     );
     llm_config.timeout_ms = 60_000;
-    let system = HostAgentSystem::new::<StdThread, TokioExecutor>(llm_config, persistence)?;
+    let system = HostAgentSystem::new::<StdThread, TokioExecutor>(persistence)?;
+    system.link_api(llm_config, claw_agent::ApiUsage::RootAgent, true)?;
     system.start_all()?;
     let session = system.new_session();
     let (control, events) = system.open_session(session)?;

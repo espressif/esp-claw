@@ -435,12 +435,20 @@ fn expected_output_fragments(expected_output: &str) -> Vec<String> {
 
 fn try_build_mem_system(root: &str) -> Result<support::MemAgentSystem, AgentError> {
     install_script(Vec::<String>::new());
-    support::MemAgentSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence(root))
+    let system = support::MemAgentSystem::new::<StdThread, TokioExecutor>(persistence(root))?;
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
+    Ok(system)
 }
 
 fn try_build_disk_system(root: &str) -> Result<DiskAgentSystem, AgentError> {
     install_script(Vec::<String>::new());
-    DiskAgentSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence(root))
+    let system = DiskAgentSystem::new::<StdThread, TokioExecutor>(persistence(root))?;
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
+    Ok(system)
 }
 
 fn disk_root(mode: &str, temp: &TempDir) -> String {

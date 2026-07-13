@@ -10,6 +10,7 @@
 //! the agent layer's rolling-summary adapter.
 
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, RwLock};
 
 use serde_json::{json, Value};
 
@@ -17,6 +18,8 @@ use claw_api::{ChatRequest, ClawApiAsync};
 use claw_interface::{Cancel, ClawHttp, ClawTimer};
 use claw_memory::{CompactBackendError, CompactError, CompactFuture, Compactor};
 use tracing::Instrument as _;
+
+use crate::config::{ApiUsage, ClawApiManager};
 
 use super::async_llm::SharedAsyncLlm;
 
@@ -37,21 +40,21 @@ const SUMMARY_USER_PREFIX: &str = "Summarize the following conversation transcri
 /// exclusively without holding a mutex while the future is running.
 pub struct LlmCompactor<H: ClawHttp, Timer: ClawTimer> {
     api: SharedAsyncLlm<H, Timer>,
+    /// Shared per-usage config; the compaction config is applied at the start of
+    /// each compaction call.
+    api_manager: Arc<RwLock<ClawApiManager>>,
 }
 
-impl<H: ClawHttp, Timer: ClawTimer> LlmCompactor<H, Timer> {
-    /// Build a compactor that owns the given LLM client.
-    ///
-    /// The `api` is its own [`ClawApiAsync`] (with its own transport `H`), so
-    /// compaction summarizes through the configured backend without sharing the
-    /// main conversation client.
+impl<H: ClawHttp + Default, Timer: ClawTimer + Default> LlmCompactor<H, Timer> {
+    /// Build a compactor with its own unconfigured LLM client.
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// use std::sync::Arc;
+    /// use std::sync::{Arc, RwLock};
     ///
-    /// use claw_api::{BackendKind, ClawApiAsync, ClawApiConfig};
+    /// use claw_api::{BackendKind, ClawApiConfig};
+    /// use claw_core::{ApiUsage, ClawApiManager};
     /// # use super::LlmCompactor;
     /// # use claw_interface::http::{BlockingHttpAdapter, HttpError, HttpJsonRequest, HttpResponse, HttpStatusCode};
     /// # use claw_interface::{Cancel, ClawHttp, ImmediateTimer};
@@ -64,23 +67,26 @@ impl<H: ClawHttp, Timer: ClawTimer> LlmCompactor<H, Timer> {
     /// #         })
     /// #     }
     /// # }
-    /// let api = ClawApiAsync::<StubHttp, ImmediateTimer>::init_default(
+    /// let mut manager = ClawApiManager::new();
+    /// manager.link_api(
     ///     ClawApiConfig::new(
     ///         BackendKind::OpenAiCompatible,
     ///         "sk-test",
     ///         "gpt-4o-mini",
     ///         "https://api.openai.com/v1",
-    ///     ),
-    /// )
-    /// .expect("init");
+    ///     ), ApiUsage::Compaction, true,
+    /// ).expect("valid config");
     ///
     /// // A ready-to-inject `Compactor`.
-    /// let compactor = Arc::new(LlmCompactor::new(api));
+    /// let compactor = Arc::new(LlmCompactor::<StubHttp, ImmediateTimer>::new(
+    ///     Arc::new(RwLock::new(manager)),
+    /// ));
     /// # let _ = compactor;
     /// ```
-    pub fn new(api: ClawApiAsync<H, Timer>) -> Self {
+    pub fn new(api_manager: Arc<RwLock<ClawApiManager>>) -> Self {
         Self {
-            api: SharedAsyncLlm::new(api),
+            api: SharedAsyncLlm::new(ClawApiAsync::new(H::default(), Timer::default())),
+            api_manager,
         }
     }
 }
@@ -105,6 +111,16 @@ impl<H: ClawHttp, Timer: ClawTimer> Compactor for LlmCompactor<H, Timer> {
             );
             let response = async {
                 let mut lease = self.api.lease().await;
+                // Apply this operation's config from the manager (its explicit
+                // binding, else the default). None / invalid leaves the current one.
+                if let Some(config) = self
+                    .api_manager
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .get_api(ApiUsage::Compaction)
+                {
+                    let _ = lease.api_mut().set_config(config);
+                }
                 lease.api_mut().chat(&request, Cancel::new(&abort)).await
             }
             .instrument(chat_span)

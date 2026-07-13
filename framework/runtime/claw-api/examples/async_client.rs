@@ -1,4 +1,4 @@
-//! Async [`ClawApiAsync`] surface: `init_default`, `chat`, `chat_json`, and
+//! Async [`ClawApiAsync`] surface: `new`, `set_config`, `chat`, `chat_json`, and
 //! `infer_media` driven over the injected async [`ClawHttp`] transport and
 //! [`ClawTimer`] backoff seam.
 //!
@@ -103,7 +103,8 @@ fn main() -> anyhow::Result<()> {
         "gpt-4o-mini",
         "https://api.example.com/v1",
     );
-    let mut api = ClawApiAsync::<StubHttp, ImmediateTimer>::init_default(config)?;
+    let mut api = ClawApiAsync::new(StubHttp, ImmediateTimer);
+    api.set_config(config)?;
 
     let abort = AtomicBool::new(false);
     let cancel = Cancel::new(&abort);

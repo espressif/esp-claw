@@ -7,14 +7,14 @@
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use claw_api::ClawApiConfig;
+use claw_api::{ClawApiConfig, InitError};
 use claw_checkpoint::{
     BatchId, CheckpointCoordinatorInitError, CheckpointStorage, CheckpointStorageError,
     DurableBatchSnapshot, DurablePart, DurablePartError, DurablePartSnapshot, FsCheckpointStorage,
     LoadCheckpointError, SharedCheckpointCoordinator,
 };
 pub use claw_core::{
-    AttachmentId, AttachmentKind, AttachmentRecord, AttachmentRef, IterationId, Message,
+    ApiUsage, AttachmentId, AttachmentKind, AttachmentRecord, AttachmentRef, IterationId, Message,
     OpenSessionError, SessionControl, SessionControlError, SessionEvent, SessionEventStream,
     SessionId, TurnCause, TurnId,
 };
@@ -50,6 +50,9 @@ pub struct AgentPersistenceConfig {
 /// What can go wrong while building or driving an [`AgentSystem`].
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
+    /// An LLM API config could not be linked because a required field is empty.
+    #[error(transparent)]
+    LlmConfig(#[from] InitError),
     /// Building the core orchestrator failed.
     #[error(transparent)]
     Orchestrator(#[from] OrchestratorBuildError),
@@ -122,10 +125,7 @@ where
     /// # Errors
     ///
     /// Returns [`AgentError`] when storage cleanup or orchestrator construction fails.
-    pub fn new<Thread, Executor>(
-        llm_config: ClawApiConfig,
-        persistence: AgentPersistenceConfig,
-    ) -> AgentResult<Self>
+    pub fn new<Thread, Executor>(persistence: AgentPersistenceConfig) -> AgentResult<Self>
     where
         Thread: ClawThread,
         Executor: ClawExecutor + 'static,
@@ -167,7 +167,6 @@ where
         >(
             Arc::clone(&tools),
             checkpoints,
-            llm_config,
             persistence.persistence_root,
             persistence.skill_roots,
         )?;
@@ -219,6 +218,21 @@ where
         session: SessionId,
     ) -> AgentResult<(SessionControl, SessionEventStream)> {
         Ok(self.orchestrator.open_session(session)?)
+    }
+
+    /// Register an LLM API config for a usage (root/subagent/memory/compaction).
+    ///
+    /// De-duplicated by model; when `default` is set it becomes the fallback for
+    /// usages without an explicit binding. Updates take effect at the start of the
+    /// next turn (see `ClawApiManager`), so this never disturbs an in-flight turn.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AgentError::LlmConfig`] without changing bindings when `api` is
+    /// invalid.
+    pub fn link_api(&self, api: ClawApiConfig, usage: ApiUsage, default: bool) -> AgentResult<()> {
+        self.orchestrator.link_api(api, usage, default)?;
+        Ok(())
     }
 
     /// Create a fresh isolated conversation session.

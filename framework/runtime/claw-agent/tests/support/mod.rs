@@ -120,7 +120,11 @@ pub fn mem_root(name: &str) -> String {
 
 pub fn build_mem_system(root: &str, bodies: Vec<String>) -> MemAgentSystem {
     install_script(bodies);
-    MemAgentSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence(root)).unwrap()
+    let system = MemAgentSystem::new::<StdThread, TokioExecutor>(persistence(root)).unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
+    system
 }
 
 pub fn assistant_text(text: &str) -> String {

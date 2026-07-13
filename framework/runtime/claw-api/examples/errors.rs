@@ -45,8 +45,9 @@ fn show_init_errors() {
     ];
     for (api_key, model, base_url) in cases {
         let config = ClawApiConfig::new(BackendKind::OpenAiCompatible, api_key, model, base_url);
-        let label = match ClawApi::init(config, UnusedHttp) {
-            Ok(_) => "ok (unexpected)".to_string(),
+        let mut api = ClawApi::new(UnusedHttp);
+        let label = match api.set_config(config) {
+            Ok(()) => "ok (unexpected)".to_string(),
             Err(InitError::MissingApiKey) => "MissingApiKey".to_string(),
             Err(InitError::MissingModel) => "MissingModel".to_string(),
             Err(InitError::MissingBaseUrl) => "MissingBaseUrl".to_string(),
@@ -58,6 +59,7 @@ fn show_init_errors() {
 /// Every [`ClawApiError`] variant, named so the match stays exhaustive.
 fn api_error_label(error: &ClawApiError) -> &'static str {
     match error {
+        ClawApiError::NotConfigured => "NotConfigured",
         ClawApiError::Transport(_) => "Transport",
         ClawApiError::TransientTransport(_) => "TransientTransport",
         ClawApiError::Parse => "Parse",

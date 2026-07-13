@@ -3,6 +3,7 @@ use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use tracing::Instrument as _;
 
 use crate::agent::AgentId;
+use crate::config::ApiUsage;
 use crate::event::{EventSink, SessionEvent};
 use crate::orchestrator::control::{DriveControl, DriveStop};
 
@@ -170,9 +171,23 @@ where
         }
         self.refresh_snapshots();
 
-        for ready in ready {
+        for mut ready in ready {
             let id = ready.id;
             let is_root = ready.is_root;
+            // Snapshot this turn's config for the agent's usage (root vs sub),
+            // resolved from the shared manager. A turn thus runs on one config
+            // even if it is updated mid-turn. `None` (nothing linked) or an
+            // invalid config leaves the agent on its current client.
+            let usage = if is_root {
+                ApiUsage::RootAgent
+            } else {
+                ApiUsage::SubAgent
+            };
+            if let Some(config) = self.factory.config_for(usage) {
+                if ready.agent.set_llm_config(config).is_err() {
+                    tracing::error!(name: "llm_config_invalid", agent = %id);
+                }
+            }
             let abort = ready.agent.abort_handle();
             let sink = if ready.is_root {
                 events.clone()

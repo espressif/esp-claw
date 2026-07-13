@@ -7,7 +7,7 @@ use strum::IntoStaticStr;
 
 use crate::event::{EventSink, SessionEvent};
 use crate::orchestrator::{
-    OpenSessionError, SessionControl, SessionControlError, SessionEventStream,
+    OpenSessionError, ReasoningEffort, SessionControl, SessionControlError, SessionEventStream,
 };
 use crate::session::SessionId;
 
@@ -47,6 +47,11 @@ pub(in crate::orchestrator) enum Command {
         op: ControlOp,
         ack: Sender<Result<(), SessionControlError>>,
     },
+    SetReasoningEffort {
+        session: SessionId,
+        effort: ReasoningEffort,
+        ack: Sender<Result<(), SessionControlError>>,
+    },
     CloseSession {
         session: SessionId,
         ack: Sender<Result<(), SessionControlError>>,
@@ -80,6 +85,30 @@ impl SessionControl {
             .send(Command::Submit {
                 session: self.session,
                 text,
+                ack: ack_tx,
+            })
+            .await
+            .map_err(|_| SessionControlError::WorkerStopped)?;
+        match ack_rx.recv().await {
+            Ok(result) => result,
+            Err(_) => Err(SessionControlError::WorkerStopped),
+        }
+    }
+
+    /// Reconfigure this session's reasoning effort.
+    ///
+    /// A config-only request: it does not disturb a turn already running. The new
+    /// effort takes effect on the session's next turn. The returned future
+    /// resolves when the orchestrator accepts the command.
+    pub async fn set_reasoning_effort(
+        &self,
+        effort: ReasoningEffort,
+    ) -> Result<(), SessionControlError> {
+        let (ack_tx, ack_rx) = async_channel::bounded(1);
+        self.command_tx
+            .send(Command::SetReasoningEffort {
+                session: self.session,
+                effort,
                 ack: ack_tx,
             })
             .await

@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use claw_api::{ClawApiAsync, ClawApiConfig, RetryPolicy};
+use claw_api::{ClawApiAsync, ClawApiConfig, InitError, RetryPolicy};
 use claw_checkpoint::DurableState;
 use claw_context::{Block, Context};
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
@@ -21,7 +21,6 @@ use super::{BaseAgent, BaseAgentBuildError};
 /// All construction-time configuration for a [`BaseAgent`], consumed by
 /// [`BaseAgent::build`].
 pub(crate) struct BaseAgentConfig<F: ClawFs + 'static> {
-    pub llm_config: ClawApiConfig,
     pub store: TranscriptStore<F>,
     pub tools: ToolSet,
     pub skills: SkillSet,
@@ -33,6 +32,12 @@ pub(crate) struct BaseAgentConfig<F: ClawFs + 'static> {
 }
 
 impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
+    /// Rebind the agent's LLM client to `config` for the next turn, keeping the
+    /// existing transport (see [`ClawApiAsync::set_config`]).
+    pub(crate) fn set_llm_config(&mut self, config: ClawApiConfig) -> Result<(), InitError> {
+        self.llm.set_config(config)
+    }
+
     /// Assemble a runnable agent from a [`BaseAgentConfig`].
     pub fn build<F: ClawFs + 'static>(
         config: BaseAgentConfig<F>,
@@ -43,7 +48,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     {
         let control: ControlSink = Arc::new(Mutex::new(VecDeque::new()));
 
-        let llm = ClawApiAsync::<H, Timer>::init_default(config.llm_config)?;
+        let llm = ClawApiAsync::<H, Timer>::new(H::default(), Timer::default());
 
         let mut tools = config.tools;
         tools.add_group(internal_tools(Arc::clone(&control)))?;

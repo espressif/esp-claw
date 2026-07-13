@@ -87,16 +87,16 @@ impl<
         } else {
             TranscriptStore::<Filesystem>::in_memory(transcript_id)
         };
-        // The LLM client (and its transport) is built inside the agent from this
-        // shared config plus the factory's transport type; nothing is minted here.
+        // The LLM client and transport are built inside the agent. Its config is
+        // selected from the shared manager at the start of each turn.
         let mut agent = match GenericAgent::<Http, Timer>::new(
             id,
-            self.llm_config.clone(),
             store,
             config,
             tools,
             host,
             inherited_context,
+            Arc::clone(&self.api_manager),
         ) {
             Ok(agent) => agent,
             Err(error) => {

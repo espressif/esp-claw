@@ -1,4 +1,14 @@
 pub mod claw_core
+pub enum claw_core::ApiUsage
+pub claw_core::ApiUsage::Compaction
+pub claw_core::ApiUsage::Memory
+pub claw_core::ApiUsage::RootAgent
+pub claw_core::ApiUsage::SubAgent
+pub struct claw_core::ClawApiManager
+impl claw_core::ClawApiManager
+pub fn claw_core::ClawApiManager::get_api(&self, claw_core::ApiUsage) -> core::option::Option<claw_api::types::ClawApiConfig>
+pub fn claw_core::ClawApiManager::link_api(&mut self, claw_api::types::ClawApiConfig, claw_core::ApiUsage, bool) -> core::result::Result<(), claw_api::errors::InitError>
+pub fn claw_core::ClawApiManager::new() -> Self
 pub enum claw_core::OpenSessionError
 pub claw_core::OpenSessionError::AlreadyOpen(claw_core::SessionId)
 pub claw_core::OpenSessionError::SessionNotFound(claw_core::SessionId)
@@ -8,7 +18,6 @@ pub claw_core::OrchestratorBuildError::CheckpointInstanceRestore(claw_core::Orch
 pub claw_core::OrchestratorBuildError::CheckpointLoad(claw_checkpoint::LoadCheckpointError)
 pub claw_core::OrchestratorBuildError::CheckpointRestore(claw_checkpoint::DurablePartError)
 pub claw_core::OrchestratorBuildError::CheckpointStorage(claw_checkpoint::CheckpointStorageError)
-pub claw_core::OrchestratorBuildError::ExtractionLlm(claw_api::errors::InitError)
 pub claw_core::OrchestratorBuildError::LongTermInit(claw_memory::long_term_memory::LongTermInitError)
 pub claw_core::OrchestratorBuildError::MissingCheckpointPart
 pub claw_core::OrchestratorBuildError::MissingCheckpointPart::batch: &'static str
@@ -60,7 +69,8 @@ impl<'de> serde_core::de::Deserialize<'de> for claw_core::IterationId
 pub fn claw_core::IterationId::deserialize<D: serde_core::de::Deserializer<'de>>(D) -> core::result::Result<Self, <D as serde_core::de::Deserializer>::Error>
 pub struct claw_core::Orchestrator
 impl claw_core::Orchestrator
-pub fn claw_core::Orchestrator::new<Filesystem, Http, Timer, Thread, Executor>(alloc::sync::Arc<claw_tool::registry::ToolRegistry>, claw_api::types::ClawApiConfig, alloc::string::String, alloc::vec::Vec<alloc::string::String>) -> core::result::Result<Self, claw_core::OrchestratorBuildError> where Filesystem: claw_interface::fs::ClawFs + 'static, Http: claw_interface::http::ClawHttp + core::default::Default + 'static, Timer: claw_interface::timer::ClawTimer + core::default::Default + 'static, Thread: claw_interface::thread::ClawThread, Executor: claw_interface::executor::ClawExecutor + 'static
+pub fn claw_core::Orchestrator::link_api(&self, claw_api::types::ClawApiConfig, claw_core::config::ApiUsage, bool) -> core::result::Result<(), claw_api::errors::InitError>
+pub fn claw_core::Orchestrator::new<Filesystem, Http, Timer, Thread, Executor>(alloc::sync::Arc<claw_tool::registry::ToolRegistry>, alloc::string::String, alloc::vec::Vec<alloc::string::String>) -> core::result::Result<Self, claw_core::OrchestratorBuildError> where Filesystem: claw_interface::fs::ClawFs + 'static, Http: claw_interface::http::ClawHttp + core::default::Default + 'static, Timer: claw_interface::timer::ClawTimer + core::default::Default + 'static, Thread: claw_interface::thread::ClawThread, Executor: claw_interface::executor::ClawExecutor + 'static
 pub fn claw_core::Orchestrator::open_session(&self, claw_core::SessionId) -> core::result::Result<(claw_core::SessionControl, claw_core::SessionEventStream), claw_core::OpenSessionError>
 pub fn claw_core::Orchestrator::session_create(&self) -> claw_core::SessionId
 pub fn claw_core::Orchestrator::session_delete(&self, claw_core::SessionId) -> core::result::Result<(), claw_core::SessionControlError>

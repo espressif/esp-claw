@@ -211,7 +211,11 @@ impl SyncToolHandler for MatrixTool {
 }
 
 fn build_matrix_system(root: &str) -> MatrixAgentSystem {
-    MatrixAgentSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence(root)).unwrap()
+    let system = MatrixAgentSystem::new::<StdThread, TokioExecutor>(persistence(root)).unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
+    system
 }
 
 fn apply_registry_ops(system: &MatrixAgentSystem, operations: &str, behavior: MatrixToolBehavior) {

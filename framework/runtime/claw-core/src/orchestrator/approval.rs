@@ -5,9 +5,9 @@
 //! into the internal [`ApprovalDecision`] it feeds back to the parked agent.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex, RwLock};
 
-use claw_api::{ClawApiAsync, ClawApiConfig, InitError, RetryPolicy};
+use claw_api::{ClawApiAsync, InitError, RetryPolicy};
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawHttp, ClawTimer};
 use claw_permission::{Action, PermissionDecision, RiskClass};
@@ -21,6 +21,7 @@ use crate::agent::{
     ApprovalDecision, ChatMessages, CompletedKind, InterruptionControl, IterationId, IterationLoop,
     IterationLoopError, IterationOutcome, IterationStep, SystemPrompt,
 };
+use crate::config::{ApiUsage, ClawApiManager};
 use crate::event::EventSink;
 use crate::orchestrator::control::DriveControl;
 
@@ -187,7 +188,7 @@ impl ToolGate for AllowGate {
 }
 
 pub(crate) async fn resolve_permission_reply<H, Timer>(
-    llm_config: ClawApiConfig,
+    api_manager: &Arc<RwLock<ClawApiManager>>,
     summary: &str,
     user_reply: &str,
     control: &DriveControl,
@@ -196,7 +197,16 @@ where
     H: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
-    let mut llm = ClawApiAsync::<H, Timer>::init_default(llm_config)?;
+    let mut llm = ClawApiAsync::<H, Timer>::new(H::default(), Timer::default());
+    // Approval resolution runs on the root agent's config (its explicit binding,
+    // else the default). With no binding, the request reports NotConfigured.
+    if let Some(config) = api_manager
+        .read()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get_api(ApiUsage::RootAgent)
+    {
+        llm.set_config(config)?;
+    }
     let resolution = Arc::new(Mutex::new(None));
     // Approval classification uses an isolated local tool set.
     let mut tools = APPROVAL_TOOL_PARENT.tool_set();

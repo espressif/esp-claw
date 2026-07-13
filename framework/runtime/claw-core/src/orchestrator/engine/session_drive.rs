@@ -7,6 +7,7 @@ use claw_checkpoint::{
 use serde::{Deserialize, Serialize};
 
 use crate::event::EventSink;
+use crate::orchestrator::ReasoningEffort;
 use crate::session::{TurnId, TurnIdAllocator};
 
 use super::super::control::DriveControl;
@@ -22,6 +23,13 @@ pub(super) struct SubmittedInput {
 pub(in crate::orchestrator) struct SessionDriveState {
     pending_input: Option<SubmittedInput>,
     next_turn_id: TurnId,
+    /// Reasoning effort in force for the current turn.
+    #[serde(default)]
+    reasoning_effort: ReasoningEffort,
+    /// A requested effort not yet in force; promoted to `reasoning_effort` at the
+    /// next turn boundary so a running turn is never disrupted mid-flight.
+    #[serde(default)]
+    pending_reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl Default for SessionDriveState {
@@ -29,6 +37,8 @@ impl Default for SessionDriveState {
         Self {
             pending_input: None,
             next_turn_id: TurnIdAllocator::new().peek(),
+            reasoning_effort: ReasoningEffort::default(),
+            pending_reasoning_effort: None,
         }
     }
 }
@@ -87,9 +97,31 @@ impl SessionDrive {
 
     pub(super) fn next_turn(&mut self) -> TurnId {
         let state = self.state.get_mut();
+        // Turn boundary: promote a reasoning-effort change requested while the
+        // previous turn was still running.
+        if let Some(effort) = state.pending_reasoning_effort.take() {
+            state.reasoning_effort = effort;
+        }
         let turn = state.next_turn_id;
         state.next_turn_id = TurnId::new(turn.0.saturating_add(1));
         turn
+    }
+
+    /// Queue a reasoning-effort change for this session. Held pending and applied
+    /// at the next turn boundary (see [`next_turn`](Self::next_turn)), so the
+    /// running turn is undisturbed.
+    pub(super) fn set_reasoning_effort(&mut self, effort: ReasoningEffort) {
+        self.state.get_mut().pending_reasoning_effort = Some(effort);
+    }
+
+    /// The reasoning effort in force for the current turn. A change requested
+    /// mid-turn is not reflected until the next turn begins.
+    ///
+    /// Scaffold read-seam: the eventual prompt/api wiring reads the active effort
+    /// here when building a turn's request. Unused until that lands.
+    #[allow(dead_code)]
+    pub(super) fn reasoning_effort(&self) -> ReasoningEffort {
+        self.state.get().reasoning_effort
     }
 }
 

@@ -20,6 +20,30 @@ type MemConstructionSystem = AgentSystem<MemFs, Sse<ConstructionHttp>, Immediate
 type DiskConstructionSystem = AgentSystem<DiskFs, Sse<ConstructionHttp>, ImmediateTimer>;
 
 #[test]
+fn turn_without_linked_api_reports_not_configured() {
+    MemFs::new();
+    let root = mem_root("construction-without-api");
+    let system =
+        MemConstructionSystem::new::<StdThread, TokioExecutor>(mem_persistence(&root, "none"))
+            .unwrap();
+    let session = system.new_session();
+    let (control, mut events) = system.open_session(session).unwrap();
+
+    block_on(control.submit("run without api".to_string())).unwrap();
+    let events = drain_until_turn_ended(&mut events);
+
+    assert!(
+        events.iter().any(|event| {
+            matches!(
+                event,
+                SessionEvent::Output { text } if text.contains("NotConfigured")
+            )
+        }),
+        "{events:?}"
+    );
+}
+
+#[test]
 fn construction_csv_config_matrix_validates_llm_config_and_skill_roots() {
     for row in csv_dicts(include_str!("fixtures/construction_config_cases.csv")) {
         let case = field(&row, "case");
@@ -101,7 +125,9 @@ impl ConstructionSystem for MemConstructionSystem {
         config: ClawApiConfig,
         persistence: AgentPersistenceConfig,
     ) -> Result<Self, claw_agent::AgentError> {
-        Self::new::<StdThread, TokioExecutor>(config, persistence)
+        let system = Self::new::<StdThread, TokioExecutor>(persistence)?;
+        system.link_api(config, claw_agent::ApiUsage::RootAgent, true)?;
+        Ok(system)
     }
 
     fn new_session(&self) -> claw_agent::SessionId {
@@ -121,7 +147,9 @@ impl ConstructionSystem for DiskConstructionSystem {
         config: ClawApiConfig,
         persistence: AgentPersistenceConfig,
     ) -> Result<Self, claw_agent::AgentError> {
-        Self::new::<StdThread, TokioExecutor>(config, persistence)
+        let system = Self::new::<StdThread, TokioExecutor>(persistence)?;
+        system.link_api(config, claw_agent::ApiUsage::RootAgent, true)?;
+        Ok(system)
     }
 
     fn new_session(&self) -> claw_agent::SessionId {

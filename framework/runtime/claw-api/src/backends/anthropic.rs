@@ -40,7 +40,7 @@ pub(super) struct Anthropic {
 
 /// `anthropic_init`
 ///
-/// Credential/config validation is centralized in [`crate::ClawApi::init`];
+/// Credential/config validation is centralized in [`crate::ClawApi::set_config`];
 /// `api_key`, `model`, and `base_url` are guaranteed non-empty here.
 fn str_field<'a>(obj: &'a Value, key: &str) -> Option<&'a str> {
     obj.get(key).and_then(|v| v.as_str())

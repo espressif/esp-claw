@@ -7,7 +7,7 @@
 //! injected into the long-term memory adapter.
 
 use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use serde_json::{json, Value};
 
@@ -15,6 +15,8 @@ use claw_api::{ChatRequest, ClawApiAsync};
 use claw_interface::{Cancel, ClawHttp, ClawTimer};
 use claw_memory::MemoryId;
 use tracing::Instrument as _;
+
+use crate::config::{ApiUsage, ClawApiManager};
 
 use super::async_llm::SharedAsyncLlm;
 use super::extraction::{
@@ -55,19 +57,23 @@ const EXTRACT_TRANSCRIPT_HEADER: &str = "CONVERSATION:";
 /// is running.
 pub struct LlmExtractor<H: ClawHttp, Timer: ClawTimer> {
     api: SharedAsyncLlm<H, Timer>,
+    /// Shared per-usage config; the extraction config is applied at the start of
+    /// each extraction call.
+    api_manager: Arc<RwLock<ClawApiManager>>,
 }
 
-impl<H: ClawHttp + 'static, Timer: ClawTimer + 'static> LlmExtractor<H, Timer> {
-    /// Build an extractor that owns the given LLM client.
-    pub fn new(api: ClawApiAsync<H, Timer>) -> Self {
+impl<H: ClawHttp + Default + 'static, Timer: ClawTimer + Default + 'static> LlmExtractor<H, Timer> {
+    /// Build an extractor with its own unconfigured LLM client.
+    pub fn new(api_manager: Arc<RwLock<ClawApiManager>>) -> Self {
         Self {
-            api: SharedAsyncLlm::new(api),
+            api: SharedAsyncLlm::new(ClawApiAsync::new(H::default(), Timer::default())),
+            api_manager,
         }
     }
 
-    /// A ready-to-inject [`Extractor`] over `api`.
-    pub fn shared(api: ClawApiAsync<H, Timer>) -> Arc<dyn Extractor> {
-        Arc::new(Self::new(api))
+    /// A ready-to-inject [`Extractor`] using `api_manager`.
+    pub fn shared(api_manager: Arc<RwLock<ClawApiManager>>) -> Arc<dyn Extractor> {
+        Arc::new(Self::new(api_manager))
     }
 }
 
@@ -90,6 +96,16 @@ impl<H: ClawHttp, Timer: ClawTimer> Extractor for LlmExtractor<H, Timer> {
                 tracing::info_span!("api.chat", purpose = "memory_extraction", max_attempts,);
             let response = async {
                 let mut lease = self.api.lease().await;
+                // Apply this operation's config from the manager (its explicit
+                // binding, else the default). None / invalid keeps the current one.
+                if let Some(config) = self
+                    .api_manager
+                    .read()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .get_api(ApiUsage::Memory)
+                {
+                    let _ = lease.api_mut().set_config(config);
+                }
                 lease.api_mut().chat(&request, Cancel::new(&abort)).await
             }
             .instrument(chat_span)

@@ -41,14 +41,14 @@ fn skill_tools_csv_matrix_scans_roots_reloads_and_activates_documents() {
         materialize_root(&runtime_root);
 
         install_case(fixture.clone());
-        let system = SkillToolSystem::new::<StdThread, TokioExecutor>(
-            llm_config(),
-            AgentPersistenceConfig {
-                persistence_root,
-                skill_roots: vec![data_root.clone(), system_root.clone(), runtime_root.clone()],
-            },
-        )
+        let system = SkillToolSystem::new::<StdThread, TokioExecutor>(AgentPersistenceConfig {
+            persistence_root,
+            skill_roots: vec![data_root.clone(), system_root.clone(), runtime_root.clone()],
+        })
         .unwrap();
+        system
+            .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+            .unwrap();
         install_runtime_skill(&runtime_root);
 
         let session = system.new_session();

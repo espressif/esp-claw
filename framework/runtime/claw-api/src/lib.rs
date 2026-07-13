@@ -7,9 +7,9 @@
 //!
 //! # Overview
 //!
-//! The entry point is [`ClawApi`]. You build it once from a [`ClawApiConfig`]
-//! plus an HTTP transport (any [`claw_interface::http::ClawHttp`]), then issue
-//! requests:
+//! The entry point is [`ClawApi`]. You build it around an HTTP transport (any
+//! [`claw_interface::http::ClawHttp`]), install a complete [`ClawApiConfig`],
+//! then issue requests:
 //!
 //! | Method | Request | Returns |
 //! |---|---|---|
@@ -66,7 +66,8 @@
 //!     "gpt-4o-mini",
 //!     "https://api.openai.com/v1",
 //! );
-//! let mut api = ClawApi::init(config, MyHttp)?;
+//! let mut api = ClawApi::new(MyHttp);
+//! api.set_config(config)?;
 //!
 //! // 3. Chat. The abort flag can be flipped from another thread to cancel.
 //! let messages = serde_json::json!([{ "role": "user", "content": "Hello" }]);

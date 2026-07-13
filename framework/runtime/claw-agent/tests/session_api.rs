@@ -233,7 +233,11 @@ fn delete_session_removes_session_and_closes_open_stream() {
 
 fn build_slow_system(root: &str, bodies: Vec<String>) -> SlowAgentSystem {
     install_script(bodies);
-    SlowAgentSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence(root)).unwrap()
+    let system = SlowAgentSystem::new::<StdThread, TokioExecutor>(persistence(root)).unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
+    system
 }
 
 fn drain_until_closed(events: &mut SessionEventStream) -> Vec<SessionEvent> {

@@ -121,8 +121,10 @@ fn async_csv_control_storm_on_cloned_controls_finishes_and_accepts_next_submit()
         YIELDING_HTTP_POLLS.store(0, Ordering::SeqCst);
 
         let system =
-            YieldingAgentSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence(&root))
-                .unwrap();
+            YieldingAgentSystem::new::<StdThread, TokioExecutor>(persistence(&root)).unwrap();
+        system
+            .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+            .unwrap();
         let session = system.new_session();
         let (control, mut events) = system.open_session(session).unwrap();
 
@@ -224,8 +226,10 @@ fn run_mem_stress_case(
     let root = mem_root("session-stress");
     MemFs::new();
     install_stress_outputs(expected_outputs);
-    let system =
-        MemStressSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence(&root)).unwrap();
+    let system = MemStressSystem::new::<StdThread, TokioExecutor>(persistence(&root)).unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
     drive_stress_case(
         case,
         &system,
@@ -356,7 +360,11 @@ impl DriveSystem for DiskStressSystem {
 }
 
 fn build_disk_stress_system(root: &str) -> DiskStressSystem {
-    DiskStressSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence(root)).unwrap()
+    let system = DiskStressSystem::new::<StdThread, TokioExecutor>(persistence(root)).unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
+    system
 }
 
 fn expected_outputs(

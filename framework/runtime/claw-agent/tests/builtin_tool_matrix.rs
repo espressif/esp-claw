@@ -41,8 +41,10 @@ fn builtin_tools_csv_matrix_feeds_profile_memory_and_subagent_results_back_to_ll
         let root = mem_root("builtin-tool-matrix");
         MemFs::new();
         let system =
-            BuiltinToolSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence(&root))
-                .unwrap();
+            BuiltinToolSystem::new::<StdThread, TokioExecutor>(persistence(&root)).unwrap();
+        system
+            .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+            .unwrap();
         let session = system.new_session();
         let (control, mut events) = system.open_session(session).unwrap();
 

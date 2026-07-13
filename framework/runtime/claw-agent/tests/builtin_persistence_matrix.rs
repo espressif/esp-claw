@@ -409,8 +409,10 @@ fn run_phase(
     ]);
 
     let system =
-        BuiltinPersistenceSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence(root))
-            .unwrap();
+        BuiltinPersistenceSystem::new::<StdThread, TokioExecutor>(persistence(root)).unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
     let session = system.new_session();
     let (control, mut events) = system.open_session(session).unwrap();
     block_on(control.submit(input)).unwrap();

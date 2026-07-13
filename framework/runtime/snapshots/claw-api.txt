@@ -26,6 +26,7 @@ pub enum claw_api::ClawApiError
 pub claw_api::ClawApiError::ApiError(&'static str)
 pub claw_api::ClawApiError::EmptyResponse
 pub claw_api::ClawApiError::MalformedResponse(&'static str)
+pub claw_api::ClawApiError::NotConfigured
 pub claw_api::ClawApiError::Parse
 pub claw_api::ClawApiError::TransientTransport(alloc::string::String)
 pub claw_api::ClawApiError::Transport(alloc::string::String)
@@ -102,14 +103,16 @@ impl<H: claw_interface::http::blocking::ClawHttp> claw_api::ClawApi<H>
 pub fn claw_api::ClawApi<H>::chat(&mut self, &claw_api::ChatRequest<'_>, &core::sync::atomic::AtomicBool) -> core::result::Result<claw_api::LlmResponse, claw_api::ChatError>
 pub fn claw_api::ClawApi<H>::chat_json<T: serde_core::de::DeserializeOwned>(&mut self, &claw_api::ChatJsonRequest<'_>, &core::sync::atomic::AtomicBool) -> core::result::Result<claw_api::ChatJsonResponse<T>, claw_api::ChatJsonError>
 pub fn claw_api::ClawApi<H>::infer_media(&mut self, &claw_api::MediaRequest<'_>, &core::sync::atomic::AtomicBool) -> core::result::Result<alloc::string::String, claw_api::InferMediaError>
-pub fn claw_api::ClawApi<H>::init(claw_api::ClawApiConfig, H) -> core::result::Result<claw_api::ClawApi<H>, claw_api::InitError>
+pub fn claw_api::ClawApi<H>::new(H) -> Self
+pub fn claw_api::ClawApi<H>::set_config(&mut self, claw_api::ClawApiConfig) -> core::result::Result<(), claw_api::InitError>
 pub struct claw_api::ClawApiAsync<H: claw_interface::http::ClawHttp, Timer: claw_interface::timer::ClawTimer>
-impl<H, Timer> claw_api::ClawApiAsync<H, Timer> where H: claw_interface::http::ClawHttp + core::default::Default, Timer: claw_interface::timer::ClawTimer + core::default::Default
-pub fn claw_api::ClawApiAsync<H, Timer>::init_default(claw_api::ClawApiConfig) -> core::result::Result<Self, claw_api::InitError>
 impl<H: claw_interface::http::ClawHttp, Timer: claw_interface::timer::ClawTimer> claw_api::ClawApiAsync<H, Timer>
 pub async fn claw_api::ClawApiAsync<H, Timer>::chat(&mut self, &claw_api::ChatRequest<'_>, claw_interface::http::Cancel<'_>) -> core::result::Result<claw_api::LlmResponse, claw_api::ChatError>
 pub async fn claw_api::ClawApiAsync<H, Timer>::chat_json<T: serde_core::de::DeserializeOwned>(&mut self, &claw_api::ChatJsonRequest<'_>, claw_interface::http::Cancel<'_>) -> core::result::Result<claw_api::ChatJsonResponse<T>, claw_api::ChatJsonError>
+pub async fn claw_api::ClawApiAsync<H, Timer>::chat_stream<'a>(&'a mut self, &'a claw_api::ChatRequest<'_>, claw_interface::http::Cancel<'a>) -> core::result::Result<claw_api::ChatStream<<H as claw_interface::http::StreamingHttp>::ByteStream>, claw_api::ChatError> where H: claw_interface::http::StreamingHttp
 pub async fn claw_api::ClawApiAsync<H, Timer>::infer_media(&mut self, &claw_api::MediaRequest<'_>, claw_interface::http::Cancel<'_>) -> core::result::Result<alloc::string::String, claw_api::InferMediaError>
+pub fn claw_api::ClawApiAsync<H, Timer>::new(H, Timer) -> Self
+pub fn claw_api::ClawApiAsync<H, Timer>::set_config(&mut self, claw_api::ClawApiConfig) -> core::result::Result<(), claw_api::InitError>
 pub struct claw_api::ClawApiConfig
 pub claw_api::ClawApiConfig::api_key: alloc::string::String
 pub claw_api::ClawApiConfig::backend: claw_api::BackendKind
@@ -120,6 +123,7 @@ pub claw_api::ClawApiConfig::model: alloc::string::String
 pub claw_api::ClawApiConfig::timeout_ms: u32
 impl claw_api::ClawApiConfig
 pub fn claw_api::ClawApiConfig::new(claw_api::BackendKind, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn claw_api::ClawApiConfig::validate(&self) -> core::result::Result<(), claw_api::InitError>
 pub struct claw_api::LlmResponse
 pub claw_api::LlmResponse::raw_message_json: core::option::Option<alloc::string::String>
 pub claw_api::LlmResponse::reasoning_content: core::option::Option<alloc::string::String>

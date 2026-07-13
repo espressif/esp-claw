@@ -282,21 +282,25 @@ fn fs_checkpoint_write_failure() -> Option<String> {
 
 fn http_permanent_failure() -> Option<String> {
     MemFs::new();
-    let system = PermanentHttpSystem::new::<StdThread, TokioExecutor>(
-        llm_config(),
-        persistence(&mem_root("http-permanent")),
-    )
+    let system = PermanentHttpSystem::new::<StdThread, TokioExecutor>(persistence(&mem_root(
+        "http-permanent",
+    )))
     .unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
     first_failure_text(drive_one_turn(&system, "permanent failure"))
 }
 
 fn http_transient_then_success(case: &str) -> Option<String> {
     MemFs::new();
-    let system = TransientThenSuccessSystem::new::<StdThread, TokioExecutor>(
-        llm_config(),
-        persistence(&mem_root("http-transient-success")),
-    )
+    let system = TransientThenSuccessSystem::new::<StdThread, TokioExecutor>(persistence(
+        &mem_root("http-transient-success"),
+    ))
     .unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
     let events = drive_one_turn(&system, "recover");
     assert_eq!(
         output_fragments(&events),
@@ -308,20 +312,30 @@ fn http_transient_then_success(case: &str) -> Option<String> {
 
 fn http_transient_exhausts_retries() -> Option<String> {
     MemFs::new();
-    let system = TransientExhaustSystem::new::<StdThread, TokioExecutor>(
-        llm_config(),
-        persistence(&mem_root("transient-exhaust")),
-    )
+    let system = TransientExhaustSystem::new::<StdThread, TokioExecutor>(persistence(&mem_root(
+        "transient-exhaust",
+    )))
     .unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
     first_failure_text(drive_one_turn(&system, "exhaust transient retries"))
 }
 
 fn build_fs_read_fail_system() -> Result<FsReadFailSystem, AgentError> {
-    FsReadFailSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence("/fs-read-fail"))
+    let system = FsReadFailSystem::new::<StdThread, TokioExecutor>(persistence("/fs-read-fail"))?;
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
+    Ok(system)
 }
 
 fn build_fs_write_fail_system() -> Result<FsWriteFailSystem, AgentError> {
-    FsWriteFailSystem::new::<StdThread, TokioExecutor>(llm_config(), persistence("/fs-write-fail"))
+    let system = FsWriteFailSystem::new::<StdThread, TokioExecutor>(persistence("/fs-write-fail"))?;
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
+    Ok(system)
 }
 
 fn drive_one_turn<Filesystem, Http, Timer>(

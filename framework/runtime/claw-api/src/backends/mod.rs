@@ -50,7 +50,7 @@ impl std::error::Error for ParseBackendKindError {}
 trait BackendImpl: Sized {
     /// Build the backend from validated config.
     ///
-    /// Credential/config validation is centralized in [`crate::ClawApi::init`];
+    /// Credential/config validation is centralized in [`crate::ClawApi::set_config`];
     /// `api_key`, `model`, and `base_url` are guaranteed non-empty here.
     fn make(config: &ClawApiConfig) -> Result<Self, InitError>;
 

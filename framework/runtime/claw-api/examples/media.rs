@@ -75,7 +75,8 @@ fn main() -> anyhow::Result<()> {
         "gpt-4o-mini",
         "https://api.example.com/v1",
     );
-    let mut api = ClawApi::init(config, StubHttp)?;
+    let mut api = ClawApi::new(StubHttp);
+    api.set_config(config)?;
     let abort = AtomicBool::new(false);
 
     // A media request with both prompts and a custom retry policy; the fields

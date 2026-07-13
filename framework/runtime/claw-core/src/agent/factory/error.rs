@@ -1,4 +1,3 @@
-use claw_api::InitError;
 use claw_memory::{LongTermInitError, TranscriptInitError};
 use claw_skill::SkillError;
 use claw_tool::ToolSetError;
@@ -13,9 +12,6 @@ pub enum FsAgentFactoryError {
     /// No persistence directory was provided to the factory.
     #[error("persistence directory is required")]
     MissingPersistenceDir,
-    /// The dedicated extraction LLM client (for long-term memory) failed to init.
-    #[error("failed to initialize the extraction LLM client: {0}")]
-    ExtractionLlm(#[from] InitError),
     /// A long-term memory journal exists but could not be read at startup.
     #[error("failed to load long-term memory: {0}")]
     LongTermInit(#[from] LongTermInitError),

@@ -1,7 +1,9 @@
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
-use claw_api::{ClawApiAsync, ClawApiConfig};
+use claw_api::ClawApiConfig;
+
+use crate::config::{ApiUsage, ClawApiManager};
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::ProfileStore;
@@ -21,8 +23,17 @@ impl<
         Timer: ClawTimer + Default + 'static,
     > FsAgentFactory<Filesystem, Http, Timer>
 {
-    /// Build a factory over an LLM `llm_config` and one persistence root.
+    /// Build a factory over one persistence root and a shared API manager.
     ///
+    /// The config to run `usage` on this turn, resolved from the shared manager
+    /// (its explicit binding, else the default). `None` only if nothing is linked.
+    pub(crate) fn config_for(&self, usage: ApiUsage) -> Option<ClawApiConfig> {
+        self.api_manager
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get_api(usage)
+    }
+
     /// The factory owns the memory layout below `persistence_dir`: transcripts,
     /// editable profile documents, and long-term memory. `Filesystem` selects
     /// the static filesystem HAL backend used by those stores.
@@ -30,13 +41,12 @@ impl<
     /// # Errors
     ///
     /// Returns [`FsAgentFactoryError::MissingPersistenceDir`] when the
-    /// persistence root is blank, or [`FsAgentFactoryError::ExtractionLlm`] if the
-    /// internal extraction LLM client cannot be initialized.
+    /// persistence root is blank.
     pub fn new(
         tools: Arc<ToolRegistry>,
-        llm_config: ClawApiConfig,
         persistence_dir: String,
         skill_roots: Vec<String>,
+        api_manager: Arc<RwLock<ClawApiManager>>,
     ) -> Result<Self, FsAgentFactoryError> {
         let span = tracing::info_span!("agent.factory");
         let _enter = span.enter();
@@ -46,17 +56,10 @@ impl<
         }
         let layout = FsAgentFactoryLayout::new(persistence_dir);
 
-        let extraction_llm = match ClawApiAsync::<Http, Timer>::init_default(llm_config.clone()) {
-            Ok(llm) => llm,
-            Err(error) => {
-                tracing::error!(name: "extraction_llm_init_failed", kind = "init");
-                return Err(FsAgentFactoryError::ExtractionLlm(error));
-            }
-        };
         let long_term = match LongTermDeps::<Filesystem>::from_root(
             &layout.long_term_dir,
             RuleBasedTierClassifier::shared(),
-            LlmExtractor::shared(extraction_llm),
+            LlmExtractor::<Http, Timer>::shared(Arc::clone(&api_manager)),
         ) {
             Ok(deps) => deps,
             Err(error) => {
@@ -69,7 +72,7 @@ impl<
         let skills = build_skill_registry::<Filesystem>(skill_roots)?;
 
         Ok(Self {
-            llm_config,
+            api_manager,
             tools,
             _http: PhantomData,
             _timer: PhantomData,

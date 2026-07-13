@@ -25,7 +25,7 @@ use serde_json::json;
 const OK: c_int = 0;
 /// A required pointer argument was null (or not valid UTF-8).
 const ERR_NULL_ARG: c_int = -1;
-/// `ClawApi::init` rejected the config.
+/// `ClawApi::set_config` rejected the config.
 const ERR_INIT: c_int = -2;
 /// The chat call failed (transport, HTTP, or parse error).
 const ERR_CHAT: c_int = -3;
@@ -104,9 +104,10 @@ pub unsafe extern "C" fn claw_api_selftest_chat(
     let Ok(http) = EspIdfHttp::new(base_url) else {
         return ERR_INIT;
     };
-    let Ok(mut api) = ClawApi::init(config, http) else {
+    let mut api = ClawApi::new(http);
+    if api.set_config(config).is_err() {
         return ERR_INIT;
-    };
+    }
 
     let abort = AtomicBool::new(false);
     let messages = json!([{ "role": "user", "content": user_message }]);
@@ -165,9 +166,10 @@ pub unsafe extern "C" fn claw_api_selftest_chat_async(
 
     let task = executor.spawn(async move {
         let abort = AtomicBool::new(false);
-        let Ok(mut api) = ClawApiAsync::<EspIdfHttp, NoDelayTimer>::init_default(config) else {
+        let mut api = ClawApiAsync::new(EspIdfHttp::default(), NoDelayTimer);
+        if api.set_config(config).is_err() {
             return (ERR_INIT, "failed to initialize async api".to_string());
-        };
+        }
         let messages = json!([{ "role": "user", "content": user_message }]);
         let request = ChatRequest::new(
             "You are a concise test assistant. Reply in one short sentence.",

@@ -41,6 +41,8 @@ pub(crate) use registry::{AgentIdAllocator, AgentRegistry};
 
 use crate::event::EventSink;
 
+use claw_api::{ClawApiConfig, InitError};
+
 use claw_checkpoint::{DurablePart, DurablePartError, PartStateSlice};
 use core::future::Future;
 use core::pin::Pin;
@@ -95,6 +97,14 @@ pub(crate) trait Agent: DurablePart {
         let _ = (name, state);
         Ok(false)
     }
+
+    /// Rebind this agent's LLM client to `config` for the upcoming turn.
+    ///
+    /// Called at the turn boundary with the config resolved from the
+    /// `ClawApiManager` for this agent's usage, so a turn runs entirely on one
+    /// config snapshot even if configs are updated mid-turn. Keeps the transport;
+    /// only the provider/key/model/base URL change.
+    fn set_llm_config(&mut self, config: ClawApiConfig) -> Result<(), InitError>;
 
     /// Advance the agent by one step and report what happened. See [`TickOutcome`].
     ///

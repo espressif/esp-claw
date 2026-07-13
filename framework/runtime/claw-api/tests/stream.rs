@@ -22,7 +22,8 @@ fn run(
     chunk_size: usize,
 ) -> (Vec<LlmDelta>, claw_api::LlmResponse) {
     let http = ChunkedHttp::new([sse_body.to_string()], chunk_size);
-    let mut rt = ClawApiAsync::<ChunkedHttp, ImmediateTimer>::init(config(backend), http).unwrap();
+    let mut rt = ClawApiAsync::<ChunkedHttp, ImmediateTimer>::new(http, ImmediateTimer);
+    rt.set_config(config(backend)).unwrap();
     let abort = AtomicBool::new(false);
     let messages = json!([{ "role": "user", "content": "hi" }]);
     let request = ChatRequest::new("sys", &messages);
