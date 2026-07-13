@@ -157,6 +157,12 @@ static int lua_espnow_parse_peer(lua_State *L, esp_now_peer_info_t *peer)
     }
     lua_pop(L, 1);
 
+    lua_getfield(L, 1, "encrypt");
+    if (!lua_isnil(L, -1)) {
+        peer->encrypt = lua_toboolean(L, -1);
+    }
+    lua_pop(L, 1);
+
     lua_getfield(L, 1, "lmk");
     if (!lua_isnil(L, -1)) {
         size_t len = 0;
@@ -166,12 +172,6 @@ static int lua_espnow_parse_peer(lua_State *L, esp_now_peer_info_t *peer)
         }
         memcpy(peer->lmk, lmk, ESP_NOW_KEY_LEN);
         peer->encrypt = true;
-    }
-    lua_pop(L, 1);
-
-    lua_getfield(L, 1, "encrypt");
-    if (!lua_isnil(L, -1)) {
-        peer->encrypt = lua_toboolean(L, -1);
     }
     lua_pop(L, 1);
 
@@ -211,6 +211,7 @@ static int lua_espnow_init(lua_State *L)
     if (err != ESP_OK) {
         return lua_espnow_push_ok_or_err(L, ESP_ERR_INVALID_STATE);
     }
+    (void)mode;
 
     lua_espnow_runtime_lock();
     if (s_espnow_rt.inited) {
@@ -302,8 +303,8 @@ static int lua_espnow_send(lua_State *L)
     }
     lua_espnow_check_mac(L, 1, mac);
     data = luaL_checklstring(L, 2, &len);
-    if (len == 0) {
-        return luaL_error(L, "data must be a non-empty string");
+    if (len == 0 || len > ESP_NOW_MAX_DATA_LEN) {
+        return luaL_error(L, "data length must be 1..%d bytes", ESP_NOW_MAX_DATA_LEN);
     }
 
     err = esp_now_send(mac, (const uint8_t *)data, len);
