@@ -112,6 +112,9 @@ pub enum SessionControlError {
     /// The orchestrator worker is gone, so the command could not be delivered.
     #[error("orchestrator worker is not running")]
     WorkerStopped,
+    /// The session closed, but its final state could not be checkpointed.
+    #[error("failed to persist closed session state")]
+    ClosePersistence,
 }
 
 /// Cloneable write/control half of an open session.

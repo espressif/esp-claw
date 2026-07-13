@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use claw_agent::{AgentError, AgentSystem, SessionEvent};
+use claw_agent::{AgentError, AgentSystem, Message, SessionEvent};
 use claw_interface::{
     Cancel, ClawFile, ClawFs, ClawHttp, ClawTimer, FsError, HttpError, HttpJsonRequest,
     HttpRequestFailure, HttpResponse, HttpResponseFuture, HttpStatusCode, ImmediateTimer, MemFs,
@@ -349,7 +349,7 @@ where
 {
     let session = system.new_session();
     let (control, mut events) = system.open_session(session).unwrap();
-    block_on(control.submit(input)).unwrap();
+    block_on(control.submit(Message::text(input))).unwrap();
     drain_until_turn_ended(&mut events)
 }
 

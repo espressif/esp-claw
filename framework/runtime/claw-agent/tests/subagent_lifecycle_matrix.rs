@@ -7,9 +7,10 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use claw_agent::{AgentSystem, IterationId, SessionEvent, TurnCause, TurnId};
+use claw_agent::{AgentSystem, IterationId, Message, SessionEvent, TurnId};
 use claw_interface::{
     Cancel, ClawHttp, HttpJsonRequest, HttpResponse, HttpResponseFuture, HttpStatusCode,
     ImmediateTimer, MemFs, StdThread, TokioExecutor,
@@ -24,6 +25,7 @@ type SubagentSystem = AgentSystem<MemFs, Sse<SubagentHttp>, ImmediateTimer>;
 
 static SUBAGENT_LOCK: Mutex<()> = Mutex::new(());
 static SUBAGENT_STATE: Mutex<Option<SubagentCaseState>> = Mutex::new(None);
+static CONTROL_WORKER_POLLS: AtomicUsize = AtomicUsize::new(0);
 
 #[test]
 fn subagent_lifecycle_csv_matrix_drives_background_results_and_graph_updates() {
@@ -43,56 +45,31 @@ fn subagent_lifecycle_csv_matrix_drives_background_results_and_graph_updates() {
         let session = system.new_session();
         let (control, mut events) = system.open_session(session).unwrap();
 
-        block_on(control.submit(format!("delegate {}", fixture.case))).unwrap();
-        let first_turn = drain_until_turn_ended(&mut events);
-        assert_turn(&first_turn, TurnId(1), TurnCause::UserSubmit, &fixture.case);
+        block_on(control.submit(Message::text(format!("delegate {}", fixture.case)))).unwrap();
+        let delegated_turn = drain_until_turn_ended(&mut events);
+        assert_turn(&delegated_turn, TurnId(1), &fixture.case);
         assert_eq!(
-            iteration_ids(&first_turn),
-            vec![IterationId(0), IterationId(1)],
+            iteration_ids(&delegated_turn),
+            vec![IterationId(0), IterationId(1), IterationId(0)],
             "case {}",
             fixture.case
         );
         assert_eq!(
-            tools_events(&first_turn),
+            tools_events(&delegated_turn),
             vec!["subagent_spawn".to_string()],
             "case {}",
             fixture.case
         );
         assert_eq!(
-            output_fragments(&first_turn),
-            vec![fixture.spawn_ack.clone()],
+            output_fragments(&delegated_turn),
+            vec![fixture.spawn_ack.clone(), fixture.background_output.clone()],
             "case {}",
             fixture.case
         );
 
-        let background_turn = drain_until_turn_ended(&mut events);
-        assert_turn(
-            &background_turn,
-            TurnId(2),
-            TurnCause::BackgroundResult,
-            &fixture.case,
-        );
-        assert_eq!(
-            iteration_ids(&background_turn),
-            vec![IterationId(0)],
-            "case {}",
-            fixture.case
-        );
-        assert_eq!(
-            output_fragments(&background_turn),
-            vec![fixture.background_output.clone()],
-            "case {}",
-            fixture.case
-        );
-
-        block_on(control.submit(format!("supervise {}", fixture.case))).unwrap();
+        block_on(control.submit(Message::text(format!("supervise {}", fixture.case)))).unwrap();
         let supervision_turn = drain_until_turn_ended(&mut events);
-        assert_turn(
-            &supervision_turn,
-            TurnId(3),
-            TurnCause::UserSubmit,
-            &fixture.case,
-        );
+        assert_turn(&supervision_turn, TurnId(2), &fixture.case);
         assert_eq!(
             iteration_ids(&supervision_turn),
             vec![IterationId(0), IterationId(1), IterationId(2)],
@@ -122,6 +99,56 @@ fn subagent_lifecycle_csv_matrix_drives_background_results_and_graph_updates() {
     }
 }
 
+#[test]
+fn turn_control_preserves_agents_on_interrupt_and_deletes_them_on_cancel() {
+    let _lock = SUBAGENT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    for control_name in ["interrupt", "cancel"] {
+        install_control_case(control_name);
+        let root = mem_root("subagent-turn-control");
+        let system = SubagentSystem::new::<StdThread, TokioExecutor>(persistence(&root)).unwrap();
+        system
+            .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+            .unwrap();
+        let session = system.new_session();
+        let (control, mut events) = system.open_session(session).unwrap();
+
+        block_on(control.submit(Message::text(format!("delegate then {control_name}")))).unwrap();
+        wait_until_control_worker_is_pending(control_name);
+        match control_name {
+            "interrupt" => block_on(control.interrupt()).unwrap(),
+            "cancel" => block_on(control.cancel()).unwrap(),
+            _ => unreachable!(),
+        }
+        block_on(control.submit(Message::text(format!("inspect after {control_name}")))).unwrap();
+
+        let controlled_turn = drain_until_turn_ended(&mut events);
+        assert_turn(&controlled_turn, TurnId(1), control_name);
+
+        let inspection_turn = drain_until_turn_ended(&mut events);
+        assert_turn(&inspection_turn, TurnId(2), control_name);
+        assert_eq!(
+            output_fragments(&inspection_turn),
+            vec![format!("{control_name} graph inspected")],
+        );
+
+        let list_result = control_list_result();
+        if control_name == "interrupt" {
+            assert!(
+                list_result.contains("helper") && list_result.contains("idle"),
+                "interrupt should preserve the stopped subagent as idle: {list_result}"
+            );
+        } else {
+            assert!(
+                list_result.contains(r#""subagents":[]"#),
+                "cancel should delete every spawned subagent: {list_result}"
+            );
+        }
+    }
+}
+
 #[derive(Default)]
 struct SubagentHttp;
 
@@ -129,15 +156,42 @@ impl ClawHttp for SubagentHttp {
     fn post_json<'a>(
         &'a mut self,
         request: &'a HttpJsonRequest<'a>,
-        _cancel: Cancel<'a>,
+        cancel: Cancel<'a>,
     ) -> HttpResponseFuture<'a> {
         let body = request.body.to_owned();
+        if should_hold_worker(&body) {
+            return Box::pin(async move {
+                loop {
+                    CONTROL_WORKER_POLLS.fetch_add(1, Ordering::SeqCst);
+                    if cancel.is_cancelled() {
+                        return Err(claw_interface::HttpError::Aborted);
+                    }
+                    YieldOnce(false).await;
+                }
+            });
+        }
         let delay_once = should_delay_once(&body);
         Box::pin(SubagentResponseFuture {
             body,
             delay_once,
             yielded_pending: false,
         })
+    }
+}
+
+struct YieldOnce(bool);
+
+impl Future for YieldOnce {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.0 {
+            Poll::Ready(())
+        } else {
+            self.0 = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
     }
 }
 
@@ -196,6 +250,8 @@ impl Fixture {
 
 struct SubagentCaseState {
     fixture: Fixture,
+    control: Option<String>,
+    hold_worker: bool,
     root_requests: usize,
     worker_requests: usize,
     worker_delay_used: bool,
@@ -220,12 +276,43 @@ enum RequestKind {
 fn install_case(fixture: Fixture) {
     *state() = Some(SubagentCaseState {
         fixture,
+        control: None,
+        hold_worker: false,
         root_requests: 0,
         worker_requests: 0,
         worker_delay_used: false,
         child_id: None,
         requests: Vec::new(),
     });
+}
+
+fn install_control_case(control: &str) {
+    CONTROL_WORKER_POLLS.store(0, Ordering::SeqCst);
+    *state() = Some(SubagentCaseState {
+        fixture: Fixture {
+            case: control.to_string(),
+            termination: "manual".to_string(),
+            worker_output: "must not finish".to_string(),
+            spawn_ack: "root delegated".to_string(),
+            background_output: String::new(),
+            supervision_output: String::new(),
+            expected_watch_fragment: String::new(),
+            expected_delete_fragment: String::new(),
+            expected_after_delete_fragment: String::new(),
+        },
+        control: Some(control.to_string()),
+        hold_worker: true,
+        root_requests: 0,
+        worker_requests: 0,
+        worker_delay_used: false,
+        child_id: None,
+        requests: Vec::new(),
+    });
+}
+
+fn should_hold_worker(body: &str) -> bool {
+    classify_request(body) == RequestKind::Worker
+        && state().as_ref().is_some_and(|state| state.hold_worker)
 }
 
 fn should_delay_once(body: &str) -> bool {
@@ -265,6 +352,10 @@ fn response_for_request(body: &str) -> String {
 fn root_response(state: &mut SubagentCaseState, body: &str) -> String {
     let request_index = state.root_requests;
     state.root_requests += 1;
+
+    if let Some(control) = state.control.clone() {
+        return control_root_response(state, body, request_index, &control);
+    }
 
     match request_index {
         0 => assistant_tool_calls(vec![tool_call(
@@ -309,6 +400,56 @@ fn root_response(state: &mut SubagentCaseState, body: &str) -> String {
             state.fixture.case
         ),
     }
+}
+
+fn control_root_response(
+    state: &mut SubagentCaseState,
+    body: &str,
+    request_index: usize,
+    control: &str,
+) -> String {
+    match request_index {
+        0 => assistant_tool_calls(vec![tool_call(
+            "call_spawn",
+            "subagent_spawn",
+            json!({
+                "kind": "worker",
+                "name": "helper",
+                "goal": format!("worker held for {control}"),
+                "termination": "manual",
+            }),
+        )]),
+        1 => {
+            state.child_id = extract_child_id(body);
+            assistant_text("root delegated")
+        }
+        2 => assistant_tool_calls(vec![tool_call(
+            "call_list_after_control",
+            "subagent_list",
+            json!({}),
+        )]),
+        3 => assistant_text(&format!("{control} graph inspected")),
+        other => panic!("unexpected control root request index {other} for {control}"),
+    }
+}
+
+fn wait_until_control_worker_is_pending(control: &str) {
+    for _ in 0..10_000 {
+        if CONTROL_WORKER_POLLS.load(Ordering::SeqCst) > 0 {
+            return;
+        }
+        std::thread::yield_now();
+    }
+    panic!("{control}: worker did not enter its pending task");
+}
+
+fn control_list_result() -> String {
+    recorded_requests()
+        .into_iter()
+        .rev()
+        .find(|request| request.kind == RequestKind::Root)
+        .map(|request| tool_message_content(&request.body).join("\n"))
+        .unwrap_or_default()
 }
 
 fn assistant_tool_calls(calls: Vec<Value>) -> String {
@@ -461,10 +602,10 @@ fn tool_message_content(body: &str) -> Vec<String> {
         .collect()
 }
 
-fn assert_turn(events: &[SessionEvent], turn: TurnId, cause: TurnCause, case: &str) {
+fn assert_turn(events: &[SessionEvent], turn: TurnId, case: &str) {
     assert_eq!(
         events.first(),
-        Some(&SessionEvent::TurnStarted { turn, cause }),
+        Some(&SessionEvent::TurnStarted { turn }),
         "case {case}"
     );
     assert_eq!(

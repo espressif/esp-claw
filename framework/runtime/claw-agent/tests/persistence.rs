@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 use std::sync::{Mutex, MutexGuard};
 
 use claw_agent::{
-    AgentError, AgentSystem, OpenSessionError, SessionEvent, SessionId, TurnCause, TurnId,
+    AgentError, AgentSystem, Message, OpenSessionError, SessionEvent, SessionId, TurnId,
 };
 use claw_checkpoint::{
     BatchId, BatchWrite, ChangePatternHint, Checkpoint, CheckpointStorage, CheckpointWrite,
@@ -198,14 +198,17 @@ fn session_drive_turn_counter_restores_from_disk_checkpoint() {
         let system = build_disk_system(&root, vec![assistant_text("first")]);
         let session = system.new_session();
         let (control, mut events) = system.open_session(session).unwrap();
-        block_on(control.submit("one")).unwrap();
+        block_on(control.submit(Message::text("one"))).unwrap();
         let events = drain_until_turn_ended(&mut events);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, SessionEvent::Error { .. })),
+            "turn emitted an error: {events:?}"
+        );
         assert_eq!(
             events.first(),
-            Some(&SessionEvent::TurnStarted {
-                turn: TurnId(1),
-                cause: TurnCause::UserSubmit,
-            })
+            Some(&SessionEvent::TurnStarted { turn: TurnId(1) })
         );
         assert!(DiskFs::exists(&checkpoint_manifest));
         let checkpoint = latest_checkpoint::<DiskFs>(&format!("{root}/checkpoint"));
@@ -230,14 +233,11 @@ fn session_drive_turn_counter_restores_from_disk_checkpoint() {
     let system = build_disk_system(&root, vec![assistant_text("second")]);
     assert_eq!(system.list_sessions(), vec![session]);
     let (control, mut events) = system.open_session(session).unwrap();
-    block_on(control.submit("two")).unwrap();
+    block_on(control.submit(Message::text("two"))).unwrap();
     let events = drain_until_turn_ended(&mut events);
     assert_eq!(
         events.first(),
-        Some(&SessionEvent::TurnStarted {
-            turn: TurnId(2),
-            cause: TurnCause::UserSubmit,
-        })
+        Some(&SessionEvent::TurnStarted { turn: TurnId(2) })
     );
 }
 
@@ -254,7 +254,7 @@ fn session_transcript_history_survives_disk_rebuild_and_reenters_llm_context() {
         let system = build_recording_disk_system(&root);
         let session = system.new_session();
         let (control, mut events) = system.open_session(session).unwrap();
-        block_on(control.submit("first persisted user")).unwrap();
+        block_on(control.submit(Message::text("first persisted user"))).unwrap();
         let events = drain_until_turn_ended(&mut events);
         assert!(events
             .iter()
@@ -268,15 +268,12 @@ fn session_transcript_history_survives_disk_rebuild_and_reenters_llm_context() {
     let system = build_recording_disk_system(&root);
     assert_eq!(system.list_sessions(), vec![session]);
     let (control, mut events) = system.open_session(session).unwrap();
-    block_on(control.submit("second user")).unwrap();
+    block_on(control.submit(Message::text("second user"))).unwrap();
     let events = drain_until_turn_ended(&mut events);
 
     assert_eq!(
         events.first(),
-        Some(&SessionEvent::TurnStarted {
-            turn: TurnId(2),
-            cause: TurnCause::UserSubmit,
-        })
+        Some(&SessionEvent::TurnStarted { turn: TurnId(2) })
     );
     assert!(events
         .iter()
@@ -305,7 +302,7 @@ fn corrupt_transcript_index_rebuilds_from_data_log_after_disk_rebuild() {
         let system = build_recording_disk_system(&root);
         let session = system.new_session();
         let (control, mut events) = system.open_session(session).unwrap();
-        block_on(control.submit("user before index corruption")).unwrap();
+        block_on(control.submit(Message::text("user before index corruption"))).unwrap();
         let events = drain_until_turn_ended(&mut events);
         assert!(events.iter().any(
             |event| matches!(event, SessionEvent::Output { text } if text == "reply before index corruption")
@@ -319,15 +316,12 @@ fn corrupt_transcript_index_rebuilds_from_data_log_after_disk_rebuild() {
     let system = build_recording_disk_system(&root);
     assert_eq!(system.list_sessions(), vec![session]);
     let (control, mut events) = system.open_session(session).unwrap();
-    block_on(control.submit("user after index corruption")).unwrap();
+    block_on(control.submit(Message::text("user after index corruption"))).unwrap();
     let events = drain_until_turn_ended(&mut events);
 
     assert_eq!(
         events.first(),
-        Some(&SessionEvent::TurnStarted {
-            turn: TurnId(2),
-            cause: TurnCause::UserSubmit,
-        })
+        Some(&SessionEvent::TurnStarted { turn: TurnId(2) })
     );
     assert!(events
         .iter()
@@ -352,7 +346,7 @@ fn deleted_session_does_not_reappear_after_disk_rebuild() {
         let session = system.new_session();
         {
             let (control, mut events) = system.open_session(session).unwrap();
-            block_on(control.submit("persist before delete")).unwrap();
+            block_on(control.submit(Message::text("persist before delete"))).unwrap();
             let events = drain_until_turn_ended(&mut events);
             assert!(events.iter().any(
                 |event| matches!(event, SessionEvent::Output { text } if text == "before delete")
@@ -378,34 +372,19 @@ fn deleted_session_does_not_reappear_after_disk_rebuild() {
 }
 
 #[test]
-fn pending_input_checkpoint_replays_after_disk_rebuild() {
+fn old_session_drive_layout_is_rejected() {
     let _script = serialize_script();
     let root = TempDir::new("claw-agent-pending-input-checkpoint").unwrap();
     let root = root.path().to_string_lossy().into_owned();
     let session = SessionId(1);
 
-    write_pending_session_checkpoint(&root, session, "recover me");
-    assert_eq!(
-        session_drive_pending_text::<DiskFs>(&root, session),
-        Some("recover me".to_string())
-    );
+    write_old_session_drive_checkpoint(&root, session, "obsolete");
 
-    let system = build_disk_system(&root, vec![assistant_text("recovered")]);
-    assert_eq!(system.list_sessions(), vec![session]);
-    let (_control, mut events) = system.open_session(session).unwrap();
-    let events = drain_until_turn_ended(&mut events);
-    assert_eq!(
-        events.first(),
-        Some(&SessionEvent::TurnStarted {
-            turn: TurnId(1),
-            cause: TurnCause::UserSubmit,
-        })
-    );
-    assert!(events
-        .iter()
-        .any(|event| matches!(event, SessionEvent::Output { text } if text == "recovered")));
-    assert_eq!(session_drive_pending_text::<DiskFs>(&root, session), None);
-    assert_disk_file_contains(&root, "transcript/1.jsonl", "recover me");
+    let error = match DiskAgentSystem::new::<StdThread, TokioExecutor>(persistence(&root)) {
+        Ok(_) => panic!("old session-drive layout must reject startup"),
+        Err(error) => error.to_string(),
+    };
+    assert_contains(&error, "failed to decode durable state");
 }
 
 struct CheckpointEchoTool;
@@ -538,7 +517,7 @@ fn tool_count(checkpoint: &Checkpoint) -> usize {
     value["tools"].as_object().unwrap().len()
 }
 
-fn write_pending_session_checkpoint(root: &str, session: SessionId, text: &str) {
+fn write_old_session_drive_checkpoint(root: &str, session: SessionId, text: &str) {
     let mut storage = FsCheckpointStorage::<DiskFs>::new(format!("{root}/checkpoint"));
     let step = storage.next_step().unwrap();
     storage
@@ -602,17 +581,6 @@ fn tool_registry_state<F: ClawFs>(root: &str) -> Option<Value> {
         .find(|batch| batch.name == "tool-registry")
         .and_then(|batch| batch.parts.iter().find(|part| part.name == "tool-registry"))?;
     serde_json::from_slice(part.state.bytes.as_ref()).ok()
-}
-
-fn session_drive_pending_text<F: ClawFs>(root: &str, session: SessionId) -> Option<String> {
-    let checkpoint = latest_checkpoint::<F>(&format!("{root}/checkpoint"));
-    let part = checkpoint
-        .batches
-        .iter()
-        .find(|batch| batch.name == "session-runtime" && batch.id.0 == session.0)
-        .and_then(|batch| batch.parts.iter().find(|part| part.name == "session-drive"))?;
-    let state: Value = serde_json::from_slice(part.state.bytes.as_ref()).ok()?;
-    state["pending_input"]["text"].as_str().map(str::to_string)
 }
 
 fn recording_replies() -> MutexGuard<'static, VecDeque<String>> {

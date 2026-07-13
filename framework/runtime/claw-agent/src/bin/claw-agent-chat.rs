@@ -16,7 +16,8 @@ use std::path::Path;
 use anstyle::{AnsiColor, Style};
 use anyhow::{bail, Result};
 use claw_agent::{
-    AgentPersistenceConfig, HostAgentSystem, SessionControl, SessionEvent, SessionEventStream,
+    AgentPersistenceConfig, HostAgentSystem, Message, SessionControl, SessionEvent,
+    SessionEventStream,
 };
 use claw_api::{ApiUsage, BackendKind, ClawApiConfig};
 use claw_interface::{StdThread, TokioExecutor};
@@ -47,7 +48,7 @@ impl ChatDriver {
     /// Submit one input and print events until that user-visible turn ends.
     /// Returns whether the turn produced any assistant-visible output.
     async fn send(&mut self, text: impl Into<String>) -> bool {
-        if let Err(error) = self.control.submit(text.into()).await {
+        if let Err(error) = self.control.submit(Message::text(text)).await {
             print_event("error", &error.to_string(), EventStyle::Error);
             return false;
         }

@@ -1,9 +1,9 @@
 //! The event vocabulary a session event stream yields.
 //!
-//! One open session has one long-lived stream. User submits and background
-//! subagent completions both create root-visible turns on that stream. Only the
-//! **root** agent is externally visible, and a root's iterations are sequential,
-//! so events carry no agent id: the `iteration` id is emitted once (on
+//! One open session has one long-lived stream. A user submit creates a turn;
+//! background subagent work remains inside that turn. Only the **root** agent is
+//! externally visible, and a root's iterations are sequential, so events carry
+//! no agent id: the `iteration` id is emitted once (on
 //! [`SessionEvent::IterationStarted`]) and the following content events belong
 //! to it by position.
 //!
@@ -50,15 +50,6 @@ const REASONING_EVENT_LIMIT: usize = 8_000;
 ))]
 const REASONING_EVENT_LIMIT: usize = 32_000;
 
-/// Why a root-visible turn started.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TurnCause {
-    /// A user input accepted through [`SessionControl::submit`](crate::SessionControl::submit).
-    UserSubmit,
-    /// A background subagent completed and made the root ready again.
-    BackgroundResult,
-}
-
 /// One item in a session's event stream.
 ///
 /// Content variants ([`Reasoning`](Self::Reasoning), [`Output`](Self::Output),
@@ -75,8 +66,6 @@ pub enum SessionEvent {
     TurnStarted {
         /// The session-local turn this bracket opens.
         turn: TurnId,
-        /// What made this turn runnable.
-        cause: TurnCause,
     },
     /// A root LLM round started. Carries the only iteration id on the stream.
     IterationStarted {

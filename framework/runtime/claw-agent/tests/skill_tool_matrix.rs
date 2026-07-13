@@ -6,9 +6,7 @@ use support::Sse;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, MutexGuard};
 
-use claw_agent::{
-    AgentPersistenceConfig, AgentSystem, IterationId, SessionEvent, TurnCause, TurnId,
-};
+use claw_agent::{AgentPersistenceConfig, AgentSystem, IterationId, Message, SessionEvent, TurnId};
 use claw_interface::{
     Cancel, ClawFs, ClawHttp, DiskFs, HttpJsonRequest, HttpResponse, HttpResponseFuture,
     HttpStatusCode, ImmediateTimer, StdThread, TokioExecutor,
@@ -53,7 +51,8 @@ fn skill_tools_csv_matrix_scans_roots_reloads_and_activates_documents() {
 
         let session = system.new_session();
         let (control, mut events) = system.open_session(session).unwrap();
-        block_on(control.submit(format!("run skill matrix {}", fixture.case))).unwrap();
+        block_on(control.submit(Message::text(format!("run skill matrix {}", fixture.case))))
+            .unwrap();
         let events = drain_until_turn_ended(&mut events);
 
         assert_turn_bracket(&events, &fixture.case);
@@ -360,10 +359,7 @@ fn assert_absent_fragments(text: &str, fragments: &str, case: &str) {
 fn assert_turn_bracket(events: &[SessionEvent], case: &str) {
     assert_eq!(
         events.first(),
-        Some(&SessionEvent::TurnStarted {
-            turn: TurnId(1),
-            cause: TurnCause::UserSubmit,
-        }),
+        Some(&SessionEvent::TurnStarted { turn: TurnId(1) }),
         "case {case}"
     );
     assert_eq!(

@@ -11,7 +11,6 @@ use futures_core::Stream;
 
 use crate::orchestrator::{OpenSessionError, SessionControlError};
 
-use super::super::session_drive::SubmittedInput;
 use super::super::session_io::Command;
 use super::super::{DriveFuture, Engine};
 
@@ -89,16 +88,19 @@ where
                         inflight.push_back(future);
                     }
                 }
-                EngineEvent::Command(Some(Command::Submit { session, text, ack })) => {
-                    let (result, future) = self.submit_input(session, SubmittedInput { text });
+                EngineEvent::Command(Some(Command::Submit {
+                    session,
+                    message,
+                    ack,
+                })) => {
+                    let (result, future) = self.submit_input(session, message);
                     let _ = ack.try_send(result);
                     if let Some(future) = future {
                         inflight.push_back(future);
                     }
                 }
                 EngineEvent::Command(Some(Command::Control { session, op, ack })) => {
-                    let (result, future) = self.control_session(session, op);
-                    let _ = ack.try_send(result);
+                    let future = self.control_session(session, op, ack);
                     if let Some(future) = future {
                         inflight.push_back(future);
                     }
@@ -111,8 +113,7 @@ where
                     let _ = ack.try_send(self.set_reasoning_effort(session, effort));
                 }
                 EngineEvent::Command(Some(Command::CloseSession { session, ack })) => {
-                    let (result, future) = self.close_session(session);
-                    let _ = ack.try_send(result);
+                    let future = self.close_session(session, ack);
                     if let Some(future) = future {
                         inflight.push_back(future);
                     }

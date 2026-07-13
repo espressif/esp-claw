@@ -17,7 +17,7 @@
 //!   --target x86_64-unknown-linux-gnu
 //! ```
 
-use claw_agent::{AgentSystem, SessionEvent};
+use claw_agent::{AgentSystem, Message, SessionEvent};
 use claw_api::{BackendKind, ClawApiConfig};
 use claw_interface::{
     BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp, StdThread, TokioExecutor,
@@ -104,7 +104,9 @@ async fn main() -> anyhow::Result<()> {
 
     // 2. Drive the loop: explicit session id selects the agent session.
     let (control, mut events) = system.open_session(session)?;
-    control.submit("Hi, what time is it?").await?;
+    control
+        .submit(Message::text("Hi, what time is it?"))
+        .await?;
 
     println!("\nsession `{session}` events:");
     let mut outputs = Vec::new();

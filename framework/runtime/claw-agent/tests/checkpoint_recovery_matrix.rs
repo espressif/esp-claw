@@ -180,13 +180,17 @@ fn valid_session_store_part() -> PartWrite<'static> {
 }
 
 fn valid_session_drive_part() -> PartWrite<'static> {
-    json_part(
+    let mut part = json_part(
         "session-drive",
         json!({
-            "pending_input": null,
+            "active_turn": null,
             "next_turn_id": "turn-1",
+            "reasoning_effort": "medium",
+            "pending_reasoning_effort": null,
         }),
-    )
+    );
+    part.state.schema_version = 1;
+    part
 }
 
 fn json_part(name: &'static str, value: Value) -> PartWrite<'static> {

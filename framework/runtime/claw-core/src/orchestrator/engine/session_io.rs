@@ -9,7 +9,7 @@ use crate::event::{EventSink, SessionEvent};
 use crate::orchestrator::{
     OpenSessionError, ReasoningEffort, SessionControl, SessionControlError, SessionEventStream,
 };
-use crate::session::SessionId;
+use crate::session::{Message, SessionId};
 
 use super::super::control::DriveControl;
 
@@ -39,7 +39,7 @@ pub(in crate::orchestrator) enum Command {
     },
     Submit {
         session: SessionId,
-        text: String,
+        message: Message,
         ack: Sender<Result<(), SessionControlError>>,
     },
     Control {
@@ -71,20 +71,19 @@ impl SessionControl {
         }
     }
 
-    /// Submit one user input for this session.
+    /// Submit one message, including any attachment references, for this session.
     ///
     /// The returned future resolves when the orchestrator accepts the command,
     /// not when the agent reply completes. If a foreground submit is already in
     /// progress, this returns [`SessionControlError::Busy`] instead of buffering
     /// another input internally. User-visible output is delivered on the paired
     /// [`SessionEventStream`].
-    pub async fn submit(&self, text: impl Into<String>) -> Result<(), SessionControlError> {
-        let text = text.into();
+    pub async fn submit(&self, message: Message) -> Result<(), SessionControlError> {
         let (ack_tx, ack_rx) = async_channel::bounded(1);
         self.command_tx
             .send(Command::Submit {
                 session: self.session,
-                text,
+                message,
                 ack: ack_tx,
             })
             .await
@@ -129,9 +128,12 @@ impl SessionControl {
         self.send_control(ControlOp::Cancel).await
     }
 
-    /// Close this open session stream. The session id remains live and can be
-    /// opened again later; deleting the session is handled by the orchestrator
-    /// handle.
+    /// Close this open session stream and checkpoint its final runtime state.
+    /// The session id remains live and can be opened again later; deleting the
+    /// session is handled by the orchestrator handle.
+    ///
+    /// The stream is closed even when the final checkpoint fails. In that case,
+    /// this returns [`SessionControlError::ClosePersistence`].
     pub async fn close_session(&self) -> Result<(), SessionControlError> {
         let (ack_tx, ack_rx) = async_channel::bounded(1);
         self.command_tx

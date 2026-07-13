@@ -4,6 +4,7 @@ mod support;
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use claw_agent::Message;
 use claw_log::{FlatTreeSubscriber, TraceSink};
 use futures_lite::future::block_on;
 use tracing::Level;
@@ -53,10 +54,10 @@ fn iteration_preparation_traces_auxiliary_llm_work_without_payloads() {
     // prefix and the second alone exceeds the configured verbatim-tail budget.
     let oversized_input = USER_PAYLOAD_SECRET.repeat(1_024);
     for input in [oversized_input.clone(), oversized_input] {
-        block_on(control.submit(input)).unwrap();
+        block_on(control.submit(Message::text(input))).unwrap();
         let _ = drain_until_turn_ended(&mut events);
     }
-    block_on(control.submit("trigger the next context preparation")).unwrap();
+    block_on(control.submit(Message::text("trigger the next context preparation"))).unwrap();
     let _ = drain_until_turn_ended(&mut events);
 
     // Join the worker before inspecting the complete trace so every selected

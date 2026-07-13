@@ -9,7 +9,8 @@ use std::sync::{Mutex, MutexGuard};
 use std::thread;
 
 use claw_agent::{
-    AgentSystem, SessionControl, SessionControlError, SessionEvent, SessionEventStream, SessionId,
+    AgentSystem, Message, SessionControl, SessionControlError, SessionEvent, SessionEventStream,
+    SessionId,
 };
 use claw_interface::{
     Cancel, ClawFs, ClawHttp, DiskFs, HttpError, HttpJsonRequest, HttpResponse, HttpResponseFuture,
@@ -128,7 +129,7 @@ fn async_csv_control_storm_on_cloned_controls_finishes_and_accepts_next_submit()
         let session = system.new_session();
         let (control, mut events) = system.open_session(session).unwrap();
 
-        block_on(control.submit(format!("storm start {case}"))).unwrap();
+        block_on(control.submit(Message::text(format!("storm start {case}")))).unwrap();
         let handles = spawn_control_storm(&control, interrupts, cancels);
         for handle in handles {
             let result = handle.join().expect("control worker should not panic");
@@ -148,7 +149,7 @@ fn async_csv_control_storm_on_cloned_controls_finishes_and_accepts_next_submit()
         );
 
         if post_storm_submit {
-            block_on(control.submit(format!("after storm {case}"))).unwrap();
+            block_on(control.submit(Message::text(format!("after storm {case}")))).unwrap();
             let second_events = drain_until_turn_ended(&mut events);
             assert!(
                 output_fragments(&second_events)
@@ -299,7 +300,10 @@ where
         if reopen_each_turn {
             for turn in 0..turns_per_session {
                 let (control, mut events) = system.open_session(*session);
-                block_on(control.submit(format!("{case} session {session} turn {turn}"))).unwrap();
+                block_on(control.submit(Message::text(format!(
+                    "{case} session {session} turn {turn}"
+                ))))
+                .unwrap();
                 assert_turn_output(
                     case,
                     &mut events,
@@ -314,7 +318,10 @@ where
         } else {
             let (control, mut events) = system.open_session(*session);
             for turn in 0..turns_per_session {
-                block_on(control.submit(format!("{case} session {session} turn {turn}"))).unwrap();
+                block_on(control.submit(Message::text(format!(
+                    "{case} session {session} turn {turn}"
+                ))))
+                .unwrap();
                 assert_turn_output(
                     case,
                     &mut events,

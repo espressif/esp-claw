@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use claw_agent::{AgentSystem, IterationId, ReasoningEffort, SessionEvent, TurnCause, TurnId};
+use claw_agent::{AgentSystem, IterationId, Message, ReasoningEffort, SessionEvent, TurnId};
 #[cfg(feature = "cache_profile")]
 use claw_api::ApiUsage;
 use claw_interface::{
@@ -56,7 +56,7 @@ fn agent_loop_csv_tool_matrix_runs_tools_and_feeds_results_to_next_iteration() {
         let session = system.new_session();
         let (control, mut events) = system.open_session(session).unwrap();
 
-        block_on(control.submit(format!("run tool matrix {case}"))).unwrap();
+        block_on(control.submit(Message::text(format!("run tool matrix {case}")))).unwrap();
         let events = drain_until_turn_ended(&mut events);
 
         assert_turn_bracket(&events, case);
@@ -122,7 +122,7 @@ fn agent_loop_csv_llm_response_matrix_reports_errors_and_bounds_reasoning() {
         let session = system.new_session();
         let (control, mut events) = system.open_session(session).unwrap();
 
-        block_on(control.submit(format!("run llm response matrix {case}"))).unwrap();
+        block_on(control.submit(Message::text(format!("run llm response matrix {case}")))).unwrap();
         let events = drain_until_turn_ended(&mut events);
 
         assert_turn_bracket(&events, case);
@@ -154,10 +154,10 @@ fn reasoning_effort_replaces_the_root_system_prompt_block_on_the_next_turn() {
     let session = system.new_session();
     let (control, mut events) = system.open_session(session).unwrap();
 
-    block_on(control.submit("first turn")).unwrap();
+    block_on(control.submit(Message::text("first turn"))).unwrap();
     let _ = drain_until_turn_ended(&mut events);
     block_on(control.set_reasoning_effort(ReasoningEffort::High)).unwrap();
-    block_on(control.submit("second turn")).unwrap();
+    block_on(control.submit(Message::text("second turn"))).unwrap();
     let _ = drain_until_turn_ended(&mut events);
 
     let bodies = agent_request_bodies().clone();
@@ -190,7 +190,7 @@ fn agent_loop_emits_provider_usage_for_cli_consumers() {
     let system = build_matrix_system(&root);
     let session = system.new_session();
     let (control, mut events) = system.open_session(session).unwrap();
-    block_on(control.submit("report usage".to_string())).unwrap();
+    block_on(control.submit(Message::text("report usage"))).unwrap();
     let events = drain_until_turn_ended(&mut events);
 
     assert!(events.contains(&SessionEvent::Usage {
@@ -523,10 +523,7 @@ fn assert_reasoning_shape(
 fn assert_turn_bracket(events: &[SessionEvent], case: &str) {
     assert_eq!(
         events.first(),
-        Some(&SessionEvent::TurnStarted {
-            turn: TurnId(1),
-            cause: TurnCause::UserSubmit,
-        }),
+        Some(&SessionEvent::TurnStarted { turn: TurnId(1) }),
         "case {case}"
     );
     assert_eq!(

@@ -2,6 +2,8 @@
 
 use std::fmt::Write as _;
 
+use serde::{Deserialize, Serialize};
+
 crate::define_prefixed_id!(AttachmentId, "att-", "attachment");
 
 /// One inbound user message delivered to a session.
@@ -9,7 +11,8 @@ crate::define_prefixed_id!(AttachmentId, "att-", "attachment");
 /// The text body is the normal chat message body. Attachments are references to
 /// session attachment records; the record store is the source of truth for
 /// non-text bytes and metadata.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Message {
     /// User-visible text body, including normalized captions when a transport
     /// sends an image/file with a caption.
@@ -29,9 +32,7 @@ impl Message {
 
     /// Render the current typed message into the existing text transcript lane.
     ///
-    /// This is a temporary compatibility projection while the lower agent and
-    /// transcript layers are still text-only.
-    #[allow(dead_code)]
+    /// Temporary projection for the text-only agent and transcript layers.
     pub(crate) fn into_transcript_text(self) -> String {
         let mut rendered = self.text.unwrap_or_default();
         if self.attachments.is_empty() {
@@ -48,21 +49,9 @@ impl Message {
     }
 }
 
-impl From<String> for Message {
-    fn from(text: String) -> Self {
-        Self::text(text)
-    }
-}
-
-impl From<&str> for Message {
-    fn from(text: &str) -> Self {
-        Self::text(text)
-    }
-}
-
 /// A reference from a chat message to an attachment stored in the session
 /// manifest.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct AttachmentRef {
     pub id: AttachmentId,
 }

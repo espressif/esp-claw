@@ -329,6 +329,9 @@ impl Orchestrator {
                     SessionControlError::WorkerStopped => {
                         tracing::error!(name: "delete_rejected", reason = "worker_stopped");
                     }
+                    SessionControlError::ClosePersistence => {
+                        tracing::error!(name: "delete_rejected", reason = "persistence");
+                    }
                 }
                 Err(error)
             }

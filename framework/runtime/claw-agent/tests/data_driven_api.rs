@@ -6,8 +6,8 @@ use support::Sse;
 use std::collections::BTreeMap;
 
 use claw_agent::{
-    AgentError, AgentSystem, IterationId, OpenSessionError, SessionControlError, SessionEvent,
-    SessionEventStream, SessionId, TurnCause, TurnId,
+    AgentError, AgentSystem, IterationId, Message, OpenSessionError, SessionControlError,
+    SessionEvent, SessionEventStream, SessionId, TurnId,
 };
 use claw_checkpoint::DurablePart;
 use claw_interface::{
@@ -45,15 +45,12 @@ fn submit_streams_csv_reply_cases() {
         let session = system.new_session();
         let (control, mut events) = system.open_session(session).unwrap();
 
-        block_on(control.submit(field(&row, "user_input").to_owned())).unwrap();
+        block_on(control.submit(Message::text(field(&row, "user_input")))).unwrap();
         let events = drain_until_turn_ended(&mut events);
 
         assert_eq!(
             events.first(),
-            Some(&SessionEvent::TurnStarted {
-                turn: TurnId(1),
-                cause: TurnCause::UserSubmit,
-            }),
+            Some(&SessionEvent::TurnStarted { turn: TurnId(1) }),
             "case {case}"
         );
         assert_eq!(

@@ -88,6 +88,18 @@ where
         }
     }
 
+    pub(in crate::orchestrator::instance) fn clear_turn_work(&mut self) {
+        let state = self.state.get_mut();
+        state.ready.clear();
+        state.parked_approvals.clear();
+        state.approval_queue.clear();
+        state.subagent_result_mailbox.clear();
+        self.effects
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clear();
+    }
+
     pub(crate) fn work(&self) -> InstanceWork {
         if self.has_root_work() || self.has_unprompted_approval() {
             InstanceWork::Root

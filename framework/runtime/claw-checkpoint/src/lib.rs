@@ -553,6 +553,16 @@ impl<S: CheckpointStorage> CheckpointCoordinator<S> {
     }
 
     pub fn maybe_checkpoint(&mut self) -> Result<(), CheckpointError> {
+        self.checkpoint_with_policy(false)
+    }
+
+    /// Publish pending changes immediately, bypassing the configured write
+    /// interval. Intended for externally observable durability boundaries.
+    pub fn checkpoint_now(&mut self) -> Result<(), CheckpointError> {
+        self.checkpoint_with_policy(true)
+    }
+
+    fn checkpoint_with_policy(&mut self, force: bool) -> Result<(), CheckpointError> {
         let mut current_refs = HashMap::with_capacity(self.batches.len());
         let mut indexes = HashMap::with_capacity(self.batches.len());
         let mut planned = HashSet::new();
@@ -577,9 +587,11 @@ impl<S: CheckpointStorage> CheckpointCoordinator<S> {
         }
         let current_tick = previous_tick.saturating_add(1);
         self.current_checkpoint_tick = Some(current_tick);
-        if let Some(last) = self.last_physical_checkpoint_tick {
-            if current_tick.saturating_sub(last) < self.checkpoint_interval {
-                return Ok(());
+        if !force {
+            if let Some(last) = self.last_physical_checkpoint_tick {
+                if current_tick.saturating_sub(last) < self.checkpoint_interval {
+                    return Ok(());
+                }
             }
         }
 
@@ -760,6 +772,15 @@ impl<S: CheckpointStorage> SharedCheckpointCoordinator<S> {
         self.checkpoint_and_remove(batches, Vec::new())
     }
 
+    /// Submit snapshots and publish them before returning, regardless of the
+    /// coordinator's normal write interval.
+    pub fn checkpoint_now(
+        &self,
+        batches: Vec<DurableBatchSnapshot>,
+    ) -> Result<(), CheckpointError> {
+        self.checkpoint_and_remove_with_policy(batches, Vec::new(), true)
+    }
+
     /// Atomically apply owned snapshots and complete-batch tombstones, then ask
     /// the coordinator to publish one physical checkpoint.
     ///
@@ -771,6 +792,15 @@ impl<S: CheckpointStorage> SharedCheckpointCoordinator<S> {
         &self,
         batches: Vec<DurableBatchSnapshot>,
         removed_batches: Vec<BatchKey>,
+    ) -> Result<(), CheckpointError> {
+        self.checkpoint_and_remove_with_policy(batches, removed_batches, false)
+    }
+
+    fn checkpoint_and_remove_with_policy(
+        &self,
+        batches: Vec<DurableBatchSnapshot>,
+        removed_batches: Vec<BatchKey>,
+        force: bool,
     ) -> Result<(), CheckpointError> {
         let mut coordinator = self
             .inner
@@ -815,7 +845,12 @@ impl<S: CheckpointStorage> SharedCheckpointCoordinator<S> {
             mutations.push(coordinator.apply_remove_batch(key));
         }
 
-        if let Err(error) = coordinator.maybe_checkpoint() {
+        let checkpoint_result = if force {
+            coordinator.checkpoint_now()
+        } else {
+            coordinator.maybe_checkpoint()
+        };
+        if let Err(error) = checkpoint_result {
             coordinator.rollback_batch_mutations(mutations);
             coordinator.restore_bookkeeping(bookkeeping);
             return Err(error);

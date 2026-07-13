@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use async_channel::Sender;
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
@@ -33,6 +34,7 @@ where
                 return (Err(OpenSessionError::AlreadyOpen(session_id)), None);
             }
             drive.events = Some(events);
+            drive.announced_turn = None;
             drive.closing = false;
             drive.close_cancels = false;
             drive.has_pending_input()
@@ -64,30 +66,35 @@ where
     pub(in crate::orchestrator::engine::command_loop) fn close_session(
         self: &Rc<Self>,
         session_id: SessionId,
-    ) -> (Result<(), SessionControlError>, Option<DriveFuture>) {
+        ack: Sender<Result<(), SessionControlError>>,
+    ) -> Option<DriveFuture> {
         let session_span = tracing::info_span!("session", run.session = %session_id);
         let _session_enter = session_span.enter();
         if !self.sessions.contains(session_id) {
             tracing::warn!(name: "close_rejected", reason = "session_closed");
-            return (Err(SessionControlError::SessionClosed(session_id)), None);
+            let _ = ack.try_send(Err(SessionControlError::SessionClosed(session_id)));
+            return None;
         }
         {
-            let drives = self.drives.borrow();
-            let Some(drive) = drives.get(&session_id) else {
+            let mut drives = self.drives.borrow_mut();
+            let Some(drive) = drives.get_mut(&session_id) else {
                 tracing::warn!(name: "close_rejected", reason = "not_open");
-                return (Err(SessionControlError::SessionClosed(session_id)), None);
+                let _ = ack.try_send(Err(SessionControlError::SessionClosed(session_id)));
+                return None;
             };
             if drive.events.is_none() {
                 tracing::warn!(name: "close_rejected", reason = "not_open");
-                return (Err(SessionControlError::SessionClosed(session_id)), None);
+                let _ = ack.try_send(Err(SessionControlError::SessionClosed(session_id)));
+                return None;
             }
+            drive.queue_close_ack(ack);
             if drive.closing {
                 tracing::info!(name: "close_requested", "");
-                return (Ok(()), None);
+                return None;
             }
             tracing::info!(name: "close_requested", "");
         }
-        (Ok(()), self.session_shutdown(session_id))
+        self.session_shutdown(session_id)
     }
 
     pub(in crate::orchestrator::engine::command_loop) fn delete_session(

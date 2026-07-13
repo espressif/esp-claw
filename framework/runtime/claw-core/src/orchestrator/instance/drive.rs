@@ -8,7 +8,7 @@ use crate::event::{EventSink, SessionEvent};
 use crate::orchestrator::control::{DriveControl, DriveStop};
 
 use super::inflight::{tick_agent, ReadyAgent, TickedAgent};
-use super::model::DriveOutput;
+use super::model::{DriveOutput, TurnStopMode};
 use super::OrchestratorInstance;
 
 impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
@@ -17,6 +17,36 @@ where
     Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
+    /// Stop every task owned by the active turn. Agents are first recovered from
+    /// in-flight futures, then reset to idle through their normal cancel reducer.
+    /// The caller chooses whether the durable graph is preserved or pruned.
+    pub(crate) async fn stop_turn_tasks(&mut self, mode: TurnStopMode) {
+        let events = EventSink::disabled();
+        let control = DriveControl::new();
+
+        self.inflight.abort_all();
+        while !self.inflight.is_empty() {
+            let ticked = self.inflight.next_completed(&control).await;
+            self.reinsert_stopped_agents(ticked);
+        }
+
+        self.clear_turn_work();
+        self.cancel_all(crate::agent::CancelReason::UserRequested);
+        while self.has_ready() || !self.inflight.is_empty() {
+            self.start_ready_agent_tasks(&events);
+            if self.inflight.is_empty() {
+                continue;
+            }
+            let ticked = self.inflight.next_completed(&control).await;
+            self.reinsert_stopped_agents(ticked);
+        }
+        self.clear_turn_work();
+        if mode == TurnStopMode::DeleteSpawnedAgents {
+            self.delete_spawned_subagents();
+        }
+        self.refresh_snapshots();
+    }
+
     /// Drive the root-visible foreground turn until the root is no longer ready
     /// or in flight. Background subagents may remain in flight after this
     /// returns; they stay on the instance and continue through
@@ -125,32 +155,6 @@ where
         DriveStop::Quiescent
     }
 
-    /// Drive cancellation cleanup until no queued or in-flight work remains.
-    pub(crate) async fn drive_cancelled(
-        &mut self,
-        control: &DriveControl,
-        events: &EventSink,
-    ) -> (DriveOutput, DriveStop) {
-        let output = DriveOutput::default();
-        loop {
-            let _ = control.take_cancel();
-            let _ = control.take_interrupt();
-            let _ = control.take_wake();
-            self.start_ready_agent_tasks(events);
-            if self.inflight.is_empty() {
-                if self.has_ready() {
-                    continue;
-                }
-                break;
-            }
-            self.set_cancel_hook(control);
-            let ticked = self.inflight.next_completed(control).await;
-            self.route_ticked_agents(ticked, events);
-        }
-        control.clear_cancel_hook();
-        (output, DriveStop::Cancelled)
-    }
-
     fn set_cancel_hook(&self, control: &DriveControl) {
         let mut abort_handles = self.state.get().registry.abort_handles();
         abort_handles.extend(self.inflight.abort_handles());
@@ -236,6 +240,15 @@ where
         }
         self.inflight.retain_live(&self.state.get().meta);
         self.flush_subagent_result_mailbox();
+    }
+
+    fn reinsert_stopped_agents(&mut self, ticked: Vec<TickedAgent>) {
+        for TickedAgent { id, agent, .. } in ticked {
+            if self.state.get().meta.contains_key(&id) {
+                self.state.get_mut().registry.insert(id, agent);
+            }
+        }
+        self.inflight.retain_live(&self.state.get().meta);
     }
 
     fn drain_ready_agents(&mut self) -> Vec<ReadyAgent> {

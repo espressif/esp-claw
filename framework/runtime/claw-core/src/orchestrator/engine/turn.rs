@@ -2,16 +2,16 @@ use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use tracing::Instrument as _;
 
-use crate::agent::CancelReason;
-use crate::event::{EventSink, SessionEvent, TurnCause};
+use crate::event::{EventSink, SessionEvent};
 use crate::orchestrator::ReasoningEffort;
-use crate::session::{SessionId, TurnId};
+use crate::session::{Message, SessionId};
 
 use super::super::approval::{self, ApprovalResolverError, PermissionReplyResolution};
 use super::super::control::{DriveControl, DriveStop};
 use super::super::error::DeliverError;
-use super::super::instance::{DriveOutput, OrchestratorInstance, PendingApproval, RootReply};
-use super::session_drive::SubmittedInput;
+use super::super::instance::{
+    DriveOutput, OrchestratorInstance, PendingApproval, RootReply, TurnStopMode,
+};
 use super::Engine;
 
 impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
@@ -20,76 +20,99 @@ where
     Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
-    pub(super) async fn drive_user_turn(&self, session_id: SessionId, input: SubmittedInput) {
+    pub(super) fn announce_active_turn(&self, session_id: SessionId) {
         let Some(events) = self.session_events(session_id) else {
             return;
         };
-        let Some((turn, effort)) = self.drives.borrow_mut().get_mut(&session_id).map(|drive| {
-            let turn = drive.next_turn();
-            (turn, drive.reasoning_effort())
-        }) else {
-            return;
+        let turn = {
+            let mut drives = self.drives.borrow_mut();
+            let Some(drive) = drives.get_mut(&session_id) else {
+                return;
+            };
+            let Some(turn) = drive.active_turn_id() else {
+                return;
+            };
+            if drive.announced_turn == Some(turn) {
+                return;
+            }
+            drive.announced_turn = Some(turn);
+            turn
         };
-        let has_text = !input.text.is_empty();
-        let text_bytes = input.text.len() as u64;
-        async {
+        events.emit(SessionEvent::TurnStarted { turn });
+    }
+
+    pub(super) async fn drive_user_turn(&self, session_id: SessionId, input: Message) -> DriveStop {
+        let Some(events) = self.session_events(session_id) else {
+            return DriveStop::Quiescent;
+        };
+        let Some((turn, effort)) = self.drives.borrow().get(&session_id).and_then(|drive| {
+            drive
+                .active_turn_id()
+                .map(|turn| (turn, drive.reasoning_effort()))
+        }) else {
+            return DriveStop::Quiescent;
+        };
+        let has_text = input.text.as_ref().is_some_and(|text| !text.is_empty());
+        let text_bytes = input.text.as_ref().map_or(0, |text| text.len()) as u64;
+        let attachment_count = input.attachments.len() as u64;
+        let attachment_kinds = if input.attachments.is_empty() {
+            "none"
+        } else {
+            "references"
+        };
+        let stop = async {
             self.set_foreground_active(session_id, true);
-            events.emit(SessionEvent::TurnStarted {
-                turn,
-                cause: TurnCause::UserSubmit,
-            });
             tracing::info!(
                 name: "input_delivered",
                 has_text,
                 text_bytes,
-                attachment_count = 0_u64,
-                attachment_kinds = "none",
+                attachment_count,
+                attachment_kinds,
             );
             let result = self
-                .drive_one_input(session_id, input.text, effort, &events)
+                .drive_one_input(session_id, input.into_transcript_text(), effort, &events)
                 .await;
-            self.finish_turn(session_id, turn, &events, result);
+            let stop = self.handle_drive_result(&events, result);
             self.set_foreground_active(session_id, false);
+            stop
         }
         .instrument(tracing::info_span!("turn", run.turn = %turn, cause = "user_submit"))
         .await;
+        stop
     }
 
-    pub(super) async fn drive_background_result_turn(&self, session_id: SessionId) {
+    pub(super) async fn drive_root_ready_for_active_turn(
+        &self,
+        session_id: SessionId,
+    ) -> DriveStop {
         let Some(events) = self.session_events(session_id) else {
-            return;
+            return DriveStop::Quiescent;
         };
-        let Some((turn, effort)) = self.drives.borrow_mut().get_mut(&session_id).map(|drive| {
-            let turn = drive.next_turn();
-            (turn, drive.reasoning_effort())
+        let Some((turn, effort)) = self.drives.borrow().get(&session_id).and_then(|drive| {
+            drive
+                .active_turn_id()
+                .map(|turn| (turn, drive.reasoning_effort()))
         }) else {
-            return;
+            return DriveStop::Quiescent;
         };
         async {
             self.set_foreground_active(session_id, true);
-            events.emit(SessionEvent::TurnStarted {
-                turn,
-                cause: TurnCause::BackgroundResult,
-            });
             tracing::info!(name: "background_result", "");
             let result = self.drive_root_ready(session_id, effort, &events).await;
-            self.finish_turn(session_id, turn, &events, result);
+            let stop = self.handle_drive_result(&events, result);
             self.set_foreground_active(session_id, false);
+            stop
         }
-        .instrument(tracing::info_span!(
-            "turn",
-            run.turn = %turn,
-            cause = "background_result"
-        ))
-        .await;
+        .instrument(tracing::info_span!("turn", run.turn = %turn, cause = "background_result"))
+        .await
     }
 
-    pub(super) async fn drive_background(&self, session_id: SessionId) {
+    pub(super) async fn drive_background(&self, session_id: SessionId) -> DriveStop {
         let Some(events) = self.session_events(session_id) else {
-            return;
+            return DriveStop::Quiescent;
         };
         let Some(mut slot) = self.checkout_existing_instance(session_id) else {
-            return;
+            return DriveStop::Quiescent;
         };
         let control = DriveControl::new();
         self.set_active_control(session_id, Some(control.clone()));
@@ -98,42 +121,31 @@ where
             .drive_background_until_root_ready(&control, &events)
             .await;
         self.set_active_control(session_id, None);
-        if stop == DriveStop::Cancelled {
-            slot.get_mut().cancel_all(CancelReason::UserRequested);
-            let cleanup_control = DriveControl::new();
-            cleanup_control.request_cancel();
-            let _ = slot
-                .get_mut()
-                .drive_cancelled(&cleanup_control, &events)
-                .await;
+        if stop != DriveStop::Quiescent {
+            let mode = if stop == DriveStop::Cancelled {
+                TurnStopMode::DeleteSpawnedAgents
+            } else {
+                TurnStopMode::PreserveAgents
+            };
+            slot.get_mut().stop_turn_tasks(mode).await;
         }
+        stop
     }
 
-    fn finish_turn(
-        &self,
-        session_id: SessionId,
-        turn: TurnId,
-        events: &EventSink,
-        result: Result<(DriveOutput, DriveStop), DeliverError>,
-    ) {
-        match result {
-            Ok((output, _stop)) => {
-                for reply in output.replies {
-                    tracing::info!(name: "output", text_bytes = reply.text.len() as u64);
-                    // Plain answers already streamed their Output fragments.
-                    if !reply.streamed {
-                        events.emit(SessionEvent::Output { text: reply.text });
-                    }
-                }
-            }
-            Err(error) => {
-                let kind: &'static str = (&error).into();
-                tracing::error!(name: "error", kind);
-                events.emit(SessionEvent::Error {
-                    message: error.to_string(),
-                });
-            }
-        }
+    pub(super) fn finish_active_turn(&self, session_id: SessionId) {
+        let Some(events) = self.session_events(session_id) else {
+            return;
+        };
+        let (turn, control_acks) = {
+            let mut drives = self.drives.borrow_mut();
+            let Some(drive) = drives.get_mut(&session_id) else {
+                return;
+            };
+            (drive.finish_turn(), drive.take_control_acks())
+        };
+        let Some(turn) = turn else {
+            return;
+        };
         if let Err(error) = self.checkpoint_session_runtime(session_id) {
             tracing::error!(name: "checkpoint_failed", target = "session_runtime", error = %error);
             events.emit(SessionEvent::Error {
@@ -141,6 +153,36 @@ where
             });
         }
         events.emit(SessionEvent::TurnEnded { turn });
+        for ack in control_acks {
+            let _ = ack.try_send(Ok(()));
+        }
+    }
+
+    fn handle_drive_result(
+        &self,
+        events: &EventSink,
+        result: Result<(DriveOutput, DriveStop), DeliverError>,
+    ) -> DriveStop {
+        match result {
+            Ok((output, stop)) => {
+                for reply in output.replies {
+                    tracing::info!(name: "output", text_bytes = reply.text.len() as u64);
+                    // Plain answers already streamed their Output fragments.
+                    if !reply.streamed {
+                        events.emit(SessionEvent::Output { text: reply.text });
+                    }
+                }
+                stop
+            }
+            Err(error) => {
+                let kind: &'static str = (&error).into();
+                tracing::error!(name: "error", kind);
+                events.emit(SessionEvent::Error {
+                    message: error.to_string(),
+                });
+                DriveStop::Quiescent
+            }
+        }
     }
 
     async fn drive_one_input(
@@ -190,15 +232,16 @@ where
     ) -> Result<(DriveOutput, DriveStop), DeliverError> {
         let control = DriveControl::new();
         self.set_active_control(session_id, Some(control.clone()));
-        let (mut output, stop) = instance.drive_root_turn(&control, events).await;
+        let (output, stop) = instance.drive_root_turn(&control, events).await;
         self.set_active_control(session_id, None);
-        if stop == DriveStop::Cancelled {
-            instance.cancel_all(CancelReason::UserRequested);
-            let cleanup_control = DriveControl::new();
-            cleanup_control.request_cancel();
-            let (cleanup_output, _) = instance.drive_cancelled(&cleanup_control, events).await;
-            output.absorb(cleanup_output);
-            tracing::warn!(name: "cancelled_cleanup", "");
+        if stop != DriveStop::Quiescent {
+            let mode = if stop == DriveStop::Cancelled {
+                TurnStopMode::DeleteSpawnedAgents
+            } else {
+                TurnStopMode::PreserveAgents
+            };
+            instance.stop_turn_tasks(mode).await;
+            tracing::warn!(name: "turn_stopped", mode = ?mode);
         }
         Ok((output, stop))
     }
@@ -222,11 +265,10 @@ where
         {
             Ok(resolution) => resolution,
             Err(ApprovalResolverError::Cancelled) => {
-                instance.cancel_all(CancelReason::UserRequested);
-                let cleanup_control = DriveControl::new();
-                cleanup_control.request_cancel();
-                let (cleanup_output, _) = instance.drive_cancelled(&cleanup_control, events).await;
-                return Ok((cleanup_output, DriveStop::Cancelled));
+                instance
+                    .stop_turn_tasks(TurnStopMode::DeleteSpawnedAgents)
+                    .await;
+                return Ok((DriveOutput::default(), DriveStop::Cancelled));
             }
             Err(error) => return Err(error.into()),
         };

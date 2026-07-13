@@ -45,7 +45,7 @@ use crate::session::SessionId;
 use self::inflight::InflightAgentTasks;
 pub(crate) use self::model::{
     ApprovalResolutionError, DriveOutput, InstanceDeliverError, OrchestratorInstanceState,
-    PendingApproval, RootReply,
+    PendingApproval, RootReply, TurnStopMode,
 };
 use self::model::{EffectQueue, SnapshotView};
 pub use self::persistence::OrchestratorInstanceRestoreError;

@@ -4,14 +4,17 @@ use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use tracing::Instrument as _;
 
-use crate::agent::CancelReason;
 use crate::event::{EventSink, SessionEvent};
-use crate::session::SessionId;
+use crate::orchestrator::control::DriveStop;
+use crate::session::{Message, SessionId};
 
 use super::super::control::DriveControl;
-use super::session_drive::SubmittedInput;
+use super::super::instance::TurnStopMode;
 use super::session_io::{apply_control, ControlOp};
 use super::{DriveFuture, Engine, InstanceWork};
+
+#[cfg(test)]
+mod tests;
 
 impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
 where
@@ -26,10 +29,12 @@ where
             let mut drives = self.drives.borrow_mut();
             let drive = drives.get_mut(&session_id)?;
             let had_pending_input = drive.take_pending_input().is_some();
+            let had_active_turn = drive.has_active_turn();
             drive.close_cancels = drive.close_cancels
                 || drive.running
                 || drive.foreground_active
                 || had_pending_input
+                || had_active_turn
                 || has_root_work;
             drive.closing = true;
             drive.requested_control = Some(ControlOp::Cancel);
@@ -83,21 +88,66 @@ where
                 return;
             }
 
+            self.announce_active_turn(session_id);
+
+            let requested_control = self
+                .drives
+                .borrow_mut()
+                .get_mut(&session_id)
+                .and_then(|drive| drive.requested_control.take());
+            if let Some(op) = requested_control {
+                let mode = match op {
+                    ControlOp::Interrupt => TurnStopMode::PreserveAgents,
+                    ControlOp::Cancel => TurnStopMode::DeleteSpawnedAgents,
+                };
+                if let Some(mut slot) = self.checkout_existing_instance(session_id) {
+                    slot.get_mut().stop_turn_tasks(mode).await;
+                }
+                self.finish_active_turn(session_id);
+                break;
+            }
+
             if let Some(input) = self.take_input(session_id) {
-                self.drive_user_turn(session_id, input).await;
+                let stop = self.drive_user_turn(session_id, input).await;
+                if stop != DriveStop::Quiescent {
+                    self.finish_active_turn(session_id);
+                    if self.session_is_closing(session_id) {
+                        continue;
+                    }
+                    break;
+                }
                 continue;
             }
 
             match self.instance_work(session_id) {
                 InstanceWork::Root => {
-                    self.drive_background_result_turn(session_id).await;
+                    let stop = self.drive_root_ready_for_active_turn(session_id).await;
+                    if stop != DriveStop::Quiescent {
+                        self.finish_active_turn(session_id);
+                        if self.session_is_closing(session_id) {
+                            continue;
+                        }
+                        break;
+                    }
                     continue;
                 }
                 InstanceWork::Background => {
-                    self.drive_background(session_id).await;
+                    let stop = self.drive_background(session_id).await;
+                    if stop != DriveStop::Quiescent {
+                        self.finish_active_turn(session_id);
+                        if self.session_is_closing(session_id) {
+                            continue;
+                        }
+                        break;
+                    }
                     continue;
                 }
-                InstanceWork::None => {}
+                InstanceWork::None => {
+                    if self.instance_has_active_approval(session_id) {
+                        break;
+                    }
+                    self.finish_active_turn(session_id);
+                }
             }
 
             break;
@@ -112,7 +162,7 @@ where
         }
     }
 
-    fn take_input(&self, session_id: SessionId) -> Option<SubmittedInput> {
+    fn take_input(&self, session_id: SessionId) -> Option<Message> {
         let mut drives = self.drives.borrow_mut();
         let drive = drives.get_mut(&session_id)?;
         if drive.closing {
@@ -169,22 +219,13 @@ where
             )
         };
 
-        let cleanup_events = match events.clone() {
-            Some(events) => events,
-            None => EventSink::disabled(),
-        };
         if should_cancel {
             if let Some(mut slot) = self.checkout_existing_instance(session_id) {
-                slot.get_mut().cancel_all(CancelReason::UserRequested);
-                let control = DriveControl::new();
-                control.request_cancel();
-                self.set_active_control(session_id, Some(control.clone()));
-                let _ = slot
-                    .get_mut()
-                    .drive_cancelled(&control, &cleanup_events)
+                slot.get_mut()
+                    .stop_turn_tasks(TurnStopMode::DeleteSpawnedAgents)
                     .await;
-                self.set_active_control(session_id, None);
             }
+            self.finish_active_turn(session_id);
         }
 
         if let Some(events) = events {
@@ -193,11 +234,21 @@ where
         }
 
         if deleted {
+            let close_acks = {
+                let mut drives = self.drives.borrow_mut();
+                let Some(drive) = drives.get_mut(&session_id) else {
+                    return;
+                };
+                drive.take_close_acks()
+            };
             tracing::info_span!("session.delete", run.session = %session_id).in_scope(|| {
                 tracing::info!(name: "runtime_state_removed", "");
             });
             self.drives.borrow_mut().remove(&session_id);
             self.instances.borrow_mut().remove(&session_id);
+            for ack in close_acks {
+                let _ = ack.try_send(Ok(()));
+            }
             return;
         }
 
@@ -211,8 +262,22 @@ where
             drive.closing = false;
             drive.close_cancels = false;
         }
-        if let Err(error) = self.checkpoint_session_runtime(session_id) {
-            tracing::error!(name: "checkpoint_failed", target = "session_runtime", error = %error);
+        let close_result = match self.checkpoint_session_runtime(session_id) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                tracing::error!(name: "checkpoint_failed", target = "session_runtime", error = %error);
+                Err(crate::orchestrator::SessionControlError::ClosePersistence)
+            }
+        };
+        let close_acks = {
+            let mut drives = self.drives.borrow_mut();
+            let Some(drive) = drives.get_mut(&session_id) else {
+                return;
+            };
+            drive.take_close_acks()
+        };
+        for ack in close_acks {
+            let _ = ack.try_send(close_result.clone());
         }
     }
 }

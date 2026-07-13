@@ -6,7 +6,7 @@ use support::Sse;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, MutexGuard};
 
-use claw_agent::{AgentSystem, IterationId, SessionEvent, TurnCause, TurnId};
+use claw_agent::{AgentSystem, IterationId, Message, SessionEvent, TurnId};
 use claw_interface::{
     Cancel, ClawFs, ClawHttp, DiskFs, HttpJsonRequest, HttpResponse, HttpResponseFuture,
     HttpStatusCode, ImmediateTimer, StdThread, TokioExecutor,
@@ -415,7 +415,7 @@ fn run_phase(
         .unwrap();
     let session = system.new_session();
     let (control, mut events) = system.open_session(session).unwrap();
-    block_on(control.submit(input)).unwrap();
+    block_on(control.submit(Message::text(input))).unwrap();
     let events = drain_until_turn_ended(&mut events);
     drop(system);
 
@@ -462,10 +462,7 @@ fn install_replies(items: Vec<String>) {
 fn assert_phase(result: &PhaseResult, expected_output: &str, case: &str) {
     assert_eq!(
         result.events.first(),
-        Some(&SessionEvent::TurnStarted {
-            turn: TurnId(1),
-            cause: TurnCause::UserSubmit,
-        }),
+        Some(&SessionEvent::TurnStarted { turn: TurnId(1) }),
         "case {case}"
     );
     assert_eq!(

@@ -101,7 +101,7 @@ where
             session_parts.push(instance_snapshot);
         }
 
-        self.checkpoints.checkpoint(vec![
+        self.checkpoints.checkpoint_now(vec![
             DurableBatchSnapshot::new(ENGINE_BATCH, ENGINE_BATCH_ID, vec![engine_snapshot]),
             DurableBatchSnapshot::new(
                 SESSION_RUNTIME_BATCH,

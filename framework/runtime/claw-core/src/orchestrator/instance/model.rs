@@ -18,6 +18,12 @@ pub(crate) struct PendingApproval {
     pub(crate) summary: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TurnStopMode {
+    PreserveAgents,
+    DeleteSpawnedAgents,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ParkedApproval {
     pub(super) approval: ApprovalId,

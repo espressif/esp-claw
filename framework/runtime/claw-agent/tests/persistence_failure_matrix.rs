@@ -6,7 +6,7 @@ use support::Sse;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, MutexGuard};
 
-use claw_agent::{AgentSystem, SessionEvent};
+use claw_agent::{AgentSystem, Message, SessionEvent};
 use claw_interface::{
     Cancel, ClawFs, ClawHttp, DiskFs, HttpJsonRequest, HttpResponse, HttpResponseFuture,
     HttpStatusCode, ImmediateTimer, StdThread, TokioExecutor,
@@ -126,7 +126,7 @@ fn assert_submit_error(root: &str, fixture: &Fixture) {
         .unwrap();
     let session = system.new_session();
     let (control, mut events) = system.open_session(session).unwrap();
-    block_on(control.submit(format!("trigger {}", fixture.case))).unwrap();
+    block_on(control.submit(Message::text(format!("trigger {}", fixture.case)))).unwrap();
     let events = drain_until_turn_ended(&mut events);
     let errors = error_messages(&events).join("\n");
     assert_contains(&errors, &fixture.expected_error, &fixture.case);
@@ -148,7 +148,7 @@ fn assert_tool_error(root: &str, fixture: &Fixture) {
         .unwrap();
     let session = system.new_session();
     let (control, mut events) = system.open_session(session).unwrap();
-    block_on(control.submit(format!("trigger {}", fixture.case))).unwrap();
+    block_on(control.submit(Message::text(format!("trigger {}", fixture.case)))).unwrap();
     let events = drain_until_turn_ended(&mut events);
 
     assert!(

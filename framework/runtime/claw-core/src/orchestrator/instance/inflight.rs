@@ -76,6 +76,12 @@ impl InflightAgentTasks {
             .collect()
     }
 
+    pub(super) fn abort_all(&self) {
+        for entry in self.entries.iter().flatten() {
+            entry.abort.abort();
+        }
+    }
+
     /// Cooperative-abort one in-flight agent so a queued graph effect can retask it.
     pub(in crate::orchestrator::instance) fn abort_if_present(&self, id: AgentId) -> bool {
         for entry in &self.entries {

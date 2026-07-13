@@ -85,6 +85,13 @@ where
             .is_some_and(|instance| instance.work() == InstanceWork::Root)
     }
 
+    pub(super) fn instance_has_active_approval(&self, session_id: SessionId) -> bool {
+        self.instances
+            .borrow()
+            .get(&session_id)
+            .is_some_and(|instance| instance.active_approval().is_some())
+    }
+
     pub(super) fn checkout_instance(
         &self,
         session_id: SessionId,

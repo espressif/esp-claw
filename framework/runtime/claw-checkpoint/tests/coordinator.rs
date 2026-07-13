@@ -106,6 +106,41 @@ fn shared_coordinator_keeps_two_slots_across_fifty_four_updates() {
 }
 
 #[test]
+fn shared_coordinator_checkpoint_now_bypasses_the_write_interval() {
+    let temp = TempDir::new("claw-checkpoint-now").unwrap();
+    let root = temp
+        .path()
+        .join("checkpoint")
+        .to_string_lossy()
+        .into_owned();
+    let coordinator =
+        SharedCheckpointCoordinator::new(FsCheckpointStorage::<DiskFs>::new(root.clone()), 30, 2)
+            .unwrap();
+
+    coordinator
+        .checkpoint(vec![batch_snapshot(
+            "session-runtime",
+            1,
+            vec![part_snapshot("session-drive", 1, b"active")],
+        )])
+        .unwrap();
+    coordinator
+        .checkpoint_now(vec![batch_snapshot(
+            "session-runtime",
+            1,
+            vec![part_snapshot("session-drive", 2, b"finished")],
+        )])
+        .unwrap();
+
+    let storage = FsCheckpointStorage::<DiskFs>::new(root);
+    assert_eq!(storage.latest_step().unwrap(), Some(2));
+    assert_eq!(
+        part_bytes(&storage.load_checkpoint(2).unwrap()),
+        b"finished"
+    );
+}
+
+#[test]
 fn shared_coordinator_does_not_cache_a_failed_candidate() {
     let temp = TempDir::new("claw-checkpoint-failed-candidate").unwrap();
     let root = temp

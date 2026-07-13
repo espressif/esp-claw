@@ -49,6 +49,7 @@ pages/simulator/dist
 pages/simulator/*.log
 pages/simulator/public/runtime/*
 !pages/simulator/public/runtime/.gitkeep
+todo.md
 
 # rust
 target/

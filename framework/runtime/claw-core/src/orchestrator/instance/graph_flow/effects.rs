@@ -113,7 +113,23 @@ where
         self.state
             .get_mut()
             .subagent_result_mailbox
-            .retain(|result| !victims.contains(&result.parent));
+            .retain(|result| !victims.contains(&result.parent) && !victims.contains(&result.child));
+    }
+
+    pub(in crate::orchestrator::instance) fn delete_spawned_subagents(&mut self) {
+        let Some(root) = self.state.get().root else {
+            return;
+        };
+        let children: Vec<AgentId> = self
+            .state
+            .get()
+            .meta
+            .iter()
+            .filter_map(|(&id, meta)| (meta.parent == Some(root)).then_some(id))
+            .collect();
+        for child in children {
+            self.delete_subtree(child);
+        }
     }
 
     fn is_descendant(&self, ancestor: AgentId, node: AgentId) -> bool {

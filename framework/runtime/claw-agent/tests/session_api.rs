@@ -7,8 +7,11 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 
-use claw_agent::{AgentError, AgentSystem, OpenSessionError, SessionControlError};
-use claw_agent::{SessionEvent, SessionEventStream, SessionId, TurnCause, TurnId};
+use claw_agent::{
+    AgentError, AgentSystem, AttachmentId, AttachmentRef, Message, OpenSessionError,
+    SessionControlError,
+};
+use claw_agent::{SessionEvent, SessionEventStream, SessionId, TurnId};
 use claw_interface::{
     BlockingHttpAdapter, Cancel, ClawHttp, HttpError, HttpJsonRequest, HttpResponseFuture,
     ImmediateTimer, MemFs, SharedScriptHttp, StdThread, TokioExecutor,
@@ -84,15 +87,18 @@ fn session_streams_root_reply_as_output() {
     let session = system.new_session();
     let (control, mut events) = system.open_session(session).unwrap();
 
-    block_on(control.submit("say hi")).unwrap();
+    block_on(control.submit(Message {
+        text: Some("say hi".to_string()),
+        attachments: vec![AttachmentRef {
+            id: AttachmentId(1),
+        }],
+    }))
+    .unwrap();
     let events = drain_until_turn_ended(&mut events);
 
     assert_eq!(
         events.first(),
-        Some(&SessionEvent::TurnStarted {
-            turn: TurnId(1),
-            cause: TurnCause::UserSubmit,
-        })
+        Some(&SessionEvent::TurnStarted { turn: TurnId(1) })
     );
     assert_eq!(
         events.last(),
@@ -134,9 +140,9 @@ fn second_submit_returns_busy_until_current_turn_ends() {
     let (control, mut events) = system.open_session(session).unwrap();
 
     block_on(async {
-        control.submit("first").await.unwrap();
+        control.submit(Message::text("first")).await.unwrap();
         assert!(matches!(
-            control.submit("second").await,
+            control.submit(Message::text("second")).await,
             Err(SessionControlError::Busy(busy_session)) if busy_session == session
         ));
     });
@@ -145,7 +151,7 @@ fn second_submit_returns_busy_until_current_turn_ends() {
     assert!(first_events
         .iter()
         .any(|event| matches!(event, SessionEvent::Output { text } if text == "first")));
-    block_on(control.submit("second")).unwrap();
+    block_on(control.submit(Message::text("second"))).unwrap();
     let second_events = drain_until_turn_ended(&mut events);
     assert!(second_events
         .iter()
@@ -161,7 +167,7 @@ fn session_control_methods_are_idempotent() {
     let (control, mut events) = system.open_session(session).unwrap();
 
     block_on(async {
-        control.submit("cancel me").await.unwrap();
+        control.submit(Message::text("cancel me")).await.unwrap();
         control.interrupt().await.unwrap();
         control.interrupt().await.unwrap();
         control.cancel().await.unwrap();
@@ -171,10 +177,7 @@ fn session_control_methods_are_idempotent() {
     let events = drain_until_turn_ended(&mut events);
     assert!(matches!(
         events.first(),
-        Some(SessionEvent::TurnStarted {
-            turn: TurnId(1),
-            cause: TurnCause::UserSubmit,
-        })
+        Some(SessionEvent::TurnStarted { turn: TurnId(1) })
     ));
     assert_eq!(
         events.last(),
@@ -191,7 +194,7 @@ fn close_session_cancels_active_work_and_closes_events() {
     let (control, mut events) = system.open_session(session).unwrap();
 
     block_on(async {
-        control.submit("close me").await.unwrap();
+        control.submit(Message::text("close me")).await.unwrap();
         control.close_session().await.unwrap();
     });
     let events = drain_until_closed(&mut events);
@@ -205,7 +208,7 @@ fn close_session_cancels_active_work_and_closes_events() {
     );
     assert!(system.list_sessions().contains(&session));
     assert!(
-        block_on(control.submit("after close")).is_err(),
+        block_on(control.submit(Message::text("after close"))).is_err(),
         "closed control should reject new submits"
     );
 }
