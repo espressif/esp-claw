@@ -8,7 +8,7 @@ use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use serde::{Deserialize, Serialize};
 
 use crate::agent::AgentIdAllocator;
-use crate::session::SessionId;
+use crate::session::{SessionId, SessionPersistence};
 
 use super::super::checkpoint::RuntimeCheckpointError;
 use super::super::{ENGINE_BATCH, ENGINE_BATCH_ID, SESSION_RUNTIME_BATCH};
@@ -77,10 +77,9 @@ where
         &self,
         session_id: SessionId,
     ) -> Result<(), RuntimeCheckpointError> {
-        if !self.sessions.contains(session_id) {
+        if self.sessions.persistence(session_id) != Some(SessionPersistence::Persistent) {
             return Ok(());
         }
-        let engine_snapshot = DurablePartSnapshot::capture(self)?;
         let drive_snapshot = {
             let drives = self.drives.borrow();
             let Some(drive) = drives.get(&session_id) else {
@@ -88,6 +87,7 @@ where
             };
             DurablePartSnapshot::capture(drive)?
         };
+        let engine_snapshot = DurablePartSnapshot::capture(self)?;
         let instance_snapshot = {
             let instances = self.instances.borrow();
             if let Some(instance) = instances.get(&session_id) {

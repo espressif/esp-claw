@@ -347,7 +347,7 @@ where
     Http: ClawHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
-    let session = system.new_session();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
     let (control, mut events) = system.open_session(session).unwrap();
     block_on(control.submit(Message::text(input))).unwrap();
     drain_until_turn_ended(&mut events)

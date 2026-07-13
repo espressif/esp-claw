@@ -16,7 +16,7 @@ use claw_tool::ToolRegistry;
 
 use crate::config::{ApiUsage, ClawApiManager};
 use crate::event::EventSink;
-use crate::session::{SessionId, SessionStore};
+use crate::session::{SessionId, SessionPersistence, SessionStore};
 
 use super::checkpoint::{
     checkpoint_session_registry, load_session_store_state, SessionRegistryCheckpointError,
@@ -262,22 +262,22 @@ impl Orchestrator {
     }
 
     /// Create a fresh isolated conversation session.
-    pub fn session_create(&self) -> SessionId {
+    pub fn session_create(&self, persistence: SessionPersistence) -> SessionId {
         let span = tracing::info_span!("session.create");
         let _enter = span.enter();
-        let session = self.sessions.create();
-        if let Err(error) = (self.checkpoint_sessions)(&self.sessions, None) {
-            tracing::error!(name: "checkpoint_failed", target = "session_registry", error = %error);
+        let session = self.sessions.create(persistence);
+        if persistence == SessionPersistence::Persistent {
+            if let Err(error) = (self.checkpoint_sessions)(&self.sessions, None) {
+                tracing::error!(name: "checkpoint_failed", target = "session_registry", error = %error);
+            }
         }
-        tracing::info!(name: "created", session = %session);
+        tracing::info!(name: "created", session = %session, persistence = ?persistence);
         session
     }
 
     /// The live conversation sessions, sorted by id.
     pub fn session_list(&self) -> Vec<SessionId> {
-        let mut sessions = self.sessions.list();
-        sessions.sort_by_key(|id| id.0);
-        sessions
+        self.sessions.list()
     }
 
     /// Delete a live session id and remove any associated runtime state.
@@ -293,10 +293,10 @@ impl Orchestrator {
     pub fn session_delete(&self, session_id: SessionId) -> Result<(), SessionControlError> {
         let span = tracing::info_span!("session.delete", run.session = %session_id);
         let _enter = span.enter();
-        if !self.sessions.contains(session_id) {
+        let Some(persistence) = self.sessions.persistence(session_id) else {
             tracing::warn!(name: "delete_rejected", reason = "session_closed");
             return Err(SessionControlError::SessionClosed(session_id));
-        }
+        };
         let (ack_tx, ack_rx) = async_channel::bounded(1);
         self.command_tx
             .try_send(Command::DeleteSession {
@@ -309,12 +309,15 @@ impl Orchestrator {
             })?;
         match ack_rx.recv_blocking() {
             Ok(Ok(())) => {
-                if let Err(error) = (self.checkpoint_sessions)(&self.sessions, Some(session_id)) {
-                    tracing::error!(
-                        name: "checkpoint_failed",
-                        target = "session_registry",
-                        error = %error
-                    );
+                if persistence == SessionPersistence::Persistent {
+                    if let Err(error) = (self.checkpoint_sessions)(&self.sessions, Some(session_id))
+                    {
+                        tracing::error!(
+                            name: "checkpoint_failed",
+                            target = "session_registry",
+                            error = %error
+                        );
+                    }
                 }
                 Ok(())
             }

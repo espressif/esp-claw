@@ -4,7 +4,7 @@ use tracing::Instrument as _;
 
 use crate::event::{EventSink, SessionEvent};
 use crate::orchestrator::ReasoningEffort;
-use crate::session::{Message, SessionId};
+use crate::session::{Message, SessionId, SessionPersistence};
 
 use super::super::approval::{self, ApprovalResolverError, PermissionReplyResolution};
 use super::super::control::{DriveControl, DriveStop};
@@ -45,11 +45,16 @@ where
         let Some(events) = self.session_events(session_id) else {
             return DriveStop::Quiescent;
         };
-        let Some((turn, effort)) = self.drives.borrow().get(&session_id).and_then(|drive| {
-            drive
-                .active_turn_id()
-                .map(|turn| (turn, drive.reasoning_effort()))
-        }) else {
+        let Some(persistence) = self.sessions.persistence(session_id) else {
+            return DriveStop::Quiescent;
+        };
+        let Some((turn, effort)) =
+            self.drives.borrow().get(&session_id).and_then(|drive| {
+                drive
+                    .active_turn_id()
+                    .map(|turn| (turn, drive.reasoning_effort()))
+            })
+        else {
             return DriveStop::Quiescent;
         };
         let has_text = input.text.as_ref().is_some_and(|text| !text.is_empty());
@@ -70,7 +75,13 @@ where
                 attachment_kinds,
             );
             let result = self
-                .drive_one_input(session_id, input.into_transcript_text(), effort, &events)
+                .drive_one_input(
+                    session_id,
+                    input.into_transcript_text(),
+                    effort,
+                    persistence,
+                    &events,
+                )
                 .await;
             let stop = self.handle_drive_result(&events, result);
             self.set_foreground_active(session_id, false);
@@ -190,6 +201,7 @@ where
         session_id: SessionId,
         text: String,
         effort: ReasoningEffort,
+        persistence: SessionPersistence,
         events: &EventSink,
     ) -> Result<(DriveOutput, DriveStop), DeliverError> {
         let mut slot = self.checkout_instance(session_id);
@@ -206,7 +218,7 @@ where
             return result;
         }
 
-        instance.deliver(text, effort.context_block())?;
+        instance.deliver(text, effort.context_block(), persistence)?;
         self.drive_root_ready_in_slot(session_id, instance, events)
             .await
     }

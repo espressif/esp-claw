@@ -16,6 +16,15 @@ crate::define_prefixed_id!(TurnId, "turn-", "turn");
 
 pub use message::{AttachmentId, AttachmentKind, AttachmentRecord, AttachmentRef, Message};
 
+/// Whether a session survives a runtime restart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionPersistence {
+    /// Checkpoint session state and write the root transcript to storage.
+    Persistent,
+    /// Keep session state and transcript in memory for this process only.
+    Ephemeral,
+}
+
 crate::define_id_allocator!(
     /// Hands out process-unique [`SessionId`]s for the current runtime.
     SessionIdAllocator(SessionId),
@@ -39,6 +48,8 @@ crate::define_id_allocator!(
 /// section.
 struct Registry {
     state: DurableState<SessionStoreState>,
+    ephemeral_sessions: Vec<SessionId>,
+    next_runtime_session_id: SessionId,
 }
 
 pub(crate) struct SessionStore {
@@ -54,9 +65,12 @@ impl Default for SessionStore {
 impl SessionStore {
     /// Build a session store from durable state.
     pub(crate) fn new(state: SessionStoreState) -> Self {
+        let next_runtime_session_id = state.next_session_id;
         Self {
             registry: Mutex::new(Registry {
                 state: DurableState::new(state),
+                ephemeral_sessions: Vec::new(),
+                next_runtime_session_id,
             }),
         }
     }
@@ -67,40 +81,66 @@ impl SessionStore {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    pub fn create(&self) -> SessionId {
+    pub fn create(&self, persistence: SessionPersistence) -> SessionId {
         let mut registry = self.lock_registry();
-        let state = registry.state.get_mut();
-        let id = state.next_session_id;
-        state.next_session_id = SessionId::new(id.0.saturating_add(1));
-        state.sessions.push(id);
+        let id = registry.next_runtime_session_id;
+        let next_session_id = SessionId::new(id.0.saturating_add(1));
+        registry.next_runtime_session_id = next_session_id;
+        match persistence {
+            SessionPersistence::Persistent => {
+                let state = registry.state.get_mut();
+                state.next_session_id = next_session_id;
+                state.sessions.push(id);
+            }
+            SessionPersistence::Ephemeral => registry.ephemeral_sessions.push(id),
+        }
         id
     }
 
     pub fn list(&self) -> Vec<SessionId> {
-        self.lock_registry().state.get().sessions.clone()
+        let registry = self.lock_registry();
+        let mut sessions = registry.state.get().sessions.clone();
+        sessions.extend_from_slice(&registry.ephemeral_sessions);
+        sessions.sort_by_key(|session| session.0);
+        sessions
     }
 
     pub fn delete(&self, session_id: SessionId) -> bool {
         let mut registry = self.lock_registry();
-        let Some(position) = registry
+        if let Some(position) = registry
             .state
             .get()
             .sessions
             .iter()
             .position(|session| *session == session_id)
+        {
+            registry.state.get_mut().sessions.remove(position);
+            return true;
+        }
+        let Some(position) = registry
+            .ephemeral_sessions
+            .iter()
+            .position(|session| *session == session_id)
         else {
             return false;
         };
-        registry.state.get_mut().sessions.remove(position);
+        registry.ephemeral_sessions.remove(position);
         true
     }
 
     pub fn contains(&self, session_id: SessionId) -> bool {
-        self.lock_registry()
-            .state
-            .get()
-            .sessions
-            .contains(&session_id)
+        self.persistence(session_id).is_some()
+    }
+
+    pub fn persistence(&self, session_id: SessionId) -> Option<SessionPersistence> {
+        let registry = self.lock_registry();
+        if registry.state.get().sessions.contains(&session_id) {
+            Some(SessionPersistence::Persistent)
+        } else if registry.ephemeral_sessions.contains(&session_id) {
+            Some(SessionPersistence::Ephemeral)
+        } else {
+            None
+        }
     }
 
     pub(crate) fn with_durable_snapshot<T>(
@@ -197,5 +237,33 @@ impl DurablePart for SessionStore {
             size: StorageSizeHint::Small,
             change: ChangePatternHint::Arbitrary,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ephemeral_sessions_stay_out_of_durable_state() {
+        let sessions = SessionStore::default();
+        let ephemeral = sessions.create(SessionPersistence::Ephemeral);
+        let persistent = sessions.create(SessionPersistence::Persistent);
+
+        assert_eq!(sessions.list(), vec![ephemeral, persistent]);
+
+        let encoded = sessions.export_state().unwrap();
+        let restored = SessionStore::restore_from_state(encoded.as_slice()).unwrap();
+
+        assert_eq!(restored.list(), vec![persistent]);
+        assert_eq!(
+            restored.persistence(persistent),
+            Some(SessionPersistence::Persistent)
+        );
+        assert_eq!(restored.persistence(ephemeral), None);
+        assert_eq!(
+            restored.create(SessionPersistence::Ephemeral),
+            SessionId::new(persistent.0.saturating_add(1))
+        );
     }
 }

@@ -47,7 +47,7 @@ fn iteration_preparation_traces_auxiliary_llm_work_without_payloads() {
     // extraction, compaction, and the user-facing iteration.
     let replies = vec![assistant_text(MODEL_PAYLOAD_SECRET); 16];
     let system = build_mem_system(&root, replies);
-    let session = system.new_session();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
     let (control, mut events) = system.open_session(session).unwrap();
 
     // Two committed turns are needed for compaction: the first becomes the aged

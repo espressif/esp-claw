@@ -19,4 +19,4 @@ pub use orchestrator::{
     SessionControlError, SessionEventStream,
 };
 pub use session::{AttachmentId, AttachmentKind, AttachmentRecord, AttachmentRef, Message};
-pub use session::{SessionId, TurnId};
+pub use session::{SessionId, SessionPersistence, TurnId};

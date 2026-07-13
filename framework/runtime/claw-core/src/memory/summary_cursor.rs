@@ -22,26 +22,26 @@ use std::rc::Rc;
 use claw_memory::TurnId;
 
 /// The highest committed [`TurnId`] the rolling summary has covered, shared
-/// between the summary and recent-tail adapters. `0` means nothing is summarized
-/// yet (turn ids are 1-based), so the whole transcript renders verbatim.
+/// between the summary and recent-tail adapters. `None` means nothing is
+/// summarized yet, so the whole transcript renders verbatim.
 ///
 /// Cheap to clone (an `Rc` bump); both adapters hold the same underlying value.
 /// This is intentionally local to the agent's context assembly path, not a
 /// cross-thread coordination primitive.
 #[derive(Clone, Default)]
-pub(crate) struct SummaryCursor(Rc<Cell<u64>>);
+pub(crate) struct SummaryCursor(Rc<Cell<Option<TurnId>>>);
 
 impl SummaryCursor {
-    /// A fresh cursor at `0` — nothing summarized yet.
+    /// A fresh cursor with no summarized turns.
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    /// The highest committed turn id summarized so far (`0` = none).
+    /// The highest committed turn id summarized so far.
     ///
     /// The recent-tail adapter renders committed turns whose id is strictly
     /// greater than this.
-    pub(crate) fn covered_through(&self) -> u64 {
+    pub(crate) fn covered_through(&self) -> Option<TurnId> {
         self.0.get()
     }
 
@@ -51,6 +51,7 @@ impl SummaryCursor {
     /// boundary backwards (which would re-expose already-summarized turns as
     /// verbatim, duplicating them against the summary).
     pub(crate) fn advance_to(&self, id: TurnId) {
-        self.0.set(self.0.get().max(id.0));
+        self.0
+            .set(Some(self.0.get().map_or(id, |current| current.max(id))));
     }
 }

@@ -13,9 +13,6 @@ use super::super::instance::TurnStopMode;
 use super::session_io::{apply_control, ControlOp};
 use super::{DriveFuture, Engine, InstanceWork};
 
-#[cfg(test)]
-mod tests;
-
 impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,

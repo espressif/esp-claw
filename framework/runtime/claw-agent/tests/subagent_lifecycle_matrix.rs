@@ -42,7 +42,7 @@ fn subagent_lifecycle_csv_matrix_drives_background_results_and_graph_updates() {
         system
             .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
             .unwrap();
-        let session = system.new_session();
+        let session = system.new_session(claw_agent::SessionPersistence::Persistent);
         let (control, mut events) = system.open_session(session).unwrap();
 
         block_on(control.submit(Message::text(format!("delegate {}", fixture.case)))).unwrap();
@@ -112,7 +112,7 @@ fn turn_control_preserves_agents_on_interrupt_and_deletes_them_on_cancel() {
         system
             .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
             .unwrap();
-        let session = system.new_session();
+        let session = system.new_session(claw_agent::SessionPersistence::Persistent);
         let (control, mut events) = system.open_session(session).unwrap();
 
         block_on(control.submit(Message::text(format!("delegate then {control_name}")))).unwrap();

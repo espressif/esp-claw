@@ -135,18 +135,4 @@ where
         }
         self.state.get_mut().approval_queue.pop_front()
     }
-
-    #[cfg(test)]
-    pub(crate) fn install_test_approval(&mut self) {
-        let agent = AgentId::new(1);
-        self.state.get_mut().parked_approvals.insert(
-            agent,
-            super::model::ParkedApproval {
-                approval: crate::agent::ApprovalId::new(1),
-                summary: "test approval".to_string(),
-                prompted: true,
-            },
-        );
-        self.state.get_mut().approval_queue.push_back(agent);
-    }
 }

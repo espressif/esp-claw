@@ -42,7 +42,7 @@ fn submit_streams_csv_reply_cases() {
             vec![assistant_text(expected_output)]
         };
         let system = build_mem_system(&root, bodies);
-        let session = system.new_session();
+        let session = system.new_session(claw_agent::SessionPersistence::Persistent);
         let (control, mut events) = system.open_session(session).unwrap();
 
         block_on(control.submit(Message::text(field(&row, "user_input")))).unwrap();
@@ -182,7 +182,7 @@ fn construction_csv_roots_accept_tempdirs_and_reject_blank_roots() {
                 Ok(system) => system,
                 Err(error) => panic!("case {case} should build: {error}"),
             };
-            let session = system.new_session();
+            let session = system.new_session(claw_agent::SessionPersistence::Persistent);
 
             assert_eq!(system.list_sessions(), vec![session], "case {case}");
             assert!(
@@ -244,7 +244,7 @@ enum ControlAfterClose {
 }
 
 fn lifecycle_open_twice(system: &support::MemAgentSystem) -> Option<String> {
-    let session = system.new_session();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
     let (_control, _events) = system.open_session(session).unwrap();
     match system.open_session(session) {
         Ok(_) => panic!("second open should fail"),
@@ -263,7 +263,7 @@ fn lifecycle_delete_unknown(system: &support::MemAgentSystem) -> Option<String> 
 }
 
 fn lifecycle_reopen_after_close(system: &support::MemAgentSystem) -> Option<String> {
-    let session = system.new_session();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
     let (control, mut events) = system.open_session(session).unwrap();
     block_on(control.close_session()).unwrap();
     assert_closed(&mut events);
@@ -278,7 +278,7 @@ fn lifecycle_control_after_close(
     system: &support::MemAgentSystem,
     control_kind: ControlAfterClose,
 ) -> Option<String> {
-    let session = system.new_session();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
     let (control, mut events) = system.open_session(session).unwrap();
     block_on(control.close_session()).unwrap();
     assert_closed(&mut events);
@@ -299,7 +299,7 @@ fn lifecycle_control_after_close(
 }
 
 fn lifecycle_delete_after_close(system: &support::MemAgentSystem) -> Option<String> {
-    let session = system.new_session();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
     let (control, mut events) = system.open_session(session).unwrap();
     block_on(control.close_session()).unwrap();
     assert_closed(&mut events);

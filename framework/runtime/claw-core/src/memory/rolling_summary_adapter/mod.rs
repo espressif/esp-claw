@@ -173,7 +173,10 @@ impl<F: ClawFs + 'static> RollingSummaryContextAdapter<F> {
     fn select_window(&self) -> Option<(TurnId, Vec<Value>, usize)> {
         let turns = self.store.turns_snapshot();
         let cursor = self.cursor.covered_through();
-        let uncovered: Vec<&Turn> = turns.iter().filter(|turn| turn.id.0 > cursor).collect();
+        let uncovered: Vec<&Turn> = turns
+            .iter()
+            .filter(|turn| cursor.map_or(true, |covered| turn.id > covered))
+            .collect();
 
         let uncovered_tokens: usize = uncovered
             .iter()

@@ -769,7 +769,7 @@ impl<S: CheckpointStorage> SharedCheckpointCoordinator<S> {
 
     /// Submit one atomic group of owned batch snapshots.
     pub fn checkpoint(&self, batches: Vec<DurableBatchSnapshot>) -> Result<(), CheckpointError> {
-        self.checkpoint_and_remove(batches, Vec::new())
+        self.checkpoint_and_remove_with_policy(batches, Vec::new(), false)
     }
 
     /// Submit snapshots and publish them before returning, regardless of the
@@ -781,8 +781,8 @@ impl<S: CheckpointStorage> SharedCheckpointCoordinator<S> {
         self.checkpoint_and_remove_with_policy(batches, Vec::new(), true)
     }
 
-    /// Atomically apply owned snapshots and complete-batch tombstones, then ask
-    /// the coordinator to publish one physical checkpoint.
+    /// Atomically apply owned snapshots and complete-batch tombstones, publishing
+    /// them before returning regardless of the normal write interval.
     ///
     /// If validation, export, pruning, or the checkpoint write fails, the
     /// coordinator's in-memory candidates are restored. The latest published
@@ -793,7 +793,7 @@ impl<S: CheckpointStorage> SharedCheckpointCoordinator<S> {
         batches: Vec<DurableBatchSnapshot>,
         removed_batches: Vec<BatchKey>,
     ) -> Result<(), CheckpointError> {
-        self.checkpoint_and_remove_with_policy(batches, removed_batches, false)
+        self.checkpoint_and_remove_with_policy(batches, removed_batches, true)
     }
 
     fn checkpoint_and_remove_with_policy(

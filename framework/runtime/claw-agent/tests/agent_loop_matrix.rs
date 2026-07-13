@@ -53,7 +53,7 @@ fn agent_loop_csv_tool_matrix_runs_tools_and_feeds_results_to_next_iteration() {
             field(&row, "registry_ops"),
             parse_tool_behavior(field(&row, "tool_behavior")),
         );
-        let session = system.new_session();
+        let session = system.new_session(claw_agent::SessionPersistence::Persistent);
         let (control, mut events) = system.open_session(session).unwrap();
 
         block_on(control.submit(Message::text(format!("run tool matrix {case}")))).unwrap();
@@ -119,7 +119,7 @@ fn agent_loop_csv_llm_response_matrix_reports_errors_and_bounds_reasoning() {
 
         let root = mem_root("agent-loop-llm");
         let system = build_matrix_system(&root);
-        let session = system.new_session();
+        let session = system.new_session(claw_agent::SessionPersistence::Persistent);
         let (control, mut events) = system.open_session(session).unwrap();
 
         block_on(control.submit(Message::text(format!("run llm response matrix {case}")))).unwrap();
@@ -151,7 +151,7 @@ fn reasoning_effort_replaces_the_root_system_prompt_block_on_the_next_turn() {
 
     let root = mem_root("agent-loop-reasoning-effort");
     let system = build_matrix_system(&root);
-    let session = system.new_session();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
     let (control, mut events) = system.open_session(session).unwrap();
 
     block_on(control.submit(Message::text("first turn"))).unwrap();
@@ -188,7 +188,7 @@ fn agent_loop_emits_provider_usage_for_cli_consumers() {
 
     let root = mem_root("agent-loop-usage");
     let system = build_matrix_system(&root);
-    let session = system.new_session();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
     let (control, mut events) = system.open_session(session).unwrap();
     block_on(control.submit(Message::text("report usage"))).unwrap();
     let events = drain_until_turn_ended(&mut events);

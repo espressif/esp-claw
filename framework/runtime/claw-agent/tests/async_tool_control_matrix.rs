@@ -48,7 +48,7 @@ fn pending_request_control_ends_the_turn_before_returning() {
         system
             .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
             .unwrap();
-        let session = system.new_session();
+        let session = system.new_session(claw_agent::SessionPersistence::Persistent);
         let (control, mut events) = system.open_session(session).unwrap();
 
         block_on(control.submit(Message::text(format!("run {}", fixture.case)))).unwrap();
@@ -131,7 +131,7 @@ fn close_reports_final_checkpoint_failure_after_closing_the_stream() {
 
     let root = mem_root("close-checkpoint-failure");
     let system = ControlSystem::new::<StdThread, TokioExecutor>(persistence(&root)).unwrap();
-    let session = system.new_session();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
     let (control, mut events) = system.open_session(session).unwrap();
 
     FAIL_CHECKPOINT_WRITES.store(true, Ordering::SeqCst);

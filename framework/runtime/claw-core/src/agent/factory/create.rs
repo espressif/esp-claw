@@ -29,10 +29,9 @@ impl<
     /// it `host` as its back-channel to the agent graph. Used for both spawned
     /// subagents and a session's root agent.
     ///
-    /// `placement` selects the durable transcript this agent attaches to: a
-    /// root keys its record by the stable session id (so it resumes across
-    /// restarts), a subagent by its agent id. It also decides root-only tool
-    /// wiring, so root/subagent identity has one source of truth.
+    /// `placement` selects the transcript identity and storage mode. It also
+    /// decides root-only tool wiring, so root/subagent identity has one source
+    /// of truth.
     ///
     /// # Errors
     ///
@@ -69,8 +68,7 @@ impl<
         tools.add_group(discovery_tools(tools.discovery()))?;
 
         // Every agent gets a transcript for context management; `persists` only
-        // decides whether it is written to disk. Roots persist under
-        // `transcript/<session id>.jsonl`; subagents stay in memory.
+        // decides whether it is written to disk.
         let transcript_id = placement.transcript_id();
         let store = if placement.persists() {
             match TranscriptStore::<Filesystem>::new(transcript_id, &self.transcript_dir) {

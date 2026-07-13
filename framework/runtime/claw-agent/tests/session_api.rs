@@ -74,7 +74,7 @@ fn list_sessions_returns_session_ids() {
     let _script = serialize_script();
     let root = mem_root("agent-list-sessions");
     let system = build_mem_system(&root, Vec::new());
-    let session = system.new_session();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
 
     assert_eq!(system.list_sessions(), vec![session]);
 }
@@ -84,7 +84,7 @@ fn session_streams_root_reply_as_output() {
     let _script = serialize_script();
     let root = mem_root("agent-stream-output");
     let system = build_mem_system(&root, vec![assistant_text("hello there")]);
-    let session = system.new_session();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
     let (control, mut events) = system.open_session(session).unwrap();
 
     block_on(control.submit(Message {
@@ -136,7 +136,7 @@ fn second_submit_returns_busy_until_current_turn_ends() {
         &root,
         vec![assistant_text("first"), assistant_text("second")],
     );
-    let session = system.new_session();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
     let (control, mut events) = system.open_session(session).unwrap();
 
     block_on(async {
@@ -163,7 +163,7 @@ fn session_control_methods_are_idempotent() {
     let _script = serialize_script();
     let root = mem_root("agent-control-idempotent");
     let system = build_slow_system(&root, vec![assistant_text("cancelled")]);
-    let session = system.new_session();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
     let (control, mut events) = system.open_session(session).unwrap();
 
     block_on(async {
@@ -190,7 +190,7 @@ fn close_session_cancels_active_work_and_closes_events() {
     let _script = serialize_script();
     let root = mem_root("agent-close-session");
     let system = build_slow_system(&root, vec![assistant_text("should not surface")]);
-    let session = system.new_session();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
     let (control, mut events) = system.open_session(session).unwrap();
 
     block_on(async {
@@ -218,7 +218,7 @@ fn delete_session_removes_session_and_closes_open_stream() {
     let _script = serialize_script();
     let root = mem_root("agent-delete-session");
     let system = build_mem_system(&root, Vec::new());
-    let session = system.new_session();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
     let (_control, mut events) = system.open_session(session).unwrap();
 
     system.delete_session(session).unwrap();

@@ -8,7 +8,8 @@ use std::collections::VecDeque;
 use std::sync::{Mutex, MutexGuard};
 
 use claw_agent::{
-    AgentError, AgentSystem, Message, OpenSessionError, SessionEvent, SessionId, TurnId,
+    AgentError, AgentSystem, Message, OpenSessionError, SessionEvent, SessionId,
+    SessionPersistence, TurnId,
 };
 use claw_checkpoint::{
     BatchId, BatchWrite, ChangePatternHint, Checkpoint, CheckpointStorage, CheckpointWrite,
@@ -73,7 +74,7 @@ fn sessions_restore_from_checkpoint_after_rebuild() {
 
     let first = {
         let system = build_mem_system(&root, Vec::new());
-        let session = system.new_session();
+        let session = system.new_session(SessionPersistence::Persistent);
         assert_eq!(system.list_sessions(), vec![session]);
         assert!(MemFs::exists(&format!("{root}/checkpoint/manifest.json")));
         session
@@ -81,9 +82,64 @@ fn sessions_restore_from_checkpoint_after_rebuild() {
 
     let system = build_mem_system(&root, Vec::new());
     assert_eq!(system.list_sessions(), vec![first]);
-    let second = system.new_session();
+    let second = system.new_session(SessionPersistence::Persistent);
     assert_eq!(second.0, first.0.saturating_add(1));
     assert_eq!(system.list_sessions(), vec![first, second]);
+}
+
+#[test]
+fn ephemeral_session_keeps_only_process_local_history() {
+    let _lock = RECORDING_HTTP_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let root = TempDir::new("claw-agent-ephemeral-session").unwrap();
+    let root = root.path().to_string_lossy().into_owned();
+
+    let ephemeral = {
+        install_recording_replies(vec![
+            assistant_text("first volatile reply"),
+            assistant_text("second volatile reply"),
+        ]);
+        let system = build_recording_disk_system(&root);
+        let session = system.new_session(SessionPersistence::Ephemeral);
+        assert_eq!(system.list_sessions(), vec![session]);
+
+        let (control, mut events) = system.open_session(session).unwrap();
+        block_on(control.submit(Message::text("first volatile user"))).unwrap();
+        let _ = drain_until_turn_ended(&mut events);
+        block_on(control.submit(Message::text("second volatile user"))).unwrap();
+        let _ = drain_until_turn_ended(&mut events);
+
+        let requests = recording_requests().clone();
+        assert_eq!(requests.len(), 2);
+        assert_contains(&requests[1], "first volatile user");
+        assert_contains(&requests[1], "first volatile reply");
+        assert_contains(&requests[1], "second volatile user");
+        assert!(!DiskFs::exists(&format!(
+            "{root}/transcript/{}.jsonl",
+            session.0
+        )));
+        assert!(!DiskFs::exists(&format!(
+            "{root}/transcript/{}.json",
+            session.0
+        )));
+        assert!(!DiskFs::exists(&format!("{root}/checkpoint/manifest.json")));
+        session
+    };
+
+    let system = build_recording_disk_system(&root);
+    assert_eq!(system.list_sessions(), Vec::<SessionId>::new());
+    assert!(matches!(
+        system.open_session(ephemeral),
+        Err(AgentError::OpenSession(
+            OpenSessionError::SessionNotFound(missing)
+        )) if missing == ephemeral
+    ));
+    assert_eq!(
+        system.new_session(SessionPersistence::Persistent),
+        ephemeral,
+        "an ephemeral-only allocation must not advance the durable id"
+    );
 }
 
 #[test]
@@ -196,7 +252,7 @@ fn session_drive_turn_counter_restores_from_disk_checkpoint() {
 
     let session = {
         let system = build_disk_system(&root, vec![assistant_text("first")]);
-        let session = system.new_session();
+        let session = system.new_session(SessionPersistence::Persistent);
         let (control, mut events) = system.open_session(session).unwrap();
         block_on(control.submit(Message::text("one"))).unwrap();
         let events = drain_until_turn_ended(&mut events);
@@ -252,7 +308,7 @@ fn session_transcript_history_survives_disk_rebuild_and_reenters_llm_context() {
     let session = {
         install_recording_replies(vec![assistant_text("first persisted reply")]);
         let system = build_recording_disk_system(&root);
-        let session = system.new_session();
+        let session = system.new_session(SessionPersistence::Persistent);
         let (control, mut events) = system.open_session(session).unwrap();
         block_on(control.submit(Message::text("first persisted user"))).unwrap();
         let events = drain_until_turn_ended(&mut events);
@@ -300,7 +356,7 @@ fn corrupt_transcript_index_rebuilds_from_data_log_after_disk_rebuild() {
     let session = {
         install_recording_replies(vec![assistant_text("reply before index corruption")]);
         let system = build_recording_disk_system(&root);
-        let session = system.new_session();
+        let session = system.new_session(SessionPersistence::Persistent);
         let (control, mut events) = system.open_session(session).unwrap();
         block_on(control.submit(Message::text("user before index corruption"))).unwrap();
         let events = drain_until_turn_ended(&mut events);
@@ -343,7 +399,7 @@ fn deleted_session_does_not_reappear_after_disk_rebuild() {
 
     let deleted = {
         let system = build_disk_system(&root, vec![assistant_text("before delete")]);
-        let session = system.new_session();
+        let session = system.new_session(SessionPersistence::Persistent);
         {
             let (control, mut events) = system.open_session(session).unwrap();
             block_on(control.submit(Message::text("persist before delete"))).unwrap();
@@ -366,7 +422,7 @@ fn deleted_session_does_not_reappear_after_disk_rebuild() {
     let system = build_disk_system(&root, Vec::new());
     assert_eq!(system.list_sessions(), Vec::<SessionId>::new());
     assert_session_missing(&system, deleted);
-    let next = system.new_session();
+    let next = system.new_session(SessionPersistence::Persistent);
     assert_eq!(next.0, deleted.0.saturating_add(1));
     assert_eq!(system.list_sessions(), vec![next]);
 }

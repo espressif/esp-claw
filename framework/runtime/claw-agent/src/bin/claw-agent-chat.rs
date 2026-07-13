@@ -17,7 +17,7 @@ use anstyle::{AnsiColor, Style};
 use anyhow::{bail, Result};
 use claw_agent::{
     AgentPersistenceConfig, HostAgentSystem, Message, SessionControl, SessionEvent,
-    SessionEventStream,
+    SessionEventStream, SessionPersistence,
 };
 use claw_api::{ApiUsage, BackendKind, ClawApiConfig};
 use claw_interface::{StdThread, TokioExecutor};
@@ -270,7 +270,7 @@ async fn run() -> Result<()> {
     let system = HostAgentSystem::new::<StdThread, TokioExecutor>(persistence)?;
     system.link_api(llm_config, claw_agent::ApiUsage::RootAgent, true)?;
     system.start_all()?;
-    let session = system.new_session();
+    let session = system.new_session(SessionPersistence::Persistent);
     let (control, events) = system.open_session(session)?;
     let mut chat = ChatDriver::new(control, events);
 

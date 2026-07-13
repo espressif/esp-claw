@@ -45,7 +45,7 @@ fn builtin_tools_csv_matrix_feeds_profile_memory_and_subagent_results_back_to_ll
         system
             .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
             .unwrap();
-        let session = system.new_session();
+        let session = system.new_session(claw_agent::SessionPersistence::Persistent);
         let (control, mut events) = system.open_session(session).unwrap();
 
         block_on(control.submit(Message::text(format!("run builtin tool matrix {case}")))).unwrap();

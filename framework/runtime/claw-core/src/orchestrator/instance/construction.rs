@@ -10,7 +10,7 @@ use crate::agent::{
     AgentId, AgentIdAllocator, AgentKind, AgentPlacement, FsAgentCreateError, FsAgentFactory,
     GraphHost,
 };
-use crate::session::SessionId;
+use crate::session::{SessionId, SessionPersistence};
 
 use super::inflight::InflightAgentTasks;
 use super::model::{EffectQueue, InstanceHost, OrchestratorInstanceState, SnapshotView};
@@ -73,7 +73,10 @@ where
             .collect::<Vec<_>>();
         for (id, meta) in agents {
             let placement = if self.state.get().root == Some(id) {
-                AgentPlacement::Root(self.session)
+                AgentPlacement::Root {
+                    session: self.session,
+                    persistence: SessionPersistence::Persistent,
+                }
             } else {
                 AgentPlacement::Sub(id)
             };

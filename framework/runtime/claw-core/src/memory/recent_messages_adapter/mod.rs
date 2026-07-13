@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use claw_context::{BlockKind, ContextSink};
 use claw_interface::ClawFs;
-use claw_memory::TranscriptStore;
+use claw_memory::{TranscriptStore, TurnId};
 use serde_json::Value;
 
 use crate::memory::summary_cursor::SummaryCursor;
@@ -46,7 +46,7 @@ pub(crate) struct RecentMessagesContextAdapter<F: ClawFs + 'static> {
     /// The store [`version`](TranscriptStore::version) `cached` reflects.
     cached_version: u64,
     /// The [`SummaryCursor`] value `cached` reflects.
-    cached_cursor: u64,
+    cached_cursor: Option<TurnId>,
     /// `false` until the first refresh fills `cached` (version 0 is a real, empty
     /// state, so a flag distinguishes "never refreshed").
     primed: bool,
@@ -61,7 +61,7 @@ impl<F: ClawFs + 'static> RecentMessagesContextAdapter<F> {
             cursor,
             cached: Arc::new(Value::Array(Vec::new())),
             cached_version: 0,
-            cached_cursor: 0,
+            cached_cursor: None,
             primed: false,
         }
     }
@@ -77,7 +77,10 @@ impl<F: ClawFs + 'static> RecentMessagesContextAdapter<F> {
         }
         let turns = self.store.turns_snapshot();
         let mut out = Vec::new();
-        for turn in turns.iter().filter(|turn| turn.id.0 > cursor) {
+        for turn in turns
+            .iter()
+            .filter(|turn| cursor.map_or(true, |covered| turn.id > covered))
+        {
             out.extend(turn.messages.iter().cloned());
         }
         // The open turn is always the newest content and is never summarized, so

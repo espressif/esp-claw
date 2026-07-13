@@ -75,7 +75,7 @@ fn stress_csv_session_registry_keeps_sorted_unique_ids_after_delete_and_create()
         let system = build_mem_system(&root, Vec::new());
 
         let initial = (0..initial_sessions)
-            .map(|_| system.new_session())
+            .map(|_| system.new_session(claw_agent::SessionPersistence::Persistent))
             .collect::<Vec<_>>();
         let deleted = if delete_stride == 0 {
             Vec::new()
@@ -92,7 +92,7 @@ fn stress_csv_session_registry_keeps_sorted_unique_ids_after_delete_and_create()
             system.delete_session(*session).unwrap();
         }
         let extra = (0..extra_sessions)
-            .map(|_| system.new_session())
+            .map(|_| system.new_session(claw_agent::SessionPersistence::Persistent))
             .collect::<Vec<_>>();
 
         let listed = system.list_sessions();
@@ -126,7 +126,7 @@ fn async_csv_control_storm_on_cloned_controls_finishes_and_accepts_next_submit()
         system
             .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
             .unwrap();
-        let session = system.new_session();
+        let session = system.new_session(claw_agent::SessionPersistence::Persistent);
         let (control, mut events) = system.open_session(session).unwrap();
 
         block_on(control.submit(Message::text(format!("storm start {case}")))).unwrap();
@@ -271,7 +271,7 @@ fn run_disk_stress_case(
         install_stress_outputs(&[]);
         let rebuilt = build_disk_stress_system(&root);
         assert_eq!(rebuilt.list_sessions(), created, "case {case}");
-        let next = rebuilt.new_session();
+        let next = rebuilt.new_session(claw_agent::SessionPersistence::Persistent);
         assert!(
             next.0 > created.last().map_or(0, |id| id.0),
             "case {case}: rebuilt allocator reused ids"
@@ -348,7 +348,7 @@ trait DriveSystem {
 
 impl DriveSystem for MemStressSystem {
     fn new_session(&self) -> SessionId {
-        self.new_session()
+        self.new_session(claw_agent::SessionPersistence::Persistent)
     }
 
     fn open_session(&self, session: SessionId) -> (SessionControl, SessionEventStream) {
@@ -358,7 +358,7 @@ impl DriveSystem for MemStressSystem {
 
 impl DriveSystem for DiskStressSystem {
     fn new_session(&self) -> SessionId {
-        self.new_session()
+        self.new_session(claw_agent::SessionPersistence::Persistent)
     }
 
     fn open_session(&self, session: SessionId) -> (SessionControl, SessionEventStream) {

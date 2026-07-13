@@ -16,7 +16,7 @@ use claw_checkpoint::{
 pub use claw_core::{
     ApiUsage, AttachmentId, AttachmentKind, AttachmentRecord, AttachmentRef, IterationId, Message,
     OpenSessionError, ReasoningEffort, SessionControl, SessionControlError, SessionEvent,
-    SessionEventStream, SessionId, TurnId,
+    SessionEventStream, SessionId, SessionPersistence, TurnId,
 };
 use claw_core::{Orchestrator, OrchestratorBuildError};
 use claw_interface::http::StreamingHttp;
@@ -235,9 +235,10 @@ where
         Ok(())
     }
 
-    /// Create a fresh isolated conversation session.
-    pub fn new_session(&self) -> SessionId {
-        self.orchestrator.session_create()
+    /// Create a fresh isolated conversation session with explicit persistence.
+    /// Ephemeral sessions keep their transcript only for this process.
+    pub fn new_session(&self, persistence: SessionPersistence) -> SessionId {
+        self.orchestrator.session_create(persistence)
     }
 
     /// Return the live conversation sessions.

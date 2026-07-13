@@ -24,7 +24,7 @@ ends, waits for approval, fails, or is interrupted.
 | `AgentSystem` | Public runtime entry point in `claw-agent`. Builds the runtime and exposes sessions and tools. | `ToolRegistry`, `Orchestrator` |
 | `Orchestrator` | Thread-safe session facade. Sends commands to the worker engine and returns session controls and event streams. | Session registry, command sender, API configuration |
 | `Engine` | Runs all sessions on one worker thread and coordinates checkpoints. | Session drives, session agent runtimes, agent factory |
-| `SessionDrive` | Stores durable Turn state and process-local drive state for one session. | Active turn, turn counter, reasoning effort, event sink, control flags |
+| `SessionDrive` | Stores Turn state and process-local drive state for one session. | Active turn, turn counter, reasoning effort, event sink, control flags |
 | `OrchestratorInstance` | Runs the agent graph for one session. Schedules agents and routes results, approvals, and graph effects. | Agent registry, graph, ready queue, in-flight tasks, pending approvals |
 | `FsAgentFactory` | Resolves an agent manifest and assembles its tools, memory stores, skills, and context adapters. | Shared tool registry, skill registry, memory stores, API manager |
 | `Agent` | Scheduler-facing contract for commands, ticks, child results, control, and durable state. | Defined by each implementation |
@@ -38,7 +38,7 @@ ends, waits for approval, fails, or is interrupted.
 
 | Unit | Meaning |
 | --- | --- |
-| Session | Isolated conversation and agent graph. |
+| Session | Isolated conversation and agent graph. Created as persistent or ephemeral. |
 | Turn | One user submission and all work it causes. It remains active while a task, result, or approval is pending. |
 | Task | Work held by one agent until it ends, fails, or is cancelled. |
 | Tick | One scheduler advance of an agent. |
@@ -70,16 +70,23 @@ graph.
 
 ## Persistence
 
-| Durable | Ephemeral |
+A persistent session checkpoints its lifecycle and runtime state and writes its
+root transcript to storage. An ephemeral session keeps the same multi-turn
+context in memory and disappears when the process stops.
+
+| Persistent session state | Process-local state |
 | --- | --- |
+| Session registry entry | Ephemeral session registry entry |
 | Active turn id and pending input | Event sink and control acknowledgements |
 | Next turn id and reasoning effort | Running flags, abort handles, wakers, futures |
 | Agent graph, ready queue, approvals, mailbox | Graph effects and snapshot cache |
 | Agent state and durable agent parts | Factories, clients, transports, timers |
+| Root transcript | Ephemeral root transcript |
 
 Turn acceptance and interrupt/cancel completion follow the live runtime state.
 The runtime attempts a checkpoint after submit and terminal cleanup. Failure is
 reported as persistence degradation and retried at a later checkpoint boundary.
+Persistent session creation and deletion immediately attempt to publish the session registry.
 
 Session close waits for its final checkpoint. The session remains closed if that
 checkpoint fails, and close returns a persistence error. Recovery starts from

@@ -1,5 +1,5 @@
 use crate::agent::base_agent::AgentId;
-use crate::session::SessionId;
+use crate::session::{SessionId, SessionPersistence};
 
 const TRANSCRIPT_DIR: &str = "transcript";
 const PROFILE_DIR: &str = "profile";
@@ -10,38 +10,42 @@ const LONG_TERM_DIR: &str = "long_term";
 /// This is not just a transcript selector: it is the single source of truth for
 /// root-only tool/profile permissions and for transcript placement and durability.
 ///
-/// A session **root** persists its transcript, keyed by the stable [`SessionId`]
-/// (so `transcript/<session id>.jsonl` is found again when the session is
-/// rehydrated after a restart). A **subagent** does not persist: its transcript is
-/// context-management scratch held in memory only, since its graph is rebuilt from
-/// scratch on the next boot and never resumes. Because only roots write files, the
-/// session-id and agent-id spaces never collide on disk.
+/// A persistent session root writes its transcript under the stable [`SessionId`].
+/// Ephemeral roots and subagents keep their transcript in memory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentPlacement {
     /// A session's user-facing root; its transcript key is the session id.
-    Root(SessionId),
+    Root {
+        session: SessionId,
+        persistence: SessionPersistence,
+    },
     /// A spawned subagent; its transcript key is the agent id.
     Sub(AgentId),
 }
 
 impl AgentPlacement {
     pub(super) fn is_root(self) -> bool {
-        matches!(self, Self::Root(_))
+        matches!(self, Self::Root { .. })
     }
 
     /// The transcript's `transcript_id`: the session id for a root, the agent id
     /// for a subagent.
     pub(super) fn transcript_id(self) -> u32 {
         match self {
-            AgentPlacement::Root(session) => session.0,
+            AgentPlacement::Root { session, .. } => session.0,
             AgentPlacement::Sub(agent) => agent.0,
         }
     }
 
-    /// Whether this placement's transcript is written to disk. Only roots persist;
-    /// subagent transcripts are in-memory scratch (see the type docs).
+    /// Whether this placement's transcript is written to disk.
     pub(super) fn persists(self) -> bool {
-        self.is_root()
+        matches!(
+            self,
+            Self::Root {
+                persistence: SessionPersistence::Persistent,
+                ..
+            }
+        )
     }
 }
 

@@ -8,6 +8,7 @@ use crate::agent::{
     TerminationPolicy,
 };
 use crate::orchestrator::InstanceWork;
+use crate::session::SessionPersistence;
 
 use super::super::model::{
     AgentMessageDeliveryError, InstanceDeliverError, NodeMeta, ROOT_AGENT_KIND,
@@ -25,6 +26,7 @@ where
         &mut self,
         text: impl Into<String>,
         reasoning_effort: Block<'static>,
+        persistence: SessionPersistence,
     ) -> Result<(), InstanceDeliverError> {
         match self.state.get().root {
             Some(root) => {
@@ -40,7 +42,10 @@ where
                     id,
                     &kind,
                     text.into(),
-                    AgentPlacement::Root(self.session),
+                    AgentPlacement::Root {
+                        session: self.session,
+                        persistence,
+                    },
                     Arc::from([reasoning_effort]),
                 )?;
                 self.state.get_mut().meta.insert(

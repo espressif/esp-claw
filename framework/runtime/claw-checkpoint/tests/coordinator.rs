@@ -141,6 +141,42 @@ fn shared_coordinator_checkpoint_now_bypasses_the_write_interval() {
 }
 
 #[test]
+fn shared_coordinator_checkpoint_and_remove_publishes_both_mutations() {
+    let temp = TempDir::new("claw-checkpoint-remove-now").unwrap();
+    let root = temp
+        .path()
+        .join("checkpoint")
+        .to_string_lossy()
+        .into_owned();
+    let coordinator =
+        SharedCheckpointCoordinator::new(FsCheckpointStorage::<DiskFs>::new(root.clone()), 30, 2)
+            .unwrap();
+
+    coordinator
+        .checkpoint(vec![batch_snapshot(
+            "session-runtime",
+            7,
+            vec![part_snapshot("state", 1, b"runtime")],
+        )])
+        .unwrap();
+    coordinator
+        .checkpoint_and_remove(
+            vec![batch_snapshot(
+                "session-registry",
+                1,
+                vec![part_snapshot("state", 1, b"deleted")],
+            )],
+            vec![("session-runtime", BatchId::new(7))],
+        )
+        .unwrap();
+
+    let storage = FsCheckpointStorage::<DiskFs>::new(root);
+    let checkpoint = storage.load_checkpoint(2).unwrap();
+    assert!(has_batch(&checkpoint, "session-registry", 1));
+    assert!(!has_batch(&checkpoint, "session-runtime", 7));
+}
+
+#[test]
 fn shared_coordinator_does_not_cache_a_failed_candidate() {
     let temp = TempDir::new("claw-checkpoint-failed-candidate").unwrap();
     let root = temp
