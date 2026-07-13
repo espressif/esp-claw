@@ -9,6 +9,9 @@ description = "OpenAI-/Anthropic-compatible LLM client chat + media"
 name = "claw_api"
 crate-type = ["rlib"]
 
+[features]
+cache_profile = []
+
 [dependencies]
 claw-interface = { path = "../claw-interface" }
 serde = { version = "1", features = ["derive"] }

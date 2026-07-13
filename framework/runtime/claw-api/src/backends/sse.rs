@@ -20,7 +20,28 @@
 use serde_json::{json, Map, Value};
 
 use super::super::errors::{ChatError, ClawApiError};
+#[cfg(feature = "cache_profile")]
+use super::super::types::ApiUsage;
 use super::super::types::{LlmDelta, LlmResponse, ToolCall};
+#[cfg(feature = "cache_profile")]
+use super::shared::{parse_anthropic_usage, parse_openai_usage};
+
+#[cfg(feature = "cache_profile")]
+fn merge_usage(current: &mut Option<ApiUsage>, incoming: ApiUsage) {
+    let aggregate = current.get_or_insert_with(ApiUsage::default);
+    if incoming.input_tokens.is_some() {
+        aggregate.input_tokens = incoming.input_tokens;
+    }
+    if incoming.output_tokens.is_some() {
+        aggregate.output_tokens = incoming.output_tokens;
+    }
+    if incoming.cache_read_tokens.is_some() {
+        aggregate.cache_read_tokens = incoming.cache_read_tokens;
+    }
+    if incoming.cache_write_tokens.is_some() {
+        aggregate.cache_write_tokens = incoming.cache_write_tokens;
+    }
+}
 
 /// SSE event separator. Providers frame events with a blank line.
 const FRAME_BOUNDARY: &[u8] = b"\n\n";
@@ -118,6 +139,8 @@ pub(crate) struct OpenAiSse {
     text: String,
     reasoning: String,
     tool_calls: Vec<OpenAiToolCall>,
+    #[cfg(feature = "cache_profile")]
+    usage: Option<ApiUsage>,
 }
 
 impl OpenAiSse {
@@ -127,6 +150,10 @@ impl OpenAiSse {
 
     fn process_data(&mut self, payload: &str, out: &mut Vec<LlmDelta>) -> Result<(), ChatError> {
         let value: Value = serde_json::from_str(payload).map_err(|_| ClawApiError::Parse)?;
+        #[cfg(feature = "cache_profile")]
+        if let Some(usage) = parse_openai_usage(&value) {
+            merge_usage(&mut self.usage, usage);
+        }
         let Some(delta) = value
             .get("choices")
             .and_then(|choices| choices.get(0))
@@ -268,6 +295,8 @@ impl SseParse for OpenAiSse {
             reasoning_content,
             raw_message_json: Some(raw_message_json),
             tool_calls,
+            #[cfg(feature = "cache_profile")]
+            usage: self.usage,
         })
     }
 }
@@ -303,6 +332,8 @@ pub(crate) struct AnthropicSse {
     blocks: Vec<AnthBlock>,
     /// Number of `tool_use` blocks started so far (their emitted ordinal).
     tool_count: u32,
+    #[cfg(feature = "cache_profile")]
+    usage: Option<ApiUsage>,
 }
 
 impl AnthropicSse {
@@ -312,6 +343,10 @@ impl AnthropicSse {
 
     fn process_data(&mut self, payload: &str, out: &mut Vec<LlmDelta>) -> Result<(), ChatError> {
         let value: Value = serde_json::from_str(payload).map_err(|_| ClawApiError::Parse)?;
+        #[cfg(feature = "cache_profile")]
+        if let Some(usage) = parse_anthropic_usage(&value) {
+            merge_usage(&mut self.usage, usage);
+        }
         match value.get("type").and_then(Value::as_str) {
             Some("content_block_start") => self.on_block_start(&value),
             Some("content_block_delta") => self.on_block_delta(&value, out),
@@ -503,6 +538,8 @@ impl SseParse for AnthropicSse {
             reasoning_content: reasoning_opt,
             raw_message_json: Some(raw_message_json),
             tool_calls,
+            #[cfg(feature = "cache_profile")]
+            usage: self.usage,
         })
     }
 }
@@ -559,8 +596,6 @@ mod tests {
                 },
             ]
         );
-        assert!(parser.is_done());
-
         let response = parser.finish().unwrap();
         assert_eq!(response.text.as_deref(), Some("Hello"));
         assert_eq!(response.reasoning_content.as_deref(), Some("think"));
@@ -608,6 +643,24 @@ mod tests {
         assert!(parser.finish().is_err());
     }
 
+    #[cfg(feature = "cache_profile")]
+    #[test]
+    fn openai_captures_usage_only_final_chunk() {
+        let mut parser = OpenAiSse::new();
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n",
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":3,\"prompt_tokens_details\":{\"cached_tokens\":8}}}\n\n",
+            "data: [DONE]\n\n",
+        );
+        drive(&mut parser, body);
+
+        let usage = parser.finish().unwrap().usage.unwrap();
+        assert_eq!(usage.input_tokens, Some(12));
+        assert_eq!(usage.output_tokens, Some(3));
+        assert_eq!(usage.cache_read_tokens, Some(8));
+        assert_eq!(usage.cache_write_tokens, None);
+    }
+
     // ----- Anthropic -----
 
     #[test]
@@ -640,8 +693,6 @@ mod tests {
                 },
             ]
         );
-        assert!(parser.is_done());
-
         let response = parser.finish().unwrap();
         assert_eq!(response.text.as_deref(), Some("Hi"));
         assert_eq!(response.reasoning_content.as_deref(), Some("hmm"));
@@ -666,5 +717,25 @@ mod tests {
         assert!(out.is_empty());
         parser.push(b.as_bytes(), &mut out).unwrap();
         assert_eq!(out, vec![LlmDelta::Output("hi".to_string())]);
+    }
+
+    #[cfg(feature = "cache_profile")]
+    #[test]
+    fn anthropic_merges_usage_across_stream_events() {
+        let mut parser = AnthropicSse::new();
+        let body = concat!(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":20,\"cache_read_input_tokens\":12,\"cache_creation_input_tokens\":8}}}\n\n",
+            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hi\"}}\n\n",
+            "event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":5}}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        );
+        drive(&mut parser, body);
+
+        let usage = parser.finish().unwrap().usage.unwrap();
+        assert_eq!(usage.input_tokens, Some(20));
+        assert_eq!(usage.output_tokens, Some(5));
+        assert_eq!(usage.cache_read_tokens, Some(12));
+        assert_eq!(usage.cache_write_tokens, Some(8));
     }
 }

@@ -131,6 +131,18 @@ async fn run_one_iteration<H: ClawHttp + StreamingHttp, Timer: ClawTimer>(
         }
     };
 
+    #[cfg(feature = "cache_profile")]
+    if let Some(usage) = llm_response.usage {
+        tracing::info!(
+            name: "usage",
+            input_tokens = ?usage.input_tokens,
+            output_tokens = ?usage.output_tokens,
+            cache_read_tokens = ?usage.cache_read_tokens,
+            cache_write_tokens = ?usage.cache_write_tokens,
+        );
+        events.emit(SessionEvent::Usage { usage });
+    }
+
     if llm_response.tool_calls.is_empty() {
         if let Some(outcome) = check_preempt_at_checkpoint(
             loop_.interruption,

@@ -9,6 +9,8 @@ use claw_interface::http::{
 use serde_json::{Map, Value};
 
 use super::super::errors::{ChatError, ClawApiError, InferMediaError};
+#[cfg(feature = "cache_profile")]
+use super::super::types::ApiUsage;
 use super::super::types::{ClawApiConfig, LlmResponse, MediaAsset, ToolCall};
 
 /// HTTP statuses that indicate a transient, retryable server condition.
@@ -202,7 +204,58 @@ pub(super) fn parse_openai_chat_response(body: &str) -> Result<LlmResponse, Claw
         reasoning_content,
         raw_message_json: Some(raw_message_json),
         tool_calls,
+        #[cfg(feature = "cache_profile")]
+        usage: parse_openai_usage(&root),
     })
+}
+
+/// Extract OpenAI-compatible usage counters for cache profiling.
+#[cfg(feature = "cache_profile")]
+pub(super) fn parse_openai_usage(root: &Value) -> Option<ApiUsage> {
+    let usage = root.get("usage")?;
+    let prompt_details = usage.get("prompt_tokens_details");
+    let input_details = usage.get("input_tokens_details");
+    let profile = ApiUsage {
+        input_tokens: usage
+            .get("prompt_tokens")
+            .or_else(|| usage.get("input_tokens"))
+            .and_then(Value::as_u64),
+        output_tokens: usage
+            .get("completion_tokens")
+            .or_else(|| usage.get("output_tokens"))
+            .and_then(Value::as_u64),
+        cache_read_tokens: prompt_details
+            .and_then(|details| details.get("cached_tokens"))
+            .or_else(|| input_details.and_then(|details| details.get("cached_tokens")))
+            .and_then(Value::as_u64),
+        cache_write_tokens: usage.get("cache_write_tokens").and_then(Value::as_u64),
+    };
+    (profile.input_tokens.is_some()
+        || profile.output_tokens.is_some()
+        || profile.cache_read_tokens.is_some()
+        || profile.cache_write_tokens.is_some())
+    .then_some(profile)
+}
+
+/// Extract Anthropic usage counters for cache profiling.
+#[cfg(feature = "cache_profile")]
+pub(super) fn parse_anthropic_usage(root: &Value) -> Option<ApiUsage> {
+    let usage = root
+        .get("usage")
+        .or_else(|| root.get("message").and_then(|message| message.get("usage")))?;
+    let profile = ApiUsage {
+        input_tokens: usage.get("input_tokens").and_then(Value::as_u64),
+        output_tokens: usage.get("output_tokens").and_then(Value::as_u64),
+        cache_read_tokens: usage.get("cache_read_input_tokens").and_then(Value::as_u64),
+        cache_write_tokens: usage
+            .get("cache_creation_input_tokens")
+            .and_then(Value::as_u64),
+    };
+    (profile.input_tokens.is_some()
+        || profile.output_tokens.is_some()
+        || profile.cache_read_tokens.is_some()
+        || profile.cache_write_tokens.is_some())
+    .then_some(profile)
 }
 
 /// Insert OpenAI-style `tools` into a chat request body map.

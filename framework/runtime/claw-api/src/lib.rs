@@ -111,6 +111,8 @@ pub use backends::{BackendKind, ParseBackendKindError};
 pub use client::{ClawApi, ClawApiAsync};
 pub use errors::{ChatError, ChatJsonError, ClawApiError, InferMediaError, InitError};
 pub use stream::ChatStream;
+#[cfg(feature = "cache_profile")]
+pub use types::ApiUsage;
 pub use types::{
     ChatJsonRequest, ChatJsonResponse, ChatRequest, ClawApiConfig, LlmDelta, LlmResponse,
     MediaAsset, MediaRequest, RetryPolicy, StaticOutputSchema, ToolCall,

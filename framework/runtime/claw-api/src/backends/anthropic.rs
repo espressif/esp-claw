@@ -20,6 +20,8 @@ use super::super::stream::{drain_body, ChatStream};
 use super::super::types::{
     ChatJsonRequest, ChatRequest, ClawApiConfig, LlmResponse, MediaRequest, ToolCall,
 };
+#[cfg(feature = "cache_profile")]
+use super::shared::parse_anthropic_usage;
 use super::shared::{
     map_http_error, post_json, post_json_async, single_media_asset, BackendContext,
 };
@@ -308,6 +310,8 @@ fn parse_chat_response(body: &str) -> Result<LlmResponse, ClawApiError> {
         reasoning_content: reasoning_opt,
         raw_message_json: Some(raw_message_json),
         tool_calls,
+        #[cfg(feature = "cache_profile")]
+        usage: parse_anthropic_usage(&root),
     })
 }
 
