@@ -4,7 +4,7 @@
 //! [`Orchestrator`] is a cheap, `Send + Sync` handle: it validates sessions
 //! synchronously (via a shared [`SessionStore`]) and forwards work to the engine
 //! as [`Command`]s over an async channel. The engine ([`Engine`]) is `!Send` (it
-//! owns `Box<dyn Agent>` graphs), so it is built *inside* the worker thread from
+//! owns live agent graphs), so it is built *inside* the worker thread from
 //! `Send` config and `block_on`-driven there. The engine multiplexes every live
 //! session's drive on that single thread — cooperative concurrency, not
 //! parallelism — the same way the async HTTP seam yields between EAGAIN steps.
@@ -21,6 +21,7 @@ mod instance;
 mod reasoning;
 
 use core::pin::Pin;
+use std::error::Error as StdError;
 use std::io;
 
 use async_channel::{Receiver, Sender};
@@ -34,8 +35,6 @@ use crate::session::SessionId;
 
 pub use self::handle::Orchestrator;
 pub use self::reasoning::ReasoningEffort;
-
-pub(crate) use self::engine::InstanceWork;
 
 /// What can go wrong while building an [`Orchestrator`].
 #[derive(Debug, thiserror::Error)]
@@ -59,8 +58,11 @@ pub enum OrchestratorBuildError {
     #[error("failed to restore checkpoint part: {0}")]
     CheckpointRestore(#[from] DurablePartError),
     /// A session instance checkpoint exists but cannot be restored.
-    #[error("failed to restore checkpointed session instance: {0}")]
-    CheckpointInstanceRestore(#[from] instance::OrchestratorInstanceRestoreError),
+    #[error("failed to restore checkpointed session instance: {source}")]
+    CheckpointInstanceRestore {
+        #[source]
+        source: Box<dyn StdError + Send + Sync>,
+    },
     /// A checkpoint batch exists but does not contain the expected durable part.
     #[error("checkpoint is missing part {part} in batch {batch}")]
     MissingCheckpointPart {
@@ -81,6 +83,14 @@ impl From<FsAgentFactoryError> for OrchestratorBuildError {
             FsAgentFactoryError::MissingPersistenceDir => Self::MissingPersistenceDir,
             FsAgentFactoryError::LongTermInit(source) => Self::LongTermInit(source),
             FsAgentFactoryError::SkillRegistry(source) => Self::SkillRegistry(source),
+        }
+    }
+}
+
+impl From<instance::OrchestratorInstanceRestoreError> for OrchestratorBuildError {
+    fn from(source: instance::OrchestratorInstanceRestoreError) -> Self {
+        Self::CheckpointInstanceRestore {
+            source: Box::new(source),
         }
     }
 }
@@ -134,8 +144,6 @@ pub struct SessionEventStream {
 /// device agent worker's budget.
 const ENGINE_WORKER_STACK_SIZE: usize = 64 * 1024;
 const CHECKPOINT_DIR: &str = "checkpoint";
-const CHECKPOINT_INTERVAL: u64 = 1;
-const CHECKPOINT_HISTORY: u64 = 2;
 const ENGINE_BATCH: &str = "engine";
 const ENGINE_BATCH_ID: BatchId = BatchId::new(1);
 const ENGINE_PART: &str = "engine";

@@ -1,19 +1,14 @@
+use crate::agent::{
+    AgentCommand, AgentGraphSnapshot, AgentId, AgentKind, AgentPlacement, AgentSnapshot,
+};
+use crate::session::SessionPersistence;
 use claw_context::Block;
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
-use std::sync::Arc;
 
-use crate::agent::{
-    AgentCommand, AgentId, AgentKind, AgentPlacement, AgentSnapshot, AgentStatus, CancelReason,
-    TerminationPolicy,
-};
-use crate::orchestrator::InstanceWork;
-use crate::session::SessionPersistence;
-
-use super::super::model::{
-    AgentMessageDeliveryError, InstanceDeliverError, NodeMeta, ROOT_AGENT_KIND,
-};
-use super::super::OrchestratorInstance;
+use super::super::error::{AgentMessageDeliveryError, InstanceDeliverError};
+use super::super::scheduler::InstanceWork;
+use super::super::{OrchestratorInstance, ROOT_AGENT_KIND};
 
 impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
 where
@@ -24,11 +19,11 @@ where
     /// Deliver a user message to this session's root.
     pub(crate) fn deliver(
         &mut self,
-        text: impl Into<String>,
+        text: String,
         reasoning_effort: Block<'static>,
         persistence: SessionPersistence,
     ) -> Result<(), InstanceDeliverError> {
-        match self.state.get().root {
+        match self.state.get().graph.root() {
             Some(root) => {
                 self.set_agent_context_block(root, reasoning_effort)
                     .map_err(|source| InstanceDeliverError::Root { root, source })?;
@@ -37,28 +32,19 @@ where
             }
             None => {
                 let id = self.agent_id_allocator.next();
-                let kind = AgentKind::new(ROOT_AGENT_KIND);
+                let kind = AgentKind::from_static(ROOT_AGENT_KIND);
                 self.build_agent(
                     id,
                     &kind,
-                    text.into(),
+                    text,
                     AgentPlacement::Root {
                         session: self.session,
                         persistence,
                     },
-                    Arc::from([reasoning_effort]),
+                    vec![reasoning_effort],
                 )?;
-                self.state.get_mut().meta.insert(
-                    id,
-                    NodeMeta {
-                        parent: None,
-                        depth: 0,
-                        kind,
-                        name: None,
-                        termination: TerminationPolicy::AutoOnIdle,
-                    },
-                );
-                self.state.get_mut().root = Some(id);
+                let inserted = self.state.get_mut().graph.insert_root(id, kind);
+                debug_assert!(inserted, "root insertion requires an empty graph");
                 self.enqueue(id);
                 Ok(())
             }
@@ -69,25 +55,20 @@ where
         &mut self,
         block: Block<'static>,
     ) -> Result<(), InstanceDeliverError> {
-        let Some(root) = self.state.get().root else {
+        let Some(root) = self.state.get().graph.root() else {
             return Ok(());
         };
         self.set_agent_context_block(root, block)
             .map_err(|source| InstanceDeliverError::Root { root, source })
     }
 
-    pub(crate) fn cancel_all(&mut self, reason: CancelReason) {
-        let agents: Vec<AgentId> = self.state.get().meta.keys().copied().collect();
+    pub(crate) fn cancel_all(&mut self) {
+        let agents: Vec<AgentId> = self.state.get().graph.agent_ids().collect();
         for agent_id in agents {
-            let Some(agent) = self.state.get_mut().registry.get_mut(agent_id) else {
+            let Some(agent) = self.registry.get_mut(agent_id) else {
                 continue;
             };
-            if agent
-                .send_command(AgentCommand::Cancel {
-                    reason: reason.clone(),
-                })
-                .is_ok()
-            {
+            if agent.send_command(AgentCommand::Cancel).is_ok() {
                 self.enqueue(agent_id);
             }
         }
@@ -95,10 +76,7 @@ where
 
     pub(in crate::orchestrator::instance) fn clear_turn_work(&mut self) {
         let state = self.state.get_mut();
-        state.ready.clear();
-        state.parked_approvals.clear();
-        state.approval_queue.clear();
-        state.subagent_result_mailbox.clear();
+        state.scheduler.clear_turn_work();
         self.effects
             .lock()
             .unwrap_or_else(|poison| poison.into_inner())
@@ -106,70 +84,64 @@ where
     }
 
     pub(crate) fn work(&self) -> InstanceWork {
-        if self.has_root_work() || self.has_unprompted_approval() {
-            InstanceWork::Root
-        } else if self.has_background_work() {
-            InstanceWork::Background
-        } else {
-            InstanceWork::None
-        }
+        self.state.get().scheduler.work(
+            self.state.get().graph.root(),
+            self.inflight.has_root(),
+            self.inflight.has_background(),
+        )
     }
 
     pub(in crate::orchestrator::instance) fn enqueue(&mut self, id: AgentId) {
-        if !self.state.get().ready.contains(&id) {
-            self.state.get_mut().ready.push_back(id);
-        }
+        self.state.get_mut().scheduler.enqueue(id);
     }
 
     pub(in crate::orchestrator::instance) fn has_ready(&self) -> bool {
-        !self.state.get().ready.is_empty()
+        self.state.get().scheduler.has_ready()
     }
 
     pub(in crate::orchestrator::instance) fn has_root_work(&self) -> bool {
-        let Some(root) = self.state.get().root else {
+        let Some(root) = self.state.get().graph.root() else {
             return false;
         };
-        self.state.get().ready.contains(&root) || self.inflight.has_root()
+        self.state.get().scheduler.is_ready(root) || self.inflight.has_root()
     }
 
     pub(in crate::orchestrator::instance) fn refresh_snapshots(&self) {
-        let mut snapshots = self
+        let snapshot = AgentGraphSnapshot::new(self.state.get().graph.nodes().map(|(id, meta)| {
+            AgentSnapshot {
+                id,
+                kind: meta.kind().clone(),
+                name: meta.name().map(str::to_owned),
+                parent: meta.parent(),
+                depth: self
+                    .state
+                    .get()
+                    .graph
+                    .depth(id)
+                    .expect("live graph topology is valid"),
+                termination: meta.termination(),
+                status: self
+                    .state
+                    .get()
+                    .scheduler
+                    .agent_status(id, self.inflight.contains(id)),
+            }
+        }));
+        *self
             .snapshots
             .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        snapshots.clear();
-        for (&id, meta) in &self.state.get().meta {
-            let status = if self.state.get().parked_approvals.contains_key(&id) {
-                AgentStatus::AwaitingApproval
-            } else if self.state.get().ready.contains(&id) {
-                AgentStatus::Ready
-            } else {
-                AgentStatus::Idle
-            };
-            snapshots.insert(
-                id,
-                AgentSnapshot {
-                    id,
-                    kind: meta.kind.clone(),
-                    name: meta.name.clone(),
-                    parent: meta.parent,
-                    depth: meta.depth,
-                    termination: meta.termination,
-                    status,
-                },
-            );
-        }
+            .unwrap_or_else(|poison| poison.into_inner()) = snapshot;
     }
 
     fn deliver_message(
         &mut self,
         id: AgentId,
-        text: impl Into<String>,
+        text: String,
     ) -> Result<(), AgentMessageDeliveryError> {
-        let Some(agent) = self.state.get_mut().registry.get_mut(id) else {
+        let Some(agent) = self.registry.get_mut(id) else {
             return Err(AgentMessageDeliveryError::UnknownAgent(id));
         };
-        agent.send_command(AgentCommand::AppendMessage(text.into()))?;
+        agent.send_command(AgentCommand::AppendMessage(text))?;
         self.enqueue(id);
         Ok(())
     }
@@ -179,7 +151,7 @@ where
         id: AgentId,
         block: Block<'static>,
     ) -> Result<(), AgentMessageDeliveryError> {
-        let Some(agent) = self.state.get_mut().registry.get_mut(id) else {
+        let Some(agent) = self.registry.get_mut(id) else {
             return Err(AgentMessageDeliveryError::UnknownAgent(id));
         };
         agent.set_context_block(block);
@@ -194,23 +166,15 @@ where
     pub(in crate::orchestrator::instance) fn deliver_followup(
         &mut self,
         id: AgentId,
-        message: impl Into<String>,
+        message: String,
     ) -> Result<(), AgentMessageDeliveryError> {
-        let message = message.into();
-        let Some(agent) = self.state.get_mut().registry.get_mut(id) else {
+        let Some(agent) = self.registry.get_mut(id) else {
             return Err(AgentMessageDeliveryError::UnknownAgent(id));
         };
-        let _ = agent.send_command(AgentCommand::Cancel {
-            reason: CancelReason::UserRequested,
-        });
+        let _ = agent.send_command(AgentCommand::Cancel);
         agent.send_command(AgentCommand::AppendMessage(message))?;
         self.enqueue(id);
         tracing::info!(name: "followup_delivered", target_agent = %id);
         Ok(())
-    }
-
-    fn has_background_work(&self) -> bool {
-        let root = self.state.get().root;
-        self.state.get().ready.iter().any(|id| Some(*id) != root) || self.inflight.has_background()
     }
 }

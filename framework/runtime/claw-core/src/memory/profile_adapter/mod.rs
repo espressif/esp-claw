@@ -8,7 +8,7 @@ use claw_interface::ClawFs;
 use claw_memory::{ProfileDocument, ProfileStore};
 use claw_tool::ToolGroup;
 
-use crate::memory::traits::{ContextAdapter, ContextAdapterInput};
+use crate::memory::traits::ContextAdapter;
 
 mod tools;
 
@@ -24,14 +24,14 @@ enum ProfileTools {
 }
 
 /// Pulls global profile documents into the current agent context.
-pub struct ProfileContextAdapter<F: ClawFs + 'static> {
+pub(crate) struct ProfileContextAdapter<F: ClawFs + 'static> {
     store: ProfileStore<F>,
     tools: ProfileTools,
 }
 
 impl<F: ClawFs + 'static> ProfileContextAdapter<F> {
     /// Build an adapter over `store`.
-    pub fn new(store: ProfileStore<F>, is_root: bool) -> Self {
+    pub(crate) fn new(store: ProfileStore<F>, is_root: bool) -> Self {
         // Attach editable global profile context to every agent. Only a root agent
         // gets the mutation tools; subagents read profile through context but do
         // not write it directly.
@@ -70,7 +70,7 @@ impl<F: ClawFs + 'static> ProfileContextAdapter<F> {
 }
 
 impl<F: ClawFs + 'static> ContextAdapter for ProfileContextAdapter<F> {
-    fn contribute(&mut self, _input: ContextAdapterInput<'_>, output: &mut ContextSink<'_>) {
+    fn contribute(&mut self, output: &mut ContextSink<'_>) {
         for document in ProfileDocument::all() {
             self.contribute_document(document, output);
         }

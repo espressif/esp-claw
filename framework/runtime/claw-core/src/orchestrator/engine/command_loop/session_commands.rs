@@ -8,8 +8,7 @@ use crate::event::EventSink;
 use crate::orchestrator::{OpenSessionError, ReasoningEffort, SessionControlError};
 use crate::session::SessionId;
 
-use super::super::session_drive::{SessionDrive, SessionDriveState};
-use super::super::{DriveFuture, Engine, InstanceWork};
+use super::super::{DriveFuture, Engine, InstanceWork, SessionRuntime};
 
 impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
 where
@@ -26,18 +25,14 @@ where
             return (Err(OpenSessionError::SessionNotFound(session_id)), None);
         }
         let has_pending_input = {
-            let mut drives = self.drives.borrow_mut();
-            let drive = drives
+            let mut runtimes = self.runtimes.borrow_mut();
+            let runtime = runtimes
                 .entry(session_id)
-                .or_insert_with(|| SessionDrive::new(SessionDriveState::default()));
-            if drive.events.is_some() || drive.closing {
+                .or_insert_with(SessionRuntime::fresh);
+            let Some(has_pending_input) = runtime.open(events) else {
                 return (Err(OpenSessionError::AlreadyOpen(session_id)), None);
-            }
-            drive.events = Some(events);
-            drive.announced_turn = None;
-            drive.closing = false;
-            drive.close_cancels = false;
-            drive.has_pending_input()
+            };
+            has_pending_input
         };
         let should_start =
             has_pending_input || !matches!(self.instance_work(session_id), InstanceWork::None);
@@ -55,11 +50,11 @@ where
         session_id: SessionId,
         effort: ReasoningEffort,
     ) -> Result<(), SessionControlError> {
-        let mut drives = self.drives.borrow_mut();
-        let Some(drive) = drives.get_mut(&session_id) else {
+        let mut runtimes = self.runtimes.borrow_mut();
+        let Some(runtime) = runtimes.get_mut(&session_id) else {
             return Err(SessionControlError::SessionClosed(session_id));
         };
-        drive.set_reasoning_effort(effort);
+        runtime.set_reasoning_effort(effort);
         Ok(())
     }
 
@@ -76,19 +71,19 @@ where
             return None;
         }
         {
-            let mut drives = self.drives.borrow_mut();
-            let Some(drive) = drives.get_mut(&session_id) else {
+            let mut runtimes = self.runtimes.borrow_mut();
+            let Some(runtime) = runtimes.get_mut(&session_id) else {
                 tracing::warn!(name: "close_rejected", reason = "not_open");
                 let _ = ack.try_send(Err(SessionControlError::SessionClosed(session_id)));
                 return None;
             };
-            if drive.events.is_none() {
+            if !runtime.is_open() && !runtime.is_closing() {
                 tracing::warn!(name: "close_rejected", reason = "not_open");
                 let _ = ack.try_send(Err(SessionControlError::SessionClosed(session_id)));
                 return None;
             }
-            drive.queue_close_ack(ack);
-            if drive.closing {
+            runtime.queue_close_ack(ack);
+            if runtime.is_closing() {
                 tracing::info!(name: "close_requested", "");
                 return None;
             }
@@ -118,10 +113,9 @@ where
             return (Err(SessionControlError::SessionClosed(session_id)), None);
         }
         {
-            let drives = self.drives.borrow();
-            if !drives.contains_key(&session_id) {
-                drop(drives);
-                self.instances.borrow_mut().remove(&session_id);
+            let runtimes = self.runtimes.borrow();
+            if !runtimes.contains_key(&session_id) {
+                drop(runtimes);
                 tracing::info_span!("session.delete", run.session = %session_id).in_scope(|| {
                     tracing::info!(name: "runtime_state_removed", "");
                 });

@@ -13,43 +13,48 @@ use super::command::{
     AgentCommand, AgentCommandError, AgentRunError, ApprovalDecision, TickOutcome,
 };
 use super::control::AgentAbortHandle;
-use super::state::{classify, AgentLifecycle, Inbound, ToolBlockVerdict};
-use super::{BaseAgent, IterationIdAllocator};
+use super::state::ToolBlockVerdict;
+use super::task_state::TaskAction;
+use super::{AgentId, BaseAgent, IterationIdAllocator};
 use claw_permission::Grant;
 
 impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// Queue a command. The single inbound entry point.
-    pub fn send_command(&mut self, command: AgentCommand) -> Result<(), AgentCommandError> {
-        let next = classify(self.state.get().projected_lifecycle, &command)?;
-        let state = self.state.get_mut();
-        state.projected_lifecycle = next;
-        state.inbox.push_back(Inbound::Command(command));
-        Ok(())
+    pub(crate) fn send_command(&mut self, command: AgentCommand) -> Result<(), AgentCommandError> {
+        self.state.get_mut().task_mut().enqueue_command(command)
     }
 
-    pub(crate) fn push_task_input(&mut self, text: impl Into<String>) {
-        let state = self.state.get_mut();
-        if state.projected_lifecycle == AgentLifecycle::Idle {
-            state.projected_lifecycle = AgentLifecycle::Running;
-        }
-        state.inbox.push_back(Inbound::TaskInput(text.into()));
+    pub(crate) fn push_task_input(&mut self, text: String) {
+        self.state.get_mut().task_mut().enqueue_task_input(text);
     }
 
-    pub fn abort_handle(&self) -> AgentAbortHandle {
+    pub(crate) fn abort_handle(&self) -> AgentAbortHandle {
         self.interruption.handle()
+    }
+
+    /// Deliver a finished subagent's result as ordinary task input.
+    pub(crate) fn deliver_child_result(&mut self, child: AgentId, text: String, ok: bool) {
+        let status = if ok { "ok" } else { "failed" };
+        self.push_task_input(format!("[subagent {child} {status}] {text}"));
     }
 
     pub(super) fn drain_inbox(&mut self) {
         loop {
-            let inbound = if self.state.get().inbox.is_empty() {
-                None
-            } else {
-                self.state.get_mut().inbox.pop_front()
+            let action = match self.state.get_mut().task_mut().pop_action() {
+                Ok(action) => action,
+                Err(error) => {
+                    tracing::error!(
+                        name: "task_mailbox_invariant_failed",
+                        detail = %error,
+                    );
+                    self.fail_with(AgentRunError::TaskStateInvariant);
+                    break;
+                }
             };
-            let Some(inbound) = inbound else {
+            let Some(action) = action else {
                 break;
             };
-            self.apply_inbound(inbound);
+            self.apply_action(action);
         }
     }
 
@@ -64,39 +69,36 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         if !signals.is_empty() {
             let state = self.state.get_mut();
             for signal in signals {
-                state.inbox.push_back(Inbound::Control(signal));
+                state.task_mut().enqueue_control(signal);
             }
         }
     }
 
-    fn apply_inbound(&mut self, inbound: Inbound) {
-        match inbound {
-            Inbound::Command(AgentCommand::AppendMessage(text)) | Inbound::TaskInput(text) => {
-                self.append_task_input(&text);
+    fn apply_action(&mut self, action: TaskAction) {
+        match action {
+            TaskAction::TaskInput { text, starts_task } => {
+                self.append_task_input(&text, starts_task);
             }
-            Inbound::Command(AgentCommand::Cancel { reason }) => {
+            TaskAction::Cancel => {
                 self.transcript.discard_open_turn();
-                self.state.get_mut().pending_grant_signatures.clear();
                 self.interruption.clear();
-                self.state.get_mut().lifecycle = AgentLifecycle::Idle;
-                self.outcome = Some(TickOutcome::Cancelled { reason });
+                self.outcome = Some(TickOutcome::Cancelled);
             }
-            Inbound::Command(AgentCommand::ApprovalResult { id, decision }) => {
+            TaskAction::ApprovalResult {
+                decision,
+                grant_signatures,
+            } => {
                 let marker = match &decision {
-                    ApprovalDecision::Approved => {
-                        format!("[approval {id}] approved by the human.")
-                    }
+                    ApprovalDecision::Approved => "[approval] approved by the human.".to_owned(),
                     ApprovalDecision::Rejected(reason) => {
-                        format!("[approval {id}] rejected by the human: {reason}")
+                        format!("[approval] rejected by the human: {reason}")
                     }
                 };
                 self.transcript.append_user(&marker, false);
-                self.record_grants(&decision);
-                self.state.get_mut().lifecycle = AgentLifecycle::Running;
+                self.record_grants(&decision, grant_signatures);
             }
-            Inbound::Control(ControlSignal::EndConversation { final_message }) => {
+            TaskAction::EndConversation { final_message } => {
                 self.transcript.commit_ended(&final_message);
-                self.state.get_mut().lifecycle = AgentLifecycle::Idle;
                 self.outcome = Some(TickOutcome::Ended { final_message });
             }
         }
@@ -111,14 +113,15 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
                         None => AssistantCommit::PlainText(&answer.text),
                     };
                     self.transcript.commit_assistant(commit);
-                    self.state.get_mut().lifecycle = AgentLifecycle::Idle;
+                    self.state.get_mut().task_mut().finish_task();
                     self.outcome = Some(TickOutcome::Yielded { text: answer.text });
                 }
                 CompletedKind::Tools(tools) => {
                     // A tool round is a non-terminal iteration: keep it in the
                     // open turn so the whole user request stays one user-started
                     // group, committed only by the terminal iteration.
-                    self.transcript.append_patch(&tools.appended.0);
+                    self.transcript
+                        .append_patch(&tools.appended.into_json_array());
                     self.apply_tool_block_policy(&tools.runs);
                     self.maybe_raise_approval(&tools.runs);
                 }
@@ -160,19 +163,21 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         let Some((summary, _)) = pending.first().cloned() else {
             return;
         };
-        let id = {
-            let state = self.state.get_mut();
-            state.pending_grant_signatures = pending.into_iter().map(|(_, sig)| sig).collect();
-            let id = state.approvals.next();
-            state.lifecycle = AgentLifecycle::AwaitingApproval(id);
-            id
-        };
-        self.outcome = Some(TickOutcome::AwaitingApproval { id, summary });
+        let signatures = pending.into_iter().map(|(_, sig)| sig).collect();
+        if let Err(error) = self.state.get_mut().task_mut().await_approval(signatures) {
+            tracing::error!(
+                name: "task_phase_transition_failed",
+                transition = "await_approval",
+                detail = %error,
+            );
+            self.fail_with(AgentRunError::TaskStateInvariant);
+            return;
+        }
+        self.outcome = Some(TickOutcome::AwaitingApproval { summary });
     }
 
-    fn record_grants(&mut self, decision: &ApprovalDecision) {
+    fn record_grants(&mut self, decision: &ApprovalDecision, signatures: Vec<String>) {
         let state = self.state.get_mut();
-        let signatures = std::mem::take(&mut state.pending_grant_signatures);
         let grant = match decision {
             ApprovalDecision::Approved => Grant::Granted,
             ApprovalDecision::Rejected(reason) => Grant::Denied(reason.clone()),
@@ -187,7 +192,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     }
 
     fn fail_with(&mut self, error: AgentRunError) {
-        self.state.get_mut().lifecycle = AgentLifecycle::Idle;
+        self.state.get_mut().task_mut().finish_task();
         self.outcome = Some(TickOutcome::Failed(error));
     }
 
@@ -195,13 +200,11 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         if outcome.produced.is_empty() {
             return;
         }
-        if has_dangling_tool_calls(&outcome.produced.0) {
+        if has_dangling_tool_calls(outcome.produced.as_slice()) {
             let tool_call_count = outcome
                 .produced
-                .0
-                .as_array()
-                .into_iter()
-                .flatten()
+                .as_slice()
+                .iter()
                 .filter_map(|message| message.get("tool_calls").and_then(Value::as_array))
                 .map(|calls| calls.len())
                 .sum::<usize>();
@@ -214,25 +217,21 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         // Preemption ends the iteration but the turn continues in a fresh
         // iteration, so keep the salvaged work in the open turn rather than
         // closing it into its own user-less group.
-        self.transcript.append_patch(&outcome.produced.0);
+        self.transcript
+            .append_patch(&outcome.produced.into_json_array());
     }
 
-    fn append_task_input(&mut self, text: &str) {
-        let starts_task = self.state.get().lifecycle == AgentLifecycle::Idle;
+    fn append_task_input(&mut self, text: &str, starts_task: bool) {
         if starts_task {
             let state = self.state.get_mut();
             state.iterations = IterationIdAllocator::new();
-            state.lifecycle = AgentLifecycle::Running;
             self.outcome = None;
         }
         self.transcript.append_user(text, starts_task);
     }
 }
 
-fn has_dangling_tool_calls(patch: &Value) -> bool {
-    let Some(items) = patch.as_array() else {
-        return false;
-    };
+fn has_dangling_tool_calls(items: &[Value]) -> bool {
     let mut expected: Vec<&str> = Vec::new();
     let mut satisfied: HashSet<&str> = HashSet::new();
     for message in items {

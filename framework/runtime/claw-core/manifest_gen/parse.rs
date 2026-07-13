@@ -13,42 +13,42 @@ use crate::model::{AgentJson, SkillsJson, ToolsJson};
 /// One fully-parsed, validated kind directory before the shared `common/` base is
 /// inherited. Strings are owned here; [`crate::agent_manifests::inherit_base`]
 /// folds in common entries and produces a [`ParsedManifest`] ready for codegen.
-pub struct ParsedKind {
-    pub kind: String,
-    pub description: String,
-    pub spawn_enabled: bool,
-    pub allowed_kinds: Vec<String>,
-    pub retries: u32,
-    pub tool_block_retries: u32,
-    pub tool_groups: Vec<String>,
-    pub skills: Vec<String>,
+pub(crate) struct ParsedKind {
+    pub(crate) kind: String,
+    pub(crate) description: String,
+    pub(crate) spawn_enabled: bool,
+    pub(crate) allowed_kinds: Vec<String>,
+    pub(crate) retries: u32,
+    pub(crate) tool_block_retries: u32,
+    pub(crate) tool_groups: Vec<String>,
+    pub(crate) skills: Vec<String>,
     /// Absolute path to `instructions.md`, embedded via `include_str!` in the
     /// generated code so the bytes are not duplicated into the generated source.
-    pub instructions_path: PathBuf,
+    pub(crate) instructions_path: PathBuf,
 }
 
 /// A fully-parsed manifest after the shared `common/` base has been inherited —
 /// the build-time counterpart to the runtime `AgentManifest`.
-pub struct ParsedManifest {
-    pub kind: String,
-    pub description: String,
-    pub spawn_enabled: bool,
-    pub allowed_kinds: Vec<String>,
-    pub retries: u32,
-    pub tool_block_retries: u32,
-    pub tool_groups: Vec<String>,
-    pub skills: Vec<String>,
+pub(crate) struct ParsedManifest {
+    pub(crate) kind: String,
+    pub(crate) description: String,
+    pub(crate) spawn_enabled: bool,
+    pub(crate) allowed_kinds: Vec<String>,
+    pub(crate) retries: u32,
+    pub(crate) tool_block_retries: u32,
+    pub(crate) tool_groups: Vec<String>,
+    pub(crate) skills: Vec<String>,
     /// Absolute path to `instructions.md`, embedded via `include_str!` in the
     /// generated code so the bytes are not duplicated into the generated source.
-    pub instructions_path: PathBuf,
+    pub(crate) instructions_path: PathBuf,
     /// Absolute path to the shared `common/instructions.md` preamble, prepended
     /// (via `include_str!`) before this kind's own instructions at codegen.
-    pub common_instructions_path: PathBuf,
+    pub(crate) common_instructions_path: PathBuf,
 }
 
 /// The manifest files expected in every kind directory; also the set the build
 /// script registers for `rerun-if-changed`.
-pub const MANIFEST_FILES: &[&str] = &[
+pub(crate) const MANIFEST_FILES: &[&str] = &[
     "agent.json",
     "tools/tools.json",
     "skills/skills.json",
@@ -58,7 +58,7 @@ pub const MANIFEST_FILES: &[&str] = &[
 /// Files the shared `common/` base is tracked for `rerun-if-changed`. `agent.json`
 /// is included so that *adding* one re-triggers the build (and fails it, since
 /// the shared base must not declare an agent kind).
-pub const COMMON_FILES: &[&str] = &[
+pub(crate) const COMMON_FILES: &[&str] = &[
     "tools/tools.json",
     "skills/skills.json",
     "instructions.md",
@@ -82,11 +82,11 @@ const SKILLS_DIR_ENTRIES: &[&str] = &["skills.json"];
 
 /// The shared `common/` base inherited by every kind: default tool/skill
 /// names plus the instructions preamble prepended to each kind's prompt.
-pub struct CommonBase {
-    pub tool_groups: Vec<String>,
-    pub skills: Vec<String>,
+pub(crate) struct CommonBase {
+    pub(crate) tool_groups: Vec<String>,
+    pub(crate) skills: Vec<String>,
     /// Absolute path to `common/instructions.md`, the shared preamble.
-    pub instructions_path: PathBuf,
+    pub(crate) instructions_path: PathBuf,
 }
 
 /// Parse the shared `common/` base at `common_dir`.
@@ -100,7 +100,7 @@ pub struct CommonBase {
 ///
 /// Errors if `common/` contains `agent.json`, has a missing/stray entry, or if
 /// its `tools.json` / `skills.json` is malformed.
-pub fn parse_common(common_dir: &Path) -> Result<CommonBase> {
+pub(crate) fn parse_common(common_dir: &Path) -> Result<CommonBase> {
     if common_dir.join("agent.json").is_file() {
         bail!(
             "{} must not contain agent.json: the shared base defines default \
@@ -138,7 +138,7 @@ pub fn parse_common(common_dir: &Path) -> Result<CommonBase> {
 ///
 /// The directory name is the source of truth for the kind: `agent.json`'s
 /// declared `kind` must match it, otherwise the build fails.
-pub fn parse_kind(dir: &Path) -> Result<ParsedKind> {
+pub(crate) fn parse_kind(dir: &Path) -> Result<ParsedKind> {
     let dir_name = dir
         .file_name()
         .and_then(|name| name.to_str())

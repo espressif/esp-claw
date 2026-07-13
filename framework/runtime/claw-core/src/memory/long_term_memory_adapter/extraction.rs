@@ -23,14 +23,14 @@ use strum::IntoStaticStr;
 /// One fact an [`Extractor`] distilled from a transcript.
 ///
 /// Carries the same shape a [`MemoryDraft`](claw_memory::MemoryDraft) needs.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct ExtractedItem {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ExtractedItem {
     /// The distilled fact, in concise third person.
-    pub content: String,
+    pub(super) content: String,
     /// Topic labels to file it under.
-    pub tags: Vec<String>,
+    pub(super) tags: Vec<String>,
     /// Extra search terms.
-    pub keywords: Vec<String>,
+    pub(super) keywords: Vec<String>,
 }
 
 /// A compact view of one already-stored fact, handed to the [`Extractor`] so it
@@ -40,22 +40,22 @@ pub struct ExtractedItem {
 /// extractor only needs to recognize a fact and cite it, not its provenance or
 /// ordering.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MemorySnapshot {
+pub(crate) struct MemorySnapshot {
     /// The stored fact's stable id (the handle for `Replace`/`Forget`).
-    pub id: MemoryId,
+    pub(super) id: MemoryId,
     /// The stored fact's content.
-    pub content: String,
+    pub(super) content: String,
     /// The labels it is filed under.
-    pub tags: Vec<String>,
+    pub(super) tags: Vec<String>,
 }
 
 /// What the [`Extractor`] sees: the recent conversation plus the current memory.
 #[derive(Clone, Copy, Debug)]
-pub struct ExtractionInput<'a> {
+pub(crate) struct ExtractionInput<'a> {
     /// A flattened, self-contained snapshot of the recent conversation.
-    pub transcript: &'a str,
+    pub(super) transcript: &'a str,
     /// The facts already stored, so edits/removals can cite an existing id.
-    pub existing: &'a [MemorySnapshot],
+    pub(super) existing: &'a [MemorySnapshot],
 }
 
 /// A single change an [`Extractor`] proposes against long-term memory.
@@ -64,7 +64,7 @@ pub struct ExtractionInput<'a> {
 /// cited fact in place, `Forget` removes it. `Replace`/`Forget` name a fact by
 /// the [`MemoryId`] the extractor saw in a [`MemorySnapshot`].
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MemoryOp {
+pub(crate) enum MemoryOp {
     /// Store a newly-distilled fact.
     Add(ExtractedItem),
     /// Replace the cited fact's content/labels with `item`.
@@ -86,7 +86,7 @@ pub enum MemoryOp {
 /// Extraction is best-effort: on error the adapter logs the reason and keeps the
 /// existing memory, but the concrete source is still preserved for diagnostics.
 #[derive(Debug, Clone, IntoStaticStr, PartialEq, Eq, thiserror::Error)]
-pub enum ExtractError {
+pub(crate) enum ExtractError {
     /// The extraction backend (e.g. the LLM client) failed.
     #[strum(serialize = "backend")]
     #[error("extraction backend failed: {0}")]
@@ -97,14 +97,14 @@ pub enum ExtractError {
     EmptyOutput,
 }
 
-pub type ExtractFuture<'a> =
+pub(super) type ExtractFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Vec<MemoryOp>, ExtractError>> + 'a>>;
 
 /// Reconciles long-term memory against a conversation, emitting zero or more
 /// [`MemoryOp`]s.
 ///
 /// Returning an empty `Vec` is normal — most turns hold nothing worth changing.
-pub trait Extractor {
+pub(crate) trait Extractor {
     /// Propose memory changes from `input` (transcript + current memory).
     fn extract<'a>(&'a self, input: ExtractionInput<'a>) -> ExtractFuture<'a>;
 }

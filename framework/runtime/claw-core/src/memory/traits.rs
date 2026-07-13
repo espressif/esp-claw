@@ -10,8 +10,8 @@
 //! - [`History`] (read): the message snapshot + a change [`version`](History::version),
 //! - [`Transcript`] (write): the boundary writes the agent drives directly.
 //!
-//! Every [`ContextAdapter`] is a **pure projector**: given a narrow input view, it
-//! contributes first-class context items into a `claw-context` sink and may
+//! Every [`ContextAdapter`] contributes first-class context items into a
+//! `claw-context` sink and may
 //! schedule its own background work into its own store. There is no event bus and
 //! nothing is pushed at an adapter — an adapter pulls the source views it needs
 //! during [`contribute`](ContextAdapter::contribute) and self-detects change by
@@ -35,7 +35,7 @@ use serde_json::{json, Value};
 /// storage/compaction/persistence — and a filesystem type parameter — along).
 ///
 /// Both request assembly and every pluggable [`ContextAdapter`] read through it.
-pub trait History {
+pub(crate) trait History {
     /// The current transcript as a JSON array of chat messages.
     ///
     /// Returns an [`Arc`] so the snapshot is shared, not deep-copied, on every
@@ -54,7 +54,7 @@ pub trait History {
 }
 
 /// Assistant message shape to commit into the transcript.
-pub enum AssistantCommit<'a> {
+pub(crate) enum AssistantCommit<'a> {
     /// Backend-shaped assistant message JSON returned by the LLM.
     RawJson(&'a str),
     /// Plain assistant text; the transcript layer wraps it as an assistant
@@ -69,7 +69,7 @@ pub enum AssistantCommit<'a> {
 /// The agent holds this as `Arc<dyn Transcript>` and writes through it directly
 /// (no event indirection); it lends the read view to adapters via
 /// [`as_history`](Self::as_history).
-pub trait Transcript: History {
+pub(crate) trait Transcript: History {
     /// Append a user message, reusing the open turn or opening a new one. When
     /// `starts_task`, first close out any turn a prior task left open so the new
     /// task starts a fresh group.
@@ -151,19 +151,11 @@ impl<F: ClawFs + 'static> Transcript for TranscriptStore<F> {
     }
 }
 
-/// The read-only runtime sources an adapter may project into context.
-#[derive(Clone, Copy)]
-pub struct ContextAdapterInput<'a> {
-    /// The conversation transcript read view.
-    pub history: &'a dyn History,
-}
-
 /// Future returned by [`ContextAdapter::prepare`].
-pub type ContextAdapterFuture<'a> = Pin<Box<dyn Future<Output = ()> + 'a>>;
+pub(super) type ContextAdapterFuture<'a> = Pin<Box<dyn Future<Output = ()> + 'a>>;
 
-/// A pluggable context source: a pure projector over [`ContextAdapterInput`] that
-/// contributes to the next LLM request through a `claw-context` [`ContextSink`],
-/// and may provide model-callable tools.
+/// A pluggable source that contributes to the next LLM request and may provide
+/// model-callable tools.
 ///
 /// Owned by the agent (one `Box<dyn ContextAdapter>` per registration) and driven
 /// from its single tick thread.
@@ -171,17 +163,17 @@ pub type ContextAdapterFuture<'a> = Pin<Box<dyn Future<Output = ()> + 'a>>;
 /// The agent does not decide whether a source is a system block, history message,
 /// or ephemeral reminder; each adapter emits the correct item into the sink and
 /// `claw-context` owns placement, ordering, and render caches.
-pub trait ContextAdapter {
+pub(crate) trait ContextAdapter {
     /// Refresh any async state needed for the next contribution.
     ///
     /// Called from the agent's local async tick before [`contribute`](Self::contribute).
     /// The default is a no-op for purely synchronous projectors.
-    fn prepare<'a>(&'a mut self, _input: ContextAdapterInput<'a>) -> ContextAdapterFuture<'a> {
+    fn prepare<'a>(&'a mut self, _history: &'a dyn History) -> ContextAdapterFuture<'a> {
         Box::pin(async {})
     }
 
     /// Project this source into the request context for the current iteration.
-    fn contribute(&mut self, input: ContextAdapterInput<'_>, output: &mut ContextSink<'_>);
+    fn contribute(&mut self, output: &mut ContextSink<'_>);
 
     /// The model-callable tools this adapter provides.
     ///

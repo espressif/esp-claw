@@ -1,3 +1,5 @@
+#![deny(unreachable_pub)]
+
 //! `claw_core` — runtime primitives for the agent orchestrator.
 //!
 //! Layer 1: [`Orchestrator`]
@@ -12,11 +14,10 @@ mod session;
 pub(crate) use claw_utils::{define_id_allocator, define_prefixed_id};
 
 pub use agent::IterationId;
-pub use config::{ApiUsage, ClawApiManager};
+pub use config::ApiUsage;
 pub use event::SessionEvent;
 pub use orchestrator::{
     OpenSessionError, Orchestrator, OrchestratorBuildError, ReasoningEffort, SessionControl,
     SessionControlError, SessionEventStream,
 };
-pub use session::{AttachmentId, AttachmentKind, AttachmentRecord, AttachmentRef, Message};
-pub use session::{SessionId, SessionPersistence, TurnId};
+pub use session::{Message, SessionId, SessionPersistence, TurnId};

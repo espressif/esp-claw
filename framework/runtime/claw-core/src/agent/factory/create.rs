@@ -1,23 +1,28 @@
 use std::sync::Arc;
 
-use claw_context::Block;
+use claw_context::{Block, BlockKind};
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
-use claw_memory::TranscriptStore;
+use claw_memory::{Compactor, TranscriptStore};
 
-use crate::agent::base_agent::{AgentCommand, AgentId};
+use crate::agent::base_agent::{AgentCommand, AgentId, BaseAgent, BaseAgentConfig};
 use crate::agent::config::{AgentConfig, AgentConfigError};
-use crate::agent::generic_agent::GenericAgent;
-use crate::agent::graph::GraphHost;
+use crate::agent::graph::{AgentContext, GraphHost};
 use crate::agent::kind::AgentKind;
 use crate::agent::manifest::AgentManifest;
-use crate::agent::tools::discovery_tools;
-use crate::agent::Agent;
-use crate::memory::{agent_store, LongTermMemoryContextAdapter, ProfileContextAdapter};
+use crate::agent::tools::{discovery_tools, subagent_tools};
+use crate::memory::{
+    CompactionPolicy, ConversationHistoryContextAdapter, LlmCompactor,
+    LongTermMemoryContextAdapter, ProfileContextAdapter,
+};
 
 use super::error::FsAgentCreateError;
-use super::layout::{join_storage_path, AgentPlacement};
+use super::layout::AgentPlacement;
 use super::FsAgentFactory;
+
+const COMPACTION_TRIGGER_TOKENS: usize = 6000;
+const COMPACTION_KEEP_RECENT_TOKENS: usize = 2000;
+const COMPACTION_SEGMENT_TOKEN_BUDGET: usize = 1500;
 
 impl<
         Filesystem: ClawFs + 'static,
@@ -45,8 +50,8 @@ impl<
         goal: String,
         placement: AgentPlacement,
         host: Arc<dyn GraphHost>,
-        inherited_context: Arc<[Block<'static>]>,
-    ) -> Result<Box<dyn Agent>, FsAgentCreateError> {
+        inherited_context: Vec<Block<'static>>,
+    ) -> Result<BaseAgent<Http, Timer>, FsAgentCreateError> {
         let span = tracing::info_span!("agent.create");
         let _enter = span.enter();
         // The config is pure data. Registry tools are projected here, then
@@ -66,6 +71,10 @@ impl<
         let mut tools = self.tools.tool_set();
         tools.retain_registry_groups(manifest.tool_groups);
         tools.add_group(discovery_tools(tools.discovery()))?;
+        let graph_context = Arc::new(AgentContext::new(id, host));
+        if config.spawn_enabled {
+            tools.add_group(subagent_tools(graph_context, config.spawn_policy))?;
+        }
 
         // Every agent gets a transcript for context management; `persists` only
         // decides whether it is written to disk.
@@ -85,17 +94,20 @@ impl<
         } else {
             TranscriptStore::<Filesystem>::in_memory(transcript_id)
         };
-        // The LLM client and transport are built inside the agent. Its config is
-        // selected from the shared manager at the start of each turn.
-        let mut agent = match GenericAgent::<Http, Timer>::new(
-            id,
+        let conversation_history_store = store.clone();
+
+        // This is the single configured-agent assembly point. BaseAgent adds
+        // only its invariant built-ins (skill projection and conversation_end).
+        let base_config = BaseAgentConfig {
             store,
-            config,
             tools,
-            host,
+            skills: config.skills,
+            agent_instruction: Block::new(BlockKind::AgentInstruction, config.system_prompt),
             inherited_context,
-            Arc::clone(&self.api_manager),
-        ) {
+            retry_policy: config.retry_policy,
+            block_retries: config.tool_block_retries,
+        };
+        let mut agent = match BaseAgent::<Http, Timer>::build(base_config) {
             Ok(agent) => agent,
             Err(error) => {
                 tracing::error!(
@@ -106,6 +118,28 @@ impl<
                 return Err(FsAgentCreateError::Agent(error));
             }
         };
+
+        let compactor: Box<dyn Compactor> = Box::new(LlmCompactor::<Http, Timer>::new(Arc::clone(
+            &self.api_manager,
+        )));
+        let conversation_history = ConversationHistoryContextAdapter::new(
+            conversation_history_store,
+            compactor,
+            CompactionPolicy::new(
+                COMPACTION_TRIGGER_TOKENS,
+                COMPACTION_KEEP_RECENT_TOKENS,
+                COMPACTION_SEGMENT_TOKEN_BUDGET,
+            ),
+        );
+        if let Err(error) = agent.register_context_adapter(Box::new(conversation_history)) {
+            tracing::error!(
+                name: "context_adapter_attach_failed",
+                agent = %id,
+                adapter = "conversation_history",
+                kind = %kind.as_str(),
+            );
+            return Err(FsAgentCreateError::Agent(error));
+        }
 
         let profile_adapter = ProfileContextAdapter::new(self.profile.clone(), is_root);
         if let Err(error) = agent.register_context_adapter(Box::new(profile_adapter)) {
@@ -119,8 +153,7 @@ impl<
         }
 
         let long_term = &self.long_term;
-        let agent_dir = join_storage_path(&long_term.agent_root_dir, kind.as_str());
-        let agent_memory = match agent_store::<Filesystem>(&agent_dir) {
+        let agent_memory = match long_term.agent_store(kind.as_str()) {
             Ok(store) => store,
             Err(error) => {
                 tracing::error!(
@@ -135,7 +168,6 @@ impl<
         let adapter = LongTermMemoryContextAdapter::new(
             agent_memory,
             long_term.global.clone(),
-            Arc::clone(&long_term.classifier),
             Arc::clone(&long_term.extractor),
         );
         if let Err(error) = agent.register_context_adapter(Box::new(adapter)) {
@@ -160,7 +192,7 @@ impl<
         }
 
         tracing::info!(name: "created", agent = %id, kind = %kind.as_str());
-        Ok(Box::new(agent))
+        Ok(agent)
     }
 
     fn resolve_config(&self, kind: &AgentKind) -> Result<AgentConfig, AgentConfigError> {

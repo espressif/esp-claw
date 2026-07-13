@@ -7,7 +7,6 @@ AgentSystem
   -> Orchestrator
   -> Engine
   -> OrchestratorInstance
-  -> Agent
   -> BaseAgent
   -> IterationLoop
   -> claw-api / claw-tool
@@ -22,14 +21,13 @@ ends, waits for approval, fails, or is interrupted.
 | Type | Role | Owned state |
 | --- | --- | --- |
 | `AgentSystem` | Public runtime entry point in `claw-agent`. Builds the runtime and exposes sessions and tools. | `ToolRegistry`, `Orchestrator` |
-| `Orchestrator` | Thread-safe session facade. Sends commands to the worker engine and returns session controls and event streams. | Session registry, command sender, API configuration |
-| `Engine` | Runs all sessions on one worker thread and coordinates checkpoints. | Session drives, session agent runtimes, agent factory |
-| `SessionDrive` | Stores Turn state and process-local drive state for one session. | Active turn, turn counter, reasoning effort, event sink, control flags |
+| `Orchestrator` | Thread-safe session facade. Sends commands to the worker engine and returns session controls and event streams. | Command sender, shared session view, API configuration |
+| `Engine` | Runs all sessions on one worker thread and coordinates checkpoints. | Session runtimes, session registry, agent factory |
+| `SessionRuntime` | Owns all engine-level state for one session and decides whether input/control can be accepted. | Session drive and its lazily-created agent instance |
+| `SessionDrive` | Stores turn state and process-local I/O state behind `SessionRuntime`. | Active turn, turn counter, reasoning effort, event sink, control flags |
 | `OrchestratorInstance` | Runs the agent graph for one session. Schedules agents and routes results, approvals, and graph effects. | Agent registry, graph, ready queue, in-flight tasks, pending approvals |
 | `FsAgentFactory` | Resolves an agent manifest and assembles its tools, memory stores, skills, and context adapters. | Shared tool registry, skill registry, memory stores, API manager |
-| `Agent` | Scheduler-facing contract for commands, ticks, child results, control, and durable state. | Defined by each implementation |
-| `GenericAgent` | Configured agent implementation backed by `BaseAgent`. Adds graph tools and conversation-memory adapters. | Agent id, `BaseAgent` |
-| `BaseAgent` | Executes one agent task as a sequence of ticks and iterations. | Transcript, context, tool view, adapters, LLM client, task state |
+| `BaseAgent` | Concrete agent stored and driven by the session instance; executes one configured task as a sequence of ticks and iterations. | Transcript, context, tool view, adapters, LLM client, canonical task phase and mailbox |
 | `IterationLoop` | Executes one LLM request and its optional tool calls. | Borrowed iteration inputs only |
 | `ContextAdapter` | Projects memory, skills, and other sources into model context. | Adapter-specific state |
 | `ClawApiManager` | Selects the LLM configuration for each runtime usage. | API configurations and usage bindings |
@@ -63,10 +61,10 @@ ends, waits for approval, fails, or is interrupted.
 
 ## Scheduling
 
-`Engine` multiplexes sessions. Each `OrchestratorInstance` multiplexes the root
-agent and its subagents. Each agent tick advances one task. Background subagents
-keep the current turn active and deliver their results through the session agent
-graph.
+`Engine` multiplexes `SessionRuntime` objects. Each `OrchestratorInstance`
+multiplexes the root agent and its subagents. Each agent tick advances one task.
+Background subagents keep the current turn active and deliver their results
+through the session agent graph.
 
 ## Persistence
 

@@ -1,21 +1,14 @@
-use std::sync::Arc;
+use std::rc::Rc;
 
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::session::SessionId;
 
-use super::super::instance::{OrchestratorInstance, OrchestratorInstanceState};
-use super::Engine;
+use super::super::instance::{InstanceWork, OrchestratorInstance, OrchestratorInstanceState};
+use super::{Engine, SessionRuntime};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum InstanceWork {
-    None,
-    Root,
-    Background,
-}
-
-/// Holds a session instance out of the engine map and reinserts it on drop.
+/// Holds an instance out of its session runtime and reinserts it on drop.
 pub(super) struct InstanceSlot<'a, Filesystem, Http, Timer>
 where
     Filesystem: ClawFs + 'static,
@@ -72,35 +65,34 @@ where
     Timer: ClawTimer + Default + 'static,
 {
     pub(super) fn instance_work(&self, session_id: SessionId) -> InstanceWork {
-        match self.instances.borrow().get(&session_id) {
-            Some(instance) => instance.work(),
-            None => InstanceWork::None,
-        }
-    }
-
-    pub(super) fn instance_has_root_work(&self, session_id: SessionId) -> bool {
-        self.instances
+        self.runtimes
             .borrow()
             .get(&session_id)
-            .is_some_and(|instance| instance.work() == InstanceWork::Root)
+            .map_or(InstanceWork::None, SessionRuntime::work)
     }
 
     pub(super) fn instance_has_active_approval(&self, session_id: SessionId) -> bool {
-        self.instances
+        self.runtimes
             .borrow()
             .get(&session_id)
-            .is_some_and(|instance| instance.active_approval().is_some())
+            .is_some_and(SessionRuntime::has_active_approval)
     }
 
     pub(super) fn checkout_instance(
         &self,
         session_id: SessionId,
     ) -> InstanceSlot<'_, Filesystem, Http, Timer> {
-        let instance = match self.instances.borrow_mut().remove(&session_id) {
+        let instance = match self
+            .runtimes
+            .borrow_mut()
+            .get_mut(&session_id)
+            .expect("an instance is only checked out for a live session runtime")
+            .take_instance()
+        {
             Some(instance) => instance,
             None => OrchestratorInstance::new(
                 session_id,
-                Arc::clone(&self.factory),
+                Rc::clone(&self.factory),
                 self.state.get().agent_id_allocator.clone(),
                 OrchestratorInstanceState::default(),
             ),
@@ -112,7 +104,11 @@ where
         &self,
         session_id: SessionId,
     ) -> Option<InstanceSlot<'_, Filesystem, Http, Timer>> {
-        let instance = self.instances.borrow_mut().remove(&session_id)?;
+        let instance = self
+            .runtimes
+            .borrow_mut()
+            .get_mut(&session_id)?
+            .take_instance()?;
         Some(InstanceSlot::new(self, session_id, instance))
     }
 
@@ -124,6 +120,8 @@ where
         if !self.sessions.contains(session_id) {
             return;
         }
-        self.instances.borrow_mut().insert(session_id, instance);
+        if let Some(runtime) = self.runtimes.borrow_mut().get_mut(&session_id) {
+            runtime.put_instance(instance);
+        }
     }
 }

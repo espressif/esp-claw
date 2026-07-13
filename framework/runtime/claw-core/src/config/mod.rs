@@ -29,7 +29,7 @@ pub enum ApiUsage {
 /// that already exists **replaces** the stored config (e.g. to rotate a key), and
 /// every usage bound to that model then resolves to the updated config.
 #[derive(Debug, Default, Clone)]
-pub struct ClawApiManager {
+pub(crate) struct ClawApiManager {
     /// Configs by model name (one per model).
     by_model: HashMap<String, ClawApiConfig>,
     /// Usage → the model name it resolves to.
@@ -42,7 +42,7 @@ impl ClawApiManager {
     /// An empty manager. [`get_api`](Self::get_api) returns `None` for every
     /// usage until something is linked.
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
@@ -56,7 +56,7 @@ impl ClawApiManager {
     /// # Errors
     ///
     /// Returns [`InitError`] without changing the manager when `api` is invalid.
-    pub fn link_api(
+    pub(crate) fn link_api(
         &mut self,
         api: ClawApiConfig,
         usage: ApiUsage,
@@ -75,7 +75,7 @@ impl ClawApiManager {
     /// Resolve the config for `usage`: its explicit binding if present, otherwise
     /// the default, otherwise `None`.
     #[must_use]
-    pub fn get_api(&self, usage: ApiUsage) -> Option<ClawApiConfig> {
+    pub(crate) fn get_api(&self, usage: ApiUsage) -> Option<ClawApiConfig> {
         let model = self.usage.get(&usage).or(self.default_model.as_ref())?;
         self.by_model.get(model).cloned()
     }

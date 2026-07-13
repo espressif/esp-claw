@@ -5,6 +5,8 @@
 - [x] keep everything else unchanged with master but not agent
 - [ ] better context management
 - [ ] cleaned up stale configuration
+- [ ] cleaned up sse bad designs
+- [ ] cleaned up multiagent bugs
 - [ ] efficient checkpointing system
 - speeded up agent system perf
   - [x] max_token optimization (reasoning efforts), and per model
@@ -13,6 +15,11 @@
 - [x] tool search
 - [x] subagent followup(agent-id, message) — cancel current task and retask
 - [ ] refactor (cleaned up runtime/)
+- [ ] reduced memory use by 80%
+- [ ] test plan
+  - [ ] skills
+  - [ ] tools
+  - [ ] multiagent
 
 ## Stage 1 - Goal 2
 

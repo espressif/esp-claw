@@ -80,22 +80,14 @@ where
         if self.sessions.persistence(session_id) != Some(SessionPersistence::Persistent) {
             return Ok(());
         }
-        let drive_snapshot = {
-            let drives = self.drives.borrow();
-            let Some(drive) = drives.get(&session_id) else {
+        let (drive_snapshot, instance_snapshot) = {
+            let runtimes = self.runtimes.borrow();
+            let Some(runtime) = runtimes.get(&session_id) else {
                 return Ok(());
             };
-            DurablePartSnapshot::capture(drive)?
+            runtime.capture_checkpoint_parts()?
         };
         let engine_snapshot = DurablePartSnapshot::capture(self)?;
-        let instance_snapshot = {
-            let instances = self.instances.borrow();
-            if let Some(instance) = instances.get(&session_id) {
-                Some(DurablePartSnapshot::capture(instance)?)
-            } else {
-                None
-            }
-        };
         let mut session_parts = vec![drive_snapshot];
         if let Some(instance_snapshot) = instance_snapshot {
             session_parts.push(instance_snapshot);

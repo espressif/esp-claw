@@ -1,12 +1,11 @@
 //! Per-session agent runtime: the **graph + scheduler + lifecycle policy**.
 //!
 //! Each session owns one [`OrchestratorInstance`]. It holds:
-//! - an [`AgentRegistry`] — the session's agent *store* (build / get-handle /
-//!   remove), graph-blind and schedule-blind;
-//! - `meta` — the agent **graph** (parent edge, depth, kind) keyed by [`AgentId`],
-//!   owned here so all relationship algorithms are local and lock-free;
-//! - the **scheduler** state (`ready`, pending approvals) and the drive loop;
-//! - `root` — the session's user-facing agent.
+//! - durable graph state — root plus node topology and lifecycle metadata;
+//! - durable scheduler state — ready work, approvals, and result mailboxes;
+//! - non-durable runtime ownership — the live [`AgentRegistry`] and in-flight
+//!   agent tasks, held directly by the instance;
+//! - an explicit graph read model shared with inspection tools.
 //!
 //! Responsibility line: the instance decides *when* agents run, *what* their tick
 //! outcomes mean (bubble a subagent result to its parent vs. surface a root
@@ -28,27 +27,36 @@
 mod approval_flow;
 mod construction;
 mod drive;
+mod error;
 mod graph_flow;
+mod graph_state;
 mod inflight;
-mod model;
+mod output;
 mod persistence;
+mod scheduler;
+mod state;
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use claw_checkpoint::DurableState;
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
-use crate::agent::{AgentIdAllocator, FsAgentFactory, GraphHost};
+use crate::agent::{AgentIdAllocator, AgentRegistry, FsAgentFactory, GraphHost};
 use crate::session::SessionId;
 
+pub(crate) use self::drive::TurnStopMode;
+pub(crate) use self::error::{ApprovalResolutionError, InstanceDeliverError};
+use self::graph_state::{EffectQueue, SnapshotView};
 use self::inflight::InflightAgentTasks;
-pub(crate) use self::model::{
-    ApprovalResolutionError, DriveOutput, InstanceDeliverError, OrchestratorInstanceState,
-    PendingApproval, RootReply, TurnStopMode,
-};
-use self::model::{EffectQueue, SnapshotView};
-pub use self::persistence::OrchestratorInstanceRestoreError;
+pub(crate) use self::output::DriveOutput;
+pub(crate) use self::persistence::OrchestratorInstanceRestore;
+pub(super) use self::persistence::OrchestratorInstanceRestoreError;
+pub(crate) use self::scheduler::{InstanceWork, PendingApproval};
+pub(crate) use self::state::OrchestratorInstanceState;
+
+pub(in crate::orchestrator::instance) const ROOT_AGENT_KIND: &str = "conversation";
 
 /// One session's agent store, graph, scheduler, and root.
 pub(crate) struct OrchestratorInstance<Filesystem, Http, Timer>
@@ -59,19 +67,21 @@ where
 {
     session: SessionId,
     /// Builds agents (root and children). Owned here; the registry only stores.
-    factory: Arc<FsAgentFactory<Filesystem, Http, Timer>>,
+    factory: Rc<FsAgentFactory<Filesystem, Http, Timer>>,
     /// Shared, process-wide id allocator for roots and spawned children.
     agent_id_allocator: AgentIdAllocator,
     /// Durable graph and scheduler state.
     state: DurableState<OrchestratorInstanceState>,
-    /// Agent ticks currently in flight. Kept on the session instance so a root
-    /// turn can end while background subagents continue running.
-    inflight: InflightAgentTasks,
+    /// Non-durable live agents at rest between ticks.
+    registry: AgentRegistry<Http, Timer>,
+    /// Non-durable ticks currently in flight. Agents move between this table and
+    /// `registry` without becoming part of checkpoint state.
+    inflight: InflightAgentTasks<Http, Timer>,
     /// Graph effects emitted by agents during the current/last tick, applied after
     /// it at a borrow-safe point. Shared with every agent's [`GraphHost`].
     effects: EffectQueue,
     /// The read-only graph projection agents' inspection tools read, refreshed at
-    /// the start of each tick. Shared with every agent's [`GraphHost`].
+    /// scheduling boundaries. Shared with every agent's [`GraphHost`].
     snapshots: SnapshotView,
     /// The [`GraphHost`] handed to every agent this instance builds.
     host: Arc<dyn GraphHost>,

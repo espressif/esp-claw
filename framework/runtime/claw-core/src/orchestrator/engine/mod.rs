@@ -4,6 +4,7 @@ mod instance_store;
 mod persistence;
 mod session_drive;
 mod session_io;
+mod session_runtime;
 mod turn;
 
 use core::cell::RefCell;
@@ -23,14 +24,14 @@ use crate::agent::FsAgentFactory;
 use crate::config::ClawApiManager;
 use crate::session::{SessionId, SessionStore};
 
-use super::checkpoint::{load_engine_state, load_session_drives, load_session_instances};
-use super::instance::OrchestratorInstance;
+use super::checkpoint::{load_engine_state, load_session_runtimes};
 use super::OrchestratorBuildError;
 
-pub(crate) use self::instance_store::InstanceWork;
 pub(super) use self::persistence::EngineState;
-pub(super) use self::session_drive::{SessionDrive, SessionDriveState};
+pub(super) use self::session_drive::SessionDriveState;
 pub(super) use self::session_io::Command;
+pub(in crate::orchestrator) use self::session_runtime::SessionRuntime;
+pub(crate) use super::instance::InstanceWork;
 
 pub(super) type DriveFuture = Pin<Box<dyn Future<Output = ()>>>;
 
@@ -84,11 +85,9 @@ where
     Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
-    pub(super) factory: Arc<FsAgentFactory<Filesystem, Http, Timer>>,
+    pub(super) factory: Rc<FsAgentFactory<Filesystem, Http, Timer>>,
     pub(super) checkpoints: SharedCheckpointCoordinator<FsCheckpointStorage<Filesystem>>,
-    pub(super) instances:
-        RefCell<HashMap<SessionId, OrchestratorInstance<Filesystem, Http, Timer>>>,
-    pub(super) drives: RefCell<HashMap<SessionId, SessionDrive>>,
+    runtimes: RefCell<HashMap<SessionId, SessionRuntime<Filesystem, Http, Timer>>>,
     sessions: Arc<SessionStore>,
     pub(super) state: DurableState<EngineState>,
     /// Per-usage LLM config, shared with the orchestrator handle. Read at the
@@ -113,24 +112,22 @@ where
         state: EngineState,
         api_manager: Arc<RwLock<ClawApiManager>>,
     ) -> Result<Self, OrchestratorBuildError> {
-        let factory = Arc::new(FsAgentFactory::<Filesystem, Http, Timer>::new(
+        let factory = Rc::new(FsAgentFactory::<Filesystem, Http, Timer>::new(
             tools,
             persistence_dir,
             skill_roots,
             Arc::clone(&api_manager),
         )?);
-        let drives = load_session_drives::<Filesystem>(&checkpoint_dir, sessions.as_ref())?;
-        let instances = load_session_instances::<Filesystem, Http, Timer>(
+        let runtimes = load_session_runtimes::<Filesystem, Http, Timer>(
             &checkpoint_dir,
             sessions.as_ref(),
-            Arc::clone(&factory),
+            Rc::clone(&factory),
             state.agent_id_allocator.clone(),
         )?;
         Ok(Self {
             factory,
             checkpoints,
-            instances: RefCell::new(instances),
-            drives: RefCell::new(drives),
+            runtimes: RefCell::new(runtimes),
             sessions,
             state: DurableState::new(state),
             api_manager,

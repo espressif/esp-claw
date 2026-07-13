@@ -38,7 +38,7 @@ const SHARED_DIR: &str = "common";
 /// Returns an error if the resources directory cannot be read, a manifest is
 /// malformed/invalid (via [`parse_kind`]), no kinds are found, or the output
 /// file cannot be written — any of which fails the build.
-pub fn generate(manifest_dir: &Path, out_dir: &Path) -> Result<()> {
+pub(crate) fn generate(manifest_dir: &Path, out_dir: &Path) -> Result<()> {
     let agents_dir = manifest_dir.join("resources/agents");
     // Re-run when a kind is added or removed.
     println!("cargo:rerun-if-changed={}", agents_dir.display());

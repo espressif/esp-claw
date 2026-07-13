@@ -17,8 +17,8 @@ use claw_memory::MemoryId;
 use tracing::Instrument as _;
 
 use crate::config::{ApiUsage, ClawApiManager};
+use crate::memory::async_llm::SharedAsyncLlm;
 
-use super::async_llm::SharedAsyncLlm;
 use super::extraction::{
     ExtractError, ExtractFuture, ExtractedItem, ExtractionInput, Extractor, MemoryOp,
     MemorySnapshot,
@@ -55,7 +55,7 @@ const EXTRACT_TRANSCRIPT_HEADER: &str = "CONVERSATION:";
 /// `Arc<dyn Extractor>`, while [`ClawApiAsync::chat`] needs `&mut self`, so
 /// calls borrow the client exclusively without holding a mutex while the future
 /// is running.
-pub struct LlmExtractor<H: ClawHttp, Timer: ClawTimer> {
+pub(crate) struct LlmExtractor<H: ClawHttp, Timer: ClawTimer> {
     api: SharedAsyncLlm<H, Timer>,
     /// Shared per-usage config; the extraction config is applied at the start of
     /// each extraction call.
@@ -64,7 +64,7 @@ pub struct LlmExtractor<H: ClawHttp, Timer: ClawTimer> {
 
 impl<H: ClawHttp + Default + 'static, Timer: ClawTimer + Default + 'static> LlmExtractor<H, Timer> {
     /// Build an extractor with its own unconfigured LLM client.
-    pub fn new(api_manager: Arc<RwLock<ClawApiManager>>) -> Self {
+    pub(crate) fn new(api_manager: Arc<RwLock<ClawApiManager>>) -> Self {
         Self {
             api: SharedAsyncLlm::new(ClawApiAsync::new(H::default(), Timer::default())),
             api_manager,
@@ -72,7 +72,7 @@ impl<H: ClawHttp + Default + 'static, Timer: ClawTimer + Default + 'static> LlmE
     }
 
     /// A ready-to-inject [`Extractor`] using `api_manager`.
-    pub fn shared(api_manager: Arc<RwLock<ClawApiManager>>) -> Arc<dyn Extractor> {
+    pub(crate) fn shared(api_manager: Arc<RwLock<ClawApiManager>>) -> Arc<dyn Extractor> {
         Arc::new(Self::new(api_manager))
     }
 }

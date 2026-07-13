@@ -7,10 +7,7 @@ use core::future::Future;
 use core::pin::Pin;
 use core::task::{Context, Poll};
 
-use claw_agent::{
-    AgentError, AgentSystem, AttachmentId, AttachmentRef, Message, OpenSessionError,
-    SessionControlError,
-};
+use claw_agent::{AgentError, AgentSystem, Message, OpenSessionError, SessionControlError};
 use claw_agent::{SessionEvent, SessionEventStream, SessionId, TurnId};
 use claw_interface::{
     BlockingHttpAdapter, Cancel, ClawHttp, HttpError, HttpJsonRequest, HttpResponseFuture,
@@ -87,13 +84,7 @@ fn session_streams_root_reply_as_output() {
     let session = system.new_session(claw_agent::SessionPersistence::Persistent);
     let (control, mut events) = system.open_session(session).unwrap();
 
-    block_on(control.submit(Message {
-        text: Some("say hi".to_string()),
-        attachments: vec![AttachmentRef {
-            id: AttachmentId(1),
-        }],
-    }))
-    .unwrap();
+    block_on(control.submit(Message::text("say hi"))).unwrap();
     let events = drain_until_turn_ended(&mut events);
 
     assert_eq!(

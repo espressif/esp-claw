@@ -4,12 +4,18 @@ use tracing::Instrument as _;
 
 use crate::agent::AgentId;
 use crate::config::ApiUsage;
-use crate::event::{EventSink, SessionEvent};
+use crate::event::EventSink;
 use crate::orchestrator::control::{DriveControl, DriveStop};
 
 use super::inflight::{tick_agent, ReadyAgent, TickedAgent};
-use super::model::{DriveOutput, TurnStopMode};
+use super::output::DriveOutput;
 use super::OrchestratorInstance;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TurnStopMode {
+    PreserveAgents,
+    DeleteSpawnedAgents,
+}
 
 impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
 where
@@ -31,7 +37,7 @@ where
         }
 
         self.clear_turn_work();
-        self.cancel_all(crate::agent::CancelReason::UserRequested);
+        self.cancel_all();
         while self.has_ready() || !self.inflight.is_empty() {
             self.start_ready_agent_tasks(&events);
             if self.inflight.is_empty() {
@@ -97,7 +103,7 @@ where
             self.set_cancel_hook(control);
 
             let ticked = self.inflight.next_completed(control).await;
-            self.route_ticked_agents(ticked, events);
+            output.absorb(self.route_ticked_agents(ticked));
         }
         control.clear_cancel_hook();
         output.absorb(self.take_next_approval_prompt());
@@ -110,29 +116,30 @@ where
         &mut self,
         control: &DriveControl,
         events: &EventSink,
-    ) -> DriveStop {
+    ) -> (DriveOutput, DriveStop) {
+        let mut output = DriveOutput::default();
         loop {
             if control.take_cancel() {
                 control.clear_cancel_hook();
-                return DriveStop::Cancelled;
+                return (output, DriveStop::Cancelled);
             }
             if control.take_interrupt() {
                 control.clear_cancel_hook();
-                return DriveStop::Interrupted;
+                return (output, DriveStop::Interrupted);
             }
             if control.take_wake() {
                 control.clear_cancel_hook();
-                return DriveStop::Interrupted;
+                return (output, DriveStop::Interrupted);
             }
             if self.has_root_work() || self.has_unprompted_approval() {
                 control.clear_cancel_hook();
-                return DriveStop::Quiescent;
+                return (output, DriveStop::Quiescent);
             }
 
             self.start_ready_agent_tasks(events);
             if self.has_root_work() || self.has_unprompted_approval() {
                 control.clear_cancel_hook();
-                return DriveStop::Quiescent;
+                return (output, DriveStop::Quiescent);
             }
 
             if self.inflight.is_empty() {
@@ -145,18 +152,18 @@ where
             self.set_cancel_hook(control);
 
             let ticked = self.inflight.next_completed(control).await;
-            self.route_ticked_agents(ticked, events);
+            output.absorb(self.route_ticked_agents(ticked));
             if self.has_unprompted_approval() {
                 control.clear_cancel_hook();
-                return DriveStop::Quiescent;
+                return (output, DriveStop::Quiescent);
             }
         }
         control.clear_cancel_hook();
-        DriveStop::Quiescent
+        (output, DriveStop::Quiescent)
     }
 
     fn set_cancel_hook(&self, control: &DriveControl) {
-        let mut abort_handles = self.state.get().registry.abort_handles();
+        let mut abort_handles = self.registry.abort_handles();
         abort_handles.extend(self.inflight.abort_handles());
         control.set_cancel_hook(move || {
             for handle in &abort_handles {
@@ -173,7 +180,6 @@ where
         if ready.is_empty() {
             return;
         }
-        self.refresh_snapshots();
 
         for mut ready in ready {
             let id = ready.id;
@@ -198,14 +204,19 @@ where
             } else {
                 EventSink::disabled()
             };
-            let Some(meta) = self.state.get().meta.get(&id) else {
+            let Some(meta) = self.state.get().graph.node(id) else {
                 continue;
             };
             let span = tracing::info_span!(
                 "agent",
                 run.agent = %id,
-                kind = %meta.kind.as_str(),
-                depth = meta.depth as u64,
+                kind = %meta.kind().as_str(),
+                depth = self
+                    .state
+                    .get()
+                    .graph
+                    .depth(id)
+                    .expect("live graph topology is valid") as u64,
             );
             self.inflight.spawn(
                 id,
@@ -214,55 +225,53 @@ where
                 Box::pin(tick_agent(ready, sink).instrument(span)),
             );
         }
+        self.refresh_snapshots();
     }
 
     /// Reinsert completed agents, apply effects, then route completed outcomes.
-    fn route_ticked_agents(&mut self, ticked: Vec<TickedAgent>, events: &EventSink) {
+    fn route_ticked_agents(&mut self, ticked: Vec<TickedAgent<Http, Timer>>) -> DriveOutput {
         let mut outcomes = Vec::with_capacity(ticked.len());
+        let mut output = DriveOutput::default();
         for TickedAgent { id, agent, outcome } in ticked {
-            if self.state.get().meta.contains_key(&id) {
-                self.state.get_mut().registry.insert(id, agent);
+            if self.state.get().graph.contains(id) {
+                self.registry.insert(id, agent);
                 outcomes.push((id, outcome));
             }
         }
 
         self.apply_effects();
         for (id, outcome) in outcomes {
-            if self.state.get().meta.contains_key(&id) {
-                let output = self.route_outcome(id, outcome);
-                for reply in output.replies {
-                    // Plain answers already streamed their Output fragments.
-                    if !reply.streamed {
-                        events.emit(SessionEvent::Output { text: reply.text });
-                    }
-                }
+            if self.state.get().graph.contains(id) {
+                output.absorb(self.route_outcome(id, outcome));
             }
         }
-        self.inflight.retain_live(&self.state.get().meta);
+        self.inflight.retain_live(&self.state.get().graph);
         self.flush_subagent_result_mailbox();
+        self.refresh_snapshots();
+        output
     }
 
-    fn reinsert_stopped_agents(&mut self, ticked: Vec<TickedAgent>) {
+    fn reinsert_stopped_agents(&mut self, ticked: Vec<TickedAgent<Http, Timer>>) {
         for TickedAgent { id, agent, .. } in ticked {
-            if self.state.get().meta.contains_key(&id) {
-                self.state.get_mut().registry.insert(id, agent);
+            if self.state.get().graph.contains(id) {
+                self.registry.insert(id, agent);
             }
         }
-        self.inflight.retain_live(&self.state.get().meta);
+        self.inflight.retain_live(&self.state.get().graph);
     }
 
-    fn drain_ready_agents(&mut self) -> Vec<ReadyAgent> {
+    fn drain_ready_agents(&mut self) -> Vec<ReadyAgent<Http, Timer>> {
         let mut ready_agents = Vec::new();
         while let Some(id) = self.pop_ready() {
-            if !self.state.get().meta.contains_key(&id) {
+            if !self.state.get().graph.contains(id) {
                 continue;
             }
-            let Some(agent) = self.state.get_mut().registry.take(id) else {
+            let Some(agent) = self.registry.take(id) else {
                 continue;
             };
             ready_agents.push(ReadyAgent {
                 id,
-                is_root: self.state.get().root == Some(id),
+                is_root: self.state.get().graph.is_root(id),
                 agent,
             });
         }
@@ -270,9 +279,6 @@ where
     }
 
     fn pop_ready(&mut self) -> Option<AgentId> {
-        if self.state.get().ready.is_empty() {
-            return None;
-        }
-        self.state.get_mut().ready.pop_front()
+        self.state.get_mut().scheduler.pop_ready()
     }
 }

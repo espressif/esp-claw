@@ -28,7 +28,9 @@ impl SyncToolHandler for ToolLoadTool {
         let group_id = optional_string_argument(call.arguments_json(), "group_id")?
             .map(|group_id| group_id.trim().to_owned())
             .filter(|group_id| !group_id.is_empty())
-            .ok_or_else(|| ToolError::InvalidArguments("tool_load 'group_id' is required".into()))?;
+            .ok_or_else(|| {
+                ToolError::InvalidArguments("tool_load 'group_id' is required".into())
+            })?;
 
         let loaded = self.discovery.request_load(group_id.clone());
         Ok(ToolOutput {

@@ -1,17 +1,14 @@
 use claw_checkpoint::SchemaVersion;
 use serde::{Deserialize, Serialize};
 
-use crate::agent::{AgentId, ApprovalId};
+use crate::agent::AgentId;
 
 #[derive(Deserialize, Serialize)]
 pub(super) struct OrchestratorInstanceSnapshot {
-    pub(super) root: Option<AgentId>,
     pub(super) agents: Vec<AgentNodeSnapshot>,
     pub(super) ready_queue: Vec<AgentId>,
-    pub(super) parked_approvals: Vec<ParkedApprovalSnapshot>,
-    pub(super) approval_queue: Vec<AgentId>,
+    pub(super) approvals: Vec<ApprovalSnapshot>,
     pub(super) subagent_result_mailbox: Vec<SubagentResultSnapshot>,
-    #[serde(default)]
     pub(super) agent_parts: Vec<AgentPartsSnapshot>,
 }
 
@@ -19,16 +16,14 @@ pub(super) struct OrchestratorInstanceSnapshot {
 pub(super) struct AgentNodeSnapshot {
     pub(super) id: AgentId,
     pub(super) parent: Option<AgentId>,
-    pub(super) depth: u16,
     pub(super) kind: String,
     pub(super) name: Option<String>,
     pub(super) termination_policy: String,
 }
 
 #[derive(Deserialize, Serialize)]
-pub(super) struct ParkedApprovalSnapshot {
+pub(super) struct ApprovalSnapshot {
     pub(super) agent: AgentId,
-    pub(super) approval: ApprovalId,
     pub(super) summary: String,
     pub(super) prompted: bool,
 }

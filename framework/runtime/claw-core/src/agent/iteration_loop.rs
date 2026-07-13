@@ -19,8 +19,8 @@ use claw_interface::{ClawHttp, ClawTimer};
 use crate::event::EventSink;
 
 pub(crate) use types::{
-    ChatMessages, CompletedKind, CompletedOutcome, InterruptionControl, IterationLoopError,
-    IterationOutcome, IterationResult, IterationStep, PreemptedOutcome, SystemPrompt, ToolRun,
+    CompletedKind, CompletedOutcome, InterruptionControl, IterationLoopError, IterationOutcome,
+    IterationResult, IterationStep, PreemptedOutcome, ToolRun,
 };
 
 /// One-step executor: LLM + preempt control only. Tools live on [`IterationStep`].

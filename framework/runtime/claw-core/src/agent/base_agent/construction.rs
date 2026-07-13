@@ -6,11 +6,9 @@ use claw_checkpoint::DurableState;
 use claw_context::{Block, Context};
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::TranscriptStore;
-use claw_permission::PermissionPolicy;
 use claw_skill::SkillSet;
 use claw_tool::ToolSet;
 
-use crate::agent::manifest::RetryCount;
 use crate::agent::tools::{internal_tools, ControlSink};
 use crate::memory::{ContextAdapter, SkillContextAdapter, Transcript};
 
@@ -20,15 +18,14 @@ use super::{BaseAgent, BaseAgentBuildError};
 
 /// All construction-time configuration for a [`BaseAgent`], consumed by
 /// [`BaseAgent::build`].
-pub(crate) struct BaseAgentConfig<F: ClawFs + 'static> {
-    pub store: TranscriptStore<F>,
-    pub tools: ToolSet,
-    pub skills: SkillSet,
-    pub agent_instruction: Block<'static>,
-    pub inherited_context: Arc<[Block<'static>]>,
-    pub retry_policy: RetryPolicy,
-    pub permission_policy: Arc<dyn PermissionPolicy>,
-    pub block_retries: RetryCount,
+pub(in crate::agent) struct BaseAgentConfig<F: ClawFs + 'static> {
+    pub(in crate::agent) store: TranscriptStore<F>,
+    pub(in crate::agent) tools: ToolSet,
+    pub(in crate::agent) skills: SkillSet,
+    pub(in crate::agent) agent_instruction: Block<'static>,
+    pub(in crate::agent) inherited_context: Vec<Block<'static>>,
+    pub(in crate::agent) retry_policy: RetryPolicy,
+    pub(in crate::agent) block_retries: u32,
 }
 
 impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
@@ -43,7 +40,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     }
 
     /// Assemble a runnable agent from a [`BaseAgentConfig`].
-    pub fn build<F: ClawFs + 'static>(
+    pub(in crate::agent) fn build<F: ClawFs + 'static>(
         config: BaseAgentConfig<F>,
     ) -> Result<BaseAgent<H, Timer>, BaseAgentBuildError>
     where
@@ -57,11 +54,9 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         let mut tools = config.tools;
         tools.add_group(internal_tools(Arc::clone(&control)))?;
 
-        let permission_policy = config.permission_policy;
-
         let mut context = Context::new();
-        for block in config.inherited_context.iter() {
-            context.with(block.clone());
+        for block in config.inherited_context {
+            context.with(block);
         }
         context.with(config.agent_instruction);
 
@@ -79,9 +74,8 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
             interruption: AgentInterruption::new(),
             transcript,
             tools,
-            permission_policy,
             context,
-            state: DurableState::new(BaseAgentState::new(config.block_retries.get())),
+            state: DurableState::new(BaseAgentState::new(config.block_retries)),
             outcome: None,
             control,
             adapters,

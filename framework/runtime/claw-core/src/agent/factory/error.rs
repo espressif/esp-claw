@@ -4,11 +4,10 @@ use claw_tool::ToolSetError;
 
 use crate::agent::base_agent::{AgentCommandError, BaseAgentBuildError};
 use crate::agent::config::AgentConfigError;
-use crate::agent::generic_agent::GenericAgentBuildError;
 
 /// What can go wrong while building an [`super::FsAgentFactory`].
 #[derive(Debug, thiserror::Error)]
-pub enum FsAgentFactoryError {
+pub(crate) enum FsAgentFactoryError {
     /// No persistence directory was provided to the factory.
     #[error("persistence directory is required")]
     MissingPersistenceDir,
@@ -32,9 +31,9 @@ pub(crate) enum FsAgentCreateError {
     /// The transcript store for this placement could not be opened.
     #[error("failed to open transcript: {0}")]
     Transcript(#[from] TranscriptInitError),
-    /// The generic agent failed to build.
+    /// The base agent or one of its built-in context adapters failed to build.
     #[error("failed to build agent: {0}")]
-    Agent(#[from] GenericAgentBuildError),
+    Agent(#[from] BaseAgentBuildError),
     /// The profile context adapter could not be attached.
     #[error("failed to attach profile context: {0}")]
     ProfileContext(#[source] BaseAgentBuildError),

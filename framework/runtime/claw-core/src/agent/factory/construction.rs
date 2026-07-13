@@ -10,7 +10,7 @@ use claw_memory::ProfileStore;
 use claw_skill::{FsSkillRegistry, SkillError};
 use claw_tool::ToolRegistry;
 
-use crate::memory::{LlmExtractor, RuleBasedTierClassifier};
+use crate::memory::LlmExtractor;
 
 use super::error::FsAgentFactoryError;
 use super::layout::FsAgentFactoryLayout;
@@ -42,7 +42,7 @@ impl<
     ///
     /// Returns [`FsAgentFactoryError::MissingPersistenceDir`] when the
     /// persistence root is blank.
-    pub fn new(
+    pub(crate) fn new(
         tools: Arc<ToolRegistry>,
         persistence_dir: String,
         skill_roots: Vec<String>,
@@ -58,7 +58,6 @@ impl<
 
         let long_term = match LongTermDeps::<Filesystem>::from_root(
             &layout.long_term_dir,
-            RuleBasedTierClassifier::shared(),
             LlmExtractor::<Http, Timer>::shared(Arc::clone(&api_manager)),
         ) {
             Ok(deps) => deps,

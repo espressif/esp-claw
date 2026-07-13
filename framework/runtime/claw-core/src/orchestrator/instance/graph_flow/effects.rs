@@ -1,12 +1,8 @@
-use std::collections::VecDeque;
-use std::sync::Arc;
-
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::agent::{AgentId, AgentKind, AgentPlacement, GraphEffect, TerminationPolicy};
 
-use super::super::model::NodeMeta;
 use super::super::OrchestratorInstance;
 
 impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
@@ -40,7 +36,12 @@ where
     }
 
     fn apply_followup(&mut self, requester: AgentId, target: AgentId, message: String) {
-        if !self.is_descendant(requester, target) {
+        if !self
+            .state
+            .get()
+            .graph
+            .is_strict_descendant(requester, target)
+        {
             tracing::warn!(
                 name: "followup_ignored",
                 target_agent = %target,
@@ -48,7 +49,7 @@ where
             );
             return;
         }
-        if !self.state.get().meta.contains_key(&target) {
+        if !self.state.get().graph.contains(target) {
             tracing::warn!(
                 name: "followup_ignored",
                 target_agent = %target,
@@ -79,7 +80,12 @@ where
     }
 
     fn apply_delete(&mut self, requester: AgentId, target: AgentId) {
-        if !self.is_descendant(requester, target) {
+        if !self
+            .state
+            .get()
+            .graph
+            .is_strict_descendant(requester, target)
+        {
             tracing::warn!(
                 name: "delete_ignored",
                 target_agent = %target,
@@ -91,66 +97,25 @@ where
     }
 
     pub(super) fn delete_subtree(&mut self, root: AgentId) {
-        let victims = self.subtree_ids(root);
+        let victims = self.state.get().graph.subtree_ids(root);
         tracing::info!(
             name: "subtree_deleted",
             root_agent = %root,
             count = victims.len() as u64,
         );
         for victim in &victims {
-            self.state.get_mut().registry.remove(*victim);
-            self.state.get_mut().meta.remove(victim);
-            self.state.get_mut().parked_approvals.remove(victim);
+            self.registry.remove(*victim);
         }
-        self.state
-            .get_mut()
-            .ready
-            .retain(|queued| !victims.contains(queued));
-        self.state
-            .get_mut()
-            .approval_queue
-            .retain(|queued| !victims.contains(queued));
-        self.state
-            .get_mut()
-            .subagent_result_mailbox
-            .retain(|result| !victims.contains(&result.parent) && !victims.contains(&result.child));
+        let state = self.state.get_mut();
+        state.graph.remove_nodes(&victims);
+        state.scheduler.remove_agents(&victims);
     }
 
     pub(in crate::orchestrator::instance) fn delete_spawned_subagents(&mut self) {
-        let Some(root) = self.state.get().root else {
-            return;
-        };
-        let children: Vec<AgentId> = self
-            .state
-            .get()
-            .meta
-            .iter()
-            .filter_map(|(&id, meta)| (meta.parent == Some(root)).then_some(id))
-            .collect();
+        let children = self.state.get().graph.root_children();
         for child in children {
             self.delete_subtree(child);
         }
-    }
-
-    fn is_descendant(&self, ancestor: AgentId, node: AgentId) -> bool {
-        let mut current = self
-            .state
-            .get()
-            .meta
-            .get(&node)
-            .and_then(|meta| meta.parent);
-        while let Some(parent) = current {
-            if parent == ancestor {
-                return true;
-            }
-            current = self
-                .state
-                .get()
-                .meta
-                .get(&parent)
-                .and_then(|meta| meta.parent);
-        }
-        false
     }
 
     fn materialize_spawn(
@@ -162,7 +127,7 @@ where
         goal: String,
         termination: TerminationPolicy,
     ) {
-        let Some(parent_meta) = self.state.get().meta.get(&parent) else {
+        if !self.state.get().graph.contains(parent) {
             tracing::warn!(
                 name: "spawn_dropped",
                 parent_agent = %parent,
@@ -170,25 +135,31 @@ where
                 reason = "missing_parent",
             );
             return;
-        };
-        let depth = parent_meta.depth.saturating_add(1);
-        match self.build_agent(id, &kind, goal, AgentPlacement::Sub(id), Arc::from([])) {
+        }
+        match self.build_agent(id, &kind, goal, AgentPlacement::Sub(id), Vec::new()) {
             Ok(()) => {
+                let inserted = self.state.get_mut().graph.insert_child(
+                    parent,
+                    id,
+                    kind.clone(),
+                    name,
+                    termination,
+                );
+                if !inserted {
+                    self.registry.remove(id);
+                    tracing::warn!(
+                        name: "spawn_dropped",
+                        parent_agent = %parent,
+                        kind = %kind.as_str(),
+                        reason = "missing_parent",
+                    );
+                    return;
+                }
                 tracing::info!(
                     name: "spawn_materialized",
                     parent_agent = %parent,
                     child_agent = %id,
                     kind = %kind.as_str(),
-                );
-                self.state.get_mut().meta.insert(
-                    id,
-                    NodeMeta {
-                        parent: Some(parent),
-                        depth,
-                        kind,
-                        name,
-                        termination,
-                    },
                 );
                 self.enqueue(id);
             }
@@ -202,19 +173,5 @@ where
                 );
             }
         }
-    }
-
-    fn subtree_ids(&self, root: AgentId) -> Vec<AgentId> {
-        let mut out = vec![root];
-        let mut frontier = VecDeque::from([root]);
-        while let Some(current) = frontier.pop_front() {
-            for (&id, meta) in &self.state.get().meta {
-                if meta.parent == Some(current) {
-                    out.push(id);
-                    frontier.push_back(id);
-                }
-            }
-        }
-        out
     }
 }

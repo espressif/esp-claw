@@ -2,17 +2,17 @@
 //!
 //! A baked manifest is compile-time data: prompt, tool names, skill ids, and
 //! spawn policy. Runtime binding belongs to `FsAgentFactory`; this module only
-//! stores the resolved config passed to `GenericAgent`.
+//! stores the resolved config consumed at the factory's private assembly point.
 
 use claw_api::RetryPolicy;
 use claw_skill::SkillSet;
 
 use crate::agent::graph::SpawnPolicy;
-use crate::agent::manifest::{AgentManifest, RetryCount};
+use crate::agent::manifest::AgentManifest;
 
 /// A fully-resolved agent configuration.
 ///
-pub struct AgentConfig {
+pub(super) struct AgentConfig {
     pub(in crate::agent) system_prompt: String,
     pub(in crate::agent) skills: SkillSet,
     /// Whether this kind may spawn subagents.
@@ -20,7 +20,7 @@ pub struct AgentConfig {
     /// The kinds this agent may spawn.
     pub(in crate::agent) spawn_policy: SpawnPolicy,
     pub(in crate::agent) retry_policy: RetryPolicy,
-    pub(in crate::agent) tool_block_retries: RetryCount,
+    pub(in crate::agent) tool_block_retries: u32,
 }
 
 impl AgentConfig {
@@ -33,7 +33,7 @@ impl AgentConfig {
             skills,
             spawn_enabled: manifest.spawn_enabled,
             spawn_policy: SpawnPolicy::from_allowed_kinds(manifest.allowed_kinds),
-            retry_policy: RetryPolicy::new(manifest.retries.get()),
+            retry_policy: RetryPolicy::new(manifest.retries),
             tool_block_retries: manifest.tool_block_retries,
         }
     }
@@ -41,7 +41,7 @@ impl AgentConfig {
 
 /// Failure resolving baked manifest data into an [`AgentConfig`].
 #[derive(Clone, Debug, thiserror::Error)]
-pub enum AgentConfigError {
+pub(crate) enum AgentConfigError {
     /// No manifest is baked into the firmware for the requested kind.
     #[error("unknown agent kind: {0}")]
     UnknownKind(String),

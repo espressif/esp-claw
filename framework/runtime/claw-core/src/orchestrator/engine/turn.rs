@@ -9,9 +9,7 @@ use crate::session::{Message, SessionId, SessionPersistence};
 use super::super::approval::{self, ApprovalResolverError, PermissionReplyResolution};
 use super::super::control::{DriveControl, DriveStop};
 use super::super::error::DeliverError;
-use super::super::instance::{
-    DriveOutput, OrchestratorInstance, PendingApproval, RootReply, TurnStopMode,
-};
+use super::super::instance::{DriveOutput, OrchestratorInstance, PendingApproval, TurnStopMode};
 use super::Engine;
 
 impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
@@ -25,17 +23,13 @@ where
             return;
         };
         let turn = {
-            let mut drives = self.drives.borrow_mut();
-            let Some(drive) = drives.get_mut(&session_id) else {
+            let mut runtimes = self.runtimes.borrow_mut();
+            let Some(runtime) = runtimes.get_mut(&session_id) else {
                 return;
             };
-            let Some(turn) = drive.active_turn_id() else {
+            let Some(turn) = runtime.take_unannounced_turn() else {
                 return;
             };
-            if drive.announced_turn == Some(turn) {
-                return;
-            }
-            drive.announced_turn = Some(turn);
             turn
         };
         events.emit(SessionEvent::TurnStarted { turn });
@@ -48,40 +42,25 @@ where
         let Some(persistence) = self.sessions.persistence(session_id) else {
             return DriveStop::Quiescent;
         };
-        let Some((turn, effort)) =
-            self.drives.borrow().get(&session_id).and_then(|drive| {
-                drive
-                    .active_turn_id()
-                    .map(|turn| (turn, drive.reasoning_effort()))
-            })
+        let Some((turn, effort)) = self
+            .runtimes
+            .borrow()
+            .get(&session_id)
+            .and_then(|runtime| runtime.active_turn_context())
         else {
             return DriveStop::Quiescent;
         };
-        let has_text = input.text.as_ref().is_some_and(|text| !text.is_empty());
-        let text_bytes = input.text.as_ref().map_or(0, |text| text.len()) as u64;
-        let attachment_count = input.attachments.len() as u64;
-        let attachment_kinds = if input.attachments.is_empty() {
-            "none"
-        } else {
-            "references"
-        };
+        let has_text = !input.as_str().is_empty();
+        let text_bytes = input.as_str().len() as u64;
         let stop = async {
             self.set_foreground_active(session_id, true);
             tracing::info!(
                 name: "input_delivered",
                 has_text,
                 text_bytes,
-                attachment_count,
-                attachment_kinds,
             );
             let result = self
-                .drive_one_input(
-                    session_id,
-                    input.into_transcript_text(),
-                    effort,
-                    persistence,
-                    &events,
-                )
+                .drive_one_input(session_id, input.into_text(), effort, persistence, &events)
                 .await;
             let stop = self.handle_drive_result(&events, result);
             self.set_foreground_active(session_id, false);
@@ -99,11 +78,12 @@ where
         let Some(events) = self.session_events(session_id) else {
             return DriveStop::Quiescent;
         };
-        let Some((turn, effort)) = self.drives.borrow().get(&session_id).and_then(|drive| {
-            drive
-                .active_turn_id()
-                .map(|turn| (turn, drive.reasoning_effort()))
-        }) else {
+        let Some((turn, effort)) = self
+            .runtimes
+            .borrow()
+            .get(&session_id)
+            .and_then(|runtime| runtime.active_turn_context())
+        else {
             return DriveStop::Quiescent;
         };
         async {
@@ -127,7 +107,7 @@ where
         };
         let control = DriveControl::new();
         self.set_active_control(session_id, Some(control.clone()));
-        let stop = slot
+        let (output, stop) = slot
             .get_mut()
             .drive_background_until_root_ready(&control, &events)
             .await;
@@ -140,7 +120,7 @@ where
             };
             slot.get_mut().stop_turn_tasks(mode).await;
         }
-        stop
+        self.handle_drive_result(&events, Ok((output, stop)))
     }
 
     pub(super) fn finish_active_turn(&self, session_id: SessionId) {
@@ -148,11 +128,11 @@ where
             return;
         };
         let (turn, control_acks) = {
-            let mut drives = self.drives.borrow_mut();
-            let Some(drive) = drives.get_mut(&session_id) else {
+            let mut runtimes = self.runtimes.borrow_mut();
+            let Some(runtime) = runtimes.get_mut(&session_id) else {
                 return;
             };
-            (drive.finish_turn(), drive.take_control_acks())
+            runtime.finish_turn()
         };
         let Some(turn) = turn else {
             return;
@@ -176,12 +156,9 @@ where
     ) -> DriveStop {
         match result {
             Ok((output, stop)) => {
-                for reply in output.replies {
-                    tracing::info!(name: "output", text_bytes = reply.text.len() as u64);
-                    // Plain answers already streamed their Output fragments.
-                    if !reply.streamed {
-                        events.emit(SessionEvent::Output { text: reply.text });
-                    }
+                for text in output.into_messages() {
+                    tracing::info!(name: "output", text_bytes = text.len() as u64);
+                    events.emit(SessionEvent::Output { text });
                 }
                 stop
             }
@@ -212,7 +189,7 @@ where
             let control = DriveControl::new();
             self.set_active_control(session_id, Some(control.clone()));
             let result = self
-                .resolve_pending_approval(session_id, instance, pending, &text, &control, events)
+                .resolve_pending_approval(instance, pending, &text, &control, events)
                 .await;
             self.set_active_control(session_id, None);
             return result;
@@ -260,7 +237,6 @@ where
 
     async fn resolve_pending_approval(
         &self,
-        session_id: SessionId,
         instance: &mut OrchestratorInstance<Filesystem, Http, Timer>,
         pending: PendingApproval,
         user_reply: &str,
@@ -290,16 +266,7 @@ where
                 unreachable!("non-clarification resolutions map to approval decisions")
             };
             tracing::info!(name: "approval_clarification", reason = "clarify");
-            return Ok((
-                DriveOutput {
-                    replies: vec![RootReply {
-                        session: session_id,
-                        text: message,
-                        streamed: false,
-                    }],
-                },
-                DriveStop::Quiescent,
-            ));
+            return Ok((DriveOutput::message(message), DriveStop::Quiescent));
         };
 
         let decision_name: &'static str = (&decision).into();

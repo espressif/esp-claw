@@ -18,8 +18,8 @@ use claw_tool::{
 use serde_json::{json, Value};
 
 use crate::agent::{
-    ApprovalDecision, ChatMessages, CompletedKind, InterruptionControl, IterationId, IterationLoop,
-    IterationLoopError, IterationOutcome, IterationStep, SystemPrompt,
+    ApprovalDecision, CompletedKind, InterruptionControl, IterationId, IterationLoop,
+    IterationLoopError, IterationOutcome, IterationStep,
 };
 use crate::config::{ApiUsage, ClawApiManager};
 use crate::event::EventSink;
@@ -245,8 +245,8 @@ where
     }
     .run(IterationStep {
         iteration_id: IterationId(1),
-        system_prompt: SystemPrompt(APPROVAL_RESOLVER_PROMPT),
-        messages: ChatMessages(&messages),
+        system_prompt: APPROVAL_RESOLVER_PROMPT,
+        messages: &messages,
         reminders: &reminders,
         tools: &tools,
         gate: &gate,

@@ -1,9 +1,11 @@
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
-use crate::agent::{AgentCommand, AgentId, ApprovalDecision, ApprovalId};
+use crate::agent::{AgentCommand, AgentId, ApprovalDecision};
 
-use super::model::{ApprovalResolutionError, DriveOutput, ParkedApproval, PendingApproval};
+use super::error::ApprovalResolutionError;
+use super::output::DriveOutput;
+use super::scheduler::PendingApproval;
 use super::OrchestratorInstance;
 
 impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
@@ -13,13 +15,7 @@ where
     Timer: ClawTimer + Default + 'static,
 {
     pub(crate) fn active_approval(&self) -> Option<PendingApproval> {
-        let agent = *self.state.get().approval_queue.front()?;
-        let pending = self.state.get().parked_approvals.get(&agent)?;
-        Some(PendingApproval {
-            agent,
-            approval: pending.approval,
-            summary: pending.summary.clone(),
-        })
+        self.state.get().scheduler.active_approval()
     }
 
     pub(crate) fn resolve_active_approval(
@@ -27,112 +23,150 @@ where
         decision: ApprovalDecision,
     ) -> Result<(), ApprovalResolutionError> {
         let pending = self
-            .pop_active_approval()
+            .state
+            .get()
+            .scheduler
+            .active_approval()
             .ok_or(ApprovalResolutionError::NoActiveApproval)?;
-        self.send_approval_decision(pending.agent, pending.approval, decision)
+        let decision_name: &'static str = (&decision).into();
+        self.registry
+            .get_mut(pending.agent)
+            .ok_or(ApprovalResolutionError::UnknownAgent(pending.agent))?
+            .send_command(AgentCommand::ApprovalResult(decision))
+            .map_err(ApprovalResolutionError::Command)?;
+
+        let removed = self
+            .state
+            .get_mut()
+            .scheduler
+            .remove_approval(pending.agent);
+        debug_assert!(
+            removed,
+            "the active approval changed without synchronization"
+        );
+        tracing::info!(
+            name: "approval_resolved",
+            agent = %pending.agent,
+            decision = decision_name,
+        );
+        self.enqueue(pending.agent);
+        Ok(())
     }
 
     pub(crate) fn take_next_approval_prompt(&mut self) -> DriveOutput {
-        loop {
-            let Some(agent) = self.state.get().approval_queue.front().copied() else {
-                return DriveOutput::default();
-            };
-            let Some(pending) = self.state.get_mut().parked_approvals.get_mut(&agent) else {
-                self.state.get_mut().approval_queue.pop_front();
-                continue;
-            };
-            if pending.prompted {
-                return DriveOutput::default();
-            }
-            let summary = pending.summary.clone();
-            pending.prompted = true;
-            return DriveOutput::reply(
-                self.session,
-                format!(
-                    "Permission approval needed:\n{summary}\n\nReply with approval or rejection."
-                ),
-            );
-        }
+        let Some(summary) = self.state.get_mut().scheduler.take_next_approval_summary() else {
+            return DriveOutput::default();
+        };
+        DriveOutput::message(format!(
+            "Permission approval needed:\n{summary}\n\nReply with approval or rejection."
+        ))
     }
 
-    pub(super) fn park_approval(
-        &mut self,
-        agent: AgentId,
-        approval: ApprovalId,
-        summary: String,
-    ) -> DriveOutput {
-        if !self.state.get().meta.contains_key(&agent) {
+    pub(super) fn park_approval(&mut self, agent: AgentId, summary: String) -> DriveOutput {
+        if !self.state.get().graph.contains(agent) {
             return DriveOutput::default();
         }
-        self.state.get_mut().parked_approvals.insert(
-            agent,
-            ParkedApproval {
-                approval,
-                summary,
-                prompted: false,
-            },
-        );
-        if !self.state.get().approval_queue.contains(&agent) {
-            self.state.get_mut().approval_queue.push_back(agent);
-        }
+        self.state.get_mut().scheduler.park_approval(agent, summary);
 
         DriveOutput::default()
     }
 
     pub(super) fn has_unprompted_approval(&self) -> bool {
-        self.state.get().approval_queue.iter().any(|agent| {
-            self.state
-                .get()
-                .parked_approvals
-                .get(agent)
-                .is_some_and(|pending| !pending.prompted)
-        })
+        self.state.get().scheduler.has_unprompted_approval()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+    use std::sync::{Arc, RwLock};
+
+    use claw_interface::{ImmediateTimer, MemFs, RealHttp};
+    use claw_tool::ToolRegistry;
+
+    use crate::agent::{
+        AgentCommandError, AgentId, AgentIdAllocator, AgentKind, AgentPlacement, ApprovalDecision,
+        FsAgentFactory,
+    };
+    use crate::config::ClawApiManager;
+    use crate::session::{SessionId, SessionPersistence};
+
+    use super::super::error::ApprovalResolutionError;
+    use super::super::state::OrchestratorInstanceState;
+    use super::super::{OrchestratorInstance, ROOT_AGENT_KIND};
+
+    type TestInstance = OrchestratorInstance<MemFs, RealHttp, ImmediateTimer>;
+
+    fn instance() -> TestInstance {
+        MemFs::new();
+        let factory = FsAgentFactory::new(
+            Arc::new(ToolRegistry::new()),
+            "/approval-test".to_owned(),
+            Vec::new(),
+            Arc::new(RwLock::new(ClawApiManager::new())),
+        )
+        .expect("test factory builds");
+        OrchestratorInstance::new(
+            SessionId::new(1),
+            Rc::new(factory),
+            AgentIdAllocator::new(),
+            OrchestratorInstanceState::default(),
+        )
     }
 
-    fn send_approval_decision(
-        &mut self,
-        agent: AgentId,
-        approval: ApprovalId,
-        decision: ApprovalDecision,
-    ) -> Result<(), ApprovalResolutionError> {
-        let decision_name: &'static str = (&decision).into();
-        self.state
+    #[test]
+    fn unknown_agent_does_not_consume_active_approval() {
+        let agent = AgentId(7);
+        let mut instance = instance();
+        instance
+            .state
             .get_mut()
-            .registry
-            .get_mut(agent)
-            .ok_or(ApprovalResolutionError::UnknownAgent(agent))?
-            .send_command(AgentCommand::ApprovalResult {
-                id: approval,
-                decision,
-            })
-            .map_err(ApprovalResolutionError::Command)?;
-        tracing::info!(
-            name: "approval_resolved",
-            approval = %approval,
-            decision = decision_name,
+            .scheduler
+            .park_approval(agent, "permission".to_owned());
+
+        assert!(matches!(
+            instance.resolve_active_approval(ApprovalDecision::Approved),
+            Err(ApprovalResolutionError::UnknownAgent(id)) if id == agent
+        ));
+        assert_eq!(
+            instance.active_approval().map(|pending| pending.agent),
+            Some(agent)
         );
-        self.enqueue(agent);
-        Ok(())
     }
 
-    fn pop_active_approval(&mut self) -> Option<PendingApproval> {
-        while let Some(agent) = self.pop_approval_queue() {
-            let Some(pending) = self.state.get_mut().parked_approvals.remove(&agent) else {
-                continue;
-            };
-            return Some(PendingApproval {
+    #[test]
+    fn rejected_agent_command_does_not_consume_active_approval() {
+        let agent = AgentId(7);
+        let mut instance = instance();
+        let kind = AgentKind::from_static(ROOT_AGENT_KIND);
+        instance
+            .build_agent(
                 agent,
-                approval: pending.approval,
-                summary: pending.summary,
-            });
-        }
-        None
-    }
+                &kind,
+                String::new(),
+                AgentPlacement::Root {
+                    session: SessionId::new(1),
+                    persistence: SessionPersistence::Ephemeral,
+                },
+                Vec::new(),
+            )
+            .expect("idle test agent builds");
+        assert!(instance.state.get_mut().graph.insert_root(agent, kind));
+        instance
+            .state
+            .get_mut()
+            .scheduler
+            .park_approval(agent, "permission".to_owned());
 
-    fn pop_approval_queue(&mut self) -> Option<AgentId> {
-        if self.state.get().approval_queue.is_empty() {
-            return None;
-        }
-        self.state.get_mut().approval_queue.pop_front()
+        assert!(matches!(
+            instance.resolve_active_approval(ApprovalDecision::Approved),
+            Err(ApprovalResolutionError::Command(
+                AgentCommandError::NotAwaitingApproval { .. }
+            ))
+        ));
+        assert_eq!(
+            instance.active_approval().map(|pending| pending.agent),
+            Some(agent)
+        );
     }
 }

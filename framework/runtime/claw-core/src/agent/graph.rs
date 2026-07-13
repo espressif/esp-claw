@@ -6,4 +6,7 @@ mod types;
 
 pub(crate) use context::{AgentContext, GraphHost};
 pub(crate) use spawn_policy::SpawnPolicy;
-pub(crate) use types::{AgentSnapshot, AgentStatus, GraphEffect, TerminationPolicy};
+pub(crate) use types::{
+    is_strict_descendant, AgentGraphSnapshot, AgentSnapshot, AgentStatus, GraphEffect,
+    TerminationPolicy,
+};

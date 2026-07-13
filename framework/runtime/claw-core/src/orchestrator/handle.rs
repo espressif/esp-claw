@@ -4,10 +4,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use async_channel::Sender;
 use claw_api::{ClawApiConfig, InitError};
-use claw_checkpoint::{
-    CheckpointCoordinatorInitError, CheckpointStorage, FsCheckpointStorage,
-    SharedCheckpointCoordinator,
-};
+use claw_checkpoint::{FsCheckpointStorage, SharedCheckpointCoordinator};
 use claw_interface::http::StreamingHttp;
 use claw_interface::{
     ClawExecutor, ClawFs, ClawHttp, ClawThread, ClawTimer, CoreAffinity, Priority, WorkerHandle,
@@ -24,8 +21,7 @@ use super::checkpoint::{
 use super::engine::{run_engine, Command};
 use super::{
     OpenSessionError, OrchestratorBuildError, SessionControl, SessionControlError,
-    SessionEventStream, CHECKPOINT_DIR, CHECKPOINT_HISTORY, CHECKPOINT_INTERVAL,
-    ENGINE_WORKER_STACK_SIZE,
+    SessionEventStream, CHECKPOINT_DIR, ENGINE_WORKER_STACK_SIZE,
 };
 
 type CheckpointSessions = dyn Fn(&SessionStore, Option<SessionId>) -> Result<(), SessionRegistryCheckpointError>
@@ -48,49 +44,6 @@ pub struct Orchestrator {
 }
 
 impl Orchestrator {
-    /// Build an orchestrator: spawn the drive worker, construct the engine
-    /// inside it, and wait for it to report readiness.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`OrchestratorBuildError`] when the worker cannot be spawned or the
-    /// engine cannot be assembled inside it.
-    pub fn new<Filesystem, Http, Timer, Thread, Executor>(
-        tools: Arc<ToolRegistry>,
-        persistence_dir: String,
-        skill_roots: Vec<String>,
-    ) -> Result<Self, OrchestratorBuildError>
-    where
-        Filesystem: ClawFs + 'static,
-        Http: ClawHttp + StreamingHttp + Default + 'static,
-        Timer: ClawTimer + Default + 'static,
-        Thread: ClawThread,
-        Executor: ClawExecutor + 'static,
-    {
-        let persistence_root = persistence_dir.trim_end_matches('/');
-        let checkpoint_dir = format!("{persistence_root}/{CHECKPOINT_DIR}");
-        let checkpoints = SharedCheckpointCoordinator::new(
-            FsCheckpointStorage::<Filesystem>::new(checkpoint_dir),
-            CHECKPOINT_INTERVAL,
-            CHECKPOINT_HISTORY,
-        )
-        .map_err(|error| match error {
-            CheckpointCoordinatorInitError::Storage(source) => {
-                OrchestratorBuildError::CheckpointStorage(source)
-            }
-            CheckpointCoordinatorInitError::InvalidCheckpointInterval
-            | CheckpointCoordinatorInitError::InvalidHistoryCheckpoints => {
-                unreachable!("fixed checkpoint coordinator policy is valid")
-            }
-        })?;
-        Self::new_with_checkpoint_coordinator::<Filesystem, Http, Timer, Thread, Executor>(
-            tools,
-            checkpoints,
-            persistence_dir,
-            skill_roots,
-        )
-    }
-
     #[doc(hidden)]
     pub fn new_with_checkpoint_coordinator<Filesystem, Http, Timer, Thread, Executor>(
         tools: Arc<ToolRegistry>,

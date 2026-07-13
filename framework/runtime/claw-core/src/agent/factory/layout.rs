@@ -13,7 +13,7 @@ const LONG_TERM_DIR: &str = "long_term";
 /// A persistent session root writes its transcript under the stable [`SessionId`].
 /// Ephemeral roots and subagents keep their transcript in memory.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AgentPlacement {
+pub(crate) enum AgentPlacement {
     /// A session's user-facing root; its transcript key is the session id.
     Root {
         session: SessionId,

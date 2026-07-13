@@ -440,7 +440,7 @@ fn old_session_drive_layout_is_rejected() {
         Ok(_) => panic!("old session-drive layout must reject startup"),
         Err(error) => error.to_string(),
     };
-    assert_contains(&error, "failed to decode durable state");
+    assert_contains(&error, "unsupported session-drive checkpoint schema");
 }
 
 struct CheckpointEchoTool;

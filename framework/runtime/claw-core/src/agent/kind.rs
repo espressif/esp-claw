@@ -12,22 +12,22 @@ use std::borrow::Cow;
 /// can share the same `AgentKind`. The spawning model picks the kind when it
 /// delegates.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct AgentKind(Cow<'static, str>);
+pub(crate) struct AgentKind(Cow<'static, str>);
 
 impl AgentKind {
     /// Wrap a runtime role name as a kind (owns its `String`).
-    pub fn new(kind: impl Into<String>) -> Self {
-        Self(Cow::Owned(kind.into()))
+    pub(crate) fn new(kind: String) -> Self {
+        Self(Cow::Owned(kind))
     }
 
     /// Wrap a `&'static str` as a kind in a `const` context (no allocation) —
     /// used by build-script-generated manifests.
-    pub const fn from_static(kind: &'static str) -> Self {
+    pub(crate) const fn from_static(kind: &'static str) -> Self {
         Self(Cow::Borrowed(kind))
     }
 
     /// The kind as a string slice.
-    pub fn as_str(&self) -> &str {
+    pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
 }

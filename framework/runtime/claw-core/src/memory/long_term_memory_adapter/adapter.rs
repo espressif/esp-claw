@@ -5,28 +5,22 @@ use claw_interface::ClawFs;
 use claw_memory::LongTermMemory;
 use claw_tool::ToolGroup;
 
-use crate::memory::traits::{ContextAdapter, ContextAdapterFuture, ContextAdapterInput};
+use crate::memory::traits::{ContextAdapter, ContextAdapterFuture, History};
 
 use super::catalog::{render_catalog, CatalogCache};
 use super::stores::MemoryStores;
 use super::tools::memory_tools;
-use super::{Extractor, LongTermMemoryContextAdapter, TierClassifier};
+use super::{Extractor, LongTermMemoryContextAdapter};
 
 impl<F: ClawFs + 'static> LongTermMemoryContextAdapter<F> {
-    /// Build an adapter over the two stores, a tier `classifier`, and an
-    /// `extractor`.
-    pub fn new(
+    /// Build an adapter over the two stores and an `extractor`.
+    pub(crate) fn new(
         agent: LongTermMemory<F>,
         global: LongTermMemory<F>,
-        classifier: Arc<dyn TierClassifier>,
         extractor: Arc<dyn Extractor>,
     ) -> Self {
         Self {
-            stores: MemoryStores {
-                global,
-                agent,
-                classifier,
-            },
+            stores: MemoryStores { global, agent },
             extractor,
             catalog: CatalogCache::default(),
             extract_cursor: 0,
@@ -54,16 +48,16 @@ impl<F: ClawFs + 'static> LongTermMemoryContextAdapter<F> {
 }
 
 impl<F: ClawFs + 'static> ContextAdapter for LongTermMemoryContextAdapter<F> {
-    fn prepare<'a>(&'a mut self, input: ContextAdapterInput<'a>) -> ContextAdapterFuture<'a> {
+    fn prepare<'a>(&'a mut self, history: &'a dyn History) -> ContextAdapterFuture<'a> {
         Box::pin(async move {
             // Pull, not push: reading the transcript here is where this adapter
             // decides whether new conversation warrants extraction.
-            self.maybe_schedule_extraction(input.history).await;
+            self.maybe_schedule_extraction(history).await;
             self.refresh_catalog();
         })
     }
 
-    fn contribute(&mut self, _input: ContextAdapterInput<'_>, output: &mut ContextSink<'_>) {
+    fn contribute(&mut self, output: &mut ContextSink<'_>) {
         // Borrow the cached strings into the blocks; `Context::with` copies them
         // only on a real change, so an unchanged catalog allocates nothing here.
         output.block(Block::new(

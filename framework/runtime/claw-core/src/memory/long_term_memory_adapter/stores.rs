@@ -1,24 +1,23 @@
-use std::sync::Arc;
-
 use claw_interface::ClawFs;
 use claw_memory::{
     LongTermError, LongTermInitError, LongTermMemory, MemoryDraft, MemoryId, MemoryItem,
     MemoryPatch, StoreOutcome,
 };
 
-use super::{MemorySnapshot, MemoryTier, TierClassifier};
+use super::tier::classify_tier;
+use super::{MemorySnapshot, MemoryTier};
 
 /// Id prefix for the shared global store.
-pub const GLOBAL_ID_PREFIX: &str = "g-";
+pub(super) const GLOBAL_ID_PREFIX: &str = "g-";
 /// Id prefix for the per-agent store.
-pub const AGENT_ID_PREFIX: &str = "a-";
+pub(super) const AGENT_ID_PREFIX: &str = "a-";
 
 /// Build a global long-term store under `dir` (minting `g-` ids).
 ///
 /// # Errors
 ///
 /// Propagates [`LongTermInitError`] when the journal exists but is unreadable.
-pub fn global_store<F: ClawFs + 'static>(
+pub(crate) fn global_store<F: ClawFs + 'static>(
     dir: &str,
 ) -> Result<LongTermMemory<F>, LongTermInitError> {
     LongTermMemory::new(dir, GLOBAL_ID_PREFIX)
@@ -29,16 +28,17 @@ pub fn global_store<F: ClawFs + 'static>(
 /// # Errors
 ///
 /// Propagates [`LongTermInitError`] when the journal exists but is unreadable.
-pub fn agent_store<F: ClawFs + 'static>(dir: &str) -> Result<LongTermMemory<F>, LongTermInitError> {
+pub(crate) fn agent_store<F: ClawFs + 'static>(
+    dir: &str,
+) -> Result<LongTermMemory<F>, LongTermInitError> {
     LongTermMemory::new(dir, AGENT_ID_PREFIX)
 }
 
-/// The two stores plus the routing policy, shared (by cheap clone) between the
-/// adapter and every memory tool handler.
+/// The two stores, shared (by cheap clone) between the adapter and every memory
+/// tool handler.
 pub(crate) struct MemoryStores<F: ClawFs + 'static> {
     pub(super) global: LongTermMemory<F>,
     pub(super) agent: LongTermMemory<F>,
-    pub(super) classifier: Arc<dyn TierClassifier>,
 }
 
 impl<F: ClawFs + 'static> Clone for MemoryStores<F> {
@@ -46,15 +46,14 @@ impl<F: ClawFs + 'static> Clone for MemoryStores<F> {
         Self {
             global: self.global.clone(),
             agent: self.agent.clone(),
-            classifier: Arc::clone(&self.classifier),
         }
     }
 }
 
 impl<F: ClawFs + 'static> MemoryStores<F> {
-    /// Store a draft, routing it to a tier via the classifier.
+    /// Store a draft in the tier determined by its tags.
     pub(crate) fn store(&self, draft: MemoryDraft) -> StoreOutcome {
-        match self.classifier.classify(&draft) {
+        match classify_tier(&draft) {
             MemoryTier::Global => self.global.store(draft),
             MemoryTier::Agent => self.agent.store(draft),
         }

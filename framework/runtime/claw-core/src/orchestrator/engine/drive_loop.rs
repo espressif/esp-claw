@@ -10,7 +10,7 @@ use crate::session::{Message, SessionId};
 
 use super::super::control::DriveControl;
 use super::super::instance::TurnStopMode;
-use super::session_io::{apply_control, ControlOp};
+use super::session_io::ControlOp;
 use super::{DriveFuture, Engine, InstanceWork};
 
 impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
@@ -20,30 +20,12 @@ where
     Timer: ClawTimer + Default + 'static,
 {
     pub(super) fn session_shutdown(self: &Rc<Self>, session_id: SessionId) -> Option<DriveFuture> {
-        let has_root_work = self.instance_has_root_work(session_id);
-        let mut should_start = false;
-        {
-            let mut drives = self.drives.borrow_mut();
-            let drive = drives.get_mut(&session_id)?;
-            let had_pending_input = drive.take_pending_input().is_some();
-            let had_active_turn = drive.has_active_turn();
-            drive.close_cancels = drive.close_cancels
-                || drive.running
-                || drive.foreground_active
-                || had_pending_input
-                || had_active_turn
-                || has_root_work;
-            drive.closing = true;
-            drive.requested_control = Some(ControlOp::Cancel);
-            if let Some(control) = &drive.control {
-                apply_control(control, drive.requested_control);
-            }
-            if !drive.running {
-                drive.running = true;
-                should_start = true;
-            }
-        }
-        should_start.then(|| {
+        let start_drive = self
+            .runtimes
+            .borrow_mut()
+            .get_mut(&session_id)?
+            .request_close();
+        start_drive.then(|| {
             let engine = Rc::clone(self);
             Box::pin(
                 async move {
@@ -59,15 +41,11 @@ where
         session_id: SessionId,
     ) -> Option<DriveFuture> {
         {
-            let mut drives = self.drives.borrow_mut();
-            let drive = drives.get_mut(&session_id)?;
-            if drive.running {
-                if let Some(control) = &drive.control {
-                    control.request_wake();
-                }
+            let mut runtimes = self.runtimes.borrow_mut();
+            let runtime = runtimes.get_mut(&session_id)?;
+            if !runtime.ensure_drive_started() {
                 return None;
             }
-            drive.running = true;
         }
         let engine = Rc::clone(self);
         Some(Box::pin(
@@ -88,10 +66,10 @@ where
             self.announce_active_turn(session_id);
 
             let requested_control = self
-                .drives
+                .runtimes
                 .borrow_mut()
                 .get_mut(&session_id)
-                .and_then(|drive| drive.requested_control.take());
+                .and_then(|runtime| runtime.take_requested_control());
             if let Some(op) = requested_control {
                 let mode = match op {
                     ControlOp::Interrupt => TurnStopMode::PreserveAgents,
@@ -153,67 +131,52 @@ where
     }
 
     fn session_is_closing(&self, session_id: SessionId) -> bool {
-        match self.drives.borrow().get(&session_id) {
-            Some(drive) => drive.closing,
+        match self.runtimes.borrow().get(&session_id) {
+            Some(runtime) => runtime.is_closing(),
             None => true,
         }
     }
 
     fn take_input(&self, session_id: SessionId) -> Option<Message> {
-        let mut drives = self.drives.borrow_mut();
-        let drive = drives.get_mut(&session_id)?;
-        if drive.closing {
-            return None;
-        }
-        drive.take_pending_input()
+        let mut runtimes = self.runtimes.borrow_mut();
+        runtimes.get_mut(&session_id)?.take_input()
     }
 
     pub(super) fn session_events(&self, session_id: SessionId) -> Option<EventSink> {
-        self.drives
+        self.runtimes
             .borrow()
             .get(&session_id)
-            .and_then(|drive| drive.events.clone())
+            .and_then(|runtime| runtime.event_sink())
     }
 
     fn finish_session_drive(&self, session_id: SessionId) {
-        let mut drives = self.drives.borrow_mut();
-        if let Some(drive) = drives.get_mut(&session_id) {
-            drive.running = false;
-            drive.foreground_active = false;
-            drive.control = None;
-            drive.requested_control = None;
+        let mut runtimes = self.runtimes.borrow_mut();
+        if let Some(runtime) = runtimes.get_mut(&session_id) {
+            runtime.finish_drive();
         }
     }
 
     pub(super) fn set_foreground_active(&self, session_id: SessionId, active: bool) {
-        if let Some(drive) = self.drives.borrow_mut().get_mut(&session_id) {
-            drive.foreground_active = active;
+        if let Some(runtime) = self.runtimes.borrow_mut().get_mut(&session_id) {
+            runtime.set_foreground_active(active);
         }
     }
 
     pub(super) fn set_active_control(&self, session_id: SessionId, control: Option<DriveControl>) {
-        let mut drives = self.drives.borrow_mut();
-        if let Some(drive) = drives.get_mut(&session_id) {
-            if let Some(control) = &control {
-                apply_control(control, drive.requested_control);
-            } else {
-                drive.requested_control = None;
-            }
-            drive.control = control;
+        let mut runtimes = self.runtimes.borrow_mut();
+        if let Some(runtime) = runtimes.get_mut(&session_id) {
+            runtime.set_active_control(control);
         }
     }
 
     async fn finish_closing_session(&self, session_id: SessionId) {
         let (events, should_cancel, deleted) = {
-            let drives = self.drives.borrow();
-            let Some(drive) = drives.get(&session_id) else {
+            let runtimes = self.runtimes.borrow();
+            let Some(runtime) = runtimes.get(&session_id) else {
                 return;
             };
-            (
-                drive.events.clone(),
-                drive.close_cancels,
-                !self.sessions.contains(session_id),
-            )
+            let (events, should_cancel) = runtime.close_snapshot();
+            (events, should_cancel, !self.sessions.contains(session_id))
         };
 
         if should_cancel {
@@ -232,32 +195,24 @@ where
 
         if deleted {
             let close_acks = {
-                let mut drives = self.drives.borrow_mut();
-                let Some(drive) = drives.get_mut(&session_id) else {
+                let mut runtimes = self.runtimes.borrow_mut();
+                let Some(runtime) = runtimes.get_mut(&session_id) else {
                     return;
                 };
-                drive.take_close_acks()
+                runtime.take_close_acks()
             };
             tracing::info_span!("session.delete", run.session = %session_id).in_scope(|| {
                 tracing::info!(name: "runtime_state_removed", "");
             });
-            self.drives.borrow_mut().remove(&session_id);
-            self.instances.borrow_mut().remove(&session_id);
+            self.runtimes.borrow_mut().remove(&session_id);
             for ack in close_acks {
                 let _ = ack.try_send(Ok(()));
             }
             return;
         }
 
-        if let Some(drive) = self.drives.borrow_mut().get_mut(&session_id) {
-            drive.events = None;
-            let _ = drive.take_pending_input();
-            drive.running = false;
-            drive.foreground_active = false;
-            drive.control = None;
-            drive.requested_control = None;
-            drive.closing = false;
-            drive.close_cancels = false;
+        if let Some(runtime) = self.runtimes.borrow_mut().get_mut(&session_id) {
+            runtime.finish_close();
         }
         let close_result = match self.checkpoint_session_runtime(session_id) {
             Ok(()) => Ok(()),
@@ -267,11 +222,11 @@ where
             }
         };
         let close_acks = {
-            let mut drives = self.drives.borrow_mut();
-            let Some(drive) = drives.get_mut(&session_id) else {
+            let mut runtimes = self.runtimes.borrow_mut();
+            let Some(runtime) = runtimes.get_mut(&session_id) else {
                 return;
             };
-            drive.take_close_acks()
+            runtime.take_close_acks()
         };
         for ack in close_acks {
             let _ = ack.try_send(close_result.clone());

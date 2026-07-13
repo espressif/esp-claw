@@ -61,8 +61,8 @@ async fn run_one_iteration<H: ClawHttp + StreamingHttp, Timer: ClawTimer>(
     }
 
     let chat_request = ChatRequest {
-        system_prompt: step.system_prompt.as_ref(),
-        messages: step.messages.0,
+        system_prompt: step.system_prompt,
+        messages: step.messages,
         reminders: step.reminders,
         tools_json: Some(step.tools.schemas_json()),
         retry: loop_.retry,
@@ -97,11 +97,8 @@ async fn run_one_iteration<H: ClawHttp + StreamingHttp, Timer: ClawTimer>(
             Err(llm_err) => return interpret_chat_error(llm_err),
         };
 
-        // Stream content events as tokens arrive: reasoning (cap-truncated across
-        // fragments), then output, then complete tool calls — matching the
-        // provider ordering `reasoning -> output -> tools`. `Output` is emitted
-        // here (not by the orchestrator's routed reply) so plain answers stream;
-        // the orchestrator dedups via `RootReply::streamed`.
+        // The iteration loop owns streamed LLM fragments. The orchestrator emits
+        // only messages it synthesizes outside this stream.
         let mut reasoning_emitted = 0usize;
         loop {
             let next = {
@@ -185,7 +182,7 @@ async fn run_one_iteration<H: ClawHttp + StreamingHttp, Timer: ClawTimer>(
 
     // Tool-call events were already emitted per call while streaming above.
 
-    if let Err(err) = append_assistant_tool_calls(&mut appended.0, &llm_response) {
+    if let Err(err) = append_assistant_tool_calls(&mut appended, &llm_response) {
         let kind: &'static str = (&err).into();
         tracing::error!(name: "assistant_tool_calls_invalid", kind);
         return Err(err);
@@ -211,11 +208,6 @@ async fn run_one_iteration<H: ClawHttp + StreamingHttp, Timer: ClawTimer>(
         ToolRoundResult::Preempted(outcome) => {
             tracing::warn!(name: "preempted", checkpoint = "before_tool");
             Ok(IterationOutcome::Preempted(outcome))
-        }
-        ToolRoundResult::Failed(err) => {
-            let kind: &'static str = (&err).into();
-            tracing::error!(name: "tool_round_failed", kind);
-            Err(err)
         }
     }
 }

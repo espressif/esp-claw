@@ -1,7 +1,7 @@
 //! Render parsed manifests into Rust source: a single `MANIFESTS` array of typed
 //! `AgentManifest` values. The output is `include!`-d into `crate::agent::manifest`,
-//! so it references the `AgentManifest`, `AgentKind`, `SkillId`, and
-//! `RetryCount` types defined/imported there.
+//! so it references the `AgentManifest`, `AgentKind`, and `SkillId` types
+//! defined/imported there.
 //!
 //! Generation uses `quote` to build a typed `proc_macro2::TokenStream` rather
 //! than hand-concatenating source strings, so string escaping, slice literals,
@@ -14,13 +14,13 @@ use quote::quote;
 use crate::parse::ParsedManifest;
 
 /// Render the full generated module body for `kinds` (assumed already sorted for
-/// deterministic output): a single `pub const MANIFESTS: &[AgentManifest]`.
-pub fn render(kinds: &[ParsedManifest]) -> String {
+/// deterministic output): a single `pub(super) const MANIFESTS: &[AgentManifest]`.
+pub(crate) fn render(kinds: &[ParsedManifest]) -> String {
     let entries = kinds.iter().map(render_entry);
 
     let body = quote! {
         #[doc = "Every firmware-baked agent manifest, one entry per kind under `resources/agents/`."]
-        pub const MANIFESTS: &[AgentManifest] = &[
+        pub(super) const MANIFESTS: &[AgentManifest] = &[
             #(#entries),*
         ];
     };
@@ -49,8 +49,8 @@ fn render_entry(kind: &ParsedManifest) -> TokenStream {
             description: #description,
             spawn_enabled: #spawn_enabled,
             allowed_kinds: &[#(AgentKind::from_static(#allowed_kinds)),*],
-            retries: RetryCount::new(#retries),
-            tool_block_retries: RetryCount::new(#tool_block_retries),
+            retries: #retries,
+            tool_block_retries: #tool_block_retries,
             tool_groups: &[#(#tool_groups),*],
             skills: &[#(SkillId::from_static(#skills)),*],
             instructions: #instructions,

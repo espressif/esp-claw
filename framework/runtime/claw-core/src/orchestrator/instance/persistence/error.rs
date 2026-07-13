@@ -6,7 +6,7 @@ use claw_checkpoint::DurablePartError;
 use crate::agent::{AgentId, FsAgentCreateError};
 
 #[derive(Debug)]
-pub struct OrchestratorInstanceRestoreError {
+pub(crate) struct OrchestratorInstanceRestoreError {
     kind: OrchestratorInstanceRestoreErrorKind,
 }
 
@@ -20,6 +20,8 @@ enum OrchestratorInstanceRestoreErrorKind {
     },
     #[error("checkpointed agent is missing after rebuild: {0}")]
     MissingAgent(AgentId),
+    #[error("checkpointed durable parts do not match the rebuilt agent: {0}")]
+    PartRoster(AgentId),
     #[error("unknown checkpointed agent part {part} for {agent}")]
     UnknownPart { agent: AgentId, part: String },
     #[error("failed to restore checkpointed agent part {part} for {agent}: {source}")]
@@ -44,6 +46,12 @@ impl OrchestratorInstanceRestoreError {
     pub(in crate::orchestrator::instance) fn missing_agent(agent: AgentId) -> Self {
         Self {
             kind: OrchestratorInstanceRestoreErrorKind::MissingAgent(agent),
+        }
+    }
+
+    pub(in crate::orchestrator::instance) fn part_roster(agent: AgentId) -> Self {
+        Self {
+            kind: OrchestratorInstanceRestoreErrorKind::PartRoster(agent),
         }
     }
 

@@ -1,4 +1,5 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use claw_checkpoint::{DurableState, PartStateSlice};
@@ -7,15 +8,17 @@ use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::agent::{
-    AgentId, AgentIdAllocator, AgentKind, AgentPlacement, FsAgentCreateError, FsAgentFactory,
-    GraphHost,
+    AgentGraphSnapshot, AgentId, AgentIdAllocator, AgentKind, AgentPlacement, FsAgentCreateError,
+    FsAgentFactory, GraphHost,
 };
 use crate::session::{SessionId, SessionPersistence};
 
-use super::inflight::InflightAgentTasks;
-use super::model::{EffectQueue, InstanceHost, OrchestratorInstanceState, SnapshotView};
-use super::persistence::OrchestratorInstanceRestoreError;
-use super::OrchestratorInstance;
+use super::graph_state::{EffectQueue, InstanceHost, SnapshotView};
+use super::persistence::{
+    AgentPartState, OrchestratorInstanceRestore, OrchestratorInstanceRestoreError,
+};
+use super::state::OrchestratorInstanceState;
+use super::{AgentRegistry, InflightAgentTasks, OrchestratorInstance};
 
 impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
 where
@@ -26,12 +29,12 @@ where
     /// Create an empty instance for `session`.
     pub(crate) fn new(
         session: SessionId,
-        factory: Arc<FsAgentFactory<Filesystem, Http, Timer>>,
+        factory: Rc<FsAgentFactory<Filesystem, Http, Timer>>,
         agent_id_allocator: AgentIdAllocator,
         state: OrchestratorInstanceState,
     ) -> Self {
         let effects: EffectQueue = Arc::new(Mutex::new(VecDeque::new()));
-        let snapshots: SnapshotView = Arc::new(Mutex::new(HashMap::new()));
+        let snapshots: SnapshotView = Arc::new(Mutex::new(AgentGraphSnapshot::default()));
         let host: Arc<dyn GraphHost> = Arc::new(InstanceHost {
             agent_id_allocator: agent_id_allocator.clone(),
             effects: Arc::clone(&effects),
@@ -42,7 +45,8 @@ where
             factory,
             agent_id_allocator,
             state: DurableState::new(state),
-            inflight: InflightAgentTasks::default(),
+            registry: AgentRegistry::new(),
+            inflight: InflightAgentTasks::new(),
             effects,
             snapshots,
             host,
@@ -51,28 +55,29 @@ where
 
     pub(crate) fn from_restored_state(
         session: SessionId,
-        factory: Arc<FsAgentFactory<Filesystem, Http, Timer>>,
+        factory: Rc<FsAgentFactory<Filesystem, Http, Timer>>,
         agent_id_allocator: AgentIdAllocator,
-        state: OrchestratorInstanceState,
+        restored: OrchestratorInstanceRestore,
     ) -> Result<Self, OrchestratorInstanceRestoreError> {
+        let OrchestratorInstanceRestore { state, agent_parts } = restored;
         let mut instance = Self::new(session, factory, agent_id_allocator, state);
-        instance.restore_agents_from_pending_parts()?;
+        instance.restore_agents(agent_parts)?;
         Ok(instance)
     }
 
-    fn restore_agents_from_pending_parts(
+    fn restore_agents(
         &mut self,
+        pending: BTreeMap<AgentId, Vec<AgentPartState>>,
     ) -> Result<(), OrchestratorInstanceRestoreError> {
-        let pending = std::mem::take(&mut self.state.get_mut().pending_agent_parts);
         let agents = self
             .state
             .get()
-            .meta
-            .iter()
-            .map(|(&id, meta)| (id, meta.clone()))
+            .graph
+            .nodes()
+            .map(|(id, meta)| (id, meta.clone()))
             .collect::<Vec<_>>();
         for (id, meta) in agents {
-            let placement = if self.state.get().root == Some(id) {
+            let placement = if self.state.get().graph.is_root(id) {
                 AgentPlacement::Root {
                     session: self.session,
                     persistence: SessionPersistence::Persistent,
@@ -80,17 +85,28 @@ where
             } else {
                 AgentPlacement::Sub(id)
             };
-            self.build_agent(id, &meta.kind, String::new(), placement, Arc::from([]))
+            self.build_agent(id, meta.kind(), String::new(), placement, Vec::new())
                 .map_err(|source| OrchestratorInstanceRestoreError::agent(id, source))?;
 
-            let Some(parts) = pending.get(&id) else {
-                continue;
-            };
-            let state = self.state.get_mut();
-            let agent = state
+            let parts = pending
+                .get(&id)
+                .ok_or_else(|| OrchestratorInstanceRestoreError::part_roster(id))?;
+            let agent = self
                 .registry
                 .get_mut(id)
                 .ok_or_else(|| OrchestratorInstanceRestoreError::missing_agent(id))?;
+            let expected = agent
+                .durable_parts()
+                .into_iter()
+                .map(|part| part.name())
+                .collect::<BTreeSet<_>>();
+            let actual = parts
+                .iter()
+                .map(|part| part.name.as_str())
+                .collect::<BTreeSet<_>>();
+            if expected.len() != parts.len() || expected != actual {
+                return Err(OrchestratorInstanceRestoreError::part_roster(id));
+            }
             for part in parts {
                 let restored = agent
                     .restore_durable_part(
@@ -124,7 +140,7 @@ where
         kind: &AgentKind,
         goal: String,
         placement: AgentPlacement,
-        inherited_context: Arc<[Block<'static>]>,
+        inherited_context: Vec<Block<'static>>,
     ) -> Result<(), FsAgentCreateError> {
         let agent = self.factory.create_agent(
             id,
@@ -134,7 +150,7 @@ where
             Arc::clone(&self.host),
             inherited_context,
         )?;
-        self.state.get_mut().registry.insert(id, agent);
+        self.registry.insert(id, agent);
         Ok(())
     }
 }

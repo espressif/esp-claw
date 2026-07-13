@@ -118,7 +118,7 @@ pub enum SessionEvent {
 /// only the root's events reach the stream, and used when a session has no
 /// live subscriber.
 #[derive(Clone)]
-pub struct EventSink {
+pub(crate) struct EventSink {
     tx: Option<async_channel::Sender<SessionEvent>>,
 }
 

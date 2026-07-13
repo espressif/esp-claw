@@ -12,7 +12,7 @@ use claw_context::{Block, BlockKind, ContextSink};
 use claw_skill::SkillSet;
 use claw_tool::ToolGroup;
 
-use super::traits::{ContextAdapter, ContextAdapterInput};
+use super::traits::ContextAdapter;
 
 pub(crate) struct SkillContextAdapter {
     skills: Arc<Mutex<SkillSet>>,
@@ -27,7 +27,7 @@ impl SkillContextAdapter {
 }
 
 impl ContextAdapter for SkillContextAdapter {
-    fn contribute(&mut self, _input: ContextAdapterInput<'_>, output: &mut ContextSink<'_>) {
+    fn contribute(&mut self, output: &mut ContextSink<'_>) {
         let mut skills = lock_skill_set(&self.skills);
         let rendered = skills.catalog_context();
         output.block(Block::new(BlockKind::SkillList, rendered));

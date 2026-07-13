@@ -1,4 +1,3 @@
-use serde_json::Value;
 use tracing::Instrument as _;
 
 use claw_api::LlmResponse;
@@ -13,11 +12,10 @@ use super::IterationId;
 pub(super) enum ToolRoundResult {
     Completed { runs: Vec<ToolRun> },
     Preempted(PreemptedOutcome),
-    Failed(IterationLoopError),
 }
 
 pub(super) fn append_assistant_tool_calls(
-    messages: &mut Value,
+    messages: &mut AppendedMessages,
     response: &LlmResponse,
 ) -> Result<(), IterationLoopError> {
     let Some(raw) = response
@@ -27,16 +25,11 @@ pub(super) fn append_assistant_tool_calls(
     else {
         return Err(IterationLoopError::MissingAssistantMessage);
     };
-    let Ok(assistant) = serde_json::from_str::<Value>(raw) else {
+    let Ok(assistant) = serde_json::from_str(raw) else {
         return Err(IterationLoopError::MalformedAssistantMessage);
     };
-    match messages.as_array_mut() {
-        Some(a) => {
-            a.push(assistant);
-            Ok(())
-        }
-        None => Err(IterationLoopError::MessagesNotArray),
-    }
+    messages.push(assistant);
+    Ok(())
 }
 
 pub(super) async fn run_tool_calls(
@@ -46,10 +39,6 @@ pub(super) async fn run_tool_calls(
     response: &LlmResponse,
     iteration_id: IterationId,
 ) -> ToolRoundResult {
-    if appended.0.as_array().is_none() {
-        return ToolRoundResult::Failed(IterationLoopError::MessagesNotArray);
-    }
-
     let mut runs: Vec<ToolRun> = Vec::with_capacity(response.tool_calls.len());
 
     for tc in &response.tool_calls {
@@ -87,9 +76,7 @@ pub(super) async fn run_tool_calls(
                     tracing::warn!(name: "parse_failed", kind = "invalid_invocation");
                 });
                 let content = error.to_string();
-                if let Err(error) = push_tool_message(appended, &tc.id, content, false) {
-                    return ToolRoundResult::Failed(error);
-                }
+                push_tool_message(appended, &tc.id, content, false);
                 span.in_scope(|| {
                     tracing::info!(name: "result", ok = false, blocked = false);
                 });
@@ -117,9 +104,7 @@ pub(super) async fn run_tool_calls(
             }
         });
 
-        if let Err(error) = push_tool_message(appended, &tc.id, content, ok) {
-            return ToolRoundResult::Failed(error);
-        }
+        push_tool_message(appended, &tc.id, content, ok);
         let disposition = match approval {
             Some(approval) => ToolRunDisposition::AwaitingApproval(approval),
             None if blocked => ToolRunDisposition::Blocked,
@@ -140,7 +125,7 @@ fn push_tool_message(
     id: &str,
     content: String,
     ok: bool,
-) -> Result<(), IterationLoopError> {
+) {
     let tool_message = serde_json::json!({
         "role": "tool",
         "tool_call_id": id,
@@ -148,9 +133,5 @@ fn push_tool_message(
         "is_error": !ok,
     });
 
-    let Some(runtime_arr) = appended.0.as_array_mut() else {
-        return Err(IterationLoopError::MessagesNotArray);
-    };
-    runtime_arr.push(tool_message);
-    Ok(())
+    appended.push(tool_message);
 }

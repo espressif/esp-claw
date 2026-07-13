@@ -1,3 +1,5 @@
+#![deny(unreachable_pub)]
+
 //! Build script for `claw_core` (entry point; configured via `build =
 //! "manifest_gen/main.rs"` in `Cargo.toml`).
 //!

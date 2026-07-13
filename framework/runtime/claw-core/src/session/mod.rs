@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 crate::define_prefixed_id!(SessionId, "session-", "session");
 crate::define_prefixed_id!(TurnId, "turn-", "turn");
 
-pub use message::{AttachmentId, AttachmentKind, AttachmentRecord, AttachmentRef, Message};
+pub use message::Message;
 
 /// Whether a session survives a runtime restart.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,12 +56,6 @@ pub(crate) struct SessionStore {
     registry: Mutex<Registry>,
 }
 
-impl Default for SessionStore {
-    fn default() -> Self {
-        Self::new(SessionStoreState::default())
-    }
-}
-
 impl SessionStore {
     /// Build a session store from durable state.
     pub(crate) fn new(state: SessionStoreState) -> Self {
@@ -81,7 +75,7 @@ impl SessionStore {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    pub fn create(&self, persistence: SessionPersistence) -> SessionId {
+    pub(crate) fn create(&self, persistence: SessionPersistence) -> SessionId {
         let mut registry = self.lock_registry();
         let id = registry.next_runtime_session_id;
         let next_session_id = SessionId::new(id.0.saturating_add(1));
@@ -97,7 +91,7 @@ impl SessionStore {
         id
     }
 
-    pub fn list(&self) -> Vec<SessionId> {
+    pub(crate) fn list(&self) -> Vec<SessionId> {
         let registry = self.lock_registry();
         let mut sessions = registry.state.get().sessions.clone();
         sessions.extend_from_slice(&registry.ephemeral_sessions);
@@ -105,7 +99,7 @@ impl SessionStore {
         sessions
     }
 
-    pub fn delete(&self, session_id: SessionId) -> bool {
+    pub(crate) fn delete(&self, session_id: SessionId) -> bool {
         let mut registry = self.lock_registry();
         if let Some(position) = registry
             .state
@@ -128,11 +122,11 @@ impl SessionStore {
         true
     }
 
-    pub fn contains(&self, session_id: SessionId) -> bool {
+    pub(crate) fn contains(&self, session_id: SessionId) -> bool {
         self.persistence(session_id).is_some()
     }
 
-    pub fn persistence(&self, session_id: SessionId) -> Option<SessionPersistence> {
+    pub(crate) fn persistence(&self, session_id: SessionId) -> Option<SessionPersistence> {
         let registry = self.lock_registry();
         if registry.state.get().sessions.contains(&session_id) {
             Some(SessionPersistence::Persistent)
@@ -246,7 +240,7 @@ mod tests {
 
     #[test]
     fn ephemeral_sessions_stay_out_of_durable_state() {
-        let sessions = SessionStore::default();
+        let sessions = SessionStore::new(SessionStoreState::default());
         let ephemeral = sessions.create(SessionPersistence::Ephemeral);
         let persistent = sessions.create(SessionPersistence::Persistent);
 

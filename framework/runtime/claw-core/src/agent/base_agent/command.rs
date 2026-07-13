@@ -3,7 +3,7 @@ use strum::IntoStaticStr;
 
 use claw_tool::ToolSetError;
 
-use super::{ApprovalId, IterationLoopError};
+use super::IterationLoopError;
 
 /// Inbound: a control input handed to the agent. This is the agent's entire
 /// external surface — the outside drives the agent only through these.
@@ -22,18 +22,9 @@ pub(crate) enum AgentCommand {
     /// from the agent ending itself via `conversation_end`.) Being disruptive,
     /// it discards the still-open turn instead of writing a marker, so cancelled
     /// partial work leaves no transcript trace.
-    Cancel {
-        /// Why the task is being abandoned; carried on the cancelled outcome.
-        reason: CancelReason,
-    },
-    /// Deliver a human decision for a pending [`TickOutcome::AwaitingApproval`].
-    /// Ignored unless the agent is awaiting this exact approval.
-    ApprovalResult {
-        /// The pending approval this decision answers.
-        id: ApprovalId,
-        /// The human's verdict.
-        decision: ApprovalDecision,
-    },
+    Cancel,
+    /// Deliver the human's decision for the active approval.
+    ApprovalResult(ApprovalDecision),
 }
 
 /// The agent's externally observable lifecycle state.
@@ -83,26 +74,6 @@ pub(crate) enum AgentCommandError {
         /// The state the agent was in when the approval result was rejected.
         state: AgentState,
     },
-    /// The agent is awaiting approval, but for a different request id.
-    #[error("approval {got} does not match the pending approval {expected}")]
-    ApprovalMismatch {
-        /// The approval the agent is actually waiting on.
-        expected: ApprovalId,
-        /// The approval id the caller supplied.
-        got: ApprovalId,
-    },
-}
-
-/// Why a task was [`Cancel`](AgentCommand::Cancel)led, carried on the resulting
-/// [`TickOutcome::Cancelled`].
-#[derive(Clone, Debug, Deserialize, IntoStaticStr, PartialEq, Eq, Serialize)]
-pub(crate) enum CancelReason {
-    /// A human asked to stop.
-    #[strum(serialize = "user_requested")]
-    UserRequested,
-    /// The host is shutting the agent down.
-    #[strum(serialize = "shutdown")]
-    Shutdown,
 }
 
 /// A human's answer to an approval request.
@@ -137,8 +108,6 @@ pub(crate) enum TickOutcome {
     /// A tool call's permission policy returned `Ask`; the agent is waiting for a
     /// human decision. Resolve it by sending [`AgentCommand::ApprovalResult`].
     AwaitingApproval {
-        /// The id to pass back in [`AgentCommand::ApprovalResult`].
-        id: ApprovalId,
         /// A human-readable description of what needs approving.
         summary: String,
     },
@@ -149,10 +118,7 @@ pub(crate) enum TickOutcome {
         final_message: String,
     },
     /// Terminal: the task was cancelled by the orchestrator.
-    Cancelled {
-        /// Why the task was cancelled.
-        reason: CancelReason,
-    },
+    Cancelled,
     /// Terminal: the task failed.
     Failed(AgentRunError),
 }
@@ -176,6 +142,9 @@ pub(crate) enum AgentRunError {
         /// The name of the refused tool.
         name: String,
     },
+    /// The private task phase/mailbox invariant was violated.
+    #[error("agent task state invariant violated")]
+    TaskStateInvariant,
 }
 
 /// Failure assembling a [`super::BaseAgent`] in [`super::BaseAgent::build`].

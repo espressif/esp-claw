@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use claw_checkpoint::{
     BatchId, CheckpointError, CheckpointStorage, DurableBatchSnapshot, DurablePartError,
-    DurableStateCodec, FsCheckpointStorage, SharedCheckpointCoordinator,
+    DurableStateCodec, FsCheckpointStorage, PartStateBlob, SharedCheckpointCoordinator,
 };
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
@@ -11,8 +11,8 @@ use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use crate::agent::{AgentIdAllocator, FsAgentFactory};
 use crate::session::{SessionId, SessionStore, SessionStoreState};
 
-use super::engine::{EngineState, SessionDrive, SessionDriveState};
-use super::instance::{OrchestratorInstance, OrchestratorInstanceState};
+use super::engine::{EngineState, SessionDriveState, SessionRuntime};
+use super::instance::{OrchestratorInstance, OrchestratorInstanceRestore};
 use super::{
     OrchestratorBuildError, ENGINE_BATCH, ENGINE_BATCH_ID, ENGINE_PART, ORCHESTRATOR_INSTANCE_PART,
     SESSION_DRIVE_PART, SESSION_REGISTRY_BATCH, SESSION_REGISTRY_BATCH_ID, SESSION_RUNTIME_BATCH,
@@ -117,48 +117,12 @@ pub(super) fn load_engine_state<Filesystem: ClawFs>(
     }
 }
 
-pub(super) fn load_session_drives<Filesystem: ClawFs>(
+pub(super) fn load_session_runtimes<Filesystem, Http, Timer>(
     checkpoint_dir: &str,
     sessions: &SessionStore,
-) -> Result<HashMap<SessionId, SessionDrive>, OrchestratorBuildError> {
-    let storage = FsCheckpointStorage::<Filesystem>::new(checkpoint_dir.to_owned());
-    let Some(step) = storage.latest_step()? else {
-        return Ok(HashMap::new());
-    };
-    let checkpoint = storage.load_checkpoint(step)?;
-    let mut drives = HashMap::new();
-    for batch in checkpoint.batches {
-        if batch.name != SESSION_RUNTIME_BATCH {
-            continue;
-        }
-        let session = SessionId::new(batch.id.0);
-        if !sessions.contains(session) {
-            continue;
-        }
-        let mut saw_drive = false;
-        for part in batch.parts {
-            if part.name == SESSION_DRIVE_PART {
-                saw_drive = true;
-                let state = SessionDriveState::decode_state(part.state.as_slice())?;
-                drives.insert(session, SessionDrive::new(state));
-            }
-        }
-        if !saw_drive {
-            return Err(OrchestratorBuildError::MissingCheckpointPart {
-                batch: SESSION_RUNTIME_BATCH,
-                part: SESSION_DRIVE_PART,
-            });
-        }
-    }
-    Ok(drives)
-}
-
-pub(super) fn load_session_instances<Filesystem, Http, Timer>(
-    checkpoint_dir: &str,
-    sessions: &SessionStore,
-    factory: Arc<FsAgentFactory<Filesystem, Http, Timer>>,
+    factory: Rc<FsAgentFactory<Filesystem, Http, Timer>>,
     agent_id_allocator: AgentIdAllocator,
-) -> Result<HashMap<SessionId, OrchestratorInstance<Filesystem, Http, Timer>>, OrchestratorBuildError>
+) -> Result<HashMap<SessionId, SessionRuntime<Filesystem, Http, Timer>>, OrchestratorBuildError>
 where
     Filesystem: ClawFs + 'static,
     Http: ClawHttp + StreamingHttp + Default + 'static,
@@ -169,7 +133,13 @@ where
         return Ok(HashMap::new());
     };
     let checkpoint = storage.load_checkpoint(step)?;
-    let mut instances = HashMap::new();
+    let mut runtime_parts = HashMap::<
+        SessionId,
+        (
+            Option<PartStateBlob<'static>>,
+            Option<PartStateBlob<'static>>,
+        ),
+    >::new();
     for batch in checkpoint.batches {
         if batch.name != SESSION_RUNTIME_BATCH {
             continue;
@@ -178,18 +148,55 @@ where
         if !sessions.contains(session) {
             continue;
         }
+        let entry = runtime_parts.entry(session).or_default();
         for part in batch.parts {
-            if part.name == ORCHESTRATOR_INSTANCE_PART {
-                let state = OrchestratorInstanceState::decode_state(part.state.as_slice())?;
-                let instance = OrchestratorInstance::from_restored_state(
-                    session,
-                    Arc::clone(&factory),
-                    agent_id_allocator.clone(),
-                    state,
-                )?;
-                instances.insert(session, instance);
+            match part.name.as_str() {
+                SESSION_DRIVE_PART => {
+                    entry.0 = Some(part.state);
+                }
+                ORCHESTRATOR_INSTANCE_PART => {
+                    entry.1 = Some(part.state);
+                }
+                _ => {}
             }
         }
     }
-    Ok(instances)
+
+    // The drive is the required owner of a session runtime. Validate every
+    // drive before decoding optional instance state so a missing drive cannot
+    // be masked by corruption in a part that has no runtime to attach to.
+    let mut decoded_drives = Vec::with_capacity(runtime_parts.len());
+    for (session, (drive_state, instance_state)) in runtime_parts {
+        let Some(drive_state) = drive_state else {
+            return Err(OrchestratorBuildError::MissingCheckpointPart {
+                batch: SESSION_RUNTIME_BATCH,
+                part: SESSION_DRIVE_PART,
+            });
+        };
+        decoded_drives.push((
+            session,
+            SessionDriveState::decode_state(drive_state.as_slice())?,
+            instance_state,
+        ));
+    }
+
+    let mut runtimes = HashMap::with_capacity(decoded_drives.len());
+    for (session, drive_state, instance_state) in decoded_drives {
+        let instance = instance_state
+            .map(|state| -> Result<_, OrchestratorBuildError> {
+                let state = OrchestratorInstanceRestore::decode_state(state.as_slice())?;
+                Ok(OrchestratorInstance::from_restored_state(
+                    session,
+                    Rc::clone(&factory),
+                    agent_id_allocator.clone(),
+                    state,
+                )?)
+            })
+            .transpose()?;
+        runtimes.insert(
+            session,
+            SessionRuntime::from_restored_parts(drive_state, instance),
+        );
+    }
+    Ok(runtimes)
 }

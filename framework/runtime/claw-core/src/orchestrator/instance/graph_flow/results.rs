@@ -3,9 +3,10 @@ use std::collections::VecDeque;
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
-use crate::agent::{AgentId, CancelReason, TerminationPolicy, TickOutcome};
+use crate::agent::{AgentId, TerminationPolicy, TickOutcome};
 
-use super::super::model::{DriveOutput, RootReply, SubagentResult};
+use super::super::output::DriveOutput;
+use super::super::scheduler::SubagentResult;
 use super::super::OrchestratorInstance;
 
 impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
@@ -25,23 +26,13 @@ where
                 DriveOutput::default()
             }
             TickOutcome::Idle => DriveOutput::default(),
-            TickOutcome::AwaitingApproval {
-                id: approval,
-                summary,
-            } => self.park_approval(id, approval, summary),
-            TickOutcome::Yielded { text } => {
-                DriveOutput::replies(self.route_result(id, text, true, false))
+            TickOutcome::AwaitingApproval { summary } => self.park_approval(id, summary),
+            TickOutcome::Yielded { text } => self.route_yielded(id, text),
+            TickOutcome::Ended { final_message } => self.route_terminal(id, final_message, true),
+            TickOutcome::Cancelled => self.route_cancelled(id),
+            TickOutcome::Failed(error) => {
+                self.route_terminal(id, format!("[failed: {error:?}]"), false)
             }
-            TickOutcome::Ended { final_message } => {
-                DriveOutput::replies(self.route_result(id, final_message, true, true))
-            }
-            TickOutcome::Cancelled { reason } => self.route_cancelled(id, reason),
-            TickOutcome::Failed(error) => DriveOutput::replies(self.route_result(
-                id,
-                format!("[failed: {error:?}]"),
-                false,
-                true,
-            )),
         }
     }
 
@@ -52,10 +43,10 @@ where
         text: String,
         ok: bool,
     ) {
-        if !self.state.get().meta.contains_key(&parent) {
+        if !self.state.get().graph.contains(parent) {
             return;
         }
-        if self.state.get().parked_approvals.contains_key(&parent) {
+        if self.state.get().scheduler.is_awaiting_approval(parent) {
             tracing::info!(
                 name: "result_to_parent",
                 parent_agent = %parent,
@@ -64,8 +55,8 @@ where
             );
             self.state
                 .get_mut()
-                .subagent_result_mailbox
-                .push_back(SubagentResult {
+                .scheduler
+                .queue_subagent_result(SubagentResult {
                     parent,
                     child,
                     text,
@@ -73,7 +64,7 @@ where
                 });
             return;
         }
-        if let Some(parent_agent) = self.state.get_mut().registry.get_mut(parent) {
+        if let Some(parent_agent) = self.registry.get_mut(parent) {
             parent_agent.deliver_child_result(child, text, ok);
             self.enqueue(parent);
             tracing::info!(
@@ -91,8 +82,8 @@ where
             );
             self.state
                 .get_mut()
-                .subagent_result_mailbox
-                .push_back(SubagentResult {
+                .scheduler
+                .queue_subagent_result(SubagentResult {
                     parent,
                     child,
                     text,
@@ -102,73 +93,82 @@ where
     }
 
     pub(in crate::orchestrator::instance) fn flush_subagent_result_mailbox(&mut self) {
-        if self.state.get().subagent_result_mailbox.is_empty() {
+        if !self.state.get().scheduler.has_subagent_results() {
             return;
         }
         let mut pending = VecDeque::new();
-        while let Some(result) = self.pop_subagent_result_mailbox() {
-            if !self.state.get().meta.contains_key(&result.parent) {
+        let results = self.state.get_mut().scheduler.take_subagent_results();
+        for result in results {
+            if !self.state.get().graph.contains(result.parent) {
                 continue;
             }
             if self
                 .state
                 .get()
-                .parked_approvals
-                .contains_key(&result.parent)
+                .scheduler
+                .is_awaiting_approval(result.parent)
             {
                 pending.push_back(result);
                 continue;
             }
             let parent = result.parent;
-            if let Some(parent_agent) = self.state.get_mut().registry.get_mut(parent) {
+            if let Some(parent_agent) = self.registry.get_mut(parent) {
                 parent_agent.deliver_child_result(result.child, result.text, result.ok);
                 self.enqueue(parent);
             } else {
                 pending.push_back(result);
             }
         }
-        self.state.get_mut().subagent_result_mailbox = pending;
+        self.state
+            .get_mut()
+            .scheduler
+            .replace_subagent_results(pending);
     }
 
-    fn route_result(&mut self, id: AgentId, text: String, ok: bool, ended: bool) -> Vec<RootReply> {
+    fn route_yielded(&mut self, id: AgentId, text: String) -> DriveOutput {
         let Some((parent, termination)) = self
             .state
             .get()
-            .meta
-            .get(&id)
-            .map(|meta| (meta.parent, meta.termination))
+            .graph
+            .node(id)
+            .map(|meta| (meta.parent(), meta.termination()))
         else {
-            return Vec::new();
+            return DriveOutput::default();
         };
         let Some(parent_id) = parent else {
-            // A root plain answer streamed its text as Output fragments during the
-            // iteration; a conversation-end closing message (`ended`) did not.
-            return vec![RootReply {
-                session: self.session,
-                text,
-                streamed: !ended,
-            }];
+            return DriveOutput::default();
+        };
+
+        self.deliver_or_mailbox_subagent_result(parent_id, id, text, true);
+
+        if termination == TerminationPolicy::Manual {
+            tracing::info!(name: "manual_yielded", "");
+        } else {
+            self.delete_subtree(id);
+        }
+        DriveOutput::default()
+    }
+
+    fn route_terminal(&mut self, id: AgentId, text: String, ok: bool) -> DriveOutput {
+        let Some(parent) = self.state.get().graph.node(id).map(|meta| meta.parent()) else {
+            return DriveOutput::default();
+        };
+        let Some(parent_id) = parent else {
+            return DriveOutput::message(text);
         };
 
         self.deliver_or_mailbox_subagent_result(parent_id, id, text, ok);
-
-        let keep_alive = termination == TerminationPolicy::Manual && ok && !ended;
-        if keep_alive {
-            tracing::info!(name: "manual_yielded", "");
-        }
-        if !keep_alive {
-            self.delete_subtree(id);
-        }
-        Vec::new()
+        self.delete_subtree(id);
+        DriveOutput::default()
     }
 
-    fn route_cancelled(&mut self, id: AgentId, _reason: CancelReason) -> DriveOutput {
+    fn route_cancelled(&mut self, id: AgentId) -> DriveOutput {
         if self
             .state
             .get()
-            .meta
-            .get(&id)
-            .and_then(|meta| meta.parent)
+            .graph
+            .node(id)
+            .and_then(|meta| meta.parent())
             .is_none()
         {
             return DriveOutput::default();
@@ -176,11 +176,68 @@ where
         self.delete_subtree(id);
         DriveOutput::default()
     }
+}
 
-    fn pop_subagent_result_mailbox(&mut self) -> Option<SubagentResult> {
-        if self.state.get().subagent_result_mailbox.is_empty() {
-            return None;
-        }
-        self.state.get_mut().subagent_result_mailbox.pop_front()
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+    use std::sync::{Arc, RwLock};
+
+    use claw_interface::{ImmediateTimer, MemFs, RealHttp};
+    use claw_tool::ToolRegistry;
+
+    use crate::agent::{AgentId, AgentIdAllocator, AgentKind, FsAgentFactory, TickOutcome};
+    use crate::config::ClawApiManager;
+    use crate::session::SessionId;
+
+    use super::super::super::state::OrchestratorInstanceState;
+    use super::super::super::{OrchestratorInstance, ROOT_AGENT_KIND};
+
+    type TestInstance = OrchestratorInstance<MemFs, RealHttp, ImmediateTimer>;
+
+    #[allow(clippy::arc_with_non_send_sync)]
+    fn instance_with_root() -> (TestInstance, AgentId) {
+        MemFs::new();
+        let factory = FsAgentFactory::new(
+            Arc::new(ToolRegistry::new()),
+            "/output-test".to_owned(),
+            Vec::new(),
+            Arc::new(RwLock::new(ClawApiManager::new())),
+        )
+        .expect("test factory builds");
+        let mut instance = OrchestratorInstance::new(
+            SessionId::new(1),
+            Rc::new(factory),
+            AgentIdAllocator::new(),
+            OrchestratorInstanceState::default(),
+        );
+        let root = AgentId(1);
+        assert!(instance
+            .state
+            .get_mut()
+            .graph
+            .insert_root(root, AgentKind::from_static(ROOT_AGENT_KIND)));
+        (instance, root)
+    }
+
+    #[test]
+    fn only_root_terminal_results_request_engine_emission() {
+        let (mut instance, root) = instance_with_root();
+
+        let yielded = instance.route_outcome(
+            root,
+            TickOutcome::Yielded {
+                text: "streamed".to_owned(),
+            },
+        );
+        assert!(yielded.into_messages().is_empty());
+
+        let ended = instance.route_outcome(
+            root,
+            TickOutcome::Ended {
+                final_message: "finished".to_owned(),
+            },
+        );
+        assert_eq!(ended.into_messages(), vec!["finished".to_owned()]);
     }
 }

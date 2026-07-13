@@ -13,9 +13,9 @@ use crate::orchestrator::SessionControlError;
 use crate::session::{Message, TurnId, TurnIdAllocator};
 
 use super::super::control::DriveControl;
-use super::session_io::ControlOp;
+use super::session_io::{apply_control, ControlOp};
 
-const SESSION_DRIVE_SCHEMA_VERSION: u32 = 1;
+const SESSION_DRIVE_SCHEMA_VERSION: u32 = 2;
 
 /// Durable work owned by the session's one active turn.
 #[derive(Deserialize, Serialize)]
@@ -65,37 +65,177 @@ impl DurableStateCodec for SessionDriveState {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SessionDrivePhase {
+    Closed,
+    OpenIdle,
+    OpenDriving,
+    Closing,
+}
+
 pub(in crate::orchestrator) struct SessionDrive {
-    pub(super) events: Option<EventSink>,
-    pub(super) running: bool,
-    pub(super) foreground_active: bool,
-    pub(super) control: Option<DriveControl>,
-    pub(super) requested_control: Option<ControlOp>,
-    pub(super) closing: bool,
-    pub(super) close_cancels: bool,
+    phase: SessionDrivePhase,
+    events: Option<EventSink>,
+    foreground_active: bool,
+    control: Option<DriveControl>,
+    requested_control: Option<ControlOp>,
+    close_cancels: bool,
     /// Event delivery is process-local. A restored turn is announced again on
     /// the newly opened stream.
-    pub(super) announced_turn: Option<TurnId>,
-    pub(super) control_acks: Vec<Sender<Result<(), SessionControlError>>>,
-    pub(super) close_acks: Vec<Sender<Result<(), SessionControlError>>>,
+    announced_turn: Option<TurnId>,
+    control_acks: Vec<Sender<Result<(), SessionControlError>>>,
+    close_acks: Vec<Sender<Result<(), SessionControlError>>>,
     state: DurableState<SessionDriveState>,
 }
 
 impl SessionDrive {
     pub(in crate::orchestrator) fn new(state: SessionDriveState) -> Self {
         Self {
+            phase: SessionDrivePhase::Closed,
             events: None,
-            running: false,
             foreground_active: false,
             control: None,
             requested_control: None,
-            closing: false,
             close_cancels: false,
             announced_turn: None,
             control_acks: Vec::new(),
             close_acks: Vec::new(),
             state: DurableState::new(state),
         }
+    }
+
+    #[cfg(test)]
+    fn phase(&self) -> SessionDrivePhase {
+        self.phase
+    }
+
+    /// Attach the process-local event stream to a restored or fresh drive.
+    /// Returns whether durable input was waiting when the stream opened.
+    pub(super) fn open(&mut self, events: EventSink) -> Option<bool> {
+        if self.phase != SessionDrivePhase::Closed {
+            return None;
+        }
+        self.events = Some(events);
+        self.announced_turn = None;
+        self.close_cancels = false;
+        self.phase = SessionDrivePhase::OpenIdle;
+        Some(self.has_pending_input())
+    }
+
+    pub(super) fn is_open(&self) -> bool {
+        matches!(
+            self.phase,
+            SessionDrivePhase::OpenIdle | SessionDrivePhase::OpenDriving
+        )
+    }
+
+    pub(super) fn is_closing(&self) -> bool {
+        self.phase == SessionDrivePhase::Closing
+    }
+
+    pub(super) fn event_sink(&self) -> Option<EventSink> {
+        self.events.clone()
+    }
+
+    /// Move an idle open drive into its one in-flight drive slot.
+    pub(super) fn start(&mut self) -> bool {
+        if self.phase != SessionDrivePhase::OpenIdle {
+            return false;
+        }
+        self.phase = SessionDrivePhase::OpenDriving;
+        true
+    }
+
+    pub(super) fn finish_drive(&mut self) {
+        debug_assert_eq!(self.phase, SessionDrivePhase::OpenDriving);
+        if self.phase == SessionDrivePhase::OpenDriving {
+            self.phase = SessionDrivePhase::OpenIdle;
+        }
+        self.foreground_active = false;
+        self.control = None;
+        self.requested_control = None;
+    }
+
+    pub(super) fn request_close(&mut self, has_root_work: bool) -> bool {
+        if self.phase == SessionDrivePhase::Closing {
+            return false;
+        }
+        let was_driving = self.phase == SessionDrivePhase::OpenDriving;
+        let had_pending_input = self.take_pending_input().is_some();
+        let had_active_turn = self.has_active_turn();
+        self.close_cancels = self.close_cancels
+            || was_driving
+            || self.foreground_active
+            || had_pending_input
+            || had_active_turn
+            || has_root_work;
+        self.phase = SessionDrivePhase::Closing;
+        self.requested_control = Some(ControlOp::Cancel);
+        if let Some(control) = &self.control {
+            apply_control(control, self.requested_control);
+        }
+        !was_driving
+    }
+
+    pub(super) fn close_cancels(&self) -> bool {
+        self.close_cancels
+    }
+
+    pub(super) fn finish_close(&mut self) {
+        debug_assert_eq!(self.phase, SessionDrivePhase::Closing);
+        self.events = None;
+        let _ = self.take_pending_input();
+        self.foreground_active = false;
+        self.control = None;
+        self.requested_control = None;
+        self.close_cancels = false;
+        self.announced_turn = None;
+        self.phase = SessionDrivePhase::Closed;
+    }
+
+    pub(super) fn set_foreground_active(&mut self, active: bool) {
+        debug_assert!(!active || self.phase == SessionDrivePhase::OpenDriving);
+        self.foreground_active = active;
+    }
+
+    pub(super) fn is_foreground_active(&self) -> bool {
+        self.foreground_active
+    }
+
+    pub(super) fn request_wake(&self) {
+        if let Some(control) = &self.control {
+            control.request_wake();
+        }
+    }
+
+    pub(super) fn request_control(&mut self, op: ControlOp) {
+        let requested = ControlOp::merge(self.requested_control, op);
+        self.requested_control = Some(requested);
+        if let Some(control) = &self.control {
+            apply_control(control, self.requested_control);
+        }
+    }
+
+    pub(super) fn take_requested_control(&mut self) -> Option<ControlOp> {
+        self.requested_control.take()
+    }
+
+    pub(super) fn set_active_control(&mut self, control: Option<DriveControl>) {
+        if let Some(control) = &control {
+            apply_control(control, self.requested_control);
+        } else {
+            self.requested_control = None;
+        }
+        self.control = control;
+    }
+
+    pub(super) fn take_unannounced_turn(&mut self) -> Option<TurnId> {
+        let turn = self.active_turn_id()?;
+        if self.announced_turn == Some(turn) {
+            return None;
+        }
+        self.announced_turn = Some(turn);
+        Some(turn)
     }
 
     pub(super) fn has_active_turn(&self) -> bool {
@@ -202,5 +342,68 @@ impl DurablePart for SessionDrive {
             size: StorageSizeHint::Small,
             change: ChangePatternHint::Arbitrary,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SessionDrive, SessionDrivePhase, SessionDriveState};
+    use crate::event::EventSink;
+    use claw_checkpoint::DurablePart;
+
+    #[test]
+    fn lifecycle_has_one_explicit_phase() {
+        let mut drive = SessionDrive::new(SessionDriveState::default());
+
+        assert_eq!(drive.phase(), SessionDrivePhase::Closed);
+        assert!(!drive.open(EventSink::disabled()).unwrap());
+        assert_eq!(drive.phase(), SessionDrivePhase::OpenIdle);
+
+        assert!(drive.start());
+        assert!(!drive.start());
+        assert_eq!(drive.phase(), SessionDrivePhase::OpenDriving);
+
+        assert!(!drive.request_close(false));
+        assert_eq!(drive.phase(), SessionDrivePhase::Closing);
+        assert!(!drive.start());
+
+        drive.finish_close();
+        assert_eq!(drive.phase(), SessionDrivePhase::Closed);
+        assert!(drive.event_sink().is_none());
+    }
+
+    #[test]
+    fn closing_an_idle_drive_schedules_exactly_once() {
+        let mut drive = SessionDrive::new(SessionDriveState::default());
+        drive.open(EventSink::disabled()).unwrap();
+
+        assert!(drive.request_close(false));
+        assert!(!drive.request_close(false));
+        assert_eq!(drive.phase(), SessionDrivePhase::Closing);
+    }
+
+    #[test]
+    fn a_completed_drive_releases_the_only_drive_slot() {
+        let mut drive = SessionDrive::new(SessionDriveState::default());
+        drive.open(EventSink::disabled()).unwrap();
+
+        assert!(drive.start());
+        drive.finish_drive();
+
+        assert_eq!(drive.phase(), SessionDrivePhase::OpenIdle);
+        assert!(drive.start());
+    }
+
+    #[test]
+    fn checkpoint_round_trips_the_current_schema() {
+        let drive = SessionDrive::new(SessionDriveState::default());
+
+        assert_eq!(drive.name(), "session-drive");
+        let state = drive.export_state().unwrap().into_owned();
+        assert_eq!(state.schema_version, 2);
+
+        let restored = SessionDrive::restore_from_state(state.as_slice()).unwrap();
+        assert_eq!(restored.name(), "session-drive");
+        assert_eq!(restored.phase(), SessionDrivePhase::Closed);
     }
 }

@@ -12,9 +12,6 @@ use super::IterationId;
 /// Errors from one [`super::IterationLoop::run`] step.
 #[derive(Clone, Debug, IntoStaticStr, thiserror::Error)]
 pub(crate) enum IterationLoopError {
-    #[strum(serialize = "messages_not_array")]
-    #[error("messages must be a JSON array")]
-    MessagesNotArray,
     #[strum(serialize = "missing_assistant_message")]
     #[error("LLM tool-call response missing raw assistant message JSON")]
     MissingAssistantMessage,
@@ -38,39 +35,41 @@ pub(crate) enum IterationCheckpoint {
     BeforeTool,
 }
 
-/// Borrowed OpenAI-style system prompt for one LLM call.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct SystemPrompt<'a>(pub &'a str);
-
-impl AsRef<str> for SystemPrompt<'_> {
-    fn as_ref(&self) -> &str {
-        self.0
-    }
-}
-
-/// Borrowed OpenAI-style `messages` array for one LLM call.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ChatMessages<'a>(pub &'a Value);
-
 /// Owned message batch appended by one completed step (assistant/tool round).
-#[derive(Clone, Debug, PartialEq, Default)]
-pub(crate) struct AppendedMessages(pub Value);
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct AppendedMessages {
+    messages: Vec<Value>,
+}
 
 impl AppendedMessages {
     pub(crate) fn empty() -> Self {
-        Self(Value::Array(Vec::new()))
+        Self {
+            messages: Vec::new(),
+        }
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.0.as_array().is_none_or(Vec::is_empty)
+        self.messages.is_empty()
+    }
+
+    pub(super) fn push(&mut self, message: Value) {
+        self.messages.push(message);
+    }
+
+    pub(crate) fn as_slice(&self) -> &[Value] {
+        &self.messages
+    }
+
+    pub(crate) fn into_json_array(self) -> Value {
+        Value::Array(self.messages)
     }
 }
 
 /// Inputs for exactly one [`super::IterationLoop::run`]: chat fields + tools.
 pub(crate) struct IterationStep<'a> {
     pub iteration_id: IterationId,
-    pub system_prompt: SystemPrompt<'a>,
-    pub messages: ChatMessages<'a>,
+    pub system_prompt: &'a str,
+    pub messages: &'a Value,
     /// Ephemeral trailing messages for this request only (never persisted),
     /// appended after `messages`. Empty when there is nothing to nudge.
     pub reminders: &'a [Value],
@@ -195,4 +194,26 @@ pub(super) fn check_preempt_at_checkpoint(
         checkpoint,
         produced,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::AppendedMessages;
+
+    #[test]
+    fn appended_messages_can_only_materialize_as_an_array() {
+        let mut messages = AppendedMessages::empty();
+        messages.push(json!({ "role": "assistant", "content": "working" }));
+        messages.push(json!({ "role": "tool", "content": "done" }));
+
+        assert_eq!(
+            messages.into_json_array(),
+            json!([
+                { "role": "assistant", "content": "working" },
+                { "role": "tool", "content": "done" }
+            ])
+        );
+    }
 }

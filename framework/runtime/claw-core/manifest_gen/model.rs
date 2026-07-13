@@ -6,55 +6,55 @@ use serde::Deserialize;
 
 /// `agent.json` — the kind's metadata header.
 #[derive(Debug, Deserialize)]
-pub struct AgentJson {
+pub(crate) struct AgentJson {
     /// Schema version of `agent.json`; reserved for forward-compatibility.
     #[allow(dead_code)]
-    pub schema_version: u32,
+    pub(crate) schema_version: u32,
     /// The kind/role this directory defines (validated against the dir name).
-    pub kind: String,
+    pub(crate) kind: String,
     /// Human/model-facing summary of the kind's purpose.
-    pub description: String,
+    pub(crate) description: String,
     /// Whether this kind may spawn subagents.
-    pub spawn: SpawnJson,
+    pub(crate) spawn: SpawnJson,
     /// Per-agent runtime tuning.
-    pub runtime: RuntimeJson,
+    pub(crate) runtime: RuntimeJson,
 }
 
 /// The `spawn` block of `agent.json`.
 #[derive(Debug, Deserialize)]
-pub struct SpawnJson {
+pub(crate) struct SpawnJson {
     /// Gates the `subagent_spawn` tool.
-    pub enabled: bool,
+    pub(crate) enabled: bool,
     /// Intended allowlist of kinds this agent may spawn (`"*"` = any).
-    pub allowed_kinds: Vec<String>,
+    pub(crate) allowed_kinds: Vec<String>,
 }
 
 /// The `runtime` block of `agent.json`.
 #[derive(Debug, Deserialize)]
-pub struct RuntimeJson {
+pub(crate) struct RuntimeJson {
     /// LLM retry count per iteration.
-    pub retries: u32,
+    pub(crate) retries: u32,
     /// Consecutive gating-blocked tool rounds to tolerate.
     #[serde(default)]
-    pub tool_block_retries: u32,
+    pub(crate) tool_block_retries: u32,
 }
 
 /// `tools/tools.json` — the tool groups this kind may use.
 #[derive(Debug, Deserialize)]
-pub struct ToolsJson {
+pub(crate) struct ToolsJson {
     /// Schema version; reserved for forward-compatibility.
     #[allow(dead_code)]
-    pub schema_version: u32,
+    pub(crate) schema_version: u32,
     /// Tool group ids allowed for this agent kind.
-    pub tool_groups: Vec<String>,
+    pub(crate) tool_groups: Vec<String>,
 }
 
 /// `skills/skills.json` — the skill ids this kind loads.
 #[derive(Debug, Deserialize)]
-pub struct SkillsJson {
+pub(crate) struct SkillsJson {
     /// Schema version; reserved for forward-compatibility.
     #[allow(dead_code)]
-    pub schema_version: u32,
+    pub(crate) schema_version: u32,
     /// Skill ids loaded into the agent's skill set at runtime.
-    pub skills: Vec<String>,
+    pub(crate) skills: Vec<String>,
 }
