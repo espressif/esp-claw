@@ -317,7 +317,7 @@ fn openai_chat_profiles_cache_usage() -> TestResult {
             }
         }"#,
     );
-    let mut rt = ClawApi::init(
+    let mut rt = configured_api(
         cfg(BackendKind::OpenAiCompatible, "https://api.example.com/v1"),
         Owned(http),
     )?;
@@ -368,7 +368,7 @@ fn anthropic_chat_profiles_cache_usage() -> TestResult {
             }
         }"#,
     );
-    let mut rt = ClawApi::init(
+    let mut rt = configured_api(
         cfg(
             BackendKind::AnthropicCompatible,
             "https://api.anthropic.com/v1",
