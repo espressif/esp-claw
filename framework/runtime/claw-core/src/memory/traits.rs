@@ -66,7 +66,7 @@ pub(crate) enum AssistantCommit<'a> {
 /// boundary. Extends [`History`]: one object reads and writes the single
 /// transcript, so a write is always visible to the next read.
 ///
-/// The agent holds this as `Arc<dyn Transcript>` and writes through it directly
+/// The agent holds this as `Box<dyn Transcript>` and writes through it directly
 /// (no event indirection); it lends the read view to adapters via
 /// [`as_history`](Self::as_history).
 pub(crate) trait Transcript: History {

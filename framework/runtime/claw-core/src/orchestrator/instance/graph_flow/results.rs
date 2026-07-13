@@ -5,9 +5,8 @@ use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::agent::{AgentId, TerminationPolicy, TickOutcome};
 
-use super::super::output::DriveOutput;
 use super::super::scheduler::SubagentResult;
-use super::super::OrchestratorInstance;
+use super::super::{DriveOutput, OrchestratorInstance};
 
 impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
 where
@@ -190,8 +189,7 @@ mod tests {
     use crate::config::ClawApiManager;
     use crate::session::SessionId;
 
-    use super::super::super::state::OrchestratorInstanceState;
-    use super::super::super::{OrchestratorInstance, ROOT_AGENT_KIND};
+    use super::super::super::{OrchestratorInstance, OrchestratorInstanceState, ROOT_AGENT_KIND};
 
     type TestInstance = OrchestratorInstance<MemFs, RealHttp, ImmediateTimer>;
 

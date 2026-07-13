@@ -64,9 +64,3 @@ impl BaseAgentState {
         &mut self.task
     }
 }
-
-impl Default for BaseAgentState {
-    fn default() -> Self {
-        Self::new(0)
-    }
-}

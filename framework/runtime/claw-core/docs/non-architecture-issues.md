@@ -466,6 +466,29 @@ Exit condition: decide the intended contracts, update implementation or
 fixtures accordingly, and make `cargo test -p claw-agent --tests` pass without
 weakening assertions.
 
+### NAR-024: the full `claw-core` clippy gate is blocked by `claw-api`
+
+`cargo clippy -p claw-core --tests -- -D warnings` fails while compiling the
+unchanged `claw-api` dependency. `backends/sse.rs` currently violates its own
+`arithmetic_side_effects` and `indexing_slicing` deny lints at lines 102, 103,
+190, 364, and 383. The scoped command
+`cargo clippy -p claw-core --tests --no-deps -- -D warnings` passes, so this is
+recorded rather than mixed into the architecture refactor.
+
+Exit condition: make `claw-api` pass its declared clippy policy, then restore
+the full dependency-inclusive command as the `claw-core` lint gate.
+
+### NAR-025: `claw-memory` long-term-memory tests call removed free functions
+
+`cargo test -p claw-memory` does not compile
+`tests/long_term_memory.rs`. The tests construct a `LongTermMemory` instance but
+still call removed free functions such as `memory_store`, `memory_recall`,
+`memory_list`, `memory_update`, and `memory_forget`; 19 unresolved-name errors
+are reported. `claw-memory` is unchanged by this refactor.
+
+Exit condition: route those assertions through the constructed
+`LongTermMemory` instance and make the crate test suite compile and pass.
+
 ### NAR-009: cross-feature contracts lack behavioral tests
 
 Existing tests cover individual tool-set operations, but the audit found no
@@ -481,10 +504,8 @@ internal APIs solely for test access.
 
 ### NAR-010: comments and guides contradict the implementation
 
-Known examples:
+Known remaining examples:
 
-- `src/memory/traits.rs` says the agent holds `Arc<dyn Transcript>`; the field
-  is `Box<dyn Transcript>` and its field comment explains why.
 - `src/agent/manifest.rs` says `allowed_kinds` is not enforced; the spawn tool
   enforces it.
 - `src/agent/generic_agent.rs` says HTTP/timer transports are injected; the

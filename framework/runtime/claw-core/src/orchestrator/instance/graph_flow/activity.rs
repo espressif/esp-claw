@@ -1,14 +1,32 @@
 use crate::agent::{
-    AgentCommand, AgentGraphSnapshot, AgentId, AgentKind, AgentPlacement, AgentSnapshot,
+    AgentCommand, AgentCommandError, AgentId, AgentKind, AgentPlacement, FsAgentCreateError,
 };
 use crate::session::SessionPersistence;
 use claw_context::Block;
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
-use super::super::error::{AgentMessageDeliveryError, InstanceDeliverError};
-use super::super::scheduler::InstanceWork;
 use super::super::{OrchestratorInstance, ROOT_AGENT_KIND};
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum InstanceDeliverError {
+    #[error("failed to build root agent: {0}")]
+    Create(#[from] FsAgentCreateError),
+    #[error("failed to deliver to root {root}: {source}")]
+    Root {
+        root: AgentId,
+        #[source]
+        source: AgentMessageDeliveryError,
+    },
+}
+
+#[derive(Clone, Debug, thiserror::Error)]
+pub(crate) enum AgentMessageDeliveryError {
+    #[error("no such agent: {0}")]
+    UnknownAgent(AgentId),
+    #[error(transparent)]
+    Command(#[from] AgentCommandError),
+}
 
 impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
 where
@@ -72,65 +90,6 @@ where
                 self.enqueue(agent_id);
             }
         }
-    }
-
-    pub(in crate::orchestrator::instance) fn clear_turn_work(&mut self) {
-        let state = self.state.get_mut();
-        state.scheduler.clear_turn_work();
-        self.effects
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner())
-            .clear();
-    }
-
-    pub(crate) fn work(&self) -> InstanceWork {
-        self.state.get().scheduler.work(
-            self.state.get().graph.root(),
-            self.inflight.has_root(),
-            self.inflight.has_background(),
-        )
-    }
-
-    pub(in crate::orchestrator::instance) fn enqueue(&mut self, id: AgentId) {
-        self.state.get_mut().scheduler.enqueue(id);
-    }
-
-    pub(in crate::orchestrator::instance) fn has_ready(&self) -> bool {
-        self.state.get().scheduler.has_ready()
-    }
-
-    pub(in crate::orchestrator::instance) fn has_root_work(&self) -> bool {
-        let Some(root) = self.state.get().graph.root() else {
-            return false;
-        };
-        self.state.get().scheduler.is_ready(root) || self.inflight.has_root()
-    }
-
-    pub(in crate::orchestrator::instance) fn refresh_snapshots(&self) {
-        let snapshot = AgentGraphSnapshot::new(self.state.get().graph.nodes().map(|(id, meta)| {
-            AgentSnapshot {
-                id,
-                kind: meta.kind().clone(),
-                name: meta.name().map(str::to_owned),
-                parent: meta.parent(),
-                depth: self
-                    .state
-                    .get()
-                    .graph
-                    .depth(id)
-                    .expect("live graph topology is valid"),
-                termination: meta.termination(),
-                status: self
-                    .state
-                    .get()
-                    .scheduler
-                    .agent_status(id, self.inflight.contains(id)),
-            }
-        }));
-        *self
-            .snapshots
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner()) = snapshot;
     }
 
     fn deliver_message(

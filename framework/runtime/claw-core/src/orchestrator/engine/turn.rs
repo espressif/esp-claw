@@ -1,5 +1,8 @@
+//! Drives foreground and background turns and maps delivery failures to session events.
+
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
+use strum::IntoStaticStr;
 use tracing::Instrument as _;
 
 use crate::event::{EventSink, SessionEvent};
@@ -8,9 +11,24 @@ use crate::session::{Message, SessionId, SessionPersistence};
 
 use super::super::approval::{self, ApprovalResolverError, PermissionReplyResolution};
 use super::super::control::{DriveControl, DriveStop};
-use super::super::error::DeliverError;
-use super::super::instance::{DriveOutput, OrchestratorInstance, PendingApproval, TurnStopMode};
+use super::super::instance::{
+    ApprovalResolutionError, DriveOutput, InstanceDeliverError, OrchestratorInstance,
+    PendingApproval, TurnStopMode,
+};
 use super::Engine;
+
+#[derive(Debug, IntoStaticStr, thiserror::Error)]
+enum DeliverError {
+    #[strum(serialize = "agent")]
+    #[error(transparent)]
+    Instance(#[from] InstanceDeliverError),
+    #[strum(serialize = "agent")]
+    #[error(transparent)]
+    ApprovalResolver(#[from] ApprovalResolverError),
+    #[strum(serialize = "agent")]
+    #[error(transparent)]
+    ApprovalResolution(#[from] ApprovalResolutionError),
+}
 
 impl<Filesystem, Http, Timer> Engine<Filesystem, Http, Timer>
 where

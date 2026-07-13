@@ -24,7 +24,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         self.state.get_mut().task_mut().enqueue_command(command)
     }
 
-    pub(crate) fn push_task_input(&mut self, text: String) {
+    fn push_task_input(&mut self, text: String) {
         self.state.get_mut().task_mut().enqueue_task_input(text);
     }
 

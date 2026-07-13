@@ -11,15 +11,15 @@ use crate::agent::base_agent::{AgentAbortHandle, AgentId, BaseAgent};
 crate::define_id_allocator!(AgentIdCounter(AgentId), AgentId(1));
 
 /// Clones share one process-wide counter.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(crate) struct AgentIdAllocator(Arc<Mutex<AgentIdCounter>>);
 
 impl AgentIdAllocator {
     pub(crate) fn new() -> Self {
-        Self::default()
+        Self(Arc::new(Mutex::new(AgentIdCounter::new())))
     }
 
-    pub(crate) fn starting_at(first: AgentId) -> Self {
+    fn starting_at(first: AgentId) -> Self {
         Self(Arc::new(Mutex::new(AgentIdCounter::starting_at(first))))
     }
 

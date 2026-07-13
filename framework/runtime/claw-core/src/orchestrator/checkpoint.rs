@@ -162,9 +162,18 @@ where
         }
     }
 
-    // The drive is the required owner of a session runtime. Validate every
-    // drive before decoding optional instance state so a missing drive cannot
-    // be masked by corruption in a part that has no runtime to attach to.
+    // The drive is the required owner of a session runtime. Check every runtime
+    // before decoding any state so HashMap order cannot change error priority.
+    if runtime_parts
+        .values()
+        .any(|(drive_state, _)| drive_state.is_none())
+    {
+        return Err(OrchestratorBuildError::MissingCheckpointPart {
+            batch: SESSION_RUNTIME_BATCH,
+            part: SESSION_DRIVE_PART,
+        });
+    }
+
     let mut decoded_drives = Vec::with_capacity(runtime_parts.len());
     for (session, (drive_state, instance_state)) in runtime_parts {
         let Some(drive_state) = drive_state else {

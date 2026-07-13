@@ -27,14 +27,11 @@
 mod approval_flow;
 mod construction;
 mod drive;
-mod error;
 mod graph_flow;
 mod graph_state;
 mod inflight;
-mod output;
 mod persistence;
 mod scheduler;
-mod state;
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -46,17 +43,23 @@ use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use crate::agent::{AgentIdAllocator, AgentRegistry, FsAgentFactory, GraphHost};
 use crate::session::SessionId;
 
-pub(crate) use self::drive::TurnStopMode;
-pub(crate) use self::error::{ApprovalResolutionError, InstanceDeliverError};
-use self::graph_state::{EffectQueue, SnapshotView};
+pub(crate) use self::approval_flow::ApprovalResolutionError;
+pub(crate) use self::drive::{DriveOutput, TurnStopMode};
+pub(crate) use self::graph_flow::InstanceDeliverError;
+use self::graph_state::{EffectQueue, GraphState, SnapshotView};
 use self::inflight::InflightAgentTasks;
-pub(crate) use self::output::DriveOutput;
 pub(crate) use self::persistence::OrchestratorInstanceRestore;
 pub(super) use self::persistence::OrchestratorInstanceRestoreError;
+use self::scheduler::SchedulerState;
 pub(crate) use self::scheduler::{InstanceWork, PendingApproval};
-pub(crate) use self::state::OrchestratorInstanceState;
 
 pub(in crate::orchestrator::instance) const ROOT_AGENT_KIND: &str = "conversation";
+
+#[derive(Default)]
+pub(crate) struct OrchestratorInstanceState {
+    pub(in crate::orchestrator::instance) graph: GraphState,
+    pub(in crate::orchestrator::instance) scheduler: SchedulerState,
+}
 
 /// One session's agent store, graph, scheduler, and root.
 pub(crate) struct OrchestratorInstance<Filesystem, Http, Timer>

@@ -2,9 +2,13 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use crate::agent::{
-    is_strict_descendant, AgentGraphSnapshot, AgentId, AgentIdAllocator, AgentKind, GraphEffect,
-    GraphHost, TerminationPolicy,
+    is_strict_descendant, AgentGraphSnapshot, AgentId, AgentIdAllocator, AgentKind, AgentSnapshot,
+    GraphEffect, GraphHost, TerminationPolicy,
 };
+use claw_interface::http::StreamingHttp;
+use claw_interface::{ClawFs, ClawHttp, ClawTimer};
+
+use super::OrchestratorInstance;
 
 #[derive(Clone)]
 pub(super) struct NodeMeta {
@@ -202,6 +206,40 @@ impl GraphState {
             }
         }
         out
+    }
+}
+
+impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
+where
+    Filesystem: ClawFs + 'static,
+    Http: ClawHttp + StreamingHttp + Default + 'static,
+    Timer: ClawTimer + Default + 'static,
+{
+    pub(in crate::orchestrator::instance) fn refresh_snapshots(&self) {
+        let snapshot = AgentGraphSnapshot::new(self.state.get().graph.nodes().map(|(id, meta)| {
+            AgentSnapshot {
+                id,
+                kind: meta.kind().clone(),
+                name: meta.name().map(str::to_owned),
+                parent: meta.parent(),
+                depth: self
+                    .state
+                    .get()
+                    .graph
+                    .depth(id)
+                    .expect("live graph topology is valid"),
+                termination: meta.termination(),
+                status: self
+                    .state
+                    .get()
+                    .scheduler
+                    .agent_status(id, self.inflight.contains(id)),
+            }
+        }));
+        *self
+            .snapshots
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner()) = snapshot;
     }
 }
 

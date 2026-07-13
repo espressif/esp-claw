@@ -17,8 +17,7 @@ use super::graph_state::{EffectQueue, InstanceHost, SnapshotView};
 use super::persistence::{
     AgentPartState, OrchestratorInstanceRestore, OrchestratorInstanceRestoreError,
 };
-use super::state::OrchestratorInstanceState;
-use super::{AgentRegistry, InflightAgentTasks, OrchestratorInstance};
+use super::{AgentRegistry, InflightAgentTasks, OrchestratorInstance, OrchestratorInstanceState};
 
 impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
 where

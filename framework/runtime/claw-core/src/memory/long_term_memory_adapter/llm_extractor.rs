@@ -64,7 +64,7 @@ pub(crate) struct LlmExtractor<H: ClawHttp, Timer: ClawTimer> {
 
 impl<H: ClawHttp + Default + 'static, Timer: ClawTimer + Default + 'static> LlmExtractor<H, Timer> {
     /// Build an extractor with its own unconfigured LLM client.
-    pub(crate) fn new(api_manager: Arc<RwLock<ClawApiManager>>) -> Self {
+    fn new(api_manager: Arc<RwLock<ClawApiManager>>) -> Self {
         Self {
             api: SharedAsyncLlm::new(ClawApiAsync::new(H::default(), Timer::default())),
             api_manager,

@@ -7,4 +7,4 @@ missing-session-store-part,missing_session_part,checkpoint is missing part sessi
 invalid-session-store-part,invalid_session_part,failed to restore checkpoint part
 missing-session-drive-part,missing_runtime_drive_part,checkpoint is missing part session-drive in batch session-runtime
 invalid-session-drive-part,invalid_runtime_drive_part,failed to restore checkpoint part
-invalid-orchestrator-instance-part,invalid_orchestrator_instance_part,failed to restore checkpoint part
+invalid-orchestrator-instance-part,invalid_orchestrator_instance_part,unsupported orchestrator instance schema version

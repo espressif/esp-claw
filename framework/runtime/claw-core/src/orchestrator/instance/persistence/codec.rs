@@ -8,7 +8,7 @@ use crate::agent::{AgentId, AgentKind, AgentRegistry, TerminationPolicy};
 
 use super::super::graph_state::{GraphState, NodeMeta};
 use super::super::scheduler::{ParkedApproval, SchedulerState, SubagentResult};
-use super::super::state::OrchestratorInstanceState;
+use super::super::OrchestratorInstanceState;
 use super::schema::{
     AgentNodeSnapshot, AgentPartState, AgentPartsSnapshot, ApprovalSnapshot,
     OrchestratorInstanceSnapshot, SubagentResultSnapshot,
@@ -581,15 +581,14 @@ mod tests {
         };
 
         assert!(
-            crate::orchestrator::instance::state::OrchestratorInstanceState::decode_state(slice)
-                .is_ok()
+            crate::orchestrator::instance::OrchestratorInstanceState::decode_state(slice).is_ok()
         );
         assert!(OrchestratorInstanceRestore::decode_state(slice).is_err());
 
         let full = snapshot(vec![node(root, None)]);
         let bytes = serde_json::to_vec(&full).expect("full snapshot encodes");
         assert!(
-            crate::orchestrator::instance::state::OrchestratorInstanceState::decode_state(
+            crate::orchestrator::instance::OrchestratorInstanceState::decode_state(
                 PartStateSlice {
                     schema_version: 2,
                     bytes: &bytes,

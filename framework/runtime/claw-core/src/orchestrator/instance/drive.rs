@@ -8,8 +8,29 @@ use crate::event::EventSink;
 use crate::orchestrator::control::{DriveControl, DriveStop};
 
 use super::inflight::{tick_agent, ReadyAgent, TickedAgent};
-use super::output::DriveOutput;
-use super::OrchestratorInstance;
+use super::{InstanceWork, OrchestratorInstance};
+
+/// Messages created outside the LLM stream and still awaiting engine emission.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DriveOutput {
+    messages: Vec<String>,
+}
+
+impl DriveOutput {
+    fn absorb(&mut self, other: DriveOutput) {
+        self.messages.extend(other.messages);
+    }
+
+    pub(crate) fn message(message: String) -> Self {
+        Self {
+            messages: vec![message],
+        }
+    }
+
+    pub(crate) fn into_messages(self) -> Vec<String> {
+        self.messages
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TurnStopMode {
@@ -23,6 +44,37 @@ where
     Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
+    pub(in crate::orchestrator::instance) fn clear_turn_work(&mut self) {
+        self.state.get_mut().scheduler.clear_turn_work();
+        self.effects
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .clear();
+    }
+
+    pub(crate) fn work(&self) -> InstanceWork {
+        self.state.get().scheduler.work(
+            self.state.get().graph.root(),
+            self.inflight.has_root(),
+            self.inflight.has_background(),
+        )
+    }
+
+    pub(in crate::orchestrator::instance) fn enqueue(&mut self, id: AgentId) {
+        self.state.get_mut().scheduler.enqueue(id);
+    }
+
+    pub(in crate::orchestrator::instance) fn has_ready(&self) -> bool {
+        self.state.get().scheduler.has_ready()
+    }
+
+    pub(in crate::orchestrator::instance) fn has_root_work(&self) -> bool {
+        let Some(root) = self.state.get().graph.root() else {
+            return false;
+        };
+        self.state.get().scheduler.is_ready(root) || self.inflight.has_root()
+    }
+
     /// Stop every task owned by the active turn. Agents are first recovered from
     /// in-flight futures, then reset to idle through their normal cancel reducer.
     /// The caller chooses whether the durable graph is preserved or pruned.
@@ -280,5 +332,21 @@ where
 
     fn pop_ready(&mut self) -> Option<AgentId> {
         self.state.get_mut().scheduler.pop_ready()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DriveOutput;
+
+    #[test]
+    fn drive_output_owns_only_messages_that_still_need_emission() {
+        let mut output = DriveOutput::message("first".to_owned());
+        output.absorb(DriveOutput::message("second".to_owned()));
+
+        assert_eq!(
+            output.into_messages(),
+            vec!["first".to_owned(), "second".to_owned()]
+        );
     }
 }

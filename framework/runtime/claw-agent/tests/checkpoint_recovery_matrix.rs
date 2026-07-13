@@ -189,7 +189,7 @@ fn valid_session_drive_part() -> PartWrite<'static> {
             "pending_reasoning_effort": null,
         }),
     );
-    part.state.schema_version = 1;
+    part.state.schema_version = 2;
     part
 }
 

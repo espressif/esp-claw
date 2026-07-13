@@ -1,7 +1,7 @@
 use crate::{DurablePartError, PartGeneration, PartStateBlob, PartStateSlice};
 
 /// Encoding contract for state stored inside [`DurableState`].
-pub trait DurableStateCodec: Default {
+pub trait DurableStateCodec {
     /// Encode this durable state into a checkpoint payload.
     fn encode_state(&self) -> Result<PartStateBlob<'_>, DurablePartError>;
 
@@ -61,7 +61,7 @@ impl<T: DurableStateCodec> DurableState<T> {
     }
 }
 
-impl<T: DurableStateCodec> Default for DurableState<T> {
+impl<T: DurableStateCodec + Default> Default for DurableState<T> {
     fn default() -> Self {
         Self::new(T::default())
     }

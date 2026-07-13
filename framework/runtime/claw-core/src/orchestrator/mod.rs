@@ -15,7 +15,6 @@ mod approval;
 mod checkpoint;
 mod control;
 mod engine;
-mod error;
 mod handle;
 mod instance;
 mod reasoning;

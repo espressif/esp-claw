@@ -1,12 +1,20 @@
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
-use crate::agent::{AgentCommand, AgentId, ApprovalDecision};
+use crate::agent::{AgentCommand, AgentCommandError, AgentId, ApprovalDecision};
 
-use super::error::ApprovalResolutionError;
-use super::output::DriveOutput;
 use super::scheduler::PendingApproval;
-use super::OrchestratorInstance;
+use super::{DriveOutput, OrchestratorInstance};
+
+#[derive(Clone, Debug, thiserror::Error)]
+pub(crate) enum ApprovalResolutionError {
+    #[error("no active approval to resolve")]
+    NoActiveApproval,
+    #[error("no agent {0} to resolve approval for")]
+    UnknownAgent(AgentId),
+    #[error(transparent)]
+    Command(AgentCommandError),
+}
 
 impl<Filesystem, Http, Timer> OrchestratorInstance<Filesystem, Http, Timer>
 where
@@ -91,9 +99,8 @@ mod tests {
     use crate::config::ClawApiManager;
     use crate::session::{SessionId, SessionPersistence};
 
-    use super::super::error::ApprovalResolutionError;
-    use super::super::state::OrchestratorInstanceState;
-    use super::super::{OrchestratorInstance, ROOT_AGENT_KIND};
+    use super::super::{OrchestratorInstance, OrchestratorInstanceState, ROOT_AGENT_KIND};
+    use super::ApprovalResolutionError;
 
     type TestInstance = OrchestratorInstance<MemFs, RealHttp, ImmediateTimer>;
 

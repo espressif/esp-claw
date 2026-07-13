@@ -14,7 +14,7 @@
 - [x] runtime agent config
 - [x] tool search
 - [x] subagent followup(agent-id, message) — cancel current task and retask
-- [ ] refactor (cleaned up runtime/)
+- [x] refactor (cleaned up runtime/)
 - [ ] reduced memory use by 80%
 - [ ] test plan
   - [ ] skills

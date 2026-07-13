@@ -28,7 +28,7 @@ pub enum ApiUsage {
 /// Configs are keyed by their `model`: [`link_api`](Self::link_api) with a model
 /// that already exists **replaces** the stored config (e.g. to rotate a key), and
 /// every usage bound to that model then resolves to the updated config.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub(crate) struct ClawApiManager {
     /// Configs by model name (one per model).
     by_model: HashMap<String, ClawApiConfig>,

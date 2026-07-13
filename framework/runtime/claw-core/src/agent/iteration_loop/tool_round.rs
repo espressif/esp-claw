@@ -120,12 +120,7 @@ pub(super) async fn run_tool_calls(
     ToolRoundResult::Completed { runs }
 }
 
-fn push_tool_message(
-    appended: &mut AppendedMessages,
-    id: &str,
-    content: String,
-    ok: bool,
-) {
+fn push_tool_message(appended: &mut AppendedMessages, id: &str, content: String, ok: bool) {
     let tool_message = serde_json::json!({
         "role": "tool",
         "tool_call_id": id,

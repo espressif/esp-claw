@@ -11,8 +11,7 @@ use claw_checkpoint::{
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
-use super::state::OrchestratorInstanceState;
-use super::OrchestratorInstance;
+use super::{OrchestratorInstance, OrchestratorInstanceState};
 
 pub(crate) use error::OrchestratorInstanceRestoreError;
 pub(in crate::orchestrator::instance) use schema::AgentPartState;
