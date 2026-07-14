@@ -14,6 +14,7 @@ mod session;
 
 pub(crate) use claw_utils::{define_id_allocator, define_prefixed_id};
 
+pub use claw_permission::PermissionLevel;
 pub use config::{ApiUsage, ReasoningEffort};
 pub use orchestrator::{Orchestrator, OrchestratorBuildError};
 pub use protocol::{

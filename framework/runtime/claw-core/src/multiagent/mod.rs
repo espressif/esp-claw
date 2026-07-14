@@ -44,6 +44,7 @@ use std::sync::Arc;
 use claw_checkpoint::DurableState;
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
+use claw_permission::PermissionPolicy;
 
 use crate::agent::FsAgentFactory;
 use crate::protocol::{AgentId, SessionId, SessionPersistence};
@@ -83,6 +84,8 @@ where
     session: SessionId,
     /// Builds agents (root and children). Owned here; slots only store.
     factory: Rc<FsAgentFactory<Filesystem, Http, Timer>>,
+    /// Session-owned policy propagated unchanged to every built agent.
+    permission_policy: Arc<dyn PermissionPolicy>,
     /// Shared, process-wide id allocator for roots and spawned children.
     agent_id_allocator: AgentIdAllocator,
     /// Durable graph and scheduler state.

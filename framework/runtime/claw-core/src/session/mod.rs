@@ -3,6 +3,7 @@
 mod actor;
 mod api;
 mod approval;
+mod permission;
 mod persistence;
 mod registry;
 mod state;

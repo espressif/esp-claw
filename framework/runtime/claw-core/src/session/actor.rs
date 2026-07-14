@@ -27,6 +27,7 @@ use super::api::{
     ControlOp, OpenSessionError, SessionCommand, SessionControlError, SessionEndpoint,
 };
 use super::approval::{self, ApprovalResolverError, PermissionReplyResolution};
+use super::permission::SessionPermission;
 use super::persistence::{SessionCheckpointer, SessionRestore};
 use super::state::SessionState;
 
@@ -111,6 +112,7 @@ where
     session: SessionId,
     persistence: SessionPersistence,
     state: DurableState<SessionState>,
+    permission: Arc<SessionPermission>,
     execution: Option<RuntimeExecution<Filesystem, Http, Timer>>,
     checkpointer: SessionCheckpointer<Filesystem>,
     api_manager: Arc<RwLock<ClawApiManager>>,
@@ -143,12 +145,20 @@ where
         checkpointer: SessionCheckpointer<Filesystem>,
         api_manager: Arc<RwLock<ClawApiManager>>,
     ) -> Self {
-        let runtime =
-            MultiagentRuntime::new(session, factory, agent_ids, MultiagentState::default());
+        let state = SessionState::default();
+        let permission = Arc::new(SessionPermission::new(state.permission_level()));
+        let runtime = MultiagentRuntime::new(
+            session,
+            factory,
+            agent_ids,
+            permission.clone(),
+            MultiagentState::default(),
+        );
         Self::new(
             session,
             persistence,
-            SessionState::default(),
+            state,
+            permission,
             runtime,
             checkpointer,
             api_manager,
@@ -165,16 +175,19 @@ where
         api_manager: Arc<RwLock<ClawApiManager>>,
         restore: SessionRestore,
     ) -> Result<Self, MultiagentRestoreError> {
+        let permission = Arc::new(SessionPermission::new(restore.state.permission_level()));
         let runtime = MultiagentRuntime::from_restored_state(
             session,
             factory,
             agent_ids,
+            permission.clone(),
             restore.multiagent,
         )?;
         Ok(Self::new(
             session,
             persistence,
             restore.state,
+            permission,
             runtime,
             checkpointer,
             api_manager,
@@ -185,6 +198,7 @@ where
         session: SessionId,
         persistence: SessionPersistence,
         state: SessionState,
+        permission: Arc<SessionPermission>,
         runtime: MultiagentRuntime<Filesystem, Http, Timer>,
         checkpointer: SessionCheckpointer<Filesystem>,
         api_manager: Arc<RwLock<ClawApiManager>>,
@@ -193,6 +207,7 @@ where
             session,
             persistence,
             state: DurableState::new(state),
+            permission,
             execution: Some(RuntimeExecution::Idle(runtime)),
             checkpointer,
             api_manager,
@@ -359,6 +374,16 @@ where
             SessionCommand::SetReasoningEffort { lease, effort, ack } => {
                 if self.accepts(lease) {
                     self.state.get_mut().set_reasoning_effort(effort);
+                    let _ = ack.try_send(Ok(()));
+                } else {
+                    self.reject_closed(ack);
+                }
+            }
+            SessionCommand::SetPermissionLevel { lease, level, ack } => {
+                if self.accepts(lease) {
+                    self.state.get_mut().set_permission_level(level);
+                    self.permission.set(level);
+                    self.checkpoint_pending = true;
                     let _ = ack.try_send(Ok(()));
                 } else {
                     self.reject_closed(ack);

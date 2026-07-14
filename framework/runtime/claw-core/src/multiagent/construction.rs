@@ -6,6 +6,7 @@ use claw_checkpoint::{DurableState, PartStateSlice};
 use claw_context::Block;
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
+use claw_permission::PermissionPolicy;
 
 use crate::agent::{
     AgentEnvironment, FsAgentCreateError, FsAgentFactory, ProfileAccess, TranscriptTarget,
@@ -29,12 +30,14 @@ where
         session: SessionId,
         factory: Rc<FsAgentFactory<Filesystem, Http, Timer>>,
         agent_id_allocator: AgentIdAllocator,
+        permission_policy: Arc<dyn PermissionPolicy>,
         state: MultiagentState,
     ) -> Self {
         let multiagent = Arc::new(MultiagentBridge::new(agent_id_allocator.clone()));
         Self {
             session,
             factory,
+            permission_policy,
             agent_id_allocator,
             state: DurableState::new(state),
             slots: AgentSlots::new(),
@@ -47,10 +50,17 @@ where
         session: SessionId,
         factory: Rc<FsAgentFactory<Filesystem, Http, Timer>>,
         agent_id_allocator: AgentIdAllocator,
+        permission_policy: Arc<dyn PermissionPolicy>,
         restored: MultiagentRestore,
     ) -> Result<Self, MultiagentRestoreError> {
         let MultiagentRestore { state, agent_slots } = restored;
-        let mut instance = Self::new(session, factory, agent_id_allocator, state);
+        let mut instance = Self::new(
+            session,
+            factory,
+            agent_id_allocator,
+            permission_policy,
+            state,
+        );
         instance.restore_agents(agent_slots)?;
         Ok(instance)
     }
@@ -144,8 +154,13 @@ where
                 (TranscriptTarget::InMemory(child.0), ProfileAccess::ReadOnly)
             }
         };
-        let environment =
-            AgentEnvironment::new(transcript, profile, extension_tools, inherited_context);
+        let environment = AgentEnvironment::new(
+            transcript,
+            profile,
+            Arc::clone(&self.permission_policy),
+            extension_tools,
+            inherited_context,
+        );
         let agent = self.factory.create_agent(id, kind, goal, environment)?;
         self.slots.insert(id, agent);
         Ok(())

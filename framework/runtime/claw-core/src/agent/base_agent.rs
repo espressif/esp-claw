@@ -16,6 +16,7 @@ mod task_state;
 use claw_api::{ClawApiAsync, RetryPolicy};
 use claw_checkpoint::DurableState;
 use claw_interface::{ClawHttp, ClawTimer};
+use claw_permission::PermissionPolicy;
 
 use super::iteration_loop::IterationLoopError;
 use crate::agent::tools::ControlSink;
@@ -23,6 +24,7 @@ use crate::memory::{ContextAdapter, Transcript};
 use crate::protocol::IterationIdAllocator;
 use claw_context::Context;
 use claw_tool::ToolSet;
+use std::sync::Arc;
 
 pub(crate) use self::command::{
     AgentCommand, AgentCommandError, AgentState, ApprovalDecision, BaseAgentBuildError, TickOutcome,
@@ -40,6 +42,7 @@ pub(crate) struct BaseAgent<H: ClawHttp, Timer: ClawTimer> {
     /// Type-erased so context adapters need not carry the filesystem type.
     transcript: Box<dyn Transcript>,
     tools: ToolSet,
+    permission_policy: Arc<dyn PermissionPolicy>,
     context: Context,
     state: DurableState<BaseAgentState>,
     outcome: Option<TickOutcome>,

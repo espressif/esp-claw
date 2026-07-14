@@ -1,12 +1,13 @@
 use std::borrow::Cow;
 
 use claw_checkpoint::{DurablePartError, DurableStateCodec, PartStateBlob, PartStateSlice};
+use claw_permission::PermissionLevel;
 use serde::{Deserialize, Serialize};
 
 use crate::config::ReasoningEffort;
 use crate::protocol::{Message, TurnId, TurnIdAllocator, TurnOrigin};
 
-pub(crate) const SESSION_STATE_SCHEMA_VERSION: u32 = 4;
+pub(crate) const SESSION_STATE_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Deserialize, Serialize)]
 struct TurnState {
@@ -21,6 +22,7 @@ pub(crate) struct SessionState {
     next_turn_id: TurnId,
     reasoning_effort: ReasoningEffort,
     pending_reasoning_effort: Option<ReasoningEffort>,
+    permission_level: PermissionLevel,
 }
 
 impl Default for SessionState {
@@ -30,6 +32,7 @@ impl Default for SessionState {
             next_turn_id: TurnIdAllocator::new().peek(),
             reasoning_effort: ReasoningEffort::default(),
             pending_reasoning_effort: None,
+            permission_level: PermissionLevel::default(),
         }
     }
 }
@@ -98,6 +101,14 @@ impl SessionState {
     pub(super) fn reasoning_effort(&self) -> ReasoningEffort {
         self.reasoning_effort
     }
+
+    pub(super) fn set_permission_level(&mut self, level: PermissionLevel) {
+        self.permission_level = level;
+    }
+
+    pub(super) fn permission_level(&self) -> PermissionLevel {
+        self.permission_level
+    }
 }
 
 impl DurableStateCodec for SessionState {
@@ -124,11 +135,14 @@ mod tests {
     use claw_checkpoint::DurableStateCodec;
 
     use super::{SessionState, SESSION_STATE_SCHEMA_VERSION};
+    use claw_permission::PermissionLevel;
+
     use crate::protocol::{Message, TurnOrigin};
 
     #[test]
     fn active_turn_round_trips_through_the_current_schema() {
         let mut state = SessionState::default();
+        state.set_permission_level(PermissionLevel::Ask);
         let turn = state.begin_user_turn(Message::text("hello"));
         let encoded = state.encode_state().unwrap().into_owned();
         assert_eq!(encoded.schema_version, SESSION_STATE_SCHEMA_VERSION);
@@ -137,5 +151,6 @@ mod tests {
         assert_eq!(restored.active_turn_id(), Some(turn));
         assert_eq!(restored.active_turn_origin(), Some(TurnOrigin::User));
         assert!(restored.has_pending_input());
+        assert_eq!(restored.permission_level(), PermissionLevel::Ask);
     }
 }

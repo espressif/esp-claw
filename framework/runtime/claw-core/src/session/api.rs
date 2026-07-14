@@ -2,6 +2,7 @@ use core::pin::Pin;
 use core::task::{Context, Poll};
 
 use async_channel::{Receiver, Sender};
+use claw_permission::PermissionLevel;
 use futures_core::Stream;
 use strum::IntoStaticStr;
 
@@ -82,6 +83,11 @@ pub(crate) enum SessionCommand {
         effort: ReasoningEffort,
         ack: Sender<Result<(), SessionControlError>>,
     },
+    SetPermissionLevel {
+        lease: u64,
+        level: PermissionLevel,
+        ack: Sender<Result<(), SessionControlError>>,
+    },
     Close {
         lease: u64,
         ack: Sender<Result<(), SessionControlError>>,
@@ -136,6 +142,26 @@ impl SessionControl {
             .send(SessionCommand::SetReasoningEffort {
                 lease: self.lease,
                 effort,
+                ack,
+            })
+            .await
+            .map_err(|_| SessionControlError::WorkerStopped)?;
+        result
+            .recv()
+            .await
+            .unwrap_or(Err(SessionControlError::WorkerStopped))
+    }
+
+    /// Apply a new permission level to subsequent action authorizations.
+    pub async fn set_permission_level(
+        &self,
+        level: PermissionLevel,
+    ) -> Result<(), SessionControlError> {
+        let (ack, result) = async_channel::bounded(1);
+        self.commands
+            .send(SessionCommand::SetPermissionLevel {
+                lease: self.lease,
+                level,
                 ack,
             })
             .await

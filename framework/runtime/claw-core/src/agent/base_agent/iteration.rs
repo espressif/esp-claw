@@ -107,6 +107,7 @@ impl<H: ClawHttp + StreamingHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         };
         let state = self.state.get();
         let permission_gate = PermissionGate {
+            policy: self.permission_policy.as_ref(),
             grants: &state.permission_grants,
         };
         let gate = &permission_gate as &dyn ToolGate;

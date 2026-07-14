@@ -6,6 +6,7 @@ use claw_checkpoint::DurableState;
 use claw_context::{Block, Context};
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::TranscriptStore;
+use claw_permission::PermissionPolicy;
 use claw_skill::SkillSet;
 use claw_tool::ToolSet;
 
@@ -21,6 +22,7 @@ use super::{BaseAgent, BaseAgentBuildError};
 pub(in crate::agent) struct BaseAgentConfig<F: ClawFs + 'static> {
     pub(in crate::agent) store: TranscriptStore<F>,
     pub(in crate::agent) tools: ToolSet,
+    pub(in crate::agent) permission_policy: Arc<dyn PermissionPolicy>,
     pub(in crate::agent) skills: SkillSet,
     pub(in crate::agent) agent_instruction: Block<'static>,
     pub(in crate::agent) inherited_context: Vec<Block<'static>>,
@@ -74,6 +76,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
             interruption: AgentInterruption::new(),
             transcript,
             tools,
+            permission_policy: config.permission_policy,
             context,
             state: DurableState::new(BaseAgentState::new(config.block_retries)),
             outcome: None,

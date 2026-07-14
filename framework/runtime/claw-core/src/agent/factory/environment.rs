@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use claw_context::Block;
+use claw_permission::PermissionPolicy;
 use claw_tool::ToolGroup;
 
 /// Transcript identity and storage for one independently-built agent.
@@ -35,6 +38,7 @@ pub(crate) enum ProfileAccess {
 pub(crate) struct AgentEnvironment {
     pub(super) transcript: TranscriptTarget,
     pub(super) profile: ProfileAccess,
+    pub(super) permission_policy: Arc<dyn PermissionPolicy>,
     pub(super) extension_tools: Vec<ToolGroup>,
     pub(super) inherited_context: Vec<Block<'static>>,
 }
@@ -43,12 +47,14 @@ impl AgentEnvironment {
     pub(crate) fn new(
         transcript: TranscriptTarget,
         profile: ProfileAccess,
+        permission_policy: Arc<dyn PermissionPolicy>,
         extension_tools: Vec<ToolGroup>,
         inherited_context: Vec<Block<'static>>,
     ) -> Self {
         Self {
             transcript,
             profile,
+            permission_policy,
             extension_tools,
             inherited_context,
         }

@@ -1,7 +1,9 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use claw_permission::{Action, Grant, GrantStore, PermissionDecision};
+use claw_permission::{
+    Action, Grant, GrantStore, PermissionDecision, PermissionPolicy, PermissionRequest,
+};
 use claw_tool::ToolGate;
 
 use crate::agent::iteration_loop::InterruptionControl;
@@ -48,42 +50,78 @@ impl InterruptionControl for AgentInterruption {
 }
 
 pub(super) struct PermissionGate<'a> {
+    pub(super) policy: &'a dyn PermissionPolicy,
     pub(super) grants: &'a GrantStore,
 }
 
 impl ToolGate for PermissionGate<'_> {
     fn decide(&self, action: &Action) -> PermissionDecision {
-        match self.grants.lookup(&action.signature()) {
-            Some(Grant::Granted) => PermissionDecision::Allow,
-            Some(Grant::Denied(reason)) => PermissionDecision::Deny {
+        if let Some(Grant::Denied(reason)) = self.grants.lookup(&action.signature()) {
+            return PermissionDecision::Deny {
                 reason: reason.clone(),
+            };
+        }
+        let decision = self.policy.evaluate(&PermissionRequest::new(action));
+        match decision {
+            ask @ PermissionDecision::Ask { .. } => match self.grants.lookup(&action.signature()) {
+                Some(Grant::Granted) => PermissionDecision::Allow,
+                Some(Grant::Denied(_)) | None => ask,
             },
-            None => PermissionDecision::Allow,
+            decision @ (PermissionDecision::Allow | PermissionDecision::Deny { .. }) => decision,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use claw_permission::{Action, GrantStore, PermissionDecision, RiskClass};
+    use claw_permission::{Action, GrantStore, PermissionDecision, PermissionLevel, RiskClass};
     use claw_tool::ToolGate;
 
     use super::PermissionGate;
 
     #[test]
-    fn permission_gate_preserves_existing_grants_and_allows_unknown_actions() {
+    fn permission_gate_preserves_denials_and_uses_approvals_only_for_ask() {
         let action = Action::new("write", RiskClass::High);
         let mut grants = GrantStore::new();
-        let gate = PermissionGate { grants: &grants };
-        assert_eq!(gate.decide(&action), PermissionDecision::Allow);
+        let gate = PermissionGate {
+            policy: &PermissionLevel::Ask,
+            grants: &grants,
+        };
+        assert!(matches!(
+            gate.decide(&action),
+            PermissionDecision::Ask { .. }
+        ));
 
         grants.deny(action.signature(), "blocked");
-        let gate = PermissionGate { grants: &grants };
+        let gate = PermissionGate {
+            policy: &PermissionLevel::Ask,
+            grants: &grants,
+        };
         assert_eq!(
             gate.decide(&action),
             PermissionDecision::Deny {
                 reason: "blocked".into()
             }
         );
+        let gate = PermissionGate {
+            policy: &PermissionLevel::AllowAll,
+            grants: &grants,
+        };
+        assert_eq!(
+            gate.decide(&action),
+            PermissionDecision::Deny {
+                reason: "blocked".into()
+            }
+        );
+
+        grants.grant(action.signature());
+        let gate = PermissionGate {
+            policy: &PermissionLevel::Deny,
+            grants: &grants,
+        };
+        assert!(matches!(
+            gate.decide(&action),
+            PermissionDecision::Deny { .. }
+        ));
     }
 }

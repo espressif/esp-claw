@@ -36,10 +36,12 @@
 
 mod action;
 mod grant;
+mod level;
 mod policy;
 
 pub use action::{Action, Resource, RiskClass};
 pub use grant::{Grant, GrantStore};
+pub use level::PermissionLevel;
 pub use policy::{
     AllowAll, AskAtOrAbove, PermissionDecision, PermissionPolicy, PermissionRequest, PolicyChain,
 };

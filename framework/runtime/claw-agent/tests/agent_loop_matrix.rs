@@ -4,12 +4,13 @@ mod support;
 use support::Sse;
 
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
+use std::task::{Poll, Waker};
 
 use claw_agent::{
-    AgentSystem, IterationId, Message, ReasoningEffort, SessionEvent, StreamPart, ToolCall, TurnId,
-    TurnOrigin,
+    AgentSystem, IterationId, Message, PermissionLevel, ReasoningEffort, SessionEvent, StreamPart,
+    ToolCall, TurnId, TurnOrigin,
 };
 #[cfg(feature = "cache_profile")]
 use claw_api::ApiUsage;
@@ -21,7 +22,8 @@ use claw_tool::{
     SyncToolHandler, Tool, ToolError, ToolGroup, ToolInvocation, ToolInvokeError, ToolOutput,
     ToolResult, ToolSpec,
 };
-use futures_lite::future::block_on;
+use futures_lite::future::{block_on, poll_fn};
+use futures_lite::StreamExt;
 use serde_json::{json, Value};
 use support::{
     assistant_text, csv_dicts, drain_until_turn_ended, llm_config, mem_root, persistence,
@@ -33,6 +35,8 @@ static AGENT_LOOP_LOCK: Mutex<()> = Mutex::new(());
 static AGENT_REPLIES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static AGENT_REQUEST_BODIES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static TOOL_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
+static HOLD_AGENT_RESPONSES: AtomicBool = AtomicBool::new(false);
+static AGENT_RESPONSE_WAKER: Mutex<Option<Waker>> = Mutex::new(None);
 
 #[test]
 fn session_events_close_each_content_stream_explicitly() {
@@ -233,6 +237,157 @@ fn reasoning_effort_replaces_the_root_system_prompt_block_on_the_next_turn() {
     assert!(!second_system.contains("# Reasoning effort: medium"));
 }
 
+#[test]
+fn permission_level_changes_during_a_turn_before_the_next_action_authorization() {
+    let _lock = AGENT_LOOP_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    install_agent_replies(vec![assistant_tool_call(
+        "conversation_end",
+        r#"{"final_message":"allowed immediately"}"#,
+        None,
+    )]);
+    let response_hold = hold_agent_responses();
+
+    let root = mem_root("agent-loop-live-permission-level");
+    let system = build_matrix_system(&root);
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
+    let (control, mut events) = system.open_session(session).unwrap();
+
+    block_on(control.set_permission_level(PermissionLevel::Deny)).unwrap();
+    block_on(control.submit(Message::text("switch while this turn is active"))).unwrap();
+    block_on(wait_for_iteration_started(&mut events));
+    block_on(control.set_permission_level(PermissionLevel::AllowAll)).unwrap();
+    drop(response_hold);
+    let remaining_events = drain_until_turn_ended(&mut events);
+
+    assert!(
+        output_fragments(&remaining_events)
+            .iter()
+            .any(|output| output == "allowed immediately"),
+        "events={remaining_events:?}"
+    );
+}
+
+#[test]
+fn ask_permission_level_reaches_the_public_approval_flow() {
+    let _lock = AGENT_LOOP_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let arguments = r#"{"final_message":"approved execution"}"#;
+    install_agent_replies(vec![
+        assistant_tool_call("conversation_end", arguments, None),
+        assistant_tool_call(
+            "permission_resolve_reply",
+            r#"{"decision":"approve"}"#,
+            None,
+        ),
+        assistant_tool_call("conversation_end", arguments, None),
+    ]);
+
+    let root = mem_root("agent-loop-ask-permission-level");
+    let system = build_matrix_system(&root);
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
+    let (control, mut events) = system.open_session(session).unwrap();
+
+    block_on(control.set_permission_level(PermissionLevel::Ask)).unwrap();
+    block_on(control.submit(Message::text("ask before running the tool"))).unwrap();
+    let prompt = block_on(wait_for_output(&mut events));
+    assert!(
+        prompt.contains("Permission approval needed:"),
+        "unexpected output: {prompt:?}"
+    );
+
+    block_on(control.submit(Message::text("approve"))).unwrap();
+    let remaining_events = drain_until_turn_ended(&mut events);
+
+    assert!(
+        output_fragments(&remaining_events)
+            .iter()
+            .any(|output| output == "approved execution"),
+        "events={remaining_events:?}"
+    );
+}
+
+#[test]
+fn explicit_rejection_survives_a_switch_from_ask_to_allow_all() {
+    let _lock = AGENT_LOOP_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let arguments = r#"{"final_message":"rejected action ran"}"#;
+    install_agent_replies(vec![
+        assistant_tool_call("conversation_end", arguments, None),
+        assistant_tool_call(
+            "permission_resolve_reply",
+            r#"{"decision":"reject","note":"not allowed"}"#,
+            None,
+        ),
+        assistant_tool_call("conversation_end", arguments, None),
+        assistant_text("rejection respected"),
+    ]);
+
+    let root = mem_root("agent-loop-rejected-permission");
+    let system = build_matrix_system(&root);
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
+    let (control, mut events) = system.open_session(session).unwrap();
+
+    block_on(control.set_permission_level(PermissionLevel::Ask)).unwrap();
+    block_on(control.submit(Message::text("ask before running the tool"))).unwrap();
+    let prompt = block_on(wait_for_output(&mut events));
+    assert!(prompt.contains("Permission approval needed:"));
+
+    block_on(control.set_permission_level(PermissionLevel::AllowAll)).unwrap();
+    block_on(control.submit(Message::text("reject"))).unwrap();
+    let remaining_events = drain_until_turn_ended(&mut events);
+
+    assert_eq!(
+        output_fragments(&remaining_events),
+        vec!["rejection respected".to_string()]
+    );
+}
+
+#[test]
+fn permission_levels_are_isolated_between_sessions() {
+    let _lock = AGENT_LOOP_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    install_agent_replies(vec![
+        assistant_tool_call(
+            "conversation_end",
+            r#"{"final_message":"denied action ran"}"#,
+            None,
+        ),
+        assistant_text("denied session continued"),
+        assistant_tool_call(
+            "conversation_end",
+            r#"{"final_message":"default session allowed"}"#,
+            None,
+        ),
+    ]);
+
+    let root = mem_root("agent-loop-isolated-permission-levels");
+    let system = build_matrix_system(&root);
+
+    let denied_session = system.new_session(claw_agent::SessionPersistence::Persistent);
+    let (denied_control, mut denied_events) = system.open_session(denied_session).unwrap();
+    block_on(denied_control.set_permission_level(PermissionLevel::Deny)).unwrap();
+    block_on(denied_control.submit(Message::text("deny side effects"))).unwrap();
+    let denied_events = drain_until_turn_ended(&mut denied_events);
+    assert_eq!(
+        output_fragments(&denied_events),
+        vec!["denied session continued".to_string()]
+    );
+
+    let default_session = system.new_session(claw_agent::SessionPersistence::Persistent);
+    let (default_control, mut default_events) = system.open_session(default_session).unwrap();
+    block_on(default_control.submit(Message::text("use the default permission"))).unwrap();
+    let default_events = drain_until_turn_ended(&mut default_events);
+    assert_eq!(
+        output_fragments(&default_events),
+        vec!["default session allowed".to_string()]
+    );
+}
+
 #[cfg(feature = "cache_profile")]
 #[test]
 fn agent_loop_emits_provider_usage_for_cli_consumers() {
@@ -277,6 +432,7 @@ impl ClawHttp for AgentLoopHttp {
     ) -> HttpResponseFuture<'a> {
         Box::pin(async move {
             let body = if is_agent_iteration_request(request.body) {
+                wait_for_agent_response_release().await;
                 agent_request_bodies().push(request.body.to_owned());
                 agent_replies()
                     .pop_front()
@@ -420,9 +576,69 @@ fn assistant_plain_response(output: &str, reasoning_bytes: usize) -> String {
 }
 
 fn install_agent_replies(replies: Vec<String>) {
+    release_agent_responses();
     *agent_replies() = replies.into();
     agent_request_bodies().clear();
     TOOL_INVOCATIONS.store(0, Ordering::SeqCst);
+}
+
+struct AgentResponseHold;
+
+impl Drop for AgentResponseHold {
+    fn drop(&mut self) {
+        release_agent_responses();
+    }
+}
+
+fn hold_agent_responses() -> AgentResponseHold {
+    HOLD_AGENT_RESPONSES.store(true, Ordering::Release);
+    AgentResponseHold
+}
+
+fn release_agent_responses() {
+    HOLD_AGENT_RESPONSES.store(false, Ordering::Release);
+    if let Some(waker) = AGENT_RESPONSE_WAKER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .take()
+    {
+        waker.wake();
+    }
+}
+
+async fn wait_for_agent_response_release() {
+    poll_fn(|context| {
+        if !HOLD_AGENT_RESPONSES.load(Ordering::Acquire) {
+            return Poll::Ready(());
+        }
+        *AGENT_RESPONSE_WAKER
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(context.waker().clone());
+        if HOLD_AGENT_RESPONSES.load(Ordering::Acquire) {
+            Poll::Pending
+        } else {
+            Poll::Ready(())
+        }
+    })
+    .await
+}
+
+async fn wait_for_iteration_started(events: &mut claw_agent::SessionEventStream) {
+    while let Some(event) = events.next().await {
+        if matches!(event, SessionEvent::IterationStarted { .. }) {
+            return;
+        }
+    }
+    panic!("session event stream closed before an iteration started");
+}
+
+async fn wait_for_output(events: &mut claw_agent::SessionEventStream) -> String {
+    while let Some(event) = events.next().await {
+        if let SessionEvent::Output(StreamPart::Delta(text)) = event {
+            return text;
+        }
+    }
+    panic!("session event stream closed before output arrived");
 }
 
 fn is_agent_iteration_request(body: &str) -> bool {

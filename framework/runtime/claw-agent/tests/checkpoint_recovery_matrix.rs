@@ -187,9 +187,10 @@ fn valid_session_state_part() -> PartWrite<'static> {
             "next_turn_id": "turn-1",
             "reasoning_effort": "medium",
             "pending_reasoning_effort": null,
+            "permission_level": "allow_all",
         }),
     );
-    part.state.schema_version = 4;
+    part.state.schema_version = 5;
     part
 }
 

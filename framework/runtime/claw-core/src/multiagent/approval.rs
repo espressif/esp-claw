@@ -86,6 +86,7 @@ mod tests {
     use std::sync::{Arc, RwLock};
 
     use claw_interface::{ImmediateTimer, MemFs, RealHttp};
+    use claw_permission::AllowAll;
     use claw_tool::ToolRegistry;
 
     use crate::agent::{AgentCommandError, ApprovalDecision, FsAgentFactory};
@@ -112,6 +113,7 @@ mod tests {
             SessionId::new(1),
             Rc::new(factory),
             AgentIdAllocator::new(),
+            Arc::new(AllowAll),
             MultiagentState::default(),
         )
     }

@@ -90,6 +90,7 @@ impl<
         let base_config = BaseAgentConfig {
             store,
             tools,
+            permission_policy: environment.permission_policy,
             skills: config.skills,
             agent_instruction: Block::new(BlockKind::AgentInstruction, config.system_prompt),
             inherited_context: environment.inherited_context,

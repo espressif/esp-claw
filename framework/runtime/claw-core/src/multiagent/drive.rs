@@ -375,6 +375,7 @@ mod tests {
     use std::sync::{Arc, RwLock};
 
     use claw_interface::{ImmediateTimer, MemFs, RealHttp};
+    use claw_permission::AllowAll;
     use claw_tool::ToolRegistry;
 
     use super::super::model::SubagentResult;
@@ -447,6 +448,7 @@ mod tests {
             session,
             Rc::new(factory),
             AgentIdAllocator::new(),
+            Arc::new(AllowAll),
             MultiagentState::default(),
         );
         let root = AgentId::new(1);

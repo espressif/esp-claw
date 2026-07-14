@@ -54,7 +54,7 @@ Priorities in this document mean:
 | `NAR-011` | P2 | Dependencies | Build-only tool baking is exposed by the runtime `claw-tool` crate and leaves manifest debris. |
 | `NAR-012` | P1 | Manifests | Manifest `schema_version` fields are required in files but ignored by the parser. |
 | `NAR-013` | P1 | Manifests | A missing `tool_block_retries` field silently changes policy to zero retries. |
-| `NAR-014` | P1 | Permissions | The human-approval runtime is unreachable from the product assembly path. |
+| `NAR-014` | P1 | Permissions | **Resolved:** every session exposes a durable, live `Deny` / `Ask` / `AllowAll` permission level. |
 | `NAR-015` | P1 | Checkpoints | Several checkpoint decoders ignore schema versions or silently normalize invalid state. |
 | `NAR-016` | P0 | Subagents | **Resolved:** each live agent now has a stable slot whose inbox survives while the agent is in flight. |
 | `NAR-017` | P0 | Concurrency | A shared async LLM lease keeps only one waiter waker, so concurrent extraction can stall indefinitely. |
@@ -211,26 +211,20 @@ compatibility reason.
 
 ### NAR-014: product assembly always allows tool calls
 
-`BaseAgent` can pause on `PermissionDecision::Ask`, and the orchestrator has a
-complete user-reply resolution path. The only production assembly point,
-however, always installs `AllowAll`; no current caller supplies another policy.
-Consequently `ApprovalNeeded` cannot be produced by a normally constructed
-agent, and the approval path is not product-reachable.
+**Status: resolved.**
 
-Current evidence:
+`PermissionLevel::{Deny, Ask, AllowAll}` is now an explicit session setting.
+`SessionState` owns and persists the selected level, while `SessionActor` keeps
+a shared live policy synchronized so changes affect the next action
+authorization even during an active turn. The same policy is injected into the
+root and every subagent; `BaseAgent` remains unaware of sessions and consumes it
+only through `PermissionPolicy`.
 
-- `src/agent/factory/create.rs` (the sole `BaseAgentConfig` construction uses
-  `AllowAll`);
-- `src/agent/base_agent/control.rs` and `iteration_loop/tool_round.rs` (the ask
-  path);
-- `src/orchestrator/approval.rs` and `instance/approval_flow.rs` (reply
-  resolution);
-- no other `permission_policy` construction exists under `claw-core`.
-
-Exit condition: make an explicit product decision. Either assemble a concrete
-current approval policy and cover it end to end, or remove the unreachable
-approval behavior. Do not add a public policy seam solely for a hypothetical
-future caller.
+`Deny` rejects side-effecting actions, `Ask` reaches the existing human approval
+and grant flow, and `AllowAll` preserves the previous product behavior. Safe
+actions remain available at every level. Public integration coverage verifies
+live switching, the complete Ask/approve flow, and isolation between sessions
+in `claw-agent/tests/agent_loop_matrix.rs`.
 
 ### NAR-015: checkpoint validation is inconsistent
 
