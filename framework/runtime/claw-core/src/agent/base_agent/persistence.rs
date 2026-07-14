@@ -9,7 +9,7 @@ use claw_interface::{ClawHttp, ClawTimer};
 use super::state::BaseAgentState;
 use super::BaseAgent;
 
-const BASE_AGENT_SCHEMA_VERSION: u32 = 2;
+const BASE_AGENT_SCHEMA_VERSION: u32 = 3;
 
 impl DurableStateCodec for BaseAgentState {
     fn encode_state(&self) -> Result<PartStateBlob<'_>, DurablePartError> {
@@ -91,25 +91,26 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::base_agent::pending_tool_round::PendingToolRound;
     use crate::agent::base_agent::task_state::TaskAction;
     use crate::agent::base_agent::{AgentCommand, ApprovalDecision};
     use crate::protocol::Message;
 
     #[test]
-    fn schema_two_round_trips_the_canonical_approval_payload() {
+    fn schema_three_round_trips_the_pending_tool_round() {
         let mut state = BaseAgentState::new(0);
         state.task_mut().enqueue_task_input(Message::text("start"));
         let _ = state.task_mut().pop_action().expect("valid task input");
         state
             .task_mut()
-            .await_approval(vec!["signature-a".into(), "signature-b".into()])
+            .await_approval(PendingToolRound::pending_for_test("signature-a"))
             .expect("running task can await approval");
 
         let encoded = state.encode_state().expect("state encodes").into_owned();
         assert_eq!(encoded.schema_version, BASE_AGENT_SCHEMA_VERSION);
 
-        let mut restored =
-            BaseAgentState::decode_state(encoded.as_slice()).expect("schema two state round trips");
+        let mut restored = BaseAgentState::decode_state(encoded.as_slice())
+            .expect("schema three state round trips");
         restored
             .task_mut()
             .enqueue_command(AgentCommand::ApprovalResult(ApprovalDecision::Approved))
@@ -120,9 +121,11 @@ mod tests {
                 .pop_action()
                 .expect("valid restored queue"),
             Some(TaskAction::ApprovalResult {
-                grant_signatures,
+                pending_tools,
                 ..
-            }) if grant_signatures == ["signature-a", "signature-b"]
+            }) if pending_tools
+                .next()
+                .is_some_and(|approval| approval.signature == "signature-a")
         ));
     }
 

@@ -11,13 +11,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
 use claw_agent::{
-    AgentId, AgentSystem, IterationId, Message, SessionEvent, StreamPart, TurnId, TurnOrigin,
+    AgentId, AgentSystem, InputRequestId, InputRequestKind, IterationId, Message, PermissionLevel,
+    SessionEvent, StreamPart, TurnId, TurnOrigin,
 };
 use claw_interface::{
     Cancel, ClawHttp, HttpJsonRequest, HttpResponse, HttpResponseFuture, HttpStatusCode,
     ImmediateTimer, MemFs, StdThread, TokioExecutor,
 };
 use futures_lite::future::block_on;
+use futures_lite::StreamExt;
 use serde_json::{json, Value};
 use support::{
     assistant_text, csv_dicts, drain_until_turn_ended, llm_config, mem_root, persistence,
@@ -160,6 +162,72 @@ fn foreground_spawn_returns_the_child_result_to_the_same_tool_call_and_turn() {
                     .as_str()
                     .is_some_and(|content| content.starts_with("[subagent]"))
         }));
+}
+
+#[test]
+fn foreground_child_approval_resumes_the_child_without_entering_either_transcript() {
+    let _lock = SUBAGENT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    install_approval_case();
+
+    let root = mem_root("subagent-foreground-approval");
+    let system = SubagentSystem::new::<StdThread, TokioExecutor>(persistence(&root)).unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
+    let (control, mut events) = system.open_session(session).unwrap();
+
+    block_on(control.set_permission_level(PermissionLevel::Ask)).unwrap();
+    block_on(control.submit(Message::text("delegate with approval"))).unwrap();
+    let (root_approval, root_kind) = block_on(wait_for_input_request(&mut events));
+    assert!(matches!(
+        root_kind,
+        InputRequestKind::PermissionApproval { summary }
+            if summary.contains("subagent_spawn")
+    ));
+    block_on(control.respond(root_approval, Message::text("approve"))).unwrap();
+
+    let (child_approval, child_kind) = block_on(wait_for_input_request(&mut events));
+    assert!(matches!(
+        child_kind,
+        InputRequestKind::PermissionApproval { summary }
+            if summary.contains("conversation_end")
+    ));
+    block_on(control.respond(child_approval, Message::text("approve"))).unwrap();
+
+    let turn = drain_until_turn_ended(&mut events);
+    assert_eq!(root_approval, InputRequestId(1));
+    assert_eq!(child_approval, InputRequestId(2));
+    assert_eq!(output_fragments(&turn), vec!["root received child"]);
+
+    let requests = recorded_requests();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.kind == RequestKind::Root)
+            .count(),
+        2
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.kind == RequestKind::Worker)
+            .count(),
+        1,
+        "the child must execute its held call instead of asking the AI to repeat it"
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.kind == RequestKind::Permission)
+            .count(),
+        2
+    );
+    assert!(requests
+        .iter()
+        .all(|request| !request.body.contains("[approval]")));
 }
 
 #[test]
@@ -362,10 +430,12 @@ struct SubagentCaseState {
     control: Option<String>,
     foreground: bool,
     background_concurrency: bool,
+    approval_flow: bool,
     hold_worker: bool,
     wait_root_for_worker: bool,
     root_requests: usize,
     worker_requests: usize,
+    permission_requests: usize,
     worker_delay_used: bool,
     child_id: Option<String>,
     requests: Vec<RecordedRequest>,
@@ -380,6 +450,7 @@ struct RecordedRequest {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RequestKind {
     Extraction,
+    Permission,
     Root,
     Worker,
     Other,
@@ -391,10 +462,12 @@ fn install_case(fixture: Fixture, foreground: bool) {
         control: None,
         foreground,
         background_concurrency: false,
+        approval_flow: false,
         hold_worker: false,
         wait_root_for_worker: !foreground,
         root_requests: 0,
         worker_requests: 0,
+        permission_requests: 0,
         worker_delay_used: false,
         child_id: None,
         requests: Vec::new(),
@@ -418,10 +491,12 @@ fn install_control_case(control: &str) {
         control: Some(control.to_string()),
         foreground: true,
         background_concurrency: false,
+        approval_flow: false,
         hold_worker: true,
         wait_root_for_worker: false,
         root_requests: 0,
         worker_requests: 0,
+        permission_requests: 0,
         worker_delay_used: false,
         child_id: None,
         requests: Vec::new(),
@@ -445,10 +520,39 @@ fn install_background_concurrency_case() {
         control: None,
         foreground: false,
         background_concurrency: true,
+        approval_flow: false,
         hold_worker: true,
         wait_root_for_worker: false,
         root_requests: 0,
         worker_requests: 0,
+        permission_requests: 0,
+        worker_delay_used: false,
+        child_id: None,
+        requests: Vec::new(),
+    });
+}
+
+fn install_approval_case() {
+    *state() = Some(SubagentCaseState {
+        fixture: Fixture {
+            case: "approval".to_owned(),
+            worker_output: "worker approved".to_owned(),
+            spawn_ack: "root received child".to_owned(),
+            background_output: String::new(),
+            supervision_output: String::new(),
+            expected_watch_fragment: String::new(),
+            expected_delete_fragment: String::new(),
+            expected_after_delete_fragment: String::new(),
+        },
+        control: None,
+        foreground: true,
+        background_concurrency: false,
+        approval_flow: true,
+        hold_worker: false,
+        wait_root_for_worker: false,
+        root_requests: 0,
+        worker_requests: 0,
+        permission_requests: 0,
         worker_delay_used: false,
         child_id: None,
         requests: Vec::new(),
@@ -496,9 +600,47 @@ fn response_for_request(body: &str) -> String {
 
     match kind {
         RequestKind::Extraction => assistant_text("[]"),
+        RequestKind::Permission => {
+            let request_index = state.permission_requests;
+            state.permission_requests += 1;
+            match request_index {
+                0 | 1 => assistant_tool_calls(vec![tool_call(
+                    "call_permission",
+                    "permission_resolve_reply",
+                    json!({ "decision": "approve" }),
+                )]),
+                other => panic!("unexpected permission request index {other}"),
+            }
+        }
         RequestKind::Worker => {
             state.worker_requests += 1;
-            assistant_text(&state.fixture.worker_output)
+            if state.approval_flow {
+                assistant_tool_calls(vec![tool_call(
+                    "call_worker_end",
+                    "conversation_end",
+                    json!({ "final_message": state.fixture.worker_output }),
+                )])
+            } else {
+                assistant_text(&state.fixture.worker_output)
+            }
+        }
+        RequestKind::Root if state.approval_flow => {
+            let request_index = state.root_requests;
+            state.root_requests += 1;
+            match request_index {
+                0 => assistant_tool_calls(vec![tool_call(
+                    "call_spawn",
+                    "subagent_spawn",
+                    json!({
+                        "kind": "worker",
+                        "name": "approval-worker",
+                        "goal": "finish after approval",
+                        "foreground": true,
+                    }),
+                )]),
+                1 => assistant_text(&state.fixture.spawn_ack),
+                other => panic!("unexpected approval root request index {other}"),
+            }
         }
         RequestKind::Root => root_response(state, body),
         RequestKind::Other => panic!("unexpected HTTP request body: {body}"),
@@ -673,13 +815,26 @@ fn classify_request(body: &str) -> RequestKind {
         return RequestKind::Extraction;
     }
 
-    if system.contains("subagent spawned by the root agent") {
+    if system.contains("resolve a user's natural-language reply") {
+        RequestKind::Permission
+    } else if system.contains("subagent spawned by the root agent") {
         RequestKind::Worker
     } else if system.contains("user-facing assistant") {
         RequestKind::Root
     } else {
         RequestKind::Other
     }
+}
+
+async fn wait_for_input_request(
+    events: &mut claw_agent::SessionEventStream,
+) -> (InputRequestId, InputRequestKind) {
+    while let Some(event) = events.next().await {
+        if let SessionEvent::InputRequested { request, kind } = event {
+            return (request, kind);
+        }
+    }
+    panic!("session event stream closed before input was requested");
 }
 
 fn extract_child_id(body: &str) -> Option<String> {

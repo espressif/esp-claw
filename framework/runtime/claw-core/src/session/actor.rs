@@ -936,23 +936,19 @@ where
         PendingTurnInput::Response {
             kind: InputRequestKind::PermissionApproval { summary },
             message,
-        } => match runtime
-            .set_root_context_block(effort.context_block())
-            .map_err(DeliverError::from)
-        {
-            Ok(()) => {
-                resolve_pending_approval(
-                    runtime,
-                    &summary,
-                    message.as_str(),
-                    control,
-                    events,
-                    api_manager,
-                )
-                .await
-            }
-            Err(error) => Err(error),
-        },
+        } => {
+            // The request may belong to a child while a foreground root tool is
+            // still running. Approval resolution does not mutate agent context.
+            resolve_pending_approval(
+                runtime,
+                &summary,
+                message.as_str(),
+                control,
+                events,
+                api_manager,
+            )
+            .await
+        }
     };
     RuntimeDriveResult::Driven(result)
 }

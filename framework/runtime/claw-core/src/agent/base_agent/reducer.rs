@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use crate::agent::iteration_loop::{
     CompletedKind, CompletedOutcome, IterationOutcome, IterationResult, PreemptedOutcome, ToolRun,
+    ToolsOutcome,
 };
 use crate::agent::tools::ControlSignal;
 use crate::memory::AssistantCommit;
@@ -14,10 +15,15 @@ use super::command::{
     AgentCommand, AgentCommandError, AgentRunError, ApprovalDecision, TickOutcome,
 };
 use super::control::AgentAbortHandle;
+use super::pending_tool_round::PendingToolRound;
 use super::state::ToolBlockVerdict;
 use super::task_state::TaskAction;
 use super::{BaseAgent, IterationIdAllocator};
-use claw_permission::Grant;
+
+pub(super) struct ApprovalResume {
+    pub(super) decision: ApprovalDecision,
+    pub(super) pending_tools: PendingToolRound,
+}
 
 impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// Queue a command. The single inbound entry point.
@@ -35,7 +41,8 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         self.interruption.handle()
     }
 
-    pub(super) fn drain_inbox(&mut self) {
+    pub(super) fn drain_inbox(&mut self) -> Option<ApprovalResume> {
+        let mut approval_resume = None;
         loop {
             let action = match self.state.get_mut().task_mut().pop_action() {
                 Ok(action) => action,
@@ -51,8 +58,12 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
             let Some(action) = action else {
                 break;
             };
-            self.apply_action(action);
+            if let Some(resume) = self.apply_action(action) {
+                debug_assert!(approval_resume.is_none());
+                approval_resume = Some(resume);
+            }
         }
+        approval_resume
     }
 
     pub(super) fn drain_control_signals(&mut self) {
@@ -71,35 +82,32 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         }
     }
 
-    fn apply_action(&mut self, action: TaskAction) {
+    fn apply_action(&mut self, action: TaskAction) -> Option<ApprovalResume> {
         match action {
             TaskAction::TaskInput {
                 message,
                 starts_task,
             } => {
                 self.append_task_input(&message, starts_task);
+                None
             }
             TaskAction::Cancel => {
                 self.transcript.discard_open_turn();
                 self.interruption.clear();
                 self.outcome = Some(TickOutcome::Cancelled);
+                None
             }
             TaskAction::ApprovalResult {
                 decision,
-                grant_signatures,
-            } => {
-                let marker = match &decision {
-                    ApprovalDecision::Approved => "[approval] approved by the human.".to_owned(),
-                    ApprovalDecision::Rejected(reason) => {
-                        format!("[approval] rejected by the human: {reason}")
-                    }
-                };
-                self.transcript.append_user(&marker, false);
-                self.record_grants(&decision, grant_signatures);
-            }
+                pending_tools,
+            } => Some(ApprovalResume {
+                decision,
+                pending_tools,
+            }),
             TaskAction::EndConversation { final_message } => {
                 self.transcript.commit_ended(&final_message);
                 self.outcome = Some(TickOutcome::Ended { final_message });
+                None
             }
         }
     }
@@ -117,13 +125,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
                     self.outcome = Some(TickOutcome::Yielded { text: answer.text });
                 }
                 CompletedKind::Tools(tools) => {
-                    // A tool round is a non-terminal iteration: keep it in the
-                    // open turn so the whole user request stays one user-started
-                    // group, committed only by the terminal iteration.
-                    self.transcript
-                        .append_patch(&tools.appended.into_json_array());
-                    self.apply_tool_block_policy(&tools.runs);
-                    self.maybe_raise_approval(&tools.runs);
+                    self.reduce_tool_round(tools);
                 }
             },
             Ok(IterationOutcome::Preempted(outcome)) => {
@@ -133,38 +135,65 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         }
     }
 
+    fn reduce_tool_round(&mut self, tools: ToolsOutcome) {
+        let awaits_approval = tools.next_approval().is_some();
+        if awaits_approval {
+            self.apply_tool_block_policy(&tools.runs);
+            if self.outcome.is_none() {
+                match PendingToolRound::from_tools(tools) {
+                    Some(pending) => self.park_tool_round(pending),
+                    None => self.fail_with(AgentRunError::TaskStateInvariant),
+                }
+            }
+        } else {
+            let ToolsOutcome { appended, runs } = tools;
+            self.transcript.append_patch(&appended.into_json_array());
+            self.apply_tool_block_policy(&runs);
+        }
+    }
+
+    pub(super) fn reduce_resolved_tool_round(&mut self, pending: PendingToolRound) {
+        let awaits_approval = pending.next().is_some();
+        if awaits_approval {
+            self.park_tool_round(pending);
+        } else {
+            // The resumed round is now complete. Only now can the assistant and
+            // all matched tool messages become visible to the next iteration.
+            let (appended, blocked) = pending.into_completed();
+            self.transcript.append_patch(&appended.into_json_array());
+            if !blocked.is_empty() {
+                let blocked = blocked.iter().map(String::as_str).collect::<Vec<_>>();
+                self.apply_blocked_tool_policy(&blocked);
+            }
+        }
+    }
+
     fn apply_tool_block_policy(&mut self, runs: &[ToolRun]) {
         let blocked: Vec<&str> = runs
             .iter()
             .filter(|run| run.is_blocked())
             .map(|run| run.name.as_str())
             .collect();
+        self.apply_blocked_tool_policy(&blocked);
+    }
+
+    fn apply_blocked_tool_policy(&mut self, blocked: &[&str]) {
         if !blocked.is_empty() {
             tracing::warn!(name: "tool_gate_blocked", count = blocked.len() as u64);
         }
         if let ToolBlockVerdict::Exhausted { name } =
-            self.state.get_mut().block_policy.record_round(&blocked)
+            self.state.get_mut().block_policy.record_round(blocked)
         {
             self.fail_with(AgentRunError::ToolNotPermitted { name });
         }
     }
 
-    fn maybe_raise_approval(&mut self, runs: &[ToolRun]) {
-        if self.outcome.is_some() {
-            return;
-        }
-        let pending: Vec<(String, String)> = runs
-            .iter()
-            .filter_map(|run| {
-                run.approval()
-                    .map(|approval| (approval.summary.clone(), approval.signature.clone()))
-            })
-            .collect();
-        let Some((summary, _)) = pending.first().cloned() else {
+    fn park_tool_round(&mut self, pending: PendingToolRound) {
+        let Some(summary) = pending.next().map(|approval| approval.summary.clone()) else {
+            self.fail_with(AgentRunError::TaskStateInvariant);
             return;
         };
-        let signatures = pending.into_iter().map(|(_, sig)| sig).collect();
-        if let Err(error) = self.state.get_mut().task_mut().await_approval(signatures) {
+        if let Err(error) = self.state.get_mut().task_mut().await_approval(pending) {
             tracing::error!(
                 name: "task_phase_transition_failed",
                 transition = "await_approval",
@@ -176,22 +205,7 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         self.outcome = Some(TickOutcome::AwaitingApproval { summary });
     }
 
-    fn record_grants(&mut self, decision: &ApprovalDecision, signatures: Vec<String>) {
-        let state = self.state.get_mut();
-        let grant = match decision {
-            ApprovalDecision::Approved => Grant::Granted,
-            ApprovalDecision::Rejected(reason) => Grant::Denied(reason.clone()),
-        };
-        let grants = &mut state.permission_grants;
-        for signature in signatures {
-            match &grant {
-                Grant::Granted => grants.grant(signature),
-                Grant::Denied(reason) => grants.deny(signature, reason.clone()),
-            }
-        }
-    }
-
-    fn fail_with(&mut self, error: AgentRunError) {
+    pub(super) fn fail_with(&mut self, error: AgentRunError) {
         self.state.get_mut().task_mut().finish_task();
         self.outcome = Some(TickOutcome::Failed(error));
     }

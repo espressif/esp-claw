@@ -186,6 +186,12 @@ where
                 .next_completed_or_command(control, &self.multiagent)
                 .await;
             output.absorb(self.route_completed_agents(completed));
+            if self.has_pending_approval() {
+                // A foreground root tool may still be waiting on the child
+                // that asked. Keep its future in the slot and return control
+                // to the session so the caller can answer.
+                break;
+            }
         }
         control.clear_cancel_hook();
         (output, DriveStop::Quiescent)

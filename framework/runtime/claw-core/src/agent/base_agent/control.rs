@@ -1,12 +1,14 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use claw_permission::{
-    Action, Grant, GrantStore, PermissionDecision, PermissionPolicy, PermissionRequest,
-};
+use claw_permission::{Action, PermissionDecision, PermissionPolicy, PermissionRequest};
 use claw_tool::ToolGate;
 
 use crate::agent::iteration_loop::InterruptionControl;
+
+use super::ApprovalDecision;
+
+const PENDING_ACTION_CHANGED: &str = "the pending tool action changed before execution";
 
 #[derive(Clone)]
 pub(crate) struct AgentAbortHandle {
@@ -51,77 +53,103 @@ impl InterruptionControl for AgentInterruption {
 
 pub(super) struct PermissionGate<'a> {
     pub(super) policy: &'a dyn PermissionPolicy,
-    pub(super) grants: &'a GrantStore,
 }
 
 impl ToolGate for PermissionGate<'_> {
     fn decide(&self, action: &Action) -> PermissionDecision {
-        if let Some(Grant::Denied(reason)) = self.grants.lookup(&action.signature()) {
+        self.policy.evaluate(&PermissionRequest::new(action))
+    }
+}
+
+pub(super) struct ResolvedPermissionGate<'a> {
+    pub(super) policy: &'a dyn PermissionPolicy,
+    pub(super) expected_signature: &'a str,
+    pub(super) decision: &'a ApprovalDecision,
+}
+
+impl ToolGate for ResolvedPermissionGate<'_> {
+    fn decide(&self, action: &Action) -> PermissionDecision {
+        if action.signature() != self.expected_signature {
             return PermissionDecision::Deny {
-                reason: reason.clone(),
+                reason: PENDING_ACTION_CHANGED.to_owned(),
             };
         }
-        let decision = self.policy.evaluate(&PermissionRequest::new(action));
-        match decision {
-            ask @ PermissionDecision::Ask { .. } => match self.grants.lookup(&action.signature()) {
-                Some(Grant::Granted) => PermissionDecision::Allow,
-                Some(Grant::Denied(_)) | None => ask,
+        match self.decision {
+            ApprovalDecision::Rejected(reason) => PermissionDecision::Deny {
+                reason: reason.clone(),
             },
-            decision @ (PermissionDecision::Allow | PermissionDecision::Deny { .. }) => decision,
+            ApprovalDecision::Approved => {
+                match self.policy.evaluate(&PermissionRequest::new(action)) {
+                    PermissionDecision::Ask { .. } | PermissionDecision::Allow => {
+                        PermissionDecision::Allow
+                    }
+                    decision @ PermissionDecision::Deny { .. } => decision,
+                }
+            }
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use claw_permission::{Action, GrantStore, PermissionDecision, PermissionLevel, RiskClass};
+    use claw_permission::{Action, PermissionDecision, PermissionLevel, RiskClass};
     use claw_tool::ToolGate;
 
-    use super::PermissionGate;
+    use super::{PermissionGate, ResolvedPermissionGate};
+    use crate::agent::ApprovalDecision;
 
     #[test]
-    fn permission_gate_preserves_denials_and_uses_approvals_only_for_ask() {
+    fn permission_gate_projects_the_current_policy() {
         let action = Action::new("write", RiskClass::High);
-        let mut grants = GrantStore::new();
         let gate = PermissionGate {
             policy: &PermissionLevel::Ask,
-            grants: &grants,
         };
         assert!(matches!(
             gate.decide(&action),
             PermissionDecision::Ask { .. }
         ));
 
-        grants.deny(action.signature(), "blocked");
-        let gate = PermissionGate {
-            policy: &PermissionLevel::Ask,
-            grants: &grants,
-        };
-        assert_eq!(
-            gate.decide(&action),
-            PermissionDecision::Deny {
-                reason: "blocked".into()
-            }
-        );
         let gate = PermissionGate {
             policy: &PermissionLevel::AllowAll,
-            grants: &grants,
+        };
+        assert_eq!(gate.decide(&action), PermissionDecision::Allow);
+    }
+
+    #[test]
+    fn resolved_gate_applies_one_matching_decision_without_persisting_a_grant() {
+        let action = Action::new("write", RiskClass::High);
+        let signature = action.signature();
+        let approved = ResolvedPermissionGate {
+            policy: &PermissionLevel::Ask,
+            expected_signature: &signature,
+            decision: &ApprovalDecision::Approved,
+        };
+        assert_eq!(approved.decide(&action), PermissionDecision::Allow);
+        assert!(matches!(
+            approved.decide(&Action::new("delete", RiskClass::High)),
+            PermissionDecision::Deny { .. }
+        ));
+
+        let denied_by_current_policy = ResolvedPermissionGate {
+            policy: &PermissionLevel::Deny,
+            expected_signature: &signature,
+            decision: &ApprovalDecision::Approved,
+        };
+        assert!(matches!(
+            denied_by_current_policy.decide(&action),
+            PermissionDecision::Deny { .. }
+        ));
+
+        let rejected = ResolvedPermissionGate {
+            policy: &PermissionLevel::AllowAll,
+            expected_signature: &signature,
+            decision: &ApprovalDecision::Rejected("blocked".into()),
         };
         assert_eq!(
-            gate.decide(&action),
+            rejected.decide(&action),
             PermissionDecision::Deny {
                 reason: "blocked".into()
             }
         );
-
-        grants.grant(action.signature());
-        let gate = PermissionGate {
-            policy: &PermissionLevel::Deny,
-            grants: &grants,
-        };
-        assert!(matches!(
-            gate.decide(&action),
-            PermissionDecision::Deny { .. }
-        ));
     }
 }

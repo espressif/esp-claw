@@ -8,6 +8,7 @@ mod command;
 mod construction;
 mod control;
 mod iteration;
+mod pending_tool_round;
 mod persistence;
 mod reducer;
 mod state;

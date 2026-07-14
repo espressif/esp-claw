@@ -1,11 +1,12 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use strum::IntoStaticStr;
 
 use claw_api::ChatError;
-use claw_tool::{ApprovalNeeded, ToolGate, ToolSetError, ToolSetHandle};
+use claw_tool::{ToolGate, ToolSetError, ToolSetHandle};
 
 use crate::protocol::IterationId;
 
@@ -36,7 +37,7 @@ pub(crate) enum IterationCheckpoint {
 }
 
 /// Owned message batch appended by one completed step (assistant/tool round).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub(crate) struct AppendedMessages {
     messages: Vec<Value>,
 }
@@ -62,6 +63,27 @@ impl AppendedMessages {
 
     pub(crate) fn into_json_array(self) -> Value {
         Value::Array(self.messages)
+    }
+
+    pub(crate) fn replace_tool_result(
+        &mut self,
+        tool_call_id: &str,
+        content: String,
+        ok: bool,
+    ) -> bool {
+        let Some(message) = self.messages.iter_mut().find(|message| {
+            message.get("role").and_then(Value::as_str) == Some("tool")
+                && message.get("tool_call_id").and_then(Value::as_str) == Some(tool_call_id)
+        }) else {
+            return false;
+        };
+        *message = serde_json::json!({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": content,
+            "is_error": !ok,
+        });
+        true
     }
 }
 
@@ -119,9 +141,16 @@ impl ToolRun {
         matches!(self.disposition, ToolRunDisposition::Blocked)
     }
 
-    pub(crate) fn approval(&self) -> Option<&ApprovalNeeded> {
+    pub(crate) fn approval(&self) -> Option<&PendingApproval> {
         match &self.disposition {
             ToolRunDisposition::AwaitingApproval(approval) => Some(approval),
+            ToolRunDisposition::Executed | ToolRunDisposition::Blocked => None,
+        }
+    }
+
+    pub(crate) fn into_approval(self) -> Option<(String, PendingApproval)> {
+        match self.disposition {
+            ToolRunDisposition::AwaitingApproval(approval) => Some((self.name, approval)),
             ToolRunDisposition::Executed | ToolRunDisposition::Blocked => None,
         }
     }
@@ -134,7 +163,17 @@ impl ToolRun {
 pub(super) enum ToolRunDisposition {
     Executed,
     Blocked,
-    AwaitingApproval(ApprovalNeeded),
+    AwaitingApproval(PendingApproval),
+}
+
+/// Everything required to resume exactly one held tool call after the caller
+/// resolves its permission request.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PendingApproval {
+    pub(crate) tool_call_id: String,
+    pub(crate) arguments_json: String,
+    pub(crate) summary: String,
+    pub(crate) signature: String,
 }
 
 /// The model issued tool calls and they were executed.
@@ -143,6 +182,50 @@ pub(crate) struct ToolsOutcome {
     /// Assistant + tool messages produced this step (iteration layer merges).
     pub appended: AppendedMessages,
     pub runs: Vec<ToolRun>,
+}
+
+impl ToolsOutcome {
+    pub(crate) fn next_approval(&self) -> Option<(&str, &PendingApproval)> {
+        self.runs
+            .iter()
+            .find_map(|run| run.approval().map(|approval| (run.name.as_str(), approval)))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_for_test(signature: &str) -> Self {
+        let tool_call_id = "pending-call";
+        let mut appended = AppendedMessages::empty();
+        appended.push(serde_json::json!({
+            "role": "assistant",
+            "tool_calls": [{
+                "id": tool_call_id,
+                "type": "function",
+                "function": {
+                    "name": "pending_tool",
+                    "arguments": "{}",
+                },
+            }],
+        }));
+        appended.push(serde_json::json!({
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": "approval required",
+            "is_error": true,
+        }));
+        Self {
+            appended,
+            runs: vec![ToolRun {
+                name: "pending_tool".to_owned(),
+                ok: false,
+                disposition: ToolRunDisposition::AwaitingApproval(PendingApproval {
+                    tool_call_id: tool_call_id.to_owned(),
+                    arguments_json: "{}".to_owned(),
+                    summary: "approval required".to_owned(),
+                    signature: signature.to_owned(),
+                }),
+            }],
+        }
+    }
 }
 
 /// The model returned a final plain-text answer.

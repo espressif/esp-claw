@@ -282,7 +282,6 @@ fn ask_permission_level_reaches_the_public_approval_flow() {
             r#"{"decision":"approve"}"#,
             None,
         ),
-        assistant_tool_call("conversation_end", arguments, None),
     ]);
 
     let root = mem_root("agent-loop-ask-permission-level");
@@ -327,6 +326,13 @@ fn ask_permission_level_reaches_the_public_approval_flow() {
             .count(),
         1
     );
+    let bodies = agent_request_bodies();
+    assert_eq!(
+        bodies.len(),
+        2,
+        "approval must resume the held call directly"
+    );
+    assert!(bodies.iter().all(|body| !body.contains("[approval]")));
 }
 
 #[test]
@@ -342,7 +348,6 @@ fn approval_response_requires_the_pending_request_id() {
             r#"{"decision":"approve"}"#,
             None,
         ),
-        assistant_tool_call("conversation_end", arguments, None),
     ]);
 
     let root = mem_root("agent-loop-approval-request-id");
@@ -395,7 +400,6 @@ fn ambiguous_approval_response_reissues_input_inside_the_same_turn() {
             r#"{"decision":"approve"}"#,
             None,
         ),
-        assistant_tool_call("conversation_end", arguments, None),
     ]);
 
     let root = mem_root("agent-loop-approval-clarification");
@@ -448,7 +452,6 @@ fn explicit_rejection_survives_a_switch_from_ask_to_allow_all() {
             r#"{"decision":"reject","note":"not allowed"}"#,
             None,
         ),
-        assistant_tool_call("conversation_end", arguments, None),
         assistant_text("rejection respected"),
     ]);
 
@@ -469,6 +472,98 @@ fn explicit_rejection_survives_a_switch_from_ask_to_allow_all() {
         output_fragments(&remaining_events),
         vec!["rejection respected".to_string()]
     );
+    let bodies = agent_request_bodies();
+    assert_eq!(bodies.len(), 3);
+    assert_followup_received_tool_result(&bodies[2], arguments, "not allowed", "rejected approval");
+    assert!(bodies.iter().all(|body| !body.contains("[approval]")));
+}
+
+#[test]
+fn each_asked_call_is_resolved_separately_while_safe_calls_keep_running() {
+    let _lock = AGENT_LOOP_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    install_agent_replies(vec![
+        assistant_tool_calls(&[
+            (
+                "call_asked_1",
+                "conversation_end",
+                r#"{"final_message":"first should not run"}"#,
+            ),
+            ("call_safe", "tool_search", r#"{}"#),
+            (
+                "call_asked_2",
+                "conversation_end",
+                r#"{"final_message":"second completed"}"#,
+            ),
+        ]),
+        assistant_tool_call(
+            "permission_resolve_reply",
+            r#"{"decision":"reject","note":"first denied"}"#,
+            None,
+        ),
+        assistant_tool_call(
+            "permission_resolve_reply",
+            r#"{"decision":"approve"}"#,
+            None,
+        ),
+        assistant_text("history inspected"),
+    ]);
+
+    let root = mem_root("agent-loop-distinct-approvals");
+    let system = build_matrix_system(&root);
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
+    let (control, mut events) = system.open_session(session).unwrap();
+
+    block_on(control.set_permission_level(PermissionLevel::Ask)).unwrap();
+    block_on(control.submit(Message::text("run all three calls"))).unwrap();
+    let (first_request, _, _) = block_on(wait_for_input_request(&mut events));
+    block_on(control.respond(first_request, Message::text("reject"))).unwrap();
+    let (second_request, _, _) = block_on(wait_for_input_request(&mut events));
+    block_on(control.respond(second_request, Message::text("approve"))).unwrap();
+    let remaining_events = drain_until_turn_ended(&mut events);
+
+    assert_eq!(first_request, InputRequestId(1));
+    assert_eq!(second_request, InputRequestId(2));
+    assert_eq!(
+        output_fragments(&remaining_events),
+        vec!["second completed".to_string()]
+    );
+
+    block_on(control.submit(Message::text("inspect prior tool results"))).unwrap();
+    let inspection_events = drain_until_turn_ended(&mut events);
+    assert_eq!(
+        output_fragments(&inspection_events),
+        vec!["history inspected".to_string()]
+    );
+
+    let bodies = agent_request_bodies();
+    assert_eq!(bodies.len(), 4);
+    assert!(bodies.iter().all(|body| !body.contains("[approval]")));
+    let final_messages = serde_json::from_str::<Value>(&bodies[3]).unwrap()["messages"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let tool_results = final_messages
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .map(|message| {
+            (
+                message["tool_call_id"].as_str().unwrap(),
+                message["content"].as_str().unwrap(),
+                message["is_error"].as_bool().unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(tool_results.iter().any(|(id, content, is_error)| {
+        *id == "call_asked_1" && content.contains("first denied") && *is_error
+    }));
+    assert!(tool_results
+        .iter()
+        .any(|(id, _, is_error)| *id == "call_safe" && !is_error));
+    assert!(tool_results.iter().any(|(id, content, is_error)| {
+        *id == "call_asked_2" && content.contains("Conversation ended") && !*is_error
+    }));
 }
 
 #[test]
@@ -661,6 +756,31 @@ fn assistant_tool_call(name: &str, arguments_json: &str, reasoning: Option<&str>
         message["reasoning_content"] = Value::String(reasoning.to_string());
     }
     json!({ "choices": [{ "message": message }] }).to_string()
+}
+
+fn assistant_tool_calls(calls: &[(&str, &str, &str)]) -> String {
+    let tool_calls = calls
+        .iter()
+        .map(|(id, name, arguments_json)| {
+            json!({
+                "id": id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": arguments_json,
+                },
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "tool_calls": tool_calls,
+            }
+        }]
+    })
+    .to_string()
 }
 
 fn llm_response_for_case(kind: &str, output: &str, reasoning_bytes: usize) -> String {

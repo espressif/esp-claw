@@ -5,13 +5,14 @@ use serde::{Deserialize, Serialize};
 use crate::agent::tools::ControlSignal;
 use crate::protocol::Message;
 
+use super::pending_tool_round::PendingToolRound;
 use super::{AgentCommand, AgentCommandError, AgentState, ApprovalDecision};
 
 #[derive(Deserialize, Serialize)]
 enum TaskPhase {
     Idle,
     Running,
-    AwaitingApproval(Vec<String>),
+    AwaitingApproval(PendingToolRound),
 }
 
 #[derive(Clone, Copy)]
@@ -85,7 +86,7 @@ pub(super) enum TaskAction {
     Cancel,
     ApprovalResult {
         decision: ApprovalDecision,
-        grant_signatures: Vec<String>,
+        pending_tools: PendingToolRound,
     },
     EndConversation {
         final_message: String,
@@ -98,6 +99,16 @@ pub(super) enum TaskStateError {
     CannotAwaitApproval { state: AgentState },
     #[error("cannot await approval while task inputs are still queued")]
     PendingMailbox,
+    #[error("cannot await approval without a pending tool call")]
+    NoPendingApproval,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(super) enum TaskStateValidationError {
+    #[error(transparent)]
+    Mailbox(#[from] AgentCommandError),
+    #[error("awaiting approval phase has no pending tool call")]
+    NoPendingApproval,
 }
 
 /// Owns the one committed task phase and all accepted-but-unapplied inputs.
@@ -158,8 +169,8 @@ impl TaskState {
             }
             Inbound::Command(AgentCommand::ApprovalResult(decision)) => {
                 let previous = std::mem::replace(&mut self.phase, TaskPhase::Running);
-                let grant_signatures = match previous {
-                    TaskPhase::AwaitingApproval(signatures) => signatures,
+                let pending_tools = match previous {
+                    TaskPhase::AwaitingApproval(pending_tools) => pending_tools,
                     TaskPhase::Idle => {
                         return Err(AgentCommandError::NotAwaitingApproval {
                             state: AgentState::Idle,
@@ -173,7 +184,7 @@ impl TaskState {
                 };
                 TaskAction::ApprovalResult {
                     decision,
-                    grant_signatures,
+                    pending_tools,
                 }
             }
             Inbound::Control(ControlSignal::EndConversation { final_message }) => {
@@ -186,7 +197,7 @@ impl TaskState {
 
     pub(super) fn await_approval(
         &mut self,
-        grant_signatures: Vec<String>,
+        pending_tools: PendingToolRound,
     ) -> Result<(), TaskStateError> {
         if !self.mailbox.entries.is_empty() {
             return Err(TaskStateError::PendingMailbox);
@@ -196,7 +207,10 @@ impl TaskState {
                 state: self.phase.view().public(),
             });
         }
-        self.phase = TaskPhase::AwaitingApproval(grant_signatures);
+        if pending_tools.next().is_none() {
+            return Err(TaskStateError::NoPendingApproval);
+        }
+        self.phase = TaskPhase::AwaitingApproval(pending_tools);
         Ok(())
     }
 
@@ -208,8 +222,15 @@ impl TaskState {
         matches!(self.phase, TaskPhase::Running)
     }
 
-    pub(super) fn validate(&self) -> Result<(), AgentCommandError> {
-        self.mailbox.projected_phase(&self.phase).map(|_| ())
+    pub(super) fn validate(&self) -> Result<(), TaskStateValidationError> {
+        self.mailbox.projected_phase(&self.phase)?;
+        if matches!(
+            &self.phase,
+            TaskPhase::AwaitingApproval(pending) if pending.next().is_none()
+        ) {
+            return Err(TaskStateValidationError::NoPendingApproval);
+        }
+        Ok(())
     }
 }
 
@@ -254,6 +275,7 @@ mod tests {
     use crate::protocol::Message;
 
     use super::*;
+    use crate::agent::base_agent::pending_tool_round::PendingToolRound;
 
     fn projected_state(task: &TaskState) -> Result<AgentState, AgentCommandError> {
         task.mailbox
@@ -345,7 +367,7 @@ mod tests {
         task.enqueue_task_input(Message::text("start"));
         let _ = task.pop_action().expect("valid queue");
 
-        task.await_approval(vec!["sig-a".into(), "sig-b".into()])
+        task.await_approval(PendingToolRound::pending_for_test("sig-a"))
             .expect("running tasks may await approval");
 
         task.enqueue_command(AgentCommand::ApprovalResult(ApprovalDecision::Approved))
@@ -358,9 +380,11 @@ mod tests {
         assert!(matches!(
             action,
             TaskAction::ApprovalResult {
-                grant_signatures,
+                pending_tools,
                 ..
-            } if grant_signatures == ["sig-a", "sig-b"]
+            } if pending_tools
+                .next()
+                .is_some_and(|approval| approval.signature == "sig-a")
         ));
         assert!(task.is_running());
     }

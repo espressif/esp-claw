@@ -5,7 +5,7 @@ use claw_tool::{RawToolInvocation, ToolInvocation, ToolRunOutcome, ToolRunner};
 
 use super::types::{
     check_preempt_at_checkpoint, AppendedMessages, InterruptionControl, IterationCheckpoint,
-    IterationLoopError, PreemptedOutcome, ToolRun, ToolRunDisposition,
+    IterationLoopError, PendingApproval, PreemptedOutcome, ToolRun, ToolRunDisposition,
 };
 use crate::protocol::IterationId;
 
@@ -106,12 +106,17 @@ pub(super) async fn run_tool_calls(
 
         push_tool_message(appended, &tc.id, content, ok);
         let disposition = match approval {
-            Some(approval) => ToolRunDisposition::AwaitingApproval(approval),
+            Some(approval) => ToolRunDisposition::AwaitingApproval(PendingApproval {
+                tool_call_id: tc.id.clone(),
+                arguments_json: call.arguments_json().to_owned(),
+                summary: approval.summary,
+                signature: approval.signature,
+            }),
             None if blocked => ToolRunDisposition::Blocked,
             None => ToolRunDisposition::Executed,
         };
         runs.push(ToolRun {
-            name: tc.display_name().to_string(),
+            name: call.name().to_owned(),
             ok,
             disposition,
         });

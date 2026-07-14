@@ -1,4 +1,3 @@
-use claw_permission::GrantStore;
 use serde::{Deserialize, Serialize};
 
 use super::task_state::TaskState;
@@ -41,7 +40,6 @@ pub(super) enum ToolBlockVerdict {
 #[derive(Deserialize, Serialize)]
 pub(super) struct BaseAgentState {
     pub(super) block_policy: BlockPolicy,
-    pub(super) permission_grants: GrantStore,
     pub(super) iterations: IterationIdAllocator,
     task: TaskState,
 }
@@ -50,7 +48,6 @@ impl BaseAgentState {
     pub(super) fn new(block_retries: u32) -> Self {
         Self {
             block_policy: BlockPolicy::new(block_retries),
-            permission_grants: GrantStore::new(),
             iterations: IterationIdAllocator::new(),
             task: TaskState::new(),
         }
