@@ -12,8 +12,9 @@ use std::task::Waker;
 use std::time::Duration;
 
 use claw_agent::{
-    AgentError, AgentPersistenceConfig, AgentSystem, Message, OpenSessionError, SessionControl,
-    SessionControlError, SessionEvent, SessionEventStream, SessionId, StreamPart,
+    AgentError, AgentPersistenceConfig, AgentSystem, InputRequestId, InputRequestKind, Message,
+    OpenSessionError, SessionControl, SessionControlError, SessionEvent, SessionEventStream,
+    SessionId, StreamPart,
 };
 use claw_api::{BackendKind, ClawApiConfig};
 use claw_interface::{Cancel, ClawThread, ClawTimer, CoreAffinity, Priority};
@@ -25,11 +26,13 @@ use futures_lite::StreamExt;
 
 use crate::abi::{
     ClawAgentConfig, ClawAgentEvent, EspErr, CLAW_AGENT_EVENT_KIND_CLOSED,
-    CLAW_AGENT_EVENT_KIND_DONE, CLAW_AGENT_EVENT_KIND_ERROR, CLAW_AGENT_EVENT_KIND_OUTPUT,
-    CLAW_AGENT_EVENT_KIND_OUTPUT_END, CLAW_AGENT_EVENT_KIND_REASONING,
-    CLAW_AGENT_EVENT_KIND_REASONING_END, CLAW_AGENT_EVENT_KIND_TOOLS,
-    CLAW_AGENT_EVENT_KIND_TOOLS_END, ESP_ERR_INVALID_ARG, ESP_ERR_INVALID_SIZE,
-    ESP_ERR_INVALID_STATE, ESP_ERR_NOT_FOUND, ESP_ERR_TIMEOUT, ESP_FAIL, ESP_OK,
+    CLAW_AGENT_EVENT_KIND_DONE, CLAW_AGENT_EVENT_KIND_ERROR, CLAW_AGENT_EVENT_KIND_INPUT_REQUESTED,
+    CLAW_AGENT_EVENT_KIND_OUTPUT, CLAW_AGENT_EVENT_KIND_OUTPUT_END,
+    CLAW_AGENT_EVENT_KIND_REASONING, CLAW_AGENT_EVENT_KIND_REASONING_END,
+    CLAW_AGENT_EVENT_KIND_TOOLS, CLAW_AGENT_EVENT_KIND_TOOLS_END,
+    CLAW_AGENT_INPUT_REQUEST_KIND_NONE, CLAW_AGENT_INPUT_REQUEST_KIND_PERMISSION_APPROVAL,
+    ESP_ERR_INVALID_ARG, ESP_ERR_INVALID_SIZE, ESP_ERR_INVALID_STATE, ESP_ERR_NOT_FOUND,
+    ESP_ERR_TIMEOUT, ESP_FAIL, ESP_OK,
 };
 use crate::tool::register_capability_tools;
 
@@ -69,6 +72,10 @@ struct OpenSession {
 
 /// One event handed across the FFI, mapped from a [`SessionEvent`].
 enum FfiEvent {
+    InputRequested {
+        request: InputRequestId,
+        summary: String,
+    },
     Output(String),
     OutputEnd,
     Reasoning(String),
@@ -91,6 +98,10 @@ impl FfiEvent {
 /// the puller skips it and pulls the next.
 fn map_event(event: SessionEvent) -> Option<FfiEvent> {
     match event {
+        SessionEvent::InputRequested {
+            request,
+            kind: InputRequestKind::PermissionApproval { summary },
+        } => Some(FfiEvent::InputRequested { request, summary }),
         SessionEvent::Output(StreamPart::Delta(text)) => Some(FfiEvent::Output(text)),
         SessionEvent::Output(StreamPart::End) => Some(FfiEvent::OutputEnd),
         SessionEvent::Reasoning(StreamPart::Delta(text)) => Some(FfiEvent::Reasoning(text)),
@@ -137,6 +148,19 @@ pub extern "C" fn claw_agent_deinit() -> EspErr {
 /// `input` must point to valid UTF-8 C strings for this call.
 pub unsafe extern "C" fn claw_agent_session_submit(session_id: u32, text: *const c_char) -> EspErr {
     ffi_result(|| submit_session(session_id, text))
+}
+
+#[no_mangle]
+/// Respond to an input request inside the open session's current turn.
+///
+/// # Safety
+/// `text` must point to a valid UTF-8 C string for this call.
+pub unsafe extern "C" fn claw_agent_session_respond(
+    session_id: u32,
+    request_id: u32,
+    text: *const c_char,
+) -> EspErr {
+    ffi_result(|| respond_session(session_id, request_id, text))
 }
 
 #[no_mangle]
@@ -354,7 +378,26 @@ fn submit_session(session_id: u32, text: *const c_char) -> Result<(), CabiError>
         get_open_session_locked(runtime, session_id)?.ok_or(CabiError::NotFound)?
     };
     futures_lite::future::block_on(session.control.submit(Message::text(text)))
-        .map_err(|_| CabiError::InvalidState)
+        .map_err(session_control_error)
+}
+
+fn respond_session(session_id: u32, request_id: u32, text: *const c_char) -> Result<(), CabiError> {
+    if session_id == 0 || request_id == 0 {
+        return Err(CabiError::InvalidArgument);
+    }
+    let text = required_string(text)?;
+    let session = {
+        let _guard = lock_runtime();
+        let runtime = runtime_mut()?;
+        runtime.agent.as_ref().ok_or(CabiError::InvalidState)?;
+        get_open_session_locked(runtime, session_id)?.ok_or(CabiError::NotFound)?
+    };
+    futures_lite::future::block_on(
+        session
+            .control
+            .respond(InputRequestId::new(request_id), Message::text(text)),
+    )
+    .map_err(session_control_error)
 }
 
 fn session_open(session_id: u32) -> Result<(), CabiError> {
@@ -600,10 +643,16 @@ fn runtime_mut() -> Result<&'static mut RuntimeController, CabiError> {
     Ok(unsafe { &mut *ptr })
 }
 
-/// Marshal one [`FfiEvent`] into the C event struct: content events fill `text`,
-/// an error fills `error_message`, and the rest stay null.
+/// Marshal one [`FfiEvent`] into the C event struct.
 fn write_event(out_event: &mut ClawAgentEvent, event: FfiEvent) -> Result<(), CabiError> {
+    let mut request_id = 0;
+    let mut input_kind = CLAW_AGENT_INPUT_REQUEST_KIND_NONE;
     let (kind, text, error_message) = match event {
+        FfiEvent::InputRequested { request, summary } => {
+            request_id = request.0;
+            input_kind = CLAW_AGENT_INPUT_REQUEST_KIND_PERMISSION_APPROVAL;
+            (CLAW_AGENT_EVENT_KIND_INPUT_REQUESTED, Some(summary), None)
+        }
         FfiEvent::Output(text) => (CLAW_AGENT_EVENT_KIND_OUTPUT, Some(text), None),
         FfiEvent::OutputEnd => (CLAW_AGENT_EVENT_KIND_OUTPUT_END, None, None),
         FfiEvent::Reasoning(text) => (CLAW_AGENT_EVENT_KIND_REASONING, Some(text), None),
@@ -624,6 +673,8 @@ fn write_event(out_event: &mut ClawAgentEvent, event: FfiEvent) -> Result<(), Ca
     };
     *out_event = ClawAgentEvent {
         kind,
+        request_id,
+        input_kind,
         text,
         error_message,
     };
@@ -680,9 +731,11 @@ fn open_session_error(error: AgentError) -> CabiError {
 fn session_control_error(error: SessionControlError) -> CabiError {
     match error {
         SessionControlError::SessionClosed(_) => CabiError::NotFound,
-        SessionControlError::Busy(_) | SessionControlError::WorkerStopped => {
-            CabiError::InvalidState
-        }
+        SessionControlError::Busy(_)
+        | SessionControlError::NotAwaitingInput(_)
+        | SessionControlError::InputRequestMismatch { .. }
+        | SessionControlError::WorkerStopped
+        | SessionControlError::ClosePersistence => CabiError::InvalidState,
     }
 }
 

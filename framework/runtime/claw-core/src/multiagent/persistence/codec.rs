@@ -14,7 +14,7 @@ use super::schema::{
 };
 use super::{MultiagentRestore, RestoredAgentSlot};
 
-const MULTIAGENT_SCHEMA_VERSION: u32 = 4;
+const MULTIAGENT_SCHEMA_VERSION: u32 = 5;
 
 #[derive(Clone, Copy)]
 enum AgentSlotsMode {
@@ -41,7 +41,6 @@ fn checkpoint_snapshot(
         .map(|(agent, pending)| ApprovalSnapshot {
             agent,
             summary: pending.summary.clone(),
-            prompted: pending.prompted,
         })
         .collect();
 
@@ -158,7 +157,6 @@ fn decode_restore(
                 approval.agent,
                 ParkedApproval {
                     summary: approval.summary,
-                    prompted: approval.prompted,
                 },
             )
         })
@@ -368,7 +366,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_four_restore_keeps_agent_slots_outside_durable_state() {
+    fn schema_five_restore_keeps_agent_slots_outside_durable_state() {
         let root = AgentId(1);
         let mut snapshot = snapshot(vec![node(root, None)]);
         snapshot.ready_queue.push(root);
@@ -438,7 +436,6 @@ mod tests {
         unknown_approval.approvals.push(ApprovalSnapshot {
             agent: missing,
             summary: "permission".to_owned(),
-            prompted: false,
         });
         assert!(decode(&unknown_approval).is_err());
 
@@ -447,12 +444,10 @@ mod tests {
             ApprovalSnapshot {
                 agent: root,
                 summary: "first".to_owned(),
-                prompted: false,
             },
             ApprovalSnapshot {
                 agent: root,
                 summary: "second".to_owned(),
-                prompted: false,
             },
         ];
         assert!(decode(&duplicate_approval).is_err());
@@ -462,7 +457,6 @@ mod tests {
         ready_and_approval.approvals.push(ApprovalSnapshot {
             agent: root,
             summary: "permission".to_owned(),
-            prompted: false,
         });
         assert!(decode(&ready_and_approval).is_err());
     }
@@ -530,21 +524,16 @@ mod tests {
             ApprovalSnapshot {
                 agent: child,
                 summary: "child permission".to_owned(),
-                prompted: false,
             },
             ApprovalSnapshot {
                 agent: root,
                 summary: "root permission".to_owned(),
-                prompted: true,
             },
         ];
 
         let restored = decode(&snapshot).expect("current snapshot restores");
         assert_eq!(
-            restored
-                .state
-                .active_approval()
-                .map(|pending| pending.agent),
+            restored.state.active_approval().map(|(agent, _)| agent),
             Some(child)
         );
 
@@ -558,6 +547,8 @@ mod tests {
         assert!(value.get("approval_queue").is_none());
         assert_eq!(value["approvals"][0]["agent"], "agent-2");
         assert_eq!(value["approvals"][1]["agent"], "agent-1");
+        assert!(value["approvals"][0].get("prompted").is_none());
+        assert!(value["approvals"][1].get("prompted").is_none());
     }
 
     #[test]

@@ -96,6 +96,27 @@ Followup is live-only. It aborts a running child at a safe boundary and delivers
 a new `Message` to the same in-memory agent. Completed children are removed;
 there is no transcript-based resurrection path.
 
+## Input inside a turn
+
+Approval is an input boundary inside the active turn, not another turn:
+
+```text
+Root requests permission
+  -> SessionEvent::InputRequested(request_id, PermissionApproval)
+  -> Caller presents it using its own UI
+  -> SessionControl::respond(request_id, Message)
+  -> Resume Root in the same Turn
+```
+
+`submit` is accepted only when no root turn is active. While a turn is awaiting
+input, only `respond` with its current request id can resume it; a stale id is
+rejected. Core owns the semantic request and its durable id. The caller owns
+presentation, so an IM adapter can make it look like ordinary conversation
+without forcing that representation on CLI or GUI callers. If a background
+subagent requests input while the root is idle, the actor opens a
+`TurnOrigin::Subagent` turn for that request; an approval reached during an
+active turn stays inside that turn.
+
 ## Interrupt, cancel, and close
 
 - Interrupt ends the active turn, preserves live subagent instances, and resets

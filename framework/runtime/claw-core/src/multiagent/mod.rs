@@ -58,7 +58,7 @@ pub(crate) use self::id_allocator::AgentIdAllocator;
 use self::model::SubagentResult;
 pub(crate) use self::persistence::MultiagentRestore;
 pub(crate) use self::persistence::MultiagentRestoreError;
-pub(crate) use self::state::{MultiagentState, MultiagentWork, PendingApproval};
+pub(crate) use self::state::{MultiagentState, MultiagentWork};
 use self::tool_port::MultiagentBridge;
 
 pub(in crate::multiagent) const ROOT_AGENT_KIND: &str = "conversation";

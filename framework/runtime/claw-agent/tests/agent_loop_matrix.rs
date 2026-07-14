@@ -9,8 +9,8 @@ use std::sync::{Mutex, MutexGuard};
 use std::task::{Poll, Waker};
 
 use claw_agent::{
-    AgentSystem, IterationId, Message, PermissionLevel, ReasoningEffort, SessionEvent, StreamPart,
-    ToolCall, TurnId, TurnOrigin,
+    AgentSystem, InputRequestId, InputRequestKind, IterationId, Message, PermissionLevel,
+    ReasoningEffort, SessionControlError, SessionEvent, StreamPart, ToolCall, TurnId, TurnOrigin,
 };
 #[cfg(feature = "cache_profile")]
 use claw_api::ApiUsage;
@@ -292,15 +292,141 @@ fn ask_permission_level_reaches_the_public_approval_flow() {
 
     block_on(control.set_permission_level(PermissionLevel::Ask)).unwrap();
     block_on(control.submit(Message::text("ask before running the tool"))).unwrap();
-    let prompt = block_on(wait_for_output(&mut events));
+    let (request, kind, request_events) = block_on(wait_for_input_request(&mut events));
+    assert_eq!(request, InputRequestId(1));
+    assert!(matches!(
+        kind,
+        InputRequestKind::PermissionApproval { summary }
+            if summary.contains("'conversation_end'")
+    ));
     assert!(
-        prompt.contains("Permission approval needed:"),
-        "unexpected output: {prompt:?}"
+        output_fragments(&request_events).is_empty(),
+        "approval request leaked into assistant output: {request_events:?}"
     );
 
-    block_on(control.submit(Message::text("approve"))).unwrap();
+    block_on(control.respond(request, Message::text("approve"))).unwrap();
     let remaining_events = drain_until_turn_ended(&mut events);
 
+    assert!(
+        output_fragments(&remaining_events)
+            .iter()
+            .any(|output| output == "approved execution"),
+        "events={remaining_events:?}"
+    );
+    assert!(
+        !remaining_events
+            .iter()
+            .any(|event| matches!(event, SessionEvent::InputRequested { .. })),
+        "an accepted response created another input request: {remaining_events:?}"
+    );
+    assert_eq!(
+        request_events
+            .iter()
+            .chain(&remaining_events)
+            .filter(|event| matches!(event, SessionEvent::TurnStarted { .. }))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn approval_response_requires_the_pending_request_id() {
+    let _lock = AGENT_LOOP_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let arguments = r#"{"final_message":"approved execution"}"#;
+    install_agent_replies(vec![
+        assistant_tool_call("conversation_end", arguments, None),
+        assistant_tool_call(
+            "permission_resolve_reply",
+            r#"{"decision":"approve"}"#,
+            None,
+        ),
+        assistant_tool_call("conversation_end", arguments, None),
+    ]);
+
+    let root = mem_root("agent-loop-approval-request-id");
+    let system = build_matrix_system(&root);
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
+    let (control, mut events) = system.open_session(session).unwrap();
+
+    block_on(control.set_permission_level(PermissionLevel::Ask)).unwrap();
+    block_on(control.submit(Message::text("ask before running the tool"))).unwrap();
+    let (request, _, _) = block_on(wait_for_input_request(&mut events));
+
+    assert_eq!(
+        block_on(control.submit(Message::text("approve"))),
+        Err(SessionControlError::Busy(session))
+    );
+    assert!(matches!(
+        block_on(control.respond(InputRequestId(99), Message::text("approve"))),
+        Err(SessionControlError::InputRequestMismatch {
+            session: error_session,
+            expected,
+            received,
+        }) if error_session == session && expected == request && received == InputRequestId(99)
+    ));
+
+    block_on(control.respond(request, Message::text("approve"))).unwrap();
+    let remaining_events = drain_until_turn_ended(&mut events);
+    assert!(
+        output_fragments(&remaining_events)
+            .iter()
+            .any(|output| output == "approved execution"),
+        "events={remaining_events:?}"
+    );
+}
+
+#[test]
+fn ambiguous_approval_response_reissues_input_inside_the_same_turn() {
+    let _lock = AGENT_LOOP_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let arguments = r#"{"final_message":"approved execution"}"#;
+    install_agent_replies(vec![
+        assistant_tool_call("conversation_end", arguments, None),
+        assistant_tool_call(
+            "permission_resolve_reply",
+            r#"{"decision":"clarify","message":"Please answer yes or no."}"#,
+            None,
+        ),
+        assistant_tool_call(
+            "permission_resolve_reply",
+            r#"{"decision":"approve"}"#,
+            None,
+        ),
+        assistant_tool_call("conversation_end", arguments, None),
+    ]);
+
+    let root = mem_root("agent-loop-approval-clarification");
+    let system = build_matrix_system(&root);
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
+    let (control, mut events) = system.open_session(session).unwrap();
+
+    block_on(control.set_permission_level(PermissionLevel::Ask)).unwrap();
+    block_on(control.submit(Message::text("ask before running the tool"))).unwrap();
+    let (first_request, _, first_events) = block_on(wait_for_input_request(&mut events));
+
+    block_on(control.respond(first_request, Message::text("maybe"))).unwrap();
+    let (second_request, _, clarification_events) = block_on(wait_for_input_request(&mut events));
+
+    assert_eq!(first_request, InputRequestId(1));
+    assert_eq!(second_request, InputRequestId(2));
+    assert!(output_fragments(&clarification_events).is_empty());
+    assert!(!clarification_events
+        .iter()
+        .any(|event| matches!(event, SessionEvent::TurnEnded { .. })));
+    assert_eq!(
+        first_events
+            .iter()
+            .chain(&clarification_events)
+            .filter(|event| matches!(event, SessionEvent::TurnStarted { .. }))
+            .count(),
+        1
+    );
+
+    block_on(control.respond(second_request, Message::text("approve"))).unwrap();
+    let remaining_events = drain_until_turn_ended(&mut events);
     assert!(
         output_fragments(&remaining_events)
             .iter()
@@ -333,11 +459,10 @@ fn explicit_rejection_survives_a_switch_from_ask_to_allow_all() {
 
     block_on(control.set_permission_level(PermissionLevel::Ask)).unwrap();
     block_on(control.submit(Message::text("ask before running the tool"))).unwrap();
-    let prompt = block_on(wait_for_output(&mut events));
-    assert!(prompt.contains("Permission approval needed:"));
+    let (request, _, _) = block_on(wait_for_input_request(&mut events));
 
     block_on(control.set_permission_level(PermissionLevel::AllowAll)).unwrap();
-    block_on(control.submit(Message::text("reject"))).unwrap();
+    block_on(control.respond(request, Message::text("reject"))).unwrap();
     let remaining_events = drain_until_turn_ended(&mut events);
 
     assert_eq!(
@@ -632,13 +757,17 @@ async fn wait_for_iteration_started(events: &mut claw_agent::SessionEventStream)
     panic!("session event stream closed before an iteration started");
 }
 
-async fn wait_for_output(events: &mut claw_agent::SessionEventStream) -> String {
+async fn wait_for_input_request(
+    events: &mut claw_agent::SessionEventStream,
+) -> (InputRequestId, InputRequestKind, Vec<SessionEvent>) {
+    let mut received = Vec::new();
     while let Some(event) = events.next().await {
-        if let SessionEvent::Output(StreamPart::Delta(text)) = event {
-            return text;
+        if let SessionEvent::InputRequested { request, kind } = event {
+            return (request, kind, received);
         }
+        received.push(event);
     }
-    panic!("session event stream closed before output arrived");
+    panic!("session event stream closed before input was requested");
 }
 
 fn is_agent_iteration_request(body: &str) -> bool {

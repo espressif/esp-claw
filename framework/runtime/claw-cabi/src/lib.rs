@@ -12,7 +12,8 @@ pub use runtime::{
     claw_agent_deinit, claw_agent_event_free, claw_agent_init, claw_agent_session_cancel,
     claw_agent_session_close, claw_agent_session_create, claw_agent_session_delete,
     claw_agent_session_interrupt, claw_agent_session_list, claw_agent_session_open,
-    claw_agent_session_receive, claw_agent_session_submit, claw_agent_start, claw_agent_stop,
+    claw_agent_session_receive, claw_agent_session_respond, claw_agent_session_submit,
+    claw_agent_start, claw_agent_stop,
 };
 
 #[cfg(not(target_os = "espidf"))]

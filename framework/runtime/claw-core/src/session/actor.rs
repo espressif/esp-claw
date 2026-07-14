@@ -17,10 +17,11 @@ use crate::config::ClawApiManager;
 use crate::multiagent::{
     AgentIdAllocator, ApprovalResolutionError, DriveControl, DriveOutput, DriveStop,
     MultiagentDeliverError, MultiagentRestoreError, MultiagentRuntime, MultiagentState,
-    MultiagentWork, PendingApproval, TurnStopMode,
+    MultiagentWork, TurnStopMode,
 };
 use crate::protocol::{
-    EventSink, Message, SessionEvent, SessionId, SessionPersistence, StreamPart, TurnId, TurnOrigin,
+    EventSink, InputRequestId, InputRequestKind, Message, SessionEvent, SessionId,
+    SessionPersistence, StreamPart, TurnId, TurnOrigin,
 };
 
 use super::api::{
@@ -29,7 +30,7 @@ use super::api::{
 use super::approval::{self, ApprovalResolverError, PermissionReplyResolution};
 use super::permission::SessionPermission;
 use super::persistence::{SessionCheckpointer, SessionRestore};
-use super::state::SessionState;
+use super::state::{PendingTurnInput, SessionState};
 
 type RuntimeFuture<Filesystem, Http, Timer> =
     Pin<Box<dyn Future<Output = RuntimeCompletion<Filesystem, Http, Timer>>>>;
@@ -120,6 +121,7 @@ where
     active_lease: Option<u64>,
     next_lease: u64,
     announced_turn: Option<TurnId>,
+    announced_input_request: Option<InputRequestId>,
     checkpoint_pending: bool,
     requested_control: Option<ControlOp>,
     control_acks: Vec<Sender<Result<(), SessionControlError>>>,
@@ -215,6 +217,7 @@ where
             active_lease: None,
             next_lease: 1,
             announced_turn: None,
+            announced_input_request: None,
             checkpoint_pending: false,
             requested_control: None,
             control_acks: Vec::new(),
@@ -297,6 +300,8 @@ where
                 return None;
             }
 
+            self.ensure_input_request();
+
             if self.checkpoint_pending {
                 if self.runtime().checkpoint_ready() {
                     self.checkpoint_pending = false;
@@ -307,8 +312,12 @@ where
             }
 
             self.announce_turn();
+            self.announce_input_request();
             if let Some(input) = self.state.get_mut().take_pending_input() {
-                self.start_user_input(input);
+                self.start_turn_input(input);
+                return None;
+            }
+            if self.state.get().active_input_request().is_some() {
                 return None;
             }
 
@@ -321,9 +330,6 @@ where
                             .expect("root work outside a turn has a subagent origin");
                         self.state.get_mut().begin_subagent_turn(origin);
                     }
-                    Some(TurnOrigin::User) if self.runtime().active_approval().is_some() => {
-                        return None;
-                    }
                     Some(TurnOrigin::User) if self.runtime().pending_root_origin().is_some() => {
                         self.start_pending_root_result();
                         return None;
@@ -335,9 +341,7 @@ where
                     }
                 },
                 MultiagentWork::Background => {
-                    if self.state.get().has_active_turn()
-                        && self.runtime().active_approval().is_none()
-                    {
+                    if self.state.get().has_active_turn() {
                         self.finish_active_turn();
                     } else {
                         self.start_background();
@@ -345,9 +349,6 @@ where
                     }
                 }
                 MultiagentWork::None => {
-                    if self.runtime().active_approval().is_some() {
-                        return None;
-                    }
                     if self.state.get().has_active_turn() {
                         self.finish_active_turn();
                     } else {
@@ -370,6 +371,12 @@ where
                 message,
                 ack,
             } => self.submit(lease, message, ack),
+            SessionCommand::Respond {
+                lease,
+                request,
+                message,
+                ack,
+            } => self.respond(lease, request, message, ack),
             SessionCommand::Control { lease, op, ack } => self.control(lease, op, ack),
             SessionCommand::SetReasoningEffort { lease, effort, ack } => {
                 if self.accepts(lease) {
@@ -421,6 +428,7 @@ where
         self.active_lease = Some(lease);
         self.events = Some(events);
         self.announced_turn = None;
+        self.announced_input_request = None;
         let _ = ack.try_send(Ok(SessionEndpoint::new(lease, commands)));
     }
 
@@ -435,33 +443,73 @@ where
         let foreground_running = self
             .driving_kind()
             .is_some_and(RuntimeDriveKind::is_foreground);
-        let continues_approval = !foreground_running
-            && self.state.get().has_active_turn()
-            && self
-                .idle_runtime()
-                .is_some_and(|runtime| runtime.active_approval().is_some());
         let root_busy = self
             .idle_runtime()
             .is_some_and(|runtime| runtime.work() == MultiagentWork::Root);
         if foreground_running
             || self.state.get().has_pending_input()
-            || (self.state.get().has_active_turn() && !continues_approval)
+            || self.state.get().has_active_turn()
             || root_busy
         {
             tracing::warn!(name: "submit_rejected", reason = "busy", has_text, text_bytes);
             let _ = ack.try_send(Err(SessionControlError::Busy(self.session)));
             return;
         }
-        if continues_approval {
-            self.state.get_mut().continue_turn(input);
-        } else {
-            self.state.get_mut().begin_user_turn(input);
-        }
+        self.state.get_mut().begin_user_turn(input);
         self.checkpoint_pending = true;
         if let Some(control) = self.driving_control() {
             control.request_wake();
         }
         tracing::info!(name: "submit_accepted", has_text, text_bytes);
+        let _ = ack.try_send(Ok(()));
+    }
+
+    fn respond(
+        &mut self,
+        lease: u64,
+        request: InputRequestId,
+        input: Message,
+        ack: Sender<Result<(), SessionControlError>>,
+    ) {
+        if !self.accepts(lease) {
+            tracing::warn!(name: "respond_rejected", reason = "session_closed");
+            self.reject_closed(ack);
+            return;
+        }
+        if self.is_driving() || self.state.get().has_pending_input() {
+            tracing::warn!(name: "respond_rejected", reason = "busy", request = %request);
+            let _ = ack.try_send(Err(SessionControlError::Busy(self.session)));
+            return;
+        }
+        let Some(expected) = self
+            .state
+            .get()
+            .active_input_request()
+            .map(|pending| pending.id)
+        else {
+            tracing::warn!(name: "respond_rejected", reason = "not_awaiting_input", request = %request);
+            let _ = ack.try_send(Err(SessionControlError::NotAwaitingInput(self.session)));
+            return;
+        };
+        if expected != request {
+            tracing::warn!(
+                name: "respond_rejected",
+                reason = "input_request_mismatch",
+                expected = %expected,
+                received = %request,
+            );
+            let _ = ack.try_send(Err(SessionControlError::InputRequestMismatch {
+                session: self.session,
+                expected,
+                received: request,
+            }));
+            return;
+        }
+        let accepted = self.state.get_mut().respond_to_input(request, input);
+        debug_assert!(accepted, "validated input request must still be active");
+        self.announced_input_request = None;
+        self.checkpoint_pending = true;
+        tracing::info!(name: "respond_accepted", request = %request);
         let _ = ack.try_send(Ok(()));
     }
 
@@ -542,11 +590,41 @@ where
         self.emit(SessionEvent::TurnStarted { turn, origin });
     }
 
+    fn ensure_input_request(&mut self) {
+        if self.state.get().has_pending_input() || self.state.get().active_input_request().is_some()
+        {
+            return;
+        }
+        let Some(request) = self.runtime().required_input() else {
+            return;
+        };
+        let (idle_origin, kind) = request.into_parts();
+        let requested = self.state.get_mut().request_input(idle_origin, kind);
+        if requested.is_some() {
+            self.checkpoint_pending = true;
+        }
+    }
+
+    fn announce_input_request(&mut self) {
+        let Some(pending) = self.state.get().active_input_request().cloned() else {
+            return;
+        };
+        if self.announced_input_request == Some(pending.id) {
+            return;
+        }
+        self.announced_input_request = Some(pending.id);
+        self.emit(SessionEvent::InputRequested {
+            request: pending.id,
+            kind: pending.kind,
+        });
+    }
+
     fn finish_active_turn(&mut self) {
         let Some(turn) = self.state.get_mut().finish_turn() else {
             return;
         };
         self.announced_turn = None;
+        self.announced_input_request = None;
         if self.runtime().checkpoint_ready() {
             if let Err(error) = self.checkpoint() {
                 self.emit_error(error.to_string());
@@ -648,7 +726,7 @@ where
         }
     }
 
-    fn start_user_input(&mut self, input: Message) {
+    fn start_turn_input(&mut self, input: PendingTurnInput) {
         let runtime = self.take_runtime();
         let events = self.events.clone().unwrap_or_else(EventSink::disabled);
         let effort = self.state.get().reasoning_effort();
@@ -664,7 +742,7 @@ where
         let future = Box::pin(
             async move {
                 let mut runtime = runtime;
-                let result = drive_user_input(
+                let result = drive_turn_input(
                     &mut runtime,
                     input,
                     effort,
@@ -831,9 +909,9 @@ where
     }
 }
 
-async fn drive_user_input<Filesystem, Http, Timer>(
+async fn drive_turn_input<Filesystem, Http, Timer>(
     runtime: &mut MultiagentRuntime<Filesystem, Http, Timer>,
-    input: Message,
+    input: PendingTurnInput,
     effort: crate::config::ReasoningEffort,
     persistence: SessionPersistence,
     events: &EventSink,
@@ -845,16 +923,28 @@ where
     Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
-    let result = if let Some(pending) = runtime.active_approval() {
-        match runtime
+    let result = match input {
+        PendingTurnInput::Submit(input) => {
+            match runtime
+                .deliver(input, effort.context_block(), persistence)
+                .map_err(DeliverError::from)
+            {
+                Ok(()) => drive_root(runtime, control, events).await,
+                Err(error) => Err(error),
+            }
+        }
+        PendingTurnInput::Response {
+            kind: InputRequestKind::PermissionApproval { summary },
+            message,
+        } => match runtime
             .set_root_context_block(effort.context_block())
             .map_err(DeliverError::from)
         {
             Ok(()) => {
                 resolve_pending_approval(
                     runtime,
-                    pending,
-                    input.as_str(),
+                    &summary,
+                    message.as_str(),
                     control,
                     events,
                     api_manager,
@@ -862,15 +952,7 @@ where
                 .await
             }
             Err(error) => Err(error),
-        }
-    } else {
-        match runtime
-            .deliver(input, effort.context_block(), persistence)
-            .map_err(DeliverError::from)
-        {
-            Ok(()) => drive_root(runtime, control, events).await,
-            Err(error) => Err(error),
-        }
+        },
     };
     RuntimeDriveResult::Driven(result)
 }
@@ -947,7 +1029,7 @@ fn stop_mode(stop: DriveStop) -> Option<TurnStopMode> {
 
 async fn resolve_pending_approval<Filesystem, Http, Timer>(
     runtime: &mut MultiagentRuntime<Filesystem, Http, Timer>,
-    pending: PendingApproval,
+    summary: &str,
     user_reply: &str,
     control: &DriveControl,
     events: &EventSink,
@@ -960,7 +1042,7 @@ where
 {
     let resolution = match approval::resolve_permission_reply::<Http, Timer>(
         api_manager,
-        &pending.summary,
+        summary,
         user_reply,
         control,
     )
@@ -980,8 +1062,9 @@ where
         let PermissionReplyResolution::Clarify(message) = resolution else {
             unreachable!("non-clarification resolutions map to approval decisions")
         };
-        return Ok((DriveOutput::message(message), DriveStop::Quiescent));
+        tracing::info!(name: "approval_clarification", reason = %message);
+        return Ok((DriveOutput::default(), DriveStop::Quiescent));
     };
-    runtime.resolve_active_approval(decision)?;
+    runtime.resolve_required_input(decision)?;
     drive_root(runtime, control, events).await
 }

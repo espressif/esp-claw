@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cap_agent_input.h"
 #include "cJSON.h"
 #include "claw_agent.h"
 #include "claw_cap.h"
@@ -136,6 +137,57 @@ static esp_err_t cap_agent_send_reply(const cap_agent_reply_task_arg_t *arg,
     return err;
 }
 
+static char *cap_agent_format_permission_request(const char *summary)
+{
+    static const char prefix[] = "Permission approval needed:\n";
+    static const char suffix[] = "\n\nReply with approval or rejection.";
+    size_t summary_len;
+    size_t message_len;
+    char *message;
+
+    if (cap_agent_str_empty(summary)) {
+        return NULL;
+    }
+
+    summary_len = strlen(summary);
+    if (summary_len > SIZE_MAX - sizeof(prefix) - sizeof(suffix)) {
+        return NULL;
+    }
+    message_len = (sizeof(prefix) - 1) + summary_len + (sizeof(suffix) - 1);
+    message = malloc(message_len + 1);
+    if (!message) {
+        return NULL;
+    }
+
+    snprintf(message, message_len + 1, "%s%s%s", prefix, summary, suffix);
+    return message;
+}
+
+static esp_err_t cap_agent_send_input_request(const cap_agent_reply_task_arg_t *arg,
+                                              const claw_agent_event_t *event)
+{
+    char *message;
+    esp_err_t err;
+
+    if (event->request_id == 0 ||
+            event->input_kind != CLAW_AGENT_INPUT_REQUEST_KIND_PERMISSION_APPROVAL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = cap_agent_input_request_store(arg->session_id, event->request_id);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    message = cap_agent_format_permission_request(event->text);
+    if (!message) {
+        return ESP_ERR_NO_MEM;
+    }
+    err = cap_agent_send_reply(arg, message);
+    free(message);
+    return err;
+}
+
 static void cap_agent_reply_task(void *param)
 {
     cap_agent_reply_task_arg_t *arg = (cap_agent_reply_task_arg_t *)param;
@@ -167,6 +219,19 @@ static void cap_agent_reply_task(void *param)
         }
 
         switch (event.kind) {
+        case CLAW_AGENT_EVENT_KIND_INPUT_REQUESTED: {
+            esp_err_t send_err = cap_agent_send_input_request(arg, &event);
+            if (send_err != ESP_OK) {
+                ESP_LOGW(TAG,
+                         "input request delivery failed session=%" PRIu32 " err=%s",
+                         arg->session_id,
+                         esp_err_to_name(send_err));
+            }
+            /* The current turn is paused. Its next events are consumed by the
+             * reply task started after claw_agent_session_respond(). */
+            done = true;
+            break;
+        }
         case CLAW_AGENT_EVENT_KIND_OUTPUT:
         case CLAW_AGENT_EVENT_KIND_REASONING: {
             esp_err_t send_err = cap_agent_send_reply(arg, event.text);

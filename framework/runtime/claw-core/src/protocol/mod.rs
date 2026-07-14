@@ -9,9 +9,11 @@ mod kind;
 mod message;
 
 pub(crate) use event::EventSink;
-pub use event::{SessionEvent, StreamPart, ToolCall};
-pub use ids::{AgentId, IterationId, SessionId, TurnId};
-pub(crate) use ids::{IterationIdAllocator, SessionIdAllocator, TurnIdAllocator};
+pub use event::{InputRequestKind, SessionEvent, StreamPart, ToolCall};
+pub use ids::{AgentId, InputRequestId, IterationId, SessionId, TurnId};
+pub(crate) use ids::{
+    InputRequestIdAllocator, IterationIdAllocator, SessionIdAllocator, TurnIdAllocator,
+};
 pub(crate) use kind::AgentKind;
 pub(crate) use message::deserialize_message_or_text;
 pub use message::Message;

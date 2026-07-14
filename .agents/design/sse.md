@@ -15,6 +15,7 @@ pub enum StreamPart<T> {
 
 pub enum SessionEvent {
     TurnStarted { turn: TurnId, origin: TurnOrigin },
+    InputRequested { request: InputRequestId, kind: InputRequestKind },
     IterationStarted { iteration: IterationId },
 
     Reasoning(StreamPart<String>),
@@ -25,6 +26,10 @@ pub enum SessionEvent {
     TurnEnded { turn: TurnId },
     Error { message: String },
     Closed,
+}
+
+pub enum InputRequestKind {
+    PermissionApproval { summary: String },
 }
 
 pub enum TurnOrigin {
@@ -77,6 +82,11 @@ TurnStarted { turn: 1, origin: User }
     ToolCalls(Delta(call))
     ToolCalls(End)
   IterationEnded
+  InputRequested {
+    request: input-1,
+    kind: PermissionApproval { summary: "..." },
+  }
+  // caller: SessionControl::respond(input-1, message)
   IterationStarted { iteration: 2 }
     Reasoning(End)
     Output(Delta("done"))
@@ -92,11 +102,22 @@ TurnEnded { turn: 2 }
 Closed
 ```
 
-Messages synthesized outside the LLM stream, such as approval prompts,
-clarifications, terminal tool messages, and failure text, are also emitted as
-`Output(Delta)*` followed by `Output(End)`. They can appear at turn scope rather
-than inside an iteration. `Closed` is terminal for the session stream;
-`TurnEnded` is not.
+An input request pauses, but does not end, the current turn. `submit(message)`
+only starts a new user-origin turn while the session is idle.
+`respond(request_id, message)` resumes the active turn and rejects a missing or
+stale request id. If the response does not resolve the request, the actor emits
+a new `InputRequested` with a new id in that same turn.
+
+An input request reached while a root turn is active stays in that turn. If an
+idle root is woken by a background subagent that needs input, the actor opens a
+`TurnOrigin::Subagent` turn and emits the request there.
+
+Input request presentation belongs to the caller. Core emits semantic data and
+never turns an approval prompt or clarification into `Output`; a chat caller
+may display the request as ordinary assistant text, while a GUI may render a
+dialog or buttons. Terminal tool messages and failure text may still appear as
+turn-scope `Output(Delta)*` followed by `Output(End)`. `Closed` is terminal for
+the session stream; `TurnEnded` is not.
 
 `subagent_spawn(foreground: true)` waits inside its tool call, so its result
 stays in the current turn. `subagent_spawn(foreground: false)` returns the agent
@@ -138,8 +159,11 @@ kinds:
 | `Reasoning(End)` | `CLAW_AGENT_EVENT_KIND_REASONING_END` |
 | `ToolCalls(Delta(call))` | `CLAW_AGENT_EVENT_KIND_TOOLS` |
 | `ToolCalls(End)` | `CLAW_AGENT_EVENT_KIND_TOOLS_END` |
+| `InputRequested { request, PermissionApproval { summary } }` | `CLAW_AGENT_EVENT_KIND_INPUT_REQUESTED` |
 
 The current C payload for a tool call remains its name; Rust callers receive
-the complete `ToolCall`. End events have null `text` and `error_message`. The C
-ABI currently skips `TurnStarted`, so `TurnOrigin` is exposed by the Rust public
-API only.
+the complete `ToolCall`. For `INPUT_REQUESTED`, `request_id` is non-zero,
+`input_kind` is `PERMISSION_APPROVAL`, and `text` carries the semantic summary;
+the caller replies through `claw_agent_session_respond`. End events have null
+`text` and `error_message`. The C ABI currently skips `TurnStarted`, so
+`TurnOrigin` is exposed by the Rust public API only.

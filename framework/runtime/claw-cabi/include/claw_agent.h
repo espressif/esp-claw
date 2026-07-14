@@ -45,12 +45,24 @@ typedef enum {
     CLAW_AGENT_EVENT_KIND_OUTPUT_END = 6,    /* current output stream ended */
     CLAW_AGENT_EVENT_KIND_REASONING_END = 7, /* current reasoning stream ended */
     CLAW_AGENT_EVENT_KIND_TOOLS_END = 8,     /* no more tool calls this iteration */
+    /* Current turn is waiting for caller input; see request_id and text. */
+    CLAW_AGENT_EVENT_KIND_INPUT_REQUESTED = 9,
 } claw_agent_event_kind_t;
+
+typedef enum {
+    CLAW_AGENT_INPUT_REQUEST_KIND_NONE = 0,
+    CLAW_AGENT_INPUT_REQUEST_KIND_PERMISSION_APPROVAL = 1,
+} claw_agent_input_request_kind_t;
 
 typedef struct {
     claw_agent_event_kind_t kind;
-    /* Owned UTF-8 fragment for content events (OUTPUT/REASONING/TOOLS); NULL for
-     * *_END/DONE/ERROR. Release with claw_agent_event_free. */
+    /* Session-local id for INPUT_REQUESTED; zero otherwise. */
+    uint32_t request_id;
+    /* Semantic input kind for INPUT_REQUESTED; NONE otherwise. */
+    claw_agent_input_request_kind_t input_kind;
+    /* Owned UTF-8 fragment for content events (OUTPUT/REASONING/TOOLS), or the
+     * semantic request summary for INPUT_REQUESTED; NULL otherwise. Release
+     * with claw_agent_event_free. */
     char *text;
     /* Owned UTF-8 message for ERROR; NULL otherwise. Release with
      * claw_agent_event_free. */
@@ -129,6 +141,24 @@ esp_err_t claw_agent_session_open(uint32_t session_id);
  * - ESP_FAIL for unexpected scheduling failures.
  */
 esp_err_t claw_agent_session_submit(uint32_t session_id, const char *text);
+
+/*
+ * Respond to INPUT_REQUESTED inside the current turn.
+ *
+ * request_id must match the id delivered by the latest INPUT_REQUESTED event.
+ * Unlike claw_agent_session_submit(), this resumes the existing turn instead
+ * of starting a new one.
+ *
+ * Returns:
+ * - ESP_OK after the worker accepts the response.
+ * - ESP_ERR_INVALID_ARG for a zero id or invalid text.
+ * - ESP_ERR_INVALID_STATE if the request is stale, the session is not waiting
+ *   for input, or the runtime is not running.
+ * - ESP_ERR_NOT_FOUND if session_id is not open.
+ */
+esp_err_t claw_agent_session_respond(uint32_t session_id,
+                                     uint32_t request_id,
+                                     const char *text);
 
 /*
  * Request graceful interruption of the active foreground turn.
@@ -224,7 +254,9 @@ esp_err_t claw_agent_session_delete(uint32_t session_id);
  * receiving for future user submits or background results. _CLOSED is terminal.
  *
  * session_id must be non-zero and open. out_event must be non-NULL. On ESP_OK,
- * out_event owns text/error_message until claw_agent_event_free.
+ * out_event owns text/error_message until claw_agent_event_free. For
+ * INPUT_REQUESTED, request_id identifies the response target and text contains
+ * semantic data for the caller to present; this event does not end the turn.
  *
  * timeout_ms == 0 performs a non-blocking poll (returns the next buffered event
  * or ESP_ERR_TIMEOUT immediately). Otherwise it waits up to timeout_ms for the

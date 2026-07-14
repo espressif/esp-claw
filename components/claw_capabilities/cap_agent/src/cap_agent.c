@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "cap_agent_input.h"
 #include "cap_agent_reply.h"
 #include "cJSON.h"
 #include "claw_agent.h"
@@ -206,7 +207,9 @@ static esp_err_t cap_agent_execute(const char *input_json,
     const char *reply_channel = NULL;
     const char *reply_chat_id = NULL;
     const char *correlation_id = NULL;
+    const char *operation = "submit";
     uint32_t session_id = 0;
+    uint32_t input_request_id = 0;
     bool route_reply = false;
     esp_err_t err;
 
@@ -233,11 +236,24 @@ static esp_err_t cap_agent_execute(const char *input_json,
     }
     route_reply = cap_agent_reply_route_supported(reply_channel, reply_chat_id);
 
-    err = claw_agent_session_submit(session_id, text);
+    err = cap_agent_input_request_get(session_id, &input_request_id);
+    if (err == ESP_OK) {
+        operation = "response";
+        err = claw_agent_session_respond(session_id, input_request_id, text);
+        if (err == ESP_OK) {
+            cap_agent_input_request_clear(session_id, input_request_id);
+        }
+    } else if (err == ESP_ERR_NOT_FOUND) {
+        err = claw_agent_session_submit(session_id, text);
+    }
     cJSON_Delete(root);
     if (err != ESP_OK) {
         if (output && output_size > 0) {
-            snprintf(output, output_size, "agent submit failed: %s", esp_err_to_name(err));
+            snprintf(output,
+                     output_size,
+                     "agent %s failed: %s",
+                     operation,
+                     esp_err_to_name(err));
         }
         return err;
     }

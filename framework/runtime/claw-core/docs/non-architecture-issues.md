@@ -224,7 +224,9 @@ only through `PermissionPolicy`.
 and grant flow, and `AllowAll` preserves the previous product behavior. Safe
 actions remain available at every level. Public integration coverage verifies
 live switching, the complete Ask/approve flow, and isolation between sessions
-in `claw-agent/tests/agent_loop_matrix.rs`.
+in `claw-agent/tests/agent_loop_matrix.rs`. Approval is exposed as a typed
+same-turn `InputRequested` event and resumed with `respond`; caller adapters own
+how that request is presented.
 
 ### NAR-015: checkpoint validation is inconsistent
 

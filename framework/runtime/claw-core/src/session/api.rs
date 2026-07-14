@@ -7,7 +7,7 @@ use futures_core::Stream;
 use strum::IntoStaticStr;
 
 use crate::config::ReasoningEffort;
-use crate::protocol::{EventSink, Message, SessionEvent, SessionId};
+use crate::protocol::{EventSink, InputRequestId, Message, SessionEvent, SessionId};
 
 /// Failure opening a session event stream.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -27,6 +27,14 @@ pub enum SessionControlError {
     SessionClosed(SessionId),
     #[error("session is busy: {0}")]
     Busy(SessionId),
+    #[error("session is not waiting for input: {0}")]
+    NotAwaitingInput(SessionId),
+    #[error("session {session} is waiting for input request {expected}, not {received}")]
+    InputRequestMismatch {
+        session: SessionId,
+        expected: InputRequestId,
+        received: InputRequestId,
+    },
     #[error("orchestrator worker is not running")]
     WorkerStopped,
     #[error("failed to persist closed session state")]
@@ -70,6 +78,12 @@ pub(crate) enum SessionCommand {
     },
     Submit {
         lease: u64,
+        message: Message,
+        ack: Sender<Result<(), SessionControlError>>,
+    },
+    Respond {
+        lease: u64,
+        request: InputRequestId,
         message: Message,
         ack: Sender<Result<(), SessionControlError>>,
     },
@@ -121,6 +135,32 @@ impl SessionControl {
         self.commands
             .send(SessionCommand::Submit {
                 lease: self.lease,
+                message,
+                ack,
+            })
+            .await
+            .map_err(|_| SessionControlError::WorkerStopped)?;
+        result
+            .recv()
+            .await
+            .unwrap_or(Err(SessionControlError::WorkerStopped))
+    }
+
+    /// Respond to one input request inside the current turn.
+    ///
+    /// This resolves when the actor accepts the response, not when the turn
+    /// resumes or ends. The request id prevents a delayed response from being
+    /// applied to a newer request.
+    pub async fn respond(
+        &self,
+        request: InputRequestId,
+        message: Message,
+    ) -> Result<(), SessionControlError> {
+        let (ack, result) = async_channel::bounded(1);
+        self.commands
+            .send(SessionCommand::Respond {
+                lease: self.lease,
+                request,
                 message,
                 ack,
             })

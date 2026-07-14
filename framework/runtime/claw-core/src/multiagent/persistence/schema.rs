@@ -23,7 +23,6 @@ pub(super) struct AgentNodeSnapshot {
 pub(super) struct ApprovalSnapshot {
     pub(super) agent: AgentId,
     pub(super) summary: String,
-    pub(super) prompted: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

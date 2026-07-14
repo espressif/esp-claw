@@ -300,6 +300,10 @@ impl Orchestrator {
                     SessionControlError::ClosePersistence => {
                         tracing::error!(name: "delete_rejected", reason = "persistence");
                     }
+                    SessionControlError::NotAwaitingInput(_)
+                    | SessionControlError::InputRequestMismatch { .. } => {
+                        tracing::error!(name: "delete_rejected", reason = "unexpected_response");
+                    }
                 }
                 Err(error)
             }

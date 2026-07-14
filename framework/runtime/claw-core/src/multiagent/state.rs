@@ -30,15 +30,8 @@ impl NodeMeta {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct PendingApproval {
-    pub(crate) agent: AgentId,
-    pub(crate) summary: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct ParkedApproval {
     pub(super) summary: String,
-    pub(super) prompted: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -231,7 +224,7 @@ impl MultiagentState {
     pub(super) fn work(&self, root_running: bool, background_running: bool) -> MultiagentWork {
         let root = self.root();
         let root_ready = root.is_some_and(|root| self.ready.contains(&root));
-        if root_ready || root_running || self.has_unprompted_approval() {
+        if root_ready || root_running || self.has_pending_approval() {
             return MultiagentWork::Root;
         }
         let background_ready = self.ready.iter().any(|id| Some(*id) != root);
@@ -254,34 +247,17 @@ impl MultiagentState {
         }
     }
 
-    pub(super) fn has_unprompted_approval(&self) -> bool {
-        self.approvals
-            .front()
-            .is_some_and(|(_, pending)| !pending.prompted)
+    pub(super) fn has_pending_approval(&self) -> bool {
+        !self.approvals.is_empty()
     }
 
-    pub(super) fn active_approval(&self) -> Option<PendingApproval> {
+    pub(super) fn active_approval(&self) -> Option<(AgentId, &str)> {
         let (agent, pending) = self.approvals.front()?;
-        Some(PendingApproval {
-            agent: *agent,
-            summary: pending.summary.clone(),
-        })
-    }
-
-    pub(super) fn take_next_approval_summary(&mut self) -> Option<String> {
-        let (_, pending) = self.approvals.front_mut()?;
-        if pending.prompted {
-            return None;
-        }
-        pending.prompted = true;
-        Some(pending.summary.clone())
+        Some((*agent, pending.summary.as_str()))
     }
 
     pub(super) fn park_approval(&mut self, agent: AgentId, summary: String) {
-        let replacement = ParkedApproval {
-            summary,
-            prompted: false,
-        };
+        let replacement = ParkedApproval { summary };
         if let Some((_, pending)) = self
             .approvals
             .iter_mut()
@@ -380,19 +356,16 @@ mod tests {
     }
 
     #[test]
-    fn approvals_are_prompted_in_queue_order() {
+    fn approvals_are_resolved_in_queue_order() {
         let first = AgentId(1);
         let second = AgentId(2);
         let mut state = MultiagentState::default();
         state.park_approval(first, "first".to_owned());
         state.park_approval(second, "second".to_owned());
 
-        assert_eq!(state.take_next_approval_summary().as_deref(), Some("first"));
-        assert!(!state.has_unprompted_approval());
+        assert_eq!(state.active_approval(), Some((first, "first")));
+        assert!(state.has_pending_approval());
         assert!(state.remove_approval(first));
-        assert_eq!(
-            state.take_next_approval_summary().as_deref(),
-            Some("second")
-        );
+        assert_eq!(state.active_approval(), Some((second, "second")));
     }
 }

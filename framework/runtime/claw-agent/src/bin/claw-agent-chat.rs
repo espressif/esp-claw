@@ -22,8 +22,9 @@ use std::path::Path;
 use anstyle::{AnsiColor, Style};
 use anyhow::{bail, Result};
 use claw_agent::{
-    AgentPersistenceConfig, HostAgentSystem, Message, PermissionLevel, SessionControl,
-    SessionEvent, SessionEventStream, SessionPersistence, StreamPart, ToolCall, TurnOrigin,
+    AgentPersistenceConfig, HostAgentSystem, InputRequestId, InputRequestKind, Message,
+    PermissionLevel, SessionControl, SessionEvent, SessionEventStream, SessionPersistence,
+    StreamPart, ToolCall, TurnOrigin,
 };
 use claw_api::{ApiUsage, BackendKind, ClawApiConfig};
 use claw_interface::{StdThread, TokioExecutor};
@@ -68,6 +69,18 @@ impl ChatDriver {
         true
     }
 
+    async fn respond(&self, request: InputRequestId, text: impl Into<String>) -> bool {
+        if let Err(error) = self
+            .control
+            .respond(request, Message::text(text.into()))
+            .await
+        {
+            print_event("error", &error.to_string(), EventStyle::Error);
+            return false;
+        }
+        true
+    }
+
     async fn set_permission_level(&self, level: PermissionLevel) -> bool {
         if let Err(error) = self.control.set_permission_level(level).await {
             print_event("error", &error.to_string(), EventStyle::Error);
@@ -93,6 +106,13 @@ impl ChatDriver {
                 self.active_origin = Some(origin);
                 self.saw_output = false;
                 RenderOutcome::TurnStarted
+            }
+            SessionEvent::InputRequested { request, kind } => {
+                self.content
+                    .output(StreamPart::Delta(format_input_request(&kind)))?;
+                self.content.output(StreamPart::End)?;
+                self.content.finish(editor)?;
+                RenderOutcome::InputRequested(request)
             }
             SessionEvent::Reasoning(part) => {
                 self.content.reasoning(part)?;
@@ -140,8 +160,17 @@ impl ChatDriver {
 enum RenderOutcome {
     Continue,
     TurnStarted,
+    InputRequested(InputRequestId),
     TurnEnded { user: bool, saw_output: bool },
     Closed,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum ReplState {
+    #[default]
+    Idle,
+    Running,
+    AwaitingInput(InputRequestId),
 }
 
 enum IdleActivity {
@@ -158,6 +187,17 @@ async fn next_idle_activity(
         async move { IdleActivity::Session(event.await) },
     )
     .await
+}
+
+async fn next_activity(
+    state: ReplState,
+    input: impl Future<Output = Option<LineInput>>,
+    event: impl Future<Output = Option<SessionEvent>>,
+) -> IdleActivity {
+    match state {
+        ReplState::Running => IdleActivity::Session(event.await),
+        ReplState::Idle | ReplState::AwaitingInput(_) => next_idle_activity(input, event).await,
+    }
 }
 
 #[derive(Default)]
@@ -385,6 +425,14 @@ fn permission_level_name(level: PermissionLevel) -> &'static str {
     }
 }
 
+fn format_input_request(kind: &InputRequestKind) -> String {
+    match kind {
+        InputRequestKind::PermissionApproval { summary } => {
+            format!("Permission approval needed:\n{summary}\n\nReply with approval or rejection.")
+        }
+    }
+}
+
 fn format_usage(usage: ApiUsage) -> String {
     fn value(value: Option<u64>) -> String {
         value.map_or_else(|| "-".to_string(), |count| count.to_string())
@@ -480,16 +528,12 @@ async fn run() -> Result<()> {
     eprintln!("Type a message, or / for commands. Empty line or Ctrl-D to quit.\n");
 
     let mut editor = ChatLineEditor::new()?;
-    let mut turn_active = false;
+    let mut state = ReplState::Idle;
     let mut prompt_active = false;
     show_prompt(&editor, &mut prompt_active)?;
 
     loop {
-        let activity = if turn_active {
-            IdleActivity::Session(chat.events.next().await)
-        } else {
-            next_idle_activity(editor.next_input(), chat.events.next()).await
-        };
+        let activity = next_activity(state, editor.next_input(), chat.events.next()).await;
         match activity {
             IdleActivity::Input(Some(LineInput::Line(line))) => {
                 prompt_active = false;
@@ -499,8 +543,17 @@ async fn run() -> Result<()> {
                 }
                 match parse_input(input) {
                     Ok(CliInput::Message(message)) => {
-                        turn_active = chat.submit(message).await;
-                        if !turn_active {
+                        let accepted = match state {
+                            ReplState::Idle => chat.submit(message).await,
+                            ReplState::AwaitingInput(request) => {
+                                chat.respond(request, message).await
+                            }
+                            ReplState::Running => false,
+                        };
+                        if accepted {
+                            state = ReplState::Running;
+                            prompt_active = false;
+                        } else {
                             show_prompt(&editor, &mut prompt_active)?;
                         }
                     }
@@ -523,9 +576,13 @@ async fn run() -> Result<()> {
             IdleActivity::Session(Some(event)) => {
                 match chat.render(event, &mut editor, prompt_active)? {
                     RenderOutcome::Continue => {}
-                    RenderOutcome::TurnStarted => turn_active = true,
+                    RenderOutcome::TurnStarted => state = ReplState::Running,
+                    RenderOutcome::InputRequested(request) => {
+                        state = ReplState::AwaitingInput(request);
+                        show_prompt(&editor, &mut prompt_active)?;
+                    }
                     RenderOutcome::TurnEnded { user, saw_output } => {
-                        turn_active = false;
+                        state = ReplState::Idle;
                         if user && !saw_output {
                             println!("\n(no reply)\n");
                         }
@@ -649,5 +706,29 @@ mod tests {
             activity,
             IdleActivity::Session(Some(received)) if received == event
         ));
+    }
+
+    #[test]
+    fn awaiting_input_repl_reads_the_callers_response() {
+        let activity = futures_lite::future::block_on(next_activity(
+            ReplState::AwaitingInput(InputRequestId(7)),
+            std::future::ready(Some(LineInput::Line("approve".to_owned()))),
+            std::future::pending(),
+        ));
+
+        assert!(matches!(
+            activity,
+            IdleActivity::Input(Some(LineInput::Line(line))) if line == "approve"
+        ));
+    }
+
+    #[test]
+    fn permission_request_rendering_belongs_to_the_cli() {
+        assert_eq!(
+            format_input_request(&InputRequestKind::PermissionApproval {
+                summary: "'skill_reload' is a High-risk action and needs approval.".to_owned(),
+            }),
+            "Permission approval needed:\n'skill_reload' is a High-risk action and needs approval.\n\nReply with approval or rejection."
+        );
     }
 }

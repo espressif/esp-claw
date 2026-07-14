@@ -9,7 +9,9 @@
 //!
 //! See `.agents/design/sse.md` for the full model (ordering, SSE forward-compat).
 
-use super::{IterationId, TurnId, TurnOrigin};
+use serde::{Deserialize, Serialize};
+
+use super::{InputRequestId, IterationId, TurnId, TurnOrigin};
 
 pub use claw_api::ToolCall;
 
@@ -64,6 +66,20 @@ pub enum StreamPart<T> {
     End,
 }
 
+/// Semantic input the active turn needs from its caller.
+///
+/// Callers choose how to present this request. A chat adapter may render it as
+/// an ordinary assistant message, while a GUI may use dedicated controls.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InputRequestKind {
+    /// A tool action is waiting for human permission.
+    PermissionApproval {
+        /// Policy-provided description of the action awaiting approval.
+        summary: String,
+    },
+}
+
 /// One item in a session's event stream.
 ///
 /// Content variants ([`Reasoning`](Self::Reasoning), [`Output`](Self::Output),
@@ -85,6 +101,13 @@ pub enum SessionEvent {
         /// Why the runtime opened this turn.
         origin: TurnOrigin,
     },
+    /// The current turn is paused until the caller responds to this request.
+    InputRequested {
+        /// Session-local request id required by `SessionControl::respond`.
+        request: InputRequestId,
+        /// What input is required. Presentation remains caller-owned.
+        kind: InputRequestKind,
+    },
     /// A root LLM round started. Carries the only iteration id on the stream.
     IterationStarted {
         /// The iteration this bracket opens.
@@ -92,8 +115,8 @@ pub enum SessionEvent {
     },
     /// Model thinking text, truncated to the configured limit.
     Reasoning(StreamPart<String>),
-    /// Assistant-visible text: a plain-text answer, an `conversation_end` closing
-    /// message, an approval prompt, or a clarification. Never truncated.
+    /// Assistant-visible text: a plain-text answer or a `conversation_end`
+    /// closing message. Never truncated.
     Output(StreamPart<String>),
     /// Complete tool calls requested by the model this iteration. Each delta is
     /// one call; `End` means no more calls will be emitted for the iteration.

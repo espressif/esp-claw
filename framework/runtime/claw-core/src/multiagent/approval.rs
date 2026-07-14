@@ -2,10 +2,25 @@ use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::agent::{AgentCommand, AgentCommandError, ApprovalDecision};
-use crate::protocol::AgentId;
+use crate::protocol::{AgentId, InputRequestKind, TurnOrigin};
 
-use super::state::PendingApproval;
 use super::{DriveOutput, MultiagentRuntime};
+
+/// Input the multiagent runtime needs before it can continue.
+///
+/// This is a boundary value, not a handle to the approval queue. The session
+/// owns whether the request has already been presented to its caller.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct MultiagentInputRequest {
+    idle_origin: TurnOrigin,
+    kind: InputRequestKind,
+}
+
+impl MultiagentInputRequest {
+    pub(crate) fn into_parts(self) -> (TurnOrigin, InputRequestKind) {
+        (self.idle_origin, self.kind)
+    }
+}
 
 #[derive(Clone, Debug, thiserror::Error)]
 pub(crate) enum ApprovalResolutionError {
@@ -23,47 +38,45 @@ where
     Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
-    pub(crate) fn active_approval(&self) -> Option<PendingApproval> {
-        self.state.get().active_approval()
+    pub(crate) fn required_input(&self) -> Option<MultiagentInputRequest> {
+        let (agent, summary) = self.state.get().active_approval()?;
+        Some(MultiagentInputRequest {
+            idle_origin: TurnOrigin::Subagent { agent },
+            kind: InputRequestKind::PermissionApproval {
+                summary: summary.to_owned(),
+            },
+        })
     }
 
-    pub(crate) fn resolve_active_approval(
+    pub(crate) fn resolve_required_input(
         &mut self,
         decision: ApprovalDecision,
     ) -> Result<(), ApprovalResolutionError> {
-        let pending = self
+        let agent = self
             .state
             .get()
             .active_approval()
+            .map(|(agent, _)| agent)
             .ok_or(ApprovalResolutionError::NoActiveApproval)?;
         let decision_name: &'static str = (&decision).into();
         self.slots
-            .available_agent_mut(pending.agent)
-            .ok_or(ApprovalResolutionError::UnknownAgent(pending.agent))?
+            .available_agent_mut(agent)
+            .ok_or(ApprovalResolutionError::UnknownAgent(agent))?
             .send_command(AgentCommand::ApprovalResult(decision))
             .map_err(ApprovalResolutionError::Command)?;
 
-        let removed = self.state.get_mut().remove_approval(pending.agent);
+        let removed = self.state.get_mut().remove_approval(agent);
         debug_assert!(
             removed,
             "the active approval changed without synchronization"
         );
         tracing::info!(
             name: "approval_resolved",
-            agent = %pending.agent,
+            agent = %agent,
             decision = decision_name,
         );
-        self.enqueue(pending.agent);
+        self.enqueue(agent);
         Ok(())
-    }
-
-    pub(crate) fn take_next_approval_prompt(&mut self) -> DriveOutput {
-        let Some(summary) = self.state.get_mut().take_next_approval_summary() else {
-            return DriveOutput::default();
-        };
-        DriveOutput::message(format!(
-            "Permission approval needed:\n{summary}\n\nReply with approval or rejection."
-        ))
     }
 
     pub(super) fn park_approval(&mut self, agent: AgentId, summary: String) -> DriveOutput {
@@ -75,8 +88,8 @@ where
         DriveOutput::default()
     }
 
-    pub(super) fn has_unprompted_approval(&self) -> bool {
-        self.state.get().has_unprompted_approval()
+    pub(super) fn has_pending_approval(&self) -> bool {
+        self.state.get().has_pending_approval()
     }
 }
 
@@ -128,11 +141,15 @@ mod tests {
             .park_approval(agent, "permission".to_owned());
 
         assert!(matches!(
-            instance.resolve_active_approval(ApprovalDecision::Approved),
+            instance.resolve_required_input(ApprovalDecision::Approved),
             Err(ApprovalResolutionError::UnknownAgent(id)) if id == agent
         ));
         assert_eq!(
-            instance.active_approval().map(|pending| pending.agent),
+            instance
+                .state
+                .get()
+                .active_approval()
+                .map(|(agent, _)| agent),
             Some(agent)
         );
     }
@@ -161,13 +178,17 @@ mod tests {
             .park_approval(agent, "permission".to_owned());
 
         assert!(matches!(
-            instance.resolve_active_approval(ApprovalDecision::Approved),
+            instance.resolve_required_input(ApprovalDecision::Approved),
             Err(ApprovalResolutionError::Command(
                 AgentCommandError::NotAwaitingApproval { .. }
             ))
         ));
         assert_eq!(
-            instance.active_approval().map(|pending| pending.agent),
+            instance
+                .state
+                .get()
+                .active_approval()
+                .map(|(agent, _)| agent),
             Some(agent)
         );
     }

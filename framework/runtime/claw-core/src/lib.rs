@@ -18,7 +18,7 @@ pub use claw_permission::PermissionLevel;
 pub use config::{ApiUsage, ReasoningEffort};
 pub use orchestrator::{Orchestrator, OrchestratorBuildError};
 pub use protocol::{
-    AgentId, IterationId, Message, SessionEvent, SessionId, SessionPersistence, StreamPart,
-    ToolCall, TurnId, TurnOrigin,
+    AgentId, InputRequestId, InputRequestKind, IterationId, Message, SessionEvent, SessionId,
+    SessionPersistence, StreamPart, ToolCall, TurnId, TurnOrigin,
 };
 pub use session::{OpenSessionError, SessionControl, SessionControlError, SessionEventStream};

@@ -168,7 +168,7 @@ where
                     control.clear_cancel_hook();
                     return (output, DriveStop::Interrupted);
                 }
-            } else if !self.has_root_work() && !self.has_unprompted_approval() {
+            } else if !self.has_root_work() && !self.has_pending_approval() {
                 break;
             }
 
@@ -188,7 +188,6 @@ where
             output.absorb(self.route_completed_agents(completed));
         }
         control.clear_cancel_hook();
-        output.absorb(self.take_next_approval_prompt());
         (output, DriveStop::Quiescent)
     }
 
@@ -215,7 +214,7 @@ where
             }
             if self.pending_root_origin().is_some()
                 || self.has_root_work()
-                || self.has_unprompted_approval()
+                || self.has_pending_approval()
             {
                 control.clear_cancel_hook();
                 return (output, DriveStop::Quiescent);
@@ -224,7 +223,7 @@ where
             self.start_ready_agent_tasks(events, false);
             if self.pending_root_origin().is_some()
                 || self.has_root_work()
-                || self.has_unprompted_approval()
+                || self.has_pending_approval()
             {
                 control.clear_cancel_hook();
                 return (output, DriveStop::Quiescent);
@@ -244,7 +243,7 @@ where
                 .next_completed_or_command(control, &self.multiagent)
                 .await;
             output.absorb(self.route_completed_agents(completed));
-            if self.has_unprompted_approval() {
+            if self.has_pending_approval() {
                 control.clear_cancel_hook();
                 return (output, DriveStop::Quiescent);
             }

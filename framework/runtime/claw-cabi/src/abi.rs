@@ -37,7 +37,9 @@ pub struct ClawAgentConfig {
 /// fragment (or one complete tool-call name). Their matching `_END` event
 /// explicitly closes that content stream. `DONE` marks one root-visible turn
 /// ending; the session stream stays open. `ERROR` carries `error_message`.
-/// `CLOSED` is terminal for the open session stream.
+/// `INPUT_REQUESTED` pauses the current turn and carries `request_id`,
+/// `input_kind`, and semantic data in `text`. `CLOSED` is terminal for the open
+/// session stream.
 pub const CLAW_AGENT_EVENT_KIND_OUTPUT: c_int = 0;
 pub const CLAW_AGENT_EVENT_KIND_REASONING: c_int = 1;
 pub const CLAW_AGENT_EVENT_KIND_TOOLS: c_int = 2;
@@ -47,13 +49,21 @@ pub const CLAW_AGENT_EVENT_KIND_CLOSED: c_int = 5;
 pub const CLAW_AGENT_EVENT_KIND_OUTPUT_END: c_int = 6;
 pub const CLAW_AGENT_EVENT_KIND_REASONING_END: c_int = 7;
 pub const CLAW_AGENT_EVENT_KIND_TOOLS_END: c_int = 8;
+pub const CLAW_AGENT_EVENT_KIND_INPUT_REQUESTED: c_int = 9;
+
+pub const CLAW_AGENT_INPUT_REQUEST_KIND_NONE: c_int = 0;
+pub const CLAW_AGENT_INPUT_REQUEST_KIND_PERMISSION_APPROVAL: c_int = 1;
 
 #[repr(C)]
 pub struct ClawAgentEvent {
     pub kind: c_int,
-    /// Owned UTF-8 fragment for content events (`OUTPUT`/`REASONING`/`TOOLS`);
-    /// null for `_END`, `DONE`, and `ERROR`. Released by
-    /// `claw_agent_event_free`.
+    /// Session-local id for `INPUT_REQUESTED`; zero otherwise.
+    pub request_id: u32,
+    /// Semantic input kind for `INPUT_REQUESTED`; `NONE` otherwise.
+    pub input_kind: c_int,
+    /// Owned UTF-8 fragment for content events (`OUTPUT`/`REASONING`/`TOOLS`),
+    /// or the semantic request summary for `INPUT_REQUESTED`; null otherwise.
+    /// Released by `claw_agent_event_free`.
     pub text: *mut c_char,
     /// Owned UTF-8 message for `ERROR`; null otherwise. Released by
     /// `claw_agent_event_free`.
