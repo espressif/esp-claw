@@ -2,6 +2,7 @@ use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::agent::{AgentId, AgentKind, AgentPlacement, GraphEffect, TerminationPolicy};
+use crate::session::Message;
 
 use super::super::OrchestratorInstance;
 
@@ -35,7 +36,7 @@ where
         }
     }
 
-    fn apply_followup(&mut self, requester: AgentId, target: AgentId, message: String) {
+    fn apply_followup(&mut self, requester: AgentId, target: AgentId, message: Message) {
         if !self
             .state
             .get()
@@ -124,7 +125,7 @@ where
         id: AgentId,
         kind: AgentKind,
         name: Option<String>,
-        goal: String,
+        goal: Message,
         termination: TerminationPolicy,
     ) {
         if !self.state.get().graph.contains(parent) {

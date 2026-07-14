@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
-use crate::agent::{AgentId, TerminationPolicy, TickOutcome};
+use crate::agent::{AgentId, SubagentTranscriptText, TerminationPolicy, TickOutcome};
 
 use super::super::scheduler::SubagentResult;
 use super::super::{DriveOutput, OrchestratorInstance};
@@ -64,7 +64,7 @@ where
             return;
         }
         if let Some(parent_agent) = self.registry.get_mut(parent) {
-            parent_agent.deliver_child_result(child, text, ok);
+            parent_agent.deliver_child_result(SubagentTranscriptText::new(child, text, ok));
             self.enqueue(parent);
             tracing::info!(
                 name: "result_to_parent",
@@ -112,7 +112,11 @@ where
             }
             let parent = result.parent;
             if let Some(parent_agent) = self.registry.get_mut(parent) {
-                parent_agent.deliver_child_result(result.child, result.text, result.ok);
+                parent_agent.deliver_child_result(SubagentTranscriptText::new(
+                    result.child,
+                    result.text,
+                    result.ok,
+                ));
                 self.enqueue(parent);
             } else {
                 pending.push_back(result);

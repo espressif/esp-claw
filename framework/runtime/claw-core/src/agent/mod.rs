@@ -14,7 +14,7 @@ mod tools;
 
 pub(crate) use base_agent::{
     AgentAbortHandle, AgentCommand, AgentCommandError, AgentId, ApprovalDecision, BaseAgent,
-    TickOutcome,
+    SubagentTranscriptText, TickOutcome,
 };
 pub(crate) use factory::{AgentPlacement, FsAgentCreateError, FsAgentFactory, FsAgentFactoryError};
 pub(crate) use graph::{

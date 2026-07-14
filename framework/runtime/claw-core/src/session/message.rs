@@ -1,8 +1,8 @@
-//! Inbound user messages.
+//! Messages delivered to sessions and agents.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
-/// One inbound user message delivered to a session.
+/// One message delivered to a session or agent.
 ///
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -11,7 +11,7 @@ pub struct Message {
 }
 
 impl Message {
-    /// Build a user text message.
+    /// Build a text message.
     pub fn text(text: impl Into<String>) -> Self {
         Self { text: text.into() }
     }
@@ -19,10 +19,25 @@ impl Message {
     pub(crate) fn as_str(&self) -> &str {
         &self.text
     }
+}
 
-    pub(crate) fn into_text(self) -> String {
-        self.text
+/// Decode the canonical message object or the legacy plain string used by
+/// persisted agent mailboxes before task inputs retained their `Message` type.
+pub(crate) fn deserialize_message_or_text<'de, D>(deserializer: D) -> Result<Message, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Repr {
+        Message(Message),
+        Text(String),
     }
+
+    Ok(match Repr::deserialize(deserializer)? {
+        Repr::Message(message) => message,
+        Repr::Text(text) => Message::text(text),
+    })
 }
 
 #[cfg(test)]
@@ -33,7 +48,7 @@ mod tests {
     fn text_message_projects_to_plain_text() {
         let message = Message::text("hello");
 
-        assert_eq!(message.into_text(), "hello");
+        assert_eq!(message.as_str(), "hello");
     }
 
     #[test]

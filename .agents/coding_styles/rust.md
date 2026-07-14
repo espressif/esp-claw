@@ -32,6 +32,15 @@ Rust Best Practices by Finn(Ziheng) Sheng.
 - Keep configuration fields on the type that owns the behavior unless a separate config type has real semantic weight. Do not create `FooConfig` just to carry one or two fields that are only used by `FooStore`/`FooClient`; put those fields on `FooStore`/`FooClient` and expose the smallest constructor that represents the real product API.
 - Do not expose public API only to make tests convenient. A test needing a smaller limit, an alternate timeout, or an artificial knob is not enough reason to add `with_*`, builder methods, or extra config structs. Prefer testing through the real default behavior, private/internal test helpers, or inputs that naturally exercise the branch. Public API entropy must come from product requirements, not test setup.
 
+## Semantic Types and Change Scope
+
+- Start from the responsibility of the consuming function, not from a desire to make every transport layer use the same type. Introduce a semantic type at the narrowest boundary that needs its behavior.
+- A semantic wrapper must be complete: it owns every value required to perform its behavior. Do not leave required context as side parameters while claiming the wrapper represents the operation.
+- Keep data and its domain-specific representation together. If a value knows how it should be rendered for a transcript, log, protocol, or UI, put that behavior on the value (commonly through a small trait implementation) and keep the consumer unaware of variant-specific formatting.
+- Convert into the semantic type at the boundary where the behavior becomes relevant. Do not propagate it through schedulers, queues, persistence schemas, or unrelated APIs unless those layers themselves require its semantics.
+- Prefer the smallest coherent diff. A local signature change does not authorize redesigning adjacent message types, durable state, or transport structures merely for type uniformity.
+- When a requested type or trait is not found, search the repository, dependencies, and relevant history before editing. Do not invent its contract from its name; if its intended behavior still cannot be established from context, ask before creating it.
+
 ## Durable State Layout
 
 - For persistence-enabled Rust objects, put durable fields in an `XxxState` struct and keep non-durable runtime fields as ordinary fields on `Xxx`; do not invent a `Deps` wrapper just to pass non-durable fields.

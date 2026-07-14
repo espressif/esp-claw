@@ -6,6 +6,7 @@ use strum::{EnumString, IntoStaticStr};
 
 use crate::agent::base_agent::AgentId;
 use crate::agent::kind::AgentKind;
+use crate::session::Message;
 
 #[derive(Clone, Copy, Debug, EnumString, IntoStaticStr, PartialEq, Eq)]
 #[strum(
@@ -35,7 +36,7 @@ pub(crate) enum GraphEffect {
         id: AgentId,
         kind: AgentKind,
         name: Option<String>,
-        goal: String,
+        goal: Message,
         termination: TerminationPolicy,
     },
     Delete {
@@ -43,7 +44,7 @@ pub(crate) enum GraphEffect {
     },
     Followup {
         target: AgentId,
-        message: String,
+        message: Message,
     },
 }
 

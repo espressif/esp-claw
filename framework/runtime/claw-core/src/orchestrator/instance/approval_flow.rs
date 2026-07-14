@@ -97,7 +97,7 @@ mod tests {
         FsAgentFactory,
     };
     use crate::config::ClawApiManager;
-    use crate::session::{SessionId, SessionPersistence};
+    use crate::session::{Message, SessionId, SessionPersistence};
 
     use super::super::{OrchestratorInstance, OrchestratorInstanceState, ROOT_AGENT_KIND};
     use super::ApprovalResolutionError;
@@ -150,7 +150,7 @@ mod tests {
             .build_agent(
                 agent,
                 &kind,
-                String::new(),
+                Message::text(""),
                 AgentPlacement::Root {
                     session: SessionId::new(1),
                     persistence: SessionPersistence::Ephemeral,

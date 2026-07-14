@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 crate::define_prefixed_id!(SessionId, "session-", "session");
 crate::define_prefixed_id!(TurnId, "turn-", "turn");
 
+pub(crate) use message::deserialize_message_or_text;
 pub use message::Message;
 
 /// Whether a session survives a runtime restart.

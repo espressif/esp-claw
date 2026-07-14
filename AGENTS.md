@@ -127,6 +127,12 @@ The firmware uses two logical filesystem roots, configured at boot through `claw
 
 ## Testing
 
+## Rust Core
+
+- use framework/runtime/check.sh + harness.sh + update-public-api-snapshots.sh to tests
+
+## C & Integration
+
 - Firmware changes should at minimum run `idf.py build` for the affected board configuration after exporting ESP-IDF and generating board manager config.
 - Component test apps live under `components/claw_modules/*/test_apps/`.
 - Lua module tests live beside modules under `components/lua_modules/<module>/test/` with descriptive names such as `json_roundtrip.lua`.

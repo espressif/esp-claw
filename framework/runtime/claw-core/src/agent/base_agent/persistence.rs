@@ -93,11 +93,12 @@ mod tests {
     use super::*;
     use crate::agent::base_agent::task_state::TaskAction;
     use crate::agent::base_agent::{AgentCommand, ApprovalDecision};
+    use crate::session::Message;
 
     #[test]
     fn schema_two_round_trips_the_canonical_approval_payload() {
         let mut state = BaseAgentState::new(0);
-        state.task_mut().enqueue_task_input("start".into());
+        state.task_mut().enqueue_task_input(Message::text("start"));
         let _ = state.task_mut().pop_action().expect("valid task input");
         state
             .task_mut()

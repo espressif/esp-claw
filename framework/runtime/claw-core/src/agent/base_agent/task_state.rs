@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use serde::{Deserialize, Serialize};
 
 use crate::agent::tools::ControlSignal;
+use crate::session::Message;
 
 use super::{AgentCommand, AgentCommandError, AgentState, ApprovalDecision};
 
@@ -43,7 +44,7 @@ impl TaskPhaseView {
 #[derive(Deserialize, Serialize)]
 enum Inbound {
     Command(AgentCommand),
-    TaskInput(String),
+    TaskInput(#[serde(deserialize_with = "crate::session::deserialize_message_or_text")] Message),
     Control(ControlSignal),
 }
 
@@ -78,7 +79,7 @@ impl TaskMailbox {
 
 pub(super) enum TaskAction {
     TaskInput {
-        text: String,
+        message: Message,
         starts_task: bool,
     },
     Cancel,
@@ -124,8 +125,8 @@ impl TaskState {
         Ok(())
     }
 
-    pub(super) fn enqueue_task_input(&mut self, text: String) {
-        self.mailbox.enqueue(Inbound::TaskInput(text));
+    pub(super) fn enqueue_task_input(&mut self, message: Message) {
+        self.mailbox.enqueue(Inbound::TaskInput(message));
     }
 
     pub(super) fn enqueue_control(&mut self, signal: ControlSignal) {
@@ -140,12 +141,16 @@ impl TaskState {
         transition(current, &inbound)?;
 
         let action = match inbound {
-            Inbound::Command(AgentCommand::AppendMessage(text)) | Inbound::TaskInput(text) => {
+            Inbound::Command(AgentCommand::AppendMessage(message))
+            | Inbound::TaskInput(message) => {
                 let starts_task = matches!(current, TaskPhaseView::Idle);
                 if starts_task {
                     self.phase = TaskPhase::Running;
                 }
-                TaskAction::TaskInput { text, starts_task }
+                TaskAction::TaskInput {
+                    message,
+                    starts_task,
+                }
             }
             Inbound::Command(AgentCommand::Cancel) => {
                 self.phase = TaskPhase::Idle;
@@ -246,6 +251,8 @@ fn classify(
 
 #[cfg(test)]
 mod tests {
+    use crate::session::Message;
+
     use super::*;
 
     fn projected_state(task: &TaskState) -> Result<AgentState, AgentCommandError> {
@@ -255,15 +262,31 @@ mod tests {
     }
 
     #[test]
+    fn task_input_preserves_the_message_until_reduction() {
+        let mut task = TaskState::new();
+        let input = Message::text("hello");
+
+        task.enqueue_task_input(input.clone());
+
+        assert!(matches!(
+            task.pop_action().expect("valid task input"),
+            Some(TaskAction::TaskInput {
+                message,
+                starts_task: true,
+            }) if message == input
+        ));
+    }
+
+    #[test]
     fn mailbox_validates_against_queued_transitions_without_a_second_phase_field() {
         let mut task = TaskState::new();
-        task.enqueue_command(AgentCommand::AppendMessage("first".into()))
+        task.enqueue_command(AgentCommand::AppendMessage(Message::text("first")))
             .expect("the idle task accepts its first message");
 
         assert!(matches!(task.phase, TaskPhase::Idle));
         assert_eq!(projected_state(&task), Ok(AgentState::Running));
         assert_eq!(
-            task.enqueue_command(AgentCommand::AppendMessage("second".into())),
+            task.enqueue_command(AgentCommand::AppendMessage(Message::text("second"))),
             Err(AgentCommandError::CannotAppend {
                 state: AgentState::Running,
             })
@@ -276,9 +299,9 @@ mod tests {
         assert!(matches!(
             action,
             TaskAction::TaskInput {
-                text,
+                message,
                 starts_task: true,
-            } if text == "first"
+            } if message.as_str() == "first"
         ));
         assert!(task.is_running());
     }
@@ -286,11 +309,11 @@ mod tests {
     #[test]
     fn mailbox_preserves_order_when_commands_cross_an_idle_boundary() {
         let mut task = TaskState::new();
-        task.enqueue_command(AgentCommand::AppendMessage("first".into()))
+        task.enqueue_command(AgentCommand::AppendMessage(Message::text("first")))
             .expect("append is valid");
         task.enqueue_command(AgentCommand::Cancel)
             .expect("cancel validates against the queued append");
-        task.enqueue_command(AgentCommand::AppendMessage("replacement".into()))
+        task.enqueue_command(AgentCommand::AppendMessage(Message::text("replacement")))
             .expect("append validates against the queued cancel");
 
         assert_eq!(projected_state(&task), Ok(AgentState::Running));
@@ -309,9 +332,9 @@ mod tests {
         assert!(matches!(
             task.pop_action().expect("valid queue"),
             Some(TaskAction::TaskInput {
-                text,
+                message,
                 starts_task: true,
-            }) if text == "replacement"
+            }) if message.as_str() == "replacement"
         ));
         assert!(task.is_running());
     }
@@ -319,7 +342,7 @@ mod tests {
     #[test]
     fn pending_approval_payload_is_owned_and_consumed_by_the_phase() {
         let mut task = TaskState::new();
-        task.enqueue_task_input("start".into());
+        task.enqueue_task_input(Message::text("start"));
         let _ = task.pop_action().expect("valid queue");
 
         task.await_approval(vec!["sig-a".into(), "sig-b".into()])

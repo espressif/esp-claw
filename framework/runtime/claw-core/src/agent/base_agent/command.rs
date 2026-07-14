@@ -3,6 +3,8 @@ use strum::IntoStaticStr;
 
 use claw_tool::ToolSetError;
 
+use crate::session::Message;
+
 use super::IterationLoopError;
 
 /// Inbound: a control input handed to the agent. This is the agent's entire
@@ -17,7 +19,9 @@ pub(crate) enum AgentCommand {
     /// Start a fresh task with a user message. This is valid only when the agent
     /// is idle; the orchestrator is responsible for deferring append delivery
     /// until that boundary.
-    AppendMessage(String),
+    AppendMessage(
+        #[serde(deserialize_with = "crate::session::deserialize_message_or_text")] Message,
+    ),
     /// Abandon the current task. (Orchestrator-initiated hard stop — distinct
     /// from the agent ending itself via `conversation_end`.) Being disruptive,
     /// it discards the still-open turn instead of writing a marker, so cancelled

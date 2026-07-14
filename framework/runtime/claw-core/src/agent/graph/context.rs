@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::agent::base_agent::AgentId;
 use crate::agent::kind::AgentKind;
+use crate::session::Message;
 
 use super::types::{AgentGraphSnapshot, AgentSnapshot, GraphEffect, TerminationPolicy};
 
@@ -37,7 +38,7 @@ impl AgentContext {
                 id: child,
                 kind,
                 name,
-                goal,
+                goal: Message::text(goal),
                 termination,
             },
         );
@@ -49,8 +50,13 @@ impl AgentContext {
     }
 
     pub(crate) fn followup_subagent(&self, target: AgentId, message: String) {
-        self.host
-            .emit(self.id, GraphEffect::Followup { target, message });
+        self.host.emit(
+            self.id,
+            GraphEffect::Followup {
+                target,
+                message: Message::text(message),
+            },
+        );
     }
 
     pub(crate) fn list_subagents(&self) -> Vec<AgentSnapshot> {

@@ -15,6 +15,7 @@ use crate::memory::{
     CompactionPolicy, ConversationHistoryContextAdapter, LlmCompactor,
     LongTermMemoryContextAdapter, ProfileContextAdapter,
 };
+use crate::session::Message;
 
 use super::error::FsAgentCreateError;
 use super::layout::AgentPlacement;
@@ -47,7 +48,7 @@ impl<
         &self,
         id: AgentId,
         kind: &AgentKind,
-        goal: String,
+        goal: Message,
         placement: AgentPlacement,
         host: Arc<dyn GraphHost>,
         inherited_context: Vec<Block<'static>>,
@@ -180,7 +181,7 @@ impl<
             return Err(FsAgentCreateError::LongTermContext(error));
         }
 
-        if !goal.trim().is_empty() {
+        if !goal.as_str().trim().is_empty() {
             if let Err(error) = agent.send_command(AgentCommand::AppendMessage(goal)) {
                 tracing::error!(
                     name: "goal_seed_failed",

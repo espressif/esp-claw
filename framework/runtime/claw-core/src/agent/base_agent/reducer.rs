@@ -3,11 +3,13 @@ use std::collections::HashSet;
 use claw_interface::{ClawHttp, ClawTimer};
 use serde_json::Value;
 
+use crate::agent::base_agent::TranscriptText;
 use crate::agent::iteration_loop::{
     CompletedKind, CompletedOutcome, IterationOutcome, IterationResult, PreemptedOutcome, ToolRun,
 };
 use crate::agent::tools::ControlSignal;
 use crate::memory::AssistantCommit;
+use crate::session::Message;
 
 use super::command::{
     AgentCommand, AgentCommandError, AgentRunError, ApprovalDecision, TickOutcome,
@@ -15,7 +17,7 @@ use super::command::{
 use super::control::AgentAbortHandle;
 use super::state::ToolBlockVerdict;
 use super::task_state::TaskAction;
-use super::{AgentId, BaseAgent, IterationIdAllocator};
+use super::{BaseAgent, IterationIdAllocator, SubagentTranscriptText};
 use claw_permission::Grant;
 
 impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
@@ -24,8 +26,8 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         self.state.get_mut().task_mut().enqueue_command(command)
     }
 
-    fn push_task_input(&mut self, text: String) {
-        self.state.get_mut().task_mut().enqueue_task_input(text);
+    fn push_task_input(&mut self, message: Message) {
+        self.state.get_mut().task_mut().enqueue_task_input(message);
     }
 
     pub(crate) fn abort_handle(&self) -> AgentAbortHandle {
@@ -33,9 +35,8 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     }
 
     /// Deliver a finished subagent's result as ordinary task input.
-    pub(crate) fn deliver_child_result(&mut self, child: AgentId, text: String, ok: bool) {
-        let status = if ok { "ok" } else { "failed" };
-        self.push_task_input(format!("[subagent {child} {status}] {text}"));
+    pub(crate) fn deliver_child_result(&mut self, result: SubagentTranscriptText) {
+        self.push_task_input(Message::text(result.text()));
     }
 
     pub(super) fn drain_inbox(&mut self) {
@@ -76,8 +77,11 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
 
     fn apply_action(&mut self, action: TaskAction) {
         match action {
-            TaskAction::TaskInput { text, starts_task } => {
-                self.append_task_input(&text, starts_task);
+            TaskAction::TaskInput {
+                message,
+                starts_task,
+            } => {
+                self.append_task_input(&message, starts_task);
             }
             TaskAction::Cancel => {
                 self.transcript.discard_open_turn();
@@ -221,13 +225,13 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
             .append_patch(&outcome.produced.into_json_array());
     }
 
-    fn append_task_input(&mut self, text: &str, starts_task: bool) {
+    fn append_task_input(&mut self, message: &Message, starts_task: bool) {
         if starts_task {
             let state = self.state.get_mut();
             state.iterations = IterationIdAllocator::new();
             self.outcome = None;
         }
-        self.transcript.append_user(text, starts_task);
+        self.transcript.append_user(message.as_str(), starts_task);
     }
 }
 

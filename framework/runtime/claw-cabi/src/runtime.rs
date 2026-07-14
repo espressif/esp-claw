@@ -12,7 +12,7 @@ use std::task::Waker;
 use std::time::Duration;
 
 use claw_agent::{
-    AgentError, AgentPersistenceConfig, AgentSystem, OpenSessionError, SessionControl,
+    AgentError, AgentPersistenceConfig, AgentSystem, Message, OpenSessionError, SessionControl,
     SessionControlError, SessionEvent, SessionEventStream, SessionId, StreamPart,
 };
 use claw_api::{BackendKind, ClawApiConfig};
@@ -353,7 +353,7 @@ fn submit_session(session_id: u32, text: *const c_char) -> Result<(), CabiError>
         runtime.agent.as_ref().ok_or(CabiError::InvalidState)?;
         get_open_session_locked(runtime, session_id)?.ok_or(CabiError::NotFound)?
     };
-    futures_lite::future::block_on(session.control.submit(text))
+    futures_lite::future::block_on(session.control.submit(Message::text(text)))
         .map_err(|_| CabiError::InvalidState)
 }
 

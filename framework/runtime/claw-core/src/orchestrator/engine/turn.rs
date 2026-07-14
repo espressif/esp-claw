@@ -78,7 +78,7 @@ where
                 text_bytes,
             );
             let result = self
-                .drive_one_input(session_id, input.into_text(), effort, persistence, &events)
+                .drive_one_input(session_id, input, effort, persistence, &events)
                 .await;
             let stop = self.handle_drive_result(&events, result);
             self.set_foreground_active(session_id, false);
@@ -199,7 +199,7 @@ where
     async fn drive_one_input(
         &self,
         session_id: SessionId,
-        text: String,
+        message: Message,
         effort: ReasoningEffort,
         persistence: SessionPersistence,
         events: &EventSink,
@@ -212,13 +212,13 @@ where
             let control = DriveControl::new();
             self.set_active_control(session_id, Some(control.clone()));
             let result = self
-                .resolve_pending_approval(instance, pending, &text, &control, events)
+                .resolve_pending_approval(instance, pending, message.as_str(), &control, events)
                 .await;
             self.set_active_control(session_id, None);
             return result;
         }
 
-        instance.deliver(text, effort.context_block(), persistence)?;
+        instance.deliver(message, effort.context_block(), persistence)?;
         self.drive_root_ready_in_slot(session_id, instance, events)
             .await
     }

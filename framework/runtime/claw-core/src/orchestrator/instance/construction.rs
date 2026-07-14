@@ -11,7 +11,7 @@ use crate::agent::{
     AgentGraphSnapshot, AgentId, AgentIdAllocator, AgentKind, AgentPlacement, FsAgentCreateError,
     FsAgentFactory, GraphHost,
 };
-use crate::session::{SessionId, SessionPersistence};
+use crate::session::{Message, SessionId, SessionPersistence};
 
 use super::graph_state::{EffectQueue, InstanceHost, SnapshotView};
 use super::persistence::{
@@ -84,7 +84,7 @@ where
             } else {
                 AgentPlacement::Sub(id)
             };
-            self.build_agent(id, meta.kind(), String::new(), placement, Vec::new())
+            self.build_agent(id, meta.kind(), Message::text(""), placement, Vec::new())
                 .map_err(|source| OrchestratorInstanceRestoreError::agent(id, source))?;
 
             let parts = pending
@@ -137,7 +137,7 @@ where
         &mut self,
         id: AgentId,
         kind: &AgentKind,
-        goal: String,
+        goal: Message,
         placement: AgentPlacement,
         inherited_context: Vec<Block<'static>>,
     ) -> Result<(), FsAgentCreateError> {

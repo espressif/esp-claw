@@ -71,7 +71,7 @@ impl SessionControl {
         }
     }
 
-    /// Submit one text message for this session.
+    /// Submit one message for this session.
     ///
     /// The returned future resolves when the orchestrator accepts the command,
     /// not when the agent reply completes. If a foreground submit is already in

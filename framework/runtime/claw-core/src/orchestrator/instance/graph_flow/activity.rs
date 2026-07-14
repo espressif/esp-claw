@@ -1,7 +1,7 @@
 use crate::agent::{
     AgentCommand, AgentCommandError, AgentId, AgentKind, AgentPlacement, FsAgentCreateError,
 };
-use crate::session::SessionPersistence;
+use crate::session::{Message, SessionPersistence};
 use claw_context::Block;
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
@@ -34,10 +34,10 @@ where
     Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
-    /// Deliver a user message to this session's root.
+    /// Deliver a message to this session's root.
     pub(crate) fn deliver(
         &mut self,
-        text: String,
+        message: Message,
         reasoning_effort: Block<'static>,
         persistence: SessionPersistence,
     ) -> Result<(), InstanceDeliverError> {
@@ -45,7 +45,7 @@ where
             Some(root) => {
                 self.set_agent_context_block(root, reasoning_effort)
                     .map_err(|source| InstanceDeliverError::Root { root, source })?;
-                self.deliver_message(root, text)
+                self.deliver_message(root, message)
                     .map_err(|source| InstanceDeliverError::Root { root, source })
             }
             None => {
@@ -54,7 +54,7 @@ where
                 self.build_agent(
                     id,
                     &kind,
-                    text,
+                    message,
                     AgentPlacement::Root {
                         session: self.session,
                         persistence,
@@ -95,12 +95,12 @@ where
     fn deliver_message(
         &mut self,
         id: AgentId,
-        text: String,
+        message: Message,
     ) -> Result<(), AgentMessageDeliveryError> {
         let Some(agent) = self.registry.get_mut(id) else {
             return Err(AgentMessageDeliveryError::UnknownAgent(id));
         };
-        agent.send_command(AgentCommand::AppendMessage(text))?;
+        agent.send_command(AgentCommand::AppendMessage(message))?;
         self.enqueue(id);
         Ok(())
     }
@@ -125,7 +125,7 @@ where
     pub(in crate::orchestrator::instance) fn deliver_followup(
         &mut self,
         id: AgentId,
-        message: String,
+        message: Message,
     ) -> Result<(), AgentMessageDeliveryError> {
         let Some(agent) = self.registry.get_mut(id) else {
             return Err(AgentMessageDeliveryError::UnknownAgent(id));
