@@ -55,3 +55,4 @@ todo.md
 target/
 output/
 simulator.log
+trace.json

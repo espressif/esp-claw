@@ -76,16 +76,18 @@ new lease; commands from an older lease are rejected after close and reopen.
 - `subagent_spawn(foreground = true)` waits inside the current tool call and
   returns the child result in the current turn.
 - `subagent_spawn(foreground = false)` returns the child id immediately. When
-  the child finishes, the session actor opens a `TurnOrigin::Subagent` turn and
-  delivers the result to the parent through the multiagent runtime.
+  the child finishes, the result enters the parent's inbox. At the root it joins
+  an active turn as the next input; if the root is idle, it wakes the root and
+  opens a `TurnOrigin::Subagent` turn.
 - `subagent_followup` is live-only. A completed child is gone and cannot be
   resumed from transcript state.
 - Interrupt stops the foreground turn but preserves live detached children.
 - Cancel stops the turn and all children owned by the session.
 
-Detached work does not keep a user turn artificially open, and it does not make
-the session API busy. The long-lived session event stream carries later
-subagent-origin turns to the caller.
+Detached work alone does not keep a turn open, and it does not make the session
+API busy. A result that arrives before an active turn ends is consumed inside
+that turn; a later result is carried as a subagent-origin turn on the long-lived
+session event stream.
 
 ## Scheduling
 

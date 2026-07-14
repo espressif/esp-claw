@@ -309,6 +309,10 @@ where
                     Some(TurnOrigin::User) if self.runtime().active_approval().is_some() => {
                         return None;
                     }
+                    Some(TurnOrigin::User) if self.runtime().pending_root_origin().is_some() => {
+                        self.start_pending_root_result();
+                        return None;
+                    }
                     Some(TurnOrigin::User) => self.finish_active_turn(),
                     Some(TurnOrigin::Subagent { .. }) => {
                         self.start_pending_root_result();
@@ -857,7 +861,7 @@ where
     Http: ClawHttp + StreamingHttp + Default + 'static,
     Timer: ClawTimer + Default + 'static,
 {
-    let result = if runtime.activate_pending_root_result() {
+    let result = if runtime.activate_pending_root_results() {
         runtime
             .set_root_context_block(effort.context_block())
             .map_err(DeliverError::from)

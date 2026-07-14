@@ -10,19 +10,21 @@
 //! cargo run -p claw-agent --features dev,cache_profile --bin claw-agent-chat
 //! ```
 //!
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::future::Future;
+use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 
 use anstyle::{AnsiColor, Style};
 use anyhow::{bail, Result};
 use claw_agent::{
     AgentPersistenceConfig, HostAgentSystem, Message, SessionControl, SessionEvent,
-    SessionEventStream, SessionPersistence, StreamPart, ToolCall,
+    SessionEventStream, SessionPersistence, StreamPart, ToolCall, TurnOrigin,
 };
 use claw_api::{ApiUsage, BackendKind, ClawApiConfig};
 use claw_interface::{StdThread, TokioExecutor};
 use claw_log::{LevelFilter, LogOutput, TracingConfig};
 use futures_lite::StreamExt;
+use tokio::io::{AsyncBufReadExt, BufReader};
 
 const MEMORY_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/output/claw-agent-chat");
 
@@ -30,6 +32,9 @@ struct ChatDriver {
     control: SessionControl,
     events: SessionEventStream,
     total_usage: ApiUsage,
+    content: ContentRenderer,
+    active_origin: Option<TurnOrigin>,
+    saw_output: bool,
 }
 
 impl ChatDriver {
@@ -38,6 +43,9 @@ impl ChatDriver {
             control,
             events,
             total_usage: ApiUsage::default(),
+            content: ContentRenderer::default(),
+            active_origin: None,
+            saw_output: false,
         }
     }
 
@@ -45,40 +53,83 @@ impl ChatDriver {
         has_usage(self.total_usage).then_some(self.total_usage)
     }
 
-    /// Submit one input and print events until that user-visible turn ends.
-    /// Returns whether the turn produced any assistant-visible output.
-    async fn send(&mut self, text: impl Into<String>) -> bool {
+    async fn submit(&self, text: impl Into<String>) -> bool {
         if let Err(error) = self.control.submit(Message::text(text)).await {
             print_event("error", &error.to_string(), EventStyle::Error);
             return false;
         }
-        let mut saw_output = false;
-        let mut content = ContentRenderer::default();
-        while let Some(event) = self.events.next().await {
-            match event {
-                SessionEvent::Reasoning(part) => content.reasoning(part),
-                SessionEvent::Output(part) => saw_output |= content.output(part),
-                SessionEvent::ToolCalls(part) => content.tool_calls(part),
-                SessionEvent::Usage { usage } => {
-                    accumulate_usage(&mut self.total_usage, usage);
-                    content.finish();
-                    print_event("usage", &format_usage(usage), EventStyle::Usage);
-                }
-                SessionEvent::Error { message } => {
-                    content.finish();
-                    print_event("error", &message, EventStyle::Error)
-                }
-                SessionEvent::TurnEnded { .. } | SessionEvent::Closed => {
-                    content.finish();
-                    break;
-                }
-                SessionEvent::TurnStarted { .. }
-                | SessionEvent::IterationStarted { .. }
-                | SessionEvent::IterationEnded => {}
+        true
+    }
+
+    fn render(&mut self, event: SessionEvent) -> RenderOutcome {
+        match event {
+            SessionEvent::TurnStarted { origin, .. } => {
+                self.content.finish();
+                self.active_origin = Some(origin);
+                self.saw_output = false;
+                RenderOutcome::TurnStarted
+            }
+            SessionEvent::Reasoning(part) => {
+                self.content.reasoning(part);
+                RenderOutcome::Continue
+            }
+            SessionEvent::Output(part) => {
+                self.saw_output |= self.content.output(part);
+                RenderOutcome::Continue
+            }
+            SessionEvent::ToolCalls(part) => {
+                self.content.tool_calls(part);
+                RenderOutcome::Continue
+            }
+            SessionEvent::Usage { usage } => {
+                accumulate_usage(&mut self.total_usage, usage);
+                self.content.finish();
+                print_event("usage", &format_usage(usage), EventStyle::Usage);
+                RenderOutcome::Continue
+            }
+            SessionEvent::Error { message } => {
+                self.content.finish();
+                print_event("error", &message, EventStyle::Error);
+                RenderOutcome::Continue
+            }
+            SessionEvent::TurnEnded { .. } => {
+                self.content.finish();
+                let user = matches!(self.active_origin.take(), Some(TurnOrigin::User));
+                let saw_output = std::mem::take(&mut self.saw_output);
+                RenderOutcome::TurnEnded { user, saw_output }
+            }
+            SessionEvent::Closed => {
+                self.content.finish();
+                RenderOutcome::Closed
+            }
+            SessionEvent::IterationStarted { .. } | SessionEvent::IterationEnded => {
+                RenderOutcome::Continue
             }
         }
-        saw_output
     }
+}
+
+enum RenderOutcome {
+    Continue,
+    TurnStarted,
+    TurnEnded { user: bool, saw_output: bool },
+    Closed,
+}
+
+enum IdleActivity {
+    Input(io::Result<Option<String>>),
+    Session(Option<SessionEvent>),
+}
+
+async fn next_idle_activity(
+    input: impl Future<Output = io::Result<Option<String>>>,
+    event: impl Future<Output = Option<SessionEvent>>,
+) -> IdleActivity {
+    futures_lite::future::race(
+        async move { IdleActivity::Input(input.await) },
+        async move { IdleActivity::Session(event.await) },
+    )
+    .await
 }
 
 #[derive(Default)]
@@ -307,22 +358,50 @@ async fn run() -> Result<()> {
     eprintln!("Memory:  {MEMORY_DIR}");
     eprintln!("Type your message and press Enter. Empty line or Ctrl-D to quit.\n");
 
-    let stdin = io::stdin();
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    let mut turn_active = false;
+    let mut prompt_visible = false;
     loop {
-        print!("> ");
-        io::stdout().flush()?;
-
-        let mut line = String::new();
-        if stdin.lock().read_line(&mut line)? == 0 {
-            break;
-        }
-        let input = line.trim();
-        if input.is_empty() {
-            break;
+        if !turn_active && !prompt_visible {
+            print!("> ");
+            io::stdout().flush()?;
+            prompt_visible = true;
         }
 
-        if !chat.send(input).await {
-            println!("\n(no reply)\n");
+        let activity = if turn_active {
+            IdleActivity::Session(chat.events.next().await)
+        } else {
+            next_idle_activity(lines.next_line(), chat.events.next()).await
+        };
+        match activity {
+            IdleActivity::Input(Ok(Some(line))) => {
+                prompt_visible = false;
+                let input = line.trim();
+                if input.is_empty() {
+                    break;
+                }
+                turn_active = chat.submit(input).await;
+            }
+            IdleActivity::Input(Ok(None)) => break,
+            IdleActivity::Input(Err(error)) => return Err(error.into()),
+            IdleActivity::Session(Some(event)) => {
+                if matches!(event, SessionEvent::TurnStarted { .. }) && prompt_visible {
+                    println!();
+                    prompt_visible = false;
+                }
+                match chat.render(event) {
+                    RenderOutcome::Continue => {}
+                    RenderOutcome::TurnStarted => turn_active = true,
+                    RenderOutcome::TurnEnded { user, saw_output } => {
+                        turn_active = false;
+                        if user && !saw_output {
+                            println!("\n(no reply)\n");
+                        }
+                    }
+                    RenderOutcome::Closed => break,
+                }
+            }
+            IdleActivity::Session(None) => break,
         }
     }
 
@@ -405,5 +484,25 @@ mod tests {
         );
         assert!(has_usage(total));
         assert!(!has_usage(ApiUsage::default()));
+    }
+
+    #[test]
+    fn idle_repl_receives_session_events_without_waiting_for_stdin() {
+        let event = SessionEvent::TurnStarted {
+            turn: claw_agent::TurnId(7),
+            origin: TurnOrigin::Subagent {
+                agent: claw_agent::AgentId(3),
+            },
+        };
+
+        let activity = futures_lite::future::block_on(next_idle_activity(
+            std::future::pending(),
+            std::future::ready(Some(event.clone())),
+        ));
+
+        assert!(matches!(
+            activity,
+            IdleActivity::Session(Some(received)) if received == event
+        ));
     }
 }

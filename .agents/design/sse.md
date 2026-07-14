@@ -2,8 +2,8 @@
 
 `AgentSystem::open_session` returns a [`SessionControl`, `SessionEventStream`]
 pair. The stream remains open across submits. A submit creates a user-origin
-turn; a detached subagent result creates a subagent-origin turn on the same
-stream.
+turn. A detached subagent result joins an active root turn, or creates a
+subagent-origin turn on the same stream when the root is idle.
 
 ## Event model
 
@@ -101,15 +101,18 @@ than inside an iteration. `Closed` is terminal for the session stream;
 `subagent_spawn(foreground: true)` waits inside its tool call, so its result
 stays in the current turn. `subagent_spawn(foreground: false)` returns the agent
 id immediately; the current turn may end while that agent continues running.
-When the detached result reaches the root, the session actor opens a new
-`TurnOrigin::Subagent` turn. A caller may submit another user message while only
-detached work is running; that message opens an independent user-origin turn.
+When the detached result reaches a root with an active turn, it becomes a later
+root input inside that turn before `TurnEnded`. When it reaches an idle root,
+the session actor opens a new `TurnOrigin::Subagent` turn. A caller may submit
+another user message while only detached work is running; that message opens an
+independent user-origin turn.
 
 ## Scope and ownership
 
 Only root-agent iterations are externally visible. Subagent iterations use a
-disabled sink and remain internal; a detached result becomes root input in its
-own turn. Root iterations are sequential, so the
+disabled sink and remain internal; a detached result becomes root input in the
+active turn or wakes an idle root into a new turn. Root iterations are
+sequential, so the
 `IterationStarted..IterationEnded` bracket supplies enough scope for content
 events without repeating agent or iteration ids on every delta.
 

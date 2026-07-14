@@ -1,0 +1,64 @@
+{
+  "displayTimeUnit": "ms",
+  "traceEvents": [
+    {
+      "name": "agent_request",
+      "cat": "agent",
+      "ph": "X",
+      "ts": 1000000,
+      "dur": 50000,
+      "pid": 1,
+      "tid": 1,
+      "args": {
+        "request_id": 42
+      }
+    },
+
+    {
+      "name": "heap_used_bytes",
+      "cat": "memory",
+      "ph": "C",
+      "ts": 1000000,
+      "pid": 1,
+      "tid": 0,
+      "args": {
+        "value": 184320
+      }
+    },
+    {
+      "name": "heap_used_bytes",
+      "cat": "memory",
+      "ph": "C",
+      "ts": 1020000,
+      "pid": 1,
+      "tid": 0,
+      "args": {
+        "value": 231424
+      }
+    },
+    {
+      "name": "heap_used_bytes",
+      "cat": "memory",
+      "ph": "C",
+      "ts": 1050000,
+      "pid": 1,
+      "tid": 0,
+      "args": {
+        "value": 196608
+      }
+    },
+
+    {
+      "name": "gc",
+      "cat": "memory",
+      "ph": "I",
+      "s": "p",
+      "ts": 1045000,
+      "pid": 1,
+      "tid": 0,
+      "args": {
+        "reason": "low_memory"
+      }
+    }
+  ]
+}

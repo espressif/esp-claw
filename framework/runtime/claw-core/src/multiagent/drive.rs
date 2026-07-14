@@ -56,15 +56,15 @@ where
             self.slots.has_running_root(),
             self.slots.has_running_background(),
         );
-        if scheduled != MultiagentWork::None {
-            return scheduled;
+        if scheduled == MultiagentWork::Root {
+            return MultiagentWork::Root;
         }
         let Some(root) = root else {
-            return MultiagentWork::None;
+            return scheduled;
         };
         if self.slots.has_inbox(root) {
             MultiagentWork::Root
-        } else if self.slots.has_inbox_except(root) {
+        } else if scheduled == MultiagentWork::Background || self.slots.has_inbox_except(root) {
             MultiagentWork::Background
         } else {
             MultiagentWork::None
@@ -76,11 +76,11 @@ where
         self.slots.first_inbox_origin(root)
     }
 
-    pub(crate) fn activate_pending_root_result(&mut self) -> bool {
+    pub(crate) fn activate_pending_root_results(&mut self) -> bool {
         let Some(root) = self.state.get().root() else {
             return false;
         };
-        if !self.slots.activate_next_message(root) {
+        if !self.slots.activate_inbox(root) {
             return false;
         }
         self.enqueue(root);
@@ -357,7 +357,7 @@ where
             if (include_root || Some(id) != root)
                 && self.state.get().contains(id)
                 && !self.state.get().is_awaiting_approval(id)
-                && self.slots.activate_next_message(id)
+                && self.slots.activate_inbox(id)
             {
                 self.enqueue(id);
             }
@@ -371,7 +371,23 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
+    use std::sync::{Arc, RwLock};
+
+    use claw_interface::{ImmediateTimer, MemFs, RealHttp};
+    use claw_tool::ToolRegistry;
+
+    use super::super::model::SubagentResult;
+    use super::super::{
+        AgentIdAllocator, AgentPlacement, MultiagentRuntime, MultiagentState, MultiagentWork,
+        ROOT_AGENT_KIND,
+    };
     use super::DriveOutput;
+    use crate::agent::FsAgentFactory;
+    use crate::config::ClawApiManager;
+    use crate::protocol::{AgentId, AgentKind, Message, SessionId, SessionPersistence};
+
+    type TestRuntime = MultiagentRuntime<MemFs, RealHttp, ImmediateTimer>;
 
     #[test]
     fn drive_output_owns_only_messages_that_still_need_emission() {
@@ -382,5 +398,87 @@ mod tests {
             output.into_messages(),
             vec!["first".to_owned(), "second".to_owned()]
         );
+    }
+
+    #[test]
+    fn idle_root_inbox_has_priority_over_other_background_work() {
+        let (mut runtime, root, child) = runtime_with_root_and_child();
+        runtime.enqueue(child);
+        assert!(runtime
+            .slots
+            .deliver_child_result(
+                root,
+                SubagentResult::new(child, "finished".to_owned(), true),
+            )
+            .is_some());
+
+        assert_eq!(runtime.work(), MultiagentWork::Root);
+    }
+
+    #[test]
+    fn activating_root_inbox_drains_every_queued_result() {
+        let (mut runtime, root, child) = runtime_with_root_and_child();
+        for index in 0..3 {
+            assert!(runtime
+                .slots
+                .deliver_child_result(
+                    root,
+                    SubagentResult::new(child, format!("result-{index}"), true),
+                )
+                .is_some());
+        }
+
+        assert!(runtime.activate_pending_root_results());
+        assert!(!runtime.slots.has_inbox(root));
+    }
+
+    #[allow(clippy::arc_with_non_send_sync)]
+    fn runtime_with_root_and_child() -> (TestRuntime, AgentId, AgentId) {
+        MemFs::new();
+        let session = SessionId::new(1);
+        let factory = FsAgentFactory::new(
+            Arc::new(ToolRegistry::new()),
+            "/work-priority-test".to_owned(),
+            Vec::new(),
+            Arc::new(RwLock::new(ClawApiManager::new())),
+        )
+        .expect("test factory builds");
+        let mut runtime = MultiagentRuntime::new(
+            session,
+            Rc::new(factory),
+            AgentIdAllocator::new(),
+            MultiagentState::default(),
+        );
+        let root = AgentId::new(1);
+        let child = AgentId::new(2);
+        let root_kind = AgentKind::from_static(ROOT_AGENT_KIND);
+        let child_kind = AgentKind::from_static("worker");
+        runtime
+            .build_agent(
+                root,
+                &root_kind,
+                Message::text("root"),
+                AgentPlacement::Root {
+                    session,
+                    persistence: SessionPersistence::Ephemeral,
+                },
+                Vec::new(),
+            )
+            .expect("root builds");
+        assert!(runtime.state.get_mut().insert_root(root, root_kind));
+        runtime
+            .build_agent(
+                child,
+                &child_kind,
+                Message::text("child"),
+                AgentPlacement::Child(child),
+                Vec::new(),
+            )
+            .expect("child builds");
+        assert!(runtime
+            .state
+            .get_mut()
+            .insert_child(root, child, child_kind, None));
+        (runtime, root, child)
     }
 }

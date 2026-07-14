@@ -256,10 +256,10 @@ The child result completes that tool future and stays inside the current turn.
 continues while the session actor remains able to process control commands and,
 when no root turn is active, another user submission.
 
-The completed child result is appended to its parent's `AgentSlot` inbox. A
-result reaching the root opens a `TurnOrigin::Subagent` turn only at a legal
-turn boundary. If a user turn is active, the result remains queued until that
-turn ends; root turns never overlap.
+The completed child result is appended to its parent's `AgentSlot` inbox. If a
+root turn is active, the result becomes the root's next input inside that same
+turn, before `TurnEnded`. If the root is idle with no active turn, the result
+wakes it and opens a `TurnOrigin::Subagent` turn. Root turns never overlap.
 
 ### Followup
 

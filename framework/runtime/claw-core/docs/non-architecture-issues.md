@@ -64,6 +64,8 @@ Priorities in this document mean:
 | `NAR-021` | P0 | Tests | The tool-registry fixture expects an obsolete duplicate-tool error fragment. |
 | `NAR-022` | P0 | Persistence | Tool-registry checkpoint timing/state assertions disagree with persisted output. |
 | `NAR-023` | P1 | Tracing | Streaming iteration chat spans do not contain the attempt span required by the trace test. |
+| `NAR-026` | P1 | Tracing | Async sibling spans on one executor thread corrupt offline incremental-context reconstruction. |
+| `NAR-027` | P1 | Tracing | The Chrome exporter promotes every numeric event field to a counter track. |
 
 ## Behavior and Configuration Contracts
 
@@ -390,6 +392,68 @@ Current evidence:
 Exit condition: make streaming and non-streaming retry attempts obey the same
 structural trace contract, or explicitly narrow the test if streaming attempts
 are intentionally represented elsewhere.
+
+### NAR-026: async sibling spans corrupt reconstructed context
+
+`FlatTreeSubscriber` emits one `enter`/`exit` pair for each span's
+creation/destruction lifetime, not for each poll of an instrumented future. It
+also records an explicit `parent` edge for every span. The offline tree builder
+nevertheless reconstructs incremental context by replaying those lifetime
+records as a per-`task` LIFO stack.
+
+Concurrent sibling futures commonly share one executor thread, overlap in time,
+and finish out of LIFO order. Their lifetime records therefore do not form a
+stack. A later sibling can become the parser's apparent ancestor even when the
+recorded `parent` points to an earlier sibling. In the 2026-07-14 simulator
+capture, span 75 has `parent=67` (the `agent-2` span) but is exported with
+`agent-1`; parent-edge reconstruction disagrees with the current parser for 21
+of 137 spans and 10 of 94 events.
+
+Current evidence:
+
+- `framework/runtime/claw-log/docs/trace-format.md` defines lifetime-level
+  `enter`/`exit` records but also requires stack-based context reconstruction;
+- `framework/runtime/claw-log/scripts/claw_trace/tree.py` derives an entering
+  span's ancestor from the top of a per-task stack and unwinds that stack on
+  exit;
+- `framework/runtime/claw-log/scripts/tests/test_tree.py` covers only a strictly
+  nested, LIFO trace fixture;
+- `framework/runtime/claw-agent/simulator.log` contains the overlapping sibling
+  agent spans and the concrete parent edges described above.
+
+Exit condition: reconstruct each span's effective context from its explicit
+parent's effective context plus its own opened-context delta, and use an event's
+explicit span id for event context. Define deterministic handling for a missing
+parent, update the format documentation, and add a same-task async-sibling test
+whose spans overlap and close out of LIFO order without leaking context between
+siblings.
+
+### NAR-027: numeric event fields create spurious Chrome counter tracks
+
+The Chrome exporter emits an instant event for every trace event, then parses
+all numeric-looking `key=value` fields and emits an additional `ph=C` counter
+whenever it finds one. Numeric lifecycle attributes are not necessarily sampled
+metrics: `argument_bytes`, `output_bytes`, `text_bytes`, and one-off `count`
+fields describe individual events.
+
+The current `trace.json` contains 46 generated counter records named
+`arguments`, `completed`, `submit_accepted`, `subtree_deleted`, `tool_calls`, or
+`tool_round_completed`. Chrome/Perfetto renders these as separate counter
+tracks, producing the unrelated tracks visible beside the span timeline.
+
+Current evidence:
+
+- `framework/runtime/claw-log/scripts/chrome_export/__init__.py`
+  (`_event_events`, `_numeric`, and the unconditional counter conversion);
+- `framework/runtime/claw-log/scripts/tests/test_chrome.py`
+  (`test_numeric_event_fields_become_counter` codifies the broad heuristic);
+- `framework/runtime/trace.json` contains the 46 resulting `ph=C` records.
+
+Exit condition: require an explicit, structured counter/metric marker and emit
+`ph=C` only for opted-in metric events. Keep ordinary numeric fields in the
+instant event's arguments, add negative coverage for lifecycle events with
+numeric fields, retain positive coverage for an explicit RAM/gauge metric, and
+verify a regenerated simulator trace contains none of the spurious tracks above.
 
 ## Public API and CI
 

@@ -58,16 +58,39 @@ agent into the same slot; deleting the slot aborts and drops its running future.
 
 ## Turns and background work
 
-A session has at most one root-visible turn. `TurnOrigin` records why it began:
+A session has at most one root-visible turn:
 
-- `User`: accepted from `SessionControl::submit`;
-- `Subagent { agent }`: opened when a detached result reaches the root at a legal turn boundary.
+```text
+User Message
+  -> Open Turn(TurnOrigin::User)
+  -> Root Input
+  -> Root Iteration(s)
+  -> TurnEnded
+
+Background Result(s)
+  -> Root Inbox
+  -> Root Busy
+  -> Drain Root Inbox into Current Turn (no new Turn)
+  -> Root Iteration(s)
+  -> TurnEnded
+
+Background Result(s)
+  -> Root Inbox
+  -> Root Idle
+  -> Open Turn(TurnOrigin::Subagent)
+  -> Drain Root Inbox into New Turn
+  -> Root Iteration(s)
+  -> TurnEnded
+```
 
 `subagent_spawn(foreground: true)` keeps the current tool call and turn pending
 until the child completes. `foreground: false` returns the child id immediately.
 The session actor keeps polling that child in the background and may accept a
 new user turn while no root turn is active. Background results queue in the
-parent slot; they never create overlapping root turns.
+parent slot. A result reaching a busy root becomes its next input inside the
+active turn; a result reaching an idle root wakes it and opens a subagent-origin
+turn. At either boundary, every result already queued in that inbox is activated
+as one batch. They never create overlapping root turns.
 
 Followup is live-only. It aborts a running child at a safe boundary and delivers
 a new `Message` to the same in-memory agent. Completed children are removed;

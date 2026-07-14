@@ -157,16 +157,16 @@ impl<Http: ClawHttp, Timer: ClawTimer> AgentSlot<Http, Timer> {
         true
     }
 
-    fn activate_next_message(&mut self) -> bool {
-        let Some(message) = self.inbox.pop_front() else {
+    fn activate_inbox(&mut self) -> bool {
+        let Some(AgentExecution::Idle(agent)) = self.execution.as_mut() else {
             return false;
         };
-        let Some(agent) = self.idle_agent_mut() else {
-            self.inbox.push_front(message);
-            return false;
-        };
-        agent.activate_deferred_message(message);
-        true
+        let mut activated = false;
+        while let Some(message) = self.inbox.pop_front() {
+            agent.activate_deferred_message(message);
+            activated = true;
+        }
+        activated
     }
 
     fn deliver_child_result(&mut self, result: SubagentResult) -> AgentAvailability {
@@ -234,10 +234,10 @@ impl<Http: ClawHttp, Timer: ClawTimer> AgentSlots<Http, Timer> {
             .start(id, is_root, abort, future);
     }
 
-    pub(super) fn activate_next_message(&mut self, id: AgentId) -> bool {
+    pub(super) fn activate_inbox(&mut self, id: AgentId) -> bool {
         self.slots
             .get_mut(&id)
-            .is_some_and(AgentSlot::activate_next_message)
+            .is_some_and(AgentSlot::activate_inbox)
     }
 
     pub(super) fn deliver_child_result(

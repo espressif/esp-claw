@@ -54,7 +54,7 @@ fn subagent_lifecycle_csv_matrix_drives_background_results_and_graph_updates() {
         assert_turn(&delegated_turn, TurnId(1), TurnOrigin::User, &fixture.case);
         assert_eq!(
             iteration_ids(&delegated_turn),
-            vec![IterationId(0), IterationId(1)],
+            vec![IterationId(0), IterationId(1), IterationId(0)],
             "case {}",
             fixture.case
         );
@@ -66,24 +66,7 @@ fn subagent_lifecycle_csv_matrix_drives_background_results_and_graph_updates() {
         );
         assert_eq!(
             output_fragments(&delegated_turn),
-            vec![fixture.spawn_ack.clone()],
-            "case {}",
-            fixture.case
-        );
-
-        let child = recorded_child_id();
-        let background_turn = drain_until_turn_ended(&mut events);
-        assert_turn(
-            &background_turn,
-            TurnId(2),
-            TurnOrigin::Subagent { agent: child },
-            &fixture.case,
-        );
-        assert_eq!(iteration_ids(&background_turn), vec![IterationId(0)]);
-        assert!(tools_events(&background_turn).is_empty());
-        assert_eq!(
-            output_fragments(&background_turn),
-            vec![fixture.background_output.clone()],
+            vec![fixture.spawn_ack.clone(), fixture.background_output.clone()],
             "case {}",
             fixture.case
         );
@@ -92,7 +75,7 @@ fn subagent_lifecycle_csv_matrix_drives_background_results_and_graph_updates() {
         let supervision_turn = drain_until_turn_ended(&mut events);
         assert_turn(
             &supervision_turn,
-            TurnId(3),
+            TurnId(2),
             TurnOrigin::User,
             &fixture.case,
         );
