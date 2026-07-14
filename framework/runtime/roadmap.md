@@ -5,7 +5,7 @@
 - [x] keep everything else unchanged with master but not agent
 - [ ] better context management
 - [ ] cleaned up stale configuration
-- [ ] cleaned up sse bad designs
+- [x] cleaned up sse bad designs
 - [ ] cleaned up multiagent bugs
 - [ ] efficient checkpointing system
 - speeded up agent system perf

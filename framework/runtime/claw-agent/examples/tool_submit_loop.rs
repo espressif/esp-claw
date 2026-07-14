@@ -17,7 +17,7 @@
 //!   --target x86_64-unknown-linux-gnu
 //! ```
 
-use claw_agent::{AgentSystem, Message, SessionEvent, SessionPersistence};
+use claw_agent::{AgentSystem, Message, SessionEvent, SessionPersistence, StreamPart};
 use claw_api::{BackendKind, ClawApiConfig};
 use claw_interface::{
     BlockingHttpAdapter, ImmediateTimer, MemFs, SharedScriptHttp, StdThread, TokioExecutor,
@@ -112,12 +112,17 @@ async fn main() -> anyhow::Result<()> {
     let mut outputs = Vec::new();
     while let Some(event) = events.next().await {
         match event {
-            SessionEvent::Output { text } => {
+            SessionEvent::Output(StreamPart::Delta(text)) => {
                 println!("  > {text}");
                 outputs.push(text);
             }
-            SessionEvent::Reasoning { text } => println!("  [thinking] {text}"),
-            SessionEvent::ToolCall { name } => println!("  [tools] {name}"),
+            SessionEvent::Reasoning(StreamPart::Delta(text)) => println!("  [thinking] {text}"),
+            SessionEvent::ToolCalls(StreamPart::Delta(call)) => {
+                println!("  [tools] {}", call.name)
+            }
+            SessionEvent::Reasoning(StreamPart::End)
+            | SessionEvent::Output(StreamPart::End)
+            | SessionEvent::ToolCalls(StreamPart::End) => {}
             SessionEvent::Error { message } => println!("  [error] {message}"),
             SessionEvent::TurnEnded { .. } => break,
             other => println!("  [{other:?}]"),

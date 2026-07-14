@@ -5,7 +5,7 @@ use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use strum::IntoStaticStr;
 use tracing::Instrument as _;
 
-use crate::event::{EventSink, SessionEvent};
+use crate::event::{EventSink, SessionEvent, StreamPart};
 use crate::orchestrator::ReasoningEffort;
 use crate::session::{Message, SessionId, SessionPersistence};
 
@@ -174,9 +174,14 @@ where
     ) -> DriveStop {
         match result {
             Ok((output, stop)) => {
+                let mut emitted = false;
                 for text in output.into_messages() {
                     tracing::info!(name: "output", text_bytes = text.len() as u64);
-                    events.emit(SessionEvent::Output { text });
+                    events.emit(SessionEvent::Output(StreamPart::Delta(text)));
+                    emitted = true;
+                }
+                if emitted {
+                    events.emit(SessionEvent::Output(StreamPart::End));
                 }
                 stop
             }

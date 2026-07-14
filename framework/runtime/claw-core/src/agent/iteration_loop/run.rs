@@ -1,12 +1,12 @@
 use tracing::Instrument as _;
 
-use claw_api::{ChatRequest, LlmDelta};
+use claw_api::{ChatRequest, LlmDelta, ToolCall};
 use claw_interface::http::StreamingHttp;
 use claw_interface::{Cancel, ClawHttp, ClawTimer};
 use claw_tool::ToolRunner;
 use futures_lite::StreamExt;
 
-use crate::event::{EventSink, SessionEvent};
+use crate::event::{EventSink, SessionEvent, StreamPart};
 
 use super::tool_round::{append_assistant_tool_calls, run_tool_calls, ToolRoundResult};
 use super::types::{
@@ -20,10 +20,76 @@ use super::IterationLoop;
 /// exit path closes the bracket its [`SessionEvent::IterationStarted`] opened.
 struct IterationBracket<'a> {
     events: &'a EventSink,
+    phase: ContentPhase,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ContentPhase {
+    Reasoning,
+    Output,
+    ToolCalls,
+    Ended,
+}
+
+impl<'a> IterationBracket<'a> {
+    fn new(events: &'a EventSink) -> Self {
+        Self {
+            events,
+            phase: ContentPhase::Reasoning,
+        }
+    }
+
+    fn emit_reasoning_fragment(&mut self, fragment: &str, emitted: &mut usize) {
+        debug_assert_eq!(self.phase, ContentPhase::Reasoning);
+        self.events.emit_reasoning_fragment(fragment, emitted);
+    }
+
+    fn emit_output(&mut self, text: String) {
+        self.finish_reasoning();
+        debug_assert_eq!(self.phase, ContentPhase::Output);
+        self.events
+            .emit(SessionEvent::Output(StreamPart::Delta(text)));
+    }
+
+    fn emit_tool_call(&mut self, call: ToolCall) {
+        self.finish_reasoning();
+        self.finish_output();
+        debug_assert_eq!(self.phase, ContentPhase::ToolCalls);
+        self.events
+            .emit(SessionEvent::ToolCalls(StreamPart::Delta(call)));
+    }
+
+    fn finish_content(&mut self) {
+        self.finish_reasoning();
+        self.finish_output();
+        self.finish_tool_calls();
+    }
+
+    fn finish_reasoning(&mut self) {
+        if self.phase == ContentPhase::Reasoning {
+            self.events.emit(SessionEvent::Reasoning(StreamPart::End));
+            self.phase = ContentPhase::Output;
+        }
+    }
+
+    fn finish_output(&mut self) {
+        if self.phase == ContentPhase::Output {
+            self.events.emit(SessionEvent::Output(StreamPart::End));
+            self.phase = ContentPhase::ToolCalls;
+        }
+    }
+
+    fn finish_tool_calls(&mut self) {
+        if self.phase == ContentPhase::ToolCalls {
+            self.events.emit(SessionEvent::ToolCalls(StreamPart::End));
+            self.phase = ContentPhase::Ended;
+        }
+    }
 }
 
 impl Drop for IterationBracket<'_> {
     fn drop(&mut self) {
+        self.finish_content();
         self.events.emit(SessionEvent::IterationEnded);
     }
 }
@@ -47,7 +113,7 @@ async fn run_one_iteration<H: ClawHttp + StreamingHttp, Timer: ClawTimer>(
     events.emit(SessionEvent::IterationStarted {
         iteration: iteration_id,
     });
-    let _bracket = IterationBracket { events };
+    let mut bracket = IterationBracket::new(events);
     let mut appended = AppendedMessages::empty();
 
     if let Some(outcome) = check_preempt_at_checkpoint(
@@ -108,13 +174,22 @@ async fn run_one_iteration<H: ClawHttp + StreamingHttp, Timer: ClawTimer>(
             };
             match next {
                 Some(Ok(LlmDelta::Reasoning(text))) => {
-                    events.emit_reasoning_fragment(&text, &mut reasoning_emitted);
+                    bracket.emit_reasoning_fragment(&text, &mut reasoning_emitted);
                 }
                 Some(Ok(LlmDelta::Output(text))) => {
-                    events.emit(SessionEvent::Output { text });
+                    bracket.emit_output(text);
                 }
-                Some(Ok(LlmDelta::ToolCall { name, .. })) => {
-                    events.emit(SessionEvent::ToolCall { name });
+                Some(Ok(LlmDelta::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                    ..
+                })) => {
+                    bracket.emit_tool_call(ToolCall {
+                        id,
+                        name,
+                        arguments_json: arguments,
+                    });
                 }
                 Some(Err(llm_err)) => return interpret_chat_error(llm_err),
                 None => break,
@@ -127,6 +202,7 @@ async fn run_one_iteration<H: ClawHttp + StreamingHttp, Timer: ClawTimer>(
             None => return interpret_chat_error(claw_api::ChatError::truncated_stream()),
         }
     };
+    bracket.finish_content();
 
     #[cfg(feature = "cache_profile")]
     if let Some(usage) = llm_response.usage {
@@ -209,5 +285,50 @@ async fn run_one_iteration<H: ClawHttp + StreamingHttp, Timer: ClawTimer>(
             tracing::warn!(name: "preempted", checkpoint = "before_tool");
             Ok(IterationOutcome::Preempted(outcome))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use claw_api::ToolCall;
+
+    use crate::event::{EventSink, SessionEvent, StreamPart};
+
+    use super::IterationBracket;
+
+    #[test]
+    fn iteration_bracket_closes_skipped_content_streams_in_order() {
+        let (sender, receiver) = async_channel::unbounded();
+        let events = EventSink::new(sender);
+        {
+            let mut bracket = IterationBracket::new(&events);
+            let mut reasoning_emitted = 0;
+            bracket.emit_reasoning_fragment("thinking", &mut reasoning_emitted);
+            bracket.emit_tool_call(ToolCall {
+                id: "call-1".to_string(),
+                name: "search".to_string(),
+                arguments_json: r#"{"query":"rust"}"#.to_string(),
+            });
+        }
+
+        let mut actual = Vec::new();
+        while let Ok(event) = receiver.try_recv() {
+            actual.push(event);
+        }
+        assert_eq!(
+            actual,
+            vec![
+                SessionEvent::Reasoning(StreamPart::Delta("thinking".to_string())),
+                SessionEvent::Reasoning(StreamPart::End),
+                SessionEvent::Output(StreamPart::End),
+                SessionEvent::ToolCalls(StreamPart::Delta(ToolCall {
+                    id: "call-1".to_string(),
+                    name: "search".to_string(),
+                    arguments_json: r#"{"query":"rust"}"#.to_string(),
+                })),
+                SessionEvent::ToolCalls(StreamPart::End),
+                SessionEvent::IterationEnded,
+            ]
+        );
     }
 }

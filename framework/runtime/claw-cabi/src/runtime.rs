@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use claw_agent::{
     AgentError, AgentPersistenceConfig, AgentSystem, OpenSessionError, SessionControl,
-    SessionControlError, SessionEvent, SessionEventStream, SessionId,
+    SessionControlError, SessionEvent, SessionEventStream, SessionId, StreamPart,
 };
 use claw_api::{BackendKind, ClawApiConfig};
 use claw_interface::{Cancel, ClawThread, ClawTimer, CoreAffinity, Priority};
@@ -26,9 +26,10 @@ use futures_lite::StreamExt;
 use crate::abi::{
     ClawAgentConfig, ClawAgentEvent, EspErr, CLAW_AGENT_EVENT_KIND_CLOSED,
     CLAW_AGENT_EVENT_KIND_DONE, CLAW_AGENT_EVENT_KIND_ERROR, CLAW_AGENT_EVENT_KIND_OUTPUT,
-    CLAW_AGENT_EVENT_KIND_REASONING, CLAW_AGENT_EVENT_KIND_TOOLS, ESP_ERR_INVALID_ARG,
-    ESP_ERR_INVALID_SIZE, ESP_ERR_INVALID_STATE, ESP_ERR_NOT_FOUND, ESP_ERR_TIMEOUT, ESP_FAIL,
-    ESP_OK,
+    CLAW_AGENT_EVENT_KIND_OUTPUT_END, CLAW_AGENT_EVENT_KIND_REASONING,
+    CLAW_AGENT_EVENT_KIND_REASONING_END, CLAW_AGENT_EVENT_KIND_TOOLS,
+    CLAW_AGENT_EVENT_KIND_TOOLS_END, ESP_ERR_INVALID_ARG, ESP_ERR_INVALID_SIZE,
+    ESP_ERR_INVALID_STATE, ESP_ERR_NOT_FOUND, ESP_ERR_TIMEOUT, ESP_FAIL, ESP_OK,
 };
 use crate::tool::register_capability_tools;
 
@@ -69,8 +70,11 @@ struct OpenSession {
 /// One event handed across the FFI, mapped from a [`SessionEvent`].
 enum FfiEvent {
     Output(String),
+    OutputEnd,
     Reasoning(String),
+    ReasoningEnd,
     Tools(String),
+    ToolsEnd,
     Done,
     Error(String),
     Closed,
@@ -87,9 +91,12 @@ impl FfiEvent {
 /// the puller skips it and pulls the next.
 fn map_event(event: SessionEvent) -> Option<FfiEvent> {
     match event {
-        SessionEvent::Output { text } => Some(FfiEvent::Output(text)),
-        SessionEvent::Reasoning { text } => Some(FfiEvent::Reasoning(text)),
-        SessionEvent::ToolCall { name } => Some(FfiEvent::Tools(name)),
+        SessionEvent::Output(StreamPart::Delta(text)) => Some(FfiEvent::Output(text)),
+        SessionEvent::Output(StreamPart::End) => Some(FfiEvent::OutputEnd),
+        SessionEvent::Reasoning(StreamPart::Delta(text)) => Some(FfiEvent::Reasoning(text)),
+        SessionEvent::Reasoning(StreamPart::End) => Some(FfiEvent::ReasoningEnd),
+        SessionEvent::ToolCalls(StreamPart::Delta(call)) => Some(FfiEvent::Tools(call.name)),
+        SessionEvent::ToolCalls(StreamPart::End) => Some(FfiEvent::ToolsEnd),
         SessionEvent::Error { message } => Some(FfiEvent::Error(message)),
         SessionEvent::TurnEnded { .. } => Some(FfiEvent::Done),
         SessionEvent::Closed => Some(FfiEvent::Closed),
@@ -598,8 +605,11 @@ fn runtime_mut() -> Result<&'static mut RuntimeController, CabiError> {
 fn write_event(out_event: &mut ClawAgentEvent, event: FfiEvent) -> Result<(), CabiError> {
     let (kind, text, error_message) = match event {
         FfiEvent::Output(text) => (CLAW_AGENT_EVENT_KIND_OUTPUT, Some(text), None),
+        FfiEvent::OutputEnd => (CLAW_AGENT_EVENT_KIND_OUTPUT_END, None, None),
         FfiEvent::Reasoning(text) => (CLAW_AGENT_EVENT_KIND_REASONING, Some(text), None),
+        FfiEvent::ReasoningEnd => (CLAW_AGENT_EVENT_KIND_REASONING_END, None, None),
         FfiEvent::Tools(text) => (CLAW_AGENT_EVENT_KIND_TOOLS, Some(text), None),
+        FfiEvent::ToolsEnd => (CLAW_AGENT_EVENT_KIND_TOOLS_END, None, None),
         FfiEvent::Done => (CLAW_AGENT_EVENT_KIND_DONE, None, None),
         FfiEvent::Error(message) => (CLAW_AGENT_EVENT_KIND_ERROR, None, Some(message)),
         FfiEvent::Closed => (CLAW_AGENT_EVENT_KIND_CLOSED, None, None),

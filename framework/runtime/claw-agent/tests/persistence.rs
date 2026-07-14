@@ -9,7 +9,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use claw_agent::{
     AgentError, AgentSystem, Message, OpenSessionError, SessionEvent, SessionId,
-    SessionPersistence, TurnId,
+    SessionPersistence, StreamPart, TurnId,
 };
 use claw_checkpoint::{
     BatchId, BatchWrite, ChangePatternHint, Checkpoint, CheckpointStorage, CheckpointWrite,
@@ -314,7 +314,7 @@ fn session_transcript_history_survives_disk_rebuild_and_reenters_llm_context() {
         let events = drain_until_turn_ended(&mut events);
         assert!(events
             .iter()
-            .any(|event| matches!(event, SessionEvent::Output { text } if text == "first persisted reply")));
+            .any(|event| matches!(event, SessionEvent::Output(StreamPart::Delta(text)) if text == "first persisted reply")));
         assert_disk_file_contains(&root, "transcript/1.jsonl", "first persisted user");
         assert_disk_file_contains(&root, "transcript/1.jsonl", "first persisted reply");
         session
@@ -333,7 +333,7 @@ fn session_transcript_history_survives_disk_rebuild_and_reenters_llm_context() {
     );
     assert!(events
         .iter()
-        .any(|event| matches!(event, SessionEvent::Output { text } if text == "second reply")));
+        .any(|event| matches!(event, SessionEvent::Output(StreamPart::Delta(text)) if text == "second reply")));
 
     let requests = recording_requests().clone();
     assert_eq!(requests.len(), 1, "expected one visible root LLM request");
@@ -361,7 +361,7 @@ fn corrupt_transcript_index_rebuilds_from_data_log_after_disk_rebuild() {
         block_on(control.submit(Message::text("user before index corruption"))).unwrap();
         let events = drain_until_turn_ended(&mut events);
         assert!(events.iter().any(
-            |event| matches!(event, SessionEvent::Output { text } if text == "reply before index corruption")
+            |event| matches!(event, SessionEvent::Output(StreamPart::Delta(text)) if text == "reply before index corruption")
         ));
         assert_disk_json_parses(&root, "transcript/1.json");
         DiskFs::write_atomic(&index_path, b"{not valid json").unwrap();
@@ -381,7 +381,7 @@ fn corrupt_transcript_index_rebuilds_from_data_log_after_disk_rebuild() {
     );
     assert!(events
         .iter()
-        .any(|event| matches!(event, SessionEvent::Output { text } if text == "reply after index rebuild")));
+        .any(|event| matches!(event, SessionEvent::Output(StreamPart::Delta(text)) if text == "reply after index rebuild")));
 
     let requests = recording_requests().clone();
     assert_eq!(requests.len(), 1, "expected one visible root LLM request");
@@ -405,7 +405,7 @@ fn deleted_session_does_not_reappear_after_disk_rebuild() {
             block_on(control.submit(Message::text("persist before delete"))).unwrap();
             let events = drain_until_turn_ended(&mut events);
             assert!(events.iter().any(
-                |event| matches!(event, SessionEvent::Output { text } if text == "before delete")
+                |event| matches!(event, SessionEvent::Output(StreamPart::Delta(text)) if text == "before delete")
             ));
         }
         system.delete_session(session).unwrap();

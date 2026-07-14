@@ -34,22 +34,26 @@ pub struct ClawAgentConfig {
 /// Event kinds delivered by `claw_agent_session_receive`, one event per call.
 ///
 /// `OUTPUT`/`REASONING`/`TOOLS` are content events: `text` carries an append
-/// fragment (concatenate across events) — assistant-visible text, truncated
-/// thinking text, or comma-joined tool names respectively. `DONE` marks one
-/// root-visible turn ending; the session stream stays open. `ERROR` carries
-/// `error_message`. `CLOSED` is terminal for the open session stream.
+/// fragment (or one complete tool-call name). Their matching `_END` event
+/// explicitly closes that content stream. `DONE` marks one root-visible turn
+/// ending; the session stream stays open. `ERROR` carries `error_message`.
+/// `CLOSED` is terminal for the open session stream.
 pub const CLAW_AGENT_EVENT_KIND_OUTPUT: c_int = 0;
 pub const CLAW_AGENT_EVENT_KIND_REASONING: c_int = 1;
 pub const CLAW_AGENT_EVENT_KIND_TOOLS: c_int = 2;
 pub const CLAW_AGENT_EVENT_KIND_DONE: c_int = 3;
 pub const CLAW_AGENT_EVENT_KIND_ERROR: c_int = 4;
 pub const CLAW_AGENT_EVENT_KIND_CLOSED: c_int = 5;
+pub const CLAW_AGENT_EVENT_KIND_OUTPUT_END: c_int = 6;
+pub const CLAW_AGENT_EVENT_KIND_REASONING_END: c_int = 7;
+pub const CLAW_AGENT_EVENT_KIND_TOOLS_END: c_int = 8;
 
 #[repr(C)]
 pub struct ClawAgentEvent {
     pub kind: c_int,
     /// Owned UTF-8 fragment for content events (`OUTPUT`/`REASONING`/`TOOLS`);
-    /// null for `DONE`/`ERROR`. Released by `claw_agent_event_free`.
+    /// null for `_END`, `DONE`, and `ERROR`. Released by
+    /// `claw_agent_event_free`.
     pub text: *mut c_char,
     /// Owned UTF-8 message for `ERROR`; null otherwise. Released by
     /// `claw_agent_event_free`.

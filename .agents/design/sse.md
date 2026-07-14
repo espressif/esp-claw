@@ -1,181 +1,127 @@
-# Submit Event Stream (SSE-ready)
+# Session Event Stream (SSE-ready)
 
-`Orchestrator::submit` returns an async `Stream` of `AgentEvent` instead of a
-single `DriveOutput`. The caller just keeps pulling until the stream ends. The
-event vocabulary is shaped so a future token-level SSE transport slots in
-without changing the enum or the caller.
+`AgentSystem::open_session` returns a [`SessionControl`, `SessionEventStream`]
+pair. The stream remains open across submits; each submit creates one turn on
+that stream. Pulling `SessionEventStream` drives the session and yields events as
+they happen.
 
 ## Event model
 
 ```rust
-pub enum AgentEvent {
-    TurnStarted,
+pub enum StreamPart<T> {
+    Delta(T),
+    End,
+}
+
+pub enum SessionEvent {
+    TurnStarted { turn: TurnId },
     IterationStarted { iteration: IterationId },
 
-    // Content: exclusive (one kind per event). `text` is an *append fragment*:
-    // non-streaming emits one fragment = the whole string; future SSE emits many.
-    Reasoning { text: String },        // model thinking, truncated to the cfg limit
-    Output    { text: String },        // assistant-visible text, untruncated
-    Tools     { names: Vec<String> },  // tool names invoked this iteration
+    Reasoning(StreamPart<String>),
+    Output(StreamPart<String>),
+    ToolCalls(StreamPart<ToolCall>),
 
     IterationEnded,
-    TurnEnded,
-
-    Error { message: String },         // this submit failed
+    TurnEnded { turn: TurnId },
+    Error { message: String },
+    Closed,
 }
 ```
 
-- No `session` / `turn` fields: one `submit` == one session == one turn, so the
-  stream itself is that scope.
-- No `agent` / `depth` fields: only the **root** agent is externally visible
-  (see scope), and a root's iterations are sequential, so there is no
-  interleaving to disambiguate.
-- `iteration` id is emitted **once**, on `IterationStarted`. The following
-  `Reasoning` / `Output` / `Tools` / `IterationEnded` belong to it by position
-  (the open `IterationStarted..IterationEnded` bracket).
-- No separate `Reply` variant: every assistant-visible reply is an `Output`
-  (see the emission table for the sources folded into it).
+`Reasoning` and `Output` deltas are append fragments. Each `ToolCalls` delta is
+one complete `ToolCall`, including its provider id, name, and complete JSON
+arguments. `End` is a boundary event, not a success or error status.
 
-## Definitions
+## Iteration ordering
 
-```
-turn      = one submit = one delivered user message = one drive cycle
-iteration = one LLM request/response round-trip (+ that round's tool execution)
-```
+The three content streams are contiguous and explicitly closed in every root
+LLM iteration:
 
-A turn contains one or more iterations; the loop runs iterations until a round
-returns a plain-text answer (no tools) or ends the conversation.
-
-```
-TurnStarted
-  IterationStarted{it:1}  Reasoning  Tools   IterationEnded   // tool round
-  IterationStarted{it:2}  Reasoning          IterationEnded   // final LLM round
-  Output                                                      // routed answer (turn-level)
-TurnEnded
+```text
+IterationStarted
+  Reasoning(Delta)*
+  Reasoning(End)
+  Output(Delta)*
+  Output(End)
+  ToolCalls(Delta)*
+  ToolCalls(End)
+IterationEnded
 ```
 
-`Reasoning` / `Tools` are **in-bracket** (emitted from the LLM round). `Output`
-is **turn-level**: it is the *routed* reply, produced after a round yields, so it
-appears after that round's `IterationEnded`. Consumers treat `Output` as "the
-assistant-visible text of this turn" (concatenate); they do not depend on it
-sitting inside a bracket. (Under SSE the final answer's `Output` would move into
-the closing iteration's bracket as token fragments — see forward-compat.)
+Exactly one `End` is emitted for each content kind, including a kind with no
+deltas. A caller therefore never has to infer that reasoning, output, or tool
+calls ended from the next event or from `IterationEnded`.
 
-Code anchors: `BaseAgent::tick` = one iteration (`IterationLoop::run` once); a
-tool round returns `TickOutcome::Working` (loop again = next iteration); a
-plain-text round returns `TickOutcome::Yielded` (turn ends). `instance.turn`
-counts turns.
+The lower-level `LlmDelta` contract has the same monotonic ordering. A tool call
+is emitted only after all of its arguments have arrived, so `ToolCalls(Delta)`
+never contains a partial call. The content `End` events are emitted as soon as
+the LLM stream finishes and before tool execution. `IterationEnded` is emitted
+after the rest of the iteration finishes. Error, cancellation, and interruption
+paths still close every open content stream before `IterationEnded`.
 
-## Ordering (what SSE actually delivers)
+## Turn ordering
 
-Within **one** API request/response, parts are monotonic and non-interleaving:
+One long-lived session stream can carry multiple turns:
 
+```text
+TurnStarted { turn: 1 }
+  IterationStarted { iteration: 1 }
+    Reasoning(Delta("..."))
+    Reasoning(End)
+    Output(End)
+    ToolCalls(Delta(call))
+    ToolCalls(End)
+  IterationEnded
+  IterationStarted { iteration: 2 }
+    Reasoning(End)
+    Output(Delta("done"))
+    Output(End)
+    ToolCalls(End)
+  IterationEnded
+TurnEnded { turn: 1 }
+
+TurnStarted { turn: 2 }
+  ...
+TurnEnded { turn: 2 }
+
+Closed
 ```
-reasoning (one contiguous run, always first)  ->  msg?  ->  tools?
-```
 
-- `reasoning` is first and never returns after `msg`/`tools` start (same
-  request). "reasoning again after a tool" only happens in the **next**
-  iteration (a new request, after tool results are fed back).
-- `msg` and `tools` may **both** be present in one request (model speaks, then
-  calls tools); when both, `msg` precedes `tools`. They never co-occur at the
-  same instant — SSE streams them sequentially (OpenAI/DeepSeek switch fields;
-  Anthropic emits separate typed content blocks).
-- Non-streaming today: the full `LlmResponse` carries all present fields at once
-  (an accumulated snapshot); we emit them in the same order as separate events,
-  so the consumer sees an ordering identical to the streaming case.
+Messages synthesized outside the LLM stream, such as approval prompts,
+clarifications, terminal tool messages, and failure text, are also emitted as
+`Output(Delta)*` followed by `Output(End)`. They can appear at turn scope rather
+than inside an iteration. `Closed` is terminal for the session stream;
+`TurnEnded` is not.
 
-## SSE forward-compatibility
+## Scope and ownership
 
-The hook is left open without adding fields:
+Only root-agent iterations are externally visible. Subagent events use a
+disabled sink and remain internal. Root iterations are sequential, so the
+`IterationStarted..IterationEnded` bracket supplies enough scope for content
+events without repeating agent or iteration ids on every delta.
 
-1. **Content `text` = append fragment.** One-shot = a single fragment (the whole
-   string); streaming = many fragments the consumer concatenates. `reasoning`
-   truncation applies to the accumulated length.
-2. **`Tools` carries only names.** Tool-call names arrive early in a stream
-   (first chunk / block start); arguments stream later. Exposing arguments later
-   is an additive `ToolArgs*` event, not a change here.
-3. **Emission point moves down, links stay.** Today `Reasoning`/`Tools` are
-   emitted from the full `LlmResponse` in `IterationLoop`, and the final answer's
-   `Output` is emitted one level up when the round is routed. Under SSE, both
-   emissions move into the transport's SSE parse loop (`claw-api` backend) — the
-   answer's `Output` then lands inside the closing iteration's bracket as token
-   fragments. The sink plumbing and the outward `Stream` are unchanged.
+The iteration loop owns LLM deltas and their three content boundaries. The
+orchestrator owns turn boundaries and output synthesized outside the LLM
+stream. The outward `SessionEventStream` wraps the session receiver and is the
+only public read side.
 
-## Emission (root only)
+Reasoning is capped by the selected compile-time feature
+(`reasoning_short`/`reasoning_medium`/`reasoning_long`) across all reasoning
+deltas in one iteration. Output and tool calls are not truncated.
 
-| Event | When |
+## C ABI mapping
+
+The C ABI preserves the existing content event numbers and adds explicit end
+kinds:
+
+| Rust event | C event kind |
 |---|---|
-| `TurnStarted` / `TurnEnded` | first/last of one drive (one submit) |
-| `IterationStarted` / `IterationEnded` | first/last of each root LLM round |
-| `Reasoning` | root round's `LlmResponse.reasoning_content` (if any; cfg-truncated) |
-| `Tools` | tool-call names of a root tool round |
-| `Output` | root plain-text answer, `end_conversation` closing message, approval prompt, clarification |
-| `Error` | task failure (`TickOutcome::Failed`) or submit precondition error (session not found) |
+| `Output(Delta(text))` | `CLAW_AGENT_EVENT_KIND_OUTPUT` |
+| `Output(End)` | `CLAW_AGENT_EVENT_KIND_OUTPUT_END` |
+| `Reasoning(Delta(text))` | `CLAW_AGENT_EVENT_KIND_REASONING` |
+| `Reasoning(End)` | `CLAW_AGENT_EVENT_KIND_REASONING_END` |
+| `ToolCalls(Delta(call))` | `CLAW_AGENT_EVENT_KIND_TOOLS` |
+| `ToolCalls(End)` | `CLAW_AGENT_EVENT_KIND_TOOLS_END` |
 
-Not emitted (deliberately out of scope for now): a tool round's assistant
-preamble text. Subagent events are never emitted (subagents are internal; their
-output is not externally visible).
-
-## Layering
-
-```
-IterationLoop (L3)  emits IterationStarted/Reasoning/Tools/IterationEnded via a
-                    sink; it knows the iteration, not session/agent. (No Output:
-                    the answer is a routed reply, emitted one level up.)
-BaseAgent     (L2)  forwards the sink into IterationLoop (via Agent::tick).
-instance      (L1)  hands an *active* sink only to the root agent's tick
-                    (subagents get a no-op sink), so only root events reach the
-                    stream. Stamps nothing extra (root is implicit).
-orchestrator        opens TurnStarted, emits every routed root reply as Output
-                    (plain answer / end / approval / clarify), Error on failure,
-                    closes TurnEnded; owns the outward Stream.
-```
-
-The sink is an `async-channel::Sender<AgentEvent>` wrapper that is a no-op when
-disabled (subagents). Reasoning truncation is a compile-time constant, not a
-field it carries. The outward `Stream` is the paired `Receiver`
-(`async-channel::Receiver` implements `Stream`).
-
-## Implementation status
-
-Landed (full stack):
-
-- `AgentEvent` + `EventSink` (`claw-core/src/event.rs`). Reasoning is truncated to
-  the compile-time `REASONING_EVENT_LIMIT` (selected by the mutually-exclusive
-  `reasoning_short` / `reasoning_medium` / `reasoning_long` Cargo features,
-  default `reasoning_short`) via `claw_utils::TruncatedText`.
-- `Orchestrator::submit(self: &Arc<Self>, ..) -> SubmitStream`. Each submit owns
-  one `async-channel`; the session shares one drive future (`Rc<RefCell<..>>`)
-  that every live `SubmitStream` cooperatively advances. `TurnStarted`, `Output`
-  (from every routed `RootReply`), `Error` (drive error / unknown session /
-  superseded), and `TurnEnded` are emitted at the turn level.
-- Iteration-level events: `&EventSink` is threaded `Agent::tick` → `BaseAgent` →
-  `IterationLoop`, which emits `IterationStarted` (once, at the top), `Reasoning`
-  (from `LlmResponse.reasoning_content`), `Tools` (root tool-round names), and
-  `IterationEnded` (a `Drop` guard closes the bracket on every exit path).
-  `instance` hands the live sink only to the **root** agent's tick; every subagent
-  (and the internal approval resolver) ticks with a disabled sink, so only the
-  root's iterations reach the stream.
-- Call sites updated: `claw_agent::AgentSystem::submit`, the CLI, and the example
-  drain the stream directly. The C FFI (`claw-cabi`) surfaces it **incrementally**:
-  `claw_agent_session_receive` returns one event per call as a `claw_agent_event_t`
-  (`OUTPUT`/`REASONING`/`TOOLS` content fragments, terminal `DONE`/`ERROR`), so a C
-  consumer streams a turn as it runs instead of blocking for the whole turn. See
-  `claw-cabi/include/claw_agent.h`.
-
-## Rules
-
-```rust
-// One submit -> one Stream -> one turn -> one session. Caller drains it.
-Orchestrator::submit(session, text, kind) -> impl Stream<Item = AgentEvent>
-
-// Content events are exclusive and ordered within an iteration.
-IterationStarted -> (Reasoning? -> Output? -> Tools?) -> IterationEnded
-
-// text fields are append fragments (concatenate); non-streaming = one fragment.
-// reasoning is truncated to the compile-time REASONING_EVENT_LIMIT; output is not.
-
-// Only the root agent is visible. Subagent iterations are never emitted.
-// iteration id appears once, on IterationStarted.
-```
+The current C payload for a tool call remains its name; Rust callers receive
+the complete `ToolCall`. End events have null `text` and `error_message`.

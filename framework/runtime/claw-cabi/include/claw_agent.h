@@ -42,12 +42,15 @@ typedef enum {
     CLAW_AGENT_EVENT_KIND_DONE = 3,   /* one root-visible turn finished */
     CLAW_AGENT_EVENT_KIND_ERROR = 4,  /* session work failed; see error_message */
     CLAW_AGENT_EVENT_KIND_CLOSED = 5, /* session stream closed; terminal */
+    CLAW_AGENT_EVENT_KIND_OUTPUT_END = 6,    /* current output stream ended */
+    CLAW_AGENT_EVENT_KIND_REASONING_END = 7, /* current reasoning stream ended */
+    CLAW_AGENT_EVENT_KIND_TOOLS_END = 8,     /* no more tool calls this iteration */
 } claw_agent_event_kind_t;
 
 typedef struct {
     claw_agent_event_kind_t kind;
     /* Owned UTF-8 fragment for content events (OUTPUT/REASONING/TOOLS); NULL for
-     * DONE/ERROR. Release with claw_agent_event_free. */
+     * *_END/DONE/ERROR. Release with claw_agent_event_free. */
     char *text;
     /* Owned UTF-8 message for ERROR; NULL otherwise. Release with
      * claw_agent_event_free. */

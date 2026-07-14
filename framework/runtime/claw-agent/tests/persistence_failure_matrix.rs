@@ -6,7 +6,7 @@ use support::Sse;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, MutexGuard};
 
-use claw_agent::{AgentSystem, Message, SessionEvent};
+use claw_agent::{AgentSystem, Message, SessionEvent, StreamPart};
 use claw_interface::{
     Cancel, ClawFs, ClawHttp, DiskFs, HttpJsonRequest, HttpResponse, HttpResponseFuture,
     HttpStatusCode, ImmediateTimer, StdThread, TokioExecutor,
@@ -153,7 +153,7 @@ fn assert_tool_error(root: &str, fixture: &Fixture) {
 
     assert!(
         events.iter().any(
-            |event| matches!(event, SessionEvent::Output { text } if text == &fixture.final_output)
+            |event| matches!(event, SessionEvent::Output(StreamPart::Delta(text)) if text == &fixture.final_output)
         ),
         "case {}: {events:?}",
         fixture.case

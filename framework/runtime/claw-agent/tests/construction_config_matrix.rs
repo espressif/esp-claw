@@ -5,7 +5,7 @@ use support::Sse;
 
 use std::collections::BTreeMap;
 
-use claw_agent::{AgentPersistenceConfig, AgentSystem, Message, SessionEvent};
+use claw_agent::{AgentPersistenceConfig, AgentSystem, Message, SessionEvent, StreamPart};
 use claw_api::{BackendKind, ClawApiConfig};
 use claw_interface::{
     Cancel, ClawHttp, DiskFs, HttpJsonRequest, HttpResponse, HttpResponseFuture, HttpStatusCode,
@@ -36,7 +36,7 @@ fn turn_without_linked_api_reports_not_configured() {
         events.iter().any(|event| {
             matches!(
                 event,
-                SessionEvent::Output { text } if text.contains("NotConfigured")
+                SessionEvent::Output(StreamPart::Delta(text)) if text.contains("NotConfigured")
             )
         }),
         "{events:?}"
@@ -179,7 +179,7 @@ fn assert_construction_case<System: ConstructionSystem>(
             let events = drain_until_turn_ended(&mut events);
             assert!(
                 events.iter().any(
-                    |event| matches!(event, SessionEvent::Output { text } if text == "construction-ok")
+                    |event| matches!(event, SessionEvent::Output(StreamPart::Delta(text)) if text == "construction-ok")
                 ),
                 "case {case}: {events:?}"
             );

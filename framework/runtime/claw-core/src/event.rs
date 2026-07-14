@@ -12,6 +12,8 @@
 use crate::agent::IterationId;
 use crate::session::TurnId;
 
+pub use claw_api::ToolCall;
+
 // The reasoning cap is a compile-time tier, not a runtime knob. Exactly one of
 // the mutually-exclusive `reasoning_short` / `reasoning_medium` / `reasoning_long`
 // Cargo features selects it; the default is `reasoning_short`. Reject zero or
@@ -50,16 +52,31 @@ const REASONING_EVENT_LIMIT: usize = 8_000;
 ))]
 const REASONING_EVENT_LIMIT: usize = 32_000;
 
+/// One incremental part of a typed content stream.
+///
+/// [`Delta`](Self::Delta) carries one append fragment or one complete item.
+/// [`End`](Self::End) explicitly closes that content stream, including streams
+/// that emitted no deltas.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StreamPart<T> {
+    /// One incremental fragment or complete list item.
+    Delta(T),
+    /// No more deltas will be emitted for this content stream.
+    End,
+}
+
 /// One item in a session's event stream.
 ///
 /// Content variants ([`Reasoning`](Self::Reasoning), [`Output`](Self::Output),
-/// [`ToolCall`](Self::ToolCall)) are mutually exclusive per event and, within one
-/// iteration, arrive in the order `reasoning -> output -> tool calls` (whichever
-/// are present), followed by diagnostic usage when cache profiling is enabled.
-/// `Reasoning`/`Output` `text` fields are **append fragments**
-/// (streaming emits many, non-streaming one holding the whole string); each
-/// tool call is emitted as its own complete [`ToolCall`](Self::ToolCall) event,
-/// in call order.
+/// [`ToolCalls`](Self::ToolCalls)) are mutually exclusive per event. Within one
+/// iteration they form three explicitly closed streams in this order:
+/// `Reasoning(Delta)* -> Reasoning(End) -> Output(Delta)* -> Output(End) ->
+/// ToolCalls(Delta)* -> ToolCalls(End)`. Diagnostic usage follows when cache
+/// profiling is enabled.
+/// `Reasoning`/`Output` deltas are **append fragments** (streaming emits many,
+/// non-streaming one holding the whole string). Each `ToolCalls` delta is one
+/// complete [`ToolCall`], in call order. Every content stream emits exactly one
+/// [`StreamPart::End`] per iteration, even when it emitted no deltas.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionEvent {
     /// A root-visible turn started.
@@ -73,22 +90,13 @@ pub enum SessionEvent {
         iteration: IterationId,
     },
     /// Model thinking text, truncated to the configured limit.
-    Reasoning {
-        /// A fragment of the reasoning text (concatenate across events).
-        text: String,
-    },
+    Reasoning(StreamPart<String>),
     /// Assistant-visible text: a plain-text answer, an `conversation_end` closing
     /// message, an approval prompt, or a clarification. Never truncated.
-    Output {
-        /// A fragment of the assistant-visible text (concatenate across events).
-        text: String,
-    },
-    /// One complete tool call the model requested this iteration. Emitted once
-    /// per call, in call order (after any `Output`).
-    ToolCall {
-        /// The tool name.
-        name: String,
-    },
+    Output(StreamPart<String>),
+    /// Complete tool calls requested by the model this iteration. Each delta is
+    /// one call; `End` means no more calls will be emitted for the iteration.
+    ToolCalls(StreamPart<ToolCall>),
     /// Provider token/cache counters for the completed LLM iteration.
     #[cfg(feature = "cache_profile")]
     Usage {
@@ -158,8 +166,8 @@ impl EventSink {
             return;
         }
         *emitted += end;
-        self.emit(SessionEvent::Reasoning {
-            text: fragment[..end].to_string(),
-        });
+        self.emit(SessionEvent::Reasoning(StreamPart::Delta(
+            fragment[..end].to_string(),
+        )));
     }
 }

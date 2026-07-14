@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
 
-use claw_agent::{AgentSystem, Message, SessionControlError, SessionEvent, TurnId};
+use claw_agent::{AgentSystem, Message, SessionControlError, SessionEvent, StreamPart, TurnId};
 use claw_interface::{
     Cancel, ClawFs, ClawHttp, FsError, HttpError, HttpJsonRequest, HttpResponse,
     HttpResponseFuture, HttpStatusCode, ImmediateTimer, MemFile, MemFs, StdThread, TokioExecutor,
@@ -319,7 +319,7 @@ fn output_fragments(events: &[SessionEvent]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match event {
-            SessionEvent::Output { text } => Some(text.clone()),
+            SessionEvent::Output(StreamPart::Delta(text)) => Some(text.clone()),
             _ => None,
         })
         .collect()

@@ -6,7 +6,9 @@ use support::Sse;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, MutexGuard};
 
-use claw_agent::{AgentPersistenceConfig, AgentSystem, IterationId, Message, SessionEvent, TurnId};
+use claw_agent::{
+    AgentPersistenceConfig, AgentSystem, IterationId, Message, SessionEvent, StreamPart, TurnId,
+};
 use claw_interface::{
     Cancel, ClawFs, ClawHttp, DiskFs, HttpJsonRequest, HttpResponse, HttpResponseFuture,
     HttpStatusCode, ImmediateTimer, StdThread, TokioExecutor,
@@ -383,7 +385,7 @@ fn tools_events(events: &[SessionEvent]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match event {
-            SessionEvent::ToolCall { name } => Some(name.clone()),
+            SessionEvent::ToolCalls(StreamPart::Delta(call)) => Some(call.name.clone()),
             _ => None,
         })
         .collect()
@@ -393,7 +395,7 @@ fn output_fragments(events: &[SessionEvent]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match event {
-            SessionEvent::Output { text } => Some(text.clone()),
+            SessionEvent::Output(StreamPart::Delta(text)) => Some(text.clone()),
             _ => None,
         })
         .collect()

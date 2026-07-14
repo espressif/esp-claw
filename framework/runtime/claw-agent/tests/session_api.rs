@@ -8,7 +8,7 @@ use core::pin::Pin;
 use core::task::{Context, Poll};
 
 use claw_agent::{AgentError, AgentSystem, Message, OpenSessionError, SessionControlError};
-use claw_agent::{SessionEvent, SessionEventStream, SessionId, TurnId};
+use claw_agent::{SessionEvent, SessionEventStream, SessionId, StreamPart, TurnId};
 use claw_interface::{
     BlockingHttpAdapter, Cancel, ClawHttp, HttpError, HttpJsonRequest, HttpResponseFuture,
     ImmediateTimer, MemFs, SharedScriptHttp, StdThread, TokioExecutor,
@@ -98,7 +98,7 @@ fn session_streams_root_reply_as_output() {
     let outputs: Vec<&str> = events
         .iter()
         .filter_map(|event| match event {
-            SessionEvent::Output { text } => Some(text.as_str()),
+            SessionEvent::Output(StreamPart::Delta(text)) => Some(text.as_str()),
             _ => None,
         })
         .collect();
@@ -139,14 +139,14 @@ fn second_submit_returns_busy_until_current_turn_ends() {
     });
     let first_events = drain_until_turn_ended(&mut events);
 
-    assert!(first_events
-        .iter()
-        .any(|event| matches!(event, SessionEvent::Output { text } if text == "first")));
+    assert!(first_events.iter().any(
+        |event| matches!(event, SessionEvent::Output(StreamPart::Delta(text)) if text == "first")
+    ));
     block_on(control.submit(Message::text("second"))).unwrap();
     let second_events = drain_until_turn_ended(&mut events);
-    assert!(second_events
-        .iter()
-        .any(|event| matches!(event, SessionEvent::Output { text } if text == "second")));
+    assert!(second_events.iter().any(
+        |event| matches!(event, SessionEvent::Output(StreamPart::Delta(text)) if text == "second")
+    ));
 }
 
 #[test]
@@ -194,7 +194,7 @@ fn close_session_cancels_active_work_and_closes_events() {
     assert!(
         !events
             .iter()
-            .any(|event| matches!(event, SessionEvent::Output { .. })),
+            .any(|event| matches!(event, SessionEvent::Output(StreamPart::Delta(_)))),
         "closed stream should be cancelled without output: {events:?}"
     );
     assert!(system.list_sessions().contains(&session));

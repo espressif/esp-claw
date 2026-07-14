@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use claw_agent::{
     AgentError, AgentSystem, IterationId, Message, OpenSessionError, SessionControlError,
-    SessionEvent, SessionEventStream, SessionId, TurnId,
+    SessionEvent, SessionEventStream, SessionId, StreamPart, TurnId,
 };
 use claw_checkpoint::DurablePart;
 use claw_interface::{
@@ -416,7 +416,7 @@ fn output_fragments(events: &[SessionEvent]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match event {
-            SessionEvent::Output { text } => Some(text.clone()),
+            SessionEvent::Output(StreamPart::Delta(text)) => Some(text.clone()),
             _ => None,
         })
         .collect()

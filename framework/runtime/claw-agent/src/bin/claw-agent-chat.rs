@@ -17,7 +17,7 @@ use anstyle::{AnsiColor, Style};
 use anyhow::{bail, Result};
 use claw_agent::{
     AgentPersistenceConfig, HostAgentSystem, Message, SessionControl, SessionEvent,
-    SessionEventStream, SessionPersistence,
+    SessionEventStream, SessionPersistence, StreamPart, ToolCall,
 };
 use claw_api::{ApiUsage, BackendKind, ClawApiConfig};
 use claw_interface::{StdThread, TokioExecutor};
@@ -53,60 +53,23 @@ impl ChatDriver {
             return false;
         }
         let mut saw_output = false;
-        let mut reasoning_open = false;
-        let mut reasoning_needs_newline = false;
-        let mut output_open = false;
-        let mut output_needs_newline = false;
+        let mut content = ContentRenderer::default();
         while let Some(event) = self.events.next().await {
             match event {
-                SessionEvent::Reasoning { text } => {
-                    print_reasoning_fragment(
-                        &text,
-                        &mut reasoning_open,
-                        &mut reasoning_needs_newline,
-                    );
-                }
-                SessionEvent::ToolCall { name } => {
-                    finish_reasoning_line(reasoning_open, reasoning_needs_newline);
-                    reasoning_open = false;
-                    reasoning_needs_newline = false;
-                    finish_output_line(output_open, output_needs_newline);
-                    output_open = false;
-                    output_needs_newline = false;
-                    print_event("tools", &name, EventStyle::Tools);
-                }
+                SessionEvent::Reasoning(part) => content.reasoning(part),
+                SessionEvent::Output(part) => saw_output |= content.output(part),
+                SessionEvent::ToolCalls(part) => content.tool_calls(part),
                 SessionEvent::Usage { usage } => {
                     accumulate_usage(&mut self.total_usage, usage);
-                    finish_reasoning_line(reasoning_open, reasoning_needs_newline);
-                    reasoning_open = false;
-                    reasoning_needs_newline = false;
-                    finish_output_line(output_open, output_needs_newline);
-                    output_open = false;
-                    output_needs_newline = false;
+                    content.finish();
                     print_event("usage", &format_usage(usage), EventStyle::Usage);
                 }
-                SessionEvent::Output { text } => {
-                    finish_reasoning_line(reasoning_open, reasoning_needs_newline);
-                    reasoning_open = false;
-                    reasoning_needs_newline = false;
-                    saw_output = true;
-                    output_open = true;
-                    output_needs_newline = !text.ends_with('\n');
-                    print!("{text}");
-                    let _ = io::stdout().flush();
-                }
                 SessionEvent::Error { message } => {
-                    finish_reasoning_line(reasoning_open, reasoning_needs_newline);
-                    reasoning_open = false;
-                    reasoning_needs_newline = false;
-                    finish_output_line(output_open, output_needs_newline);
-                    output_open = false;
-                    output_needs_newline = false;
+                    content.finish();
                     print_event("error", &message, EventStyle::Error)
                 }
                 SessionEvent::TurnEnded { .. } | SessionEvent::Closed => {
-                    finish_reasoning_line(reasoning_open, reasoning_needs_newline);
-                    finish_output_line(output_open, output_needs_newline);
+                    content.finish();
                     break;
                 }
                 SessionEvent::TurnStarted { .. }
@@ -118,38 +81,105 @@ impl ChatDriver {
     }
 }
 
-fn print_reasoning_fragment(
-    fragment: &str,
-    reasoning_open: &mut bool,
-    reasoning_needs_newline: &mut bool,
-) {
-    if fragment.is_empty() {
-        return;
-    }
-
-    let style = EventStyle::Thinking.style();
-    if !*reasoning_open {
-        eprint!("  {style}{:<5}{style:#}  ", "think");
-        *reasoning_open = true;
-    }
-    eprint!("{fragment}");
-    let _ = io::stderr().flush();
-    *reasoning_needs_newline = !fragment.ends_with('\n');
+#[derive(Default)]
+struct ContentRenderer {
+    reasoning: LineState,
+    output: LineState,
 }
 
-fn finish_reasoning_line(reasoning_open: bool, reasoning_needs_newline: bool) {
-    if reasoning_open && reasoning_needs_newline {
-        eprintln!();
-    } else if reasoning_open {
+impl ContentRenderer {
+    fn reasoning(&mut self, part: StreamPart<String>) {
+        match part {
+            StreamPart::Delta(fragment) => self.reasoning_delta(&fragment),
+            StreamPart::End => self.finish_reasoning(),
+        }
+    }
+
+    fn output(&mut self, part: StreamPart<String>) -> bool {
+        match part {
+            StreamPart::Delta(fragment) => {
+                self.finish_reasoning();
+                self.output.observe(&fragment);
+                print!("{fragment}");
+                let _ = io::stdout().flush();
+                true
+            }
+            StreamPart::End => {
+                self.finish_output();
+                false
+            }
+        }
+    }
+
+    fn tool_calls(&mut self, part: StreamPart<ToolCall>) {
+        self.finish();
+        if let StreamPart::Delta(call) = part {
+            print_event("tools", &call.name, EventStyle::Tools);
+        }
+    }
+
+    fn reasoning_delta(&mut self, fragment: &str) {
+        if fragment.is_empty() {
+            return;
+        }
+
+        let style = EventStyle::Thinking.style();
+        if !self.reasoning.is_open() {
+            eprint!("  {style}{:<5}{style:#}  ", "think");
+        }
+        self.reasoning.observe(fragment);
+        eprint!("{fragment}");
         let _ = io::stderr().flush();
     }
+
+    fn finish(&mut self) {
+        self.finish_reasoning();
+        self.finish_output();
+    }
+
+    fn finish_reasoning(&mut self) {
+        finish_line(&mut self.reasoning, io::stderr());
+    }
+
+    fn finish_output(&mut self) {
+        finish_line(&mut self.output, io::stdout());
+    }
 }
 
-fn finish_output_line(output_open: bool, output_needs_newline: bool) {
-    if output_open && output_needs_newline {
-        println!();
-    } else if output_open {
-        let _ = io::stdout().flush();
+#[derive(Default)]
+struct LineState {
+    open: bool,
+    needs_newline: bool,
+}
+
+impl LineState {
+    fn is_open(&self) -> bool {
+        self.open
+    }
+
+    fn observe(&mut self, fragment: &str) {
+        self.open = true;
+        self.needs_newline = !fragment.ends_with('\n');
+    }
+
+    fn finish(&mut self) -> Option<bool> {
+        if !self.open {
+            return None;
+        }
+        let needs_newline = self.needs_newline;
+        *self = Self::default();
+        Some(needs_newline)
+    }
+}
+
+fn finish_line(line: &mut LineState, mut writer: impl Write) {
+    let Some(needs_newline) = line.finish() else {
+        return;
+    };
+    if needs_newline {
+        let _ = writeln!(writer);
+    } else {
+        let _ = writer.flush();
     }
 }
 

@@ -7,7 +7,9 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use claw_agent::{AgentSystem, IterationId, Message, ReasoningEffort, SessionEvent, TurnId};
+use claw_agent::{
+    AgentSystem, IterationId, Message, ReasoningEffort, SessionEvent, StreamPart, ToolCall, TurnId,
+};
 #[cfg(feature = "cache_profile")]
 use claw_api::ApiUsage;
 use claw_interface::{
@@ -30,6 +32,66 @@ static AGENT_LOOP_LOCK: Mutex<()> = Mutex::new(());
 static AGENT_REPLIES: Mutex<VecDeque<String>> = Mutex::new(VecDeque::new());
 static AGENT_REQUEST_BODIES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static TOOL_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
+
+#[test]
+fn session_events_close_each_content_stream_explicitly() {
+    let _lock = AGENT_LOOP_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let arguments = r#"{"value":"boundary"}"#;
+    install_agent_replies(vec![
+        assistant_tool_call("matrix_echo", arguments, Some("thinking")),
+        assistant_text("finished"),
+    ]);
+
+    let root = mem_root("agent-loop-stream-parts");
+    let system = build_matrix_system(&root);
+    apply_registry_ops(&system, "register|start", MatrixToolBehavior::Echo);
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
+    let (control, mut events) = system.open_session(session).unwrap();
+
+    block_on(control.submit(Message::text("exercise stream boundaries"))).unwrap();
+    let protocol = drain_until_turn_ended(&mut events)
+        .into_iter()
+        .filter(|event| {
+            matches!(
+                event,
+                SessionEvent::IterationStarted { .. }
+                    | SessionEvent::Reasoning(_)
+                    | SessionEvent::Output(_)
+                    | SessionEvent::ToolCalls(_)
+                    | SessionEvent::IterationEnded
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        protocol,
+        vec![
+            SessionEvent::IterationStarted {
+                iteration: IterationId(0),
+            },
+            SessionEvent::Reasoning(StreamPart::Delta("thinking".to_string())),
+            SessionEvent::Reasoning(StreamPart::End),
+            SessionEvent::Output(StreamPart::End),
+            SessionEvent::ToolCalls(StreamPart::Delta(ToolCall {
+                id: "call_matrix_1".to_string(),
+                name: "matrix_echo".to_string(),
+                arguments_json: arguments.to_string(),
+            })),
+            SessionEvent::ToolCalls(StreamPart::End),
+            SessionEvent::IterationEnded,
+            SessionEvent::IterationStarted {
+                iteration: IterationId(1),
+            },
+            SessionEvent::Reasoning(StreamPart::End),
+            SessionEvent::Output(StreamPart::Delta("finished".to_string())),
+            SessionEvent::Output(StreamPart::End),
+            SessionEvent::ToolCalls(StreamPart::End),
+            SessionEvent::IterationEnded,
+        ]
+    );
+}
 
 #[test]
 fn agent_loop_csv_tool_matrix_runs_tools_and_feeds_results_to_next_iteration() {
@@ -547,7 +609,7 @@ fn reasoning_fragments(events: &[SessionEvent]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match event {
-            SessionEvent::Reasoning { text } => Some(text.clone()),
+            SessionEvent::Reasoning(StreamPart::Delta(text)) => Some(text.clone()),
             _ => None,
         })
         .collect()
@@ -557,7 +619,7 @@ fn tools_events(events: &[SessionEvent]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match event {
-            SessionEvent::ToolCall { name } => Some(name.clone()),
+            SessionEvent::ToolCalls(StreamPart::Delta(call)) => Some(call.name.clone()),
             _ => None,
         })
         .collect()
@@ -567,7 +629,7 @@ fn output_fragments(events: &[SessionEvent]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match event {
-            SessionEvent::Output { text } => Some(text.clone()),
+            SessionEvent::Output(StreamPart::Delta(text)) => Some(text.clone()),
             _ => None,
         })
         .collect()

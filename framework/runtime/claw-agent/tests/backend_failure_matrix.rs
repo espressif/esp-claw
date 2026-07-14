@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use claw_agent::{AgentError, AgentSystem, Message, SessionEvent};
+use claw_agent::{AgentError, AgentSystem, Message, SessionEvent, StreamPart};
 use claw_interface::{
     Cancel, ClawFile, ClawFs, ClawHttp, ClawTimer, FsError, HttpError, HttpJsonRequest,
     HttpRequestFailure, HttpResponse, HttpResponseFuture, HttpStatusCode, ImmediateTimer, MemFs,
@@ -356,7 +356,7 @@ where
 fn first_failure_text(events: Vec<SessionEvent>) -> Option<String> {
     events.into_iter().find_map(|event| match event {
         SessionEvent::Error { message } => Some(message),
-        SessionEvent::Output { text } if text.contains("[failed:") => Some(text),
+        SessionEvent::Output(StreamPart::Delta(text)) if text.contains("[failed:") => Some(text),
         _ => None,
     })
 }
@@ -365,7 +365,7 @@ fn output_fragments(events: &[SessionEvent]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match event {
-            SessionEvent::Output { text } => Some(text.clone()),
+            SessionEvent::Output(StreamPart::Delta(text)) => Some(text.clone()),
             _ => None,
         })
         .collect()

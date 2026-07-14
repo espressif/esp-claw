@@ -21,10 +21,10 @@ stage_verbose = []
 # for diagnostic-only response fields and session events.
 cache_profile = ["claw-api/cache_profile"]
 
-# Compile-time byte cap on each `SessionEvent::Reasoning` payload. EXACTLY ONE may
-# be enabled (event.rs emits a compile_error! for zero or multiple). Default is
-# `reasoning_short`; to change the tier, disable defaults (`default-features =
-# false`) and pick one.
+# Compile-time byte cap on accumulated `SessionEvent::Reasoning` deltas in one
+# iteration. EXACTLY ONE may be enabled (event.rs emits a compile_error! for zero
+# or multiple). Default is `reasoning_short`; to change the tier, disable
+# defaults (`default-features = false`) and pick one.
 default = ["reasoning_short"]
 reasoning_short = []  # 2000 bytes
 reasoning_medium = [] # 8000 bytes

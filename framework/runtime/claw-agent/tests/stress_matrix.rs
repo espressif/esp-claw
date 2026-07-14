@@ -10,7 +10,7 @@ use std::thread;
 
 use claw_agent::{
     AgentSystem, Message, SessionControl, SessionControlError, SessionEvent, SessionEventStream,
-    SessionId,
+    SessionId, StreamPart,
 };
 use claw_interface::{
     Cancel, ClawFs, ClawHttp, DiskFs, HttpError, HttpJsonRequest, HttpResponse, HttpResponseFuture,
@@ -479,7 +479,7 @@ fn output_fragments(events: &[SessionEvent]) -> Vec<String> {
     events
         .iter()
         .filter_map(|event| match event {
-            SessionEvent::Output { text } => Some(text.clone()),
+            SessionEvent::Output(StreamPart::Delta(text)) => Some(text.clone()),
             _ => None,
         })
         .collect()

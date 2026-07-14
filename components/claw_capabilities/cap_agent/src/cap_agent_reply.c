@@ -185,6 +185,10 @@ static void cap_agent_reply_task(void *param)
                      (int)event.kind,
                      event.text ? event.text : "-");
             break;
+        case CLAW_AGENT_EVENT_KIND_OUTPUT_END:
+        case CLAW_AGENT_EVENT_KIND_REASONING_END:
+        case CLAW_AGENT_EVENT_KIND_TOOLS_END:
+            break;
         case CLAW_AGENT_EVENT_KIND_ERROR:
             ESP_LOGW(TAG,
                      "agent error session=%" PRIu32 " error=%s",

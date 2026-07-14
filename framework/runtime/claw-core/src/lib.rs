@@ -15,7 +15,7 @@ pub(crate) use claw_utils::{define_id_allocator, define_prefixed_id};
 
 pub use agent::IterationId;
 pub use config::ApiUsage;
-pub use event::SessionEvent;
+pub use event::{SessionEvent, StreamPart, ToolCall};
 pub use orchestrator::{
     OpenSessionError, Orchestrator, OrchestratorBuildError, ReasoningEffort, SessionControl,
     SessionControlError, SessionEventStream,
