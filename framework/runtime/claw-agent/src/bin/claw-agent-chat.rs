@@ -10,6 +10,11 @@
 //! cargo run -p claw-agent --features dev,cache_profile --bin claw-agent-chat
 //! ```
 //!
+#[path = "claw-agent-chat/command.rs"]
+mod command;
+#[path = "claw-agent-chat/line_editor.rs"]
+mod line_editor;
+
 use std::future::Future;
 use std::io::{self, IsTerminal, Write};
 use std::path::Path;
@@ -17,14 +22,16 @@ use std::path::Path;
 use anstyle::{AnsiColor, Style};
 use anyhow::{bail, Result};
 use claw_agent::{
-    AgentPersistenceConfig, HostAgentSystem, Message, SessionControl, SessionEvent,
-    SessionEventStream, SessionPersistence, StreamPart, ToolCall, TurnOrigin,
+    AgentPersistenceConfig, HostAgentSystem, Message, PermissionLevel, SessionControl,
+    SessionEvent, SessionEventStream, SessionPersistence, StreamPart, ToolCall, TurnOrigin,
 };
 use claw_api::{ApiUsage, BackendKind, ClawApiConfig};
 use claw_interface::{StdThread, TokioExecutor};
 use claw_log::{LevelFilter, LogOutput, TracingConfig};
 use futures_lite::StreamExt;
-use tokio::io::{AsyncBufReadExt, BufReader};
+
+use command::{parse_input, CliInput};
+use line_editor::{ChatLineEditor, LineInput};
 
 const MEMORY_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/output/claw-agent-chat");
 
@@ -61,51 +68,72 @@ impl ChatDriver {
         true
     }
 
-    fn render(&mut self, event: SessionEvent) -> RenderOutcome {
-        match event {
+    async fn set_permission_level(&self, level: PermissionLevel) -> bool {
+        if let Err(error) = self.control.set_permission_level(level).await {
+            print_event("error", &error.to_string(), EventStyle::Error);
+            return false;
+        }
+        print_event(
+            "permission",
+            &format!("set to {}", permission_level_name(level)),
+            EventStyle::Permission,
+        );
+        true
+    }
+
+    fn render(
+        &mut self,
+        event: SessionEvent,
+        editor: &mut ChatLineEditor,
+        above_prompt: bool,
+    ) -> Result<RenderOutcome> {
+        let outcome = match event {
             SessionEvent::TurnStarted { origin, .. } => {
-                self.content.finish();
+                self.content.start_turn(above_prompt, editor)?;
                 self.active_origin = Some(origin);
                 self.saw_output = false;
                 RenderOutcome::TurnStarted
             }
             SessionEvent::Reasoning(part) => {
-                self.content.reasoning(part);
+                self.content.reasoning(part)?;
                 RenderOutcome::Continue
             }
             SessionEvent::Output(part) => {
-                self.saw_output |= self.content.output(part);
+                self.saw_output |= self.content.output(part)?;
                 RenderOutcome::Continue
             }
             SessionEvent::ToolCalls(part) => {
-                self.content.tool_calls(part);
+                self.content.tool_calls(part, editor)?;
                 RenderOutcome::Continue
             }
             SessionEvent::Usage { usage } => {
                 accumulate_usage(&mut self.total_usage, usage);
-                self.content.finish();
-                print_event("usage", &format_usage(usage), EventStyle::Usage);
+                self.content.finish(editor)?;
+                self.content
+                    .event(editor, "usage", &format_usage(usage), EventStyle::Usage)?;
                 RenderOutcome::Continue
             }
             SessionEvent::Error { message } => {
-                self.content.finish();
-                print_event("error", &message, EventStyle::Error);
+                self.content.finish(editor)?;
+                self.content
+                    .event(editor, "error", &message, EventStyle::Error)?;
                 RenderOutcome::Continue
             }
             SessionEvent::TurnEnded { .. } => {
-                self.content.finish();
+                self.content.finish(editor)?;
                 let user = matches!(self.active_origin.take(), Some(TurnOrigin::User));
                 let saw_output = std::mem::take(&mut self.saw_output);
                 RenderOutcome::TurnEnded { user, saw_output }
             }
             SessionEvent::Closed => {
-                self.content.finish();
+                self.content.finish(editor)?;
                 RenderOutcome::Closed
             }
             SessionEvent::IterationStarted { .. } | SessionEvent::IterationEnded => {
                 RenderOutcome::Continue
             }
-        }
+        };
+        Ok(outcome)
     }
 }
 
@@ -117,12 +145,12 @@ enum RenderOutcome {
 }
 
 enum IdleActivity {
-    Input(io::Result<Option<String>>),
+    Input(Option<LineInput>),
     Session(Option<SessionEvent>),
 }
 
 async fn next_idle_activity(
-    input: impl Future<Output = io::Result<Option<String>>>,
+    input: impl Future<Output = Option<LineInput>>,
     event: impl Future<Output = Option<SessionEvent>>,
 ) -> IdleActivity {
     futures_lite::future::race(
@@ -136,64 +164,120 @@ async fn next_idle_activity(
 struct ContentRenderer {
     reasoning: LineState,
     output: LineState,
+    above_prompt: bool,
+    buffer: String,
 }
 
 impl ContentRenderer {
-    fn reasoning(&mut self, part: StreamPart<String>) {
-        match part {
-            StreamPart::Delta(fragment) => self.reasoning_delta(&fragment),
-            StreamPart::End => self.finish_reasoning(),
-        }
+    fn start_turn(&mut self, above_prompt: bool, editor: &mut ChatLineEditor) -> Result<()> {
+        self.finish(editor)?;
+        self.above_prompt = above_prompt;
+        Ok(())
     }
 
-    fn output(&mut self, part: StreamPart<String>) -> bool {
+    fn reasoning(&mut self, part: StreamPart<String>) -> Result<()> {
+        match part {
+            StreamPart::Delta(fragment) => self.reasoning_delta(&fragment)?,
+            StreamPart::End => self.finish_reasoning(),
+        }
+        Ok(())
+    }
+
+    fn output(&mut self, part: StreamPart<String>) -> Result<bool> {
         match part {
             StreamPart::Delta(fragment) => {
                 self.finish_reasoning();
                 self.output.observe(&fragment);
-                print!("{fragment}");
-                let _ = io::stdout().flush();
-                true
+                if self.above_prompt {
+                    self.buffer.push_str(&fragment);
+                } else {
+                    print!("{fragment}");
+                    io::stdout().flush()?;
+                }
+                Ok(true)
             }
             StreamPart::End => {
                 self.finish_output();
-                false
+                Ok(false)
             }
         }
     }
 
-    fn tool_calls(&mut self, part: StreamPart<ToolCall>) {
-        self.finish();
+    fn tool_calls(
+        &mut self,
+        part: StreamPart<ToolCall>,
+        editor: &mut ChatLineEditor,
+    ) -> Result<()> {
+        self.finish(editor)?;
         if let StreamPart::Delta(call) = part {
-            print_event("tools", &call.name, EventStyle::Tools);
+            self.event(editor, "tools", &call.name, EventStyle::Tools)?;
         }
+        Ok(())
     }
 
-    fn reasoning_delta(&mut self, fragment: &str) {
+    fn event(
+        &mut self,
+        editor: &mut ChatLineEditor,
+        label: &str,
+        message: &str,
+        style: EventStyle,
+    ) -> Result<()> {
+        if self.above_prompt {
+            editor.print(format_event(label, message, style))?;
+        } else {
+            print_event(label, message, style);
+        }
+        Ok(())
+    }
+
+    fn reasoning_delta(&mut self, fragment: &str) -> Result<()> {
         if fragment.is_empty() {
-            return;
+            return Ok(());
         }
 
         let style = EventStyle::Thinking.style();
         if !self.reasoning.is_open() {
-            eprint!("  {style}{:<5}{style:#}  ", "think");
+            if self.above_prompt {
+                self.buffer
+                    .push_str(&format!("  {style}{:<5}{style:#}  ", "think"));
+            } else {
+                eprint!("  {style}{:<5}{style:#}  ", "think");
+            }
         }
         self.reasoning.observe(fragment);
-        eprint!("{fragment}");
-        let _ = io::stderr().flush();
+        if self.above_prompt {
+            self.buffer.push_str(fragment);
+        } else {
+            eprint!("{fragment}");
+            io::stderr().flush()?;
+        }
+        Ok(())
     }
 
-    fn finish(&mut self) {
+    fn finish(&mut self, editor: &mut ChatLineEditor) -> Result<()> {
         self.finish_reasoning();
         self.finish_output();
+        if self.above_prompt && !self.buffer.is_empty() {
+            let output = std::mem::take(&mut self.buffer);
+            print_above_prompt(editor, output)?;
+        }
+        Ok(())
     }
 
     fn finish_reasoning(&mut self) {
-        finish_line(&mut self.reasoning, io::stderr());
+        if self.above_prompt {
+            finish_buffered_line(&mut self.reasoning, &mut self.buffer);
+        } else {
+            finish_line(&mut self.reasoning, io::stderr());
+        }
     }
 
     fn finish_output(&mut self) {
-        finish_line(&mut self.output, io::stdout());
+        if self.above_prompt {
+            finish_buffered_line(&mut self.output, &mut self.buffer);
+        } else {
+            finish_line(&mut self.output, io::stdout());
+        }
     }
 }
 
@@ -234,9 +318,16 @@ fn finish_line(line: &mut LineState, mut writer: impl Write) {
     }
 }
 
+fn finish_buffered_line(line: &mut LineState, buffer: &mut String) {
+    if line.finish() == Some(true) {
+        buffer.push('\n');
+    }
+}
+
 enum EventStyle {
     Thinking,
     Tools,
+    Permission,
     Usage,
     Error,
 }
@@ -250,6 +341,7 @@ impl EventStyle {
         match self {
             Self::Thinking => Style::new().dimmed().fg_color(Some(AnsiColor::Cyan.into())),
             Self::Tools => Style::new().bold().fg_color(Some(AnsiColor::Green.into())),
+            Self::Permission => Style::new().fg_color(Some(AnsiColor::Cyan.into())),
             Self::Usage => Style::new()
                 .dimmed()
                 .fg_color(Some(AnsiColor::Yellow.into())),
@@ -259,16 +351,37 @@ impl EventStyle {
 }
 
 fn print_event(label: &str, message: &str, event_style: EventStyle) {
+    eprintln!("{}", format_event(label, message, event_style));
+}
+
+fn format_event(label: &str, message: &str, event_style: EventStyle) -> String {
     let style = event_style.style();
     let mut lines = message.lines();
     let Some(first) = lines.next() else {
-        eprintln!("  {style}{label:<5}{style:#}");
-        return;
+        return format!("  {style}{label:<5}{style:#}");
     };
 
-    eprintln!("  {style}{label:<5}{style:#}  {first}");
+    let mut rendered = format!("  {style}{label:<5}{style:#}  {first}");
     for line in lines {
-        eprintln!("         {line}");
+        rendered.push_str("\n         ");
+        rendered.push_str(line);
+    }
+    rendered
+}
+
+fn print_above_prompt(editor: &mut ChatLineEditor, message: String) -> Result<()> {
+    let message = message.trim_end_matches(['\r', '\n']);
+    if !message.is_empty() {
+        editor.print(message.to_string())?;
+    }
+    Ok(())
+}
+
+fn permission_level_name(level: PermissionLevel) -> &'static str {
+    match level {
+        PermissionLevel::Deny => "deny",
+        PermissionLevel::Ask => "ask",
+        PermissionLevel::AllowAll => "allow-all",
     }
 }
 
@@ -313,6 +426,14 @@ fn has_usage(usage: ApiUsage) -> bool {
         || usage.cache_write_tokens.is_some()
 }
 
+fn show_prompt(editor: &ChatLineEditor, prompt_active: &mut bool) -> Result<()> {
+    if !*prompt_active {
+        editor.show_prompt()?;
+        *prompt_active = true;
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     if let Err(error) = run().await {
@@ -328,7 +449,7 @@ async fn run() -> Result<()> {
     )?;
     claw_log::init_tracing(
         TracingConfig::default()
-            .with_context_group_keys("run", ["session", "turn", "agent", "iteration"]),
+            .with_context_group_keys("run", ["system", "session", "turn", "agent", "iteration"]),
     )?;
     let env_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../claw-agent/.env.local");
     if env_path.is_file() {
@@ -356,40 +477,51 @@ async fn run() -> Result<()> {
     let mut chat = ChatDriver::new(control, events);
 
     eprintln!("Memory:  {MEMORY_DIR}");
-    eprintln!("Type your message and press Enter. Empty line or Ctrl-D to quit.\n");
+    eprintln!("Type a message, or / for commands. Empty line or Ctrl-D to quit.\n");
 
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    let mut editor = ChatLineEditor::new()?;
     let mut turn_active = false;
-    let mut prompt_visible = false;
-    loop {
-        if !turn_active && !prompt_visible {
-            print!("> ");
-            io::stdout().flush()?;
-            prompt_visible = true;
-        }
+    let mut prompt_active = false;
+    show_prompt(&editor, &mut prompt_active)?;
 
+    loop {
         let activity = if turn_active {
             IdleActivity::Session(chat.events.next().await)
         } else {
-            next_idle_activity(lines.next_line(), chat.events.next()).await
+            next_idle_activity(editor.next_input(), chat.events.next()).await
         };
         match activity {
-            IdleActivity::Input(Ok(Some(line))) => {
-                prompt_visible = false;
+            IdleActivity::Input(Some(LineInput::Line(line))) => {
+                prompt_active = false;
                 let input = line.trim();
                 if input.is_empty() {
                     break;
                 }
-                turn_active = chat.submit(input).await;
-            }
-            IdleActivity::Input(Ok(None)) => break,
-            IdleActivity::Input(Err(error)) => return Err(error.into()),
-            IdleActivity::Session(Some(event)) => {
-                if matches!(event, SessionEvent::TurnStarted { .. }) && prompt_visible {
-                    println!();
-                    prompt_visible = false;
+                match parse_input(input) {
+                    Ok(CliInput::Message(message)) => {
+                        turn_active = chat.submit(message).await;
+                        if !turn_active {
+                            show_prompt(&editor, &mut prompt_active)?;
+                        }
+                    }
+                    Ok(CliInput::SetPermission(level)) => {
+                        chat.set_permission_level(level).await;
+                        show_prompt(&editor, &mut prompt_active)?;
+                    }
+                    Err(error) => {
+                        print_event("error", &error.to_string(), EventStyle::Error);
+                        show_prompt(&editor, &mut prompt_active)?;
+                    }
                 }
-                match chat.render(event) {
+            }
+            IdleActivity::Input(Some(LineInput::Interrupted)) => {
+                prompt_active = false;
+                show_prompt(&editor, &mut prompt_active)?;
+            }
+            IdleActivity::Input(Some(LineInput::Eof) | None) => break,
+            IdleActivity::Input(Some(LineInput::Failed(error))) => return Err(error.into()),
+            IdleActivity::Session(Some(event)) => {
+                match chat.render(event, &mut editor, prompt_active)? {
                     RenderOutcome::Continue => {}
                     RenderOutcome::TurnStarted => turn_active = true,
                     RenderOutcome::TurnEnded { user, saw_output } => {
@@ -397,6 +529,7 @@ async fn run() -> Result<()> {
                         if user && !saw_output {
                             println!("\n(no reply)\n");
                         }
+                        show_prompt(&editor, &mut prompt_active)?;
                     }
                     RenderOutcome::Closed => break,
                 }
@@ -406,10 +539,22 @@ async fn run() -> Result<()> {
     }
 
     if let Some(usage) = chat.total_usage() {
-        eprintln!("\n");
-        print_event("total", &format_usage(usage), EventStyle::Usage);
+        if prompt_active {
+            editor.print(format_event(
+                "total",
+                &format_usage(usage),
+                EventStyle::Usage,
+            ))?;
+        } else {
+            eprintln!("\n");
+            print_event("total", &format_usage(usage), EventStyle::Usage);
+        }
     }
-    eprintln!("Goodbye.");
+    if prompt_active {
+        editor.print("Goodbye.".to_string())?;
+    } else {
+        eprintln!("Goodbye.");
+    }
     Ok(())
 }
 

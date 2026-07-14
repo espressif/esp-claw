@@ -36,7 +36,7 @@ fn iteration_preparation_traces_auxiliary_llm_work_without_payloads() {
     let sink = RecordingSink::default();
     let subscriber = FlatTreeSubscriber::with_sink(sink.clone())
         .with_allowed_target_prefix("claw")
-        .with_context_group_keys("run", ["session", "turn", "agent", "iteration"]);
+        .with_context_group_keys("run", ["system", "session", "turn", "agent", "iteration"]);
     tracing::subscriber::set_global_default(subscriber)
         .expect("this single-test binary installs tracing exactly once");
 

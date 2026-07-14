@@ -74,7 +74,7 @@ async fn main() -> anyhow::Result<()> {
     claw_log::init_logger(LevelFilter::Info, LogOutput::Stderr)?;
     claw_log::init_tracing(
         TracingConfig::default()
-            .with_context_group_keys("run", ["session", "turn", "agent", "iteration"]),
+            .with_context_group_keys("run", ["system", "session", "turn", "agent", "iteration"]),
     )?;
 
     // 1. Build the system. Hermetic backends (in-memory fs + scripted LLM) keep

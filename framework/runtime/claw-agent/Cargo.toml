@@ -48,6 +48,7 @@ dev = [
     "dep:tokio",
     "dep:futures-lite",
     "dep:anstyle",
+    "dep:rustyline",
 ]
 # Provider token/cache usage diagnostics, kept separate from `dev` so examples
 # and other host workflows do not enable it implicitly.
@@ -74,11 +75,13 @@ thiserror = "2"
 anyhow = { version = "1", optional = true }
 # Dev-only: the `claw-agent-chat` bin loads `claw-core/.env.local`.
 dotenvy = { version = "0.15", optional = true }
-tokio = { version = "1.52.3", features = ["io-std", "io-util", "macros", "rt-multi-thread"], optional = true }
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread", "sync"], optional = true }
 # Dev-only: `StreamExt` to drain the session event stream in the REPL/examples.
 futures-lite = { version = "2", optional = true }
 # Dev-only: colored, aligned event labels for the `claw-agent-chat` REPL.
 anstyle = { version = "1", optional = true }
+# Dev-only: editable input, history, and inline slash-command hints.
+rustyline = { version = "18.0.1", default-features = false, optional = true }
 
 [dev-dependencies]
 claw-context = { path = "../claw-context" }
