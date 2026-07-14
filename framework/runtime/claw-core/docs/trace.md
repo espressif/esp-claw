@@ -193,7 +193,6 @@ span-name: `agent`
 `spawn_dropped`: Requested subagent could not be built or its parent was gone.
 `delete_ignored`: Agent delete request targeted a non-descendant and was ignored.
 `result_to_parent`: Subagent result was delivered or queued for its parent.
-`manual_yielded`: Manual subagent yielded and stayed alive idle.
 `root_cancelled`: Root task was cancelled.
 `subagent_cancelled`: Subagent task was cancelled and removed.
 `subtree_deleted`: Agent subtree was removed from registry, graph, queues, and approvals.

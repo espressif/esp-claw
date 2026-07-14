@@ -8,6 +8,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use claw_agent::{
     AgentPersistenceConfig, AgentSystem, IterationId, Message, SessionEvent, StreamPart, TurnId,
+    TurnOrigin,
 };
 use claw_interface::{
     Cancel, ClawFs, ClawHttp, DiskFs, HttpJsonRequest, HttpResponse, HttpResponseFuture,
@@ -361,7 +362,10 @@ fn assert_absent_fragments(text: &str, fragments: &str, case: &str) {
 fn assert_turn_bracket(events: &[SessionEvent], case: &str) {
     assert_eq!(
         events.first(),
-        Some(&SessionEvent::TurnStarted { turn: TurnId(1) }),
+        Some(&SessionEvent::TurnStarted {
+            turn: TurnId(1),
+            origin: TurnOrigin::User,
+        }),
         "case {case}"
     );
     assert_eq!(

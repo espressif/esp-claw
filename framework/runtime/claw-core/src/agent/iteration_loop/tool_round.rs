@@ -7,7 +7,7 @@ use super::types::{
     check_preempt_at_checkpoint, AppendedMessages, InterruptionControl, IterationCheckpoint,
     IterationLoopError, PreemptedOutcome, ToolRun, ToolRunDisposition,
 };
-use super::IterationId;
+use crate::protocol::IterationId;
 
 pub(super) enum ToolRoundResult {
     Completed { runs: Vec<ToolRun> },

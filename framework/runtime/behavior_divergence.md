@@ -151,7 +151,7 @@ Current runtime behavior:
 - Runtime internal tools are `subagent_list_spawnable`, `subagent_spawn`,
   `subagent_list`, `subagent_watch`, `subagent_delete`, and
   `conversation_end`.
-- `subagent_spawn` accepts `kind`, `name`, `goal`, and optional `termination`.
+- `subagent_spawn` accepts `kind`, `name`, `goal`, and required `foreground`.
 - Spawn permission is based on agent manifests and graph policy.
 - No direct equivalent was found for `send_agent_followup` or `close_agent`.
 - The runtime C capability wrapper filters out `ROOT_AGENT_ONLY` C capabilities,

@@ -1,234 +1,134 @@
-# Orchestrator worker (drive engine behind a Send handle)
+# Orchestrator worker and session actors
 
-Replaces the self-driving `SubmitStream` with a single owned worker. The goal is
-to delete the machinery that only existed because "the caller's `poll` drives the
-session": `SharedDrive`, `SubmitStream`'s custom `poll_next`, the `Mutex`-guarded
-`instances`/`drives` maps, and the `InstanceSlot` checkout/reinsert RAII.
+The runtime has one process-wide worker and one actor per live session. The
+orchestrator is a public handle; it does not own turn state or agent graphs.
 
-`submit` becomes what it always should have been: enqueue a message, return a
-plain event `Receiver`. Something else (a worker the orchestrator owns) drives.
-
-## Why the old design was complex
-
-The old `Orchestrator::submit` returned a `SubmitStream` that *was* the driver:
-its `poll_next` advanced a session-shared drive future (`SharedDrive =
-Rc<RefCell<Option<Pin<Box<dyn Future>>>>>`) and then read its own event channel.
-That single trick forced everything else:
-
-- Multiple live streams for one session (append/interrupt/cancel each return a
-  stream) had to *cooperatively* advance one drive → `SharedDrive` + the
-  "who polls first drives" rule.
-- Because streams poll on the same thread re-entrantly, the state they touch
-  (`instances`, `drives`) was behind `Mutex`, and an instance driven across an
-  `.await` was checked out via the `InstanceSlot` RAII guard.
-
-None of this is about parallelism (the system is already single-threaded and
-`!Send`). It is all bookkeeping for "the stream is the driver."
-
-## New shape: handle + engine
-
-```
-Orchestrator (Send handle)
-  ├─ Arc<SessionStore>     // session id truth source
-  ├─ command_tx: Sender<Command>
-  └─ WorkerHandle          // spawned via T: ClawThread, ZST static dispatch
-        │  (Send command crosses the thread boundary)
-   worker thread ── E::block_on (E: ClawExecutor, injected) ──▶
-        Engine (!Send)                    // built INSIDE the worker
-          ├─ instances: RefCell<HashMap<SessionId, OrchestratorInstance>>  // single-owner interior mut
-          ├─ drives:    RefCell<HashMap<SessionId, SessionDrive>>          // single-owner interior mut
-          ├─ factory, sessions (shared Arc), next_agent_id, ...
-          └─ run(command_rx): EnginePoll(inflight session drives, command_rx)
-                 → concurrently multiplexes every active session's drive on this
-                   one thread, emits AgentEvents into each submission's own Sender
+```text
+caller
+  │
+  ├─ Orchestrator ── open/delete/stop ──▶ Engine worker
+  │                                      ├─ SessionActor[session A]
+  │                                      ├─ SessionActor[session B]
+  │                                      └─ dormant restored actors
+  │
+  └─ SessionControl ── submit/control ──▶ one SessionActor
+                         SessionEvent ◀──┘
 ```
 
-- The engine is `!Send` (it owns `Box<dyn Agent>` graphs), so it is **constructed
-  inside the worker thread** from `Send` config; only `Send` things
-  (`command_tx`, `WorkerHandle`, `Arc<SessionStore>`, and the per-submit
-  `Sender`/`Receiver`, all of which `async-channel` makes `Send`) cross the
-  boundary. This satisfies `ClawThread::spawn_worker`'s `F: Send` bound the same
-  way `claw-cabi`'s worker used to (it now spawns no worker of its own; this is
-  the only worker on device).
-- The engine is the **single owner** of `instances`/`drives`. The `Mutex`es and
-  the `SharedDrive` are gone; the maps become single-threaded `RefCell`s. Every
-  engine method takes `&self`, and the run loop plus each in-flight per-session
-  drive future all share `&Engine` (via `Rc<Engine>`), touching the `RefCell`s
-  only in short, non-`await` critical sections.
-- **Concurrency is real, not cosmetic.** The device (`EspIdfHttp`) and host
-  (`RealHttp`) HTTP seams are genuinely async: they yield `Poll::Pending` while a
-  request is in flight (ESP-IDF loops over `ESP_ERR_HTTP_EAGAIN` with
-  `yield_once().await`). So while session A waits on its LLM round, the engine
-  polls session B's drive. `EnginePoll` (a hand-rolled multiplexer, same shape as
-  the agent `TickBatch`/the old `claw-cabi` `WorkerPoll`) polls every in-flight
-  drive plus the command receiver each wakeup. Only the `BlockingHttpAdapter`
-  test double resolves in one poll; it is not used on device.
-- `InstanceSlot` **stays** (now borrowing `&Engine`, reinserting into the
-  `RefCell`): a session being driven has its instance checked *out* of the map so
-  the drive owns it across `.await` without holding a `RefCell` borrow, and it is
-  reinserted on every exit path. This is what lets multiple sessions drive
-  concurrently without aliasing one map borrow.
+## Ownership
 
-## `submit` and session validation (synchronous, handle-side)
+### `Orchestrator`
 
-Session existence is checked **before** entering the worker, on the handle:
+The `Send + Sync` public handle owns:
 
-```rust
-pub fn submit(&self, session: SessionId, text: String, kind: DeliveryKind) -> SubmitStream {
-    let (tx, rx) = async_channel::unbounded();
-    if !self.sessions.contains(session) {
-        let _ = tx.try_send(AgentEvent::Error { message: SessionNotFound(session).into() });
-        return SubmitStream(rx); // closed channel -> stream ends after the error
-    }
-    let _ = self.command_tx.try_send(Command::Submit { session, text, kind, events: tx });
-    SubmitStream(rx)
-}
+- the durable session registry;
+- the process-wide engine command sender;
+- the worker lifetime;
+- process-wide API configuration.
+
+It creates, lists, opens, and deletes sessions. Opening a session returns a
+`SessionControl` and a `SessionEventStream`.
+
+### `Engine`
+
+The engine is constructed inside the worker because agent runtimes are
+single-threaded and `!Send`. It owns only process-wide coordination:
+
+- the agent factory and global `AgentIdAllocator`;
+- dormant restored session actors;
+- active actor command senders and actor futures;
+- `OpenSession`, `DeleteSession`, and `Stop` handling.
+
+The engine cooperatively polls every actor future. It does not interpret
+messages, create turns, schedule agents, or route subagent results.
+
+### `SessionActor`
+
+Each actor is the sole owner of one session's mutable runtime:
+
+```text
+SessionActor
+├─ SessionState
+│  ├─ active/pending turn input
+│  ├─ next turn id
+│  └─ reasoning effort
+├─ RuntimeExecution
+│  ├─ Idle(MultiagentRuntime)
+│  └─ Driving { control, future }
+├─ event sink and active lease
+└─ checkpoint/control/close state
 ```
 
-- `SessionStore` lives on the handle (`Send + Sync`, shared with the engine via
-  `Arc`). `session_create` / `session_list` / `session_delete` and the `submit`
-  existence check are all synchronous handle-side operations; only *valid*
-  commands are ever sent to the worker.
-- `SubmitStream` is now just a thin newtype over `async_channel::Receiver`
-  (`impl Stream`). No `drive` field, no custom `poll_next`.
+`SessionControl` sends `SessionCommand` directly to this actor. The engine is
+not a relay for turn traffic.
 
-## Command vocabulary
+The actor keeps polling commands while `MultiagentRuntime` is driving. This is
+what permits a caller to submit a new foreground message while detached
+subagents continue in the background. Interrupt, cancel, close, and delete are
+also observed at cooperative drive boundaries.
 
-```rust
-enum Command {
-    Submit {
-        session: SessionId,
-        text: String,
-        kind: DeliveryKind,
-        events: EventSink,                 // this submission's event Sender
-        context: Option<SharedContext>,    // per-submission tool context (see below)
-    },
-    DeleteSession { session: SessionId },   // engine drops the live graph
-    Stop,                                    // drain then exit run(); worker joins
-}
+Only one client may hold the open event stream for a session. Every open gets a
+new lease; commands from an older lease are rejected after close and reopen.
+
+## Turn and subagent semantics
+
+- A user submission opens a `TurnOrigin::User` turn.
+- `subagent_spawn(foreground = true)` waits inside the current tool call and
+  returns the child result in the current turn.
+- `subagent_spawn(foreground = false)` returns the child id immediately. When
+  the child finishes, the session actor opens a `TurnOrigin::Subagent` turn and
+  delivers the result to the parent through the multiagent runtime.
+- `subagent_followup` is live-only. A completed child is gone and cannot be
+  resumed from transcript state.
+- Interrupt stops the foreground turn but preserves live detached children.
+- Cancel stops the turn and all children owned by the session.
+
+Detached work does not keep a user turn artificially open, and it does not make
+the session API busy. The long-lived session event stream carries later
+subagent-origin turns to the caller.
+
+## Scheduling
+
+There is one worker thread, but asynchronous work from different sessions is
+interleaved cooperatively:
+
+1. `EnginePoll` polls the process-wide command receiver.
+2. It polls each active `SessionActor` future.
+3. Each actor polls its direct command receiver and its current runtime future.
+4. `MultiagentRuntime` owns the graph, ready queue, agent slots, and lifecycle
+   transitions for that session.
+
+No `Mutex` protects an agent graph, no stream drives the runtime, and no
+instance is checked out of a shared map across an `await`.
+
+## Persistence
+
+The stable checkpoint boundary for a session is:
+
+```text
+session-state + multiagent-runtime = session-runtime[session_id]
 ```
 
-Session create/list live entirely on the handle (`SessionStore`), so they need no
-command. `DeleteSession` is a command because the engine must drop the live agent
-graph for that session. `Stop` lets `Drop`/shutdown join the worker cleanly.
+A running agent tick owns its `BaseAgent` future and cannot be serialized. The
+actor therefore defers a requested checkpoint until every `AgentSlot` is back
+at a checkpoint-ready boundary. Close and shutdown stop work before publishing
+the final session checkpoint.
 
-Interrupt/cancel are **not** separate commands: they arrive as ordinary `Submit`s
-whose `DeliveryKind` the engine folds into the target session's `SessionDrive`
-(setting the `SessionControl` flags). Because the async HTTP seam yields, the
-engine observes such a `Submit` between a running drive's cooperative yields — it
-never needs to preempt a thread blocked in a synchronous transfer.
+## Dependency direction
 
-## Capability context (per-submission)
-
-Moving the drive multiplexer down into the engine means the layer that *has* the
-per-submission context (e.g. `claw-cabi`'s `request_id`/channel/chat ids) no
-longer wraps the drive. So the context is threaded through as a type-erased
-[`claw_tool::SharedContext`] (`Arc<dyn Any + Send + Sync>`):
-
-- `claw-tool` owns a poll-scoped, thread-local context (`with_context` installs
-  it around each `poll`; `current_context::<T>()` downcasts it back). It lives in
-  `claw-tool` because both the setter (`claw-core`'s engine) and the reader (a
-  concrete tool handler) depend on `claw-tool`.
-- The engine wraps **each submission's** `drive_one_submission` with
-  `claw_tool::with_context(submission.context, …)`, so the right context is
-  installed for exactly that turn even while other sessions are multiplexed on the
-  same thread.
-- `claw-cabi` builds `Arc::new(CapabilityContextData { … })`, passes it to
-  `submit_with_context`, and `CapTool::invoke` reads it back with
-  `claw_tool::current_context::<CapabilityContextData>()`. Host callers pass
-  `None`.
-
-## The run loop (session multiplexing)
-
-One engine future owns everything and multiplexes by hand (same spirit as the
-current `TickBatch`/`WorkerPoll`), so there is no per-session task and no shared
-state:
-
-```
-run(command_rx):
-  loop select:
-    - command_rx.recv():
-        Submit  -> fold into that session's SessionDrive (append/interrupt/cancel
-                   semantics unchanged: pending/carried + SessionControl), mark active
-        Delete  -> drop the session's instance + drive
-        Stop    -> stop accepting, drain active drives, return
-    - any active session made progress (drive one ready batch):
-        emit its AgentEvents into the submission's Sender; when a submission's turn
-        ends, drop its Sender so that SubmitStream ends.
+```text
+protocol   config   memory
+    \        |       /
+             agent
+               ↑
+           multiagent
+               ↑
+            session
+               ↑
+          orchestrator
 ```
 
-The per-session drive logic (`drive_interruptible`, `SessionControl`,
-`DeliveryKind` folding, `StartMode`) is reused as-is — the interrupt/cancel model
-is unchanged. What changes is *who* pumps it (the engine loop, not a stream).
-
-## Channels
-
-Unbounded for now (`async-channel::unbounded`), `try_send` from the engine so it
-never blocks. Bounding for on-device memory (with a drop policy that may shed
-`Reasoning` but never `Output`/`Error`) is deferred until measured.
-
-## Layering / ownership
-
-- `claw-core`: owns both `Orchestrator` (handle) and `Engine`, plus the
-  `Command` type and the `run` loop. It takes a `T: ClawThread` **and** an
-  `E: ClawExecutor` at construction and `block_on`s the engine inside the worker
-  via `E::block_on` — it depends only on the `ClawExecutor` *trait*, never on a
-  concrete executor. The device supplies `EspIdfExecutor` (`edge-executor`
-  `block_on`, from `claw-sys`); the host supplies `TokioExecutor` (a
-  current-thread tokio runtime, from `claw-interface`) so async `reqwest` +
-  `TokioTimer` reach tokio's reactor. The "`!Send` + externally driven, no thread"
-  rule is intentionally relaxed here.
-- `claw-tool`: gains the type-erased `SharedContext` + `with_context` /
-  `current_context` seam described above.
-- `claw-agent`: `AgentSystem` stays a thin wrapper — it holds an `Orchestrator`
-  handle (now backend-erased; `F/H/Timer` survive only as a `PhantomData` marker)
-  and forwards. `AgentSystem::new` gains a `thread: T` (`T: ClawThread`) value
-  argument and an `E: ClawExecutor` type argument; `on_disk` supplies `StdThread`
-  + `TokioExecutor`. Adds `submit_with_context`.
-- `claw-cabi`: the drive now lives in the orchestrator's worker, so `claw-cabi`
-  no longer spawns a worker of its own. It holds the (now `Send + Sync`)
-  `AgentSystem` directly; `submit` enqueues onto the orchestrator (returning a
-  request id) and stores the returned `SubmitStream` keyed by request id, and
-  `receive` **pulls that stream one event at a time** — bounded by the caller's
-  `timeout_ms` via a `block_on(or(next_event, EspIdfTimer::sleep))`. Content
-  events (`Output`/`Reasoning`/`Tools`) are surfaced incrementally as
-  `claw_agent_event_t` (an append fragment per call) while the turn is still
-  running; `TurnEnded`/`Error` map to terminal `DONE`/`ERROR` and consume the
-  request id. Bracket events (`TurnStarted`/`Iteration*`) are skipped. A timeout
-  re-parks the stream for a later `receive`.
-  `EspIdfTimer` is backed by the shared `esp_timer` one-shot service (a single
-  system timer task dispatches all callbacks), so the timeout costs one timer
-  object, never a spawned thread — the retry-backoff path benefits identically.
-  Its
-  capability-context thread-local is deleted; the context rides through
-  `submit_with_context`. Net: **one** worker thread on device (the `claw-core`
-  drive engine); the turn runs there and just buffers events until the FFI thread
-  drains them. This is possible because `SubmitStream` is now `Send`.
-- `CLI` / `example`: pass a `ClawThread` + `ClawExecutor` (host `StdThread` +
-  `TokioExecutor`); `submit` still yields a `Stream<Item = AgentEvent>`.
-
-## Testing
-
-Engine logic stays testable without a worker: tests construct the `Engine`
-directly and `block_on` its drive (feeding `Command`s through an in-process
-channel), exactly as the old orchestrator tests `block_on`'d `submit`. No thread
-is required in a unit test.
-
-## What gets deleted
-
-`SharedDrive`, `SubmitStream.drive` + custom `poll_next`, `SubmitStream::settled`
-special-case, `SessionDrive.shared` lifecycle, the `Mutex`es around
-`instances`/`drives`, `claw-cabi`'s per-submission capability-context
-thread-local combinator (the drive itself moved out of `claw-cabi`), and
-`claw-cabi`'s entire worker/command-queue/`ResponseStore` condvar machinery
-(`worker_loop`, `WorkerPoll`, `RuntimeCommand`, the `edge-executor` dependency) —
-replaced by a lazy `receive()`-time drain.
-
-## What stays
-
-`DeliveryKind` (append/interrupt/cancel), `SessionControl` + preemption
-checkpoints, `InstanceSlot` (now `RefCell`-backed) so concurrent session drives
-each own their instance across `.await`, the per-submit event channel, and the
-`EventSink` threading through `Agent::tick` → `IterationLoop` (the iteration-level
-events landed earlier). `claw-cabi` now drains each submission's event stream
-lazily at `receive()` time instead of on a dedicated worker (see Layering).
+`agent` is a single-agent runtime and has no knowledge of sessions,
+orchestration, parent/child graphs, or subagent tools. `multiagent` adapts that
+runtime into a graph and scheduler. `session` owns public turn semantics.
+`orchestrator` only owns process-wide lifecycle and the worker boundary.

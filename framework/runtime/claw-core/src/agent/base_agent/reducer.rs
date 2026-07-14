@@ -3,13 +3,12 @@ use std::collections::HashSet;
 use claw_interface::{ClawHttp, ClawTimer};
 use serde_json::Value;
 
-use crate::agent::base_agent::TranscriptText;
 use crate::agent::iteration_loop::{
     CompletedKind, CompletedOutcome, IterationOutcome, IterationResult, PreemptedOutcome, ToolRun,
 };
 use crate::agent::tools::ControlSignal;
 use crate::memory::AssistantCommit;
-use crate::session::Message;
+use crate::protocol::Message;
 
 use super::command::{
     AgentCommand, AgentCommandError, AgentRunError, ApprovalDecision, TickOutcome,
@@ -17,7 +16,7 @@ use super::command::{
 use super::control::AgentAbortHandle;
 use super::state::ToolBlockVerdict;
 use super::task_state::TaskAction;
-use super::{BaseAgent, IterationIdAllocator, SubagentTranscriptText};
+use super::{BaseAgent, IterationIdAllocator};
 use claw_permission::Grant;
 
 impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
@@ -26,17 +25,14 @@ impl<H: ClawHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
         self.state.get_mut().task_mut().enqueue_command(command)
     }
 
-    fn push_task_input(&mut self, message: Message) {
+    /// Activate an input that the orchestrator already deferred until this
+    /// agent returned to an idle boundary.
+    pub(crate) fn activate_deferred_message(&mut self, message: Message) {
         self.state.get_mut().task_mut().enqueue_task_input(message);
     }
 
     pub(crate) fn abort_handle(&self) -> AgentAbortHandle {
         self.interruption.handle()
-    }
-
-    /// Deliver a finished subagent's result as ordinary task input.
-    pub(crate) fn deliver_child_result(&mut self, result: SubagentTranscriptText) {
-        self.push_task_input(Message::text(result.text()));
     }
 
     pub(super) fn drain_inbox(&mut self) {

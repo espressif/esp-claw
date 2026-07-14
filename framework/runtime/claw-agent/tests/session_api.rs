@@ -8,7 +8,7 @@ use core::pin::Pin;
 use core::task::{Context, Poll};
 
 use claw_agent::{AgentError, AgentSystem, Message, OpenSessionError, SessionControlError};
-use claw_agent::{SessionEvent, SessionEventStream, SessionId, StreamPart, TurnId};
+use claw_agent::{SessionEvent, SessionEventStream, SessionId, StreamPart, TurnId, TurnOrigin};
 use claw_interface::{
     BlockingHttpAdapter, Cancel, ClawHttp, HttpError, HttpJsonRequest, HttpResponseFuture,
     ImmediateTimer, MemFs, SharedScriptHttp, StdThread, TokioExecutor,
@@ -89,7 +89,10 @@ fn session_streams_root_reply_as_output() {
 
     assert_eq!(
         events.first(),
-        Some(&SessionEvent::TurnStarted { turn: TurnId(1) })
+        Some(&SessionEvent::TurnStarted {
+            turn: TurnId(1),
+            origin: TurnOrigin::User,
+        })
     );
     assert_eq!(
         events.last(),
@@ -168,7 +171,10 @@ fn session_control_methods_are_idempotent() {
     let events = drain_until_turn_ended(&mut events);
     assert!(matches!(
         events.first(),
-        Some(SessionEvent::TurnStarted { turn: TurnId(1) })
+        Some(SessionEvent::TurnStarted {
+            turn: TurnId(1),
+            origin: TurnOrigin::User,
+        })
     ));
     assert_eq!(
         events.last(),

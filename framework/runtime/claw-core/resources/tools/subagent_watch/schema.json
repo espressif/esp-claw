@@ -2,7 +2,7 @@
   "type": "function",
   "function": {
     "name": "subagent_watch",
-    "description": "Get the current state (a snapshot) of one of your subagents by id: its kind, depth, lifecycle status, and termination policy. Only subagents in your own subtree can be watched.",
+    "description": "Get the current state of an active subagent by id, including its kind, depth, and status. Only subagents in your own subtree can be watched.",
     "parameters": {
       "type": "object",
       "properties": {

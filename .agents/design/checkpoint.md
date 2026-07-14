@@ -1,94 +1,71 @@
-# Orchestrator Durable Tree
+# Runtime Durable Tree
 
 ```text
 Orchestrator
 ├── SessionStore
-│   ├── sessions: Set<SessionId>
-│   └── next_session_id
-│
-├── Engine
-│   └── agent_id_allocator
-│
-└── Session[session_id]
-    ├── SessionDrive
-    │   ├── pending_input
-    │   └── next_turn_id
-    │
-    ├── OrchestratorInstance
-    │   ├── root: Option<AgentId>
-    │   ├── agents: Map<AgentId, AgentNode>
-    │   │   └── AgentNode
-    │   │       ├── parent
-    │   │       ├── depth
-    │   │       ├── kind
-    │   │       ├── name
-    │   │       └── termination_policy
-    │   ├── ready_queue
-    │   ├── parked_approvals
-    │   ├── approval_queue
-    │   └── subagent_result_mailbox
-    │
-    └── Agent[agent_id]
-        ├── GenericAgentState
-        │   └── id
-        ├── BaseAgentState
-        │   ├── lifecycle
-        │   ├── inbox
-        │   ├── approval_id_allocator
-        │   ├── iteration_id_allocator
-        │   ├── pending_grant_signatures
-        │   ├── permission_grants
-        │   └── block_policy_state
-        └── ToolSetState
-            ├── registry_version
-            └── tools
+│   ├── persistent sessions
+│   └── next session id
+├── AgentIdAllocator
+└── SessionActor[session_id]
+    ├── SessionState
+    │   ├── active turn / pending input
+    │   ├── next turn id
+    │   └── reasoning effort
+    └── MultiagentRuntime
+        ├── MultiagentState
+        │   ├── graph topology
+        │   ├── ready queue
+        │   └── parked approvals
+        └── AgentSlot[agent_id]
+            ├── inbox
+            └── BaseAgent durable parts
+                ├── BaseAgentState
+                └── ToolSetState
 ```
 
-## Checkpoint Batches
+Running futures, event sinks, actor command channels, wakers, abort handles,
+foreground completion senders, and inspection snapshots are process-local.
+
+## Checkpoint batches
 
 ```text
-Batch: SessionRuntime[session_id]        // atomic
-├── SessionDrive
-├── OrchestratorInstance
-└── Agent[*]
-    ├── GenericAgentState
-    ├── BaseAgentState
-    └── ToolSetState
+Batch: orchestrator[1]
+└── agent-id-allocator
 
-Batch: ToolRegistry                      // only if runtime mutations persist
-Batch: SessionRegistry                   // prefer derived from SessionRuntime[*]
-Batch: SkillCatalog                      // reload from filesystem
+Batch: session-runtime[session_id]       // atomic
+├── session-state
+└── multiagent-runtime
+    └── AgentSlot[*] durable envelopes
+
+Batch: session-registry[1]
+└── session-store
+
+Batch: tool-registry[1]
+└── tool-registry
 ```
 
-Must be same batch:
+The atomic session unit is:
 
 ```text
-SessionDrive + OrchestratorInstance + Agent[*] = SessionRuntime[session_id]
+session-state + multiagent-runtime = session-runtime[session_id]
 ```
 
-Outside checkpoint:
+A running agent tick cannot be serialized. The session actor defers checkpoint
+publication until its stable slots are checkpoint-ready; close first stops all
+work and then writes the final batch.
+
+## External file-backed stores
 
 ```text
-TranscriptStore, LongTermMemory, ProfileStore, soul.md, profile markdown:
-file-backed stores own their append/load/read/write logic.
-They are not DurablePart and are not checkpoint batches.
-
-ToolRegistry is independent; agent-local overrides live in SessionRuntime.
-SkillCatalog is reloaded, not coordinated with SessionRuntime.
+TranscriptStore       // owns append/load
+LongTermMemory        // owns append/load
+ProfileStore          // owns file read/write
+Soul/Profile markdown // owns file read/write
+SkillCatalog          // reloaded from filesystem
 ```
 
-## External File-Backed Stores
-
-```text
-TranscriptStore       // own append/load
-LongTermMemory        // own append/load
-ProfileStore          // own file read/write
-Soul/Profile markdown // own file read/write
-```
-
-Checkpoint does not store these payloads and does not restore them.
-
-Context adapters are not durable. They are derived from TranscriptStore and external stores.
+These payloads are not duplicated into the session checkpoint. Context adapters
+are derived from these stores and are not durable parts.
 
 ## API Design
 
@@ -285,7 +262,7 @@ DurablePart::is_dirty() // forbidden
 DurablePart::clear_dirty() // forbidden
 
 // DurableBatch is only the atomic grouping boundary.
-SessionDrive + OrchestratorInstance + Agent[*] -> SessionRuntime[session_id]
+SessionState + MultiagentRuntime -> SessionRuntime[session_id]
 
 // DurableBatch exposes current generation, but does not own clean state or checkpoint state.
 DurableBatch::mark_clean() // forbidden
@@ -309,8 +286,8 @@ newer_generation > exported_part.generation // remains dirty
 DurablePart -> DurableBatch -> Checkpoint
 
 // Restore is owned by runtime objects that can provide parent resources.
-OrchestratorInstance::restore(batch, session, factory, agent_id_allocator)
-AgentNode::restore(state, id, host, factory)
+SessionActor::restored(session, persistence, factory, agent_id_allocator, restore)
+MultiagentRuntime::from_restored_state(session, factory, agent_id_allocator, restore)
 
 // Checkpoint is the recovery anchor.
 latest valid checkpoint -> restore cut

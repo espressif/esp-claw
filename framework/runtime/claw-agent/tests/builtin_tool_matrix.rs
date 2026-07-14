@@ -6,7 +6,7 @@ use support::Sse;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, MutexGuard};
 
-use claw_agent::{AgentSystem, IterationId, Message, SessionEvent, StreamPart, TurnId};
+use claw_agent::{AgentSystem, IterationId, Message, SessionEvent, StreamPart, TurnId, TurnOrigin};
 use claw_interface::{
     Cancel, ClawHttp, HttpJsonRequest, HttpResponse, HttpResponseFuture, HttpStatusCode,
     ImmediateTimer, MemFs, StdThread, TokioExecutor,
@@ -203,7 +203,7 @@ fn tool_calls_for_sequence(sequence: &str) -> Vec<ToolCallSpec> {
                     "kind": "ghost",
                     "name": "bad",
                     "goal": "do impossible work",
-                    "termination": "manual",
+                    "foreground": false,
                 }),
             ),
         ],
@@ -309,7 +309,10 @@ fn assert_fragments_in_tool_messages(
 fn assert_turn_bracket(events: &[SessionEvent], case: &str) {
     assert_eq!(
         events.first(),
-        Some(&SessionEvent::TurnStarted { turn: TurnId(1) }),
+        Some(&SessionEvent::TurnStarted {
+            turn: TurnId(1),
+            origin: TurnOrigin::User,
+        }),
         "case {case}"
     );
     assert_eq!(

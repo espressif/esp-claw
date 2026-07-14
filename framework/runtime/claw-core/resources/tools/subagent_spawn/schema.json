@@ -2,7 +2,7 @@
   "type": "function",
   "function": {
     "name": "subagent_spawn",
-    "description": "Delegate a goal to a new subagent that works in parallel. Choose the kind of agent best suited to the goal. Its result is reported back to you when it finishes.",
+    "description": "Delegate a goal to a new subagent. Foreground mode waits for its result in this tool call; background mode returns immediately and reports the result in a later turn.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -21,13 +21,12 @@
           "minLength": 1,
           "description": "The goal to delegate to the subagent."
         },
-        "termination": {
-          "type": "string",
-          "enum": ["auto", "manual"],
-          "description": "Lifecycle policy. 'auto' (default): one-shot — the subagent is removed as soon as it returns its result. 'manual': persistent — after returning its result the subagent stays alive and idle so you can watch it, give it more work, or delete it with subagent_delete."
+        "foreground": {
+          "type": "boolean",
+          "description": "Required execution mode. true waits for the subagent and returns its result from this tool call. false returns the agent id immediately; the result is delivered later in a new subagent-origin turn."
         }
       },
-      "required": ["kind", "name", "goal"]
+      "required": ["kind", "name", "goal", "foreground"]
     }
   }
 }

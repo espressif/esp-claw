@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use claw_agent::{
     AgentError, AgentSystem, IterationId, Message, OpenSessionError, SessionControlError,
-    SessionEvent, SessionEventStream, SessionId, StreamPart, TurnId,
+    SessionEvent, SessionEventStream, SessionId, StreamPart, TurnId, TurnOrigin,
 };
 use claw_checkpoint::DurablePart;
 use claw_interface::{
@@ -50,7 +50,10 @@ fn submit_streams_csv_reply_cases() {
 
         assert_eq!(
             events.first(),
-            Some(&SessionEvent::TurnStarted { turn: TurnId(1) }),
+            Some(&SessionEvent::TurnStarted {
+                turn: TurnId(1),
+                origin: TurnOrigin::User,
+            }),
             "case {case}"
         );
         assert_eq!(

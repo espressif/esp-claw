@@ -9,7 +9,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use claw_agent::{
     AgentError, AgentSystem, Message, OpenSessionError, SessionEvent, SessionId,
-    SessionPersistence, StreamPart, TurnId,
+    SessionPersistence, StreamPart, TurnId, TurnOrigin,
 };
 use claw_checkpoint::{
     BatchId, BatchWrite, ChangePatternHint, Checkpoint, CheckpointStorage, CheckpointWrite,
@@ -244,7 +244,7 @@ fn tool_registry_keeps_only_two_checkpoints_across_fifty_four_registrations() {
 }
 
 #[test]
-fn session_drive_turn_counter_restores_from_disk_checkpoint() {
+fn session_turn_counter_restores_from_disk_checkpoint() {
     let _script = serialize_script();
     let root = TempDir::new("claw-agent-session-drive").unwrap();
     let root = root.path().to_string_lossy().into_owned();
@@ -264,7 +264,10 @@ fn session_drive_turn_counter_restores_from_disk_checkpoint() {
         );
         assert_eq!(
             events.first(),
-            Some(&SessionEvent::TurnStarted { turn: TurnId(1) })
+            Some(&SessionEvent::TurnStarted {
+                turn: TurnId(1),
+                origin: TurnOrigin::User,
+            })
         );
         assert!(DiskFs::exists(&checkpoint_manifest));
         let checkpoint = latest_checkpoint::<DiskFs>(&format!("{root}/checkpoint"));
@@ -276,12 +279,12 @@ fn session_drive_turn_counter_restores_from_disk_checkpoint() {
         let instance = runtime
             .parts
             .iter()
-            .find(|part| part.name == "orchestrator-instance")
-            .expect("orchestrator instance checkpoint exists");
+            .find(|part| part.name == "multiagent-runtime")
+            .expect("multiagent runtime checkpoint exists");
         let instance_json: Value = serde_json::from_slice(instance.state.bytes.as_ref()).unwrap();
-        assert!(!instance_json["agent_parts"]
+        assert!(!instance_json["agent_slots"]
             .as_array()
-            .expect("agent_parts is an array")
+            .expect("agent_slots is an array")
             .is_empty());
         session
     };
@@ -293,7 +296,10 @@ fn session_drive_turn_counter_restores_from_disk_checkpoint() {
     let events = drain_until_turn_ended(&mut events);
     assert_eq!(
         events.first(),
-        Some(&SessionEvent::TurnStarted { turn: TurnId(2) })
+        Some(&SessionEvent::TurnStarted {
+            turn: TurnId(2),
+            origin: TurnOrigin::User,
+        })
     );
 }
 
@@ -329,7 +335,10 @@ fn session_transcript_history_survives_disk_rebuild_and_reenters_llm_context() {
 
     assert_eq!(
         events.first(),
-        Some(&SessionEvent::TurnStarted { turn: TurnId(2) })
+        Some(&SessionEvent::TurnStarted {
+            turn: TurnId(2),
+            origin: TurnOrigin::User,
+        })
     );
     assert!(events
         .iter()
@@ -377,7 +386,10 @@ fn corrupt_transcript_index_rebuilds_from_data_log_after_disk_rebuild() {
 
     assert_eq!(
         events.first(),
-        Some(&SessionEvent::TurnStarted { turn: TurnId(2) })
+        Some(&SessionEvent::TurnStarted {
+            turn: TurnId(2),
+            origin: TurnOrigin::User,
+        })
     );
     assert!(events
         .iter()
@@ -428,7 +440,7 @@ fn deleted_session_does_not_reappear_after_disk_rebuild() {
 }
 
 #[test]
-fn old_session_drive_layout_is_rejected() {
+fn legacy_session_drive_part_is_not_accepted_as_session_state() {
     let _script = serialize_script();
     let root = TempDir::new("claw-agent-pending-input-checkpoint").unwrap();
     let root = root.path().to_string_lossy().into_owned();
@@ -440,7 +452,10 @@ fn old_session_drive_layout_is_rejected() {
         Ok(_) => panic!("old session-drive layout must reject startup"),
         Err(error) => error.to_string(),
     };
-    assert_contains(&error, "unsupported session-drive checkpoint schema");
+    assert_contains(
+        &error,
+        "checkpoint is missing part session-state in batch session-runtime",
+    );
 }
 
 struct CheckpointEchoTool;

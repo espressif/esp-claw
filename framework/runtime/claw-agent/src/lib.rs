@@ -14,9 +14,9 @@ use claw_checkpoint::{
     LoadCheckpointError, SharedCheckpointCoordinator,
 };
 pub use claw_core::{
-    ApiUsage, IterationId, Message, OpenSessionError, ReasoningEffort, SessionControl,
+    AgentId, ApiUsage, IterationId, Message, OpenSessionError, ReasoningEffort, SessionControl,
     SessionControlError, SessionEvent, SessionEventStream, SessionId, SessionPersistence,
-    StreamPart, ToolCall, TurnId,
+    StreamPart, ToolCall, TurnId, TurnOrigin,
 };
 use claw_core::{Orchestrator, OrchestratorBuildError};
 use claw_interface::http::StreamingHttp;

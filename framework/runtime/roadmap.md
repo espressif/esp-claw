@@ -16,6 +16,7 @@
 - [x] subagent followup(agent-id, message) — cancel current task and retask
 - [x] refactor (cleaned up runtime/)
 - [ ] reduced memory use by 80%
+- [ ] plan mode
 - [ ] test plan
   - [ ] skills
   - [ ] tools

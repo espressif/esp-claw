@@ -5,7 +5,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Runtime primitives: orchestrator shell, channels, and iteration loop"
 # Agent manifests under `resources/agents/<kind>/` are parsed + validated at
-# compile time and emitted as typed `AgentManifest` statics (see `manifest_gen/`),
+# compile time and emitted as typed catalog entries (see `manifest_gen/`),
 # so malformed metadata fails the build instead of the device at boot.
 build = "manifest_gen/main.rs"
 
@@ -65,7 +65,7 @@ thiserror = "2"
 
 [build-dependencies]
 # The build script parses the agent manifest JSON at compile time and generates
-# typed `AgentManifest` statics into `OUT_DIR`. `quote`/`proc-macro2` build the
+# typed catalog entries into `OUT_DIR`. `quote`/`proc-macro2` build the
 # generated source as a typed token stream (no `syn`, so no extra build cost).
 # `anyhow` is build-only: it gives the generator ergonomic, context-rich errors
 # and never reaches the device image.

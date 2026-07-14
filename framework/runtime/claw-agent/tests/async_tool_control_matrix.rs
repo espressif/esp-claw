@@ -11,7 +11,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::thread;
 
-use claw_agent::{AgentSystem, Message, SessionControlError, SessionEvent, StreamPart, TurnId};
+use claw_agent::{
+    AgentSystem, Message, SessionControlError, SessionEvent, StreamPart, TurnId, TurnOrigin,
+};
 use claw_interface::{
     Cancel, ClawFs, ClawHttp, FsError, HttpError, HttpJsonRequest, HttpResponse,
     HttpResponseFuture, HttpStatusCode, ImmediateTimer, MemFile, MemFs, StdThread, TokioExecutor,
@@ -305,7 +307,10 @@ fn wait_for_bool(flag: &AtomicBool, case: &str, failure: &str) {
 fn assert_turn(events: &[SessionEvent], turn: TurnId, case: &str) {
     assert_eq!(
         events.first(),
-        Some(&SessionEvent::TurnStarted { turn }),
+        Some(&SessionEvent::TurnStarted {
+            turn,
+            origin: TurnOrigin::User,
+        }),
         "case {case}"
     );
     assert_eq!(

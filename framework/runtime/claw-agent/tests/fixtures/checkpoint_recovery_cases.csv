@@ -5,6 +5,6 @@ missing-tool-registry-part,missing_tool_part,checkpoint is missing part tool-reg
 invalid-tool-registry-part,invalid_tool_part,checkpoint durable part failed
 missing-session-store-part,missing_session_part,checkpoint is missing part session-store in batch session-registry
 invalid-session-store-part,invalid_session_part,failed to restore checkpoint part
-missing-session-drive-part,missing_runtime_drive_part,checkpoint is missing part session-drive in batch session-runtime
-invalid-session-drive-part,invalid_runtime_drive_part,failed to restore checkpoint part
-invalid-orchestrator-instance-part,invalid_orchestrator_instance_part,unsupported orchestrator instance schema version
+missing-session-state-part,missing_session_state_part,checkpoint is missing part session-state in batch session-runtime
+invalid-session-state-part,invalid_session_state_part,failed to restore checkpoint part
+invalid-multiagent-runtime-part,invalid_multiagent_runtime_part,unsupported multiagent runtime schema version

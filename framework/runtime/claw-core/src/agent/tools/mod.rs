@@ -1,57 +1,25 @@
-//! The agent's built-in tools — one [`SyncToolHandler`](claw_tool::SyncToolHandler) per
-//! file — and the small seams they share.
+//! Built-ins owned by one agent: self-control and tool discovery.
 //!
-//! Internal tools are model-callable like any other tool, but instead of
-//! returning a result to the conversation they steer the *agent graph*. A tool
-//! handler only has `&self`, so it cannot touch state directly — it routes
-//! through one of two seams:
-//! - **self-affecting** control (`conversation_end`) pushes a [`ControlSignal`]
-//!   onto the agent's own [`ControlSink`], drained each tick;
-//! - **graph-affecting** actions (`subagent_spawn`, `subagent_list`,
-//!   `subagent_watch`, `subagent_delete`, `subagent_followup`) call the
-//!   [`AgentContext`](crate::agent::graph::AgentContext) façade, which emits a
-//!   [`GraphEffect`](crate::agent::graph::GraphEffect) (or reads a snapshot) via
-//!   the [`GraphHost`](crate::agent::graph::GraphHost) — applied by the
-//!   orchestrator instance at a borrow-safe point.
+//! Orchestrator features such as multiagent are injected as ordinary
+//! `ToolGroup`s during construction; they do not live in this module.
 //!
 //! Human approval is **not** a tool: it is raised by the permission layer (an
 //! `Ask` decision in `base_agent`), not requested or resolved by the model.
 //!
-//! Which tools an agent actually gets is a build-time knob: `subagent_spawn` and
-//! its siblings only when its manifest enables spawning.
-//!
-//! Keeping these here means the iteration loop stays fully agnostic: it runs them
-//! like ordinary tools and never learns their meaning.
-
-mod delete_subagent;
 mod end_conversation;
-mod followup_subagent;
-mod list_spawnable_agents;
-mod list_subagents;
-mod spawn_subagent;
 mod tool_load;
 mod tool_search;
-mod watch_subagent;
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
-use claw_permission::Resource;
-use claw_tool::{Tool, ToolDiscoveryHandle, ToolError, ToolGroup, ToolInvocation};
+use claw_tool::{Tool, ToolDiscoveryHandle, ToolError, ToolGroup};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::agent::graph::{AgentContext, SpawnPolicy};
-
-use delete_subagent::DeleteSubagentTool;
 use end_conversation::EndConversationTool;
-use followup_subagent::FollowupSubagentTool;
-use list_spawnable_agents::ListSpawnableAgentsTool;
-use list_subagents::ListSubagentsTool;
-use spawn_subagent::SpawnSubagentTool;
 use tool_load::ToolLoadTool;
 use tool_search::ToolSearchTool;
-use watch_subagent::WatchSubagentTool;
 
 // -- Self-control seam ------------------------------------------------------
 
@@ -80,10 +48,7 @@ pub(crate) type ControlSink = Arc<Mutex<VecDeque<ControlSignal>>>;
 ///
 /// [`ToolError::InvalidArgumentsJson`] if the arguments are present but not valid JSON —
 /// a malformed call is surfaced, not swallowed.
-pub(crate) fn optional_string_argument(
-    arguments_json: &str,
-    key: &str,
-) -> Result<Option<String>, ToolError> {
+fn optional_string_argument(arguments_json: &str, key: &str) -> Result<Option<String>, ToolError> {
     let text = arguments_json.trim();
     let value = if text.is_empty() {
         Value::Object(serde_json::Map::new())
@@ -104,17 +69,6 @@ pub(crate) fn optional_string_argument(
         ))),
         None => Ok(None),
     }
-}
-
-/// Best-effort [`Resource::Agent`] for a tool call's `agent` argument, for
-/// classification only — a missing/malformed id just yields `None` (the verb
-/// alone still classifies; `invoke` is where a bad id is reported).
-fn agent_resource(call: &ToolInvocation<'_>) -> Option<Resource> {
-    let raw = optional_string_argument(call.arguments_json(), "agent")
-        .ok()
-        .flatten()?;
-    let trimmed = raw.trim();
-    (!trimmed.is_empty()).then(|| Resource::Agent(trimmed.to_string()))
 }
 
 // -- Tool builders ----------------------------------------------------------
@@ -144,40 +98,6 @@ pub(crate) fn discovery_tools(discovery: ToolDiscoveryHandle) -> ToolGroup {
                 discovery: discovery.clone(),
             }),
             Tool::from_sync(ToolLoadTool { discovery }),
-        ],
-    )
-}
-
-/// Build the subagent-management tools, all scoped by the context's agent
-/// (or, for `subagent_list_spawnable`, by that agent's spawn `policy`):
-/// - `subagent_list_spawnable` — the menu of kinds this agent may spawn;
-/// - `subagent_spawn` — create a child (restricted to `policy`'s allowed kinds);
-/// - `subagent_list` — enumerate this agent's subtree;
-/// - `subagent_watch` — snapshot one descendant;
-/// - `subagent_delete` — remove one descendant (and its subtree);
-/// - `subagent_followup` — cancel the target's current task and retask it.
-pub(crate) fn subagent_tools(context: Arc<AgentContext>, policy: SpawnPolicy) -> ToolGroup {
-    ToolGroup::new(
-        "subagent",
-        true,
-        [
-            Tool::from_sync(ListSpawnableAgentsTool {
-                policy: policy.clone(),
-            }),
-            Tool::from_sync(SpawnSubagentTool {
-                context: Arc::clone(&context),
-                policy,
-            }),
-            Tool::from_sync(ListSubagentsTool {
-                context: Arc::clone(&context),
-            }),
-            Tool::from_sync(WatchSubagentTool {
-                context: Arc::clone(&context),
-            }),
-            Tool::from_sync(DeleteSubagentTool {
-                context: Arc::clone(&context),
-            }),
-            Tool::from_sync(FollowupSubagentTool { context }),
         ],
     )
 }

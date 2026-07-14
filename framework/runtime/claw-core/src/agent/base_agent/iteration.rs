@@ -5,12 +5,13 @@ use claw_tool::ToolGate;
 use serde_json::Value;
 use tracing::Instrument as _;
 
-use crate::event::EventSink;
 use crate::memory::ContextAdapter;
+use crate::protocol::EventSink;
 
 use super::control::PermissionGate;
 use super::{BaseAgent, BaseAgentBuildError, TickOutcome};
-use crate::agent::iteration_loop::{IterationId, IterationLoop, IterationResult, IterationStep};
+use crate::agent::iteration_loop::{IterationLoop, IterationResult, IterationStep};
+use crate::protocol::IterationId;
 
 impl<H: ClawHttp + StreamingHttp, Timer: ClawTimer> BaseAgent<H, Timer> {
     /// Process queued commands, advance at most one iteration, and report what

@@ -5,21 +5,18 @@ use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 use claw_memory::{Compactor, TranscriptStore};
 
-use crate::agent::base_agent::{AgentCommand, AgentId, BaseAgent, BaseAgentConfig};
+use crate::agent::base_agent::{AgentCommand, BaseAgent, BaseAgentConfig};
 use crate::agent::config::{AgentConfig, AgentConfigError};
-use crate::agent::graph::{AgentContext, GraphHost};
-use crate::agent::kind::AgentKind;
-use crate::agent::manifest::AgentManifest;
-use crate::agent::tools::{discovery_tools, subagent_tools};
+use crate::agent::tools::discovery_tools;
+use crate::config::catalog as agent_catalog;
 use crate::memory::{
     CompactionPolicy, ConversationHistoryContextAdapter, LlmCompactor,
     LongTermMemoryContextAdapter, ProfileContextAdapter,
 };
-use crate::session::Message;
+use crate::protocol::{AgentId, AgentKind, Message};
 
 use super::error::FsAgentCreateError;
-use super::layout::AgentPlacement;
-use super::FsAgentFactory;
+use super::{AgentEnvironment, FsAgentFactory, ProfileAccess};
 
 const COMPACTION_TRIGGER_TOKENS: usize = 6000;
 const COMPACTION_KEEP_RECENT_TOKENS: usize = 2000;
@@ -31,13 +28,11 @@ impl<
         Timer: ClawTimer + Default + 'static,
     > FsAgentFactory<Filesystem, Http, Timer>
 {
-    /// Build an agent of `kind` with id `id` already tasked with `goal`, handing
-    /// it `host` as its back-channel to the agent graph. Used for both spawned
-    /// subagents and a session's root agent.
+    /// Build one agent of `kind`, already tasked with `goal`.
     ///
-    /// `placement` selects the transcript identity and storage mode. It also
-    /// decides root-only tool wiring, so root/subagent identity has one source
-    /// of truth.
+    /// Its owner supplies storage, profile access, inherited context, and any
+    /// extension tools through `environment`. The factory does not interpret
+    /// orchestration roles.
     ///
     /// # Errors
     ///
@@ -49,9 +44,7 @@ impl<
         id: AgentId,
         kind: &AgentKind,
         goal: Message,
-        placement: AgentPlacement,
-        host: Arc<dyn GraphHost>,
-        inherited_context: Vec<Block<'static>>,
+        environment: AgentEnvironment,
     ) -> Result<BaseAgent<Http, Timer>, FsAgentCreateError> {
         let span = tracing::info_span!("agent.create");
         let _enter = span.enter();
@@ -65,22 +58,17 @@ impl<
             }
             FsAgentCreateError::Config(error)
         })?;
-        let manifest = AgentManifest::for_kind(kind.as_str()).ok_or_else(|| {
-            FsAgentCreateError::Config(AgentConfigError::UnknownKind(kind.as_str().to_owned()))
-        })?;
-        let is_root = placement.is_root();
         let mut tools = self.tools.tool_set();
-        tools.retain_registry_groups(manifest.tool_groups);
+        tools.retain_registry_groups(config.tool_groups);
         tools.add_group(discovery_tools(tools.discovery()))?;
-        let graph_context = Arc::new(AgentContext::new(id, host));
-        if config.spawn_enabled {
-            tools.add_group(subagent_tools(graph_context, config.spawn_policy))?;
+        for extension in environment.extension_tools {
+            tools.add_group(extension)?;
         }
 
         // Every agent gets a transcript for context management; `persists` only
         // decides whether it is written to disk.
-        let transcript_id = placement.transcript_id();
-        let store = if placement.persists() {
+        let transcript_id = environment.transcript.id();
+        let store = if environment.transcript.persists() {
             match TranscriptStore::<Filesystem>::new(transcript_id, &self.transcript_dir) {
                 Ok(store) => store,
                 Err(error) => {
@@ -104,7 +92,7 @@ impl<
             tools,
             skills: config.skills,
             agent_instruction: Block::new(BlockKind::AgentInstruction, config.system_prompt),
-            inherited_context,
+            inherited_context: environment.inherited_context,
             retry_policy: config.retry_policy,
             block_retries: config.tool_block_retries,
         };
@@ -142,7 +130,10 @@ impl<
             return Err(FsAgentCreateError::Agent(error));
         }
 
-        let profile_adapter = ProfileContextAdapter::new(self.profile.clone(), is_root);
+        let profile_adapter = ProfileContextAdapter::new(
+            self.profile.clone(),
+            environment.profile == ProfileAccess::Writable,
+        );
         if let Err(error) = agent.register_context_adapter(Box::new(profile_adapter)) {
             tracing::error!(
                 name: "context_adapter_attach_failed",
@@ -197,17 +188,15 @@ impl<
     }
 
     fn resolve_config(&self, kind: &AgentKind) -> Result<AgentConfig, AgentConfigError> {
-        let manifest = AgentManifest::for_kind(kind.as_str())
+        let manifest = agent_catalog::find(kind)
             .ok_or_else(|| AgentConfigError::UnknownKind(kind.as_str().to_owned()))?;
-        if !manifest.skills.is_empty() {
+        let runtime = manifest.runtime();
+        if !runtime.skills().is_empty() {
             tracing::info!(
                 name: "manifest_ids_catalog_only",
-                count = manifest.skills.len() as u64,
+                count = runtime.skills().len() as u64,
             );
         }
-        Ok(AgentConfig::from_manifest(
-            manifest,
-            self.skills.skill_set(),
-        ))
+        Ok(AgentConfig::from_manifest(runtime, self.skills.skill_set()))
     }
 }

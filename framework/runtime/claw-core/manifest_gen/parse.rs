@@ -28,7 +28,7 @@ pub(crate) struct ParsedKind {
 }
 
 /// A fully-parsed manifest after the shared `common/` base has been inherited —
-/// the build-time counterpart to the runtime `AgentManifest`.
+/// the build-time counterpart to one runtime catalog entry.
 pub(crate) struct ParsedManifest {
     pub(crate) kind: String,
     pub(crate) description: String,

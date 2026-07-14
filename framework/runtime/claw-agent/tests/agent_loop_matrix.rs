@@ -9,6 +9,7 @@ use std::sync::{Mutex, MutexGuard};
 
 use claw_agent::{
     AgentSystem, IterationId, Message, ReasoningEffort, SessionEvent, StreamPart, ToolCall, TurnId,
+    TurnOrigin,
 };
 #[cfg(feature = "cache_profile")]
 use claw_api::ApiUsage;
@@ -585,7 +586,10 @@ fn assert_reasoning_shape(
 fn assert_turn_bracket(events: &[SessionEvent], case: &str) {
     assert_eq!(
         events.first(),
-        Some(&SessionEvent::TurnStarted { turn: TurnId(1) }),
+        Some(&SessionEvent::TurnStarted {
+            turn: TurnId(1),
+            origin: TurnOrigin::User,
+        }),
         "case {case}"
     );
     assert_eq!(

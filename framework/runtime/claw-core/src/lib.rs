@@ -6,18 +6,18 @@
 
 mod agent;
 mod config;
-mod event;
 mod memory;
+mod multiagent;
 mod orchestrator;
+mod protocol;
 mod session;
 
 pub(crate) use claw_utils::{define_id_allocator, define_prefixed_id};
 
-pub use agent::IterationId;
-pub use config::ApiUsage;
-pub use event::{SessionEvent, StreamPart, ToolCall};
-pub use orchestrator::{
-    OpenSessionError, Orchestrator, OrchestratorBuildError, ReasoningEffort, SessionControl,
-    SessionControlError, SessionEventStream,
+pub use config::{ApiUsage, ReasoningEffort};
+pub use orchestrator::{Orchestrator, OrchestratorBuildError};
+pub use protocol::{
+    AgentId, IterationId, Message, SessionEvent, SessionId, SessionPersistence, StreamPart,
+    ToolCall, TurnId, TurnOrigin,
 };
-pub use session::{Message, SessionId, SessionPersistence, TurnId};
+pub use session::{OpenSessionError, SessionControl, SessionControlError, SessionEventStream};

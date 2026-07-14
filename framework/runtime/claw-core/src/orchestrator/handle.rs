@@ -12,17 +12,17 @@ use claw_interface::{
 use claw_tool::ToolRegistry;
 
 use crate::config::{ApiUsage, ClawApiManager};
-use crate::event::EventSink;
-use crate::session::{SessionId, SessionPersistence, SessionStore};
+use crate::protocol::EventSink;
+use crate::protocol::{SessionId, SessionPersistence};
+use crate::session::{
+    OpenSessionError, SessionControl, SessionControlError, SessionEventStream, SessionStore,
+};
 
 use super::checkpoint::{
     checkpoint_session_registry, load_session_store_state, SessionRegistryCheckpointError,
 };
 use super::engine::{run_engine, Command};
-use super::{
-    OpenSessionError, OrchestratorBuildError, SessionControl, SessionControlError,
-    SessionEventStream, CHECKPOINT_DIR, ENGINE_WORKER_STACK_SIZE,
-};
+use super::{OrchestratorBuildError, CHECKPOINT_DIR, ENGINE_WORKER_STACK_SIZE};
 
 type CheckpointSessions = dyn Fn(&SessionStore, Option<SessionId>) -> Result<(), SessionRegistryCheckpointError>
     + Send
@@ -186,10 +186,10 @@ impl Orchestrator {
                 OpenSessionError::WorkerStopped
             })?;
         match ack_rx.recv_blocking() {
-            Ok(Ok(())) => {
+            Ok(Ok(endpoint)) => {
                 tracing::info!(name: "opened", "");
                 Ok((
-                    SessionControl::new(session_id, self.command_tx.clone()),
+                    SessionControl::new(endpoint),
                     SessionEventStream::new(receiver),
                 ))
             }
@@ -236,7 +236,7 @@ impl Orchestrator {
     /// Delete a live session id and remove any associated runtime state.
     ///
     /// If the session has an open event stream, the stream receives
-    /// [`crate::event::SessionEvent::Closed`] before it terminates.
+    /// [`crate::protocol::SessionEvent::Closed`] before it terminates.
     ///
     /// # Errors
     ///

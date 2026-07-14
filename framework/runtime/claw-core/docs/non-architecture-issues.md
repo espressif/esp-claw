@@ -56,7 +56,7 @@ Priorities in this document mean:
 | `NAR-013` | P1 | Manifests | A missing `tool_block_retries` field silently changes policy to zero retries. |
 | `NAR-014` | P1 | Permissions | The human-approval runtime is unreachable from the product assembly path. |
 | `NAR-015` | P1 | Checkpoints | Several checkpoint decoders ignore schema versions or silently normalize invalid state. |
-| `NAR-016` | P0 | Subagents | An auto-terminated child can lose its queued result while its parent is temporarily unavailable. |
+| `NAR-016` | P0 | Subagents | **Resolved:** each live agent now has a stable slot whose inbox survives while the agent is in flight. |
 | `NAR-017` | P0 | Concurrency | A shared async LLM lease keeps only one waiter waker, so concurrent extraction can stall indefinitely. |
 | `NAR-018` | P0 | Tests | Control-progress tests race their workers and can leave the test process hung after failure. |
 | `NAR-019` | P0 | Tests | The backend retry matrix expects six transient HTTP calls but the runtime makes four. |
@@ -251,26 +251,15 @@ Exit condition: every durable part explicitly accepts only supported schemas,
 and invalid registry/graph invariants fail restore or use a documented versioned
 migration. Add unknown-schema and corrupt-state tests for each decoder.
 
-### NAR-016: queued subagent result is deleted with its child
+### NAR-016: queued subagent result is deleted with its child (resolved)
 
-When a subagent finishes while its parent is awaiting approval or checked out
-for a tick, `route_result` first puts the result in the parent's mailbox. For an
-auto-terminated child it then calls `delete_subtree(child)`. Subtree cleanup
-removes every mailbox item whose `child` is one of the deleted nodes, including
-the result that was just queued. The parent therefore never observes that
-child's result.
-
-Current evidence:
-
-- `src/orchestrator/instance/graph_flow/results.rs`
-  (`deliver_or_mailbox_subagent_result` followed by `delete_subtree`);
-- `src/orchestrator/instance/scheduler.rs` (`remove_agents` filters mailbox
-  entries by both parent and child);
-- the same ordering and filter were present in the pre-refactor implementation.
-
-Exit condition: decide the mailbox's ownership semantics after a child exits,
-retain deliverable results for live parents, and cover both parent-awaiting and
-parent-in-flight cases with behavioral tests.
+The registry now keeps one stable `AgentSlot` per live graph node. A slot owns
+the node's inbox even while its `BaseAgent` is checked out for a tick. Child
+results are converted to parent messages at delivery time and stored only in
+the parent's slot, so deleting the child cannot delete an already delivered
+result. The lifecycle matrix forces the parent to remain in flight until the
+auto-terminated child finishes and verifies that the parent still receives the
+result.
 
 ### NAR-017: shared async LLM lease can lose waiters
 

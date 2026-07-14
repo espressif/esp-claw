@@ -1,7 +1,6 @@
-//! Render parsed manifests into Rust source: a single `MANIFESTS` array of typed
-//! `AgentManifest` values. The output is `include!`-d into `crate::agent::manifest`,
-//! so it references the `AgentManifest`, `AgentKind`, and `SkillId` types
-//! defined/imported there.
+//! Render parsed manifests into Rust source: a single `ENTRIES` array of typed
+//! `AgentCatalogEntry` values. The output is `include!`-d into
+//! `crate::agent_catalog`.
 //!
 //! Generation uses `quote` to build a typed `proc_macro2::TokenStream` rather
 //! than hand-concatenating source strings, so string escaping, slice literals,
@@ -14,13 +13,13 @@ use quote::quote;
 use crate::parse::ParsedManifest;
 
 /// Render the full generated module body for `kinds` (assumed already sorted for
-/// deterministic output): a single `pub(super) const MANIFESTS: &[AgentManifest]`.
+/// deterministic output): a single catalog array.
 pub(crate) fn render(kinds: &[ParsedManifest]) -> String {
     let entries = kinds.iter().map(render_entry);
 
     let body = quote! {
-        #[doc = "Every firmware-baked agent manifest, one entry per kind under `resources/agents/`."]
-        pub(super) const MANIFESTS: &[AgentManifest] = &[
+        #[doc = "Every firmware-baked agent definition, one entry per kind."]
+        const ENTRIES: &[AgentCatalogEntry] = &[
             #(#entries),*
         ];
     };
@@ -31,7 +30,7 @@ pub(crate) fn render(kinds: &[ParsedManifest]) -> String {
     )
 }
 
-/// One `AgentManifest { ... }` array entry.
+/// One `AgentCatalogEntry { ... }` array entry.
 fn render_entry(kind: &ParsedManifest) -> TokenStream {
     let kind_name = &kind.kind;
     let description = &kind.description;
@@ -44,16 +43,20 @@ fn render_entry(kind: &ParsedManifest) -> TokenStream {
     let instructions = render_instructions(kind);
 
     quote! {
-        AgentManifest {
+        AgentCatalogEntry {
             kind: AgentKind::from_static(#kind_name),
             description: #description,
-            spawn_enabled: #spawn_enabled,
-            allowed_kinds: &[#(AgentKind::from_static(#allowed_kinds)),*],
-            retries: #retries,
-            tool_block_retries: #tool_block_retries,
-            tool_groups: &[#(#tool_groups),*],
-            skills: &[#(SkillId::from_static(#skills)),*],
-            instructions: #instructions,
+            runtime: AgentRuntimeManifest {
+                retries: #retries,
+                tool_block_retries: #tool_block_retries,
+                tool_groups: &[#(#tool_groups),*],
+                skills: &[#(SkillId::from_static(#skills)),*],
+                instructions: #instructions,
+            },
+            multiagent: MultiagentManifest {
+                spawn_enabled: #spawn_enabled,
+                allowed_kinds: &[#(AgentKind::from_static(#allowed_kinds)),*],
+            },
         }
     }
 }
@@ -63,7 +66,7 @@ fn render_entry(kind: &ParsedManifest) -> TokenStream {
 ///
 /// Both files are pulled in with `include_str!` and joined by `concat!` at
 /// compile time, so no instruction bytes are duplicated into the generated
-/// source. (`AgentConfig::resolve` trims the joined result, so an empty preamble
+/// source. (`AgentConfig::from_manifest` trims the result, so an empty preamble
 /// contributes nothing.)
 fn render_instructions(kind: &ParsedManifest) -> TokenStream {
     let own = kind

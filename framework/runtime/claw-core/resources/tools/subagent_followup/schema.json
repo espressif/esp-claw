@@ -2,7 +2,7 @@
   "type": "function",
   "function": {
     "name": "subagent_followup",
-    "description": "Cancel a subagent's current task and start a new one with the given message. Use this to retask a persistent (manual) subagent that is still alive. One-shot (auto) subagents finish on their own and report back automatically.",
+    "description": "Cancel an active subagent's current task and start a new one with the given message. Only subagents that have not completed can be retasked.",
     "parameters": {
       "type": "object",
       "properties": {

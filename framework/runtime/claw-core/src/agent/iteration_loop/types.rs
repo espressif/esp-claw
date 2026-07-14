@@ -7,7 +7,7 @@ use strum::IntoStaticStr;
 use claw_api::ChatError;
 use claw_tool::{ApprovalNeeded, ToolGate, ToolSetError, ToolSetHandle};
 
-use super::IterationId;
+use crate::protocol::IterationId;
 
 /// Errors from one [`super::IterationLoop::run`] step.
 #[derive(Clone, Debug, IntoStaticStr, thiserror::Error)]

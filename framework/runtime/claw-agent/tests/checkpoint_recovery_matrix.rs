@@ -62,7 +62,7 @@ fn setup_checkpoint(root: &str, setup: &str) {
             BatchId::new(1),
             vec![invalid_part("session-store")],
         ),
-        "missing_runtime_drive_part" => write_checkpoint_batches(
+        "missing_session_state_part" => write_checkpoint_batches(
             root,
             vec![
                 batch(
@@ -73,11 +73,11 @@ fn setup_checkpoint(root: &str, setup: &str) {
                 batch(
                     "session-runtime",
                     BatchId::new(1),
-                    vec![invalid_part("orchestrator-instance")],
+                    vec![invalid_part("multiagent-runtime")],
                 ),
             ],
         ),
-        "invalid_runtime_drive_part" => write_checkpoint_batches(
+        "invalid_session_state_part" => write_checkpoint_batches(
             root,
             vec![
                 batch(
@@ -88,11 +88,11 @@ fn setup_checkpoint(root: &str, setup: &str) {
                 batch(
                     "session-runtime",
                     BatchId::new(1),
-                    vec![invalid_part("session-drive")],
+                    vec![invalid_part("session-state"), valid_multiagent_part()],
                 ),
             ],
         ),
-        "invalid_orchestrator_instance_part" => write_checkpoint_batches(
+        "invalid_multiagent_runtime_part" => write_checkpoint_batches(
             root,
             vec![
                 batch(
@@ -104,8 +104,8 @@ fn setup_checkpoint(root: &str, setup: &str) {
                     "session-runtime",
                     BatchId::new(1),
                     vec![
-                        valid_session_drive_part(),
-                        invalid_part("orchestrator-instance"),
+                        valid_session_state_part(),
+                        invalid_part("multiagent-runtime"),
                     ],
                 ),
             ],
@@ -179,9 +179,9 @@ fn valid_session_store_part() -> PartWrite<'static> {
     )
 }
 
-fn valid_session_drive_part() -> PartWrite<'static> {
+fn valid_session_state_part() -> PartWrite<'static> {
     let mut part = json_part(
-        "session-drive",
+        "session-state",
         json!({
             "active_turn": null,
             "next_turn_id": "turn-1",
@@ -189,7 +189,21 @@ fn valid_session_drive_part() -> PartWrite<'static> {
             "pending_reasoning_effort": null,
         }),
     );
-    part.state.schema_version = 2;
+    part.state.schema_version = 4;
+    part
+}
+
+fn valid_multiagent_part() -> PartWrite<'static> {
+    let mut part = json_part(
+        "multiagent-runtime",
+        json!({
+            "agents": [],
+            "ready_queue": [],
+            "approvals": [],
+            "agent_slots": [],
+        }),
+    );
+    part.state.schema_version = 4;
     part
 }
 

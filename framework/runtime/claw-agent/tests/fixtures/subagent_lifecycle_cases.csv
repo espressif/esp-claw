@@ -1,3 +1,2 @@
-case,termination,worker_output,spawn_ack,background_output,supervision_output,expected_watch_fragment,expected_delete_fragment,expected_after_delete_fragment
-manual-worker-background-then-delete,manual,worker manual result,root delegated manual,root saw manual result,manual supervision done,"""name"":""helper""|""termination"":""manual""",scheduled for deletion,"{""subagents"":[]}"
-auto-worker-background-then-autoremove,auto,worker auto result,root delegated auto,root saw auto result,auto supervision done,No subagent,Cannot delete,"{""subagents"":[]}"
+case,worker_output,spawn_ack,background_output,supervision_output,expected_watch_fragment,expected_delete_fragment,expected_after_delete_fragment
+worker-background-then-autoremove,worker result,root delegated,root saw result,supervision done,No subagent,Cannot delete,"{""subagents"":[]}"

@@ -3,7 +3,7 @@ use strum::IntoStaticStr;
 
 use claw_tool::ToolSetError;
 
-use crate::session::Message;
+use crate::protocol::Message;
 
 use super::IterationLoopError;
 
@@ -20,7 +20,7 @@ pub(crate) enum AgentCommand {
     /// is idle; the orchestrator is responsible for deferring append delivery
     /// until that boundary.
     AppendMessage(
-        #[serde(deserialize_with = "crate::session::deserialize_message_or_text")] Message,
+        #[serde(deserialize_with = "crate::protocol::deserialize_message_or_text")] Message,
     ),
     /// Abandon the current task. (Orchestrator-initiated hard stop — distinct
     /// from the agent ending itself via `conversation_end`.) Being disruptive,

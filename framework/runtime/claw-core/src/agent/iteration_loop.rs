@@ -7,8 +7,6 @@
 //! It does not read, format, or return interrupt message content — upper layers
 //! own pending input and context rebuild.
 
-crate::define_prefixed_id!(IterationId, "iteration-", "iteration");
-
 mod run;
 mod tool_round;
 mod types;
@@ -16,7 +14,7 @@ mod types;
 use claw_api::{ClawApiAsync, RetryPolicy};
 use claw_interface::{ClawHttp, ClawTimer};
 
-use crate::event::EventSink;
+use crate::protocol::EventSink;
 
 pub(crate) use types::{
     CompletedKind, CompletedOutcome, InterruptionControl, IterationLoopError, IterationOutcome,
@@ -33,8 +31,7 @@ pub(crate) struct IterationLoop<'a, H: ClawHttp, Timer: ClawTimer> {
     pub interruption: &'a dyn InterruptionControl,
     /// Retry policy applied to this iteration's LLM call (see [`RetryPolicy`]).
     pub retry: RetryPolicy,
-    /// Where this iteration's `SessionEvent`s are pushed. Disabled for subagents
-    /// (and the internal approval resolver), so only the root's iteration events
-    /// reach a submission's stream.
+    /// Where this iteration's `SessionEvent`s are pushed. The owner may disable
+    /// it when this agent's internal stream should not be public.
     pub events: &'a EventSink,
 }

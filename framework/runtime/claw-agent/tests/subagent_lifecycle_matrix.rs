@@ -10,7 +10,9 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
-use claw_agent::{AgentSystem, IterationId, Message, SessionEvent, StreamPart, TurnId};
+use claw_agent::{
+    AgentId, AgentSystem, IterationId, Message, SessionEvent, StreamPart, TurnId, TurnOrigin,
+};
 use claw_interface::{
     Cancel, ClawHttp, HttpJsonRequest, HttpResponse, HttpResponseFuture, HttpStatusCode,
     ImmediateTimer, MemFs, StdThread, TokioExecutor,
@@ -26,6 +28,8 @@ type SubagentSystem = AgentSystem<MemFs, Sse<SubagentHttp>, ImmediateTimer>;
 static SUBAGENT_LOCK: Mutex<()> = Mutex::new(());
 static SUBAGENT_STATE: Mutex<Option<SubagentCaseState>> = Mutex::new(None);
 static CONTROL_WORKER_POLLS: AtomicUsize = AtomicUsize::new(0);
+static RELEASE_HELD_WORKER: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 #[test]
 fn subagent_lifecycle_csv_matrix_drives_background_results_and_graph_updates() {
@@ -35,7 +39,7 @@ fn subagent_lifecycle_csv_matrix_drives_background_results_and_graph_updates() {
 
     for row in csv_dicts(include_str!("fixtures/subagent_lifecycle_cases.csv")) {
         let fixture = Fixture::from_row(&row);
-        install_case(fixture.clone());
+        install_case(fixture.clone(), false);
 
         let root = mem_root("subagent-lifecycle");
         let system = SubagentSystem::new::<StdThread, TokioExecutor>(persistence(&root)).unwrap();
@@ -47,10 +51,10 @@ fn subagent_lifecycle_csv_matrix_drives_background_results_and_graph_updates() {
 
         block_on(control.submit(Message::text(format!("delegate {}", fixture.case)))).unwrap();
         let delegated_turn = drain_until_turn_ended(&mut events);
-        assert_turn(&delegated_turn, TurnId(1), &fixture.case);
+        assert_turn(&delegated_turn, TurnId(1), TurnOrigin::User, &fixture.case);
         assert_eq!(
             iteration_ids(&delegated_turn),
-            vec![IterationId(0), IterationId(1), IterationId(0)],
+            vec![IterationId(0), IterationId(1)],
             "case {}",
             fixture.case
         );
@@ -62,14 +66,36 @@ fn subagent_lifecycle_csv_matrix_drives_background_results_and_graph_updates() {
         );
         assert_eq!(
             output_fragments(&delegated_turn),
-            vec![fixture.spawn_ack.clone(), fixture.background_output.clone()],
+            vec![fixture.spawn_ack.clone()],
+            "case {}",
+            fixture.case
+        );
+
+        let child = recorded_child_id();
+        let background_turn = drain_until_turn_ended(&mut events);
+        assert_turn(
+            &background_turn,
+            TurnId(2),
+            TurnOrigin::Subagent { agent: child },
+            &fixture.case,
+        );
+        assert_eq!(iteration_ids(&background_turn), vec![IterationId(0)]);
+        assert!(tools_events(&background_turn).is_empty());
+        assert_eq!(
+            output_fragments(&background_turn),
+            vec![fixture.background_output.clone()],
             "case {}",
             fixture.case
         );
 
         block_on(control.submit(Message::text(format!("supervise {}", fixture.case)))).unwrap();
         let supervision_turn = drain_until_turn_ended(&mut events);
-        assert_turn(&supervision_turn, TurnId(2), &fixture.case);
+        assert_turn(
+            &supervision_turn,
+            TurnId(3),
+            TurnOrigin::User,
+            &fixture.case,
+        );
         assert_eq!(
             iteration_ids(&supervision_turn),
             vec![IterationId(0), IterationId(1), IterationId(2)],
@@ -100,53 +126,135 @@ fn subagent_lifecycle_csv_matrix_drives_background_results_and_graph_updates() {
 }
 
 #[test]
-fn turn_control_preserves_agents_on_interrupt_and_deletes_them_on_cancel() {
+fn foreground_spawn_returns_the_child_result_to_the_same_tool_call_and_turn() {
+    let _lock = SUBAGENT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let fixture = csv_dicts(include_str!("fixtures/subagent_lifecycle_cases.csv"))
+        .into_iter()
+        .map(|row| Fixture::from_row(&row))
+        .next()
+        .expect("subagent fixture");
+    install_case(fixture.clone(), true);
+
+    let root = mem_root("subagent-foreground");
+    let system = SubagentSystem::new::<StdThread, TokioExecutor>(persistence(&root)).unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
+    let (control, mut events) = system.open_session(session).unwrap();
+
+    block_on(control.submit(Message::text("delegate in foreground"))).unwrap();
+    let turn = drain_until_turn_ended(&mut events);
+    assert_turn(&turn, TurnId(1), TurnOrigin::User, &fixture.case);
+    assert_eq!(iteration_ids(&turn), vec![IterationId(0), IterationId(1)]);
+    assert_eq!(tools_events(&turn), vec!["subagent_spawn".to_string()]);
+    assert_eq!(output_fragments(&turn), vec![fixture.spawn_ack.clone()]);
+
+    let requests = recorded_requests();
+    let root_requests = requests
+        .iter()
+        .filter(|request| request.kind == RequestKind::Root)
+        .collect::<Vec<_>>();
+    assert_eq!(root_requests.len(), 2);
+    assert_eq!(worker_request_count(), 1);
+    let child = extract_child_id(&root_requests[1].body).expect("foreground result has child id");
+    assert!(tool_message_content(&root_requests[1].body)
+        .join("\n")
+        .contains(&format!(
+            "[subagent] id: {child}, result: true, message: {}",
+            fixture.worker_output
+        )));
+    let request: Value = serde_json::from_str(&root_requests[1].body).expect("valid request body");
+    assert!(!request["messages"]
+        .as_array()
+        .expect("request messages")
+        .iter()
+        .any(|message| {
+            message["role"].as_str() == Some("user")
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|content| content.starts_with("[subagent]"))
+        }));
+}
+
+#[test]
+fn a_user_turn_can_run_while_a_background_subagent_is_still_working() {
+    let _lock = SUBAGENT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    install_background_concurrency_case();
+
+    let root = mem_root("subagent-background-concurrency");
+    let system = SubagentSystem::new::<StdThread, TokioExecutor>(persistence(&root)).unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
+    let (control, mut events) = system.open_session(session).unwrap();
+
+    block_on(control.submit(Message::text("start background work"))).unwrap();
+    let delegated = drain_until_turn_ended(&mut events);
+    assert_turn(&delegated, TurnId(1), TurnOrigin::User, "background");
+    wait_until_control_worker_is_pending("background");
+
+    block_on(control.submit(Message::text("answer while it runs"))).unwrap();
+    let concurrent = drain_until_turn_ended(&mut events);
+    assert_turn(&concurrent, TurnId(2), TurnOrigin::User, "concurrent user");
+    assert_eq!(
+        output_fragments(&concurrent),
+        vec!["root stayed responsive"]
+    );
+
+    RELEASE_HELD_WORKER.store(true, Ordering::SeqCst);
+    let child = recorded_child_id();
+    let delivered = drain_until_turn_ended(&mut events);
+    assert_turn(
+        &delivered,
+        TurnId(3),
+        TurnOrigin::Subagent { agent: child },
+        "background result",
+    );
+    assert_eq!(output_fragments(&delivered), vec!["background delivered"]);
+}
+
+#[test]
+fn cancelled_foreground_spawn_deletes_its_subagent() {
     let _lock = SUBAGENT_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    for control_name in ["interrupt", "cancel"] {
-        install_control_case(control_name);
-        let root = mem_root("subagent-turn-control");
-        let system = SubagentSystem::new::<StdThread, TokioExecutor>(persistence(&root)).unwrap();
-        system
-            .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
-            .unwrap();
-        let session = system.new_session(claw_agent::SessionPersistence::Persistent);
-        let (control, mut events) = system.open_session(session).unwrap();
+    let control_name = "cancel";
+    install_control_case(control_name);
+    let root = mem_root("subagent-turn-control");
+    let system = SubagentSystem::new::<StdThread, TokioExecutor>(persistence(&root)).unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
+    let (control, mut events) = system.open_session(session).unwrap();
 
-        block_on(control.submit(Message::text(format!("delegate then {control_name}")))).unwrap();
-        wait_until_control_worker_is_pending(control_name);
-        match control_name {
-            "interrupt" => block_on(control.interrupt()).unwrap(),
-            "cancel" => block_on(control.cancel()).unwrap(),
-            _ => unreachable!(),
-        }
-        block_on(control.submit(Message::text(format!("inspect after {control_name}")))).unwrap();
+    block_on(control.submit(Message::text(format!("delegate then {control_name}")))).unwrap();
+    wait_until_control_worker_is_pending(control_name);
+    block_on(control.cancel()).unwrap();
+    block_on(control.submit(Message::text(format!("inspect after {control_name}")))).unwrap();
 
-        let controlled_turn = drain_until_turn_ended(&mut events);
-        assert_turn(&controlled_turn, TurnId(1), control_name);
+    let controlled_turn = drain_until_turn_ended(&mut events);
+    assert_turn(&controlled_turn, TurnId(1), TurnOrigin::User, control_name);
 
-        let inspection_turn = drain_until_turn_ended(&mut events);
-        assert_turn(&inspection_turn, TurnId(2), control_name);
-        assert_eq!(
-            output_fragments(&inspection_turn),
-            vec![format!("{control_name} graph inspected")],
-        );
+    let inspection_turn = drain_until_turn_ended(&mut events);
+    assert_turn(&inspection_turn, TurnId(2), TurnOrigin::User, control_name);
+    assert_eq!(
+        output_fragments(&inspection_turn),
+        vec![format!("{control_name} graph inspected")],
+    );
 
-        let list_result = control_list_result();
-        if control_name == "interrupt" {
-            assert!(
-                list_result.contains("helper") && list_result.contains("idle"),
-                "interrupt should preserve the stopped subagent as idle: {list_result}"
-            );
-        } else {
-            assert!(
-                list_result.contains(r#""subagents":[]"#),
-                "cancel should delete every spawned subagent: {list_result}"
-            );
-        }
-    }
+    let list_result = control_list_result();
+    assert!(
+        list_result.contains(r#""subagents":[]"#),
+        "cancel should delete every spawned subagent: {list_result}"
+    );
 }
 
 #[derive(Default)]
@@ -166,15 +274,24 @@ impl ClawHttp for SubagentHttp {
                     if cancel.is_cancelled() {
                         return Err(claw_interface::HttpError::Aborted);
                     }
+                    if RELEASE_HELD_WORKER.load(Ordering::SeqCst) {
+                        return Ok(HttpResponse {
+                            status_code: HttpStatusCode::OK,
+                            body: response_for_request(&body),
+                        });
+                    }
                     YieldOnce(false).await;
                 }
             });
         }
         let delay_once = should_delay_once(&body);
+        let wait_for_worker = should_wait_for_worker(&body);
         Box::pin(SubagentResponseFuture {
             body,
             delay_once,
             yielded_pending: false,
+            wait_for_worker,
+            yielded_after_worker: false,
         })
     }
 }
@@ -199,12 +316,23 @@ struct SubagentResponseFuture {
     body: String,
     delay_once: bool,
     yielded_pending: bool,
+    wait_for_worker: bool,
+    yielded_after_worker: bool,
 }
 
 impl Future for SubagentResponseFuture {
     type Output = Result<HttpResponse, claw_interface::HttpError>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.wait_for_worker && worker_request_count() == 0 {
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
+        }
+        if self.wait_for_worker && !self.yielded_after_worker {
+            self.yielded_after_worker = true;
+            cx.waker().wake_by_ref();
+            return Poll::Pending;
+        }
         if self.delay_once && !self.yielded_pending {
             self.yielded_pending = true;
             cx.waker().wake_by_ref();
@@ -221,7 +349,6 @@ impl Future for SubagentResponseFuture {
 #[derive(Clone)]
 struct Fixture {
     case: String,
-    termination: String,
     worker_output: String,
     spawn_ack: String,
     background_output: String,
@@ -235,7 +362,6 @@ impl Fixture {
     fn from_row(row: &BTreeMap<String, String>) -> Self {
         Self {
             case: field(row, "case").to_string(),
-            termination: field(row, "termination").to_string(),
             worker_output: field(row, "worker_output").to_string(),
             spawn_ack: field(row, "spawn_ack").to_string(),
             background_output: field(row, "background_output").to_string(),
@@ -251,7 +377,10 @@ impl Fixture {
 struct SubagentCaseState {
     fixture: Fixture,
     control: Option<String>,
+    foreground: bool,
+    background_concurrency: bool,
     hold_worker: bool,
+    wait_root_for_worker: bool,
     root_requests: usize,
     worker_requests: usize,
     worker_delay_used: bool,
@@ -273,11 +402,14 @@ enum RequestKind {
     Other,
 }
 
-fn install_case(fixture: Fixture) {
+fn install_case(fixture: Fixture, foreground: bool) {
     *state() = Some(SubagentCaseState {
         fixture,
         control: None,
+        foreground,
+        background_concurrency: false,
         hold_worker: false,
+        wait_root_for_worker: !foreground,
         root_requests: 0,
         worker_requests: 0,
         worker_delay_used: false,
@@ -288,10 +420,10 @@ fn install_case(fixture: Fixture) {
 
 fn install_control_case(control: &str) {
     CONTROL_WORKER_POLLS.store(0, Ordering::SeqCst);
+    RELEASE_HELD_WORKER.store(false, Ordering::SeqCst);
     *state() = Some(SubagentCaseState {
         fixture: Fixture {
             case: control.to_string(),
-            termination: "manual".to_string(),
             worker_output: "must not finish".to_string(),
             spawn_ack: "root delegated".to_string(),
             background_output: String::new(),
@@ -301,7 +433,37 @@ fn install_control_case(control: &str) {
             expected_after_delete_fragment: String::new(),
         },
         control: Some(control.to_string()),
+        foreground: true,
+        background_concurrency: false,
         hold_worker: true,
+        wait_root_for_worker: false,
+        root_requests: 0,
+        worker_requests: 0,
+        worker_delay_used: false,
+        child_id: None,
+        requests: Vec::new(),
+    });
+}
+
+fn install_background_concurrency_case() {
+    CONTROL_WORKER_POLLS.store(0, Ordering::SeqCst);
+    RELEASE_HELD_WORKER.store(false, Ordering::SeqCst);
+    *state() = Some(SubagentCaseState {
+        fixture: Fixture {
+            case: "background-concurrency".to_owned(),
+            worker_output: "held worker result".to_owned(),
+            spawn_ack: "background requested".to_owned(),
+            background_output: "background delivered".to_owned(),
+            supervision_output: String::new(),
+            expected_watch_fragment: String::new(),
+            expected_delete_fragment: String::new(),
+            expected_after_delete_fragment: String::new(),
+        },
+        control: None,
+        foreground: false,
+        background_concurrency: true,
+        hold_worker: true,
+        wait_root_for_worker: false,
         root_requests: 0,
         worker_requests: 0,
         worker_delay_used: false,
@@ -327,6 +489,17 @@ fn should_delay_once(body: &str) -> bool {
     }
     state.worker_delay_used = true;
     true
+}
+
+fn should_wait_for_worker(body: &str) -> bool {
+    classify_request(body) == RequestKind::Root
+        && state()
+            .as_ref()
+            .is_some_and(|state| state.wait_root_for_worker && state.root_requests == 1)
+}
+
+fn worker_request_count() -> usize {
+    state().as_ref().map_or(0, |state| state.worker_requests)
 }
 
 fn response_for_request(body: &str) -> String {
@@ -356,6 +529,9 @@ fn root_response(state: &mut SubagentCaseState, body: &str) -> String {
     if let Some(control) = state.control.clone() {
         return control_root_response(state, body, request_index, &control);
     }
+    if state.background_concurrency {
+        return background_concurrency_root_response(state, body, request_index);
+    }
 
     match request_index {
         0 => assistant_tool_calls(vec![tool_call(
@@ -365,7 +541,7 @@ fn root_response(state: &mut SubagentCaseState, body: &str) -> String {
                 "kind": "worker",
                 "name": "helper",
                 "goal": format!("worker goal {}", state.fixture.case),
-                "termination": state.fixture.termination,
+                "foreground": state.foreground,
             }),
         )]),
         1 => {
@@ -402,9 +578,35 @@ fn root_response(state: &mut SubagentCaseState, body: &str) -> String {
     }
 }
 
-fn control_root_response(
+fn background_concurrency_root_response(
     state: &mut SubagentCaseState,
     body: &str,
+    request_index: usize,
+) -> String {
+    match request_index {
+        0 => assistant_tool_calls(vec![tool_call(
+            "call_spawn",
+            "subagent_spawn",
+            json!({
+                "kind": "worker",
+                "name": "helper",
+                "goal": "held background work",
+                "foreground": false,
+            }),
+        )]),
+        1 => {
+            state.child_id = extract_child_id(body);
+            assistant_text("background requested")
+        }
+        2 => assistant_text("root stayed responsive"),
+        3 => assistant_text("background delivered"),
+        other => panic!("unexpected background concurrency request index {other}"),
+    }
+}
+
+fn control_root_response(
+    _state: &mut SubagentCaseState,
+    _body: &str,
     request_index: usize,
     control: &str,
 ) -> String {
@@ -416,25 +618,22 @@ fn control_root_response(
                 "kind": "worker",
                 "name": "helper",
                 "goal": format!("worker held for {control}"),
-                "termination": "manual",
+                "foreground": true,
             }),
         )]),
-        1 => {
-            state.child_id = extract_child_id(body);
-            assistant_text("root delegated")
-        }
-        2 => assistant_tool_calls(vec![tool_call(
+        1 => assistant_tool_calls(vec![tool_call(
             "call_list_after_control",
             "subagent_list",
             json!({}),
         )]),
-        3 => assistant_text(&format!("{control} graph inspected")),
+        2 => assistant_text(&format!("{control} graph inspected")),
         other => panic!("unexpected control root request index {other} for {control}"),
     }
 }
 
 fn wait_until_control_worker_is_pending(control: &str) {
-    for _ in 0..10_000 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while std::time::Instant::now() < deadline {
         if CONTROL_WORKER_POLLS.load(Ordering::SeqCst) > 0 {
             return;
         }
@@ -552,7 +751,7 @@ fn assert_request_history(fixture: &Fixture) {
         .unwrap_or_else(|| panic!("case {}: child id missing", fixture.case));
     assert!(
         root_requests[2].body.contains(&format!(
-            "[subagent {child_id} ok] {}",
+            "[subagent] id: {child_id}, result: true, message: {}",
             fixture.worker_output
         )),
         "case {}: background root request did not receive subagent result",
@@ -602,10 +801,18 @@ fn tool_message_content(body: &str) -> Vec<String> {
         .collect()
 }
 
-fn assert_turn(events: &[SessionEvent], turn: TurnId, case: &str) {
+fn recorded_child_id() -> AgentId {
+    let child = state()
+        .as_ref()
+        .and_then(|state| state.child_id.clone())
+        .expect("spawn response recorded child id");
+    AgentId::from_wire(&child).expect("valid recorded child id")
+}
+
+fn assert_turn(events: &[SessionEvent], turn: TurnId, origin: TurnOrigin, case: &str) {
     assert_eq!(
         events.first(),
-        Some(&SessionEvent::TurnStarted { turn }),
+        Some(&SessionEvent::TurnStarted { turn, origin }),
         "case {case}"
     );
     assert_eq!(

@@ -17,9 +17,10 @@ use claw_api::{ClawApiAsync, RetryPolicy};
 use claw_checkpoint::DurableState;
 use claw_interface::{ClawHttp, ClawTimer};
 
-use super::iteration_loop::{IterationId, IterationLoopError};
+use super::iteration_loop::IterationLoopError;
 use crate::agent::tools::ControlSink;
 use crate::memory::{ContextAdapter, Transcript};
+use crate::protocol::IterationIdAllocator;
 use claw_context::Context;
 use claw_tool::ToolSet;
 
@@ -30,39 +31,6 @@ pub(super) use self::construction::BaseAgentConfig;
 pub(crate) use self::control::AgentAbortHandle;
 use self::control::AgentInterruption;
 use self::state::BaseAgentState;
-
-crate::define_prefixed_id!(AgentId, "agent-", "agent");
-
-crate::define_id_allocator!(
-    /// Reset for each task.
-    IterationIdAllocator(IterationId),
-    IterationId(0)
-);
-
-pub(crate) trait TranscriptText {
-    fn text(&self) -> String;
-}
-
-pub(crate) struct SubagentTranscriptText {
-    id: AgentId,
-    text: String,
-    ok: bool,
-}
-
-impl SubagentTranscriptText {
-    pub(crate) fn new(id: AgentId, text: String, ok: bool) -> Self {
-        Self { id, text, ok }
-    }
-}
-
-impl TranscriptText for SubagentTranscriptText {
-    fn text(&self) -> String {
-        format!(
-            "[subagent] id: {}, result: {}, message: {}",
-            self.id, self.ok, self.text
-        )
-    }
-}
 
 /// A base agent that runs one task at a time as a sequence of iterations.
 pub(crate) struct BaseAgent<H: ClawHttp, Timer: ClawTimer> {

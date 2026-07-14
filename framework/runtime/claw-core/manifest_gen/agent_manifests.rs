@@ -1,8 +1,8 @@
 //! The **agent-manifest** generator.
 //!
 //! Self-contained codegen step: reads `resources/agents/<kind>/`, parses +
-//! validates each kind, and writes the typed `MANIFESTS: &[AgentManifest]` array
-//! to `<out_dir>/manifests.rs`.
+//! validates each kind, and writes the typed `ENTRIES: &[AgentCatalogEntry]`
+//! array to `<out_dir>/manifests.rs`.
 //!
 //! The whole step is sealed behind the single entry point [`generate`]; `main`
 //! only calls it. Other generators (if added) live in their own sibling modules
@@ -27,7 +27,7 @@ const OUTPUT_FILE: &str = "manifests.rs";
 /// generator skips it rather than parsing it as a manifest.
 const SHARED_DIR: &str = "common";
 
-/// Generate the agent-manifest statics.
+/// Generate the agent catalog.
 ///
 /// Reads `<manifest_dir>/resources/agents`, parses and validates every kind
 /// directory, and writes `<out_dir>/manifests.rs`. Registers the resources it

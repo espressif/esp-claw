@@ -6,7 +6,7 @@ use claw_interface::{Cancel, ClawHttp, ClawTimer};
 use claw_tool::ToolRunner;
 use futures_lite::StreamExt;
 
-use crate::event::{EventSink, SessionEvent, StreamPart};
+use crate::protocol::{EventSink, SessionEvent, StreamPart};
 
 use super::tool_round::{append_assistant_tool_calls, run_tool_calls, ToolRoundResult};
 use super::types::{
@@ -292,7 +292,7 @@ async fn run_one_iteration<H: ClawHttp + StreamingHttp, Timer: ClawTimer>(
 mod tests {
     use claw_api::ToolCall;
 
-    use crate::event::{EventSink, SessionEvent, StreamPart};
+    use crate::protocol::{EventSink, SessionEvent, StreamPart};
 
     use super::IterationBracket;
 

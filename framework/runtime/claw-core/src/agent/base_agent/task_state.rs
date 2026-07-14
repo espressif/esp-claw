@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use serde::{Deserialize, Serialize};
 
 use crate::agent::tools::ControlSignal;
-use crate::session::Message;
+use crate::protocol::Message;
 
 use super::{AgentCommand, AgentCommandError, AgentState, ApprovalDecision};
 
@@ -44,7 +44,7 @@ impl TaskPhaseView {
 #[derive(Deserialize, Serialize)]
 enum Inbound {
     Command(AgentCommand),
-    TaskInput(#[serde(deserialize_with = "crate::session::deserialize_message_or_text")] Message),
+    TaskInput(#[serde(deserialize_with = "crate::protocol::deserialize_message_or_text")] Message),
     Control(ControlSignal),
 }
 
@@ -251,7 +251,7 @@ fn classify(
 
 #[cfg(test)]
 mod tests {
-    use crate::session::Message;
+    use crate::protocol::Message;
 
     use super::*;
 

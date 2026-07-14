@@ -93,7 +93,7 @@ mod tests {
     use super::*;
     use crate::agent::base_agent::task_state::TaskAction;
     use crate::agent::base_agent::{AgentCommand, ApprovalDecision};
-    use crate::session::Message;
+    use crate::protocol::Message;
 
     #[test]
     fn schema_two_round_trips_the_canonical_approval_payload() {

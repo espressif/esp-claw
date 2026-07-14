@@ -2,6 +2,7 @@
 
 mod construction;
 mod create;
+mod environment;
 mod error;
 mod layout;
 mod long_term;
@@ -18,10 +19,10 @@ use claw_tool::ToolRegistry;
 
 use self::long_term::LongTermDeps;
 
+pub(crate) use environment::{AgentEnvironment, ProfileAccess, TranscriptTarget};
 pub(crate) use error::{FsAgentCreateError, FsAgentFactoryError};
-pub(crate) use layout::AgentPlacement;
 
-/// Shared assembly state for root agents and subagents.
+/// Shared assembly dependencies for independently-built agents.
 pub(crate) struct FsAgentFactory<
     Filesystem: ClawFs + 'static,
     Http: ClawHttp + StreamingHttp + Default + 'static,

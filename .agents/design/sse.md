@@ -1,9 +1,9 @@
 # Session Event Stream (SSE-ready)
 
 `AgentSystem::open_session` returns a [`SessionControl`, `SessionEventStream`]
-pair. The stream remains open across submits; each submit creates one turn on
-that stream. Pulling `SessionEventStream` drives the session and yields events as
-they happen.
+pair. The stream remains open across submits. A submit creates a user-origin
+turn; a detached subagent result creates a subagent-origin turn on the same
+stream.
 
 ## Event model
 
@@ -14,7 +14,7 @@ pub enum StreamPart<T> {
 }
 
 pub enum SessionEvent {
-    TurnStarted { turn: TurnId },
+    TurnStarted { turn: TurnId, origin: TurnOrigin },
     IterationStarted { iteration: IterationId },
 
     Reasoning(StreamPart<String>),
@@ -25,6 +25,11 @@ pub enum SessionEvent {
     TurnEnded { turn: TurnId },
     Error { message: String },
     Closed,
+}
+
+pub enum TurnOrigin {
+    User,
+    Subagent { agent: AgentId },
 }
 ```
 
@@ -64,7 +69,7 @@ paths still close every open content stream before `IterationEnded`.
 One long-lived session stream can carry multiple turns:
 
 ```text
-TurnStarted { turn: 1 }
+TurnStarted { turn: 1, origin: User }
   IterationStarted { iteration: 1 }
     Reasoning(Delta("..."))
     Reasoning(End)
@@ -80,7 +85,7 @@ TurnStarted { turn: 1 }
   IterationEnded
 TurnEnded { turn: 1 }
 
-TurnStarted { turn: 2 }
+TurnStarted { turn: 2, origin: Subagent { agent: agent-2 } }
   ...
 TurnEnded { turn: 2 }
 
@@ -93,15 +98,23 @@ clarifications, terminal tool messages, and failure text, are also emitted as
 than inside an iteration. `Closed` is terminal for the session stream;
 `TurnEnded` is not.
 
+`subagent_spawn(foreground: true)` waits inside its tool call, so its result
+stays in the current turn. `subagent_spawn(foreground: false)` returns the agent
+id immediately; the current turn may end while that agent continues running.
+When the detached result reaches the root, the session actor opens a new
+`TurnOrigin::Subagent` turn. A caller may submit another user message while only
+detached work is running; that message opens an independent user-origin turn.
+
 ## Scope and ownership
 
-Only root-agent iterations are externally visible. Subagent events use a
-disabled sink and remain internal. Root iterations are sequential, so the
+Only root-agent iterations are externally visible. Subagent iterations use a
+disabled sink and remain internal; a detached result becomes root input in its
+own turn. Root iterations are sequential, so the
 `IterationStarted..IterationEnded` bracket supplies enough scope for content
 events without repeating agent or iteration ids on every delta.
 
 The iteration loop owns LLM deltas and their three content boundaries. The
-orchestrator owns turn boundaries and output synthesized outside the LLM
+session actor owns turn boundaries and output synthesized outside the LLM
 stream. The outward `SessionEventStream` wraps the session receiver and is the
 only public read side.
 
@@ -124,4 +137,6 @@ kinds:
 | `ToolCalls(End)` | `CLAW_AGENT_EVENT_KIND_TOOLS_END` |
 
 The current C payload for a tool call remains its name; Rust callers receive
-the complete `ToolCall`. End events have null `text` and `error_message`.
+the complete `ToolCall`. End events have null `text` and `error_message`. The C
+ABI currently skips `TurnStarted`, so `TurnOrigin` is exposed by the Rust public
+API only.

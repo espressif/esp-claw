@@ -31,13 +31,12 @@ pub(crate) struct ProfileContextAdapter<F: ClawFs + 'static> {
 
 impl<F: ClawFs + 'static> ProfileContextAdapter<F> {
     /// Build an adapter over `store`.
-    pub(crate) fn new(store: ProfileStore<F>, is_root: bool) -> Self {
-        // Attach editable global profile context to every agent. Only a root agent
-        // gets the mutation tools; subagents read profile through context but do
-        // not write it directly.
+    pub(crate) fn new(store: ProfileStore<F>, writable: bool) -> Self {
+        // Every agent receives profile context. Its owner explicitly decides
+        // whether mutation tools are part of this agent's environment.
         Self {
             store,
-            tools: if is_root {
+            tools: if writable {
                 ProfileTools::Writable
             } else {
                 ProfileTools::Disabled

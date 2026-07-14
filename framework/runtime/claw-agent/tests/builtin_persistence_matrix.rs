@@ -6,7 +6,7 @@ use support::Sse;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, MutexGuard};
 
-use claw_agent::{AgentSystem, IterationId, Message, SessionEvent, StreamPart, TurnId};
+use claw_agent::{AgentSystem, IterationId, Message, SessionEvent, StreamPart, TurnId, TurnOrigin};
 use claw_interface::{
     Cancel, ClawFs, ClawHttp, DiskFs, HttpJsonRequest, HttpResponse, HttpResponseFuture,
     HttpStatusCode, ImmediateTimer, StdThread, TokioExecutor,
@@ -462,7 +462,10 @@ fn install_replies(items: Vec<String>) {
 fn assert_phase(result: &PhaseResult, expected_output: &str, case: &str) {
     assert_eq!(
         result.events.first(),
-        Some(&SessionEvent::TurnStarted { turn: TurnId(1) }),
+        Some(&SessionEvent::TurnStarted {
+            turn: TurnId(1),
+            origin: TurnOrigin::User,
+        }),
         "case {case}"
     );
     assert_eq!(

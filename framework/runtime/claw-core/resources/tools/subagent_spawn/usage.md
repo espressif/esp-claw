@@ -6,10 +6,13 @@ Give the subagent a short, required `name` so you can tell several subagents apa
 in `subagent_list` / `subagent_watch`. The name is just a label; you still
 `subagent_delete` (and refer to it) by the agent id this call returns.
 
-The subagent runs on its own and reports its result back to you when it finishes;
-integrate that result as it arrives. Use `termination` to choose its lifecycle:
+Choose the required execution mode explicitly:
 
-- `auto` (default) — one-shot: the subagent is removed as soon as it reports.
-- `manual` — persistent: it stays alive and idle after reporting, so you can
-  watch it, hand it more work, or delete it later. You are then responsible for
-  removing it with `subagent_delete` when it is no longer needed.
+- `foreground: true` — wait; this tool call returns the subagent result in the
+  current turn.
+- `foreground: false` — return the agent id immediately; the subagent keeps
+  running and its result starts a later subagent-origin turn.
+
+Every subagent is one-shot and is removed automatically after reporting its
+result. While a background subagent is still running, you can inspect, retask,
+or stop it with the other subagent tools.
