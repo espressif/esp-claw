@@ -64,7 +64,7 @@ Priorities in this document mean:
 | `NAR-021` | P0 | Tests | The tool-registry fixture expects an obsolete duplicate-tool error fragment. |
 | `NAR-022` | P0 | Persistence | Tool-registry checkpoint timing/state assertions disagree with persisted output. |
 | `NAR-023` | P1 | Tracing | Streaming iteration chat spans do not contain the attempt span required by the trace test. |
-| `NAR-026` | P1 | Tracing | Async sibling spans on one executor thread corrupt offline incremental-context reconstruction. |
+| `NAR-026` | P1 | Tracing | **Resolved in Rust:** overlapping session/agent futures now use distinct logical tasks and independently seeded context. |
 | `NAR-027` | P1 | Tracing | The Chrome exporter promotes every numeric event field to a counter track. |
 
 ## Behavior and Configuration Contracts
@@ -389,6 +389,8 @@ are intentionally represented elsewhere.
 
 ### NAR-026: async sibling spans corrupt reconstructed context
 
+**Status: resolved in Rust; the offline Python tools are unchanged.**
+
 `FlatTreeSubscriber` emits one `enter`/`exit` pair for each span's
 creation/destruction lifetime, not for each poll of an instrumented future. It
 also records an explicit `parent` edge for every span. The offline tree builder
@@ -415,12 +417,31 @@ Current evidence:
 - `framework/runtime/claw-agent/simulator.log` contains the overlapping sibling
   agent spans and the concrete parent edges described above.
 
-Exit condition: reconstruct each span's effective context from its explicit
-parent's effective context plus its own opened-context delta, and use an event's
-explicit span id for event context. Define deterministic handling for a missing
-parent, update the format documentation, and add a same-task async-sibling test
-whose spans overlap and close out of LIFO order without leaking context between
-siblings.
+Resolution:
+
+- every long-lived session actor future opens its root span with
+  `trace.task=<session-id>`;
+- every in-flight `claw-core` agent future opens its root span with
+  `trace.task=<agent-id>`;
+- `FlatTreeSubscriber` consumes that reserved Rust span field, stores the
+  logical task on the span, and makes descendants, events, and the lifetime
+  `exit` inherit it instead of reading the current executor thread;
+- a logical-task root repeats its complete effective grouped context, so the
+  existing per-task offline stack starts with `session` for an actor or
+  `session + turn + agent` for an agent and does not depend on another task's
+  stack;
+- `AgentSlots` allows only one in-flight future for an agent id, so concurrently
+  live agent siblings cannot share a task label. Any future independently
+  scheduled below an agent must likewise open a distinct `trace.task`, as now
+  required by the trace-format contract.
+
+`framework/runtime/claw-log/tests/trace.rs` covers two overlapping logical
+agent tasks on one physical thread, full context seeding, descendant/event task
+inheritance, and close-time task stability across physical threads.
+`framework/runtime/claw-agent/tests/logical_task_trace.rs` verifies the product
+session and agent logical-task roots, including that the agent root seeds
+`session + turn + agent`. The format and `claw-core` trace vocabulary document
+the logical-task rule.
 
 ### NAR-027: numeric event fields create spurious Chrome counter tracks
 

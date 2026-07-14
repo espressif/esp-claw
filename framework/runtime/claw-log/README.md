@@ -9,7 +9,7 @@ format:
 
 - **`log` facade** — plain `log::error!`/`warn!`/`info!`/… records.
 - **`tracing`** — spans/events rendered as a flat tree, with caller-declared
-  inherited-context groups.
+  inherited-context groups and logical async-task lanes.
 
 Both render as ESP-IDF's `<L> (<ms>) <tag>: <msg>` line with ESP-IDF's
 per-level colors.
@@ -36,6 +36,13 @@ versa), eliminating any log↔trace loop.
 | `InitLoggerError` | `init_logger` failure (`OpenLogFile`, `SetLogger`). |
 | `LevelFilter` | Re-exported from `log`. |
 | `FlatTreeSubscriber` / `TraceSink` | The subscriber and its output seam (from the `trace` module). |
+
+An independently scheduled future opens a stable logical lane by adding
+`trace.task = %task_id` to its root span. `FlatTreeSubscriber` consumes that
+reserved field and propagates the label to descendant spans, events, and the
+closing record; physical thread names are only the fallback for synchronous
+work outside such a span. See [the trace format](docs/trace-format.md) for the
+full contract.
 
 ## Level ceilings
 

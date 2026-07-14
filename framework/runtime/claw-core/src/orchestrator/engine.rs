@@ -209,11 +209,11 @@ where
 
     fn spawn_actor(&mut self, session: SessionId, actor: SessionActor<Filesystem, Http, Timer>) {
         let (commands, receiver) = async_channel::unbounded();
-        let future = Box::pin(
-            actor
-                .run(receiver)
-                .instrument(tracing::info_span!("session", run.session = %session)),
-        );
+        let future = Box::pin(actor.run(receiver).instrument(tracing::info_span!(
+            "session",
+            trace.task = %session,
+            run.session = %session,
+        )));
         let previous = self.actors.insert(session, ActorTask { commands, future });
         debug_assert!(previous.is_none());
     }

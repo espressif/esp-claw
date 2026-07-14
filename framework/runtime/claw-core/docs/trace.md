@@ -33,6 +33,11 @@ incremental context when the runtime level is `Info`.
 
 span-name: `session`
 
+The engine-owned, long-lived session actor root sets `trace.task` to the
+session id. Concurrent session actor futures therefore have distinct logical
+lanes even when one executor thread polls all of them. Short synchronous
+`session` handle spans do not open a logical task.
+
 ### Incremental Context
 
 `run.session`: Session id.
@@ -176,6 +181,12 @@ span-name: `agent.create`
 ### Tracing Context
 
 span-name: `agent`
+
+`trace.task`: The agent id. This reserved `claw-log` field opens one stable
+logical async task/lane for each in-flight agent future; it is consumed by the
+subscriber and does not appear as custom context. Child spans and events inherit
+the lane across executor-thread changes. `AgentSlots` permits only one in-flight
+future for an agent id, so overlapping agent tasks have distinct labels.
 
 ### Incremental Context
 

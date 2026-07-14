@@ -300,6 +300,7 @@ where
                 .expect("a ready agent must remain in the live graph");
             let span = tracing::info_span!(
                 "agent",
+                trace.task = %id,
                 run.agent = %id,
                 kind = %meta.kind().as_str(),
                 depth = self

@@ -27,6 +27,10 @@ Chrome export is a batch step (span-tree reconstruction needs the whole
 capture), so the JSON is written once at the end. Occasional corrupt serial
 lines are skipped (and counted) rather than aborting the capture.
 
+Chrome's thread rows are synthetic lanes keyed by the trace protocol's logical
+`task` label. For async runtime work they represent agent/future identity, not
+the executor OS or FreeRTOS thread that happened to poll it.
+
 ## CLI: `claw-trace-chrome` (offline `.log` → `trace.json`)
 
 Convert an already-captured `TRACE` log file (or stdin) to Chrome Trace Event

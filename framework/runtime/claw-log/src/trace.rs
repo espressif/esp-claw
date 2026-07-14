@@ -1,7 +1,8 @@
 //! A minimal, platform-agnostic `tracing` [`Subscriber`] that tracks the
-//! *current thread's* span stack and writes one line per event / span-boundary
-//! to an injected [`TraceSink`], tagging each with its `span`/`parent` ids and
-//! `task` so an offline tool rebuilds the tree and the in-effect context.
+//! *current thread's* active span stack and writes one line per event /
+//! span-boundary to an injected [`TraceSink`], tagging each with its
+//! `span`/`parent` ids and logical `task` so an offline tool rebuilds the tree
+//! and the in-effect context.
 //!
 //! This is pure Rust (only `tracing`'s re-exported core traits): no
 //! `tracing-subscriber` (so no `sharded-slab`/`regex`), and no platform/FFI. The
@@ -17,10 +18,12 @@
 //! interleave irrecoverably. This subscriber fixes both **without** plumbing ids
 //! through every layer:
 //!
-//! - Span context propagates automatically via the thread-local stack (the whole
+//! - Span context propagates automatically via the active span stack (the whole
 //!   point of `tracing` spans), so call sites pass no extra arguments.
-//! - Each line carries a `task=` label (the OS thread / FreeRTOS task), so
-//!   concurrent drives stay separable.
+//! - A span may open a logical async task with the reserved `trace.task` field.
+//!   Its descendants inherit that label even when the future migrates between
+//!   executor threads, so concurrent drives stay separable. Spans outside a
+//!   logical task fall back to the OS thread / FreeRTOS task label.
 //! - Span lifetimes are emitted as `enter` / `exit` lines keyed by a
 //!   process-unique `span=` id with a `parent=` edge, so an offline tool rebuilds
 //!   the tree from `(span, parent)` and computes per-span timing by differencing
@@ -49,9 +52,10 @@
 //!   enter/exit callbacks so events resolve their enclosing span.
 //! - Incremental context is grouped: a span field named `group.key` whose `group`
 //!   is a registered [`ContextGroup`] is rendered once, on the `enter` line of the
-//!   span that opens it, as a `<context=<group> …>` block (only the delta this
-//!   span adds). Descendants and events do not repeat it — the consumer replays
-//!   the stack per group. Any other field is custom context.
+//!   span that opens it, as a `<context=<group> …>` block. A span that opens a
+//!   logical task repeats the complete inherited context so that task's stream
+//!   is independently replayable; other descendants emit only their delta.
+//!   Events do not repeat context. Any other field is custom context.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -98,6 +102,10 @@ struct ContextGroup {
 /// `(key, value)` entries in effect for that group.
 type GroupedContext = Vec<Vec<(&'static str, String)>>;
 
+/// Reserved span field that opens a logical async task/lane. It is consumed by
+/// the subscriber and therefore never appears as custom context.
+const LOGICAL_TASK_FIELD: &str = "trace.task";
+
 /// Immutable per-span data captured at creation and reused on exit/descendants.
 struct SpanRecord {
     /// The span's `target` (module path), used as the sink tag on the exit line.
@@ -106,6 +114,10 @@ struct SpanRecord {
     level: Level,
     /// Inherited context (ancestor + own), per group, propagated to descendants.
     context: GroupedContext,
+    /// Logical async task inherited by descendants and used for this span's
+    /// lifetime records. This must not be recomputed at close because a future
+    /// may resume or be dropped on a different executor thread.
+    task: String,
 }
 
 /// Merge a child's own per-group context onto its inherited (ancestor) context:
@@ -185,17 +197,21 @@ thread_local! {
     /// the global map.
     static STACK: RefCell<Vec<(u64, Arc<SpanRecord>)>> = const { RefCell::new(Vec::new()) };
 
-    /// This thread's label, computed once (thread name, else `ThreadId(n)`).
-    static TASK: String = task_label();
+    /// This physical thread's fallback label, computed once (thread name, else
+    /// `ThreadId(n)`). Logical async tasks do not use this label.
+    static PHYSICAL_TASK: String = physical_task_label();
 }
 
-fn task_label() -> String {
+fn physical_task_label() -> String {
     let current = std::thread::current();
-    match current.name() {
-        Some(name) => name.to_string(),
-        // `ThreadId`'s Debug is `ThreadId(n)` — no spaces, safe as a token.
-        None => format!("{:?}", current.id()),
+    if let Some(name) = current.name() {
+        let label = sanitize_token(name);
+        if !label.is_empty() {
+            return label;
+        }
     }
+    // `ThreadId`'s Debug is `ThreadId(n)` — no spaces, safe as a token.
+    format!("{:?}", current.id())
 }
 
 /// Collects a span/event's fields, routing each `group.key` field to its
@@ -211,21 +227,32 @@ struct FieldVisitor<'groups> {
     message: Option<String>,
     /// Per-group incremental context, indexed parallel to `groups`.
     context: GroupedContext,
+    /// Explicit logical task opened by a span's reserved `trace.task` field.
+    logical_task: Option<String>,
+    /// Events use the same visitor but do not interpret `trace.task` as a
+    /// structural field.
+    capture_logical_task: bool,
 }
 
 impl<'groups> FieldVisitor<'groups> {
-    fn new(groups: &'groups [ContextGroup]) -> Self {
+    fn new(groups: &'groups [ContextGroup], capture_logical_task: bool) -> Self {
         Self {
             groups,
             fields: String::new(),
             message: None,
             context: groups.iter().map(|_| Vec::new()).collect(),
+            logical_task: None,
+            capture_logical_task,
         }
     }
 
     fn push(&mut self, name: &'static str, value: fmt::Arguments<'_>) {
         if name == "message" {
             self.message = Some(format!("{value}"));
+            return;
+        }
+        if self.capture_logical_task && name == LOGICAL_TASK_FIELD {
+            self.logical_task = Some(format!("{value}"));
             return;
         }
         // A `group.key` field routes to that group's incremental-context bucket;
@@ -463,44 +490,63 @@ impl<S: TraceSink + 'static> Subscriber for FlatTreeSubscriber<S> {
 
     fn new_span(&self, attributes: &Attributes<'_>) -> Id {
         let metadata = attributes.metadata();
-        let mut visitor = FieldVisitor::new(&self.context_groups);
+        let mut visitor = FieldVisitor::new(&self.context_groups, true);
         attributes.record(&mut visitor);
 
-        // The structural parent and inherited context are the span currently
-        // entered on this thread (the contextual parent at creation time).
-        let (parent_id, parent_context) = STACK.with(|stack| match stack.borrow().last() {
-            Some((id, record)) => (*id, record.context.clone()),
-            None => (0, GroupedContext::new()),
-        });
+        // The structural parent, inherited context, and inherited logical task
+        // come from the span currently entered during this future's poll.
+        let (parent_id, parent_context, parent_task) =
+            STACK.with(|stack| match stack.borrow().last() {
+                Some((id, record)) => (*id, record.context.clone(), Some(record.task.clone())),
+                None => (0, GroupedContext::new(), None),
+            });
         let parent_context = self.normalize_context(parent_context);
         let context = merge_grouped_context(parent_context.clone(), visitor.context);
+        let opened_logical_task = visitor
+            .logical_task
+            .as_deref()
+            .map(sanitize_token)
+            .filter(|task| !task.is_empty());
+        let opens_logical_task = opened_logical_task.is_some();
+        let task = match opened_logical_task {
+            Some(task) => task,
+            None => match parent_task {
+                Some(task) => task,
+                None => PHYSICAL_TASK.with(Clone::clone),
+            },
+        };
 
         let id = self.next_span_id();
 
         // `enter` line == span creation (one pair per span; not per poll). The
-        // span is pushed onto the stack later, in the `enter` callback.
-        let opened = self.render_opened_groups(&parent_context, &context);
+        // span is pushed onto the stack later, in the `enter` callback. A new
+        // logical task has no prior consumer-side stack, so seed its lane with
+        // the complete effective context; same-task descendants stay compact.
+        let context_base = if opens_logical_task {
+            GroupedContext::new()
+        } else {
+            parent_context
+        };
+        let opened = self.render_opened_groups(&context_base, &context);
         let timestamp = self.now_ms();
-        let line = TASK.with(|task| {
-            let mut line = format!(
-                "TRACE {timestamp} enter <span={id} parent={parent} task={task} span-name={name} target={target}>",
-                parent = id_or_none(parent_id),
-                name = metadata.name(),
-                target = metadata.target(),
-            );
-            line.push_str(&opened);
-            if !visitor.fields.is_empty() {
-                line.push(' ');
-                line.push_str(&visitor.fields);
-            }
-            line
-        });
+        let mut line = format!(
+            "TRACE {timestamp} enter <span={id} parent={parent} task={task} span-name={name} target={target}>",
+            parent = id_or_none(parent_id),
+            name = metadata.name(),
+            target = metadata.target(),
+        );
+        line.push_str(&opened);
+        if !visitor.fields.is_empty() {
+            line.push(' ');
+            line.push_str(&visitor.fields);
+        }
         self.write(*metadata.level(), metadata.target(), &line);
 
         let record = Arc::new(SpanRecord {
             target: metadata.target(),
             level: *metadata.level(),
             context,
+            task,
         });
         self.lock().insert(id, SpanSlot { record, refs: 1 });
         Id::from_u64(id)
@@ -518,13 +564,9 @@ impl<S: TraceSink + 'static> Subscriber for FlatTreeSubscriber<S> {
         let metadata = event.metadata();
         // Events open no incremental context, so route nothing to groups: every
         // field (and the message) is custom context.
-        let mut visitor = FieldVisitor::new(&[]);
+        let mut visitor = FieldVisitor::new(&[], false);
         event.record(&mut visitor);
 
-        let span_id = STACK.with(|stack| match stack.borrow().last() {
-            Some((id, _)) => *id,
-            None => 0,
-        });
         let timestamp = self.now_ms();
         let event_name = sanitize_token(metadata.name());
 
@@ -536,7 +578,7 @@ impl<S: TraceSink + 'static> Subscriber for FlatTreeSubscriber<S> {
             custom.push_str(&message);
         }
 
-        let line = TASK.with(|task| {
+        let render_line = |span_id, task: &str| {
             let mut line = format!(
                 "TRACE {timestamp} event <span={span} task={task} event-name={event_name} target={target}>",
                 span = id_or_none(span_id),
@@ -547,6 +589,10 @@ impl<S: TraceSink + 'static> Subscriber for FlatTreeSubscriber<S> {
                 line.push_str(&custom);
             }
             line
+        };
+        let line = STACK.with(|stack| match stack.borrow().last() {
+            Some((id, record)) => render_line(*id, &record.task),
+            None => PHYSICAL_TASK.with(|task| render_line(0, task)),
         });
         self.write(*metadata.level(), metadata.target(), &line);
     }
@@ -602,8 +648,10 @@ impl<S: TraceSink + 'static> Subscriber for FlatTreeSubscriber<S> {
         match closed {
             Some(slot) => {
                 let timestamp = self.now_ms();
-                let line =
-                    TASK.with(|task| format!("TRACE {timestamp} exit <span={raw} task={task}>"));
+                let line = format!(
+                    "TRACE {timestamp} exit <span={raw} task={task}>",
+                    task = slot.record.task
+                );
                 self.write(slot.record.level, slot.record.target, &line);
                 true
             }

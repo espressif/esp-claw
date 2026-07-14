@@ -21,7 +21,7 @@ TRACE <timestamp> <type> <tracing-context> <incremental-context>* <custom-contex
 
 ## ② tracing-context (framework-filled, one `<...>` block)
 
-Coordinates the framework derives from metadata / stack / thread. Contents are fixed per type:
+Coordinates the framework derives from metadata, the active span stack, and logical-task inheritance. Contents are fixed per type:
 
 | type | `<...>` contents |
 |------|------|
@@ -32,8 +32,11 @@ Coordinates the framework derives from metadata / stack / thread. Contents are f
 - `span`/`parent`: a framework-assigned, **monotonically increasing, never-recycled** unique id (not the raw tracing id), globally unique across the whole trace stream, so pairing/tree-building is unambiguous.
 - `span`: the id of the span this record belongs to; for an `event` with no enclosing span it is `none` (how the consumer renders an orphan is decided by the visualizer and is out of scope for this spec).
 - `parent`: the id of the parent span; the outermost span has no parent and is recorded as `none`.
-- `task`: the thread name, taken from the thread API (host `std::thread::name`, ESP FreeRTOS task name), used to disambiguate across threads.
+- `task`: the logical async-task label used as the offline/Chrome lane. A span opens a logical task with the reserved `trace.task=<label>` field; that field is consumed by `claw-log` and is not emitted as custom context. Descendant spans and events inherit the label, and the span's `exit` reuses its stored label even if the future resumes or is dropped on another executor thread. Whitespace in an explicit label is normalized to `_` so it remains one structural token.
+- If no enclosing span has opened `trace.task`, `task` falls back to the host thread name or ESP FreeRTOS task name. This fallback identifies synchronous/control work only; it is not an async task identity.
 - `enter`/`exit` come **one pair per span**, corresponding to span creation/destruction (not per poll); they are paired by the same `span` (duration = the `<timestamp>` difference), and the span name is looked up by `span` from the `enter` line.
+
+Every independently scheduled future whose span lifetime may overlap another future must open its own stable `trace.task`. Reusing a physical executor-thread label for overlapping async work violates the format's per-task replay contract.
 
 ## ③ incremental-context (caller-configured groups, `enter` only)
 
@@ -55,15 +58,22 @@ Each group that opens at least one key on a span renders as its own block on tha
 **Call site (how a field becomes incremental context):** a span field named `group.key` (dotted) is routed to that group's context; any other field is custom context.
 
 ```rust
-info_span!("agent", run.agent = %agent_id, depth = 1);
-//                  └─ group=run, key=agent ──┘  └─ custom ─┘
-// →  … <context=run agent=agent-1> depth=1
+info_span!(
+    "agent",
+    trace.task = %agent_id,
+    run.agent = %agent_id,
+    depth = 1,
+);
+//  trace.task: reserved logical-task control field
+//  run.agent:  group=run, key=agent
+//  depth:      custom context
 ```
 
 - A field's `group` prefix must be a registered group **and** its `key` must be in that group's closed set; a registered prefix with an unknown key is a typo and trips `debug_assert!`. A dotted field whose prefix is **not** a registered group (e.g. `http.method`) is ordinary custom context.
-- A key appears **once, on the `enter` line of the span that opens it**; descendant lines / events do **not** repeat it. The consumer reconstructs context via the stack: `enter` pushes, `exit` pops, and the full context of any line = the merged stack (child overrides parent), per group.
+- Within one logical task, a key appears on the `enter` line of the span that opens or changes it; ordinary descendant lines and events do **not** repeat it.
+- A span that opens a new `trace.task` is the exception: its `enter` line repeats the **complete effective context** (inherited context plus its own fields). The new task therefore seeds an independent per-task stack instead of depending on the executor thread's stack. Descendants on that task return to incremental deltas.
+- The consumer reconstructs context independently per `task`: `enter` pushes, `exit` pops, and the full context of any line is the merged task stack (child overrides parent), per group. Events use their explicit `span` id after the span's context has been reconstructed.
 - **Prefix-closed (per group)**: because the span hierarchy is a fixed nesting, a group's reconstructed key set is always a prefix of its declared order — e.g. for `run`, `agent` present ⟹ `session`+`turn` present; `iteration` present ⟹ all three present. There is never a "has `agent` but missing `turn`" gap.
-- A subagent re-opening `run.agent` is a shadow that overrides its subtree, reverted on `exit`.
 - A group that opens no key on a span emits **no block** (no empty `<context=…>`). `event` lines carry no incremental block at all.
 
 ## ④ custom-context (call site, free-form)
@@ -79,21 +89,21 @@ Each span/event's own content — **developer-defined, no format requirement, no
 
 - span = a unit of work with a start and end (`enter`/`exit` paired); event = an instantaneous fact.
 
-## Example (with subagent shadow)
+## Example (overlapping async agents)
 
 ```
-TRACE 2100 enter <span=1 parent=none task=main span-name=session target=claw_core::orchestrator> <context=run session=session-1>
-TRACE 2105 enter <span=2 parent=1 task=main span-name=turn target=claw_core::orchestrator> <context=run turn=7> message_id=m1 cause=message
-TRACE 2110 enter <span=3 parent=2 task=main span-name=agent target=claw_core::agent::registry> <context=run agent=agent-1> kind=conversation depth=0
-TRACE 2112 enter <span=4 parent=3 task=main span-name=iteration_loop target=claw_core::iteration_loop> <context=run iteration=iteration-0>
-TRACE 2120 enter <span=5 parent=4 task=main span-name=agent target=claw_core::agent::registry> <context=run agent=agent-2> kind=tool depth=1
-TRACE 2121 event <span=5 task=main event-name=spawned target=claw_core::agent::registry> parent_agent=agent-1 child_agent=agent-2
-TRACE 2130 exit <span=5 task=main>
-TRACE 2150 event <span=4 task=main event-name=completion target=claw_core::iteration_loop> status=done 👋 Hello!
-TRACE 2152 exit <span=4 task=main>
-TRACE 2154 exit <span=3 task=main>
-TRACE 2156 exit <span=2 task=main>
-TRACE 2158 exit <span=1 task=main>
+TRACE 2100 enter <span=1 parent=none task=session-1 span-name=session target=claw_core::orchestrator> <context=run session=session-1>
+TRACE 2105 enter <span=2 parent=1 task=session-1 span-name=turn target=claw_core::orchestrator> <context=run turn=7> message_id=m1 cause=message
+TRACE 2110 enter <span=3 parent=2 task=agent-1 span-name=agent target=claw_core::multiagent::drive> <context=run session=session-1 turn=7 agent=agent-1> kind=conversation depth=0
+TRACE 2112 enter <span=4 parent=3 task=agent-1 span-name=iteration_loop target=claw_core::iteration_loop> <context=run iteration=iteration-0>
+TRACE 2120 enter <span=5 parent=2 task=agent-2 span-name=agent target=claw_core::multiagent::drive> <context=run session=session-1 turn=7 agent=agent-2> kind=tool depth=1
+TRACE 2121 event <span=5 task=agent-2 event-name=polled target=claw_core::multiagent::drive> ready=true
+TRACE 2130 exit <span=5 task=agent-2>
+TRACE 2150 event <span=4 task=agent-1 event-name=completion target=claw_core::iteration_loop> status=done
+TRACE 2152 exit <span=4 task=agent-1>
+TRACE 2154 exit <span=3 task=agent-1>
+TRACE 2156 exit <span=2 task=session-1>
+TRACE 2158 exit <span=1 task=session-1>
 ```
 
-- The `event-name=spawned` on `span=5` carries no incremental block; the merged `run` stack reconstructs it as `session-1 + turn-7 + agent-2 + iteration-0`. The `event-name=completion` on `span=4` reconstructs as `session-1 + turn-7 + agent-1 + iteration-0`.
+- The session actor owns the `session-1` lane. `agent-1` and `agent-2` overlap in wall-clock time but have independent task stacks and therefore independent Chrome lanes. Each agent root repeats `session + turn + agent`; its descendants only add deltas. The `completion` event reconstructs as `session-1 + turn-7 + agent-1 + iteration-0`, while the `polled` event reconstructs as `session-1 + turn-7 + agent-2`.

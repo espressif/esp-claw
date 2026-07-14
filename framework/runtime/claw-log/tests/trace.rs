@@ -186,6 +186,95 @@ fn event_outside_any_span_reports_span_none() {
     assert_eq!(token(&event, "span"), Some("none"));
 }
 
+#[test]
+fn logical_tasks_separate_overlapping_async_span_lifetimes() {
+    let sink = VecSink::default();
+
+    tracing::subscriber::with_default(run_subscriber(sink.clone()), || {
+        let session = tracing::info_span!("session", run.session = "s-1");
+        let _session = session.enter();
+        let turn = tracing::info_span!("turn", run.turn = "t-1");
+        let _turn = turn.enter();
+
+        // These sibling spans model separately instrumented async agent futures:
+        // both are alive at once on one executor thread and may close in an
+        // order unrelated to their creation order.
+        let agent_2 = tracing::info_span!(
+            "agent",
+            trace.task = "agent-2",
+            run.agent = "agent-2",
+            depth = 1u64,
+        );
+        let agent_3 = tracing::info_span!(
+            "agent",
+            trace.task = "agent-3",
+            run.agent = "agent-3",
+            depth = 1u64,
+        );
+
+        agent_2.in_scope(|| {
+            let iteration = tracing::info_span!("iteration_loop", run.iteration = "iteration-2");
+            iteration.in_scope(|| tracing::info!(name: "polled", owner = "agent-2"));
+        });
+        agent_3.in_scope(|| {
+            let iteration = tracing::info_span!("iteration_loop", run.iteration = "iteration-3");
+            iteration.in_scope(|| tracing::info!(name: "polled", owner = "agent-3"));
+        });
+
+        std::thread::Builder::new()
+            .name("other-executor".to_string())
+            .spawn(move || drop(agent_2))
+            .expect("spawn close thread")
+            .join()
+            .expect("close thread");
+        drop(agent_3);
+    });
+
+    let lines = sink.lines();
+    for agent in ["agent-2", "agent-3"] {
+        let enter = lines
+            .iter()
+            .find(|line| {
+                line_type(line) == Some("enter")
+                    && token(line, "span-name") == Some("agent")
+                    && token(line, "agent") == Some(agent)
+            })
+            .expect("logical agent enter");
+        let span_id = token(enter, "span").expect("agent span id");
+
+        assert_eq!(token(enter, "task"), Some(agent), "{enter}");
+        assert_eq!(token(enter, "session"), Some("s-1"), "{enter}");
+        assert_eq!(token(enter, "turn"), Some("t-1"), "{enter}");
+        assert!(!enter.contains("trace.task="), "{enter}");
+
+        let iteration = lines
+            .iter()
+            .find(|line| {
+                line_type(line) == Some("enter")
+                    && token(line, "iteration")
+                        == Some(if agent == "agent-2" {
+                            "iteration-2"
+                        } else {
+                            "iteration-3"
+                        })
+            })
+            .expect("iteration enter");
+        assert_eq!(token(iteration, "task"), Some(agent), "{iteration}");
+
+        let event = lines
+            .iter()
+            .find(|line| line_type(line) == Some("event") && token(line, "owner") == Some(agent))
+            .expect("agent event");
+        assert_eq!(token(event, "task"), Some(agent), "{event}");
+
+        let exit = lines
+            .iter()
+            .find(|line| line_type(line) == Some("exit") && token(line, "span") == Some(span_id))
+            .expect("agent exit");
+        assert_eq!(token(exit, "task"), Some(agent), "{exit}");
+    }
+}
+
 fn event_line(sink: &VecSink) -> String {
     sink.lines()
         .into_iter()
