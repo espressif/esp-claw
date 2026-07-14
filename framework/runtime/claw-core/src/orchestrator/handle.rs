@@ -22,7 +22,7 @@ use super::checkpoint::{
     checkpoint_session_registry, load_session_store_state, SessionRegistryCheckpointError,
 };
 use super::engine::{run_engine, Command};
-use super::{OrchestratorBuildError, CHECKPOINT_DIR, ENGINE_WORKER_STACK_SIZE};
+use super::{OrchestratorBuildError, CHECKPOINT_DIR, ENGINE_WORKER_STACK_SIZE, SYSTEM_TRACE_SCOPE};
 
 type CheckpointSessions = dyn Fn(&SessionStore, Option<SessionId>) -> Result<(), SessionRegistryCheckpointError>
     + Send
@@ -166,7 +166,11 @@ impl Orchestrator {
         &self,
         session_id: SessionId,
     ) -> Result<(SessionControl, SessionEventStream), OpenSessionError> {
-        let span = tracing::info_span!("session", run.session = %session_id);
+        let span = tracing::info_span!(
+            "session",
+            run.system = SYSTEM_TRACE_SCOPE,
+            run.session = %session_id,
+        );
         let _enter = span.enter();
         if !self.sessions.contains(session_id) {
             tracing::warn!(name: "open_rejected", reason = "session_not_found");
@@ -216,15 +220,19 @@ impl Orchestrator {
 
     /// Create a fresh isolated conversation session.
     pub fn session_create(&self, persistence: SessionPersistence) -> SessionId {
-        let span = tracing::info_span!("session.create");
-        let _enter = span.enter();
         let session = self.sessions.create(persistence);
+        let span = tracing::info_span!(
+            "session.create",
+            run.system = SYSTEM_TRACE_SCOPE,
+            run.session = %session,
+        );
+        let _enter = span.enter();
         if persistence == SessionPersistence::Persistent {
             if let Err(error) = (self.checkpoint_sessions)(&self.sessions, None) {
                 tracing::error!(name: "checkpoint_failed", target = "session_registry", error = %error);
             }
         }
-        tracing::info!(name: "created", session = %session, persistence = ?persistence);
+        tracing::info!(name: "created", persistence = ?persistence);
         session
     }
 
@@ -244,7 +252,11 @@ impl Orchestrator {
     /// live, or [`SessionControlError::WorkerStopped`] if the engine worker is
     /// gone.
     pub fn session_delete(&self, session_id: SessionId) -> Result<(), SessionControlError> {
-        let span = tracing::info_span!("session.delete", run.session = %session_id);
+        let span = tracing::info_span!(
+            "session.delete",
+            run.system = SYSTEM_TRACE_SCOPE,
+            run.session = %session_id,
+        );
         let _enter = span.enter();
         let Some(persistence) = self.sessions.persistence(session_id) else {
             tracing::warn!(name: "delete_rejected", reason = "session_closed");
@@ -301,6 +313,8 @@ impl Orchestrator {
 
 impl Drop for Orchestrator {
     fn drop(&mut self) {
+        let span = tracing::info_span!("orchestrator.shutdown", run.system = SYSTEM_TRACE_SCOPE,);
+        let _enter = span.enter();
         let has_pending_removals = !self
             .pending_runtime_removals
             .lock()

@@ -74,10 +74,9 @@ fn async_runtime_roots_use_logical_task_lanes_with_full_context() {
         })
         .collect::<Vec<_>>();
     assert_eq!(orchestrators.len(), 2, "{}", lines.join("\n"));
-    let first_system_id = token(orchestrators[0], "system").expect("first system context id");
-    let second_system_id = token(orchestrators[1], "system").expect("second system context id");
-    assert_ne!(first_system_id, second_system_id);
     for orchestrator in &orchestrators {
+        assert_eq!(token(orchestrator, "system"), Some("agent-system"));
+        assert_eq!(token(orchestrator, "task"), Some("orchestrator"));
         let orchestrator_span = token(orchestrator, "span").expect("orchestrator span id");
         let factory = lines
             .iter()
@@ -94,11 +93,6 @@ fn async_runtime_roots_use_logical_task_lanes_with_full_context() {
                 && token(line, "parent") == Some(factory_span)
         }));
     }
-    let expected_orchestrator_task = format!("orchestrator-{first_system_id}");
-    assert_eq!(
-        token(orchestrators[0], "task"),
-        Some(expected_orchestrator_task.as_str())
-    );
 
     let restored_session_wire = restored_session.to_wire();
     let restore = lines
@@ -130,7 +124,7 @@ fn async_runtime_roots_use_logical_task_lanes_with_full_context() {
                 && token(line, "session") == Some(created_session_wire.as_str())
         })
         .expect("session create enter line");
-    assert_eq!(token(session_create, "system"), Some(second_system_id));
+    assert_eq!(token(session_create, "system"), Some("agent-system"));
 
     let session_actor = lines
         .iter()
@@ -147,7 +141,11 @@ fn async_runtime_roots_use_logical_task_lanes_with_full_context() {
         Some(session_id),
         "{session_actor}"
     );
-    assert!(token(session_actor, "system").is_some(), "{session_actor}");
+    assert_eq!(
+        token(session_actor, "system"),
+        Some("agent-system"),
+        "{session_actor}"
+    );
     assert!(!session_actor.contains("trace.task="), "{session_actor}");
 
     let agent = lines
@@ -157,7 +155,7 @@ fn async_runtime_roots_use_logical_task_lanes_with_full_context() {
     let agent_id = token(agent, "agent").expect("agent context id");
 
     assert_eq!(token(agent, "task"), Some(agent_id), "{agent}");
-    assert!(token(agent, "system").is_some(), "{agent}");
+    assert_eq!(token(agent, "system"), Some("agent-system"), "{agent}");
     assert!(token(agent, "session").is_some(), "{agent}");
     assert!(token(agent, "turn").is_some(), "{agent}");
     assert!(!agent.contains("trace.task="), "{agent}");

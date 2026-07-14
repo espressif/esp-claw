@@ -44,6 +44,20 @@ closing record; physical thread names are only the fallback for synchronous
 work outside such a span. See [the trace format](docs/trace-format.md) for the
 full contract.
 
+The runtime registers `run` as
+`system → session → turn → agent → iteration`. `system` is the outer
+agent-system scope used by startup/global work before any session exists; it is
+a fixed semantic label rather than an allocated id. Session and agent futures
+then open their own logical task lanes.
+The Python [Chrome exporter](scripts/README.md) maps those scopes to synthetic
+Chrome processes. A session requires its inherited system scope; the exporter
+does not accept the older session-without-system shape. Records outside both a
+system and a session remain valid and use `unattributed`.
+
+Chrome counters are explicit: only `counter.<series>=<number>` event fields
+produce `ph=C`. Numeric lifecycle metadata remains on its instant event as
+ordinary arguments.
+
 ## Level ceilings
 
 Two layers cap verbosity:

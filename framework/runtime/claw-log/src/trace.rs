@@ -83,9 +83,9 @@ pub trait TraceSink: Send + Sync {
 ///
 /// `claw-log` itself bakes in **no** group; the caller registers each one at
 /// subscriber init (e.g. `claw_core` registers `"run"` with
-/// `["session", "turn", "agent", "iteration"]`). A span field named `group.key`
-/// whose `group` matches `name` and whose `key` is in `keys` becomes this group's
-/// incremental context.
+/// `["system", "session", "turn", "agent", "iteration"]`). A span field named
+/// `group.key` whose `group` matches `name` and whose `key` is in `keys` becomes
+/// this group's incremental context.
 ///
 /// [`with_context_group_keys`]: FlatTreeSubscriber::with_context_group_keys
 struct ContextGroup {
@@ -396,7 +396,7 @@ impl<S: TraceSink> FlatTreeSubscriber<S> {
     /// context, rendered once (as a `<context=<name> …>` block) on the `enter`
     /// line of the span that opens it. `claw-log` bakes in no group; the caller
     /// declares them — e.g. `claw_core` registers `"run"` with
-    /// `["session", "turn", "agent", "iteration"]`.
+    /// `["system", "session", "turn", "agent", "iteration"]`.
     pub fn with_context_group_keys(
         mut self,
         name: &'static str,

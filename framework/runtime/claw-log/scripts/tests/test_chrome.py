@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from claw_trace import build_forest
 from chrome_export import chrome_trace_events, write_chrome_trace
 from test_tree import SPEC_EXAMPLE
@@ -58,11 +60,108 @@ def test_process_and_thread_metadata_emitted_once() -> None:
     assert thread_names[0]['args']['name'] == 'main'
 
 
-def test_numeric_event_fields_become_counter() -> None:
+def test_system_and_session_scopes_become_distinct_processes() -> None:
     log = '\n'.join(
         [
-            'TRACE 10 enter <span=1 parent=none task=main span-name=iteration_loop target=t> <context=run iteration=i-0>',
-            'TRACE 12 event <span=1 task=main event-name=ram target=claw_ram> free_heap=120000 min_free=90000',
+            'TRACE 1 enter <span=1 parent=none task=orchestrator span-name=orchestrator target=t> <context=run system=agent-system>',
+            'TRACE 2 enter <span=2 parent=1 task=orchestrator span-name=agent.factory target=t>',
+            'TRACE 3 exit <span=2 task=orchestrator>',
+            'TRACE 4 enter <span=3 parent=1 task=session-1 span-name=session target=t> <context=run system=agent-system session=session-1>',
+            'TRACE 5 exit <span=3 task=session-1>',
+            'TRACE 6 exit <span=1 task=orchestrator>',
+        ]
+    )
+
+    bodies = [event.to_dict() for event in chrome_trace_events(build_forest(log))]
+    process_names = {
+        event['args']['name']: event['pid']
+        for event in bodies
+        if event['ph'] == 'M' and event['name'] == 'process_name'
+    }
+
+    assert set(process_names) == {'agent-system', 'session-1'}
+    factory = next(event for event in bodies if event['name'] == 'agent.factory')
+    session = next(event for event in bodies if event['name'] == 'session')
+    assert factory['pid'] == process_names['agent-system']
+    assert factory['args']['system'] == 'agent-system'
+    assert session['pid'] == process_names['session-1']
+    assert session['args']['system'] == 'agent-system'
+    assert session['args']['session'] == 'session-1'
+
+
+def test_same_session_id_in_distinct_system_scopes_does_not_merge() -> None:
+    log = '\n'.join(
+        [
+            'TRACE 1 enter <span=1 parent=none task=session-1 span-name=session target=t> <context=run system=system-a session=session-1>',
+            'TRACE 2 exit <span=1 task=session-1>',
+            'TRACE 3 enter <span=2 parent=none task=session-1 span-name=session target=t> <context=run system=system-b session=session-1>',
+            'TRACE 4 exit <span=2 task=session-1>',
+        ]
+    )
+
+    bodies = [event.to_dict() for event in chrome_trace_events(build_forest(log))]
+    sessions = [event for event in bodies if event['ph'] == 'X']
+
+    assert len(sessions) == 2
+    assert sessions[0]['pid'] != sessions[1]['pid']
+
+
+def test_legacy_session_without_system_is_rejected() -> None:
+    log = '\n'.join(
+        [
+            'TRACE 1 enter <span=1 parent=none task=session-9 span-name=session target=t> <context=run session=session-9>',
+            'TRACE 2 exit <span=1 task=session-9>',
+        ]
+    )
+
+    with pytest.raises(ValueError, match='run.session requires run.system'):
+        chrome_trace_events(build_forest(log))
+
+
+def test_record_without_system_or_session_is_unattributed() -> None:
+    log = '\n'.join(
+        [
+            'TRACE 1 enter <span=1 parent=none task=main span-name=boot target=t>',
+            'TRACE 2 exit <span=1 task=main>',
+        ]
+    )
+
+    bodies = [event.to_dict() for event in chrome_trace_events(build_forest(log))]
+    process_name = next(
+        event
+        for event in bodies
+        if event['ph'] == 'M' and event['name'] == 'process_name'
+    )
+
+    assert process_name['args']['name'] == 'unattributed'
+
+
+def test_lifecycle_numeric_fields_remain_instant_event_args() -> None:
+    log = '\n'.join(
+        [
+            'TRACE 10 enter <span=1 parent=none task=main span-name=iteration_loop target=t> <context=run system=agent-system iteration=i-0>',
+            'TRACE 11 event <span=1 task=main event-name=arguments target=t> argument_bytes=120 completed=1',
+            'TRACE 12 event <span=1 task=main event-name=completed target=t> replace_count=2 count=3',
+            'TRACE 20 exit <span=1 task=main>',
+        ]
+    )
+    events = chrome_trace_events(build_forest(log))
+    assert _by_phase(events, 'C') == []
+
+    instants = {
+        event.to_dict()['name']: event.to_dict() for event in _by_phase(events, 'I')
+    }
+    assert instants['arguments']['args']['argument_bytes'] == '120'
+    assert instants['arguments']['args']['completed'] == '1'
+    assert instants['completed']['args']['replace_count'] == '2'
+    assert instants['completed']['args']['count'] == '3'
+
+
+def test_explicit_counter_fields_become_counter() -> None:
+    log = '\n'.join(
+        [
+            'TRACE 10 enter <span=1 parent=none task=main span-name=iteration_loop target=t> <context=run system=agent-system iteration=i-0>',
+            'TRACE 12 event <span=1 task=main event-name=ram target=claw_ram> counter.free_heap=120000 counter.min_free=90000 sample=1',
             'TRACE 20 exit <span=1 task=main>',
         ]
     )
@@ -73,6 +172,19 @@ def test_numeric_event_fields_become_counter() -> None:
     assert body['name'] == 'ram'
     assert body['args'] == {'free_heap': 120000.0, 'min_free': 90000.0}
     assert body['ts'] == 12 * 1000
+
+
+def test_explicit_counter_value_must_be_numeric() -> None:
+    log = '\n'.join(
+        [
+            'TRACE 10 enter <span=1 parent=none task=main span-name=iteration_loop target=t> <context=run system=agent-system>',
+            'TRACE 12 event <span=1 task=main event-name=ram target=claw_ram> counter.free_heap=unknown',
+            'TRACE 20 exit <span=1 task=main>',
+        ]
+    )
+
+    with pytest.raises(ValueError, match='counter.free_heap must be numeric'):
+        chrome_trace_events(build_forest(log))
 
 
 def test_write_chrome_trace_produces_valid_json_array(tmp_path) -> None:
@@ -89,7 +201,7 @@ def test_write_chrome_trace_produces_valid_json_array(tmp_path) -> None:
 
 
 def test_unclosed_span_becomes_duration_begin(tmp_path) -> None:
-    log = 'TRACE 5 enter <span=1 parent=none task=main span-name=turn target=t> <context=run turn=1>'
+    log = 'TRACE 5 enter <span=1 parent=none task=main span-name=turn target=t> <context=run system=agent-system turn=1>'
     events = chrome_trace_events(build_forest(log))
     begins = _by_phase(events, 'B')
     assert len(begins) == 1

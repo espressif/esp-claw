@@ -218,7 +218,7 @@ fn init(config: *const ClawAgentConfig) -> Result<(), CabiError> {
     let _ = claw_log::init_logger(LevelFilter::Info, LogOutput::Stderr);
     let _ = claw_log::init_tracing(
         TracingConfig::default()
-            .with_context_group_keys("run", ["session", "turn", "agent", "iteration"]),
+            .with_context_group_keys("run", ["system", "session", "turn", "agent", "iteration"]),
     );
 
     let config = unsafe { config.as_ref() }.ok_or(CabiError::InvalidArgument)?;

@@ -83,6 +83,8 @@ impl From<SessionRestoreLoadError> for OrchestratorBuildError {
 
 const ENGINE_WORKER_STACK_SIZE: usize = 64 * 1024;
 const CHECKPOINT_DIR: &str = "checkpoint";
+const SYSTEM_TRACE_SCOPE: &str = "agent-system";
+const ORCHESTRATOR_TRACE_TASK: &str = "orchestrator";
 const SESSION_REGISTRY_BATCH: &str = "session-registry";
 const SESSION_REGISTRY_BATCH_ID: BatchId = BatchId::new(1);
 const SESSION_STORE_PART: &str = "session-store";

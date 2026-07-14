@@ -65,7 +65,7 @@ Priorities in this document mean:
 | `NAR-022` | P0 | Persistence | Tool-registry checkpoint timing/state assertions disagree with persisted output. |
 | `NAR-023` | P1 | Tracing | Streaming iteration chat spans do not contain the attempt span required by the trace test. |
 | `NAR-026` | P1 | Tracing | **Resolved in Rust:** overlapping session/agent futures now use distinct logical tasks and independently seeded context. |
-| `NAR-027` | P1 | Tracing | The Chrome exporter promotes every numeric event field to a counter track. |
+| `NAR-027` | P1 | Tracing | **Resolved:** only explicit `counter.<series>` fields create Chrome counter tracks. |
 
 ## Behavior and Configuration Contracts
 
@@ -389,7 +389,8 @@ are intentionally represented elsewhere.
 
 ### NAR-026: async sibling spans corrupt reconstructed context
 
-**Status: resolved in Rust; the offline Python tools are unchanged.**
+**Status: resolved in Rust; Python tree reconstruction remains unchanged because
+each independently scheduled Rust future now supplies a valid logical lane.**
 
 `FlatTreeSubscriber` emits one `enter`/`exit` pair for each span's
 creation/destruction lifetime, not for each poll of an instrumented future. It
@@ -427,9 +428,9 @@ Resolution:
   logical task on the span, and makes descendants, events, and the lifetime
   `exit` inherit it instead of reading the current executor thread;
 - a logical-task root repeats its complete effective grouped context, so the
-  existing per-task offline stack starts with `session` for an actor or
-  `session + turn + agent` for an agent and does not depend on another task's
-  stack;
+  existing per-task offline stack starts with `system + session` for an actor or
+  `system + session + turn + agent` for an agent and does not depend on another
+  task's stack;
 - `AgentSlots` allows only one in-flight future for an agent id, so concurrently
   live agent siblings cannot share a task label. Any future independently
   scheduled below an agent must likewise open a distinct `trace.task`, as now
@@ -440,35 +441,37 @@ agent tasks on one physical thread, full context seeding, descendant/event task
 inheritance, and close-time task stability across physical threads.
 `framework/runtime/claw-agent/tests/logical_task_trace.rs` verifies the product
 session and agent logical-task roots, including that the agent root seeds
-`session + turn + agent`. The format and `claw-core` trace vocabulary document
-the logical-task rule.
+`system + session + turn + agent`. The same integration test also covers the
+agent-system root, system-scoped startup, and restored-session attribution. The
+format and `claw-core` trace vocabulary document the logical-task rule. The
+Python Chrome exporter maps complete session scopes, system-only scopes, and
+records outside both scopes to separate Chrome processes. It rejects the legacy
+session-without-system shape and does not reconstruct async context by guessing
+from physical threads.
 
 ### NAR-027: numeric event fields create spurious Chrome counter tracks
 
-The Chrome exporter emits an instant event for every trace event, then parses
-all numeric-looking `key=value` fields and emits an additional `ph=C` counter
-whenever it finds one. Numeric lifecycle attributes are not necessarily sampled
-metrics: `argument_bytes`, `output_bytes`, `text_bytes`, and one-off `count`
-fields describe individual events.
+**Status: resolved.**
 
-The current `trace.json` contains 46 generated counter records named
-`arguments`, `completed`, `submit_accepted`, `subtree_deleted`, `tool_calls`, or
-`tool_round_completed`. Chrome/Perfetto renders these as separate counter
-tracks, producing the unrelated tracks visible beside the span timeline.
+The exporter previously parsed every numeric-looking event `key=value` field
+and emitted an additional `ph=C` record. That turned lifecycle attributes such
+as `argument_bytes`, `output_bytes`, `replace_count`, and one-off `count` fields
+into unrelated Chrome/Perfetto counter tracks.
 
-Current evidence:
+Counter generation is now explicit:
 
-- `framework/runtime/claw-log/scripts/chrome_export/__init__.py`
-  (`_event_events`, `_numeric`, and the unconditional counter conversion);
-- `framework/runtime/claw-log/scripts/tests/test_chrome.py`
-  (`test_numeric_event_fields_become_counter` codifies the broad heuristic);
-- `framework/runtime/trace.json` contains the 46 resulting `ph=C` records.
+- only `counter.<series>=<number>` opts a field into `ph=C`, with the prefix
+  removed from the exported series name;
+- every ordinary numeric field remains only in the instant event's `args`;
+- a nonnumeric explicitly marked counter fails export rather than being guessed
+  or silently ignored;
+- negative lifecycle coverage and positive explicit RAM/gauge coverage live in
+  `framework/runtime/claw-log/scripts/tests/test_chrome.py`.
 
-Exit condition: require an explicit, structured counter/metric marker and emit
-`ph=C` only for opted-in metric events. Keep ordinary numeric fields in the
-instant event's arguments, add negative coverage for lifecycle events with
-numeric fields, retain positive coverage for an explicit RAM/gauge metric, and
-verify a regenerated simulator trace contains none of the spurious tracks above.
+Regenerating `framework/runtime/trace.json` from the current simulator log
+produces zero `ph=C` records. The `arguments`, `completed`, `submit_accepted`,
+`subtree_deleted`, `tool_calls`, and `tool_round_completed` instant events and
+their numeric arguments remain present.
 
 ## Public API and CI
 

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from claw_trace import build_forest, render_tree
 
-# The exact example from docs/trace-format.md ("Example (with subagent shadow)").
+# Compact same-task fixture for grouped-context inheritance and shadowing.
 SPEC_EXAMPLE = """\
-TRACE 2100 enter <span=1 parent=none task=main span-name=session target=claw_core::orchestrator> <context=run session=session-1>
+TRACE 2100 enter <span=1 parent=none task=main span-name=session target=claw_core::orchestrator> <context=run system=agent-system session=session-1>
 TRACE 2105 enter <span=2 parent=1 task=main span-name=turn target=claw_core::orchestrator> <context=run turn=7> message_id=m1 cause=message
 TRACE 2110 enter <span=3 parent=2 task=main span-name=agent target=claw_core::agent::registry> <context=run agent=agent-1> kind=conversation depth=0
 TRACE 2112 enter <span=4 parent=3 task=main span-name=iteration_loop target=claw_core::iteration_loop> <context=run iteration=iteration-0>
@@ -43,9 +43,10 @@ def test_hierarchy_and_durations() -> None:
 def test_inherited_context_is_prefix_closed_and_grouped() -> None:
     forest = build_forest(SPEC_EXAMPLE)
     iteration = forest.spans[4]
-    # session -> turn -> agent -> iteration, agent-1 in this subtree.
+    # system -> session -> turn -> agent -> iteration, agent-1 in this subtree.
     assert iteration.context == {
         'run': {
+            'system': 'agent-system',
             'session': 'session-1',
             'turn': '7',
             'agent': 'agent-1',
@@ -62,6 +63,7 @@ def test_subagent_shadow_overrides_agent() -> None:
     spawned = next(e for e in forest.events if e.name == 'spawned')
     assert spawned.context == {
         'run': {
+            'system': 'agent-system',
             'session': 'session-1',
             'turn': '7',
             'agent': 'agent-2',
@@ -72,6 +74,7 @@ def test_subagent_shadow_overrides_agent() -> None:
     completion = next(e for e in forest.events if e.name == 'completion')
     assert completion.context == {
         'run': {
+            'system': 'agent-system',
             'session': 'session-1',
             'turn': '7',
             'agent': 'agent-1',

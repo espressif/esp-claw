@@ -7,10 +7,20 @@ the first-party runtime span names and event names emitted by `claw-core` and
 its `claw-api` LLM request path, plus incremental `run.*` keys and custom
 context fields.
 
+The `run` context is prefix-closed in this order:
+`system → session → turn → agent → iteration`. `run.system` is the outer
+runtime scope and is present before a session exists. It is a semantic label,
+not another runtime identifier.
+
 Trace user data by shape, not by payload. Do not emit raw user text, captions,
 attachment file paths, file contents, tool arguments, or model output text. For
 messages and attachments, prefer fields such as `has_text`, `text_bytes`,
 `attachment_count`, and `attachment_kinds`.
+
+Numeric lifecycle fields are event attributes, not sampled metrics. They remain
+in the Chrome instant event's `args` and do not create counter tracks. A real
+sampled metric must opt in with the `counter.<series>=<number>` field convention
+defined by `claw-log`; do not mark one-off byte/count attributes as counters.
 
 ## Levels
 
@@ -27,6 +37,35 @@ Context-carrying spans (`session`, `turn`, `agent`, `iteration_loop`,
 `toolcall`, etc.) use `info_span!` so `info`/`warn`/`error` events retain their
 incremental context when the runtime level is `Info`.
 
+## Agent System / Orchestrator
+
+### Tracing Context
+
+span-name: `orchestrator`
+
+The `Orchestrator` is the global runtime root owned by `AgentSystem`. Its
+long-lived engine span carries the fixed `run.system=agent-system` semantic
+scope and opens the fixed `trace.task=orchestrator` logical lane. No system id
+is allocated or persisted.
+
+The root covers engine construction, checkpoint restoration, and the worker
+loop. System-wide startup spans such as `agent.factory` and `skill.catalog`
+therefore inherit the system context instead of falling into an unknown
+session bucket. Synchronous handle operations on the caller thread carry the
+same `run.system` explicitly; their task label remains the physical-thread
+fallback because they are not independently scheduled async futures.
+
+### Incremental Context
+
+`run.system`: Fixed `agent-system` semantic scope.
+
+### Shutdown
+
+span-name: `orchestrator.shutdown`
+
+The handle-side shutdown and worker join. It carries `run.system`; checkpoint
+errors emitted while shutting down inherit that scope.
+
 ## Session
 
 ### Tracing Context
@@ -40,6 +79,7 @@ lanes even when one executor thread polls all of them. Short synchronous
 
 ### Incremental Context
 
+`run.system`: Inherited `agent-system` scope.
 `run.session`: Session id.
 
 ### Events
@@ -69,13 +109,37 @@ lanes even when one executor thread polls all of them. Short synchronous
 
 span-name: `session.create`
 
+The session id is allocated before this span is opened, so creation and any
+registry-checkpoint diagnostics carry both context keys.
+
+### Incremental Context
+
+`run.system`: `agent-system` scope.
+`run.session`: Newly allocated session id.
+
 ### Events
 
 `created`: Session id was created.
 
 ### Event Fields
 
-`created`: `session`.
+`created`: `persistence`.
+
+## Session Restore
+
+### Tracing Context
+
+span-name: `session.restore`
+
+One startup span per persisted session runtime restored while constructing the
+engine. (A registry-only session with no runtime checkpoint has nothing to
+restore.) It is a child of `orchestrator`; restored `agent.create` spans are
+children of this span rather than unattributed startup work.
+
+### Incremental Context
+
+`run.system`: Inherited `agent-system` scope.
+`run.session`: Restored session id.
 
 ## Session Delete
 
@@ -85,6 +149,7 @@ span-name: `session.delete`
 
 ### Incremental Context
 
+`run.system`: `agent-system` scope.
 `run.session`: Session id being removed.
 
 ### Events
@@ -135,6 +200,10 @@ span-name: `turn`
 ### Tracing Context
 
 span-name: `agent.factory`
+
+Factory construction is system-wide startup work. It is a child of
+`orchestrator` and inherits `run.system`; it intentionally has no
+`run.session`.
 
 ### Events
 

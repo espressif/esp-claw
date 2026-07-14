@@ -23,7 +23,7 @@ use crate::session::{
 };
 
 use super::checkpoint::load_agent_id_allocator;
-use super::OrchestratorBuildError;
+use super::{OrchestratorBuildError, ORCHESTRATOR_TRACE_TASK, SYSTEM_TRACE_SCOPE};
 
 /// Process-wide commands. Turn and control commands go directly to a session actor.
 pub(super) enum Command {
@@ -88,18 +88,21 @@ where
         let restores = load_session_restores::<Filesystem>(&checkpoint_dir, sessions.as_ref())?;
         let mut dormant = HashMap::with_capacity(restores.len());
         for (session, restore) in restores {
+            let span = tracing::info_span!("session.restore", run.session = %session);
             let persistence = sessions
                 .persistence(session)
                 .expect("only live session checkpoints are restored");
-            let actor = SessionActor::restored(
-                session,
-                persistence,
-                Rc::clone(&factory),
-                agent_ids.clone(),
-                checkpointer.clone(),
-                Arc::clone(&api_manager),
-                restore,
-            )?;
+            let actor = span.in_scope(|| {
+                SessionActor::restored(
+                    session,
+                    persistence,
+                    Rc::clone(&factory),
+                    agent_ids.clone(),
+                    checkpointer.clone(),
+                    Arc::clone(&api_manager),
+                    restore,
+                )
+            })?;
             dormant.insert(session, actor);
         }
         Ok(Self {
@@ -279,15 +282,22 @@ pub(super) fn run_engine<Filesystem, Http, Timer, Executor>(
     Timer: ClawTimer + Default + 'static,
     Executor: ClawExecutor,
 {
-    let engine = match Engine::<Filesystem, Http, Timer>::new(
-        tools,
-        checkpoints,
-        persistence_dir,
-        checkpoint_dir,
-        skill_roots,
-        sessions,
-        api_manager,
-    ) {
+    let span = tracing::info_span!(
+        "orchestrator",
+        trace.task = ORCHESTRATOR_TRACE_TASK,
+        run.system = SYSTEM_TRACE_SCOPE,
+    );
+    let engine = match span.in_scope(|| {
+        Engine::<Filesystem, Http, Timer>::new(
+            tools,
+            checkpoints,
+            persistence_dir,
+            checkpoint_dir,
+            skill_roots,
+            sessions,
+            api_manager,
+        )
+    }) {
         Ok(engine) => engine,
         Err(error) => {
             let _ = ready.send(Err(error));
@@ -295,5 +305,5 @@ pub(super) fn run_engine<Filesystem, Http, Timer, Executor>(
         }
     };
     let _ = ready.send(Ok(()));
-    Executor::block_on(engine.run(command_rx));
+    Executor::block_on(engine.run(command_rx).instrument(span));
 }

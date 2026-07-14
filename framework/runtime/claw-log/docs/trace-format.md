@@ -44,10 +44,16 @@ Inherited context is organized into one or more **named groups**, each a closed,
 
 ```rust
 TracingConfig::default()
-    .with_context_group_keys("run", ["session", "turn", "agent", "iteration"])
+    .with_context_group_keys(
+        "run",
+        ["system", "session", "turn", "agent", "iteration"],
+    )
 ```
 
-`claw_core` registers the `run` group above (fixed order `session → turn → agent → iteration`); other subsystems may register their own groups.
+`claw_core` registers the `run` group above (fixed order
+`system → session → turn → agent → iteration`); other subsystems may register
+their own groups. `system` is the semantic agent-system root for startup/global
+records; it is a scope label, not an allocated or persisted runtime id.
 
 Each group that opens at least one key on a span renders as its own block on that span's `enter` line, in registration order:
 
@@ -73,7 +79,10 @@ info_span!(
 - Within one logical task, a key appears on the `enter` line of the span that opens or changes it; ordinary descendant lines and events do **not** repeat it.
 - A span that opens a new `trace.task` is the exception: its `enter` line repeats the **complete effective context** (inherited context plus its own fields). The new task therefore seeds an independent per-task stack instead of depending on the executor thread's stack. Descendants on that task return to incremental deltas.
 - The consumer reconstructs context independently per `task`: `enter` pushes, `exit` pops, and the full context of any line is the merged task stack (child overrides parent), per group. Events use their explicit `span` id after the span's context has been reconstructed.
-- **Prefix-closed (per group)**: because the span hierarchy is a fixed nesting, a group's reconstructed key set is always a prefix of its declared order — e.g. for `run`, `agent` present ⟹ `session`+`turn` present; `iteration` present ⟹ all three present. There is never a "has `agent` but missing `turn`" gap.
+- **Prefix-closed (per group)**: because the span hierarchy is a fixed nesting, a group's reconstructed key set is always a prefix of its declared order — e.g. for `run`, `session` present ⟹ `system` present; `agent` present ⟹ `system`+`session`+`turn` present; `iteration` present ⟹ all four earlier keys are present. There is never a "has `agent` but missing `turn`" gap.
+- The canonical Chrome exporter rejects `run.session` without `run.system`; it
+  does not support the older context shape. An empty `run` prefix is valid:
+  records outside both scopes are exported as `unattributed`.
 - A group that opens no key on a span emits **no block** (no empty `<context=…>`). `event` lines carry no incremental block at all.
 
 ## ④ custom-context (call site, free-form)
@@ -82,28 +91,45 @@ Each span/event's own content — **developer-defined, no format requirement, no
 
 - Only `enter` (span creation arguments) and `event` (record content) may carry a custom context.
 - An `exit` line has only the tracing context (`span=<id> task=<label>`); it carries **neither incremental nor custom context**.
+- The canonical Chrome exporter treats ordinary numeric `key=value` fields as
+  event arguments. A field opts into a Chrome counter only with the explicit
+  `counter.<series>=<number>` form; the exported series name omits the
+  `counter.` prefix. A nonnumeric explicitly marked value is an export error.
 
 ## Span Hierarchy
 
-`session` (opens `session`) > `turn` (opens `turn`) > `agent` (opens `agent`) > `iteration_loop` (opens `iteration`).
+`orchestrator` (opens `system`) > `session` (opens `session`) > `turn`
+(opens `turn`) > `agent` (opens `agent`) > `iteration_loop` (opens
+`iteration`). Startup restore uses `orchestrator` > `session.restore` >
+`agent.create`; system-wide startup such as `agent.factory` stays directly
+below `orchestrator` with no session key.
 
 - span = a unit of work with a start and end (`enter`/`exit` paired); event = an instantaneous fact.
 
 ## Example (overlapping async agents)
 
 ```
-TRACE 2100 enter <span=1 parent=none task=session-1 span-name=session target=claw_core::orchestrator> <context=run session=session-1>
-TRACE 2105 enter <span=2 parent=1 task=session-1 span-name=turn target=claw_core::orchestrator> <context=run turn=7> message_id=m1 cause=message
-TRACE 2110 enter <span=3 parent=2 task=agent-1 span-name=agent target=claw_core::multiagent::drive> <context=run session=session-1 turn=7 agent=agent-1> kind=conversation depth=0
-TRACE 2112 enter <span=4 parent=3 task=agent-1 span-name=iteration_loop target=claw_core::iteration_loop> <context=run iteration=iteration-0>
-TRACE 2120 enter <span=5 parent=2 task=agent-2 span-name=agent target=claw_core::multiagent::drive> <context=run session=session-1 turn=7 agent=agent-2> kind=tool depth=1
-TRACE 2121 event <span=5 task=agent-2 event-name=polled target=claw_core::multiagent::drive> ready=true
-TRACE 2130 exit <span=5 task=agent-2>
-TRACE 2150 event <span=4 task=agent-1 event-name=completion target=claw_core::iteration_loop> status=done
-TRACE 2152 exit <span=4 task=agent-1>
-TRACE 2154 exit <span=3 task=agent-1>
-TRACE 2156 exit <span=2 task=session-1>
-TRACE 2158 exit <span=1 task=session-1>
+TRACE 2090 enter <span=1 parent=none task=orchestrator span-name=orchestrator target=claw_core::orchestrator::engine> <context=run system=agent-system>
+TRACE 2100 enter <span=2 parent=1 task=session-1 span-name=session target=claw_core::orchestrator::engine> <context=run system=agent-system session=session-1>
+TRACE 2105 enter <span=3 parent=2 task=session-1 span-name=turn target=claw_core::session::actor> <context=run turn=turn-7> cause=user_submit
+TRACE 2110 enter <span=4 parent=3 task=agent-1 span-name=agent target=claw_core::multiagent::drive> <context=run system=agent-system session=session-1 turn=turn-7 agent=agent-1> kind=conversation depth=0
+TRACE 2112 enter <span=5 parent=4 task=agent-1 span-name=iteration_loop target=claw_core::agent::iteration_loop> <context=run iteration=iteration-0>
+TRACE 2120 enter <span=6 parent=3 task=agent-2 span-name=agent target=claw_core::multiagent::drive> <context=run system=agent-system session=session-1 turn=turn-7 agent=agent-2> kind=tool depth=1
+TRACE 2121 event <span=6 task=agent-2 event-name=polled target=claw_core::multiagent::drive> ready=true
+TRACE 2130 exit <span=6 task=agent-2>
+TRACE 2150 event <span=5 task=agent-1 event-name=completion target=claw_core::agent::iteration_loop> status=done
+TRACE 2152 exit <span=5 task=agent-1>
+TRACE 2154 exit <span=4 task=agent-1>
+TRACE 2156 exit <span=3 task=session-1>
+TRACE 2158 exit <span=2 task=session-1>
+TRACE 2160 exit <span=1 task=orchestrator>
 ```
 
-- The session actor owns the `session-1` lane. `agent-1` and `agent-2` overlap in wall-clock time but have independent task stacks and therefore independent Chrome lanes. Each agent root repeats `session + turn + agent`; its descendants only add deltas. The `completion` event reconstructs as `session-1 + turn-7 + agent-1 + iteration-0`, while the `polled` event reconstructs as `session-1 + turn-7 + agent-2`.
+- The orchestrator owns the system lane and the session actor owns the
+  `session-1` lane. `agent-1` and `agent-2` overlap in wall-clock time but have
+  independent task stacks and therefore independent Chrome lanes. Each new
+  session/agent task root repeats its complete context; descendants only add
+  deltas. The `completion` event reconstructs as
+  `agent-system + session-1 + turn-7 + agent-1 + iteration-0`, while the
+  `polled` event reconstructs as
+  `agent-system + session-1 + turn-7 + agent-2`.
