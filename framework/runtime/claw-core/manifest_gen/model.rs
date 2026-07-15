@@ -7,9 +7,6 @@ use serde::Deserialize;
 /// `agent.json` — the kind's metadata header.
 #[derive(Debug, Deserialize)]
 pub(crate) struct AgentJson {
-    /// Schema version of `agent.json`; reserved for forward-compatibility.
-    #[allow(dead_code)]
-    pub(crate) schema_version: u32,
     /// The kind/role this directory defines (validated against the dir name).
     pub(crate) kind: String,
     /// Human/model-facing summary of the kind's purpose.
@@ -42,9 +39,6 @@ pub(crate) struct RuntimeJson {
 /// `tools/tools.json` — the tool groups this kind may use.
 #[derive(Debug, Deserialize)]
 pub(crate) struct ToolsJson {
-    /// Schema version; reserved for forward-compatibility.
-    #[allow(dead_code)]
-    pub(crate) schema_version: u32,
     /// Tool group ids allowed for this agent kind.
     pub(crate) tool_groups: Vec<String>,
 }

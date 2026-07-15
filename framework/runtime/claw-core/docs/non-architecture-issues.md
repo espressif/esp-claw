@@ -52,7 +52,7 @@ Priorities in this document mean:
 | `NAR-009` | P1 | Tests | The compound tool-policy contract has no behavioral coverage. |
 | `NAR-010` | P2 | Documentation | Several source comments and repository guides contradict current Rust behavior. |
 | `NAR-011` | P2 | Dependencies | Build-only tool baking is exposed by the runtime `claw-tool` crate and leaves manifest debris. |
-| `NAR-012` | P1 | Manifests | Manifest `schema_version` fields are required in files but ignored by the parser. |
+| `NAR-012` | P1 | Manifests | **Resolved:** decorative `schema_version` fields were removed from baked manifests. |
 | `NAR-013` | P1 | Manifests | A missing `tool_block_retries` field silently changes policy to zero retries. |
 | `NAR-014` | P1 | Permissions | **Resolved:** every session exposes a durable, live `Deny` / `Ask` / `AllowAll` permission level. |
 | `NAR-015` | P1 | Checkpoints | Several checkpoint decoders ignore schema versions or silently normalize invalid state. |
@@ -180,6 +180,8 @@ an already-configured checkpoint coordinator and introduces no second default.
 
 ### NAR-012: manifest versions are decorative
 
+**Status: resolved.**
+
 `agent.json` and `tools/tools.json` require a `schema_version`, but the
 build-time serde shapes suppress the resulting dead field warning and never
 validate the value. A file declaring an unknown version is therefore accepted
@@ -192,9 +194,10 @@ Current evidence:
 - `manifest_gen/parse.rs` (no version validation);
 - `resources/agents/**/{agent.json,tools/tools.json}`.
 
-Exit condition: either remove the unused version fields from the format and
-fixtures, or validate supported versions and add unsupported-version tests. Do
-not keep a version field solely for hypothetical future formats.
+Resolution: the unused fields were removed from `AgentJson`, `ToolsJson`, and
+all checked-in agent manifest resources. These files are compiled together with
+their parser and have no independent runtime or persistence lifecycle, so build
+failure is the format compatibility boundary.
 
 ### NAR-013: missing tool-block policy silently falls back to zero
 

@@ -1,5 +1,4 @@
 {
-  "schema_version": 1,
   "kind": "worker",
   "description": "Executes one delegated task end-to-end, then reports a result. Plans before large changes and verifies before finishing.",
   "spawn": {
