@@ -43,6 +43,7 @@ where
             slots: AgentSlots::new(),
             timeouts: Default::default(),
             foreground_results: BTreeMap::new(),
+            pending_deliveries: Default::default(),
             multiagent,
         }
     }

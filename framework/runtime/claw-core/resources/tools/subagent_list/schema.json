@@ -2,7 +2,7 @@
   "type": "function",
   "function": {
     "name": "subagent_list",
-    "description": "List the currently active subagents in your whole subtree, each with its id, kind, depth, and status. Completed subagents are removed automatically.",
+    "description": "List active subagents plus completed background subagents whose results are queued for delivery, each with its id, kind, depth, and status. A completed_pending_delivery entry is no longer running and disappears after its parent consumes the queued result.",
     "parameters": {
       "type": "object",
       "properties": {},

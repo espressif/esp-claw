@@ -102,6 +102,8 @@ pub(in crate::multiagent) enum SubagentStatus {
     Running,
     #[strum(serialize = "idle")]
     Idle,
+    #[strum(serialize = "completed_pending_delivery")]
+    CompletedPendingDelivery,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -263,5 +265,18 @@ mod tests {
             graph.descendant(root, child).map(|node| node.status),
             Some(SubagentStatus::Running)
         );
+    }
+
+    #[test]
+    fn completed_pending_delivery_status_has_a_stable_wire_name() {
+        let value = serde_json::to_value(snapshot(
+            AgentId(2),
+            Some(AgentId(1)),
+            1,
+            SubagentStatus::CompletedPendingDelivery,
+        ))
+        .expect("snapshot serializes");
+
+        assert_eq!(value["status"], "completed_pending_delivery");
     }
 }

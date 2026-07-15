@@ -235,19 +235,26 @@ where
     Timer: ClawTimer + Default + 'static,
 {
     pub(in crate::multiagent) fn refresh_multiagent_snapshot(&self) {
-        let snapshot = MultiagentSnapshot::new(self.state.get().nodes().map(|(id, meta)| {
-            SubagentSnapshot::new(
-                id,
-                meta.kind().clone(),
-                meta.name().map(str::to_owned),
-                meta.parent(),
-                self.state
-                    .get()
-                    .depth(id)
-                    .expect("live graph topology is valid"),
-                self.state.get().agent_status(id, self.slots.is_running(id)),
-            )
-        }));
+        let live = self
+            .state
+            .get()
+            .nodes()
+            .map(|(id, meta)| {
+                SubagentSnapshot::new(
+                    id,
+                    meta.kind().clone(),
+                    meta.name().map(str::to_owned),
+                    meta.parent(),
+                    self.state
+                        .get()
+                        .depth(id)
+                        .expect("live graph topology is valid"),
+                    self.state.get().agent_status(id, self.slots.is_running(id)),
+                )
+            })
+            .collect::<Vec<_>>();
+        let snapshot =
+            MultiagentSnapshot::new(live.into_iter().chain(self.pending_deliveries.snapshots()));
         self.multiagent.publish_snapshot(snapshot);
     }
 }

@@ -31,6 +31,7 @@ mod drive_control;
 mod id_allocator;
 mod lifecycle;
 mod model;
+mod pending_deliveries;
 mod persistence;
 mod policy;
 mod state;
@@ -57,6 +58,7 @@ pub(crate) use self::drive::{DriveOutput, TurnStopMode};
 pub(crate) use self::drive_control::{DriveControl, DriveStop};
 pub(crate) use self::id_allocator::AgentIdAllocator;
 use self::model::SubagentResult;
+use self::pending_deliveries::PendingDeliveries;
 pub(crate) use self::persistence::MultiagentRestore;
 pub(crate) use self::persistence::MultiagentRestoreError;
 pub(crate) use self::state::{MultiagentState, MultiagentWork};
@@ -100,6 +102,9 @@ where
     /// One-shot completions for foreground spawns. They are process-local: an
     /// active tool future owns the matching receiver.
     foreground_results: BTreeMap<AgentId, async_channel::Sender<SubagentResult>>,
+    /// Inspection tombstones for background results queued in a parent inbox
+    /// but not yet activated into that parent's agent context.
+    pending_deliveries: PendingDeliveries,
     /// The only boundary exposed to subagent tools. It owns their pending
     /// commands and read-only inspection projection.
     multiagent: Arc<MultiagentBridge>,

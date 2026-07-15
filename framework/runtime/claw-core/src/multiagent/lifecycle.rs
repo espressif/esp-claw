@@ -208,6 +208,7 @@ where
             }
             self.slots.remove(*victim);
         }
+        self.pending_deliveries.clear_for_removed_parents(&victims);
         self.state.get_mut().remove_agents(&victims);
     }
 
@@ -320,6 +321,8 @@ where
             );
             return;
         };
+        let recorded = self.pending_deliveries.record(self.state.get(), child);
+        debug_assert!(recorded, "background result must have live child metadata");
         let awaiting_approval = self.state.get().is_awaiting_approval(parent);
         tracing::info!(
             name: "result_to_parent",
@@ -398,7 +401,7 @@ mod tests {
 
     use crate::agent::{FsAgentFactory, TickOutcome};
     use crate::config::ClawApiManager;
-    use crate::protocol::{AgentId, AgentKind, Message, SessionId};
+    use crate::protocol::{AgentId, AgentKind, Message, SessionId, SessionPersistence};
 
     use super::super::model::{SubagentTimeout, TranscriptText};
     use super::super::timeouts::ExpiredTimeout;
@@ -605,5 +608,61 @@ mod tests {
         );
         assert!(!instance.state.get().contains(parent));
         assert!(!instance.timeouts.has_pending());
+    }
+
+    #[test]
+    fn completed_background_child_remains_inspectable_until_root_consumes_its_result() {
+        let (mut instance, root) = instance_with_root();
+        let child = AgentId(2);
+        let root_kind = AgentKind::from_static(ROOT_AGENT_KIND);
+        let worker = AgentKind::from_static("worker");
+        instance
+            .build_agent(
+                root,
+                &root_kind,
+                Message::text("root"),
+                AgentPlacement::Root {
+                    session: SessionId::new(1),
+                    persistence: SessionPersistence::Ephemeral,
+                },
+                Vec::new(),
+            )
+            .expect("root builds");
+        instance
+            .build_agent(
+                child,
+                &worker,
+                Message::text("work"),
+                AgentPlacement::Child(child),
+                Vec::new(),
+            )
+            .expect("child builds");
+        assert!(instance.state.get_mut().insert_child(
+            root,
+            child,
+            worker,
+            Some("alpha".to_owned()),
+            timeout(),
+        ));
+
+        instance.route_outcome(
+            child,
+            TickOutcome::Yielded {
+                text: "finished".to_owned(),
+            },
+        );
+        instance.refresh_multiagent_snapshot();
+
+        assert!(!instance.state.get().contains(child));
+        let pending = instance
+            .multiagent
+            .get(root, child)
+            .expect("completed child remains inspectable");
+        let pending = serde_json::to_value(pending).expect("snapshot serializes");
+        assert_eq!(pending["status"], "completed_pending_delivery");
+
+        assert!(instance.activate_pending_root_results());
+        instance.refresh_multiagent_snapshot();
+        assert!(instance.multiagent.get(root, child).is_none());
     }
 }

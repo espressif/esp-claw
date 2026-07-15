@@ -53,6 +53,7 @@ where
     pub(in crate::multiagent) fn clear_turn_work(&mut self) {
         self.state.get_mut().clear_turn_work();
         self.slots.clear_inboxes();
+        self.pending_deliveries.clear();
         self.foreground_results.clear();
         self.multiagent.clear();
     }
@@ -93,6 +94,7 @@ where
         if !self.slots.activate_inbox(root) {
             return false;
         }
+        self.pending_deliveries.clear_for_parent(root);
         self.enqueue(root);
         true
     }
@@ -421,9 +423,11 @@ where
             if (include_root || Some(id) != root)
                 && self.state.get().contains(id)
                 && !self.state.get().is_awaiting_approval(id)
-                && self.slots.activate_inbox(id)
             {
-                self.enqueue(id);
+                if self.slots.activate_inbox(id) {
+                    self.pending_deliveries.clear_for_parent(id);
+                    self.enqueue(id);
+                }
             }
         }
     }

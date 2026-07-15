@@ -2,7 +2,7 @@
   "type": "function",
   "function": {
     "name": "subagent_watch",
-    "description": "Get the current state of an active subagent by id, including its kind, depth, and status. Only subagents in your own subtree can be watched.",
+    "description": "Get the current state of an active subagent or a completed subagent whose result is still queued for delivery, including its kind, depth, and status. Only subagents in your own subtree can be watched.",
     "parameters": {
       "type": "object",
       "properties": {

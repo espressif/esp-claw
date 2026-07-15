@@ -12,6 +12,9 @@ Choose the required execution mode explicitly:
   current turn.
 - `foreground: false` — return the agent id immediately; the subagent keeps
   running and its result is delivered asynchronously to the spawning parent.
+  If the parent is already running, the result waits until its next safe agent
+  boundary and `subagent_list` / `subagent_watch` report the finished child as
+  `completed_pending_delivery` during that interval.
 
 Always set the required `timeout_ms` to the maximum lifetime this delegated work
 may consume. The deadline covers the subagent and the complete subtree it owns.

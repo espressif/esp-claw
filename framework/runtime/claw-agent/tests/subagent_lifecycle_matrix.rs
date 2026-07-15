@@ -349,6 +349,39 @@ fn a_user_turn_can_run_while_a_background_subagent_is_still_working() {
 }
 
 #[test]
+fn completed_background_child_is_inspectable_until_its_result_enters_root_context() {
+    let _lock = SUBAGENT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    install_pending_delivery_inspection_case();
+
+    let root = mem_root("subagent-pending-delivery-inspection");
+    let system = SubagentSystem::new::<StdThread, TokioExecutor>(persistence(&root)).unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
+    let (control, mut events) = system.open_session(session).unwrap();
+
+    block_on(control.submit(Message::text("inspect completed delivery"))).unwrap();
+    let turn = drain_until_turn_ended(&mut events);
+
+    assert_turn(&turn, TurnId(1), TurnOrigin::User, "pending delivery");
+    assert_eq!(
+        tools_events(&turn),
+        vec![
+            "subagent_spawn".to_owned(),
+            "subagent_watch".to_owned(),
+            "subagent_watch".to_owned(),
+        ]
+    );
+    assert_eq!(
+        output_fragments(&turn),
+        vec!["pending status observed", "pending status cleared"]
+    );
+}
+
+#[test]
 fn cancelled_foreground_spawn_deletes_its_subagent() {
     let _lock = SUBAGENT_LOCK
         .lock()
@@ -580,6 +613,7 @@ struct SubagentCaseState {
     control: Option<String>,
     foreground: bool,
     background_concurrency: bool,
+    pending_delivery_inspection: bool,
     approval_flow: bool,
     timeout_flow: Option<bool>,
     hold_worker: bool,
@@ -614,6 +648,7 @@ fn install_case(fixture: Fixture, foreground: bool) {
         control: None,
         foreground,
         background_concurrency: false,
+        pending_delivery_inspection: false,
         approval_flow: false,
         timeout_flow: None,
         hold_worker: false,
@@ -645,6 +680,7 @@ fn install_control_case(control: &str) {
         control: Some(control.to_string()),
         foreground: true,
         background_concurrency: false,
+        pending_delivery_inspection: false,
         approval_flow: false,
         timeout_flow: None,
         hold_worker: true,
@@ -676,10 +712,41 @@ fn install_background_concurrency_case() {
         control: None,
         foreground: false,
         background_concurrency: true,
+        pending_delivery_inspection: false,
         approval_flow: false,
         timeout_flow: None,
         hold_worker: true,
         wait_root_for_worker: false,
+        root_requests: 0,
+        worker_requests: 0,
+        permission_requests: 0,
+        worker_delay_used: false,
+        child_id: None,
+        requests: Vec::new(),
+    });
+}
+
+fn install_pending_delivery_inspection_case() {
+    reset_timers();
+    *state() = Some(SubagentCaseState {
+        fixture: Fixture {
+            case: "pending-delivery-inspection".to_owned(),
+            worker_output: "pending worker result".to_owned(),
+            spawn_ack: String::new(),
+            background_output: String::new(),
+            supervision_output: String::new(),
+            expected_watch_fragment: String::new(),
+            expected_delete_fragment: String::new(),
+            expected_after_delete_fragment: String::new(),
+        },
+        control: None,
+        foreground: false,
+        background_concurrency: false,
+        pending_delivery_inspection: true,
+        approval_flow: false,
+        timeout_flow: None,
+        hold_worker: false,
+        wait_root_for_worker: true,
         root_requests: 0,
         worker_requests: 0,
         permission_requests: 0,
@@ -705,6 +772,7 @@ fn install_approval_case() {
         control: None,
         foreground: true,
         background_concurrency: false,
+        pending_delivery_inspection: false,
         approval_flow: true,
         timeout_flow: None,
         hold_worker: false,
@@ -740,6 +808,7 @@ fn install_timeout_case(foreground: bool) {
         control: None,
         foreground,
         background_concurrency: false,
+        pending_delivery_inspection: false,
         approval_flow: false,
         timeout_flow: Some(foreground),
         hold_worker: true,
@@ -875,6 +944,9 @@ fn root_response(state: &mut SubagentCaseState, body: &str) -> String {
     if state.background_concurrency {
         return background_concurrency_root_response(state, body, request_index);
     }
+    if state.pending_delivery_inspection {
+        return pending_delivery_inspection_root_response(state, body, request_index);
+    }
 
     match request_index {
         0 => assistant_tool_calls(vec![tool_call(
@@ -982,6 +1054,66 @@ fn background_concurrency_root_response(
         2 => assistant_text("root stayed responsive"),
         3 => assistant_text("background delivered"),
         other => panic!("unexpected background concurrency request index {other}"),
+    }
+}
+
+fn pending_delivery_inspection_root_response(
+    state: &mut SubagentCaseState,
+    body: &str,
+    request_index: usize,
+) -> String {
+    match request_index {
+        0 => assistant_tool_calls(vec![tool_call(
+            "call_spawn",
+            "subagent_spawn",
+            json!({
+                "kind": "worker",
+                "name": "pending-worker",
+                "goal": "finish while the root remains in flight",
+                "foreground": false,
+                "timeout_ms": 60_000,
+            }),
+        )]),
+        1 => {
+            state.child_id = extract_child_id(body);
+            let child = state.child_id.as_deref().expect("spawn returned child id");
+            assistant_tool_calls(vec![tool_call(
+                "call_watch_pending",
+                "subagent_watch",
+                json!({ "agent": child }),
+            )])
+        }
+        2 => {
+            assert!(
+                tool_message_content(body)
+                    .join("\n")
+                    .contains(r#""status":"completed_pending_delivery""#),
+                "completed child was not inspectable before inbox activation: {body}"
+            );
+            assistant_text("pending status observed")
+        }
+        3 => {
+            let child = state.child_id.as_deref().expect("spawn returned child id");
+            assert!(
+                body.contains(&format!("[subagent] id: {child}, result: true")),
+                "background result did not enter root context: {body}"
+            );
+            assistant_tool_calls(vec![tool_call(
+                "call_watch_consumed",
+                "subagent_watch",
+                json!({ "agent": child }),
+            )])
+        }
+        4 => {
+            assert!(
+                tool_message_content(body)
+                    .join("\n")
+                    .contains("No subagent"),
+                "completed status remained after inbox activation: {body}"
+            );
+            assistant_text("pending status cleared")
+        }
+        other => panic!("unexpected pending delivery request index {other}"),
     }
 }
 
