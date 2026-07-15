@@ -1,3 +1,4 @@
+#[cfg(feature = "build-support")]
 pub mod bake;
 mod registry;
 mod runner;

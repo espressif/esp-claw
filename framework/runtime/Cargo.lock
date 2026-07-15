@@ -239,7 +239,6 @@ dependencies = [
  "claw-skill",
  "claw-tool",
  "claw-utils",
- "dotenvy",
  "futures-core",
  "futures-lite 2.6.1",
  "proc-macro2",

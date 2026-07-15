@@ -51,7 +51,7 @@ Priorities in this document mean:
 | `NAR-008` | P0 | Tests | The adjacent `claw-agent` integration baseline is not green; Cargo initially exposes only the first failing binary. |
 | `NAR-009` | P1 | Tests | The compound tool-policy contract has no behavioral coverage. |
 | `NAR-010` | P2 | Documentation | Several source comments and repository guides contradict current Rust behavior. |
-| `NAR-011` | P2 | Dependencies | Build-only tool baking is exposed by the runtime `claw-tool` crate and leaves manifest debris. |
+| `NAR-011` | P2 | Dependencies | **Resolved:** tool baking is feature-gated as host build support and stale dependencies were removed. |
 | `NAR-012` | P1 | Manifests | **Resolved:** decorative `schema_version` fields were removed from baked manifests. |
 | `NAR-013` | P1 | Manifests | A missing `tool_block_retries` field silently changes policy to zero retries. |
 | `NAR-014` | P1 | Permissions | **Resolved:** every session exposes a durable, live `Deny` / `Ask` / `AllowAll` permission level. |
@@ -607,6 +607,8 @@ update the repository routing docs to distinguish the C and Rust runtimes.
 
 ### NAR-011: build-only baking code leaks into runtime dependencies
 
+**Status: resolved.**
+
 `claw-tool` unconditionally exposes `pub mod bake`, whose filesystem validator
 uses `anyhow`. The only production-tree caller found is the `claw-core` build
 script, yet `anyhow` is a normal `claw-tool` dependency rather than a build-only
@@ -625,10 +627,12 @@ Current evidence:
 - `manifest_gen/main.rs` (the only `claw_tool::bake` caller found);
 - `Cargo.toml` (`dotenvy` and duplicate `serde_json` dev entries).
 
-Exit condition: move or feature-gate the baking validator so it is not in the
-runtime API, move `anyhow` to the resulting host/build-only dependency surface,
-remove unused/redundant `claw-core` dev dependencies, and run the workspace
-build/tests for host and firmware targets.
+Resolution: `claw-tool::bake` is available only through the explicit
+`build-support` feature. With workspace resolver version 2, `claw-core` enables
+that feature only for its host build-dependency, while the runtime dependency
+keeps the default API and excludes `anyhow`. `anyhow` remains a dev-dependency
+for `claw-tool` tests. The unused `dotenvy` and duplicate `serde_json`
+dev-dependencies were removed from `claw-core`.
 
 ## Related Register
 

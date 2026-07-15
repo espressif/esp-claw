@@ -8,14 +8,21 @@ description = "Tool registry, tool set projection, and tool runner"
 [lib]
 crate-type = ["rlib"]
 
+[features]
+# Host-only validation used by build scripts that bake tool resources.
+build-support = ["dep:anyhow"]
+
 [dependencies]
-anyhow = "1"
+anyhow = { version = "1", optional = true }
 claw-checkpoint = { path = "../claw-checkpoint" }
 claw-permission = { path = "../claw-permission" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 tracing = { version = "0.1", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+anyhow = "1"
 
 [lints.rust]
 unsafe_code = "forbid"

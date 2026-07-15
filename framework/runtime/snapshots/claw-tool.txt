@@ -1,6 +1,4 @@
 pub mod claw_tool
-pub mod claw_tool::bake
-pub fn claw_tool::bake::validate_tools_dir(&std::path::Path) -> anyhow::Result<usize>
 pub macro claw_tool::tool_metadata!
 pub enum claw_tool::ToolError
 pub claw_tool::ToolError::InvalidArguments(alloc::string::String)
