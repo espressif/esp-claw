@@ -52,7 +52,7 @@ Priorities in this document mean:
 | `NAR-010` | P2 | Documentation | Several source comments and repository guides contradict current Rust behavior. |
 | `NAR-011` | P2 | Dependencies | **Resolved:** tool baking is feature-gated as host build support and stale dependencies were removed. |
 | `NAR-012` | P1 | Manifests | **Resolved:** decorative `schema_version` fields were removed from baked manifests. |
-| `NAR-013` | P1 | Manifests | A missing `tool_block_retries` field silently changes policy to zero retries. |
+| `NAR-013` | P1 | Manifests | **Resolved:** `tool_block_retries` is required in every agent manifest. |
 | `NAR-014` | P1 | Permissions | **Resolved:** every session exposes a durable, live `Deny` / `Ask` / `AllowAll` permission level. |
 | `NAR-015` | P1 | Checkpoints | Several checkpoint decoders ignore schema versions or silently normalize invalid state. |
 | `NAR-016` | P0 | Subagents | **Resolved:** each live agent now has a stable slot whose inbox survives while the agent is in flight. |
@@ -172,20 +172,12 @@ failure is the format compatibility boundary.
 
 ### NAR-013: missing tool-block policy silently falls back to zero
 
-`RuntimeJson::tool_block_retries` uses `#[serde(default)]`. Omitting the field
-therefore produces a valid manifest with a stricter zero-retry policy, even
-though all current manifests specify the value explicitly. A typo or incomplete
-manifest changes behavior instead of failing the build.
+**Status: resolved.**
 
-Current evidence:
-
-- `manifest_gen/model.rs` (`RuntimeJson::tool_block_retries`);
-- `src/agent/manifest.rs` (documents the zero fallback);
-- both checked-in `resources/agents/*/agent.json` files specify the field.
-
-Exit condition: make the field required and add a missing-field failure test,
-or explicitly define it as optional product behavior with a schema-backed
-compatibility reason.
+`RuntimeJson::tool_block_retries` no longer uses `#[serde(default)]`. Every
+checked-in `resources/agents/*/agent.json` must now specify the policy, and an
+omission fails manifest deserialization during the build instead of silently
+selecting zero retries.
 
 ### NAR-014: product assembly always allows tool calls
 

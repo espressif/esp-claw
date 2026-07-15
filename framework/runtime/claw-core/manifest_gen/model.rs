@@ -33,7 +33,6 @@ pub(crate) struct RuntimeJson {
     /// LLM retry count per iteration.
     pub(crate) retries: u32,
     /// Consecutive gating-blocked tool rounds to tolerate.
-    #[serde(default)]
     pub(crate) tool_block_retries: u32,
 }
 
