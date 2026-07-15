@@ -22,7 +22,8 @@ pub(crate) struct AgentJson {
 pub(crate) struct SpawnJson {
     /// Gates the `subagent_spawn` tool.
     pub(crate) enabled: bool,
-    /// Intended allowlist of kinds this agent may spawn (`"*"` = any).
+    /// Runtime-enforced allowlist of kinds this agent may spawn
+    /// (`"*"` = any known kind).
     pub(crate) allowed_kinds: Vec<String>,
 }
 

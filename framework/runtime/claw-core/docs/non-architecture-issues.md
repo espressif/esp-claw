@@ -42,7 +42,7 @@ Priorities in this document mean:
 | ID | Priority | Area | Problem |
 | --- | --- | --- | --- |
 | `NAR-002` | P1 | Skills | **Resolved:** per-kind skill baking was removed; every agent receives the AgentSystem's shared skill catalog. |
-| `NAR-003` | P2 | Spawn policy | The `allowed_kinds` comment says the policy is not enforced although runtime code enforces it. |
+| `NAR-003` | P2 | Spawn policy | **Resolved:** `allowed_kinds` is projected into `SpawnPolicy` and enforced consistently by spawn discovery and execution. |
 | `NAR-004` | P1 | Memory | “Per-agent” long-term memory is physically scoped by agent kind, so same-kind agents share a store. |
 | `NAR-005` | P1 | Checkpoints | **Resolved during the boundary refactor:** the unused second construction path was removed. |
 | `NAR-006` | P1 | Public API | The committed `claw-core` API snapshot does not describe the current API. |
@@ -95,17 +95,20 @@ the shared filesystem-backed `SkillSet` assembled from `skill_roots`.
 
 ### NAR-003: `allowed_kinds` documentation is stale
 
-`AgentManifest::allowed_kinds` says the policy is “not yet enforced at
-runtime.” `SpawnSubagentTool` rejects disallowed kinds before emitting a graph
-effect, and `subagent_list_spawnable` is built from the same policy.
+**Status: resolved during the multiagent refactor.**
+
+The obsolete `AgentManifest` field and its “not yet enforced” comment were
+removed. The generated `MultiagentManifest` now feeds one `SpawnPolicy` shared
+by `subagent_list_spawnable` and `subagent_spawn`; the spawn path rejects a
+disallowed kind before requesting a child. The manifest-generator comment now
+states that `allowed_kinds` is runtime-enforced.
 
 Current evidence:
 
-- `src/agent/manifest.rs` (`allowed_kinds` field comment);
-- `src/agent/tools/spawn_subagent.rs` (`SpawnPolicy::allows` check).
-
-Exit condition: update the field and manifest-generator documentation to state
-the actual enforcement point, then keep an allowed/disallowed spawn test.
+- `manifest_gen/model.rs` (`SpawnJson::allowed_kinds`);
+- `src/config/catalog.rs` (`MultiagentManifest`);
+- `src/multiagent/policy.rs` (`SpawnPolicy`);
+- `src/multiagent/tools/list_spawnable.rs` and `spawn.rs`.
 
 ### NAR-004: long-term memory scope is named inconsistently
 
@@ -554,8 +557,6 @@ behavior rather than opening new internal APIs solely for test access.
 
 Known remaining examples:
 
-- `src/agent/manifest.rs` says `allowed_kinds` is not enforced; the spawn tool
-  enforces it.
 - `src/agent/generic_agent.rs` says HTTP/timer transports are injected; the
   construction path currently creates them through `Default`.
 - long-term-memory comments alternate between per-agent and per-kind semantics
