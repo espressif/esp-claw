@@ -56,7 +56,7 @@ Priorities in this document mean:
 | `NAR-014` | P1 | Permissions | **Resolved:** every session exposes a durable, live `Deny` / `Ask` / `AllowAll` permission level. |
 | `NAR-015` | P1 | Checkpoints | Several checkpoint decoders ignore schema versions or silently normalize invalid state. |
 | `NAR-016` | P0 | Subagents | **Resolved:** each live agent now has a stable slot whose inbox survives while the agent is in flight. |
-| `NAR-017` | P0 | Concurrency | A shared async LLM lease keeps only one waiter waker, so concurrent extraction can stall indefinitely. |
+| `NAR-017` | P0 | Concurrency | **Resolved:** the shared async LLM lease uses a waiter-aware single-item channel. |
 | `NAR-018` | P0 | Tests | Control-progress tests race their workers and can leave the test process hung after failure. |
 | `NAR-019` | P0 | Tests | The backend retry matrix expects six transient HTTP calls but the runtime makes four. |
 | `NAR-020` | P0 | Tests | The built-in subagent fixture expects an obsolete unknown-kind error fragment. |
@@ -229,23 +229,17 @@ result. The lifecycle matrix forces the parent to remain in flight until the
 auto-terminated child finishes and verifies that the parent still receives the
 result.
 
-### NAR-017: shared async LLM lease can lose waiters
+### NAR-017: shared async LLM lease can lose waiters (resolved)
 
-`SharedAsyncLlmState` stores only one `Option<Waker>`. The shared
-`LlmExtractor` can be awaited by several agents concurrently, so each later
-pending poll replaces the previous waiter's waker. Returning the lease wakes
-only the last waiter; an earlier waiter can remain asleep indefinitely even
-though the lease becomes available.
+`SharedAsyncLlm` now stores its single `ClawApiAsync` as the token in a bounded
+async channel. `lease()` receives the token and `AsyncLlmLease::drop` returns
+it, leaving waiter registration, cancellation, and wakeup to `async-channel`
+instead of a hand-written single `Waker` slot.
 
-Current evidence:
-
-- `src/memory/async_llm.rs` owns the single waker slot (moved from
-  `long_term_memory_adapter/async_llm.rs` during the boundary refactor);
-- `LongTermDeps` shares one extractor across all agents created by a factory.
-
-Exit condition: use a waiter-aware lease primitive or maintain and wake a
-deduplicated waiter set, then cover at least two concurrent extractor waiters
-with a progress test.
+The unit test polls two waiting lease futures with independent wakers and only
+repolls futures that were signalled. Both waiters acquire the client in turn,
+so lease progress no longer depends on all actors sharing the engine's top-level
+waker.
 
 ### NAR-018: control-progress tests are racy and can hang after failure
 
