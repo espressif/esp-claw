@@ -28,6 +28,10 @@
 
 ## Stage 2 - Goal 1
 
+- [ ] decouple agents and tools through a generic event bus
+  - [ ] preserve baked `tool_groups` as the strict per-agent capability allowlist
+  - [ ] apply the allowlist before tool discovery and loading
+  - [ ] keep `default_visibility` solely for controlling tool-schema context size
 - [ ] DAG powered parallelized toolcalls
 - [ ] SSE toocall scheduling
 - [ ] evals

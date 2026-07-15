@@ -41,7 +41,6 @@ Priorities in this document mean:
 
 | ID | Priority | Area | Problem |
 | --- | --- | --- | --- |
-| `NAR-001` | P0 | Tools | `tool_groups` is described as an allowlist but omitted hidden groups remain discoverable and loadable. |
 | `NAR-002` | P1 | Skills | **Resolved:** per-kind skill baking was removed; every agent receives the AgentSystem's shared skill catalog. |
 | `NAR-003` | P2 | Spawn policy | The `allowed_kinds` comment says the policy is not enforced although runtime code enforces it. |
 | `NAR-004` | P1 | Memory | “Per-agent” long-term memory is physically scoped by agent kind, so same-kind agents share a store. |
@@ -68,37 +67,6 @@ Priorities in this document mean:
 | `NAR-027` | P1 | Tracing | **Resolved:** only explicit `counter.<series>` fields create Chrome counter tracks. |
 
 ## Behavior and Configuration Contracts
-
-### NAR-001: `tool_groups` does not currently form a strict allowlist
-
-`AgentManifest::tool_groups` and the factory comments describe the field as the
-set of registry groups an agent may use. The implementation calls
-`ToolSet::retain_registry_groups`, which changes omitted registry tools to
-`Disabled` rather than removing or permanently denying them.
-
-Capability groups registered by `claw-cabi` use `default_visibility = false`.
-A disabled tool with that visibility is added to the discovery catalog, and
-`tool_load` can enable it durably. Therefore an omitted capability group may be
-found with `tool_search` and enabled after the manifest projection is applied.
-
-Current evidence:
-
-- `src/agent/manifest.rs` (`AgentManifest::tool_groups`);
-- `src/agent/factory/create.rs` (`retain_registry_groups` call);
-- `framework/runtime/claw-tool/src/set.rs` (`retain_registry_groups`, `is_loadable`,
-  `refresh_discovery_catalog`, and `apply_pending_tool_loads`);
-- `framework/runtime/claw-cabi/src/tool.rs`
-  (`ToolGroup::new(group_id, false, tools)`).
-
-This may be either a policy bypass or an inaccurately named lazy-loading
-contract. It must be decided explicitly.
-
-Exit condition:
-
-- If the field is an allowlist, omitted groups cannot be searched, loaded, or
-  called, and a test proves all three properties.
-- If the field is an initial-visibility list, rename/re-document the field and
-  add a test proving the intended discovery/load behavior.
 
 ### NAR-002: manifest skill ids are catalog-only
 
@@ -575,9 +543,10 @@ Existing tests cover individual tool-set operations, but the audit found no
 test combining manifest projection, a hidden registry group, discovery, and
 `tool_load`.
 
-Exit condition: add black-box tests for the final decision in `NAR-001`. The
-tests should use product-visible behavior rather than opening new internal APIs
-solely for test access.
+Exit condition: when the roadmap's agent/tool event-bus work lands, add
+black-box tests proving that baked `tool_groups` filters hidden registry groups
+before discovery, loading, and invocation. The tests should use product-visible
+behavior rather than opening new internal APIs solely for test access.
 
 ## Documentation and Comment Drift
 
