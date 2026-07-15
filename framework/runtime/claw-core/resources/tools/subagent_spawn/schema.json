@@ -2,7 +2,7 @@
   "type": "function",
   "function": {
     "name": "subagent_spawn",
-    "description": "Delegate a goal to a new subagent. Foreground mode waits for its result in this tool call; background mode returns immediately and reports the result in a later turn.",
+    "description": "Delegate a goal to a new subagent with a required lifetime timeout. Foreground mode waits for its result in this tool call; background mode returns immediately and reports the result to its parent when it finishes.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -23,10 +23,16 @@
         },
         "foreground": {
           "type": "boolean",
-          "description": "Required execution mode. true waits for the subagent and returns its result from this tool call. false returns the agent id immediately; the result is delivered later in a new subagent-origin turn."
+          "description": "Required execution mode. true waits for the subagent and returns its result from this tool call. false returns the agent id immediately; the result is delivered asynchronously to the spawning parent."
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295,
+          "description": "Required maximum lifetime of this subagent and all work it owns, in milliseconds. On expiry the runtime reports a failed result and atomically deletes this agent's entire subtree."
         }
       },
-      "required": ["kind", "name", "goal", "foreground"]
+      "required": ["kind", "name", "goal", "foreground", "timeout_ms"]
     }
   }
 }

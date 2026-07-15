@@ -2,18 +2,29 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::protocol::{AgentId, AgentKind};
 
-use super::model::SubagentStatus;
+use super::model::{SubagentStatus, SubagentTimeout};
 
 #[derive(Clone)]
 pub(super) struct NodeMeta {
     parent: Option<AgentId>,
     kind: AgentKind,
     name: Option<String>,
+    timeout: Option<SubagentTimeout>,
 }
 
 impl NodeMeta {
-    pub(super) fn new(parent: Option<AgentId>, kind: AgentKind, name: Option<String>) -> Self {
-        Self { parent, kind, name }
+    pub(super) fn new(
+        parent: Option<AgentId>,
+        kind: AgentKind,
+        name: Option<String>,
+        timeout: Option<SubagentTimeout>,
+    ) -> Self {
+        Self {
+            parent,
+            kind,
+            name,
+            timeout,
+        }
     }
 
     pub(super) fn parent(&self) -> Option<AgentId> {
@@ -26,6 +37,10 @@ impl NodeMeta {
 
     pub(super) fn name(&self) -> Option<&str> {
         self.name.as_deref()
+    }
+
+    pub(super) fn timeout(&self) -> Option<SubagentTimeout> {
+        self.timeout
     }
 }
 
@@ -107,7 +122,7 @@ impl MultiagentState {
         if self.root().is_some() || self.nodes.contains_key(&id) {
             return false;
         }
-        self.nodes.insert(id, NodeMeta::new(None, kind, None));
+        self.nodes.insert(id, NodeMeta::new(None, kind, None, None));
         true
     }
 
@@ -118,13 +133,18 @@ impl MultiagentState {
         id: AgentId,
         kind: AgentKind,
         name: Option<String>,
+        timeout: SubagentTimeout,
     ) -> bool {
         if !self.nodes.contains_key(&parent) || self.nodes.contains_key(&id) {
             return false;
         }
         self.nodes
-            .insert(id, NodeMeta::new(Some(parent), kind, name));
+            .insert(id, NodeMeta::new(Some(parent), kind, name, Some(timeout)));
         true
+    }
+
+    pub(super) fn has_children(&self, parent: AgentId) -> bool {
+        self.nodes.values().any(|meta| meta.parent == Some(parent))
     }
 
     pub(super) fn root_children(&self) -> Vec<AgentId> {
@@ -303,7 +323,12 @@ mod tests {
 
     use crate::protocol::{AgentId, AgentKind};
 
+    use super::super::model::SubagentTimeout;
     use super::{MultiagentState, MultiagentWork, NodeMeta};
+
+    fn timeout() -> SubagentTimeout {
+        SubagentTimeout::from_millis(60_000).expect("non-zero timeout")
+    }
 
     #[test]
     fn topology_owns_descendant_and_subtree_rules() {
@@ -312,8 +337,14 @@ mod tests {
         let grandchild = AgentId(3);
         let mut state = MultiagentState::default();
         assert!(state.insert_root(root, AgentKind::from_static("test")));
-        assert!(state.insert_child(root, child, AgentKind::from_static("test"), None));
-        assert!(state.insert_child(child, grandchild, AgentKind::from_static("test"), None));
+        assert!(state.insert_child(root, child, AgentKind::from_static("test"), None, timeout(),));
+        assert!(state.insert_child(
+            child,
+            grandchild,
+            AgentKind::from_static("test"),
+            None,
+            timeout(),
+        ));
 
         assert!(state.is_strict_descendant(root, grandchild));
         assert_eq!(state.depth(grandchild), Some(2));
@@ -327,11 +358,21 @@ mod tests {
         let nodes = BTreeMap::from([
             (
                 first,
-                NodeMeta::new(Some(second), AgentKind::from_static("test"), None),
+                NodeMeta::new(
+                    Some(second),
+                    AgentKind::from_static("test"),
+                    None,
+                    Some(timeout()),
+                ),
             ),
             (
                 second,
-                NodeMeta::new(Some(first), AgentKind::from_static("test"), None),
+                NodeMeta::new(
+                    Some(first),
+                    AgentKind::from_static("test"),
+                    None,
+                    Some(timeout()),
+                ),
             ),
         ]);
         let state = MultiagentState::restored(nodes, Default::default(), Default::default());
@@ -346,7 +387,7 @@ mod tests {
         let child = AgentId(2);
         let mut state = MultiagentState::default();
         assert!(state.insert_root(root, AgentKind::from_static("test")));
-        assert!(state.insert_child(root, child, AgentKind::from_static("test"), None));
+        assert!(state.insert_child(root, child, AgentKind::from_static("test"), None, timeout(),));
 
         assert_eq!(state.work(false, false), MultiagentWork::None);
         state.enqueue(child);

@@ -41,6 +41,7 @@ where
             agent_id_allocator,
             state: DurableState::new(state),
             slots: AgentSlots::new(),
+            timeouts: Default::default(),
             foreground_results: BTreeMap::new(),
             multiagent,
         }
@@ -62,7 +63,20 @@ where
             state,
         );
         instance.restore_agents(agent_slots)?;
+        instance.rearm_subagent_timeouts();
         Ok(instance)
+    }
+
+    fn rearm_subagent_timeouts(&mut self) {
+        let pending = self
+            .state
+            .get()
+            .nodes()
+            .filter_map(|(id, meta)| meta.timeout().map(|timeout| (id, timeout)))
+            .collect::<Vec<_>>();
+        for (id, timeout) in pending {
+            self.timeouts.arm::<Timer>(id, timeout);
+        }
     }
 
     fn restore_agents(
@@ -164,5 +178,107 @@ where
         let agent = self.factory.create_agent(id, kind, goal, environment)?;
         self.slots.insert(id, agent);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+    use std::sync::{Arc, RwLock};
+
+    use claw_checkpoint::{DurablePart, PartStateSlice};
+    use claw_interface::{ImmediateTimer, MemFs, RealHttp};
+    use claw_permission::AllowAll;
+    use claw_tool::ToolRegistry;
+    use futures_lite::future::block_on;
+
+    use crate::agent::FsAgentFactory;
+    use crate::config::ClawApiManager;
+    use crate::protocol::{AgentId, AgentKind, Message, SessionId, SessionPersistence};
+
+    use super::super::model::SubagentTimeout;
+    use super::super::{
+        AgentIdAllocator, AgentPlacement, MultiagentRestore, MultiagentRuntime, MultiagentState,
+        ROOT_AGENT_KIND,
+    };
+
+    type TestRuntime = MultiagentRuntime<MemFs, RealHttp, ImmediateTimer>;
+
+    #[test]
+    #[allow(clippy::arc_with_non_send_sync)]
+    fn restore_rearms_each_persisted_subagent_with_its_full_timeout() {
+        MemFs::new();
+        let session = SessionId::new(1);
+        let factory = Rc::new(
+            FsAgentFactory::new(
+                Arc::new(ToolRegistry::new()),
+                "/timeout-restore-test".to_owned(),
+                Vec::new(),
+                Arc::new(RwLock::new(ClawApiManager::new())),
+            )
+            .expect("test factory builds"),
+        );
+        let mut runtime = TestRuntime::new(
+            session,
+            Rc::clone(&factory),
+            AgentIdAllocator::new(),
+            Arc::new(AllowAll),
+            MultiagentState::default(),
+        );
+        let root = AgentId::new(1);
+        let child = AgentId::new(2);
+        let root_kind = AgentKind::from_static(ROOT_AGENT_KIND);
+        let child_kind = AgentKind::from_static("worker");
+        runtime
+            .build_agent(
+                root,
+                &root_kind,
+                Message::text("root"),
+                AgentPlacement::Root {
+                    session,
+                    persistence: SessionPersistence::Persistent,
+                },
+                Vec::new(),
+            )
+            .expect("root builds");
+        assert!(runtime.state.get_mut().insert_root(root, root_kind));
+        runtime
+            .build_agent(
+                child,
+                &child_kind,
+                Message::text("child"),
+                AgentPlacement::Child(child),
+                Vec::new(),
+            )
+            .expect("child builds");
+        let timeout = SubagentTimeout::from_millis(12_345).expect("non-zero timeout");
+        assert!(runtime.state.get_mut().insert_child(
+            root,
+            child,
+            child_kind,
+            Some("restored-child".to_owned()),
+            timeout,
+        ));
+
+        let checkpoint = runtime.export_state().expect("runtime checkpoints");
+        let restored = MultiagentRestore::decode_state(PartStateSlice {
+            schema_version: checkpoint.schema_version,
+            bytes: checkpoint.bytes.as_ref(),
+        })
+        .expect("checkpoint decodes");
+        let mut runtime = TestRuntime::from_restored_state(
+            session,
+            factory,
+            AgentIdAllocator::new(),
+            Arc::new(AllowAll),
+            restored,
+        )
+        .expect("runtime restores");
+
+        let expired = block_on(runtime.timeouts.next_expired());
+        assert_eq!(expired.len(), 1);
+        let expired = expired.first().expect("one restored timeout");
+        assert_eq!(expired.agent, child);
+        assert_eq!(expired.timeout.millis(), 12_345);
     }
 }

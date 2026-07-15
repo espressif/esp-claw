@@ -8,10 +8,10 @@ use claw_tool::{
 
 use crate::protocol::{AgentKind, Message};
 
-use super::super::model::TranscriptText;
+use super::super::model::{SubagentTimeout, TranscriptText};
 use super::super::policy::SpawnPolicy;
 use super::super::tool_port::SubagentControl;
-use super::args::{non_blank_argument, required_bool_argument};
+use super::args::{non_blank_argument, required_bool_argument, required_nonzero_u32_argument};
 
 pub(super) fn tool(control: Arc<SubagentControl>, policy: SpawnPolicy) -> Tool {
     Tool::from_async(SpawnSubagentTool { control, policy })
@@ -79,8 +79,14 @@ impl SpawnSubagentTool {
         let name = non_blank_argument(call.arguments_json(), "name")?;
         let goal = Message::text(non_blank_argument(call.arguments_json(), "goal")?);
         let foreground = required_bool_argument(call.arguments_json(), "foreground")?;
+        let timeout = SubagentTimeout::new(required_nonzero_u32_argument(
+            call.arguments_json(),
+            "timeout_ms",
+        )?);
         if foreground {
-            let (_child, result) = self.control.spawn_foreground(kind, Some(name), goal);
+            let (_child, result) = self
+                .control
+                .spawn_foreground(kind, Some(name), goal, timeout);
             let result = result.recv().await.map_err(|_| {
                 ToolError::InvokeRejected("foreground subagent result channel closed".to_owned())
             })?;
@@ -91,10 +97,11 @@ impl SpawnSubagentTool {
         } else {
             let child = self
                 .control
-                .spawn_background(kind, Some(name.clone()), goal);
+                .spawn_background(kind, Some(name.clone()), goal, timeout);
             Ok(ToolOutput {
                 output: format!(
-                    "Subagent {child} named '{name}' requested; its result will be reported back when it finishes."
+                    "Subagent {child} named '{name}' requested with a {} ms timeout; its result will be reported back when it finishes.",
+                    timeout.millis()
                 ),
                 ok: true,
             })

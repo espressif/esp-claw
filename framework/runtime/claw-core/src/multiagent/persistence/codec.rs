@@ -7,6 +7,7 @@ use claw_interface::{ClawHttp, ClawTimer};
 use crate::protocol::{AgentId, AgentKind};
 
 use super::super::agents::AgentSlots;
+use super::super::model::SubagentTimeout;
 use super::super::state::{NodeMeta, ParkedApproval};
 use super::super::MultiagentState;
 use super::schema::{
@@ -14,7 +15,7 @@ use super::schema::{
 };
 use super::{MultiagentRestore, RestoredAgentSlot};
 
-const MULTIAGENT_SCHEMA_VERSION: u32 = 5;
+const MULTIAGENT_SCHEMA_VERSION: u32 = 6;
 
 #[derive(Clone, Copy)]
 enum AgentSlotsMode {
@@ -34,6 +35,7 @@ fn checkpoint_snapshot(
             parent: meta.parent(),
             kind: meta.kind().as_str().to_string(),
             name: meta.name().map(str::to_owned),
+            timeout_ms: meta.timeout().map(SubagentTimeout::millis),
         });
     }
     let approvals = state
@@ -147,7 +149,12 @@ fn decode_restore(
     for agent in agents {
         nodes.insert(
             agent.id,
-            NodeMeta::new(agent.parent, AgentKind::new(agent.kind), agent.name),
+            NodeMeta::new(
+                agent.parent,
+                AgentKind::new(agent.kind),
+                agent.name,
+                agent.timeout_ms.and_then(SubagentTimeout::from_millis),
+            ),
         );
     }
     let approvals = approvals
@@ -190,6 +197,20 @@ fn validate_snapshot(
     for agent in &snapshot.agents {
         if agent.kind.trim().is_empty() {
             return Err(DurablePartError::InvalidState("agent kind is empty"));
+        }
+        match (agent.parent, agent.timeout_ms) {
+            (None, None) => {}
+            (Some(_), Some(1..=u32::MAX)) => {}
+            (None, Some(_)) => {
+                return Err(DurablePartError::InvalidState(
+                    "root agent must not have a timeout",
+                ));
+            }
+            (Some(_), None | Some(0)) => {
+                return Err(DurablePartError::InvalidState(
+                    "subagent timeout must be a positive integer",
+                ));
+            }
         }
         if parents.insert(agent.id, agent.parent).is_some() {
             return Err(DurablePartError::InvalidState("duplicate graph agent id"));
@@ -319,6 +340,7 @@ mod tests {
             parent,
             kind: "conversation".to_owned(),
             name: None,
+            timeout_ms: parent.map(|_| 60_000),
         }
     }
 
@@ -366,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn schema_five_restore_keeps_agent_slots_outside_durable_state() {
+    fn schema_six_restore_keeps_agent_slots_outside_durable_state() {
         let root = AgentId(1);
         let mut snapshot = snapshot(vec![node(root, None)]);
         snapshot.ready_queue.push(root);
@@ -418,6 +440,24 @@ mod tests {
 
         let multiple_roots = snapshot(vec![node(root, None), node(child, None)]);
         assert!(decode(&multiple_roots).is_err());
+    }
+
+    #[test]
+    fn restore_requires_a_positive_timeout_on_every_non_root_agent_only() {
+        let root = AgentId(1);
+        let child = AgentId(2);
+
+        let mut root_timeout = snapshot(vec![node(root, None)]);
+        root_timeout.agents[0].timeout_ms = Some(10);
+        assert!(decode(&root_timeout).is_err());
+
+        let mut missing = snapshot(vec![node(root, None), node(child, Some(root))]);
+        missing.agents[1].timeout_ms = None;
+        assert!(decode(&missing).is_err());
+
+        let mut zero = snapshot(vec![node(root, None), node(child, Some(root))]);
+        zero.agents[1].timeout_ms = Some(0);
+        assert!(decode(&zero).is_err());
     }
 
     #[test]
@@ -543,6 +583,8 @@ mod tests {
             serde_json::from_slice(encoded.bytes.as_ref()).expect("encoded snapshot decodes");
         assert!(value.get("root").is_none());
         assert!(value["agents"][0].get("depth").is_none());
+        assert!(value["agents"][0]["timeout_ms"].is_null());
+        assert_eq!(value["agents"][1]["timeout_ms"], 60_000);
         assert!(value.get("parked_approvals").is_none());
         assert!(value.get("approval_queue").is_none());
         assert_eq!(value["approvals"][0]["agent"], "agent-2");

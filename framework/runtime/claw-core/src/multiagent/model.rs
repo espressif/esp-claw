@@ -1,3 +1,5 @@
+use core::num::NonZeroU32;
+use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::ser::{SerializeStruct, Serializer};
@@ -11,15 +13,49 @@ pub(in crate::multiagent) struct SubagentSpec {
     kind: AgentKind,
     name: Option<String>,
     goal: Message,
+    timeout: SubagentTimeout,
 }
 
 impl SubagentSpec {
-    pub(in crate::multiagent) fn new(kind: AgentKind, name: Option<String>, goal: Message) -> Self {
-        Self { kind, name, goal }
+    pub(in crate::multiagent) fn new(
+        kind: AgentKind,
+        name: Option<String>,
+        goal: Message,
+        timeout: SubagentTimeout,
+    ) -> Self {
+        Self {
+            kind,
+            name,
+            goal,
+            timeout,
+        }
     }
 
-    pub(in crate::multiagent) fn into_parts(self) -> (AgentKind, Option<String>, Message) {
-        (self.kind, self.name, self.goal)
+    pub(in crate::multiagent) fn into_parts(
+        self,
+    ) -> (AgentKind, Option<String>, Message, SubagentTimeout) {
+        (self.kind, self.name, self.goal, self.timeout)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::multiagent) struct SubagentTimeout(NonZeroU32);
+
+impl SubagentTimeout {
+    pub(in crate::multiagent) const fn new(milliseconds: NonZeroU32) -> Self {
+        Self(milliseconds)
+    }
+
+    pub(in crate::multiagent) fn from_millis(milliseconds: u32) -> Option<Self> {
+        NonZeroU32::new(milliseconds).map(Self)
+    }
+
+    pub(in crate::multiagent) const fn millis(self) -> u32 {
+        self.0.get()
+    }
+
+    pub(in crate::multiagent) fn duration(self) -> Duration {
+        Duration::from_millis(u64::from(self.millis()))
     }
 }
 

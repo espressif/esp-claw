@@ -134,6 +134,14 @@ impl SessionState {
         self.active_turn.as_ref()?.input_request.as_ref()
     }
 
+    pub(super) fn cancel_input_request(&mut self) -> Option<InputRequestId> {
+        self.active_turn
+            .as_mut()?
+            .input_request
+            .take()
+            .map(|request| request.id)
+    }
+
     pub(super) fn respond_to_input(&mut self, request: InputRequestId, input: Message) -> bool {
         let Some(turn) = self.active_turn.as_mut() else {
             return false;

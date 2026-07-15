@@ -34,6 +34,7 @@ mod model;
 mod persistence;
 mod policy;
 mod state;
+mod timeouts;
 mod tool_port;
 mod tools;
 
@@ -59,6 +60,7 @@ use self::model::SubagentResult;
 pub(crate) use self::persistence::MultiagentRestore;
 pub(crate) use self::persistence::MultiagentRestoreError;
 pub(crate) use self::state::{MultiagentState, MultiagentWork};
+use self::timeouts::AgentTimeouts;
 use self::tool_port::MultiagentBridge;
 
 pub(in crate::multiagent) const ROOT_AGENT_KIND: &str = "conversation";
@@ -93,6 +95,8 @@ where
     /// Stable slots for live graph nodes. Each slot owns the agent in both its
     /// idle and running forms; slot inboxes are part of the checkpoint.
     slots: AgentSlots<Http, Timer>,
+    /// Process-local deadline futures, one for every durable non-root node.
+    timeouts: AgentTimeouts,
     /// One-shot completions for foreground spawns. They are process-local: an
     /// active tool future owns the matching receiver.
     foreground_results: BTreeMap<AgentId, async_channel::Sender<SubagentResult>>,

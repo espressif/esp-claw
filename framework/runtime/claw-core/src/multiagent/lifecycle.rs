@@ -1,3 +1,7 @@
+use core::future::Future as _;
+use core::pin::Pin;
+use core::task::{Context, Poll};
+
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
@@ -6,6 +10,7 @@ use crate::protocol::{AgentId, Message};
 
 use super::agent_control::AgentMessageDeliveryError;
 use super::model::SubagentResult;
+use super::timeouts::ExpiredTimeout;
 use super::tool_port::{MultiagentAction, MultiagentCommand, SpawnCommand};
 use super::{AgentPlacement, DriveOutput, MultiagentRuntime};
 
@@ -33,7 +38,7 @@ where
 
     fn spawn_subagent(&mut self, parent: AgentId, spawn: SpawnCommand) {
         let (id, spec, completion) = spawn.into_parts();
-        let (kind, name, goal) = spec.into_parts();
+        let (kind, name, goal, timeout) = spec.into_parts();
         if !self.state.get().contains(parent) {
             tracing::warn!(
                 name: "spawn_dropped",
@@ -51,10 +56,10 @@ where
 
         match self.build_agent(id, &kind, goal, AgentPlacement::Child(id), Vec::new()) {
             Ok(()) => {
-                let inserted = self
-                    .state
-                    .get_mut()
-                    .insert_child(parent, id, kind.clone(), name);
+                let inserted =
+                    self.state
+                        .get_mut()
+                        .insert_child(parent, id, kind.clone(), name, timeout);
                 if !inserted {
                     self.slots.remove(id);
                     tracing::warn!(
@@ -77,11 +82,13 @@ where
                         "foreground result waiter already exists: {id}"
                     );
                 }
+                self.timeouts.arm::<Timer>(id, timeout);
                 tracing::info!(
                     name: "spawn_materialized",
                     parent_agent = %parent,
                     child_agent = %id,
                     kind = %kind.as_str(),
+                    timeout_ms = timeout.millis() as u64,
                 );
                 self.enqueue(id);
             }
@@ -191,6 +198,7 @@ where
             count = victims.len() as u64,
         );
         for victim in &victims {
+            self.timeouts.remove(*victim);
             if let Some(completion) = self.foreground_results.remove(victim) {
                 let _ = completion.try_send(SubagentResult::new(
                     *victim,
@@ -201,6 +209,53 @@ where
             self.slots.remove(*victim);
         }
         self.state.get_mut().remove_agents(&victims);
+    }
+
+    pub(in crate::multiagent) fn route_expired_timeouts(
+        &mut self,
+        mut expired: Vec<ExpiredTimeout>,
+    ) -> DriveOutput {
+        expired.sort_by_key(|expired| self.state.get().depth(expired.agent).unwrap_or(u16::MAX));
+        for expired in expired {
+            if !self.state.get().contains(expired.agent) {
+                continue;
+            }
+            let Some(parent) = self.state.get().parent(expired.agent).flatten() else {
+                continue;
+            };
+            let victim_count = self.state.get().subtree_ids(expired.agent).len();
+            let message = format!(
+                "subagent timed out after {} ms; deleted its subtree of {victim_count} agent(s)",
+                expired.timeout.millis()
+            );
+            tracing::warn!(
+                name: "subtree_timed_out",
+                root_agent = %expired.agent,
+                timeout_ms = expired.timeout.millis() as u64,
+                count = victim_count as u64,
+            );
+            self.deliver_subagent_result(parent, expired.agent, message, false);
+            self.delete_subtree(expired.agent);
+        }
+        DriveOutput::default()
+    }
+
+    /// Keep deadlines live while the session actor is idle, including while it
+    /// is waiting for a permission reply or has no open client lease.
+    pub(crate) fn poll_expired_timeouts(&mut self, context: &mut Context<'_>) -> Poll<DriveOutput> {
+        if !self.timeouts.has_pending() {
+            return Poll::Pending;
+        }
+        let expired = {
+            let mut next = self.timeouts.next_expired();
+            let Poll::Ready(expired) = Pin::new(&mut next).poll(context) else {
+                return Poll::Pending;
+            };
+            expired
+        };
+        let output = self.route_expired_timeouts(expired);
+        self.refresh_multiagent_snapshot();
+        Poll::Ready(output)
     }
 
     pub(in crate::multiagent) fn delete_spawned_subagents(&mut self) {
@@ -283,6 +338,9 @@ where
         let Some(parent_id) = parent else {
             return DriveOutput::default();
         };
+        if self.defer_success_for_owned_work(id) {
+            return DriveOutput::default();
+        }
 
         self.deliver_subagent_result(parent_id, id, text, true);
         self.delete_subtree(id);
@@ -296,10 +354,28 @@ where
         let Some(parent_id) = parent else {
             return DriveOutput::message(text);
         };
+        if ok && self.defer_success_for_owned_work(id) {
+            return DriveOutput::default();
+        }
 
         self.deliver_subagent_result(parent_id, id, text, ok);
         self.delete_subtree(id);
         DriveOutput::default()
+    }
+
+    fn defer_success_for_owned_work(&self, id: AgentId) -> bool {
+        let has_live_children = self.state.get().has_children(id);
+        let has_pending_child_results = self.slots.has_inbox(id);
+        if !has_live_children && !has_pending_child_results {
+            return false;
+        }
+        tracing::info!(
+            name: "subagent_completion_deferred",
+            agent = %id,
+            live_descendants = self.state.get().subtree_ids(id).len().saturating_sub(1) as u64,
+            pending_child_results = has_pending_child_results,
+        );
+        true
     }
 
     fn route_cancelled(&mut self, id: AgentId) -> DriveOutput {
@@ -322,11 +398,19 @@ mod tests {
 
     use crate::agent::{FsAgentFactory, TickOutcome};
     use crate::config::ClawApiManager;
-    use crate::protocol::{AgentId, AgentKind, SessionId};
+    use crate::protocol::{AgentId, AgentKind, Message, SessionId};
 
-    use super::super::{AgentIdAllocator, MultiagentRuntime, MultiagentState, ROOT_AGENT_KIND};
+    use super::super::model::{SubagentTimeout, TranscriptText};
+    use super::super::timeouts::ExpiredTimeout;
+    use super::super::{
+        AgentIdAllocator, AgentPlacement, MultiagentRuntime, MultiagentState, ROOT_AGENT_KIND,
+    };
 
     type TestInstance = MultiagentRuntime<MemFs, RealHttp, ImmediateTimer>;
+
+    fn timeout() -> SubagentTimeout {
+        SubagentTimeout::from_millis(60_000).expect("non-zero timeout")
+    }
 
     #[allow(clippy::arc_with_non_send_sync)]
     fn instance_with_root() -> (TestInstance, AgentId) {
@@ -372,5 +456,154 @@ mod tests {
             },
         );
         assert_eq!(ended.into_messages(), vec!["finished".to_owned()]);
+    }
+
+    #[test]
+    fn successful_subagent_with_live_children_is_parked_instead_of_deleted() {
+        let (mut instance, root) = instance_with_root();
+        let parent = AgentId(2);
+        let child = AgentId(3);
+        assert!(instance.state.get_mut().insert_child(
+            root,
+            parent,
+            AgentKind::from_static("worker"),
+            Some("epsilon".to_owned()),
+            timeout(),
+        ));
+        assert!(instance.state.get_mut().insert_child(
+            parent,
+            child,
+            AgentKind::from_static("worker"),
+            Some("nested".to_owned()),
+            timeout(),
+        ));
+
+        let output = instance.route_outcome(
+            parent,
+            TickOutcome::Yielded {
+                text: "children spawned; waiting for their results".to_owned(),
+            },
+        );
+
+        assert!(output.into_messages().is_empty());
+        assert!(instance.state.get().contains(parent));
+        assert!(instance.state.get().contains(child));
+        assert_eq!(instance.state.get().node_count(), 3);
+    }
+
+    #[test]
+    fn parent_timeout_reports_one_failure_and_deletes_its_entire_subtree() {
+        let (mut instance, root) = instance_with_root();
+        // Deliberately give the descendant a lower id: timeout dominance is
+        // topology-based, never allocator/order-based.
+        let parent = AgentId(3);
+        let child = AgentId(2);
+        assert!(instance.state.get_mut().insert_child(
+            root,
+            parent,
+            AgentKind::from_static("worker"),
+            Some("epsilon".to_owned()),
+            timeout(),
+        ));
+        assert!(instance.state.get_mut().insert_child(
+            parent,
+            child,
+            AgentKind::from_static("worker"),
+            Some("nested".to_owned()),
+            timeout(),
+        ));
+        instance.timeouts.arm::<ImmediateTimer>(parent, timeout());
+        instance.timeouts.arm::<ImmediateTimer>(child, timeout());
+        let (completion, results) = async_channel::bounded(1);
+        instance.foreground_results.insert(parent, completion);
+
+        instance.route_expired_timeouts(vec![
+            ExpiredTimeout {
+                agent: child,
+                timeout: timeout(),
+            },
+            ExpiredTimeout {
+                agent: parent,
+                timeout: timeout(),
+            },
+        ]);
+
+        let result = results.try_recv().expect("timeout result delivered");
+        assert!(!result.ok());
+        assert!(result.text().contains("timed out after 60000 ms"));
+        assert!(instance.state.get().contains(root));
+        assert!(!instance.state.get().contains(parent));
+        assert!(!instance.state.get().contains(child));
+        assert!(!instance.timeouts.has_pending());
+        assert!(results.try_recv().is_err(), "timeout must report only once");
+    }
+
+    #[test]
+    fn early_child_result_parks_and_wakes_its_parent_before_the_parent_bubbles_up() {
+        let (mut instance, root) = instance_with_root();
+        let parent = AgentId(2);
+        let child = AgentId(3);
+        let worker = AgentKind::from_static("worker");
+        instance
+            .build_agent(
+                parent,
+                &worker,
+                Message::text("spawn children"),
+                AgentPlacement::Child(parent),
+                Vec::new(),
+            )
+            .expect("parent builds");
+        assert!(instance.state.get_mut().insert_child(
+            root,
+            parent,
+            worker.clone(),
+            Some("epsilon".to_owned()),
+            timeout(),
+        ));
+        instance
+            .build_agent(
+                child,
+                &worker,
+                Message::text("nested work"),
+                AgentPlacement::Child(child),
+                Vec::new(),
+            )
+            .expect("child builds");
+        assert!(instance.state.get_mut().insert_child(
+            parent,
+            child,
+            worker,
+            Some("nested".to_owned()),
+            timeout(),
+        ));
+        instance.timeouts.arm::<ImmediateTimer>(parent, timeout());
+        instance.timeouts.arm::<ImmediateTimer>(child, timeout());
+
+        instance.route_outcome(
+            child,
+            TickOutcome::Yielded {
+                text: "nested work complete".to_owned(),
+            },
+        );
+        instance.route_outcome(
+            parent,
+            TickOutcome::Yielded {
+                text: "waiting for nested work".to_owned(),
+            },
+        );
+
+        assert!(instance.state.get().contains(parent));
+        assert!(!instance.state.get().contains(child));
+        assert!(instance.slots.has_inbox(parent));
+        assert!(instance.slots.activate_inbox(parent));
+
+        instance.route_outcome(
+            parent,
+            TickOutcome::Yielded {
+                text: "aggregated nested result".to_owned(),
+            },
+        );
+        assert!(!instance.state.get().contains(parent));
+        assert!(!instance.timeouts.has_pending());
     }
 }

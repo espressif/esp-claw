@@ -1,5 +1,6 @@
 use claw_interface::http::StreamingHttp;
 use claw_interface::{ClawFs, ClawHttp, ClawTimer};
+use futures_lite::future;
 use tracing::Instrument as _;
 
 use crate::config::ApiUsage;
@@ -7,7 +8,13 @@ use crate::protocol::{AgentId, EventSink, TurnOrigin};
 
 use super::agents::{tick_agent, CompletedAgentTick, ReadyAgent};
 use super::drive_control::{DriveControl, DriveStop};
+use super::timeouts::ExpiredTimeout;
 use super::{MultiagentRuntime, MultiagentWork};
+
+enum RuntimeWake {
+    Agents(Vec<CompletedAgentTick>),
+    Timeouts(Vec<ExpiredTimeout>),
+}
 
 /// Messages created outside the LLM stream and still awaiting engine emission.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -64,7 +71,10 @@ where
         };
         if self.slots.has_inbox(root) {
             MultiagentWork::Root
-        } else if scheduled == MultiagentWork::Background || self.slots.has_inbox_except(root) {
+        } else if scheduled == MultiagentWork::Background
+            || self.slots.has_inbox_except(root)
+            || self.timeouts.has_pending()
+        {
             MultiagentWork::Background
         } else {
             MultiagentWork::None
@@ -181,11 +191,8 @@ where
 
             self.set_cancel_hook(control);
 
-            let completed = self
-                .slots
-                .next_completed_or_command(control, &self.multiagent)
-                .await;
-            output.absorb(self.route_completed_agents(completed));
+            let wake = self.next_runtime_wake(control).await;
+            output.absorb(self.route_runtime_wake(wake));
             if self.has_pending_approval() {
                 // A foreground root tool may still be waiting on the child
                 // that asked. Keep its future in the slot and return control
@@ -235,7 +242,7 @@ where
                 return (output, DriveStop::Quiescent);
             }
 
-            if !self.slots.has_running() {
+            if !self.slots.has_running() && !self.timeouts.has_pending() {
                 if self.has_ready() {
                     continue;
                 }
@@ -244,11 +251,8 @@ where
 
             self.set_cancel_hook(control);
 
-            let completed = self
-                .slots
-                .next_completed_or_command(control, &self.multiagent)
-                .await;
-            output.absorb(self.route_completed_agents(completed));
+            let wake = self.next_runtime_wake(control).await;
+            output.absorb(self.route_runtime_wake(wake));
             if self.has_pending_approval() {
                 control.clear_cancel_hook();
                 return (output, DriveStop::Quiescent);
@@ -265,6 +269,49 @@ where
                 handle.abort();
             }
         });
+    }
+
+    async fn next_runtime_wake(&mut self, control: &DriveControl) -> RuntimeWake {
+        if !self.timeouts.has_pending() {
+            return RuntimeWake::Agents(
+                self.slots
+                    .next_completed_or_command(control, &self.multiagent)
+                    .await,
+            );
+        }
+
+        if !self.slots.has_running() {
+            return future::or(
+                async { RuntimeWake::Timeouts(self.timeouts.next_expired().await) },
+                async {
+                    future::poll_fn(|context| {
+                        control.set_waker(context.waker().clone());
+                        if control.has_signal() {
+                            core::task::Poll::Ready(())
+                        } else {
+                            core::task::Poll::Pending
+                        }
+                    })
+                    .await;
+                    RuntimeWake::Agents(Vec::new())
+                },
+            )
+            .await;
+        }
+
+        // `or` is left-biased: when a tick and its deadline become ready at
+        // the same scheduling boundary, committed agent completion wins.
+        future::or(
+            async {
+                RuntimeWake::Agents(
+                    self.slots
+                        .next_completed_or_command(control, &self.multiagent)
+                        .await,
+                )
+            },
+            async { RuntimeWake::Timeouts(self.timeouts.next_expired().await) },
+        )
+        .await
     }
 
     /// Start every currently-ready agent in its stable slot.
@@ -338,6 +385,17 @@ where
         output
     }
 
+    fn route_runtime_wake(&mut self, wake: RuntimeWake) -> DriveOutput {
+        match wake {
+            RuntimeWake::Agents(completed) => self.route_completed_agents(completed),
+            RuntimeWake::Timeouts(expired) => {
+                let output = self.route_expired_timeouts(expired);
+                self.refresh_multiagent_snapshot();
+                output
+            }
+        }
+    }
+
     fn drain_ready_agents(&mut self) -> Vec<ReadyAgent<Http, Timer>> {
         let mut ready_agents = Vec::new();
         while let Some(id) = self.pop_ready() {
@@ -383,16 +441,19 @@ mod tests {
     use claw_interface::{ImmediateTimer, MemFs, RealHttp};
     use claw_permission::AllowAll;
     use claw_tool::ToolRegistry;
+    use futures_lite::future::block_on;
 
-    use super::super::model::SubagentResult;
+    use super::super::model::{SubagentResult, SubagentTimeout};
     use super::super::{
-        AgentIdAllocator, AgentPlacement, MultiagentRuntime, MultiagentState, MultiagentWork,
-        ROOT_AGENT_KIND,
+        AgentIdAllocator, AgentPlacement, DriveControl, MultiagentRuntime, MultiagentState,
+        MultiagentWork, ROOT_AGENT_KIND,
     };
     use super::DriveOutput;
     use crate::agent::FsAgentFactory;
     use crate::config::ClawApiManager;
-    use crate::protocol::{AgentId, AgentKind, Message, SessionId, SessionPersistence};
+    use crate::protocol::{
+        AgentId, AgentKind, EventSink, Message, SessionId, SessionPersistence, TurnOrigin,
+    };
 
     type TestRuntime = MultiagentRuntime<MemFs, RealHttp, ImmediateTimer>;
 
@@ -439,6 +500,26 @@ mod tests {
         assert!(!runtime.slots.has_inbox(root));
     }
 
+    #[test]
+    fn background_drive_polls_timeouts_even_when_every_agent_is_idle() {
+        let (mut runtime, root, child) = runtime_with_root_and_child();
+        let timeout = SubagentTimeout::from_millis(25).expect("non-zero timeout");
+        runtime.timeouts.arm::<ImmediateTimer>(child, timeout);
+
+        let (_, stop) = block_on(
+            runtime.drive_background_until_root_ready(&DriveControl::new(), &EventSink::disabled()),
+        );
+
+        assert_eq!(stop, super::DriveStop::Quiescent);
+        assert!(!runtime.state.get().contains(child));
+        assert_eq!(
+            runtime.pending_root_origin(),
+            Some(TurnOrigin::Subagent { agent: child })
+        );
+        assert!(runtime.state.get().contains(root));
+        assert!(!runtime.timeouts.has_pending());
+    }
+
     #[allow(clippy::arc_with_non_send_sync)]
     fn runtime_with_root_and_child() -> (TestRuntime, AgentId, AgentId) {
         MemFs::new();
@@ -483,10 +564,13 @@ mod tests {
                 Vec::new(),
             )
             .expect("child builds");
-        assert!(runtime
-            .state
-            .get_mut()
-            .insert_child(root, child, child_kind, None));
+        assert!(runtime.state.get_mut().insert_child(
+            root,
+            child,
+            child_kind,
+            None,
+            SubagentTimeout::from_millis(60_000).expect("non-zero timeout"),
+        ));
         (runtime, root, child)
     }
 }

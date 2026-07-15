@@ -17,6 +17,7 @@ pub(super) struct AgentNodeSnapshot {
     pub(super) parent: Option<AgentId>,
     pub(super) kind: String,
     pub(super) name: Option<String>,
+    pub(super) timeout_ms: Option<u32>,
 }
 
 #[derive(Deserialize, Serialize)]

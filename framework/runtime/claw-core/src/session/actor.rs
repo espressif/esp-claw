@@ -247,6 +247,7 @@ where
                 ActorEvent::RuntimeFinished { kind, result } => {
                     self.handle_runtime_finished(kind, result)
                 }
+                ActorEvent::RuntimeTimedOut { output } => self.handle_idle_timeout(output),
             }
         }
     }
@@ -334,9 +335,14 @@ where
                         self.start_pending_root_result();
                         return None;
                     }
-                    Some(TurnOrigin::User) => self.finish_active_turn(),
-                    Some(TurnOrigin::Subagent { .. }) => {
+                    Some(TurnOrigin::Subagent { .. })
+                        if self.runtime().pending_root_origin().is_some() =>
+                    {
                         self.start_pending_root_result();
+                        return None;
+                    }
+                    Some(TurnOrigin::User | TurnOrigin::Subagent { .. }) => {
+                        self.start_root_resume();
                         return None;
                     }
                 },
@@ -790,6 +796,34 @@ where
         });
     }
 
+    fn start_root_resume(&mut self) {
+        let runtime = self.take_runtime();
+        let events = self.events.clone().unwrap_or_else(EventSink::disabled);
+        let turn = self
+            .state
+            .get()
+            .active_turn_id()
+            .expect("resumed root work belongs to an active turn");
+        let control = DriveControl::new();
+        let drive_control = control.clone();
+        let future = Box::pin(
+            async move {
+                let mut runtime = runtime;
+                let result = drive_root(&mut runtime, &drive_control, &events).await;
+                RuntimeCompletion {
+                    runtime,
+                    result: RuntimeDriveResult::Driven(result),
+                }
+            }
+            .instrument(tracing::info_span!("turn", run.turn = %turn, cause = "runtime_resume")),
+        );
+        self.execution = Some(RuntimeExecution::Driving {
+            kind: RuntimeDriveKind::Foreground,
+            control,
+            future,
+        });
+    }
+
     fn start_background(&mut self) {
         let runtime = self.take_runtime();
         let events = self.events.clone().unwrap_or_else(EventSink::disabled);
@@ -837,6 +871,27 @@ where
         }
     }
 
+    fn handle_idle_timeout(&mut self, output: DriveOutput) {
+        let _ = self.emit_drive_result(Ok::<_, DeliverError>((output, DriveStop::Quiescent)));
+        self.checkpoint_pending = true;
+        let active_kind = self
+            .state
+            .get()
+            .active_input_request()
+            .map(|request| request.kind.clone());
+        let request_is_still_current = active_kind.as_ref().is_some_and(|active_kind| {
+            self.runtime()
+                .required_input()
+                .is_some_and(|required| required.kind() == active_kind)
+        });
+        if active_kind.is_some() && !request_is_still_current {
+            if let Some(request) = self.state.get_mut().cancel_input_request() {
+                self.announced_input_request = None;
+                tracing::info!(name: "input_request_cancelled", request = %request, reason = "subagent_timeout");
+            }
+        }
+    }
+
     fn emit_drive_result(
         &self,
         result: Result<(DriveOutput, DriveStop), DeliverError>,
@@ -865,6 +920,9 @@ where
 
 enum ActorEvent {
     Command(Option<SessionCommand>),
+    RuntimeTimedOut {
+        output: DriveOutput,
+    },
     RuntimeFinished {
         kind: RuntimeDriveKind,
         result: RuntimeDriveResult,
@@ -894,18 +952,23 @@ where
         if let Poll::Ready(command) = this.commands.as_mut().poll_next(context) {
             return Poll::Ready(ActorEvent::Command(command));
         }
-        let Some(RuntimeExecution::Driving { kind, future, .. }) = this.execution.as_mut() else {
-            return Poll::Pending;
-        };
-        let kind = *kind;
-        let Poll::Ready(completion) = future.as_mut().poll(context) else {
-            return Poll::Pending;
-        };
-        *this.execution = Some(RuntimeExecution::Idle(completion.runtime));
-        Poll::Ready(ActorEvent::RuntimeFinished {
-            kind,
-            result: completion.result,
-        })
+        match this.execution.as_mut() {
+            Some(RuntimeExecution::Idle(runtime)) => runtime
+                .poll_expired_timeouts(context)
+                .map(|output| ActorEvent::RuntimeTimedOut { output }),
+            Some(RuntimeExecution::Driving { kind, future, .. }) => {
+                let kind = *kind;
+                let Poll::Ready(completion) = future.as_mut().poll(context) else {
+                    return Poll::Pending;
+                };
+                *this.execution = Some(RuntimeExecution::Idle(completion.runtime));
+                Poll::Ready(ActorEvent::RuntimeFinished {
+                    kind,
+                    result: completion.result,
+                })
+            }
+            None => Poll::Pending,
+        }
     }
 }
 

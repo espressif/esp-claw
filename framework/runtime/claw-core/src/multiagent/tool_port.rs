@@ -8,7 +8,9 @@ use claw_interface::{ClawFs, ClawHttp, ClawTimer};
 
 use crate::protocol::{AgentId, AgentKind, Message};
 
-use super::model::{MultiagentSnapshot, SubagentResult, SubagentSnapshot, SubagentSpec};
+use super::model::{
+    MultiagentSnapshot, SubagentResult, SubagentSnapshot, SubagentSpec, SubagentTimeout,
+};
 use super::{AgentIdAllocator, MultiagentRuntime};
 
 /// One command emitted by an agent's subagent tools.
@@ -80,9 +82,10 @@ impl SubagentControl {
         kind: AgentKind,
         name: Option<String>,
         goal: Message,
+        timeout: SubagentTimeout,
     ) -> AgentId {
         self.bridge
-            .spawn_background(self.caller, SubagentSpec::new(kind, name, goal))
+            .spawn_background(self.caller, SubagentSpec::new(kind, name, goal, timeout))
     }
 
     pub(super) fn spawn_foreground(
@@ -90,9 +93,10 @@ impl SubagentControl {
         kind: AgentKind,
         name: Option<String>,
         goal: Message,
+        timeout: SubagentTimeout,
     ) -> (AgentId, Receiver<SubagentResult>) {
         self.bridge
-            .spawn_foreground(self.caller, SubagentSpec::new(kind, name, goal))
+            .spawn_foreground(self.caller, SubagentSpec::new(kind, name, goal, timeout))
     }
 
     pub(super) fn delete(&self, target: AgentId) {

@@ -20,6 +20,10 @@ impl MultiagentInputRequest {
     pub(crate) fn into_parts(self) -> (TurnOrigin, InputRequestKind) {
         (self.idle_origin, self.kind)
     }
+
+    pub(crate) fn kind(&self) -> &InputRequestKind {
+        &self.kind
+    }
 }
 
 #[derive(Clone, Debug, thiserror::Error)]

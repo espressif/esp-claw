@@ -1,3 +1,5 @@
+use core::num::NonZeroU32;
+
 use claw_permission::{Action, Resource, RiskClass};
 use claw_tool::{ToolError, ToolInvocation, ToolInvokeError};
 use serde_json::Value;
@@ -26,6 +28,28 @@ pub(super) fn required_bool_argument(arguments_json: &str, key: &str) -> Result<
         ))),
         None => Err(ToolError::InvalidArguments(format!("'{key}' is required"))),
     }
+}
+
+pub(super) fn required_nonzero_u32_argument(
+    arguments_json: &str,
+    key: &str,
+) -> Result<NonZeroU32, ToolError> {
+    let value = arguments_object(arguments_json)?;
+    let Some(raw) = value.get(key) else {
+        return Err(ToolError::InvalidArguments(format!("'{key}' is required")));
+    };
+    let Some(raw) = raw.as_u64() else {
+        return Err(ToolError::InvalidArguments(format!(
+            "'{key}' must be a positive integer"
+        )));
+    };
+    let value = u32::try_from(raw)
+        .ok()
+        .and_then(NonZeroU32::new)
+        .ok_or_else(|| {
+            ToolError::InvalidArguments(format!("'{key}' must be between 1 and {}", u32::MAX))
+        })?;
+    Ok(value)
 }
 
 pub(super) fn required_agent_id(
@@ -90,4 +114,33 @@ fn agent_resource(call: &ToolInvocation<'_>) -> Option<Resource> {
         .flatten()?;
     let trimmed = raw.trim();
     (!trimmed.is_empty()).then(|| Resource::Agent(trimmed.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::required_nonzero_u32_argument;
+
+    #[test]
+    fn required_nonzero_u32_rejects_missing_zero_negative_fractional_and_oversized_values() {
+        assert_eq!(
+            required_nonzero_u32_argument(r#"{"timeout_ms":2500}"#, "timeout_ms")
+                .expect("valid timeout")
+                .get(),
+            2_500
+        );
+
+        for arguments in [
+            r#"{}"#,
+            r#"{"timeout_ms":0}"#,
+            r#"{"timeout_ms":-1}"#,
+            r#"{"timeout_ms":1.5}"#,
+            r#"{"timeout_ms":4294967296}"#,
+            r#"{"timeout_ms":"1000"}"#,
+        ] {
+            assert!(
+                required_nonzero_u32_argument(arguments, "timeout_ms").is_err(),
+                "unexpectedly accepted {arguments}"
+            );
+        }
+    }
 }

@@ -5,7 +5,7 @@ use support::Sse;
 
 use core::future::Future;
 use core::pin::Pin;
-use core::task::{Context, Poll};
+use core::task::{Context, Poll, Waker};
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
@@ -15,8 +15,8 @@ use claw_agent::{
     SessionEvent, StreamPart, TurnId, TurnOrigin,
 };
 use claw_interface::{
-    Cancel, ClawHttp, HttpJsonRequest, HttpResponse, HttpResponseFuture, HttpStatusCode,
-    ImmediateTimer, MemFs, StdThread, TokioExecutor,
+    Cancel, ClawHttp, ClawTimer, HttpJsonRequest, HttpResponse, HttpResponseFuture, HttpStatusCode,
+    MemFs, SleepOutcome, StdThread, TimerFuture, TokioExecutor,
 };
 use futures_lite::future::block_on;
 use futures_lite::StreamExt;
@@ -25,13 +25,52 @@ use support::{
     assistant_text, csv_dicts, drain_until_turn_ended, llm_config, mem_root, persistence,
 };
 
-type SubagentSystem = AgentSystem<MemFs, Sse<SubagentHttp>, ImmediateTimer>;
+type SubagentSystem = AgentSystem<MemFs, Sse<SubagentHttp>, ManualTimer>;
 
 static SUBAGENT_LOCK: Mutex<()> = Mutex::new(());
 static SUBAGENT_STATE: Mutex<Option<SubagentCaseState>> = Mutex::new(None);
 static CONTROL_WORKER_POLLS: AtomicUsize = AtomicUsize::new(0);
 static RELEASE_HELD_WORKER: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+static RELEASE_TIMEOUTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static TIMEOUT_WAKERS: Mutex<Vec<Waker>> = Mutex::new(Vec::new());
+
+#[derive(Default)]
+struct ManualTimer;
+
+impl ClawTimer for ManualTimer {
+    fn sleep<'a>(
+        &'a mut self,
+        _duration: core::time::Duration,
+        cancel: Cancel<'a>,
+    ) -> TimerFuture<'a> {
+        Box::pin(ManualSleep { cancel })
+    }
+}
+
+struct ManualSleep<'a> {
+    cancel: Cancel<'a>,
+}
+
+impl Future for ManualSleep<'_> {
+    type Output = SleepOutcome;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        if self.cancel.is_cancelled() {
+            return Poll::Ready(SleepOutcome::Cancelled);
+        }
+        if RELEASE_TIMEOUTS.load(Ordering::SeqCst) {
+            return Poll::Ready(SleepOutcome::Completed);
+        }
+        let mut wakers = TIMEOUT_WAKERS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !wakers.iter().any(|waker| waker.will_wake(context.waker())) {
+            wakers.push(context.waker().clone());
+        }
+        Poll::Pending
+    }
+}
 
 #[test]
 fn subagent_lifecycle_csv_matrix_drives_background_results_and_graph_updates() {
@@ -231,6 +270,45 @@ fn foreground_child_approval_resumes_the_child_without_entering_either_transcrip
 }
 
 #[test]
+fn foreground_child_timeout_cancels_its_pending_approval_and_resumes_the_root() {
+    let _lock = SUBAGENT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    install_approval_case();
+
+    let root = mem_root("subagent-approval-timeout");
+    let system = SubagentSystem::new::<StdThread, TokioExecutor>(persistence(&root)).unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
+    let (control, mut events) = system.open_session(session).unwrap();
+
+    block_on(control.set_permission_level(PermissionLevel::Ask)).unwrap();
+    block_on(control.submit(Message::text("delegate and let approval time out"))).unwrap();
+    let (root_approval, _) = block_on(wait_for_input_request(&mut events));
+    block_on(control.respond(root_approval, Message::text("approve"))).unwrap();
+    let (_child_approval, child_kind) = block_on(wait_for_input_request(&mut events));
+    assert!(matches!(
+        child_kind,
+        InputRequestKind::PermissionApproval { summary }
+            if summary.contains("conversation_end")
+    ));
+
+    release_timers();
+    let turn = drain_until_turn_ended(&mut events);
+
+    assert_eq!(output_fragments(&turn), vec!["root received child"]);
+    assert!(recorded_requests()
+        .iter()
+        .filter(|request| request.kind == RequestKind::Root)
+        .any(|request| {
+            request.body.contains("result: false")
+                && request.body.contains("timed out after 60000 ms")
+        }));
+}
+
+#[test]
 fn a_user_turn_can_run_while_a_background_subagent_is_still_working() {
     let _lock = SUBAGENT_LOCK
         .lock()
@@ -305,6 +383,78 @@ fn cancelled_foreground_spawn_deletes_its_subagent() {
     assert!(
         list_result.contains(r#""subagents":[]"#),
         "cancel should delete every spawned subagent: {list_result}"
+    );
+}
+
+#[test]
+fn foreground_timeout_fails_the_tool_call_and_deletes_the_subtree() {
+    let _lock = SUBAGENT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    install_timeout_case(true);
+
+    let root = mem_root("subagent-foreground-timeout");
+    let system = SubagentSystem::new::<StdThread, TokioExecutor>(persistence(&root)).unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
+    let (control, mut events) = system.open_session(session).unwrap();
+
+    block_on(control.submit(Message::text("start foreground timeout"))).unwrap();
+    wait_until_control_worker_is_pending("foreground timeout");
+    release_timers();
+    let turn = drain_until_turn_ended(&mut events);
+
+    assert_eq!(output_fragments(&turn), vec!["foreground timeout observed"]);
+    assert!(error_messages(&turn).is_empty());
+    assert!(
+        control_list_result().contains(r#""subagents":[]"#),
+        "foreground timeout must remove the child before the tool resumes"
+    );
+}
+
+#[test]
+fn background_timeout_reports_a_failed_subagent_turn_and_deletes_the_subtree() {
+    let _lock = SUBAGENT_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    install_timeout_case(false);
+
+    let root = mem_root("subagent-background-timeout");
+    let system = SubagentSystem::new::<StdThread, TokioExecutor>(persistence(&root)).unwrap();
+    system
+        .link_api(llm_config(), claw_agent::ApiUsage::RootAgent, true)
+        .unwrap();
+    let session = system.new_session(claw_agent::SessionPersistence::Persistent);
+    let (control, mut events) = system.open_session(session).unwrap();
+
+    block_on(control.submit(Message::text("start background timeout"))).unwrap();
+    let delegated = drain_until_turn_ended(&mut events);
+    assert_eq!(
+        output_fragments(&delegated),
+        vec!["timeout worker requested"]
+    );
+    wait_until_control_worker_is_pending("background timeout");
+
+    release_timers();
+    let timed_out = drain_until_turn_ended(&mut events);
+
+    assert!(matches!(
+        timed_out.first(),
+        Some(SessionEvent::TurnStarted {
+            origin: TurnOrigin::Subagent { .. },
+            ..
+        })
+    ));
+    assert_eq!(
+        output_fragments(&timed_out),
+        vec!["background timeout observed"]
+    );
+    assert!(error_messages(&timed_out).is_empty());
+    assert!(
+        control_list_result().contains(r#""subagents":[]"#),
+        "background timeout must remove the child before notifying the root"
     );
 }
 
@@ -431,6 +581,7 @@ struct SubagentCaseState {
     foreground: bool,
     background_concurrency: bool,
     approval_flow: bool,
+    timeout_flow: Option<bool>,
     hold_worker: bool,
     wait_root_for_worker: bool,
     root_requests: usize,
@@ -457,12 +608,14 @@ enum RequestKind {
 }
 
 fn install_case(fixture: Fixture, foreground: bool) {
+    reset_timers();
     *state() = Some(SubagentCaseState {
         fixture,
         control: None,
         foreground,
         background_concurrency: false,
         approval_flow: false,
+        timeout_flow: None,
         hold_worker: false,
         wait_root_for_worker: !foreground,
         root_requests: 0,
@@ -475,6 +628,7 @@ fn install_case(fixture: Fixture, foreground: bool) {
 }
 
 fn install_control_case(control: &str) {
+    reset_timers();
     CONTROL_WORKER_POLLS.store(0, Ordering::SeqCst);
     RELEASE_HELD_WORKER.store(false, Ordering::SeqCst);
     *state() = Some(SubagentCaseState {
@@ -492,6 +646,7 @@ fn install_control_case(control: &str) {
         foreground: true,
         background_concurrency: false,
         approval_flow: false,
+        timeout_flow: None,
         hold_worker: true,
         wait_root_for_worker: false,
         root_requests: 0,
@@ -504,6 +659,7 @@ fn install_control_case(control: &str) {
 }
 
 fn install_background_concurrency_case() {
+    reset_timers();
     CONTROL_WORKER_POLLS.store(0, Ordering::SeqCst);
     RELEASE_HELD_WORKER.store(false, Ordering::SeqCst);
     *state() = Some(SubagentCaseState {
@@ -521,6 +677,7 @@ fn install_background_concurrency_case() {
         foreground: false,
         background_concurrency: true,
         approval_flow: false,
+        timeout_flow: None,
         hold_worker: true,
         wait_root_for_worker: false,
         root_requests: 0,
@@ -533,6 +690,7 @@ fn install_background_concurrency_case() {
 }
 
 fn install_approval_case() {
+    reset_timers();
     *state() = Some(SubagentCaseState {
         fixture: Fixture {
             case: "approval".to_owned(),
@@ -548,6 +706,7 @@ fn install_approval_case() {
         foreground: true,
         background_concurrency: false,
         approval_flow: true,
+        timeout_flow: None,
         hold_worker: false,
         wait_root_for_worker: false,
         root_requests: 0,
@@ -557,6 +716,61 @@ fn install_approval_case() {
         child_id: None,
         requests: Vec::new(),
     });
+}
+
+fn install_timeout_case(foreground: bool) {
+    reset_timers();
+    CONTROL_WORKER_POLLS.store(0, Ordering::SeqCst);
+    RELEASE_HELD_WORKER.store(false, Ordering::SeqCst);
+    *state() = Some(SubagentCaseState {
+        fixture: Fixture {
+            case: if foreground {
+                "foreground-timeout".to_owned()
+            } else {
+                "background-timeout".to_owned()
+            },
+            worker_output: "must not finish".to_owned(),
+            spawn_ack: "timeout worker requested".to_owned(),
+            background_output: String::new(),
+            supervision_output: String::new(),
+            expected_watch_fragment: String::new(),
+            expected_delete_fragment: String::new(),
+            expected_after_delete_fragment: String::new(),
+        },
+        control: None,
+        foreground,
+        background_concurrency: false,
+        approval_flow: false,
+        timeout_flow: Some(foreground),
+        hold_worker: true,
+        wait_root_for_worker: false,
+        root_requests: 0,
+        worker_requests: 0,
+        permission_requests: 0,
+        worker_delay_used: false,
+        child_id: None,
+        requests: Vec::new(),
+    });
+}
+
+fn reset_timers() {
+    RELEASE_TIMEOUTS.store(false, Ordering::SeqCst);
+    TIMEOUT_WAKERS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear();
+}
+
+fn release_timers() {
+    RELEASE_TIMEOUTS.store(true, Ordering::SeqCst);
+    let wakers = std::mem::take(
+        &mut *TIMEOUT_WAKERS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()),
+    );
+    for waker in wakers {
+        waker.wake();
+    }
 }
 
 fn should_hold_worker(body: &str) -> bool {
@@ -636,6 +850,7 @@ fn response_for_request(body: &str) -> String {
                         "name": "approval-worker",
                         "goal": "finish after approval",
                         "foreground": true,
+                        "timeout_ms": 60_000,
                     }),
                 )]),
                 1 => assistant_text(&state.fixture.spawn_ack),
@@ -651,6 +866,9 @@ fn root_response(state: &mut SubagentCaseState, body: &str) -> String {
     let request_index = state.root_requests;
     state.root_requests += 1;
 
+    if let Some(foreground) = state.timeout_flow {
+        return timeout_root_response(body, request_index, foreground);
+    }
     if let Some(control) = state.control.clone() {
         return control_root_response(state, body, request_index, &control);
     }
@@ -667,6 +885,7 @@ fn root_response(state: &mut SubagentCaseState, body: &str) -> String {
                 "name": "helper",
                 "goal": format!("worker goal {}", state.fixture.case),
                 "foreground": state.foreground,
+                "timeout_ms": 60_000,
             }),
         )]),
         1 => {
@@ -703,6 +922,42 @@ fn root_response(state: &mut SubagentCaseState, body: &str) -> String {
     }
 }
 
+fn timeout_root_response(body: &str, request_index: usize, foreground: bool) -> String {
+    let list_call = || {
+        assistant_tool_calls(vec![tool_call(
+            "call_list_after_timeout",
+            "subagent_list",
+            json!({}),
+        )])
+    };
+    match (foreground, request_index) {
+        (_, 0) => assistant_tool_calls(vec![tool_call(
+            "call_spawn_timeout",
+            "subagent_spawn",
+            json!({
+                "kind": "worker",
+                "name": "timeout-worker",
+                "goal": "hold until runtime timeout",
+                "foreground": foreground,
+                "timeout_ms": 10,
+            }),
+        )]),
+        (false, 1) => assistant_text("timeout worker requested"),
+        (true, 1) | (false, 2) => {
+            assert!(
+                body.contains("result: false") && body.contains("timed out after 10 ms"),
+                "timeout failure missing from parent request: {body}"
+            );
+            list_call()
+        }
+        (true, 2) => assistant_text("foreground timeout observed"),
+        (false, 3) => assistant_text("background timeout observed"),
+        _ => {
+            panic!("unexpected timeout root request index {request_index}, foreground={foreground}")
+        }
+    }
+}
+
 fn background_concurrency_root_response(
     state: &mut SubagentCaseState,
     body: &str,
@@ -717,6 +972,7 @@ fn background_concurrency_root_response(
                 "name": "helper",
                 "goal": "held background work",
                 "foreground": false,
+                "timeout_ms": 60_000,
             }),
         )]),
         1 => {
@@ -744,6 +1000,7 @@ fn control_root_response(
                 "name": "helper",
                 "goal": format!("worker held for {control}"),
                 "foreground": true,
+                "timeout_ms": 60_000,
             }),
         )]),
         1 => assistant_tool_calls(vec![tool_call(
