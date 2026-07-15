@@ -39,7 +39,6 @@ fn render_entry(kind: &ParsedManifest) -> TokenStream {
     let retries = kind.retries;
     let tool_block_retries = kind.tool_block_retries;
     let tool_groups = kind.tool_groups.iter();
-    let skills = kind.skills.iter();
     let instructions = render_instructions(kind);
 
     quote! {
@@ -50,7 +49,6 @@ fn render_entry(kind: &ParsedManifest) -> TokenStream {
                 retries: #retries,
                 tool_block_retries: #tool_block_retries,
                 tool_groups: &[#(#tool_groups),*],
-                skills: &[#(SkillId::from_static(#skills)),*],
                 instructions: #instructions,
             },
             multiagent: MultiagentManifest {

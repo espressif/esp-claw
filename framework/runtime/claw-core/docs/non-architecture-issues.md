@@ -42,14 +42,14 @@ Priorities in this document mean:
 | ID | Priority | Area | Problem |
 | --- | --- | --- | --- |
 | `NAR-001` | P0 | Tools | `tool_groups` is described as an allowlist but omitted hidden groups remain discoverable and loadable. |
-| `NAR-002` | P1 | Skills | Manifest skill ids are parsed and baked but ignored when an agent's skill catalog is assembled. |
+| `NAR-002` | P1 | Skills | **Resolved:** per-kind skill baking was removed; every agent receives the AgentSystem's shared skill catalog. |
 | `NAR-003` | P2 | Spawn policy | The `allowed_kinds` comment says the policy is not enforced although runtime code enforces it. |
 | `NAR-004` | P1 | Memory | “Per-agent” long-term memory is physically scoped by agent kind, so same-kind agents share a store. |
 | `NAR-005` | P1 | Checkpoints | **Resolved during the boundary refactor:** the unused second construction path was removed. |
 | `NAR-006` | P1 | Public API | The committed `claw-core` API snapshot does not describe the current API. |
 | `NAR-007` | P1 | CI | Public API checks are not reproducible from the checked-in toolchain and are not run by a checked-in workflow. |
 | `NAR-008` | P0 | Tests | The adjacent `claw-agent` integration baseline is not green; Cargo initially exposes only the first failing binary. |
-| `NAR-009` | P1 | Tests | Compound tool-policy and manifest-skill contracts have no behavioral coverage. |
+| `NAR-009` | P1 | Tests | The compound tool-policy contract has no behavioral coverage. |
 | `NAR-010` | P2 | Documentation | Several source comments and repository guides contradict current Rust behavior. |
 | `NAR-011` | P2 | Dependencies | Build-only tool baking is exposed by the runtime `claw-tool` crate and leaves manifest debris. |
 | `NAR-012` | P1 | Manifests | Manifest `schema_version` fields are required in files but ignored by the parser. |
@@ -102,6 +102,8 @@ Exit condition:
 
 ### NAR-002: manifest skill ids are catalog-only
 
+**Status: resolved.**
+
 The build-time schema says `skills/skills.json` lists the skill ids the kind
 loads. Parsing, inheritance, validation, and code generation preserve those
 ids. At runtime, `FsAgentFactory::resolve_config` only emits the
@@ -117,9 +119,11 @@ Current evidence:
 - `src/agent/manifest.rs` (`AgentManifest::skills`);
 - `src/agent/factory/create.rs` (`resolve_config`).
 
-Exit condition: either filter the agent skill set to the manifest ids, with
-unknown-id validation and a non-empty fixture test, or redefine the field as
-metadata and remove the claim that it controls loaded skills.
+Resolution: skills are AgentSystem-level runtime data, not agent-kind manifest
+data. The `skills/skills.json` resources, parser and code-generation fields,
+runtime manifest field, and catalog-only trace event were removed. Agent kinds
+still select instructions, tool groups, and spawn policy; every agent receives
+the shared filesystem-backed `SkillSet` assembled from `skill_roots`.
 
 ### NAR-003: `allowed_kinds` documentation is stale
 
@@ -176,17 +180,17 @@ an already-configured checkpoint coordinator and introduces no second default.
 
 ### NAR-012: manifest versions are decorative
 
-`agent.json`, `tools/tools.json`, and `skills/skills.json` all require a
-`schema_version`, but the build-time serde shapes suppress the resulting dead
-field warning and never validate the value. A file declaring an unknown version
-is therefore accepted and interpreted as the current shape. The version cannot
-provide compatibility or reject unsupported data in its present form.
+`agent.json` and `tools/tools.json` require a `schema_version`, but the
+build-time serde shapes suppress the resulting dead field warning and never
+validate the value. A file declaring an unknown version is therefore accepted
+and interpreted as the current shape. The version cannot provide compatibility
+or reject unsupported data in its present form.
 
 Current evidence:
 
-- `manifest_gen/model.rs` (`AgentJson`, `ToolsJson`, and `SkillsJson`);
+- `manifest_gen/model.rs` (`AgentJson` and `ToolsJson`);
 - `manifest_gen/parse.rs` (no version validation);
-- `resources/agents/**/{agent.json,tools/tools.json,skills/skills.json}`.
+- `resources/agents/**/{agent.json,tools/tools.json}`.
 
 Exit condition: either remove the unused version fields from the format and
 fixtures, or validate supported versions and add unsupported-version tests. Do
@@ -566,12 +570,11 @@ Exit condition: route those assertions through the constructed
 
 Existing tests cover individual tool-set operations, but the audit found no
 test combining manifest projection, a hidden registry group, discovery, and
-`tool_load`. There is also no non-empty manifest skill fixture proving that two
-agent kinds receive different skill catalogs.
+`tool_load`.
 
-Exit condition: add black-box tests for the final decisions in `NAR-001` and
-`NAR-002`. The tests should use product-visible behavior rather than opening new
-internal APIs solely for test access.
+Exit condition: add black-box tests for the final decision in `NAR-001`. The
+tests should use product-visible behavior rather than opening new internal APIs
+solely for test access.
 
 ## Documentation and Comment Drift
 

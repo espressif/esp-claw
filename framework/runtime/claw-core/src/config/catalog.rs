@@ -4,8 +4,6 @@
 //! projection consumed by `agent`; [`MultiagentManifest`] is consumed only by
 //! the orchestrator's multiagent extension.
 
-use claw_skill::SkillId;
-
 use crate::protocol::AgentKind;
 
 pub(crate) struct AgentCatalogEntry {
@@ -38,7 +36,6 @@ pub(crate) struct AgentRuntimeManifest {
     retries: u32,
     tool_block_retries: u32,
     tool_groups: &'static [&'static str],
-    skills: &'static [SkillId],
     instructions: &'static str,
 }
 
@@ -53,10 +50,6 @@ impl AgentRuntimeManifest {
 
     pub(crate) fn tool_groups(&self) -> &'static [&'static str] {
         self.tool_groups
-    }
-
-    pub(crate) fn skills(&self) -> &'static [SkillId] {
-        self.skills
     }
 
     pub(crate) fn instructions(&self) -> &'static str {

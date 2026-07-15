@@ -192,12 +192,6 @@ impl<
         let manifest = agent_catalog::find(kind)
             .ok_or_else(|| AgentConfigError::UnknownKind(kind.as_str().to_owned()))?;
         let runtime = manifest.runtime();
-        if !runtime.skills().is_empty() {
-            tracing::info!(
-                name: "manifest_ids_catalog_only",
-                count = runtime.skills().len() as u64,
-            );
-        }
         Ok(AgentConfig::from_manifest(runtime, self.skills.skill_set()))
     }
 }

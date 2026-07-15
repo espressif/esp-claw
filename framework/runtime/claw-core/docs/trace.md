@@ -231,7 +231,6 @@ span-name: `agent.create`
 `agent_build_failed`: Agent object could not be built.
 `context_adapter_attach_failed`: Profile or long-term memory context adapter could not be attached.
 `goal_seed_failed`: Initial goal could not be appended to the agent.
-`manifest_ids_catalog_only`: Manifest skill ids were observed but the full shared catalog was projected.
 `created`: Agent was built and returned to the instance.
 
 ### Event Fields
@@ -242,7 +241,6 @@ span-name: `agent.create`
 `agent_build_failed`: `agent`, `kind`.
 `context_adapter_attach_failed`: `agent`, `adapter`, `kind`.
 `goal_seed_failed`: `agent`, `kind`.
-`manifest_ids_catalog_only`: `count`.
 `created`: `agent`, `kind`.
 
 ## Agent

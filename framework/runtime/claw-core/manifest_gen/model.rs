@@ -48,13 +48,3 @@ pub(crate) struct ToolsJson {
     /// Tool group ids allowed for this agent kind.
     pub(crate) tool_groups: Vec<String>,
 }
-
-/// `skills/skills.json` — the skill ids this kind loads.
-#[derive(Debug, Deserialize)]
-pub(crate) struct SkillsJson {
-    /// Schema version; reserved for forward-compatibility.
-    #[allow(dead_code)]
-    pub(crate) schema_version: u32,
-    /// Skill ids loaded into the agent's skill set at runtime.
-    pub(crate) skills: Vec<String>,
-}
