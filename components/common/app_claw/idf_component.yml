@@ -345,5 +345,6 @@ dependencies:
   lua_module_vision:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True
+      - if: $CONFIG{APP_CLAW_LUA_MODULE_VISION} == True
       - if: $CONFIG{ESP_BOARD_DEV_CAMERA_SUPPORT} == True
     path: ../../lua_modules/lua_module_vision
