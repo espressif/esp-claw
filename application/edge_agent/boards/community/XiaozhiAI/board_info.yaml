@@ -1,4 +1,4 @@
-board: ESP32-S3-CAM
+board: XiaozhiAI-S3-CAM
 chip: esp32s3
 version: 1.0.0
 description: OV3660,LCD1.54,INMP441,MAX98357
