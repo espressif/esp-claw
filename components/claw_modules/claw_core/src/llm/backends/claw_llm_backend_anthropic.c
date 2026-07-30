@@ -20,6 +20,7 @@ typedef struct {
     char *api_key;
     char *model;
     char *base_url;
+    char *auth_type;
     uint32_t timeout_ms;
     uint32_t max_tokens;
     size_t image_max_bytes;
@@ -731,6 +732,7 @@ static esp_err_t anthropic_init(const claw_llm_runtime_config_t *config,
 {
     anthropic_backend_ctx_t *ctx = NULL;
     const char *base_url = NULL;
+    const char *auth_type = NULL;
 
     if (!config || !profile || !out_backend_ctx || !out_error_message) {
         return ESP_ERR_INVALID_ARG;
@@ -756,16 +758,19 @@ static esp_err_t anthropic_init(const claw_llm_runtime_config_t *config,
         return ESP_ERR_NO_MEM;
     }
 
+    auth_type = (config->auth_type && config->auth_type[0]) ? config->auth_type : "none";
     ctx->api_key = strdup(config->api_key);
     ctx->model = strdup(config->model);
     ctx->base_url = strdup(base_url);
+    ctx->auth_type = strdup(auth_type);
     ctx->timeout_ms = config->timeout_ms;
     ctx->max_tokens = config->max_tokens;
     ctx->image_max_bytes = config->image_max_bytes;
-    if (!ctx->api_key || !ctx->model || !ctx->base_url) {
+    if (!ctx->api_key || !ctx->model || !ctx->base_url || !ctx->auth_type) {
         free(ctx->api_key);
         free(ctx->model);
         free(ctx->base_url);
+        free(ctx->auth_type);
         free(ctx);
         *out_error_message = dup_printf("Out of memory copying backend config");
         return ESP_ERR_NO_MEM;
@@ -787,7 +792,10 @@ static esp_err_t anthropic_chat(void *backend_ctx,
     char *post_data = NULL;
     char *url = NULL;
     esp_err_t err;
-    const claw_llm_http_header_t headers[] = {
+    const claw_llm_http_header_t version_headers[] = {
+        { .name = "anthropic-version", .value = CLAW_LLM_ANTHROPIC_VERSION },
+    };
+    const claw_llm_http_header_t key_headers[] = {
         { .name = "x-api-key", .value = ctx ? ctx->api_key : NULL },
         { .name = "anthropic-version", .value = CLAW_LLM_ANTHROPIC_VERSION },
     };
@@ -810,11 +818,18 @@ static esp_err_t anthropic_chat(void *backend_ctx,
 
     http_request.url = url;
     http_request.body = post_data;
-    http_request.auth_type = "none";
+    if (ctx->auth_type && strcmp(ctx->auth_type, "bearer") == 0) {
+        http_request.api_key = ctx->api_key;
+        http_request.auth_type = "bearer";
+        http_request.headers = version_headers;
+        http_request.header_count = sizeof(version_headers) / sizeof(version_headers[0]);
+    } else {
+        http_request.auth_type = "none";
+        http_request.headers = key_headers;
+        http_request.header_count = sizeof(key_headers) / sizeof(key_headers[0]);
+    }
     http_request.timeout_ms = ctx->timeout_ms;
     http_request.abort_flag = request->abort_flag;
-    http_request.headers = headers;
-    http_request.header_count = sizeof(headers) / sizeof(headers[0]);
 
     err = claw_llm_http_post_json(&http_request, &http_response, out_error_message);
     free(url);
@@ -851,7 +866,10 @@ static esp_err_t anthropic_infer_media(void *backend_ctx,
     char *post_data = NULL;
     char *url = NULL;
     esp_err_t err;
-    const claw_llm_http_header_t headers[] = {
+    const claw_llm_http_header_t version_headers[] = {
+        { .name = "anthropic-version", .value = CLAW_LLM_ANTHROPIC_VERSION },
+    };
+    const claw_llm_http_header_t key_headers[] = {
         { .name = "x-api-key", .value = ctx ? ctx->api_key : NULL },
         { .name = "anthropic-version", .value = CLAW_LLM_ANTHROPIC_VERSION },
     };
@@ -949,10 +967,17 @@ static esp_err_t anthropic_infer_media(void *backend_ctx,
 
     http_request.url = url;
     http_request.body = post_data;
-    http_request.auth_type = "none";
+    if (ctx->auth_type && strcmp(ctx->auth_type, "bearer") == 0) {
+        http_request.api_key = ctx->api_key;
+        http_request.auth_type = "bearer";
+        http_request.headers = version_headers;
+        http_request.header_count = sizeof(version_headers) / sizeof(version_headers[0]);
+    } else {
+        http_request.auth_type = "none";
+        http_request.headers = key_headers;
+        http_request.header_count = sizeof(key_headers) / sizeof(key_headers[0]);
+    }
     http_request.timeout_ms = ctx->timeout_ms;
-    http_request.headers = headers;
-    http_request.header_count = sizeof(headers) / sizeof(headers[0]);
 
     err = claw_llm_http_post_json(&http_request, &http_response, out_error_message);
     if (err != ESP_OK) {
@@ -1002,6 +1027,7 @@ static void anthropic_deinit(void *backend_ctx)
     free(ctx->api_key);
     free(ctx->model);
     free(ctx->base_url);
+    free(ctx->auth_type);
     free(ctx);
 }
 
