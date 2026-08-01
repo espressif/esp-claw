@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "app_claw.h"
+#include "audio_hub.h"
 #include "app_claw_cli.h"
 #include "app_capabilities.h"
 #if CONFIG_APP_CLAW_SYSTEM_UI_ENABLE
@@ -390,6 +391,24 @@ static bool s_current_config_valid;
 static app_claw_save_config_fn s_save_config;
 static void *s_save_config_user_ctx;
 
+static void app_claw_audio_start_service(void)
+{
+    static const audio_hub_config_t config = {
+        .mixer = {
+            .sample_rate = 16000, .channels = 1, .bits = 16, .frame_ms = 20,
+            .system_full_gain = 1.0f, .app_full_gain = 1.0f, .app_ducked_gain = 0.3f,
+            .duck_release_ms = 300, .output_volume = 80,
+        },
+        .capture = {
+            .sample_rate = 16000, .channels = 1, .bits = 16, .frame_ms = 20, .ring_frames = 8,
+        },
+    };
+    esp_err_t err = audio_hub_start(&config);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "audio_hub_start skipped: %s", esp_err_to_name(err));
+    }
+}
+
 static esp_err_t app_claw_ensure_config_lock(void)
 {
     if (!s_config_lock) {
@@ -713,6 +732,13 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
     }
     ESP_RETURN_ON_ERROR(app_claw_store_current_config(config), TAG, "Failed to store Claw config");
     ESP_RETURN_ON_ERROR(build_storage_paths(&paths), TAG, "Failed to resolve storage paths");
+
+    esp_err_t hw_err = app_claw_hw_bridge_register_board_devices();
+    if (hw_err != ESP_OK) {
+        ESP_LOGW(TAG, "hw bridge register skipped/failed: %s", esp_err_to_name(hw_err));
+    }
+
+    app_claw_audio_start_service();
 
 #if CONFIG_APP_CLAW_CAP_EVENT_ROUTER
     router_config.default_route_messages_to_agent = true;

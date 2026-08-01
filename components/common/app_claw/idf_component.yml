@@ -1,4 +1,10 @@
 dependencies:
+  claw_hw_registry:
+    path: ../claw_hw_registry
+
+  audio_hub:
+    path: ../audio_hub
+
   cap_boards:
     path: ../../claw_capabilities/cap_boards
 

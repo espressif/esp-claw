@@ -14,7 +14,7 @@ devices:
     type: custom
     version: default
     dependencies:
-      espressif/usb_host_uvc: "2.4.2"
+      espressif/usb_host_uvc: "^2.4.2"
 
   # PDM Microphone (bare PDM mic, no I2C codec IC).
   # Lua audio reads the already-initialized i2s_audio_in peripheral directly.

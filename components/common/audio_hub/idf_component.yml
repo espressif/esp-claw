@@ -1,0 +1,10 @@
+## audio_hub — output mixer + input capture hub for the shared codec.
+dependencies:
+  claw_hw_registry:
+    path: ../claw_hw_registry
+  espressif/esp_audio_effects:
+    version: "<1.4.0" # esp_audio_effects v1.4+ requires ESP32-P4 rev >= 3.0.
+  espressif/esp_codec_dev:
+    version: ">=1.6.2"
+  espressif/esp_board_manager:
+    version: ">=0.6.1"
