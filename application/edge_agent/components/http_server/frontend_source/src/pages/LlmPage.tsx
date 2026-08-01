@@ -15,6 +15,7 @@ import { getProviderLinks } from '../constants/externalLinks';
 import { pushToast } from '../state/toast';
 
 type PresetKey =
+  | 'atlascloud'
   | 'openai'
   | 'bailian'
   | 'deepseek'
@@ -40,6 +41,18 @@ type ProviderPreset = {
 };
 
 const PROVIDER_PRESETS: Record<PresetKey, ProviderPreset> = {
+  atlascloud: {
+    llm_backend_type: 'openai_compatible',
+    llm_base_url: 'https://api.atlascloud.ai/v1',
+    llm_auth_type: 'bearer',
+    llm_max_tokens_field: 'max_completion_tokens',
+    llm_default_image_max_bytes: '524288',
+    llm_supports_tools: true,
+    llm_supports_vision: false,
+    llm_image_remote_url_only: false,
+    llm_model: 'deepseek-ai/deepseek-v4-pro',
+    advanced: false,
+  },
   openai: {
     llm_backend_type: 'openai_compatible',
     llm_base_url: 'https://api.openai.com/v1',
@@ -163,6 +176,7 @@ const PROVIDER_PRESETS: Record<PresetKey, ProviderPreset> = {
 };
 
 const PRESET_BUTTONS: PresetKey[] = [
+  'atlascloud',
   'openai',
   'bailian',
   'deepseek',
@@ -200,6 +214,8 @@ function parseBool(value: string | undefined): boolean {
 
 function presetLabel(key: PresetKey): string {
   switch (key) {
+    case 'atlascloud':
+      return t('llmProviderAtlasCloud') as string;
     case 'openai':
       return t('llmProviderOpenai') as string;
     case 'bailian':

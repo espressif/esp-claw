@@ -102,6 +102,7 @@ export const en = {
 
   sectionLlm: 'LLM Settings',
   llmProvider: 'LLM Provider',
+  llmProviderAtlasCloud: 'Atlas Cloud',
   llmProviderOpenai: 'OpenAI',
   llmProviderQwen: 'Qwen Compatible',
   llmProviderDeepSeek: 'DeepSeek',

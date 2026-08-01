@@ -100,6 +100,7 @@ export const zhCn: Dict = {
 
   sectionLlm: 'LLM 设置',
   llmProvider: 'LLM 提供商',
+  llmProviderAtlasCloud: 'Atlas Cloud',
   llmProviderOpenai: 'OpenAI',
   llmProviderQwen: 'Qwen 兼容',
   llmProviderDeepSeek: 'DeepSeek',
