@@ -17,5 +17,5 @@ idf_component_register(
         esp_timer
         lvgl
     PRIV_REQUIRES
-        esp_driver_gpio
+        esp_driver_ledc
 )

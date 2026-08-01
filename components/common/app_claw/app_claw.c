@@ -6,6 +6,7 @@
 #include "app_claw.h"
 #include "audio_hub.h"
 #include "app_claw_cli.h"
+#include "app_claw_hw_bridge.h"
 #include "app_capabilities.h"
 #if CONFIG_APP_CLAW_SYSTEM_UI_ENABLE
 #include "system_ui.h"

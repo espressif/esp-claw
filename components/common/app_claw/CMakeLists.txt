@@ -1,6 +1,7 @@
 
 set(app_claw_srcs
     "app_claw.c"
+    "app_claw_hw_bridge.c"
     "app_capabilities.c"
     "app_lua_modules.c"
 )

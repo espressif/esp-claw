@@ -2,3 +2,5 @@
 dependencies:
   espressif/esp_lvgl_adapter: "*"
   lvgl/lvgl: ^9.5.0
+  claw_hw_registry:
+    path: ../claw_hw_registry

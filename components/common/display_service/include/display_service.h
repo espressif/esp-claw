@@ -65,6 +65,10 @@ typedef struct {
 
 typedef void (*display_service_touch_observer_cb_t)(const display_service_touch_sample_t *sample,
                                                     void *user_ctx);
+typedef uint32_t display_service_touch_observer_handle_t;
+
+#define DISPLAY_SERVICE_TOUCH_OBSERVER_INVALID 0
+
 typedef enum {
     DISPLAY_SERVICE_STATE_EVENT_EXCLUSIVE_LVGL_ENTERED = 0,
     DISPLAY_SERVICE_STATE_EVENT_EXCLUSIVE_LVGL_EXITED,
@@ -96,8 +100,11 @@ bool display_service_exclusive_allows_system_overlay(void);
 esp_err_t display_service_lock(void);
 void display_service_unlock(void);
 
-esp_err_t display_service_set_touch_observer(display_service_touch_observer_cb_t cb,
-                                             void *user_ctx);
+/* Touch observers are independent subscribers; unregister with the returned handle. */
+esp_err_t display_service_add_touch_observer(display_service_touch_observer_cb_t cb,
+                                             void *user_ctx,
+                                             display_service_touch_observer_handle_t *ret_handle);
+esp_err_t display_service_remove_touch_observer(display_service_touch_observer_handle_t handle);
 esp_err_t display_service_set_state_observer(display_service_state_observer_cb_t cb,
                                              void *user_ctx);
 esp_err_t display_service_set_default_screen(lv_obj_t *screen);

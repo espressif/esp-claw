@@ -4,36 +4,28 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "system_ui_private.h"
+#include "esp_board_manager.h"
+#include "esp_board_manager_includes.h"
+
+#if defined(CONFIG_ESP_BOARD_DEV_LEDC_CTRL_SUPPORT)
 
 #include "esp_check.h"
 #include "esp_log.h"
-#include "esp_board_manager.h"
-#include <string.h>
 
-#include "driver/gpio.h"
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/timers.h"
 
 #define TAG "ui_vibration"
 #define SYSTEM_UI_VIBRATION_DEVICE_NAME "vibration_motor"
-#define SYSTEM_UI_VIBRATION_DEVICE_TYPE "custom"
-#define SYSTEM_UI_VIBRATION_ACTIVE_LEVEL 1
-#define SYSTEM_UI_VIBRATION_INACTIVE_LEVEL 0
 #define APP_CLAW_VIBRATION_PULSE_MS 25
 #define APP_CLAW_VIBRATION_MIN_INTERVAL_MS 80
 
-typedef struct {
-    const char *name;
-    const char *type;
-    const char *chip;
-    int8_t gpio_num;
-} system_ui_vibration_config_t;
-
 static TimerHandle_t s_vibration_timer;
 static TickType_t s_last_pulse_tick;
-static const char *s_vibration_device_name;
-static gpio_num_t s_vibration_gpio = GPIO_NUM_NC;
+static bool s_vibration_ready;
+static uint32_t s_vibration_active_duty;
 
 static TickType_t system_ui_vibration_ms_to_ticks(uint32_t ms)
 {
@@ -44,10 +36,19 @@ static TickType_t system_ui_vibration_ms_to_ticks(uint32_t ms)
 
 static esp_err_t system_ui_vibration_set_enabled(bool enabled)
 {
-    if (s_vibration_gpio == GPIO_NUM_NC) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    return gpio_set_level(s_vibration_gpio, enabled ? SYSTEM_UI_VIBRATION_ACTIVE_LEVEL : SYSTEM_UI_VIBRATION_INACTIVE_LEVEL);
+    periph_ledc_handle_t *ledc_handle = NULL;
+
+    ESP_RETURN_ON_FALSE(s_vibration_ready, ESP_ERR_INVALID_STATE, TAG, "vibration LEDC is not ready");
+    ESP_RETURN_ON_ERROR(esp_board_manager_get_device_handle(SYSTEM_UI_VIBRATION_DEVICE_NAME, (void **)&ledc_handle),
+                        TAG, "get vibration motor LEDC handle failed");
+    ESP_RETURN_ON_FALSE(ledc_handle != NULL, ESP_ERR_INVALID_STATE, TAG, "vibration LEDC handle is NULL");
+
+    // Match the ESP-IDF LEDC flow: set duty first, then update duty to apply it.
+    ESP_RETURN_ON_ERROR(ledc_set_duty(ledc_handle->speed_mode, ledc_handle->channel, enabled ? s_vibration_active_duty : 0),
+                        TAG, "set vibration motor duty failed");
+    ESP_RETURN_ON_ERROR(ledc_update_duty(ledc_handle->speed_mode, ledc_handle->channel),
+                        TAG, "update vibration motor duty failed");
+    return ESP_OK;
 }
 
 static void system_ui_vibration_timer_cb(TimerHandle_t timer)
@@ -67,74 +68,51 @@ static void system_ui_vibration_click_event_cb(lv_event_t *event)
     }
 }
 
-static esp_err_t system_ui_vibration_resolve_device(void)
-{
-    if (esp_board_manager_check_name(SYSTEM_UI_VIBRATION_DEVICE_NAME)) {
-        s_vibration_device_name = SYSTEM_UI_VIBRATION_DEVICE_NAME;
-        return ESP_OK;
-    }
-    return ESP_ERR_NOT_FOUND;
-}
-
-static esp_err_t system_ui_vibration_load_config(const char *device_name)
-{
-    void *config = NULL;
-    system_ui_vibration_config_t *vibration_config = NULL;
-
-    ESP_RETURN_ON_ERROR(esp_board_manager_get_device_config(device_name, &config), TAG, "get vibration device config failed");
-    vibration_config = (system_ui_vibration_config_t *)config;
-    ESP_RETURN_ON_FALSE(vibration_config != NULL && vibration_config->type != NULL && strcmp(vibration_config->type, SYSTEM_UI_VIBRATION_DEVICE_TYPE) == 0,
-                        ESP_ERR_INVALID_ARG, TAG, "vibration device is not a custom device");
-    ESP_RETURN_ON_FALSE(vibration_config->gpio_num >= 0 && vibration_config->gpio_num < GPIO_NUM_MAX,
-                        ESP_ERR_INVALID_ARG, TAG, "invalid vibration gpio: %d", (int)vibration_config->gpio_num);
-    s_vibration_gpio = (gpio_num_t)vibration_config->gpio_num;
-    return ESP_OK;
-}
-
 esp_err_t system_ui_vibration_init(void)
 {
-    esp_err_t err = ESP_OK;
+    esp_err_t ret = ESP_OK;
+    dev_ledc_ctrl_config_t *device_config = NULL;
+    periph_ledc_config_t *periph_config = NULL;
+    periph_ledc_handle_t *ledc_handle = NULL;
 
     if (s_vibration_timer != NULL) {
         return ESP_OK;
     }
-
-    err = system_ui_vibration_resolve_device();
-    if (err == ESP_ERR_NOT_FOUND) {
+    if (!esp_board_manager_check_name(SYSTEM_UI_VIBRATION_DEVICE_NAME)) {
         ESP_LOGI(TAG, "board manager device '%s' not found, skip vibration", SYSTEM_UI_VIBRATION_DEVICE_NAME);
         return ESP_OK;
     }
-    ESP_RETURN_ON_ERROR(err, TAG, "resolve vibration motor device failed");
 
-    ESP_RETURN_ON_ERROR(system_ui_vibration_load_config(s_vibration_device_name), TAG, "load vibration motor config failed");
-    gpio_config_t io_conf = {
-        .pin_bit_mask = BIT64(s_vibration_gpio),
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    ESP_RETURN_ON_ERROR(gpio_config(&io_conf), TAG, "vibration gpio config failed");
-    err = system_ui_vibration_set_enabled(false);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "disable vibration motor failed: %s", esp_err_to_name(err));
-        goto fail;
-    }
+    // Use the already initialized Board Manager LEDC device; system_ui only changes its duty.
+    ESP_GOTO_ON_ERROR(esp_board_manager_get_device_handle(SYSTEM_UI_VIBRATION_DEVICE_NAME, (void **)&ledc_handle),
+                      fail, TAG, "get vibration motor LEDC handle failed");
+    ESP_GOTO_ON_ERROR(esp_board_manager_get_device_config(SYSTEM_UI_VIBRATION_DEVICE_NAME, (void **)&device_config),
+                      fail, TAG, "get vibration motor LEDC config failed");
+    ESP_GOTO_ON_FALSE(device_config != NULL && device_config->ledc_name != NULL && device_config->default_percent <= 100,
+                      ESP_ERR_INVALID_ARG, fail, TAG, "invalid vibration motor LEDC config");
+    ESP_GOTO_ON_ERROR(esp_board_manager_get_periph_config(device_config->ledc_name, (void **)&periph_config),
+                      fail, TAG, "get vibration motor LEDC peripheral config failed");
+    ESP_GOTO_ON_FALSE(ledc_handle != NULL && periph_config != NULL && periph_config->duty_resolution < 31,
+                      ESP_ERR_INVALID_ARG, fail, TAG, "invalid vibration motor LEDC peripheral config");
+
+    s_vibration_active_duty = (device_config->default_percent * ((1U << (uint32_t)periph_config->duty_resolution) - 1U)) / 100U;
+    s_vibration_ready = true;
+    ESP_GOTO_ON_ERROR(system_ui_vibration_set_enabled(false), fail, TAG, "disable vibration motor failed");
 
     s_vibration_timer = xTimerCreate("ui_vibration", system_ui_vibration_ms_to_ticks(APP_CLAW_VIBRATION_PULSE_MS), pdFALSE, NULL, system_ui_vibration_timer_cb);
     if (s_vibration_timer == NULL) {
         ESP_LOGE(TAG, "create vibration timer failed");
-        err = ESP_ERR_NO_MEM;
+        ret = ESP_ERR_NO_MEM;
         goto fail;
     }
     s_last_pulse_tick = 0;
-    ESP_LOGI(TAG, "vibration motor enabled: %s", s_vibration_device_name);
+    ESP_LOGI(TAG, "vibration motor enabled: %s", SYSTEM_UI_VIBRATION_DEVICE_NAME);
     return ESP_OK;
 
 fail:
-    s_vibration_device_name = NULL;
-    s_vibration_gpio = GPIO_NUM_NC;
-    return err;
+    s_vibration_ready = false;
+    s_vibration_active_duty = 0;
+    return ret;
 }
 
 void system_ui_vibration_deinit(void)
@@ -145,14 +123,14 @@ void system_ui_vibration_deinit(void)
         s_vibration_timer = NULL;
     }
 
-    if (s_vibration_device_name != NULL) {
+    if (s_vibration_ready) {
         esp_err_t err = system_ui_vibration_set_enabled(false);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "disable vibration motor during deinit failed: %s", esp_err_to_name(err));
         }
     }
-    s_vibration_device_name = NULL;
-    s_vibration_gpio = GPIO_NUM_NC;
+    s_vibration_ready = false;
+    s_vibration_active_duty = 0;
     s_last_pulse_tick = 0;
 }
 
@@ -190,3 +168,25 @@ void system_ui_add_click_feedback(lv_obj_t *obj)
 
     lv_obj_add_event_cb(obj, system_ui_vibration_click_event_cb, LV_EVENT_CLICKED, NULL);
 }
+
+#else
+
+esp_err_t system_ui_vibration_init(void)
+{
+    return ESP_OK;
+}
+
+void system_ui_vibration_deinit(void)
+{
+}
+
+void system_ui_click_feedback(void)
+{
+}
+
+void system_ui_add_click_feedback(lv_obj_t *obj)
+{
+    (void)obj;
+}
+
+#endif

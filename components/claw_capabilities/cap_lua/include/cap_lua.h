@@ -91,6 +91,14 @@ esp_err_t cap_lua_stop_all_jobs(const char *exclusive_filter,
 
 size_t cap_lua_get_active_async_job_count(void);
 
+/* Format "lua/job/<id>" for the currently running Lua job's task, or NULL
+ * outside any job context. Pointer stays valid for the job's lifetime. */
+const char *cap_lua_current_owner_tag(void);
+
+/* Wrapper around claw_hw_release_by_tag(); invoked automatically on job
+ * exit after user-registered exit_cleanup callbacks. */
+void cap_lua_release_job_hw_leases(const char *owner_tag);
+
 #ifdef __cplusplus
 }
 #endif
