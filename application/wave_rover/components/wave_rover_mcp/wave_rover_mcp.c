@@ -410,6 +410,7 @@ esp_err_t wave_rover_mcp_start(const wave_rover_config_t *cfg,
     hcfg.server_port       = cfg->mcp_port;
     hcfg.max_uri_handlers  = 16;
     hcfg.stack_size        = 8192;  /* nav tools run in httpd task, need headroom */
+    hcfg.recv_wait_timeout = 30;   /* OTA uploads over slow WiFi need longer recv timeout */
     ESP_RETURN_ON_ERROR(httpd_start(&s_httpd, &hcfg), TAG, "httpd_start");
 
     httpd_uri_t mcp_uri = {

@@ -516,6 +516,11 @@ static esp_err_t handle_update(httpd_req_t *req)
 {
     WEB_REQUIRE_AUTH(req);
 
+    /* Disable WiFi PS for the duration of the upload so the TCP connection
+     * stays reliable regardless of the current power mode. The power manager
+     * will restore the correct PS level on the next mode transition. */
+    esp_wifi_set_ps(WIFI_PS_NONE);
+
     uint32_t ota_lock_id = 0;
     if (s_web_power_mgr) wr_power_mgr_acquire_lock(s_web_power_mgr, "ota", 0, &ota_lock_id);
 
@@ -534,7 +539,10 @@ static esp_err_t handle_update(httpd_req_t *req)
     }
 
     esp_ota_handle_t ota = 0;
-    esp_err_t err = esp_ota_begin(part, OTA_WITH_SEQUENTIAL_WRITES, &ota);
+    /* Pre-erase the full image size upfront so subsequent writes are fast
+     * and do not repeatedly interrupt the WiFi stack (sequential writes
+     * trigger a sector erase on every 4 KB chunk, which causes TCP drops). */
+    esp_err_t err = esp_ota_begin(part, (size_t)total, &ota);
     if (err != ESP_OK) {
         if (s_web_power_mgr && ota_lock_id) wr_power_mgr_release_lock(s_web_power_mgr, ota_lock_id);
         ESP_LOGE(TAG, "ota begin: %s", esp_err_to_name(err));
