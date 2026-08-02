@@ -16,6 +16,7 @@ idf_component_register(
         board_support
         cap_rover cap_unitv cap_voice
         cap_im_platform cap_files cap_skill_mgr
-        cap_session_mgr cap_system cap_time
+        cap_session_mgr cap_system
         claw_core claw_cap claw_event_router claw_memory claw_skill
+        app_claw
 )

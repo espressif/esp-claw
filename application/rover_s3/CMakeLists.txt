@@ -10,11 +10,11 @@ set(EXTRA_COMPONENT_DIRS
     "${CMAKE_SOURCE_DIR}/../../components/claw_capabilities/cap_skill_mgr"
     "${CMAKE_SOURCE_DIR}/../../components/claw_capabilities/cap_session_mgr"
     "${CMAKE_SOURCE_DIR}/../../components/claw_capabilities/cap_system"
-    "${CMAKE_SOURCE_DIR}/../../components/claw_capabilities/cap_time"
     # Common utilities (only what rover_s3 actually needs)
     "${CMAKE_SOURCE_DIR}/../../components/common/json"
     "${CMAKE_SOURCE_DIR}/../../components/common/http_reuse"
     "${CMAKE_SOURCE_DIR}/../../components/common/captive_dns"
+    "${CMAKE_SOURCE_DIR}/../../components/common/app_claw"
     "${CMAKE_SOURCE_DIR}/components"
 )
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)

@@ -58,6 +58,16 @@ typedef struct {
     char enabled_cap_groups[APP_CLAW_STR_LEN];
     char llm_visible_cap_groups[APP_CLAW_STR_LEN];
     char enabled_lua_modules[APP_CLAW_STR_LEN];
+    /**
+     * Optional replacement for the built-in skills/subagent-oriented system
+     * prompt. When non-NULL and non-empty, app_claw_start() uses this string
+     * verbatim as the root agent's system prompt instead of
+     * APP_SYSTEM_PROMPT, and does not append the root/subagent role overlays
+     * (those describe the skill-and-delegation workflow the override
+     * replaces). Must outlive the call to app_claw_start() (a string literal
+     * or static buffer, not a stack buffer).
+     */
+    const char *system_prompt_override;
 } app_claw_config_t;
 
 typedef esp_err_t (*app_claw_save_config_fn)(const app_claw_config_t *config,

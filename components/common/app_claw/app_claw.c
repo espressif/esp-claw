@@ -617,7 +617,9 @@ static void app_claw_fill_core_config(const app_claw_config_t *config,
     core_config->supports_vision = app_claw_bool_is_true(config->llm_supports_vision);
     core_config->image_remote_url_only = app_claw_bool_is_true(config->llm_image_remote_url_only);
     core_config->instance_id = 0;
-    core_config->system_prompt = APP_SYSTEM_PROMPT;
+    core_config->system_prompt = (config->system_prompt_override && config->system_prompt_override[0])
+                                  ? config->system_prompt_override
+                                  : APP_SYSTEM_PROMPT;
 #if CONFIG_APP_CLAW_CAP_MEMORY
 #if CONFIG_APP_CLAW_MEMORY_MODE_FULL
     core_config->persist_context = claw_memory_persist_context_callback;
@@ -802,12 +804,13 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
                  config->llm_base_url[0] ? config->llm_base_url : "(empty)",
                  config->llm_model[0] ? config->llm_model : "(empty)",
                  config->llm_api_key[0] ? "configured" : "missing");
+        bool has_prompt_override = config->system_prompt_override && config->system_prompt_override[0];
         ESP_RETURN_ON_ERROR(claw_agent_mgr_init(&(claw_agent_mgr_config_t) {
                                 .core_config = &core_config,
                                 .base_context_providers = base_providers,
                                 .base_context_provider_count = sizeof(base_providers) / sizeof(base_providers[0]),
-                                .root_agent_system_prompt = APP_ROOT_AGENT_SYSTEM_PROMPT,
-                                .subagent_system_prompt = APP_SUBAGENT_SYSTEM_PROMPT,
+                                .root_agent_system_prompt = has_prompt_override ? "" : APP_ROOT_AGENT_SYSTEM_PROMPT,
+                                .subagent_system_prompt = has_prompt_override ? "" : APP_SUBAGENT_SYSTEM_PROMPT,
                             }),
                             TAG, "Failed to init claw_agent_mgr");
         ESP_RETURN_ON_ERROR(claw_agent_mgr_create_root_agent(&root_agent_id),

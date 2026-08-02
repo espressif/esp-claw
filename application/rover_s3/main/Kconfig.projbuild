@@ -46,28 +46,11 @@ config ROVER_S3_TIME_TIMEZONE
 
 endmenu
 
-# IM capability selection (subset of app_claw Kconfig, redefined here since
-# rover_s3 does not include components/common/app_claw in its component list)
-menu "Claw IM capabilities"
-
-config APP_CLAW_CAP_IM_TG
-    bool "Enable Telegram IM"
-    default y
-
-config APP_CLAW_CAP_IM_QQ
-    bool "Enable QQ IM"
+# rover_s3 is a hand-rolled PlatformIO app (no `idf.py bmgr` board-manager
+# Kconfig generation), so board-capability symbols that generated Kconfig
+# normally provides don't exist here. app_claw's Kconfig gates the optional
+# "emote" display component on this symbol; stub it to n so the component
+# manager's rule can resolve instead of erroring on an undefined symbol.
+config ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT
+    bool
     default n
-
-config APP_CLAW_CAP_IM_FEISHU
-    bool "Enable Feishu IM"
-    default n
-
-config APP_CLAW_CAP_IM_WECHAT
-    bool "Enable WeChat IM"
-    default n
-
-config APP_CLAW_CAP_IM_LOCAL
-    bool "Enable Local IM"
-    default n
-
-endmenu

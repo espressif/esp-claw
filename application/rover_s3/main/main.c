@@ -20,6 +20,7 @@
 #include "setup_device.h"
 #include "app_rover_s3.h"
 #include "captive_dns.h"
+#include "claw_paths.h"
 #include "wear_levelling.h"
 
 static const char *TAG = "rover_s3_main";
@@ -141,6 +142,12 @@ void app_main(void)
         /* Don't call app_rover_s3_start() — no LLM/router needed in AP mode */
         return;
     }
+
+    /* rover_s3 has a single FATFS partition (no separate read-only SYSTEM
+     * image like edge_agent's dual-image boards); point both claw_paths
+     * roots at it so app_claw's storage-path resolution has valid roots. */
+    ESP_ERROR_CHECK(claw_paths_set(CLAW_PATH_DATA, rover_s3_fatfs_base_path));
+    ESP_ERROR_CHECK(claw_paths_set(CLAW_PATH_SYSTEM, rover_s3_fatfs_base_path));
 
     ESP_ERROR_CHECK(app_rover_s3_start());
 }

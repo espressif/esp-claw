@@ -6,29 +6,15 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
-#include "cap_files.h"
-#include "cap_im_tg.h"
+#include "app_capabilities.h"
+#include "app_claw.h"
 #include "cap_rover.h"
-#include "cap_session_mgr.h"
-#include "cap_skill_mgr.h"
-#include "cap_system.h"
-#include "cap_time.h"
 #include "cap_unitv.h"
 #include "cap_voice.h"
-#include "claw_cap.h"
-#include "claw_core.h"
-#include "claw_event_publisher.h"
-#include "claw_event_router.h"
-#include "claw_memory.h"
-#include "claw_skill.h"
-#include "driver/gpio.h"
 #include "esp_check.h"
-#include "esp_console.h"
 #include "esp_log.h"
-#include "esp_sleep.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "rover_s3_cli.h"
 #include "rover_s3_display.h"
 #include "rover_s3_httpd.h"
@@ -46,46 +32,7 @@ static const char *TAG = "app_rover_s3";
     "Use voice_say to speak responses aloud when the user communicates via voice. " \
     "For multi-step tasks, activate rover_ops or rover_search first."
 
-static const char *const ROVER_S3_LLM_VISIBLE_GROUPS[] = {
-    "cap_rover",
-    "cap_unitv",
-    "cap_skill",
-    "cap_voice",
-};
-
 rover_s3_settings_t g_settings;
-
-typedef struct {
-    char memory_session_root[64];
-    char memory_root_dir[64];
-    char skills_root_dir[64];
-    char router_rules_path[96];
-    char im_attachment_root[64];
-} rover_paths_t;
-
-static rover_paths_t s_paths;
-
-static esp_err_t init_paths(rover_paths_t *p)
-{
-    const char *base = rover_s3_fatfs_base_path;
-
-    if (!p || !base || base[0] != '/') {
-        return ESP_ERR_INVALID_STATE;
-    }
-    if (snprintf(p->memory_session_root, sizeof(p->memory_session_root), "%s/sessions", base) >= sizeof(p->memory_session_root) ||
-            snprintf(p->memory_root_dir, sizeof(p->memory_root_dir), "%s/memory", base) >= sizeof(p->memory_root_dir) ||
-            snprintf(p->skills_root_dir, sizeof(p->skills_root_dir), "%s/skills", base) >= sizeof(p->skills_root_dir) ||
-            snprintf(p->router_rules_path, sizeof(p->router_rules_path), "%s/router_rules/router_rules.json", base) >= sizeof(p->router_rules_path) ||
-            snprintf(p->im_attachment_root, sizeof(p->im_attachment_root), "%s/inbox", base) >= sizeof(p->im_attachment_root)) {
-        return ESP_ERR_INVALID_SIZE;
-    }
-    return ESP_OK;
-}
-
-static bool llm_is_configured(const rover_s3_settings_t *s)
-{
-    return s && s->llm_api_key[0] && s->llm_model[0] && s->llm_profile[0];
-}
 
 static void wifi_state_cb(bool connected, void *user_ctx)
 {
@@ -109,65 +56,48 @@ static void voice_ui_cb(cap_voice_ui_state_t state, void *ctx)
     }
 }
 
-esp_err_t app_rover_s3_start(void)
+/* --- external capability groups registered with app_claw's generic bootstrap ---
+ * cap_rover / cap_unitv / cap_voice are rover_s3-specific hardware
+ * capabilities with no generic app_claw counterpart. Each "prepare" callback
+ * runs the board-specific hardware init (I2C/UART bring-up); each "reg"
+ * callback registers the capability's tools with claw_cap and, where the
+ * original app also wired a CLI command set, does that too. app_claw calls
+ * prepare() then reg() for each enabled group before starting claw_cap. */
+
+static esp_err_t app_cap_prepare_rover(const app_claw_config_t *config,
+                                       const app_claw_storage_paths_t *paths)
 {
-    ESP_RETURN_ON_ERROR(rover_s3_settings_init(), TAG, "settings init");
-    ESP_RETURN_ON_ERROR(rover_s3_settings_load(&g_settings), TAG, "settings load");
-    ESP_RETURN_ON_ERROR(init_paths(&s_paths), TAG, "init paths");
-    ESP_RETURN_ON_ERROR(rover_s3_wifi_register_state_cb(wifi_state_cb, NULL), TAG, "wifi callback");
+    (void)config;
+    (void)paths;
+    return cap_rover_init(&(cap_rover_config_t){
+                              .i2c_port = 1,   /* external I2C / Grove: GPIO 9/10 */
+                              .sda_gpio = 9,
+                              .scl_gpio = 10,
+                              .i2c_freq_hz = 100000,
+                              .rover_addr = 0x38,
+                              .gripper_servo_idx = 1,
+                              .gripper_open_angle = 35,
+                              .gripper_close_angle = 150,
+                              .hw_task_stack_size = 4096,
+                              .hw_task_priority = 5,
+                              .hw_task_core = 0,
+                          });
+}
 
-    claw_event_router_config_t router_cfg = {
-        .rules_path = s_paths.router_rules_path,
-        .task_stack_size = 8 * 1024,
-        .task_priority = 5,
-        .task_core = tskNO_AFFINITY,
-        .core_submit_timeout_ms = 1000,
-        .core_receive_timeout_ms = 130000,
-        .default_route_messages_to_agent = llm_is_configured(&g_settings),
-        .session_builder = cap_session_mgr_build_session_id,
-    };
-    ESP_RETURN_ON_ERROR(cap_session_mgr_set_session_root_dir(s_paths.memory_session_root), TAG, "session root");
-    ESP_RETURN_ON_ERROR(claw_event_router_init(&router_cfg), TAG, "event router");
+static esp_err_t app_cap_register_rover(const app_claw_config_t *config,
+                                        const app_claw_storage_paths_t *paths)
+{
+    (void)config;
+    (void)paths;
+    ESP_RETURN_ON_ERROR(cap_rover_register_group(), TAG, "register rover");
+    cap_rover_register_cli();
+    return ESP_OK;
+}
 
-    claw_memory_config_t mem_cfg = {
-        .session_root_dir = s_paths.memory_session_root,
-        .memory_root_dir = s_paths.memory_root_dir,
-        .max_message_chars = 128,
-        .llm = {
-            .api_key = g_settings.llm_api_key,
-            .backend_type = g_settings.llm_backend_type,
-            .model = g_settings.llm_model,
-            .base_url = g_settings.llm_base_url,
-            .auth_type = g_settings.llm_auth_type,
-            .timeout_ms = (uint32_t)strtoul(g_settings.llm_timeout_ms, NULL, 10),
-            .image_max_bytes = 0,
-        },
-        .enable_async_extract_stage_note = false,
-    };
-    ESP_RETURN_ON_ERROR(claw_memory_init(&mem_cfg), TAG, "memory");
-    ESP_RETURN_ON_ERROR(claw_skill_init(&(claw_skill_config_t){
-                            .skills_root_dir = s_paths.skills_root_dir,
-                            .session_state_root_dir = s_paths.memory_session_root,
-                            .max_file_bytes = 10 * 1024,
-                        }),
-                        TAG, "skills");
-
-    ESP_RETURN_ON_ERROR(claw_cap_init(), TAG, "cap init");
-    ESP_RETURN_ON_ERROR(cap_files_set_base_dir(rover_s3_fatfs_base_path), TAG, "files base");
-    ESP_RETURN_ON_ERROR(cap_rover_init(&(cap_rover_config_t){
-                            .i2c_port = 1,   /* external I2C / Grove: GPIO 9/10 */
-                            .sda_gpio = 9,
-                            .scl_gpio = 10,
-                            .i2c_freq_hz = 100000,
-                            .rover_addr = 0x38,
-                            .gripper_servo_idx = 1,
-                            .gripper_open_angle = 35,
-                            .gripper_close_angle = 150,
-                            .hw_task_stack_size = 4096,
-                            .hw_task_priority = 5,
-                            .hw_task_core = 0,
-                        }),
-                        TAG, "rover init");
+static esp_err_t app_cap_prepare_unitv(const app_claw_config_t *config,
+                                       const app_claw_storage_paths_t *paths)
+{
+    (void)paths;
     ESP_RETURN_ON_ERROR(cap_unitv_init(&(cap_unitv_config_t){
                             .uart_port = 1,
                             .tx_gpio = 5,
@@ -180,35 +110,32 @@ esp_err_t app_rover_s3_start(void)
                         }),
                         TAG, "unitv init");
     cap_unitv_set_vision_config(&(cap_unitv_vision_config_t){
-        .api_key = g_settings.llm_api_key,
-        .backend_type = g_settings.llm_backend_type,
-        .model = g_settings.llm_model,
-        .base_url = g_settings.llm_base_url,
-        .auth_type = g_settings.llm_auth_type,
-        .timeout_ms = (uint32_t)strtoul(g_settings.llm_timeout_ms, NULL, 10),
+        .api_key = config->llm_api_key,
+        .backend_type = config->llm_backend_type,
+        .model = config->llm_model,
+        .base_url = config->llm_base_url,
+        .auth_type = config->llm_auth_type,
+        .timeout_ms = (uint32_t)strtoul(config->llm_timeout_ms, NULL, 10),
         .max_response_tokens = 256,
     });
+    return ESP_OK;
+}
 
-    if (g_settings.tg_bot_token[0]) {
-        ESP_RETURN_ON_ERROR(cap_im_tg_set_token(g_settings.tg_bot_token), TAG, "Telegram token");
-    }
-    ESP_RETURN_ON_ERROR(cap_im_tg_set_attachment_config(&(cap_im_tg_attachment_config_t){
-                            .storage_root_dir = s_paths.im_attachment_root,
-                            .max_inbound_file_bytes = 1024 * 1024,
-                            .enable_inbound_attachments = false,
-                        }),
-                        TAG, "Telegram attachments");
-
-    ESP_RETURN_ON_ERROR(cap_rover_register_group(), TAG, "register rover");
+static esp_err_t app_cap_register_unitv(const app_claw_config_t *config,
+                                        const app_claw_storage_paths_t *paths)
+{
+    (void)config;
+    (void)paths;
     ESP_RETURN_ON_ERROR(cap_unitv_register_group(), TAG, "register unitv");
-    ESP_RETURN_ON_ERROR(cap_im_tg_register_group(), TAG, "register tg");
-    ESP_RETURN_ON_ERROR(cap_files_register_group(), TAG, "register files");
-    ESP_RETURN_ON_ERROR(cap_skill_mgr_register_group(), TAG, "register skills");
-    ESP_RETURN_ON_ERROR(cap_system_register_group(), TAG, "register system");
-    ESP_RETURN_ON_ERROR(cap_time_register_group(), TAG, "register time");
-    ESP_RETURN_ON_ERROR(cap_session_mgr_register_group(), TAG, "register sessions");
-    ESP_RETURN_ON_ERROR(cap_voice_register_group(), TAG, "register voice");
+    cap_unitv_register_cli();
+    return ESP_OK;
+}
 
+static esp_err_t app_cap_prepare_voice(const app_claw_config_t *config,
+                                       const app_claw_storage_paths_t *paths)
+{
+    (void)config;
+    (void)paths;
     cap_voice_config_t vcfg = {
         .whisper_api_key  = g_settings.whisper_api_key[0]
                             ? g_settings.whisper_api_key : g_settings.llm_api_key,
@@ -227,17 +154,87 @@ esp_err_t app_rover_s3_start(void)
         .ui_ctx      = NULL,
     };
     cap_voice_set_config(&vcfg);
+    return ESP_OK;
+}
 
-    ESP_RETURN_ON_ERROR(claw_cap_set_llm_visible_groups(
-                            ROVER_S3_LLM_VISIBLE_GROUPS,
-                            sizeof(ROVER_S3_LLM_VISIBLE_GROUPS) / sizeof(ROVER_S3_LLM_VISIBLE_GROUPS[0])),
-                        TAG, "visible groups");
-    ESP_RETURN_ON_ERROR(claw_cap_start_all(), TAG, "start caps");
-    ESP_RETURN_ON_ERROR(claw_event_router_register_outbound_binding("telegram", "tg_send_message"), TAG, "tg outbound");
+static esp_err_t app_cap_register_voice(const app_claw_config_t *config,
+                                        const app_claw_storage_paths_t *paths)
+{
+    (void)config;
+    (void)paths;
+    return cap_voice_register_group();
+}
+
+static esp_err_t register_rover_s3_capabilities(void)
+{
+    ESP_RETURN_ON_ERROR(app_capabilities_register_external_group(&(app_capability_external_group_t){
+                            .group_id = "cap_rover",
+                            .display_name = "Rover",
+                            .llm_visible_by_default = true,
+                            .prepare = app_cap_prepare_rover,
+                            .reg = app_cap_register_rover,
+                        }),
+                        TAG, "register external group cap_rover");
+    ESP_RETURN_ON_ERROR(app_capabilities_register_external_group(&(app_capability_external_group_t){
+                            .group_id = "cap_unitv",
+                            .display_name = "UnitV",
+                            .llm_visible_by_default = true,
+                            .prepare = app_cap_prepare_unitv,
+                            .reg = app_cap_register_unitv,
+                        }),
+                        TAG, "register external group cap_unitv");
+    ESP_RETURN_ON_ERROR(app_capabilities_register_external_group(&(app_capability_external_group_t){
+                            .group_id = "cap_voice",
+                            .display_name = "Voice",
+                            .llm_visible_by_default = true,
+                            .prepare = app_cap_prepare_voice,
+                            .reg = app_cap_register_voice,
+                        }),
+                        TAG, "register external group cap_voice");
+    return ESP_OK;
+}
+
+static bool llm_is_configured(const rover_s3_settings_t *s)
+{
+    return s && s->llm_api_key[0] && s->llm_model[0] && s->llm_profile[0];
+}
+
+static void build_app_claw_config(const rover_s3_settings_t *s, app_claw_config_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    strlcpy(out->llm_api_key, s->llm_api_key, sizeof(out->llm_api_key));
+    strlcpy(out->llm_backend_type, s->llm_backend_type, sizeof(out->llm_backend_type));
+    strlcpy(out->llm_model, s->llm_model, sizeof(out->llm_model));
+    strlcpy(out->llm_base_url, s->llm_base_url, sizeof(out->llm_base_url));
+    strlcpy(out->llm_auth_type, s->llm_auth_type, sizeof(out->llm_auth_type));
+    strlcpy(out->llm_timeout_ms, s->llm_timeout_ms, sizeof(out->llm_timeout_ms));
+    strlcpy(out->llm_max_tokens, "0", sizeof(out->llm_max_tokens));
+    strlcpy(out->llm_default_image_max_bytes, "0", sizeof(out->llm_default_image_max_bytes));
+    strlcpy(out->llm_supports_tools, "1", sizeof(out->llm_supports_tools));
+    strlcpy(out->llm_supports_vision, "0", sizeof(out->llm_supports_vision));
+    strlcpy(out->llm_image_remote_url_only, "0", sizeof(out->llm_image_remote_url_only));
+    strlcpy(out->tg_bot_token, s->tg_bot_token, sizeof(out->tg_bot_token));
+    /* Empty enabled_cap_groups = enable every compiled-in group (Kconfig
+     * already trims the built-in set to what rover_s3 needs). */
+    out->enabled_cap_groups[0] = '\0';
+    strlcpy(out->llm_visible_cap_groups, "cap_rover,cap_unitv,cap_skill,cap_voice",
+           sizeof(out->llm_visible_cap_groups));
+    out->system_prompt_override = ROVER_S3_SYSTEM_PROMPT;
+}
+
+esp_err_t app_rover_s3_start(void)
+{
+    ESP_RETURN_ON_ERROR(rover_s3_settings_init(), TAG, "settings init");
+    ESP_RETURN_ON_ERROR(rover_s3_settings_load(&g_settings), TAG, "settings load");
+    ESP_RETURN_ON_ERROR(rover_s3_wifi_register_state_cb(wifi_state_cb, NULL), TAG, "wifi callback");
 
     ESP_RETURN_ON_ERROR(rover_s3_cli_init(), TAG, "console");
-    cap_rover_register_cli();
-    cap_unitv_register_cli();
+    ESP_RETURN_ON_ERROR(register_rover_s3_capabilities(), TAG, "register rover_s3 capabilities");
+
+    app_claw_config_t claw_cfg;
+    build_app_claw_config(&g_settings, &claw_cfg);
+    ESP_RETURN_ON_ERROR(app_claw_start(&claw_cfg), TAG, "app_claw start");
+
     ESP_RETURN_ON_ERROR(rover_s3_cli_start(), TAG, "console REPL");
 
     if (strcmp(g_settings.voice_enabled, "0") != 0) {
@@ -250,38 +247,9 @@ esp_err_t app_rover_s3_start(void)
         }
     }
 
-    if (llm_is_configured(&g_settings)) {
-        claw_core_config_t core_cfg = {
-            .api_key = g_settings.llm_api_key,
-            .backend_type = g_settings.llm_backend_type,
-            .model = g_settings.llm_model,
-            .base_url = g_settings.llm_base_url,
-            .auth_type = g_settings.llm_auth_type,
-            .timeout_ms = (uint32_t)strtoul(g_settings.llm_timeout_ms, NULL, 10),
-            .system_prompt = ROVER_S3_SYSTEM_PROMPT,
-            .persist_session = claw_memory_persist_session_callback,
-            .call_cap = claw_cap_call_from_core,
-            .task_stack_size = 16 * 1024,
-            .task_priority = 5,
-            .task_core = tskNO_AFFINITY,
-            .max_tool_iterations = 20,
-            .request_queue_len = 2,
-            .response_queue_len = 2,
-            .max_context_providers = 8,
-        };
-        ESP_RETURN_ON_ERROR(claw_core_init(&core_cfg), TAG, "core");
-        ESP_RETURN_ON_ERROR(claw_core_add_context_provider(&claw_memory_profile_provider), TAG, "ctx profile");
-        ESP_RETURN_ON_ERROR(claw_core_add_context_provider(&claw_memory_long_term_lightweight_provider), TAG, "ctx memory");
-        ESP_RETURN_ON_ERROR(claw_core_add_context_provider(&claw_skill_skills_list_provider), TAG, "ctx skills list");
-        ESP_RETURN_ON_ERROR(claw_core_add_context_provider(&claw_memory_session_history_provider), TAG, "ctx history");
-        ESP_RETURN_ON_ERROR(claw_core_add_context_provider(&claw_cap_tools_provider), TAG, "ctx tools");
-        ESP_RETURN_ON_ERROR(claw_core_add_context_provider(&cap_time_context_provider), TAG, "ctx time");
-        ESP_RETURN_ON_ERROR(claw_core_start(), TAG, "core start");
-    } else {
+    if (!llm_is_configured(&g_settings)) {
         ESP_LOGW(TAG, "LLM not configured; agent routing is disabled");
     }
-
-    ESP_RETURN_ON_ERROR(claw_event_router_start(), TAG, "router start");
 
     rover_s3_display_set_state(rover_s3_wifi_is_connected()
                                 ? ROVER_S3_DISPLAY_IDLE : ROVER_S3_DISPLAY_OFFLINE);
