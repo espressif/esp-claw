@@ -134,7 +134,12 @@ static void eval_task_fn(void *arg)
 
         xSemaphoreTake(m->mutex, portMAX_DELAY);
 
-        bool rover_busy = wr_rover_state_get() != WR_ROVER_STATE_IDLE;
+        /* ESTOP means motors are stopped — treat it as idle so power can
+         * reduce. Only DRIVING and NAV_BUSY actively consume power and
+         * justify delaying the idle timer. */
+        wr_rover_state_t rover_state = wr_rover_state_get();
+        bool rover_busy = (rover_state == WR_ROVER_STATE_DRIVING ||
+                           rover_state == WR_ROVER_STATE_NAV_BUSY);
         if (rover_busy) {
             m->last_activity_us = esp_timer_get_time();
         }
@@ -223,6 +228,10 @@ esp_err_t wr_power_mgr_start(wr_power_mgr_handle_t handle)
 {
     if (!handle) return ESP_ERR_INVALID_ARG;
     if (handle->running) return ESP_OK;
+    /* Apply initial mode so WiFi/CPU settings match the starting mode
+     * immediately — without this, ESP32 boots with WIFI_PS_MIN_MODEM
+     * regardless of the configured mode. */
+    apply_mode(handle, handle->mode);
     handle->running = true;
     BaseType_t ok = xTaskCreate(eval_task_fn, "wr_power_eval", 3072, handle, 3,
                                  &handle->eval_task);
