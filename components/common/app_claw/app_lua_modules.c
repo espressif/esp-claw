@@ -33,8 +33,14 @@
 #if CONFIG_APP_CLAW_LUA_DRIVER_RMT
 #include "lua_driver_rmt.h"
 #endif
+#if CONFIG_APP_CLAW_LUA_DRIVER_SX1262
+#include "lua_driver_sx1262.h"
+#endif
 #if CONFIG_APP_CLAW_LUA_DRIVER_TOUCH
 #include "lua_driver_touch.h"
+#endif
+#if CONFIG_APP_CLAW_LUA_DRIVER_TWAI
+#include "lua_driver_twai.h"
 #endif
 #if CONFIG_APP_CLAW_LUA_DRIVER_UART
 #include "lua_driver_uart.h"
@@ -366,11 +372,27 @@ static esp_err_t app_lua_register_rmt(const char *fatfs_base_path)
 }
 #endif
 
+#if CONFIG_APP_CLAW_LUA_DRIVER_SX1262
+static esp_err_t app_lua_register_sx1262(const char *fatfs_base_path)
+{
+    (void)fatfs_base_path;
+    return lua_driver_sx1262_register();
+}
+#endif
+
 #if CONFIG_APP_CLAW_LUA_DRIVER_TOUCH
 static esp_err_t app_lua_register_touch(const char *fatfs_base_path)
 {
     (void)fatfs_base_path;
     return lua_driver_touch_register();
+}
+#endif
+
+#if CONFIG_APP_CLAW_LUA_DRIVER_TWAI
+static esp_err_t app_lua_register_twai(const char *fatfs_base_path)
+{
+    (void)fatfs_base_path;
+    return lua_driver_twai_register();
 }
 #endif
 
@@ -627,8 +649,14 @@ static const app_lua_module_entry_t s_lua_module_entries[] = {
 #if CONFIG_APP_CLAW_LUA_DRIVER_RMT
     { "rmt", "RMT", app_lua_register_rmt },
 #endif
+#if CONFIG_APP_CLAW_LUA_DRIVER_SX1262
+    { "sx1262", "SX1262 LoRa", app_lua_register_sx1262 },
+#endif
 #if CONFIG_APP_CLAW_LUA_DRIVER_TOUCH
     { "touch", "Touch", app_lua_register_touch },
+#endif
+#if CONFIG_APP_CLAW_LUA_DRIVER_TWAI
+    { "twai", "TWAI (CAN)", app_lua_register_twai },
 #endif
 #if CONFIG_APP_CLAW_LUA_DRIVER_UART
     { "uart", "UART", app_lua_register_uart },
@@ -740,8 +768,14 @@ static const app_lua_module_info_t s_lua_module_infos[] = {
 #if CONFIG_APP_CLAW_LUA_DRIVER_RMT
     { "rmt", "RMT" },
 #endif
+#if CONFIG_APP_CLAW_LUA_DRIVER_SX1262
+    { "sx1262", "SX1262 LoRa" },
+#endif
 #if CONFIG_APP_CLAW_LUA_DRIVER_TOUCH
     { "touch", "Touch" },
+#endif
+#if CONFIG_APP_CLAW_LUA_DRIVER_TWAI
+    { "twai", "TWAI (CAN)" },
 #endif
 #if CONFIG_APP_CLAW_LUA_DRIVER_UART
     { "uart", "UART" },

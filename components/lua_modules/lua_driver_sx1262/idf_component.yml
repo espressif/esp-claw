@@ -1,0 +1,3 @@
+dependencies:
+  idf: ">=5.1"
+  nicolaielectronics/sx126x: "^0.3.0"

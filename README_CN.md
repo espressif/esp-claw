@@ -20,7 +20,6 @@
       <img src="https://img.shields.io/github/license/espressif/esp-claw?style=flat-square" alt="License" />
     </a>
   </p>
-
   <a href="https://esp-claw.com/zh-cn/">主页</a>
   |
   <a href="https://esp-claw.com/zh-cn/tutorial/">文档</a>
@@ -34,6 +33,8 @@
 </div>
 
 **ESP-Claw** 是乐鑫推出的面向物联网设备的 **Chat Coding「聊天造物」** 式 AI Agent 框架，以对话定义设备行为，在乐鑫芯片上本地完成感知、决策与执行的完整闭环。ESP-Claw 自 OpenClaw 理念出发，用 C 语言重新实现，轻盈、智能、成长。仅需一块几美元的 ESP32 系列芯片，便可体验 ESP-Claw 的轻灵特性。
+
+此版本添加支持适配LilyGo-T-Connect-Pro。
 
 <div align="center">
   <img alt="From traditional IoT to Edge Agent" src="./docs/static/from-traditional-iot-to-edge-agent.webp" width="90%" />

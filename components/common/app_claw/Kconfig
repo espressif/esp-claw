@@ -245,6 +245,15 @@ menu "App Claw Config"
                 on lua_driver_rmt when Lua capability is enabled.
                 Defaults to n on chips without RMT hardware support.
 
+        config APP_CLAW_LUA_DRIVER_SX1262
+            bool "Enable SX1262 LoRa Lua driver"
+            default y if SOC_GPSPI_SUPPORTED
+            default n
+            help
+                Enable the SX1262 LoRa Lua driver. It adds the radio as a
+                device on an initialized SPI master bus so the bus can remain
+                shared with a display or Ethernet controller.
+
         config APP_CLAW_LUA_DRIVER_TOUCH
             bool "Enable touch Lua driver"
             default y if SOC_TOUCH_SENSOR_SUPPORTED
@@ -253,6 +262,15 @@ menu "App Claw Config"
                 Enable the touch Lua driver and keep app_claw's direct dependency
                 on lua_driver_touch when Lua capability is enabled.
                 Defaults to n on chips without touch sensor hardware support.
+
+        config APP_CLAW_LUA_DRIVER_TWAI
+            bool "Enable TWAI (CAN) Lua driver"
+            default y if SOC_TWAI_SUPPORTED
+            default n
+            help
+                Enable the TWAI (Classical CAN) Lua driver and keep app_claw's
+                direct dependency on lua_driver_twai when Lua capability is
+                enabled. Defaults to n on chips without TWAI hardware support.
 
         config APP_CLAW_LUA_DRIVER_UART
             bool "Enable UART Lua driver"
