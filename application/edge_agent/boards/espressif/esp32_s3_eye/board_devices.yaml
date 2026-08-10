@@ -1,0 +1,44 @@
+version: 1.0.0
+# Devices Configuration
+devices:
+
+  - name: led_strip
+    chip: ws2812
+    type: custom
+    version: default
+    init_skip: true
+    dependencies:
+      espressif/led_strip:
+        version: "^3.0"
+        public: true
+    config:
+      max_leds: 1                  # Number of LEDs in the strip
+    peripherals:
+      - name: rmt_tx               # RMT TX peripheral used by the LED strip
+
+  # SPI Display Device (ST7789 240x240)
+  - name: display_lcd
+    chip: st7789
+    type: display_lcd
+    sub_type: spi
+    version: default
+    config:
+      mirror_x: false
+      mirror_y: false
+      invert_color: true
+      x_max: 240
+      y_max: 240
+      io_spi_config:
+        cs_gpio_num: 44
+        dc_gpio_num: 43
+        spi_mode: 0
+        pclk_hz: 80000000
+
+    peripherals:
+    - name: spi_display
+
+  - name: lcd_brightness
+    type: ledc_ctrl
+    version: default
+    peripherals:
+      - name: ledc_backlight
