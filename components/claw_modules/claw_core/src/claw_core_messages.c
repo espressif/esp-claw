@@ -85,101 +85,99 @@ static esp_err_t clone_request_item(const claw_core_request_t *request,
     return ESP_OK;
 }
 
-static esp_err_t queue_insert_request_locked(claw_core_state_t *core,
-                                             claw_core_request_item_t *item)
+static esp_err_t queue_inbox_message_locked(claw_core_state_t *core,
+                                            const char *session_id,
+                                            char **owned_text)
 {
     size_t tail;
 
-    if (!core || !item || !item->view.session_id || item->view.session_id[0] == '\0' ||
+    if (!core || !session_id || session_id[0] == '\0' || !owned_text ||
+            !*owned_text || !(*owned_text)[0] ||
             core->inflight_request_id == 0 ||
             core->inflight_session_id[0] == '\0' ||
-            strcmp(core->inflight_session_id, item->view.session_id) != 0) {
+            strcmp(core->inflight_session_id, session_id) != 0) {
         return ESP_ERR_NOT_FOUND;
     }
     if (!claw_core_agent_loop_phase_is_insertable(core->agent_loop_phase)) {
         return ESP_ERR_INVALID_STATE;
     }
-    if (core->insert_queue_count >= CLAW_CORE_INSERT_QUEUE_LEN) {
+    if (core->run_inbox_count >= CLAW_CORE_RUN_INBOX_CAPACITY) {
         return ESP_ERR_NO_MEM;
     }
 
-    tail = (core->insert_queue_head + core->insert_queue_count) % CLAW_CORE_INSERT_QUEUE_LEN;
-    core->insert_queue[tail] = *item;
-    memset(item, 0, sizeof(*item));
-    core->insert_queue_count++;
+    tail = (core->run_inbox_head + core->run_inbox_count) %
+           CLAW_CORE_RUN_INBOX_CAPACITY;
+    core->run_inbox[tail] = (claw_core_inbox_item_t) {
+        .text = *owned_text,
+    };
+    *owned_text = NULL;
+    core->run_inbox_count++;
 
     if (core->agent_loop_phase == CLAW_CORE_AGENT_LOOP_PHASE_IN_LLM_HTTP &&
             core->inflight_abort_reason != CLAW_CORE_CONTROL_ABORT_REASON_CANCEL) {
         core->inflight_abort = true;
-        core->inflight_abort_reason = CLAW_CORE_CONTROL_ABORT_REASON_USER_INTERRUPT;
+        core->inflight_abort_reason = CLAW_CORE_CONTROL_ABORT_REASON_RUN_INBOX;
     }
     return ESP_OK;
 }
 
-static esp_err_t try_queue_insert_request(claw_core_state_t *core,
-                                          claw_core_request_item_t *item)
+static esp_err_t try_append_message(claw_core_state_t *core,
+                                    const claw_core_request_t *message,
+                                    claw_core_message_receipt_t *out_receipt)
 {
-    uint32_t inserted_request_id;
+    char *owned_text = NULL;
     uint32_t inflight_request_id;
-    char session_id[CLAW_CORE_INFLIGHT_SESSION_ID_SIZE] = {0};
     size_t depth;
     esp_err_t err;
 
-    if (!core || !core->inflight_lock || !item) {
+    if (!core || !core->inflight_lock || !message || !out_receipt ||
+            !message->session_id || !message->session_id[0] ||
+            !message->user_text || !message->user_text[0]) {
         return ESP_ERR_INVALID_STATE;
     }
-
-    inserted_request_id = item->view.request_id;
-    if (item->view.session_id) {
-        strlcpy(session_id, item->view.session_id, sizeof(session_id));
-    }
+    owned_text = claw_utils_string_dup(message->user_text);
+    if (!owned_text) return ESP_ERR_NO_MEM;
 
     if (xSemaphoreTake(core->inflight_lock, pdMS_TO_TICKS(200)) != pdTRUE) {
+        free(owned_text);
         return ESP_ERR_TIMEOUT;
     }
     inflight_request_id = core->inflight_request_id;
-    err = queue_insert_request_locked(core, item);
-    depth = core->insert_queue_count;
+    err = queue_inbox_message_locked(core, message->session_id, &owned_text);
+    depth = core->run_inbox_count;
     xSemaphoreGive(core->inflight_lock);
+    free(owned_text);
 
     if (err == ESP_OK) {
+        out_receipt->disposition = CLAW_CORE_MESSAGE_APPENDED_TO_RUN;
+        out_receipt->run_id = inflight_request_id;
         ESP_LOGI(TAG,
-                 "inserted user input request=%" PRIu32 " into inflight_request=%" PRIu32
+                 "appended conversation message=%" PRIu32 " to run=%" PRIu32
                  " session=%s depth=%u",
-                 inserted_request_id,
+                 message->request_id,
                  inflight_request_id,
-                 session_id,
+                 message->session_id,
                  (unsigned)depth);
     }
     return err;
 }
 
-esp_err_t claw_core_ingress_submit(claw_core_state_t *core,
-                                   const claw_core_request_t *request,
-                                   uint32_t timeout_ms)
+esp_err_t claw_core_ingress_start_run(claw_core_state_t *core,
+                                      const claw_core_request_t *request,
+                                      uint32_t timeout_ms)
 {
     claw_core_request_item_t item = {0};
     TickType_t ticks;
     esp_err_t err;
 
-    if (!core || !core->started || !request || !request->user_text || request->user_text[0] == '\0') {
+    if (!core || !core->started || !request || request->request_id == 0 ||
+            !request->user_text || request->user_text[0] == '\0') {
         return (core && core->started) ? ESP_ERR_INVALID_ARG : ESP_ERR_INVALID_STATE;
     }
 
     err = clone_request_item(request, &item);
     if (err != ESP_OK) {
         return err;
-    }
-
-    if (request->flags & CLAW_CORE_REQUEST_FLAG_USER_INTERRUPT) {
-        err = try_queue_insert_request(core, &item);
-        if (err == ESP_OK) {
-            return ESP_OK;
-        }
-        if (err == ESP_ERR_NO_MEM || err == ESP_ERR_TIMEOUT) {
-            claw_core_free_request_item(&item);
-            return err;
-        }
     }
 
     ticks = (timeout_ms == UINT32_MAX) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
@@ -191,11 +189,39 @@ esp_err_t claw_core_ingress_submit(claw_core_state_t *core,
     return ESP_OK;
 }
 
-bool claw_core_ingress_dequeue_inserted_user_inputs(claw_core_state_t *core,
-                                                    const char *session_id,
-                                                    char **texts,
-                                                    size_t max_count,
-                                                    size_t *out_count)
+esp_err_t claw_core_ingress_post_message(
+    claw_core_state_t *core,
+    const claw_core_request_t *request,
+    uint32_t timeout_ms,
+    claw_core_message_receipt_t *out_receipt)
+{
+    esp_err_t err;
+
+    if (!out_receipt) return ESP_ERR_INVALID_ARG;
+    memset(out_receipt, 0, sizeof(*out_receipt));
+    if (!core || !core->started || !request || request->request_id == 0 ||
+            !request->user_text || !request->user_text[0]) {
+        return (core && core->started) ? ESP_ERR_INVALID_ARG
+                                       : ESP_ERR_INVALID_STATE;
+    }
+
+    err = try_append_message(core, request, out_receipt);
+    if (err == ESP_OK) return ESP_OK;
+    if (err == ESP_ERR_NO_MEM || err == ESP_ERR_TIMEOUT) return err;
+
+    err = claw_core_ingress_start_run(core, request, timeout_ms);
+    if (err == ESP_OK) {
+        out_receipt->disposition = CLAW_CORE_MESSAGE_QUEUED_NEW_RUN;
+        out_receipt->run_id = request->request_id;
+    }
+    return err;
+}
+
+bool claw_core_ingress_drain_run_inbox(claw_core_state_t *core,
+                                       const char *session_id,
+                                       char **texts,
+                                       size_t max_count,
+                                       size_t *out_count)
 {
     bool found = false;
 
@@ -210,29 +236,26 @@ bool claw_core_ingress_dequeue_inserted_user_inputs(claw_core_state_t *core,
     if (xSemaphoreTake(core->inflight_lock, portMAX_DELAY) != pdTRUE) {
         return false;
     }
-    while (core->insert_queue_count > 0 && *out_count < max_count) {
-        claw_core_request_item_t *item = &core->insert_queue[core->insert_queue_head];
+    while (core->run_inbox_count > 0 && *out_count < max_count) {
+        claw_core_inbox_item_t *item = &core->run_inbox[core->run_inbox_head];
 
-        if (!item->view.session_id || strcmp(item->view.session_id, session_id) != 0) {
-            break;
-        }
-        texts[*out_count] = item->owned_user_text;
-        item->owned_user_text = NULL;
-        item->view.user_text = NULL;
-        claw_core_free_request_item(item);
-        core->insert_queue_head = (core->insert_queue_head + 1) % CLAW_CORE_INSERT_QUEUE_LEN;
-        core->insert_queue_count--;
+        texts[*out_count] = item->text;
+        item->text = NULL;
+        memset(item, 0, sizeof(*item));
+        core->run_inbox_head = (core->run_inbox_head + 1) %
+                               CLAW_CORE_RUN_INBOX_CAPACITY;
+        core->run_inbox_count--;
         (*out_count)++;
         found = true;
     }
-    if (core->insert_queue_count == 0) {
-        core->insert_queue_head = 0;
+    if (core->run_inbox_count == 0) {
+        core->run_inbox_head = 0;
     }
     xSemaphoreGive(core->inflight_lock);
     return found;
 }
 
-void claw_core_ingress_clear_insert_queue_locked(claw_core_state_t *core)
+void claw_core_ingress_clear_run_inbox_locked(claw_core_state_t *core)
 {
     size_t i;
 
@@ -240,13 +263,16 @@ void claw_core_ingress_clear_insert_queue_locked(claw_core_state_t *core)
         return;
     }
 
-    for (i = 0; i < core->insert_queue_count; i++) {
-        size_t index = (core->insert_queue_head + i) % CLAW_CORE_INSERT_QUEUE_LEN;
+    for (i = 0; i < core->run_inbox_count; i++) {
+        size_t index = (core->run_inbox_head + i) %
+                       CLAW_CORE_RUN_INBOX_CAPACITY;
 
-        claw_core_free_request_item(&core->insert_queue[index]);
+        free(core->run_inbox[index].text);
+        memset(&core->run_inbox[index], 0,
+               sizeof(core->run_inbox[index]));
     }
-    core->insert_queue_head = 0;
-    core->insert_queue_count = 0;
+    core->run_inbox_head = 0;
+    core->run_inbox_count = 0;
 }
 
 void claw_core_free_response_item(claw_core_response_item_t *item)

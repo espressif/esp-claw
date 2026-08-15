@@ -690,25 +690,43 @@ static uint32_t claw_agent_mgr_next_request_id_locked(void)
     return s_mgr.next_request_id++;
 }
 
-static esp_err_t claw_agent_mgr_submit_to_agent(claw_agent_mgr_agent_t *agent,
-                                                const claw_core_request_t *request,
-                                                uint32_t timeout_ms)
+static void claw_agent_mgr_record_delivery(claw_agent_mgr_agent_t *agent,
+                                           uint32_t run_id,
+                                           esp_err_t err)
 {
-    esp_err_t err;
-
-    if (!agent || !agent->core || !request) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    err = claw_core_submit(agent->core, request, timeout_ms);
     if (err == ESP_OK) {
-        agent->last_request_id = request->request_id;
+        agent->last_request_id = run_id;
         agent->status = CLAW_AGENT_MGR_STATUS_RUNNING;
         agent->last_error[0] = '\0';
     } else {
         agent->status = CLAW_AGENT_MGR_STATUS_ERROR;
         snprintf(agent->last_error, sizeof(agent->last_error), "%s", esp_err_to_name(err));
     }
+}
 
+static esp_err_t claw_agent_mgr_start_run_to_agent(
+    claw_agent_mgr_agent_t *agent,
+    const claw_core_request_t *request,
+    uint32_t timeout_ms)
+{
+    if (!agent || !agent->core || !request) return ESP_ERR_INVALID_STATE;
+    esp_err_t err = claw_core_start_run(agent->core, request, timeout_ms);
+    claw_agent_mgr_record_delivery(agent, request->request_id, err);
+    return err;
+}
+
+static esp_err_t claw_agent_mgr_post_message_to_agent(
+    claw_agent_mgr_agent_t *agent,
+    const claw_core_request_t *request,
+    uint32_t timeout_ms,
+    claw_core_message_receipt_t *out_receipt)
+{
+    if (!agent || !agent->core || !request || !out_receipt) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t err = claw_core_post_message(agent->core, request, timeout_ms,
+                                           out_receipt);
+    claw_agent_mgr_record_delivery(agent, out_receipt->run_id, err);
     return err;
 }
 
@@ -759,8 +777,7 @@ static void claw_agent_mgr_completion_observer(const claw_core_completion_summar
     if (root && root->core) {
         request.request_id = claw_agent_mgr_next_request_id_locked();
         request.flags = CLAW_CORE_REQUEST_FLAG_PUBLISH_OUT_MESSAGE |
-                        CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE |
-                        CLAW_CORE_REQUEST_FLAG_USER_INTERRUPT;
+                        CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE;
         request.session_id = agent->parent_session_id;
         request.user_text = text;
         request.source_channel = agent->parent_source_channel;
@@ -768,13 +785,17 @@ static void claw_agent_mgr_completion_observer(const claw_core_completion_summar
         request.source_cap = "cap_agent_mgr";
         request.target_channel = agent->parent_target_channel;
         request.target_chat_id = agent->parent_target_chat_id;
-        (void)claw_agent_mgr_submit_to_agent(root, &request, 1000);
+        claw_core_message_receipt_t receipt = {0};
+        (void)claw_agent_mgr_post_message_to_agent(root, &request, 1000,
+                                                   &receipt);
     }
     claw_agent_mgr_unlock();
 }
 
-esp_err_t claw_agent_mgr_submit_root(const claw_agent_mgr_root_input_t *input,
-                                     uint32_t timeout_ms)
+esp_err_t claw_agent_mgr_post_root_message(
+    const claw_agent_mgr_root_input_t *input,
+    uint32_t timeout_ms,
+    claw_core_message_receipt_t *out_receipt)
 {
     claw_agent_mgr_agent_t *root = NULL;
     claw_core_request_t request = {0};
@@ -782,7 +803,7 @@ esp_err_t claw_agent_mgr_submit_root(const claw_agent_mgr_root_input_t *input,
     size_t session_id_len = 0;
     esp_err_t err;
 
-    if (!input || !input->user_text || !input->user_text[0]) {
+    if (!input || !input->user_text || !input->user_text[0] || !out_receipt) {
         return ESP_ERR_INVALID_ARG;
     }
     if (!claw_agent_mgr_is_ready()) {
@@ -815,16 +836,17 @@ esp_err_t claw_agent_mgr_submit_root(const claw_agent_mgr_root_input_t *input,
     request.source_cap = input->source_cap;
     request.target_channel = input->target_channel;
     request.target_chat_id = input->target_chat_id;
-    err = claw_agent_mgr_submit_to_agent(root, &request, timeout_ms);
+    err = claw_agent_mgr_post_message_to_agent(root, &request, timeout_ms,
+                                               out_receipt);
     claw_agent_mgr_unlock();
     return err;
 }
 
-esp_err_t claw_agent_mgr_submit_root_text(const char *text,
-                                          const char *session_id,
-                                          uint32_t flags,
-                                          uint32_t timeout_ms,
-                                          uint32_t *out_request_id)
+esp_err_t claw_agent_mgr_start_root_run_text(const char *text,
+                                             const char *session_id,
+                                             uint32_t flags,
+                                             uint32_t timeout_ms,
+                                             uint32_t *out_request_id)
 {
     claw_agent_mgr_agent_t *root = NULL;
     claw_core_request_t request = {0};
@@ -848,7 +870,7 @@ esp_err_t claw_agent_mgr_submit_root_text(const char *text,
     request.flags = flags;
     request.session_id = (session_id && session_id[0]) ? session_id : NULL;
     request.user_text = text;
-    err = claw_agent_mgr_submit_to_agent(root, &request, timeout_ms);
+    err = claw_agent_mgr_start_run_to_agent(root, &request, timeout_ms);
     if (err == ESP_OK && out_request_id) {
         *out_request_id = request.request_id;
     }
@@ -866,6 +888,20 @@ esp_err_t claw_agent_mgr_receive_root_for(uint32_t request_id,
         return ESP_ERR_INVALID_STATE;
     }
     return claw_core_receive_for(core, request_id, response, timeout_ms);
+}
+
+esp_err_t claw_agent_mgr_cancel_root_request(uint32_t request_id)
+{
+    claw_core_handle_t core;
+
+    if (request_id == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    core = claw_agent_mgr_get_root_core();
+    if (!core) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return claw_core_cancel_request(core, request_id);
 }
 
 static bool claw_agent_mgr_ctx_is_root_agent(const claw_cap_call_context_t *ctx)
@@ -956,7 +992,7 @@ esp_err_t claw_agent_mgr_spawn_subagent(const claw_cap_call_context_t *parent_ct
         request.source_channel = parent_ctx->channel;
         request.source_chat_id = parent_ctx->chat_id;
         request.source_cap = "cap_agent_mgr";
-        err = claw_agent_mgr_submit_to_agent(agent, &request, 1000);
+        err = claw_agent_mgr_start_run_to_agent(agent, &request, 1000);
     }
     if (err != ESP_OK) {
         if (agent->core) {
@@ -1052,14 +1088,19 @@ esp_err_t claw_agent_mgr_send_subagent_input(const claw_cap_call_context_t *ctx,
     }
     if (err == ESP_OK) {
         request.request_id = claw_agent_mgr_next_request_id_locked();
-        request.flags = CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE |
-                        (interrupt ? CLAW_CORE_REQUEST_FLAG_USER_INTERRUPT : 0);
+        request.flags = CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE;
         request.session_id = agent->session_id;
         request.user_text = input;
         request.source_channel = ctx->channel;
         request.source_chat_id = ctx->chat_id;
         request.source_cap = "cap_agent_mgr";
-        err = claw_agent_mgr_submit_to_agent(agent, &request, 1000);
+        if (interrupt) {
+            claw_core_message_receipt_t receipt = {0};
+            err = claw_agent_mgr_post_message_to_agent(
+                agent, &request, 1000, &receipt);
+        } else {
+            err = claw_agent_mgr_start_run_to_agent(agent, &request, 1000);
+        }
     }
     claw_agent_mgr_unlock();
     return err;

@@ -152,11 +152,9 @@ static int submit_and_print(const char *prompt, const char *session_id)
         return 1;
     }
 
-    err = claw_agent_mgr_submit_root_text(prompt,
-                                          session_id,
-                                          CLAW_CORE_REQUEST_FLAG_PUBLISH_STAGE_MESSAGE,
-                                          5000,
-                                          &request_id);
+    err = claw_agent_mgr_start_root_run_text(
+        prompt, session_id, CLAW_CORE_REQUEST_FLAG_PUBLISH_STAGE_MESSAGE,
+        5000, &request_id);
     if (err != ESP_OK) {
         printf("submit failed: %s\n", esp_err_to_name(err));
         return 1;

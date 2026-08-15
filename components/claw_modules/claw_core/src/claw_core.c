@@ -55,7 +55,7 @@ static void claw_core_free_runtime(claw_core_state_t *core)
     }
     if (core->inflight_lock) {
         if (xSemaphoreTake(core->inflight_lock, portMAX_DELAY) == pdTRUE) {
-            claw_core_ingress_clear_insert_queue_locked(core);
+            claw_core_ingress_clear_run_inbox_locked(core);
             xSemaphoreGive(core->inflight_lock);
         }
         vSemaphoreDelete(core->inflight_lock);
@@ -344,11 +344,20 @@ claw_core_agent_loop_phase_t claw_core_get_agent_loop_phase(claw_core_handle_t c
     return claw_core_control_get_phase(core);
 }
 
-esp_err_t claw_core_submit(claw_core_handle_t core,
-                           const claw_core_request_t *request,
-                           uint32_t timeout_ms)
+esp_err_t claw_core_start_run(claw_core_handle_t core,
+                              const claw_core_request_t *request,
+                              uint32_t timeout_ms)
 {
-    return claw_core_ingress_submit(core, request, timeout_ms);
+    return claw_core_ingress_start_run(core, request, timeout_ms);
+}
+
+esp_err_t claw_core_post_message(claw_core_handle_t core,
+                                 const claw_core_request_t *request,
+                                 uint32_t timeout_ms,
+                                 claw_core_message_receipt_t *out_receipt)
+{
+    return claw_core_ingress_post_message(core, request, timeout_ms,
+                                          out_receipt);
 }
 
 esp_err_t claw_core_receive(claw_core_handle_t core,

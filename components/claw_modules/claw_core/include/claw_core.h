@@ -38,7 +38,6 @@ typedef enum {
 
 #define CLAW_CORE_REQUEST_FLAG_PUBLISH_OUT_MESSAGE (1U << 0)
 #define CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE (1U << 1)
-#define CLAW_CORE_REQUEST_FLAG_USER_INTERRUPT      (1U << 2)
 #define CLAW_CORE_REQUEST_FLAG_PUBLISH_STAGE_MESSAGE  (1U << 3)
 
 #define CLAW_CORE_CONTEXT_PROVIDER_FLAG_REQUEST_START_ONLY (1U << 0)
@@ -58,6 +57,19 @@ typedef struct {
     const char *target_channel;
     const char *target_chat_id;
 } claw_core_request_t;
+
+typedef enum {
+    /** The message starts a new run, immediately or after an older run. */
+    CLAW_CORE_MESSAGE_QUEUED_NEW_RUN = 0,
+    /** The message was appended to the inbox of the active run. */
+    CLAW_CORE_MESSAGE_APPENDED_TO_RUN,
+} claw_core_message_disposition_t;
+
+typedef struct {
+    claw_core_message_disposition_t disposition;
+    /** Run that owns the message. This can differ from request.request_id. */
+    uint32_t run_id;
+} claw_core_message_receipt_t;
 
 typedef enum {
     CLAW_CORE_CONTEXT_RECORD_USER = 1,
@@ -194,9 +206,21 @@ esp_err_t claw_core_add_completion_observer(claw_core_handle_t core,
                                             claw_core_completion_observer_fn observer,
                                             void *user_ctx);
 esp_err_t claw_core_publish_stage_text(const claw_core_request_t *request, const char *text);
-esp_err_t claw_core_submit(claw_core_handle_t core,
-                           const claw_core_request_t *request,
-                           uint32_t timeout_ms);
+/** Queue an explicitly independent Agent run. */
+esp_err_t claw_core_start_run(claw_core_handle_t core,
+                              const claw_core_request_t *request,
+                              uint32_t timeout_ms);
+/**
+ * Deliver a conversation message.
+ *
+ * A message for the session currently owned by an inbox-accepting run is put in
+ * that run's inbox. Otherwise it starts a new run. Callers therefore never
+ * need a separate submit/append decision or a racy active-state query.
+ */
+esp_err_t claw_core_post_message(claw_core_handle_t core,
+                                 const claw_core_request_t *request,
+                                 uint32_t timeout_ms,
+                                 claw_core_message_receipt_t *out_receipt);
 esp_err_t claw_core_cancel_request(claw_core_handle_t core, uint32_t request_id);
 claw_core_agent_loop_phase_t claw_core_get_agent_loop_phase(claw_core_handle_t core);
 esp_err_t claw_core_receive(claw_core_handle_t core,

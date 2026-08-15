@@ -185,6 +185,7 @@ void claw_core_publish_out_message_if_requested(const claw_core_request_item_t *
 esp_err_t claw_core_publish_stage_text(const claw_core_request_t *request, const char *text)
 {
     claw_event_t event = {0};
+    char payload_json[96];
     int64_t now_ms;
     esp_err_t err;
 
@@ -210,6 +211,21 @@ esp_err_t claw_core_publish_stage_text(const claw_core_request_t *request, const
     if (err != ESP_OK) {
         return err;
     }
+    snprintf(event.message_id,
+             sizeof(event.message_id),
+             "agent-stage-%" PRIu32 "-%" PRId64,
+             request->request_id,
+             now_ms);
+    if (request->source_message_id && request->source_message_id[0]) {
+        strlcpy(event.correlation_id,
+                request->source_message_id,
+                sizeof(event.correlation_id));
+    }
+    snprintf(payload_json,
+             sizeof(payload_json),
+             "{\"request_id\":%" PRIu32 ",\"status\":\"running\"}",
+             request->request_id);
+    event.payload_json = payload_json;
 
     esp_err_t pub_err = claw_event_router_publish(&event);
     if (pub_err != ESP_OK) {

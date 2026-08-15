@@ -1782,6 +1782,8 @@ static esp_err_t claw_event_router_execute_agent_action(
     claw_event_t agent_event = {0};
     claw_agent_mgr_root_input_t agent_input = {0};
     char submit_output[32] = {0};
+    char accepted_payload[128] = {0};
+    claw_core_message_receipt_t receipt = {0};
     esp_err_t err;
 
     input_root = cJSON_Parse(action->input_json);
@@ -1808,8 +1810,7 @@ static esp_err_t claw_event_router_execute_agent_action(
     agent_input.session_policy = agent_event.session_policy;
     agent_input.flags = CLAW_CORE_REQUEST_FLAG_PUBLISH_OUT_MESSAGE |
                         CLAW_CORE_REQUEST_FLAG_PUBLISH_STAGE_MESSAGE |
-                        CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE |
-                        CLAW_CORE_REQUEST_FLAG_USER_INTERRUPT;
+                        CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE;
     agent_input.request_id = s_runtime->next_request_id++;
     agent_input.user_text = (text && text[0]) ? text : (event->text ? event->text : "");
     agent_input.source_cap = event->source_cap;
@@ -1822,16 +1823,66 @@ static esp_err_t claw_event_router_execute_agent_action(
     agent_input.target_channel = (target_channel && target_channel[0]) ? target_channel : event->source_channel;
     agent_input.target_chat_id = (target_chat_id && target_chat_id[0]) ? target_chat_id : event->chat_id;
 
-    err = claw_agent_mgr_submit_root(&agent_input,
-                                     s_runtime->config.agent_submit_timeout_ms);
+    err = claw_agent_mgr_post_root_message(
+        &agent_input, s_runtime->config.agent_submit_timeout_ms, &receipt);
 
     if (err == ESP_OK) {
-        snprintf(submit_output, sizeof(submit_output), "request_id=%" PRIu32, agent_input.request_id);
+        snprintf(submit_output, sizeof(submit_output), "run_id=%" PRIu32,
+                 receipt.run_id);
         claw_event_router_update_last_output(ctx,
                                              "agent",
                                              agent_input.target_channel,
                                              "submitted",
                                              submit_output);
+        snprintf(agent_event.event_id,
+                 sizeof(agent_event.event_id),
+                 "agent-accepted-%" PRIu32,
+                 agent_input.request_id);
+        strlcpy(agent_event.source_cap,
+                "claw_agent_mgr",
+                sizeof(agent_event.source_cap));
+        strlcpy(agent_event.event_type,
+                "agent_accepted",
+                sizeof(agent_event.event_type));
+        strlcpy(agent_event.source_channel,
+                agent_input.target_channel ? agent_input.target_channel : "",
+                sizeof(agent_event.source_channel));
+        strlcpy(agent_event.chat_id,
+                agent_input.target_chat_id ? agent_input.target_chat_id : "",
+                sizeof(agent_event.chat_id));
+        snprintf(agent_event.message_id,
+                 sizeof(agent_event.message_id),
+                 "agent-accepted-%" PRIu32,
+                 agent_input.request_id);
+        if (event->message_id[0]) {
+            strlcpy(agent_event.correlation_id,
+                    event->message_id,
+                    sizeof(agent_event.correlation_id));
+        }
+        strlcpy(agent_event.content_type, "text", sizeof(agent_event.content_type));
+        agent_event.timestamp_ms = claw_event_router_now_ms();
+        agent_event.session_policy = CLAW_SESSION_POLICY_CHAT;
+        agent_event.text = "accepted";
+        snprintf(accepted_payload,
+                 sizeof(accepted_payload),
+                 "{\"run_id\":%" PRIu32
+                 ",\"status\":\"accepted\",\"disposition\":\"%s\"}",
+                 receipt.run_id,
+                 receipt.disposition == CLAW_CORE_MESSAGE_APPENDED_TO_RUN
+                     ? "appended"
+                     : "new_run");
+        agent_event.payload_json = accepted_payload;
+        {
+            esp_err_t publish_err = claw_event_router_publish(&agent_event);
+            if (publish_err != ESP_OK) {
+                ESP_LOGW(TAG,
+                         "Failed to publish agent accepted message=%" PRIu32
+                         " run=%" PRIu32 ": %s",
+                         agent_input.request_id,
+                         receipt.run_id,
+                         esp_err_to_name(publish_err));
+            }
+        }
     } else {
         claw_event_router_update_last_output(ctx, "agent", agent_input.target_channel, "error",
                                              esp_err_to_name(err));
