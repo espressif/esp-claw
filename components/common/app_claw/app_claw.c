@@ -698,6 +698,8 @@ static esp_err_t build_storage_paths(app_claw_storage_paths_t *paths)
                         TAG, "lua root path too long");
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "router_rules/router_rules.json", paths->router_rules_path, sizeof(paths->router_rules_path)),
                         TAG, "router rules path too long");
+    ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_SYSTEM, ".recovery/router_rules/router_rules.json", paths->router_recovery_path, sizeof(paths->router_recovery_path)),
+                        TAG, "router recovery path too long");
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "scheduler/schedules.json", paths->scheduler_rules_path, sizeof(paths->scheduler_rules_path)),
                         TAG, "scheduler rules path too long");
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "inbox", paths->im_attachment_root, sizeof(paths->im_attachment_root)),
@@ -744,6 +746,7 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
 #if CONFIG_APP_CLAW_CAP_EVENT_ROUTER
     router_config.default_route_messages_to_agent = true;
     router_config.rules_path = paths.router_rules_path;
+    router_config.recovery_rules_path = paths.router_recovery_path;
 #endif
 
 #if CONFIG_APP_CLAW_CAP_SESSION_MGR

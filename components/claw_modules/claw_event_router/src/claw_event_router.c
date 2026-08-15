@@ -45,6 +45,9 @@ static const char *TAG = "claw_event_router";
 #define CLAW_EVENT_ROUTER_cap_SIZE          64
 #define CLAW_EVENT_ROUTER_BINDING_SIZE             16
 #define CLAW_EVENT_ROUTER_PENDING_TABLE_SIZE        6
+#define CLAW_EVENT_ROUTER_PATH_SIZE                192
+#define CLAW_EVENT_ROUTER_QUARANTINE_SUFFIX       ".bad"
+#define CLAW_EVENT_ROUTER_PREVIOUS_SUFFIX         ".prev"
 _Static_assert(CLAW_EVENT_ROUTER_PENDING_TABLE_SIZE >= CLAW_EVENT_ROUTER_DEFAULT_QUEUE_LEN,
                "pending table must cover the default event queue length");
 
@@ -77,7 +80,8 @@ typedef struct {
     bool event_queue_with_caps;
     TaskHandle_t task_handle;
     uint32_t next_request_id;
-    char rules_path[192];
+    char rules_path[CLAW_EVENT_ROUTER_PATH_SIZE];
+    char recovery_rules_path[CLAW_EVENT_ROUTER_PATH_SIZE];
     size_t max_rules;
     size_t max_actions_per_rule;
     size_t cap_output_size;
@@ -99,6 +103,8 @@ static esp_err_t claw_event_router_load_rules_from_file(const char *path,
                                                         size_t *out_rule_count,
                                                         cJSON **out_root);
 static esp_err_t claw_event_router_write_rules_json_file(const char *path, const char *json);
+static esp_err_t claw_event_router_recover_rules(claw_event_router_rule_t **out_rules,
+                                                 size_t *out_rule_count);
 static esp_err_t claw_event_router_commit_rules(cJSON *root,
                                                 claw_event_router_rule_t *new_rules,
                                                 size_t new_rule_count);
@@ -1122,6 +1128,107 @@ static esp_err_t claw_event_router_write_rules_json_file(const char *path, const
         ESP_LOGE(TAG, "Failed to rename %s to %s errno=%d", temp_path, path, errno);
         return ESP_FAIL;
     }
+    return ESP_OK;
+}
+
+static esp_err_t claw_event_router_quarantine_rules(void)
+{
+    char bad_path[CLAW_EVENT_ROUTER_PATH_SIZE + sizeof(CLAW_EVENT_ROUTER_QUARANTINE_SUFFIX)];
+    char previous_path[sizeof(bad_path) + sizeof(CLAW_EVENT_ROUTER_PREVIOUS_SUFFIX)];
+    struct stat st = {0};
+
+    if (snprintf(bad_path, sizeof(bad_path), "%s%s",
+                 s_runtime->rules_path,
+                 CLAW_EVENT_ROUTER_QUARANTINE_SUFFIX) >= (int)sizeof(bad_path) ||
+        snprintf(previous_path, sizeof(previous_path), "%s%s",
+                 bad_path,
+                 CLAW_EVENT_ROUTER_PREVIOUS_SUFFIX) >= (int)sizeof(previous_path)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    if (stat(bad_path, &st) == 0) {
+        if (remove(previous_path) != 0 && errno != ENOENT) {
+            ESP_LOGE(TAG, "Failed to remove old router quarantine %s errno=%d",
+                     previous_path, errno);
+            return ESP_FAIL;
+        }
+        if (rename(bad_path, previous_path) != 0) {
+            ESP_LOGE(TAG, "Failed to rotate router quarantine %s errno=%d",
+                     bad_path, errno);
+            return ESP_FAIL;
+        }
+    } else if (errno != ENOENT) {
+        ESP_LOGE(TAG, "Failed to inspect router quarantine %s errno=%d",
+                 bad_path, errno);
+        return ESP_FAIL;
+    }
+
+    if (rename(s_runtime->rules_path, bad_path) != 0) {
+        ESP_LOGE(TAG, "Failed to quarantine router rules %s errno=%d",
+                 s_runtime->rules_path, errno);
+        return ESP_FAIL;
+    }
+    ESP_LOGW(TAG, "Quarantined invalid router rules: %s", bad_path);
+    return ESP_OK;
+}
+
+static esp_err_t claw_event_router_recover_rules(claw_event_router_rule_t **out_rules,
+                                                 size_t *out_rule_count)
+{
+    claw_event_router_rule_t *recovery_rules = NULL;
+    size_t recovery_rule_count = 0;
+    char *recovery_json = NULL;
+    cJSON *root = NULL;
+    esp_err_t err;
+
+    if (!out_rules || !out_rule_count || !s_runtime->recovery_rules_path[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_rules = NULL;
+    *out_rule_count = 0;
+
+    /* Validate the recovery source before touching the failed primary. */
+    err = claw_event_router_read_file(s_runtime->recovery_rules_path,
+                                      &recovery_json);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read recovery router rules %s: %s",
+                 s_runtime->recovery_rules_path, esp_err_to_name(err));
+        return err;
+    }
+    root = cJSON_Parse(recovery_json);
+    if (!root) {
+        free(recovery_json);
+        ESP_LOGE(TAG, "Recovery router rules are invalid JSON: %s",
+                 s_runtime->recovery_rules_path);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    err = claw_event_router_load_rules_from_root(root,
+                                                 &recovery_rules,
+                                                 &recovery_rule_count);
+    cJSON_Delete(root);
+    if (err != ESP_OK) {
+        free(recovery_json);
+        ESP_LOGE(TAG, "Recovery router rules failed validation: %s",
+                 esp_err_to_name(err));
+        return err;
+    }
+
+    err = claw_event_router_quarantine_rules();
+    if (err == ESP_OK) {
+        err = claw_event_router_write_rules_json_file(s_runtime->rules_path,
+                                                      recovery_json);
+    }
+    free(recovery_json);
+    if (err != ESP_OK) {
+        claw_event_router_free_rule_list(recovery_rules,
+                                         recovery_rule_count);
+        return err;
+    }
+
+    ESP_LOGW(TAG, "Restored router rules from recovery: %s",
+             s_runtime->recovery_rules_path);
+    *out_rules = recovery_rules;
+    *out_rule_count = recovery_rule_count;
     return ESP_OK;
 }
 
@@ -2419,6 +2526,11 @@ esp_err_t claw_event_router_init(const claw_event_router_config_t *config)
         s_runtime->config = *config;
     }
     strlcpy(s_runtime->rules_path, config->rules_path, sizeof(s_runtime->rules_path));
+    if (config->recovery_rules_path) {
+        strlcpy(s_runtime->recovery_rules_path,
+                config->recovery_rules_path,
+                sizeof(s_runtime->recovery_rules_path));
+    }
     if (config && config->max_rules > 0) {
         s_runtime->max_rules = config->max_rules;
     }
@@ -2451,6 +2563,21 @@ esp_err_t claw_event_router_init(const claw_event_router_config_t *config)
              s_runtime->event_queue_with_caps ? "PSRAM" : "internal");
     {
         esp_err_t err = claw_event_router_reload();
+        if (err != ESP_OK && s_runtime->recovery_rules_path[0]) {
+            claw_event_router_rule_t *recovery_rules = NULL;
+            size_t recovery_rule_count = 0;
+
+            ESP_LOGE(TAG, "Failed to load router rules %s: %s; attempting recovery",
+                     s_runtime->rules_path, esp_err_to_name(err));
+            err = claw_event_router_recover_rules(&recovery_rules,
+                                                  &recovery_rule_count);
+            if (err == ESP_OK) {
+                claw_event_router_lock();
+                s_runtime->rules = recovery_rules;
+                s_runtime->rule_count = recovery_rule_count;
+                claw_event_router_unlock();
+            }
+        }
         if (err != ESP_OK) {
             claw_event_router_free_runtime();
             return err;

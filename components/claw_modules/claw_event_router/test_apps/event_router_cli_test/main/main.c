@@ -31,11 +31,15 @@ static const char *TAG = "event_router_test";
 #define TEST_FATFS_PARTITION_LABEL "storage"
 #define TEST_AUTOMATION_DIR        TEST_FATFS_BASE_PATH "/auto"
 #define TEST_RULES_PATH            TEST_AUTOMATION_DIR "/rules"
+#define TEST_RECOVERY_RULES_PATH   TEST_AUTOMATION_DIR "/recovery_rules"
+#define TEST_BAD_RULES_PATH        TEST_RULES_PATH ".bad"
 
 static wl_handle_t s_wl_handle = WL_INVALID_HANDLE;
 
 static const char *s_seed_rules_json =
     "[]\n";
+static const char *s_bad_rules_json =
+    "{broken-router-rules";
 
 static esp_err_t init_nvs(void)
 {
@@ -113,7 +117,24 @@ static esp_err_t write_text_file(const char *path, const char *content)
 static esp_err_t prepare_rules_file(void)
 {
     ESP_RETURN_ON_ERROR(ensure_dir(TEST_AUTOMATION_DIR), TAG, "Failed to prepare automation dir");
-    return write_text_file(TEST_RULES_PATH, s_seed_rules_json);
+    (void)remove(TEST_BAD_RULES_PATH);
+    ESP_RETURN_ON_ERROR(write_text_file(TEST_RECOVERY_RULES_PATH, s_seed_rules_json),
+                        TAG, "Failed to prepare recovery rules");
+    return write_text_file(TEST_RULES_PATH, s_bad_rules_json);
+}
+
+static bool file_equals(const char *path, const char *expected)
+{
+    char buffer[64] = {0};
+    FILE *file = fopen(path, "rb");
+    if (!file) {
+        return false;
+    }
+    size_t read_bytes = fread(buffer, 1, sizeof(buffer) - 1, file);
+    bool at_eof = feof(file) != 0;
+    fclose(file);
+    buffer[read_bytes] = '\0';
+    return at_eof && strcmp(buffer, expected) == 0;
 }
 
 static esp_err_t init_console(void)
@@ -136,6 +157,7 @@ static esp_err_t init_event_router(void)
 {
     claw_event_router_config_t config = {
         .rules_path = TEST_RULES_PATH,
+        .recovery_rules_path = TEST_RECOVERY_RULES_PATH,
         .event_queue_len = 4,
         .task_stack_size = 4096,
         .task_priority = 4,
@@ -144,6 +166,10 @@ static esp_err_t init_event_router(void)
     };
 
     ESP_RETURN_ON_ERROR(claw_event_router_init(&config), TAG, "Failed to init event router");
+    ESP_RETURN_ON_FALSE(file_equals(TEST_RULES_PATH, s_seed_rules_json),
+                        ESP_FAIL, TAG, "Recovery rules were not installed");
+    ESP_RETURN_ON_FALSE(file_equals(TEST_BAD_RULES_PATH, s_bad_rules_json),
+                        ESP_FAIL, TAG, "Invalid rules were not quarantined");
     return claw_event_router_start();
 }
 
