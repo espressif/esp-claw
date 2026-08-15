@@ -5,6 +5,8 @@
  */
 #pragma once
 
+#include <stdint.h>
+
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -31,6 +33,11 @@ const char *app_fs_storage_base_path(void);
  * @return Mount-point string owned by this module (never NULL).
  */
 const char *app_fs_system_base_path(void);
+
+/** Query total and free bytes for the active writable filesystem. */
+esp_err_t app_fs_get_storage_space(void *ctx,
+                                   uint64_t *total_bytes,
+                                   uint64_t *free_bytes);
 
 /**
  * @brief  Initialize all filesystems.

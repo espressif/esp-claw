@@ -413,6 +413,9 @@ void app_main(void)
      * without knowing whether data lives on flash or an SD card. */
     ESP_ERROR_CHECK(claw_paths_set(CLAW_PATH_DATA, app_fs_storage_base_path()));
     ESP_ERROR_CHECK(claw_paths_set(CLAW_PATH_SYSTEM, app_fs_system_base_path()));
+    ESP_ERROR_CHECK(claw_paths_set_space_provider(CLAW_PATH_DATA,
+                                                  app_fs_get_storage_space,
+                                                  NULL));
 
     ESP_ERROR_CHECK(wifi_manager_init());
 
