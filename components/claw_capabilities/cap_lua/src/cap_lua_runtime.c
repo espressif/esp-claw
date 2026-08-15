@@ -342,6 +342,22 @@ bool cap_lua_runtime_stop_requested(lua_State *L)
     return ctx && ctx->stop_requested && *ctx->stop_requested;
 }
 
+bool cap_lua_runtime_request_stop(lua_State *L)
+{
+    cap_lua_exec_ctx_t *ctx = NULL;
+
+    if (!L) {
+        return false;
+    }
+
+    ctx = cap_lua_get_exec_ctx(L);
+    if (!ctx || !ctx->stop_requested) {
+        return false;
+    }
+    *ctx->stop_requested = true;
+    return true;
+}
+
 static void cap_lua_load_registered_modules(lua_State *L)
 {
     size_t i;

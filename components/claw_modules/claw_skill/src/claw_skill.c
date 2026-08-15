@@ -17,11 +17,14 @@
 #include "cJSON.h"
 #include "esp_log.h"
 #include "esp_check.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "claw_skill.h"
 
 static const char *TAG = "claw_skill";
 static const char *SKILL_FRONTMATTER_DELIM = "---";
 static const char *SKILL_DOCUMENT_NAME = "SKILL.md";
+static const char *SKILL_LAUNCHER_DEFINITION_NAME = "launcher.json";
 static const char *SKILL_MANAGE_MODE_READONLY = "readonly";
 static const char *SKILL_MANAGE_MODE_WEB = "web";
 static const char *SKILL_MANAGE_MODE_RUNTIME = "runtime";
@@ -31,6 +34,9 @@ static const char *SKILL_EXECUTION_ICON_JPEG_EXT = ".jpeg";
 
 #define CLAW_SKILL_MAX_FILES         64  /* hard cap on registry entries across all directories */
 #define CLAW_SKILL_MAX_PATH          192
+#define CLAW_SKILL_MAX_REGISTRY_LISTENERS 4
+#define CLAW_SKILL_WORK_FILE_MAX_BYTES 4096
+#define CLAW_SKILL_WORK_SCHEMA_VERSION 1
 
 #ifdef CONFIG_CLAW_SKILL_DEBUG_LOG
 #define CLAW_SKILL_DIAGI(...) ESP_LOGI(TAG, __VA_ARGS__)
@@ -42,8 +48,10 @@ typedef struct {
     char *entry;
     char *icon;
     char *args_json;
+    char *exclusive;
     int order;
     bool visible;
+    bool replace;
 } claw_skill_execution_owned_t;
 
 typedef struct {
@@ -61,6 +69,11 @@ typedef struct {
 } claw_skill_registry_entry_t;
 
 typedef struct {
+    claw_skill_registry_changed_cb_t callback;
+    void *user_ctx;
+} claw_skill_registry_listener_t;
+
+typedef struct {
     int initialized;
     char **roots;        /* dynamic list of skills directories; roots[0] is the primary writable root */
     size_t root_count;
@@ -68,6 +81,10 @@ typedef struct {
     size_t max_file_bytes;
     claw_skill_registry_entry_t *entries;
     size_t entry_count;
+    SemaphoreHandle_t registry_lock;
+    uint32_t registry_revision;
+    claw_skill_registry_listener_t
+        registry_listeners[CLAW_SKILL_MAX_REGISTRY_LISTENERS];
 } claw_skill_state_t;
 
 static claw_skill_state_t *s_skill = NULL;
@@ -78,7 +95,28 @@ static esp_err_t load_registry_dir_recursive(const char *root_dir,
                                              const char *relative_dir,
                                              claw_skill_registry_entry_t **entries,
                                              size_t *entry_count);
-static esp_err_t parse_skill_document_metadata(const char *filename, const char *text, int default_order, claw_skill_registry_entry_t *entry);
+static esp_err_t parse_skill_document_metadata(const char *filename, const char *text, claw_skill_registry_entry_t *entry);
+static esp_err_t load_skill_work_definition(claw_skill_registry_entry_t *entry, int default_order);
+static esp_err_t claw_skill_reload_registry_locked(void);
+
+static void claw_skill_notify_registry_changed(uint32_t revision)
+{
+    claw_skill_registry_listener_t
+        listeners[CLAW_SKILL_MAX_REGISTRY_LISTENERS] = {0};
+
+    if (!s_skill || !s_skill->registry_lock || revision == 0) {
+        return;
+    }
+    xSemaphoreTake(s_skill->registry_lock, portMAX_DELAY);
+    memcpy(listeners, s_skill->registry_listeners, sizeof(listeners));
+    xSemaphoreGive(s_skill->registry_lock);
+
+    for (size_t i = 0; i < CLAW_SKILL_MAX_REGISTRY_LISTENERS; i++) {
+        if (listeners[i].callback) {
+            listeners[i].callback(revision, listeners[i].user_ctx);
+        }
+    }
+}
 
 static void safe_copy(char *dst, size_t dst_size, const char *src)
 {
@@ -147,6 +185,7 @@ static void free_execution(claw_skill_execution_owned_t *execution)
     free(execution->entry);
     free(execution->icon);
     free(execution->args_json);
+    free(execution->exclusive);
     memset(execution, 0, sizeof(*execution));
 }
 
@@ -195,6 +234,9 @@ static void claw_skill_reset(void)
         free(s_skill->roots[i]);
     }
     free(s_skill->roots);
+    if (s_skill->registry_lock) {
+        vSemaphoreDelete(s_skill->registry_lock);
+    }
     memset(s_skill, 0, sizeof(*s_skill));
     free(s_skill);
     s_skill = NULL;
@@ -619,54 +661,154 @@ static esp_err_t json_dup_optional_string(cJSON *object, const char *key, char *
     return *out_value ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
-static esp_err_t parse_skill_execution(cJSON *root, claw_skill_registry_entry_t *entry, int default_order)
+static bool work_definition_key_is_allowed(const char *key)
 {
-    cJSON *execution = NULL;
+    static const char *const keys[] = {
+        "schema_version", "entry", "icon", "args", "exclusive",
+        "order", "visible", "replace",
+    };
+
+    if (!key) {
+        return false;
+    }
+    for (size_t i = 0; i < sizeof(keys) / sizeof(keys[0]); i++) {
+        if (strcmp(key, keys[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static esp_err_t load_skill_work_definition(claw_skill_registry_entry_t *entry, int default_order)
+{
+    char *work_path = NULL;
+    char *work_text = NULL;
+    cJSON *work = NULL;
+    cJSON *schema_version = NULL;
     cJSON *order = NULL;
     cJSON *visible = NULL;
+    cJSON *replace = NULL;
+    cJSON *field = NULL;
     char *relative_entry = NULL;
     char *relative_icon = NULL;
     char *args_json = NULL;
+    char *exclusive = NULL;
     char *absolute_entry = NULL;
     char *absolute_icon = NULL;
-    esp_err_t err;
+    struct stat st = {0};
+    esp_err_t err = ESP_OK;
 
-    if (!root || !entry || !entry->skill_dir) {
+    if (!entry || !entry->skill_dir) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    execution = cJSON_GetObjectItemCaseSensitive(root, "execution");
-    if (!execution || cJSON_IsNull(execution)) {
-        return ESP_OK;
+    work_path = build_skill_payload_path_dup(entry->skill_dir, SKILL_LAUNCHER_DEFINITION_NAME);
+    if (!work_path) {
+        return ESP_ERR_NO_MEM;
     }
-    if (!cJSON_IsObject(execution)) {
-        ESP_LOGW(TAG, "skip invalid execution object: %s", entry->id ? entry->id : "(null)");
-        return ESP_OK;
+    if (stat(work_path, &st) != 0) {
+        free(work_path);
+        return errno == ENOENT ? ESP_OK : ESP_FAIL;
+    }
+    if (!S_ISREG(st.st_mode)) {
+        ESP_LOGE(TAG, "work definition is not a file: id=%s path=%s",
+                 entry->id ? entry->id : "(null)", work_path);
+        free(work_path);
+        return ESP_ERR_INVALID_ARG;
     }
 
-    err = json_dup_required_string(execution, "entry", &relative_entry);
-    if (err != ESP_OK || !skill_payload_path_is_valid(relative_entry, SKILL_EXECUTION_ENTRY_EXT)) {
-        ESP_LOGW(TAG, "skip invalid execution entry: id=%s entry=%s", entry->id ? entry->id : "(null)", relative_entry ? relative_entry : "(null)");
-        err = ESP_OK;
+    err = read_file_dup(work_path, CLAW_SKILL_WORK_FILE_MAX_BYTES, &work_text);
+    if (err != ESP_OK) {
+        goto cleanup;
+    }
+    work = cJSON_ParseWithOpts(work_text, NULL, true);
+    if (!cJSON_IsObject(work)) {
+        ESP_LOGE(TAG, "invalid work definition json: id=%s path=%s",
+                 entry->id ? entry->id : "(null)", work_path);
+        err = ESP_ERR_INVALID_ARG;
+        goto cleanup;
+    }
+    cJSON_ArrayForEach(field, work) {
+        if (!work_definition_key_is_allowed(field->string)) {
+            ESP_LOGE(TAG, "unknown work definition field: id=%s field=%s",
+                     entry->id ? entry->id : "(null)",
+                     field->string ? field->string : "(null)");
+            err = ESP_ERR_INVALID_ARG;
+            goto cleanup;
+        }
+    }
+
+    schema_version = cJSON_GetObjectItemCaseSensitive(work, "schema_version");
+    if (!cJSON_IsNumber(schema_version) ||
+            schema_version->valuedouble != (double)schema_version->valueint ||
+            schema_version->valueint != CLAW_SKILL_WORK_SCHEMA_VERSION) {
+        ESP_LOGE(TAG, "unsupported work schema version: id=%s",
+                 entry->id ? entry->id : "(null)");
+        err = ESP_ERR_INVALID_ARG;
         goto cleanup;
     }
 
-    err = json_dup_optional_string(execution, "icon", &relative_icon);
+    err = json_dup_required_string(work, "entry", &relative_entry);
+    if (err != ESP_OK || !skill_payload_path_is_valid(relative_entry, SKILL_EXECUTION_ENTRY_EXT)) {
+        ESP_LOGE(TAG, "invalid work entry: id=%s entry=%s",
+                 entry->id ? entry->id : "(null)",
+                 relative_entry ? relative_entry : "(null)");
+        err = ESP_ERR_INVALID_ARG;
+        goto cleanup;
+    }
+
+    err = json_dup_optional_string(work, "icon", &relative_icon);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "skip invalid execution icon: id=%s", entry->id ? entry->id : "(null)");
-        err = ESP_OK;
+        ESP_LOGE(TAG, "invalid work icon: id=%s", entry->id ? entry->id : "(null)");
         goto cleanup;
     }
     if (relative_icon && !skill_execution_icon_path_is_valid(relative_icon)) {
-        ESP_LOGW(TAG, "ignore invalid execution icon path: id=%s icon=%s", entry->id ? entry->id : "(null)", relative_icon);
-        free(relative_icon);
-        relative_icon = NULL;
+        ESP_LOGE(TAG, "invalid work icon path: id=%s icon=%s",
+                 entry->id ? entry->id : "(null)", relative_icon);
+        err = ESP_ERR_INVALID_ARG;
+        goto cleanup;
     }
 
-    err = json_dup_optional_object(execution, "args", &args_json);
+    err = json_dup_optional_object(work, "args", &args_json);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "skip invalid execution args: id=%s", entry->id ? entry->id : "(null)");
-        err = ESP_OK;
+        ESP_LOGE(TAG, "invalid work args: id=%s", entry->id ? entry->id : "(null)");
+        goto cleanup;
+    }
+
+    err = json_dup_optional_string(work, "exclusive", &exclusive);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "invalid work exclusive group: id=%s",
+                 entry->id ? entry->id : "(null)");
+        goto cleanup;
+    }
+    if (exclusive &&
+            (!exclusive[0] || strlen(exclusive) >
+                CLAW_SKILL_EXECUTION_EXCLUSIVE_MAX)) {
+        ESP_LOGE(TAG,
+                 "invalid work exclusive group length: id=%s max=%u",
+                 entry->id ? entry->id : "(null)",
+                 (unsigned)CLAW_SKILL_EXECUTION_EXCLUSIVE_MAX);
+        err = ESP_ERR_INVALID_ARG;
+        goto cleanup;
+    }
+
+    order = cJSON_GetObjectItemCaseSensitive(work, "order");
+    if (order && (!cJSON_IsNumber(order) ||
+            order->valuedouble != (double)order->valueint)) {
+        ESP_LOGE(TAG, "invalid work order: id=%s", entry->id ? entry->id : "(null)");
+        err = ESP_ERR_INVALID_ARG;
+        goto cleanup;
+    }
+    visible = cJSON_GetObjectItemCaseSensitive(work, "visible");
+    if (visible && !cJSON_IsBool(visible)) {
+        ESP_LOGE(TAG, "invalid work visible flag: id=%s", entry->id ? entry->id : "(null)");
+        err = ESP_ERR_INVALID_ARG;
+        goto cleanup;
+    }
+    replace = cJSON_GetObjectItemCaseSensitive(work, "replace");
+    if (replace && !cJSON_IsBool(replace)) {
+        ESP_LOGE(TAG, "invalid work replace flag: id=%s", entry->id ? entry->id : "(null)");
+        err = ESP_ERR_INVALID_ARG;
         goto cleanup;
     }
 
@@ -686,33 +828,31 @@ static esp_err_t parse_skill_execution(cJSON *root, claw_skill_registry_entry_t 
     entry->execution.entry = absolute_entry;
     entry->execution.icon = absolute_icon;
     entry->execution.args_json = args_json;
-    entry->execution.order = default_order;
-    entry->execution.visible = true;
+    entry->execution.exclusive = exclusive;
+    entry->execution.order = order ? order->valueint : default_order;
+    entry->execution.visible = visible ? cJSON_IsTrue(visible) : true;
+    entry->execution.replace = replace ? cJSON_IsTrue(replace) : false;
     entry->execution_view.entry = entry->execution.entry;
     entry->execution_view.icon = entry->execution.icon;
     entry->execution_view.args_json = entry->execution.args_json;
+    entry->execution_view.exclusive = entry->execution.exclusive;
     entry->execution_view.order = entry->execution.order;
     entry->execution_view.visible = entry->execution.visible;
+    entry->execution_view.replace = entry->execution.replace;
     entry->has_execution = true;
     absolute_entry = NULL;
     absolute_icon = NULL;
     args_json = NULL;
-
-    order = cJSON_GetObjectItemCaseSensitive(execution, "order");
-    if (cJSON_IsNumber(order)) {
-        entry->execution.order = order->valueint;
-        entry->execution_view.order = entry->execution.order;
-    }
-    visible = cJSON_GetObjectItemCaseSensitive(execution, "visible");
-    if (cJSON_IsBool(visible)) {
-        entry->execution.visible = cJSON_IsTrue(visible);
-        entry->execution_view.visible = entry->execution.visible;
-    }
+    exclusive = NULL;
 
 cleanup:
+    cJSON_Delete(work);
+    free(work_text);
+    free(work_path);
     free(relative_entry);
     free(relative_icon);
     free(args_json);
+    free(exclusive);
     free(absolute_entry);
     free(absolute_icon);
     return err;
@@ -827,7 +967,7 @@ static esp_err_t extract_skill_frontmatter_json(const char *text, const char **o
     return ESP_OK;
 }
 
-static esp_err_t parse_skill_document_metadata(const char *filename, const char *text, int default_order, claw_skill_registry_entry_t *entry)
+static esp_err_t parse_skill_document_metadata(const char *filename, const char *text, claw_skill_registry_entry_t *entry)
 {
     const char *json_start = NULL;
     const char *json_end = NULL;
@@ -867,6 +1007,11 @@ static esp_err_t parse_skill_document_metadata(const char *filename, const char 
         cJSON_Delete(root);
         return ESP_ERR_INVALID_ARG;
     }
+    if (cJSON_GetObjectItemCaseSensitive(root, "execution")) {
+        ESP_LOGE(TAG, "legacy execution field is not allowed; use launcher.json: %s", filename);
+        cJSON_Delete(root);
+        return ESP_ERR_INVALID_ARG;
+    }
 
     err = json_dup_required_string(root, "name", &entry->id);
     if (err == ESP_OK) {
@@ -885,9 +1030,6 @@ static esp_err_t parse_skill_document_metadata(const char *filename, const char 
     }
     if (err == ESP_OK) {
         err = json_parse_manage_mode(metadata, "manage_mode", &entry->manage_mode);
-    }
-    if (err == ESP_OK) {
-        err = parse_skill_execution(root, entry, default_order);
     }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "meta fields: %s", filename);
@@ -949,27 +1091,36 @@ static esp_err_t validate_registry_entry(claw_skill_registry_entry_t *entry)
     free(path);
     fclose(file);
 
-    if (entry->has_execution) {
-        file = fopen(entry->execution.entry, "rb");
+    return ESP_OK;
+}
+
+static esp_err_t validate_skill_work_files(const claw_skill_registry_entry_t *entry)
+{
+    FILE *file = NULL;
+
+    if (!entry) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!entry->has_execution) {
+        return ESP_OK;
+    }
+
+    file = fopen(entry->execution.entry, "rb");
+    if (!file) {
+        ESP_LOGE(TAG, "work entry missing: id=%s path=%s",
+                 entry->id ? entry->id : "(null)", entry->execution.entry);
+        return ESP_ERR_NOT_FOUND;
+    }
+    fclose(file);
+
+    if (entry->execution.icon) {
+        file = fopen(entry->execution.icon, "rb");
         if (!file) {
-            ESP_LOGW(TAG, "skip execution with missing entry: id=%s path=%s", entry->id ? entry->id : "(null)", entry->execution.entry);
-            free_execution(&entry->execution);
-            memset(&entry->execution_view, 0, sizeof(entry->execution_view));
-            entry->has_execution = false;
-            return ESP_OK;
+            ESP_LOGE(TAG, "work icon missing: id=%s path=%s",
+                     entry->id ? entry->id : "(null)", entry->execution.icon);
+            return ESP_ERR_NOT_FOUND;
         }
         fclose(file);
-        if (entry->execution.icon) {
-            file = fopen(entry->execution.icon, "rb");
-            if (!file) {
-                ESP_LOGW(TAG, "ignore missing execution icon: id=%s path=%s", entry->id ? entry->id : "(null)", entry->execution.icon);
-                free(entry->execution.icon);
-                entry->execution.icon = NULL;
-                entry->execution_view.icon = NULL;
-            } else {
-                fclose(file);
-            }
-        }
     }
     return ESP_OK;
 }
@@ -1087,7 +1238,7 @@ static esp_err_t load_registry_dir_recursive(const char *root_dir,
         entry = &(*entries)[*entry_count];
         entry->root_dir = root_dir;
 
-        err = parse_skill_document_metadata(relative_path, text, (int)*entry_count, entry);
+        err = parse_skill_document_metadata(relative_path, text, entry);
         free(text);
         if (err == ESP_ERR_INVALID_ARG) {
             ESP_LOGE(TAG, "skill file %s has invalid metadata", relative_path);
@@ -1103,6 +1254,21 @@ static esp_err_t load_registry_dir_recursive(const char *root_dir,
         err = validate_registry_entry(entry);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "skill file %s validation failed: %s", relative_path, esp_err_to_name(err));
+            free_registry_entry(entry);
+            goto cleanup;
+        }
+
+        err = load_skill_work_definition(entry, (int)*entry_count);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "skill work definition %s failed: %s",
+                     relative_path, esp_err_to_name(err));
+            free_registry_entry(entry);
+            goto cleanup;
+        }
+
+        err = validate_skill_work_files(entry);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "skill work files %s validation failed: %s", relative_path, esp_err_to_name(err));
             free_registry_entry(entry);
             goto cleanup;
         }
@@ -1514,6 +1680,11 @@ esp_err_t claw_skill_init(const claw_skill_config_t *config)
     claw_skill_reset();
     s_skill = calloc(1, sizeof(*s_skill));
     ESP_RETURN_ON_FALSE(s_skill!= NULL, ESP_ERR_NO_MEM, TAG, "alloc skill registry failed");
+    s_skill->registry_lock = xSemaphoreCreateMutex();
+    if (!s_skill->registry_lock) {
+        claw_skill_reset();
+        return ESP_ERR_NO_MEM;
+    }
     safe_copy(s_skill->session_state_root_dir, sizeof(s_skill->session_state_root_dir), config->session_state_root_dir);
     s_skill->max_file_bytes = config->max_file_bytes;
 
@@ -1535,6 +1706,7 @@ esp_err_t claw_skill_add_directory(const char *dir)
 {
     esp_err_t err;
     size_t i;
+    uint32_t changed_revision = 0;
 
     if (!s_skill || !s_skill->initialized) {
         ESP_LOGE(TAG, "add dir before init");
@@ -1543,9 +1715,13 @@ esp_err_t claw_skill_add_directory(const char *dir)
     if (!dir || !dir[0]) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (xSemaphoreTake(s_skill->registry_lock, pdMS_TO_TICKS(5000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
     for (i = 0; i < s_skill->root_count; i++) {
         if (strcmp(s_skill->roots[i], dir) == 0) {
             CLAW_SKILL_DIAGI("skills dir %s already registered, skipping", dir);
+            xSemaphoreGive(s_skill->registry_lock);
             return ESP_OK;
         }
     }
@@ -1553,14 +1729,21 @@ esp_err_t claw_skill_add_directory(const char *dir)
     err = append_root_dir(dir);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "add skills dir %s: %s", dir, esp_err_to_name(err));
+        xSemaphoreGive(s_skill->registry_lock);
         return err;
     }
 
     /* Reload so skills under the new directory are picked up. */
-    return claw_skill_reload_registry();
+    err = claw_skill_reload_registry_locked();
+    if (err == ESP_OK) {
+        changed_revision = s_skill->registry_revision;
+    }
+    xSemaphoreGive(s_skill->registry_lock);
+    claw_skill_notify_registry_changed(changed_revision);
+    return err;
 }
 
-esp_err_t claw_skill_reload_registry(void)
+static esp_err_t claw_skill_reload_registry_locked(void)
 {
     claw_skill_registry_entry_t *old_entries = NULL;
     size_t old_count = 0;
@@ -1579,6 +1762,9 @@ esp_err_t claw_skill_reload_registry(void)
     err = load_registry_from_markdown();
     if (err == ESP_OK) {
         free_registry_entries(old_entries, old_count);
+        if (++s_skill->registry_revision == 0) {
+            ++s_skill->registry_revision;
+        }
         ESP_LOGI(TAG, "Reloaded registry with %u skill(s)", (unsigned)s_skill->entry_count);
         return ESP_OK;
     }
@@ -1587,6 +1773,80 @@ esp_err_t claw_skill_reload_registry(void)
     s_skill->entry_count = old_count;
     ESP_LOGE(TAG, "reload registry: %s", esp_err_to_name(err));
     return err;
+}
+
+esp_err_t claw_skill_reload_registry(void)
+{
+    uint32_t changed_revision = 0;
+
+    if (!s_skill || !s_skill->initialized || !s_skill->registry_lock) {
+        ESP_LOGE(TAG, "reload before init");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(s_skill->registry_lock, pdMS_TO_TICKS(5000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    esp_err_t err = claw_skill_reload_registry_locked();
+    if (err == ESP_OK) {
+        changed_revision = s_skill->registry_revision;
+    }
+    xSemaphoreGive(s_skill->registry_lock);
+    claw_skill_notify_registry_changed(changed_revision);
+    return err;
+}
+
+esp_err_t claw_skill_get_registry_revision(uint32_t *out_revision)
+{
+    if (!out_revision) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_skill || !s_skill->initialized || !s_skill->registry_lock) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(s_skill->registry_lock, pdMS_TO_TICKS(200)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    *out_revision = s_skill->registry_revision;
+    xSemaphoreGive(s_skill->registry_lock);
+    return ESP_OK;
+}
+
+esp_err_t claw_skill_register_registry_changed_cb(
+    claw_skill_registry_changed_cb_t callback,
+    void *user_ctx)
+{
+    size_t free_index = CLAW_SKILL_MAX_REGISTRY_LISTENERS;
+
+    if (!callback) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_skill || !s_skill->initialized || !s_skill->registry_lock) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xSemaphoreTake(s_skill->registry_lock, pdMS_TO_TICKS(5000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    for (size_t i = 0; i < CLAW_SKILL_MAX_REGISTRY_LISTENERS; i++) {
+        claw_skill_registry_listener_t *listener =
+            &s_skill->registry_listeners[i];
+
+        if (listener->callback == callback && listener->user_ctx == user_ctx) {
+            xSemaphoreGive(s_skill->registry_lock);
+            return ESP_OK;
+        }
+        if (!listener->callback &&
+                free_index == CLAW_SKILL_MAX_REGISTRY_LISTENERS) {
+            free_index = i;
+        }
+    }
+    if (free_index == CLAW_SKILL_MAX_REGISTRY_LISTENERS) {
+        xSemaphoreGive(s_skill->registry_lock);
+        return ESP_ERR_NO_MEM;
+    }
+    s_skill->registry_listeners[free_index].callback = callback;
+    s_skill->registry_listeners[free_index].user_ctx = user_ctx;
+    xSemaphoreGive(s_skill->registry_lock);
+    return ESP_OK;
 }
 
 esp_err_t claw_skill_read_skills_list(char *buf, size_t size)
@@ -1678,6 +1938,11 @@ esp_err_t claw_skill_foreach_catalog_entry(claw_skill_catalog_cb_t cb, void *use
     if (!cb) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (!s_skill->registry_lock ||
+            xSemaphoreTake(s_skill->registry_lock,
+                           pdMS_TO_TICKS(5000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
 
     for (i = 0; i < s_skill->entry_count; i++) {
         claw_skill_catalog_entry_t view;
@@ -1687,9 +1952,11 @@ esp_err_t claw_skill_foreach_catalog_entry(claw_skill_catalog_cb_t cb, void *use
         err = cb(&view, user_ctx);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "catalog iteration stopped: id=%s err=%s", view.id ? view.id : "(null)", esp_err_to_name(err));
+            xSemaphoreGive(s_skill->registry_lock);
             return err;
         }
     }
+    xSemaphoreGive(s_skill->registry_lock);
     return ESP_OK;
 }
 
