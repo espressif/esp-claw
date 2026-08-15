@@ -74,6 +74,7 @@ typedef struct {
     bool stop_requested;
     SemaphoreHandle_t mutex;
     QueueHandle_t event_queue;
+    bool event_queue_with_caps;
     TaskHandle_t task_handle;
     uint32_t next_request_id;
     char rules_path[192];
@@ -115,6 +116,29 @@ static void claw_event_router_init_defaults(claw_event_router_runtime_t *runtime
     runtime->next_request_id = 1000000;
 }
 
+static void *claw_event_router_calloc_prefer_psram(size_t count, size_t size)
+{
+    void *memory = heap_caps_calloc(
+        count, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return memory ? memory : calloc(count, size);
+}
+
+static QueueHandle_t claw_event_router_create_event_queue(
+    UBaseType_t queue_len, UBaseType_t item_size, bool *out_with_caps)
+{
+    QueueHandle_t queue = NULL;
+
+    if (out_with_caps) {
+        *out_with_caps = false;
+    }
+    queue = xQueueCreateWithCaps(
+        queue_len, item_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (queue && out_with_caps) {
+        *out_with_caps = true;
+    }
+    return queue ? queue : xQueueCreate(queue_len, item_size);
+}
+
 static void claw_event_router_free_runtime(void)
 {
     if (!s_runtime) {
@@ -123,7 +147,11 @@ static void claw_event_router_free_runtime(void)
 
     claw_event_router_free_rules(s_runtime->rules, s_runtime->rule_count);
     if (s_runtime->event_queue) {
-        vQueueDelete(s_runtime->event_queue);
+        if (s_runtime->event_queue_with_caps) {
+            vQueueDeleteWithCaps(s_runtime->event_queue);
+        } else {
+            vQueueDelete(s_runtime->event_queue);
+        }
     }
     if (s_runtime->mutex) {
         vSemaphoreDelete(s_runtime->mutex);
@@ -791,7 +819,8 @@ static esp_err_t claw_event_router_parse_rule(const cJSON *item,
         }
     }
 
-    out_rule->actions = calloc(action_count, sizeof(*out_rule->actions));
+    out_rule->actions = claw_event_router_calloc_prefer_psram(
+        action_count, sizeof(*out_rule->actions));
     if (!out_rule->actions) {
         return ESP_ERR_NO_MEM;
     }
@@ -987,7 +1016,8 @@ static esp_err_t claw_event_router_load_rules_from_root(const cJSON *root,
         return ESP_ERR_INVALID_SIZE;
     }
     if (cJSON_GetArraySize((cJSON *)root) > 0) {
-        rules = calloc((size_t)cJSON_GetArraySize((cJSON *)root), sizeof(*rules));
+        rules = claw_event_router_calloc_prefer_psram(
+            (size_t)cJSON_GetArraySize((cJSON *)root), sizeof(*rules));
         if (!rules) {
             return ESP_ERR_NO_MEM;
         }
@@ -2332,14 +2362,17 @@ esp_err_t claw_event_router_init(const claw_event_router_config_t *config)
         claw_event_router_free_runtime();
         return ESP_ERR_INVALID_ARG;
     }
-    s_runtime->event_queue = xQueueCreate(queue_len, sizeof(claw_event_t));
+    s_runtime->event_queue = claw_event_router_create_event_queue(
+        queue_len, sizeof(claw_event_t), &s_runtime->event_queue_with_caps);
     if (!s_runtime->event_queue) {
         claw_event_router_free_runtime();
         return ESP_ERR_NO_MEM;
     }
 
     s_runtime->initialized = true;
-    ESP_LOGI(TAG, "Rules path: %s", s_runtime->rules_path);
+    ESP_LOGI(TAG, "Rules path: %s (event queue memory=%s)",
+             s_runtime->rules_path,
+             s_runtime->event_queue_with_caps ? "PSRAM" : "internal");
     {
         esp_err_t err = claw_event_router_reload();
         if (err != ESP_OK) {
@@ -2819,7 +2852,7 @@ esp_err_t claw_event_router_add_rule_json(const char *rule_json)
     claw_event_router_rule_t *rule = NULL;
     esp_err_t err;
 
-    rule = calloc(1, sizeof(*rule));
+    rule = claw_event_router_calloc_prefer_psram(1, sizeof(*rule));
     if (!rule) {
         return ESP_ERR_NO_MEM;
     }
@@ -2843,7 +2876,7 @@ esp_err_t claw_event_router_update_rule_json(const char *rule_json)
     claw_event_router_rule_t *rule = NULL;
     esp_err_t err;
 
-    rule = calloc(1, sizeof(*rule));
+    rule = claw_event_router_calloc_prefer_psram(1, sizeof(*rule));
     if (!rule) {
         return ESP_ERR_NO_MEM;
     }
