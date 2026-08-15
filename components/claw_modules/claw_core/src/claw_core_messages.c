@@ -34,6 +34,12 @@ void claw_core_free_request_item(claw_core_request_item_t *item)
     free(item->owned_source_cap);
     free(item->owned_target_channel);
     free(item->owned_target_chat_id);
+    if (item->owned_skill_ids) {
+        for (size_t i = 0; i < item->view.skill_count; ++i) {
+            free(item->owned_skill_ids[i]);
+        }
+        free(item->owned_skill_ids);
+    }
     memset(item, 0, sizeof(*item));
 }
 
@@ -42,7 +48,9 @@ static esp_err_t clone_request_item(const claw_core_request_t *request,
 {
     claw_core_request_item_t item = {0};
 
-    if (!request || !out_item || !request->user_text || request->user_text[0] == '\0') {
+    if (!request || !out_item || !request->user_text || request->user_text[0] == '\0' ||
+            request->skill_count > CLAW_CORE_REQUEST_SKILL_MAX ||
+            (request->skill_count > 0 && !request->skill_ids)) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -67,6 +75,29 @@ static esp_err_t clone_request_item(const claw_core_request_t *request,
     item.view.source_cap = item.owned_source_cap;
     item.view.target_channel = item.owned_target_channel;
     item.view.target_chat_id = item.owned_target_chat_id;
+    item.view.request_skills_replace_global = request->request_skills_replace_global;
+
+    if (request->skill_count > 0) {
+        item.owned_skill_ids = calloc(request->skill_count,
+                                      sizeof(*item.owned_skill_ids));
+        if (!item.owned_skill_ids) {
+            claw_core_free_request_item(&item);
+            return ESP_ERR_NO_MEM;
+        }
+        item.view.skill_count = request->skill_count;
+        item.view.skill_ids = (const char *const *)item.owned_skill_ids;
+        for (size_t i = 0; i < request->skill_count; ++i) {
+            if (!request->skill_ids[i] || !request->skill_ids[i][0]) {
+                claw_core_free_request_item(&item);
+                return ESP_ERR_INVALID_ARG;
+            }
+            item.owned_skill_ids[i] = claw_utils_string_dup(request->skill_ids[i]);
+            if (!item.owned_skill_ids[i]) {
+                claw_core_free_request_item(&item);
+                return ESP_ERR_NO_MEM;
+            }
+        }
+    }
 
     if ((request->session_id && !item.owned_session_id) ||
             (request->source_channel && !item.owned_source_channel) ||

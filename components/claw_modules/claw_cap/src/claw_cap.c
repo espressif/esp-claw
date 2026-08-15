@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "cJSON.h"
+#include "claw_skill.h"
 #include "esp_log.h"
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
@@ -52,6 +53,7 @@ typedef struct {
     char *session_id;
     char **group_ids;
     size_t group_count;
+    bool replace_global;
 } claw_cap_session_visibility_t;
 
 typedef struct {
@@ -69,6 +71,8 @@ typedef struct {
     size_t session_visibility_capacity;
     size_t descriptor_capacity;
     size_t group_capacity;
+    claw_cap_llm_authorizer_t llm_authorizer;
+    void *llm_authorizer_ctx;
 } claw_cap_runtime_t;
 
 static EXT_RAM_BSS_ATTR claw_cap_runtime_t s_runtime = {0};
@@ -81,13 +85,14 @@ typedef enum {
     CLAW_CAP_AUTH_NOT_LLM_CALLABLE,
     CLAW_CAP_AUTH_ROOT_ONLY,
     CLAW_CAP_AUTH_GROUP_NOT_VISIBLE,
+    CLAW_CAP_AUTH_POLICY_DENIED,
 } claw_cap_auth_status_t;
 
 static claw_cap_auth_status_t claw_cap_authorize_llm_tool_locked(
     const claw_cap_descriptor_slot_t *slot,
     const claw_cap_call_context_t *ctx);
 static bool claw_cap_group_is_llm_visible_locked(size_t group_slot_index,
-                                                 const char *session_id);
+                                                 const claw_cap_call_context_t *ctx);
 static void claw_cap_clear_llm_visible_groups_locked(void);
 static void claw_cap_free_group_ids(char **group_ids, size_t group_count);
 static void claw_cap_free_session_visibility(claw_cap_session_visibility_t *visibility);
@@ -139,6 +144,8 @@ static const char *claw_cap_auth_status_to_string(claw_cap_auth_status_t status)
         return "root_agent_only";
     case CLAW_CAP_AUTH_GROUP_NOT_VISIBLE:
         return "group_not_visible";
+    case CLAW_CAP_AUTH_POLICY_DENIED:
+        return "policy_denied";
     default:
         return "unknown";
     }
@@ -469,6 +476,9 @@ esp_err_t claw_cap_call_from_core(const char *cap_name,
         ctx.target_channel = request->target_channel;
         ctx.target_chat_id = request->target_chat_id;
         ctx.source_cap = request->source_cap;
+        ctx.request_skill_ids = request->skill_ids;
+        ctx.request_skill_count = request->skill_count;
+        ctx.request_skills_replace_global = request->request_skills_replace_global;
         if (user_ctx) {
             const claw_cap_core_call_user_ctx_t *call_user_ctx =
                 (const claw_cap_core_call_user_ctx_t *)user_ctx;
@@ -516,6 +526,9 @@ static esp_err_t claw_cap_tools_collect_for_caller(const claw_core_request_t *re
     ctx.target_channel = request->target_channel;
     ctx.target_chat_id = request->target_chat_id;
     ctx.source_cap = request->source_cap;
+    ctx.request_skill_ids = request->skill_ids;
+    ctx.request_skill_count = request->skill_count;
+    ctx.request_skills_replace_global = request->request_skills_replace_global;
     ctx.caller = caller;
     if (claw_cap_core_user_ctx_is_valid((const claw_cap_core_call_user_ctx_t *)user_ctx)) {
         claw_cap_apply_core_user_ctx(&ctx, (const claw_cap_core_call_user_ctx_t *)user_ctx);
@@ -606,8 +619,6 @@ static claw_cap_auth_status_t claw_cap_authorize_llm_tool_locked(
     const claw_cap_descriptor_slot_t *slot,
     const claw_cap_call_context_t *ctx)
 {
-    const char *session_id = (ctx && ctx->session_id && ctx->session_id[0]) ?
-                             ctx->session_id : NULL;
     claw_cap_caller_t caller = ctx ? ctx->caller : CLAW_CAP_CALLER_SYSTEM;
 
     if (!claw_cap_descriptor_is_available(slot)) {
@@ -627,10 +638,30 @@ static claw_cap_auth_status_t claw_cap_authorize_llm_tool_locked(
             (slot->descriptor.cap_flags & CLAW_CAP_FLAG_ROOT_AGENT_ONLY)) {
         return CLAW_CAP_AUTH_ROOT_ONLY;
     }
-    if (!claw_cap_group_is_llm_visible_locked(slot->group_slot_index, session_id)) {
+    if (!claw_cap_group_is_llm_visible_locked(slot->group_slot_index, ctx)) {
         return CLAW_CAP_AUTH_GROUP_NOT_VISIBLE;
     }
+    if (s_runtime.llm_authorizer) {
+        const claw_cap_group_t *group =
+            s_runtime.group_slots[slot->group_slot_index].group;
+        const char *group_id = group ? group->group_id : NULL;
+        if (!s_runtime.llm_authorizer(group_id, &slot->descriptor, ctx,
+                                      s_runtime.llm_authorizer_ctx)) {
+            return CLAW_CAP_AUTH_POLICY_DENIED;
+        }
+    }
     return CLAW_CAP_AUTH_OK;
+}
+
+esp_err_t claw_cap_set_llm_authorizer(claw_cap_llm_authorizer_t authorizer,
+                                      void *user_ctx)
+{
+    if (!s_runtime.initialized) return ESP_ERR_INVALID_STATE;
+    claw_cap_lock();
+    s_runtime.llm_authorizer = authorizer;
+    s_runtime.llm_authorizer_ctx = user_ctx;
+    claw_cap_unlock();
+    return ESP_OK;
 }
 
 static bool claw_cap_group_id_in_list(const char *group_id,
@@ -652,31 +683,69 @@ static bool claw_cap_group_id_in_list(const char *group_id,
     return false;
 }
 
-static bool claw_cap_group_is_llm_visible_locked(size_t group_slot_index,
-                                                 const char *session_id)
+static bool claw_cap_group_is_enabled_by_request_skills(
+    const char *group_id, const claw_cap_call_context_t *ctx)
+{
+    if (!group_id || !ctx || !ctx->request_skill_ids) {
+        return false;
+    }
+    for (size_t i = 0; i < ctx->request_skill_count; ++i) {
+        claw_skill_catalog_entry_t entry = {0};
+
+        if (!ctx->request_skill_ids[i] ||
+                claw_skill_get_catalog_entry(ctx->request_skill_ids[i], &entry) != ESP_OK) {
+            continue;
+        }
+        if (claw_cap_group_id_in_list(group_id, entry.cap_groups,
+                                      entry.cap_group_count)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool claw_cap_group_is_llm_visible_locked(
+    size_t group_slot_index, const claw_cap_call_context_t *ctx)
 {
     const char *group_id = NULL;
     const claw_cap_session_visibility_t *visibility = NULL;
+    const char *session_id = (ctx && ctx->session_id && ctx->session_id[0]) ?
+                             ctx->session_id : NULL;
 
-    if (s_runtime.llm_visible_group_count == 0 &&
-            (!session_id || !session_id[0] ||
-             !claw_cap_get_session_visibility_locked(session_id))) {
-        return true;
-    }
     if (group_slot_index >= s_runtime.group_capacity ||
             !s_runtime.group_slots[group_slot_index].occupied ||
             !s_runtime.group_slots[group_slot_index].group ||
             !s_runtime.group_slots[group_slot_index].group->group_id) {
         return false;
     }
-
     group_id = s_runtime.group_slots[group_slot_index].group->group_id;
-    if (claw_cap_group_id_in_list(group_id,
+
+    if (ctx && ctx->request_skill_count > 0) {
+        if (claw_cap_group_is_enabled_by_request_skills(group_id, ctx)) {
+            return true;
+        }
+        if (ctx->request_skills_replace_global) {
+            return false;
+        }
+        return s_runtime.llm_visible_group_count == 0 ||
+               claw_cap_group_id_in_list(
+                   group_id,
+                   (const char *const *)s_runtime.llm_visible_group_ids,
+                   s_runtime.llm_visible_group_count);
+    }
+
+    if (s_runtime.llm_visible_group_count == 0 &&
+            (!session_id || !session_id[0] ||
+             !claw_cap_get_session_visibility_locked(session_id))) {
+        return true;
+    }
+    visibility = claw_cap_get_session_visibility_locked(session_id);
+    if ((!visibility || !visibility->replace_global) &&
+        claw_cap_group_id_in_list(group_id,
                                   (const char *const *)s_runtime.llm_visible_group_ids,
                                   s_runtime.llm_visible_group_count)) {
         return true;
     }
-    visibility = claw_cap_get_session_visibility_locked(session_id);
     if (visibility &&
             claw_cap_group_id_in_list(group_id,
                                       (const char *const *)visibility->group_ids,
@@ -1303,6 +1372,13 @@ esp_err_t claw_cap_set_session_llm_visible_groups(const char *session_id,
                                                   const char *const *group_ids,
                                                   size_t count)
 {
+    return claw_cap_set_session_llm_visible_groups_ex(
+        session_id, group_ids, count, false);
+}
+
+esp_err_t claw_cap_set_session_llm_visible_groups_ex(const char *session_id,
+    const char *const *group_ids, size_t count, bool replace_global)
+{
     char **copied_group_ids = NULL;
     char *session_id_copy = NULL;
     ssize_t existing_index;
@@ -1320,7 +1396,7 @@ esp_err_t claw_cap_set_session_llm_visible_groups(const char *session_id,
         return err;
     }
 
-    if (count > 0) {
+    if (count > 0 || replace_global) {
         session_id_copy = claw_cap_strdup(session_id);
         if (!session_id_copy) {
             claw_cap_free_group_ids(copied_group_ids, count);
@@ -1337,7 +1413,8 @@ esp_err_t claw_cap_set_session_llm_visible_groups(const char *session_id,
         claw_cap_free_group_ids(visibility->group_ids, visibility->group_count);
         visibility->group_ids = copied_group_ids;
         visibility->group_count = count;
-        if (count == 0) {
+        visibility->replace_global = replace_global;
+        if (count == 0 && !replace_global) {
             claw_cap_free_session_visibility(visibility);
             if ((size_t)existing_index + 1 < s_runtime.session_visibility_count) {
                 memmove(&s_runtime.session_visibilities[existing_index],
@@ -1352,7 +1429,7 @@ esp_err_t claw_cap_set_session_llm_visible_groups(const char *session_id,
         return ESP_OK;
     }
 
-    if (count == 0) {
+    if (count == 0 && !replace_global) {
         claw_cap_unlock();
         free(session_id_copy);
         return ESP_OK;
@@ -1382,6 +1459,8 @@ esp_err_t claw_cap_set_session_llm_visible_groups(const char *session_id,
     s_runtime.session_visibilities[s_runtime.session_visibility_count].session_id = session_id_copy;
     s_runtime.session_visibilities[s_runtime.session_visibility_count].group_ids = copied_group_ids;
     s_runtime.session_visibilities[s_runtime.session_visibility_count].group_count = count;
+    s_runtime.session_visibilities[s_runtime.session_visibility_count].replace_global =
+        replace_global;
     s_runtime.session_visibility_count++;
     claw_cap_unlock();
 

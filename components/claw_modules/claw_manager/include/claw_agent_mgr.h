@@ -58,6 +58,9 @@ typedef struct {
     const char *target_chat_id;
     uint32_t flags;
     uint32_t request_id;
+    const char *const *skill_ids;
+    size_t skill_count;
+    bool request_skills_replace_global;
 } claw_agent_mgr_root_input_t;
 
 typedef struct {

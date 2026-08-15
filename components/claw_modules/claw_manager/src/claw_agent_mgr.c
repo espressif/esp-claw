@@ -836,6 +836,9 @@ esp_err_t claw_agent_mgr_post_root_message(
     request.source_cap = input->source_cap;
     request.target_channel = input->target_channel;
     request.target_chat_id = input->target_chat_id;
+    request.skill_ids = input->skill_ids;
+    request.skill_count = input->skill_count;
+    request.request_skills_replace_global = input->request_skills_replace_global;
     err = claw_agent_mgr_post_message_to_agent(root, &request, timeout_ms,
                                                out_receipt);
     claw_agent_mgr_unlock();

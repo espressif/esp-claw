@@ -1779,6 +1779,9 @@ static esp_err_t claw_event_router_execute_agent_action(
     const char *target_channel = NULL;
     const char *target_chat_id = NULL;
     const char *session_policy = NULL;
+    const char *skill_ids[CLAW_CORE_REQUEST_SKILL_MAX] = {0};
+    size_t skill_count = 0;
+    const char *skill_capability_policy = NULL;
     claw_event_t agent_event = {0};
     claw_agent_mgr_root_input_t agent_input = {0};
     char submit_output[32] = {0};
@@ -1801,6 +1804,23 @@ static esp_err_t claw_event_router_execute_agent_action(
     target_channel = cJSON_GetStringValue(cJSON_GetObjectItem(rendered_input, "target_channel"));
     target_chat_id = cJSON_GetStringValue(cJSON_GetObjectItem(rendered_input, "target_chat_id"));
     session_policy = cJSON_GetStringValue(cJSON_GetObjectItem(rendered_input, "session_policy"));
+    skill_capability_policy = cJSON_GetStringValue(
+        cJSON_GetObjectItem(rendered_input, "skill_capability_policy"));
+    cJSON *skill_ids_json = cJSON_GetObjectItem(rendered_input, "skill_ids");
+    if (cJSON_IsArray(skill_ids_json)) {
+        cJSON *skill_id_json = NULL;
+        cJSON_ArrayForEach(skill_id_json, skill_ids_json) {
+            const char *skill_id = cJSON_GetStringValue(skill_id_json);
+            if (!skill_id || !skill_id[0]) {
+                continue;
+            }
+            if (skill_count >= CLAW_CORE_REQUEST_SKILL_MAX) {
+                cJSON_Delete(rendered_input);
+                return ESP_ERR_INVALID_SIZE;
+            }
+            skill_ids[skill_count++] = skill_id;
+        }
+    }
 
     agent_event = *event;
     if (session_policy && session_policy[0]) {
@@ -1822,6 +1842,11 @@ static esp_err_t claw_event_router_execute_agent_action(
     agent_input.event_id = event->event_id;
     agent_input.target_channel = (target_channel && target_channel[0]) ? target_channel : event->source_channel;
     agent_input.target_chat_id = (target_chat_id && target_chat_id[0]) ? target_chat_id : event->chat_id;
+    agent_input.skill_ids = skill_ids;
+    agent_input.skill_count = skill_count;
+    agent_input.request_skills_replace_global =
+        skill_count > 0 && skill_capability_policy &&
+        strcmp(skill_capability_policy, "replace_global") == 0;
 
     err = claw_agent_mgr_post_root_message(
         &agent_input, s_runtime->config.agent_submit_timeout_ms, &receipt);

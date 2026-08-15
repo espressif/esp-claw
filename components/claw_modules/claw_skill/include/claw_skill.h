@@ -240,6 +240,9 @@ esp_err_t claw_skill_delete_session_state(const char *session_id,
  */
 extern const claw_core_context_provider_t claw_skill_skills_list_provider;
 
+/** Request-start provider that injects Skills selected for one Agent run. */
+extern const claw_core_context_provider_t claw_skill_request_skills_provider;
+
 #ifdef __cplusplus
 }
 #endif
