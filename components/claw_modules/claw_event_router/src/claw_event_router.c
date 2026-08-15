@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #include "cJSON.h"
 #include "claw_agent_mgr.h"
@@ -1094,6 +1095,7 @@ static esp_err_t claw_event_router_write_rules_json_file(const char *path, const
 {
     char temp_path[224];
     FILE *file = NULL;
+    char *verified_json = NULL;
     size_t json_len = 0;
 
     if (!path || !path[0] || !json) {
@@ -1111,21 +1113,44 @@ static esp_err_t claw_event_router_write_rules_json_file(const char *path, const
     }
 
     json_len = strlen(json);
-    if ((json_len > 0 && fwrite(json, 1, json_len, file) != json_len) || fflush(file) != 0) {
-        fclose(file);
+    bool io_failed = (json_len > 0 && fwrite(json, 1, json_len, file) != json_len) ||
+                     fflush(file) != 0 || fsync(fileno(file)) != 0;
+    int io_errno = errno;
+    if (fclose(file) != 0) {
+        io_failed = true;
+        io_errno = errno;
+    }
+    file = NULL;
+    if (io_failed) {
         remove(temp_path);
-        ESP_LOGE(TAG, "Failed to write temp rules file %s errno=%d", temp_path, errno);
+        ESP_LOGE(TAG, "Failed to sync temp rules file %s errno=%d", temp_path,
+                 io_errno);
         return ESP_FAIL;
     }
-    fclose(file);
 
-    if (remove(path) != 0 && errno != ENOENT) {
+    if (claw_event_router_read_file(temp_path, &verified_json) != ESP_OK ||
+        strcmp(verified_json, json) != 0) {
+        free(verified_json);
         remove(temp_path);
-        return ESP_FAIL;
+        ESP_LOGE(TAG, "Temp rules verification failed: %s", temp_path);
+        return ESP_ERR_INVALID_RESPONSE;
     }
+    free(verified_json);
+
+    /* LittleFS atomically replaces an existing file. Retain a compatibility
+     * fallback for FAT backends whose rename implementation reports EEXIST. */
     if (rename(temp_path, path) != 0) {
+        int rename_errno = errno;
+        if (rename_errno == EEXIST || rename_errno == ENOTEMPTY) {
+            if ((remove(path) == 0 || errno == ENOENT) &&
+                rename(temp_path, path) == 0) {
+                return ESP_OK;
+            }
+            rename_errno = errno;
+        }
         remove(temp_path);
-        ESP_LOGE(TAG, "Failed to rename %s to %s errno=%d", temp_path, path, errno);
+        ESP_LOGE(TAG, "Failed to rename %s to %s errno=%d", temp_path, path,
+                 rename_errno);
         return ESP_FAIL;
     }
     return ESP_OK;
@@ -1213,6 +1238,9 @@ static esp_err_t claw_event_router_recover_rules(claw_event_router_rule_t **out_
         return err;
     }
 
+    /* Persistence is best-effort. Recovery rules were already parsed and
+     * validated, so a read-only/full/damaged DATA filesystem must not prevent
+     * the router from starting with the immutable SYSTEM fallback. */
     err = claw_event_router_quarantine_rules();
     if (err == ESP_OK) {
         err = claw_event_router_write_rules_json_file(s_runtime->rules_path,
@@ -1220,13 +1248,14 @@ static esp_err_t claw_event_router_recover_rules(claw_event_router_rule_t **out_
     }
     free(recovery_json);
     if (err != ESP_OK) {
-        claw_event_router_free_rule_list(recovery_rules,
-                                         recovery_rule_count);
-        return err;
+        ESP_LOGW(TAG,
+                 "Using recovery router rules in memory; DATA repair failed: %s",
+                 esp_err_to_name(err));
+    } else {
+        ESP_LOGW(TAG, "Restored router rules from recovery: %s",
+                 s_runtime->recovery_rules_path);
     }
 
-    ESP_LOGW(TAG, "Restored router rules from recovery: %s",
-             s_runtime->recovery_rules_path);
     *out_rules = recovery_rules;
     *out_rule_count = recovery_rule_count;
     return ESP_OK;
