@@ -81,6 +81,15 @@ esp_err_t claw_memory_persist_context_callback(const claw_core_context_persist_b
                                                void *user_ctx);
 esp_err_t claw_memory_delete_session_history(const char *session_id,
                                              bool *out_deleted_any);
+/**
+ * @brief Load the persisted records for a session as an allocated JSON array.
+ *
+ * The caller owns @p out_json and must release it with free(). This read-only
+ * API lets product UIs render history without depending on the memory
+ * component's storage layout.
+ */
+esp_err_t claw_memory_load_session_history_json(const char *session_id,
+                                                char **out_json);
 esp_err_t claw_memory_request_gate_callback(const claw_core_request_t *request,
                                             char *reject_message,
                                             size_t reject_message_size,
