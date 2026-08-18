@@ -262,6 +262,7 @@ static void bridge_claim_gpio(const char *device_name,
                           registered_count);
 }
 
+#if defined(CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT) || defined(CONFIG_ESP_BOARD_DEV_LCD_TOUCH_SUB_I2C_SUPPORT)
 static void bridge_claim_i2c(const char *device_name,
                              const char *owner_tag,
                              int port, uint8_t addr7,
@@ -273,6 +274,7 @@ static void bridge_claim_i2c(const char *device_name,
                           CLAW_HW_MODE_EXCLUSIVE,
                           registered_count);
 }
+#endif
 
 static void bridge_claim_spi_cs(const char *device_name,
                                 const char *owner_tag,
@@ -289,6 +291,7 @@ static void bridge_claim_spi_cs(const char *device_name,
                           registered_count);
 }
 
+#if defined(CONFIG_ESP_BOARD_DEV_AUDIO_CODEC_SUPPORT) && defined(CONFIG_ESP_BOARD_PERIPH_I2S_SUPPORT)
 static void bridge_claim_i2s(const char *device_name,
                              const char *owner_tag,
                              int port, bool tx,
@@ -300,6 +303,7 @@ static void bridge_claim_i2s(const char *device_name,
                           CLAW_HW_MODE_EXCLUSIVE,
                           registered_count);
 }
+#endif
 
 #ifdef CONFIG_ESP_BOARD_PERIPH_GPIO_SUPPORT
 /* Shared by power_ctrl / gpio_ctrl / button-gpio extractors. */
