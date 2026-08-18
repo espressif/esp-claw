@@ -5,6 +5,8 @@
  */
 #pragma once
 
+#include "claw_llm_auth.h"
+
 #include "llm/claw_llm_types.h"
 
 typedef struct claw_llm_runtime claw_llm_runtime_t;

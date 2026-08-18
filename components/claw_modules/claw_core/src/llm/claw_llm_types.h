@@ -102,6 +102,7 @@ typedef struct {
     const char *auth_type;
     uint32_t timeout_ms;
     volatile bool *abort_flag;
+    bool force_auth_refresh;
     const claw_llm_http_header_t *headers;
     size_t header_count;
 } claw_llm_http_json_request_t;
@@ -110,3 +111,8 @@ typedef struct {
     char *body;
     int status_code;
 } claw_llm_http_response_t;
+
+typedef esp_err_t (*claw_llm_auth_resolver_fn)(const char *auth_type,
+                                               bool force_refresh,
+                                               char **out_token,
+                                               void *user_ctx);

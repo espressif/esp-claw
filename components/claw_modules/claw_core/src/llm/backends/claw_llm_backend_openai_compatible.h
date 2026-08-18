@@ -11,6 +11,8 @@
 #define CLAW_LLM_BACKEND_OPENAI_COMPATIBLE_CHAT_PATH "/chat/completions"
 #define CLAW_LLM_BACKEND_OPENAI_COMPATIBLE_AUTH_TYPE "bearer"
 #define CLAW_LLM_BACKEND_OPENAI_COMPATIBLE_DEFAULT_MAX_TOKENS_FIELD "max_tokens"
+#define CLAW_LLM_BACKEND_TRIAL_ID "trial"
 
 const claw_llm_backend_vtable_t *claw_llm_backend_openai_compatible_vtable(void);
 const claw_llm_backend_registration_t *claw_llm_backend_openai_compatible_registration(void);
+const claw_llm_backend_registration_t *claw_llm_backend_trial_registration(void);

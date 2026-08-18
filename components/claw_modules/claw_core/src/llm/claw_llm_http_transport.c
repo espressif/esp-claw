@@ -29,6 +29,42 @@ typedef struct {
     volatile bool *abort_flag;
 } http_request_context_t;
 
+typedef struct {
+    char auth_type[32];
+    claw_llm_auth_resolver_fn resolver;
+    void *user_ctx;
+} auth_resolver_t;
+
+static auth_resolver_t s_auth_resolver;
+
+esp_err_t claw_llm_register_auth_resolver(const char *auth_type,
+                                          claw_llm_auth_resolver_fn resolver,
+                                          void *user_ctx)
+{
+    if (!auth_type || !auth_type[0] || !resolver || strlen(auth_type) >= sizeof(s_auth_resolver.auth_type)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    strlcpy(s_auth_resolver.auth_type, auth_type, sizeof(s_auth_resolver.auth_type));
+    s_auth_resolver.resolver = resolver;
+    s_auth_resolver.user_ctx = user_ctx;
+    return ESP_OK;
+}
+
+esp_err_t claw_llm_resolve_auth(const char *auth_type,
+                                bool force_refresh,
+                                char **out_token)
+{
+    if (out_token) {
+        *out_token = NULL;
+    }
+    if (!auth_type || !out_token || !s_auth_resolver.resolver ||
+            strcmp(auth_type, s_auth_resolver.auth_type) != 0) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    return s_auth_resolver.resolver(auth_type, force_refresh, out_token,
+                                    s_auth_resolver.user_ctx);
+}
+
 static inline bool abort_requested(const http_request_context_t *ctx)
 {
     return ctx && ctx->abort_flag && *ctx->abort_flag;
@@ -266,6 +302,7 @@ esp_err_t claw_llm_http_post_json(const claw_llm_http_json_request_t *request,
     esp_http_client_config_t config = {0};
     esp_http_client_handle_t client = NULL;
     char *auth_header_value = NULL;
+    char *resolved_token = NULL;
     char *sanitized_body = NULL;
     int status_code = 0;
     esp_err_t err;
@@ -307,6 +344,16 @@ esp_err_t claw_llm_http_post_json(const claw_llm_http_json_request_t *request,
     config.keep_alive_enable = true;
 #endif
 
+    if (request->auth_type && strcmp(request->auth_type, "trial") == 0) {
+        err = claw_llm_resolve_auth(request->auth_type, request->force_auth_refresh,
+                                    &resolved_token);
+        if (err != ESP_OK || !resolved_token || !resolved_token[0]) {
+            *out_error_message = dup_printf("Trial authentication is unavailable");
+            err = err == ESP_OK ? ESP_ERR_INVALID_STATE : err;
+            goto cleanup;
+        }
+    }
+
     client = esp_http_client_init(&config);
     if (!client) {
         *out_error_message = dup_printf("Failed to create HTTP client");
@@ -317,7 +364,8 @@ esp_err_t claw_llm_http_post_json(const claw_llm_http_json_request_t *request,
 
     esp_http_client_set_method(client, HTTP_METHOD_POST);
     esp_http_client_set_header(client, "Content-Type", "application/json");
-    auth_header_value = build_auth_header_value(request->auth_type, request->api_key);
+    auth_header_value = build_auth_header_value(request->auth_type,
+                                                resolved_token ? resolved_token : request->api_key);
     if (auth_header_value) {
         esp_http_client_set_header(client, auth_header_name(request->auth_type), auth_header_value);
     }
@@ -356,6 +404,7 @@ esp_err_t claw_llm_http_post_json(const claw_llm_http_json_request_t *request,
     }
 
     status_code = esp_http_client_get_status_code(client);
+    out_response->status_code = status_code;
     ESP_LOGD(TAG, "HTTP status=%d", status_code);
     if (status_code != 200) {
         err = ESP_FAIL;
@@ -370,6 +419,7 @@ esp_err_t claw_llm_http_post_json(const claw_llm_http_json_request_t *request,
     err = ESP_OK;
 
 cleanup:
+    free(resolved_token);
     free(auth_header_value);
     free(sanitized_body);
     if (client) {
