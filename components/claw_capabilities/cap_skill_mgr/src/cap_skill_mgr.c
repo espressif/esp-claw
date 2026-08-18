@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "cJSON.h"
 #include "claw_cap.h"
@@ -176,7 +177,7 @@ static esp_err_t cap_skill_write_file_text(const char *path, const char *text)
     if (!file) {
         return ESP_FAIL;
     }
-    if (fputs(text, file) < 0 || fflush(file) != 0) {
+    if (fputs(text, file) < 0 || fflush(file) != 0 || fsync(fileno(file)) != 0) {
         failed = true;
     }
     if (fclose(file) != 0) {
@@ -1597,7 +1598,7 @@ static const claw_cap_descriptor_t s_skill_descriptors[] = {
         .family = "skill",
         .description = "Register or refresh an existing source-file skill markdown file and reload the in-memory skill registry.",
         .kind = CLAW_CAP_KIND_CALLABLE,
-        .cap_flags = 0,
+        .cap_flags = CLAW_CAP_FLAG_CALLABLE_BY_LLM,
         .input_schema_json =
         "{\"type\":\"object\",\"properties\":{\"skill_id\":{\"type\":\"string\"},"
         "\"file\":{\"type\":\"string\",\"pattern\":\"^[^/]+/SKILL\\\\.md$\"}},"
