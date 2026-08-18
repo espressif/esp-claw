@@ -391,6 +391,8 @@ static app_claw_config_t s_current_config;
 static bool s_current_config_valid;
 static app_claw_save_config_fn s_save_config;
 static void *s_save_config_user_ctx;
+static app_claw_network_ready_fn s_network_ready;
+static void *s_network_ready_user_ctx;
 
 static void app_claw_audio_start_service(void)
 {
@@ -441,6 +443,18 @@ esp_err_t app_claw_set_save_config_callback(app_claw_save_config_fn save_config,
     xSemaphoreTake(s_config_lock, portMAX_DELAY);
     s_save_config = save_config;
     s_save_config_user_ctx = user_ctx;
+    xSemaphoreGive(s_config_lock);
+    return ESP_OK;
+}
+
+esp_err_t app_claw_set_network_ready_callback(app_claw_network_ready_fn network_ready,
+                                              void *user_ctx)
+{
+    ESP_RETURN_ON_ERROR(app_claw_ensure_config_lock(), TAG, "config lock unavailable");
+
+    xSemaphoreTake(s_config_lock, portMAX_DELAY);
+    s_network_ready = network_ready;
+    s_network_ready_user_ctx = user_ctx;
     xSemaphoreGive(s_config_lock);
     return ESP_OK;
 }
@@ -856,7 +870,8 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
 
 #if CONFIG_APP_CLAW_CAP_SYSTEM
     ESP_ERROR_CHECK(cap_system_time_sync_service_start(&(cap_system_time_sync_service_config_t) {
-                        .network_ready = NULL,
+                        .network_ready = s_network_ready,
+                        .network_ready_ctx = s_network_ready_user_ctx,
 #if CONFIG_APP_CLAW_CAP_SCHEDULER
                         .on_sync_success = app_time_sync_success,
 #else
