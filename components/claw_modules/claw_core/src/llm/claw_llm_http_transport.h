@@ -5,6 +5,8 @@
  */
 #pragma once
 
+#include "claw_llm_auth.h"
+
 #include <stdbool.h>
 
 #include "llm/claw_llm_types.h"

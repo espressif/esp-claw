@@ -24,6 +24,7 @@ static const claw_llm_backend_registration_t *find_builtin_backend_registration(
 {
     static const builtin_backend_registration_getter_t getters[] = {
         claw_llm_backend_openai_compatible_registration,
+        claw_llm_backend_trial_registration,
         claw_llm_backend_anthropic_registration,
     };
     size_t i;
