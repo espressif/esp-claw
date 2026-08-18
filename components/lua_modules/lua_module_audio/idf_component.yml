@@ -4,6 +4,6 @@ dependencies:
   espressif/esp_audio_codec: "*"
   espressif/esp_asrc: ^1.0.0
   audio_playback:
-    path: ../../../../../components/audio_playback
+    path: ../../common/audio_playback
   audio_hub:
     path: ../../common/audio_hub
