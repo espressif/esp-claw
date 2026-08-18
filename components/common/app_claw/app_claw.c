@@ -363,14 +363,16 @@ static void app_claw_launcher_select_cb(const system_ui_launcher_item_t *selecti
         return;
     }
 
-    esp_err_t err = cap_lua_run_script_async(selection->action,
-                                             selection->args_json,
-                                             0,
-                                             selection->id,
-                                             "display",
-                                             true,
-                                             output,
-                                             sizeof(output));
+    const cap_lua_async_config_t config = {
+        .path = selection->action,
+        .args_json = selection->args_json,
+        .name = selection->id,
+        .exclusive = "display",
+        .skill_id = selection->id,
+        .timeout_ms = 0,
+        .replace = true,
+    };
+    esp_err_t err = cap_lua_run_script_async_ex(&config, output, sizeof(output));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "launcher action failed: title=%s action=%s err=%s output=%s",
                  selection->title ? selection->title : "(null)",

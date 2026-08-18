@@ -42,12 +42,18 @@ typedef struct {
     char owner_tag[CAP_LUA_OWNER_TAG_MAX];
 } cap_lua_exec_ctx_t;
 
-/* task -> owner_tag map with one slot per possible concurrent Lua job.
+/* task -> owner_tag stack with one slot per possible concurrent Lua job.
  * A dedicated table (rather than FreeRTOS TLS) avoids fighting the app's
- * scarce TLS pointer slots. */
+ * scarce TLS pointer slots. Each nested runtime invocation owns one frame so
+ * returning from an inner invocation restores the outer owner tag. */
+typedef struct cap_lua_owner_tag_frame {
+    const char *tag;
+    struct cap_lua_owner_tag_frame *prev;
+} cap_lua_owner_tag_frame_t;
+
 typedef struct {
     TaskHandle_t task;
-    const char *tag;
+    cap_lua_owner_tag_frame_t *top;
 } cap_lua_owner_tag_slot_t;
 
 static cap_lua_owner_tag_slot_t s_owner_tag_slots[CAP_LUA_ASYNC_MAX_CONCURRENT];
@@ -66,17 +72,26 @@ static esp_err_t cap_lua_ensure_owner_tag_lock(void)
 
 static void cap_lua_owner_tag_register(TaskHandle_t task, const char *tag)
 {
+    cap_lua_owner_tag_frame_t *frame;
+
     if (!task || !tag || cap_lua_ensure_owner_tag_lock() != ESP_OK) {
         return;
     }
+    frame = calloc(1, sizeof(*frame));
+    if (!frame) {
+        ESP_LOGW(TAG, "failed to allocate owner-tag frame; job will report NULL tag");
+        return;
+    }
+    frame->tag = tag;
     if (xSemaphoreTake(s_owner_tag_lock, portMAX_DELAY) != pdTRUE) {
+        free(frame);
         return;
     }
     int free_slot = -1;
     for (int i = 0; i < CAP_LUA_ASYNC_MAX_CONCURRENT; i++) {
         if (s_owner_tag_slots[i].task == task) {
-            /* Re-entrant runtime (nested pcall sub-run): innermost tag wins. */
-            s_owner_tag_slots[i].tag = tag;
+            frame->prev = s_owner_tag_slots[i].top;
+            s_owner_tag_slots[i].top = frame;
             xSemaphoreGive(s_owner_tag_lock);
             return;
         }
@@ -87,10 +102,11 @@ static void cap_lua_owner_tag_register(TaskHandle_t task, const char *tag)
     if (free_slot < 0) {
         ESP_LOGW(TAG, "owner-tag slot table full; job will report NULL tag");
         xSemaphoreGive(s_owner_tag_lock);
+        free(frame);
         return;
     }
     s_owner_tag_slots[free_slot].task = task;
-    s_owner_tag_slots[free_slot].tag = tag;
+    s_owner_tag_slots[free_slot].top = frame;
     xSemaphoreGive(s_owner_tag_lock);
 }
 
@@ -103,9 +119,21 @@ static void cap_lua_owner_tag_unregister(TaskHandle_t task, const char *tag)
         return;
     }
     for (int i = 0; i < CAP_LUA_ASYNC_MAX_CONCURRENT; i++) {
-        if (s_owner_tag_slots[i].task == task && s_owner_tag_slots[i].tag == tag) {
-            s_owner_tag_slots[i].task = NULL;
-            s_owner_tag_slots[i].tag = NULL;
+        if (s_owner_tag_slots[i].task == task) {
+            cap_lua_owner_tag_frame_t **cursor = &s_owner_tag_slots[i].top;
+            while (*cursor != NULL) {
+                cap_lua_owner_tag_frame_t *frame = *cursor;
+                if (frame->tag == tag) {
+                    *cursor = frame->prev;
+                    free(frame);
+                    if (s_owner_tag_slots[i].top == NULL) {
+                        s_owner_tag_slots[i].task = NULL;
+                    }
+                    xSemaphoreGive(s_owner_tag_lock);
+                    return;
+                }
+                cursor = &frame->prev;
+            }
             break;
         }
     }
@@ -129,7 +157,7 @@ const char *cap_lua_current_owner_tag(void)
     }
     for (int i = 0; i < CAP_LUA_ASYNC_MAX_CONCURRENT; i++) {
         if (s_owner_tag_slots[i].task == task) {
-            tag = s_owner_tag_slots[i].tag;
+            tag = s_owner_tag_slots[i].top ? s_owner_tag_slots[i].top->tag : NULL;
             break;
         }
     }
