@@ -2680,6 +2680,7 @@ esp_err_t claw_event_router_reload(void)
     claw_event_router_rule_t *new_rules = NULL;
     size_t new_rule_count = 0;
     esp_err_t err;
+    bool recovered = false;
 
     if (!s_runtime || !s_runtime->initialized) {
         return ESP_ERR_INVALID_STATE;
@@ -2690,7 +2691,17 @@ esp_err_t claw_event_router_reload(void)
                                                  &new_rule_count,
                                                  NULL);
     if (err != ESP_OK) {
-        return err;
+        if (!s_runtime->recovery_rules_path[0]) {
+            return err;
+        }
+
+        ESP_LOGE(TAG, "Failed to reload router rules %s: %s; attempting recovery",
+                 s_runtime->rules_path, esp_err_to_name(err));
+        err = claw_event_router_recover_rules(&new_rules, &new_rule_count);
+        if (err != ESP_OK) {
+            return err;
+        }
+        recovered = true;
     }
 
     claw_event_router_lock();
@@ -2699,7 +2710,9 @@ esp_err_t claw_event_router_reload(void)
     s_runtime->rule_count = new_rule_count;
     claw_event_router_unlock();
 
-    ESP_LOGI(TAG, "Loaded %u router rules", (unsigned int)new_rule_count);
+    ESP_LOGI(TAG, "Loaded %u router rules%s",
+             (unsigned int)new_rule_count,
+             recovered ? " from recovery" : "");
     return ESP_OK;
 }
 
