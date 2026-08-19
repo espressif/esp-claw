@@ -41,7 +41,6 @@ typedef enum {
 #define CLAW_CORE_REQUEST_FLAG_PUBLISH_STAGE_MESSAGE  (1U << 3)
 
 #define CLAW_CORE_CONTEXT_PROVIDER_FLAG_REQUEST_START_ONLY (1U << 0)
-#define CLAW_CORE_REQUEST_SKILL_MAX 4U
 
 typedef struct claw_core_state *claw_core_handle_t;
 
@@ -57,11 +56,6 @@ typedef struct {
     const char *source_cap;
     const char *target_channel;
     const char *target_chat_id;
-    /** Skills injected only for this Agent run; the caller retains ownership. */
-    const char *const *skill_ids;
-    size_t skill_count;
-    /** Hide globally visible capability groups while request skills are active. */
-    bool request_skills_replace_global;
 } claw_core_request_t;
 
 typedef enum {

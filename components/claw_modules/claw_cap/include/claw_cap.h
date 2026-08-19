@@ -58,10 +58,6 @@ typedef struct {
     const char *target_chat_id;
     const char *source_cap;
     const char *correlation_id;
-    /** Request-scoped Skill Overlay inherited from the Agent request. */
-    const char *const *request_skill_ids;
-    size_t request_skill_count;
-    bool request_skills_replace_global;
     claw_core_handle_t core;
     claw_cap_caller_t caller;
 } claw_cap_call_context_t;

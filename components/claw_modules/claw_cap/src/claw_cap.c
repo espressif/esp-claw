@@ -476,9 +476,6 @@ esp_err_t claw_cap_call_from_core(const char *cap_name,
         ctx.target_channel = request->target_channel;
         ctx.target_chat_id = request->target_chat_id;
         ctx.source_cap = request->source_cap;
-        ctx.request_skill_ids = request->skill_ids;
-        ctx.request_skill_count = request->skill_count;
-        ctx.request_skills_replace_global = request->request_skills_replace_global;
         if (user_ctx) {
             const claw_cap_core_call_user_ctx_t *call_user_ctx =
                 (const claw_cap_core_call_user_ctx_t *)user_ctx;
@@ -526,9 +523,6 @@ static esp_err_t claw_cap_tools_collect_for_caller(const claw_core_request_t *re
     ctx.target_channel = request->target_channel;
     ctx.target_chat_id = request->target_chat_id;
     ctx.source_cap = request->source_cap;
-    ctx.request_skill_ids = request->skill_ids;
-    ctx.request_skill_count = request->skill_count;
-    ctx.request_skills_replace_global = request->request_skills_replace_global;
     ctx.caller = caller;
     if (claw_cap_core_user_ctx_is_valid((const claw_cap_core_call_user_ctx_t *)user_ctx)) {
         claw_cap_apply_core_user_ctx(&ctx, (const claw_cap_core_call_user_ctx_t *)user_ctx);
@@ -683,27 +677,6 @@ static bool claw_cap_group_id_in_list(const char *group_id,
     return false;
 }
 
-static bool claw_cap_group_is_enabled_by_request_skills(
-    const char *group_id, const claw_cap_call_context_t *ctx)
-{
-    if (!group_id || !ctx || !ctx->request_skill_ids) {
-        return false;
-    }
-    for (size_t i = 0; i < ctx->request_skill_count; ++i) {
-        claw_skill_catalog_entry_t entry = {0};
-
-        if (!ctx->request_skill_ids[i] ||
-                claw_skill_get_catalog_entry(ctx->request_skill_ids[i], &entry) != ESP_OK) {
-            continue;
-        }
-        if (claw_cap_group_id_in_list(group_id, entry.cap_groups,
-                                      entry.cap_group_count)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 static bool claw_cap_group_is_llm_visible_locked(
     size_t group_slot_index, const claw_cap_call_context_t *ctx)
 {
@@ -719,20 +692,6 @@ static bool claw_cap_group_is_llm_visible_locked(
         return false;
     }
     group_id = s_runtime.group_slots[group_slot_index].group->group_id;
-
-    if (ctx && ctx->request_skill_count > 0) {
-        if (claw_cap_group_is_enabled_by_request_skills(group_id, ctx)) {
-            return true;
-        }
-        if (ctx->request_skills_replace_global) {
-            return false;
-        }
-        return s_runtime.llm_visible_group_count == 0 ||
-               claw_cap_group_id_in_list(
-                   group_id,
-                   (const char *const *)s_runtime.llm_visible_group_ids,
-                   s_runtime.llm_visible_group_count);
-    }
 
     if (s_runtime.llm_visible_group_count == 0 &&
             (!session_id || !session_id[0] ||

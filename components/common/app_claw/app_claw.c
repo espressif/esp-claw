@@ -840,7 +840,6 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
 #endif
             claw_memory_session_history_provider,
             claw_skill_skills_list_provider,
-            claw_skill_request_skills_provider,
         };
         const char *root_agent_id = NULL;
 

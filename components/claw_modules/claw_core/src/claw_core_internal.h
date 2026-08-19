@@ -51,7 +51,6 @@ typedef struct {
     char *owned_source_cap;
     char *owned_target_channel;
     char *owned_target_chat_id;
-    char **owned_skill_ids;
 } claw_core_request_item_t;
 
 typedef struct {
