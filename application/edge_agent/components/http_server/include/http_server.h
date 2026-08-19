@@ -39,10 +39,23 @@ typedef struct {
 } http_server_wechat_login_status_t;
 
 typedef struct {
+    bool active;
+    bool completed;
+    char status[32];
+    char message[160];
+    char user_code[32];
+    char verification_url[160];
+    uint32_t interval;
+} http_server_openai_login_status_t;
+
+typedef struct {
     esp_err_t (*load_config)(app_config_t *config);
     esp_err_t (*save_config)(const app_config_t *config);
     esp_err_t (*get_wifi_status)(http_server_wifi_status_t *status);
     esp_err_t (*restart_device)(void);
+    esp_err_t (*openai_login_start)(void);
+    esp_err_t (*openai_login_get_status)(http_server_openai_login_status_t *status);
+    esp_err_t (*openai_login_cancel)(void);
     esp_err_t (*wechat_login_start)(const char *account_id, bool force);
     esp_err_t (*wechat_login_get_status)(http_server_wechat_login_status_t *status);
     esp_err_t (*wechat_login_cancel)(void);
