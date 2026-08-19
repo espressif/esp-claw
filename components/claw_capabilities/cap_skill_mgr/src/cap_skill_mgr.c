@@ -25,15 +25,15 @@ static const char *CAP_SKILL_LIST = "list_skill";
 static const char *CAP_SKILL_PUBLISH = "publish_skill";
 static const char *CAP_SKILL_REGISTER = "register_skill";
 static const char *CAP_SKILL_UNREGISTER = "unregister_skill";
-static const char *CAP_SKILL_SET_WORK = "set_skill_work";
-static const char *CAP_SKILL_REMOVE_WORK = "remove_skill_work";
+static const char *CAP_SKILL_SET_LAUNCHER = "set_skill_launcher";
+static const char *CAP_SKILL_REMOVE_LAUNCHER = "remove_skill_launcher";
 
 #define CAP_SKILL_MAX_CATALOG_LEN 16384
 #define CAP_SKILL_MAX_PATH_LEN    128
-#define CAP_SKILL_WORK_SCHEMA_VERSION 1
+#define CAP_SKILL_LAUNCHER_SCHEMA_VERSION 1
 #define CAP_SKILL_LAUNCHER_FILENAME "launcher.json"
-#define CAP_SKILL_WORK_TEMP_SUFFIX ".tmp"
-#define CAP_SKILL_WORK_BACKUP_SUFFIX ".bak"
+#define CAP_SKILL_LAUNCHER_TEMP_SUFFIX ".tmp"
+#define CAP_SKILL_LAUNCHER_BACKUP_SUFFIX ".bak"
 
 static char s_skill_root_dir[CAP_SKILL_MAX_PATH_LEN];
 static SemaphoreHandle_t s_skill_mutation_lock;
@@ -239,9 +239,9 @@ static esp_err_t cap_skill_build_transaction_paths(
 {
     if (!path || !temp_path || !backup_path ||
             snprintf(temp_path, temp_path_size, "%s%s", path,
-                     CAP_SKILL_WORK_TEMP_SUFFIX) >= (int)temp_path_size ||
+                     CAP_SKILL_LAUNCHER_TEMP_SUFFIX) >= (int)temp_path_size ||
             snprintf(backup_path, backup_path_size, "%s%s", path,
-                     CAP_SKILL_WORK_BACKUP_SUFFIX) >= (int)backup_path_size) {
+                     CAP_SKILL_LAUNCHER_BACKUP_SUFFIX) >= (int)backup_path_size) {
         return ESP_ERR_INVALID_SIZE;
     }
     return ESP_OK;
@@ -387,7 +387,7 @@ static bool cap_skill_id_is_valid(const char *skill_id)
            strchr(skill_id, '/') == NULL && strchr(skill_id, '\\') == NULL;
 }
 
-static bool cap_skill_work_input_key_is_allowed(const char *key)
+static bool cap_skill_launcher_field_is_allowed(const char *key)
 {
     static const char *const keys[] = {
         "skill_id", "entry", "icon", "args", "exclusive",
@@ -412,18 +412,18 @@ static bool cap_skill_publish_input_key_is_allowed(const char *key)
                    strcmp(key, "launcher") == 0);
 }
 
-static bool cap_skill_launcher_input_key_is_allowed(const char *key)
+static bool cap_skill_launcher_definition_key_is_allowed(const char *key)
 {
     return key && strcmp(key, "skill_id") != 0 &&
-           cap_skill_work_input_key_is_allowed(key);
+           cap_skill_launcher_field_is_allowed(key);
 }
 
 static esp_err_t cap_skill_resolve_runtime_paths(const char *skill_id,
                                                  bool require_registered,
                                                  char *skill_dir,
                                                  size_t skill_dir_size,
-                                                 char *work_path,
-                                                 size_t work_path_size,
+                                                 char *launcher_path,
+                                                 size_t launcher_path_size,
                                                  char *output,
                                                  size_t output_size)
 {
@@ -445,8 +445,8 @@ static esp_err_t cap_skill_resolve_runtime_paths(const char *skill_id,
             (int)skill_dir_size ||
             snprintf(skill_path, sizeof(skill_path), "%s/SKILL.md", skill_dir) >=
             (int)sizeof(skill_path) ||
-            snprintf(work_path, work_path_size, "%s/%s", skill_dir,
-                     CAP_SKILL_LAUNCHER_FILENAME) >= (int)work_path_size) {
+            snprintf(launcher_path, launcher_path_size, "%s/%s", skill_dir,
+                     CAP_SKILL_LAUNCHER_FILENAME) >= (int)launcher_path_size) {
         cap_skill_write_error(output, output_size, "skill path is too long", skill_id);
         return ESP_ERR_INVALID_SIZE;
     }
@@ -463,7 +463,7 @@ static esp_err_t cap_skill_resolve_runtime_paths(const char *skill_id,
     err = claw_skill_get_catalog_entry(skill_id, &entry);
     if (err != ESP_OK) {
         cap_skill_write_error(output, output_size,
-                              "skill must be published before low-level Work management",
+                              "skill must be published before launcher management",
                               skill_id);
         return err;
     }
@@ -479,11 +479,11 @@ static esp_err_t cap_skill_resolve_runtime_paths(const char *skill_id,
     return ESP_OK;
 }
 
-static esp_err_t cap_skill_rollback_file_update(const char *work_path,
+static esp_err_t cap_skill_rollback_file_update(const char *launcher_path,
                                                 bool had_previous,
                                                 bool reload_registry)
 {
-    esp_err_t restore_err = cap_skill_finish_file_update(work_path,
+    esp_err_t restore_err = cap_skill_finish_file_update(launcher_path,
                                                          had_previous, false);
 
     if (restore_err != ESP_OK || !reload_registry) {
@@ -562,8 +562,7 @@ static cJSON *cap_skill_catalog_entry_to_json(const claw_skill_catalog_entry_t *
     cJSON_AddStringToObject(skill, "file", entry->file ? entry->file : "");
     cJSON_AddStringToObject(skill, "summary", entry->summary ? entry->summary : "");
     cJSON_AddStringToObject(skill, "manage_mode", cap_skill_manage_mode_to_string(entry->manage_mode));
-    cJSON_AddBoolToObject(skill, "is_work",
-                         entry->execution && entry->execution->visible);
+    cJSON_AddBoolToObject(skill, "has_launcher", entry->execution != NULL);
     for (i = 0; i < entry->cap_group_count; i++) {
         cJSON_AddItemToArray(cap_groups, cJSON_CreateString(entry->cap_groups[i]));
     }
@@ -848,14 +847,14 @@ static esp_err_t cap_skill_register_execute_inner(const char *input_json,
     return cap_skill_build_catalog_result(CAP_SKILL_REGISTER, skill, NULL, output, output_size);
 }
 
-static esp_err_t cap_skill_set_work_execute_common(const char *input_json,
+static esp_err_t cap_skill_set_launcher_execute_common(const char *input_json,
                                                    const claw_cap_call_context_t *ctx,
                                                    char *output,
                                                    size_t output_size,
                                                    bool require_registered)
 {
     char skill_dir[CAP_SKILL_MAX_PATH_LEN];
-    char work_path[CAP_SKILL_MAX_PATH_LEN];
+    char launcher_path[CAP_SKILL_MAX_PATH_LEN];
     char payload_path[CAP_SKILL_MAX_PATH_LEN];
     cJSON *root = NULL;
     cJSON *field = NULL;
@@ -867,9 +866,9 @@ static esp_err_t cap_skill_set_work_execute_common(const char *input_json,
     cJSON *order_item = NULL;
     cJSON *visible_item = NULL;
     cJSON *replace_item = NULL;
-    cJSON *work = NULL;
+    cJSON *launcher = NULL;
     cJSON *skill = NULL;
-    char *work_text = NULL;
+    char *launcher_text = NULL;
     bool had_previous = false;
     claw_skill_catalog_entry_t catalog_entry;
     esp_err_t err;
@@ -884,8 +883,8 @@ static esp_err_t cap_skill_set_work_execute_common(const char *input_json,
         return ESP_ERR_INVALID_ARG;
     }
     cJSON_ArrayForEach(field, root) {
-        if (!cap_skill_work_input_key_is_allowed(field->string)) {
-            cap_skill_write_error(output, output_size, "unknown Work field", NULL);
+        if (!cap_skill_launcher_field_is_allowed(field->string)) {
+            cap_skill_write_error(output, output_size, "unknown launcher field", NULL);
             err = ESP_ERR_INVALID_ARG;
             goto cleanup;
         }
@@ -954,7 +953,7 @@ static esp_err_t cap_skill_set_work_execute_common(const char *input_json,
     err = cap_skill_resolve_runtime_paths(skill_id_item->valuestring,
                                           require_registered,
                                           skill_dir, sizeof(skill_dir),
-                                          work_path, sizeof(work_path),
+                                          launcher_path, sizeof(launcher_path),
                                           output, output_size);
     if (err != ESP_OK) {
         goto cleanup;
@@ -962,7 +961,7 @@ static esp_err_t cap_skill_set_work_execute_common(const char *input_json,
     if (snprintf(payload_path, sizeof(payload_path), "%s/%s", skill_dir,
                  entry_item->valuestring) >= (int)sizeof(payload_path) ||
             !cap_skill_file_exists(payload_path)) {
-        cap_skill_write_error(output, output_size, "Work entry file does not exist",
+        cap_skill_write_error(output, output_size, "launcher entry file does not exist",
                               skill_id_item->valuestring);
         err = ESP_ERR_NOT_FOUND;
         goto cleanup;
@@ -971,75 +970,75 @@ static esp_err_t cap_skill_set_work_execute_common(const char *input_json,
         if (snprintf(payload_path, sizeof(payload_path), "%s/%s", skill_dir,
                      icon_item->valuestring) >= (int)sizeof(payload_path) ||
                 !cap_skill_file_exists(payload_path)) {
-            cap_skill_write_error(output, output_size, "Work icon file does not exist",
+            cap_skill_write_error(output, output_size, "launcher icon file does not exist",
                                   skill_id_item->valuestring);
             err = ESP_ERR_NOT_FOUND;
             goto cleanup;
         }
     }
 
-    work = cJSON_CreateObject();
-    if (!work ||
-            !cJSON_AddNumberToObject(work, "schema_version",
-                                     CAP_SKILL_WORK_SCHEMA_VERSION) ||
-            !cJSON_AddStringToObject(work, "entry", entry_item->valuestring)) {
+    launcher = cJSON_CreateObject();
+    if (!launcher ||
+            !cJSON_AddNumberToObject(launcher, "schema_version",
+                                     CAP_SKILL_LAUNCHER_SCHEMA_VERSION) ||
+            !cJSON_AddStringToObject(launcher, "entry", entry_item->valuestring)) {
         cap_skill_write_error(output, output_size, "out of memory",
                               skill_id_item->valuestring);
         err = ESP_ERR_NO_MEM;
         goto cleanup;
     }
-    if (icon_item && !cJSON_AddStringToObject(work, "icon", icon_item->valuestring)) {
+    if (icon_item && !cJSON_AddStringToObject(launcher, "icon", icon_item->valuestring)) {
         err = ESP_ERR_NO_MEM;
-        goto work_alloc_failed;
+        goto launcher_alloc_failed;
     }
     if (args_item) {
         cJSON *args_copy = cJSON_Duplicate(args_item, true);
-        if (!args_copy || !cJSON_AddItemToObject(work, "args", args_copy)) {
+        if (!args_copy || !cJSON_AddItemToObject(launcher, "args", args_copy)) {
             cJSON_Delete(args_copy);
             err = ESP_ERR_NO_MEM;
-            goto work_alloc_failed;
+            goto launcher_alloc_failed;
         }
     }
-    if (exclusive_item && !cJSON_AddStringToObject(work, "exclusive",
+    if (exclusive_item && !cJSON_AddStringToObject(launcher, "exclusive",
                                                     exclusive_item->valuestring)) {
         err = ESP_ERR_NO_MEM;
-        goto work_alloc_failed;
+        goto launcher_alloc_failed;
     }
-    if (order_item && !cJSON_AddNumberToObject(work, "order", order_item->valueint)) {
+    if (order_item && !cJSON_AddNumberToObject(launcher, "order", order_item->valueint)) {
         err = ESP_ERR_NO_MEM;
-        goto work_alloc_failed;
+        goto launcher_alloc_failed;
     }
-    if (visible_item && !cJSON_AddBoolToObject(work, "visible",
+    if (visible_item && !cJSON_AddBoolToObject(launcher, "visible",
                                                cJSON_IsTrue(visible_item))) {
         err = ESP_ERR_NO_MEM;
-        goto work_alloc_failed;
+        goto launcher_alloc_failed;
     }
-    if (replace_item && !cJSON_AddBoolToObject(work, "replace",
+    if (replace_item && !cJSON_AddBoolToObject(launcher, "replace",
                                                cJSON_IsTrue(replace_item))) {
         err = ESP_ERR_NO_MEM;
-        goto work_alloc_failed;
+        goto launcher_alloc_failed;
     }
 
-    work_text = cJSON_Print(work);
-    if (!work_text) {
+    launcher_text = cJSON_Print(launcher);
+    if (!launcher_text) {
         err = ESP_ERR_NO_MEM;
-        goto work_alloc_failed;
+        goto launcher_alloc_failed;
     }
 
-    err = cap_skill_begin_file_update(work_path, work_text, &had_previous);
+    err = cap_skill_begin_file_update(launcher_path, launcher_text, &had_previous);
     if (err != ESP_OK) {
-        cap_skill_write_error(output, output_size, "failed to write Work definition",
+        cap_skill_write_error(output, output_size, "failed to write launcher definition",
                               skill_id_item->valuestring);
         goto cleanup;
     }
     err = claw_skill_reload_registry();
     if (err != ESP_OK) {
-        rollback_err = cap_skill_rollback_file_update(work_path, had_previous,
+        rollback_err = cap_skill_rollback_file_update(launcher_path, had_previous,
                                                       false);
         cap_skill_write_error(output, output_size,
                               rollback_err == ESP_OK ?
-                              "failed to reload registry; previous Work restored" :
-                              "failed to reload registry and restore previous Work",
+                              "failed to reload registry; previous launcher restored" :
+                              "failed to reload registry and restore previous launcher",
                               skill_id_item->valuestring);
         goto cleanup;
     }
@@ -1049,32 +1048,32 @@ static esp_err_t cap_skill_set_work_execute_common(const char *input_json,
             catalog_entry.manage_mode != CLAW_SKILL_MANAGE_MODE_RUNTIME ||
             !catalog_entry.skill_dir ||
             strcmp(catalog_entry.skill_dir, skill_dir) != 0) {
-        rollback_err = cap_skill_rollback_file_update(work_path, had_previous,
+        rollback_err = cap_skill_rollback_file_update(launcher_path, had_previous,
                                                       true);
         cap_skill_write_error(output, output_size,
                               rollback_err == ESP_OK ?
-                              "Work was not available after reload; previous Work restored" :
-                              "Work was not available after reload and rollback failed",
+                              "launcher was not available after reload; previous launcher restored" :
+                              "launcher was not available after reload and rollback failed",
                               skill_id_item->valuestring);
         err = err == ESP_OK ? ESP_ERR_INVALID_STATE : err;
         goto cleanup;
     }
 
-    err = cap_skill_finish_file_update(work_path, had_previous, true);
+    err = cap_skill_finish_file_update(launcher_path, had_previous, true);
     if (err != ESP_OK) {
-        rollback_err = cap_skill_rollback_file_update(work_path, had_previous,
+        rollback_err = cap_skill_rollback_file_update(launcher_path, had_previous,
                                                       true);
         cap_skill_write_error(output, output_size,
                               rollback_err == ESP_OK ?
-                              "failed to commit Work update; previous Work restored" :
-                              "failed to commit Work update and rollback failed",
+                              "failed to commit launcher update; previous launcher restored" :
+                              "failed to commit launcher update and rollback failed",
                               skill_id_item->valuestring);
         goto cleanup;
     }
 
     err = claw_skill_get_catalog_entry(skill_id_item->valuestring, &catalog_entry);
     if (err != ESP_OK) {
-        cap_skill_write_error(output, output_size, "skill not found after Work update",
+        cap_skill_write_error(output, output_size, "skill not found after launcher update",
                               skill_id_item->valuestring);
         goto cleanup;
     }
@@ -1085,33 +1084,33 @@ static esp_err_t cap_skill_set_work_execute_common(const char *input_json,
         err = ESP_ERR_NO_MEM;
         goto cleanup;
     }
-    err = cap_skill_build_catalog_result(CAP_SKILL_SET_WORK, skill, NULL,
+    err = cap_skill_build_catalog_result(CAP_SKILL_SET_LAUNCHER, skill, NULL,
                                          output, output_size);
     skill = NULL;
     goto cleanup;
 
-work_alloc_failed:
+launcher_alloc_failed:
     cap_skill_write_error(output, output_size, "out of memory",
                           skill_id_item->valuestring);
 
 cleanup:
     cJSON_Delete(skill);
-    cJSON_Delete(work);
+    cJSON_Delete(launcher);
     cJSON_Delete(root);
-    free(work_text);
+    free(launcher_text);
     return err;
 }
 
-static esp_err_t cap_skill_set_work_execute_inner(const char *input_json,
+static esp_err_t cap_skill_set_launcher_execute_inner(const char *input_json,
                                                   const claw_cap_call_context_t *ctx,
                                                   char *output,
                                                   size_t output_size)
 {
-    return cap_skill_set_work_execute_common(input_json, ctx, output,
+    return cap_skill_set_launcher_execute_common(input_json, ctx, output,
                                              output_size, true);
 }
 
-static esp_err_t cap_skill_remove_work_execute_common(const char *input_json,
+static esp_err_t cap_skill_remove_launcher_execute_common(const char *input_json,
                                                       const claw_cap_call_context_t *ctx,
                                                       char *output,
                                                       size_t output_size,
@@ -1119,7 +1118,7 @@ static esp_err_t cap_skill_remove_work_execute_common(const char *input_json,
                                                       bool force_reload)
 {
     char skill_dir[CAP_SKILL_MAX_PATH_LEN];
-    char work_path[CAP_SKILL_MAX_PATH_LEN];
+    char launcher_path[CAP_SKILL_MAX_PATH_LEN];
     cJSON *root = NULL;
     cJSON *field = NULL;
     cJSON *skill_id_item = NULL;
@@ -1139,7 +1138,7 @@ static esp_err_t cap_skill_remove_work_execute_common(const char *input_json,
     }
     cJSON_ArrayForEach(field, root) {
         if (!field->string || strcmp(field->string, "skill_id") != 0) {
-            cap_skill_write_error(output, output_size, "unknown remove_skill_work field", NULL);
+            cap_skill_write_error(output, output_size, "unknown remove_skill_launcher field", NULL);
             err = ESP_ERR_INVALID_ARG;
             goto cleanup;
         }
@@ -1155,14 +1154,14 @@ static esp_err_t cap_skill_remove_work_execute_common(const char *input_json,
     err = cap_skill_resolve_runtime_paths(skill_id_item->valuestring,
                                           require_registered,
                                           skill_dir, sizeof(skill_dir),
-                                          work_path, sizeof(work_path),
+                                          launcher_path, sizeof(launcher_path),
                                           output, output_size);
     if (err != ESP_OK) {
         goto cleanup;
     }
-    err = cap_skill_begin_file_update(work_path, NULL, &had_previous);
+    err = cap_skill_begin_file_update(launcher_path, NULL, &had_previous);
     if (err != ESP_OK) {
-        cap_skill_write_error(output, output_size, "failed to remove Work definition",
+        cap_skill_write_error(output, output_size, "failed to remove launcher definition",
                               skill_id_item->valuestring);
         goto cleanup;
     }
@@ -1170,12 +1169,12 @@ static esp_err_t cap_skill_remove_work_execute_common(const char *input_json,
     if (had_previous || force_reload) {
         err = claw_skill_reload_registry();
         if (err != ESP_OK) {
-            rollback_err = cap_skill_rollback_file_update(work_path,
+            rollback_err = cap_skill_rollback_file_update(launcher_path,
                                                           had_previous, false);
             cap_skill_write_error(output, output_size,
                                   rollback_err == ESP_OK ?
-                                  "failed to reload registry; Work restored" :
-                                  "failed to reload registry and restore Work",
+                                  "failed to reload registry; launcher restored" :
+                                  "failed to reload registry and restore launcher",
                                   skill_id_item->valuestring);
             goto cleanup;
         }
@@ -1183,42 +1182,42 @@ static esp_err_t cap_skill_remove_work_execute_common(const char *input_json,
 
     err = claw_skill_get_catalog_entry(skill_id_item->valuestring, &catalog_entry);
     if (err != ESP_OK) {
-        cap_skill_write_error(output, output_size, "skill not found after Work removal",
+        cap_skill_write_error(output, output_size, "skill not found after launcher removal",
                               skill_id_item->valuestring);
         goto cleanup;
     }
     if (catalog_entry.manage_mode != CLAW_SKILL_MANAGE_MODE_RUNTIME ||
             !catalog_entry.skill_dir ||
             strcmp(catalog_entry.skill_dir, skill_dir) != 0) {
-        rollback_err = cap_skill_rollback_file_update(work_path, had_previous,
+        rollback_err = cap_skill_rollback_file_update(launcher_path, had_previous,
                                                       true);
         cap_skill_write_error(output, output_size,
                               rollback_err == ESP_OK ?
-                              "published Skill is not runtime-manageable; Work restored" :
-                              "published Skill is not runtime-manageable and Work rollback failed",
+                              "published Skill is not runtime-manageable; launcher restored" :
+                              "published Skill is not runtime-manageable and launcher rollback failed",
                               skill_id_item->valuestring);
         err = ESP_ERR_INVALID_STATE;
         goto cleanup;
     }
     if (catalog_entry.execution) {
-        rollback_err = cap_skill_rollback_file_update(work_path, had_previous,
+        rollback_err = cap_skill_rollback_file_update(launcher_path, had_previous,
                                                       true);
         cap_skill_write_error(output, output_size,
                               rollback_err == ESP_OK ?
-                              "Work remains available after removal; Work restored" :
-                              "Work remains available after removal and rollback failed",
+                              "launcher remains available after removal; launcher restored" :
+                              "launcher remains available after removal and rollback failed",
                               skill_id_item->valuestring);
         err = ESP_ERR_INVALID_STATE;
         goto cleanup;
     }
-    err = cap_skill_finish_file_update(work_path, had_previous, true);
+    err = cap_skill_finish_file_update(launcher_path, had_previous, true);
     if (err != ESP_OK) {
-        rollback_err = cap_skill_rollback_file_update(work_path, had_previous,
+        rollback_err = cap_skill_rollback_file_update(launcher_path, had_previous,
                                                       true);
         cap_skill_write_error(output, output_size,
                               rollback_err == ESP_OK ?
-                              "failed to commit Work removal; Work restored" :
-                              "failed to commit Work removal and rollback failed",
+                              "failed to commit launcher removal; launcher restored" :
+                              "failed to commit launcher removal and rollback failed",
                               skill_id_item->valuestring);
         goto cleanup;
     }
@@ -1229,7 +1228,7 @@ static esp_err_t cap_skill_remove_work_execute_common(const char *input_json,
         err = ESP_ERR_NO_MEM;
         goto cleanup;
     }
-    err = cap_skill_build_catalog_result(CAP_SKILL_REMOVE_WORK, skill, NULL,
+    err = cap_skill_build_catalog_result(CAP_SKILL_REMOVE_LAUNCHER, skill, NULL,
                                          output, output_size);
     skill = NULL;
 
@@ -1239,12 +1238,12 @@ cleanup:
     return err;
 }
 
-static esp_err_t cap_skill_remove_work_execute_inner(const char *input_json,
+static esp_err_t cap_skill_remove_launcher_execute_inner(const char *input_json,
                                                      const claw_cap_call_context_t *ctx,
                                                      char *output,
                                                      size_t output_size)
 {
-    return cap_skill_remove_work_execute_common(input_json, ctx, output,
+    return cap_skill_remove_launcher_execute_common(input_json, ctx, output,
                                                 output_size, true, false);
 }
 
@@ -1303,7 +1302,7 @@ static esp_err_t cap_skill_publish_execute_inner(const char *input_json,
     }
     if (cJSON_IsObject(launcher_item)) {
         cJSON_ArrayForEach(field, launcher_item) {
-            if (!cap_skill_launcher_input_key_is_allowed(field->string)) {
+            if (!cap_skill_launcher_definition_key_is_allowed(field->string)) {
                 cap_skill_write_error(output, output_size,
                                       "unknown launcher field",
                                       skill_id_item->valuestring);
@@ -1329,7 +1328,7 @@ static esp_err_t cap_skill_publish_execute_inner(const char *input_json,
             err = ESP_ERR_NO_MEM;
             goto cleanup;
         }
-        err = cap_skill_set_work_execute_common(call_text, ctx, output,
+        err = cap_skill_set_launcher_execute_common(call_text, ctx, output,
                                                 output_size, false);
     } else if (cJSON_IsNull(launcher_item)) {
         call = cJSON_CreateObject();
@@ -1347,7 +1346,7 @@ static esp_err_t cap_skill_publish_execute_inner(const char *input_json,
             err = ESP_ERR_NO_MEM;
             goto cleanup;
         }
-        err = cap_skill_remove_work_execute_common(call_text, ctx, output,
+        err = cap_skill_remove_launcher_execute_common(call_text, ctx, output,
                                                    output_size, false, true);
     } else {
         call = cJSON_CreateObject();
@@ -1539,21 +1538,21 @@ static esp_err_t cap_skill_unregister_execute(const char *input_json,
                                              input_json, ctx, output, output_size);
 }
 
-static esp_err_t cap_skill_set_work_execute(const char *input_json,
+static esp_err_t cap_skill_set_launcher_execute(const char *input_json,
                                             const claw_cap_call_context_t *ctx,
                                             char *output,
                                             size_t output_size)
 {
-    return cap_skill_execute_mutation_locked(cap_skill_set_work_execute_inner,
+    return cap_skill_execute_mutation_locked(cap_skill_set_launcher_execute_inner,
                                              input_json, ctx, output, output_size);
 }
 
-static esp_err_t cap_skill_remove_work_execute(const char *input_json,
+static esp_err_t cap_skill_remove_launcher_execute(const char *input_json,
                                                const claw_cap_call_context_t *ctx,
                                                char *output,
                                                size_t output_size)
 {
-    return cap_skill_execute_mutation_locked(cap_skill_remove_work_execute_inner,
+    return cap_skill_execute_mutation_locked(cap_skill_remove_launcher_execute_inner,
                                              input_json, ctx, output, output_size);
 }
 
@@ -1617,10 +1616,10 @@ static const claw_cap_descriptor_t s_skill_descriptors[] = {
         .execute = cap_skill_unregister_execute,
     },
     {
-        .id = "set_skill_work",
-        .name = "set_skill_work",
+        .id = "set_skill_launcher",
+        .name = "set_skill_launcher",
         .family = "skill",
-        .description = "Create or update a registered runtime Skill's Work launcher definition. "
+        .description = "Create or update a registered runtime Skill's launcher definition. "
                        "The firmware validates the files and generates launcher.json; do not write launcher.json directly.",
         .kind = CLAW_CAP_KIND_CALLABLE,
         .cap_flags = 0,
@@ -1635,19 +1634,19 @@ static const claw_cap_descriptor_t s_skill_descriptors[] = {
         "\"visible\":{\"type\":\"boolean\"},"
         "\"replace\":{\"type\":\"boolean\"}},"
         "\"required\":[\"skill_id\",\"entry\"]}",
-        .execute = cap_skill_set_work_execute,
+        .execute = cap_skill_set_launcher_execute,
     },
     {
-        .id = "remove_skill_work",
-        .name = "remove_skill_work",
+        .id = "remove_skill_launcher",
+        .name = "remove_skill_launcher",
         .family = "skill",
-        .description = "Remove a registered runtime Skill's Work launcher definition and refresh the registry.",
+        .description = "Remove a registered runtime Skill's launcher definition and refresh the registry.",
         .kind = CLAW_CAP_KIND_CALLABLE,
         .cap_flags = 0,
         .input_schema_json =
         "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{"
         "\"skill_id\":{\"type\":\"string\"}},\"required\":[\"skill_id\"]}",
-        .execute = cap_skill_remove_work_execute,
+        .execute = cap_skill_remove_launcher_execute,
     },
     {
         .id = "activate_skill",

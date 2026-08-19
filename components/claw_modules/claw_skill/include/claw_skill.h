@@ -35,7 +35,7 @@ typedef enum {
 } claw_skill_manage_mode_t;
 
 /**
- * @brief  Optional executable entry loaded from a skill's launcher.json
+ * @brief  Optional launcher entry loaded from a skill's launcher.json
  */
 typedef struct {
     const char *entry;      /**< Absolute path of the executable script */
