@@ -7,6 +7,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #include "claw_core.h"
 #include "esp_err.h"
@@ -14,6 +15,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#define CLAW_SKILL_EXECUTION_EXCLUSIVE_MAX 31
 
 /**
  * @brief  Configuration for claw_skill_init()
@@ -32,14 +35,16 @@ typedef enum {
 } claw_skill_manage_mode_t;
 
 /**
- * @brief  Optional executable entry declared by a skill's frontmatter
+ * @brief  Optional launcher entry loaded from a skill's launcher.json
  */
 typedef struct {
     const char *entry;      /**< Absolute path of the executable script */
     const char *icon;       /**< Optional absolute path of the launcher icon */
     const char *args_json;  /**< Optional compact JSON object string passed to the executable */
+    const char *exclusive;  /**< Optional async-job resource conflict group */
     int         order;      /**< Launcher ordering hint */
     bool        visible;    /**< False hides the entry from launcher consumers */
+    bool        replace;    /**< Replace an active job with the same name/exclusive group */
 } claw_skill_execution_t;
 
 /**
@@ -57,6 +62,10 @@ typedef struct {
 } claw_skill_catalog_entry_t;
 
 typedef esp_err_t (*claw_skill_catalog_cb_t)(const claw_skill_catalog_entry_t *entry, void *user_ctx);
+
+/** Callback published after a new registry snapshot becomes visible. */
+typedef void (*claw_skill_registry_changed_cb_t)(uint32_t revision,
+                                                 void *user_ctx);
 
 /**
  * @brief  Initialize the skill registry
@@ -104,6 +113,24 @@ esp_err_t claw_skill_add_directory(const char *dir);
 esp_err_t claw_skill_reload_registry(void);
 
 /**
+ * @brief Read the revision of the currently published registry snapshot
+ *
+ * The revision changes only after a successful registry reload. Consumers may
+ * cache derived views and rebuild them only when this value changes.
+ */
+esp_err_t claw_skill_get_registry_revision(uint32_t *out_revision);
+
+/**
+ * @brief Register a listener for successful registry snapshot changes
+ *
+ * The callback runs after the registry lock is released. Registering the same
+ * callback/context pair more than once is idempotent.
+ */
+esp_err_t claw_skill_register_registry_changed_cb(
+    claw_skill_registry_changed_cb_t callback,
+    void *user_ctx);
+
+/**
  * @brief  Render the skill catalog as a plain-text list for the prompt layer
  *
  * @param[out]  buf   Destination buffer
@@ -144,6 +171,8 @@ esp_err_t claw_skill_render_catalog_json(char *buf, size_t size);
  * @note  The callback receives a read-only view whose pointers remain valid
  *        until the next registry reload or reset. Consumers that keep data
  *        longer must copy it.
+ * @note  Iteration is serialized with registry reload. The callback must not
+ *        call APIs that add directories or reload the skill registry.
  */
 esp_err_t claw_skill_foreach_catalog_entry(claw_skill_catalog_cb_t cb, void *user_ctx);
 

@@ -109,7 +109,9 @@ bool claw_core_llm_config_ready(claw_core_state_t *core,
     if (core->llm_lock) {
         xSemaphoreTake(core->llm_lock, portMAX_DELAY);
     }
-    if (!core->llm_config.api_key || !core->llm_config.api_key[0]) {
+    if ((!core->llm_config.api_key || !core->llm_config.api_key[0]) &&
+            (!core->llm_config.backend_type ||
+             strcmp(core->llm_config.backend_type, "trial") != 0)) {
         reason = "LLM API token is not configured. Open the device settings page and set the LLM API token before chatting.";
     } else if (!core->llm_config.backend_type || !core->llm_config.backend_type[0]) {
         reason = "LLM backend is not configured. Open the device settings page and select an LLM backend before chatting.";

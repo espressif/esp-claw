@@ -53,6 +53,7 @@
 #include "claw_core.h"
 #include "claw_event_publisher.h"
 #include "claw_event_router.h"
+#include "claw_hw_registry.h"
 #include "cJSON.h"
 #include "esp_console.h"
 #include "esp_log.h"
@@ -151,11 +152,9 @@ static int submit_and_print(const char *prompt, const char *session_id)
         return 1;
     }
 
-    err = claw_agent_mgr_submit_root_text(prompt,
-                                          session_id,
-                                          CLAW_CORE_REQUEST_FLAG_PUBLISH_STAGE_MESSAGE,
-                                          5000,
-                                          &request_id);
+    err = claw_agent_mgr_start_root_run_text(
+        prompt, session_id, CLAW_CORE_REQUEST_FLAG_PUBLISH_STAGE_MESSAGE,
+        5000, &request_id);
     if (err != ESP_OK) {
         printf("submit failed: %s\n", esp_err_to_name(err));
         return 1;
@@ -710,6 +709,60 @@ static int cmd_auto(int argc, char **argv)
     return 1;
 }
 
+/* `hwmap` — dump the claw_hw_registry state or query one resource. */
+typedef struct {
+    int count;
+} hwmap_ctx_t;
+
+static const char *hwmap_mode_str(claw_hw_mode_t mode)
+{
+    switch (mode) {
+    case CLAW_HW_MODE_EXCLUSIVE:  return "EXCLUSIVE";
+    case CLAW_HW_MODE_SHARED_READ: return "SHARED_READ";
+    default: return "?";
+    }
+}
+
+static void hwmap_iter_cb(const char *resource, const char *owner_tag,
+                          claw_hw_mode_t mode, void *user_ctx)
+{
+    hwmap_ctx_t *ctx = (hwmap_ctx_t *)user_ctx;
+    ctx->count++;
+    printf("  %-11s  %-32s  %s\n",
+           hwmap_mode_str(mode),
+           resource ? resource : "?",
+           owner_tag ? owner_tag : "?");
+}
+
+static int cmd_hwmap(int argc, char **argv)
+{
+    if (argc >= 2 && strcmp(argv[1], "query") == 0) {
+        if (argc < 3) {
+            printf("Usage: hwmap query <resource>\n");
+            return 1;
+        }
+        const char *holder = NULL;
+        esp_err_t err = claw_hw_query(argv[2], &holder);
+        if (err == ESP_OK && holder) {
+            printf("%s -> %s\n", argv[2], holder);
+        } else {
+            printf("%s -> (unclaimed)\n", argv[2]);
+        }
+        return 0;
+    }
+
+    printf("Active hardware leases:\n");
+    printf("  %-11s  %-32s  %s\n", "MODE", "RESOURCE", "OWNER");
+    hwmap_ctx_t ctx = {0};
+    esp_err_t err = claw_hw_foreach(hwmap_iter_cb, &ctx);
+    if (err != ESP_OK) {
+        printf("hwmap: iteration failed: %s\n", esp_err_to_name(err));
+        return 1;
+    }
+    printf("(%d entries)\n", ctx.count);
+    return 0;
+}
+
 static void register_cap_cli_commands(void)
 {
 #if CONFIG_APP_CLAW_CAP_IM_QQ
@@ -818,6 +871,15 @@ esp_err_t app_claw_cli_start(void)
             .func = cmd_auto,
         };
         ESP_ERROR_CHECK(esp_console_cmd_register(&auto_cmd));
+    }
+
+    {
+        esp_console_cmd_t hwmap_cmd = {
+            .command = "hwmap",
+            .help = "Dump the hardware lease registry: hwmap [query <resource>]",
+            .func = cmd_hwmap,
+        };
+        ESP_ERROR_CHECK(esp_console_cmd_register(&hwmap_cmd));
     }
 
     printf("Type 'help', 'auto rules', 'auto last', or 'auto emit_message qq_gateway qq 123 hello'\n");

@@ -1213,6 +1213,50 @@ esp_err_t claw_session_mgr_list_chat_sessions(uint32_t agent_id,
     return err;
 }
 
+esp_err_t claw_session_mgr_resolve_chat_session_id(uint32_t agent_id,
+                                                   const char *source_channel,
+                                                   const char *chat_id,
+                                                   const char *alias,
+                                                   char *buf,
+                                                   size_t buf_size,
+                                                   size_t *out_len)
+{
+    char chat_key[CLAW_SESSION_MGR_KEY_SIZE];
+    claw_session_mgr_alias_map_t map;
+    esp_err_t err;
+
+    if (!source_channel || !source_channel[0] || !chat_id || !chat_id[0] ||
+            !claw_session_mgr_alias_is_valid(alias) || !buf || buf_size == 0 ||
+            !out_len) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    buf[0] = '\0';
+    *out_len = 0;
+    if (!s_session_mgr.configured || !s_session_mgr.mutex) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    xSemaphoreTakeRecursive(s_session_mgr.mutex, portMAX_DELAY);
+    err = claw_session_mgr_require_configured_locked();
+    if (err == ESP_OK) {
+        err = claw_session_mgr_build_chat_key(agent_id, source_channel, chat_id,
+                                              chat_key, sizeof(chat_key));
+    }
+    if (err == ESP_OK) {
+        err = claw_session_mgr_load_mapping_locked(chat_key, &map);
+    }
+    if (err == ESP_OK && !claw_session_mgr_alias_exists(&map, alias)) {
+        err = ESP_ERR_NOT_FOUND;
+    }
+    if (err == ESP_OK) {
+        err = claw_session_mgr_build_alias_session_id(chat_key, alias, buf,
+                                                      buf_size, out_len);
+    }
+    xSemaphoreGiveRecursive(s_session_mgr.mutex);
+
+    return err;
+}
+
 esp_err_t claw_session_mgr_switch_chat_session(uint32_t agent_id,
                                                const char *source_channel,
                                                const char *chat_id,

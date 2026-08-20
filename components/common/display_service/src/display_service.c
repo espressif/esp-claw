@@ -9,6 +9,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "app_claw_hw_bridge.h"
+#include "claw_hw_registry.h"
 #include "devices/dev_display_lcd/dev_display_lcd.h"
 #include "devices/dev_lcd_touch/dev_lcd_touch.h"
 #include "esp_board_manager_includes.h"
@@ -29,7 +31,10 @@ static const char *TAG = "display_service";
 #define DISPLAY_SERVICE_TASK_PRIO 5
 #define DISPLAY_SERVICE_MAX_SESSIONS 6
 #define DISPLAY_SERVICE_MAX_CLIENTS 4
+#define DISPLAY_SERVICE_MAX_TOUCH_OBSERVERS 4
 #define DISPLAY_SERVICE_SCENE_OWNER_NAME_LEN DISPLAY_SERVICE_OWNER_NAME_LEN
+#define DISPLAY_SERVICE_TOUCH_OBSERVER_INDEX_MASK 0xffu
+#define DISPLAY_SERVICE_TOUCH_OBSERVER_GENERATION_MASK 0x00ffffffu
 
 typedef void (*display_service_scene_cleanup_cb_t)(void *owner_ctx, void *user_ctx);
 
@@ -55,6 +60,13 @@ typedef struct {
     display_service_config_t display_config;
 } display_service_client_config_t;
 
+typedef struct {
+    display_service_touch_observer_cb_t cb;
+    void *user_ctx;
+    uint32_t generation;
+    bool active;
+} display_service_touch_observer_t;
+
 struct display_service_session_t {
     bool active;
     uint32_t generation;
@@ -75,12 +87,12 @@ typedef struct {
     lv_obj_t *dummy_input_blocker;
     SemaphoreHandle_t dummy_mutex;
     const char *dummy_owner;
-    display_service_touch_observer_cb_t touch_observer_cb;
-    void *touch_observer_user_ctx;
+    display_service_touch_observer_t touch_observers[DISPLAY_SERVICE_MAX_TOUCH_OBSERVERS];
     display_service_state_observer_cb_t state_observer_cb;
     void *state_observer_user_ctx;
     display_service_client_t clients[DISPLAY_SERVICE_MAX_CLIENTS];
     struct display_service_session_t sessions[DISPLAY_SERVICE_MAX_SESSIONS];
+    uint32_t touch_observer_generation;
     uint32_t session_generation;
     size_t client_count;
     void *scene_owner;
@@ -94,6 +106,11 @@ typedef struct {
 } display_service_state_t;
 
 EXT_RAM_BSS_ATTR static display_service_state_t s_display;
+
+/* Exclusive leases held under "compositor/display" while the service runs;
+ * NULL when not held. */
+static claw_hw_lease_handle_t s_display_lcd_lease;
+static claw_hw_lease_handle_t s_lcd_touch_lease;
 
 static esp_err_t display_service_scene_acquire_ex(const display_service_scene_config_t *config);
 static esp_err_t display_service_scene_load_screen(void *owner_ctx, lv_obj_t *screen);
@@ -244,10 +261,29 @@ static bool display_service_remove_client_locked(void *owner_ctx)
     return true;
 }
 
+static display_service_touch_observer_handle_t display_service_make_touch_observer_handle(size_t index, uint32_t generation)
+{
+    return (display_service_touch_observer_handle_t)((generation << 8) | (uint32_t)(index + 1));
+}
+
+static uint32_t display_service_next_touch_observer_generation(void)
+{
+    s_display.touch_observer_generation = (s_display.touch_observer_generation + 1) & DISPLAY_SERVICE_TOUCH_OBSERVER_GENERATION_MASK;
+    if (s_display.touch_observer_generation == 0) {
+        s_display.touch_observer_generation = 1;
+    }
+    return s_display.touch_observer_generation;
+}
+
 static void display_service_notify_touch_observer(const display_service_touch_sample_t *sample)
 {
-    if (s_display.touch_observer_cb != NULL && sample != NULL) {
-        s_display.touch_observer_cb(sample, s_display.touch_observer_user_ctx);
+    if (sample == NULL) {
+        return;
+    }
+    for (size_t i = 0; i < DISPLAY_SERVICE_MAX_TOUCH_OBSERVERS; i++) {
+        if (s_display.touch_observers[i].active && s_display.touch_observers[i].cb != NULL) {
+            s_display.touch_observers[i].cb(sample, s_display.touch_observers[i].user_ctx);
+        }
     }
 }
 
@@ -482,15 +518,43 @@ esp_err_t display_service_start(const display_service_config_t *config)
         return ESP_OK;
     }
 
-    ESP_RETURN_ON_ERROR(display_service_load_board_display(&lcd_cfg, &lcd_handles), TAG, "load display failed");
+    /* Lease display_lcd + (optional) lcd_touch exclusively under
+     * "compositor/display" before touching any hardware. On failure below
+     * we fall through to `fail:` which calls display_service_stop(); that
+     * release path drops both leases. */
+    ret = app_claw_hw_lease_device("display_lcd", "compositor/display",
+                                   CLAW_HW_MODE_EXCLUSIVE,
+                                   &s_display_lcd_lease, NULL);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "display_lcd lease failed: %s", esp_err_to_name(ret));
+        s_display_lcd_lease = NULL;
+        return ret;
+    }
+    {
+        /* Touch is optional. */
+        esp_err_t touch_err = app_claw_hw_lease_device("lcd_touch", "compositor/display",
+                                                       CLAW_HW_MODE_EXCLUSIVE,
+                                                       &s_lcd_touch_lease, NULL);
+        if (touch_err == ESP_ERR_NOT_FOUND) {
+            s_lcd_touch_lease = NULL;
+        } else if (touch_err != ESP_OK) {
+            ESP_LOGW(TAG, "lcd_touch lease failed: %s", esp_err_to_name(touch_err));
+            claw_hw_release(s_display_lcd_lease);
+            s_display_lcd_lease = NULL;
+            s_lcd_touch_lease = NULL;
+            return touch_err;
+        }
+    }
+
+    ESP_GOTO_ON_ERROR(display_service_load_board_display(&lcd_cfg, &lcd_handles), fail, TAG, "load display failed");
     display_service_load_board_touch();
-    ESP_RETURN_ON_FALSE(buffer_lines > 0 && buffer_lines <= lcd_cfg->lcd_height,
-                        ESP_ERR_INVALID_ARG, TAG, "invalid buffer lines");
+    ESP_GOTO_ON_FALSE(buffer_lines > 0 && buffer_lines <= lcd_cfg->lcd_height,
+                      ESP_ERR_INVALID_ARG, fail, TAG, "invalid buffer lines");
 
     if (!s_display.dummy_mutex) {
         s_display.dummy_mutex = xSemaphoreCreateMutex();
-        ESP_RETURN_ON_FALSE(s_display.dummy_mutex != NULL, ESP_ERR_NO_MEM,
-                            TAG, "create dummy draw mutex failed");
+        ESP_GOTO_ON_FALSE(s_display.dummy_mutex != NULL, ESP_ERR_NO_MEM,
+                          fail, TAG, "create dummy draw mutex failed");
     }
 
     esp_lv_adapter_config_t adapter_config = ESP_LV_ADAPTER_DEFAULT_CONFIG();
@@ -538,6 +602,17 @@ fail:
 
 void display_service_stop(void)
 {
+    /* Release the compositor/display leases first; each is guarded so this
+     * is also safe when start() failed before acquiring them. */
+    if (s_lcd_touch_lease) {
+        claw_hw_release(s_lcd_touch_lease);
+        s_lcd_touch_lease = NULL;
+    }
+    if (s_display_lcd_lease) {
+        claw_hw_release(s_display_lcd_lease);
+        s_display_lcd_lease = NULL;
+    }
+
     if (s_display.adapter_initialized && display_service_lock() == ESP_OK) {
         s_display.started = false;
         display_service_delete_dummy_input_blocker_locked();
@@ -571,8 +646,7 @@ void display_service_stop(void)
     s_display.io = NULL;
     s_display.touch = NULL;
     s_display.dummy_owner = NULL;
-    s_display.touch_observer_cb = NULL;
-    s_display.touch_observer_user_ctx = NULL;
+    memset(s_display.touch_observers, 0, sizeof(s_display.touch_observers));
     s_display.state_observer_cb = NULL;
     s_display.state_observer_user_ctx = NULL;
     memset(s_display.clients, 0, sizeof(s_display.clients));
@@ -789,12 +863,48 @@ void display_service_unlock(void)
     esp_lv_adapter_unlock();
 }
 
-esp_err_t display_service_set_touch_observer(display_service_touch_observer_cb_t cb,
-                                             void *user_ctx)
+esp_err_t display_service_add_touch_observer(display_service_touch_observer_cb_t cb,
+                                             void *user_ctx,
+                                             display_service_touch_observer_handle_t *ret_handle)
 {
+    ESP_RETURN_ON_FALSE(cb != NULL && ret_handle != NULL, ESP_ERR_INVALID_ARG, TAG, "touch observer args invalid");
+    *ret_handle = DISPLAY_SERVICE_TOUCH_OBSERVER_INVALID;
     ESP_RETURN_ON_ERROR(display_service_lock(), TAG, "lock failed");
-    s_display.touch_observer_cb = cb;
-    s_display.touch_observer_user_ctx = user_ctx;
+    for (size_t i = 0; i < DISPLAY_SERVICE_MAX_TOUCH_OBSERVERS; i++) {
+        if (!s_display.touch_observers[i].active) {
+            uint32_t generation = display_service_next_touch_observer_generation();
+            s_display.touch_observers[i].cb = cb;
+            s_display.touch_observers[i].user_ctx = user_ctx;
+            s_display.touch_observers[i].generation = generation;
+            s_display.touch_observers[i].active = true;
+            *ret_handle = display_service_make_touch_observer_handle(i, generation);
+            display_service_unlock();
+            return ESP_OK;
+        }
+    }
+    display_service_unlock();
+    ESP_LOGE(TAG, "touch observer slots full");
+    return ESP_ERR_NO_MEM;
+}
+
+esp_err_t display_service_remove_touch_observer(display_service_touch_observer_handle_t handle)
+{
+    ESP_RETURN_ON_FALSE(handle != DISPLAY_SERVICE_TOUCH_OBSERVER_INVALID, ESP_ERR_INVALID_ARG, TAG, "touch observer handle invalid");
+    ESP_RETURN_ON_ERROR(display_service_lock(), TAG, "lock failed");
+    uint32_t raw_index = handle & DISPLAY_SERVICE_TOUCH_OBSERVER_INDEX_MASK;
+    uint32_t generation = (handle >> 8) & DISPLAY_SERVICE_TOUCH_OBSERVER_GENERATION_MASK;
+    if (raw_index == 0 || raw_index > DISPLAY_SERVICE_MAX_TOUCH_OBSERVERS) {
+        display_service_unlock();
+        return ESP_ERR_NOT_FOUND;
+    }
+    display_service_touch_observer_t *observer = &s_display.touch_observers[raw_index - 1];
+    if (!observer->active || observer->generation != generation) {
+        display_service_unlock();
+        return ESP_ERR_NOT_FOUND;
+    }
+    observer->active = false;
+    observer->cb = NULL;
+    observer->user_ctx = NULL;
     display_service_unlock();
     return ESP_OK;
 }

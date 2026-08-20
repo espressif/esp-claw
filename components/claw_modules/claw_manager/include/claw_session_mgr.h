@@ -85,6 +85,13 @@ esp_err_t claw_session_mgr_list_chat_sessions(uint32_t agent_id,
                                              const char *source_channel,
                                              const char *chat_id,
                                              claw_session_mgr_alias_map_t *out_map);
+esp_err_t claw_session_mgr_resolve_chat_session_id(uint32_t agent_id,
+                                                   const char *source_channel,
+                                                   const char *chat_id,
+                                                   const char *alias,
+                                                   char *buf,
+                                                   size_t buf_size,
+                                                   size_t *out_len);
 esp_err_t claw_session_mgr_switch_chat_session(uint32_t agent_id,
                                                const char *source_channel,
                                                const char *chat_id,

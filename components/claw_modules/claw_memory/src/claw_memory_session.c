@@ -1320,6 +1320,11 @@ cleanup:
     return ESP_OK;
 }
 
+esp_err_t claw_memory_load_session_history_json(const char *session_id, char **out_json)
+{
+    return claw_memory_session_load_json_alloc(session_id, out_json);
+}
+
 static esp_err_t session_history_open_pair_for_append(const char *data_path,
                                                       const char *idx_path,
                                                       FILE **out_data_file,

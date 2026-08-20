@@ -12,18 +12,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "audio_capture.h"
+#include "audio_mixer.h"
 #include "esp_asrc.h"
 #include "esp_asrc_types.h"
 #include "esp_aac_enc.h"
-#include "esp_audio_simple_player_advance.h"
-#include "esp_audio_simple_player.h"
-#include "esp_codec_dev.h"
-#include "esp_crt_bundle.h"
+#include "audio_playback.h"
 #include "esp_dsp.h"
 #include "esp_err.h"
-#include "esp_gmf_io_http.h"
-#include "esp_gmf_obj.h"
-#include "esp_gmf_pipeline.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -39,7 +35,6 @@
 #define TAG                           AUDIO_TAG
 #define AUDIO_CHUNK_BYTES             512
 #define AUDIO_DEFAULT_VOL             80
-#define AUDIO_INPUT_GAIN_DB_MAX       30.0f
 #define AUDIO_DEVICE_INPUT_META       "lua_audio_input"
 #define AUDIO_DEVICE_OUTPUT_META      "lua_audio_output"
 #define AUDIO_PLAYER_META             "lua_audio_player"
@@ -53,11 +48,7 @@
 #define AUDIO_SPECTRUM_DB_MAX         (-20.0f)
 #define AUDIO_ASRC_COMPLEXITY         3
 #define AUDIO_ASRC_TIMEOUT_MS         1000
-#define AUDIO_CODEC_VREG_FORMAT_MAGIC        0x7AC0
-#define AUDIO_CODEC_VREG_FORMAT_SAMPLE_RATE  0x7AC1
-#define AUDIO_CODEC_VREG_FORMAT_CHANNELS     0x7AC2
-#define AUDIO_CODEC_VREG_FORMAT_BITS         0x7AC3
-#define AUDIO_CODEC_VREG_FORMAT_MAGIC_VALUE  0x55414346
+#define AUDIO_INPUT_READ_TIMEOUT_MS   2000
 
 typedef enum {
     AUDIO_DEVICE_INPUT = 0,
@@ -71,9 +62,12 @@ typedef struct {
     uint8_t bytes_per_frame;
 } audio_format_t;
 
+/* `sink_handle` is discriminated by `kind`: OUTPUT -> audio_mixer_track_handle_t
+ * bound to the APP track; INPUT -> audio_capture_sub_handle_t bound to the APP
+ * subscriber. Direct codec access is not permitted. */
 typedef struct audio_device_t {
     audio_device_kind_t kind;
-    esp_codec_dev_handle_t codec_dev;
+    void *sink_handle;
     audio_format_t fmt;
     int volume;
     bool closed;
@@ -96,17 +90,19 @@ typedef struct {
 } audio_converter_t;
 
 typedef struct {
-    esp_asp_handle_t asp;
+    audio_playback_handle_t service;
     audio_device_t *output;
     int output_ref;
     SemaphoreHandle_t lock;
-    audio_converter_t converter;
-    bool converter_ready;
     bool closed;
     bool running;
-    bool current_uri_https;
-    esp_asp_state_t state;
-    esp_asp_music_info_t music_info;
+    audio_playback_state_t state;
+    struct {
+        int sample_rate;
+        uint8_t channels;
+        uint8_t bits;
+        int bitrate;
+    } music_info;
     bool has_music_info;
 } audio_player_t;
 
@@ -143,6 +139,18 @@ audio_analyzer_t *lua_audio_check_analyzer(lua_State *L, int idx, const char *wh
 bool audio_device_acquire(audio_device_t *dev);
 void audio_device_release(audio_device_t *dev);
 
+/* Returns ESP_OK on full accept, ESP_FAIL on partial write, or
+ * ESP_ERR_INVALID_STATE for a closed / wrong-kind device. */
+esp_err_t audio_device_write(audio_device_t *dev, const void *buf, size_t bytes);
+
+/* timeout_ms == 0 uses AUDIO_INPUT_READ_TIMEOUT_MS. Returns ESP_OK on a full
+ * read, ESP_ERR_TIMEOUT when the buffer could not be filled in time, or
+ * ESP_ERR_INVALID_STATE for a closed / wrong-kind device. */
+esp_err_t audio_device_read(audio_device_t *dev, void *buf, size_t bytes, uint32_t timeout_ms);
+
+/* Discards queued PCM before a recorder begins its timed capture window. */
+esp_err_t audio_device_flush_input(audio_device_t *dev);
+
 char *audio_uri_from_path(const char *path);
 char *audio_path_from_file_arg(const char *path_or_uri);
 bool audio_path_valid(const char *path, const char *ext);
@@ -151,8 +159,8 @@ void audio_converter_destroy(audio_converter_t *converter);
 esp_err_t audio_converter_create(audio_converter_t *converter, const audio_format_t *src, const audio_format_t *dst);
 esp_err_t audio_converter_process(audio_converter_t *converter, const uint8_t *in, uint32_t in_bytes, uint8_t **out, uint32_t *out_bytes);
 
-int lua_audio_new_output(lua_State *L);
-int lua_audio_new_input(lua_State *L);
+int lua_audio_open_output(lua_State *L);
+int lua_audio_open_input(lua_State *L);
 int lua_audio_device_close(lua_State *L);
 int lua_audio_device_gc(lua_State *L);
 int lua_audio_device_info(lua_State *L);

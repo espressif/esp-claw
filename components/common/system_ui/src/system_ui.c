@@ -19,6 +19,7 @@ EXT_RAM_BSS_ATTR system_ui_state_t s_ui;
 static const char *SYSTEM_UI_DISPLAY_OWNER_NAME = "system_ui";
 static int32_t s_touch_start_x;
 static int32_t s_touch_start_y;
+static display_service_touch_observer_handle_t s_touch_observer_handle;
 
 #define SYSTEM_UI_JOBS_SWIPE_EDGE_PX 32
 #define SYSTEM_UI_JOBS_SWIPE_TRIGGER_PX 54
@@ -412,8 +413,9 @@ esp_err_t system_ui_start(const system_ui_config_t *config)
     s_ui.height = (uint32_t)lv_display_get_vertical_resolution(display);
     ESP_GOTO_ON_FALSE(s_ui.width > 0 && s_ui.height > 0, ESP_ERR_INVALID_STATE, fail, SYSTEM_UI_TAG, "display resolution is invalid");
     ESP_GOTO_ON_ERROR(system_ui_start_event_task(), fail, SYSTEM_UI_TAG, "start event task failed");
-    ESP_GOTO_ON_ERROR(display_service_set_touch_observer(system_ui_touch_observer_cb, NULL),
-                      fail, SYSTEM_UI_TAG, "set touch observer failed");
+    s_touch_observer_handle = DISPLAY_SERVICE_TOUCH_OBSERVER_INVALID;
+    ESP_GOTO_ON_ERROR(display_service_add_touch_observer(system_ui_touch_observer_cb, NULL, &s_touch_observer_handle),
+                      fail, SYSTEM_UI_TAG, "add touch observer failed");
     ESP_GOTO_ON_ERROR(display_service_set_state_observer(system_ui_state_observer_cb, NULL),
                       fail, SYSTEM_UI_TAG, "set state observer failed");
     ESP_GOTO_ON_ERROR(system_ui_vibration_init(), fail, SYSTEM_UI_TAG, "init vibration failed");
@@ -453,7 +455,15 @@ void system_ui_stop(void)
     } else {
         s_ui.started = false;
     }
-    (void)display_service_set_touch_observer(NULL, NULL);
+    if (s_touch_observer_handle != DISPLAY_SERVICE_TOUCH_OBSERVER_INVALID) {
+        if (display_service_is_started()) {
+            esp_err_t err = display_service_remove_touch_observer(s_touch_observer_handle);
+            if (err != ESP_OK) {
+                ESP_LOGW(SYSTEM_UI_TAG, "remove touch observer failed: %s", esp_err_to_name(err));
+            }
+        }
+        s_touch_observer_handle = DISPLAY_SERVICE_TOUCH_OBSERVER_INVALID;
+    }
     (void)display_service_set_state_observer(NULL, NULL);
     system_ui_vibration_deinit();
     s_ui.touch_gesture = SYSTEM_UI_TOUCH_GESTURE_NONE;

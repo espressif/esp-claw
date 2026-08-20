@@ -1,4 +1,10 @@
 dependencies:
+  claw_hw_registry:
+    path: ../claw_hw_registry
+
+  audio_hub:
+    path: ../audio_hub
+
   cap_boards:
     path: ../../claw_capabilities/cap_boards
 
@@ -120,7 +126,7 @@ dependencies:
 
   system_ui:
     rules:
-      - if: $CONFIG{ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT} == True
+      - if: $CONFIG{ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT} == True && $CONFIG{APP_CLAW_SYSTEM_UI_ENABLE} == True
     path: ../system_ui
 
   # --- lua_driver (hardware peripheral drivers) ---

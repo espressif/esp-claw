@@ -1,2 +1,4 @@
 dependencies:
   georgik/lua: "^5.5.0~7"
+  claw_hw_registry:
+    path: ../../common/claw_hw_registry

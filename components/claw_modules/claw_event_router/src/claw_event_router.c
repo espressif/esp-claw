@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <unistd.h>
 
 #include "cJSON.h"
 #include "claw_agent_mgr.h"
@@ -45,6 +46,9 @@ static const char *TAG = "claw_event_router";
 #define CLAW_EVENT_ROUTER_cap_SIZE          64
 #define CLAW_EVENT_ROUTER_BINDING_SIZE             16
 #define CLAW_EVENT_ROUTER_PENDING_TABLE_SIZE        6
+#define CLAW_EVENT_ROUTER_PATH_SIZE                192
+#define CLAW_EVENT_ROUTER_QUARANTINE_SUFFIX       ".bad"
+#define CLAW_EVENT_ROUTER_PREVIOUS_SUFFIX         ".prev"
 _Static_assert(CLAW_EVENT_ROUTER_PENDING_TABLE_SIZE >= CLAW_EVENT_ROUTER_DEFAULT_QUEUE_LEN,
                "pending table must cover the default event queue length");
 
@@ -74,9 +78,11 @@ typedef struct {
     bool stop_requested;
     SemaphoreHandle_t mutex;
     QueueHandle_t event_queue;
+    bool event_queue_with_caps;
     TaskHandle_t task_handle;
     uint32_t next_request_id;
-    char rules_path[192];
+    char rules_path[CLAW_EVENT_ROUTER_PATH_SIZE];
+    char recovery_rules_path[CLAW_EVENT_ROUTER_PATH_SIZE];
     size_t max_rules;
     size_t max_actions_per_rule;
     size_t cap_output_size;
@@ -98,6 +104,8 @@ static esp_err_t claw_event_router_load_rules_from_file(const char *path,
                                                         size_t *out_rule_count,
                                                         cJSON **out_root);
 static esp_err_t claw_event_router_write_rules_json_file(const char *path, const char *json);
+static esp_err_t claw_event_router_recover_rules(claw_event_router_rule_t **out_rules,
+                                                 size_t *out_rule_count);
 static esp_err_t claw_event_router_commit_rules(cJSON *root,
                                                 claw_event_router_rule_t *new_rules,
                                                 size_t new_rule_count);
@@ -115,6 +123,29 @@ static void claw_event_router_init_defaults(claw_event_router_runtime_t *runtime
     runtime->next_request_id = 1000000;
 }
 
+static void *claw_event_router_calloc_prefer_psram(size_t count, size_t size)
+{
+    void *memory = heap_caps_calloc(
+        count, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    return memory ? memory : calloc(count, size);
+}
+
+static QueueHandle_t claw_event_router_create_event_queue(
+    UBaseType_t queue_len, UBaseType_t item_size, bool *out_with_caps)
+{
+    QueueHandle_t queue = NULL;
+
+    if (out_with_caps) {
+        *out_with_caps = false;
+    }
+    queue = xQueueCreateWithCaps(
+        queue_len, item_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (queue && out_with_caps) {
+        *out_with_caps = true;
+    }
+    return queue ? queue : xQueueCreate(queue_len, item_size);
+}
+
 static void claw_event_router_free_runtime(void)
 {
     if (!s_runtime) {
@@ -123,7 +154,11 @@ static void claw_event_router_free_runtime(void)
 
     claw_event_router_free_rules(s_runtime->rules, s_runtime->rule_count);
     if (s_runtime->event_queue) {
-        vQueueDelete(s_runtime->event_queue);
+        if (s_runtime->event_queue_with_caps) {
+            vQueueDeleteWithCaps(s_runtime->event_queue);
+        } else {
+            vQueueDelete(s_runtime->event_queue);
+        }
     }
     if (s_runtime->mutex) {
         vSemaphoreDelete(s_runtime->mutex);
@@ -791,7 +826,8 @@ static esp_err_t claw_event_router_parse_rule(const cJSON *item,
         }
     }
 
-    out_rule->actions = calloc(action_count, sizeof(*out_rule->actions));
+    out_rule->actions = claw_event_router_calloc_prefer_psram(
+        action_count, sizeof(*out_rule->actions));
     if (!out_rule->actions) {
         return ESP_ERR_NO_MEM;
     }
@@ -987,7 +1023,8 @@ static esp_err_t claw_event_router_load_rules_from_root(const cJSON *root,
         return ESP_ERR_INVALID_SIZE;
     }
     if (cJSON_GetArraySize((cJSON *)root) > 0) {
-        rules = calloc((size_t)cJSON_GetArraySize((cJSON *)root), sizeof(*rules));
+        rules = claw_event_router_calloc_prefer_psram(
+            (size_t)cJSON_GetArraySize((cJSON *)root), sizeof(*rules));
         if (!rules) {
             return ESP_ERR_NO_MEM;
         }
@@ -1058,6 +1095,7 @@ static esp_err_t claw_event_router_write_rules_json_file(const char *path, const
 {
     char temp_path[224];
     FILE *file = NULL;
+    char *verified_json = NULL;
     size_t json_len = 0;
 
     if (!path || !path[0] || !json) {
@@ -1075,23 +1113,151 @@ static esp_err_t claw_event_router_write_rules_json_file(const char *path, const
     }
 
     json_len = strlen(json);
-    if ((json_len > 0 && fwrite(json, 1, json_len, file) != json_len) || fflush(file) != 0) {
-        fclose(file);
+    bool io_failed = (json_len > 0 && fwrite(json, 1, json_len, file) != json_len) ||
+                     fflush(file) != 0 || fsync(fileno(file)) != 0;
+    int io_errno = errno;
+    if (fclose(file) != 0) {
+        io_failed = true;
+        io_errno = errno;
+    }
+    file = NULL;
+    if (io_failed) {
         remove(temp_path);
-        ESP_LOGE(TAG, "Failed to write temp rules file %s errno=%d", temp_path, errno);
+        ESP_LOGE(TAG, "Failed to sync temp rules file %s errno=%d", temp_path,
+                 io_errno);
         return ESP_FAIL;
     }
-    fclose(file);
 
-    if (remove(path) != 0 && errno != ENOENT) {
+    if (claw_event_router_read_file(temp_path, &verified_json) != ESP_OK ||
+        strcmp(verified_json, json) != 0) {
+        free(verified_json);
         remove(temp_path);
-        return ESP_FAIL;
+        ESP_LOGE(TAG, "Temp rules verification failed: %s", temp_path);
+        return ESP_ERR_INVALID_RESPONSE;
     }
+    free(verified_json);
+
+    /* LittleFS atomically replaces an existing file. Retain a compatibility
+     * fallback for FAT backends whose rename implementation reports EEXIST. */
     if (rename(temp_path, path) != 0) {
+        int rename_errno = errno;
+        if (rename_errno == EEXIST || rename_errno == ENOTEMPTY) {
+            if ((remove(path) == 0 || errno == ENOENT) &&
+                rename(temp_path, path) == 0) {
+                return ESP_OK;
+            }
+            rename_errno = errno;
+        }
         remove(temp_path);
-        ESP_LOGE(TAG, "Failed to rename %s to %s errno=%d", temp_path, path, errno);
+        ESP_LOGE(TAG, "Failed to rename %s to %s errno=%d", temp_path, path,
+                 rename_errno);
         return ESP_FAIL;
     }
+    return ESP_OK;
+}
+
+static esp_err_t claw_event_router_quarantine_rules(void)
+{
+    char bad_path[CLAW_EVENT_ROUTER_PATH_SIZE + sizeof(CLAW_EVENT_ROUTER_QUARANTINE_SUFFIX)];
+    char previous_path[sizeof(bad_path) + sizeof(CLAW_EVENT_ROUTER_PREVIOUS_SUFFIX)];
+    struct stat st = {0};
+
+    if (snprintf(bad_path, sizeof(bad_path), "%s%s",
+                 s_runtime->rules_path,
+                 CLAW_EVENT_ROUTER_QUARANTINE_SUFFIX) >= (int)sizeof(bad_path) ||
+        snprintf(previous_path, sizeof(previous_path), "%s%s",
+                 bad_path,
+                 CLAW_EVENT_ROUTER_PREVIOUS_SUFFIX) >= (int)sizeof(previous_path)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    if (stat(bad_path, &st) == 0) {
+        if (remove(previous_path) != 0 && errno != ENOENT) {
+            ESP_LOGE(TAG, "Failed to remove old router quarantine %s errno=%d",
+                     previous_path, errno);
+            return ESP_FAIL;
+        }
+        if (rename(bad_path, previous_path) != 0) {
+            ESP_LOGE(TAG, "Failed to rotate router quarantine %s errno=%d",
+                     bad_path, errno);
+            return ESP_FAIL;
+        }
+    } else if (errno != ENOENT) {
+        ESP_LOGE(TAG, "Failed to inspect router quarantine %s errno=%d",
+                 bad_path, errno);
+        return ESP_FAIL;
+    }
+
+    if (rename(s_runtime->rules_path, bad_path) != 0) {
+        ESP_LOGE(TAG, "Failed to quarantine router rules %s errno=%d",
+                 s_runtime->rules_path, errno);
+        return ESP_FAIL;
+    }
+    ESP_LOGW(TAG, "Quarantined invalid router rules: %s", bad_path);
+    return ESP_OK;
+}
+
+static esp_err_t claw_event_router_recover_rules(claw_event_router_rule_t **out_rules,
+                                                 size_t *out_rule_count)
+{
+    claw_event_router_rule_t *recovery_rules = NULL;
+    size_t recovery_rule_count = 0;
+    char *recovery_json = NULL;
+    cJSON *root = NULL;
+    esp_err_t err;
+
+    if (!out_rules || !out_rule_count || !s_runtime->recovery_rules_path[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_rules = NULL;
+    *out_rule_count = 0;
+
+    /* Validate the recovery source before touching the failed primary. */
+    err = claw_event_router_read_file(s_runtime->recovery_rules_path,
+                                      &recovery_json);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to read recovery router rules %s: %s",
+                 s_runtime->recovery_rules_path, esp_err_to_name(err));
+        return err;
+    }
+    root = cJSON_Parse(recovery_json);
+    if (!root) {
+        free(recovery_json);
+        ESP_LOGE(TAG, "Recovery router rules are invalid JSON: %s",
+                 s_runtime->recovery_rules_path);
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    err = claw_event_router_load_rules_from_root(root,
+                                                 &recovery_rules,
+                                                 &recovery_rule_count);
+    cJSON_Delete(root);
+    if (err != ESP_OK) {
+        free(recovery_json);
+        ESP_LOGE(TAG, "Recovery router rules failed validation: %s",
+                 esp_err_to_name(err));
+        return err;
+    }
+
+    /* Persistence is best-effort. Recovery rules were already parsed and
+     * validated, so a read-only/full/damaged DATA filesystem must not prevent
+     * the router from starting with the immutable SYSTEM fallback. */
+    err = claw_event_router_quarantine_rules();
+    if (err == ESP_OK) {
+        err = claw_event_router_write_rules_json_file(s_runtime->rules_path,
+                                                      recovery_json);
+    }
+    free(recovery_json);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG,
+                 "Using recovery router rules in memory; DATA repair failed: %s",
+                 esp_err_to_name(err));
+    } else {
+        ESP_LOGW(TAG, "Restored router rules from recovery: %s",
+                 s_runtime->recovery_rules_path);
+    }
+
+    *out_rules = recovery_rules;
+    *out_rule_count = recovery_rule_count;
     return ESP_OK;
 }
 
@@ -1752,6 +1918,8 @@ static esp_err_t claw_event_router_execute_agent_action(
     claw_event_t agent_event = {0};
     claw_agent_mgr_root_input_t agent_input = {0};
     char submit_output[32] = {0};
+    char accepted_payload[128] = {0};
+    claw_core_message_receipt_t receipt = {0};
     esp_err_t err;
 
     input_root = cJSON_Parse(action->input_json);
@@ -1769,7 +1937,6 @@ static esp_err_t claw_event_router_execute_agent_action(
     target_channel = cJSON_GetStringValue(cJSON_GetObjectItem(rendered_input, "target_channel"));
     target_chat_id = cJSON_GetStringValue(cJSON_GetObjectItem(rendered_input, "target_chat_id"));
     session_policy = cJSON_GetStringValue(cJSON_GetObjectItem(rendered_input, "session_policy"));
-
     agent_event = *event;
     if (session_policy && session_policy[0]) {
         claw_event_router_parse_session_policy(session_policy, &agent_event.session_policy);
@@ -1778,8 +1945,7 @@ static esp_err_t claw_event_router_execute_agent_action(
     agent_input.session_policy = agent_event.session_policy;
     agent_input.flags = CLAW_CORE_REQUEST_FLAG_PUBLISH_OUT_MESSAGE |
                         CLAW_CORE_REQUEST_FLAG_PUBLISH_STAGE_MESSAGE |
-                        CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE |
-                        CLAW_CORE_REQUEST_FLAG_USER_INTERRUPT;
+                        CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE;
     agent_input.request_id = s_runtime->next_request_id++;
     agent_input.user_text = (text && text[0]) ? text : (event->text ? event->text : "");
     agent_input.source_cap = event->source_cap;
@@ -1791,17 +1957,66 @@ static esp_err_t claw_event_router_execute_agent_action(
     agent_input.event_id = event->event_id;
     agent_input.target_channel = (target_channel && target_channel[0]) ? target_channel : event->source_channel;
     agent_input.target_chat_id = (target_chat_id && target_chat_id[0]) ? target_chat_id : event->chat_id;
-
-    err = claw_agent_mgr_submit_root(&agent_input,
-                                     s_runtime->config.agent_submit_timeout_ms);
+    err = claw_agent_mgr_post_root_message(
+        &agent_input, s_runtime->config.agent_submit_timeout_ms, &receipt);
 
     if (err == ESP_OK) {
-        snprintf(submit_output, sizeof(submit_output), "request_id=%" PRIu32, agent_input.request_id);
+        snprintf(submit_output, sizeof(submit_output), "run_id=%" PRIu32,
+                 receipt.run_id);
         claw_event_router_update_last_output(ctx,
                                              "agent",
                                              agent_input.target_channel,
                                              "submitted",
                                              submit_output);
+        snprintf(agent_event.event_id,
+                 sizeof(agent_event.event_id),
+                 "agent-accepted-%" PRIu32,
+                 agent_input.request_id);
+        strlcpy(agent_event.source_cap,
+                "claw_agent_mgr",
+                sizeof(agent_event.source_cap));
+        strlcpy(agent_event.event_type,
+                "agent_accepted",
+                sizeof(agent_event.event_type));
+        strlcpy(agent_event.source_channel,
+                agent_input.target_channel ? agent_input.target_channel : "",
+                sizeof(agent_event.source_channel));
+        strlcpy(agent_event.chat_id,
+                agent_input.target_chat_id ? agent_input.target_chat_id : "",
+                sizeof(agent_event.chat_id));
+        snprintf(agent_event.message_id,
+                 sizeof(agent_event.message_id),
+                 "agent-accepted-%" PRIu32,
+                 agent_input.request_id);
+        if (event->message_id[0]) {
+            strlcpy(agent_event.correlation_id,
+                    event->message_id,
+                    sizeof(agent_event.correlation_id));
+        }
+        strlcpy(agent_event.content_type, "text", sizeof(agent_event.content_type));
+        agent_event.timestamp_ms = claw_event_router_now_ms();
+        agent_event.session_policy = CLAW_SESSION_POLICY_CHAT;
+        agent_event.text = "accepted";
+        snprintf(accepted_payload,
+                 sizeof(accepted_payload),
+                 "{\"run_id\":%" PRIu32
+                 ",\"status\":\"accepted\",\"disposition\":\"%s\"}",
+                 receipt.run_id,
+                 receipt.disposition == CLAW_CORE_MESSAGE_APPENDED_TO_RUN
+                     ? "appended"
+                     : "new_run");
+        agent_event.payload_json = accepted_payload;
+        {
+            esp_err_t publish_err = claw_event_router_publish(&agent_event);
+            if (publish_err != ESP_OK) {
+                ESP_LOGW(TAG,
+                         "Failed to publish agent accepted message=%" PRIu32
+                         " run=%" PRIu32 ": %s",
+                         agent_input.request_id,
+                         receipt.run_id,
+                         esp_err_to_name(publish_err));
+            }
+        }
     } else {
         claw_event_router_update_last_output(ctx, "agent", agent_input.target_channel, "error",
                                              esp_err_to_name(err));
@@ -2313,6 +2528,11 @@ esp_err_t claw_event_router_init(const claw_event_router_config_t *config)
         s_runtime->config = *config;
     }
     strlcpy(s_runtime->rules_path, config->rules_path, sizeof(s_runtime->rules_path));
+    if (config->recovery_rules_path) {
+        strlcpy(s_runtime->recovery_rules_path,
+                config->recovery_rules_path,
+                sizeof(s_runtime->recovery_rules_path));
+    }
     if (config && config->max_rules > 0) {
         s_runtime->max_rules = config->max_rules;
     }
@@ -2332,16 +2552,34 @@ esp_err_t claw_event_router_init(const claw_event_router_config_t *config)
         claw_event_router_free_runtime();
         return ESP_ERR_INVALID_ARG;
     }
-    s_runtime->event_queue = xQueueCreate(queue_len, sizeof(claw_event_t));
+    s_runtime->event_queue = claw_event_router_create_event_queue(
+        queue_len, sizeof(claw_event_t), &s_runtime->event_queue_with_caps);
     if (!s_runtime->event_queue) {
         claw_event_router_free_runtime();
         return ESP_ERR_NO_MEM;
     }
 
     s_runtime->initialized = true;
-    ESP_LOGI(TAG, "Rules path: %s", s_runtime->rules_path);
+    ESP_LOGI(TAG, "Rules path: %s (event queue memory=%s)",
+             s_runtime->rules_path,
+             s_runtime->event_queue_with_caps ? "PSRAM" : "internal");
     {
         esp_err_t err = claw_event_router_reload();
+        if (err != ESP_OK && s_runtime->recovery_rules_path[0]) {
+            claw_event_router_rule_t *recovery_rules = NULL;
+            size_t recovery_rule_count = 0;
+
+            ESP_LOGE(TAG, "Failed to load router rules %s: %s; attempting recovery",
+                     s_runtime->rules_path, esp_err_to_name(err));
+            err = claw_event_router_recover_rules(&recovery_rules,
+                                                  &recovery_rule_count);
+            if (err == ESP_OK) {
+                claw_event_router_lock();
+                s_runtime->rules = recovery_rules;
+                s_runtime->rule_count = recovery_rule_count;
+                claw_event_router_unlock();
+            }
+        }
         if (err != ESP_OK) {
             claw_event_router_free_runtime();
             return err;
@@ -2415,6 +2653,7 @@ esp_err_t claw_event_router_reload(void)
     claw_event_router_rule_t *new_rules = NULL;
     size_t new_rule_count = 0;
     esp_err_t err;
+    bool recovered = false;
 
     if (!s_runtime || !s_runtime->initialized) {
         return ESP_ERR_INVALID_STATE;
@@ -2425,7 +2664,17 @@ esp_err_t claw_event_router_reload(void)
                                                  &new_rule_count,
                                                  NULL);
     if (err != ESP_OK) {
-        return err;
+        if (!s_runtime->recovery_rules_path[0]) {
+            return err;
+        }
+
+        ESP_LOGE(TAG, "Failed to reload router rules %s: %s; attempting recovery",
+                 s_runtime->rules_path, esp_err_to_name(err));
+        err = claw_event_router_recover_rules(&new_rules, &new_rule_count);
+        if (err != ESP_OK) {
+            return err;
+        }
+        recovered = true;
     }
 
     claw_event_router_lock();
@@ -2434,7 +2683,9 @@ esp_err_t claw_event_router_reload(void)
     s_runtime->rule_count = new_rule_count;
     claw_event_router_unlock();
 
-    ESP_LOGI(TAG, "Loaded %u router rules", (unsigned int)new_rule_count);
+    ESP_LOGI(TAG, "Loaded %u router rules%s",
+             (unsigned int)new_rule_count,
+             recovered ? " from recovery" : "");
     return ESP_OK;
 }
 
@@ -2819,7 +3070,7 @@ esp_err_t claw_event_router_add_rule_json(const char *rule_json)
     claw_event_router_rule_t *rule = NULL;
     esp_err_t err;
 
-    rule = calloc(1, sizeof(*rule));
+    rule = claw_event_router_calloc_prefer_psram(1, sizeof(*rule));
     if (!rule) {
         return ESP_ERR_NO_MEM;
     }
@@ -2843,7 +3094,7 @@ esp_err_t claw_event_router_update_rule_json(const char *rule_json)
     claw_event_router_rule_t *rule = NULL;
     esp_err_t err;
 
-    rule = calloc(1, sizeof(*rule));
+    rule = claw_event_router_calloc_prefer_psram(1, sizeof(*rule));
     if (!rule) {
         return ESP_ERR_NO_MEM;
     }

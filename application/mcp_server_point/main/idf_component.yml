@@ -1,7 +1,7 @@
 ## IDF Component Manager Manifest File
 dependencies:
   espressif/esp_board_manager:
-    version: "^0.5.9"
+    version: "^0.6"
     public: true
 
   espressif/esp_wifi_remote:

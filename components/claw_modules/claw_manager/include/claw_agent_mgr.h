@@ -75,16 +75,26 @@ esp_err_t claw_agent_mgr_init(const claw_agent_mgr_config_t *config);
 esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_config);
 esp_err_t claw_agent_mgr_create_root_agent(const char **out_agent_id);
 claw_core_handle_t claw_agent_mgr_get_root_core(void);
-esp_err_t claw_agent_mgr_submit_root(const claw_agent_mgr_root_input_t *input,
-                                     uint32_t timeout_ms);
-esp_err_t claw_agent_mgr_submit_root_text(const char *text,
-                                          const char *session_id,
-                                          uint32_t flags,
-                                          uint32_t timeout_ms,
-                                          uint32_t *out_request_id);
+/**
+ * Post a conversation message to the root Agent.
+ *
+ * Messages for the active session join its current run. Other messages queue
+ * a new run. The receipt identifies which run owns the message.
+ */
+esp_err_t claw_agent_mgr_post_root_message(
+    const claw_agent_mgr_root_input_t *input,
+    uint32_t timeout_ms,
+    claw_core_message_receipt_t *out_receipt);
+/** Start an explicitly independent root run, used by request/response clients. */
+esp_err_t claw_agent_mgr_start_root_run_text(const char *text,
+                                             const char *session_id,
+                                             uint32_t flags,
+                                             uint32_t timeout_ms,
+                                             uint32_t *out_request_id);
 esp_err_t claw_agent_mgr_receive_root_for(uint32_t request_id,
                                           claw_core_response_t *response,
                                           uint32_t timeout_ms);
+esp_err_t claw_agent_mgr_cancel_root_request(uint32_t request_id);
 
 esp_err_t claw_agent_mgr_spawn_subagent(const claw_cap_call_context_t *parent_ctx,
                                         const char *prompt,

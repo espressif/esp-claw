@@ -33,6 +33,7 @@ typedef struct {
     char job_id[CAP_LUA_JOB_ID_LEN];
     char name[CAP_LUA_JOB_NAME_MAX];
     char exclusive[CAP_LUA_JOB_EXCLUSIVE_MAX];
+    char skill_id[CAP_LUA_JOB_SKILL_ID_MAX];
     char path[CAP_LUA_JOB_PATH_MAX];
     char *args_json;
     char *summary;
@@ -127,6 +128,7 @@ static void cap_lua_build_job_event_locked(cap_lua_job_event_t *event,
     strlcpy(event->job_id, job->job_id, sizeof(event->job_id));
     strlcpy(event->name, job->name, sizeof(event->name));
     strlcpy(event->exclusive, job->exclusive, sizeof(event->exclusive));
+    strlcpy(event->skill_id, job->skill_id, sizeof(event->skill_id));
     strlcpy(event->path, job->path, sizeof(event->path));
 }
 
@@ -1082,6 +1084,9 @@ static esp_err_t cap_lua_async_submit_once(const cap_lua_async_job_t *job,
     if (job->exclusive[0]) {
         strlcpy(s_jobs[slot].exclusive, job->exclusive, sizeof(s_jobs[slot].exclusive));
     }
+    if (job->skill_id[0]) {
+        strlcpy(s_jobs[slot].skill_id, job->skill_id, sizeof(s_jobs[slot].skill_id));
+    }
     if (ctx->args_json) {
         s_jobs[slot].args_json = strdup(ctx->args_json);
         if (!s_jobs[slot].args_json) {
@@ -1226,11 +1231,12 @@ esp_err_t cap_lua_async_list_jobs(const char *status_filter,
             now,
             s_jobs[i].started_at ? s_jobs[i].started_at : s_jobs[i].created_at);
         int written = snprintf(output + offset, output_size - offset,
-                               "%s | %s | name=%s | exclusive=%s | runtime=%ds | path=%s\n",
+                               "%s | %s | name=%s | exclusive=%s | skill_id=%s | runtime=%ds | path=%s\n",
                                s_jobs[i].job_id,
                                cap_lua_job_status_name(s_jobs[i].status),
                                s_jobs[i].name[0] ? s_jobs[i].name : "(unnamed)",
                                s_jobs[i].exclusive[0] ? s_jobs[i].exclusive : "none",
+                               s_jobs[i].skill_id[0] ? s_jobs[i].skill_id : "none",
                                runtime_s,
                                s_jobs[i].path);
         if (written < 0 || (size_t)written >= output_size - offset) {
@@ -1296,12 +1302,13 @@ esp_err_t cap_lua_async_get_job(const char *id_or_name,
                                         &range_truncated);
 
     snprintf(output, output_size,
-             "job_id=%s\nname=%s\nstatus=%s\nexclusive=%s\nruntime_s=%d\npath=%s\nargs=%s\nsummary=%s\n"
+             "job_id=%s\nname=%s\nstatus=%s\nexclusive=%s\nskill_id=%s\nruntime_s=%d\npath=%s\nargs=%s\nsummary=%s\n"
              "log_seq=%" PRIu64 "\nlog_size=%u\nlog_truncated=%s\nrecent_log=%s",
              s_jobs[slot].job_id,
              s_jobs[slot].name[0] ? s_jobs[slot].name : "(unnamed)",
              cap_lua_job_status_name(s_jobs[slot].status),
              s_jobs[slot].exclusive[0] ? s_jobs[slot].exclusive : "none",
+             s_jobs[slot].skill_id[0] ? s_jobs[slot].skill_id : "none",
              runtime_s,
              s_jobs[slot].path,
              (s_jobs[slot].args_json && s_jobs[slot].args_json[0]) ? s_jobs[slot].args_json : "(none)",
@@ -1589,7 +1596,7 @@ esp_err_t cap_lua_async_get_status(const char *job_id,
     return ESP_OK;
 }
 
-size_t cap_lua_async_collect_active_snapshots(cap_lua_async_job_snapshot_t *out,
+size_t cap_lua_async_collect_active_snapshots(cap_lua_job_snapshot_t *out,
                                               size_t max)
 {
     size_t count = 0;
@@ -1608,11 +1615,9 @@ size_t cap_lua_async_collect_active_snapshots(cap_lua_async_job_snapshot_t *out,
         strlcpy(out[count].job_id, s_jobs[i].job_id, sizeof(out[count].job_id));
         strlcpy(out[count].name, s_jobs[i].name, sizeof(out[count].name));
         strlcpy(out[count].exclusive, s_jobs[i].exclusive, sizeof(out[count].exclusive));
+        strlcpy(out[count].skill_id, s_jobs[i].skill_id, sizeof(out[count].skill_id));
         strlcpy(out[count].path, s_jobs[i].path, sizeof(out[count].path));
         out[count].status = s_jobs[i].status;
-        out[count].created_at = s_jobs[i].created_at;
-        out[count].started_at = s_jobs[i].started_at;
-        out[count].finished_at = s_jobs[i].finished_at;
         count++;
     }
     xSemaphoreGive(s_job_lock);
