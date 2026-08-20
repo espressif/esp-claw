@@ -102,13 +102,13 @@ static esp_err_t display_hal_checked_framebuffer_bytes(int width, int height,
     return ESP_OK;
 }
 
-/* bswap16 is meaningful only for RGB565: SPI LCD controllers expect the pixel
-   in big-endian byte order, and this HAL keeps the framebuffer in native
-   little-endian. RGB888 input is converted to native BGR when pixels enter
-   the framebuffer or direct-submit buffer. */
 static bool display_hal_pixels_need_swap(display_hal_pixel_format_t pixel_format, display_hal_panel_if_t panel_if)
 {
+#ifdef CONFIG_LUA_MODULE_DISPLAY_RGB565_SWAP_ON
     return pixel_format == DISPLAY_HAL_PIXEL_FORMAT_RGB565 && panel_if == DISPLAY_HAL_PANEL_IF_IO;
+#else
+    return false;
+#endif
 }
 
 static void display_hal_bswap16_into(uint8_t *dst, const uint8_t *src, size_t pixel_count)
