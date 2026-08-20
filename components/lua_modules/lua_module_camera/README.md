@@ -1,156 +1,184 @@
 # Lua Camera
 
-Lua bindings for the camera service. The module exposes one borrow-and-release frame API and leaves format conversion and filesystem I/O to other modules.
-
-## How to call
-- `local camera = require("camera")`
-- `camera.open(dev_path [, opts])` before any other call (opts is optional, see below)
-- `camera.info()` returns `{ width, height, pixel_format }` for the active stream
-- `camera.get_frame([timeout_ms])` borrows one frame; release frames when they are no longer needed
-- `camera.flush()` drops every queued buffer so the next `get_frame()` returns a fresh capture
-- `camera.is_open()` / `camera.is_streaming()` query state without raising
-- `camera.list_formats()` reports available capture formats and sizes
-- `camera.close()` when the camera is no longer needed
-
-## Negotiating resolution / pixel format
-
-Pass `opts` to ask for a specific capture configuration. Any field that is `nil` keeps the device default. `camera.info()` always reflects what was actually accepted.
+The `camera` module discovers capture devices, opens one capture stream, and
+returns captured frames as `image.frame` objects.
 
 ```lua
-camera.open(paths.dev_path, {
-    width   = 640,
-    height  = 480,
-    format  = { "JPEG", "RGBP" }, -- priority list; first one the sensor speaks wins
-    nearest = true,               -- snap width/height to the closest supported size
-})
-local stream = camera.info()
-print(stream.width, stream.height, stream.pixel_format)
+local camera = require("camera")
 ```
 
-### `opts.format`
+## Error handling and lifetime
 
-Array of FOURCC strings ordered by preference. Valid tokens: `RGBP`, `RGBR`,
-`RGB3`, `BGR3`, `YUYV`, `UYVY`, `GREY` / `Y800`, `YU12`, `JPEG`, `MJPG`.
+- Invalid arguments and camera operation failures raise Lua errors. Use
+  `pcall()` when the caller needs to handle an error.
+- The module manages one active camera stream. Open the camera before calling
+  `info()`, `list_formats()`, `get_frame()`, `flush()`, `set_vflip()`, or
+  `set_hmirror()`.
+- A frame returned by `get_frame()` must be released before `camera.close()`.
+  The recommended pattern is a Lua 5.4+ `<close>` variable.
 
-- `{ "RGBP" }` — strictly this format. Errors with the list of advertised
-  formats if the sensor does not support it.
-- `{ "JPEG", "RGBP", "YUYV" }` — try in order; the first FOURCC the sensor
-  actually advertises wins.
-- omitted — keep the device default.
+```lua
+do
+    local frame <close> = camera.get_frame(3000)
+    -- Use frame here.
+end
+-- The frame has been released.
+```
 
-### `opts.width` / `opts.height`
+## Discover devices
 
-Requested capture size. Omitted means "use the first size the chosen format
-advertises". May be combined with `format` and `nearest`.
+### `camera.list_devices()`
 
-### `opts.nearest`
-
-When `true`, the requested `width`/`height` is snapped to the closest size the
-chosen format actually supports before opening the stream. Composes
-with `format`: the FOURCC is picked first, then the nearest size lookup runs
-under that FOURCC. Default `false`, which sends the exact requested size and
-returns an error when the camera service rejects it.
-
-When the camera is already open and the call requests a reconfiguration (new
-format or nearest snap), the session is closed and reopened transparently.
-
-## Discovering what the sensor supports
-
-`camera.list_formats()` returns the minimum information scripts usually need:
+Returns an array of currently available capture devices:
 
 ```lua
 {
-    format      = "JPEG",        -- 4-char FOURCC
-    description = "Motion-JPEG",
-    sizes = {                    -- array of discrete sizes (may be empty)
-        { w = 1600, h = 1200, fps = { 30, 15 } },  -- fps is optional
-        { w = 640,  h = 480 },
-    },
+  {
+    path = string,
+    source = "mipi_csi" | "dvp" | "spi" | "usb_uvc" | "unknown",
+    removable = boolean,
+    capabilities = integer,
+  },
+  -- ...
 }
 ```
 
-Walking it:
+Pass a device's `path` to `camera.open()`. `capabilities` is a device-provided
+bitmask; this module does not provide constants for decoding it.
+
+## Open and close
+
+### `camera.open(dev_path [, opts])`
+
+Opens `dev_path` and starts capture. Returns `true` on success.
+
+When called without options while a stream is already open, `camera.open()` is
+idempotent and returns `true`. To change only an exact width or height, close
+the active stream before calling `open()` again. Requests with `format`, or
+with both dimensions and `nearest = true`, can replace the active stream; they
+fail if any frame is still held.
+
+`opts` is optional and supports:
+
+- `width`: integer from 0 to 4294967295. Omit or use `0` to keep the device
+  default.
+- `height`: integer from 0 to 4294967295. Omit or use `0` to keep the device
+  default.
+- `format`: a non-empty preference array of up to 16 four-character FOURCC
+  strings. The first format offered by the device is selected. For example:
+  `{ "JPEG", "RGBP", "YUYV" }`.
+- `nearest`: boolean. When `true` and both `width` and `height` are non-zero,
+  selects the closest advertised size for the selected format when available.
+
+The device may adjust a requested width, height, or format. Always call
+`camera.info()` after opening to obtain the active stream configuration.
+
+### `camera.close()`
+
+Closes the active stream and returns `true`. It raises an error until every
+frame and every view derived from a frame has been released.
+
+## Inspect the active stream
+
+### `camera.info()`
+
+Returns:
 
 ```lua
-for _, f in ipairs(camera.list_formats()) do
-    print(string.format("%s  (%s)", f.format, f.description))
-    for _, s in ipairs(f.sizes) do
-        local fps = s.fps and ("  fps=" .. table.concat(s.fps, ",")) or ""
-        print(string.format("  %dx%d%s", s.w, s.h, fps))
-    end
-end
+{
+  width = integer,
+  height = integer,
+  pixel_format = string, -- four-character FOURCC
+}
 ```
 
-If a camera cannot enumerate discrete sizes, `sizes` comes back empty. Use `camera.info()` to read what the active stream is producing, and `camera.open(opts)` with explicit `{ width, height, format }` to probe another configuration.
+### `camera.is_open()`
 
-## Flushing stale frames
+Returns whether a camera stream is open.
 
-After long idle or sensor wake-up, the queue may already hold stale buffers. Drop them with:
+### `camera.is_streaming()`
+
+Returns whether the open camera stream is currently capturing.
+
+## Discover supported formats
+
+### `camera.list_formats()`
+
+Returns an array describing formats available from the active camera:
 
 ```lua
-camera.flush()                -- discard everything currently queued
-local frame <close> = camera.get_frame(1000)
+{
+  {
+    format = string,       -- four-character FOURCC
+    description = string,
+    sizes = {
+      { w = integer, h = integer, fps = { number, ... } }, -- fps is optional
+      -- ...
+    },
+  },
+  -- ...
+}
 ```
 
-`flush()` is rejected with an error if one or more frames are still borrowed.
+Only discrete sizes and frame rates are listed. If the device reports a size
+range rather than discrete sizes, `sizes` is an empty array for that format.
 
-## Frame lifecycle
+## Capture frames
 
-`camera.get_frame()` returns an `image.frame` userdata. The type and
-its methods live in the `image` module so that any frame producer
-(camera, future JPEG/file loaders, network streams) shares one contract:
+### `camera.get_frame([timeout_ms])`
 
-- `frame:info()` returns `{ width, height, bytes, pixel_format, timestamp_us, valid }`
-- `frame:data()` copies the buffer into a Lua string (slow, allocates)
-- `frame:release()` returns the buffer to its producer
+Captures and returns an `image.frame`. `timeout_ms` must be a non-negative
+integer; zero or omission uses a 5000 ms timeout.
 
-Important:
-- `camera.get_frame()` is a borrow API, not a copy.
-- Multiple frames may be borrowed at the same time, up to the camera buffer count. Release frames promptly so capture can continue.
-- Converted `image.frame` views can share the same borrowed camera buffer. Release all derived views before `camera.close()`.
-- Prefer the Lua 5.4+ `<close>` attribute so the frame is released
-  deterministically when the variable leaves scope:
-  ```lua
-  do
-      local frame <close> = camera.get_frame(1000)
-      -- use frame here; auto-released on scope exit
-  end
-  ```
-- The raw format can be RGB565, YUV, GRAY, JPEG or MJPEG. Consumers request the format they need through `image`.
-- `camera.close()` fails with an explicit error when frames are still borrowed.
+The returned object follows the `image.frame` API:
 
-## Saving a frame as JPEG
+- `frame:info()` returns `{ width, height, bytes, pixel_format, timestamp_us, valid }`.
+- `frame:data()` returns a copy of the frame bytes as a Lua string.
+- `frame:release()` releases the frame. It is also released by `<close>` or
+  garbage collection.
 
-Camera no longer owns JPEG encoding or filesystem I/O. Compose three small
-modules instead:
+Release every frame promptly. Holding frames can prevent later captures,
+`camera.flush()`, and `camera.close()`.
+
+### `camera.flush()`
+
+Discards frames waiting to be read and returns `true`. It requires an active
+stream with no currently held frames.
+
+## Orientation
+
+### `camera.set_vflip(enabled)`
+
+Sets vertical flip on the active camera and returns `true`. `enabled` must be
+a boolean.
+
+### `camera.set_hmirror(enabled)`
+
+Sets horizontal mirror on the active camera and returns `true`. `enabled` must
+be a boolean.
+
+The camera must support the requested orientation control.
+
+## Example: capture and save a JPEG
 
 ```lua
-local camera         = require("camera")
+local camera = require("camera")
 local image = require("image")
-local storage        = require("storage")
+local storage = require("storage")
+
+local devices = camera.list_devices()
+assert(#devices > 0, "no camera available")
+assert(camera.open(devices[1].path, {
+    width = 640,
+    height = 480,
+    format = { "JPEG", "RGBP" },
+    nearest = true,
+}))
 
 do
     local frame <close> = camera.get_frame(3000)
     image.save_file(storage.join_path(storage.get_root_dir(), "capture.jpg"), frame)
 end
-```
 
-## Example
-```lua
-local camera         = require("camera")
-local board_manager  = require("board_manager")
-
-local paths = board_manager.get_camera_paths()
-camera.open(paths.dev_path)
-
-local stream = camera.info()
-print(stream.width, stream.height, stream.pixel_format)
-
-do
-    local frame <close> = camera.get_frame(1000)
-    local info = frame:info()
-    print(info.width, info.height, info.pixel_format, info.bytes)
-end
-
-camera.close()
+assert(camera.close())
 ```

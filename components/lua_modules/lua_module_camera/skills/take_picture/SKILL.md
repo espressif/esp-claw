@@ -1,7 +1,7 @@
 ---
 {
   "name": "take_picture",
-  "description": "Take one photo with the board camera and save it as a JPEG file. Requires board_hardware_info skill.",
+  "description": "Take one photo with the first available video camera and save it as a JPEG file.",
   "metadata": {
     "cap_groups": [
       "cap_lua"
@@ -13,9 +13,9 @@
 
 # Take Picture
 
-Use this skill when the user asks to take a photo, capture a picture, snap an image, or save a camera still from the board camera.
+Use this skill when the user asks to take a photo, capture a picture, snap an image, or save a camera still.
 
-Run exactly one script with `lua_run_script` after reading `board_hardware_info`.
+Run exactly one script with `lua_run_script`.
 
 If `lua_run_script` returns an error, report that error directly to the user.
 Do not retry with changed arguments or run another camera script in the same turn unless the user explicitly asks.

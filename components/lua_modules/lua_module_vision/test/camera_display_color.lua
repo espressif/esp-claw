@@ -163,11 +163,12 @@ if not panel_handle then
     return
 end
 
-local camera_paths, path_err = board_manager.get_camera_paths()
-if not camera_paths then
-    print(TAG .. " SKIP: get_camera_paths failed: " .. tostring(path_err))
+local camera_devices = camera.list_devices()
+if #camera_devices == 0 then
+    print(TAG .. " SKIP: no capture video device available")
     return
 end
+local camera_path = camera_devices[1].path
 
 local ok, err = pcall(display.init, panel_handle, io_handle, lcd_width, lcd_height, panel_if)
 if not ok then
@@ -176,7 +177,7 @@ if not ok then
 end
 display_started = true
 
-ok, err = pcall(camera.open, camera_paths.dev_path, CAMERA_OPEN_OPTS)
+ok, err = pcall(camera.open, camera_path, CAMERA_OPEN_OPTS)
 if not ok then
     print(TAG .. " SKIP: camera.open failed: " .. tostring(err))
     cleanup()

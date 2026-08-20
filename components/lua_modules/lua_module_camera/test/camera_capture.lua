@@ -1,4 +1,3 @@
-local board_manager  = require("board_manager")
 local camera         = require("camera")
 local image          = require("image")
 local storage        = require("storage")
@@ -14,18 +13,16 @@ local function close_camera()
     end
 end
 
-local camera_paths, path_err = board_manager.get_camera_paths()
-if not camera_paths then
-    print(TAG .. " ERROR: get_camera_paths failed: " .. tostring(path_err))
+local camera_devices = camera.list_devices()
+if #camera_devices == 0 then
+    print(TAG .. " ERROR: no capture video device available")
     return
 end
 
-print(TAG .. " camera dev_path: " .. tostring(camera_paths.dev_path))
-if camera_paths.meta_path then
-    print(TAG .. " camera meta_path: " .. tostring(camera_paths.meta_path))
-end
+print(TAG .. " camera dev_path: " .. tostring(camera_devices[1].path))
+local camera_path = camera_devices[1].path
 
-local opened, open_err = pcall(camera.open, camera_paths.dev_path)
+local opened, open_err = pcall(camera.open, camera_path)
 if not opened then
     print(TAG .. " ERROR: " .. tostring(open_err))
     return
