@@ -35,6 +35,8 @@ static const char *TAG = "display_service";
 #define DISPLAY_SERVICE_SCENE_OWNER_NAME_LEN DISPLAY_SERVICE_OWNER_NAME_LEN
 #define DISPLAY_SERVICE_TOUCH_OBSERVER_INDEX_MASK 0xffu
 #define DISPLAY_SERVICE_TOUCH_OBSERVER_GENERATION_MASK 0x00ffffffu
+#define DISPLAY_SERVICE_EXIT_GESTURE_START_HEIGHT 80
+#define DISPLAY_SERVICE_EXIT_GESTURE_MIN_DY 72
 
 typedef void (*display_service_scene_cleanup_cb_t)(void *owner_ctx, void *user_ctx);
 
@@ -73,8 +75,13 @@ struct display_service_session_t {
     display_service_mode_t mode;
     uint32_t flags;
     display_service_session_cleanup_cb_t cleanup_cb;
+    display_service_session_exit_request_cb_t exit_request_cb;
     void *cleanup_user_ctx;
     char owner_name[DISPLAY_SERVICE_OWNER_NAME_LEN];
+    bool exit_gesture_tracking;
+    bool exit_gesture_captured;
+    bool exit_request_sent;
+    int32_t exit_gesture_start_y;
 };
 
 typedef struct {
@@ -131,6 +138,60 @@ static esp_err_t display_service_dummy_draw_blit(const char *owner,
                                                  bool wait);
 static void display_service_dummy_draw_suspend_locked(void);
 static void display_service_dummy_draw_resume_locked(void);
+static bool display_service_dummy_owner_matches(const char *owner);
+static bool display_service_session_valid_unlocked(display_service_session_handle_t session);
+
+static struct display_service_session_t *display_service_active_exclusive_session(void)
+{
+    for (size_t i = 0; i < DISPLAY_SERVICE_MAX_SESSIONS; i++) {
+        struct display_service_session_t *session = &s_display.sessions[i];
+
+        if (!session->active) {
+            continue;
+        }
+        if (session->mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_LVGL && s_display.scene_owner == session) {
+            return session;
+        }
+        if (session->mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW && s_display.dummy_draw_enabled &&
+                display_service_dummy_owner_matches(session->owner_name)) {
+            return session;
+        }
+    }
+    return NULL;
+}
+
+static bool display_service_process_exit_gesture(struct display_service_session_t *session,
+                                                 const display_service_touch_sample_t *sample,
+                                                 int32_t display_height)
+{
+    if (!display_service_session_valid_unlocked(session) || sample == NULL || display_height <= 0) {
+        return false;
+    }
+
+    if (sample->pressed && !session->exit_gesture_tracking) {
+        session->exit_gesture_tracking = true;
+        session->exit_gesture_captured = false;
+        session->exit_request_sent = false;
+        session->exit_gesture_start_y = sample->y;
+    }
+    if (sample->pressed && session->exit_gesture_tracking &&
+            session->exit_gesture_start_y >= display_height - DISPLAY_SERVICE_EXIT_GESTURE_START_HEIGHT &&
+            session->exit_gesture_start_y - sample->y >= DISPLAY_SERVICE_EXIT_GESTURE_MIN_DY) {
+        session->exit_gesture_captured = true;
+    }
+
+    const bool captured = session->exit_gesture_captured;
+    if (captured && !session->exit_request_sent && session->exit_request_cb != NULL) {
+        session->exit_request_sent = true;
+        ESP_LOGI(TAG, "display shell exit gesture: owner=%s", session->owner_name);
+        session->exit_request_cb(session, session->cleanup_user_ctx);
+    }
+    if (!sample->pressed) {
+        session->exit_gesture_tracking = false;
+        session->exit_gesture_captured = false;
+    }
+    return captured;
+}
 
 static bool display_service_dummy_owner_matches(const char *owner)
 {
@@ -450,6 +511,14 @@ static void display_service_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *da
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
     }
+    struct display_service_session_t *session = display_service_active_exclusive_session();
+    const int32_t display_height = s_display.display != NULL ?
+        lv_display_get_vertical_resolution(s_display.display) : 0;
+    if (display_service_process_exit_gesture(session, &sample, display_height)) {
+        /* The gesture belongs to the display shell, not the active session. */
+        sample.pressed = false;
+        data->state = LV_INDEV_STATE_RELEASED;
+    }
     display_service_notify_touch_observer(&sample);
 }
 
@@ -699,6 +768,7 @@ esp_err_t display_service_open(const display_service_session_config_t *config,
     session->mode = config->mode;
     session->flags = config->flags;
     session->cleanup_cb = config->cleanup_cb;
+    session->exit_request_cb = config->exit_request_cb;
     session->cleanup_user_ctx = config->user_ctx;
     strlcpy(session->owner_name, owner_name, sizeof(session->owner_name));
     err = display_service_add_client_locked(&(display_service_client_config_t) {

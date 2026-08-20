@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -39,6 +44,7 @@ struct display_service_session_t {
     display_service_mode_t mode;
     uint32_t flags;
     display_service_session_cleanup_cb_t cleanup_cb;
+    display_service_session_exit_request_cb_t exit_request_cb;
     void *user_ctx;
 };
 
@@ -409,6 +415,7 @@ esp_err_t display_service_open(const display_service_session_config_t *config, d
     s_display_session.mode = config->mode;
     s_display_session.flags = config->flags;
     s_display_session.cleanup_cb = config->cleanup_cb;
+    s_display_session.exit_request_cb = config->exit_request_cb;
     s_display_session.user_ctx = config->user_ctx;
     *ret_session = &s_display_session;
     return ESP_OK;
@@ -453,6 +460,13 @@ esp_err_t display_service_session_load_screen_locked(display_service_session_han
 esp_err_t display_service_session_load_screen(display_service_session_handle_t session, lv_obj_t *screen)
 {
     return display_service_session_load_screen_locked(session, screen);
+}
+
+bool display_service_has_exclusive_session(void)
+{
+    return s_display_session.active &&
+           (s_display_session.mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_LVGL ||
+            s_display_session.mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW);
 }
 
 esp_err_t display_service_lock(void)
@@ -896,4 +910,23 @@ bool cap_lua_runtime_stop_requested(lua_State *L)
 {
     (void)L;
     return EM_ASM_INT({ return Module.__stopRequested ? 1 : 0; }) != 0;
+}
+
+const char *cap_lua_runtime_job_id(lua_State *L)
+{
+    (void)L;
+    return "sim0001";
+}
+
+esp_err_t cap_lua_stop_job(const char *id_or_name, uint32_t wait_ms, char *output, size_t output_size)
+{
+    (void)wait_ms;
+    if (!id_or_name || !id_or_name[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    EM_ASM({ Module.__stopRequested = true; });
+    if (output && output_size > 0) {
+        snprintf(output, output_size, "stop requested");
+    }
+    return ESP_OK;
 }

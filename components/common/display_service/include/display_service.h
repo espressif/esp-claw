@@ -36,13 +36,22 @@ typedef enum {
 } display_service_session_flags_t;
 
 typedef void (*display_service_session_cleanup_cb_t)(display_service_session_handle_t session, void *user_ctx);
+typedef void (*display_service_session_exit_request_cb_t)(display_service_session_handle_t session, void *user_ctx);
 
 typedef struct {
+    /** Stable, non-empty name used for diagnostics and ownership checks. */
     const char *owner_name;
+    /** Shared LVGL or the exclusive LVGL/RAW presentation mode. */
     display_service_mode_t mode;
+    /** Bitwise OR of display_service_session_flags_t values. */
     uint32_t flags;
+    /** Service settings used if this session starts the display service. */
     display_service_config_t display_config;
+    /** Optional cleanup invoked while the session is being closed. */
     display_service_session_cleanup_cb_t cleanup_cb;
+    /** Optional non-blocking request to exit an exclusive session. */
+    display_service_session_exit_request_cb_t exit_request_cb;
+    /** Opaque context passed unchanged to both session callbacks. */
     void *user_ctx;
 } display_service_session_config_t;
 

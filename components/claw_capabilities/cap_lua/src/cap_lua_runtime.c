@@ -37,6 +37,7 @@ typedef struct {
     volatile bool *stop_requested;
     cap_lua_runtime_log_fn_t log_fn;
     void *log_ctx;
+    char job_id[CAP_LUA_JOB_ID_LEN];
     /* Owner tag handed out by cap_lua_current_owner_tag(); must outlive
      * every C callback that runs on this task. */
     char owner_tag[CAP_LUA_OWNER_TAG_MAX];
@@ -386,6 +387,12 @@ bool cap_lua_runtime_request_stop(lua_State *L)
     return true;
 }
 
+const char *cap_lua_runtime_job_id(lua_State *L)
+{
+    cap_lua_exec_ctx_t *ctx = cap_lua_get_exec_ctx(L);
+    return ctx && ctx->job_id[0] ? ctx->job_id : NULL;
+}
+
 static void cap_lua_load_registered_modules(lua_State *L)
 {
     size_t i;
@@ -546,6 +553,7 @@ esp_err_t cap_lua_runtime_init(void)
 
 esp_err_t cap_lua_runtime_execute_file(const char *path,
                                        const char *args_json,
+                                       const char *job_id,
                                        uint32_t timeout_ms,
                                        volatile bool *stop_requested,
                                        cap_lua_runtime_log_fn_t log_fn,
@@ -573,7 +581,11 @@ esp_err_t cap_lua_runtime_execute_file(const char *path,
     if (!output || output_size == 0) {
         return ESP_ERR_INVALID_ARG;
     }
+    if (!job_id || !job_id[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
     output[0] = '\0';
+    strlcpy(ctx.job_id, job_id, sizeof(ctx.job_id));
 
     /* Mint the owner tag before opening any Lua state so early-exit paths
      * still have a well-formed tag for the closing release_by_tag. */

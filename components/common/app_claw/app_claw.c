@@ -327,20 +327,6 @@ static esp_err_t app_claw_lua_jobs_stop_all_cb(void *user_ctx)
     return err;
 }
 
-static esp_err_t app_claw_lua_display_exit_swipe_cb(void *user_ctx)
-{
-    char output[APP_CLAW_LAUNCHER_OUTPUT_LEN] = {0};
-
-    (void)user_ctx;
-    esp_err_t err = cap_lua_stop_all_jobs("display", APP_CLAW_UI_JOB_STOP_WAIT_MS, output, sizeof(output));
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "app exit swipe stop display jobs failed: err=%s output=%s", esp_err_to_name(err), output);
-    } else {
-        ESP_LOGI(TAG, "app exit swipe requested: output=%s", output);
-    }
-    return err;
-}
-
 static bool app_claw_launcher_action_is_lua_script(const char *action)
 {
     size_t len;
@@ -530,7 +516,6 @@ esp_err_t app_claw_ui_start(void)
         .get_tasks = app_claw_lua_jobs_provider,
         .on_stop_task = app_claw_lua_job_stop_cb,
         .on_stop_all_tasks = app_claw_lua_jobs_stop_all_cb,
-        .on_app_exit_swipe = app_claw_lua_display_exit_swipe_cb,
     };
     ESP_RETURN_ON_ERROR(system_ui_set_callbacks(&callbacks, NULL), TAG, "set system UI callbacks failed");
     ESP_RETURN_ON_ERROR(cap_lua_register_job_event_cb(app_claw_lua_job_event_cb, NULL),

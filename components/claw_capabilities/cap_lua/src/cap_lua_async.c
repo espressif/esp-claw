@@ -479,6 +479,7 @@ static void cap_lua_job_task(void *arg)
 
     err = cap_lua_runtime_execute_file(ctx->path,
                                        ctx->args_json,
+                                       ctx->job_id,
                                        ctx->timeout_ms,
                                        ctx->stop_requested,
                                        cap_lua_async_log_callback,
