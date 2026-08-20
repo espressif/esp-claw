@@ -1,7 +1,4 @@
 menu "Lua Camera Module"
-    depends on APP_CLAW_CAP_LUA
-    depends on APP_CLAW_LUA_MODULE_CAMERA
-
     config LUA_MODULE_CAMERA_ENABLE_VFLIP
         bool "Camera vertical flip"
         default y

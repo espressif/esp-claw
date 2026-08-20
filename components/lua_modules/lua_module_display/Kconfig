@@ -1,0 +1,9 @@
+menu "Lua Display Module"
+
+    config LUA_MODULE_DISPLAY_RGB565_SWAP_ON
+        bool "Swap RGB565 bytes before IO panel submission"
+        default y
+        help
+            Swap each RGB565 pixel before it is submitted.
+
+endmenu

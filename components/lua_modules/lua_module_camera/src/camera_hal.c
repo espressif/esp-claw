@@ -27,7 +27,7 @@
 
 #define CAMERA_DEFAULT_TIMEOUT_MS   5000
 #define CAMERA_SETTLE_TIMEOUT_MS   30000  /* settle at open time, allow slow SPI sensors */
-#define CAMERA_BUFFER_COUNT            3
+#define CAMERA_BUFFER_COUNT            2
 #define CAMERA_STREAM_SETTLE_FRAMES    3  /* reduced: 3 frames enough for AE/AWB stabilize */
 
 static const char *TAG = "camera_service";
@@ -884,11 +884,6 @@ esp_err_t camera_flush(void)
         return ESP_ERR_INVALID_STATE;
     }
 
-    /* Drain every ready buffer. Any non-OK dequeue means "no buffer available
-     * right now" and we treat it as the empty-queue signal — esp_video does
-     * not distinguish empty-queue from hard error on VIDIOC_DQBUF (both come
-     * back as ESP_FAIL → errno=EPERM in its VFS), so we cannot be more
-     * selective here without false negatives. */
     while (true) {
         struct v4l2_buffer buffer = {0};
         esp_err_t dq = camera_dequeue_buffer_locked(1 /* ms */, &buffer);
@@ -957,6 +952,44 @@ static esp_err_t camera_set_hmirror_locked(bool enable)
     }
     ESP_LOGI(TAG, "Camera horizontal mirror: %s", enable ? "enabled" : "disabled");
     return ESP_OK;
+}
+
+esp_err_t camera_set_vflip(bool enable)
+{
+    esp_err_t err = camera_lock();
+
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (!s_camera.opened || s_camera.close_pending) {
+        camera_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
+    err = camera_set_vflip_locked(enable);
+    if (err == ESP_OK) {
+        s_camera.settled_frames = 0;
+    }
+    camera_unlock();
+    return err;
+}
+
+esp_err_t camera_set_hmirror(bool enable)
+{
+    esp_err_t err = camera_lock();
+
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (!s_camera.opened || s_camera.close_pending) {
+        camera_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
+    err = camera_set_hmirror_locked(enable);
+    if (err == ESP_OK) {
+        s_camera.settled_frames = 0;
+    }
+    camera_unlock();
+    return err;
 }
 
 bool camera_is_open(void)
