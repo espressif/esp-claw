@@ -61,9 +61,6 @@ Common `opts`:
 - `buffer_lines`: draw buffer height in lines, default `40`
 - `tick_ms`: LVGL tick period, default `5`
 - `task_period_ms`: LVGL handler task period, default `10`
-- `font_path`: default runtime font path, default `fonts/NotoSansSC-Regular-sub.ttf`; DATA is tried first, then SYSTEM
-- `font_size`: default runtime font size, default `24`
-- `font_cache_size`: default runtime font glyph cache size, default `LV_TINY_TTF_CACHE_GLYPH_CNT`
 
 Legacy scripts may still call `lvgl.init(panel_handle, io_handle, width, height, panel_if, opts)`. The positional display parameters are ignored; only `opts` is used.
 
@@ -236,34 +233,25 @@ bg_color = "#2f80ed"
 text_color = 0xffffff
 ```
 
-## Runtime TTF Fonts
+## Fonts
 
-By default, `lvgl.init()` tries to load `fonts/NotoSansSC-Regular-sub.ttf` as the runtime font and applies it to the root screen and every screen created with `lvgl.create_screen()`. If that font is unavailable, LVGL uses its built-in font. Set `font_size` per app when a different default text size is needed:
-
-```lua
-lvgl.init({
-    font_size = 22,
-})
-```
-
-When LVGL `tiny_ttf` is enabled, fonts can be loaded from the DATA root at
-runtime for per-object overrides:
+`lvgl.init()` does not load a font. Load a font explicitly, then apply it to individual controls or set it as the default:
 
 ```lua
-local storage = require("storage")
 local lvgl = require("lvgl")
 
-local font_path = storage.join_path(storage.get_root_dir(), "fonts/NotoSansSC-Regular.ttf")
-local font = lvgl.font_load(font_path, { size = 24, cache_size = 128 })
+local font = lvgl.font_load({ size = 24, cache_size = 128 })
+lvgl.set_default_font(font)
 label:set_style({ font = font })
 ```
 
-- `lvgl.font_load(path[, { size = 16, cache_size = LV_TINY_TTF_CACHE_GLYPH_CNT }])` -> font handle
+- `lvgl.font_load([path][, { size = 16, cache_size = ... }])` -> font handle
+- `lvgl.set_default_font(font | nil)` -> true; applies to the current root screen and subsequently created screens
 - `font:set_size(px)` -> true
 - `font:is_valid()` -> boolean
 - `font:delete()` -> true
 
-`lvgl.init({ font_path = ... })` resolves the path from DATA first, then SYSTEM. `lvgl.font_load(path[, opts])` only accepts a DATA-relative path, a `D:/...` LVGL filesystem path, or an absolute path under the DATA root. Runtime font files must remain available while any LVGL object uses them.
+Without `path`, `lvgl.font_load()` uses `fonts/NotoSansSC-Regular-sub.ttf`. Passing `nil` to `lvgl.set_default_font()` restores the built-in font. An explicit `font` style on a control overrides the default font.
 
 ## EAF Animation
 
