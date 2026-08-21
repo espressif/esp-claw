@@ -177,7 +177,6 @@ static void lua_lvgl_release_runtime_locked(void)
     lua_lvgl_delete_owned_objects_locked();
     lua_lvgl_invalidate_records_locked();
     lua_lvgl_release_fonts_locked();
-    lua_lvgl_destroy_default_font_locked();
     lua_lvgl_drain_event_queue_locked();
     lua_lvgl_drain_pending_unrefs_locked(owner);
     heap_caps_free(s_lvgl.draw_buf);
@@ -245,54 +244,24 @@ static int lua_lvgl_init(lua_State *L)
     int buffer_lines = LUA_MODULE_LVGL_DEFAULT_BUFFER_LINES;
     int tick_ms = LUA_MODULE_LVGL_DEFAULT_TICK_MS;
     int task_period_ms = LUA_MODULE_LVGL_DEFAULT_TASK_PERIOD_MS;
-    int font_size = LUA_MODULE_LVGL_DEFAULT_FONT_SIZE;
-    int font_cache_size = LV_TINY_TTF_CACHE_GLYPH_CNT;
-    int opts_index = 0;
-    const char *font_path = LUA_MODULE_LVGL_DEFAULT_FONT_PATH;
     const char *job_id = cap_lua_runtime_job_id(L);
-    char font_path_buf[LUA_MODULE_LVGL_PATH_MAX];
     lv_display_t *display = NULL;
     lv_obj_t *root_screen = NULL;
     display_service_session_handle_t session = NULL;
     esp_err_t err;
 
-    font_path_buf[0] = '\0';
     if (lua_lvgl_opt_table(L, 6)) {
-        opts_index = 6;
         buffer_lines = lua_lvgl_get_opt_int_field(L, 6, "buffer_lines", buffer_lines);
         tick_ms = lua_lvgl_get_opt_int_field(L, 6, "tick_ms", tick_ms);
         task_period_ms = lua_lvgl_get_opt_int_field(L, 6, "task_period_ms", task_period_ms);
     } else if (lua_lvgl_opt_table(L, 1)) {
-        opts_index = 1;
         buffer_lines = lua_lvgl_get_opt_int_field(L, 1, "buffer_lines", buffer_lines);
         tick_ms = lua_lvgl_get_opt_int_field(L, 1, "tick_ms", tick_ms);
         task_period_ms = lua_lvgl_get_opt_int_field(L, 1, "task_period_ms", task_period_ms);
     }
-    if (opts_index > 0) {
-        font_path = lua_lvgl_get_opt_string_field(L, opts_index, "font_path");
-        if (!font_path || !font_path[0]) {
-            font_path = LUA_MODULE_LVGL_DEFAULT_FONT_PATH;
-        }
-        int written = snprintf(font_path_buf, sizeof(font_path_buf), "%s", font_path);
-        if (written <= 0 || (size_t)written >= sizeof(font_path_buf)) {
-            ESP_LOGE(TAG, "default font path too long");
-            return luaL_error(L, "lvgl option 'font_path' is too long");
-        }
-        font_path = font_path_buf;
-        font_size = lua_lvgl_get_opt_int_field(L, opts_index, "font_size", font_size);
-        font_cache_size = lua_lvgl_get_opt_int_field(L, opts_index, "font_cache_size", font_cache_size);
-    }
     luaL_argcheck(L, buffer_lines > 0, 1, "buffer_lines must be positive");
     luaL_argcheck(L, tick_ms > 0, 6, "tick_ms must be positive");
     luaL_argcheck(L, task_period_ms > 0, 6, "task_period_ms must be positive");
-    if (font_size <= 0) {
-        ESP_LOGE(TAG, "invalid default font size: %d", font_size);
-        return luaL_error(L, "lvgl option 'font_size' must be positive");
-    }
-    if (font_cache_size < 0) {
-        ESP_LOGE(TAG, "invalid default font cache size: %d", font_cache_size);
-        return luaL_error(L, "lvgl option 'font_cache_size' must be non-negative");
-    }
     if (job_id == NULL) {
         return luaL_error(L, "lvgl init requires an asynchronous Lua job context");
     }
@@ -349,23 +318,15 @@ static int lua_lvgl_init(lua_State *L)
         (void)display_service_close(session);
         return lua_lvgl_error_esp(L, "register fs", err);
     }
-    err = lua_lvgl_create_default_font_locked(font_path, (uint32_t)font_size, (uint32_t)font_cache_size);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "default font unavailable, using LVGL built-in font");
-    }
-
     root_screen = lv_obj_create(NULL);
     if (root_screen == NULL) {
-        lua_lvgl_destroy_default_font_locked();
         lua_lvgl_unlock();
         (void)display_service_close(session);
         return luaL_error(L, "lvgl root screen create failed");
     }
-    lua_lvgl_apply_default_font_locked(root_screen);
     err = display_service_session_load_screen_locked(session, root_screen);
     if (err != ESP_OK) {
         lv_obj_delete(root_screen);
-        lua_lvgl_destroy_default_font_locked();
         lua_lvgl_unlock();
         (void)display_service_close(session);
         return lua_lvgl_error_esp(L, "load root screen", err);
