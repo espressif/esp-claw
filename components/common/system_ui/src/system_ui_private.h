@@ -136,13 +136,11 @@ typedef enum {
     SYSTEM_UI_WORK_EVENT_JOBS_REFRESH,
     SYSTEM_UI_WORK_EVENT_JOBS_ACTION,
     SYSTEM_UI_WORK_EVENT_NETWORK_STATUS,
-    SYSTEM_UI_WORK_EVENT_APP_EXIT_SWIPE,
 } system_ui_work_event_type_t;
 
 typedef enum {
     SYSTEM_UI_TOUCH_GESTURE_NONE = 0,
     SYSTEM_UI_TOUCH_GESTURE_SHOW_JOBS,
-    SYSTEM_UI_TOUCH_GESTURE_EXIT_APP,
 } system_ui_touch_gesture_t;
 
 typedef struct {
@@ -203,8 +201,6 @@ typedef struct {
     void *jobs_action_user_ctx;
     system_ui_jobs_stop_all_cb_t jobs_stop_all_cb;
     void *jobs_stop_all_user_ctx;
-    system_ui_app_exit_swipe_cb_t app_exit_swipe_cb;
-    void *app_exit_swipe_user_ctx;
     bool jobs_stop_task_running;
     bool jobs_refresh_running;
     bool jobs_refresh_pending;

@@ -8,11 +8,71 @@
 static const char *TAG = "lua_lvgl";
 lua_lvgl_state_t s_lvgl;
 
+#define LUA_LVGL_EXIT_STOP_TASK_STACK 3072
+#define LUA_LVGL_EXIT_STOP_TASK_PRIO 5
+#define LUA_LVGL_EXIT_STOP_WAIT_MS 5000
+#define LUA_LVGL_EXIT_STOP_OUTPUT_LEN 256
+
+typedef struct {
+    char job_id[CAP_LUA_JOB_ID_LEN];
+} lua_lvgl_exit_stop_ctx_t;
+
+static volatile bool s_lvgl_exit_stop_pending;
+static char s_lvgl_job_id[CAP_LUA_JOB_ID_LEN];
+
+static void lua_lvgl_exit_stop_task(void *arg)
+{
+    char output[LUA_LVGL_EXIT_STOP_OUTPUT_LEN] = {0};
+    lua_lvgl_exit_stop_ctx_t *ctx = arg;
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+
+    if (ctx != NULL) {
+        err = cap_lua_stop_job(ctx->job_id, LUA_LVGL_EXIT_STOP_WAIT_MS, output, sizeof(output));
+    }
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "exit gesture stop Lua job failed: %s output=%s", esp_err_to_name(err), output);
+    } else {
+        ESP_LOGI(TAG, "exit gesture requested Lua job stop: %s", output);
+    }
+    free(ctx);
+    s_lvgl_exit_stop_pending = false;
+    vTaskDelete(NULL);
+}
+
+static void lua_lvgl_exit_request_cb(display_service_session_handle_t session, void *user_ctx)
+{
+    (void)session;
+    (void)user_ctx;
+
+    if (s_lvgl_exit_stop_pending) {
+        return;
+    }
+    if (!s_lvgl_job_id[0]) {
+        ESP_LOGE(TAG, "exit gesture ignored: Lua job ID unavailable");
+        return;
+    }
+
+    lua_lvgl_exit_stop_ctx_t *ctx = calloc(1, sizeof(*ctx));
+    if (ctx == NULL) {
+        ESP_LOGE(TAG, "exit gesture stop context allocation failed");
+        return;
+    }
+    strlcpy(ctx->job_id, s_lvgl_job_id, sizeof(ctx->job_id));
+    s_lvgl_exit_stop_pending = true;
+    if (xTaskCreate(lua_lvgl_exit_stop_task, "lua_lvgl_exit", LUA_LVGL_EXIT_STOP_TASK_STACK,
+                    ctx, LUA_LVGL_EXIT_STOP_TASK_PRIO, NULL) != pdPASS) {
+        s_lvgl_exit_stop_pending = false;
+        free(ctx);
+        ESP_LOGE(TAG, "exit gesture stop task creation failed");
+    }
+}
+
 esp_err_t lua_lvgl_lock(void)
 {
     esp_err_t err;
 
-    if (display_service_is_started()) {
+    /* A presenter can be active before Lua owns an LVGL session. */
+    if (display_service_has_exclusive_session()) {
         err = display_service_lock();
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "display service lock failed: %s", esp_err_to_name(err));
@@ -23,13 +83,13 @@ esp_err_t lua_lvgl_lock(void)
         s_lvgl.mutex = xSemaphoreCreateMutex();
     }
     if (!s_lvgl.mutex) {
-        if (display_service_is_started()) {
+        if (display_service_has_exclusive_session()) {
             display_service_unlock();
         }
         return ESP_ERR_NO_MEM;
     }
     if (xSemaphoreTake(s_lvgl.mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        if (display_service_is_started()) {
+        if (display_service_has_exclusive_session()) {
             display_service_unlock();
         }
         return ESP_ERR_TIMEOUT;
@@ -42,7 +102,7 @@ void lua_lvgl_unlock(void)
     if (s_lvgl.mutex) {
         xSemaphoreGive(s_lvgl.mutex);
     }
-    if (display_service_is_started()) {
+    if (display_service_has_exclusive_session()) {
         display_service_unlock();
     }
 }
@@ -147,6 +207,7 @@ static void lua_lvgl_session_cleanup_cb(display_service_session_handle_t session
         return;
     }
     lua_lvgl_release_runtime_locked();
+    s_lvgl_job_id[0] = '\0';
     if (s_lvgl.mutex) {
         xSemaphoreGive(s_lvgl.mutex);
     }
@@ -188,6 +249,7 @@ static int lua_lvgl_init(lua_State *L)
     int font_cache_size = LV_TINY_TTF_CACHE_GLYPH_CNT;
     int opts_index = 0;
     const char *font_path = LUA_MODULE_LVGL_DEFAULT_FONT_PATH;
+    const char *job_id = cap_lua_runtime_job_id(L);
     char font_path_buf[LUA_MODULE_LVGL_PATH_MAX];
     lv_display_t *display = NULL;
     lv_obj_t *root_screen = NULL;
@@ -231,6 +293,9 @@ static int lua_lvgl_init(lua_State *L)
         ESP_LOGE(TAG, "invalid default font cache size: %d", font_cache_size);
         return luaL_error(L, "lvgl option 'font_cache_size' must be non-negative");
     }
+    if (job_id == NULL) {
+        return luaL_error(L, "lvgl init requires an asynchronous Lua job context");
+    }
 
     if (!s_lvgl.mutex) {
         s_lvgl.mutex = xSemaphoreCreateMutex();
@@ -249,12 +314,14 @@ static int lua_lvgl_init(lua_State *L)
     }
     lua_lvgl_unlock();
 
+    strlcpy(s_lvgl_job_id, job_id, sizeof(s_lvgl_job_id));
     err = display_service_open(&(display_service_session_config_t) {
         .owner_name = "lua_lvgl",
         .mode = DISPLAY_SERVICE_MODE_EXCLUSIVE_LVGL,
         .flags = DISPLAY_SERVICE_SESSION_FLAG_RESTORE_DEFAULT_ON_RELEASE |
                  DISPLAY_SERVICE_SESSION_FLAG_ALLOW_SYSTEM_OVERLAY,
         .cleanup_cb = lua_lvgl_session_cleanup_cb,
+        .exit_request_cb = lua_lvgl_exit_request_cb,
         .display_config = {
             .buffer_lines = (uint32_t)buffer_lines,
             .tick_ms = (uint32_t)tick_ms,
@@ -262,6 +329,7 @@ static int lua_lvgl_init(lua_State *L)
         },
     }, &session);
     if (err != ESP_OK) {
+        s_lvgl_job_id[0] = '\0';
         return lua_lvgl_error_esp(L, "open display session", err);
     }
     display = display_service_session_display(session);

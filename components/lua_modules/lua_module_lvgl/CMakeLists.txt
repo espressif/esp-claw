@@ -21,6 +21,7 @@ idf_component_register(
     REQUIRES
         cap_lua
         claw_core
+        display_service
         esp_lcd
         esp_lcd_touch
         esp_timer

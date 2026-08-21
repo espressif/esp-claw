@@ -12,6 +12,8 @@
 #include "display_text.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "lauxlib.h"
 #include "lua_image.h"
 
@@ -23,9 +25,66 @@
 static const char *TAG = "lua_display";
 
 #define LUA_DISPLAY_OWNER "lua_display"
+#define LUA_DISPLAY_EXIT_STOP_TASK_STACK 3072
+#define LUA_DISPLAY_EXIT_STOP_TASK_PRIO 5
+#define LUA_DISPLAY_EXIT_STOP_WAIT_MS 5000
+#define LUA_DISPLAY_EXIT_STOP_OUTPUT_LEN 256
+
+typedef struct {
+    char job_id[CAP_LUA_JOB_ID_LEN];
+} lua_display_exit_stop_ctx_t;
 
 static display_service_session_handle_t s_display_session;
 static bool s_display_active;
+static volatile bool s_display_exit_stop_pending;
+static char s_display_job_id[CAP_LUA_JOB_ID_LEN];
+
+static void lua_display_exit_stop_task(void *arg)
+{
+    char output[LUA_DISPLAY_EXIT_STOP_OUTPUT_LEN] = {0};
+    lua_display_exit_stop_ctx_t *ctx = arg;
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+
+    if (ctx != NULL) {
+        err = cap_lua_stop_job(ctx->job_id, LUA_DISPLAY_EXIT_STOP_WAIT_MS, output, sizeof(output));
+    }
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "exit gesture stop Lua job failed: %s output=%s", esp_err_to_name(err), output);
+    } else {
+        ESP_LOGI(TAG, "exit gesture requested Lua job stop: %s", output);
+    }
+    free(ctx);
+    s_display_exit_stop_pending = false;
+    vTaskDelete(NULL);
+}
+
+static void lua_display_exit_request_cb(display_service_session_handle_t session, void *user_ctx)
+{
+    (void)session;
+    (void)user_ctx;
+
+    if (s_display_exit_stop_pending) {
+        return;
+    }
+    if (!s_display_job_id[0]) {
+        ESP_LOGE(TAG, "exit gesture ignored: Lua job ID unavailable");
+        return;
+    }
+
+    lua_display_exit_stop_ctx_t *ctx = calloc(1, sizeof(*ctx));
+    if (ctx == NULL) {
+        ESP_LOGE(TAG, "exit gesture stop context allocation failed");
+        return;
+    }
+    strlcpy(ctx->job_id, s_display_job_id, sizeof(ctx->job_id));
+    s_display_exit_stop_pending = true;
+    if (xTaskCreate(lua_display_exit_stop_task, "lua_display_exit", LUA_DISPLAY_EXIT_STOP_TASK_STACK,
+                    ctx, LUA_DISPLAY_EXIT_STOP_TASK_PRIO, NULL) != pdPASS) {
+        s_display_exit_stop_pending = false;
+        free(ctx);
+        ESP_LOGE(TAG, "exit gesture stop task creation failed");
+    }
+}
 
 static int lua_display_check_integer_arg(lua_State *L, int index, const char *name)
 {
@@ -200,6 +259,7 @@ static void lua_display_exit_cleanup(lua_State *L)
         (void)display_service_close(s_display_session);
         s_display_session = NULL;
     }
+    s_display_job_id[0] = '\0';
     s_display_active = false;
 }
 
@@ -214,18 +274,25 @@ static int lua_display_init(lua_State *L)
     int lcd_height = lua_display_check_integer_arg(L, 4, "lcd_height");
     display_hal_panel_if_t panel_if = lua_display_parse_panel_if(L, 5);
     display_hal_pixel_format_t pixel_format = lua_display_parse_pixel_format(L, 6);
+    const char *job_id = cap_lua_runtime_job_id(L);
 
     if (s_display_active) {
         lua_pushboolean(L, 1);
         return 1;
     }
+    if (job_id == NULL) {
+        return luaL_error(L, "display init requires an asynchronous Lua job context");
+    }
 
+    strlcpy(s_display_job_id, job_id, sizeof(s_display_job_id));
     esp_err_t err = display_service_open(&(display_service_session_config_t) {
         .owner_name = LUA_DISPLAY_OWNER,
         .mode = DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW,
+        .exit_request_cb = lua_display_exit_request_cb,
         .display_config = {0},
     }, &s_display_session);
     if (err != ESP_OK) {
+        s_display_job_id[0] = '\0';
         return luaL_error(L, "display session open failed: %s", esp_err_to_name(err));
     }
 
@@ -233,6 +300,7 @@ static int lua_display_init(lua_State *L)
     if (err != ESP_OK) {
         (void)display_service_close(s_display_session);
         s_display_session = NULL;
+        s_display_job_id[0] = '\0';
         return luaL_error(L, "display init failed: %s", esp_err_to_name(err));
     }
     s_display_active = true;
@@ -262,6 +330,7 @@ static int lua_display_deinit(lua_State *L)
         }
         s_display_session = NULL;
     }
+    s_display_job_id[0] = '\0';
     s_display_active = false;
 
     lua_pushboolean(L, 1);

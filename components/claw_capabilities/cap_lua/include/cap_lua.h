@@ -87,6 +87,8 @@ esp_err_t cap_lua_unregister_job_event_cb(cap_lua_job_event_cb_t cb, void *user_
 bool cap_lua_runtime_stop_requested(lua_State *L);
 /** Cooperatively request cancellation of the Lua job owning L. */
 bool cap_lua_runtime_request_stop(lua_State *L);
+/** Return the async job ID owning L, or NULL outside a Lua job context. */
+const char *cap_lua_runtime_job_id(lua_State *L);
 esp_err_t cap_lua_run_script(const char *path,
                              const char *args_json,
                              uint32_t timeout_ms,
