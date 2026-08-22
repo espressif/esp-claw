@@ -15,8 +15,6 @@ idf_component_register(
         captive_dns
         board_support
         cap_rover cap_unitv cap_voice
-        cap_im_platform cap_files cap_skill_mgr
-        cap_session_mgr cap_system
-        claw_core claw_cap claw_event_router claw_memory claw_skill
+        claw_cap claw_event_router
         app_claw
 )

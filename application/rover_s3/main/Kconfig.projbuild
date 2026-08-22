@@ -48,9 +48,11 @@ endmenu
 
 # rover_s3 is a hand-rolled PlatformIO app (no `idf.py bmgr` board-manager
 # Kconfig generation), so board-capability symbols that generated Kconfig
-# normally provides don't exist here. app_claw's Kconfig gates the optional
-# "emote" display component on this symbol; stub it to n so the component
-# manager's rule can resolve instead of erroring on an undefined symbol.
+# normally provides don't exist here. app_claw's idf_component.yml gates the
+# optional system_ui component on this symbol; stub it to n (with a prompt
+# string, required for the component manager's rule evaluator to resolve the
+# symbol instead of erroring on an undefined one) so dependency resolution
+# succeeds.
 config ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT
-    bool
+    bool "Board has an LCD display (stub; rover_s3 does not run idf.py bmgr)"
     default n

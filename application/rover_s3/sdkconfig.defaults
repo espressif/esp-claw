@@ -52,9 +52,10 @@ CONFIG_APP_CLAW_CAP_IM_WECHAT=n
 CONFIG_APP_CLAW_CAP_IM_LOCAL=n
 # rover_s3 runs its own console REPL (rover_s3_cli.c) and its own display FSM
 # (rover_s3_display.c); don't let app_claw start a second console or pull in
-# the generic emote UI.
+# the generic system_ui runtime (ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT is stubbed
+# to n in main/Kconfig.projbuild, which already keeps system_ui out of the
+# build).
 CONFIG_APP_CLAW_ENABLE_CLI=n
-CONFIG_APP_CLAW_ENABLE_EMOTE=n
 CONFIG_APP_CLAW_CAP_FILES=y
 CONFIG_APP_CLAW_CAP_MEMORY=y
 CONFIG_APP_CLAW_MEMORY_MODE_LIGHTWEIGHT=y

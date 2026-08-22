@@ -1118,15 +1118,8 @@ CONFIG_ROVER_S3_TG_BOT_TOKEN=""
 CONFIG_ROVER_S3_TIME_TIMEZONE="UTC0"
 # end of Rover S3 Configuration
 
-#
-# Claw IM capabilities
-#
-CONFIG_APP_CLAW_CAP_IM_TG=y
-# CONFIG_APP_CLAW_CAP_IM_QQ is not set
-# CONFIG_APP_CLAW_CAP_IM_FEISHU is not set
-# CONFIG_APP_CLAW_CAP_IM_WECHAT is not set
-# CONFIG_APP_CLAW_CAP_IM_LOCAL is not set
-# end of Claw IM capabilities
+# default:
+# CONFIG_ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT is not set
 
 #
 # HTTP Client Reuse
@@ -1135,6 +1128,8 @@ CONFIG_APP_CLAW_CAP_IM_TG=y
 CONFIG_HTTP_REUSE_ENABLE=y
 # default:
 CONFIG_HTTP_REUSE_MAX_POOL=6
+# default:
+CONFIG_HTTP_REUSE_IDLE_TIMEOUT_SEC=60
 # end of HTTP Client Reuse
 
 #
@@ -1169,8 +1164,14 @@ CONFIG_SR_VADN_WEBRTC=y
 # end of Load Multiple Wake Words (WakeNet9s)
 
 #
-# Load Multiple Wake Words (WakeNet9)
+# Load Multiple Wake Words (WakeNet9 or WakeNet10)
 #
+# default:
+# CONFIG_SR_WN_WN10_HILEXIN is not set
+# default:
+# CONFIG_SR_WN_WN10_XIAOAITONGXUE is not set
+# default:
+# CONFIG_SR_WN_WN10_NIHAOXIAOZHI is not set
 # default:
 # CONFIG_SR_WN_WN9_HILEXIN is not set
 # default:
@@ -1291,7 +1292,7 @@ CONFIG_SR_VADN_WEBRTC=y
 # CONFIG_SR_WN_WN9_HAI1XIAO3XIANG4_TTS3 is not set
 # default:
 # CONFIG_SR_WN_WN9L_NI3HAO3XING1BAO3_TTS3 is not set
-# end of Load Multiple Wake Words (WakeNet9)
+# end of Load Multiple Wake Words (WakeNet9 or WakeNet10)
 
 # default:
 CONFIG_SR_MN_CN_NONE=y
@@ -2830,9 +2831,12 @@ CONFIG_HAL_WDT_USE_ROM_IMPL=y
 #
 # Heap memory debugging
 #
-# CONFIG_HEAP_POISONING_DISABLED is not set
+# default:
+CONFIG_HEAP_POISONING_DISABLED=y
+# default:
 # CONFIG_HEAP_POISONING_LIGHT is not set
-CONFIG_HEAP_POISONING_COMPREHENSIVE=y
+# default:
+# CONFIG_HEAP_POISONING_COMPREHENSIVE is not set
 # default:
 CONFIG_HEAP_TRACING_OFF=y
 # default:
@@ -3944,6 +3948,13 @@ CONFIG_CLAW_CORE_STAGE_VERBOSITY_SIMPLE=y
 # end of ESP-Claw Core
 
 #
+# Claw Manager
+#
+# default:
+CONFIG_CLAW_AGENT_MGR_MAX_SUBAGENTS=3
+# end of Claw Manager
+
+#
 # Claw Skill
 #
 # default:
@@ -3964,11 +3975,121 @@ CONFIG_CAP_VOICE_AUDIO_RECORD_BUF_KB=320
 # end of cap_voice
 
 #
-# Claw System Capability
+# App Claw Config
+#
+# CONFIG_APP_CLAW_ENABLE_CLI is not set
+# CONFIG_APP_CLAW_MEMORY_MODE_FULL is not set
+CONFIG_APP_CLAW_MEMORY_MODE_LIGHTWEIGHT=y
+
+#
+# App Claw Capabilities
+#
+CONFIG_APP_CLAW_CAP_FILES=y
+CONFIG_APP_CLAW_CAP_MEMORY=y
+CONFIG_APP_CLAW_CAP_EVENT_ROUTER=y
+CONFIG_APP_CLAW_CAP_CORE=y
+# CONFIG_APP_CLAW_CAP_IM_QQ is not set
+# CONFIG_APP_CLAW_CAP_IM_FEISHU is not set
+CONFIG_APP_CLAW_CAP_IM_TG=y
+# CONFIG_APP_CLAW_CAP_IM_WECHAT is not set
+# CONFIG_APP_CLAW_CAP_IM_LOCAL is not set
+# default:
+CONFIG_APP_CLAW_CAP_IM_PLATFORM=y
+# CONFIG_APP_CLAW_CAP_SCHEDULER is not set
+# CONFIG_APP_CLAW_CAP_LUA is not set
+# CONFIG_APP_CLAW_CAP_MCP_CLIENT is not set
+# CONFIG_APP_CLAW_CAP_MCP_SERVER is not set
+CONFIG_APP_CLAW_CAP_SKILL_MGR=y
+CONFIG_APP_CLAW_CAP_SYSTEM=y
+# CONFIG_APP_CLAW_CAP_LLM_INSPECT is not set
+# CONFIG_APP_CLAW_CAP_HTTP_REQUEST is not set
+# CONFIG_APP_CLAW_CAP_WEB_SEARCH is not set
+# CONFIG_APP_CLAW_CAP_ROUTER_MGR is not set
+CONFIG_APP_CLAW_CAP_SESSION_MGR=y
+# CONFIG_APP_CLAW_CAP_AGENT_MGR is not set
+# end of App Claw Capabilities
+
+#
+# App Claw Lua Modules
+#
+
+#
+# --- Hardware peripheral drivers (lua_driver) ---
 #
 # default:
-# CONFIG_CLAW_CAP_SYSTEM_DEBUG_LOGS is not set
-# end of Claw System Capability
+CONFIG_APP_CLAW_LUA_DRIVER_ADC=y
+# default:
+CONFIG_APP_CLAW_LUA_DRIVER_GPIO=y
+# default:
+CONFIG_APP_CLAW_LUA_DRIVER_I2C=y
+# default:
+CONFIG_APP_CLAW_LUA_DRIVER_MCPWM=y
+# default:
+CONFIG_APP_CLAW_LUA_DRIVER_PCNT=y
+# default:
+CONFIG_APP_CLAW_LUA_DRIVER_RMT=y
+# default:
+CONFIG_APP_CLAW_LUA_DRIVER_TOUCH=y
+# default:
+CONFIG_APP_CLAW_LUA_DRIVER_UART=y
+
+#
+# --- Higher-level modules (lua_module) ---
+#
+# default:
+# CONFIG_APP_CLAW_LUA_MODULE_AUDIO is not set
+# default:
+CONFIG_APP_CLAW_LUA_MODULE_BOARD_MANAGER=y
+# default:
+CONFIG_APP_CLAW_LUA_MODULE_BUTTON=y
+# default:
+# CONFIG_APP_CLAW_LUA_MODULE_CAMERA is not set
+# default:
+CONFIG_APP_CLAW_LUA_MODULE_CAPABILITY=y
+# default:
+CONFIG_APP_CLAW_LUA_MODULE_DELAY=y
+# default:
+CONFIG_APP_CLAW_LUA_MODULE_DISPLAY=y
+# default:
+# CONFIG_APP_CLAW_LUA_MODULE_ENVIRONMENTAL_SENSOR is not set
+# default:
+CONFIG_APP_CLAW_LUA_MODULE_EVENT_PUBLISHER=y
+# default:
+CONFIG_APP_CLAW_LUA_MODULE_HTTP_SERVER=y
+# default:
+CONFIG_APP_CLAW_LUA_MODULE_JSON=y
+# default:
+CONFIG_APP_CLAW_LUA_MODULE_THREAD=y
+# default:
+# CONFIG_APP_CLAW_LUA_MODULE_FUEL_GAUGE is not set
+# default:
+CONFIG_APP_CLAW_LUA_MODULE_IMAGE=y
+# default:
+# CONFIG_APP_CLAW_LUA_MODULE_IMU is not set
+# default:
+# CONFIG_APP_CLAW_LUA_MODULE_IR is not set
+# default:
+# CONFIG_APP_CLAW_LUA_MODULE_KNOB is not set
+# default:
+# CONFIG_APP_CLAW_LUA_MODULE_LCD is not set
+# default:
+# CONFIG_APP_CLAW_LUA_MODULE_LCD_TOUCH is not set
+# default:
+CONFIG_APP_CLAW_LUA_MODULE_LEDC=y
+# default:
+CONFIG_APP_CLAW_LUA_MODULE_LED_STRIP=y
+# default:
+CONFIG_APP_CLAW_LUA_MODULE_LVGL=y
+# default:
+# CONFIG_APP_CLAW_LUA_MODULE_MAGNETOMETER is not set
+# default:
+# CONFIG_APP_CLAW_LUA_MODULE_SCI is not set
+# default:
+CONFIG_APP_CLAW_LUA_MODULE_STORAGE=y
+# default:
+CONFIG_APP_CLAW_LUA_MODULE_SYSTEM=y
+# end of App Claw Lua Modules
+# end of App Claw Config
 
 #
 # cJSON
@@ -3978,6 +4099,46 @@ CONFIG_CJSON_NESTING_LIMIT=1000
 # default:
 CONFIG_CJSON_CIRCULAR_LIMIT=10000
 # end of cJSON
+
+#
+# ESP-DL Configuration
+#
+
+#
+# Vision/Image: Pixel Convert Support
+#
+# default:
+CONFIG_PIX_CVT_RGB565_TO_RGB565_SUPPORT=y
+# default:
+CONFIG_PIX_CVT_RGB565_TO_RGB888_SUPPORT=y
+# default:
+CONFIG_PIX_CVT_RGB565_TO_GRAY_SUPPORT=y
+# default:
+CONFIG_PIX_CVT_RGB565_TO_HSV_SUPPORT=y
+# default:
+CONFIG_PIX_CVT_RGB888_TO_RGB888_SUPPORT=y
+# default:
+CONFIG_PIX_CVT_RGB888_TO_RGB565_SUPPORT=y
+# default:
+CONFIG_PIX_CVT_RGB888_TO_GRAY_SUPPORT=y
+# default:
+CONFIG_PIX_CVT_RGB888_TO_HSV_SUPPORT=y
+# default:
+CONFIG_PIX_CVT_GRAY_TO_GRAY_SUPPORT=y
+# default:
+CONFIG_PIX_CVT_HSV_TO_HSV_MASK_SUPPORT=y
+# default:
+CONFIG_PIX_CVT_YUV_TO_RGB888_SUPPORT=y
+# default:
+CONFIG_PIX_CVT_YUV_TO_RGB565_SUPPORT=y
+# default:
+CONFIG_PIX_CVT_YUV_TO_GRAY_SUPPORT=y
+# default:
+CONFIG_PIX_CVT_YUV_TO_HSV_SUPPORT=y
+# default:
+CONFIG_PIX_CVT_YUV_TO_YUV_SUPPORT=y
+# end of Vision/Image: Pixel Convert Support
+# end of ESP-DL Configuration
 
 #
 # DSP Library
@@ -4049,6 +4210,13 @@ CONFIG_CODEC_TAS5805M_SUPPORT=y
 # default:
 # CONFIG_ESP_WS_CLIENT_SEPARATE_TX_LOCK is not set
 # end of ESP WebSocket client
+
+#
+# Claw System Capability
+#
+# default:
+# CONFIG_CLAW_CAP_SYSTEM_DEBUG_LOGS is not set
+# end of Claw System Capability
 # end of Component config
 
 # default:

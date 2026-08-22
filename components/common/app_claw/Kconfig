@@ -107,6 +107,19 @@ menu "App Claw Config"
             help
                 Register cap_im_local for in-process IM (e.g. edge_agent Web IM). Requires session manager for session_command.
 
+        config APP_CLAW_CAP_IM_PLATFORM
+            bool
+            default y if APP_CLAW_CAP_IM_QQ || APP_CLAW_CAP_IM_FEISHU || APP_CLAW_CAP_IM_TG || APP_CLAW_CAP_IM_WECHAT
+            default n
+            help
+                Hidden helper selected when any cap_im_platform-backed IM is
+                enabled. idf_component.yml manifest "if:" rules only reliably
+                evaluate a single $CONFIG{} == True comparison; a compound
+                "A || B || C || D" rule string is silently treated as
+                unsatisfied by the component manager, so cap_im_platform's
+                manifest rule references this single derived symbol instead
+                of ORing the four IM flags directly.
+
         config APP_CLAW_CAP_SCHEDULER
             bool "Enable scheduler capability"
             select APP_CLAW_CAP_EVENT_ROUTER

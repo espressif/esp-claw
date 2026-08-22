@@ -14,9 +14,7 @@ dependencies:
 
   cap_im_platform:
     rules:
-      - if: >-
-          $CONFIG{APP_CLAW_CAP_IM_FEISHU} == True || $CONFIG{APP_CLAW_CAP_IM_QQ} == True ||
-          $CONFIG{APP_CLAW_CAP_IM_TG} == True || $CONFIG{APP_CLAW_CAP_IM_WECHAT} == True
+      - if: $CONFIG{APP_CLAW_CAP_IM_PLATFORM} == True
     path: ../../claw_capabilities/cap_im_platform
 
   cap_im_local:
