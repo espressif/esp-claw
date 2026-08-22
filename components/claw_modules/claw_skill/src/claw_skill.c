@@ -1007,11 +1007,6 @@ static esp_err_t parse_skill_document_metadata(const char *filename, const char 
         cJSON_Delete(root);
         return ESP_ERR_INVALID_ARG;
     }
-    if (cJSON_GetObjectItemCaseSensitive(root, "execution")) {
-        ESP_LOGE(TAG, "legacy execution field is not allowed; use launcher.json: %s", filename);
-        cJSON_Delete(root);
-        return ESP_ERR_INVALID_ARG;
-    }
 
     err = json_dup_required_string(root, "name", &entry->id);
     if (err == ESP_OK) {
