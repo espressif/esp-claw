@@ -4,7 +4,7 @@
  *
  * Board support for M5Stack StickS3.
  * - M5PM1 PMIC init (powers LCD rail and speaker PA)
- * - ST7789 135×240 display via SPI3, solid-color state rendering
+ * - ST7789 135×240 display via M5GFX (LGFX_Device), state UI rendering
  */
 #include "setup_device.h"
 
@@ -14,24 +14,25 @@
  * forcing C linkage on them is a "conflicting declaration of C function" error. */
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
-#include "driver/spi_master.h"
-#include "esp_lcd_panel_io.h"
-#include "esp_lcd_panel_vendor.h"
-#include "esp_lcd_panel_ops.h"
-#include "esp_lcd_io_spi.h"
 #include "esp_log.h"
-#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <M5GFX.h>
+#include <lgfx/v1/panel/Panel_ST7789.hpp>
+#include <lgfx/v1/platforms/esp32/Bus_SPI.hpp>
+#include <lgfx/v1/platforms/esp32/Light_PWM.hpp>
 #include <string.h>
 
 static const char *TAG = "setup_device";
 
 /* ------------------------------------------------------------------ */
-/* Button GPIOs                                                        */
+/* Button GPIOs — M5StickS3 BtnA/BtnB per M5Unified's authoritative    */
+/* board table. NOT GPIO37/35 (those are this module's internal Octal  */
+/* PSRAM D6/DQS lines — see rover_s3_board_init() comment below) and    */
+/* NOT the 37/39 in board_peripherals.yaml (also wrong; 39 is LCD MOSI).*/
 /* ------------------------------------------------------------------ */
-#define BTN_A_GPIO  GPIO_NUM_37
-#define BTN_B_GPIO  GPIO_NUM_35
+#define BTN_A_GPIO  GPIO_NUM_11
+#define BTN_B_GPIO  GPIO_NUM_12
 
 /* ------------------------------------------------------------------ */
 /* M5PM1 PMIC — internal I2C (SDA=47, SCL=48, addr=0x6E)             */
@@ -50,24 +51,74 @@ static const char *TAG = "setup_device";
 #define M5PM1_BIT_SPK_PA      (1 << 3)
 
 /* ------------------------------------------------------------------ */
-/* ST7789 display — SPI3                                               */
+/* ST7789 display — SPI3, driven directly via a hand-configured        */
+/* LGFX_Device instead of M5GFX's autodetect()/M5Unified's M5.begin(). */
+/* Both of those probe OTHER M5 boards first (M5StackCoreS3's block    */
+/* reconfigures GPIO35/36/37 for its SPI bus), which would corrupt     */
+/* this module's Octal PSRAM the same way the old BTN_A/BTN_B          */
+/* gpio_config() did. Pinning the exact M5StickS3 panel config here    */
+/* (values verified against M5GFX's own board_M5StickS3 case in        */
+/* M5GFX.cpp) skips probing entirely. M5Unified itself is not used at  */
+/* all: its board_M5StickS3 case also clears PM1 gpio3 (speaker PA),   */
+/* which would silence the speaker our own init_m5pm1() enables below. */
 /* ------------------------------------------------------------------ */
-#define LCD_W           135
-#define LCD_H           240
-#define LCD_OFFSET_X    52
-#define LCD_OFFSET_Y    40
-#define LCD_MOSI        GPIO_NUM_39
-#define LCD_SCK         GPIO_NUM_40
-#define LCD_CS          GPIO_NUM_41
-#define LCD_DC          GPIO_NUM_45
-#define LCD_RST         GPIO_NUM_21
-#define LCD_BL          GPIO_NUM_38
-#define LCD_SPI_HOST    SPI3_HOST
-#define LCD_SPI_HZ      (40 * 1000 * 1000)
+class LGFX : public lgfx::LGFX_Device
+{
+    lgfx::Panel_ST7789 _panel_instance;
+    lgfx::Bus_SPI      _bus_instance;
+    lgfx::Light_PWM    _light_instance;
 
-static esp_lcd_panel_handle_t s_panel = NULL;
-/* Line buffer for draw_bitmap — same color every pixel, DMA race is harmless */
-static uint16_t s_line_buf[LCD_W];
+public:
+    LGFX(void)
+    {
+        {
+            auto cfg = _bus_instance.config();
+            cfg.spi_host    = SPI3_HOST;
+            cfg.spi_mode    = 0;
+            cfg.freq_write  = 40000000;
+            cfg.freq_read   = 16000000;
+            cfg.spi_3wire   = true;
+            cfg.use_lock    = true;
+            cfg.dma_channel = SPI_DMA_CH_AUTO;
+            cfg.pin_sclk    = GPIO_NUM_40;
+            cfg.pin_mosi    = GPIO_NUM_39;
+            cfg.pin_miso    = -1;
+            cfg.pin_dc      = GPIO_NUM_45;
+            _bus_instance.config(cfg);
+            _panel_instance.setBus(&_bus_instance);
+        }
+        {
+            auto cfg = _panel_instance.config();
+            cfg.pin_cs           = GPIO_NUM_41;
+            cfg.pin_rst          = GPIO_NUM_21;
+            cfg.pin_busy         = -1;
+            cfg.panel_width      = 135;
+            cfg.panel_height     = 240;
+            cfg.offset_x         = 52;
+            cfg.offset_y         = 40;
+            cfg.offset_rotation  = 0;
+            cfg.readable         = true;
+            cfg.invert           = true;
+            cfg.rgb_order        = false;
+            cfg.dlen_16bit       = false;
+            cfg.bus_shared       = false;
+            _panel_instance.config(cfg);
+        }
+        {
+            auto cfg = _light_instance.config();
+            cfg.pin_bl      = GPIO_NUM_38;
+            cfg.invert      = false;
+            cfg.freq        = 44100;
+            cfg.pwm_channel = 7;
+            _light_instance.config(cfg);
+            _panel_instance.setLight(&_light_instance);
+        }
+        setPanel(&_panel_instance);
+    }
+};
+
+static LGFX s_lcd;
+static bool s_lcd_ready = false;
 
 /* ------------------------------------------------------------------ */
 /* M5PM1 helpers                                                       */
@@ -147,92 +198,52 @@ cleanup:
 }
 
 /* ------------------------------------------------------------------ */
+/* Buttons                                                             */
+/* ------------------------------------------------------------------ */
+static void init_buttons(void)
+{
+    gpio_config_t cfg = {
+        .pin_bit_mask = (1ULL << BTN_A_GPIO) | (1ULL << BTN_B_GPIO),
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&cfg);
+}
+
+/* ------------------------------------------------------------------ */
 /* ST7789 init                                                         */
 /* ------------------------------------------------------------------ */
 static void init_display(void)
 {
-    /* Backlight GPIO — configure as output and keep off during init */
-    gpio_config_t bl_cfg = {
-        .pin_bit_mask = (1ULL << LCD_BL),
-        .mode         = GPIO_MODE_OUTPUT,
-        .pull_up_en   = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&bl_cfg);
-    gpio_set_level(LCD_BL, 0);
-
-    spi_bus_config_t bus_cfg = {};
-    bus_cfg.mosi_io_num     = LCD_MOSI;
-    bus_cfg.miso_io_num     = -1;
-    bus_cfg.sclk_io_num     = LCD_SCK;
-    bus_cfg.quadwp_io_num   = -1;
-    bus_cfg.quadhd_io_num   = -1;
-    bus_cfg.max_transfer_sz = LCD_W * LCD_H * 2;
-
-    if (spi_bus_initialize(LCD_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO) != ESP_OK) {
-        ESP_LOGW(TAG, "LCD: SPI bus init failed");
+    if (!s_lcd.init()) {
+        ESP_LOGW(TAG, "LCD: init failed");
         return;
     }
-
-    esp_lcd_panel_io_spi_config_t io_cfg = {};
-    io_cfg.cs_gpio_num       = LCD_CS;
-    io_cfg.dc_gpio_num       = LCD_DC;
-    io_cfg.spi_mode          = 0;
-    io_cfg.pclk_hz           = LCD_SPI_HZ;
-    io_cfg.trans_queue_depth = 4;
-    io_cfg.lcd_cmd_bits      = 8;
-    io_cfg.lcd_param_bits    = 8;
-
-    esp_lcd_panel_io_handle_t io = NULL;
-    if (esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_SPI_HOST,
-                                  &io_cfg, &io) != ESP_OK) {
-        ESP_LOGW(TAG, "LCD: panel IO create failed");
-        spi_bus_free(LCD_SPI_HOST);
-        return;
-    }
-
-    esp_lcd_panel_dev_config_t panel_cfg = {};
-    panel_cfg.reset_gpio_num  = LCD_RST;
-    panel_cfg.rgb_ele_order   = LCD_RGB_ELEMENT_ORDER_RGB;
-    panel_cfg.data_endian     = LCD_RGB_DATA_ENDIAN_BIG;
-    panel_cfg.bits_per_pixel  = 16;
-
-    if (esp_lcd_new_panel_st7789(io, &panel_cfg, &s_panel) != ESP_OK) {
-        ESP_LOGW(TAG, "LCD: panel create failed");
-        esp_lcd_panel_io_del(io);
-        spi_bus_free(LCD_SPI_HOST);
-        return;
-    }
-
-    esp_lcd_panel_reset(s_panel);
-    esp_lcd_panel_init(s_panel);
-    esp_lcd_panel_invert_color(s_panel, true);
-    esp_lcd_panel_set_gap(s_panel, LCD_OFFSET_X, LCD_OFFSET_Y);
-    esp_lcd_panel_disp_on_off(s_panel, true);
-
-    /* Blank to black before turning on backlight */
-    memset(s_line_buf, 0, sizeof(s_line_buf));
-    for (int y = 0; y < LCD_H; y++) {
-        esp_lcd_panel_draw_bitmap(s_panel, 0, y, LCD_W, y + 1, s_line_buf);
-    }
-    gpio_set_level(LCD_BL, 1);
-
-    ESP_LOGI(TAG, "LCD: ST7789 %dx%d ready", LCD_W, LCD_H);
+    s_lcd.setRotation(0);
+    s_lcd.setBrightness(128);
+    s_lcd.fillScreen(TFT_BLACK);
+    s_lcd_ready = true;
+    ESP_LOGI(TAG, "LCD: ST7789 %dx%d ready", s_lcd.width(), s_lcd.height());
 }
 
-/* RGB565 color table per display state */
-static uint16_t state_color(rover_s3_display_state_t state)
+struct state_style_t {
+    const char *label;
+    uint8_t r, g, b;
+};
+
+static state_style_t state_style(rover_s3_display_state_t state)
 {
     switch (state) {
-    case ROVER_S3_DISPLAY_BOOT:       return 0x4208; /* gray */
-    case ROVER_S3_DISPLAY_IDLE:       return 0x000F; /* navy */
-    case ROVER_S3_DISPLAY_LISTENING:  return 0x07FF; /* cyan */
-    case ROVER_S3_DISPLAY_THINKING:   return 0xFFE0; /* yellow */
-    case ROVER_S3_DISPLAY_SPEAKING:   return 0x07E0; /* green */
-    case ROVER_S3_DISPLAY_EXECUTING:  return 0xFD20; /* orange */
-    case ROVER_S3_DISPLAY_OFFLINE:    return 0xF800; /* red */
-    default:                          return 0x0000;
+    case ROVER_S3_DISPLAY_BOOT:      return { "BOOT",    0x40, 0x40, 0x40 };
+    case ROVER_S3_DISPLAY_IDLE:      return { "IDLE",    0x00, 0x00, 0x80 };
+    case ROVER_S3_DISPLAY_LISTENING: return { "LISTEN",  0x00, 0xC0, 0xC0 };
+    case ROVER_S3_DISPLAY_THINKING:  return { "THINK",   0xC0, 0xC0, 0x00 };
+    case ROVER_S3_DISPLAY_SPEAKING:  return { "SPEAK",   0x00, 0xA0, 0x00 };
+    case ROVER_S3_DISPLAY_EXECUTING: return { "EXEC",    0xE0, 0x80, 0x00 };
+    case ROVER_S3_DISPLAY_OFFLINE:   return { "OFFLINE", 0xC0, 0x00, 0x00 };
+    default:                         return { "?",       0x00, 0x00, 0x00 };
     }
 }
 
@@ -241,20 +252,9 @@ static uint16_t state_color(rover_s3_display_state_t state)
 /* ------------------------------------------------------------------ */
 extern "C" esp_err_t rover_s3_board_init(void)
 {
-    /* BTN_A/BTN_B gpio_config is intentionally NOT called: GPIO37/35 are the
-     * ESP32-S3-PICO-1's internal Octal PSRAM D6/DQS lines on this module.
-     * Configuring them as plain GPIO inputs corrupts PSRAM (heap_caps_malloc
-     * hangs inside the allocator on the next PSRAM allocation — confirmed via
-     * A/B test with the psram_probe() calls in main.c). btn_a/btn_b in
-     * board_peripherals.yaml (37/39) don't match this file's constants and
-     * GPIO39 is the LCD's own SPI MOSI line, so that mapping needs hardware
-     * verification against the real M5StickS3 schematic before buttons can
-     * be wired up on a safe pin; until then BTN_A/BTN_B are unavailable. */
-    ESP_LOGI(TAG, "board_init: buttons unavailable (GPIO%d/%d reserved by Octal PSRAM)",
-             BTN_A_GPIO, BTN_B_GPIO);
-
     init_m5pm1();
     init_display();
+    init_buttons();
 
     ESP_LOGI(TAG, "board_init done");
     return ESP_OK;
@@ -285,10 +285,7 @@ extern "C" bool rover_s3_board_is_charging(void)
 extern "C" void rover_s3_board_display_state(rover_s3_display_state_t state,
                                                const char *ip, int batt_pct)
 {
-    (void)ip;
-    (void)batt_pct;
-
-    if (!s_panel) {
+    if (!s_lcd_ready) {
         static rover_s3_display_state_t last = (rover_s3_display_state_t)-1;
         if (state != last) {
             last = state;
@@ -297,9 +294,29 @@ extern "C" void rover_s3_board_display_state(rover_s3_display_state_t state,
         return;
     }
 
-    uint16_t color = state_color(state);
-    for (int i = 0; i < LCD_W; i++) s_line_buf[i] = color;
-    for (int y = 0; y < LCD_H; y++) {
-        esp_lcd_panel_draw_bitmap(s_panel, 0, y, LCD_W, y + 1, s_line_buf);
+    state_style_t style = state_style(state);
+    uint16_t header_color = s_lcd.color565(style.r, style.g, style.b);
+
+    s_lcd.startWrite();
+    s_lcd.fillScreen(TFT_BLACK);
+    s_lcd.fillRect(0, 0, s_lcd.width(), 40, header_color);
+
+    s_lcd.setTextColor(TFT_WHITE, header_color);
+    s_lcd.setTextSize(2);
+    s_lcd.setCursor(6, 12);
+    s_lcd.print(style.label);
+
+    s_lcd.setTextSize(1);
+    s_lcd.setTextColor(TFT_WHITE, TFT_BLACK);
+    s_lcd.setCursor(4, 52);
+    s_lcd.printf("IP: %s", (ip && ip[0]) ? ip : "---");
+
+    s_lcd.setCursor(4, 68);
+    if (batt_pct >= 0) {
+        s_lcd.printf("BAT: %d%%", batt_pct);
+    } else {
+        s_lcd.print("BAT: --");
     }
+
+    s_lcd.endWrite();
 }

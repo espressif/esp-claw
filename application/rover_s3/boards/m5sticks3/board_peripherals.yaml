@@ -1,10 +1,10 @@
 peripherals:
   buttons:
     - id: btn_a
-      gpio: 37
+      gpio: 11
       active_low: true
     - id: btn_b
-      gpio: 39
+      gpio: 12
       active_low: true
   leds:
     - id: led
