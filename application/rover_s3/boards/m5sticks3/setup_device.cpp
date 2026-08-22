@@ -100,9 +100,6 @@ static esp_err_t m5pm1_enable_output(i2c_master_dev_handle_t dev, uint8_t mask)
 
 static void init_m5pm1(void)
 {
-    /* Granular logs locate the exact stall vs. the IWDT reset. */
-    ESP_LOGI(TAG, "M5PM1: [1] entering init, SDA=%d SCL=%d", M5PM1_SDA, M5PM1_SCL);
-
     i2c_master_bus_config_t bus_cfg = {};
     bus_cfg.i2c_port          = M5PM1_I2C_PORT;
     bus_cfg.sda_io_num        = M5PM1_SDA;
@@ -115,12 +112,9 @@ static void init_m5pm1(void)
     i2c_master_dev_handle_t dev = NULL;
     esp_err_t err;
 
-    ESP_LOGI(TAG, "M5PM1: [2] pre i2c_new_master_bus");
     err = i2c_new_master_bus(&bus_cfg, &bus);
-    ESP_LOGI(TAG, "M5PM1: [3] post i2c_new_master_bus rc=%d (%s)",
-             err, esp_err_to_name(err));
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "M5PM1: bus create failed");
+        ESP_LOGW(TAG, "M5PM1: bus create failed: %s", esp_err_to_name(err));
         return;
     }
 
@@ -129,20 +123,14 @@ static void init_m5pm1(void)
     dev_cfg.device_address  = M5PM1_ADDR;
     dev_cfg.scl_speed_hz    = 100000;
 
-    ESP_LOGI(TAG, "M5PM1: [4] pre add_device");
     err = i2c_master_bus_add_device(bus, &dev_cfg, &dev);
-    ESP_LOGI(TAG, "M5PM1: [5] post add_device rc=%d (%s)",
-             err, esp_err_to_name(err));
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "M5PM1: add device failed");
+        ESP_LOGW(TAG, "M5PM1: add device failed: %s", esp_err_to_name(err));
         i2c_del_master_bus(bus);
         return;
     }
 
-    ESP_LOGI(TAG, "M5PM1: [6] pre first write (I2C_CFG)");
     err = m5pm1_write_reg(dev, M5PM1_REG_I2C_CFG, 0x00);
-    ESP_LOGI(TAG, "M5PM1: [7] post first write rc=%d (%s)",
-             err, esp_err_to_name(err));
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "M5PM1: I2C_CFG failed: %s", esp_err_to_name(err));
         goto cleanup;
@@ -156,7 +144,6 @@ static void init_m5pm1(void)
 cleanup:
     i2c_master_bus_rm_device(dev);
     i2c_del_master_bus(bus);
-    ESP_LOGI(TAG, "M5PM1: [8] cleanup done");
 }
 
 /* ------------------------------------------------------------------ */
@@ -183,12 +170,10 @@ static void init_display(void)
     bus_cfg.quadhd_io_num   = -1;
     bus_cfg.max_transfer_sz = LCD_W * LCD_H * 2;
 
-    ESP_LOGI(TAG, "LCD: [a] pre spi_bus_initialize");
     if (spi_bus_initialize(LCD_SPI_HOST, &bus_cfg, SPI_DMA_CH_AUTO) != ESP_OK) {
         ESP_LOGW(TAG, "LCD: SPI bus init failed");
         return;
     }
-    ESP_LOGI(TAG, "LCD: [b] post spi_bus_initialize");
 
     esp_lcd_panel_io_spi_config_t io_cfg = {};
     io_cfg.cs_gpio_num       = LCD_CS;
@@ -199,7 +184,6 @@ static void init_display(void)
     io_cfg.lcd_cmd_bits      = 8;
     io_cfg.lcd_param_bits    = 8;
 
-    ESP_LOGI(TAG, "LCD: [c] pre new_panel_io_spi");
     esp_lcd_panel_io_handle_t io = NULL;
     if (esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_SPI_HOST,
                                   &io_cfg, &io) != ESP_OK) {
@@ -214,7 +198,6 @@ static void init_display(void)
     panel_cfg.data_endian     = LCD_RGB_DATA_ENDIAN_BIG;
     panel_cfg.bits_per_pixel  = 16;
 
-    ESP_LOGI(TAG, "LCD: [d] pre new_panel_st7789");
     if (esp_lcd_new_panel_st7789(io, &panel_cfg, &s_panel) != ESP_OK) {
         ESP_LOGW(TAG, "LCD: panel create failed");
         esp_lcd_panel_io_del(io);
@@ -222,14 +205,13 @@ static void init_display(void)
         return;
     }
 
-    ESP_LOGI(TAG, "LCD: [e] pre reset");    esp_lcd_panel_reset(s_panel);
-    ESP_LOGI(TAG, "LCD: [f] pre init");     esp_lcd_panel_init(s_panel);
-    ESP_LOGI(TAG, "LCD: [g] pre invert");   esp_lcd_panel_invert_color(s_panel, true);
+    esp_lcd_panel_reset(s_panel);
+    esp_lcd_panel_init(s_panel);
+    esp_lcd_panel_invert_color(s_panel, true);
     esp_lcd_panel_set_gap(s_panel, LCD_OFFSET_X, LCD_OFFSET_Y);
-    ESP_LOGI(TAG, "LCD: [h] pre disp_on");  esp_lcd_panel_disp_on_off(s_panel, true);
+    esp_lcd_panel_disp_on_off(s_panel, true);
 
     /* Blank to black before turning on backlight */
-    ESP_LOGI(TAG, "LCD: [i] pre draw loop");
     memset(s_line_buf, 0, sizeof(s_line_buf));
     for (int y = 0; y < LCD_H; y++) {
         esp_lcd_panel_draw_bitmap(s_panel, 0, y, LCD_W, y + 1, s_line_buf);
@@ -259,23 +241,20 @@ static uint16_t state_color(rover_s3_display_state_t state)
 /* ------------------------------------------------------------------ */
 extern "C" esp_err_t rover_s3_board_init(void)
 {
-    /* DIAG: re-enable ONLY the button gpio_config (m5pm1/display still skipped).
-     * BTN_A=GPIO37, BTN_B=GPIO35 = octal PSRAM MSPI pins (D6/DQS). Clean probe D
-     * after this confirms whether reconfiguring them corrupts PSRAM. */
-    gpio_config_t btn_cfg = {
-        .pin_bit_mask = (1ULL << BTN_A_GPIO) | (1ULL << BTN_B_GPIO),
-        .mode         = GPIO_MODE_INPUT,
-        .pull_up_en   = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&btn_cfg);
-    ESP_LOGI(TAG, "board_init: btn gpio_config done (GPIO%d/%d)", BTN_A_GPIO, BTN_B_GPIO);
+    /* BTN_A/BTN_B gpio_config is intentionally NOT called: GPIO37/35 are the
+     * ESP32-S3-PICO-1's internal Octal PSRAM D6/DQS lines on this module.
+     * Configuring them as plain GPIO inputs corrupts PSRAM (heap_caps_malloc
+     * hangs inside the allocator on the next PSRAM allocation — confirmed via
+     * A/B test with the psram_probe() calls in main.c). btn_a/btn_b in
+     * board_peripherals.yaml (37/39) don't match this file's constants and
+     * GPIO39 is the LCD's own SPI MOSI line, so that mapping needs hardware
+     * verification against the real M5StickS3 schematic before buttons can
+     * be wired up on a safe pin; until then BTN_A/BTN_B are unavailable. */
+    ESP_LOGI(TAG, "board_init: buttons unavailable (GPIO%d/%d reserved by Octal PSRAM)",
+             BTN_A_GPIO, BTN_B_GPIO);
 
-    ESP_LOGI(TAG, "board_init: init_m5pm1 (DIAG: SKIPPED)");
-    /* init_m5pm1(); */
-    ESP_LOGI(TAG, "board_init: init_display (DIAG: SKIPPED)");
-    /* init_display(); */
+    init_m5pm1();
+    init_display();
 
     ESP_LOGI(TAG, "board_init done");
     return ESP_OK;

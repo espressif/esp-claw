@@ -9,7 +9,6 @@
 #include <time.h>
 
 #include "esp_err.h"
-#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_vfs_fat.h"
 #include "nvs_flash.h"
@@ -63,40 +62,16 @@ static void apply_timezone(const char *tz)
     ESP_LOGI(TAG, "timezone set: %s", tz);
 }
 
-/* DIAG: alloc 64KB PSRAM, write a pattern, read it back & verify, free.
- * No integrity check, no persistence (both were confounds). A log before each
- * sub-step: the last log before a stall = the stalling sub-step; a verify
- * mismatch = PSRAM data corruption (MSPI write/read), not metadata. */
-static void psram_probe(const char *where)
-{
-    ESP_LOGI(TAG, "PROBE[%s]: alloc", where);
-    uint8_t *p = heap_caps_malloc(64 * 1024, MALLOC_CAP_SPIRAM);
-    if (!p) { ESP_LOGW(TAG, "PROBE[%s]: NULL", where); return; }
-    ESP_LOGI(TAG, "PROBE[%s]: memset ptr=%p", where, p);
-    memset(p, 0xA5, 64 * 1024);
-    ESP_LOGI(TAG, "PROBE[%s]: verify", where);
-    int bad = 0;
-    for (int i = 0; i < 64 * 1024; i++) if (p[i] != 0xA5) bad++;
-    ESP_LOGI(TAG, "PROBE[%s]: free (bad=%d)", where, bad);
-    heap_caps_free(p);
-    ESP_LOGI(TAG, "PROBE[%s]: done", where);
-}
-
 void app_main(void)
 {
     ESP_LOGI(TAG, "Starting rover_s3");
 
-    psram_probe("A-top");
-
     ESP_ERROR_CHECK(init_nvs());
-    psram_probe("B-after-nvs");
     ESP_ERROR_CHECK(rover_s3_settings_init());
     ESP_ERROR_CHECK(rover_s3_settings_load(&s_settings));
-    psram_probe("C-after-settings");
     apply_timezone(s_settings.time_timezone);
 
     ESP_ERROR_CHECK(rover_s3_board_init());
-    psram_probe("D-after-board_init");
 
     rover_s3_display_init();
     rover_s3_display_set_state(ROVER_S3_DISPLAY_BOOT);
