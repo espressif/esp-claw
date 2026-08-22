@@ -1,16 +1,38 @@
 # Lua HTTP Server
 
-This module lets a long-running Lua script publish static FatFS files and HTTP
-callbacks through the existing edge_agent HTTP server.
+This module lets a long-running Lua script publish static DATA files and HTTP callbacks through the existing edge_agent HTTP server.
+
+## API
+
+- `http.app(app_id)` creates an application object. `app_id` may contain only letters, digits, `_`, and `-`.
+- `app:mount_static(root_path)` publishes files from an absolute safe directory path and returns `true`.
+- `app:get(path, callback)` registers a GET route and returns the app object.
+- `app:post(path, callback)` registers a POST route and returns the app object.
+- `app:url()` returns the static URL prefix, such as `/lua/panel/`.
+- `app:serve_forever()` dispatches callback requests until the Lua job is stopped.
+
+Callback `req` fields:
+- `method`: `"GET"` or `"POST"`
+- `path`: route path without the `/api/lua/<app_id>` prefix
+- `query`: decoded query-string table
+- `body`: request body string
+- `content_type`: request content type
+
+Callback return values:
+- `nil`: HTTP 204
+- `string`: HTTP 200 `text/plain; charset=utf-8`
+- `{ json = table [, status = code] }`: JSON response
+- `{ body = string [, content_type = type] [, status = code] }`: custom body response
 
 ## Example
 
 ```lua
 local http = require("http_server")
+local storage = require("storage")
 local system = require("system")
 
 local app = http.app("panel")
-app:mount_static("/fatfs/www/panel")
+app:mount_static(storage.join_path(storage.get_root_dir(), "www", "panel"))
 
 app:get("/state", function(req)
   return {
@@ -31,15 +53,10 @@ print(app:url())
 app:serve_forever()
 ```
 
-Run scripts that serve callbacks through `lua_run_script_async`, because
-`serve_forever()` keeps the Lua state alive until the job is stopped.
-
 ## URL Space
 
 - Static files: `/lua/<app_id>/...`
 - Callback APIs: `/api/lua/<app_id>/...`
-
-`app_id` may contain only letters, digits, `_`, and `-`.
 
 ## Static Page Rules
 
@@ -60,13 +77,6 @@ If a skill allows callers to change `app_id`, either keep the documented
 trailing-slash URL as the required entry point or update the HTML asset URLs to
 match the chosen app id.
 
-## Packaged Skill Example
+## Notes
 
-The repository includes a ready-to-run skill example:
-
-```text
-components/lua_modules/lua_module_http_server/skills/http_server_lua_demo/
-```
-
-It starts a background Lua web page at `/lua/lua_demo/`, shows "Hello World",
-and logs every switch toggle from the browser in the Lua script output.
+Run scripts that serve callbacks through `lua_run_script_async`, because `serve_forever()` keeps the Lua state alive until the job is stopped.

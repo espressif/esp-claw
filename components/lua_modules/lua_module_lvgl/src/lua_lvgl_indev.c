@@ -5,14 +5,6 @@
  */
 
 /*
- * Input device subsystem (P4 of RFC-single-script-ui.md).
- *
- * Scope of this revision: a single LV_INDEV_TYPE_POINTER backed by an
- * esp_lcd_touch_handle_t obtained from board_manager. Encoder and keypad
- * indevs are intentionally deferred to a follow-up PR (the registration
- * surface here accepts a kind string so adding them later is purely
- * additive).
- *
  * Threading model:
  *   - The read callback runs from the LVGL task while it already holds
  *     lua_lvgl_lock() (taken in lua_lvgl_task before lv_timer_handler).
@@ -40,8 +32,6 @@
 #include "esp_lcd_touch.h"
 
 static const char *TAG = "lua_lvgl_indev";
-
-/* --- Internal helpers -------------------------------------------------- */
 
 static void lua_lvgl_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
@@ -93,8 +83,6 @@ static const char *lua_lvgl_indev_attach_touch_locked(void *touch_handle)
     return NULL;
 }
 
-/* --- Public C API (called from runtime teardown) ----------------------- */
-
 void lua_lvgl_indev_release_locked(void)
 {
     if (s_lvgl.touch_indev) {
@@ -106,8 +94,6 @@ void lua_lvgl_indev_release_locked(void)
     }
     s_lvgl.touch_handle = NULL;
 }
-
-/* --- Lua entries ------------------------------------------------------- */
 
 static int lua_lvgl_indev_register(lua_State *L)
 {

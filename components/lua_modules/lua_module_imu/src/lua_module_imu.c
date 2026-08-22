@@ -90,10 +90,6 @@ static const char *TAG = "lua_module_imu";
 
 static void lua_imu_destroy_handle(lua_imu_handle_t *handle);
 
-/* ---------------------------------------------------------------------------
- * Helper exported to backends.
- * ------------------------------------------------------------------------- */
-
 esp_err_t lua_imu_ctx_select_addr(lua_imu_backend_ctx_t *ctx, uint8_t i2c_addr)
 {
     if (ctx->i2c_dev_handle != NULL && ctx->i2c_addr == i2c_addr) {
@@ -111,10 +107,6 @@ esp_err_t lua_imu_ctx_select_addr(lua_imu_backend_ctx_t *ctx, uint8_t i2c_addr)
     ctx->i2c_addr = i2c_addr;
     return ESP_OK;
 }
-
-/* ---------------------------------------------------------------------------
- * GPIO + I2C bus setup.
- * ------------------------------------------------------------------------- */
 
 static esp_err_t lua_imu_configure_interrupt_pin(int int_gpio_num)
 {
@@ -198,10 +190,6 @@ static esp_err_t lua_imu_open_i2c_bus(const char *peripheral_name,
     }
     return ESP_OK;
 }
-
-/* ---------------------------------------------------------------------------
- * Handle lifecycle (delegates chip work to the backend).
- * ------------------------------------------------------------------------- */
 
 static esp_err_t lua_imu_create_handle(const lua_imu_resolved_cfg_t *cfg,
                                        lua_imu_handle_t **out_handle)
@@ -311,10 +299,6 @@ static void lua_imu_destroy_handle(lua_imu_handle_t *handle)
     free(handle);
 }
 
-/* ---------------------------------------------------------------------------
- * Lua bindings.
- * ------------------------------------------------------------------------- */
-
 static lua_imu_ud_t *lua_imu_get_ud(lua_State *L, int idx)
 {
     lua_imu_ud_t *ud = (lua_imu_ud_t *)luaL_checkudata(L, idx, LUA_IMU_METATABLE);
@@ -412,10 +396,6 @@ static int lua_imu_read_int_status(lua_State *L)
     lua_pushinteger(L, (lua_Integer)status);
     return 1;
 }
-
-/* ---------------------------------------------------------------------------
- * Board defaults + Lua options resolution.
- * ------------------------------------------------------------------------- */
 
 /*
  * Resolve the auto-generated board device config for `device_name` and

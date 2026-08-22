@@ -1,9 +1,0 @@
-dependencies:
-  app_provisioning:
-    path: ../app_provisioning
-  cap_im_platform:
-    path: ../../claw_capabilities/cap_im_platform
-  config_runtime:
-    path: ../config_runtime
-  http_server:
-    path: ../http_server

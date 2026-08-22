@@ -11,6 +11,14 @@ menu "Lua Vision Module"
             the default vision submodule and does not require ESPDet model
             runtime support.
 
+    config LUA_MODULE_VISION_COLOR_DETECT
+        bool "Enable color_detect Lua module"
+        default n
+        help
+            Build and register the ESP-DL color_detect Lua module for detecting
+            colored blobs in image.frame values using the migrated ColorDetect
+            implementation.
+
     config LUA_MODULE_VISION_ESPDET
         bool "Enable espdet Lua module"
         default n

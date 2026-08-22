@@ -1,9 +1,0 @@
-idf_component_register(
-    SRCS
-        "src/lua_module_match_watch.c"
-    INCLUDE_DIRS
-        "src"
-    REQUIRES
-        cap_lua
-        match_watch_runtime
-)

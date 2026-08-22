@@ -19,7 +19,6 @@ import LinkToSource from '@/components/LinkToSource.astro';
 | [claw_event_router](./claw-event-router) | 统一事件入口：规则匹配、`call_cap` / `run_agent` / `run_script` / `send_message` 等动作链；`run_agent` 异步提交至 `claw_core`，响应通过 `out_message` 事件发布。事件类型定义见 `claw_event.h`，发布 API 见 `claw_event_publisher.h`。 |
 | [claw_memory](./claw-memory) | 会话历史与长期记忆文件的读写，并作为 `claw_core` 的 context provider。 |
 | [claw_skill](./claw-skill) | Skills 目录、`SKILL.md` 元数据渲染、按 session 的激活状态持久化，以及向模型注入 Skills 目录清单。已激活 Skill 文档通过 `activate_skill` 工具返回值注入会话历史。 |
-| [claw_ramfs](./claw-ramfs) | RAM-backed 文件系统，通过 VFS 接口提供高速内存文件存储，支持与 FATFS 双向同步。 |
 
 ## 各模块详细文档
 
@@ -29,5 +28,4 @@ import LinkToSource from '@/components/LinkToSource.astro';
   <LinkCard title="claw_event_router" href="./claw-event-router" description="事件入口、自动化规则匹配、出站通道绑定" />
   <LinkCard title="claw_memory" href="./claw-memory" description="会话历史与长期记忆文件的读写" />
   <LinkCard title="claw_skill" href="./claw-skill" description="Skills 目录与 session 级激活状态管理" />
-  <LinkCard title="claw_ramfs" href="./claw-ramfs" description="RAM 文件系统 — 高速内存存储与 FATFS 同步" />
 </CardGrid>

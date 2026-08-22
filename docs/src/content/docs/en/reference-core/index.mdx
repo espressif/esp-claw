@@ -19,7 +19,6 @@ Each `cap_*` capability registers and runs through the framework’s unified int
 | [claw_event_router](./claw-event-router) | Unified event ingress: rule matching, action chains such as `call_cap` / `run_agent` / `run_script` / `send_message`; `run_agent` asynchronously submits to `claw_core` and the response is published via `out_message` event. Event types are in `claw_event.h` and publishing APIs are in `claw_event_publisher.h`. |
 | [claw_memory](./claw-memory) | Read/write session history and long-term memory files; acts as a context provider for `claw_core`. |
 | [claw_skill](./claw-skill) | Skills tree, `SKILL.md` metadata rendering, per-session activation persistence, and injection of the Skills catalog list into the model. Activated Skill documents are injected into conversation history through `activate_skill` tool results. |
-| [claw_ramfs](./claw-ramfs) | RAM-backed file system that provides high-speed memory file storage through VFS and supports bidirectional sync with FATFS. |
 
 ## Per-module docs
 
@@ -29,5 +28,4 @@ Each `cap_*` capability registers and runs through the framework’s unified int
   <LinkCard title="claw_event_router" href="./claw-event-router" description="Event ingress, automation rules, outbound channel bindings" />
   <LinkCard title="claw_memory" href="./claw-memory" description="Session history and long-term memory file I/O" />
   <LinkCard title="claw_skill" href="./claw-skill" description="Skills directory and per-session activation state" />
-  <LinkCard title="claw_ramfs" href="./claw-ramfs" description="RAM file system: high-speed memory storage and FATFS sync" />
 </CardGrid>

@@ -91,7 +91,7 @@ static void on_wifi_state_changed(bool connected, void *user_ctx)
 
     esp_err_t err = app_claw_set_network_status(connected, ap_ssid);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to update network emote: %s", esp_err_to_name(err));
+        ESP_LOGW(TAG, "Failed to update network UI: %s", esp_err_to_name(err));
     }
 }
 
@@ -329,7 +329,6 @@ void app_main(void)
     app_config_to_claw(s_config, s_claw_config);
     init_timezone(app_config_get_timezone(s_config)); // no need to check error
     ESP_ERROR_CHECK(esp_board_manager_init());
-    ESP_ERROR_CHECK(app_claw_ui_start());
     ESP_ERROR_CHECK(app_fs_init());
 
     /* Publish the resolved storage roots so any component can compose paths
@@ -338,6 +337,9 @@ void app_main(void)
     ESP_ERROR_CHECK(claw_paths_set(CLAW_PATH_SYSTEM, app_fs_system_base_path()));
 
     ESP_ERROR_CHECK(wifi_manager_init());
+
+    ESP_ERROR_CHECK(app_claw_ui_start());
+
     ESP_ERROR_CHECK(http_server_init(&(http_server_config_t) {
         .storage_base_path = app_fs_storage_base_path(),
         .services = {
@@ -381,22 +383,14 @@ void app_main(void)
                 wifi_manager_status_t status = {0};
                 wifi_manager_get_status(&status);
                 ESP_LOGI(TAG, "Wi-Fi STA ready: %s", status.sta_ip);
-            } else if (wait_err == ESP_FAIL) {
-                wifi_manager_status_t status = {0};
-                wifi_manager_get_status(&status);
-                ESP_LOGW(TAG,
-                         "Wi-Fi STA failed after retries: mode=%s ap_active=%d ap_ip=%s",
-                         status.mode ? status.mode : "off",
-                         status.ap_active,
-                         status.ap_ip ? status.ap_ip : "0.0.0.0");
             } else if (wait_err == ESP_ERR_TIMEOUT) {
                 wifi_manager_status_t status = {0};
                 wifi_manager_get_status(&status);
                 ESP_LOGW(TAG,
-                         "Wi-Fi STA wait timeout: mode=%s ap_active=%d sta_configured=%d",
+                         "Wi-Fi STA not connected within wait window; retrying in background: mode=%s ap_active=%d ap_ip=%s",
                          status.mode ? status.mode : "off",
                          status.ap_active,
-                         status.sta_configured);
+                         status.ap_ip ? status.ap_ip : "0.0.0.0");
             } else {
                 ESP_LOGW(TAG, "Wi-Fi STA wait returned error: %s", esp_err_to_name(wait_err));
             }

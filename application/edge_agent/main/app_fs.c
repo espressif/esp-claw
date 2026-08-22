@@ -12,7 +12,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 
-#include "claw_ramfs.h"
+#include "ramfs.h"
 #include "wear_levelling.h"
 #include "esp_vfs_fat.h"
 #include "esp_heap_caps.h"
@@ -263,13 +263,13 @@ const char *app_fs_system_base_path(void)
 
 static esp_err_t app_fs_init_ramfs(void)
 {
-    claw_ramfs_config_t config = {
+    ramfs_config_t config = {
         .base_path = s_ramfs_base_path,
         .max_files = APP_FS_RAMFS_MAX_FILES,
         .max_bytes = APP_FS_RAMFS_MAX_BYTES,
         .caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
     };
-    ESP_RETURN_ON_ERROR(claw_ramfs_register(&config), TAG,
+    ESP_RETURN_ON_ERROR(ramfs_register(&config), TAG,
                         "Failed to mount RAMFS at %s", s_ramfs_base_path);
 
     ESP_LOGI(TAG, "RAMFS mounted at %s max_files=%u max_bytes=%u",

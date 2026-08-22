@@ -1,7 +1,0 @@
-dependencies:
-  pet_buddy:
-    path: ../pet_buddy
-  config_runtime:
-    path: ../config_runtime
-  scene_runtime:
-    path: ../scene_runtime

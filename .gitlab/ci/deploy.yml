@@ -41,3 +41,24 @@ deploy_website:
     - cd docs
     - corepack enable
     - pnpx wrangler pages deploy "dist/" --project-name "$SITE_DEPLOY_PROJECT_NAME" --branch="$DEPLOY_BRANCH"
+
+upload_firmware:
+  stage: deploy
+  tags:
+    - build
+  image: python:3.12-alpine
+  rules:
+    - if: '$CI_COMMIT_TAG =~ /^v\d+/'
+      when: on_success
+    - when: never
+  needs:
+    - job: build_application_edge_agent
+      artifacts: true
+    - job: build_application_mcp_server_point
+      artifacts: true
+      optional: true
+  variables:
+    FIRMWARE_API_URL: $FIRMWARE_API_URL
+    FIRMWARE_API_KEY: $FIRMWARE_API_KEY
+  script:
+    - python .gitlab/ci/upload_firmware.py

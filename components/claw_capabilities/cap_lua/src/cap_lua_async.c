@@ -14,6 +14,7 @@
 
 #include "claw_task.h"
 #include "esp_attr.h"
+#include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_random.h"
@@ -23,6 +24,8 @@
 #include "freertos/task.h"
 
 static const char *TAG = "cap_lua_async";
+
+#define CAP_LUA_JOB_EVENT_OBSERVER_MAX 8
 
 typedef struct {
     bool used;
@@ -59,10 +62,27 @@ typedef struct {
 } cap_lua_job_ctx_t;
 
 static SemaphoreHandle_t s_job_lock;
+static SemaphoreHandle_t s_event_lock;
 static EXT_RAM_BSS_ATTR cap_lua_job_record_t s_jobs[CAP_LUA_ASYNC_MAX_JOBS];
 static SemaphoreHandle_t s_slot_terminal_sem[CAP_LUA_ASYNC_MAX_JOBS];
 static size_t s_running_jobs;
 static bool s_runner_started;
+
+typedef struct {
+    bool used;
+    cap_lua_job_event_cb_t cb;
+    void *user_ctx;
+} cap_lua_job_event_observer_t;
+
+static cap_lua_job_event_observer_t s_event_observers[CAP_LUA_JOB_EVENT_OBSERVER_MAX];
+
+static esp_err_t cap_lua_ensure_event_lock(void)
+{
+    if (!s_event_lock) {
+        s_event_lock = xSemaphoreCreateMutex();
+    }
+    return s_event_lock ? ESP_OK : ESP_ERR_NO_MEM;
+}
 
 const char *cap_lua_job_status_name(cap_lua_job_status_t status)
 {
@@ -91,6 +111,47 @@ static bool cap_lua_job_status_matches(cap_lua_job_status_t status, const char *
         return true;
     }
     return strcmp(cap_lua_job_status_name(status), filter) == 0;
+}
+
+static void cap_lua_build_job_event_locked(cap_lua_job_event_t *event,
+                                           cap_lua_job_event_type_t type,
+                                           const cap_lua_job_record_t *job)
+{
+    if (!event || !job) {
+        return;
+    }
+
+    memset(event, 0, sizeof(*event));
+    event->type = type;
+    event->status = job->status;
+    strlcpy(event->job_id, job->job_id, sizeof(event->job_id));
+    strlcpy(event->name, job->name, sizeof(event->name));
+    strlcpy(event->exclusive, job->exclusive, sizeof(event->exclusive));
+    strlcpy(event->path, job->path, sizeof(event->path));
+}
+
+static void cap_lua_publish_job_event(const cap_lua_job_event_t *event)
+{
+    cap_lua_job_event_observer_t observers[CAP_LUA_JOB_EVENT_OBSERVER_MAX] = {0};
+    size_t count = 0;
+
+    if (!event || !s_event_lock) {
+        return;
+    }
+
+    if (xSemaphoreTake(s_event_lock, pdMS_TO_TICKS(200)) != pdTRUE) {
+        return;
+    }
+    for (size_t i = 0; i < CAP_LUA_JOB_EVENT_OBSERVER_MAX; i++) {
+        if (s_event_observers[i].used && s_event_observers[i].cb) {
+            observers[count++] = s_event_observers[i];
+        }
+    }
+    xSemaphoreGive(s_event_lock);
+
+    for (size_t i = 0; i < count; i++) {
+        observers[i].cb(event, observers[i].user_ctx);
+    }
 }
 
 static void cap_lua_generate_job_id(char *job_id, size_t size)
@@ -349,6 +410,7 @@ static void cap_lua_finish_job(cap_lua_job_ctx_t *ctx,
     bool stopped = false;
     bool timed_out = false;
     bool became_terminal = false;
+    cap_lua_job_event_t event = {0};
 
     if (xSemaphoreTake(s_job_lock, pdMS_TO_TICKS(1000)) != pdTRUE) {
         return;
@@ -375,6 +437,7 @@ static void cap_lua_finish_job(cap_lua_job_ctx_t *ctx,
             free(s_jobs[ctx->slot].summary);
             s_jobs[ctx->slot].summary = strdup(summary);
         }
+        cap_lua_build_job_event_locked(&event, CAP_LUA_JOB_EVENT_TERMINAL, &s_jobs[ctx->slot]);
         became_terminal = true;
     }
 
@@ -386,6 +449,9 @@ static void cap_lua_finish_job(cap_lua_job_ctx_t *ctx,
 
     if (became_terminal && s_slot_terminal_sem[ctx->slot]) {
         xSemaphoreGive(s_slot_terminal_sem[ctx->slot]);
+    }
+    if (became_terminal) {
+        cap_lua_publish_job_event(&event);
     }
 }
 
@@ -432,6 +498,7 @@ esp_err_t cap_lua_async_init(void)
     if (!s_job_lock) {
         return ESP_ERR_NO_MEM;
     }
+    ESP_RETURN_ON_ERROR(cap_lua_ensure_event_lock(), TAG, "create event lock failed");
 
     for (int i = 0; i < CAP_LUA_ASYNC_MAX_JOBS; i++) {
         cap_lua_clear_slot(&s_jobs[i]);
@@ -455,6 +522,66 @@ esp_err_t cap_lua_async_start(void)
     }
     s_runner_started = true;
     return ESP_OK;
+}
+
+esp_err_t cap_lua_async_register_job_event_cb(cap_lua_job_event_cb_t cb, void *user_ctx)
+{
+    int free_slot = -1;
+
+    if (!cb) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    ESP_RETURN_ON_ERROR(cap_lua_ensure_event_lock(), TAG, "create event lock failed");
+
+    if (xSemaphoreTake(s_event_lock, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    for (size_t i = 0; i < CAP_LUA_JOB_EVENT_OBSERVER_MAX; i++) {
+        if (s_event_observers[i].used &&
+                s_event_observers[i].cb == cb &&
+                s_event_observers[i].user_ctx == user_ctx) {
+            xSemaphoreGive(s_event_lock);
+            return ESP_OK;
+        }
+        if (!s_event_observers[i].used && free_slot < 0) {
+            free_slot = (int)i;
+        }
+    }
+    if (free_slot < 0) {
+        xSemaphoreGive(s_event_lock);
+        return ESP_ERR_NO_MEM;
+    }
+
+    s_event_observers[free_slot].used = true;
+    s_event_observers[free_slot].cb = cb;
+    s_event_observers[free_slot].user_ctx = user_ctx;
+    xSemaphoreGive(s_event_lock);
+    return ESP_OK;
+}
+
+esp_err_t cap_lua_async_unregister_job_event_cb(cap_lua_job_event_cb_t cb, void *user_ctx)
+{
+    if (!cb) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!s_event_lock) {
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    if (xSemaphoreTake(s_event_lock, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    for (size_t i = 0; i < CAP_LUA_JOB_EVENT_OBSERVER_MAX; i++) {
+        if (s_event_observers[i].used &&
+                s_event_observers[i].cb == cb &&
+                s_event_observers[i].user_ctx == user_ctx) {
+            memset(&s_event_observers[i], 0, sizeof(s_event_observers[i]));
+            xSemaphoreGive(s_event_lock);
+            return ESP_OK;
+        }
+    }
+    xSemaphoreGive(s_event_lock);
+    return ESP_ERR_NOT_FOUND;
 }
 
 static void cap_lua_format_active_jobs_locked(char *out, size_t size)
@@ -525,6 +652,7 @@ static esp_err_t cap_lua_stop_slot_and_wait(int slot,
                                             bool *out_was_running)
 {
     bool was_running = false;
+    cap_lua_job_event_t event = {0};
 
     if (xSemaphoreTake(s_job_lock, pdMS_TO_TICKS(1000)) != pdTRUE) {
         return ESP_ERR_TIMEOUT;
@@ -545,9 +673,13 @@ static esp_err_t cap_lua_stop_slot_and_wait(int slot,
         ESP_LOGI(TAG, "Stop requested for job %s (name=%s)",
                  s_jobs[slot].job_id,
                  s_jobs[slot].name[0] ? s_jobs[slot].name : "(unnamed)");
+        cap_lua_build_job_event_locked(&event, CAP_LUA_JOB_EVENT_STOP_REQUESTED, &s_jobs[slot]);
     }
     xSemaphoreGive(s_job_lock);
 
+    if (was_running) {
+        cap_lua_publish_job_event(&event);
+    }
     if (out_was_running) {
         *out_was_running = was_running;
     }
@@ -861,6 +993,8 @@ static esp_err_t cap_lua_async_submit_once(const cap_lua_async_job_t *job,
 
     char submitted_job_id[CAP_LUA_JOB_ID_LEN] = {0};
     char submitted_path[CAP_LUA_JOB_PATH_MAX] = {0};
+    cap_lua_job_event_t created_event = {0};
+    cap_lua_job_event_t running_event = {0};
     strlcpy(submitted_job_id, ctx->job_id, sizeof(submitted_job_id));
     strlcpy(submitted_path, ctx->path, sizeof(submitted_path));
 
@@ -968,7 +1102,10 @@ static esp_err_t cap_lua_async_submit_once(const cap_lua_async_job_t *job,
     ctx->slot = slot;
     ctx->stop_requested = &s_jobs[slot].stop_requested;
     s_running_jobs++;
+    cap_lua_build_job_event_locked(&created_event, CAP_LUA_JOB_EVENT_CREATED, &s_jobs[slot]);
     xSemaphoreGive(s_job_lock);
+
+    cap_lua_publish_job_event(&created_event);
 
     {
         claw_task_config_t task_config = {
@@ -997,11 +1134,26 @@ static esp_err_t cap_lua_async_submit_once(const cap_lua_async_job_t *job,
                          (unsigned)free_bytes);
             }
             if (xSemaphoreTake(s_job_lock, pdMS_TO_TICKS(1000)) == pdTRUE) {
+                cap_lua_job_event_t failed_event = {0};
+                bool publish_failed = false;
+                if (s_jobs[slot].used &&
+                        strncmp(s_jobs[slot].job_id, submitted_job_id,
+                                sizeof(s_jobs[slot].job_id)) == 0) {
+                    s_jobs[slot].status = CAP_LUA_JOB_FAILED;
+                    s_jobs[slot].finished_at = time(NULL);
+                    cap_lua_build_job_event_locked(&failed_event,
+                                                   CAP_LUA_JOB_EVENT_TERMINAL,
+                                                   &s_jobs[slot]);
+                    publish_failed = true;
+                }
                 cap_lua_clear_slot(&s_jobs[slot]);
                 if (s_running_jobs > 0) {
                     s_running_jobs--;
                 }
                 xSemaphoreGive(s_job_lock);
+                if (publish_failed) {
+                    cap_lua_publish_job_event(&failed_event);
+                }
             }
             free(log_buf);
             free(ctx->args_json);
@@ -1017,8 +1169,13 @@ static esp_err_t cap_lua_async_submit_once(const cap_lua_async_job_t *job,
                 s_jobs[slot].status == CAP_LUA_JOB_QUEUED) {
             s_jobs[slot].status = CAP_LUA_JOB_RUNNING;
             s_jobs[slot].started_at = time(NULL);
+            cap_lua_build_job_event_locked(&running_event, CAP_LUA_JOB_EVENT_RUNNING, &s_jobs[slot]);
         }
         xSemaphoreGive(s_job_lock);
+    }
+
+    if (running_event.job_id[0]) {
+        cap_lua_publish_job_event(&running_event);
     }
 
     if (job_id_out && job_id_out_size > 0) {

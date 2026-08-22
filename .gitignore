@@ -47,3 +47,8 @@ docs/public/d2
 docs/dist
 docs/.astro
 docs/**/*.bin
+pages/simulator/node_modules
+pages/simulator/dist
+pages/simulator/*.log
+pages/simulator/public/runtime/*
+!pages/simulator/public/runtime/.gitkeep

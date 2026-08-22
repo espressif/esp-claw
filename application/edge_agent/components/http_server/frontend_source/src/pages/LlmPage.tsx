@@ -19,6 +19,10 @@ type PresetKey =
   | 'bailian'
   | 'deepseek'
   | 'anthropic'
+  | 'kimi_global'
+  | 'kimi_cn'
+  | 'minimax_global'
+  | 'minimax_cn'
   | 'anthropic_compatible'
   | 'openai_compatible';
 
@@ -84,6 +88,54 @@ const PROVIDER_PRESETS: Record<PresetKey, ProviderPreset> = {
     llm_model: 'claude-sonnet-4-6',
     advanced: false,
   },
+  kimi_global: {
+    llm_backend_type: 'openai_compatible',
+    llm_base_url: 'https://api.moonshot.ai/v1',
+    llm_auth_type: 'bearer',
+    llm_max_tokens_field: 'max_completion_tokens',
+    llm_default_image_max_bytes: '524288',
+    llm_supports_tools: true,
+    llm_supports_vision: true,
+    llm_image_remote_url_only: false,
+    llm_model: 'kimi-k2.6',
+    advanced: false,
+  },
+  kimi_cn: {
+    llm_backend_type: 'openai_compatible',
+    llm_base_url: 'https://api.moonshot.cn/v1',
+    llm_auth_type: 'bearer',
+    llm_max_tokens_field: 'max_completion_tokens',
+    llm_default_image_max_bytes: '524288',
+    llm_supports_tools: true,
+    llm_supports_vision: true,
+    llm_image_remote_url_only: false,
+    llm_model: 'kimi-k2.6',
+    advanced: false,
+  },
+  minimax_global: {
+    llm_backend_type: 'anthropic_compatible',
+    llm_base_url: 'https://api.minimaxi.io/anthropic',
+    llm_auth_type: 'none',
+    llm_max_tokens_field: 'max_tokens',
+    llm_default_image_max_bytes: '524288',
+    llm_supports_tools: true,
+    llm_supports_vision: true,
+    llm_image_remote_url_only: false,
+    llm_model: 'MiniMax-M3',
+    advanced: false,
+  },
+  minimax_cn: {
+    llm_backend_type: 'anthropic_compatible',
+    llm_base_url: 'https://api.minimaxi.com/anthropic',
+    llm_auth_type: 'none',
+    llm_max_tokens_field: 'max_tokens',
+    llm_default_image_max_bytes: '524288',
+    llm_supports_tools: true,
+    llm_supports_vision: true,
+    llm_image_remote_url_only: false,
+    llm_model: 'MiniMax-M3',
+    advanced: false,
+  },
   openai_compatible: {
     llm_backend_type: 'openai_compatible',
     llm_base_url: 'https://api.openai.com/v1',
@@ -115,8 +167,12 @@ const PRESET_BUTTONS: PresetKey[] = [
   'bailian',
   'deepseek',
   'anthropic',
-  'anthropic_compatible',
+  'kimi_global',
+  'kimi_cn',
+  'minimax_global',
+  'minimax_cn',
   'openai_compatible',
+  'anthropic_compatible',
 ];
 
 type LlmForm = {
@@ -152,6 +208,14 @@ function presetLabel(key: PresetKey): string {
       return t('llmProviderDeepSeek') as string;
     case 'anthropic':
       return t('llmProviderAnthropic') as string;
+    case 'kimi_global':
+      return t('llmProviderKimiGlobal') as string;
+    case 'kimi_cn':
+      return t('llmProviderKimiCn') as string;
+    case 'minimax_global':
+      return t('llmProviderMinimaxGlobal') as string;
+    case 'minimax_cn':
+      return t('llmProviderMinimaxCn') as string;
     case 'openai_compatible':
       return t('llmProviderOpenaiCompatible') as string;
     case 'anthropic_compatible':

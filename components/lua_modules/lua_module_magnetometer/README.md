@@ -1,6 +1,6 @@
 # Lua Magnetometer
 
-This skill describes how to read magnetometer data from Lua.
+This module describes how to read magnetometer data from Lua.
 When a request mentions `bmm350`, `bmm150`, `magnetometer`, `magnetic field`, or `compass`,
 use this module by default. The active chip backend is selected at build time via
 `CONFIG_LUA_MODULE_MAGNETOMETER_CHIP_*` (BMM350, BMM150, or QMC6309).
@@ -15,10 +15,13 @@ use this module by default. The active chip backend is selected at build time vi
 - Call `local sample = sensor:read()` to get magnetic field data and temperature
 - Call `local temp = sensor:read_temperature()` to read temperature
 - Call `local status = sensor:read_int_status()` to get the raw interrupt status register
+- Call `sensor:name()` to read the resolved board device name
+- Call `sensor:chip_id()` to read the active chip id
 - Call `sensor:calibration_reset()` before collecting calibration samples
-- Call `sensor:calibration_add_sample()` repeatedly while rotating the device in all directions
+- Call `sensor:calibration_add_sample([sample])` repeatedly while rotating the device in all directions. `sample` may be `{x, y, z}`; when omitted, the module reads the sensor.
 - Call `local cal = sensor:calibration_finish()` to compute and persist hard/soft iron calibration
 - Call `local cal = sensor:calibration_get()` to inspect the active calibration
+- Call `local cal = sensor:calibration_set(cal)` to apply and persist a calibration table
 - Call `sensor:calibration_clear()` to clear persisted calibration
 - Call `sensor:close()` when needed
 
@@ -45,8 +48,13 @@ missing required fields will raise an error.
 - `sample.calibrated`
 
 ## Calibration
-The module applies a simple hard-iron plus diagonal soft-iron calibration,
-matching the approach used by the reference compass app.
+
+Calibration tables contain:
+- `calibrated`
+- `collecting`
+- `sample_count`
+- `hard_iron`: `{ x, y, z }`
+- `soft_iron`: 3x3 numeric array
 
 Suggested flow:
 ```lua

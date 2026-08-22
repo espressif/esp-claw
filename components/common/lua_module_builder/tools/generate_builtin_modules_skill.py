@@ -10,7 +10,7 @@ import json
 import sys
 from pathlib import Path
 
-from lua_sync_common import ComponentSource, LuaSyncConsole, LuaSyncError, collect_build_component_sources, write_depfile, write_stamp
+from lua_sync_common import ComponentSource, LuaSyncConsole, LuaSyncError, collect_build_component_sources
 
 
 console = LuaSyncConsole()
@@ -32,8 +32,6 @@ GENERATED_SKILL_META = {
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Generate the builtin Lua modules skill from lua_module docs.')
     parser.add_argument('--build-dir', required=True)
-    parser.add_argument('--stamp-path', required=True)
-    parser.add_argument('--depfile', required=True)
     return parser.parse_args()
 
 
@@ -109,15 +107,10 @@ def main() -> int:
     args = parse_args()
     build_dir = Path(args.build_dir).resolve()
     skill_output_dir = Path(__file__).resolve().parents[1] / 'skills'
-    stamp_path = Path(args.stamp_path).resolve()
-    depfile_path = Path(args.depfile).resolve()
 
     sources = collect_build_component_sources(build_dir, name_prefix=('lua_module_', 'lua_driver_'))
     entries = collect_lua_module_skill_entries(sources)
     write_generated_skill(skill_output_dir, entries)
-    input_paths = [path for entry in entries for path in entry['doc_paths'] + entry['test_paths']]
-    write_depfile(depfile_path, stamp_path, input_paths)
-    write_stamp(stamp_path)
     console.success(f'CLAW lua modules skill generation updated {len(entries)} module entries into {skill_output_dir}')
     return 0
 

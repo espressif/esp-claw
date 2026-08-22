@@ -1,0 +1,5 @@
+board: xiao_esp32s3_sense
+chip: esp32s3
+version: 1.0.0
+description: "Seeed Studio XIAO ESP32-S3 Sense (ESP32-S3R8, OV2640 camera, PDM mic, microSD, user LED)"
+manufacturer: "Seeed Studio"

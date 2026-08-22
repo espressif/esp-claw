@@ -1,5 +1,0 @@
-dependencies:
-  cap_lua:
-    path: ../../../../../../components/claw_capabilities/cap_lua
-  match_watch_runtime:
-    path: ../../common/match_watch_runtime

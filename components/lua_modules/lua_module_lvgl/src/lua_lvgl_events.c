@@ -5,10 +5,6 @@
  */
 
 /*
- * Event subsystem (P3 of RFC-single-script-ui.md).
- *
- * Design summary (full rationale lives in RFC §4.2):
- *
  *   - LVGL events fire on the LVGL task. The trampoline here MUST NOT call
  *     into the Lua state directly: the script lives on a separate cap_lua
  *     job task, and the Lua VM is single-threaded per state. Instead the
@@ -39,8 +35,6 @@
 #include "freertos/task.h"
 
 static const char *TAG = "lua_lvgl_evt";
-
-/* --- Event name <-> LVGL code mapping ---------------------------------- */
 
 typedef struct {
     const char *name;
@@ -76,8 +70,6 @@ static bool lua_lvgl_event_code_for_name(const char *name, lv_event_code_t *out)
     return false;
 }
 
-/* --- Pending unref queue ----------------------------------------------- */
-
 void lua_lvgl_queue_pending_unref_locked(int ref)
 {
     lua_lvgl_pending_unref_t *node;
@@ -112,8 +104,6 @@ void lua_lvgl_drain_pending_unrefs_locked(lua_State *L)
     }
 }
 
-/* --- Event queue (FIFO of subs) ---------------------------------------- */
-
 static void lua_lvgl_enqueue_sub_locked(lua_lvgl_event_sub_t *sub)
 {
     sub->queued = true;
@@ -142,8 +132,6 @@ static lua_lvgl_event_sub_t *lua_lvgl_dequeue_sub_locked(void)
     return head;
 }
 
-/* --- Trampoline (runs in LVGL task) ------------------------------------ */
-
 /* Note: We hold lua_lvgl_lock() because lv_timer_handler is invoked under
  * that lock by lua_lvgl_task. Coalesce repeated fires while a sub is still
  * pending so the script never gets a queue blowup; for typical UI events
@@ -158,8 +146,6 @@ static void lua_lvgl_event_trampoline(lv_event_t *e)
     }
     lua_lvgl_enqueue_sub_locked(sub);
 }
-
-/* --- Sub allocation / release ------------------------------------------ */
 
 /* Free a sub that is NOT in the dispatch queue. Caller holds the lock and
  * is responsible for having already removed it from record->events. */
@@ -227,8 +213,6 @@ void lua_lvgl_record_release_events_locked(lua_lvgl_obj_record_t *record)
         sub = next;
     }
 }
-
-/* --- obj:on / obj:off Lua entries -------------------------------------- */
 
 int lua_lvgl_obj_on(lua_State *L)
 {
@@ -387,8 +371,6 @@ int lua_lvgl_obj_off(lua_State *L)
     return 1;
 }
 
-/* --- lvgl.process_events / lvgl.run ------------------------------------ */
-
 /* Drain one queued event under the lock; returns the popped sub or NULL.
  * Also drains pending unrefs while the lock is held. */
 static lua_lvgl_event_sub_t *lua_lvgl_pop_event_with_drain(lua_State *L)
@@ -436,6 +418,15 @@ static int lua_lvgl_drain_events_for(lua_State *L, int timeout_ms)
         lua_lvgl_event_sub_t *sub;
         int callback_ref;
 
+#ifdef __EMSCRIPTEN__
+        if (lua_lvgl_lock() == ESP_OK) {
+            if (s_lvgl.runtime_initialized) {
+                (void)lv_timer_handler();
+            }
+            lua_lvgl_unlock();
+        }
+#endif
+
         if (cap_lua_runtime_stop_requested(L)) {
             break;
         }
@@ -450,9 +441,15 @@ static int lua_lvgl_drain_events_for(lua_State *L, int timeout_ms)
                  * there now". */
                 break;
             }
+#ifdef __EMSCRIPTEN__
+            /* The browser RAF cadence needs headroom beyond a 20 ms sleep;
+             * otherwise any render work drops the simulator below 50 fps. */
+            vTaskDelay(pdMS_TO_TICKS(10));
+#else
             /* Sleep briefly and re-check both stop and deadline. 20ms is
              * about one LVGL tick and keeps stop responsiveness ~50Hz. */
             vTaskDelay(pdMS_TO_TICKS(20));
+#endif
             continue;
         }
         if (sub->dead) {

@@ -16,6 +16,16 @@ This module describes how to correctly use storage when writing Lua scripts.
 - Call `storage.rename(old_path, new_path)` to rename or move a path
 - Call `storage.get_free_space()` to get `{ total, free, used }` bytes for the storage root
 
+## Return values
+- `storage.get_root_dir()` returns the DATA root path string.
+- `storage.join_path(...)` returns the joined path string.
+- `storage.exists(path)` returns a boolean.
+- `storage.stat(path)` returns `{ type, size, mtime, mode }` or `nil, err`.
+- `storage.listdir(path)` returns an array of entries. Each entry includes `name`, `type`, and, when available, `size`, `mtime`, and `mode`.
+- `storage.mkdir(path)`, `storage.write_file(path, content)`, `storage.remove(path)`, and `storage.rename(old_path, new_path)` return `true` on success.
+- `storage.read_file(path)` returns the file contents as a string.
+- `storage.get_free_space()` returns `{ total, free, used }`.
+
 ## Path joining
 - Prefer `storage.join_path(...)` whenever building a path from `storage.get_root_dir()` and child names.
 - Pass each path component as a separate string argument, for example `storage.join_path(root, "logs", "today.txt")`.

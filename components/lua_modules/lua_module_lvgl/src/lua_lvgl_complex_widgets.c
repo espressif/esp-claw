@@ -567,6 +567,93 @@ int lua_lvgl_canvas_get_px(lua_State *L)
     return 1;
 }
 
+int lua_lvgl_canvas_set_rgb565_data(lua_State *L)
+{
+    lua_lvgl_obj_ud_t *ud = lua_lvgl_check_ud(L, 1);
+    size_t src_len = 0;
+    const uint8_t *src = (const uint8_t *)luaL_checklstring(L, 2, &src_len);
+    const char *order = lua_isnoneornil(L, 3) ? "le" : luaL_checkstring(L, 3);
+    bool swap = false;
+    esp_err_t err;
+    lua_lvgl_obj_type_t type;
+    const char *obj_error = NULL;
+    lv_obj_t *obj;
+    int32_t w;
+    int32_t h;
+    size_t src_stride;
+    uint32_t dst_stride;
+    size_t expected_len;
+    size_t needed_len;
+
+    if (strcmp(order, "le") == 0 || strcmp(order, "native") == 0) {
+        swap = false;
+    } else if (strcmp(order, "be") == 0 || strcmp(order, "swap") == 0) {
+        swap = true;
+    } else {
+        return luaL_error(L, "lvgl canvas rgb565 byte order must be le, native, be, or swap");
+    }
+
+    err = lua_lvgl_lock();
+    if (err != ESP_OK) return lua_lvgl_error_esp(L, "lock", err);
+
+    obj = lua_lvgl_validate_ud_locked(ud, &type, &obj_error);
+    if (!obj) {
+        lua_lvgl_unlock();
+        return luaL_error(L, "%s", obj_error);
+    }
+    if (type != LUA_LVGL_OBJ_CANVAS) {
+        lua_lvgl_unlock();
+        return luaL_error(L, "lvgl set_rgb565_data requires a canvas object");
+    }
+    if (!ud->record->data || ud->record->data_size == 0) {
+        lua_lvgl_unlock();
+        return luaL_error(L, "lvgl canvas buffer is not initialized");
+    }
+
+    w = ud->record->data_width > 0 ? ud->record->data_width : lv_obj_get_width(obj);
+    h = ud->record->data_height > 0 ? ud->record->data_height : lv_obj_get_height(obj);
+    if (w <= 0 || h <= 0) {
+        lua_lvgl_unlock();
+        return luaL_error(L, "lvgl canvas has invalid size");
+    }
+
+    src_stride = (size_t)w * 2;
+    expected_len = src_stride * (size_t)h;
+    dst_stride = lv_draw_buf_width_to_stride((uint32_t)w, LV_COLOR_FORMAT_RGB565);
+    needed_len = (size_t)dst_stride * (size_t)h;
+    if (src_len != expected_len) {
+        lua_lvgl_unlock();
+        return luaL_error(L, "lvgl canvas rgb565 data length mismatch: got %d, expected %d", (int)src_len, (int)expected_len);
+    }
+    if (ud->record->data_size < needed_len) {
+        lua_lvgl_unlock();
+        return luaL_error(L, "lvgl canvas buffer is too small");
+    }
+
+    /* Copy packed RGB565 data into LVGL's canvas draw buffer in C to avoid slow Lua per-pixel calls. */
+    uint8_t *dst = (uint8_t *)ud->record->data;
+    for (int32_t y = 0; y < h; y++) {
+        const uint8_t *src_row = src + ((size_t)y * src_stride);
+        uint8_t *dst_row = dst + ((size_t)y * dst_stride);
+
+        if (!swap) {
+            memcpy(dst_row, src_row, src_stride);
+        } else {
+            for (int32_t x = 0; x < w; x++) {
+                dst_row[(size_t)x * 2] = src_row[(size_t)x * 2 + 1];
+                dst_row[(size_t)x * 2 + 1] = src_row[(size_t)x * 2];
+            }
+        }
+        if (dst_stride > src_stride) {
+            memset(dst_row + src_stride, 0, (size_t)dst_stride - src_stride);
+        }
+    }
+    lv_obj_invalidate(obj);
+    lua_lvgl_unlock();
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 int lua_lvgl_chart_add_series(lua_State *L)
 {
     lua_lvgl_obj_ud_t *ud = lua_lvgl_check_ud(L, 1);
@@ -1334,6 +1421,8 @@ static void lua_lvgl_apply_complex_opts(lua_State *L, lua_lvgl_obj_ud_t *ud, lua
             free(ud->record->data);
             ud->record->data = buf;
             ud->record->data_size = size;
+            ud->record->data_width = w;
+            ud->record->data_height = h;
             lv_canvas_set_buffer(obj, buf, w, h, cf);
         }
         break;

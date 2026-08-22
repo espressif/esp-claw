@@ -1,9 +1,0 @@
-idf_component_register(
-    SRCS
-        "src/claw_ramfs.c"
-    INCLUDE_DIRS
-        "include"
-    REQUIRES
-        heap
-        vfs
-)

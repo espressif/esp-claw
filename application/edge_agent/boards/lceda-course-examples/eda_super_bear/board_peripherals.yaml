@@ -1,0 +1,131 @@
+version: 1.0.0
+# Peripherals for EDA Super Bear (六轴机器熊)
+# INMP441 mic + MAX98357 speaker + 6x servo
+
+peripherals:
+
+  # MAX98357 speaker amplifier (I2S STD TX on I2S1)
+  - name: i2s_audio_out
+    type: i2s
+    role: master
+    format: std-out
+    config:
+      port: 1
+      sample_rate_hz: 24000
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_MONO
+      slot_mask: I2S_STD_SLOT_BOTH
+      ws_width: 16
+      pins:
+        mclk: -1
+        bclk: 48
+        ws: 45
+        dout: 47
+        din: -1
+
+  # INMP441 microphone (I2S STD RX on I2S0)
+  - name: i2s_audio_in
+    type: i2s
+    role: master
+    format: std-in
+    config:
+      port: 0
+      sample_rate_hz: 16000
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_MONO
+      slot_mask: I2S_STD_SLOT_BOTH
+      ws_width: 16
+      pins:
+        mclk: -1
+        bclk: 39
+        ws: 40
+        dout: -1
+        din: 41
+
+  # Boot button
+  - name: gpio_boot_btn
+    type: gpio
+    role: io
+    config:
+      pin: 38
+      mode: GPIO_MODE_INPUT
+      default_level: 1
+
+  # Touch button
+  - name: gpio_touch_btn
+    type: gpio
+    role: io
+    config:
+      pin: 14
+      mode: GPIO_MODE_INPUT
+      default_level: 1
+
+  # Servo - right leg
+  - name: servo_right_leg
+    type: ledc
+    role: none
+    config:
+      gpio_num: 11
+      freq_hz: 50
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false
+
+  # Servo - right foot
+  - name: servo_right_foot
+    type: ledc
+    role: none
+    config:
+      gpio_num: 14
+      freq_hz: 50
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false
+
+  # Servo - left leg
+  - name: servo_left_leg
+    type: ledc
+    role: none
+    config:
+      gpio_num: 13
+      freq_hz: 50
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false
+
+  # Servo - left foot
+  - name: servo_left_foot
+    type: ledc
+    role: none
+    config:
+      gpio_num: 12
+      freq_hz: 50
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false
+
+  # Servo - left hand
+  - name: servo_left_hand
+    type: ledc
+    role: none
+    config:
+      gpio_num: 21
+      freq_hz: 50
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false
+
+  # Servo - right hand
+  - name: servo_right_hand
+    type: ledc
+    role: none
+    config:
+      gpio_num: 10
+      freq_hz: 50
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false

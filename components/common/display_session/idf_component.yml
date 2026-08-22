@@ -1,5 +1,0 @@
-dependencies:
-  display_arbiter:
-    path: ../display_arbiter
-  hw_gfx_runtime:
-    path: ../hw_gfx_runtime

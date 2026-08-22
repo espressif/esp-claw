@@ -14,8 +14,9 @@
 #define LUA_BM_DISPLAY_PANEL_IF_IO        0
 #define LUA_BM_DISPLAY_PANEL_IF_RGB       1
 #define LUA_BM_DISPLAY_PANEL_IF_MIPI_DSI  2
+#define LUA_BM_DISPLAY_PIXEL_FORMAT_RGB565 0
+#define LUA_BM_DISPLAY_PIXEL_FORMAT_RGB888 1
 
-/** Push nil + error message string, return 2. Convenience for error paths. */
 static int push_err(lua_State *L, esp_err_t err, const char *msg)
 {
     lua_pushnil(L);
@@ -68,12 +69,6 @@ static esp_err_t lua_module_board_manager_get_camera_paths(const char **dev_path
 #endif
 }
 
-/* --------------------------------------------------------------------------
- * board_manager.get_board_info() -> table
- *
- * Returns a table:
- *   { name, chip, version, description, manufacturer }
- * -------------------------------------------------------------------------- */
 static int lua_bm_get_board_info(lua_State *L)
 {
     esp_board_info_t info = {0};
@@ -95,9 +90,6 @@ static int lua_bm_get_board_info(lua_State *L)
     return 1;
 }
 
-/* --------------------------------------------------------------------------
- * board_manager.init_device(name) -> true | nil, errmsg
- * -------------------------------------------------------------------------- */
 static int lua_bm_init_device(lua_State *L)
 {
     const char *name = luaL_checkstring(L, 1);
@@ -109,9 +101,6 @@ static int lua_bm_init_device(lua_State *L)
     return 1;
 }
 
-/* --------------------------------------------------------------------------
- * board_manager.deinit_device(name) -> true | nil, errmsg
- * -------------------------------------------------------------------------- */
 static int lua_bm_deinit_device(lua_State *L)
 {
     const char *name = luaL_checkstring(L, 1);
@@ -123,12 +112,6 @@ static int lua_bm_deinit_device(lua_State *L)
     return 1;
 }
 
-/* --------------------------------------------------------------------------
- * board_manager.get_device_handle(name) -> lightuserdata | nil, errmsg
- *
- * Returns the raw device handle as a lightuserdata pointer.
- * Useful when another C-backed Lua module needs to wrap it.
- * -------------------------------------------------------------------------- */
 static int lua_bm_get_device_handle(lua_State *L)
 {
     const char *name = luaL_checkstring(L, 1);
@@ -146,12 +129,6 @@ static int lua_bm_get_device_handle(lua_State *L)
     return 1;
 }
 
-/* --------------------------------------------------------------------------
- * board_manager.get_device_config_handle(name) -> lightuserdata | nil, errmsg
- *
- * Returns the raw device config pointer as lightuserdata.
- * Useful for passing board-manager-generated config structs into other modules.
- * -------------------------------------------------------------------------- */
 static int lua_bm_get_device_config_handle(lua_State *L)
 {
     const char *name = luaL_checkstring(L, 1);
@@ -169,10 +146,6 @@ static int lua_bm_get_device_config_handle(lua_State *L)
     return 1;
 }
 
-/* --------------------------------------------------------------------------
- * board_manager.get_display_lcd_params(name)
- *   -> panel_handle, io_handle, lcd_width, lcd_height, panel_if | nil, errmsg
- * -------------------------------------------------------------------------- */
 static int lua_bm_get_display_lcd_params(lua_State *L)
 {
 #ifdef CONFIG_ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT
@@ -209,6 +182,7 @@ static int lua_bm_get_display_lcd_params(lua_State *L)
     }
     const char *sub_type = lcd_cfg->sub_type;
     int panel_if = LUA_BM_DISPLAY_PANEL_IF_IO;
+    int pixel_format = lcd_cfg->bits_per_pixel == 24 ? LUA_BM_DISPLAY_PIXEL_FORMAT_RGB888 : LUA_BM_DISPLAY_PIXEL_FORMAT_RGB565;
 
     if (sub_type != NULL) {
         if (strcmp(sub_type, "dsi") == 0 || strcmp(sub_type, "mipi_dsi") == 0) {
@@ -221,7 +195,8 @@ static int lua_bm_get_display_lcd_params(lua_State *L)
     lua_pushinteger(L, lcd_cfg->lcd_width);
     lua_pushinteger(L, lcd_cfg->lcd_height);
     lua_pushinteger(L, panel_if);
-    return 5;
+    lua_pushinteger(L, pixel_format);
+    return 6;
 #else
     lua_pushnil(L);
     lua_pushstring(L, "display lcd support is disabled");
@@ -229,11 +204,6 @@ static int lua_bm_get_display_lcd_params(lua_State *L)
 #endif
 }
 
-/* --------------------------------------------------------------------------
- * board_manager.get_lcd_touch_handle(name) -> lightuserdata | nil, errmsg
- *
- * Returns the raw esp_lcd_touch_handle_t from the board-manager wrapper handle.
- * -------------------------------------------------------------------------- */
 static int lua_bm_get_lcd_touch_handle(lua_State *L)
 {
 #if defined(CONFIG_ESP_BOARD_DEV_LCD_TOUCH_SUPPORT) && defined(CONFIG_ESP_BOARD_DEV_LCD_TOUCH_SUB_I2C_SUPPORT)
@@ -412,19 +382,11 @@ static int lua_bm_get_audio_codec_common(lua_State *L, bool for_input)
 #endif
 }
 
-/* --------------------------------------------------------------------------
- * board_manager.get_audio_codec_input_params(name)
- *   -> codec_dev_handle, sample_rate, channels, bits_per_sample, init_gain_db
- * -------------------------------------------------------------------------- */
 static int lua_bm_get_audio_codec_input_params(lua_State *L)
 {
     return lua_bm_get_audio_codec_common(L, true);
 }
 
-/* --------------------------------------------------------------------------
- * board_manager.get_audio_codec_output_params(name)
- *   -> codec_dev_handle, sample_rate, channels, bits_per_sample
- * -------------------------------------------------------------------------- */
 static int lua_bm_get_audio_codec_output_params(lua_State *L)
 {
     return lua_bm_get_audio_codec_common(L, false);
@@ -450,9 +412,6 @@ static int lua_bm_get_camera_paths(lua_State *L)
     return 1;
 }
 
-/* --------------------------------------------------------------------------
- * Module registration
- * -------------------------------------------------------------------------- */
 int luaopen_board_manager(lua_State *L)
 {
     static const luaL_Reg funcs[] = {
@@ -477,6 +436,10 @@ int luaopen_board_manager(lua_State *L)
     lua_setfield(L, -2, "PANEL_IF_RGB");
     lua_pushinteger(L, LUA_BM_DISPLAY_PANEL_IF_MIPI_DSI);
     lua_setfield(L, -2, "PANEL_IF_MIPI_DSI");
+    lua_pushinteger(L, LUA_BM_DISPLAY_PIXEL_FORMAT_RGB565);
+    lua_setfield(L, -2, "PIXEL_FORMAT_RGB565");
+    lua_pushinteger(L, LUA_BM_DISPLAY_PIXEL_FORMAT_RGB888);
+    lua_setfield(L, -2, "PIXEL_FORMAT_RGB888");
     return 1;
 }
 

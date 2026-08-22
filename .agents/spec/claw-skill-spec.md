@@ -16,7 +16,7 @@ component_xx/
         ├── scripts/
         │   └── action.lua
         └── assets/
-            └── image.bin
+            └── icon.jpg
 ```
 
 Notes:
@@ -37,11 +37,18 @@ Notes:
   "description": "Short capability description.",
   "author": "bob",
   "metadata": {
+    "category": ["game", "ui"],
+    "tags": ["flappybird", "arcade", "demo", "button", "touch"],
+    "peripherals": ["display"],
     "cap_groups": ["cap_lua"],
-    "manage_mode": "web",
-    "category": ["utility"],
-    "peripherals": [],
-    "tags": ["weather", "forecast"]
+    "manage_mode": "web"
+  },
+  "execution": {
+    "entry": "scripts/flappybird.lua",
+    "icon": "assets/icon.jpg",
+    "args": {},
+    "order": 10,
+    "visible": true
   }
 }
 ---
@@ -68,6 +75,13 @@ Rules:
 - `metadata.tags`, when present, must be a string array.
 - `metadata.tags` is free-form and is not validated against an allowlist.
 - `metadata.tags` must not repeat any value already present in `metadata.category` or `metadata.peripherals`.
+- `execution` is optional. When present, it declares a System UI launcher entry for the skill.
+- `execution.entry` is required when `execution` is present. It must be a skill-owned relative `.lua` path such as `scripts/action.lua`.
+- `execution.icon` is optional. It must be a skill-owned relative `.jpg` or `.jpeg` launcher icon path when present. System UI decodes it to its fixed launcher icon size at runtime.
+- `execution.args` is optional. It must be a JSON object and is passed to the launcher script as compact JSON.
+- `execution.order` is optional. Lower values appear earlier in the launcher.
+- `execution.visible` is optional and defaults to `true`; set it to `false` to keep the execution metadata without showing it in the launcher.
+- `execution` does not support a `title` field. The launcher uses the skill id as the item title.
 - Additional keys at the root of the frontmatter or inside `metadata` may appear (for example tooling or Skills Lab fields). The device runtime ignores keys it does not read.
 
 ### Description

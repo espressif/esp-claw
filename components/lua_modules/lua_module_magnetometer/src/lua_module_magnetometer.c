@@ -103,10 +103,6 @@ static const char *TAG = "lua_module_magnetometer";
 
 static void lua_mag_destroy_handle(lua_mag_handle_t *handle);
 
-/* ---------------------------------------------------------------------------
- * Helpers exported to chip backends (declared in lua_module_mag_backend.h).
- * ------------------------------------------------------------------------- */
-
 void lua_mag_delay_us(uint32_t period_us)
 {
     if (period_us < 1000) {
@@ -133,10 +129,6 @@ esp_err_t lua_mag_ctx_select_addr(lua_mag_backend_ctx_t *ctx, uint8_t i2c_addr)
     ctx->i2c_addr = i2c_addr;
     return ESP_OK;
 }
-
-/* ---------------------------------------------------------------------------
- * Calibration: NVS persistence + hard/soft-iron math (chip-agnostic).
- * ------------------------------------------------------------------------- */
 
 static void lua_mag_calibration_reset_state(lua_mag_handle_t *handle)
 {
@@ -322,10 +314,6 @@ static esp_err_t lua_mag_calibration_finish(lua_mag_handle_t *handle)
     return ESP_OK;
 }
 
-/* ---------------------------------------------------------------------------
- * Lua <-> C value plumbing.
- * ------------------------------------------------------------------------- */
-
 static void lua_mag_push_axes_table(lua_State *L, float x, float y, float z)
 {
     lua_newtable(L);
@@ -403,10 +391,6 @@ static bool lua_mag_read_mat3(lua_State *L, int idx, float out[3][3])
     }
     return ok;
 }
-
-/* ---------------------------------------------------------------------------
- * GPIO + I2C bus setup (board-level, not chip-specific).
- * ------------------------------------------------------------------------- */
 
 static esp_err_t lua_mag_configure_interrupt_pin(int int_gpio_num)
 {
@@ -493,10 +477,6 @@ static esp_err_t lua_mag_open_i2c_bus(const char *peripheral_name, int frequency
     }
     return ESP_OK;
 }
-
-/* ---------------------------------------------------------------------------
- * Handle lifecycle (delegates chip work to the backend).
- * ------------------------------------------------------------------------- */
 
 static esp_err_t lua_mag_create_handle(const lua_mag_resolved_cfg_t *cfg,
                                        lua_mag_handle_t **out_handle)
@@ -591,10 +571,6 @@ static void lua_mag_destroy_handle(lua_mag_handle_t *handle)
     }
     free(handle);
 }
-
-/* ---------------------------------------------------------------------------
- * Lua bindings.
- * ------------------------------------------------------------------------- */
 
 static lua_mag_ud_t *lua_mag_get_ud(lua_State *L, int idx)
 {
@@ -804,10 +780,6 @@ static int lua_mag_calibration_clear(lua_State *L)
     lua_mag_push_calibration_table(L, &ud->handle->calibration);
     return 1;
 }
-
-/* ---------------------------------------------------------------------------
- * Board defaults + Lua options resolution.
- * ------------------------------------------------------------------------- */
 
 /*
  * Walk the board manager descriptor list and verify that the auto-generated

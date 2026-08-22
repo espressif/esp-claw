@@ -7,10 +7,6 @@ application/edge_agent:
   enable:
     - if: INCLUDE_DEFAULT == 1
 
-application/third_party/buddy_pet:
-  enable:
-    - if: INCLUDE_DEFAULT == 1
-
 application/mcp_server_point:
   enable:
     - if: INCLUDE_DEFAULT == 1

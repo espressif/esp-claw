@@ -205,10 +205,6 @@ static void lua_image_set_format_constants(lua_State *L)
     lua_image_set_format_constant(L, "MJPEG", LUA_IMAGE_FORMAT_MJPEG);
 }
 
-/* ------------------------------------------------------------------------- */
-/* image.frame userdata                                             */
-/* ------------------------------------------------------------------------- */
-
 static lua_image_frame_ud_t *lua_image_check_frame(lua_State *L, int index)
 {
     return (lua_image_frame_ud_t *)luaL_checkudata(L, index, LUA_IMAGE_FRAME_MT);

@@ -1,0 +1,17 @@
+version: 1.0.0
+# Peripherals Configuration for Waveshare ESP32-S3-Zero N8R8
+#
+# Official Waveshare ESP32-S3-Zero N8R8 variant notes:
+#   SoC/module: ESP32-S3-PICO-1-N8R8
+#   Flash/PSRAM: 8 MB flash + 8 MB PSRAM
+#   RGB LED: GPIO21 (WS2812, configured as a led_strip device)
+#   BOOT button: GPIO0
+#   UART0 header: TXD=GPIO43, RXD=GPIO44
+#   USB: native ESP32-S3 USB Serial/JTAG via USB-C (D-=GPIO19, D+=GPIO20)
+#   Reserved for Octal PSRAM: GPIO33-GPIO37
+#
+# The board has no fixed I2C/SPI/audio/display/storage bus wiring. Expansion
+# header GPIOs are intentionally not initialized here; users can claim them from
+# Lua or custom apps as needed.
+
+peripherals: []

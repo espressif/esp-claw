@@ -20,6 +20,22 @@ const PROVIDER_LINKS: Record<string, ExternalLinkPair> = {
     docsUrl: 'https://platform.claude.com/docs/en/api/overview',
     consoleUrl: 'https://platform.claude.com/settings/keys',
   },
+  kimi_global: {
+    docsUrl: 'https://platform.kimi.ai/docs/overview',
+    consoleUrl: 'https://platform.kimi.ai/console',
+  },
+  kimi_cn: {
+    docsUrl: 'https://platform.kimi.com/docs/overview',
+    consoleUrl: 'https://platform.kimi.com/console',
+  },
+  minimax_global: {
+    docsUrl: 'https://platform.minimaxi.com/docs/api-reference/api-overview',
+    consoleUrl: 'https://platform.minimax.io/login',
+  },
+  minimax_cn: {
+    docsUrl: 'https://platform.minimaxi.com/docs/api-reference/api-overview',
+    consoleUrl: 'https://platform.minimaxi.com/user-center/basic-information',
+  },
 };
 
 export const TAVILY_API_KEY_URL = 'https://app.tavily.com/';

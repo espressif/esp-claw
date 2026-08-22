@@ -1,4 +1,0 @@
-board: esp_Ditto
-chip: esp32c5
-description: "ESP-Ditto Development Board"
-manufacturer: "ESPRESSIF"

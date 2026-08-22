@@ -5,8 +5,8 @@ This module describes how to correctly use `display` when writing Lua scripts.
 `display` is a low-level drawing module. It can:
 - Initialize and deinitialize the LCD drawing context
 - Draw text, lines, rectangles, circles, arcs, ellipses, triangles, and round rectangles
-- Draw raw RGB565 pixel buffers
-- Draw RGB565 buffers obtained from `image.frame` values through the `image` module
+- Draw raw RGB565 or RGB888 pixel buffers
+- Draw RGB565 or RGB888 buffers obtained from `image.frame` values through the `image` module
 - Manage frame-based rendering and partial screen flushes
 
 ## Typical setup
@@ -17,17 +17,28 @@ In this project, `display` is usually used together with `board_manager`:
 local board_manager = require("board_manager")
 local display = require("display")
 
-local panel_handle, io_handle, width, height, panel_if =
+local panel_handle, io_handle, width, height, panel_if, pixel_format =
     board_manager.get_display_lcd_params("display_lcd")
 
-display.init(panel_handle, io_handle, width, height, panel_if)
+display.init(panel_handle, io_handle, width, height, panel_if, pixel_format)
 ```
 
 After `display.init(...)` succeeds:
 - `display.width` returns the current screen width
 - `display.height` returns the current screen height
 - Most drawing APIs can be used
-- The display arbiter automatically grants Lua foreground ownership for the lifetime of the display session
+- The Lua script owns the display session until `display.deinit()`.
+
+Touch input for the same session can be read through `lcd_touch` with the touch handle from `board_manager`:
+
+```lua
+local board_manager = require("board_manager")
+local lcd_touch = require("lcd_touch")
+
+local touch_handle = board_manager.get_lcd_touch_handle("lcd_touch")
+lcd_touch.sync(touch_handle)
+local touch = lcd_touch.poll(touch_handle)
+```
 
 When finished:
 
@@ -46,13 +57,13 @@ pcall(display.deinit)
 - Supported hex forms are `#rgb`, `#rgba`, `#rrggbb`, and `#rrggbbaa`.
 - Supported named colors include `black`, `white`, `red`, `green`, `blue`, `yellow`, `cyan`, `magenta`, and `transparent`.
 - Text drawing only supports ASCII text.
-- For Chinese or other Unicode text, render or load an image through the `image` module, convert it to `image.RGB565`, then draw the RGB565 buffer.
-- Image file loading, saving, decoding, and format conversion belong to the `image` module. `display` only draws raw RGB565 buffers.
+- For Chinese or other Unicode text, render or load an image through the `image` module, convert it to the active display pixel format, then draw the buffer.
+- Image file loading, saving, decoding, and format conversion belong to the `image` module. `display` only draws raw RGB565/RGB888 buffers.
 - This is critical: screen display duration must be considered. Do not deinitialize or exit immediately after `present()`, or the image may only flash briefly. Keep the display session alive long enough, and handle that hold time asynchronously when appropriate.
 
 ## Screen lifecycle
 
-### `display.init(panel_handle, io_handle, lcd_width, lcd_height[, panel_if])`
+### `display.init(panel_handle, io_handle, lcd_width, lcd_height[, panel_if[, pixel_format]])`
 
 Initializes the drawing context.
 
@@ -62,6 +73,11 @@ Initializes the drawing context.
 - `lcd_height`: integer
 - `panel_if`: optional interface constant, usually returned by `board_manager.get_display_lcd_params(...)`
 - Common values come from `board_manager.PANEL_IF_IO`, `board_manager.PANEL_IF_RGB`, and `board_manager.PANEL_IF_MIPI_DSI`
+- `pixel_format`: optional framebuffer format; defaults to RGB565
+- Accepts either `display.PIXEL_FORMAT_RGB565` / `display.PIXEL_FORMAT_RGB888`, or the string `"rgb565"` / `"rgb888"`
+- Must match the byte layout configured for the LCD panel.
+- Byte-swap is applied only when the framebuffer is RGB565 (independent of interface); RGB888 buffers are never byte-swapped
+- RGB565 is stored as standard RGB565; RGB888 is stored and submitted as native BGR888. Lua color values keep RGB semantics at parse time.
 - Returns `true` on success
 - Raises a Lua error on failure
 
@@ -80,6 +96,14 @@ Returns the current screen width.
 
 Returns the current screen height.
 
+### `display.pixel_format`
+
+Returns the active framebuffer format as `"rgb565"` or `"rgb888"`.
+
+### `display.bytes_per_pixel`
+
+Returns the number of bytes per pixel that raw pixel APIs expect (`2` for RGB565, `3` for RGB888).
+
 ## Frame rendering
 
 The module supports frame-based rendering. This is the preferred mode when a script draws a full screen or updates multiple primitives together.
@@ -91,6 +115,7 @@ Starts a frame.
 `options` is an optional table:
 - `clear`: boolean, default `true`
 - `color`: background color, default `"black"`
+- `preserve`: boolean, default `true`. When `clear = false`, copy the latest visible framebuffer into the draw framebuffer before drawing. Set to `false` for full-frame redraw loops (games/animations) to skip the per-frame SPIRAM memcpy; leave it at the default only if you rely on partial-update presents to keep untouched pixels across frames.
 
 Example:
 
@@ -277,15 +302,17 @@ Draws a filled triangle.
 
 ## Raw pixel APIs
 
-These APIs draw RGB565 pixel buffers. Prefer `display.draw_image(...)` when the source is already an `image.frame`, because it borrows the image buffer during the C call and avoids creating a large Lua string.
+These APIs draw RGB565 or RGB888 pixel buffers. Prefer `display.draw_image(...)` when the source is already an `image.frame`.
 
 ### `display.draw_pixels(x, y, data, opts)`
 
-Draws a raw RGB565 pixel buffer.
+Draws a raw RGB565 or RGB888 pixel buffer.
 
-- `data` is either a Lua string containing at least `opts.width * opts.height * 2` bytes, or a `lightuserdata` pointer to a buffer of that size
+- `data` is either a Lua string containing at least `opts.width * opts.height * bytes_per_pixel` bytes, or a `lightuserdata` pointer to a buffer of that size
 - `opts` is required because raw buffers do not carry width or height metadata
-- `opts.format`: `"rgb565"` or `"rgb565le"`; default is `"rgb565"`
+- `opts.format`: `"rgb565"` / `"rgb565le"` or `"rgb888"`; defaults to the panel's active pixel format (`display.pixel_format`)
+- The buffer format must match the panel's pixel format; a mismatch is rejected with an error
+- RGB565 input buffers are used as standard RGB565LE. RGB888 input buffers use normal R,G,B byte order from Lua and are converted to native BGR before drawing.
 - `opts.width`, `opts.height`: full source buffer size
 - `opts.mode`: `"raw"`, `"fit"`, `"cover"`, `"stretch"`, or `"crop"`; default is `"raw"`
 - `opts.dst_width`, `opts.dst_height`: destination size for stretch/cover/crop modes
@@ -324,9 +351,10 @@ display.draw_pixels(0, 0, rgb565_bytes, {
 
 ### `display.draw_image(x, y, frame, opts)`
 
-Draws an `image.frame` directly. The display module requests RGB565 from the
-image module and borrows the buffer only during the C call, avoiding the large
-Lua string copy caused by `frame:data()`.
+Draws an `image.frame` directly. The display module requests the panel's
+active pixel format from the image module (RGB565LE when
+`display.pixel_format == "rgb565"`, native BGR888 when it is `"rgb888"`).
+The image module provides the requested display format for the duration of the call.
 
 `opts` is optional:
 
@@ -356,7 +384,7 @@ display.draw_image(0, 0, frame, {
 
 ## Error behavior and constraints
 
-- Most APIs raise Lua errors directly when arguments are invalid or the HAL returns an error
+- Most APIs raise Lua errors directly when arguments are invalid or drawing fails
 - Integer-only APIs reject non-integer Lua values
 - File path validation is handled by the `image` module when loading or saving image files
 - `draw_pixels(...)` rejects buffers that are too short

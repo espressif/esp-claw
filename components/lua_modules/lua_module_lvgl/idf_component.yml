@@ -1,6 +1,7 @@
 ## IDF Component Manager Manifest File
 dependencies:
-  display_arbiter:
-    path: ../../common/display_arbiter
+  display_service:
+    path: ../../common/display_service
   espressif/esp_lcd_touch: "*"
   lvgl/lvgl: ^9.5.0
+  espressif/esp_lv_eaf_player: "^0.3"

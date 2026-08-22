@@ -4,8 +4,4 @@ idf_component_register(
         "src/mcp_local.c"
     INCLUDE_DIRS
         "include"
-    REQUIRES
-        esp_netif
-        json
-        mdns
 )

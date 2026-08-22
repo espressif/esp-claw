@@ -90,6 +90,13 @@ static uint8_t lua_image_rgb565_to_gray(uint16_t pixel)
     return (uint8_t)((r * 77 + g * 150 + b * 29) >> 8);
 }
 
+static void lua_image_rgb565_to_rgb888(uint16_t pixel, uint8_t *r, uint8_t *g, uint8_t *b)
+{
+    *r = (uint8_t)(((pixel >> 8) & 0xf8) | ((pixel >> 13) & 0x07));
+    *g = (uint8_t)(((pixel >> 3) & 0xfc) | ((pixel >> 9) & 0x03));
+    *b = (uint8_t)(((pixel << 3) & 0xf8) | ((pixel >> 2) & 0x07));
+}
+
 static uint16_t lua_image_yuv_to_rgb565(int y, int u, int v)
 {
     int c = y - 16;
@@ -106,6 +113,20 @@ static uint16_t lua_image_yuv_to_rgb565(int y, int u, int v)
     g = lua_image_clip_u8((298 * c - 100 * d - 208 * e + 128) >> 8);
     b = lua_image_clip_u8((298 * c + 516 * d + 128) >> 8);
     return lua_image_rgb888_to_rgb565(r, g, b);
+}
+
+static void lua_image_yuv_to_rgb888(int y, int u, int v, uint8_t *r, uint8_t *g, uint8_t *b)
+{
+    int c = y - 16;
+    int d = u - 128;
+    int e = v - 128;
+
+    if (c < 0) {
+        c = 0;
+    }
+    *r = lua_image_clip_u8((298 * c + 409 * e + 128) >> 8);
+    *g = lua_image_clip_u8((298 * c - 100 * d - 208 * e + 128) >> 8);
+    *b = lua_image_clip_u8((298 * c + 516 * d + 128) >> 8);
 }
 
 static esp_err_t lua_image_checked_pixel_count(int width, int height, size_t *out_pixels)
@@ -335,6 +356,149 @@ static esp_err_t lua_image_require_rgb565le(const lua_image_source_t *src, lua_i
     return ESP_OK;
 }
 
+static esp_err_t lua_image_require_bgr888(const lua_image_source_t *src, lua_image_view_t *out)
+{
+    size_t pixel_count = 0;
+    size_t required_bytes = 0;
+    uint8_t *pixels = NULL;
+    esp_err_t err = lua_image_checked_pixel_count(src->width, src->height, &pixel_count);
+
+    if (err != ESP_OK) {
+        return err;
+    }
+    ESP_RETURN_ON_ERROR(lua_image_checked_data_bytes(pixel_count, 3, &required_bytes), TAG, "BGR888 size check failed");
+
+    if (src->format == LUA_IMAGE_FORMAT_BGR888) {
+        lua_image_init_borrowed_view(src, out, LUA_IMAGE_FORMAT_BGR888);
+        return src->bytes >= required_bytes ? ESP_OK : ESP_ERR_INVALID_SIZE;
+    }
+    if (src->format == LUA_IMAGE_FORMAT_JPEG || src->format == LUA_IMAGE_FORMAT_MJPEG) {
+        lua_image_view_t rgb565 = {0};
+        lua_image_source_t rgb565_src = {0};
+        err = lua_image_require_rgb565le(src, &rgb565);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "JPEG BGR888 decode through RGB565 failed: %s", esp_err_to_name(err));
+            return err;
+        }
+        rgb565_src.data = rgb565.data;
+        rgb565_src.bytes = rgb565.bytes;
+        rgb565_src.width = rgb565.width;
+        rgb565_src.height = rgb565.height;
+        rgb565_src.format = LUA_IMAGE_FORMAT_RGB565LE;
+        strlcpy(rgb565_src.source_format, src->source_format, sizeof(rgb565_src.source_format));
+        err = lua_image_require_bgr888(&rgb565_src, out);
+        lua_image_release_view(&rgb565);
+        return err;
+    }
+
+    pixels = (uint8_t *)heap_caps_aligned_calloc(16, 1, required_bytes, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+    if (!pixels) {
+        ESP_LOGE(TAG, "BGR888 conversion buffer alloc failed: %u bytes", (unsigned)required_bytes);
+        return ESP_ERR_NO_MEM;
+    }
+
+    switch (src->format) {
+    case LUA_IMAGE_FORMAT_RGB888:
+        if (src->bytes < required_bytes) {
+            free(pixels);
+            return ESP_ERR_INVALID_SIZE;
+        }
+        for (size_t i = 0; i < pixel_count; i++) {
+            const uint8_t *s = src->data + i * 3;
+            uint8_t *d = pixels + i * 3;
+            d[0] = s[2];
+            d[1] = s[1];
+            d[2] = s[0];
+        }
+        break;
+    case LUA_IMAGE_FORMAT_RGB565LE:
+    case LUA_IMAGE_FORMAT_RGB565BE: {
+        size_t src_bytes = 0;
+        err = lua_image_checked_data_bytes(pixel_count, 2, &src_bytes);
+        if (err != ESP_OK) {
+            goto fail;
+        }
+        if (src->bytes < src_bytes) {
+            err = ESP_ERR_INVALID_SIZE;
+            goto fail;
+        }
+        for (size_t i = 0; i < pixel_count; i++) {
+            uint16_t pixel = src->format == LUA_IMAGE_FORMAT_RGB565LE ?
+                ((uint16_t)src->data[i * 2] | ((uint16_t)src->data[i * 2 + 1] << 8)) :
+                (((uint16_t)src->data[i * 2] << 8) | src->data[i * 2 + 1]);
+            uint8_t r = 0;
+            uint8_t g = 0;
+            uint8_t b = 0;
+            uint8_t *d = pixels + i * 3;
+            lua_image_rgb565_to_rgb888(pixel, &r, &g, &b);
+            d[0] = b;
+            d[1] = g;
+            d[2] = r;
+        }
+        break;
+    }
+    case LUA_IMAGE_FORMAT_GRAY8:
+        if (src->bytes < pixel_count) {
+            err = ESP_ERR_INVALID_SIZE;
+            goto fail;
+        }
+        for (size_t i = 0; i < pixel_count; i++) {
+            pixels[i * 3] = src->data[i];
+            pixels[i * 3 + 1] = src->data[i];
+            pixels[i * 3 + 2] = src->data[i];
+        }
+        break;
+    case LUA_IMAGE_FORMAT_YUYV:
+    case LUA_IMAGE_FORMAT_UYVY: {
+        size_t src_bytes = 0;
+        err = lua_image_checked_data_bytes(pixel_count, 2, &src_bytes);
+        if (err != ESP_OK) {
+            goto fail;
+        }
+        if (src->bytes < src_bytes) {
+            err = ESP_ERR_INVALID_SIZE;
+            goto fail;
+        }
+        for (size_t i = 0; i + 1 < pixel_count; i += 2) {
+            const uint8_t *p = src->data + i * 2;
+            uint8_t r = 0;
+            uint8_t g = 0;
+            uint8_t b = 0;
+            int y0 = src->format == LUA_IMAGE_FORMAT_YUYV ? p[0] : p[1];
+            int u = src->format == LUA_IMAGE_FORMAT_YUYV ? p[1] : p[0];
+            int y1 = src->format == LUA_IMAGE_FORMAT_YUYV ? p[2] : p[3];
+            int v = src->format == LUA_IMAGE_FORMAT_YUYV ? p[3] : p[2];
+            lua_image_yuv_to_rgb888(y0, u, v, &r, &g, &b);
+            pixels[i * 3] = b;
+            pixels[i * 3 + 1] = g;
+            pixels[i * 3 + 2] = r;
+            lua_image_yuv_to_rgb888(y1, u, v, &r, &g, &b);
+            pixels[(i + 1) * 3] = b;
+            pixels[(i + 1) * 3 + 1] = g;
+            pixels[(i + 1) * 3 + 2] = r;
+        }
+        if ((pixel_count & 1U) != 0) {
+            size_t last = pixel_count - 1;
+            pixels[last * 3] = pixel_count > 1 ? pixels[(last - 1) * 3] : 0;
+            pixels[last * 3 + 1] = pixel_count > 1 ? pixels[(last - 1) * 3 + 1] : 0;
+            pixels[last * 3 + 2] = pixel_count > 1 ? pixels[(last - 1) * 3 + 2] : 0;
+        }
+        break;
+    }
+    default:
+        ESP_LOGE(TAG, "frame format %s cannot be provided as BGR888", lua_image_format_name(src->format));
+        err = ESP_ERR_NOT_SUPPORTED;
+        goto fail;
+    }
+
+    lua_image_init_owned_view(src, out, pixels, required_bytes, LUA_IMAGE_FORMAT_BGR888);
+    return ESP_OK;
+
+fail:
+    free(pixels);
+    return err;
+}
+
 static esp_err_t lua_image_require_gray8(const lua_image_source_t *src, lua_image_view_t *out)
 {
     size_t pixel_count = 0;
@@ -551,6 +715,8 @@ esp_err_t lua_image_convert_view(const lua_image_source_t *src, lua_image_format
     switch (format) {
     case LUA_IMAGE_FORMAT_RGB565LE:
         return lua_image_require_rgb565le(src, out);
+    case LUA_IMAGE_FORMAT_BGR888:
+        return lua_image_require_bgr888(src, out);
     case LUA_IMAGE_FORMAT_GRAY8:
         return lua_image_require_gray8(src, out);
     case LUA_IMAGE_FORMAT_JPEG:

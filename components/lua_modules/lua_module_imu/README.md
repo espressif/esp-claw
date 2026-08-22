@@ -13,6 +13,7 @@ When a request mentions `bmi270`, `icm42670`, `mpu6050`, `imu`, `accelerometer`,
 - Call `local sample = sensor:read()` to get accel and gyro raw data
 - Call `local temp = sensor:read_temperature()` to read the raw temperature value
 - Call `local status = sensor:read_int_status()` to get the interrupt status bits
+- Call `sensor:name()` to read the resolved board device name
 - Call `sensor:close()` when needed
 
 ## Options table

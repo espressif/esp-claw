@@ -5,6 +5,7 @@ idf_component_register(
         "src/lua_lvgl_complex_widgets.c"
         "src/lua_lvgl_demos.c"
         "src/lua_lvgl_events.c"
+        "src/lua_lvgl_eaf.c"
         "src/lua_lvgl_font.c"
         "src/lua_lvgl_extra_widgets.c"
         "src/lua_lvgl_indev.c"
@@ -19,7 +20,7 @@ idf_component_register(
         "src"
     REQUIRES
         cap_lua
-        display_arbiter
+        claw_core
         esp_lcd
         esp_lcd_touch
         esp_timer

@@ -56,7 +56,7 @@ esp_err_t lcd_panel_factory_entry_t(esp_lcd_panel_io_handle_t io, const esp_lcd_
     panel_dev_cfg.vendor_config = (void *)&vendor_config;
     int ret = esp_lcd_new_panel_ili9341(io, &panel_dev_cfg, ret_panel);
     if (ret != ESP_OK) {
-        ESP_LOGE("lcd_panel_factory_entry_t", "New ili9341 panel failed");
+        ESP_LOGE(TAG, "New ili9341 panel failed");
         return ret;
     }
     esp_lcd_panel_set_gap(*ret_panel, 36, 0);
@@ -68,12 +68,12 @@ esp_err_t lcd_touch_factory_entry_t(esp_lcd_panel_io_handle_t io, const esp_lcd_
     esp_lcd_touch_config_t touch_cfg = {0};
     memcpy(&touch_cfg, touch_dev_config, sizeof(esp_lcd_touch_config_t));
     if (touch_cfg.int_gpio_num != GPIO_NUM_NC) {
-        ESP_LOGW("lcd_touch_factory_entry_t", "Touch interrupt supported!");
+        ESP_LOGW(TAG, "Touch interrupt supported!");
         touch_cfg.interrupt_callback = NULL;
     }
     esp_err_t ret = esp_lcd_touch_new_i2c_cst816s(io, &touch_cfg, ret_touch);
     if (ret != ESP_OK) {
-        ESP_LOGE("lcd_touch_factory_entry_t", "Failed to create gt911 touch driver: %s", esp_err_to_name(ret));
+        ESP_LOGE(TAG, "Failed to create gt911 touch driver: %s", esp_err_to_name(ret));
         return ret;
     }
     return ESP_OK;

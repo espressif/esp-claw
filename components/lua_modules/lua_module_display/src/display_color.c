@@ -18,15 +18,15 @@ typedef struct {
 } display_named_color_t;
 
 static const display_named_color_t s_named_colors[] = {
-    { "black",       { 0,   0,   0,   255 } },
-    { "white",       { 255, 255, 255, 255 } },
-    { "red",         { 255, 0,   0,   255 } },
-    { "green",       { 0,   255, 0,   255 } },
-    { "blue",        { 0,   0,   255, 255 } },
-    { "yellow",      { 255, 255, 0,   255 } },
-    { "cyan",        { 0,   255, 255, 255 } },
-    { "magenta",     { 255, 0,   255, 255 } },
-    { "transparent", { 0,   0,   0,   0   } },
+    { "black",       { .r = 0,   .g = 0,   .b = 0,   .a = 255 } },
+    { "white",       { .r = 255, .g = 255, .b = 255, .a = 255 } },
+    { "red",         { .r = 255, .g = 0,   .b = 0,   .a = 255 } },
+    { "green",       { .r = 0,   .g = 255, .b = 0,   .a = 255 } },
+    { "blue",        { .r = 0,   .g = 0,   .b = 255, .a = 255 } },
+    { "yellow",      { .r = 255, .g = 255, .b = 0,   .a = 255 } },
+    { "cyan",        { .r = 0,   .g = 255, .b = 255, .a = 255 } },
+    { "magenta",     { .r = 255, .g = 0,   .b = 255, .a = 255 } },
+    { "transparent", { .r = 0,   .g = 0,   .b = 0,   .a = 0   } },
 };
 
 static int display_color_hex_value(char ch)
@@ -188,20 +188,64 @@ uint16_t display_color_to_rgb565(display_color_t color)
     return (uint16_t)(((color.r & 0xF8) << 8) | ((color.g & 0xFC) << 3) | ((color.b & 0xF8) >> 3));
 }
 
+/* Mask that isolates R/G/B channels when a 565 pixel is spread across a
+   32-bit word as (pixel << 16) | pixel; enables single-multiply blending
+   without per-channel divides. */
+#define DISPLAY_COLOR_RGB565_CHANNEL_MASK 0x07E0F81FU
+
 uint16_t display_color_blend_rgb565(uint16_t dst, display_color_t src)
 {
-    uint8_t dst_r = (uint8_t)(((dst >> 11) & 0x1F) * 255 / 31);
-    uint8_t dst_g = (uint8_t)(((dst >> 5) & 0x3F) * 255 / 63);
-    uint8_t dst_b = (uint8_t)((dst & 0x1F) * 255 / 31);
-    uint16_t inv_a = (uint16_t)(255 - src.a);
-    display_color_t blended = {
-        .r = (uint8_t)(((uint16_t)src.r * src.a + (uint16_t)dst_r * inv_a + 127) / 255),
-        .g = (uint8_t)(((uint16_t)src.g * src.a + (uint16_t)dst_g * inv_a + 127) / 255),
-        .b = (uint8_t)(((uint16_t)src.b * src.a + (uint16_t)dst_b * inv_a + 127) / 255),
-        .a = 255,
-    };
+    if (src.a == 0) {
+        return dst;
+    }
+    if (src.a == 255) {
+        return display_color_to_rgb565(src);
+    }
 
-    return display_color_to_rgb565(blended);
+    /* Widen alpha to 6-bit (0..64), +2 for round-to-nearest. */
+    uint32_t a5 = ((uint32_t)src.a + 2) >> 2;
+    if (a5 > 64) {
+        a5 = 64;
+    }
+
+    uint16_t src565 = display_color_to_rgb565(src);
+    uint32_t bg32 = ((uint32_t)dst | ((uint32_t)dst << 16)) & DISPLAY_COLOR_RGB565_CHANNEL_MASK;
+    uint32_t fg32 = ((uint32_t)src565 | ((uint32_t)src565 << 16)) & DISPLAY_COLOR_RGB565_CHANNEL_MASK;
+    uint32_t out = (bg32 + (((fg32 - bg32) * a5) >> 6)) & DISPLAY_COLOR_RGB565_CHANNEL_MASK;
+    return (uint16_t)((out >> 16) | out);
+}
+
+uint32_t display_color_to_rgb888(display_color_t color)
+{
+    return ((uint32_t)color.b << 16) | ((uint32_t)color.g << 8) | (uint32_t)color.r;
+}
+
+/* Exact x/255 for x in [0..65534] via mul+shift (Xtensa has no HW divide). */
+static inline uint8_t display_color_div255(uint32_t x)
+{
+    return (uint8_t)((x * 0x8081U) >> 23);
+}
+
+uint32_t display_color_blend_rgb888(uint32_t dst, display_color_t src)
+{
+    if (src.a == 0) {
+        return dst;
+    }
+    if (src.a == 255) {
+        return display_color_to_rgb888(src);
+    }
+
+    uint32_t a = src.a;
+    uint32_t inv_a = 255U - a;
+    uint32_t dst_b = (dst >> 16) & 0xFFU;
+    uint32_t dst_g = (dst >> 8) & 0xFFU;
+    uint32_t dst_r = dst & 0xFFU;
+
+    /* +127 for round-to-nearest. */
+    uint32_t b = display_color_div255((uint32_t)src.b * a + dst_b * inv_a + 127U);
+    uint32_t g = display_color_div255((uint32_t)src.g * a + dst_g * inv_a + 127U);
+    uint32_t r = display_color_div255((uint32_t)src.r * a + dst_r * inv_a + 127U);
+    return (b << 16) | (g << 8) | r;
 }
 
 bool display_color_is_transparent(display_color_t color)

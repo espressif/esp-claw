@@ -1,0 +1,5 @@
+board: metalio_claw_4
+chip: esp32p4
+version: 1.0.0
+description: "Metalio Claw 4"
+manufacturer: "Metalio"

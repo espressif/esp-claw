@@ -22,6 +22,7 @@
 #include "esp_video_ioctl.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "linux/v4l2-controls.h"
 #include "linux/videodev2.h"
 
 #define CAMERA_DEFAULT_TIMEOUT_MS   5000
@@ -34,6 +35,8 @@ static const char *TAG = "camera_service";
 static esp_err_t camera_settle_stream_locked(int64_t deadline_us);
 static void camera_fourcc_to_string(uint32_t pixel_format, char out[5]);
 static esp_err_t camera_requeue_buffer_locked(struct v4l2_buffer *buffer);
+static esp_err_t camera_set_vflip_locked(bool enable);
+static esp_err_t camera_set_hmirror_locked(bool enable);
 
 typedef struct {
     bool active;
@@ -430,6 +433,28 @@ static esp_err_t camera_open_locked(const char *dev_path, const camera_open_opts
         return ESP_ERR_NOT_SUPPORTED;
     }
     /* Driver may have adjusted any field — adopt whatever it reports back. */
+
+    /* Apply build-time orientation defaults after format negotiation. */
+#ifdef CONFIG_LUA_MODULE_CAMERA_ENABLE_VFLIP
+    const bool enable_vflip = true;
+#else
+    const bool enable_vflip = false;
+#endif
+#ifdef CONFIG_LUA_MODULE_CAMERA_ENABLE_HMIRROR
+    const bool enable_hmirror = true;
+#else
+    const bool enable_hmirror = false;
+#endif
+
+    err = camera_set_vflip_locked(enable_vflip);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to apply vertical flip, continue opening camera: %s", esp_err_to_name(err));
+    }
+
+    err = camera_set_hmirror_locked(enable_hmirror);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to apply horizontal mirror, continue opening camera: %s", esp_err_to_name(err));
+    }
 
     s_camera.width = format.fmt.pix.width;
     s_camera.height = format.fmt.pix.height;
@@ -886,6 +911,52 @@ esp_err_t camera_flush(void)
         ESP_LOGD(TAG, "flush drained %d buffer(s)", drained);
     }
     return err;
+}
+
+static esp_err_t camera_set_vflip_locked(bool enable)
+{
+    struct v4l2_ext_control control = {
+        .id    = V4L2_CID_VFLIP,
+        .value = enable ? 1 : 0,
+    };
+    struct v4l2_ext_controls controls = {
+        .ctrl_class = V4L2_CTRL_CLASS_USER,
+        .count      = 1,
+        .controls   = &control,
+    };
+
+    if (s_camera.fd < 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (ioctl(s_camera.fd, VIDIOC_S_EXT_CTRLS, &controls) != 0) {
+        ESP_LOGE(TAG, "VIDIOC_S_EXT_CTRLS VFLIP=%d failed (errno=%d)", control.value, errno);
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "Camera vertical flip: %s", enable ? "enabled" : "disabled");
+    return ESP_OK;
+}
+
+static esp_err_t camera_set_hmirror_locked(bool enable)
+{
+    struct v4l2_ext_control control = {
+        .id    = V4L2_CID_HFLIP,
+        .value = enable ? 1 : 0,
+    };
+    struct v4l2_ext_controls controls = {
+        .ctrl_class = V4L2_CTRL_CLASS_USER,
+        .count      = 1,
+        .controls   = &control,
+    };
+
+    if (s_camera.fd < 0) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (ioctl(s_camera.fd, VIDIOC_S_EXT_CTRLS, &controls) != 0) {
+        ESP_LOGE(TAG, "VIDIOC_S_EXT_CTRLS HFLIP=%d failed (errno=%d)", control.value, errno);
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "Camera horizontal mirror: %s", enable ? "enabled" : "disabled");
+    return ESP_OK;
 }
 
 bool camera_is_open(void)

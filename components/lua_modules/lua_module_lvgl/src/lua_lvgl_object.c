@@ -56,6 +56,8 @@ void lua_lvgl_record_release_resources(lua_lvgl_obj_record_t *record)
     free(record->data);
     record->data = NULL;
     record->data_size = 0;
+    record->data_width = 0;
+    record->data_height = 0;
     free(record->data2);
     record->data2 = NULL;
     record->data2_size = 0;
@@ -104,7 +106,7 @@ lv_obj_t *lua_lvgl_validate_ud_locked(const lua_lvgl_obj_ud_t *ud,
     return record->obj;
 }
 
-lua_lvgl_obj_ud_t *lua_lvgl_push_obj(lua_State *L, lv_obj_t *obj, lua_lvgl_obj_type_t type)
+lua_lvgl_obj_ud_t *lua_lvgl_push_obj_ex(lua_State *L, lv_obj_t *obj, lua_lvgl_obj_type_t type, bool owned)
 {
     lua_lvgl_obj_record_t *record = (lua_lvgl_obj_record_t *)calloc(1, sizeof(*record));
     lua_lvgl_obj_ud_t *ud;
@@ -117,6 +119,7 @@ lua_lvgl_obj_ud_t *lua_lvgl_push_obj(lua_State *L, lv_obj_t *obj, lua_lvgl_obj_t
     record->generation = s_lvgl.generation;
     record->type = type;
     record->valid = true;
+    record->owned = owned;
     record->next = s_lvgl.records;
     s_lvgl.records = record;
     ud->record = record;
@@ -124,6 +127,11 @@ lua_lvgl_obj_ud_t *lua_lvgl_push_obj(lua_State *L, lv_obj_t *obj, lua_lvgl_obj_t
     luaL_getmetatable(L, lua_lvgl_metatable_for_type(type));
     lua_setmetatable(L, -2);
     return ud;
+}
+
+lua_lvgl_obj_ud_t *lua_lvgl_push_obj(lua_State *L, lv_obj_t *obj, lua_lvgl_obj_type_t type)
+{
+    return lua_lvgl_push_obj_ex(L, obj, type, true);
 }
 void lua_lvgl_invalidate_records_locked(void)
 {

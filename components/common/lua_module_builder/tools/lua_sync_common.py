@@ -115,23 +115,6 @@ def write_synced_files_manifest(path: Path, synced_files: list[str]) -> None:
     path.write_text(json.dumps(manifest_data, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 
 
-def write_stamp(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('ok\n', encoding='utf-8')
-
-
-def escape_depfile_path(path: Path) -> str:
-    return str(path).replace('\\', '\\\\').replace(' ', '\\ ')
-
-
-def write_depfile(depfile_path: Path, stamp_path: Path, input_paths: list[Path]) -> None:
-    unique_inputs = sorted({path.resolve() for path in input_paths}, key=lambda item: str(item))
-    dependencies = ' '.join(escape_depfile_path(path) for path in unique_inputs)
-    target = escape_depfile_path(stamp_path.name)
-    depfile_path.parent.mkdir(parents=True, exist_ok=True)
-    depfile_path.write_text(f'{target}: {dependencies}\n', encoding='utf-8')
-
-
 class FileSyncPlan:
     def __init__(self, output_dir: Path, manifest_path: Path) -> None:
         self.output_dir = output_dir
@@ -164,10 +147,6 @@ class FileSyncPlan:
             shutil.copy2(source_path, target_path)
 
         write_synced_files_manifest(self.manifest_path, list(self._copy_map.keys()))
-
-    @property
-    def input_paths(self) -> list[Path]:
-        return list(self._copy_map.values())
 
     @property
     def count(self) -> int:

@@ -1,9 +1,6 @@
 # Lua UART
 
-This module describes how to open a UART port and read/write bytes or text
-lines from Lua. The module wraps ESP-IDF's UART driver and follows a pure
-polling model — scripts call `read` / `read_line` with a timeout and get
-back whatever is available.
+This module describes how to open a UART port and read/write bytes or text lines from Lua. Scripts call `read` / `read_line` with a timeout and get back whatever is available.
 
 ## How to call
 - Import it with `local uart = require("uart")`
@@ -83,5 +80,4 @@ local u = uart.new(1, 17, 18, 9600, {
 - All reads are **polling with a timeout**. There is no callback /
   interrupt interface in this module. For high-rate data, poll often
   enough to drain the 1 KiB RX buffer before it overruns.
-- Closing a port releases the hardware; the same `port` number can then
-  be reopened with different settings.
+- Closing a port releases it; the same `port` number can then be reopened with different settings.

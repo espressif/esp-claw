@@ -8,6 +8,10 @@ This module describes how to correctly use gpio when writing Lua scripts.
 - Call `gpio.set_level(pin, level)` to set output level
 - Call `gpio.get_level(pin)` to read pin level
 
+Supported modes are `"input"`, `"output"`, `"input_output"`, `"output_od"`, `"input_output_od"`, and `"disable"`.
+
+`set_direction` and `set_level` return no values on success and raise a Lua error on failure. `get_level` returns `0` or `1`.
+
 ## Example
 ```lua
 local gpio = require("gpio")

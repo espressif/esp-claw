@@ -93,32 +93,32 @@ devices:
         address: 0x20
         frequency: 400000
 
-  # # microSD card on SDMMC 4-bit bus. Shares GPIO20~25 stuffing option with SPI NAND.
-  # - name: fs_sdcard
-  #   type: fs_fat
-  #   sub_type: sdmmc
-  #   power_ctrl_device: sdcard_power_ctrl
-  #   version: default
-  #   config:
-  #     mount_point: "/sdcard"
-  #     vfs_config:
-  #       format_if_mount_failed: false
-  #       max_files: 5
-  #       allocation_unit_size: 16384
-  #     sub_config:
-  #       slot: SDMMC_HOST_SLOT_0
-  #       frequency: SDMMC_FREQ_HIGHSPEED
-  #       bus_width: 4
-  #       slot_flags: SDMMC_SLOT_FLAG_INTERNAL_PULLUP
-  #       pins:
-  #         clk: 24
-  #         cmd: 25
-  #         d0: 20
-  #         d1: 21
-  #         d2: 22
-  #         d3: 23
-  #         cd: -1
-  #         wp: -1
+  # microSD card on SDMMC 4-bit bus. Shares GPIO20~25 stuffing option with SPI NAND.
+  - name: fs_sdcard
+    type: fs_fat
+    sub_type: sdmmc
+    power_ctrl_device: sdcard_power_ctrl
+    version: default
+    config:
+      mount_point: "/sdcard"
+      vfs_config:
+        format_if_mount_failed: false
+        max_files: 5
+        allocation_unit_size: 16384
+      sub_config:
+        slot: SDMMC_HOST_SLOT_0
+        frequency: SDMMC_FREQ_HIGHSPEED
+        bus_width: 4
+        slot_flags: SDMMC_SLOT_FLAG_INTERNAL_PULLUP
+        pins:
+          clk: 24
+          cmd: 25
+          d0: 20
+          d1: 21
+          d2: 22
+          d3: 23
+          cd: -1
+          wp: -1
 
   # 800x480 RGB LCD panel. Schematic nets: RGB565 data GPIO8-19/33-36,
   # PCLK=GPIO40, DE=GPIO43, HSYNC=GPIO44, VSYNC=GPIO45.

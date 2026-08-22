@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from lua_sync_common import ComponentSource, FileSyncPlan, LuaSyncConsole, LuaSyncError
-from lua_sync_common import collect_build_component_sources, write_depfile, write_stamp
+from lua_sync_common import collect_build_component_sources
 
 
 console = LuaSyncConsole()
@@ -46,8 +46,6 @@ def parse_args() -> argparse.Namespace:
                         help='Output dir for libs (require() search path); tests are placed inside the builtin_lua_modules skill.')
     parser.add_argument('--libs-manifest-path', required=True)
     parser.add_argument('--tests-manifest-path', required=True)
-    parser.add_argument('--stamp-path', required=True)
-    parser.add_argument('--depfile', required=True)
     return parser.parse_args()
 
 
@@ -88,16 +86,12 @@ def main() -> int:
     tests_output_dir = TESTS_DEST_DIR.resolve()
     libs_manifest = Path(args.libs_manifest_path).resolve()
     tests_manifest = Path(args.tests_manifest_path).resolve()
-    stamp_path = Path(args.stamp_path).resolve()
-    depfile_path = Path(args.depfile).resolve()
 
     sources = collect_build_component_sources(build_dir)
     libs_plan = collect_builtin_lua_module_libs(sources, libs_output_dir, libs_manifest)
     tests_plan = collect_builtin_lua_module_tests(sources, tests_output_dir, tests_manifest)
     libs_plan.apply()
     tests_plan.apply()
-    write_depfile(depfile_path, stamp_path, list(libs_plan.input_paths) + list(tests_plan.input_paths))
-    write_stamp(stamp_path)
     console.success(
         f'CLAW lua module resource sync updated {libs_plan.count} libs into {libs_output_dir} '
         f'and {tests_plan.count} tests into {tests_output_dir}'

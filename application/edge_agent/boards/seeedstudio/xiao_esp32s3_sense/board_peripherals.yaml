@@ -1,0 +1,53 @@
+version: 1.0.0
+# Peripherals Configuration for Seeed Studio XIAO ESP32-S3 Sense
+#
+# Bus allocation:
+#   I2C0  - camera SCCB (also used by XIAO header D4/D5 as I2C if needed later)
+#           SCL=GPIO39, SDA=GPIO40
+#   I2S0  - PDM microphone (pdm-in)
+#           CLK=GPIO42 (shared with D11/MTMS), DATA=GPIO41 (shared with D12/MTDI)
+#   SPI2  - on-board microSD card slot
+#           CS=GPIO21 (shared with user LED; SD takes the pin), SCK=GPIO7,
+#           MOSI=GPIO9, MISO=GPIO8
+#
+# The on-board user LED on GPIO21 is intentionally NOT registered as a
+# peripheral: the Sense expansion board hardwires the SD card CS to the
+# same pin, so the LED cannot be driven while the SD card is in use.
+
+peripherals:
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 40
+        scl: 39
+
+  - name: i2s_audio_in
+    type: i2s
+    role: master
+    format: pdm-in
+    config:
+      port: 0
+      sample_rate_hz: 16000
+      clk_src: I2S_CLK_SRC_DEFAULT
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_MONO
+      slot_mask: I2S_PDM_SLOT_LEFT
+      data_fmt: I2S_PDM_DATA_FMT_PCM
+      pins:
+        clk: 42
+        din: 41
+
+  - name: spi_sdcard
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        sclk_io_num: 7
+        mosi_io_num: 9
+        miso_io_num: 8
+        max_transfer_sz: 4096

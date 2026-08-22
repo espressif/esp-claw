@@ -1,0 +1,35 @@
+version: 1.0.0
+# Devices for EDA Robot Pro (四足机器狗)
+
+devices:
+
+  # MAX98357: I2S Class-D speaker amplifier (I2S1 STD TX)
+  - name: audio_dac
+    chip: internal
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: false
+      dac_enabled: true
+      dac_max_channel: 1
+      dac_channel_mask: "1"
+      dac_init_gain: 0
+      mclk_enabled: false
+    peripherals:
+      - name: i2s_audio_out
+
+  # INMP441: I2S MEMS microphone (I2S0 STD RX)
+  - name: audio_adc
+    chip: internal
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      dac_enabled: false
+      adc_max_channel: 1
+      adc_channel_mask: "1"
+      adc_init_gain: 0
+      mclk_enabled: false
+    peripherals:
+      - name: i2s_audio_in
+

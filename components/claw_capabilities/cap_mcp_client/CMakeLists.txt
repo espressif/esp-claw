@@ -11,6 +11,4 @@ idf_component_register(
         claw_cap
         esp_http_client
         mcp-c-sdk
-        mcp_mdns
-        json
 )

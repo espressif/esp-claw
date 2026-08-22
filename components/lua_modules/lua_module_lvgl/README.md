@@ -1,12 +1,11 @@
 # Lua LVGL Usage Guide
 
-This document is written for LLMs and Lua script generation. It explains how
-to use the `lvgl` module exposed by `components/lua_modules/lua_module_lvgl`.
+This document is an API guide for building LVGL UIs from Lua with the `lvgl` module.
 
 ## Core Rules
 
 - Import the module with `local lvgl = require("lvgl")`.
-- Get display parameters with `board_manager.get_display_lcd_params("display_lcd")`, then call `lvgl.init(...)`.
+- Call `lvgl.init([opts])` before creating screens or widgets.
 - All widget operations are userdata methods. Use `btn:set_text("OK")`, not `lvgl.set_text(btn, "OK")`.
 - Only one Lua script can own the LVGL runtime at a time. Do not use `display.init(...)` and `lvgl.init(...)` together.
 - Call `lvgl.deinit()` before the script exits. The module also cleans up automatically if the owner script exits unexpectedly.
@@ -16,13 +15,9 @@ to use the `lvgl` module exposed by `components/lua_modules/lua_module_lvgl`.
 ## Minimal Example
 
 ```lua
-local board_manager = require("board_manager")
 local lvgl = require("lvgl")
 
-local panel_handle, io_handle, width, height, panel_if =
-    board_manager.get_display_lcd_params("display_lcd")
-
-lvgl.init(panel_handle, io_handle, width, height, panel_if, {
+lvgl.init({
     buffer_lines = 40,
     tick_ms = 5,
     task_period_ms = 10,
@@ -58,19 +53,32 @@ lvgl.deinit()
 
 ## Init And Deinit
 
-```lua
-lvgl.init(panel_handle, io_handle, width, height, panel_if, opts)
+```text
+lvgl.init([opts]) -> true
 ```
 
 Common `opts`:
 - `buffer_lines`: draw buffer height in lines, default `40`
 - `tick_ms`: LVGL tick period, default `5`
 - `task_period_ms`: LVGL handler task period, default `10`
+- `font_path`: default runtime font path, default `fonts/NotoSansSC-Regular-sub.ttf`; DATA is tried first, then SYSTEM
+- `font_size`: default runtime font size, default `24`
+- `font_cache_size`: default runtime font glyph cache size, default `LV_TINY_TTF_CACHE_GLYPH_CNT`
+
+Legacy scripts may still call `lvgl.init(panel_handle, io_handle, width, height, panel_if, opts)`. The positional display parameters are ignored; only `opts` is used.
+
+Legacy constants are still exported for older scripts:
+
+- `lvgl.PANEL_IF_IO`
+- `lvgl.PANEL_IF_RGB`
+- `lvgl.PANEL_IF_MIPI_DSI`
+
+They are not needed by `lvgl.init([opts])`.
 
 Shutdown:
 
-```lua
-lvgl.deinit()
+```text
+lvgl.deinit() -> true
 ```
 
 ## Touch Input
@@ -78,20 +86,21 @@ lvgl.deinit()
 Register a touch panel as an LVGL input device:
 
 ```lua
+local board_manager = require("board_manager")
+
 local touch_handle, err = board_manager.get_lcd_touch_handle("lcd_touch")
 if touch_handle then
-    lvgl.indev_register("touch", touch_handle)
+    lvgl.indev_register("touch", touch_handle) -- -> true
 end
 ```
 
 Unregister it before shutdown when needed:
 
 ```lua
-lvgl.indev_unregister("touch")
+lvgl.indev_unregister("touch") -- -> removed
 ```
 
-`indev_register("touch", ...)` borrows the `esp_lcd_touch_handle_t`; it does
-not free the underlying touch handle.
+`indev_register("touch", ...)` does not take ownership of the touch handle. `indev_unregister("touch")` returns `true` only when a touch input device was actually removed.
 
 ## Event Loop
 
@@ -106,9 +115,9 @@ end)
 Remove callbacks:
 
 ```lua
-btn:off(handle)      -- remove one callback handle
-btn:off("clicked")  -- remove all callbacks for this event
-btn:off()           -- remove all callbacks from this object
+btn:off(handle)      -- -> removed_count
+btn:off("clicked")  -- -> removed_count
+btn:off()           -- -> removed_count
 ```
 
 Supported event names:
@@ -118,25 +127,27 @@ Supported event names:
 
 Drive the event loop:
 
-```lua
-lvgl.run()
+```text
+lvgl.run([{ period_ms = 200 }]) -> processed_count
 ```
 
 Or:
 
 ```lua
 while true do
-    lvgl.process_events(50)
+    lvgl.process_events(50) -- -> processed_count
     -- run other periodic Lua-side work here
 end
 ```
+
+`lvgl.process_events([timeout_ms = 0])` treats negative timeouts as `0`. Event callbacks receive no arguments; callback errors are logged and event dispatch continues.
 
 ## Widget Constructors
 
 All constructors follow the same basic shape:
 
 ```lua
-local obj = lvgl.widget(parent, opts)
+local obj = lvgl.widget(parent, opts) -- -> object userdata
 ```
 
 Basic widgets:
@@ -147,8 +158,8 @@ Basic widgets:
 - `lvgl.button(parent, { text = "OK" })`
 - `lvgl.bar(parent, { min = 0, max = 100, value = 50 })`
 - `lvgl.slider(parent, { min = 0, max = 100, value = 50 })`
-- `lvgl.arc(parent, opts)`
-- `lvgl.scale(parent, opts)`
+- `lvgl.arc(parent, { min = 0, max = 100, value = 50 })`
+- `lvgl.scale(parent, { min = 0, max = 100, value = 50 })`
 - `lvgl.checkbox(parent, { text = "Enable", checked = true })`
 - `lvgl.switch(parent, { checked = true })`
 - `lvgl.dropdown(parent, { options = {"A", "B"}, selected = 1 })`
@@ -156,15 +167,15 @@ Basic widgets:
 - `lvgl.keyboard(parent, { mode = "text_lower", textarea = textarea })`
 - `lvgl.textarea(parent, { text = "..." })`
 - `lvgl.list(parent, opts)`
-- `lvgl.table(parent, opts)`
-- `lvgl.image(parent, { src = "S:/path.bin" })`
+- `lvgl.table(parent, { rows = 2, cols = 2 })`
+- `lvgl.image(parent, { src = "<your/path/image.bin>" })`
 - `lvgl.line(parent, { points = {{x=0,y=0}, {x=20,y=20}} })`
 - `lvgl.spinner(parent, { anim_ms = 1000, arc_sweep = 60 })`
 - `lvgl.buttonmatrix(parent, { map = {"1", "2", "\n", "3"}, one_checked = true })`
 - `lvgl.calendar(parent, { today = {2026, 5, 15}, shown = {2026, 5}, highlighted = {{2026, 5, 15}} })`
 - `lvgl.canvas(parent, { w = 80, h = 40, color_format = "rgb565" })`
 - `lvgl.chart(parent, { type = "line", point_count = 10, min = 0, max = 100, update_mode = "shift" })`
-- `lvgl.imagebutton(parent, { src = "S:/path.bin" })`
+- `lvgl.imagebutton(parent, { src = "<your/path/image.bin>" })`
 - `lvgl.led(parent, { color = "#00ff00", brightness = 180, on = true })`
 - `lvgl.menu(parent, opts)`
 - `lvgl.msgbox(parent_or_nil, { title = "...", text = "...", buttons = {"OK"}, close_button = true })`
@@ -173,6 +184,7 @@ Basic widgets:
 - `lvgl.tabview(parent, { tab_bar_position = "top", tab_bar_size = 36 })`
 - `lvgl.tileview(parent, opts)`
 - `lvgl.window(parent, opts)`
+- `lvgl.eaf(parent, { src = "<your/path/anim.eaf>", loop_count = -1, loop_enabled = true })`
 
 Lua index convention:
 - dropdown/roller selected indexes are 1-based
@@ -180,6 +192,31 @@ Lua index convention:
 - buttonmatrix selected indexes are 1-based
 - tabview active indexes are 1-based
 - tileview `col` and `row` are 1-based
+
+Widget-specific `opts`:
+
+- `image`: `src`
+- `line`: `points`, `y_invert`
+- `arc`: `start_angle`, `end_angle`, `bg_start_angle`, `bg_end_angle`, `rotation`, `mode`
+- `spinner`: `anim_ms`, `arc_sweep`
+- `scale`: `mode`, `total_ticks`, `major_tick_every`, `label_show`, `angle_range`, `rotation`
+- `checkbox`, `switch`: `checked`
+- `dropdown`: `options`, `selected`, `dir`, `symbol`
+- `roller`: `options`, `selected`, `mode`, `visible_rows`
+- `keyboard`: `mode`, `popovers`, `textarea`
+- `textarea`: `placeholder`, `one_line`, `password`, `max_length`, `accepted_chars`
+- `table`: `rows`, `cols`, `cells`, `column_widths`
+- `buttonmatrix`: `map`, `one_checked`
+- `calendar`: `today`, `shown`, `highlighted`, `day_names`
+- `canvas`: `w`, `h`, `color_format`
+- `chart`: `type`, `point_count`, `min`, `max`, `update_mode`
+- `imagebutton`: `src`
+- `led`: `color`, `brightness`, `on`
+- `msgbox`: `title`, `text`, `buttons`, `close_button`
+- `spangroup`: `mode`, `overflow`, `indent`, `max_lines`, `spans`
+- `spinbox`: `min`, `max`, `value`, `step`, `digit_count`, `dec_point_pos`, `rollover`
+- `tabview`: `tab_bar_position`, `tab_bar_size`
+- `eaf`: `src`, `src_data`, `loop_count`, `loop_enabled`, `frame_delay`
 
 ## Common Options
 
@@ -201,8 +238,16 @@ text_color = 0xffffff
 
 ## Runtime TTF Fonts
 
+By default, `lvgl.init()` tries to load `fonts/NotoSansSC-Regular-sub.ttf` as the runtime font and applies it to the root screen and every screen created with `lvgl.create_screen()`. If that font is unavailable, LVGL uses its built-in font. Set `font_size` per app when a different default text size is needed:
+
+```lua
+lvgl.init({
+    font_size = 22,
+})
+```
+
 When LVGL `tiny_ttf` is enabled, fonts can be loaded from the DATA root at
-runtime:
+runtime for per-object overrides:
 
 ```lua
 local storage = require("storage")
@@ -213,18 +258,49 @@ local font = lvgl.font_load(font_path, { size = 24, cache_size = 128 })
 label:set_style({ font = font })
 ```
 
-- `lvgl.font_load(path, { size = px, cache_size = n })` -> font handle
-- `font:set_size(px)`
+- `lvgl.font_load(path[, { size = 16, cache_size = LV_TINY_TTF_CACHE_GLYPH_CNT }])` -> font handle
+- `font:set_size(px)` -> true
 - `font:is_valid()` -> boolean
-- `font:delete()`
+- `font:delete()` -> true
 
-Font paths must be relative to or under the DATA root. The font file must
-remain available while any LVGL object uses the font.
+`lvgl.init({ font_path = ... })` resolves the path from DATA first, then SYSTEM. `lvgl.font_load(path[, opts])` only accepts a DATA-relative path, a `D:/...` LVGL filesystem path, or an absolute path under the DATA root. Runtime font files must remain available while any LVGL object uses them.
+
+## EAF Animation
+
+EAF playback is exposed as an LVGL object:
+
+```lua
+local anim = lvgl.eaf(scr, {
+    src = "<your/path/idle.eaf>",
+    align = "center",
+    loop_count = -1,
+    loop_enabled = true,
+    frame_delay = 100,
+})
+
+if anim:is_loaded() then
+    anim:pause()
+    anim:resume()
+end
+```
+
+Methods:
+- `anim:set_src(path)`
+- `anim:set_src_data(binary_string)`
+- `anim:restart()`, `anim:pause()`, `anim:resume()`
+- `anim:is_loaded()`
+- `anim:get_total_frames()`, `anim:get_current_frame()`
+- `anim:set_loop_count(n)`, `anim:get_loop_count()`
+- `anim:set_loop_enabled(boolean)`, `anim:get_loop_enabled()`
+- `anim:set_frame_delay(ms)`, `anim:get_frame_delay()`
+
+Use either `src` or `src_data` when creating an EAF object.
 
 ## Common Methods
 
 All LVGL object userdata supports:
 
+- Methods that change object state return `true` on success unless another return value is shown.
 - `obj:set_pos(x, y)`
 - `obj:get_pos()` -> `x, y`
 - `obj:set_size(w, h)`
@@ -236,16 +312,20 @@ All LVGL object userdata supports:
 - `obj:set_grid(opts)`
 - `obj:set_grid_cell(opts)`
 - `obj:set_scroll(opts)`
-- `obj:on(event, callback)`
-- `obj:off([handle_or_event])`
+- `obj:on(event, callback)` -> handle
+- `obj:off([handle_or_event])` -> removed_count
 - `obj:delete()`
 - `obj:clean()`
+
+Screen helpers:
+- `lvgl.screen()` -> active screen object
+- `lvgl.create_screen()` -> screen object
 
 Common `align` names:
 
 `top_left`, `top_mid`, `top`, `top_right`, `bottom_left`, `bottom_mid`,
 `bottom`, `bottom_right`, `left_mid`, `left`, `right_mid`, `right`,
-`center`, `centre`
+`center`, `centre`, `default`
 
 ## Layout And Scrolling
 
@@ -277,6 +357,19 @@ obj:set_grid({
 })
 ```
 
+Grid cell:
+
+```lua
+obj:set_grid_cell({
+    col = 1,
+    row = 1,
+    col_span = 1,
+    row_span = 1,
+    col_align = "stretch",
+    row_align = "stretch",
+})
+```
+
 Scroll:
 
 ```lua
@@ -290,13 +383,18 @@ obj:set_scroll({
 
 `dir`: `none`, `left`, `right`, `top`, `bottom`, `hor`, `ver`, `all`
 
+`scrollbar`: `auto`, `off`, `on`, `active`
+
+`snap_x/snap_y`: `none`, `start`, `end`, `center`
+
 ## Type-Specific Methods
 
 Basic methods:
 
 - `label/button/checkbox/dropdown/textarea/list_text/list_button:set_text(text)`
-- `bar/slider/arc/scale/dropdown/roller/checkbox/switch/spinbox:set_value(v[, anim])`
-- `bar/slider/arc/scale/spinbox:get_value()`
+- `bar/slider/roller:set_value(v[, anim])`
+- `arc/scale/dropdown/checkbox/switch/spinbox:set_value(v)`
+- `bar/slider/arc/scale/dropdown/roller/checkbox/switch/spinbox:get_value()`
 - `bar/slider/arc/scale/spinbox:set_range(min, max)`
 - `screen:load()`
 - `list:add_text(text)` -> `list_text`
@@ -311,9 +409,10 @@ Basic methods:
 - `calendar:set_today(y, m, d)`
 - `calendar:set_shown(y, m)`
 - `calendar:set_highlighted({{y,m,d}, ...})`
-- `calendar:get_pressed_date()` -> `{year, month, day}` or nil
+- `calendar:get_pressed_date()` -> `{ year = y, month = m, day = d }` or nil
 - `canvas:fill_bg(color[, opa])`
 - `canvas:set_px(x, y, color[, opa])`
+- `canvas:set_rgb565_data(data[, byte_order])`
 - `canvas:get_px(x, y)` -> `{r, g, b, a}`
 - `chart:add_series(color[, axis])` -> series handle
 - `chart:set_type(type)`
@@ -328,19 +427,19 @@ Basic methods:
 - `led:set_brightness(v)`
 - `led:get_brightness()` -> integer
 - `led:on()`, `led:off()`, `led:toggle()`
-- `menu:page(title)` -> page
+- `menu:page([title])` -> page
 - `menu:cont(parent)` -> cont
 - `menu:section(page)` -> section
 - `menu:separator(page)` -> separator
-- `menu:set_page(page)`
-- `menu:set_sidebar_page(page)`
+- `menu:set_page([page])`
+- `menu:set_sidebar_page([page])`
 - `menu:set_mode_header(mode)`
 - `menu:set_root_back_button(bool)`
 - `menu:clear_history()`
-- `msgbox:add_title(text)`
-- `msgbox:add_text(text)`
-- `msgbox:add_footer_button(text)`
-- `msgbox:add_close_button()`
+- `msgbox:add_title(text)` -> msgbox_child
+- `msgbox:add_text(text)` -> msgbox_child
+- `msgbox:add_footer_button(text)` -> msgbox_child
+- `msgbox:add_close_button()` -> msgbox_child
 - `msgbox:close()`
 - `msgbox:close_async()`
 - `spangroup:add_span(text[, style])` -> span handle
@@ -361,14 +460,17 @@ Basic methods:
 - `tabview:get_active()` -> index
 - `tabview:get_tab_count()` -> integer
 - `tabview:set_tab_text(index, text)`
-- `tileview:add_tile(col, row, dir)` -> tile
+- `tileview:add_tile(col, row[, dir])` -> tile
 - `tileview:set_tile(tile[, anim])`
 - `tileview:set_tile_by_index(col, row[, anim])`
 - `tileview:get_active_tile()` -> tile or nil
 - `window:add_title(text)` -> label
-- `window:add_button(icon[, width])` -> button
+- `window:add_button([icon[, width]])` -> button
 - `window:get_header()` -> object
 - `window:get_content()` -> object
+
+`span:set_style(opts)` applies style options through the owning `spangroup`.
+
 - `canvas.color_format`: `rgb565`, `rgb888`, `xrgb8888`, `argb8888`, `native`
 - `chart.type`: `none`, `line`, `curve`, `bar`, `stacked`, `scatter`
 - `chart.update_mode`: `shift`, `circular`
@@ -380,9 +482,18 @@ Basic methods:
 - `menu` header mode: `top_fixed`, `top_unfixed`, `bottom_fixed`
 - Direction values: `none`, `left`, `right`, `top`, `bottom`, `hor`, `ver`, `all`
 
+## Demos
+
+- `lvgl.demos()` -> `{name, ...}`
+- `lvgl.demo(name)` -> `true`
+
+`lvgl.demo(name)` requires an initialized LVGL runtime. Available demo names depend on firmware LVGL demo build flags.
+
 ## Limitations
 
 - Encoder/keypad indevs are not exposed yet.
+- Some widgets and demos depend on LVGL `LV_USE_*` build flags; disabled entries raise a Lua error such as `not enabled in firmware`.
+- `lvgl.font_load(...)` requires LVGL `tiny_ttf` support.
 - Image decoders and general filesystem setup are not wrapped.
 - `lvgl.image(...)` and `lvgl.imagebutton(...)` only pass string `src` values
   to LVGL. Whether those strings load depends on firmware FS/decoder setup.
@@ -391,13 +502,3 @@ Basic methods:
 - Span handles and chart series handles are not LVGL objects; they do not support object base methods such as `set_pos`, `set_style`, or `delete`.
 - Non-ASCII text rendering depends on either firmware-enabled fonts or a
   runtime TTF font applied with `font`.
-
-## Test Scripts
-
-Directory: `components/lua_modules/lua_module_lvgl/test/`
-
-- `lvgl_basic.lua`: basic display and widgets
-- `lvgl_events.lua`: event callbacks and `process_events`
-- `lvgl_indev.lua`: touch indev registration/unregistration
-- `lvgl_demos.lua`: demo wrapper
-- `lvgl_widgets_test.lua`: full widget test, touch-enabled when available, 60-second interactive window

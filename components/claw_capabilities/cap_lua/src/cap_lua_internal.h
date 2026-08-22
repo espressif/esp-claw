@@ -25,10 +25,6 @@
 #define CAP_LUA_ASYNC_MAX_CONCURRENT    4
 #define CAP_LUA_MAX_MODULES             32
 
-#define CAP_LUA_JOB_NAME_MAX            32
-#define CAP_LUA_JOB_EXCLUSIVE_MAX       32
-#define CAP_LUA_JOB_PATH_MAX            192
-#define CAP_LUA_JOB_ID_LEN              9
 #define CAP_LUA_STOP_WAIT_DEFAULT_MS    2000
 
 typedef void (*cap_lua_runtime_log_fn_t)(void *user_ctx,
@@ -46,15 +42,6 @@ typedef struct {
     bool sync_waiter;
     time_t created_at;
 } cap_lua_async_job_t;
-
-typedef enum {
-    CAP_LUA_JOB_QUEUED = 0,
-    CAP_LUA_JOB_RUNNING,
-    CAP_LUA_JOB_DONE,
-    CAP_LUA_JOB_FAILED,
-    CAP_LUA_JOB_TIMEOUT,
-    CAP_LUA_JOB_STOPPED,
-} cap_lua_job_status_t;
 
 typedef struct {
     char job_id[CAP_LUA_JOB_ID_LEN];
@@ -132,3 +119,5 @@ esp_err_t cap_lua_async_wait_settle(const char *job_id,
                                     cap_lua_job_status_t *out_status,
                                     char *summary_out,
                                     size_t summary_out_size);
+esp_err_t cap_lua_async_register_job_event_cb(cap_lua_job_event_cb_t cb, void *user_ctx);
+esp_err_t cap_lua_async_unregister_job_event_cb(cap_lua_job_event_cb_t cb, void *user_ctx);

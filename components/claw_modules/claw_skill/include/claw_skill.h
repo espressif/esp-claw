@@ -32,6 +32,17 @@ typedef enum {
 } claw_skill_manage_mode_t;
 
 /**
+ * @brief  Optional executable entry declared by a skill's frontmatter
+ */
+typedef struct {
+    const char *entry;      /**< Absolute path of the executable script */
+    const char *icon;       /**< Optional absolute path of the launcher icon */
+    const char *args_json;  /**< Optional compact JSON object string passed to the executable */
+    int         order;      /**< Launcher ordering hint */
+    bool        visible;    /**< False hides the entry from launcher consumers */
+} claw_skill_execution_t;
+
+/**
  * @brief  Read-only view of a single skill in the registry catalog
  */
 typedef struct {
@@ -41,7 +52,11 @@ typedef struct {
     const char *const        *cap_groups;       /**< Capability groups unlocked while the skill is active */
     size_t                    cap_group_count;  /**< Number of entries in cap_groups */
     claw_skill_manage_mode_t  manage_mode;      /**< Management mode of the skill */
+    const char               *skill_dir;        /**< Absolute directory path that owns the skill payload */
+    const claw_skill_execution_t *execution;     /**< Optional executable entry, or NULL when absent/invalid */
 } claw_skill_catalog_entry_t;
+
+typedef esp_err_t (*claw_skill_catalog_cb_t)(const claw_skill_catalog_entry_t *entry, void *user_ctx);
 
 /**
  * @brief  Initialize the skill registry
@@ -113,6 +128,24 @@ esp_err_t claw_skill_read_skills_list(char *buf, size_t size);
  *         - ESP_ERR_INVALID_SIZE if the rendered JSON does not fit in buf
  */
 esp_err_t claw_skill_render_catalog_json(char *buf, size_t size);
+
+/**
+ * @brief  Iterate over every catalog entry in registry order
+ *
+ * @param[in]  cb        Callback invoked once per skill
+ * @param[in]  user_ctx  Caller context passed to cb
+ *
+ * @return
+ *         - ESP_OK on success
+ *         - ESP_ERR_INVALID_STATE if not initialized
+ *         - ESP_ERR_INVALID_ARG if cb is NULL
+ *         - any error returned by cb
+ *
+ * @note  The callback receives a read-only view whose pointers remain valid
+ *        until the next registry reload or reset. Consumers that keep data
+ *        longer must copy it.
+ */
+esp_err_t claw_skill_foreach_catalog_entry(claw_skill_catalog_cb_t cb, void *user_ctx);
 
 /**
  * @brief  Look up a single catalog entry by skill id

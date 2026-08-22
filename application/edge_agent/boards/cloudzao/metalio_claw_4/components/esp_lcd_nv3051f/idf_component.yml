@@ -1,0 +1,7 @@
+version: "0.0.1"
+targets:
+  - esp32p4
+description: ESP LCD NV3051F MIPI-DSI panel
+dependencies:
+  idf: ">=5.3"
+  cmake_utilities: "0.*"

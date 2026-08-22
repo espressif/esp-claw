@@ -1,100 +1,199 @@
 {
-  "esp32p4|rev1": {
-    "test_brand": {
-      "test_Board_p4": {
-        "features": [],
-        "description": "",
-        "merged_binary": {
+  "edge_agent": {
+    "esp32p4|rev1": {
+      "test_brand": {
+        "test_Board_p4": {
           "Serial JTAG": {
-            "bin": "/merged_binary/test_Board_p4__rev1__serial_jtag.bin",
-            "gzip": "/merged_binary/test_Board_p4__rev1__serial_jtag.bin.gz"
+            "flash_files": {
+              "0x0": "/firmware/master/test_Board_p4/Serial JTAG/bootloader.bin",
+              "0x9000": "/firmware/master/test_Board_p4/Serial JTAG/partition-table.bin",
+              "0x10000": "/firmware/master/test_Board_p4/Serial JTAG/ota_data_initial.bin",
+              "0x20000": "/firmware/master/test_Board_p4/Serial JTAG/edge_agent.bin"
+            },
+            "flash_settings": {
+              "flash_mode": "dio",
+              "flash_freq": "80m",
+              "flash_size": "16MB"
+            },
+            "partition_table": [
+              { "name": "nvs", "type": "data", "subtype": "nvs", "offset": "0x11000", "size": "0x6000" },
+              { "name": "otadata", "type": "data", "subtype": "ota", "offset": "0x10000", "size": "0x2000" },
+              { "name": "phy_init", "type": "data", "subtype": "phy", "offset": "0x17000", "size": "0x1000" },
+              { "name": "factory", "type": "app", "subtype": "factory", "offset": "0x20000", "size": "0x7b0000" }
+            ],
+            "nvs_info": {
+              "start_addr": "0x11000",
+              "size": "0x6000"
+            },
+            "min_flash_size": 16,
+            "min_psram_size": 8
           }
-        },
-        "min_flash_size": 16,
-        "min_psram_size": 8,
-        "nvs_info": {
-          "start_addr": "0x9000",
-          "size": "0x6000"
         }
       }
-    }
-  },
-  "esp32p4|rev3": {
-    "test_brand": {
-      "test_Board_p4x": {
-        "features": [],
-        "description": "",
-        "merged_binary": {
+    },
+    "esp32p4|rev3": {
+      "test_brand": {
+        "test_Board_p4x": {
           "Serial JTAG": {
-            "bin": "/merged_binary/test_Board_p4x__rev3__serial_jtag.bin",
-            "gzip": "/merged_binary/test_Board_p4x__rev3__serial_jtag.bin.gz"
+            "flash_files": {
+              "0x0": "/firmware/master/test_Board_p4x/Serial JTAG/bootloader.bin",
+              "0x9000": "/firmware/master/test_Board_p4x/Serial JTAG/partition-table.bin",
+              "0x10000": "/firmware/master/test_Board_p4x/Serial JTAG/ota_data_initial.bin",
+              "0x20000": "/firmware/master/test_Board_p4x/Serial JTAG/edge_agent.bin"
+            },
+            "flash_settings": {
+              "flash_mode": "dio",
+              "flash_freq": "80m",
+              "flash_size": "16MB"
+            },
+            "partition_table": [
+              { "name": "nvs", "type": "data", "subtype": "nvs", "offset": "0x11000", "size": "0x6000" },
+              { "name": "otadata", "type": "data", "subtype": "ota", "offset": "0x10000", "size": "0x2000" },
+              { "name": "phy_init", "type": "data", "subtype": "phy", "offset": "0x17000", "size": "0x1000" },
+              { "name": "factory", "type": "app", "subtype": "factory", "offset": "0x20000", "size": "0x7b0000" }
+            ],
+            "nvs_info": {
+              "start_addr": "0x11000",
+              "size": "0x6000"
+            },
+            "min_flash_size": 16,
+            "min_psram_size": 8
           }
-        },
-        "min_flash_size": 16,
-        "min_psram_size": 8,
-        "nvs_info": {
-          "start_addr": "0x9000",
-          "size": "0x6000"
         }
       }
-    }
-  },
-  "esp32s3": {
-    "test_brand": {
-      "test_Board_s3": {
-        "features": [],
-        "description": "",
-        "merged_binary": {
+    },
+    "esp32s3": {
+      "test_brand": {
+        "test_Board_s3": {
           "Serial JTAG": {
-            "bin": "/merged_binary/test_Board_s3__serial_jtag.bin",
-            "gzip": "/merged_binary/test_Board_s3__serial_jtag.bin.gz"
+            "flash_files": {
+              "0x0": "/firmware/master/test_Board_s3/Serial JTAG/bootloader.bin",
+              "0x9000": "/firmware/master/test_Board_s3/Serial JTAG/partition-table.bin",
+              "0x10000": "/firmware/master/test_Board_s3/Serial JTAG/ota_data_initial.bin",
+              "0x20000": "/firmware/master/test_Board_s3/Serial JTAG/edge_agent.bin"
+            },
+            "flash_settings": {
+              "flash_mode": "dio",
+              "flash_freq": "80m",
+              "flash_size": "8MB"
+            },
+            "partition_table": [
+              { "name": "nvs", "type": "data", "subtype": "nvs", "offset": "0x11000", "size": "0x6000" },
+              { "name": "otadata", "type": "data", "subtype": "ota", "offset": "0x10000", "size": "0x2000" },
+              { "name": "phy_init", "type": "data", "subtype": "phy", "offset": "0x17000", "size": "0x1000" },
+              { "name": "factory", "type": "app", "subtype": "factory", "offset": "0x20000", "size": "0x3b0000" }
+            ],
+            "nvs_info": {
+              "start_addr": "0x11000",
+              "size": "0x6000"
+            },
+            "min_flash_size": 8,
+            "min_psram_size": 8
           }
         },
-        "min_flash_size": 8,
-        "min_psram_size": 8,
-        "nvs_info": {
-          "start_addr": "0x9000",
-          "size": "0x6000"
-        }
-      },
-      "test_Board_s3_2": {
-        "features": [],
-        "description": "",
-        "merged_binary": {
+        "test_Board_s3_2": {
           "UART": {
-            "bin": "/merged_binary/test_Board_s3_2__uart.bin",
-            "gzip": "/merged_binary/test_Board_s3_2__uart.bin.gz"
+            "flash_files": {
+              "0x0": "/firmware/master/test_Board_s3_2/UART/bootloader.bin",
+              "0x9000": "/firmware/master/test_Board_s3_2/UART/partition-table.bin",
+              "0x10000": "/firmware/master/test_Board_s3_2/UART/ota_data_initial.bin",
+              "0x20000": "/firmware/master/test_Board_s3_2/UART/edge_agent.bin"
+            },
+            "flash_settings": {
+              "flash_mode": "dio",
+              "flash_freq": "80m",
+              "flash_size": "8MB"
+            },
+            "partition_table": [
+              { "name": "nvs", "type": "data", "subtype": "nvs", "offset": "0x11000", "size": "0x6000" },
+              { "name": "otadata", "type": "data", "subtype": "ota", "offset": "0x10000", "size": "0x2000" },
+              { "name": "phy_init", "type": "data", "subtype": "phy", "offset": "0x17000", "size": "0x1000" },
+              { "name": "factory", "type": "app", "subtype": "factory", "offset": "0x20000", "size": "0x3b0000" }
+            ],
+            "nvs_info": {
+              "start_addr": "0x11000",
+              "size": "0x6000"
+            },
+            "min_flash_size": 8,
+            "min_psram_size": 8
           },
           "Serial JTAG": {
-            "bin": "/merged_binary/test_Board_s3_2__serial_jtag.bin",
-            "gzip": "/merged_binary/test_Board_s3_2__serial_jtag.bin.gz"
+            "flash_files": {
+              "0x0": "/firmware/master/test_Board_s3_2/Serial JTAG/bootloader.bin",
+              "0x9000": "/firmware/master/test_Board_s3_2/Serial JTAG/partition-table.bin",
+              "0x10000": "/firmware/master/test_Board_s3_2/Serial JTAG/ota_data_initial.bin",
+              "0x20000": "/firmware/master/test_Board_s3_2/Serial JTAG/edge_agent.bin"
+            },
+            "flash_settings": {
+              "flash_mode": "dio",
+              "flash_freq": "80m",
+              "flash_size": "8MB"
+            },
+            "partition_table": [
+              { "name": "nvs", "type": "data", "subtype": "nvs", "offset": "0x11000", "size": "0x6000" },
+              { "name": "otadata", "type": "data", "subtype": "ota", "offset": "0x10000", "size": "0x2000" },
+              { "name": "phy_init", "type": "data", "subtype": "phy", "offset": "0x17000", "size": "0x1000" },
+              { "name": "factory", "type": "app", "subtype": "factory", "offset": "0x20000", "size": "0x3b0000" }
+            ],
+            "nvs_info": {
+              "start_addr": "0x11000",
+              "size": "0x6000"
+            },
+            "min_flash_size": 8,
+            "min_psram_size": 8
           }
         },
-        "min_flash_size": 8,
-        "min_psram_size": 8,
-        "nvs_info": {
-          "start_addr": "0x9000",
-          "size": "0x6000"
-        }
-      },
-      "test_Board_s3_3": {
-        "features": [],
-        "description": "",
-        "merged_binary": {
+        "test_Board_s3_3": {
           "UART": {
-            "bin": "/merged_binary/test_Board_s3_3__uart.bin",
-            "gzip": "/merged_binary/test_Board_s3_3__uart.bin.gz"
+            "flash_files": {
+              "0x0": "/firmware/master/test_Board_s3_3/UART/bootloader.bin",
+              "0x9000": "/firmware/master/test_Board_s3_3/UART/partition-table.bin",
+              "0x10000": "/firmware/master/test_Board_s3_3/UART/ota_data_initial.bin",
+              "0x20000": "/firmware/master/test_Board_s3_3/UART/edge_agent.bin"
+            },
+            "flash_settings": {
+              "flash_mode": "dio",
+              "flash_freq": "80m",
+              "flash_size": "8MB"
+            },
+            "partition_table": [
+              { "name": "nvs", "type": "data", "subtype": "nvs", "offset": "0x11000", "size": "0x6000" },
+              { "name": "otadata", "type": "data", "subtype": "ota", "offset": "0x10000", "size": "0x2000" },
+              { "name": "phy_init", "type": "data", "subtype": "phy", "offset": "0x17000", "size": "0x1000" },
+              { "name": "factory", "type": "app", "subtype": "factory", "offset": "0x20000", "size": "0x3b0000" }
+            ],
+            "nvs_info": {
+              "start_addr": "0x11000",
+              "size": "0x6000"
+            },
+            "min_flash_size": 8,
+            "min_psram_size": 8
           },
           "Serial JTAG": {
-            "bin": "/merged_binary/test_Board_s3_3__serial_jtag.bin",
-            "gzip": "/merged_binary/test_Board_s3_3__serial_jtag.bin.gz"
+            "flash_files": {
+              "0x0": "/firmware/master/test_Board_s3_3/Serial JTAG/bootloader.bin",
+              "0x9000": "/firmware/master/test_Board_s3_3/Serial JTAG/partition-table.bin",
+              "0x10000": "/firmware/master/test_Board_s3_3/Serial JTAG/ota_data_initial.bin",
+              "0x20000": "/firmware/master/test_Board_s3_3/Serial JTAG/edge_agent.bin"
+            },
+            "flash_settings": {
+              "flash_mode": "dio",
+              "flash_freq": "80m",
+              "flash_size": "8MB"
+            },
+            "partition_table": [
+              { "name": "nvs", "type": "data", "subtype": "nvs", "offset": "0x11000", "size": "0x6000" },
+              { "name": "otadata", "type": "data", "subtype": "ota", "offset": "0x10000", "size": "0x2000" },
+              { "name": "phy_init", "type": "data", "subtype": "phy", "offset": "0x17000", "size": "0x1000" },
+              { "name": "factory", "type": "app", "subtype": "factory", "offset": "0x20000", "size": "0x3b0000" }
+            ],
+            "nvs_info": {
+              "start_addr": "0x11000",
+              "size": "0x6000"
+            },
+            "min_flash_size": 8,
+            "min_psram_size": 8
           }
-        },
-        "min_flash_size": 8,
-        "min_psram_size": 8,
-        "nvs_info": {
-          "start_addr": "0x9000",
-          "size": "0x6000"
         }
       }
     }

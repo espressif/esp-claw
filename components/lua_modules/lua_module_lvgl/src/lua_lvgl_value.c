@@ -203,7 +203,7 @@ int lua_lvgl_set_value(lua_State *L)
         break;
     case LUA_LVGL_OBJ_DROPDOWN: {
         int selected = (int)luaL_checkinteger(L, 2);
-        lv_dropdown_set_selected(obj, selected > 0 ? (uint16_t)(selected - 1) : 0);
+        lv_dropdown_set_selected(obj, selected > 0 ? (uint32_t)(selected - 1) : 0);
         break;
     }
     case LUA_LVGL_OBJ_ROLLER: {

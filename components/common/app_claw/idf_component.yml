@@ -118,11 +118,10 @@ dependencies:
   lua_module_builder:
     path: ../../common/lua_module_builder
 
-  emote:
+  system_ui:
     rules:
       - if: $CONFIG{ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT} == True
-      - if: $CONFIG{APP_CLAW_ENABLE_EMOTE} == True
-    path: ../emote
+    path: ../system_ui
 
   # --- lua_driver (hardware peripheral drivers) ---
 
@@ -306,6 +305,12 @@ dependencies:
       - if: $CONFIG{ESP_BOARD_DEV_LCD_TOUCH_SUB_I2C_SUPPORT} == True
     path: ../../lua_modules/lua_module_lcd_touch
 
+  lua_module_ledc:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
+      - if: $CONFIG{APP_CLAW_LUA_MODULE_LEDC} == True
+    path: ../../lua_modules/lua_module_ledc
+
   lua_module_led_strip:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True
@@ -346,4 +351,5 @@ dependencies:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True
       - if: $CONFIG{ESP_BOARD_DEV_CAMERA_SUPPORT} == True
+      - if: $CONFIG{APP_CLAW_LUA_MODULE_VISION} == True
     path: ../../lua_modules/lua_module_vision

@@ -16,81 +16,67 @@ extern "C" {
 #endif
 
 typedef struct {
-    const uint8_t *data; ///< Borrowed GRAY8 frame data
-    uint32_t width;     ///< Frame width in pixels
-    uint32_t height;    ///< Frame height in pixels
-    size_t bytes;       ///< Frame payload size in bytes
-} motion_detect_gray_frame_t;
-
-typedef struct {
-    int stride;                 ///< Pixel sampling interval
-    double pixel_threshold;     ///< Per-sample gray-value ratio threshold in [0, 1]
-    double moving_threshold;    ///< Moving sample ratio threshold in [0, 1]
-    bool has_moving_threshold;  ///< True when moving_threshold should set result.moved
+    int roi_x;
+    int roi_y;
+    int roi_width;
+    int roi_height;
+    int pixel_diff_threshold;
+    int active_pixel_percent;
+    int confirm_frames;
+    int hold_frames;
+    int block_size;
+    int block_hit_pixels;
+    int box_padding;
+    int box_deadband;
+    int box_snap_threshold;
 } motion_detect_config_t;
 
+typedef enum {
+    MOTION_DETECT_EVENT_NONE = 0,
+    MOTION_DETECT_EVENT_ACTIVATED,
+    MOTION_DETECT_EVENT_CLEARED,
+} motion_detect_event_t;
+
 typedef struct {
-    uint32_t moving_points; ///< Number of changed sample points
-    uint32_t sample_points; ///< Total sampled points
-    double moving_ratio;    ///< moving_points / sample_points
-    bool moved;             ///< True when moving_ratio > moving_threshold
+    bool has_previous;
+    bool detected;
+    bool alert_active;
+    motion_detect_event_t event;
+    uint32_t active_pixels;
+    uint32_t threshold_pixels;
+    uint32_t positive_frames;
+    uint32_t hold_frames;
+    int roi_x;
+    int roi_y;
+    int roi_width;
+    int roi_height;
+    bool has_raw_box;
+    int raw_x1;
+    int raw_y1;
+    int raw_x2;
+    int raw_y2;
+    bool has_display_box;
+    int display_x1;
+    int display_y1;
+    int display_x2;
+    int display_y2;
 } motion_detect_result_t;
 
-typedef struct {
-    uint8_t *prev_data;                      ///< Owned previous GRAY8 frame copy
-    size_t prev_capacity;                    ///< Allocated previous-frame byte capacity
-    motion_detect_gray_frame_t prev_frame;   ///< Metadata for prev_data
-} motion_detect_context_t;
+typedef struct motion_detect_t *motion_detect_handle_t;
 
-void motion_detect_context_reset(motion_detect_context_t *ctx);
-bool motion_detect_context_has_previous(const motion_detect_context_t *ctx, const motion_detect_gray_frame_t *frame);
-esp_err_t motion_detect_context_update(motion_detect_context_t *ctx, const motion_detect_gray_frame_t *frame);
-esp_err_t motion_detect_compare_gray(const motion_detect_gray_frame_t *previous,
-                                     const motion_detect_gray_frame_t *current,
-                                     const motion_detect_config_t *config,
-                                     motion_detect_result_t *out);
+void motion_detect_config_set_defaults(motion_detect_config_t *config);
+esp_err_t motion_detect_create(motion_detect_handle_t *ret_handle);
+void motion_detect_delete(motion_detect_handle_t handle);
+void motion_detect_reset(motion_detect_handle_t handle);
+void motion_detect_close(motion_detect_handle_t handle);
+esp_err_t motion_detect_process_rgb565(motion_detect_handle_t handle,
+                                       const uint8_t *data,
+                                       size_t bytes,
+                                       int width,
+                                       int height,
+                                       const motion_detect_config_t *config,
+                                       motion_detect_result_t *out_result);
 
 #ifdef __cplusplus
 }
-
-namespace dl {
-namespace image {
-
-typedef enum {
-    DL_IMAGE_PIX_TYPE_GRAY = 0, ///< 8-bit gray pixel
-} pix_type_t;
-
-/**
- * @brief Lightweight image view used by the motion detector.
- *
- * The detector never owns the image data. Callers must keep data valid for the duration of get_moving_point_number().
- */
-struct img_t {
-    void *data;          ///< Image data pointer
-    uint16_t width;      ///< Image width in pixels
-    uint16_t height;     ///< Image height in pixels
-    pix_type_t pix_type; ///< Image pixel format
-
-    /**
-     * @brief Get bytes per pixel column step for the current pixel format.
-     *
-     * @return Bytes per pixel, or 0 if the pixel format is unsupported
-     */
-    int col_step() const;
-};
-
-/**
- * @brief Detect motion by counting sample points whose gray value changes above threshold.
- *
- * @param img1       Previous image view
- * @param img2       Current image view
- * @param stride     Pixel sampling stride
- * @param threshold  Per-sample gray-value activation threshold
- *
- * @return Activated sample point count, or UINT32_MAX on invalid input
- */
-uint32_t get_moving_point_number(const img_t &img1, const img_t &img2, const int stride, const uint8_t threshold = 5);
-
-} // namespace image
-} // namespace dl
 #endif

@@ -26,18 +26,33 @@ Before flashing, prepare a computer with Chrome or Edge installed. Web flashing 
 
 1. **Connect the board with a data cable**
 
-   Connect the board to your PC with a USB data cable. If you are using the breadboard form ESP-Claw, use the USB port labeled UART.
+   Connect the board to your PC with a USB data cable. If you are using the breadboard form ESP-Claw, it is recommended to use the USB port labeled UART.
 
 2. **Open the web flasher and connect serial**
 
    <LinkCard title="Web flash" href="@lang/flash" description="Open the web flasher to program ESP-Claw on ESP32" />
 
-   Open the web flasher, click Connect, and select your board.
+   Open the web flasher, click Connect, and connect to your board.
 
-3. **Configure options**
+   The web flasher will detect the chip model on the board. Select the matching board (vendor/brand and board model), then click Flash to start programming.
 
-   - Pick the firmware image for your board.
-   - Configure Wi-Fi SSID and password (required).
+   <Aside type="tip" title="Advanced options">
+      By default, the web flasher programs all partitions but does not erase the entire Flash. As a result, NVS configuration is usually preserved when updating firmware.
+      If you have special requirements, such as erasing the entire Flash, you can adjust this in Advanced options.
+   </Aside>
+
+3. **Configure Wi-Fi**
+
+   After flashing completes, the web flasher will try to connect to ESP-Claw and open the Wi-Fi configuration page.
+   Configure the Wi-Fi SSID and password to continue.
+
+   <Aside type="note" title="Can't enter the Wi-Fi configuration step?">
+      If you can't enter the Wi-Fi configuration step, try connecting to the SoftAP provided by ESP-Claw and update the config there.
+      [➡️Web config](@lang/tutorial/web-config)
+   </Aside>
+
+4. **Configure other options**
+
    - Configure LLM: Supports GPT (OpenAI), Qwen (Alibaba Bailian), Claude (Anthropic), and DeepSeek (DeepSeek API). Generate an API Key as prompted and enter it.
       <Aside type="note" title="Please select a model with strong reasoning ability">
          ESP-Claw's self-programming, complex tool combination, and other advanced features rely on the ability of strong reasoning models.
@@ -59,17 +74,13 @@ Before flashing, prepare a computer with Chrome or Edge installed. Web flashing 
       Open [Tavily Dashboard](https://app.tavily.com/), sign up and sign in, copy an API Key, then paste it into the Tavily field in the web flasher.
    - Configure advanced settings (optional). See [Configuration](@lang/reference-project/configuration).
 
-4. **Flash**
+5. **Flash**
 
-   Click Flash and wait for programming to finish.
+   Click the Flash button to start flashing.
 
-5. **Start using it**
+6. **Start using it**
 
-   After flashing, the device restarts automatically and is ready to use.
-
-   <Aside type="note">
-      If the Wi-Fi SSID or password is incorrect, ESP-Claw may fail to connect. In this case, connect to the SoftAP provided by ESP-Claw and update the config there. [➡️Web config](@lang/tutorial/web-config)
-   </Aside>
+   After flashing completes, the device restarts automatically and is ready to use.
 
 </Steps>
 

@@ -40,28 +40,20 @@ function(skill_builder_configure_skill_sync)
     skill_builder_require_args(skill_builder_configure_skill_sync arg TARGET SKILL_OUTPUT_DIR)
 
     idf_build_get_property(python PYTHON)
-    set(sync_stamp "${CMAKE_BINARY_DIR}/skill_builder_sync.stamp")
-    set(sync_depfile "${CMAKE_BINARY_DIR}/skill_builder_sync.d")
     set(script_args
         --build-dir "${CMAKE_BINARY_DIR}"
         --skill-output-dir "${arg_SKILL_OUTPUT_DIR}"
-        --stamp-path "${sync_stamp}"
-        --depfile "${sync_depfile}"
     )
 
-    add_custom_command(
-        OUTPUT "${sync_stamp}"
+    add_custom_target(skill_builder_sync_skills ALL
         COMMAND ${python} "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../tools/sync_component_skills.py" ${script_args}
         DEPENDS
                 "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../tools/sync_component_skills.py"
                 "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../tools/skill_sync_common.py"
                 "${CMAKE_BINARY_DIR}/project_description.json"
-        DEPFILE "${sync_depfile}"
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         VERBATIM
     )
-
-    add_custom_target(skill_builder_sync_skills ALL DEPENDS "${sync_stamp}")
 
     skill_builder_get_dependency_targets(dependency_targets)
     if(dependency_targets)

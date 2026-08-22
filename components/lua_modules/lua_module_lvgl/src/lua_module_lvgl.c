@@ -31,6 +31,7 @@ int luaopen_lvgl(lua_State *L)
     lua_lvgl_register_funcs(L, lua_lvgl_core_widget_funcs);
     lua_lvgl_register_funcs(L, lua_lvgl_extra_widget_funcs);
     lua_lvgl_register_funcs(L, lua_lvgl_complex_widget_funcs);
+    lua_lvgl_register_funcs(L, lua_lvgl_eaf_module_funcs);
     lua_lvgl_register_funcs(L, lua_lvgl_event_module_funcs);
     lua_lvgl_register_funcs(L, lua_lvgl_indev_module_funcs);
     lua_lvgl_register_funcs(L, lua_lvgl_demo_module_funcs);

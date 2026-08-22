@@ -56,8 +56,10 @@ provided in the first version.
 
 ```lua
 local thread = require("thread")
+local storage = require("storage")
 
-local ok, output = thread.run("/system/skills/builtin_lua_modules/scripts/builtin/test/thread_child_a.lua", {
+local script_path = storage.join_path(storage.get_root_dir(), "scripts", "worker.lua")
+local ok, output = thread.run(script_path, {
     mode = "sync",
 }, {
     timeout_ms = 5000,

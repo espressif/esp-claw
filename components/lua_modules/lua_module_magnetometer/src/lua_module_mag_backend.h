@@ -79,10 +79,6 @@ typedef struct {
  */
 extern const lua_mag_backend_t lua_mag_backend;
 
-/* ---------------------------------------------------------------------------
- * Helpers exposed by the main module to backends.
- * ------------------------------------------------------------------------- */
-
 /**
  * @brief Recreate the I2C device handle inside `ctx` for a new address.
  *

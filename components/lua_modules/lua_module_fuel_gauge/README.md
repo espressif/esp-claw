@@ -1,9 +1,8 @@
 # Lua Fuel Gauge
 
-This skill describes how to read battery fuel-gauge data from Lua using the existing `i2c` module.
+This module describes how to read battery fuel-gauge data from Lua using the existing `i2c` module.
 When a request mentions `fuel gauge`, `battery voltage`, `battery current`, or `battery percentage`, use this module by default.
 
-The module supports multiple fuel-gauge ICs through a chip profile architecture.
 Currently supported chips: **BQ27220**, **MAX17048** (voltage + SOC only, no current).
 
 ## How to call
@@ -16,6 +15,7 @@ Currently supported chips: **BQ27220**, **MAX17048** (voltage + SOC only, no cur
   - `gauge:read_current_ma()` (not available on all chips)
   - `gauge:read_soc()`
 - Query the active chip with `gauge:chip()`
+- Query the active I2C address with `gauge:address()`
 - List supported chips with `fuel_gauge.supported_chips()`
 - Call `gauge:close()` when needed
 
@@ -30,12 +30,15 @@ Currently supported chips: **BQ27220**, **MAX17048** (voltage + SOC only, no cur
 | `frequency`| integer | Alias of `freq_hz`                                   |
 | `addr`     | integer | 7-bit I2C address (default depends on chip)          |
 | `bus`      | userdata| Existing `i2c` bus handle, recommended               |
+| `close_bus`| boolean | Close a bus created from `port`/`sda`/`scl` when `gauge:close()` runs |
 
 ## Data format
 - `sample.chip` — chip name string
 - `sample.voltage_mv`
 - `sample.current_ma` (nil when the chip has no current register)
 - `sample.soc`
+
+`gauge:read_current_ma()` raises an error when the selected chip has no current register.
 
 ## Example
 ```lua

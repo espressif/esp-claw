@@ -18,16 +18,10 @@
 
 static const char *TAG = "lua_button";
 
-/* --------------------------------------------------------------------------
- * Constants
- * -------------------------------------------------------------------------- */
 #define BTN_MAX_HANDLES      8
 #define BTN_EVENT_QUEUE_SIZE 16
 #define BTN_HANDLE_METATABLE "lua_button_handle"
 
-/* --------------------------------------------------------------------------
- * Internal types
- * -------------------------------------------------------------------------- */
 typedef struct {
     button_handle_t handle;
     button_event_t  event;
@@ -45,16 +39,10 @@ typedef struct {
     button_handle_t handle;
 } btn_lua_handle_ud_t;
 
-/* --------------------------------------------------------------------------
- * Module-level state
- * -------------------------------------------------------------------------- */
 static btn_lua_reg_t s_regs[BTN_MAX_HANDLES];
 static int           s_num_regs = 0;
 static QueueHandle_t s_queue    = NULL;
 
-/* --------------------------------------------------------------------------
- * Event name tables
- * -------------------------------------------------------------------------- */
 static const char *const s_event_names[BUTTON_EVENT_MAX] = {
     "press_down",
     "press_up",
@@ -87,9 +75,6 @@ static button_event_t btn_event_from_str(const char *s)
     return BUTTON_EVENT_MAX;
 }
 
-/* --------------------------------------------------------------------------
- * Registry helpers
- * -------------------------------------------------------------------------- */
 static btn_lua_reg_t *btn_find_reg(button_handle_t handle)
 {
     for (int i = 0; i < s_num_regs; i++) {
@@ -203,10 +188,6 @@ static void btn_c_event_cb(void *btn_handle, void *user_data)
     }
 }
 
-/* --------------------------------------------------------------------------
- * button.new(gpio_num [, active_level [, long_press_ms [, short_press_ms]]])
- *   -> handle | nil, errmsg
- * -------------------------------------------------------------------------- */
 static int lua_btn_new(lua_State *L)
 {
     int gpio_num        = (int)luaL_checkinteger(L, 1);
@@ -255,9 +236,6 @@ static int lua_btn_new(lua_State *L)
     return 1;
 }
 
-/* --------------------------------------------------------------------------
- * button.close(handle) -> true | nil, errmsg
- * -------------------------------------------------------------------------- */
 static int lua_btn_close(lua_State *L)
 {
     btn_lua_handle_ud_t *ud = lua_btn_check_ud(L, 1);
@@ -285,9 +263,6 @@ static int lua_btn_close(lua_State *L)
     return 1;
 }
 
-/* --------------------------------------------------------------------------
- * button.get_key_level(handle) -> level
- * -------------------------------------------------------------------------- */
 static int lua_btn_get_key_level(lua_State *L)
 {
     button_handle_t handle = lua_btn_check_handle(L, 1);
@@ -303,9 +278,6 @@ static int lua_btn_get_key_level(lua_State *L)
     return 1;
 }
 
-/* --------------------------------------------------------------------------
- * button.on(handle, event_str, fn) -> true | nil, errmsg
- * -------------------------------------------------------------------------- */
 static int lua_btn_on(lua_State *L)
 {
     button_handle_t handle    = lua_btn_check_handle(L, 1);
@@ -359,9 +331,6 @@ static int lua_btn_on(lua_State *L)
     return 1;
 }
 
-/* --------------------------------------------------------------------------
- * button.off(handle [, event_str]) -> true | nil, errmsg
- * -------------------------------------------------------------------------- */
 static int lua_btn_off(lua_State *L)
 {
     button_handle_t handle    = lua_btn_check_handle(L, 1);
@@ -418,9 +387,6 @@ static int lua_btn_off(lua_State *L)
     return 1;
 }
 
-/* --------------------------------------------------------------------------
- * button.dispatch() -> count
- * -------------------------------------------------------------------------- */
 static int lua_btn_dispatch(lua_State *L)
 {
     int count = 0;
@@ -468,9 +434,6 @@ static int lua_btn_dispatch(lua_State *L)
     return 1;
 }
 
-/* --------------------------------------------------------------------------
- * Module registration
- * -------------------------------------------------------------------------- */
 int luaopen_button(lua_State *L)
 {
     static const luaL_Reg funcs[] = {

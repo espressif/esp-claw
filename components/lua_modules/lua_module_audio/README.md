@@ -1,8 +1,7 @@
 # Lua Audio
 
 Object-oriented Lua bindings for audio input, output, playback, recording, and
-simple analysis. Board discovery stays in `board_manager`; this module only
-wraps codec devices and audio processing helpers.
+simple analysis. Board discovery stays in `board_manager`; this module opens codec devices and exposes Lua objects for common audio tasks.
 
 ## How to call
 - `local audio = require("audio")`
@@ -47,7 +46,7 @@ actual device format after open, which may differ from the requested format on
 devices such as UAC.
 
 ## Output objects
-- `output:info()` returns `{ role, sample_rate, channels, bits, bytes_per_frame }`
+- `output:info()` returns `{ role, opened, sample_rate, channels, bits, bytes_per_frame }`
 - `output:set_volume(percent)` sets output volume from 0 to 100
 - `output:get_volume()` returns the current output volume
 - `output:set_mute(mute)` mutes or unmutes the output
@@ -56,10 +55,10 @@ devices such as UAC.
 - `output:close()` closes the codec device
 
 ## Input objects
-- `input:info()` returns `{ role, sample_rate, channels, bits, bytes_per_frame }`
+- `input:info()` returns `{ role, opened, sample_rate, channels, bits, bytes_per_frame }`
 - `input:set_volume(percent)` sets input capture volume from 0 to 100
 - `input:get_volume()` returns the current input capture volume
-- `input:read(bytes)` returns raw PCM from the input device
+- `input:read(bytes)` or `input:read({ bytes = n })` returns raw PCM from the input device
 - `input:close()` closes the codec device
 
 ## Player
@@ -74,6 +73,7 @@ Supported calls:
 
 - `player:play(path_or_uri [, opts])` starts playback
 - `player:play(path_or_uri, { wait = true })` blocks until playback finishes
+- `player:play(path_or_uri, { music_info = { sample_rate = n, channels = n, bits = n, bitrate = n } })` supplies stream format hints
 - `player:stop()` stops playback
 - `player:pause()` pauses playback
 - `player:resume()` resumes playback
@@ -91,8 +91,7 @@ Create a recorder from an input object:
 local recorder = audio.recorder({ input = input })
 ```
 
-`recorder:record(path, opts)` requires `opts.duration_ms` and returns
-`{ path, duration_ms, bytes, encoding, format }`.
+`recorder:record(path, opts)` requires `opts.duration_ms` and returns `{ path, duration_ms, bytes, format }`. AAC recordings also include `encoding = "aac"`.
 
 ```lua
 local storage = require("storage")
@@ -126,8 +125,13 @@ local analyzer = audio.analyzer({ input = input })
 Supported calls:
 
 - `analyzer:read_level(duration_ms)` returns RMS and peak level data
-- `analyzer:read_spectrum(fft_size, bands)` returns spectrum bands and peak frequency data
+- `analyzer:read_level({ duration_ms = n })` is also accepted
+- `analyzer:read_spectrum(fft_size, bands)` or `analyzer:read_spectrum({ fft_size = n, bands = n })` returns spectrum bands and peak frequency data
 - `analyzer:close()` closes the analyzer
+
+`read_level` returns `{ rms, peak, duration_ms }`.
+
+`read_spectrum` returns `{ bands, peak_freq_hz, peak_db, rms, fft_size, band_count, sample_rate }`.
 
 ## Example
 ```lua

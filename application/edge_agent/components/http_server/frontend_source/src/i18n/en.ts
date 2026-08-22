@@ -106,6 +106,10 @@ export const en = {
   llmProviderQwen: 'Qwen Compatible',
   llmProviderDeepSeek: 'DeepSeek',
   llmProviderAnthropic: 'Anthropic',
+  llmProviderKimiGlobal: 'Kimi (Global)',
+  llmProviderKimiCn: 'Kimi (CN)',
+  llmProviderMinimaxGlobal: 'MiniMax (Global)',
+  llmProviderMinimaxCn: 'MiniMax (CN)',
   llmProviderOpenaiCompatible: 'OpenAI Compatible API',
   llmProviderAnthropicCompatible: 'Anthropic Compatible API',
   llmProviderCustom: 'Custom',
@@ -176,8 +180,7 @@ export const en = {
   wechatLoginOpenLink: 'Open login link',
 
   sectionWebReqSearch: 'Search',
-  webreqSearchNote:
-    'Optional. If set, ESP-Claw can search online.',
+  webreqSearchNote: 'Optional. If set, ESP-Claw can search online.',
   sectionWebReqNetwork: 'Network Requests',
   webreqBraveKey: 'Brave Search API Key',
   webreqTavilyKey: 'Tavily API Key',

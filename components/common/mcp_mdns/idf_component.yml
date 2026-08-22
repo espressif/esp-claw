@@ -1,2 +1,5 @@
 dependencies:
   espressif/mdns: "^1.10.1"
+  espressif/cjson:
+    version: "*"
+    public: true

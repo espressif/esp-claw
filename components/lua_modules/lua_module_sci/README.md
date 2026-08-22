@@ -18,9 +18,11 @@ in the DFRobot SCI string format.
 - Open the module with
   `local dev = sci.new(port, sda_gpio, scl_gpio [, addr [, freq_hz]])`.
 - Close the handle with `dev:close()` when done.
+  `dev:close()`, `dev:set_timeout(timeout_ms)`, and `dev:reset([cmd])` return no values on success.
 
 ## Common reads
 - `dev:get_version()` returns `{ raw = 0x0105, text = "V1.0.5" }`.
+- `dev:get_address()` returns the current 7-bit I2C address.
 - `dev:get_information([port_mask [, timestamp]])` returns readings such as
   `"SEN0334: Temp_Air:28.65 C,Humi_Air:30.12 %RH"`.
 - `dev:get_sku([port_mask])` returns connected sensor SKUs.
@@ -29,6 +31,7 @@ in the DFRobot SCI string format.
 - `dev:get_value(key [, port_mask [, sku]])` reads values for one data name.
 - `dev:get_unit(key [, port_mask [, sku]])` reads units for one data name.
 - `dev:get_timestamp()` returns the SCI data refresh timestamp string.
+- `dev:get_rtc()` returns `{ second, minute, hour, day, week, month, year }`.
 
 Port masks:
 - `sci.PORT1` for the A/D port
@@ -40,6 +43,7 @@ Port masks:
 - `dev:set_port(1, sku)`, `dev:set_port(2, sku)`, and `dev:set_port(3, sku)`
   configure ports. Use `"NULL"` to clear a port. Use `"Analog"` for raw analog
   voltage on port 1.
+- `dev:set_address(addr)` changes the SCI I2C address and returns the SCI error code.
 - `dev:get_port(1)`, `dev:get_port(2)`, and `dev:get_port(3)` return
   `{ mode = 0|1, mode_text = "...", sku = "..." }`.
 - `dev:set_refresh_rate(rate)` accepts `sci.REFRESH_MS`, `sci.REFRESH_1S`,
@@ -49,6 +53,7 @@ Port masks:
 - `dev:get_refresh_rate()` returns `{ rate = enum_value, ms = milliseconds }`.
 - `dev:enable_record()` / `dev:disable_record()` control SCI CSV recording.
 - `dev:oled_on()` / `dev:oled_off()` control the SCI onboard display.
+- `dev:set_rtc({ second, minute, hour, day, week, month, year })` sets the SCI RTC and returns the SCI error code.
 - `dev:get_supported_skus(kind)` where `kind` is `"analog"`, `"digital"`,
   `"i2c"`, or `"uart"` returns the supported SKU list.
 
@@ -70,6 +75,4 @@ print("Readings: " .. dev:get_information(sci.ALL, true))
 dev:close()
 ```
 
-If the SCI board is not found, run `builtin/sci_probe.lua`. It tries the K10
-I2C bus plus common external I2C pin pairs and SCI addresses `0x21`, `0x22`,
-and `0x23`, then prints the first working version/SKU/information response.
+If the SCI board is not found, try the common addresses `0x21`, `0x22`, and `0x23` on the board's configured I2C pins.

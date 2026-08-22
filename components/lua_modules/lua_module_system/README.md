@@ -12,7 +12,7 @@ This module describes how to correctly use system when writing Lua scripts.
 - Inputs: none
 - Output: `number`
 - Returns the current Unix timestamp in seconds
-- Raises an error if the system clock is not set
+- Raises an error only if the platform time call fails
 
 ### `system.date(format)`
 - Inputs:
@@ -55,7 +55,7 @@ This module describes how to correctly use system when writing Lua scripts.
 ### `system.heap`
 - Type: `table`
 - Provides heap and task stack introspection helpers
-- `system.heap.caps`: heap capability flags such as `DEFAULT`, `INTERNAL`, `SPIRAM`, `DMA`, `BIT8`, and `BIT32`
+- `system.heap.caps`: heap capability flags such as `DEFAULT`, `INTERNAL`, `SPIRAM`, `DMA`, `BIT8`, `BIT32`, `EXEC`, `IRAM_8BIT`, `RTCRAM`, and `RETENTION` when available
 - `system.heap.get_info(caps)`: returns heap statistics for the selected capability flags
 - `system.heap.get_task_watermarks()`: returns stack high-water marks for tasks
 - `system.heap.get_current_task()`: returns stack high-water mark information for the current task
@@ -70,6 +70,10 @@ This module describes how to correctly use system when writing Lua scripts.
 - `allocated_blocks`: `integer`, allocated block count
 - `free_blocks`: `integer`, free block count
 - `total_blocks`: `integer`, total block count
+
+`system.heap.get_task_watermarks()` returns an array of task tables with `name`, `task_number`, `state`, `current_priority`, `base_priority`, `stack_high_water_mark_words`, and `stack_high_water_mark_bytes`.
+
+`system.heap.get_current_task()` returns `name`, `stack_high_water_mark_words`, and `stack_high_water_mark_bytes` for the current task.
 
 ## Example
 ```lua

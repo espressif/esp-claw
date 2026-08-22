@@ -9,6 +9,11 @@ This module describes how to correctly use lcd_touch when writing Lua scripts.
 - Call `lcd_touch.read(touch_handle)` to read the current touch state
 - Call `lcd_touch.poll(touch_handle)` to get edge-aware touch information such as `just_pressed`, `just_released`, `x`, `y`, `dx`, `dy`, and `held_ms`
 
+## Return values
+- `lcd_touch.read(touch_handle)` returns `{ pressed = boolean, x = integer, y = integer }`. `x` and `y` are present only when pressed.
+- `lcd_touch.sync(touch_handle)` returns the cached-state table with `pressed`, `just_pressed = false`, `just_released = false`, `x`, `y`, `dx = 0`, `dy = 0`, `moved = false`, and `held_ms = 0`.
+- `lcd_touch.poll(touch_handle)` returns `pressed`, edge flags, coordinates, delta fields, `moved`, and `held_ms`.
+
 ## Example
 ```lua
 local board_manager = require("board_manager")

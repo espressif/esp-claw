@@ -1,0 +1,12 @@
+## IDF Component Manager Manifest File
+dependencies:
+  claw_cap:
+    path: ../../claw_modules/claw_cap
+  claw_core:
+    path: ../../claw_modules/claw_core
+  claw_skill:
+    path: ../../claw_modules/claw_skill
+  display_service:
+    path: ../display_service
+  espressif/esp_new_jpeg: "*"
+  lvgl/lvgl: ^9.5.0

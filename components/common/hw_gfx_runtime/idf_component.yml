@@ -1,7 +1,0 @@
-dependencies:
-  espressif/esp_board_manager: "^0.5.12"
-  espressif2022/esp_emote_gfx:
-    git: https://github.com/espressif2022/esp_emote_gfx.git
-    version: feat/new_struct
-  display_arbiter:
-    path: ../display_arbiter

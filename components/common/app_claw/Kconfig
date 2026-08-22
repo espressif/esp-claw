@@ -7,12 +7,14 @@ menu "App Claw Config"
             Enable the console REPL managed by app_claw. When disabled, app_claw
             does not build or start the serial CLI.
 
-    config APP_CLAW_ENABLE_EMOTE
-        bool "Enable App Claw emote"
+    config APP_CLAW_SYSTEM_UI_ENABLE
+        bool "LVGL system UI runtime"
         depends on ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT
         default y
         help
-            Enable the ESP-Claw lobster display UI and animation assets.
+            Enable the system-level LVGL UI runtime. When the Lua LVGL module
+            is enabled, Lua LVGL scripts switch screens inside this runtime
+            instead of initializing LVGL directly.
 
     choice APP_CLAW_MEMORY_MODE
         prompt "App Claw memory management mode"
@@ -414,6 +416,13 @@ menu "App Claw Config"
             help
                 Enable the LCD touch Lua module and keep app_claw's direct dependency
                 on lua_module_lcd_touch when Lua capability is enabled.
+
+        config APP_CLAW_LUA_MODULE_LEDC
+            bool "Enable LEDC Lua module"
+            default y
+            help
+                Enable the LEDC Lua module and keep app_claw's direct dependency
+                on lua_module_ledc when Lua capability is enabled.
 
         config APP_CLAW_LUA_MODULE_LED_STRIP
             bool "Enable LED strip Lua module"

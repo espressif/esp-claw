@@ -83,7 +83,7 @@ devices:
       reset_gpio_num: 27
       rgb_ele_order: LCD_RGB_ELEMENT_ORDER_RGB
       data_endian: LCD_RGB_DATA_ENDIAN_LITTLE
-      bits_per_pixel: 24
+      bits_per_pixel: 16
       reset_active_high: 0
       dbi_config:
         virtual_channel: 0
@@ -95,7 +95,7 @@ devices:
         dpi_clock_freq_mhz: 48
         pixel_format: LCD_COLOR_PIXEL_FORMAT_RGB565
         in_color_format: LCD_COLOR_FMT_RGB565
-        out_color_format: LCD_COLOR_FMT_RGB565
+        out_color_format: 0
         num_fbs: 1
         flags:
           use_dma2d: false

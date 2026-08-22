@@ -1,8 +1,7 @@
 # Lua BLE
 
-This document is written for LLMs and Lua script generation. It explains how
-to use the `ble` module exposed by `components/lua_modules/lua_module_ble` for
-ordinary BLE Peripheral advertising and GATT Server tasks.
+This document is an API guide for using the `ble` module from Lua for ordinary
+BLE Peripheral advertising and GATT Server tasks.
 
 ## When To Use
 
@@ -37,7 +36,7 @@ ordinary BLE Peripheral advertising and GATT Server tasks.
 ## How To Call
 
 - `ble.smp_config(opts)`: configure security before `ble.init()`.
-- `ble.init()`: start the BLE controller and NimBLE host. Idempotent.
+- `ble.init()`: initialize BLE runtime state. Idempotent.
 - `ble.deinit()`: stop advertising, disconnect peers, drain events, and release
   this module's BLE state. Idempotent.
 - `ble.set_name(name)`: set the GAP device name. `name` must be 28 bytes or less.
@@ -60,20 +59,6 @@ Most operations return `true` on success or `nil, err` on recoverable runtime
 failure. Parameter type and shape errors raise Lua errors.
 
 ## Minimal Advertising Example
-
-Prefer the runtime script when the agent only needs to start ordinary BLE
-advertising. It initializes BLE, defines a simple `fff0/fff1` GATT service,
-starts advertising, and runs an event loop:
-
-```json
-{"path":"/fatfs/skills/ble/scripts/start_ble.lua","args":{},"timeout_ms":0}
-```
-
-Stop ordinary BLE advertising with:
-
-```json
-{"path":"/fatfs/skills/ble/scripts/stop_ble.lua","args":{},"timeout_ms":5000}
-```
 
 Use direct Lua when generating a custom advertising script:
 

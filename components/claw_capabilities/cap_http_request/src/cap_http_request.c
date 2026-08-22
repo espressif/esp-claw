@@ -48,6 +48,9 @@ typedef struct {
 static EXT_RAM_BSS_ATTR cap_http_request_state_t s_http_request = {0};
 
 static bool cap_http_request_extract_url_host(const char *url, char *host, size_t host_size);
+static bool cap_http_request_extract_redirect_host(const char *location,
+                                                   esp_http_client_handle_t client,
+                                                   char *host, size_t host_size);
 static bool cap_http_request_host_allowed(const char *host);
 
 static esp_err_t cap_http_request_event_handler(esp_http_client_event_t *event)
@@ -75,7 +78,8 @@ static esp_err_t cap_http_request_event_handler(esp_http_client_event_t *event)
             char host[128] = {0};
 
             if (!buf->redirect_location[0] ||
-                    !cap_http_request_extract_url_host(buf->redirect_location, host, sizeof(host)) ||
+                    !cap_http_request_extract_redirect_host(buf->redirect_location, event->client,
+                            host, sizeof(host)) ||
                     !cap_http_request_host_allowed(host)) {
                 ESP_LOGW(TAG, "Redirect to '%s' blocked by allowlist", buf->redirect_location);
                 return ESP_FAIL;
@@ -258,6 +262,40 @@ static bool cap_http_request_extract_url_host(const char *url, char *host, size_
     memcpy(host, start, host_len);
     host[host_len] = '\0';
     return true;
+}
+
+static bool cap_http_request_extract_redirect_host(const char *location,
+                                                   esp_http_client_handle_t client,
+                                                   char *host, size_t host_size)
+{
+    char current_url[CAP_HTTP_REQUEST_REDIRECT_URL_MAX];
+    char protocol_relative_url[CAP_HTTP_REQUEST_REDIRECT_URL_MAX + 8];
+
+    if (!location || !location[0] || !host || host_size == 0) {
+        return false;
+    }
+
+    if (cap_http_request_extract_url_host(location, host, host_size)) {
+        return true;
+    }
+
+    if (location[0] == '/' && location[1] == '/') {
+        if (snprintf(protocol_relative_url, sizeof(protocol_relative_url), "https:%s", location) >=
+                (int)sizeof(protocol_relative_url)) {
+            return false;
+        }
+        return cap_http_request_extract_url_host(protocol_relative_url, host, host_size);
+    }
+
+    if (!client) {
+        return false;
+    }
+
+    if (esp_http_client_get_url(client, current_url, sizeof(current_url)) != ESP_OK) {
+        return false;
+    }
+
+    return cap_http_request_extract_url_host(current_url, host, host_size);
 }
 
 static bool cap_http_request_host_matches_allowlist_token(const char *host, const char *token)

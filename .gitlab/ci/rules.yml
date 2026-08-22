@@ -32,6 +32,12 @@
 .patterns-docs: &patterns-docs
   - "docs/**/*"
 
+.patterns-simulator: &patterns-simulator
+  - "components/claw_capabilities/cap_lua/**/*"
+  - "components/lua_modules/**/*"
+  - "pages/simulator/**/*"
+  - "tools/lua_lvgl_web_sim/**/*"
+
 ##############
 # if anchors #
 ##############
@@ -123,4 +129,13 @@
     - <<: *if-trigger-job
     - <<: *if-mr
       changes: *patterns-docs
+    - when: never
+
+.rules:build:simulator:
+  rules:
+    - <<: *if-protected-push
+    - <<: *if-label-build
+    - <<: *if-trigger-job
+    - <<: *if-mr
+      changes: *patterns-simulator
     - when: never

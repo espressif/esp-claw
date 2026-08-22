@@ -485,8 +485,6 @@ static int lua_module_camera_list_formats(lua_State *L)
     return 1;
 }
 
-/* camera.info()
- * Returns a table with stream info: width, height, pixel_format. */
 static int lua_module_camera_info(lua_State *L)
 {
     camera_stream_info_t info = {0};

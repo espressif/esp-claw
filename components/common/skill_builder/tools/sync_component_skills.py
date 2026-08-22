@@ -29,8 +29,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Sync component skill markdown files into the application FATFS image.')
     parser.add_argument('--build-dir', required=True)
     parser.add_argument('--skill-output-dir', required=True)
-    parser.add_argument('--stamp-path', required=True)
-    parser.add_argument('--depfile', required=True)
     return parser.parse_args()
 
 
@@ -55,23 +53,6 @@ def load_manifest(path: Path) -> dict:
     if not isinstance(data, dict):
         fail(f'Manifest must be a JSON object: {path}')
     return {'component_files': [str(item) for item in data.get('component_files', [])]}
-
-
-def write_stamp(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text('ok\n', encoding='utf-8')
-
-
-def escape_depfile_path(path: Path) -> str:
-    return str(path).replace('\\', '\\\\').replace(' ', '\\ ')
-
-
-def write_depfile(depfile_path: Path, stamp_path: Path, input_paths: list[Path]) -> None:
-    unique_inputs = sorted({path.resolve() for path in input_paths}, key=lambda item: str(item))
-    dependencies = ' '.join(escape_depfile_path(path) for path in unique_inputs)
-    target = escape_depfile_path(stamp_path.name)
-    depfile_path.parent.mkdir(parents=True, exist_ok=True)
-    depfile_path.write_text(f'{target}: {dependencies}\n', encoding='utf-8')
 
 
 def parse_skill_meta(skill_path: Path) -> dict:
@@ -196,8 +177,6 @@ def main() -> int:
     args = parse_args()
     build_dir = Path(args.build_dir).resolve()
     skill_output_dir = Path(args.skill_output_dir).resolve()
-    stamp_path = Path(args.stamp_path).resolve()
-    depfile_path = Path(args.depfile).resolve()
     manifest_path = build_dir / 'skill_builder_manifest.json'
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest = load_manifest(manifest_path)
@@ -205,8 +184,6 @@ def main() -> int:
     sources = collect_skill_sources(build_dir)
     copy_map = collect_component_skills(sources)
     sync_markdown_files(skill_output_dir, manifest_path, manifest, copy_map)
-    write_depfile(depfile_path, stamp_path, list(copy_map.values()))
-    write_stamp(stamp_path)
     console.success(f'CLAW skill sync updated {count_synced_skills(copy_map)} skills into {skill_output_dir}')
     return 0
 

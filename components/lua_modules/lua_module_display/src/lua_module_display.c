@@ -2,18 +2,12 @@
  * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
- *
- * Lua "display" module.
- *
- * Ported from esp-claw lua_module_halo_display.c.
- * HAL calls are routed through display_hal.h which the board layer must
- * implement. Image file loading and decoding live in lua_module_image.
  */
 #include "lua_module_display.h"
 
 #include "cap_lua.h"
+#include "display_service.h"
 #include "display_color.h"
-#include "display_arbiter.h"
 #include "display_hal.h"
 #include "display_text.h"
 #include "esp_err.h"
@@ -28,9 +22,10 @@
 
 static const char *TAG = "lua_display";
 
-/* -------------------------------------------------------------------------
- * Argument helpers (mirrors the reference implementation)
- * ---------------------------------------------------------------------- */
+#define LUA_DISPLAY_OWNER "lua_display"
+
+static display_service_session_handle_t s_display_session;
+static bool s_display_active;
 
 static int lua_display_check_integer_arg(lua_State *L, int index, const char *name)
 {
@@ -77,7 +72,9 @@ static const uint8_t *lua_display_check_buffer_arg(lua_State *L, int index, size
     return data;
 }
 
-static int lua_display_checked_rgb565_bytes(lua_State *L, int width, int height, const char *api, size_t *out_bytes)
+static int lua_display_checked_pixel_bytes(lua_State *L, int width, int height,
+                                            size_t bytes_per_pixel, const char *api,
+                                            size_t *out_bytes)
 {
     size_t pixels;
 
@@ -85,14 +82,17 @@ static int lua_display_checked_rgb565_bytes(lua_State *L, int width, int height,
         return luaL_error(L, "%s: internal size output missing", api);
     }
     *out_bytes = 0;
-    if (width <= 0 || height <= 0 || (size_t)width > SIZE_MAX / (size_t)height) {
-        return luaL_error(L, "%s: invalid size (%d x %d)", api, width, height);
+    if (width <= 0 || height <= 0 || bytes_per_pixel == 0 ||
+            (size_t)width > SIZE_MAX / (size_t)height) {
+        return luaL_error(L, "%s: invalid size (%d x %d bpp=%u)", api, width, height,
+                          (unsigned)bytes_per_pixel);
     }
     pixels = (size_t)width * (size_t)height;
-    if (pixels > SIZE_MAX / 2) {
-        return luaL_error(L, "%s: buffer size overflow (%d x %d)", api, width, height);
+    if (pixels > SIZE_MAX / bytes_per_pixel) {
+        return luaL_error(L, "%s: buffer size overflow (%d x %d bpp=%u)", api, width, height,
+                          (unsigned)bytes_per_pixel);
     }
-    *out_bytes = pixels * 2;
+    *out_bytes = pixels * bytes_per_pixel;
     return 0;
 }
 
@@ -127,6 +127,39 @@ static display_hal_panel_if_t lua_display_parse_panel_if(lua_State *L, int index
     return DISPLAY_HAL_PANEL_IF_IO;
 }
 
+/* Accept either an integer constant (display.PIXEL_FORMAT_RGB565/RGB888) or a
+   friendly string ("rgb565", "rgb888"). Absent argument defaults to RGB565 so
+   existing scripts keep working. */
+static display_hal_pixel_format_t lua_display_parse_pixel_format(lua_State *L, int index)
+{
+    if (lua_isnoneornil(L, index)) {
+        return DISPLAY_HAL_PIXEL_FORMAT_RGB565;
+    }
+    if (lua_isinteger(L, index)) {
+        lua_Integer value = lua_tointeger(L, index);
+        if (value == DISPLAY_HAL_PIXEL_FORMAT_RGB565 || value == DISPLAY_HAL_PIXEL_FORMAT_RGB888) {
+            return (display_hal_pixel_format_t)value;
+        }
+        luaL_error(L, "display pixel_format integer is out of range");
+        return DISPLAY_HAL_PIXEL_FORMAT_RGB565;
+    }
+    if (lua_type(L, index) == LUA_TSTRING) {
+        const char *value = lua_tostring(L, index);
+        if (value != NULL) {
+            if (strcmp(value, "rgb565") == 0 || strcmp(value, "rgb565le") == 0) {
+                return DISPLAY_HAL_PIXEL_FORMAT_RGB565;
+            }
+            if (strcmp(value, "rgb888") == 0) {
+                return DISPLAY_HAL_PIXEL_FORMAT_RGB888;
+            }
+        }
+        luaL_error(L, "display pixel_format string must be 'rgb565' or 'rgb888'");
+        return DISPLAY_HAL_PIXEL_FORMAT_RGB565;
+    }
+    luaL_error(L, "display pixel_format must be an integer or string");
+    return DISPLAY_HAL_PIXEL_FORMAT_RGB565;
+}
+
 static display_color_t lua_display_check_color_arg(lua_State *L, int index, const char *name)
 {
     display_color_t color = {0};
@@ -148,22 +181,26 @@ static void lua_display_reject_table_field(lua_State *L, int index, const char *
     }
 }
 
-/* -------------------------------------------------------------------------
- * Screen lifecycle
- * ---------------------------------------------------------------------- */
-
 static void lua_display_exit_cleanup(lua_State *L)
 {
+    esp_err_t err;
+
     (void)L;
 
-    if (!display_arbiter_is_owner(DISPLAY_ARBITER_OWNER_LUA)) {
+    if (!s_display_active) {
         return;
     }
-    ESP_LOGI(TAG, "Lua exit cleanup: display still owned by Lua, releasing");
+    ESP_LOGI(TAG, "Lua exit cleanup: display raw session still active, releasing");
 
-    if (display_hal_destroy() == ESP_OK) {
-        display_arbiter_release(DISPLAY_ARBITER_OWNER_LUA);
+    err = display_hal_destroy();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "display HAL cleanup failed during Lua exit: %s", esp_err_to_name(err));
     }
+    if (s_display_session != NULL) {
+        (void)display_service_close(s_display_session);
+        s_display_session = NULL;
+    }
+    s_display_active = false;
 }
 
 static int lua_display_init(lua_State *L)
@@ -176,17 +213,29 @@ static int lua_display_init(lua_State *L)
     int lcd_width = lua_display_check_integer_arg(L, 3, "lcd_width");
     int lcd_height = lua_display_check_integer_arg(L, 4, "lcd_height");
     display_hal_panel_if_t panel_if = lua_display_parse_panel_if(L, 5);
+    display_hal_pixel_format_t pixel_format = lua_display_parse_pixel_format(L, 6);
 
-    esp_err_t err = display_arbiter_acquire(DISPLAY_ARBITER_OWNER_LUA);
-    if (err != ESP_OK) {
-        return luaL_error(L, "display init acquire failed: %s", esp_err_to_name(err));
+    if (s_display_active) {
+        lua_pushboolean(L, 1);
+        return 1;
     }
 
-    err = display_hal_create(panel_handle, io_handle, panel_if, lcd_width, lcd_height);
+    esp_err_t err = display_service_open(&(display_service_session_config_t) {
+        .owner_name = LUA_DISPLAY_OWNER,
+        .mode = DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW,
+        .display_config = {0},
+    }, &s_display_session);
     if (err != ESP_OK) {
-        display_arbiter_release(DISPLAY_ARBITER_OWNER_LUA);
+        return luaL_error(L, "display session open failed: %s", esp_err_to_name(err));
+    }
+
+    err = display_hal_create(s_display_session, panel_handle, io_handle, panel_if, pixel_format, lcd_width, lcd_height);
+    if (err != ESP_OK) {
+        (void)display_service_close(s_display_session);
+        s_display_session = NULL;
         return luaL_error(L, "display init failed: %s", esp_err_to_name(err));
     }
+    s_display_active = true;
 
     lua_pushboolean(L, 1);
     return 1;
@@ -195,23 +244,29 @@ static int lua_display_init(lua_State *L)
 static int lua_display_deinit(lua_State *L)
 {
     (void)L;
+
+    if (!s_display_active) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+
     esp_err_t err = display_hal_destroy();
     if (err != ESP_OK) {
         return luaL_error(L, "display deinit failed: %s", esp_err_to_name(err));
     }
 
-    err = display_arbiter_release(DISPLAY_ARBITER_OWNER_LUA);
-    if (err != ESP_OK) {
-        return luaL_error(L, "display release failed: %s", esp_err_to_name(err));
+    if (s_display_session != NULL) {
+        err = display_service_close(s_display_session);
+        if (err != ESP_OK) {
+            return luaL_error(L, "display session close failed: %s", esp_err_to_name(err));
+        }
+        s_display_session = NULL;
     }
+    s_display_active = false;
 
     lua_pushboolean(L, 1);
     return 1;
 }
-
-/* -------------------------------------------------------------------------
- * Basic drawing
- * ---------------------------------------------------------------------- */
 
 static int lua_display_clear(lua_State *L)
 {
@@ -310,15 +365,12 @@ static int lua_display_backlight(lua_State *L)
     return 0;
 }
 
-/* -------------------------------------------------------------------------
- * Frame management
- * ---------------------------------------------------------------------- */
-
 static void lua_display_parse_frame_options(lua_State *L, int index,
-                                            bool *clear, display_color_t *color)
+                                            bool *clear, display_color_t *color, bool *preserve)
 {
     if (clear)  { *clear = true; }
-    if (color)  { *color = (display_color_t){ 0, 0, 0, 255 }; }
+    if (color)  { *color = (display_color_t){ .r = 0, .g = 0, .b = 0, .a = 255 }; }
+    if (preserve) { *preserve = true; }
 
     if (lua_isnoneornil(L, index)) {
         return;
@@ -342,14 +394,21 @@ static void lua_display_parse_frame_options(lua_State *L, int index,
         }
     }
     lua_pop(L, 1);
+
+    lua_getfield(L, index, "preserve");
+    if (!lua_isnil(L, -1) && preserve) {
+        *preserve = lua_toboolean(L, -1);
+    }
+    lua_pop(L, 1);
 }
 
 static int lua_display_begin_frame(lua_State *L)
 {
     bool clear = true;
-    display_color_t color = { 0, 0, 0, 255 };
-    lua_display_parse_frame_options(L, 1, &clear, &color);
-    esp_err_t err = display_hal_begin_frame(clear, color);
+    bool preserve = true;
+    display_color_t color = { .r = 0, .g = 0, .b = 0, .a = 255 };
+    lua_display_parse_frame_options(L, 1, &clear, &color, &preserve);
+    esp_err_t err = display_hal_begin_frame(clear, color, preserve);
     if (err != ESP_OK) {
         return luaL_error(L, "display begin_frame failed: %s", esp_err_to_name(err));
     }
@@ -422,6 +481,16 @@ static int lua_display_module_index(lua_State *L)
         lua_pushinteger(L, display_hal_height());
         return 1;
     }
+    if (strcmp(key, "pixel_format") == 0) {
+        display_hal_pixel_format_t format = display_hal_get_pixel_format();
+        lua_pushstring(L, format == DISPLAY_HAL_PIXEL_FORMAT_RGB888 ? "rgb888" : "rgb565");
+        return 1;
+    }
+    if (strcmp(key, "bytes_per_pixel") == 0) {
+        lua_pushinteger(L,
+            (lua_Integer)display_hal_pixel_format_bytes(display_hal_get_pixel_format()));
+        return 1;
+    }
     lua_pushnil(L);
     return 1;
 }
@@ -429,7 +498,8 @@ static int lua_display_module_index(lua_State *L)
 static int lua_display_module_newindex(lua_State *L)
 {
     const char *key = luaL_checkstring(L, 2);
-    if (strcmp(key, "width") == 0 || strcmp(key, "height") == 0) {
+    if (strcmp(key, "width") == 0 || strcmp(key, "height") == 0 ||
+            strcmp(key, "pixel_format") == 0 || strcmp(key, "bytes_per_pixel") == 0) {
         return luaL_error(L, "display.%s is read-only", key);
     }
     lua_rawset(L, 1);
@@ -445,10 +515,6 @@ static void lua_display_set_module_metatable(lua_State *L)
     lua_setfield(L, -2, "__newindex");
     lua_setmetatable(L, -2);
 }
-
-/* -------------------------------------------------------------------------
- * Pixel buffers and images
- * ---------------------------------------------------------------------- */
 
 static int lua_display_align_down(int value, int align)
 {
@@ -473,6 +539,8 @@ typedef struct {
     int src_y;
     int src_w;
     int src_h;
+    /* draw_pixels-only: parsed 'format' string; unused by draw_image. */
+    display_hal_pixel_format_t pixel_format;
 } lua_display_image_options_t;
 
 static bool lua_display_get_table_integer(lua_State *L, int table_idx, const char *name, int *out)
@@ -562,10 +630,14 @@ static void lua_display_parse_image_options(lua_State *L, int opts_idx, int src_
 }
 
 static esp_err_t lua_display_draw_pixels_fit_data(int x, int y, int src_width, int src_height,
-                                                  int max_w, int max_h, const uint16_t *data, int *out_w, int *out_h)
+                                                  int max_w, int max_h, const void *data,
+                                                  display_hal_pixel_format_t src_format,
+                                                  bool src_native, int *out_w, int *out_h)
 {
     if (src_width <= max_w && src_height <= max_h) {
-        esp_err_t err = display_hal_draw_bitmap(x, y, src_width, src_height, data);
+        esp_err_t err = src_native ?
+            display_hal_draw_bitmap_native(x, y, src_width, src_height, data, src_format) :
+            display_hal_draw_bitmap(x, y, src_width, src_height, data, src_format);
         if (err != ESP_OK) {
             return err;
         }
@@ -602,24 +674,34 @@ static esp_err_t lua_display_draw_pixels_fit_data(int x, int y, int src_width, i
             scale_h = 8;
         }
     }
-    return display_hal_draw_bitmap_scaled(x, y, data, src_width, src_height, scale_w, scale_h, out_w, out_h);
+    return src_native ?
+        display_hal_draw_bitmap_scaled_native(x, y, data, src_width, src_height, scale_w, scale_h, src_format, out_w, out_h) :
+        display_hal_draw_bitmap_scaled(x, y, data, src_width, src_height, scale_w, scale_h, src_format, out_w, out_h);
 }
 
-static esp_err_t lua_display_copy_rgb565_crop(const uint16_t *src, int src_width, int src_x, int src_y, int crop_w, int crop_h, uint16_t **out)
+static esp_err_t lua_display_copy_pixels_crop(const void *src, int src_width,
+                                              int src_x, int src_y,
+                                              int crop_w, int crop_h,
+                                              size_t bytes_per_pixel, void **out)
 {
-    uint16_t *crop = NULL;
+    uint8_t *crop = NULL;
 
-    if (out == NULL || src == NULL || src_width <= 0 || crop_w <= 0 || crop_h <= 0) {
+    if (out == NULL || src == NULL || src_width <= 0 || crop_w <= 0 || crop_h <= 0 ||
+            bytes_per_pixel == 0) {
         return ESP_ERR_INVALID_ARG;
     }
-    crop = (uint16_t *)malloc((size_t)crop_w * (size_t)crop_h * sizeof(uint16_t));
+    size_t row_bytes = (size_t)crop_w * bytes_per_pixel;
+    crop = (uint8_t *)malloc(row_bytes * (size_t)crop_h);
     if (crop == NULL) {
-        ESP_LOGE(TAG, "display crop buffer alloc failed: %dx%d", crop_w, crop_h);
+        ESP_LOGE(TAG, "display crop buffer alloc failed: %dx%d bpp=%u",
+                 crop_w, crop_h, (unsigned)bytes_per_pixel);
         return ESP_ERR_NO_MEM;
     }
+    const uint8_t *src_bytes = (const uint8_t *)src;
     for (int row = 0; row < crop_h; row++) {
-        const uint16_t *src_row = src + ((size_t)(src_y + row) * src_width) + src_x;
-        memcpy(crop + ((size_t)row * crop_w), src_row, (size_t)crop_w * sizeof(uint16_t));
+        const uint8_t *src_row = src_bytes +
+            ((size_t)(src_y + row) * (size_t)src_width + (size_t)src_x) * bytes_per_pixel;
+        memcpy(crop + (size_t)row * row_bytes, src_row, row_bytes);
     }
     *out = crop;
     return ESP_OK;
@@ -631,18 +713,25 @@ static int lua_display_draw_image(lua_State *L)
     int y = lua_display_check_integer_arg(L, 2, "y");
     lua_image_view_t view = {0};
     lua_display_image_options_t opts = {0};
-    const uint16_t *pixels = NULL;
+    const void *pixels = NULL;
     int out_w = 0;
     int out_h = 0;
-    esp_err_t err = lua_image_require_format(L, 3, LUA_IMAGE_FORMAT_RGB565LE, &view);
+    display_hal_pixel_format_t panel_format = display_hal_get_pixel_format();
+    lua_image_format_t image_format = (panel_format == DISPLAY_HAL_PIXEL_FORMAT_RGB888) ?
+        LUA_IMAGE_FORMAT_BGR888 : LUA_IMAGE_FORMAT_RGB565LE;
+    display_hal_pixel_format_t src_format = panel_format;
+    size_t bpp = display_hal_pixel_format_bytes(panel_format);
+    esp_err_t err = lua_image_require_format(L, 3, image_format, &view);
 
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "display image require RGB565 failed: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "display image require %s failed: %s",
+                 image_format == LUA_IMAGE_FORMAT_BGR888 ? "BGR888" : "RGB565LE",
+                 esp_err_to_name(err));
         return luaL_error(L, "display draw_image image format failed: %s", esp_err_to_name(err));
     }
 
     lua_display_parse_image_options(L, 4, view.width, view.height, &opts);
-    pixels = (const uint16_t *)view.data;
+    pixels = view.data;
     if (opts.dst_w <= 0 || opts.dst_h <= 0 || opts.src_w <= 0 || opts.src_h <= 0) {
         lua_image_release_view(&view);
         return luaL_error(L, "display draw_image invalid image size");
@@ -654,19 +743,21 @@ static int lua_display_draw_image(lua_State *L)
 
     switch (opts.mode) {
     case LUA_DISPLAY_IMAGE_RAW:
-        err = display_hal_draw_bitmap(x, y, view.width, view.height, pixels);
+        err = display_hal_draw_bitmap_native(x, y, view.width, view.height, pixels, src_format);
         out_w = view.width;
         out_h = view.height;
         break;
     case LUA_DISPLAY_IMAGE_FIT:
-        err = lua_display_draw_pixels_fit_data(x, y, view.width, view.height, opts.dst_w, opts.dst_h, pixels, &out_w, &out_h);
+        err = lua_display_draw_pixels_fit_data(x, y, view.width, view.height, opts.dst_w, opts.dst_h,
+                                               pixels, src_format, true, &out_w, &out_h);
         break;
     case LUA_DISPLAY_IMAGE_STRETCH:
-        err = display_hal_draw_bitmap_scaled(x, y, pixels, view.width, view.height, opts.dst_w, opts.dst_h, &out_w, &out_h);
+        err = display_hal_draw_bitmap_scaled_native(x, y, pixels, view.width, view.height,
+                                                    opts.dst_w, opts.dst_h, src_format, &out_w, &out_h);
         break;
     case LUA_DISPLAY_IMAGE_CROP:
     case LUA_DISPLAY_IMAGE_COVER: {
-        uint16_t *crop = NULL;
+        void *crop = NULL;
         int src_x = opts.src_x;
         int src_y = opts.src_y;
         int src_w = opts.src_w;
@@ -686,14 +777,16 @@ static int lua_display_draw_image(lua_State *L)
             }
         }
         if (src_w == opts.dst_w && src_h == opts.dst_h) {
-            err = display_hal_draw_bitmap_crop(x, y, src_x, src_y, src_w, src_h, view.width, view.height, pixels);
+            err = display_hal_draw_bitmap_crop_native(x, y, src_x, src_y, src_w, src_h,
+                                                      view.width, view.height, pixels, src_format);
             out_w = src_w;
             out_h = src_h;
             break;
         }
-        err = lua_display_copy_rgb565_crop(pixels, view.width, src_x, src_y, src_w, src_h, &crop);
+        err = lua_display_copy_pixels_crop(pixels, view.width, src_x, src_y, src_w, src_h, bpp, &crop);
         if (err == ESP_OK) {
-            err = display_hal_draw_bitmap_scaled(x, y, crop, src_w, src_h, opts.dst_w, opts.dst_h, &out_w, &out_h);
+            err = display_hal_draw_bitmap_scaled_native(x, y, crop, src_w, src_h,
+                                                        opts.dst_w, opts.dst_h, src_format, &out_w, &out_h);
         }
         free(crop);
         break;
@@ -738,6 +831,9 @@ static void lua_display_parse_pixels_options(lua_State *L, int opts_idx, lua_dis
 
     memset(opts, 0, sizeof(*opts));
     opts->mode = LUA_DISPLAY_IMAGE_RAW;
+    /* Default source format to the panel format so a script that just says
+       'panel is RGB888' can drop the 'format' field. */
+    opts->pixel_format = display_hal_get_pixel_format();
 
     if (lua_isnoneornil(L, opts_idx)) {
         luaL_error(L, "display draw_pixels options table required");
@@ -760,24 +856,37 @@ static void lua_display_parse_pixels_options(lua_State *L, int opts_idx, lua_dis
     lua_getfield(L, opts_idx, "format");
     if (!lua_isnil(L, -1)) {
         const char *format = luaL_checkstring(L, -1);
-        if (strcmp(format, "rgb565") != 0 && strcmp(format, "rgb565le") != 0) {
-            luaL_error(L, "display draw_pixels format must be rgb565");
+        if (strcmp(format, "rgb565") == 0 || strcmp(format, "rgb565le") == 0) {
+            opts->pixel_format = DISPLAY_HAL_PIXEL_FORMAT_RGB565;
+        } else if (strcmp(format, "rgb888") == 0) {
+            opts->pixel_format = DISPLAY_HAL_PIXEL_FORMAT_RGB888;
+        } else {
+            luaL_error(L, "display draw_pixels format must be 'rgb565' or 'rgb888'");
         }
     }
     lua_pop(L, 1);
 }
 
-static esp_err_t lua_display_draw_pixels_data(int x, int y, const uint16_t *pixels,
-                                              const lua_display_image_options_t *opts, int *out_w, int *out_h)
+static esp_err_t lua_display_draw_pixels_data(int x, int y, const void *pixels,
+                                              const lua_display_image_options_t *opts,
+                                              int *out_w, int *out_h)
 {
     esp_err_t err = ESP_OK;
+    display_hal_pixel_format_t src_format = opts->pixel_format;
+    size_t bpp = display_hal_pixel_format_bytes(src_format);
+
+    if (bpp == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
 
     switch (opts->mode) {
     case LUA_DISPLAY_IMAGE_RAW:
         if (!lua_display_pixels_source_is_full(opts)) {
-            err = display_hal_draw_bitmap_crop(x, y, opts->src_x, opts->src_y, opts->src_w, opts->src_h, opts->full_w, opts->full_h, pixels);
+            err = display_hal_draw_bitmap_crop(x, y, opts->src_x, opts->src_y,
+                                               opts->src_w, opts->src_h,
+                                               opts->full_w, opts->full_h, pixels, src_format);
         } else {
-            err = display_hal_draw_bitmap(x, y, opts->full_w, opts->full_h, pixels);
+            err = display_hal_draw_bitmap(x, y, opts->full_w, opts->full_h, pixels, src_format);
         }
         if (out_w) {
             *out_w = opts->src_w;
@@ -787,38 +896,43 @@ static esp_err_t lua_display_draw_pixels_data(int x, int y, const uint16_t *pixe
         }
         break;
     case LUA_DISPLAY_IMAGE_FIT: {
-        uint16_t *crop = NULL;
-        const uint16_t *src_pixels = pixels;
+        void *crop = NULL;
+        const void *src_pixels = pixels;
 
         if (!lua_display_pixels_source_is_full(opts)) {
-            err = lua_display_copy_rgb565_crop(pixels, opts->full_w, opts->src_x, opts->src_y, opts->src_w, opts->src_h, &crop);
+            err = lua_display_copy_pixels_crop(pixels, opts->full_w, opts->src_x, opts->src_y,
+                                               opts->src_w, opts->src_h, bpp, &crop);
             if (err != ESP_OK) {
                 break;
             }
             src_pixels = crop;
         }
-        err = lua_display_draw_pixels_fit_data(x, y, opts->src_w, opts->src_h, opts->dst_w, opts->dst_h, src_pixels, out_w, out_h);
+        err = lua_display_draw_pixels_fit_data(x, y, opts->src_w, opts->src_h,
+                                               opts->dst_w, opts->dst_h,
+                                               src_pixels, src_format, false, out_w, out_h);
         free(crop);
         break;
     }
     case LUA_DISPLAY_IMAGE_STRETCH: {
-        uint16_t *crop = NULL;
-        const uint16_t *src_pixels = pixels;
+        void *crop = NULL;
+        const void *src_pixels = pixels;
 
         if (!lua_display_pixels_source_is_full(opts)) {
-            err = lua_display_copy_rgb565_crop(pixels, opts->full_w, opts->src_x, opts->src_y, opts->src_w, opts->src_h, &crop);
+            err = lua_display_copy_pixels_crop(pixels, opts->full_w, opts->src_x, opts->src_y,
+                                               opts->src_w, opts->src_h, bpp, &crop);
             if (err != ESP_OK) {
                 break;
             }
             src_pixels = crop;
         }
-        err = display_hal_draw_bitmap_scaled(x, y, src_pixels, opts->src_w, opts->src_h, opts->dst_w, opts->dst_h, out_w, out_h);
+        err = display_hal_draw_bitmap_scaled(x, y, src_pixels, opts->src_w, opts->src_h,
+                                             opts->dst_w, opts->dst_h, src_format, out_w, out_h);
         free(crop);
         break;
     }
     case LUA_DISPLAY_IMAGE_CROP:
     case LUA_DISPLAY_IMAGE_COVER: {
-        uint16_t *crop = NULL;
+        void *crop = NULL;
         int src_x = opts->src_x;
         int src_y = opts->src_y;
         int src_w = opts->src_w;
@@ -840,7 +954,8 @@ static esp_err_t lua_display_draw_pixels_data(int x, int y, const uint16_t *pixe
             }
         }
         if (src_w == dst_w && src_h == dst_h) {
-            err = display_hal_draw_bitmap_crop(x, y, src_x, src_y, src_w, src_h, opts->full_w, opts->full_h, pixels);
+            err = display_hal_draw_bitmap_crop(x, y, src_x, src_y, src_w, src_h,
+                                               opts->full_w, opts->full_h, pixels, src_format);
             if (out_w) {
                 *out_w = src_w;
             }
@@ -849,9 +964,11 @@ static esp_err_t lua_display_draw_pixels_data(int x, int y, const uint16_t *pixe
             }
             break;
         }
-        err = lua_display_copy_rgb565_crop(pixels, opts->full_w, src_x, src_y, src_w, src_h, &crop);
+        err = lua_display_copy_pixels_crop(pixels, opts->full_w, src_x, src_y,
+                                           src_w, src_h, bpp, &crop);
         if (err == ESP_OK) {
-            err = display_hal_draw_bitmap_scaled(x, y, crop, src_w, src_h, dst_w, dst_h, out_w, out_h);
+            err = display_hal_draw_bitmap_scaled(x, y, crop, src_w, src_h,
+                                                 dst_w, dst_h, src_format, out_w, out_h);
         }
         free(crop);
         break;
@@ -880,13 +997,14 @@ static int lua_display_draw_pixels(lua_State *L)
     if (opts.src_x < 0 || opts.src_y < 0 || opts.src_x + opts.src_w > opts.full_w || opts.src_y + opts.src_h > opts.full_h) {
         return luaL_error(L, "display draw_pixels source rectangle out of bounds");
     }
-    lua_display_checked_rgb565_bytes(L, opts.full_w, opts.full_h, "draw_pixels", &expected);
+    size_t bpp = display_hal_pixel_format_bytes(opts.pixel_format);
+    lua_display_checked_pixel_bytes(L, opts.full_w, opts.full_h, bpp, "draw_pixels", &expected);
     const uint8_t *data = lua_display_check_buffer_arg(L, 3, expected, &data_len);
     if (data_len < expected) {
         return luaL_error(L, "draw_pixels: data too short (%d bytes, need %d)", (int)data_len, (int)expected);
     }
 
-    esp_err_t err = lua_display_draw_pixels_data(x, y, (const uint16_t *)data, &opts, &out_w, &out_h);
+    esp_err_t err = lua_display_draw_pixels_data(x, y, data, &opts, &out_w, &out_h);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "display draw_pixels failed: %s", esp_err_to_name(err));
         return luaL_error(L, "display draw_pixels failed: %s", esp_err_to_name(err));
@@ -895,10 +1013,6 @@ static int lua_display_draw_pixels(lua_State *L)
     lua_pushinteger(L, out_h);
     return 2;
 }
-
-/* -------------------------------------------------------------------------
- * Shape drawing
- * ---------------------------------------------------------------------- */
 
 static int lua_display_fill_circle(lua_State *L)
 {
@@ -1048,10 +1162,6 @@ static int lua_display_fill_triangle(lua_State *L)
     return 0;
 }
 
-/* -------------------------------------------------------------------------
- * Module registration
- * ---------------------------------------------------------------------- */
-
 int luaopen_display(lua_State *L)
 {
     lua_newtable(L);
@@ -1124,13 +1234,22 @@ int luaopen_display(lua_State *L)
     lua_pushcfunction(L, lua_display_fill_triangle);
     lua_setfield(L, -2, "fill_triangle");
 
+    lua_pushinteger(L, DISPLAY_HAL_PIXEL_FORMAT_RGB565);
+    lua_setfield(L, -2, "PIXEL_FORMAT_RGB565");
+    lua_pushinteger(L, DISPLAY_HAL_PIXEL_FORMAT_RGB888);
+    lua_setfield(L, -2, "PIXEL_FORMAT_RGB888");
+
     lua_display_set_module_metatable(L);
     return 1;
 }
 
 esp_err_t lua_module_display_register(void)
 {
-    esp_err_t err = cap_lua_register_module("display", luaopen_display);
+    esp_err_t err = display_hal_module_init();
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = cap_lua_register_module("display", luaopen_display);
     if (err != ESP_OK) {
         return err;
     }

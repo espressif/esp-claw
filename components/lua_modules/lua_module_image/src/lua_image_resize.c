@@ -37,10 +37,6 @@ static esp_err_t lua_image_resize_alloc(size_t bytes, uint8_t **out)
     return ESP_OK;
 }
 
-/* ------------------------------------------------------------------------- */
-/* GRAY8                                                                     */
-/* ------------------------------------------------------------------------- */
-
 static void resize_gray8_nearest(const uint8_t *src, int sw, int sh,
                                  uint8_t *dst, int dw, int dh)
 {
@@ -93,10 +89,6 @@ static void resize_gray8_bilinear(const uint8_t *src, int sw, int sh,
         }
     }
 }
-
-/* ------------------------------------------------------------------------- */
-/* RGB565LE                                                                  */
-/* ------------------------------------------------------------------------- */
 
 static inline void rgb565_unpack(uint16_t px, uint8_t *r, uint8_t *g, uint8_t *b)
 {
@@ -185,10 +177,6 @@ static void resize_rgb565_bilinear(const uint8_t *src, int sw, int sh,
         }
     }
 }
-
-/* ------------------------------------------------------------------------- */
-/* Public entry                                                              */
-/* ------------------------------------------------------------------------- */
 
 esp_err_t lua_image_resize_view(const lua_image_view_t *src,
                                 int dst_width,

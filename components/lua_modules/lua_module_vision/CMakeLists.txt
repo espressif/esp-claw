@@ -18,6 +18,15 @@ if(CONFIG_APP_CLAW_LUA_MODULE_VISION AND CONFIG_ESP_BOARD_DEV_CAMERA_SUPPORT)
         )
     endif()
 
+    if(CONFIG_LUA_MODULE_VISION_COLOR_DETECT)
+        list(APPEND lua_module_vision_srcs
+            "src/color_detect.cpp"
+        )
+        list(APPEND lua_module_vision_requires
+            espressif__color_detect
+        )
+    endif()
+
     if(CONFIG_LUA_MODULE_VISION_ESPDET)
         list(APPEND lua_module_vision_srcs
             "src/espdet.cpp"
@@ -37,3 +46,10 @@ idf_component_register(
     REQUIRES
         ${lua_module_vision_requires}
 )
+
+if(CONFIG_LUA_MODULE_VISION_COLOR_DETECT)
+    idf_component_get_property(lua_module_vision_esp_dl_lib espressif__esp-dl COMPONENT_LIB)
+    if(lua_module_vision_esp_dl_lib)
+        target_compile_options(${lua_module_vision_esp_dl_lib} PRIVATE -Wno-non-c-typedef-for-linkage)
+    endif()
+endif()

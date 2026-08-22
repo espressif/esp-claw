@@ -1,0 +1,5 @@
+board: eda_super_bear
+chip: esp32s3
+version: 1.0.0
+description: "EDA Super Bear - ESP32-S3 六轴机器熊 (INMP441 + MAX98357)"
+manufacturer: "lceda-course-examples"

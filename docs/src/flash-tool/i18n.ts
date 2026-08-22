@@ -31,6 +31,7 @@ export interface Strings {
   firmwareRequirementsLabel: string;
   firmwareDescriptionLabel: string;
   downloadFirmwareLocalLink: string;
+  closeBtn: string;
 
   downloadBtn: string;
   flashBtn: string;
@@ -101,6 +102,23 @@ export interface Strings {
   modalStep2Title: string;
   modalStep3Title: string;
   terminalLabel: string;
+
+  chooseApplicationLabel: string;
+  chooseApplicationPlaceholder: string;
+  chooseVersionLabel: string;
+  chooseVersionPlaceholder: string;
+  versionMaster: string;
+  advancedSettingsLabel: string;
+  eraseFlashBeforeFlash: string;
+  partitionSelectionHint: string;
+  erasingFlash: string;
+  downloadingPartitions: string;
+  mergingFirmware: string;
+  downloadReady: string;
+  downloadError: string;
+  flashingPartition: string;
+  loadingVersions: string;
+  loadVersionsError: string;
 }
 
 const en: Strings = {
@@ -134,6 +152,7 @@ const en: Strings = {
   firmwareRequirementsLabel: "Firmware requirements",
   firmwareDescriptionLabel: "Firmware description",
   downloadFirmwareLocalLink: "Download firmware locally",
+  closeBtn: "Close",
 
   downloadBtn: "Download Firmware",
   flashBtn: "Flash Firmware",
@@ -209,6 +228,23 @@ const en: Strings = {
   modalStep2Title: "Wi-Fi Setup",
   modalStep3Title: "Wi-Fi Connected",
   terminalLabel: "Terminal",
+
+  chooseApplicationLabel: "Application",
+  chooseApplicationPlaceholder: "Choose an application",
+  chooseVersionLabel: "Version",
+  chooseVersionPlaceholder: "Choose a version",
+  versionMaster: "Latest (master)",
+  advancedSettingsLabel: "Advanced Settings",
+  eraseFlashBeforeFlash: "Erase entire flash before flashing (may take a few minutes)",
+  partitionSelectionHint: "Select partitions to flash.",
+  erasingFlash: "Erasing flash (may take a few minutes)…",
+  downloadingPartitions: "Downloading partition files…",
+  mergingFirmware: "Merging partition files…",
+  downloadReady: "Merged firmware is ready. Download started automatically.",
+  downloadError: "Download failed: ",
+  flashingPartition: "Flashing {name} at {offset}…",
+  loadingVersions: "Loading versions…",
+  loadVersionsError: "Failed to load version list",
 };
 
 const zhCn: Strings = {
@@ -242,6 +278,7 @@ const zhCn: Strings = {
   firmwareRequirementsLabel: "固件要求",
   firmwareDescriptionLabel: "固件说明",
   downloadFirmwareLocalLink: "下载固件到本地",
+  closeBtn: "关闭",
 
   downloadBtn: "下载固件",
   flashBtn: "开始烧录",
@@ -315,6 +352,23 @@ const zhCn: Strings = {
   modalStep2Title: "Wi-Fi 配置",
   modalStep3Title: "联网成功",
   terminalLabel: "终端",
+
+  chooseApplicationLabel: "应用",
+  chooseApplicationPlaceholder: "选择应用",
+  chooseVersionLabel: "版本",
+  chooseVersionPlaceholder: "选择版本",
+  versionMaster: "最新版 (master)",
+  advancedSettingsLabel: "高级设置",
+  eraseFlashBeforeFlash: "烧录前擦除全部 Flash（约需数分钟）",
+  partitionSelectionHint: "选择需要烧录的分区。",
+  erasingFlash: "正在擦除 Flash（约需数分钟）…",
+  downloadingPartitions: "正在下载分区文件…",
+  mergingFirmware: "正在合并分区文件…",
+  downloadReady: "合并固件已准备完成，已自动开始下载。",
+  downloadError: "下载失败：",
+  flashingPartition: "正在烧录 {name} 到 {offset}…",
+  loadingVersions: "正在加载版本列表…",
+  loadVersionsError: "加载版本列表失败",
 };
 
 const strings: Record<Lang, Strings> = {

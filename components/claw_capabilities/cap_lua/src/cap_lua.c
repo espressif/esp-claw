@@ -1063,6 +1063,16 @@ esp_err_t cap_lua_register_exit_cleanup(cap_lua_exit_cleanup_fn_t cleanup_fn)
     return ESP_OK;
 }
 
+esp_err_t cap_lua_register_job_event_cb(cap_lua_job_event_cb_t cb, void *user_ctx)
+{
+    return cap_lua_async_register_job_event_cb(cb, user_ctx);
+}
+
+esp_err_t cap_lua_unregister_job_event_cb(cap_lua_job_event_cb_t cb, void *user_ctx)
+{
+    return cap_lua_async_unregister_job_event_cb(cb, user_ctx);
+}
+
 esp_err_t cap_lua_register_builtin_modules(void)
 {
     s_builtin_modules_registered = true;

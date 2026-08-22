@@ -90,6 +90,7 @@ typedef struct {
     uint16_t conn_handle;
     bool encrypted;
     bool bonded;
+    bool notify_enabled;
 } ble_hid_connection_t;
 
 typedef int (*ble_hid_gap_event_handler_t)(struct ble_gap_event *event);
@@ -186,6 +187,7 @@ static void ble_hid_connection_clear(void)
     s_conn.conn_handle = BLE_HS_CONN_HANDLE_NONE;
     s_conn.encrypted = false;
     s_conn.bonded = false;
+    s_conn.notify_enabled = false;
     s_status.connected = false;
     s_status.bonded = false;
 }
@@ -211,12 +213,55 @@ static void ble_hid_connection_update_security(uint16_t conn_handle)
              desc.sec_state.key_size);
 }
 
-static void ble_hid_connection_set_connected(uint16_t conn_handle)
+static void ble_hid_security_kick(uint16_t conn_handle)
 {
+    int rc;
+    struct ble_gap_conn_desc desc;
+
+    if (ble_gap_conn_find(conn_handle, &desc) != 0) {
+        return;
+    }
+    if (desc.sec_state.encrypted) {
+        s_conn.encrypted = true;
+        s_conn.bonded = desc.sec_state.bonded;
+        s_status.bonded = s_conn.bonded;
+        return;
+    }
+    rc = ble_gap_security_initiate(conn_handle);
+    if (rc != 0 && rc != BLE_HS_EALREADY) {
+        ESP_LOGW(TAG, "ble_gap_security_initiate conn_handle=%u rc=%d", conn_handle, rc);
+    } else {
+        ESP_LOGI(TAG, "security initiate conn_handle=%u rc=%d", conn_handle, rc);
+    }
+}
+
+/* Recover / refresh link state from any GAP event that proves a live connection. */
+static void ble_hid_connection_ensure(uint16_t conn_handle)
+{
+    struct ble_gap_conn_desc desc;
+
+    if (conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+        return;
+    }
+    if (ble_gap_conn_find(conn_handle, &desc) != 0) {
+        return;
+    }
+
     s_conn.connected = true;
     s_conn.conn_handle = conn_handle;
     s_status.connected = true;
-    ble_hid_connection_update_security(conn_handle);
+    s_status.advertising = false;
+    s_conn.encrypted = desc.sec_state.encrypted;
+    s_conn.bonded = desc.sec_state.bonded;
+    s_status.bonded = s_conn.bonded;
+    if (!s_conn.encrypted) {
+        ble_hid_security_kick(conn_handle);
+    }
+}
+
+static void ble_hid_connection_set_connected(uint16_t conn_handle)
+{
+    ble_hid_connection_ensure(conn_handle);
 }
 
 static void ble_hid_on_reset(int reason)
@@ -265,11 +310,24 @@ static int ble_hid_handle_gap_connect(struct ble_gap_event *event)
              event->connect.conn_handle,
              event->connect.status);
     if (event->connect.status == 0) {
-        s_status.advertising = false;
         ble_hid_connection_set_connected(event->connect.conn_handle);
-    } else {
-        ble_hid_connection_clear();
+        return 0;
     }
+
+    /* Failed connect attempt (e.g. status=BLE_HS_EAGAIN). Do NOT clear an
+     * already-live link — MTU/enc may already prove conn_handle is valid. */
+    if (s_conn.connected && ble_gap_conn_find(s_conn.conn_handle, NULL) == 0) {
+        ESP_LOGW(TAG, "ignoring failed connect status=%d; keeping conn_handle=%u",
+                 event->connect.status, s_conn.conn_handle);
+        return 0;
+    }
+    if (ble_gap_conn_find(event->connect.conn_handle, NULL) == 0) {
+        ESP_LOGW(TAG, "connect status=%d but handle %u is live — adopting",
+                 event->connect.status, event->connect.conn_handle);
+        ble_hid_connection_ensure(event->connect.conn_handle);
+        return 0;
+    }
+    ESP_LOGW(TAG, "connect failed status=%d", event->connect.status);
     return 0;
 }
 
@@ -299,8 +357,13 @@ static int ble_hid_handle_gap_enc_change(struct ble_gap_event *event)
     ESP_LOGI(TAG, "gap enc_change conn_handle=%u status=%d",
              event->enc_change.conn_handle,
              event->enc_change.status);
+    ble_hid_connection_ensure(event->enc_change.conn_handle);
     if (event->enc_change.status == 0) {
         ble_hid_connection_update_security(event->enc_change.conn_handle);
+    } else {
+        s_conn.encrypted = false;
+        ESP_LOGW(TAG, "encryption failed status=%d (forget device on host and re-pair)",
+                 event->enc_change.status);
     }
     return 0;
 }
@@ -308,18 +371,21 @@ static int ble_hid_handle_gap_enc_change(struct ble_gap_event *event)
 static int ble_hid_handle_gap_identity_resolved(struct ble_gap_event *event)
 {
     ESP_LOGI(TAG, "gap identity_resolved conn_handle=%u", event->identity_resolved.conn_handle);
+    ble_hid_connection_ensure(event->identity_resolved.conn_handle);
     ble_hid_connection_update_security(event->identity_resolved.conn_handle);
     return 0;
 }
 
 static int ble_hid_handle_gap_repeat_pairing(struct ble_gap_event *event)
 {
-    ESP_LOGI(TAG, "gap repeat_pairing conn_handle=%u key_size=%u authenticated=%u sc=%u",
-             event->repeat_pairing.conn_handle,
-             event->repeat_pairing.cur_key_size,
-             event->repeat_pairing.cur_authenticated,
-             event->repeat_pairing.cur_sc);
-    return BLE_GAP_REPEAT_PAIRING_IGNORE;
+    struct ble_gap_conn_desc desc;
+
+    ESP_LOGW(TAG, "gap repeat_pairing conn_handle=%u — deleting stale bond and retrying",
+             event->repeat_pairing.conn_handle);
+    if (ble_gap_conn_find(event->repeat_pairing.conn_handle, &desc) == 0) {
+        ble_store_util_delete_peer(&desc.peer_id_addr);
+    }
+    return BLE_GAP_REPEAT_PAIRING_RETRY;
 }
 
 static int ble_hid_handle_gap_mtu(struct ble_gap_event *event)
@@ -328,6 +394,20 @@ static int ble_hid_handle_gap_mtu(struct ble_gap_event *event)
              event->mtu.conn_handle,
              event->mtu.channel_id,
              event->mtu.value);
+    /* MTU proves the link is up even if CONNECT(status=0) was missed. */
+    ble_hid_connection_ensure(event->mtu.conn_handle);
+    return 0;
+}
+
+static int ble_hid_handle_gap_subscribe(struct ble_gap_event *event)
+{
+    ESP_LOGI(TAG, "gap subscribe conn_handle=%u attr=%u notify=%d->%d",
+             event->subscribe.conn_handle,
+             event->subscribe.attr_handle,
+             event->subscribe.prev_notify,
+             event->subscribe.cur_notify);
+    ble_hid_connection_ensure(event->subscribe.conn_handle);
+    s_conn.notify_enabled = event->subscribe.cur_notify || event->subscribe.cur_indicate;
     return 0;
 }
 
@@ -345,6 +425,7 @@ static const ble_hid_gap_event_handler_entry_t s_gap_event_handlers[] = {
     { BLE_GAP_EVENT_IDENTITY_RESOLVED, ble_hid_handle_gap_identity_resolved },
     { BLE_GAP_EVENT_REPEAT_PAIRING, ble_hid_handle_gap_repeat_pairing },
     { BLE_GAP_EVENT_MTU, ble_hid_handle_gap_mtu },
+    { BLE_GAP_EVENT_SUBSCRIBE, ble_hid_handle_gap_subscribe },
     { BLE_GAP_EVENT_ADV_COMPLETE, ble_hid_handle_gap_adv_complete },
 };
 
@@ -527,6 +608,7 @@ static esp_err_t ble_hid_adv_apply(const char *name, uint16_t appearance,
                                    const uint16_t *uuid16_list, size_t uuid16_count)
 {
     struct ble_hs_adv_fields fields;
+    struct ble_hs_adv_fields rsp_fields;
     struct ble_gap_adv_params adv_params;
     ble_uuid16_t adv_uuids[BLE_HID_ADV_UUID16_MAX];
     int rc;
@@ -542,13 +624,10 @@ static esp_err_t ble_hid_adv_apply(const char *name, uint16_t appearance,
         (void)ble_gap_adv_stop();
     }
 
+    /* Keep ADV under 31 bytes: flags + appearance + 16-bit UUID(s).
+     * Put the local name in the scan response so longer names still fit. */
     memset(&fields, 0, sizeof(fields));
     fields.flags = BLE_HS_ADV_F_DISC_GEN | BLE_HS_ADV_F_BREDR_UNSUP;
-    fields.tx_pwr_lvl_is_present = 1;
-    fields.tx_pwr_lvl = BLE_HS_ADV_TX_PWR_LVL_AUTO;
-    fields.name = (uint8_t *)name;
-    fields.name_len = strlen(name);
-    fields.name_is_complete = 1;
     if (appearance != 0) {
         fields.appearance = appearance;
         fields.appearance_is_present = 1;
@@ -565,6 +644,16 @@ static esp_err_t ble_hid_adv_apply(const char *name, uint16_t appearance,
     rc = ble_gap_adv_set_fields(&fields);
     if (rc != 0) {
         ESP_LOGE(TAG, "ble_gap_adv_set_fields failed rc=%d", rc);
+        return ESP_FAIL;
+    }
+
+    memset(&rsp_fields, 0, sizeof(rsp_fields));
+    rsp_fields.name = (uint8_t *)name;
+    rsp_fields.name_len = strlen(name);
+    rsp_fields.name_is_complete = 1;
+    rc = ble_gap_adv_rsp_set_fields(&rsp_fields);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gap_adv_rsp_set_fields failed rc=%d", rc);
         return ESP_FAIL;
     }
 
@@ -748,8 +837,14 @@ static void hidd_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
     (void)base;
     switch ((esp_hidd_event_t)id) {
     case ESP_HIDD_CONNECT_EVENT:
-        s_status.connected = param ? esp_hidd_dev_connected(param->connect.dev) : true;
-        ESP_LOGI(TAG, "HID connected");
+        /* esp_hid sets connected even when connect.status != 0; trust GAP state. */
+        if (param && param->connect.status != 0) {
+            ESP_LOGW(TAG, "HID connect event with status=%d (ignored for ready)",
+                     param->connect.status);
+        } else {
+            ESP_LOGI(TAG, "HID connected");
+        }
+        s_status.connected = s_conn.connected;
         break;
     case ESP_HIDD_DISCONNECT_EVENT:
         s_status.connected = false;
@@ -772,6 +867,12 @@ static const char *hid_err_reason(esp_err_t err)
     if (!s_status.initialized || !s_hid_dev) {
         return "HID not initialized";
     }
+    if (!s_conn.connected) {
+        return "not connected";
+    }
+    if (!s_conn.encrypted) {
+        return "not encrypted";
+    }
     if (!esp_hidd_dev_connected(s_hid_dev)) {
         return "not connected";
     }
@@ -789,9 +890,38 @@ static int push_result(lua_State *L, esp_err_t err)
     return 2;
 }
 
+static bool ble_hid_link_ready(void)
+{
+    struct ble_gap_conn_desc desc;
+
+    if (!s_hid_dev || !s_status.initialized) {
+        return false;
+    }
+    if (!s_conn.connected || s_conn.conn_handle == BLE_HS_CONN_HANDLE_NONE) {
+        return false;
+    }
+    if (!s_conn.encrypted) {
+        return false;
+    }
+    if (ble_gap_conn_find(s_conn.conn_handle, &desc) != 0) {
+        ble_hid_connection_clear();
+        return false;
+    }
+    return true;
+}
+
 static esp_err_t send_report(size_t report_id, uint8_t *data, size_t len)
 {
     if (!s_hid_dev || !s_status.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!s_conn.connected) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!s_conn.encrypted) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!ble_hid_link_ready()) {
         return ESP_ERR_INVALID_STATE;
     }
     return esp_hidd_dev_input_set(s_hid_dev, LUA_HID_MAP_INDEX, report_id, data, len);
@@ -1126,17 +1256,29 @@ static int lua_ble_hid_release_all(lua_State *L)
 
 static int lua_ble_hid_status(lua_State *L)
 {
-    s_status.connected = s_hid_dev ? esp_hidd_dev_connected(s_hid_dev) : false;
+    bool connected = s_conn.connected &&
+                     (s_conn.conn_handle != BLE_HS_CONN_HANDLE_NONE) &&
+                     (ble_gap_conn_find(s_conn.conn_handle, NULL) == 0);
+    bool encrypted = connected && s_conn.encrypted;
+    bool ready = ble_hid_link_ready();
+
+    s_status.connected = connected;
     s_status.bonded = s_conn.bonded;
     lua_newtable(L);
     lua_pushboolean(L, s_status.initialized);
     lua_setfield(L, -2, "initialized");
     lua_pushboolean(L, s_status.advertising);
     lua_setfield(L, -2, "advertising");
-    lua_pushboolean(L, s_status.connected);
+    lua_pushboolean(L, connected);
     lua_setfield(L, -2, "connected");
+    lua_pushboolean(L, encrypted);
+    lua_setfield(L, -2, "encrypted");
+    lua_pushboolean(L, s_conn.notify_enabled);
+    lua_setfield(L, -2, "notify_enabled");
     lua_pushboolean(L, s_status.bonded);
     lua_setfield(L, -2, "bonded");
+    lua_pushboolean(L, ready);
+    lua_setfield(L, -2, "ready");
     return 1;
 }
 

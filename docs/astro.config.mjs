@@ -5,7 +5,8 @@ import { fileURLToPath } from "url";
 
 import starlightThemeNova from "starlight-theme-nova";
 import astroD2 from "astro-d2";
-import { remarkDocLinks } from "./src/plugins/remark-doc-links.ts";
+import { satteri } from "@astrojs/markdown-satteri";
+import { satteriDocLinks } from "./src/plugins/satteri-doc-links.ts";
 
 const BASE = "/";
 
@@ -124,9 +125,11 @@ export default defineConfig({
       ],
     }),
   ],
+  compressHTML: true,
   markdown: {
-    gfm: true,
-    remarkPlugins: [[remarkDocLinks, { base: BASE }]],
+    processor: satteri({
+      mdastPlugins: [satteriDocLinks({ base: BASE })],
+    }),
   },
   vite: {
     resolve: {

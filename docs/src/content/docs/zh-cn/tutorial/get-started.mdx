@@ -26,7 +26,7 @@ ESP-Claw 需要至少 8 MB Flash 和 8 MB PSRAM，目前支持 ESP32-S3、ESP32-
 
 1. **使用数据线连接开发板**
 
-   使用数据线将开发板连接到 PC。如果你使用面包板形态的 ESP-Claw，请使用标记有 UART 的 USB 口连接。
+   使用数据线将开发板连接到 PC。如果你使用面包板形态的 ESP-Claw，推荐使用标记有 UART 的 USB 口连接。
 
 2. **启动在线烧录工具并连接串口**
 
@@ -34,10 +34,25 @@ ESP-Claw 需要至少 8 MB Flash 和 8 MB PSRAM，目前支持 ESP32-S3、ESP32-
 
    打开在线烧录工具，点击「连接」，连接到开发板。
 
-3. **配置参数**
+   在线烧录工具将会探测开发版使用的芯片型号，你需要选择对应的开发版（厂商/品牌与开发版型号），然后点击烧录按钮，开始烧录。
 
-   - 选择你的开发板对应的固件。
-   - 配置 Wi-Fi SSID 及密码，必填。
+   <Aside type="tip" title="高级选项">
+      默认情况下，在线烧录工具将会烧录全部分区，但不擦除整个 Flash。因此，在版本更新时，NVS 中的配置一般会保留。
+      如果有特殊需求，例如需要擦除整个 Flash，可在高级选项中调整。
+   </Aside>
+
+3. **配置 Wi-Fi**
+
+   烧录完成后，在线烧录工具会尝试与 ESP-Claw 建立连接，并进入 Wi-Fi 配置页面。
+   请配置 Wi-Fi SSID 及密码以继续后续流程。
+
+   <Aside type="note" title="无法进入 Wi-Fi 配置步骤？">
+      如果无法进入 Wi-Fi 配置步骤，可以尝试连接 ESP-Claw 提供的 SoftAP 网络，检查并修改配置。
+      [➡️Web 配置](@lang/tutorial/web-config)
+   </Aside>
+
+4. **配置其他参数**
+
    - 配置 LLM：可选 GPT (OpenAI), Qwen (阿里云百炼), Claude (Anthropic), DeepSeek (DeepSeek API)，请按提示生成 API Key 并填入。
       <Aside type="note" title="请选择推理能力较强的模型">
          ESP-Claw 的自编程、复杂工具组合等功能依赖强推理模型的能力。
@@ -59,17 +74,13 @@ ESP-Claw 需要至少 8 MB Flash 和 8 MB PSRAM，目前支持 ESP32-S3、ESP32-
       打开 [Tavily Dashboard](https://app.tavily.com/)，注册账号并登录，复制一个 API Key 并填入网页烧录工具的「Tavily」输入框。
    - 配置高级设置（可选），见 [配置说明](@lang/reference-project/configuration)。
 
-4. **烧录**
+5. **烧录**
 
    点击「烧录」按钮，开始烧录。
 
-5. **开始体验！**
+6. **开始体验！**
 
    烧录完成后，设备会自动重启，即可开始体验。
-
-   <Aside type="note">
-      如输入了错误的 Wi-Fi SSID 或密码，ESP-Claw 可能无法联网。此时，可以连接 ESP-Claw 提供的 SoftAP 网络，检查并修改配置。[➡️Web 配置](@lang/tutorial/web-config)
-   </Aside>
 
 </Steps>
 

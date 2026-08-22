@@ -1,0 +1,5 @@
+board: eda_ai_gamebox
+chip: esp32s3
+version: 1.0.0
+description: "EDA AI GameBox - ESP32-S3 掌上游戏机 (ST7789 240x320 + 五向按键 + XYAB)"
+manufacturer: "lceda-course-examples"

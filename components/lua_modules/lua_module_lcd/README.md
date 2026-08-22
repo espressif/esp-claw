@@ -19,7 +19,7 @@ This module describes how to correctly use `lcd` when writing Lua scripts.
 
 ## Important rules
 
-- `lcd.new(...)` only initializes the LCD bus, panel IO, and panel driver.
+- `lcd.new(...)` initializes the LCD bus and panel handles.
 - This module does not manage backlight GPIO or brightness.
 - If the board uses a dedicated backlight pin, control it separately with `gpio` or another module.
 - The panel config must include `controller`, `bus`, `io`, `panel`, and `resolution` tables.

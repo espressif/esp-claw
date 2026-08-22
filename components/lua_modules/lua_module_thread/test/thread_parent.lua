@@ -2,9 +2,11 @@ local thread = require("thread")
 local delay = require("delay")
 
 local sync = thread.sync
+local a = type(args) == "table" and args or {}
 
-local child_a_path = args.child_a_path or "/fatfs/scripts/builtin/test/thread_child_a.lua"
-local child_b_path = args.child_b_path or "/fatfs/scripts/builtin/test/thread_child_b.lua"
+local default_test_dir = type(a.test_dir) == "string" and a.test_dir or "/system/skills/builtin_lua_modules/scripts/builtin/test"
+local child_a_path = a.child_a_path or default_test_dir .. "/thread_child_a.lua"
+local child_b_path = a.child_b_path or default_test_dir .. "/thread_child_b.lua"
 
 local queue_to_a = "thread_test_to_a"
 local queue_to_b = "thread_test_to_b"

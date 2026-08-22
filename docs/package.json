@@ -13,25 +13,21 @@
   },
   "dependencies": {
     "@astrojs/check": "^0.9.9",
-    "@astrojs/markdown-remark": "^7.2.0",
-    "@astrojs/starlight": "^0.39.3",
-    "@lucide/astro": "^1.17.0",
-    "astro": "^6.4.4",
-    "astro-d2": "^0.11.0",
-    "lean-qr": "^2.7.1",
-    "sharp": "^0.34.2",
-    "starlight-theme-nova": "^0.11.11",
-    "tasmota-webserial-esptool": "^9.2.23",
+    "@astrojs/markdown-satteri": "^0.3.3",
+    "@astrojs/starlight": "^0.41.3",
+    "@lucide/astro": "^1.23.0",
+    "astro": "^7.0.7",
+    "astro-d2": "^0.13.0",
+    "lean-qr": "^2.7.2",
+    "satteri": "^0.9.5",
+    "sharp": "^0.35.3",
+    "starlight-theme-nova": "^0.12.1",
+    "tasmota-webserial-esptool": "github:laride/WebSerial_ESPTool#build/support-p4-rev3_2",
     "typescript": "^6.0.3"
   },
   "devDependencies": {
-    "@types/mdast": "^4.0.4",
     "@types/w3c-web-serial": "^1.0.8",
-    "mdast-util-mdx-jsx": "^3.2.0",
-    "tsx": "^4.22.4",
-    "unified": "^11.0.5",
-    "unist-util-visit": "^5.0.0",
-    "vfile": "^6.0.3"
+    "tsx": "^4.23.0"
   },
   "packageManager": "pnpm@11.5.0"
 }

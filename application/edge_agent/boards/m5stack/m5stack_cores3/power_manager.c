@@ -12,9 +12,8 @@
 #include "esp_err.h"
 #include "esp_check.h"
 #include "driver/i2c_master.h"
-#include "esp_board_device.h"
-#include "esp_board_periph.h"
 #include "gen_board_device_custom.h"
+#include "esp_board_manager_includes.h"
 #include "esp_io_expander.h"
 #include "power_manager.h"
 

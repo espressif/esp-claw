@@ -1,8 +1,8 @@
 # Lua I2C
 
-This module describes how to correctly use `i2c` when writing Lua scripts.
-It is built on top of the `i2c_bus` component and supports scanning a bus
-and talking to multiple devices on the same bus.
+This module describes how to use `i2c` from Lua for I2C buses and 7-bit
+addressed devices. It supports scanning a bus and talking to multiple devices
+on the same bus.
 
 ## How to call
 - Import it with `local i2c = require("i2c")`
@@ -37,8 +37,7 @@ raises a Lua error, so wrap calls in `pcall` if you want to handle failures.
   `local si12t_touch = require("lib_si12t_touch")`; it can reuse an existing
   I2C bus or create one from `port`, `sda`, and `scl` options.
 
-See `scripts/builtin/lib/ssd1306.md` and
-`scripts/builtin/lib/lib_si12t_touch.md` for the full library APIs.
+Full API docs for these helpers are bundled with the libraries.
 
 ## Example: scan the bus
 ```lua

@@ -1,6 +1,7 @@
 ---
 import SiteShell from "@/layouts/SiteShell.astro";
 import firmwareDb from "@/flash-tool/firmware.json";
+import firmwareMeta from "@/flash-tool/firmware-meta.json";
 import type { Lang } from "@/site/locales";
 import { localeHref } from "@/site/locales";
 import { getChromeStrings } from "@/site/chrome-i18n";
@@ -43,6 +44,7 @@ const quickLinks = [
 const flashBootJson = JSON.stringify({
   lang,
   firmwareDb,
+  masterRef: firmwareMeta.masterRef,
   strings: s,
   boardsHref,
 }).replace(/</g, "\\u003c");
@@ -393,6 +395,100 @@ const flashBootJson = JSON.stringify({
       opacity: 0.65;
       cursor: not-allowed;
       border-color: var(--border-accent);
+    }
+
+    .advanced-settings {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      overflow: hidden;
+    }
+
+    .advanced-settings-summary {
+      padding: 0.7rem 1rem;
+      font-size: 0.82rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      cursor: pointer;
+      user-select: none;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      transition: color 0.15s;
+    }
+
+    .advanced-settings-summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .advanced-settings-summary::before {
+      content: "▶";
+      font-size: 0.55rem;
+      display: inline-block;
+      transition: transform 0.15s;
+      flex-shrink: 0;
+    }
+
+    details[open] > .advanced-settings-summary::before {
+      transform: rotate(90deg);
+    }
+
+    .advanced-settings-summary:hover {
+      color: var(--text-primary);
+    }
+
+    .advanced-settings-body {
+      padding: 0 1rem 0.85rem;
+    }
+
+    .checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.85rem;
+      color: var(--text-primary);
+      cursor: pointer;
+    }
+
+    .checkbox-label input[type="checkbox"] {
+      width: auto;
+      accent-color: var(--accent);
+    }
+
+    .partition-selection {
+      margin-top: 0.85rem;
+    }
+
+    .partition-list {
+      display: grid;
+      gap: 0.35rem;
+      margin-top: 0.5rem;
+    }
+
+    .partition-list :global(.partition-item) {
+      display: grid;
+      grid-template-columns: auto 9ch 1fr;
+      align-items: center;
+      gap: 0.65rem;
+      font-size: 0.82rem;
+      font-family: "JetBrains Mono", monospace;
+      color: var(--text-primary);
+    }
+
+    .partition-list :global(.partition-item) input[type="checkbox"] {
+      width: auto;
+      accent-color: var(--accent);
+    }
+
+    .partition-list :global(.partition-offset) {
+      color: var(--text-muted);
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .partition-list :global(.partition-name) {
+      min-width: 0;
+      word-break: break-word;
     }
 
     .connect-bar-btns {
@@ -846,6 +942,13 @@ const flashBootJson = JSON.stringify({
       max-height: 150px;
     }
 
+    .modal-download-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.75rem;
+      margin-top: 1rem;
+    }
+
     .reconnect-prompt {
       margin-top: 1rem;
       padding: 1rem;
@@ -1128,7 +1231,15 @@ const flashBootJson = JSON.stringify({
     <div class="tool-shell">
       <section class="section-card" id="selection-card">
         <div class="selection-fields" id="selection-fields">
-          <label class="section-label" for="chip-select">{s.chooseChipLabel}</label>
+          <label class="section-label" for="app-select">{s.chooseApplicationLabel}</label>
+          <select id="app-select"></select>
+
+          <label class="section-label" for="version-select" style="margin-top: 1rem;">
+            {s.chooseVersionLabel}
+          </label>
+          <select id="version-select"></select>
+
+          <label class="section-label" for="chip-select" style="margin-top: 1rem;">{s.chooseChipLabel}</label>
           <select id="chip-select"></select>
 
           <label class="section-label" for="brand-select" style="margin-top: 1rem;">
@@ -1145,6 +1256,21 @@ const flashBootJson = JSON.stringify({
             {s.chooseConsoleOutputLabel}
           </label>
           <select id="console-output-select"></select>
+
+          <details class="advanced-settings" id="advanced-settings" style="margin-top: 1rem;">
+            <summary class="advanced-settings-summary">{s.advancedSettingsLabel}</summary>
+            <div class="advanced-settings-body">
+              <label class="checkbox-label">
+                <input type="checkbox" id="erase-flash-checkbox" />
+                {s.eraseFlashBeforeFlash}
+              </label>
+              <div class="partition-selection" id="partition-selection">
+                <p class="section-note" id="partition-selection-hint">{s.partitionSelectionHint}</p>
+                <div class="partition-list" id="partition-list"></div>
+              </div>
+            </div>
+          </details>
+
           <div class="selected-board" id="selected-board-summary" hidden>
             <div class="selected-board-top">
               <div class="board-meta-list" id="selected-board-meta"></div>
@@ -1282,6 +1408,14 @@ const flashBootJson = JSON.stringify({
             <div class="progress-bar" id="modal-progress-bar"></div>
           </div>
           <div class="progress-log" id="modal-progress-log"></div>
+        </div>
+        <div class="modal-download-actions" id="modal-download-actions" hidden>
+          <button type="button" class="btn-primary" id="modal-download-btn">
+            {s.downloadBtn}
+          </button>
+          <button type="button" class="btn-secondary" id="modal-download-close-btn">
+            {s.closeBtn}
+          </button>
         </div>
         <div class="reconnect-prompt" id="modal-reconnect-prompt" hidden>
           <div class="reconnect-title">{s.postFlashReconnectTitle}</div>

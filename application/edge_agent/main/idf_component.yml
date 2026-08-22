@@ -1,16 +1,8 @@
 ## IDF Component Manager Manifest File
 dependencies:
   espressif/esp_board_manager:
-    version: "^0.5.12"
+    version: "^0.6"
     public: true
-  espressif/esp_wifi_remote:
-    version: ">=0.10,<2.0"
-    rules:
-      - if: "target in [esp32p4]"
-  espressif/esp_hosted:
-    version: "2.12.3"
-    rules:
-      - if: "target in [esp32p4]"
 
   app_claw:
     path: ../../../components/common/app_claw
@@ -21,16 +13,16 @@ dependencies:
   captive_dns:
     path: ../../../components/common/captive_dns
 
-  claw_ramfs:
-    path: ../../../components/claw_modules/claw_ramfs
+  espressif/ramfs:
+    version: "^0.1"
 
   claw_utils:
     path: ../../../components/claw_modules/claw_utils
 
-  emote:
-    path: ../../../components/common/emote
+  system_ui:
     rules:
-      - if: $CONFIG{ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT} == True
+    - if: $CONFIG{ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT} == True
+    path: ../../../components/common/system_ui
 
   http_reuse:
     path: ../../../components/common/http_reuse

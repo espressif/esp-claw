@@ -10,13 +10,28 @@ lua_lvgl_state_t s_lvgl;
 
 esp_err_t lua_lvgl_lock(void)
 {
+    esp_err_t err;
+
+    if (display_service_is_started()) {
+        err = display_service_lock();
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "display service lock failed: %s", esp_err_to_name(err));
+            return err;
+        }
+    }
     if (!s_lvgl.mutex) {
         s_lvgl.mutex = xSemaphoreCreateMutex();
     }
     if (!s_lvgl.mutex) {
+        if (display_service_is_started()) {
+            display_service_unlock();
+        }
         return ESP_ERR_NO_MEM;
     }
     if (xSemaphoreTake(s_lvgl.mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        if (display_service_is_started()) {
+            display_service_unlock();
+        }
         return ESP_ERR_TIMEOUT;
     }
     return ESP_OK;
@@ -27,193 +42,14 @@ void lua_lvgl_unlock(void)
     if (s_lvgl.mutex) {
         xSemaphoreGive(s_lvgl.mutex);
     }
+    if (display_service_is_started()) {
+        display_service_unlock();
+    }
 }
 
 int lua_lvgl_error_esp(lua_State *L, const char *what, esp_err_t err)
 {
     return luaL_error(L, "lvgl %s failed: %s", what, esp_err_to_name(err));
-}
-static const char *lua_lvgl_display_owner_name(display_arbiter_owner_t owner)
-{
-    switch (owner) {
-    case DISPLAY_ARBITER_OWNER_NONE:
-        return "none";
-    case DISPLAY_ARBITER_OWNER_LUA:
-        return "lua";
-    case DISPLAY_ARBITER_OWNER_EMOTE_GFX:
-        return "emote_gfx";
-    default:
-        return "unknown";
-    }
-}
-
-static IRAM_ATTR bool lua_lvgl_flush_done_cb(esp_lcd_panel_io_handle_t panel_io,
-                                             esp_lcd_panel_io_event_data_t *edata,
-                                             void *user_ctx)
-{
-    lua_lvgl_state_t *state = (lua_lvgl_state_t *)user_ctx;
-    BaseType_t high_task_woken = pdFALSE;
-
-    (void)panel_io;
-    (void)edata;
-
-    if (state) {
-        lv_display_t *display = state->display;
-
-        state->flush_pending = false;
-        if (display) {
-            lv_display_flush_ready(display);
-        }
-        if (state->flush_done) {
-            xSemaphoreGiveFromISR(state->flush_done, &high_task_woken);
-        }
-    }
-
-    return high_task_woken == pdTRUE;
-}
-
-static esp_err_t lua_lvgl_register_flush_callbacks_locked(void)
-{
-    if (s_lvgl.panel_if != LUA_MODULE_LVGL_PANEL_IF_IO) {
-        return ESP_OK;
-    }
-    ESP_RETURN_ON_FALSE(s_lvgl.io != NULL, ESP_ERR_INVALID_STATE, TAG, "io handle missing");
-
-    const esp_lcd_panel_io_callbacks_t callbacks = {
-        .on_color_trans_done = lua_lvgl_flush_done_cb,
-    };
-    esp_err_t err = esp_lcd_panel_io_register_event_callbacks(s_lvgl.io, &callbacks, &s_lvgl);
-
-    if (err == ESP_OK) {
-        s_lvgl.flush_callbacks_registered = true;
-    }
-    return err;
-}
-
-static esp_err_t lua_lvgl_clear_flush_callbacks_locked(void)
-{
-    if (!s_lvgl.flush_callbacks_registered || s_lvgl.panel_if != LUA_MODULE_LVGL_PANEL_IF_IO) {
-        s_lvgl.flush_callbacks_registered = false;
-        return ESP_OK;
-    }
-    ESP_RETURN_ON_FALSE(s_lvgl.io != NULL, ESP_ERR_INVALID_STATE, TAG, "io handle missing");
-
-    const esp_lcd_panel_io_callbacks_t callbacks = {0};
-    esp_err_t err = esp_lcd_panel_io_register_event_callbacks(s_lvgl.io, &callbacks, NULL);
-
-    if (err == ESP_OK) {
-        s_lvgl.flush_callbacks_registered = false;
-    }
-    return err;
-}
-
-static void lua_lvgl_wait_flush_done(void)
-{
-    if (!s_lvgl.flush_pending || !s_lvgl.flush_done) {
-        return;
-    }
-    if (xSemaphoreTake(s_lvgl.flush_done, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        ESP_LOGW(TAG, "lvgl flush wait timeout");
-    }
-}
-
-static bool lua_lvgl_panel_requires_color_swap(const lua_lvgl_state_t *state)
-{
-    return state && state->panel_if == LUA_MODULE_LVGL_PANEL_IF_IO;
-}
-
-static void lua_lvgl_bswap16_in_place(uint8_t *px_map, size_t pixel_count)
-{
-    uint16_t *pixels = (uint16_t *)px_map;
-
-    for (size_t i = 0; i < pixel_count; i++) {
-        pixels[i] = __builtin_bswap16(pixels[i]);
-    }
-}
-
-static void lua_lvgl_flush_cb(lv_display_t *display, const lv_area_t *area, uint8_t *px_map)
-{
-    lua_lvgl_state_t *state = (lua_lvgl_state_t *)lv_display_get_user_data(display);
-    bool wait_for_flush_done = state &&
-                               state->panel_if == LUA_MODULE_LVGL_PANEL_IF_IO &&
-                               state->flush_callbacks_registered;
-
-    if (state && state->panel) {
-        if (lua_lvgl_panel_requires_color_swap(state)) {
-            size_t pixel_count = (size_t)(area->x2 - area->x1 + 1) *
-                                 (size_t)(area->y2 - area->y1 + 1);
-            lua_lvgl_bswap16_in_place(px_map, pixel_count);
-        }
-        if (wait_for_flush_done) {
-            while (state->flush_done && xSemaphoreTake(state->flush_done, 0) == pdTRUE) {
-            }
-            state->flush_pending = true;
-        }
-        esp_err_t err = esp_lcd_panel_draw_bitmap(state->panel,
-                                                  area->x1,
-                                                  area->y1,
-                                                  area->x2 + 1,
-                                                  area->y2 + 1,
-                                                  px_map);
-        if (err != ESP_OK) {
-            state->flush_pending = false;
-            ESP_LOGE(TAG, "flush failed: %s", esp_err_to_name(err));
-            lv_display_flush_ready(display);
-        }
-    } else {
-        lv_display_flush_ready(display);
-        return;
-    }
-    if (!wait_for_flush_done) {
-        lv_display_flush_ready(display);
-    }
-}
-
-static void lua_lvgl_tick_timer_cb(void *arg)
-{
-    lua_lvgl_state_t *state = (lua_lvgl_state_t *)arg;
-
-    lv_tick_inc(state && state->tick_ms ? state->tick_ms : LUA_MODULE_LVGL_DEFAULT_TICK_MS);
-}
-
-static void lua_lvgl_task(void *arg)
-{
-    lua_lvgl_state_t *state = (lua_lvgl_state_t *)arg;
-
-    while (!state->task_stop) {
-        if (lua_lvgl_lock() == ESP_OK) {
-            if (state->runtime_initialized) {
-                (void)lv_timer_handler();
-            }
-            lua_lvgl_unlock();
-        }
-        vTaskDelay(pdMS_TO_TICKS(state->task_period_ms ? state->task_period_ms : LUA_MODULE_LVGL_DEFAULT_TASK_PERIOD_MS));
-    }
-    if (state->task_waiter) {
-        xTaskNotifyGive(state->task_waiter);
-        state->task_waiter = NULL;
-    }
-    state->task_handle = NULL;
-    vTaskDelete(NULL);
-}
-
-static esp_err_t lua_lvgl_stop_task(void)
-{
-    TaskHandle_t task = s_lvgl.task_handle;
-
-    if (!task) {
-        return ESP_OK;
-    }
-    s_lvgl.task_waiter = xTaskGetCurrentTaskHandle();
-    s_lvgl.task_stop = true;
-    if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(LUA_MODULE_LVGL_TASK_STOP_TIMEOUT_MS)) == 0) {
-        ESP_LOGW(TAG, "lvgl task stop timeout");
-        s_lvgl.task_waiter = NULL;
-        return ESP_ERR_TIMEOUT;
-    }
-    s_lvgl.task_waiter = NULL;
-    s_lvgl.task_handle = NULL;
-    return ESP_OK;
 }
 
 static esp_err_t lua_lvgl_quiesce_runtime(void)
@@ -226,7 +62,7 @@ static esp_err_t lua_lvgl_quiesce_runtime(void)
     if (s_lvgl.runtime_initialized) {
         s_lvgl.runtime_initialized = false;
         lua_lvgl_indev_release_locked();
-        lv_anim_delete_all();
+        /* The Lua LVGL session shares the global LVGL runtime with system UI. Do not call lv_anim_delete_all() here; object-bound animations are cleaned up when their objects are deleted. */
     }
     lua_lvgl_unlock();
     return ESP_OK;
@@ -252,34 +88,36 @@ static void lua_lvgl_drain_event_queue_locked(void)
     s_lvgl.event_queue_tail = NULL;
 }
 
-static void lua_lvgl_release_runtime_locked(void)
+static void lua_lvgl_delete_owned_objects_locked(void)
 {
-    /* Snapshot the owner before we clear it: lv_display_delete will fire
-     * LV_EVENT_DELETE on every widget which calls record_release_resources
-     * which in turn fills s_lvgl.pending_unrefs. We must drain pending
-     * unrefs against the still-live owner state below. */
-    lua_State *owner = s_lvgl.runtime_owner;
+    if (s_lvgl.root_screen != NULL && lv_obj_is_valid(s_lvgl.root_screen)) {
+        lv_obj_delete(s_lvgl.root_screen);
+        s_lvgl.root_screen = NULL;
+    }
 
-    /* Release input devices before tearing down the display: the LVGL
-     * task is already stopped (see lua_lvgl_deinit_runtime), so no
-     * read_cb can run, and lv_display_delete should not have to chase
-     * dangling indev->display pointers. */
-    lua_lvgl_indev_release_locked();
-
-    if (s_lvgl.flush_callbacks_registered) {
-        esp_err_t err = lua_lvgl_clear_flush_callbacks_locked();
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "clear flush callback failed: %s", esp_err_to_name(err));
+    for (lua_lvgl_obj_record_t *record = s_lvgl.records; record != NULL; record = record->next) {
+        if (record->generation == s_lvgl.generation &&
+                record->owned &&
+                record->valid &&
+                record->obj != NULL &&
+                lv_obj_is_valid(record->obj)) {
+            lv_obj_delete(record->obj);
         }
     }
+}
 
-    if (s_lvgl.display) {
-        lv_display_set_user_data(s_lvgl.display, NULL);
-        lv_display_delete(s_lvgl.display);
-        s_lvgl.display = NULL;
-    }
+static void lua_lvgl_release_runtime_locked(void)
+{
+    /* Snapshot the owner before deleting LVGL objects: LV_EVENT_DELETE fills
+     * pending_unrefs, and those refs must be drained against the live Lua
+     * state while we are still on the script task. */
+    lua_State *owner = s_lvgl.runtime_owner;
+
+    lua_lvgl_indev_release_locked();
+    lua_lvgl_delete_owned_objects_locked();
     lua_lvgl_invalidate_records_locked();
     lua_lvgl_release_fonts_locked();
+    lua_lvgl_destroy_default_font_locked();
     lua_lvgl_drain_event_queue_locked();
     lua_lvgl_drain_pending_unrefs_locked(owner);
     heap_caps_free(s_lvgl.draw_buf);
@@ -290,6 +128,8 @@ static void lua_lvgl_release_runtime_locked(void)
     s_lvgl.width = 0;
     s_lvgl.height = 0;
     s_lvgl.panel_if = LUA_MODULE_LVGL_PANEL_IF_IO;
+    s_lvgl.display = NULL;
+    s_lvgl.root_screen = NULL;
     s_lvgl.runtime_initialized = false;
     s_lvgl.runtime_owner = NULL;
     s_lvgl.flush_callbacks_registered = false;
@@ -297,97 +137,105 @@ static void lua_lvgl_release_runtime_locked(void)
     s_lvgl.generation++;
 }
 
+static void lua_lvgl_session_cleanup_cb(display_service_session_handle_t session, void *user_ctx)
+{
+    (void)session;
+    (void)user_ctx;
+
+    if (s_lvgl.mutex && xSemaphoreTake(s_lvgl.mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+        ESP_LOGE(TAG, "lvgl session cleanup lock timeout");
+        return;
+    }
+    lua_lvgl_release_runtime_locked();
+    if (s_lvgl.mutex) {
+        xSemaphoreGive(s_lvgl.mutex);
+    }
+}
+
 esp_err_t lua_lvgl_deinit_runtime(void)
 {
-    esp_timer_handle_t timer = s_lvgl.tick_timer;
     esp_err_t err;
+    display_service_session_handle_t session = s_lvgl.display_session;
 
     err = lua_lvgl_quiesce_runtime();
     if (err != ESP_OK) {
         return err;
     }
 
-    if (timer) {
-        (void)esp_timer_stop(timer);
-        (void)esp_timer_delete(timer);
-        s_lvgl.tick_timer = NULL;
-    }
-
-    if (s_lvgl.task_handle) {
-        err = lua_lvgl_stop_task();
+    if (session != NULL) {
+        err = display_service_close(session);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "display session close failed: %s", esp_err_to_name(err));
+            return err;
+        }
+        s_lvgl.display_session = NULL;
+    } else {
+        err = lua_lvgl_lock();
         if (err != ESP_OK) {
             return err;
         }
-    }
-    lua_lvgl_wait_flush_done();
-
-    err = lua_lvgl_lock();
-    if (err != ESP_OK) {
-        return err;
-    }
-    lua_lvgl_release_runtime_locked();
-    lua_lvgl_unlock();
-
-    if (s_lvgl.display_owner_acquired) {
-        err = display_arbiter_release(DISPLAY_ARBITER_OWNER_LUA);
-        if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-            ESP_LOGW(TAG, "display owner release failed: %s", esp_err_to_name(err));
-        }
-        s_lvgl.display_owner_acquired = false;
+        lua_lvgl_release_runtime_locked();
+        lua_lvgl_unlock();
     }
     return ESP_OK;
 }
 static int lua_lvgl_init(lua_State *L)
 {
-    esp_lcd_panel_handle_t panel = (esp_lcd_panel_handle_t)lua_touserdata(L, 1);
-    esp_lcd_panel_io_handle_t io = (esp_lcd_panel_io_handle_t)lua_touserdata(L, 2);
-    int width = (int)luaL_checkinteger(L, 3);
-    int height = (int)luaL_checkinteger(L, 4);
-    int panel_if = lua_isnoneornil(L, 5) ? LUA_MODULE_LVGL_PANEL_IF_IO : (int)luaL_checkinteger(L, 5);
     int buffer_lines = LUA_MODULE_LVGL_DEFAULT_BUFFER_LINES;
     int tick_ms = LUA_MODULE_LVGL_DEFAULT_TICK_MS;
     int task_period_ms = LUA_MODULE_LVGL_DEFAULT_TASK_PERIOD_MS;
-    size_t draw_buf_size;
-    void *draw_buf = NULL;
+    int font_size = LUA_MODULE_LVGL_DEFAULT_FONT_SIZE;
+    int font_cache_size = LV_TINY_TTF_CACHE_GLYPH_CNT;
+    int opts_index = 0;
+    const char *font_path = LUA_MODULE_LVGL_DEFAULT_FONT_PATH;
+    char font_path_buf[LUA_MODULE_LVGL_PATH_MAX];
     lv_display_t *display = NULL;
-    esp_timer_handle_t tick_timer = NULL;
-    display_arbiter_owner_t owner;
-    esp_timer_create_args_t timer_args = {
-        .callback = lua_lvgl_tick_timer_cb,
-        .arg = &s_lvgl,
-        .name = "lua_lvgl_tick",
-    };
+    lv_obj_t *root_screen = NULL;
+    display_service_session_handle_t session = NULL;
     esp_err_t err;
 
-    luaL_argcheck(L, panel != NULL, 1, "panel_handle lightuserdata expected");
-    if (panel_if == LUA_MODULE_LVGL_PANEL_IF_IO) {
-        luaL_argcheck(L, io != NULL, 2, "io_handle lightuserdata expected for IO panels");
-    }
-    luaL_argcheck(L, width > 0 && height > 0, 3, "width and height must be positive");
-    luaL_argcheck(L,
-                  panel_if >= LUA_MODULE_LVGL_PANEL_IF_IO && panel_if <= LUA_MODULE_LVGL_PANEL_IF_MIPI_DSI,
-                  5,
-                  "panel_if must be 0, 1, or 2");
-
+    font_path_buf[0] = '\0';
     if (lua_lvgl_opt_table(L, 6)) {
+        opts_index = 6;
         buffer_lines = lua_lvgl_get_opt_int_field(L, 6, "buffer_lines", buffer_lines);
         tick_ms = lua_lvgl_get_opt_int_field(L, 6, "tick_ms", tick_ms);
         task_period_ms = lua_lvgl_get_opt_int_field(L, 6, "task_period_ms", task_period_ms);
+    } else if (lua_lvgl_opt_table(L, 1)) {
+        opts_index = 1;
+        buffer_lines = lua_lvgl_get_opt_int_field(L, 1, "buffer_lines", buffer_lines);
+        tick_ms = lua_lvgl_get_opt_int_field(L, 1, "tick_ms", tick_ms);
+        task_period_ms = lua_lvgl_get_opt_int_field(L, 1, "task_period_ms", task_period_ms);
     }
-    luaL_argcheck(L, buffer_lines > 0 && buffer_lines <= height, 6, "buffer_lines must be in range 1..height");
+    if (opts_index > 0) {
+        font_path = lua_lvgl_get_opt_string_field(L, opts_index, "font_path");
+        if (!font_path || !font_path[0]) {
+            font_path = LUA_MODULE_LVGL_DEFAULT_FONT_PATH;
+        }
+        int written = snprintf(font_path_buf, sizeof(font_path_buf), "%s", font_path);
+        if (written <= 0 || (size_t)written >= sizeof(font_path_buf)) {
+            ESP_LOGE(TAG, "default font path too long");
+            return luaL_error(L, "lvgl option 'font_path' is too long");
+        }
+        font_path = font_path_buf;
+        font_size = lua_lvgl_get_opt_int_field(L, opts_index, "font_size", font_size);
+        font_cache_size = lua_lvgl_get_opt_int_field(L, opts_index, "font_cache_size", font_cache_size);
+    }
+    luaL_argcheck(L, buffer_lines > 0, 1, "buffer_lines must be positive");
     luaL_argcheck(L, tick_ms > 0, 6, "tick_ms must be positive");
     luaL_argcheck(L, task_period_ms > 0, 6, "task_period_ms must be positive");
+    if (font_size <= 0) {
+        ESP_LOGE(TAG, "invalid default font size: %d", font_size);
+        return luaL_error(L, "lvgl option 'font_size' must be positive");
+    }
+    if (font_cache_size < 0) {
+        ESP_LOGE(TAG, "invalid default font cache size: %d", font_cache_size);
+        return luaL_error(L, "lvgl option 'font_cache_size' must be non-negative");
+    }
 
     if (!s_lvgl.mutex) {
         s_lvgl.mutex = xSemaphoreCreateMutex();
         if (!s_lvgl.mutex) {
             return lua_lvgl_error_esp(L, "create mutex", ESP_ERR_NO_MEM);
-        }
-    }
-    if (!s_lvgl.flush_done) {
-        s_lvgl.flush_done = xSemaphoreCreateBinary();
-        if (!s_lvgl.flush_done) {
-            return lua_lvgl_error_esp(L, "create flush semaphore", ESP_ERR_NO_MEM);
         }
     }
 
@@ -401,117 +249,71 @@ static int lua_lvgl_init(lua_State *L)
     }
     lua_lvgl_unlock();
 
-    owner = display_arbiter_get_owner();
-    if (owner == DISPLAY_ARBITER_OWNER_LUA) {
-        return luaL_error(L,
-                          "display is already owned by Lua; deinit display/lvgl before lvgl.init");
-    }
-    if (owner != DISPLAY_ARBITER_OWNER_NONE && owner != DISPLAY_ARBITER_OWNER_EMOTE_GFX) {
-        return luaL_error(L,
-                          "display is already owned by %s",
-                          lua_lvgl_display_owner_name(owner));
-    }
-
-    err = display_arbiter_acquire(DISPLAY_ARBITER_OWNER_LUA);
+    err = display_service_open(&(display_service_session_config_t) {
+        .owner_name = "lua_lvgl",
+        .mode = DISPLAY_SERVICE_MODE_EXCLUSIVE_LVGL,
+        .flags = DISPLAY_SERVICE_SESSION_FLAG_RESTORE_DEFAULT_ON_RELEASE |
+                 DISPLAY_SERVICE_SESSION_FLAG_ALLOW_SYSTEM_OVERLAY,
+        .cleanup_cb = lua_lvgl_session_cleanup_cb,
+        .display_config = {
+            .buffer_lines = (uint32_t)buffer_lines,
+            .tick_ms = (uint32_t)tick_ms,
+            .task_period_ms = (uint32_t)task_period_ms,
+        },
+    }, &session);
     if (err != ESP_OK) {
-        return lua_lvgl_error_esp(L, "acquire display", err);
+        return lua_lvgl_error_esp(L, "open display session", err);
     }
-    s_lvgl.display_owner_acquired = true;
-
-    draw_buf_size = (size_t)width * (size_t)buffer_lines * sizeof(lv_color_t);
-    if (panel_if == LUA_MODULE_LVGL_PANEL_IF_IO) {
-        draw_buf = heap_caps_malloc(draw_buf_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
-    } else {
-        draw_buf = heap_caps_malloc(draw_buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    }
-    if (!draw_buf && panel_if != LUA_MODULE_LVGL_PANEL_IF_IO) {
-        draw_buf = heap_caps_malloc(draw_buf_size, MALLOC_CAP_8BIT);
-    }
-    if (!draw_buf && panel_if == LUA_MODULE_LVGL_PANEL_IF_IO) {
-        draw_buf = heap_caps_malloc(draw_buf_size, MALLOC_CAP_8BIT | MALLOC_CAP_DMA);
-    }
-    if (!draw_buf) {
-        (void)display_arbiter_release(DISPLAY_ARBITER_OWNER_LUA);
-        s_lvgl.display_owner_acquired = false;
-        return luaL_error(L, "lvgl draw buffer allocation failed; reduce buffer_lines");
+    display = display_service_session_display(session);
+    if (display == NULL) {
+        (void)display_service_close(session);
+        return luaL_error(L, "display service LVGL display is NULL");
     }
 
     err = lua_lvgl_lock();
     if (err != ESP_OK) {
-        heap_caps_free(draw_buf);
-        (void)display_arbiter_release(DISPLAY_ARBITER_OWNER_LUA);
-        s_lvgl.display_owner_acquired = false;
+        (void)display_service_close(session);
         return lua_lvgl_error_esp(L, "lock", err);
-    }
-
-    if (!s_lvgl.lvgl_initialized) {
-        lv_init();
-        s_lvgl.lvgl_initialized = true;
     }
     err = lua_lvgl_register_fs_locked();
     if (err != ESP_OK) {
         lua_lvgl_unlock();
-        heap_caps_free(draw_buf);
-        (void)display_arbiter_release(DISPLAY_ARBITER_OWNER_LUA);
-        s_lvgl.display_owner_acquired = false;
+        (void)display_service_close(session);
         return lua_lvgl_error_esp(L, "register fs", err);
     }
-
-    display = lv_display_create(width, height);
-    if (!display) {
-        lua_lvgl_unlock();
-        heap_caps_free(draw_buf);
-        (void)display_arbiter_release(DISPLAY_ARBITER_OWNER_LUA);
-        s_lvgl.display_owner_acquired = false;
-        return luaL_error(L, "lvgl display create failed");
+    err = lua_lvgl_create_default_font_locked(font_path, (uint32_t)font_size, (uint32_t)font_cache_size);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "default font unavailable, using LVGL built-in font");
     }
 
-    s_lvgl.panel = panel;
-    s_lvgl.io = io;
-    s_lvgl.width = width;
-    s_lvgl.height = height;
-    s_lvgl.panel_if = panel_if;
+    root_screen = lv_obj_create(NULL);
+    if (root_screen == NULL) {
+        lua_lvgl_destroy_default_font_locked();
+        lua_lvgl_unlock();
+        (void)display_service_close(session);
+        return luaL_error(L, "lvgl root screen create failed");
+    }
+    lua_lvgl_apply_default_font_locked(root_screen);
+    err = display_service_session_load_screen_locked(session, root_screen);
+    if (err != ESP_OK) {
+        lv_obj_delete(root_screen);
+        lua_lvgl_destroy_default_font_locked();
+        lua_lvgl_unlock();
+        (void)display_service_close(session);
+        return lua_lvgl_error_esp(L, "load root screen", err);
+    }
+
+    s_lvgl.display_session = session;
+    s_lvgl.width = (int)lv_display_get_horizontal_resolution(display);
+    s_lvgl.height = (int)lv_display_get_vertical_resolution(display);
     s_lvgl.tick_ms = (uint32_t)tick_ms;
     s_lvgl.task_period_ms = (uint32_t)task_period_ms;
-    s_lvgl.draw_buf = draw_buf;
-    s_lvgl.draw_buf_size = draw_buf_size;
     s_lvgl.display = display;
+    s_lvgl.root_screen = root_screen;
     s_lvgl.runtime_initialized = true;
     s_lvgl.runtime_owner = L;
     s_lvgl.task_stop = false;
-
-    lv_display_set_user_data(display, &s_lvgl);
-    lv_display_set_buffers(display, draw_buf, NULL, (uint32_t)draw_buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
-    lv_display_set_flush_cb(display, lua_lvgl_flush_cb);
-    err = lua_lvgl_register_flush_callbacks_locked();
-    if (err != ESP_OK) {
-        lua_lvgl_unlock();
-        (void)lua_lvgl_deinit_runtime();
-        return lua_lvgl_error_esp(L, "register flush callback", err);
-    }
     lua_lvgl_unlock();
-
-    err = esp_timer_create(&timer_args, &tick_timer);
-    if (err != ESP_OK) {
-        (void)lua_lvgl_deinit_runtime();
-        return lua_lvgl_error_esp(L, "create tick timer", err);
-    }
-    s_lvgl.tick_timer = tick_timer;
-    err = esp_timer_start_periodic(tick_timer, (uint64_t)tick_ms * 1000ULL);
-    if (err != ESP_OK) {
-        (void)lua_lvgl_deinit_runtime();
-        return lua_lvgl_error_esp(L, "start tick timer", err);
-    }
-
-    if (xTaskCreate(lua_lvgl_task,
-                    "lua_lvgl",
-                    LUA_MODULE_LVGL_TASK_STACK,
-                    &s_lvgl,
-                    LUA_MODULE_LVGL_TASK_PRIO,
-                    &s_lvgl.task_handle) != pdPASS) {
-        (void)lua_lvgl_deinit_runtime();
-        return lua_lvgl_error_esp(L, "create task", ESP_ERR_NO_MEM);
-    }
 
     lua_pushboolean(L, 1);
     return 1;

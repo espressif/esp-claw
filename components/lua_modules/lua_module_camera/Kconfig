@@ -1,0 +1,19 @@
+menu "Lua Camera Module"
+    depends on APP_CLAW_CAP_LUA
+    depends on APP_CLAW_LUA_MODULE_CAMERA
+
+    config LUA_MODULE_CAMERA_ENABLE_VFLIP
+        bool "Camera vertical flip"
+        default y
+        help
+            Set V4L2_CID_VFLIP to 1 when enabled or 0 when disabled whenever
+            camera.open() starts a camera stream.
+
+    config LUA_MODULE_CAMERA_ENABLE_HMIRROR
+        bool "Camera horizontal mirror"
+        default n
+        help
+            Set V4L2_CID_HFLIP to 1 when enabled or 0 when disabled whenever
+            camera.open() starts a camera stream.
+
+endmenu

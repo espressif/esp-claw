@@ -1,0 +1,80 @@
+version: 1.0.0
+# Devices Configuration for Seeed Studio XIAO ESP32-S3 Sense
+#
+# Device summary:
+#   camera     - OV2640 over DVP 8-bit (XCLK 20 MHz, JPEG 800x600@30FPS default)
+#   audio_adc  - on-board PDM microphone (bare PDM, no codec IC)
+#   fs_sdcard  - on-board microSD slot over SPI; mounts as CLAW_PATH_DATA root
+#
+# NOTE: the on-board user LED on GPIO21 is NOT exposed as a device here.
+# The Sense expansion board hardwires the SD card's CS line to GPIO21, so
+# the LED and the SD card physically cannot be used at the same time. SD
+# storage is more useful for an edge-agent workload, so the LED is dropped.
+# (See https://wiki.seeedstudio.com/xiao_esp32s3_sense_filesystem/ for the
+# official pin table: CS = GPIO21, SCK = GPIO7, MISO = GPIO8, MOSI = GPIO9.)
+
+devices:
+  - name: camera
+    type: camera
+    sub_type: dvp
+    version: default
+    config:
+      dvp_config:
+        reset_io: -1
+        pwdn_io: -1
+        vsync_io: 38
+        de_io: 47
+        pclk_io: 13
+        xclk_io: 10
+        xclk_freq: 20000000
+        data_width: CAM_CTLR_DATA_WIDTH_8
+        data_io:
+          data_io_0: 15
+          data_io_1: 17
+          data_io_2: 18
+          data_io_3: 16
+          data_io_4: 14
+          data_io_5: 12
+          data_io_6: 11
+          data_io_7: 48
+    peripherals:
+      - name: i2c_master
+        frequency: 100000
+
+  - name: audio_adc
+    chip: internal
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      dac_enabled: false
+      adc_max_channel: 1
+      adc_channel_mask: "1"
+      adc_init_gain: 0
+      mclk_enabled: false
+    peripherals:
+      - name: i2s_audio_in
+
+  - name: fs_sdcard
+    type: fs_fat
+    sub_type: spi
+    version: default
+    config:
+      vfs_config:
+        # esp_vfs_fat supports FAT12/16/32 only; the SD card MUST be FAT32,
+        # not exFAT. Cards that fail to mount should be re-formatted with
+        # the official SD Card Formatter, not silently wiped here.
+        format_if_mount_failed: false
+        max_files: 5
+      sub_config:
+        # Seeed's official pin table (SD.begin(21) in the wiki example):
+        #   CS = GPIO21, SCK = GPIO7, MISO = GPIO8, MOSI = GPIO9
+        # GPIO21 is shared with the user LED on the XIAO; CS wins.
+        cs_gpio_num: 21
+        # 10 MHz is a safe ceiling for the Sense expansion board's short SD
+        # card traces. If 0x107 (CRC) errors appear at boot, drop this to
+        # 1 MHz; the SDMMC driver still auto-negotiates to 400 kHz for the
+        # CMD0/ACMD41 init phase.
+        frequency: 10000000
+    peripherals:
+      - name: spi_sdcard

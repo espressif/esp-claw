@@ -13,6 +13,8 @@ This module describes how to use `mcpwm` from Lua for generic PWM output.
 - Query the number of outputs on a handle with `pwm:get_channel_count()`
 - Stop output with `pwm:stop()` or `pwm:set_enabled(false)`
 - Release resources with `pwm:close()`
+- `mcpwm.new(...)` returns a PWM handle; `pwm:get_channel_count()` returns an integer
+- Other methods return no values on success and raise a Lua error on invalid input or runtime failure
 
 ## Config table
 - `gpio` or `gpio_a`: required primary output GPIO

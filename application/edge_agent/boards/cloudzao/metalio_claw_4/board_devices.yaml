@@ -1,0 +1,144 @@
+version: 1.0.0
+
+devices:
+  - name: gpio_expander
+    chip: tca9555
+    type: gpio_expander
+    version: default
+    dependencies:
+      espressif/esp_io_expander_tca95xx_16bit:
+        version: "*"
+        require: public
+    config:
+      max_pins: 16
+      # P0 GPS_POWER, P1 PA_SWITCH, P2 CAM_PWDN, P3 SD, P4 PWR_KEY_PULSE,
+      # P6 BT_POWER, P7 RST_4G, P8 PA.
+      output_io_mask: [0, 1, 2, 3, 4, 6, 7, 8]
+      output_io_level_mask: [0, 1, 1, 0, 0, 1, 1, 1]
+      input_io_mask: [5, 9, 10, 11]
+    peripherals:
+      - name: i2c_master
+        i2c_addr: [0x40]
+
+  - name: audio_dac
+    chip: internal
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: false
+      dac_enabled: true
+      dac_max_channel: 2
+      dac_channel_mask: "11"
+      dac_init_gain: 0
+      mclk_enabled: false
+    peripherals:
+      - name: i2s_audio_out
+
+  - name: audio_adc
+    chip: internal
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      dac_enabled: false
+      adc_max_channel: 2
+      adc_channel_mask: "11"
+      adc_channel_labels: [FC, RE]
+      adc_init_gain: 0
+      mclk_enabled: false
+    peripherals:
+      - name: i2s_audio_in
+
+  - name: fs_sdcard
+    type: fs_fat
+    sub_type: sdmmc
+    version: default
+    depends_on: [gpio_expander]
+    config:
+      sub_config:
+        slot: SDMMC_HOST_SLOT_0
+        frequency: SDMMC_FREQ_HIGHSPEED
+        bus_width: 4
+        pins:
+          clk: 0
+          cmd: 0
+          d0: 0
+          d1: 0
+          d2: 0
+          d3: 0
+          d4: 0
+          d5: 0
+          d6: 0
+          d7: 0
+        ldo_chan_id: 4
+
+  - name: display_lcd
+    chip: nv3051f
+    type: display_lcd
+    sub_type: dsi
+    dependencies:
+      esp_lcd_nv3051f:
+        override_path: "${BOARD_PATH}/components/esp_lcd_nv3051f"
+        require: public
+    config:
+      reset_gpio_num: 3
+      rgb_ele_order: LCD_RGB_ELEMENT_ORDER_BGR
+      bits_per_pixel: 24
+      reset_active_high: 0
+      dbi_config:
+        virtual_channel: 0
+        lcd_cmd_bits: 8
+        lcd_param_bits: 8
+      dpi_config:
+        virtual_channel: 0
+        dpi_clk_src: MIPI_DSI_DPI_CLK_SRC_DEFAULT
+        dpi_clock_freq_mhz: 36
+        pixel_format: LCD_COLOR_PIXEL_FORMAT_RGB888
+        in_color_format: 0
+        out_color_format: 0
+        num_fbs: 1
+        flags:
+          use_dma2d: true
+        video_timing:
+          h_size: 720
+          v_size: 720
+          hsync_back_porch: 120
+          hsync_pulse_width: 60
+          hsync_front_porch: 106
+          vsync_back_porch: 20
+          vsync_pulse_width: 4
+          vsync_front_porch: 20
+    peripherals:
+      - name: ldo_mipi
+      - name: dsi_display
+
+  - name: lcd_touch
+    chip: gt911
+    type: lcd_touch
+    sub_type: i2c
+    version: default
+    dependencies:
+      espressif/esp_lcd_touch_gt911: "*"
+    config:
+      io_i2c_config:
+        lcd_cmd_bits: 16
+      touch_config:
+        x_max: 720
+        y_max: 720
+        rst_gpio_num: -1
+        int_gpio_num: -1
+        flags:
+          swap_xy: false
+          mirror_x: false
+          mirror_y: false
+    peripherals:
+      - name: i2c_master
+        i2c_addr: [0xba, 0x28]
+
+  - name: lcd_brightness
+    type: ledc_ctrl
+    version: default
+    config:
+      default_percent: 70
+    peripherals:
+      - name: ledc_backlight

@@ -1,8 +1,6 @@
 # Lua RMT
 
-This module exposes the ESP-IDF RMT peripheral to Lua for raw symbol transmit
-and receive. Use this driver for protocol libraries that need precise pulses,
-such as IR, LED strips, pulse capture, or custom one-wire protocols.
+This module exposes raw RMT symbol transmit and receive to Lua. Use it for protocol libraries that need precise pulses, such as IR, LED strips, pulse capture, or custom one-wire protocols.
 
 ## How to call
 

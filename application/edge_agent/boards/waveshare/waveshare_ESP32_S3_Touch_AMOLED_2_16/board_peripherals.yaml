@@ -1,0 +1,63 @@
+version: 1.0.0
+# Peripherals Configuration for Waveshare ESP32-S3-Touch-AMOLED-2.16
+
+peripherals:
+  # Shared I2C bus: touch, AXP2101 PMU, QMI8658 IMU, PCF85063 RTC, ES8311, ES7210.
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 15
+        scl: 14
+
+  # I2S port 0: ES8311 playback + ES7210 capture.
+  - name: i2s_audio_out
+    type: i2s
+    role: master
+    format: std-out
+    config: &i2s0_config
+      port: 0
+      sample_rate_hz: 16000
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_STEREO
+      slot_mask: I2S_STD_SLOT_BOTH
+      ws_width: 16
+      pins:
+        mclk: 42
+        bclk: 9
+        ws: 45
+        dout: 8
+        din: 10
+
+  - name: i2s_audio_in
+    type: i2s
+    role: master
+    format: std-in
+    config: *i2s0_config
+
+  # CO5300 AMOLED QSPI display.
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        data0_io_num: 4
+        data1_io_num: 5
+        data2_io_num: 6
+        data3_io_num: 7
+        sclk_io_num: 38
+        max_transfer_sz: 460800
+
+  # ES8311 speaker power amplifier enable, active high.
+  - name: gpio_pa_control
+    type: gpio
+    role: io
+    config:
+      pin: 46
+      mode: GPIO_MODE_OUTPUT
+      default_level: 1

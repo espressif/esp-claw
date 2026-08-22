@@ -27,7 +27,6 @@ typedef struct {
     const char *ap_behavior;
     uint8_t ap_channel;
     uint8_t ap_max_conn;
-    uint32_t max_retry;
 } wifi_manager_config_t;
 
 typedef struct {

@@ -104,6 +104,10 @@ export const zhCn: Dict = {
   llmProviderQwen: 'Qwen 兼容',
   llmProviderDeepSeek: 'DeepSeek',
   llmProviderAnthropic: 'Anthropic',
+  llmProviderKimiGlobal: 'Kimi (Global)',
+  llmProviderKimiCn: 'Kimi (CN)',
+  llmProviderMinimaxGlobal: 'MiniMax (Global)',
+  llmProviderMinimaxCn: 'MiniMax (CN)',
   llmProviderOpenaiCompatible: 'OpenAI 兼容 API',
   llmProviderAnthropicCompatible: 'Anthropic 兼容 API',
   llmProviderCustom: '自定义',
@@ -171,15 +175,13 @@ export const zhCn: Dict = {
   wechatLoginOpenLink: '打开登录链接',
 
   sectionWebReqSearch: '搜索',
-  webreqSearchNote:
-    '可选。如填写，ESP-Claw 可在运行中检索在线资源。',
+  webreqSearchNote: '可选。如填写，ESP-Claw 可在运行中检索在线资源。',
   sectionWebReqNetwork: '网络请求',
   webreqBraveKey: 'Brave Search API Key',
   webreqTavilyKey: 'Tavily API Key',
   webreqHttpAllowlist: 'HTTP 白名单（域名/IP，逗号分隔）',
   webreqHttpAllowlistPlaceholder: 'api.example.com,*.example.org,203.0.113.10',
-  webreqHttpAllowlistNote:
-    '使用逗号分隔的域名/IP，支持通配符*，单独*表示允许全部域名/IP',
+  webreqHttpAllowlistNote: '使用逗号分隔的域名/IP，支持通配符*，单独*表示允许全部域名/IP',
 
   sectionCapabilities: 'Capability Group',
   capabilitiesDescription:

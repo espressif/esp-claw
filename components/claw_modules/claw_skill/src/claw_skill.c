@@ -24,6 +24,9 @@ static const char *SKILL_DOCUMENT_NAME = "SKILL.md";
 static const char *SKILL_MANAGE_MODE_READONLY = "readonly";
 static const char *SKILL_MANAGE_MODE_WEB = "web";
 static const char *SKILL_MANAGE_MODE_RUNTIME = "runtime";
+static const char *SKILL_EXECUTION_ENTRY_EXT = ".lua";
+static const char *SKILL_EXECUTION_ICON_JPG_EXT = ".jpg";
+static const char *SKILL_EXECUTION_ICON_JPEG_EXT = ".jpeg";
 
 #define CLAW_SKILL_MAX_FILES         64  /* hard cap on registry entries across all directories */
 #define CLAW_SKILL_MAX_PATH          192
@@ -35,12 +38,24 @@ static const char *SKILL_MANAGE_MODE_RUNTIME = "runtime";
 #endif
 
 typedef struct {
+    char *entry;
+    char *icon;
+    char *args_json;
+    int order;
+    bool visible;
+} claw_skill_execution_owned_t;
+
+typedef struct {
     char *id;
     char *file;
     char *summary;
+    char *skill_dir;
     char **cap_groups;
     size_t cap_group_count;
     claw_skill_manage_mode_t manage_mode;
+    claw_skill_execution_owned_t execution;
+    claw_skill_execution_t execution_view;
+    bool has_execution;
     const char *root_dir;  /* points into claw_skill_state_t.roots; the partition this skill lives in */
 } claw_skill_registry_entry_t;
 
@@ -62,7 +77,7 @@ static esp_err_t load_registry_dir_recursive(const char *root_dir,
                                              const char *relative_dir,
                                              claw_skill_registry_entry_t **entries,
                                              size_t *entry_count);
-static esp_err_t parse_skill_document_metadata(const char *filename, const char *text, claw_skill_registry_entry_t *entry);
+static esp_err_t parse_skill_document_metadata(const char *filename, const char *text, int default_order, claw_skill_registry_entry_t *entry);
 
 static void safe_copy(char *dst, size_t dst_size, const char *src)
 {
@@ -122,6 +137,18 @@ static void free_string_array(char **items, size_t count)
     free(items);
 }
 
+static void free_execution(claw_skill_execution_owned_t *execution)
+{
+    if (!execution) {
+        return;
+    }
+
+    free(execution->entry);
+    free(execution->icon);
+    free(execution->args_json);
+    memset(execution, 0, sizeof(*execution));
+}
+
 static void free_registry_entry(claw_skill_registry_entry_t *entry)
 {
     if (!entry) {
@@ -131,7 +158,9 @@ static void free_registry_entry(claw_skill_registry_entry_t *entry)
     free(entry->id);
     free(entry->file);
     free(entry->summary);
+    free(entry->skill_dir);
     free_string_array(entry->cap_groups, entry->cap_group_count);
+    free_execution(&entry->execution);
     memset(entry, 0, sizeof(*entry));
 }
 
@@ -228,6 +257,53 @@ static char *build_skill_path_dup(const char *root_dir, const char *filename)
     }
 
     return dup_printf("%s/%s", root_dir, filename);
+}
+
+static char *build_skill_dir_dup(const char *root_dir, const char *skill_id)
+{
+    if (!root_dir || !skill_id || !skill_id[0]) {
+        return NULL;
+    }
+
+    return dup_printf("%s/%s", root_dir, skill_id);
+}
+
+static bool string_has_suffix(const char *value, const char *suffix)
+{
+    size_t value_len;
+    size_t suffix_len;
+
+    if (!value || !suffix) {
+        return false;
+    }
+    value_len = strlen(value);
+    suffix_len = strlen(suffix);
+    return value_len >= suffix_len && strcmp(value + value_len - suffix_len, suffix) == 0;
+}
+
+static bool skill_payload_path_is_valid(const char *path, const char *required_suffix)
+{
+    if (!skill_path_is_valid(path) || !required_suffix || !required_suffix[0]) {
+        return false;
+    }
+    return string_has_suffix(path, required_suffix);
+}
+
+static bool skill_execution_icon_path_is_valid(const char *path)
+{
+    if (!skill_path_is_valid(path)) {
+        return false;
+    }
+    return string_has_suffix(path, SKILL_EXECUTION_ICON_JPG_EXT) || string_has_suffix(path, SKILL_EXECUTION_ICON_JPEG_EXT);
+}
+
+static char *build_skill_payload_path_dup(const char *skill_dir, const char *relative_path)
+{
+    if (!skill_dir || !relative_path || !relative_path[0]) {
+        return NULL;
+    }
+
+    return dup_printf("%s/%s", skill_dir, relative_path);
 }
 
 static esp_err_t ensure_dir(const char *path)
@@ -495,6 +571,152 @@ static const char *manage_mode_to_string(claw_skill_manage_mode_t mode)
     }
 }
 
+static esp_err_t json_dup_optional_object(cJSON *object, const char *key, char **out_json)
+{
+    cJSON *item;
+    char *rendered;
+
+    if (!object || !key || !out_json) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_json = NULL;
+
+    item = cJSON_GetObjectItemCaseSensitive(object, key);
+    if (!item || cJSON_IsNull(item)) {
+        return ESP_OK;
+    }
+    if (!cJSON_IsObject(item)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    rendered = cJSON_PrintUnformatted(item);
+    if (!rendered) {
+        return ESP_ERR_NO_MEM;
+    }
+    *out_json = rendered;
+    return ESP_OK;
+}
+
+static esp_err_t json_dup_optional_string(cJSON *object, const char *key, char **out_value)
+{
+    cJSON *item;
+
+    if (!object || !key || !out_value) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_value = NULL;
+
+    item = cJSON_GetObjectItemCaseSensitive(object, key);
+    if (!item || cJSON_IsNull(item)) {
+        return ESP_OK;
+    }
+    if (!cJSON_IsString(item) || !item->valuestring || !item->valuestring[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *out_value = strdup(item->valuestring);
+    return *out_value ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
+static esp_err_t parse_skill_execution(cJSON *root, claw_skill_registry_entry_t *entry, int default_order)
+{
+    cJSON *execution = NULL;
+    cJSON *order = NULL;
+    cJSON *visible = NULL;
+    char *relative_entry = NULL;
+    char *relative_icon = NULL;
+    char *args_json = NULL;
+    char *absolute_entry = NULL;
+    char *absolute_icon = NULL;
+    esp_err_t err;
+
+    if (!root || !entry || !entry->skill_dir) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    execution = cJSON_GetObjectItemCaseSensitive(root, "execution");
+    if (!execution || cJSON_IsNull(execution)) {
+        return ESP_OK;
+    }
+    if (!cJSON_IsObject(execution)) {
+        ESP_LOGW(TAG, "skip invalid execution object: %s", entry->id ? entry->id : "(null)");
+        return ESP_OK;
+    }
+
+    err = json_dup_required_string(execution, "entry", &relative_entry);
+    if (err != ESP_OK || !skill_payload_path_is_valid(relative_entry, SKILL_EXECUTION_ENTRY_EXT)) {
+        ESP_LOGW(TAG, "skip invalid execution entry: id=%s entry=%s", entry->id ? entry->id : "(null)", relative_entry ? relative_entry : "(null)");
+        err = ESP_OK;
+        goto cleanup;
+    }
+
+    err = json_dup_optional_string(execution, "icon", &relative_icon);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "skip invalid execution icon: id=%s", entry->id ? entry->id : "(null)");
+        err = ESP_OK;
+        goto cleanup;
+    }
+    if (relative_icon && !skill_execution_icon_path_is_valid(relative_icon)) {
+        ESP_LOGW(TAG, "ignore invalid execution icon path: id=%s icon=%s", entry->id ? entry->id : "(null)", relative_icon);
+        free(relative_icon);
+        relative_icon = NULL;
+    }
+
+    err = json_dup_optional_object(execution, "args", &args_json);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "skip invalid execution args: id=%s", entry->id ? entry->id : "(null)");
+        err = ESP_OK;
+        goto cleanup;
+    }
+
+    absolute_entry = build_skill_payload_path_dup(entry->skill_dir, relative_entry);
+    if (!absolute_entry) {
+        err = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+    if (relative_icon) {
+        absolute_icon = build_skill_payload_path_dup(entry->skill_dir, relative_icon);
+        if (!absolute_icon) {
+            err = ESP_ERR_NO_MEM;
+            goto cleanup;
+        }
+    }
+
+    entry->execution.entry = absolute_entry;
+    entry->execution.icon = absolute_icon;
+    entry->execution.args_json = args_json;
+    entry->execution.order = default_order;
+    entry->execution.visible = true;
+    entry->execution_view.entry = entry->execution.entry;
+    entry->execution_view.icon = entry->execution.icon;
+    entry->execution_view.args_json = entry->execution.args_json;
+    entry->execution_view.order = entry->execution.order;
+    entry->execution_view.visible = entry->execution.visible;
+    entry->has_execution = true;
+    absolute_entry = NULL;
+    absolute_icon = NULL;
+    args_json = NULL;
+
+    order = cJSON_GetObjectItemCaseSensitive(execution, "order");
+    if (cJSON_IsNumber(order)) {
+        entry->execution.order = order->valueint;
+        entry->execution_view.order = entry->execution.order;
+    }
+    visible = cJSON_GetObjectItemCaseSensitive(execution, "visible");
+    if (cJSON_IsBool(visible)) {
+        entry->execution.visible = cJSON_IsTrue(visible);
+        entry->execution_view.visible = entry->execution.visible;
+    }
+
+cleanup:
+    free(relative_entry);
+    free(relative_icon);
+    free(args_json);
+    free(absolute_entry);
+    free(absolute_icon);
+    return err;
+}
+
 static const claw_skill_registry_entry_t *claw_skill_find_entry(const char *skill_id)
 {
     size_t i;
@@ -604,7 +826,7 @@ static esp_err_t extract_skill_frontmatter_json(const char *text, const char **o
     return ESP_OK;
 }
 
-static esp_err_t parse_skill_document_metadata(const char *filename, const char *text, claw_skill_registry_entry_t *entry)
+static esp_err_t parse_skill_document_metadata(const char *filename, const char *text, int default_order, claw_skill_registry_entry_t *entry)
 {
     const char *json_start = NULL;
     const char *json_end = NULL;
@@ -651,6 +873,10 @@ static esp_err_t parse_skill_document_metadata(const char *filename, const char 
         err = entry->file ? ESP_OK : ESP_ERR_NO_MEM;
     }
     if (err == ESP_OK) {
+        entry->skill_dir = build_skill_dir_dup(entry->root_dir, entry->id);
+        err = entry->skill_dir ? ESP_OK : ESP_ERR_NO_MEM;
+    }
+    if (err == ESP_OK) {
         err = json_dup_required_string(root, "description", &entry->summary);
     }
     if (err == ESP_OK) {
@@ -658,6 +884,9 @@ static esp_err_t parse_skill_document_metadata(const char *filename, const char 
     }
     if (err == ESP_OK) {
         err = json_parse_manage_mode(metadata, "manage_mode", &entry->manage_mode);
+    }
+    if (err == ESP_OK) {
+        err = parse_skill_execution(root, entry, default_order);
     }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "meta fields: %s", filename);
@@ -718,6 +947,29 @@ static esp_err_t validate_registry_entry(claw_skill_registry_entry_t *entry)
     }
     free(path);
     fclose(file);
+
+    if (entry->has_execution) {
+        file = fopen(entry->execution.entry, "rb");
+        if (!file) {
+            ESP_LOGW(TAG, "skip execution with missing entry: id=%s path=%s", entry->id ? entry->id : "(null)", entry->execution.entry);
+            free_execution(&entry->execution);
+            memset(&entry->execution_view, 0, sizeof(entry->execution_view));
+            entry->has_execution = false;
+            return ESP_OK;
+        }
+        fclose(file);
+        if (entry->execution.icon) {
+            file = fopen(entry->execution.icon, "rb");
+            if (!file) {
+                ESP_LOGW(TAG, "ignore missing execution icon: id=%s path=%s", entry->id ? entry->id : "(null)", entry->execution.icon);
+                free(entry->execution.icon);
+                entry->execution.icon = NULL;
+                entry->execution_view.icon = NULL;
+            } else {
+                fclose(file);
+            }
+        }
+    }
     return ESP_OK;
 }
 
@@ -834,7 +1086,7 @@ static esp_err_t load_registry_dir_recursive(const char *root_dir,
         entry = &(*entries)[*entry_count];
         entry->root_dir = root_dir;
 
-        err = parse_skill_document_metadata(relative_path, text, entry);
+        err = parse_skill_document_metadata(relative_path, text, (int)*entry_count, entry);
         free(text);
         if (err == ESP_ERR_INVALID_ARG) {
             ESP_LOGE(TAG, "skill file %s has invalid metadata", relative_path);
@@ -1399,6 +1651,47 @@ esp_err_t claw_skill_render_catalog_json(char *buf, size_t size)
     return ESP_OK;
 }
 
+static void fill_catalog_entry_view(const claw_skill_registry_entry_t *entry, claw_skill_catalog_entry_t *out_entry)
+{
+    memset(out_entry, 0, sizeof(*out_entry));
+    out_entry->id = entry->id;
+    out_entry->file = entry->file;
+    out_entry->summary = entry->summary;
+    out_entry->cap_groups = (const char *const *)entry->cap_groups;
+    out_entry->cap_group_count = entry->cap_group_count;
+    out_entry->manage_mode = entry->manage_mode;
+    out_entry->skill_dir = entry->skill_dir;
+    if (entry->has_execution) {
+        out_entry->execution = &entry->execution_view;
+    }
+}
+
+esp_err_t claw_skill_foreach_catalog_entry(claw_skill_catalog_cb_t cb, void *user_ctx)
+{
+    size_t i;
+
+    if (!s_skill || !s_skill->initialized) {
+        ESP_LOGD(TAG, "foreach before init");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (!cb) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    for (i = 0; i < s_skill->entry_count; i++) {
+        claw_skill_catalog_entry_t view;
+        esp_err_t err;
+
+        fill_catalog_entry_view(&s_skill->entries[i], &view);
+        err = cb(&view, user_ctx);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "catalog iteration stopped: id=%s err=%s", view.id ? view.id : "(null)", esp_err_to_name(err));
+            return err;
+        }
+    }
+    return ESP_OK;
+}
+
 esp_err_t claw_skill_get_catalog_entry(const char *skill_id, claw_skill_catalog_entry_t *out_entry)
 {
     const claw_skill_registry_entry_t *entry = claw_skill_find_entry(skill_id);
@@ -1410,12 +1703,7 @@ esp_err_t claw_skill_get_catalog_entry(const char *skill_id, claw_skill_catalog_
         return ESP_ERR_NOT_FOUND;
     }
 
-    out_entry->id = entry->id;
-    out_entry->file = entry->file;
-    out_entry->summary = entry->summary;
-    out_entry->cap_groups = (const char *const *)entry->cap_groups;
-    out_entry->cap_group_count = entry->cap_group_count;
-    out_entry->manage_mode = entry->manage_mode;
+    fill_catalog_entry_view(entry, out_entry);
     return ESP_OK;
 }
 

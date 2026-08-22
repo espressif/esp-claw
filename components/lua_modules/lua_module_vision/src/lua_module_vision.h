@@ -25,6 +25,17 @@ extern "C" {
 int luaopen_motion_detect(lua_State *L);
 #endif
 
+#if CONFIG_LUA_MODULE_VISION_COLOR_DETECT
+/**
+ * @brief Open the ESP-DL-backed color_detect Lua module.
+ *
+ * @param L Lua VM state
+ *
+ * @return Number of Lua return values
+ */
+int luaopen_color_detect_dl(lua_State *L);
+#endif
+
 /**
  * @brief Register all vision Lua modules with cap_lua.
  *

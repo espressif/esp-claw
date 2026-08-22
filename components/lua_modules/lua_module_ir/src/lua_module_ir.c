@@ -108,10 +108,6 @@ typedef struct {
     int32_t     carrier_hz;
 } lua_ir_board_cfg_t;
 
-/* -------------------------------------------------------------------------- */
-/* Helpers                                                                    */
-/* -------------------------------------------------------------------------- */
-
 static lua_module_ir_ud_t *lua_module_ir_get_ud(lua_State *L, int idx)
 {
     lua_module_ir_ud_t *ud =
@@ -308,10 +304,6 @@ static esp_err_t lua_module_ir_create_handle(const lua_ir_resolved_cfg_t *cfg,
     return ESP_OK;
 }
 
-/* -------------------------------------------------------------------------- */
-/* NEC encoding                                                               */
-/* -------------------------------------------------------------------------- */
-
 static int lua_ir_build_nec_symbols(rmt_symbol_word_t *out, uint16_t address, uint16_t command)
 {
     int n = 0;
@@ -333,10 +325,6 @@ static int lua_ir_build_nec_symbols(rmt_symbol_word_t *out, uint16_t address, ui
     };
     return n;
 }
-
-/* -------------------------------------------------------------------------- */
-/* Board-defaults & Lua-options resolution                                    */
-/* -------------------------------------------------------------------------- */
 
 /*
  * Walk the board manager descriptor list and verify that the auto-generated
@@ -430,10 +418,6 @@ static void lua_ir_apply_lua_overrides(lua_State *L, int opts_idx,
 #undef APPLY_INT
 #undef APPLY_U32
 }
-
-/* -------------------------------------------------------------------------- */
-/* Lua method implementations                                                 */
-/* -------------------------------------------------------------------------- */
 
 static int lua_module_ir_close_impl(lua_State *L, lua_module_ir_ud_t *ud)
 {
@@ -741,10 +725,6 @@ static int lua_module_ir_new(lua_State *L)
     lua_setmetatable(L, -2);
     return 1;
 }
-
-/* -------------------------------------------------------------------------- */
-/* Module registration                                                        */
-/* -------------------------------------------------------------------------- */
 
 int luaopen_ir(lua_State *L)
 {

@@ -27,18 +27,6 @@ static esp_lcd_touch_handle_t lua_lcd_touch_check_handle(lua_State *L, int index
     return (esp_lcd_touch_handle_t)handle;
 }
 
-/*
- * 与 setup_device 的契约 (board 通用):
- *   - touch_handle->config.interrupt_callback != NULL  =>  中断驱动模式
- *   - touch_handle->config.user_data                   =>  SemaphoreHandle_t (二值)
- *
- * 中断驱动模式下,本模块在首次见到该 handle 时启动一个后台 task,阻塞在
- * 信号量上;ISR give 一次即完成一次 esp_lcd_touch_read_data 把数据写入
- * tp->data 缓存。Lua 端的 read/poll/sync 只消费缓存 (esp_lcd_touch_get_data),
- * 不再亲自发 I2C —— "收到中断就读,用不用是 lua 的事"。
- *
- * 没挂 interrupt_callback 的板子 (例如 CST816S 走轮询) 维持原有行为不变。
- */
 #define LUA_LCD_TOUCH_MAX_INT_HANDLES   2
 #define LUA_LCD_TOUCH_INT_TASK_STACK    4096
 #define LUA_LCD_TOUCH_INT_TASK_PRIO     5

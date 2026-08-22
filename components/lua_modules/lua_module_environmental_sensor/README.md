@@ -1,13 +1,11 @@
 # Lua Environmental Sensor
 
-This module describes how to read environmental data from Lua using one of
-multiple backends selected at build time and at runtime. It currently
-supports Bosch BME690 and DHT-family sensors.
+This module describes how to read environmental data from Lua. It supports Bosch BME690 and DHT-family sensors when the corresponding backend is enabled in the firmware build.
 
 ## How to call
 - Import it with `local environmental_sensor = require("environmental_sensor")`
 - Open the sensor with one of:
-  - `local sensor = environmental_sensor.new()` — default to the compiled BME690 backend
+  - `local sensor = environmental_sensor.new()` — use the default enabled backend
   - `local sensor = environmental_sensor.new("environmental_sensor")` — choose a BME690 board device explicitly
   - `local sensor = environmental_sensor.new({ type = "bme690", peripheral = "i2c_master" })`
   - `local sensor = environmental_sensor.new({ type = "dht", pin = 4, sensor_type = "dht22" })`
@@ -18,6 +16,8 @@ supports Bosch BME690 and DHT-family sensors.
 - BME690-only helpers:
   - `sensor:read_pressure()`
   - `sensor:read_gas()`
+- DHT-only helpers:
+  - `sensor:read_raw()` returns `temperature_raw, humidity_raw`
 - Inspect sensor identity with:
   - `sensor:name()`
 - BME690-only identity helpers:
@@ -48,8 +48,8 @@ All fields are optional unless the chosen backend requires them.
   - `sample.pressure` — pressure in Pa
   - `sample.gas_resistance` — gas resistance in ohms
   - `sample.status` — raw BME690 status flags
-  - `sample.gas_index` — gas measurement index from the driver
-  - `sample.meas_index` — measurement index from the driver
+  - `sample.gas_index`
+  - `sample.meas_index`
 
 ## Example: BME690
 ```lua
@@ -86,7 +86,5 @@ sensor:close()
 
 ## Notes
 - Reads are blocking.
-- Each BME690 call triggers a forced-mode measurement.
-- The BME690 board device must resolve to a valid I2C peripheral, or you must
-  pass `peripheral` explicitly in Lua.
+- The BME690 board device must resolve to a valid I2C peripheral, or you must pass `peripheral` explicitly in Lua.
 - Any setup or read failure raises a Lua error.

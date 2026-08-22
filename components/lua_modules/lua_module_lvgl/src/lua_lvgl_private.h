@@ -14,7 +14,7 @@
 #include <string.h>
 
 #include "cap_lua.h"
-#include "display_arbiter.h"
+#include "display_service.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
@@ -26,7 +26,36 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lauxlib.h"
+#include "lv_eaf.h"
 #include "lvgl.h"
+
+#ifdef __EMSCRIPTEN__
+#ifndef LV_CHART_TYPE_CURVE
+#define LV_CHART_TYPE_CURVE LV_CHART_TYPE_LINE
+#endif
+#ifndef LV_CHART_TYPE_STACKED
+#define LV_CHART_TYPE_STACKED LV_CHART_TYPE_BAR
+#endif
+static inline void lua_lvgl_web_spinner_set_anim_duration(lv_obj_t *obj, uint32_t duration)
+{
+    (void)obj;
+    (void)duration;
+}
+static inline void lua_lvgl_web_spinner_set_arc_sweep(lv_obj_t *obj, uint32_t sweep)
+{
+    (void)obj;
+    (void)sweep;
+}
+static inline void lua_lvgl_web_tabview_set_tab_text(lv_obj_t *tv, uint32_t index, const char *text)
+{
+    (void)tv;
+    (void)index;
+    (void)text;
+}
+#define lv_spinner_set_anim_duration lua_lvgl_web_spinner_set_anim_duration
+#define lv_spinner_set_arc_sweep lua_lvgl_web_spinner_set_arc_sweep
+#define lv_tabview_set_tab_text lua_lvgl_web_tabview_set_tab_text
+#endif
 
 #define LUA_MODULE_LVGL_NAME "lvgl"
 #define LUA_MODULE_LVGL_DEFAULT_BUFFER_LINES 40
@@ -41,6 +70,8 @@
 #define LUA_MODULE_LVGL_FS_LETTER 'D'
 #define LUA_MODULE_LVGL_PATH_MAX 256
 #define LUA_LVGL_FONT_MT "lvgl.font"
+#define LUA_MODULE_LVGL_DEFAULT_FONT_PATH "fonts/NotoSansSC-Regular-sub.ttf"
+#define LUA_MODULE_LVGL_DEFAULT_FONT_SIZE 24
 
 typedef enum {
     LUA_LVGL_OBJ_GENERIC = 0,
@@ -86,6 +117,7 @@ typedef enum {
     LUA_LVGL_OBJ_TILE,
     LUA_LVGL_OBJ_WINDOW,
     LUA_LVGL_OBJ_WINDOW_CHILD,
+    LUA_LVGL_OBJ_EAF,
 } lua_lvgl_obj_type_t;
 
 /* Forward declaration so lua_lvgl_event_sub_t can hold a back-pointer to
@@ -132,10 +164,13 @@ typedef struct lua_lvgl_obj_record {
     void *data2;
     size_t data_size;
     size_t data2_size;
+    int data_width;
+    int data_height;
     int value_cache;
     uint32_t generation;
     lua_lvgl_obj_type_t type;
     bool valid;
+    bool owned;
     lua_lvgl_event_sub_t *events;
     struct lua_lvgl_obj_record *next;
 } lua_lvgl_obj_record_t;
@@ -162,13 +197,14 @@ typedef struct {
     SemaphoreHandle_t mutex;
     bool lvgl_initialized;
     bool runtime_initialized;
-    bool display_owner_acquired;
     volatile bool task_stop;
     TaskHandle_t task_handle;
     TaskHandle_t task_waiter;
     esp_timer_handle_t tick_timer;
     SemaphoreHandle_t flush_done;
+    display_service_session_handle_t display_session;
     lv_display_t *display;
+    lv_obj_t *root_screen;
     esp_lcd_panel_handle_t panel;
     esp_lcd_panel_io_handle_t io;
     int width;
@@ -187,6 +223,12 @@ typedef struct {
     lua_lvgl_event_sub_t *event_queue_tail;
     lua_lvgl_pending_unref_t *pending_unrefs;
     lua_lvgl_font_record_t *fonts;
+    lv_font_t *default_font;
+    uint8_t *default_font_data;
+    size_t default_font_data_size;
+    uint32_t default_font_size;
+    uint32_t default_font_cache_size;
+    char default_font_path[LUA_MODULE_LVGL_PATH_MAX];
     lv_fs_drv_t fs_drv;
     char data_root[LUA_MODULE_LVGL_PATH_MAX];
     bool fs_registered;
@@ -220,6 +262,7 @@ int lua_lvgl_error_esp(lua_State *L, const char *what, esp_err_t err);
 lua_lvgl_obj_ud_t *lua_lvgl_check_ud(lua_State *L, int index);
 void lua_lvgl_record_release_resources(lua_lvgl_obj_record_t *record);
 lua_lvgl_obj_ud_t *lua_lvgl_push_obj(lua_State *L, lv_obj_t *obj, lua_lvgl_obj_type_t type);
+lua_lvgl_obj_ud_t *lua_lvgl_push_obj_ex(lua_State *L, lv_obj_t *obj, lua_lvgl_obj_type_t type, bool owned);
 lv_obj_t *lua_lvgl_validate_ud_locked(const lua_lvgl_obj_ud_t *ud,
                                       lua_lvgl_obj_type_t *out_type,
                                       const char **out_error);
@@ -259,6 +302,9 @@ void lua_lvgl_release_fonts_locked(void);
 lua_lvgl_font_ud_t *lua_lvgl_check_font(lua_State *L, int index);
 lv_font_t *lua_lvgl_validate_font_locked(const lua_lvgl_font_ud_t *ud, const char **out_error);
 void lua_lvgl_apply_font_style_field(lua_State *L, int index, lv_obj_t *obj);
+void lua_lvgl_apply_default_font_locked(lv_obj_t *obj);
+esp_err_t lua_lvgl_create_default_font_locked(const char *font_path, uint32_t font_size, uint32_t cache_size);
+void lua_lvgl_destroy_default_font_locked(void);
 extern const luaL_Reg lua_lvgl_font_module_funcs[];
 
 /* lua_lvgl_layout.c */
@@ -293,6 +339,7 @@ int lua_lvgl_calendar_get_pressed_date(lua_State *L);
 int lua_lvgl_canvas_fill_bg(lua_State *L);
 int lua_lvgl_canvas_set_px(lua_State *L);
 int lua_lvgl_canvas_get_px(lua_State *L);
+int lua_lvgl_canvas_set_rgb565_data(lua_State *L);
 int lua_lvgl_chart_add_series(lua_State *L);
 int lua_lvgl_chart_set_type(lua_State *L);
 int lua_lvgl_chart_set_point_count(lua_State *L);
@@ -345,6 +392,20 @@ int lua_lvgl_window_add_title(lua_State *L);
 int lua_lvgl_window_add_button(lua_State *L);
 int lua_lvgl_window_get_header(lua_State *L);
 int lua_lvgl_window_get_content(lua_State *L);
+int lua_lvgl_eaf_set_src(lua_State *L);
+int lua_lvgl_eaf_set_src_data(lua_State *L);
+int lua_lvgl_eaf_restart(lua_State *L);
+int lua_lvgl_eaf_pause(lua_State *L);
+int lua_lvgl_eaf_resume(lua_State *L);
+int lua_lvgl_eaf_is_loaded(lua_State *L);
+int lua_lvgl_eaf_get_loop_count(lua_State *L);
+int lua_lvgl_eaf_set_loop_count(lua_State *L);
+int lua_lvgl_eaf_get_total_frames(lua_State *L);
+int lua_lvgl_eaf_get_current_frame(lua_State *L);
+int lua_lvgl_eaf_set_frame_delay(lua_State *L);
+int lua_lvgl_eaf_get_frame_delay(lua_State *L);
+int lua_lvgl_eaf_set_loop_enabled(lua_State *L);
+int lua_lvgl_eaf_get_loop_enabled(lua_State *L);
 int lua_lvgl_span_set_text(lua_State *L);
 int lua_lvgl_span_get_text(lua_State *L);
 int lua_lvgl_span_set_style(lua_State *L);
@@ -405,6 +466,7 @@ extern const luaL_Reg lua_lvgl_runtime_funcs[];
 extern const luaL_Reg lua_lvgl_core_widget_funcs[];
 extern const luaL_Reg lua_lvgl_extra_widget_funcs[];
 extern const luaL_Reg lua_lvgl_complex_widget_funcs[];
+extern const luaL_Reg lua_lvgl_eaf_module_funcs[];
 extern const luaL_Reg lua_lvgl_event_module_funcs[];
 extern const luaL_Reg lua_lvgl_indev_module_funcs[];
 extern const luaL_Reg lua_lvgl_demo_module_funcs[];

@@ -85,10 +85,6 @@ typedef struct {
 
 extern const lua_imu_backend_t lua_imu_backend;
 
-/* ---------------------------------------------------------------------------
- * Helpers exposed by the main module to backends.
- * ------------------------------------------------------------------------- */
-
 /**
  * @brief (Re)create the per-device I2C handle inside `ctx` for `i2c_addr`.
  */

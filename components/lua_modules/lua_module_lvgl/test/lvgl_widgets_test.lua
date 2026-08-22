@@ -154,6 +154,9 @@ local ok, err = pcall(function()
     local px = canvas:get_px(2, 2)
     check(type(px) == "table" and type(px.r) == "number" and type(px.g) == "number" and type(px.b) == "number",
         "canvas get_px color table")
+    local rgb565_canvas = lvgl.canvas(root, { w = 2, h = 2, color_format = "rgb565" })
+    check(rgb565_canvas:set_rgb565_data(string.char(0x00, 0xf8, 0xe0, 0x07, 0x1f, 0x00, 0xff, 0xff), "le") == true,
+        "canvas set_rgb565_data")
 
     box = section(root, "chart", width - 24)
     local chart = lvgl.chart(box, {
