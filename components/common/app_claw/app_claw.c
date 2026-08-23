@@ -703,6 +703,8 @@ static esp_err_t build_storage_paths(app_claw_storage_paths_t *paths)
                         TAG, "router recovery path too long");
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "scheduler/schedules.json", paths->scheduler_rules_path, sizeof(paths->scheduler_rules_path)),
                         TAG, "scheduler rules path too long");
+    ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_SYSTEM, ".recovery/scheduler/schedules.json", paths->scheduler_recovery_path, sizeof(paths->scheduler_recovery_path)),
+                        TAG, "scheduler recovery path too long");
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "inbox", paths->im_attachment_root, sizeof(paths->im_attachment_root)),
                         TAG, "inbox path too long");
 
@@ -762,6 +764,7 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
 #if CONFIG_APP_CLAW_CAP_SCHEDULER
     ESP_RETURN_ON_ERROR(cap_scheduler_init(&(cap_scheduler_config_t) {
                             .schedules_path = paths.scheduler_rules_path,
+                            .recovery_schedules_path = paths.scheduler_recovery_path,
                             .tick_ms = 1000,
                             .max_items = 32,
                             .task_stack_size = 6144,

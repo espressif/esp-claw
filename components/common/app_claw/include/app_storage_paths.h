@@ -28,6 +28,7 @@ typedef struct {
     char router_rules_path[APP_CLAW_FILE_PATH_LEN];   /**< Event router rules file */
     char router_recovery_path[APP_CLAW_FILE_PATH_LEN];/**< Read-only router recovery file */
     char scheduler_rules_path[APP_CLAW_FILE_PATH_LEN];/**< Scheduler rules file */
+    char scheduler_recovery_path[APP_CLAW_FILE_PATH_LEN];/**< Read-only scheduler recovery file */
     char im_attachment_root[APP_CLAW_PATH_LEN];       /**< IM attachment inbox */
 } app_claw_storage_paths_t;
 
