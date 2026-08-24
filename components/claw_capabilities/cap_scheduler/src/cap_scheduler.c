@@ -573,12 +573,14 @@ static void cap_scheduler_task(void *arg)
     claw_task_delete(NULL);
 }
 
-static esp_err_t cap_scheduler_load_from_disk_locked(void)
+static esp_err_t cap_scheduler_load_from_disk_locked(bool allow_empty_on_failure)
 {
     cap_scheduler_item_t *items = NULL;
+    const char *loaded_path = s_cap_scheduler.schedules_path;
     size_t item_count = 0;
     int64_t now_ms = cap_scheduler_now_ms();
     esp_err_t err;
+    bool loaded_recovery = false;
     bool runtime_state_loaded = false;
 
     items = calloc(s_cap_scheduler.max_items, sizeof(cap_scheduler_item_t));
@@ -591,8 +593,30 @@ static esp_err_t cap_scheduler_load_from_disk_locked(void)
         ESP_LOGE(TAG, "Failed to load schedules from %s: %s",
                  s_cap_scheduler.schedules_path,
                  esp_err_to_name(err));
-        free(items);
-        return err;
+        if (s_cap_scheduler.recovery_schedules_path[0]) {
+            item_count = 0;
+            memset(items, 0, s_cap_scheduler.max_items * sizeof(cap_scheduler_item_t));
+            err = cap_scheduler_load_items(s_cap_scheduler.recovery_schedules_path, items, s_cap_scheduler.max_items, &item_count);
+            if (err == ESP_OK) {
+                loaded_path = s_cap_scheduler.recovery_schedules_path;
+                loaded_recovery = true;
+                ESP_LOGW(TAG, "Using recovery schedules from %s", loaded_path);
+            } else {
+                ESP_LOGE(TAG, "Failed to load recovery schedules from %s: %s",
+                         s_cap_scheduler.recovery_schedules_path,
+                         esp_err_to_name(err));
+            }
+        }
+        if (err != ESP_OK) {
+            free(items);
+            if (!allow_empty_on_failure) {
+                return err;
+            }
+            memset(s_cap_scheduler.entries, 0, s_cap_scheduler.max_items * sizeof(cap_scheduler_entry_t));
+            s_cap_scheduler.item_count = 0;
+            ESP_LOGE(TAG, "No valid scheduler definitions; continuing with an empty scheduler");
+            return ESP_OK;
+        }
     }
 
     memset(s_cap_scheduler.entries, 0, s_cap_scheduler.max_items * sizeof(cap_scheduler_entry_t));
@@ -606,14 +630,16 @@ static esp_err_t cap_scheduler_load_from_disk_locked(void)
     s_cap_scheduler.item_count = item_count;
     free(items);
 
-    err = cap_scheduler_persist_definitions_locked();
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Failed to save normalized scheduler definitions to %s: %s",
-                 s_cap_scheduler.schedules_path,
-                 esp_err_to_name(err));
-    } else {
-        ESP_LOGI(TAG, "Saved normalized scheduler definitions to %s",
-                 s_cap_scheduler.schedules_path);
+    if (!loaded_recovery) {
+        err = cap_scheduler_persist_definitions_locked();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to save normalized scheduler definitions to %s: %s",
+                     s_cap_scheduler.schedules_path,
+                     esp_err_to_name(err));
+        } else {
+            ESP_LOGI(TAG, "Saved normalized scheduler definitions to %s",
+                     s_cap_scheduler.schedules_path);
+        }
     }
 
     err = cap_scheduler_load_runtime_state_locked(&runtime_state_loaded);
@@ -648,7 +674,7 @@ static esp_err_t cap_scheduler_load_from_disk_locked(void)
 
     ESP_LOGI(TAG, "Loaded %u scheduler entries from %s",
              (unsigned)item_count,
-             s_cap_scheduler.schedules_path);
+             loaded_path);
     return ESP_OK;
 }
 
@@ -783,6 +809,11 @@ esp_err_t cap_scheduler_init(const cap_scheduler_config_t *config)
 
     schedules_path = config->schedules_path;
     strlcpy(s_cap_scheduler.schedules_path, schedules_path, sizeof(s_cap_scheduler.schedules_path));
+    if (config->recovery_schedules_path) {
+        strlcpy(s_cap_scheduler.recovery_schedules_path, config->recovery_schedules_path, sizeof(s_cap_scheduler.recovery_schedules_path));
+    }
+    s_cap_scheduler.config.schedules_path = s_cap_scheduler.schedules_path;
+    s_cap_scheduler.config.recovery_schedules_path = s_cap_scheduler.recovery_schedules_path;
     ESP_RETURN_ON_ERROR(cap_scheduler_build_state_path(schedules_path, s_cap_scheduler.state_path, sizeof(s_cap_scheduler.state_path)),
                         TAG,
                         "Failed to derive scheduler state key");
@@ -796,7 +827,7 @@ esp_err_t cap_scheduler_init(const cap_scheduler_config_t *config)
 
     cap_scheduler_lock();
     {
-        esp_err_t err = cap_scheduler_load_from_disk_locked();
+        esp_err_t err = cap_scheduler_load_from_disk_locked(true);
 
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Scheduler init load failed: %s", esp_err_to_name(err));
@@ -856,7 +887,7 @@ esp_err_t cap_scheduler_reload(void)
         return ESP_ERR_INVALID_STATE;
     }
     cap_scheduler_lock();
-    err = cap_scheduler_load_from_disk_locked();
+    err = cap_scheduler_load_from_disk_locked(false);
     cap_scheduler_unlock();
     return err;
 }

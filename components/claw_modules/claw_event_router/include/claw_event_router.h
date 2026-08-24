@@ -27,8 +27,7 @@ typedef esp_err_t (*claw_event_router_outbound_resolver_fn)(const claw_event_t *
 
 typedef struct {
     const char *rules_path;
-    /** Optional read-only fallback used when rules_path exists but cannot be
-     * read or validated. The bad primary is quarantined as rules_path.bad. */
+    /** Optional read-only fallback used to replace rules_path when it cannot be read or validated. */
     const char *recovery_rules_path;
     size_t max_rules;
     size_t max_actions_per_rule;
