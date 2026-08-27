@@ -414,6 +414,7 @@ Basic methods:
 - `canvas:set_px(x, y, color[, opa])`
 - `canvas:set_rgb565_data(data[, byte_order])`
 - `canvas:get_px(x, y)` -> `{r, g, b, a}`
+- `line:set_points(points)` updates the point array of an existing line.
 - `chart:add_series(color[, axis])` -> series handle
 - `chart:set_type(type)`
 - `chart:set_point_count(n)`

@@ -654,6 +654,42 @@ int lua_lvgl_canvas_set_rgb565_data(lua_State *L)
     return 1;
 }
 
+int lua_lvgl_line_set_points(lua_State *L)
+{
+    lv_point_precise_t *points;
+    uint32_t point_count = 0;
+    lua_lvgl_obj_ud_t *ud;
+    lv_obj_t *obj;
+    lua_lvgl_obj_record_t *record;
+    const char *obj_error = NULL;
+    esp_err_t err;
+
+    luaL_checktype(L, 2, LUA_TTABLE);
+    points = lua_lvgl_build_line_points(L, 2, &point_count);
+
+    err = lua_lvgl_lock();
+    if (err != ESP_OK) {
+        free(points);
+        return lua_lvgl_error_esp(L, "lock", err);
+    }
+    ud = lua_lvgl_check_ud(L, 1);
+    obj = lua_lvgl_validate_ud_locked(ud, NULL, &obj_error);
+    if (!obj || !ud->record || ud->record->type != LUA_LVGL_OBJ_LINE) {
+        lua_lvgl_unlock();
+        free(points);
+        return luaL_error(L, "lvgl line:set_points requires a valid line object: %s",
+                          obj_error ? obj_error : "wrong object type");
+    }
+    record = ud->record;
+    lv_line_set_points(obj, points, point_count);
+    free(record->line_points);
+    record->line_points = points;
+    record->line_point_count = point_count;
+    lua_lvgl_unlock();
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 int lua_lvgl_chart_add_series(lua_State *L)
 {
     lua_lvgl_obj_ud_t *ud = lua_lvgl_check_ud(L, 1);

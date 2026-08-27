@@ -340,6 +340,7 @@ int lua_lvgl_canvas_fill_bg(lua_State *L);
 int lua_lvgl_canvas_set_px(lua_State *L);
 int lua_lvgl_canvas_get_px(lua_State *L);
 int lua_lvgl_canvas_set_rgb565_data(lua_State *L);
+int lua_lvgl_line_set_points(lua_State *L);
 int lua_lvgl_chart_add_series(lua_State *L);
 int lua_lvgl_chart_set_type(lua_State *L);
 int lua_lvgl_chart_set_point_count(lua_State *L);
