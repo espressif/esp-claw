@@ -34,6 +34,7 @@ typedef struct {
     char llm_max_tokens[16];
     char llm_default_image_max_bytes[16];
     char llm_max_tokens_field[32];
+    char llm_reasoning_effort[16];
     char llm_supports_tools[8];
     char llm_supports_vision[8];
     char llm_image_remote_url_only[8];

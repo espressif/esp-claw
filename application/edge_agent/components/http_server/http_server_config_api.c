@@ -51,6 +51,7 @@ static const config_field_def_t CONFIG_FIELDS[] = {
     CONFIG_FIELD("llm",          llm_max_tokens),
     CONFIG_FIELD("llm",          llm_default_image_max_bytes),
     CONFIG_FIELD("llm",          llm_max_tokens_field),
+    CONFIG_FIELD("llm",          llm_reasoning_effort),
     CONFIG_FIELD("llm",          llm_supports_tools),
     CONFIG_FIELD("llm",          llm_supports_vision),
     CONFIG_FIELD("llm",          llm_image_remote_url_only),
@@ -168,6 +169,17 @@ static bool is_boolean_string(const char *value)
             strcmp(value, "false") == 0 ||
             strcmp(value, "1") == 0 ||
             strcmp(value, "0") == 0);
+}
+
+static bool is_reasoning_effort(const char *value)
+{
+    return value &&
+           (strcmp(value, "none") == 0 ||
+            strcmp(value, "low") == 0 ||
+            strcmp(value, "medium") == 0 ||
+            strcmp(value, "high") == 0 ||
+            strcmp(value, "xhigh") == 0 ||
+            strcmp(value, "max") == 0);
 }
 
 static esp_err_t validate_wifi_config_fields(const app_config_t *config, const char **message)
@@ -344,6 +356,14 @@ static esp_err_t config_post_handler(httpd_req_t *req)
             return httpd_resp_send_err(req,
                                        HTTPD_400_BAD_REQUEST,
                                        "LLM boolean fields must be true/false");
+        }
+        if (strcmp(field->name, "llm_reasoning_effort") == 0 &&
+                !is_reasoning_effort(item->valuestring)) {
+            cJSON_Delete(root);
+            free(config);
+            return httpd_resp_send_err(req,
+                                       HTTPD_400_BAD_REQUEST,
+                                       "llm_reasoning_effort must be none/low/medium/high/xhigh/max");
         }
         strlcpy(field_mutable(config, field), item->valuestring, field->size);
         applied_count++;

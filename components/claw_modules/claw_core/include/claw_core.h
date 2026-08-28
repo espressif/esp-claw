@@ -147,6 +147,7 @@ typedef struct {
     const char *base_url;
     const char *auth_type;
     const char *max_tokens_field;
+    const char *reasoning_effort;
     uint32_t timeout_ms;
     uint32_t max_tokens;
     size_t image_max_bytes;

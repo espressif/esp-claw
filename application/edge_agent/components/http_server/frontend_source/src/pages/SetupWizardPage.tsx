@@ -68,6 +68,7 @@ type LlmForm = {
   llm_auth_type: string;
   llm_default_image_max_bytes: string;
   llm_max_tokens_field: string;
+  llm_reasoning_effort: string;
   llm_supports_tools: string;
   llm_supports_vision: string;
   llm_image_remote_url_only: string;
@@ -97,6 +98,7 @@ type ProviderPreset = {
   llm_auth_type: string;
   llm_default_image_max_bytes: string;
   llm_max_tokens_field: string;
+  llm_reasoning_effort?: string;
   llm_supports_tools: string;
   llm_supports_vision: string;
   llm_image_remote_url_only: string;
@@ -105,15 +107,16 @@ type ProviderPreset = {
 
 const PROVIDER_PRESETS: Record<ProviderKey, ProviderPreset> = {
   openai: {
-    llm_backend_type: 'openai_compatible',
+    llm_backend_type: 'openai_responses',
     llm_base_url: 'https://api.openai.com/v1',
     llm_auth_type: 'bearer',
     llm_default_image_max_bytes: '524288',
-    llm_max_tokens_field: 'max_completion_tokens',
+    llm_max_tokens_field: 'max_output_tokens',
+    llm_reasoning_effort: 'medium',
     llm_supports_tools: 'true',
     llm_supports_vision: 'true',
     llm_image_remote_url_only: 'false',
-    llm_model: 'gpt-5.4',
+    llm_model: 'gpt-5.6-sol',
   },
   bailian: {
     llm_backend_type: 'openai_compatible',
@@ -243,6 +246,7 @@ function llmFromConfig(config: Partial<AppConfig>): LlmForm {
     llm_auth_type: config.llm_auth_type ?? '',
     llm_default_image_max_bytes: config.llm_default_image_max_bytes ?? '',
     llm_max_tokens_field: config.llm_max_tokens_field ?? '',
+    llm_reasoning_effort: config.llm_reasoning_effort ?? 'medium',
     llm_supports_tools: config.llm_supports_tools ?? 'false',
     llm_supports_vision: config.llm_supports_vision ?? 'false',
     llm_image_remote_url_only: config.llm_image_remote_url_only ?? 'false',
@@ -584,6 +588,7 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
     setLlmForm('llm_auth_type', preset.llm_auth_type);
     setLlmForm('llm_default_image_max_bytes', preset.llm_default_image_max_bytes);
     setLlmForm('llm_max_tokens_field', preset.llm_max_tokens_field);
+    setLlmForm('llm_reasoning_effort', preset.llm_reasoning_effort ?? 'medium');
     setLlmForm('llm_supports_tools', preset.llm_supports_tools);
     setLlmForm('llm_supports_vision', preset.llm_supports_vision);
     setLlmForm('llm_image_remote_url_only', preset.llm_image_remote_url_only);
@@ -644,6 +649,7 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
       llm_auth_type: llmForm.llm_auth_type.trim(),
       llm_default_image_max_bytes: llmForm.llm_default_image_max_bytes.trim(),
       llm_max_tokens_field: llmForm.llm_max_tokens_field.trim(),
+      llm_reasoning_effort: llmForm.llm_reasoning_effort.trim(),
       llm_supports_tools: llmForm.llm_supports_tools,
       llm_supports_vision: llmForm.llm_supports_vision,
       llm_image_remote_url_only: llmForm.llm_image_remote_url_only,
@@ -1040,6 +1046,17 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
                       value={llmForm.llm_api_key}
                       onInput={(event) => setLlmForm('llm_api_key', event.currentTarget.value)}
                     />
+
+                    <Show when={provider() === 'openai'}>
+                      <TextInput
+                        label={t('llmReasoningEffort')}
+                        placeholder={t('llmReasoningEffortPlaceholder') as string}
+                        value={llmForm.llm_reasoning_effort}
+                        onInput={(event) =>
+                          setLlmForm('llm_reasoning_effort', event.currentTarget.value)
+                        }
+                      />
+                    </Show>
 
                     <Show when={isAdvancedProvider(provider())}>
                       <>

@@ -140,6 +140,7 @@ static void main_copy_claw_to_app_config(const app_claw_config_t *src, app_confi
             src->llm_default_image_max_bytes,
             sizeof(dst->llm_default_image_max_bytes));
     strlcpy(dst->llm_max_tokens_field, src->llm_max_tokens_field, sizeof(dst->llm_max_tokens_field));
+    strlcpy(dst->llm_reasoning_effort, src->llm_reasoning_effort, sizeof(dst->llm_reasoning_effort));
     strlcpy(dst->llm_supports_tools, src->llm_supports_tools, sizeof(dst->llm_supports_tools));
     strlcpy(dst->llm_supports_vision, src->llm_supports_vision, sizeof(dst->llm_supports_vision));
     strlcpy(dst->llm_image_remote_url_only,

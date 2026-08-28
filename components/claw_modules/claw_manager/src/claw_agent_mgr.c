@@ -112,6 +112,7 @@ typedef struct {
     char *base_url;
     char *auth_type;
     char *max_tokens_field;
+    char *reasoning_effort;
     char *system_prompt;
     char *root_agent_system_prompt;
     char *subagent_system_prompt;
@@ -173,6 +174,7 @@ static void claw_agent_mgr_free_config_storage(void)
     free(s_mgr.base_url);
     free(s_mgr.auth_type);
     free(s_mgr.max_tokens_field);
+    free(s_mgr.reasoning_effort);
     free(s_mgr.system_prompt);
     s_mgr.api_key = NULL;
     s_mgr.backend_type = NULL;
@@ -180,6 +182,7 @@ static void claw_agent_mgr_free_config_storage(void)
     s_mgr.base_url = NULL;
     s_mgr.auth_type = NULL;
     s_mgr.max_tokens_field = NULL;
+    s_mgr.reasoning_effort = NULL;
     s_mgr.system_prompt = NULL;
     claw_agent_mgr_free_prompt_config();
 }
@@ -333,9 +336,10 @@ static esp_err_t claw_agent_mgr_copy_core_config(const claw_core_config_t *confi
     s_mgr.base_url = claw_agent_mgr_strdup(config->base_url ? config->base_url : "");
     s_mgr.auth_type = claw_agent_mgr_strdup(config->auth_type ? config->auth_type : "");
     s_mgr.max_tokens_field = claw_agent_mgr_strdup(config->max_tokens_field ? config->max_tokens_field : "");
+    s_mgr.reasoning_effort = claw_agent_mgr_strdup(config->reasoning_effort ? config->reasoning_effort : "");
     s_mgr.system_prompt = claw_agent_mgr_strdup(config->system_prompt);
     if (!s_mgr.api_key || !s_mgr.backend_type || !s_mgr.model ||
-            !s_mgr.base_url || !s_mgr.auth_type || !s_mgr.max_tokens_field ||
+            !s_mgr.base_url || !s_mgr.auth_type || !s_mgr.max_tokens_field || !s_mgr.reasoning_effort ||
             !s_mgr.system_prompt) {
         return ESP_ERR_NO_MEM;
     }
@@ -347,6 +351,7 @@ static esp_err_t claw_agent_mgr_copy_core_config(const claw_core_config_t *confi
     s_mgr.core_config.base_url = s_mgr.base_url;
     s_mgr.core_config.auth_type = s_mgr.auth_type;
     s_mgr.core_config.max_tokens_field = s_mgr.max_tokens_field;
+    s_mgr.core_config.reasoning_effort = s_mgr.reasoning_effort;
     s_mgr.core_config.system_prompt = s_mgr.system_prompt;
     return ESP_OK;
 }
@@ -458,6 +463,7 @@ esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_confi
     char *base_url = NULL;
     char *auth_type = NULL;
     char *max_tokens_field = NULL;
+    char *reasoning_effort = NULL;
     char *system_prompt = NULL;
     claw_core_config_t next_config = {0};
     esp_err_t err = ESP_OK;
@@ -475,9 +481,10 @@ esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_confi
     base_url = claw_agent_mgr_strdup(core_config->base_url ? core_config->base_url : "");
     auth_type = claw_agent_mgr_strdup(core_config->auth_type ? core_config->auth_type : "");
     max_tokens_field = claw_agent_mgr_strdup(core_config->max_tokens_field ? core_config->max_tokens_field : "");
+    reasoning_effort = claw_agent_mgr_strdup(core_config->reasoning_effort ? core_config->reasoning_effort : "");
     system_prompt = claw_agent_mgr_strdup(core_config->system_prompt);
     if (!api_key || !backend_type || !model || !base_url ||
-            !auth_type || !max_tokens_field || !system_prompt) {
+            !auth_type || !max_tokens_field || !reasoning_effort || !system_prompt) {
         err = ESP_ERR_NO_MEM;
         goto fail;
     }
@@ -489,6 +496,7 @@ esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_confi
     next_config.base_url = base_url;
     next_config.auth_type = auth_type;
     next_config.max_tokens_field = max_tokens_field;
+    next_config.reasoning_effort = reasoning_effort;
     next_config.system_prompt = system_prompt;
 
     claw_agent_mgr_lock();
@@ -498,6 +506,7 @@ esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_confi
     free(s_mgr.base_url);
     free(s_mgr.auth_type);
     free(s_mgr.max_tokens_field);
+    free(s_mgr.reasoning_effort);
     free(s_mgr.system_prompt);
     s_mgr.api_key = api_key;
     s_mgr.backend_type = backend_type;
@@ -505,6 +514,7 @@ esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_confi
     s_mgr.base_url = base_url;
     s_mgr.auth_type = auth_type;
     s_mgr.max_tokens_field = max_tokens_field;
+    s_mgr.reasoning_effort = reasoning_effort;
     s_mgr.system_prompt = system_prompt;
     s_mgr.core_config = next_config;
     api_key = NULL;
@@ -513,6 +523,7 @@ esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_confi
     base_url = NULL;
     auth_type = NULL;
     max_tokens_field = NULL;
+    reasoning_effort = NULL;
     system_prompt = NULL;
 
     for (size_t i = 0; i < CLAW_AGENT_MGR_MAX_AGENTS; i++) {
@@ -536,6 +547,7 @@ fail:
     free(base_url);
     free(auth_type);
     free(max_tokens_field);
+    free(reasoning_effort);
     free(system_prompt);
     return err;
 }

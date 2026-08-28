@@ -33,6 +33,7 @@ typedef struct {
     char llm_max_tokens[APP_CLAW_TIMEOUT_LEN];
     char llm_default_image_max_bytes[APP_CLAW_TIMEOUT_LEN];
     char llm_max_tokens_field[APP_CLAW_SHORT_STR_LEN];
+    char llm_reasoning_effort[APP_CLAW_TIMEOUT_LEN];
     char llm_supports_tools[8];
     char llm_supports_vision[8];
     char llm_image_remote_url_only[8];
