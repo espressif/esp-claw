@@ -40,6 +40,9 @@ raises a Lua error, so wrap calls in `pcall` if you want to handle failures.
   `local ina226 = require("lib_ina226")`. `shunt_res` and
   `max_expected_current` are required, since a wrong shunt value yields
   readings that look plausible but are wrong by a constant factor.
+- `lib_ltr553`: Pure-Lua LTR-553ALS ambient light and proximity sensor, the
+  part fitted to M5Stack CoreS3. Use `local ltr553 = require("lib_ltr553")`;
+  it reports lux plus the raw CH0/CH1 counts.
 
 Full API docs for these helpers are bundled with the libraries.
 
