@@ -36,6 +36,10 @@ raises a Lua error, so wrap calls in `pcall` if you want to handle failures.
 - `lib_si12t_touch`: Pure-Lua Si12T 12-channel capacitive touch helper. Use
   `local si12t_touch = require("lib_si12t_touch")`; it can reuse an existing
   I2C bus or create one from `port`, `sda`, and `scl` options.
+- `lib_ina226`: Pure-Lua INA226 voltage / current / power monitor. Use
+  `local ina226 = require("lib_ina226")`. `shunt_res` and
+  `max_expected_current` are required, since a wrong shunt value yields
+  readings that look plausible but are wrong by a constant factor.
 
 Full API docs for these helpers are bundled with the libraries.
 
