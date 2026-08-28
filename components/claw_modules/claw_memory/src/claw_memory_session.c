@@ -445,6 +445,7 @@ esp_err_t claw_memory_async_extract_init(const claw_memory_config_t *config)
                                     .base_url = llm->base_url,
                                     .auth_type = llm->auth_type,
                                     .max_tokens_field = llm->max_tokens_field,
+                                    .reasoning_effort = llm->reasoning_effort,
                                     .timeout_ms = llm->timeout_ms,
                                     .max_tokens = llm->max_tokens,
                                     .image_max_bytes = llm->image_max_bytes,
@@ -583,6 +584,7 @@ static bool session_history_backend_format_valid(uint8_t backend_format)
     case CLAW_MEMORY_BACKEND_FORMAT_UNKNOWN:
     case CLAW_MEMORY_BACKEND_FORMAT_OPENAI:
     case CLAW_MEMORY_BACKEND_FORMAT_ANTHROPIC:
+    case CLAW_MEMORY_BACKEND_FORMAT_OPENAI_RESPONSES:
         return true;
     default:
         return false;

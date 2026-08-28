@@ -10,6 +10,7 @@
 
 #include "llm/backends/claw_llm_backend_anthropic.h"
 #include "llm/backends/claw_llm_backend_openai_compatible.h"
+#include "llm/backends/claw_llm_backend_openai_responses.h"
 
 typedef struct custom_backend_registration_node {
     claw_llm_custom_backend_registration_t registration;
@@ -24,6 +25,7 @@ static const claw_llm_backend_registration_t *find_builtin_backend_registration(
 {
     static const builtin_backend_registration_getter_t getters[] = {
         claw_llm_backend_openai_compatible_registration,
+        claw_llm_backend_openai_responses_registration,
         claw_llm_backend_trial_registration,
         claw_llm_backend_anthropic_registration,
     };

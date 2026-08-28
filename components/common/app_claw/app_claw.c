@@ -566,6 +566,7 @@ static esp_err_t init_memory(const app_claw_config_t *config,
             .base_url = config->llm_base_url,
             .auth_type = config->llm_auth_type,
             .max_tokens_field = config->llm_max_tokens_field,
+            .reasoning_effort = config->llm_reasoning_effort,
             .timeout_ms = (uint32_t)strtoul(config->llm_timeout_ms, NULL, 10),
             .max_tokens = (uint32_t)strtoul(config->llm_max_tokens, NULL, 10),
             .image_max_bytes = (size_t)strtoul(config->llm_default_image_max_bytes, NULL, 10),
@@ -631,6 +632,7 @@ static void app_claw_fill_core_config(const app_claw_config_t *config,
     core_config->base_url = config->llm_base_url;
     core_config->auth_type = config->llm_auth_type;
     core_config->max_tokens_field = config->llm_max_tokens_field;
+    core_config->reasoning_effort = config->llm_reasoning_effort;
     core_config->timeout_ms = (uint32_t)strtoul(config->llm_timeout_ms, NULL, 10);
     core_config->max_tokens = (uint32_t)strtoul(config->llm_max_tokens, NULL, 10);
     core_config->image_max_bytes = (size_t)strtoul(config->llm_default_image_max_bytes, NULL, 10);

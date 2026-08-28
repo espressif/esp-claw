@@ -42,6 +42,7 @@ typedef struct {
 #define APP_DEFAULT_LLM_MAX_TOKENS           "8192"
 #define APP_DEFAULT_LLM_DEFAULT_IMAGE_MAX_BYTES "524288"
 #define APP_DEFAULT_LLM_MAX_TOKENS_FIELD     ""
+#define APP_DEFAULT_LLM_REASONING_EFFORT     "medium"
 #define APP_DEFAULT_LLM_SUPPORTS_TOOLS       "false"
 #define APP_DEFAULT_LLM_SUPPORTS_VISION      "false"
 #define APP_DEFAULT_LLM_IMAGE_REMOTE_URL_ONLY "false"
@@ -77,6 +78,7 @@ static const app_config_field_t s_fields[] = {
     APP_CONFIG_FIELD(llm_max_tokens, "llm_max_tokens", APP_DEFAULT_LLM_MAX_TOKENS),
     APP_CONFIG_FIELD(llm_default_image_max_bytes, "llm_img_max_b", APP_DEFAULT_LLM_DEFAULT_IMAGE_MAX_BYTES),
     APP_CONFIG_FIELD(llm_max_tokens_field, "llm_max_toks_f", APP_DEFAULT_LLM_MAX_TOKENS_FIELD),
+    APP_CONFIG_FIELD(llm_reasoning_effort, "llm_reason_eff", APP_DEFAULT_LLM_REASONING_EFFORT),
     APP_CONFIG_FIELD(llm_supports_tools, "llm_sup_tools", APP_DEFAULT_LLM_SUPPORTS_TOOLS),
     APP_CONFIG_FIELD(llm_supports_vision, "llm_sup_vis", APP_DEFAULT_LLM_SUPPORTS_VISION),
     APP_CONFIG_FIELD(llm_image_remote_url_only, "llm_img_url_o", APP_DEFAULT_LLM_IMAGE_REMOTE_URL_ONLY),
@@ -564,6 +566,7 @@ void app_config_to_claw(const app_config_t *config, app_claw_config_t *out)
             config->llm_default_image_max_bytes,
             sizeof(out->llm_default_image_max_bytes));
     strlcpy(out->llm_max_tokens_field, config->llm_max_tokens_field, sizeof(out->llm_max_tokens_field));
+    strlcpy(out->llm_reasoning_effort, config->llm_reasoning_effort, sizeof(out->llm_reasoning_effort));
     strlcpy(out->llm_supports_tools, config->llm_supports_tools, sizeof(out->llm_supports_tools));
     strlcpy(out->llm_supports_vision, config->llm_supports_vision, sizeof(out->llm_supports_vision));
     strlcpy(out->llm_image_remote_url_only,

@@ -138,6 +138,7 @@ esp_err_t claw_core_create(const claw_core_config_t *config, claw_core_handle_t 
     llm_config.base_url = config->base_url;
     llm_config.auth_type = config->auth_type;
     llm_config.max_tokens_field = config->max_tokens_field;
+    llm_config.reasoning_effort = config->reasoning_effort;
     llm_config.timeout_ms = config->timeout_ms;
     llm_config.max_tokens = config->max_tokens;
     llm_config.image_max_bytes = config->image_max_bytes;
@@ -173,6 +174,7 @@ esp_err_t claw_core_update_llm_config(claw_core_handle_t core,
     next.base_url = config->base_url;
     next.auth_type = config->auth_type;
     next.max_tokens_field = config->max_tokens_field;
+    next.reasoning_effort = config->reasoning_effort;
     next.timeout_ms = config->timeout_ms;
     next.max_tokens = config->max_tokens;
     next.image_max_bytes = config->image_max_bytes;

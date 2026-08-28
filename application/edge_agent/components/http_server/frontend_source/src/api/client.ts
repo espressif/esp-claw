@@ -19,6 +19,7 @@ export type AppConfig = {
   llm_max_tokens: string;
   llm_default_image_max_bytes: string;
   llm_max_tokens_field: string;
+  llm_reasoning_effort: string;
   llm_supports_tools: string;
   llm_supports_vision: string;
   llm_image_remote_url_only: string;
@@ -57,6 +58,7 @@ export const GROUP_FIELDS: Record<ConfigGroup, (keyof AppConfig)[]> = {
     'llm_max_tokens',
     'llm_default_image_max_bytes',
     'llm_max_tokens_field',
+    'llm_reasoning_effort',
     'llm_supports_tools',
     'llm_supports_vision',
     'llm_image_remote_url_only',

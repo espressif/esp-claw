@@ -320,6 +320,9 @@ static void app_cap_copy_app_to_llm_config(const app_claw_config_t *app_config,
     strlcpy(llm_config->max_tokens_field,
             app_config->llm_max_tokens_field,
             sizeof(llm_config->max_tokens_field));
+    strlcpy(llm_config->reasoning_effort,
+            app_config->llm_reasoning_effort,
+            sizeof(llm_config->reasoning_effort));
     strlcpy(llm_config->supports_tools, app_config->llm_supports_tools, sizeof(llm_config->supports_tools));
     strlcpy(llm_config->supports_vision, app_config->llm_supports_vision, sizeof(llm_config->supports_vision));
     strlcpy(llm_config->image_remote_url_only,
@@ -343,6 +346,9 @@ static void app_cap_copy_llm_to_app_config(const cap_llm_config_t *llm_config,
     strlcpy(app_config->llm_max_tokens_field,
             llm_config->max_tokens_field,
             sizeof(app_config->llm_max_tokens_field));
+    strlcpy(app_config->llm_reasoning_effort,
+            llm_config->reasoning_effort,
+            sizeof(app_config->llm_reasoning_effort));
     strlcpy(app_config->llm_supports_tools, llm_config->supports_tools, sizeof(app_config->llm_supports_tools));
     strlcpy(app_config->llm_supports_vision, llm_config->supports_vision, sizeof(app_config->llm_supports_vision));
     strlcpy(app_config->llm_image_remote_url_only,

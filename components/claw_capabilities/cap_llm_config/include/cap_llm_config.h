@@ -26,6 +26,7 @@ typedef struct {
     char max_tokens[CAP_LLM_CONFIG_TIMEOUT_LEN];
     char default_image_max_bytes[CAP_LLM_CONFIG_TIMEOUT_LEN];
     char max_tokens_field[CAP_LLM_CONFIG_SHORT_STR_LEN];
+    char reasoning_effort[CAP_LLM_CONFIG_TIMEOUT_LEN];
     char supports_tools[8];
     char supports_vision[8];
     char image_remote_url_only[8];
