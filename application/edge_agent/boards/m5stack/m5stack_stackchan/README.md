@@ -88,6 +88,20 @@ The Touch board carries a Si12T 12-channel capacitive touch IC at `0x68` (`ID_SE
 
 `/system/scripts/stackchan_touch.lua` does exactly that, and is also the quickest way to confirm the Touch board FPC is seated: the Si12T's I2C runs on `VCC_3V3`, so it answers even when `BUS_5V` is down and the LEDs are dark.
 
+## Sensors skill
+
+`stackchan_sensors` (also in the board overlay, at `/system/skills/stackchan_sensors/`) exposes the two Lua-driven sensors to the agent: `scripts/sensors.lua` with `action` of `all`, `light` or `power`.
+
+It exists because a chip driven from Lua is **invisible to the agent's device inventory**. `board_hardware_info` is generated from `board_devices.yaml`, so the LTR-553, the INA226 and the Si12T are not in it, and that document tells the model it may not speculate about hardware. Asked to read the light sensor, the model correctly concluded there was none. A skill whose `description` carries the words a user would actually say is the only thing that closes that gap. Treat that as a rule: **driving a chip from Lua removes it from the only hardware inventory the agent trusts**, so anything added that way needs a skill, or the agent will never find it. (`board_info.yaml`'s own `description` field would be the natural place for a hint, but it does not reach the generated document — `gen_board_metadata.yaml` carries only the board name, chip and device list.)
+
+What the skill adds over the raw drivers:
+
+- The board's own wiring and the INA226's 10 mΩ shunt, which belong to the board rather than to a driver.
+- Lux bands in plain language, so the model answers "is it dark" without inventing thresholds. The part tracks relative light well; its absolute scale is uncalibrated here.
+- The charge direction in words, because **current is positive while discharging** on this board and a sign is easy to read backwards.
+- No state of charge. There is no SoC curve for this battery, so the skill reports voltage and direction and explicitly forbids converting either into a percentage.
+- One chip failing does not hide the other; the failing address is named.
+
 ## I2C map (internal bus, port 0, SDA GPIO12 / SCL GPIO11)
 
 | 7-bit address | Device | Declared in `board_devices.yaml` |
