@@ -46,6 +46,7 @@ type SetupWizardPageProps = {
 };
 
 type ProviderKey =
+  | 'atlascloud'
   | 'openai'
   | 'bailian'
   | 'deepseek'
@@ -104,6 +105,17 @@ type ProviderPreset = {
 };
 
 const PROVIDER_PRESETS: Record<ProviderKey, ProviderPreset> = {
+  atlascloud: {
+    llm_backend_type: 'openai_compatible',
+    llm_base_url: 'https://api.atlascloud.ai/v1',
+    llm_auth_type: 'bearer',
+    llm_default_image_max_bytes: '524288',
+    llm_max_tokens_field: 'max_completion_tokens',
+    llm_supports_tools: 'true',
+    llm_supports_vision: 'false',
+    llm_image_remote_url_only: 'false',
+    llm_model: 'deepseek-ai/deepseek-v4-pro',
+  },
   openai: {
     llm_backend_type: 'openai_compatible',
     llm_base_url: 'https://api.openai.com/v1',
@@ -217,6 +229,7 @@ const PROVIDER_PRESETS: Record<ProviderKey, ProviderPreset> = {
 };
 
 const PRESET_BUTTONS: ProviderKey[] = [
+  'atlascloud',
   'openai',
   'bailian',
   'deepseek',
@@ -277,6 +290,8 @@ function isAdvancedProvider(key: ProviderKey): boolean {
 
 function providerLabel(key: ProviderKey): string {
   switch (key) {
+    case 'atlascloud':
+      return t('llmProviderAtlasCloud') as string;
     case 'openai':
       return t('llmProviderOpenai') as string;
     case 'bailian':
