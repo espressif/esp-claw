@@ -41,6 +41,7 @@ typedef struct {
     int height;
     size_t framebuffer_bytes;
     uint8_t *framebuffers[DISPLAY_HAL_FRAMEBUFFER_COUNT_MAX];
+    uint8_t requested_framebuffer_count;
     uint8_t framebuffer_count;
     uint8_t draw_framebuffer_index;
     uint8_t visible_framebuffer_index;
@@ -312,7 +313,8 @@ esp_err_t display_hal_create(display_service_session_handle_t session,
                              display_hal_panel_if_t panel_if,
                              display_hal_pixel_format_t pixel_format,
                              int lcd_width,
-                             int lcd_height)
+                             int lcd_height,
+                             uint8_t framebuffer_count)
 {
     esp_err_t ret = display_hal_lock();
     size_t bytes_per_pixel = display_hal_pixel_format_bytes(pixel_format);
@@ -328,6 +330,8 @@ esp_err_t display_hal_create(display_service_session_handle_t session,
                       ESP_ERR_INVALID_ARG, fail, TAG, "invalid panel interface");
     ESP_GOTO_ON_FALSE(bytes_per_pixel != 0, ESP_ERR_INVALID_ARG, fail, TAG,
                       "unsupported pixel format: %d", (int)pixel_format);
+    ESP_GOTO_ON_FALSE(framebuffer_count >= 1 && framebuffer_count <= DISPLAY_HAL_FRAMEBUFFER_COUNT_MAX,
+                      ESP_ERR_INVALID_ARG, fail, TAG, "invalid framebuffer count: %u", (unsigned)framebuffer_count);
     if (panel_if == DISPLAY_HAL_PANEL_IF_IO) {
         ESP_GOTO_ON_FALSE(io_handle != NULL, ESP_ERR_INVALID_ARG, fail, TAG, "io handle missing");
     }
@@ -344,6 +348,7 @@ esp_err_t display_hal_create(display_service_session_handle_t session,
             s_state.session == session &&
             s_state.width == lcd_width &&
             s_state.height == lcd_height &&
+            s_state.requested_framebuffer_count == framebuffer_count &&
             (!swap_needed || s_state.submit_swap_buffer != NULL)) {
         ESP_LOGD(TAG, "display_hal_create: already initialized with matching params, no-op");
         ret = ESP_OK;
@@ -365,6 +370,7 @@ esp_err_t display_hal_create(display_service_session_handle_t session,
     s_state.bytes_per_pixel = bytes_per_pixel;
     s_state.width = lcd_width;
     s_state.height = lcd_height;
+    s_state.requested_framebuffer_count = framebuffer_count;
     ESP_GOTO_ON_ERROR(display_hal_checked_framebuffer_bytes(lcd_width, lcd_height,
                                                             bytes_per_pixel,
                                                             &s_state.framebuffer_bytes),
@@ -415,6 +421,7 @@ esp_err_t display_hal_destroy(void)
     s_state.width = 0;
     s_state.height = 0;
     s_state.framebuffer_bytes = 0;
+    s_state.requested_framebuffer_count = 1;
     s_state.framebuffer_count = 0;
     s_state.draw_framebuffer_index = 0;
     s_state.visible_framebuffer_index = 0;
@@ -484,15 +491,15 @@ static esp_err_t display_hal_ensure_framebuffer_locked(void)
     }
 
     ESP_RETURN_ON_ERROR(display_hal_alloc_framebuffer_locked(0), TAG, "alloc framebuffer 0 failed");
-    s_state.framebuffer_count = 1;
-    s_state.draw_framebuffer_index = 0;
-    s_state.visible_framebuffer_index = 0;
-
-    if (display_hal_alloc_framebuffer_locked(1) == ESP_OK) {
-        s_state.framebuffer_count = 2;
+    if (s_state.requested_framebuffer_count > 1) {
+        ESP_RETURN_ON_ERROR(display_hal_alloc_framebuffer_locked(1), TAG, "alloc framebuffer 1 failed");
     }
 
+    s_state.framebuffer_count = s_state.requested_framebuffer_count;
+    s_state.draw_framebuffer_index = 0;
+    s_state.visible_framebuffer_index = 0;
     s_state.framebuffer_initialized = true;
+    ESP_LOGI(TAG, "framebuffer ready: count=%u bytes=%u", (unsigned)s_state.framebuffer_count, (unsigned)s_state.framebuffer_bytes);
     return ESP_OK;
 }
 
