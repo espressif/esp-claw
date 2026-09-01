@@ -1,0 +1,108 @@
+# Peripherals Configuration
+peripherals:
+  - name: i2c_0
+    type: i2c
+    version: 1.0.0
+    config:
+      port: -1
+      clk_source: I2C_CLK_SRC_DEFAULT
+      pins:
+        sda: 4
+        scl: 5
+      enable_internal_pullup: true
+      glitch_count: 7
+      intr_priority: 1
+
+  - name: spi_0
+    type: spi
+    version: 1.0.0
+    config:
+      spi_bus_config:
+        spi_port: SPI1_HOST
+        data0_io_num: 20
+        data1_io_num: -1
+        sclk_io_num: 19
+        data2_io_num: -1
+        data3_io_num: -1
+        data4_io_num: -1
+        data5_io_num: -1
+        data6_io_num: -1
+        data7_io_num: -1
+        data_io_default_level: false
+        max_transfer_sz: 4092
+        flags: 0
+        isr_cpu_id: ESP_INTR_CPU_AFFINITY_AUTO
+        intr_flags: 0
+
+  - name: LCD_BLK
+    type: gpio
+    version: 1.0.0
+    config:
+      pin: 38
+      mode: GPIO_MODE_OUTPUT
+      pull_up: true
+      pull_down: false
+      intr_type: GPIO_INTR_DISABLE
+      default_level: 1
+
+  - name: i2s_0
+    type: i2s
+    version: 1.0.0
+    role: master
+    format: std-in
+    config:
+      sample_rate_hz: 44100
+      clk_src: I2S_CLK_SRC_DEFAULT
+      ext_clk_freq_hz: 0
+      mclk_multiple: 256
+      bclk_div: 8
+      data_bit_width: 32
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_MONO
+      ws_width: 0
+      ws_pol: false
+      bit_shift: true
+      left_align: false
+      big_endian: false
+      bit_order_lsb: false
+      pins:
+        mclk: -1
+        bclk: 2
+        ws: 1
+        din: 42
+      invert_flags:
+        mclk_inv: false
+        bclk_inv: false
+        ws_inv: false
+      port: 0
+
+  - name: i2s_1
+    type: i2s
+    version: 1.0.0
+    role: master
+    format: std-out
+    config:
+      sample_rate_hz: 44100
+      clk_src: I2S_CLK_SRC_DEFAULT
+      ext_clk_freq_hz: 0
+      mclk_multiple: 256
+      bclk_div: 8
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_STEREO
+      ws_width: 0
+      ws_pol: false
+      bit_shift: true
+      left_align: false
+      big_endian: false
+      bit_order_lsb: false
+      pins:
+        mclk: -1
+        bclk: 40
+        ws: 41
+        dout: 39
+      invert_flags:
+        mclk_inv: false
+        bclk_inv: false
+        ws_inv: false
+      port: 1
