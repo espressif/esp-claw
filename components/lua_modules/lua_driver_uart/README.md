@@ -76,6 +76,16 @@ local u = uart.new(1, 17, 18, 9600, {
 })
 ```
 
+## Reusable libraries
+- `lib_scs_servo`: Pure-Lua driver for Feetech SCS serial-bus servos (SCSCL
+  memory table). Use `local scs_servo = require("lib_scs_servo")`; it can reuse
+  an existing UART handle or open one from `port`, `tx`, `rx` and `baud`.
+  Handles framing, checksums and the sign-magnitude feedback fields, and speaks
+  raw servo counts rather than degrees. On M5Stack StackChan the bus is port
+  `1`, `tx = 6`, `rx = 7` at 1 Mbps.
+
+Full API docs for these helpers are bundled with the libraries.
+
 ## Notes
 - All reads are **polling with a timeout**. There is no callback /
   interrupt interface in this module. For high-rate data, poll often

@@ -1,0 +1,7 @@
+dependencies:
+  esp_io_expander:
+    public: true
+    version: ^1.0.1
+  idf: '>=5.2'
+description: ESP IO Expander - AW9523B(A)
+version: 1.0.0

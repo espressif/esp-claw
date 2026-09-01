@@ -36,6 +36,19 @@ raises a Lua error, so wrap calls in `pcall` if you want to handle failures.
 - `lib_si12t_touch`: Pure-Lua Si12T 12-channel capacitive touch helper. Use
   `local si12t_touch = require("lib_si12t_touch")`; it can reuse an existing
   I2C bus or create one from `port`, `sda`, and `scl` options.
+- `lib_ina226`: Pure-Lua INA226 voltage / current / power monitor. Use
+  `local ina226 = require("lib_ina226")`. `shunt_res` and
+  `max_expected_current` are required, since a wrong shunt value yields
+  readings that look plausible but are wrong by a constant factor.
+- `lib_ltr553`: Pure-Lua LTR-553ALS ambient light and proximity sensor, the
+  part fitted to M5Stack CoreS3. Use `local ltr553 = require("lib_ltr553")`;
+  it reports lux plus the raw CH0/CH1 counts.
+- `lib_py32_ioe`: Pure-Lua PY32 I2C IO expander (14 GPIO, 4 ADC, 4 PWM,
+  addressable-LED RAM). Use `local py32_ioe = require("lib_py32_ioe")`.
+
+All of these can reuse an existing bus handle. Passing `bus` is the right
+choice when the board manager already owns the port — creating a second handle
+for a port that is already up is safe, but the library must not close it.
 
 Full API docs for these helpers are bundled with the libraries.
 
