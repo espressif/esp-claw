@@ -130,9 +130,14 @@ local run_ok, run_err = xpcall(function()
         local gray_info = gray_frame:info()
         assert_frame_info(gray_info, "GREY", gray_info.width * gray_info.height)
 
+        local bgr_frame <close> = image.convert(rgb_frame, image.BGR888)
+        local bgr_info = bgr_frame:info()
+        assert_frame_info(bgr_info, "BGR3", bgr_info.width * bgr_info.height * 3)
+
         frame:release()
         assert_frame_info(rgb_frame:info(), "RGBP", rgb_info.width * rgb_info.height * 2)
         assert_frame_info(gray_frame:info(), "GREY", gray_info.width * gray_info.height)
+        assert_frame_info(bgr_frame:info(), "BGR3", bgr_info.width * bgr_info.height * 3)
 
         image.save_file(COPY_PATH, jpeg_frame)
         local saved = storage.stat(COPY_PATH)
