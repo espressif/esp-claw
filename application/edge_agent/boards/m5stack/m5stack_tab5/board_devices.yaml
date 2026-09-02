@@ -104,11 +104,12 @@ devices:
 
   # DSI Display Device
   - name: display_lcd
-    chip: ili9881c
+    chip: tab5_lcd
     type: display_lcd
     sub_type: dsi
     dependencies:
       espressif/esp_lcd_ili9881c: "*"
+      espressif/esp_lcd_st7123: "*"
     config:
       reset_gpio_num: -1
       rgb_ele_order: LCD_RGB_ELEMENT_ORDER_RGB
@@ -154,13 +155,14 @@ devices:
 
   # Touch Panel Configuration
   - name: lcd_touch
-    chip: gt911
+    chip: tab5_touch
     type: lcd_touch
     sub_type: i2c
     power_ctrl_device: touch_power_ctrl
     version: default
     dependencies:
       espressif/esp_lcd_touch_gt911: "*"
+      espressif/esp_lcd_touch_st7123: "*"
     config:
       # esp_lcd_panel_io_i2c_config_t fields for touch communication
       io_i2c_config:
@@ -172,7 +174,7 @@ devices:
         y_max: 1280                        # Maximum Y coordinate (BSP_LCD_V_RES)
     peripherals:
       - name: i2c_master
-        i2c_addr: 0x28                    # GT911 I2C address (8-bit: 0x14 << 1)
+        i2c_addr: [0x28, 0x55]                    # GT911 I2C address (8-bit: 0x14 << 1), ST7123 I2C address
 
   - name: camera
     type: camera
