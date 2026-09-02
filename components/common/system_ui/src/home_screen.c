@@ -189,6 +189,12 @@ esp_err_t system_ui_create_home_locked(void)
     return ESP_OK;
 }
 
+bool system_ui_home_clock_is_active_locked(void)
+{
+    return s_ui.tileview != NULL && s_ui.home_tile != NULL &&
+           lv_tileview_get_tile_active(s_ui.tileview) == s_ui.home_tile;
+}
+
 esp_err_t system_ui_show_home(void)
 {
     ESP_RETURN_ON_FALSE(s_ui.started && s_ui.home_screen, ESP_ERR_INVALID_STATE,

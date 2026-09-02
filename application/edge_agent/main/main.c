@@ -29,6 +29,9 @@
 #include "cap_im_wechat.h"
 #endif
 #include "app_config.h"
+#if CONFIG_EDGE_AGENT_ENABLE_EMOTE
+#include "app_expression_emote.h"
+#endif
 
 #define APP_ENABLE_MEM_LOG        (0)
 
@@ -93,6 +96,12 @@ static void on_wifi_state_changed(bool connected, void *user_ctx)
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to update network UI: %s", esp_err_to_name(err));
     }
+#if CONFIG_EDGE_AGENT_ENABLE_EMOTE
+    err = app_expression_emote_set_status(connected, ap_ssid, status.sta_ip);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to update network emote: %s", esp_err_to_name(err));
+    }
+#endif
 }
 
 static esp_err_t main_load_config(app_config_t *config)
@@ -339,6 +348,9 @@ void app_main(void)
     ESP_ERROR_CHECK(wifi_manager_init());
 
     ESP_ERROR_CHECK(app_claw_ui_start());
+#if CONFIG_EDGE_AGENT_ENABLE_EMOTE
+    ESP_ERROR_CHECK(app_expression_emote_start());
+#endif
 
     ESP_ERROR_CHECK(http_server_init(&(http_server_config_t) {
         .storage_base_path = app_fs_storage_base_path(),
