@@ -97,13 +97,13 @@ build_application_edge_agent:
         EXAMPLE_CONFIG: "sdkconfig.console.jtag=jtag"
 
       - IMAGE: ["espressif/idf:release-v5.5"]
-        EXAMPLE_BOARD: esp32_p4_function_ev
+        EXAMPLE_BOARD: ["esp32_p4_function_ev", "esp32_p4x_function_ev"]
         EXAMPLE_TARGET: esp32p4
         EXAMPLE_BOARD_BRAND: "espressif"
         EXAMPLE_CONFIG: "sdkconfig.console.jtag=jtag"
 
       - IMAGE: ["espressif/idf:release-v5.5"]
-        EXAMPLE_BOARD: ["esp32_p4x_function_ev", "esp32_p4_eye", "esp32_p4x_eye"]
+        EXAMPLE_BOARD: ["esp32_p4_eye", "esp32_p4x_eye"]
         EXAMPLE_TARGET: esp32p4
         EXAMPLE_BOARD_BRAND: "espressif"
 

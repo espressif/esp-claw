@@ -176,7 +176,9 @@ ESP-Claw is still under active development. Feel free to open an issue to report
 
 [Click here to view our TODO List (in Chinese)](https://fcn5wbhnyubf.feishu.cn/wiki/SRlgwWUYei4WmykU8uMcUtzTnFf?table=tblWSgzWcyW7jv7B&view=vewaP9B0KX) and vote for the features or issues you care about. That helps us prioritize them sooner.
 
+## Security
 
+ESP-Claw is not currently included in the Espressif Bug Bounty Program. Responsible vulnerability reports remain highly valued, but no monetary reward is promised or guaranteed under this policy.
 
 ## 📷 Follow Us
 

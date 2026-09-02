@@ -175,6 +175,10 @@ ESP-Claw 目前仍处于活跃开发阶段，欢迎向我们提交 Issue 反馈�
 
 [点此查看我们的 TODO List](https://fcn5wbhnyubf.feishu.cn/wiki/SRlgwWUYei4WmykU8uMcUtzTnFf?table=tblWSgzWcyW7jv7B&view=vewaP9B0KX)，为你心仪的 Feature / 关注的 Issue 投票，我们可以更早实现/修复！
 
+## 安全
+
+ESP-Claw 目前未纳入 Espressif Bug Bounty Program。我们仍然非常重视负责任的漏洞报告，但本政策不承诺或保证提供任何金钱奖励。
+
 ## 📷关注我们
 
 如果这个项目对您有所帮助，欢迎点亮一颗星！⭐⭐⭐⭐⭐
