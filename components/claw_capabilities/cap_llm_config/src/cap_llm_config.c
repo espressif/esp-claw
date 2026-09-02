@@ -93,6 +93,18 @@ static const cap_llm_preset_t s_presets[] = {
         .supports_vision = "true",
         .image_remote_url_only = "false",
     },
+    {
+        .id = "minimax",
+        .backend_type = "anthropic_compatible",
+        .base_url = "https://api.minimax.io/anthropic",
+        .auth_type = "bearer",
+        .model = "MiniMax-M3",
+        .max_tokens_field = "max_tokens",
+        .default_image_max_bytes = "524288",
+        .supports_tools = "true",
+        .supports_vision = "true",
+        .image_remote_url_only = "false",
+    },
 };
 
 static const char *s_usage =
@@ -102,6 +114,7 @@ static const char *s_usage =
     "/llm setup openai <api_token> [model]\n"
     "/llm setup qwen <api_token> [model]\n"
     "/llm setup anthropic <api_token> [model]\n"
+    "/llm setup minimax <api_token> [model]\n"
     "/llm setup custom backend=<backend> url=<base_url> model=<model> token=<api_token>\n"
     "/llm token <api_token>\n"
     "/llm model <model>\n"

@@ -29,7 +29,7 @@ const PROVIDER_LINKS: Record<string, ExternalLinkPair> = {
     consoleUrl: 'https://platform.kimi.com/console',
   },
   minimax_global: {
-    docsUrl: 'https://platform.minimaxi.com/docs/api-reference/api-overview',
+    docsUrl: 'https://platform.minimax.io/docs/api-reference/api-overview',
     consoleUrl: 'https://platform.minimax.io/login',
   },
   minimax_cn: {
