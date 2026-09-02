@@ -90,7 +90,9 @@ The converted result is a new `image.frame` view. Release views with `<close>`, 
 (`image.RGB565` or `image.GRAY8` only; defaults to RGB565, or GRAY8 when the
 source is already gray). Optional `opts.filter` is `"nearest"` (default) or
 `"bilinear"`. Output dimensions follow the same 1920 x 1080 pixel cap as
-conversion.
+conversion. On PPA-capable targets, supported color conversions and bilinear
+scales that fit the hardware's 1/16 scale precision are accelerated
+automatically; all other cases keep the CPU fallback.
 
 ```lua
 local image = require("image")

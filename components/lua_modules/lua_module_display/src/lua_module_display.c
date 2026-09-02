@@ -219,6 +219,28 @@ static display_hal_pixel_format_t lua_display_parse_pixel_format(lua_State *L, i
     return DISPLAY_HAL_PIXEL_FORMAT_RGB565;
 }
 
+static uint8_t lua_display_parse_framebuffer_count(lua_State *L, int index)
+{
+    int count = 1;
+
+    if (lua_isnoneornil(L, index)) {
+        return count;
+    }
+    luaL_checktype(L, index, LUA_TTABLE);
+    lua_getfield(L, index, "framebuffer_count");
+    if (!lua_isnil(L, -1)) {
+        if (!lua_isinteger(L, -1)) {
+            luaL_error(L, "display framebuffer_count must be an integer");
+        }
+        count = (int)lua_tointeger(L, -1);
+    }
+    lua_pop(L, 1);
+    if (count < 1 || count > 2) {
+        luaL_error(L, "display framebuffer_count must be 1 or 2");
+    }
+    return (uint8_t)count;
+}
+
 static display_color_t lua_display_check_color_arg(lua_State *L, int index, const char *name)
 {
     display_color_t color = {0};
@@ -274,6 +296,7 @@ static int lua_display_init(lua_State *L)
     int lcd_height = lua_display_check_integer_arg(L, 4, "lcd_height");
     display_hal_panel_if_t panel_if = lua_display_parse_panel_if(L, 5);
     display_hal_pixel_format_t pixel_format = lua_display_parse_pixel_format(L, 6);
+    uint8_t framebuffer_count = lua_display_parse_framebuffer_count(L, 7);
     const char *job_id = cap_lua_runtime_job_id(L);
 
     if (s_display_active) {
@@ -296,7 +319,7 @@ static int lua_display_init(lua_State *L)
         return luaL_error(L, "display session open failed: %s", esp_err_to_name(err));
     }
 
-    err = display_hal_create(s_display_session, panel_handle, io_handle, panel_if, pixel_format, lcd_width, lcd_height);
+    err = display_hal_create(s_display_session, panel_handle, io_handle, panel_if, pixel_format, lcd_width, lcd_height, framebuffer_count);
     if (err != ESP_OK) {
         (void)display_service_close(s_display_session);
         s_display_session = NULL;

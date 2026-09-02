@@ -20,7 +20,9 @@ local display = require("display")
 local panel_handle, io_handle, width, height, panel_if, pixel_format =
     board_manager.get_display_lcd_params("display_lcd")
 
-display.init(panel_handle, io_handle, width, height, panel_if, pixel_format)
+display.init(panel_handle, io_handle, width, height, panel_if, pixel_format, {
+    framebuffer_count = 1,
+})
 ```
 
 After `display.init(...)` succeeds:
@@ -63,7 +65,7 @@ pcall(display.deinit)
 
 ## Screen lifecycle
 
-### `display.init(panel_handle, io_handle, lcd_width, lcd_height[, panel_if[, pixel_format]])`
+### `display.init(panel_handle, io_handle, lcd_width, lcd_height[, panel_if[, pixel_format[, options]]])`
 
 Initializes the drawing context.
 
@@ -75,6 +77,8 @@ Initializes the drawing context.
 - Common values come from `board_manager.PANEL_IF_IO`, `board_manager.PANEL_IF_RGB`, and `board_manager.PANEL_IF_MIPI_DSI`
 - `pixel_format`: optional framebuffer format; defaults to RGB565
 - Accepts either `display.PIXEL_FORMAT_RGB565` / `display.PIXEL_FORMAT_RGB888`, or the string `"rgb565"` / `"rgb888"`
+- `options`: optional configuration table
+- `options.framebuffer_count`: `1` or `2`; defaults to `1`. Use `2` only when frame swapping is required.
 - Must match the byte layout configured for the LCD panel.
 - Byte-swap is applied only when the framebuffer is RGB565 (independent of interface); RGB888 buffers are never byte-swapped
 - RGB565 is stored as standard RGB565; RGB888 is stored and submitted as native BGR888. Lua color values keep RGB semantics at parse time.
@@ -115,7 +119,7 @@ Starts a frame.
 `options` is an optional table:
 - `clear`: boolean, default `true`
 - `color`: background color, default `"black"`
-- `preserve`: boolean, default `true`. When `clear = false`, copy the latest visible framebuffer into the draw framebuffer before drawing. Set to `false` for full-frame redraw loops (games/animations) to skip the per-frame SPIRAM memcpy; leave it at the default only if you rely on partial-update presents to keep untouched pixels across frames.
+- `preserve`: boolean, default `true`. With two framebuffers and `clear = false`, copies the latest visible frame before drawing. It has no copy cost with the default single framebuffer.
 
 Example:
 

@@ -15,6 +15,7 @@
 #include "esp_jpeg_enc.h"
 #include "esp_log.h"
 #include "esp_check.h"
+#include "lua_image_ppa.h"
 
 #define LUA_IMAGE_JPEG_QUALITY 80
 #define LUA_IMAGE_MIN_JPEG_BUFFER_SIZE (64 * 1024)
@@ -275,7 +276,10 @@ static esp_err_t lua_image_require_rgb565le(const lua_image_source_t *src, lua_i
     }
 
     ESP_RETURN_ON_ERROR(lua_image_checked_data_bytes(pixel_count, sizeof(uint16_t), &required_bytes), TAG, "RGB565 alloc size check failed");
-    pixels = (uint16_t *)heap_caps_aligned_calloc(16, 1, required_bytes, MALLOC_CAP_8BIT|MALLOC_CAP_SPIRAM);
+    if (lua_image_ppa_transform(src, LUA_IMAGE_FORMAT_RGB565LE, src->width, src->height, out) == ESP_OK) {
+        return ESP_OK;
+    }
+    pixels = (uint16_t *)heap_caps_aligned_alloc(16, required_bytes, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
     if (!pixels) {
         ESP_LOGE(TAG, "display conversion buffer alloc failed: %u bytes", (unsigned)required_bytes);
         return ESP_ERR_NO_MEM;
@@ -391,7 +395,10 @@ static esp_err_t lua_image_require_bgr888(const lua_image_source_t *src, lua_ima
         return err;
     }
 
-    pixels = (uint8_t *)heap_caps_aligned_calloc(16, 1, required_bytes, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
+    if (lua_image_ppa_transform(src, LUA_IMAGE_FORMAT_BGR888, src->width, src->height, out) == ESP_OK) {
+        return ESP_OK;
+    }
+    pixels = (uint8_t *)heap_caps_aligned_alloc(16, required_bytes, MALLOC_CAP_8BIT | MALLOC_CAP_SPIRAM);
     if (!pixels) {
         ESP_LOGE(TAG, "BGR888 conversion buffer alloc failed: %u bytes", (unsigned)required_bytes);
         return ESP_ERR_NO_MEM;

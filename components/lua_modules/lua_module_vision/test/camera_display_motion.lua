@@ -8,7 +8,7 @@ local motion = require("motion_detect")
 local TAG = "[camera_display_motion]"
 local RUN_SECONDS = 30
 local CAPTURE_TIMEOUT_MS = 3000
-local FRAME_INTERVAL_MS = 30
+local FRAME_PERIOD_MS = 30
 -- Whatever the sensor exposes; image.convert covers any of these on output.
 local CAMERA_OPEN_OPTS = { format = { "JPEG", "RGBP", "YUYV", "UYVY", "YU12" }, width = 320, height = 240, nearest = true, }
 local MOTION_OPTS = {
@@ -157,6 +157,7 @@ local run_ok, run_err = xpcall(function()
     local deadline_s = start_s + RUN_SECONDS
     local frames = 0
     local moved_frames = 0
+    local ticker = delay.periodic(FRAME_PERIOD_MS)
 
     print(string.format("%s start %ds stream=%dx%d format=%s",
         TAG, RUN_SECONDS, stream.width, stream.height, tostring(stream.pixel_format)))
@@ -191,9 +192,7 @@ local run_ok, run_err = xpcall(function()
                 detect_result.score or 0, tostring(detect_result.event), moved_frames))
         end
 
-        if FRAME_INTERVAL_MS > 0 then
-            delay.delay_ms(FRAME_INTERVAL_MS)
-        end
+        ticker:wait()
     end
 
     display.begin_frame({ clear = true, color = "black" })

@@ -79,7 +79,8 @@ esp_err_t display_hal_create(display_service_session_handle_t session,
                              display_hal_panel_if_t panel_if,
                              display_hal_pixel_format_t pixel_format,
                              int lcd_width,
-                             int lcd_height);
+                             int lcd_height,
+                             uint8_t framebuffer_count);
 esp_err_t display_hal_destroy(void);
 
 /**

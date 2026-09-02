@@ -8,17 +8,19 @@ local image = require("image")
 local TAG = "[camera_display_color]"
 local RUN_SECONDS = 30
 local CAPTURE_TIMEOUT_MS = 3000
-local FRAME_INTERVAL_MS = 30
+local FRAME_PERIOD_MS = 30
 -- Whatever the sensor exposes; image.convert covers any of these on output.
 local CAMERA_OPEN_OPTS = { format = { "JPEG", "RGBP", "YUYV", "UYVY", "YU12" }, width = 320, height = 240, nearest = true, }
 local COLOR_OPTS = {
-    -- Default target is a saturated green object. Adjust HSV ranges for the object and lighting under test.
-    h_min = 50,
-    h_max = 88,
-    s_min = 80,
-    s_max = 255,
-    v_min = 50,
-    v_max = 255,
+    -- LAB envelope converted from HSV green {35,100,100}..{85,255,255}.
+    l_min = 35,
+    l_max = 97,
+    a_min = -88,
+    a_max = -12,
+    b_min = -3,
+    b_max = 92,
+    x_stride = 2,
+    y_stride = 2,
     min_pixels = 250,
     max_blob_pixels = 20000,
 }
@@ -192,6 +194,7 @@ local run_ok, run_err = xpcall(function()
     local deadline_s = start_s + RUN_SECONDS
     local frames = 0
     local detected_frames = 0
+    local ticker = delay.periodic(FRAME_PERIOD_MS)
 
     print(string.format("%s start %ds stream=%dx%d format=%s", TAG, RUN_SECONDS, stream.width, stream.height, tostring(stream.pixel_format)))
 
@@ -225,9 +228,7 @@ local run_ok, run_err = xpcall(function()
                 tostring(detect_result.left), tostring(detect_result.top), tostring(detect_result.right), tostring(detect_result.bottom), detected_frames))
         end
 
-        if FRAME_INTERVAL_MS > 0 then
-            delay.delay_ms(FRAME_INTERVAL_MS)
-        end
+        ticker:wait()
     end
 
     display.begin_frame({ clear = true, color = "black" })
