@@ -1,0 +1,51 @@
+# Wireless Tag WT32-SC01 Plus board defaults
+# SoC: ESP32-S3-WROOM-1-N8R2 (8 MB QIO Flash, 2 MB Quad PSRAM)
+# LCD: ST7796 480x320 via native I80 bus (SOC_LCD_I80_SUPPORTED)
+# Touch: FT6336U via I2C (lcd_touch + sub_type: i2c)
+#
+# Note: if your module is N16R8 (16 MB flash, 8 MB Octal PSRAM), replace:
+#   CONFIG_ESPTOOLPY_FLASHSIZE_8MB -> _16MB
+#   CONFIG_SPIRAM_MODE_QUAD        -> CONFIG_SPIRAM_MODE_OCT
+
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# Flash: 8 MB QIO 80 MHz
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_16MB.csv"
+
+# Quad PSRAM 2 MB 80 MHz
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# Disable XIP-from-PSRAM: the global default enables it, but 2 MB PSRAM is not
+# large enough to hold flash instructions + heap simultaneously.
+# Code executes directly from flash cache instead.
+CONFIG_SPIRAM_XIP_FROM_PSRAM=n
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=n
+CONFIG_SPIRAM_RODATA=n
+
+# With XIP-from-PSRAM disabled, disabling the SPI flash cache (needed for
+# any flash write: NVS, SPIFFS, OTA, …) also makes PSRAM inaccessible.
+# If a task's stack is in PSRAM the CPU panics with
+#   "assert failed: esp_task_stack_is_sane_cache_disabled"
+#
+# The global defaults set SPIRAM_MALLOC_ALWAYSINTERNAL=0 (all malloc can go to
+# PSRAM) and FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y (PSRAM stacks allowed).
+# Both settings assume XIP-from-PSRAM is active.  Override them here:
+#   ALWAYSINTERNAL=65536 → every alloc < 64 kB stays in internal DRAM,
+#                          which covers all task stacks.
+#   TASK_CREATE_ALLOW_EXT_MEM=n → FreeRTOS refuses to start a task whose
+#                          stack landed in PSRAM (fail fast at creation).
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=65536
+CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=n
+
+# Enable LCD display (custom I80 device in setup_device.c)
+CONFIG_ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT=y
+
+# Enable capacitive touch (FT6336U via lcd_touch + sub_type: i2c)
+CONFIG_ESP_BOARD_DEV_LCD_TOUCH_SUPPORT=y
+CONFIG_ESP_BOARD_DEV_LCD_TOUCH_SUB_I2C_SUPPORT=y

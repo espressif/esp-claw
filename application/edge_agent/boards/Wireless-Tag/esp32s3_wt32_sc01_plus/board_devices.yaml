@@ -1,0 +1,97 @@
+version: 1.0.0
+# Devices Configuration for Wireless Tag WT32-SC01 Plus
+#
+# LCD: ST7796UI 480×320, 8-bit Intel 8080 parallel bus (SOC_LCD_I80_SUPPORTED)
+#   DC/RS: GPIO0   WR: GPIO47   DB[0..7]: GPIO9,46,3,8,18,17,16,15
+#   All hardware init done in setup_device.c (type: custom)
+#
+# Touch: FT6336U capacitive, ft5x06-compatible, over I2C
+#   SDA: GPIO6   SCL: GPIO5   INT: GPIO7   Shared reset: GPIO4
+#
+# SD Card: SPI mode on SPI2_HOST
+#   MOSI: GPIO40   MISO: GPIO38   SCK: GPIO39   CS: GPIO41
+#
+# CAN Bus (TWAI): TX: GPIO10   RX: GPIO11  (adjust to your wiring)
+
+devices:
+
+  # ── LCD display (ST7796UI, 480×320, 8-bit I80 parallel) ──────────────────
+  # ESP32-S3 has SOC_LCD_I80_SUPPORTED but no PARLIO, so the native I80 bus
+  # is used. All init (bus, panel IO, ST7796) lives in setup_device.c.
+  - name: display_lcd
+    chip: st7796
+    type: custom
+    version: default
+    dependencies:
+      espressif/esp_lcd_st7796: "^1.3.0"
+    config:
+      lcd_width: 480
+      lcd_height: 320
+
+  # ── Touch panel (FT6336U / ft5x06-compatible, I2C 0x38) ─────────────────
+  - name: lcd_touch
+    chip: ft5x06
+    type: lcd_touch
+    sub_type: i2c
+    version: default
+    dependencies:
+      esp_lcd_touch:
+        version: "*"
+        require: public
+      espressif/esp_lcd_touch_ft5x06: "^1.0.7"
+    config:
+      io_i2c_config:
+        lcd_cmd_bits: 8
+        scl_speed_hz: 400000
+        flags:
+          dc_low_on_data: false
+          disable_control_phase: true
+      touch_config:
+        x_max: 320
+        y_max: 480
+        rst_gpio_num: -1        # reset shared with LCD, handled in setup_device.c
+        int_gpio_num: 7
+        levels:
+          reset: 0
+          interrupt: 0
+        flags:
+          swap_xy: true
+          mirror_x: false
+          mirror_y: false
+    peripherals:
+      - name: i2c_master
+        i2c_addr: [0x70]        # FT6336U 7-bit 0x38 in 8-bit format (0x38 << 1)
+
+  # ── SD Card (SPI mode) ───────────────────────────────────────────────────
+  - name: fs_sdcard
+    type: fs_fat
+    sub_type: spi
+    version: default
+    init_skip: true
+    config:
+      sub_config:
+        cs_gpio_num: 41
+        frequency: SDMMC_FREQ_DEFAULT
+    peripherals:
+      - name: spi_master
+
+  # ── LCD backlight (LEDC PWM on GPIO45) ──────────────────────────────────
+  - name: lcd_brightness
+    type: ledc_ctrl
+    version: default
+    config:
+      default_percent: 100
+    peripherals:
+      - name: ledc_backlight
+
+  # ── CAN Bus (TWAI) — managed by lua_driver_canbus ────────────────────────
+  - name: can_bus
+    chip: twai
+    type: custom
+    version: default
+    init_skip: true
+    config:
+      tx_gpio: 10
+      rx_gpio: 11
+      bitrate: 500000
+      mode: normal
