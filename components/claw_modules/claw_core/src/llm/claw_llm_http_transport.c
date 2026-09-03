@@ -316,7 +316,12 @@ esp_err_t claw_llm_http_post_json(const claw_llm_http_json_request_t *request,
     }
 
     esp_http_client_set_method(client, HTTP_METHOD_POST);
-    esp_http_client_set_header(client, "Content-Type", "application/json");
+    esp_http_client_set_header(
+        client,
+        "Content-Type",
+        (request->content_type && request->content_type[0])
+            ? request->content_type
+            : "application/json");
     auth_header_value = build_auth_header_value(request->auth_type, request->api_key);
     if (auth_header_value) {
         esp_http_client_set_header(client, auth_header_name(request->auth_type), auth_header_value);
@@ -357,7 +362,7 @@ esp_err_t claw_llm_http_post_json(const claw_llm_http_json_request_t *request,
 
     status_code = esp_http_client_get_status_code(client);
     ESP_LOGD(TAG, "HTTP status=%d", status_code);
-    if (status_code != 200) {
+    if (status_code != 200 && !request->accept_non_200) {
         err = ESP_FAIL;
         *out_error_message = parse_error_message_body(buffer.data, status_code);
         ESP_LOGE(TAG, "LLM error: %s", *out_error_message ? *out_error_message : "(null)");
