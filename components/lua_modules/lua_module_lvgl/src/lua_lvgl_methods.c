@@ -167,6 +167,11 @@ static const luaL_Reg lua_lvgl_canvas_methods[] = {
     {NULL, NULL},
 };
 
+static const luaL_Reg lua_lvgl_line_methods[] = {
+    {"set_points", lua_lvgl_line_set_points},
+    {NULL, NULL},
+};
+
 static const luaL_Reg lua_lvgl_chart_methods[] = {
     {"add_series", lua_lvgl_chart_add_series},
     {"set_type", lua_lvgl_chart_set_type},
@@ -301,7 +306,7 @@ static const lua_lvgl_widget_descriptor_t s_widget_descriptors[] = {
     {LUA_LVGL_OBJ_BAR,         "lvgl.obj.bar",         lua_lvgl_bar_methods},
     {LUA_LVGL_OBJ_SLIDER,      "lvgl.obj.slider",      lua_lvgl_slider_methods},
     {LUA_LVGL_OBJ_IMAGE,       "lvgl.obj.image",       lua_lvgl_no_extra_methods},
-    {LUA_LVGL_OBJ_LINE,        "lvgl.obj.line",        lua_lvgl_no_extra_methods},
+    {LUA_LVGL_OBJ_LINE,        "lvgl.obj.line",        lua_lvgl_line_methods},
     {LUA_LVGL_OBJ_ARC,         "lvgl.obj.arc",         lua_lvgl_arc_methods},
     {LUA_LVGL_OBJ_SPINNER,     "lvgl.obj.spinner",     lua_lvgl_no_extra_methods},
     {LUA_LVGL_OBJ_SCALE,       "lvgl.obj.scale",       lua_lvgl_scale_methods},

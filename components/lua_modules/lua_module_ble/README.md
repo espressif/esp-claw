@@ -1,5 +1,9 @@
 # Lua BLE
 
+When Lua and the NimBLE host are enabled, the app_claw Kconfig defaults this
+module to enabled. Products that do not need BLE can disable
+`CONFIG_APP_CLAW_LUA_MODULE_BLE` explicitly.
+
 This document is an API guide for using the `ble` module from Lua for ordinary
 BLE Peripheral advertising and GATT Server tasks.
 
