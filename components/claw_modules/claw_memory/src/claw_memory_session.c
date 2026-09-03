@@ -476,7 +476,12 @@ esp_err_t claw_memory_async_extract_init(const claw_memory_config_t *config)
                                         .stack_size = CLAW_MEMORY_ASYNC_EXTRACT_STACK_SIZE,
                                         .priority = CLAW_MEMORY_ASYNC_EXTRACT_PRIORITY,
                                         .core_id = tskNO_AFFINITY,
-                                        .stack_policy = CLAW_TASK_STACK_PREFER_PSRAM,
+                                        /* Must be internal RAM: this task reads/writes session
+                                         * history files on flash, which briefly disables the
+                                         * flash cache. A PSRAM-backed stack becomes unreachable
+                                         * during that window — esp_task_stack_is_sane_cache_disabled()
+                                         * asserts and reboots the device on every such read. */
+                                        .stack_policy = CLAW_TASK_STACK_INTERNAL_ONLY,
                                     },
                                     claw_memory_async_extract_task,
                                     NULL,
