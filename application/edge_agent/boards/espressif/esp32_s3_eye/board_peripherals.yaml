@@ -1,0 +1,44 @@
+version: 1.0.0
+# Peripherals Configuration
+
+peripherals:
+  - name: rmt_tx
+    type: rmt
+    role: tx
+    config:
+      gpio_num: 38
+      clk_src: RMT_CLK_SRC_DEFAULT
+      resolution_hz: 10000000
+      mem_block_symbols: 64
+      trans_queue_depth: 4
+      intr_priority: 1
+      flags:
+        invert_out: false
+        with_dma: true  # RMT peripheral can connect to DMA channel in esp32s3
+        io_loop_back: false
+        io_od_mode: false
+        allow_pd: false
+        init_level: false
+
+  # LCD SPI Configuration for ST7789
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        data0_io_num: 47
+        sclk_io_num: 21
+        max_transfer_sz: 115200  # 240 * 240 * 2 (full frame RGB565)
+
+  # LCD Backlight Control
+  - name: ledc_backlight
+    type: ledc
+    version: default
+    config:
+      gpio_num: 48
+      speed_mode: LEDC_LOW_SPEED_MODE
+      channel: 1
+      timer_sel: 1
+      duty: 0
+      output_invert: true
