@@ -1,0 +1,99 @@
+version: 1.0.0
+# Devices Configuration for ATK-DNESP32S3-BOX0
+devices:
+  - name: box0_power_manager
+    chip: box0_power
+    type: custom
+    version: default
+    config:
+      sys_power_gpio: 2
+      codec_power_gpio: 14
+      charge_ctrl_gpio: 47
+      charge_status_gpio: 48
+      battery_adc_gpio: 1
+      battery_adc_unit: 0      # ADC_UNIT_1
+      battery_adc_channel: 0   # ADC_CHANNEL_0 / GPIO1 on ESP32-S3
+      battery_adc_atten: 3     # ADC_ATTEN_DB_12
+      sample_period_ms: 300000
+      low_voltage_adc_threshold: 2877
+      shutdown_on_low_battery: false
+
+  - name: audio_dac
+    chip: es8311
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: false
+      dac_enabled: true
+      dac_max_channel: 1
+      dac_channel_mask: "1"
+      dac_init_gain: 0
+      mclk_enabled: true
+    peripherals:
+      - name: i2s_audio_out
+      - name: i2c_master
+        address: 0x30
+        frequency: 400000
+
+  - name: audio_adc
+    chip: es8311
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      dac_enabled: false
+      adc_max_channel: 1
+      adc_channel_mask: "1"
+      adc_channel_labels: ['MIC']
+      adc_init_gain: 30
+      mclk_enabled: true
+    peripherals:
+      - name: i2s_audio_in
+      - name: i2c_master
+        address: 0x30
+        frequency: 400000
+
+  - name: display_lcd
+    chip: st7789
+    type: display_lcd
+    sub_type: spi
+    version: default
+    config:
+      mirror_x: false
+      mirror_y: false
+      swap_xy: false
+      invert_color: true
+      x_max: 240
+      y_max: 240
+      io_spi_config:
+        cs_gpio_num: 41
+        dc_gpio_num: 38
+        spi_mode: 0
+        pclk_hz: 40000000
+      lcd_panel_config:
+        reset_gpio_num: -1
+        rgb_ele_order: LCD_RGB_ELEMENT_ORDER_RGB
+        bits_per_pixel: 16
+        data_endian: LCD_RGB_DATA_ENDIAN_BIG
+        vendor_config: NULL
+    peripherals:
+      - name: spi_display
+
+  - name: lcd_brightness
+    type: ledc_ctrl
+    version: default
+    config:
+      default_percent: 100
+    peripherals:
+      - name: ledc_backlight
+
+  - name: box0_buttons
+    chip: gpio_button
+    type: custom
+    version: 1.0.0
+    init_skip: true
+    config:
+      right_gpio: 0
+      middle_gpio: 4
+      left_gpio: 3
+      active_level: 0
