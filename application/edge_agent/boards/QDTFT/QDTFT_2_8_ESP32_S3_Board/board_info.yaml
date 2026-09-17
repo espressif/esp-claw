@@ -1,0 +1,4 @@
+board: QDTFT_2_8_ESP32_S3_Board
+chip: esp32s3
+description: "QDTFT 2.8 inch ESP32-S3 Development Board with ILI9341 LCD"
+manufacturer: "QDTFT"
