@@ -2,5 +2,4 @@
 dependencies:
   display_service:
     path: ../../common/display_service
-  lvgl/lvgl: ^9.5.0
   espressif/esp_lv_eaf_player: "^0.3"

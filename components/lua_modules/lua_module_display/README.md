@@ -26,11 +26,9 @@ The drawing sequence is always `begin()` → draw → `present()`. The screen is
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `pixel_format` | `"rgb565"` | `"rgb565"` or `"rgb888"`; must match the screen's color depth |
-| `rgb565_swap` | `false` | Swap each RGB565 pixel's two bytes before output; invalid with `"rgb888"` |
 | `framebuffer_count` | `1` | `1` or `2`; use `2` only when the extra memory is justified by the scene |
 
-Normally omit `pixel_format` and `rgb565_swap`. The built-in screen configuration determines whether RGB565 output needs byte-order conversion. `rgb565_swap = true` applies one additional byte swap to every RGB565 pixel and is intended only for compatibility with a board configuration that explicitly requires it.
+The drawing format comes from the built-in screen's color depth. The display service handles any panel-interface byte-order conversion; Lua code does not configure it.
 
 `screen:info()` returns:
 
@@ -41,7 +39,6 @@ Normally omit `pixel_format` and `rgb565_swap`. The built-in screen configuratio
 | `bytes_per_pixel` | `2` for RGB565 or `3` for RGB888 |
 | `framebuffer_count` | Active framebuffer count |
 | `framebuffer_bytes` | Total bytes reserved by all framebuffers |
-| `rgb565_swap` | Whether the optional additional RGB565 swap was requested |
 | `touch_available` | Whether the built-in screen has touch input |
 
 Cache this table if it is needed every frame.
@@ -149,3 +146,28 @@ Both `image()` and `blit()` obey the current translation and clip. Their coordin
 Invalid arguments, invalid UTF-8, invalid frame state, a closed screen or font, and unavailable hardware raise Lua errors. Use `pcall` when a scene should recover from an expected failure. Tests and runnable examples are in [`test/`](test/).
 
 For animation, load images and fonts once, reuse prepared colors and pixel strings, and submit each frame with one `begin()` / `present()` pair.
+
+## Performance benchmark
+
+[`test/display_benchmark.lua`](test/display_benchmark.lua) measures the public display API on the real screen. It covers open-to-ready latency, framebuffer memory, partial and full presentation, a mixed scene, rectangle fill, lines, circles, text, raw-pixel blitting, close cleanup, and both one- and two-framebuffer modes. The same script detects the legacy or current API so results from before and after the refactor remain comparable.
+
+Run it as an asynchronous managed Lua job because it owns the screen for the duration of the test. Firmware-baked tests are available through the `builtin_lua_modules` skill; pass the absolute path that skill provides:
+
+```text
+lua --run-async --path <absolute-path-to-display_benchmark.lua> --args-json "{\"label\":\"candidate\"}" --timeout-ms 180000
+```
+
+The optional JSON arguments are:
+
+| Argument | Default | Range or meaning |
+| --- | --- | --- |
+| `label` | `"unspecified"` | Identifier copied to every output record |
+| `repeats` | `3` | `1..7`; the median repeat is reported |
+| `warmup_iterations` | `3` | `1..20` |
+| `frame_iterations` | `24` | `4..200` |
+| `raster_iterations` | `800` | `100..10000` |
+| `framebuffer_count` | `0` | `0` tests both modes; otherwise `1` or `2` |
+
+Machine-readable records start with `DISPLAY_BENCH|`. `result` records report `median_us`, `min_us`, `max_us`, `us_per_op`, `ops_per_s`, and frame-workload `pixels_per_s`. `memory` records report `open_us`, `ready_us`, framebuffer bytes, and SRAM/PSRAM use. `memory_after_close` shows the remaining heap delta, and a successful run ends with `status=PASS`.
+
+For a valid comparison, use the same board, display interface, pixel format, byte-order defaults, CPU frequency, ESP-IDF revision, benchmark arguments, and background workload. Let startup networking and time synchronization settle before each run. Lower latency and memory values are better; higher throughput values are better.

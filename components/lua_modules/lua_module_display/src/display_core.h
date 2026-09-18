@@ -24,7 +24,6 @@ typedef struct {
     display_service_session_handle_t session;
     display_service_info_t info;
     display_pixel_format_t pixel_format;
-    bool rgb565_swap;
     uint8_t framebuffer_count;
 } display_config_t;
 

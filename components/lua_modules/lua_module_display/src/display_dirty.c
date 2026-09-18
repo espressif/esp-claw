@@ -5,61 +5,87 @@
  */
 #include "display_dirty.h"
 
+#include <stdint.h>
 #include "esp_log.h"
 
 static const char *TAG = "display_dirty";
+#define DISPLAY_DIRTY_MERGE_OVERHEAD 256
 
-void display_dirty_clear(display_dirty_rect_t *dirty)
+static size_t rect_area(const display_dirty_rect_t *rect)
 {
-    if (!dirty) {
-        ESP_LOGE(TAG, "dirty rect output is NULL");
-        return;
-    }
-    dirty->valid = false;
-    dirty->x = 0;
-    dirty->y = 0;
-    dirty->width = 0;
-    dirty->height = 0;
+    return (size_t)rect->width * (size_t)rect->height;
 }
 
-bool display_dirty_is_valid(const display_dirty_rect_t *dirty)
+static display_dirty_rect_t rect_union(const display_dirty_rect_t *a, const display_dirty_rect_t *b)
 {
-    return dirty != NULL && dirty->valid && dirty->width > 0 && dirty->height > 0;
+    int left = a->x < b->x ? a->x : b->x;
+    int top = a->y < b->y ? a->y : b->y;
+    int right = a->x + a->width > b->x + b->width ? a->x + a->width : b->x + b->width;
+    int bottom = a->y + a->height > b->y + b->height ? a->y + a->height : b->y + b->height;
+    return (display_dirty_rect_t) {.x = left, .y = top, .width = right - left, .height = bottom - top};
 }
 
-void display_dirty_mark(display_dirty_rect_t *dirty, int x, int y, int width, int height)
+static bool should_merge(const display_dirty_rect_t *a, const display_dirty_rect_t *b)
+{
+    display_dirty_rect_t merged = rect_union(a, b);
+    return rect_area(&merged) <= rect_area(a) + rect_area(b) + DISPLAY_DIRTY_MERGE_OVERHEAD;
+}
+
+void display_dirty_clear(display_dirty_region_t *dirty)
 {
     if (!dirty) {
-        ESP_LOGE(TAG, "dirty rect output is NULL");
+        ESP_LOGE(TAG, "dirty region is NULL");
         return;
     }
-    if (width <= 0 || height <= 0) {
+    dirty->count = 0;
+}
+
+bool display_dirty_is_valid(const display_dirty_region_t *dirty)
+{
+    return dirty != NULL && dirty->count > 0;
+}
+
+size_t display_dirty_total_pixels(const display_dirty_region_t *dirty)
+{
+    size_t total = 0;
+    if (dirty == NULL) return 0;
+    for (size_t i = 0; i < dirty->count; ++i) total += rect_area(&dirty->rects[i]);
+    return total;
+}
+
+void display_dirty_mark(display_dirty_region_t *dirty, int x, int y, int width, int height)
+{
+    if (!dirty) {
+        ESP_LOGE(TAG, "dirty region is NULL");
         return;
     }
-    if (!display_dirty_is_valid(dirty)) {
-        dirty->valid = true;
-        dirty->x = x;
-        dirty->y = y;
-        dirty->width = width;
-        dirty->height = height;
+    if (width <= 0 || height <= 0) return;
+
+    display_dirty_rect_t next = {.x = x, .y = y, .width = width, .height = height};
+    for (size_t i = 0; i < dirty->count;) {
+        if (!should_merge(&dirty->rects[i], &next)) {
+            ++i;
+            continue;
+        }
+        next = rect_union(&dirty->rects[i], &next);
+        dirty->rects[i] = dirty->rects[--dirty->count];
+    }
+    if (dirty->count < DISPLAY_DIRTY_RECT_CAPACITY) {
+        dirty->rects[dirty->count++] = next;
         return;
     }
 
-    int left = dirty->x < x ? dirty->x : x;
-    int top = dirty->y < y ? dirty->y : y;
-    int right = dirty->x + dirty->width;
-    int bottom = dirty->y + dirty->height;
-    int new_right = x + width;
-    int new_bottom = y + height;
-
-    if (new_right > right) {
-        right = new_right;
+    size_t best = 0;
+    size_t best_growth = SIZE_MAX;
+    for (size_t i = 0; i < dirty->count; ++i) {
+        display_dirty_rect_t merged = rect_union(&dirty->rects[i], &next);
+        size_t growth = rect_area(&merged) - rect_area(&dirty->rects[i]);
+        if (growth < best_growth) {
+            best = i;
+            best_growth = growth;
+        }
     }
-    if (new_bottom > bottom) {
-        bottom = new_bottom;
-    }
-    dirty->x = left;
-    dirty->y = top;
-    dirty->width = right - left;
-    dirty->height = bottom - top;
+    display_dirty_rect_t merged = rect_union(&dirty->rects[best], &next);
+    dirty->rects[best] = dirty->rects[--dirty->count];
+    display_dirty_mark(dirty, merged.x, merged.y, merged.width, merged.height);
 }

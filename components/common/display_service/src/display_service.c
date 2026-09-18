@@ -38,7 +38,7 @@ static const char *TAG = "display_service";
 #define DISPLAY_SERVICE_TOUCH_OBSERVER_GENERATION_MASK 0x00ffffffu
 #define DISPLAY_SERVICE_EXIT_GESTURE_START_HEIGHT 80
 #define DISPLAY_SERVICE_EXIT_GESTURE_MIN_DY 72
-#define DISPLAY_SERVICE_RAW_SWAP_STRIP_ROWS 16
+#define DISPLAY_SERVICE_RAW_STAGING_BYTES (32 * 1024)
 
 typedef void (*display_service_scene_cleanup_cb_t)(void *owner_ctx, void *user_ctx);
 
@@ -92,8 +92,8 @@ typedef struct {
     esp_lcd_touch_handle_t touch;
     display_service_info_t info;
     bool raw_rgb565_swap;
-    uint8_t *raw_swap_strip;
-    size_t raw_swap_strip_bytes;
+    uint8_t *raw_staging;
+    size_t raw_staging_bytes;
     lv_display_t *display;
     lv_indev_t *touch_indev;
     lv_obj_t *default_screen;
@@ -142,6 +142,7 @@ static esp_err_t display_service_dummy_draw_blit(const char *owner,
                                                  int x_end,
                                                  int y_end,
                                                  const void *frame_buffer,
+                                                 size_t stride_bytes,
                                                  bool wait);
 static void display_service_dummy_draw_suspend_locked(void);
 static void display_service_dummy_draw_resume_locked(void);
@@ -760,9 +761,9 @@ void display_service_stop(void)
         s_display.adapter_initialized = false;
         s_display.adapter_started = false;
     }
-    heap_caps_free(s_display.raw_swap_strip);
-    s_display.raw_swap_strip = NULL;
-    s_display.raw_swap_strip_bytes = 0;
+    heap_caps_free(s_display.raw_staging);
+    s_display.raw_staging = NULL;
+    s_display.raw_staging_bytes = 0;
     s_display.raw_rgb565_swap = false;
     if (s_display.dummy_mutex) {
         vSemaphoreDelete(s_display.dummy_mutex);
@@ -990,6 +991,7 @@ esp_err_t display_service_session_raw_blit(display_service_session_handle_t sess
                                            blit->x_end,
                                            blit->y_end,
                                            blit->frame_buffer,
+                                           blit->stride_bytes,
                                            blit->wait);
 }
 
@@ -1304,6 +1306,9 @@ static esp_err_t display_service_exit_dummy_draw(const char *owner)
     }
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "dummy draw exited: owner=%s", owner);
+        heap_caps_free(s_display.raw_staging);
+        s_display.raw_staging = NULL;
+        s_display.raw_staging_bytes = 0;
         s_display.dummy_owner = NULL;
         s_display.dummy_draw_enabled = false;
         s_display.dummy_draw_suspended = false;
@@ -1321,35 +1326,67 @@ static esp_err_t display_service_exit_dummy_draw(const char *owner)
     return ret;
 }
 
-static esp_err_t display_service_dummy_draw_blit_swapped_locked(int x_start, int y_start, int x_end, int y_end, const void *frame_buffer, bool wait)
+static void display_service_swap_rgb565(uint8_t *dst, const uint8_t *src, size_t pixels)
 {
-    ESP_RETURN_ON_FALSE(wait, ESP_ERR_NOT_SUPPORTED, TAG, "swapped RAW blit requires wait=true");
+    if ((((uintptr_t)dst | (uintptr_t)src) & 1U) == 0) {
+        uint16_t *dst16 = (uint16_t *)dst;
+        const uint16_t *src16 = (const uint16_t *)src;
+        for (size_t i = 0; i < pixels; ++i) dst16[i] = __builtin_bswap16(src16[i]);
+        return;
+    }
+    for (size_t i = 0; i < pixels; ++i) {
+        dst[2 * i] = src[2 * i + 1];
+        dst[2 * i + 1] = src[2 * i];
+    }
+}
+
+static esp_err_t display_service_dummy_draw_blit_staged_locked(int x_start, int y_start, int x_end, int y_end,
+                                                                const void *frame_buffer, size_t stride_bytes, bool wait)
+{
+    ESP_RETURN_ON_FALSE(wait, ESP_ERR_NOT_SUPPORTED, TAG, "staged RAW blit requires wait=true");
     ESP_RETURN_ON_FALSE(x_start >= 0 && y_start >= 0 && x_end > x_start && y_end > y_start &&
                         x_end <= s_display.info.width && y_end <= s_display.info.height,
-                        ESP_ERR_INVALID_ARG, TAG, "swapped RAW blit area invalid");
+                        ESP_ERR_INVALID_ARG, TAG, "staged RAW blit area invalid");
     const int width = x_end - x_start, height = y_end - y_start;
-    const size_t row_bytes = (size_t)width * 2;
-    const size_t needed = row_bytes * DISPLAY_SERVICE_RAW_SWAP_STRIP_ROWS;
-    if (s_display.raw_swap_strip_bytes < needed) {
-        uint8_t *strip = heap_caps_aligned_alloc(16, needed, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        ESP_RETURN_ON_FALSE(strip != NULL, ESP_ERR_NO_MEM, TAG, "RAW swap strip allocation failed: %u bytes", (unsigned)needed);
-        heap_caps_free(s_display.raw_swap_strip);
-        s_display.raw_swap_strip = strip;
-        s_display.raw_swap_strip_bytes = needed;
+    const size_t bytes_per_pixel = s_display.info.bits_per_pixel / 8;
+    ESP_RETURN_ON_FALSE(bytes_per_pixel == 2 || bytes_per_pixel == 3, ESP_ERR_NOT_SUPPORTED, TAG, "RAW pixel format unsupported");
+    const size_t row_bytes = (size_t)width * bytes_per_pixel;
+    if (stride_bytes == 0) stride_bytes = row_bytes;
+    ESP_RETURN_ON_FALSE(stride_bytes >= row_bytes && (size_t)(height - 1) <= (SIZE_MAX - row_bytes) / stride_bytes,
+                        ESP_ERR_INVALID_ARG, TAG, "RAW stride invalid");
+    int rows_per_chunk = DISPLAY_SERVICE_RAW_STAGING_BYTES / row_bytes;
+    if (rows_per_chunk == 0) rows_per_chunk = 1;
+    if (rows_per_chunk > height) rows_per_chunk = height;
+    const size_t needed = row_bytes * (size_t)rows_per_chunk;
+    if (s_display.raw_staging_bytes < needed) {
+        uint8_t *strip = heap_caps_aligned_alloc(16, needed, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+        if (strip == NULL) {
+            ESP_LOGW(TAG, "internal DMA staging allocation failed: %u bytes, using PSRAM", (unsigned)needed);
+            strip = heap_caps_aligned_alloc(16, needed, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        }
+        ESP_RETURN_ON_FALSE(strip != NULL, ESP_ERR_NO_MEM, TAG, "RAW staging allocation failed: %u bytes", (unsigned)needed);
+        heap_caps_free(s_display.raw_staging);
+        s_display.raw_staging = strip;
+        s_display.raw_staging_bytes = needed;
     }
     const uint8_t *source = frame_buffer;
-    for (int row = 0; row < height; row += DISPLAY_SERVICE_RAW_SWAP_STRIP_ROWS) {
-        const int rows = height - row < DISPLAY_SERVICE_RAW_SWAP_STRIP_ROWS ? height - row : DISPLAY_SERVICE_RAW_SWAP_STRIP_ROWS;
-        for (int i = 0; i < rows; ++i) {
-            const uint8_t *src = source + (size_t)(row + i) * row_bytes;
-            uint8_t *dst = s_display.raw_swap_strip + (size_t)i * row_bytes;
-            for (int pixel = 0; pixel < width; ++pixel) {
-                dst[2 * pixel] = src[2 * pixel + 1];
-                dst[2 * pixel + 1] = src[2 * pixel];
+    for (int row = 0; row < height; row += rows_per_chunk) {
+        const int rows = height - row < rows_per_chunk ? height - row : rows_per_chunk;
+        if (stride_bytes == row_bytes) {
+            const uint8_t *src = source + (size_t)row * row_bytes;
+            size_t chunk_bytes = (size_t)rows * row_bytes;
+            if (s_display.raw_rgb565_swap) display_service_swap_rgb565(s_display.raw_staging, src, chunk_bytes / 2);
+            else memcpy(s_display.raw_staging, src, chunk_bytes);
+        } else {
+            for (int i = 0; i < rows; ++i) {
+                const uint8_t *src = source + (size_t)(row + i) * stride_bytes;
+                uint8_t *dst = s_display.raw_staging + (size_t)i * row_bytes;
+                if (s_display.raw_rgb565_swap) display_service_swap_rgb565(dst, src, width);
+                else memcpy(dst, src, row_bytes);
             }
         }
         esp_err_t err = esp_lv_adapter_dummy_draw_blit(s_display.display, x_start, y_start + row, x_end, y_start + row + rows,
-                                                        s_display.raw_swap_strip, true);
+                                                        s_display.raw_staging, true);
         if (err != ESP_OK) return err;
     }
     return ESP_OK;
@@ -1361,6 +1398,7 @@ static esp_err_t display_service_dummy_draw_blit(const char *owner,
                                                  int x_end,
                                                  int y_end,
                                                  const void *frame_buffer,
+                                                 size_t stride_bytes,
                                                  bool wait)
 {
     esp_err_t ret;
@@ -1376,9 +1414,15 @@ static esp_err_t display_service_dummy_draw_blit(const char *owner,
     if (!s_display.dummy_draw_enabled || !display_service_dummy_owner_matches(owner) ||
             s_display.display == NULL || s_display.dummy_draw_suspended) {
         ret = ESP_ERR_INVALID_STATE;
+    } else if (x_start < 0 || y_start < 0 || x_end <= x_start || y_end <= y_start ||
+               x_end > s_display.info.width || y_end > s_display.info.height ||
+               (s_display.info.bits_per_pixel != 16 && s_display.info.bits_per_pixel != 24)) {
+        ret = ESP_ERR_INVALID_ARG;
     } else {
-        ret = s_display.raw_rgb565_swap ?
-              display_service_dummy_draw_blit_swapped_locked(x_start, y_start, x_end, y_end, frame_buffer, wait) :
+        const size_t row_bytes = (size_t)(x_end - x_start) * (s_display.info.bits_per_pixel / 8);
+        if (stride_bytes == 0) stride_bytes = row_bytes;
+        ret = s_display.raw_rgb565_swap || stride_bytes != row_bytes ?
+              display_service_dummy_draw_blit_staged_locked(x_start, y_start, x_end, y_end, frame_buffer, stride_bytes, wait) :
               esp_lv_adapter_dummy_draw_blit(s_display.display, x_start, y_start, x_end, y_end, frame_buffer, wait);
     }
     display_service_unlock();
