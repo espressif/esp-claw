@@ -9,7 +9,16 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "esp_check.h"
+#include "esp_log.h"
+#include "nvs.h"
 #include "settings_store.h"
+
+// Increment only when stored settings become incompatible.
+#define APP_CONFIG_SCHEMA_KEY      "cfg_ver"
+#define APP_CONFIG_SCHEMA_VERSION  "1"
+
+static const char *TAG = "app_config";
 
 typedef struct {
     const char *key;
@@ -17,18 +26,6 @@ typedef struct {
     size_t offset;
     size_t size;
 } app_config_field_t;
-
-typedef struct {
-    const char *legacy_id;
-    const char *backend_type;
-    const char *base_url;
-    const char *auth_type;
-    const char *max_tokens_field;
-    const char *default_image_max_bytes;
-    const char *supports_tools;
-    const char *supports_vision;
-    const char *image_remote_url_only;
-} app_config_legacy_llm_preset_t;
 
 #define APP_CONFIG_FIELD(member, nvs_key, default_literal) \
     { nvs_key, default_literal, offsetof(app_config_t, member), sizeof(((app_config_t *)0)->member) }
@@ -101,87 +98,6 @@ static const app_config_field_t s_fields[] = {
     APP_CONFIG_FIELD(time_timezone, "time_timezone", APP_DEFAULT_TIME_TIMEZONE),
 };
 
-// for backward compatibility, migrate from old settings to new settings
-static const app_config_legacy_llm_preset_t s_legacy_llm_presets[] = {
-    {
-        .legacy_id = "openai",
-        .backend_type = "openai_compatible",
-        .base_url = "https://api.openai.com/v1",
-        .auth_type = "bearer",
-        .max_tokens_field = "max_completion_tokens",
-        .default_image_max_bytes = "524288",
-        .supports_tools = "true",
-        .supports_vision = "true",
-        .image_remote_url_only = "false",
-    },
-    {
-        .legacy_id = "qwen",
-        .backend_type = "openai_compatible",
-        .base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        .auth_type = "bearer",
-        .max_tokens_field = "max_tokens",
-        .default_image_max_bytes = "524288",
-        .supports_tools = "true",
-        .supports_vision = "true",
-        .image_remote_url_only = "false",
-    },
-    {
-        .legacy_id = "qwen_compatible",
-        .backend_type = "openai_compatible",
-        .base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        .auth_type = "bearer",
-        .max_tokens_field = "max_tokens",
-        .default_image_max_bytes = "524288",
-        .supports_tools = "true",
-        .supports_vision = "true",
-        .image_remote_url_only = "false",
-    },
-    {
-        .legacy_id = "deepseek",
-        .backend_type = "openai_compatible",
-        .base_url = "https://api.deepseek.com",
-        .auth_type = "bearer",
-        .max_tokens_field = "max_completion_tokens",
-        .default_image_max_bytes = "524288",
-        .supports_tools = "true",
-        .supports_vision = "true",
-        .image_remote_url_only = "false",
-    },
-    {
-        .legacy_id = "custom_openai_compatible",
-        .backend_type = "openai_compatible",
-        .base_url = "https://api.openai.com/v1",
-        .auth_type = "bearer",
-        .max_tokens_field = "max_completion_tokens",
-        .default_image_max_bytes = "524288",
-        .supports_tools = "true",
-        .supports_vision = "true",
-        .image_remote_url_only = "false",
-    },
-    {
-        .legacy_id = "anthropic",
-        .backend_type = "anthropic_compatible",
-        .base_url = "https://api.anthropic.com/v1",
-        .auth_type = "none",
-        .max_tokens_field = "max_tokens",
-        .default_image_max_bytes = "524288",
-        .supports_tools = "true",
-        .supports_vision = "true",
-        .image_remote_url_only = "false",
-    },
-    {
-        .legacy_id = "claude",
-        .backend_type = "anthropic_compatible",
-        .base_url = "https://api.anthropic.com/v1",
-        .auth_type = "none",
-        .max_tokens_field = "max_tokens",
-        .default_image_max_bytes = "524288",
-        .supports_tools = "true",
-        .supports_vision = "true",
-        .image_remote_url_only = "false",
-    },
-};
-
 static inline char *app_config_field_ptr(app_config_t *config, const app_config_field_t *field)
 {
     return (char *)config + field->offset;
@@ -199,227 +115,37 @@ static bool app_config_ap_behavior_is_valid(const char *ap_behavior)
            strcmp(ap_behavior, "close_on_sta") == 0;
 }
 
-static const app_config_legacy_llm_preset_t *app_config_find_legacy_llm_preset(const char *legacy_id)
-{
-    size_t i;
-
-    if (!legacy_id || !legacy_id[0]) {
-        return NULL;
-    }
-
-    for (i = 0; i < sizeof(s_legacy_llm_presets) / sizeof(s_legacy_llm_presets[0]); i++) {
-        if (strcmp(s_legacy_llm_presets[i].legacy_id, legacy_id) == 0) {
-            return &s_legacy_llm_presets[i];
-        }
-    }
-
-    return NULL;
-}
-
-static esp_err_t app_config_write_if_empty(const char *key,
-                                           char *current_value,
-                                           size_t current_value_size,
-                                           const char *fallback_value)
-{
-    if (!key || !current_value || !fallback_value) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (current_value[0] != '\0') {
-        return ESP_OK;
-    }
-
-    esp_err_t err = settings_store_set_string(key, fallback_value);
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    strlcpy(current_value, fallback_value, current_value_size);
-    return ESP_OK;
-}
-
-static esp_err_t app_config_replace_if_match(const char *key,
-                                             char *current_value,
-                                             size_t current_value_size,
-                                             const char *match_value,
-                                             const char *replacement_value)
-{
-    esp_err_t err;
-
-    if (!key || !current_value || !match_value || !replacement_value) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (strcmp(current_value, match_value) != 0) {
-        return ESP_OK;
-    }
-
-    err = settings_store_set_string(key, replacement_value);
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    strlcpy(current_value, replacement_value, current_value_size);
-    return ESP_OK;
-}
-
-static esp_err_t app_config_upgrade_legacy_llm_settings(void)
-{
-    char legacy_profile[32] = {0};
-    char legacy_provider[32] = {0};
-    char llm_backend_type[32] = {0};
-    char llm_base_url[APP_CONFIG_STR_LEN] = {0};
-    char llm_auth_type[32] = {0};
-    char llm_max_tokens_field[32] = {0};
-    char llm_default_image_max_bytes[16] = {0};
-    char llm_supports_tools[8] = {0};
-    char llm_supports_vision[8] = {0};
-    char llm_image_remote_url_only[8] = {0};
-    const app_config_legacy_llm_preset_t *preset = NULL;
-    const char *legacy_id = NULL;
-    esp_err_t err;
-
-    err = settings_store_get_string("llm_profile", legacy_profile, sizeof(legacy_profile), "");
-    if (err != ESP_OK) {
-        return err;
-    }
-    err = settings_store_get_string("llm_provider", legacy_provider, sizeof(legacy_provider), "");
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    legacy_id = legacy_profile[0] ? legacy_profile : legacy_provider;
-    preset = app_config_find_legacy_llm_preset(legacy_id);
-    if (preset) {
-        err = settings_store_get_string("llm_backend", llm_backend_type, sizeof(llm_backend_type), "");
-        if (err != ESP_OK) {
-            return err;
-        }
-        err = settings_store_get_string("llm_base_url", llm_base_url, sizeof(llm_base_url), "");
-        if (err != ESP_OK) {
-            return err;
-        }
-        err = settings_store_get_string("llm_auth_type", llm_auth_type, sizeof(llm_auth_type), "");
-        if (err != ESP_OK) {
-            return err;
-        }
-        err = settings_store_get_string("llm_max_toks_f", llm_max_tokens_field, sizeof(llm_max_tokens_field), "");
-        if (err != ESP_OK) {
-            return err;
-        }
-        err = settings_store_get_string("llm_img_max_b",
-                                        llm_default_image_max_bytes,
-                                        sizeof(llm_default_image_max_bytes),
-                                        "");
-        if (err != ESP_OK) {
-            return err;
-        }
-        err = settings_store_get_string("llm_sup_tools", llm_supports_tools, sizeof(llm_supports_tools), "");
-        if (err != ESP_OK) {
-            return err;
-        }
-        err = settings_store_get_string("llm_sup_vis", llm_supports_vision, sizeof(llm_supports_vision), "");
-        if (err != ESP_OK) {
-            return err;
-        }
-        err = settings_store_get_string("llm_img_url_o",
-                                        llm_image_remote_url_only,
-                                        sizeof(llm_image_remote_url_only),
-                                        "");
-        if (err != ESP_OK) {
-            return err;
-        }
-
-        err = app_config_write_if_empty("llm_backend",
-                                        llm_backend_type,
-                                        sizeof(llm_backend_type),
-                                        preset->backend_type);
-        if (err != ESP_OK) {
-            return err;
-        }
-        err = app_config_write_if_empty("llm_base_url",
-                                        llm_base_url,
-                                        sizeof(llm_base_url),
-                                        preset->base_url);
-        if (err != ESP_OK) {
-            return err;
-        }
-        err = app_config_write_if_empty("llm_auth_type",
-                                        llm_auth_type,
-                                        sizeof(llm_auth_type),
-                                        preset->auth_type);
-        if (err != ESP_OK) {
-            return err;
-        }
-        err = app_config_write_if_empty("llm_max_toks_f",
-                                        llm_max_tokens_field,
-                                        sizeof(llm_max_tokens_field),
-                                        preset->max_tokens_field);
-        if (err != ESP_OK) {
-            return err;
-        }
-        err = app_config_write_if_empty("llm_img_max_b",
-                                        llm_default_image_max_bytes,
-                                        sizeof(llm_default_image_max_bytes),
-                                        preset->default_image_max_bytes);
-        if (err != ESP_OK) {
-            return err;
-        }
-        err = app_config_write_if_empty("llm_sup_tools",
-                                        llm_supports_tools,
-                                        sizeof(llm_supports_tools),
-                                        preset->supports_tools);
-        if (err != ESP_OK) {
-            return err;
-        }
-        err = app_config_write_if_empty("llm_sup_vis",
-                                        llm_supports_vision,
-                                        sizeof(llm_supports_vision),
-                                        preset->supports_vision);
-        if (err != ESP_OK) {
-            return err;
-        }
-        err = app_config_write_if_empty("llm_img_url_o",
-                                        llm_image_remote_url_only,
-                                        sizeof(llm_image_remote_url_only),
-                                        preset->image_remote_url_only);
-        if (err != ESP_OK) {
-            return err;
-        }
-    }
-
-    err = settings_store_get_string("llm_backend", llm_backend_type, sizeof(llm_backend_type), "");
-    if (err != ESP_OK) {
-        return err;
-    }
-    err = app_config_replace_if_match("llm_backend",
-                                      llm_backend_type,
-                                      sizeof(llm_backend_type),
-                                      "anthropic",
-                                      "anthropic_compatible");
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    err = settings_store_erase_key("llm_profile");
-    if (err != ESP_OK) {
-        return err;
-    }
-    err = settings_store_erase_key("llm_provider");
-    if (err != ESP_OK) {
-        return err;
-    }
-
-    return ESP_OK;
-}
-
 esp_err_t app_config_init(void)
 {
-    esp_err_t err = settings_store_init(&(settings_store_config_t) {
+    char stored_version[8];
+
+    ESP_RETURN_ON_ERROR(settings_store_init(&(settings_store_config_t) {
         .namespace_name = "app",
-    });
-    if (err != ESP_OK) {
+    }), TAG, "Failed to initialize app settings");
+
+    esp_err_t err = settings_store_get_string(APP_CONFIG_SCHEMA_KEY, stored_version, sizeof(stored_version), "");
+    if (err != ESP_OK && err != ESP_ERR_NVS_TYPE_MISMATCH && err != ESP_ERR_NVS_INVALID_LENGTH) {
+        ESP_LOGE(TAG, "Failed to read config schema version: %s", esp_err_to_name(err));
         return err;
     }
-    return app_config_upgrade_legacy_llm_settings();
+    if (err == ESP_OK && strcmp(stored_version, APP_CONFIG_SCHEMA_VERSION) == 0) {
+        ESP_LOGI(TAG, "Using config schema version %s", stored_version);
+        return ESP_OK;
+    }
+
+    if (err == ESP_ERR_NVS_TYPE_MISMATCH || err == ESP_ERR_NVS_INVALID_LENGTH) {
+        ESP_LOGW(TAG, "Resetting app config: invalid schema version");
+    } else if (stored_version[0] == '\0') {
+        ESP_LOGW(TAG, "Resetting app config: schema version is missing");
+    } else {
+        ESP_LOGW(TAG, "Resetting app config: stored schema=%s current=%s",
+                 stored_version, APP_CONFIG_SCHEMA_VERSION);
+    }
+
+    ESP_RETURN_ON_ERROR(settings_store_erase_all(), TAG, "Failed to reset app config");
+    ESP_RETURN_ON_ERROR(settings_store_set_string(APP_CONFIG_SCHEMA_KEY, APP_CONFIG_SCHEMA_VERSION),
+                        TAG, "Failed to save config schema version");
+    return ESP_OK;
 }
 
 void app_config_load_defaults(app_config_t *config)
