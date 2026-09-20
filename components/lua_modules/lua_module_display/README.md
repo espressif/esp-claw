@@ -43,7 +43,19 @@ The drawing format comes from the built-in screen's color depth. The display ser
 
 Cache this table if it is needed every frame.
 
-`screen:stats()` returns `present_us` (last presentation time in microseconds), `dirty_pixels` (number of pixels submitted), and `framebuffer_bytes` (total framebuffer memory). A frame with no update reports zero presentation time and zero submitted pixels.
+`screen:stats()` returns the latest frame statistics:
+
+| Field | Meaning |
+| --- | --- |
+| `draw_us` | Time from the start of `begin()` until `present()` begins, including framebuffer synchronization, clearing, Lua scene work, and drawing |
+| `present_us` | Time spent submitting pixels and waiting for presentation |
+| `sync_us` | Portion of `draw_us` spent synchronizing two framebuffers |
+| `dirty_pixels` | Number of submitted pixels |
+| `dirty_rects` | Number of submitted rectangles |
+| `submitted_bytes` | Submitted pixel bytes before panel byte-order conversion |
+| `framebuffer_bytes` | Total memory reserved by all framebuffers |
+
+A frame with no update reports zero presentation time, rectangles, pixels, and submitted bytes.
 
 `screen:close()` is safe to call more than once. Other screen methods raise an error after close.
 
@@ -141,7 +153,7 @@ Both `image()` and `blit()` obey the current translation and clip. Their coordin
 
 ## Touch and errors
 
-`screen:touch() -> { points = { { id = number, x = number, y = number }, ... } }` returns the latest touch reading in screen coordinates. `points` is ordered by the touch provider and is empty when nothing is touching the screen. On a board without built-in touch, the call raises a not-supported error; check `screen:info().touch_available` first.
+`screen:touch() -> { points = { { id = number, x = number, y = number }, ... } }` returns the latest touch snapshot in screen coordinates. `points` contains every active touch point in provider order and is empty when nothing is touching the screen. Track a gesture with `id`; do not assume the array position remains stable. On a board without built-in touch, the call raises a not-supported error; check `screen:info().touch_available` first.
 
 Invalid arguments, invalid UTF-8, invalid frame state, a closed screen or font, and unavailable hardware raise Lua errors. Use `pcall` when a scene should recover from an expected failure. Tests and runnable examples are in [`test/`](test/).
 

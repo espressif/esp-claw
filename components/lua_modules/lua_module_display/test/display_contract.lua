@@ -76,7 +76,9 @@ for count = 1, 2 do
     screen:begin()
     assert(screen:present({ full = true }))
     local stats = screen:stats()
-    assert(stats.dirty_pixels == info.width * info.height and stats.present_us >= 0)
+    assert(stats.dirty_pixels == info.width * info.height and stats.dirty_rects == 1)
+    assert(stats.submitted_bytes == stats.dirty_pixels * info.bytes_per_pixel)
+    assert(stats.draw_us >= stats.sync_us and stats.present_us >= 0)
     assert(stats.framebuffer_bytes == info.framebuffer_bytes)
     screen:begin()
     assert(not screen:present(), "empty frame submitted pixels")
@@ -84,6 +86,9 @@ for count = 1, 2 do
     if info.touch_available then
         local touch = screen:touch()
         assert(type(touch.points) == "table")
+        for _, point in ipairs(touch.points) do
+            assert(math.type(point.x) == "integer" and math.type(point.y) == "integer" and math.type(point.id) == "integer")
+        end
     else
         assert(rejects(screen.touch, screen):find("NOT_SUPPORTED", 1, true))
     end

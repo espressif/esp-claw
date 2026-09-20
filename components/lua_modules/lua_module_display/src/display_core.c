@@ -30,6 +30,7 @@ struct display_t {
     uint8_t *framebuffers[2];
     uint8_t draw_index, visible_index, depth;
     bool frame_active, panel_initialized;
+    int64_t frame_started_us;
     display_dirty_region_t dirty;
     display_dirty_region_t sync_dirty;
     display_raster_t raster;
@@ -126,8 +127,11 @@ esp_err_t display_begin(display_handle_t handle, bool clear, display_color_t col
     if (handle == NULL) return ESP_ERR_INVALID_ARG;
     if (!display_is_owner(handle)) return ESP_ERR_INVALID_STATE;
     if (handle->frame_active) return ESP_ERR_INVALID_STATE;
+    handle->frame_started_us = esp_timer_get_time();
+    handle->stats.sync_us = 0;
     if (handle->config.framebuffer_count == 2 && (!clear || color.a != 255) && display_dirty_is_valid(&handle->sync_dirty)) {
         /* After a swap, only the last frame's writes differ between buffers. */
+        int64_t sync_started_us = esp_timer_get_time();
         size_t bpp = display_bytes_per_pixel(handle->config.pixel_format);
         size_t stride = (size_t)handle->config.info.width * bpp;
         for (size_t i = 0; i < handle->sync_dirty.count; ++i) {
@@ -142,6 +146,7 @@ esp_err_t display_begin(display_handle_t handle, bool clear, display_color_t col
                 for (int row = 0; row < dirty->height; ++row) memcpy(dst + (size_t)row * stride, src + (size_t)row * stride, row_bytes);
             }
         }
+        handle->stats.sync_us = (uint32_t)(esp_timer_get_time() - sync_started_us);
     }
     display_dirty_clear(&handle->sync_dirty);
     handle->frame_active = true;
@@ -169,13 +174,19 @@ esp_err_t display_present(display_handle_t handle, bool full, bool *updated)
     if (!display_is_owner(handle)) return ESP_ERR_INVALID_STATE;
     if (!handle->frame_active) return ESP_ERR_INVALID_STATE;
     *updated = false;
+    handle->stats.draw_us = (uint32_t)(esp_timer_get_time() - handle->frame_started_us);
+    handle->stats.present_us = 0;
+    handle->stats.dirty_pixels = 0;
+    handle->stats.dirty_rects = 0;
+    handle->stats.submitted_bytes = 0;
     if (!full && !display_dirty_is_valid(&handle->dirty)) {
         handle->frame_active = false;
-        handle->stats.present_us = 0;
-        handle->stats.dirty_pixels = 0;
         return ESP_OK;
     }
     bool submit_full = full || !handle->panel_initialized;
+    handle->stats.dirty_pixels = submit_full ? (size_t)handle->config.info.width * handle->config.info.height : display_dirty_total_pixels(&handle->dirty);
+    handle->stats.dirty_rects = submit_full ? 1 : handle->dirty.count;
+    handle->stats.submitted_bytes = handle->stats.dirty_pixels * display_bytes_per_pixel(handle->config.pixel_format);
     int64_t start = esp_timer_get_time();
     if (submit_full) {
         esp_err_t err = display_submit(handle, 0, 0, handle->config.info.width, handle->config.info.height);
@@ -194,7 +205,6 @@ esp_err_t display_present(display_handle_t handle, bool full, bool *updated)
         }
     }
     handle->stats.present_us = (uint32_t)(esp_timer_get_time() - start);
-    handle->stats.dirty_pixels = submit_full ? (size_t)handle->config.info.width * handle->config.info.height : display_dirty_total_pixels(&handle->dirty);
     handle->panel_initialized = true;
     handle->sync_dirty = handle->dirty;
     display_dirty_clear(&handle->dirty);

@@ -28,8 +28,12 @@ typedef struct {
 } display_config_t;
 
 typedef struct {
+    uint32_t draw_us;
     uint32_t present_us;
+    uint32_t sync_us;
     size_t dirty_pixels;
+    size_t dirty_rects;
+    size_t submitted_bytes;
     size_t framebuffer_bytes;
 } display_stats_t;
 
