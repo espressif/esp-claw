@@ -26,7 +26,7 @@ for count = 1, 2 do
     local screen <close> = open(count)
     local info = screen:info()
     assert(info.width >= 4 and info.height >= 4)
-    assert(info.pixel_format == "rgb565" and not info.rgb565_swap)
+    assert(info.pixel_format == "rgb565" and info.rgb565_swap == nil)
     assert(info.framebuffer_count == count)
     assert(info.framebuffer_bytes == info.width * info.height * info.bytes_per_pixel * count)
     assert(rejects(open):find("already open", 1, true))
@@ -58,6 +58,12 @@ for count = 1, 2 do
     screen:fill_rect(-2, -2, 4, 4, 0x80FF0000)
     assert(screen:present())
     assert(screen:stats().dirty_pixels == 4, "negative clipping dirty area")
+
+    screen:begin()
+    screen:fill_rect(0, 0, 2, 2, 0xFFFFFFFF)
+    screen:fill_rect(info.width - 2, info.height - 2, 2, 2, 0xFFFFFFFF)
+    assert(screen:present())
+    assert(screen:stats().dirty_pixels == 8, "separate dirty regions were expanded")
 
     screen:begin()
     screen:save()

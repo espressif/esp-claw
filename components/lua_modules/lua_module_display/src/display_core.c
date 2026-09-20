@@ -17,7 +17,6 @@
 
 static const char *TAG = "display_core";
 #define DISPLAY_STATE_STACK_DEPTH 8
-#define DISPLAY_SUBMIT_STRIP_ROWS 16
 
 typedef struct {
     int tx, ty;
@@ -29,12 +28,10 @@ struct display_t {
     TaskHandle_t owner_task;
     size_t framebuffer_bytes;
     uint8_t *framebuffers[2];
-    uint8_t *submit_strip;
-    size_t submit_strip_bytes;
     uint8_t draw_index, visible_index, depth;
     bool frame_active, panel_initialized;
-    display_dirty_rect_t dirty;
-    display_dirty_rect_t sync_dirty;
+    display_dirty_region_t dirty;
+    display_dirty_region_t sync_dirty;
     display_raster_t raster;
     display_draw_state_t stack[DISPLAY_STATE_STACK_DEPTH];
     display_stats_t stats;
@@ -73,7 +70,6 @@ esp_err_t display_create(const display_config_t *config, display_handle_t *ret_h
     const size_t bpp = display_bytes_per_pixel(config->pixel_format);
     const size_t width = config->info.width, height = config->info.height;
     if (bpp == 0 || width == 0 || height == 0 || config->framebuffer_count < 1 || config->framebuffer_count > 2 ||
-        (config->pixel_format == DISPLAY_PIXEL_FORMAT_RGB888 && config->rgb565_swap) ||
         config->info.bits_per_pixel != bpp * 8 || width > SIZE_MAX / height || width * height > SIZE_MAX / bpp ||
         width * height * bpp > SIZE_MAX / config->framebuffer_count) return ESP_ERR_INVALID_ARG;
     if (!display_service_session_is_valid(config->session)) return ESP_ERR_INVALID_STATE;
@@ -112,7 +108,6 @@ esp_err_t display_delete(display_handle_t handle)
         }
     }
     for (uint8_t i = 0; i < 2; ++i) heap_caps_free(handle->framebuffers[i]);
-    heap_caps_free(handle->submit_strip);
     free(handle);
     return ESP_OK;
 }
@@ -133,17 +128,19 @@ esp_err_t display_begin(display_handle_t handle, bool clear, display_color_t col
     if (handle->frame_active) return ESP_ERR_INVALID_STATE;
     if (handle->config.framebuffer_count == 2 && (!clear || color.a != 255) && display_dirty_is_valid(&handle->sync_dirty)) {
         /* After a swap, only the last frame's writes differ between buffers. */
-        const display_dirty_rect_t *dirty = &handle->sync_dirty;
         size_t bpp = display_bytes_per_pixel(handle->config.pixel_format);
         size_t stride = (size_t)handle->config.info.width * bpp;
-        size_t offset = (size_t)dirty->y * stride + (size_t)dirty->x * bpp;
-        uint8_t *dst = handle->framebuffers[handle->draw_index] + offset;
-        const uint8_t *src = handle->framebuffers[handle->visible_index] + offset;
-        size_t row_bytes = (size_t)dirty->width * bpp;
-        if (row_bytes == stride) {
-            memcpy(dst, src, row_bytes * (size_t)dirty->height);
-        } else {
-            for (int row = 0; row < dirty->height; ++row) memcpy(dst + (size_t)row * stride, src + (size_t)row * stride, row_bytes);
+        for (size_t i = 0; i < handle->sync_dirty.count; ++i) {
+            const display_dirty_rect_t *dirty = &handle->sync_dirty.rects[i];
+            size_t offset = (size_t)dirty->y * stride + (size_t)dirty->x * bpp;
+            uint8_t *dst = handle->framebuffers[handle->draw_index] + offset;
+            const uint8_t *src = handle->framebuffers[handle->visible_index] + offset;
+            size_t row_bytes = (size_t)dirty->width * bpp;
+            if (row_bytes == stride) {
+                memcpy(dst, src, row_bytes * (size_t)dirty->height);
+            } else {
+                for (int row = 0; row < dirty->height; ++row) memcpy(dst + (size_t)row * stride, src + (size_t)row * stride, row_bytes);
+            }
         }
     }
     display_dirty_clear(&handle->sync_dirty);
@@ -154,51 +151,16 @@ esp_err_t display_begin(display_handle_t handle, bool clear, display_color_t col
     return ESP_OK;
 }
 
-static esp_err_t display_ensure_submit_strip(display_handle_t handle, int width)
-{
-    size_t needed = (size_t)width * display_bytes_per_pixel(handle->config.pixel_format) * DISPLAY_SUBMIT_STRIP_ROWS;
-    if (handle->submit_strip_bytes >= needed) return ESP_OK;
-    uint8_t *buffer = heap_caps_aligned_alloc(16, needed, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (buffer == NULL) {
-        ESP_LOGE(TAG, "submit strip allocation failed: %u bytes", (unsigned)needed);
-        return ESP_ERR_NO_MEM;
-    }
-    heap_caps_free(handle->submit_strip);
-    handle->submit_strip = buffer;
-    handle->submit_strip_bytes = needed;
-    return ESP_OK;
-}
-
 static esp_err_t display_submit(display_handle_t handle, int x, int y, int w, int h)
 {
     const size_t bpp = display_bytes_per_pixel(handle->config.pixel_format);
     const size_t stride = (size_t)handle->config.info.width * bpp;
     const uint8_t *framebuffer = handle->framebuffers[handle->draw_index];
-    if (w == handle->config.info.width && !handle->config.rgb565_swap) {
-        return display_service_session_raw_blit(handle->config.session, &(display_service_raw_blit_t) {
-            .x_start = x, .y_start = y, .x_end = x + w, .y_end = y + h,
-            .frame_buffer = framebuffer + (size_t)y * stride, .wait = true,
-        });
-    }
-    esp_err_t err = display_ensure_submit_strip(handle, w);
-    if (err != ESP_OK) return err;
-    const size_t row_bytes = (size_t)w * bpp;
-    for (int row = 0; row < h; row += DISPLAY_SUBMIT_STRIP_ROWS) {
-        int rows = h - row < DISPLAY_SUBMIT_STRIP_ROWS ? h - row : DISPLAY_SUBMIT_STRIP_ROWS;
-        for (int i = 0; i < rows; ++i) {
-            const uint8_t *src = framebuffer + (size_t)(y + row + i) * stride + (size_t)x * bpp;
-            uint8_t *dst = handle->submit_strip + (size_t)i * row_bytes;
-            if (handle->config.rgb565_swap) {
-                for (int p = 0; p < w; ++p) { dst[2 * p] = src[2 * p + 1]; dst[2 * p + 1] = src[2 * p]; }
-            } else memcpy(dst, src, row_bytes);
-        }
-        err = display_service_session_raw_blit(handle->config.session, &(display_service_raw_blit_t) {
-            .x_start = x, .y_start = y + row, .x_end = x + w, .y_end = y + row + rows,
-            .frame_buffer = handle->submit_strip, .wait = true,
-        });
-        if (err != ESP_OK) return err;
-    }
-    return ESP_OK;
+    return display_service_session_raw_blit(handle->config.session, &(display_service_raw_blit_t) {
+        .x_start = x, .y_start = y, .x_end = x + w, .y_end = y + h,
+        .frame_buffer = framebuffer + (size_t)y * stride + (size_t)x * bpp,
+        .stride_bytes = stride, .wait = true,
+    });
 }
 
 esp_err_t display_present(display_handle_t handle, bool full, bool *updated)
@@ -214,17 +176,25 @@ esp_err_t display_present(display_handle_t handle, bool full, bool *updated)
         return ESP_OK;
     }
     bool submit_full = full || !handle->panel_initialized;
-    int x = submit_full ? 0 : handle->dirty.x, y = submit_full ? 0 : handle->dirty.y;
-    int w = submit_full ? handle->config.info.width : handle->dirty.width;
-    int h = submit_full ? handle->config.info.height : handle->dirty.height;
     int64_t start = esp_timer_get_time();
-    esp_err_t err = display_submit(handle, x, y, w, h);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "present failed: %s", esp_err_to_name(err));
-        return err;
+    if (submit_full) {
+        esp_err_t err = display_submit(handle, 0, 0, handle->config.info.width, handle->config.info.height);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "present failed: %s", esp_err_to_name(err));
+            return err;
+        }
+    } else {
+        for (size_t i = 0; i < handle->dirty.count; ++i) {
+            const display_dirty_rect_t *rect = &handle->dirty.rects[i];
+            esp_err_t err = display_submit(handle, rect->x, rect->y, rect->width, rect->height);
+            if (err != ESP_OK) {
+                ESP_LOGE(TAG, "present failed: %s", esp_err_to_name(err));
+                return err;
+            }
+        }
     }
     handle->stats.present_us = (uint32_t)(esp_timer_get_time() - start);
-    handle->stats.dirty_pixels = (size_t)w * (size_t)h;
+    handle->stats.dirty_pixels = submit_full ? (size_t)handle->config.info.width * handle->config.info.height : display_dirty_total_pixels(&handle->dirty);
     handle->panel_initialized = true;
     handle->sync_dirty = handle->dirty;
     display_dirty_clear(&handle->dirty);

@@ -1,6 +1,8 @@
 ## IDF Component Manager Manifest File
 dependencies:
   espressif/esp_lvgl_adapter: "*"
-  lvgl/lvgl: ^9.5.0
+  lvgl/lvgl:
+    version: ^9.5.0,<9.6.0
+    public: true
   claw_hw_registry:
     path: ../claw_hw_registry

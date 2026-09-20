@@ -251,24 +251,12 @@ static void lua_display_exit_cleanup(lua_State *L)
 
 static int lua_display_open(lua_State *L)
 {
-    display_pixel_format_t format = DISPLAY_PIXEL_FORMAT_RGB565;
-    bool swap = false;
     int count = 1;
     if (!lua_isnoneornil(L, 1)) {
         luaL_checktype(L, 1, LUA_TTABLE);
-        lua_display_raw_field(L, 1, "pixel_format");
-        if (!lua_isnil(L, -1)) {
-            const char *value = luaL_checkstring(L, -1);
-            if (strcmp(value, "rgb565") == 0) format = DISPLAY_PIXEL_FORMAT_RGB565;
-            else if (strcmp(value, "rgb888") == 0) format = DISPLAY_PIXEL_FORMAT_RGB888;
-            else luaL_error(L, "display pixel_format must be rgb565 or rgb888");
-        }
-        lua_pop(L, 1);
-        swap = lua_display_field_boolean(L, 1, "rgb565_swap", false);
         count = lua_display_field_integer(L, 1, "framebuffer_count", 1);
     }
     if (count < 1 || count > 2) luaL_error(L, "display framebuffer_count must be 1 or 2");
-    if (format == DISPLAY_PIXEL_FORMAT_RGB888 && swap) luaL_error(L, "display rgb565_swap is invalid for rgb888");
     lua_display_screen_t *screen = lua_newuserdata(L, sizeof(*screen));
     screen->handle = NULL;
     screen->pending_session = NULL;
@@ -308,9 +296,11 @@ static int lua_display_open(lua_State *L)
     display_service_info_t info = {0};
     display_handle_t handle = NULL;
     if (err == ESP_OK) err = display_service_session_get_info(session, &info);
+    display_pixel_format_t format = info.bits_per_pixel == 16 ? DISPLAY_PIXEL_FORMAT_RGB565 : DISPLAY_PIXEL_FORMAT_RGB888;
+    if (err == ESP_OK && info.bits_per_pixel != 16 && info.bits_per_pixel != 24) err = ESP_ERR_NOT_SUPPORTED;
     if (err == ESP_OK) err = display_create(&(display_config_t) {
         .session = session, .info = info, .pixel_format = format,
-        .rgb565_swap = swap, .framebuffer_count = count,
+        .framebuffer_count = count,
     }, &handle);
     if (err != ESP_OK) {
         if (session != NULL) {
@@ -347,14 +337,13 @@ static int lua_display_info(lua_State *L)
 {
     display_config_t config = *display_get_config(lua_display_screen(L)->handle);
     size_t bpp = config.pixel_format == DISPLAY_PIXEL_FORMAT_RGB565 ? 2 : 3;
-    lua_createtable(L, 0, 8);
+    lua_createtable(L, 0, 7);
     lua_display_table_integer(L, "width", config.info.width);
     lua_display_table_integer(L, "height", config.info.height);
     lua_pushstring(L, config.pixel_format == DISPLAY_PIXEL_FORMAT_RGB565 ? "rgb565" : "rgb888"); lua_setfield(L, -2, "pixel_format");
     lua_display_table_integer(L, "bytes_per_pixel", bpp);
     lua_display_table_integer(L, "framebuffer_count", config.framebuffer_count);
     lua_display_table_integer(L, "framebuffer_bytes", (size_t)config.info.width * config.info.height * bpp * config.framebuffer_count);
-    lua_pushboolean(L, config.rgb565_swap); lua_setfield(L, -2, "rgb565_swap");
     lua_pushboolean(L, config.info.touch_available); lua_setfield(L, -2, "touch_available");
     return 1;
 }

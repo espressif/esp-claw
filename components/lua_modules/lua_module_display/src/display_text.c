@@ -18,6 +18,9 @@
 
 static const char *TAG = "display_text";
 
+static int64_t max64(int64_t a, int64_t b) { return a > b ? a : b; }
+static int64_t min64(int64_t a, int64_t b) { return a < b ? a : b; }
+
 struct display_font_t {
     uint16_t width, height;
     uint32_t count;
@@ -179,33 +182,35 @@ static bool next_codepoint(const char *text, size_t length, size_t *offset, uint
     return *cp >= minimum && valid_codepoint(*cp);
 }
 
-static void draw_glyph(display_raster_t *r, int64_t x, int64_t y, const uint8_t *bitmap, const font_view_t *font, display_color_t color)
+static void draw_glyph(display_raster_t *r, int64_t x, int64_t y, const uint8_t *bitmap, const font_view_t *font,
+                       const uint8_t *rows, const display_raster_pen_t *pen)
 {
     int64_t clip_left = (int64_t)r->x0 - r->tx, clip_top = (int64_t)r->y0 - r->ty;
     int64_t clip_right = (int64_t)r->x1 - r->tx, clip_bottom = (int64_t)r->y1 - r->ty;
     if (x >= clip_right || y >= clip_bottom || x + font->width <= clip_left || y + font->height <= clip_top) return;
     int stride = (font->source_width + 7) / 8;
-    for (int row = 0; row < font->height; row++) {
-        if (y + row < clip_top || y + row >= clip_bottom) continue;
-        const uint8_t *source = bitmap + (row * font->source_height / font->height) * stride;
+    int row_start = y < clip_top ? (int)(clip_top - y) : 0;
+    int row_end = y + font->height > clip_bottom ? (int)(clip_bottom - y) : font->height;
+    int col_start = x < clip_left ? (int)(clip_left - x) : 0;
+    int col_end = x + font->width > clip_right ? (int)(clip_right - x) : font->width;
+    for (int row = row_start; row < row_end; row++) {
+        const uint8_t *source = bitmap + rows[row] * stride;
         int run = -1;
-        for (int col = 0; col <= font->width; col++) {
-            int sx = col < font->width ? font->columns[col] : 0;
-            bool on = col < font->width && (source[sx / 8] & (0x80U >> (sx & 7)));
+        for (int col = col_start; col <= col_end; col++) {
+            int sx = col < col_end ? font->columns[col] : 0;
+            bool on = col < col_end && (source[sx / 8] & (0x80U >> (sx & 7)));
             if (on && run < 0) run = col;
             if (!on && run >= 0) {
-                display_raster_span(r, x + run, x + col, y + row, color);
+                display_raster_run_unchecked(r, (int)(x + run + r->tx), (int)(y + row + r->ty), col - run, pen);
                 run = -1;
             }
         }
     }
 }
 
-static esp_err_t walk_text(display_raster_t *r, int x, int y, const char *text, size_t length, const display_text_options_t *options, int *width, int *height)
+static esp_err_t walk_text(display_raster_t *r, int x, int y, const char *text, size_t length, const font_view_t *font,
+                           const uint8_t *rows, const display_raster_pen_t *pen, int *width, int *height)
 {
-    font_view_t font;
-    esp_err_t err = font_view(options, &font);
-    if (err != ESP_OK) return err;
     int64_t column = 0, row = 0, widest = 0;
     for (size_t offset = 0; offset < length;) {
         uint32_t cp;
@@ -213,32 +218,48 @@ static esp_err_t walk_text(display_raster_t *r, int x, int y, const char *text, 
         if (cp == '\n' || cp == '\r') {
             if (column > widest) widest = column;
             column = 0;
-            if (cp == '\n') row += font.height;
-        } else if (cp == '\t') column += font.width * 4;
+            if (cp == '\n') row += font->height;
+        } else if (cp == '\t') column += font->width * 4;
         else {
-            const uint8_t *bitmap = glyph(&font, cp);
+            const uint8_t *bitmap = glyph(font, cp);
             if (!bitmap) return ESP_ERR_NOT_FOUND;
-            if (r && options->color.a) draw_glyph(r, (int64_t)x + column, (int64_t)y + row, bitmap, &font, options->color);
-            column += font.width;
+            if (r && pen->color.a) draw_glyph(r, (int64_t)x + column, (int64_t)y + row, bitmap, font, rows, pen);
+            column += font->width;
         }
-        if (column > INT_MAX || row + font.height > INT_MAX) return ESP_ERR_INVALID_SIZE;
+        if (column > INT_MAX || row + font->height > INT_MAX) return ESP_ERR_INVALID_SIZE;
     }
     if (column > widest) widest = column;
     if (width) *width = (int)widest;
-    if (height) *height = length ? (int)(row + font.height) : 0;
+    if (height) *height = length ? (int)(row + font->height) : 0;
     return ESP_OK;
 }
 
 esp_err_t display_text_measure(const char *text, size_t length, const display_text_options_t *options, int *width, int *height)
 {
     if (!text || !options || !width || !height) return ESP_ERR_INVALID_ARG;
-    return walk_text(NULL, 0, 0, text, length, options, width, height);
+    font_view_t font;
+    esp_err_t err = font_view(options, &font);
+    return err == ESP_OK ? walk_text(NULL, 0, 0, text, length, &font, NULL, NULL, width, height) : err;
 }
 
 esp_err_t display_text_draw(display_raster_t *r, int x, int y, const char *text, size_t length, const display_text_options_t *options)
 {
     if (!r || !text || !options) return ESP_ERR_INVALID_ARG;
     /* Validate all glyphs before modifying the framebuffer. */
-    esp_err_t err = walk_text(NULL, 0, 0, text, length, options, NULL, NULL);
-    return err == ESP_OK ? walk_text(r, x, y, text, length, options, NULL, NULL) : err;
+    font_view_t font;
+    esp_err_t err = font_view(options, &font);
+    display_raster_pen_t pen = display_raster_make_pen(options->color);
+    uint8_t rows[FONT_MAX_DIMENSION];
+    if (err == ESP_OK) {
+        for (int row = 0; row < font.height; ++row) rows[row] = row * font.source_height / font.height;
+    }
+    int width = 0, height = 0;
+    if (err == ESP_OK) err = walk_text(NULL, 0, 0, text, length, &font, NULL, NULL, &width, &height);
+    if (err == ESP_OK) err = walk_text(r, x, y, text, length, &font, rows, &pen, NULL, NULL);
+    int64_t left = max64((int64_t)x + r->tx, r->x0), top = max64((int64_t)y + r->ty, r->y0);
+    int64_t right = min64((int64_t)x + width + r->tx, r->x1), bottom = min64((int64_t)y + height + r->ty, r->y1);
+    if (err == ESP_OK && options->color.a && left < right && top < bottom) {
+        display_dirty_mark(r->dirty, (int)left, (int)top, (int)(right - left), (int)(bottom - top));
+    }
+    return err;
 }

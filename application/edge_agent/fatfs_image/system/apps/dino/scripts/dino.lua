@@ -241,7 +241,31 @@ local obs, gulls, palms, decor, bubbles = {}, {}, {}, {}, {}
 local scroll_px, next_spawn, speed, anim_t
 local score, best, over = 0, 0, false
 
-local function frame_color(r, g, b) return display.color(r, g, b) end
+local THEME = {
+    sky = { r = 247, g = 244, b = 235 },
+    sun = { r = 255, g = 196, b = 82 },
+    dune_far = { r = 235, g = 226, b = 206 },
+    dune_near = { r = 222, g = 207, b = 176 },
+    sand = { r = 246, g = 231, b = 199 },
+    sand_mark = { r = 216, g = 191, b = 145 },
+    ink = { r = 35, g = 47, b = 43 },
+    muted = { r = 112, g = 119, b = 105 },
+    cactus = { r = 45, g = 116, b = 82 },
+    cactus_light = { r = 86, g = 151, b = 104 },
+    card = { r = 255, g = 252, b = 244 },
+    accent = { r = 229, g = 91, b = 67 },
+}
+local color_cache = {}
+
+local function frame_color(r, g, b)
+    local key = (r << 16) | (g << 8) | b
+    local color = color_cache[key]
+    if color == nil then
+        color = display.color(r, g, b)
+        color_cache[key] = color
+    end
+    return color
+end
 local function fr(x, y, w, h, r, g, b) screen:fill_rect(x, y, w, h, frame_color(r, g, b)) end
 local function dr(x, y, w, h, r, g, b) screen:stroke_rect(x, y, w, h, frame_color(r, g, b)) end
 local function fc(x, y, r, cr, cg, cb) screen:fill_circle(x, y, r, frame_color(cr, cg, cb)) end
@@ -381,35 +405,45 @@ local function step(df)
 end
 
 local function draw_bg()
+    fc(W - 48, TOP_SAFE + 50, 25, col(THEME.sun))
+    fc(W - 48, TOP_SAFE + 50, 17, 255, 215, 126)
+
+    local far_y = GY - 50
+    ft(0, GY, math.floor(W * 0.27), far_y, math.floor(W * 0.58), GY, col(THEME.dune_far))
+    ft(math.floor(W * 0.38), GY, math.floor(W * 0.72), far_y - 8, W, GY, col(THEME.dune_far))
+    ft(0, GY, math.floor(W * 0.42), GY - 28, math.floor(W * 0.77), GY, col(THEME.dune_near))
+    ft(math.floor(W * 0.62), GY, math.floor(W * 0.86), GY - 30, W, GY, col(THEME.dune_near))
+
     for _, g in ipairs(gulls) do
         local x, y, s = math.floor(g.x), math.floor(g.y), g.s
-        ln(x, y + 8, x + 4, y + 4, 210, 210, 210)
-        ln(x + 4, y + 4, x + 8, y + 4, 210, 210, 210)
-        ln(x + 8, y + 4, x + 12, y, 210, 210, 210)
-        ln(x + 12, y, x + s, y, 210, 210, 210)
-        ln(x + s, y, x + s + 6, y + 5, 210, 210, 210)
-        ln(x + s + 6, y + 5, x + s + 12, y + 5, 210, 210, 210)
-        ln(x + s + 12, y + 5, x + s + 16, y + 8, 210, 210, 210)
+        ln(x, y + 8, x + 4, y + 4, col(THEME.muted))
+        ln(x + 4, y + 4, x + 8, y + 4, col(THEME.muted))
+        ln(x + 8, y + 4, x + 12, y, col(THEME.muted))
+        ln(x + 12, y, x + s, y, col(THEME.muted))
+        ln(x + s, y, x + s + 6, y + 5, col(THEME.muted))
+        ln(x + s + 6, y + 5, x + s + 12, y + 5, col(THEME.muted))
+        ln(x + s + 12, y + 5, x + s + 16, y + 8, col(THEME.muted))
     end
 end
 
 local function draw_ground()
-    fr(0, GY, W, 2, 83, 83, 83)
-    fr(0, GY + 2, W, GH - 2, 255, 255, 255)
+    fr(0, GY, W, GH, col(THEME.sand))
+    fr(0, GY, W, 2, col(THEME.ink))
+    fr(0, GY + 8, W, 1, 236, 214, 174)
     for _, d in ipairs(decor) do
         local x = math.floor(d.x)
         local y = GY + 9 + (d.t * 4)
         if d.t == 0 then
-            fr(x, y, 8, 1, 150, 150, 150)
+            fr(x, y, 8, 1, col(THEME.sand_mark))
         elseif d.t == 1 then
-            fr(x, y, 3, 1, 170, 170, 170)
-            fr(x + 6, y, 6, 1, 170, 170, 170)
+            fr(x, y, 3, 1, col(THEME.sand_mark))
+            fr(x + 6, y, 6, 1, col(THEME.sand_mark))
         else
-            fr(x, y, 2, 2, 185, 185, 185)
+            fr(x, y, 2, 2, col(THEME.sand_mark))
         end
     end
     local off = math.floor(scroll_px) % 28
-    for x = -off, W, 28 do fr(x, GY + 18, 10, 1, 170, 170, 170) end
+    for x = -off, W, 28 do fr(x, GY + 18, 10, 1, col(THEME.sand_mark)) end
 end
 
 local function make_scaled_draw(x, y)
@@ -428,7 +462,7 @@ end
 local function draw_dino(x, y)
     local s = make_scaled_draw(x, y)
     local leg = on_ground and (math.floor(anim_t / 4) % 2) or 2
-    local body, cut = PAL.body, { r = 255, g = 255, b = 255 }
+    local body, cut = PAL.body, THEME.sky
 
     local function block(px, py, pw, ph)
         s.rect(px, py, pw, ph, body)
@@ -486,18 +520,19 @@ end
 
 local function draw_shadow(cx)
     if on_ground then
-        fr(cx - math.floor(DW * 0.42), GY + 3, math.floor(DW * 0.84), 2, 225, 225, 225)
+        fr(cx - math.floor(DW * 0.42), GY + 3, math.floor(DW * 0.84), 2, 190, 166, 126)
     else
-        fr(cx - math.floor(DW * 0.28), GY + 4, math.floor(DW * 0.56), 1, 230, 230, 230)
+        fr(cx - math.floor(DW * 0.28), GY + 4, math.floor(DW * 0.56), 1, 224, 205, 170)
     end
 end
 
 local function draw_cactus_part(x, base, h, w)
-    fr(x, base - h, w, h, 83, 83, 83)
-    fr(x - 5, base - math.floor(h * 0.58), 5, 4, 83, 83, 83)
-    fr(x - 7, base - math.floor(h * 0.72), 3, 10, 83, 83, 83)
-    fr(x + w, base - math.floor(h * 0.42), 5, 4, 83, 83, 83)
-    fr(x + w + 3, base - math.floor(h * 0.58), 3, 9, 83, 83, 83)
+    fr(x, base - h, w, h, col(THEME.cactus))
+    fr(x + 1, base - h + 2, math.min(2, w - 1), h - 4, col(THEME.cactus_light))
+    fr(x - 5, base - math.floor(h * 0.58), 5, 4, col(THEME.cactus))
+    fr(x - 7, base - math.floor(h * 0.72), 3, 10, col(THEME.cactus))
+    fr(x + w, base - math.floor(h * 0.42), 5, 4, col(THEME.cactus))
+    fr(x + w + 3, base - math.floor(h * 0.58), 3, 9, col(THEME.cactus))
 end
 
 local function draw_cactus(o)
@@ -521,20 +556,25 @@ local function draw_obstacles()
     end
 end
 
-local TXT = { color = frame_color(0, 0, 0), font_size = FZ }
+local TXT = { color = frame_color(col(THEME.ink)), font_size = FZ }
 local TXT_C = {
-    color = frame_color(0, 0, 0),
+    color = frame_color(col(THEME.ink)),
     font_size = FZ,
 }
 
 local function draw_hud()
-    local hi = string.format("HI %05d", best)
-    local s = string.format("%05d", score)
-    local hi_w = screen:measure_text(hi, { font_size = FZ })
-    local score_w = screen:measure_text(s, { font_size = FZ })
-    local x = W - hi_w - score_w - 24
-    screen:text(x, TOP_SAFE, hi, TXT)
-    screen:text(x + hi_w + 18, TOP_SAFE, s, TXT)
+    local y = TOP_SAFE
+    local left_w = math.min(120, math.floor(W * 0.34))
+    local right_w = math.min(110, math.floor(W * 0.31))
+    frr(10, y, left_w, FZ + 19, 9, col(THEME.card))
+    screen:stroke_round_rect(10, y, left_w, FZ + 19, 9, frame_color(222, 213, 195))
+    screen:text(19, y + 4, "BEST", { color = frame_color(col(THEME.muted)), font_size = math.max(10, FZ - 7) })
+    screen:text(19, y + 13, string.format("%05d", best), { color = frame_color(col(THEME.ink)), font_size = FZ })
+
+    local rx = W - right_w - 10
+    frr(rx, y, right_w, FZ + 19, 9, col(THEME.ink))
+    screen:text(rx + 10, y + 4, "RUN", { color = frame_color(191, 205, 178), font_size = math.max(10, FZ - 7) })
+    screen:text(rx + 10, y + 13, string.format("%05d", score), { color = frame_color(col(THEME.card)), font_size = FZ })
 end
 
 local function overlay_center(lines)
@@ -548,26 +588,24 @@ local function overlay_center(lines)
     local bh = #lines * lh + 12
     local bx = (W - bw) // 2
     local by = (H - bh) // 2
+    frr(bx + 4, by + 5, bw, bh, 13, 205, 190, 163)
+    frr(bx, by, bw, bh, 13, col(THEME.card))
+    screen:stroke_round_rect(bx, by, bw, bh, 13, frame_color(218, 205, 181))
     for i, text in ipairs(lines) do
         center_text(bx, by + 6 + (i - 1) * lh, bw, FZ, text, TXT_C)
     end
 end
 
 local function draw_title_banner()
-    overlay_center({ " D I N O ", "PRESS TO JUMP" })
+    overlay_center({ "DINO DASH", "TAP OR PRESS TO JUMP" })
 end
 
 local function draw_game_over()
-    local lh = FZ + 7
-    local y = math.max(TOP_SAFE + FZ + 4, math.floor(H * 0.14))
-    center_text(0, y, W, FZ, "G A M E  O V E R", TXT_C)
-    center_text(0, y + lh, W, FZ, string.format("SCORE %d", score), TXT_C)
-    center_text(0, y + lh * 2, W, FZ, string.format("HI %d", best), TXT_C)
-    center_text(0, math.min(GY - FZ - 4, y + lh * 3), W, FZ, "PRESS TO RESTART", TXT_C)
+    overlay_center({ "RUN COMPLETE", string.format("SCORE  %05d", score), "TAP OR PRESS TO RETRY" })
 end
 
 local function render()
-    screen:begin({ clear = frame_color(255, 255, 255) })
+    screen:begin({ clear = frame_color(col(THEME.sky)) })
     draw_bg()
     draw_ground()
     draw_obstacles()
