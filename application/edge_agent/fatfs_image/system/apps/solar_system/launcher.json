@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "id": "solar_system",
+  "entry": "scripts/main.lua",
+  "display_name": "Solar System",
+  "args": {},
+  "order": 20,
+  "visible": true
+}
