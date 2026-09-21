@@ -18,7 +18,7 @@ ESP-Claw 支持使用 Skills 机制动态管理上下文，同时扩展 Agent �
 与 PC 端通行的 AI 大模型 Agent 框架中的 Skills 不同，为了扩展 ESP-Claw 的 Agent 能力，ESP-Claw 的 Skills 可以包含 Lua 脚本，并提供 Lua 脚本的 API 参考；可以包含静态资源文件。
 因此，ESP-Claw 的 Skill 需要遵守特定的目录结构与元数据规范。
 
-你可以在 [claw-skill-spec.md](https://github.com/espressif/esp-claw/blob/master/.agents/spec/claw-skill-spec.md) 中找到 ESP-Claw 的 Skill 规范。
+你可以在 [Skill package spec](https://github.com/espressif/esp-claw/blob/master/components/common/skill_builder/skills/skill_creator/references/skill-package-spec.md) 中找到 ESP-Claw 的 Skill 规范。该文件也会随内置 `skill_creator` 一起打包，供设备 Agent 使用。
 
 ### 元数据
 
@@ -34,7 +34,7 @@ Skill 的管理模式由存储根目录决定。可写 DATA 存储中的 Skill �
   `metadata.cap_groups` 中填写的值对应 `claw_cap_group_info_t.id`，即各 Capability Group 注册时使用的 ID（如 `cap_lua`、`cap_im_qq` 等）。
 </Aside>
 
-其他字段请参考 [claw-skill-spec.md](https://github.com/espressif/esp-claw/blob/master/.agents/spec/claw-skill-spec.md)。
+其他字段请参考 [Skill package spec](https://github.com/espressif/esp-claw/blob/master/components/common/skill_builder/skills/skill_creator/references/skill-package-spec.md)。
 
 ## 撰写有效的 Skill
 
