@@ -1,6 +1,7 @@
 local display = require("display")
 local delay = require("delay")
 local system = require("system")
+local audio_ok, audio = pcall(require, "audio")
 
 local script_dir = assert(debug.getinfo(1, "S").source:match("^@(.*/)"), "script directory unavailable")
 local app_dir = assert(script_dir:match("^(.*)/scripts/$"), "app directory unavailable")
@@ -16,13 +17,91 @@ local RUN_MS = int_arg("run_ms", 0, 0, 3600000)
 local FRAMEBUFFER_COUNT = int_arg("framebuffer_count", 1, 1, 2)
 local ENEMY_COUNT = int_arg("enemy_count", 14, 8, 24)
 local PARTICLE_COUNT = int_arg("particle_count", 72, 32, 112)
+local SOUND_VOLUME = int_arg("sound_volume", 72, 0, 100)
 local DEBUG_OVERLAY = app_args.debug == true
 
 local screen
 local fonts = {}
 local opened = false
+local audio_output, audio_player
+local sfx_pending, sfx_current_priority
+
+local SFX = {
+    start = { path = app_dir .. "/assets/sfx/start.aac", priority = 3 },
+    destroy = { path = app_dir .. "/assets/sfx/destroy.aac", priority = 2 },
+    elite_destroy = { path = app_dir .. "/assets/sfx/elite_destroy.aac", priority = 4 },
+    damage = { path = app_dir .. "/assets/sfx/damage.aac", priority = 6 },
+    pickup = { path = app_dir .. "/assets/sfx/pickup.aac", priority = 5 },
+    wave = { path = app_dir .. "/assets/sfx/wave.aac", priority = 5 },
+    game_over = { path = app_dir .. "/assets/sfx/game_over.aac", priority = 10 },
+}
+
+local function request_sfx(name)
+    if not audio_player then return end
+    local effect = SFX[name]
+    if effect and (not sfx_pending or effect.priority >= sfx_pending.priority) then sfx_pending = effect end
+end
+
+local function drain_sfx()
+    if not audio_player or not sfx_pending then return end
+    local poll_ok, state = pcall(audio_player.poll, audio_player)
+    if not poll_ok then
+        print("[neon_strike] WARN: audio poll failed: " .. tostring(state))
+        sfx_pending = nil
+        return
+    end
+    if state.running then
+        if sfx_pending.priority <= (sfx_current_priority or 0) then
+            sfx_pending = nil
+            return
+        end
+        local stop_ok, stopped, stop_err = pcall(audio_player.stop, audio_player)
+        if not stop_ok or not stopped then
+            print("[neon_strike] WARN: audio stop failed: " .. tostring(stop_ok and stop_err or stopped))
+            sfx_pending = nil
+        end
+        sfx_current_priority = nil
+        return
+    end
+
+    local effect = sfx_pending
+    local play_ok, played, play_err = pcall(audio_player.play, audio_player, effect.path)
+    if play_ok and played then
+        sfx_current_priority = effect.priority
+    else
+        print("[neon_strike] WARN: audio play failed: " .. tostring(play_ok and play_err or played))
+    end
+    sfx_pending = nil
+end
+
+local function init_audio()
+    if SOUND_VOLUME == 0 then return end
+    if not audio_ok then
+        print("[neon_strike] WARN: audio module unavailable: " .. tostring(audio))
+        return
+    end
+    local output_ok, output, output_err = pcall(audio.open_output)
+    if not output_ok or not output then
+        print("[neon_strike] WARN: audio output unavailable: " .. tostring(output_ok and output_err or output))
+        return
+    end
+    local volume_ok, volume_set, volume_err = pcall(output.set_volume, output, SOUND_VOLUME)
+    if not volume_ok or not volume_set then
+        print("[neon_strike] WARN: audio volume setup failed: " .. tostring(volume_ok and volume_err or volume_set))
+    end
+    local player_ok, player, player_err = pcall(audio.player, { output = output })
+    if not player_ok or not player then
+        print("[neon_strike] WARN: audio player unavailable: " .. tostring(player_ok and player_err or player))
+        pcall(output.close, output)
+        return
+    end
+    audio_output, audio_player = output, player
+end
 
 local function cleanup()
+    if audio_player then pcall(audio_player.close, audio_player) end
+    if audio_output then pcall(audio_output.close, audio_output) end
+    audio_player, audio_output = nil, nil
     if fonts.title then pcall(fonts.title.close, fonts.title) end
     if fonts.body then pcall(fonts.body.close, fonts.body) end
     fonts.title, fonts.body = nil, nil
@@ -43,6 +122,8 @@ if not open_ok then
     print("[neon_strike] ERROR: open failed: " .. tostring(open_err))
     return
 end
+
+init_audio()
 
 local info = screen:info()
 local width, height = info.width, info.height
@@ -273,6 +354,7 @@ local function reset_game()
     clear_pool(shockwaves)
     clear_pool(pickups)
     sync_enemies(true)
+    request_sfx("start")
 end
 
 local function damage_player(amount, x, y)
@@ -283,12 +365,14 @@ local function damage_player(amount, x, y)
     shake_timer = math.max(shake_timer, 0.28)
     emit_burst(x, y, 12, 3)
     emit_shockwave(x, y, 3, 58)
+    request_sfx("damage")
     if health == 0 then
         game_state = "gameover"
         state_timer = 3.2
         emit_burst(player.x, player.y, 28, 3)
         emit_shockwave(player.x, player.y, 3, 76)
         shake_timer = 0.7
+        request_sfx("game_over")
     end
 end
 
@@ -302,12 +386,14 @@ local function destroy_enemy(enemy)
     emit_burst(enemy.x, enemy.y, enemy.kind == 4 and 22 or 10, burst_kind)
     emit_shockwave(enemy.x, enemy.y, burst_kind, enemy.kind == 4 and 68 or 42)
     shake_timer = math.max(shake_timer, enemy.kind == 4 and 0.42 or 0.12)
+    request_sfx(enemy.kind == 4 and "elite_destroy" or "destroy")
     if kills % 7 == 0 then spawn_pickup(enemy.x, enemy.y) end
     local next_wave = math.floor(kills / 12) + 1
     if next_wave > wave then
         wave = next_wave
         wave_banner = 1.8
         sync_enemies(false)
+        request_sfx("wave")
     end
     configure_enemy(enemy, false)
 end
@@ -465,6 +551,7 @@ local function update_effects(dt)
                 score = score + 150
                 emit_burst(pickup.x, pickup.y, 14, 3)
                 emit_shockwave(pickup.x, pickup.y, 3, 64)
+                request_sfx("pickup")
             elseif pickup.y > height + 12 then
                 pickup.active = false
             end
@@ -749,6 +836,7 @@ local function run()
     local started, previous = system.millis(), system.millis()
     local next_frame = started
     while RUN_MS == 0 or system.millis() - started < RUN_MS do
+        drain_sfx()
         local now = system.millis()
         local dt = math.min(0.075, math.max(0.001, (now - previous) / 1000))
         previous = now
