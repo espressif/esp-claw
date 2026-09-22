@@ -5,6 +5,10 @@ Scene.__index = Scene
 
 local label_candidates = { { 1, -1 }, { 1, 1 }, { -1, -1 }, { -1, 1 } }
 local jupiter_bands = { -5, -2, 2, 5 }
+local TOUCH_NONE, TOUCH_ROTATE, TOUCH_TRANSFORM = 0, 1, 2
+local MIN_ZOOM, MAX_ZOOM = 0.65, 2.40
+local MIN_PINCH_DISTANCE = 4
+local PAN_LIMIT_RATIO = 0.75
 
 local function clamp(value, minimum, maximum)
     return math.max(minimum, math.min(maximum, value))
@@ -23,8 +27,8 @@ function Scene.new(screen, info, data, fonts)
     self.fonts = fonts
     self.center_x, self.center_y = self.width // 2, self.height // 2 + 7
     self.orbit_scale = math.min(self.width, self.height) * 0.415
-    self.camera = { yaw = -0.42, pitch = 0.90, yaw_velocity = 0, pitch_velocity = 0, cy = 0, sy = 0, cp = 0, sp = 0 }
-    self.touch = { active = false, x = 0, y = 0 }
+    self.camera = { yaw = -0.42, pitch = 0.90, zoom = 1, yaw_velocity = 0, pitch_velocity = 0, cy = 0, sy = 0, cp = 0, sp = 0 }
+    self.touch = { mode = TOUCH_NONE, id = 0, x = 0, y = 0, pair_a = 0, pair_b = 0, mid_x = 0, mid_y = 0, distance = 0 }
     self.render_order = { 1, 2, 3, 4, 5, 6, 7, 8, 9 }
     self.label_boxes, self.stars, self.asteroids = {}, {}, {}
 
@@ -54,7 +58,8 @@ function Scene:project(x, y, z)
     local py = y * camera.cp - rz * camera.sp
     local depth = y * camera.sp + rz * camera.cp
     local perspective = 1 / math.max(0.72, 1 + depth * 0.18)
-    return math.floor(self.center_x + rx * self.orbit_scale * perspective + 0.5), math.floor(self.center_y + py * self.orbit_scale * perspective + 0.5), depth, perspective
+    local scale = self.orbit_scale * camera.zoom
+    return math.floor(self.center_x + rx * scale * perspective + 0.5), math.floor(self.center_y + py * scale * perspective + 0.5), depth, perspective
 end
 
 function Scene:orbit_position(planet, eccentric_anomaly)
@@ -71,21 +76,58 @@ function Scene:solve_eccentric_anomaly(mean_anomaly, eccentricity)
     return value
 end
 
+function Scene:clamp_center()
+    local margin = math.max(self.width, self.height) * PAN_LIMIT_RATIO
+    self.center_x = math.floor(clamp(self.center_x, -margin, self.width + margin) + 0.5)
+    self.center_y = math.floor(clamp(self.center_y, -margin, self.height + margin) + 0.5)
+end
+
+function Scene:update_two_finger(first, second)
+    local touch, camera = self.touch, self.camera
+    local pair_a, pair_b = first.id, second.id
+    if pair_a > pair_b then pair_a, pair_b = pair_b, pair_a end
+    local dx, dy = second.x - first.x, second.y - first.y
+    local distance = math.max(MIN_PINCH_DISTANCE, math.sqrt(dx * dx + dy * dy))
+    local mid_x, mid_y = (first.x + second.x) * 0.5, (first.y + second.y) * 0.5
+
+    if touch.mode == TOUCH_TRANSFORM and touch.pair_a == pair_a and touch.pair_b == pair_b then
+        local old_zoom = camera.zoom
+        camera.zoom = clamp(old_zoom * distance / touch.distance, MIN_ZOOM, MAX_ZOOM)
+        local applied_zoom = camera.zoom / old_zoom
+        self.center_x = mid_x + (self.center_x - touch.mid_x) * applied_zoom
+        self.center_y = mid_y + (self.center_y - touch.mid_y) * applied_zoom
+        self:clamp_center()
+    end
+
+    camera.yaw_velocity, camera.pitch_velocity = 0, 0
+    touch.mode, touch.pair_a, touch.pair_b = TOUCH_TRANSFORM, pair_a, pair_b
+    touch.mid_x, touch.mid_y, touch.distance = mid_x, mid_y, distance
+end
+
+function Scene:update_single_finger(point)
+    local touch, camera = self.touch, self.camera
+    if touch.mode == TOUCH_ROTATE and touch.id == point.id then
+        local dx, dy = point.x - touch.x, point.y - touch.y
+        camera.yaw = camera.yaw + dx * 0.012
+        camera.pitch = clamp(camera.pitch + dy * 0.008, 0.18, 1.46)
+        camera.yaw_velocity = clamp(dx * 0.20, -2.4, 2.4)
+        camera.pitch_velocity = clamp(dy * 0.12, -1.5, 1.5)
+    else
+        camera.yaw_velocity, camera.pitch_velocity = 0, 0
+    end
+    touch.mode, touch.id, touch.x, touch.y = TOUCH_ROTATE, point.id, point.x, point.y
+end
+
 function Scene:update_touch(dt)
     if not self.touch_available then return end
-    local point = self.screen:touch().points[1]
+    local points = self.screen:touch().points
     local touch, camera = self.touch, self.camera
-    if point then
-        if touch.active then
-            local dx, dy = point.x - touch.x, point.y - touch.y
-            camera.yaw = camera.yaw + dx * 0.012
-            camera.pitch = clamp(camera.pitch + dy * 0.008, 0.18, 1.46)
-            camera.yaw_velocity = clamp(dx * 0.20, -2.4, 2.4)
-            camera.pitch_velocity = clamp(dy * 0.12, -1.5, 1.5)
-        end
-        touch.active, touch.x, touch.y = true, point.x, point.y
+    if points[2] then
+        self:update_two_finger(points[1], points[2])
+    elseif points[1] then
+        self:update_single_finger(points[1])
     else
-        touch.active = false
+        touch.mode = TOUCH_NONE
         camera.yaw = camera.yaw + camera.yaw_velocity * dt
         camera.pitch = clamp(camera.pitch + camera.pitch_velocity * dt, 0.18, 1.46)
         local damping = math.max(0, 1 - dt * 4.5)
@@ -129,13 +171,14 @@ function Scene:draw_asteroid_belt()
 end
 
 function Scene:draw_sun_glow()
-    self.screen:fill_circle(self.center_x, self.center_y, 31, self.colors.sun_glow_outer)
-    self.screen:fill_circle(self.center_x, self.center_y, 23, self.colors.sun_glow_inner)
+    local zoom = self.camera.zoom
+    self.screen:fill_circle(self.center_x, self.center_y, math.max(10, math.floor(31 * zoom + 0.5)), self.colors.sun_glow_outer)
+    self.screen:fill_circle(self.center_x, self.center_y, math.max(8, math.floor(23 * zoom + 0.5)), self.colors.sun_glow_inner)
 end
 
 function Scene:draw_sun(t)
     local screen, colors = self.screen, self.colors
-    local radius = 15
+    local radius = math.max(8, math.floor(15 * self.camera.zoom + 0.5))
     screen:fill_circle(self.center_x, self.center_y, radius, colors.sun_edge)
     screen:fill_circle(self.center_x, self.center_y, radius - 1, colors.sun)
     local spin = math.floor((t * 3) % 9)
@@ -146,11 +189,11 @@ function Scene:draw_sun(t)
 end
 
 function Scene:planet_radius(planet)
-    return math.max(2, math.floor(planet.radius * planet.scale * self.data.body_scale + 0.5))
+    return math.max(2, math.floor(planet.radius * planet.scale * self.data.body_scale * self.camera.zoom + 0.5))
 end
 
 function Scene:shade_planet(planet, radius)
-    local lx, ly, lz = self.center_x - planet.x, self.center_y - planet.y, planet.depth * self.orbit_scale
+    local lx, ly, lz = self.center_x - planet.x, self.center_y - planet.y, planet.depth * self.orbit_scale * self.camera.zoom
     local length = math.sqrt(lx * lx + ly * ly + lz * lz)
     if length < 0.001 then length = 1 end
     lx, ly, lz = lx / length, ly / length, lz / length
@@ -250,7 +293,8 @@ end
 function Scene:draw_labels()
     local boxes = self.label_boxes
     for i = #boxes, 1, -1 do boxes[i] = nil end
-    boxes[1] = { x = self.center_x - 20, y = self.center_y - 20, width = 40, height = 40 }
+    local sun_clearance = math.max(20, math.floor(24 * self.camera.zoom + 0.5))
+    boxes[1] = { x = self.center_x - sun_clearance, y = self.center_y - sun_clearance, width = sun_clearance * 2, height = sun_clearance * 2 }
     for _, planet in ipairs(self.planets) do
         local radius = self:planet_radius(planet)
         local chosen

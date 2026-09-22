@@ -205,6 +205,21 @@ local function run_raster_case(name, framebuffer_count, iterations, render)
     emit_result("raster", name, framebuffer_count, iterations, values, nil)
 end
 
+local function emit_profile(name, framebuffer_count, iterations, render)
+    if backend_name ~= "refactored" then return end
+    local draw_us, present_us, sync_us, submitted_bytes = 0, 0, 0, 0
+    for iteration = 1, iterations do
+        render(iteration)
+        local stats = active:stats()
+        draw_us = draw_us + stats.draw_us
+        present_us = present_us + stats.present_us
+        sync_us = sync_us + stats.sync_us
+        submitted_bytes = submitted_bytes + stats.submitted_bytes
+    end
+    print(string.format("DISPLAY_BENCH|profile|label=%s|case=%s|buffers=%d|iterations=%d|draw_us_avg=%d|present_us_avg=%d|sync_us_avg=%d|submitted_bytes_avg=%d",
+        label, name, framebuffer_count, iterations, draw_us // iterations, present_us // iterations, sync_us // iterations, submitted_bytes // iterations))
+end
+
 local function run_buffer_suite(framebuffer_count)
     collectgarbage("collect")
     local heap_before = heap_snapshot()
@@ -249,7 +264,7 @@ local function run_buffer_suite(framebuffer_count)
         present_frame(true)
     end)
 
-    run_frame_case("complex_scene", framebuffer_count, scene_iterations, width * height, function(iteration)
+    local function render_complex_scene(iteration)
         begin_frame("#101820")
         for index = 1, 20 do
             local x = (index * 29 + iteration * 7) % math.max(1, width)
@@ -260,7 +275,9 @@ local function run_buffer_suite(framebuffer_count)
         end
         draw_text(8, 8, "Display benchmark 0123456789")
         present_frame(true)
-    end)
+    end
+    run_frame_case("complex_scene", framebuffer_count, scene_iterations, width * height, render_complex_scene)
+    emit_profile("complex_scene", framebuffer_count, scene_iterations, render_complex_scene)
 
     run_raster_case("fill_rect", framebuffer_count, raster_iterations, function(iteration)
         local x = (iteration * 17) % math.max(1, width)

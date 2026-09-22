@@ -40,6 +40,7 @@ esp_err_t app_registry_init(void);
 /* Add writable DATA root first, then read-only SYSTEM roots. */
 esp_err_t app_registry_add_directory(const char *dir);
 esp_err_t app_registry_reload(void);
+/* Registry change callbacks run after the registry lock is released. */
 esp_err_t app_registry_register_changed_cb(app_registry_changed_cb_t callback, void *user_ctx);
 esp_err_t app_registry_foreach(app_registry_entry_cb_t callback, void *user_ctx);
 esp_err_t app_registry_publish(const char *app_id);

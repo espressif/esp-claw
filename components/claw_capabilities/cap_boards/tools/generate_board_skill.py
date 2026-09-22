@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Generate current board skill markdown.')
     parser.add_argument('--metadata-yaml', required=True, help='Path to gen_board_metadata.yaml')
     parser.add_argument('--output-md', required=True, help='Generated markdown output path')
+    parser.add_argument('--board-readme', help='Path to the selected board README.md')
+    parser.add_argument('--output-reference-md', required=True, help='Packaged board documentation output path')
     return parser.parse_args()
 
 
@@ -151,7 +154,7 @@ def load_devices(metadata: dict[str, Any]) -> list[dict[str, Any]]:
     return devices
 
 
-def render_markdown(metadata: dict[str, Any], devices: list[dict[str, Any]]) -> str:
+def render_markdown(metadata: dict[str, Any], devices: list[dict[str, Any]], has_board_reference: bool) -> str:
     board_name = str(metadata.get('board', 'unknown'))
     chip = str(metadata.get('chip', 'unknown'))
     version = str(metadata.get('version', 'unknown'))
@@ -208,6 +211,14 @@ def render_markdown(metadata: dict[str, Any], devices: list[dict[str, Any]]) -> 
         else:
             lines.append('- Occupied IO: none declared')
 
+    if has_board_reference:
+        lines.extend([
+            '',
+            '## Board Documentation',
+            '',
+            'Read `{CUR_SKILL_DIR}/references/board.md` for additional board-specific hardware details and usage notes.',
+        ])
+
     lines.extend([
         '',
         '## Notes',
@@ -217,15 +228,36 @@ def render_markdown(metadata: dict[str, Any], devices: list[dict[str, Any]]) -> 
     return '\n'.join(lines)
 
 
+def sync_board_reference(board_readme: Path | None, output_reference_md: Path) -> bool:
+    if board_readme is None:
+        if output_reference_md.exists():
+            output_reference_md.unlink()
+            print(f'[cap_boards] Removed stale board documentation: {output_reference_md}')
+        if output_reference_md.parent.exists() and not any(output_reference_md.parent.iterdir()):
+            output_reference_md.parent.rmdir()
+        return False
+
+    if not board_readme.is_file():
+        raise RuntimeError(f'Missing selected board README file: {board_readme}')
+
+    output_reference_md.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(board_readme, output_reference_md)
+    print(f'[cap_boards] Copied board documentation from {board_readme} to {output_reference_md}')
+    return True
+
+
 def main() -> int:
     args = parse_args()
     metadata_yaml = Path(args.metadata_yaml).resolve()
     output_md = Path(args.output_md).resolve()
+    board_readme = Path(args.board_readme).resolve() if args.board_readme else None
+    output_reference_md = Path(args.output_reference_md).resolve()
 
     print(f'[cap_boards] Loading generated board metadata from {metadata_yaml}')
     metadata = load_metadata(metadata_yaml)
     devices = load_devices(metadata)
-    markdown = render_markdown(metadata, devices)
+    has_board_reference = sync_board_reference(board_readme, output_reference_md)
+    markdown = render_markdown(metadata, devices, has_board_reference)
 
     output_md.parent.mkdir(parents=True, exist_ok=True)
     output_md.write_text(markdown, encoding='utf-8')

@@ -18,7 +18,7 @@ ESP-Claw uses Skills to manage context dynamically and extend the Agent—includ
 Unlike Skills in common desktop LLM agent frameworks, ESP-Claw Skills can include Lua scripts, provide API references for Lua scripts, and include static assets so they can extend ESP-Claw Agent capabilities.
 Because of this, ESP-Claw Skills must follow a specific directory structure and metadata specification.
 
-You can find the ESP-Claw Skill specification in [claw-skill-spec.md](https://github.com/espressif/esp-claw/blob/master/.agents/spec/claw-skill-spec.md).
+You can find the ESP-Claw Skill specification in the [Skill package spec](https://github.com/espressif/esp-claw/blob/master/components/common/skill_builder/skills/skill_creator/references/skill-package-spec.md). The same file is bundled with the built-in `skill_creator` for the device Agent.
 
 ### Metadata
 
@@ -34,7 +34,7 @@ Skill management mode is determined by its storage root. Skills in writable DATA
   Values in `metadata.cap_groups` are `claw_cap_group_info_t.id` strings—the ids used when each capability group registers (e.g. `cap_lua`, `cap_im_qq`).
 </Aside>
 
-For other fields, see [claw-skill-spec.md](https://github.com/espressif/esp-claw/blob/master/.agents/spec/claw-skill-spec.md).
+For other fields, see the [Skill package spec](https://github.com/espressif/esp-claw/blob/master/components/common/skill_builder/skills/skill_creator/references/skill-package-spec.md).
 
 ## Writing effective Skills
 

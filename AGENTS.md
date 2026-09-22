@@ -87,10 +87,11 @@ The firmware uses two logical filesystem roots, configured at boot through `claw
 - Architecture constraints: [`design.md`](.agents/design.md)
 - docs guide: [`docs.md`](.agents/docs.md)
 - Common gotchas: [`gotchas.md`](.agents/gotchas.md)
-- Specs (`.agents/spec/`):
-  - lua module spec: [lua-module-spec.md](.agents/spec/lua-module-spec.md)
-  - claw skill spec: [claw-skill-spec.md](.agents/spec/claw-skill-spec.md)
-  - App registry spec: [app-registry-spec.md](.agents/spec/app-registry-spec.md)
+- Specs and package contracts:
+  - Lua module spec: [lua-module-spec.md](.agents/spec/lua-module-spec.md)
+  - Skill package spec shared with the device Agent: [skill-package-spec.md](components/common/skill_builder/skills/skill_creator/references/skill-package-spec.md)
+  - Component Skill build rules: [COMPONENT_SKILL_BUILD.md](components/common/skill_builder/COMPONENT_SKILL_BUILD.md)
+  - App package spec shared with the device Agent: [app-package-spec.md](components/claw_capabilities/cap_app_mgr/skills/app_creator/references/app-package-spec.md)
 
 ## General Engineering Rules
 

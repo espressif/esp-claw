@@ -214,25 +214,55 @@ void display_raster_line(display_raster_t *r, int x0, int y0, int x1, int y1, di
     display_dirty_mark(r->dirty, (int)left, (int)top, (int)(right - left + 1), (int)(bottom - top + 1));
 }
 
+typedef struct {
+    int radius;
+    int64_t dy;
+    int64_t x;
+    int64_t limit;
+    int64_t squared;
+    bool ready;
+} circle_cursor_t;
+
 static int64_t circle_extent(int radius, int64_t dy)
 {
-    /* Squared integer radii fit int64_t; sqrt avoids a radius-sized loop. */
     int64_t n = (int64_t)radius * radius - dy * dy;
     if (n < 0) return -1;
-    int64_t x = (int64_t)sqrtf((float)n);
+    int64_t x = (int64_t)sqrt((double)n);
     while (x * x > n) x--;
     while ((x + 1) * (x + 1) <= n) x++;
     return x;
+}
+
+static int64_t circle_cursor_extent(circle_cursor_t *cursor, int radius, int64_t dy)
+{
+    if (dy < 0) dy = -dy;
+    if (dy > radius) return -1;
+    if (!cursor->ready || cursor->radius != radius) {
+        cursor->radius = radius;
+        cursor->x = circle_extent(radius, dy);
+        cursor->limit = (int64_t)radius * radius - dy * dy;
+        cursor->squared = cursor->x * cursor->x;
+        cursor->ready = true;
+    } else {
+        if (dy == cursor->dy + 1) cursor->limit -= cursor->dy * 2 + 1;
+        else if (cursor->dy == dy + 1) cursor->limit += dy * 2 + 1;
+        else cursor->limit = (int64_t)radius * radius - dy * dy;
+        while (cursor->squared > cursor->limit) { cursor->squared -= cursor->x * 2 - 1; cursor->x--; }
+        while (cursor->squared + cursor->x * 2 + 1 <= cursor->limit) { cursor->squared += cursor->x * 2 + 1; cursor->x++; }
+    }
+    cursor->dy = dy;
+    return cursor->x;
 }
 
 static void circle(display_raster_t *r, int cx, int cy, int radius, bool fill, display_color_t c)
 {
     if (radius < 0 || !c.a) return;
     display_raster_pen_t pen = display_raster_make_pen(c);
+    circle_cursor_t outer_cursor = {0}, inner_cursor = {0};
     int64_t bottom = min64((int64_t)cy + radius, (int64_t)r->y1 - r->ty - 1);
     for (int64_t y = max64((int64_t)cy - radius, (int64_t)r->y0 - r->ty); y <= bottom; y++) {
-        int64_t outer = circle_extent(radius, y - cy);
-        int64_t inner = !fill && radius > 0 ? circle_extent(radius - 1, y - cy) : -1;
+        int64_t outer = circle_cursor_extent(&outer_cursor, radius, y - cy);
+        int64_t inner = !fill && radius > 0 ? circle_cursor_extent(&inner_cursor, radius - 1, y - cy) : -1;
         if (inner < 0) draw_span(r, (int64_t)cx - outer, (int64_t)cx + outer + 1, y, &pen, false);
         else {
             draw_span(r, (int64_t)cx - outer, (int64_t)cx - inner, y, &pen, false);
@@ -268,11 +298,12 @@ void display_raster_arc(display_raster_t *r, int cx, int cy, int radius, double 
     double finish = start + sweep * radians;
     double sx = cos(start), sy = sin(start), ex = cos(finish), ey = sin(finish);
     display_raster_pen_t pen = display_raster_make_pen(c);
+    circle_cursor_t outer_cursor = {0}, inner_cursor = {0};
     int64_t dirty_left = INT64_MAX, dirty_top = INT64_MAX, dirty_right = INT64_MIN, dirty_bottom = INT64_MIN;
     int64_t bottom = min64((int64_t)cy + radius, (int64_t)r->y1 - r->ty - 1);
     for (int64_t y = max64((int64_t)cy - radius, (int64_t)r->y0 - r->ty); y <= bottom; y++) {
-        int64_t outer = circle_extent(radius, y - cy);
-        int64_t inner = radius > 0 ? circle_extent(radius - 1, y - cy) : -1;
+        int64_t outer = circle_cursor_extent(&outer_cursor, radius, y - cy);
+        int64_t inner = radius > 0 ? circle_cursor_extent(&inner_cursor, radius - 1, y - cy) : -1;
         int64_t left = max64((int64_t)cx - outer, (int64_t)r->x0 - r->tx);
         int64_t right = min64((int64_t)cx + outer, (int64_t)r->x1 - r->tx - 1);
         for (int64_t x = left; x <= right; x++) {
@@ -296,27 +327,25 @@ void display_raster_arc(display_raster_t *r, int cx, int cy, int radius, double 
     if (dirty_left <= dirty_right) display_dirty_mark(r->dirty, (int)dirty_left, (int)dirty_top, (int)(dirty_right - dirty_left + 1), (int)(dirty_bottom - dirty_top + 1));
 }
 
-static int64_t round_inset(int w, int h, int radius, int64_t row)
-{
-    radius = (int)min64(radius, min64((w - 1) / 2, (h - 1) / 2));
-    if (radius <= 0) return 0;
-    int64_t dy = row < radius ? radius - row : row - (h - radius - 1);
-    return dy > 0 ? radius - circle_extent(radius, dy) : 0;
-}
-
 static void round_rect(display_raster_t *r, int x, int y, int w, int h, int radius, bool fill, display_color_t c)
 {
     if (w <= 0 || h <= 0 || radius < 0 || !c.a) return;
     radius = (int)min64(radius, min64((w - 1) / 2, (h - 1) / 2));
     display_raster_pen_t pen = display_raster_make_pen(c);
+    circle_cursor_t outer_cursor = {0}, inner_cursor = {0};
     int64_t bottom = min64((int64_t)y + h, (int64_t)r->y1 - r->ty);
     for (int64_t row = max64(y, (int64_t)r->y0 - r->ty); row < bottom; row++) {
-        int64_t inset = round_inset(w, h, radius, row - y);
+        int64_t relative = row - y;
+        int64_t dy = relative < radius ? radius - relative : relative - (h - radius - 1);
+        int64_t inset = dy > 0 ? radius - circle_cursor_extent(&outer_cursor, radius, dy) : 0;
         int64_t left = (int64_t)x + inset, right = (int64_t)x + w - inset;
         if (fill || row == y || row == (int64_t)y + h - 1 || w <= 2 || h <= 2) {
             draw_span(r, left, right, row, &pen, false);
         } else {
-            int64_t inner = 1 + round_inset(w - 2, h - 2, radius > 0 ? radius - 1 : 0, row - y - 1);
+            int inner_radius = radius > 0 ? radius - 1 : 0;
+            int64_t inner_relative = relative - 1;
+            int64_t inner_dy = inner_relative < inner_radius ? inner_radius - inner_relative : inner_relative - (h - 2 - inner_radius - 1);
+            int64_t inner = 1 + (inner_dy > 0 ? inner_radius - circle_cursor_extent(&inner_cursor, inner_radius, inner_dy) : 0);
             draw_span(r, left, (int64_t)x + inner, row, &pen, false);
             draw_span(r, (int64_t)x + w - inner, right, row, &pen, false);
         }
@@ -334,28 +363,89 @@ void display_raster_stroke_round_rect(display_raster_t *r, int x, int y, int w, 
     round_rect(r, x, y, w, h, radius, false, c);
 }
 
+typedef struct {
+    int64_t x;
+    int64_t step;
+    uint64_t remainder;
+    uint64_t step_remainder;
+    uint64_t denominator;
+} triangle_edge_t;
+
+static triangle_edge_t triangle_edge(int x0, int y0, int x1, int y1, int64_t first_y)
+{
+    int64_t dx = (int64_t)x1 - x0;
+    int64_t dy = (int64_t)y1 - y0;
+    int64_t step = dx / dy;
+    int64_t step_remainder = dx % dy;
+    if (step_remainder < 0) { step--; step_remainder += dy; }
+    uint64_t delta = (uint64_t)(first_y - y0);
+    uint64_t accumulated = delta * (uint64_t)step_remainder;
+    return (triangle_edge_t) {
+        .x = (int64_t)x0 + (int64_t)delta * step + (int64_t)(accumulated / (uint64_t)dy),
+        .step = step,
+        .remainder = accumulated % (uint64_t)dy,
+        .step_remainder = (uint64_t)step_remainder,
+        .denominator = (uint64_t)dy,
+    };
+}
+
+static void triangle_edge_advance(triangle_edge_t *edge)
+{
+    edge->x += edge->step;
+    edge->remainder += edge->step_remainder;
+    if (edge->remainder >= edge->denominator) { edge->remainder -= edge->denominator; edge->x++; }
+}
+
+static bool triangle_edge_before(const triangle_edge_t *a, const triangle_edge_t *b)
+{
+    if (a->x != b->x) return a->x < b->x;
+    return a->remainder * b->denominator < b->remainder * a->denominator;
+}
+
+static void fill_triangle_half(display_raster_t *r, int ax0, int ay0, int ax1, int ay1, int bx0, int by0, int bx1, int by1,
+                               int64_t first_y, int64_t last_y, const display_raster_pen_t *pen)
+{
+    first_y = max64(first_y, (int64_t)r->y0 - r->ty);
+    last_y = min64(last_y, (int64_t)r->y1 - r->ty - 1);
+    if (first_y > last_y) return;
+    triangle_edge_t edge_a = triangle_edge(ax0, ay0, ax1, ay1, first_y);
+    triangle_edge_t edge_b = triangle_edge(bx0, by0, bx1, by1, first_y);
+    for (int64_t y = first_y; y <= last_y; ++y) {
+        const triangle_edge_t *left = triangle_edge_before(&edge_a, &edge_b) ? &edge_a : &edge_b;
+        const triangle_edge_t *right = left == &edge_a ? &edge_b : &edge_a;
+        draw_span(r, left->x + (left->remainder != 0), right->x + 1, y, pen, false);
+        triangle_edge_advance(&edge_a);
+        triangle_edge_advance(&edge_b);
+    }
+}
+
 void display_raster_fill_triangle(display_raster_t *r, int x0, int y0, int x1, int y1, int x2, int y2, display_color_t c)
 {
     if (!c.a) return;
-    int xs[3] = {x0, x1, x2}, ys[3] = {y0, y1, y2};
-    display_raster_pen_t pen = display_raster_make_pen(c);
-    int64_t top = max64(min64(y0, min64(y1, y2)), (int64_t)r->y0 - r->ty);
-    int64_t bottom = min64(max64(y0, max64(y1, y2)), (int64_t)r->y1 - r->ty - 1);
-    for (int64_t y = top; y <= bottom; y++) {
-        double left = INFINITY, right = -INFINITY;
-        for (int i = 0; i < 3; i++) {
-            int j = (i + 1) % 3;
-            if (y < min64(ys[i], ys[j]) || y > max64(ys[i], ys[j])) continue;
-            if (ys[i] == ys[j]) {
-                left = fmin(left, min64(xs[i], xs[j]));
-                right = fmax(right, max64(xs[i], xs[j]));
-            } else {
-                double x = xs[i] + (double)(y - ys[i]) * ((double)xs[j] - xs[i]) / ((double)ys[j] - ys[i]);
-                left = fmin(left, x);
-                right = fmax(right, x);
-            }
+    struct { int x, y; } points[3] = {{x0, y0}, {x1, y1}, {x2, y2}};
+    for (int i = 1; i < 3; ++i) {
+        for (int j = i; j > 0 && points[j].y < points[j - 1].y; --j) {
+            int tx = points[j].x, ty = points[j].y;
+            points[j] = points[j - 1];
+            points[j - 1].x = tx; points[j - 1].y = ty;
         }
-        if (left <= right) draw_span(r, (int64_t)ceil(left), (int64_t)floor(right) + 1, y, &pen, false);
+    }
+    display_raster_pen_t pen = display_raster_make_pen(c);
+    if (points[0].y == points[2].y) {
+        int left = points[0].x, right = points[0].x;
+        for (int i = 1; i < 3; ++i) { if (points[i].x < left) left = points[i].x; if (points[i].x > right) right = points[i].x; }
+        draw_span(r, left, (int64_t)right + 1, points[0].y, &pen, false);
+    } else if (points[0].y == points[1].y) {
+        fill_triangle_half(r, points[0].x, points[0].y, points[2].x, points[2].y, points[1].x, points[1].y, points[2].x, points[2].y,
+                           points[0].y, points[2].y, &pen);
+    } else if (points[1].y == points[2].y) {
+        fill_triangle_half(r, points[0].x, points[0].y, points[1].x, points[1].y, points[0].x, points[0].y, points[2].x, points[2].y,
+                           points[0].y, points[2].y, &pen);
+    } else {
+        fill_triangle_half(r, points[0].x, points[0].y, points[1].x, points[1].y, points[0].x, points[0].y, points[2].x, points[2].y,
+                           points[0].y, points[1].y, &pen);
+        fill_triangle_half(r, points[1].x, points[1].y, points[2].x, points[2].y, points[0].x, points[0].y, points[2].x, points[2].y,
+                           (int64_t)points[1].y + 1, points[2].y, &pen);
     }
     mark_local_bounds(r, min64(x0, min64(x1, x2)), min64(y0, min64(y1, y2)), max64(x0, max64(x1, x2)) + 1, max64(y0, max64(y1, y2)) + 1);
 }

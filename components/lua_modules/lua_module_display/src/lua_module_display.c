@@ -351,9 +351,13 @@ static int lua_display_info(lua_State *L)
 static int lua_display_stats(lua_State *L)
 {
     display_stats_t stats = *display_get_stats(lua_display_screen(L)->handle);
-    lua_createtable(L, 0, 3);
+    lua_createtable(L, 0, 7);
+    lua_display_table_integer(L, "draw_us", stats.draw_us);
     lua_display_table_integer(L, "present_us", stats.present_us);
+    lua_display_table_integer(L, "sync_us", stats.sync_us);
     lua_display_table_integer(L, "dirty_pixels", stats.dirty_pixels);
+    lua_display_table_integer(L, "dirty_rects", stats.dirty_rects);
+    lua_display_table_integer(L, "submitted_bytes", stats.submitted_bytes);
     lua_display_table_integer(L, "framebuffer_bytes", stats.framebuffer_bytes);
     return 1;
 }
@@ -502,7 +506,7 @@ static int lua_display_touch(lua_State *L)
     if (err != ESP_OK) return lua_display_error(L, "touch", err);
     lua_createtable(L, 0, 1);
     lua_createtable(L, snapshot.count, 0);
-    for (int i = 0; i < snapshot.count; ++i) {
+    for (uint8_t i = 0; i < snapshot.count; ++i) {
         lua_createtable(L, 0, 3);
         lua_display_table_integer(L, "id", snapshot.points[i].id);
         lua_display_table_integer(L, "x", snapshot.points[i].x);

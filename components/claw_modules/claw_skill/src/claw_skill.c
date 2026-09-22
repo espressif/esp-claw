@@ -832,7 +832,7 @@ static esp_err_t load_registry_dir_recursive(const char *root_dir,
         return ESP_ERR_NOT_FOUND;
     }
 
-    /* Skills are leaves per claw-skill-spec.md: when this directory already
+    /* Skills are leaves per the Skill package spec: when this directory already
      * holds SKILL.md, its content subdirs (scripts/, references/, assets/)
      * are skill payload, not nested skills. Detect that up front so the loop
      * below can skip descending into them — this both bounds recursion depth
