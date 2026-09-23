@@ -1,6 +1,6 @@
 ---
 title: Console 交互
-description: 串口 REPL：会话、问答、cap、技能与自动化调试命令。
+description: 串口 REPL：会话、问答、文件、cap 与自动化调试命令。
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -27,11 +27,11 @@ session
 
 ### 与 LLM 对话
 
-使用 `ask` 可以与 LLM 发起对话。`ask_once` 可以发起单轮对话，与 `ask` 不同的是，`ask_once` 不会将对话内容计入历史上下文。
+使用 `ask` 可以与 LLM 发起多轮对话。添加 `--once` 可以发起不使用会话历史的单轮对话。
 
 ```sh
 ask 帮我列一下你可以做什么
-ask_once 这是一次性问题，不要带历史
+ask --once 这是一次性问题，不要带历史
 ```
 
 <Aside type="tip">
@@ -56,44 +56,38 @@ cap call get_current_time '{}'
 cap call list_dir '{"keyword":"scripts"}'
 ```
 
-### 组管理
+### 查看能力组
 
-一个 Capability 可能提供大量 Tools。为了方便管理，这些 Tools 会被组织成一个或多个 Group，可以一次性启用/禁用/卸载整组的 Tools。
+一个 Capability 可能提供大量 Tools，这些 Tools 会被组织成一个或多个 Group。
 
 ```sh
 cap groups
-cap enable <group_id>
-cap disable <group_id>
-cap unload <group_id>
+```
+
+## 文件列表
+
+`ls` 递归列出 DATA 和 SYSTEM 根目录中的文件，可选参数用于按路径关键字过滤。
+
+```sh
+ls
+ls scripts
 ```
 
 ## 技能 skill
 
-<Aside type="note" title="skill console 命令 默认未注册">
-  `edge_agent` 默认**未**调用 `register_cap_skill()`，即串口中不会出现 `skill` 命令。如需在串口使用 `skill` 命令，请在 `components/common/app_claw/app_claw_cli.c` 的 `app_claw_cli_start` 中手动调用 `register_cap_skill()` 并重新编译。
-
-  作为替代方案，可通过 `cap call activate_skill '{"skill_id":"your_skill"}'` 在串口直接操作 Skill。
-</Aside>
-
-模型侧用 `activate_skill`；人类在串口可用 `skill` 命令（由 `cmd_cap_skill` 注册）来管理 Skill，例如：
+`skill` 列出当前 Skill 目录；添加 `--reload` 会先重新扫描目录。
 
 ```sh
-skill --catalog
-skill --publish weather
-skill --remove weather
-skill --list --session default
-skill --activate weather --session default
+skill
+skill --reload
 ```
 
-请保证 `--session` 与当前 `session` 命令切到的 id 一致，否则看起来会像「激活了但没进上下文」。
-
-## 自动化 auto
+## 自动化 router
 
 ```sh
-auto reload
-auto rules
-auto last
-...
+router --reload
+router --rules
+router --last
 ```
 
 <LinkCard
@@ -103,12 +97,10 @@ auto last
 />
 
 
-## 其它已注册的 cap 命令
+## 其它已注册的命令
 
-`edge_agent` 中通过各 Capability Group 注册了 `help`、`cap`、`auto`、`time`、`web_search`、`mcp_client`、`mcp_server`、`llm_inspect`、`event_router` 等命令。
+根据编译配置，`edge_agent` 还可注册 `lua`、`scheduler`、`router`、`skill`、`hwmap` 和 `wifi`。
 在 Console 中输入 `help` 可浏览所有命令。
-
-`cap` 命令除常规子命令（`list`、`call`、`groups`、`enable`、`disable`、`unload`）外，还支持 `cap load qq`（动态注册由 `cap_im_platform` 实现的 `cap_im_qq` 组）。
 
 ## 系统配置
 
