@@ -12,6 +12,7 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -294,7 +295,7 @@ static bool is_skill_document_file(const char *name)
 
     base = strrchr(name, '/');
     base = base ? base + 1 : name;
-    return strcmp(base, SKILL_DOCUMENT_NAME) == 0;
+    return strcasecmp(base, SKILL_DOCUMENT_NAME) == 0;
 }
 
 static bool skill_path_is_valid(const char *path)
@@ -788,7 +789,7 @@ static esp_err_t validate_registry_entry(claw_skill_registry_entry_t *entry)
         ESP_LOGW(TAG, "skill expected path too long: id=%s", entry->id);
         return ESP_ERR_INVALID_SIZE;
     }
-    if (strcmp(entry->file, expected_file) != 0) {
+    if (strcasecmp(entry->file, expected_file) != 0) {
         ESP_LOGW(TAG, "skill path must be %s, got %s", expected_file, entry->file);
         return ESP_ERR_INVALID_ARG;
     }
