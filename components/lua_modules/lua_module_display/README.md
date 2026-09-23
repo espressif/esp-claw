@@ -119,7 +119,9 @@ screen:text(8, 40, "Temperature", { font = font, color = "#ffffff" })
 
 Without `font`, the built-in font supports printable ASCII at integer sizes 8–64. Text is not automatically wrapped or aligned: `\n` starts a new line, `\r` returns to the start of the current line, and `\t` advances by four glyph widths. An empty string measures `0, 0`.
 
-For other Unicode characters, load a readable pre-generated DFN1 bitmap font with `display.load_font(path) -> font`. A custom font is rendered at its stored size, so `font_size` is ignored when `font` is present. A missing glyph uses the font's `?` glyph if available; otherwise drawing and measurement raise an error. Invalid UTF-8 also raises an error. `font:close()` is idempotent; a closed font cannot be used. Close the font only after its final synchronous `text()` or `measure_text()` call.
+For other Unicode characters, load a readable DFN1 bitmap font with `display.load_font(path) -> font`. DFN1 preserves each glyph's advance, bounding box, baseline offset, and Unicode encoding. A custom font is rendered at its stored size, so `font_size` is ignored when `font` is present. A missing glyph uses the font's configured fallback glyph if available; otherwise drawing and measurement raise an error. Invalid UTF-8 also raises an error. `font:close()` is idempotent; a closed font cannot be used. Close the font only after its final synchronous `text()` or `measure_text()` call.
+
+The built-in `bdf_font_converter` skill converts horizontal Unicode BDF 2.1/2.2 files from writable storage into DFN1 on the device. The format limits the line height, glyph width, glyph height, and horizontal advance to 64 pixels, with at most 4096 glyphs and a 1 MiB file size.
 
 ## Images and raw pixels
 
