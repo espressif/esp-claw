@@ -16,6 +16,14 @@ menu "App Claw Config"
             is enabled, Lua LVGL scripts switch screens inside this runtime
             instead of initializing LVGL directly.
 
+    config APP_CLAW_MAX_TOOL_ITERATIONS
+        int "Maximum tool-call iterations per turn"
+        default 64
+        range 1 1024
+        help
+            Set the maximum number of tool-call iterations allowed during a
+            single agent turn.
+
     choice APP_CLAW_MEMORY_MODE
         prompt "App Claw memory management mode"
         depends on APP_CLAW_CAP_MEMORY

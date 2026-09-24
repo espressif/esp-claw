@@ -615,15 +615,13 @@ static bool app_claw_bool_is_true(const char *value)
            (strcmp(value, "true") == 0 || strcmp(value, "1") == 0 || strcmp(value, "yes") == 0);
 }
 
-static esp_err_t init_memory(const app_claw_config_t *config,
-                             const app_claw_storage_paths_t *paths,
-                             uint32_t max_tool_iterations)
+static esp_err_t init_memory(const app_claw_config_t *config, const app_claw_storage_paths_t *paths)
 {
     claw_memory_config_t memory_config = {
         .session_root_dir = paths->memory_session_root,
         .memory_root_dir = paths->memory_root_dir,
         .max_message_chars = 4096,
-        .max_tool_iterations = max_tool_iterations,
+        .max_tool_iterations = CONFIG_APP_CLAW_MAX_TOOL_ITERATIONS,
         .llm = {
             .api_key = config->llm_api_key,
             .backend_type = config->llm_backend_type,
@@ -713,9 +711,7 @@ static esp_err_t app_claw_publish_startup_event(void)
 #endif
 
 #if CONFIG_APP_CLAW_CAP_CORE
-static void app_claw_fill_core_config(const app_claw_config_t *config,
-                                      uint32_t max_tool_iterations,
-                                      claw_core_config_t *core_config)
+static void app_claw_fill_core_config(const app_claw_config_t *config, claw_core_config_t *core_config)
 {
     memset(core_config, 0, sizeof(*core_config));
     core_config->api_key = config->llm_api_key;
@@ -749,7 +745,7 @@ static void app_claw_fill_core_config(const app_claw_config_t *config,
     core_config->task_stack_size = 16 * 1024;
     core_config->task_priority = 5;
     core_config->task_core = tskNO_AFFINITY;
-    core_config->max_tool_iterations = max_tool_iterations;
+    core_config->max_tool_iterations = CONFIG_APP_CLAW_MAX_TOOL_ITERATIONS;
     core_config->request_queue_len = 4;
     core_config->response_queue_len = 4;
     core_config->max_context_providers = 8;
@@ -818,9 +814,6 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
 #if CONFIG_APP_CLAW_CAP_CORE
     claw_core_config_t core_config = {0};
 #endif
-#if CONFIG_APP_CLAW_CAP_CORE || CONFIG_APP_CLAW_CAP_MEMORY
-    const uint32_t max_tool_iterations = 32;
-#endif
 #if CONFIG_APP_CLAW_CAP_EVENT_ROUTER
     claw_event_router_config_t router_config = {
         .rules_path = NULL,
@@ -874,7 +867,7 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
                         TAG, "Failed to init scheduler");
 #endif
 #if CONFIG_APP_CLAW_CAP_MEMORY
-    ESP_RETURN_ON_ERROR(init_memory(config, &paths, max_tool_iterations), TAG, "Failed to init memory");
+    ESP_RETURN_ON_ERROR(init_memory(config, &paths), TAG, "Failed to init memory");
 #endif
 #if CONFIG_APP_CLAW_CAP_SESSION_MGR && (CONFIG_APP_CLAW_CAP_MEMORY || CONFIG_APP_CLAW_CAP_SKILL_MGR)
     ESP_RETURN_ON_ERROR(cap_session_mgr_set_delete_session_handler(app_claw_delete_session_history, NULL),
@@ -909,7 +902,7 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
 #endif
 
 #if CONFIG_APP_CLAW_CAP_CORE
-    app_claw_fill_core_config(config, max_tool_iterations, &core_config);
+    app_claw_fill_core_config(config, &core_config);
     {
         claw_core_context_provider_t base_providers[] = {
             claw_memory_profile_provider,
@@ -979,13 +972,12 @@ esp_err_t app_claw_update_config(const app_claw_config_t *config)
 {
 #if CONFIG_APP_CLAW_CAP_CORE
     claw_core_config_t core_config = {0};
-    const uint32_t max_tool_iterations = 32;
 
     if (!config) {
         return ESP_ERR_INVALID_ARG;
     }
     ESP_RETURN_ON_ERROR(app_claw_store_current_config(config), TAG, "Failed to store Claw config");
-    app_claw_fill_core_config(config, max_tool_iterations, &core_config);
+    app_claw_fill_core_config(config, &core_config);
     return claw_agent_mgr_update_core_config(&core_config);
 #else
     ESP_RETURN_ON_ERROR(app_claw_store_current_config(config), TAG, "Failed to store Claw config");

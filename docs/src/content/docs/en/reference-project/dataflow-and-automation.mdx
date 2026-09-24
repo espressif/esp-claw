@@ -88,7 +88,7 @@ Full syntax is captured in the JSON Schema.
     In `edge_agent`, the file lives at `/fatfs/router_rules/router_rules.json`.
     Prefer Console commands to edit rules, but you can also edit via the Web file manager.
 
-    **Run `auto reload` after changes.**
+    **Run `router --reload` after changes.**
 </Aside>
 
 ## Event Router workflow
@@ -244,37 +244,25 @@ scheduler --trigger <id>             # trigger once immediately
 
 <LinkCard href="@lang/reference-project/console-usage" title="Console usage" description="Basic Console command usage" />
 
-Event Router provides two sets of Console commands. The `auto` command comes from `edge_agent`, and the `event_router` command comes from `cap_router_mgr`. Both are functionally equivalent and operate on the same set of rules.
+Event Router provides one `router` Console command through `cap_router_mgr`.
 
 ```sh
-# auto command (provided by edge_agent)
-auto reload                  # reload router_rules.json
-auto rules                   # dump current rules JSON
-auto rule <id>               # show one rule JSON
-auto add_rule '<json>'       # append a rule
-auto update_rule '<json>'    # replace rule by id
-auto delete_rule <id>        # delete a rule
-auto emit_message ...        # details below
-auto emit_trigger ...        # details below
-auto last                    # last match stats, details below
-
-# event_router command (provided by cap_router_mgr)
-event_router --rules                     # dump current rules JSON
-event_router --rule <id>                 # show one rule JSON
-event_router --add-rule-json '<json>'    # append a rule
-event_router --update-rule-json '<json>' # replace rule by id
-event_router --delete-rule <id>          # delete a rule
-event_router --reload                    # reload router_rules.json
-event_router --emit-message ...          # publish message Event
-event_router --emit-trigger ...          # publish trigger Event
-event_router --last                      # last match stats
+router --rules                     # dump current rules JSON
+router --rule <id>                 # show one rule JSON
+router --add-rule-json '<json>'    # append a rule
+router --update-rule-json '<json>' # replace rule by id
+router --delete-rule <id>          # delete a rule
+router --reload                    # reload router_rules.json
+router --emit-message ...          # publish message Event
+router --emit-trigger ...          # publish trigger Event
+router --last                      # last match stats
 ```
 
-- `auto emit_message` synthesizes an IM-style message Event:
+- `router --emit-message` synthesizes an IM-style message Event:
 
     ```sh
-    auto emit_message <source_cap> <channel> <chat_id> <text...>
-    # auto emit_message qq_gateway    qq      123456   hello world
+    router --emit-message --source-cap <source_cap> --channel <channel> --chat-id <chat_id> --text <text...>
+    # router --emit-message --source-cap qq_gateway --channel qq --chat-id 123456 --text hello world
     ```
 
     | Arg | Meaning | Example |
@@ -286,10 +274,10 @@ event_router --last                      # last match stats
 
 
 
-- `auto emit_trigger` synthesizes a trigger Event:
+- `router --emit-trigger` synthesizes a trigger Event:
     ```sh
-    auto emit_trigger <source_cap> <event_type> <event_key> '<payload_json>'
-    # auto emit_trigger  tester      trigger     smoke_test '{"ok":true}'
+    router --emit-trigger --source-cap <source_cap> --event-type <event_type> --event-key <event_key> --payload-json '<payload_json>'
+    # router --emit-trigger --source-cap tester --event-type trigger --event-key smoke_test --payload-json '{"ok":true}'
     ```
 
     | Arg | Meaning | Example |
@@ -301,7 +289,7 @@ event_router --last                      # last match stats
 
 
 
-- `auto last` prints the last routing result, e.g.:
+- `router --last` prints the last routing result, e.g.:
 
     ```text
     matched=true matched_rules=1 action_count=2 failed_actions=0 route=1 handled_at_ms=...
