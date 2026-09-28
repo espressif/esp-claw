@@ -68,6 +68,8 @@ static const config_field_def_t CONFIG_FIELDS[] = {
     CONFIG_FIELD("im",           wechat_account_id),
 
     CONFIG_FIELD("search",       search_brave_key),
+    CONFIG_FIELD("search",       search_provider),
+    CONFIG_FIELD("search",       search_bocha_key),
     CONFIG_FIELD("search",       search_tavily_key),
     CONFIG_FIELD("search",       search_http_allowlist),
 
@@ -182,6 +184,85 @@ static bool is_reasoning_effort(const char *value)
             strcmp(value, "max") == 0);
 }
 
+static bool is_sensitive_config_field(const char *name)
+{
+    static const char *SENSITIVE_FIELDS[] = {
+        "wifi_password",
+        "ap_password",
+        "llm_api_key",
+        "qq_app_secret",
+        "feishu_app_secret",
+        "tg_bot_token",
+        "wechat_token",
+        "search_brave_key",
+        "search_tavily_key",
+        "search_bocha_key",
+        NULL,
+    };
+
+    for (const char **cursor = SENSITIVE_FIELDS; *cursor != NULL; cursor++) {
+        if (strcmp(name, *cursor) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Mask secrets for GET responses: reveal prefix/suffix, replace the middle
+ * with equal-length asterisks. Empty strings are returned unchanged. */
+static void mask_secret_value(const char *input, char *output, size_t output_size)
+{
+    if (!output || output_size == 0) {
+        return;
+    }
+    if (!input) {
+        output[0] = '\0';
+        return;
+    }
+
+    size_t len = strlen(input);
+    if (len == 0) {
+        output[0] = '\0';
+        return;
+    }
+
+    if (len <= 2) {
+        strlcpy(output, input, output_size);
+        return;
+    }
+
+    size_t prefix_len;
+    size_t suffix_len;
+    if (len > 20) {
+        prefix_len = 6;
+        suffix_len = 5;
+    } else if (len > 10) {
+        prefix_len = 2;
+        suffix_len = 2;
+    } else {
+        prefix_len = 1;
+        suffix_len = 1;
+    }
+
+    if (prefix_len + suffix_len >= len) {
+        strlcpy(output, input, output_size);
+        return;
+    }
+
+    size_t masked_len = len;
+    if (masked_len + 1 > output_size) {
+        strlcpy(output, input, output_size);
+        return;
+    }
+
+    memcpy(output, input, prefix_len);
+    memset(output + prefix_len, '*', len - prefix_len - suffix_len);
+    memcpy(output + prefix_len + (len - prefix_len - suffix_len),
+           input + len - suffix_len,
+           suffix_len);
+    output[masked_len] = '\0';
+}
+
 static esp_err_t validate_wifi_config_fields(const app_config_t *config, const char **message)
 {
     return app_config_validate_wifi(config, message);
@@ -207,7 +288,14 @@ static esp_err_t emit_config(httpd_req_t *req,
         if (!field_matches_filter(field, groups_csv, fields_csv)) {
             continue;
         }
-        http_server_json_add_string(root, field->name, field_value(config, field));
+        const char *raw = field_value(config, field);
+        if (is_sensitive_config_field(field->name) && raw[0] != '\0') {
+            char masked[APP_CONFIG_STR_LEN];
+            mask_secret_value(raw, masked, sizeof(masked));
+            http_server_json_add_string(root, field->name, masked);
+        } else {
+            http_server_json_add_string(root, field->name, raw);
+        }
     }
 
     if (extra_meta) {
@@ -333,8 +421,20 @@ static esp_err_t config_post_handler(httpd_req_t *req)
     for (size_t i = 0; i < CONFIG_FIELD_COUNT; i++) {
         const config_field_def_t *field = &CONFIG_FIELDS[i];
         cJSON *item = cJSON_GetObjectItemCaseSensitive(root, field->name);
+        if (item && strcmp(field->name, "search_provider") == 0 &&
+                (!cJSON_IsString(item) || (strcmp(item->valuestring, "bocha") != 0 &&
+                 strcmp(item->valuestring, "tavily") != 0 && strcmp(item->valuestring, "brave") != 0))) {
+            cJSON_Delete(root);
+            free(config);
+            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "search_provider must be bocha/tavily/brave");
+        }
         if (!cJSON_IsString(item)) {
             continue;
+        }
+        if (strcmp(field->group, "search") == 0 && strlen(item->valuestring) >= field->size) {
+            cJSON_Delete(root);
+            free(config);
+            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Search setting is too long");
         }
         if (strcmp(field->name, "llm_max_tokens") == 0 ||
                 strcmp(field->name, "llm_default_image_max_bytes") == 0) {

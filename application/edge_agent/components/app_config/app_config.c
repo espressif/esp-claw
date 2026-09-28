@@ -54,6 +54,8 @@ typedef struct {
 #define APP_DEFAULT_WECHAT_CDN_BASE_URL      "https://novac2c.cdn.weixin.qq.com/c2c"
 #define APP_DEFAULT_WECHAT_ACCOUNT_ID        "default"
 #define APP_DEFAULT_SEARCH_BRAVE_KEY         ""
+#define APP_DEFAULT_SEARCH_PROVIDER          "tavily"
+#define APP_DEFAULT_SEARCH_BOCHA_KEY         ""
 #define APP_DEFAULT_SEARCH_TAVILY_KEY        ""
 #define APP_DEFAULT_ENABLED_CAP_GROUPS       ""
 #define APP_DEFAULT_LLM_VISIBLE_CAP_GROUPS   ""
@@ -90,6 +92,8 @@ static const app_config_field_t s_fields[] = {
     APP_CONFIG_FIELD(wechat_cdn_base_url, "wechat_cdn_url", APP_DEFAULT_WECHAT_CDN_BASE_URL),
     APP_CONFIG_FIELD(wechat_account_id, "wechat_acct_id", APP_DEFAULT_WECHAT_ACCOUNT_ID),
     APP_CONFIG_FIELD(search_brave_key, "brave_key", APP_DEFAULT_SEARCH_BRAVE_KEY),
+    APP_CONFIG_FIELD(search_provider, "search_provider", APP_DEFAULT_SEARCH_PROVIDER),
+    APP_CONFIG_FIELD(search_bocha_key, "bocha_key", APP_DEFAULT_SEARCH_BOCHA_KEY),
     APP_CONFIG_FIELD(search_tavily_key, "tavily_key", APP_DEFAULT_SEARCH_TAVILY_KEY),
     APP_CONFIG_FIELD(search_http_allowlist, "http_allow_ls", APP_SEARCH_HTTP_ALLOWLIST),
     APP_CONFIG_FIELD(enabled_cap_groups, "en_cap_groups", APP_DEFAULT_ENABLED_CAP_GROUPS),
@@ -179,6 +183,16 @@ esp_err_t app_config_load(app_config_t *config)
         if (err != ESP_OK) {
             return err;
         }
+    }
+
+    // Preserve the legacy provider when upgrading settings without a selection.
+    bool has_provider = false;
+    esp_err_t provider_err = settings_store_has_key("search_provider", &has_provider);
+    if (provider_err != ESP_OK) {
+        return provider_err;
+    }
+    if (!has_provider && !config->search_tavily_key[0] && config->search_brave_key[0]) {
+        strlcpy(config->search_provider, "brave", sizeof(config->search_provider));
     }
 
     for (size_t i = 0; i < sizeof(s_fields) / sizeof(s_fields[0]); ++i) {
@@ -309,6 +323,8 @@ void app_config_to_claw(const app_config_t *config, app_claw_config_t *out)
     strlcpy(out->wechat_cdn_base_url, config->wechat_cdn_base_url, sizeof(out->wechat_cdn_base_url));
     strlcpy(out->wechat_account_id, config->wechat_account_id, sizeof(out->wechat_account_id));
     strlcpy(out->search_brave_key, config->search_brave_key, sizeof(out->search_brave_key));
+    strlcpy(out->search_provider, config->search_provider, sizeof(out->search_provider));
+    strlcpy(out->search_bocha_key, config->search_bocha_key, sizeof(out->search_bocha_key));
     strlcpy(out->search_tavily_key, config->search_tavily_key, sizeof(out->search_tavily_key));
     strlcpy(out->search_http_allowlist,
             config->search_http_allowlist,

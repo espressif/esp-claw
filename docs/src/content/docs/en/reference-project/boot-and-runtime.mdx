@@ -79,7 +79,7 @@ This walkthrough uses sample app `application/edge_agent`, covering entry <LinkT
     - **cap_lua**: Lua root `/fatfs/scripts/`.
     - **cap_im_platform**: when IM credentials exist, apply QQ / Feishu / Telegram / WeChat App ID, Secret, or Token fields, then configure the shared inbox path (`/fatfs/inbox/`) plus max attachment size. The component registers the per-platform groups (`cap_im_qq`, `cap_im_feishu`, `cap_im_tg`, `cap_im_wechat`).
     - **cap_http_request**: store the configured `search_http_allowlist` for guarded outbound HTTP requests.
-    - **cap_web_search**: store Brave / Tavily keys when non-empty.
+    - **cap_web_search**: set the selected provider and Bocha / Brave / Tavily keys.
     - **cap_router_mgr**: register Event Router console commands (`event_router`).
     - **cap_system**: register the system information capability group (time, memory, CPU, Wi-Fi, IP, and restart action).
     - **cap_mcp_client / cap_mcp_server / cap_skill / cap_llm_inspect / cap_session_mgr**, etc.: each `*_register_group` (Skill management sources live under `cap_skill_mgr`; the group id remains `cap_skill`).

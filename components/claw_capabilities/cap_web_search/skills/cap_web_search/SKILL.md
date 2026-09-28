@@ -1,7 +1,7 @@
 ---
 {
   "name": "cap_web_search",
-  "description": "Search the public web for current information through the configured Tavily or Brave provider.",
+  "description": "Search the public web for current information through the selected Bocha, Tavily, or Brave provider.",
   "metadata": {
     "cap_groups": [
      "cap_web_search"
@@ -24,9 +24,9 @@ Use this skill when the user needs current public web information that should be
 - `web_search`: search the web with the configured provider and return concise formatted results.
 
 ## Provider behavior
-- The runtime prefers `Tavily` when a Tavily API key is configured.
-- If Tavily is not configured but Brave Search is configured, it falls back to `Brave`.
-- If neither provider key is configured, the capability returns an error instead of search results.
+- The runtime uses the explicitly selected `Bocha`, `Tavily`, or `Brave` provider.
+- Configure the provider and its API key in the web settings, then save and restart.
+- Missing keys or failed requests return an error; the runtime does not switch providers.
 
 ## Calling rules
 - Call `web_search` directly. Do not route web search through CLI wrappers unless the user explicitly asks for console commands.
@@ -51,7 +51,7 @@ Use this skill when the user needs current public web information that should be
   - short snippet/content
 - If no result is found, the output is `No web results found.`
 - Common error strings include:
-  - `Error: no search provider credentials configured`
+  - `Error: selected search provider has no API key`
   - `Error: invalid input JSON`
   - `Error: missing query`
   - `Error: search request failed (...)`

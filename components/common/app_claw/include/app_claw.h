@@ -47,6 +47,8 @@ typedef struct {
     char wechat_base_url[APP_CLAW_STR_LEN];
     char wechat_cdn_base_url[APP_CLAW_STR_LEN];
     char wechat_account_id[APP_CLAW_SHORT_STR_LEN];
+    char search_provider[16];
+    char search_bocha_key[APP_CLAW_STR_LEN];
     char search_brave_key[APP_CLAW_STR_LEN];
     char search_tavily_key[APP_CLAW_STR_LEN];
     char search_http_allowlist[APP_CLAW_STR_LEN];

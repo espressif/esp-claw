@@ -184,7 +184,9 @@ export const en = {
   wechatLoginOpenLink: 'Open login link',
 
   sectionWebReqSearch: 'Search',
-  webreqSearchNote: 'Optional. If set, ESP-Claw can search online.',
+  webreqSearchNote: 'Only the selected provider is used. Missing keys or failed requests do not trigger a fallback. Save and restart to apply.',
+  webreqSearchProvider: 'Search provider',
+  webreqBochaKey: 'Bocha API Key',
   sectionWebReqNetwork: 'Network Requests',
   webreqBraveKey: 'Brave Search API Key',
   webreqTavilyKey: 'Tavily API Key',

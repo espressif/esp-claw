@@ -11,7 +11,7 @@ import {
 import { markDirty, type TabId } from './dirty';
 import { pushToast } from './toast';
 import { t } from '../i18n';
-import { saveConfigPatch } from '../api/client';
+import { saveConfigPatch, diffConfigPatch } from '../api/client';
 
 export type ConfigTabOptions<T extends object> = {
   tab: TabId;
@@ -108,7 +108,12 @@ export function createConfigTab<T extends object>(options: ConfigTabOptions<T>):
     setSaving(true);
     setError(null);
     try {
-      const patch = options.fromForm(form as T);
+      const fullPatch = options.fromForm(form as T);
+      const baselinePatch = options.fromForm(baseline);
+      const patch = diffConfigPatch(fullPatch, baselinePatch);
+      if (Object.keys(patch).length === 0) {
+        return;
+      }
       await saveConfigPatch(patch);
       batch(() => {
         patchConfigLocal(patch);

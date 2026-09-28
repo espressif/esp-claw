@@ -34,6 +34,8 @@ export type AppConfig = {
   wechat_cdn_base_url: string;
   wechat_account_id: string;
   search_brave_key: string;
+  search_provider: string;
+  search_bocha_key: string;
   search_tavily_key: string;
   search_http_allowlist: string;
   enabled_cap_groups: string;
@@ -75,11 +77,50 @@ export const GROUP_FIELDS: Record<ConfigGroup, (keyof AppConfig)[]> = {
     'wechat_cdn_base_url',
     'wechat_account_id',
   ],
-  search: ['search_brave_key', 'search_tavily_key', 'search_http_allowlist'],
+  search: [
+    'search_provider',
+    'search_bocha_key',
+    'search_brave_key',
+    'search_tavily_key',
+    'search_http_allowlist',
+  ],
   capabilities: ['enabled_cap_groups', 'llm_visible_cap_groups'],
   skills: ['enabled_lua_modules'],
   time: ['time_timezone'],
 };
+
+/** Sensitive NVS fields masked on GET (must stay in sync with
+ * is_sensitive_config_field() in http_server_config_api.c). */
+export const SECRET_CONFIG_FIELDS: readonly (keyof AppConfig)[] = [
+  'wifi_password',
+  'ap_password',
+  'llm_api_key',
+  'qq_app_secret',
+  'feishu_app_secret',
+  'tg_bot_token',
+  'wechat_token',
+  'search_brave_key',
+  'search_tavily_key',
+  'search_bocha_key',
+];
+
+/** Build a partial-write patch containing only keys whose values differ
+ * from the baseline. Unchanged secrets are omitted so masked GET values
+ * are never written back to NVS. */
+export function diffConfigPatch(
+  current: Partial<AppConfig>,
+  baseline: Partial<AppConfig>,
+): Partial<AppConfig> {
+  const patch: Partial<AppConfig> = {};
+  for (const key of Object.keys(current) as (keyof AppConfig)[]) {
+    const next = current[key] ?? '';
+    const prev = baseline[key] ?? '';
+    if (next !== prev) {
+      patch[key] = next;
+    }
+  }
+  return patch;
+}
 
 export function blankConfig(): Partial<AppConfig> {
   return {};
