@@ -328,6 +328,7 @@ static esp_err_t config_post_handler(httpd_req_t *req)
     /* Partial writes: only fields present in the JSON body are applied.
      * Empty string is a valid value (lets the client clear a slot). */
     size_t applied_count = 0;
+    bool wifi_changed = false;
 
     for (size_t i = 0; i < CONFIG_FIELD_COUNT; i++) {
         const config_field_def_t *field = &CONFIG_FIELDS[i];
@@ -366,6 +367,7 @@ static esp_err_t config_post_handler(httpd_req_t *req)
                                        "llm_reasoning_effort must be none/low/medium/high/xhigh/max");
         }
         strlcpy(field_mutable(config, field), item->valuestring, field->size);
+        wifi_changed = wifi_changed || strcmp(field->group, "wifi") == 0;
         applied_count++;
     }
 
@@ -385,6 +387,12 @@ static esp_err_t config_post_handler(httpd_req_t *req)
     }
 
     err = ctx->services.save_config(config);
+    if (err == ESP_OK && wifi_changed) {
+        ESP_LOGI(TAG, "Saved Web Wi-Fi config: sta_ssid=%s ap_ssid=%s ap_behavior=%s",
+                 config->wifi_ssid,
+                 config->ap_ssid[0] ? config->ap_ssid : "(auto:mac-suffix)",
+                 config->ap_behavior);
+    }
     free(config);
     if (err != ESP_OK) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to save config");

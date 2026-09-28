@@ -29,6 +29,8 @@ export const en = {
   webimDesc: 'Interact with ESP-Claw in real time via WebSocket.',
   webimSend: 'Send',
   webimOnline: 'Online',
+  webimOffline: 'Offline',
+  webimConnecting: 'Connecting…',
   webimPlaceholder: 'Message…',
   webimAttach: 'Image',
   webimNoBind:

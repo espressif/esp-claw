@@ -31,6 +31,8 @@ export const zhCn: Dict = {
   webimDesc: '通过 WebSocket 与 ESP-Claw 实时互动。',
   webimSend: '发送',
   webimOnline: '在线',
+  webimOffline: '离线',
+  webimConnecting: '连接中…',
   webimPlaceholder: '输入消息…',
   webimAttach: '图片',
   webimNoBind: 'Web 聊天尚未就绪（设备仍在启动或未启用本地 IM）。请等待 Agent 完成启动。',
