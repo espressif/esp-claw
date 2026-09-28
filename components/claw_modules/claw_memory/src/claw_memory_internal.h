@@ -24,6 +24,22 @@
 #define CLAW_MEMORY_COMPACT_CHANGE_THRESHOLD     5
 #define CLAW_MEMORY_COMPACT_SIZE_THRESHOLD       (32 * 1024)
 #define CLAW_MEMORY_SESSION_SIZE_LIMIT           (150 * 1024)
+/*
+ * Token budget for the session-history context window. When a session's
+ * messages exceed this budget, the oldest messages are folded into a single
+ * summary message instead of blocking the session (see
+ * claw_memory_session_window_json). 6144 tokens keeps the injected history
+ * comfortably inside 8K/16K-context models while retaining recent turns in
+ * full. Override with -DCLAW_MEMORY_SESSION_MAX_TOKENS=<n>.
+ */
+#ifndef CLAW_MEMORY_SESSION_MAX_TOKENS
+#define CLAW_MEMORY_SESSION_MAX_TOKENS            (6144)
+#endif
+/* Per-message constant overhead assumed by the window budget (role fields,
+ * tool-call wrappers, JSON framing, ...). */
+#define CLAW_MEMORY_SESSION_WINDOW_MSG_OVERHEAD   4
+#define CLAW_MEMORY_SESSION_WINDOW_SUMMARY_MAX_LINES 20
+#define CLAW_MEMORY_SESSION_WINDOW_SUMMARY_LINE_CHARS 64
 #define CLAW_MEMORY_RECALL_DEFAULT_LIMIT         8
 #define CLAW_MEMORY_RECORDS_FILE                 "memory_records.jsonl"
 #define CLAW_MEMORY_INDEX_FILE                   "memory_index.json"
