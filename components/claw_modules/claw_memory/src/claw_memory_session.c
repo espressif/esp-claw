@@ -4,7 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "claw_memory_internal.h"
+#include "claw_memory_token.h"
 #include "claw_task.h"
+#include "claw_utils_string.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -688,6 +690,37 @@ static bool session_history_session_blocked(const char *session_id)
     return blocked;
 }
 
+/*
+ * Remove the ".blocked" marker for a session. With token-windowed history
+ * loading the marker is no longer needed to protect the LLM context, and
+ * staying blocked would prevent the session from ever being used again.
+ */
+static esp_err_t session_history_clear_blocked(const char *session_id)
+{
+    char *data_path = NULL;
+    char *blocked_path = NULL;
+    bool deleted_any = false;
+    esp_err_t err = ESP_OK;
+
+    if (!session_id || !session_id[0] || !s_memory.initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    data_path = claw_memory_session_path_dup(session_id);
+    if (!data_path) {
+        return ESP_ERR_NO_MEM;
+    }
+    blocked_path = session_history_blocked_path_dup(data_path);
+    free(data_path);
+    if (!blocked_path) {
+        return ESP_ERR_NO_MEM;
+    }
+
+    err = session_history_unlink_path(blocked_path, &deleted_any);
+    free(blocked_path);
+    return err;
+}
+
 static void session_history_index_header_init(claw_memory_session_index_header_t *header)
 {
     memset(header, 0, sizeof(*header));
@@ -1317,6 +1350,281 @@ cleanup:
     }
 
     *out_json = json;
+    return ESP_OK;
+}
+
+/* Extract a single summary line for a message (role + truncated text). */
+static bool session_window_message_line(const cJSON *msg, char *line, size_t line_size)
+{
+    const cJSON *role_json = NULL;
+    const cJSON *content_json = NULL;
+    const char *role = NULL;
+    const char *text = NULL;
+    size_t text_len = 0;
+
+    if (!msg || !line || line_size == 0) {
+        return false;
+    }
+
+    role_json = cJSON_GetObjectItem(msg, "role");
+    if (!cJSON_IsString(role_json) || !role_json->valuestring ||
+            (strcmp(role_json->valuestring, "user") != 0 &&
+             strcmp(role_json->valuestring, "assistant") != 0)) {
+        return false;
+    }
+    role = role_json->valuestring;
+
+    content_json = cJSON_GetObjectItem(msg, "content");
+    if (cJSON_IsString(content_json) && content_json->valuestring) {
+        text = content_json->valuestring;
+    } else if (cJSON_IsArray(content_json)) {
+        /* Tool blocks / content parts: summarize with the first string part. */
+        const cJSON *part = NULL;
+
+        cJSON_ArrayForEach(part, content_json) {
+            const cJSON *text_part = NULL;
+
+            text_part = cJSON_GetObjectItem(part, "text");
+            if (cJSON_IsString(text_part) && text_part->valuestring) {
+                text = text_part->valuestring;
+                break;
+            }
+            if (cJSON_IsString(part) && part->valuestring) {
+                text = part->valuestring;
+                break;
+            }
+        }
+    }
+    if (!text || !text[0]) {
+        text = "[no text]";
+    }
+
+    text_len = claw_utils_utf8_prefix_len(text, CLAW_MEMORY_SESSION_WINDOW_SUMMARY_LINE_CHARS);
+    snprintf(line, line_size, "%s: %.*s", role, (int)text_len, text);
+    return true;
+}
+
+/* Estimate the token footprint of one message (text + fixed overhead). */
+static size_t session_window_message_tokens(const cJSON *msg)
+{
+    const cJSON *content_json = NULL;
+    size_t tokens = CLAW_MEMORY_SESSION_WINDOW_MSG_OVERHEAD;
+
+    if (!msg) {
+        return 0;
+    }
+
+    content_json = cJSON_GetObjectItem(msg, "content");
+    if (cJSON_IsString(content_json) && content_json->valuestring) {
+        tokens += claw_memory_estimate_tokens(content_json->valuestring);
+    } else if (cJSON_IsArray(content_json)) {
+        const cJSON *part = NULL;
+
+        cJSON_ArrayForEach(part, content_json) {
+            const cJSON *text_part = NULL;
+
+            text_part = cJSON_GetObjectItem(part, "text");
+            if (cJSON_IsString(text_part) && text_part->valuestring) {
+                tokens += claw_memory_estimate_tokens(text_part->valuestring);
+            } else if (cJSON_IsString(part) && part->valuestring) {
+                tokens += claw_memory_estimate_tokens(part->valuestring);
+            }
+        }
+    }
+    return tokens;
+}
+
+/*
+ * Fold the oldest messages of a session into one "early conversation"
+ * summary message so the injected history stays within the token budget.
+ * Recent turns are kept verbatim; nothing is deleted from the persisted
+ * session, this is purely a context-window transformation.
+ */
+static esp_err_t claw_memory_session_window_json(const char *full_json, char **out_json)
+{
+    cJSON *messages = NULL;
+    cJSON *window = NULL;
+    cJSON *summary = NULL;
+    cJSON *lines = NULL;
+    size_t used_tokens = 0;
+    size_t line_count = 0;
+    size_t dropped = 0;
+    int keep_from = 0;
+    int count = 0;
+    int i;
+    esp_err_t err = ESP_OK;
+
+    if (!full_json || !out_json) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *out_json = NULL;
+
+    messages = cJSON_Parse(full_json);
+    if (!messages || !cJSON_IsArray(messages)) {
+        cJSON_Delete(messages);
+        return ESP_FAIL;
+    }
+
+    count = cJSON_GetArraySize(messages);
+    if (count == 0) {
+        *out_json = claw_utils_string_dup("[]");
+        err = *out_json ? ESP_OK : ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+
+    /* Walk newest-first, accumulating the token budget. */
+    keep_from = count;
+    {
+        bool budget_exceeded = false;
+
+        for (i = count - 1; i >= 0; i--) {
+            size_t msg_tokens = session_window_message_tokens(cJSON_GetArrayItem(messages, i));
+
+            if (used_tokens + msg_tokens > CLAW_MEMORY_SESSION_MAX_TOKENS) {
+                budget_exceeded = true;
+                break;
+            }
+            used_tokens += msg_tokens;
+            keep_from = i;
+        }
+
+        if (!budget_exceeded) {
+            /* Whole session fits inside the budget: return unchanged. */
+            *out_json = claw_utils_string_dup(full_json);
+            err = *out_json ? ESP_OK : ESP_ERR_NO_MEM;
+            goto cleanup;
+        }
+    }
+
+    window = cJSON_CreateArray();
+    lines = cJSON_CreateArray();
+    if (!window || !lines) {
+        err = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+
+    for (i = 0; i < keep_from; i++) {
+        char line[CLAW_MEMORY_SESSION_WINDOW_SUMMARY_LINE_CHARS + 16];
+        cJSON *line_json = NULL;
+
+        if (!session_window_message_line(cJSON_GetArrayItem(messages, i),
+                                         line, sizeof(line))) {
+            dropped++;
+            continue;
+        }
+        if (line_count >= CLAW_MEMORY_SESSION_WINDOW_SUMMARY_MAX_LINES) {
+            dropped++;
+            continue;
+        }
+        line_json = cJSON_CreateString(line);
+        if (!line_json) {
+            err = ESP_ERR_NO_MEM;
+            goto cleanup;
+        }
+        cJSON_AddItemToArray(lines, line_json);
+        line_count++;
+    }
+    if (dropped > 0) {
+        char note[96];
+        cJSON *note_json = NULL;
+
+        snprintf(note, sizeof(note),
+                 "… %u earlier / tool messages omitted", (unsigned)dropped);
+        note_json = cJSON_CreateString(note);
+        if (!note_json) {
+            err = ESP_ERR_NO_MEM;
+            goto cleanup;
+        }
+        cJSON_AddItemToArray(lines, note_json);
+    }
+
+    summary = cJSON_CreateObject();
+    if (!summary) {
+        err = ESP_ERR_NO_MEM;
+        goto cleanup;
+    }
+    cJSON_AddStringToObject(summary, "role", "system");
+    cJSON_AddStringToObject(summary,
+                            "content",
+                            "# Early conversation (summarized to fit the context budget)\n"
+                            "- 用户: … 早期对话记录已压缩，仅保留要点\n- 助手: 详见下方近期对话");
+
+    /* Replace the generic content with the generated summary lines. */
+    if (cJSON_GetArraySize(lines) > 0) {
+        char *joined = NULL;
+        char *new_content = NULL;
+
+        joined = cJSON_PrintUnformatted(lines);
+        if (!joined) {
+            err = ESP_ERR_NO_MEM;
+            goto cleanup;
+        }
+        /* "user: x" lines joined with newline into a readable summary. */
+        new_content = claw_utils_string_dup_printf(
+                          "# Early conversation (summarized to fit the context budget)\n%s",
+                          joined);
+        cJSON_free(joined);
+        if (!new_content) {
+            err = ESP_ERR_NO_MEM;
+            goto cleanup;
+        }
+        cJSON_DeleteItemFromObject(summary, "content");
+        cJSON_AddStringToObject(summary, "content", new_content);
+        free(new_content);
+    }
+
+    cJSON_AddItemToArray(window, summary);
+    for (i = keep_from; i < count; i++) {
+        cJSON *dup = cJSON_Duplicate(cJSON_GetArrayItem(messages, i), true);
+
+        if (!dup) {
+            err = ESP_ERR_NO_MEM;
+            goto cleanup;
+        }
+        cJSON_AddItemToArray(window, dup);
+    }
+
+    *out_json = cJSON_PrintUnformatted(window);
+    if (!*out_json) {
+        err = ESP_ERR_NO_MEM;
+    }
+
+cleanup:
+    cJSON_Delete(messages);
+    cJSON_Delete(window);
+    cJSON_Delete(lines);
+    if (err != ESP_OK) {
+        free(*out_json);
+        *out_json = NULL;
+    }
+    return err;
+}
+
+/* Load session history as a JSON message array, applying the token-budget
+ * window so oversized sessions degrade gracefully instead of blocking. */
+static esp_err_t claw_memory_session_load_json_windowed_alloc(const char *session_id,
+                                                              char **out_json)
+{
+    char *full_json = NULL;
+    char *windowed_json = NULL;
+    esp_err_t err;
+
+    if (!session_id || !out_json) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    err = claw_memory_session_load_json_alloc(session_id, &full_json);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = claw_memory_session_window_json(full_json, &windowed_json);
+    free(full_json);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    *out_json = windowed_json;
     return ESP_OK;
 }
 
@@ -2011,12 +2319,20 @@ esp_err_t claw_memory_request_gate_callback(const claw_core_request_t *request,
     }
     reject_message[0] = '\0';
 
-    if (!session_history_session_blocked(request->session_id)) {
-        return ESP_OK;
+    /*
+     * Oversized sessions are no longer rejected: history is loaded through a
+     * token-budget window (claw_memory_session_window_json), so an old
+     * ".blocked" marker only means the session was large at some point and
+     * is now automatically windowed again.
+     */
+    if (session_history_session_blocked(request->session_id)) {
+        ESP_LOGW(TAG,
+                 "session %s was previously blocked by size; context windowing "
+                 "applies (session remains usable)",
+                 request->session_id);
     }
 
-    strlcpy(reject_message, CLAW_MEMORY_SESSION_SIZE_WARNING, reject_message_size);
-    return ESP_ERR_INVALID_STATE;
+    return ESP_OK;
 }
 
 esp_err_t claw_memory_request_start_callback(const claw_core_request_t *request,
@@ -2071,7 +2387,7 @@ static esp_err_t claw_memory_session_history_collect(const claw_core_request_t *
 
     memset(out_context, 0, sizeof(*out_context));
 
-    err = claw_memory_session_load_json_alloc(request->session_id, &content);
+    err = claw_memory_session_load_json_windowed_alloc(request->session_id, &content);
     if (err != ESP_OK) {
         return err;
     }
@@ -2079,6 +2395,10 @@ static esp_err_t claw_memory_session_history_collect(const claw_core_request_t *
         free(content);
         return ESP_ERR_NOT_FOUND;
     }
+
+    /* History was loadable (possibly windowed) again: lift any stale
+     * ".blocked" marker so the session can keep being used. */
+    (void)session_history_clear_blocked(request->session_id);
 
     out_context->kind = CLAW_CORE_CONTEXT_KIND_MESSAGES;
     out_context->content = content;
