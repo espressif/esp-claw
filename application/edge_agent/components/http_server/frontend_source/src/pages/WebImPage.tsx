@@ -23,6 +23,7 @@ import { Button } from '../components/ui/Button';
 import { Banner } from '../components/ui/Banner';
 import { Switch } from '../components/ui/Switch';
 import { t } from '../i18n';
+import { reloadStatus } from '../state/config';
 import { pushToast } from '../state/toast';
 
 const LS_CHAT_ID = 'esp-claw-webim-chat-id';
@@ -209,6 +210,7 @@ export const WebImPage: Component = () => {
   const [pendingPaths, setPendingPaths] = createSignal<string[]>([]);
   const [error, setError] = createSignal<string | null>(null);
   const [bound, setBound] = createSignal<boolean | null>(null);
+  const [networkConnected, setNetworkConnected] = createSignal<boolean | null>(null);
   const [wsReady, setWsReady] = createSignal(false);
   const [sending, setSending] = createSignal(false);
   const [markdownPreview, setMarkdownPreview] = createSignal(false);
@@ -218,6 +220,27 @@ export const WebImPage: Component = () => {
   let ws: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let statusTimer: ReturnType<typeof setInterval> | null = null;
+  let disposed = false;
+
+  const chatOnline = () => networkConnected() === true && bound() === true && wsReady();
+  const chatStatusText = () => {
+    if (networkConnected() === null) return t('statusLoading');
+    if (!networkConnected()) return t('webimOffline');
+    return chatOnline() ? t('webimOnline') : t('webimConnecting');
+  };
+
+  const refreshRuntimeStatus = async () => {
+    const [networkResult, webimResult] = await Promise.allSettled([
+      reloadStatus(),
+      fetchWebimStatus(),
+    ]);
+    if (disposed) return;
+    setNetworkConnected(
+      networkResult.status === 'fulfilled' && networkResult.value.wifi_connected === true,
+    );
+    setBound(webimResult.status === 'fulfilled' && webimResult.value.bound === true);
+  };
 
   const clearReconnect = () => {
     if (reconnectTimer !== null) {
@@ -336,16 +359,15 @@ export const WebImPage: Component = () => {
     } catch {
       /* may already exist */
     }
-    try {
-      const st = await fetchWebimStatus();
-      setBound(!!st.bound);
-    } catch {
-      setBound(false);
-    }
+    await refreshRuntimeStatus();
+    if (disposed) return;
     connectWs();
+    statusTimer = setInterval(() => void refreshRuntimeStatus(), 5000);
   });
 
   onCleanup(() => {
+    disposed = true;
+    if (statusTimer !== null) clearInterval(statusTimer);
     teardownWs();
   });
 
@@ -414,11 +436,7 @@ export const WebImPage: Component = () => {
     const text = input().trim();
     const files = pendingPaths();
     if (!text && files.length === 0) return;
-    if (!wsReady()) return;
-    if (bound() === false) {
-      pushToast(t('webimNoBind') as string, 'error', 5000);
-      return;
-    }
+    if (!chatOnline()) return;
     const localMessage = makeLocalMessage(text, files);
     setMessages((prev) => [...prev, localMessage]);
     setInput('');
@@ -427,7 +445,7 @@ export const WebImPage: Component = () => {
   };
 
   const retryMessage = async (message: LocalWebImMessage) => {
-    if (!message.localId || sending() || !wsReady()) return;
+    if (!message.localId || sending() || !chatOnline()) return;
     const retry = { ...message, sendStatus: 'pending' as const };
     setMessages((prev) => [...prev.filter((m) => m.localId !== message.localId), retry]);
     await postLocalMessage(retry);
@@ -436,7 +454,7 @@ export const WebImPage: Component = () => {
   const onInputKeyDown: JSX.EventHandler<HTMLTextAreaElement, KeyboardEvent> = (e) => {
     if (e.ctrlKey && e.key === 'Enter') {
       e.preventDefault();
-      if (!sending() && wsReady()) {
+      if (!sending() && chatOnline()) {
         void send();
       }
     }
@@ -466,12 +484,20 @@ export const WebImPage: Component = () => {
         title={t('navWebIm') as string}
         description={t('webimDesc') as string}
         actions={
-          <Show when={wsReady()}>
-            <span class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-[rgba(104,211,145,0.2)] bg-[var(--color-green-dim)] text-[var(--color-green)] text-[0.78rem] font-medium">
-              <span class="w-1.5 h-1.5 rounded-full bg-[var(--color-green)] pulse-dot" />
-              {t('webimOnline')}
-            </span>
-          </Show>
+          <span
+            class={`inline-flex items-center gap-2 px-3 py-1 rounded-full border text-[0.78rem] font-medium ${
+              chatOnline()
+                ? 'border-[rgba(104,211,145,0.2)] bg-[var(--color-green-dim)] text-[var(--color-green)]'
+                : 'border-[var(--color-border-subtle)] bg-white/[0.04] text-[var(--color-text-muted)]'
+            }`}
+          >
+            <span
+              class={`w-1.5 h-1.5 rounded-full ${
+                chatOnline() ? 'bg-[var(--color-green)] pulse-dot' : 'bg-[var(--color-text-muted)]'
+              }`}
+            />
+            {chatStatusText()}
+          </span>
         }
       />
 
@@ -511,7 +537,7 @@ export const WebImPage: Component = () => {
                           class="inline-flex h-5 w-5 items-center justify-center rounded-full text-[rgb(248,113,113)] transition hover:bg-[rgba(248,113,113,0.12)] hover:text-[rgb(252,165,165)] disabled:opacity-60"
                           title={t('webimRetrySend') as string}
                           aria-label={t('webimRetrySend') as string}
-                          disabled={sending() || !wsReady()}
+                          disabled={sending() || !chatOnline()}
                           onClick={() => void retryMessage(m)}
                         >
                           <CircleX class="h-4 w-4" />
@@ -549,17 +575,23 @@ export const WebImPage: Component = () => {
                 </div>
               )}
             </For>
-            <Show when={!wsReady() || messages().length === 0}>
+            <Show when={!chatOnline() || messages().length === 0}>
               <div class="absolute inset-0 flex items-center justify-center p-4 pointer-events-none">
                 <p
                   class={[
                     'm-0 text-center inline-flex items-center px-4 py-2 rounded-full border text-[0.82rem] font-medium',
-                    !wsReady()
+                    !chatOnline()
                       ? 'border-[rgba(245,158,11,0.28)] bg-[rgba(245,158,11,0.12)] text-[rgb(245,158,11)]'
                       : 'border-[rgba(104,211,145,0.2)] bg-[var(--color-green-dim)] text-[var(--color-green)]',
                   ].join(' ')}
                 >
-                  {!wsReady() ? (t('webimWsReconnecting') as string) : (t('webimEmpty') as string)}
+                  {networkConnected() === null
+                    ? (t('statusLoading') as string)
+                    : !networkConnected()
+                      ? (t('webimOffline') as string)
+                      : !chatOnline()
+                        ? (t('webimWsReconnecting') as string)
+                        : (t('webimEmpty') as string)}
                 </p>
               </div>
             </Show>
@@ -592,7 +624,7 @@ export const WebImPage: Component = () => {
                 variant="secondary"
                 type="button"
                 onClick={() => fileRef?.click()}
-                disabled={sending() || !wsReady()}
+                disabled={sending() || !chatOnline()}
               >
                 <span class="inline-flex items-center gap-1.5">
                   <ImagePlus class="w-4 h-4" />
@@ -618,7 +650,7 @@ export const WebImPage: Component = () => {
                 size="sm"
                 variant="primary"
                 onClick={() => void send()}
-                disabled={sending() || !wsReady()}
+                disabled={sending() || !chatOnline()}
               >
                 <span class="inline-flex items-center gap-1.5">
                   <SendHorizontal class="w-4 h-4" />

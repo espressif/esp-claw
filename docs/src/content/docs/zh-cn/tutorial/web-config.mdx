@@ -144,9 +144,10 @@ https://novac2c.cdn.weixin.qq.com/c2c # WeChat CDN Base URL
 
 ### 网络和搜索设置
 
-ESP-Claw 可以接入 Brave 或 Tavily 的搜索 API，并在运行中检索在线资源；也支持发起网络请求（GET/POST/...），实时请求在线资源。
+ESP-Claw 可以接入 Bocha、Brave 或 Tavily 的搜索 API，并在运行中检索在线资源；也支持发起网络请求（GET/POST/...），实时请求在线资源。
 
-**搜索 API Key**：可选，配置后支持通过搜索 API 检索在线资源。
+**搜索服务和 API Key**：页面仅显示所选服务的 Key，切换服务会保留其他 Key。选择服务并填写对应 Key，保存并重启后生效。缺少 Key 或请求失败时不会自动切换服务。
+- Bocha API Key：在[博查开放平台](https://open.bochaai.com/)获取。
 - Brave Search API Key：Brave Search API Key，详见 [Brave API 文档](https://api-dashboard.search.brave.com/documentation/guides/authentication)。
 - Tavily API Key：Tavily API Key，详见 [Tavily API 文档](https://docs.tavily.com/documentation/quickstart)。
 

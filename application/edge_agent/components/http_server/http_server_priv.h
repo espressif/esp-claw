@@ -16,7 +16,7 @@
 #define HTTP_SERVER_CTRL_PORT         32769
 #define HTTP_SERVER_SCRATCH_SIZE      4096
 #define HTTP_SERVER_PATH_MAX          256
-#define HTTP_SERVER_UPLOAD_MAX_SIZE   (512 * 1024)
+#define HTTP_SERVER_UPLOAD_MAX_SIZE   (64 * 1024 * 1024)
 
 typedef struct {
     httpd_handle_t server;

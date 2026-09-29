@@ -39,6 +39,7 @@ const PROVIDER_LINKS: Record<string, ExternalLinkPair> = {
 };
 
 export const TAVILY_API_KEY_URL = 'https://app.tavily.com/';
+export const BOCHA_API_KEY_URL = 'https://open.bochaai.com/';
 export const BRAVE_API_KEY_URL = 'https://api-dashboard.search.brave.com/app/keys';
 
 export function getProviderLinks(key: string): ExternalLinkPair | undefined {

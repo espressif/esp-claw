@@ -702,15 +702,11 @@ static esp_err_t app_cap_prepare_web_search(const app_claw_config_t *config,
 {
     (void)paths;
 
-    if (config->search_brave_key[0]) {
-        ESP_RETURN_ON_ERROR(cap_web_search_set_brave_key(config->search_brave_key),
-                            TAG, "Failed to set Brave search key");
-    }
+    ESP_RETURN_ON_ERROR(cap_web_search_set_provider(config->search_provider), TAG, "Invalid search provider");
+    ESP_RETURN_ON_ERROR(cap_web_search_set_bocha_key(config->search_bocha_key), TAG, "Failed to set Bocha search key");
 
-    if (config->search_tavily_key[0]) {
-        ESP_RETURN_ON_ERROR(cap_web_search_set_tavily_key(config->search_tavily_key),
-                            TAG, "Failed to set Tavily search key");
-    }
+    ESP_RETURN_ON_ERROR(cap_web_search_set_brave_key(config->search_brave_key), TAG, "Failed to set Brave search key");
+    ESP_RETURN_ON_ERROR(cap_web_search_set_tavily_key(config->search_tavily_key), TAG, "Failed to set Tavily search key");
 
     return ESP_OK;
 }
