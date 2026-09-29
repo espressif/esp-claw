@@ -28,6 +28,12 @@ if(CONFIG_LUA_MODULE_IMU_CHIP_MPU6050)
     )
 endif()
 
+if(CONFIG_LUA_MODULE_IMU_CHIP_QMI8658)
+    list(APPEND imu_srcs
+        "src/qmi8658/qmi8658_backend.c"
+    )
+endif()
+
 idf_component_register(
     SRCS
         ${imu_srcs}
