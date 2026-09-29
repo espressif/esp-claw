@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "cJSON.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -50,6 +51,31 @@ typedef struct {
 typedef esp_err_t (*claw_session_mgr_delete_session_fn_t)(const char *session_id,
                                                           bool *out_deleted_any,
                                                           void *user_ctx);
+
+#define CLAW_SESSION_PUBLIC_ID_SIZE 33
+#define CLAW_SESSION_TITLE_SIZE 97
+
+typedef struct {
+    char id[CLAW_SESSION_PUBLIC_ID_SIZE];
+    char session_id[CLAW_SESSION_MGR_ID_SIZE];
+    char channel[16];
+    char chat_id[96];
+    char alias[CLAW_SESSION_MGR_ALIAS_MAX + 1];
+    char title[CLAW_SESSION_TITLE_SIZE];
+    char delivery_state[16];
+    uint32_t agent_id;
+    uint64_t activity;
+} claw_session_info_t;
+
+/* Returned JSON belongs to the caller. */
+esp_err_t claw_session_mgr_catalog_list(const char *channel, size_t offset, size_t limit, cJSON **out);
+esp_err_t claw_session_mgr_catalog_get(const char *id, claw_session_info_t *out);
+esp_err_t claw_session_mgr_catalog_create(claw_session_info_t *out);
+esp_err_t claw_session_mgr_catalog_rename(const char *id, const char *title);
+esp_err_t claw_session_mgr_catalog_delete(const char *id);
+esp_err_t claw_session_mgr_set_delivery(const char *session_id, const char *state);
+void claw_session_mgr_set_change_callback(void (*callback)(void *), void *ctx);
+esp_err_t claw_session_mgr_catalog_touch(const char *session_id, const char *text);
 
 bool claw_session_mgr_alias_is_valid(const char *alias);
 bool claw_session_mgr_is_configured(void);

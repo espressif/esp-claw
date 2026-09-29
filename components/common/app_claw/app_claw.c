@@ -536,6 +536,25 @@ claw_core_handle_t app_claw_get_core(void)
 #endif
 }
 
+#if CONFIG_APP_CLAW_CAP_MEMORY
+static esp_err_t app_claw_persist_context(const claw_core_context_persist_batch_t *batch, void *ctx)
+{
+    esp_err_t err = claw_memory_persist_context_callback(batch, ctx);
+#if CONFIG_APP_CLAW_CAP_SESSION_MGR
+    if (err == ESP_OK) {
+        for (size_t i = 0; i < batch->record_count; i++) {
+            if (batch->records[i].type == CLAW_CORE_CONTEXT_RECORD_USER || batch->records[i].type == CLAW_CORE_CONTEXT_RECORD_ASSISTANT_FINAL) {
+                esp_err_t catalog_err = claw_session_mgr_catalog_touch(batch->session_id, batch->records[i].text);
+                if (catalog_err != ESP_OK) ESP_LOGW(TAG, "Session metadata update failed: %s", esp_err_to_name(catalog_err));
+                break;
+            }
+        }
+    }
+#endif
+    return err;
+}
+#endif
+
 #if CONFIG_APP_CLAW_CAP_SESSION_MGR && (CONFIG_APP_CLAW_CAP_MEMORY || CONFIG_APP_CLAW_CAP_SKILL_MGR)
 static esp_err_t app_claw_delete_session_history(const char *session_id,
                                                  bool *out_deleted_any,
@@ -731,12 +750,12 @@ static void app_claw_fill_core_config(const app_claw_config_t *config, claw_core
     core_config->system_prompt = APP_SYSTEM_PROMPT;
 #if CONFIG_APP_CLAW_CAP_MEMORY
 #if CONFIG_APP_CLAW_MEMORY_MODE_FULL
-    core_config->persist_context = claw_memory_persist_context_callback;
+    core_config->persist_context = app_claw_persist_context;
     core_config->request_gate = claw_memory_request_gate_callback;
     core_config->on_request_start = claw_memory_request_start_callback;
     core_config->collect_stage_note = claw_memory_stage_note_callback;
 #else
-    core_config->persist_context = claw_memory_persist_context_callback;
+    core_config->persist_context = app_claw_persist_context;
     core_config->request_gate = claw_memory_request_gate_callback;
 #endif
 #endif

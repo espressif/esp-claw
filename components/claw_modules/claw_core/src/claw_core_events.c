@@ -43,6 +43,7 @@ static esp_err_t build_response_payload_json(const claw_core_request_t *request,
         cJSON_Delete(root);
         return ESP_ERR_NO_MEM;
     }
+    if (request->session_id) cJSON_AddStringToObject(root, "session_id", request->session_id);
     if (response->error_message && response->error_message[0] &&
             !cJSON_AddStringToObject(root, "error_message", response->error_message)) {
         cJSON_Delete(root);

@@ -2216,8 +2216,15 @@ static esp_err_t claw_event_router_execute_action(const claw_event_router_rule_t
         return claw_event_router_execute_agent_action(rule, action, event, ctx, result);
     case CLAW_EVENT_ROUTER_ACTION_RUN_SCRIPT:
         return claw_event_router_execute_script_action(rule, action, event, ctx, result);
-    case CLAW_EVENT_ROUTER_ACTION_SEND_MESSAGE:
-        return claw_event_router_execute_send_message_action(rule, action, event, ctx, result);
+    case CLAW_EVENT_ROUTER_ACTION_SEND_MESSAGE: {
+        cJSON *metadata = strcmp(event->event_type, "out_message") == 0 && event->payload_json ? cJSON_Parse(event->payload_json) : NULL;
+        const char *session_id = cJSON_GetStringValue(cJSON_GetObjectItem(metadata, "session_id"));
+        if (session_id) (void)claw_session_mgr_set_delivery(session_id, "pending");
+        esp_err_t err = claw_event_router_execute_send_message_action(rule, action, event, ctx, result);
+        if (session_id) (void)claw_session_mgr_set_delivery(session_id, err == ESP_OK ? "submitted" : "failed");
+        cJSON_Delete(metadata);
+        return err;
+    }
     case CLAW_EVENT_ROUTER_ACTION_EMIT_EVENT:
         return claw_event_router_execute_emit_event_action(action, ctx, result);
     case CLAW_EVENT_ROUTER_ACTION_DROP:
@@ -3130,4 +3137,16 @@ esp_err_t claw_event_router_get_last_result(claw_event_router_result_t *out_resu
     *out_result = s_runtime->last_result;
     claw_event_router_unlock();
     return ESP_OK;
+}
+
+bool claw_event_router_channel_is_bound(const char *channel)
+{
+    if (!channel || !s_runtime || !s_runtime->initialized) return false;
+    bool found = false;
+    claw_event_router_lock();
+    for (size_t i = 0; i < s_runtime->binding_count; i++) {
+        if (strcmp(channel, s_runtime->bindings[i].channel) == 0) { found = true; break; }
+    }
+    claw_event_router_unlock();
+    return found;
 }

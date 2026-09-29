@@ -1222,7 +1222,7 @@ static esp_err_t session_history_degrade_assistant_final(cJSON *record,
     return ESP_OK;
 }
 
-static esp_err_t claw_memory_session_load_json_alloc(const char *session_id, char **out_json)
+static esp_err_t session_load_json_unlocked(const char *session_id, char **out_json)
 {
     char *data_path = NULL;
     char *idx_path = NULL;
@@ -1320,6 +1320,15 @@ cleanup:
 
     *out_json = json;
     return ESP_OK;
+}
+
+static esp_err_t claw_memory_session_load_json_alloc(const char *session_id, char **out_json)
+{
+    if (!s_memory.history_lock) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTakeRecursive(s_memory.history_lock, portMAX_DELAY);
+    esp_err_t err = session_load_json_unlocked(session_id, out_json);
+    xSemaphoreGiveRecursive(s_memory.history_lock);
+    return err;
 }
 
 esp_err_t claw_memory_load_session_history_json(const char *session_id, char **out_json)
@@ -1840,7 +1849,7 @@ static const char *claw_memory_session_record_text_role(claw_core_context_record
     }
 }
 
-esp_err_t claw_memory_persist_context_callback(const claw_core_context_persist_batch_t *batch,
+static esp_err_t persist_context_unlocked(const claw_core_context_persist_batch_t *batch,
                                                void *user_ctx)
 {
     char *data_path = NULL;
@@ -1924,7 +1933,7 @@ cleanup:
     return err;
 }
 
-esp_err_t claw_memory_delete_session_history(const char *session_id,
+static esp_err_t delete_session_unlocked(const char *session_id,
                                              bool *out_deleted_any)
 {
     char *data_path = NULL;
@@ -2098,3 +2107,122 @@ const claw_core_context_provider_t claw_memory_session_history_provider = {
     .user_ctx = NULL,
     .flags = CLAW_CORE_CONTEXT_PROVIDER_FLAG_REQUEST_START_ONLY,
 };
+
+esp_err_t claw_memory_persist_context_callback(const claw_core_context_persist_batch_t *batch, void *user_ctx)
+{
+    if (!s_memory.history_lock) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTakeRecursive(s_memory.history_lock, portMAX_DELAY);
+    esp_err_t err = persist_context_unlocked(batch, user_ctx);
+    xSemaphoreGiveRecursive(s_memory.history_lock);
+    return err;
+}
+
+esp_err_t claw_memory_delete_session_history(const char *session_id, bool *out_deleted_any)
+{
+    if (!s_memory.history_lock) return ESP_ERR_INVALID_STATE;
+    xSemaphoreTakeRecursive(s_memory.history_lock, portMAX_DELAY);
+    esp_err_t err = delete_session_unlocked(session_id, out_deleted_any);
+    xSemaphoreGiveRecursive(s_memory.history_lock);
+    return err;
+}
+
+/* Flatten only visible text blocks, never tool arguments or reasoning. */
+static esp_err_t history_content_text(const cJSON *value, char **text, size_t *used)
+{
+    if (cJSON_IsString(value)) {
+        size_t n = strlen(value->valuestring);
+        if (*used + n > 65536) return ESP_ERR_INVALID_SIZE;
+        char *next = realloc(*text, *used + n + 2);
+        if (!next) return ESP_ERR_NO_MEM;
+        *text = next;
+        if (*used && n) next[(*used)++] = '\n';
+        memcpy(next + *used, value->valuestring, n + 1);
+        *used += n;
+        return ESP_OK;
+    }
+    if (cJSON_IsArray(value)) {
+        const cJSON *item;
+        cJSON_ArrayForEach(item, value) {
+            esp_err_t err = history_content_text(item, text, used);
+            if (err != ESP_OK) return err;
+        }
+    } else if (cJSON_IsObject(value)) {
+        const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(value, "type"));
+        if (!type || strcmp(type, "text") == 0 || strcmp(type, "output_text") == 0 || strcmp(type, "message") == 0) {
+            const cJSON *content = cJSON_GetObjectItem(value, "content");
+            return history_content_text(content ? content : cJSON_GetObjectItem(value, "text"), text, used);
+        }
+    }
+    return ESP_OK;
+}
+
+esp_err_t claw_memory_read_session_messages(const char *session_id, size_t before, size_t limit, cJSON **out)
+{
+    if (!session_id || !out || !limit || limit > 50) return ESP_ERR_INVALID_ARG;
+    *out = NULL;
+    if (!s_memory.initialized || !s_memory.history_lock) return ESP_ERR_INVALID_STATE;
+    char *path = claw_memory_session_path_dup(session_id);
+    char *idx_path = path ? session_history_idx_path_dup(path) : NULL;
+    if (!path || !idx_path) { free(path); free(idx_path); return ESP_ERR_NO_MEM; }
+    claw_memory_session_index_t index = {0};
+    cJSON *page = cJSON_CreateObject(), *messages = cJSON_CreateArray();
+    FILE *file = NULL;
+    esp_err_t err = page && messages ? ESP_OK : ESP_ERR_NO_MEM;
+    size_t total = 0, end = 0, start = 0, ordinal = 0, bytes = 0;
+    xSemaphoreTakeRecursive(s_memory.history_lock, portMAX_DELAY);
+    if (err == ESP_OK && (session_history_path_exists(path) || session_history_path_exists(idx_path))) {
+        err = session_history_validate_pair(path, idx_path, &index);
+        if (err == ESP_ERR_NOT_FOUND || err == ESP_ERR_INVALID_STATE || err == ESP_ERR_INVALID_ARG || err == ESP_ERR_INVALID_SIZE) err = ESP_ERR_INVALID_RESPONSE;
+        if (err == ESP_OK) {
+            file = fopen(path, "rb");
+            if (!file) err = ESP_FAIL;
+        }
+    }
+    for (size_t i = 0; i < index.count; i++) {
+        uint8_t type = index.entries[i].record_type;
+        if (type == CLAW_CORE_CONTEXT_RECORD_USER || type == CLAW_CORE_CONTEXT_RECORD_ASSISTANT_FINAL) total++;
+    }
+    end = before && before < total ? before : total;
+    start = end > limit ? end - limit : 0;
+    /* Walk backwards so the response budget always preserves the newest records. */
+    ordinal = total;
+    for (size_t i = index.count; err == ESP_OK && i > 0; i--) {
+        claw_memory_session_index_entry_t *entry = &index.entries[i - 1];
+        if (entry->record_type != CLAW_CORE_CONTEXT_RECORD_USER && entry->record_type != CLAW_CORE_CONTEXT_RECORD_ASSISTANT_FINAL) continue;
+        ordinal--;
+        if (ordinal >= end) continue;
+        if (ordinal < start) break;
+        char *raw = NULL, *text = NULL;
+        size_t used = 0;
+        if (entry->length > 65536) { err = ESP_ERR_INVALID_SIZE; break; }
+        err = session_history_read_record_text(file, entry, &raw);
+        cJSON *record = err == ESP_OK ? cJSON_Parse(raw) : NULL;
+        free(raw);
+        if (err == ESP_OK && !record) err = ESP_ERR_INVALID_RESPONSE;
+        if (err == ESP_OK) err = history_content_text(record, &text, &used);
+        cJSON_Delete(record);
+        if (err == ESP_OK && bytes + used > 32768 && cJSON_GetArraySize(messages)) {
+            start = ordinal + 1; free(text); break;
+        }
+        cJSON *message = err == ESP_OK ? cJSON_CreateObject() : NULL;
+        if (err == ESP_OK && (!message || !cJSON_AddNumberToObject(message, "seq", ordinal + 1) ||
+                !cJSON_AddStringToObject(message, "role", entry->record_type == CLAW_CORE_CONTEXT_RECORD_USER ? "user" : "assistant") ||
+                !cJSON_AddStringToObject(message, "text", text ? text : ""))) err = ESP_ERR_NO_MEM;
+        free(text);
+        if (err == ESP_OK) { cJSON_InsertItemInArray(messages, 0, message); bytes += used; }
+        else cJSON_Delete(message);
+    }
+    if (file) fclose(file);
+    if (err == ESP_OK) {
+        cJSON_AddNumberToObject(page, "total", total);
+        cJSON_AddNumberToObject(page, "revision", total);
+        cJSON_AddNumberToObject(page, "next_before", start);
+        cJSON_AddBoolToObject(page, "has_more", start > 0);
+        cJSON_AddItemToObject(page, "messages", messages); messages = NULL;
+        *out = page; page = NULL;
+    } else ESP_LOGW(TAG, "History page failed: %s", esp_err_to_name(err));
+    session_history_index_free(&index);
+    xSemaphoreGiveRecursive(s_memory.history_lock);
+    free(path); free(idx_path); cJSON_Delete(page); cJSON_Delete(messages);
+    return err;
+}
