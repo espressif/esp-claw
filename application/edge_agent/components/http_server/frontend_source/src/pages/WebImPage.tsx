@@ -23,7 +23,7 @@ import { Button } from '../components/ui/Button';
 import { Banner } from '../components/ui/Banner';
 import { Switch } from '../components/ui/Switch';
 import { t } from '../i18n';
-import { reloadStatus } from '../state/config';
+import { appStatus, deviceConnected } from '../state/config';
 import { pushToast } from '../state/toast';
 
 const LS_CHAT_ID = 'esp-claw-webim-chat-id';
@@ -210,7 +210,8 @@ export const WebImPage: Component = () => {
   const [pendingPaths, setPendingPaths] = createSignal<string[]>([]);
   const [error, setError] = createSignal<string | null>(null);
   const [bound, setBound] = createSignal<boolean | null>(null);
-  const [networkConnected, setNetworkConnected] = createSignal<boolean | null>(null);
+  const networkConnected = () =>
+    appStatus() === null ? null : deviceConnected() && appStatus()!.wifi_connected;
   const [wsReady, setWsReady] = createSignal(false);
   const [sending, setSending] = createSignal(false);
   const [markdownPreview, setMarkdownPreview] = createSignal(false);
@@ -231,15 +232,12 @@ export const WebImPage: Component = () => {
   };
 
   const refreshRuntimeStatus = async () => {
-    const [networkResult, webimResult] = await Promise.allSettled([
-      reloadStatus(),
-      fetchWebimStatus(),
-    ]);
-    if (disposed) return;
-    setNetworkConnected(
-      networkResult.status === 'fulfilled' && networkResult.value.wifi_connected === true,
-    );
-    setBound(webimResult.status === 'fulfilled' && webimResult.value.bound === true);
+    try {
+      const result = await fetchWebimStatus();
+      if (!disposed) setBound(result.bound === true);
+    } catch {
+      if (!disposed) setBound(false);
+    }
   };
 
   const clearReconnect = () => {
