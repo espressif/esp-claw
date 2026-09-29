@@ -127,6 +127,7 @@ export function blankConfig(): Partial<AppConfig> {
 }
 
 export type StatusInfo = {
+  boot_id: string;
   wifi_connected: boolean;
   ip: string;
   ap_active: boolean;
@@ -218,20 +219,20 @@ export function fetchStatus(signal?: AbortSignal) {
 /** Fetch a subset of the configuration, filtered by group names. */
 export function fetchConfigGroups(groups: ConfigGroup[] | 'all') {
   if (groups === 'all') {
-    return request<Partial<AppConfig>>('/api/config', undefined, 'Failed to load config');
+    return request<Partial<AppConfig>>('/api/config', { signal: AbortSignal.timeout(10000) }, 'Failed to load config');
   }
   if (groups.length === 0) {
     return Promise.resolve({} as Partial<AppConfig>);
   }
   const qs = 'groups=' + encodeURIComponent(groups.join(','));
-  return request<Partial<AppConfig>>('/api/config?' + qs, undefined, 'Failed to load config');
+  return request<Partial<AppConfig>>('/api/config?' + qs, { signal: AbortSignal.timeout(10000) }, 'Failed to load config');
 }
 
 /** Fetch individual named fields (advanced). */
 export function fetchConfigFields(fields: (keyof AppConfig)[]) {
   if (fields.length === 0) return Promise.resolve({} as Partial<AppConfig>);
   const qs = 'fields=' + encodeURIComponent(fields.join(','));
-  return request<Partial<AppConfig>>('/api/config?' + qs, undefined, 'Failed to load config');
+  return request<Partial<AppConfig>>('/api/config?' + qs, { signal: AbortSignal.timeout(10000) }, 'Failed to load config');
 }
 
 /** Partial save: only keys present in the patch are written; absent

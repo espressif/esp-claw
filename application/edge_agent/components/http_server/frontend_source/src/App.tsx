@@ -1,15 +1,26 @@
-import { createEffect, createSignal, lazy, onCleanup, onMount, Show, Suspense } from 'solid-js';
+import { createEffect, createMemo, createSignal, lazy, on, onCleanup, onMount, Show, Suspense } from 'solid-js';
 import type { Component } from 'solid-js';
 
 import { fetchStatus, restartDevice } from './api/client';
 import { Layout } from './components/layout/Layout';
 import { LEAF_IDS } from './components/layout/Sidebar';
 import { RestartOverlay, type RestartOverlayState } from './components/system/RestartOverlay';
+import { ConnectionOverlay } from './components/system/ConnectionOverlay';
+import { Button } from './components/ui/Button';
 import { Banner } from './components/ui/Banner';
 import { ToastViewport } from './components/ui/ToastViewport';
 import { t } from './i18n';
 import { anyDirty, type TabId } from './state/dirty';
-import { reloadCapabilities, reloadLuaModules, reloadStatus } from './state/config';
+import {
+  appStatus,
+  configGeneration,
+  configSyncError,
+  deviceConnected,
+  invalidateConfig,
+  reloadCapabilities,
+  reloadLuaModules,
+  reloadStatus,
+} from './state/config';
 import { pushToast } from './state/toast';
 
 const StatusPage = lazy(() =>
@@ -56,8 +67,8 @@ function readTabFromHash(): RouteId {
 }
 
 const App: Component = () => {
+  const statusReady = createMemo(() => appStatus() !== null);
   const [currentTab, setCurrentTab] = createSignal<RouteId>(readTabFromHash());
-  const [bootError, setBootError] = createSignal<string | null>(null);
   const [restartOverlay, setRestartOverlay] = createSignal<RestartOverlayState>({
     open: false,
     phase: 'requesting',
@@ -101,7 +112,16 @@ const App: Component = () => {
 
   onMount(() => {
     window.addEventListener('hashchange', onHashChange);
-    void bootstrap();
+    const poll = () => {
+      if (!document.hidden) void reloadStatus().catch(() => undefined);
+    };
+    poll();
+    const timer = window.setInterval(poll, 5000);
+    document.addEventListener('visibilitychange', poll);
+    onCleanup(() => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', poll);
+    });
   });
 
   onCleanup(() => {
@@ -117,9 +137,12 @@ const App: Component = () => {
     setCurrentTab(next);
   };
 
+  createEffect(on([configGeneration, statusReady], () => {
+    if (statusReady()) void bootstrap();
+  }));
+
   const bootstrap = async () => {
     const tasks: Array<[string, () => Promise<unknown>]> = [
-      ['status', () => reloadStatus()],
       ['capabilities', () => reloadCapabilities()],
       ['luaModules', () => reloadLuaModules()],
     ];
@@ -128,11 +151,7 @@ const App: Component = () => {
         await task();
       } catch (err) {
         const message = (err as Error).message || 'Failed to initialise: ' + label;
-        if (label === 'status') {
-          setBootError(message);
-        } else {
-          pushToast(message, 'error', 4500);
-        }
+        pushToast(message, 'error', 4500);
       }
     }
   };
@@ -223,69 +242,107 @@ const App: Component = () => {
 
   return (
     <>
-      <Show
-        when={currentTab() === 'start'}
-        fallback={
-          <Layout currentTab={currentTab() as TabId} onSelectTab={handleSelectTab}>
-            <Show when={bootError()}>
-              <div class="mb-4">
-                <Banner kind="error" message={bootError() ?? undefined} />
-              </div>
-            </Show>
-            <Suspense
-              fallback={<div class="p-6 text-[var(--color-text-muted)]">{t('statusLoading')}</div>}
+      <Show when={deviceConnected() && configSyncError()}>
+        <Banner kind="error" class="m-4">
+          {t('configSyncFailed')}
+          <Button
+            class="ml-3"
+            onClick={() =>
+              void reloadStatus()
+                .then(() => invalidateConfig())
+                .catch(() => undefined)
+            }
+          >
+            {t('configReload')}
+          </Button>
+        </Banner>
+      </Show>
+      <Show when={appStatus()}>
+        <Show when={configGeneration() + 1} keyed>
+          {(_generation) => (
+            <fieldset
+              class="min-w-0 border-0 m-0 p-0"
+              disabled={!deviceConnected() || configSyncError()}
             >
-              <Show when={currentTab() === 'status'}>
-                <StatusPage onRestartRequest={() => void handleRestartRequest()} />
+              <Show
+                when={currentTab() === 'start'}
+                fallback={
+                  <Layout currentTab={currentTab() as TabId} onSelectTab={handleSelectTab}>
+                    <Suspense
+                      fallback={
+                        <div class="p-6 text-[var(--color-text-muted)]">{t('statusLoading')}</div>
+                      }
+                    >
+                      <Show when={currentTab() === 'status'}>
+                        <StatusPage onRestartRequest={() => void handleRestartRequest()} />
+                      </Show>
+                      <Show when={currentTab() === 'basic'}>
+                        <BasicPage
+                          onRestartRequest={() =>
+                            void handleRestartRequest({ reloadOnSuccess: true })
+                          }
+                        />
+                      </Show>
+                      <Show when={currentTab() === 'llm'}>
+                        <LlmPage />
+                      </Show>
+                      <Show when={currentTab() === 'im'}>
+                        <ImPage
+                          onRestartRequest={() =>
+                            void handleRestartRequest({ reloadOnSuccess: true })
+                          }
+                        />
+                      </Show>
+                      <Show when={currentTab() === 'webreq'}>
+                        <WebReqPage
+                          onRestartRequest={() =>
+                            void handleRestartRequest({ reloadOnSuccess: true })
+                          }
+                        />
+                      </Show>
+                      <Show when={currentTab() === 'memory'}>
+                        <MemoryPage />
+                      </Show>
+                      <Show when={currentTab() === 'webim'}>
+                        <WebImPage />
+                      </Show>
+                      <Show when={currentTab() === 'capabilities'}>
+                        <CapabilitiesPage
+                          onRestartRequest={() =>
+                            void handleRestartRequest({ reloadOnSuccess: true })
+                          }
+                        />
+                      </Show>
+                      <Show when={currentTab() === 'skills'}>
+                        <SkillsPage
+                          onRestartRequest={() =>
+                            void handleRestartRequest({ reloadOnSuccess: true })
+                          }
+                        />
+                      </Show>
+                      <Show when={currentTab() === 'files'}>
+                        <FilesPage />
+                      </Show>
+                    </Suspense>
+                  </Layout>
+                }
+              >
+                <Suspense
+                  fallback={
+                    <div class="p-6 text-[var(--color-text-muted)]">{t('statusLoading')}</div>
+                  }
+                >
+                  <SetupWizardPage
+                    onRestartRequest={(targetTab) => void handleRestartRequest({ targetTab })}
+                  />
+                </Suspense>
               </Show>
-              <Show when={currentTab() === 'basic'}>
-                <BasicPage
-                  onRestartRequest={() => void handleRestartRequest({ reloadOnSuccess: true })}
-                />
-              </Show>
-              <Show when={currentTab() === 'llm'}>
-                <LlmPage />
-              </Show>
-              <Show when={currentTab() === 'im'}>
-                <ImPage
-                  onRestartRequest={() => void handleRestartRequest({ reloadOnSuccess: true })}
-                />
-              </Show>
-              <Show when={currentTab() === 'webreq'}>
-                <WebReqPage
-                  onRestartRequest={() => void handleRestartRequest({ reloadOnSuccess: true })}
-                />
-              </Show>
-              <Show when={currentTab() === 'memory'}>
-                <MemoryPage />
-              </Show>
-              <Show when={currentTab() === 'webim'}>
-                <WebImPage />
-              </Show>
-              <Show when={currentTab() === 'capabilities'}>
-                <CapabilitiesPage
-                  onRestartRequest={() => void handleRestartRequest({ reloadOnSuccess: true })}
-                />
-              </Show>
-              <Show when={currentTab() === 'skills'}>
-                <SkillsPage
-                  onRestartRequest={() => void handleRestartRequest({ reloadOnSuccess: true })}
-                />
-              </Show>
-              <Show when={currentTab() === 'files'}>
-                <FilesPage />
-              </Show>
-            </Suspense>
-          </Layout>
-        }
-      >
-        <Suspense
-          fallback={<div class="p-6 text-[var(--color-text-muted)]">{t('statusLoading')}</div>}
-        >
-          <SetupWizardPage
-            onRestartRequest={(targetTab) => void handleRestartRequest({ targetTab })}
-          />
-        </Suspense>
+            </fieldset>
+          )}
+        </Show>
+      </Show>
+      <Show when={!deviceConnected() && !restartOverlay().open}>
+        <ConnectionOverlay />
       </Show>
       <RestartOverlay state={restartOverlay()} onClose={closeRestartOverlay} />
       <ToastViewport />

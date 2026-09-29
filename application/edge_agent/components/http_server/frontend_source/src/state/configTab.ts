@@ -5,13 +5,15 @@ import {
   appConfig,
   ensureConfigGroups,
   isGroupLoaded,
-  patchConfigLocal,
+  configGeneration,
+  deviceConnected,
+  saveConfig,
   reloadConfigGroups,
 } from './config';
 import { markDirty, type TabId } from './dirty';
 import { pushToast } from './toast';
 import { t } from '../i18n';
-import { saveConfigPatch, diffConfigPatch } from '../api/client';
+import { diffConfigPatch } from '../api/client';
 
 export type ConfigTabOptions<T extends object> = {
   tab: TabId;
@@ -35,6 +37,7 @@ export type ConfigTabApi<T extends object> = {
 };
 
 export function createConfigTab<T extends object>(options: ConfigTabOptions<T>): ConfigTabApi<T> {
+  const version = configGeneration();
   const initial = options.toForm(appConfig());
   const [form, setForm] = createStore<T>(initial);
   let baseline: T = clone(initial);
@@ -55,8 +58,9 @@ export function createConfigTab<T extends object>(options: ConfigTabOptions<T>):
     setLoading(true);
     try {
       await ensureConfigGroups(options.groups);
-      applyBaseline();
+      if (version === configGeneration()) applyBaseline();
     } catch (err) {
+      if (version !== configGeneration()) return;
       setError((err as Error).message);
     } finally {
       setLoading(false);
@@ -68,8 +72,9 @@ export function createConfigTab<T extends object>(options: ConfigTabOptions<T>):
     setLoading(true);
     try {
       await reloadConfigGroups(options.groups);
-      applyBaseline();
+      if (version === configGeneration()) applyBaseline();
     } catch (err) {
+      if (version !== configGeneration()) return;
       setError((err as Error).message);
     } finally {
       setLoading(false);
@@ -104,7 +109,7 @@ export function createConfigTab<T extends object>(options: ConfigTabOptions<T>):
   });
 
   const save = async () => {
-    if (saving()) return;
+    if (saving() || loading() || !isGroupLoadedAll(options.groups) || !deviceConnected()) return;
     setSaving(true);
     setError(null);
     try {
@@ -114,9 +119,9 @@ export function createConfigTab<T extends object>(options: ConfigTabOptions<T>):
       if (Object.keys(patch).length === 0) {
         return;
       }
-      await saveConfigPatch(patch);
+      await saveConfig(patch);
+      if (version !== configGeneration()) return;
       batch(() => {
-        patchConfigLocal(patch);
         baseline = clone(options.toForm(appConfig()));
         setForm(reconcile(baseline));
         setBaselineTick((value) => value + 1);
@@ -127,6 +132,7 @@ export function createConfigTab<T extends object>(options: ConfigTabOptions<T>):
         'success',
       );
     } catch (err) {
+      if (version !== configGeneration()) return;
       setError((err as Error).message);
       pushToast((err as Error).message || (t('saveError') as string), 'error', 5000);
       throw err;
@@ -145,7 +151,7 @@ export function createConfigTab<T extends object>(options: ConfigTabOptions<T>):
     setForm,
     dirty: isDirtyMemo,
     loading,
-    saving,
+    saving: () => saving() || loading() || !isGroupLoadedAll(options.groups) || !deviceConnected(),
     error,
     save,
     discard,

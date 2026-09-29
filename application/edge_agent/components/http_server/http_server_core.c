@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "http_server_priv.h"
+#include "esp_random.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -52,6 +53,8 @@ esp_err_t http_server_init(const http_server_config_t *config)
     memset(&s_ctx, 0, sizeof(s_ctx));
     strlcpy(s_ctx.storage_base_path, config->storage_base_path, sizeof(s_ctx.storage_base_path));
     s_ctx.services = config->services;
+    // Identify this server lifetime without persisting state in NVS.
+    snprintf(s_ctx.boot_id, sizeof(s_ctx.boot_id), "%08lx%08lx", (unsigned long)esp_random(), (unsigned long)esp_random());
     return ESP_OK;
 }
 

@@ -20,6 +20,7 @@
 
 typedef struct {
     httpd_handle_t server;
+    char boot_id[17];
     char storage_base_path[HTTP_SERVER_PATH_MAX];
     http_server_services_t services;
 } http_server_ctx_t;
