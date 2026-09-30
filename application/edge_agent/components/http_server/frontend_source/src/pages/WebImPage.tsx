@@ -1,664 +1,155 @@
-import { CircleX, ImagePlus, LoaderCircle, SendHorizontal } from 'lucide-solid';
-import {
-  createEffect,
-  createSignal,
-  For,
-  onCleanup,
-  onMount,
-  Show,
-  type Component,
-} from 'solid-js';
-import type { JSX } from 'solid-js';
-import {
-  createFolder,
-  fetchWebimStatus,
-  sendWebimMessage,
-  uploadFile,
-  webimWebSocketUrl,
-  type WebImMessage,
-} from '../api/client';
-import { TabShell } from '../components/layout/TabShell';
-import { PageHeader } from '../components/ui/PageHeader';
-import { Button } from '../components/ui/Button';
-import { Banner } from '../components/ui/Banner';
-import { Switch } from '../components/ui/Switch';
+import { DropdownMenu } from '@kobalte/core/dropdown-menu';
+import { For, Show, createEffect, createSignal, onMount, type Component } from 'solid-js';
+import { ChevronDown, ImagePlus, LoaderCircle, MessageSquare, MoreHorizontal, PanelLeft, Plus, SendHorizontal, X } from 'lucide-solid';
+import { createFolder, uploadFile, type WebImSession } from '../api/client';
+import { createWebChat } from '../state/webim';
 import { t } from '../i18n';
-import { appStatus, deviceConnected } from '../state/config';
-import { pushToast } from '../state/toast';
-
-const LS_CHAT_ID = 'esp-claw-webim-chat-id';
-const MARKED_CDN_URL = 'https://esp-claw.com/clientjs/marked@18.0.4/marked.umd.min.js';
-const DOMPURIFY_CDN_URL = 'https://esp-claw.com/clientjs/dompurify@3.4.5/purify.min.js';
-const MARKED_CDN_INTEGRITY =
-  'sha384-QIom/Ao3tGhg4C4VY5VTDrHMTPzgsih5cGuY30rd/xp6hWQ+xIGIZ4kxhaQQY+PB';
-const DOMPURIFY_CDN_INTEGRITY =
-  'sha384-7FXQySTrDscwsLx1i8RIqZM/JHoUVstx4CuL2b7tziI4Glhp3/3dm/j3qUTheVXE';
-
-type MarkedRuntime = {
-  parse: (text: string, options?: { async?: false }) => string | Promise<string>;
-};
-
-type DomPurifyRuntime = {
-  sanitize: (html: string, config?: Record<string, unknown>) => string;
-};
-
-type LocalWebImMessage = WebImMessage & {
-  localId?: string;
-  sendStatus?: 'pending' | 'sent' | 'failed';
-  files?: string[];
-};
-
-const [webImMessages, setWebImMessages] = createSignal<LocalWebImMessage[]>([]);
-let webImUserLocalSeq = 0;
-let webImUserLocalId = 0;
-
-declare global {
-  interface Window {
-    marked?: MarkedRuntime;
-    DOMPurify?: DomPurifyRuntime;
-  }
-}
-
-const MARKDOWN_SANITIZE_CONFIG = {
-  ALLOWED_TAGS: [
-    'a',
-    'blockquote',
-    'br',
-    'code',
-    'em',
-    'h1',
-    'h2',
-    'h3',
-    'h4',
-    'h5',
-    'h6',
-    'hr',
-    'li',
-    'ol',
-    'p',
-    'pre',
-    's',
-    'strong',
-    'table',
-    'tbody',
-    'td',
-    'th',
-    'thead',
-    'tr',
-    'ul',
-  ],
-  ALLOWED_ATTR: ['href', 'title'],
-  ALLOWED_URI_REGEXP: /^(?:(?:(?:https?|mailto|tel):|[#/]))/i,
-};
-
-let markdownRuntimePromise: Promise<void> | null = null;
-
-function escapeMarkdownHtml(text: string): string {
-  return text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function loadExternalScript(
-  src: string,
-  integrity: string,
-  testReady: () => boolean,
-): Promise<void> {
-  if (testReady()) {
-    return Promise.resolve();
-  }
-
-  const existing = document.querySelector<HTMLScriptElement>(`script[data-webim-md="${src}"]`);
-  if (existing) {
-    if (existing.dataset.loaded === '1') {
-      return testReady() ? Promise.resolve() : Promise.reject(new Error(src));
-    }
-    return new Promise((resolve, reject) => {
-      existing.addEventListener('load', () => resolve(), { once: true });
-      existing.addEventListener(
-        'error',
-        () => {
-          existing.remove();
-          reject(new Error(src));
-        },
-        { once: true },
-      );
-    });
-  }
-
-  return new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = src;
-    script.async = true;
-    script.crossOrigin = 'anonymous';
-    script.integrity = integrity;
-    script.dataset.webimMd = src;
-    script.onload = () => {
-      script.dataset.loaded = '1';
-      testReady() ? resolve() : reject(new Error(src));
-    };
-    script.onerror = () => {
-      script.remove();
-      reject(new Error(src));
-    };
-    document.head.append(script);
-  });
-}
-
-async function loadMarkdownRuntime(): Promise<void> {
-  if (window.marked?.parse && window.DOMPurify?.sanitize) {
-    return;
-  }
-
-  markdownRuntimePromise ??= Promise.all([
-    loadExternalScript(MARKED_CDN_URL, MARKED_CDN_INTEGRITY, () => !!window.marked?.parse),
-    loadExternalScript(
-      DOMPURIFY_CDN_URL,
-      DOMPURIFY_CDN_INTEGRITY,
-      () => !!window.DOMPurify?.sanitize,
-    ),
-  ]).then(() => undefined);
-
-  try {
-    await markdownRuntimePromise;
-  } catch (error) {
-    markdownRuntimePromise = null;
-    throw error;
-  }
-}
-
-function renderMarkdown(text: string): string {
-  const html = window.marked?.parse(escapeMarkdownHtml(text), { async: false });
-  if (typeof html !== 'string') {
-    return '';
-  }
-  return window.DOMPurify?.sanitize(html, MARKDOWN_SANITIZE_CONFIG) ?? '';
-}
-
-const MarkdownMessage: Component<{ preview: boolean; text: string }> = (props) => (
-  <Show
-    when={props.preview}
-    fallback={<p class="m-0 whitespace-pre-wrap break-words">{props.text}</p>}
-  >
-    <div class="webim-markdown break-words" innerHTML={renderMarkdown(props.text)} />
-  </Show>
-);
-
-function loadOrCreateChatId(): string {
-  try {
-    const saved = localStorage.getItem(LS_CHAT_ID);
-    if (saved) return saved;
-  } catch {
-    /* ignore */
-  }
-  const id =
-    typeof crypto !== 'undefined' && crypto.randomUUID
-      ? crypto.randomUUID()
-      : 'w-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
-  try {
-    localStorage.setItem(LS_CHAT_ID, id);
-  } catch {
-    /* ignore */
-  }
-  return id;
-}
+import { Button } from '../components/ui/Button';
+import { Modal } from '../components/ui/Modal';
+import { MarkdownMessage, loadMarkdownRuntime } from '../components/webim/MarkdownMessage';
 
 export const WebImPage: Component = () => {
-  const chatId = loadOrCreateChatId();
-  /** In-memory transcript only — lost on refresh. */
-  const messages = webImMessages;
-  const setMessages = setWebImMessages;
-  const [input, setInput] = createSignal('');
-  const [pendingPaths, setPendingPaths] = createSignal<string[]>([]);
-  const [error, setError] = createSignal<string | null>(null);
-  const [bound, setBound] = createSignal<boolean | null>(null);
-  const networkConnected = () =>
-    appStatus() === null ? null : deviceConnected() && appStatus()!.wifi_connected;
-  const [wsReady, setWsReady] = createSignal(false);
-  const [sending, setSending] = createSignal(false);
-  const [markdownPreview, setMarkdownPreview] = createSignal(false);
-  const [markdownPreviewLoading, setMarkdownPreviewLoading] = createSignal(false);
-  let fileRef: HTMLInputElement | undefined;
-  let messagesRef: HTMLDivElement | undefined;
-  let ws: WebSocket | null = null;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  let statusTimer: ReturnType<typeof setInterval> | null = null;
-  let disposed = false;
-
-  const chatOnline = () => networkConnected() === true && bound() === true && wsReady();
-  const chatStatusText = () => {
-    if (networkConnected() === null) return t('statusLoading');
-    if (!networkConnected()) return t('webimOffline');
-    return chatOnline() ? t('webimOnline') : t('webimConnecting');
-  };
-
-  const refreshRuntimeStatus = async () => {
+  const chat = createWebChat();
+  const [sidebar, setSidebar] = createSignal(true);
+  const [markdown, setMarkdown] = createSignal(false);
+  const [menu, setMenu] = createSignal('');
+  const [dialog, setDialog] = createSignal<{ kind: 'rename' | 'delete'; session: WebImSession }>();
+  const [title, setTitle] = createSignal('');
+  const [actionError, setActionError] = createSignal('');
+  const [saving, setSaving] = createSignal(false);
+  const [uploading, setUploading] = createSignal(false);
+  const [newMessages, setNewMessages] = createSignal(false);
+  let messagesEl: HTMLDivElement | undefined, inputEl: HTMLTextAreaElement | undefined, fileEl: HTMLInputElement | undefined;
+  let renderedSession = '', renderedCount = 0;
+  const label = (s?: WebImSession) => s?.title || (s?.source && s.source !== 'web' ? `${s.source} · ${s.alias}` : t('chatNew') as string);
+  const repliesToSource = () => !!chat.session()?.reply_channel && chat.session()!.reply_channel !== 'web';
+  const pending = () => chat.thread().pending;
+  const running = () => chat.thread().run !== 'idle';
+  const canSend = () => chat.online() && (!chat.active() || chat.session()?.can_send) && !uploading() && !running() && pending()?.state !== 'sending';
+  const bottom = () => { if (messagesEl) { messagesEl.scrollTop = messagesEl.scrollHeight; chat.scroll(messagesEl.scrollTop); } setNewMessages(false); };
+  const select = (id: string) => { setMenu(''); if (window.innerWidth < 768) setSidebar(false); setNewMessages(false); void chat.select(id); };
+  const fresh = () => { chat.fresh(); if (window.innerWidth < 768) setSidebar(false); setMenu(''); inputEl?.focus(); };
+  const openDialog = (kind: 'rename' | 'delete', session: WebImSession) => { setDialog({ kind, session }); setTitle(label(session)); setMenu(''); setActionError(''); };
+  const commit = async () => {
+    const current = dialog(); if (!current || saving()) return;
+    setSaving(true); setActionError('');
     try {
-      const result = await fetchWebimStatus();
-      if (!disposed) setBound(result.bound === true);
-    } catch {
-      if (!disposed) setBound(false);
-    }
+      if (current.kind === 'rename') await chat.rename(current.session.session, title().trim());
+      else await chat.remove(current.session.session);
+      setDialog(undefined);
+    } catch (e) { setActionError((e as Error).message); }
+    finally { setSaving(false); }
   };
-
-  const clearReconnect = () => {
-    if (reconnectTimer !== null) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
+  const upload = async (event: Event) => {
+    const target = event.currentTarget as HTMLInputElement, file = target.files?.[0];
+    if (!file) return;
+    const id = chat.active();
+    const path = `/inbox/webim/${Date.now().toString(36)}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    setUploading(true); setActionError('');
+    try { await createFolder('/inbox/webim'); await uploadFile(path, file); chat.files(id, [...(chat.threads[id]?.files ?? []), path]); }
+    catch (e) { setActionError((e as Error).message); }
+    finally { setUploading(false); target.value = ''; }
   };
-
-  const clearHeartbeat = () => {
-    if (heartbeatTimer !== null) {
-      clearInterval(heartbeatTimer);
-      heartbeatTimer = null;
-    }
-  };
-
-  const teardownWs = () => {
-    clearReconnect();
-    clearHeartbeat();
-    if (ws) {
-      ws.onopen = null;
-      ws.onclose = null;
-      ws.onmessage = null;
-      ws.onerror = null;
-      try {
-        ws.close();
-      } catch {
-        /* ignore */
-      }
-      ws = null;
-    }
-    setWsReady(false);
-  };
-
-  const scheduleReconnect = () => {
-    clearReconnect();
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      connectWs();
-    }, 2000);
-  };
-
-  const connectWs = () => {
-    teardownWs();
-    const socket = new WebSocket(webimWebSocketUrl());
-    ws = socket;
-
-    socket.onopen = () => {
-      const hello = JSON.stringify({ type: 'hello', chat_id: chatId });
-
-      setWsReady(true);
-      clearReconnect();
-      try {
-        socket.send(hello);
-      } catch {
-        /* ignore */
-      }
-      clearHeartbeat();
-      heartbeatTimer = setInterval(() => {
-        if (socket.readyState !== WebSocket.OPEN) {
-          return;
-        }
-        try {
-          socket.send('{"type":"ping"}');
-        } catch {
-          /* ignore */
-        }
-      }, 15000);
-    };
-
-    socket.onclose = () => {
-      setWsReady(false);
-      clearHeartbeat();
-      scheduleReconnect();
-    };
-
-    socket.onerror = () => {
-      setWsReady(false);
-    };
-
-    socket.onmessage = (ev: MessageEvent<string>) => {
-      let data: Record<string, unknown>;
-      try {
-        data = JSON.parse(ev.data) as Record<string, unknown>;
-      } catch {
-        return;
-      }
-      const cid = typeof data.chat_id === 'string' ? data.chat_id : '';
-      if (!cid || cid !== chatId) {
-        return;
-      }
-      const role = typeof data.role === 'string' ? data.role : '';
-      if (role !== 'assistant') {
-        return;
-      }
-      const seq = typeof data.seq === 'number' ? data.seq : 0;
-      const text = typeof data.text === 'string' ? data.text : '';
-      const ts_ms = typeof data.ts_ms === 'number' ? data.ts_ms : undefined;
-      let links: WebImMessage['links'];
-      const rawLinks = data.links;
-      if (Array.isArray(rawLinks)) {
-        links = rawLinks.map((x) => {
-          const o = x as Record<string, unknown>;
-          return {
-            url: typeof o.url === 'string' ? o.url : '',
-            label: typeof o.label === 'string' ? o.label : '',
-          };
-        });
-      }
-      setMessages((prev) => [...prev, { seq, role: 'assistant', text, ts_ms, links }]);
-    };
-  };
-
-  onMount(async () => {
-    try {
-      await createFolder('/inbox/webim', { recursive: true });
-    } catch {
-      /* may already exist */
-    }
-    await refreshRuntimeStatus();
-    if (disposed) return;
-    connectWs();
-    statusTimer = setInterval(() => void refreshRuntimeStatus(), 5000);
+  onMount(() => {
+    if (window.innerWidth < 768) setSidebar(false);
+    void chat.start();
+    void loadMarkdownRuntime().then(() => setMarkdown(true)).catch(() => { /* Plain text remains available offline. */ });
   });
-
-  onCleanup(() => {
-    disposed = true;
-    if (statusTimer !== null) clearInterval(statusTimer);
-    teardownWs();
-  });
-
   createEffect(() => {
-    messages().length;
-    markdownPreview();
+    const id = chat.active(), count = chat.thread().messages.length, savedScroll = chat.thread().scroll;
+    const switched = renderedSession !== id;
+    const added = count > renderedCount;
+    renderedSession = id; renderedCount = count;
     requestAnimationFrame(() => {
-      if (messagesRef) {
-        messagesRef.scrollTop = messagesRef.scrollHeight;
-      }
+      if (!messagesEl) return;
+      if (switched) { messagesEl.scrollTop = savedScroll < 0 ? messagesEl.scrollHeight : savedScroll; setNewMessages(false); }
+      else if (added && (savedScroll < 0 || messagesEl.scrollHeight - messagesEl.clientHeight - savedScroll < 180)) bottom();
+      else if (added) setNewMessages(true);
     });
   });
-
-  const onPickFile = async (ev: Event) => {
-    const inputEl = ev.currentTarget as HTMLInputElement;
-    const file = inputEl.files?.[0];
-    if (!file) return;
-    const name = `${Date.now().toString(36)}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-    const path = '/inbox/webim/' + name;
-    try {
-      await uploadFile(path, file);
-      setPendingPaths((p) => [...p, path]);
-      pushToast(t('webimUploaded') as string, 'info', 2500);
-    } catch (e) {
-      pushToast((e as Error).message, 'error', 4000);
-    }
-    inputEl.value = '';
-  };
-
-  const makeLocalMessage = (text: string, files: string[]): LocalWebImMessage => {
-    webImUserLocalSeq -= 1;
-    webImUserLocalId += 1;
-    return {
-      seq: webImUserLocalSeq,
-      role: 'user',
-      text,
-      files,
-      localId: `user-${Date.now().toString(36)}-${webImUserLocalId.toString(36)}`,
-      sendStatus: 'pending',
-    };
-  };
-
-  const updateLocalMessageStatus = (
-    localId: string,
-    sendStatus: NonNullable<LocalWebImMessage['sendStatus']>,
-  ) => {
-    setMessages((prev) => prev.map((m) => (m.localId === localId ? { ...m, sendStatus } : m)));
-  };
-
-  const postLocalMessage = async (message: LocalWebImMessage) => {
-    if (!message.localId) return;
-    setSending(true);
-    setError(null);
-    try {
-      await sendWebimMessage(chatId, message.text, message.files ?? []);
-      updateLocalMessageStatus(message.localId, 'sent');
-    } catch (e) {
-      updateLocalMessageStatus(message.localId, 'failed');
-      setError((e as Error).message);
-    } finally {
-      setSending(false);
-    }
-  };
-
-  const send = async () => {
-    const text = input().trim();
-    const files = pendingPaths();
-    if (!text && files.length === 0) return;
-    if (!chatOnline()) return;
-    const localMessage = makeLocalMessage(text, files);
-    setMessages((prev) => [...prev, localMessage]);
-    setInput('');
-    setPendingPaths([]);
-    await postLocalMessage(localMessage);
-  };
-
-  const retryMessage = async (message: LocalWebImMessage) => {
-    if (!message.localId || sending() || !chatOnline()) return;
-    const retry = { ...message, sendStatus: 'pending' as const };
-    setMessages((prev) => [...prev.filter((m) => m.localId !== message.localId), retry]);
-    await postLocalMessage(retry);
-  };
-
-  const onInputKeyDown: JSX.EventHandler<HTMLTextAreaElement, KeyboardEvent> = (e) => {
-    if (e.ctrlKey && e.key === 'Enter') {
-      e.preventDefault();
-      if (!sending() && chatOnline()) {
-        void send();
-      }
-    }
-  };
-
-  const toggleMarkdownPreview = async (checked: boolean) => {
-    if (!checked) {
-      setMarkdownPreview(false);
-      return;
-    }
-
-    setMarkdownPreviewLoading(true);
-    try {
-      await loadMarkdownRuntime();
-      setMarkdownPreview(true);
-    } catch {
-      setMarkdownPreview(false);
-      pushToast(t('webimMarkdownPreviewLoadFailed') as string, 'error', 5000);
-    } finally {
-      setMarkdownPreviewLoading(false);
-    }
+  const older = async () => {
+    if (!messagesEl) return;
+    const id = chat.active(), height = messagesEl.scrollHeight, top = messagesEl.scrollTop;
+    await chat.load(id, true);
+    requestAnimationFrame(() => { if (messagesEl && chat.active() === id) { messagesEl.scrollTop = top + messagesEl.scrollHeight - height; chat.scroll(messagesEl.scrollTop); } });
   };
 
   return (
-    <TabShell class="flex h-[calc(100dvh-5.5rem)] min-h-[520px] flex-col sm:h-[calc(100dvh-6.5rem)]">
-      <PageHeader
-        title={t('navWebIm') as string}
-        description={t('webimDesc') as string}
-        actions={
-          <span
-            class={`inline-flex items-center gap-2 px-3 py-1 rounded-full border text-[0.78rem] font-medium ${
-              chatOnline()
-                ? 'border-[rgba(104,211,145,0.2)] bg-[var(--color-green-dim)] text-[var(--color-green)]'
-                : 'border-[var(--color-border-subtle)] bg-white/[0.04] text-[var(--color-text-muted)]'
-            }`}
-          >
-            <span
-              class={`w-1.5 h-1.5 rounded-full ${
-                chatOnline() ? 'bg-[var(--color-green)] pulse-dot' : 'bg-[var(--color-text-muted)]'
-              }`}
-            />
-            {chatStatusText()}
-          </span>
-        }
-      />
-
-      <Show when={error()}>
-        <div class="px-5 pt-2">
-          <Banner kind="error" message={error() ?? undefined} />
-        </div>
-      </Show>
-      <Show when={bound() === false}>
-        <div class="px-5 pt-2">
-          <Banner kind="info" message={t('webimNoBind') as string} />
-        </div>
-      </Show>
-
-      <div class="flex min-h-0 flex-1 flex-col">
-        <div class="flex min-h-0 flex-1 flex-col min-w-0 border border-[var(--color-border-subtle)] rounded-none bg-white/[0.02]">
-          <div
-            ref={messagesRef}
-            class="relative flex min-h-0 flex-1 overflow-auto p-4 flex-col gap-3"
-          >
-            <For each={messages()}>
-              {(m) => (
-                <div
-                  class={[
-                    'flex max-w-[min(100%,36rem)] items-start gap-2',
-                    m.role === 'user' ? 'self-end' : 'self-start',
-                  ].join(' ')}
-                >
-                  <Show when={m.role === 'user' && m.sendStatus !== 'sent'}>
-                    <span class="mt-2 flex h-5 w-5 shrink-0 items-center justify-center">
-                      <Show when={m.sendStatus === 'pending'}>
-                        <LoaderCircle class="h-4 w-4 animate-spin text-[var(--color-text-muted)]" />
-                      </Show>
-                      <Show when={m.sendStatus === 'failed'}>
-                        <button
-                          type="button"
-                          class="inline-flex h-5 w-5 items-center justify-center rounded-full text-[rgb(248,113,113)] transition hover:bg-[rgba(248,113,113,0.12)] hover:text-[rgb(252,165,165)] disabled:opacity-60"
-                          title={t('webimRetrySend') as string}
-                          aria-label={t('webimRetrySend') as string}
-                          disabled={sending() || !chatOnline()}
-                          onClick={() => void retryMessage(m)}
-                        >
-                          <CircleX class="h-4 w-4" />
-                        </button>
-                      </Show>
-                    </span>
-                  </Show>
-                  <div
-                    class={[
-                      'min-w-0 rounded-[var(--radius-md)] px-3 py-2 text-[0.88rem] leading-relaxed',
-                      m.role === 'user'
-                        ? 'bg-[var(--color-accent)]/18 text-[var(--color-text-primary)]'
-                        : 'bg-white/6 text-[var(--color-text-primary)]',
-                    ].join(' ')}
-                  >
-                    <MarkdownMessage preview={markdownPreview()} text={m.text} />
-                    <Show when={(m.links?.length ?? 0) > 0}>
-                      <ul class="mt-2 space-y-1 list-none m-0 p-0">
-                        <For each={m.links ?? []}>
-                          {(lnk) => (
-                            <li>
-                              <a
-                                href={lnk.url}
-                                download=""
-                                class="text-[var(--color-accent-soft)] hover:underline text-[0.82rem]"
-                              >
-                                {lnk.label || lnk.url}
-                              </a>
-                            </li>
-                          )}
-                        </For>
-                      </ul>
-                    </Show>
-                  </div>
+    <div class="web-chat relative flex h-[calc(100dvh-5.5rem)] min-h-[420px] overflow-hidden rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-card)] sm:h-[calc(100dvh-6.5rem)]">
+      <Show when={sidebar()}>
+        <button class="absolute inset-0 z-20 bg-black/45 md:hidden" aria-label={t('chatCancel')} onClick={() => setSidebar(false)} />
+        <aside class="absolute inset-y-0 left-0 z-30 flex w-60 shrink-0 flex-col border-r border-[var(--color-border-subtle)] bg-[var(--color-bg-card)] md:relative md:z-auto">
+          <div class="flex items-center justify-between px-3 pt-3">
+            <Button class="flex-1 justify-start" variant="ghost" onClick={fresh}><Plus size={17} />{t('chatNew')}</Button>
+            <Button variant="ghost" size="xs" aria-label={t('chatSessions')} onClick={() => setSidebar(false)}><PanelLeft size={17} /></Button>
+          </div>
+          <div class="px-4 py-4"><select aria-label={t('chatAll')} class="w-full bg-transparent text-xs text-[var(--color-text-muted)] outline-none" value={chat.source()} onChange={e => void chat.filter(e.currentTarget.value).catch(err => setActionError(err.message))}>
+            <option value="all">{t('chatAll')}</option>
+            <For each={[...new Set(['web', 'wechat', 'telegram', 'feishu', 'qq', ...chat.sessions().map(s => s.source)])]}>{source => <option value={source}>{source === 'web' ? 'Web' : source}</option>}</For>
+          </select></div>
+          <nav class="min-h-0 flex-1 overflow-y-auto px-2 pb-3" aria-label={t('chatSessions')}>
+            <Show when={!chat.sessions().length}><p class="px-3 text-xs leading-6 text-[var(--color-text-muted)]">{t('chatEmptyList')}</p></Show>
+            <For each={chat.sessions().filter(s => chat.source() === 'all' || s.source === chat.source())}>{s => (
+              <div class="relative mb-1">
+                <div class={`flex items-center rounded-lg transition ${chat.active() === s.session ? 'bg-white/8' : 'hover:bg-white/4'}`}>
+                  <button class="min-w-0 flex-1 px-3 py-3 text-left" onClick={() => select(s.session)} aria-current={chat.active() === s.session ? 'page' : undefined}>
+                    <div class="truncate text-[0.82rem] text-[var(--color-text-primary)]">{label(s)}</div>
+                    <div class="mt-1 flex items-center gap-1.5 text-[0.68rem] text-[var(--color-text-muted)]"><span>{s.source === 'web' ? 'Web' : s.source}</span><Show when={s.run_state !== 'idle'}><LoaderCircle size={10} class="animate-spin" /></Show></div>
+                  </button>
+                  <DropdownMenu open={menu() === s.session} onOpenChange={open => setMenu(open ? s.session : '')} placement="bottom-end" gutter={4} modal={false}>
+                    <DropdownMenu.Trigger as={Button} size="xs" variant="ghost" class="mr-1" aria-label={t('chatActions')}><MoreHorizontal size={16} /></DropdownMenu.Trigger>
+                    <DropdownMenu.Portal>
+                      <DropdownMenu.Content class="z-50 min-w-36 rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-bg-card)] p-1 text-xs shadow-lg outline-none">
+                        <DropdownMenu.Item class="cursor-pointer rounded px-3 py-2 outline-none data-[highlighted]:bg-white/5" onSelect={() => openDialog('rename', s)}>{t('chatRename')}</DropdownMenu.Item>
+                        <DropdownMenu.Item class="cursor-pointer rounded px-3 py-2 text-red-400 outline-none data-[highlighted]:bg-white/5" onSelect={() => openDialog('delete', s)}>{t('chatDelete')}</DropdownMenu.Item>
+                      </DropdownMenu.Content>
+                    </DropdownMenu.Portal>
+                  </DropdownMenu>
                 </div>
-              )}
-            </For>
-            <Show when={!chatOnline() || messages().length === 0}>
-              <div class="absolute inset-0 flex items-center justify-center p-4 pointer-events-none">
-                <p
-                  class={[
-                    'm-0 text-center inline-flex items-center px-4 py-2 rounded-full border text-[0.82rem] font-medium',
-                    !chatOnline()
-                      ? 'border-[rgba(245,158,11,0.28)] bg-[rgba(245,158,11,0.12)] text-[rgb(245,158,11)]'
-                      : 'border-[rgba(104,211,145,0.2)] bg-[var(--color-green-dim)] text-[var(--color-green)]',
-                  ].join(' ')}
-                >
-                  {networkConnected() === null
-                    ? (t('statusLoading') as string)
-                    : !networkConnected()
-                      ? (t('webimOffline') as string)
-                      : !chatOnline()
-                        ? (t('webimWsReconnecting') as string)
-                        : (t('webimEmpty') as string)}
-                </p>
               </div>
-            </Show>
+            )}</For>
+            <Show when={chat.more()}><Button variant="ghost" size="sm" class="w-full" onClick={() => void chat.loadMore().catch(e => setActionError(e.message))}>{t('chatMore')}</Button></Show>
+          </nav>
+        </aside>
+      </Show>
+      <main class="flex min-w-0 flex-1 flex-col">
+        <header class="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--color-border-subtle)] px-4">
+          <Show when={!sidebar()}><Button variant="ghost" size="xs" aria-label={t('chatSessions')} onClick={() => setSidebar(true)}><PanelLeft size={18} /></Button></Show>
+          <h2 class="m-0 min-w-0 flex-1 truncate text-sm font-medium">{label(chat.session())}</h2>
+          <Show when={!chat.online()}><span class="text-xs text-amber-400">{t('chatDisconnected')}</span></Show>
+        </header>
+        <div ref={messagesEl} class="min-h-0 flex-1 overflow-y-auto px-4 py-6 sm:px-8" onScroll={() => { if (messagesEl) chat.scroll(messagesEl.scrollTop); }}>
+          <div class="mx-auto flex min-h-full max-w-[760px] flex-col gap-6">
+            <Show when={chat.thread().more}><Button variant="ghost" size="sm" class="mx-auto" disabled={chat.thread().loading} onClick={() => void older()}>{t('chatEarlier')}</Button></Show>
+            <Show when={chat.thread().loading && !chat.thread().loaded}><div class="flex items-center gap-2 text-sm text-[var(--color-text-muted)]"><LoaderCircle size={15} class="animate-spin" />{t('chatLoading')}</div></Show>
+            <Show when={!chat.thread().loading && !chat.thread().messages.length && !pending()}><div class="my-auto flex flex-col items-center gap-3 py-16 text-center"><MessageSquare size={28} class="text-[var(--color-text-muted)]" /><h3 class="m-0 text-xl font-medium">{t('chatWelcome')}</h3><p class="m-0 text-sm text-[var(--color-text-muted)]">{t('chatWelcomeHint')}</p></div></Show>
+            <For each={chat.thread().messages}>{message => <article class={`min-w-0 text-[0.9rem] leading-7 ${message.role === 'user' ? 'max-w-[88%] self-end rounded-2xl bg-white/7 px-4 py-2.5' : 'w-full self-start'}`} data-role={message.role}>
+              <MarkdownMessage preview={markdown()} text={message.text} />
+            </article>}</For>
+            <Show when={pending()}><div class="rounded-lg border border-[var(--color-border-subtle)] px-3 py-2 text-xs text-[var(--color-text-muted)]"><span>{pending()?.state === 'sending' ? t('chatSending') : pending()?.state === 'accepted' ? t('chatAccepted') : t('chatUnknown')}</span><Show when={pending()?.state === 'failed'}><Button size="xs" variant="ghost" onClick={() => void chat.send(true)} disabled={!canSend()}>{t('chatRetry')}</Button></Show></div></Show>
+            <Show when={repliesToSource() && chat.thread().delivery === 'failed'}><p role="alert" class="text-xs text-amber-400">{t('chatDeliveryFailed')}</p></Show>
+            <Show when={running()}><div class="flex items-center gap-2 text-xs text-[var(--color-text-muted)]"><LoaderCircle size={14} class="animate-spin" />{chat.thread().run === 'queued' ? t('chatQueued') : t('chatRunning')}</div></Show>
+            <Show when={chat.thread().error || actionError() || chat.error()}><div role="alert" class="rounded-lg bg-red-400/8 px-3 py-2 text-xs text-red-300">{chat.thread().error || actionError() || chat.error()}<Button variant="ghost" size="xs" onClick={() => void chat.refresh()}>{t('chatRetry')}</Button></div></Show>
           </div>
-
-          <Show when={pendingPaths().length > 0}>
-            <div class="px-4 pb-1 text-[0.76rem] text-[var(--color-text-muted)]">
-              {t('webimPendingFiles')}: {pendingPaths().length}
-            </div>
-          </Show>
-
-          <div class="p-3 border-t border-[var(--color-border-subtle)] flex flex-col gap-2">
-            <textarea
-              class="w-full min-h-[72px] rounded-[var(--radius-sm)] bg-black/25 border border-[var(--color-border-subtle)] px-3 py-2 text-[0.88rem] text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)]"
-              placeholder={t('webimPlaceholder') as string}
-              value={input()}
-              onInput={(e) => setInput(e.currentTarget.value)}
-              onKeyDown={onInputKeyDown}
-            />
-            <div class="flex flex-wrap items-center gap-2">
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/*"
-                class="hidden"
-                onChange={(e) => void onPickFile(e)}
-              />
-              <Button
-                size="sm"
-                variant="secondary"
-                type="button"
-                onClick={() => fileRef?.click()}
-                disabled={sending() || !chatOnline()}
-              >
-                <span class="inline-flex items-center gap-1.5">
-                  <ImagePlus class="w-4 h-4" />
-                  {t('webimAttach')}
-                </span>
-              </Button>
-              <Switch
-                class="ml-1"
-                labelClass="text-[var(--color-text-secondary)]"
-                checked={markdownPreview()}
-                disabled={markdownPreviewLoading()}
-                onChange={(checked) => void toggleMarkdownPreview(checked)}
-                label={
-                  markdownPreviewLoading()
-                    ? (t('webimMarkdownPreviewLoading') as string)
-                    : (t('webimMarkdownPreview') as string)
-                }
-              />
-              <span class="text-[0.76rem] text-[var(--color-text-muted)] sm:ml-auto">
-                {t('webimSendShortcut')}
-              </span>
-              <Button
-                size="sm"
-                variant="primary"
-                onClick={() => void send()}
-                disabled={sending() || !chatOnline()}
-              >
-                <span class="inline-flex items-center gap-1.5">
-                  <SendHorizontal class="w-4 h-4" />
-                  {t('webimSend')}
-                </span>
-              </Button>
+        </div>
+        <Show when={newMessages()}><Button variant="secondary" size="sm" class="mx-auto mb-2" onClick={bottom}><ChevronDown size={14} />{t('chatNewMessages')}</Button></Show>
+        <div class="mx-auto w-full max-w-[824px] px-4 pb-4 sm:px-8">
+          <div class="mb-2 truncate text-[0.7rem] text-[var(--color-text-muted)]">{repliesToSource() ? `${t('chatReplyTo')} ${chat.session()!.reply_channel} · ${chat.session()!.chat_id}` : chat.session()?.source && chat.session()!.source !== 'web' ? t('chatDeviceLocal') : t('chatLocal')}</div>
+          <Show when={chat.session() && !chat.session()!.can_send}><p class="text-xs text-amber-400">{t('chatUnavailable')}</p></Show>
+          <div class="rounded-xl border border-[var(--color-border-strong)] bg-white/3 p-3 focus-within:border-[var(--color-accent)]">
+            <textarea ref={inputEl} aria-label={t('webimPlaceholder')} class="block min-h-16 w-full resize-none border-0 bg-transparent text-sm leading-6 outline-none" placeholder={t('webimPlaceholder')} value={chat.thread().draft} onInput={e => chat.draft(e.currentTarget.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); if (canSend()) { bottom(); void chat.send(); } } }} />
+            <Show when={chat.thread().files.length}><div class="mb-2 flex flex-wrap gap-2"><For each={chat.thread().files}>{file => <span class="flex items-center gap-1 rounded bg-white/5 px-2 py-1 text-xs">{file.split('/').pop()}<button aria-label={t('chatAttachRemove')} onClick={() => chat.files(chat.active(), chat.thread().files.filter(p => p !== file))}><X size={12} /></button></span>}</For></div></Show>
+            <div class="flex items-center justify-between">
+              <input ref={fileEl} type="file" accept="image/*" class="hidden" onChange={e => void upload(e)} />
+              <Button variant="ghost" size="xs" aria-label={t('webimAttach')} disabled={uploading() || chat.thread().files.length >= 4} onClick={() => fileEl?.click()}><Show when={uploading()} fallback={<ImagePlus size={18} />}><LoaderCircle size={18} class="animate-spin" /></Show></Button>
+              <Button variant="primary" size="sm" aria-label={t('webimSend')} disabled={!canSend() || (!chat.thread().draft.trim() && !chat.thread().files.length)} onClick={() => { bottom(); void chat.send(); }}><SendHorizontal size={17} />{t('webimSend')}</Button>
             </div>
           </div>
         </div>
-      </div>
-    </TabShell>
+      </main>
+      <Modal open={!!dialog()} onClose={() => { if (!saving()) setDialog(undefined); }} title={dialog()?.kind === 'rename' ? t('chatRename') : t('chatDelete')} widthClass="w-full max-w-md" actions={<><Button onClick={() => setDialog(undefined)} disabled={saving()}>{t('chatCancel')}</Button><Button variant="primary" disabled={saving() || (dialog()?.kind === 'rename' && !title().trim())} onClick={() => void commit()}>{dialog()?.kind === 'rename' ? t('chatSave') : t('chatDelete')}</Button></>}>
+        <div class="px-5 py-3"><Show when={dialog()?.kind === 'rename'} fallback={<p class="text-sm leading-6">{t('chatDeleteHint')}</p>}><input aria-label={t('chatTitle')} class="w-full rounded border border-[var(--color-border-strong)] bg-transparent p-2 text-sm" value={title()} onInput={e => setTitle(e.currentTarget.value)} /></Show><Show when={actionError()}><p role="alert" class="text-xs text-red-300">{actionError()}</p></Show></div>
+      </Modal>
+    </div>
   );
 };

@@ -6,6 +6,8 @@
 #include "claw_session_mgr.h"
 
 #include <errno.h>
+#include <dirent.h>
+#include "claw_session_catalog_priv.h"
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -19,6 +21,53 @@
 #include "freertos/semphr.h"
 
 static const char *TAG = "claw_session_mgr";
+
+/* FATFS cannot overwrite a destination: retain a recoverable backup. */
+esp_err_t claw_session_file_replace(const char *temporary, const char *path)
+{
+    char *backup = malloc(strlen(path) + 5);
+    if (!backup) return ESP_ERR_NO_MEM;
+    sprintf(backup, "%s.bak", path);
+    bool moved = false;
+    esp_err_t err = ESP_FAIL;
+    if (remove(backup) != 0 && errno != ENOENT) goto done;
+    if (rename(path, backup) == 0) moved = true;
+    else if (errno != ENOENT) goto done;
+    if (rename(temporary, path) == 0) {
+        err = ESP_OK;
+        if (moved && remove(backup) != 0) ESP_LOGW(TAG, "Backup cleanup failed: %d", errno);
+    } else if (moved && rename(backup, path) != 0) {
+        ESP_LOGE(TAG, "Session file rollback failed: %d", errno);
+    }
+done:
+    if (err != ESP_OK) ESP_LOGE(TAG, "Session file replacement failed: %d", errno);
+    free(backup);
+    return err;
+}
+
+static esp_err_t recover_session_files(const char *directory)
+{
+    DIR *dir = opendir(directory);
+    if (!dir) return ESP_FAIL;
+    char *path = malloc(CLAW_SESSION_MGR_PATH_SIZE + 5);
+    char *backup = malloc(CLAW_SESSION_MGR_PATH_SIZE + 5);
+    esp_err_t err = path && backup ? ESP_OK : ESP_ERR_NO_MEM;
+    struct dirent *entry;
+    while (err == ESP_OK && (entry = readdir(dir))) {
+        size_t n = strlen(entry->d_name);
+        if (n < 9 || strcmp(entry->d_name + n - 9, ".json.bak") != 0) continue;
+        int length = snprintf(backup, CLAW_SESSION_MGR_PATH_SIZE + 5, "%s/%s", directory, entry->d_name);
+        if (length < 4 || length >= CLAW_SESSION_MGR_PATH_SIZE + 5) { err = ESP_ERR_INVALID_SIZE; break; }
+        memcpy(path, backup, length - 4); path[length - 4] = 0;
+        FILE *file = fopen(path, "rb");
+        if (file) { fclose(file); if (remove(backup) != 0) err = ESP_FAIL; }
+        else if (errno != ENOENT || rename(backup, path) != 0) err = ESP_FAIL;
+    }
+    free(path); free(backup); closedir(dir);
+    if (err != ESP_OK) ESP_LOGE(TAG, "Session file recovery failed");
+    return err;
+}
+
 
 #define CLAW_SESSION_MGR_MAP_DIRNAME  "chat_map"
 #define CLAW_SESSION_MGR_SUBAGENT_DIRNAME "subagent_map"
@@ -287,19 +336,17 @@ static esp_err_t claw_session_mgr_write_mapping_locked(const claw_session_mgr_al
     if (!json) {
         return ESP_ERR_NO_MEM;
     }
-    file = fopen(path, "wb");
-    if (!file) {
-        free(json);
-        return ESP_FAIL;
-    }
-    if (fputs(json, file) < 0) {
-        fclose(file);
-        free(json);
-        return ESP_FAIL;
-    }
-    fclose(file);
+    char *temporary = malloc(strlen(path) + 5);
+    if (!temporary) { free(json); return ESP_ERR_NO_MEM; }
+    sprintf(temporary, "%s.tmp", path);
+    file = fopen(temporary, "wb");
+    if (!file) { free(temporary); free(json); return ESP_FAIL; }
+    bool ok = fputs(json, file) >= 0;
+    if (fclose(file) != 0) ok = false;
+    if (ok && claw_session_file_replace(temporary, path) != ESP_OK) ok = false;
+    free(temporary);
     free(json);
-    return ESP_OK;
+    return ok ? ESP_OK : ESP_FAIL;
 }
 
 static esp_err_t claw_session_mgr_load_mapping_locked(const char *chat_key,
@@ -650,8 +697,11 @@ esp_err_t claw_session_mgr_set_session_root_dir(const char *session_root_dir)
         return ESP_FAIL;
     }
 
+    esp_err_t err = recover_session_files(s_session_mgr.session_root_dir);
+    if (err == ESP_OK) err = recover_session_files(s_session_mgr.mapping_root_dir);
+    if (err != ESP_OK) return err;
     s_session_mgr.configured = true;
-    return ESP_OK;
+    return claw_session_catalog_init(session_root_dir);
 }
 
 esp_err_t claw_session_mgr_set_delete_session_handler(claw_session_mgr_delete_session_fn_t fn,
@@ -1379,5 +1429,42 @@ esp_err_t claw_session_mgr_delete_chat_session(uint32_t agent_id,
                  deleted_any ? "true" : "false");
     }
 
+    return err;
+}
+
+/* Enumerate mappings under their existing lock; the visitor must not retain map. */
+esp_err_t claw_session_mgr_visit(claw_session_visit_fn visit, void *ctx)
+{
+    if (!visit || !claw_session_mgr_is_configured()) return ESP_ERR_INVALID_STATE;
+    char *path = malloc(CLAW_SESSION_MGR_PATH_SIZE);
+    claw_session_mgr_alias_map_t *map = calloc(1, sizeof(*map));
+    if (!path || !map) { free(path); free(map); return ESP_ERR_NO_MEM; }
+    esp_err_t err = ESP_OK;
+    xSemaphoreTakeRecursive(s_session_mgr.mutex, portMAX_DELAY);
+    DIR *dir = opendir(s_session_mgr.mapping_root_dir);
+    if (!dir) err = ESP_FAIL;
+    struct dirent *entry;
+    while (dir && (entry = readdir(dir)) != NULL && err == ESP_OK) {
+        if (strncmp(entry->d_name, "chat_", 5) != 0 || strlen(entry->d_name) < 6 || strcmp(entry->d_name + strlen(entry->d_name) - 5, ".json") != 0) continue;
+        int n = snprintf(path, CLAW_SESSION_MGR_PATH_SIZE, "%s/%s", s_session_mgr.mapping_root_dir, entry->d_name);
+        if (n < 0 || n >= CLAW_SESSION_MGR_PATH_SIZE) { err = ESP_ERR_INVALID_SIZE; break; }
+        FILE *file = fopen(path, "rb");
+        if (!file) { err = ESP_FAIL; break; }
+        char *text = calloc(1, 8193);
+        if (!text) { fclose(file); err = ESP_ERR_NO_MEM; break; }
+        size_t size = fread(text, 1, 8192, file);
+        bool failed = ferror(file) || size == 8192;
+        fclose(file);
+        cJSON *json = failed ? NULL : cJSON_Parse(text);
+        free(text);
+        const char *key = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(json, "chat_key"));
+        if (!key) err = ESP_ERR_INVALID_RESPONSE;
+        else err = claw_session_mgr_load_mapping_locked(key, map);
+        cJSON_Delete(json);
+        if (err == ESP_OK) err = visit(map, ctx);
+    }
+    if (dir) closedir(dir);
+    xSemaphoreGiveRecursive(s_session_mgr.mutex);
+    free(path); free(map);
     return err;
 }

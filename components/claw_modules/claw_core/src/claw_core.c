@@ -45,6 +45,11 @@ static void claw_core_free_runtime(claw_core_state_t *core)
         vSemaphoreDelete(core->llm_lock);
     }
     if (core->request_queue) {
+        claw_core_request_item_t *item = calloc(1, sizeof(*item));
+        if (item) {
+            while (xQueueReceive(core->request_queue, item, 0) == pdTRUE) claw_core_free_request_item(item);
+            free(item);
+        }
         vQueueDelete(core->request_queue);
     }
     if (core->response_queue) {

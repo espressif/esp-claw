@@ -47,13 +47,16 @@ The System Status page shows basic ESP-Claw status, including network informatio
 
 ## Web Chat
 
-Web Chat lets you interact with ESP-Claw without configuring extra IM channels.
-Web Chat also supports regular features and triggering Event Router capabilities through messages. For example, you can use `/new` to create and switch Session.
+Web Chat lists saved Web and IM conversations on the device. Filter by source, switch conversations, and restore history. Chat histories are independent; the Agent’s profile and long-term memory remain shared.
+Select “New conversation” to start a Web conversation, created on the first send. Rename or delete it from its menu. Refreshing restores the selected conversation; drafts remain only in the current page.
 
-Web Chat currently does not support receiving image attachments.
+When continuing an IM conversation, the Agent uses its original context and sends answers to the IM destination shown beside the composer. Web displays saved messages. Web input itself is not additionally forwarded to IM.
+You can switch while the Agent works. Viewing an older conversation does not change the current IM conversation. Deletion clears Agent history on the device, not messages on the IM platform. Conversations with pending requests cannot be deleted.
+
+Images can be uploaded and sent with messages; history retains file links in message text. Chat submits directly to the Agent through the session API. Use the interface to create and switch conversations instead of relying on `/new` message routing rules.
 
 <Aside type="tip" title="Web Chat unavailable?">
-  Check whether Local IM is disabled on the Capabilities management page.
+  Check device connectivity, Agent configuration, and the corresponding IM channel. If channel delivery fails, saved answers remain available in Web history.
 </Aside>
 
 ## System Settings

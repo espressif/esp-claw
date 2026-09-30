@@ -108,6 +108,7 @@ esp_err_t claw_event_router_cancel_event(const char *event_id);
 esp_err_t claw_event_router_purge_queue(const char *event_type_filter,
                                         const char *source_cap_filter,
                                         size_t *out_cancelled);
+bool claw_event_router_channel_is_bound(const char *channel);
 esp_err_t claw_event_router_register_outbound_binding(const char *channel,
                                                       const char *cap_name);
 esp_err_t claw_event_router_handle_event(const claw_event_t *event,

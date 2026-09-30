@@ -25,6 +25,14 @@ void claw_core_free_request_item(claw_core_request_item_t *item)
         return;
     }
 
+    if (item->owner && item->pending) {
+        xSemaphoreTake(item->owner->inflight_lock, portMAX_DELAY);
+        claw_core_pending_run_t **slot = &item->owner->pending_runs;
+        while (*slot && *slot != item->pending) slot = &(*slot)->next;
+        if (*slot) *slot = item->pending->next;
+        xSemaphoreGive(item->owner->inflight_lock);
+        free(item->pending);
+    }
     free(item->owned_session_id);
     free(item->owned_user_text);
     free(item->owned_source_channel);
@@ -178,6 +186,16 @@ esp_err_t claw_core_ingress_start_run(claw_core_state_t *core,
     if (err != ESP_OK) {
         return err;
     }
+
+    item.pending = calloc(1, sizeof(*item.pending));
+    if (!item.pending) { claw_core_free_request_item(&item); return ESP_ERR_NO_MEM; }
+    item.owner = core;
+    item.pending->session_id = item.view.session_id;
+    item.pending->request_id = item.view.request_id;
+    xSemaphoreTake(core->inflight_lock, portMAX_DELAY);
+    item.pending->next = core->pending_runs;
+    core->pending_runs = item.pending;
+    xSemaphoreGive(core->inflight_lock);
 
     ticks = (timeout_ms == UINT32_MAX) ? portMAX_DELAY : pdMS_TO_TICKS(timeout_ms);
     if (xQueueSend(core->request_queue, &item, ticks) != pdTRUE) {
@@ -440,4 +458,19 @@ void claw_core_response_free(claw_core_response_t *response)
     response->target_chat_id = NULL;
     response->text = NULL;
     response->error_message = NULL;
+}
+
+const char *claw_core_session_state(claw_core_handle_t core, const char *session_id)
+{
+    if (!core || !session_id || !core->inflight_lock) return "idle";
+    const char *state = "idle";
+    xSemaphoreTake(core->inflight_lock, portMAX_DELAY);
+    for (claw_core_pending_run_t *run = core->pending_runs; run; run = run->next) {
+        if (run->session_id && strcmp(run->session_id, session_id) == 0) {
+            state = run->request_id == core->inflight_request_id ? "running" : "queued";
+            if (strcmp(state, "running") == 0) break;
+        }
+    }
+    xSemaphoreGive(core->inflight_lock);
+    return state;
 }

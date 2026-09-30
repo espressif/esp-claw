@@ -40,7 +40,15 @@ extern "C" {
 #define CLAW_CORE_OBS_CSV_MAX             384
 #define CLAW_CORE_MAX_COMPLETION_OBSERVERS 4
 
+typedef struct claw_core_pending_run {
+    const char *session_id;
+    uint32_t request_id;
+    struct claw_core_pending_run *next;
+} claw_core_pending_run_t;
+
 typedef struct {
+    claw_core_handle_t owner;
+    claw_core_pending_run_t *pending;
     claw_core_request_t view;
     char *owned_session_id;
     char *owned_user_text;
@@ -107,6 +115,7 @@ struct claw_core_state {
     uint32_t max_tool_iterations;
     /* Waiting queue: entries start new agent loops when the core task is idle. */
     QueueHandle_t request_queue;
+    claw_core_pending_run_t *pending_runs;
     QueueHandle_t response_queue;
     TaskHandle_t task_handle;
     SemaphoreHandle_t response_lock;

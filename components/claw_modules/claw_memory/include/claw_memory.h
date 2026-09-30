@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "claw_core.h"
+#include "cJSON.h"
 #include "esp_err.h"
 
 #ifdef __cplusplus
@@ -89,6 +90,8 @@ esp_err_t claw_memory_delete_session_history(const char *session_id,
  * API lets product UIs render history without depending on the memory
  * component's storage layout.
  */
+/* Read visible messages by stable visible ordinal; before=0 selects the tail. */
+esp_err_t claw_memory_read_session_messages(const char *session_id, size_t before, size_t limit, cJSON **out);
 esp_err_t claw_memory_load_session_history_json(const char *session_id,
                                                 char **out_json);
 esp_err_t claw_memory_request_gate_callback(const claw_core_request_t *request,
