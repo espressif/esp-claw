@@ -14,4 +14,6 @@ idf_component_register(
         ${app_claw_srcs}
     INCLUDE_DIRS
         "include"
+    PRIV_REQUIRES
+        console
 )

@@ -6,10 +6,16 @@
 #include "app_claw_cli.h"
 #include "app_claw.h"
 
+#include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "linenoise/linenoise.h"
+#include "esp_idf_version.h"
 
 #if CONFIG_APP_CLAW_CAP_IM_QQ
 #include "cap_im_qq.h"
@@ -56,6 +62,17 @@ static const size_t CAP_OUTPUT_BUF_SIZE = 1024;
 
 static uint32_t s_next_request_id = 1;
 static char s_current_session_id[64] = "default";
+
+static ssize_t app_claw_cli_read_blocking(int fd, void *buffer, size_t size)
+{
+    for (;;) {
+        ssize_t ret = read(fd, buffer, size);
+        if (ret >= 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
+            return ret;
+        }
+        vTaskDelay(1);
+    }
+}
 
 static char *join_prompt_args(int argc, char **argv)
 {
@@ -738,12 +755,13 @@ esp_err_t app_claw_cli_start(void)
     repl_config.task_stack_size = 10240;
     repl_config.max_cmdline_length = 512;
 
-#if CONFIG_ESP_CONSOLE_UART_DEFAULT || CONFIG_ESP_CONSOLE_UART_CUSTOM
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 2, 0)
+    ESP_ERROR_CHECK(esp_console_new_repl_stdio(&repl_config, &repl));
+#elif CONFIG_ESP_CONSOLE_UART_DEFAULT || CONFIG_ESP_CONSOLE_UART_CUSTOM
     esp_console_dev_uart_config_t hw_config = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_console_new_repl_uart(&hw_config, &repl_config, &repl));
 #elif CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
-    esp_console_dev_usb_serial_jtag_config_t hw_config =
-        ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
+    esp_console_dev_usb_serial_jtag_config_t hw_config = ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_console_new_repl_usb_serial_jtag(&hw_config, &repl_config, &repl));
 #elif CONFIG_ESP_CONSOLE_USB_CDC
     esp_console_dev_usb_cdc_config_t hw_config = ESP_CONSOLE_DEV_CDC_CONFIG_DEFAULT();
@@ -752,6 +770,7 @@ esp_err_t app_claw_cli_start(void)
     ESP_LOGE(TAG, "No supported console backend is enabled");
     return ESP_ERR_NOT_SUPPORTED;
 #endif
+    linenoiseSetReadFunction(app_claw_cli_read_blocking);
 
     esp_console_register_help_command();
     register_cap_cli_commands();
