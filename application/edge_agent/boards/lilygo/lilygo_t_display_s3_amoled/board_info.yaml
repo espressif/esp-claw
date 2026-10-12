@@ -1,0 +1,5 @@
+board: lilygo_t_display_s3_amoled
+chip: esp32s3
+description: "LilyGO T-Display-S3 AMOLED V1.x (RM67162 536x240, QSPI)"
+manufacturer: "LilyGO"
+version: "1.0.0"
