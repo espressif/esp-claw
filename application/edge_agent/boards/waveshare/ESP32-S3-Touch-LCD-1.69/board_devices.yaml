@@ -1,0 +1,76 @@
+# Devices Configuration
+devices:
+  - name: ST7789V2
+    chip: ST7789V2
+    type: display_lcd
+    sub_type: spi
+    init_skip: false
+    dependencies:
+      jbrilha/esp_lcd_st7789: '*'
+    config:
+      invert_color: false
+      need_reset: true
+      swap_xy: false
+      mirror_x: false
+      mirror_y: false
+      x_max: 240
+      y_max: 280
+      io_spi_config:
+        cs_gpio_num: 5
+        dc_gpio_num: 4
+        spi_mode: 0
+        pclk_hz: 20000000
+        trans_queue_depth: 2
+        lcd_cmd_bits: 8
+        lcd_param_bits: 8
+        cs_ena_pretrans: 0
+        cs_ena_posttrans: 0
+        flags:
+          dc_high_on_cmd: false
+          dc_low_on_data: false
+          dc_low_on_param: false
+          octal_mode: false
+          quad_mode: false
+          sio_mode: false
+          psram_dma_direct: false
+          lsb_first: false
+          cs_high_active: false
+      lcd_panel_config:
+        reset_gpio_num: 8
+        rgb_ele_order: LCD_RGB_ELEMENT_ORDER_RGB
+        data_endian: LCD_RGB_DATA_ENDIAN_BIG
+        bits_per_pixel: 16
+        flags:
+          reset_active_high: false
+
+  - name: CST816T
+    chip: CST816T
+    type: lcd_touch
+    sub_type: i2c
+    init_skip: false
+    dependencies:
+      espp/cst816: '*'
+    depends_on: ST7789V2
+    config:
+      io_i2c_config:
+        control_phase_bytes: 1
+        dc_bit_offset: 0
+        lcd_cmd_bits: 8
+        lcd_param_bits: 0
+        scl_speed_hz: 100000
+        transaction_timeout_ms: 0
+        flags:
+          dc_low_on_data: false
+          disable_control_phase: true
+      touch_config:
+        x_max: 240
+        y_max: 280
+        rst_gpio_num: 13
+        int_gpio_num: 14
+        levels:
+          reset: 0
+          interrupt: 0
+        flags:
+          swap_xy: false
+          mirror_x: false
+          mirror_y: false
