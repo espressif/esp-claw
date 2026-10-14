@@ -1,0 +1,4 @@
+board: QDTFT_4_0_ESP32_S3_Board
+chip: esp32s3
+description: "QDTFT 4.0 inch ESP32-S3 Development Board with ST7796 LCD"
+manufacturer: "QDTFT"
