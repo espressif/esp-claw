@@ -4,6 +4,10 @@ export type ExternalLinkPair = {
 };
 
 const PROVIDER_LINKS: Record<string, ExternalLinkPair> = {
+  atlascloud: {
+    docsUrl: 'https://www.atlascloud.ai/docs',
+    consoleUrl: 'https://www.atlascloud.ai/console/api-keys',
+  },
   openai: {
     docsUrl: 'https://developers.openai.com/api/docs',
     consoleUrl: 'https://platform.openai.com/api-keys',

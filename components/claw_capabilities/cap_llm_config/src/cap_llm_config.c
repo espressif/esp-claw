@@ -46,6 +46,18 @@ typedef struct {
 
 static const cap_llm_preset_t s_presets[] = {
     {
+        .id = "atlascloud",
+        .backend_type = "openai_compatible",
+        .base_url = "https://api.atlascloud.ai/v1",
+        .auth_type = "bearer",
+        .model = "deepseek-ai/deepseek-v4-pro",
+        .max_tokens_field = "max_completion_tokens",
+        .default_image_max_bytes = "524288",
+        .supports_tools = "true",
+        .supports_vision = "false",
+        .image_remote_url_only = "false",
+    },
+    {
         .id = "deepseek",
         .backend_type = "openai_compatible",
         .base_url = "https://api.deepseek.com",
@@ -98,6 +110,7 @@ static const cap_llm_preset_t s_presets[] = {
 static const char *s_usage =
     "Usage:\n"
     "/llm status\n"
+    "/llm setup atlascloud <api_token> [model]\n"
     "/llm setup deepseek <api_token> [model]\n"
     "/llm setup openai <api_token> [model]\n"
     "/llm setup qwen <api_token> [model]\n"
