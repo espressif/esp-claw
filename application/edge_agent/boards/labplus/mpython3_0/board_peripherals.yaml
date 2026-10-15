@@ -1,0 +1,119 @@
+version: 1.0.0
+# Peripherals for the Labplus mPython 3.0 / 掌控板 3.0.
+#
+# Pin source: 掌控板3.0 官方文档 "1.3 引脚排布及功能"
+#   https://mpython-esp32s3-doc.readthedocs.io/zh-cn/latest/1_hardware/1_3_IO.html
+# The I2S pin group below is cross-checked against the vendor MicroPython firmware
+# (port/boards/mpython_pro/bsp_audio_board.h in labplus-cn/mpython_esp32s3).
+peripherals:
+  # Shared I2C bus for the onboard sensors (QMI8658C 6-axis, MMC5603NJ magnetometer,
+  # LTR-308ALS light sensor) and the ES8388 audio codec. The same bus is exposed on
+  # the gold-finger pads P19 (SCL) / P20 (SDA).
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 44
+        scl: 43
+
+  # ST7789 1.47" 320x172 LCD on SPI2. Only SCK/MOSI are bus signals; CS/DC are
+  # part of the panel IO configuration in board_devices.yaml.
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        data0_io_num: 37          # LCD SDA (MOSI)
+        sclk_io_num: 36           # LCD SCK
+        max_transfer_sz: 12800    # 320 px * 20 lines * 2 bytes (RGB565)
+
+  # LCD backlight on GPIO33, dimmed through LEDC PWM.
+  - name: ledc_backlight
+    type: ledc
+    role: none
+    config:
+      gpio_num: 33
+      speed_mode: LEDC_LOW_SPEED_MODE
+      channel: 0
+      timer_sel: LEDC_TIMER_0
+      freq_hz: 5000
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false
+
+  # I2S to/from the ES8388 codec. The codec is wired to I2S port 1 in the vendor
+  # firmware. Note that DOUT/DIN are named from the ESP32-S3 point of view:
+  #   mclk=39, bclk=41, ws=42, dout=38 (codec DIN), din=40 (codec DOUT).
+  - name: i2s_audio_out
+    type: i2s
+    role: master
+    format: std-out
+    config: &i2s_audio_config
+      port: 1
+      sample_rate_hz: 16000
+      clk_src: I2S_CLK_SRC_DEFAULT
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_STEREO
+      slot_mask: I2S_STD_SLOT_BOTH
+      ws_width: 16
+      pins:
+        mclk: 39
+        bclk: 41
+        ws: 42
+        dout: 38
+        din: 40
+      invert_flags:
+        mclk_inv: false
+        bclk_inv: false
+        ws_inv: false
+
+  - name: i2s_audio_in
+    type: i2s
+    role: master
+    format: std-in
+    config: *i2s_audio_config
+
+  # RMT TX channel driving the three onboard WS2812 LEDs on GPIO8.
+  - name: rmt_tx
+    type: rmt
+    role: tx
+    config:
+      gpio_num: 8
+      clk_src: RMT_CLK_SRC_DEFAULT
+      resolution_hz: 10000000
+      mem_block_symbols: 64
+      trans_queue_depth: 4
+      intr_priority: 1
+      flags:
+        invert_out: false
+        with_dma: true
+        io_loop_back: false
+        io_od_mode: false
+        allow_pd: false
+        init_level: false
+
+  # Button A is wired to GPIO0, which is also gold-finger pad P5.
+  # The onboard circuit already pulls the line up, so it idles high.
+  - name: gpio_button_a
+    type: gpio
+    role: io
+    config:
+      pin: 0
+      mode: GPIO_MODE_INPUT
+      pull_up: true
+      default_level: 1
+
+  # Button B is wired to GPIO46, which is also gold-finger pad P11.
+  - name: gpio_button_b
+    type: gpio
+    role: io
+    config:
+      pin: 46
+      mode: GPIO_MODE_INPUT
+      pull_up: true
+      default_level: 1

@@ -1,0 +1,43 @@
+# Labplus mPython 3.0 / 掌控板 3.0
+# ESP32-S3 with 16 MB quad NOR flash (GD25Q128ES1G) + 8 MB quad SPI PSRAM
+# (ESP-PSRAM64). Quad PSRAM leaves GPIO33..37 free for the onboard LCD and
+# backlight; an octal part would consume them.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# Partition table is auto-selected from partitions_16MB.csv.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_16MB.csv"
+
+# 8 MB quad SPI PSRAM @ 80 MHz.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# Quad PSRAM cannot keep a task stack accessible while the cache is disabled for a
+# flash transaction, so task stacks must stay in internal RAM. This makes claw tasks
+# tagged CLAW_TASK_STACK_PREFER_PSRAM fall back to internal memory.
+CONFIG_SPIRAM_XIP_FROM_PSRAM=n
+CONFIG_SPIRAM_FETCH_INSTRUCTIONS=n
+CONFIG_SPIRAM_RODATA=n
+CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=n
+CONFIG_MDNS_TASK_CREATE_FROM_INTERNAL=y
+
+# USB: Serial JTAG console (the board has no external USB-UART bridge).
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# Onboard ST7789 LCD.
+CONFIG_ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT=y
+CONFIG_APP_CLAW_LUA_MODULE_LCD=y
+
+# The onboard I2C sensors (QMI8658C 6-axis, MMC5603NJ magnetometer,
+# LTR-308ALS light sensor) are deliberately not enabled through their Lua
+# modules: lua_module_imu only ships bmi270/icm42670/mpu6050 backends and there
+# is no magnetometer or light-sensor support for these parts, so enabling those
+# modules would mean shipping code outside this board directory. Drive them from
+# Lua with the generic i2c driver instead - see README.md.
