@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define SYSTEM_UI_JOBS_PANEL_Y_OFFSET_PX 50
 
 static void system_ui_jobs_refresh_locked(void);
 
@@ -343,7 +344,8 @@ esp_err_t system_ui_create_jobs_locked(void)
     ESP_RETURN_ON_FALSE(s_ui.jobs_panel != NULL, ESP_ERR_NO_MEM,
                         SYSTEM_UI_TAG, "create jobs panel failed");
     lv_obj_set_size(s_ui.jobs_panel, panel_w, panel_h);
-    lv_obj_align(s_ui.jobs_panel, LV_ALIGN_TOP_MID, 0, side_pad / 2);
+    lv_obj_align(s_ui.jobs_panel, LV_ALIGN_TOP_MID, 0,
+                 side_pad / 2 + SYSTEM_UI_JOBS_PANEL_Y_OFFSET_PX);
     lv_obj_set_style_radius(s_ui.jobs_panel, 0, 0);
     lv_obj_set_style_bg_color(s_ui.jobs_panel, system_ui_color(SYSTEM_UI_COLOR_SURFACE), 0);
     lv_obj_set_style_bg_opa(s_ui.jobs_panel, LV_OPA_COVER, 0);

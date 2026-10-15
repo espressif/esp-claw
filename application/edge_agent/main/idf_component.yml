@@ -16,6 +16,9 @@ dependencies:
   espressif/ramfs:
     version: "^0.1"
 
+  espressif2022/esp_emote_expression:
+    version: "^1.0.0"
+
   claw_utils:
     path: ../../../components/claw_modules/claw_utils
 

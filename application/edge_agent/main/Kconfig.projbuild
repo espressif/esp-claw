@@ -1,5 +1,14 @@
 menu "App Config"
 
+config EDGE_AGENT_ENABLE_EMOTE
+    bool "Enable the animated ESP-Claw home page"
+    depends on ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT
+    default n
+    help
+        Build and show the ESP-Claw expression animation as the default display
+        page. Swipe left to return to the clock page and swipe right from the
+        clock page to show the animation again.
+
 menu "Default Wi-Fi Settings"
 
     config APP_WIFI_SSID

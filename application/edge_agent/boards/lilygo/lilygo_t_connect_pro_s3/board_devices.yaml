@@ -1,0 +1,61 @@
+version: 1.0.0
+# Devices Configuration
+devices:
+
+  - name: display_lcd
+    chip: st7796
+    type: display_lcd
+    sub_type: spi
+    version: default
+    config:
+      mirror_x: true
+      mirror_y: true
+      swap_xy: true
+      invert_color: true
+      x_max: 480
+      y_max: 320
+      x_offset: 0
+      y_offset: 0
+      # esp_lcd_panel_io_spi_config_t fields
+      io_spi_config:
+        cs_gpio_num: 21
+        dc_gpio_num: 41
+        spi_mode: 0
+        pclk_hz: 40000000
+
+      lcd_panel_config:
+        reset_gpio_num: -1
+        data_endian: LCD_RGB_DATA_ENDIAN_BIG
+        vendor_config: NULL
+    peripherals:
+      - name: spi_display
+
+  - name: lcd_touch
+    chip: cst226se
+    type: lcd_touch
+    sub_type: i2c
+    version: default
+    dependencies:
+      esp_lcd_touch:
+        version: "*"
+        require: public
+    config:
+      io_i2c_config:
+        lcd_cmd_bits: 8
+        lcd_param_bits: 8
+        scl_speed_hz: 400000
+      touch_config:
+        x_max: 480
+        y_max: 320
+        rst_gpio_num: 47
+        int_gpio_num: 3
+        levels:
+          reset: 0
+          interrupt: 0
+        flags:
+          swap_xy: false
+          mirror_x: false
+          mirror_y: false
+    peripherals:
+      - name: i2c_touch
+        i2c_addr: 0xB4

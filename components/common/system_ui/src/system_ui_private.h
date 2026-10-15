@@ -137,11 +137,13 @@ typedef enum {
     SYSTEM_UI_WORK_EVENT_JOBS_ACTION,
     SYSTEM_UI_WORK_EVENT_NETWORK_STATUS,
     SYSTEM_UI_WORK_EVENT_APP_EXIT_SWIPE,
+    SYSTEM_UI_WORK_EVENT_PAGE_SWIPE,
 } system_ui_work_event_type_t;
 
 typedef enum {
     SYSTEM_UI_TOUCH_GESTURE_NONE = 0,
     SYSTEM_UI_TOUCH_GESTURE_SHOW_JOBS,
+    SYSTEM_UI_TOUCH_GESTURE_EXCLUSIVE_HOME,
     SYSTEM_UI_TOUCH_GESTURE_EXIT_APP,
 } system_ui_touch_gesture_t;
 
@@ -162,6 +164,7 @@ typedef struct {
             bool sta_connected;
             char ap_ssid[64];
         } network_status;
+        system_ui_page_swipe_direction_t page_swipe_direction;
     };
     char launcher_id[SYSTEM_UI_LAUNCHER_ID_LEN];
     char launcher_title[SYSTEM_UI_LAUNCHER_TITLE_LEN];
@@ -205,6 +208,8 @@ typedef struct {
     void *jobs_stop_all_user_ctx;
     system_ui_app_exit_swipe_cb_t app_exit_swipe_cb;
     void *app_exit_swipe_user_ctx;
+    system_ui_page_swipe_cb_t page_swipe_cb;
+    void *page_swipe_user_ctx;
     bool jobs_stop_task_running;
     bool jobs_refresh_running;
     bool jobs_refresh_pending;
@@ -260,6 +265,7 @@ static inline void system_ui_apply_clock_font(lv_obj_t *obj)
 }
 
 esp_err_t system_ui_create_home_locked(void);
+bool system_ui_home_clock_is_active_locked(void);
 void system_ui_home_update_locked(void);
 void system_ui_delete_home_locked(void);
 void system_ui_load_screen_locked(lv_obj_t *screen);

@@ -21,6 +21,7 @@ bool system_ui_is_started(void);
 esp_err_t system_ui_show_home(void);
 esp_err_t system_ui_reload_home(void);
 esp_err_t system_ui_set_callbacks(const system_ui_callbacks_t *callbacks, void *user_ctx);
+esp_err_t system_ui_set_page_swipe_callback(system_ui_page_swipe_cb_t cb, void *user_ctx);
 esp_err_t system_ui_update_network(const system_ui_network_state_t *state);
 esp_err_t system_ui_set_activity(bool active);
 esp_err_t system_ui_show_task_panel(bool visible);

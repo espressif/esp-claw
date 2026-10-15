@@ -1,0 +1,13 @@
+{
+  "skills": [
+    {
+      "id": "lua_module_uart",
+      "file": "lua_module_uart.md",
+      "title": "lua_module_uart",
+      "summary": "How to create and use UART serial ports from Lua, including RS485 transceivers.",
+      "cap_groups": [
+        "cap_lua"
+      ]
+    }
+  ]
+}

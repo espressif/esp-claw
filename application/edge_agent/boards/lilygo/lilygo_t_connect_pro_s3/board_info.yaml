@@ -1,0 +1,4 @@
+board: lilygo_t_connect_pro_s3
+chip: esp32s3
+description: "LilyGo T-Connect-Pro"
+manufacturer: "LilyGo"

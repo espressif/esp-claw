@@ -1,0 +1,35 @@
+version: 1.0.0
+# Peripherals Configuration
+peripherals:
+  - name: i2c_touch
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 39
+        scl: 40
+
+  # LCD SPI Configuration for ST7789 QSPI
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      # spi_bus_config_t fields
+      spi_bus_config:
+        spi_port: SPI3_HOST               # 0: SPI1_HOST, 1: SPI2_HOST, 2: SPI3_HOST
+        mosi_io_num: 11                  # 修改为 MOSI: IO11
+        sclk_io_num: 12                   # 修改为 SCLK: IO12
+        miso_io_num: 13                   # 建议补充 MISO: IO13 (即使不读数据，定义上也对齐)
+        max_transfer_sz: 6400             # 保持不变
+
+  # LCD BACKLIGHT CONTROL
+  - name: ledc_backlight
+    type: ledc
+    role: none
+    config:
+      gpio_num: 46
+      freq_hz: 5000
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: true
