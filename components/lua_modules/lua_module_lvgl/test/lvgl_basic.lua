@@ -89,6 +89,13 @@ local ok, err = pcall(function()
     local value = slider:get_value()
     checkbox:set_text("slider " .. value)
 
+    local route = lvgl.line(scr, {
+        points = {{x = 0, y = 0}, {x = 40, y = 20}},
+        line_color = "#2f80ed",
+        line_width = 2,
+    })
+    assert(route:set_points({{x = 0, y = 0}, {x = 20, y = 30}, {x = 60, y = 10}}))
+
     scr:load()
     delay.delay_ms(5000)
 end)

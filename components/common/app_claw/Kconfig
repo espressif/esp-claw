@@ -287,10 +287,12 @@ menu "App Claw Config"
 
         config APP_CLAW_LUA_MODULE_BLE
             bool "Enable BLE Lua module"
-            default n
+            default y if BT_ENABLED && BT_NIMBLE_ENABLED
             depends on APP_CLAW_CAP_LUA
             help
-                Enable the generic BLE Lua module.
+                Enable the generic BLE Lua module when the NimBLE host is
+                available. Disable this option explicitly for products that
+                do not expose BLE to Lua.
 
         config APP_CLAW_LUA_MODULE_BLE_HID
             bool "Enable BLE HID Lua module"
