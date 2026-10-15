@@ -49,7 +49,20 @@ typedef struct {
     char wechat_account_id[32];
     char search_brave_key[APP_CONFIG_STR_LEN];
     char search_tavily_key[APP_CONFIG_STR_LEN];
+    char search_searxng_url[APP_CONFIG_STR_LEN];
     char search_http_allowlist[APP_CONFIG_STR_LEN];
+    /* MQTT client (see components/common/mqtt_manager). All values are stored as
+     * strings for consistency with the rest of app_config_t and parsed at use. */
+    char mqtt_enabled[8];                     /* "true" / "false" */
+    char mqtt_broker[APP_CONFIG_STR_LEN];     /* hostname or IP, no scheme */
+    char mqtt_port[8];                        /* decimal, default 1883 (8883 for TLS) */
+    char mqtt_tls[8];                         /* "true" / "false" */
+    char mqtt_username[APP_CONFIG_STR_LEN];
+    char mqtt_password[APP_CONFIG_STR_LEN];   /* secret: never returned in logs */
+    char mqtt_client_id[64];                  /* empty => derived from device MAC */
+    char mqtt_keepalive[8];                   /* seconds, default 60 */
+    char mqtt_qos[4];                         /* "0" or "1" */
+    char mqtt_base_topic[64];                 /* topic root, default "espclaw" */
     char enabled_cap_groups[APP_CONFIG_STR_LEN];
     char llm_visible_cap_groups[APP_CONFIG_STR_LEN];
     char enabled_lua_modules[APP_CONFIG_STR_LEN];

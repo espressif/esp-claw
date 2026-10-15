@@ -25,7 +25,10 @@ typedef enum {
     CAP_WEB_SEARCH_PROVIDER_NONE = 0,
     CAP_WEB_SEARCH_PROVIDER_BRAVE,
     CAP_WEB_SEARCH_PROVIDER_TAVILY,
+    CAP_WEB_SEARCH_PROVIDER_SEARXNG,
 } cap_web_search_provider_t;
+
+#define CAP_WEB_SEARCH_SEARXNG_URL_MAX 256
 
 typedef struct {
     char *data;
@@ -36,6 +39,7 @@ typedef struct {
 typedef struct {
     char brave_key[128];
     char tavily_key[128];
+    char searxng_url[CAP_WEB_SEARCH_SEARXNG_URL_MAX];
     cap_web_search_provider_t provider;
 } cap_web_search_state_t;
 
@@ -43,7 +47,11 @@ static EXT_RAM_BSS_ATTR cap_web_search_state_t s_search = {0};
 
 static void cap_web_search_refresh_provider(void)
 {
-    if (s_search.tavily_key[0]) {
+    /* A self-hosted SearXNG instance takes priority when configured: it is free,
+     * private, and matches the project's on-device/off-cloud philosophy. */
+    if (s_search.searxng_url[0]) {
+        s_search.provider = CAP_WEB_SEARCH_PROVIDER_SEARXNG;
+    } else if (s_search.tavily_key[0]) {
         s_search.provider = CAP_WEB_SEARCH_PROVIDER_TAVILY;
     } else if (s_search.brave_key[0]) {
         s_search.provider = CAP_WEB_SEARCH_PROVIDER_BRAVE;
@@ -319,6 +327,65 @@ static esp_err_t cap_web_search_tavily_direct(const char *query, cap_web_search_
     return ESP_OK;
 }
 
+static esp_err_t cap_web_search_searxng_direct(const char *query, cap_web_search_buf_t *buf)
+{
+    char encoded_query[256];
+    char url[512];
+    size_t base_len;
+    int written;
+
+    cap_web_search_url_encode(query, encoded_query, sizeof(encoded_query));
+
+    /* Trim trailing slashes from the configured base URL so we build a clean
+     * "<base>/search?..." regardless of how the user entered it. */
+    base_len = strlen(s_search.searxng_url);
+    while (base_len > 0 && s_search.searxng_url[base_len - 1] == '/') {
+        base_len--;
+    }
+
+    written = snprintf(url, sizeof(url), "%.*s/search?q=%s&format=json",
+                       (int)base_len, s_search.searxng_url, encoded_query);
+    if (written < 0 || (size_t)written >= sizeof(url)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    esp_http_client_config_t config = {
+        .url = url,
+        .event_handler = cap_web_search_http_event_handler,
+        .user_data = buf,
+        .timeout_ms = 15000,
+        .buffer_size = 4096,
+        /* Harmless for http:// endpoints; required if the user points at https://. */
+        .crt_bundle_attach = esp_crt_bundle_attach,
+#ifdef CONFIG_HTTP_REUSE_ENABLE
+        .keep_alive_enable = true,
+#endif
+    };
+    esp_http_client_handle_t client = NULL;
+    esp_err_t err;
+    int status;
+
+    client = esp_http_client_init(&config);
+    if (!client) {
+        return ESP_FAIL;
+    }
+
+    esp_http_client_set_header(client, "Accept", "application/json");
+    err = esp_http_client_perform(client);
+    status = esp_http_client_get_status_code(client);
+    esp_http_client_cleanup(client);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (status != 200) {
+        ESP_LOGE(TAG, "SearXNG search returned %d", status);
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
 static esp_err_t cap_web_search_execute(const char *input_json,
                                         const claw_cap_call_context_t *ctx,
                                         char *output,
@@ -363,7 +430,9 @@ static esp_err_t cap_web_search_execute(const char *input_json,
     }
     buf.cap = CAP_WEB_SEARCH_BUF_SIZE;
 
-    if (s_search.provider == CAP_WEB_SEARCH_PROVIDER_TAVILY) {
+    if (s_search.provider == CAP_WEB_SEARCH_PROVIDER_SEARXNG) {
+        err = cap_web_search_searxng_direct(query->valuestring, &buf);
+    } else if (s_search.provider == CAP_WEB_SEARCH_PROVIDER_TAVILY) {
         err = cap_web_search_tavily_direct(query->valuestring, &buf);
     } else {
         char encoded_query[256];
@@ -392,7 +461,10 @@ static esp_err_t cap_web_search_execute(const char *input_json,
         return ESP_FAIL;
     }
 
-    if (s_search.provider == CAP_WEB_SEARCH_PROVIDER_TAVILY) {
+    if (s_search.provider == CAP_WEB_SEARCH_PROVIDER_SEARXNG ||
+            s_search.provider == CAP_WEB_SEARCH_PROVIDER_TAVILY) {
+        /* SearXNG's JSON shape (results[].{title,url,content}) matches Tavily's,
+         * so the same formatter handles both. */
         cap_web_search_format_tavily_results(root, output, output_size);
     } else {
         cap_web_search_format_brave_results(root, output, output_size);
@@ -449,6 +521,17 @@ esp_err_t cap_web_search_set_tavily_key(const char *api_key)
     }
 
     strlcpy(s_search.tavily_key, api_key, sizeof(s_search.tavily_key));
+    cap_web_search_refresh_provider();
+    return ESP_OK;
+}
+
+esp_err_t cap_web_search_set_searxng_url(const char *url)
+{
+    if (!url) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    strlcpy(s_search.searxng_url, url, sizeof(s_search.searxng_url));
     cap_web_search_refresh_provider();
     return ESP_OK;
 }

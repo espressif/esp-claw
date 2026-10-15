@@ -1,0 +1,11 @@
+idf_component_register(
+    SRCS
+        "src/cap_mqtt.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        claw_cap
+        mqtt_manager
+        json
+        esp_timer
+)

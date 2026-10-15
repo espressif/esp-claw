@@ -25,7 +25,19 @@
 #define CONFIG_FIELD(group, field) { \
     #field, (group), \
     offsetof(app_config_t, field), \
-    sizeof(((app_config_t *)0)->field) \
+    sizeof(((app_config_t *)0)->field), \
+    false \
+}
+
+/* Same as CONFIG_FIELD but flags the field as a secret (password/key/token).
+ * Secret fields are surfaced with `secret:true` in the meta descriptor, and a
+ * POST that carries an *empty* string for a secret is treated as "unchanged"
+ * (the stored value is preserved) instead of clearing it. */
+#define CONFIG_FIELD_SECRET(group, field) { \
+    #field, (group), \
+    offsetof(app_config_t, field), \
+    sizeof(((app_config_t *)0)->field), \
+    true \
 }
 
 typedef struct {
@@ -33,16 +45,17 @@ typedef struct {
     const char *group;
     size_t offset;
     size_t size;
+    bool secret;
 } config_field_def_t;
 
 static const config_field_def_t CONFIG_FIELDS[] = {
     CONFIG_FIELD("wifi",         wifi_ssid),
-    CONFIG_FIELD("wifi",         wifi_password),
+    CONFIG_FIELD_SECRET("wifi",  wifi_password),
     CONFIG_FIELD("wifi",         ap_ssid),
-    CONFIG_FIELD("wifi",         ap_password),
+    CONFIG_FIELD_SECRET("wifi",  ap_password),
     CONFIG_FIELD("wifi",         ap_behavior),
 
-    CONFIG_FIELD("llm",          llm_api_key),
+    CONFIG_FIELD_SECRET("llm",   llm_api_key),
     CONFIG_FIELD("llm",          llm_backend_type),
     CONFIG_FIELD("llm",          llm_model),
     CONFIG_FIELD("llm",          llm_base_url),
@@ -56,19 +69,31 @@ static const config_field_def_t CONFIG_FIELDS[] = {
     CONFIG_FIELD("llm",          llm_image_remote_url_only),
 
     CONFIG_FIELD("im",           qq_app_id),
-    CONFIG_FIELD("im",           qq_app_secret),
+    CONFIG_FIELD_SECRET("im",    qq_app_secret),
     CONFIG_FIELD("im",           qq_msg_type),
     CONFIG_FIELD("im",           feishu_app_id),
-    CONFIG_FIELD("im",           feishu_app_secret),
-    CONFIG_FIELD("im",           tg_bot_token),
-    CONFIG_FIELD("im",           wechat_token),
+    CONFIG_FIELD_SECRET("im",    feishu_app_secret),
+    CONFIG_FIELD_SECRET("im",    tg_bot_token),
+    CONFIG_FIELD_SECRET("im",    wechat_token),
     CONFIG_FIELD("im",           wechat_base_url),
     CONFIG_FIELD("im",           wechat_cdn_base_url),
     CONFIG_FIELD("im",           wechat_account_id),
 
-    CONFIG_FIELD("search",       search_brave_key),
-    CONFIG_FIELD("search",       search_tavily_key),
+    CONFIG_FIELD_SECRET("search", search_brave_key),
+    CONFIG_FIELD_SECRET("search", search_tavily_key),
+    CONFIG_FIELD("search",       search_searxng_url),
     CONFIG_FIELD("search",       search_http_allowlist),
+
+    CONFIG_FIELD("mqtt",         mqtt_enabled),
+    CONFIG_FIELD("mqtt",         mqtt_broker),
+    CONFIG_FIELD("mqtt",         mqtt_port),
+    CONFIG_FIELD("mqtt",         mqtt_tls),
+    CONFIG_FIELD("mqtt",         mqtt_username),
+    CONFIG_FIELD_SECRET("mqtt",  mqtt_password),
+    CONFIG_FIELD("mqtt",         mqtt_client_id),
+    CONFIG_FIELD("mqtt",         mqtt_keepalive),
+    CONFIG_FIELD("mqtt",         mqtt_qos),
+    CONFIG_FIELD("mqtt",         mqtt_base_topic),
 
     CONFIG_FIELD("capabilities", enabled_cap_groups),
     CONFIG_FIELD("capabilities", llm_visible_cap_groups),
@@ -252,6 +277,7 @@ static esp_err_t config_get_handler(httpd_req_t *req)
                 if (entry) {
                     cJSON_AddStringToObject(entry, "name", field->name);
                     cJSON_AddStringToObject(entry, "group", field->group);
+                    cJSON_AddBoolToObject(entry, "secret", field->secret);
                     cJSON_AddItemToArray(fields, entry);
                 }
             }
@@ -322,6 +348,41 @@ static esp_err_t config_post_handler(httpd_req_t *req)
         cJSON *item = cJSON_GetObjectItemCaseSensitive(root, field->name);
         if (!cJSON_IsString(item)) {
             continue;
+        }
+        if (field->secret && item->valuestring[0] == '\0') {
+            /* An empty secret means "leave unchanged": the client can submit a
+             * form without echoing back stored passwords/keys, and we never
+             * silently wipe a stored secret from a blank field. */
+            continue;
+        }
+        if ((strcmp(field->name, "mqtt_port") == 0 ||
+                strcmp(field->name, "mqtt_keepalive") == 0) &&
+                item->valuestring[0] != '\0' &&
+                !is_positive_decimal_string(item->valuestring)) {
+            cJSON_Delete(root);
+            free(config);
+            return httpd_resp_send_err(req,
+                                       HTTPD_400_BAD_REQUEST,
+                                       strcmp(field->name, "mqtt_port") == 0 ?
+                                           "mqtt_port must be a positive integer" :
+                                           "mqtt_keepalive must be a positive integer");
+        }
+        if (strcmp(field->name, "mqtt_qos") == 0 &&
+                item->valuestring[0] != '\0' &&
+                strcmp(item->valuestring, "0") != 0 &&
+                strcmp(item->valuestring, "1") != 0) {
+            cJSON_Delete(root);
+            free(config);
+            return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "mqtt_qos must be 0 or 1");
+        }
+        if ((strcmp(field->name, "mqtt_enabled") == 0 ||
+                strcmp(field->name, "mqtt_tls") == 0) &&
+                !is_boolean_string(item->valuestring)) {
+            cJSON_Delete(root);
+            free(config);
+            return httpd_resp_send_err(req,
+                                       HTTPD_400_BAD_REQUEST,
+                                       "mqtt_enabled/mqtt_tls must be true/false");
         }
         if (strcmp(field->name, "llm_max_tokens") == 0 ||
                 strcmp(field->name, "llm_default_image_max_bytes") == 0) {

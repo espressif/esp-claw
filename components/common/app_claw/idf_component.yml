@@ -89,6 +89,16 @@ dependencies:
       - if: $CONFIG{APP_CLAW_CAP_WEB_SEARCH} == True
     path: ../../claw_capabilities/cap_web_search
 
+  cap_mqtt:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_MQTT} == True
+    path: ../../claw_capabilities/cap_mqtt
+
+  mqtt_manager:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_MQTT} == True
+    path: ../mqtt_manager
+
   claw_cap:
     path: ../../claw_modules/claw_cap
 

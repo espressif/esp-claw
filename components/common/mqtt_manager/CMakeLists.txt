@@ -1,0 +1,13 @@
+idf_component_register(
+    SRCS
+        "src/mqtt_manager.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        mqtt
+        esp_event
+        esp_timer
+        esp_hw_support
+        esp-tls
+        mbedtls
+)

@@ -57,6 +57,17 @@ typedef struct {
 #define APP_DEFAULT_WECHAT_ACCOUNT_ID        "default"
 #define APP_DEFAULT_SEARCH_BRAVE_KEY         ""
 #define APP_DEFAULT_SEARCH_TAVILY_KEY        ""
+#define APP_DEFAULT_SEARCH_SEARXNG_URL       ""
+#define APP_DEFAULT_MQTT_ENABLED             "false"
+#define APP_DEFAULT_MQTT_BROKER              ""
+#define APP_DEFAULT_MQTT_PORT                "1883"
+#define APP_DEFAULT_MQTT_TLS                 "false"
+#define APP_DEFAULT_MQTT_USERNAME            ""
+#define APP_DEFAULT_MQTT_PASSWORD            ""
+#define APP_DEFAULT_MQTT_CLIENT_ID           ""
+#define APP_DEFAULT_MQTT_KEEPALIVE           "60"
+#define APP_DEFAULT_MQTT_QOS                 "0"
+#define APP_DEFAULT_MQTT_BASE_TOPIC          "espclaw"
 #define APP_DEFAULT_ENABLED_CAP_GROUPS       ""
 #define APP_DEFAULT_LLM_VISIBLE_CAP_GROUPS   ""
 #define APP_DEFAULT_ENABLED_LUA_MODULES      ""
@@ -92,7 +103,18 @@ static const app_config_field_t s_fields[] = {
     APP_CONFIG_FIELD(wechat_account_id, "wechat_acct_id", APP_DEFAULT_WECHAT_ACCOUNT_ID),
     APP_CONFIG_FIELD(search_brave_key, "brave_key", APP_DEFAULT_SEARCH_BRAVE_KEY),
     APP_CONFIG_FIELD(search_tavily_key, "tavily_key", APP_DEFAULT_SEARCH_TAVILY_KEY),
+    APP_CONFIG_FIELD(search_searxng_url, "searxng_url", APP_DEFAULT_SEARCH_SEARXNG_URL),
     APP_CONFIG_FIELD(search_http_allowlist, "http_allow_ls", APP_SEARCH_HTTP_ALLOWLIST),
+    APP_CONFIG_FIELD(mqtt_enabled, "mqtt_en", APP_DEFAULT_MQTT_ENABLED),
+    APP_CONFIG_FIELD(mqtt_broker, "mqtt_broker", APP_DEFAULT_MQTT_BROKER),
+    APP_CONFIG_FIELD(mqtt_port, "mqtt_port", APP_DEFAULT_MQTT_PORT),
+    APP_CONFIG_FIELD(mqtt_tls, "mqtt_tls", APP_DEFAULT_MQTT_TLS),
+    APP_CONFIG_FIELD(mqtt_username, "mqtt_user", APP_DEFAULT_MQTT_USERNAME),
+    APP_CONFIG_FIELD(mqtt_password, "mqtt_pass", APP_DEFAULT_MQTT_PASSWORD),
+    APP_CONFIG_FIELD(mqtt_client_id, "mqtt_client", APP_DEFAULT_MQTT_CLIENT_ID),
+    APP_CONFIG_FIELD(mqtt_keepalive, "mqtt_keepal", APP_DEFAULT_MQTT_KEEPALIVE),
+    APP_CONFIG_FIELD(mqtt_qos, "mqtt_qos", APP_DEFAULT_MQTT_QOS),
+    APP_CONFIG_FIELD(mqtt_base_topic, "mqtt_topic", APP_DEFAULT_MQTT_BASE_TOPIC),
     APP_CONFIG_FIELD(enabled_cap_groups, "en_cap_groups", APP_DEFAULT_ENABLED_CAP_GROUPS),
     APP_CONFIG_FIELD(llm_visible_cap_groups, "vis_cap_groups", APP_DEFAULT_LLM_VISIBLE_CAP_GROUPS),
     APP_CONFIG_FIELD(enabled_lua_modules, "en_lua_mods", APP_DEFAULT_ENABLED_LUA_MODULES),
@@ -581,9 +603,20 @@ void app_config_to_claw(const app_config_t *config, app_claw_config_t *out)
     strlcpy(out->wechat_account_id, config->wechat_account_id, sizeof(out->wechat_account_id));
     strlcpy(out->search_brave_key, config->search_brave_key, sizeof(out->search_brave_key));
     strlcpy(out->search_tavily_key, config->search_tavily_key, sizeof(out->search_tavily_key));
+    strlcpy(out->search_searxng_url, config->search_searxng_url, sizeof(out->search_searxng_url));
     strlcpy(out->search_http_allowlist,
             config->search_http_allowlist,
             sizeof(out->search_http_allowlist));
+    strlcpy(out->mqtt_enabled, config->mqtt_enabled, sizeof(out->mqtt_enabled));
+    strlcpy(out->mqtt_broker, config->mqtt_broker, sizeof(out->mqtt_broker));
+    strlcpy(out->mqtt_port, config->mqtt_port, sizeof(out->mqtt_port));
+    strlcpy(out->mqtt_tls, config->mqtt_tls, sizeof(out->mqtt_tls));
+    strlcpy(out->mqtt_username, config->mqtt_username, sizeof(out->mqtt_username));
+    strlcpy(out->mqtt_password, config->mqtt_password, sizeof(out->mqtt_password));
+    strlcpy(out->mqtt_client_id, config->mqtt_client_id, sizeof(out->mqtt_client_id));
+    strlcpy(out->mqtt_keepalive, config->mqtt_keepalive, sizeof(out->mqtt_keepalive));
+    strlcpy(out->mqtt_qos, config->mqtt_qos, sizeof(out->mqtt_qos));
+    strlcpy(out->mqtt_base_topic, config->mqtt_base_topic, sizeof(out->mqtt_base_topic));
     strlcpy(out->enabled_cap_groups, config->enabled_cap_groups, sizeof(out->enabled_cap_groups));
     strlcpy(out->llm_visible_cap_groups, config->llm_visible_cap_groups, sizeof(out->llm_visible_cap_groups));
     strlcpy(out->enabled_lua_modules, config->enabled_lua_modules, sizeof(out->enabled_lua_modules));

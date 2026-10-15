@@ -64,6 +64,9 @@
 #if CONFIG_APP_CLAW_CAP_WEB_SEARCH
 #include "cap_web_search.h"
 #endif
+#if CONFIG_APP_CLAW_CAP_MQTT
+#include "cap_mqtt.h"
+#endif
 #include "claw_cap.h"
 #if CONFIG_APP_CLAW_CAP_MEMORY
 #include "claw_memory.h"
@@ -703,6 +706,11 @@ static esp_err_t app_cap_prepare_web_search(const app_claw_config_t *config,
                             TAG, "Failed to set Tavily search key");
     }
 
+    if (config->search_searxng_url[0]) {
+        ESP_RETURN_ON_ERROR(cap_web_search_set_searxng_url(config->search_searxng_url),
+                            TAG, "Failed to set SearXNG URL");
+    }
+
     return ESP_OK;
 }
 
@@ -712,6 +720,41 @@ static esp_err_t app_cap_register_web_search(const app_claw_config_t *config,
     (void)config;
     (void)paths;
     return cap_web_search_register_group();
+}
+#endif
+
+#if CONFIG_APP_CLAW_CAP_MQTT
+static bool app_cap_config_flag_true(const char *value)
+{
+    return value && (strcmp(value, "true") == 0 || strcmp(value, "1") == 0);
+}
+
+static esp_err_t app_cap_prepare_mqtt(const app_claw_config_t *config,
+                                      const app_claw_storage_paths_t *paths)
+{
+    (void)paths;
+
+    cap_mqtt_config_t mqtt_cfg = {
+        .enabled = app_cap_config_flag_true(config->mqtt_enabled),
+        .broker = config->mqtt_broker,
+        .port = (uint16_t)atoi(config->mqtt_port),
+        .tls = app_cap_config_flag_true(config->mqtt_tls),
+        .username = config->mqtt_username[0] ? config->mqtt_username : NULL,
+        .password = config->mqtt_password[0] ? config->mqtt_password : NULL,
+        .client_id = config->mqtt_client_id[0] ? config->mqtt_client_id : NULL,
+        .keepalive = (uint16_t)atoi(config->mqtt_keepalive),
+        .default_qos = (uint8_t)atoi(config->mqtt_qos),
+        .base_topic = config->mqtt_base_topic[0] ? config->mqtt_base_topic : NULL,
+    };
+    return cap_mqtt_apply_config(&mqtt_cfg);
+}
+
+static esp_err_t app_cap_register_mqtt(const app_claw_config_t *config,
+                                       const app_claw_storage_paths_t *paths)
+{
+    (void)config;
+    (void)paths;
+    return cap_mqtt_register_group();
 }
 #endif
 
@@ -794,6 +837,9 @@ static const app_capability_group_entry_t s_capability_group_entries[] = {
 #if CONFIG_APP_CLAW_CAP_WEB_SEARCH
     { "cap_web_search", "Web Search", "Register web search cap", true, app_cap_prepare_web_search, app_cap_register_web_search },
 #endif
+#if CONFIG_APP_CLAW_CAP_MQTT
+    { "cap_mqtt", "MQTT", "Register MQTT cap", true, app_cap_prepare_mqtt, app_cap_register_mqtt },
+#endif
 #if CONFIG_APP_CLAW_CAP_ROUTER_MGR
     { "cap_router_mgr", "Router Manager", "Register router manager cap", true, NULL, app_cap_register_router_mgr },
 #endif
@@ -850,6 +896,9 @@ static const app_capability_group_info_t s_capability_group_infos[] = {
 #endif
 #if CONFIG_APP_CLAW_CAP_WEB_SEARCH
     { "cap_web_search", "Web Search", false },
+#endif
+#if CONFIG_APP_CLAW_CAP_MQTT
+    { "cap_mqtt", "MQTT", true },
 #endif
 #if CONFIG_APP_CLAW_CAP_ROUTER_MGR
     { "cap_router_mgr", "Router Manager", false },
