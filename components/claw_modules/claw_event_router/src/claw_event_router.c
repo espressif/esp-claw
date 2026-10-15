@@ -2379,7 +2379,13 @@ esp_err_t claw_event_router_start(void)
                                    .stack_size = stack_size,
                                    .priority = priority,
                                    .core_id = core,
-                                   .stack_policy = CLAW_TASK_STACK_PREFER_PSRAM,
+                                   /* Must be internal RAM: this task performs raw flash
+                                    * reads (fopen()/wear-levelling FAT I/O for session and
+                                    * agent management), which briefly disables the flash
+                                    * cache. A PSRAM-backed stack becomes unreachable during
+                                    * that window — esp_task_stack_is_sane_cache_disabled()
+                                    * asserts and reboots the device on every such read. */
+                                   .stack_policy = CLAW_TASK_STACK_INTERNAL_ONLY,
                                },
                                claw_event_router_task,
                                NULL,

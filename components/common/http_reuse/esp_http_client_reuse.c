@@ -12,9 +12,9 @@
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
-#include "freertos/timers.h"
 #include "sdkconfig.h"
 
 #if CONFIG_HTTP_REUSE_ENABLE
@@ -65,10 +65,30 @@ static STAILQ_HEAD(http_reuse_lease_head, http_reuse_lease)
     s_leases = STAILQ_HEAD_INITIALIZER(s_leases);
 
 static SemaphoreHandle_t s_pool_mutex          = NULL;
-static TimerHandle_t     s_pool_reaper_timer   = NULL;
 static portMUX_TYPE      s_pool_mutex_init_mux = portMUX_INITIALIZER_UNLOCKED;
 
-static void pool_reap_idle_timer_cb(TimerHandle_t timer);
+/*
+ * Idle-eviction close-off task. Idle reaping used to run on a periodic
+ * FreeRTOS software timer, i.e. the Timer Service task, which only has
+ * CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH bytes of stack (2048 by default).
+ * Even just the ESP_LOGI() call in pool_reap_idle_locked() does not
+ * reliably fit in that budget (confirmed by a stack-overflow panic with the
+ * log line cut off mid-print), let alone __real_esp_http_client_cleanup()
+ * tearing down a socket/transport. So nothing pool-related runs on the
+ * Timer Service task at all: this dedicated task both drains handles handed
+ * off for destruction and self-drives the periodic idle reap (via the
+ * xQueueReceive timeout below), entirely off Tmr Svc. Sized generously
+ * because it also has to close TLS (Telegram) pooled connections, whose
+ * mbedTLS teardown is deeper than a plain socket close.
+ */
+#define HTTP_REUSE_CLOSE_TASK_STACK_SIZE 8192
+#define HTTP_REUSE_CLOSE_TASK_PRIORITY   (tskIDLE_PRIORITY + 1)
+
+static QueueHandle_t s_close_queue = NULL;
+static TaskHandle_t  s_close_task  = NULL;
+
+static void close_task_fn(void *arg);
+static void pool_reap_idle_locked(void);
 
 static TickType_t pool_idle_timeout_ticks(void)
 {
@@ -103,36 +123,43 @@ static void endpoint_release(http_reuse_endpoint_t *ep)
 
 static void pool_mutex_take(void)
 {
-    TimerHandle_t new_timer = NULL;
-
     portENTER_CRITICAL(&s_pool_mutex_init_mux);
     if (s_pool_mutex == NULL) {
         s_pool_mutex = xSemaphoreCreateMutex();
     }
     portEXIT_CRITICAL(&s_pool_mutex_init_mux);
 
-    if (s_pool_reaper_timer == NULL) {
-        new_timer = xTimerCreate("http_reuse_gc",
-                                 pool_reaper_period_ticks(),
-                                 pdTRUE,
-                                 NULL,
-                                 pool_reap_idle_timer_cb);
-        if (new_timer != NULL) {
+    if (s_close_queue == NULL) {
+        QueueHandle_t new_queue = xQueueCreate(CONFIG_HTTP_REUSE_MAX_POOL, sizeof(esp_http_client_handle_t));
+        if (new_queue != NULL) {
             portENTER_CRITICAL(&s_pool_mutex_init_mux);
-            if (s_pool_reaper_timer == NULL) {
-                s_pool_reaper_timer = new_timer;
-                new_timer = NULL;
+            if (s_close_queue == NULL) {
+                s_close_queue = new_queue;
+                new_queue     = NULL;
             }
             portEXIT_CRITICAL(&s_pool_mutex_init_mux);
-            if (new_timer != NULL) {
-                (void)xTimerDelete(new_timer, 0);
+            if (new_queue != NULL) {
+                vQueueDelete(new_queue);
             }
         }
     }
 
-    if (s_pool_reaper_timer && xTimerIsTimerActive(s_pool_reaper_timer) == pdFALSE) {
-        (void)xTimerStart(s_pool_reaper_timer, 0);
+    if (s_close_queue != NULL && s_close_task == NULL) {
+        TaskHandle_t new_task = NULL;
+        if (xTaskCreate(close_task_fn, "http_reuse_close", HTTP_REUSE_CLOSE_TASK_STACK_SIZE,
+                        NULL, HTTP_REUSE_CLOSE_TASK_PRIORITY, &new_task) == pdPASS) {
+            portENTER_CRITICAL(&s_pool_mutex_init_mux);
+            if (s_close_task == NULL) {
+                s_close_task = new_task;
+                new_task     = NULL;
+            }
+            portEXIT_CRITICAL(&s_pool_mutex_init_mux);
+            if (new_task != NULL) {
+                vTaskDelete(new_task);
+            }
+        }
     }
+
     if (s_pool_mutex) {
         xSemaphoreTake(s_pool_mutex, portMAX_DELAY);
     }
@@ -282,6 +309,29 @@ static void node_free(http_reuse_node_t *node, bool destroy_client)
     free(node);
 }
 
+/**
+ * Runs on a dedicated task. Drains client handles handed off by
+ * pool_reap_idle_locked() for destruction; when idle for one reaper period,
+ * self-drives the next idle reap pass instead of relying on a software
+ * timer (which would run reap on the tiny Timer Service stack).
+ */
+static void close_task_fn(void *arg)
+{
+    (void)arg;
+    esp_http_client_handle_t client;
+
+    while (1) {
+        if (xQueueReceive(s_close_queue, &client, pool_reaper_period_ticks()) == pdTRUE) {
+            __real_esp_http_client_cleanup(client);
+        } else {
+            pool_mutex_take();
+            pool_reap_idle_locked();
+            pool_mutex_give();
+        }
+    }
+}
+
+/** Caller must hold @ref s_pool_mutex. */
 static void pool_reap_idle_locked(void)
 {
     TickType_t         now = xTaskGetTickCount();
@@ -308,17 +358,13 @@ static void pool_reap_idle_locked(void)
                  node->endpoint.port,
                  (unsigned)(idle_ticks * portTICK_PERIOD_MS));
         STAILQ_REMOVE(&s_pool, node, http_reuse_node, list);
-        node_free(node, true);
+        if (s_close_queue != NULL && xQueueSend(s_close_queue, &node->client, 0) == pdTRUE) {
+            node_free(node, false);
+        } else {
+            ESP_LOGW(TAG, "close queue unavailable, destroying %p inline", node->client);
+            node_free(node, true);
+        }
     }
-}
-
-static void pool_reap_idle_timer_cb(TimerHandle_t timer)
-{
-    (void)timer;
-
-    pool_mutex_take();
-    pool_reap_idle_locked();
-    pool_mutex_give();
 }
 
 static esp_http_client_handle_t pool_take_locked(const http_reuse_endpoint_t *target)
@@ -672,6 +718,17 @@ esp_err_t __wrap_esp_http_client_cleanup(esp_http_client_handle_t client)
         node->reused_in_current_lease = false; /* lease ended */
         node->last_update_ticks       = xTaskGetTickCount();
         pool_mutex_give();
+        /*
+         * event_handler/user_data still reference the caller's just-finished
+         * request (often a stack-local context). esp_http_client_close/
+         * cleanup dispatch HTTP_EVENT_DISCONNECTED through them, so an idle
+         * pooled client left with a stale pointer here crashes (use-after-
+         * free) whenever it's later evicted or destroyed instead of reused.
+         * pool_take_locked's reuse-hit path in __wrap_esp_http_client_init
+         * always re-sets both before the client is used again.
+         */
+        esp_http_client_set_event_handler(client, NULL);
+        esp_http_client_set_user_data(client, NULL);
         ESP_LOGD(TAG, "idle persistent in pool %p", client);
         return ESP_OK;
     }
@@ -706,6 +763,10 @@ esp_err_t __wrap_esp_http_client_cleanup(esp_http_client_handle_t client)
         endpoint_release(&ep);
         return __real_esp_http_client_cleanup(client);
     }
+    /* See the matching comment in the in_pool branch above: clear the
+     * caller's event_handler/user_data before this client is left idle. */
+    esp_http_client_set_event_handler(client, NULL);
+    esp_http_client_set_user_data(client, NULL);
     ESP_LOGD(TAG, "insert idle persistent %p", client);
     return ESP_OK;
 }

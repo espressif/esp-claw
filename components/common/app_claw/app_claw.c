@@ -701,7 +701,16 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
 #if CONFIG_APP_CLAW_CAP_EVENT_ROUTER
     claw_event_router_config_t router_config = {
         .rules_path = NULL,
-        .task_stack_size = 8 * 1024,
+        /* 16KB, not 8KB: with an internal-RAM task stack (required so raw
+         * flash/FAT reads don't hit an unreachable PSRAM stack mid-read,
+         * see claw_event_router_start()'s CLAW_TASK_STACK_INTERNAL_ONLY),
+         * this task's real high-water mark for a full message-event
+         * processing path (session/agent file I/O, JSON build) exceeds 8KB
+         * and overflows. That was previously masked because such
+         * deployments crashed earlier via
+         * esp_task_stack_is_sane_cache_disabled() before ever reaching
+         * this depth. */
+        .task_stack_size = 16 * 1024,
         .task_priority = 5,
         .task_core = tskNO_AFFINITY,
         .agent_submit_timeout_ms = 1000,
