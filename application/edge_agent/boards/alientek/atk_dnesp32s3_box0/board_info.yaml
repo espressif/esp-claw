@@ -1,0 +1,5 @@
+board: atk_dnesp32s3_box0
+chip: esp32s3
+version: 1.0.0
+description: "ATK-DNESP32S3-BOX0"
+manufacturer: "ALIENTEK"
