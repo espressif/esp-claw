@@ -68,6 +68,24 @@ typedef struct {
     char *content;
 } claw_core_cached_context_t;
 
+/*
+ * Per-request cache of the compiled iteration context (system prompt,
+ * message list and tools JSON). On the first iteration the full context is
+ * built from providers; on subsequent tool-call iterations only the delta
+ * (new runtime messages) is appended, avoiding repeated provider collection,
+ * session-history re-parsing and full re-serialization for every round.
+ *
+ * The cache owns all buffers; the agent loop borrows them across iterations
+ * and frees them with claw_core_iteration_cache_free() at request end.
+ */
+typedef struct {
+    bool valid;
+    char *system_prompt;
+    char *tools_json;
+    cJSON *messages;
+    size_t last_runtime_count;
+} claw_core_iteration_cache_t;
+
 typedef enum {
     CLAW_CORE_CONTROL_ABORT_REASON_NONE = 0,
     CLAW_CORE_CONTROL_ABORT_REASON_CANCEL,
@@ -114,6 +132,12 @@ struct claw_core_state {
     claw_core_agent_loop_phase_t agent_loop_phase;
     volatile bool inflight_abort;
     claw_core_control_abort_reason_t inflight_abort_reason;
+    /*
+     * Set by claw_core_context_cache_invalidate() when a context provider's
+     * input changed mid-request (e.g. long-term memory was written by a tool
+     * call); forces a full context rebuild on the next iteration.
+     */
+    volatile bool context_cache_invalidated;
     claw_core_request_item_t insert_queue[CLAW_CORE_INSERT_QUEUE_LEN];
     size_t insert_queue_head;
     size_t insert_queue_count;
@@ -181,6 +205,20 @@ esp_err_t claw_core_build_iteration_context(claw_core_state_t *core,
                                             char **out_tools_json,
                                             char *obs_providers_csv,
                                             size_t obs_providers_csv_size);
+void claw_core_iteration_cache_free(claw_core_iteration_cache_t *cache);
+esp_err_t claw_core_build_iteration_context_cached(
+    claw_core_state_t *core,
+    const claw_core_request_item_t *request,
+    const cJSON *runtime_messages,
+    const claw_core_cached_context_t *request_start_contexts,
+    size_t request_start_context_count,
+    bool inject_active_user,
+    claw_core_iteration_cache_t *cache,
+    char **out_system_prompt,
+    cJSON **out_messages,
+    char **out_tools_json,
+    char *obs_providers_csv,
+    size_t obs_providers_csv_size);
 esp_err_t claw_core_append_user_message(cJSON *messages, const char *text);
 esp_err_t claw_core_append_assistant_tool_calls(cJSON *messages,
                                                 const claw_core_llm_response_t *response);

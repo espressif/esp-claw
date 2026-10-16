@@ -7,6 +7,7 @@ idf_component_register(
         "src/claw_memory_profile.c"
         "src/claw_memory_session.c"
         "src/claw_memory_storage.c"
+        "src/claw_memory_token.c"
         "src/claw_memory_utils.c"
     INCLUDE_DIRS
         "include"

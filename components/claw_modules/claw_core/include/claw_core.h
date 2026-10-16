@@ -198,6 +198,13 @@ esp_err_t claw_core_submit(claw_core_handle_t core,
                            const claw_core_request_t *request,
                            uint32_t timeout_ms);
 esp_err_t claw_core_cancel_request(claw_core_handle_t core, uint32_t request_id);
+/*
+ * Invalidate the in-flight request's compiled iteration context so the next
+ * tool-call iteration performs a full rebuild. Call this after a tool call
+ * (or any code path) changes input that context providers rely on, e.g.
+ * long-term memory was written or a capability was (un)registered.
+ */
+esp_err_t claw_core_context_cache_invalidate(claw_core_handle_t core);
 claw_core_agent_loop_phase_t claw_core_get_agent_loop_phase(claw_core_handle_t core);
 esp_err_t claw_core_receive(claw_core_handle_t core,
                             claw_core_response_t *response,

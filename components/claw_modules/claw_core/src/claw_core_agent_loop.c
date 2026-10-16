@@ -109,6 +109,7 @@ void claw_core_agent_loop_task(void *arg)
         cJSON *messages = NULL;
         char *system_prompt = NULL;
         char *tools_json = NULL;
+        claw_core_iteration_cache_t iter_cache = {0};
         char tool_summary[CLAW_CORE_TOOL_SUMMARY_MAX_LEN] = {0};
         claw_core_llm_response_t llm_response = {0};
         uint32_t iteration = 0;
@@ -240,12 +241,11 @@ void claw_core_agent_loop_task(void *arg)
 
         while (true) {
             claw_core_llm_response_free(&llm_response);
-            free(system_prompt);
-            free(tools_json);
-            cJSON_Delete(messages);
-            system_prompt = NULL;
-            tools_json = NULL;
-            messages = NULL;
+            /*
+             * system_prompt / messages / tools_json are borrowed from
+             * iter_cache and owned by it until request end; they are NOT
+             * freed per iteration anymore.
+             */
 
             claw_core_control_set_phase(core, CLAW_CORE_AGENT_LOOP_PHASE_BEFORE_BUILD_ITERATION_CONTEXT);
             {
@@ -266,17 +266,18 @@ void claw_core_agent_loop_task(void *arg)
             }
 
             claw_core_control_set_phase(core, CLAW_CORE_AGENT_LOOP_PHASE_BUILDING_ITERATION_CONTEXT);
-            err = claw_core_build_iteration_context(core,
-                                                    &request,
-                                                    runtime_messages,
-                                                    request_start_contexts,
-                                                    request_start_context_count,
-                                                    inject_active_user,
-                                                    &system_prompt,
-                                                    &messages,
-                                                    &tools_json,
-                                                    obs_providers_csv,
-                                                    sizeof(obs_providers_csv));
+            err = claw_core_build_iteration_context_cached(core,
+                                                           &request,
+                                                           runtime_messages,
+                                                           request_start_contexts,
+                                                           request_start_context_count,
+                                                           inject_active_user,
+                                                           &iter_cache,
+                                                           &system_prompt,
+                                                           &messages,
+                                                           &tools_json,
+                                                           obs_providers_csv,
+                                                           sizeof(obs_providers_csv));
             if (err != ESP_OK) {
                 response.view.error_message = claw_utils_string_dup(esp_err_to_name(err));
                 goto finish_request;
@@ -499,9 +500,7 @@ finish_request:
 
         claw_core_llm_response_free(&llm_response);
         cJSON_Delete(runtime_messages);
-        cJSON_Delete(messages);
-        free(system_prompt);
-        free(tools_json);
+        claw_core_iteration_cache_free(&iter_cache);
         claw_core_free_cached_contexts(request_start_contexts, request_start_context_count);
         claw_core_free_request_item(&request);
     }

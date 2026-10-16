@@ -98,6 +98,37 @@ static esp_err_t append_message_array(cJSON *messages, const cJSON *items)
     return ESP_OK;
 }
 
+/* Append items[start_index..] of an array, keeping the exact per-item
+ * structure of append_message_array() so incremental and full builds
+ * produce identical message lists. */
+static esp_err_t append_message_array_from(cJSON *messages, const cJSON *items, size_t start_index)
+{
+    const cJSON *item = NULL;
+    size_t index = 0;
+
+    if (!messages || !items || !cJSON_IsArray((cJSON *)items)) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    cJSON_ArrayForEach(item, items) {
+        if (index < start_index) {
+            index++;
+            continue;
+        }
+        {
+            cJSON *dup = cJSON_Duplicate((cJSON *)item, true);
+
+            if (!dup) {
+                return ESP_ERR_NO_MEM;
+            }
+            cJSON_AddItemToArray(messages, dup);
+        }
+        index++;
+    }
+
+    return ESP_OK;
+}
+
 static esp_err_t append_tool_array_json(cJSON *tools, const char *json_text)
 {
     cJSON *parsed = NULL;
@@ -619,4 +650,120 @@ cleanup:
         *out_tools_json = NULL;
     }
     return err;
+}
+
+void claw_core_iteration_cache_free(claw_core_iteration_cache_t *cache)
+{
+    if (!cache) {
+        return;
+    }
+
+    free(cache->system_prompt);
+    cJSON_Delete(cache->messages);
+    free(cache->tools_json);
+    cache->system_prompt = NULL;
+    cache->tools_json = NULL;
+    cache->messages = NULL;
+    cache->last_runtime_count = 0;
+    cache->valid = false;
+}
+
+esp_err_t claw_core_context_cache_invalidate(claw_core_handle_t core)
+{
+    claw_core_state_t *state = (claw_core_state_t *)core;
+
+    if (!state || !state->initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    /*
+     * Any in-flight request rebuilds its iteration context on the next
+     * iteration; the next request always builds from scratch anyway.
+     */
+    state->context_cache_invalidated = true;
+    return ESP_OK;
+}
+
+esp_err_t claw_core_build_iteration_context_cached(
+    claw_core_state_t *core,
+    const claw_core_request_item_t *request,
+    const cJSON *runtime_messages,
+    const claw_core_cached_context_t *request_start_contexts,
+    size_t request_start_context_count,
+    bool inject_active_user,
+    claw_core_iteration_cache_t *cache,
+    char **out_system_prompt,
+    cJSON **out_messages,
+    char **out_tools_json,
+    char *obs_providers_csv,
+    size_t obs_providers_csv_size)
+{
+    esp_err_t err;
+
+    if (!core || !request || !cache || !out_system_prompt || !out_messages || !out_tools_json) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *out_system_prompt = NULL;
+    *out_messages = NULL;
+    *out_tools_json = NULL;
+
+    if (!cache->valid || core->context_cache_invalidated) {
+        char *new_system_prompt = NULL;
+        cJSON *new_messages = NULL;
+        char *new_tools_json = NULL;
+
+        /* Full (re)build: first iteration or the context went stale
+         * (e.g. a tool call wrote long-term memory). */
+        err = claw_core_build_iteration_context(core,
+                                                request,
+                                                runtime_messages,
+                                                request_start_contexts,
+                                                request_start_context_count,
+                                                inject_active_user,
+                                                &new_system_prompt,
+                                                &new_messages,
+                                                &new_tools_json,
+                                                obs_providers_csv,
+                                                obs_providers_csv_size);
+        if (err != ESP_OK) {
+            return err;
+        }
+
+        claw_core_iteration_cache_free(cache);
+        cache->system_prompt = new_system_prompt;
+        cache->tools_json = new_tools_json;
+        cache->messages = new_messages;
+        cache->last_runtime_count = cJSON_GetArraySize((cJSON *)runtime_messages);
+        cache->valid = true;
+        core->context_cache_invalidated = false;
+    } else {
+        /* Incremental path: reuse the compiled system prompt / tools JSON and
+         * append only the runtime messages added since the last iteration
+         * (new assistant tool calls + tool results + user interrupts). */
+        size_t new_count = cJSON_GetArraySize((cJSON *)runtime_messages);
+
+        if (new_count < cache->last_runtime_count) {
+            ESP_LOGE(TAG,
+                     "iteration cache: runtime messages shrank %u -> %u",
+                     (unsigned)cache->last_runtime_count,
+                     (unsigned)new_count);
+            return ESP_ERR_INVALID_STATE;
+        }
+        if (new_count > cache->last_runtime_count) {
+            err = append_message_array_from(cache->messages,
+                                            runtime_messages,
+                                            cache->last_runtime_count);
+            if (err != ESP_OK) {
+                return err;
+            }
+            cache->last_runtime_count = new_count;
+        }
+    }
+
+    /* Borrowed pointers; owned by the cache until request end. */
+    *out_system_prompt = cache->system_prompt;
+    *out_messages = cache->messages;
+    *out_tools_json = cache->tools_json;
+    return ESP_OK;
 }
