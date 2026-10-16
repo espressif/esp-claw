@@ -304,6 +304,16 @@ menu "App Claw Config"
                 Do not start the generic BLE Lua module advertising while BLE HID is
                 running.
 
+        config APP_CLAW_LUA_MODULE_ESP_NOW
+            bool "Enable ESP-NOW Lua module"
+            default n
+            depends on APP_CLAW_CAP_LUA
+            help
+                Enable the ESP-NOW Lua module (require("esp_now")) that wraps the
+                ESP-IDF ESP-NOW API for connectionless peer-to-peer messaging.
+                Requires the WiFi stack to be initialized and started, which the
+                application already does at boot via wifi_manager.
+
         config APP_CLAW_LUA_MODULE_CAMERA
             bool "Enable camera Lua module"
             default y if ESP_BOARD_DEV_CAMERA_SUPPORT

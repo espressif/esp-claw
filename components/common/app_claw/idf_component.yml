@@ -206,6 +206,12 @@ dependencies:
       - if: $CONFIG{APP_CLAW_LUA_MODULE_BLE_HID} == True
     path: ../../lua_modules/lua_module_ble_hid
 
+  lua_module_esp_now:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
+      - if: $CONFIG{APP_CLAW_LUA_MODULE_ESP_NOW} == True
+    path: ../../lua_modules/lua_module_esp_now
+
   lua_module_call_capability:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True
