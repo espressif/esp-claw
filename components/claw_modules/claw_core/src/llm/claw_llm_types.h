@@ -104,6 +104,8 @@ typedef struct {
     volatile bool *abort_flag;
     const claw_llm_http_header_t *headers;
     size_t header_count;
+    const char *content_type;
+    bool accept_non_200;
 } claw_llm_http_json_request_t;
 
 typedef struct {

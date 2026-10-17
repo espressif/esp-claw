@@ -7,6 +7,7 @@
 #include "app_fs.h"
 #include "claw_version.h"
 #include "claw_paths.h"
+#include "claw_openai_codex_auth.h"
 #include "edge_agent_version.h"
 #include <string.h>
 #include <stdlib.h>
@@ -92,6 +93,13 @@ static void on_wifi_state_changed(bool connected, void *user_ctx)
     esp_err_t err = app_claw_set_network_status(connected, ap_ssid);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "Failed to update network UI: %s", esp_err_to_name(err));
+    }
+
+    if (connected) {
+        esp_err_t auth_err = claw_openai_codex_auth_restore_async();
+        if (auth_err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to restore ChatGPT auth: %s", esp_err_to_name(auth_err));
+        }
     }
 }
 
@@ -248,6 +256,57 @@ static esp_err_t main_wechat_login_mark_persisted(void)
 }
 #endif
 
+static esp_err_t main_openai_login_start(void)
+{
+    return claw_openai_codex_login_start();
+}
+
+static esp_err_t main_openai_login_get_status(
+    http_server_openai_login_status_t *status)
+{
+    claw_openai_codex_login_status_t raw = {0};
+
+    ESP_RETURN_ON_FALSE(
+        status,
+        ESP_ERR_INVALID_ARG,
+        TAG,
+        "OpenAI login status is NULL");
+
+    ESP_RETURN_ON_ERROR(
+        claw_openai_codex_login_get_status(&raw),
+        TAG,
+        "Failed to get OpenAI login status");
+
+    memset(status, 0, sizeof(*status));
+
+    status->active = raw.active;
+    status->completed = raw.completed;
+    status->interval = raw.interval;
+
+    strlcpy(status->status,
+            raw.status,
+            sizeof(status->status));
+
+    strlcpy(status->message,
+            raw.message,
+            sizeof(status->message));
+
+    strlcpy(status->user_code,
+            raw.user_code,
+            sizeof(status->user_code));
+
+    strlcpy(status->verification_url,
+            raw.verification_url,
+            sizeof(status->verification_url));
+
+    return ESP_OK;
+}
+
+static esp_err_t main_openai_login_cancel(void)
+{
+    return claw_openai_codex_login_cancel();
+}
+
 static esp_err_t init_nvs(void)
 {
     esp_err_t err = nvs_flash_init();
@@ -347,6 +406,9 @@ void app_main(void)
             .save_config = main_save_config,
             .get_wifi_status = main_get_wifi_status,
             .restart_device = main_restart_device,
+            .openai_login_start = main_openai_login_start,
+            .openai_login_get_status = main_openai_login_get_status,
+            .openai_login_cancel = main_openai_login_cancel,
 #if CONFIG_APP_CLAW_CAP_IM_WECHAT
             .wechat_login_start = main_wechat_login_start,
             .wechat_login_get_status = main_wechat_login_get_status,
