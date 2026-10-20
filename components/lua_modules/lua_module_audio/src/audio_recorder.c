@@ -193,7 +193,7 @@ static int audio_recorder_record_aac(lua_State *L, audio_recorder_t *rec, const 
     uint32_t total_in_frames = (uint32_t)(((uint64_t)rec->input->fmt.sample_rate * duration_ms) / 1000);
     uint32_t done_frames = 0;
     uint32_t total_encoded_bytes = 0;
-    int ret = ESP_CODEC_DEV_OK;
+    esp_err_t ret = ESP_OK;
 
     if (!audio_device_acquire(rec->input)) {
         return lua_audio_push_error(L, "audio recorder: input busy");
@@ -243,6 +243,18 @@ static int audio_recorder_record_aac(lua_State *L, audio_recorder_t *rec, const 
         audio_device_release(rec->input);
         return lua_audio_push_error(L, "audio recorder: cannot open file");
     }
+    if (audio_device_flush_input(rec->input) != ESP_OK) {
+        ESP_LOGE(TAG, "AAC recorder subscriber flush failed");
+        fclose(f);
+        remove(path);
+        free(read_buf);
+        free(pending_buf);
+        free(aac_buf);
+        esp_aac_enc_close(encoder);
+        audio_converter_destroy(&converter);
+        audio_device_release(rec->input);
+        return lua_audio_push_error(L, "audio recorder: input flush failed");
+    }
 
     uint32_t chunk_frames = AUDIO_CHUNK_BYTES / rec->input->fmt.bytes_per_frame;
     if (chunk_frames == 0) {
@@ -255,16 +267,16 @@ static int audio_recorder_record_aac(lua_State *L, audio_recorder_t *rec, const 
                 frames = chunk_frames;
             }
             uint32_t in_bytes = frames * rec->input->fmt.bytes_per_frame;
-            if (esp_codec_dev_read(rec->input->codec_dev, read_buf, (int)in_bytes) != ESP_CODEC_DEV_OK) {
-                ESP_LOGE(TAG, "AAC recorder codec read failed");
-                ret = ESP_CODEC_DEV_READ_FAIL;
+            if (audio_device_read(rec->input, read_buf, in_bytes, 0) != ESP_OK) {
+                ESP_LOGE(TAG, "AAC recorder subscriber read failed");
+                ret = ESP_FAIL;
                 break;
             }
             uint8_t *converted = NULL;
             uint32_t converted_bytes = 0;
             if (audio_converter_process(&converter, read_buf, in_bytes, &converted, &converted_bytes) != ESP_OK) {
                 ESP_LOGE(TAG, "AAC recorder converter process failed");
-                ret = ESP_CODEC_DEV_WRITE_FAIL;
+                ret = ESP_FAIL;
                 break;
             }
             if (pending_len + converted_bytes > pending_cap) {
@@ -272,7 +284,7 @@ static int audio_recorder_record_aac(lua_State *L, audio_recorder_t *rec, const 
                 uint8_t *new_buf = realloc(pending_buf, new_cap);
                 if (!new_buf) {
                     ESP_LOGE(TAG, "AAC recorder pending buffer realloc failed");
-                    ret = ESP_CODEC_DEV_NO_MEM;
+                    ret = ESP_ERR_NO_MEM;
                     break;
                 }
                 pending_buf = new_buf;
@@ -282,7 +294,7 @@ static int audio_recorder_record_aac(lua_State *L, audio_recorder_t *rec, const 
             pending_len += converted_bytes;
             done_frames += frames;
         }
-        if (ret != ESP_CODEC_DEV_OK || pending_len < (uint32_t)pcm_size) {
+        if (ret != ESP_OK || pending_len < (uint32_t)pcm_size) {
             break;
         }
 
@@ -297,7 +309,7 @@ static int audio_recorder_record_aac(lua_State *L, audio_recorder_t *rec, const 
         if (esp_aac_enc_process(encoder, &in_frame, &out_frame) != ESP_AUDIO_ERR_OK ||
             fwrite(aac_buf, 1, out_frame.encoded_bytes, f) != out_frame.encoded_bytes) {
             ESP_LOGE(TAG, "AAC recorder encode/write failed");
-            ret = ESP_CODEC_DEV_WRITE_FAIL;
+            ret = ESP_FAIL;
             break;
         }
         total_encoded_bytes += out_frame.encoded_bytes;
@@ -308,7 +320,7 @@ static int audio_recorder_record_aac(lua_State *L, audio_recorder_t *rec, const 
     }
 
     fclose(f);
-    if (ret != ESP_CODEC_DEV_OK) {
+    if (ret != ESP_OK) {
         remove(path);
     }
     free(read_buf);
@@ -317,7 +329,7 @@ static int audio_recorder_record_aac(lua_State *L, audio_recorder_t *rec, const 
     esp_aac_enc_close(encoder);
     audio_converter_destroy(&converter);
     audio_device_release(rec->input);
-    if (ret != ESP_CODEC_DEV_OK) {
+    if (ret != ESP_OK) {
         return lua_audio_push_error(L, "audio recorder: AAC record failed");
     }
 
@@ -420,6 +432,16 @@ int lua_audio_recorder_record(lua_State *L)
         return lua_audio_push_error(L, "audio recorder: cannot open file");
     }
     fwrite(wav_hdr, 1, sizeof(wav_hdr), f);
+    if (audio_device_flush_input(rec->input) != ESP_OK) {
+        ESP_LOGE(TAG, "Recorder subscriber flush failed");
+        fclose(f);
+        remove(path);
+        free(in_buf);
+        audio_converter_destroy(&converter);
+        audio_device_release(rec->input);
+        free(path);
+        return lua_audio_push_error(L, "audio recorder: input flush failed");
+    }
 
     uint32_t total_in_frames = (uint32_t)(((uint64_t)rec->input->fmt.sample_rate * duration_ms) / 1000);
     uint32_t done_frames = 0;
@@ -433,8 +455,8 @@ int lua_audio_recorder_record(lua_State *L)
             frames = chunk_frames;
         }
         uint32_t in_bytes = frames * rec->input->fmt.bytes_per_frame;
-        if (esp_codec_dev_read(rec->input->codec_dev, in_buf, (int)in_bytes) != ESP_CODEC_DEV_OK) {
-            ESP_LOGE(TAG, "Recorder codec read failed");
+        if (audio_device_read(rec->input, in_buf, in_bytes, 0) != ESP_OK) {
+            ESP_LOGE(TAG, "Recorder subscriber read failed");
             fclose(f);
             remove(path);
             free(in_buf);

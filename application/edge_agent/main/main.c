@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "app_claw.h"
+#include "app_claw_hw_bridge.h"
 #include "app_fs.h"
 #include "claw_version.h"
 #include "claw_paths.h"
@@ -34,6 +35,7 @@
 
 static const char *TAG = "app";
 
+static claw_hw_registry_handle_t s_hw_registry;
 static app_config_t *s_config;
 static app_claw_config_t *s_claw_config;
 
@@ -140,6 +142,7 @@ static void main_copy_claw_to_app_config(const app_claw_config_t *src, app_confi
             src->llm_default_image_max_bytes,
             sizeof(dst->llm_default_image_max_bytes));
     strlcpy(dst->llm_max_tokens_field, src->llm_max_tokens_field, sizeof(dst->llm_max_tokens_field));
+    strlcpy(dst->llm_reasoning_effort, src->llm_reasoning_effort, sizeof(dst->llm_reasoning_effort));
     strlcpy(dst->llm_supports_tools, src->llm_supports_tools, sizeof(dst->llm_supports_tools));
     strlcpy(dst->llm_supports_vision, src->llm_supports_vision, sizeof(dst->llm_supports_vision));
     strlcpy(dst->llm_image_remote_url_only,
@@ -279,38 +282,116 @@ tz_default:
 
 #if APP_ENABLE_MEM_LOG
 
-static void print_task_stack_info(void)
-{
-#ifdef CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
-    static TaskStatus_t s_task_status_snapshot[24];
-    UBaseType_t count = uxTaskGetSystemState(s_task_status_snapshot,
-                                             sizeof(s_task_status_snapshot) / sizeof(s_task_status_snapshot[0]),
-                                             NULL);
+#include "esp_gmf_oal_sys.h"
 
-    for (UBaseType_t i = 0; i < count; i++) {
-        ESP_LOGI(TAG,
-                 "Task %s  %u",
-                 s_task_status_snapshot[i].pcTaskName,
-                 s_task_status_snapshot[i].usStackHighWaterMark);
+void print_memory_info(const char *tag)
+{
+    // Get basic heap memory information
+    size_t free_heap = esp_get_free_heap_size();
+    size_t min_free_heap = esp_get_minimum_free_heap_size();
+
+    // Get memory region information
+    size_t total_internal = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
+    size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    size_t largest_free_internal = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+
+    size_t total_spiram = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+    size_t free_spiram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    size_t largest_free_spiram = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+
+    size_t total_dma = heap_caps_get_total_size(MALLOC_CAP_DMA);
+    size_t free_dma = heap_caps_get_free_size(MALLOC_CAP_DMA);
+
+    // FreeRTOS heap information
+    size_t free_rtos_heap = xPortGetFreeHeapSize();
+    size_t min_free_rtos_heap = xPortGetMinimumEverFreeHeapSize();
+
+    // Calculate usage percentage
+    size_t used_heap = total_internal - free_internal;
+    float usage_percent = total_internal > 0 ? (float)used_heap * 100.0f / total_internal : 0.0f;
+
+    // Print header
+    ESP_LOGI(tag, "╔══════════════════════════════════════════════════════════════╗");
+    ESP_LOGI(tag, "║              Memory Detail Report                            ║");
+    ESP_LOGI(tag, "╠══════════════════════════════════════════════════════════════╣");
+
+    // Overall heap memory information
+    ESP_LOGI(tag, "║ Overall Heap Memory:                                         ║");
+    ESP_LOGI(tag, "║   Current Free Heap:     %8" PRIu32 " bytes (%6.1f KB)          ║",
+             (uint32_t)free_heap, free_heap / 1024.0f);
+    ESP_LOGI(tag, "║   Min Free Ever:         %8" PRIu32 " bytes (%6.1f KB)          ║",
+             (uint32_t)min_free_heap, min_free_heap / 1024.0f);
+    ESP_LOGI(tag, "╠══════════════════════════════════════════════════════════════╣");
+
+    // Internal memory region (SRAM)
+    ESP_LOGI(tag, "║ Internal Memory (SRAM):                                      ║");
+    ESP_LOGI(tag, "║   Total Capacity:        %8" PRIu32 " bytes (%6.1f KB)          ║",
+             (uint32_t)total_internal, total_internal / 1024.0f);
+    ESP_LOGI(tag, "║   Used:                  %8" PRIu32 " bytes (%6.1f KB) [%5.1f%%] ║",
+             (uint32_t)used_heap, used_heap / 1024.0f, usage_percent);
+    ESP_LOGI(tag, "║   Free:                  %8" PRIu32 " bytes (%6.1f KB)          ║",
+             (uint32_t)free_internal, free_internal / 1024.0f);
+    ESP_LOGI(tag, "║   Largest Free Block:    %8" PRIu32 " bytes (%6.1f KB)          ║",
+             (uint32_t)largest_free_internal, largest_free_internal / 1024.0f);
+
+    // SPI RAM region (if exists)
+    if (total_spiram > 0) {
+        ESP_LOGI(tag, "╠══════════════════════════════════════════════════════════════╣");
+        ESP_LOGI(tag, "║ SPI RAM Memory:                                              ║");
+        ESP_LOGI(tag, "║   Total Capacity:        %8" PRIu32 " bytes (%6.1f KB)          ║",
+                 (uint32_t)total_spiram, total_spiram / 1024.0f);
+        ESP_LOGI(tag, "║   Free:                  %8" PRIu32 " bytes (%6.1f KB)          ║",
+                 (uint32_t)free_spiram, free_spiram / 1024.0f);
+        ESP_LOGI(tag, "║   Largest Free Block:    %8" PRIu32 " bytes (%6.1f KB)          ║",
+                 (uint32_t)largest_free_spiram, largest_free_spiram / 1024.0f);
     }
-#endif
+
+    // DMA memory region
+    if (total_dma > 0) {
+        ESP_LOGI(tag, "╠══════════════════════════════════════════════════════════════╣");
+        ESP_LOGI(tag, "║ DMA Memory:                                                  ║");
+        ESP_LOGI(tag, "║   Total Capacity:        %8" PRIu32 " bytes (%6.1f KB)          ║",
+                 (uint32_t)total_dma, total_dma / 1024.0f);
+        ESP_LOGI(tag, "║   Free:                  %8" PRIu32 " bytes (%6.1f KB)          ║",
+                 (uint32_t)free_dma, free_dma / 1024.0f);
+    }
+
+    // FreeRTOS heap information
+    ESP_LOGI(tag, "╠══════════════════════════════════════════════════════════════╣");
+    ESP_LOGI(tag, "║ FreeRTOS Heap:                                               ║");
+    ESP_LOGI(tag, "║   Current Free:          %8" PRIu32 " bytes (%6.1f KB)          ║",
+             (uint32_t)free_rtos_heap, free_rtos_heap / 1024.0f);
+    ESP_LOGI(tag, "║   Min Free Ever:         %8" PRIu32 " bytes (%6.1f KB)          ║",
+             (uint32_t)min_free_rtos_heap, min_free_rtos_heap / 1024.0f);
+
+    // Memory health status
+    ESP_LOGI(tag, "╠══════════════════════════════════════════════════════════════╣");
+    if (free_heap < 10 * 1024) {
+        ESP_LOGW(tag, "║ WARNING: Free memory below 10KB, possible memory leak!       ║");
+    } else if (free_heap < 50 * 1024) {
+        ESP_LOGW(tag, "║ CAUTION: Free memory below 50KB, monitor usage carefully     ║");
+    } else {
+        ESP_LOGI(tag, "║ Status: OK                                                   ║");
+    }
+
+    // Footer
+    ESP_LOGI(tag, "╚══════════════════════════════════════════════════════════════╝");
 }
 
-/* Periodic task: print internal free, minimum free, and PSRAM free every 20s */
 static void memory_monitor_task(void *arg)
 {
     (void)arg;
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(5000));
-        size_t internal_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-        size_t internal_min = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
-        size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-        ESP_LOGI(TAG, "Memory: internal_free=%u bytes, internal_min_free=%u bytes, psram_free=%u bytes",
-                 (unsigned)internal_free, (unsigned)internal_min, (unsigned)psram_free);
-        print_task_stack_info();
+    #define PERF_REPORT_INTERVAL_MS 5000
+
+    while (true) {
+        vTaskDelay(pdMS_TO_TICKS(PERF_REPORT_INTERVAL_MS));
+
+       esp_gmf_oal_sys_get_real_time_stats(PERF_REPORT_INTERVAL_MS, 0);
+       print_memory_info(TAG);
+
+        ESP_LOGI(TAG, "=====================================================\n");
     }
 }
-
 #endif
 
 void app_main(void)
@@ -328,6 +409,8 @@ void app_main(void)
     ESP_ERROR_CHECK(app_config_load(s_config));
     app_config_to_claw(s_config, s_claw_config);
     init_timezone(app_config_get_timezone(s_config)); // no need to check error
+    ESP_ERROR_CHECK(claw_hw_registry_create(&s_hw_registry));
+    ESP_ERROR_CHECK(app_claw_hw_bridge_init(s_hw_registry));
     ESP_ERROR_CHECK(esp_board_manager_init());
     ESP_ERROR_CHECK(app_fs_init());
 
@@ -335,6 +418,9 @@ void app_main(void)
      * without knowing whether data lives on flash or an SD card. */
     ESP_ERROR_CHECK(claw_paths_set(CLAW_PATH_DATA, app_fs_storage_base_path()));
     ESP_ERROR_CHECK(claw_paths_set(CLAW_PATH_SYSTEM, app_fs_system_base_path()));
+    ESP_ERROR_CHECK(claw_paths_set_space_provider(CLAW_PATH_DATA,
+                                                  app_fs_get_storage_space,
+                                                  NULL));
 
     ESP_ERROR_CHECK(wifi_manager_init());
 
@@ -410,7 +496,7 @@ void app_main(void)
     }
 
     ESP_ERROR_CHECK(app_claw_set_save_config_callback(main_save_claw_config, NULL));
-    ESP_ERROR_CHECK(app_claw_start(s_claw_config));
+    ESP_ERROR_CHECK(app_claw_start(s_claw_config, s_hw_registry));
 #if CONFIG_APP_CLAW_CAP_IM_LOCAL
     ESP_ERROR_CHECK(http_server_webim_bind_im());
 #endif
@@ -418,7 +504,6 @@ void app_main(void)
     register_wifi_command();
 
 #if APP_ENABLE_MEM_LOG
-    /* Start memory monitor: print internal free, min free, PSRAM free every 20s */
     xTaskCreate(memory_monitor_task, "mem_mon", 4096, NULL, 1, NULL);
 #endif
 

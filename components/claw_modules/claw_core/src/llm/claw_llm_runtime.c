@@ -41,6 +41,7 @@ static void runtime_config_free(claw_llm_runtime_config_t *config)
     free((char *)config->base_url);
     free((char *)config->auth_type);
     free((char *)config->max_tokens_field);
+    free((char *)config->reasoning_effort);
     memset(config, 0, sizeof(*config));
 }
 
@@ -53,6 +54,7 @@ static esp_err_t runtime_config_copy(claw_llm_runtime_config_t *dst,
     dst->base_url = dup_or_null(src->base_url);
     dst->auth_type = dup_or_null(src->auth_type);
     dst->max_tokens_field = dup_or_null(src->max_tokens_field);
+    dst->reasoning_effort = dup_or_null(src->reasoning_effort);
     dst->timeout_ms = src->timeout_ms;
     dst->max_tokens = src->max_tokens;
     dst->image_max_bytes = src->image_max_bytes;
@@ -65,7 +67,8 @@ static esp_err_t runtime_config_copy(claw_llm_runtime_config_t *dst,
             (src->model && !dst->model) ||
             (src->base_url && !dst->base_url) ||
             (src->auth_type && !dst->auth_type) ||
-            (src->max_tokens_field && !dst->max_tokens_field)) {
+            (src->max_tokens_field && !dst->max_tokens_field) ||
+            (src->reasoning_effort && !dst->reasoning_effort)) {
         runtime_config_free(dst);
         return ESP_ERR_NO_MEM;
     }

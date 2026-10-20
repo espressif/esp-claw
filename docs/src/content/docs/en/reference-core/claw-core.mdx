@@ -21,8 +21,10 @@ Header: <LinkToSource relativePath="components/claw_modules/claw_core/include/cl
 - `user_text`: user message body.
 - `source_*` / `target_*`: source channel, chat id, message id, source cap, etc. These are passed through to `claw_cap_call_from_core` so capabilities can reply or correlate context.
 
-Applications submit with `claw_core_submit` and read `claw_core_response_t` via `claw_core_receive` / `claw_core_receive_for`.
+Request/response clients start an explicitly independent run with `claw_core_start_run` and read `claw_core_response_t` via `claw_core_receive` / `claw_core_receive_for`.
 `claw_core_response_t` includes assistant text (`text`) and `error_message`.
+
+Conversation transports use `claw_core_post_message`. Core atomically decides whether the message belongs in the active run's inbox or starts a new queued run, and returns `claw_core_message_receipt_t` with the owning `run_id` and disposition. Callers must not read the current phase and then choose between separate submit and append APIs; that check would race with run finalization.
 
 ### Request flags
 
@@ -32,9 +34,20 @@ Applications submit with `claw_core_submit` and read `claw_core_response_t` via 
 |------|-------------|
 | `CLAW_CORE_REQUEST_FLAG_PUBLISH_OUT_MESSAGE` | After inference, publish the response as an `out_message` event to the Event Router |
 | `CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE` | Skip the response queue; don't return results via `claw_core_receive` |
-| `CLAW_CORE_REQUEST_FLAG_USER_INTERRUPT` | Mark this request as a user interrupt, started after aborting the previous request |
+| `CLAW_CORE_REQUEST_FLAG_PUBLISH_STAGE_MESSAGE` | Publish Agent stage updates through the Event Router |
 
-The Event Router's `run_agent` action sets the first two flags to enable an asynchronous submit + event-published response path.
+The Event Router's `run_agent` action sets these flags to enable asynchronous message delivery and event-published progress and responses.
+
+## Messages and runs
+
+A user message and an Agent run are different lifecycle objects. When `claw_core_post_message` receives a message for the session currently owned by an insertable run, Core:
+
+1. copies the text into the run's bounded inbox;
+2. aborts an in-flight LLM HTTP call cooperatively when necessary;
+3. drains inbox messages at safe Agent-loop checkpoints;
+4. persists each message as user context before rebuilding the next inference input.
+
+The original run keeps ownership of the final response and cancellation. Messages received for another session, while the current run is finalizing, or while no run is active start a new queued run. Inbox capacity and queue submission are explicit backpressure boundaries rather than UI-level busy checks.
 
 When assembling the **current-turn user prompt** sent to the LLM, `claw_core` also appends **Behavior Notes**: since the framework usually auto-delivers the final assistant result to users, you generally do not need to proactively call IM send APIs from `cap_im_platform` to return the same text (to avoid duplicate replies).
 

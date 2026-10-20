@@ -1,4 +1,10 @@
 dependencies:
+  claw_hw_registry:
+    path: ../claw_hw_registry
+
+  audio_hub:
+    path: ../audio_hub
+
   cap_boards:
     path: ../../claw_capabilities/cap_boards
 
@@ -36,6 +42,11 @@ dependencies:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True
     path: ../../claw_capabilities/cap_lua
+
+  cap_app_mgr:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
+    path: ../../claw_capabilities/cap_app_mgr
 
   cap_mcp_client:
     rules:
@@ -109,6 +120,11 @@ dependencies:
   claw_skill:
     path: ../../claw_modules/claw_skill
 
+  app_registry:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
+    path: ../app_registry
+
   claw_utils:
     path: ../../claw_modules/claw_utils
 
@@ -120,7 +136,7 @@ dependencies:
 
   system_ui:
     rules:
-      - if: $CONFIG{ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT} == True
+      - if: $CONFIG{ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT} == True && $CONFIG{APP_CLAW_SYSTEM_UI_ENABLE} == True
     path: ../system_ui
 
   # --- lua_driver (hardware peripheral drivers) ---
@@ -297,19 +313,11 @@ dependencies:
       - if: $CONFIG{APP_CLAW_LUA_MODULE_LCD} == True
     path: ../../lua_modules/lua_module_lcd
 
-  lua_module_lcd_touch:
+  lua_driver_ledc:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True
-      - if: $CONFIG{APP_CLAW_LUA_MODULE_LCD_TOUCH} == True
-      - if: $CONFIG{ESP_BOARD_DEV_LCD_TOUCH_SUPPORT} == True
-      - if: $CONFIG{ESP_BOARD_DEV_LCD_TOUCH_SUB_I2C_SUPPORT} == True
-    path: ../../lua_modules/lua_module_lcd_touch
-
-  lua_module_ledc:
-    rules:
-      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
-      - if: $CONFIG{APP_CLAW_LUA_MODULE_LEDC} == True
-    path: ../../lua_modules/lua_module_ledc
+      - if: $CONFIG{APP_CLAW_LUA_DRIVER_LEDC} == True
+    path: ../../lua_modules/lua_driver_ledc
 
   lua_module_led_strip:
     rules:

@@ -62,7 +62,7 @@ static bool lua_lvgl_path_starts_with_data_root(const char *path, const char **o
     return false;
 }
 
-static esp_err_t lua_lvgl_to_lv_fs_path(const char *path, char *out, size_t out_size)
+static esp_err_t lua_lvgl_normalize_font_path(const char *path, char *out, size_t out_size)
 {
     const char *rel = NULL;
     int written;
@@ -83,7 +83,7 @@ static esp_err_t lua_lvgl_to_lv_fs_path(const char *path, char *out, size_t out_
     ESP_RETURN_ON_FALSE(rel && rel[0], ESP_ERR_INVALID_ARG, TAG, "font path points to data root");
     ESP_RETURN_ON_FALSE(!lua_lvgl_path_has_parent_ref(rel), ESP_ERR_INVALID_ARG, TAG, "font path escapes data root");
 
-    written = snprintf(out, out_size, "%c:/%s", LUA_MODULE_LVGL_FS_LETTER, rel);
+    written = snprintf(out, out_size, "%s", rel);
     ESP_RETURN_ON_FALSE(written > 0 && (size_t)written < out_size, ESP_ERR_INVALID_SIZE, TAG, "font path too long");
     return ESP_OK;
 }
@@ -163,22 +163,22 @@ static esp_err_t lua_lvgl_read_font_file(const char *vfs_path, uint8_t **out_dat
     return ESP_OK;
 }
 
-static esp_err_t lua_lvgl_read_default_font_data(const char *font_path, uint8_t **out_data, size_t *out_size)
+static esp_err_t lua_lvgl_read_font_data(const char *font_path, uint8_t **out_data, size_t *out_size)
 {
     char vfs_path[LUA_MODULE_LVGL_PATH_MAX] = {0};
-    esp_err_t data_ret;
+    esp_err_t system_ret;
 
-    ESP_RETURN_ON_FALSE(out_data && out_size, ESP_ERR_INVALID_ARG, TAG, "default font output missing");
+    ESP_RETURN_ON_FALSE(out_data && out_size, ESP_ERR_INVALID_ARG, TAG, "font output missing");
     *out_data = NULL;
     *out_size = 0;
 
-    ESP_RETURN_ON_ERROR(lua_lvgl_to_root_vfs_path(CLAW_PATH_DATA, font_path, vfs_path, sizeof(vfs_path)), TAG, "resolve default font data path failed");
-    data_ret = lua_lvgl_read_font_file(vfs_path, out_data, out_size);
-    if (data_ret != ESP_ERR_NOT_FOUND) {
-        return data_ret;
+    ESP_RETURN_ON_ERROR(lua_lvgl_to_root_vfs_path(CLAW_PATH_SYSTEM, font_path, vfs_path, sizeof(vfs_path)), TAG, "resolve font system path failed");
+    system_ret = lua_lvgl_read_font_file(vfs_path, out_data, out_size);
+    if (system_ret != ESP_ERR_NOT_FOUND) {
+        return system_ret;
     }
 
-    ESP_RETURN_ON_ERROR(lua_lvgl_to_root_vfs_path(CLAW_PATH_SYSTEM, font_path, vfs_path, sizeof(vfs_path)), TAG, "resolve default font system path failed");
+    ESP_RETURN_ON_ERROR(lua_lvgl_to_root_vfs_path(CLAW_PATH_DATA, font_path, vfs_path, sizeof(vfs_path)), TAG, "resolve font data path failed");
     return lua_lvgl_read_font_file(vfs_path, out_data, out_size);
 }
 
@@ -340,15 +340,23 @@ lv_font_t *lua_lvgl_validate_font_locked(const lua_lvgl_font_ud_t *ud, const cha
     return record->font;
 }
 
+static void lua_lvgl_refresh_default_font_screens_locked(void);
+
 static void lua_lvgl_release_font_record(lua_lvgl_font_record_t *record)
 {
     if (!record || !record->valid) {
         return;
     }
+    if (s_lvgl.default_font == record) {
+        s_lvgl.default_font = NULL;
+        lua_lvgl_refresh_default_font_screens_locked();
+    }
     if (record->font) {
         lv_tiny_ttf_destroy(record->font);
         record->font = NULL;
     }
+    free(record->font_data);
+    record->font_data = NULL;
     record->valid = false;
 }
 
@@ -400,80 +408,58 @@ void lua_lvgl_release_fonts_locked(void)
 
 void lua_lvgl_apply_default_font_locked(lv_obj_t *obj)
 {
-    if (obj && s_lvgl.default_font) {
-        lv_obj_set_style_text_font(obj, s_lvgl.default_font, 0);
+    if (obj && s_lvgl.default_font && s_lvgl.default_font->valid && s_lvgl.default_font->font) {
+        lv_obj_set_style_text_font(obj, s_lvgl.default_font->font, 0);
     }
 }
 
-void lua_lvgl_destroy_default_font_locked(void)
+static void lua_lvgl_refresh_default_font_screens_locked(void)
 {
-    if (s_lvgl.default_font) {
-        lv_tiny_ttf_destroy(s_lvgl.default_font);
-        s_lvgl.default_font = NULL;
+    if (s_lvgl.root_screen && lv_obj_is_valid(s_lvgl.root_screen)) {
+        if (s_lvgl.default_font) {
+            lua_lvgl_apply_default_font_locked(s_lvgl.root_screen);
+        } else {
+            lv_obj_set_style_text_font(s_lvgl.root_screen, LV_FONT_DEFAULT, 0);
+        }
     }
-    free(s_lvgl.default_font_data);
-    s_lvgl.default_font_data = NULL;
-    s_lvgl.default_font_data_size = 0;
-    s_lvgl.default_font_size = 0;
-    s_lvgl.default_font_cache_size = 0;
-    s_lvgl.default_font_path[0] = '\0';
-}
-
-esp_err_t lua_lvgl_create_default_font_locked(const char *font_path, uint32_t font_size, uint32_t cache_size)
-{
-    uint8_t *font_data = NULL;
-    size_t font_data_size = 0;
-    lv_font_t *font;
-    int written;
-    esp_err_t err;
-
-    if (!font_path || !font_path[0]) {
-        font_path = LUA_MODULE_LVGL_DEFAULT_FONT_PATH;
+    for (lua_lvgl_obj_record_t *record = s_lvgl.records; record; record = record->next) {
+        if (record->type == LUA_LVGL_OBJ_SCREEN && record->valid && record->obj && record->obj != s_lvgl.root_screen && lv_obj_is_valid(record->obj)) {
+            if (s_lvgl.default_font) {
+                lua_lvgl_apply_default_font_locked(record->obj);
+            } else {
+                lv_obj_set_style_text_font(record->obj, LV_FONT_DEFAULT, 0);
+            }
+        }
     }
-    if (font_size == 0) {
-        font_size = LUA_MODULE_LVGL_DEFAULT_FONT_SIZE;
-    }
-
-    lua_lvgl_destroy_default_font_locked();
-    written = snprintf(s_lvgl.default_font_path, sizeof(s_lvgl.default_font_path), "%s", lua_lvgl_skip_drive_prefix(font_path));
-    ESP_RETURN_ON_FALSE(written > 0 && (size_t)written < sizeof(s_lvgl.default_font_path), ESP_ERR_INVALID_SIZE, TAG, "default font path too long");
-
-    err = lua_lvgl_read_default_font_data(s_lvgl.default_font_path, &font_data, &font_data_size);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "default font data load failed: %s (%s)", s_lvgl.default_font_path, esp_err_to_name(err));
-        return err;
-    }
-
-    font = lv_tiny_ttf_create_data_ex(font_data, font_data_size, font_size, LV_FONT_KERNING_NORMAL, (size_t)cache_size);
-    if (!font) {
-        free(font_data);
-        ESP_LOGW(TAG, "default font create failed: %s size=%lu", s_lvgl.default_font_path, (unsigned long)font_size);
-        return ESP_FAIL;
-    }
-
-    s_lvgl.default_font = font;
-    s_lvgl.default_font_data = font_data;
-    s_lvgl.default_font_data_size = font_data_size;
-    s_lvgl.default_font_size = font_size;
-    s_lvgl.default_font_cache_size = cache_size;
-    ESP_LOGI(TAG, "default font loaded: %s size=%lu cache=%lu", s_lvgl.default_font_path, (unsigned long)font_size, (unsigned long)cache_size);
-    return ESP_OK;
 }
 
 static int lua_lvgl_font_load(lua_State *L)
 {
-    const char *path = luaL_checkstring(L, 1);
+    const char *path = LUA_MODULE_LVGL_DEFAULT_FONT_PATH;
     int size = 16;
     int cache_size = LV_TINY_TTF_CACHE_GLYPH_CNT;
-    char lv_path[LUA_MODULE_LVGL_PATH_MAX];
+    int opts_index = 0;
+    char normalized_path[LUA_MODULE_LVGL_PATH_MAX];
+    uint8_t *font_data = NULL;
+    size_t font_data_size = 0;
     lv_font_t *font;
     lua_lvgl_font_record_t *record;
     lua_lvgl_font_ud_t *ud;
     esp_err_t err;
 
-    if (lua_lvgl_opt_table(L, 2)) {
-        size = lua_lvgl_get_opt_int_field(L, 2, "size", size);
-        cache_size = lua_lvgl_get_opt_int_field(L, 2, "cache_size", cache_size);
+    if (lua_isstring(L, 1)) {
+        path = lua_tostring(L, 1);
+        opts_index = 2;
+    } else if (lua_istable(L, 1)) {
+        opts_index = 1;
+    } else if (!lua_isnoneornil(L, 1)) {
+        return luaL_argerror(L, 1, "font path must be a string or options table");
+    } else {
+        opts_index = 2;
+    }
+    if (lua_lvgl_opt_table(L, opts_index)) {
+        size = lua_lvgl_get_opt_int_field(L, opts_index, "size", size);
+        cache_size = lua_lvgl_get_opt_int_field(L, opts_index, "cache_size", cache_size);
     }
     luaL_argcheck(L, size > 0, 2, "font size must be positive");
     luaL_argcheck(L, cache_size >= 0, 2, "cache_size must be non-negative");
@@ -486,26 +472,34 @@ static int lua_lvgl_font_load(lua_State *L)
         lua_lvgl_unlock();
         return luaL_error(L, "lvgl runtime is not initialized");
     }
-    err = lua_lvgl_to_lv_fs_path(path, lv_path, sizeof(lv_path));
+    err = lua_lvgl_normalize_font_path(path, normalized_path, sizeof(normalized_path));
     if (err != ESP_OK) {
         lua_lvgl_unlock();
         if (err == ESP_ERR_INVALID_ARG) {
-            return luaL_error(L, "font path must be relative to data root or under %s", s_lvgl.data_root);
+            return luaL_error(L, "font path must be relative or under DATA root %s", s_lvgl.data_root);
         }
         return lua_lvgl_error_esp(L, "font path", err);
     }
-    font = lv_tiny_ttf_create_file_ex(lv_path, size, LV_FONT_KERNING_NORMAL, (size_t)cache_size);
-    if (!font) {
+    err = lua_lvgl_read_font_data(normalized_path, &font_data, &font_data_size);
+    if (err != ESP_OK) {
         lua_lvgl_unlock();
-        return luaL_error(L, "lvgl failed to load font: %s", lv_path);
+        return luaL_error(L, "failed to read font: %s (%s)", normalized_path, esp_err_to_name(err));
+    }
+    font = lv_tiny_ttf_create_data_ex(font_data, font_data_size, size, LV_FONT_KERNING_NORMAL, (size_t)cache_size);
+    if (!font) {
+        free(font_data);
+        lua_lvgl_unlock();
+        return luaL_error(L, "lvgl failed to create font: %s", normalized_path);
     }
     record = (lua_lvgl_font_record_t *)calloc(1, sizeof(*record));
     if (!record) {
         lv_tiny_ttf_destroy(font);
+        free(font_data);
         lua_lvgl_unlock();
         return luaL_error(L, "lvgl font record allocation failed");
     }
     record->font = font;
+    record->font_data = font_data;
     record->generation = s_lvgl.generation;
     record->valid = true;
     record->next = s_lvgl.fonts;
@@ -517,6 +511,34 @@ static int lua_lvgl_font_load(lua_State *L)
     luaL_getmetatable(L, LUA_LVGL_FONT_MT);
     lua_setmetatable(L, -2);
     lua_lvgl_unlock();
+    return 1;
+}
+
+static int lua_lvgl_set_default_font(lua_State *L)
+{
+    lua_lvgl_font_ud_t *ud = lua_isnoneornil(L, 1) ? NULL : lua_lvgl_check_font(L, 1);
+    const char *font_error = NULL;
+    esp_err_t err = lua_lvgl_lock();
+
+    if (err != ESP_OK) {
+        return lua_lvgl_error_esp(L, "lock", err);
+    }
+    if (!s_lvgl.runtime_initialized) {
+        lua_lvgl_unlock();
+        return luaL_error(L, "lvgl runtime is not initialized");
+    }
+    if (ud) {
+        if (!lua_lvgl_validate_font_locked(ud, &font_error)) {
+            lua_lvgl_unlock();
+            return luaL_error(L, "%s", font_error);
+        }
+        s_lvgl.default_font = ud->record;
+    } else {
+        s_lvgl.default_font = NULL;
+    }
+    lua_lvgl_refresh_default_font_screens_locked();
+    lua_lvgl_unlock();
+    lua_pushboolean(L, 1);
     return 1;
 }
 
@@ -638,6 +660,7 @@ void lua_lvgl_register_font_metatable(lua_State *L)
 
 const luaL_Reg lua_lvgl_font_module_funcs[] = {
     {"font_load", lua_lvgl_font_load},
+    {"set_default_font", lua_lvgl_set_default_font},
     {NULL, NULL},
 };
 
@@ -660,24 +683,6 @@ void lua_lvgl_register_font_metatable(lua_State *L)
 }
 
 void lua_lvgl_release_fonts_locked(void)
-{
-}
-
-void lua_lvgl_apply_default_font_locked(lv_obj_t *obj)
-{
-    (void)obj;
-}
-
-esp_err_t lua_lvgl_create_default_font_locked(const char *font_path, uint32_t font_size, uint32_t cache_size)
-{
-    (void)font_path;
-    (void)font_size;
-    (void)cache_size;
-    ESP_LOGW("lua_lvgl_font", "default font disabled: LVGL tiny_ttf is disabled");
-    return ESP_ERR_NOT_SUPPORTED;
-}
-
-void lua_lvgl_destroy_default_font_locked(void)
 {
 }
 
@@ -708,6 +713,7 @@ static int lua_lvgl_font_load_disabled(lua_State *L)
 
 const luaL_Reg lua_lvgl_font_module_funcs[] = {
     {"font_load", lua_lvgl_font_load_disabled},
+    {"set_default_font", lua_lvgl_font_load_disabled},
     {NULL, NULL},
 };
 

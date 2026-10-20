@@ -16,6 +16,7 @@ local DEVICE_NAME = type(a.device) == "string" and a.device or "magnetometer_sen
 local SAMPLE_COUNT = int_arg("samples", 20)
 local INTERVAL_MS = int_arg("interval_ms", 200)
 local RUN_CALIBRATION = a.calibrate == true
+local MIN_CALIBRATION_SAMPLES = 16
 
 local sensor
 
@@ -30,12 +31,14 @@ end
 
 local function run()
     print("[magnetometer] opening device " .. DEVICE_NAME)
-    sensor = magnetometer.new(DEVICE_NAME)
+    sensor = magnetometer.new({ device = DEVICE_NAME })
     print("[magnetometer] opened " .. sensor:name())
     if RUN_CALIBRATION then
+        local calibration_samples = math.max(SAMPLE_COUNT, MIN_CALIBRATION_SAMPLES)
+
         print("[magnetometer] collecting calibration samples")
         sensor:calibration_reset()
-        for _ = 1, SAMPLE_COUNT do
+        for _ = 1, calibration_samples do
             sensor:calibration_add_sample()
             delay.delay_ms(INTERVAL_MS)
         end
@@ -48,9 +51,9 @@ local function run()
 
     for i = 1, SAMPLE_COUNT do
         local sample = sensor:read()
-        local temp = sample.temperature
+        local temp = sample.temperature and string.format("%.3fC", sample.temperature) or "unavailable"
         print(string.format(
-            "[magnetometer] #%d mag=(%.3f,%.3f,%.3f) raw=(%.3f,%.3f,%.3f) temp=%.3fC status=0x%02X",
+            "[magnetometer] #%d mag=(%.3f,%.3f,%.3f) raw=(%.3f,%.3f,%.3f) temp=%s status=0x%02X",
             i,
             sample.magnetic.x, sample.magnetic.y, sample.magnetic.z,
             sample.raw_magnetic.x, sample.raw_magnetic.y, sample.raw_magnetic.z,

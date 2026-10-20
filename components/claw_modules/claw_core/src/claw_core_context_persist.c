@@ -65,13 +65,14 @@ esp_err_t claw_core_persist_context_user_messages_if_configured(claw_core_state_
                                                                 size_t text_count,
                                                                 bool *out_persisted)
 {
-    claw_core_context_record_t records[CLAW_CORE_INSERT_QUEUE_LEN];
+    claw_core_context_record_t records[CLAW_CORE_RUN_INBOX_CAPACITY];
     size_t i;
 
     if (out_persisted) {
         *out_persisted = false;
     }
-    if (!request || !texts || text_count == 0 || text_count > CLAW_CORE_INSERT_QUEUE_LEN) {
+    if (!request || !texts || text_count == 0 ||
+            text_count > CLAW_CORE_RUN_INBOX_CAPACITY) {
         return ESP_ERR_INVALID_ARG;
     }
     if (!request_has_context_persistence(core, request)) {

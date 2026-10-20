@@ -4,9 +4,8 @@
   "description": "Manage router automation rules: list/get/add/update/delete/reload with strict rule_json format.",
   "metadata": {
     "cap_groups": [
-      "cap_router_mgr"
-    ],
-    "manage_mode": "readonly"
+     "cap_router_mgr"
+    ]
   }
 }
 ---

@@ -311,8 +311,7 @@
             }
 
             const status = Number(match.status || 200);
-            const statusText = String(match.status_text || "OK");
-            return { ok: true, text: `HTTP ${status} ${statusText}\n${body}` };
+            return { ok: true, text: `HTTP ${status}\n${body}` };
           },
         };
         const cameraService = {
@@ -981,6 +980,7 @@
         onRuntimeInitialized() {
           Module.__simServices = createSimServices();
           let touchId = 0;
+          let pointerDown = false;
           Module.__inputSessionId = 0;
           Module.__inputMode = "idle";
           Module.__inputEnabled = false;
@@ -1039,12 +1039,13 @@
             };
           };
           const setTouchEvent = (event, pressed, type) => {
-            if (!Module.__inputEnabled) {
+            if (!Module.__inputEnabled || event.isPrimary === false) {
               return;
             }
             if (pressed) {
               Module.__simServices.audio.unlock();
             }
+            pointerDown = pressed;
             const position = pointerPosition(event);
             const touchEvent = {
               x: position.x,
@@ -1070,7 +1071,7 @@
             event.preventDefault();
           });
           Module.canvas.addEventListener("pointermove", (event) => {
-            if (event.buttons || Module.__touchState.pressed) {
+            if (event.buttons) {
               setTouchEvent(event, true, "move");
               event.preventDefault();
             }
@@ -1078,6 +1079,18 @@
           Module.canvas.addEventListener("pointercancel", (event) => {
             setTouchEvent(event, false, "cancel");
             event.preventDefault();
+          });
+          const releaseTouch = () => {
+            pointerDown = false;
+            Module.__touchState = releasedTouchState(Module.__inputSessionId);
+            Module.__touchEvents = [];
+          };
+          window.addEventListener("blur", releaseTouch);
+          Module.canvas.addEventListener("lostpointercapture", () => {
+            if (pointerDown) releaseTouch();
+          });
+          Module.canvas.addEventListener("pointerleave", () => {
+            if (pointerDown) releaseTouch();
           });
           Module.canvas.addEventListener("wheel", (event) => {
             if (!Module.__inputEnabled) {
@@ -1137,7 +1150,8 @@
             select.value = path;
             runButton.disabled = false;
           };
-          const runPath = async (path, clearLog) => {
+          let activeRun = null;
+          const executePath = async (path, clearLog) => {
             const button = document.getElementById("runButton");
             const stopButton = document.getElementById("stopButton");
             let rc = 1;
@@ -1179,11 +1193,16 @@
               postHostEvent("esp-claw-sim:exited", { code: rc, stopped: Module.__stopRequested });
             }
           };
+          const runPath = (path, clearLog) => {
+            if (activeRun) return Promise.reject(new Error("an App is already running; stop it first"));
+            activeRun = executePath(path, clearLog).finally(() => { activeRun = null; });
+            return activeRun;
+          };
           const run = async () => {
             Module.__simServices.audio.unlock();
             const path = document.getElementById("scriptSelect").value;
             if (!path) {
-              Module.printErr("[sim] no script mounted. Upload a Lua file or launch from Skill Lab.");
+              Module.printErr("[sim] no script mounted. Upload a Lua file or launch an App.");
               return;
             }
             await runPath(path, true);
@@ -1225,9 +1244,10 @@
           window.addEventListener("message", async (event) => {
             const data = event.data || {};
             try {
-              if (data.type === "esp-claw-sim:mountSkill") {
-                const skill = data.skill || {};
-                const files = Array.isArray(skill.files) ? skill.files : [];
+              if (data.type === "esp-claw-sim:mountApp") {
+                if (activeRun) throw new Error("stop the running App before mounting files");
+                const app = data.app || {};
+                const files = Array.isArray(app.files) ? app.files : [];
                 for (const file of files) {
                   if (!file || !file.path) {
                     continue;
@@ -1238,22 +1258,22 @@
                     window.espClawSim.mountBytes(file.path, file.bytes);
                   }
                 }
-                if (skill.entry) {
-                  const entry = normalizePath(skill.entry);
+                if (app.entry) {
+                  const entry = normalizePath(app.entry);
                   addScriptOption(entry);
-                  Module.__scriptPeripherals.set(entry, Array.isArray(skill.peripherals) ? skill.peripherals : []);
+                  Module.__scriptPeripherals.set(entry, Array.isArray(app.peripherals) ? app.peripherals : []);
                 }
-                Module.__simServices.capability.configure(skill.root || "", skill.capabilityMocks || {});
-                Module.__simServices.thread.configureSimulatorMocks(skill.simulatorMocks || {});
-                Module.print("[sim] mounted skill: " + (skill.id || "unknown"));
+                Module.__simServices.capability.configure(app.root || "", app.capabilityMocks || {});
+                Module.__simServices.thread.configureSimulatorMocks(app.simulatorMocks || {});
+                Module.print("[sim] mounted App: " + (app.id || "unknown"));
                 event.source && event.source.postMessage({
                   type: "esp-claw-sim:mounted",
-                  id: skill.id || "",
+                  id: app.id || "",
                 }, event.origin || "*");
-              } else if (data.type === "esp-claw-sim:runSkill") {
+              } else if (data.type === "esp-claw-sim:runApp") {
                 const path = normalizePath(data.path || "");
                 if (!path || path === "/") {
-                  throw new Error("missing runSkill path");
+                  throw new Error("missing runApp path");
                 }
                 addScriptOption(path);
                 await window.espClawSim.runPath(path, true);
@@ -1262,6 +1282,11 @@
               } else if (data.type === "esp-claw-sim:setResolution") {
                 const width = clampResolution(data.width, canvas.width || 800);
                 const height = clampResolution(data.height, canvas.height || 480);
+                if (activeRun) {
+                  window.espClawSim.stop();
+                  await activeRun;
+                }
+                Module.__lvglCanvas = null;
                 setCanvasResolution(width, height, false);
               }
             } catch (err) {

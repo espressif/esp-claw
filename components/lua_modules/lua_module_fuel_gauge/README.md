@@ -1,9 +1,8 @@
 # Lua Fuel Gauge
 
-This skill describes how to read battery fuel-gauge data from Lua using the existing `i2c` module.
+This module describes how to read battery fuel-gauge data from Lua using the existing `i2c` module.
 When a request mentions `fuel gauge`, `battery voltage`, `battery current`, or `battery percentage`, use this module by default.
 
-The module supports multiple fuel-gauge ICs through a chip profile architecture.
 Currently supported chips: **BQ27220**, **MAX17048** (voltage + SOC only, no current).
 
 ## How to call
@@ -16,6 +15,7 @@ Currently supported chips: **BQ27220**, **MAX17048** (voltage + SOC only, no cur
   - `gauge:read_current_ma()` (not available on all chips)
   - `gauge:read_soc()`
 - Query the active chip with `gauge:chip()`
+- Query the active I2C address with `gauge:address()`
 - List supported chips with `fuel_gauge.supported_chips()`
 - Call `gauge:close()` when needed
 
@@ -23,6 +23,7 @@ Currently supported chips: **BQ27220**, **MAX17048** (voltage + SOC only, no cur
 | Field      | Type    | Meaning                                              |
 |------------|---------|------------------------------------------------------|
 | `chip`     | string  | Chip model name, e.g. `"bq27220"`, `"max17048"`     |
+| `borrow`   | boolean | Use an initialized board bus by `port`; default `false` |
 | `port`     | integer | I2C port number                                      |
 | `sda`      | integer | SDA GPIO number                                      |
 | `scl`      | integer | SCL GPIO number                                      |
@@ -30,6 +31,11 @@ Currently supported chips: **BQ27220**, **MAX17048** (voltage + SOC only, no cur
 | `frequency`| integer | Alias of `freq_hz`                                   |
 | `addr`     | integer | 7-bit I2C address (default depends on chip)          |
 | `bus`      | userdata| Existing `i2c` bus handle, recommended               |
+| `close_bus`| boolean | Close a bus created from `port`/`sda`/`scl` when `gauge:close()` runs |
+
+For a board-initialized bus, use `fuel_gauge.new({ borrow = true, port = 0, chip = "bq27220" })`; `gauge:close()` closes the gauge without stopping the board bus. The device address must be free. A caller-supplied `bus` remains caller-owned and must be closed after all gauges/devices using it.
+
+Close the gauge when finished. Garbage collection and job exit also clean up unused handles.
 
 ## Data format
 - `sample.chip` — chip name string
@@ -37,12 +43,14 @@ Currently supported chips: **BQ27220**, **MAX17048** (voltage + SOC only, no cur
 - `sample.current_ma` (nil when the chip has no current register)
 - `sample.soc`
 
+`gauge:read_current_ma()` raises an error when the selected chip has no current register.
+
 ## Example
 ```lua
 local fuel_gauge = require("lib_fuel_gauge")
 local i2c = require("i2c")
 
-local bus = i2c.new(0, 14, 13, 400000)
+local bus = i2c.borrow(0)
 local gauge = fuel_gauge.new({
     bus = bus,
     chip = "bq27220",   -- or "max17048"

@@ -194,7 +194,8 @@ static void send_requests(const char *model, const char *url, bool bearer)
     };
     claw_llm_runtime_config_t config = {
         .api_key = saved.api_key, .base_url = saved.base_url, .model = saved.model,
-        .auth_type = saved.auth_type, .max_tokens = 4096, .timeout_ms = 5000,
+        .auth_type = saved.auth_type, .reasoning_effort = saved.reasoning_effort,
+        .max_tokens = 4096, .timeout_ms = 5000,
     };
     void *ctx = NULL;
     char *error = NULL;

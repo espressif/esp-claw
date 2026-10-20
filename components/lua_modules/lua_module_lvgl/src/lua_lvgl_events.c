@@ -5,10 +5,6 @@
  */
 
 /*
- * Event subsystem (P3 of RFC-single-script-ui.md).
- *
- * Design summary (full rationale lives in RFC §4.2):
- *
  *   - LVGL events fire on the LVGL task. The trampoline here MUST NOT call
  *     into the Lua state directly: the script lives on a separate cap_lua
  *     job task, and the Lua VM is single-threaded per state. Instead the
@@ -39,8 +35,6 @@
 #include "freertos/task.h"
 
 static const char *TAG = "lua_lvgl_evt";
-
-/* --- Event name <-> LVGL code mapping ---------------------------------- */
 
 typedef struct {
     const char *name;
@@ -76,8 +70,6 @@ static bool lua_lvgl_event_code_for_name(const char *name, lv_event_code_t *out)
     return false;
 }
 
-/* --- Pending unref queue ----------------------------------------------- */
-
 void lua_lvgl_queue_pending_unref_locked(int ref)
 {
     lua_lvgl_pending_unref_t *node;
@@ -112,8 +104,6 @@ void lua_lvgl_drain_pending_unrefs_locked(lua_State *L)
     }
 }
 
-/* --- Event queue (FIFO of subs) ---------------------------------------- */
-
 static void lua_lvgl_enqueue_sub_locked(lua_lvgl_event_sub_t *sub)
 {
     sub->queued = true;
@@ -142,8 +132,6 @@ static lua_lvgl_event_sub_t *lua_lvgl_dequeue_sub_locked(void)
     return head;
 }
 
-/* --- Trampoline (runs in LVGL task) ------------------------------------ */
-
 /* Note: We hold lua_lvgl_lock() because lv_timer_handler is invoked under
  * that lock by lua_lvgl_task. Coalesce repeated fires while a sub is still
  * pending so the script never gets a queue blowup; for typical UI events
@@ -158,8 +146,6 @@ static void lua_lvgl_event_trampoline(lv_event_t *e)
     }
     lua_lvgl_enqueue_sub_locked(sub);
 }
-
-/* --- Sub allocation / release ------------------------------------------ */
 
 /* Free a sub that is NOT in the dispatch queue. Caller holds the lock and
  * is responsible for having already removed it from record->events. */
@@ -208,15 +194,15 @@ void lua_lvgl_record_release_events_locked(lua_lvgl_obj_record_t *record)
     if (!record) {
         return;
     }
-    /* The widget that owned these subs is in the process of being deleted
-     * (LV_EVENT_DELETE chain), so we deliberately do NOT call
-     * lv_obj_remove_event_cb_*: LVGL is already cleaning up its own
-     * callback list. */
+    /* Detach before freeing: borrowed objects can outlive the Lua session. */
     sub = record->events;
     record->events = NULL;
     while (sub) {
         lua_lvgl_event_sub_t *next = sub->next;
 
+        if (record->obj && lv_obj_is_valid(record->obj)) {
+            lv_obj_remove_event_cb_with_user_data(record->obj, lua_lvgl_event_trampoline, sub);
+        }
         sub->next = NULL;
         sub->record = NULL;
         if (sub->queued) {
@@ -227,8 +213,6 @@ void lua_lvgl_record_release_events_locked(lua_lvgl_obj_record_t *record)
         sub = next;
     }
 }
-
-/* --- obj:on / obj:off Lua entries -------------------------------------- */
 
 int lua_lvgl_obj_on(lua_State *L)
 {
@@ -386,8 +370,6 @@ int lua_lvgl_obj_off(lua_State *L)
     lua_pushinteger(L, removed);
     return 1;
 }
-
-/* --- lvgl.process_events / lvgl.run ------------------------------------ */
 
 /* Drain one queued event under the lock; returns the popped sub or NULL.
  * Also drains pending unrefs while the lock is held. */

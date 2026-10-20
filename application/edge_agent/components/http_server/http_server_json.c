@@ -14,13 +14,20 @@ esp_err_t http_server_send_embedded_file(httpd_req_t *req,
                                          const char *content_type)
 {
     size_t content_len = (size_t)(end - start);
-    if (content_len > 0 && start[content_len - 1] == '\0') {
-        content_len--;
-    }
     httpd_resp_set_type(req, content_type);
     httpd_resp_set_hdr(req, "Cache-Control", "no-store, max-age=0");
     httpd_resp_set_hdr(req, "Pragma", "no-cache");
-    return httpd_resp_send(req, (const char *)start, content_len);
+
+    while (content_len > 0) {
+        size_t chunk_len = content_len < HTTP_SERVER_SCRATCH_SIZE ? content_len : HTTP_SERVER_SCRATCH_SIZE;
+        esp_err_t err = httpd_resp_send_chunk(req, (const char *)start, chunk_len);
+        if (err != ESP_OK) {
+            return err;
+        }
+        start += chunk_len;
+        content_len -= chunk_len;
+    }
+    return httpd_resp_send_chunk(req, NULL, 0);
 }
 
 void http_server_json_add_string(cJSON *root, const char *key, const char *value)

@@ -7,7 +7,7 @@ const projectDir = path.resolve(here, '..')
 const repoRoot = path.resolve(projectDir, '..', '..')
 const sourceDir = process.env.SIMULATOR_BUILD_DIR
   ? path.resolve(process.env.SIMULATOR_BUILD_DIR)
-  : path.join(repoRoot, 'build', 'lua_lvgl_web_sim_test')
+  : path.join(repoRoot, 'build', 'lua_lvgl_web_sim')
 const targetDir = path.join(projectDir, 'public', 'runtime')
 const files = ['esp_claw_sim.html', 'esp_claw_sim.js', 'esp_claw_sim.wasm', 'esp_claw_sim.data']
 

@@ -1,34 +1,75 @@
 # Lua Event Publisher
 
-This module describes how to correctly use `event_publisher` when writing Lua scripts.
+This module describes how to publish events from Lua scripts.
 
-## Default (use this first — avoids runtime errors)
+## API
 
-From **callbacks** (button, timers) or any code path where brevity matters, send IM text with a **single string**. The firmware sets `source_cap = "lua_script"` and fills `channel` / `chat_id` from global `args` when the agent started the script in a chat:
+- Import it with `local event_publisher = require("event_publisher")`.
+- Use dot syntax: `event_publisher.publish_message(...)`, not `event_publisher:publish_message(...)`.
+- All APIs return `true` on success and raise a Lua error on invalid arguments or publish failure.
+
+### `event_publisher.publish_message(opts)`
+
+Publishes an IM-style text message event.
+
+Required fields:
+- `source_cap`: string
+- `channel`: string
+- `chat_id`: string
+- `text`: string
+
+Optional fields:
+- `sender_id`: string
+- `message_id`: string
+
+### `event_publisher.publish_trigger(opts)`
+
+Publishes a trigger event.
+
+Required fields:
+- `source_cap`: string
+- `event_type`: string
+- `event_key`: string
+
+Payload fields:
+- `payload_json`: optional JSON string
+- `payload`: optional Lua table serialized to JSON
+
+If neither `payload_json` nor `payload` is provided, the payload defaults to `{}`.
+
+### `event_publisher.publish(opts)`
+
+Publishes a general event.
+
+Required fields:
+- `source_cap`: string
+- `event_type`: string
+
+Optional fields:
+- `event_id`: string; defaults to a generated `lua-...` id
+- `source_channel`: string
+- `target_channel`: string
+- `source_endpoint`: string
+- `target_endpoint`: string
+- `chat_id`: string
+- `sender_id`: string
+- `message_id`: string
+- `correlation_id`: string
+- `content_type`: string
+- `text`: string
+- `timestamp_ms`: integer; defaults to current uptime milliseconds
+- `session_policy`: `"chat"`, `"trigger"`, `"global"`, `"ephemeral"`, or `"nosave"`
+- `payload_json`: JSON string
+- `payload`: Lua table serialized to JSON
+
+When `session_policy` is omitted and `event_type == "trigger"`, the session policy defaults to `"trigger"`.
+
+## Example: message
 
 ```lua
-local ep = require("event_publisher")
-ep.publish_message("Button pressed!")
-```
+local event_publisher = require("event_publisher")
 
-**Dot syntax only:** `ep.publish_message(...)`. Do **not** use `ep:publish_message(...)` (colon passes the wrong first argument).
-
-Do **not** write a **partial table** (e.g. only `channel`, `chat_id`, `text`). That fails with `missing required field 'source_cap'`. Either use the **string** form above, or a **complete** table (next section).
-
-## Table form (only when you need extra fields)
-
-If you pass a **table**, **every** of these is required unless noted:
-
-| Field | Required? | Notes |
-|-------|-----------|--------|
-| `source_cap` | **Yes** | e.g. `"lua_script"` |
-| `text` | **Yes** | message body |
-| `channel` | If not in `args` | Often use `args.channel` when agent-injected |
-| `chat_id` | If not in `args` | Often use `args.chat_id` when agent-injected |
-
-```lua
-local ep = require("event_publisher")
-ep.publish_message({
+event_publisher.publish_message({
   source_cap = "lua_script",
   channel = args.channel,
   chat_id = args.chat_id,
@@ -36,25 +77,17 @@ ep.publish_message({
 })
 ```
 
-## Session context (agent / IM)
-
-When the agent runs your script from a chat session, the firmware may merge `channel`, `chat_id`, and `session_id` into the global `args` table. Prefer **string** `publish_message` so you do not forget `source_cap` in callbacks.
-
-If `args.channel` / `args.chat_id` are missing (e.g. CLI run without IM), pass `channel` and `chat_id` explicitly in the **table** (still include `source_cap` and `text`).
-
-## Other APIs
-
-- `publish_trigger` and `publish` always take a **table** as the first argument (see their fields in docs when used).
-
-## Example (CLI / no `args`)
+## Example: trigger
 
 ```lua
 local event_publisher = require("event_publisher")
 
-event_publisher.publish_message({
+event_publisher.publish_trigger({
   source_cap = "lua_script",
-  channel = "custom",
-  chat_id = "demo",
-  text = "hello"
+  event_type = "trigger",
+  event_key = "button.single_click",
+  payload = {
+    gpio = 0,
+  },
 })
 ```

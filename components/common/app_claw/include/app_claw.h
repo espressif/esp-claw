@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include "esp_err.h"
+#include "claw_hw_registry.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -33,6 +34,7 @@ typedef struct {
     char llm_max_tokens[APP_CLAW_TIMEOUT_LEN];
     char llm_default_image_max_bytes[APP_CLAW_TIMEOUT_LEN];
     char llm_max_tokens_field[APP_CLAW_SHORT_STR_LEN];
+    char llm_reasoning_effort[APP_CLAW_TIMEOUT_LEN];
     char llm_supports_tools[8];
     char llm_supports_vision[8];
     char llm_image_remote_url_only[8];
@@ -46,6 +48,8 @@ typedef struct {
     char wechat_base_url[APP_CLAW_STR_LEN];
     char wechat_cdn_base_url[APP_CLAW_STR_LEN];
     char wechat_account_id[APP_CLAW_SHORT_STR_LEN];
+    char search_provider[16];
+    char search_bocha_key[APP_CLAW_STR_LEN];
     char search_brave_key[APP_CLAW_STR_LEN];
     char search_tavily_key[APP_CLAW_STR_LEN];
     char search_http_allowlist[APP_CLAW_STR_LEN];
@@ -62,10 +66,13 @@ typedef struct {
 
 typedef esp_err_t (*app_claw_save_config_fn)(const app_claw_config_t *config,
                                              void *user_ctx);
+typedef bool (*app_claw_network_ready_fn)(void *user_ctx);
 
 esp_err_t app_claw_set_save_config_callback(app_claw_save_config_fn save_config,
                                             void *user_ctx);
-esp_err_t app_claw_start(const app_claw_config_t *config);
+esp_err_t app_claw_set_network_ready_callback(app_claw_network_ready_fn network_ready,
+                                              void *user_ctx);
+esp_err_t app_claw_start(const app_claw_config_t *config, claw_hw_registry_handle_t registry);
 esp_err_t app_claw_update_config(const app_claw_config_t *config);
 esp_err_t app_claw_get_config(app_claw_config_t *out_config);
 esp_err_t app_claw_apply_config(const app_claw_config_t *config);

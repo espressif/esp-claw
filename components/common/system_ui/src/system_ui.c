@@ -19,13 +19,11 @@ EXT_RAM_BSS_ATTR system_ui_state_t s_ui;
 static const char *SYSTEM_UI_DISPLAY_OWNER_NAME = "system_ui";
 static int32_t s_touch_start_x;
 static int32_t s_touch_start_y;
+static display_service_touch_observer_handle_t s_touch_observer_handle;
 
 #define SYSTEM_UI_JOBS_SWIPE_EDGE_PX 32
 #define SYSTEM_UI_JOBS_SWIPE_TRIGGER_PX 54
 #define SYSTEM_UI_JOBS_SWIPE_HORIZONTAL_TOL_PX 48
-#define SYSTEM_UI_BOTTOM_SWIPE_EDGE_PX 40
-#define SYSTEM_UI_BOTTOM_SWIPE_TRIGGER_PX 54
-#define SYSTEM_UI_BOTTOM_SWIPE_HORIZONTAL_TOL_PX 64
 #define SYSTEM_UI_EVENT_TASK_STACK 6144
 #define SYSTEM_UI_EVENT_TASK_PRIO 4
 
@@ -177,23 +175,6 @@ static void system_ui_event_task(void *arg)
         case SYSTEM_UI_WORK_EVENT_NETWORK_STATUS:
             system_ui_handle_network_status_event(&event);
             break;
-        case SYSTEM_UI_WORK_EVENT_APP_EXIT_SWIPE:
-        {
-            system_ui_app_exit_swipe_cb_t cb = NULL;
-            void *user_ctx = NULL;
-            if (event.generation == s_ui.generation && system_ui_callback_lock() == ESP_OK) {
-                cb = s_ui.app_exit_swipe_cb;
-                user_ctx = s_ui.app_exit_swipe_user_ctx;
-                system_ui_callback_unlock();
-            }
-            if (cb != NULL) {
-                esp_err_t err = cb(user_ctx);
-                if (err != ESP_OK) {
-                    ESP_LOGW(SYSTEM_UI_TAG, "app exit swipe callback failed: %s", esp_err_to_name(err));
-                }
-            }
-            break;
-        }
         case SYSTEM_UI_WORK_EVENT_STOP:
         default:
             break;
@@ -258,38 +239,28 @@ static void system_ui_stop_event_task(void)
     s_ui.event_task_stop = false;
 }
 
-static void system_ui_touch_observer_cb(const display_service_touch_sample_t *sample, void *user_ctx)
+static void system_ui_touch_observer_cb(const display_service_touch_snapshot_t *snapshot, void *user_ctx)
 {
     (void)user_ctx;
 
-    if (sample == NULL || !s_ui.started) {
+    if (snapshot == NULL || !s_ui.started) {
         return;
     }
-    if (sample->pressed) {
+    if (snapshot->count > 0) {
+        const display_service_touch_point_t *point = &snapshot->points[0];
         if (s_ui.touch_gesture == SYSTEM_UI_TOUCH_GESTURE_NONE) {
-            bool exclusive = display_service_has_exclusive_session();
-            s_touch_start_x = sample->x;
-            s_touch_start_y = sample->y;
-            if (exclusive && s_touch_start_y >= (int32_t)s_ui.height - SYSTEM_UI_BOTTOM_SWIPE_EDGE_PX) {
-                s_ui.touch_gesture = SYSTEM_UI_TOUCH_GESTURE_EXIT_APP;
-            } else if (!exclusive && system_ui_system_overlay_allowed() && s_touch_start_y <= SYSTEM_UI_JOBS_SWIPE_EDGE_PX) {
+            s_touch_start_x = point->x;
+            s_touch_start_y = point->y;
+            if (!display_service_has_exclusive_session() && system_ui_system_overlay_allowed() &&
+                    s_touch_start_y <= SYSTEM_UI_JOBS_SWIPE_EDGE_PX) {
                 s_ui.touch_gesture = SYSTEM_UI_TOUCH_GESTURE_SHOW_JOBS;
             }
         } else if (s_ui.touch_gesture == SYSTEM_UI_TOUCH_GESTURE_SHOW_JOBS &&
                    !s_ui.jobs_visible &&
-                   sample->y - s_touch_start_y >= SYSTEM_UI_JOBS_SWIPE_TRIGGER_PX &&
-                   system_ui_abs_i32(sample->x - s_touch_start_x) <= SYSTEM_UI_JOBS_SWIPE_HORIZONTAL_TOL_PX) {
+                   point->y - s_touch_start_y >= SYSTEM_UI_JOBS_SWIPE_TRIGGER_PX &&
+                   system_ui_abs_i32(point->x - s_touch_start_x) <= SYSTEM_UI_JOBS_SWIPE_HORIZONTAL_TOL_PX) {
             system_ui_work_event_t event = {
                 .type = SYSTEM_UI_WORK_EVENT_SHOW_JOBS,
-                .generation = s_ui.generation,
-            };
-            (void)system_ui_post_work_event(&event, 0);
-            s_ui.touch_gesture = SYSTEM_UI_TOUCH_GESTURE_NONE;
-        } else if (s_ui.touch_gesture == SYSTEM_UI_TOUCH_GESTURE_EXIT_APP &&
-                   s_touch_start_y - sample->y >= SYSTEM_UI_BOTTOM_SWIPE_TRIGGER_PX &&
-                   system_ui_abs_i32(sample->x - s_touch_start_x) <= SYSTEM_UI_BOTTOM_SWIPE_HORIZONTAL_TOL_PX) {
-            system_ui_work_event_t event = {
-                .type = SYSTEM_UI_WORK_EVENT_APP_EXIT_SWIPE,
                 .generation = s_ui.generation,
             };
             (void)system_ui_post_work_event(&event, 0);
@@ -366,8 +337,6 @@ static void system_ui_clear_callbacks_locked(void)
     s_ui.jobs_action_user_ctx = NULL;
     s_ui.jobs_stop_all_cb = NULL;
     s_ui.jobs_stop_all_user_ctx = NULL;
-    s_ui.app_exit_swipe_cb = NULL;
-    s_ui.app_exit_swipe_user_ctx = NULL;
     s_ui.launcher_select_cb = NULL;
     s_ui.launcher_select_user_ctx = NULL;
     system_ui_callback_unlock();
@@ -412,8 +381,9 @@ esp_err_t system_ui_start(const system_ui_config_t *config)
     s_ui.height = (uint32_t)lv_display_get_vertical_resolution(display);
     ESP_GOTO_ON_FALSE(s_ui.width > 0 && s_ui.height > 0, ESP_ERR_INVALID_STATE, fail, SYSTEM_UI_TAG, "display resolution is invalid");
     ESP_GOTO_ON_ERROR(system_ui_start_event_task(), fail, SYSTEM_UI_TAG, "start event task failed");
-    ESP_GOTO_ON_ERROR(display_service_set_touch_observer(system_ui_touch_observer_cb, NULL),
-                      fail, SYSTEM_UI_TAG, "set touch observer failed");
+    s_touch_observer_handle = DISPLAY_SERVICE_TOUCH_OBSERVER_INVALID;
+    ESP_GOTO_ON_ERROR(display_service_add_touch_observer(system_ui_touch_observer_cb, NULL, &s_touch_observer_handle),
+                      fail, SYSTEM_UI_TAG, "add touch observer failed");
     ESP_GOTO_ON_ERROR(display_service_set_state_observer(system_ui_state_observer_cb, NULL),
                       fail, SYSTEM_UI_TAG, "set state observer failed");
     ESP_GOTO_ON_ERROR(system_ui_vibration_init(), fail, SYSTEM_UI_TAG, "init vibration failed");
@@ -453,7 +423,15 @@ void system_ui_stop(void)
     } else {
         s_ui.started = false;
     }
-    (void)display_service_set_touch_observer(NULL, NULL);
+    if (s_touch_observer_handle != DISPLAY_SERVICE_TOUCH_OBSERVER_INVALID) {
+        if (display_service_is_started()) {
+            esp_err_t err = display_service_remove_touch_observer(s_touch_observer_handle);
+            if (err != ESP_OK) {
+                ESP_LOGW(SYSTEM_UI_TAG, "remove touch observer failed: %s", esp_err_to_name(err));
+            }
+        }
+        s_touch_observer_handle = DISPLAY_SERVICE_TOUCH_OBSERVER_INVALID;
+    }
     (void)display_service_set_state_observer(NULL, NULL);
     system_ui_vibration_deinit();
     s_ui.touch_gesture = SYSTEM_UI_TOUCH_GESTURE_NONE;
@@ -488,10 +466,6 @@ esp_err_t system_ui_set_callbacks(const system_ui_callbacks_t *callbacks, void *
                         SYSTEM_UI_TAG, "set task action callback failed");
     ESP_RETURN_ON_ERROR(system_ui_jobs_set_stop_all_callback(callbacks->on_stop_all_tasks, user_ctx),
                         SYSTEM_UI_TAG, "set stop-all task callback failed");
-    ESP_RETURN_ON_ERROR(system_ui_callback_lock(), SYSTEM_UI_TAG, "callback lock failed");
-    s_ui.app_exit_swipe_cb = callbacks->on_app_exit_swipe;
-    s_ui.app_exit_swipe_user_ctx = user_ctx;
-    system_ui_callback_unlock();
     return ESP_OK;
 }
 

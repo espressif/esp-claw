@@ -9,16 +9,11 @@
 #include "esp_check.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "i2c_bus.h"
 #include "icm42670.h"
 
 #include "lua_module_imu_backend.h"
 
 static const char *TAG = "lua_module_imu.icm42670";
-
-typedef struct {
-    icm42670_handle_t sensor_handle;
-} icm42670_state_t;
 
 static esp_err_t icm42670_apply_default_runtime_config(icm42670_handle_t sensor_handle)
 {
@@ -39,52 +34,50 @@ static esp_err_t icm42670_apply_default_runtime_config(icm42670_handle_t sensor_
 
 static esp_err_t icm42670_backend_probe(lua_imu_backend_ctx_t *ctx, uint8_t i2c_addr)
 {
-    icm42670_state_t *st = (icm42670_state_t *)ctx->state;
+    icm42670_handle_t sensor = NULL;
 
-    i2c_master_bus_handle_t i2c_master_handle = i2c_bus_get_internal_bus_handle(ctx->i2c_bus_handle);
+    i2c_master_bus_handle_t i2c_master_handle = ctx->master_bus;
     if (i2c_master_handle == NULL) {
         ESP_LOGE(TAG, "Failed to resolve internal I2C handle");
         return ESP_FAIL;
     }
 
-    esp_err_t err = icm42670_create(i2c_master_handle, i2c_addr, &st->sensor_handle);
-    if (err != ESP_OK || st->sensor_handle == NULL) {
+    esp_err_t err = icm42670_create(i2c_master_handle, i2c_addr, &sensor);
+    ctx->sensor = sensor;
+    if (err != ESP_OK || ctx->sensor == NULL) {
         ESP_LOGE(TAG, "Failed to create ICM42670 sensor: %s", esp_err_to_name(err));
         return err != ESP_OK ? err : ESP_FAIL;
     }
 
-    err = icm42670_apply_default_runtime_config(st->sensor_handle);
+    err = icm42670_apply_default_runtime_config(ctx->sensor);
     if (err != ESP_OK) {
-        icm42670_delete(st->sensor_handle);
-        st->sensor_handle = NULL;
         return err;
     }
     ctx->i2c_addr = i2c_addr;
     return ESP_OK;
 }
 
-static void icm42670_backend_destroy(lua_imu_backend_ctx_t *ctx)
+static esp_err_t icm42670_backend_destroy(lua_imu_backend_ctx_t *ctx)
 {
-    icm42670_state_t *st = (icm42670_state_t *)ctx->state;
-    if (st->sensor_handle != NULL) {
-        icm42670_delete(st->sensor_handle);
-        st->sensor_handle = NULL;
+    if (ctx->sensor) {
+        icm42670_delete(ctx->sensor);
+        ctx->sensor = NULL;
     }
+    return ESP_OK;
 }
 
 static esp_err_t icm42670_backend_read_sample(lua_imu_backend_ctx_t *ctx, lua_imu_sample_t *out)
 {
-    icm42670_state_t *st = (icm42670_state_t *)ctx->state;
     icm42670_raw_value_t acc = { 0 };
     icm42670_raw_value_t gyro = { 0 };
     uint8_t int_status = 0;
 
-    esp_err_t err = icm42670_get_acce_raw_value(st->sensor_handle, &acc);
+    esp_err_t err = icm42670_get_acce_raw_value(ctx->sensor, &acc);
     if (err == ESP_OK) {
-        err = icm42670_get_gyro_raw_value(st->sensor_handle, &gyro);
+        err = icm42670_get_gyro_raw_value(ctx->sensor, &gyro);
     }
     if (err == ESP_OK) {
-        err = icm42670_read_register(st->sensor_handle, ICM42670_INT_STATUS, &int_status);
+        err = icm42670_read_register(ctx->sensor, ICM42670_INT_STATUS, &int_status);
     }
     if (err != ESP_OK) {
         return err;
@@ -102,9 +95,8 @@ static esp_err_t icm42670_backend_read_sample(lua_imu_backend_ctx_t *ctx, lua_im
 
 static esp_err_t icm42670_backend_read_temperature(lua_imu_backend_ctx_t *ctx, int32_t *out)
 {
-    icm42670_state_t *st = (icm42670_state_t *)ctx->state;
     uint16_t temp = 0;
-    esp_err_t err = icm42670_get_temp_raw_value(st->sensor_handle, &temp);
+    esp_err_t err = icm42670_get_temp_raw_value(ctx->sensor, &temp);
     if (err != ESP_OK) {
         return err;
     }
@@ -114,14 +106,13 @@ static esp_err_t icm42670_backend_read_temperature(lua_imu_backend_ctx_t *ctx, i
 
 static esp_err_t icm42670_backend_read_int_status(lua_imu_backend_ctx_t *ctx, uint32_t *out)
 {
-    icm42670_state_t *st = (icm42670_state_t *)ctx->state;
     uint8_t s0 = 0, s2 = 0, s3 = 0;
-    esp_err_t err = icm42670_read_register(st->sensor_handle, ICM42670_INT_STATUS, &s0);
+    esp_err_t err = icm42670_read_register(ctx->sensor, ICM42670_INT_STATUS, &s0);
     if (err == ESP_OK) {
-        err = icm42670_read_register(st->sensor_handle, ICM42670_INT_STATUS2, &s2);
+        err = icm42670_read_register(ctx->sensor, ICM42670_INT_STATUS2, &s2);
     }
     if (err == ESP_OK) {
-        err = icm42670_read_register(st->sensor_handle, ICM42670_INT_STATUS3, &s3);
+        err = icm42670_read_register(ctx->sensor, ICM42670_INT_STATUS3, &s3);
     }
     if (err != ESP_OK) {
         return err;
@@ -146,9 +137,9 @@ static int icm42670_backend_sdo_level_for_addr(uint8_t i2c_addr)
     return (i2c_addr == ICM42670_I2C_ADDRESS_1) ? 1 : 0;
 }
 
-const lua_imu_backend_t lua_imu_backend = {
+const lua_imu_backend_t lua_imu_backend_icm42670 = {
     .chip_name = "icm42670",
-    .state_size = sizeof(icm42670_state_t),
+    .state_size = 0,
     .probe = icm42670_backend_probe,
     .destroy = icm42670_backend_destroy,
     .read_sample = icm42670_backend_read_sample,

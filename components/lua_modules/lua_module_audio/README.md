@@ -1,148 +1,268 @@
 # Lua Audio
 
-Object-oriented Lua bindings for audio input, output, playback, recording, and
-simple analysis. Board discovery stays in `board_manager`; this module only
-wraps codec devices and audio processing helpers.
-
-## How to call
-- `local audio = require("audio")`
-- Get codec handles and default formats from `board_manager.get_audio_codec_input_params(name)` or `board_manager.get_audio_codec_output_params(name)`
-- `audio.new_output(desc)` opens an output codec device and returns an output object
-- `audio.new_input(desc)` opens an input codec device and returns an input object
-- `audio.player({ output = output })` creates a file, HTTP, or HTTPS player bound to one output object
-- `audio.recorder({ input = input })` creates a WAV/AAC recorder bound to one input object
-- `audio.analyzer({ input = input })` creates a level and spectrum analyzer bound to one input object
-- Close player, recorder, and analyzer objects before closing their input or output device
-
-## Device descriptors
-
-`audio.new_output(desc)` and `audio.new_input(desc)` accept the compact table
-returned by board manager:
+The `audio` module provides Lua APIs for PCM input and output, media playback,
+recording, and basic audio analysis.
 
 ```lua
-local codec, rate, channels, bits = board_manager.get_audio_codec_output_params("audio_dac")
-local output = audio.new_output({ codec, rate, channels, bits, volume = 80 })
+local audio = require("audio")
 ```
 
-Named fields are also accepted:
+## Resource and error handling
+
+- At most one input device and one output device can be open at a time.
+- Close players before their output device, and close recorders and analyzers
+  before their input device. Closing a device that is still in use returns
+  `nil, "audio device: busy"`.
+- Operations that fail at runtime return `nil, error_message`. Invalid Lua
+  argument types or values raise a Lua error.
+- `close()` is safe to call more than once and returns `true`.
+
+## Open devices
+
+### `audio.open_output([opts])`
+
+Opens an output device and returns `output`, or `nil, error_message`.
+
+`opts` is optional. Its fields do not configure the output device: use
+`output:set_volume()` to set the volume, and call `output:info()` to obtain
+the PCM format required by `output:write()`.
+
+### `audio.open_input([opts])`
+
+Opens an input device and returns `input`, or `nil, error_message`.
+
+`opts` is optional and may contain:
+
+- `volume`: integer from 0 to 100.
+- `sample_rate`: positive integer.
+- `channels`: positive integer.
+- `bits`: one of 8, 16, 24, or 32.
+
+Omitted format fields use the device defaults. The returned input PCM format
+is available through `input:info()`.
+
+## Output object
+
+### `output:info()`
+
+Returns:
 
 ```lua
-local output = audio.new_output({
-    codec       = codec,
-    sample_rate = 16000,
-    channels    = 1,
-    bits        = 16,
-    volume      = 80,
-})
+{
+  role = "output",
+  opened = true,
+  sample_rate = 16000,
+  channels = 1,
+  bits = 16,
+  bytes_per_frame = 2,
+}
 ```
 
-Input and output devices both use `volume` as a percentage from 0 to 100:
+`sample_rate`, `channels`, `bits`, and `bytes_per_frame` define the raw PCM
+format accepted by `output:write()`.
 
-```lua
-local input = audio.new_input({ codec, rate, channels, bits, volume = 70 })
-```
+### `output:set_volume(percent)` / `output:get_volume()`
 
-The device is opened immediately. `output:info()` and `input:info()` return the
-actual device format after open, which may differ from the requested format on
-devices such as UAC.
+`set_volume` sets the output volume. `percent` must be an integer from 0 to
+100. It returns `true` on success. `get_volume` returns the current integer
+volume.
 
-## Output objects
-- `output:info()` returns `{ role, sample_rate, channels, bits, bytes_per_frame }`
-- `output:set_volume(percent)` sets output volume from 0 to 100
-- `output:get_volume()` returns the current output volume
-- `output:set_mute(mute)` mutes or unmutes the output
-- `output:write(pcm)` writes raw PCM in the output format
-- `output:play_tone(freq_hz, duration_ms)` writes a generated sine tone
-- `output:close()` closes the codec device
+### `output:set_mute(mute)`
 
-## Input objects
-- `input:info()` returns `{ role, sample_rate, channels, bits, bytes_per_frame }`
-- `input:set_volume(percent)` sets input capture volume from 0 to 100
-- `input:get_volume()` returns the current input capture volume
-- `input:read(bytes)` returns raw PCM from the input device
-- `input:close()` closes the codec device
+Accepted for compatibility. It currently has no audible effect and returns
+`true`.
+
+### `output:write(pcm)`
+
+Writes a Lua string containing frame-aligned raw PCM in the format returned by
+`output:info()`. Returns the number of bytes written, or `nil, error_message`.
+
+### `output:play_tone(freq_hz, duration_ms)`
+
+Plays a sine tone and returns `true`, or `nil, error_message`. Both arguments
+must be positive integers. `freq_hz` must be lower than half the output sample
+rate. This method supports only 16-bit and 32-bit output PCM formats.
+
+### `output:close()`
+
+Closes the output device.
+
+## Input object
+
+### `input:info()`
+
+Returns the same fields as `output:info()`, with `role = "input"`.
+
+### `input:set_volume(percent)` / `input:get_volume()`
+
+`percent` must be an integer from 0 to 100. `set_volume` records the requested
+value and returns `true`; `get_volume` returns that value. It does not change
+the recording level.
+
+### `input:read(bytes)`
+
+### `input:read({ bytes = bytes })`
+
+Reads and returns a Lua string containing raw PCM in the format returned by
+`input:info()`. The call waits until the requested amount is available or
+fails. On failure it returns `nil, error_message`.
+
+### `input:close()`
+
+Closes the input device.
 
 ## Player
 
-Create a player from an output object:
+Create a player from an output device:
 
 ```lua
-local player = audio.player({ output = output })
+local player = assert(audio.player({ output = output }))
 ```
 
-Supported calls:
+### `audio.player({ output = output })`
 
-- `player:play(path_or_uri [, opts])` starts playback
-- `player:play(path_or_uri, { wait = true })` blocks until playback finishes
-- `player:stop()` stops playback
-- `player:pause()` pauses playback
-- `player:resume()` resumes playback
-- `player:poll()` returns `{ state, running, music_info = ... }`
-- `player:close()` closes the player
+Returns a player object. `output` must be an open output object.
 
-Local paths are converted to `file://` URIs automatically. HTTP and HTTPS URIs
-can be passed directly.
+### `player:play(path_or_uri [, opts])`
+
+Starts playback and returns `true`, or `nil, error_message`. `path_or_uri` may
+be a local path or an HTTP/HTTPS URI. Absolute local paths are converted to a
+file URI automatically. Set `opts.wait = true` to wait until playback ends.
+
+Starting a new playback stops any current playback on the same player.
+
+### `player:stop()` / `player:pause()` / `player:resume()`
+
+Controls playback and returns `true`, or `nil, error_message`.
+
+### `player:poll()`
+
+Returns:
+
+```lua
+{
+  state = "idle" | "playing" | "paused" | "stopped" | "finished" | "error",
+  running = boolean,
+  music_info = { sample_rate = integer, channels = integer, bits = integer, bitrate = integer }, -- optional
+}
+```
+
+`music_info` is present after media format information becomes available.
+
+### `player:close()`
+
+Stops and closes the player.
 
 ## Recorder
 
-Create a recorder from an input object:
+Create a recorder from an input device:
 
 ```lua
-local recorder = audio.recorder({ input = input })
+local recorder = assert(audio.recorder({ input = input }))
 ```
 
-`recorder:record(path, opts)` requires `opts.duration_ms` and returns
-`{ path, duration_ms, bytes, encoding, format }`.
+### `audio.recorder({ input = input })`
+
+Returns a recorder object. `input` must be an open input object.
+
+### `recorder:record(path, opts)`
+
+Records for the requested duration and returns metadata, or `nil, error_message`.
+`path` must be a local path ending in `.wav` or `.aac` and must not contain
+`..`. The file is replaced if it already exists.
+
+`opts` must contain `duration_ms`, a positive integer. It may also contain:
+
+- `sample_rate`, `channels`, `bits`: output PCM format. Omitted fields use the
+  input format.
+- `bitrate`: non-negative integer; used only for AAC. Zero or omission selects
+  a default bitrate.
+
+For WAV, the result is:
 
 ```lua
-local storage = require("storage")
-local path = storage.join_path(storage.get_root_dir(), "rec.aac")
-local info = recorder:record(path, {
-    duration_ms = 3000,
-    bitrate     = 64000,
-})
-print(info.path, info.bytes, info.encoding)
+{ path = string, duration_ms = integer, bytes = integer, format = format }
 ```
 
-The output encoding is selected from the file extension. Unsupported extensions
-return an error. Supported encodings:
+For AAC, the result additionally contains `encoding = "aac"`:
 
-- `.wav` writes PCM with a WAV header
-- `.aac` writes AAC-LC with ADTS headers through `esp_audio_codec`
+```lua
+{ path = string, duration_ms = integer, bytes = integer, encoding = "aac", format = format }
+```
 
-The recording output format defaults to the actual input format. It can be
-overridden with `sample_rate`, `channels`, or `bits`. Input PCM is converted
-automatically when the requested recording format differs from the device
-format.
+`format` is `{ sample_rate, channels, bits, bytes_per_frame }`. AAC requires
+16-bit PCM, one or two channels, and a sample rate from 8000 to 96000 Hz.
+
+### `recorder:close()`
+
+Closes the recorder.
 
 ## Analyzer
 
-Create an analyzer from an input object:
+Create an analyzer from an input device:
 
 ```lua
-local analyzer = audio.analyzer({ input = input })
+local analyzer = assert(audio.analyzer({ input = input }))
 ```
 
-Supported calls:
+### `audio.analyzer({ input = input })`
 
-- `analyzer:read_level(duration_ms)` returns RMS and peak level data
-- `analyzer:read_spectrum(fft_size, bands)` returns spectrum bands and peak frequency data
-- `analyzer:close()` closes the analyzer
+Returns an analyzer object. `input` must be an open input object.
+
+An analyzer and a recorder may be created from the same input, but only one
+input-consuming operation can run at a time. A concurrent operation returns
+`nil, error_message`.
+
+### `analyzer:read_level([duration_ms])`
+
+### `analyzer:read_level({ duration_ms = duration_ms })`
+
+Captures audio for the requested duration and returns:
+
+```lua
+{ rms = integer, peak = integer, duration_ms = integer }
+```
+
+The default duration is 100 ms.
+
+### `analyzer:read_spectrum([fft_size [, bands]])`
+
+### `analyzer:read_spectrum({ fft_size = fft_size, bands = bands })`
+
+Returns:
+
+```lua
+{
+  bands = { integer, ... },
+  peak_freq_hz = number,
+  peak_db = number,
+  rms = integer,
+  fft_size = integer,
+  band_count = integer,
+  sample_rate = integer,
+}
+```
+
+`bands` contains one level from 0 to 255 for each frequency band. Defaults are
+`fft_size = 512` and `bands = 16`. `fft_size` must be a power of two from 64
+to 4096; `bands` must be from 1 to `fft_size / 2`.
+
+### `analyzer:close()`
+
+Closes the analyzer.
 
 ## Example
+
 ```lua
 local audio = require("audio")
-local board_manager = require("board_manager")
 local storage = require("storage")
 
-local output_codec, output_rate, output_channels, output_bits =
-    board_manager.get_audio_codec_output_params("audio_dac")
-local output = assert(audio.new_output({ output_codec, output_rate, output_channels, output_bits, volume = 80 }))
+local output = assert(audio.open_output())
+output:set_volume(80)
 local player = assert(audio.player({ output = output }))
-
 local path = storage.join_path(storage.get_root_dir(), "static/test.mp3")
-player:play(path, { wait = true })
 
-player:close()
-output:close()
+assert(player:play(path, { wait = true }))
+assert(player:close())
+assert(output:close())
 ```

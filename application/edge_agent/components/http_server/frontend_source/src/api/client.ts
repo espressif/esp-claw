@@ -19,6 +19,7 @@ export type AppConfig = {
   llm_max_tokens: string;
   llm_default_image_max_bytes: string;
   llm_max_tokens_field: string;
+  llm_reasoning_effort: string;
   llm_supports_tools: string;
   llm_supports_vision: string;
   llm_image_remote_url_only: string;
@@ -33,6 +34,8 @@ export type AppConfig = {
   wechat_cdn_base_url: string;
   wechat_account_id: string;
   search_brave_key: string;
+  search_provider: string;
+  search_bocha_key: string;
   search_tavily_key: string;
   search_http_allowlist: string;
   enabled_cap_groups: string;
@@ -57,6 +60,7 @@ export const GROUP_FIELDS: Record<ConfigGroup, (keyof AppConfig)[]> = {
     'llm_max_tokens',
     'llm_default_image_max_bytes',
     'llm_max_tokens_field',
+    'llm_reasoning_effort',
     'llm_supports_tools',
     'llm_supports_vision',
     'llm_image_remote_url_only',
@@ -73,17 +77,57 @@ export const GROUP_FIELDS: Record<ConfigGroup, (keyof AppConfig)[]> = {
     'wechat_cdn_base_url',
     'wechat_account_id',
   ],
-  search: ['search_brave_key', 'search_tavily_key', 'search_http_allowlist'],
+  search: [
+    'search_provider',
+    'search_bocha_key',
+    'search_brave_key',
+    'search_tavily_key',
+    'search_http_allowlist',
+  ],
   capabilities: ['enabled_cap_groups', 'llm_visible_cap_groups'],
   skills: ['enabled_lua_modules'],
   time: ['time_timezone'],
 };
+
+/** Sensitive NVS fields masked on GET (must stay in sync with
+ * is_sensitive_config_field() in http_server_config_api.c). */
+export const SECRET_CONFIG_FIELDS: readonly (keyof AppConfig)[] = [
+  'wifi_password',
+  'ap_password',
+  'llm_api_key',
+  'qq_app_secret',
+  'feishu_app_secret',
+  'tg_bot_token',
+  'wechat_token',
+  'search_brave_key',
+  'search_tavily_key',
+  'search_bocha_key',
+];
+
+/** Build a partial-write patch containing only keys whose values differ
+ * from the baseline. Unchanged secrets are omitted so masked GET values
+ * are never written back to NVS. */
+export function diffConfigPatch(
+  current: Partial<AppConfig>,
+  baseline: Partial<AppConfig>,
+): Partial<AppConfig> {
+  const patch: Partial<AppConfig> = {};
+  for (const key of Object.keys(current) as (keyof AppConfig)[]) {
+    const next = current[key] ?? '';
+    const prev = baseline[key] ?? '';
+    if (next !== prev) {
+      patch[key] = next;
+    }
+  }
+  return patch;
+}
 
 export function blankConfig(): Partial<AppConfig> {
   return {};
 }
 
 export type StatusInfo = {
+  boot_id: string;
   wifi_connected: boolean;
   ip: string;
   ap_active: boolean;
@@ -175,20 +219,20 @@ export function fetchStatus(signal?: AbortSignal) {
 /** Fetch a subset of the configuration, filtered by group names. */
 export function fetchConfigGroups(groups: ConfigGroup[] | 'all') {
   if (groups === 'all') {
-    return request<Partial<AppConfig>>('/api/config', undefined, 'Failed to load config');
+    return request<Partial<AppConfig>>('/api/config', { signal: AbortSignal.timeout(10000) }, 'Failed to load config');
   }
   if (groups.length === 0) {
     return Promise.resolve({} as Partial<AppConfig>);
   }
   const qs = 'groups=' + encodeURIComponent(groups.join(','));
-  return request<Partial<AppConfig>>('/api/config?' + qs, undefined, 'Failed to load config');
+  return request<Partial<AppConfig>>('/api/config?' + qs, { signal: AbortSignal.timeout(10000) }, 'Failed to load config');
 }
 
 /** Fetch individual named fields (advanced). */
 export function fetchConfigFields(fields: (keyof AppConfig)[]) {
   if (fields.length === 0) return Promise.resolve({} as Partial<AppConfig>);
   const qs = 'fields=' + encodeURIComponent(fields.join(','));
-  return request<Partial<AppConfig>>('/api/config?' + qs, undefined, 'Failed to load config');
+  return request<Partial<AppConfig>>('/api/config?' + qs, { signal: AbortSignal.timeout(10000) }, 'Failed to load config');
 }
 
 /** Partial save: only keys present in the patch are written; absent
@@ -440,14 +484,42 @@ export function webimWebSocketUrl(): string {
   return `${proto}//${window.location.host}/ws/webim`;
 }
 
-export async function sendWebimMessage(chatId: string, text: string, files: string[] = []) {
-  return request<{ ok?: boolean }>(
-    '/api/webim/send',
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text, files }),
-    },
-    'Failed to send Web IM message',
-  );
+export type WebImSession = {
+  session: string;
+  title: string;
+  source: string;
+  chat_id: string;
+  alias: string;
+  activity_order: number;
+  reply_channel: string;
+  can_send: boolean;
+  run_state: 'idle' | 'queued' | 'running';
+};
+export type WebImSessionPage = { items: WebImSession[]; has_more: boolean; next_cursor: number; boot_id: string };
+export type WebImHistory = { delivery_state?: string; messages: WebImMessage[]; total: number; revision: number; has_more: boolean; next_before: number; run_state: WebImSession['run_state']; boot_id: string };
+
+export function fetchWebimSessions(source = 'all', cursor = 0) {
+  return request<WebImSessionPage>(`/api/webim/sessions?source=${encodeURIComponent(source)}&cursor=${cursor}`, { signal: AbortSignal.timeout(10000) }, 'Could not load conversations');
+}
+export function fetchWebimSession(id: string) {
+  return request<WebImSession>(`/api/webim/sessions/${encodeURIComponent(id)}`, { signal: AbortSignal.timeout(10000) }, 'Conversation unavailable');
+}
+export function fetchWebimHistory(id: string, before = 0) {
+  return request<WebImHistory>(`/api/webim/sessions/${encodeURIComponent(id)}/messages?before=${before}`, { signal: AbortSignal.timeout(10000) }, 'Could not load history');
+}
+export function createWebimSession() {
+  return request<WebImSession>('/api/webim/sessions', { method: 'POST' }, 'Could not create conversation');
+}
+export function renameWebimSession(id: string, title: string) {
+  return request<WebImSession>(`/api/webim/sessions/${encodeURIComponent(id)}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title }) }, 'Could not rename conversation');
+}
+export function deleteWebimSession(id: string) {
+  return request<{ ok: boolean }>(`/api/webim/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }, 'Could not delete conversation');
+}
+export function sendWebimMessage(session: string, messageId: string, text: string, files: string[] = []) {
+  return request<{ run_id: number; boot_id: string }>('/api/webim/send', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session, client_message_id: messageId, text, files }),
+    signal: AbortSignal.timeout(15000),
+  }, 'Could not send message');
 }

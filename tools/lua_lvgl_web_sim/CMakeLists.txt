@@ -64,15 +64,23 @@ set(LUA_SOURCES
 set(ESP_CLAW_SIM_SOURCES
     sim/esp_claw_sim.c
     sim/sim_esp_compat.c
+    sim/lua_display_sim.c
+    ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_display/src/display_color.c
+    ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_display/src/display_dirty.c
+    ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_display/src/display_core.c
+    ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_display/src/display_raster.c
+    ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_display/src/display_text.c
+    ${ESP_CLAW_ROOT}/components/common/esp_painter/font/basic_font_24.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_module_lvgl.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_core_widgets.c
+    ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_image.c
+    ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_line.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_complex_widgets.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_demos.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_eaf.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_events.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_font.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_extra_widgets.c
-    ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_indev.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_layout.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_methods.c
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src/lua_lvgl_object.c
@@ -85,17 +93,20 @@ set(ESP_CLAW_SIM_SOURCES
 
 # Keep SDL as a final-link option. Putting USE_SDL in global compile flags makes every parallel emcc compile try to initialize the same Emscripten port cache.
 set(ESP_CLAW_SIM_COMMON_LINK_FLAGS "-O3 --shell-file ${PROJECT_SOURCE_DIR}/esp_claw_shell.html -s USE_SDL=2 -s ASYNCIFY=1 -s ASYNCIFY_STACK_SIZE=262144 -s EXPORTED_RUNTIME_METHODS=['ccall','FS']")
-set(ESP_CLAW_SIM_RUNTIME_ASSETS "--preload-file ${PROJECT_SOURCE_DIR}/sim/lvgl_web_shim.lua@/sim/lvgl_web_shim.lua --preload-file ${PROJECT_SOURCE_DIR}/sim_assets/fonts@/fonts")
-set(ESP_CLAW_SIM_EMBED_ASSETS "--embed-file ${PROJECT_SOURCE_DIR}/sim/lvgl_web_shim.lua@/sim/lvgl_web_shim.lua --embed-file ${PROJECT_SOURCE_DIR}/sim_assets/fonts@/fonts")
+set(ESP_CLAW_SIM_RUNTIME_ASSETS "--preload-file ${PROJECT_SOURCE_DIR}/sim_assets/fonts@/fonts")
+set(ESP_CLAW_SIM_EMBED_ASSETS "--embed-file ${PROJECT_SOURCE_DIR}/sim_assets/fonts@/fonts")
 
 function(configure_esp_claw_sim_target target_name)
+set_property(TARGET ${target_name} APPEND PROPERTY LINK_DEPENDS "${PROJECT_SOURCE_DIR}/esp_claw_shell.html")
 target_include_directories(${target_name} PRIVATE
     ${LUA_SRC_DIR}
+    ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_display/src
+    ${ESP_CLAW_ROOT}/components/common/esp_painter/include
     ${PROJECT_SOURCE_DIR}/sim/compat
     ${lvgl_SOURCE_DIR}
     ${ESP_CLAW_ROOT}/components/lua_modules/lua_module_lvgl/src
 )
-target_compile_definitions(${target_name} PRIVATE LUA_USE_C89)
+target_compile_definitions(${target_name} PRIVATE LUA_USE_C89 CONFIG_ESP_PAINTER_BASIC_FONT_24=1)
 target_compile_options(${target_name} PRIVATE -O3)
 target_link_libraries(${target_name}
     lvgl

@@ -91,7 +91,7 @@ def main() -> int:
     libs_plan = collect_builtin_lua_module_libs(sources, libs_output_dir, libs_manifest)
     tests_plan = collect_builtin_lua_module_tests(sources, tests_output_dir, tests_manifest)
     libs_plan.apply()
-    tests_plan.apply()
+    tests_plan.apply(prune_output=True)
     console.success(
         f'CLAW lua module resource sync updated {libs_plan.count} libs into {libs_output_dir} '
         f'and {tests_plan.count} tests into {tests_output_dir}'

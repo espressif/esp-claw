@@ -291,7 +291,8 @@ static esp_err_t openai_compatible_init(const claw_llm_runtime_config_t *config,
     if (!config || !profile || !out_backend_ctx || !out_error_message) {
         return ESP_ERR_INVALID_ARG;
     }
-    if (!config->api_key || !config->api_key[0]) {
+    if ((!config->api_key || !config->api_key[0]) &&
+            (!config->auth_type || strcmp(config->auth_type, "trial") != 0)) {
         *out_error_message = dup_printf("LLM API key is empty");
         return ESP_ERR_INVALID_ARG;
     }
@@ -372,6 +373,13 @@ static esp_err_t openai_compatible_chat(void *backend_ctx,
     http_request.abort_flag = request->abort_flag;
 
     err = claw_llm_http_post_json(&http_request, &http_response, out_error_message);
+    if (err != ESP_OK && strcmp(ctx->auth_type, "trial") == 0 &&
+            http_response.status_code == 401) {
+        free(*out_error_message);
+        *out_error_message = NULL;
+        http_request.force_auth_refresh = true;
+        err = claw_llm_http_post_json(&http_request, &http_response, out_error_message);
+    }
     free(url);
     free(post_data);
     if (err != ESP_OK) {
@@ -497,6 +505,13 @@ static esp_err_t openai_compatible_infer_media(void *backend_ctx,
     http_request.timeout_ms = ctx->timeout_ms;
 
     err = claw_llm_http_post_json(&http_request, &http_response, out_error_message);
+    if (err != ESP_OK && strcmp(ctx->auth_type, "trial") == 0 &&
+            http_response.status_code == 401) {
+        free(*out_error_message);
+        *out_error_message = NULL;
+        http_request.force_auth_refresh = true;
+        err = claw_llm_http_post_json(&http_request, &http_response, out_error_message);
+    }
     if (err != ESP_OK) {
         goto cleanup;
     }
@@ -565,6 +580,16 @@ static const claw_llm_backend_registration_t s_openai_compatible_registration = 
     },
 };
 
+static const claw_llm_backend_registration_t s_trial_registration = {
+    .id = CLAW_LLM_BACKEND_TRIAL_ID,
+    .vtable = &s_openai_compatible_vtable,
+    .defaults = {
+        .auth_type = "trial",
+        .chat_path = "/v1/chat/completions",
+        .max_tokens_field = CLAW_LLM_BACKEND_OPENAI_COMPATIBLE_DEFAULT_MAX_TOKENS_FIELD,
+    },
+};
+
 const claw_llm_backend_vtable_t *claw_llm_backend_openai_compatible_vtable(void)
 {
     return &s_openai_compatible_vtable;
@@ -573,4 +598,9 @@ const claw_llm_backend_vtable_t *claw_llm_backend_openai_compatible_vtable(void)
 const claw_llm_backend_registration_t *claw_llm_backend_openai_compatible_registration(void)
 {
     return &s_openai_compatible_registration;
+}
+
+const claw_llm_backend_registration_t *claw_llm_backend_trial_registration(void)
+{
+    return &s_trial_registration;
 }

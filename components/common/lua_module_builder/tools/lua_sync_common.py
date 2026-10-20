@@ -130,9 +130,11 @@ class FileSyncPlan:
         self._copy_map[output_name] = source_path.resolve()
         self._source_map[output_name] = owner
 
-    def apply(self) -> None:
+    def apply(self, prune_output: bool = False) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         previous_files = load_synced_files_manifest(self.manifest_path)
+        if prune_output:
+            previous_files.update(str(path.relative_to(self.output_dir)) for path in self.output_dir.rglob('*') if path.is_file())
 
         for old_file in previous_files:
             if old_file not in self._copy_map:

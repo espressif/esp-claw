@@ -1,2 +1,9 @@
-## IDF Component Manager Manifest File
-dependencies: {}
+dependencies:
+  espressif/bmm150:
+    version: "^1.1.0"
+    rules:
+      - if: "$CONFIG{LUA_MODULE_MAGNETOMETER_CHIP_BMM150} == True"
+  espressif/bmm350:
+    version: "^1.1.0"
+    rules:
+      - if: "$CONFIG{LUA_MODULE_MAGNETOMETER_CHIP_BMM350} == True"

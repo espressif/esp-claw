@@ -394,13 +394,14 @@ static void lua_http_push_query(lua_State *L, const char *query)
     for (token = strtok_r(copy, "&", &saveptr); token; token = strtok_r(NULL, "&", &saveptr)) {
         char *eq = strchr(token, '=');
         char *key = token;
-        char *value = eq ? eq + 1 : "";
+        const char *value = "";
 
         if (eq) {
             *eq = '\0';
+            value = eq + 1;
+            lua_http_url_decode_inplace(eq + 1);
         }
         lua_http_url_decode_inplace(key);
-        lua_http_url_decode_inplace(value);
         if (key[0]) {
             lua_pushstring(L, value);
             lua_setfield(L, -2, key);

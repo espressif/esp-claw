@@ -12,8 +12,6 @@
 extern "C" {
 #endif
 
-#define LUA_MODULE_ENVIRONMENTAL_SENSOR_SELECTED_CHIP_NAME "bme690"
-
 int luaopen_environmental_sensor(lua_State *L);
 esp_err_t lua_module_environmental_sensor_register(void);
 

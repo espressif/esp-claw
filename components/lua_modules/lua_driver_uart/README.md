@@ -1,26 +1,21 @@
 # Lua UART
 
-This module describes how to open a UART port and read/write bytes or text
-lines from Lua. The module wraps ESP-IDF's UART driver and follows a pure
-polling model — scripts call `read` / `read_line` with a timeout and get
-back whatever is available.
+This module describes how to open a UART port and read/write bytes or text lines from Lua. Scripts call `read` / `read_line` with a timeout and get back whatever is available.
 
 ## How to call
 - Import it with `local uart = require("uart")`
 - Open a port with `local u = uart.new(port, tx, rx, baud [, opts])`
-  - `port`: UART port number. **Start from `1`** (`UART_NUM_1`) by
-    default — port `0` is normally claimed by the system log console, so
-    opening it from a script will fight the bootloader / `printf` output.
+  - `port`: UART port number. **Start from `1`** by default. Avoid the port used by the
+    console, commonly port `0`, because script traffic would interfere with logs.
     Each port has a single owner; a second `uart.new()` for the same
     port raises a Lua error.
-  - `tx`, `rx`: GPIO numbers for TX and RX pins
+  - `tx`, `rx`: Explicit GPIO numbers for TX and RX pins; `-1` is not accepted
   - `baud`: baud rate, e.g. `9600`, `115200`
   - `opts` (optional table, omit entirely for the common **8N1** case):
     - `data_bits`: `5`–`8`, default `8`
     - `parity`: `"none"` / `"even"` / `"odd"`, default `"none"`
     - `stop_bits`: `1` or `2`, default `1`
-  - The RX ring buffer is fixed at 1 KiB and writes are blocking (no TX
-    ring buffer); flow control is disabled.
+  - Writes block until sent. Receive capacity is 1 KiB; flow control is disabled.
 - `u:read(len [, timeout_ms])` → string of up to `len` bytes. Timeout in
   milliseconds, default `0` (non-blocking — returns immediately with
   whatever is buffered, possibly empty). The returned string may be
@@ -32,8 +27,7 @@ back whatever is available.
   of byte integers `0..255`.
 - `u:available()` → number of bytes currently sitting in the RX buffer.
 - `u:flush_input()` → discard all buffered RX data.
-- `u:close()` when you're done. Handles are also cleaned up on garbage
-  collection; explicit close is preferred for determinism.
+- `u:close()` when you're done. Job shutdown also closes retained handles; explicit close releases resources immediately.
 
 ## Example: AT-command style request/response
 ```lua
@@ -83,5 +77,6 @@ local u = uart.new(1, 17, 18, 9600, {
 - All reads are **polling with a timeout**. There is no callback /
   interrupt interface in this module. For high-rate data, poll often
   enough to drain the 1 KiB RX buffer before it overruns.
-- Closing a port releases the hardware; the same `port` number can then
-  be reopened with different settings.
+- Closing a port releases it; the same `port` number can then be reopened with different settings.
+
+Use free GPIOs suitable for the connected hardware. Occupied or unavailable resources raise an error. If `close()` fails, retry it before reusing the resources.

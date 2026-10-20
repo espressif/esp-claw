@@ -3,6 +3,8 @@ idf_component_register(
         "src/claw_skill.c"
     INCLUDE_DIRS
         "include"
-    REQUIRES
-        claw_core
+    PRIV_REQUIRES
+        claw_utils
+        freertos
+        espressif__cjson
 )

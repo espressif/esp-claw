@@ -1,6 +1,6 @@
 ---
 title: Lua extension modules (`lua_module_*` / `lua_driver_*`)
-description: How `lua_module_*` and `lua_driver_*` components register with `cap_lua`, how to author your own, and a full `display` walkthrough.
+description: How `lua_module_*` and `lua_driver_*` components register with `cap_lua`, how to author your own, and an overview of `display` ownership.
 ---
 
 import LinkToSource from '@/components/LinkToSource.astro';
@@ -40,7 +40,7 @@ Pure Lua modules may provide only managed resources such as `lib/`, `test/`, and
 | `camera` | `lua_module_camera` | Still capture / streaming hooks |
 | `delay` | `lua_module_delay` | `delay.delay_ms(n)` helpers |
 | `dht` | `lua_module_dht` | DHT-family temperature and humidity reads |
-| `display` | `lua_module_display` | LCD drawing (text, primitives, JPEG/PNG) |
+| `display` | `lua_module_display` | LCD drawing and touch input |
 | `environmental_sensor` | `lua_module_environmental_sensor` | BME690 temperature, humidity, pressure, and gas data |
 | `event_publisher` | `lua_module_event_publisher` | Publish events from Lua into the Event Router |
 | `http_server` | `lua_module_http_server` | Publish static files and HTTP callbacks on the existing HTTP server |
@@ -50,8 +50,7 @@ Pure Lua modules may provide only managed resources such as `lib/`, `test/`, and
 | `imu` | `lua_module_imu` | IMU accelerometer and gyroscope reads |
 | `ir` | `lua_module_ir` | IR receive, learn, and transmit |
 | `knob` | `lua_module_knob` | Rotary encoder / knob events |
-| `lcd` | `lua_module_lcd` | LCD panel initialization, backlight, and display helpers |
-| `lcd_touch` | `lua_module_lcd_touch` | Touch coordinates |
+| `lcd` | `lua_module_lcd` | Optional LCD panel initialization, reset, and metadata; not used by `display` |
 | `led_strip` | `lua_module_led_strip` | Addressable strips such as WS2812 |
 | `lvgl` | `lua_module_lvgl` | LVGL graphics binding with full UI widgets and event system |
 | `magnetometer` | `lua_module_magnetometer` | Magnetometer / compass reads |
@@ -66,6 +65,16 @@ Pure Lua modules may provide only managed resources such as `lib/`, `test/`, and
     In `edge_agent`, every module is controlled by Kconfig. When the firmware is not built with a module's component, Lua scripts cannot use that module.
 </Aside>
 
+## Hardware ownership and exit cleanup
+
+Hardware objects claim resources through a shared registry: opening fails when a resource is unregistered or already held exclusively. Board code and providers register resources; scripts open, use, and close objects. `i2c.new(...)` creates a bus, while `i2c.borrow(0)` borrows the initialized board bus. Device addresses remain exclusive, so borrowing cannot override board devices.
+
+The constructors `lcd.new(...)`, `environmental_sensor.new(...)`, `magnetometer.new(...)`, and `sci.new(...)` currently return an explicit error because their resource ownership integration is incomplete, even when their components are enabled. This does not affect access to the built-in screen through `display.open()`.
+
+On script exit, hardware stops before its claims are released. If hardware cleanup fails, the runtime retains the Lua state and claims, then retries when a later job starts. This prevents other jobs from taking over hardware that is still active. Use the Console command `hwmap` to inspect ownership.
+
+The runtime keeps only `traceback` and `getinfo` in the `debug` library; interfaces that modify the registry, metatables, closures, or execution hooks are unavailable.
+
 ## Registration flow
 
 Each `lua_module_*` / `lua_driver_*` ships exactly one registrar named `lua_module_<name>_register()` or `lua_driver_<name>_register()`:
@@ -75,35 +84,22 @@ Each `lua_module_*` / `lua_driver_*` ships exactly one registrar named `lua_modu
 esp_err_t lua_module_display_register(void);
 ```
 
-The body calls `cap_lua_register_module` to bind the Lua module name to its `luaopen_*` entry:
+The registrar binds the Lua module name to its `luaopen_*` entry and may perform module-specific setup. `lua_module_display_register()` also registers script-exit cleanup.
 
-```c
-// lua_module_display/src/lua_module_display.c
-esp_err_t lua_module_display_register(void)
-{
-    return cap_lua_register_module("display", luaopen_display);
-}
-```
-
-**All modules must register before `cap_lua_register_group()`**—later calls fail because the runtime locks registration.
+**Register modules before the Lua capability group initializes.** Group initialization locks module registration; later calls fail.
 
 ### Example wiring from the app
 
 ```c
-// app_claw.c or equivalent init
+// Minimal app registration example
 #include "lua_module_display.h"
-#include "lua_driver_gpio.h"
-#include "lua_module_delay.h"
 #include "cap_lua.h"
 
-void app_lua_modules_init(void)
+esp_err_t register_display_lua_capability(void)
 {
-    lua_module_display_register();
-    lua_driver_gpio_register();
-    lua_module_delay_register();
-    // …other modules…
-
-    cap_lua_register_group("/fatfs/scripts");  // pass script base dir; no more registration after lock
+    esp_err_t err = lua_module_display_register();
+    if (err != ESP_OK) return err;
+    return cap_lua_register_group();
 }
 ```
 
@@ -428,9 +424,9 @@ Hardware test scripts should choose GPIOs according to the actual board wiring. 
 
 The display module has a dedicated ownership-management ("arbitration") mechanism, ensuring Lua scripts can exclusively use display resources and avoid conflicts with other tasks.
 
-After `display.init(...)` succeeds in `lua_module_display`, Lua automatically acquires foreground display ownership; ownership is released on `display.deinit()` or script-exit cleanup to avoid conflicts with other display tasks.
+`display.open(...)` acquires exclusive ownership of the built-in screen and returns a screen object. `screen:close()`, `<close>`, or script-exit cleanup releases ownership. Draw between `screen:begin()` and `screen:present()`; opening an already-open screen fails.
 
-Additionally, in display-HAL re-creation scenarios, the runtime cleans up stale swap-buffer and display-callback state to reduce cross-script display resource leak risks (especially when switching with `lua_run_script_async` `exclusive:"display"` + `replace:true`).
+For long-running scenes, `lua_run_script_async` can use `exclusive:"display"` and `replace:true` to stop the previous display job before starting another.
 
 ### `event_publisher`: publish events to Event Router
 

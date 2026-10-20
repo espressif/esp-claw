@@ -2,13 +2,14 @@ idf_component_register(
     SRCS
         "src/lua_module_lvgl.c"
         "src/lua_lvgl_core_widgets.c"
+        "src/lua_lvgl_image.c"
+        "src/lua_lvgl_line.c"
         "src/lua_lvgl_complex_widgets.c"
         "src/lua_lvgl_demos.c"
         "src/lua_lvgl_events.c"
         "src/lua_lvgl_eaf.c"
         "src/lua_lvgl_font.c"
         "src/lua_lvgl_extra_widgets.c"
-        "src/lua_lvgl_indev.c"
         "src/lua_lvgl_layout.c"
         "src/lua_lvgl_methods.c"
         "src/lua_lvgl_object.c"
@@ -21,8 +22,8 @@ idf_component_register(
     REQUIRES
         cap_lua
         claw_core
+        display_service
         esp_lcd
-        esp_lcd_touch
         esp_timer
         lvgl
 )

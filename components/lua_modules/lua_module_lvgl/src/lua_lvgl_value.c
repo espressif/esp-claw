@@ -98,21 +98,11 @@ int lua_lvgl_get_size(lua_State *L)
 int lua_lvgl_is_valid(lua_State *L)
 {
     lua_lvgl_obj_ud_t *ud = lua_lvgl_check_ud(L, 1);
-    lua_lvgl_obj_record_t *record = ud->record;
     bool valid = false;
+    const char *error = NULL;
 
     if (lua_lvgl_lock() == ESP_OK) {
-        if (s_lvgl.runtime_initialized &&
-                record &&
-                record->generation == s_lvgl.generation &&
-                record->valid &&
-                record->obj &&
-                lv_obj_is_valid(record->obj)) {
-            valid = true;
-        } else if (record) {
-            record->valid = false;
-            record->obj = NULL;
-        }
+        valid = lua_lvgl_validate_ud_locked(ud, NULL, &error) != NULL;
         lua_lvgl_unlock();
     }
     lua_pushboolean(L, valid);

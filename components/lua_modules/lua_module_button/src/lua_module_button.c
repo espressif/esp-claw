@@ -15,21 +15,17 @@
 #include "iot_button.h"
 #include "button_gpio.h"
 #include "cap_lua.h"
+#include "cap_lua_hw.h"
 
 static const char *TAG = "lua_button";
 
-/* --------------------------------------------------------------------------
- * Constants
- * -------------------------------------------------------------------------- */
 #define BTN_MAX_HANDLES      8
 #define BTN_EVENT_QUEUE_SIZE 16
 #define BTN_HANDLE_METATABLE "lua_button_handle"
 
-/* --------------------------------------------------------------------------
- * Internal types
- * -------------------------------------------------------------------------- */
 typedef struct {
     button_handle_t handle;
+    uint64_t        generation;
     button_event_t  event;
     uint8_t         repeat_count;
     uint32_t        pressed_time_ms;
@@ -37,24 +33,46 @@ typedef struct {
 
 typedef struct {
     button_handle_t handle;
+    uint64_t        generation;
     int             lua_refs[BUTTON_EVENT_MAX]; /* LUA_NOREF if not registered */
     bool            cbs_registered[BUTTON_EVENT_MAX];
 } btn_lua_reg_t;
 
 typedef struct {
+    btn_lua_reg_t regs[BTN_MAX_HANDLES];
+    int count;
+    QueueHandle_t queue;
+    uint64_t generation;
+} btn_context_t;
+
+typedef struct {
     button_handle_t handle;
+    cap_lua_hw_lease_t lease;
+    uint64_t generation;
+    lua_State *state;
+    btn_context_t *context;
 } btn_lua_handle_ud_t;
 
-/* --------------------------------------------------------------------------
- * Module-level state
- * -------------------------------------------------------------------------- */
-static btn_lua_reg_t s_regs[BTN_MAX_HANDLES];
-static int           s_num_regs = 0;
-static QueueHandle_t s_queue    = NULL;
+static const char s_context_key;
 
-/* --------------------------------------------------------------------------
- * Event name tables
- * -------------------------------------------------------------------------- */
+static int btn_context_gc(lua_State *L)
+{
+    btn_context_t *ctx = lua_touserdata(L, 1);
+    if (ctx && ctx->queue) {
+        vQueueDelete(ctx->queue);
+        ctx->queue = NULL;
+    }
+    return 0;
+}
+
+static btn_context_t *btn_context(lua_State *L)
+{
+    lua_rawgetp(L, LUA_REGISTRYINDEX, &s_context_key);
+    btn_context_t *ctx = lua_touserdata(L, -1);
+    lua_pop(L, 1);
+    return ctx;
+}
+
 static const char *const s_event_names[BUTTON_EVENT_MAX] = {
     "press_down",
     "press_up",
@@ -87,30 +105,29 @@ static button_event_t btn_event_from_str(const char *s)
     return BUTTON_EVENT_MAX;
 }
 
-/* --------------------------------------------------------------------------
- * Registry helpers
- * -------------------------------------------------------------------------- */
-static btn_lua_reg_t *btn_find_reg(button_handle_t handle)
+static btn_lua_reg_t *btn_find_reg(lua_State *L, button_handle_t handle)
 {
-    for (int i = 0; i < s_num_regs; i++) {
-        if (s_regs[i].handle == handle) {
-            return &s_regs[i];
+    btn_context_t *ctx = btn_context(L);
+    for (int i = 0; i < ctx->count; i++) {
+        if (ctx->regs[i].handle == handle) {
+            return &ctx->regs[i];
         }
     }
     return NULL;
 }
 
-static btn_lua_reg_t *btn_add_reg(button_handle_t handle)
+static btn_lua_reg_t *btn_add_reg(lua_State *L, button_handle_t handle)
 {
-    btn_lua_reg_t *reg = btn_find_reg(handle);
+    btn_context_t *ctx = btn_context(L);
+    btn_lua_reg_t *reg = btn_find_reg(L, handle);
     if (reg) {
         return reg;
     }
-    if (s_num_regs >= BTN_MAX_HANDLES) {
+    if (ctx->count >= BTN_MAX_HANDLES) {
         return NULL;
     }
 
-    reg = &s_regs[s_num_regs++];
+    reg = &ctx->regs[ctx->count++];
     memset(reg, 0, sizeof(*reg));
     reg->handle = handle;
     for (int i = 0; i < BUTTON_EVENT_MAX; i++) {
@@ -121,29 +138,23 @@ static btn_lua_reg_t *btn_add_reg(button_handle_t handle)
 
 static void btn_remove_reg(lua_State *L, btn_lua_reg_t *reg)
 {
-    int idx = (int)(reg - s_regs);
-    if (idx < 0 || idx >= s_num_regs) {
+    btn_context_t *ctx = btn_context(L);
+    int idx = (int)(reg - ctx->regs);
+    if (idx < 0 || idx >= ctx->count) {
         return;
     }
 
     for (int i = 0; i < BUTTON_EVENT_MAX; i++) {
-        if (reg->cbs_registered[i]) {
-            esp_err_t err = iot_button_unregister_cb(reg->handle, (button_event_t)i, NULL);
-            if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-                ESP_LOGW(TAG, "unregister_cb failed for event %s: %s",
-                         btn_event_to_str((button_event_t)i), esp_err_to_name(err));
-            }
-        }
         if (reg->lua_refs[i] != LUA_NOREF) {
             luaL_unref(L, LUA_REGISTRYINDEX, reg->lua_refs[i]);
         }
     }
 
-    s_num_regs--;
-    if (idx != s_num_regs) {
-        s_regs[idx] = s_regs[s_num_regs];
+    ctx->count--;
+    if (idx != ctx->count) {
+        ctx->regs[idx] = ctx->regs[ctx->count];
     }
-    memset(&s_regs[s_num_regs], 0, sizeof(s_regs[s_num_regs]));
+    memset(&ctx->regs[ctx->count], 0, sizeof(ctx->regs[ctx->count]));
 }
 
 static btn_lua_handle_ud_t *lua_btn_check_ud(lua_State *L, int idx)
@@ -163,57 +174,100 @@ static button_handle_t lua_btn_check_handle(lua_State *L, int idx)
     return lua_btn_check_ud(L, idx)->handle;
 }
 
+typedef struct {
+    btn_lua_handle_ud_t *object;
+    const button_config_t *config;
+    const button_gpio_config_t *gpio;
+} btn_create_args_t;
+
+static esp_err_t btn_create_driver(void *arg)
+{
+    btn_create_args_t *args = arg;
+    return iot_button_new_gpio_device(args->config, args->gpio, &args->object->handle);
+}
+
+static esp_err_t btn_delete_driver(void *arg)
+{
+    btn_lua_handle_ud_t *ud = arg;
+    return iot_button_delete(ud->handle);
+}
+
+static esp_err_t btn_close(btn_lua_handle_ud_t *ud)
+{
+    if (ud->handle) {
+        btn_lua_reg_t *reg = btn_find_reg(ud->state, ud->handle);
+        esp_err_t err = cap_lua_hw_timer_call(btn_delete_driver, ud);
+        if (err != ESP_OK) return err;
+        ud->handle = NULL;
+        if (reg) btn_remove_reg(ud->state, reg);
+    }
+    return cap_lua_hw_release(&ud->lease);
+}
+
 static int lua_btn_handle_gc(lua_State *L)
 {
-    btn_lua_handle_ud_t *ud =
-        (btn_lua_handle_ud_t *)luaL_testudata(L, 1, BTN_HANDLE_METATABLE);
-    btn_lua_reg_t *reg = NULL;
-
-    if (!ud || !ud->handle) {
-        return 0;
-    }
-
-    reg = btn_find_reg(ud->handle);
-    if (reg) {
-        btn_remove_reg(L, reg);
-    }
-    iot_button_delete(ud->handle);
-    ud->handle = NULL;
+    btn_lua_handle_ud_t *ud = luaL_testudata(L, 1, BTN_HANDLE_METATABLE);
+    if (ud) (void)btn_close(ud);
     return 0;
 }
 
 static void btn_c_event_cb(void *btn_handle, void *user_data)
 {
-    (void)user_data;
+    btn_lua_handle_ud_t *ud = user_data;
+    btn_context_t *ctx = ud->context;
 
-    if (!s_queue) {
+    if (!ctx->queue) {
         return;
     }
 
     button_handle_t handle = (button_handle_t)btn_handle;
     btn_event_item_t item = {
         .handle          = handle,
+        .generation      = ud->generation,
         .event           = iot_button_get_event(handle),
         .repeat_count    = iot_button_get_repeat(handle),
         .pressed_time_ms = iot_button_get_pressed_time(handle),
     };
 
-    if (xQueueSend(s_queue, &item, 0) != pdTRUE) {
+    if (xQueueSend(ctx->queue, &item, 0) != pdTRUE) {
         ESP_LOGW(TAG, "event queue full, dropped button event");
     }
 }
 
-/* --------------------------------------------------------------------------
- * button.new(gpio_num [, active_level [, long_press_ms [, short_press_ms]]])
- *   -> handle | nil, errmsg
- * -------------------------------------------------------------------------- */
+typedef struct {
+    button_handle_t handle;
+    button_event_t event;
+    btn_lua_handle_ud_t *object;
+    bool enable;
+    int level;
+} btn_operation_t;
+
+static esp_err_t btn_update_callback(void *arg)
+{
+    btn_operation_t *op = arg;
+    return op->enable ? iot_button_register_cb(op->handle, op->event, NULL, btn_c_event_cb, op->object)
+                      : iot_button_unregister_cb(op->handle, op->event, NULL);
+}
+
+static esp_err_t btn_read_level(void *arg)
+{
+    btn_operation_t *op = arg;
+    op->level = iot_button_get_key_level(op->handle);
+    return ESP_OK;
+}
+
+static esp_err_t btn_set_callback(button_handle_t handle, button_event_t event, btn_lua_handle_ud_t *object, bool enable)
+{
+    btn_operation_t op = { .handle = handle, .event = event, .object = object, .enable = enable };
+    return cap_lua_hw_timer_call(btn_update_callback, &op);
+}
+
 static int lua_btn_new(lua_State *L)
 {
     int gpio_num        = (int)luaL_checkinteger(L, 1);
     int active_level    = (int)luaL_optinteger(L, 2, 0);
     int long_press_ms   = (int)luaL_optinteger(L, 3, 0);
     int short_press_ms  = (int)luaL_optinteger(L, 4, 0);
-    button_handle_t btn = NULL;
 
     if (active_level != 0 && active_level != 1) {
         lua_pushnil(L);
@@ -232,66 +286,50 @@ static int lua_btn_new(lua_State *L)
         .disable_pull      = false,
     };
 
-    esp_err_t err = iot_button_new_gpio_device(&btn_cfg, &gpio_cfg, &btn);
-    if (err != ESP_OK || btn == NULL) {
+    btn_lua_handle_ud_t *ud = lua_newuserdata(L, sizeof(*ud));
+    *ud = (btn_lua_handle_ud_t){ .context = btn_context(L) };
+    lua_rawgeti(L, LUA_REGISTRYINDEX, LUA_RIDX_MAINTHREAD);
+    ud->state = lua_tothread(L, -1);
+    lua_pop(L, 1);
+    if (ud->context->generation == UINT64_MAX) return luaL_error(L, "button generation exhausted");
+    ud->generation = ++ud->context->generation;
+    luaL_setmetatable(L, BTN_HANDLE_METATABLE);
+    esp_err_t err = cap_lua_hw_claim_gpio(L, &ud->lease, "lua/button", gpio_num);
+    if (err == ESP_OK) {
+        btn_create_args_t create_args = { .object = ud, .config = &btn_cfg, .gpio = &gpio_cfg };
+        err = cap_lua_hw_timer_call(btn_create_driver, &create_args);
+    }
+    if (err == ESP_OK) {
+        btn_lua_reg_t *reg = btn_add_reg(L, ud->handle);
+        if (reg) reg->generation = ud->generation;
+        else err = ESP_ERR_NO_MEM;
+    }
+    if (err != ESP_OK || !ud->handle) {
+        (void)btn_close(ud);
         lua_pushnil(L);
-        lua_pushfstring(L, "button.new failed for gpio %d: %s",
-                        gpio_num, esp_err_to_name(err));
+        lua_pushfstring(L, "button.new failed for gpio %d: %s", gpio_num, esp_err_to_name(err));
         return 2;
     }
-
-    if (!btn_add_reg(btn)) {
-        iot_button_delete(btn);
-        lua_pushnil(L);
-        lua_pushfstring(L, "too many button handles (max %d)", BTN_MAX_HANDLES);
-        return 2;
-    }
-
-    btn_lua_handle_ud_t *ud =
-        (btn_lua_handle_ud_t *)lua_newuserdata(L, sizeof(*ud));
-    ud->handle = btn;
-    luaL_getmetatable(L, BTN_HANDLE_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
-/* --------------------------------------------------------------------------
- * button.close(handle) -> true | nil, errmsg
- * -------------------------------------------------------------------------- */
 static int lua_btn_close(lua_State *L)
 {
-    btn_lua_handle_ud_t *ud = lua_btn_check_ud(L, 1);
-    button_handle_t handle = ud->handle;
-    btn_lua_reg_t  *reg    = btn_find_reg(handle);
-    esp_err_t       err;
-
-    if (!reg) {
-        lua_pushnil(L);
-        lua_pushstring(L, "invalid or closed button handle");
-        return 2;
-    }
-
-    btn_remove_reg(L, reg);
-
-    err = iot_button_delete(handle);
+    btn_lua_handle_ud_t *ud = luaL_checkudata(L, 1, BTN_HANDLE_METATABLE);
+    esp_err_t err = btn_close(ud);
     if (err != ESP_OK) {
         lua_pushnil(L);
         lua_pushfstring(L, "button.close failed: %s", esp_err_to_name(err));
         return 2;
     }
-
-    ud->handle = NULL;
     lua_pushboolean(L, 1);
     return 1;
 }
 
-/* --------------------------------------------------------------------------
- * button.get_key_level(handle) -> level
- * -------------------------------------------------------------------------- */
 static int lua_btn_get_key_level(lua_State *L)
 {
     button_handle_t handle = lua_btn_check_handle(L, 1);
-    btn_lua_reg_t  *reg    = btn_find_reg(handle);
+    btn_lua_reg_t  *reg    = btn_find_reg(L, handle);
 
     if (!reg) {
         lua_pushnil(L);
@@ -299,18 +337,19 @@ static int lua_btn_get_key_level(lua_State *L)
         return 2;
     }
 
-    lua_pushinteger(L, iot_button_get_key_level(handle));
+    btn_operation_t op = { .handle = handle };
+    esp_err_t err = cap_lua_hw_timer_call(btn_read_level, &op);
+    if (err != ESP_OK) return luaL_error(L, "button read failed: %s", esp_err_to_name(err));
+    lua_pushinteger(L, op.level);
     return 1;
 }
 
-/* --------------------------------------------------------------------------
- * button.on(handle, event_str, fn) -> true | nil, errmsg
- * -------------------------------------------------------------------------- */
 static int lua_btn_on(lua_State *L)
 {
+    btn_context_t *ctx = btn_context(L);
     button_handle_t handle    = lua_btn_check_handle(L, 1);
     const char     *event_str = luaL_checkstring(L, 2);
-    btn_lua_reg_t  *reg       = btn_find_reg(handle);
+    btn_lua_reg_t  *reg       = btn_find_reg(L, handle);
 
     luaL_checktype(L, 3, LUA_TFUNCTION);
 
@@ -327,9 +366,9 @@ static int lua_btn_on(lua_State *L)
         return 2;
     }
 
-    if (!s_queue) {
-        s_queue = xQueueCreate(BTN_EVENT_QUEUE_SIZE, sizeof(btn_event_item_t));
-        if (!s_queue) {
+    if (!ctx->queue) {
+        ctx->queue = xQueueCreate(BTN_EVENT_QUEUE_SIZE, sizeof(btn_event_item_t));
+        if (!ctx->queue) {
             lua_pushnil(L);
             lua_pushstring(L, "failed to create event queue");
             return 2;
@@ -343,7 +382,7 @@ static int lua_btn_on(lua_State *L)
     reg->lua_refs[ev] = luaL_ref(L, LUA_REGISTRYINDEX);
 
     if (!reg->cbs_registered[ev]) {
-        esp_err_t err = iot_button_register_cb(handle, ev, NULL, btn_c_event_cb, NULL);
+        esp_err_t err = btn_set_callback(handle, ev, lua_btn_check_ud(L, 1), true);
         if (err != ESP_OK) {
             luaL_unref(L, LUA_REGISTRYINDEX, reg->lua_refs[ev]);
             reg->lua_refs[ev] = LUA_NOREF;
@@ -359,14 +398,11 @@ static int lua_btn_on(lua_State *L)
     return 1;
 }
 
-/* --------------------------------------------------------------------------
- * button.off(handle [, event_str]) -> true | nil, errmsg
- * -------------------------------------------------------------------------- */
 static int lua_btn_off(lua_State *L)
 {
     button_handle_t handle    = lua_btn_check_handle(L, 1);
     const char     *event_str = luaL_optstring(L, 2, NULL);
-    btn_lua_reg_t  *reg       = btn_find_reg(handle);
+    btn_lua_reg_t  *reg       = btn_find_reg(L, handle);
 
     if (!reg) {
         lua_pushnil(L);
@@ -386,7 +422,7 @@ static int lua_btn_off(lua_State *L)
             reg->lua_refs[ev] = LUA_NOREF;
         }
         if (reg->cbs_registered[ev]) {
-            esp_err_t err = iot_button_unregister_cb(handle, ev, NULL);
+            esp_err_t err = btn_set_callback(handle, ev, NULL, false);
             if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
                 lua_pushnil(L);
                 lua_pushfstring(L, "unregister_cb failed for event '%s': %s",
@@ -402,7 +438,7 @@ static int lua_btn_off(lua_State *L)
                 reg->lua_refs[i] = LUA_NOREF;
             }
             if (reg->cbs_registered[i]) {
-                esp_err_t err = iot_button_unregister_cb(handle, (button_event_t)i, NULL);
+                esp_err_t err = btn_set_callback(handle, (button_event_t)i, NULL, false);
                 if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
                     lua_pushnil(L);
                     lua_pushfstring(L, "unregister_cb failed for event '%s': %s",
@@ -418,21 +454,19 @@ static int lua_btn_off(lua_State *L)
     return 1;
 }
 
-/* --------------------------------------------------------------------------
- * button.dispatch() -> count
- * -------------------------------------------------------------------------- */
 static int lua_btn_dispatch(lua_State *L)
 {
+    btn_context_t *ctx = btn_context(L);
     int count = 0;
-    if (!s_queue) {
+    if (!ctx->queue) {
         lua_pushinteger(L, 0);
         return 1;
     }
 
     btn_event_item_t item;
-    while (xQueueReceive(s_queue, &item, 0) == pdTRUE) {
-        btn_lua_reg_t *reg = btn_find_reg(item.handle);
-        if (!reg) {
+    while (xQueueReceive(ctx->queue, &item, 0) == pdTRUE) {
+        btn_lua_reg_t *reg = btn_find_reg(L, item.handle);
+        if (!reg || reg->generation != item.generation) {
             continue;
         }
 
@@ -468,11 +502,18 @@ static int lua_btn_dispatch(lua_State *L)
     return 1;
 }
 
-/* --------------------------------------------------------------------------
- * Module registration
- * -------------------------------------------------------------------------- */
 int luaopen_button(lua_State *L)
 {
+    if (!btn_context(L)) {
+        btn_context_t *ctx = lua_newuserdata(L, sizeof(*ctx));
+        memset(ctx, 0, sizeof(*ctx));
+        if (luaL_newmetatable(L, "button.context")) {
+            lua_pushcfunction(L, btn_context_gc);
+            lua_setfield(L, -2, "__gc");
+        }
+        lua_setmetatable(L, -2);
+        lua_rawsetp(L, LUA_REGISTRYINDEX, &s_context_key);
+    }
     static const luaL_Reg funcs[] = {
         {"new",           lua_btn_new},
         {"close",         lua_btn_close},

@@ -11,6 +11,8 @@ When a request mentions `ws2812`, use this `led_strip` module by default.
 - Call `strip:refresh()` to apply changes
 - Call `strip:clear()` or `strip:close()` when needed
 
+Pixel indexes are 0-based. `set_pixel`, `set_pixel_hsv`, `refresh`, `clear`, and `close` return no values on success and raise a Lua error on failure.
+
 `set_pixel_hsv` uses:
 - `h`: `0-359`
 - `s`: `0-255`
@@ -24,4 +26,5 @@ local strip = led_strip.new(8, 1)
 strip:set_pixel(0, 255, 0, 0)
 strip:set_pixel_hsv(0, 120, 255, 64)
 strip:refresh()
+strip:close()
 ```

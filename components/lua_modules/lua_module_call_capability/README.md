@@ -72,9 +72,14 @@ print(ok, out, err)
 ### Send an image or file
 ```lua
 local capability = require("capability")
+local storage = require("storage")
+
+local root = storage.get_root_dir()
+local image_path = storage.join_path(root, "statistics", "ESP-Claw.png")
+local file_path = storage.join_path(root, "reports", "status.json")
 
 local ok1, out1, err1 = capability.call("qq_send_image", {
-  path = "/fatfs/statistics/ESP-Claw.png",
+  path = image_path,
   caption = "image from lua"
 }, {
   channel = "qq",
@@ -83,7 +88,7 @@ local ok1, out1, err1 = capability.call("qq_send_image", {
 })
 
 local ok2, out2, err2 = capability.call("qq_send_file", {
-  path = "/fatfs/reports/status.json",
+  path = file_path,
   caption = "latest report"
 }, {
   channel = "qq",
@@ -140,10 +145,13 @@ print(ok, out, err)
 ### Send a WeChat image
 ```lua
 local capability = require("capability")
+local storage = require("storage")
+
+local image_path = storage.join_path(storage.get_root_dir(), "statistics", "ESP-Claw.png")
 
 local ok, out, err = capability.call("wechat_send_image", {
   chat_id = "wxid_abc123",
-  path = "/fatfs/statistics/ESP-Claw.png",
+  path = image_path,
   caption = "image from lua"
 }, {
   channel = "wechat",

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "app_claw.h"
+#include "audio_hub.h"
 #include "app_claw_cli.h"
 #include "app_capabilities.h"
 #if CONFIG_APP_CLAW_SYSTEM_UI_ENABLE
@@ -11,6 +12,7 @@
 #endif
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -39,6 +41,9 @@
 #endif
 #if CONFIG_APP_CLAW_CAP_SKILL_MGR
 #include "claw_skill.h"
+#endif
+#if CONFIG_APP_CLAW_CAP_LUA
+#include "app_registry.h"
 #endif
 #include "esp_check.h"
 #include "esp_log.h"
@@ -103,6 +108,69 @@ static const char *APP_STARTUP_EVENT_KEY = "boot_completed";
 #define APP_CLAW_LAUNCHER_OUTPUT_LEN 128
 #define APP_CLAW_UI_JOBS_OUTPUT_LEN 4096
 #define APP_CLAW_UI_JOB_STOP_WAIT_MS 50
+
+#if CONFIG_APP_CLAW_CAP_CORE && CONFIG_APP_CLAW_CAP_SKILL_MGR
+typedef struct {
+    char *text;
+    size_t length;
+} app_claw_skills_list_builder_t;
+
+static esp_err_t app_claw_append_skill(const claw_skill_catalog_entry_t *entry, void *user_ctx)
+{
+    app_claw_skills_list_builder_t *builder = user_ctx;
+
+    if (!entry || !builder) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    const char *id = entry->id ? entry->id : "";
+    const char *summary = entry->summary ? entry->summary : "";
+    int added = snprintf(NULL, 0, "- %s: %s\n", id, summary);
+
+    if (added < 0 || SIZE_MAX - builder->length <= (size_t)added) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+    char *grown = realloc(builder->text, builder->length + (size_t)added + 1);
+    if (!grown) {
+        return ESP_ERR_NO_MEM;
+    }
+    builder->text = grown;
+    snprintf(builder->text + builder->length, (size_t)added + 1, "- %s: %s\n", id, summary);
+    builder->length += (size_t)added;
+    return ESP_OK;
+}
+
+static esp_err_t app_claw_skills_list_collect(const claw_core_request_t *request, claw_core_context_t *out_context, void *user_ctx)
+{
+    static const char heading[] = "Available skills:\n";
+    app_claw_skills_list_builder_t builder = {
+        .text = strdup(heading),
+        .length = sizeof(heading) - 1,
+    };
+
+    (void)request;
+    (void)user_ctx;
+    if (!out_context) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memset(out_context, 0, sizeof(*out_context));
+    if (!builder.text) {
+        return ESP_ERR_NO_MEM;
+    }
+    esp_err_t err = claw_skill_foreach_catalog_entry(app_claw_append_skill, &builder);
+    if (err != ESP_OK) {
+        free(builder.text);
+        return err;
+    }
+    out_context->kind = CLAW_CORE_CONTEXT_KIND_SYSTEM_PROMPT;
+    out_context->content = builder.text;
+    return ESP_OK;
+}
+
+static const claw_core_context_provider_t s_app_claw_skills_list_provider = {
+    .name = "Skills List",
+    .collect = app_claw_skills_list_collect,
+};
+#endif
 
 #if CONFIG_APP_CLAW_SYSTEM_UI_ENABLE && CONFIG_APP_CLAW_CAP_LUA
 static char *app_claw_split_job_field(char **cursor)
@@ -325,21 +393,7 @@ static esp_err_t app_claw_lua_jobs_stop_all_cb(void *user_ctx)
     return err;
 }
 
-static esp_err_t app_claw_lua_display_exit_swipe_cb(void *user_ctx)
-{
-    char output[APP_CLAW_LAUNCHER_OUTPUT_LEN] = {0};
-
-    (void)user_ctx;
-    esp_err_t err = cap_lua_stop_all_jobs("display", APP_CLAW_UI_JOB_STOP_WAIT_MS, output, sizeof(output));
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "app exit swipe stop display jobs failed: err=%s output=%s", esp_err_to_name(err), output);
-    } else {
-        ESP_LOGI(TAG, "app exit swipe requested: output=%s", output);
-    }
-    return err;
-}
-
-static bool app_claw_launcher_action_is_lua_script(const char *action)
+static bool app_claw_app_action_is_lua_script(const char *action)
 {
     size_t len;
 
@@ -350,12 +404,12 @@ static bool app_claw_launcher_action_is_lua_script(const char *action)
     return len > 4 && strcmp(action + len - 4, ".lua") == 0;
 }
 
-static void app_claw_launcher_select_cb(const system_ui_launcher_item_t *selection, void *user_ctx)
+static void app_claw_app_select_cb(const system_ui_launcher_item_t *selection, void *user_ctx)
 {
     char output[APP_CLAW_LAUNCHER_OUTPUT_LEN] = {0};
 
     (void)user_ctx;
-    if (selection == NULL || !app_claw_launcher_action_is_lua_script(selection->action)) {
+    if (selection == NULL || !app_claw_app_action_is_lua_script(selection->action)) {
         ESP_LOGW(TAG, "invalid launcher action: %s",
                  selection && selection->action ? selection->action : "(null)");
         return;
@@ -389,6 +443,26 @@ static app_claw_config_t s_current_config;
 static bool s_current_config_valid;
 static app_claw_save_config_fn s_save_config;
 static void *s_save_config_user_ctx;
+static app_claw_network_ready_fn s_network_ready;
+static void *s_network_ready_user_ctx;
+
+static void app_claw_audio_start_service(void)
+{
+    static const audio_hub_config_t config = {
+        .mixer = {
+            .sample_rate = 16000, .channels = 1, .bits = 16, .frame_ms = 20,
+            .system_full_gain = 1.0f, .app_full_gain = 1.0f, .app_ducked_gain = 0.3f,
+            .duck_release_ms = 300, .output_volume = 80,
+        },
+        .capture = {
+            .sample_rate = 16000, .channels = 1, .bits = 16, .frame_ms = 20, .ring_frames = 8,
+        },
+    };
+    esp_err_t err = audio_hub_start(&config);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "audio_hub_start skipped: %s", esp_err_to_name(err));
+    }
+}
 
 static esp_err_t app_claw_ensure_config_lock(void)
 {
@@ -425,6 +499,18 @@ esp_err_t app_claw_set_save_config_callback(app_claw_save_config_fn save_config,
     return ESP_OK;
 }
 
+esp_err_t app_claw_set_network_ready_callback(app_claw_network_ready_fn network_ready,
+                                              void *user_ctx)
+{
+    ESP_RETURN_ON_ERROR(app_claw_ensure_config_lock(), TAG, "config lock unavailable");
+
+    xSemaphoreTake(s_config_lock, portMAX_DELAY);
+    s_network_ready = network_ready;
+    s_network_ready_user_ctx = user_ctx;
+    xSemaphoreGive(s_config_lock);
+    return ESP_OK;
+}
+
 esp_err_t app_claw_get_config(app_claw_config_t *out_config)
 {
     ESP_RETURN_ON_FALSE(out_config, ESP_ERR_INVALID_ARG, TAG, "out_config is NULL");
@@ -448,6 +534,25 @@ claw_core_handle_t app_claw_get_core(void)
     return NULL;
 #endif
 }
+
+#if CONFIG_APP_CLAW_CAP_MEMORY
+static esp_err_t app_claw_persist_context(const claw_core_context_persist_batch_t *batch, void *ctx)
+{
+    esp_err_t err = claw_memory_persist_context_callback(batch, ctx);
+#if CONFIG_APP_CLAW_CAP_SESSION_MGR
+    if (err == ESP_OK) {
+        for (size_t i = 0; i < batch->record_count; i++) {
+            if (batch->records[i].type == CLAW_CORE_CONTEXT_RECORD_USER || batch->records[i].type == CLAW_CORE_CONTEXT_RECORD_ASSISTANT_FINAL) {
+                esp_err_t catalog_err = claw_session_mgr_catalog_touch(batch->session_id, batch->records[i].text);
+                if (catalog_err != ESP_OK) ESP_LOGW(TAG, "Session metadata update failed: %s", esp_err_to_name(catalog_err));
+                break;
+            }
+        }
+    }
+#endif
+    return err;
+}
+#endif
 
 #if CONFIG_APP_CLAW_CAP_SESSION_MGR && (CONFIG_APP_CLAW_CAP_MEMORY || CONFIG_APP_CLAW_CAP_SKILL_MGR)
 static esp_err_t app_claw_delete_session_history(const char *session_id,
@@ -490,11 +595,10 @@ esp_err_t app_claw_ui_start(void)
     ESP_RETURN_ON_ERROR(system_ui_start(NULL), TAG, "start system UI failed");
 #if CONFIG_APP_CLAW_CAP_LUA
     const system_ui_callbacks_t callbacks = {
-        .on_launcher_select = app_claw_launcher_select_cb,
+        .on_launcher_select = app_claw_app_select_cb,
         .get_tasks = app_claw_lua_jobs_provider,
         .on_stop_task = app_claw_lua_job_stop_cb,
         .on_stop_all_tasks = app_claw_lua_jobs_stop_all_cb,
-        .on_app_exit_swipe = app_claw_lua_display_exit_swipe_cb,
     };
     ESP_RETURN_ON_ERROR(system_ui_set_callbacks(&callbacks, NULL), TAG, "set system UI callbacks failed");
     ESP_RETURN_ON_ERROR(cap_lua_register_job_event_cb(app_claw_lua_job_event_cb, NULL),
@@ -529,15 +633,13 @@ static bool app_claw_bool_is_true(const char *value)
            (strcmp(value, "true") == 0 || strcmp(value, "1") == 0 || strcmp(value, "yes") == 0);
 }
 
-static esp_err_t init_memory(const app_claw_config_t *config,
-                             const app_claw_storage_paths_t *paths,
-                             uint32_t max_tool_iterations)
+static esp_err_t init_memory(const app_claw_config_t *config, const app_claw_storage_paths_t *paths)
 {
     claw_memory_config_t memory_config = {
         .session_root_dir = paths->memory_session_root,
         .memory_root_dir = paths->memory_root_dir,
         .max_message_chars = 4096,
-        .max_tool_iterations = max_tool_iterations,
+        .max_tool_iterations = CONFIG_APP_CLAW_MAX_TOOL_ITERATIONS,
         .llm = {
             .api_key = config->llm_api_key,
             .backend_type = config->llm_backend_type,
@@ -545,6 +647,7 @@ static esp_err_t init_memory(const app_claw_config_t *config,
             .base_url = config->llm_base_url,
             .auth_type = config->llm_auth_type,
             .max_tokens_field = config->llm_max_tokens_field,
+            .reasoning_effort = config->llm_reasoning_effort,
             .timeout_ms = (uint32_t)strtoul(config->llm_timeout_ms, NULL, 10),
             .max_tokens = (uint32_t)strtoul(config->llm_max_tokens, NULL, 10),
             .image_max_bytes = (size_t)strtoul(config->llm_default_image_max_bytes, NULL, 10),
@@ -568,6 +671,20 @@ static esp_err_t init_memory(const app_claw_config_t *config,
 }
 #endif
 
+#if CONFIG_APP_CLAW_SYSTEM_UI_ENABLE && CONFIG_APP_CLAW_CAP_LUA
+static void app_claw_registry_changed_cb(void *user_ctx)
+{
+    (void)user_ctx;
+    if (!system_ui_is_started()) {
+        return;
+    }
+    esp_err_t err = system_ui_reload_home();
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Reload UI after launcher change failed: %s", esp_err_to_name(err));
+    }
+}
+#endif
+
 #if CONFIG_APP_CLAW_CAP_SKILL_MGR
 static esp_err_t init_skills(const app_claw_storage_paths_t *paths)
 {
@@ -576,10 +693,23 @@ static esp_err_t init_skills(const app_claw_storage_paths_t *paths)
                             .max_file_bytes = 20 * 1024,
                         }),
                         TAG, "Failed to init claw_skill");
-    /* Register scan roots in priority order*/
-    ESP_RETURN_ON_ERROR(claw_skill_add_directory(paths->system_skills_root_dir), TAG, "Failed to add system skills directory");
+    /* Writable skills take priority over firmware-baked skills. */
     ESP_RETURN_ON_ERROR(claw_skill_add_directory(paths->skills_root_dir), TAG, "Failed to add skills directory");
-    return ESP_OK;
+    ESP_RETURN_ON_ERROR(claw_skill_add_directory(paths->system_skills_root_dir), TAG, "Failed to add system skills directory");
+    return claw_skill_reload_registry();
+}
+#endif
+
+#if CONFIG_APP_CLAW_CAP_LUA
+static esp_err_t init_apps(const app_claw_storage_paths_t *paths)
+{
+    ESP_RETURN_ON_ERROR(app_registry_init(), TAG, "Failed to init App registry");
+    ESP_RETURN_ON_ERROR(app_registry_add_directory(paths->apps_root_dir), TAG, "Failed to add writable App directory");
+    ESP_RETURN_ON_ERROR(app_registry_add_directory(paths->system_apps_root_dir), TAG, "Failed to add system App directory");
+#if CONFIG_APP_CLAW_SYSTEM_UI_ENABLE
+    ESP_RETURN_ON_ERROR(app_registry_register_changed_cb(app_claw_registry_changed_cb, NULL), TAG, "Failed to register App listener");
+#endif
+    return app_registry_reload();
 }
 #endif
 
@@ -599,9 +729,7 @@ static esp_err_t app_claw_publish_startup_event(void)
 #endif
 
 #if CONFIG_APP_CLAW_CAP_CORE
-static void app_claw_fill_core_config(const app_claw_config_t *config,
-                                      uint32_t max_tool_iterations,
-                                      claw_core_config_t *core_config)
+static void app_claw_fill_core_config(const app_claw_config_t *config, claw_core_config_t *core_config)
 {
     memset(core_config, 0, sizeof(*core_config));
     core_config->api_key = config->llm_api_key;
@@ -610,6 +738,7 @@ static void app_claw_fill_core_config(const app_claw_config_t *config,
     core_config->base_url = config->llm_base_url;
     core_config->auth_type = config->llm_auth_type;
     core_config->max_tokens_field = config->llm_max_tokens_field;
+    core_config->reasoning_effort = config->llm_reasoning_effort;
     core_config->timeout_ms = (uint32_t)strtoul(config->llm_timeout_ms, NULL, 10);
     core_config->max_tokens = (uint32_t)strtoul(config->llm_max_tokens, NULL, 10);
     core_config->image_max_bytes = (size_t)strtoul(config->llm_default_image_max_bytes, NULL, 10);
@@ -620,12 +749,12 @@ static void app_claw_fill_core_config(const app_claw_config_t *config,
     core_config->system_prompt = APP_SYSTEM_PROMPT;
 #if CONFIG_APP_CLAW_CAP_MEMORY
 #if CONFIG_APP_CLAW_MEMORY_MODE_FULL
-    core_config->persist_context = claw_memory_persist_context_callback;
+    core_config->persist_context = app_claw_persist_context;
     core_config->request_gate = claw_memory_request_gate_callback;
     core_config->on_request_start = claw_memory_request_start_callback;
     core_config->collect_stage_note = claw_memory_stage_note_callback;
 #else
-    core_config->persist_context = claw_memory_persist_context_callback;
+    core_config->persist_context = app_claw_persist_context;
     core_config->request_gate = claw_memory_request_gate_callback;
 #endif
 #endif
@@ -634,7 +763,7 @@ static void app_claw_fill_core_config(const app_claw_config_t *config,
     core_config->task_stack_size = 16 * 1024;
     core_config->task_priority = 5;
     core_config->task_core = tskNO_AFFINITY;
-    core_config->max_tool_iterations = max_tool_iterations;
+    core_config->max_tool_iterations = CONFIG_APP_CLAW_MAX_TOOL_ITERATIONS;
     core_config->request_queue_len = 4;
     core_config->response_queue_len = 4;
     core_config->max_context_providers = 8;
@@ -674,29 +803,34 @@ static esp_err_t build_storage_paths(app_claw_storage_paths_t *paths)
                         TAG, "memory root path too long");
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "skills", paths->skills_root_dir, sizeof(paths->skills_root_dir)),
                         TAG, "skills root path too long");
+    ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "apps", paths->apps_root_dir, sizeof(paths->apps_root_dir)),
+                        TAG, "App root path too long");
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "scripts", paths->lua_root_dir, sizeof(paths->lua_root_dir)),
                         TAG, "lua root path too long");
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "router_rules/router_rules.json", paths->router_rules_path, sizeof(paths->router_rules_path)),
                         TAG, "router rules path too long");
+    ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_SYSTEM, ".recovery/router_rules/router_rules.json", paths->router_recovery_path, sizeof(paths->router_recovery_path)),
+                        TAG, "router recovery path too long");
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "scheduler/schedules.json", paths->scheduler_rules_path, sizeof(paths->scheduler_rules_path)),
                         TAG, "scheduler rules path too long");
+    ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_SYSTEM, ".recovery/scheduler/schedules.json", paths->scheduler_recovery_path, sizeof(paths->scheduler_recovery_path)),
+                        TAG, "scheduler recovery path too long");
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_DATA, "inbox", paths->im_attachment_root, sizeof(paths->im_attachment_root)),
                         TAG, "inbox path too long");
 
     ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_SYSTEM, "skills", paths->system_skills_root_dir, sizeof(paths->system_skills_root_dir)),
                         TAG, "system skills root path too long");
+    ESP_RETURN_ON_ERROR(claw_paths_join(CLAW_PATH_SYSTEM, "apps", paths->system_apps_root_dir, sizeof(paths->system_apps_root_dir)),
+                        TAG, "system App root path too long");
 
     return ESP_OK;
 }
 
-esp_err_t app_claw_start(const app_claw_config_t *config)
+esp_err_t app_claw_start(const app_claw_config_t *config, claw_hw_registry_handle_t registry)
 {
     app_claw_storage_paths_t paths;
 #if CONFIG_APP_CLAW_CAP_CORE
     claw_core_config_t core_config = {0};
-#endif
-#if CONFIG_APP_CLAW_CAP_CORE || CONFIG_APP_CLAW_CAP_MEMORY
-    const uint32_t max_tool_iterations = 32;
 #endif
 #if CONFIG_APP_CLAW_CAP_EVENT_ROUTER
     claw_event_router_config_t router_config = {
@@ -714,9 +848,16 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
     ESP_RETURN_ON_ERROR(app_claw_store_current_config(config), TAG, "Failed to store Claw config");
     ESP_RETURN_ON_ERROR(build_storage_paths(&paths), TAG, "Failed to resolve storage paths");
 
+    ESP_RETURN_ON_FALSE(registry != NULL, ESP_ERR_INVALID_ARG, TAG, "hardware registry is required");
+#if CONFIG_APP_CLAW_CAP_LUA
+    ESP_RETURN_ON_ERROR(cap_lua_set_hw_registry(registry), TAG, "bind Lua hardware registry failed");
+#endif
+    app_claw_audio_start_service();
+
 #if CONFIG_APP_CLAW_CAP_EVENT_ROUTER
     router_config.default_route_messages_to_agent = true;
     router_config.rules_path = paths.router_rules_path;
+    router_config.recovery_rules_path = paths.router_recovery_path;
 #endif
 
 #if CONFIG_APP_CLAW_CAP_SESSION_MGR
@@ -731,6 +872,7 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
 #if CONFIG_APP_CLAW_CAP_SCHEDULER
     ESP_RETURN_ON_ERROR(cap_scheduler_init(&(cap_scheduler_config_t) {
                             .schedules_path = paths.scheduler_rules_path,
+                            .recovery_schedules_path = paths.scheduler_recovery_path,
                             .tick_ms = 1000,
                             .max_items = 32,
                             .task_stack_size = 6144,
@@ -742,7 +884,7 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
                         TAG, "Failed to init scheduler");
 #endif
 #if CONFIG_APP_CLAW_CAP_MEMORY
-    ESP_RETURN_ON_ERROR(init_memory(config, &paths, max_tool_iterations), TAG, "Failed to init memory");
+    ESP_RETURN_ON_ERROR(init_memory(config, &paths), TAG, "Failed to init memory");
 #endif
 #if CONFIG_APP_CLAW_CAP_SESSION_MGR && (CONFIG_APP_CLAW_CAP_MEMORY || CONFIG_APP_CLAW_CAP_SKILL_MGR)
     ESP_RETURN_ON_ERROR(cap_session_mgr_set_delete_session_handler(app_claw_delete_session_history, NULL),
@@ -750,15 +892,9 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
 #endif
 #if CONFIG_APP_CLAW_CAP_SKILL_MGR
     ESP_RETURN_ON_ERROR(init_skills(&paths), TAG, "Failed to init skills");
-#if CONFIG_APP_CLAW_SYSTEM_UI_ENABLE
-    if (system_ui_is_started()) {
-        /* Skills back the launcher catalog, so refresh the home screen after the registry is ready. */
-        esp_err_t ui_err = system_ui_reload_home();
-        if (ui_err != ESP_OK) {
-            ESP_LOGW(TAG, "Reload UI launcher after skills failed: %s", esp_err_to_name(ui_err));
-        }
-    }
 #endif
+#if CONFIG_APP_CLAW_CAP_LUA
+    ESP_RETURN_ON_ERROR(init_apps(&paths), TAG, "Failed to init Apps");
 #endif
     ESP_RETURN_ON_ERROR(app_capabilities_init(config, &paths), TAG, "Failed to init capabilities");
 #if CONFIG_APP_CLAW_CAP_IM_QQ
@@ -783,7 +919,7 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
 #endif
 
 #if CONFIG_APP_CLAW_CAP_CORE
-    app_claw_fill_core_config(config, max_tool_iterations, &core_config);
+    app_claw_fill_core_config(config, &core_config);
     {
         claw_core_context_provider_t base_providers[] = {
             claw_memory_profile_provider,
@@ -793,7 +929,9 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
             claw_memory_long_term_lightweight_provider,
 #endif
             claw_memory_session_history_provider,
-            claw_skill_skills_list_provider,
+#if CONFIG_APP_CLAW_CAP_SKILL_MGR
+            s_app_claw_skills_list_provider,
+#endif
         };
         const char *root_agent_id = NULL;
 
@@ -825,7 +963,8 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
 
 #if CONFIG_APP_CLAW_CAP_SYSTEM
     ESP_ERROR_CHECK(cap_system_time_sync_service_start(&(cap_system_time_sync_service_config_t) {
-                        .network_ready = NULL,
+                        .network_ready = s_network_ready,
+                        .network_ready_ctx = s_network_ready_user_ctx,
 #if CONFIG_APP_CLAW_CAP_SCHEDULER
                         .on_sync_success = app_time_sync_success,
 #else
@@ -835,7 +974,7 @@ esp_err_t app_claw_start(const app_claw_config_t *config)
 #endif
 
 #if CONFIG_APP_CLAW_ENABLE_CLI
-    ESP_RETURN_ON_ERROR(app_claw_cli_start(), TAG, "Failed to start CLI");
+    ESP_RETURN_ON_ERROR(app_claw_cli_start(registry), TAG, "Failed to start CLI");
 #endif
 #if CONFIG_APP_CLAW_CAP_EVENT_ROUTER
     ESP_RETURN_ON_ERROR(app_claw_publish_startup_event(), TAG,
@@ -850,13 +989,12 @@ esp_err_t app_claw_update_config(const app_claw_config_t *config)
 {
 #if CONFIG_APP_CLAW_CAP_CORE
     claw_core_config_t core_config = {0};
-    const uint32_t max_tool_iterations = 32;
 
     if (!config) {
         return ESP_ERR_INVALID_ARG;
     }
     ESP_RETURN_ON_ERROR(app_claw_store_current_config(config), TAG, "Failed to store Claw config");
-    app_claw_fill_core_config(config, max_tool_iterations, &core_config);
+    app_claw_fill_core_config(config, &core_config);
     return claw_agent_mgr_update_core_config(&core_config);
 #else
     ESP_RETURN_ON_ERROR(app_claw_store_current_config(config), TAG, "Failed to store Claw config");

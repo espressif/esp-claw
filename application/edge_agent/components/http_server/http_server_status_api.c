@@ -20,6 +20,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         return ESP_ERR_NO_MEM;
     }
 
+    http_server_json_add_string(root, "boot_id", ctx->boot_id);
     cJSON_AddBoolToObject(root, "wifi_connected", status.wifi_connected);
     http_server_json_add_string(root, "ip", status.ip);
     http_server_json_add_string(root, "storage_base_path", ctx->storage_base_path);

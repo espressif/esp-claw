@@ -4,9 +4,8 @@
   "description": "Operate ESP-Claw BLE: initialize BLE, advertise, handle connections, process events, and inspect module state.",
   "metadata": {
     "cap_groups": [
-      "cap_lua"
-    ],
-    "manage_mode": "readonly"
+     "cap_lua"
+    ]
   }
 }
 ---

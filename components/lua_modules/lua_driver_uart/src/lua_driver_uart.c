@@ -6,15 +6,19 @@
 #include "lua_driver_uart.h"
 
 #include <stdbool.h>
+#include <limits.h>
 #include <stdint.h>
 #include <string.h>
 
 #include "cap_lua.h"
+#include "cap_lua_hw.h"
 #include "driver/uart.h"
 #include "esp_err.h"
+#include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "hal/uart_types.h"
 #include "lauxlib.h"
+#include "soc/soc_caps.h"
 
 #define LUA_DRIVER_UART_METATABLE       "uart.port"
 #define LUA_DRIVER_UART_RX_BUF_SIZE     1024
@@ -23,15 +27,31 @@
 #define LUA_DRIVER_UART_MAX_LINE_LEN    1024
 
 typedef struct {
+    cap_lua_hw_lease_t lease;
     uart_port_t port;
     bool installed;
+    bool closing;
 } lua_driver_uart_ud_t;
+
+static esp_err_t lua_driver_uart_destroy(lua_driver_uart_ud_t *ud)
+{
+    ud->closing = true;
+    if (ud->installed) {
+        esp_err_t err = uart_driver_delete(ud->port);
+        if (err != ESP_OK) {
+            ESP_LOGE("lua_uart", "delete port failed: %s", esp_err_to_name(err));
+            return err;
+        }
+        ud->installed = false;
+    }
+    return cap_lua_hw_release(&ud->lease);
+}
 
 static lua_driver_uart_ud_t *lua_driver_uart_get_ud(lua_State *L, int idx)
 {
     lua_driver_uart_ud_t *ud = (lua_driver_uart_ud_t *)luaL_checkudata(
         L, idx, LUA_DRIVER_UART_METATABLE);
-    if (!ud || !ud->installed) {
+    if (!ud || !ud->installed || ud->closing) {
         luaL_error(L, "uart: invalid or closed port");
     }
     return ud;
@@ -107,8 +127,11 @@ static int lua_driver_uart_new(lua_State *L)
     if (port_num < 0 || port_num >= UART_NUM_MAX) {
         return luaL_error(L, "uart port must be in range 0-%d", UART_NUM_MAX - 1);
     }
-    if (baud <= 0) {
-        return luaL_error(L, "uart baud must be positive");
+    if (baud <= 0 || baud > INT_MAX) {
+        return luaL_error(L, "uart baud must be a positive int");
+    }
+    if (tx < 0 || tx >= SOC_GPIO_PIN_COUNT || rx < 0 || rx >= SOC_GPIO_PIN_COUNT) {
+        return luaL_error(L, "uart requires explicit valid TX and RX GPIOs");
     }
 
     uart_word_length_t data_bits = UART_DATA_8_BITS;
@@ -146,33 +169,28 @@ static int lua_driver_uart_new(lua_State *L)
         .source_clk = UART_SCLK_DEFAULT,
     };
 
-    uart_port_t port = (uart_port_t)port_num;
-    esp_err_t err = uart_driver_install(port,
-                                        LUA_DRIVER_UART_RX_BUF_SIZE,
-                                        LUA_DRIVER_UART_TX_BUF_SIZE,
-                                        0, NULL, 0);
-    if (err != ESP_OK) {
-        return luaL_error(L, "uart_driver_install failed on port %d: %s",
-                          (int)port, esp_err_to_name(err));
-    }
-    err = uart_param_config(port, &cfg);
-    if (err != ESP_OK) {
-        uart_driver_delete(port);
-        return luaL_error(L, "uart_param_config failed: %s", esp_err_to_name(err));
-    }
-    err = uart_set_pin(port, (int)tx, (int)rx,
-                       UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    if (err != ESP_OK) {
-        uart_driver_delete(port);
-        return luaL_error(L, "uart_set_pin failed: %s", esp_err_to_name(err));
-    }
-
-    lua_driver_uart_ud_t *ud = (lua_driver_uart_ud_t *)lua_newuserdata(
-        L, sizeof(*ud));
-    ud->port = port;
-    ud->installed = true;
+    lua_driver_uart_ud_t *ud = lua_newuserdata(L, sizeof(*ud));
+    memset(ud, 0, sizeof(*ud));
+    ud->port = (uart_port_t)port_num;
     luaL_getmetatable(L, LUA_DRIVER_UART_METATABLE);
     lua_setmetatable(L, -2);
+    char bus_key[CLAW_HW_KEY_SIZE], tx_key[CLAW_HW_KEY_SIZE], rx_key[CLAW_HW_KEY_SIZE];
+    const char *keys[] = {
+        claw_hw_key_uart_bus(bus_key, sizeof(bus_key), ud->port),
+        claw_hw_key_gpio(tx_key, sizeof(tx_key), (int)tx),
+        claw_hw_key_gpio(rx_key, sizeof(rx_key), (int)rx),
+    };
+    esp_err_t err = cap_lua_hw_claim(L, &ud->lease, "lua/uart", keys, 3);
+    if (err == ESP_OK) {
+        err = uart_driver_install(ud->port, LUA_DRIVER_UART_RX_BUF_SIZE, LUA_DRIVER_UART_TX_BUF_SIZE, 0, NULL, 0);
+        ud->installed = err == ESP_OK;
+    }
+    if (err == ESP_OK) err = uart_param_config(ud->port, &cfg);
+    if (err == ESP_OK) err = uart_set_pin(ud->port, (int)tx, (int)rx, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    if (err != ESP_OK) {
+        (void)lua_driver_uart_destroy(ud);
+        return luaL_error(L, "uart new failed: %s", esp_err_to_name(err));
+    }
     return 1;
 }
 
@@ -310,24 +328,15 @@ static int lua_driver_uart_gc(lua_State *L)
 {
     lua_driver_uart_ud_t *ud = (lua_driver_uart_ud_t *)luaL_testudata(
         L, 1, LUA_DRIVER_UART_METATABLE);
-    if (ud && ud->installed) {
-        uart_driver_delete(ud->port);
-        ud->installed = false;
-    }
+    if (ud) (void)lua_driver_uart_destroy(ud);
     return 0;
 }
 
 static int lua_driver_uart_close(lua_State *L)
 {
-    lua_driver_uart_ud_t *ud = (lua_driver_uart_ud_t *)luaL_checkudata(
-        L, 1, LUA_DRIVER_UART_METATABLE);
-    if (ud->installed) {
-        esp_err_t err = uart_driver_delete(ud->port);
-        ud->installed = false;
-        if (err != ESP_OK) {
-            return luaL_error(L, "uart close failed: %s", esp_err_to_name(err));
-        }
-    }
+    lua_driver_uart_ud_t *ud = luaL_checkudata(L, 1, LUA_DRIVER_UART_METATABLE);
+    esp_err_t err = lua_driver_uart_destroy(ud);
+    if (err != ESP_OK) return luaL_error(L, "uart close failed: %s", esp_err_to_name(err));
     return 0;
 }
 

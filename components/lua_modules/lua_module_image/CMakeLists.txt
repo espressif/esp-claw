@@ -7,4 +7,6 @@ idf_component_register(
         cap_lua
         esp_new_jpeg
         heap
+    PRIV_REQUIRES
+        esp_driver_ppa
 )

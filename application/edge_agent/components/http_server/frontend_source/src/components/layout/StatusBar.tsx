@@ -1,6 +1,6 @@
 import { Show, type Component, type JSX } from 'solid-js';
 import { t } from '../../i18n';
-import { appStatus } from '../../state/config';
+import { appStatus, deviceConnected } from '../../state/config';
 
 export const Logo: Component<{ class?: string }> = (props) => (
   <svg
@@ -20,7 +20,7 @@ export const Logo: Component<{ class?: string }> = (props) => (
 );
 
 export const StatusSummary: Component<{ class?: string; compact?: boolean }> = (props) => {
-  const online = () => appStatus()?.wifi_connected === true;
+  const online = () => deviceConnected() && appStatus()?.wifi_connected === true;
   const loading = () => appStatus() === null;
 
   return (
@@ -54,7 +54,7 @@ export const StatusSummary: Component<{ class?: string; compact?: boolean }> = (
             ? t('statusLoading')
             : online()
               ? t('statusOnline')
-              : appStatus()?.ap_active
+              : deviceConnected() && appStatus()?.ap_active
                 ? t('statusApActive')
                 : t('statusOffline')}
         </span>

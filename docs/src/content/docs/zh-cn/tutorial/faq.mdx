@@ -32,7 +32,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 **排查建议：**
 1. 观察日志中是否有 HTTP / TLS 相关错误。
-2. 确认配置中 LLM 配置完整。[➡️配置说明](@lang/reference-project/configuration) 
+2. 确认配置中 LLM 配置完整。[➡️配置说明](@lang/reference-project/configuration)
 3. 检查 Event Router 规则是否正确，消息是否正确路由。
 
 ### 通过 IM 发送的消息没有响应
@@ -116,8 +116,8 @@ import { Aside } from '@astrojs/starlight/components';
 ### 规则改了不生效
 
 1. 校验 JSON。
-2. `auto reload`。
-3. `auto emit_message` / `auto emit_trigger` 做最小用例。
+2. `router --reload`。
+3. `router --emit-message` / `router --emit-trigger` 做最小用例。
 
 ### Lua 执行失败
 

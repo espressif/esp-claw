@@ -42,6 +42,7 @@ typedef struct {
     TaskHandle_t task_handle;
     cap_scheduler_config_t config;
     char schedules_path[192];
+    char recovery_schedules_path[192];
     char state_path[192];
     cap_scheduler_entry_t *entries;
     size_t max_items;

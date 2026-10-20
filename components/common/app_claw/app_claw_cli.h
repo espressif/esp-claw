@@ -6,12 +6,13 @@
 #pragma once
 
 #include "esp_err.h"
+#include "claw_hw_registry.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-esp_err_t app_claw_cli_start(void);
+esp_err_t app_claw_cli_start(claw_hw_registry_handle_t registry);
 
 #ifdef __cplusplus
 }

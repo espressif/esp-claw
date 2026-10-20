@@ -38,6 +38,7 @@
 #endif
 #include "cap_llm_config.h"
 #if CONFIG_APP_CLAW_CAP_LUA
+#include "cap_app_mgr.h"
 #include "cap_lua.h"
 #endif
 #if CONFIG_APP_CLAW_CAP_MCP_CLIENT
@@ -320,6 +321,9 @@ static void app_cap_copy_app_to_llm_config(const app_claw_config_t *app_config,
     strlcpy(llm_config->max_tokens_field,
             app_config->llm_max_tokens_field,
             sizeof(llm_config->max_tokens_field));
+    strlcpy(llm_config->reasoning_effort,
+            app_config->llm_reasoning_effort,
+            sizeof(llm_config->reasoning_effort));
     strlcpy(llm_config->supports_tools, app_config->llm_supports_tools, sizeof(llm_config->supports_tools));
     strlcpy(llm_config->supports_vision, app_config->llm_supports_vision, sizeof(llm_config->supports_vision));
     strlcpy(llm_config->image_remote_url_only,
@@ -343,6 +347,9 @@ static void app_cap_copy_llm_to_app_config(const cap_llm_config_t *llm_config,
     strlcpy(app_config->llm_max_tokens_field,
             llm_config->max_tokens_field,
             sizeof(app_config->llm_max_tokens_field));
+    strlcpy(app_config->llm_reasoning_effort,
+            llm_config->reasoning_effort,
+            sizeof(app_config->llm_reasoning_effort));
     strlcpy(app_config->llm_supports_tools, llm_config->supports_tools, sizeof(app_config->llm_supports_tools));
     strlcpy(app_config->llm_supports_vision, llm_config->supports_vision, sizeof(app_config->llm_supports_vision));
     strlcpy(app_config->llm_image_remote_url_only,
@@ -614,7 +621,8 @@ static esp_err_t app_cap_register_lua(const app_claw_config_t *config,
 {
     (void)config;
     (void)paths;
-    return cap_lua_register_group();
+    ESP_RETURN_ON_ERROR(cap_lua_register_group(), TAG, "Failed to register Lua group");
+    return cap_app_mgr_register_group();
 }
 #endif
 
@@ -633,7 +641,8 @@ static esp_err_t app_cap_register_skill_mgr(const app_claw_config_t *config,
                                             const app_claw_storage_paths_t *paths)
 {
     (void)config;
-    return cap_skill_mgr_register_group(paths ? paths->skills_root_dir : NULL);
+    (void)paths;
+    return cap_skill_mgr_register_group();
 }
 #endif
 
@@ -693,15 +702,11 @@ static esp_err_t app_cap_prepare_web_search(const app_claw_config_t *config,
 {
     (void)paths;
 
-    if (config->search_brave_key[0]) {
-        ESP_RETURN_ON_ERROR(cap_web_search_set_brave_key(config->search_brave_key),
-                            TAG, "Failed to set Brave search key");
-    }
+    ESP_RETURN_ON_ERROR(cap_web_search_set_provider(config->search_provider), TAG, "Invalid search provider");
+    ESP_RETURN_ON_ERROR(cap_web_search_set_bocha_key(config->search_bocha_key), TAG, "Failed to set Bocha search key");
 
-    if (config->search_tavily_key[0]) {
-        ESP_RETURN_ON_ERROR(cap_web_search_set_tavily_key(config->search_tavily_key),
-                            TAG, "Failed to set Tavily search key");
-    }
+    ESP_RETURN_ON_ERROR(cap_web_search_set_brave_key(config->search_brave_key), TAG, "Failed to set Brave search key");
+    ESP_RETURN_ON_ERROR(cap_web_search_set_tavily_key(config->search_tavily_key), TAG, "Failed to set Tavily search key");
 
     return ESP_OK;
 }
@@ -777,7 +782,7 @@ static const app_capability_group_entry_t s_capability_group_entries[] = {
     { "cap_mcp_client", "MCP Client", "Register MCP client cap", false, NULL, app_cap_register_mcp_client },
 #endif
 #if CONFIG_APP_CLAW_CAP_SKILL_MGR
-    { "cap_skill", "Skill Manager", "Register skill cap", true, NULL, app_cap_register_skill_mgr },
+    { "cap_skill", "Skills", "Register skill capabilities", true, NULL, app_cap_register_skill_mgr },
 #endif
 #if CONFIG_APP_CLAW_CAP_SYSTEM
     { "cap_system", "System", "Register system cap", true, NULL, app_cap_register_system },
@@ -834,7 +839,7 @@ static const app_capability_group_info_t s_capability_group_infos[] = {
     { "cap_mcp_client", "MCP Client", false },
 #endif
 #if CONFIG_APP_CLAW_CAP_SKILL_MGR
-    { "cap_skill", "Skill Manager", true },
+    { "cap_skill", "Skills", true },
 #endif
 #if CONFIG_APP_CLAW_CAP_SYSTEM
     { "cap_system", "System", true },

@@ -27,8 +27,6 @@
 
 #include "lua_lvgl_private.h"
 
-/* --- Base method table: methods every widget gets ---------------------- */
-
 static const luaL_Reg lua_lvgl_base_methods[] = {
     {"set_pos", lua_lvgl_set_pos},
     {"get_pos", lua_lvgl_get_pos},
@@ -41,14 +39,15 @@ static const luaL_Reg lua_lvgl_base_methods[] = {
     {"set_grid", lua_lvgl_set_grid},
     {"set_grid_cell", lua_lvgl_set_grid_cell},
     {"set_scroll", lua_lvgl_set_scroll},
+    {"add_flag", lua_lvgl_add_flag},
+    {"clear_flag", lua_lvgl_clear_flag},
+    {"move_foreground", lua_lvgl_move_foreground},
     {"on", lua_lvgl_obj_on},
     {"off", lua_lvgl_obj_off},
     {"delete", lua_lvgl_delete},
     {"clean", lua_lvgl_clean},
     {NULL, NULL},
 };
-
-/* --- Per-type extra method tables -------------------------------------- */
 
 static const luaL_Reg lua_lvgl_screen_methods[] = {
     {"load", lua_lvgl_screen_load},
@@ -284,13 +283,24 @@ static const luaL_Reg lua_lvgl_eaf_methods[] = {
     {NULL, NULL},
 };
 
-/* image / line / spinner / keyboard / generic / container expose the base
+static const luaL_Reg lua_lvgl_image_methods[] = {
+    {"set_raw_rgb565", lua_lvgl_image_set_raw_rgb565},
+    {"set_raw_argb8888", lua_lvgl_image_set_raw_argb8888},
+    {"set_rotation", lua_lvgl_image_set_rotation},
+    {"set_pivot", lua_lvgl_image_set_pivot},
+    {NULL, NULL},
+};
+
+static const luaL_Reg lua_lvgl_line_methods[] = {
+    {"set_points", lua_lvgl_line_set_points},
+    {NULL, NULL},
+};
+
+/* spinner / keyboard / generic / container expose the base
  * method set only; an empty per-type extra table is enough. */
 static const luaL_Reg lua_lvgl_no_extra_methods[] = {
     {NULL, NULL},
 };
-
-/* --- Type -> metatable name + extra methods table ---------------------- */
 
 typedef struct {
     lua_lvgl_obj_type_t type;
@@ -306,8 +316,8 @@ static const lua_lvgl_widget_descriptor_t s_widget_descriptors[] = {
     {LUA_LVGL_OBJ_BUTTON,      "lvgl.obj.button",      lua_lvgl_button_methods},
     {LUA_LVGL_OBJ_BAR,         "lvgl.obj.bar",         lua_lvgl_bar_methods},
     {LUA_LVGL_OBJ_SLIDER,      "lvgl.obj.slider",      lua_lvgl_slider_methods},
-    {LUA_LVGL_OBJ_IMAGE,       "lvgl.obj.image",       lua_lvgl_no_extra_methods},
-    {LUA_LVGL_OBJ_LINE,        "lvgl.obj.line",        lua_lvgl_no_extra_methods},
+    {LUA_LVGL_OBJ_IMAGE,       "lvgl.obj.image",       lua_lvgl_image_methods},
+    {LUA_LVGL_OBJ_LINE,        "lvgl.obj.line",        lua_lvgl_line_methods},
     {LUA_LVGL_OBJ_ARC,         "lvgl.obj.arc",         lua_lvgl_arc_methods},
     {LUA_LVGL_OBJ_SPINNER,     "lvgl.obj.spinner",     lua_lvgl_no_extra_methods},
     {LUA_LVGL_OBJ_SCALE,       "lvgl.obj.scale",       lua_lvgl_scale_methods},
@@ -359,8 +369,6 @@ const char *lua_lvgl_metatable_for_type(lua_lvgl_obj_type_t type)
      * the userdata remains recognizable to lua_lvgl_check_ud. */
     return "lvgl.obj.generic";
 }
-
-/* --- Metatable construction helpers ------------------------------------ */
 
 /* Build a per-type "methods" table whose metatable's __index points to the
  * shared base methods table at stack absolute index `base_idx`. The newly

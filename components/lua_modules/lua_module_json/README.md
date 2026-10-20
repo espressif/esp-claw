@@ -1,6 +1,6 @@
 # Lua JSON Module
 
-`lua_module_json` provides JSON encode and decode helpers for Lua scripts.
+This module provides JSON encode and decode helpers for Lua scripts.
 
 ```lua
 local json = require("json")

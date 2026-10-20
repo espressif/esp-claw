@@ -1,6 +1,10 @@
 menu "Lua Camera Module"
-    depends on APP_CLAW_CAP_LUA
-    depends on APP_CLAW_LUA_MODULE_CAMERA
+    config LUA_MODULE_CAMERA_BUFFER_COUNT
+        int "Camera buffer count"
+        range 1 16
+        default 2
+        help
+            Set the number of V4L2 buffers requested when opening the camera.
 
     config LUA_MODULE_CAMERA_ENABLE_VFLIP
         bool "Camera vertical flip"

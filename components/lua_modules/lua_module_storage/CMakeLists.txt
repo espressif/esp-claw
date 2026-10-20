@@ -5,5 +5,5 @@ idf_component_register(
         "src"
     REQUIRES
         cap_lua
-        fatfs
+        claw_core
 )
