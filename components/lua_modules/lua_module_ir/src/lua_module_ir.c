@@ -16,14 +16,15 @@
 #include "freertos/task.h"
 
 #include "cap_lua.h"
+#include "cap_lua_hw.h"
 #include "driver/gpio.h"
+#include "driver/rmt_encoder.h"
 #include "driver/rmt_rx.h"
 #include "driver/rmt_tx.h"
 #include "esp_board_device.h"
 #include "esp_board_manager.h"
 #include "esp_check.h"
 #include "esp_log.h"
-#include "ir_encoder.h"
 #include "lauxlib.h"
 #include "sdkconfig.h"
 
@@ -46,6 +47,7 @@
 #define LUA_IR_NEC_ZERO_LOW_US       560
 #define LUA_IR_NEC_ONE_LOW_US        1690
 #define LUA_IR_NEC_ENDING_HIGH_US    560
+#define LUA_IR_NEC_SYMBOL_COUNT      34
 
 static const char *TAG = "lua_module_ir";
 
@@ -74,12 +76,15 @@ typedef struct {
     uint32_t             tx_resolution_hz;
     uint32_t             rx_resolution_hz;
     int                  rx_max_symbols;
+    rmt_symbol_word_t   *tx_buffer;
+    bool                 ctrl_configured;
     bool                 tx_enabled;
     bool                 rx_enabled;
 } lua_module_ir_handle_t;
 
 typedef struct {
     lua_module_ir_handle_t *handle;
+    cap_lua_hw_lease_t lease;
     char device_name[LUA_MODULE_IR_MAX_NAME_LEN];
 } lua_module_ir_ud_t;
 
@@ -135,10 +140,10 @@ static bool IRAM_ATTR lua_ir_rx_done_cb(rmt_channel_handle_t channel,
  * regardless of whether the user is about to send or receive. The pin is
  * idempotent; calling this multiple times is safe.
  */
-static void lua_module_ir_assert_ctrl(lua_module_ir_handle_t *h)
+static esp_err_t lua_module_ir_assert_ctrl(lua_module_ir_handle_t *h)
 {
     if (h->ctrl_gpio_num < 0) {
-        return;
+        return ESP_OK;
     }
     gpio_config_t io_conf = {
         .pin_bit_mask = BIT64(h->ctrl_gpio_num),
@@ -147,14 +152,15 @@ static void lua_module_ir_assert_ctrl(lua_module_ir_handle_t *h)
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
-    (void)gpio_config(&io_conf);
-    (void)gpio_set_level(h->ctrl_gpio_num, h->ctrl_active_level ? 1 : 0);
+    ESP_RETURN_ON_ERROR(gpio_config(&io_conf), TAG, "IR control configuration failed");
+    h->ctrl_configured = true;
+    return gpio_set_level(h->ctrl_gpio_num, h->ctrl_active_level ? 1 : 0);
 }
 
 static esp_err_t lua_module_ir_ensure_tx(lua_module_ir_handle_t *h)
 {
     if (h->tx_channel != NULL) {
-        return ESP_OK;
+        return h->tx_enabled ? ESP_OK : ESP_ERR_INVALID_STATE;
     }
 
     rmt_tx_channel_config_t tx_cfg = {
@@ -174,23 +180,20 @@ static esp_err_t lua_module_ir_ensure_tx(lua_module_ir_handle_t *h)
     ESP_RETURN_ON_ERROR(rmt_apply_carrier(h->tx_channel, &carrier_cfg),
                         TAG, "Failed to apply IR carrier");
 
-    ir_encoder_config_t enc_cfg = {
-        .resolution = h->tx_resolution_hz,
-    };
-    ESP_RETURN_ON_ERROR(ir_encoder_new(&enc_cfg, &h->encoder),
-                        TAG, "Failed to create IR encoder");
+    rmt_copy_encoder_config_t enc_cfg = {};
+    ESP_RETURN_ON_ERROR(rmt_new_copy_encoder(&enc_cfg, &h->encoder),
+                        TAG, "Failed to create IR copy encoder");
 
     ESP_RETURN_ON_ERROR(rmt_enable(h->tx_channel), TAG, "Failed to enable TX channel");
     h->tx_enabled = true;
 
-    lua_module_ir_assert_ctrl(h);
-    return ESP_OK;
+    return lua_module_ir_assert_ctrl(h);
 }
 
 static esp_err_t lua_module_ir_ensure_rx(lua_module_ir_handle_t *h)
 {
     if (h->rx_channel != NULL) {
-        return ESP_OK;
+        return h->rx_enabled ? ESP_OK : ESP_ERR_INVALID_STATE;
     }
 
     /*
@@ -201,7 +204,7 @@ static esp_err_t lua_module_ir_ensure_rx(lua_module_ir_handle_t *h)
      * RX path made the very first dev:receive() always time out: the
      * receiver was simply unpowered until something later called ensure_tx.
      */
-    lua_module_ir_assert_ctrl(h);
+    ESP_RETURN_ON_ERROR(lua_module_ir_assert_ctrl(h), TAG, "IR control failed");
 
     rmt_rx_channel_config_t rx_cfg = {
         .clk_src = RMT_CLK_SRC_DEFAULT,
@@ -244,41 +247,43 @@ static esp_err_t lua_module_ir_ensure_rx(lua_module_ir_handle_t *h)
     return ESP_OK;
 }
 
-static void lua_module_ir_destroy_handle(lua_module_ir_handle_t *h)
+static esp_err_t lua_module_ir_destroy_handle(lua_module_ir_handle_t *h)
 {
-    if (h == NULL) {
-        return;
-    }
-
-    if (h->tx_enabled && h->tx_channel) {
-        (void)rmt_disable(h->tx_channel);
+    if (!h) return ESP_OK;
+    if (h->tx_enabled) {
+        ESP_RETURN_ON_ERROR(rmt_disable(h->tx_channel), TAG, "Disable TX failed");
         h->tx_enabled = false;
     }
-    if (h->rx_enabled && h->rx_channel) {
-        (void)rmt_disable(h->rx_channel);
+    if (h->rx_enabled) {
+        ESP_RETURN_ON_ERROR(rmt_disable(h->rx_channel), TAG, "Disable RX failed");
         h->rx_enabled = false;
     }
-    if (h->encoder) {
-        (void)rmt_del_encoder(h->encoder);
-        h->encoder = NULL;
-    }
     if (h->tx_channel) {
-        (void)rmt_del_channel(h->tx_channel);
+        ESP_RETURN_ON_ERROR(rmt_del_channel(h->tx_channel), TAG, "Delete TX failed");
         h->tx_channel = NULL;
     }
     if (h->rx_channel) {
-        (void)rmt_del_channel(h->rx_channel);
+        ESP_RETURN_ON_ERROR(rmt_del_channel(h->rx_channel), TAG, "Delete RX failed");
         h->rx_channel = NULL;
+    }
+    if (h->encoder) {
+        ESP_RETURN_ON_ERROR(rmt_del_encoder(h->encoder), TAG, "Delete encoder failed");
+        h->encoder = NULL;
+    }
+    if (h->ctrl_configured) {
+        ESP_RETURN_ON_ERROR(gpio_set_level(h->ctrl_gpio_num, !h->ctrl_active_level), TAG, "Disable IR power failed");
+        ESP_RETURN_ON_ERROR(gpio_reset_pin(h->ctrl_gpio_num), TAG, "Reset IR control failed");
+        h->ctrl_configured = false;
     }
     if (h->rx_queue) {
         vQueueDelete(h->rx_queue);
         h->rx_queue = NULL;
     }
-    if (h->rx_buffer) {
-        free(h->rx_buffer);
-        h->rx_buffer = NULL;
-    }
-    free(h);
+    free(h->rx_buffer);
+    free(h->tx_buffer);
+    h->rx_buffer = NULL;
+    h->tx_buffer = NULL;
+    return ESP_OK;
 }
 
 static esp_err_t lua_module_ir_create_handle(const lua_ir_resolved_cfg_t *cfg,
@@ -419,34 +424,30 @@ static void lua_ir_apply_lua_overrides(lua_State *L, int opts_idx,
 #undef APPLY_U32
 }
 
-static int lua_module_ir_close_impl(lua_State *L, lua_module_ir_ud_t *ud)
+static esp_err_t lua_module_ir_close_handle(lua_module_ir_ud_t *ud)
 {
-    (void)L;
-    if (ud->handle) {
-        lua_module_ir_destroy_handle(ud->handle);
-        ud->handle = NULL;
-    }
+    esp_err_t err = lua_module_ir_destroy_handle(ud->handle);
+    if (err != ESP_OK) return err;
+    err = cap_lua_hw_release(&ud->lease);
+    if (err != ESP_OK) return err;
+    free(ud->handle);
+    ud->handle = NULL;
     ud->device_name[0] = '\0';
-    return 0;
+    return ESP_OK;
 }
 
 static int lua_module_ir_gc(lua_State *L)
 {
-    lua_module_ir_ud_t *ud =
-        (lua_module_ir_ud_t *)luaL_testudata(L, 1, LUA_MODULE_IR_METATABLE);
-    if (ud && ud->handle) {
-        return lua_module_ir_close_impl(L, ud);
-    }
+    lua_module_ir_ud_t *ud = luaL_testudata(L, 1, LUA_MODULE_IR_METATABLE);
+    if (ud) (void)lua_module_ir_close_handle(ud);
     return 0;
 }
 
 static int lua_module_ir_close(lua_State *L)
 {
-    lua_module_ir_ud_t *ud =
-        (lua_module_ir_ud_t *)luaL_checkudata(L, 1, LUA_MODULE_IR_METATABLE);
-    if (ud->handle) {
-        return lua_module_ir_close_impl(L, ud);
-    }
+    lua_module_ir_ud_t *ud = luaL_checkudata(L, 1, LUA_MODULE_IR_METATABLE);
+    esp_err_t err = lua_module_ir_close_handle(ud);
+    if (err != ESP_OK) return luaL_error(L, "ir.close failed: %s", esp_err_to_name(err));
     return 0;
 }
 
@@ -477,6 +478,8 @@ static int lua_module_ir_send_symbols_internal(lua_State *L,
     if (err != ESP_OK) {
         return luaL_error(L, "ir: tx wait failed: %s", esp_err_to_name(err));
     }
+    free(h->tx_buffer);
+    h->tx_buffer = NULL;
     return 0;
 }
 
@@ -490,62 +493,55 @@ static int lua_module_ir_send_nec(lua_State *L)
         return luaL_error(L, "ir: TX GPIO not configured");
     }
 
-    rmt_symbol_word_t symbols[34];
-    int n = lua_ir_build_nec_symbols(symbols, address, command);
-    (void)lua_module_ir_send_symbols_internal(L, ud->handle, symbols, (size_t)n);
+    if (ud->handle->tx_buffer) return luaL_error(L, "ir: previous transmission requires close");
+    ud->handle->tx_buffer = calloc(LUA_IR_NEC_SYMBOL_COUNT, sizeof(rmt_symbol_word_t));
+    if (!ud->handle->tx_buffer) return luaL_error(L, "ir: out of memory");
+    int n = lua_ir_build_nec_symbols(ud->handle->tx_buffer, address, command);
+    (void)lua_module_ir_send_symbols_internal(L, ud->handle, ud->handle->tx_buffer, (size_t)n);
     lua_pushboolean(L, 1);
     return 1;
 }
 
+static lua_Integer lua_ir_raw_symbol_field(lua_State *L, const char *field, lua_Integer fallback)
+{
+    lua_pushstring(L, field);
+    lua_rawget(L, -2);
+    lua_Integer value = luaL_optinteger(L, -1, fallback);
+    lua_pop(L, 1);
+    return value;
+}
+
 static int lua_module_ir_send_raw(lua_State *L)
 {
-    lua_module_ir_ud_t *ud = lua_module_ir_get_ud(L, 1);
+    luaL_checkudata(L, 1, LUA_MODULE_IR_METATABLE);
     luaL_checktype(L, 2, LUA_TTABLE);
-
-    if (ud->handle->tx_gpio_num < 0) {
-        return luaL_error(L, "ir: TX GPIO not configured");
+    size_t count = lua_rawlen(L, 2);
+    if (!count || count > SIZE_MAX / sizeof(rmt_symbol_word_t)) {
+        return luaL_error(L, "ir.send_raw: invalid symbol count");
     }
 
-#if LUA_VERSION_NUM >= 502
-    lua_Integer count = luaL_len(L, 2);
-#else
-    lua_Integer count = lua_objlen(L, 2);
-#endif
-    if (count <= 0) {
-        return luaL_error(L, "ir.send_raw: empty symbol list");
-    }
-
-    rmt_symbol_word_t *symbols = calloc((size_t)count, sizeof(rmt_symbol_word_t));
-    if (symbols == NULL) {
-        return luaL_error(L, "ir.send_raw: out of memory");
-    }
-
-    for (lua_Integer i = 0; i < count; i++) {
-        lua_rawgeti(L, 2, i + 1);
+    /* Lua owns parsing storage; finalizers cannot free it by closing the device. */
+    rmt_symbol_word_t *symbols = lua_newuserdata(L, count * sizeof(*symbols));
+    for (size_t i = 0; i < count; ++i) {
+        lua_rawgeti(L, 2, (lua_Integer)i + 1);
         if (!lua_istable(L, -1)) {
-            free(symbols);
-            return luaL_error(L, "ir.send_raw: symbol[%d] is not a table", (int)(i + 1));
+            return luaL_error(L, "ir.send_raw: symbol[%d] is not a table", (int)i + 1);
         }
-        lua_getfield(L, -1, "level0");
-        symbols[i].level0 = (uint32_t)luaL_optinteger(L, -1, 1) & 0x1;
-        lua_pop(L, 1);
-        lua_getfield(L, -1, "duration0");
-        symbols[i].duration0 = (uint32_t)luaL_optinteger(L, -1, 0) & 0x7FFF;
-        lua_pop(L, 1);
-        lua_getfield(L, -1, "level1");
-        symbols[i].level1 = (uint32_t)luaL_optinteger(L, -1, 0) & 0x1;
-        lua_pop(L, 1);
-        lua_getfield(L, -1, "duration1");
-        symbols[i].duration1 = (uint32_t)luaL_optinteger(L, -1, 0) & 0x7FFF;
-        lua_pop(L, 1);
+        symbols[i].level0 = (uint32_t)lua_ir_raw_symbol_field(L, "level0", 1) & 0x1;
+        symbols[i].duration0 = (uint32_t)lua_ir_raw_symbol_field(L, "duration0", 0) & 0x7FFF;
+        symbols[i].level1 = (uint32_t)lua_ir_raw_symbol_field(L, "level1", 0) & 0x1;
+        symbols[i].duration1 = (uint32_t)lua_ir_raw_symbol_field(L, "duration1", 0) & 0x7FFF;
         lua_pop(L, 1);
     }
 
-    int rc = lua_module_ir_send_symbols_internal(L, ud->handle, symbols, (size_t)count);
-    free(symbols);
-    if (rc != 0) {
-        return rc;
-    }
+    /* Parsing can run GC finalizers, so recheck the device before retaining TX data. */
+    lua_module_ir_ud_t *ud = lua_module_ir_get_ud(L, 1);
+    if (ud->handle->tx_gpio_num < 0) return luaL_error(L, "ir: TX GPIO not configured");
+    if (ud->handle->tx_buffer) return luaL_error(L, "ir: previous transmission requires close");
+    ud->handle->tx_buffer = malloc(count * sizeof(*symbols));
+    if (!ud->handle->tx_buffer) return luaL_error(L, "ir.send_raw: out of memory");
+    memcpy(ud->handle->tx_buffer, symbols, count * sizeof(*symbols));
+    lua_module_ir_send_symbols_internal(L, ud->handle, ud->handle->tx_buffer, count);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -559,6 +555,11 @@ static int lua_module_ir_receive(lua_State *L)
         return luaL_error(L, "ir: RX GPIO not configured");
     }
 
+    if (timeout_ms < 0) return luaL_error(L, "ir: timeout must be nonnegative");
+    size_t capacity = (size_t)ud->handle->rx_max_symbols;
+    if (capacity > SIZE_MAX / sizeof(rmt_symbol_word_t)) return luaL_error(L, "ir: receive buffer too large");
+    rmt_symbol_word_t *frame = lua_newuserdata(L, capacity * sizeof(*frame));
+    ud = lua_module_ir_get_ud(L, 1);
     esp_err_t err = lua_module_ir_ensure_rx(ud->handle);
     if (err != ESP_OK) {
         return luaL_error(L, "ir: RX init failed: %s", esp_err_to_name(err));
@@ -597,6 +598,7 @@ static int lua_module_ir_receive(lua_State *L)
         if (evt.num_symbols == 0) {
             continue;
         }
+        if (!evt.received_symbols || evt.num_symbols > capacity) return luaL_error(L, "ir: invalid received frame");
         /*
          * Reject obvious noise bursts: any real IR remote frame lasts at
          * least ~10ms (NEC repeat alone is 13.5ms, regular NEC ~67ms). A
@@ -616,9 +618,11 @@ static int lua_module_ir_receive(lua_State *L)
         }
     }
 
+    /* Table allocation may run a finalizer that closes the receiver. */
+    memcpy(frame, evt.received_symbols, evt.num_symbols * sizeof(*frame));
     lua_newtable(L);
     for (size_t i = 0; i < evt.num_symbols; i++) {
-        const rmt_symbol_word_t *s = &evt.received_symbols[i];
+        const rmt_symbol_word_t *s = &frame[i];
         lua_newtable(L);
         lua_pushinteger(L, s->level0 ? 0 : 1);
         lua_setfield(L, -2, "level0");
@@ -636,22 +640,26 @@ static int lua_module_ir_receive(lua_State *L)
 static int lua_module_ir_info(lua_State *L)
 {
     lua_module_ir_ud_t *ud = lua_module_ir_get_ud(L, 1);
-    lua_module_ir_handle_t *h = ud->handle;
+    const lua_ir_resolved_cfg_t info = {
+        .tx_gpio_num = ud->handle->tx_gpio_num, .rx_gpio_num = ud->handle->rx_gpio_num,
+        .ctrl_gpio_num = ud->handle->ctrl_gpio_num, .carrier_hz = ud->handle->carrier_hz,
+        .tx_resolution_hz = ud->handle->tx_resolution_hz, .rx_resolution_hz = ud->handle->rx_resolution_hz,
+    };
 
     lua_newtable(L);
     lua_pushstring(L, ud->device_name);
     lua_setfield(L, -2, "name");
-    lua_pushinteger(L, h->tx_gpio_num);
+    lua_pushinteger(L, info.tx_gpio_num);
     lua_setfield(L, -2, "tx_gpio");
-    lua_pushinteger(L, h->rx_gpio_num);
+    lua_pushinteger(L, info.rx_gpio_num);
     lua_setfield(L, -2, "rx_gpio");
-    lua_pushinteger(L, h->ctrl_gpio_num);
+    lua_pushinteger(L, info.ctrl_gpio_num);
     lua_setfield(L, -2, "ctrl_gpio");
-    lua_pushinteger(L, h->carrier_hz);
+    lua_pushinteger(L, info.carrier_hz);
     lua_setfield(L, -2, "carrier_hz");
-    lua_pushinteger(L, h->tx_resolution_hz);
+    lua_pushinteger(L, info.tx_resolution_hz);
     lua_setfield(L, -2, "tx_resolution_hz");
-    lua_pushinteger(L, h->rx_resolution_hz);
+    lua_pushinteger(L, info.rx_resolution_hz);
     lua_setfield(L, -2, "rx_resolution_hz");
     return 1;
 }
@@ -678,6 +686,9 @@ static int lua_module_ir_new(lua_State *L)
     if (strlen(device_name) >= LUA_MODULE_IR_MAX_NAME_LEN) {
         return luaL_error(L, "ir device name too long");
     }
+    char name_copy[LUA_MODULE_IR_MAX_NAME_LEN];
+    memcpy(name_copy, device_name, strlen(device_name) + 1);
+    device_name = name_copy;
 
     lua_ir_resolved_cfg_t cfg = {
         .tx_gpio_num       = -1,
@@ -708,21 +719,32 @@ static int lua_module_ir_new(lua_State *L)
         cfg.rx_max_symbols = CONFIG_LUA_MODULE_IR_RX_MAX_SYMBOLS;
     }
 
-    lua_module_ir_handle_t *handle = NULL;
-    esp_err_t err = lua_module_ir_create_handle(&cfg, &handle);
-    if (err != ESP_OK || handle == NULL) {
-        return luaL_error(L, "ir.new failed: %s",
-                          esp_err_to_name(err != ESP_OK ? err : ESP_FAIL));
+    if ((cfg.tx_gpio_num >= 0 && !GPIO_IS_VALID_OUTPUT_GPIO(cfg.tx_gpio_num)) ||
+        (cfg.rx_gpio_num >= 0 && !GPIO_IS_VALID_GPIO(cfg.rx_gpio_num)) ||
+        (cfg.ctrl_gpio_num >= 0 && !GPIO_IS_VALID_OUTPUT_GPIO(cfg.ctrl_gpio_num))) {
+        return luaL_error(L, "ir.new: invalid GPIO");
     }
-
-    lua_module_ir_ud_t *ud =
-        (lua_module_ir_ud_t *)lua_newuserdata(L, sizeof(*ud));
+    lua_module_ir_ud_t *ud = lua_newuserdata(L, sizeof(*ud));
     memset(ud, 0, sizeof(*ud));
-    ud->handle = handle;
-    snprintf(ud->device_name, sizeof(ud->device_name), "%s", device_name);
-
     luaL_getmetatable(L, LUA_MODULE_IR_METATABLE);
     lua_setmetatable(L, -2);
+    char tx_key[CLAW_HW_KEY_SIZE], rx_key[CLAW_HW_KEY_SIZE], ctrl_key[CLAW_HW_KEY_SIZE];
+    const char *keys[3];
+    size_t count = 0;
+    if (cfg.tx_gpio_num >= 0) keys[count++] = claw_hw_key_gpio(tx_key, sizeof(tx_key), cfg.tx_gpio_num);
+    if (cfg.rx_gpio_num >= 0) keys[count++] = claw_hw_key_gpio(rx_key, sizeof(rx_key), cfg.rx_gpio_num);
+    if (cfg.ctrl_gpio_num >= 0) keys[count++] = claw_hw_key_gpio(ctrl_key, sizeof(ctrl_key), cfg.ctrl_gpio_num);
+    const char *owner = cap_lua_current_owner_tag();
+    esp_err_t err = cap_lua_hw_claim(L, &ud->lease, owner ? owner : "lua/ir", keys, count);
+    if (err != ESP_OK) {
+        return luaL_error(L, "ir.new: resource claim failed: %s", esp_err_to_name(err));
+    }
+    err = lua_module_ir_create_handle(&cfg, &ud->handle);
+    if (err != ESP_OK) {
+        (void)lua_module_ir_close_handle(ud);
+        return luaL_error(L, "ir.new failed: %s", esp_err_to_name(err));
+    }
+    snprintf(ud->device_name, sizeof(ud->device_name), "%s", device_name);
     return 1;
 }
 

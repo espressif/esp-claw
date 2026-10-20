@@ -45,12 +45,11 @@ ESP-Claw 使用 Lua 解释器，通过 `cap_lua_runtime_*` 系列函数初始化
 
 ### 脚本路径管理
 
-`cap_lua` 的可写运行时脚本需位于 Script 基目录（Script Base Dir）下。`edge_agent` 中 Script Base Dir 默认为 `/fatfs/scripts/`（应用可通过 `cap_lua_set_base_dir` 修改）。Skill 自带脚本是只读资源，允许以 `/fatfs/skills/<skill_id>/scripts/...` 形式执行。
+`cap_lua` 接受已解析的绝对脚本路径。调用方必须从当前存储根生成路径：可写脚本位于 DATA 根的 `scripts/`，固件资源位于 SYSTEM 根，App 入口由 App registry 提供。
 
 - `path` 必须是 `.lua` 文件。
-- `path` 可用两种形式：
-  - 受管相对路径：如 `hello.lua` 或 `builtin/test/hello.lua`（会自动拼到 `${base_dir}` 下，且不能包含 `..`）。
-  - Skill 本地绝对路径：如 `{CUR_SKILL_DIR}/scripts/hello.lua`，前提是活动 Skill 文档明确提供该脚本。该路径会展开到 `/fatfs/skills/<skill_id>/scripts/...`，必须位于 Skill 根目录下，且不能包含 `..`。
+- `path` 必须是绝对路径且不能包含 `..`；可写路径不得假定 DATA 根固定为 `/fatfs`。
+- Skill 文档用 `{CUR_SKILL_DIR}/scripts/...` 引用自身脚本；App 使用 registry 已校验的包内 `entry`。
 - 使用文件工具发现和读取脚本：`list_dir {"keyword":"scripts/"}` 与 `read_file {"path":"scripts/hello.lua"}`。
 
 ### 模块注册锁
@@ -62,7 +61,7 @@ ESP-Claw 使用 Lua 解释器，通过 `cap_lua_runtime_*` 系列函数初始化
 lua_module_display_register();   // 注册 display 模块
 lua_driver_gpio_register();      // 注册 gpio 模块
 // ...
-cap_lua_register_group("/fatfs/scripts");  // 传入脚本基目录，之后锁定
+cap_lua_register_group();  // 启动 capability group，之后锁定
 ```
 
 ## cap_lua 工具集

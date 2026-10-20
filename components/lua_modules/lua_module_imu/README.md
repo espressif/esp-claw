@@ -1,49 +1,53 @@
 # Lua IMU
 
-This module describes how to read IMU data from Lua.
-When a request mentions `bmi270`, `icm42670`, `mpu6050`, `imu`, `accelerometer`, or `gyroscope`, use this module by default.
+`imu` reads raw acceleration, angular velocity, temperature, and interrupt status from supported IMUs. Available chips are BMI270, ICM42670, and MPU6050, depending on the firmware configuration.
 
-## How to call
-- Import it with `local imu = require("imu")`
-- Open the sensor with one of:
-  - `local sensor = imu.new()` — use board defaults from the device named `imu_sensor`
-  - `local sensor = imu.new("imu_sensor")` — choose a device name explicitly
-  - `local sensor = imu.new({ peripheral = "i2c_master", int_gpio = 21 })` — provide options directly
-  - `local sensor = imu.new("imu_sensor", { frequency = 100000 })` — board defaults + per-field overrides
-- Call `local sample = sensor:read()` to get accel and gyro raw data
-- Call `local temp = sensor:read_temperature()` to read the raw temperature value
-- Call `local status = sensor:read_int_status()` to get the interrupt status bits
-- Call `sensor:name()` to read the resolved board device name
-- Call `sensor:close()` when needed
+## Board sensor
 
-## Options table
-All fields are optional. Any field omitted falls back to the board
-`board_devices.yaml` value for the device named by `device` (default
-`"imu_sensor"`). On a board that does not declare the device, missing
-required fields will raise an error.
-
-| Field        | Type     | Meaning                                                       |
-|--------------|----------|---------------------------------------------------------------|
-| `device`     | string   | Board device name to read defaults from (default `imu_sensor`)|
-| `peripheral` | string   | Board I2C master peripheral name (e.g. `"i2c_master"`)        |
-| `i2c_addr`   | integer  | Selected backend's 7-bit I2C address (default `0x68`)         |
-| `frequency`  | integer  | I2C clock in Hz (default `400000`)                            |
-| `int_gpio`   | integer  | GPIO number wired to the sensor interrupt pin                 |
-| `sdo_gpio`   | integer  | Optional address-select pin; for MPU6050 it drives `AD0`      |
-
-## Data format
-- `sample.accel.x`, `sample.accel.y`, `sample.accel.z`
-- `sample.gyro.x`, `sample.gyro.y`, `sample.gyro.z`
-- `sample.sens_time`
-- `sample.status`
-
-## Example
 ```lua
 local imu = require("imu")
-
-local sensor = imu.new()                  -- uses board defaults
+local sensor = imu.new({ device = "imu_sensor" })
 local sample = sensor:read()
-print(sample.accel.x, sample.accel.y, sample.accel.z)
-print(sample.gyro.x, sample.gyro.y, sample.gyro.z)
+print(sample.accel.x, sample.gyro.z)
 sensor:close()
 ```
+
+`device` selects an IMU supported by the board firmware. It is initialized automatically if needed. Existing sampling settings are preserved, and closing the Lua handle leaves the board sensor available. A second Lua handle cannot open the same board IMU until the first closes.
+
+## External sensor
+
+```lua
+local i2c = require("i2c")
+local imu = require("imu")
+local bus = i2c.new(1, 4, 5)
+local sensor = imu.new({ chip = "mpu6050", bus = bus, address = 0x68 })
+print(sensor:read().accel.z)
+sensor:close()
+bus:close()
+```
+
+Check your board before choosing a controller or GPIOs. An external sensor can also use an `i2c.borrow(port)` bus handle.
+
+| Field | Description |
+| --- | --- |
+| `chip` | Required: `bmi270`, `icm42670`, or `mpu6050`; the chip must be enabled in the firmware |
+| `bus` | Required Lua I2C bus handle |
+| `address` | Optional 7-bit address; defaults to the chip's default address |
+| `int_gpio` | Optional interrupt input GPIO; defaults to `-1` (unused) |
+| `sdo_gpio` | Optional address strap output GPIO; defaults to `-1` (unused) |
+
+External sensors use 400 kHz I2C transfers. Their address and optional GPIOs must be unused. Close the sensor before closing its bus: the bus cannot close while a sensor uses it.
+
+Pass exactly one configuration table. Board mode accepts only `device`; it cannot be combined with external sensor fields. Unknown options, unavailable devices, unsupported chips, and resource conflicts raise Lua errors.
+
+## Methods and cleanup
+
+- `sensor:read()` returns `accel` and `gyro` tables, each containing `x`, `y`, and `z`, plus `sens_time` and `status`.
+- `sensor:read_temperature()` returns the chip's raw temperature value.
+- `sensor:read_int_status()` returns the chip's interrupt status bits; reading may clear hardware status bits.
+- `sensor:name()` returns the board device name or, for an external sensor, the chip name.
+- `sensor:close()` releases the Lua handle and destroys external sensor instances. Repeated successful closes are harmless.
+
+Values are raw chip-specific readings, not normalized physical units. BMI270 `sens_time` is the sensor counter; ICM42670 and MPU6050 use system microseconds. Board sensor ranges follow board configuration; external sensor ranges depend on the selected chip.
+
+Read methods raise errors after closing or when hardware access fails. Use `pcall` to handle errors. Lua garbage collection also finalizes handles, but explicit close is recommended. Retry a failed close before dropping the handle.

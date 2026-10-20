@@ -27,6 +27,8 @@ typedef esp_err_t (*claw_event_router_outbound_resolver_fn)(const claw_event_t *
 
 typedef struct {
     const char *rules_path;
+    /** Optional read-only fallback used to replace rules_path when it cannot be read or validated. */
+    const char *recovery_rules_path;
     size_t max_rules;
     size_t max_actions_per_rule;
     size_t cap_output_size;
@@ -106,6 +108,7 @@ esp_err_t claw_event_router_cancel_event(const char *event_id);
 esp_err_t claw_event_router_purge_queue(const char *event_type_filter,
                                         const char *source_cap_filter,
                                         size_t *out_cancelled);
+bool claw_event_router_channel_is_bound(const char *channel);
 esp_err_t claw_event_router_register_outbound_binding(const char *channel,
                                                       const char *cap_name);
 esp_err_t claw_event_router_handle_event(const claw_event_t *event,

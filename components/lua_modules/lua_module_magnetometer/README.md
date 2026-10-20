@@ -1,78 +1,69 @@
 # Lua Magnetometer
 
-This module describes how to read magnetometer data from Lua.
-When a request mentions `bmm350`, `bmm150`, `magnetometer`, `magnetic field`, or `compass`,
-use this module by default. The active chip backend is selected at build time via
-`CONFIG_LUA_MODULE_MAGNETOMETER_CHIP_*` (BMM350, BMM150, or QMC6309).
+`magnetometer` reads magnetic field samples from BMM150, BMM350, and QMC6309 sensors. Each chip must be enabled in the firmware.
 
-## How to call
-- Import it with `local magnetometer = require("magnetometer")`
-- Open the sensor with one of:
-  - `local sensor = magnetometer.new()` — use board defaults from `magnetometer_sensor`
-  - `local sensor = magnetometer.new("magnetometer_sensor")` — choose a device name explicitly
-  - `local sensor = magnetometer.new({ peripheral = "i2c_master" })` — provide options directly
-  - `local sensor = magnetometer.new("magnetometer_sensor", { i2c_addr = 0x15 })` — board defaults + per-field overrides
-- Call `local sample = sensor:read()` to get magnetic field data and temperature
-- Call `local temp = sensor:read_temperature()` to read temperature
-- Call `local status = sensor:read_int_status()` to get the raw interrupt status register
-- Call `sensor:name()` to read the resolved board device name
-- Call `sensor:chip_id()` to read the active chip id
-- Call `sensor:calibration_reset()` before collecting calibration samples
-- Call `sensor:calibration_add_sample([sample])` repeatedly while rotating the device in all directions. `sample` may be `{x, y, z}`; when omitted, the module reads the sensor.
-- Call `local cal = sensor:calibration_finish()` to compute and persist hard/soft iron calibration
-- Call `local cal = sensor:calibration_get()` to inspect the active calibration
-- Call `local cal = sensor:calibration_set(cal)` to apply and persist a calibration table
-- Call `sensor:calibration_clear()` to clear persisted calibration
-- Call `sensor:close()` when needed
+## Board sensor
 
-## Options table
-All fields are optional. Any field omitted falls back to the board
-`board_devices.yaml` value for the device named by `device` (default
-`"magnetometer_sensor"`). On a board that does not declare the device,
-missing required fields will raise an error.
+```lua
+local magnetometer = require("magnetometer")
+local sensor = magnetometer.new({ device = "magnetometer_sensor" })
+local sample = sensor:read()
+print(sample.magnetic.x, sample.magnetic.y, sample.magnetic.z)
+sensor:close()
+```
 
-| Field        | Type    | Meaning                                                               |
-|--------------|---------|-----------------------------------------------------------------------|
-| `device`     | string  | Board device name to read defaults from (default `magnetometer_sensor`) |
-| `peripheral` | string  | Board I2C master peripheral name (e.g. `"i2c_master"`)               |
-| `i2c_addr`   | integer | 7-bit I2C address (BMM350: `0x14`/`0x15`; BMM150: `0x10`–`0x13`; QMC6309: `0x7C`) |
-| `frequency`  | integer | I2C clock in Hz (default `100000`)                                   |
-| `int_gpio`   | integer | Optional GPIO number wired to the sensor interrupt pin               |
-| `sdo_gpio`   | integer | Optional GPIO to strap SDO/ADSEL for alternate I2C address           |
+The named device must be supported by the board firmware. It is initialized if needed; opening an initialized sensor preserves its sampling settings. Closing the Lua handle leaves the board sensor active. Only one Lua handle can open a given board sensor at a time. The board sensor and its bus must remain available while Lua uses them.
 
-## Data format
-- `sample.magnetic.x`, `sample.magnetic.y`, `sample.magnetic.z`
-- `sample.raw_magnetic.x`, `sample.raw_magnetic.y`, `sample.raw_magnetic.z`
-- `sample.temperature` (BMM150 and QMC6309 return `0`; no on-chip temperature)
-- `sample.status`
-- `sample.calibrated`
+## External sensor
+
+```lua
+local i2c = require("i2c")
+local magnetometer = require("magnetometer")
+local bus = i2c.new(1, 4, 5) -- Choose a controller and pins available on your board.
+local sensor = magnetometer.new({ chip = "bmm150", bus = bus, address = 0x10 })
+print(sensor:read().magnetic.x)
+sensor:close()
+bus:close()
+```
+
+An external sensor can also use an `i2c.borrow(port)` bus.
+
+| Field | Description |
+| --- | --- |
+| `chip` | Required: `bmm150`, `bmm350`, or `qmc6309` |
+| `bus` | Required Lua I2C bus handle |
+| `address` | Optional 7-bit address: BMM150 `0x10`–`0x13` (default `0x10`), BMM350 `0x14`–`0x15` (default `0x14`), QMC6309 `0x7c` |
+| `int_gpio` | Optional interrupt input GPIO; default `-1` (unused); no callbacks are installed |
+| `sdo_gpio` | Optional address strap output GPIO for BMM150/BMM350; default `-1` (unused) |
+
+External sensors use 400 kHz transfers. Their address and requested GPIOs must be unused. No alternate addresses are probed. For BMM150, the other address selection pin must already match the requested address. QMC6309 does not accept `sdo_gpio`.
+
+Pass exactly one configuration table. Board mode accepts only `device`; external fields cannot be combined with it. Invalid options, unavailable devices, disabled chips, resource conflicts, and hardware failures raise Lua errors.
+
+## Read and close
+
+- `sensor:read()` returns `magnetic = {x, y, z}`, `raw_magnetic = {x, y, z}`, `status`, and `calibrated`. BMM350 also returns `temperature` in degrees Celsius; other chips omit it.
+- `sensor:read_temperature()` returns BMM350 temperature in degrees Celsius; other chips raise an error.
+- `sensor:read_int_status()` returns chip-specific status bits. Reading may clear hardware status bits.
+- `sensor:chip_id()` returns the chip's identification value.
+- `sensor:name()` returns the board device name or external chip name.
+- `sensor:close()` releases the Lua handle and deletes an external sensor. Repeated successful closes are harmless.
+
+BMM150 and BMM350 magnetic values are in microteslas; QMC6309 values are signed raw counts. `raw_magnetic` means before application calibration; factory compensation is already applied by the Bosch sensors. `magnetic` has the same units after calibration. No heading or tilt compensation is computed.
+
+Reads are synchronous. QMC6309 waits for data readiness with a 100 ms polling deadline; an in-progress I2C transfer and scheduling can extend the elapsed time. BMM150/BMM350 read the current sample, so callers should allow startup time and choose a polling interval appropriate for the sensor. Do not access the same sensor concurrently through another driver.
+
+Close an external sensor before closing its bus: a bus with an active sensor cannot close. Garbage collection also releases handles, but explicit close is recommended. Retry a failed close before discarding the handle. Read and calibration methods fail after close.
 
 ## Calibration
 
-Calibration tables contain:
-- `calibrated`
-- `collecting`
-- `sample_count`
-- `hard_iron`: `{ x, y, z }`
-- `soft_iron`: 3x3 numeric array
+Calibration affects only the current Lua object and is not saved automatically. Applications can store the result of `calibration_get()` and restore it with `calibration_set()`.
 
-Suggested flow:
-```lua
-sensor:calibration_reset()
-for i = 1, 500 do
-  sensor:calibration_add_sample()
-end
-local cal = sensor:calibration_finish()
-print(cal.calibrated, cal.sample_count)
-```
+- `calibration_reset()` clears calibration and starts a new collection.
+- `calibration_add_sample([sample])` accepts an array `{x, y, z}` before application calibration, or reads a sample when omitted. Returns the collected sample count.
+- `calibration_finish()` computes offset and per-axis scale, returning the calibration table. Requires at least 16 samples and a nonzero span on every axis. Rotate the sensor through different orientations while collecting samples.
+- `calibration_get()` returns `hard_iron` (three-number array), `soft_iron` (3×3 array), `calibrated`, `collecting`, and `sample_count`.
+- `calibration_set({hard_iron = {...}, soft_iron = {{...}, {...}, {...}}})` applies finite numeric coefficients and returns the calibration table.
+- `calibration_clear()` clears calibration and collection state, returning the calibration table.
 
-## Example
-```lua
-local magnetometer = require("magnetometer")
-
-local sensor = magnetometer.new()
-local sample = sensor:read()
-print(sample.magnetic.x, sample.magnetic.y, sample.magnetic.z)
-print(sample.temperature)
-sensor:close()
-```
+The correction is `soft_iron * (raw_magnetic - hard_iron)`. Without calibration, `magnetic` equals `raw_magnetic`. Keep saved coefficients associated with the individual sensor and its installation.

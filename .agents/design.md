@@ -14,6 +14,8 @@ Capabilities live under `components/claw_capabilities/` and are registered throu
 
 Skills are user-facing instructions and assets. Built-in skill sources live under component `skills/` directories and are synced into the read-only SYSTEM image at build time. Prefer skills for model know-how and workflows; prefer capabilities for callable firmware functions.
 
+Standalone Lua Apps are separate from Skills. Built-in Apps live under the application or board SYSTEM image's `apps/` directory, runtime Apps live under the DATA root's `apps/` directory, and the System UI Launcher consumes the independent App registry.
+
 ## Keep Lua modules modular
 
 Lua drivers and modules live under `components/lua_modules/` and are registered through `components/common/app_claw/app_lua_modules.c`. Hardware-specific modules should stay guarded by the existing Kconfig and board capability checks.

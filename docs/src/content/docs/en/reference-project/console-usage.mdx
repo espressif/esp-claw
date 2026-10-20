@@ -1,6 +1,6 @@
 ---
 title: Console usage
-description: "Serial REPL: session, Q&A, cap, skills, and automation debug commands."
+description: "Serial REPL: session, Q&A, files, cap, and automation debug commands."
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -27,11 +27,11 @@ session
 
 ### Chat with the LLM
 
-`ask` starts a multi-turn chat with history. `ask_once` is single-turn and does **not** append to session history.
+`ask` starts a multi-turn chat with history. Add `--once` for a single turn that does not use session history.
 
 ```sh
 ask list what you can do for me
-ask_once one-off question, do not use history
+ask --once one-off question, do not use history
 ```
 
 <Aside type="tip">
@@ -56,42 +56,38 @@ cap call get_current_time '{}'
 cap call list_dir '{"keyword":"scripts"}'
 ```
 
-### Group management
+### Inspect capability groups
 
-A capability may expose many tools. They are grouped so you can enable/disable/unload whole sets at once.
+A capability may expose many tools, which are organized into groups.
 
 ```sh
 cap groups
-cap enable <group_id>
-cap disable <group_id>
-cap unload <group_id>
+```
+
+## File listing
+
+`ls` recursively lists files under the DATA and SYSTEM roots. Its optional argument filters paths by keyword.
+
+```sh
+ls
+ls scripts
 ```
 
 ## skill
 
-<Aside type="note" title="skill console command is not registered by default">
-  `edge_agent` does **not** call `register_cap_skill()` by default, so the `skill` command does not appear on the serial console. To enable it, call `register_cap_skill()` inside `app_claw_cli_start` in `components/common/app_claw/app_claw_cli.c` and rebuild.
-
-  Alternatively, use `cap call activate_skill '{"skill_id":"your_skill"}'` from the console to manage Skills.
-</Aside>
-
-On the model side: `activate_skill`. On serial: the `skill` command (registered by `cmd_cap_skill`) can manage Skills, e.g.:
+`skill` lists the current Skill catalog. Add `--reload` to rescan the directories first.
 
 ```sh
-skill --catalog
-skill --list --session default
-skill --activate weather --session default
+skill
+skill --reload
 ```
 
-Keep `--session` aligned with the active `session` id, otherwise it looks “activated but not in context”.
-
-## auto
+## router
 
 ```sh
-auto reload
-auto rules
-auto last
-...
+router --reload
+router --rules
+router --last
 ```
 
 <LinkCard
@@ -101,12 +97,23 @@ auto last
 />
 
 
-## Other registered cap commands
+## Hardware resources: hwmap
 
-`edge_agent` registers `help`, `cap`, `auto`, `time`, `web_search`, `mcp_client`, `mcp_server`, `llm_inspect`, `event_router`, etc.
+`hwmap` shows registered resources and their users; `hwmap query <key>` selects one resource. `EXCLUSIVE` permits at most one claim, while `SHARED` permits multiple claims. `USERS` is the current usage count and `CLAIM` is the usage credential ID. Registered idle resources show `(free)`; an unregistered key returns an error.
+
+```sh
+hwmap
+hwmap query gpio:1
+hwmap query bus:i2c0
+hwmap query device:display_lcd
+```
+
+Resources are registered at startup and claimed when Board Manager actually initializes each driver. Successful driver deinitialization releases its claim. Flash, PSRAM and console resources are outside this registry’s protection scope. Shared access reuses an existing hardware object and does not guarantee that arbitrary concurrent operations are safe.
+
+## Other registered commands
+
+Depending on the build configuration, `edge_agent` can also register `lua`, `scheduler`, `router`, `skill`, `hwmap`, and `wifi`.
 Type `help` in the Console for the full list.
-
-Besides the usual `cap` subcommands (`list`, `call`, `groups`, `enable`, `disable`, `unload`), `cap load qq` dynamically registers the `cap_im_qq` group implemented by `cap_im_platform`.
 
 ## System configuration
 

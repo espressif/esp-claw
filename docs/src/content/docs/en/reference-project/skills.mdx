@@ -18,7 +18,7 @@ ESP-Claw uses Skills to manage context dynamically and extend the Agent—includ
 Unlike Skills in common desktop LLM agent frameworks, ESP-Claw Skills can include Lua scripts, provide API references for Lua scripts, and include static assets so they can extend ESP-Claw Agent capabilities.
 Because of this, ESP-Claw Skills must follow a specific directory structure and metadata specification.
 
-You can find the ESP-Claw Skill specification in [claw-skill-spec.md](https://github.com/espressif/esp-claw/blob/master/.agents/spec/claw-skill-spec.md).
+You can find the ESP-Claw Skill specification in the [Skill package spec](https://github.com/espressif/esp-claw/blob/master/components/common/skill_builder/skills/skill_creator/references/skill-package-spec.md). The same file is bundled with the built-in `skill_creator` for the device Agent.
 
 ### Metadata
 
@@ -26,8 +26,7 @@ ESP-Claw reads Skill metadata from JSON frontmatter at the top of each `SKILL.md
 
 `name` and `description` map to the Skill ID and summary shown to the model in the Skills catalog.
 
-`metadata.manage_mode` must be `readonly`, `web`, or `runtime`.
-Skills Lab projects typically use `web`; on device, `web` behaves like `readonly` for management. Runtime-registered skills use `runtime`.
+Skill management mode is determined by its storage root. Skills in writable DATA storage are runtime-manageable, while firmware-baked SYSTEM skills are read-only.
 
 `metadata.cap_groups` is optional: a list of capability group ids. When the Skill activates, those groups become visible to the LLM (tools exposed). This binds “how to use tools” with “having the tools” for the same lifecycle so the model cannot call tools without the guide.
 
@@ -35,7 +34,7 @@ Skills Lab projects typically use `web`; on device, `web` behaves like `readonly
   Values in `metadata.cap_groups` are `claw_cap_group_info_t.id` strings—the ids used when each capability group registers (e.g. `cap_lua`, `cap_im_qq`).
 </Aside>
 
-For other fields, see [claw-skill-spec.md](https://github.com/espressif/esp-claw/blob/master/.agents/spec/claw-skill-spec.md).
+For other fields, see the [Skill package spec](https://github.com/espressif/esp-claw/blob/master/components/common/skill_builder/skills/skill_creator/references/skill-package-spec.md).
 
 ## Writing effective Skills
 

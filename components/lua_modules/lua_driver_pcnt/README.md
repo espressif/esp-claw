@@ -49,3 +49,5 @@ unit:close()
 - `pcnt.new(opts)` returns a unit object.
 - `unit:add_channel(opts)`, `unit:start()`, `unit:stop()`, `unit:clear()`, and `unit:close()` return no values on success and raise a Lua error on failure.
 - `unit:get_count()` returns the current count as an integer.
+
+Use free GPIOs suitable for the connected hardware. Occupied or unavailable resources raise an error. If `close()` fails, retry it before reusing the resources.

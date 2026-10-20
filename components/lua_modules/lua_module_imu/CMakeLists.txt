@@ -42,8 +42,8 @@ idf_component_register(
     REQUIRES
         cap_lua
         esp_board_manager
-    PRIV_REQUIRES
-        espressif__i2c_bus
+        esp_driver_i2c
+        lua_driver_i2c
 )
 
 if(CONFIG_LUA_MODULE_IMU_CHIP_BMI270)

@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "id": "dino",
+  "entry": "scripts/dino.lua",
+  "display_name": "Dino",
+  "icon": "assets/icon.jpg",
+  "args": {},
+  "order": 10,
+  "visible": true
+}

@@ -12,11 +12,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "lauxlib.h"
 #include "cap_lua.h"
 #include "claw_paths.h"
-#include "esp_vfs_fat.h"
 
 /* The writable data root is owned by claw_paths; resolve it on each call so the
  * module always sees the current mount point (flash partition or SD card). */
@@ -117,15 +117,53 @@ static int lua_module_storage_exists(lua_State *L)
     return 1;
 }
 
+static const char *storage_error_code(int error)
+{
+    switch (error) {
+    case ENOENT: return "ENOENT";
+    case ENOTDIR: return "ENOTDIR";
+    case EACCES: return "EACCES";
+    case EPERM: return "EPERM";
+    case EIO: return "EIO";
+    case ENOSPC: return "ENOSPC";
+    case ENOTEMPTY: return "ENOTEMPTY";
+    case EEXIST: return "EEXIST";
+    case ENOMEM: return "ENOMEM";
+    case EINVAL: return "EINVAL";
+    case ELOOP: return "ELOOP";
+    case ENAMETOOLONG: return "ENAMETOOLONG";
+    case EROFS: return "EROFS";
+    case EBUSY: return "EBUSY";
+    default: return "UNKNOWN";
+    }
+}
+
+static void storage_push_error(lua_State *L, const char *operation, const char *path, int error)
+{
+    lua_newtable(L);
+    lua_pushstring(L, storage_error_code(error));
+    lua_setfield(L, -2, "code");
+    lua_pushinteger(L, error);
+    lua_setfield(L, -2, "errno");
+    lua_pushstring(L, path);
+    lua_setfield(L, -2, "path");
+    lua_pushstring(L, operation);
+    lua_setfield(L, -2, "operation");
+    lua_pushfstring(L, "storage.%s failed for %s: %s", operation, path, strerror(error));
+    lua_setfield(L, -2, "message");
+}
+
 static int lua_module_storage_stat(lua_State *L)
 {
     const char *path = luaL_checkstring(L, 1);
     struct stat st;
 
     if (stat(path, &st) != 0) {
+        const int error = errno;
         lua_pushnil(L);
-        lua_pushfstring(L, "stat failed for %s: %s", path, strerror(errno));
-        return 2;
+        lua_pushfstring(L, "stat failed for %s: %s", path, strerror(error));
+        storage_push_error(L, "stat", path, error);
+        return 3;
     }
 
     lua_module_storage_push_stat_table(L, NULL, &st);
@@ -267,12 +305,115 @@ static int lua_module_storage_listdir(lua_State *L)
 
 static int lua_module_storage_remove(lua_State *L)
 {
-    const char *path = luaL_checkstring(L, 1);
+    size_t path_len = 0;
+    const char *path = luaL_checklstring(L, 1, &path_len);
+    luaL_argcheck(L, strlen(path) == path_len, 1, "path contains a NUL byte");
 
-    if (remove(path) != 0) {
-        return luaL_error(L, "remove failed for %s: %s", path, strerror(errno));
+    /* ESP-IDF remove() may only unlink; directories require rmdir(). */
+    int result = unlink(path);
+    if (result != 0 && errno == EISDIR) {
+        result = rmdir(path);
+    }
+    if (result != 0) {
+        const int error = errno;
+        return luaL_error(L, "remove failed for %s: %s", path, strerror(error));
     }
 
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+enum { STORAGE_TREE_PATH_MAX = 1024, STORAGE_TREE_DEPTH_MAX = 16 };
+
+typedef struct {
+    char path[STORAGE_TREE_PATH_MAX];
+} storage_tree_t;
+
+static int storage_tree_stat(const char *path, struct stat *st)
+{
+#ifdef ESP_PLATFORM
+    /* ESP-IDF FATFS and LittleFS do not support symbolic links. */
+    return stat(path, st);
+#else
+    return lstat(path, st);
+#endif
+}
+
+static int storage_remove_tree(storage_tree_t *tree, unsigned depth)
+{
+    struct stat st;
+    if (storage_tree_stat(tree->path, &st) != 0) return errno == ENOENT ? 0 : errno;
+    if (!S_ISDIR(st.st_mode)) return unlink(tree->path) == 0 || errno == ENOENT ? 0 : errno;
+    if (depth >= STORAGE_TREE_DEPTH_MAX) return ELOOP;
+
+    DIR *dir = opendir(tree->path);
+    if (!dir) return errno;
+    size_t parent_len = strlen(tree->path);
+    int error = 0;
+    while (!error) {
+        errno = 0;
+        struct dirent *entry = readdir(dir);
+        if (!entry) { error = errno; break; }
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
+        size_t name_len = strlen(entry->d_name);
+        if (parent_len + name_len + 2 > sizeof(tree->path)) { error = ENAMETOOLONG; break; }
+        tree->path[parent_len] = '/';
+        memcpy(tree->path + parent_len + 1, entry->d_name, name_len + 1);
+        error = storage_remove_tree(tree, depth + 1);
+        /* Retain the failing child's path for diagnostics. */
+        if (!error) tree->path[parent_len] = '\0';
+    }
+    if (closedir(dir) != 0 && !error) error = errno;
+    if (!error && rmdir(tree->path) != 0 && errno != ENOENT) error = errno;
+    return error;
+}
+
+static int lua_module_storage_remove_tree(lua_State *L)
+{
+    size_t len = 0;
+    const char *path = luaL_checklstring(L, 1, &len);
+    luaL_argcheck(L, strlen(path) == len, 1, "path contains a NUL byte");
+    const char *root = lua_module_storage_base_path();
+    size_t root_len = root ? strlen(root) : 0;
+    while (root_len > 1 && root[root_len - 1] == '/') root_len--;
+    int error = 0;
+    /* Only canonical descendants of DATA are eligible for recursive deletion. */
+    if (!root_len || root[0] != '/' || len <= root_len + 1 || strncmp(path, root, root_len) || path[root_len] != '/') error = EINVAL;
+    for (const char *part = path; !error && *part;) {
+        if (*part == '/') part++;
+        size_t n = strcspn(part, "/");
+        if (!n || (n == 1 && part[0] == '.') || (n == 2 && !strncmp(part, "..", 2))) { error = EINVAL; break; }
+        part += n;
+        if (*part && !part[1]) error = EINVAL;
+    }
+    if (!error && len >= STORAGE_TREE_PATH_MAX) error = ENAMETOOLONG;
+    if (error) {
+        lua_pushnil(L);
+        storage_push_error(L, "remove_tree", path, error);
+        return 2;
+    }
+    /* Lua owns the buffer even if allocating an error table raises an exception. */
+    storage_tree_t *tree = lua_newuserdata(L, sizeof(*tree));
+    bool missing_parent = false;
+    memcpy(tree->path, path, len + 1);
+    /* Reject symlink ancestors before walking; callers must own the tree exclusively. */
+    for (size_t i = root_len + 1; i < len; i++) {
+        if (tree->path[i] != '/') continue;
+        tree->path[i] = '\0';
+        struct stat st;
+        if (storage_tree_stat(tree->path, &st) != 0) {
+            error = errno;
+            missing_parent = error == ENOENT;
+        } else if (!S_ISDIR(st.st_mode)) error = ENOTDIR;
+        if (error) break;
+        tree->path[i] = '/';
+    }
+    if (!error) error = storage_remove_tree(tree, 0);
+    if (error && !missing_parent) {
+        lua_pushnil(L);
+        storage_push_error(L, "remove_tree", tree->path, error);
+        return 2;
+    }
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -300,7 +441,8 @@ static int lua_module_storage_get_free_space(lua_State *L)
         return luaL_error(L, "storage root is not configured");
     }
 
-    esp_err_t err = esp_vfs_fat_info(base_path, &total, &free_bytes);
+    /* Use the DATA backend registered by the application. */
+    esp_err_t err = claw_paths_get_space(CLAW_PATH_DATA, &total, &free_bytes);
 
     if (err != ESP_OK) {
         return luaL_error(L, "failed to query storage free space: %s", esp_err_to_name(err));
@@ -337,6 +479,8 @@ int luaopen_storage(lua_State *L)
     lua_setfield(L, -2, "listdir");
     lua_pushcfunction(L, lua_module_storage_remove);
     lua_setfield(L, -2, "remove");
+    lua_pushcfunction(L, lua_module_storage_remove_tree);
+    lua_setfield(L, -2, "remove_tree");
     lua_pushcfunction(L, lua_module_storage_rename);
     lua_setfield(L, -2, "rename");
     lua_pushcfunction(L, lua_module_storage_get_free_space);

@@ -11,10 +11,16 @@
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "lua_image_ppa.h"
 
 #define LUA_IMAGE_RESIZE_MAX_PIXELS (1920U * 1080U)
 
 static const char *TAG = "image_resize";
+
+static size_t lua_image_resize_bpp(lua_image_format_t format)
+{
+    return format == LUA_IMAGE_FORMAT_GRAY8 ? 1 : format == LUA_IMAGE_FORMAT_RGB565LE ? 2 : 0;
+}
 
 static inline int clamp_int(int v, int lo, int hi)
 {
@@ -35,6 +41,22 @@ static esp_err_t lua_image_resize_alloc(size_t bytes, uint8_t **out)
         return ESP_ERR_NO_MEM;
     }
     return ESP_OK;
+}
+
+esp_err_t lua_image_resize_ppa(const lua_image_source_t *src, lua_image_format_t dst_format, int dst_width, int dst_height,
+                               lua_image_resize_filter_t filter, lua_image_view_t *out)
+{
+    size_t bpp = lua_image_resize_bpp(dst_format);
+
+    if (src == NULL || out == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memset(out, 0, sizeof(*out));
+    if (filter != LUA_IMAGE_RESIZE_FILTER_BILINEAR || bpp == 0 || dst_width <= 0 || dst_height <= 0 ||
+        (size_t)dst_width > LUA_IMAGE_RESIZE_MAX_PIXELS / (size_t)dst_height) {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    return lua_image_ppa_transform(src, dst_format, dst_width, dst_height, out);
 }
 
 static void resize_gray8_nearest(const uint8_t *src, int sw, int sh,
@@ -204,14 +226,8 @@ esp_err_t lua_image_resize_view(const lua_image_view_t *src,
         return ESP_ERR_INVALID_SIZE;
     }
 
-    switch (src->format) {
-    case LUA_IMAGE_FORMAT_GRAY8:
-        bpp = 1;
-        break;
-    case LUA_IMAGE_FORMAT_RGB565LE:
-        bpp = 2;
-        break;
-    default:
+    bpp = lua_image_resize_bpp(src->format);
+    if (bpp == 0) {
         ESP_LOGE(TAG, "resize only supports GRAY8 / RGB565LE, got %s", lua_image_format_name(src->format));
         return ESP_ERR_NOT_SUPPORTED;
     }

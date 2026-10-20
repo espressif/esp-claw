@@ -197,7 +197,10 @@ void app_main(void)
 
     ESP_ERROR_CHECK(claw_paths_set(CLAW_PATH_DATA, app_fatfs_base_path));
     ESP_ERROR_CHECK(claw_paths_set(CLAW_PATH_SYSTEM, app_fatfs_base_path));
-    ESP_ERROR_CHECK(app_claw_start(s_claw_config));
+    /* No board hardware is exposed by this network-only application. */
+    static claw_hw_registry_handle_t hw_registry;
+    ESP_ERROR_CHECK(claw_hw_registry_create(&hw_registry));
+    ESP_ERROR_CHECK(app_claw_start(s_claw_config, hw_registry));
 
     ESP_ERROR_CHECK(cap_mcp_server_init());
     ESP_ERROR_CHECK(cap_mcp_lua_tools_init());

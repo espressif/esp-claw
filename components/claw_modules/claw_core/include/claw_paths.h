@@ -6,6 +6,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "esp_err.h"
 
@@ -25,6 +26,16 @@ typedef enum {
     CLAW_PATH_SYSTEM,       /**< Read-only firmware-baked root (e.g. /system) */
     CLAW_PATH_ROOT_MAX,     /**< Number of logical roots */
 } claw_path_root_t;
+
+/**
+ * @brief  Filesystem-independent space query callback
+ *
+ *         Applications provide this because the physical backend (LittleFS,
+ *         FAT on SD, etc.) is selected before the agent framework starts.
+ */
+typedef esp_err_t (*claw_path_space_provider_t)(void *ctx,
+                                                uint64_t *total_bytes,
+                                                uint64_t *free_bytes);
 
 /**
  * @brief  Set the physical path of a logical root
@@ -51,6 +62,23 @@ esp_err_t claw_paths_set(claw_path_root_t root, const char *path);
  *         - NULL if root is out of range or has not been set
  */
 const char *claw_paths_get(claw_path_root_t root);
+
+/**
+ * @brief  Register the space query provider for a logical root
+ *
+ *         Intended to be called during early boot after the backing filesystem
+ *         has been mounted. Passing NULL clears the provider.
+ */
+esp_err_t claw_paths_set_space_provider(claw_path_root_t root,
+                                        claw_path_space_provider_t provider,
+                                        void *ctx);
+
+/**
+ * @brief  Query total and free space without exposing the filesystem type
+ */
+esp_err_t claw_paths_get_space(claw_path_root_t root,
+                               uint64_t *total_bytes,
+                               uint64_t *free_bytes);
 
 /**
  * @brief  Compose a path under a logical root

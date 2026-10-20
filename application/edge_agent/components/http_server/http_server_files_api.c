@@ -12,6 +12,9 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "esp_log.h"
+
+static const char *TAG = "http_server_files_api";
 
 static int mkdir_parents(char *path, mode_t mode)
 {
@@ -166,7 +169,7 @@ static esp_err_t files_upload_handler(httpd_req_t *req)
     if (http_server_query_get(req, "path", relative_path, sizeof(relative_path)) != ESP_OK) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing path");
     }
-    if (req->content_len <= 0 || req->content_len > HTTP_SERVER_UPLOAD_MAX_SIZE) {
+    if (req->content_len > HTTP_SERVER_UPLOAD_MAX_SIZE) {
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid upload size");
     }
 
@@ -190,32 +193,51 @@ static esp_err_t files_upload_handler(httpd_req_t *req)
 
     FILE *file = fopen(full_path, "wb");
     if (!file) {
+        ESP_LOGE(TAG, "Failed to create %s: errno=%d", full_path, errno);
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Failed to create file");
     }
 
-    char *scratch = http_server_alloc_scratch_buffer();
-    if (!scratch) {
-        fclose(file);
-        unlink(full_path);
-        httpd_resp_send_500(req);
-        return ESP_ERR_NO_MEM;
+    char *scratch = NULL;
+    if (req->content_len > 0) {
+        scratch = http_server_alloc_scratch_buffer();
+        if (!scratch) {
+            ESP_LOGE(TAG, "Failed to allocate upload buffer for %s", full_path);
+            fclose(file);
+            unlink(full_path);
+            httpd_resp_send_500(req);
+            return ESP_ERR_NO_MEM;
+        }
     }
 
-    int remaining = req->content_len;
+    ESP_LOGI(TAG, "Uploading %zu bytes to %s", req->content_len, full_path);
+    size_t remaining = req->content_len;
     while (remaining > 0) {
-        int chunk = remaining > HTTP_SERVER_SCRATCH_SIZE ? HTTP_SERVER_SCRATCH_SIZE : remaining;
+        size_t chunk = remaining > HTTP_SERVER_SCRATCH_SIZE ? HTTP_SERVER_SCRATCH_SIZE : remaining;
         int received = httpd_req_recv(req, scratch, chunk);
-        if (received <= 0 || fwrite(scratch, 1, received, file) != (size_t)received) {
+        if (received <= 0) {
+            ESP_LOGE(TAG, "Receive failed for %s: error=%d", full_path, received);
             free(scratch);
             fclose(file);
             unlink(full_path);
             return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Upload failed");
         }
-        remaining -= received;
+        size_t written = fwrite(scratch, 1, received, file);
+        if (written != (size_t)received) {
+            ESP_LOGE(TAG, "Write failed for %s: written=%u expected=%d errno=%d", full_path, (unsigned)written, received, errno);
+            free(scratch);
+            fclose(file);
+            unlink(full_path);
+            return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Upload failed");
+        }
+        remaining -= (size_t)received;
     }
 
     free(scratch);
-    fclose(file);
+    if (fclose(file) != 0) {
+        ESP_LOGE(TAG, "Failed to close %s: errno=%d", full_path, errno);
+        unlink(full_path);
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Upload failed");
+    }
     httpd_resp_set_type(req, "application/json");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store, max-age=0");
     return httpd_resp_sendstr(req, "{\"ok\":true}");

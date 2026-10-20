@@ -15,8 +15,8 @@ import { generate } from 'lean-qr';
 import type { AppConfig, WechatLoginStatus } from '../api/client';
 import {
   cancelWechatLogin,
+  diffConfigPatch,
   pollWechatLoginStatus,
-  saveConfigPatch,
   startWechatLogin,
 } from '../api/client';
 import { LanguageSwitcher } from '../components/layout/LanguageSwitcher';
@@ -24,9 +24,11 @@ import { Banner } from '../components/ui/Banner';
 import { Button } from '../components/ui/Button';
 import { TextInput } from '../components/ui/FormField';
 import { LabelLink } from '../components/ui/LabelLink';
-import { getProviderLinks, TAVILY_API_KEY_URL } from '../constants/externalLinks';
+import { getProviderLinks } from '../constants/externalLinks';
+import { WECHAT_DEFAULT_BASE_URL, WECHAT_DEFAULT_CDN_BASE_URL } from '../constants/wechat';
+import { SearchFields, type SearchConfig } from '../components/system/SearchFields';
 import { t } from '../i18n';
-import { appConfig, ensureConfigGroups, patchConfigLocal } from '../state/config';
+import { appConfig, ensureConfigGroups, saveConfig, configGeneration } from '../state/config';
 import { pushToast } from '../state/toast';
 
 type TabId =
@@ -68,6 +70,7 @@ type LlmForm = {
   llm_auth_type: string;
   llm_default_image_max_bytes: string;
   llm_max_tokens_field: string;
+  llm_reasoning_effort: string;
   llm_supports_tools: string;
   llm_supports_vision: string;
   llm_image_remote_url_only: string;
@@ -85,9 +88,7 @@ type ImForm = {
   tg_bot_token: string;
 };
 
-type SearchForm = {
-  search_brave_key: string;
-  search_tavily_key: string;
+type SearchForm = SearchConfig & {
   search_http_allowlist: string;
 };
 
@@ -97,6 +98,7 @@ type ProviderPreset = {
   llm_auth_type: string;
   llm_default_image_max_bytes: string;
   llm_max_tokens_field: string;
+  llm_reasoning_effort?: string;
   llm_supports_tools: string;
   llm_supports_vision: string;
   llm_image_remote_url_only: string;
@@ -105,15 +107,16 @@ type ProviderPreset = {
 
 const PROVIDER_PRESETS: Record<ProviderKey, ProviderPreset> = {
   openai: {
-    llm_backend_type: 'openai_compatible',
+    llm_backend_type: 'openai_responses',
     llm_base_url: 'https://api.openai.com/v1',
     llm_auth_type: 'bearer',
     llm_default_image_max_bytes: '524288',
-    llm_max_tokens_field: 'max_completion_tokens',
+    llm_max_tokens_field: 'max_output_tokens',
+    llm_reasoning_effort: 'medium',
     llm_supports_tools: 'true',
     llm_supports_vision: 'true',
     llm_image_remote_url_only: 'false',
-    llm_model: 'gpt-5.4',
+    llm_model: 'gpt-5.6-sol',
   },
   bailian: {
     llm_backend_type: 'openai_compatible',
@@ -172,7 +175,7 @@ const PROVIDER_PRESETS: Record<ProviderKey, ProviderPreset> = {
   },
   minimax_global: {
     llm_backend_type: 'anthropic_compatible',
-    llm_base_url: 'https://api.minimaxi.io/anthropic',
+    llm_base_url: 'https://api.minimax.io/anthropic/v1',
     llm_auth_type: 'none',
     llm_default_image_max_bytes: '524288',
     llm_max_tokens_field: 'max_tokens',
@@ -183,7 +186,7 @@ const PROVIDER_PRESETS: Record<ProviderKey, ProviderPreset> = {
   },
   minimax_cn: {
     llm_backend_type: 'anthropic_compatible',
-    llm_base_url: 'https://api.minimaxi.com/anthropic',
+    llm_base_url: 'https://api.minimaxi.com/anthropic/v1',
     llm_auth_type: 'none',
     llm_default_image_max_bytes: '524288',
     llm_max_tokens_field: 'max_tokens',
@@ -230,7 +233,6 @@ const PRESET_BUTTONS: ProviderKey[] = [
 ];
 
 const PLATFORM_ORDER: PlatformId[] = ['wechat', 'feishu', 'qq', 'telegram'];
-const WECHAT_DEFAULT_CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c';
 
 function llmFromConfig(config: Partial<AppConfig>): LlmForm {
   return {
@@ -243,6 +245,7 @@ function llmFromConfig(config: Partial<AppConfig>): LlmForm {
     llm_auth_type: config.llm_auth_type ?? '',
     llm_default_image_max_bytes: config.llm_default_image_max_bytes ?? '',
     llm_max_tokens_field: config.llm_max_tokens_field ?? '',
+    llm_reasoning_effort: config.llm_reasoning_effort ?? 'medium',
     llm_supports_tools: config.llm_supports_tools ?? 'false',
     llm_supports_vision: config.llm_supports_vision ?? 'false',
     llm_image_remote_url_only: config.llm_image_remote_url_only ?? 'false',
@@ -265,9 +268,53 @@ function imFromConfig(config: Partial<AppConfig>): ImForm {
 
 function searchFromConfig(config: Partial<AppConfig>): SearchForm {
   return {
+    search_provider: config.search_provider ?? 'tavily',
+    search_bocha_key: config.search_bocha_key ?? '',
     search_brave_key: config.search_brave_key ?? '',
     search_tavily_key: config.search_tavily_key ?? '',
     search_http_allowlist: config.search_http_allowlist ?? '',
+  };
+}
+
+function llmToPatch(form: LlmForm): Partial<AppConfig> {
+  return {
+    llm_api_key: form.llm_api_key.trim(),
+    llm_model: form.llm_model.trim(),
+    llm_timeout_ms: form.llm_timeout_ms.trim(),
+    llm_max_tokens: form.llm_max_tokens.trim(),
+    llm_backend_type: form.llm_backend_type.trim(),
+    llm_base_url: form.llm_base_url.trim(),
+    llm_auth_type: form.llm_auth_type.trim(),
+    llm_default_image_max_bytes: form.llm_default_image_max_bytes.trim(),
+    llm_max_tokens_field: form.llm_max_tokens_field.trim(),
+    llm_reasoning_effort: form.llm_reasoning_effort.trim(),
+    llm_supports_tools: form.llm_supports_tools,
+    llm_supports_vision: form.llm_supports_vision,
+    llm_image_remote_url_only: form.llm_image_remote_url_only,
+  };
+}
+
+function imToPatch(form: ImForm): Partial<AppConfig> {
+  return {
+    wechat_token: form.wechat_token,
+    wechat_base_url: form.wechat_base_url.trim(),
+    wechat_cdn_base_url: form.wechat_cdn_base_url.trim(),
+    wechat_account_id: form.wechat_account_id.trim(),
+    qq_app_id: form.qq_app_id.trim(),
+    qq_app_secret: form.qq_app_secret,
+    feishu_app_id: form.feishu_app_id.trim(),
+    feishu_app_secret: form.feishu_app_secret,
+    tg_bot_token: form.tg_bot_token.trim(),
+  };
+}
+
+function searchToPatch(form: SearchForm): Partial<AppConfig> {
+  return {
+    search_provider: form.search_provider,
+    search_bocha_key: form.search_bocha_key.trim(),
+    search_brave_key: form.search_brave_key.trim(),
+    search_tavily_key: form.search_tavily_key.trim(),
+    search_http_allowlist: form.search_http_allowlist.trim(),
   };
 }
 
@@ -517,6 +564,10 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
   const [wechatAdvancedOpen, setWechatAdvancedOpen] = createSignal(false);
   const isWechatConfigured = createMemo(() => isWechatConfiguredLikeIm(imForm));
 
+  let llmBaseline: Partial<AppConfig> = {};
+  let imBaseline: Partial<AppConfig> = {};
+  let searchBaseline: Partial<AppConfig> = {};
+
   onMount(async () => {
     setLoading(true);
     setError(null);
@@ -527,11 +578,9 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
       const absM = Math.abs(offsetMin) % 60;
       const sign = offsetMin >= 0 ? '' : '-';
       const tz = `UTC${sign}${absH}${absM ? ':' + String(absM).padStart(2, '0') : ''}`;
-      saveConfigPatch({ time_timezone: tz })
-        .then(() => patchConfigLocal({ time_timezone: tz }))
-        .catch(() => {
-          console.error('Failed to save time_timezone to config');
-        });
+      saveConfig({ time_timezone: tz }).catch(() => {
+        console.error('Failed to save time_timezone to config');
+      });
     }
 
     try {
@@ -548,7 +597,14 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
         ].some((value) => value.trim().length > 0);
         setLlmForm(nextLlm);
         setImForm(nextIm);
-        setSearchForm(searchFromConfig(config));
+        const nextSearch = searchFromConfig(config);
+        setSearchForm(nextSearch);
+        llmBaseline = llmToPatch(nextLlm);
+        imBaseline = imToPatch(nextIm);
+        searchBaseline = searchToPatch(nextSearch);
+        // Keep the stored baseline so repaired URLs are saved with this step.
+        setImForm('wechat_base_url', nextIm.wechat_base_url.trim() || WECHAT_DEFAULT_BASE_URL);
+        setImForm('wechat_cdn_base_url', nextIm.wechat_cdn_base_url.trim() || WECHAT_DEFAULT_CDN_BASE_URL);
         setSelectedPlatforms(selectedPlatformsFromForm(nextIm));
         setWechatAdvancedOpen(
           !!(nextIm.wechat_token || nextIm.wechat_base_url || nextIm.wechat_account_id),
@@ -584,6 +640,7 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
     setLlmForm('llm_auth_type', preset.llm_auth_type);
     setLlmForm('llm_default_image_max_bytes', preset.llm_default_image_max_bytes);
     setLlmForm('llm_max_tokens_field', preset.llm_max_tokens_field);
+    setLlmForm('llm_reasoning_effort', preset.llm_reasoning_effort ?? 'medium');
     setLlmForm('llm_supports_tools', preset.llm_supports_tools);
     setLlmForm('llm_supports_vision', preset.llm_supports_vision);
     setLlmForm('llm_image_remote_url_only', preset.llm_image_remote_url_only);
@@ -593,12 +650,24 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
   const next = () => setStep((value) => Math.min(value + 1, steps().length - 1));
   const prev = () => setStep((value) => Math.max(value - 1, 0));
 
-  const savePatch = async (patch: Partial<AppConfig>) => {
+  const savePatch = async (
+    full: Partial<AppConfig>,
+    baseline: Partial<AppConfig>,
+    onSaved: () => void,
+  ) => {
+    const version = configGeneration();
+    const patch = diffConfigPatch(full, baseline);
+    if (Object.keys(patch).length === 0) {
+      onSaved();
+      next();
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
-      await saveConfigPatch(patch);
-      patchConfigLocal(patch);
+      await saveConfig(patch);
+      if (version !== configGeneration()) return;
+      onSaved();
       pushToast(t('setupSavedStep') as string, 'success');
       next();
     } catch (err) {
@@ -634,19 +703,9 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
       return;
     }
 
-    await savePatch({
-      llm_api_key: llmForm.llm_api_key.trim(),
-      llm_model: llmForm.llm_model.trim(),
-      llm_timeout_ms: llmForm.llm_timeout_ms.trim(),
-      llm_max_tokens: llmForm.llm_max_tokens.trim(),
-      llm_backend_type: llmForm.llm_backend_type.trim(),
-      llm_base_url: llmForm.llm_base_url.trim(),
-      llm_auth_type: llmForm.llm_auth_type.trim(),
-      llm_default_image_max_bytes: llmForm.llm_default_image_max_bytes.trim(),
-      llm_max_tokens_field: llmForm.llm_max_tokens_field.trim(),
-      llm_supports_tools: llmForm.llm_supports_tools,
-      llm_supports_vision: llmForm.llm_supports_vision,
-      llm_image_remote_url_only: llmForm.llm_image_remote_url_only,
+    const full = llmToPatch(llmForm);
+    await savePatch(full, llmBaseline, () => {
+      llmBaseline = full;
     });
   };
 
@@ -730,7 +789,8 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
         ? (validatePlatform(t('imTelegramTitle') as string, [
             [imForm.tg_bot_token, t('tgBotToken') as string],
           ]) ??
-          (!isTelegramToken(imForm.tg_bot_token.trim())
+          (imForm.tg_bot_token.trim() !== imBaseline.tg_bot_token &&
+          !isTelegramToken(imForm.tg_bot_token.trim())
             ? (t('imValidationInvalidField') as string)
                 .replace('{platform}', t('imTelegramTitle') as string)
                 .replace('{field}', t('tgBotToken') as string)
@@ -743,23 +803,16 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
       return;
     }
 
-    await savePatch({
-      wechat_token: imForm.wechat_token,
-      wechat_base_url: imForm.wechat_base_url.trim(),
-      wechat_cdn_base_url: imForm.wechat_cdn_base_url.trim(),
-      wechat_account_id: imForm.wechat_account_id.trim(),
-      qq_app_id: imForm.qq_app_id.trim(),
-      qq_app_secret: imForm.qq_app_secret,
-      feishu_app_id: imForm.feishu_app_id.trim(),
-      feishu_app_secret: imForm.feishu_app_secret,
-      tg_bot_token: imForm.tg_bot_token.trim(),
+    const full = imToPatch(imForm);
+    await savePatch(full, imBaseline, () => {
+      imBaseline = full;
     });
   };
 
   const saveSearch = async () => {
-    await savePatch({
-      search_tavily_key: searchForm.search_tavily_key.trim(),
-      search_http_allowlist: searchForm.search_http_allowlist.trim(),
+    const full = searchToPatch(searchForm);
+    await savePatch(full, searchBaseline, () => {
+      searchBaseline = full;
     });
   };
 
@@ -771,8 +824,8 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
     setSelectedPlatforms((prev) => prev.filter((item) => item !== id));
     if (id === 'wechat') {
       setImForm('wechat_token', '');
-      setImForm('wechat_base_url', '');
-      setImForm('wechat_cdn_base_url', '');
+      setImForm('wechat_base_url', WECHAT_DEFAULT_BASE_URL);
+      setImForm('wechat_cdn_base_url', WECHAT_DEFAULT_CDN_BASE_URL);
       setImForm('wechat_account_id', '');
     } else if (id === 'feishu') {
       setImForm('feishu_app_id', '');
@@ -788,7 +841,7 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
   const onWechatLoginComplete = (data: WechatLoginStatus) => {
     batch(() => {
       if (data.token) setImForm('wechat_token', data.token);
-      if (data.base_url) setImForm('wechat_base_url', data.base_url);
+      setImForm('wechat_base_url', data.base_url?.trim() || WECHAT_DEFAULT_BASE_URL);
       if (data.account_id) setImForm('wechat_account_id', data.account_id);
       if (!imForm.wechat_cdn_base_url.trim()) {
         setImForm('wechat_cdn_base_url', WECHAT_DEFAULT_CDN_BASE_URL);
@@ -860,14 +913,14 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
                   label={t('wechatBaseUrl')}
                   placeholder={t('wechatBaseUrlPlaceholder') as string}
                   value={imForm.wechat_base_url}
-                  onInput={(e) => setImForm('wechat_base_url', e.currentTarget.value)}
+                  readOnly
                 />
                 <TextInput
                   type="url"
                   label={t('wechatCdnBaseUrl')}
                   placeholder={t('wechatCdnBaseUrlPlaceholder') as string}
                   value={imForm.wechat_cdn_base_url}
-                  onInput={(e) => setImForm('wechat_cdn_base_url', e.currentTarget.value)}
+                  readOnly
                 />
               </div>
             </Show>
@@ -1041,6 +1094,17 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
                       onInput={(event) => setLlmForm('llm_api_key', event.currentTarget.value)}
                     />
 
+                    <Show when={provider() === 'openai'}>
+                      <TextInput
+                        label={t('llmReasoningEffort')}
+                        placeholder={t('llmReasoningEffortPlaceholder') as string}
+                        value={llmForm.llm_reasoning_effort}
+                        onInput={(event) =>
+                          setLlmForm('llm_reasoning_effort', event.currentTarget.value)
+                        }
+                      />
+                    </Show>
+
                     <Show when={isAdvancedProvider(provider())}>
                       <>
                         <TextInput
@@ -1123,20 +1187,9 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
 
                 <Match when={step() === 2}>
                   <div class="grid gap-4 sm:grid-cols-2">
-                    <TextInput
-                      type="password"
-                      label={
-                        <>
-                          {t('webreqTavilyKey')}
-                          <LabelLink href={TAVILY_API_KEY_URL}>
-                            {t('llmProviderConsole') as string} ↗
-                          </LabelLink>
-                        </>
-                      }
-                      value={searchForm.search_tavily_key}
-                      onInput={(event) =>
-                        setSearchForm('search_tavily_key', event.currentTarget.value)
-                      }
+                    <SearchFields
+                      form={searchForm}
+                      onChange={(field, value) => setSearchForm(field, value)}
                     />
                     <TextInput
                       label={t('webreqHttpAllowlist')}

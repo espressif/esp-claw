@@ -7,17 +7,25 @@
 #include "lua_driver_touch.h"
 
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "cap_lua.h"
+#include "cap_lua_hw.h"
 #include "driver/touch_sens.h"
 #include "esp_check.h"
+#include "esp_board_device.h"
 #include "esp_log.h"
 #include "lauxlib.h"
 #include "sdkconfig.h"
 #include "soc/soc_caps.h"
+#if __has_include("hal/touch_sensor_periph.h")
+#include "hal/touch_sensor_periph.h"
+#else
+#include "soc/touch_sensor_periph.h"
+#endif
 
 #define LUA_DRIVER_TOUCH_METATABLE        "touch.device"
 #define LUA_DRIVER_TOUCH_DEFAULT_NAME     "touch_inputs"
@@ -64,6 +72,8 @@ typedef struct {
 
 typedef struct {
     lua_driver_touch_handle_t *handle;
+    cap_lua_hw_lease_t lease;
+    bool closing;
     char device_name[LUA_DRIVER_TOUCH_MAX_NAME_LEN];
 } lua_driver_touch_ud_t;
 
@@ -77,59 +87,18 @@ static const char *TAG = "lua_driver_touch";
 
 static int lua_driver_touch_gpio_to_channel(int gpio_num)
 {
-    switch (gpio_num) {
-#ifdef TOUCH_PAD_GPIO1_CHANNEL
-    case 1: return TOUCH_PAD_GPIO1_CHANNEL;
-#endif
-#ifdef TOUCH_PAD_GPIO2_CHANNEL
-    case 2: return TOUCH_PAD_GPIO2_CHANNEL;
-#endif
-#ifdef TOUCH_PAD_GPIO3_CHANNEL
-    case 3: return TOUCH_PAD_GPIO3_CHANNEL;
-#endif
-#ifdef TOUCH_PAD_GPIO4_CHANNEL
-    case 4: return TOUCH_PAD_GPIO4_CHANNEL;
-#endif
-#ifdef TOUCH_PAD_GPIO5_CHANNEL
-    case 5: return TOUCH_PAD_GPIO5_CHANNEL;
-#endif
-#ifdef TOUCH_PAD_GPIO6_CHANNEL
-    case 6: return TOUCH_PAD_GPIO6_CHANNEL;
-#endif
-#ifdef TOUCH_PAD_GPIO7_CHANNEL
-    case 7: return TOUCH_PAD_GPIO7_CHANNEL;
-#endif
-#ifdef TOUCH_PAD_GPIO8_CHANNEL
-    case 8: return TOUCH_PAD_GPIO8_CHANNEL;
-#endif
-#ifdef TOUCH_PAD_GPIO9_CHANNEL
-    case 9: return TOUCH_PAD_GPIO9_CHANNEL;
-#endif
-#ifdef TOUCH_PAD_GPIO10_CHANNEL
-    case 10: return TOUCH_PAD_GPIO10_CHANNEL;
-#endif
-#ifdef TOUCH_PAD_GPIO11_CHANNEL
-    case 11: return TOUCH_PAD_GPIO11_CHANNEL;
-#endif
-#ifdef TOUCH_PAD_GPIO12_CHANNEL
-    case 12: return TOUCH_PAD_GPIO12_CHANNEL;
-#endif
-#ifdef TOUCH_PAD_GPIO13_CHANNEL
-    case 13: return TOUCH_PAD_GPIO13_CHANNEL;
-#endif
-#ifdef TOUCH_PAD_GPIO14_CHANNEL
-    case 14: return TOUCH_PAD_GPIO14_CHANNEL;
-#endif
-    default:
-        return -1;
+    /* Use the target's map instead of assuming GPIO and channel numbers match. */
+    for (int channel = TOUCH_MIN_CHAN_ID; channel <= TOUCH_MAX_CHAN_ID; ++channel) {
+        if (touch_sensor_channel_io_map[channel] == gpio_num) return channel;
     }
+    return -1;
 }
 
 static lua_driver_touch_ud_t *lua_driver_touch_get_ud(lua_State *L, int idx)
 {
     lua_driver_touch_ud_t *ud =
         (lua_driver_touch_ud_t *)luaL_checkudata(L, idx, LUA_DRIVER_TOUCH_METATABLE);
-    if (!ud || !ud->handle || !ud->handle->sens_handle) {
+    if (!ud || !ud->handle || !ud->handle->sens_handle || ud->closing) {
         luaL_error(L, "touch: invalid or closed handle");
     }
     return ud;
@@ -189,31 +158,29 @@ static esp_err_t lua_driver_touch_initial_scan(lua_driver_touch_handle_t *handle
     return ESP_OK;
 }
 
-static void lua_driver_touch_destroy_handle(lua_driver_touch_handle_t *handle)
+static esp_err_t lua_driver_touch_destroy_handle(lua_driver_touch_handle_t *handle)
 {
-    if (handle == NULL) {
-        return;
-    }
-
+    if (!handle) return ESP_OK;
     if (handle->scanning) {
-        (void)touch_sensor_stop_continuous_scanning(handle->sens_handle);
+        ESP_RETURN_ON_ERROR(touch_sensor_stop_continuous_scanning(handle->sens_handle), TAG, "stop scanning failed");
         handle->scanning = false;
     }
     if (handle->enabled) {
-        (void)touch_sensor_disable(handle->sens_handle);
+        ESP_RETURN_ON_ERROR(touch_sensor_disable(handle->sens_handle), TAG, "disable sensor failed");
         handle->enabled = false;
     }
     for (int i = 0; i < handle->key_count; i++) {
-        if (handle->chan_handle[i] != NULL) {
-            (void)touch_sensor_del_channel(handle->chan_handle[i]);
+        if (handle->chan_handle[i]) {
+            ESP_RETURN_ON_ERROR(touch_sensor_del_channel(handle->chan_handle[i]), TAG, "delete channel failed");
             handle->chan_handle[i] = NULL;
         }
     }
-    if (handle->sens_handle != NULL) {
-        (void)touch_sensor_del_controller(handle->sens_handle);
+    if (handle->sens_handle) {
+        ESP_RETURN_ON_ERROR(touch_sensor_del_controller(handle->sens_handle), TAG, "delete controller failed");
         handle->sens_handle = NULL;
     }
     free(handle);
+    return ESP_OK;
 }
 
 static esp_err_t lua_driver_touch_create_handle(const lua_touch_resolved_cfg_t *cfg,
@@ -231,14 +198,12 @@ static esp_err_t lua_driver_touch_create_handle(const lua_touch_resolved_cfg_t *
         return ESP_ERR_NO_MEM;
     }
 
+    *out_handle = handle;
     handle->key_count = cfg->key_count;
     memcpy(handle->gpio_num, cfg->gpio_num, sizeof(handle->gpio_num));
 
     esp_err_t err = touch_sensor_new_controller(&sens_cfg, &handle->sens_handle);
-    if (err != ESP_OK) {
-        free(handle);
-        return err;
-    }
+    if (err != ESP_OK) return err;
 
     for (int i = 0; i < cfg->key_count; i++) {
         handle->channel_id[i] = lua_driver_touch_gpio_to_channel(cfg->gpio_num[i]);
@@ -283,7 +248,6 @@ static esp_err_t lua_driver_touch_create_handle(const lua_touch_resolved_cfg_t *
     return ESP_OK;
 
 fail:
-    lua_driver_touch_destroy_handle(handle);
     return err;
 }
 
@@ -370,34 +334,30 @@ static void lua_driver_touch_apply_lua_overrides(lua_State *L, int opts_idx,
     lua_pop(L, 1);
 }
 
-static int lua_driver_touch_close_impl(lua_State *L, lua_driver_touch_ud_t *ud)
+static esp_err_t lua_driver_touch_destroy(lua_driver_touch_ud_t *ud)
 {
-    (void)L;
-    if (ud->handle != NULL) {
-        lua_driver_touch_destroy_handle(ud->handle);
+    ud->closing = true;
+    if (ud->handle) {
+        ESP_RETURN_ON_ERROR(lua_driver_touch_destroy_handle(ud->handle), TAG, "close touch failed");
         ud->handle = NULL;
     }
+    ESP_RETURN_ON_ERROR(cap_lua_hw_release(&ud->lease), TAG, "release touch claim failed");
     ud->device_name[0] = '\0';
-    return 0;
+    return ESP_OK;
 }
 
 static int lua_driver_touch_gc(lua_State *L)
 {
-    lua_driver_touch_ud_t *ud =
-        (lua_driver_touch_ud_t *)luaL_testudata(L, 1, LUA_DRIVER_TOUCH_METATABLE);
-    if (ud && ud->handle) {
-        return lua_driver_touch_close_impl(L, ud);
-    }
+    lua_driver_touch_ud_t *ud = luaL_testudata(L, 1, LUA_DRIVER_TOUCH_METATABLE);
+    if (ud) (void)lua_driver_touch_destroy(ud);
     return 0;
 }
 
 static int lua_driver_touch_close(lua_State *L)
 {
-    lua_driver_touch_ud_t *ud =
-        (lua_driver_touch_ud_t *)luaL_checkudata(L, 1, LUA_DRIVER_TOUCH_METATABLE);
-    if (ud->handle) {
-        return lua_driver_touch_close_impl(L, ud);
-    }
+    lua_driver_touch_ud_t *ud = luaL_checkudata(L, 1, LUA_DRIVER_TOUCH_METATABLE);
+    esp_err_t err = lua_driver_touch_destroy(ud);
+    if (err != ESP_OK) return luaL_error(L, "touch close failed: %s", esp_err_to_name(err));
     return 0;
 }
 
@@ -488,6 +448,28 @@ static int lua_driver_touch_is_pressed(lua_State *L)
     return 1;
 }
 
+/* This layout is the touch_keys board YAML contract; verify before reading. */
+typedef struct {
+    const char *name;
+    const char *type;
+    const char *chip;
+    int8_t key1_gpio_num;
+    int8_t key2_gpio_num;
+    int8_t threshold_milli;
+} lua_touch_board_config_t;
+
+static const lua_touch_board_config_t *lua_driver_touch_board_config(void)
+{
+    extern const esp_board_device_desc_t g_esp_board_devices[];
+    for (const esp_board_device_desc_t *desc = g_esp_board_devices; desc && desc->name; desc = desc->next) {
+        if (strcmp(desc->name, "touch_keys") == 0 && desc->cfg && desc->cfg_size == sizeof(lua_touch_board_config_t)) {
+            const lua_touch_board_config_t *config = desc->cfg;
+            if (config->type && strcmp(config->type, "custom") == 0 && config->chip && strcmp(config->chip, "esp32s3_touch") == 0) return config;
+        }
+    }
+    return NULL;
+}
+
 static int lua_driver_touch_new(lua_State *L)
 {
     const char *device_name = LUA_DRIVER_TOUCH_DEFAULT_NAME;
@@ -515,6 +497,13 @@ static int lua_driver_touch_new(lua_State *L)
         .threshold_milli = CONFIG_LUA_DRIVER_TOUCH_DEFAULT_THRESHOLD_MILLI,
     };
 
+    const lua_touch_board_config_t *board = lua_driver_touch_board_config();
+    if (board) {
+        cfg.gpio_num[0] = board->key1_gpio_num;
+        cfg.gpio_num[1] = board->key2_gpio_num;
+        cfg.key_count = 2;
+        cfg.threshold_milli = board->threshold_milli;
+    }
     lua_driver_touch_apply_lua_overrides(L, opts_idx, &cfg);
 
     if (cfg.key_count <= 0) {
@@ -524,21 +513,24 @@ static int lua_driver_touch_new(lua_State *L)
         return luaL_error(L, "touch.new: invalid threshold_milli=%d", cfg.threshold_milli);
     }
 
-    lua_driver_touch_handle_t *handle = NULL;
-    esp_err_t err = lua_driver_touch_create_handle(&cfg, &handle);
-    if (err != ESP_OK || handle == NULL) {
-        return luaL_error(L, "touch.new failed: %s",
-                          esp_err_to_name(err != ESP_OK ? err : ESP_FAIL));
-    }
-
-    lua_driver_touch_ud_t *ud =
-        (lua_driver_touch_ud_t *)lua_newuserdata(L, sizeof(*ud));
+    lua_driver_touch_ud_t *ud = lua_newuserdata(L, sizeof(*ud));
     memset(ud, 0, sizeof(*ud));
-    ud->handle = handle;
     snprintf(ud->device_name, sizeof(ud->device_name), "%s", device_name);
-
     luaL_getmetatable(L, LUA_DRIVER_TOUCH_METATABLE);
     lua_setmetatable(L, -2);
+    /* Keep variable-size resource lists off the task stack. */
+    char (*key_buf)[CLAW_HW_KEY_SIZE] = lua_newuserdata(L, (size_t)cfg.key_count * sizeof(*key_buf));
+    const char **keys = lua_newuserdata(L, (size_t)cfg.key_count * sizeof(*keys));
+    for (int i = 0; i < cfg.key_count; ++i) {
+        keys[i] = claw_hw_key_gpio(key_buf[i], sizeof(key_buf[i]), cfg.gpio_num[i]);
+    }
+    esp_err_t err = cap_lua_hw_claim(L, &ud->lease, "lua/touch", keys, cfg.key_count);
+    lua_pop(L, 2);
+    if (err == ESP_OK) err = lua_driver_touch_create_handle(&cfg, &ud->handle);
+    if (err != ESP_OK) {
+        (void)lua_driver_touch_destroy(ud);
+        return luaL_error(L, "touch.new failed: %s", esp_err_to_name(err));
+    }
     return 1;
 }
 

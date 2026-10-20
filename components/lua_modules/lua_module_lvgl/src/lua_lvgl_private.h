@@ -8,6 +8,7 @@
 #include "lua_module_lvgl.h"
 
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -71,7 +72,6 @@ static inline void lua_lvgl_web_tabview_set_tab_text(lv_obj_t *tv, uint32_t inde
 #define LUA_MODULE_LVGL_PATH_MAX 256
 #define LUA_LVGL_FONT_MT "lvgl.font"
 #define LUA_MODULE_LVGL_DEFAULT_FONT_PATH "fonts/NotoSansSC-Regular-sub.ttf"
-#define LUA_MODULE_LVGL_DEFAULT_FONT_SIZE 24
 
 typedef enum {
     LUA_LVGL_OBJ_GENERIC = 0,
@@ -152,6 +152,7 @@ typedef struct lua_lvgl_pending_unref {
 } lua_lvgl_pending_unref_t;
 
 typedef struct lua_lvgl_obj_record {
+    atomic_uint refs; /* One list reference plus one per Lua userdata. */
     lv_obj_t *obj;
     lv_obj_t *aux_obj;
     lv_point_precise_t *line_points;
@@ -183,6 +184,7 @@ typedef struct lua_lvgl_font_ud lua_lvgl_font_ud_t;
 
 typedef struct lua_lvgl_font_record {
     lv_font_t *font;
+    uint8_t *font_data;
     lua_lvgl_font_ud_t *ud;
     uint32_t generation;
     bool valid;
@@ -223,21 +225,10 @@ typedef struct {
     lua_lvgl_event_sub_t *event_queue_tail;
     lua_lvgl_pending_unref_t *pending_unrefs;
     lua_lvgl_font_record_t *fonts;
-    lv_font_t *default_font;
-    uint8_t *default_font_data;
-    size_t default_font_data_size;
-    uint32_t default_font_size;
-    uint32_t default_font_cache_size;
-    char default_font_path[LUA_MODULE_LVGL_PATH_MAX];
+    lua_lvgl_font_record_t *default_font;
     lv_fs_drv_t fs_drv;
     char data_root[LUA_MODULE_LVGL_PATH_MAX];
     bool fs_registered;
-    /* P4: input devices. Only one indev of each kind is supported on a
-     * single-script runtime; the underlying esp_lcd_touch_handle_t is owned
-     * by board_manager, so we only borrow the pointer here and never free
-     * it when the LVGL runtime is torn down. */
-    lv_indev_t *touch_indev;
-    void *touch_handle;
 } lua_lvgl_state_t;
 
 typedef struct {
@@ -260,6 +251,7 @@ void lua_lvgl_unlock(void);
 int lua_lvgl_error_esp(lua_State *L, const char *what, esp_err_t err);
 
 lua_lvgl_obj_ud_t *lua_lvgl_check_ud(lua_State *L, int index);
+lv_obj_t *lua_lvgl_lock_widget(lua_State *L, lua_lvgl_obj_ud_t *ud, lua_lvgl_obj_type_t expected);
 void lua_lvgl_record_release_resources(lua_lvgl_obj_record_t *record);
 lua_lvgl_obj_ud_t *lua_lvgl_push_obj(lua_State *L, lv_obj_t *obj, lua_lvgl_obj_type_t type);
 lua_lvgl_obj_ud_t *lua_lvgl_push_obj_ex(lua_State *L, lv_obj_t *obj, lua_lvgl_obj_type_t type, bool owned);
@@ -267,6 +259,7 @@ lv_obj_t *lua_lvgl_validate_ud_locked(const lua_lvgl_obj_ud_t *ud,
                                       lua_lvgl_obj_type_t *out_type,
                                       const char **out_error);
 void lua_lvgl_invalidate_records_locked(void);
+void lua_lvgl_sweep_records_locked(void);
 int lua_lvgl_obj_gc(lua_State *L);
 
 /* Method-style API support: build all per-type metatables under
@@ -303,8 +296,6 @@ lua_lvgl_font_ud_t *lua_lvgl_check_font(lua_State *L, int index);
 lv_font_t *lua_lvgl_validate_font_locked(const lua_lvgl_font_ud_t *ud, const char **out_error);
 void lua_lvgl_apply_font_style_field(lua_State *L, int index, lv_obj_t *obj);
 void lua_lvgl_apply_default_font_locked(lv_obj_t *obj);
-esp_err_t lua_lvgl_create_default_font_locked(const char *font_path, uint32_t font_size, uint32_t cache_size);
-void lua_lvgl_destroy_default_font_locked(void);
 extern const luaL_Reg lua_lvgl_font_module_funcs[];
 
 /* lua_lvgl_layout.c */
@@ -316,9 +307,22 @@ int lua_lvgl_set_scroll(lua_State *L);
 /* lua_lvgl_object.c */
 int lua_lvgl_delete(lua_State *L);
 int lua_lvgl_clean(lua_State *L);
+int lua_lvgl_add_flag(lua_State *L);
+int lua_lvgl_clear_flag(lua_State *L);
+int lua_lvgl_move_foreground(lua_State *L);
 
 /* lua_lvgl_core_widgets.c */
 int lua_lvgl_screen_load(lua_State *L);
+
+/* lua_lvgl_image.c */
+int lua_lvgl_image_set_raw_rgb565(lua_State *L);
+int lua_lvgl_image_set_raw_argb8888(lua_State *L);
+int lua_lvgl_image_set_rotation(lua_State *L);
+int lua_lvgl_image_set_pivot(lua_State *L);
+
+/* lua_lvgl_line.c */
+int lua_lvgl_line_set_points(lua_State *L);
+lv_point_precise_t *lua_lvgl_build_line_points(lua_State *L, int opts_index, uint32_t *out_count);
 
 /* lua_lvgl_extra_widgets.c */
 int lua_lvgl_list_add_text(lua_State *L);
@@ -450,7 +454,6 @@ void lua_lvgl_parse_opts(lua_State *L, int index, lua_lvgl_opts_t *opts);
 void lua_lvgl_apply_common_opts_locked(lv_obj_t *obj, const lua_lvgl_opts_t *opts);
 char *lua_lvgl_build_options_string(lua_State *L, int index, const char *field);
 int32_t *lua_lvgl_build_grid_tracks(lua_State *L, int opts_index, const char *field);
-lv_point_precise_t *lua_lvgl_build_line_points(lua_State *L, int opts_index, uint32_t *out_count);
 
 void lua_lvgl_apply_style_opts_locked(lua_State *L, int index, lv_obj_t *obj);
 
@@ -468,10 +471,4 @@ extern const luaL_Reg lua_lvgl_extra_widget_funcs[];
 extern const luaL_Reg lua_lvgl_complex_widget_funcs[];
 extern const luaL_Reg lua_lvgl_eaf_module_funcs[];
 extern const luaL_Reg lua_lvgl_event_module_funcs[];
-extern const luaL_Reg lua_lvgl_indev_module_funcs[];
 extern const luaL_Reg lua_lvgl_demo_module_funcs[];
-
-/* lua_lvgl_indev.c: tear down all currently registered indevs.
- * Caller must hold lua_lvgl_lock() and the LVGL task must already be
- * stopped (so no read_cb is running). */
-void lua_lvgl_indev_release_locked(void);

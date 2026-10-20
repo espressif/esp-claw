@@ -3,7 +3,9 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  */
+#include "audio_hub.h"
 #include "audio_private.h"
+#include "cap_lua.h"
 
 bool audio_device_acquire(audio_device_t *dev)
 {
@@ -21,96 +23,198 @@ void audio_device_release(audio_device_t *dev)
     }
 }
 
-static void audio_device_refresh_actual_format(audio_device_t *dev)
+static const char *audio_device_owner_tag(void)
 {
-    int magic = 0;
-    int rate = 0;
-    int channels = 0;
-    int bits = 0;
-    audio_format_t actual = {0};
-
-    if (esp_codec_dev_read_reg(dev->codec_dev, AUDIO_CODEC_VREG_FORMAT_MAGIC, &magic) != ESP_CODEC_DEV_OK || magic != AUDIO_CODEC_VREG_FORMAT_MAGIC_VALUE) {
-        return;
-    }
-    if (esp_codec_dev_read_reg(dev->codec_dev, AUDIO_CODEC_VREG_FORMAT_SAMPLE_RATE, &rate) != ESP_CODEC_DEV_OK ||
-        esp_codec_dev_read_reg(dev->codec_dev, AUDIO_CODEC_VREG_FORMAT_CHANNELS, &channels) != ESP_CODEC_DEV_OK ||
-        esp_codec_dev_read_reg(dev->codec_dev, AUDIO_CODEC_VREG_FORMAT_BITS, &bits) != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Codec actual format read failed");
-        return;
-    }
-
-    actual.sample_rate = (uint32_t)rate;
-    actual.channels = (uint8_t)channels;
-    actual.bits = (uint8_t)bits;
-    if (audio_format_complete(&actual) != ESP_OK) {
-        ESP_LOGE(TAG, "Codec actual format invalid: rate=%d ch=%d bits=%d", rate, channels, bits);
-        return;
-    }
-    if (!audio_format_equal(&dev->fmt, &actual)) {
-        ESP_LOGI(TAG, "Codec actual format: role=%s requested=%" PRIu32 "/%u/%u actual=%" PRIu32 "/%u/%u",
-                 dev->kind == AUDIO_DEVICE_OUTPUT ? "output" : "input", dev->fmt.sample_rate, dev->fmt.channels, dev->fmt.bits,
-                 actual.sample_rate, actual.channels, actual.bits);
-        dev->fmt = actual;
-    }
+    /* Prefer the current Lua job tag so mixer/capture logs correlate with
+     * the script that opened the track. */
+    const char *tag = cap_lua_current_owner_tag();
+    return tag ? tag : "lua/module/audio";
 }
 
-static float audio_input_volume_to_db(int volume)
+static esp_err_t audio_device_open_output(audio_device_t *dev)
 {
-    return ((float)volume * AUDIO_INPUT_GAIN_DB_MAX) / 100.0f;
-}
-
-static esp_err_t audio_device_open(audio_device_t *dev)
-{
-    esp_codec_dev_sample_info_t fs = {
-        .sample_rate = dev->fmt.sample_rate,
-        .channel = dev->fmt.channels,
-        .bits_per_sample = dev->fmt.bits,
-    };
-    int ret = esp_codec_dev_open(dev->codec_dev, &fs);
-    if (ret != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Codec open failed: role=%s rate=%" PRIu32 " ch=%u bits=%u ret=%d",
-                 dev->kind == AUDIO_DEVICE_OUTPUT ? "output" : "input", dev->fmt.sample_rate, dev->fmt.channels, dev->fmt.bits, ret);
-        return ESP_FAIL;
+    audio_mixer_handle_t mixer = NULL;
+    if (audio_hub_get_mixer(&mixer) != ESP_OK) {
+        return ESP_ERR_NOT_FOUND;
     }
-    audio_device_refresh_actual_format(dev);
-    if (dev->kind == AUDIO_DEVICE_OUTPUT) {
-        ret = esp_codec_dev_set_out_vol(dev->codec_dev, dev->volume);
-    } else {
-        ret = esp_codec_dev_set_in_gain(dev->codec_dev, audio_input_volume_to_db(dev->volume));
+    audio_mixer_track_handle_t track = NULL;
+    esp_err_t err = audio_mixer_open_track(mixer,
+                                           AUDIO_MIXER_TRACK_APP,
+                                           audio_device_owner_tag(),
+                                           &track);
+    if (err != ESP_OK) {
+        return err;
     }
-    if (ret != ESP_CODEC_DEV_OK && ret != ESP_CODEC_DEV_NOT_SUPPORT) {
-        ESP_LOGE(TAG, "Codec level setup failed: role=%s ret=%d", dev->kind == AUDIO_DEVICE_OUTPUT ? "output" : "input", ret);
-        esp_codec_dev_close(dev->codec_dev);
-        return ESP_FAIL;
+    /* Adopt the mixer's negotiated format; the mixer does not resample per
+     * track, so producers must submit PCM in this format. */
+    uint32_t rate = 0;
+    uint8_t channels = 0;
+    uint8_t bits = 0;
+    (void)audio_mixer_track_info(track, &rate, &channels, &bits);
+    dev->fmt.sample_rate = rate;
+    dev->fmt.channels    = channels;
+    dev->fmt.bits        = bits;
+    if (audio_format_complete(&dev->fmt) != ESP_OK) {
+        ESP_LOGE(TAG, "mixer reported invalid format: rate=%" PRIu32 " ch=%u bits=%u",
+                 rate, channels, bits);
+        audio_mixer_close_track(track);
+        return ESP_ERR_INVALID_STATE;
     }
+    dev->sink_handle = track;
     dev->closed = false;
     return ESP_OK;
 }
 
+static esp_err_t audio_device_open_input(audio_device_t *dev, const audio_format_t *req_fmt)
+{
+    audio_capture_handle_t capture = NULL;
+    if (audio_hub_get_capture(&capture) != ESP_OK) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    const audio_capture_sub_format_t fmt_req = {
+        .sample_rate = req_fmt->sample_rate,
+        .channels    = req_fmt->channels,
+        .bits        = req_fmt->bits,
+    };
+    audio_capture_sub_handle_t sub = NULL;
+    esp_err_t err = audio_capture_open_subscriber(capture,
+                                                  AUDIO_CAPTURE_SUB_APP,
+                                                  &fmt_req,
+                                                  audio_device_owner_tag(),
+                                                  &sub);
+    if (err != ESP_OK) {
+        return err;
+    }
+    uint32_t rate = 0;
+    uint8_t channels = 0;
+    uint8_t bits = 0;
+    (void)audio_capture_sub_info(sub, &rate, &channels, &bits);
+    dev->fmt.sample_rate = rate;
+    dev->fmt.channels    = channels;
+    dev->fmt.bits        = bits;
+    if (audio_format_complete(&dev->fmt) != ESP_OK) {
+        ESP_LOGE(TAG, "capture reported invalid format: rate=%" PRIu32 " ch=%u bits=%u",
+                 rate, channels, bits);
+        audio_capture_close_subscriber(sub);
+        return ESP_ERR_INVALID_STATE;
+    }
+    dev->sink_handle = sub;
+    dev->closed = false;
+    return ESP_OK;
+}
+
+esp_err_t audio_device_write(audio_device_t *dev, const void *buf, size_t bytes)
+{
+    if (!dev || dev->closed || dev->kind != AUDIO_DEVICE_OUTPUT || !dev->sink_handle || !buf) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (bytes == 0) {
+        return ESP_OK;
+    }
+    audio_mixer_track_handle_t track = (audio_mixer_track_handle_t)dev->sink_handle;
+    const uint8_t *p = (const uint8_t *)buf;
+    size_t remaining = bytes;
+
+    /* Bounded-blocking mixer writes naturally pace this loop; a short return
+     * means the mixer task stalled — treat it as a fatal write error. */
+    while (remaining > 0) {
+        size_t chunk = remaining > AUDIO_CHUNK_BYTES ? AUDIO_CHUNK_BYTES : remaining;
+        size_t written = audio_mixer_track_write(track, p, chunk);
+        if (written == 0) {
+            return ESP_FAIL;
+        }
+        p += written;
+        remaining -= written;
+    }
+    return ESP_OK;
+}
+
+esp_err_t audio_device_read(audio_device_t *dev, void *buf, size_t bytes, uint32_t timeout_ms)
+{
+    if (!dev || dev->closed || dev->kind != AUDIO_DEVICE_INPUT || !dev->sink_handle || !buf) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (bytes == 0) {
+        return ESP_OK;
+    }
+    if (timeout_ms == 0) {
+        timeout_ms = AUDIO_INPUT_READ_TIMEOUT_MS;
+    }
+    audio_capture_sub_handle_t sub = (audio_capture_sub_handle_t)dev->sink_handle;
+    uint8_t *p = (uint8_t *)buf;
+    size_t remaining = bytes;
+    uint32_t deadline_left = timeout_ms;
+    while (remaining > 0) {
+        uint32_t slice = deadline_left > 200 ? 200 : deadline_left;
+        size_t got = audio_capture_sub_read(sub, p, remaining, slice);
+        if (got == 0) {
+            if (slice >= deadline_left) {
+                return ESP_ERR_TIMEOUT;
+            }
+            deadline_left -= slice;
+            continue;
+        }
+        p += got;
+        remaining -= got;
+    }
+    return ESP_OK;
+}
+
+esp_err_t audio_device_flush_input(audio_device_t *dev)
+{
+    if (!dev || dev->closed || dev->kind != AUDIO_DEVICE_INPUT || !dev->sink_handle) return ESP_ERR_INVALID_STATE;
+    return audio_capture_sub_flush((audio_capture_sub_handle_t)dev->sink_handle);
+}
+
 static int lua_audio_new_device(lua_State *L, audio_device_kind_t kind)
 {
-    luaL_checktype(L, 1, LUA_TTABLE);
+    /* Accepts either no arg or an opts table
+     * `{ volume=..., sample_rate=..., channels=..., bits=... }`. Only the
+     * "app" mixer/capture slot is exposed to Lua; there is no role field. */
+    int volume = AUDIO_DEFAULT_VOL;
+    audio_format_t req_fmt = {0};
+    if (lua_istable(L, 1)) {
+        volume = lua_audio_get_int_field(L, 1, "volume", AUDIO_DEFAULT_VOL);
+        (void)lua_audio_get_codec_field(L, 1);
+        req_fmt.sample_rate = lua_audio_get_u32_field(L, 1, "sample_rate", 2, 0);
+        req_fmt.channels    = lua_audio_get_u8_field(L, 1, "channels", 3, 0);
+        req_fmt.bits        = lua_audio_get_u8_field(L, 1, "bits", 4, 0);
+    } else if (!lua_isnoneornil(L, 1)) {
+        return lua_audio_push_error(L,
+            "audio.open_output/open_input: expected opts table or no argument");
+    }
+
     audio_device_t *dev = (audio_device_t *)lua_newuserdata(L, sizeof(*dev));
     memset(dev, 0, sizeof(*dev));
     dev->kind = kind;
-    dev->codec_dev = (esp_codec_dev_handle_t)lua_audio_get_codec_field(L, 1);
-    dev->volume = lua_audio_get_int_field(L, 1, "volume", AUDIO_DEFAULT_VOL);
+    dev->closed = true; /* flipped in audio_device_open_* on success */
+    dev->volume = volume;
 
-    if (!dev->codec_dev) {
-        return lua_audio_push_error(L, "audio device: codec is required");
-    }
-    dev->fmt.sample_rate = lua_audio_get_u32_field(L, 1, "sample_rate", 2, 0);
-    dev->fmt.channels = lua_audio_get_u8_field(L, 1, "channels", 3, 0);
-    dev->fmt.bits = lua_audio_get_u8_field(L, 1, "bits", 4, 0);
-    if (audio_format_complete(&dev->fmt) != ESP_OK) {
-        ESP_LOGE(TAG, "Invalid device format: rate=%" PRIu32 " ch=%u bits=%u", dev->fmt.sample_rate, dev->fmt.channels, dev->fmt.bits);
-        return lua_audio_push_error(L, "audio device: invalid format");
-    }
     if (dev->volume < 0 || dev->volume > 100) {
         return lua_audio_push_error(L, kind == AUDIO_DEVICE_OUTPUT ? "audio output: volume must be 0..100" : "audio input: volume must be 0..100");
     }
-    if (audio_device_open(dev) != ESP_OK) {
-        return lua_audio_push_error(L, "audio device: failed to open codec");
+
+    esp_err_t err;
+    if (kind == AUDIO_DEVICE_OUTPUT) {
+        (void)audio_format_complete(&req_fmt);
+        err = audio_device_open_output(dev);
+    } else {
+        err = audio_device_open_input(dev, &req_fmt);
+    }
+
+    if (err == ESP_ERR_NOT_FOUND) {
+        return lua_audio_push_error(L, "audio codec not available");
+    }
+    if (err == ESP_ERR_INVALID_STATE) {
+        return lua_audio_push_error(L,
+                                    kind == AUDIO_DEVICE_OUTPUT
+                                        ? "audio output: app track already open"
+                                        : "audio input: app subscriber already open");
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "audio %s open failed: %s",
+                 kind == AUDIO_DEVICE_OUTPUT ? "output" : "input", esp_err_to_name(err));
+        return lua_audio_push_error(L, kind == AUDIO_DEVICE_OUTPUT ? "audio output: open failed" : "audio input: open failed");
     }
 
     luaL_getmetatable(L, kind == AUDIO_DEVICE_OUTPUT ? AUDIO_DEVICE_OUTPUT_META : AUDIO_DEVICE_INPUT_META);
@@ -118,14 +222,27 @@ static int lua_audio_new_device(lua_State *L, audio_device_kind_t kind)
     return 1;
 }
 
-int lua_audio_new_output(lua_State *L)
+int lua_audio_open_output(lua_State *L)
 {
     return lua_audio_new_device(L, AUDIO_DEVICE_OUTPUT);
 }
 
-int lua_audio_new_input(lua_State *L)
+int lua_audio_open_input(lua_State *L)
 {
     return lua_audio_new_device(L, AUDIO_DEVICE_INPUT);
+}
+
+static void audio_device_close_backend(audio_device_t *dev)
+{
+    if (!dev || !dev->sink_handle) {
+        return;
+    }
+    if (dev->kind == AUDIO_DEVICE_OUTPUT) {
+        audio_mixer_close_track((audio_mixer_track_handle_t)dev->sink_handle);
+    } else {
+        audio_capture_close_subscriber((audio_capture_sub_handle_t)dev->sink_handle);
+    }
+    dev->sink_handle = NULL;
 }
 
 int lua_audio_device_close(lua_State *L)
@@ -139,10 +256,7 @@ int lua_audio_device_close(lua_State *L)
         ESP_LOGW(TAG, "Device close rejected: busy holders=%u active=%d", dev->holders, dev->active);
         return lua_audio_push_error(L, "audio device: busy");
     }
-    if (esp_codec_dev_close(dev->codec_dev) != ESP_CODEC_DEV_OK) {
-        ESP_LOGW(TAG, "Codec close returned error");
-    }
-    dev->codec_dev = NULL;
+    audio_device_close_backend(dev);
     dev->closed = true;
     lua_pushboolean(L, 1);
     return 1;
@@ -152,8 +266,7 @@ int lua_audio_device_gc(lua_State *L)
 {
     audio_device_t *dev = (audio_device_t *)lua_touserdata(L, 1);
     if (dev && !dev->closed && dev->holders == 0 && !dev->active) {
-        esp_codec_dev_close(dev->codec_dev);
-        dev->codec_dev = NULL;
+        audio_device_close_backend(dev);
         dev->closed = true;
     }
     return 0;
@@ -164,6 +277,28 @@ int lua_audio_device_info(lua_State *L)
     audio_device_t *dev = luaL_testudata(L, 1, AUDIO_DEVICE_INPUT_META);
     if (!dev) {
         dev = (audio_device_t *)luaL_checkudata(L, 1, AUDIO_DEVICE_OUTPUT_META);
+    }
+    /* The mixer/capture handle is the source of truth for the negotiated
+     * format; refresh dev->fmt from it every call. */
+    if (!dev->closed && dev->sink_handle) {
+        uint32_t rate = 0;
+        uint8_t channels = 0;
+        uint8_t bits = 0;
+        if (dev->kind == AUDIO_DEVICE_OUTPUT) {
+            (void)audio_mixer_track_info((audio_mixer_track_handle_t)dev->sink_handle,
+                                         &rate, &channels, &bits);
+        } else {
+            (void)audio_capture_sub_info((audio_capture_sub_handle_t)dev->sink_handle,
+                                         &rate, &channels, &bits);
+        }
+        audio_format_t fmt = {
+            .sample_rate = rate,
+            .channels    = channels,
+            .bits        = bits,
+        };
+        if (audio_format_complete(&fmt) == ESP_OK) {
+            dev->fmt = fmt;
+        }
     }
     lua_newtable(L);
     lua_pushstring(L, dev->kind == AUDIO_DEVICE_OUTPUT ? "output" : "input");
@@ -181,6 +316,9 @@ int lua_audio_device_info(lua_State *L)
     return 1;
 }
 
+/* Output volume routes to the mixer (physical DAC gain). Input gain is a
+ * shadow-only value; the capture hub does not expose a gain knob yet. */
+
 int lua_audio_output_set_volume(lua_State *L)
 {
     audio_device_t *dev = lua_audio_check_device(L, 1, AUDIO_DEVICE_OUTPUT, "set_volume");
@@ -188,9 +326,13 @@ int lua_audio_output_set_volume(lua_State *L)
     if (vol < 0 || vol > 100) {
         return luaL_error(L, "audio set_volume: volume must be 0..100");
     }
-    if (esp_codec_dev_set_out_vol(dev->codec_dev, vol) != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Set output volume failed");
-        return lua_audio_push_error(L, "audio output: set volume failed");
+    audio_mixer_handle_t mixer = NULL;
+    if (audio_hub_get_mixer(&mixer) != ESP_OK) {
+        return lua_audio_push_error(L, "audio set_volume: mixer unavailable");
+    }
+    esp_err_t err = audio_mixer_set_output_volume(mixer, vol);
+    if (err != ESP_OK) {
+        return lua_audio_push_error(L, "audio set_volume: mixer rejected");
     }
     dev->volume = vol;
     lua_pushboolean(L, 1);
@@ -200,10 +342,15 @@ int lua_audio_output_set_volume(lua_State *L)
 int lua_audio_output_get_volume(lua_State *L)
 {
     audio_device_t *dev = lua_audio_check_device(L, 1, AUDIO_DEVICE_OUTPUT, "get_volume");
-    int vol = 0;
-    if (esp_codec_dev_get_out_vol(dev->codec_dev, &vol) != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Get output volume failed");
-        return lua_audio_push_error(L, "audio output: get volume failed");
+    audio_mixer_handle_t mixer = NULL;
+    (void)audio_hub_get_mixer(&mixer);
+    int vol = dev->volume;
+    if (mixer != NULL) {
+        int live = 0;
+        if (audio_mixer_get_output_volume(mixer, &live) == ESP_OK) {
+            vol = live;
+            dev->volume = vol;
+        }
     }
     lua_pushinteger(L, vol);
     return 1;
@@ -213,10 +360,8 @@ int lua_audio_output_set_mute(lua_State *L)
 {
     audio_device_t *dev = lua_audio_check_device(L, 1, AUDIO_DEVICE_OUTPUT, "set_mute");
     bool mute = lua_toboolean(L, 2);
-    if (esp_codec_dev_set_out_mute(dev->codec_dev, mute) != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Set output mute failed");
-        return lua_audio_push_error(L, "audio output: set mute failed");
-    }
+    (void)dev;
+    ESP_LOGD(TAG, "output set_mute=%d ignored: mute is owned by the mixer", (int)mute);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -228,11 +373,8 @@ int lua_audio_input_set_volume(lua_State *L)
     if (vol < 0 || vol > 100) {
         return luaL_error(L, "audio set_volume: volume must be 0..100");
     }
-    if (esp_codec_dev_set_in_gain(dev->codec_dev, audio_input_volume_to_db(vol)) != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Set input volume failed");
-        return lua_audio_push_error(L, "audio input: set volume failed");
-    }
     dev->volume = vol;
+    ESP_LOGD(TAG, "input set_volume=%d ignored: gain is owned by capture", vol);
     lua_pushboolean(L, 1);
     return 1;
 }
@@ -252,10 +394,10 @@ int lua_audio_output_write(lua_State *L)
     if (!audio_device_acquire(dev)) {
         return lua_audio_push_error(L, "audio output: busy");
     }
-    int ret = esp_codec_dev_write(dev->codec_dev, (void *)data, (int)len);
+    esp_err_t err = audio_device_write(dev, data, len);
     audio_device_release(dev);
-    if (ret != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Output write failed: ret=%d", ret);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Output write failed: err=%s", esp_err_to_name(err));
         return lua_audio_push_error(L, "audio output: write failed");
     }
     lua_pushinteger(L, len);
@@ -282,11 +424,11 @@ int lua_audio_input_read(lua_State *L)
         ESP_LOGE(TAG, "Input read buffer alloc failed: %" PRIu32 " bytes", bytes);
         return lua_audio_push_error(L, "audio input: out of memory");
     }
-    int ret = esp_codec_dev_read(dev->codec_dev, buf, (int)bytes);
+    esp_err_t err = audio_device_read(dev, buf, bytes, 0);
     audio_device_release(dev);
-    if (ret != ESP_CODEC_DEV_OK) {
+    if (err != ESP_OK) {
         free(buf);
-        ESP_LOGE(TAG, "Input read failed: ret=%d", ret);
+        ESP_LOGE(TAG, "Input read failed: err=%s", esp_err_to_name(err));
         return lua_audio_push_error(L, "audio input: read failed");
     }
     lua_pushlstring(L, (const char *)buf, bytes);
@@ -326,7 +468,6 @@ int lua_audio_output_play_tone(lua_State *L)
         return lua_audio_push_error(L, "audio play_tone: invalid frame size");
     }
     total_frames = (uint32_t)(((uint64_t)dev->fmt.sample_rate * duration_ms) / 1000);
-    /* Keep tone amplitude below full scale; device volume controls perceived loudness. */
     amplitude = 32767.0f * 0.55f;
     phase_step = 2.0f * (float)M_PI * (float)freq_hz / (float)dev->fmt.sample_rate;
     buf = malloc(chunk_frames * dev->fmt.bytes_per_frame);
@@ -360,8 +501,8 @@ int lua_audio_output_play_tone(lua_State *L)
                 phase -= 2.0f * (float)M_PI;
             }
         }
-        int bytes = (int)(frames_this * dev->fmt.bytes_per_frame);
-        if (esp_codec_dev_write(dev->codec_dev, buf, bytes) != ESP_CODEC_DEV_OK) {
+        size_t chunk_bytes = (size_t)(frames_this * dev->fmt.bytes_per_frame);
+        if (audio_device_write(dev, buf, chunk_bytes) != ESP_OK) {
             free(buf);
             audio_device_release(dev);
             ESP_LOGE(TAG, "Tone output write failed");

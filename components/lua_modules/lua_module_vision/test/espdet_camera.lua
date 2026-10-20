@@ -1,4 +1,3 @@
-local board_manager = require("board_manager")
 local camera = require("camera")
 local espdet = require("espdet")
 local storage = require("storage")
@@ -6,13 +5,13 @@ local storage = require("storage")
 local TAG = "[espdet_camera_test]"
 local a = type(args) == "table" and args or {}
 local ROOT = storage.get_root_dir()
-local camera_paths, path_err = board_manager.get_camera_paths()
-if not camera_paths then
-    print(TAG .. " SKIP: get_camera_paths failed: " .. tostring(path_err))
+local camera_devices = camera.list_devices()
+if #camera_devices == 0 then
+    print(TAG .. " SKIP: no capture video device available")
     return
 end
 
-local DEVICE = type(a.device) == "string" and a.device or camera_paths.dev_path
+local DEVICE = type(a.device) == "string" and a.device or camera_devices[1].path
 local TIMEOUT_MS = 3000
 local MODEL_PATH = type(a.model_path) == "string" and a.model_path or storage.join_path(ROOT, "models", "espdet_pico_224_224_cat.espdl")
 

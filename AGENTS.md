@@ -62,6 +62,7 @@ The main entry point is `application/edge_agent/main/main.c`.
 - **Capabilities** (`components/claw_capabilities/`): concrete agent capabilities such as Lua execution, files, IM platforms, MCP, skill management, router management, scheduler, session management, time, HTTP requests, web search, system, and LLM inspection.
 - **Memory** (`components/claw_modules/claw_memory/`): session history, profile/long-term memory providers, memory persistence, request gating, and stage notes.
 - **Skills** (`components/claw_modules/claw_skill/`, component `skills/` directories): user-facing skill documents and activation state.
+- **Apps** (`components/common/app_registry/`, SYSTEM/DATA `apps/` directories): standalone Lua App packages consumed by the System UI Launcher.
 - **Lua modules** (`components/lua_modules/`): Lua drivers and higher-level modules for hardware, media, HTTP server, storage, threading, JSON, board manager, and capability calls.
 - **Board manager** (`application/edge_agent/boards/`): board metadata, peripheral YAML, board setup code, board defaults, optional local components, and optional board FATFS overlays.
 - **FATFS images** (`application/edge_agent/fatfs_image/`): build-time source trees for the read-only SYSTEM image and writable DATA seed image.
@@ -71,11 +72,12 @@ The main entry point is `application/edge_agent/main/main.c`.
 
 The firmware uses two logical filesystem roots, configured at boot through `claw_paths`:
 
-- `CLAW_PATH_SYSTEM` is mounted at `/system`. It is read-only and contains firmware-baked skills, skill assets, built-in Lua modules, Lua docs/tests, board image overlays, and `.recovery` seed files.
+- `CLAW_PATH_SYSTEM` is mounted at `/system`. It is read-only and contains firmware-baked skills, App packages, built-in Lua modules, Lua docs/tests, board image overlays, and `.recovery` seed files.
 - `CLAW_PATH_DATA` is the writable storage root. It is `/fatfs` when flash storage is used, or the board-manager SD card mount point when an SD card is available.
 - Never hard-code `/fatfs` for writable paths in reusable code or docs. Use `claw_paths_join(CLAW_PATH_DATA, ...)` in C and `storage.get_root_dir()` plus `storage.join_path(...)` in Lua.
 - Firmware-baked skill scripts must be referenced with `{CUR_SKILL_DIR}/scripts/...` inside `SKILL.md`; do not write fixed `/fatfs/skills/...` paths.
 - Runtime-installed/user skills live under the DATA root's `skills/`. Firmware-baked skills live under `/system/skills/`; the skill registry scans both, with DATA skills taking priority when ids conflict.
+- Runtime Apps live under the DATA root's `apps/`. Firmware-baked Apps live under `/system/apps/`; Apps and Skills must not own or reference each other's files.
 - Router rules, scheduler rules, memory, sessions, inbox, and user-generated files live under DATA. Recovery defaults are stored under `/system/.recovery` and copied into DATA only when missing.
 - Built-in Lua libraries are staged under `/system/scripts/builtin/lib`; generated Lua module docs/tests are bundled into the `builtin_lua_modules` skill and should be accessed via that skill's `{CUR_SKILL_DIR}` paths.
 - Board-specific `boards/<vendor>/<board>/fatfs_image/` content overlays the SYSTEM image at build time. Board image content does not target DATA and hidden board folders are not considered.
@@ -85,9 +87,11 @@ The firmware uses two logical filesystem roots, configured at boot through `claw
 - Architecture constraints: [`design.md`](.agents/design.md)
 - docs guide: [`docs.md`](.agents/docs.md)
 - Common gotchas: [`gotchas.md`](.agents/gotchas.md)
-- Specs (`.agents/spec/`):
-  - lua module spec: [lua-module-spec.md](.agents/spec/lua-module-spec.md)
-  - claw skill spec: [claw-skill-spec.md](.agents/spec/claw-skill-spec.md)
+- Specs and package contracts:
+  - Lua module spec: [lua-module-spec.md](.agents/spec/lua-module-spec.md)
+  - Skill package spec shared with the device Agent: [skill-package-spec.md](components/common/skill_builder/skills/skill_creator/references/skill-package-spec.md)
+  - Component Skill build rules: [COMPONENT_SKILL_BUILD.md](components/common/skill_builder/COMPONENT_SKILL_BUILD.md)
+  - App package spec shared with the device Agent: [app-package-spec.md](components/claw_capabilities/cap_app_mgr/skills/app_creator/references/app-package-spec.md)
 
 ## General Engineering Rules
 

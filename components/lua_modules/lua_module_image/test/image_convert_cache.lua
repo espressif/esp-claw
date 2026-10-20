@@ -14,10 +14,15 @@
   miss / hit timings so the operator can see the cache working in real time.
 --]]
 
-local board_manager = require("board_manager")
 local camera = require("camera")
 local delay = require("delay")
 local display = require("display")
+local screen, screen_info
+
+local function center_text(x, y, w, h, text, options)
+    local tw, th = screen:measure_text(text, options)
+    screen:text(x + math.max(0, (w - tw) // 2), y + math.max(0, (h - th) // 2), text, options)
+end
 local image = require("image")
 local system = require("system")
 
@@ -39,8 +44,7 @@ local camera_started = false
 
 local function cleanup()
     if display_started then
-        pcall(display.end_frame)
-        pcall(display.deinit)
+        pcall(screen.close, screen)
         display_started = false
     end
     if camera_started then
@@ -89,47 +93,43 @@ end
 
 local function draw_status_overlay(stats)
     local bg = stats.last_error and { r = 160, g = 24, b = 24 } or { r = 24, g = 24, b = 24 }
-    display.fill_rect(0, 0, display.width, 60, bg)
+    screen:fill_rect(0, 0, screen_info.width, 60, bg)
 
     local line1 = string.format("frame=%d  left=%ds  fps~%.1f",
         stats.frame_index, stats.remaining_s, stats.fps_est)
-    display.draw_text(6, 4, line1, { color = "white", font_size = 14 })
+    screen:text(6, 4, line1, { color = "#ffffff", font_size = 14 })
 
     local line2 = string.format("RGB565 miss=%dms hit=%dms",
         stats.last_rgb_miss, stats.last_rgb_hit)
-    display.draw_text(6, 22, line2, { color = "white", font_size = 12 })
+    screen:text(6, 22, line2, { color = "#ffffff", font_size = 12 })
 
     local line3 = string.format("GRAY8  miss=%dms hit=%dms  JPEG=%s",
         stats.last_gray_miss, stats.last_gray_hit,
         stats.last_jpeg_ms >= 0 and (stats.last_jpeg_ms .. "ms") or "-")
-    display.draw_text(6, 38, line3, { color = "white", font_size = 12 })
+    screen:text(6, 38, line3, { color = "#ffffff", font_size = 12 })
 
     if stats.last_error then
-        display.draw_text(6, 52, "FAIL: " .. stats.last_error, { color = "yellow", font_size = 12 })
+        screen:text(6, 52, "FAIL: " .. stats.last_error, { color = "#ffff00", font_size = 12 })
     end
 end
 
-local panel_handle, io_handle, lcd_width, lcd_height, panel_if =
-    board_manager.get_display_lcd_params("display_lcd")
-if not panel_handle then
-    print(TAG .. " SKIP: get_display_lcd_params failed: " .. tostring(io_handle))
+local camera_devices = camera.list_devices()
+if #camera_devices == 0 then
+    print(TAG .. " SKIP: no capture video device available")
     return
 end
+local camera_path = camera_devices[1].path
 
-local camera_paths, path_err = board_manager.get_camera_paths()
-if not camera_paths then
-    print(TAG .. " SKIP: get_camera_paths failed: " .. tostring(path_err))
-    return
-end
-
-local ok, err = pcall(display.init, panel_handle, io_handle, lcd_width, lcd_height, panel_if)
+local ok, err = pcall(display.open)
 if not ok then
-    print(TAG .. " SKIP: display.init failed: " .. tostring(err))
+    print(TAG .. " SKIP: display.open failed: " .. tostring(err))
     return
 end
+screen = err
+screen_info = screen:info()
 display_started = true
 
-ok, err = pcall(camera.open, camera_paths.dev_path, CAMERA_OPEN_OPTS)
+ok, err = pcall(camera.open, camera_path, CAMERA_OPEN_OPTS)
 if not ok then
     print(TAG .. " SKIP: camera.open failed: " .. tostring(err))
     cleanup()
@@ -230,15 +230,14 @@ local run_ok, run_err = xpcall(function()
         stats.last_gray_hit = gray_hit_ms
         stats.last_jpeg_ms = jpeg_ms
 
-        display.begin_frame({ clear = true, color = "black" })
-        display.draw_image(0, 0, rgb_hit_view, {
-            mode = "fit",
-            width = display.width,
-            height = display.height,
+        screen:begin({ clear = "#000000" })
+        screen:image(0, 0, rgb_hit_view, {
+            mode = "contain",
+            width = screen_info.width,
+            height = screen_info.height,
         })
         draw_status_overlay(stats)
-        display.present()
-        display.end_frame()
+        screen:present()
 
         -- Release per-frame views so the camera buffer can be returned.
         rgb_miss_view:release()
@@ -263,13 +262,12 @@ local run_ok, run_err = xpcall(function()
     local rgb_speedup_avg = rgb_speedup_count > 0 and (rgb_speedup_sum / rgb_speedup_count) or 0
     local gray_speedup_avg = gray_speedup_count > 0 and (gray_speedup_sum / gray_speedup_count) or 0
 
-    display.begin_frame({ clear = true, color = "black" })
-    display.draw_text_aligned(0, 0, display.width, display.height,
+    screen:begin({ clear = "#000000" })
+    center_text(0, 0, screen_info.width, screen_info.height,
         string.format("Convert+cache PASS\nframes=%d\nRGB565 x%.1f  GRAY8 x%.1f\njpeg=%d release=%d",
             frames, rgb_speedup_avg, gray_speedup_avg, jpeg_runs, release_checks),
-        { color = "white", font_size = 18, align = "center", valign = "middle" })
-    display.present()
-    display.end_frame()
+        { color = "#ffffff", font_size = 18 })
+    screen:present()
 
     print(string.format(
         "%s PASS frames=%d rgb_speedup_avg=%.2f gray_speedup_avg=%.2f jpeg_runs=%d release_checks=%d",

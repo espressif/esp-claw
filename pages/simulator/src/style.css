@@ -144,7 +144,7 @@ button:disabled {
 
 .device-shell {
   position: relative;
-  width: min(100%, 64rem);
+  width: min(100%, 64rem, calc((100dvh - 9rem) * var(--device-ratio, 1.666667)));
   aspect-ratio: var(--device-aspect, 5 / 3);
   display: grid;
   overflow: hidden;

@@ -6,28 +6,24 @@ set(srcs
 if(CONFIG_APP_CLAW_CAP_IM_FEISHU)
     list(APPEND srcs
         "src/cap_im_feishu.c"
-        "src/cmd_cap_im_feishu.c"
     )
 endif()
 
 if(CONFIG_APP_CLAW_CAP_IM_QQ)
     list(APPEND srcs
         "src/cap_im_qq.c"
-        "src/cmd_cap_im_qq.c"
     )
 endif()
 
 if(CONFIG_APP_CLAW_CAP_IM_TG)
     list(APPEND srcs
         "src/cap_im_tg.c"
-        "src/cmd_cap_im_tg.c"
     )
 endif()
 
 if(CONFIG_APP_CLAW_CAP_IM_WECHAT)
     list(APPEND srcs
         "src/cap_im_wechat.c"
-        "src/cmd_cap_im_wechat.c"
     )
 endif()
 
@@ -48,5 +44,4 @@ idf_component_register(
         esp_websocket_client
         freertos
         mbedtls
-        console
 )

@@ -15,6 +15,8 @@
 static const char *TAG = "claw_paths";
 
 static char s_root_dirs[CLAW_PATH_ROOT_MAX][CLAW_PATHS_MAX_LEN];
+static claw_path_space_provider_t s_space_providers[CLAW_PATH_ROOT_MAX];
+static void *s_space_provider_ctx[CLAW_PATH_ROOT_MAX];
 
 esp_err_t claw_paths_set(claw_path_root_t root, const char *path)
 {
@@ -22,6 +24,8 @@ esp_err_t claw_paths_set(claw_path_root_t root, const char *path)
     ESP_RETURN_ON_FALSE(path && path[0], ESP_ERR_INVALID_ARG, TAG, "empty path");
     ESP_RETURN_ON_FALSE(strlcpy(s_root_dirs[root], path, sizeof(s_root_dirs[root])) < sizeof(s_root_dirs[root]),
                         ESP_ERR_INVALID_SIZE, TAG, "root path too long: %s", path);
+    s_space_providers[root] = NULL;
+    s_space_provider_ctx[root] = NULL;
     return ESP_OK;
 }
 
@@ -31,6 +35,31 @@ const char *claw_paths_get(claw_path_root_t root)
         return NULL;
     }
     return s_root_dirs[root];
+}
+
+esp_err_t claw_paths_set_space_provider(claw_path_root_t root,
+                                        claw_path_space_provider_t provider,
+                                        void *ctx)
+{
+    ESP_RETURN_ON_FALSE((unsigned)root < CLAW_PATH_ROOT_MAX, ESP_ERR_INVALID_ARG,
+                        TAG, "bad root %d", (int)root);
+    s_space_providers[root] = provider;
+    s_space_provider_ctx[root] = provider ? ctx : NULL;
+    return ESP_OK;
+}
+
+esp_err_t claw_paths_get_space(claw_path_root_t root,
+                               uint64_t *total_bytes,
+                               uint64_t *free_bytes)
+{
+    ESP_RETURN_ON_FALSE((unsigned)root < CLAW_PATH_ROOT_MAX, ESP_ERR_INVALID_ARG,
+                        TAG, "bad root %d", (int)root);
+    ESP_RETURN_ON_FALSE(total_bytes && free_bytes, ESP_ERR_INVALID_ARG, TAG,
+                        "space output is NULL");
+    ESP_RETURN_ON_FALSE(s_space_providers[root], ESP_ERR_INVALID_STATE, TAG,
+                        "space provider for root %d is not set", (int)root);
+    return s_space_providers[root](s_space_provider_ctx[root], total_bytes,
+                                   free_bytes);
 }
 
 esp_err_t claw_paths_join(claw_path_root_t root, const char *subpath, char *out, size_t out_size)

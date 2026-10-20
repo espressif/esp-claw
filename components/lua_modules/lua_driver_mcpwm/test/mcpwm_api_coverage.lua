@@ -1,5 +1,4 @@
--- MCPWM API coverage test. Use args.gpio_a/gpio_b to select safe pins for
--- the target board before running this on real hardware.
+-- API checks only; select safe, unconnected args.gpio_a/gpio_b pins.
 local mcpwm = require("mcpwm")
 local delay = require("delay")
 
@@ -99,6 +98,31 @@ local ok, err = xpcall(function()
         mcpwm.new({gpio = GPIO_A, gpio_b = GPIO_A})
     end)
 
+    for _, value in ipairs({-1, 4294968296}) do
+        expect_error("frequency outside uint32 range", function()
+            mcpwm.new({gpio = GPIO_A, frequency_hz = value})
+        end)
+        expect_error("resolution outside uint32 range", function()
+            mcpwm.new({gpio = GPIO_A, resolution_hz = value})
+        end)
+    end
+    for _, value in ipairs({-1, 4294967300}) do
+        expect_error("invalid output GPIO", function()
+            mcpwm.new({gpio = value})
+        end)
+    end
+    for _, value in ipairs({0 / 0, math.huge, -math.huge}) do
+        expect_error("non-finite initial duty", function()
+            mcpwm.new({gpio = GPIO_A, duty_percent = value})
+        end)
+    end
+    expect_error("one-tick period", function()
+        mcpwm.new({gpio = GPIO_A, resolution_hz = 1000000, frequency_hz = 1000000})
+    end)
+    expect_error("invert requires boolean", function()
+        mcpwm.new({gpio = GPIO_A, invert = 0})
+    end)
+
     local default_pwm = track(mcpwm.new({gpio = GPIO_A}))
     assert_equal("default get_channel_count", default_pwm:get_channel_count(), 1)
     default_pwm:start()
@@ -143,6 +167,10 @@ local ok, err = xpcall(function()
         pwm:set_duty(3, 50)
     end)
 
+    expect_error("set_duty NaN", function() pwm:set_duty(0 / 0) end)
+    expect_error("set_frequency overflow", function() pwm:set_frequency(4294968296) end)
+    expect_error("set_enabled requires boolean", function() pwm:set_enabled(0) end)
+
     pwm:set_frequency(NEW_FREQUENCY_HZ)
     print("[mcpwm_api] set_frequency OK")
     expect_error("set_frequency zero", function()
@@ -170,7 +198,21 @@ local ok, err = xpcall(function()
         pwm:get_channel_count()
     end)
 
-    print("[mcpwm_api] done")
+    for i = 1, 8 do
+        local running = track(mcpwm.new({gpio = GPIO_A, group_id = GROUP_ID}))
+        running:start()
+        running:close()
+    end
+    for i = 1, 8 do
+        local garbage = mcpwm.new({gpio = GPIO_A, group_id = GROUP_ID})
+        garbage:start()
+        garbage = nil
+        collectgarbage("collect")
+    end
+    local reused = track(mcpwm.new({gpio = GPIO_A, group_id = GROUP_ID}))
+    reused:start()
+    reused:close()
+    print("[mcpwm_api] API checks done; physical waveforms not measured")
 end, debug.traceback)
 
 cleanup()

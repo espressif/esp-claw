@@ -1,0 +1,38 @@
+{
+  "simulator": false,
+  "kind": "app",
+  "files": [
+    "README.md",
+    "assets/icon.jpg",
+    "launcher.json",
+    "scripts/app_store.lua",
+    "scripts/store_worker.lua"
+  ],
+  "name": "app_store",
+  "description": "设备上的应用商店：浏览应用、查看详情、后台安装与卸载，支持资源子目录。",
+  "author": "ESP-Claw contributor",
+  "last_modified": 1791963794725,
+  "metadata": {
+    "category": [
+      "utility",
+      "network"
+    ],
+    "tags": [
+      "store",
+      "installer"
+    ],
+    "peripherals": [
+      "display"
+    ]
+  },
+  "extra_files": {
+    "references": [],
+    "scripts": [
+      "app_store.lua",
+      "store_worker.lua"
+    ],
+    "assets": [
+      "icon.jpg"
+    ]
+  }
+}

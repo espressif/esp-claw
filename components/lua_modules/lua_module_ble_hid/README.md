@@ -19,7 +19,7 @@ keyboard, and mouse input reports.
 - Call `ble_hid.mouse_scroll(wheel [, pan])` to scroll vertically or horizontally
 - Call `ble_hid.mouse_button(button [, gesture])` to click, press, or release a mouse button
 - Call `ble_hid.release_all()` before stopping or after interrupted pointer/key actions
-- Call `ble_hid.stop()` to stop advertising, and `ble_hid.deinit()` to release the HID stack
+- Call `ble_hid.stop()` to stop advertising, and `ble_hid.deinit()` to shut down BLE HID
 
 `init` and `start` accept an optional `name` field. The name length must be 29
 bytes or less. The default name is `esp-claw-hid`.

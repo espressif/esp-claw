@@ -31,6 +31,7 @@ type ProviderPreset = {
   llm_base_url: string;
   llm_auth_type: string;
   llm_max_tokens_field: string;
+  llm_reasoning_effort?: string;
   llm_default_image_max_bytes: string;
   llm_supports_tools: boolean;
   llm_supports_vision: boolean;
@@ -41,15 +42,16 @@ type ProviderPreset = {
 
 const PROVIDER_PRESETS: Record<PresetKey, ProviderPreset> = {
   openai: {
-    llm_backend_type: 'openai_compatible',
+    llm_backend_type: 'openai_responses',
     llm_base_url: 'https://api.openai.com/v1',
     llm_auth_type: 'bearer',
-    llm_max_tokens_field: 'max_completion_tokens',
+    llm_max_tokens_field: 'max_output_tokens',
+    llm_reasoning_effort: 'medium',
     llm_default_image_max_bytes: '524288',
     llm_supports_tools: true,
     llm_supports_vision: true,
     llm_image_remote_url_only: false,
-    llm_model: 'gpt-5.4',
+    llm_model: 'gpt-5.6-sol',
     advanced: false,
   },
   bailian: {
@@ -114,7 +116,7 @@ const PROVIDER_PRESETS: Record<PresetKey, ProviderPreset> = {
   },
   minimax_global: {
     llm_backend_type: 'anthropic_compatible',
-    llm_base_url: 'https://api.minimaxi.io/anthropic',
+    llm_base_url: 'https://api.minimax.io/anthropic/v1',
     llm_auth_type: 'none',
     llm_max_tokens_field: 'max_tokens',
     llm_default_image_max_bytes: '524288',
@@ -126,7 +128,7 @@ const PROVIDER_PRESETS: Record<PresetKey, ProviderPreset> = {
   },
   minimax_cn: {
     llm_backend_type: 'anthropic_compatible',
-    llm_base_url: 'https://api.minimaxi.com/anthropic',
+    llm_base_url: 'https://api.minimaxi.com/anthropic/v1',
     llm_auth_type: 'none',
     llm_max_tokens_field: 'max_tokens',
     llm_default_image_max_bytes: '524288',
@@ -185,6 +187,7 @@ type LlmForm = {
   llm_auth_type: string;
   llm_default_image_max_bytes: string;
   llm_max_tokens_field: string;
+  llm_reasoning_effort: string;
   llm_supports_tools: boolean;
   llm_supports_vision: boolean;
   llm_image_remote_url_only: boolean;
@@ -237,6 +240,7 @@ export const LlmPage: Component = () => {
       llm_auth_type: config.llm_auth_type ?? '',
       llm_default_image_max_bytes: config.llm_default_image_max_bytes ?? '',
       llm_max_tokens_field: config.llm_max_tokens_field ?? '',
+      llm_reasoning_effort: config.llm_reasoning_effort ?? 'medium',
       llm_supports_tools: parseBool(config.llm_supports_tools),
       llm_supports_vision: parseBool(config.llm_supports_vision),
       llm_image_remote_url_only: parseBool(config.llm_image_remote_url_only),
@@ -251,6 +255,7 @@ export const LlmPage: Component = () => {
       llm_auth_type: form.llm_auth_type.trim(),
       llm_default_image_max_bytes: form.llm_default_image_max_bytes.trim(),
       llm_max_tokens_field: form.llm_max_tokens_field.trim(),
+      llm_reasoning_effort: form.llm_reasoning_effort.trim(),
       llm_supports_tools: String(form.llm_supports_tools),
       llm_supports_vision: String(form.llm_supports_vision),
       llm_image_remote_url_only: String(form.llm_image_remote_url_only),
@@ -273,6 +278,7 @@ export const LlmPage: Component = () => {
     void tab.form.llm_auth_type;
     void tab.form.llm_default_image_max_bytes;
     void tab.form.llm_max_tokens_field;
+    void tab.form.llm_reasoning_effort;
     void tab.form.llm_supports_tools;
     void tab.form.llm_supports_vision;
     void tab.form.llm_image_remote_url_only;
@@ -285,6 +291,7 @@ export const LlmPage: Component = () => {
     tab.setForm('llm_base_url', preset.llm_base_url);
     tab.setForm('llm_auth_type', preset.llm_auth_type);
     tab.setForm('llm_max_tokens_field', preset.llm_max_tokens_field);
+    tab.setForm('llm_reasoning_effort', preset.llm_reasoning_effort ?? 'medium');
     tab.setForm('llm_default_image_max_bytes', preset.llm_default_image_max_bytes);
     tab.setForm('llm_supports_tools', preset.llm_supports_tools);
     tab.setForm('llm_supports_vision', preset.llm_supports_vision);
@@ -304,6 +311,7 @@ export const LlmPage: Component = () => {
       ['llm_auth_type', t('llmAuthType') as string],
       ['llm_default_image_max_bytes', t('llmDefaultImageMaxBytes') as string],
       ['llm_max_tokens_field', t('llmMaxTokensField') as string],
+      ['llm_reasoning_effort', t('llmReasoningEffort') as string],
     ];
     const missing = requiredFields
       .filter(([key]) => typeof tab.form[key] === 'string' && !(tab.form[key] as string).trim())
@@ -339,12 +347,18 @@ export const LlmPage: Component = () => {
   return (
     <TabShell>
       <PageHeader title={t('navLlm') as string} description={t('sectionLlm') as string} />
+      <Show when={tab.loading()}>
+        <div class="px-5 pt-4">
+          <Banner kind="info" message={t('statusLoading') as string} />
+        </div>
+      </Show>
       <Show when={validationError() ?? tab.error()}>
         <div class="px-5 pt-4">
           <Banner kind="error" message={validationError() ?? tab.error() ?? undefined} />
         </div>
       </Show>
-      <div class="divide-y divide-[var(--color-border-subtle)] mt-2">
+      {/* Wait for the loaded baseline before accepting edits. */}
+      <fieldset class="min-w-0 border-0 p-0 m-0 mt-2 divide-y divide-[var(--color-border-subtle)]" disabled={tab.loading()} aria-busy={tab.loading()}>
         <StaticConfigBlock title={t('sectionLlm') as string}>
           <div class="flex flex-col gap-3 pt-2">
             <div class="flex flex-col gap-2">
@@ -448,6 +462,12 @@ export const LlmPage: Component = () => {
               }
             />
             <TextInput
+              label={t('llmReasoningEffort')}
+              placeholder={t('llmReasoningEffortPlaceholder') as string}
+              value={tab.form.llm_reasoning_effort}
+              onInput={(event) => tab.setForm('llm_reasoning_effort', event.currentTarget.value)}
+            />
+            <TextInput
               label={t('llmTimeout')}
               placeholder={t('llmTimeoutPlaceholder') as string}
               value={tab.form.llm_timeout_ms}
@@ -476,7 +496,7 @@ export const LlmPage: Component = () => {
             </div>
           </div>
         </CollapsibleConfigBlock>
-      </div>
+      </fieldset>
       <SavePanel
         dirty={tab.dirty()}
         saving={tab.saving()}

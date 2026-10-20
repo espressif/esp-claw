@@ -194,15 +194,15 @@ void lua_lvgl_record_release_events_locked(lua_lvgl_obj_record_t *record)
     if (!record) {
         return;
     }
-    /* The widget that owned these subs is in the process of being deleted
-     * (LV_EVENT_DELETE chain), so we deliberately do NOT call
-     * lv_obj_remove_event_cb_*: LVGL is already cleaning up its own
-     * callback list. */
+    /* Detach before freeing: borrowed objects can outlive the Lua session. */
     sub = record->events;
     record->events = NULL;
     while (sub) {
         lua_lvgl_event_sub_t *next = sub->next;
 
+        if (record->obj && lv_obj_is_valid(record->obj)) {
+            lv_obj_remove_event_cb_with_user_data(record->obj, lua_lvgl_event_trampoline, sub);
+        }
         sub->next = NULL;
         sub->record = NULL;
         if (sub->queued) {

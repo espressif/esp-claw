@@ -568,6 +568,8 @@ static int lua_lcd_device_get_info(lua_State *L)
 
 static int lua_lcd_new(lua_State *L)
 {
+    return luaL_error(L, "lua_module_lcd: raw hardware creation is not supported until resource ownership is integrated");
+
     lua_lcd_create_config_t cfg;
     spi_bus_config_t bus_cfg;
     esp_lcd_panel_io_spi_config_t io_cfg;

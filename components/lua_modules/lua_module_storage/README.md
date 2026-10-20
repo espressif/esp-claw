@@ -1,56 +1,42 @@
 # Lua Storage
 
-This module describes how to correctly use storage when writing Lua scripts.
+Filesystem access through `local storage = require("storage")`.
 
-## How to call
-- Import it with `local storage = require("storage")`
-- Call `storage.get_root_dir()` to get the storage root directory
-- Call `storage.join_path(...)` to join path segments with one `/`
-- Call `storage.exists(path)` to check whether a path exists
-- Call `storage.stat(path)` to get path metadata, or `nil, err` if it does not exist
-- Call `storage.mkdir(path)` to create a directory
-- Call `storage.write_file(path, content)` to write a file
-- Call `storage.read_file(path)` to read a file
-- Call `storage.listdir(path)` to list directory entries
-- Call `storage.remove(path)` to remove a file or empty directory
-- Call `storage.rename(old_path, new_path)` to rename or move a path
-- Call `storage.get_free_space()` to get `{ total, free, used }` bytes for the storage root
+## API
 
-## Return values
-- `storage.get_root_dir()` returns the DATA root path string.
-- `storage.join_path(...)` returns the joined path string.
-- `storage.exists(path)` returns a boolean.
-- `storage.stat(path)` returns `{ type, size, mtime, mode }` or `nil, err`.
-- `storage.listdir(path)` returns an array of entries. Each entry includes `name`, `type`, and, when available, `size`, `mtime`, and `mode`.
-- `storage.mkdir(path)`, `storage.write_file(path, content)`, `storage.remove(path)`, and `storage.rename(old_path, new_path)` return `true` on success.
-- `storage.read_file(path)` returns the file contents as a string.
-- `storage.get_free_space()` returns `{ total, free, used }`.
+| Function | Behavior / return value |
+| --- | --- |
+| `get_root_dir()` | Return the writable DATA root path. |
+| `join_path(...)` | Join path strings, ignoring empty components and duplicate separators between components. Does not resolve `..` or create directories. |
+| `exists(path)` | Return whether the path exists. |
+| `stat(path)` | Return `{ type, size, mtime, mode }`, or `nil, err, detail` on failure. |
+| `mkdir(path)` | Create a directory; return `true` on success. |
+| `write_file(path, content)` | Write file contents; return `true` on success. |
+| `read_file(path)` | Return file contents as a string. |
+| `listdir(path)` | Return entries with `name`, `type`, and, when available, `size`, `mtime`, and `mode`. |
+| `remove(path)` | Delete a file or empty directory; return `true` on success. |
+| `remove_tree(path)` | Recursively delete a DATA child path; return `true` if deleted or already missing, or `nil, detail` on failure. |
+| `rename(old_path, new_path)` | Rename or move a path; return `true` on success. |
+| `get_free_space()` | Return `{ total, free, used }` in bytes for DATA storage. |
 
-## Path joining
-- Prefer `storage.join_path(...)` whenever building a path from `storage.get_root_dir()` and child names.
-- Pass each path component as a separate string argument, for example `storage.join_path(root, "logs", "today.txt")`.
-- `join_path` removes duplicate separators between components, so `storage.join_path(storage.get_root_dir(), "/demo/", "test.txt")` returns `<storage_root>/demo/test.txt`.
-- Empty string components are ignored, so optional subdirectories can be passed directly when they may be empty.
-- The first component decides whether the result is absolute. Use `storage.get_root_dir()` as the first component for filesystem paths in this demo.
-- Do not put multiple logical components in one string when they can be separate arguments; `storage.join_path(root, "demo", filename)` is easier to audit than `storage.join_path(root, "demo/" .. filename)`.
-- `join_path` only joins strings. It does not create directories, validate that a path exists, or prevent `..` path traversal.
+## Removal and errors
+
+- `remove()` raises a Lua error on failure, including missing paths and non-empty directories. Use `pcall(storage.remove, path)` to handle it.
+- `remove_tree()` accepts only absolute descendants of DATA. The DATA root itself, `.`/`..`, repeated separators, and trailing separators are rejected. Paths must be shorter than 1024 bytes; directory depth is limited to 16 levels, including the target directory.
+- Recursive deletion may be partial on failure. Do not modify the target tree concurrently.
+- `detail` returned by `stat()` and `remove_tree()` contains `code`, `errno`, `operation`, `path`, and `message`. Invalid arguments may raise Lua errors instead.
 
 ## Example
+
 ```lua
 local storage = require("storage")
 
-local root = storage.get_root_dir()
-local dir = storage.join_path(root, "demo")
+local dir = storage.join_path(storage.get_root_dir(), "demo")
 local file = storage.join_path(dir, "test.txt")
-local log_file = storage.join_path(root, "logs", "today.txt")
 
 storage.mkdir(dir)
 storage.write_file(file, "hello")
-local text = storage.read_file(file)
-
-if storage.exists(file) then
-    local info = storage.stat(file)
-    local entries = storage.listdir(dir)
-    local space = storage.get_free_space()
-end
+print(storage.read_file(file))
+storage.remove(file)
+storage.remove(dir)
 ```

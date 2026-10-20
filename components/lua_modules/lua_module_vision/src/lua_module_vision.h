@@ -27,13 +27,24 @@ int luaopen_motion_detect(lua_State *L);
 
 #if CONFIG_LUA_MODULE_VISION_COLOR_DETECT
 /**
- * @brief Open the ESP-DL-backed color_detect Lua module.
+ * @brief Open the esp_vision_core-backed color_detect Lua module.
  *
  * @param L Lua VM state
  *
  * @return Number of Lua return values
  */
-int luaopen_color_detect_dl(lua_State *L);
+int luaopen_color_detect(lua_State *L);
+#endif
+
+#if CONFIG_LUA_MODULE_VISION_QRCODE_DETECT
+/**
+ * @brief Open the esp_vision_core-backed qrcode_detect Lua module.
+ *
+ * @param L Lua VM state
+ *
+ * @return Number of Lua return values
+ */
+int luaopen_qrcode_detect(lua_State *L);
 #endif
 
 /**

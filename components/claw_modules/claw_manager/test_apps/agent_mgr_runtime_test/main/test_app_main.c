@@ -1014,7 +1014,7 @@ TEST_CASE("root text submit returns response through manager facade",
     test_clear_captures();
 
     TEST_ASSERT_EQUAL(ESP_OK,
-                      claw_agent_mgr_submit_root_text("root hello",
+                      claw_agent_mgr_start_root_run_text("root hello",
                                                      "chat:root:facade",
                                                      0,
                                                      1000,

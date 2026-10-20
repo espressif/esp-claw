@@ -135,8 +135,8 @@ static esp_err_t audio_analyzer_capture_i16(audio_device_t *input, uint32_t fram
         free(in_buf);
         return ESP_FAIL;
     }
-    if (esp_codec_dev_read(input->codec_dev, in_buf, (int)in_bytes) != ESP_CODEC_DEV_OK) {
-        ESP_LOGE(TAG, "Analyzer codec read failed");
+    if (audio_device_read(input, in_buf, in_bytes, 0) != ESP_OK) {
+        ESP_LOGE(TAG, "Analyzer subscriber read failed");
         audio_converter_destroy(&converter);
         free(in_buf);
         return ESP_FAIL;

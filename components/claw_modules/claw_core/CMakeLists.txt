@@ -16,6 +16,7 @@ idf_component_register(
         "src/llm/claw_llm_http_transport.c"
         "src/llm/backends/claw_llm_backend_anthropic.c"
         "src/llm/backends/claw_llm_backend_openai_compatible.c"
+        "src/llm/backends/claw_llm_backend_openai_responses.c"
         "src/llm/backends/claw_llm_backend_custom.c"
         "src/llm/media/claw_media_pipeline.c"
     INCLUDE_DIRS

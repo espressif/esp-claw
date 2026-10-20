@@ -27,6 +27,7 @@ typedef struct {
     const char *auth_type;
     const char *model;
     const char *max_tokens_field;
+    const char *reasoning_effort;
     const char *default_image_max_bytes;
     const char *supports_tools;
     const char *supports_vision;
@@ -42,6 +43,7 @@ typedef struct {
     char base_url[CAP_LLM_CONFIG_STR_LEN];
     char custom_model[CAP_LLM_CONFIG_MODEL_LEN];
     char custom_token[CAP_LLM_CONFIG_STR_LEN];
+    char reasoning_effort[CAP_LLM_CONFIG_TIMEOUT_LEN];
 } cap_llm_config_parse_buf_t;
 
 static const cap_llm_preset_t s_presets[] = {
@@ -52,6 +54,7 @@ static const cap_llm_preset_t s_presets[] = {
         .auth_type = "bearer",
         .model = "deepseek-chat",
         .max_tokens_field = "max_completion_tokens",
+        .reasoning_effort = "medium",
         .default_image_max_bytes = "524288",
         .supports_tools = "true",
         .supports_vision = "true",
@@ -59,11 +62,12 @@ static const cap_llm_preset_t s_presets[] = {
     },
     {
         .id = "openai",
-        .backend_type = "openai_compatible",
+        .backend_type = "openai_responses",
         .base_url = "https://api.openai.com/v1",
         .auth_type = "bearer",
-        .model = "gpt-4o-mini",
-        .max_tokens_field = "max_completion_tokens",
+        .model = "gpt-5.6-sol",
+        .max_tokens_field = "max_output_tokens",
+        .reasoning_effort = "medium",
         .default_image_max_bytes = "524288",
         .supports_tools = "true",
         .supports_vision = "true",
@@ -76,6 +80,7 @@ static const cap_llm_preset_t s_presets[] = {
         .auth_type = "bearer",
         .model = "qwen-plus",
         .max_tokens_field = "max_tokens",
+        .reasoning_effort = "medium",
         .default_image_max_bytes = "524288",
         .supports_tools = "true",
         .supports_vision = "true",
@@ -88,6 +93,7 @@ static const cap_llm_preset_t s_presets[] = {
         .auth_type = "none",
         .model = "claude-3-5-haiku-latest",
         .max_tokens_field = "max_tokens",
+        .reasoning_effort = "medium",
         .default_image_max_bytes = "524288",
         .supports_tools = "true",
         .supports_vision = "true",
@@ -107,6 +113,7 @@ static const char *s_usage =
     "/llm model <model>\n"
     "/llm backend <backend>\n"
     "/llm base-url <base_url>\n"
+    "/llm reasoning <none|low|medium|high|xhigh|max>\n"
     "/llm reset\n";
 
 static bool is_space(char ch)
@@ -244,6 +251,9 @@ static void apply_preset(cap_llm_config_t *config, const cap_llm_preset_t *prese
     strlcpy(config->auth_type, preset->auth_type, sizeof(config->auth_type));
     strlcpy(config->model, preset->model, sizeof(config->model));
     strlcpy(config->max_tokens_field, preset->max_tokens_field, sizeof(config->max_tokens_field));
+    strlcpy(config->reasoning_effort,
+            preset->reasoning_effort ? preset->reasoning_effort : "medium",
+            sizeof(config->reasoning_effort));
     strlcpy(config->default_image_max_bytes,
             preset->default_image_max_bytes,
             sizeof(config->default_image_max_bytes));
@@ -299,11 +309,13 @@ static void write_status(const cap_llm_config_t *config, char *output, size_t ou
              "base_url: %s\n"
              "model: %s\n"
              "token: %s\n"
+             "reasoning: %s\n"
              "tools: %s vision: %s",
              config->backend_type[0] ? config->backend_type : "(missing)",
              config->base_url[0] ? config->base_url : "(missing)",
              config->model[0] ? config->model : "(missing)",
              masked,
+             config->reasoning_effort[0] ? config->reasoning_effort : "medium",
              config->supports_tools[0] ? config->supports_tools : "false",
              config->supports_vision[0] ? config->supports_vision : "false");
 }
@@ -565,7 +577,7 @@ static esp_err_t llm_config_execute(const char *input_json,
             goto cleanup;
         }
         if (!has_backend) {
-            strlcpy(output, "Usage: /llm backend <openai_compatible|anthropic_compatible>", output_size);
+            strlcpy(output, "Usage: /llm backend <openai_responses|openai_compatible|anthropic_compatible>", output_size);
             err = ESP_OK;
             goto cleanup;
         }
@@ -592,6 +604,35 @@ static esp_err_t llm_config_execute(const char *input_json,
         goto cleanup;
     }
 
+    if (strcmp(subcommand, "reasoning") == 0) {
+        bool has_effort = false;
+
+        err = read_token(&cursor,
+                         parse_buf->reasoning_effort,
+                         sizeof(parse_buf->reasoning_effort),
+                         &has_effort);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "reasoning effort parse failed: %s", esp_err_to_name(err));
+            goto cleanup;
+        }
+        if (!has_effort ||
+                (strcmp(parse_buf->reasoning_effort, "none") != 0 &&
+                 strcmp(parse_buf->reasoning_effort, "low") != 0 &&
+                 strcmp(parse_buf->reasoning_effort, "medium") != 0 &&
+                 strcmp(parse_buf->reasoning_effort, "high") != 0 &&
+                 strcmp(parse_buf->reasoning_effort, "xhigh") != 0 &&
+                 strcmp(parse_buf->reasoning_effort, "max") != 0)) {
+            strlcpy(output, "Usage: /llm reasoning <none|low|medium|high|xhigh|max>", output_size);
+            err = ESP_OK;
+            goto cleanup;
+        }
+        strlcpy(config->reasoning_effort,
+                parse_buf->reasoning_effort,
+                sizeof(config->reasoning_effort));
+        err = save_config(config, output, output_size);
+        goto cleanup;
+    }
+
     if (strcmp(subcommand, "test") == 0) {
         snprintf(output,
                  output_size,
@@ -610,6 +651,7 @@ static esp_err_t llm_config_execute(const char *input_json,
         config->base_url[0] = '\0';
         config->auth_type[0] = '\0';
         config->max_tokens_field[0] = '\0';
+        config->reasoning_effort[0] = '\0';
         config->supports_tools[0] = '\0';
         config->supports_vision[0] = '\0';
         config->image_remote_url_only[0] = '\0';

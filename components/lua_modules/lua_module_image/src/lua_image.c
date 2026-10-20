@@ -725,11 +725,14 @@ static int lua_module_image_resize(lua_State *L)
     lua_image_resize_filter_t filter;
     lua_image_format_t source_format;
     lua_image_format_t output_format;
+    const lua_image_buffer_t *direct;
     const lua_image_buffer_t *intermediate;
+    lua_image_source_t direct_src;
     lua_image_source_t intermediate_src;
     lua_image_view_t intermediate_view;
     lua_image_view_t output_view = {0};
     lua_image_frame_info_t info = {0};
+    int64_t timestamp_us = 0;
     const char *fourcc;
     esp_err_t err;
 
@@ -777,32 +780,36 @@ static int lua_module_image_resize(lua_State *L)
                           lua_image_format_name(output_format));
     }
 
-    /* Lift the source into the canonical intermediate format, caching it
-     * inside the source store so future calls (including convert / resize)
-     * skip the decode step. */
-    err = lua_image_store_require_format(source->store, output_format);
-    if (err != ESP_OK) {
-        return luaL_error(L, "image.resize source conversion failed: %s", esp_err_to_name(err));
-    }
-    intermediate = lua_image_store_get_buffer(source->store, output_format);
-    if (intermediate == NULL || !intermediate->valid || intermediate->data == NULL) {
-        return luaL_error(L, "image.resize intermediate buffer missing after conversion");
-    }
-    err = lua_image_source_from_buffer(intermediate, output_format, &intermediate_src);
-    if (err != ESP_OK) {
-        return luaL_error(L, "image.resize intermediate buffer borrow failed");
-    }
-    intermediate_view.data = intermediate_src.data;
-    intermediate_view.bytes = intermediate_src.bytes;
-    intermediate_view.width = intermediate_src.width;
-    intermediate_view.height = intermediate_src.height;
-    intermediate_view.format = output_format;
-    intermediate_view.owned = false;
-    strlcpy(intermediate_view.source_format, intermediate_src.source_format, sizeof(intermediate_view.source_format));
-
-    err = lua_image_resize_view(&intermediate_view, dst_width, dst_height, filter, &output_view);
-    if (err != ESP_OK) {
-        return luaL_error(L, "image.resize failed: %s", esp_err_to_name(err));
+    direct = lua_image_store_get_buffer(source->store, source_format);
+    if (lua_image_source_from_buffer(direct, source_format, &direct_src) == ESP_OK &&
+        lua_image_resize_ppa(&direct_src, output_format, dst_width, dst_height, filter, &output_view) == ESP_OK) {
+        timestamp_us = direct->info.timestamp_us;
+    } else {
+        /* Cache the canonical format used by the CPU fallback. */
+        err = lua_image_store_require_format(source->store, output_format);
+        if (err != ESP_OK) {
+            return luaL_error(L, "image.resize source conversion failed: %s", esp_err_to_name(err));
+        }
+        intermediate = lua_image_store_get_buffer(source->store, output_format);
+        if (intermediate == NULL || !intermediate->valid || intermediate->data == NULL) {
+            return luaL_error(L, "image.resize intermediate buffer missing after conversion");
+        }
+        err = lua_image_source_from_buffer(intermediate, output_format, &intermediate_src);
+        if (err != ESP_OK) {
+            return luaL_error(L, "image.resize intermediate buffer borrow failed");
+        }
+        intermediate_view.data = intermediate_src.data;
+        intermediate_view.bytes = intermediate_src.bytes;
+        intermediate_view.width = intermediate_src.width;
+        intermediate_view.height = intermediate_src.height;
+        intermediate_view.format = output_format;
+        intermediate_view.owned = false;
+        strlcpy(intermediate_view.source_format, intermediate_src.source_format, sizeof(intermediate_view.source_format));
+        err = lua_image_resize_view(&intermediate_view, dst_width, dst_height, filter, &output_view);
+        if (err != ESP_OK) {
+            return luaL_error(L, "image.resize failed: %s", esp_err_to_name(err));
+        }
+        timestamp_us = intermediate->info.timestamp_us;
     }
 
     fourcc = lua_image_format_fourcc(output_format);
@@ -813,7 +820,7 @@ static int lua_module_image_resize(lua_State *L)
     info.width = output_view.width;
     info.height = output_view.height;
     info.bytes = output_view.bytes;
-    info.timestamp_us = intermediate->info.timestamp_us;
+    info.timestamp_us = timestamp_us;
     strlcpy(info.pixel_format, fourcc, sizeof(info.pixel_format));
 
     err = lua_image_push_frame(L, output_view.data, output_view.bytes, &info, lua_image_free_owned_frame, NULL);

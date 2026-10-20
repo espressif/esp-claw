@@ -1,4 +1,3 @@
-local board_manager = require("board_manager")
 local camera = require("camera")
 local motion = require("motion_detect")
 
@@ -35,13 +34,14 @@ local function get_frame_or_fail()
     return frame_or_err
 end
 
-local camera_paths, path_err = board_manager.get_camera_paths()
-if not camera_paths then
-    print(TAG .. " SKIP: get_camera_paths failed: " .. tostring(path_err))
+local camera_devices = camera.list_devices()
+if #camera_devices == 0 then
+    print(TAG .. " SKIP: no capture video device available")
     return
 end
+local camera_path = camera_devices[1].path
 
-local opened, open_err = pcall(camera.open, camera_paths.dev_path)
+local opened, open_err = pcall(camera.open, camera_path)
 if not opened then
     print(TAG .. " SKIP: camera.open failed: " .. tostring(open_err))
     return

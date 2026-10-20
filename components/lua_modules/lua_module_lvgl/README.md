@@ -7,7 +7,7 @@ This document is an API guide for building LVGL UIs from Lua with the `lvgl` mod
 - Import the module with `local lvgl = require("lvgl")`.
 - Call `lvgl.init([opts])` before creating screens or widgets.
 - All widget operations are userdata methods. Use `btn:set_text("OK")`, not `lvgl.set_text(btn, "OK")`.
-- Only one Lua script can own the LVGL runtime at a time. Do not use `display.init(...)` and `lvgl.init(...)` together.
+- Only one Lua script can own the LVGL runtime at a time. Do not use `display.open(...)` and `lvgl.init(...)` together.
 - Call `lvgl.deinit()` before the script exits. The module also cleans up automatically if the owner script exits unexpectedly.
 - Object handles become invalid after `obj:delete()`, after a parent object is deleted, or after `lvgl.deinit()`.
 - After registering events, call `lvgl.run()` or repeatedly call `lvgl.process_events(...)`; otherwise Lua callbacks will not run.
@@ -61,9 +61,6 @@ Common `opts`:
 - `buffer_lines`: draw buffer height in lines, default `40`
 - `tick_ms`: LVGL tick period, default `5`
 - `task_period_ms`: LVGL handler task period, default `10`
-- `font_path`: default runtime font path, default `fonts/NotoSansSC-Regular-sub.ttf`; DATA is tried first, then SYSTEM
-- `font_size`: default runtime font size, default `24`
-- `font_cache_size`: default runtime font glyph cache size, default `LV_TINY_TTF_CACHE_GLYPH_CNT`
 
 Legacy scripts may still call `lvgl.init(panel_handle, io_handle, width, height, panel_if, opts)`. The positional display parameters are ignored; only `opts` is used.
 
@@ -83,24 +80,7 @@ lvgl.deinit() -> true
 
 ## Touch Input
 
-Register a touch panel as an LVGL input device:
-
-```lua
-local board_manager = require("board_manager")
-
-local touch_handle, err = board_manager.get_lcd_touch_handle("lcd_touch")
-if touch_handle then
-    lvgl.indev_register("touch", touch_handle) -- -> true
-end
-```
-
-Unregister it before shutdown when needed:
-
-```lua
-lvgl.indev_unregister("touch") -- -> removed
-```
-
-`indev_register("touch", ...)` does not take ownership of the touch handle. `indev_unregister("touch")` returns `true` only when a touch input device was actually removed.
+The board's LCD touch device is connected automatically. After `lvgl.init(...)`, widgets receive touch events without registering an input handle.
 
 ## Event Loop
 
@@ -236,34 +216,25 @@ bg_color = "#2f80ed"
 text_color = 0xffffff
 ```
 
-## Runtime TTF Fonts
+## Fonts
 
-By default, `lvgl.init()` tries to load `fonts/NotoSansSC-Regular-sub.ttf` as the runtime font and applies it to the root screen and every screen created with `lvgl.create_screen()`. If that font is unavailable, LVGL uses its built-in font. Set `font_size` per app when a different default text size is needed:
-
-```lua
-lvgl.init({
-    font_size = 22,
-})
-```
-
-When LVGL `tiny_ttf` is enabled, fonts can be loaded from the DATA root at
-runtime for per-object overrides:
+`lvgl.init()` does not load a font. Load a font explicitly, then apply it to individual controls or set it as the default:
 
 ```lua
-local storage = require("storage")
 local lvgl = require("lvgl")
 
-local font_path = storage.join_path(storage.get_root_dir(), "fonts/NotoSansSC-Regular.ttf")
-local font = lvgl.font_load(font_path, { size = 24, cache_size = 128 })
+local font = lvgl.font_load({ size = 24, cache_size = 128 })
+lvgl.set_default_font(font)
 label:set_style({ font = font })
 ```
 
-- `lvgl.font_load(path[, { size = 16, cache_size = LV_TINY_TTF_CACHE_GLYPH_CNT }])` -> font handle
+- `lvgl.font_load([path][, { size = 16, cache_size = ... }])` -> font handle
+- `lvgl.set_default_font(font | nil)` -> true; applies to the current root screen and subsequently created screens
 - `font:set_size(px)` -> true
 - `font:is_valid()` -> boolean
 - `font:delete()` -> true
 
-`lvgl.init({ font_path = ... })` resolves the path from DATA first, then SYSTEM. `lvgl.font_load(path[, opts])` only accepts a DATA-relative path, a `D:/...` LVGL filesystem path, or an absolute path under the DATA root. Runtime font files must remain available while any LVGL object uses them.
+Without `path`, `lvgl.font_load()` uses `fonts/NotoSansSC-Regular-sub.ttf`. Passing `nil` to `lvgl.set_default_font()` restores the built-in font. An explicit `font` style on a control overrides the default font.
 
 ## EAF Animation
 
@@ -326,6 +297,13 @@ Common `align` names:
 `top_left`, `top_mid`, `top`, `top_right`, `bottom_left`, `bottom_mid`,
 `bottom`, `bottom_right`, `left_mid`, `left`, `right_mid`, `right`,
 `center`, `centre`, `default`
+
+## Object Flags And Order
+
+- `obj:add_flag(name)` / `obj:clear_flag(name)` -> true. Supported names: `CLICKABLE`, `PRESS_LOCK`, `SCROLLABLE`, `HIDDEN` (case-sensitive).
+- `obj:move_foreground()` -> true. Moves the object above its siblings; screens have no parent and raise an error.
+
+Use `PRESS_LOCK` on hold controls to keep receiving release events when a finger leaves the control. Clear `CLICKABLE` on decorative widgets so they do not intercept touches. `HIDDEN` disables drawing and hit testing without deleting the object. These methods raise errors for unsupported flags or invalid/deleted handles.
 
 ## Layout And Scrolling
 
@@ -397,6 +375,11 @@ Basic methods:
 - `bar/slider/arc/scale/dropdown/roller/checkbox/switch/spinbox:get_value()`
 - `bar/slider/arc/scale/spinbox:set_range(min, max)`
 - `screen:load()`
+- `image:set_raw_rgb565(width, height, data[, opts])` -> true
+- `image:set_raw_argb8888(width, height, data)` -> true
+- `image:set_pivot(x, y)` -> true
+- `image:set_rotation(angle)` -> true
+- `line:set_points({{x=0,y=0}, {x=20,y=20}, ...})` -> true
 - `list:add_text(text)` -> `list_text`
 - `list:add_button(text[, symbol])` -> `list_button`
 - `table:set_cell(row, col, text)`
@@ -489,16 +472,37 @@ Basic methods:
 
 `lvgl.demo(name)` requires an initialized LVGL runtime. Available demo names depend on firmware LVGL demo build flags.
 
+## Raw Images And Dynamic Lines
+
+Raw image setters accept tightly packed pixel strings. RGB565 uses little-endian bytes by default; `{swapped=true}` accepts big-endian RGB565. ARGB8888 uses B, G, R, A byte order. The string length must equal `width * height * bytes_per_pixel`. Dimensions must be positive integers; height is limited to 65535 pixels, and maximum width depends on pixel format and firmware. Oversized images raise an error.
+
+Uploads replace the previous source. Argument, allocation, or unsupported-format errors leave the previous image intact. Lua strings and image frames may be released immediately after upload.
+
+`set_rotation(angle)` accepts an integer in tenths of a degree, clockwise, normalized modulo 3600. `set_pivot(x, y)` uses pixel coordinates. Pivot and line coordinates must be integers in `[-32768, 32767]`. Image rotation requires firmware draw support for its color format.
+
+Use `image` to load and convert a JPEG before displaying it:
+
+```lua
+local image = require("image")
+local source <close> = image.load_file(path)
+local cover <close> = image.resize(source, { width = 148, height = 148, format = image.RGB565 })
+local picture = lvgl.image(scr, { w = 148, h = 148 })
+picture:set_raw_rgb565(148, 148, cover:data())
+picture:set_pivot(74, 74)
+picture:set_rotation(450)
+```
+
+Line construction and `set_points()` accept 2–1024 point tables; omitted coordinates default to zero. Invalid arguments leave the previous line unchanged and raise a Lua error. Calls on deleted objects also raise an error.
+
 ## Limitations
 
-- Encoder/keypad indevs are not exposed yet.
+- Encoder and keypad input are not available.
 - Some widgets and demos depend on LVGL `LV_USE_*` build flags; disabled entries raise a Lua error such as `not enabled in firmware`.
 - `lvgl.font_load(...)` requires LVGL `tiny_ttf` support.
 - Image decoders and general filesystem setup are not wrapped.
-- `lvgl.image(...)` and `lvgl.imagebutton(...)` only pass string `src` values
-  to LVGL. Whether those strings load depends on firmware FS/decoder setup.
-- Canvas support covers buffer allocation, background fill, and pixel read/write only. Advanced draw layers are not wrapped.
+- Constructor `src` and `imagebutton:set_src(...)` pass string sources to LVGL; loading them depends on firmware FS/decoder setup. `image` raw setters bypass file decoding.
+- Canvas supports background fill, pixel read/write, and RGB565 pixel uploads. Advanced drawing layers are not available.
 - Chart cursors and other advanced chart APIs are not wrapped.
-- Span handles and chart series handles are not LVGL objects; they do not support object base methods such as `set_pos`, `set_style`, or `delete`.
+- Span and chart series handles support only their documented methods, not general widget methods such as `set_pos`.
 - Non-ASCII text rendering depends on either firmware-enabled fonts or a
   runtime TTF font applied with `font`.

@@ -1,5 +1,5 @@
-import { createSignal } from 'solid-js';
-import { createStore } from 'solid-js/store';
+import { batch, createSignal } from 'solid-js';
+import { createStore, reconcile } from 'solid-js/store';
 import {
   fetchCapabilities,
   fetchConfigGroups,
@@ -13,15 +13,56 @@ import {
   type StatusInfo,
 } from '../api/client';
 
+import { t } from '../i18n';
+import { pushToast } from './toast';
+
 /* ── Runtime status ─────────────────────────────────────────────────── */
 
 const [status, setStatus] = createSignal<StatusInfo | null>(null);
 export const appStatus = status;
 
-export async function reloadStatus() {
-  const next = await fetchStatus();
-  setStatus(next);
-  return next;
+const [connected, setConnected] = createSignal(false);
+const [generation, setGeneration] = createSignal(0);
+const [configError, setConfigError] = createSignal(false);
+export const deviceConnected = connected;
+export const configGeneration = generation;
+export const configSyncError = configError;
+let statusRequest: Promise<StatusInfo> | undefined;
+
+export function reloadStatus(): Promise<StatusInfo> {
+  if (statusRequest) return statusRequest;
+  statusRequest = fetchStatus(AbortSignal.timeout(4000))
+    .then((next) => {
+      const restarted = status() !== null && status()!.boot_id !== next.boot_id;
+      batch(() => {
+        setStatus(next);
+        setConnected(true);
+        if (restarted) invalidateConfig();
+      });
+      if (restarted) pushToast(t('deviceRestarted'), 'info', 8000);
+      return next;
+    })
+    .catch((err) => {
+      setConnected(false);
+      throw err;
+    })
+    .finally(() => {
+      statusRequest = undefined;
+    });
+  return statusRequest;
+}
+
+// Remount page state and reject responses belonging to an earlier device lifetime.
+export function invalidateConfig() {
+  batch(() => {
+    pending.clear();
+    setConfigStore(reconcile({}));
+    setLoadedGroups(new Set<ConfigGroup>());
+    setConfigError(false);
+    setCapabilities([]);
+    setLuaModules([]);
+    setGeneration((value) => value + 1);
+  });
 }
 
 /* ── Capabilities & Lua modules ─────────────────────────────────────── */
@@ -32,14 +73,16 @@ export const appCapabilities = capabilities;
 export const appLuaModules = luaModules;
 
 export async function reloadCapabilities() {
+  const version = generation();
   const items = await fetchCapabilities();
-  setCapabilities(items);
+  if (version === generation()) setCapabilities(items);
   return items;
 }
 
 export async function reloadLuaModules() {
+  const version = generation();
   const items = await fetchLuaModules();
-  setLuaModules(items);
+  if (version === generation()) setLuaModules(items);
   return items;
 }
 
@@ -61,32 +104,32 @@ export async function ensureConfigGroups(groups: ConfigGroup[]): Promise<void> {
   const missing = Array.from(new Set(groups.filter((group) => !loadedGroups().has(group))));
   if (missing.length === 0) return;
 
-  const alreadyPending = missing.filter((group) => pending.has(group));
   const toFetch = missing.filter((group) => !pending.has(group));
 
   if (toFetch.length > 0) {
-    const task = fetchConfigGroups(toFetch).then((data) => {
-      setConfigStore(data as Partial<AppConfig>);
-      setLoadedGroups((prev) => {
-        const next = new Set(prev);
-        toFetch.forEach((group) => next.add(group));
-        return next;
-      });
+    const task = reloadConfigGroups(toFetch).finally(() => {
+      for (const group of toFetch) {
+        if (pending.get(group) === task) pending.delete(group);
+      }
     });
-    for (const group of toFetch) {
-      const cleanup = task.finally(() => pending.delete(group));
-      pending.set(group, cleanup);
-    }
+    for (const group of toFetch) pending.set(group, task);
   }
 
   await Promise.all(missing.map((group) => pending.get(group)).filter(Boolean) as Promise<void>[]);
-  void alreadyPending;
 }
 
 /** Force-reload a set of groups, bypassing the cache. */
 export async function reloadConfigGroups(groups: ConfigGroup[]): Promise<void> {
   if (groups.length === 0) return;
-  const data = await fetchConfigGroups(groups);
+  const version = generation();
+  let data: Partial<AppConfig>;
+  try {
+    data = await fetchConfigGroups(groups);
+  } catch (err) {
+    if (version === generation()) setConfigError(true);
+    throw err;
+  }
+  if (version !== generation()) throw new Error(t('deviceRestarted'));
   setConfigStore(data as Partial<AppConfig>);
   setLoadedGroups((prev) => {
     const next = new Set(prev);
@@ -95,13 +138,12 @@ export async function reloadConfigGroups(groups: ConfigGroup[]): Promise<void> {
   });
 }
 
-/** Apply a locally-known patch to the cache after a successful save. */
-export function patchConfigLocal(patch: Partial<AppConfig>) {
-  setConfigStore(patch);
-}
-
 export async function saveConfig(patch: Partial<AppConfig>) {
+  const version = generation();
+  await reloadStatus();
+  if (version !== generation() || configError()) throw new Error(t('configSyncFailed'));
   const result = await saveConfigPatch(patch);
+  if (version !== generation()) throw new Error(t('deviceRestarted'));
   setConfigStore(patch);
   return result;
 }

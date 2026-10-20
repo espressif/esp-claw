@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "app_store",
+  "display_name": "App Store",
+  "entry": "scripts/app_store.lua",
+  "args": {},
+  "icon": "assets/icon.jpg",
+  "catalog": {
+    "description": "设备上的应用商店：浏览应用、查看详情、后台安装与卸载，支持资源子目录。",
+    "author": "ESP-Claw contributor",
+    "simulator": false,
+    "category": ["utility", "network"],
+    "tags": ["store", "installer"],
+    "peripherals": ["display"]
+  }
+}

@@ -11,8 +11,10 @@
 #include <string.h>
 
 #include "cap_lua.h"
+#include "cap_lua_hw.h"
 #include "driver/pulse_cnt.h"
 #include "esp_err.h"
+#include "esp_check.h"
 #include "esp_log.h"
 #include "lauxlib.h"
 
@@ -23,12 +25,19 @@
 static const char *TAG = "lua_driver_pcnt";
 
 typedef struct {
+    pcnt_channel_handle_t handle;
+    cap_lua_hw_lease_t lease;
+    int gpios[2];
+} lua_driver_pcnt_channel_t;
+
+typedef struct {
     pcnt_unit_handle_t unit;
-    pcnt_channel_handle_t *channels;
+    lua_driver_pcnt_channel_t *channels;
     size_t channel_count;
     size_t channel_capacity;
     bool enabled;
     bool running;
+    bool closing;
 } lua_driver_pcnt_ud_t;
 
 typedef struct {
@@ -43,7 +52,7 @@ static lua_driver_pcnt_ud_t *lua_driver_pcnt_get_ud(lua_State *L, int idx)
 {
     lua_driver_pcnt_ud_t *ud =
         (lua_driver_pcnt_ud_t *)luaL_checkudata(L, idx, LUA_DRIVER_PCNT_METATABLE);
-    if (!ud || !ud->unit) {
+    if (!ud || !ud->unit || ud->closing) {
         luaL_error(L, "pcnt: invalid or closed unit");
     }
     return ud;
@@ -183,120 +192,91 @@ static void lua_driver_pcnt_resolve_channel_config(lua_State *L,
         lua_driver_pcnt_get_level_action_field(L, table_idx, "low_level", "keep");
 }
 
-static esp_err_t lua_driver_pcnt_append_channel(lua_driver_pcnt_ud_t *ud, pcnt_channel_handle_t channel)
-{
-    if (ud->channel_count == ud->channel_capacity) {
-        size_t new_capacity = ud->channel_capacity == 0 ? 2 : ud->channel_capacity * 2;
-        pcnt_channel_handle_t *new_channels = (pcnt_channel_handle_t *)realloc(ud->channels, new_capacity * sizeof(*new_channels));
-        if (!new_channels) {
-            ESP_LOGE(TAG, "Failed to grow PCNT channel list");
-            return ESP_ERR_NO_MEM;
-        }
-        ud->channels = new_channels;
-        ud->channel_capacity = new_capacity;
-    }
-
-    // Keep created channels so close/gc can release them later.
-    ud->channels[ud->channel_count++] = channel;
-    return ESP_OK;
-}
-
 static esp_err_t lua_driver_pcnt_destroy(lua_driver_pcnt_ud_t *ud)
 {
-    esp_err_t first_err = ESP_OK;
-    esp_err_t err;
-
-    if (!ud) {
-        return ESP_OK;
-    }
-
-    if (ud->running && ud->unit) {
-        err = pcnt_unit_stop(ud->unit);
-        if (first_err == ESP_OK && err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to stop PCNT unit during destroy: %s", esp_err_to_name(err));
-            first_err = err;
-        }
+    if (!ud) return ESP_OK;
+    ud->closing = true;
+    if (ud->running) {
+        ESP_RETURN_ON_ERROR(pcnt_unit_stop(ud->unit), TAG, "stop unit failed");
         ud->running = false;
     }
-
-    if (ud->enabled && ud->unit) {
-        err = pcnt_unit_disable(ud->unit);
-        if (first_err == ESP_OK && err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to disable PCNT unit during destroy: %s", esp_err_to_name(err));
-            first_err = err;
-        }
+    if (ud->enabled) {
+        ESP_RETURN_ON_ERROR(pcnt_unit_disable(ud->unit), TAG, "disable unit failed");
         ud->enabled = false;
     }
-
     for (size_t i = 0; i < ud->channel_count; ++i) {
-        if (ud->channels[i]) {
-            err = pcnt_del_channel(ud->channels[i]);
-            if (first_err == ESP_OK && err != ESP_OK) {
-                ESP_LOGE(TAG, "Failed to delete PCNT channel during destroy: %s", esp_err_to_name(err));
-                first_err = err;
-            }
-            ud->channels[i] = NULL;
+        if (ud->channels[i].handle) {
+            ESP_RETURN_ON_ERROR(pcnt_del_channel(ud->channels[i].handle), TAG, "delete channel failed");
+            ud->channels[i].handle = NULL;
         }
     }
-    ud->channel_count = 0;
-    ud->channel_capacity = 0;
-    free(ud->channels);
-    ud->channels = NULL;
-
     if (ud->unit) {
-        err = pcnt_del_unit(ud->unit);
-        if (first_err == ESP_OK && err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to delete PCNT unit during destroy: %s", esp_err_to_name(err));
-            first_err = err;
-        }
+        ESP_RETURN_ON_ERROR(pcnt_del_unit(ud->unit), TAG, "delete unit failed");
         ud->unit = NULL;
     }
-
-    return first_err;
+    for (size_t i = 0; i < ud->channel_count; ++i) {
+        ESP_RETURN_ON_ERROR(cap_lua_hw_release(&ud->channels[i].lease), TAG, "release GPIO failed");
+    }
+    free(ud->channels);
+    ud->channels = NULL;
+    ud->channel_count = ud->channel_capacity = 0;
+    return ESP_OK;
 }
 
-static esp_err_t lua_driver_pcnt_add_channel_from_table(lua_State *L,
-                                                        lua_driver_pcnt_ud_t *ud,
-                                                        int table_idx)
+static bool lua_driver_pcnt_owns_gpio(lua_driver_pcnt_ud_t *ud, int gpio)
 {
-    lua_driver_pcnt_channel_config_t resolved_config;
-    lua_driver_pcnt_resolve_channel_config(L, table_idx, &resolved_config);
-
-    if (ud->enabled) {
-        return ESP_ERR_INVALID_STATE;
+    for (size_t i = 0; i < ud->channel_count; ++i) {
+        if (ud->channels[i].gpios[0] == gpio || ud->channels[i].gpios[1] == gpio) return true;
     }
+    return false;
+}
 
-    pcnt_channel_handle_t channel = NULL;
-    esp_err_t err = pcnt_new_channel(ud->unit, &resolved_config.chan_config, &channel);
+static esp_err_t lua_driver_pcnt_add_channel_from_table(lua_State *L, lua_driver_pcnt_ud_t *ud, int table_idx)
+{
+    lua_driver_pcnt_channel_config_t config;
+    lua_driver_pcnt_resolve_channel_config(L, table_idx, &config);
+    if (ud->enabled) return ESP_ERR_INVALID_STATE;
+    if (ud->channel_count == ud->channel_capacity) {
+        if (ud->channel_capacity > SIZE_MAX / (2 * sizeof(*ud->channels))) return ESP_ERR_NO_MEM;
+        size_t capacity = ud->channel_capacity ? ud->channel_capacity * 2 : 2;
+        void *channels = realloc(ud->channels, capacity * sizeof(*ud->channels));
+        if (!channels) return ESP_ERR_NO_MEM;
+        ud->channels = channels;
+        ud->channel_capacity = capacity;
+    }
+    lua_driver_pcnt_channel_t *channel = &ud->channels[ud->channel_count];
+    memset(channel, 0, sizeof(*channel));
+    channel->gpios[0] = config.chan_config.edge_gpio_num;
+    channel->gpios[1] = config.chan_config.level_gpio_num;
+    char edge_key[CLAW_HW_KEY_SIZE], level_key[CLAW_HW_KEY_SIZE];
+    const char *keys[2];
+    size_t count = 0;
+    if (channel->gpios[0] >= 0 && !lua_driver_pcnt_owns_gpio(ud, channel->gpios[0])) {
+        keys[count++] = claw_hw_key_gpio(edge_key, sizeof(edge_key), channel->gpios[0]);
+    }
+    if (channel->gpios[1] >= 0 && channel->gpios[1] != channel->gpios[0] && !lua_driver_pcnt_owns_gpio(ud, channel->gpios[1])) {
+        keys[count++] = claw_hw_key_gpio(level_key, sizeof(level_key), channel->gpios[1]);
+    }
+    esp_err_t err = count ? cap_lua_hw_claim(L, &channel->lease, "lua/pcnt", keys, count) : ESP_OK;
+    if (err != ESP_OK) return err;
+    /* Retain the slot before SDK calls so failed cleanup remains reachable. */
+    ++ud->channel_count;
+    err = pcnt_new_channel(ud->unit, &config.chan_config, &channel->handle);
+    if (err == ESP_OK) err = pcnt_channel_set_edge_action(channel->handle, config.pos_edge, config.neg_edge);
+    if (err == ESP_OK) err = pcnt_channel_set_level_action(channel->handle, config.high_level, config.low_level);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to create PCNT channel: %s", esp_err_to_name(err));
-        return err;
+        esp_err_t cleanup = channel->handle ? pcnt_del_channel(channel->handle) : ESP_OK;
+        if (cleanup == ESP_OK) {
+            channel->handle = NULL;
+            cleanup = cap_lua_hw_release(&channel->lease);
+        }
+        if (cleanup == ESP_OK) --ud->channel_count;
+        else {
+            ud->closing = true;
+            ESP_LOGE(TAG, "channel rollback retained: %s", esp_err_to_name(cleanup));
+        }
     }
-
-    err = pcnt_channel_set_edge_action(channel,
-                                       resolved_config.pos_edge,
-                                       resolved_config.neg_edge);
-    if (err != ESP_OK) {
-        pcnt_del_channel(channel);
-        ESP_LOGE(TAG, "Failed to set PCNT edge action: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    err = pcnt_channel_set_level_action(channel,
-                                        resolved_config.high_level,
-                                        resolved_config.low_level);
-    if (err != ESP_OK) {
-        pcnt_del_channel(channel);
-        ESP_LOGE(TAG, "Failed to set PCNT level action: %s", esp_err_to_name(err));
-        return err;
-    }
-
-    err = lua_driver_pcnt_append_channel(ud, channel);
-    if (err != ESP_OK) {
-        pcnt_del_channel(channel);
-        return err;
-    }
-    return ESP_OK;
+    return err;
 }
 
 static int lua_driver_pcnt_add_channel(lua_State *L)
@@ -323,10 +303,6 @@ static int lua_driver_pcnt_new(lua_State *L)
         L, 1, "high_limit", LUA_DRIVER_PCNT_DEFAULT_HIGH_LIMIT);
     bool accum_count = lua_driver_pcnt_get_bool_field(L, 1, "accum_count", false);
     bool has_channel_config = lua_driver_pcnt_table_has_channel_config(L, 1);
-    lua_driver_pcnt_channel_config_t initial_channel_config;
-    if (has_channel_config) {
-        lua_driver_pcnt_resolve_channel_config(L, 1, &initial_channel_config);
-    }
 
     bool has_glitch_filter = false;
     uint32_t glitch_ns = 0;
@@ -378,35 +354,15 @@ static int lua_driver_pcnt_new(lua_State *L)
         };
         err = pcnt_unit_set_glitch_filter(ud->unit, &filter_config);
         if (err != ESP_OK) {
-            lua_driver_pcnt_destroy(ud);
+            (void)lua_driver_pcnt_destroy(ud);
             return luaL_error(L, "pcnt set glitch filter failed: %s", esp_err_to_name(err));
         }
     }
 
     if (has_channel_config) {
-        pcnt_channel_handle_t channel = NULL;
-        err = pcnt_new_channel(ud->unit, &initial_channel_config.chan_config, &channel);
-        if (err == ESP_OK) {
-            err = pcnt_channel_set_edge_action(channel,
-                                               initial_channel_config.pos_edge,
-                                               initial_channel_config.neg_edge);
-        }
-        if (err == ESP_OK) {
-            err = pcnt_channel_set_level_action(channel,
-                                                initial_channel_config.high_level,
-                                                initial_channel_config.low_level);
-        }
+        err = lua_driver_pcnt_add_channel_from_table(L, ud, 1);
         if (err != ESP_OK) {
-            if (channel) {
-                pcnt_del_channel(channel);
-            }
-            lua_driver_pcnt_destroy(ud);
-            return luaL_error(L, "pcnt add initial channel failed: %s", esp_err_to_name(err));
-        }
-        err = lua_driver_pcnt_append_channel(ud, channel);
-        if (err != ESP_OK) {
-            pcnt_del_channel(channel);
-            lua_driver_pcnt_destroy(ud);
+            (void)lua_driver_pcnt_destroy(ud);
             return luaL_error(L, "pcnt add initial channel failed: %s", esp_err_to_name(err));
         }
     }

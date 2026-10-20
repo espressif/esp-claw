@@ -11,7 +11,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#include "claw_skill.h"
+#include "app_registry.h"
 #include "esp_check.h"
 #include "esp_jpeg_dec.h"
 #include "esp_log.h"
@@ -308,7 +308,7 @@ static esp_err_t system_ui_launcher_load_app_icon(system_ui_launcher_app_t *app,
 static int system_ui_launcher_compare_app(const system_ui_launcher_app_t *a, const system_ui_launcher_app_t *b)
 {
     if (a->order != b->order) {
-        return a->order - b->order;
+        return a->order < b->order ? -1 : 1;
     }
     return strcmp(a->title, b->title);
 }
@@ -325,46 +325,48 @@ static void system_ui_launcher_insert_app_sorted(system_ui_launcher_app_t *app)
     s_ui.launcher_app_count++;
 }
 
-static esp_err_t system_ui_launcher_add_skill_entry(const claw_skill_catalog_entry_t *entry, void *user_ctx)
+static esp_err_t system_ui_launcher_add_entry(const app_registry_entry_t *entry, void *user_ctx)
 {
     system_ui_launcher_app_t *app = NULL;
+    const char *title;
 
     (void)user_ctx;
 
-    if (!entry || !entry->execution || !entry->execution->visible) {
+    if (!entry || !entry->visible) {
         return ESP_OK;
     }
     if (s_ui.launcher_app_count >= SYSTEM_UI_LAUNCHER_MAX_APPS) {
         ESP_LOGW(SYSTEM_UI_TAG, "skip launcher app: capacity reached");
         return ESP_OK;
     }
-    if (!entry->id || !entry->id[0] || !entry->execution->entry || !system_ui_launcher_action_is_valid(entry->execution->entry)) {
-        ESP_LOGW(SYSTEM_UI_TAG, "skip invalid launcher execution: id=%s", entry && entry->id ? entry->id : "(null)");
+    title = entry->display_name ? entry->display_name : entry->app_id;
+    if (!entry->app_id || !entry->app_id[0] || !title || !title[0] || !entry->entry || !system_ui_launcher_action_is_valid(entry->entry)) {
+        ESP_LOGW(SYSTEM_UI_TAG, "skip invalid launcher entry: id=%s", entry && entry->app_id ? entry->app_id : "(null)");
         return ESP_OK;
     }
-    if (entry->execution->icon && !system_ui_launcher_icon_path_is_valid(entry->execution->icon)) {
-        ESP_LOGW(SYSTEM_UI_TAG, "ignore invalid launcher icon: id=%s", entry->id);
+    if (entry->icon && !system_ui_launcher_icon_path_is_valid(entry->icon)) {
+        ESP_LOGW(SYSTEM_UI_TAG, "ignore invalid launcher icon: id=%s", entry->app_id);
     }
 
     app = calloc(1, sizeof(*app));
     ESP_RETURN_ON_FALSE(app != NULL, ESP_ERR_NO_MEM, SYSTEM_UI_TAG, "alloc launcher app failed");
 
-    if (strlcpy(app->id, entry->id, sizeof(app->id)) >= sizeof(app->id) ||
-            strlcpy(app->title, entry->id, sizeof(app->title)) >= sizeof(app->title) ||
-            strlcpy(app->action, entry->execution->entry, sizeof(app->action)) >= sizeof(app->action)) {
-        ESP_LOGW(SYSTEM_UI_TAG, "skip launcher app with long fields: id=%s", entry->id);
+    if (strlcpy(app->id, entry->app_id, sizeof(app->id)) >= sizeof(app->id) ||
+            strlcpy(app->title, title, sizeof(app->title)) >= sizeof(app->title) ||
+            strlcpy(app->action, entry->entry, sizeof(app->action)) >= sizeof(app->action)) {
+        ESP_LOGW(SYSTEM_UI_TAG, "skip launcher app with long fields: id=%s", entry->app_id);
         free(app);
         return ESP_OK;
     }
-    app->order = entry->execution->order;
-    if (entry->execution->args_json && strlcpy(app->args_json, entry->execution->args_json, sizeof(app->args_json)) >= sizeof(app->args_json)) {
-        ESP_LOGW(SYSTEM_UI_TAG, "skip launcher app with long args: id=%s", entry->id);
+    app->order = entry->order;
+    if (entry->args_json && strlcpy(app->args_json, entry->args_json, sizeof(app->args_json)) >= sizeof(app->args_json)) {
+        ESP_LOGW(SYSTEM_UI_TAG, "skip launcher app with long args: id=%s", entry->app_id);
         free(app);
         return ESP_OK;
     }
-    if (entry->execution->icon && system_ui_launcher_icon_path_is_valid(entry->execution->icon)) {
-        if (strlcpy(app->icon_path, entry->execution->icon, sizeof(app->icon_path)) >= sizeof(app->icon_path)) {
-            ESP_LOGW(SYSTEM_UI_TAG, "ignore long launcher icon path: id=%s", entry->id);
+    if (entry->icon && system_ui_launcher_icon_path_is_valid(entry->icon)) {
+        if (strlcpy(app->icon_path, entry->icon, sizeof(app->icon_path)) >= sizeof(app->icon_path)) {
+            ESP_LOGW(SYSTEM_UI_TAG, "ignore long launcher icon path: id=%s", entry->app_id);
             app->icon_path[0] = '\0';
         }
     }
@@ -381,13 +383,13 @@ esp_err_t system_ui_launcher_load_locked(void)
     s_ui.launcher_page_count = 0;
     system_ui_launcher_set_default_layout();
 
-    ret = claw_skill_foreach_catalog_entry(system_ui_launcher_add_skill_entry, NULL);
+    ret = app_registry_foreach(system_ui_launcher_add_entry, NULL);
     if (ret == ESP_ERR_INVALID_STATE) {
-        ESP_LOGI(SYSTEM_UI_TAG, "launcher deferred: skill registry not ready");
+        ESP_LOGI(SYSTEM_UI_TAG, "launcher registry not ready");
         system_ui_launcher_ensure_page_count();
         return ESP_OK;
     }
-    ESP_RETURN_ON_ERROR(ret, SYSTEM_UI_TAG, "load launcher skills failed");
+    ESP_RETURN_ON_ERROR(ret, SYSTEM_UI_TAG, "load launcher entries failed");
 
     system_ui_launcher_ensure_page_count();
     ESP_LOGI(SYSTEM_UI_TAG, "loaded %u launcher apps in %u pages",

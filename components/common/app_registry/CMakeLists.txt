@@ -1,0 +1,9 @@
+idf_component_register(
+    SRCS
+        "src/app_registry.c"
+    INCLUDE_DIRS
+        "include"
+    REQUIRES
+        freertos
+        espressif__cjson
+)

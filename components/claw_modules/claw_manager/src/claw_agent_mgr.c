@@ -112,6 +112,7 @@ typedef struct {
     char *base_url;
     char *auth_type;
     char *max_tokens_field;
+    char *reasoning_effort;
     char *system_prompt;
     char *root_agent_system_prompt;
     char *subagent_system_prompt;
@@ -173,6 +174,7 @@ static void claw_agent_mgr_free_config_storage(void)
     free(s_mgr.base_url);
     free(s_mgr.auth_type);
     free(s_mgr.max_tokens_field);
+    free(s_mgr.reasoning_effort);
     free(s_mgr.system_prompt);
     s_mgr.api_key = NULL;
     s_mgr.backend_type = NULL;
@@ -180,6 +182,7 @@ static void claw_agent_mgr_free_config_storage(void)
     s_mgr.base_url = NULL;
     s_mgr.auth_type = NULL;
     s_mgr.max_tokens_field = NULL;
+    s_mgr.reasoning_effort = NULL;
     s_mgr.system_prompt = NULL;
     claw_agent_mgr_free_prompt_config();
 }
@@ -333,9 +336,10 @@ static esp_err_t claw_agent_mgr_copy_core_config(const claw_core_config_t *confi
     s_mgr.base_url = claw_agent_mgr_strdup(config->base_url ? config->base_url : "");
     s_mgr.auth_type = claw_agent_mgr_strdup(config->auth_type ? config->auth_type : "");
     s_mgr.max_tokens_field = claw_agent_mgr_strdup(config->max_tokens_field ? config->max_tokens_field : "");
+    s_mgr.reasoning_effort = claw_agent_mgr_strdup(config->reasoning_effort ? config->reasoning_effort : "");
     s_mgr.system_prompt = claw_agent_mgr_strdup(config->system_prompt);
     if (!s_mgr.api_key || !s_mgr.backend_type || !s_mgr.model ||
-            !s_mgr.base_url || !s_mgr.auth_type || !s_mgr.max_tokens_field ||
+            !s_mgr.base_url || !s_mgr.auth_type || !s_mgr.max_tokens_field || !s_mgr.reasoning_effort ||
             !s_mgr.system_prompt) {
         return ESP_ERR_NO_MEM;
     }
@@ -347,6 +351,7 @@ static esp_err_t claw_agent_mgr_copy_core_config(const claw_core_config_t *confi
     s_mgr.core_config.base_url = s_mgr.base_url;
     s_mgr.core_config.auth_type = s_mgr.auth_type;
     s_mgr.core_config.max_tokens_field = s_mgr.max_tokens_field;
+    s_mgr.core_config.reasoning_effort = s_mgr.reasoning_effort;
     s_mgr.core_config.system_prompt = s_mgr.system_prompt;
     return ESP_OK;
 }
@@ -458,6 +463,7 @@ esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_confi
     char *base_url = NULL;
     char *auth_type = NULL;
     char *max_tokens_field = NULL;
+    char *reasoning_effort = NULL;
     char *system_prompt = NULL;
     claw_core_config_t next_config = {0};
     esp_err_t err = ESP_OK;
@@ -475,9 +481,10 @@ esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_confi
     base_url = claw_agent_mgr_strdup(core_config->base_url ? core_config->base_url : "");
     auth_type = claw_agent_mgr_strdup(core_config->auth_type ? core_config->auth_type : "");
     max_tokens_field = claw_agent_mgr_strdup(core_config->max_tokens_field ? core_config->max_tokens_field : "");
+    reasoning_effort = claw_agent_mgr_strdup(core_config->reasoning_effort ? core_config->reasoning_effort : "");
     system_prompt = claw_agent_mgr_strdup(core_config->system_prompt);
     if (!api_key || !backend_type || !model || !base_url ||
-            !auth_type || !max_tokens_field || !system_prompt) {
+            !auth_type || !max_tokens_field || !reasoning_effort || !system_prompt) {
         err = ESP_ERR_NO_MEM;
         goto fail;
     }
@@ -489,6 +496,7 @@ esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_confi
     next_config.base_url = base_url;
     next_config.auth_type = auth_type;
     next_config.max_tokens_field = max_tokens_field;
+    next_config.reasoning_effort = reasoning_effort;
     next_config.system_prompt = system_prompt;
 
     claw_agent_mgr_lock();
@@ -498,6 +506,7 @@ esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_confi
     free(s_mgr.base_url);
     free(s_mgr.auth_type);
     free(s_mgr.max_tokens_field);
+    free(s_mgr.reasoning_effort);
     free(s_mgr.system_prompt);
     s_mgr.api_key = api_key;
     s_mgr.backend_type = backend_type;
@@ -505,6 +514,7 @@ esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_confi
     s_mgr.base_url = base_url;
     s_mgr.auth_type = auth_type;
     s_mgr.max_tokens_field = max_tokens_field;
+    s_mgr.reasoning_effort = reasoning_effort;
     s_mgr.system_prompt = system_prompt;
     s_mgr.core_config = next_config;
     api_key = NULL;
@@ -513,6 +523,7 @@ esp_err_t claw_agent_mgr_update_core_config(const claw_core_config_t *core_confi
     base_url = NULL;
     auth_type = NULL;
     max_tokens_field = NULL;
+    reasoning_effort = NULL;
     system_prompt = NULL;
 
     for (size_t i = 0; i < CLAW_AGENT_MGR_MAX_AGENTS; i++) {
@@ -536,6 +547,7 @@ fail:
     free(base_url);
     free(auth_type);
     free(max_tokens_field);
+    free(reasoning_effort);
     free(system_prompt);
     return err;
 }
@@ -674,6 +686,13 @@ static esp_err_t claw_agent_mgr_build_root_session_id(const claw_agent_mgr_root_
 {
     claw_session_build_context_t ctx = {0};
 
+    if (input->session_id && input->session_id[0]) {
+        size_t n = strlen(input->session_id);
+        if (n >= session_id_size) return ESP_ERR_INVALID_SIZE;
+        memcpy(session_id, input->session_id, n + 1);
+        if (out_len) *out_len = n;
+        return ESP_OK;
+    }
     ctx.agent_id = 0;
     ctx.session_policy = input->session_policy;
     ctx.source_cap = input->source_cap;
@@ -690,25 +709,43 @@ static uint32_t claw_agent_mgr_next_request_id_locked(void)
     return s_mgr.next_request_id++;
 }
 
-static esp_err_t claw_agent_mgr_submit_to_agent(claw_agent_mgr_agent_t *agent,
-                                                const claw_core_request_t *request,
-                                                uint32_t timeout_ms)
+static void claw_agent_mgr_record_delivery(claw_agent_mgr_agent_t *agent,
+                                           uint32_t run_id,
+                                           esp_err_t err)
 {
-    esp_err_t err;
-
-    if (!agent || !agent->core || !request) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    err = claw_core_submit(agent->core, request, timeout_ms);
     if (err == ESP_OK) {
-        agent->last_request_id = request->request_id;
+        agent->last_request_id = run_id;
         agent->status = CLAW_AGENT_MGR_STATUS_RUNNING;
         agent->last_error[0] = '\0';
     } else {
         agent->status = CLAW_AGENT_MGR_STATUS_ERROR;
         snprintf(agent->last_error, sizeof(agent->last_error), "%s", esp_err_to_name(err));
     }
+}
 
+static esp_err_t claw_agent_mgr_start_run_to_agent(
+    claw_agent_mgr_agent_t *agent,
+    const claw_core_request_t *request,
+    uint32_t timeout_ms)
+{
+    if (!agent || !agent->core || !request) return ESP_ERR_INVALID_STATE;
+    esp_err_t err = claw_core_start_run(agent->core, request, timeout_ms);
+    claw_agent_mgr_record_delivery(agent, request->request_id, err);
+    return err;
+}
+
+static esp_err_t claw_agent_mgr_post_message_to_agent(
+    claw_agent_mgr_agent_t *agent,
+    const claw_core_request_t *request,
+    uint32_t timeout_ms,
+    claw_core_message_receipt_t *out_receipt)
+{
+    if (!agent || !agent->core || !request || !out_receipt) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    esp_err_t err = claw_core_post_message(agent->core, request, timeout_ms,
+                                           out_receipt);
+    claw_agent_mgr_record_delivery(agent, out_receipt->run_id, err);
     return err;
 }
 
@@ -759,8 +796,7 @@ static void claw_agent_mgr_completion_observer(const claw_core_completion_summar
     if (root && root->core) {
         request.request_id = claw_agent_mgr_next_request_id_locked();
         request.flags = CLAW_CORE_REQUEST_FLAG_PUBLISH_OUT_MESSAGE |
-                        CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE |
-                        CLAW_CORE_REQUEST_FLAG_USER_INTERRUPT;
+                        CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE;
         request.session_id = agent->parent_session_id;
         request.user_text = text;
         request.source_channel = agent->parent_source_channel;
@@ -768,13 +804,17 @@ static void claw_agent_mgr_completion_observer(const claw_core_completion_summar
         request.source_cap = "cap_agent_mgr";
         request.target_channel = agent->parent_target_channel;
         request.target_chat_id = agent->parent_target_chat_id;
-        (void)claw_agent_mgr_submit_to_agent(root, &request, 1000);
+        claw_core_message_receipt_t receipt = {0};
+        (void)claw_agent_mgr_post_message_to_agent(root, &request, 1000,
+                                                   &receipt);
     }
     claw_agent_mgr_unlock();
 }
 
-esp_err_t claw_agent_mgr_submit_root(const claw_agent_mgr_root_input_t *input,
-                                     uint32_t timeout_ms)
+esp_err_t claw_agent_mgr_post_root_message(
+    const claw_agent_mgr_root_input_t *input,
+    uint32_t timeout_ms,
+    claw_core_message_receipt_t *out_receipt)
 {
     claw_agent_mgr_agent_t *root = NULL;
     claw_core_request_t request = {0};
@@ -782,22 +822,23 @@ esp_err_t claw_agent_mgr_submit_root(const claw_agent_mgr_root_input_t *input,
     size_t session_id_len = 0;
     esp_err_t err;
 
-    if (!input || !input->user_text || !input->user_text[0]) {
+    if (!input || !input->user_text || !input->user_text[0] || !out_receipt) {
         return ESP_ERR_INVALID_ARG;
     }
     if (!claw_agent_mgr_is_ready()) {
         return ESP_ERR_INVALID_STATE;
     }
 
+    claw_agent_mgr_lock();
     err = claw_agent_mgr_build_root_session_id(input,
                                                session_id,
                                                sizeof(session_id),
                                                &session_id_len);
     if (err != ESP_OK) {
+        claw_agent_mgr_unlock();
         return err;
     }
 
-    claw_agent_mgr_lock();
     root = claw_agent_mgr_find_locked(CLAW_AGENT_MGR_ROOT_AGENT_ID);
     if (!root || !root->core) {
         claw_agent_mgr_unlock();
@@ -815,16 +856,17 @@ esp_err_t claw_agent_mgr_submit_root(const claw_agent_mgr_root_input_t *input,
     request.source_cap = input->source_cap;
     request.target_channel = input->target_channel;
     request.target_chat_id = input->target_chat_id;
-    err = claw_agent_mgr_submit_to_agent(root, &request, timeout_ms);
+    err = claw_agent_mgr_post_message_to_agent(root, &request, timeout_ms,
+                                               out_receipt);
     claw_agent_mgr_unlock();
     return err;
 }
 
-esp_err_t claw_agent_mgr_submit_root_text(const char *text,
-                                          const char *session_id,
-                                          uint32_t flags,
-                                          uint32_t timeout_ms,
-                                          uint32_t *out_request_id)
+esp_err_t claw_agent_mgr_start_root_run_text(const char *text,
+                                             const char *session_id,
+                                             uint32_t flags,
+                                             uint32_t timeout_ms,
+                                             uint32_t *out_request_id)
 {
     claw_agent_mgr_agent_t *root = NULL;
     claw_core_request_t request = {0};
@@ -848,7 +890,7 @@ esp_err_t claw_agent_mgr_submit_root_text(const char *text,
     request.flags = flags;
     request.session_id = (session_id && session_id[0]) ? session_id : NULL;
     request.user_text = text;
-    err = claw_agent_mgr_submit_to_agent(root, &request, timeout_ms);
+    err = claw_agent_mgr_start_run_to_agent(root, &request, timeout_ms);
     if (err == ESP_OK && out_request_id) {
         *out_request_id = request.request_id;
     }
@@ -866,6 +908,20 @@ esp_err_t claw_agent_mgr_receive_root_for(uint32_t request_id,
         return ESP_ERR_INVALID_STATE;
     }
     return claw_core_receive_for(core, request_id, response, timeout_ms);
+}
+
+esp_err_t claw_agent_mgr_cancel_root_request(uint32_t request_id)
+{
+    claw_core_handle_t core;
+
+    if (request_id == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    core = claw_agent_mgr_get_root_core();
+    if (!core) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return claw_core_cancel_request(core, request_id);
 }
 
 static bool claw_agent_mgr_ctx_is_root_agent(const claw_cap_call_context_t *ctx)
@@ -956,7 +1012,7 @@ esp_err_t claw_agent_mgr_spawn_subagent(const claw_cap_call_context_t *parent_ct
         request.source_channel = parent_ctx->channel;
         request.source_chat_id = parent_ctx->chat_id;
         request.source_cap = "cap_agent_mgr";
-        err = claw_agent_mgr_submit_to_agent(agent, &request, 1000);
+        err = claw_agent_mgr_start_run_to_agent(agent, &request, 1000);
     }
     if (err != ESP_OK) {
         if (agent->core) {
@@ -1052,14 +1108,19 @@ esp_err_t claw_agent_mgr_send_subagent_input(const claw_cap_call_context_t *ctx,
     }
     if (err == ESP_OK) {
         request.request_id = claw_agent_mgr_next_request_id_locked();
-        request.flags = CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE |
-                        (interrupt ? CLAW_CORE_REQUEST_FLAG_USER_INTERRUPT : 0);
+        request.flags = CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE;
         request.session_id = agent->session_id;
         request.user_text = input;
         request.source_channel = ctx->channel;
         request.source_chat_id = ctx->chat_id;
         request.source_cap = "cap_agent_mgr";
-        err = claw_agent_mgr_submit_to_agent(agent, &request, 1000);
+        if (interrupt) {
+            claw_core_message_receipt_t receipt = {0};
+            err = claw_agent_mgr_post_message_to_agent(
+                agent, &request, 1000, &receipt);
+        } else {
+            err = claw_agent_mgr_start_run_to_agent(agent, &request, 1000);
+        }
     }
     claw_agent_mgr_unlock();
     return err;
@@ -1342,4 +1403,61 @@ const char *claw_agent_mgr_status_to_string(claw_agent_mgr_status_t status)
     default:
         return "unknown";
     }
+}
+
+esp_err_t claw_agent_mgr_post_session_message(const char *id, const char *text, const char *message_id, bool reply_to_source, claw_core_message_receipt_t *receipt)
+{
+    if (!id || !text || !message_id || !receipt || !claw_agent_mgr_is_ready()) return ESP_ERR_INVALID_ARG;
+    claw_session_info_t *info = calloc(1, sizeof(*info));
+    claw_agent_mgr_root_input_t *input = calloc(1, sizeof(*input));
+    if (!info || !input) { free(info); free(input); return ESP_ERR_NO_MEM; }
+    claw_agent_mgr_lock();
+    esp_err_t err = claw_session_mgr_catalog_get(id, info);
+    if (err == ESP_OK && info->agent_id != 0) err = ESP_ERR_NOT_SUPPORTED;
+    if (err == ESP_OK) {
+        input->session_id = info->session_id;
+        input->session_policy = CLAW_SESSION_POLICY_CHAT;
+        input->user_text = text;
+        input->source_cap = "web_chat";
+        input->source_channel = "web";
+        input->source_chat_id = "web-ui";
+        input->source_sender_id = "web_user";
+        input->source_message_id = message_id;
+        input->target_channel = reply_to_source ? info->channel : "web";
+        input->target_chat_id = reply_to_source ? info->chat_id : "web-ui";
+        input->flags = CLAW_CORE_REQUEST_FLAG_PUBLISH_OUT_MESSAGE | CLAW_CORE_REQUEST_FLAG_PUBLISH_STAGE_MESSAGE | CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE;
+        err = claw_agent_mgr_post_root_message(input, 0, receipt);
+    }
+    claw_agent_mgr_unlock();
+    free(info); free(input);
+    return err;
+}
+
+esp_err_t claw_agent_mgr_delete_session(const char *id)
+{
+    if (!id || !claw_agent_mgr_is_ready()) return ESP_ERR_INVALID_ARG;
+    claw_session_info_t *info = calloc(1, sizeof(*info));
+    if (!info) return ESP_ERR_NO_MEM;
+    claw_agent_mgr_lock();
+    esp_err_t err = claw_session_mgr_catalog_get(id, info);
+    if (err == ESP_OK && strcmp(claw_agent_mgr_session_state(info->session_id), "idle") != 0) err = ESP_ERR_INVALID_STATE;
+    if (err == ESP_OK) err = claw_session_mgr_catalog_delete(id);
+    claw_agent_mgr_unlock();
+    free(info);
+    return err;
+}
+
+const char *claw_agent_mgr_session_state(const char *session_id)
+{
+    if (!session_id || !claw_agent_mgr_is_ready()) return "idle";
+    const char *state = "idle";
+    claw_agent_mgr_lock();
+    for (size_t i = 0; i < CLAW_AGENT_MGR_MAX_AGENTS; i++) {
+        if (!s_mgr.agents[i].occupied || !s_mgr.agents[i].core) continue;
+        const char *current = claw_core_session_state(s_mgr.agents[i].core, session_id);
+        if (strcmp(current, "idle") != 0) state = current;
+        if (strcmp(state, "running") == 0) break;
+    }
+    claw_agent_mgr_unlock();
+    return state;
 }

@@ -12,13 +12,104 @@
 #include "cap_lua.h"
 #include "esp_log.h"
 #include "lua_image.h"
+#include "esp_video_device.h"
 #include "lauxlib.h"
 #include "lua.h"
 #include "camera_hal.h"
+#include "cap_lua_hw.h"
 
 #define LUA_MODULE_CAMERA_NAME "camera"
 
 static const char *TAG = "lua_camera";
+
+static const char s_camera_lease_key;
+
+static esp_err_t lua_camera_release(cap_lua_hw_lease_t *lease)
+{
+    if (!lease->id) return ESP_OK;
+    esp_err_t err = camera_is_open() ? camera_close() : ESP_OK;
+    return err == ESP_OK ? cap_lua_hw_release(lease) : err;
+}
+
+static int lua_camera_gc(lua_State *L)
+{
+    cap_lua_hw_lease_t *lease = lua_touserdata(L, 1);
+    esp_err_t err = lua_camera_release(lease);
+    if (err != ESP_OK) ESP_LOGE("lua_camera", "Cleanup failed: %s", esp_err_to_name(err));
+    return 0;
+}
+
+static cap_lua_hw_lease_t *lua_camera_lease(lua_State *L, bool create)
+{
+    lua_rawgetp(L, LUA_REGISTRYINDEX, &s_camera_lease_key);
+    cap_lua_hw_lease_t *lease = lua_touserdata(L, -1);
+    if (!lease && create) {
+        lua_pop(L, 1);
+        lease = lua_newuserdata(L, sizeof(*lease));
+        memset(lease, 0, sizeof(*lease));
+        if (luaL_newmetatable(L, "camera.lease")) {
+            lua_pushcfunction(L, lua_camera_gc);
+            lua_setfield(L, -2, "__gc");
+        }
+        lua_setmetatable(L, -2);
+        lua_pushvalue(L, -1);
+        lua_rawsetp(L, LUA_REGISTRYINDEX, &s_camera_lease_key);
+    }
+    lua_pop(L, 1);
+    return lease;
+}
+
+static void lua_camera_require(lua_State *L)
+{
+    cap_lua_hw_lease_t *lease = lua_camera_lease(L, false);
+    if (!lease || !lease->id) luaL_error(L, "camera is not owned by this Lua environment");
+}
+
+static const char *lua_module_camera_source_name(esp_video_device_source_t source)
+{
+    switch (source) {
+    case ESP_VIDEO_DEVICE_SOURCE_MIPI_CSI:
+        return "mipi_csi";
+    case ESP_VIDEO_DEVICE_SOURCE_DVP:
+        return "dvp";
+    case ESP_VIDEO_DEVICE_SOURCE_SPI:
+        return "spi";
+    case ESP_VIDEO_DEVICE_SOURCE_USB_UVC:
+        return "usb_uvc";
+    default:
+        return "unknown";
+    }
+}
+
+static int lua_module_camera_list_devices(lua_State *L)
+{
+    size_t count = 0;
+    esp_err_t err = esp_video_get_capture_device_count(&count);
+
+    if (err != ESP_OK) {
+        return luaL_error(L, "camera device discovery failed: %s", esp_err_to_name(err));
+    }
+
+    lua_createtable(L, (int)count, 0);
+    for (size_t i = 0; i < count; i++) {
+        esp_video_capture_device_info_t info = {0};
+        err = esp_video_get_capture_device_info(i, &info);
+        if (err != ESP_OK) {
+            return luaL_error(L, "camera device discovery changed: %s", esp_err_to_name(err));
+        }
+        lua_createtable(L, 0, 4);
+        lua_pushstring(L, info.path);
+        lua_setfield(L, -2, "path");
+        lua_pushstring(L, lua_module_camera_source_name(info.source));
+        lua_setfield(L, -2, "source");
+        lua_pushboolean(L, info.removable);
+        lua_setfield(L, -2, "removable");
+        lua_pushinteger(L, (lua_Integer)info.capabilities);
+        lua_setfield(L, -2, "capabilities");
+        lua_rawseti(L, -2, (lua_Integer)i + 1);
+    }
+    return 1;
+}
 
 /* Camera-side release hook. The service can hold multiple borrowed buffers,
  * each identified by its data pointer; ctx is unused. */
@@ -84,10 +175,6 @@ static int lua_module_camera_optional_bool_field(lua_State *L, int table_idx, co
     return 0;
 }
 
-/* Camera must already be open when this is called. Walks the sensor's
- * advertised formats and returns the FOURCC of the highest-priority entry in
- * @p preferred that the sensor exposes. ESP_ERR_NOT_FOUND when no preference
- * matches. */
 static esp_err_t lua_module_camera_resolve_fourcc(const uint32_t *preferred, int n_preferred,
                                                   uint32_t *out_fourcc)
 {
@@ -134,9 +221,6 @@ static esp_err_t lua_module_camera_enum_first_discrete_size(uint32_t fourcc,
     return ESP_ERR_NOT_FOUND;
 }
 
-/* Build a human-readable list of all advertised FOURCC strings; used to make
- * the "no preference matched" error actionable. Returns the number of chars
- * written (excluding NUL). */
 static int lua_module_camera_describe_available(char *out, size_t out_size)
 {
     camera_format_desc_t desc = {0};
@@ -158,32 +242,9 @@ static int lua_module_camera_describe_available(char *out, size_t out_size)
     return (int)written;
 }
 
-/* camera.open(dev_path [, opts])
- * opts (optional table): { width, height, format, nearest }
- *   - width/height: requested capture resolution (integer; driver may adjust)
- *   - format: array of FOURCC strings in priority order, e.g.
- *       { "JPEG", "RGBP", "YUYV" }. The driver is probed first and the
- *       highest-priority entry the sensor actually advertises wins; the
- *       camera is then (re)opened with that format. A single-element array
- *       like { "RGBP" } gives the strict "use exactly this format" behaviour
- *       with a helpful error listing the sensor's actual formats on miss.
- *   - nearest: snap requested width/height to the closest supported size for
- *     the chosen format. When false (default) the exact size is sent to the
- *     driver and an unsupported request fails.
- *
- * Negotiation runs in one pass:
- *   1. probe-open (no opts) so we can enumerate
- *   2. pick fourcc — preferred list (if given) or current probe fourcc
- *   3. pick (w, h) — user size snapped via camera_find_closest_size when
- *      nearest=true, user size verbatim when nearest=false, or the first
- *      enumerated discrete size when no size was given alongside a format
- *   4. close + reopen with the exact (fourcc, w, h)
- *
- * The probe is skipped when no enumeration is required (no format list and
- * no nearest snap), in which case opts pass straight to the HAL. */
 static int lua_module_camera_open(lua_State *L)
 {
-    const char *dev_path = luaL_checkstring(L, 1);
+    const char *dev_path;
     camera_open_opts_t opts = {0};
     bool opt_nearest = false;
     enum { LUA_CAMERA_MAX_PREFERRED = 16 };
@@ -192,6 +253,8 @@ static int lua_module_camera_open(lua_State *L)
     bool has_format = false;
     bool has_opts_table = false;
     esp_err_t err;
+
+    dev_path = luaL_checkstring(L, 1);
 
     if (!lua_isnoneornil(L, 2)) {
         if (!lua_istable(L, 2)) {
@@ -233,6 +296,14 @@ static int lua_module_camera_open(lua_State *L)
         lua_module_camera_optional_uint_field(L, 2, "width", &opts.width);
         lua_module_camera_optional_uint_field(L, 2, "height", &opts.height);
         lua_module_camera_optional_bool_field(L, 2, "nearest", &opt_nearest);
+    }
+
+    cap_lua_hw_lease_t *lease = lua_camera_lease(L, true);
+    if (!lease->id) {
+        char key[CLAW_HW_KEY_SIZE];
+        const char *keys[] = { claw_hw_key_device(key, sizeof(key), "camera") };
+        err = cap_lua_hw_claim(L, lease, "lua/camera", keys, 1);
+        if (err != ESP_OK) return luaL_error(L, "camera claim failed: %s", esp_err_to_name(err));
     }
 
     /* Fast path: nothing to enumerate. Pass through to the HAL — either no
@@ -345,25 +416,59 @@ static int lua_module_camera_open(lua_State *L)
     return 1;
 }
 
+static int lua_module_camera_set_vflip(lua_State *L)
+{
+    lua_camera_require(L);
+    luaL_checktype(L, 1, LUA_TBOOLEAN);
+    const bool enable = lua_toboolean(L, 1) != 0;
+    esp_err_t err = camera_set_vflip(enable);
+
+    if (err == ESP_ERR_INVALID_STATE) {
+        return luaL_error(L, "camera set_vflip failed: camera not opened");
+    }
+    if (err != ESP_OK) {
+        return luaL_error(L, "camera set_vflip failed: %s", esp_err_to_name(err));
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+static int lua_module_camera_set_hmirror(lua_State *L)
+{
+    lua_camera_require(L);
+    luaL_checktype(L, 1, LUA_TBOOLEAN);
+    const bool enable = lua_toboolean(L, 1) != 0;
+    esp_err_t err = camera_set_hmirror(enable);
+
+    if (err == ESP_ERR_INVALID_STATE) {
+        return luaL_error(L, "camera set_hmirror failed: camera not opened");
+    }
+    if (err != ESP_OK) {
+        return luaL_error(L, "camera set_hmirror failed: %s", esp_err_to_name(err));
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 /* camera.is_open() -> bool */
 static int lua_module_camera_is_open(lua_State *L)
 {
-    lua_pushboolean(L, camera_is_open());
+    cap_lua_hw_lease_t *lease = lua_camera_lease(L, false);
+    lua_pushboolean(L, lease && lease->id && camera_is_open());
     return 1;
 }
 
 /* camera.is_streaming() -> bool */
 static int lua_module_camera_is_streaming(lua_State *L)
 {
-    lua_pushboolean(L, camera_is_streaming());
+    cap_lua_hw_lease_t *lease = lua_camera_lease(L, false);
+    lua_pushboolean(L, lease && lease->id && camera_is_streaming());
     return 1;
 }
 
-/* camera.flush()
- * Drops every queued buffer so the next get_frame() returns a freshly captured
- * frame. Useful after long idle / wake-up to discard stale AE/AWB output. */
 static int lua_module_camera_flush(lua_State *L)
 {
+    lua_camera_require(L);
     esp_err_t err = camera_flush();
 
     if (err == ESP_ERR_INVALID_STATE) {
@@ -376,10 +481,6 @@ static int lua_module_camera_flush(lua_State *L)
     return 1;
 }
 
-/* Push a Lua array of discrete fps integers onto the stack. Stepwise / range
- * intervals are intentionally ignored — they are rare and surfacing them
- * doubles the output shape. Returns the number of fps entries pushed; caller
- * decides whether to attach (count > 0) or discard (count == 0). */
 static int lua_module_camera_push_fps_for_size(lua_State *L, uint32_t pixel_format,
                                                uint32_t w, uint32_t h)
 {
@@ -408,18 +509,9 @@ static int lua_module_camera_push_fps_for_size(lua_State *L, uint32_t pixel_form
     return count;
 }
 
-/* camera.list_formats() — see README. Output shape:
- *   {
- *     { format = "JPEG", description = "...",
- *       sizes = { { w=640, h=480, fps = {30, 15} }, ... },
- *     },
- *     ...
- *   }
- * Empty fps arrays, stepwise/continuous size ranges, and verbose driver flags
- * are intentionally omitted; query the V4L2 raw enum APIs via custom C code if
- * those are needed. */
 static int lua_module_camera_list_formats(lua_State *L)
 {
+    lua_camera_require(L);
     camera_format_desc_t desc = {0};
 
     lua_newtable(L);
@@ -487,6 +579,7 @@ static int lua_module_camera_list_formats(lua_State *L)
 
 static int lua_module_camera_info(lua_State *L)
 {
+    lua_camera_require(L);
     camera_stream_info_t info = {0};
     esp_err_t err = camera_get_stream_info(&info);
 
@@ -507,11 +600,9 @@ static int lua_module_camera_info(lua_State *L)
     return 1;
 }
 
-/* camera.get_frame([timeout_ms])
- * Borrows one V4L2 buffer and wraps it as an image.frame userdata.
- * Release with frame:release() or by declaring the variable <close>. */
 static int lua_module_camera_get_frame(lua_State *L)
 {
+    lua_camera_require(L);
     camera_frame_info_t frame_info = {0};
     lua_image_frame_info_t info = {0};
     int timeout_ms = (int)luaL_optinteger(L, 1, 0);
@@ -547,11 +638,10 @@ static int lua_module_camera_get_frame(lua_State *L)
     return 1;
 }
 
-/* camera.close()
- * Closes the camera device and releases all resources. */
 static int lua_module_camera_close(lua_State *L)
 {
-    esp_err_t err = camera_close();
+    cap_lua_hw_lease_t *lease = lua_camera_lease(L, false);
+    esp_err_t err = lease ? lua_camera_release(lease) : ESP_OK;
 
     if (err != ESP_OK) {
         uint32_t borrowed_count = 0;
@@ -569,10 +659,13 @@ static int lua_module_camera_close(lua_State *L)
 int luaopen_camera(lua_State *L)
 {
     static const luaL_Reg funcs[] = {
+        {"list_devices", lua_module_camera_list_devices},
         {"open",         lua_module_camera_open},
         {"info",         lua_module_camera_info},
         {"get_frame",    lua_module_camera_get_frame},
         {"flush",        lua_module_camera_flush},
+        {"set_vflip",    lua_module_camera_set_vflip},
+        {"set_hmirror",  lua_module_camera_set_hmirror},
         {"is_open",      lua_module_camera_is_open},
         {"is_streaming", lua_module_camera_is_streaming},
         {"list_formats", lua_module_camera_list_formats},
