@@ -96,9 +96,21 @@ static const cap_llm_preset_t s_presets[] = {
     {
         .id = "minimax",
         .backend_type = "anthropic_compatible",
-        .base_url = "https://api.minimax.io/anthropic",
+        .base_url = "https://api.minimax.io/anthropic/v1",
         .auth_type = "bearer",
-        .model = "MiniMax-M3",
+        .model = "MiniMax-M3.1-Flash",
+        .max_tokens_field = "max_tokens",
+        .default_image_max_bytes = "524288",
+        .supports_tools = "true",
+        .supports_vision = "true",
+        .image_remote_url_only = "false",
+    },
+    {
+        .id = "minimax_cn",
+        .backend_type = "anthropic_compatible",
+        .base_url = "https://api.minimax.cn/anthropic/v1",
+        .auth_type = "bearer",
+        .model = "MiniMax-M3.1-Flash",
         .max_tokens_field = "max_tokens",
         .default_image_max_bytes = "524288",
         .supports_tools = "true",
@@ -115,6 +127,8 @@ static const char *s_usage =
     "/llm setup qwen <api_token> [model]\n"
     "/llm setup anthropic <api_token> [model]\n"
     "/llm setup minimax <api_token> [model]\n"
+    "/llm setup minimax_cn <api_token> [model]\n"
+    "MiniMax defaults to MiniMax-M3.1-Flash; use MiniMax-M3 or an explicit model override.\n"
     "/llm setup custom backend=<backend> url=<base_url> model=<model> token=<api_token>\n"
     "/llm token <api_token>\n"
     "/llm model <model>\n"
