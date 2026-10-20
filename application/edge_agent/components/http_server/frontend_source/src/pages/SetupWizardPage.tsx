@@ -176,24 +176,24 @@ const PROVIDER_PRESETS: Record<ProviderKey, ProviderPreset> = {
   minimax_global: {
     llm_backend_type: 'anthropic_compatible',
     llm_base_url: 'https://api.minimax.io/anthropic/v1',
-    llm_auth_type: 'none',
+    llm_auth_type: 'bearer',
     llm_default_image_max_bytes: '524288',
     llm_max_tokens_field: 'max_tokens',
     llm_supports_tools: 'true',
     llm_supports_vision: 'true',
     llm_image_remote_url_only: 'false',
-    llm_model: 'MiniMax-M3',
+    llm_model: 'MiniMax-M3.1-Flash',
   },
   minimax_cn: {
     llm_backend_type: 'anthropic_compatible',
-    llm_base_url: 'https://api.minimaxi.com/anthropic/v1',
-    llm_auth_type: 'none',
+    llm_base_url: 'https://api.minimax.cn/anthropic/v1',
+    llm_auth_type: 'bearer',
     llm_default_image_max_bytes: '524288',
     llm_max_tokens_field: 'max_tokens',
     llm_supports_tools: 'true',
     llm_supports_vision: 'true',
     llm_image_remote_url_only: 'false',
-    llm_model: 'MiniMax-M3',
+    llm_model: 'MiniMax-M3.1-Flash',
   },
   openai_compatible: {
     llm_backend_type: 'openai_compatible',
@@ -604,7 +604,10 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
         searchBaseline = searchToPatch(nextSearch);
         // Keep the stored baseline so repaired URLs are saved with this step.
         setImForm('wechat_base_url', nextIm.wechat_base_url.trim() || WECHAT_DEFAULT_BASE_URL);
-        setImForm('wechat_cdn_base_url', nextIm.wechat_cdn_base_url.trim() || WECHAT_DEFAULT_CDN_BASE_URL);
+        setImForm(
+          'wechat_cdn_base_url',
+          nextIm.wechat_cdn_base_url.trim() || WECHAT_DEFAULT_CDN_BASE_URL,
+        );
         setSelectedPlatforms(selectedPlatformsFromForm(nextIm));
         setWechatAdvancedOpen(
           !!(nextIm.wechat_token || nextIm.wechat_base_url || nextIm.wechat_account_id),
@@ -1073,9 +1076,14 @@ export const SetupWizardPage: Component<SetupWizardPageProps> = (props) => {
                           </Show>
                         </>
                       }
+                      list={provider().startsWith('minimax_') ? 'setup-minimax-models' : undefined}
                       value={llmForm.llm_model}
                       onInput={(event) => setLlmForm('llm_model', event.currentTarget.value)}
                     />
+                    <datalist id="setup-minimax-models">
+                      <option value="MiniMax-M3.1-Flash" />
+                      <option value="MiniMax-M3" />
+                    </datalist>
                     <TextInput
                       type="password"
                       label={

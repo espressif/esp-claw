@@ -117,25 +117,25 @@ const PROVIDER_PRESETS: Record<PresetKey, ProviderPreset> = {
   minimax_global: {
     llm_backend_type: 'anthropic_compatible',
     llm_base_url: 'https://api.minimax.io/anthropic/v1',
-    llm_auth_type: 'none',
+    llm_auth_type: 'bearer',
     llm_max_tokens_field: 'max_tokens',
     llm_default_image_max_bytes: '524288',
     llm_supports_tools: true,
     llm_supports_vision: true,
     llm_image_remote_url_only: false,
-    llm_model: 'MiniMax-M3',
+    llm_model: 'MiniMax-M3.1-Flash',
     advanced: false,
   },
   minimax_cn: {
     llm_backend_type: 'anthropic_compatible',
-    llm_base_url: 'https://api.minimaxi.com/anthropic/v1',
-    llm_auth_type: 'none',
+    llm_base_url: 'https://api.minimax.cn/anthropic/v1',
+    llm_auth_type: 'bearer',
     llm_max_tokens_field: 'max_tokens',
     llm_default_image_max_bytes: '524288',
     llm_supports_tools: true,
     llm_supports_vision: true,
     llm_image_remote_url_only: false,
-    llm_model: 'MiniMax-M3',
+    llm_model: 'MiniMax-M3.1-Flash',
     advanced: false,
   },
   openai_compatible: {
@@ -358,7 +358,11 @@ export const LlmPage: Component = () => {
         </div>
       </Show>
       {/* Wait for the loaded baseline before accepting edits. */}
-      <fieldset class="min-w-0 border-0 p-0 m-0 mt-2 divide-y divide-[var(--color-border-subtle)]" disabled={tab.loading()} aria-busy={tab.loading()}>
+      <fieldset
+        class="min-w-0 border-0 p-0 m-0 mt-2 divide-y divide-[var(--color-border-subtle)]"
+        disabled={tab.loading()}
+        aria-busy={tab.loading()}
+      >
         <StaticConfigBlock title={t('sectionLlm') as string}>
           <div class="flex flex-col gap-3 pt-2">
             <div class="flex flex-col gap-2">
@@ -409,9 +413,14 @@ export const LlmPage: Component = () => {
                     </Show>
                   </>
                 }
+                list={selectedPreset()?.startsWith('minimax_') ? 'minimax-models' : undefined}
                 value={tab.form.llm_model}
                 onInput={(event) => tab.setForm('llm_model', event.currentTarget.value)}
               />
+              <datalist id="minimax-models">
+                <option value="MiniMax-M3.1-Flash" />
+                <option value="MiniMax-M3" />
+              </datalist>
               <TextInput
                 label={t('llmMaxTokens')}
                 placeholder={t('llmMaxTokensPlaceholder') as string}
