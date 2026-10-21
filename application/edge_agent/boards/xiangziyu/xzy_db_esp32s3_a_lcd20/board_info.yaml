@@ -1,0 +1,4 @@
+board: xzy_db_esp32s3_a_lcd20
+chip: esp32s3
+description: "xzy_db_esp32s3_a_lcd20 Development Board"
+manufacturer: "xiangziyu"
