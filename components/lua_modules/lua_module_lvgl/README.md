@@ -452,7 +452,10 @@ Basic methods:
 - `window:get_header()` -> object
 - `window:get_content()` -> object
 
-`span:set_style(opts)` applies style options through the owning `spangroup`.
+`spangroup:add_span(text, style)` and `span:set_style(opts)` apply `text_color`,
+`text_decor` (an LVGL text decoration integer), and `font` to that span only.
+Omitted fields keep their current values. Set group-wide styles and layout
+options with `spangroup:set_style(opts)`; they are not applied by span methods.
 
 - `canvas.color_format`: `rgb565`, `rgb888`, `xrgb8888`, `argb8888`, `native`
 - `chart.type`: `none`, `line`, `curve`, `bar`, `stacked`, `scatter`
