@@ -1,0 +1,47 @@
+version: 1.0.0
+# Peripherals Configuration for Wireless Tag WT32-SC01 Plus
+#
+# LCD: ST7796 (480x320), 8-bit Intel 8080 parallel bus (SOC_LCD_I80_SUPPORTED)
+#   DC/RS: GPIO0   WR: GPIO47   DB[0..7]: GPIO9,46,3,8,18,17,16,15
+#   Shared reset (LCD + touch): GPIO4   Backlight: GPIO45 (LEDC)
+#
+# Touch: FT6336U capacitive controller over I2C
+#   SDA: GPIO6   SCL: GPIO5   INT: GPIO7
+#
+# SD Card: SPI mode
+#   MOSI: GPIO40   MISO: GPIO38   SCK: GPIO39   CS: GPIO41
+#
+# CAN Bus (TWAI): TX: GPIO10   RX: GPIO11
+
+peripherals:
+  # I2C bus — touch controller FT6336U (0x38)
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 6
+        scl: 5
+
+  # SPI bus — SD card
+  - name: spi_master
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        mosi_io_num: 40
+        miso_io_num: 38
+        sclk_io_num: 39
+        max_transfer_sz: 4092
+
+  # LCD backlight — LEDC PWM on GPIO45
+  - name: ledc_backlight
+    type: ledc
+    role: none
+    config:
+      gpio_num: 45
+      freq_hz: 5000
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT

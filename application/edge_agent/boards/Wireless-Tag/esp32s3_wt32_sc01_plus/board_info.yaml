@@ -1,0 +1,5 @@
+board: esp32s3_wt32_sc01_plus
+chip: esp32s3
+version: 1.0.0
+description: "Wireless Tag WT32-SC01 Plus Smart Panel with 3.5-inch ST7796 IPS LCD and FT5x06 touch"
+manufacturer: "Wireless Tag"
