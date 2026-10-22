@@ -224,6 +224,38 @@ static lua_lvgl_span_ud_t *lua_lvgl_check_span(lua_State *L, int index)
     return ud;
 }
 
+static void lua_lvgl_apply_span_style_locked(lua_State *L, int index, lv_span_t *span)
+{
+    lv_style_t *style = lv_span_get_style(span);
+
+    lua_getfield(L, index, "text_color");
+    if (!lua_isnil(L, -1)) {
+        lv_color_t color;
+        if (lua_lvgl_parse_color(L, -1, &color) != ESP_OK) {
+            luaL_error(L, "lvgl span text_color must be a 0xRRGGBB number or '#RRGGBB' string");
+        }
+        lv_style_set_text_color(style, color);
+    }
+    lua_pop(L, 1);
+
+    lua_getfield(L, index, "text_decor");
+    if (!lua_isnil(L, -1)) {
+        lv_style_set_text_decor(style, (lv_text_decor_t)luaL_checkinteger(L, -1));
+    }
+    lua_pop(L, 1);
+
+    lua_getfield(L, index, "font");
+    if (!lua_isnil(L, -1)) {
+        const char *font_error = NULL;
+        lv_font_t *font = lua_lvgl_validate_font_locked(lua_lvgl_check_font(L, -1), &font_error);
+        if (!font) {
+            luaL_error(L, "%s", font_error);
+        }
+        lv_style_set_text_font(style, font);
+    }
+    lua_pop(L, 1);
+}
+
 static int lua_lvgl_push_series(lua_State *L, lua_lvgl_obj_record_t *chart_record, lv_chart_series_t *series)
 {
     lua_lvgl_chart_series_ud_t *ud = (lua_lvgl_chart_series_ud_t *)lua_newuserdata(L, sizeof(*ud));
@@ -1015,9 +1047,7 @@ int lua_lvgl_spangroup_add_span(lua_State *L)
     lv_spangroup_set_span_text(group, span, text);
     if (!lua_isnoneornil(L, 3)) {
         luaL_checktype(L, 3, LUA_TTABLE);
-        /* P1 span styles are intentionally applied to the group-level widget
-         * style selectors through the same compact style table used elsewhere. */
-        lua_lvgl_apply_style_opts_locked(L, 3, group);
+        lua_lvgl_apply_span_style_locked(L, 3, span);
     }
     lv_spangroup_refresh(group);
     lua_lvgl_push_span(L, ud->record, span);
@@ -1315,7 +1345,7 @@ int lua_lvgl_span_set_style(lua_State *L)
     err = lua_lvgl_lock();
     if (err != ESP_OK) return lua_lvgl_error_esp(L, "lock", err);
     ud = lua_lvgl_check_span(L, 1);
-    lua_lvgl_apply_style_opts_locked(L, 2, ud->group_record->obj);
+    lua_lvgl_apply_span_style_locked(L, 2, ud->span);
     lv_spangroup_refresh(ud->group_record->obj);
     lua_lvgl_unlock();
     lua_pushboolean(L, 1);
