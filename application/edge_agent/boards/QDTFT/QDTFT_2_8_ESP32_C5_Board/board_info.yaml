@@ -1,0 +1,4 @@
+board: QDTFT_2_8_ESP32_C5_Board
+chip: esp32c5
+description: "QDTFT 2.8 inch ESP32-C5 Development Board with ST7789 LCD"
+manufacturer: "QDTFT"
