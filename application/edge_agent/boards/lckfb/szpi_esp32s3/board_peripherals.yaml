@@ -1,0 +1,80 @@
+version: 1.0.0
+# Peripherals for LCKFB SZPI ESP32-S3 (立创·实战派 ESP32-S3)
+#
+# Shared I2C bus (port 0): SDA=IO1, SCL=IO2
+#   - PCA9557 IO expander @0x19 (LCD_CS / PA_EN / DVP_PWDN)
+#   - ES8311 audio DAC, ES7210 audio ADC
+#   - QMI8658 6-axis IMU @0x6A
+#   - FT6336 capacitive touch
+
+peripherals:
+
+  # Shared I2C master bus
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 1
+        scl: 2
+
+  # I2S standard configuration (full duplex, 48 kHz / 16-bit stereo)
+  # ES8311 (DAC) uses DOUT, ES7210 (ADC) uses DIN.
+  - name: i2s_audio_out
+    type: i2s
+    role: master
+    format: std-out
+    config: &i2s0_config
+      port: 0
+      sample_rate_hz: 48000
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_STEREO
+      slot_mask: I2S_STD_SLOT_BOTH
+      ws_width: 16
+      pins:
+        mclk: 38
+        bclk: 14
+        ws: 13
+        dout: 45
+        din: 12
+
+  - name: i2s_audio_in
+    type: i2s
+    role: master
+    format: std-in
+    # i2s0 works in duplex mode, so reuse the i2s_audio_out configuration
+    config: *i2s0_config
+
+  # ST7789 LCD SPI bus (SPI3): MOSI=IO40, SCLK=IO41
+  # CS is driven by the PCA9557 expander (kept low), so it is not a SoC GPIO.
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI3_HOST
+        data0_io_num: 40
+        sclk_io_num: 41
+        max_transfer_sz: 153600
+
+  # LCD backlight (LEDC PWM on IO42, active low -> output_invert)
+  - name: ledc_backlight
+    type: ledc
+    role: none
+    config:
+      gpio_num: 42
+      freq_hz: 5000
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: true
+
+  # BOOT / user button (IO0, active low, internal pull-up)
+  - name: gpio_button_boot
+    type: gpio
+    role: io
+    config:
+      pin: 0
+      mode: GPIO_MODE_INPUT
