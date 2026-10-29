@@ -1,0 +1,4 @@
+board: QDTFT_3_5_ESP32_S3_Board
+chip: esp32s3
+description: "QDTFT 3.5 inch ESP32-S3 Development Board with ST77922 QSPI LCD"
+manufacturer: "QDTFT"

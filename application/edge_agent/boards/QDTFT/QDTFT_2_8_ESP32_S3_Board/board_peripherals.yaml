@@ -1,0 +1,59 @@
+version: 1.0.0
+# Peripherals Configuration for QDTFT 2.8 ESP32-S3 Board
+
+peripherals:
+  # SPI bus - ILI9341 320x240 LCD
+  # max_transfer_sz: 153600 bytes = 320 * 240 * 2 (full frame RGB565)
+  - name: spi_master
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        mosi_io_num: 11
+        miso_io_num: -1
+        sclk_io_num: 12
+        max_transfer_sz: 153600
+
+  # I2C bus - FT6336G Touch Controller
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 16
+        scl: 15
+
+  # LCD Backlight Control - GPIO45 via LEDC
+  - name: ledc_backlight
+    type: ledc
+    version: default
+    config:
+      gpio_num: 45
+      speed_mode: LEDC_LOW_SPEED_MODE
+      channel: 0
+      timer_sel: 0
+      freq_hz: 5000
+      duty: 1023
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false
+
+  # LED strip RMT TX - WS2812 on GPIO42
+  - name: rmt_tx
+    type: rmt
+    role: tx
+    config:
+      gpio_num: 42
+      clk_src: RMT_CLK_SRC_DEFAULT
+      resolution_hz: 10000000
+      mem_block_symbols: 64
+      trans_queue_depth: 4
+      intr_priority: 1
+      flags:
+        invert_out: false
+        with_dma: true
+        io_loop_back: false
+        io_od_mode: false
+        allow_pd: false
+        init_level: false
