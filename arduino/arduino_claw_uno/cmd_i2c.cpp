@@ -1,3 +1,6 @@
+// PLAIN ENGLISH: the I2C commands (talk to chips like sensors and displays
+// on the two-wire bus).
+
 /*
  * cmd_i2c.cpp — I2C Command Handlers
  *

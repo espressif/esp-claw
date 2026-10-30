@@ -1,3 +1,6 @@
+// PLAIN ENGLISH: which physical pins do what on this board, in one place -
+// change the wiring, change this file.
+
 /*
  * board_defs.h — Arduino UNO (ATmega328P) Board Definitions
  *

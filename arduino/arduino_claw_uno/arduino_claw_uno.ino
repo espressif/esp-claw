@@ -1,3 +1,9 @@
+// PLAIN ENGLISH: this sketch lets a cheap Arduino UNO work as extra hands
+// for the ESP32 AI agent ('split-brain'): the ESP32 does the thinking and
+// talks over USB serial; the UNO does the doing - pins, servos, sensors.
+// This file is the firmware's main loop: listen for a command, do it,
+// answer.
+
 /*
  * arduino_claw_uno.ino — ESP-Claw Arduino UNO Peripheral Controller
  *

@@ -1,3 +1,5 @@
+// PLAIN ENGLISH: the servo commands (move a servo motor to an angle).
+
 /*
  * cmd_servo.cpp — Servo Command Handlers
  *

@@ -1,3 +1,7 @@
+# PLAIN ENGLISH: a chat window for the hardware: type what you want in
+# plain words ('turn the servo to 90') and an AI turns that into bridge.py
+# calls that move the real hardware.
+
 #!/usr/bin/env python3
 """
 ai_shell.py — Natural Language Arduino Programmer

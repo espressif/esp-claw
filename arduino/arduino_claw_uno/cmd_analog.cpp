@@ -1,3 +1,5 @@
+// PLAIN ENGLISH: the analog-pin commands (read a sensor's voltage).
+
 /*
  * cmd_analog.cpp — Analog I/O Command Handlers (ADC + PWM)
  *

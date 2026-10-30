@@ -1,3 +1,6 @@
+// PLAIN ENGLISH: the digital-pin commands (turn a pin on/off, read a
+// button).
+
 /*
  * cmd_gpio.cpp — GPIO Command Handlers
  *

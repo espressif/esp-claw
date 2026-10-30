@@ -1,3 +1,7 @@
+// PLAIN ENGLISH: the language the ESP32 and UNO speak over the USB cable -
+// small JSON messages like {'cmd':'servo','pin':9,'deg':45}. This file
+// parses incoming commands and formats the replies.
+
 /*
  * claw_serial_protocol.cpp — Serial command parser and response formatter
  *

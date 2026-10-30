@@ -1,3 +1,7 @@
+# PLAIN ENGLISH: the Python side of the cable: opens the serial port to the
+# UNO and gives you simple functions (servo(9, 45)) instead of raw JSON
+# messages.
+
 #!/usr/bin/env python3
 """
 bridge.py — ESP-Claw Arduino UNO Serial Bridge
