@@ -34,8 +34,9 @@ static const char *TAG = "display_service";
 #define DISPLAY_SERVICE_SCENE_OWNER_NAME_LEN DISPLAY_SERVICE_OWNER_NAME_LEN
 #define DISPLAY_SERVICE_TOUCH_OBSERVER_INDEX_MASK 0xffu
 #define DISPLAY_SERVICE_TOUCH_OBSERVER_GENERATION_MASK 0x00ffffffu
-#define DISPLAY_SERVICE_EXIT_GESTURE_START_HEIGHT 80
-#define DISPLAY_SERVICE_EXIT_GESTURE_MIN_DY 72
+#define DISPLAY_SERVICE_EXIT_GESTURE_EDGE_HEIGHT_PCT 3
+#define DISPLAY_SERVICE_EXIT_GESTURE_MIN_DY_PCT 30
+#define DISPLAY_SERVICE_EXIT_GESTURE_MAX_DX_PCT 15
 #define DISPLAY_SERVICE_RAW_STAGING_BYTES (32 * 1024)
 #define DISPLAY_SERVICE_RAW_STAGING_MIN_BYTES (4 * 1024)
 
@@ -80,8 +81,10 @@ struct display_service_session_t {
     void *cleanup_user_ctx;
     char owner_name[DISPLAY_SERVICE_OWNER_NAME_LEN];
     bool exit_gesture_tracking;
+    bool exit_gesture_cancelled;
     bool exit_gesture_captured;
     bool exit_request_sent;
+    int32_t exit_gesture_start_x;
     int32_t exit_gesture_start_y;
 };
 
@@ -143,6 +146,16 @@ static void display_service_dummy_draw_resume_locked(void);
 static bool display_service_dummy_owner_matches(const char *owner);
 static bool display_service_session_valid_unlocked(display_service_session_handle_t session);
 
+static int32_t display_service_abs_i32(int32_t value)
+{
+    return value < 0 ? -value : value;
+}
+
+static int32_t display_service_pct_ceil(int32_t value, int32_t pct)
+{
+    return (value * pct + 99) / 100;
+}
+
 static struct display_service_session_t *display_service_active_exclusive_session(void)
 {
     for (size_t i = 0; i < DISPLAY_SERVICE_MAX_SESSIONS; i++) {
@@ -164,23 +177,35 @@ static struct display_service_session_t *display_service_active_exclusive_sessio
 
 static bool display_service_process_exit_gesture(struct display_service_session_t *session,
                                                  const display_service_touch_snapshot_t *snapshot,
+                                                 int32_t display_width,
                                                  int32_t display_height)
 {
-    if (!display_service_session_valid_unlocked(session) || snapshot == NULL || display_height <= 0) {
+    if (!display_service_session_valid_unlocked(session) || snapshot == NULL || display_width <= 0 || display_height <= 0) {
         return false;
     }
 
+    int32_t edge_height = display_service_pct_ceil(display_height, DISPLAY_SERVICE_EXIT_GESTURE_EDGE_HEIGHT_PCT);
+    int32_t min_dy = display_service_pct_ceil(display_height, DISPLAY_SERVICE_EXIT_GESTURE_MIN_DY_PCT);
+    int32_t max_dx = display_service_pct_ceil(display_width, DISPLAY_SERVICE_EXIT_GESTURE_MAX_DX_PCT);
     bool pressed = snapshot->count > 0;
+    int32_t x = pressed ? snapshot->points[0].x : 0;
     int32_t y = pressed ? snapshot->points[0].y : 0;
     if (pressed && !session->exit_gesture_tracking) {
         session->exit_gesture_tracking = true;
+        session->exit_gesture_cancelled = false;
         session->exit_gesture_captured = false;
         session->exit_request_sent = false;
+        session->exit_gesture_start_x = x;
         session->exit_gesture_start_y = y;
     }
     if (pressed && session->exit_gesture_tracking &&
-            session->exit_gesture_start_y >= display_height - DISPLAY_SERVICE_EXIT_GESTURE_START_HEIGHT &&
-            session->exit_gesture_start_y - y >= DISPLAY_SERVICE_EXIT_GESTURE_MIN_DY) {
+            display_service_abs_i32(x - session->exit_gesture_start_x) > max_dx) {
+        session->exit_gesture_cancelled = true;
+    }
+    if (pressed && session->exit_gesture_tracking &&
+            !session->exit_gesture_cancelled &&
+            session->exit_gesture_start_y >= display_height - edge_height &&
+            session->exit_gesture_start_y - y >= min_dy) {
         session->exit_gesture_captured = true;
     }
 
@@ -192,6 +217,7 @@ static bool display_service_process_exit_gesture(struct display_service_session_
     }
     if (!pressed) {
         session->exit_gesture_tracking = false;
+        session->exit_gesture_cancelled = false;
         session->exit_gesture_captured = false;
     }
     return captured;
@@ -508,8 +534,9 @@ static bool display_service_publish_touch_snapshot(const esp_lcd_touch_point_dat
         snapshot.points[i].y = points[i].y;
     }
     struct display_service_session_t *session = display_service_active_exclusive_session();
+    int32_t display_width = s_display.display != NULL ? lv_display_get_horizontal_resolution(s_display.display) : 0;
     int32_t display_height = s_display.display != NULL ? lv_display_get_vertical_resolution(s_display.display) : 0;
-    bool captured = display_service_process_exit_gesture(session, &snapshot, display_height);
+    bool captured = display_service_process_exit_gesture(session, &snapshot, display_width, display_height);
     if (captured) {
         snapshot.count = 0;
     }
