@@ -278,6 +278,8 @@ bool system_ui_system_overlay_allowed(void)
 
 static void system_ui_state_observer_cb(display_service_state_event_t event, void *user_ctx)
 {
+    bool reload_home = false;
+
     (void)user_ctx;
 
     if (!s_ui.started) {
@@ -300,12 +302,22 @@ static void system_ui_state_observer_cb(display_service_state_event_t event, voi
         break;
     case DISPLAY_SERVICE_STATE_EVENT_EXCLUSIVE_LVGL_EXITED:
     case DISPLAY_SERVICE_STATE_EVENT_EXCLUSIVE_RAW_EXITED:
+        if (s_ui.home_reload_pending) {
+            s_ui.home_reload_pending = false;
+            reload_home = true;
+        }
         break;
     default:
         break;
     }
 
     system_ui_unlock();
+    if (reload_home) {
+        esp_err_t err = system_ui_reload_home();
+        if (err != ESP_OK) {
+            ESP_LOGE(SYSTEM_UI_TAG, "deferred home reload failed: %s", esp_err_to_name(err));
+        }
+    }
 }
 
 static bool system_ui_system_overlay_visible_locked(void)
@@ -345,6 +357,7 @@ static void system_ui_clear_callbacks_locked(void)
 static void system_ui_delete_ui_locked(void)
 {
     s_ui.started = false;
+    s_ui.home_reload_pending = false;
     display_service_set_default_screen_locked(NULL);
     system_ui_delete_jobs_locked();
     system_ui_delete_overlay_locked();

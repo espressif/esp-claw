@@ -230,6 +230,7 @@ typedef struct {
     uint32_t generation;
     bool started;
     bool event_task_stop;
+    bool home_reload_pending;
     system_ui_touch_gesture_t touch_gesture;
     bool jobs_visible;
     bool sta_connected;
