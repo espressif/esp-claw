@@ -274,6 +274,7 @@ void lua_lvgl_register_metatables(lua_State *L);
 
 /* lua_lvgl_value.c */
 int lua_lvgl_set_text(lua_State *L);
+int lua_lvgl_get_text(lua_State *L);
 int lua_lvgl_get_pos(lua_State *L);
 int lua_lvgl_get_size(lua_State *L);
 int lua_lvgl_get_value(lua_State *L);

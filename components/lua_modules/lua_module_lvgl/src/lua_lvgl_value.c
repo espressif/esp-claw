@@ -53,6 +53,31 @@ int lua_lvgl_set_text(lua_State *L)
     return 1;
 }
 
+int lua_lvgl_get_text(lua_State *L)
+{
+    lua_lvgl_obj_ud_t *ud = lua_lvgl_check_ud(L, 1);
+    lua_lvgl_obj_type_t type;
+    esp_err_t err = lua_lvgl_lock();
+    lv_obj_t *obj;
+    const char *obj_error = NULL;
+
+    if (err != ESP_OK) {
+        return lua_lvgl_error_esp(L, "lock", err);
+    }
+    obj = lua_lvgl_validate_ud_locked(ud, &type, &obj_error);
+    if (!obj) {
+        lua_lvgl_unlock();
+        return luaL_error(L, "%s", obj_error);
+    }
+    if (type != LUA_LVGL_OBJ_TEXTAREA) {
+        lua_lvgl_unlock();
+        return luaL_error(L, "lvgl get_text does not support this object type");
+    }
+    lua_pushstring(L, lv_textarea_get_text(obj));
+    lua_lvgl_unlock();
+    return 1;
+}
+
 int lua_lvgl_get_pos(lua_State *L)
 {
     lua_lvgl_obj_ud_t *ud = lua_lvgl_check_ud(L, 1);

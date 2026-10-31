@@ -17,6 +17,10 @@
 #include "lauxlib.h"
 #include "cap_lua.h"
 #include "claw_paths.h"
+#include "nvs.h"
+
+#define LUA_STORAGE_NVS_NAMESPACE "lua_apps"
+#define LUA_STORAGE_SETTING_MAX_SIZE 4096
 
 /* The writable data root is owned by claw_paths; resolve it on each call so the
  * module always sees the current mount point (flash partition or SD card). */
@@ -458,6 +462,73 @@ static int lua_module_storage_get_free_space(lua_State *L)
     return 1;
 }
 
+static const char *lua_module_storage_check_setting_key(lua_State *L)
+{
+    size_t len = 0;
+    const char *key = luaL_checklstring(L, 1, &len);
+
+    luaL_argcheck(L, len > 0 && len <= 15 && strlen(key) == len, 1, "setting key must be 1-15 bytes without NUL");
+    return key;
+}
+
+static int lua_module_storage_get_app_setting(lua_State *L)
+{
+    const char *key = lua_module_storage_check_setting_key(L);
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(LUA_STORAGE_NVS_NAMESPACE, NVS_READONLY, &handle);
+
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        if (lua_gettop(L) >= 2) lua_pushvalue(L, 2); else lua_pushnil(L);
+        return 1;
+    }
+    if (err != ESP_OK) return luaL_error(L, "nvs_open failed: %s", esp_err_to_name(err));
+
+    size_t size = 0;
+    err = nvs_get_str(handle, key, NULL, &size);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        nvs_close(handle);
+        if (lua_gettop(L) >= 2) lua_pushvalue(L, 2); else lua_pushnil(L);
+        return 1;
+    }
+    if (err != ESP_OK || size == 0 || size > LUA_STORAGE_SETTING_MAX_SIZE) {
+        nvs_close(handle);
+        return luaL_error(L, "nvs_get_str(%s) failed: %s", key, err == ESP_OK ? "invalid size" : esp_err_to_name(err));
+    }
+
+    char *value = malloc(size);
+    if (!value) {
+        nvs_close(handle);
+        return luaL_error(L, "setting allocation failed");
+    }
+    err = nvs_get_str(handle, key, value, &size);
+    nvs_close(handle);
+    if (err != ESP_OK) {
+        free(value);
+        return luaL_error(L, "nvs_get_str(%s) failed: %s", key, esp_err_to_name(err));
+    }
+    lua_pushlstring(L, value, size - 1);
+    free(value);
+    return 1;
+}
+
+static int lua_module_storage_set_app_setting(lua_State *L)
+{
+    const char *key = lua_module_storage_check_setting_key(L);
+    size_t len = 0;
+    const char *value = luaL_checklstring(L, 2, &len);
+    luaL_argcheck(L, len < LUA_STORAGE_SETTING_MAX_SIZE && strlen(value) == len, 2, "setting value must be under 4096 bytes without NUL");
+
+    nvs_handle_t handle;
+    esp_err_t err = nvs_open(LUA_STORAGE_NVS_NAMESPACE, NVS_READWRITE, &handle);
+    if (err != ESP_OK) return luaL_error(L, "nvs_open failed: %s", esp_err_to_name(err));
+    err = nvs_set_str(handle, key, value);
+    if (err == ESP_OK) err = nvs_commit(handle);
+    nvs_close(handle);
+    if (err != ESP_OK) return luaL_error(L, "nvs_set_str(%s) failed: %s", key, esp_err_to_name(err));
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 int luaopen_storage(lua_State *L)
 {
     lua_newtable(L);
@@ -485,6 +556,10 @@ int luaopen_storage(lua_State *L)
     lua_setfield(L, -2, "rename");
     lua_pushcfunction(L, lua_module_storage_get_free_space);
     lua_setfield(L, -2, "get_free_space");
+    lua_pushcfunction(L, lua_module_storage_get_app_setting);
+    lua_setfield(L, -2, "get_app_setting");
+    lua_pushcfunction(L, lua_module_storage_set_app_setting);
+    lua_setfield(L, -2, "set_app_setting");
     return 1;
 }
 
