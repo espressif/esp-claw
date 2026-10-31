@@ -370,6 +370,13 @@ menu "App Claw Config"
                 Enable the JSON Lua module and keep app_claw's direct dependency
                 on lua_module_json when Lua capability is enabled.
 
+        config APP_CLAW_LUA_MODULE_MQTT
+            bool "Enable MQTT Lua module"
+            default y
+            depends on APP_CLAW_CAP_LUA
+            help
+                Enable the generic MQTT 3.1.1 Lua client module.
+
         config APP_CLAW_LUA_MODULE_THREAD
             bool "Enable Thread Lua module"
             default y
