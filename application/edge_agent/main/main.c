@@ -464,27 +464,11 @@ void app_main(void)
             ESP_LOGW(TAG, "Captive DNS could not start, portal pop-up disabled");
         }
 
-        if (s_config->wifi_ssid[0] != '\0') {
-            esp_err_t wait_err = wifi_manager_wait_connected(30000);
-            if (wait_err == ESP_OK) {
-                wifi_manager_status_t status = {0};
-                wifi_manager_get_status(&status);
-                ESP_LOGI(TAG, "Wi-Fi STA ready: %s", status.sta_ip);
-            } else if (wait_err == ESP_ERR_TIMEOUT) {
-                wifi_manager_status_t status = {0};
-                wifi_manager_get_status(&status);
-                ESP_LOGW(TAG,
-                         "Wi-Fi STA not connected within wait window; retrying in background: mode=%s ap_active=%d ap_ip=%s",
-                         status.mode ? status.mode : "off",
-                         status.ap_active,
-                         status.ap_ip ? status.ap_ip : "0.0.0.0");
-            } else {
-                ESP_LOGW(TAG, "Wi-Fi STA wait returned error: %s", esp_err_to_name(wait_err));
-            }
-        }
-
         wifi_manager_status_t status = {0};
         wifi_manager_get_status(&status);
+        if (status.sta_configured && !status.sta_connected) {
+            ESP_LOGI(TAG, "Wi-Fi STA connection continuing in background");
+        }
         if (status.ap_active) {
             const char *portal_auth = s_config->ap_password[0] ? "wpa2" : "open";
             ESP_LOGW(TAG,
