@@ -6,4 +6,5 @@ idf_component_register(
     REQUIRES
         cap_lua
         claw_core
+        nvs_flash
 )

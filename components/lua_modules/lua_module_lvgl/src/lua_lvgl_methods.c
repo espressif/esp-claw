@@ -120,6 +120,7 @@ static const luaL_Reg lua_lvgl_roller_methods[] = {
 
 static const luaL_Reg lua_lvgl_textarea_methods[] = {
     {"set_text", lua_lvgl_set_text},
+    {"get_text", lua_lvgl_get_text},
     {NULL, NULL},
 };
 

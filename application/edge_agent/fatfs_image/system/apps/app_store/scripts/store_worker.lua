@@ -8,6 +8,10 @@ local cache = storage.join_path(root, "cache", "app_store")
 local stage = cache .. "/staging"
 local installed_path
 
+local function tr(en, zh)
+    return a.language == "zh" and zh or en
+end
+
 local function mkdir(path)
     local current = ""
     for part in path:gmatch("[^/]+") do
@@ -17,12 +21,8 @@ local function mkdir(path)
 end
 
 local function remove_tree(path)
-    local info = storage.stat(path)
-    if not info then return end
-    if info.type == "dir" then
-        for _, entry in ipairs(storage.listdir(path)) do remove_tree(path .. "/" .. entry.name) end
-    end
-    storage.remove(path)
+    local ok, err = storage.remove_tree(path)
+    if not ok then error(err.message) end
 end
 
 local function valid_id(id)
@@ -68,7 +68,7 @@ local function fetch(path, target, limit)
 end
 
 local function refresh()
-    progress("正在获取应用目录")
+    progress(tr("Fetching app catalog", "正在获取应用目录"))
     local entries = fetch("/raw/apps-data.json")
     assert(type(entries) == "table", "invalid catalog")
     local list, seen = {}, {}
@@ -94,7 +94,7 @@ local function refresh()
         cancelled()
         local target = cache .. "/" .. item.id .. ".jpg"
         if valid_path(item.icon) and not storage.exists(target) then
-            progress("缓存图标 " .. i .. "/" .. #list)
+            progress(tr("Caching icon ", "正在缓存图标 ") .. i .. "/" .. #list)
             local ok, err = pcall(fetch, "/raw/apps/" .. item.id .. "/" .. encode(item.icon), target, 65536)
             if not ok then print("[AppStore] icon " .. item.id .. ": " .. tostring(err)) end
         end
@@ -106,7 +106,7 @@ local function install()
     assert(valid_id(a.id) and a.id ~= "app_store", "invalid App id")
     local target = storage.join_path(root, "apps", a.id)
     assert(not storage.exists(target) and not storage.exists("/system/apps/" .. a.id), "App already installed")
-    progress("检查应用文件")
+    progress(tr("Checking app files", "正在检查应用文件"))
     local meta = fetch("/raw/apps/" .. a.id .. "/_metadata.json")
     assert(type(meta) == "table" and meta.kind == "app" and meta.name == a.id, "App metadata mismatch")
     assert(type(meta.files) == "table" and #meta.files > 0 and #meta.files <= 512, "invalid file list")
@@ -122,7 +122,7 @@ local function install()
     assert(free > (tonumber(a.size) or 0) + 65536, "Not enough storage")
     mkdir(stage)
     for i, path in ipairs(meta.files) do
-        progress("下载 " .. i .. "/" .. count, math.floor((i - 1) * 100 / count))
+        progress(tr("Downloading ", "正在下载 ") .. i .. "/" .. count, math.floor((i - 1) * 100 / count))
         local file = stage .. "/" .. path
         mkdir(assert(file:match("^(.+)/[^/]+$")))
         fetch("/raw/apps/" .. a.id .. "/" .. encode(path), file)
@@ -135,10 +135,26 @@ local function install()
     assert(not storage.exists(target), "App appeared during download")
     storage.rename(stage, target)
     installed_path = target
-    progress("正在发布应用", 100)
+    progress(tr("Publishing app", "正在发布应用"), 100)
     local result = json.decode(call("publish_app", { app_id = a.id }))
     assert(result.ok == true, "App publication failed")
     installed_path = nil
+end
+
+local function clear_apps()
+    local apps = storage.join_path(root, "apps")
+    if not storage.exists(apps) then return end
+    local ids = {}
+    for _, entry in ipairs(storage.listdir(apps)) do
+        if entry.type == "dir" and valid_id(entry.name) and entry.name ~= "app_store" then ids[#ids + 1] = entry.name end
+    end
+    table.sort(ids)
+    for i, id in ipairs(ids) do
+        cancelled()
+        progress(tr("Removing ", "正在删除 ") .. i .. "/" .. #ids, math.floor((i - 1) * 100 / math.max(1, #ids)))
+        assert(json.decode(call("remove_app", { app_id = id })).ok == true, "App removal failed: " .. id)
+    end
+    progress(tr("Apps removed", "应用已清空"), 100)
 end
 
 local function run()
@@ -146,6 +162,7 @@ local function run()
     mkdir(cache)
     if a.action == "catalog" then refresh()
     elseif a.action == "install" then install()
+    elseif a.action == "clear_apps" then clear_apps()
     elseif a.action == "remove" then
         assert(valid_id(a.id) and a.id ~= "app_store", "invalid App id")
         assert(not storage.exists("/system/apps/" .. a.id), "Built-in App cannot be removed")
@@ -158,11 +175,12 @@ local ok, err = xpcall(run, debug.traceback)
 if not ok then
     print("[AppStore] " .. tostring(err))
     -- Only directories owned by this installation may be rolled back.
-    local cleaned, cleanup_err = pcall(function()
-        if a.action == "install" then remove_tree(stage) end
-        if installed_path then remove_tree(installed_path) end
-    end)
-    if not cleaned then print("[AppStore] cleanup: " .. tostring(cleanup_err)) end
+    for _, path in ipairs({ a.action == "install" and stage or false, installed_path or false }) do
+        if path then
+            local cleaned, cleanup_err = pcall(remove_tree, path)
+            if not cleaned then print("[AppStore] cleanup: " .. tostring(cleanup_err)) end
+        end
+    end
 end
 storage.write_file(cache .. "/result.tmp", json.encode({ ok = ok, error = not ok and tostring(err):match("^[^\n]+") or nil }))
 storage.rename(cache .. "/result.tmp", cache .. "/result.json")
