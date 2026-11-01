@@ -271,6 +271,12 @@ dependencies:
       - if: $CONFIG{APP_CLAW_LUA_MODULE_JSON} == True
     path: ../../lua_modules/lua_module_json
 
+  lua_module_mqtt:
+    rules:
+      - if: $CONFIG{APP_CLAW_CAP_LUA} == True
+      - if: $CONFIG{APP_CLAW_LUA_MODULE_MQTT} == True
+    path: ../../lua_modules/lua_module_mqtt
+
   lua_module_thread:
     rules:
       - if: $CONFIG{APP_CLAW_CAP_LUA} == True

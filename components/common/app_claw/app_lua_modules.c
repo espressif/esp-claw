@@ -80,6 +80,9 @@
 #if CONFIG_APP_CLAW_LUA_MODULE_JSON
 #include "lua_module_json.h"
 #endif
+#if CONFIG_APP_CLAW_LUA_MODULE_MQTT
+#include "lua_module_mqtt.h"
+#endif
 #if CONFIG_APP_CLAW_LUA_MODULE_IMAGE
 #include "lua_image.h"
 #endif
@@ -485,6 +488,14 @@ static esp_err_t app_lua_register_json(const char *fatfs_base_path)
 }
 #endif
 
+#if CONFIG_APP_CLAW_LUA_MODULE_MQTT
+static esp_err_t app_lua_register_mqtt(const char *fatfs_base_path)
+{
+    (void)fatfs_base_path;
+    return lua_module_mqtt_register();
+}
+#endif
+
 #if CONFIG_APP_CLAW_LUA_MODULE_IMAGE
 static esp_err_t app_lua_register_image(const char *fatfs_base_path)
 {
@@ -662,6 +673,9 @@ static const app_lua_module_entry_t s_lua_module_entries[] = {
 #if CONFIG_APP_CLAW_LUA_MODULE_JSON
     { "json", "JSON", app_lua_register_json },
 #endif
+#if CONFIG_APP_CLAW_LUA_MODULE_MQTT
+    { "mqtt", "MQTT", app_lua_register_mqtt },
+#endif
 #if CONFIG_APP_CLAW_LUA_MODULE_IMAGE
     { "image", "Image", app_lua_register_image },
 #endif
@@ -771,6 +785,9 @@ static const app_lua_module_info_t s_lua_module_infos[] = {
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_JSON
     { "json", "JSON" },
+#endif
+#if CONFIG_APP_CLAW_LUA_MODULE_MQTT
+    { "mqtt", "MQTT" },
 #endif
 #if CONFIG_APP_CLAW_LUA_MODULE_IMAGE
     { "image", "Image" },
