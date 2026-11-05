@@ -1,7 +1,12 @@
 ## IDF Component Manager Manifest File
 dependencies:
+  claw_http:
+    path: ../claw_http
   claw_utils:
     path: ../claw_utils
+  claw_endpoint:
+    path: ../claw_endpoint
+    public: true
   espressif/cjson:
     version: "^1.7"
     public: true

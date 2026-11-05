@@ -334,7 +334,7 @@ static int event_router_func(int argc, char **argv)
     if (router_args.last->count) {
         err = claw_event_router_get_last_result(&result);
         if (err != ESP_OK) {
-            printf("event_router last failed: %s\n", esp_err_to_name(err));
+            printf("router last failed: %s\n", esp_err_to_name(err));
             free(parse_argv == argv ? NULL : parse_argv);
             free(joined_value);
             return 1;
@@ -371,7 +371,7 @@ static int event_router_func(int argc, char **argv)
                                                 "console",
                                                 "cli-msg");
         if (err != ESP_OK) {
-            printf("event_router emit-message failed: %s\n", esp_err_to_name(err));
+            printf("router emit-message failed: %s\n", esp_err_to_name(err));
             free(parse_argv == argv ? NULL : parse_argv);
             free(joined_value);
             return 1;
@@ -416,7 +416,7 @@ static int event_router_func(int argc, char **argv)
     }
 
     if (err != ESP_OK) {
-        printf("event_router emit-trigger failed: %s\n", esp_err_to_name(err));
+        printf("router emit-trigger failed: %s\n", esp_err_to_name(err));
         free(parse_argv == argv ? NULL : parse_argv);
         free(joined_value);
         return 1;
@@ -452,16 +452,16 @@ void register_cap_router_mgr(void)
     router_args.end = arg_end(15);
 
     const esp_console_cmd_t router_cmd = {
-        .command = "event_router",
+        .command = "router",
         .help = "Event router operations.\n"
         "Examples:\n"
-        " event_router --rules\n"
-        " event_router --rule sample-id\n"
-        " event_router --add-rule-json '{\"id\":\"sample\",\"match\":{\"event_type\":\"message\"},\"actions\":[{\"type\":\"drop\"}]}'\n"
-        " event_router --update-rule-json '{...}'\n"
-        " event_router --delete-rule sample-id\n"
-        " event_router --reload\n"
-        " event_router --emit-message --source-cap qq_gateway --channel qq --chat-id 123 --text hello\n",
+        " router --rules\n"
+        " router --rule sample-id\n"
+        " router --add-rule-json '{\"id\":\"sample\",\"match\":{\"event_type\":\"message\"},\"actions\":[{\"type\":\"drop\"}]}'\n"
+        " router --update-rule-json '{...}'\n"
+        " router --delete-rule sample-id\n"
+        " router --reload\n"
+        " router --emit-message --source-cap qq_gateway --channel qq --chat-id 123 --text hello\n",
         .func = event_router_func,
         .argtable = &router_args,
     };

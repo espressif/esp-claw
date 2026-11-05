@@ -1,7 +1,7 @@
 export interface SimulatorParams {
   repo: string
   ref: string
-  skill: string
+  app: string
 }
 
 export interface RepoConfig {
@@ -12,33 +12,15 @@ export interface RepoConfig {
   kind: 'skillsLabRaw' | 'gitRaw'
 }
 
-export interface SkillFrontmatter {
-  name: string
-  description: string
-  author?: string
-  metadata: {
-    category?: string[]
-    peripherals?: string[]
-    tags?: string[]
-    cap_groups?: string[]
-    manage_mode?: string
-  }
-  execution?: {
-    entry?: string
-    icon?: string
-    args?: Record<string, unknown>
-    order?: number
-    visible?: boolean
-  }
-  simulator?: {
-    type?: string
-    entry?: string
-    files?: string[]
-    width?: number
-    height?: number
-    touch?: boolean
-    audio?: string
-  }
+export interface AppManifest {
+  schema_version: number
+  id: string
+  display_name?: string
+  entry: string
+  icon?: string
+  args?: Record<string, unknown>
+  order?: number
+  visible?: boolean
 }
 
 export interface CapabilityMocks {
@@ -54,6 +36,7 @@ export interface CapabilityMocks {
 }
 
 export interface SimulatorMocks {
+  args?: Record<string, unknown>
   capability?: CapabilityMocks
   network_radio?: {
     stations?: Array<{
@@ -63,20 +46,20 @@ export interface SimulatorMocks {
   }
 }
 
-export interface SkillFile {
+export interface AppFile {
   path: string
   content: Uint8Array
   text?: string
 }
 
-export interface LoadedSkill {
+export interface LoadedApp {
   params: SimulatorParams
   rootPath: string
-  frontmatter: SkillFrontmatter
-  markdownBody: string
-  files: SkillFile[]
+  manifest: AppManifest
+  files: AppFile[]
   entry: string
   virtualRoot: string
+  peripherals: string[]
   capabilityMocks: CapabilityMocks
   simulatorMocks: SimulatorMocks
 }

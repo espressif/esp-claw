@@ -153,12 +153,18 @@ static esp_err_t submit_user_interrupt(const char *session_id, const char *text)
 {
     claw_core_request_t request = {
         .request_id = s_next_interrupt_request_id++,
-        .flags = CLAW_CORE_REQUEST_FLAG_USER_INTERRUPT,
         .session_id = session_id,
         .user_text = text,
     };
+    claw_core_message_receipt_t receipt = {0};
 
-    return claw_core_submit(s_core, &request, 1000);
+    esp_err_t err = claw_core_post_message(s_core, &request, 1000, &receipt);
+    if (err == ESP_OK) {
+        TEST_ASSERT_EQUAL(CLAW_CORE_MESSAGE_APPENDED_TO_RUN,
+                          receipt.disposition);
+        TEST_ASSERT_EQUAL(s_active_request_id, receipt.run_id);
+    }
+    return err;
 }
 
 static esp_err_t test_persist_context(const claw_core_context_persist_batch_t *batch, void *user_ctx)
@@ -365,12 +371,14 @@ static esp_err_t test_call_cap(const char *cap_name,
     return *out_output ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
-static esp_err_t test_backend_init(const claw_llm_runtime_config_t *config,
+static esp_err_t test_backend_init(const claw_llm_backend_config_t *config,
                                    const claw_llm_model_profile_t *profile,
+                                   claw_endpoint_handle_t endpoint,
                                    void **out_backend_ctx,
                                    char **out_error_message)
 {
     (void)profile;
+    (void)endpoint;
     (void)out_error_message;
 
     test_backend_ctx_t *ctx = calloc(1, sizeof(test_backend_ctx_t));
@@ -525,7 +533,6 @@ static void ensure_backend_registered(void)
         .id = "core_interrupt_test",
         .vtable = &s_backend_vtable,
         .defaults = {
-            .auth_type = "none",
             .chat_path = "",
             .max_tokens_field = "max_tokens",
         },
@@ -544,6 +551,7 @@ static void ensure_core_ready(void)
     const claw_core_config_t config = {
         .instance_id = 0,
         .api_key = "test",
+        .base_url = "http://127.0.0.1",
         .backend_type = "core_interrupt_test",
         .model = "test",
         .system_prompt = "system",
@@ -574,7 +582,7 @@ static void submit_and_expect_ok(uint32_t request_id, const char *session_id, co
     claw_core_response_t response = {0};
 
     strlcpy(s_active_session_id, session_id ? session_id : "", sizeof(s_active_session_id));
-    TEST_ASSERT_EQUAL(ESP_OK, claw_core_submit(s_core, &request, 1000));
+    TEST_ASSERT_EQUAL(ESP_OK, claw_core_start_run(s_core, &request, 1000));
     TEST_ASSERT_EQUAL(ESP_OK, claw_core_receive_for(s_core, request_id, &response, 5000));
     TEST_ASSERT_EQUAL(request_id, response.request_id);
     TEST_ASSERT_EQUAL(CLAW_CORE_RESPONSE_STATUS_OK, response.status);
@@ -582,18 +590,25 @@ static void submit_and_expect_ok(uint32_t request_id, const char *session_id, co
     claw_core_response_free(&response);
 }
 
-static void submit_interrupt_flagged_and_expect_ok(uint32_t request_id, const char *session_id, const char *text)
+static void post_message_and_expect_new_run(uint32_t request_id,
+                                            const char *session_id,
+                                            const char *text)
 {
     claw_core_request_t request = {
         .request_id = request_id,
-        .flags = CLAW_CORE_REQUEST_FLAG_USER_INTERRUPT,
         .session_id = session_id,
         .user_text = text,
     };
     claw_core_response_t response = {0};
+    claw_core_message_receipt_t receipt = {0};
 
     strlcpy(s_active_session_id, session_id ? session_id : "", sizeof(s_active_session_id));
-    TEST_ASSERT_EQUAL(ESP_OK, claw_core_submit(s_core, &request, 1000));
+    TEST_ASSERT_EQUAL(ESP_OK,
+                      claw_core_post_message(s_core, &request, 1000,
+                                             &receipt));
+    TEST_ASSERT_EQUAL(CLAW_CORE_MESSAGE_QUEUED_NEW_RUN,
+                      receipt.disposition);
+    TEST_ASSERT_EQUAL(request_id, receipt.run_id);
     TEST_ASSERT_EQUAL(ESP_OK, claw_core_receive_for(s_core, request_id, &response, 5000));
     TEST_ASSERT_EQUAL(request_id, response.request_id);
     TEST_ASSERT_EQUAL(CLAW_CORE_RESPONSE_STATUS_OK, response.status);
@@ -871,7 +886,6 @@ static void test_http_client_task(void *arg)
     claw_llm_http_json_request_t request = {
         .url = task->url,
         .body = "{\"input\":\"test\"}",
-        .auth_type = "none",
         .timeout_ms = TEST_HTTP_TIMEOUT_MS,
         .abort_flag = task->abort_flag,
     };
@@ -936,6 +950,7 @@ static claw_core_config_t make_test_core_config(uint32_t instance_id,
     claw_core_config_t config = {
         .instance_id = instance_id,
         .api_key = "test",
+        .base_url = "http://127.0.0.1",
         .backend_type = "core_interrupt_test",
         .model = model,
         .system_prompt = "system",
@@ -1205,7 +1220,7 @@ TEST_CASE("claw_core isolates queues providers responses and media runtime per h
     free(media_text);
     media_text = NULL;
 
-    TEST_ASSERT_EQUAL(ESP_OK, claw_core_submit(core_a, &request_a, 1000));
+    TEST_ASSERT_EQUAL(ESP_OK, claw_core_start_run(core_a, &request_a, 1000));
     err = claw_core_receive_for(core_b, request_a.request_id, &response, 50);
     TEST_ASSERT_TRUE(err == ESP_ERR_TIMEOUT || err == ESP_ERR_NOT_FOUND);
     TEST_ASSERT_EQUAL(ESP_OK, claw_core_receive_for(core_a, request_a.request_id, &response, 5000));
@@ -1216,7 +1231,7 @@ TEST_CASE("claw_core isolates queues providers responses and media runtime per h
     assert_text_contains(s_isolate_a_messages, "hello-a");
     assert_text_contains(s_isolate_a_messages, "provider-only-on-a");
 
-    TEST_ASSERT_EQUAL(ESP_OK, claw_core_submit(core_b, &request_b, 1000));
+    TEST_ASSERT_EQUAL(ESP_OK, claw_core_start_run(core_b, &request_b, 1000));
     TEST_ASSERT_EQUAL(ESP_OK, claw_core_receive_for(core_b, request_b.request_id, &response, 5000));
     TEST_ASSERT_EQUAL(request_b.request_id, response.request_id);
     TEST_ASSERT_EQUAL(CLAW_CORE_RESPONSE_STATUS_OK, response.status);
@@ -1295,7 +1310,7 @@ TEST_CASE("claw_core queues interrupt flagged requests without an insertable loo
     ensure_core_ready();
 
     test_reset_scenario(TEST_BACKEND_FINAL, 1010);
-    submit_interrupt_flagged_and_expect_ok(1010, "s-idle-fallback", "A4");
+    post_message_and_expect_new_run(1010, "s-idle-fallback", "A4");
     TEST_ASSERT_EQUAL(1, s_backend_call_count);
     TEST_ASSERT_EQUAL(1, count_session_context_records("s-idle-fallback", CLAW_CORE_CONTEXT_RECORD_USER));
     TEST_ASSERT_EQUAL(1, count_session_context_records("s-idle-fallback", CLAW_CORE_CONTEXT_RECORD_ASSISTANT_FINAL));

@@ -2,7 +2,9 @@ idf_component_register(
     SRCS
         "src/display_color.c"
         "src/display_dirty.c"
-        "src/display_hal.c"
+        "src/display_core.c"
+        "src/display_raster.c"
+        "src/display_bitmap.c"
         "src/display_text.c"
         "src/lua_module_display.c"
     INCLUDE_DIRS
@@ -10,7 +12,7 @@ idf_component_register(
     REQUIRES
         cap_lua
         display_service
-        esp_lcd
+        esp_timer
         esp_painter
         lua_module_image
 )

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "app_store",
+  "display_name": "App Store",
+  "entry": "scripts/app_store.lua",
+  "args": {},
+  "icon": "assets/icon.jpg",
+  "catalog": {
+    "description": "On-device app store: browse apps, view details, and install or uninstall in the background, with support for asset subdirectories.",
+    "author": "ESP-Claw contributor",
+    "simulator": false,
+    "category": ["utility", "network"],
+    "tags": ["store", "installer"],
+    "peripherals": ["display"]
+  }
+}

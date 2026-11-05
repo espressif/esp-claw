@@ -1,0 +1,12 @@
+idf_component_register(
+    SRCS
+        "test_app_main.c"
+    INCLUDE_DIRS
+        "."
+    PRIV_REQUIRES
+        app_registry
+        fatfs
+        unity
+        wear_levelling
+    WHOLE_ARCHIVE
+)

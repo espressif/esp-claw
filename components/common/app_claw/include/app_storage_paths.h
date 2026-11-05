@@ -24,9 +24,13 @@ typedef struct {
     char memory_root_dir[APP_CLAW_PATH_LEN];          /**< Long-term memory store */
     char skills_root_dir[APP_CLAW_PATH_LEN];          /**< Writable skills root */
     char system_skills_root_dir[APP_CLAW_PATH_LEN];   /**< Read-only firmware-baked skills root */
+    char apps_root_dir[APP_CLAW_PATH_LEN];            /**< Writable App root */
+    char system_apps_root_dir[APP_CLAW_PATH_LEN];     /**< Read-only firmware-baked App root */
     char lua_root_dir[APP_CLAW_PATH_LEN];             /**< Lua scripts root */
     char router_rules_path[APP_CLAW_FILE_PATH_LEN];   /**< Event router rules file */
+    char router_recovery_path[APP_CLAW_FILE_PATH_LEN];/**< Read-only router recovery file */
     char scheduler_rules_path[APP_CLAW_FILE_PATH_LEN];/**< Scheduler rules file */
+    char scheduler_recovery_path[APP_CLAW_FILE_PATH_LEN];/**< Read-only scheduler recovery file */
     char im_attachment_root[APP_CLAW_PATH_LEN];       /**< IM attachment inbox */
 } app_claw_storage_paths_t;
 

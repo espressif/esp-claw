@@ -186,7 +186,7 @@ audio_device_t *lua_audio_check_device(lua_State *L, int idx, audio_device_kind_
     } else {
         dev = (audio_device_t *)luaL_checkudata(L, idx, AUDIO_DEVICE_OUTPUT_META);
     }
-    if (!dev || dev->closed || dev->codec_dev == NULL) {
+    if (!dev || dev->closed || dev->sink_handle == NULL) {
         luaL_error(L, "audio %s: invalid or closed device", what);
         return NULL;
     }

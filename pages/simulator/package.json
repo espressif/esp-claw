@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "test": "node --test tests/*.test.mjs",
     "build": "tsc -p tsconfig.json && vite build",
     "copy-runtime": "node scripts/copy-runtime.mjs",
     "preview": "vite preview --host 0.0.0.0"

@@ -31,22 +31,13 @@ char *audio_uri_from_path(const char *path)
         return audio_strdup(path ? path : "");
     }
 
-    const char *host_start = path + 1;
-    const char *path_start = strchr(host_start, '/');
-    if (!path_start || path_start == host_start) {
-        return NULL;
-    }
-
-    size_t host_len = (size_t)(path_start - host_start);
-    size_t tail_len = strlen(path_start);
-    size_t len = strlen("file://") + host_len + tail_len + 1;
+    size_t len = strlen("file://") + strlen(path) + 1;
     char *uri = malloc(len);
     if (!uri) {
         return NULL;
     }
     memcpy(uri, "file://", strlen("file://"));
-    memcpy(uri + strlen("file://"), host_start, host_len);
-    memcpy(uri + strlen("file://") + host_len, path_start, tail_len + 1);
+    memcpy(uri + strlen("file://"), path, strlen(path) + 1);
     return uri;
 }
 

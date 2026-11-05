@@ -9,8 +9,8 @@
 
 #define CLAW_LLM_BACKEND_OPENAI_COMPATIBLE_ID "openai_compatible"
 #define CLAW_LLM_BACKEND_OPENAI_COMPATIBLE_CHAT_PATH "/chat/completions"
-#define CLAW_LLM_BACKEND_OPENAI_COMPATIBLE_AUTH_TYPE "bearer"
 #define CLAW_LLM_BACKEND_OPENAI_COMPATIBLE_DEFAULT_MAX_TOKENS_FIELD "max_tokens"
 
+/** Shared with custom registrations that speak the OpenAI chat protocol. */
 const claw_llm_backend_vtable_t *claw_llm_backend_openai_compatible_vtable(void);
 const claw_llm_backend_registration_t *claw_llm_backend_openai_compatible_registration(void);

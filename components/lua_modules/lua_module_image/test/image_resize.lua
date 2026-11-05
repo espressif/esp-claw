@@ -14,10 +14,15 @@
   spot check.
 --]]
 
-local board_manager = require("board_manager")
 local camera = require("camera")
 local delay = require("delay")
 local display = require("display")
+local screen, screen_info
+
+local function center_text(x, y, w, h, text, options)
+    local tw, th = screen:measure_text(text, options)
+    screen:text(x + math.max(0, (w - tw) // 2), y + math.max(0, (h - th) // 2), text, options)
+end
 local image = require("image")
 local system = require("system")
 
@@ -35,8 +40,7 @@ local camera_started = false
 
 local function cleanup()
     if display_started then
-        pcall(display.end_frame)
-        pcall(display.deinit)
+        pcall(screen.close, screen)
         display_started = false
     end
     if camera_started then
@@ -62,27 +66,23 @@ local function assert_info(view, expected_w, expected_h, expected_format, expect
         string.format("%s: bytes=%d expected=%d", label, info.bytes, expected_bytes))
 end
 
-local panel_handle, io_handle, lcd_width, lcd_height, panel_if =
-    board_manager.get_display_lcd_params("display_lcd")
-if not panel_handle then
-    print(TAG .. " SKIP: get_display_lcd_params failed: " .. tostring(io_handle))
+local camera_devices = camera.list_devices()
+if #camera_devices == 0 then
+    print(TAG .. " SKIP: no capture video device available")
     return
 end
+local camera_path = camera_devices[1].path
 
-local camera_paths, path_err = board_manager.get_camera_paths()
-if not camera_paths then
-    print(TAG .. " SKIP: get_camera_paths failed: " .. tostring(path_err))
-    return
-end
-
-local ok, err = pcall(display.init, panel_handle, io_handle, lcd_width, lcd_height, panel_if)
+local ok, err = pcall(display.open)
 if not ok then
-    print(TAG .. " SKIP: display.init failed: " .. tostring(err))
+    print(TAG .. " SKIP: display.open failed: " .. tostring(err))
     return
 end
+screen = err
+screen_info = screen:info()
 display_started = true
 
-ok, err = pcall(camera.open, camera_paths.dev_path, CAMERA_OPEN_OPTS)
+ok, err = pcall(camera.open, camera_path, CAMERA_OPEN_OPTS)
 if not ok then
     print(TAG .. " SKIP: camera.open failed: " .. tostring(err))
     cleanup()
@@ -92,8 +92,8 @@ camera_started = true
 
 local run_ok, run_err = xpcall(function()
     local overlay_h = 60
-    local panel_w = display.width // 2
-    local panel_h = math.max(32, display.height - overlay_h - 16)
+    local panel_w = screen_info.width // 2
+    local panel_h = math.max(32, screen_info.height - overlay_h - 16)
     local target_w = math.max(32, panel_w - 4)
     local target_h = math.max(32, panel_h - 4)
 
@@ -146,34 +146,33 @@ local run_ok, run_err = xpcall(function()
             release_checks = release_checks + 1
         end
 
-        display.begin_frame({ clear = true, color = "black" })
+        screen:begin({ clear = "#000000" })
 
-        display.draw_image(2, overlay_h + 2, near, {
-            mode = "fit", width = target_w, height = target_h,
+        screen:image(2, overlay_h + 2, near, {
+            mode = "contain", width = target_w, height = target_h,
         })
-        display.draw_image(panel_w + 2, overlay_h + 2, bilin, {
-            mode = "fit", width = target_w, height = target_h,
+        screen:image(panel_w + 2, overlay_h + 2, bilin, {
+            mode = "contain", width = target_w, height = target_h,
         })
 
-        display.fill_rect(0, 0, display.width, overlay_h, { r = 24, g = 24, b = 24 })
-        display.draw_text(6, 4, string.format("image.resize  frame=%d  left=%ds", frames, remaining_s),
-            { color = "white", font_size = 14 })
-        display.draw_text(6, 22, string.format("nearest=%dms  bilinear=%dms", t_near, t_bilin),
-            { color = "white", font_size = 12 })
-        display.draw_text(6, 38, string.format("gray%dx%d=%dms  release_checks=%d",
+        screen:fill_rect(0, 0, screen_info.width, overlay_h, { r = 24, g = 24, b = 24 })
+        screen:text(6, 4, string.format("image.resize  frame=%d  left=%ds", frames, remaining_s),
+            { color = "#ffffff", font_size = 14 })
+        screen:text(6, 22, string.format("nearest=%dms  bilinear=%dms", t_near, t_bilin),
+            { color = "#ffffff", font_size = 12 })
+        screen:text(6, 38, string.format("gray%dx%d=%dms  release_checks=%d",
             GRAY_PROBE_W, GRAY_PROBE_H, t_gray, release_checks),
-            { color = "white", font_size = 12 })
+            { color = "#ffffff", font_size = 12 })
 
         local label_y = overlay_h + 2 + target_h + 2
-        if label_y + 14 <= display.height then
-            display.draw_text_aligned(0, label_y, panel_w, 14, "nearest",
-                { color = "yellow", font_size = 12, align = "center" })
-            display.draw_text_aligned(panel_w, label_y, panel_w, 14, "bilinear",
-                { color = "yellow", font_size = 12, align = "center" })
+        if label_y + 14 <= screen_info.height then
+            center_text(0, label_y, panel_w, 14, "nearest",
+                { color = "#ffff00", font_size = 12 })
+            center_text(panel_w, label_y, panel_w, 14, "bilinear",
+                { color = "#ffff00", font_size = 12 })
         end
 
-        display.present()
-        display.end_frame()
+        screen:present()
 
         near:release()
         bilin:release()
@@ -195,13 +194,12 @@ local run_ok, run_err = xpcall(function()
     local bilin_avg = bilin_sum / frames
     local gray_avg = gray_sum / frames
 
-    display.begin_frame({ clear = true, color = "black" })
-    display.draw_text_aligned(0, 0, display.width, display.height,
+    screen:begin({ clear = "#000000" })
+    center_text(0, 0, screen_info.width, screen_info.height,
         string.format("Resize PASS\nframes=%d\nnear=%.1fms\nbilin=%.1fms\ngray=%.1fms",
             frames, near_avg, bilin_avg, gray_avg),
-        { color = "white", font_size = 18, align = "center", valign = "middle" })
-    display.present()
-    display.end_frame()
+        { color = "#ffffff", font_size = 18 })
+    screen:present()
 
     print(string.format("%s PASS frames=%d near_avg=%.1fms bilin_avg=%.1fms gray_avg=%.1fms release_checks=%d",
         TAG, frames, near_avg, bilin_avg, gray_avg, release_checks))

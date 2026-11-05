@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "id": "flappybird",
+  "entry": "scripts/flappybird.lua",
+  "display_name": "Flappy Bird",
+  "icon": "assets/icon.jpg",
+  "args": {},
+  "order": 11,
+  "visible": true
+}

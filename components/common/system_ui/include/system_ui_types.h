@@ -51,7 +51,6 @@ typedef void (*system_ui_launcher_select_cb_t)(const system_ui_launcher_item_t *
 typedef size_t (*system_ui_tasks_provider_cb_t)(system_ui_task_item_t *out, size_t max, void *user_ctx);
 typedef esp_err_t (*system_ui_task_action_cb_t)(const char *task_id, void *user_ctx);
 typedef esp_err_t (*system_ui_tasks_stop_all_cb_t)(void *user_ctx);
-typedef esp_err_t (*system_ui_app_exit_swipe_cb_t)(void *user_ctx);
 
 typedef enum {
     SYSTEM_UI_PAGE_SWIPE_PREVIOUS = -1,
@@ -66,7 +65,6 @@ typedef struct {
     system_ui_tasks_provider_cb_t get_tasks;
     system_ui_task_action_cb_t on_stop_task;
     system_ui_tasks_stop_all_cb_t on_stop_all_tasks;
-    system_ui_app_exit_swipe_cb_t on_app_exit_swipe;
 } system_ui_callbacks_t;
 
 #ifdef __cplusplus

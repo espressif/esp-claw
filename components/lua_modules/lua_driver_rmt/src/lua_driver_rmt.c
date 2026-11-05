@@ -17,6 +17,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "lauxlib.h"
+#include "cap_lua_hw.h"
 
 #define LUA_DRIVER_RMT_TX_METATABLE "rmt.tx"
 #define LUA_DRIVER_RMT_RX_METATABLE "rmt.rx"
@@ -32,8 +33,10 @@
 #define LUA_DRIVER_RMT_DEFAULT_TX_TIMEOUT_MS       5000
 
 typedef struct {
+    cap_lua_hw_lease_t lease;
     rmt_channel_handle_t channel;
     rmt_encoder_handle_t encoder;
+    rmt_symbol_word_t *symbols;
     int gpio_num;
     uint32_t resolution_hz;
     int mem_block_symbols;
@@ -41,9 +44,11 @@ typedef struct {
     uint32_t carrier_hz;
     float carrier_duty;
     bool enabled;
+    bool closing;
 } lua_driver_rmt_tx_ud_t;
 
 typedef struct {
+    cap_lua_hw_lease_t lease;
     rmt_channel_handle_t channel;
     QueueHandle_t queue;
     rmt_symbol_word_t *buffer;
@@ -54,6 +59,7 @@ typedef struct {
     uint32_t signal_range_min_ns;
     uint32_t signal_range_max_ns;
     bool enabled;
+    bool closing;
 } lua_driver_rmt_rx_ud_t;
 
 static bool IRAM_ATTR lua_driver_rmt_rx_done_cb(rmt_channel_handle_t channel,
@@ -71,7 +77,7 @@ static lua_driver_rmt_tx_ud_t *lua_driver_rmt_tx_get_ud(lua_State *L, int idx)
 {
     lua_driver_rmt_tx_ud_t *ud =
         (lua_driver_rmt_tx_ud_t *)luaL_checkudata(L, idx, LUA_DRIVER_RMT_TX_METATABLE);
-    if (!ud || !ud->channel) {
+    if (!ud || !ud->channel || ud->closing) {
         luaL_error(L, "rmt tx: invalid or closed handle");
     }
     return ud;
@@ -81,7 +87,7 @@ static lua_driver_rmt_rx_ud_t *lua_driver_rmt_rx_get_ud(lua_State *L, int idx)
 {
     lua_driver_rmt_rx_ud_t *ud =
         (lua_driver_rmt_rx_ud_t *)luaL_checkudata(L, idx, LUA_DRIVER_RMT_RX_METATABLE);
-    if (!ud || !ud->channel) {
+    if (!ud || !ud->channel || ud->closing) {
         luaL_error(L, "rmt rx: invalid or closed handle");
     }
     return ud;
@@ -198,67 +204,51 @@ static int lua_driver_rmt_push_symbols(lua_State *L, const rmt_symbol_word_t *sy
 
 static esp_err_t lua_driver_rmt_tx_release(lua_driver_rmt_tx_ud_t *ud)
 {
-    esp_err_t first_err = ESP_OK;
+    if (!ud) return ESP_OK;
+    ud->closing = true;
     esp_err_t err;
-
-    if (!ud) {
-        return ESP_OK;
-    }
     if (ud->enabled && ud->channel) {
         err = rmt_disable(ud->channel);
-        if (first_err == ESP_OK && err != ESP_OK) {
-            first_err = err;
-        }
+        if (err != ESP_OK) return err;
         ud->enabled = false;
-    }
-    if (ud->encoder) {
-        err = rmt_del_encoder(ud->encoder);
-        if (first_err == ESP_OK && err != ESP_OK) {
-            first_err = err;
-        }
-        ud->encoder = NULL;
     }
     if (ud->channel) {
         err = rmt_del_channel(ud->channel);
-        if (first_err == ESP_OK && err != ESP_OK) {
-            first_err = err;
-        }
+        if (err != ESP_OK) return err;
         ud->channel = NULL;
     }
-    return first_err;
+    if (ud->encoder) {
+        err = rmt_del_encoder(ud->encoder);
+        if (err != ESP_OK) return err;
+        ud->encoder = NULL;
+    }
+    free(ud->symbols);
+    ud->symbols = NULL;
+    return cap_lua_hw_release(&ud->lease);
 }
 
 static esp_err_t lua_driver_rmt_rx_release(lua_driver_rmt_rx_ud_t *ud)
 {
-    esp_err_t first_err = ESP_OK;
+    if (!ud) return ESP_OK;
+    ud->closing = true;
     esp_err_t err;
-
-    if (!ud) {
-        return ESP_OK;
-    }
     if (ud->enabled && ud->channel) {
         err = rmt_disable(ud->channel);
-        if (first_err == ESP_OK && err != ESP_OK) {
-            first_err = err;
-        }
+        if (err != ESP_OK) return err;
         ud->enabled = false;
     }
     if (ud->channel) {
         err = rmt_del_channel(ud->channel);
-        if (first_err == ESP_OK && err != ESP_OK) {
-            first_err = err;
-        }
+        if (err != ESP_OK) return err;
         ud->channel = NULL;
     }
     if (ud->queue) {
         vQueueDelete(ud->queue);
         ud->queue = NULL;
     }
-    if (ud->buffer) {
-        free(ud->buffer);
-        ud->buffer = NULL;
-    }
-    return first_err;
+    free(ud->buffer);
+    ud->buffer = NULL;
+    return cap_lua_hw_release(&ud->lease);
 }
 
 static int lua_driver_rmt_tx_new(lua_State *L)
@@ -292,6 +282,11 @@ static int lua_driver_rmt_tx_new(lua_State *L)
         .carrier_duty = carrier_duty,
     };
 
+    luaL_getmetatable(L, LUA_DRIVER_RMT_TX_METATABLE);
+    lua_setmetatable(L, -2);
+    esp_err_t claim_err = cap_lua_hw_claim_gpio(L, &ud->lease, "lua/rmt-tx", gpio_num);
+    if (claim_err != ESP_OK) return luaL_error(L, "rmt GPIO claim failed: %s", esp_err_to_name(claim_err));
+
     rmt_tx_channel_config_t tx_cfg = {
         .clk_src = RMT_CLK_SRC_DEFAULT,
         .resolution_hz = resolution_hz,
@@ -301,6 +296,7 @@ static int lua_driver_rmt_tx_new(lua_State *L)
     };
     esp_err_t err = rmt_new_tx_channel(&tx_cfg, &ud->channel);
     if (err != ESP_OK) {
+        (void)lua_driver_rmt_tx_release(ud);
         return luaL_error(L, "rmt tx: rmt_new_tx_channel failed: %s", esp_err_to_name(err));
     }
 
@@ -311,7 +307,7 @@ static int lua_driver_rmt_tx_new(lua_State *L)
         };
         err = rmt_apply_carrier(ud->channel, &carrier_cfg);
         if (err != ESP_OK) {
-            lua_driver_rmt_tx_release(ud);
+            (void)lua_driver_rmt_tx_release(ud);
             return luaL_error(L, "rmt tx: rmt_apply_carrier failed: %s", esp_err_to_name(err));
         }
     }
@@ -319,13 +315,13 @@ static int lua_driver_rmt_tx_new(lua_State *L)
     rmt_copy_encoder_config_t encoder_cfg = {};
     err = rmt_new_copy_encoder(&encoder_cfg, &ud->encoder);
     if (err != ESP_OK) {
-        lua_driver_rmt_tx_release(ud);
+        (void)lua_driver_rmt_tx_release(ud);
         return luaL_error(L, "rmt tx: rmt_new_copy_encoder failed: %s", esp_err_to_name(err));
     }
 
     err = rmt_enable(ud->channel);
     if (err != ESP_OK) {
-        lua_driver_rmt_tx_release(ud);
+        (void)lua_driver_rmt_tx_release(ud);
         return luaL_error(L, "rmt tx: rmt_enable failed: %s", esp_err_to_name(err));
     }
     ud->enabled = true;
@@ -366,6 +362,11 @@ static int lua_driver_rmt_rx_new(lua_State *L)
         .signal_range_max_ns = max_ns,
     };
 
+    luaL_getmetatable(L, LUA_DRIVER_RMT_RX_METATABLE);
+    lua_setmetatable(L, -2);
+    esp_err_t claim_err = cap_lua_hw_claim_gpio(L, &ud->lease, "lua/rmt-rx", gpio_num);
+    if (claim_err != ESP_OK) return luaL_error(L, "rmt GPIO claim failed: %s", esp_err_to_name(claim_err));
+
     rmt_rx_channel_config_t rx_cfg = {
         .clk_src = RMT_CLK_SRC_DEFAULT,
         .resolution_hz = resolution_hz,
@@ -374,12 +375,13 @@ static int lua_driver_rmt_rx_new(lua_State *L)
     };
     esp_err_t err = rmt_new_rx_channel(&rx_cfg, &ud->channel);
     if (err != ESP_OK) {
+        (void)lua_driver_rmt_rx_release(ud);
         return luaL_error(L, "rmt rx: rmt_new_rx_channel failed: %s", esp_err_to_name(err));
     }
 
     ud->queue = xQueueCreate(1, sizeof(rmt_rx_done_event_data_t));
     if (ud->queue == NULL) {
-        lua_driver_rmt_rx_release(ud);
+        (void)lua_driver_rmt_rx_release(ud);
         return luaL_error(L, "rmt rx: out of memory");
     }
 
@@ -388,19 +390,19 @@ static int lua_driver_rmt_rx_new(lua_State *L)
     };
     err = rmt_rx_register_event_callbacks(ud->channel, &cbs, ud->queue);
     if (err != ESP_OK) {
-        lua_driver_rmt_rx_release(ud);
+        (void)lua_driver_rmt_rx_release(ud);
         return luaL_error(L, "rmt rx: register callback failed: %s", esp_err_to_name(err));
     }
 
     ud->buffer = calloc((size_t)max_symbols, sizeof(rmt_symbol_word_t));
     if (ud->buffer == NULL) {
-        lua_driver_rmt_rx_release(ud);
+        (void)lua_driver_rmt_rx_release(ud);
         return luaL_error(L, "rmt rx: out of memory");
     }
 
     err = rmt_enable(ud->channel);
     if (err != ESP_OK) {
-        lua_driver_rmt_rx_release(ud);
+        (void)lua_driver_rmt_rx_release(ud);
         return luaL_error(L, "rmt rx: rmt_enable failed: %s", esp_err_to_name(err));
     }
     ud->enabled = true;
@@ -421,8 +423,10 @@ static int lua_driver_rmt_tx_send(lua_State *L)
         return luaL_error(L, "rmt tx: symbol count must be 1-%d", LUA_DRIVER_RMT_MAX_SYMBOLS);
     }
 
-    rmt_symbol_word_t *symbols =
-        (rmt_symbol_word_t *)lua_newuserdata(L, (size_t)count * sizeof(rmt_symbol_word_t));
+    if (ud->symbols) return luaL_error(L, "rmt tx has an unfinished transfer; close first");
+    ud->symbols = calloc((size_t)count, sizeof(*ud->symbols));
+    if (!ud->symbols) return luaL_error(L, "rmt tx: out of memory");
+    rmt_symbol_word_t *symbols = ud->symbols;
 
     for (lua_Integer i = 0; i < count; i++) {
         lua_rawgeti(L, 2, i + 1);
@@ -442,6 +446,8 @@ static int lua_driver_rmt_tx_send(lua_State *L)
     if (err != ESP_OK) {
         return luaL_error(L, "rmt tx: wait failed: %s", esp_err_to_name(err));
     }
+    free(ud->symbols);
+    ud->symbols = NULL;
     lua_pushboolean(L, 1);
     return 1;
 }

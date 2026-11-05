@@ -17,9 +17,8 @@
 #define CLAW_LLM_ANTHROPIC_VERSION "2023-06-01"
 
 typedef struct {
-    char *api_key;
+    claw_endpoint_handle_t endpoint;
     char *model;
-    char *base_url;
     uint32_t timeout_ms;
     uint32_t max_tokens;
     size_t image_max_bytes;
@@ -67,26 +66,6 @@ static char *dup_n_string(const char *value, size_t len)
     memcpy(copy, value, len);
     copy[len] = '\0';
     return copy;
-}
-
-static char *join_url(const char *base_url, const char *path)
-{
-    bool base_has_slash;
-    bool path_has_slash;
-
-    if (!base_url || !path) {
-        return NULL;
-    }
-
-    base_has_slash = base_url[0] && base_url[strlen(base_url) - 1] == '/';
-    path_has_slash = path[0] == '/';
-    if (base_has_slash && path_has_slash) {
-        return dup_printf("%s%s", base_url, path + 1);
-    }
-    if (!base_has_slash && !path_has_slash) {
-        return dup_printf("%s/%s", base_url, path);
-    }
-    return dup_printf("%s%s", base_url, path);
 }
 
 static esp_err_t dup_json_string(cJSON *json, char **out_value)
@@ -724,29 +703,19 @@ static esp_err_t build_chat_body(const anthropic_backend_ctx_t *ctx,
     return ESP_OK;
 }
 
-static esp_err_t anthropic_init(const claw_llm_runtime_config_t *config,
+static esp_err_t anthropic_init(const claw_llm_backend_config_t *config,
                                 const claw_llm_model_profile_t *profile,
+                                claw_endpoint_handle_t endpoint,
                                 void **out_backend_ctx,
                                 char **out_error_message)
 {
     anthropic_backend_ctx_t *ctx = NULL;
-    const char *base_url = NULL;
 
-    if (!config || !profile || !out_backend_ctx || !out_error_message) {
-        return ESP_ERR_INVALID_ARG;
-    }
-    if (!config->api_key || !config->api_key[0]) {
-        *out_error_message = dup_printf("LLM API key is empty");
+    if (!config || !profile || !endpoint || !out_backend_ctx || !out_error_message) {
         return ESP_ERR_INVALID_ARG;
     }
     if (!config->model || !config->model[0]) {
         *out_error_message = dup_printf("LLM model is empty");
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    base_url = config->base_url;
-    if (!base_url || !base_url[0]) {
-        *out_error_message = dup_printf("LLM base_url is empty");
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -756,16 +725,13 @@ static esp_err_t anthropic_init(const claw_llm_runtime_config_t *config,
         return ESP_ERR_NO_MEM;
     }
 
-    ctx->api_key = strdup(config->api_key);
+    ctx->endpoint = endpoint;
     ctx->model = strdup(config->model);
-    ctx->base_url = strdup(base_url);
     ctx->timeout_ms = config->timeout_ms;
     ctx->max_tokens = config->max_tokens;
     ctx->image_max_bytes = config->image_max_bytes;
-    if (!ctx->api_key || !ctx->model || !ctx->base_url) {
-        free(ctx->api_key);
+    if (!ctx->model) {
         free(ctx->model);
-        free(ctx->base_url);
         free(ctx);
         *out_error_message = dup_printf("Out of memory copying backend config");
         return ESP_ERR_NO_MEM;
@@ -785,10 +751,8 @@ static esp_err_t anthropic_chat(void *backend_ctx,
     claw_llm_http_json_request_t http_request = {0};
     claw_llm_http_response_t http_response = {0};
     char *post_data = NULL;
-    char *url = NULL;
     esp_err_t err;
     const claw_llm_http_header_t headers[] = {
-        { .name = "x-api-key", .value = ctx ? ctx->api_key : NULL },
         { .name = "anthropic-version", .value = CLAW_LLM_ANTHROPIC_VERSION },
     };
 
@@ -801,23 +765,14 @@ static esp_err_t anthropic_chat(void *backend_ctx,
         return err;
     }
 
-    url = join_url(ctx->base_url, profile->chat_path);
-    if (!url) {
-        free(post_data);
-        *out_error_message = dup_printf("Out of memory building API URL");
-        return ESP_ERR_NO_MEM;
-    }
-
-    http_request.url = url;
     http_request.body = post_data;
-    http_request.auth_type = "none";
     http_request.timeout_ms = ctx->timeout_ms;
     http_request.abort_flag = request->abort_flag;
     http_request.headers = headers;
     http_request.header_count = sizeof(headers) / sizeof(headers[0]);
 
-    err = claw_llm_http_post_json(&http_request, &http_response, out_error_message);
-    free(url);
+    err = claw_llm_http_post_endpoint(ctx->endpoint, profile->chat_path, &http_request,
+                                      &http_response, out_error_message);
     free(post_data);
     if (err != ESP_OK) {
         return err;
@@ -849,10 +804,8 @@ static esp_err_t anthropic_infer_media(void *backend_ctx,
     char *mime = NULL;
     char *base64_data = NULL;
     char *post_data = NULL;
-    char *url = NULL;
     esp_err_t err;
     const claw_llm_http_header_t headers[] = {
-        { .name = "x-api-key", .value = ctx ? ctx->api_key : NULL },
         { .name = "anthropic-version", .value = CLAW_LLM_ANTHROPIC_VERSION },
     };
 
@@ -940,21 +893,13 @@ static esp_err_t anthropic_infer_media(void *backend_ctx,
         goto cleanup;
     }
 
-    url = join_url(ctx->base_url, profile->chat_path);
-    if (!url) {
-        err = ESP_ERR_NO_MEM;
-        *out_error_message = dup_printf("Out of memory building API URL");
-        goto cleanup;
-    }
-
-    http_request.url = url;
     http_request.body = post_data;
-    http_request.auth_type = "none";
     http_request.timeout_ms = ctx->timeout_ms;
     http_request.headers = headers;
     http_request.header_count = sizeof(headers) / sizeof(headers[0]);
 
-    err = claw_llm_http_post_json(&http_request, &http_response, out_error_message);
+    err = claw_llm_http_post_endpoint(ctx->endpoint, profile->chat_path, &http_request,
+                                      &http_response, out_error_message);
     if (err != ESP_OK) {
         goto cleanup;
     }
@@ -977,7 +922,6 @@ cleanup:
     free(mime);
     free(base64_data);
     free(post_data);
-    free(url);
     cJSON_Delete(body);
     cJSON_Delete(messages);
     cJSON_Delete(user_msg);
@@ -999,9 +943,7 @@ static void anthropic_deinit(void *backend_ctx)
         return;
     }
 
-    free(ctx->api_key);
     free(ctx->model);
-    free(ctx->base_url);
     free(ctx);
 }
 
@@ -1017,7 +959,6 @@ static const claw_llm_backend_registration_t s_anthropic_registration = {
     .id = CLAW_LLM_BACKEND_ANTHROPIC_ID,
     .vtable = &s_anthropic_vtable,
     .defaults = {
-        .auth_type = CLAW_LLM_BACKEND_ANTHROPIC_AUTH_TYPE,
         .chat_path = CLAW_LLM_BACKEND_ANTHROPIC_CHAT_PATH,
         .max_tokens_field = CLAW_LLM_BACKEND_ANTHROPIC_DEFAULT_MAX_TOKENS_FIELD,
     },

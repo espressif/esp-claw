@@ -24,7 +24,6 @@ GENERATED_SKILL_META = {
     'description': 'Built-in Lua module documentation.',
     'metadata': {
         'cap_groups': ['cap_lua'],
-        'manage_mode': 'readonly',
     },
 }
 

@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "cJSON.h"
+#include "claw_endpoint.h"
 #include "esp_err.h"
 
 typedef enum {
@@ -47,13 +48,24 @@ typedef struct {
     bool image_remote_url_only;
 } claw_llm_model_profile_t;
 
+/** Protocol/model settings only; connection settings belong to the endpoint. */
+typedef struct {
+    const char *model;
+    const char *reasoning_effort;
+    uint32_t timeout_ms;
+    uint32_t max_tokens;
+    size_t image_max_bytes;
+} claw_llm_backend_config_t;
+
 typedef struct {
     const char *api_key;
     const char *backend_type;
+    const char *endpoint_provider;
     const char *model;
     const char *base_url;
     const char *auth_type;
     const char *max_tokens_field;
+    const char *reasoning_effort;
     uint32_t timeout_ms;
     uint32_t max_tokens;
     size_t image_max_bytes;
@@ -98,8 +110,7 @@ typedef struct {
 typedef struct {
     const char *url;
     const char *body;
-    const char *api_key;
-    const char *auth_type;
+    const claw_endpoint_request_t *endpoint_request;
     uint32_t timeout_ms;
     volatile bool *abort_flag;
     const claw_llm_http_header_t *headers;

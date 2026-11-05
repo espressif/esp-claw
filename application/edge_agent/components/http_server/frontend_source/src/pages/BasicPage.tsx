@@ -117,7 +117,10 @@ export const BasicPage: Component<{ onRestartRequest: () => void }> = (props) =>
           <Banner kind="error" message={validationError() ?? tab.error() ?? undefined} />
         </div>
       </Show>
-      <div class="divide-y divide-[var(--color-border-subtle)] mt-2">
+      <fieldset
+        disabled={tab.loading() || tab.saving()}
+        class="m-0 min-w-0 border-0 p-0 divide-y divide-[var(--color-border-subtle)] mt-2 disabled:opacity-60"
+      >
         <StaticConfigBlock title={t('sectionWifi') as string}>
           <div class="grid gap-3 sm:grid-cols-2 pt-2">
             <TextInput
@@ -151,7 +154,7 @@ export const BasicPage: Component<{ onRestartRequest: () => void }> = (props) =>
             <SelectInput
               label={t('apBehavior')}
               value={tab.form.ap_behavior}
-              onChange={(event) => tab.setForm('ap_behavior', event.currentTarget.value)}
+              onInput={(event) => tab.setForm('ap_behavior', event.currentTarget.value)}
             >
               <option value="keep">{t('apBehaviorKeep') as string}</option>
               <option value="close_on_sta">{t('apBehaviorCloseOnSta') as string}</option>
@@ -170,10 +173,10 @@ export const BasicPage: Component<{ onRestartRequest: () => void }> = (props) =>
             />
           </div>
         </CollapsibleConfigBlock>
-      </div>
+      </fieldset>
       <SavePanel
         dirty={tab.dirty()}
-        saving={tab.saving()}
+        saving={tab.saving() || tab.loading()}
         onSave={() => handleSave().catch(() => undefined)}
         onDiscard={tab.discard}
         note={t('restartHint') as string}

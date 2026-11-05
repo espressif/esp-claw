@@ -4,9 +4,8 @@
   "description": "Use the editable profile markdown files to persist changes to the agent's soul, identity card, persona, role, and the user's standing profile.",
   "metadata": {
     "cap_groups": [
-      "cap_files"
-    ],
-    "manage_mode": "readonly"
+     "cap_files"
+    ]
   }
 }
 ---

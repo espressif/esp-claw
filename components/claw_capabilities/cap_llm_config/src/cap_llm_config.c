@@ -12,6 +12,7 @@
 
 #include "cJSON.h"
 #include "claw_cap.h"
+#include "claw_endpoint.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_log.h"
@@ -27,6 +28,7 @@ typedef struct {
     const char *auth_type;
     const char *model;
     const char *max_tokens_field;
+    const char *reasoning_effort;
     const char *default_image_max_bytes;
     const char *supports_tools;
     const char *supports_vision;
@@ -42,6 +44,7 @@ typedef struct {
     char base_url[CAP_LLM_CONFIG_STR_LEN];
     char custom_model[CAP_LLM_CONFIG_MODEL_LEN];
     char custom_token[CAP_LLM_CONFIG_STR_LEN];
+    char reasoning_effort[CAP_LLM_CONFIG_TIMEOUT_LEN];
 } cap_llm_config_parse_buf_t;
 
 static const cap_llm_preset_t s_presets[] = {
@@ -52,6 +55,7 @@ static const cap_llm_preset_t s_presets[] = {
         .auth_type = "bearer",
         .model = "deepseek-chat",
         .max_tokens_field = "max_completion_tokens",
+        .reasoning_effort = "medium",
         .default_image_max_bytes = "524288",
         .supports_tools = "true",
         .supports_vision = "true",
@@ -59,11 +63,12 @@ static const cap_llm_preset_t s_presets[] = {
     },
     {
         .id = "openai",
-        .backend_type = "openai_compatible",
+        .backend_type = "openai_responses",
         .base_url = "https://api.openai.com/v1",
         .auth_type = "bearer",
-        .model = "gpt-4o-mini",
-        .max_tokens_field = "max_completion_tokens",
+        .model = "gpt-5.6-sol",
+        .max_tokens_field = "max_output_tokens",
+        .reasoning_effort = "medium",
         .default_image_max_bytes = "524288",
         .supports_tools = "true",
         .supports_vision = "true",
@@ -76,6 +81,7 @@ static const cap_llm_preset_t s_presets[] = {
         .auth_type = "bearer",
         .model = "qwen-plus",
         .max_tokens_field = "max_tokens",
+        .reasoning_effort = "medium",
         .default_image_max_bytes = "524288",
         .supports_tools = "true",
         .supports_vision = "true",
@@ -85,9 +91,10 @@ static const cap_llm_preset_t s_presets[] = {
         .id = "anthropic",
         .backend_type = "anthropic_compatible",
         .base_url = "https://api.anthropic.com/v1",
-        .auth_type = "none",
+        .auth_type = "api-key",
         .model = "claude-3-5-haiku-latest",
         .max_tokens_field = "max_tokens",
+        .reasoning_effort = "medium",
         .default_image_max_bytes = "524288",
         .supports_tools = "true",
         .supports_vision = "true",
@@ -106,7 +113,10 @@ static const char *s_usage =
     "/llm token <api_token>\n"
     "/llm model <model>\n"
     "/llm backend <backend>\n"
+    "/llm endpoint <provider>\n"
+    "/llm auth <bearer|api-key|none>\n"
     "/llm base-url <base_url>\n"
+    "/llm reasoning <none|low|medium|high|xhigh|max>\n"
     "/llm reset\n";
 
 static bool is_space(char ch)
@@ -240,10 +250,14 @@ static void mask_token(const char *token, char *out, size_t out_size)
 static void apply_preset(cap_llm_config_t *config, const cap_llm_preset_t *preset)
 {
     strlcpy(config->backend_type, preset->backend_type, sizeof(config->backend_type));
+    strlcpy(config->endpoint_provider, CLAW_ENDPOINT_PROVIDER_STATIC, sizeof(config->endpoint_provider));
     strlcpy(config->base_url, preset->base_url, sizeof(config->base_url));
     strlcpy(config->auth_type, preset->auth_type, sizeof(config->auth_type));
     strlcpy(config->model, preset->model, sizeof(config->model));
     strlcpy(config->max_tokens_field, preset->max_tokens_field, sizeof(config->max_tokens_field));
+    strlcpy(config->reasoning_effort,
+            preset->reasoning_effort ? preset->reasoning_effort : "medium",
+            sizeof(config->reasoning_effort));
     strlcpy(config->default_image_max_bytes,
             preset->default_image_max_bytes,
             sizeof(config->default_image_max_bytes));
@@ -296,24 +310,31 @@ static void write_status(const cap_llm_config_t *config, char *output, size_t ou
              output_size,
              "LLM status\n"
              "backend: %s\n"
+             "endpoint provider: %s\n"
              "base_url: %s\n"
              "model: %s\n"
              "token: %s\n"
+             "reasoning: %s\n"
              "tools: %s vision: %s",
              config->backend_type[0] ? config->backend_type : "(missing)",
+             config->endpoint_provider[0] ? config->endpoint_provider : CLAW_ENDPOINT_PROVIDER_STATIC,
              config->base_url[0] ? config->base_url : "(missing)",
              config->model[0] ? config->model : "(missing)",
              masked,
+             config->reasoning_effort[0] ? config->reasoning_effort : "medium",
              config->supports_tools[0] ? config->supports_tools : "false",
              config->supports_vision[0] ? config->supports_vision : "false");
 }
 
 static bool config_ready(const cap_llm_config_t *config)
 {
-    return config->api_key[0] &&
-           config->backend_type[0] &&
-           config->base_url[0] &&
-           config->model[0];
+    return config->backend_type[0] && config->model[0] &&
+           claw_endpoint_is_configured(config->endpoint_provider, &(claw_endpoint_config_t) {
+               .service = CLAW_ENDPOINT_SERVICE_LLM,
+               .base_url = config->base_url,
+               .api_key = config->api_key,
+               .auth_type = config->auth_type,
+           });
 }
 
 static esp_err_t save_config(cap_llm_config_t *config, char *output, size_t output_size)
@@ -407,6 +428,24 @@ static esp_err_t llm_config_execute(const char *input_json,
         goto cleanup;
     }
 
+    if (strcmp(subcommand, "endpoint") == 0 || strcmp(subcommand, "auth") == 0) {
+        bool has_value = false;
+        err = read_token(&cursor, parse_buf->backend, sizeof(parse_buf->backend), &has_value);
+        if (err != ESP_OK) goto cleanup;
+        const bool auth = strcmp(subcommand, "auth") == 0;
+        if (!has_value || (auth && strcmp(parse_buf->backend, CLAW_ENDPOINT_AUTH_BEARER) != 0 &&
+                           strcmp(parse_buf->backend, CLAW_ENDPOINT_AUTH_API_KEY) != 0 &&
+                           strcmp(parse_buf->backend, CLAW_ENDPOINT_AUTH_NONE) != 0)) {
+            strlcpy(output, auth ? "Usage: /llm auth <bearer|api-key|none>"
+                                : "Usage: /llm endpoint <provider>", output_size);
+            goto cleanup;
+        }
+        if (auth) strlcpy(config->auth_type, parse_buf->backend, sizeof(config->auth_type));
+        else strlcpy(config->endpoint_provider, parse_buf->backend, sizeof(config->endpoint_provider));
+        err = save_config(config, output, output_size);
+        goto cleanup;
+    }
+
     if (strcmp(subcommand, "setup") == 0) {
         bool has_provider = false;
         bool has_token = false;
@@ -467,14 +506,14 @@ static esp_err_t llm_config_execute(const char *input_json,
                 goto cleanup;
             }
             strlcpy(config->backend_type, parse_buf->backend, sizeof(config->backend_type));
+            strlcpy(config->endpoint_provider, CLAW_ENDPOINT_PROVIDER_STATIC, sizeof(config->endpoint_provider));
             strlcpy(config->base_url,
                     has_url ? parse_buf->url : parse_buf->base_url,
                     sizeof(config->base_url));
             strlcpy(config->model, parse_buf->custom_model, sizeof(config->model));
             strlcpy(config->api_key, parse_buf->custom_token, sizeof(config->api_key));
-            if (!config->auth_type[0]) {
-                strlcpy(config->auth_type, "bearer", sizeof(config->auth_type));
-            }
+            strlcpy(config->auth_type, strcmp(config->backend_type, "anthropic_compatible") == 0
+                    ? CLAW_ENDPOINT_AUTH_API_KEY : CLAW_ENDPOINT_AUTH_BEARER, sizeof(config->auth_type));
             if (!config->max_tokens_field[0]) {
                 strlcpy(config->max_tokens_field, "max_tokens", sizeof(config->max_tokens_field));
             }
@@ -565,7 +604,7 @@ static esp_err_t llm_config_execute(const char *input_json,
             goto cleanup;
         }
         if (!has_backend) {
-            strlcpy(output, "Usage: /llm backend <openai_compatible|anthropic_compatible>", output_size);
+            strlcpy(output, "Usage: /llm backend <openai_responses|openai_compatible|anthropic_compatible>", output_size);
             err = ESP_OK;
             goto cleanup;
         }
@@ -592,6 +631,35 @@ static esp_err_t llm_config_execute(const char *input_json,
         goto cleanup;
     }
 
+    if (strcmp(subcommand, "reasoning") == 0) {
+        bool has_effort = false;
+
+        err = read_token(&cursor,
+                         parse_buf->reasoning_effort,
+                         sizeof(parse_buf->reasoning_effort),
+                         &has_effort);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "reasoning effort parse failed: %s", esp_err_to_name(err));
+            goto cleanup;
+        }
+        if (!has_effort ||
+                (strcmp(parse_buf->reasoning_effort, "none") != 0 &&
+                 strcmp(parse_buf->reasoning_effort, "low") != 0 &&
+                 strcmp(parse_buf->reasoning_effort, "medium") != 0 &&
+                 strcmp(parse_buf->reasoning_effort, "high") != 0 &&
+                 strcmp(parse_buf->reasoning_effort, "xhigh") != 0 &&
+                 strcmp(parse_buf->reasoning_effort, "max") != 0)) {
+            strlcpy(output, "Usage: /llm reasoning <none|low|medium|high|xhigh|max>", output_size);
+            err = ESP_OK;
+            goto cleanup;
+        }
+        strlcpy(config->reasoning_effort,
+                parse_buf->reasoning_effort,
+                sizeof(config->reasoning_effort));
+        err = save_config(config, output, output_size);
+        goto cleanup;
+    }
+
     if (strcmp(subcommand, "test") == 0) {
         snprintf(output,
                  output_size,
@@ -606,10 +674,12 @@ static esp_err_t llm_config_execute(const char *input_json,
     if (strcmp(subcommand, "reset") == 0) {
         config->api_key[0] = '\0';
         config->backend_type[0] = '\0';
+        config->endpoint_provider[0] = '\0';
         config->model[0] = '\0';
         config->base_url[0] = '\0';
         config->auth_type[0] = '\0';
         config->max_tokens_field[0] = '\0';
+        config->reasoning_effort[0] = '\0';
         config->supports_tools[0] = '\0';
         config->supports_vision[0] = '\0';
         config->image_remote_url_only[0] = '\0';

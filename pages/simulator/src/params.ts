@@ -3,13 +3,16 @@ import type { SimulatorParams } from './types'
 const DEFAULT_REPO = 'skills-lab'
 const DEFAULT_REF = 'main'
 
-function normalizeSkillPath(value: string): string {
-  const path = value.trim().replaceAll('\\', '/').replace(/^\/+/, '')
-  if (!path.endsWith('/SKILL.md')) {
-    throw new Error('skill must point to a SKILL.md file')
+function normalizeAppPath(value: string): string {
+  const path = value.trim()
+  if (path.startsWith('/') || path.includes('\\') || path.split('/').some((segment) => !segment)) {
+    throw new Error('app path must be repository-relative')
+  }
+  if (!path.endsWith('/launcher.json')) {
+    throw new Error('app must point to a launcher.json file')
   }
   if (path.includes('..')) {
-    throw new Error('skill path must not contain ..')
+    throw new Error('app path must not contain ..')
   }
   return path
 }
@@ -18,15 +21,15 @@ export function readSimulatorParams(search = window.location.search): SimulatorP
   const params = new URLSearchParams(search)
   const repo = params.get('repo')?.trim() || DEFAULT_REPO
   const ref = params.get('ref')?.trim() || DEFAULT_REF
-  const skillParam = params.get('skill')?.trim()
+  const appParam = params.get('app')?.trim()
 
-  if (!skillParam) {
-    throw new Error('missing URL parameter: skill')
+  if (!appParam) {
+    throw new Error('missing URL parameter: app')
   }
 
   return {
     repo,
     ref,
-    skill: normalizeSkillPath(skillParam),
+    app: normalizeAppPath(appParam),
   }
 }

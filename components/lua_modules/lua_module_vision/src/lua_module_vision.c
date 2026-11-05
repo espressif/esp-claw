@@ -17,6 +17,10 @@
 #include "lua.h"
 #include "sdkconfig.h"
 
+#if CONFIG_LUA_MODULE_VISION_COLOR_DETECT || CONFIG_LUA_MODULE_VISION_QRCODE_DETECT
+#include "vision_core_runtime.h"
+#endif
+
 #if CONFIG_LUA_MODULE_VISION_ESPDET
 #include "espdet.h"
 #endif
@@ -301,9 +305,16 @@ int luaopen_motion_detect(lua_State *L)
 
 esp_err_t lua_module_vision_register(void)
 {
-#if !CONFIG_LUA_MODULE_VISION_MOTION_DETECT && !CONFIG_LUA_MODULE_VISION_ESPDET && !CONFIG_LUA_MODULE_VISION_COLOR_DETECT
+#if !CONFIG_LUA_MODULE_VISION_MOTION_DETECT && !CONFIG_LUA_MODULE_VISION_ESPDET && !CONFIG_LUA_MODULE_VISION_COLOR_DETECT && !CONFIG_LUA_MODULE_VISION_QRCODE_DETECT
     return ESP_OK;
 #else
+#if CONFIG_LUA_MODULE_VISION_COLOR_DETECT || CONFIG_LUA_MODULE_VISION_QRCODE_DETECT
+    esp_err_t err = lua_vision_core_runtime_init();
+    if (err != ESP_OK) {
+        ESP_LOGE("lua_vision", "vision core runtime init failed: %s", esp_err_to_name(err));
+        return err;
+    }
+#endif
     static const cap_lua_module_t modules[] = {
 #if CONFIG_LUA_MODULE_VISION_MOTION_DETECT
         {"motion_detect", luaopen_motion_detect},
@@ -312,7 +323,10 @@ esp_err_t lua_module_vision_register(void)
         {"espdet", luaopen_espdet},
 #endif
 #if CONFIG_LUA_MODULE_VISION_COLOR_DETECT
-        {"color_detect", luaopen_color_detect_dl},
+        {"color_detect", luaopen_color_detect},
+#endif
+#if CONFIG_LUA_MODULE_VISION_QRCODE_DETECT
+        {"qrcode_detect", luaopen_qrcode_detect},
 #endif
     };
     return cap_lua_register_modules(modules, sizeof(modules) / sizeof(modules[0]));

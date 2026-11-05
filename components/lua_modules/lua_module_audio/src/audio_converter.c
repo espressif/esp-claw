@@ -102,6 +102,17 @@ static esp_err_t audio_converter_ensure_buffers(audio_converter_t *converter, ui
     return ESP_OK;
 }
 
+esp_err_t audio_converter_prepare(audio_converter_t *converter, uint32_t in_bytes)
+{
+    if (!converter || !in_bytes || !converter->src.bytes_per_frame || !converter->src.sample_rate) return ESP_ERR_INVALID_ARG;
+    if (converter->bypass) return ESP_OK;
+    uint64_t frames = in_bytes / converter->src.bytes_per_frame;
+    /* Reserve phase-dependent rounding and filter alignment headroom. */
+    uint64_t out_frames = (frames * converter->dst.sample_rate + converter->src.sample_rate - 1) / converter->src.sample_rate + 32;
+    if (out_frames > UINT32_MAX / converter->out_frame_bytes) return ESP_ERR_INVALID_SIZE;
+    return audio_converter_ensure_buffers(converter, in_bytes, out_frames * converter->out_frame_bytes);
+}
+
 esp_err_t audio_converter_process(audio_converter_t *converter, const uint8_t *in, uint32_t in_bytes, uint8_t **out, uint32_t *out_bytes)
 {
     uint32_t in_frames;

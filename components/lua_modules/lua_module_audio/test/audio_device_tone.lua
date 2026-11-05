@@ -1,13 +1,7 @@
 local audio = require("audio")
-local bm = require("board_manager")
 local delay = require("delay")
 
-local codec, rate, channels, bits = bm.get_audio_codec_output_params("audio_dac")
-if not codec then
-    error("get_audio_codec_output_params(audio_dac) failed: " .. tostring(rate))
-end
-
-local output = assert(audio.new_output({ codec, rate, channels, bits, volume = 100 }))
+local output = assert(audio.open_output({ volume = 100 }))
 
 local ok, err = xpcall(function()
     local info = output:info()

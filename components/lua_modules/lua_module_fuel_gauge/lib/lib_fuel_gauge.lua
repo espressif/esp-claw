@@ -99,6 +99,9 @@ local function new_device_from_opts(opts, default_addr)
 
     if opts.bus ~= nil then
         bus = opts.bus
+    elseif opts.borrow == true then
+        bus = i2c.borrow(assert(opts.port, "fuel_gauge.new: missing port"))
+        owns_bus = true
     else
         bus = i2c.new(
             assert(opts.port, "fuel_gauge.new: missing 'port'"),

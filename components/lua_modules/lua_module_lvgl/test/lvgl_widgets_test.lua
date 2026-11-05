@@ -1,4 +1,3 @@
-local board_manager = require("board_manager")
 local lvgl = require("lvgl")
 
 local function check(cond, msg)
@@ -30,16 +29,11 @@ local function section(parent, title, width)
     return box
 end
 
-local panel_handle, io_handle, width, height, panel_if =
-    board_manager.get_display_lcd_params("display_lcd")
-
-lvgl.init(panel_handle, io_handle, width, height, panel_if, {
+lvgl.init({
     buffer_lines = 10,
     tick_ms = 5,
     task_period_ms = 10,
 })
-
-local touch_registered = false
 
 local ok, err = pcall(function()
     local test_year = 2026
@@ -47,15 +41,8 @@ local ok, err = pcall(function()
     local src_released = "S:/missing_released.bin"
     local src_pressed = "S:/missing_pressed.bin"
 
-    local touch_handle, touch_err = board_manager.get_lcd_touch_handle("lcd_touch")
-    if touch_handle == nil then
-        print("no touch handle on this board, running without touch:", touch_err)
-    else
-        touch_registered = lvgl.indev_register("touch", touch_handle)
-        print("touch indev registered:", touch_registered)
-    end
-
     local scr = lvgl.create_screen()
+    local width, height = scr:get_size()
     scr:set_style({ bg_color = "#0f172a" })
 
     local root = lvgl.container(scr, {
@@ -294,13 +281,6 @@ local ok, err = pcall(function()
         lvgl.process_events(500)
     end
 end)
-
-if touch_registered then
-    local unreg_ok, unreg_err = pcall(lvgl.indev_unregister, "touch")
-    if not unreg_ok then
-        print("touch indev unregister failed: " .. tostring(unreg_err))
-    end
-end
 
 local deinit_ok, deinit_err = pcall(lvgl.deinit)
 if not deinit_ok then

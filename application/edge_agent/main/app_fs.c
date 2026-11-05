@@ -261,6 +261,16 @@ const char *app_fs_system_base_path(void)
     return s_system_base_path;
 }
 
+esp_err_t app_fs_get_storage_space(void *ctx,
+                                   uint64_t *total_bytes,
+                                   uint64_t *free_bytes)
+{
+    (void)ctx;
+    ESP_RETURN_ON_FALSE(total_bytes && free_bytes, ESP_ERR_INVALID_ARG, TAG,
+                        "space output is NULL");
+    return esp_vfs_fat_info(s_storage_base_path, total_bytes, free_bytes);
+}
+
 static esp_err_t app_fs_init_ramfs(void)
 {
     ramfs_config_t config = {

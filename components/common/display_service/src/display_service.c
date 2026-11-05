@@ -13,6 +13,7 @@
 #include "devices/dev_lcd_touch/dev_lcd_touch.h"
 #include "esp_board_manager_includes.h"
 #include "esp_check.h"
+#include "esp_heap_caps.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_log.h"
@@ -29,7 +30,15 @@ static const char *TAG = "display_service";
 #define DISPLAY_SERVICE_TASK_PRIO 5
 #define DISPLAY_SERVICE_MAX_SESSIONS 6
 #define DISPLAY_SERVICE_MAX_CLIENTS 4
+#define DISPLAY_SERVICE_MAX_TOUCH_OBSERVERS 4
 #define DISPLAY_SERVICE_SCENE_OWNER_NAME_LEN DISPLAY_SERVICE_OWNER_NAME_LEN
+#define DISPLAY_SERVICE_TOUCH_OBSERVER_INDEX_MASK 0xffu
+#define DISPLAY_SERVICE_TOUCH_OBSERVER_GENERATION_MASK 0x00ffffffu
+#define DISPLAY_SERVICE_EXIT_GESTURE_EDGE_HEIGHT_PCT 3
+#define DISPLAY_SERVICE_EXIT_GESTURE_MIN_DY_PCT 30
+#define DISPLAY_SERVICE_EXIT_GESTURE_MAX_DX_PCT 15
+#define DISPLAY_SERVICE_RAW_STAGING_BYTES (32 * 1024)
+#define DISPLAY_SERVICE_RAW_STAGING_MIN_BYTES (4 * 1024)
 
 typedef void (*display_service_scene_cleanup_cb_t)(void *owner_ctx, void *user_ctx);
 
@@ -55,6 +64,13 @@ typedef struct {
     display_service_config_t display_config;
 } display_service_client_config_t;
 
+typedef struct {
+    display_service_touch_observer_cb_t cb;
+    void *user_ctx;
+    uint32_t generation;
+    bool active;
+} display_service_touch_observer_t;
+
 struct display_service_session_t {
     bool active;
     bool suspended;
@@ -63,16 +79,27 @@ struct display_service_session_t {
     uint32_t flags;
     display_service_session_cleanup_cb_t cleanup_cb;
     display_service_session_resume_cb_t resume_cb;
+    display_service_session_exit_request_cb_t exit_request_cb;
     void *cleanup_user_ctx;
     void *resume_user_ctx;
     struct display_service_session_t *preempted_session;
     char owner_name[DISPLAY_SERVICE_OWNER_NAME_LEN];
+    bool exit_gesture_tracking;
+    bool exit_gesture_cancelled;
+    bool exit_gesture_captured;
+    bool exit_request_sent;
+    int32_t exit_gesture_start_x;
+    int32_t exit_gesture_start_y;
 };
 
 typedef struct {
     esp_lcd_panel_handle_t panel;
     esp_lcd_panel_io_handle_t io;
     esp_lcd_touch_handle_t touch;
+    display_service_info_t info;
+    bool raw_rgb565_swap;
+    uint8_t *raw_staging;
+    size_t raw_staging_bytes;
     lv_display_t *display;
     lv_indev_t *touch_indev;
     lv_obj_t *default_screen;
@@ -80,12 +107,13 @@ typedef struct {
     SemaphoreHandle_t dummy_mutex;
     const char *dummy_owner;
     struct display_service_session_t *dummy_session;
-    display_service_touch_observer_cb_t touch_observer_cb;
-    void *touch_observer_user_ctx;
+    display_service_touch_snapshot_t touch_snapshot;
+    display_service_touch_observer_t touch_observers[DISPLAY_SERVICE_MAX_TOUCH_OBSERVERS];
     display_service_state_observer_cb_t state_observer_cb;
     void *state_observer_user_ctx;
     display_service_client_t clients[DISPLAY_SERVICE_MAX_CLIENTS];
     struct display_service_session_t sessions[DISPLAY_SERVICE_MAX_SESSIONS];
+    uint32_t touch_observer_generation;
     uint32_t session_generation;
     size_t client_count;
     void *scene_owner;
@@ -112,15 +140,95 @@ static esp_err_t display_service_preempt_raw_for(display_service_session_handle_
 static esp_err_t display_service_restore_preempted_raw(display_service_session_handle_t session);
 static esp_err_t display_service_enter_dummy_draw(display_service_session_handle_t session);
 static esp_err_t display_service_exit_dummy_draw(display_service_session_handle_t session);
-static esp_err_t display_service_dummy_draw_blit(const char *owner,
+static esp_err_t display_service_dummy_draw_blit(display_service_session_handle_t session,
                                                  int x_start,
                                                  int y_start,
                                                  int x_end,
                                                  int y_end,
                                                  const void *frame_buffer,
+                                                 size_t stride_bytes,
                                                  bool wait);
 static void display_service_dummy_draw_suspend_locked(void);
 static void display_service_dummy_draw_resume_locked(void);
+static bool display_service_dummy_owner_matches(const char *owner);
+static bool display_service_session_valid_unlocked(display_service_session_handle_t session);
+
+static int32_t display_service_abs_i32(int32_t value)
+{
+    return value < 0 ? -value : value;
+}
+
+static int32_t display_service_pct_ceil(int32_t value, int32_t pct)
+{
+    return (value * pct + 99) / 100;
+}
+
+static struct display_service_session_t *display_service_active_exclusive_session(void)
+{
+    for (size_t i = 0; i < DISPLAY_SERVICE_MAX_SESSIONS; i++) {
+        struct display_service_session_t *session = &s_display.sessions[i];
+
+        if (!session->active || session->suspended) {
+            continue;
+        }
+        if (session->mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_LVGL && s_display.scene_owner == session) {
+            return session;
+        }
+        if (session->mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW && s_display.dummy_draw_enabled &&
+                s_display.dummy_session == session) {
+            return session;
+        }
+    }
+    return NULL;
+}
+
+static bool display_service_process_exit_gesture(struct display_service_session_t *session,
+                                                 const display_service_touch_snapshot_t *snapshot,
+                                                 int32_t display_width,
+                                                 int32_t display_height)
+{
+    if (!display_service_session_valid_unlocked(session) || snapshot == NULL || display_width <= 0 || display_height <= 0) {
+        return false;
+    }
+
+    int32_t edge_height = display_service_pct_ceil(display_height, DISPLAY_SERVICE_EXIT_GESTURE_EDGE_HEIGHT_PCT);
+    int32_t min_dy = display_service_pct_ceil(display_height, DISPLAY_SERVICE_EXIT_GESTURE_MIN_DY_PCT);
+    int32_t max_dx = display_service_pct_ceil(display_width, DISPLAY_SERVICE_EXIT_GESTURE_MAX_DX_PCT);
+    bool pressed = snapshot->count > 0;
+    int32_t x = pressed ? snapshot->points[0].x : 0;
+    int32_t y = pressed ? snapshot->points[0].y : 0;
+    if (pressed && !session->exit_gesture_tracking) {
+        session->exit_gesture_tracking = true;
+        session->exit_gesture_cancelled = false;
+        session->exit_gesture_captured = false;
+        session->exit_request_sent = false;
+        session->exit_gesture_start_x = x;
+        session->exit_gesture_start_y = y;
+    }
+    if (pressed && session->exit_gesture_tracking &&
+            display_service_abs_i32(x - session->exit_gesture_start_x) > max_dx) {
+        session->exit_gesture_cancelled = true;
+    }
+    if (pressed && session->exit_gesture_tracking &&
+            !session->exit_gesture_cancelled &&
+            session->exit_gesture_start_y >= display_height - edge_height &&
+            session->exit_gesture_start_y - y >= min_dy) {
+        session->exit_gesture_captured = true;
+    }
+
+    const bool captured = session->exit_gesture_captured;
+    if (captured && !session->exit_request_sent && session->exit_request_cb != NULL) {
+        session->exit_request_sent = true;
+        ESP_LOGI(TAG, "display shell exit gesture: owner=%s", session->owner_name);
+        session->exit_request_cb(session, session->cleanup_user_ctx);
+    }
+    if (!pressed) {
+        session->exit_gesture_tracking = false;
+        session->exit_gesture_cancelled = false;
+        session->exit_gesture_captured = false;
+    }
+    return captured;
+}
 
 static bool display_service_dummy_owner_matches(const char *owner)
 {
@@ -153,8 +261,12 @@ static void display_service_clear_scene_locked(void)
 
 static bool display_service_session_slot_contains(const struct display_service_session_t *session)
 {
-    return session >= &s_display.sessions[0] &&
-           session < &s_display.sessions[DISPLAY_SERVICE_MAX_SESSIONS];
+    for (size_t i = 0; i < DISPLAY_SERVICE_MAX_SESSIONS; i++) {
+        if (session == &s_display.sessions[i]) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool display_service_session_valid_unlocked(display_service_session_handle_t session)
@@ -251,10 +363,29 @@ static bool display_service_remove_client_locked(void *owner_ctx)
     return true;
 }
 
-static void display_service_notify_touch_observer(const display_service_touch_sample_t *sample)
+static display_service_touch_observer_handle_t display_service_make_touch_observer_handle(size_t index, uint32_t generation)
 {
-    if (s_display.touch_observer_cb != NULL && sample != NULL) {
-        s_display.touch_observer_cb(sample, s_display.touch_observer_user_ctx);
+    return (display_service_touch_observer_handle_t)((generation << 8) | (uint32_t)(index + 1));
+}
+
+static uint32_t display_service_next_touch_observer_generation(void)
+{
+    s_display.touch_observer_generation = (s_display.touch_observer_generation + 1) & DISPLAY_SERVICE_TOUCH_OBSERVER_GENERATION_MASK;
+    if (s_display.touch_observer_generation == 0) {
+        s_display.touch_observer_generation = 1;
+    }
+    return s_display.touch_observer_generation;
+}
+
+static void display_service_notify_touch_observers(const display_service_touch_snapshot_t *snapshot)
+{
+    if (snapshot == NULL) {
+        return;
+    }
+    for (size_t i = 0; i < DISPLAY_SERVICE_MAX_TOUCH_OBSERVERS; i++) {
+        if (s_display.touch_observers[i].active && s_display.touch_observers[i].cb != NULL) {
+            s_display.touch_observers[i].cb(snapshot, s_display.touch_observers[i].user_ctx);
+        }
     }
 }
 
@@ -398,30 +529,68 @@ static lv_display_t *display_service_register_adapter_display(const dev_display_
     return esp_lv_adapter_register_display(&disp_cfg);
 }
 
-static void display_service_touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
+static bool display_service_publish_touch_snapshot(const esp_lcd_touch_point_data_t *points, uint8_t count)
 {
-    esp_lcd_touch_handle_t tp = (esp_lcd_touch_handle_t)lv_indev_get_user_data(indev);
-    esp_lcd_touch_point_data_t point;
-    uint8_t point_count = 0;
-    display_service_touch_sample_t sample = {0};
+    display_service_touch_snapshot_t snapshot = {
+        .count = count,
+    };
 
-    if (!tp) {
-        data->state = LV_INDEV_STATE_RELEASED;
-        display_service_notify_touch_observer(&sample);
-        return;
+    for (uint8_t i = 0; i < count; i++) {
+        snapshot.points[i].id = points[i].track_id;
+        snapshot.points[i].x = points[i].x;
+        snapshot.points[i].y = points[i].y;
     }
-    (void)esp_lcd_touch_read_data(tp);
-    if (esp_lcd_touch_get_data(tp, &point, &point_count, 1) == ESP_OK && point_count > 0) {
-        data->point.x = (int32_t)point.x;
-        data->point.y = (int32_t)point.y;
-        data->state = LV_INDEV_STATE_PRESSED;
-        sample.pressed = true;
-        sample.x = data->point.x;
-        sample.y = data->point.y;
-    } else {
-        data->state = LV_INDEV_STATE_RELEASED;
+    struct display_service_session_t *session = display_service_active_exclusive_session();
+    int32_t display_width = s_display.display != NULL ? lv_display_get_horizontal_resolution(s_display.display) : 0;
+    int32_t display_height = s_display.display != NULL ? lv_display_get_vertical_resolution(s_display.display) : 0;
+    bool captured = display_service_process_exit_gesture(session, &snapshot, display_width, display_height);
+    if (captured) {
+        snapshot.count = 0;
     }
-    display_service_notify_touch_observer(&sample);
+
+    s_display.touch_snapshot = snapshot;
+    display_service_notify_touch_observers(&s_display.touch_snapshot);
+    return captured;
+}
+
+static esp_err_t display_service_touch_read_cb(esp_lcd_touch_handle_t tp,
+                                               esp_lcd_touch_point_data_t *points,
+                                               uint8_t *count,
+                                               uint8_t max_count,
+                                               void *user_ctx)
+{
+    /* The adapter invokes this callback from the LVGL task while holding its lock. */
+    (void)user_ctx;
+    if (tp == NULL || points == NULL || count == NULL || max_count == 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    *count = 0;
+    esp_err_t err = esp_lcd_touch_read_data(tp);
+    if (err == ESP_OK) {
+        err = esp_lcd_touch_get_data(tp, points, count, max_count);
+    }
+    if (err != ESP_OK || *count > max_count) {
+        ESP_LOGW(TAG, "touch sample failed: %s", esp_err_to_name(err != ESP_OK ? err : ESP_ERR_INVALID_SIZE));
+        (void)display_service_publish_touch_snapshot(NULL, 0);
+        return err != ESP_OK ? err : ESP_ERR_INVALID_SIZE;
+    }
+
+    for (uint8_t i = 0; i < *count; i++) {
+        for (uint8_t j = 0; j < i; j++) {
+            if (points[i].track_id == points[j].track_id) {
+                ESP_LOGW(TAG, "touch sample has duplicate track ID: %u", points[i].track_id);
+                *count = 0;
+                (void)display_service_publish_touch_snapshot(NULL, 0);
+                return ESP_ERR_INVALID_STATE;
+            }
+        }
+    }
+
+    if (display_service_publish_touch_snapshot(points, *count)) {
+        *count = 0;
+    }
+    return ESP_OK;
 }
 
 static esp_err_t display_service_load_board_display(dev_display_lcd_config_t **out_lcd_cfg,
@@ -452,6 +621,27 @@ static esp_err_t display_service_load_board_display(dev_display_lcd_config_t **o
     }
     s_display.panel = lcd_handles->panel_handle;
     s_display.io = lcd_handles->io_handle;
+    s_display.info.width = lcd_cfg->lcd_width;
+    s_display.info.height = lcd_cfg->lcd_height;
+    s_display.info.bits_per_pixel = lcd_cfg->bits_per_pixel;
+    if (strcmp(lcd_cfg->sub_type, ESP_BOARD_DEVICE_LCD_SUB_TYPE_DSI) == 0) {
+        s_display.info.panel_interface = DISPLAY_SERVICE_PANEL_INTERFACE_DSI;
+    } else if (strcmp(lcd_cfg->sub_type, ESP_BOARD_DEVICE_LCD_SUB_TYPE_RGB) == 0 ||
+               strcmp(lcd_cfg->sub_type, ESP_BOARD_DEVICE_LCD_SUB_TYPE_RGB_3WIRE_SPI) == 0) {
+        s_display.info.panel_interface = DISPLAY_SERVICE_PANEL_INTERFACE_RGB;
+    } else if (strcmp(lcd_cfg->sub_type, ESP_BOARD_DEVICE_LCD_SUB_TYPE_I80) == 0) {
+        s_display.info.panel_interface = DISPLAY_SERVICE_PANEL_INTERFACE_I80;
+    } else if (strcmp(lcd_cfg->sub_type, ESP_BOARD_DEVICE_LCD_SUB_TYPE_PARLIO) == 0) {
+        s_display.info.panel_interface = DISPLAY_SERVICE_PANEL_INTERFACE_PARLIO;
+    } else {
+        s_display.info.panel_interface = DISPLAY_SERVICE_PANEL_INTERFACE_SPI;
+    }
+    /* RAW RGB565 pixels are little-endian; only big-endian panel IO needs a byte swap. */
+    s_display.raw_rgb565_swap = lcd_cfg->bits_per_pixel == 16 &&
+        (s_display.info.panel_interface == DISPLAY_SERVICE_PANEL_INTERFACE_SPI ||
+         s_display.info.panel_interface == DISPLAY_SERVICE_PANEL_INTERFACE_I80 ||
+         s_display.info.panel_interface == DISPLAY_SERVICE_PANEL_INTERFACE_PARLIO) &&
+        lcd_cfg->data_endian == LCD_RGB_DATA_ENDIAN_BIG;
     (void)esp_lcd_panel_disp_on_off(s_display.panel, true);
     return ESP_OK;
 #endif
@@ -489,15 +679,16 @@ esp_err_t display_service_start(const display_service_config_t *config)
         return ESP_OK;
     }
 
-    ESP_RETURN_ON_ERROR(display_service_load_board_display(&lcd_cfg, &lcd_handles), TAG, "load display failed");
+    ESP_GOTO_ON_ERROR(display_service_load_board_display(&lcd_cfg, &lcd_handles), fail, TAG, "load display failed");
     display_service_load_board_touch();
-    ESP_RETURN_ON_FALSE(buffer_lines > 0 && buffer_lines <= lcd_cfg->lcd_height,
-                        ESP_ERR_INVALID_ARG, TAG, "invalid buffer lines");
+    s_display.info.touch_available = s_display.touch != NULL;
+    ESP_GOTO_ON_FALSE(buffer_lines > 0 && buffer_lines <= lcd_cfg->lcd_height,
+                      ESP_ERR_INVALID_ARG, fail, TAG, "invalid buffer lines");
 
     if (!s_display.dummy_mutex) {
         s_display.dummy_mutex = xSemaphoreCreateMutex();
-        ESP_RETURN_ON_FALSE(s_display.dummy_mutex != NULL, ESP_ERR_NO_MEM,
-                            TAG, "create dummy draw mutex failed");
+        ESP_GOTO_ON_FALSE(s_display.dummy_mutex != NULL, ESP_ERR_NO_MEM,
+                          fail, TAG, "create dummy draw mutex failed");
     }
 
     esp_lv_adapter_config_t adapter_config = ESP_LV_ADAPTER_DEFAULT_CONFIG();
@@ -517,25 +708,22 @@ esp_err_t display_service_start(const display_service_config_t *config)
     s_display.display = display_service_register_adapter_display(lcd_cfg, lcd_handles, buffer_lines);
     ESP_GOTO_ON_FALSE(s_display.display != NULL, ESP_FAIL, fail, TAG, "register LVGL adapter display failed");
 
-    ESP_GOTO_ON_ERROR(display_service_lock(), fail, TAG, "lock failed");
     if (s_display.touch) {
-        s_display.touch_indev = lv_indev_create();
-        if (s_display.touch_indev) {
-            lv_indev_set_type(s_display.touch_indev, LV_INDEV_TYPE_POINTER);
-            lv_indev_set_read_cb(s_display.touch_indev, display_service_touch_read_cb);
-            lv_indev_set_user_data(s_display.touch_indev, s_display.touch);
-            lv_indev_set_display(s_display.touch_indev, s_display.display);
-        } else {
-            ESP_LOGW(TAG, "touch disabled: lv_indev_create failed");
-        }
+        esp_lv_adapter_touch_config_t touch_config = ESP_LV_ADAPTER_TOUCH_DEFAULT_CONFIG(s_display.display, s_display.touch);
+#if CONFIG_ESP_LCD_TOUCH_MAX_POINTS > 1
+        touch_config.multi_touch.mode = ESP_LV_ADAPTER_TOUCH_MODE_MULTI_CONTROL;
+        touch_config.multi_touch.pointers = CONFIG_ESP_LCD_TOUCH_MAX_POINTS;
+#endif
+        touch_config.callbacks.custom_touch_read = display_service_touch_read_cb;
+        s_display.touch_indev = esp_lv_adapter_register_touch(&touch_config);
+        ESP_GOTO_ON_FALSE(s_display.touch_indev != NULL, ESP_FAIL, fail, TAG, "register touch input failed");
     }
-    display_service_unlock();
 
     ESP_GOTO_ON_ERROR(esp_lv_adapter_start(), fail, TAG, "start LVGL adapter failed");
     s_display.adapter_started = true;
     s_display.started = true;
 
-    ESP_LOGI(TAG, "started display service: %ux%u", lcd_cfg->lcd_width, lcd_cfg->lcd_height);
+    ESP_LOGI(TAG, "started display service: %ux%u raw_rgb565_swap=%d", lcd_cfg->lcd_width, lcd_cfg->lcd_height, (int)s_display.raw_rgb565_swap);
     return ESP_OK;
 
 fail:
@@ -548,15 +736,18 @@ void display_service_stop(void)
     if (s_display.adapter_initialized && display_service_lock() == ESP_OK) {
         s_display.started = false;
         display_service_delete_dummy_input_blocker_locked();
-        if (s_display.touch_indev) {
-            lv_indev_delete(s_display.touch_indev);
-            s_display.touch_indev = NULL;
-        }
         display_service_clear_scene_locked();
         memset(s_display.clients, 0, sizeof(s_display.clients));
         memset(s_display.sessions, 0, sizeof(s_display.sessions));
         s_display.client_count = 0;
         display_service_unlock();
+    }
+    if (s_display.touch_indev) {
+        esp_err_t err = esp_lv_adapter_unregister_touch(s_display.touch_indev);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "unregister touch input failed: %s", esp_err_to_name(err));
+        }
+        s_display.touch_indev = NULL;
     }
     if (s_display.dummy_draw_enabled && s_display.display) {
         (void)esp_lv_adapter_set_dummy_draw(s_display.display, false);
@@ -570,6 +761,10 @@ void display_service_stop(void)
         s_display.adapter_initialized = false;
         s_display.adapter_started = false;
     }
+    heap_caps_free(s_display.raw_staging);
+    s_display.raw_staging = NULL;
+    s_display.raw_staging_bytes = 0;
+    s_display.raw_rgb565_swap = false;
     if (s_display.dummy_mutex) {
         vSemaphoreDelete(s_display.dummy_mutex);
         s_display.dummy_mutex = NULL;
@@ -577,10 +772,11 @@ void display_service_stop(void)
     s_display.panel = NULL;
     s_display.io = NULL;
     s_display.touch = NULL;
+    memset(&s_display.info, 0, sizeof(s_display.info));
+    memset(&s_display.touch_snapshot, 0, sizeof(s_display.touch_snapshot));
     s_display.dummy_owner = NULL;
     s_display.dummy_session = NULL;
-    s_display.touch_observer_cb = NULL;
-    s_display.touch_observer_user_ctx = NULL;
+    memset(s_display.touch_observers, 0, sizeof(s_display.touch_observers));
     s_display.state_observer_cb = NULL;
     s_display.state_observer_user_ctx = NULL;
     memset(s_display.clients, 0, sizeof(s_display.clients));
@@ -634,6 +830,7 @@ esp_err_t display_service_open(const display_service_session_config_t *config,
     session->flags = config->flags;
     session->cleanup_cb = config->cleanup_cb;
     session->resume_cb = config->resume_cb;
+    session->exit_request_cb = config->exit_request_cb;
     session->cleanup_user_ctx = config->user_ctx;
     session->resume_user_ctx = config->user_ctx;
     strlcpy(session->owner_name, owner_name, sizeof(session->owner_name));
@@ -649,17 +846,17 @@ esp_err_t display_service_open(const display_service_session_config_t *config,
         return err;
     }
 
-    if (config->mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_LVGL) {
+    if (config->mode != DISPLAY_SERVICE_MODE_SHARED_LVGL) {
+        err = display_service_preempt_raw_for(session);
+    }
+    if (err == ESP_OK && config->mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_LVGL) {
         err = display_service_scene_acquire_ex(&(display_service_scene_config_t) {
             .owner_name = session->owner_name,
             .owner_ctx = session,
             .flags = display_service_session_flags_to_scene_flags(config->flags),
         });
-    } else if (config->mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW) {
-        err = display_service_preempt_raw_for(session);
-        if (err == ESP_OK) {
-            err = display_service_enter_dummy_draw(session);
-        }
+    } else if (err == ESP_OK && config->mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW) {
+        err = display_service_enter_dummy_draw(session);
     }
     if (err != ESP_OK) {
         if (session->preempted_session != NULL) {
@@ -712,7 +909,7 @@ esp_err_t display_service_close(display_service_session_handle_t session)
         cleanup_cb(session, cleanup_user_ctx);
     }
 
-    if (mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW && session->preempted_session != NULL) {
+    if (session->preempted_session != NULL) {
         esp_err_t resume_err = display_service_restore_preempted_raw(session);
         if (resume_err != ESP_OK) {
             ESP_LOGE(TAG, "restore preempted display session failed: %s",
@@ -741,7 +938,7 @@ bool display_service_session_is_valid(display_service_session_handle_t session)
 
 bool display_service_session_is_active(display_service_session_handle_t session)
 {
-    return display_service_session_is_valid(session);
+    return display_service_session_is_valid(session) && !session->suspended;
 }
 
 display_service_mode_t display_service_session_mode(display_service_session_handle_t session)
@@ -777,6 +974,19 @@ lv_display_t *display_service_session_display(display_service_session_handle_t s
     return display_service_session_is_valid(session) ? s_display.display : NULL;
 }
 
+esp_err_t display_service_session_get_info(display_service_session_handle_t session, display_service_info_t *info)
+{
+    ESP_RETURN_ON_FALSE(info != NULL, ESP_ERR_INVALID_ARG, TAG, "display info output missing");
+    ESP_RETURN_ON_ERROR(display_service_lock(), TAG, "lock failed");
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    if (display_service_session_valid_unlocked(session)) {
+        *info = s_display.info;
+        err = ESP_OK;
+    }
+    display_service_unlock();
+    return err;
+}
+
 esp_err_t display_service_session_raw_blit(display_service_session_handle_t session,
                                            const display_service_raw_blit_t *blit)
 {
@@ -785,13 +995,32 @@ esp_err_t display_service_session_raw_blit(display_service_session_handle_t sess
     ESP_RETURN_ON_FALSE(blit != NULL, ESP_ERR_INVALID_ARG, TAG, "raw blit config missing");
     ESP_RETURN_ON_FALSE(session->mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW,
                         ESP_ERR_INVALID_STATE, TAG, "session is not exclusive raw");
-    return display_service_dummy_draw_blit(session->owner_name,
+    return display_service_dummy_draw_blit(session,
                                            blit->x_start,
                                            blit->y_start,
                                            blit->x_end,
                                            blit->y_end,
                                            blit->frame_buffer,
+                                           blit->stride_bytes,
                                            blit->wait);
+}
+
+esp_err_t display_service_session_get_touch_snapshot(display_service_session_handle_t session,
+                                                     display_service_touch_snapshot_t *snapshot)
+{
+    ESP_RETURN_ON_FALSE(snapshot != NULL, ESP_ERR_INVALID_ARG, TAG, "touch snapshot output missing");
+    ESP_RETURN_ON_ERROR(display_service_lock(), TAG, "lock failed");
+    if (!display_service_session_valid_unlocked(session)) {
+        display_service_unlock();
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_display.touch == NULL) {
+        display_service_unlock();
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    *snapshot = s_display.touch_snapshot;
+    display_service_unlock();
+    return ESP_OK;
 }
 
 bool display_service_has_exclusive_session(void)
@@ -822,12 +1051,48 @@ void display_service_unlock(void)
     esp_lv_adapter_unlock();
 }
 
-esp_err_t display_service_set_touch_observer(display_service_touch_observer_cb_t cb,
-                                             void *user_ctx)
+esp_err_t display_service_add_touch_observer(display_service_touch_observer_cb_t cb,
+                                             void *user_ctx,
+                                             display_service_touch_observer_handle_t *ret_handle)
 {
+    ESP_RETURN_ON_FALSE(cb != NULL && ret_handle != NULL, ESP_ERR_INVALID_ARG, TAG, "touch observer args invalid");
+    *ret_handle = DISPLAY_SERVICE_TOUCH_OBSERVER_INVALID;
     ESP_RETURN_ON_ERROR(display_service_lock(), TAG, "lock failed");
-    s_display.touch_observer_cb = cb;
-    s_display.touch_observer_user_ctx = user_ctx;
+    for (size_t i = 0; i < DISPLAY_SERVICE_MAX_TOUCH_OBSERVERS; i++) {
+        if (!s_display.touch_observers[i].active) {
+            uint32_t generation = display_service_next_touch_observer_generation();
+            s_display.touch_observers[i].cb = cb;
+            s_display.touch_observers[i].user_ctx = user_ctx;
+            s_display.touch_observers[i].generation = generation;
+            s_display.touch_observers[i].active = true;
+            *ret_handle = display_service_make_touch_observer_handle(i, generation);
+            display_service_unlock();
+            return ESP_OK;
+        }
+    }
+    display_service_unlock();
+    ESP_LOGE(TAG, "touch observer slots full");
+    return ESP_ERR_NO_MEM;
+}
+
+esp_err_t display_service_remove_touch_observer(display_service_touch_observer_handle_t handle)
+{
+    ESP_RETURN_ON_FALSE(handle != DISPLAY_SERVICE_TOUCH_OBSERVER_INVALID, ESP_ERR_INVALID_ARG, TAG, "touch observer handle invalid");
+    ESP_RETURN_ON_ERROR(display_service_lock(), TAG, "lock failed");
+    uint32_t raw_index = handle & DISPLAY_SERVICE_TOUCH_OBSERVER_INDEX_MASK;
+    uint32_t generation = (handle >> 8) & DISPLAY_SERVICE_TOUCH_OBSERVER_GENERATION_MASK;
+    if (raw_index == 0 || raw_index > DISPLAY_SERVICE_MAX_TOUCH_OBSERVERS) {
+        display_service_unlock();
+        return ESP_ERR_NOT_FOUND;
+    }
+    display_service_touch_observer_t *observer = &s_display.touch_observers[raw_index - 1];
+    if (!observer->active || observer->generation != generation) {
+        display_service_unlock();
+        return ESP_ERR_NOT_FOUND;
+    }
+    observer->active = false;
+    observer->cb = NULL;
+    observer->user_ctx = NULL;
     display_service_unlock();
     return ESP_OK;
 }
@@ -1009,6 +1274,10 @@ static esp_err_t display_service_preempt_raw_for(display_service_session_handle_
     }
     if (ret == ESP_OK) {
         current->suspended = true;
+        current->exit_gesture_tracking = false;
+        current->exit_gesture_cancelled = false;
+        current->exit_gesture_captured = false;
+        current->exit_request_sent = false;
         session->preempted_session = current;
         s_display.dummy_owner = NULL;
         s_display.dummy_session = NULL;
@@ -1116,12 +1385,23 @@ static esp_err_t display_service_exit_dummy_draw(display_service_session_handle_
         display_service_dummy_unlock();
         return ret;
     }
+    /* Restore visibility before releasing RAW ownership, including overlay suspension. */
+    ret = s_display.panel ? esp_lcd_panel_disp_on_off(s_display.panel, true) : ESP_ERR_INVALID_STATE;
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "restore panel visibility failed: %s", esp_err_to_name(ret));
+        display_service_unlock();
+        display_service_dummy_unlock();
+        return ret;
+    }
     display_service_delete_dummy_input_blocker_locked();
     if (s_display.display != NULL && !s_display.dummy_draw_suspended) {
         ret = esp_lv_adapter_set_dummy_draw(s_display.display, false);
     }
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "dummy draw exited: owner=%s", owner);
+        heap_caps_free(s_display.raw_staging);
+        s_display.raw_staging = NULL;
+        s_display.raw_staging_bytes = 0;
         s_display.dummy_owner = NULL;
         s_display.dummy_session = NULL;
         s_display.dummy_draw_enabled = false;
@@ -1164,29 +1444,131 @@ static esp_err_t display_service_restore_preempted_raw(display_service_session_h
     return ESP_OK;
 }
 
-static esp_err_t display_service_dummy_draw_blit(const char *owner,
+static void display_service_swap_rgb565(uint8_t *dst, const uint8_t *src, size_t pixels)
+{
+    if ((((uintptr_t)dst | (uintptr_t)src) & 3U) == 0) {
+        /* Swap two pixels per aligned word, keeping their order unchanged. */
+        uint32_t *dst32 = (uint32_t *)dst;
+        const uint32_t *src32 = (const uint32_t *)src;
+        for (size_t i = 0; i < pixels / 2; ++i) {
+            uint32_t value = src32[i];
+            dst32[i] = ((value & 0x00ff00ffU) << 8) | ((value & 0xff00ff00U) >> 8);
+        }
+        if (pixels & 1U) {
+            size_t offset = (pixels - 1) * 2;
+            dst[offset] = src[offset + 1];
+            dst[offset + 1] = src[offset];
+        }
+        return;
+    }
+    if ((((uintptr_t)dst | (uintptr_t)src) & 1U) == 0) {
+        uint16_t *dst16 = (uint16_t *)dst;
+        const uint16_t *src16 = (const uint16_t *)src;
+        for (size_t i = 0; i < pixels; ++i) dst16[i] = __builtin_bswap16(src16[i]);
+        return;
+    }
+    for (size_t i = 0; i < pixels; ++i) {
+        dst[2 * i] = src[2 * i + 1];
+        dst[2 * i + 1] = src[2 * i];
+    }
+}
+
+static esp_err_t display_service_dummy_draw_blit_staged_locked(int x_start, int y_start, int x_end, int y_end,
+                                                                const void *frame_buffer, size_t stride_bytes, bool wait)
+{
+    ESP_RETURN_ON_FALSE(wait, ESP_ERR_NOT_SUPPORTED, TAG, "staged RAW blit requires wait=true");
+    ESP_RETURN_ON_FALSE(x_start >= 0 && y_start >= 0 && x_end > x_start && y_end > y_start &&
+                        x_end <= s_display.info.width && y_end <= s_display.info.height,
+                        ESP_ERR_INVALID_ARG, TAG, "staged RAW blit area invalid");
+    const int width = x_end - x_start, height = y_end - y_start;
+    const size_t bytes_per_pixel = s_display.info.bits_per_pixel / 8;
+    ESP_RETURN_ON_FALSE(bytes_per_pixel == 2 || bytes_per_pixel == 3, ESP_ERR_NOT_SUPPORTED, TAG, "RAW pixel format unsupported");
+    const size_t row_bytes = (size_t)width * bytes_per_pixel;
+    if (stride_bytes == 0) stride_bytes = row_bytes;
+    ESP_RETURN_ON_FALSE(stride_bytes >= row_bytes && (size_t)(height - 1) <= (SIZE_MAX - row_bytes) / stride_bytes,
+                        ESP_ERR_INVALID_ARG, TAG, "RAW stride invalid");
+    if (s_display.raw_staging_bytes < row_bytes) {
+        size_t capacity = row_bytes > DISPLAY_SERVICE_RAW_STAGING_BYTES ? row_bytes : DISPLAY_SERVICE_RAW_STAGING_BYTES;
+        const size_t minimum = row_bytes > DISPLAY_SERVICE_RAW_STAGING_MIN_BYTES ? row_bytes : DISPLAY_SERVICE_RAW_STAGING_MIN_BYTES;
+        uint8_t *strip = NULL;
+        /* Prefer a smaller DMA buffer to copying through PSRAM. Reuse it for every rectangle. */
+        for (;;) {
+            strip = heap_caps_aligned_alloc(16, capacity, MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA);
+            if (strip != NULL || capacity <= minimum) break;
+            capacity = capacity / 2 < minimum ? minimum : capacity / 2;
+        }
+        if (strip == NULL) {
+            capacity = row_bytes > DISPLAY_SERVICE_RAW_STAGING_BYTES ? row_bytes : DISPLAY_SERVICE_RAW_STAGING_BYTES;
+            ESP_LOGW(TAG, "internal DMA staging unavailable, using %u bytes in PSRAM", (unsigned)capacity);
+            strip = heap_caps_aligned_alloc(16, capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        } else {
+            ESP_LOGI(TAG, "RAW DMA staging: %u bytes", (unsigned)capacity);
+        }
+        ESP_RETURN_ON_FALSE(strip != NULL, ESP_ERR_NO_MEM, TAG, "RAW staging allocation failed: %u bytes", (unsigned)capacity);
+        heap_caps_free(s_display.raw_staging);
+        s_display.raw_staging = strip;
+        s_display.raw_staging_bytes = capacity;
+    }
+    int rows_per_chunk = s_display.raw_staging_bytes / row_bytes;
+    if (rows_per_chunk > height) rows_per_chunk = height;
+    const uint8_t *source = frame_buffer;
+    for (int row = 0; row < height; row += rows_per_chunk) {
+        const int rows = height - row < rows_per_chunk ? height - row : rows_per_chunk;
+        if (stride_bytes == row_bytes) {
+            const uint8_t *src = source + (size_t)row * row_bytes;
+            size_t chunk_bytes = (size_t)rows * row_bytes;
+            if (s_display.raw_rgb565_swap) display_service_swap_rgb565(s_display.raw_staging, src, chunk_bytes / 2);
+            else memcpy(s_display.raw_staging, src, chunk_bytes);
+        } else {
+            for (int i = 0; i < rows; ++i) {
+                const uint8_t *src = source + (size_t)(row + i) * stride_bytes;
+                uint8_t *dst = s_display.raw_staging + (size_t)i * row_bytes;
+                if (s_display.raw_rgb565_swap) display_service_swap_rgb565(dst, src, width);
+                else memcpy(dst, src, row_bytes);
+            }
+        }
+        esp_err_t err = esp_lv_adapter_dummy_draw_blit(s_display.display, x_start, y_start + row, x_end, y_start + row + rows,
+                                                        s_display.raw_staging, true);
+        if (err != ESP_OK) return err;
+    }
+    return ESP_OK;
+}
+
+static esp_err_t display_service_dummy_draw_blit(display_service_session_handle_t session,
                                                  int x_start,
                                                  int y_start,
                                                  int x_end,
                                                  int y_end,
                                                  const void *frame_buffer,
+                                                 size_t stride_bytes,
                                                  bool wait)
 {
     esp_err_t ret;
 
-    ESP_RETURN_ON_FALSE(owner != NULL, ESP_ERR_INVALID_ARG, TAG, "dummy owner missing");
+    ESP_RETURN_ON_FALSE(session != NULL, ESP_ERR_INVALID_ARG, TAG, "dummy session missing");
     ESP_RETURN_ON_FALSE(frame_buffer != NULL, ESP_ERR_INVALID_ARG, TAG, "frame buffer missing");
     ESP_RETURN_ON_ERROR(display_service_dummy_lock(), TAG, "dummy lock failed");
-    if (!s_display.dummy_draw_enabled || !display_service_dummy_owner_matches(owner) ||
-            s_display.display == NULL) {
+    ret = display_service_lock();
+    if (ret != ESP_OK) {
         display_service_dummy_unlock();
-        return ESP_ERR_INVALID_STATE;
+        return ret;
     }
-    if (s_display.dummy_draw_suspended) {
-        display_service_dummy_unlock();
-        return ESP_OK;
+    if (!display_service_session_valid_unlocked(session) || session->suspended ||
+            !s_display.dummy_draw_enabled || s_display.dummy_session != session ||
+            s_display.display == NULL || s_display.dummy_draw_suspended) {
+        ret = ESP_ERR_INVALID_STATE;
+    } else if (x_start < 0 || y_start < 0 || x_end <= x_start || y_end <= y_start ||
+               x_end > s_display.info.width || y_end > s_display.info.height ||
+               (s_display.info.bits_per_pixel != 16 && s_display.info.bits_per_pixel != 24)) {
+        ret = ESP_ERR_INVALID_ARG;
+    } else {
+        const size_t row_bytes = (size_t)(x_end - x_start) * (s_display.info.bits_per_pixel / 8);
+        if (stride_bytes == 0) stride_bytes = row_bytes;
+        ret = s_display.raw_rgb565_swap || stride_bytes != row_bytes ?
+              display_service_dummy_draw_blit_staged_locked(x_start, y_start, x_end, y_end, frame_buffer, stride_bytes, wait) :
+              esp_lv_adapter_dummy_draw_blit(s_display.display, x_start, y_start, x_end, y_end, frame_buffer, wait);
     }
-    ret = esp_lv_adapter_dummy_draw_blit(s_display.display, x_start, y_start, x_end, y_end, frame_buffer, wait);
+    display_service_unlock();
     display_service_dummy_unlock();
     return ret;
 }

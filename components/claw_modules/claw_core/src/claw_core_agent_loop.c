@@ -15,14 +15,14 @@
 
 static const char *TAG = "claw_core";
 
-static esp_err_t handle_pending_user_interrupts(claw_core_state_t *core,
-                                                const claw_core_request_item_t *request,
-                                                const char *timing_point,
-                                                cJSON **runtime_messages,
-                                                bool *out_drained)
+static esp_err_t drain_run_inbox(claw_core_state_t *core,
+                                 const claw_core_request_item_t *request,
+                                 const char *timing_point,
+                                 cJSON **runtime_messages,
+                                 bool *out_drained)
 {
-    char *texts[CLAW_CORE_INSERT_QUEUE_LEN] = {0};
-    const char *persist_texts[CLAW_CORE_INSERT_QUEUE_LEN] = {0};
+    char *texts[CLAW_CORE_RUN_INBOX_CAPACITY] = {0};
+    const char *persist_texts[CLAW_CORE_RUN_INBOX_CAPACITY] = {0};
     size_t text_count = 0;
     size_t i;
     bool persisted = false;
@@ -35,14 +35,14 @@ static esp_err_t handle_pending_user_interrupts(claw_core_state_t *core,
         return ESP_ERR_INVALID_ARG;
     }
 
-    if (!claw_core_ingress_dequeue_inserted_user_inputs(core,
-                                                        request->view.session_id,
-                                                        texts,
-                                                        CLAW_CORE_INSERT_QUEUE_LEN,
-                                                        &text_count)) {
+    if (!claw_core_ingress_drain_run_inbox(core,
+                                           request->view.session_id,
+                                           texts,
+                                           CLAW_CORE_RUN_INBOX_CAPACITY,
+                                           &text_count)) {
         return ESP_OK;
     }
-    claw_core_control_clear_user_interrupt_abort(core, request->view.request_id);
+    claw_core_control_clear_run_inbox_abort(core, request->view.request_id);
 
     for (i = 0; i < text_count; i++) {
         persist_texts[i] = texts[i];
@@ -55,12 +55,12 @@ static esp_err_t handle_pending_user_interrupts(claw_core_state_t *core,
                                                                 &persisted);
     if (err != ESP_OK) {
         claw_core_log_context_persist_failure(&request->view,
-                                              "persist_context_user_interrupt",
+                                              "persist_context_run_inbox",
                                               err);
         persisted = false;
     }
     ESP_LOGI(TAG,
-             "user_interrupt_triggered request=%" PRIu32 " timing=%s count=%u persisted=%s",
+             "run_inbox_drained request=%" PRIu32 " timing=%s count=%u persisted=%s",
              request->view.request_id,
              timing_point ? timing_point : "unknown",
              (unsigned)text_count,
@@ -138,7 +138,7 @@ void claw_core_agent_loop_task(void *arg)
             core->agent_loop_phase = CLAW_CORE_AGENT_LOOP_PHASE_BEFORE_BUILD_ITERATION_CONTEXT;
             core->inflight_abort = false;
             core->inflight_abort_reason = CLAW_CORE_CONTROL_ABORT_REASON_NONE;
-            claw_core_ingress_clear_insert_queue_locked(core);
+            claw_core_ingress_clear_run_inbox_locked(core);
             xSemaphoreGive(core->inflight_lock);
         }
         response.view.request_id = request.view.request_id;
@@ -251,7 +251,7 @@ void claw_core_agent_loop_task(void *arg)
             {
                 bool drained = false;
 
-                err = handle_pending_user_interrupts(core,
+                err = drain_run_inbox(core,
                                                      &request,
                                                      "before_build_iteration_context",
                                                      &runtime_messages,
@@ -286,7 +286,7 @@ void claw_core_agent_loop_task(void *arg)
             {
                 bool drained = false;
 
-                err = handle_pending_user_interrupts(core,
+                err = drain_run_inbox(core,
                                                      &request,
                                                      "before_llm_http",
                                                      &runtime_messages,
@@ -310,10 +310,11 @@ void claw_core_agent_loop_task(void *arg)
             if (err != ESP_OK) {
                 bool drained = false;
 
-                if (claw_core_control_take_user_interrupt_http_abort(core, request.view.request_id)) {
+                if (claw_core_control_take_run_inbox_http_abort(
+                        core, request.view.request_id)) {
                     free(response.view.error_message);
                     response.view.error_message = NULL;
-                    err = handle_pending_user_interrupts(core,
+                    err = drain_run_inbox(core,
                                                          &request,
                                                          "in_llm_http_abort",
                                                          &runtime_messages,
@@ -343,7 +344,7 @@ void claw_core_agent_loop_task(void *arg)
             {
                 bool drained = false;
 
-                err = handle_pending_user_interrupts(core,
+                err = drain_run_inbox(core,
                                                      &request,
                                                      "after_llm_before_tool",
                                                      &runtime_messages,
@@ -454,7 +455,7 @@ finish_request:
             core->agent_loop_phase = CLAW_CORE_AGENT_LOOP_PHASE_IDLE;
             core->inflight_abort = false;
             core->inflight_abort_reason = CLAW_CORE_CONTROL_ABORT_REASON_NONE;
-            claw_core_ingress_clear_insert_queue_locked(core);
+            claw_core_ingress_clear_run_inbox_locked(core);
             xSemaphoreGive(core->inflight_lock);
             if (was_cancelled && err != ESP_OK && response.view.error_message) {
                 /* Replace the generic transport error with a clearer one. */

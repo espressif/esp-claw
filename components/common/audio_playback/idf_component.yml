@@ -1,0 +1,4 @@
+dependencies:
+  espressif/esp_player: ^1.0.5
+  espressif/esp_audio_render: "~1.0"
+  espressif/media_lib_sal: "~1.0"

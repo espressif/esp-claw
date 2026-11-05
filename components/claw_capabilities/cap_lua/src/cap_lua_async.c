@@ -477,6 +477,7 @@ static void cap_lua_job_task(void *arg)
 
     err = cap_lua_runtime_execute_file(ctx->path,
                                        ctx->args_json,
+                                       ctx->job_id,
                                        ctx->timeout_ms,
                                        ctx->stop_requested,
                                        cap_lua_async_log_callback,
@@ -1589,7 +1590,7 @@ esp_err_t cap_lua_async_get_status(const char *job_id,
     return ESP_OK;
 }
 
-size_t cap_lua_async_collect_active_snapshots(cap_lua_async_job_snapshot_t *out,
+size_t cap_lua_async_collect_active_snapshots(cap_lua_job_snapshot_t *out,
                                               size_t max)
 {
     size_t count = 0;
@@ -1610,9 +1611,6 @@ size_t cap_lua_async_collect_active_snapshots(cap_lua_async_job_snapshot_t *out,
         strlcpy(out[count].exclusive, s_jobs[i].exclusive, sizeof(out[count].exclusive));
         strlcpy(out[count].path, s_jobs[i].path, sizeof(out[count].path));
         out[count].status = s_jobs[i].status;
-        out[count].created_at = s_jobs[i].created_at;
-        out[count].started_at = s_jobs[i].started_at;
-        out[count].finished_at = s_jobs[i].finished_at;
         count++;
     }
     xSemaphoreGive(s_job_lock);

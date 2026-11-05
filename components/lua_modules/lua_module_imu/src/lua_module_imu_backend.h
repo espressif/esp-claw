@@ -6,17 +6,17 @@
  * Per-chip backend interface for the lua_module_imu module.
  *
  * Each supported IMU chip (BMI270 / ICM42670 / MPU6050 / ...) lives under
- * src/<chip>/ and exports a single `lua_imu_backend_t` instance named
- * `lua_imu_backend`. The main glue file talks to chips only via this table.
+ * src/<chip>/ and exports a single `lua_imu_backend_t` instance selected by chip name. The main glue file talks to chips only via this table.
  */
 
 #pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 
 #include "esp_err.h"
-#include "i2c_bus.h"
+#include "driver/i2c_master.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -26,14 +26,16 @@ extern "C" {
  * @brief Shared per-instance context handed to the backend.
  *
  * The main module owns this struct. Backends only read/write what they need:
- *   - `i2c_bus_handle` (e.g. BMI270 takes the wrapper bus directly);
+ *   - `master_bus` is the caller-owned native bus;
  *   - `i2c_dev_handle` (e.g. MPU6050 reads/writes by register through it);
  *   - `state` (backend-private scratch sized by `state_size`).
  */
 typedef struct {
-    i2c_bus_handle_t i2c_bus_handle;
-    i2c_bus_device_handle_t i2c_dev_handle;
+    i2c_master_dev_handle_t i2c_dev_handle;
+    i2c_master_bus_handle_t master_bus;
+    uint32_t frequency;
     uint8_t i2c_addr;
+    void *sensor;
     void *state;
 } lua_imu_backend_ctx_t;
 
@@ -46,7 +48,7 @@ typedef struct {
 typedef struct {
     lua_imu_axes_t accel;
     lua_imu_axes_t gyro;
-    int64_t sens_time;   /*!< microseconds; backend may fill from sensor or wall-clock */
+    int64_t sens_time;   /*!< Sensor ticks for BMI270; microseconds otherwise. */
     uint32_t status;     /*!< chip-specific status bits */
 } lua_imu_sample_t;
 
@@ -58,7 +60,7 @@ typedef struct {
     esp_err_t (*probe)(lua_imu_backend_ctx_t *ctx, uint8_t i2c_addr);
 
     /** Tear down backend-private resources. May be NULL. */
-    void (*destroy)(lua_imu_backend_ctx_t *ctx);
+    esp_err_t (*destroy)(lua_imu_backend_ctx_t *ctx);
 
     /** Read one accel+gyro sample. */
     esp_err_t (*read_sample)(lua_imu_backend_ctx_t *ctx, lua_imu_sample_t *out);
@@ -83,7 +85,9 @@ typedef struct {
     int (*sdo_level_for_addr)(uint8_t i2c_addr);
 } lua_imu_backend_t;
 
-extern const lua_imu_backend_t lua_imu_backend;
+extern const lua_imu_backend_t lua_imu_backend_bmi270;
+extern const lua_imu_backend_t lua_imu_backend_icm42670;
+extern const lua_imu_backend_t lua_imu_backend_mpu6050;
 
 /**
  * @brief (Re)create the per-device I2C handle inside `ctx` for `i2c_addr`.

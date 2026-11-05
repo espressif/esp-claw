@@ -17,10 +17,6 @@
 
 static const char *TAG = "lua_module_imu.bmi270";
 
-typedef struct {
-    bmi270_handle_t sensor_handle;
-} bmi270_state_t;
-
 static esp_err_t bmi270_apply_default_runtime_config(bmi270_handle_t sensor_handle)
 {
     uint8_t sens_list[2] = { BMI2_ACCEL, BMI2_GYRO };
@@ -67,15 +63,16 @@ static esp_err_t bmi270_apply_default_runtime_config(bmi270_handle_t sensor_hand
 
 static esp_err_t bmi270_backend_probe(lua_imu_backend_ctx_t *ctx, uint8_t i2c_addr)
 {
-    if (i2c_addr != BMI270_I2C_ADDRESS) {
+    bmi270_handle_t sensor = NULL;
+    if (!((i2c_addr == 0x68) || (i2c_addr == 0x69))) {
         return ESP_ERR_INVALID_ARG;
     }
-    bmi270_state_t *st = (bmi270_state_t *)ctx->state;
 
-    esp_err_t err = bmi270_sensor_create(ctx->i2c_bus_handle, &st->sensor_handle,
+    esp_err_t err = bmi270_sensor_create_from_master_bus_with_address(ctx->master_bus, i2c_addr, &sensor,
                                          bmi270_config_file,
                                          BMI2_GYRO_CROSS_SENS_ENABLE | BMI2_CRT_RTOSK_ENABLE);
-    if (err != ESP_OK || st->sensor_handle == NULL) {
+    ctx->sensor = sensor;
+    if (err != ESP_OK || ctx->sensor == NULL) {
         ESP_LOGE(TAG, "Failed to create BMI270 sensor: %s", esp_err_to_name(err));
         return err != ESP_OK ? err : ESP_FAIL;
     }
@@ -88,16 +85,14 @@ static esp_err_t bmi270_backend_probe(lua_imu_backend_ctx_t *ctx, uint8_t i2c_ad
     int_pin_cfg.pin_cfg[0].output_en = BMI2_INT_OUTPUT_ENABLE;
     int_pin_cfg.int_latch = BMI2_INT_NON_LATCH;
 
-    int8_t rslt = bmi2_set_int_pin_config(&int_pin_cfg, st->sensor_handle);
+    int8_t rslt = bmi2_set_int_pin_config(&int_pin_cfg, ctx->sensor);
     if (rslt != BMI2_OK) {
         ESP_LOGE(TAG, "Failed to configure BMI270 INT1 pin: %d", rslt);
-        bmi270_sensor_del(&st->sensor_handle);
         return ESP_FAIL;
     }
 
-    err = bmi270_apply_default_runtime_config(st->sensor_handle);
+    err = bmi270_apply_default_runtime_config(ctx->sensor);
     if (err != ESP_OK) {
-        bmi270_sensor_del(&st->sensor_handle);
         return err;
     }
 
@@ -105,19 +100,18 @@ static esp_err_t bmi270_backend_probe(lua_imu_backend_ctx_t *ctx, uint8_t i2c_ad
     return ESP_OK;
 }
 
-static void bmi270_backend_destroy(lua_imu_backend_ctx_t *ctx)
+static esp_err_t bmi270_backend_destroy(lua_imu_backend_ctx_t *ctx)
 {
-    bmi270_state_t *st = (bmi270_state_t *)ctx->state;
-    if (st->sensor_handle != NULL) {
-        bmi270_sensor_del(&st->sensor_handle);
-    }
+    bmi270_handle_t sensor = ctx->sensor;
+    esp_err_t err = sensor ? bmi270_sensor_del(&sensor) : ESP_OK;
+    ctx->sensor = sensor;
+    return err;
 }
 
 static esp_err_t bmi270_backend_read_sample(lua_imu_backend_ctx_t *ctx, lua_imu_sample_t *out)
 {
-    bmi270_state_t *st = (bmi270_state_t *)ctx->state;
     struct bmi2_sens_data data = { 0 };
-    int8_t rslt = bmi2_get_sensor_data(&data, st->sensor_handle);
+    int8_t rslt = bmi2_get_sensor_data(&data, ctx->sensor);
     if (rslt != BMI2_OK) {
         return ESP_FAIL;
     }
@@ -134,9 +128,8 @@ static esp_err_t bmi270_backend_read_sample(lua_imu_backend_ctx_t *ctx, lua_imu_
 
 static esp_err_t bmi270_backend_read_temperature(lua_imu_backend_ctx_t *ctx, int32_t *out)
 {
-    bmi270_state_t *st = (bmi270_state_t *)ctx->state;
     int16_t temp = 0;
-    int8_t rslt = bmi2_get_temperature_data(&temp, st->sensor_handle);
+    int8_t rslt = bmi2_get_temperature_data(&temp, ctx->sensor);
     if (rslt != BMI2_OK) {
         return ESP_FAIL;
     }
@@ -146,9 +139,8 @@ static esp_err_t bmi270_backend_read_temperature(lua_imu_backend_ctx_t *ctx, int
 
 static esp_err_t bmi270_backend_read_int_status(lua_imu_backend_ctx_t *ctx, uint32_t *out)
 {
-    bmi270_state_t *st = (bmi270_state_t *)ctx->state;
     uint16_t int_status = 0;
-    int8_t rslt = bmi2_get_int_status(&int_status, st->sensor_handle);
+    int8_t rslt = bmi2_get_int_status(&int_status, ctx->sensor);
     if (rslt != BMI2_OK) {
         return ESP_FAIL;
     }
@@ -158,7 +150,7 @@ static esp_err_t bmi270_backend_read_int_status(lua_imu_backend_ctx_t *ctx, uint
 
 static bool bmi270_backend_is_supported_addr(uint8_t i2c_addr)
 {
-    return i2c_addr == BMI270_I2C_ADDRESS;
+    return i2c_addr == 0x68 || i2c_addr == 0x69;
 }
 
 static uint8_t bmi270_backend_default_addr(void)
@@ -168,14 +160,13 @@ static uint8_t bmi270_backend_default_addr(void)
 
 static int bmi270_backend_sdo_level_for_addr(uint8_t i2c_addr)
 {
-    /* BMI270 7-bit addresses: 0x68 (SDO=GND), 0x69 (SDO=VDDIO).
-     * Only 0x68 is officially supported by the vendor driver here. */
+    /* BMI270 address strap: low for 0x68, high for 0x69. */
     return (i2c_addr == 0x69) ? 1 : 0;
 }
 
-const lua_imu_backend_t lua_imu_backend = {
+const lua_imu_backend_t lua_imu_backend_bmi270 = {
     .chip_name = "bmi270",
-    .state_size = sizeof(bmi270_state_t),
+    .state_size = 0,
     .probe = bmi270_backend_probe,
     .destroy = bmi270_backend_destroy,
     .read_sample = bmi270_backend_read_sample,

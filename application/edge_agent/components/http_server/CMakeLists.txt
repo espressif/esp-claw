@@ -22,6 +22,7 @@ set(http_server_srcs
     "http_server_files_api.c"
     "http_server_wechat_api.c"
     "http_server_webim_api.c"
+    "http_server_webim_sessions.c"
     "http_server_json.c"
     "http_server_utils.c"
 )
@@ -29,8 +30,6 @@ set(http_server_srcs
 set(http_server_requires
     app_config
     app_claw
-    cap_im_local
-    claw_cap
     esp_http_server
     heap
 )

@@ -4,9 +4,8 @@
   "description": "Use on-device long-term memory tools to remember, recall, list, update, and forget structured memories.",
   "metadata": {
     "cap_groups": [
-      "claw_memory"
-    ],
-    "manage_mode": "readonly"
+     "claw_memory"
+    ]
   }
 }
 ---

@@ -23,6 +23,7 @@ Currently supported chips: **BQ27220**, **MAX17048** (voltage + SOC only, no cur
 | Field      | Type    | Meaning                                              |
 |------------|---------|------------------------------------------------------|
 | `chip`     | string  | Chip model name, e.g. `"bq27220"`, `"max17048"`     |
+| `borrow`   | boolean | Use an initialized board bus by `port`; default `false` |
 | `port`     | integer | I2C port number                                      |
 | `sda`      | integer | SDA GPIO number                                      |
 | `scl`      | integer | SCL GPIO number                                      |
@@ -31,6 +32,10 @@ Currently supported chips: **BQ27220**, **MAX17048** (voltage + SOC only, no cur
 | `addr`     | integer | 7-bit I2C address (default depends on chip)          |
 | `bus`      | userdata| Existing `i2c` bus handle, recommended               |
 | `close_bus`| boolean | Close a bus created from `port`/`sda`/`scl` when `gauge:close()` runs |
+
+For a board-initialized bus, use `fuel_gauge.new({ borrow = true, port = 0, chip = "bq27220" })`; `gauge:close()` closes the gauge without stopping the board bus. The device address must be free. A caller-supplied `bus` remains caller-owned and must be closed after all gauges/devices using it.
+
+Close the gauge when finished. Garbage collection and job exit also clean up unused handles.
 
 ## Data format
 - `sample.chip` — chip name string
@@ -45,7 +50,7 @@ Currently supported chips: **BQ27220**, **MAX17048** (voltage + SOC only, no cur
 local fuel_gauge = require("lib_fuel_gauge")
 local i2c = require("i2c")
 
-local bus = i2c.new(0, 14, 13, 400000)
+local bus = i2c.borrow(0)
 local gauge = fuel_gauge.new({
     bus = bus,
     chip = "bq27220",   -- or "max17048"

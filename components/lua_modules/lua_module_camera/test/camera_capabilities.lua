@@ -2,7 +2,6 @@
 -- Picks the first discrete frame size of the first format the sensor advertises,
 -- re-opens with that explicit configuration, flushes, then grabs one frame.
 
-local board_manager = require("board_manager")
 local camera        = require("camera")
 
 local TAG = "[camera_capabilities]"
@@ -13,16 +12,17 @@ local function assert_true(value, message)
     end
 end
 
-local camera_paths, path_err = board_manager.get_camera_paths()
-if not camera_paths then
-    print(TAG .. " SKIP: get_camera_paths failed: " .. tostring(path_err))
+local camera_devices = camera.list_devices()
+if #camera_devices == 0 then
+    print(TAG .. " SKIP: no capture video device available")
     return
 end
+local camera_path = camera_devices[1].path
 
 assert_true(camera.is_open() == false, "is_open() should be false before open")
 assert_true(camera.is_streaming() == false, "is_streaming() should be false before open")
 
-local ok, err = pcall(camera.open, camera_paths.dev_path)
+local ok, err = pcall(camera.open, camera_path)
 if not ok then
     print(TAG .. " SKIP: camera.open failed: " .. tostring(err))
     return
@@ -52,15 +52,15 @@ assert_true(camera.is_open() == false, "is_open() should be false after close")
 if first_choice ~= nil then
     print(string.format("%s re-opening with %s @ %dx%d",
         TAG, first_choice.format, first_choice.width, first_choice.height))
-    local opened, open_err = pcall(camera.open, camera_paths.dev_path, first_choice)
+    local opened, open_err = pcall(camera.open, camera_path, first_choice)
     if not opened then
         print(TAG .. " WARN: open with opts failed (driver may not support it): " .. tostring(open_err))
-        local fallback_ok, fallback_err = pcall(camera.open, camera_paths.dev_path)
+        local fallback_ok, fallback_err = pcall(camera.open, camera_path)
         assert_true(fallback_ok, "fallback open failed: " .. tostring(fallback_err))
     end
 else
     -- No discrete sizes advertised; just open with defaults.
-    local opened, open_err = pcall(camera.open, camera_paths.dev_path)
+    local opened, open_err = pcall(camera.open, camera_path)
     assert_true(opened, "camera.open default failed: " .. tostring(open_err))
 end
 

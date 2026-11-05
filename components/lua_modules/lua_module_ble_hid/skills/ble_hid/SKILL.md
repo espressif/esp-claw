@@ -4,9 +4,8 @@
   "description": "Operate ESP-Claw BLE HID: start HID advertising and send media/keyboard/mouse actions.",
   "metadata": {
     "cap_groups": [
-      "cap_lua"
-    ],
-    "manage_mode": "readonly"
+     "cap_lua"
+    ]
   }
 }
 ---

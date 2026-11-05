@@ -79,4 +79,4 @@ match the chosen app id.
 
 ## Notes
 
-Run scripts that serve callbacks through `lua_run_script_async`, because `serve_forever()` keeps the Lua state alive until the job is stopped.
+Run scripts that serve callbacks through `lua_run_script_async`, because `serve_forever()` blocks until the job is stopped.

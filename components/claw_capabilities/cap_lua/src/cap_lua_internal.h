@@ -43,26 +43,17 @@ typedef struct {
     time_t created_at;
 } cap_lua_async_job_t;
 
-typedef struct {
-    char job_id[CAP_LUA_JOB_ID_LEN];
-    char name[CAP_LUA_JOB_NAME_MAX];
-    char exclusive[CAP_LUA_JOB_EXCLUSIVE_MAX];
-    char path[CAP_LUA_JOB_PATH_MAX];
-    cap_lua_job_status_t status;
-    time_t created_at;
-    time_t started_at;
-    time_t finished_at;
-} cap_lua_async_job_snapshot_t;
-
 size_t cap_lua_get_package_path_dir_count(void);
 const char *cap_lua_get_package_path_dir(size_t index);
 bool cap_lua_run_path_is_valid(const char *path);
 esp_err_t cap_lua_resolve_run_path(const char *path, char *resolved, size_t resolved_size);
 
 esp_err_t cap_lua_runtime_init(void);
+claw_hw_registry_handle_t cap_lua_get_hw_registry(void);
 
 esp_err_t cap_lua_runtime_execute_file(const char *path,
                                        const char *args_json,
+                                       const char *job_id,
                                        uint32_t timeout_ms,
                                        volatile bool *stop_requested,
                                        cap_lua_runtime_log_fn_t log_fn,
@@ -106,7 +97,7 @@ esp_err_t cap_lua_async_stop_all_jobs(const char *exclusive_filter,
                                       uint32_t wait_ms,
                                       char *output,
                                       size_t output_size);
-size_t cap_lua_async_collect_active_snapshots(cap_lua_async_job_snapshot_t *out,
+size_t cap_lua_async_collect_active_snapshots(cap_lua_job_snapshot_t *out,
                                               size_t max);
 size_t cap_lua_async_active_count(void);
 const char *cap_lua_job_status_name(cap_lua_job_status_t status);

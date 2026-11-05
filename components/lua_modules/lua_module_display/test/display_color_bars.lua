@@ -1,52 +1,45 @@
--- Color bar test for visually comparing RGB565 vs RGB888 framebuffer output.
---
--- Set the global DISPLAY_PIXEL_FORMAT (e.g. "rgb888") before requiring this
--- script to force a specific framebuffer format at display.init time. Leave it
--- nil to use the panel's default (RGB565). The screen title shows which format
--- is actually active, so you can flash the test twice and eyeball the banding
--- difference on the dark gradients.
-
-local bm = require("board_manager")
+-- Uses the default screen format; raw blit declares its source pixel format.
 local delay = require("delay")
 local display = require("display")
+local screen, screen_info
+
+local function center_text(x, y, w, h, text, options)
+    local tw, th = screen:measure_text(text, options)
+    screen:text(x + math.max(0, (w - tw) // 2), y + math.max(0, (h - th) // 2), text, options)
+end
 
 local TAG = "[display_color_bars]"
 
-local panel_handle, io_handle, width, height, panel_if, requested_format= bm.get_display_lcd_params("display_lcd")
-if not panel_handle then
-    print(TAG .. " SKIP: get_display_lcd_params(display_lcd) failed: " .. tostring(io_handle))
-    return
-end
-
-local ok, err = pcall(display.init, panel_handle, io_handle, width, height, panel_if, requested_format)
+local ok, err = pcall(display.open)
 if not ok then
-    print(TAG .. " SKIP: display.init failed: " .. tostring(err))
+    print(TAG .. " SKIP: display.open failed: " .. tostring(err))
     return
 end
+screen = err
+screen_info = screen:info()
 
 local started = true
 local function cleanup()
     if started then
-        pcall(display.end_frame)
-        pcall(display.deinit)
+        pcall(screen.close, screen)
         started = false
     end
 end
 
-width = display.width
-height = display.height
-local active_format = display.pixel_format
-local active_bpp = display.bytes_per_pixel
+local width = screen_info.width
+local height = screen_info.height
+local active_format = screen_info.pixel_format
+local active_bpp = screen_info.bytes_per_pixel
 
 print(string.format("%s active pixel_format=%s bpp=%d size=%dx%d",
                     TAG, active_format, active_bpp, width, height))
 
 local function draw_border(x, y, w, h)
-    display.draw_rect(x - 1, y - 1, w + 2, h + 2, { r = 200, g = 200, b = 200 })
+    screen:stroke_rect(x - 1, y - 1, w + 2, h + 2, { r = 200, g = 200, b = 200 })
 end
 
 local function draw_bar_label(x, y, w, text)
-    display.draw_text(x, y, text, {
+    screen:text(x, y, text, {
         color = { r = 220, g = 226, b = 232 },
         font_size = 12,
     })
@@ -62,7 +55,7 @@ end
 local function draw_channel_bar(x, y, w, h, channel_fn, max_val, label)
     for i = 0, w - 1 do
         local v = math.floor(i * max_val / math.max(1, w - 1))
-        display.fill_rect(x + i, y, 1, h, channel_fn(v))
+        screen:fill_rect(x + i, y, 1, h, channel_fn(v))
     end
     draw_border(x, y, w, h)
     draw_bar_label(x, y + h + 2, w, label)
@@ -77,9 +70,7 @@ local function pack_rgb888(r, g, b)
     return string.char(r, g, b)
 end
 
--- Build a full-width gradient scanline in the panel's native pixel format and
--- repeat it `h` times so draw_pixels can push a single tall block. This proves
--- the draw_pixels 'format' option round-trips bytes without re-conversion.
+-- Build source pixels in the declared blit format, independent of panel order.
 local function make_gradient_block(w, h, channel_fn, max_val)
     local pack = (active_format == "rgb888") and pack_rgb888 or pack_rgb565
     local row_parts = {}
@@ -94,7 +85,7 @@ end
 
 local function draw_raw_bar(x, y, w, h, channel_fn, max_val, label)
     local block = make_gradient_block(w, h, channel_fn, max_val)
-    display.draw_pixels(x, y, block, {
+    screen:blit(x, y, block, {
         width = w,
         height = h,
         format = active_format,
@@ -104,15 +95,13 @@ local function draw_raw_bar(x, y, w, h, channel_fn, max_val, label)
 end
 
 local run_ok, run_err = xpcall(function()
-    display.begin_frame({ clear = true, color = { r = 8, g = 12, b = 20 } })
+    screen:begin({ clear = { r = 8, g = 12, b = 20 } })
 
-    display.draw_text_aligned(0, 4, width, 18,
+    center_text(0, 4, width, 18,
         string.format("Color Bars  format=%s  bpp=%d", active_format, active_bpp),
         {
-            color = "white",
+            color = "#ffffff",
             font_size = 14,
-            align = "center",
-            valign = "middle",
         })
 
     local bar_x = 12
@@ -152,30 +141,26 @@ local run_ok, run_err = xpcall(function()
         function(v) return { r = v, g = 0, b = 0 } end, 31, "Dark R 0..31 (5-bit test)")
     y = y + gap
 
-    -- Native-format draw_pixels: exercises the panel-format path without the
+    -- Native-format blit: exercises the panel-format path without the
     -- fill_rect fast path. Rendered pattern must match the earlier gray bar.
     if y + bar_h + 12 <= height then
         draw_raw_bar(bar_x, y, bar_w, bar_h,
             function(v) return { r = v, g = v, b = v } end, 255,
-            string.format("Raw draw_pixels %s", active_format))
+            string.format("Raw blit %s", active_format))
     end
 
-    display.present()
-    display.end_frame()
+    screen:present()
 
     delay.delay_ms(3000)
 
-    display.begin_frame({ clear = true, color = "black" })
-    display.draw_text_aligned(0, 0, width, height,
+    screen:begin({ clear = "#000000" })
+    center_text(0, 0, width, height,
         string.format("color_bars %s PASS", active_format),
         {
-            color = "white",
+            color = "#ffffff",
             font_size = 20,
-            align = "center",
-            valign = "middle",
         })
-    display.present()
-    display.end_frame()
+    screen:present()
 end, debug.traceback)
 
 cleanup()

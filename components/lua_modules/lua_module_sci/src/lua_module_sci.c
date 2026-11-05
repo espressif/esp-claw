@@ -7,17 +7,20 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "cap_lua.h"
-#include "driver/gpio.h"
+#include "cap_lua_hw.h"
+#include "driver/i2c_master.h"
+#include "esp_log.h"
 #include "esp_err.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "i2c_bus.h"
+#include "lua_driver_i2c.h"
 #include "lauxlib.h"
 
 #define LUA_MODULE_SCI_NAME              "sci"
@@ -72,8 +75,16 @@ typedef enum {
 } sci_cmd_t;
 
 typedef struct {
-    i2c_bus_handle_t bus;
-    i2c_bus_device_handle_t dev;
+    i2c_master_bus_handle_t bus;
+    lua_driver_i2c_bus_handle_t bus_owner;
+    i2c_master_dev_handle_t dev;
+    i2c_master_dev_handle_t pending_dev;
+    cap_lua_hw_lease_t lease;
+    cap_lua_hw_lease_t pending_lease;
+    int port;
+    uint32_t frequency;
+    /* Keep response storage alive if Lua raises while constructing a result. */
+    uint8_t response[LUA_MODULE_SCI_MAX_PAYLOAD];
     uint8_t addr;
     uint32_t timeout_ms;
     bool open;
@@ -155,7 +166,7 @@ static esp_err_t lua_module_sci_write(lua_module_sci_ud_t *ud,
         (uint8_t)(arg_len & 0xFF),
         (uint8_t)(arg_len >> 8),
     };
-    uint16_t total_len = (uint16_t)sizeof(header) + arg_len;
+    size_t total_len = sizeof(header) + arg_len;
     uint8_t stack_buf[64];
     uint8_t *buf = stack_buf;
     esp_err_t err;
@@ -172,7 +183,7 @@ static esp_err_t lua_module_sci_write(lua_module_sci_ud_t *ud,
         memcpy(buf + sizeof(header), args, arg_len);
     }
 
-    err = i2c_bus_write_bytes(ud->dev, NULL_I2C_MEM_ADDR, total_len, buf);
+    err = i2c_master_transmit(ud->dev, buf, total_len, ud->timeout_ms);
     if (buf != stack_buf) {
         free(buf);
     }
@@ -183,7 +194,7 @@ static esp_err_t lua_module_sci_read_exact(lua_module_sci_ud_t *ud, uint8_t *buf
 {
     while (len > 0) {
         size_t chunk = len > LUA_MODULE_SCI_I2C_CHUNK ? LUA_MODULE_SCI_I2C_CHUNK : len;
-        esp_err_t err = i2c_bus_read_bytes(ud->dev, NULL_I2C_MEM_ADDR, chunk, buf);
+        esp_err_t err = i2c_master_receive(ud->dev, buf, chunk, ud->timeout_ms);
         if (err != ESP_OK) {
             return err;
         }
@@ -191,14 +202,6 @@ static esp_err_t lua_module_sci_read_exact(lua_module_sci_ud_t *ud, uint8_t *buf
         len -= chunk;
     }
     return ESP_OK;
-}
-
-static void lua_module_sci_free_response(sci_response_t *resp)
-{
-    if (resp && resp->data) {
-        free(resp->data);
-        resp->data = NULL;
-    }
 }
 
 static esp_err_t lua_module_sci_reset_cmd(lua_module_sci_ud_t *ud, uint8_t cmd)
@@ -256,22 +259,15 @@ static esp_err_t lua_module_sci_read_response(lua_module_sci_ud_t *ud,
             return ESP_ERR_INVALID_SIZE;
         }
         if (resp->len > 0) {
-            resp->data = (uint8_t *)malloc(resp->len);
-            if (!resp->data) {
-                if (error_code) {
-                    *error_code = SCI_ERR_M_NO_SPACE;
-                }
-                return ESP_ERR_NO_MEM;
-            }
+            resp->data = ud->response;
             err = lua_module_sci_read_exact(ud, resp->data, resp->len);
             if (err != ESP_OK) {
-                lua_module_sci_free_response(resp);
                 return err;
             }
         }
 
-        if (status == SCI_STATUS_FAILED && error_code && resp->len > 0) {
-            *error_code = resp->data[0];
+        if (status == SCI_STATUS_FAILED && error_code) {
+            *error_code = resp->len > 0 && resp->data[0] != SCI_ERR_NONE ? resp->data[0] : SCI_ERR_RES_PKT;
         }
         return ESP_OK;
     }
@@ -295,8 +291,8 @@ static uint8_t lua_module_sci_command_error(lua_module_sci_ud_t *ud,
         return SCI_ERR_RES_PKT;
     }
     err = lua_module_sci_read_response(ud, cmd, &resp, &code);
-    lua_module_sci_free_response(&resp);
-    return err == ESP_OK ? code : code;
+
+    return err == ESP_OK || code != SCI_ERR_NONE ? code : SCI_ERR_RES_PKT;
 }
 
 static int lua_module_sci_push_string_command(lua_State *L,
@@ -313,79 +309,115 @@ static int lua_module_sci_push_string_command(lua_State *L,
     }
     err = lua_module_sci_read_response(ud, cmd, &resp, &code);
     if (err != ESP_OK) {
-        lua_module_sci_free_response(&resp);
-        return luaL_error(L, "sci response failed for command 0x%02X: err=%s code=%u",
+        return luaL_error(L, "sci response failed for command %d: err=%s code=%d",
                           cmd, esp_err_to_name(err), code);
     }
     if (resp.status == SCI_STATUS_FAILED) {
-        lua_module_sci_free_response(&resp);
-        return luaL_error(L, "sci command 0x%02X failed with code %u", cmd, code);
+        return luaL_error(L, "sci command %d failed with code %d", cmd, code);
     }
     lua_pushlstring(L, resp.len > 0 ? (const char *)resp.data : "", resp.len);
-    lua_module_sci_free_response(&resp);
+
     return 1;
+}
+
+static esp_err_t lua_module_sci_release(lua_module_sci_ud_t *ud)
+{
+    ud->open = false;
+    if (ud->pending_dev) {
+        esp_err_t err = i2c_master_bus_rm_device(ud->pending_dev);
+        if (err != ESP_OK) return err;
+        ud->pending_dev = NULL;
+    }
+    esp_err_t err = cap_lua_hw_release(&ud->pending_lease);
+    if (err != ESP_OK) return err;
+    if (ud->dev) {
+        err = i2c_master_bus_rm_device(ud->dev);
+        if (err != ESP_OK) return err;
+        ud->dev = NULL;
+    }
+    err = cap_lua_hw_release(&ud->lease);
+    if (err != ESP_OK) return err;
+    lua_driver_i2c_unref_bus(ud->bus_owner);
+    ud->bus_owner = NULL;
+    ud->bus = NULL;
+    return ESP_OK;
+}
+
+static esp_err_t lua_module_sci_add_device(lua_State *L, lua_module_sci_ud_t *ud, uint8_t address,
+                                         cap_lua_hw_lease_t *lease, i2c_master_dev_handle_t *dev)
+{
+    char key[CLAW_HW_KEY_SIZE];
+    const char *keys[] = {claw_hw_key_i2c_addr(key, sizeof(key), ud->port, address)};
+    esp_err_t err = cap_lua_hw_claim(L, lease, "lua/sci", keys, 1);
+    if (err != ESP_OK) return err;
+    i2c_device_config_t config = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = address,
+        .scl_speed_hz = ud->frequency,
+    };
+    return i2c_master_bus_add_device(ud->bus, &config, dev);
 }
 
 static int lua_module_sci_new(lua_State *L)
 {
-    lua_Integer port = luaL_checkinteger(L, 1);
-    lua_Integer sda = luaL_checkinteger(L, 2);
-    lua_Integer scl = luaL_checkinteger(L, 3);
-    uint8_t addr = lua_isnoneornil(L, 4) ? LUA_MODULE_SCI_DEFAULT_ADDR :
-                   lua_module_sci_check_addr(L, 4);
-    uint32_t freq_hz = (uint32_t)luaL_optinteger(L, 5, LUA_MODULE_SCI_DEFAULT_FREQ_HZ);
-
-    if (port < 0 || port > 1) {
-        return luaL_error(L, "sci i2c port must be 0 or 1");
+    luaL_checktype(L, 1, LUA_TTABLE);
+    luaL_argcheck(L, lua_gettop(L) == 1, 1, "expected one options table");
+    lua_pushnil(L);
+    while (lua_next(L, 1)) {
+        const char *key = lua_type(L, -2) == LUA_TSTRING ? lua_tostring(L, -2) : NULL;
+        if (!key || (strcmp(key, "bus") && strcmp(key, "address") && strcmp(key, "freq_hz") && strcmp(key, "timeout_ms"))) {
+            return luaL_error(L, "sci.new: unsupported option");
+        }
+        lua_pop(L, 1);
     }
-    if (freq_hz == 0 || freq_hz > LUA_MODULE_SCI_DEFAULT_FREQ_HZ) {
-        return luaL_error(L, "sci i2c freq_hz must be 1-%u", LUA_MODULE_SCI_DEFAULT_FREQ_HZ);
+    lua_getfield(L, 1, "address");
+    uint8_t address = lua_isnil(L, -1) ? LUA_MODULE_SCI_DEFAULT_ADDR : lua_module_sci_check_addr(L, -1);
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "freq_hz");
+    lua_Integer frequency = luaL_optinteger(L, -1, LUA_MODULE_SCI_DEFAULT_FREQ_HZ);
+    lua_pop(L, 1);
+    lua_getfield(L, 1, "timeout_ms");
+    lua_Integer timeout = luaL_optinteger(L, -1, LUA_MODULE_SCI_DEFAULT_TIMEOUT);
+    lua_pop(L, 1);
+    if (frequency < 1 || frequency > LUA_MODULE_SCI_DEFAULT_FREQ_HZ || timeout < 1 || timeout > INT_MAX) {
+        return luaL_error(L, "sci: freq_hz must be 1-100000 and timeout_ms must be 1-2147483647");
     }
-
-    i2c_config_t cfg = {
-        .mode = I2C_MODE_MASTER,
-        .sda_io_num = (gpio_num_t)sda,
-        .scl_io_num = (gpio_num_t)scl,
-        .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master.clk_speed = freq_hz,
-        .clk_flags = 0,
-    };
-    i2c_bus_handle_t bus = i2c_bus_create((i2c_port_t)port, &cfg);
-    if (!bus) {
-        return luaL_error(L, "sci i2c bus create failed");
-    }
-    i2c_bus_device_handle_t dev = i2c_bus_device_create(bus, addr, freq_hz);
-    if (!dev) {
-        i2c_bus_delete(&bus);
-        return luaL_error(L, "sci i2c device create failed");
-    }
-
-    lua_module_sci_ud_t *ud = (lua_module_sci_ud_t *)lua_newuserdata(L, sizeof(*ud));
+    lua_module_sci_ud_t *ud = lua_newuserdata(L, sizeof(*ud));
     memset(ud, 0, sizeof(*ud));
-    ud->bus = bus;
-    ud->dev = dev;
-    ud->addr = addr;
-    ud->timeout_ms = LUA_MODULE_SCI_DEFAULT_TIMEOUT;
+    luaL_setmetatable(L, LUA_MODULE_SCI_METATABLE);
+    lua_getfield(L, 1, "bus");
+    lua_pushvalue(L, -1);
+    lua_setuservalue(L, -3);
+    ud->bus = lua_driver_i2c_ref_bus(L, -1, &ud->port, &ud->bus_owner);
+    lua_pop(L, 1);
+    ud->frequency = frequency;
+    ud->timeout_ms = timeout;
+    ud->addr = address;
+    esp_err_t err = lua_module_sci_add_device(L, ud, address, &ud->lease, &ud->dev);
+    if (err != ESP_OK) {
+        esp_err_t cleanup = lua_module_sci_release(ud);
+        if (cleanup != ESP_OK) ESP_LOGE("sci", "Open cleanup failed: %s", esp_err_to_name(cleanup));
+        return luaL_error(L, "sci.new failed: %s", esp_err_to_name(err));
+    }
     ud->open = true;
-    luaL_getmetatable(L, LUA_MODULE_SCI_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
 static int lua_module_sci_close(lua_State *L)
 {
-    lua_module_sci_ud_t *ud = (lua_module_sci_ud_t *)luaL_checkudata(
-        L, 1, LUA_MODULE_SCI_METATABLE);
-    if (ud && ud->open) {
-        if (ud->dev) {
-            i2c_bus_device_delete(&ud->dev);
-        }
-        if (ud->bus) {
-            i2c_bus_delete(&ud->bus);
-        }
-        ud->open = false;
-    }
+    lua_module_sci_ud_t *ud = luaL_checkudata(L, 1, LUA_MODULE_SCI_METATABLE);
+    esp_err_t err = lua_module_sci_release(ud);
+    if (err != ESP_OK) return luaL_error(L, "sci.close failed: %s", esp_err_to_name(err));
+    lua_pushnil(L);
+    lua_setuservalue(L, 1);
+    return 0;
+}
+
+static int lua_module_sci_gc(lua_State *L)
+{
+    lua_module_sci_ud_t *ud = luaL_checkudata(L, 1, LUA_MODULE_SCI_METATABLE);
+    esp_err_t err = lua_module_sci_release(ud);
+    if (err != ESP_OK) ESP_LOGE("sci", "Cleanup failed: %s", esp_err_to_name(err));
     return 0;
 }
 
@@ -393,8 +425,8 @@ static int lua_module_sci_set_timeout(lua_State *L)
 {
     lua_module_sci_ud_t *ud = lua_module_sci_get_ud(L, 1);
     lua_Integer timeout = luaL_checkinteger(L, 2);
-    if (timeout <= 0) {
-        return luaL_error(L, "sci timeout_ms must be positive");
+    if (timeout <= 0 || timeout > INT_MAX) {
+        return luaL_error(L, "sci timeout_ms must be 1-2147483647");
     }
     ud->timeout_ms = (uint32_t)timeout;
     return 0;
@@ -411,13 +443,11 @@ static int lua_module_sci_get_version(lua_State *L)
     }
     err = lua_module_sci_read_response(ud, SCI_CMD_GET_VERSION, &resp, &code);
     if (err != ESP_OK) {
-        lua_module_sci_free_response(&resp);
-        return luaL_error(L, "sci get_version failed: err=%s code=%u",
+        return luaL_error(L, "sci get_version failed: err=%s code=%d",
                           esp_err_to_name(err), code);
     }
     if (resp.status == SCI_STATUS_FAILED || resp.len != 2) {
-        lua_module_sci_free_response(&resp);
-        return luaL_error(L, "sci get_version failed with code %u", code);
+        return luaL_error(L, "sci get_version failed with code %d", code);
     }
     uint16_t raw = ((uint16_t)resp.data[0] << 8) | resp.data[1];
     char text[16];
@@ -430,7 +460,7 @@ static int lua_module_sci_get_version(lua_State *L)
     lua_setfield(L, -2, "raw");
     lua_pushstring(L, text);
     lua_setfield(L, -2, "text");
-    lua_module_sci_free_response(&resp);
+
     return 1;
 }
 
@@ -445,16 +475,14 @@ static int lua_module_sci_get_address(lua_State *L)
     }
     err = lua_module_sci_read_response(ud, SCI_CMD_SET_ADDR, &resp, &code);
     if (err != ESP_OK) {
-        lua_module_sci_free_response(&resp);
-        return luaL_error(L, "sci get_address failed: err=%s code=%u",
+        return luaL_error(L, "sci get_address failed: err=%s code=%d",
                           esp_err_to_name(err), code);
     }
     if (resp.status == SCI_STATUS_FAILED || resp.len < 1) {
-        lua_module_sci_free_response(&resp);
-        return luaL_error(L, "sci get_address failed with code %u", code);
+        return luaL_error(L, "sci get_address failed with code %d", code);
     }
     lua_pushinteger(L, resp.data[0]);
-    lua_module_sci_free_response(&resp);
+
     return 1;
 }
 
@@ -462,24 +490,42 @@ static int lua_module_sci_set_address(lua_State *L)
 {
     lua_module_sci_ud_t *ud = lua_module_sci_get_ud(L, 1);
     uint8_t addr = lua_module_sci_check_addr(L, 2);
-    uint8_t code = lua_module_sci_command_error(ud, SCI_CMD_SET_ADDR, &addr, 1);
-    if (code == SCI_ERR_NONE) {
-        i2c_bus_device_handle_t new_dev = i2c_bus_device_create(ud->bus, addr, 0);
-        if (!new_dev) {
-            return luaL_error(L, "sci i2c device recreate failed after address change");
-        }
-        i2c_bus_device_delete(&ud->dev);
-        ud->dev = new_dev;
-        ud->addr = addr;
+    if (addr == ud->addr) {
+        lua_pushinteger(L, SCI_ERR_NONE);
+        return 1;
     }
-    lua_pushinteger(L, code);
+    esp_err_t err = lua_module_sci_add_device(L, ud, addr, &ud->pending_lease, &ud->pending_dev);
+    if (err != ESP_OK) {
+        esp_err_t cleanup = cap_lua_hw_release(&ud->pending_lease);
+        if (cleanup != ESP_OK) ud->open = false;
+        return luaL_error(L, "sci address reservation failed: %s", esp_err_to_name(err));
+    }
+    uint8_t code = lua_module_sci_command_error(ud, SCI_CMD_SET_ADDR, &addr, 1);
+    /* A lost response leaves the hardware address uncertain; close releases both reservations. */
+    ud->open = false;
+    if (code != SCI_ERR_NONE) {
+        return luaL_error(L, "sci address change failed with code %d; close and reopen at the device address", code);
+    }
+    err = i2c_master_bus_rm_device(ud->dev);
+    if (err != ESP_OK) return luaL_error(L, "sci address cleanup failed: %s; close the device", esp_err_to_name(err));
+    ud->dev = NULL;
+    err = cap_lua_hw_release(&ud->lease);
+    if (err != ESP_OK) return luaL_error(L, "sci address release failed: %s; close the device", esp_err_to_name(err));
+    ud->dev = ud->pending_dev;
+    ud->pending_dev = NULL;
+    ud->lease = ud->pending_lease;
+    memset(&ud->pending_lease, 0, sizeof(ud->pending_lease));
+    ud->addr = addr;
+    ud->open = true;
+    lua_pushinteger(L, SCI_ERR_NONE);
     return 1;
 }
 
 static int lua_module_sci_set_port(lua_State *L)
 {
     lua_module_sci_ud_t *ud = lua_module_sci_get_ud(L, 1);
-    int port = (int)luaL_checkinteger(L, 2);
+    lua_Integer port = luaL_checkinteger(L, 2);
+    if (port < 1 || port > 3) return luaL_error(L, "sci port must be 1, 2, or 3");
     const char *sku = luaL_checkstring(L, 3);
     size_t len = strlen(sku);
     if (len > LUA_MODULE_SCI_MAX_SKU_LEN) {
@@ -496,7 +542,8 @@ static int lua_module_sci_set_port(lua_State *L)
 static int lua_module_sci_get_port(lua_State *L)
 {
     lua_module_sci_ud_t *ud = lua_module_sci_get_ud(L, 1);
-    int port = (int)luaL_checkinteger(L, 2);
+    lua_Integer port = luaL_checkinteger(L, 2);
+    if (port < 1 || port > 3) return luaL_error(L, "sci port must be 1, 2, or 3");
     uint8_t cmd = lua_module_sci_port_to_cmd(L, port);
     sci_response_t resp;
     uint8_t code = SCI_ERR_NONE;
@@ -506,13 +553,11 @@ static int lua_module_sci_get_port(lua_State *L)
     }
     err = lua_module_sci_read_response(ud, cmd, &resp, &code);
     if (err != ESP_OK) {
-        lua_module_sci_free_response(&resp);
-        return luaL_error(L, "sci get_port failed: err=%s code=%u",
+        return luaL_error(L, "sci get_port failed: err=%s code=%d",
                           esp_err_to_name(err), code);
     }
     if (resp.status == SCI_STATUS_FAILED || resp.len < 1) {
-        lua_module_sci_free_response(&resp);
-        return luaL_error(L, "sci get_port failed with code %u", code);
+        return luaL_error(L, "sci get_port failed with code %d", code);
     }
 
     lua_createtable(L, 0, 3);
@@ -522,7 +567,7 @@ static int lua_module_sci_get_port(lua_State *L)
     lua_setfield(L, -2, "mode_text");
     lua_pushlstring(L, (const char *)resp.data + 1, resp.len - 1);
     lua_setfield(L, -2, "sku");
-    lua_module_sci_free_response(&resp);
+
     return 1;
 }
 
@@ -549,13 +594,11 @@ static int lua_module_sci_get_refresh_rate(lua_State *L)
     }
     err = lua_module_sci_read_response(ud, SCI_CMD_REFRESH_TIME, &resp, &code);
     if (err != ESP_OK) {
-        lua_module_sci_free_response(&resp);
-        return luaL_error(L, "sci get_refresh_rate failed: err=%s code=%u",
+        return luaL_error(L, "sci get_refresh_rate failed: err=%s code=%d",
                           esp_err_to_name(err), code);
     }
     if (resp.status == SCI_STATUS_FAILED || resp.len < 1) {
-        lua_module_sci_free_response(&resp);
-        return luaL_error(L, "sci get_refresh_rate failed with code %u", code);
+        return luaL_error(L, "sci get_refresh_rate failed with code %d", code);
     }
     uint8_t rate = resp.data[0];
     lua_createtable(L, 0, 2);
@@ -563,7 +606,7 @@ static int lua_module_sci_get_refresh_rate(lua_State *L)
     lua_setfield(L, -2, "rate");
     lua_pushinteger(L, lua_module_sci_refresh_ms(rate));
     lua_setfield(L, -2, "ms");
-    lua_module_sci_free_response(&resp);
+
     return 1;
 }
 
@@ -604,8 +647,8 @@ static int lua_module_sci_get_units(lua_State *L) { return lua_module_sci_get_fi
 static int lua_module_sci_key_lookup(lua_State *L, uint8_t base_cmd)
 {
     lua_module_sci_ud_t *ud = lua_module_sci_get_ud(L, 1);
-    const char *key = luaL_checkstring(L, 2);
-    size_t key_len = strlen(key);
+    size_t key_len;
+    const char *key = luaL_checklstring(L, 2, &key_len);
     bool has_port = !lua_isnoneornil(L, 3);
     bool has_sku = !lua_isnoneornil(L, 4);
     uint8_t port = has_port ? lua_module_sci_check_port_mask(L, 3, 0x07) : 0x07;
@@ -616,6 +659,7 @@ static int lua_module_sci_key_lookup(lua_State *L, uint8_t base_cmd)
     uint8_t *args = stack_buf;
     size_t len = key_len;
 
+    if (key_len > LUA_MODULE_SCI_MAX_PAYLOAD) return luaL_error(L, "sci key lookup argument too long");
     if (sku_len > LUA_MODULE_SCI_MAX_SKU_LEN) {
         return luaL_error(L, "sci sku length must be <= %d", LUA_MODULE_SCI_MAX_SKU_LEN);
     }
@@ -626,14 +670,11 @@ static int lua_module_sci_key_lookup(lua_State *L, uint8_t base_cmd)
         cmd = base_cmd + 1;
         len = 1 + key_len;
     }
-    if (len > UINT16_MAX) {
+    if (len > LUA_MODULE_SCI_MAX_PAYLOAD) {
         return luaL_error(L, "sci key lookup argument too long");
     }
     if (len > sizeof(stack_buf)) {
-        args = (uint8_t *)malloc(len);
-        if (!args) {
-            return luaL_error(L, "sci key lookup out of memory");
-        }
+        args = lua_newuserdata(L, len);
     }
 
     if (has_sku) {
@@ -648,11 +689,7 @@ static int lua_module_sci_key_lookup(lua_State *L, uint8_t base_cmd)
         memcpy(args, key, key_len);
     }
 
-    int ret = lua_module_sci_push_string_command(L, ud, cmd, args, (uint16_t)len);
-    if (args != stack_buf) {
-        free(args);
-    }
-    return ret;
+    return lua_module_sci_push_string_command(L, ud, cmd, args, (uint16_t)len);
 }
 
 static int lua_module_sci_get_value(lua_State *L)
@@ -701,13 +738,11 @@ static int lua_module_sci_get_rtc(lua_State *L)
     }
     err = lua_module_sci_read_response(ud, SCI_CMD_SET_TIME, &resp, &code);
     if (err != ESP_OK) {
-        lua_module_sci_free_response(&resp);
-        return luaL_error(L, "sci get_rtc failed: err=%s code=%u",
+        return luaL_error(L, "sci get_rtc failed: err=%s code=%d",
                           esp_err_to_name(err), code);
     }
     if (resp.status == SCI_STATUS_FAILED || resp.len != 8) {
-        lua_module_sci_free_response(&resp);
-        return luaL_error(L, "sci get_rtc failed with code %u", code);
+        return luaL_error(L, "sci get_rtc failed with code %d", code);
     }
     lua_createtable(L, 0, 7);
     lua_pushinteger(L, resp.data[0]); lua_setfield(L, -2, "second");
@@ -718,7 +753,7 @@ static int lua_module_sci_get_rtc(lua_State *L)
     lua_pushinteger(L, resp.data[5]); lua_setfield(L, -2, "month");
     lua_pushinteger(L, (uint16_t)resp.data[6] | ((uint16_t)resp.data[7] << 8));
     lua_setfield(L, -2, "year");
-    lua_module_sci_free_response(&resp);
+
     return 1;
 }
 
@@ -727,14 +762,17 @@ static int lua_module_sci_set_rtc(lua_State *L)
     lua_module_sci_ud_t *ud = lua_module_sci_get_ud(L, 1);
     luaL_checktype(L, 2, LUA_TTABLE);
     const char *fields[] = { "second", "minute", "hour", "day", "week", "month", "year" };
-    int values[7] = {0};
+    lua_Integer values[7] = {0};
     for (int i = 0; i < 7; i++) {
         lua_getfield(L, 2, fields[i]);
-        values[i] = (int)luaL_checkinteger(L, -1);
+        values[i] = luaL_checkinteger(L, -1);
         lua_pop(L, 1);
     }
-    if (values[6] < 0 || values[6] > 65535) {
-        return luaL_error(L, "sci rtc year must be 0-65535");
+    if (values[0] < 0 || values[0] > 59 || values[1] < 0 || values[1] > 59 ||
+        values[2] < 0 || values[2] > 23 || values[3] < 1 || values[3] > 31 ||
+        values[4] < 0 || values[4] > UINT8_MAX || values[5] < 1 || values[5] > 12 ||
+        values[6] < 0 || values[6] > UINT16_MAX) {
+        return luaL_error(L, "sci: invalid RTC fields");
     }
     uint8_t args[8] = {
         (uint8_t)values[0],
@@ -790,7 +828,7 @@ static const luaL_Reg lua_module_sci_methods[] = {
     { "get_rtc", lua_module_sci_get_rtc },
     { "set_rtc", lua_module_sci_set_rtc },
     { "reset", lua_module_sci_reset },
-    { "__gc", lua_module_sci_close },
+    { "__gc", lua_module_sci_gc },
     { NULL, NULL },
 };
 

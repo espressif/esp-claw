@@ -4,7 +4,6 @@
 
 -- 1. Requires
 local arg_schema = require("arg_schema")
-local board_manager = require("board_manager")
 local camera = require("camera")
 local image = require("image")
 local storage = require("storage")
@@ -98,14 +97,15 @@ end
 
 -- 6. Run
 local function run()
-  local camera_paths, path_err = board_manager.get_camera_paths()
-  if not camera_paths then
-    error("get_camera_paths failed: " .. tostring(path_err))
+  local camera_devices = camera.list_devices()
+  if #camera_devices == 0 then
+    error("no capture video device available")
   end
+  local camera_path = camera_devices[1].path
 
   local save_path = build_save_path()
 
-  local opened, open_err = pcall(camera.open, camera_paths.dev_path)
+  local opened, open_err = pcall(camera.open, camera_path)
   if not opened then
     error(tostring(open_err))
   end

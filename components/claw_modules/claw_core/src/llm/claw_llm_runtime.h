@@ -5,14 +5,18 @@
  */
 #pragma once
 
+#include "claw_endpoint.h"
 #include "llm/claw_llm_types.h"
 
 typedef struct claw_llm_runtime claw_llm_runtime_t;
 
 typedef struct {
     const char *id;
-    esp_err_t (*init)(const claw_llm_runtime_config_t *config,
+    /* `config` is borrowed for this call; copy retained strings.
+     * `endpoint` is owned by the runtime and outlives the backend context. */
+    esp_err_t (*init)(const claw_llm_backend_config_t *config,
                       const claw_llm_model_profile_t *profile,
+                      claw_endpoint_handle_t endpoint,
                       void **out_backend_ctx,
                       char **out_error_message);
     esp_err_t (*chat)(void *backend_ctx,
@@ -29,7 +33,6 @@ typedef struct {
 } claw_llm_backend_vtable_t;
 
 typedef struct {
-    const char *auth_type;
     const char *chat_path;
     const char *max_tokens_field;
 } claw_llm_backend_defaults_t;
@@ -45,6 +48,8 @@ typedef claw_llm_backend_registration_t claw_llm_custom_backend_registration_t;
 esp_err_t claw_llm_runtime_init(claw_llm_runtime_t **out_runtime,
                                 const claw_llm_runtime_config_t *config,
                                 char **out_error_message);
+/** @brief Check whether the selected endpoint provider accepts the connection settings. */
+bool claw_llm_runtime_endpoint_is_configured(const claw_llm_runtime_config_t *config);
 esp_err_t claw_llm_runtime_chat(claw_llm_runtime_t *runtime,
                                 const claw_llm_chat_request_t *request,
                                 claw_llm_response_t *out_response,

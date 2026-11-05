@@ -84,7 +84,7 @@ int lua_lvgl_create_widget(lua_State *L, lua_lvgl_obj_type_t type)
     lua_lvgl_obj_ud_t *parent_ud = lua_lvgl_check_ud(L, 1);
     lua_lvgl_opts_t opts;
     lv_align_t align;
-    esp_err_t err = lua_lvgl_lock();
+    esp_err_t err;
     lv_obj_t *parent;
     lv_obj_t *obj = NULL;
     lua_lvgl_obj_ud_t *created_ud;
@@ -113,6 +113,7 @@ int lua_lvgl_create_widget(lua_State *L, lua_lvgl_obj_type_t type)
         options = lua_lvgl_build_options_string(L, 2, "options");
     }
 
+    err = lua_lvgl_lock();
     if (err != ESP_OK) {
         free(options);
         free(line_points);

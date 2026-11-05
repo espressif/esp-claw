@@ -4,9 +4,8 @@
   "description": "Call allowlisted HTTP or HTTPS endpoints directly and return response status plus body text, or stream the response body to a file.",
   "metadata": {
     "cap_groups": [
-      "cap_http_request"
-    ],
-    "manage_mode": "readonly"
+     "cap_http_request"
+    ]
   }
 }
 ---

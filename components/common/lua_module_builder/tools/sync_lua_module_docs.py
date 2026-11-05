@@ -73,7 +73,7 @@ def main() -> int:
 
     sources = collect_build_component_sources(build_dir, name_prefix=('lua_module_', 'lua_driver_'))
     plan = collect_lua_module_docs(sources, output_dir, manifest_path)
-    plan.apply()
+    plan.apply(prune_output=True)
     console.success(f'CLAW lua docs sync updated {plan.count} markdown files into {output_dir}')
     return 0
 

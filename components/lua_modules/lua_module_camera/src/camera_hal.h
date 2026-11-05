@@ -96,6 +96,8 @@ esp_err_t camera_capture_frame(int timeout_ms, uint8_t **frame_data, size_t *fra
                                camera_frame_info_t *out_info);
 esp_err_t camera_release_frame(void *frame_data);
 esp_err_t camera_close(void);
+esp_err_t camera_set_vflip(bool enable);
+esp_err_t camera_set_hmirror(bool enable);
 
 /**
  * @brief Drop every queued capture buffer so the next get_frame returns a fresh capture.

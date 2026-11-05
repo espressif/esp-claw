@@ -11,6 +11,8 @@
 #include <stdio.h>
 
 #include "cJSON.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "claw_memory.h"
 #include "llm/claw_llm_runtime.h"
 
@@ -37,10 +39,12 @@ typedef enum {
     CLAW_MEMORY_BACKEND_FORMAT_UNKNOWN = 0,
     CLAW_MEMORY_BACKEND_FORMAT_OPENAI = 1,
     CLAW_MEMORY_BACKEND_FORMAT_ANTHROPIC = 2,
+    CLAW_MEMORY_BACKEND_FORMAT_OPENAI_RESPONSES = 3,
 } claw_memory_backend_format_t;
 
 typedef struct {
     int initialized;
+    SemaphoreHandle_t history_lock;
     char session_root_dir[CLAW_MEMORY_MAX_PATH];
     char memory_root_dir[CLAW_MEMORY_MAX_PATH];
     char markdown_path[CLAW_MEMORY_MAX_PATH];

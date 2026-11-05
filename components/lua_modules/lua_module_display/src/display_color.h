@@ -7,8 +7,6 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include "esp_err.h"
-#include "lua.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,7 +35,6 @@ typedef union {
     uint32_t full;
 } display_color_t;
 
-esp_err_t display_color_from_lua(lua_State *L, int index, display_color_t *out_color);
 uint16_t display_color_to_rgb565(display_color_t color);
 uint16_t display_color_blend_rgb565(uint16_t dst, display_color_t src);
 

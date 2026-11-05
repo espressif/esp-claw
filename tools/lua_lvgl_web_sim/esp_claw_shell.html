@@ -3,6 +3,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <script>
+@SIM_AUDIO_JS@
+    </script>
+    <script>
       window.__espClawEmbedded = new URLSearchParams(window.location.search).get("embedded") === "1";
       if (window.__espClawEmbedded) {
         document.documentElement.classList.add("embedded");
@@ -311,8 +314,7 @@
             }
 
             const status = Number(match.status || 200);
-            const statusText = String(match.status_text || "OK");
-            return { ok: true, text: `HTTP ${status} ${statusText}\n${body}` };
+            return { ok: true, text: `HTTP ${status}\n${body}` };
           },
         };
         const cameraService = {
@@ -453,236 +455,7 @@
             return true;
           },
         };
-        const audioService = {
-          outputs: new Map(),
-          players: new Map(),
-          nextOutputId: 1,
-          nextPlayerId: 1,
-          proxyBase: "http://127.0.0.1:8092/stream?url=",
-          unlocked: false,
-          audioContext: null,
-          skippedPcmWarned: false,
-          log(message) {
-            appendLog("[audio] " + message);
-          },
-          unlock() {
-            if (this.unlocked) {
-              return;
-            }
-            this.unlocked = true;
-            try {
-              const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-              if (AudioContextCtor) {
-                const ctx = this.audioContext || new AudioContextCtor();
-                this.audioContext = ctx;
-                const resumeResult = ctx.resume?.();
-                const source = ctx.createBufferSource();
-                source.buffer = ctx.createBuffer(1, 1, 22050);
-                source.connect(ctx.destination);
-                source.start(0);
-                if (resumeResult && typeof resumeResult.then === "function") {
-                  resumeResult.catch(() => {});
-                }
-              }
-            } catch (err) {
-              this.log("unlock context failed: " + formatError(err));
-            }
-            try {
-              const audio = new Audio("data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=");
-              audio.muted = true;
-              audio.play().then(() => {
-                audio.pause();
-              }).catch(() => {});
-            } catch (err) {
-              this.log("unlock element failed: " + formatError(err));
-            }
-          },
-          createOutput(opts = {}) {
-            const id = this.nextOutputId++;
-            this.outputs.set(id, {
-              id,
-              sample_rate: Number(opts.sample_rate || opts.rate || 16000),
-              channels: Number(opts.channels || 1),
-              bits: Number(opts.bits || 16),
-              volume: Number(opts.volume ?? 70),
-              nextTime: 0,
-              closed: false,
-            });
-            return id;
-          },
-          writePcm(outputId, ptr, len) {
-            try {
-              const output = this.outputs.get(Number(outputId));
-              if (!output || output.closed) {
-                return "output_closed";
-              }
-              if (output.bits !== 16) {
-                return `unsupported_bits_${output.bits}`;
-              }
-              const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
-              if (!AudioContextCtor) {
-                return "audio_context_unavailable";
-              }
-              const heap = Module.HEAPU8 || globalThis.HEAPU8;
-              if (!heap) {
-                return "heap_unavailable";
-              }
-              const ctx = this.audioContext || new AudioContextCtor();
-              this.audioContext = ctx;
-              const resumeResult = ctx.resume?.();
-              if (resumeResult && typeof resumeResult.then === "function") {
-                resumeResult.catch(() => {});
-              }
-              if (ctx.state !== "running") {
-                if (!this.skippedPcmWarned) {
-                  this.skippedPcmWarned = true;
-                  this.log("pcm skipped until browser audio is unlocked");
-                }
-                return "";
-              }
-              const channels = Math.max(1, Math.min(2, output.channels || 1));
-              const bytesPerFrame = channels * 2;
-              const frameCount = Math.floor(Number(len || 0) / bytesPerFrame);
-              if (frameCount <= 0) {
-                return "";
-              }
-              const sampleRate = Math.max(8000, Math.min(96000, output.sample_rate || 16000));
-              const buffer = ctx.createBuffer(channels, frameCount, sampleRate);
-              for (let ch = 0; ch < channels; ch++) {
-                const data = buffer.getChannelData(ch);
-                for (let i = 0; i < frameCount; i++) {
-                  const off = Number(ptr) + i * bytesPerFrame + ch * 2;
-                  let sample = heap[off] | (heap[off + 1] << 8);
-                  if (sample & 0x8000) {
-                    sample -= 0x10000;
-                  }
-                  data[i] = Math.max(-1, Math.min(1, sample / 32768));
-                }
-              }
-              const gain = ctx.createGain();
-              gain.gain.value = Math.max(0, Math.min(1, output.volume / 100));
-              gain.connect(ctx.destination);
-              const source = ctx.createBufferSource();
-              source.buffer = buffer;
-              source.connect(gain);
-              const startAt = Math.max(ctx.currentTime, output.nextTime || 0);
-              source.start(startAt);
-              output.nextTime = startAt + buffer.duration;
-              return "";
-            } catch (err) {
-              this.log("pcm write failed: " + formatError(err));
-              return "pcm_write_failed";
-            }
-          },
-          setVolume(outputId, volume) {
-            const output = this.outputs.get(Number(outputId));
-            if (!output || output.closed) {
-              return false;
-            }
-            output.volume = Math.max(0, Math.min(100, Number(volume || 0)));
-            for (const player of this.players.values()) {
-              if (player.outputId === output.id && player.audio) {
-                player.audio.volume = output.volume / 100;
-              }
-            }
-            return true;
-          },
-          closeOutput(outputId) {
-            const output = this.outputs.get(Number(outputId));
-            if (output) {
-              output.closed = true;
-            }
-            return true;
-          },
-          createPlayer(outputId) {
-            const id = this.nextPlayerId++;
-            this.players.set(id, {
-              id,
-              outputId: Number(outputId || 0),
-              state: "stopped",
-              url: "",
-              error: "",
-              audio: null,
-            });
-            return id;
-          },
-          resolveStream(url) {
-            const mode = new URLSearchParams(location.search).get("stream") || "localProxy";
-            if (mode === "direct") {
-              return url;
-            }
-            return this.proxyBase + enc(url);
-          },
-          play(playerId, url) {
-            const player = this.players.get(Number(playerId));
-            if (!player) {
-              return "player_not_found";
-            }
-            this.stop(playerId);
-            const output = this.outputs.get(player.outputId);
-            const audio = new Audio();
-            audio.preload = "none";
-            audio.crossOrigin = "anonymous";
-            audio.src = this.resolveStream(url);
-            audio.volume = Math.max(0, Math.min(1, Number((output && output.volume) ?? 70) / 100));
-            player.audio = audio;
-            player.url = url;
-            player.error = "";
-            player.state = "buffering";
-            audio.addEventListener("playing", () => { player.state = "playing"; });
-            audio.addEventListener("waiting", () => { player.state = "buffering"; });
-            audio.addEventListener("ended", () => { player.state = "stopped"; });
-            audio.addEventListener("error", () => {
-              player.state = "error";
-              player.error = audio.error ? `media_error_${audio.error.code}` : "media_error";
-              this.log(`play failed: ${player.error}`);
-            });
-            audio.play().then(() => {
-              player.state = "playing";
-              this.log(`playing ${url}`);
-            }).catch((err) => {
-              player.state = "error";
-              player.error = err && err.message ? err.message : String(err);
-              this.log(`play rejected: ${player.error}`);
-            });
-            return "";
-          },
-          stop(playerId) {
-            const player = this.players.get(Number(playerId));
-            if (!player) {
-              return true;
-            }
-            if (player.audio) {
-              try {
-                player.audio.pause();
-                player.audio.removeAttribute("src");
-                player.audio.load();
-              } catch (err) {
-                this.log(formatError(err));
-              }
-            }
-            player.audio = null;
-            player.state = "stopped";
-            return true;
-          },
-          closePlayer(playerId) {
-            this.stop(playerId);
-            this.players.delete(Number(playerId));
-            return true;
-          },
-          poll(playerId) {
-            const player = this.players.get(Number(playerId));
-            if (!player) {
-              return { state: "stopped", error: "player_not_found" };
-            }
-            return { state: player.state, error: player.error || "", url: player.url || "" };
-          },
-          stopAll() {
-            for (const id of Array.from(this.players.keys())) {
-              this.stop(id);
-            }
-          },
-        };
+        const audioService = createSimAudio(() => Module, (message) => appendLog("[audio] " + message));
         const threadService = {
           queues: new Map(),
           locks: new Map(),
@@ -853,7 +626,7 @@
               const action = command.action;
               if (action === "play" || action === "switch") {
                 if (!job.radio.outputId) {
-                  job.radio.outputId = audioService.createOutput({ volume: command.volume ?? status.volume });
+                  job.radio.outputId = audioService.createOutput();
                 }
                 audioService.setVolume(job.radio.outputId, command.volume ?? status.volume);
                 if (!job.radio.playerId) {
@@ -932,6 +705,7 @@
           audio: audioService,
           thread: threadService,
           resetForRun(path) {
+            audioService.reset();
             this.runtime.currentId = this.runtime.nextId++;
             appendLog(`[runtime] start #${this.runtime.currentId}: ${path}`);
             ensureDir("/app");
@@ -981,6 +755,7 @@
         onRuntimeInitialized() {
           Module.__simServices = createSimServices();
           let touchId = 0;
+          let pointerDown = false;
           Module.__inputSessionId = 0;
           Module.__inputMode = "idle";
           Module.__inputEnabled = false;
@@ -1039,12 +814,13 @@
             };
           };
           const setTouchEvent = (event, pressed, type) => {
-            if (!Module.__inputEnabled) {
+            if (!Module.__inputEnabled || event.isPrimary === false) {
               return;
             }
             if (pressed) {
               Module.__simServices.audio.unlock();
             }
+            pointerDown = pressed;
             const position = pointerPosition(event);
             const touchEvent = {
               x: position.x,
@@ -1070,7 +846,7 @@
             event.preventDefault();
           });
           Module.canvas.addEventListener("pointermove", (event) => {
-            if (event.buttons || Module.__touchState.pressed) {
+            if (event.buttons) {
               setTouchEvent(event, true, "move");
               event.preventDefault();
             }
@@ -1078,6 +854,18 @@
           Module.canvas.addEventListener("pointercancel", (event) => {
             setTouchEvent(event, false, "cancel");
             event.preventDefault();
+          });
+          const releaseTouch = () => {
+            pointerDown = false;
+            Module.__touchState = releasedTouchState(Module.__inputSessionId);
+            Module.__touchEvents = [];
+          };
+          window.addEventListener("blur", releaseTouch);
+          Module.canvas.addEventListener("lostpointercapture", () => {
+            if (pointerDown) releaseTouch();
+          });
+          Module.canvas.addEventListener("pointerleave", () => {
+            if (pointerDown) releaseTouch();
           });
           Module.canvas.addEventListener("wheel", (event) => {
             if (!Module.__inputEnabled) {
@@ -1137,7 +925,8 @@
             select.value = path;
             runButton.disabled = false;
           };
-          const runPath = async (path, clearLog) => {
+          let activeRun = null;
+          const executePath = async (path, clearLog) => {
             const button = document.getElementById("runButton");
             const stopButton = document.getElementById("stopButton");
             let rc = 1;
@@ -1172,6 +961,8 @@
               Module.printErr(err && err.stack ? err.stack : String(err));
               return 1;
             } finally {
+              Module.__simServices.stopAll();
+              Module.__simServices.audio.reset();
               button.disabled = false;
               stopButton.disabled = true;
               stopInputSession();
@@ -1179,11 +970,16 @@
               postHostEvent("esp-claw-sim:exited", { code: rc, stopped: Module.__stopRequested });
             }
           };
+          const runPath = (path, clearLog) => {
+            if (activeRun) return Promise.reject(new Error("an App is already running; stop it first"));
+            activeRun = executePath(path, clearLog).finally(() => { activeRun = null; });
+            return activeRun;
+          };
           const run = async () => {
             Module.__simServices.audio.unlock();
             const path = document.getElementById("scriptSelect").value;
             if (!path) {
-              Module.printErr("[sim] no script mounted. Upload a Lua file or launch from Skill Lab.");
+              Module.printErr("[sim] no script mounted. Upload a Lua file or launch an App.");
               return;
             }
             await runPath(path, true);
@@ -1225,9 +1021,10 @@
           window.addEventListener("message", async (event) => {
             const data = event.data || {};
             try {
-              if (data.type === "esp-claw-sim:mountSkill") {
-                const skill = data.skill || {};
-                const files = Array.isArray(skill.files) ? skill.files : [];
+              if (data.type === "esp-claw-sim:mountApp") {
+                if (activeRun) throw new Error("stop the running App before mounting files");
+                const app = data.app || {};
+                const files = Array.isArray(app.files) ? app.files : [];
                 for (const file of files) {
                   if (!file || !file.path) {
                     continue;
@@ -1238,30 +1035,49 @@
                     window.espClawSim.mountBytes(file.path, file.bytes);
                   }
                 }
-                if (skill.entry) {
-                  const entry = normalizePath(skill.entry);
+                if (app.entry) {
+                  const entry = normalizePath(app.entry);
                   addScriptOption(entry);
-                  Module.__scriptPeripherals.set(entry, Array.isArray(skill.peripherals) ? skill.peripherals : []);
+                  Module.__scriptPeripherals.set(entry, Array.isArray(app.peripherals) ? app.peripherals : []);
                 }
-                Module.__simServices.capability.configure(skill.root || "", skill.capabilityMocks || {});
-                Module.__simServices.thread.configureSimulatorMocks(skill.simulatorMocks || {});
-                Module.print("[sim] mounted skill: " + (skill.id || "unknown"));
+                Module.__simServices.capability.configure(app.root || "", app.capabilityMocks || {});
+                Module.__simServices.thread.configureSimulatorMocks(app.simulatorMocks || {});
+                Module.print("[sim] mounted App: " + (app.id || "unknown"));
                 event.source && event.source.postMessage({
                   type: "esp-claw-sim:mounted",
-                  id: skill.id || "",
+                  id: app.id || "",
                 }, event.origin || "*");
-              } else if (data.type === "esp-claw-sim:runSkill") {
+              } else if (data.type === "esp-claw-sim:runApp") {
                 const path = normalizePath(data.path || "");
                 if (!path || path === "/") {
-                  throw new Error("missing runSkill path");
+                  throw new Error("missing runApp path");
                 }
                 addScriptOption(path);
                 await window.espClawSim.runPath(path, true);
               } else if (data.type === "esp-claw-sim:stop") {
                 window.espClawSim.stop();
+              } else if (data.type === "esp-claw-sim:motion") {
+                const x = Number(data.x), y = Number(data.y);
+                if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+                const motion = Module.__motion ||= {x:0, y:0, z:1, flipped:false};
+                if (data.action === "shake") motion.shakeUntil = performance.now() + 600;
+                else if (data.action === "flip") {
+                  motion.flipped = !motion.flipped;
+                  motion.x = 0; motion.y = motion.flipped ? -1 : 1; motion.z = 0;
+                } else {
+                  const ax = Math.max(-1, Math.min(1, x)), ay = Math.max(-1, Math.min(1, y));
+                  const norm = Math.hypot(ax, ay, 1);
+                  motion.x = ax / norm; motion.y = ay / norm; motion.z = 1 / norm;
+                  motion.flipped = false; motion.shakeUntil = 0;
+                }
               } else if (data.type === "esp-claw-sim:setResolution") {
                 const width = clampResolution(data.width, canvas.width || 800);
                 const height = clampResolution(data.height, canvas.height || 480);
+                if (activeRun) {
+                  window.espClawSim.stop();
+                  await activeRun;
+                }
+                Module.__lvglCanvas = null;
                 setCanvasResolution(width, height, false);
               }
             } catch (err) {

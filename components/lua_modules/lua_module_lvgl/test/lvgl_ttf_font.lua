@@ -1,12 +1,8 @@
-local board_manager = require("board_manager")
 local delay = require("delay")
 local lvgl = require("lvgl")
 local storage = require("storage")
 
-local panel_handle, io_handle, width, height, panel_if =
-    board_manager.get_display_lcd_params("display_lcd")
-
-lvgl.init(panel_handle, io_handle, width, height, panel_if, {
+lvgl.init({
     buffer_lines = 10,
     tick_ms = 5,
     task_period_ms = 10,
@@ -32,6 +28,7 @@ local ok, err = pcall(function()
     })
 
     local scr = lvgl.create_screen()
+    local width = scr:get_size()
     scr:set_style({
         bg_color = "#101820",
     })
@@ -89,6 +86,8 @@ local ok, err = pcall(function()
     scr:load()
     delay.delay_ms(8000)
 end)
+
+lvgl.deinit()
 
 if not ok then
     error(err)

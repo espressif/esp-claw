@@ -4,9 +4,8 @@
   "description": "Manage scheduler rules: list/get/add/update/remove/enable/disable/pause/resume/trigger/reload.",
   "metadata": {
     "cap_groups": [
-      "cap_scheduler"
-    ],
-    "manage_mode": "readonly"
+     "cap_scheduler"
+    ]
   }
 }
 ---

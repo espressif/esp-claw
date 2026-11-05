@@ -41,6 +41,21 @@ static cap_lua_exit_cleanup_node_t *s_exit_cleanups;
 static size_t s_exit_cleanup_count;
 static bool s_builtin_modules_registered;
 static bool s_module_registration_locked;
+static claw_hw_registry_handle_t s_hw_registry;
+
+esp_err_t cap_lua_set_hw_registry(claw_hw_registry_handle_t registry)
+{
+    if (!registry) return ESP_ERR_INVALID_ARG;
+    if (s_hw_registry == registry) return ESP_OK;
+    if (s_hw_registry || s_module_registration_locked) return ESP_ERR_INVALID_STATE;
+    s_hw_registry = registry;
+    return ESP_OK;
+}
+
+claw_hw_registry_handle_t cap_lua_get_hw_registry(void)
+{
+    return s_hw_registry;
+}
 
 static bool cap_lua_abs_dir_is_valid(const char *dir);
 
@@ -179,8 +194,7 @@ esp_err_t cap_lua_resolve_run_path(const char *path, char *resolved, size_t reso
         ESP_LOGE(TAG, "resolve_run_path: invalid arg");
         return ESP_ERR_INVALID_ARG;
     }
-    /* Run tools only accept absolute .lua paths; the script's mount point is unrestricted so a
-     * caller can run a script from /fatfs/scripts, /fatfs/skills, /fatfs/temp (RAMFS), etc. */
+    /* Run tools accept absolute .lua paths from any mounted storage root. */
     if (!cap_lua_run_path_is_valid(path)) {
         ESP_LOGE(TAG, "resolve_run_path: path must be an absolute .lua path: %s", path);
         return ESP_ERR_INVALID_ARG;
@@ -416,7 +430,6 @@ static esp_err_t cap_lua_run_script_async_execute(const char *input_json,
     if (exclusive && exclusive[0]) {
         strlcpy(job.exclusive, exclusive, sizeof(job.exclusive));
     }
-
     err = cap_lua_build_args_json(root, &args_json);
     cJSON_Delete(root);
     if (err != ESP_OK) {
@@ -462,7 +475,13 @@ static esp_err_t cap_lua_run_script_async_execute(const char *input_json,
                  job.name[0] ? job.name : "(unnamed)",
                  status_label,
                  settle_summary[0] ? settle_summary : "(none)");
-        return ESP_OK;
+        if (settle_status == CAP_LUA_JOB_TIMEOUT) {
+            return ESP_ERR_TIMEOUT;
+        }
+        if (settle_status == CAP_LUA_JOB_STOPPED) {
+            return ESP_ERR_INVALID_STATE;
+        }
+        return ESP_FAIL;
     }
 
     snprintf(output, output_size,
@@ -712,7 +731,8 @@ static const claw_cap_descriptor_t s_lua_descriptors[] = {
         "\"additionalProperties\":true},"
         "\"timeout_ms\":{\"type\":\"integer\",\"minimum\":0},\"log_bytes\":{\"type\":\"integer\","
         "\"minimum\":1024,\"maximum\":16384},\"name\":{\"type\":\"string\"},"
-        "\"exclusive\":{\"type\":\"string\"},\"replace\":{\"type\":\"boolean\"}},\"required\":[\"path\"]}",
+        "\"exclusive\":{\"type\":\"string\"},"
+        "\"replace\":{\"type\":\"boolean\"}},\"required\":[\"path\"]}",
         .execute = cap_lua_run_script_async_execute,
     },
     {
@@ -861,7 +881,7 @@ esp_err_t cap_lua_run_script_async(const char *path,
     char *input_json = NULL;
     esp_err_t err = ESP_OK;
 
-    if (!path) {
+    if (!path || !output || output_size == 0) {
         return ESP_ERR_INVALID_ARG;
     }
 
@@ -908,6 +928,11 @@ esp_err_t cap_lua_run_script_async(const char *path,
     err = cap_lua_run_script_async_execute(input_json, NULL, output, output_size);
     free(input_json);
     return err;
+}
+
+size_t cap_lua_collect_active_jobs(cap_lua_job_snapshot_t *out, size_t max)
+{
+    return cap_lua_async_collect_active_snapshots(out, max);
 }
 
 esp_err_t cap_lua_stop_job(const char *id_or_name,

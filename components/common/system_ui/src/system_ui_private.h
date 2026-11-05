@@ -35,7 +35,7 @@ extern "C" {
 #define SYSTEM_UI_CLOCK_FONT_SIZE 72
 #define SYSTEM_UI_PATH_MAX 256
 #define SYSTEM_UI_LAUNCHER_MAX_APPS 32
-#define SYSTEM_UI_LAUNCHER_ID_LEN 32
+#define SYSTEM_UI_LAUNCHER_ID_LEN 64
 #define SYSTEM_UI_LAUNCHER_TITLE_LEN 40
 #define SYSTEM_UI_LAUNCHER_ARGS_LEN 384
 #define SYSTEM_UI_LAUNCHER_MAX_TILES 16
@@ -136,15 +136,15 @@ typedef enum {
     SYSTEM_UI_WORK_EVENT_JOBS_REFRESH,
     SYSTEM_UI_WORK_EVENT_JOBS_ACTION,
     SYSTEM_UI_WORK_EVENT_NETWORK_STATUS,
-    SYSTEM_UI_WORK_EVENT_APP_EXIT_SWIPE,
     SYSTEM_UI_WORK_EVENT_PAGE_SWIPE,
 } system_ui_work_event_type_t;
 
 typedef enum {
     SYSTEM_UI_TOUCH_GESTURE_NONE = 0,
     SYSTEM_UI_TOUCH_GESTURE_SHOW_JOBS,
+    SYSTEM_UI_TOUCH_GESTURE_HOME,
     SYSTEM_UI_TOUCH_GESTURE_EXCLUSIVE_HOME,
-    SYSTEM_UI_TOUCH_GESTURE_EXIT_APP,
+    SYSTEM_UI_TOUCH_GESTURE_CONSUMED,
 } system_ui_touch_gesture_t;
 
 typedef struct {
@@ -206,8 +206,6 @@ typedef struct {
     void *jobs_action_user_ctx;
     system_ui_jobs_stop_all_cb_t jobs_stop_all_cb;
     void *jobs_stop_all_user_ctx;
-    system_ui_app_exit_swipe_cb_t app_exit_swipe_cb;
-    void *app_exit_swipe_user_ctx;
     system_ui_page_swipe_cb_t page_swipe_cb;
     void *page_swipe_user_ctx;
     bool jobs_stop_task_running;
@@ -239,6 +237,7 @@ typedef struct {
     uint32_t generation;
     bool started;
     bool event_task_stop;
+    bool home_reload_pending;
     system_ui_touch_gesture_t touch_gesture;
     bool jobs_visible;
     bool sta_connected;

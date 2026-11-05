@@ -5,4 +5,6 @@ idf_component_register(
         "include"
     REQUIRES
         claw_cap
+    PRIV_REQUIRES
+        claw_endpoint
 )
