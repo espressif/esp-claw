@@ -25,6 +25,7 @@
 #define LUA_DRIVER_UART_TX_BUF_SIZE     0
 #define LUA_DRIVER_UART_MAX_READ_LEN    4096
 #define LUA_DRIVER_UART_MAX_LINE_LEN    1024
+#define LUA_DRIVER_UART_TX_TIMEOUT_MS   1000
 
 typedef struct {
     cap_lua_hw_lease_t lease;
@@ -324,6 +325,19 @@ static int lua_driver_uart_flush_input(lua_State *L)
     return 0;
 }
 
+static int lua_driver_uart_wait_tx_done(lua_State *L)
+{
+    lua_driver_uart_ud_t *ud = lua_driver_uart_get_ud(L, 1);
+    TickType_t timeout = lua_isnoneornil(L, 2) ?
+                         pdMS_TO_TICKS(LUA_DRIVER_UART_TX_TIMEOUT_MS) :
+                         lua_driver_uart_timeout_ticks(L, 2);
+    esp_err_t err = uart_wait_tx_done(ud->port, timeout);
+    if (err != ESP_OK) {
+        return luaL_error(L, "uart wait_tx_done failed: %s", esp_err_to_name(err));
+    }
+    return 0;
+}
+
 static int lua_driver_uart_gc(lua_State *L)
 {
     lua_driver_uart_ud_t *ud = (lua_driver_uart_ud_t *)luaL_testudata(
@@ -357,6 +371,8 @@ int luaopen_uart(lua_State *L)
         lua_setfield(L, -2, "available");
         lua_pushcfunction(L, lua_driver_uart_flush_input);
         lua_setfield(L, -2, "flush_input");
+        lua_pushcfunction(L, lua_driver_uart_wait_tx_done);
+        lua_setfield(L, -2, "wait_tx_done");
         lua_pushcfunction(L, lua_driver_uart_close);
         lua_setfield(L, -2, "close");
     }

@@ -1,5 +1,4 @@
 local twai = require("twai")
-local board_manager = require("board_manager")
 local display = require("display")
 local system = require("system")
 
@@ -29,7 +28,8 @@ local interval_ms = integer_arg(a.interval_ms or 1000, "interval_ms", 10)
 local initial_value = integer_arg(a.initial_value or 1, "initial_value", 0, 0x7FFFFFFF)
 
 local bus
-local display_initialized = false
+local screen
+local screen_info
 
 local function counter_bytes(value)
     return {
@@ -66,30 +66,24 @@ end
 
 local function render(tx_line, rx_line)
     local line_height = 42
-    local top = (display.height - line_height * 2) // 2
+    local top = math.max(0, (screen_info.height - line_height * 2) // 2)
+    local function draw_line(text, y, color)
+        local options = { color = color, font_size = 22 }
+        local width, height = screen:measure_text(text, options)
+        screen:text(math.max(0, (screen_info.width - width) // 2),
+            y + (line_height - height) // 2, text, options)
+    end
 
-    display.begin_frame({ clear = true, color = "#101214", preserve = false })
-    display.draw_text_aligned(0, top, display.width, line_height, tx_line, {
-        color = "#58D68D",
-        font_size = 22,
-        align = "center",
-        valign = "middle",
-    })
-    display.draw_text_aligned(0, top + line_height, display.width, line_height, rx_line, {
-        color = "#5DADE2",
-        font_size = 22,
-        align = "center",
-        valign = "middle",
-    })
-    display.present()
-    display.end_frame()
+    screen:begin({ clear = "#101214" })
+    draw_line(tx_line, top, "#58D68D")
+    draw_line(rx_line, top + line_height, "#5DADE2")
+    screen:present()
 end
 
 local function cleanup()
-    if display_initialized then
-        pcall(display.end_frame)
-        pcall(display.deinit)
-        display_initialized = false
+    if screen then
+        pcall(function() screen:close() end)
+        screen = nil
     end
     if bus then
         pcall(function()
@@ -109,12 +103,8 @@ local function run()
         rx_queue_len = 32,
     })
 
-    local panel_handle, io_handle, width, height, panel_if, pixel_format =
-        board_manager.get_display_lcd_params("display_lcd")
-    assert(panel_handle, "display_lcd is unavailable: " .. tostring(io_handle))
-    display.init(panel_handle, io_handle, width, height, panel_if, pixel_format)
-    display_initialized = true
-    display.backlight(true)
+    screen = display.open()
+    screen_info = screen:info()
 
     local tx_line = "TX:--"
     local rx_line = "RX:--"

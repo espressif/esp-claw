@@ -1,5 +1,4 @@
 local sx1262 = require("sx1262")
-local board_manager = require("board_manager")
 local display = require("display")
 local system = require("system")
 local delay = require("delay")
@@ -54,7 +53,8 @@ if type(tx_payload) == "string" then
 end
 
 local radio
-local display_initialized = false
+local screen
+local screen_info
 
 local function bytes_hex(data)
     local parts = {}
@@ -90,25 +90,22 @@ end
 local function render(tx_line, rx_line, signal_line)
     local line_height = 32
     local total_height = line_height * 4
-    local top = math.max(0, (display.height - total_height) // 2)
+    local top = math.max(0, (screen_info.height - total_height) // 2)
     local mhz = frequency_hz / 1000000
+    local function draw_line(text, y, color, font_size)
+        local options = { color = color, font_size = font_size }
+        local width, height = screen:measure_text(text, options)
+        screen:text(math.max(0, (screen_info.width - width) // 2),
+            y + (line_height - height) // 2, text, options)
+    end
 
-    display.begin_frame({ clear = true, color = "#101214", preserve = false })
-    display.draw_text_aligned(0, top, display.width, line_height,
-        string.format("LoRa %.3fMHz BW%d SF%d", mhz, bandwidth_khz, spreading_factor), {
-            color = "#F4D03F", font_size = 16, align = "center", valign = "middle",
-        })
-    display.draw_text_aligned(0, top + line_height, display.width, line_height, tx_line, {
-        color = "#58D68D", font_size = 18, align = "center", valign = "middle",
-    })
-    display.draw_text_aligned(0, top + line_height * 2, display.width, line_height, rx_line, {
-        color = "#5DADE2", font_size = 18, align = "center", valign = "middle",
-    })
-    display.draw_text_aligned(0, top + line_height * 3, display.width, line_height, signal_line, {
-        color = "#D5D8DC", font_size = 16, align = "center", valign = "middle",
-    })
-    display.present()
-    display.end_frame()
+    screen:begin({ clear = "#101214" })
+    draw_line(string.format("LoRa %.3fMHz BW%d SF%d", mhz, bandwidth_khz, spreading_factor),
+        top, "#F4D03F", 16)
+    draw_line(tx_line, top + line_height, "#58D68D", 18)
+    draw_line(rx_line, top + line_height * 2, "#5DADE2", 18)
+    draw_line(signal_line, top + line_height * 3, "#D5D8DC", 16)
+    screen:present()
 end
 
 local function cleanup()
@@ -116,10 +113,9 @@ local function cleanup()
         pcall(function() radio:close() end)
         radio = nil
     end
-    if display_initialized then
-        pcall(display.end_frame)
-        pcall(display.deinit)
-        display_initialized = false
+    if screen then
+        pcall(function() screen:close() end)
+        screen = nil
     end
 end
 
@@ -144,12 +140,8 @@ local function hold_error(err)
 end
 
 local function open_display()
-    local panel_handle, io_handle, width, height, panel_if, pixel_format =
-        board_manager.get_display_lcd_params("display_lcd")
-    assert(panel_handle, "display_lcd is unavailable: " .. tostring(io_handle))
-    display.init(panel_handle, io_handle, width, height, panel_if, pixel_format)
-    display_initialized = true
-    display.backlight(true)
+    screen = display.open()
+    screen_info = screen:info()
 end
 
 local function open_radio()

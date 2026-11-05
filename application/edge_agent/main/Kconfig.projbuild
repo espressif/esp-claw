@@ -3,6 +3,7 @@ menu "App Config"
 config EDGE_AGENT_ENABLE_EMOTE
     bool "Enable the animated ESP-Claw home page"
     depends on ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT
+    depends on APP_CLAW_SYSTEM_UI_ENABLE
     default n
     help
         Build and show the ESP-Claw expression animation as the default display

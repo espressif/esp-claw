@@ -34,17 +34,6 @@ static emote_handle_t s_emote_handle;
 static display_service_session_handle_t s_display_session;
 static SemaphoreHandle_t s_session_mutex;
 
-static bool app_emote_should_swap_color(const dev_display_lcd_config_t *lcd_cfg)
-{
-    if (lcd_cfg == NULL || lcd_cfg->sub_type == NULL) {
-        return true;
-    }
-
-    return strcmp(lcd_cfg->sub_type, "dsi") != 0 &&
-           strcmp(lcd_cfg->sub_type, "mipi_dsi") != 0 &&
-           strcmp(lcd_cfg->sub_type, "rgb") != 0;
-}
-
 static void app_emote_flush_callback(int x_start, int y_start, int x_end, int y_end,
                                      const void *data, emote_handle_t handle)
 {
@@ -126,11 +115,12 @@ static esp_err_t app_emote_load_board_display(dev_display_lcd_config_t **ret_lcd
     return ESP_OK;
 }
 
-static emote_config_t app_emote_default_config(const dev_display_lcd_config_t *lcd_cfg)
+static emote_config_t app_emote_default_config(void)
 {
     return (emote_config_t) {
         .flags = {
-            .swap = app_emote_should_swap_color(lcd_cfg),
+            /* display_service converts native RGB565 to the panel's byte order. */
+            .swap = false,
             .double_buffer = true,
             .buff_dma = true,
         },
@@ -309,7 +299,7 @@ esp_err_t app_expression_emote_start(void)
         return err;
     }
 
-    emote_config_t config = app_emote_default_config(lcd_cfg);
+    emote_config_t config = app_emote_default_config();
     s_emote_handle = emote_init(&config);
     if (s_emote_handle == NULL || !emote_is_initialized(s_emote_handle)) {
         app_emote_cleanup();
