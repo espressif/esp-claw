@@ -29,7 +29,11 @@
  * Regex examples (Python):
  *   ok      = re.search(r'ok=(\d)', line).group(1)
  *   rssi    = re.search(r'rssi=(-?\d+)', line).group(1)
+ *   bssid   = re.search(r'bssid=([0-9a-f:]{17})', line).group(1)
  *   ssid    = re.search(r'ssid=(.+)$', line).group(1).strip()
+ *
+ * rssi and ch are reported by both status and scan lines; in a status line
+ * they describe the BSS the station is associated with (0 while offline).
  */
 
 static struct {
@@ -81,19 +85,23 @@ static void log_status_line(const char *command,
     if (extra_msg) {
         ESP_LOGI(TAG, "cmd=%s ok=1 msg=%s "
                  "sta_connected=%d ap_active=%d sta_configured=%d "
+                 "rssi=%d ch=%u "
                  "sta_ip=%s ap_ip=%s ap_ssid=%s mode=%s "
                  "saved_configured=%d saved_ssid=%s",
                  command, extra_msg,
                  st->sta_connected, st->ap_active, st->sta_configured,
+                 st->sta_rssi, st->sta_channel,
                  sta_ip, ap_ip, ap_ssid, mode,
                  saved_configured, saved_ssid);
     } else {
         ESP_LOGI(TAG, "cmd=%s ok=1 "
                  "sta_connected=%d ap_active=%d sta_configured=%d "
+                 "rssi=%d ch=%u "
                  "sta_ip=%s ap_ip=%s ap_ssid=%s mode=%s "
                  "saved_configured=%d saved_ssid=%s",
                  command,
                  st->sta_connected, st->ap_active, st->sta_configured,
+                 st->sta_rssi, st->sta_channel,
                  sta_ip, ap_ip, ap_ssid, mode,
                  saved_configured, saved_ssid);
     }
@@ -134,10 +142,12 @@ static int cmd_wifi_scan(void)
 
     for (uint16_t i = 0; i < count; ++i) {
         /* ssid is last: regex  ssid=(.+)$  captures it even with spaces */
-        ESP_LOGI(TAG, "ap idx=%u rssi=%d ch=%u auth=%s ssid=%s",
+        ESP_LOGI(TAG, "ap idx=%u rssi=%d ch=%u bssid=%02x:%02x:%02x:%02x:%02x:%02x auth=%s ssid=%s",
                  i,
                  records[i].rssi,
                  records[i].primary,
+                 records[i].bssid[0], records[i].bssid[1], records[i].bssid[2],
+                 records[i].bssid[3], records[i].bssid[4], records[i].bssid[5],
                  wifi_auth_mode_to_string(records[i].authmode),
                  records[i].ssid[0] ? records[i].ssid : "-");
     }

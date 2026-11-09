@@ -253,6 +253,12 @@ static esp_err_t configure_sta_mode(const wifi_manager_config_t *config)
         sta_cfg.sta.threshold.authmode = wifi_manager_sta_password_is_set() ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
         sta_cfg.sta.pmf_cfg.capable = true;
         sta_cfg.sta.pmf_cfg.required = false;
+        /* WIFI_FAST_SCAN (the default) stops at the first BSS whose SSID
+         * matches, so with a mesh or a multi-AP home network the station can
+         * latch onto a distant unit and stay there. Scan every channel and
+         * keep the strongest BSS instead. */
+        sta_cfg.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+        sta_cfg.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
 
         s_mode = WM_STATE_APSTA;
         err = esp_wifi_set_mode(WIFI_MODE_APSTA);
@@ -485,6 +491,17 @@ void wifi_manager_get_status(wifi_manager_status_t *status)
     status->sta_connected = s_connected;
     status->ap_active = s_ap_active;
     status->sta_configured = s_sta_configured;
+    status->sta_rssi = 0;
+    status->sta_channel = 0;
+    /* Only query the driver while associated: esp_wifi_sta_get_ap_info()
+     * fails once the link is down or before esp_wifi_start(). */
+    if (s_connected) {
+        wifi_ap_record_t ap_info;
+        if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+            status->sta_rssi = ap_info.rssi;
+            status->sta_channel = ap_info.primary;
+        }
+    }
     status->sta_ip = s_ip_addr;
     status->ap_ip = s_ap_ip;
     status->ap_ssid = s_ap_ssid;
@@ -537,6 +554,7 @@ esp_err_t wifi_manager_scan_aps(wifi_manager_scan_record_t *records, uint16_t ma
 
     for (uint16_t i = 0; i < ap_count; ++i) {
         strlcpy(records[i].ssid, (const char *)ap_records[i].ssid, sizeof(records[i].ssid));
+        memcpy(records[i].bssid, ap_records[i].bssid, sizeof(records[i].bssid));
         records[i].rssi = ap_records[i].rssi;
         records[i].primary = ap_records[i].primary;
         records[i].authmode = ap_records[i].authmode;
