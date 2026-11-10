@@ -182,9 +182,17 @@ typedef struct {
 
 typedef struct lua_lvgl_font_ud lua_lvgl_font_ud_t;
 
+/* TTF file bytes shared by every font loaded from the same path; tiny_ttf only reads them. */
+typedef struct {
+    char *path;
+    uint8_t *bytes;
+    size_t size;
+    uint32_t refs;
+} lua_lvgl_font_data_t;
+
 typedef struct lua_lvgl_font_record {
     lv_font_t *font;
-    uint8_t *font_data;
+    lua_lvgl_font_data_t *data;
     lua_lvgl_font_ud_t *ud;
     uint32_t generation;
     bool valid;
