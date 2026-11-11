@@ -14,6 +14,10 @@ FetchContent_Declare(
     GIT_TAG v9.5.0
 )
 FetchContent_MakeAvailable(lvgl)
+# LVGL 9.5 ThorVG calls free() without <cstdlib>, which Emscripten 7 libc++ no longer includes transitively.
+foreach(lvgl_target lvgl lvgl_thorvg)
+    target_compile_options(${lvgl_target} PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include cstdlib>")
+endforeach()
 
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.24)
     set(ESP_CLAW_SIM_FETCH_TIMESTAMP_ARGS DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
