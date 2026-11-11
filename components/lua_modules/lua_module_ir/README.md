@@ -89,7 +89,7 @@ Each protocol uses a subset, reported by `protocol:info().fields` and `protocol:
    "Checked" protocols carry a checksum or an inverted copy, so a successful decode is reliable; decode results of unchecked protocols are weaker evidence. The air-conditioner protocols carry defaults and limits, see `protocol:capabilities()`.
 2. Protocols registered in the current Lua state with `ir.protocol.register()`.
 3. `ir/protocols/<id>.json` under the DATA root: user protocols, one JSON file each, in the [description format](#protocol-description-format). Build the directory path with `storage.join_path(storage.get_root_dir(), "ir/protocols")`.
-4. `/system/ir/protocols.jsonl`: 33 experimental air-conditioner codesets generated from IRext, with ids such as `gree.irext_10727`. Their scope and limitations are described in [`protocols/irext.md`](protocols/irext.md) in the component source.
+4. `/system/ir/protocols.jsonl`: 58 experimental air-conditioner codesets generated from IRext, with ids such as `gree.irext_10727`. Their scope and limitations are described in [`protocols/irext.md`](protocols/irext.md) in the component source.
 
 Registered and JSON protocols are encode-only. A DATA file overrides a SYSTEM codeset with the same id; if that file is invalid, `ir.protocol.get()` raises an error instead of falling back.
 
@@ -413,4 +413,4 @@ The scripts in `test/` are bundled with the `builtin_lua_modules` skill. `ir_cod
 
 ## Licenses
 
-Third-party notices for the IRext codesets are in [`licenses/`](licenses/) in the component source.
+The license of the IRext codesets is in [`protocols/LICENSE.IRext`](protocols/LICENSE.IRext) in the component source.

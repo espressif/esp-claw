@@ -2,7 +2,7 @@
 
 ## Scope
 
-The SYSTEM image contains 33 experimental codesets for Gree, Midea, Haier, Hisense, Daikin, Mitsubishi Electric, Panasonic, and LG, at most five per brand. Each one is a `<brand>.irext_<remote>` line in `fs_image/ir/protocols.jsonl` and is tied to one IRext `remote_index` row and binary. The database does not provide appliance model numbers, market coverage, or device verification, so these entries do not claim brand-wide compatibility.
+The SYSTEM image contains 58 experimental codesets for Gree, Midea, Haier, Hisense, Daikin, Mitsubishi Electric, Panasonic, LG, Chigo, Kelon, Changhong, Galanz, and Chunlan, at most five per brand. Each one is a `<brand>.irext_<remote>` line in `fs_image/ir/protocols.jsonl` and is tied to one IRext `remote_index` row and binary. The database does not provide appliance model numbers, market coverage, or device verification, so these entries do not claim brand-wide compatibility.
 
 Every codeset is an inline, encode-only JSON protocol: a payload template, disjoint bit fields with raw value tables, and sum checksums, wrapped in the IRext timing steps. Messages are selected by the values they imply:
 
@@ -15,10 +15,10 @@ Exposed fields:
 
 | Field | Codesets | Notes |
 | --- | --- | --- |
-| `power`, `mode`, `fan` | 33 / 32 / 32 | `mode_limits` in 24 codesets restrict fans, temperatures, swing or keys per mode |
-| `temperature` | 32 | whole degrees Celsius |
-| `swing_v` | 22 | `auto` and the fixed `position_N` values reachable from reset |
-| `key` | 14 | `power`, `mode`, `temp_up`, `temp_down`, `fan`, `swing_v`, `swing_v_fix` (IRext tags 29/34) |
+| `power`, `mode`, `fan` | 58 / 56 / 57 | `mode_limits` in 42 codesets restrict fans, temperatures, swing or keys per mode |
+| `temperature` | 57 | whole degrees Celsius |
+| `swing_v` | 39 | `auto` and the fixed `position_N` values reachable from reset |
+| `key` | 27 | `power`, `mode`, `temp_up`, `temp_down`, `fan`, `swing_v`, `swing_v_fix` (IRext tags 29/34) |
 
 The `ir_remote` library's `set()` picks the function key from the changed field; `press(key)` sends the current state with that key, flipping the cached power first for `power`. Turbo, quiet, sleep, display, timers, and half-degree temperatures are not exposed.
 
@@ -27,6 +27,7 @@ Capabilities are truthful: values that encode identically are merged, and a fiel
 - `panasonic.irext_25073` sends one frame for every state, so it only exposes `power` and function keys.
 - `panasonic.irext_25074`: swing `auto` equals `position_1`, so `swing_v` is removed.
 - `hisense.irext_11677`: the power key rewrites the fan bits; pressing power uses dedicated solo-key frames while the other keys keep the fan field.
+- Swing keys are only exposed with NORMAL swing data (tag 46) or their own function code. libirdecode ignores the swing patches otherwise and sends the bare template, which in `panasonic.irext_25073` is the power frame.
 
 ## Pinned source
 
@@ -35,7 +36,7 @@ Capabilities are truthful: values that encode identically are merged, and a fiel
 - IRext database commit: `fb3b471d73e118463cf609e096188f837fa8d684`
 - SQLite SHA-256: `fc9507bb6a0bd65fb7d407b7a65287e66ccaa00f80067ae9cc7a425cdfaca571`
 - Binary archive SHA-256: `2dccd7c5fdc09d68eda10e864f1dc9da16c6b0e79402b665440f3edd39e89f79`
-- License: MIT; see `licenses/LICENSE.IRext`
+- License: MIT; see [`LICENSE.IRext`](LICENSE.IRext)
 
 The exact rows and binary digests are stored in `irext_profiles.json` next to this document.
 
@@ -43,11 +44,11 @@ The exact rows and binary digests are stored in `irext_profiles.json` next to th
 
 The generator independently rebuilds the selection from the pinned SQLite database and ZIP:
 
-1. active `new_ac` air-conditioner rows for the eight fixed brands;
+1. active `new_ac` air-conditioner rows for the thirteen fixed brands;
 2. binary exists and matches the database MD5;
 3. exclude generic `remote=2807`;
-4. exclude binaries associated with more than three active brands;
-5. deduplicate binary MD5 globally;
+4. exclude binaries associated with more than three active brands, except for Chigo, whose highest-priority rows are such shared codes;
+5. deduplicate binary MD5 globally, in the brand order of `BRAND_SELECTION`;
 6. sort by ascending database `priority`, then row ID, and take five per brand.
 
 `irext_profiles.json` pins an ordered subset of this selection.
@@ -71,6 +72,6 @@ The generator replaces only the `*.irext_*` lines of the bundle, keeps the other
 - re-encoding the emitted JSON matches the model for every state it accepts;
 - every value combination allowed by `limits`/`mode_limits`, and the defaults, encodes.
 
-`--oracle-output <path>` also writes a Lua oracle of 1,134 libirdecode vectors (mode bases plus one-field variations, as pulse count and FNV-1a hash) for replaying the codesets through `ir_protocol_encode()`, the path `protocol:encode()` uses. The oracle is generated on demand and is not stored in the repository.
+`--oracle-output <path>` also writes a Lua oracle of 2,076 libirdecode vectors (mode bases plus one-field variations, as pulse count and FNV-1a hash) for replaying the codesets through `ir_protocol_encode()`, the path `protocol:encode()` uses. The oracle is generated on demand and is not stored in the repository.
 
 Validation is software-only. No target appliance has been tested, and the local Xiaomi remote-app captures are not used as proof that any IRext codeset controls a particular appliance.

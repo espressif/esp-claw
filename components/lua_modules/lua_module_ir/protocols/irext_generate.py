@@ -31,19 +31,29 @@ MODE_NAMES = ('cool', 'heat', 'auto', 'fan', 'dry')
 FAN_NAMES = ('auto', 'low', 'medium', 'high')
 ID_RE = re.compile(r'^([a-z][a-z0-9_]*)\.irext_([1-9][0-9]*)$')
 MAX_U16 = 0xFFFF
+# Binaries shared by more brands are generic codes and skipped unless the brand lifts the cap.
+MAX_SHARED_BRANDS = 3
+NO_SHARED_LIMIT = None
+# (key, brand_id, database name, max brands sharing one binary)
 BRAND_SELECTION = (
-    ('gree', 4, '格力'),
-    ('midea', 9, '美的'),
-    ('haier', 5, '海尔'),
-    ('hisense', 6, '海信'),
-    ('daikin', 84, '大金'),
-    ('mitsubishi_electric', 1052, '三菱电机'),
-    ('panasonic', 85, '松下'),
-    ('lg', 882, 'LG 乐金'),
+    ('gree', 4, '格力', MAX_SHARED_BRANDS),
+    ('midea', 9, '美的', MAX_SHARED_BRANDS),
+    ('haier', 5, '海尔', MAX_SHARED_BRANDS),
+    ('hisense', 6, '海信', MAX_SHARED_BRANDS),
+    ('daikin', 84, '大金', MAX_SHARED_BRANDS),
+    ('mitsubishi_electric', 1052, '三菱电机', MAX_SHARED_BRANDS),
+    ('panasonic', 85, '松下', MAX_SHARED_BRANDS),
+    ('lg', 882, 'LG 乐金', MAX_SHARED_BRANDS),
+    ('chigo', 11, '志高', NO_SHARED_LIMIT),
+    ('kelon', 8, '科龙', MAX_SHARED_BRANDS),
+    ('changhong', 2, '长虹', MAX_SHARED_BRANDS),
+    ('galanz', 86, '格兰仕', MAX_SHARED_BRANDS),
+    ('chunlan', 3, '春兰', MAX_SHARED_BRANDS),
 )
 BRAND_DISPLAY = {
     'gree': 'Gree', 'midea': 'Midea', 'haier': 'Haier', 'hisense': 'Hisense', 'daikin': 'Daikin',
     'mitsubishi_electric': 'Mitsubishi Electric', 'panasonic': 'Panasonic', 'lg': 'LG',
+    'chigo': 'Chigo', 'kelon': 'Kelon', 'changhong': 'Changhong', 'galanz': 'Galanz', 'chunlan': 'Chunlan',
 }
 # Database candidates per brand; the manifest pins an ordered subset of them.
 SELECTION_PER_BRAND = 5
@@ -183,7 +193,7 @@ def verify_database(manifest, database_repo):
         manifest_by_brand = defaultdict(list)
         for profile in manifest['profiles']:
             manifest_by_brand[profile['brand']].append(profile)
-        for brand, brand_id, brand_name in BRAND_SELECTION:
+        for brand, brand_id, brand_name, max_shared in BRAND_SELECTION:
             brand_row = connection.execute('SELECT name, category_id, status FROM brand WHERE id = ?', (brand_id,)).fetchone()
             if brand_row != (brand_name, 1, 1):
                 fail(f'{brand}: brand mapping mismatch for id {brand_id}: {brand_row!r}')
@@ -202,7 +212,7 @@ def verify_database(manifest, database_repo):
                     "WHERE category_id = 1 AND protocol = 'new_ac' AND status = 1 AND binary_md5 = ?",
                     (binary_md5,),
                 ).fetchone()[0]
-                if cross_brand_count < 1 or cross_brand_count > 3:
+                if cross_brand_count < 1 or (max_shared is not None and cross_brand_count > max_shared):
                     continue
                 member = f'irext-binaries_20260929/irda_{remote_map}.bin'
                 try:
@@ -308,19 +318,6 @@ def parse_segments(raw, count, width, where, exact=True):
     return result
 
 
-def parse_all_segments(raw, width, where):
-    result = []
-    offset = 0
-    while offset < len(raw):
-        length = raw[offset]
-        offset += 1
-        if offset + length > len(raw) or length % width:
-            fail(f'{where}: malformed unused segment')
-        result.append(list(raw[offset:offset + length]))
-        offset += length
-    return result
-
-
 def validate_segments(segments, width, payload_len, where):
     for index, segment in enumerate(segments):
         for offset in range(0, len(segment), width):
@@ -342,7 +339,10 @@ def parse_temperature(raw, width, where):
             segment = list(body)
             for offset in range(width - 1, len(segment), width):
                 segment[offset] *= index
-                if segment[offset] > 0xFF:
+                # libirdecode truncates the type1 step to UINT8, so step 0xFF subtracts one per degree.
+                if width == 2:
+                    segment[offset] &= 0xFF
+                elif segment[offset] > 0xFF:
                     fail(f'{where}: expanded temperature value overflows one byte')
             segments.append(segment)
         return {'kind': 'dynamic', 'values': segments}
@@ -470,10 +470,11 @@ def parse_protocol(binary, profile_id):
         ('type1', 2, {21: 'power', 23: 'temperature', 24: 'mode', 25: 'fan', 26: 'swing', 29: 'function'}),
         ('type2', 3, {30: 'temperature', 31: 'mode', 32: 'fan', 33: 'swing', 34: 'function'}),
     )
-    counts = {'power': 2, 'mode': 5, 'fan': 4}
+    counts = {'power': 2, 'mode': 5, 'fan': 4, 'swing': swing['count']}
     for kind, width, names in layouts:
         for tag_id, name in names.items():
-            if tag_id not in tags:
+            # libirdecode loads swing patches only for NORMAL swing, see ir_ac_control.c.
+            if tag_id not in tags or (name == 'swing' and swing['type'] != 'normal'):
                 continue
             raw = parse_hex(tags[tag_id], tag_id, profile_id)
             where = f'{profile_id}: {name} {kind}'
@@ -483,9 +484,6 @@ def parse_protocol(binary, profile_id):
             elif name == 'function':
                 value = parse_functions(raw, width, where)
                 segments = list(value.values())
-            elif name == 'swing':
-                value = parse_segments(raw, swing['count'], width, where) if swing['count'] else parse_all_segments(raw, width, where)
-                segments = value
             else:
                 value = segments = parse_segments(raw, counts[name], width, where)
             validate_segments(segments, width, n, where)
@@ -614,7 +612,7 @@ def apply_checksums(p, payload):
 
 
 def irext_payload(p, s, checksum=True):
-    """ir_ac_control() for state s; None where libirdecode refuses to send."""
+    """ir_ac_control() for state s; None where libirdecode refuses to send or a swing key has no swing data."""
     payload = list(p['default_payload'])
     key = s['key']
     if not s['power']:
@@ -631,7 +629,9 @@ def irext_payload(p, s, checksum=True):
                 return None
         elif key == F_FAN:
             return None
-        if patch(p, payload, 'swing', s['swing']) is False and key in (F_SWING, F_FIX) and not has_function(p, key):
+        # Without NORMAL swing libirdecode sends the bare template for swing keys, so they are unsupported.
+        swing_failed = patch(p, payload, 'swing', s['swing']) is False or p['swing']['type'] != 'normal'
+        if swing_failed and key in (F_SWING, F_FIX) and not has_function(p, key):
             return None
         temperature_keys = (F_TEMP_UP, F_TEMP_DOWN)
         if not rule['all_temperature'] and s['temp'] + TEMP_BASE_C not in rule['temperatures']:

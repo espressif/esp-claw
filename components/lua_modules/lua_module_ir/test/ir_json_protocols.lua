@@ -1,6 +1,10 @@
 -- Every air-conditioner protocol, builtin table or bundled JSON, honors its own capabilities; no hardware is accessed.
 local ir = require("ir")
 local ir_remote = require("ir_remote")
+local delay = require("delay")
+
+-- Each codeset scans the bundle several times; yielding lets the idle task feed the watchdog.
+local YIELD_MS = 10
 
 local function rejects(fn, text)
     local ok, err = pcall(fn)
@@ -8,7 +12,7 @@ local function rejects(fn, text)
     if text then assert(string.find(tostring(err), text, 1, true), tostring(err)) end
 end
 
-local BUILTIN_AC_COUNT, IREXT_COUNT = 8, 33
+local BUILTIN_AC_COUNT, IREXT_COUNT = 8, 58
 local codesets = ir.protocol.list({category = "air_conditioner"})
 assert(#codesets == BUILTIN_AC_COUNT + IREXT_COUNT)
 local gree = ir.protocol.list({category = "air_conditioner", brand = "Gree"})
@@ -56,11 +60,12 @@ for _, info in ipairs(codesets) do
             assert(remote:state().power == false and #remote:press(key) > 0 and remote:state().power == true, info.id)
         end
     end
+    delay.delay_ms(YIELD_MS)
 end
 assert(irext == IREXT_COUNT)
 local brand_count = 0
 for _ in pairs(brands) do brand_count = brand_count + 1 end
-assert(brand_count == 8)
+assert(brand_count == 13)
 
 -- Capability corrections: a one-frame codeset becomes keys only; duplicate swing encodings are merged.
 local pcaps = ir.protocol.get("panasonic.irext_25073"):capabilities()
