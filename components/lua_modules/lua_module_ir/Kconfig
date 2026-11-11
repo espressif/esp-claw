@@ -15,17 +15,19 @@ menu "Lua IR Module"
 
     config LUA_MODULE_IR_DEFAULT_RX_RESOLUTION_HZ
         int "Default RMT RX resolution in Hz"
-        default 1000000
+        default 500000
         help
-            Default RMT counter resolution for IR RX, 1MHz means 1 tick = 1us.
+            Default RMT counter resolution for IR RX. 500kHz lets the 15-bit idle
+            threshold cover the 60ms default receive gap needed by long A/C frames.
 
     config LUA_MODULE_IR_RX_MAX_SYMBOLS
         int "Max symbols per IR RX frame"
         default 512
         range 32 2048
         help
-            Maximum number of RMT symbols stored per learned IR frame.
-            Raise this when learning long protocols (e.g. air-conditioner
-            frames) or capturing repeated NEC bursts in a single shot.
+            Default rx_max_symbols of ir.device: the RX buffer, in RMT symbols,
+            used by every receive. A frame that fills it is reported as
+            frame_too_long. Raise this for long protocols (e.g. air-conditioner
+            frames) or repeated NEC bursts captured in a single shot.
 
 endmenu

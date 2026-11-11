@@ -142,17 +142,3 @@ devices:
     version: default
     peripherals:
       - name: ledc_backlight               # LEDC peripheral for GPIO 47
-
-  # IR transceiver (NEC remote control)
-  # Used by lua_module_ir; field order must match lua_ir_board_cfg_t.
-  - name: ir_blaster
-    chip: rmt_ir
-    type: custom
-    version: 1.0.0
-    init_skip: true
-    config:
-      tx_gpio_num: 39                      # BSP_IR_TX_GPIO on ESP32-S3-BOX-3
-      rx_gpio_num: 38                      # BSP_IR_RX_GPIO on ESP32-S3-BOX-3
-      ctrl_gpio_num: 44                    # BSP_IR_CTRL_GPIO, enable pin for IR TX
-      ctrl_active_level: 0                 # 0-low active enables the IR transmitter
-      carrier_hz: 38000                    # 38 kHz carrier frequency

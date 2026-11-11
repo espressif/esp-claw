@@ -81,6 +81,7 @@ The firmware uses two logical filesystem roots, configured at boot through `claw
 - Router rules, scheduler rules, memory, sessions, inbox, and user-generated files live under DATA. Recovery defaults are stored under `/system/.recovery` and copied into DATA only when missing.
 - Built-in Lua libraries are staged under `/system/scripts/builtin/lib`; generated Lua module docs/tests are bundled into the `builtin_lua_modules` skill and should be accessed via that skill's `{CUR_SKILL_DIR}` paths.
 - Board-specific `boards/<vendor>/<board>/fatfs_image/` content overlays the SYSTEM image at build time. Board image content does not target DATA and hidden board folders are not considered.
+- Lua module `components/lua_modules/<module>/fs_image/` content is also overlaid onto the SYSTEM image (see the Lua module spec). For example, IR JSON protocols (codesets) ship in `/system/ir/protocols.jsonl`, and user `<id>.json` files in the DATA root's `ir/protocols/` take priority.
 
 ## Project-Specific Notes
 
