@@ -561,7 +561,9 @@ static int protocol_capabilities(lua_State *L)
     lua_createtable(L, 0, 2);
     lua_newtable(L);
     for (unsigned i = 0; i < IR_FIELD_COUNT; ++i) {
+        ir_limit_t limit;
         if (!(state_fields & IR_FIELD_BIT(i))) continue;
+        if (ir_protocol_get_limit(protocol, (ir_field_id_t)i, mode, &limit) && ir_limit_unused(&limit)) continue;
         push_field_caps(L, protocol, (ir_field_id_t)i, mode);
         lua_setfield(L, -2, ir_field_info((ir_field_id_t)i)->name);
     }

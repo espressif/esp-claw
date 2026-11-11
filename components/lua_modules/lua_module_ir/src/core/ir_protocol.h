@@ -94,6 +94,12 @@ typedef struct {
     uint32_t mask;                      /* BOOL, ENUM: bit per allowed value */
 } ir_limit_t;
 
+/* An all-zero mode limit marks a field the mode does not send: its value is ignored and not offered. */
+static inline bool ir_limit_unused(const ir_limit_t *limit)
+{
+    return !limit->mask && !limit->step;
+}
+
 /* Capability description of an AC table or codeset, and the value limits verified for it. */
 typedef struct {
     const char *category;
@@ -132,7 +138,7 @@ uint32_t ir_message_fields(const ir_message_t *message);
 uint32_t ir_protocol_fields(const ir_protocol_t *protocol);
 /* Effective limit of a field, mode-specific when mode >= 0. Returns false when the field is unlimited. */
 bool ir_protocol_get_limit(const ir_protocol_t *protocol, ir_field_id_t field, int32_t mode, ir_limit_t *limit);
-/* Checks every present value against the limits of values' mode; ESP_ERR_NOT_SUPPORTED when one is outside. */
+/* Checks every present value against the limits of values' mode, skipping unused fields; ESP_ERR_NOT_SUPPORTED when one is outside. */
 esp_err_t ir_protocol_check(const ir_protocol_t *protocol, const ir_values_t *values);
 /* Picks the message with the most implied values contained in values. */
 const ir_message_t *ir_protocol_select(const ir_protocol_t *protocol, const ir_values_t *values);

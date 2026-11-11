@@ -31,6 +31,19 @@ static bool windows_overlap(uint32_t a, uint32_t b)
     return (uint64_t)a + tolerance(a) + tolerance(b) >= b && (uint64_t)b + tolerance(a) + tolerance(b) >= a;
 }
 
+/* Nearest-symbol decoding needs each nominal duration outside the window of the other. */
+static bool durations_apart(uint32_t a, uint32_t b)
+{
+    uint32_t high = a > b ? a : b;
+    uint32_t low = a > b ? b : a;
+    return high - low > tolerance(high);
+}
+
+static unsigned symbol_bits(const ir_layout_t *layout)
+{
+    return layout->coding == IR_CODING_PAIR && layout->symbol_bits ? layout->symbol_bits : 1U;
+}
+
 static bool cursor_end(const cursor_t *c)
 {
     return c->index >= c->frame->count;
@@ -88,17 +101,37 @@ static bool take_period(cursor_t *c, uint32_t period)
     return true;
 }
 
-static int take_pair_bit(cursor_t *c, const ir_layout_t *layout)
+static uint64_t pulse_error(const cursor_t *c, uint32_t expected)
 {
-    cursor_t start = *c;
-    for (int split = 0; split < 2; ++split) {
-        for (int bit = 0; bit < 2; ++bit) {
-            const ir_symbol_t *symbol = &layout->symbols[bit];
+    if (cursor_end(c)) return 0;
+    uint64_t pulse = cursor_pulse(c);
+    uint64_t total = (uint64_t)c->taken + expected;
+    return pulse > total ? pulse - total : total - pulse;
+}
+
+/* Exact matches pick the nearest symbol; a space running into a following gap takes the first symbol that fits. */
+static int take_pair_symbol(cursor_t *c, const ir_layout_t *layout)
+{
+    const cursor_t start = *c;
+    cursor_t best = start;
+    uint64_t best_error = UINT64_MAX;
+    int value = -1;
+    unsigned count = 1U << symbol_bits(layout);
+    for (int split = 0; split < 2 && value < 0; ++split) {
+        for (unsigned v = 0; v < count; ++v) {
+            const ir_symbol_t *symbol = &layout->symbols[v];
             *c = start;
-            if (take(c, 1, symbol->mark_us, false) && take(c, 0, symbol->space_us, split)) return bit;
+            uint64_t error = pulse_error(c, symbol->mark_us);
+            if (!take(c, 1, symbol->mark_us, false)) continue;
+            error += pulse_error(c, symbol->space_us);
+            if (!take(c, 0, symbol->space_us, split) || error >= best_error) continue;
+            best = *c;
+            best_error = split ? 0 : error;
+            value = (int)v;
         }
     }
-    return -1;
+    *c = best;
+    return value;
 }
 
 static int take_biphase_bit(cursor_t *c, const ir_layout_t *layout)
@@ -112,6 +145,7 @@ static int take_biphase_bit(cursor_t *c, const ir_layout_t *layout)
 static esp_err_t decode_at(const ir_layout_t *layout, const ir_frame_t *frame, size_t offset, ir_bits_t *bits, size_t *next)
 {
     cursor_t c = {.frame = frame, .index = offset};
+    unsigned width = symbol_bits(layout);
     memset(bits, 0, sizeof(*bits));
     for (uint16_t i = 0; i < layout->step_count; ++i) {
         const ir_step_t *step = &layout->steps[i];
@@ -127,11 +161,12 @@ static esp_err_t decode_at(const ir_layout_t *layout, const ir_frame_t *frame, s
             ok = take_period(&c, step->value_us);
             break;
         case IR_STEP_BITS:
-            for (uint16_t n = 0; ok && n < step->count; ++n) {
-                int bit = layout->coding == IR_CODING_PAIR ? take_pair_bit(&c, layout) : take_biphase_bit(&c, layout);
-                ok = bit >= 0 && bits->count < IR_BITS_MAX;
-                if (ok && bit) bits->data[bits->count >> 3] |= (uint8_t)(1U << (bits->count & 7U));
-                bits->count++;
+            for (uint16_t n = 0; ok && n < step->count; n += width) {
+                int value = layout->coding == IR_CODING_PAIR ? take_pair_symbol(&c, layout) : take_biphase_bit(&c, layout);
+                ok = value >= 0 && bits->count + width <= IR_BITS_MAX;
+                for (unsigned b = width; ok && b-- > 0; bits->count++) {
+                    if ((value >> b) & 1) bits->data[bits->count >> 3] |= (uint8_t)(1U << (bits->count & 7U));
+                }
             }
             break;
         default:
@@ -162,14 +197,14 @@ static esp_err_t emit(emitter_t *e, int level, uint32_t duration_us)
     return err;
 }
 
-static esp_err_t emit_bit(emitter_t *e, const ir_layout_t *layout, bool bit)
+static esp_err_t emit_symbol(emitter_t *e, const ir_layout_t *layout, unsigned value)
 {
     if (layout->coding == IR_CODING_PAIR) {
-        const ir_symbol_t *symbol = &layout->symbols[bit];
+        const ir_symbol_t *symbol = &layout->symbols[value];
         esp_err_t err = emit(e, 1, symbol->mark_us);
         return err == ESP_OK ? emit(e, 0, symbol->space_us) : err;
     }
-    int first = bit ? layout->one_level : !layout->one_level;
+    int first = value ? layout->one_level : !layout->one_level;
     esp_err_t err = emit(e, first, layout->half_us);
     return err == ESP_OK ? emit(e, !first, layout->half_us) : err;
 }
@@ -178,6 +213,7 @@ esp_err_t ir_layout_encode(const ir_layout_t *layout, const ir_bits_t *bits, ir_
 {
     if (!layout || !layout->steps || !bits || !frame) return ESP_ERR_INVALID_ARG;
     emitter_t e = {.frame = frame};
+    unsigned width = symbol_bits(layout);
     uint16_t bit = 0;
     esp_err_t err = ESP_OK;
     for (uint16_t i = 0; err == ESP_OK && i < layout->step_count; ++i) {
@@ -193,8 +229,14 @@ esp_err_t ir_layout_encode(const ir_layout_t *layout, const ir_bits_t *bits, ir_
             err = e.elapsed < step->value_us ? emit(&e, 0, step->value_us - e.elapsed) : ESP_ERR_INVALID_SIZE;
             break;
         case IR_STEP_BITS:
-            for (uint16_t n = 0; err == ESP_OK && n < step->count; ++n) {
-                err = bit < bits->count ? emit_bit(&e, layout, ir_bits_get(bits, bit++)) : ESP_ERR_INVALID_SIZE;
+            for (uint16_t n = 0; err == ESP_OK && n < step->count; n += width) {
+                if (bit + width > bits->count) {
+                    err = ESP_ERR_INVALID_SIZE;
+                    break;
+                }
+                unsigned value = 0;
+                for (unsigned b = 0; b < width; ++b) value = value << 1 | ir_bits_get(bits, bit++);
+                err = emit_symbol(&e, layout, value);
             }
             break;
         default:
@@ -218,17 +260,20 @@ size_t ir_layout_max_pulses(const ir_layout_t *layout)
 {
     size_t count = 0;
     for (uint16_t i = 0; layout && i < layout->step_count; ++i) {
-        count += layout->steps[i].kind == IR_STEP_BITS ? 2U * layout->steps[i].count : 1U;
+        count += layout->steps[i].kind == IR_STEP_BITS ? 2U * layout->steps[i].count / symbol_bits(layout) : 1U;
     }
     return count;
 }
 
-static uint32_t max_bit_us(const ir_layout_t *layout)
+static uint32_t max_symbol_us(const ir_layout_t *layout)
 {
     if (layout->coding == IR_CODING_BIPHASE) return 2U * layout->half_us;
-    uint32_t zero = (uint32_t)layout->symbols[0].mark_us + layout->symbols[0].space_us;
-    uint32_t one = (uint32_t)layout->symbols[1].mark_us + layout->symbols[1].space_us;
-    return zero > one ? zero : one;
+    uint32_t longest = 0;
+    for (unsigned v = 0; v < 1U << symbol_bits(layout); ++v) {
+        uint32_t us = (uint32_t)layout->symbols[v].mark_us + layout->symbols[v].space_us;
+        if (us > longest) longest = us;
+    }
+    return longest;
 }
 
 uint32_t ir_layout_max_duration_us(const ir_layout_t *layout)
@@ -237,7 +282,7 @@ uint32_t ir_layout_max_duration_us(const ir_layout_t *layout)
     for (uint16_t i = 0; layout && i < layout->step_count; ++i) {
         const ir_step_t *step = &layout->steps[i];
         if (step->kind == IR_STEP_BITS) {
-            elapsed += (uint64_t)step->count * max_bit_us(layout);
+            elapsed += (uint64_t)step->count / symbol_bits(layout) * max_symbol_us(layout);
         } else if (step->kind == IR_STEP_PERIOD) {
             if (elapsed < step->value_us) elapsed = step->value_us;
         } else {
@@ -251,10 +296,23 @@ esp_err_t ir_layout_validate(const ir_layout_t *layout, bool decodable)
 {
     if (!layout || !layout->steps || !layout->step_count || layout->coding > IR_CODING_BIPHASE) return ESP_ERR_INVALID_ARG;
     bool pair = layout->coding == IR_CODING_PAIR;
+    if (layout->symbol_bits > (pair ? IR_LAYOUT_SYMBOL_BITS_MAX : 1)) return ESP_ERR_INVALID_ARG;
     const ir_symbol_t *s = layout->symbols;
-    bool bad_symbols = pair ? (!s[0].mark_us || !s[0].space_us || !s[1].mark_us || !s[1].space_us) : (!layout->half_us || layout->one_level > 1);
+    unsigned width = symbol_bits(layout);
+    unsigned count = 1U << width;
+    bool bad_symbols = !pair && (!layout->half_us || layout->one_level > 1);
+    bool marks_apart = true;
+    bool separable = true;
+    for (unsigned i = 0; pair && i < count; ++i) {
+        bad_symbols |= !s[i].mark_us || !s[i].space_us;
+        for (unsigned j = i + 1; j < count; ++j) {
+            bool mark_apart = durations_apart(s[i].mark_us, s[j].mark_us);
+            marks_apart &= mark_apart;
+            separable &= mark_apart || durations_apart(s[i].space_us, s[j].space_us);
+        }
+    }
+    if (!pair) separable = !windows_overlap(layout->half_us, 2U * layout->half_us);
     if (bad_symbols && ir_layout_bit_count(layout)) return ESP_ERR_INVALID_ARG;
-    bool marks_apart = !windows_overlap(s[0].mark_us, s[1].mark_us);
     uint64_t elapsed = 0;
     uint32_t bits = 0;
     for (uint16_t i = 0; i < layout->step_count; ++i) {
@@ -266,11 +324,11 @@ esp_err_t ir_layout_validate(const ir_layout_t *layout, bool decodable)
             elapsed += step->value_us;
             break;
         case IR_STEP_BITS:
-            if (!step->count) return ESP_ERR_INVALID_ARG;
-            /* With equal marks the last bit needs a following mark to show its space. */
+            if (!step->count || step->count % width) return ESP_ERR_INVALID_ARG;
+            /* With equal marks the last symbol needs a following mark to show its space. */
             if (decodable && pair && !marks_apart && (i + 1 >= layout->step_count || layout->steps[i + 1].kind != IR_STEP_MARK)) return ESP_ERR_INVALID_ARG;
             bits += step->count;
-            elapsed += (uint64_t)step->count * max_bit_us(layout);
+            elapsed += (uint64_t)step->count / width * max_symbol_us(layout);
             break;
         case IR_STEP_PERIOD:
             if (step->value_us <= elapsed || step->value_us > IR_FRAME_MAX_PULSE_US) return ESP_ERR_INVALID_ARG;
@@ -281,9 +339,6 @@ esp_err_t ir_layout_validate(const ir_layout_t *layout, bool decodable)
         }
     }
     if (bits > IR_BITS_MAX) return ESP_ERR_INVALID_SIZE;
-    if (decodable && bits) {
-        bool separable = pair ? marks_apart || !windows_overlap(s[0].space_us, s[1].space_us) : !windows_overlap(layout->half_us, 2U * layout->half_us);
-        if (!separable) return ESP_ERR_INVALID_ARG;
-    }
+    if (decodable && bits && !separable) return ESP_ERR_INVALID_ARG;
     return ESP_OK;
 }

@@ -20,6 +20,8 @@ extern "C" {
 #define IR_LAYOUT_TOLERANCE_PCT 25
 #define IR_LAYOUT_TOLERANCE_MIN_US 100
 #define IR_LAYOUT_SYNC_TRIES 16
+#define IR_LAYOUT_SYMBOL_BITS_MAX 2
+#define IR_LAYOUT_SYMBOLS_MAX (1U << IR_LAYOUT_SYMBOL_BITS_MAX)
 
 typedef struct {
     uint16_t count;
@@ -32,7 +34,7 @@ typedef struct {
 } ir_symbol_t;
 
 typedef enum {
-    IR_CODING_PAIR,                     /* each bit is one mark/space symbol */
+    IR_CODING_PAIR,                     /* each symbol is one mark/space pair carrying symbol_bits bits */
     IR_CODING_BIPHASE,                  /* each bit is two half periods with opposite levels */
 } ir_coding_t;
 
@@ -57,8 +59,9 @@ typedef struct {
 typedef struct {
     ir_coding_t coding;
     uint8_t one_level;                  /* BIPHASE: level of the first half of a one, RC5 = 0 */
+    uint8_t symbol_bits;                /* PAIR: bits per symbol, 0 or 1 for two symbols, 2 for four */
     uint16_t half_us;                   /* BIPHASE */
-    ir_symbol_t symbols[2];             /* PAIR: zero, one */
+    ir_symbol_t symbols[IR_LAYOUT_SYMBOLS_MAX]; /* PAIR: indexed by value, the first sent bit is the high bit */
     const ir_step_t *steps;
     uint16_t step_count;
 } ir_layout_t;

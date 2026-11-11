@@ -8,8 +8,9 @@ local function rejects(fn, text)
     if text then assert(string.find(tostring(err), text, 1, true), tostring(err)) end
 end
 
+local BUILTIN_AC_COUNT, IREXT_COUNT = 8, 33
 local codesets = ir.protocol.list({category = "air_conditioner"})
-assert(#codesets == 42)   -- 2 builtin tables and 40 IRext codesets
+assert(#codesets == BUILTIN_AC_COUNT + IREXT_COUNT)
 local gree = ir.protocol.list({category = "air_conditioner", brand = "Gree"})
 assert(#gree >= 6)
 for _, info in ipairs(gree) do assert(info.category == "air_conditioner" and info.brand == "Gree") end
@@ -50,9 +51,13 @@ for _, info in ipairs(codesets) do
     end
     for _, key in ipairs(p:capabilities({mode = remote:state().mode}).keys) do
         assert(remote:keys()[key] == "function" and #remote:press(key) > 0, info.id .. " key " .. key)
+        -- The power key flips the cached power; pressing it again restores power for the next keys.
+        if key == "power" and remote:state().power ~= nil then
+            assert(remote:state().power == false and #remote:press(key) > 0 and remote:state().power == true, info.id)
+        end
     end
 end
-assert(irext == 40)
+assert(irext == IREXT_COUNT)
 local brand_count = 0
 for _ in pairs(brands) do brand_count = brand_count + 1 end
 assert(brand_count == 8)
@@ -62,17 +67,21 @@ local pcaps = ir.protocol.get("panasonic.irext_25073"):capabilities()
 assert(pcaps.state.mode == nil and pcaps.state.power and #pcaps.keys >= 1)
 assert(ir.protocol.get("panasonic.irext_25074"):capabilities().state.swing_v == nil)
 
--- Builtin AC tables describe themselves and decode their frames; JSON codesets are encode only and honor mode limits.
-local haier = ir.protocol.get("haier.a6")
-local haier_info = haier:info()
-assert(haier_info.category == "air_conditioner" and haier_info.brand == "Haier" and haier_info.decode)
-local values, info = haier:decode(haier:encode({power = true, mode = "dry", temperature = 24, fan = "low"}))
-assert(values.temperature == 24 and values.protocol == nil and info.checked)
+-- Builtin AC tables describe themselves: Xiaomi decodes within its mode limits, dry runs at low fan only.
+local xiaomi = ir.protocol.get("xiaomi.96")
+local xiaomi_info = xiaomi:info()
+assert(xiaomi_info.category == "air_conditioner" and xiaomi_info.brand == "Xiaomi" and xiaomi_info.model == "96-bit" and xiaomi_info.decode)
+local dry = {power = true, mode = "dry", temperature = 24, fan = "low", swing_v = "off", sleep = false}
+local values, info = xiaomi:decode(xiaomi:encode(dry))
+assert(values.temperature == 24 and values.fan == "low" and values.protocol == nil and info.checked)
+local off, off_info = xiaomi:decode(xiaomi:encode({power = false}))
+assert(off.power == false and off.mode == nil and off_info.message == "off")
 local irext = ir.protocol.get("gree.irext_10727")
-assert(select(2, irext:decode(haier:encode({power = false, mode = "cool", temperature = 24, fan = "auto"}))) == "not_decodable")
-rejects(function() irext:encode({power = true, mode = "dry", temperature = 26, fan = "high", swing_v = "auto"}) end, "unsupported value")
-rejects(function() haier:encode({protocol = "haier.a6", power = false}) end, "unknown field 'protocol'")
-assert(not irext:check({mode = "dry", fan = "high"}) and irext:check({mode = "cool", fan = "high"}))
+assert(select(2, irext:decode(xiaomi:encode({power = false}))) == "not_decodable")
+dry.fan = "high"
+rejects(function() xiaomi:encode(dry) end, "unsupported value")
+rejects(function() xiaomi:encode({protocol = "xiaomi.96", power = false}) end, "unknown field 'protocol'")
+assert(not xiaomi:check({mode = "dry", fan = "high"}) and xiaomi:check({mode = "cool", fan = "high"}))
 assert(irext:encode({power = false}):info().carrier_hz == 38000)
 rejects(function() ir.protocol.get("Bad id") end, "unknown protocol")
 print("[ir_json_protocols] passed; bundled JSON protocols load and encode within their limits")

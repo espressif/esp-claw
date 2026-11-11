@@ -149,6 +149,8 @@ function Remote:press(key, options)
     local values = self._keys[key]
     if values then return p:encode(self:_toggled(merge(self._fixed, values), self._fields.toggle), options) end
     if p and set_of(self:_function_keys(self._state.mode))[key] then
+        -- The power key flips the cached power so protocols with an off frame or a toggle stay in sync.
+        if key == "power" and self._state.power ~= nil then return self:_apply({power = not self._state.power, key = key}, options) end
         values = merge(self._fixed, self._state)
         values.key = key
         return p:encode(values, options)
@@ -156,7 +158,8 @@ function Remote:press(key, options)
     fail("unknown key '%s'", tostring(key))
 end
 
--- Function key for a state change: the first changed field whose key the mode allows, else the first allowed key.
+-- Function key for a state change: the first changed field whose key the mode allows, else the first allowed key,
+-- skipping power while power is unchanged so toggle protocols are not switched.
 local function pick_key(old, new, keys)
     local allowed = set_of(keys)
     for _, field in ipairs(KEY_FIELDS) do
@@ -164,15 +167,17 @@ local function pick_key(old, new, keys)
         if field == "temperature" then
             key = (new.temperature or 0) > (old.temperature or 0) and "temp_up" or "temp_down"
         elseif field == "swing_v" then
-            key = tostring(new.swing_v):match("^position_") and "swing_v_fix" or "swing_v"
+            key = tostring(new.swing_v):match("^position_") and allowed.swing_v_fix and "swing_v_fix" or "swing_v"
         end
         if new[field] ~= old[field] and allowed[key] then return key end
     end
-    return keys[1] or "power"
+    for _, key in ipairs(keys) do
+        if key ~= "power" or new.power ~= old.power then return key end
+    end
+    return "power"
 end
 
-function Remote:set(changes)
-    if type(changes) ~= "table" then fail("changes must be a table") end
+function Remote:_apply(changes, options)
     local p = self._protocol
     if not p then fail("unsupported value: no protocol") end
     local caps = p:capabilities().state
@@ -183,7 +188,12 @@ function Remote:set(changes)
             new[field] = value
         end
     end
-    for field, cap in pairs(p:capabilities({mode = new.mode}).state) do
+    -- Fields missing from the mode caps are not sent in that mode; their cached values are kept for later modes.
+    local mode_caps = p:capabilities({mode = new.mode}).state
+    for field in pairs(changes) do
+        if field ~= "key" and not mode_caps[field] then fail("unsupported value for '%s' in mode '%s'", tostring(field), tostring(new.mode)) end
+    end
+    for field, cap in pairs(mode_caps) do
         if changes[field] == nil and new[field] ~= nil and not p:check({mode = new.mode, [field] = new[field]}) then new[field] = nearest(cap, new[field]) end
     end
     local values = merge(self._fixed, new)
@@ -192,9 +202,14 @@ function Remote:set(changes)
     elseif changes.key ~= nil then
         fail("unsupported value for 'key'")
     end
-    local frame = p:encode(values)
+    local frame = p:encode(values, options)
     self._state = new
     return frame
+end
+
+function Remote:set(changes)
+    if type(changes) ~= "table" then fail("changes must be a table") end
+    return self:_apply(changes)
 end
 
 function Remote:state() return copy(self._state) end

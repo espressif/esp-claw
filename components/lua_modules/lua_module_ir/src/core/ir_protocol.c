@@ -336,7 +336,7 @@ esp_err_t ir_protocol_check(const ir_protocol_t *protocol, const ir_values_t *va
     int32_t mode = ir_values_has(values, IR_FIELD_MODE) ? values->value[IR_FIELD_MODE] : -1;
     for (unsigned i = 0; protocol->meta && i < IR_FIELD_COUNT; ++i) {
         ir_limit_t limit;
-        if (ir_values_has(values, (ir_field_id_t)i) && ir_protocol_get_limit(protocol, (ir_field_id_t)i, mode, &limit) && !limit_allows((ir_field_id_t)i, &limit, values->value[i])) {
+        if (ir_values_has(values, (ir_field_id_t)i) && ir_protocol_get_limit(protocol, (ir_field_id_t)i, mode, &limit) && !ir_limit_unused(&limit) && !limit_allows((ir_field_id_t)i, &limit, values->value[i])) {
             return ESP_ERR_NOT_SUPPORTED;
         }
     }

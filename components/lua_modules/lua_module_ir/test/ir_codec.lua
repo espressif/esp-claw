@@ -23,7 +23,7 @@ for _, p in ipairs(ir.protocol.list()) do protocols[p.id] = p end
 assert(protocols.nec.decode and protocols.nec.checked and protocols.nec.carrier_hz == 38000)
 assert(protocols.sony12.decode and not protocols.sony12.checked and protocols.sony12.carrier_hz == 40000)
 assert(table.concat(protocols.rc5.fields, ",") == "address,command,toggle")
-assert(table.concat(protocols.gree.fields, ",") == "power,mode,temperature,fan")
+assert(table.concat(protocols.gree.fields, ",") == "power,mode,temperature,fan,swing_v")
 assert(protocols.gree.category == "air_conditioner" and protocols.gree.decode and protocols.nec.category == nil)
 
 local cases = {
@@ -34,8 +34,23 @@ local cases = {
     {"sony15", {address = 0xFF, command = 0x7F}, count = 96, carrier = 40000, copies = 3},
     {"sony20", {address = 0x1FFF, command = 0x7F}, count = 126, carrier = 40000, copies = 3},
     {"rc5", {address = 0x1F, command = 0x3F, toggle = true}, count = 28, carrier = 36000, copies = 1},
-    {"gree", {power = true, mode = "cool", temperature = 24, fan = "auto"}, count = 279, carrier = 38000, copies = 1},
-    {"haier.a6", {power = true, mode = "heat", temperature = 30, fan = "high"}, count = 229, carrier = 38000, copies = 1},
+    {"gree", {power = true, mode = "cool", temperature = 24, fan = "auto", swing_v = "auto"}, count = 279, carrier = 38000, copies = 1},
+    {
+        "haier.a6", {power = true, mode = "heat", temperature = 30, fan = "high", swing_v = "position_3", sleep = true, key = "mode"},
+        count = 229, carrier = 38000, copies = 1,
+    },
+    {"daikin.280", {power = true, mode = "cool", temperature = 25, fan = "medium", swing_v = "auto", swing_h = "off"}, count = 583, carrier = 38000, copies = 1},
+    {"midea.coolix", {power = true, mode = "cool", temperature = 22, fan = "high"}, count = 299, carrier = 38000, copies = 1},
+    {
+        "hisense.kelon168", {power = true, mode = "cool", temperature = 27, fan = "low", swing_v = "position_1", key = "fan"},
+        count = 343, carrier = 38000, copies = 1,
+    },
+    {
+        "aux.electra", {power = true, mode = "heat", temperature = 28, fan = "medium", swing_v = "auto", sleep = false, key = "temp_up"},
+        count = 211, carrier = 38000, copies = 1,
+    },
+    {"tcl.112", {power = true, mode = "dry", temperature = 23, fan = "min", swing_v = "off"}, count = 227, carrier = 38000, copies = 1},
+    {"xiaomi.96", {power = true, mode = "heat", temperature = 30, fan = "high", swing_v = "off", sleep = true}, count = 99, carrier = 38000, copies = 1},
 }
 for _, case in ipairs(cases) do
     local id, values = case[1], case[2]
@@ -65,7 +80,7 @@ end
 local HAIER_HEADER_PULSES, HAIER_MARK, HAIER_ZERO, HAIER_ONE = 4, 510, 590, 1700
 local function haier_byte_first(index) return HAIER_HEADER_PULSES + 1 + 16 * index end
 local haier = ir.protocol.get("haier.a6")
-local haier_values = {power = true, mode = "cool", temperature = 30, fan = "auto"}
+local haier_values = {power = true, mode = "cool", temperature = 30, fan = "auto", swing_v = "position_5", sleep = false, key = "temp_up"}
 local hot = haier:encode(haier_values):to_table()
 local function write_byte(index, value)
     for bit = 0, 7 do
@@ -117,8 +132,9 @@ rejects(function() ir.protocol.get("missing") end, "unknown protocol")
 rejects(function() nec:encode({address = 1}) end, "missing or invalid field")
 rejects(function() nec:encode({address = 256, command = 1}) end, "unsupported value")
 rejects(function() nec:encode({address = 1, command = 1, speed = 1}) end, "unknown field")
-rejects(function() gree:encode({power = true, mode = "cool", temperature = 24.25, fan = "auto"}) end, "at most one decimal")
-rejects(function() gree:encode({power = true, mode = "cold", temperature = 24, fan = "auto"}) end, "invalid mode")
+rejects(function() gree:encode({power = true, mode = "cool", temperature = 24.25, fan = "auto", swing_v = "off"}) end, "at most one decimal")
+rejects(function() gree:encode({power = true, mode = "cold", temperature = 24, fan = "auto", swing_v = "off"}) end, "invalid mode")
+rejects(function() gree:encode({power = true, mode = "cool", temperature = 24, fan = "auto"}) end, "missing or invalid field")
 rejects(function() nec:decode(joined, {offset = 0}) end, "offset")
 rejects(function() nec:decode(joined, {protocol = "nec"}) end, "unknown field")
 rejects(function() ir.frame({pulses_us = {1, 2}, start_level = 1}) end, "unknown field")

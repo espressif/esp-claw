@@ -45,6 +45,8 @@ BRAND_DISPLAY = {
     'gree': 'Gree', 'midea': 'Midea', 'haier': 'Haier', 'hisense': 'Hisense', 'daikin': 'Daikin',
     'mitsubishi_electric': 'Mitsubishi Electric', 'panasonic': 'Panasonic', 'lg': 'LG',
 }
+# Database candidates per brand; the manifest pins an ordered subset of them.
+SELECTION_PER_BRAND = 5
 
 CARRIER_HZ = 38000
 TEMP_BASE_C = 16
@@ -137,8 +139,8 @@ def load_manifest(path):
     if not isinstance(manifest['core_version'], str) or not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+', manifest['core_version']):
         fail('manifest.core_version: expected semantic numeric version')
     profiles = manifest['profiles']
-    if not isinstance(profiles, list) or len(profiles) != 40:
-        fail('manifest.profiles: expected exactly 40 entries')
+    if not isinstance(profiles, list) or not profiles:
+        fail('manifest.profiles: expected a non-empty list')
     required = {'id', 'brand', 'brand_id', 'remote_index', 'remote', 'priority', 'md5', 'sha256'}
     brands = Counter()
     seen = {'id': set(), 'remote_index': set(), 'md5': set()}
@@ -162,8 +164,8 @@ def load_manifest(path):
                 fail(f'{where}: duplicate global {key} {profile[key]}')
             values.add(profile[key])
         brands[profile['brand']] += 1
-    if len(brands) != 8 or set(brands.values()) != {5}:
-        fail(f'manifest.profiles: expected 8 brands with 5 entries each, got {dict(brands)}')
+    if max(brands.values()) > SELECTION_PER_BRAND:
+        fail(f'manifest.profiles: expected at most {SELECTION_PER_BRAND} entries per brand, got {dict(brands)}')
     return manifest
 
 
@@ -213,11 +215,12 @@ def verify_database(manifest, database_repo):
                 selected.append(remote_index)
                 selected_md5.add(binary_md5)
                 selected_by_index[remote_index] = binary
-                if len(selected) == 5:
+                if len(selected) == SELECTION_PER_BRAND:
                     break
-            expected = sorted(manifest_by_brand[brand], key=lambda item: (item['priority'], item['remote_index']))
-            if selected != [item['remote_index'] for item in expected]:
-                fail(f'{brand}: manifest remote_index set does not match ordered database selection')
+            ordered = sorted(manifest_by_brand[brand], key=lambda item: (item['priority'], item['remote_index']))
+            expected = [item['remote_index'] for item in ordered]
+            if [index for index in selected if index in expected] != expected:
+                fail(f'{brand}: manifest remote_index list is not an ordered subset of the database selection')
         for profile in manifest['profiles']:
             row = connection.execute(
                 'SELECT category_id, brand_id, protocol, remote, remote_map, status, sub_cate, priority, binary_md5 '

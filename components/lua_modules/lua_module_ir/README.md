@@ -77,12 +77,19 @@ Each protocol uses a subset, reported by `protocol:info().fields` and `protocol:
    | `sony20` | `address` 0–0x1FFF, `command` 0–0x7F | 40 kHz | no |
    | `rc5` | `address` 0–0x1F, `command` 0–0x3F, `toggle` | 36 kHz | no |
    | `jvc` | `address` 0–0xFF, `command` 0–0xFF | 38 kHz | no |
-   | `gree`, `haier.a6` | `power`, `mode`, `temperature`, `fan` | 38 kHz | yes |
+   | `gree` | `power`, `mode`, `temperature`, `fan`, `swing_v` | 38 kHz | yes |
+   | `haier.a6` | `power`, `mode`, `temperature`, `fan`, `swing_v`, `sleep`, `key` | 38 kHz | yes |
+   | `daikin.280` | `power`, `mode`, `temperature`, `fan`, `swing_v`, `swing_h` | 38 kHz | yes |
+   | `midea.coolix` | `power`, `mode`, `temperature`, `fan`, `key` | 38 kHz | yes |
+   | `hisense.kelon168` | `power`, `mode`, `temperature`, `fan`, `swing_v`, `key` | 38 kHz | yes |
+   | `aux.electra` | `power`, `mode`, `temperature`, `fan`, `swing_v`, `sleep`, `key` | 38 kHz | yes |
+   | `tcl.112` | `power`, `mode`, `temperature`, `fan`, `swing_v`, `key` | 38 kHz | yes |
+   | `xiaomi.96` | `power`, `mode`, `temperature`, `fan`, `swing_v`, `sleep` | 38 kHz | yes |
 
-   "Checked" protocols carry a checksum or an inverted copy, so a successful decode is reliable; decode results of unchecked protocols are weaker evidence. `gree` and `haier.a6` are air-conditioner protocols with defaults and limits, see `protocol:capabilities()`.
+   "Checked" protocols carry a checksum or an inverted copy, so a successful decode is reliable; decode results of unchecked protocols are weaker evidence. The air-conditioner protocols carry defaults and limits, see `protocol:capabilities()`.
 2. Protocols registered in the current Lua state with `ir.protocol.register()`.
 3. `ir/protocols/<id>.json` under the DATA root: user protocols, one JSON file each, in the [description format](#protocol-description-format). Build the directory path with `storage.join_path(storage.get_root_dir(), "ir/protocols")`.
-4. `/system/ir/protocols.jsonl`: 40 experimental air-conditioner codesets generated from IRext, with ids such as `gree.irext_10727`. Their scope and limitations are described in [`protocols/irext.md`](protocols/irext.md) in the component source.
+4. `/system/ir/protocols.jsonl`: 33 experimental air-conditioner codesets generated from IRext, with ids such as `gree.irext_10727`. Their scope and limitations are described in [`protocols/irext.md`](protocols/irext.md) in the component source.
 
 Registered and JSON protocols are encode-only. A DATA file overrides a SYSTEM codeset with the same id; if that file is invalid, `ir.protocol.get()` raises an error instead of falling back.
 
@@ -113,19 +120,19 @@ Returns `{id, carrier_hz, decode, checked, fields}`. Protocols that carry attrib
 #### `protocol:capabilities([context])`
 
 ```lua
-local caps = ir.protocol.get("gree.irext_10727"):capabilities({mode = "dry"})
+local caps = ir.protocol.get("xiaomi.96"):capabilities({mode = "dry"})
 -- caps.state.temperature = {type = "number", min = 16, max = 30, step = 1, default = 26}
 -- caps.state.fan = {type = "enum", values = {"low"}, default = "auto"}
 -- caps.keys = {}
 ```
 
-- `state` describes each state field (every field except `address`, `command`, `toggle`, and `key`): its `type` (`boolean`, `enum`, `number`, or `integer`), the allowed `values` or `min`/`max`/`step` when the protocol limits the field, and `default` when the protocol has one. Defaults do not depend on the mode.
+- `state` describes each state field (every field except `address`, `command`, `toggle`, and `key`): its `type` (`boolean`, `enum`, `number`, or `integer`), the allowed `values` or `min`/`max`/`step` when the protocol limits the field, and `default` when the protocol has one. Defaults do not depend on the mode. Fields the mode does not send are omitted, e.g. `temperature` in the fan mode of `daikin.280`.
 - `keys` lists the function keys allowed in the mode. It is empty when the protocol has no `key` field.
 - `context` only accepts `mode`. Without it, the mode-independent limits are returned.
 
 #### `protocol:check(values)`
 
-Returns `true` when every given value is within the protocol limits for `values.mode`. Missing fields are not checked.
+Returns `true` when every given value is within the protocol limits for `values.mode`. Missing fields and fields the mode does not send are not checked.
 
 #### `protocol:encode(values[, options])`
 
@@ -224,7 +231,7 @@ Top-level keys; any other key is rejected:
 | `category`, `brand`, `model`, `source`, `maturity` | no | Strings reported by `info()`; `category` and `brand` are used by `list()` filters |
 | `defaults` | no | Initial state. Only fields the protocol uses, within the limits |
 | `limits` | no | Allowed values: an array for enum and boolean fields, `{min, max, step}` for numbers |
-| `mode_limits` | no | Per-mode overrides of `limits`, keyed by mode |
+| `mode_limits` | no | Per-mode overrides of `limits`, keyed by mode. `null` marks a field the mode does not send, e.g. `{"fan": {"temperature": null}}` (`ir.protocol.none` in Lua) |
 
 `protocol` contains `carrier_hz` (1000–1,000,000), a non-empty `messages` array, and an optional `hold` message that `hold_ms` appends instead of repeating the selected message. A message has these keys:
 
@@ -242,7 +249,7 @@ Top-level keys; any other key is rejected:
 | `checks` | Checksums, applied in order after the fields |
 
 - `layout.steps` is an array of `"M<us>"` (mark), `"S<us>"` (space), `"P<us>"` (space until the message has lasted `<us>` since it started), and `"B<n>"` (the next `n` payload bits, at most 384).
-- `layout.coding` is `"pair"` (default) or `"biphase"`. Pair coding sends bit 0 and bit 1 as `symbols = [[mark, space], [mark, space]]`. Biphase (Manchester) coding uses `half_us` and `one_level`, the level of the first half of a 1 bit (default 1).
+- `layout.coding` is `"pair"` (default) or `"biphase"`. Pair coding sends bit 0 and bit 1 as `symbols = [[mark, space], [mark, space]]`. With four symbols each one carries two bits: `symbols[v + 1]` sends the value `v` of the next two bits, the first sent bit being the high one, and every `"B<n>"` must have an even `n`. Decoding picks the nearest symbol, so each pair of symbols needs a mark or a space that lies outside the tolerance window of the other. Biphase (Manchester) coding uses `half_us` and `one_level`, the level of the first half of a 1 bit (default 1).
 - A field is `{"field": name, "segments": [[byte, shift, width], ...], "base": 0, "step": 1, "raw": [...]}`. The segments hold the value starting from its least significant bits, in order; `shift` is 0–7 and `width` 1–8. A value becomes the index `(value - base) / step`; temperatures count in 0.1 °C (`base` 160 is 16 °C, `step` 10 is 1 °C), enums by their position in the [field table](#fields) from 0, and booleans as 0 and 1. With `raw`, the index selects the raw code and `null` marks an unsupported value. Without `raw`, the index itself is written and must fit in the segments.
 - A check is `{"op": "sum" | "xor" | "copy", "target": unit, "units": [...]}`, or uses `"first"` and `"count"` instead of `units`. `sum` adds the source units and `bias`, `xor` XORs them, and both write the result, truncated to one unit, to `target`. `copy` copies the source units to `target`, `target + 1`, and so on. Units are bytes, or nibbles when `nibble` is `true` (unit `2k` is the high nibble of byte `k`); `byte_target` keeps the target in bytes. `invert` inverts the written value.
 - Every array of a message (`steps`, `symbols`, `widths`, `fields`, `segments`, `raw`, `checks`, `units`) and `messages` itself hold at most 255 items; longer arrays raise `too large`.

@@ -171,7 +171,8 @@ static esp_err_t parse_limit(ir_field_id_t id, const cJSON *item, ir_limit_t *li
     return limit->mask ? ESP_OK : ESP_ERR_INVALID_ARG;
 }
 
-static esp_err_t parse_limits(const cJSON *object, uint32_t *fields, ir_limit_t *limits)
+/* allow_unused: null marks a field the mode does not send, left as an all-zero limit. */
+static esp_err_t parse_limits(const cJSON *object, bool allow_unused, uint32_t *fields, ir_limit_t *limits)
 {
     if (!object) return ESP_OK;
     if (!cJSON_IsObject(object)) return ESP_ERR_INVALID_ARG;
@@ -179,7 +180,11 @@ static esp_err_t parse_limits(const cJSON *object, uint32_t *fields, ir_limit_t 
     cJSON_ArrayForEach(item, object) {
         ir_field_id_t id;
         if (ir_field_find(item->string, &id) != ESP_OK) return ESP_ERR_INVALID_ARG;
-        TRY(parse_limit(id, item, &limits[id]));
+        if (allow_unused && cJSON_IsNull(item)) {
+            memset(&limits[id], 0, sizeof(limits[id]));
+        } else {
+            TRY(parse_limit(id, item, &limits[id]));
+        }
         *fields |= IR_FIELD_BIT(id);
     }
     return ESP_OK;
@@ -196,7 +201,7 @@ static esp_err_t parse_mode_limits(json_protocol_t *p, const cJSON *object)
         ir_limit_t *limits = arena_array(p, IR_FIELD_COUNT, sizeof(ir_limit_t));
         if (!limits) return ESP_ERR_NO_MEM;
         p->meta.mode_limits[mode] = limits;
-        TRY(parse_limits(item, &p->meta.mode_limit_fields[mode], limits));
+        TRY(parse_limits(item, true, &p->meta.mode_limit_fields[mode], limits));
     }
     return ESP_OK;
 }
@@ -266,7 +271,8 @@ static esp_err_t parse_layout(json_protocol_t *p, const cJSON *object, const ir_
     const cJSON *symbols = member(object, "symbols");
     size_t count;
     TRY(list_size(symbols, false, &count));
-    if (count && count != 2) return ESP_ERR_INVALID_ARG;
+    if (count && count != 2 && count != IR_LAYOUT_SYMBOLS_MAX) return ESP_ERR_INVALID_ARG;
+    layout->symbol_bits = count == IR_LAYOUT_SYMBOLS_MAX ? IR_LAYOUT_SYMBOL_BITS_MAX : 1;
     for (size_t i = 0; i < count; ++i) {
         const cJSON *symbol = cJSON_GetArrayItem(symbols, (int)i);
         int64_t mark, space;
@@ -491,7 +497,7 @@ static esp_err_t parse_root(json_protocol_t *p, const cJSON *root)
     TRY(parse_info(p, root));
     TRY(parse_codec(p, member(root, "protocol")));
     TRY(parse_values(member(root, "defaults"), &p->meta.defaults));
-    TRY(parse_limits(member(root, "limits"), &p->meta.limit_fields, p->meta.limits));
+    TRY(parse_limits(member(root, "limits"), false, &p->meta.limit_fields, p->meta.limits));
     TRY(parse_mode_limits(p, member(root, "mode_limits")));
     p->protocol.meta = &p->meta;
     if (p->meta.defaults.present & ~ir_protocol_fields(&p->protocol)) return ESP_ERR_INVALID_ARG;

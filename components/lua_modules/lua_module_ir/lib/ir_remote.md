@@ -47,7 +47,7 @@ Returns the frame for a key, looked up in this order:
 
 1. Learned keys: the stored frame.
 2. Mapped keys: `fixed` merged with the key values.
-3. Function keys of the current mode, for protocols with a `key` field: the current state encoded with that key.
+3. Function keys of the current mode, for protocols with a `key` field: the current state encoded with that key. `power` also flips the cached power, like `set({power = not power, key = "power"})`.
 
 `options.hold_ms` appends hold messages as in `protocol:encode()`; learned keys ignore it. On protocols with a `toggle` field, every press of a mapped key flips the toggle bit. Unknown keys raise an error.
 
@@ -59,9 +59,9 @@ Changes the AC state and returns the full state frame. Needs a protocol.
 local frame = ac:set({mode = "cool", temperature = 24})
 ```
 
-1. `changes` is merged into the current state. Fields that are not state fields raise `unsupported value`.
-2. Unchanged fields that the new mode does not allow move to an allowed value: the first listed value, or the value clamped to the range and rounded down to a step. For example, entering dry mode on `gree.irext_10727` sets the fan to low.
-3. On protocols with a `key` field, a function key is chosen from the change, e.g. `temp_up` when the temperature rises. Keys the mode does not allow are skipped. Without a changed field, the first allowed key is used. `changes.key` selects the key explicitly; on protocols without a `key` field it raises an error.
+1. `changes` is merged into the current state. Fields that are not state fields, or that the new mode does not send (absent from `capabilities({mode = ...}).state`), raise `unsupported value`. Values of fields the new mode does not send are kept for later modes.
+2. Unchanged fields that the new mode does not allow move to an allowed value: the first listed value, or the value clamped to the range and rounded down to a step. For example, entering dry mode on `xiaomi.96` sets the fan to low.
+3. On protocols with a `key` field, a function key is chosen from the change, e.g. `temp_up` when the temperature rises, or `swing_v_fix` for a fixed vane position (`swing_v` when the protocol has no `swing_v_fix`). Keys the mode does not allow are skipped. Without a changed field, the first allowed key is used, skipping `power` while power is unchanged. `changes.key` selects the key explicitly; on protocols without a `key` field it raises an error.
 4. The state is encoded; on success it becomes the current state. Values outside the protocol limits raise `unsupported value` and leave the state unchanged.
 
 `set({power = false})` returns the power-off frame of the protocol.
@@ -116,7 +116,7 @@ local ir = require("ir")
 local ir_remote = require("ir_remote")
 
 local device = ir.device({tx_gpio = 39, rx_gpio = 38, ctrl_gpio = 44})
-local ac = ir_remote.new({protocol = "gree.irext_10727"})
+local ac = ir_remote.new({protocol = "xiaomi.96"})
 device:send(ac:set({power = true, mode = "dry"}))
 print(ac:state().fan) -- "low", fitted to dry mode
 

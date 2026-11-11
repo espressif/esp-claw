@@ -17,10 +17,18 @@ extern const ir_protocol_t ir_protocol_rc5;
 extern const ir_protocol_t ir_protocol_jvc;
 extern const ir_protocol_t ir_protocol_gree;
 extern const ir_protocol_t ir_protocol_haier_a6;
+extern const ir_protocol_t ir_protocol_daikin_280;
+extern const ir_protocol_t ir_protocol_midea_coolix;
+extern const ir_protocol_t ir_protocol_hisense_kelon168;
+extern const ir_protocol_t ir_protocol_aux_electra;
+extern const ir_protocol_t ir_protocol_tcl_112;
+extern const ir_protocol_t ir_protocol_xiaomi_96;
 
 static const ir_protocol_t *const s_protocols[] = {
     &ir_protocol_nec, &ir_protocol_nec_extended, &ir_protocol_samsung32, &ir_protocol_sony12, &ir_protocol_sony15, &ir_protocol_sony20,
     &ir_protocol_rc5, &ir_protocol_jvc, &ir_protocol_gree, &ir_protocol_haier_a6,
+    &ir_protocol_daikin_280, &ir_protocol_midea_coolix, &ir_protocol_hisense_kelon168, &ir_protocol_aux_electra, &ir_protocol_tcl_112,
+    &ir_protocol_xiaomi_96,
 };
 
 const ir_protocol_t *const *ir_builtin_protocols(size_t *count)

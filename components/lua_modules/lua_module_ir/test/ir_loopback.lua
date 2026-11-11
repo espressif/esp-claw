@@ -45,8 +45,14 @@ local PROTOCOL_CODES = {
     {"sony20", {address = 0x1A5, command = 0x15}},
     {"rc5", {address = 0x05, command = 0x21}},
     {"jvc", {address = 0x10, command = 0x20}},
-    {"gree", {power = true, mode = "cool", temperature = 24, fan = "auto"}},
-    {"haier.a6", {power = true, mode = "cool", temperature = 24, fan = "auto"}},
+    {"gree", {power = true, mode = "cool", temperature = 24, fan = "auto", swing_v = "off"}},
+    {"haier.a6", {power = true, mode = "cool", temperature = 24, fan = "auto", swing_v = "position_5", sleep = false, key = "power"}},
+    {"daikin.280", {power = true, mode = "cool", temperature = 24, fan = "auto", swing_v = "off", swing_h = "auto"}},
+    {"midea.coolix", {power = true, mode = "cool", temperature = 24, fan = "auto"}},
+    {"hisense.kelon168", {power = true, mode = "cool", temperature = 24, fan = "auto", swing_v = "position_1", key = "mode"}},
+    {"aux.electra", {power = true, mode = "cool", temperature = 24, fan = "auto", swing_v = "off", sleep = false, key = "power"}},
+    {"tcl.112", {power = true, mode = "cool", temperature = 24, fan = "auto", swing_v = "off"}},
+    {"xiaomi.96", {power = true, mode = "cool", temperature = 24, fan = "auto", swing_v = "auto", sleep = false}},
 }
 
 local function run_protocols()
