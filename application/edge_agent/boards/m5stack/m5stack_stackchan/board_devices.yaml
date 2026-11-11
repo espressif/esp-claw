@@ -1,0 +1,162 @@
+version: 1.0.0
+# Devices Configuration
+devices:
+
+  - name: gpio_expander
+    chip: aw9523b
+    type: gpio_expander
+    version: default
+    dependencies:
+      esp_io_expander_aw9523b:
+        override_path: "${BOARD_PATH}/components/esp_io_expander_aw9523b"
+        require: public
+    config:
+      max_pins: 16
+      # When pin1 and pin5 of the IO expansion chip are driven low,
+      # the device can be powered via the Grove/DC interface, but using
+      # SD card and LCD simultaneously may cause a crash issue.
+      # pin 1  = BUS_EN   (Grove / ext 5V)
+      # pin 15 = BOOST_EN (5V boost converter; must be on together with BUS_EN)
+      output_io_mask: [0, 1, 2, 4, 5, 8, 9, 10, 11, 15]
+      output_io_level_mask: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      input_io_mask: NULL
+    peripherals:
+      - name: i2c_master
+        i2c_addr: [0xb0]
+
+  - name: axp2101_power_manager
+    chip: axp2101
+    type: custom
+    version: default
+    config:
+      frequency: 400000
+      i2c_addr: 0x34
+    peripherals:
+      - name: i2c_master
+
+  # StackChan PY32 IO expander ("IOE1"), on the CoreS3 internal I2C bus.
+  # Distinct from `gpio_expander` above: that one is the CoreS3's own AW9523B.
+  # Not declared as `type: gpio_expander` because the PY32 needs a retry
+  # window at boot (it comes up slower than the ESP32-S3) and exposes ADC /
+  # PWM / LED-RAM blocks that the esp_io_expander API cannot express.
+  # This device only brings the servo VM rail up; full access is available
+  # from Lua through the `lib_py32_ioe` library.
+  #   pin 0  = VM_EN  (servo power rail, TPS61088 boost enable)
+  #   pin 13 = RGB    (data line for the 12 StackChan Ring LEDs)
+  - name: ioe1
+    chip: py32
+    type: custom
+    version: default
+    config:
+      frequency: 100000
+      i2c_addr: 0x6F
+      # Max time to wait for the PY32 to answer after power-on. The M5Stack
+      # reference BSP polls for 1200 ms before giving up.
+      boot_timeout_ms: 1200
+      boot_retry_interval_ms: 100
+      vm_en_pin: 0
+      # Turn the servo rail on during board init so the servo bus is usable
+      # as soon as the agent runs a script.
+      vm_en_on_init: true
+    peripherals:
+      - name: i2c_master
+
+  - name: audio_dac
+    chip: aw88298
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: false
+      dac_enabled: true
+      dac_max_channel: 1
+      dac_channel_mask: "1"
+      dac_init_gain: 0
+      # Audio processing settings
+      mclk_enabled: false
+    peripherals:
+      - name: i2s_audio_out
+      - name: i2c_master
+        address: 0x6c
+        frequency: 400000
+
+  - name: audio_adc
+    chip: es7210
+    type: audio_codec
+    version: default
+    config:
+      adc_enabled: true
+      adc_max_channel: 4
+      adc_channel_mask: "0011"
+      adc_init_gain: 0
+    peripherals:
+      - name: i2s_audio_in
+      - name: i2c_master
+        address: 0x80
+        frequency: 400000
+
+  # SD Card Configuration, it is recommended not to use it with LCD.
+  # Using them simultaneously may cause SD card mount failure or program
+  # crashes due to SPI resource conflicts.
+  # - name: fs_sdcard
+  #   type: fs_fat
+  #   sub_type: spi
+  #   config:
+  #     sub_config:
+  #       cs_gpio_num: 4
+  #       frequency: SDMMC_FREQ_DEFAULT
+  #   peripherals:
+  #     - name: spi_master
+
+  - name: display_lcd
+    chip: ili9341
+    type: display_lcd
+    sub_type: spi
+    version: default
+    dependencies:
+      espressif/esp_lcd_ili9341: "*"
+    config:
+      mirror_x: false
+      mirror_y: false
+      x_max: 320
+      y_max: 240
+      invert_color: true  # Required for M5Stack CoreS3 LCD
+      io_spi_config:
+        cs_gpio_num: 3
+        dc_gpio_num: 35
+        spi_mode: 0
+        pclk_hz: 40000000
+        flags:
+          sio_mode: true
+
+      lcd_panel_config:
+        reset_gpio_num: -1
+        rgb_ele_order: LCD_RGB_ELEMENT_ORDER_BGR
+        bits_per_pixel: 16
+        data_endian: LCD_RGB_DATA_ENDIAN_BIG
+        flags:
+          reset_active_high: true
+
+    peripherals:
+      - name: spi_master
+
+  # Touch Panel Configuration
+  - name: lcd_touch
+    chip: ft5x06
+    type: lcd_touch
+    sub_type: i2c
+    version: default
+    dependencies:
+      esp_lcd_touch:
+        version: "*"
+        require: public
+      espressif/esp_lcd_touch_ft5x06: "^1.0.0"
+    config:
+      io_i2c_config:
+        lcd_cmd_bits: 8
+        scl_speed_hz: 400000
+      touch_config:
+        x_max: 320
+        y_max: 240
+    peripherals:
+      - name: i2c_master
+        i2c_addr: [0x70]

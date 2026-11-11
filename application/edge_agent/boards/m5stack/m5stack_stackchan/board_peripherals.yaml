@@ -1,0 +1,71 @@
+version: 1.0.0
+# Peripherals Configuration
+peripherals:
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 12
+        scl: 11
+
+  # I2S Standard Configuration (48 kHz stereo)
+  - name: i2s_audio_out
+    type: i2s
+    role: master
+    format: std-out
+    config: &i2s0_config
+      port: 0
+      # Clock configuration
+      sample_rate_hz: 48000
+      mclk_multiple: 256
+
+      # Slot configuration
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_STEREO
+      slot_mask: I2S_STD_SLOT_BOTH
+      ws_width: 16
+
+      # GPIO configuration
+      pins:
+        mclk: 0
+        bclk: 34
+        ws: 33
+        dout: 13
+        din: 14
+
+  - name: i2s_audio_in
+    type: i2s
+    role: master
+    format: std-in
+    config: *i2s0_config
+
+  # LCD SPI Configuration
+  - name: spi_master
+    type: spi
+    role: master
+    config:
+      # spi_bus_config_t fields
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        mosi_io_num: 37
+        miso_io_num: 35
+        sclk_io_num: 36
+        max_transfer_sz: 3600
+
+  # PA CONTROL (AW88298 power amplifier enable)
+  - name: gpio_pa_control
+    type: gpio
+    role: io
+    config:
+      pin: 46
+      mode: GPIO_MODE_OUTPUT
+      pull_up: true
+
+  # Servo bus (Feetech SCS serial servos) is deliberately NOT declared here.
+  # UART1 tx=GPIO6 rx=GPIO7 @1 Mbps is owned by Lua scripts through the `uart`
+  # module and the `lib_scs_servo` library; a UART port has a single owner, so
+  # declaring it here would make uart.new(1, 6, 7, 1000000) fail. See
+  # components/lua_modules/lua_driver_uart/lib/lib_scs_servo.md.
