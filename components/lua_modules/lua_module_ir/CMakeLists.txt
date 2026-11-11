@@ -1,13 +1,31 @@
 idf_component_register(
     SRCS
-        "src/lua_module_ir.c"
+        "src/core/ir_frame.c"
+        "src/core/ir_fields.c"
+        "src/core/ir_layout.c"
+        "src/core/ir_protocol.c"
+        "src/builtin/ir_builtin.c"
+        "src/builtin/ir_builtin_aircon.c"
+        "src/builtin/ir_builtin_tv.c"
+        "src/json/ir_protocol_json.c"
+        "src/json/ir_protocol_dir.c"
+        "src/port/ir_device.c"
+        "src/lua/lua_module_ir.c"
+        "src/lua/lua_ir_common.c"
+        "src/lua/lua_ir_device.c"
+        "src/lua/lua_ir_frame.c"
+        "src/lua/lua_ir_protocol.c"
     INCLUDE_DIRS
-        "src"
+        "src/lua"
+    PRIV_INCLUDE_DIRS
+        "src/core"
+        "src/builtin"
+        "src/json"
+        "src/port"
     REQUIRES
         cap_lua
-        esp_board_manager
+    PRIV_REQUIRES
+        claw_core
         esp_driver_rmt
         esp_driver_gpio
 )
-
-idf_component_set_property(${COMPONENT_NAME} WHOLE_ARCHIVE TRUE)

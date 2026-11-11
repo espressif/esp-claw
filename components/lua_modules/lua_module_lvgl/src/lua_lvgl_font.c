@@ -342,6 +342,50 @@ lv_font_t *lua_lvgl_validate_font_locked(const lua_lvgl_font_ud_t *ud, const cha
 
 static void lua_lvgl_refresh_default_font_screens_locked(void);
 
+/* Reuses the bytes of a live font loaded from the same path, so extra sizes skip the file read. */
+static esp_err_t lua_lvgl_acquire_font_data_locked(const char *path, lua_lvgl_font_data_t **out_data)
+{
+    lua_lvgl_font_data_t *data;
+    esp_err_t err;
+
+    for (lua_lvgl_font_record_t *record = s_lvgl.fonts; record; record = record->next) {
+        if (record->valid && record->data && record->generation == s_lvgl.generation &&
+                strcmp(record->data->path, path) == 0) {
+            record->data->refs++;
+            *out_data = record->data;
+            return ESP_OK;
+        }
+    }
+
+    data = (lua_lvgl_font_data_t *)calloc(1, sizeof(*data));
+    ESP_RETURN_ON_FALSE(data, ESP_ERR_NO_MEM, TAG, "font data allocation failed");
+    data->path = strdup(path);
+    if (!data->path) {
+        free(data);
+        ESP_LOGW(TAG, "font path allocation failed");
+        return ESP_ERR_NO_MEM;
+    }
+    err = lua_lvgl_read_font_data(path, &data->bytes, &data->size);
+    if (err != ESP_OK) {
+        free(data->path);
+        free(data);
+        return err;
+    }
+    data->refs = 1;
+    *out_data = data;
+    return ESP_OK;
+}
+
+static void lua_lvgl_release_font_data(lua_lvgl_font_data_t *data)
+{
+    if (!data || --data->refs > 0) {
+        return;
+    }
+    free(data->bytes);
+    free(data->path);
+    free(data);
+}
+
 static void lua_lvgl_release_font_record(lua_lvgl_font_record_t *record)
 {
     if (!record || !record->valid) {
@@ -351,12 +395,13 @@ static void lua_lvgl_release_font_record(lua_lvgl_font_record_t *record)
         s_lvgl.default_font = NULL;
         lua_lvgl_refresh_default_font_screens_locked();
     }
+    /* The font reads the shared bytes, so it must be destroyed before they are released. */
     if (record->font) {
         lv_tiny_ttf_destroy(record->font);
         record->font = NULL;
     }
-    free(record->font_data);
-    record->font_data = NULL;
+    lua_lvgl_release_font_data(record->data);
+    record->data = NULL;
     record->valid = false;
 }
 
@@ -440,8 +485,7 @@ static int lua_lvgl_font_load(lua_State *L)
     int cache_size = LV_TINY_TTF_CACHE_GLYPH_CNT;
     int opts_index = 0;
     char normalized_path[LUA_MODULE_LVGL_PATH_MAX];
-    uint8_t *font_data = NULL;
-    size_t font_data_size = 0;
+    lua_lvgl_font_data_t *font_data = NULL;
     lv_font_t *font;
     lua_lvgl_font_record_t *record;
     lua_lvgl_font_ud_t *ud;
@@ -480,26 +524,26 @@ static int lua_lvgl_font_load(lua_State *L)
         }
         return lua_lvgl_error_esp(L, "font path", err);
     }
-    err = lua_lvgl_read_font_data(normalized_path, &font_data, &font_data_size);
+    err = lua_lvgl_acquire_font_data_locked(normalized_path, &font_data);
     if (err != ESP_OK) {
         lua_lvgl_unlock();
         return luaL_error(L, "failed to read font: %s (%s)", normalized_path, esp_err_to_name(err));
     }
-    font = lv_tiny_ttf_create_data_ex(font_data, font_data_size, size, LV_FONT_KERNING_NORMAL, (size_t)cache_size);
+    font = lv_tiny_ttf_create_data_ex(font_data->bytes, font_data->size, size, LV_FONT_KERNING_NORMAL, (size_t)cache_size);
     if (!font) {
-        free(font_data);
+        lua_lvgl_release_font_data(font_data);
         lua_lvgl_unlock();
         return luaL_error(L, "lvgl failed to create font: %s", normalized_path);
     }
     record = (lua_lvgl_font_record_t *)calloc(1, sizeof(*record));
     if (!record) {
         lv_tiny_ttf_destroy(font);
-        free(font_data);
+        lua_lvgl_release_font_data(font_data);
         lua_lvgl_unlock();
         return luaL_error(L, "lvgl font record allocation failed");
     }
     record->font = font;
-    record->font_data = font_data;
+    record->data = font_data;
     record->generation = s_lvgl.generation;
     record->valid = true;
     record->next = s_lvgl.fonts;

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from lua_sync_common import ComponentSource, FileSyncPlan, LuaSyncConsole, LuaSyncError
-from lua_sync_common import collect_build_component_sources
+from lua_sync_common import collect_build_component_sources, load_synced_files_manifest
 
 
 console = LuaSyncConsole()
@@ -20,6 +20,8 @@ console = LuaSyncConsole()
 # they can be reached via {CUR_SKILL_DIR}/scripts/builtin/test/<name>.
 GENERATED_SKILL_DIR = Path(__file__).resolve().parents[1] / 'skills' / 'builtin_lua_modules'
 TESTS_DEST_DIR = GENERATED_SKILL_DIR / 'scripts' / 'builtin' / 'test'
+# Per-module directory overlaid onto the SYSTEM image staging root.
+SYSTEM_IMAGE_DIR_NAME = 'fs_image'
 
 
 def add_lib_script(plan: FileSyncPlan, category_dir: Path, script_path: Path, owner: str) -> None:
@@ -46,6 +48,9 @@ def parse_args() -> argparse.Namespace:
                         help='Output dir for libs (require() search path); tests are placed inside the builtin_lua_modules skill.')
     parser.add_argument('--libs-manifest-path', required=True)
     parser.add_argument('--tests-manifest-path', required=True)
+    parser.add_argument('--system-output-dir',
+                        help=f'SYSTEM image staging root; each module {SYSTEM_IMAGE_DIR_NAME}/ tree is overlaid onto it.')
+    parser.add_argument('--system-manifest-path')
     return parser.parse_args()
 
 
@@ -79,6 +84,27 @@ def collect_builtin_lua_module_tests(sources: list[ComponentSource], output_dir:
     return plan
 
 
+def collect_system_image_files(sources: list[ComponentSource], output_dir: Path, manifest_path: Path) -> FileSyncPlan:
+    plan = FileSyncPlan(output_dir, manifest_path)
+
+    for source in sources:
+        image_dir = source.root / SYSTEM_IMAGE_DIR_NAME
+        if not image_dir.is_dir():
+            continue
+        for path in sorted(image_dir.rglob('*')):
+            relative_path = path.relative_to(image_dir)
+            # Hidden entries are skipped, matching board fatfs_image overlays.
+            if path.is_file() and not any(part.startswith('.') for part in relative_path.parts):
+                plan.add(str(relative_path), path, source.name)
+
+    # Application and board SYSTEM files are staged first; a module must not silently replace them.
+    owned = load_synced_files_manifest(manifest_path)
+    for name in plan.output_names:
+        if name not in owned and (output_dir / name).exists():
+            raise LuaSyncError(f"Module {SYSTEM_IMAGE_DIR_NAME} file '{name}' conflicts with an existing SYSTEM image file")
+    return plan
+
+
 def main() -> int:
     args = parse_args()
     build_dir = Path(args.build_dir).resolve()
@@ -86,15 +112,23 @@ def main() -> int:
     tests_output_dir = TESTS_DEST_DIR.resolve()
     libs_manifest = Path(args.libs_manifest_path).resolve()
     tests_manifest = Path(args.tests_manifest_path).resolve()
+    if bool(args.system_output_dir) != bool(args.system_manifest_path):
+        raise LuaSyncError('--system-output-dir and --system-manifest-path must be given together')
 
     sources = collect_build_component_sources(build_dir)
     libs_plan = collect_builtin_lua_module_libs(sources, libs_output_dir, libs_manifest)
     tests_plan = collect_builtin_lua_module_tests(sources, tests_output_dir, tests_manifest)
+    system_plan = None
+    if args.system_output_dir:
+        system_plan = collect_system_image_files(sources, Path(args.system_output_dir).resolve(), Path(args.system_manifest_path).resolve())
     libs_plan.apply()
     tests_plan.apply(prune_output=True)
+    if system_plan:
+        system_plan.apply()
     console.success(
-        f'CLAW lua module resource sync updated {libs_plan.count} libs into {libs_output_dir} '
-        f'and {tests_plan.count} tests into {tests_output_dir}'
+        f'CLAW lua module resource sync updated {libs_plan.count} libs into {libs_output_dir}, '
+        f'{tests_plan.count} tests into {tests_output_dir}'
+        + (f' and {system_plan.count} SYSTEM image files' if system_plan else '')
     )
     return 0
 

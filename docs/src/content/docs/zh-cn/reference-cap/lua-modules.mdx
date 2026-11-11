@@ -244,20 +244,21 @@ myled.set(false)  -- 熄灭
 
 ## 构建同步规则
 
-构建系统会收集 `lua_module_*` 的受管资源并同步到应用文件系统镜像。
-输出根目录由应用配置决定；在 `edge_agent` 中，内置 Lua 资源通常进入 `/fatfs/scripts/builtin`。
-模块文档进入 `/fatfs/scripts/docs`。
+构建系统会收集参与构建的组件的受管资源，并同步到只读的 SYSTEM 镜像。
+库的输出根目录由应用配置决定；在 `edge_agent` 中为 `/system/scripts/builtin`，即 `require()` 的搜索路径。
+模块文档和测试打包进生成的 `builtin_lua_modules` skill，通过该 skill 的 `{CUR_SKILL_DIR}` 读取。
 
 | 源路径 | 同步输出 |
 |--------|----------|
-| `README.md` | Lua 模块文档输出目录中的 `<component_name>.md` |
-| `test/foo.lua` | 内置 Lua 输出目录中的 `test/foo.lua` |
-| `lib/foo.lua` | 内置 Lua 输出目录中的 `lib/foo.lua` |
-| `lib/foo.md` | 内置 Lua 输出目录中的 `lib/foo.md` |
+| `README.md` | `builtin_lua_modules` 的 `{CUR_SKILL_DIR}/scripts/docs/<component_name>.md` |
+| `test/foo.lua` | `builtin_lua_modules` 的 `{CUR_SKILL_DIR}/scripts/builtin/test/foo.lua` |
+| `lib/foo.lua` | 库输出根目录中的 `lib/foo.lua`，例如 `/system/scripts/builtin/lib/foo.lua` |
+| `lib/foo.md` | 库输出根目录中的 `lib/foo.md` |
+| `fs_image/...` | 叠加到 SYSTEM 镜像根目录，例如 `fs_image/ir/protocols.jsonl` 变为 `/system/ir/protocols.jsonl` |
 
 同步规则：
 
-- `README.md` 同步只适用于组件名为 `lua_module_*` 的组件。
+- `README.md` 同步只适用于组件名为 `lua_module_*` 或 `lua_driver_*` 的组件。
 - `lib/` 与 `test/` 会保留各自目录内的相对路径。
 - 所有同步后的脚本和库输出路径必须全局唯一。
 - 根目录下的 `.lua` 文件不是受管同步输出，模块不应维护扁平的根级 Lua 文件。

@@ -12,7 +12,8 @@ function(lua_module_builder_configure_builtin_lua_sync)
     # DOCS_OUTPUT_DIR is parsed for backward compatibility but no longer used:
     # module docs are now bundled into the builtin_lua_modules skill source tree
     # so {CUR_SKILL_DIR}/scripts/docs/... resolves correctly at runtime.
-    set(one_value_args TARGET BUILTIN_OUTPUT_DIR DOCS_OUTPUT_DIR)
+    # SYSTEM_OUTPUT_DIR is optional: when set, each module's fs_image/ tree is overlaid onto it.
+    set(one_value_args TARGET BUILTIN_OUTPUT_DIR DOCS_OUTPUT_DIR SYSTEM_OUTPUT_DIR)
     cmake_parse_arguments(arg "" "${one_value_args}" "" ${ARGN})
 
     lua_module_builder_require_args(lua_module_builder_configure_builtin_lua_sync arg TARGET BUILTIN_OUTPUT_DIR)
@@ -22,6 +23,13 @@ function(lua_module_builder_configure_builtin_lua_sync)
     set(common_script_args
         --build-dir "${CMAKE_BINARY_DIR}"
     )
+    set(system_image_args "")
+    if(arg_SYSTEM_OUTPUT_DIR)
+        set(system_image_args
+            --system-output-dir "${arg_SYSTEM_OUTPUT_DIR}"
+            --system-manifest-path "${CMAKE_BINARY_DIR}/lua_module_builder_system_image_manifest.json"
+        )
+    endif()
 
     add_custom_target(lua_module_builder_sync_builtin_scripts ALL
         COMMAND ${python}
@@ -30,6 +38,7 @@ function(lua_module_builder_configure_builtin_lua_sync)
                 --builtin-output-dir "${arg_BUILTIN_OUTPUT_DIR}"
                 --libs-manifest-path "${CMAKE_BINARY_DIR}/lua_module_builder_builtin_lua_libs_manifest.json"
                 --tests-manifest-path "${CMAKE_BINARY_DIR}/lua_module_builder_builtin_lua_tests_manifest.json"
+                ${system_image_args}
         DEPENDS
                 "${tools_dir}/sync_lua_module_resources.py"
                 "${tools_dir}/lua_sync_common.py"
