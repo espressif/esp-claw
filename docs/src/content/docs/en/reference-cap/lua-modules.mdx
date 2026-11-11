@@ -244,20 +244,21 @@ Just like `cap_*` modules, **each `lua_module_*` / `lua_driver_*` should ship a 
 
 ## Build sync rules
 
-The build system collects managed `lua_module_*` resources and syncs them into the application filesystem image.
-Output roots are application-specific; in `edge_agent`, built-in Lua resources usually go to `/fatfs/scripts/builtin`.
-Module docs go to `/fatfs/scripts/docs`.
+The build system collects the managed resources of the built components and syncs them into the read-only SYSTEM image.
+The library output root is application-specific; in `edge_agent` it is `/system/scripts/builtin`, the `require()` search path.
+Module docs and tests are bundled into the generated `builtin_lua_modules` skill and read through its `{CUR_SKILL_DIR}`.
 
 | Source path | Sync output |
 |-------------|-------------|
-| `README.md` | `<component_name>.md` in the Lua module docs output directory |
-| `test/foo.lua` | `test/foo.lua` in the built-in Lua output directory |
-| `lib/foo.lua` | `lib/foo.lua` in the built-in Lua output directory |
-| `lib/foo.md` | `lib/foo.md` in the built-in Lua output directory |
+| `README.md` | `{CUR_SKILL_DIR}/scripts/docs/<component_name>.md` of `builtin_lua_modules` |
+| `test/foo.lua` | `{CUR_SKILL_DIR}/scripts/builtin/test/foo.lua` of `builtin_lua_modules` |
+| `lib/foo.lua` | `lib/foo.lua` in the library output root, e.g. `/system/scripts/builtin/lib/foo.lua` |
+| `lib/foo.md` | `lib/foo.md` in the library output root |
+| `fs_image/...` | Overlaid onto the SYSTEM image root, e.g. `fs_image/ir/protocols.jsonl` becomes `/system/ir/protocols.jsonl` |
 
 Sync rules:
 
-- `README.md` sync applies only to components named `lua_module_*`.
+- `README.md` sync applies only to components named `lua_module_*` or `lua_driver_*`.
 - `lib/` and `test/` preserve their relative paths under those directories.
 - All synced script and library output paths must be globally unique.
 - Root-level `.lua` files are not managed sync outputs; modules should not maintain flat root-level Lua files.

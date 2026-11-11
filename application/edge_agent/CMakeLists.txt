@@ -79,6 +79,7 @@ lua_module_builder_configure_builtin_lua_sync(
     TARGET fatfs_system_bin
     BUILTIN_OUTPUT_DIR "${EDGE_AGENT_FATFS_SYSTEM_BUILD_ROOT}/scripts/builtin"
     DOCS_OUTPUT_DIR "${EDGE_AGENT_FATFS_SYSTEM_BUILD_ROOT}/scripts/docs"
+    SYSTEM_OUTPUT_DIR "${EDGE_AGENT_FATFS_SYSTEM_BUILD_ROOT}"
 )
 
 add_dependencies(skill_builder_sync_skills edge_agent_prepare_system_fs_image)

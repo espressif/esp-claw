@@ -153,3 +153,7 @@ class FileSyncPlan:
     @property
     def count(self) -> int:
         return len(self._copy_map)
+
+    @property
+    def output_names(self) -> list[str]:
+        return list(self._copy_map)
