@@ -12,4 +12,8 @@ menu "Lua IMU Module"
         bool "ICM42670 backend"
         default n
 
+    config LUA_MODULE_IMU_CHIP_QMI8658
+        bool "QMI8658 backend"
+        default n
+
 endmenu

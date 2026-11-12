@@ -1,5 +1,14 @@
 cmake_minimum_required(VERSION 3.16)
 
+# Windows limits a process command line to about 32k characters. With many
+# components and long managed-component include paths, a single compile command
+# can exceed that and Ninja fails with:
+#   ninja: fatal: CreateProcess: The parameter is incorrect. (command line too long?)
+# Force Ninja to use response files so generated compile commands stay short.
+if(CMAKE_HOST_WIN32)
+    set(CMAKE_NINJA_FORCE_RESPONSE_FILE ON)
+endif()
+
 include("${CMAKE_SOURCE_DIR}/tools/cmake/esp_idf_patch.cmake")
 include("${CMAKE_SOURCE_DIR}/tools/cmake/flash_partition_defaults.cmake")
 
