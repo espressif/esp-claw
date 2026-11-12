@@ -16,6 +16,13 @@ dependencies:
   espressif/ramfs:
     version: "^0.1"
 
+  espressif2022/esp_emote_expression:
+    version: "^1.0.0"
+    rules:
+      - if: $CONFIG{ESP_BOARD_DEV_DISPLAY_LCD_SUPPORT} == True
+      - if: $CONFIG{APP_CLAW_SYSTEM_UI_ENABLE} == True
+      - if: $CONFIG{EDGE_AGENT_ENABLE_EMOTE} == True
+
   claw_utils:
     path: ../../../components/claw_modules/claw_utils
 

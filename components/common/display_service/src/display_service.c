@@ -73,12 +73,16 @@ typedef struct {
 
 struct display_service_session_t {
     bool active;
+    bool suspended;
     uint32_t generation;
     display_service_mode_t mode;
     uint32_t flags;
     display_service_session_cleanup_cb_t cleanup_cb;
+    display_service_session_resume_cb_t resume_cb;
     display_service_session_exit_request_cb_t exit_request_cb;
     void *cleanup_user_ctx;
+    void *resume_user_ctx;
+    struct display_service_session_t *preempted_session;
     char owner_name[DISPLAY_SERVICE_OWNER_NAME_LEN];
     bool exit_gesture_tracking;
     bool exit_gesture_cancelled;
@@ -102,6 +106,7 @@ typedef struct {
     lv_obj_t *dummy_input_blocker;
     SemaphoreHandle_t dummy_mutex;
     const char *dummy_owner;
+    struct display_service_session_t *dummy_session;
     display_service_touch_snapshot_t touch_snapshot;
     display_service_touch_observer_t touch_observers[DISPLAY_SERVICE_MAX_TOUCH_OBSERVERS];
     display_service_state_observer_cb_t state_observer_cb;
@@ -131,9 +136,11 @@ static esp_err_t display_service_scene_release_with_cleanup(void *owner_ctx,
                                                             display_service_scene_cleanup_cb_t cleanup_cb,
                                                             void *cleanup_user_ctx);
 static bool display_service_scene_allows_system_overlay(void);
-static esp_err_t display_service_enter_dummy_draw(const char *owner);
-static esp_err_t display_service_exit_dummy_draw(const char *owner);
-static esp_err_t display_service_dummy_draw_blit(const char *owner,
+static esp_err_t display_service_preempt_raw_for(display_service_session_handle_t session);
+static esp_err_t display_service_restore_preempted_raw(display_service_session_handle_t session);
+static esp_err_t display_service_enter_dummy_draw(display_service_session_handle_t session);
+static esp_err_t display_service_exit_dummy_draw(display_service_session_handle_t session);
+static esp_err_t display_service_dummy_draw_blit(display_service_session_handle_t session,
                                                  int x_start,
                                                  int y_start,
                                                  int x_end,
@@ -161,14 +168,14 @@ static struct display_service_session_t *display_service_active_exclusive_sessio
     for (size_t i = 0; i < DISPLAY_SERVICE_MAX_SESSIONS; i++) {
         struct display_service_session_t *session = &s_display.sessions[i];
 
-        if (!session->active) {
+        if (!session->active || session->suspended) {
             continue;
         }
         if (session->mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_LVGL && s_display.scene_owner == session) {
             return session;
         }
         if (session->mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW && s_display.dummy_draw_enabled &&
-                display_service_dummy_owner_matches(session->owner_name)) {
+                s_display.dummy_session == session) {
             return session;
         }
     }
@@ -768,6 +775,7 @@ void display_service_stop(void)
     memset(&s_display.info, 0, sizeof(s_display.info));
     memset(&s_display.touch_snapshot, 0, sizeof(s_display.touch_snapshot));
     s_display.dummy_owner = NULL;
+    s_display.dummy_session = NULL;
     memset(s_display.touch_observers, 0, sizeof(s_display.touch_observers));
     s_display.state_observer_cb = NULL;
     s_display.state_observer_user_ctx = NULL;
@@ -821,8 +829,10 @@ esp_err_t display_service_open(const display_service_session_config_t *config,
     session->mode = config->mode;
     session->flags = config->flags;
     session->cleanup_cb = config->cleanup_cb;
+    session->resume_cb = config->resume_cb;
     session->exit_request_cb = config->exit_request_cb;
     session->cleanup_user_ctx = config->user_ctx;
+    session->resume_user_ctx = config->user_ctx;
     strlcpy(session->owner_name, owner_name, sizeof(session->owner_name));
     err = display_service_add_client_locked(&(display_service_client_config_t) {
         .owner_name = session->owner_name,
@@ -836,16 +846,22 @@ esp_err_t display_service_open(const display_service_session_config_t *config,
         return err;
     }
 
-    if (config->mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_LVGL) {
+    if (config->mode != DISPLAY_SERVICE_MODE_SHARED_LVGL) {
+        err = display_service_preempt_raw_for(session);
+    }
+    if (err == ESP_OK && config->mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_LVGL) {
         err = display_service_scene_acquire_ex(&(display_service_scene_config_t) {
             .owner_name = session->owner_name,
             .owner_ctx = session,
             .flags = display_service_session_flags_to_scene_flags(config->flags),
         });
-    } else if (config->mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW) {
-        err = display_service_enter_dummy_draw(session->owner_name);
+    } else if (err == ESP_OK && config->mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW) {
+        err = display_service_enter_dummy_draw(session);
     }
     if (err != ESP_OK) {
+        if (session->preempted_session != NULL) {
+            (void)display_service_restore_preempted_raw(session);
+        }
         ESP_LOGE(TAG, "open session exclusive enter failed: %s", esp_err_to_name(err));
         if (display_service_lock() == ESP_OK) {
             (void)display_service_remove_client_locked(session);
@@ -877,7 +893,7 @@ esp_err_t display_service_close(display_service_session_handle_t session)
     strlcpy(owner_name, session->owner_name, sizeof(owner_name));
 
     if (mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW) {
-        err = display_service_exit_dummy_draw(owner_name);
+        err = display_service_exit_dummy_draw(session);
     } else if (mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_LVGL) {
         err = cleanup_cb != NULL ?
               display_service_scene_release_with_cleanup(session,
@@ -891,6 +907,15 @@ esp_err_t display_service_close(display_service_session_handle_t session)
     }
     if (mode != DISPLAY_SERVICE_MODE_EXCLUSIVE_LVGL && cleanup_cb != NULL) {
         cleanup_cb(session, cleanup_user_ctx);
+    }
+
+    if (session->preempted_session != NULL) {
+        esp_err_t resume_err = display_service_restore_preempted_raw(session);
+        if (resume_err != ESP_OK) {
+            ESP_LOGE(TAG, "restore preempted display session failed: %s",
+                     esp_err_to_name(resume_err));
+            return resume_err;
+        }
     }
 
     ESP_RETURN_ON_ERROR(display_service_lock(), TAG, "lock failed");
@@ -913,7 +938,7 @@ bool display_service_session_is_valid(display_service_session_handle_t session)
 
 bool display_service_session_is_active(display_service_session_handle_t session)
 {
-    return display_service_session_is_valid(session);
+    return display_service_session_is_valid(session) && !session->suspended;
 }
 
 display_service_mode_t display_service_session_mode(display_service_session_handle_t session)
@@ -970,7 +995,7 @@ esp_err_t display_service_session_raw_blit(display_service_session_handle_t sess
     ESP_RETURN_ON_FALSE(blit != NULL, ESP_ERR_INVALID_ARG, TAG, "raw blit config missing");
     ESP_RETURN_ON_FALSE(session->mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW,
                         ESP_ERR_INVALID_STATE, TAG, "session is not exclusive raw");
-    return display_service_dummy_draw_blit(session->owner_name,
+    return display_service_dummy_draw_blit(session,
                                            blit->x_start,
                                            blit->y_start,
                                            blit->x_end,
@@ -1005,7 +1030,15 @@ bool display_service_has_exclusive_session(void)
 
 bool display_service_exclusive_allows_system_overlay(void)
 {
-    return s_display.scene_owner == NULL || display_service_scene_allows_system_overlay();
+    if (s_display.scene_owner != NULL) {
+        return display_service_scene_allows_system_overlay();
+    }
+    if (s_display.dummy_draw_enabled &&
+            display_service_session_valid_unlocked(s_display.dummy_session)) {
+        return (s_display.dummy_session->flags &
+                DISPLAY_SERVICE_SESSION_FLAG_ALLOW_SYSTEM_OVERLAY) != 0;
+    }
+    return true;
 }
 
 esp_err_t display_service_lock(void)
@@ -1199,12 +1232,81 @@ static bool display_service_scene_allows_system_overlay(void)
     return (s_display.scene_flags & DISPLAY_SERVICE_SCENE_FLAG_ALLOW_SYSTEM_OVERLAY) != 0;
 }
 
-static esp_err_t display_service_enter_dummy_draw(const char *owner)
+static void display_service_notify_session_resume(display_service_session_handle_t session)
+{
+    if (display_service_session_valid_unlocked(session) && session->resume_cb != NULL) {
+        session->resume_cb(session, session->resume_user_ctx);
+    }
+}
+
+static esp_err_t display_service_preempt_raw_for(display_service_session_handle_t session)
+{
+    esp_err_t ret = ESP_OK;
+    bool preempted = false;
+
+    ESP_RETURN_ON_FALSE(display_service_session_valid_unlocked(session),
+                        ESP_ERR_INVALID_ARG, TAG, "preempting session invalid");
+    ESP_RETURN_ON_ERROR(display_service_dummy_lock(), TAG, "dummy lock failed");
+    ret = display_service_lock();
+    if (ret != ESP_OK) {
+        display_service_dummy_unlock();
+        return ret;
+    }
+    if (!s_display.dummy_draw_enabled) {
+        display_service_unlock();
+        display_service_dummy_unlock();
+        return ESP_OK;
+    }
+
+    display_service_session_handle_t current = s_display.dummy_session;
+    if (!display_service_session_valid_unlocked(current) ||
+            current->mode != DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW ||
+            !(current->flags & DISPLAY_SERVICE_SESSION_FLAG_PREEMPTIBLE) ||
+            current->suspended || session->preempted_session != NULL) {
+        display_service_unlock();
+        display_service_dummy_unlock();
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    display_service_delete_dummy_input_blocker_locked();
+    if (!s_display.dummy_draw_suspended && s_display.display != NULL) {
+        ret = esp_lv_adapter_set_dummy_draw(s_display.display, false);
+    }
+    if (ret == ESP_OK) {
+        current->suspended = true;
+        current->exit_gesture_tracking = false;
+        current->exit_gesture_cancelled = false;
+        current->exit_gesture_captured = false;
+        current->exit_request_sent = false;
+        session->preempted_session = current;
+        s_display.dummy_owner = NULL;
+        s_display.dummy_session = NULL;
+        s_display.dummy_draw_enabled = false;
+        s_display.dummy_draw_suspended = false;
+        preempted = true;
+        ESP_LOGI(TAG, "raw display preempted: owner=%s by=%s",
+                 current->owner_name, session->owner_name);
+    } else {
+        (void)display_service_create_dummy_input_blocker_locked();
+    }
+    display_service_unlock();
+    display_service_dummy_unlock();
+
+    if (preempted) {
+        display_service_notify_state_observer(DISPLAY_SERVICE_STATE_EVENT_EXCLUSIVE_RAW_EXITED);
+    }
+    return ret;
+}
+
+static esp_err_t display_service_enter_dummy_draw(display_service_session_handle_t session)
 {
     esp_err_t ret;
     bool entered = false;
+    const char *owner;
 
-    ESP_RETURN_ON_FALSE(owner != NULL, ESP_ERR_INVALID_ARG, TAG, "dummy owner missing");
+    ESP_RETURN_ON_FALSE(display_service_session_valid_unlocked(session),
+                        ESP_ERR_INVALID_ARG, TAG, "dummy session invalid");
+    owner = session->owner_name;
     ESP_RETURN_ON_ERROR(display_service_dummy_lock(), TAG, "dummy lock failed");
     ret = display_service_lock();
     if (ret != ESP_OK) {
@@ -1221,7 +1323,7 @@ static esp_err_t display_service_enter_dummy_draw(const char *owner)
         display_service_dummy_unlock();
         return ESP_ERR_INVALID_STATE;
     }
-    if (s_display.dummy_owner != NULL && !display_service_dummy_owner_matches(owner)) {
+    if (s_display.dummy_session != NULL && s_display.dummy_session != session) {
         display_service_unlock();
         display_service_dummy_unlock();
         return ESP_ERR_INVALID_STATE;
@@ -1240,6 +1342,7 @@ static esp_err_t display_service_enter_dummy_draw(const char *owner)
     }
     if (ret == ESP_OK) {
         s_display.dummy_owner = owner;
+        s_display.dummy_session = session;
         s_display.dummy_draw_enabled = true;
         s_display.dummy_draw_suspended = false;
         entered = true;
@@ -1255,19 +1358,24 @@ static esp_err_t display_service_enter_dummy_draw(const char *owner)
     return ret;
 }
 
-static esp_err_t display_service_exit_dummy_draw(const char *owner)
+static esp_err_t display_service_exit_dummy_draw(display_service_session_handle_t session)
 {
     esp_err_t ret = ESP_OK;
     bool exited = false;
     bool should_stop = false;
+    const char *owner;
 
-    ESP_RETURN_ON_FALSE(owner != NULL, ESP_ERR_INVALID_ARG, TAG, "dummy owner missing");
+    ESP_RETURN_ON_FALSE(display_service_session_valid_unlocked(session),
+                        ESP_ERR_INVALID_ARG, TAG, "dummy session invalid");
+    ESP_RETURN_ON_FALSE(!session->suspended, ESP_ERR_INVALID_STATE,
+                        TAG, "cannot close a preempted raw session");
+    owner = session->owner_name;
     ESP_RETURN_ON_ERROR(display_service_dummy_lock(), TAG, "dummy lock failed");
     if (!s_display.dummy_draw_enabled) {
         display_service_dummy_unlock();
         return ESP_OK;
     }
-    if (!display_service_dummy_owner_matches(owner)) {
+    if (s_display.dummy_session != session || !display_service_dummy_owner_matches(owner)) {
         display_service_dummy_unlock();
         return ESP_ERR_INVALID_STATE;
     }
@@ -1295,6 +1403,7 @@ static esp_err_t display_service_exit_dummy_draw(const char *owner)
         s_display.raw_staging = NULL;
         s_display.raw_staging_bytes = 0;
         s_display.dummy_owner = NULL;
+        s_display.dummy_session = NULL;
         s_display.dummy_draw_enabled = false;
         s_display.dummy_draw_suspended = false;
         should_stop = display_service_should_auto_stop_locked();
@@ -1309,6 +1418,30 @@ static esp_err_t display_service_exit_dummy_draw(const char *owner)
         display_service_stop();
     }
     return ret;
+}
+
+static esp_err_t display_service_restore_preempted_raw(display_service_session_handle_t session)
+{
+    display_service_session_handle_t preempted;
+
+    ESP_RETURN_ON_FALSE(display_service_session_valid_unlocked(session),
+                        ESP_ERR_INVALID_ARG, TAG, "preempting session invalid");
+    preempted = session->preempted_session;
+    if (preempted == NULL) {
+        return ESP_OK;
+    }
+    ESP_RETURN_ON_FALSE(display_service_session_valid_unlocked(preempted) && preempted->suspended,
+                        ESP_ERR_INVALID_STATE, TAG, "preempted session invalid");
+
+    esp_err_t err = display_service_enter_dummy_draw(preempted);
+    if (err != ESP_OK) {
+        return err;
+    }
+    preempted->suspended = false;
+    session->preempted_session = NULL;
+    ESP_LOGI(TAG, "raw display resumed: owner=%s", preempted->owner_name);
+    display_service_notify_session_resume(preempted);
+    return ESP_OK;
 }
 
 static void display_service_swap_rgb565(uint8_t *dst, const uint8_t *src, size_t pixels)
@@ -1401,7 +1534,7 @@ static esp_err_t display_service_dummy_draw_blit_staged_locked(int x_start, int 
     return ESP_OK;
 }
 
-static esp_err_t display_service_dummy_draw_blit(const char *owner,
+static esp_err_t display_service_dummy_draw_blit(display_service_session_handle_t session,
                                                  int x_start,
                                                  int y_start,
                                                  int x_end,
@@ -1412,7 +1545,7 @@ static esp_err_t display_service_dummy_draw_blit(const char *owner,
 {
     esp_err_t ret;
 
-    ESP_RETURN_ON_FALSE(owner != NULL, ESP_ERR_INVALID_ARG, TAG, "dummy owner missing");
+    ESP_RETURN_ON_FALSE(session != NULL, ESP_ERR_INVALID_ARG, TAG, "dummy session missing");
     ESP_RETURN_ON_FALSE(frame_buffer != NULL, ESP_ERR_INVALID_ARG, TAG, "frame buffer missing");
     ESP_RETURN_ON_ERROR(display_service_dummy_lock(), TAG, "dummy lock failed");
     ret = display_service_lock();
@@ -1420,7 +1553,8 @@ static esp_err_t display_service_dummy_draw_blit(const char *owner,
         display_service_dummy_unlock();
         return ret;
     }
-    if (!s_display.dummy_draw_enabled || !display_service_dummy_owner_matches(owner) ||
+    if (!display_service_session_valid_unlocked(session) || session->suspended ||
+            !s_display.dummy_draw_enabled || s_display.dummy_session != session ||
             s_display.display == NULL || s_display.dummy_draw_suspended) {
         ret = ESP_ERR_INVALID_STATE;
     } else if (x_start < 0 || y_start < 0 || x_end <= x_start || y_end <= y_start ||
@@ -1457,6 +1591,8 @@ static void display_service_dummy_draw_suspend_locked(void)
 
 static void display_service_dummy_draw_resume_locked(void)
 {
+    display_service_session_handle_t session = s_display.dummy_session;
+
     if (!s_display.dummy_draw_enabled || !s_display.dummy_draw_suspended || s_display.display == NULL) {
         return;
     }
@@ -1471,6 +1607,7 @@ static void display_service_dummy_draw_resume_locked(void)
     }
     s_display.dummy_draw_suspended = false;
     ESP_LOGI(TAG, "dummy draw resumed");
+    display_service_notify_session_resume(session);
 }
 
 void display_service_exclusive_raw_suspend_locked(void)

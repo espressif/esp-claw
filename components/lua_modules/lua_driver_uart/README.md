@@ -27,6 +27,11 @@ This module describes how to open a UART port and read/write bytes or text lines
   of byte integers `0..255`.
 - `u:available()` → number of bytes currently sitting in the RX buffer.
 - `u:flush_input()` → discard all buffered RX data.
+- `u:wait_tx_done([timeout_ms])` waits for transmission to finish, with a
+  default timeout of 1000 ms. It returns no values on success and raises an
+  error on timeout or driver failure. Use it before changing an RS485
+  transceiver's transmit-enable GPIO; automatic-direction transceivers do not
+  need a GPIO toggle.
 - `u:close()` when you're done. Job shutdown also closes retained handles; explicit close releases resources immediately.
 
 ## Example: AT-command style request/response

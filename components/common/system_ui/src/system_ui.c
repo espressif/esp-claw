@@ -24,6 +24,8 @@ static display_service_touch_observer_handle_t s_touch_observer_handle;
 #define SYSTEM_UI_JOBS_SWIPE_EDGE_PX 32
 #define SYSTEM_UI_JOBS_SWIPE_TRIGGER_PX 54
 #define SYSTEM_UI_JOBS_SWIPE_HORIZONTAL_TOL_PX 48
+#define SYSTEM_UI_PAGE_SWIPE_TRIGGER_PX 54
+#define SYSTEM_UI_PAGE_SWIPE_VERTICAL_TOL_PX 48
 #define SYSTEM_UI_EVENT_TASK_STACK 6144
 #define SYSTEM_UI_EVENT_TASK_PRIO 4
 
@@ -175,6 +177,23 @@ static void system_ui_event_task(void *arg)
         case SYSTEM_UI_WORK_EVENT_NETWORK_STATUS:
             system_ui_handle_network_status_event(&event);
             break;
+        case SYSTEM_UI_WORK_EVENT_PAGE_SWIPE:
+        {
+            system_ui_page_swipe_cb_t cb = NULL;
+            void *user_ctx = NULL;
+            if (event.generation == s_ui.generation && system_ui_callback_lock() == ESP_OK) {
+                cb = s_ui.page_swipe_cb;
+                user_ctx = s_ui.page_swipe_user_ctx;
+                system_ui_callback_unlock();
+            }
+            if (cb != NULL) {
+                esp_err_t err = cb(event.page_swipe_direction, user_ctx);
+                if (err != ESP_OK) {
+                    ESP_LOGW(SYSTEM_UI_TAG, "page swipe callback failed: %s", esp_err_to_name(err));
+                }
+            }
+            break;
+        }
         case SYSTEM_UI_WORK_EVENT_STOP:
         default:
             break;
@@ -246,28 +265,64 @@ static void system_ui_touch_observer_cb(const display_service_touch_snapshot_t *
     if (snapshot == NULL || !s_ui.started) {
         return;
     }
-    if (snapshot->count > 0) {
-        const display_service_touch_point_t *point = &snapshot->points[0];
-        if (s_ui.touch_gesture == SYSTEM_UI_TOUCH_GESTURE_NONE) {
-            s_touch_start_x = point->x;
-            s_touch_start_y = point->y;
-            if (!display_service_has_exclusive_session() && system_ui_system_overlay_allowed() &&
-                    s_touch_start_y <= SYSTEM_UI_JOBS_SWIPE_EDGE_PX) {
+    if (snapshot->count == 0) {
+        s_ui.touch_gesture = SYSTEM_UI_TOUCH_GESTURE_NONE;
+        return;
+    }
+    /* One gesture per contact; multi-touch belongs to the foreground app. */
+    if (snapshot->count != 1) {
+        s_ui.touch_gesture = SYSTEM_UI_TOUCH_GESTURE_CONSUMED;
+        return;
+    }
+
+    const display_service_touch_point_t *point = &snapshot->points[0];
+    if (s_ui.touch_gesture == SYSTEM_UI_TOUCH_GESTURE_NONE) {
+        bool page_swipe_enabled = false;
+        if (system_ui_callback_lock() == ESP_OK) {
+            page_swipe_enabled = s_ui.page_swipe_cb != NULL;
+            system_ui_callback_unlock();
+        }
+        s_touch_start_x = point->x;
+        s_touch_start_y = point->y;
+        s_ui.touch_gesture = SYSTEM_UI_TOUCH_GESTURE_CONSUMED;
+        if (system_ui_system_overlay_allowed() && !s_ui.jobs_visible) {
+            if (display_service_has_exclusive_session()) {
+                if (page_swipe_enabled) {
+                    s_ui.touch_gesture = SYSTEM_UI_TOUCH_GESTURE_EXCLUSIVE_HOME;
+                }
+            } else if (page_swipe_enabled && system_ui_home_clock_is_active_locked()) {
+                s_ui.touch_gesture = SYSTEM_UI_TOUCH_GESTURE_HOME;
+            } else if (s_touch_start_y <= SYSTEM_UI_JOBS_SWIPE_EDGE_PX) {
                 s_ui.touch_gesture = SYSTEM_UI_TOUCH_GESTURE_SHOW_JOBS;
             }
-        } else if (s_ui.touch_gesture == SYSTEM_UI_TOUCH_GESTURE_SHOW_JOBS &&
-                   !s_ui.jobs_visible &&
-                   point->y - s_touch_start_y >= SYSTEM_UI_JOBS_SWIPE_TRIGGER_PX &&
-                   system_ui_abs_i32(point->x - s_touch_start_x) <= SYSTEM_UI_JOBS_SWIPE_HORIZONTAL_TOL_PX) {
-            system_ui_work_event_t event = {
-                .type = SYSTEM_UI_WORK_EVENT_SHOW_JOBS,
-                .generation = s_ui.generation,
-            };
-            (void)system_ui_post_work_event(&event, 0);
-            s_ui.touch_gesture = SYSTEM_UI_TOUCH_GESTURE_NONE;
         }
-    } else {
-        s_ui.touch_gesture = SYSTEM_UI_TOUCH_GESTURE_NONE;
+        return;
+    }
+    if (s_ui.jobs_visible) {
+        return;
+    }
+
+    bool home = s_ui.touch_gesture == SYSTEM_UI_TOUCH_GESTURE_HOME;
+    bool exclusive_home = s_ui.touch_gesture == SYSTEM_UI_TOUCH_GESTURE_EXCLUSIVE_HOME;
+    if ((home || exclusive_home || s_ui.touch_gesture == SYSTEM_UI_TOUCH_GESTURE_SHOW_JOBS) &&
+            point->y - s_touch_start_y >= SYSTEM_UI_JOBS_SWIPE_TRIGGER_PX &&
+            system_ui_abs_i32(point->x - s_touch_start_x) <= SYSTEM_UI_JOBS_SWIPE_HORIZONTAL_TOL_PX) {
+        system_ui_work_event_t event = {
+            .type = SYSTEM_UI_WORK_EVENT_SHOW_JOBS,
+            .generation = s_ui.generation,
+        };
+        (void)system_ui_post_work_event(&event, 0);
+        s_ui.touch_gesture = SYSTEM_UI_TOUCH_GESTURE_CONSUMED;
+    } else if (((home && point->x - s_touch_start_x >= SYSTEM_UI_PAGE_SWIPE_TRIGGER_PX) ||
+                (exclusive_home && s_touch_start_x - point->x >= SYSTEM_UI_PAGE_SWIPE_TRIGGER_PX)) &&
+               system_ui_abs_i32(point->y - s_touch_start_y) <= SYSTEM_UI_PAGE_SWIPE_VERTICAL_TOL_PX) {
+        system_ui_work_event_t event = {
+            .type = SYSTEM_UI_WORK_EVENT_PAGE_SWIPE,
+            .generation = s_ui.generation,
+            .page_swipe_direction = home ? SYSTEM_UI_PAGE_SWIPE_PREVIOUS : SYSTEM_UI_PAGE_SWIPE_NEXT,
+        };
+        (void)system_ui_post_work_event(&event, 0);
+        s_ui.touch_gesture = SYSTEM_UI_TOUCH_GESTURE_CONSUMED;
     }
 }
 
@@ -299,6 +354,9 @@ static void system_ui_state_observer_cb(display_service_state_event_t event, voi
         }
         break;
     case DISPLAY_SERVICE_STATE_EVENT_EXCLUSIVE_RAW_ENTERED:
+        if (!display_service_exclusive_allows_system_overlay() && s_ui.jobs_visible) {
+            system_ui_jobs_set_visible_locked(false);
+        }
         break;
     case DISPLAY_SERVICE_STATE_EVENT_EXCLUSIVE_LVGL_EXITED:
     case DISPLAY_SERVICE_STATE_EVENT_EXCLUSIVE_RAW_EXITED:
@@ -349,6 +407,8 @@ static void system_ui_clear_callbacks_locked(void)
     s_ui.jobs_action_user_ctx = NULL;
     s_ui.jobs_stop_all_cb = NULL;
     s_ui.jobs_stop_all_user_ctx = NULL;
+    s_ui.page_swipe_cb = NULL;
+    s_ui.page_swipe_user_ctx = NULL;
     s_ui.launcher_select_cb = NULL;
     s_ui.launcher_select_user_ctx = NULL;
     system_ui_callback_unlock();
@@ -479,6 +539,17 @@ esp_err_t system_ui_set_callbacks(const system_ui_callbacks_t *callbacks, void *
                         SYSTEM_UI_TAG, "set task action callback failed");
     ESP_RETURN_ON_ERROR(system_ui_jobs_set_stop_all_callback(callbacks->on_stop_all_tasks, user_ctx),
                         SYSTEM_UI_TAG, "set stop-all task callback failed");
+    return ESP_OK;
+}
+
+esp_err_t system_ui_set_page_swipe_callback(system_ui_page_swipe_cb_t cb, void *user_ctx)
+{
+    ESP_RETURN_ON_FALSE(s_ui.started, ESP_ERR_INVALID_STATE,
+                        SYSTEM_UI_TAG, "system UI not started");
+    ESP_RETURN_ON_ERROR(system_ui_callback_lock(), SYSTEM_UI_TAG, "callback lock failed");
+    s_ui.page_swipe_cb = cb;
+    s_ui.page_swipe_user_ctx = user_ctx;
+    system_ui_callback_unlock();
     return ESP_OK;
 }
 

@@ -50,9 +50,11 @@ typedef enum {
 typedef enum {
     DISPLAY_SERVICE_SESSION_FLAG_RESTORE_DEFAULT_ON_RELEASE = 1 << 0,
     DISPLAY_SERVICE_SESSION_FLAG_ALLOW_SYSTEM_OVERLAY       = 1 << 1,
+    DISPLAY_SERVICE_SESSION_FLAG_PREEMPTIBLE                = 1 << 2,
 } display_service_session_flags_t;
 
 typedef void (*display_service_session_cleanup_cb_t)(display_service_session_handle_t session, void *user_ctx);
+typedef void (*display_service_session_resume_cb_t)(display_service_session_handle_t session, void *user_ctx);
 typedef void (*display_service_session_exit_request_cb_t)(display_service_session_handle_t session, void *user_ctx);
 
 typedef struct {
@@ -66,9 +68,11 @@ typedef struct {
     display_service_config_t display_config;
     /** Optional cleanup invoked while the session is being closed. */
     display_service_session_cleanup_cb_t cleanup_cb;
+    /** Optional redraw notification after a suspended RAW session resumes. */
+    display_service_session_resume_cb_t resume_cb;
     /** Optional non-blocking request to exit an exclusive session. */
     display_service_session_exit_request_cb_t exit_request_cb;
-    /** Opaque context passed unchanged to both session callbacks. */
+    /** Opaque context passed unchanged to all session callbacks. */
     void *user_ctx;
 } display_service_session_config_t;
 
