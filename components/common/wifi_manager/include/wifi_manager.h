@@ -33,6 +33,10 @@ typedef struct {
     bool sta_connected;
     bool ap_active;
     bool sta_configured;
+    /* RSSI in dBm and primary channel of the BSS currently associated with.
+     * Both are 0 when the station is not connected. */
+    int8_t sta_rssi;
+    uint8_t sta_channel;
     const char *sta_ip;
     const char *ap_ip;
     const char *ap_ssid;
@@ -41,6 +45,9 @@ typedef struct {
 
 typedef struct {
     char ssid[33];
+    /* A BSSID identifies one BSS, so two access points publishing the same
+     * SSID stay distinguishable. */
+    uint8_t bssid[6];
     int8_t rssi;
     uint8_t primary;
     wifi_auth_mode_t authmode;

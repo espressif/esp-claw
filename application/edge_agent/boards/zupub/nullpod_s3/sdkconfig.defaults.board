@@ -1,0 +1,37 @@
+# Board defaults for NullPod (ESP32-S3, 16 MB flash + 8 MB OPI PSRAM)
+# The stock firmware builds with board_build.arduino.memory_type = qio_opi.
+
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# Flash: 16 MB, QIO 80 MHz
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+
+# 16 MB partition layout (system / storage / ota)
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_16MB.csv"
+
+# PSRAM: 8 MB octal, 80 MHz
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+
+# Console over the native USB-Serial/JTAG port (USB CDC on boot)
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# The panel is driven by the board-managed display_lcd device, so expose the
+# Lua LCD module. LCD is not default-y and must be listed explicitly, or the
+# module is compiled out.
+CONFIG_APP_CLAW_LUA_MODULE_LCD=y
+
+# On-board input / output peripherals are exposed to Lua. KNOB, IR and IMU are
+# not default-y, so they must be listed or the modules are compiled out. Button
+# and LED strip are default-y; they are listed explicitly so a reused sdkconfig
+# cannot freeze them back to n (see README §5.7).
+CONFIG_APP_CLAW_LUA_MODULE_BUTTON=y
+CONFIG_APP_CLAW_LUA_MODULE_KNOB=y
+CONFIG_APP_CLAW_LUA_MODULE_LED_STRIP=y
+CONFIG_APP_CLAW_LUA_MODULE_IR=y
+CONFIG_APP_CLAW_LUA_MODULE_IMU=y

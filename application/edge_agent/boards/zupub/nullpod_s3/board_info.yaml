@@ -1,0 +1,5 @@
+board: nullpod_s3
+chip: esp32s3
+version: 1.0.0
+description: "NullPod ESP32-S3 handheld (ST7789 240x280 LCD, CST816S touch, BMI270/QMC5883P/PCF8563/BMP280, SPI SD)"
+manufacturer: "NullPod"

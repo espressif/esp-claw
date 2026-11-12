@@ -1,0 +1,82 @@
+version: 1.0.0
+# Peripherals Configuration for NullPod (ESP32-S3, 16 MB flash + 8 MB OPI PSRAM)
+#
+# Pin assignment taken from the stock NullPod firmware (src/hal/hal_config.h):
+#   LCD (ST7789)   : SCLK=6, MOSI=7, CS=5, DC=4, RST=8, BL=15
+#   Touch (CST816S): shares I2C0 (SDA=11, SCL=10), RST=13, IRQ=14
+#   SD card (SPI)  : SCLK=39, MISO=40, MOSI=38, CS=41
+#   Power          : PWR_HOLD=18 (must be driven high), PWR_KEY=17
+#   Misc           : Buzzer=46, RGB=45, IR TX=42, Battery ADC=1
+
+peripherals:
+  # Shared I2C bus: CST816S touch, BMI270 IMU, QMC5883P magnetometer,
+  # PCF8563 RTC and BMP280 barometer all hang off this bus.
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 11
+        scl: 10
+
+  # LCD bus: write-only SPI (the panel has no MISO line).
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        mosi_io_num: 7
+        miso_io_num: -1
+        sclk_io_num: 6
+        quadwp_io_num: -1
+        quadhd_io_num: -1
+        max_transfer_sz: 134400   # one full 240x280 RGB565 frame
+
+  # SD card slot on its own SPI bus.
+  - name: spi_sdcard
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI3_HOST
+        mosi_io_num: 38
+        miso_io_num: 40
+        sclk_io_num: 39
+        quadwp_io_num: -1
+        quadhd_io_num: -1
+        max_transfer_sz: 4096
+
+  # LCD backlight: GPIO15 driven by LEDC PWM. The stock NullPod firmware also
+  # runs the backlight PWM at 44.1 kHz so the panel does not whine audibly.
+  - name: ledc_backlight
+    type: ledc
+    role: none
+    config:
+      gpio_num: 15
+      channel: LEDC_CHANNEL_0
+      timer_sel: LEDC_TIMER_0
+      freq_hz: 44100
+      duty_resolution: LEDC_TIMER_10_BIT
+      duty: 0
+      output_invert: false
+
+  # Hardware power latch: the board cuts power when this pin drops, so it
+  # must be driven high as early as possible (peripherals init before devices).
+  - name: gpio_pwr_hold
+    type: gpio
+    config:
+      pin: 18
+      mode: GPIO_MODE_OUTPUT
+      default_level: 1
+
+  # Power key, active low.
+  - name: gpio_pwr_key
+    type: gpio
+    config:
+      pin: 17
+      mode: GPIO_MODE_INPUT
+      pull_up: true
+      pull_down: false
+      intr_type: GPIO_INTR_DISABLE
