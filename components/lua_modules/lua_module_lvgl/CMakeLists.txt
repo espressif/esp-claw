@@ -16,6 +16,7 @@ idf_component_register(
         "src/lua_lvgl_parse.c"
         "src/lua_lvgl_runtime.c"
         "src/lua_lvgl_style.c"
+        "src/lua_lvgl_symbols.c"
         "src/lua_lvgl_value.c"
     INCLUDE_DIRS
         "src"
