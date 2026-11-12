@@ -1,0 +1,5 @@
+board: ESP32-S3-Touch-LCD-1.69
+chip: esp32s3
+version: 1.0.0
+description: ESP32-S3-Touch-LCD-1.69 with 16MB Flash and 8MB PSRAM
+manufacturer: waveshare

@@ -1,0 +1,81 @@
+# Peripherals Configuration
+peripherals:
+  - name: ST7789V2 4-wire SPI
+    type: spi
+    config:
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        data0_io_num: 7
+        data1_io_num: -1
+        sclk_io_num: 6
+        data2_io_num: -1
+        data3_io_num: -1
+        data4_io_num: -1
+        data5_io_num: -1
+        data6_io_num: -1
+        data7_io_num: -1
+        data_io_default_level: false
+        max_transfer_sz: 4092
+        dma_burst_size: 0
+        flags: 0
+        isr_cpu_id: ESP_INTR_CPU_AFFINITY_AUTO
+        intr_flags: 0
+
+  - name: Shared I2C Bus (Touch 0x15, IMU 0x6B, RTC 0x51)
+    type: i2c
+    config:
+      port: 0
+      clk_source: I2C_CLK_SRC_DEFAULT
+      pins:
+        sda: 11
+        scl: 10
+      enable_internal_pullup: true
+      glitch_count: 7
+      intr_priority: 1
+
+  - name: LCD Backlight
+    type: gpio
+    config:
+      pin: 15
+      mode: GPIO_MODE_OUTPUT
+      pull_up: false
+      pull_down: false
+      intr_type: GPIO_INTR_DISABLE
+      default_level: 1
+
+  - name: Buzzer
+    type: gpio
+    config:
+      pin: 42
+      mode: GPIO_MODE_OUTPUT
+      pull_up: false
+      pull_down: false
+      intr_type: GPIO_INTR_DISABLE
+      default_level: 0
+
+  - name: Battery ADC
+    type: adc
+    config:
+      pin: 1
+      atten: ADC_ATTEN_DB_12
+      unit: ADC_UNIT_1
+
+  - name: Power Control SYS_OUT
+    type: gpio
+    config:
+      pin: 40
+      mode: GPIO_MODE_INPUT_OUTPUT
+      pull_up: true
+      pull_down: false
+      intr_type: GPIO_INTR_DISABLE
+      default_level: 1
+
+  - name: Power Control SYS_EN
+    type: gpio
+    config:
+      pin: 41
+      mode: GPIO_MODE_OUTPUT
+      pull_up: false
+      pull_down: false
+      intr_type: GPIO_INTR_DISABLE
+      default_level: 1
