@@ -1,0 +1,7 @@
+# Python virtual environment
+venv/
+__pycache__/
+*.pyc
+
+# Arduino build artifacts
+arduino_claw_uno/build/
