@@ -1,0 +1,118 @@
+# Devices Configuration
+devices:
+  - name: OV3660
+    version: 1.0.0
+    type: camera
+    sub_type: dvp
+    config:
+      dvp_config:
+        reset_io: -1
+        pwdn_io: -1
+        vsync_io: 6
+        data_width: CAM_CTLR_DATA_WIDTH_8
+        de_io: 7
+        pclk_io: 13
+        xclk_io: 15
+        xclk_freq: 20000000
+        data_io:
+          data_io_0: 11
+          data_io_1: 9
+          data_io_2: 8
+          data_io_3: 10
+          data_io_4: 12
+          data_io_5: 18
+          data_io_6: 17
+          data_io_7: 16
+          data_io_8: -1
+          data_io_9: -1
+          data_io_10: -1
+          data_io_11: -1
+          data_io_12: -1
+          data_io_13: -1
+          data_io_14: -1
+          data_io_15: -1
+    peripherals:
+      - name: i2c_0
+        frequency: 100000
+
+  - name: LCD_ST7789
+    version: 1.0.0
+    chip: st7789
+    type: display_lcd
+    sub_type: spi
+    config:
+      invert_color: false
+      need_reset: true
+      swap_xy: false
+      mirror_x: false
+      mirror_y: false
+      x_max: 240
+      y_max: 240
+      io_spi_config:
+        cs_gpio_num: 45
+        dc_gpio_num: 47
+        spi_mode: 0
+        pclk_hz: 40000000
+        trans_queue_depth: 2
+        lcd_cmd_bits: 8
+        lcd_param_bits: 8
+        cs_ena_pretrans: 0
+        cs_ena_posttrans: 0
+        flags:
+          dc_high_on_cmd: false
+          dc_low_on_data: false
+          dc_low_on_param: false
+          octal_mode: false
+          quad_mode: false
+          sio_mode: false
+          lsb_first: false
+          cs_high_active: false
+      lcd_panel_config:
+        reset_gpio_num: 21
+        rgb_ele_order: LCD_RGB_ELEMENT_ORDER_RGB
+        data_endian: LCD_RGB_DATA_ENDIAN_BIG
+        bits_per_pixel: 16
+        flags:
+          reset_active_high: false
+      io_3wire_spi_config:
+        line_config:
+          cs_io_type: IO_TYPE_GPIO
+          scl_io_type: IO_TYPE_GPIO
+          sda_io_type: IO_TYPE_GPIO
+    peripherals:
+      - name: spi_0
+
+  - name: INMP441
+    version: 1.0.0
+    type: audio_codec
+    config:
+      adc_enabled: false
+      adc_max_channel: 0
+      adc_channel_mask: '0011'
+      adc_channel_labels: []
+      adc_init_gain: 0
+      mclk_enabled: false
+      aec: false
+      eq: false
+      alc: false
+    peripherals:
+      - name: i2s_0
+
+  - name: MAX98357A
+    version: 1.0.0
+    type: audio_codec
+    config:
+      dac_enabled: false
+      dac_max_channel: 0
+      dac_channel_mask: '0'
+      dac_init_gain: 0
+      mclk_enabled: false
+      aec: false
+      eq: false
+      alc: false
+    peripherals:
+      - name: i2s_1
+        clk_src: 0
+        tx_aux_out_io: -1
+        tx_aux_out_line: 0
+        tx_aux_out_invert: false
