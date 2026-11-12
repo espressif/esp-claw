@@ -22,6 +22,9 @@ local ROUND_DOT, ROUND_DOT_STEP = 4, 9
 -- Round panels below this side length shrink rows so the narrow body still shows two of them.
 local ROUND_SMALL_MAX_SIDE = 300
 local ROUND_SMALL = { button_h = 34, tab_h = 34, row_h = 48, icon = 34, detail_icon = 44, row_title_y = 3, row_sub_y = 25 }
+local S = lvgl.SYMBOL
+local ICONS = { back = S.LEFT, refresh = S.REFRESH, settings = S.SETTINGS }
+local TAB_ICONS = { S.TH_LARGE, S.GAMEPAD, S.TOOLS, S.DOWNLOAD }
 local C = {
     bg = "#0b0e10", panel = "#121619", surface = "#1b2025", selected = "#202b27",
     text = "#f5f7f8", muted = "#929ba5", accent = "#43e98b", danger = "#ff5c65", line = "#2a3137"
@@ -180,42 +183,41 @@ local function button(parent, text, x, y, w, action, kind, h)
     return b
 end
 
+-- Icons use the title font so glyphs stay legible next to the body text.
 local function icon_button(parent, icon, x, y, w, action, kind, h)
-    h = h or M.button_h
-    local b = button(parent, "", x, y, w, action, kind, h)
-    local scale = h <= 30 and 0.72 or 1
-    local ox, oy = math.floor((w - 24 * scale) / 2), math.floor((h - 24 * scale) / 2)
-    local color = (kind == "accent" or kind == "danger") and C.bg or C.text
-    local function points(values)
-        local result = {}
-        for _, value in ipairs(values) do result[#result + 1] = { x = math.floor(ox + value[1] * scale), y = math.floor(oy + value[2] * scale) } end
-        return result
-    end
-    local function stroke(values)
-        return lvgl.line(b, { points = points(values), line_color = color, line_width = 2 })
-    end
-    if icon == "back" then
-        stroke({ { 16, 5 }, { 7, 12 }, { 16, 19 } })
-        stroke({ { 7, 12 }, { 21, 12 } })
-    elseif icon == "refresh" then
-        stroke({ { 19, 7 }, { 14, 5 }, { 9, 7 }, { 6, 11 }, { 6, 16 }, { 9, 20 }, { 14, 21 }, { 19, 18 } })
-        stroke({ { 18, 3 }, { 19, 7 }, { 15, 8 } })
-    else
-        stroke({ { 5, 7 }, { 19, 7 } })
-        stroke({ { 5, 12 }, { 19, 12 } })
-        stroke({ { 5, 17 }, { 19, 17 } })
-        stroke({ { 9, 4 }, { 9, 10 } })
-        stroke({ { 15, 9 }, { 15, 15 } })
-        stroke({ { 11, 14 }, { 11, 20 } })
-    end
+    local b = button(parent, ICONS[icon], x, y, w, action, kind, h)
+    b:set_style({ font = title_font })
     return b
+end
+
+local function tab_names()
+    return { t("all"), t("games"), t("tools"), t("local_apps") }
+end
+
+-- Icon followed by text, e.g. for action buttons and install states.
+local function with_icon(icon, text)
+    return icon .. " " .. text
+end
+
+-- Tab captions: icon and name when every name fits, otherwise icons alone so the tabs stay uniform.
+local function tab_texts(pixels)
+    local texts = {}
+    for index, name in ipairs(tab_names()) do
+        texts[index] = with_icon(TAB_ICONS[index], name)
+        if compact(texts[index], pixels, M.font_unit) ~= texts[index] then return TAB_ICONS end
+    end
+    return texts
+end
+
+local function app_placeholder(holder)
+    lvgl.label(holder, { text = S.TH_LARGE, align = "center", text_color = C.muted, font = title_font })
 end
 
 local function app_icon(parent, item, x, y, size)
     local holder = box(parent, x, y, size, size, C.surface, M.radius)
     local path = cache .. "/" .. item.id .. ".jpg"
     if not storage.exists(path) then
-        label(holder, "APP", 0, math.floor((size - M.text_h) / 2), size, M.text_h, C.muted)
+        app_placeholder(holder)
         return holder
     end
     local frames = {}
@@ -226,7 +228,7 @@ local function app_icon(parent, item, x, y, size)
         view:set_raw_rgb565(size, size, frames[2]:data())
     end)
     for _, frame in ipairs(frames) do frame:release() end
-    if not ok then print("[AppStore] image: " .. tostring(err)); label(holder, "APP", 0, math.floor((size - M.text_h) / 2), size, M.text_h, C.muted) end
+    if not ok then print("[AppStore] image: " .. tostring(err)); app_placeholder(holder) end
     return holder
 end
 
@@ -272,7 +274,7 @@ local function render_list(parent, x, y, w, h)
     local list = lvgl.object(parent, { x = x, y = y, w = w, h = h, pad = 0, border_width = 0, bg_opa = 0 })
     list:set_scroll({ dir = "ver", scrollbar = "auto" })
     local filtered = visible_items()
-    if #filtered == 0 then label(list, t("empty"), M.pad, M.pad, w - M.pad * 2, M.text_h * 3, C.muted); return end
+    if #filtered == 0 then label(list, with_icon(S.BOX_OPEN, t("empty")), M.pad, M.pad, w - M.pad * 2, M.text_h * 3, C.muted); return end
     for index, item in ipairs(filtered) do
         local current, row_y = item, (index - 1) * M.row_h
         local row = box(list, 0, row_y, w - 2, M.row_h, selected and selected.id == item.id and C.selected or C.panel)
@@ -282,7 +284,7 @@ local function render_list(parent, x, y, w, h)
         local text_x, text_w = M.gap * 2 + M.icon, w - M.gap * 3 - M.icon
         local state = installed(item.id)
         label(row, compact(item.title, text_w, M.font_unit), text_x, M.row_title_y, text_w, M.text_h, C.text)
-        label(row, compact(state and t(state) or item.description, text_w, M.font_unit), text_x, M.row_sub_y, text_w, M.text_h, state and C.accent or C.muted)
+        label(row, compact(state and with_icon(S.OK, t(state)) or item.description, text_w, M.font_unit), text_x, M.row_sub_y, text_w, M.text_h, state and C.accent or C.muted)
         line(list, M.gap, row_y + M.row_h - 1, w - M.gap * 2)
     end
 end
@@ -290,10 +292,10 @@ end
 local function action_for(item)
     local state = installed(item.id)
     local protected = state == "builtin" or item.id == "app_store"
-    if task then return t("working"), nil end
-    if protected then return t("protected"), nil end
-    if not state then return t("install"), "accent" end
-    return confirm and t("confirm_uninstall") or t("uninstall"), "danger"
+    if task then return with_icon(S.REFRESH, t("working")), nil end
+    if protected then return with_icon(S.LOCK, t("protected")), nil end
+    if not state then return with_icon(S.DOWNLOAD, t("install")), "accent" end
+    return confirm and with_icon(S.WARNING, t("confirm_uninstall")) or with_icon(S.TRASH, t("uninstall")), "danger"
 end
 
 local function perform_item_action()
@@ -320,7 +322,7 @@ local function render_detail(parent, x, y, w, h, external_action)
     app_icon(scroll, item, M.pad, top, M.detail_icon)
     local info_x = M.pad * 2 + M.detail_icon
     label(scroll, compact(item.title, w - info_x - M.pad, M.title_unit), info_x, top, w - info_x - M.pad, M.title_h, C.text, true)
-    label(scroll, state and t(state) or t("available"), info_x, top + M.title_h + 2, w - info_x - M.pad, M.text_h, state and C.accent or C.muted)
+    label(scroll, state and with_icon(S.OK, t(state)) or t("available"), info_x, top + M.title_h + 2, w - info_x - M.pad, M.text_h, state and C.accent or C.muted)
     label(scroll, string.format("%s  %.0f KB", t("size"), (tonumber(item.totalSize) or 0) / 1024), info_x, top + M.title_h + M.text_h + 4, w - info_x - M.pad, M.text_h, C.muted)
     local description = confirm and t("uninstall_confirm") or item.description or ""
     local desc_y = top + M.detail_icon + M.gap * 2
@@ -387,7 +389,7 @@ local function render_settings(parent, x, y, w, h)
     local inner_w, cursor = view_w - M.pad * 2, M.pad
     label(form, t("language"), M.pad, cursor, inner_w, M.text_h, C.muted)
     cursor = cursor + M.text_h + M.gap
-    local language_select = lvgl.dropdown(form, { x = M.pad, y = cursor, w = inner_w, h = M.button_h, options = { "English", "中文" }, selected = language == "zh" and 2 or 1, symbol = " ", font = font, bg_color = C.surface, text_color = C.text, border_color = C.line, border_width = 1, radius = M.radius })
+    local language_select = lvgl.dropdown(form, { x = M.pad, y = cursor, w = inner_w, h = M.button_h, options = { "English", "中文" }, selected = language == "zh" and 2 or 1, font = font, bg_color = C.surface, text_color = C.text, border_color = C.line, border_width = 1, radius = M.radius })
     language_select:on("value_changed", function() change_language(language_select:get_value() == 2 and "zh" or "en") end)
     cursor = cursor + M.button_h + M.gap * 2
     label(form, t("server"), M.pad, cursor, inner_w, M.text_h, C.muted)
@@ -404,8 +406,8 @@ local function render_settings(parent, x, y, w, h)
     cursor = cursor + M.button_h + M.gap * 2
     local stacked = inner_w < 330
     local danger_w = stacked and inner_w or math.floor((inner_w - M.gap) / 2)
-    local cache_text = settings_confirm == "cache" and t("confirm") or t("clear_cache")
-    local apps_text = settings_confirm == "apps" and t("confirm") or t("clear_apps")
+    local cache_text = settings_confirm == "cache" and with_icon(S.WARNING, t("confirm")) or with_icon(S.TRASH, t("clear_cache"))
+    local apps_text = settings_confirm == "apps" and with_icon(S.WARNING, t("confirm")) or with_icon(S.TRASH, t("clear_apps"))
     button(form, cache_text, M.pad, cursor, danger_w, function()
         if task then notice = t("busy"); return end
         if settings_confirm == "cache" then clear_cache() else settings_confirm, notice, dirty = "cache", t("confirm_cache"), true end
@@ -417,7 +419,7 @@ local function render_settings(parent, x, y, w, h)
         if settings_confirm == "apps" then start("clear_apps") else settings_confirm, notice, dirty = "apps", t("confirm_apps"), true end
     end, "danger")
     cursor = apps_y + M.button_h + M.gap * 2
-    button(form, t("save"), M.pad, cursor, inner_w, function()
+    button(form, with_icon(S.SAVE, t("save")), M.pad, cursor, inner_w, function()
         local value = normalize_server(server_draft)
         if not value then notice = t("invalid_url"); dirty = true; return end
         server = value
@@ -437,10 +439,6 @@ end
 
 local function open_settings()
     page, settings_confirm, dirty = "settings", nil, true
-end
-
-local function tab_names()
-    return { t("all"), t("games"), t("tools"), t("local_apps") }
 end
 
 local function layout()
@@ -501,12 +499,12 @@ local function render_compact()
     end
     line(screen, 0, M.header_h - 1, width)
     if page == "catalog" then
-        local names = M.tiny and (language == "zh" and { "全", "游", "工", "装" } or { "A", "G", "T", "L" }) or tab_names()
         local tx, tw = fit(0, width, content_y, M.tab_h)
-        local tab_w = math.floor(tw / 4)
-        for index, name in ipairs(names) do
+        local tab_w = math.floor(tw / #TAB_ICONS)
+        local captions = tab_texts(tab_w - M.gap)
+        for index = 1, #TAB_ICONS do
             local current = index
-            local b = button(screen, name, tx + (index - 1) * tab_w, content_y, index == 4 and tw - tab_w * 3 or tab_w, function() switch_tab(current) end, index == tab and "accent" or nil, M.tab_h)
+            local b = button(screen, captions[index], tx + (index - 1) * tab_w, content_y, index == #TAB_ICONS and tw - tab_w * (#TAB_ICONS - 1) or tab_w, function() switch_tab(current) end, index == tab and "accent" or nil, M.tab_h)
             b:set_style({ radius = 0 })
         end
         local list_y, list_h = content_y + M.tab_h, content_h - M.tab_h
@@ -525,7 +523,7 @@ local function render_round()
     local head_y = frame:top_for(head_w, M.tab_h) or M.pad
     if page == "catalog" then
         local names = tab_names()
-        local pill = button(screen, compact(names[tab], head_w - gap * 2, M.font_unit), math.floor((width - head_w) / 2), head_y, head_w, function() switch_tab(tab % #names + 1) end, nil, M.tab_h)
+        local pill = button(screen, tab_texts(head_w - gap * 2)[tab], math.floor((width - head_w) / 2), head_y, head_w, function() switch_tab(tab % #names + 1) end, nil, M.tab_h)
         local dots_x = math.floor((head_w - ROUND_DOT_STEP * (#names - 1) - ROUND_DOT) / 2)
         for index = 1, #names do
             local dot = box(pill, dots_x + (index - 1) * ROUND_DOT_STEP, M.tab_h - ROUND_DOT - 3, ROUND_DOT, ROUND_DOT, index == tab and C.accent or C.line, ROUND_DOT)
@@ -590,7 +588,7 @@ local function render_wide()
     for index, name in ipairs(tab_names()) do
         local current = index
         local sx, sw = fit(0, M.sidebar_w, content_y + y, M.button_h)
-        button(sidebar, name, sx + M.pad, y, sw - M.pad * 2, function() switch_tab(current) end, page == "catalog" and tab == index and "accent" or nil)
+        button(sidebar, with_icon(TAB_ICONS[index], name), sx + M.pad, y, sw - M.pad * 2, function() switch_tab(current) end, page == "catalog" and tab == index and "accent" or nil)
         y = y + M.button_h + M.gap
     end
     vline(screen, M.sidebar_w - 1, content_y, content_h)
