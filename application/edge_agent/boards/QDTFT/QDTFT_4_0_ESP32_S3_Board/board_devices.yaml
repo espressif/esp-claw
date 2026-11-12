@@ -1,0 +1,92 @@
+# Devices Configuration for QDTFT 4.0 ESP32-S3 Board
+version: 1.0.0
+devices:
+
+  # LCD: ST7796 320x480 via SPI
+  - name: display_lcd
+    chip: st7796
+    type: display_lcd
+    sub_type: spi
+    version: default
+    dependencies:
+      espressif/esp_lcd_st7796: "*"
+    config:
+      mirror_x: true
+      mirror_y: false
+      x_max: 320
+      y_max: 480
+      invert_color: false
+      io_spi_config:
+        cs_gpio_num: 10
+        dc_gpio_num: 46
+        spi_mode: 0
+        pclk_hz: 40000000
+        lcd_cmd_bits: 8
+        lcd_param_bits: 8
+        flags:
+          sio_mode: false
+      lcd_panel_config:
+        reset_gpio_num: -1
+        rgb_ele_order: LCD_RGB_ELEMENT_ORDER_BGR
+        bits_per_pixel: 16
+        data_endian: LCD_RGB_DATA_ENDIAN_BIG
+        flags:
+          reset_active_high: false
+        vendor_config: NULL
+    peripherals:
+      - name: spi_master
+
+  # LCD Brightness Control via LEDC
+  - name: lcd_brightness
+    type: ledc_ctrl
+    version: default
+    config:
+      default_percent: 100
+    peripherals:
+      - name: ledc_backlight
+
+  # Touch Panel: FT6336U via I2C (7-bit address 0x38, 8-bit 0x70)
+  - name: lcd_touch
+    chip: ft5x06
+    type: lcd_touch
+    sub_type: i2c
+    version: default
+    dependencies:
+      esp_lcd_touch:
+        version: "*"
+        require: public
+      espressif/esp_lcd_touch_ft5x06: "^1.0.0"
+    config:
+      io_i2c_config:
+        lcd_cmd_bits: 8
+        scl_speed_hz: 400000
+      touch_config:
+        rst_gpio_num: 18
+        int_gpio_num: 17
+        levels:
+          reset: 0
+          interrupt: 0
+        x_max: 320
+        y_max: 480
+        flags:
+          swap_xy: false
+          mirror_x: false
+          mirror_y: false
+    peripherals:
+      - name: i2c_master
+        i2c_addr: [0x70]
+
+  # LED strip: 1x WS2812
+  - name: led_strip
+    chip: ws2812
+    type: custom
+    version: default
+    init_skip: true
+    dependencies:
+      espressif/led_strip:
+        version: "^3.0"
+        public: true
+    config:
+      max_leds: 1
+    peripherals:
+      - name: rmt_tx

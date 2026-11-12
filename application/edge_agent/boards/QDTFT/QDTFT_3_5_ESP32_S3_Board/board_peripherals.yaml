@@ -1,0 +1,52 @@
+version: 1.0.0
+# Peripherals Configuration for QDTFT 3.5 ESP32-S3 Board
+
+peripherals:
+  # SPI bus - ST77922 320x480 QSPI LCD
+  # QSPI data lines: D0=IO11, D1=IO13, D2=IO14, D3=IO9
+  # max_transfer_sz: 307200 bytes = 320 * 480 * 2 (full frame RGB565)
+  - name: spi_master
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI2_HOST
+        mosi_io_num: 11
+        miso_io_num: 13
+        quadwp_io_num: 14
+        quadhd_io_num: 9
+        sclk_io_num: 12
+        max_transfer_sz: 307200
+
+  # LCD Backlight Control - GPIO41 via LEDC
+  - name: ledc_backlight
+    type: ledc
+    version: default
+    config:
+      gpio_num: 41
+      speed_mode: LEDC_LOW_SPEED_MODE
+      channel: 0
+      timer_sel: 0
+      freq_hz: 5000
+      duty: 1023
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false
+
+  # LED strip RMT TX - WS2812 on GPIO40
+  - name: rmt_tx
+    type: rmt
+    role: tx
+    config:
+      gpio_num: 40
+      clk_src: RMT_CLK_SRC_DEFAULT
+      resolution_hz: 10000000
+      mem_block_symbols: 64
+      trans_queue_depth: 4
+      intr_priority: 1
+      flags:
+        invert_out: false
+        with_dma: true
+        io_loop_back: false
+        io_od_mode: false
+        allow_pd: false
+        init_level: false
