@@ -7,8 +7,20 @@
 
 #include "esp_err.h"
 #include "lauxlib.h"
+#include "sdkconfig.h"
 #include "esp_board_manager_includes.h"
 #include "cap_lua.h"
+
+#if CONFIG_LUA_MODULE_BOARD_MANAGER_DISPLAY_SHAPE_CIRCLE
+#define BM_DISPLAY_SHAPE         "circle"
+#define BM_DISPLAY_CORNER_RADIUS 0
+#elif CONFIG_LUA_MODULE_BOARD_MANAGER_DISPLAY_SHAPE_ROUNDED_RECT
+#define BM_DISPLAY_SHAPE         "rounded_rect"
+#define BM_DISPLAY_CORNER_RADIUS CONFIG_LUA_MODULE_BOARD_MANAGER_DISPLAY_CORNER_RADIUS
+#else
+#define BM_DISPLAY_SHAPE         "rect"
+#define BM_DISPLAY_CORNER_RADIUS 0
+#endif
 
 static int push_err(lua_State *L, esp_err_t err, const char *msg)
 {
@@ -64,11 +76,22 @@ static int lua_bm_get_camera_paths(lua_State *L)
 #endif
 }
 
+static int lua_bm_get_display_shape(lua_State *L)
+{
+    lua_createtable(L, 0, 2);
+    lua_pushstring(L, BM_DISPLAY_SHAPE);
+    lua_setfield(L, -2, "shape");
+    lua_pushinteger(L, BM_DISPLAY_CORNER_RADIUS);
+    lua_setfield(L, -2, "corner_radius");
+    return 1;
+}
+
 int luaopen_board_manager(lua_State *L)
 {
     static const luaL_Reg funcs[] = {
         {"get_board_info",    lua_bm_get_board_info},
         {"get_camera_paths",  lua_bm_get_camera_paths},
+        {"get_display_shape", lua_bm_get_display_shape},
         {NULL, NULL},
     };
 
