@@ -1,17 +1,27 @@
 local lvgl, storage, json = require("lvgl"), require("storage"), require("json")
 local thread, image, delay = require("thread"), require("image"), require("delay")
+local display_shape = require("display_shape")
 local scripts = assert(debug.getinfo(1, "S").source:match("^@(.*)/[^/]+$"))
 local root = storage.get_root_dir()
 local cache = storage.join_path(root, "cache", "app_store")
 local settings_key = "app_store"
-local default_server = ((args or {}).server or "https://skills-lab.esp-claw.com"):gsub("/+$", "")
+local launch = args or {}
+local default_server = (launch.server or "https://skills-lab.esp-claw.com"):gsub("/+$", "")
+-- A shape in args overrides the board outline and draws a preview mask, for testing on other panels.
+local shape_override = launch.shape and { shape = launch.shape, corner_radius = launch.corner_radius } or nil
 local job, queue = "app_store_worker", "app_store_progress"
 local items, selected, task = {}, nil, nil
 local running, closing, owned = true, false, false
 local language, server, server_draft, tab = "en", default_server, default_server, 1
 local notice, percent, page, confirm, settings_confirm = "", 0, "catalog", false, nil
-local screen, status, progress, width, height, font, title_font, M
+local screen, status, progress, width, height, font, title_font, frame, M
 local url_editor, dirty = nil, true
+local PROGRESS_H = 3
+local ROUND_HEAD_RATIO, ROUND_ACTION_RATIO, EDITOR_ROW_RATIO = 0.5, 0.42, 0.8
+local ROUND_DOT, ROUND_DOT_STEP = 4, 9
+-- Round panels below this side length shrink rows so the narrow body still shows two of them.
+local ROUND_SMALL_MAX_SIDE = 300
+local ROUND_SMALL = { button_h = 34, tab_h = 34, row_h = 48, icon = 34, detail_icon = 44, row_title_y = 3, row_sub_y = 25 }
 local C = {
     bg = "#0b0e10", panel = "#121619", surface = "#1b2025", selected = "#202b27",
     text = "#f5f7f8", muted = "#929ba5", accent = "#43e98b", danger = "#ff5c65", line = "#2a3137"
@@ -139,6 +149,27 @@ end
 
 local function vline(parent, x, y, h)
     return box(parent, x, y, 1, math.max(1, h), C.line)
+end
+
+-- Intersects [x, x + w) with the part of the band [y, y + h) the panel can show.
+local function fit(x, w, y, h)
+    local fx, fw = frame:span(y, h)
+    local left, right = math.max(x, fx), math.min(x + w, fx + fw)
+    return left, math.max(0, right - left)
+end
+
+local function center_label(parent, text, y, color, large)
+    return lvgl.label(parent, { text = text, align = "top_mid", y = y, text_color = color or C.text, font = large and title_font or font })
+end
+
+-- Covers everything outside the outline with a thick rounded border so other panels can be previewed.
+local function draw_shape_preview(parent)
+    local r = frame.radius
+    if r <= 0 then return end
+    local b = math.ceil(math.sqrt((frame.ox + r) ^ 2 + (frame.oy + r) ^ 2) - r) + 2
+    local mask = lvgl.object(parent, { x = frame.ox - b, y = frame.oy - b, w = frame.rw + b * 2, h = frame.rh + b * 2, pad = 0, radius = r + b, border_width = b, border_color = "#000000", bg_opa = 0 })
+    mask:clear_flag("CLICKABLE")
+    mask:clear_flag("SCROLLABLE")
 end
 
 local function button(parent, text, x, y, w, action, kind, h)
@@ -277,11 +308,13 @@ local function perform_item_action()
     end
 end
 
-local function render_detail(parent, x, y, w, h)
+-- external_action leaves the install/uninstall button to the caller, e.g. the round footer.
+local function render_detail(parent, x, y, w, h, external_action)
     if not selected then return end
     local item, state = selected, installed(selected.id)
     local action_h = M.button_h
-    local scroll = lvgl.object(parent, { x = x, y = y, w = w, h = h - action_h - M.gap, pad = 0, border_width = 0, bg_opa = 0 })
+    local scroll_h = external_action and h or h - action_h - M.gap
+    local scroll = lvgl.object(parent, { x = x, y = y, w = w, h = scroll_h, pad = 0, border_width = 0, bg_opa = 0 })
     scroll:set_scroll({ dir = "ver", scrollbar = "auto" })
     local top = M.pad
     app_icon(scroll, item, M.pad, top, M.detail_icon)
@@ -296,6 +329,7 @@ local function render_detail(parent, x, y, w, h)
     label(scroll, description, M.pad, desc_y, w - M.pad * 2, desc_h, confirm and C.danger or C.muted)
     local peripherals = (item.metadata or {}).peripherals or {}
     if #peripherals > 0 then label(scroll, t("peripherals") .. table.concat(peripherals, ", "), M.pad, desc_y + desc_h + M.gap, w - M.pad * 2, M.text_h * 2, C.text) end
+    if external_action then return end
     local text, kind = action_for(item)
     button(parent, text, x + M.pad, y + h - action_h, w - M.pad * 2, perform_item_action, kind, action_h)
 end
@@ -305,9 +339,15 @@ local function open_url_editor()
     local overlay = box(screen, 0, 0, width, height, C.bg)
     local input_h = M.button_h
     local back_w = M.tiny and 28 or M.button_h
-    local input_x = M.pad + back_w + M.gap
-    local input = lvgl.textarea(overlay, { text = server_draft, x = input_x, y = M.pad, w = width - input_x - M.pad, h = input_h, one_line = true, max_length = 160, font = font, bg_color = C.surface, text_color = C.text, border_color = C.line, border_width = 1, radius = M.radius })
-    local keyboard = lvgl.keyboard(overlay, { x = 0, y = M.pad * 2 + input_h, w = width, h = height - input_h - M.pad * 2, mode = "text_lower", textarea = input, font = font })
+    local row_y = math.max(M.pad, frame:top_for(math.floor(width * EDITOR_ROW_RATIO), input_h) or M.pad)
+    local row_x, row_w = fit(0, width, row_y, input_h)
+    local input_x = row_x + M.pad + back_w + M.gap
+    local input = lvgl.textarea(overlay, { text = server_draft, x = input_x, y = row_y, w = row_x + row_w - input_x - M.pad, h = input_h, one_line = true, max_length = 160, font = font, bg_color = C.surface, text_color = C.text, border_color = C.line, border_width = 1, radius = M.radius })
+    local _, safe_y, _, safe_h = frame:safe_rect()
+    local kb_y = row_y + input_h + M.pad
+    local kb_h = safe_y + safe_h - kb_y
+    local kb_x, kb_w = fit(0, width, kb_y, kb_h)
+    local keyboard = lvgl.keyboard(overlay, { x = kb_x, y = kb_y, w = kb_w, h = kb_h, mode = "text_lower", textarea = input, font = font })
     url_editor = { root = overlay, input = input }
     local function close(commit)
         if not url_editor then return end
@@ -316,9 +356,10 @@ local function open_url_editor()
         url_editor = nil
         dirty = true
     end
-    icon_button(overlay, "back", M.pad, M.pad, back_w, function() close(false) end, nil, input_h)
+    icon_button(overlay, "back", row_x + M.pad, row_y, back_w, function() close(false) end, nil, input_h)
     keyboard:on("ready", function() close(true) end)
     keyboard:on("cancel", function() close(false) end)
+    if shape_override then draw_shape_preview(overlay) end
 end
 
 local function clear_cache()
@@ -394,13 +435,22 @@ local function switch_tab(index)
     tab, page, selected, confirm, dirty = index, "catalog", nil, false, true
 end
 
+local function open_settings()
+    page, settings_confirm, dirty = "settings", nil, true
+end
+
+local function tab_names()
+    return { t("all"), t("games"), t("tools"), t("local_apps") }
+end
+
 local function layout()
-    local compact_mode = width < 560 or height < 540
+    local round = frame.shape == "circle"
+    local compact_mode = round or width < 560 or height < 540
     local tiny = width < 180
     local pad = tiny and 5 or compact_mode and 8 or 16
     local text_h = tiny and 18 or 22
-    return {
-        compact = compact_mode, tiny = tiny, pad = tiny and 4 or pad, gap = tiny and 3 or 8, radius = tiny and 4 or 7,
+    local m = {
+        round = round, compact = compact_mode, tiny = tiny, pad = tiny and 4 or pad, gap = tiny and 3 or 8, radius = tiny and 4 or 7,
         header_h = tiny and 34 or compact_mode and 48 or 64, status_h = tiny and 20 or 30, button_h = tiny and 28 or 40,
         tab_h = tiny and 26 or 38, text_h = tiny and 15 or text_h, title_h = tiny and 18 or compact_mode and 28 or 36,
         row_h = tiny and 46 or compact_mode and 66 or 74, icon = tiny and 30 or compact_mode and 44 or 50,
@@ -408,33 +458,113 @@ local function layout()
         row_title_y = tiny and 4 or 9, row_sub_y = tiny and 23 or compact_mode and 36 or 41,
         sidebar_w = compact_mode and 0 or math.max(156, math.min(220, math.floor(width * 0.22)))
     }
+    if round and math.min(width, height) < ROUND_SMALL_MAX_SIDE then
+        for key, value in pairs(ROUND_SMALL) do m[key] = value end
+    end
+    return m
+end
+
+local function update_progress()
+    if percent <= 0 then progress:add_flag("HIDDEN"); return end
+    progress:set_size(math.max(1, math.floor(M.progress_w * math.min(100, percent) / 100)), PROGRESS_H)
+    progress:clear_flag("HIDDEN")
+end
+
+-- Status text centered in the band [y, y + h) with a progress strip along the band top, both clipped to the outline.
+local function render_status(y, h, centered)
+    local text_y = y + math.floor((h - M.text_h) / 2)
+    local sx, sw = fit(0, width, text_y, M.text_h)
+    M.status_w = math.max(0, sw - M.pad * 2)
+    local text = compact(notice ~= "" and notice or t("ready"), M.status_w, M.font_unit)
+    if centered then
+        status = center_label(screen, text, text_y, C.muted)
+    else
+        status = label(screen, text, sx + M.pad, text_y, M.status_w, M.text_h, C.muted)
+    end
+    M.progress_x, M.progress_w = fit(0, width, y, PROGRESS_H)
+    progress = box(screen, M.progress_x, y, 1, PROGRESS_H, C.accent)
+    update_progress()
 end
 
 local function render_compact()
     local content_y, content_h = M.header_h, height - M.header_h - M.status_h
     local back_w = M.tiny and 28 or 54
-    icon_button(screen, "back", M.pad, math.floor((M.header_h - M.button_h) / 2), back_w, go_back)
+    local action_y = math.floor((M.header_h - M.button_h) / 2)
+    local hx, hw = fit(0, width, action_y, M.button_h)
+    icon_button(screen, "back", hx + M.pad, action_y, back_w, go_back)
     local right_w = M.button_h * 2 + M.gap
-    local title_x, title_w = M.pad + back_w + M.gap, width - back_w - right_w - M.pad * 3 - M.gap
+    local title_x, title_w = hx + M.pad + back_w + M.gap, hw - back_w - right_w - M.pad * 3 - M.gap
     if not M.tiny and title_w >= 20 then label(screen, compact(page == "settings" and t("settings") or page == "detail" and (selected and selected.title or t("app_store")) or t("app_store"), title_w, M.title_unit), title_x, math.floor((M.header_h - M.title_h) / 2), title_w, M.title_h, C.text, true) end
     if page ~= "settings" then
-        icon_button(screen, "refresh", width - M.pad - right_w, math.floor((M.header_h - M.button_h) / 2), M.button_h, function() start("catalog") end)
-        icon_button(screen, "settings", width - M.pad - M.button_h, math.floor((M.header_h - M.button_h) / 2), M.button_h, function() page, settings_confirm, dirty = "settings", nil, true end)
+        icon_button(screen, "refresh", hx + hw - M.pad - right_w, action_y, M.button_h, function() start("catalog") end)
+        icon_button(screen, "settings", hx + hw - M.pad - M.button_h, action_y, M.button_h, open_settings)
     end
     line(screen, 0, M.header_h - 1, width)
     if page == "catalog" then
-        local names = M.tiny and (language == "zh" and { "全", "游", "工", "装" } or { "A", "G", "T", "L" }) or { t("all"), t("games"), t("tools"), t("local_apps") }
-        local tab_w = math.floor(width / 4)
+        local names = M.tiny and (language == "zh" and { "全", "游", "工", "装" } or { "A", "G", "T", "L" }) or tab_names()
+        local tx, tw = fit(0, width, content_y, M.tab_h)
+        local tab_w = math.floor(tw / 4)
         for index, name in ipairs(names) do
             local current = index
-            local b = button(screen, name, (index - 1) * tab_w, content_y, index == 4 and width - tab_w * 3 or tab_w, function() switch_tab(current) end, index == tab and "accent" or nil, M.tab_h)
+            local b = button(screen, name, tx + (index - 1) * tab_w, content_y, index == 4 and tw - tab_w * 3 or tab_w, function() switch_tab(current) end, index == tab and "accent" or nil, M.tab_h)
             b:set_style({ radius = 0 })
         end
-        render_list(screen, 0, content_y + M.tab_h, width, content_h - M.tab_h)
-    elseif page == "detail" then
-        render_detail(screen, 0, content_y, width, content_h)
+        local list_y, list_h = content_y + M.tab_h, content_h - M.tab_h
+        local lx, lw = fit(0, width, list_y, list_h)
+        render_list(screen, lx, list_y, lw, list_h)
     else
-        render_settings(screen, 0, content_y, width, content_h)
+        local bx, bw = fit(0, width, content_y, content_h)
+        if page == "detail" then render_detail(screen, bx, content_y, bw, content_h) else render_settings(screen, bx, content_y, bw, content_h) end
+    end
+end
+
+-- Round panels stack a centered header, the body, a status line and a centered action cluster at the bottom.
+local function render_round()
+    local size, gap = M.button_h, M.gap
+    local head_w = math.floor(width * ROUND_HEAD_RATIO)
+    local head_y = frame:top_for(head_w, M.tab_h) or M.pad
+    if page == "catalog" then
+        local names = tab_names()
+        local pill = button(screen, compact(names[tab], head_w - gap * 2, M.font_unit), math.floor((width - head_w) / 2), head_y, head_w, function() switch_tab(tab % #names + 1) end, nil, M.tab_h)
+        local dots_x = math.floor((head_w - ROUND_DOT_STEP * (#names - 1) - ROUND_DOT) / 2)
+        for index = 1, #names do
+            local dot = box(pill, dots_x + (index - 1) * ROUND_DOT_STEP, M.tab_h - ROUND_DOT - 3, ROUND_DOT, ROUND_DOT, index == tab and C.accent or C.line, ROUND_DOT)
+            dot:clear_flag("CLICKABLE")
+        end
+    else
+        local title = page == "settings" and t("settings") or selected and selected.title or t("app_store")
+        center_label(screen, compact(title, head_w, M.title_unit), head_y + math.floor((M.tab_h - M.title_h) / 2), C.text, true)
+    end
+    local action_text, action_kind
+    local cluster_w = size
+    if page == "catalog" then
+        cluster_w = size * 3 + gap * 2
+    elseif page == "detail" and selected then
+        action_text, action_kind = action_for(selected)
+        cluster_w = size + gap + math.floor(width * ROUND_ACTION_RATIO)
+    end
+    local cluster_y = frame:bottom_for(cluster_w, size) or (height - size - M.pad)
+    local cx = math.floor((width - cluster_w) / 2)
+    icon_button(screen, "back", cx, cluster_y, size, go_back)
+    if page == "catalog" then
+        icon_button(screen, "refresh", cx + size + gap, cluster_y, size, function() start("catalog") end)
+        icon_button(screen, "settings", cx + (size + gap) * 2, cluster_y, size, open_settings)
+    elseif action_text then
+        local action_w = cluster_w - size - gap
+        button(screen, compact(action_text, action_w - gap * 2, M.font_unit), cx + size + gap, cluster_y, action_w, perform_item_action, action_kind, size)
+    end
+    local status_h = M.text_h + PROGRESS_H * 2
+    local status_y = cluster_y - math.floor(gap / 2) - status_h
+    render_status(status_y, status_h, true)
+    local body_y = head_y + M.tab_h + math.floor(gap / 2)
+    local body_h = status_y - math.floor(gap / 2) - body_y
+    local bx, bw = fit(0, width, body_y, body_h)
+    if page == "catalog" then
+        render_list(screen, bx, body_y, bw, body_h)
+    elseif page == "detail" then
+        render_detail(screen, bx, body_y, bw, body_h, true)
+    else
+        render_settings(screen, bx, body_y, bw, body_h)
     end
 end
 
@@ -442,27 +572,29 @@ local function render_wide()
     local content_y = M.header_h
     local content_h = height - M.header_h - M.status_h
     local header = box(screen, 0, 0, width, M.header_h, C.bg)
-    icon_button(header, "back", M.pad, math.floor((M.header_h - M.button_h) / 2), M.button_h, go_back)
-    local brand_x = M.pad + M.button_h + M.gap
+    local action_y = math.floor((M.header_h - M.button_h) / 2)
+    local hx, hw = fit(0, width, action_y, M.button_h)
+    icon_button(header, "back", hx + M.pad, action_y, M.button_h, go_back)
+    local brand_x = hx + M.pad + M.button_h + M.gap
     label(header, t("app_store"), brand_x, math.floor((M.header_h - M.text_h) / 2), M.sidebar_w - brand_x - M.gap, M.text_h, C.text)
     vline(header, M.sidebar_w - 1, 0, M.header_h)
-    local page_title = page == "settings" and t("settings") or page == "detail" and selected and selected.title or ({ t("all"), t("games"), t("tools"), t("local_apps") })[tab]
-    label(header, page_title, M.sidebar_w + M.pad, math.floor((M.header_h - M.title_h) / 2), width - M.sidebar_w - M.pad * 3 - M.button_h * 2 - M.gap, M.title_h, C.text, true)
+    local page_title = page == "settings" and t("settings") or page == "detail" and selected and selected.title or tab_names()[tab]
+    label(header, page_title, M.sidebar_w + M.pad, math.floor((M.header_h - M.title_h) / 2), hx + hw - M.sidebar_w - M.pad * 3 - M.button_h * 2 - M.gap, M.title_h, C.text, true)
     if page ~= "settings" then
-        local action_y = math.floor((M.header_h - M.button_h) / 2)
-        icon_button(header, "refresh", width - M.pad * 2 - M.button_h * 2 - M.gap, action_y, M.button_h, function() start("catalog") end)
-        icon_button(header, "settings", width - M.pad - M.button_h, action_y, M.button_h, function() page, settings_confirm, dirty = "settings", nil, true end)
+        icon_button(header, "refresh", hx + hw - M.pad * 2 - M.button_h * 2 - M.gap, action_y, M.button_h, function() start("catalog") end)
+        icon_button(header, "settings", hx + hw - M.pad - M.button_h, action_y, M.button_h, open_settings)
     end
     line(screen, 0, M.header_h - 1, width)
     local sidebar = box(screen, 0, content_y, M.sidebar_w, content_h, C.panel)
     local y = M.pad
-    for index, name in ipairs({ t("all"), t("games"), t("tools"), t("local_apps") }) do
+    for index, name in ipairs(tab_names()) do
         local current = index
-        button(sidebar, name, M.pad, y, M.sidebar_w - M.pad * 2, function() switch_tab(current) end, page == "catalog" and tab == index and "accent" or nil)
+        local sx, sw = fit(0, M.sidebar_w, content_y + y, M.button_h)
+        button(sidebar, name, sx + M.pad, y, sw - M.pad * 2, function() switch_tab(current) end, page == "catalog" and tab == index and "accent" or nil)
         y = y + M.button_h + M.gap
     end
     vline(screen, M.sidebar_w - 1, content_y, content_h)
-    local x, w = M.sidebar_w, width - M.sidebar_w
+    local x, w = fit(M.sidebar_w, width - M.sidebar_w, content_y, content_h)
     if page == "settings" then
         render_settings(screen, x, content_y, w, content_h)
     elseif page == "detail" then
@@ -480,13 +612,16 @@ end
 local function render()
     screen:clean()
     M = layout()
-    if M.compact then render_compact() else render_wide() end
-    local status_y = height - M.status_h
-    box(screen, 0, status_y, width, M.status_h, C.bg)
-    line(screen, 0, status_y, width)
-    status = label(screen, compact(notice ~= "" and notice or t("ready"), width - M.pad * 2, M.font_unit), M.pad, status_y + math.floor((M.status_h - M.text_h) / 2), width - M.pad * 2, M.text_h, C.muted)
-    progress = box(screen, 0, status_y, math.max(1, math.floor(width * math.min(100, percent) / 100)), 3, C.accent)
-    if percent <= 0 then progress:add_flag("HIDDEN") end
+    if M.round then
+        render_round()
+    else
+        if M.compact then render_compact() else render_wide() end
+        local status_y = height - M.status_h
+        box(screen, 0, status_y, width, M.status_h, C.bg)
+        line(screen, 0, status_y, width)
+        render_status(status_y, M.status_h, false)
+    end
+    if shape_override then draw_shape_preview(screen) end
 end
 
 local function failure(result)
@@ -501,13 +636,8 @@ end
 
 local function update_status()
     if not status then return end
-    status:set_text(compact(notice ~= "" and notice or t("ready"), width - M.pad * 2, M.font_unit))
-    if percent <= 0 then
-        progress:add_flag("HIDDEN")
-    else
-        progress:set_size(math.max(1, math.floor(width * math.min(100, percent) / 100)), 3)
-        progress:clear_flag("HIDDEN")
-    end
+    status:set_text(compact(notice ~= "" and notice or t("ready"), M.status_w, M.font_unit))
+    update_progress()
 end
 
 local function run()
@@ -522,6 +652,7 @@ local function run()
     screen = lvgl.create_screen()
     width, height = screen:get_size()
     assert(width >= 125 and height >= 240, "App Store needs a 125x240 or larger display")
+    frame = display_shape.new(width, height, shape_override)
     local compact_mode = width < 560 or height < 540
     font = lvgl.font_load({ size = width < 180 and 11 or compact_mode and 16 or 18, cache_size = 96 })
     title_font = lvgl.font_load({ size = width < 180 and 14 or compact_mode and 21 or 28, cache_size = 48 })
