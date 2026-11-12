@@ -1,0 +1,4 @@
+board: esp32_s3_eye
+chip: esp32s3
+description: "ESP32-S3-EYE AI Development Board"
+manufacturer: "ESPRESSIF"
