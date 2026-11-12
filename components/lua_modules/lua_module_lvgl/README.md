@@ -208,6 +208,7 @@ Most widgets support:
 - Style: `bg_color`, `text_color`, `border_color`, `bg_opa`, `opa`,
   `radius`, `border_width`, `pad`, `pad_row`, `pad_column`,
   `line_color`, `line_width`, `arc_width`, `font`
+- Text alignment inside the widget: `text_align = "auto" | "left" | "center" | "right"`. It only shows on widgets wider than their text, e.g. labels created with both `w` and `h`; `align` moves the whole widget instead.
 
 Colors can be strings or numbers:
 

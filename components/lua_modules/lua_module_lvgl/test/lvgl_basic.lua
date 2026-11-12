@@ -51,6 +51,15 @@ local ok, err = pcall(function()
     })
     button:set_text("Updated")
 
+    local caption = lvgl.label(panel, {
+        text = "right aligned",
+        w = width - 60,
+        h = 24,
+        text_align = "right",
+        text_color = "#9fb3c8",
+    })
+    caption:set_style({ text_align = "center" })
+
     local checkbox = lvgl.checkbox(panel, {
         text = "checked",
         checked = true,
