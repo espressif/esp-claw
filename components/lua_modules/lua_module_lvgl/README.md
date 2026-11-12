@@ -144,7 +144,7 @@ Basic widgets:
 - `lvgl.switch(parent, { checked = true })`
 - `lvgl.dropdown(parent, { options = {"A", "B"}, selected = 1 })`
 - `lvgl.roller(parent, { options = {"A", "B"}, selected = 1 })`
-- `lvgl.keyboard(parent, { mode = "text_lower", textarea = textarea })`
+- `lvgl.keyboard(parent, { mode = "text_lower", textarea = textarea })`; docks to the bottom of `parent` unless `x`/`y` or `align` are given
 - `lvgl.textarea(parent, { text = "..." })`
 - `lvgl.list(parent, opts)`
 - `lvgl.table(parent, { rows = 2, cols = 2 })`
@@ -202,7 +202,7 @@ Widget-specific `opts`:
 
 Most widgets support:
 
-- Position and size: `x`, `y`, `w`, `h`, `align`
+- Position and size: `x`, `y`, `w`, `h`, `align`. Without `align`, `x`/`y` are measured from the parent's top-left; with `align`, they are offsets from that anchor. `obj:set_pos(x, y)` keeps the current anchor.
 - Text: `text`
 - Numeric values: `min`, `max`, `value`
 - Style: `bg_color`, `text_color`, `border_color`, `bg_opa`, `opa`,

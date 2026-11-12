@@ -241,6 +241,7 @@ typedef struct {
 
 typedef struct {
     bool has_opts;
+    bool has_pos;
     const char *text;
     const char *align_value;
     int x;
