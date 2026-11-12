@@ -241,6 +241,7 @@ typedef struct {
 
 typedef struct {
     bool has_opts;
+    bool has_pos;
     const char *text;
     const char *align_value;
     int x;
@@ -306,6 +307,9 @@ lv_font_t *lua_lvgl_validate_font_locked(const lua_lvgl_font_ud_t *ud, const cha
 void lua_lvgl_apply_font_style_field(lua_State *L, int index, lv_obj_t *obj);
 void lua_lvgl_apply_default_font_locked(lv_obj_t *obj);
 extern const luaL_Reg lua_lvgl_font_module_funcs[];
+
+/* lua_lvgl_symbols.c */
+void lua_lvgl_push_symbol_table(lua_State *L);
 
 /* lua_lvgl_layout.c */
 int lua_lvgl_set_flex(lua_State *L);

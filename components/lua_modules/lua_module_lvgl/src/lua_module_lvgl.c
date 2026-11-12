@@ -43,6 +43,9 @@ int luaopen_lvgl(lua_State *L)
     lua_pushinteger(L, LUA_MODULE_LVGL_PANEL_IF_MIPI_DSI);
     lua_setfield(L, -2, "PANEL_IF_MIPI_DSI");
 
+    lua_lvgl_push_symbol_table(L);
+    lua_setfield(L, -2, "SYMBOL");
+
     return 1;
 }
 

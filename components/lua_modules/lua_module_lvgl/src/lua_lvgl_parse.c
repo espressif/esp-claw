@@ -331,6 +331,7 @@ void lua_lvgl_parse_opts(lua_State *L, int index, lua_lvgl_opts_t *opts)
     }
 
     opts->has_opts = true;
+    opts->has_pos = lua_lvgl_has_field(L, index, "x") || lua_lvgl_has_field(L, index, "y");
     opts->x = lua_lvgl_get_opt_int_field(L, index, "x", 0);
     opts->y = lua_lvgl_get_opt_int_field(L, index, "y", 0);
     opts->w = lua_lvgl_get_opt_int_field(L, index, "w", -1);
@@ -355,8 +356,9 @@ void lua_lvgl_apply_common_opts_locked(lv_obj_t *obj, const lua_lvgl_opts_t *opt
     }
     if (opts->align_value && lua_lvgl_parse_align(NULL, opts->align_value, &align) == ESP_OK) {
         lv_obj_align(obj, align, opts->x, opts->y);
-    } else {
-        lv_obj_set_pos(obj, opts->x, opts->y);
+    } else if (opts->has_pos) {
+        /* Widgets such as the keyboard align themselves on creation; explicit x/y always mean the parent's top-left. */
+        lv_obj_align(obj, LV_ALIGN_TOP_LEFT, opts->x, opts->y);
     }
 }
 char *lua_lvgl_build_options_string(lua_State *L, int index, const char *field)

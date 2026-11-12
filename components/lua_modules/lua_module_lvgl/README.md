@@ -144,7 +144,7 @@ Basic widgets:
 - `lvgl.switch(parent, { checked = true })`
 - `lvgl.dropdown(parent, { options = {"A", "B"}, selected = 1 })`
 - `lvgl.roller(parent, { options = {"A", "B"}, selected = 1 })`
-- `lvgl.keyboard(parent, { mode = "text_lower", textarea = textarea })`
+- `lvgl.keyboard(parent, { mode = "text_lower", textarea = textarea })`; docks to the bottom of `parent` unless `x`/`y` or `align` are given
 - `lvgl.textarea(parent, { text = "..." })`
 - `lvgl.list(parent, opts)`
 - `lvgl.table(parent, { rows = 2, cols = 2 })`
@@ -202,12 +202,13 @@ Widget-specific `opts`:
 
 Most widgets support:
 
-- Position and size: `x`, `y`, `w`, `h`, `align`
+- Position and size: `x`, `y`, `w`, `h`, `align`. Without `align`, `x`/`y` are measured from the parent's top-left; with `align`, they are offsets from that anchor. `obj:set_pos(x, y)` keeps the current anchor.
 - Text: `text`
 - Numeric values: `min`, `max`, `value`
 - Style: `bg_color`, `text_color`, `border_color`, `bg_opa`, `opa`,
   `radius`, `border_width`, `pad`, `pad_row`, `pad_column`,
   `line_color`, `line_width`, `arc_width`, `font`
+- Text alignment inside the widget: `text_align = "auto" | "left" | "center" | "right"`. It only shows on widgets wider than their text, e.g. labels created with both `w` and `h`; `align` moves the whole widget instead.
 
 Colors can be strings or numbers:
 
@@ -235,6 +236,19 @@ label:set_style({ font = font })
 - `font:delete()` -> true
 
 Without `path`, `lvgl.font_load()` uses `fonts/NotoSansSC-Regular-sub.ttf`. Passing `nil` to `lvgl.set_default_font()` restores the built-in font. An explicit `font` style on a control overrides the default font.
+
+## Symbols
+
+`lvgl.SYMBOL` maps icon names to UTF-8 strings that can be used in any label, button or list text. The default system font contains every entry; other fonts may render them as blanks.
+
+```lua
+lvgl.label(parent, { text = lvgl.SYMBOL.WIFI .. " Connected", font = font })
+lvgl.button(parent, { text = lvgl.SYMBOL.SNOWFLAKE .. " Cool", font = font })
+```
+
+- LVGL symbols use the `LV_SYMBOL_*` name without the prefix: `OK`, `CLOSE`, `HOME`, `SETTINGS`, `WIFI`, `BLUETOOTH`, `BATTERY_FULL`, `PLAY`, `PAUSE`, `VOLUME_MAX`, `LEFT`, `RIGHT`, `UP`, `DOWN`, `PLUS`, `MINUS`, `REFRESH`, `TRASH`, `WARNING`, `BULLET`, and the rest of `lv_symbol_def.h`.
+- Extended FontAwesome 5 icons use the FontAwesome name in upper case with `-` replaced by `_`. Groups: home and climate (`SNOWFLAKE`, `SUN`, `MOON`, `WIND`, `FIRE`, `WATER`, `TEMPERATURE_HIGH`, `TEMPERATURE_LOW`, `LIGHTBULB`, `PLUG`, `TOGGLE_ON`, `LOCK`, `DOOR_OPEN`, `TV`), weather (`CLOUD`, `CLOUD_SUN`, `CLOUD_RAIN`, `UMBRELLA`), devices and network (`ROBOT`, `MICROPHONE`, `HEADPHONES`, `SERVER`, `MICROCHIP`, `ETHERNET`, `QRCODE`, `SYNC_ALT`), communication (`COMMENT`, `COMMENTS`, `PAPER_PLANE`, `USER`, `USERS`, `HEART`, `STAR`, `THUMBS_UP`), emotions (`SMILE`, `LAUGH`, `MEH`, `FROWN`, `SAD_TEAR`, `ANGRY`), time (`CLOCK`, `STOPWATCH`, `CALENDAR_ALT`, `HISTORY`), status (`INFO_CIRCLE`, `CHECK_CIRCLE`, `TIMES_CIRCLE`, `QUESTION_CIRCLE`, `SEARCH`, `ELLIPSIS_H`), navigation (`ARROW_UP`, `ANGLE_LEFT`, `CARET_DOWN`, `MAP_MARKER_ALT`, `COMPASS`), store (`STORE`, `SHOPPING_CART`, `BOX_OPEN`, `PUZZLE_PIECE`, `ROCKET`) and travel and nature (`CAR`, `PLANE`, `LEAF`, `TREE`, `CAT`, `DOG`). The full list is `tools/font_subset/fa_icons.txt`.
+- Iterate `pairs(lvgl.SYMBOL)` to list every available name at runtime.
 
 ## EAF Animation
 
