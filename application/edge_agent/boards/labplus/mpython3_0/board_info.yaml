@@ -1,0 +1,5 @@
+board: mpython3_0
+chip: esp32s3
+version: 1.0.0
+description: "Labplus mPython 3.0 / 掌控板 3.0 (ESP32-S3, ST7789 320x172 LCD, ES8388 codec, 3x WS2812, QMI8658C/MMC5603NJ/LTR-308ALS on I2C)"
+manufacturer: "Labplus"
