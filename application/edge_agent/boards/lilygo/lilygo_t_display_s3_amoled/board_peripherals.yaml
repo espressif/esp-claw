@@ -1,0 +1,14 @@
+version: "1.0.0"
+peripherals:
+  - name: spi_amoled
+    type: spi
+    config:
+      spi_bus_config:
+        spi_port: 1   # SPI2_HOST
+        data0_io_num: 18
+        data1_io_num: 7
+        data2_io_num: 48
+        data3_io_num: 5
+        sclk_io_num: 47
+        max_transfer_sz: 32768
+        flags: 0

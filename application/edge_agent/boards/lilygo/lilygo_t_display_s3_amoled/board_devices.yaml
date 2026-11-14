@@ -1,0 +1,34 @@
+version: "1.0.0"
+devices:
+  - name: display_lcd
+    type: display_lcd
+    sub_type: spi
+    chip: rm67162
+    version: default
+    dependencies:
+      crosser/esp-lcd-panel-rm67162: "^0.1.0"
+    config:
+      swap_xy: true
+      mirror_x: true
+      mirror_y: false
+      x_max: 536
+      y_max: 240
+      need_reset: true
+      invert_color: false
+      io_spi_config:
+        cs_gpio_num: 6
+        dc_gpio_num: -1
+        spi_mode: 0
+        pclk_hz: 20000000
+        trans_queue_depth: 17
+        lcd_cmd_bits: 32
+        lcd_param_bits: 8
+        flags:
+          quad_mode: true
+      lcd_panel_config:
+        reset_gpio_num: 17
+        rgb_ele_order: LCD_RGB_ELEMENT_ORDER_RGB
+        data_endian: LCD_RGB_DATA_ENDIAN_BIG
+        bits_per_pixel: 16
+    peripherals:
+      - name: spi_amoled
