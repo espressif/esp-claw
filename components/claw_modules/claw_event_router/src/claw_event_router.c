@@ -1900,7 +1900,7 @@ static esp_err_t claw_event_router_execute_agent_action(
     agent_input.source_channel = event->source_channel;
     agent_input.source_chat_id = event->chat_id;
     agent_input.source_sender_id = event->sender_id;
-    agent_input.source_message_id = event->message_id;
+    agent_input.source_message_id = event->reply_to_message_id ? event->reply_to_message_id : event->message_id;
     agent_input.event_id = event->event_id;
     agent_input.target_channel = (target_channel && target_channel[0]) ? target_channel : event->source_channel;
     agent_input.target_chat_id = (target_chat_id && target_chat_id[0]) ? target_chat_id : event->chat_id;
@@ -1944,6 +1944,7 @@ static esp_err_t claw_event_router_execute_agent_action(
         agent_event.timestamp_ms = claw_event_router_now_ms();
         agent_event.session_policy = CLAW_SESSION_POLICY_CHAT;
         agent_event.text = "accepted";
+        agent_event.reply_to_message_id = NULL;
         snprintf(accepted_payload,
                  sizeof(accepted_payload),
                  "{\"run_id\":%" PRIu32
@@ -2081,6 +2082,9 @@ static esp_err_t claw_event_router_execute_send_message_action(
     call_ctx.target_chat_id = chat_id;
     call_ctx.source_cap = "claw_event_router";
     call_ctx.caller = CLAW_CAP_CALLER_SYSTEM;
+    if (strcmp(channel, event->source_channel) == 0 && strcmp(chat_id, event->chat_id) == 0) {
+        call_ctx.reply_to_message_id = event->reply_to_message_id;
+    }
     err = claw_cap_call(cap_name, payload, &call_ctx, output, sizeof(output));
     ESP_LOGI(TAG,
              "send_message cap=%s err=%s output=%s",
@@ -2738,6 +2742,9 @@ esp_err_t claw_event_router_publish_message(const char *source_cap,
     if (message_id) {
         strlcpy(event.message_id, message_id, sizeof(event.message_id));
         strlcpy(event.correlation_id, message_id, sizeof(event.correlation_id));
+        if (strcmp(channel, "qq") == 0) {
+            event.reply_to_message_id = (char *)message_id;
+        }
     }
     event.timestamp_ms = claw_event_router_now_ms();
     event.session_policy = CLAW_SESSION_POLICY_CHAT;
