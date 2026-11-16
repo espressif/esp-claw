@@ -1,0 +1,5 @@
+board: m5stack_stackchan
+chip: esp32s3
+version: 1.0.0
+description: "M5Stack StackChan Development Board"
+manufacturer: "M5Stack"
