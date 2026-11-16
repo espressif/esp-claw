@@ -32,6 +32,7 @@ typedef struct {
     claw_session_policy_t session_policy;
     char *text;
     char *payload_json;
+    char *reply_to_message_id; /**< Full transport ID, owned by a cloned event. */
 } claw_event_t;
 
 esp_err_t claw_event_clone(const claw_event_t *src, claw_event_t *dst);

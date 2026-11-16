@@ -22,6 +22,7 @@ esp_err_t claw_event_clone(const claw_event_t *src, claw_event_t *dst)
     memcpy(dst, src, sizeof(*dst));
     dst->text = NULL;
     dst->payload_json = NULL;
+    dst->reply_to_message_id = NULL;
 
     if (src->text) {
         dst->text = strdup(src->text);
@@ -39,6 +40,13 @@ esp_err_t claw_event_clone(const claw_event_t *src, claw_event_t *dst)
             return ESP_ERR_NO_MEM;
         }
     }
+    if (src->reply_to_message_id) {
+        dst->reply_to_message_id = strdup(src->reply_to_message_id);
+        if (!dst->reply_to_message_id) {
+            claw_event_free(dst);
+            return ESP_ERR_NO_MEM;
+        }
+    }
     return ESP_OK;
 }
 
@@ -49,6 +57,7 @@ void claw_event_free(claw_event_t *event)
     }
     free(event->text);
     free(event->payload_json);
+    free(event->reply_to_message_id);
     memset(event, 0, sizeof(*event));
 }
 

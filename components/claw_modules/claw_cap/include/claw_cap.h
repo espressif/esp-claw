@@ -60,6 +60,7 @@ typedef struct {
     const char *correlation_id;
     claw_core_handle_t core;
     claw_cap_caller_t caller;
+    const char *reply_to_message_id; /**< Transport reply ID for this destination. */
 } claw_cap_call_context_t;
 
 typedef struct {

@@ -89,6 +89,16 @@ static esp_err_t build_out_message_event_common(const char *event_id_prefix,
     return ESP_OK;
 }
 
+static void set_reply_to_message_id(const claw_core_request_t *request, claw_event_t *event)
+{
+    if (request->source_message_id && request->source_channel && request->source_chat_id &&
+            strcmp(request->source_channel, "qq") == 0 &&
+            strcmp(request->source_channel, event->source_channel) == 0 &&
+            strcmp(request->source_chat_id, event->chat_id) == 0) {
+        event->reply_to_message_id = (char *)request->source_message_id;
+    }
+}
+
 static esp_err_t build_agent_out_message_event(const claw_core_request_t *request,
                                                const claw_core_response_t *response,
                                                claw_event_t *out_event,
@@ -149,6 +159,7 @@ static esp_err_t build_agent_out_message_event(const claw_core_request_t *reques
                  "%" PRIu32,
                  request->request_id);
     }
+    set_reply_to_message_id(request, out_event);
     out_event->payload_json = *out_payload_json;
 
     return ESP_OK;
@@ -226,6 +237,7 @@ esp_err_t claw_core_publish_stage_text(const claw_core_request_t *request, const
              sizeof(payload_json),
              "{\"request_id\":%" PRIu32 ",\"status\":\"running\"}",
              request->request_id);
+    set_reply_to_message_id(request, &event);
     event.payload_json = payload_json;
 
     esp_err_t pub_err = claw_event_router_publish(&event);

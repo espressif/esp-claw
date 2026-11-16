@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <stdbool.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1531,8 +1532,10 @@ static esp_err_t cap_im_qq_send_media(const char *chat_id,
     return ESP_OK;
 }
 
-static esp_err_t cap_im_qq_send_message_chunk(const char *chat_id, const char *message)
+static esp_err_t cap_im_qq_send_message_chunk(const char *chat_id, const char *message,
+                                              const char *reply_id)
 {
+    static atomic_uint reply_sequence;
     cJSON *body = cJSON_CreateObject();
     char *json_str = NULL;
     char *path = NULL;
@@ -1554,6 +1557,14 @@ static esp_err_t cap_im_qq_send_message_chunk(const char *chat_id, const char *m
         cJSON_AddStringToObject(body, "content", message);
     }
     cJSON_AddNumberToObject(body, "msg_type", s_qq.msg_type);
+    if (reply_id && reply_id[0]) {
+        unsigned seq = atomic_fetch_add_explicit(&reply_sequence, 1, memory_order_relaxed) % INT32_MAX + 1;
+        if (!cJSON_AddStringToObject(body, "msg_id", reply_id) ||
+                !cJSON_AddNumberToObject(body, "msg_seq", seq)) {
+            cJSON_Delete(body);
+            return ESP_ERR_NO_MEM;
+        }
+    }
     json_str = cJSON_PrintUnformatted(body);
     cJSON_Delete(body);
     if (!json_str) {
@@ -1794,6 +1805,8 @@ static esp_err_t cap_im_qq_gateway_stop(void)
     return ESP_OK;
 }
 
+static esp_err_t cap_im_qq_send_text_reply(const char *chat_id, const char *text, const char *reply_id);
+
 static esp_err_t cap_im_qq_send_message_execute(const char *input_json,
                                                 const claw_cap_call_context_t *ctx,
                                                 char *output,
@@ -1841,7 +1854,12 @@ static esp_err_t cap_im_qq_send_message_execute(const char *input_json,
              message,
              strlen(message) > 48 ? "..." : "");
 
-    err = cap_im_qq_send_text(chat_id, message);
+    const char *reply_id = NULL;
+    if (ctx && ctx->caller == CLAW_CAP_CALLER_SYSTEM && ctx->target_chat_id &&
+            strcmp(chat_id, ctx->target_chat_id) == 0) {
+        reply_id = ctx->reply_to_message_id;
+    }
+    err = cap_im_qq_send_text_reply(chat_id, message, reply_id);
     cJSON_Delete(root);
     if (err != ESP_OK) {
         snprintf(output, output_size, "Error: %s", esp_err_to_name(err));
@@ -2067,7 +2085,7 @@ esp_err_t cap_im_qq_stop(void)
     return cap_im_qq_gateway_stop();
 }
 
-esp_err_t cap_im_qq_send_text(const char *chat_id, const char *text)
+static esp_err_t cap_im_qq_send_text_reply(const char *chat_id, const char *text, const char *reply_id)
 {
     if (!s_qq_initialized) {
         return ESP_ERR_INVALID_STATE;
@@ -2103,7 +2121,7 @@ esp_err_t cap_im_qq_send_text(const char *chat_id, const char *text)
         }
         memcpy(chunk, text + offset, chunk_len);
 
-        err = cap_im_qq_send_message_chunk(chat_id, chunk);
+        err = cap_im_qq_send_message_chunk(chat_id, chunk, reply_id);
         free(chunk);
         if (err != ESP_OK) {
             last_err = err;
@@ -2113,6 +2131,11 @@ esp_err_t cap_im_qq_send_text(const char *chat_id, const char *text)
     }
 
     return last_err;
+}
+
+esp_err_t cap_im_qq_send_text(const char *chat_id, const char *text)
+{
+    return cap_im_qq_send_text_reply(chat_id, text, NULL);
 }
 
 esp_err_t cap_im_qq_send_image(const char *chat_id, const char *path, const char *caption)
