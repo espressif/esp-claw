@@ -1,0 +1,5 @@
+board: lilygo_t_cameraplus_s3_v1_1
+chip: esp32s3
+version: 1.0.0
+description: "LilyGO T-CameraPlus-S3 V1.0-V1.1 Development Board"
+manufacturer: "LilyGO"
