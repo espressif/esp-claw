@@ -6,21 +6,21 @@ When a request mentions `touch`, `touch channels`, or `capacitive sensor`, use t
 ## How to call
 - Import it with `local touch = require("touch")`
 - Open the device with one of:
-  - `local keys = touch.new({ gpios = { 2, 3, 4 } })` — provide GPIOs directly
-  - `local keys = touch.new("touch_inputs", { gpios = { 2, 3, 4 }, threshold_milli = 20 })` — choose a name and threshold
+  - `local keys = touch.new({ gpios = { 4, 5 } })` — provide GPIOs directly
+  - `local keys = touch.new("touch_inputs", { gpios = { 4, 5 }, threshold_milli = 20 })` — choose a name and threshold
 - Call `local sample = keys:read()` to get all channel states
 - Call `local pressed = keys:is_pressed(index)` to check one channel (1-based index)
 - Call `keys:name()` to get the device name string
 - Call `keys:close()` when done
 
 ## Options table
-`gpios` is required. Other fields are optional.
+`gpios` is optional when the board declares `touch_keys`; otherwise it is required. `touch.new()` uses the board pins and threshold. Pins already used by another device or touch object cannot be opened again.
 
 | Field             | Type    | Meaning                                              |
 |-------------------|---------|------------------------------------------------------|
 | `device`          | string  | Optional name returned by `keys:name()`              |
 | `gpios`           | array   | GPIO numbers of touch channels to read               |
-| `threshold_milli` | integer | Active threshold in permille of benchmark (default from Kconfig) |
+| `threshold_milli` | integer | Active threshold in permille of benchmark (firmware default) |
 
 ## Data format
 `keys:read()` returns a table with:
@@ -41,10 +41,12 @@ When a request mentions `touch`, `touch channels`, or `capacitive sensor`, use t
 ```lua
 local touch = require("touch")
 
-local keys = touch.new({ gpios = { 2, 3, 4 } })
+local keys = touch.new({ gpios = { 4, 5 } })
 local sample = keys:read()
 for _, key in ipairs(sample.keys) do
     print(key.index, key.gpio, key.channel, key.smooth)
 end
 keys:close()
 ```
+
+GPIO4/5 in this example must be free and touch-capable on your board. Unavailable pins raise an error. Close the handle when finished; retry a failed close before reusing the pins.

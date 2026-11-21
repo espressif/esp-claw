@@ -391,14 +391,16 @@ static esp_err_t test_session_history_collect(const claw_core_request_t *request
     return ESP_OK;
 }
 
-static esp_err_t test_backend_init(const claw_llm_runtime_config_t *config,
+static esp_err_t test_backend_init(const claw_llm_backend_config_t *config,
                                    const claw_llm_model_profile_t *profile,
+                                   claw_endpoint_handle_t endpoint,
                                    void **out_backend_ctx,
                                    char **out_error_message)
 {
     test_backend_ctx_t *ctx = NULL;
 
     (void)profile;
+    (void)endpoint;
 
     if (!out_backend_ctx) {
         return ESP_ERR_INVALID_ARG;
@@ -506,7 +508,6 @@ static void ensure_backend_registered(void)
         .id = TEST_BACKEND_ID,
         .vtable = &s_backend_vtable,
         .defaults = {
-            .auth_type = "none",
             .chat_path = "",
             .max_tokens_field = "max_tokens",
         },
@@ -1014,7 +1015,7 @@ TEST_CASE("root text submit returns response through manager facade",
     test_clear_captures();
 
     TEST_ASSERT_EQUAL(ESP_OK,
-                      claw_agent_mgr_submit_root_text("root hello",
+                      claw_agent_mgr_start_root_run_text("root hello",
                                                      "chat:root:facade",
                                                      0,
                                                      1000,

@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 #include "http_server_priv.h"
+#include "esp_random.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -52,6 +53,8 @@ esp_err_t http_server_init(const http_server_config_t *config)
     memset(&s_ctx, 0, sizeof(s_ctx));
     strlcpy(s_ctx.storage_base_path, config->storage_base_path, sizeof(s_ctx.storage_base_path));
     s_ctx.services = config->services;
+    // Identify this server lifetime without persisting state in NVS.
+    snprintf(s_ctx.boot_id, sizeof(s_ctx.boot_id), "%08lx%08lx", (unsigned long)esp_random(), (unsigned long)esp_random());
     return ESP_OK;
 }
 
@@ -71,7 +74,7 @@ esp_err_t http_server_start(void)
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     config.ctrl_port = HTTP_SERVER_CTRL_PORT;
-    config.max_uri_handlers = 32;
+    config.max_uri_handlers = 48;
     config.stack_size = 8192;
     config.max_open_sockets = 12;
     config.lru_purge_enable = true;
@@ -99,6 +102,7 @@ esp_err_t http_server_start(void)
 #endif
     ESP_RETURN_ON_ERROR(http_server_register_wechat_routes(s_ctx.server), TAG, "Failed to register WeChat routes");
     ESP_RETURN_ON_ERROR(http_server_register_webim_routes(s_ctx.server), TAG, "Failed to register Web IM routes");
+    ESP_RETURN_ON_ERROR(http_server_register_webim_session_routes(s_ctx.server), TAG, "Failed to register session routes");
     ESP_RETURN_ON_ERROR(httpd_register_err_handler(s_ctx.server, HTTPD_404_NOT_FOUND, http_server_captive_404_handler),
                         TAG, "Failed to register captive 404 handler");
 
@@ -111,6 +115,7 @@ esp_err_t http_server_stop(void)
         return ESP_OK;
     }
 
+    http_server_webim_stop();
     esp_err_t err = httpd_stop(s_ctx.server);
     if (err == ESP_OK) {
         s_ctx.server = NULL;

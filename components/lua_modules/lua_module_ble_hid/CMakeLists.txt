@@ -8,5 +8,4 @@ idf_component_register(
         bt
         esp_hid
         freertos
-        georgik__lua
 )

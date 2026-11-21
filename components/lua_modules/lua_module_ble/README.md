@@ -1,8 +1,7 @@
 # Lua BLE
 
-This document is written for LLMs and Lua script generation. It explains how
-to use the `ble` module exposed by `components/lua_modules/lua_module_ble` for
-ordinary BLE Peripheral advertising and GATT Server tasks.
+This document is an API guide for using the `ble` module from Lua for ordinary
+BLE Peripheral advertising and GATT Server tasks.
 
 ## When To Use
 
@@ -37,9 +36,8 @@ ordinary BLE Peripheral advertising and GATT Server tasks.
 ## How To Call
 
 - `ble.smp_config(opts)`: configure security before `ble.init()`.
-- `ble.init()`: start the BLE controller and NimBLE host. Idempotent.
-- `ble.deinit()`: stop advertising, disconnect peers, drain events, and release
-  this module's BLE state. Idempotent.
+- `ble.init()`: initialize BLE runtime state. Idempotent.
+- `ble.deinit()`: stop advertising, disconnect peers, and clear pending events. Idempotent.
 - `ble.set_name(name)`: set the GAP device name. `name` must be 28 bytes or less.
 - `ble.set_max_mtu(mtu)`: set preferred ATT MTU from `23..517` before connections.
 - `ble.gatts_define(profile)`: define and activate a dynamic GATT Server.
@@ -61,20 +59,6 @@ failure. Parameter type and shape errors raise Lua errors.
 
 ## Minimal Advertising Example
 
-Prefer the runtime script when the agent only needs to start ordinary BLE
-advertising. It initializes BLE, defines a simple `fff0/fff1` GATT service,
-starts advertising, and runs an event loop:
-
-```json
-{"path":"/fatfs/skills/ble/scripts/start_ble.lua","args":{},"timeout_ms":0}
-```
-
-Stop ordinary BLE advertising with:
-
-```json
-{"path":"/fatfs/skills/ble/scripts/stop_ble.lua","args":{},"timeout_ms":5000}
-```
-
 Use direct Lua when generating a custom advertising script:
 
 ```lua
@@ -94,10 +78,6 @@ end
 ```
 
 ## Minimal GATT Example
-
-Use the same runtime start/stop scripts as the advertising example when the
-default `fff0/fff1` GATT service is enough. Use direct Lua when the generated
-script needs a custom GATT profile or event behavior.
 
 This example exposes service `fff0` with one read/write/notify characteristic.
 A peer must subscribe before `ble.notify()` can succeed.
@@ -180,13 +160,11 @@ ble.adv_start({
 ```
 
 Advertising payloads are Legacy Advertising payloads and must fit the 31-byte AD
-data limit. `adv_start()` sets `adv_requested = true`; advertising automatically
-restarts after a disconnect if a connection slot becomes free. `ble.adv_stop()`
-clears `adv_requested`.
+data limit. Advertising automatically restarts after a disconnect if a
+connection slot becomes free. `ble.adv_stop()` disables automatic restart.
 
 UUIDs may be 16-bit, 32-bit, or 128-bit strings. Prefer stable characteristic
-`id` values for lookup. Do not declare descriptor `2902`; NimBLE creates CCCD
-automatically for notify and indicate characteristics.
+`id` values for lookup. Do not declare descriptor `2902`; it is provided automatically for notify and indicate characteristics.
 
 ## Events
 

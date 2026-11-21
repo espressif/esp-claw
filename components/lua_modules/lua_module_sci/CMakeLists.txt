@@ -5,5 +5,8 @@ idf_component_register(
         "include"
     REQUIRES
         cap_lua
-        esp_driver_gpio
+        esp_driver_i2c
+        lua_driver_i2c
+    PRIV_REQUIRES
+        esp_timer
 )

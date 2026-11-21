@@ -4,6 +4,54 @@ This directory contains the Emscripten build for the ESP-Claw Lua LVGL
 simulator. It intentionally keeps only simulator-specific source files in the
 repository.
 
+The simulator supports Lua LVGL and the basic `require("display")` screen APIs.
+Display supports RGB565, single/double buffering, primitives, basic and DFN1
+fonts, clipping, translation, and single-touch input. Image loading is not
+supported. RAW display and LVGL use exclusive screen sessions.
+
+Runtime state is cleaned up when a script returns, fails, or stops. Switching
+Apps or resolution discards pending refreshes. Browser audio does not provide
+`audio.open_output()`; Apps with optional sound can run silently.
+
+## Hardware mocks
+
+These APIs return simulated data and do not access physical devices:
+
+- `imu.new({ device = "imu_sensor" })` opens a named mock board sensor.
+- `imu.new({ chip = "bmi270", bus = bus })` opens a mock external sensor;
+  `icm42670` and `mpu6050` are also accepted. Use a bus from `i2c.new(...)`
+  or `i2c.borrow(port)`. Optional `address`, `int_gpio`, and `sdo_gpio` fields
+  do not configure hardware.
+- IMU handles provide `read()`, `read_temperature()`, `read_int_status()`,
+  `name()`, and `close()`. Reads return simulated acceleration
+  (16384 LSB/g), zero gyro, browser elapsed microseconds in `sens_time`,
+  and zero status/temperature. The page provides a tilt joystick (mouse, touch and arrow keys; release to center), shake, flip and reset controls. Read and name calls fail after closing.
+- `button.on(handle, event, callback)` accepts a subscription, but no physical
+  button events are generated. `button.dispatch()` returns zero, and
+  `button.get_key_level(handle)` returns the inactive level.
+
+Hardware mocks do not validate board wiring, detect resource conflicts, or
+model sensor-specific ranges and timing. Validate hardware behavior on a board.
+
+## Audio and bitmap rendering
+
+`audio.open_output`, `audio.player` and `audio.sample_player` use browser audio.
+Click Run to unlock playback. File playback, PCM writes and a started sample player
+exclusively own the output; close players before closing their output.
+Sample playback supports voice handles, rate, delay, duration and envelopes.
+The browser compressor approximates limiting; hardware underrun and timing counters
+are unavailable. Remote streams retain the local proxy at port 8092; use the runtime's
+`?stream=direct` option to bypass it.
+
+`display:blit` supports RGB565, RGB888 and BGR888. `image` remains unsupported.
+
+## Validation
+
+Upload `tests/display_contract.lua` and check `DISPLAY_CONTRACT_OK`.
+Duplicate screen-open errors are expected. Upload `tests/display_font_contract.lua`
+and check `DISPLAY_FONT_CONTRACT_OK`; truncated-font errors are expected.
+Run `pnpm test` in `pages/simulator` for bootstrap and audio lifecycle checks.
+
 Third-party dependencies are fetched into the CMake build directory:
 
 - LVGL `v9.5.0`

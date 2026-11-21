@@ -1,15 +1,15 @@
 import './style.css'
 import { readSimulatorParams } from './params'
 import { buildWebUrl } from './repo-provider'
-import { loadSkill } from './skill-loader'
+import { inferLuaPeripherals, loadApp } from './app-loader'
 import { RuntimeHost } from './runtime-host'
-import type { LoadedSkill } from './types'
+import type { LoadedApp } from './types'
 
 const app = document.querySelector<HTMLDivElement>('#app')
 if (!app) throw new Error('missing #app')
 const appRoot = app
 
-let loadedSkill: LoadedSkill | null = null
+let loadedApp: LoadedApp | null = null
 let runtime: RuntimeHost | null = null
 let runtimeReady = false
 let runtimeFailed = false
@@ -46,14 +46,14 @@ const guideSteps = [
   {
     target: '#run',
     icon: 'run' as const,
-    title: 'Run the skill',
+    title: 'Run the App',
     description: 'Click Run to load the program and start the simulation.',
   },
   {
     target: '#stop',
     icon: 'stop' as const,
     title: 'Stop the program',
-    description: 'Once the skill is running, click Stop to end it safely.',
+    description: 'Once the App is running, click Stop to end it safely.',
   },
 ]
 
@@ -71,44 +71,31 @@ function safeLocalScriptName(name: string): string {
   return cleaned.replace(/[^A-Za-z0-9._-]/g, '_') || 'local_script.lua'
 }
 
-async function createLocalSkill(file: File): Promise<LoadedSkill> {
+async function createLocalApp(file: File): Promise<LoadedApp> {
   const name = safeLocalScriptName(file.name)
+  const localAppId = name.replace(/\.lua$/i, '').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 63) || 'local_script'
   const content = new Uint8Array(await file.arrayBuffer())
   const text = new TextDecoder().decode(content)
   const entry = `scripts/${name}`
+  const files = [{ path: entry, content, text }]
 
   return {
     params: {
       repo: 'local',
       ref: 'local',
-      skill: 'local/SKILL.md',
+      app: 'local/launcher.json',
     },
     rootPath: 'local',
-    frontmatter: {
-      name: name.replace(/\.lua$/i, '') || 'local_script',
-      description: 'Local Lua script uploaded from this browser.',
-      metadata: {
-        category: ['ui'],
-        tags: ['local'],
-      },
-      execution: {
-        entry,
-      },
-      simulator: {
-        entry,
-        files: [entry],
-      },
+    manifest: {
+      schema_version: 1,
+      id: localAppId,
+      display_name: name,
+      entry,
     },
-    markdownBody: '',
-    files: [
-      {
-        path: entry,
-        content,
-        text,
-      },
-    ],
+    files,
     entry,
-    virtualRoot: `/uploads/local/${Date.now()}`,
+    virtualRoot: `/apps/local_${Date.now()}`,
+    peripherals: inferLuaPeripherals(files),
     capabilityMocks: {},
     simulatorMocks: {},
   }
@@ -122,14 +109,14 @@ function renderShell(): HTMLIFrameElement {
           <img class="brand-logo" src="./logo.svg" alt="ESP-Claw" />
           <span class="brand-divider">|</span>
           <span>
-            <strong>Skill Simulator</strong>
+            <strong>App Simulator</strong>
             <small>Lua LVGL Web Runtime</small>
           </span>
         </a>
         <div class="header-actions">
           <button id="guideButton" class="btn-secondary" type="button">Guide</button>
           <button id="localUploadButton" class="btn-secondary" type="button">Simulate Local Script</button>
-          <a id="sourceLink" class="btn-secondary" href="#" target="_blank" rel="noreferrer">SKILL.md</a>
+          <a id="sourceLink" class="btn-secondary" href="#" target="_blank" rel="noreferrer">launcher.json</a>
           <input id="localUpload" class="file-input" type="file" accept=".lua,text/x-lua,text/plain" />
         </div>
       </header>
@@ -137,7 +124,7 @@ function renderShell(): HTMLIFrameElement {
       <main class="workspace">
         <section class="preview" aria-label="Simulator display">
           <div class="device-shell">
-            <iframe id="runtime" title="ESP-Claw Lua LVGL runtime" allow="camera"></iframe>
+            <iframe id="runtime" title="ESP-Claw Lua LVGL runtime" allow="camera; autoplay"></iframe>
             <div id="previewLoading" class="preview-loading" role="status" aria-label="Loading runtime">
               <span>Loading</span>
               <span class="loading-dots" aria-hidden="true">
@@ -150,7 +137,7 @@ function renderShell(): HTMLIFrameElement {
                   <path d="M18 13.5 36 24 18 34.5z"></path>
                 </svg>
               </span>
-              <span>Run Skill</span>
+              <span>Run App</span>
             </button>
           </div>
         </section>
@@ -158,8 +145,8 @@ function renderShell(): HTMLIFrameElement {
         <aside class="control-panel">
           <section class="panel-section">
             <p class="eyebrow">Online Experience</p>
-            <h1 id="skillName">Loading skill...</h1>
-            <p id="skillDescription" class="description">Preparing simulator runtime.</p>
+            <h1 id="appName">Loading App...</h1>
+            <p id="appDescription" class="description">Preparing simulator runtime.</p>
             <div id="categoryTags" class="tag-list"></div>
           </section>
 
@@ -185,6 +172,19 @@ function renderShell(): HTMLIFrameElement {
                 <input id="displayHeight" type="number" min="64" max="2048" step="1" value="480" />
               </label>
               <button id="applyResolution" class="btn-secondary" type="button" disabled>Apply</button>
+            </div>
+          </section>
+
+          <section id="motionControls" class="panel-section" hidden>
+            <div class="section-title">Motion · 倾斜控制</div>
+            <div id="motionStick" class="motion-stick" tabindex="0" role="group" aria-label="倾斜摇杆" aria-describedby="motionHint">
+              <span class="motion-knob"></span>
+            </div>
+            <p id="motionHint" class="motion-hint">拖动倾斜 · 松手回中 · 支持方向键</p>
+            <div class="motion-actions">
+              <button id="motionShake" class="btn-secondary" type="button">Shake · 摇动</button>
+              <button id="motionFlip" class="btn-secondary" type="button">Flip · 翻转</button>
+              <button id="motionReset" class="btn-secondary" type="button">Reset · 归零</button>
             </div>
           </section>
 
@@ -273,7 +273,7 @@ function setRunning(isRunning: boolean): void {
   const applyResolutionButton = document.querySelector<HTMLButtonElement>('#applyResolution')
   const widthInput = document.querySelector<HTMLInputElement>('#displayWidth')
   const heightInput = document.querySelector<HTMLInputElement>('#displayHeight')
-  const canRun = Boolean(!isRunning && loadedSkill && runtimeReady)
+  const canRun = Boolean(!isRunning && loadedApp && runtimeReady)
   const isPreparing = !isRunning && !runtimeFailed && !canRun
   runButton?.toggleAttribute('disabled', !canRun)
   previewRunButton?.toggleAttribute('hidden', !canRun)
@@ -291,6 +291,7 @@ function setDisplayResolution(width: number, height: number): void {
   if (widthInput) widthInput.value = String(width)
   if (heightInput) heightInput.value = String(height)
   deviceShell?.style.setProperty('--device-aspect', `${width} / ${height}`)
+  deviceShell?.style.setProperty('--device-ratio', String(width / height))
 }
 
 function applyRequestedResolution(): void {
@@ -418,50 +419,110 @@ function openGuide(): void {
 }
 
 function renderLocalPrompt(): void {
-  document.querySelector<HTMLHeadingElement>('#skillName')!.textContent = 'Local Lua Script'
-  document.querySelector<HTMLParagraphElement>('#skillDescription')!.textContent =
+  document.querySelector<HTMLHeadingElement>('#appName')!.textContent = 'Local Lua Script'
+  document.querySelector<HTMLParagraphElement>('#appDescription')!.textContent =
     'Upload a Lua script from this computer and run it in the browser simulator.'
   document.querySelector<HTMLElement>('#entryPath')!.textContent = '-'
   document.querySelector<HTMLElement>('#fileCount')!.textContent = '0'
   document.querySelector<HTMLElement>('#sourceName')!.textContent = 'local'
   document.querySelector<HTMLAnchorElement>('#sourceLink')!.classList.add('is-hidden')
+  document.querySelector<HTMLElement>('#motionControls')!.hidden = true
   const tagList = document.querySelector<HTMLDivElement>('#categoryTags')!
   tagList.innerHTML = '<span class="tag">local</span><span class="tag">ui</span>'
 }
 
-function renderSkill(skill: LoadedSkill): void {
-  document.querySelector<HTMLHeadingElement>('#skillName')!.textContent = skill.frontmatter.name
-  document.querySelector<HTMLParagraphElement>('#skillDescription')!.textContent =
-    skill.frontmatter.description || 'ESP-Claw Lua LVGL skill'
-  document.querySelector<HTMLElement>('#entryPath')!.textContent = skill.entry
-  document.querySelector<HTMLElement>('#fileCount')!.textContent = String(skill.files.length)
+function renderApp(loaded: LoadedApp): void {
+  document.querySelector<HTMLHeadingElement>('#appName')!.textContent = loaded.manifest.display_name || loaded.manifest.id
+  document.querySelector<HTMLParagraphElement>('#appDescription')!.textContent = Object.keys(loaded.simulatorMocks.capability ?? {}).length ? '示例数据 · Sample data' : 'ESP-Claw Lua App'
+  document.querySelector<HTMLElement>('#entryPath')!.textContent = loaded.entry
+  document.querySelector<HTMLElement>('#fileCount')!.textContent = String(loaded.files.length)
 
   const sourceLink = document.querySelector<HTMLAnchorElement>('#sourceLink')!
-  if (skill.params.repo === 'local') {
+  if (loaded.params.repo === 'local') {
     sourceLink.classList.add('is-hidden')
     sourceLink.removeAttribute('href')
   } else {
-    const sourceUrl = buildWebUrl(skill.params, skill.params.skill)
+    const sourceUrl = buildWebUrl(loaded.params, loaded.params.app)
     sourceLink.classList.remove('is-hidden')
     sourceLink.href = sourceUrl
   }
-  document.querySelector<HTMLElement>('#sourceName')!.textContent = skill.params.repo
+  document.querySelector<HTMLElement>('#sourceName')!.textContent = loaded.params.repo
 
-  const categories = skill.frontmatter.metadata.category ?? []
+  document.querySelector<HTMLElement>('#motionControls')!.hidden = !loaded.peripherals.includes('imu')
   const tagList = document.querySelector<HTMLDivElement>('#categoryTags')!
-  tagList.innerHTML = categories.map((cat) => `<span class="tag">${escapeHtml(cat)}</span>`).join('')
+  tagList.innerHTML = loaded.peripherals.map((item) => `<span class="tag">${escapeHtml(item)}</span>`).join('')
 }
 
-function runLoadedSkill(): void {
-  if (!loadedSkill || !runtimeReady || runtimeRunning) return
+function runLoadedApp(): void {
+  if (!loadedApp || !runtimeReady || runtimeRunning) return
   applyRequestedResolution()
-  runtime?.run(loadedSkill)
+  runtime?.run(loadedApp)
   setRunning(true)
   setStatus('Running in browser runtime.', 'running')
 }
 
 async function main(): Promise<void> {
   const iframe = renderShell()
+  const motion = document.querySelector<HTMLElement>('#motionControls')!
+  const motionAnchor = motion.nextElementSibling!
+  const narrow = window.matchMedia('(max-width: 980px)')
+  const placeMotion = () => {
+    if (narrow.matches) document.querySelector('.preview')!.append(motion)
+    else motionAnchor.before(motion)
+  }
+  narrow.addEventListener('change', placeMotion)
+  placeMotion()
+  const stick = document.querySelector<HTMLElement>('#motionStick')!
+  const knob = stick.querySelector<HTMLElement>('.motion-knob')!
+  let pointer: number | null = null
+  const keys = new Set<string>()
+  const tilt = (x: number, y: number, action?: string) => {
+    const length = Math.max(1, Math.hypot(x, y))
+    x /= length; y /= length
+    knob.style.transform = `translate(${x * 54}px, ${y * 54}px)`
+    runtime?.setMotion(x, y, action)
+  }
+  const reset = () => {
+    const captured = pointer
+    pointer = null
+    keys.clear()
+    if (captured !== null && stick.hasPointerCapture(captured)) stick.releasePointerCapture(captured)
+    tilt(0, 0)
+  }
+  const move = (event: PointerEvent) => {
+    if (event.pointerId !== pointer) return
+    const box = stick.getBoundingClientRect()
+    tilt((event.clientX - box.left - box.width / 2) / 54, (event.clientY - box.top - box.height / 2) / 54)
+  }
+  stick.addEventListener('pointerdown', (event) => {
+    if (pointer !== null || event.button !== 0) return
+    event.preventDefault()
+    stick.focus({preventScroll: true})
+    keys.clear()
+    pointer = event.pointerId
+    stick.setPointerCapture(pointer)
+    move(event)
+  })
+  stick.addEventListener('pointermove', move)
+  for (const name of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
+    stick.addEventListener(name, (event) => { if (event.pointerId === pointer) reset() })
+  }
+  // Clear held input when focus or pointer capture is lost.
+  stick.addEventListener('blur', reset)
+  window.addEventListener('blur', reset)
+  document.addEventListener('visibilitychange', () => { if (document.hidden) reset() })
+  for (const name of ['keydown', 'keyup'] as const) {
+    stick.addEventListener(name, (event) => {
+      if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return
+      event.preventDefault()
+      if (pointer !== null) return
+      if (name === 'keydown') keys.add(event.key); else keys.delete(event.key)
+      tilt(Number(keys.has('ArrowRight')) - Number(keys.has('ArrowLeft')), Number(keys.has('ArrowDown')) - Number(keys.has('ArrowUp')))
+    })
+  }
+  document.querySelector('#motionShake')!.addEventListener('click', () => { reset(); tilt(0, 0, 'shake') })
+  document.querySelector('#motionFlip')!.addEventListener('click', () => { keys.clear(); tilt(0, 0, 'flip') })
+  document.querySelector('#motionReset')!.addEventListener('click', reset)
   runtime = new RuntimeHost(iframe, {
     onLog: (message, kind) => appendLog(message, kind),
     onState: (state, detail) => {
@@ -469,7 +530,7 @@ async function main(): Promise<void> {
         runtimeFailed = false
         runtimeReady = true
         setRunning(false)
-        setStatus(loadedSkill ? 'Runtime ready. Click Run to start.' : 'Runtime ready.', 'ready')
+        setStatus(loadedApp ? 'Runtime ready. Click Run to start.' : 'Runtime ready.', 'ready')
       } else if (state === 'running') {
         setRunning(true)
         setStatus('Running in browser runtime.', 'running')
@@ -501,8 +562,8 @@ async function main(): Promise<void> {
   const localUploadButton = document.querySelector<HTMLButtonElement>('#localUploadButton')
   const localUpload = document.querySelector<HTMLInputElement>('#localUpload')
 
-  runButton?.addEventListener('click', runLoadedSkill)
-  previewRunButton?.addEventListener('click', runLoadedSkill)
+  runButton?.addEventListener('click', runLoadedApp)
+  previewRunButton?.addEventListener('click', runLoadedApp)
   stopButton?.addEventListener('click', () => {
     runtime?.stop()
     setStatus('Stop requested...', 'loading')
@@ -528,12 +589,12 @@ async function main(): Promise<void> {
     try {
       runtime?.stop()
       setRunning(false)
-      loadedSkill = await createLocalSkill(file)
-      renderSkill(loadedSkill)
+      loadedApp = await createLocalApp(file)
+      renderApp(loadedApp)
       appendLog(`uploaded local script ${file.name}`)
       setStatus('Local script loaded. Click Run to start.', 'ready')
       setRunning(false)
-      runLoadedSkill()
+      runLoadedApp()
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       appendLog(message, 'error')
@@ -557,11 +618,11 @@ async function main(): Promise<void> {
       setRunning(false)
       return
     }
-    appendLog('loading skill metadata')
-    loadedSkill = await loadSkill(params)
-    renderSkill(loadedSkill)
-    appendLog(`loaded ${loadedSkill.files.length} files`)
-    setStatus(runtimeReady ? 'Runtime ready. Click Run to start.' : 'Skill loaded. Waiting for runtime...', 'ready')
+    appendLog('loading App metadata')
+    loadedApp = await loadApp(params)
+    renderApp(loadedApp)
+    appendLog(`loaded ${loadedApp.files.length} files`)
+    setStatus(runtimeReady ? 'Runtime ready. Click Run to start.' : 'App loaded. Waiting for runtime...', 'ready')
     setRunning(false)
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)

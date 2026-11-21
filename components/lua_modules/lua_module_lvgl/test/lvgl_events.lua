@@ -7,19 +7,13 @@ What this script exercises:
   - lvgl.process_events drains the queue non-blocking
   - lvgl.run loops until cap_lua signals stop
 
-Hardware expectation: a touch-capable display backing
-board_manager.get_display_lcd_params(...). On boards without touch you
-will not see the click events fire, but the script will still register,
-deinit cleanly, and tolerate an empty event queue.
+Hardware expectation: a configured display with optional touch input.
+Without touch, callbacks still register and the empty event queue is safe.
 ]]
 
-local board_manager = require("board_manager")
 local lvgl = require("lvgl")
 
-local panel_handle, io_handle, width, height, panel_if =
-    board_manager.get_display_lcd_params("display_lcd")
-
-lvgl.init(panel_handle, io_handle, width, height, panel_if, {
+lvgl.init({
     buffer_lines = 10,
     tick_ms = 5,
     task_period_ms = 10,
@@ -27,6 +21,7 @@ lvgl.init(panel_handle, io_handle, width, height, panel_if, {
 
 local ok, err = pcall(function()
     local scr = lvgl.create_screen()
+    local width = scr:get_size()
     scr:set_style({ bg_color = "#0f172a" })
 
     local title = lvgl.label(scr, {

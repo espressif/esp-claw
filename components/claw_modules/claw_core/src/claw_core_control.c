@@ -23,8 +23,8 @@ void claw_core_control_set_phase(claw_core_state_t *core, claw_core_agent_loop_p
     }
 }
 
-bool claw_core_control_take_user_interrupt_http_abort(claw_core_state_t *core,
-                                                      uint32_t request_id)
+bool claw_core_control_take_run_inbox_http_abort(claw_core_state_t *core,
+                                                 uint32_t request_id)
 {
     bool taken = false;
 
@@ -36,7 +36,7 @@ bool claw_core_control_take_user_interrupt_http_abort(claw_core_state_t *core,
     }
     if (core->inflight_request_id == request_id &&
             core->inflight_abort &&
-            core->inflight_abort_reason == CLAW_CORE_CONTROL_ABORT_REASON_USER_INTERRUPT) {
+            core->inflight_abort_reason == CLAW_CORE_CONTROL_ABORT_REASON_RUN_INBOX) {
         core->inflight_abort = false;
         core->inflight_abort_reason = CLAW_CORE_CONTROL_ABORT_REASON_NONE;
         taken = true;
@@ -45,8 +45,8 @@ bool claw_core_control_take_user_interrupt_http_abort(claw_core_state_t *core,
     return taken;
 }
 
-void claw_core_control_clear_user_interrupt_abort(claw_core_state_t *core,
-                                                  uint32_t request_id)
+void claw_core_control_clear_run_inbox_abort(claw_core_state_t *core,
+                                             uint32_t request_id)
 {
     if (!core || !core->inflight_lock) {
         return;
@@ -55,7 +55,7 @@ void claw_core_control_clear_user_interrupt_abort(claw_core_state_t *core,
         return;
     }
     if (core->inflight_request_id == request_id &&
-            core->inflight_abort_reason == CLAW_CORE_CONTROL_ABORT_REASON_USER_INTERRUPT) {
+            core->inflight_abort_reason == CLAW_CORE_CONTROL_ABORT_REASON_RUN_INBOX) {
         core->inflight_abort = false;
         core->inflight_abort_reason = CLAW_CORE_CONTROL_ABORT_REASON_NONE;
     }

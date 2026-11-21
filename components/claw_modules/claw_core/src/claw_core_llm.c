@@ -53,10 +53,12 @@ void claw_core_llm_config_free(claw_core_llm_config_t *config)
 
     free((char *)config->api_key);
     free((char *)config->backend_type);
+    free((char *)config->endpoint_provider);
     free((char *)config->model);
     free((char *)config->base_url);
     free((char *)config->auth_type);
     free((char *)config->max_tokens_field);
+    free((char *)config->reasoning_effort);
     memset(config, 0, sizeof(*config));
 }
 
@@ -70,10 +72,12 @@ esp_err_t claw_core_llm_config_copy(claw_core_llm_config_t *dst,
     memset(dst, 0, sizeof(*dst));
     dst->api_key = src->api_key ? strdup(src->api_key) : NULL;
     dst->backend_type = src->backend_type ? strdup(src->backend_type) : NULL;
+    dst->endpoint_provider = src->endpoint_provider ? strdup(src->endpoint_provider) : NULL;
     dst->model = src->model ? strdup(src->model) : NULL;
     dst->base_url = src->base_url ? strdup(src->base_url) : NULL;
     dst->auth_type = src->auth_type ? strdup(src->auth_type) : NULL;
     dst->max_tokens_field = src->max_tokens_field ? strdup(src->max_tokens_field) : NULL;
+    dst->reasoning_effort = src->reasoning_effort ? strdup(src->reasoning_effort) : NULL;
     dst->timeout_ms = src->timeout_ms;
     dst->max_tokens = src->max_tokens;
     dst->image_max_bytes = src->image_max_bytes;
@@ -83,15 +87,37 @@ esp_err_t claw_core_llm_config_copy(claw_core_llm_config_t *dst,
 
     if ((src->api_key && !dst->api_key) ||
             (src->backend_type && !dst->backend_type) ||
+            (src->endpoint_provider && !dst->endpoint_provider) ||
             (src->model && !dst->model) ||
             (src->base_url && !dst->base_url) ||
             (src->auth_type && !dst->auth_type) ||
-            (src->max_tokens_field && !dst->max_tokens_field)) {
+            (src->max_tokens_field && !dst->max_tokens_field) ||
+            (src->reasoning_effort && !dst->reasoning_effort)) {
         claw_core_llm_config_free(dst);
         return ESP_ERR_NO_MEM;
     }
 
     return ESP_OK;
+}
+
+static claw_llm_runtime_config_t runtime_config_from_core(const claw_core_llm_config_t *config)
+{
+    return (claw_llm_runtime_config_t) {
+        .api_key = config->api_key,
+        .backend_type = config->backend_type,
+        .endpoint_provider = config->endpoint_provider,
+        .model = config->model,
+        .base_url = config->base_url,
+        .auth_type = config->auth_type,
+        .max_tokens_field = config->max_tokens_field,
+        .reasoning_effort = config->reasoning_effort,
+        .timeout_ms = config->timeout_ms,
+        .max_tokens = config->max_tokens,
+        .image_max_bytes = config->image_max_bytes,
+        .supports_tools = config->supports_tools,
+        .supports_vision = config->supports_vision,
+        .image_remote_url_only = config->image_remote_url_only,
+    };
 }
 
 bool claw_core_llm_config_ready(claw_core_state_t *core,
@@ -109,14 +135,13 @@ bool claw_core_llm_config_ready(claw_core_state_t *core,
     if (core->llm_lock) {
         xSemaphoreTake(core->llm_lock, portMAX_DELAY);
     }
-    if (!core->llm_config.api_key || !core->llm_config.api_key[0]) {
-        reason = "LLM API token is not configured. Open the device settings page and set the LLM API token before chatting.";
-    } else if (!core->llm_config.backend_type || !core->llm_config.backend_type[0]) {
+    claw_llm_runtime_config_t runtime_config = runtime_config_from_core(&core->llm_config);
+    if (!core->llm_config.backend_type || !core->llm_config.backend_type[0]) {
         reason = "LLM backend is not configured. Open the device settings page and select an LLM backend before chatting.";
     } else if (!core->llm_config.model || !core->llm_config.model[0]) {
         reason = "LLM model is not configured. Open the device settings page and set an LLM model before chatting.";
-    } else if (!core->llm_config.base_url || !core->llm_config.base_url[0]) {
-        reason = "LLM base URL is not configured. Open the device settings page and set the LLM base URL before chatting.";
+    } else if (!claw_llm_runtime_endpoint_is_configured(&runtime_config)) {
+        reason = "LLM endpoint is not configured. Open the device settings page and configure its connection settings before chatting.";
     } else {
         ready = true;
     }
@@ -133,7 +158,7 @@ esp_err_t claw_core_llm_init(const claw_core_llm_config_t *config,
                              claw_llm_runtime_t **out_runtime,
                              char **out_error_message)
 {
-    claw_llm_runtime_config_t runtime_config = {0};
+    claw_llm_runtime_config_t runtime_config;
     esp_err_t err;
 
     if (out_runtime) {
@@ -142,22 +167,11 @@ esp_err_t claw_core_llm_init(const claw_core_llm_config_t *config,
     if (out_error_message) {
         *out_error_message = NULL;
     }
-    if (!config || !config->api_key || !config->model || !out_runtime || !out_error_message) {
+    if (!config || !config->model || !out_runtime || !out_error_message) {
         return ESP_ERR_INVALID_ARG;
     }
 
-    runtime_config.api_key = config->api_key;
-    runtime_config.backend_type = config->backend_type;
-    runtime_config.model = config->model;
-    runtime_config.base_url = config->base_url;
-    runtime_config.auth_type = config->auth_type;
-    runtime_config.max_tokens_field = config->max_tokens_field;
-    runtime_config.timeout_ms = config->timeout_ms;
-    runtime_config.max_tokens = config->max_tokens;
-    runtime_config.image_max_bytes = config->image_max_bytes;
-    runtime_config.supports_tools = config->supports_tools;
-    runtime_config.supports_vision = config->supports_vision;
-    runtime_config.image_remote_url_only = config->image_remote_url_only;
+    runtime_config = runtime_config_from_core(config);
     err = claw_llm_runtime_init(out_runtime, &runtime_config, out_error_message);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "init: runtime init failed err=0x%x", err);

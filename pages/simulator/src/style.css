@@ -144,7 +144,7 @@ button:disabled {
 
 .device-shell {
   position: relative;
-  width: min(100%, 64rem);
+  width: min(100%, 64rem, calc((100dvh - 9rem) * var(--device-ratio, 1.666667)));
   aspect-ratio: var(--device-aspect, 5 / 3);
   display: grid;
   overflow: hidden;
@@ -742,4 +742,20 @@ body.guide-open {
   .guide-footer {
     bottom: 1rem;
   }
+}
+
+.motion-stick { position: relative; display: grid; place-items: center; width: 160px; height: 160px; margin: 20px auto 12px; border: 1px solid #444; border-radius: 50%; background: radial-gradient(circle, #242832 0 28%, transparent 29%), linear-gradient(90deg, transparent 49.5%, #343841 50%, transparent 50.5%), linear-gradient(transparent 49.5%, #343841 50%, transparent 50.5%), #14171c; touch-action: none; user-select: none; cursor: grab; }
+.motion-stick:active { cursor: grabbing; }
+.motion-stick:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.motion-knob { width: 48px; height: 48px; border: 1px solid #ff776b; border-radius: 50%; background: var(--accent); box-shadow: 0 4px 16px #0008; pointer-events: none; }
+.motion-hint { text-align: center; color: #aeb3bf; font-size: 12px; margin-bottom: 16px; }
+.motion-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+@media (max-width: 980px) {
+  .preview:has(#motionControls:not([hidden])) { align-content: start; gap: 16px; }
+  .preview #motionControls:not([hidden]) { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 8px 16px; width: min(100%, 420px); padding: 12px 0 0; border: 0; }
+  .preview #motionControls .section-title { grid-column: 1 / -1; }
+  .preview .motion-stick { grid-column: 1; grid-row: 2; margin: 0; }
+  .preview .motion-actions { grid-column: 2; grid-row: 2; flex-direction: column; justify-content: center; }
+  .preview .motion-hint { grid-column: 1 / -1; grid-row: 3; margin: 0; }
 }

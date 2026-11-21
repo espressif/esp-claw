@@ -208,9 +208,20 @@ esp_err_t system_ui_reload_home(void)
 {
     ESP_RETURN_ON_FALSE(s_ui.started, ESP_ERR_INVALID_STATE,
                         SYSTEM_UI_TAG, "runtime not started");
-    ESP_RETURN_ON_FALSE(!display_service_has_exclusive_session(), ESP_ERR_INVALID_STATE,
-                        SYSTEM_UI_TAG, "exclusive display session active");
     ESP_RETURN_ON_ERROR(system_ui_lock(), SYSTEM_UI_TAG, "lock failed");
+    if (!s_ui.started) {
+        system_ui_unlock();
+        ESP_LOGE(SYSTEM_UI_TAG, "runtime stopped before home reload");
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (display_service_has_exclusive_session()) {
+        /* Keep the current default screen valid until the exclusive owner releases it. */
+        s_ui.home_reload_pending = true;
+        system_ui_unlock();
+        ESP_LOGI(SYSTEM_UI_TAG, "home reload deferred until exclusive display exits");
+        return ESP_OK;
+    }
+    s_ui.home_reload_pending = false;
     system_ui_delete_home_locked();
     esp_err_t err = system_ui_create_home_locked();
     if (err == ESP_OK) {

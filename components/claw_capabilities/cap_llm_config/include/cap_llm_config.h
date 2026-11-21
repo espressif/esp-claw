@@ -19,6 +19,7 @@ extern "C" {
 typedef struct {
     char api_key[CAP_LLM_CONFIG_STR_LEN];
     char backend_type[CAP_LLM_CONFIG_SHORT_STR_LEN];
+    char endpoint_provider[CAP_LLM_CONFIG_SHORT_STR_LEN];
     char model[CAP_LLM_CONFIG_MODEL_LEN];
     char base_url[CAP_LLM_CONFIG_STR_LEN];
     char auth_type[CAP_LLM_CONFIG_SHORT_STR_LEN];
@@ -26,6 +27,7 @@ typedef struct {
     char max_tokens[CAP_LLM_CONFIG_TIMEOUT_LEN];
     char default_image_max_bytes[CAP_LLM_CONFIG_TIMEOUT_LEN];
     char max_tokens_field[CAP_LLM_CONFIG_SHORT_STR_LEN];
+    char reasoning_effort[CAP_LLM_CONFIG_TIMEOUT_LEN];
     char supports_tools[8];
     char supports_vision[8];
     char image_remote_url_only[8];

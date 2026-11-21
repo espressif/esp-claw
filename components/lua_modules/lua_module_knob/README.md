@@ -1,6 +1,6 @@
 # Lua Knob
 
-This skill describes how to correctly use a rotary encoder (knob) when writing Lua scripts.
+This module describes how to use a rotary encoder (knob) from Lua.
 
 ## How to call
 - Import it with `local knob = require("knob")`
@@ -14,6 +14,13 @@ This skill describes how to correctly use a rotary encoder (knob) when writing L
 - Call `knob.get_count(handle)` to read the current count value
 - Call `knob.clear_count(handle)` to reset count to zero
 - Call `knob.close(handle)` when the handle is no longer needed
+
+## Return values and events
+- `knob.new(...)` returns a handle or `nil, err`.
+- `knob.close(handle)`, `knob.clear_count(handle)`, `knob.on(handle, event, callback)`, and `knob.off(handle[, event])` return `true` or `nil, err`.
+- `knob.get_count(handle)` returns the current count as an integer.
+- `knob.dispatch()` returns the number of dispatched callback events.
+- Callback events are tables with `event` and `count`.
 
 ## Events
 | Event    | Description                    |

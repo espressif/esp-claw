@@ -120,6 +120,8 @@ devices:
     type: custom
     version: 1.0.0
     init_skip: true
+    dependencies:
+      espressif/bmm150: "^1.1.0"
     config:
       i2c_addr: 0x10
       frequency: 400000

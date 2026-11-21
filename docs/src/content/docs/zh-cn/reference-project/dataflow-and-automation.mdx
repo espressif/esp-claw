@@ -88,7 +88,7 @@ Event 是 ESP-Claw 框架中的消息载体，包含了 Event ID、来源、目�
     `edge_agent` 的 `router_rules.json` 位于 `/fatfs/router_rules/router_rules.json`。
     虽然更推荐使用 Console 命令增删修改规则，你也可以通过 Web 配置页的文件系统管理功能直接编辑 `router_rules.json`。
 
-    **修改后，需要执行 `auto reload` 命令使修改生效。**
+    **修改后，需要执行 `router --reload` 命令使修改生效。**
 </Aside>
 
 ## Event Router 的工作流程
@@ -244,37 +244,25 @@ scheduler --trigger <id>             # 立即触发一次
 
 <LinkCard href="@lang/reference-project/console-usage" title="Console 交互" description="查看 Console 命令的基本用法" />
 
-Event Router 提供了两组 Console 命令。`auto` 命令来自 `edge_agent`，`event_router` 命令来自 `cap_router_mgr`，两者功能等价，操作同一份规则集。
+Event Router 通过 `cap_router_mgr` 提供一组 `router` Console 命令。
 
 ```sh
-# auto 命令（edge_agent 提供）
-auto reload                  # 重新载入 router_rules.json
-auto rules                   # 列出当前规则集 JSON
-auto rule <id>               # 查看单条规则 JSON
-auto add_rule '<json>'       # 新增一条规则
-auto update_rule '<json>'    # 按 id 替换一条规则
-auto delete_rule <id>        # 删除一条规则
-auto emit_message ...        # 见后文详细说明
-auto emit_trigger ...        # 见后文详细说明
-auto last                    # 查看最近一次匹配统计，见后文详细说明
-
-# event_router 命令（cap_router_mgr 提供）
-event_router --rules                     # 列出当前规则集 JSON
-event_router --rule <id>                 # 查看单条规则 JSON
-event_router --add-rule-json '<json>'    # 新增一条规则
-event_router --update-rule-json '<json>' # 按 id 替换一条规则
-event_router --delete-rule <id>          # 删除一条规则
-event_router --reload                    # 重新载入 router_rules.json
-event_router --emit-message ...          # 发布消息 Event
-event_router --emit-trigger ...          # 发布触发 Event
-event_router --last                      # 查看最近一次匹配统计
+router --rules                     # 列出当前规则集 JSON
+router --rule <id>                 # 查看单条规则 JSON
+router --add-rule-json '<json>'    # 新增一条规则
+router --update-rule-json '<json>' # 按 id 替换一条规则
+router --delete-rule <id>          # 删除一条规则
+router --reload                    # 重新载入 router_rules.json
+router --emit-message ...          # 发布消息 Event
+router --emit-trigger ...          # 发布触发 Event
+router --last                      # 查看最近一次匹配统计
 ```
 
-- `auto emit_message` 模拟一条来自 IM 的消息 Event：
+- `router --emit-message` 模拟一条来自 IM 的消息 Event：
 
     ```sh
-    auto emit_message <source_cap> <channel> <chat_id> <text...>
-    # auto emit_message qq_gateway    qq      123456   hello world
+    router --emit-message --source-cap <source_cap> --channel <channel> --chat-id <chat_id> --text <text...>
+    # router --emit-message --source-cap qq_gateway --channel qq --chat-id 123456 --text hello world
     ```
 
     | 参数 | 说明 | 示例 |
@@ -286,10 +274,10 @@ event_router --last                      # 查看最近一次匹配统计
 
 
 
-- `auto emit_trigger` 模拟一条触发类 Event：
+- `router --emit-trigger` 模拟一条触发类 Event：
     ```sh
-    auto emit_trigger <source_cap> <event_type> <event_key> '<payload_json>'
-    # auto emit_trigger  tester      trigger     smoke_test '{"ok":true}'
+    router --emit-trigger --source-cap <source_cap> --event-type <event_type> --event-key <event_key> --payload-json '<payload_json>'
+    # router --emit-trigger --source-cap tester --event-type trigger --event-key smoke_test --payload-json '{"ok":true}'
     ```
 
     | 参数 | 说明 | 示例 |
@@ -301,7 +289,7 @@ event_router --last                      # 查看最近一次匹配统计
 
 
 
-- `auto last` 输出最近一次 Event 的处理结果，例如：
+- `router --last` 输出最近一次 Event 的处理结果，例如：
 
     ```text
     matched=true matched_rules=1 action_count=2 failed_actions=0 route=1 handled_at_ms=...

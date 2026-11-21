@@ -10,6 +10,7 @@
 #include <stdint.h>
 
 #include "claw_core.h"
+#include "claw_hw_registry.h"
 #include "esp_err.h"
 #include "lua.h"
 
@@ -56,6 +57,14 @@ typedef struct {
 
 typedef void (*cap_lua_job_event_cb_t)(const cap_lua_job_event_t *event, void *user_ctx);
 
+typedef struct {
+    char job_id[CAP_LUA_JOB_ID_LEN];
+    char name[CAP_LUA_JOB_NAME_MAX];
+    char exclusive[CAP_LUA_JOB_EXCLUSIVE_MAX];
+    char path[CAP_LUA_JOB_PATH_MAX];
+    cap_lua_job_status_t status;
+} cap_lua_job_snapshot_t;
+
 esp_err_t cap_lua_register_group(void);
 esp_err_t cap_lua_add_package_path_dir(const char *dir);
 esp_err_t cap_lua_register_module(const char *name, lua_CFunction open_fn);
@@ -64,6 +73,10 @@ esp_err_t cap_lua_register_exit_cleanup(cap_lua_exit_cleanup_fn_t cleanup_fn);
 esp_err_t cap_lua_register_job_event_cb(cap_lua_job_event_cb_t cb, void *user_ctx);
 esp_err_t cap_lua_unregister_job_event_cb(cap_lua_job_event_cb_t cb, void *user_ctx);
 bool cap_lua_runtime_stop_requested(lua_State *L);
+/** Cooperatively request cancellation of the Lua job owning L. */
+bool cap_lua_runtime_request_stop(lua_State *L);
+/** Return the async job ID owning L, or NULL outside a Lua job context. */
+const char *cap_lua_runtime_job_id(lua_State *L);
 esp_err_t cap_lua_run_script(const char *path,
                              const char *args_json,
                              uint32_t timeout_ms,
@@ -78,6 +91,7 @@ esp_err_t cap_lua_run_script_async(const char *path,
                                    bool replace,
                                    char *output,
                                    size_t output_size);
+size_t cap_lua_collect_active_jobs(cap_lua_job_snapshot_t *out, size_t max);
 esp_err_t cap_lua_list_jobs(const char *status, char *output, size_t output_size);
 esp_err_t cap_lua_get_job(const char *id_or_name, char *output, size_t output_size);
 esp_err_t cap_lua_stop_job(const char *id_or_name,
@@ -90,6 +104,13 @@ esp_err_t cap_lua_stop_all_jobs(const char *exclusive_filter,
                                 size_t output_size);
 
 size_t cap_lua_get_active_async_job_count(void);
+
+/* Format "lua/job/<id>" for the currently running Lua job's task, or NULL
+ * outside any job context. Pointer stays valid for the job's lifetime. */
+const char *cap_lua_current_owner_tag(void);
+
+/* Bind once before starting Lua jobs; the application owns the registry. */
+esp_err_t cap_lua_set_hw_registry(claw_hw_registry_handle_t registry);
 
 #ifdef __cplusplus
 }

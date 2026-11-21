@@ -77,6 +77,7 @@ typedef claw_event_publish_fn cap_scheduler_publish_fn;
 
 typedef struct {
     const char *schedules_path;
+    const char *recovery_schedules_path;
     uint32_t tick_ms;
     uint32_t max_items;
     uint32_t task_stack_size;

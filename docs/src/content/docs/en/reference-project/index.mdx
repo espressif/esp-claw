@@ -86,7 +86,6 @@ Today the code falls into four areas:
     - lua_module_json/ JSON utilities
     - lua_module_knob/ Knob
     - lua_module_lcd/ LCD
-    - lua_module_lcd_touch/ LCD touch
     - lua_module_lvgl/ LVGL UI
     - lua_module_magnetometer/ Magnetometer
     - lua_module_sci/ Serial peripheral integration
@@ -103,10 +102,10 @@ Today the code falls into four areas:
 
 ## Runtime data directory
 
-All runtime data lives under the FATFS mount `/fatfs`:
+Writable runtime data lives under the DATA root. DATA is `/fatfs` with flash storage and the board-specific mount point with an SD card:
 
 <FileTree>
-- fatfs/
+- DATA/
   - sessions/ Session history (one file per session id)
   - memory/
     - MEMORY.md Human-readable memory view (read-only)
@@ -120,6 +119,11 @@ All runtime data lives under the FATFS mount `/fatfs`:
     - skill_id/
       - SKILL.md Skill metadata and body
       - scripts/ Skill-bundled scripts (optional)
+  - apps/
+    - app_id/
+      - launcher.json App metadata and Lua entry
+      - scripts/ App scripts
+      - assets/ App assets (optional)
   - scripts/
     - builtin/ Built-in Lua test scripts and libraries
     - docs/ Built-in Lua module docs
@@ -137,5 +141,5 @@ All runtime data lives under the FATFS mount `/fatfs`:
 
 ## Backup and reset
 
-- **Backup**: copy the `/fatfs` subfolders (`sessions/`, `memory/`, `skills/`, `scripts/`, `router_rules/`, `scheduler/`, `static/`, `inbox/`) to external storage.
+- **Backup**: copy the DATA-root subfolders (`sessions/`, `memory/`, `skills/`, `apps/`, `scripts/`, `router_rules/`, `scheduler/`, `static/`, `inbox/`) to external storage.
 - **Reset**: re-flash the `storage` partition or re-flash the full firmware.

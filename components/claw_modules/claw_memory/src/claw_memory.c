@@ -304,7 +304,10 @@ esp_err_t claw_memory_init(const claw_memory_config_t *config)
         return ESP_ERR_INVALID_ARG;
     }
 
+    SemaphoreHandle_t history_lock = s_memory.history_lock;
     memset(&s_memory, 0, sizeof(s_memory));
+    s_memory.history_lock = history_lock ? history_lock : xSemaphoreCreateRecursiveMutex();
+    if (!s_memory.history_lock) return ESP_ERR_NO_MEM;
     safe_copy(s_memory.session_root_dir, sizeof(s_memory.session_root_dir), config->session_root_dir);
     safe_copy(s_memory.memory_root_dir,
               sizeof(s_memory.memory_root_dir),
@@ -359,7 +362,6 @@ esp_err_t claw_memory_init(const claw_memory_config_t *config)
             return async_err;
         }
     }
-    claw_memory_compact_internal(false);
     ESP_LOGI(TAG, "Initialized memory root=%s", s_memory.memory_root_dir);
     return ESP_OK;
 }

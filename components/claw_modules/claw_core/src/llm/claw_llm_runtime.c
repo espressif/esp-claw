@@ -15,6 +15,7 @@
 struct claw_llm_runtime {
     claw_llm_runtime_config_t config;
     claw_llm_model_profile_t profile;
+    claw_endpoint_handle_t endpoint;
     const claw_llm_backend_vtable_t *backend;
     void *backend_ctx;
 };
@@ -37,10 +38,12 @@ static void runtime_config_free(claw_llm_runtime_config_t *config)
 
     free((char *)config->api_key);
     free((char *)config->backend_type);
+    free((char *)config->endpoint_provider);
     free((char *)config->model);
     free((char *)config->base_url);
     free((char *)config->auth_type);
     free((char *)config->max_tokens_field);
+    free((char *)config->reasoning_effort);
     memset(config, 0, sizeof(*config));
 }
 
@@ -49,10 +52,12 @@ static esp_err_t runtime_config_copy(claw_llm_runtime_config_t *dst,
 {
     dst->api_key = dup_or_null(src->api_key);
     dst->backend_type = dup_or_null(src->backend_type);
+    dst->endpoint_provider = dup_or_null(src->endpoint_provider);
     dst->model = dup_or_null(src->model);
     dst->base_url = dup_or_null(src->base_url);
     dst->auth_type = dup_or_null(src->auth_type);
     dst->max_tokens_field = dup_or_null(src->max_tokens_field);
+    dst->reasoning_effort = dup_or_null(src->reasoning_effort);
     dst->timeout_ms = src->timeout_ms;
     dst->max_tokens = src->max_tokens;
     dst->image_max_bytes = src->image_max_bytes;
@@ -62,15 +67,55 @@ static esp_err_t runtime_config_copy(claw_llm_runtime_config_t *dst,
 
     if ((src->api_key && !dst->api_key) ||
             (src->backend_type && !dst->backend_type) ||
+            (src->endpoint_provider && !dst->endpoint_provider) ||
             (src->model && !dst->model) ||
             (src->base_url && !dst->base_url) ||
             (src->auth_type && !dst->auth_type) ||
-            (src->max_tokens_field && !dst->max_tokens_field)) {
+            (src->max_tokens_field && !dst->max_tokens_field) ||
+            (src->reasoning_effort && !dst->reasoning_effort)) {
         runtime_config_free(dst);
         return ESP_ERR_NO_MEM;
     }
 
     return ESP_OK;
+}
+
+static claw_endpoint_config_t endpoint_config_from_runtime(const claw_llm_runtime_config_t *config)
+{
+    return (claw_endpoint_config_t) {
+        .service = CLAW_ENDPOINT_SERVICE_LLM,
+        .base_url = config->base_url,
+        .api_key = config->api_key,
+        .auth_type = config->auth_type,
+    };
+}
+
+bool claw_llm_runtime_endpoint_is_configured(const claw_llm_runtime_config_t *config)
+{
+    const claw_llm_backend_registration_t *registration =
+        config ? claw_llm_find_backend_registration(config->backend_type) : NULL;
+
+    if (!registration) {
+        return false;
+    }
+    claw_endpoint_config_t endpoint_config = endpoint_config_from_runtime(config);
+    return claw_endpoint_is_configured(config->endpoint_provider, &endpoint_config);
+}
+
+static esp_err_t create_endpoint(claw_llm_runtime_t *runtime,
+                                 char **out_error_message)
+{
+    claw_endpoint_config_t endpoint_config = endpoint_config_from_runtime(&runtime->config);
+    esp_err_t err = claw_endpoint_create(runtime->config.endpoint_provider,
+                                         &endpoint_config,
+                                         &runtime->endpoint);
+
+    if (err == ESP_ERR_INVALID_ARG) {
+        *out_error_message = strdup("Invalid LLM endpoint settings");
+    } else if (err != ESP_OK) {
+        *out_error_message = strdup("Failed to create LLM endpoint");
+    }
+    return err;
 }
 
 esp_err_t claw_llm_runtime_init(claw_llm_runtime_t **out_runtime,
@@ -87,7 +132,7 @@ esp_err_t claw_llm_runtime_init(claw_llm_runtime_t **out_runtime,
     if (out_error_message) {
         *out_error_message = NULL;
     }
-    if (!out_runtime || !config || !config->api_key || !config->model ||
+    if (!out_runtime || !config || !config->model ||
             !config->backend_type || !config->backend_type[0] || !out_error_message) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -110,10 +155,6 @@ esp_err_t claw_llm_runtime_init(claw_llm_runtime_t **out_runtime,
         *out_error_message = strdup("Out of memory copying runtime config");
         return err;
     }
-    if (string_is_empty(runtime->config.auth_type)) {
-        free((char *)runtime->config.auth_type);
-        runtime->config.auth_type = dup_or_null(backend_registration->defaults.auth_type);
-    }
     if (!runtime->config.timeout_ms) {
         runtime->config.timeout_ms = CLAW_LLM_DEFAULT_TIMEOUT_MS;
     }
@@ -128,7 +169,6 @@ esp_err_t claw_llm_runtime_init(claw_llm_runtime_t **out_runtime,
         runtime->config.max_tokens_field = dup_or_null(backend_registration->defaults.max_tokens_field);
     }
     if (!runtime->config.backend_type ||
-            (backend_registration->defaults.auth_type && !runtime->config.auth_type) ||
             (backend_registration->defaults.max_tokens_field && !runtime->config.max_tokens_field)) {
         runtime_config_free(&runtime->config);
         free(runtime);
@@ -145,8 +185,20 @@ esp_err_t claw_llm_runtime_init(claw_llm_runtime_t **out_runtime,
     runtime->profile.image_remote_url_only = runtime->config.image_remote_url_only;
     runtime->backend = backend_registration->vtable;
 
-    err = runtime->backend->init(&runtime->config, &runtime->profile, &runtime->backend_ctx, out_error_message);
+    err = create_endpoint(runtime, out_error_message);
+    if (err == ESP_OK) {
+        const claw_llm_backend_config_t backend_config = {
+            .model = runtime->config.model,
+            .reasoning_effort = runtime->config.reasoning_effort,
+            .timeout_ms = runtime->config.timeout_ms,
+            .max_tokens = runtime->config.max_tokens,
+            .image_max_bytes = runtime->config.image_max_bytes,
+        };
+        err = runtime->backend->init(&backend_config, &runtime->profile, runtime->endpoint,
+                                     &runtime->backend_ctx, out_error_message);
+    }
     if (err != ESP_OK) {
+        claw_endpoint_delete(runtime->endpoint);
         runtime_config_free(&runtime->config);
         free(runtime);
         return err;
@@ -197,6 +249,7 @@ void claw_llm_runtime_deinit(claw_llm_runtime_t *runtime)
     if (runtime->backend && runtime->backend->deinit) {
         runtime->backend->deinit(runtime->backend_ctx);
     }
+    claw_endpoint_delete(runtime->endpoint);
     runtime_config_free(&runtime->config);
     free(runtime);
 }

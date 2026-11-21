@@ -1,8 +1,8 @@
 # Lua I2C
 
-This module describes how to correctly use `i2c` when writing Lua scripts.
-It is built on top of the `i2c_bus` component and supports scanning a bus
-and talking to multiple devices on the same bus.
+This module describes how to use `i2c` from Lua for I2C buses and 7-bit
+addressed devices. It supports scanning a bus and talking to multiple devices
+on the same bus.
 
 ## How to call
 - Import it with `local i2c = require("i2c")`
@@ -10,6 +10,9 @@ and talking to multiple devices on the same bus.
   - `port`: I2C port number, usually `0` or `1`
   - `sda`, `scl`: GPIO numbers for SDA and SCL
   - `freq_hz`: optional clock frequency in Hz, default `400000`
+- Borrow a board-initialized bus with `local bus = i2c.borrow(0)`
+  - The board must initialize the bus and keep it alive throughout Lua use; borrowing does not initialize or reconfigure its controller or pins. Do not borrow a bus created by `i2c.new()`; reuse its Lua handle instead
+  - The borrowed Lua handle defaults to `400000` Hz for new devices; use `bus:device(addr, clk_speed)` to choose another device speed
 - Scan the bus for devices with `local addrs = bus:scan()`
   - Returns a Lua array of 7-bit addresses that ACKed
 - Attach a device with `local dev = bus:device(addr [, clk_speed])`
@@ -22,9 +25,10 @@ and talking to multiple devices on the same bus.
   - `dev:write(data [, mem_addr])` where `data` is a string or a table of bytes
   - `dev:address()` → the 7-bit address
 - Close handles when you're done with `dev:close()` and `bus:close()`.
-  **Always close every device before closing its bus.** Handles are also
-  cleaned up automatically on garbage collection, but explicit close is
-  preferred so resources are released deterministically.
+  **Always close every device before closing its bus.** Closing a bus with live devices fails. Closing a borrowed handle leaves the board bus initialized.
+  Unreachable handles are finalized by Lua GC; job exit closes remaining handles. Retry a failed explicit close before dropping the handle.
+
+`i2c.new()` requires an unused controller and pins. On any bus, an address already used by another device cannot be opened again, including through `i2c.borrow()`. Use the device-specific module for an initialized board sensor.
 
 `mem_addr` is the 8-bit internal register/memory address inside the device.
 Omit it (or pass `nil`) for devices that have no internal address. Any error
@@ -37,25 +41,26 @@ raises a Lua error, so wrap calls in `pcall` if you want to handle failures.
   `local si12t_touch = require("lib_si12t_touch")`; it can reuse an existing
   I2C bus or create one from `port`, `sda`, and `scl` options.
 
-See `scripts/builtin/lib/ssd1306.md` and
-`scripts/builtin/lib/lib_si12t_touch.md` for the full library APIs.
+Full API docs for these helpers are bundled with the libraries.
 
 ## Example: scan the bus
 ```lua
 local i2c = require("i2c")
 
-local bus = i2c.new(0, 21, 22, 400000)
+local bus = i2c.borrow(0)
 for _, addr in ipairs(bus:scan()) do
     print(string.format("found device at 0x%02X", addr))
 end
 bus:close()
 ```
 
-## Example: read a register from a device
+## Example: read a register from an external device
+
+Connect a separate MPU6050-compatible sensor to free GPIO4/SDA and GPIO5/SCL on controller 1. Check that these pins and controller are available on your board. Use `imu.new({ device = "imu_sensor" })` for the built-in IMU instead.
 ```lua
 local i2c = require("i2c")
 
-local bus = i2c.new(0, 21, 22)
+local bus = i2c.new(1, 4, 5, 100000)
 local dev = bus:device(0x68)             -- MPU6050-style address
 local who_am_i = dev:read_byte(0x75)     -- read register 0x75
 print(string.format("WHO_AM_I = 0x%02X", who_am_i))

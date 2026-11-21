@@ -885,7 +885,10 @@ int lua_lvgl_menu_page(lua_State *L)
     if (err != ESP_OK) return lua_lvgl_error_esp(L, "lock", err);
     menu = lua_lvgl_check_typed_obj(L, 1, LUA_LVGL_OBJ_MENU, "menu");
     page = lv_menu_page_create(menu, title);
-    lua_lvgl_push_obj(L, page, LUA_LVGL_OBJ_MENU_PAGE);
+    if (!lua_lvgl_push_obj(L, page, LUA_LVGL_OBJ_MENU_PAGE)) {
+        lua_lvgl_unlock();
+        return luaL_error(L, "lvgl object record allocation failed");
+    }
     (void)ud;
     lua_lvgl_unlock();
     return 1;
@@ -1065,7 +1068,10 @@ int lua_lvgl_tabview_add_tab(lua_State *L)
     if (err != ESP_OK) return lua_lvgl_error_esp(L, "lock", err);
     tv = lua_lvgl_check_typed_obj(L, 1, LUA_LVGL_OBJ_TABVIEW, "tabview");
     tab = lv_tabview_add_tab(tv, luaL_checkstring(L, 2));
-    lua_lvgl_push_obj(L, tab, LUA_LVGL_OBJ_TAB_PAGE);
+    if (!lua_lvgl_push_obj(L, tab, LUA_LVGL_OBJ_TAB_PAGE)) {
+        lua_lvgl_unlock();
+        return luaL_error(L, "lvgl object record allocation failed");
+    }
     lua_lvgl_unlock();
     return 1;
 }
@@ -1145,7 +1151,10 @@ int lua_lvgl_tileview_add_tile(lua_State *L)
     if (err != ESP_OK) return lua_lvgl_error_esp(L, "lock", err);
     tv = lua_lvgl_check_typed_obj(L, 1, LUA_LVGL_OBJ_TILEVIEW, "tileview");
     tile = lv_tileview_add_tile(tv, (uint8_t)(col - 1), (uint8_t)(row - 1), dir);
-    lua_lvgl_push_obj(L, tile, LUA_LVGL_OBJ_TILE);
+    if (!lua_lvgl_push_obj(L, tile, LUA_LVGL_OBJ_TILE)) {
+        lua_lvgl_unlock();
+        return luaL_error(L, "lvgl object record allocation failed");
+    }
     lua_lvgl_unlock();
     return 1;
 }
@@ -1208,7 +1217,10 @@ int lua_lvgl_window_add_title(lua_State *L)
     if (err != ESP_OK) return lua_lvgl_error_esp(L, "lock", err);
     win = lua_lvgl_check_typed_obj(L, 1, LUA_LVGL_OBJ_WINDOW, "window");
     child = lv_win_add_title(win, luaL_checkstring(L, 2));
-    lua_lvgl_push_obj(L, child, LUA_LVGL_OBJ_LABEL);
+    if (!lua_lvgl_push_obj(L, child, LUA_LVGL_OBJ_LABEL)) {
+        lua_lvgl_unlock();
+        return luaL_error(L, "lvgl object record allocation failed");
+    }
     lua_lvgl_unlock();
     return 1;
 }
@@ -1224,7 +1236,10 @@ int lua_lvgl_window_add_button(lua_State *L)
     if (err != ESP_OK) return lua_lvgl_error_esp(L, "lock", err);
     win = lua_lvgl_check_typed_obj(L, 1, LUA_LVGL_OBJ_WINDOW, "window");
     child = lv_win_add_button(win, icon, width);
-    lua_lvgl_push_obj(L, child, LUA_LVGL_OBJ_BUTTON);
+    if (!lua_lvgl_push_obj(L, child, LUA_LVGL_OBJ_BUTTON)) {
+        lua_lvgl_unlock();
+        return luaL_error(L, "lvgl object record allocation failed");
+    }
     lua_lvgl_unlock();
     return 1;
 }
@@ -1238,7 +1253,10 @@ int lua_lvgl_window_get_header(lua_State *L)
     if (err != ESP_OK) return lua_lvgl_error_esp(L, "lock", err);
     win = lua_lvgl_check_typed_obj(L, 1, LUA_LVGL_OBJ_WINDOW, "window");
     child = lv_win_get_header(win);
-    lua_lvgl_push_obj(L, child, LUA_LVGL_OBJ_WINDOW_CHILD);
+    if (!lua_lvgl_push_obj(L, child, LUA_LVGL_OBJ_WINDOW_CHILD)) {
+        lua_lvgl_unlock();
+        return luaL_error(L, "lvgl object record allocation failed");
+    }
     lua_lvgl_unlock();
     return 1;
 }
@@ -1252,7 +1270,10 @@ int lua_lvgl_window_get_content(lua_State *L)
     if (err != ESP_OK) return lua_lvgl_error_esp(L, "lock", err);
     win = lua_lvgl_check_typed_obj(L, 1, LUA_LVGL_OBJ_WINDOW, "window");
     child = lv_win_get_content(win);
-    lua_lvgl_push_obj(L, child, LUA_LVGL_OBJ_WINDOW_CHILD);
+    if (!lua_lvgl_push_obj(L, child, LUA_LVGL_OBJ_WINDOW_CHILD)) {
+        lua_lvgl_unlock();
+        return luaL_error(L, "lvgl object record allocation failed");
+    }
     lua_lvgl_unlock();
     return 1;
 }

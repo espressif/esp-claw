@@ -33,7 +33,6 @@ int luaopen_lvgl(lua_State *L)
     lua_lvgl_register_funcs(L, lua_lvgl_complex_widget_funcs);
     lua_lvgl_register_funcs(L, lua_lvgl_eaf_module_funcs);
     lua_lvgl_register_funcs(L, lua_lvgl_event_module_funcs);
-    lua_lvgl_register_funcs(L, lua_lvgl_indev_module_funcs);
     lua_lvgl_register_funcs(L, lua_lvgl_demo_module_funcs);
     lua_lvgl_register_funcs(L, lua_lvgl_font_module_funcs);
 
@@ -43,6 +42,9 @@ int luaopen_lvgl(lua_State *L)
     lua_setfield(L, -2, "PANEL_IF_RGB");
     lua_pushinteger(L, LUA_MODULE_LVGL_PANEL_IF_MIPI_DSI);
     lua_setfield(L, -2, "PANEL_IF_MIPI_DSI");
+
+    lua_lvgl_push_symbol_table(L);
+    lua_setfield(L, -2, "SYMBOL");
 
     return 1;
 }

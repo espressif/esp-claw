@@ -4,9 +4,8 @@
   "description": "Read smoothed capacitive touch sensor values from one or more input GPIO channels. Use when the user asks for touch smooth values, capacitive touch channel readings, or smoothed touch data. Requires explicit gpios and board_hardware_info before assigning GPIOs.",
   "metadata": {
     "cap_groups": [
-      "cap_lua"
-    ],
-    "manage_mode": "readonly"
+     "cap_lua"
+    ]
   }
 }
 ---

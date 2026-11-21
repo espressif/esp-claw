@@ -24,6 +24,7 @@ int luaopen_audio(lua_State *L)
     static const luaL_Reg output_methods[] = {
         {"close",      lua_audio_device_close},
         {"info",       lua_audio_device_info},
+        {"status",     lua_audio_output_status},
         {"set_volume", lua_audio_output_set_volume},
         {"get_volume", lua_audio_output_get_volume},
         {"set_mute",   lua_audio_output_set_mute},
@@ -48,6 +49,16 @@ int luaopen_audio(lua_State *L)
         {"poll",   lua_audio_player_poll},
         {NULL, NULL},
     };
+    static const luaL_Reg sample_player_methods[] = {
+        {"close",    lua_audio_sample_player_close},
+        {"load",     lua_audio_sample_player_load},
+        {"start",    lua_audio_sample_player_start},
+        {"trigger",  lua_audio_sample_player_trigger},
+        {"stop",     lua_audio_sample_player_stop},
+        {"clear",    lua_audio_sample_player_clear},
+        {"status",   lua_audio_sample_player_status},
+        {NULL, NULL},
+    };
     static const luaL_Reg recorder_methods[] = {
         {"close",  lua_audio_recorder_close},
         {"record", lua_audio_recorder_record},
@@ -60,9 +71,10 @@ int luaopen_audio(lua_State *L)
         {NULL, NULL},
     };
     static const luaL_Reg funcs[] = {
-        {"new_output", lua_audio_new_output},
-        {"new_input",  lua_audio_new_input},
+        {"open_output", lua_audio_open_output},
+        {"open_input",  lua_audio_open_input},
         {"player",     lua_audio_player_new},
+        {"sample_player", lua_audio_sample_player_new},
         {"recorder",   lua_audio_recorder_new},
         {"analyzer",   lua_audio_analyzer_new},
         {NULL, NULL},
@@ -74,6 +86,9 @@ int luaopen_audio(lua_State *L)
     lua_audio_create_meta(L, AUDIO_RECORDER_META, recorder_methods, lua_audio_recorder_gc);
     lua_audio_create_meta(L, AUDIO_ANALYZER_META, analyzer_methods, lua_audio_analyzer_gc);
 
+    lua_audio_create_meta(L, AUDIO_SAMPLE_PLAYER_META, sample_player_methods, lua_audio_sample_player_close);
+    luaL_newmetatable(L, AUDIO_VOICE_META);
+    lua_pop(L, 1);
     lua_newtable(L);
     luaL_setfuncs(L, funcs, 0);
     return 1;

@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -39,6 +44,7 @@ struct display_service_session_t {
     display_service_mode_t mode;
     uint32_t flags;
     display_service_session_cleanup_cb_t cleanup_cb;
+    display_service_session_exit_request_cb_t exit_request_cb;
     void *user_ctx;
 };
 
@@ -61,6 +67,7 @@ static int s_canvas_height;
 static size_t s_canvas_rgba_size;
 static struct display_service_session_t s_display_session;
 static lv_display_t *s_display_service_display;
+static lv_indev_t *s_display_service_input;
 static void *s_display_service_draw_buf;
 static size_t s_display_service_draw_buf_size;
 static bool s_display_service_started;
@@ -329,6 +336,25 @@ static void display_service_flush_cb(lv_display_t *display, const lv_area_t *are
     lv_display_flush_ready(display);
 }
 
+static uint32_t sim_lvgl_tick(void)
+{
+    return (uint32_t)emscripten_get_now();
+}
+
+static void sim_lvgl_touch_read(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    (void)indev;
+    esp_lcd_touch_point_data_t point = {0};
+    uint8_t count = 0;
+    esp_lcd_touch_read_data(NULL);
+    esp_lcd_touch_get_data(NULL, &point, &count, 1);
+    data->state = count ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+    if (count) {
+        data->point.x = point.x;
+        data->point.y = point.y;
+    }
+}
+
 esp_err_t display_service_start(const display_service_config_t *config)
 {
     int width;
@@ -344,6 +370,7 @@ esp_err_t display_service_start(const display_service_config_t *config)
         lv_init();
     }
 
+    lv_tick_set_cb(sim_lvgl_tick);
     width = sim_canvas_current_width();
     height = sim_canvas_current_height();
     buffer_lines = config && config->buffer_lines > 0 ? (int)config->buffer_lines : height;
@@ -366,6 +393,14 @@ esp_err_t display_service_start(const display_service_config_t *config)
     lv_display_set_buffers(s_display_service_display, draw_buf, NULL, draw_buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
     s_display_service_draw_buf = draw_buf;
     s_display_service_draw_buf_size = draw_buf_size;
+    s_display_service_input = lv_indev_create();
+    if (!s_display_service_input) {
+        display_service_stop();
+        return ESP_ERR_NO_MEM;
+    }
+    lv_indev_set_type(s_display_service_input, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_display(s_display_service_input, s_display_service_display);
+    lv_indev_set_read_cb(s_display_service_input, sim_lvgl_touch_read);
     s_display_service_started = true;
     return ESP_OK;
 }
@@ -374,6 +409,10 @@ void display_service_stop(void)
 {
     if (s_display_session.active) {
         (void)display_service_close(&s_display_session);
+    }
+    if (s_display_service_input) {
+        lv_indev_delete(s_display_service_input);
+        s_display_service_input = NULL;
     }
     if (s_display_service_display) {
         lv_display_delete(s_display_service_display);
@@ -400,15 +439,23 @@ esp_err_t display_service_open(const display_service_session_config_t *config, d
     if (s_display_session.active) {
         return ESP_ERR_INVALID_STATE;
     }
-    err = display_service_start(&config->display_config);
+    /* RAW owns the canvas without creating an LVGL display or timer. */
+    if (config->mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW) {
+        display_service_stop();
+        err = sim_ensure_canvas_rgba(sim_canvas_current_width(), sim_canvas_current_height());
+    } else {
+        err = display_service_start(&config->display_config);
+    }
     if (err != ESP_OK) {
         return err;
     }
     memset(&s_display_session, 0, sizeof(s_display_session));
+    EM_ASM({ Module.__lvglCanvas = null; });
     s_display_session.active = true;
     s_display_session.mode = config->mode;
     s_display_session.flags = config->flags;
     s_display_session.cleanup_cb = config->cleanup_cb;
+    s_display_session.exit_request_cb = config->exit_request_cb;
     s_display_session.user_ctx = config->user_ctx;
     *ret_session = &s_display_session;
     return ESP_OK;
@@ -438,12 +485,12 @@ bool display_service_session_is_valid(display_service_session_handle_t session)
 
 lv_display_t *display_service_session_display(display_service_session_handle_t session)
 {
-    return display_service_session_is_valid(session) ? s_display_service_display : NULL;
+    return display_service_session_is_valid(session) && session->mode != DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW ? s_display_service_display : NULL;
 }
 
 esp_err_t display_service_session_load_screen_locked(display_service_session_handle_t session, lv_obj_t *screen)
 {
-    if (!display_service_session_is_valid(session) || !screen) {
+    if (!display_service_session_display(session) || !screen) {
         return ESP_ERR_INVALID_ARG;
     }
     lv_screen_load(screen);
@@ -453,6 +500,13 @@ esp_err_t display_service_session_load_screen_locked(display_service_session_han
 esp_err_t display_service_session_load_screen(display_service_session_handle_t session, lv_obj_t *screen)
 {
     return display_service_session_load_screen_locked(session, screen);
+}
+
+bool display_service_has_exclusive_session(void)
+{
+    return s_display_session.active &&
+           (s_display_session.mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_LVGL ||
+            s_display_session.mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW);
 }
 
 esp_err_t display_service_lock(void)
@@ -653,7 +707,9 @@ void vTaskDelete(TaskHandle_t task)
 
 TaskHandle_t xTaskGetCurrentTaskHandle(void)
 {
-    return NULL;
+    /* Asyncify resumes the same logical task on the browser thread. */
+    static char main_task;
+    return &main_task;
 }
 
 uint32_t ulTaskNotifyTake(BaseType_t clear_on_exit, TickType_t ticks_to_wait)
@@ -682,40 +738,8 @@ esp_err_t esp_lcd_panel_io_register_event_callbacks(esp_lcd_panel_io_handle_t io
     return ESP_OK;
 }
 
-esp_err_t esp_lcd_panel_draw_bitmap(esp_lcd_panel_handle_t panel,
-                                    int x_start,
-                                    int y_start,
-                                    int x_end,
-                                    int y_end,
-                                    const void *color_data)
+static void sim_present_rgba(int x_start, int y_start, int width, int height, double convert_ms)
 {
-    (void)panel;
-    int width = x_end - x_start;
-    int height = y_end - y_start;
-    int canvas_width;
-    int canvas_height;
-    double convert_start;
-    double convert_ms;
-    esp_err_t err;
-
-    if (!color_data || width <= 0 || height <= 0) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    canvas_width = EM_ASM_INT({ return Module.canvas ? (Module.canvas.width | 0) : 0; });
-    canvas_height = EM_ASM_INT({ return Module.canvas ? (Module.canvas.height | 0) : 0; });
-    err = sim_ensure_canvas_rgba(canvas_width, canvas_height);
-    if (err != ESP_OK) {
-        return err;
-    }
-    if (x_start < 0 || y_start < 0 || x_end > canvas_width || y_end > canvas_height) {
-        return ESP_ERR_INVALID_ARG;
-    }
-
-    convert_start = emscripten_get_now();
-    sim_copy_xrgb8888_to_rgba(x_start, y_start, width, height, (const uint8_t *)color_data);
-    convert_ms = emscripten_get_now() - convert_start;
-
     EM_ASM({
         const perfNow = (typeof performance !== 'undefined' && performance.now) ?
             () => performance.now() :
@@ -765,6 +789,15 @@ esp_err_t esp_lcd_panel_draw_bitmap(esp_lcd_panel_handle_t panel,
             Module.__lvglCanvas.pending = false;
         }
         const target = Module.__lvglCanvas;
+        // Copy while the C buffer is alive; RAF only reads JS-owned pixels.
+        const copyStart = perfNow();
+        for (let row = 0; row < h; row++) {
+            const offset = ((y + row) * cw + x) * 4;
+            target.image.data.set(HEAPU8.subarray(framePtr + offset, framePtr + offset + w * 4), offset);
+        }
+        const copyMs = perfNow() - copyStart;
+        perf.copyMs += copyMs;
+        perf.logCopyMs += copyMs;
         perf.flushCalls++;
         perf.flushPixels += w * h;
         perf.convertMs += convertMs;
@@ -786,6 +819,7 @@ esp_err_t esp_lcd_panel_draw_bitmap(esp_lcd_panel_handle_t panel,
         if (!target.pending) {
             target.pending = true;
             requestAnimationFrame(() => {
+                if (Module.__lvglCanvas !== target) return;
                 target.pending = false;
                 const d = target.dirty;
                 target.dirty = null;
@@ -795,23 +829,13 @@ esp_err_t esp_lcd_panel_draw_bitmap(esp_lcd_panel_handle_t panel,
                 const dw = Math.min(target.w, d.x2 | 0) - dx;
                 const dh = Math.min(target.h, d.y2 | 0) - dy;
                 if (dw > 0 && dh > 0) {
-                    const copyStart = perfNow();
-                    const bytesPerRow = dw * 4;
-                    for (let row = 0; row < dh; row++) {
-                        const srcStart = framePtr + (((dy + row) * target.w + dx) * 4);
-                        const dstStart = (((dy + row) * target.w + dx) * 4);
-                        target.image.data.set(HEAPU8.subarray(srcStart, srcStart + bytesPerRow), dstStart);
-                    }
-                    const copyMs = perfNow() - copyStart;
                     const putStart = perfNow();
                     ctx.putImageData(target.image, 0, 0, dx, dy, dw, dh);
                     const putMs = perfNow() - putStart;
-                    perf.copyMs += copyMs;
                     perf.putMs += putMs;
                     perf.presentPixels += dw * dh;
                     perf.rafFrames++;
                     perf.logFrames++;
-                    perf.logCopyMs += copyMs;
                     perf.logPutMs += putMs;
                     perf.logPixels += dw * dh;
                     const now = perfNow();
@@ -840,6 +864,43 @@ esp_err_t esp_lcd_panel_draw_bitmap(esp_lcd_panel_handle_t panel,
             });
         }
     }, x_start, y_start, width, height, s_canvas_rgba, convert_ms);
+}
+
+esp_err_t esp_lcd_panel_draw_bitmap(esp_lcd_panel_handle_t panel,
+                                    int x_start,
+                                    int y_start,
+                                    int x_end,
+                                    int y_end,
+                                    const void *color_data)
+{
+    (void)panel;
+    int width = x_end - x_start;
+    int height = y_end - y_start;
+    int canvas_width;
+    int canvas_height;
+    double convert_start;
+    double convert_ms;
+    esp_err_t err;
+
+    if (!color_data || width <= 0 || height <= 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    canvas_width = EM_ASM_INT({ return Module.canvas ? (Module.canvas.width | 0) : 0; });
+    canvas_height = EM_ASM_INT({ return Module.canvas ? (Module.canvas.height | 0) : 0; });
+    err = sim_ensure_canvas_rgba(canvas_width, canvas_height);
+    if (err != ESP_OK) {
+        return err;
+    }
+    if (x_start < 0 || y_start < 0 || x_end > canvas_width || y_end > canvas_height) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    convert_start = emscripten_get_now();
+    sim_copy_xrgb8888_to_rgba(x_start, y_start, width, height, (const uint8_t *)color_data);
+    convert_ms = emscripten_get_now() - convert_start;
+
+    sim_present_rgba(x_start, y_start, width, height, convert_ms);
     if (s_io_callbacks.on_color_trans_done) {
         esp_lcd_panel_io_event_data_t edata = {0};
         s_io_callbacks.on_color_trans_done(NULL, &edata, s_io_user_ctx);
@@ -896,4 +957,73 @@ bool cap_lua_runtime_stop_requested(lua_State *L)
 {
     (void)L;
     return EM_ASM_INT({ return Module.__stopRequested ? 1 : 0; }) != 0;
+}
+
+const char *cap_lua_runtime_job_id(lua_State *L)
+{
+    (void)L;
+    return "sim0001";
+}
+
+esp_err_t cap_lua_stop_job(const char *id_or_name, uint32_t wait_ms, char *output, size_t output_size)
+{
+    (void)wait_ms;
+    if (!id_or_name || !id_or_name[0]) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    EM_ASM({ Module.__stopRequested = true; });
+    if (output && output_size > 0) {
+        snprintf(output, output_size, "stop requested");
+    }
+    return ESP_OK;
+}
+
+esp_err_t display_service_session_get_info(display_service_session_handle_t session, display_service_info_t *info)
+{
+    if (!display_service_session_is_valid(session) || !info) return ESP_ERR_INVALID_ARG;
+    *info = (display_service_info_t) {
+        .width = sim_canvas_current_width(), .height = sim_canvas_current_height(),
+        .bits_per_pixel = session->mode == DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW ? 16 : 32,
+        .panel_interface = DISPLAY_SERVICE_PANEL_INTERFACE_RGB, .touch_available = true,
+    };
+    return ESP_OK;
+}
+
+esp_err_t display_service_session_raw_blit(display_service_session_handle_t session, const display_service_raw_blit_t *blit)
+{
+    if (!display_service_session_is_valid(session) || session->mode != DISPLAY_SERVICE_MODE_EXCLUSIVE_RAW) return ESP_ERR_INVALID_STATE;
+    if (!blit || !blit->frame_buffer || blit->x_start < 0 || blit->y_start < 0 ||
+        blit->x_end > s_canvas_width || blit->y_end > s_canvas_height ||
+        blit->x_end <= blit->x_start || blit->y_end <= blit->y_start) return ESP_ERR_INVALID_ARG;
+    int width = blit->x_end - blit->x_start, height = blit->y_end - blit->y_start;
+    size_t stride = blit->stride_bytes ? blit->stride_bytes : (size_t)width * 2;
+    if (stride < (size_t)width * 2 || stride > SIZE_MAX / (size_t)height) return ESP_ERR_INVALID_SIZE;
+    double start = emscripten_get_now();
+    for (int y = 0; y < height; ++y) {
+        const uint8_t *src = (const uint8_t *)blit->frame_buffer + (size_t)y * stride;
+        uint8_t *dst = s_canvas_rgba + ((size_t)(blit->y_start + y) * s_canvas_width + blit->x_start) * 4;
+        for (int x = 0; x < width; ++x, src += 2, dst += 4) {
+            uint16_t pixel = src[0] | ((uint16_t)src[1] << 8);
+            unsigned red = pixel >> 11, green = (pixel >> 5) & 63, blue = pixel & 31;
+            dst[0] = (red << 3) | (red >> 2);
+            dst[1] = (green << 2) | (green >> 4);
+            dst[2] = (blue << 3) | (blue >> 2);
+            dst[3] = 255;
+        }
+    }
+    sim_present_rgba(blit->x_start, blit->y_start, width, height, emscripten_get_now() - start);
+    return ESP_OK;
+}
+
+esp_err_t display_service_session_get_touch_snapshot(display_service_session_handle_t session, display_service_touch_snapshot_t *snapshot)
+{
+    if (!display_service_session_is_valid(session) || !snapshot) return ESP_ERR_INVALID_ARG;
+    memset(snapshot, 0, sizeof(*snapshot));
+    esp_lcd_touch_read_data(NULL);
+    if (EM_ASM_INT({ return Module.__touchState && Module.__touchState.pressed ? 1 : 0; })) {
+        snapshot->count = 1;
+        snapshot->points[0].x = EM_ASM_INT({ return Math.max(0, Math.min(Module.canvas.width - 1, Module.__touchState.x | 0)); });
+        snapshot->points[0].y = EM_ASM_INT({ return Math.max(0, Math.min(Module.canvas.height - 1, Module.__touchState.y | 0)); });
+    }
+    return ESP_OK;
 }

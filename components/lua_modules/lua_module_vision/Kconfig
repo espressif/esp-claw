@@ -15,9 +15,16 @@ menu "Lua Vision Module"
         bool "Enable color_detect Lua module"
         default n
         help
-            Build and register the ESP-DL color_detect Lua module for detecting
-            colored blobs in image.frame values using the migrated ColorDetect
-            implementation.
+            Build and register the esp_vision_core-backed color_detect Lua
+            module for detecting colored blobs in image.frame values.
+
+    config LUA_MODULE_VISION_QRCODE_DETECT
+        bool "Enable qrcode_detect Lua module"
+        default n
+        select ESP_VISION_CORE_ENABLE_QRCODES
+        help
+            Build and register the esp_vision_core-backed qrcode_detect Lua
+            module for finding and decoding QR codes in image.frame values.
 
     config LUA_MODULE_VISION_ESPDET
         bool "Enable espdet Lua module"

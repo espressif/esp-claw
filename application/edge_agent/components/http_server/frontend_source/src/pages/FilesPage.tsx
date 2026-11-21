@@ -66,6 +66,33 @@ type FolderDownloadState = {
   controller: AbortController;
 };
 
+type FolderUploadItem = {
+  file: File;
+  relativePath: string;
+};
+
+// Match device path validation before issuing any writes.
+function normalizeFolderPath(file: File): string | null {
+  const path = file.webkitRelativePath;
+  const parts = path.split('/');
+  if (
+    !path ||
+    path.startsWith('/') ||
+    path.includes('\\') ||
+    path.includes('..') ||
+    parts.length < 2 ||
+    parts.some((part) => !part || part === '.')
+  )
+    return null;
+  return parts.join('/');
+}
+
+function folderUploadDirectories(items: FolderUploadItem[], basePath: string): string[] {
+  return [...new Set(items.map((item) => parentOf(joinPath(basePath, item.relativePath))))].sort(
+    (a, b) => a.split('/').length - b.split('/').length,
+  );
+}
+
 const initialEditor: EditorState = {
   open: false,
   path: '',
@@ -88,11 +115,23 @@ export const FilesPage: Component = () => {
   const [newFolderName, setNewFolderName] = createSignal('');
   let fileInputRef: HTMLInputElement | undefined;
   const [chosenFile, setChosenFile] = createSignal<File | null>(null);
+  let folderInputRef: HTMLInputElement | undefined;
+  const [folderUploadItems, setFolderUploadItems] = createSignal<FolderUploadItem[]>([]);
+  const [folderUploading, setFolderUploading] = createSignal(false);
+  const [folderUploadCompleted, setFolderUploadCompleted] = createSignal(0);
+  const [folderUploadCurrent, setFolderUploadCurrent] = createSignal('');
 
   const [editor, setEditor] = createSignal<EditorState>(initialEditor);
   const [folderDownload, setFolderDownload] = createSignal<FolderDownloadState | null>(null);
 
   const dirtyEditor = () => editor().open && editor().content !== editor().baseline;
+  const folderUploadName = () => folderUploadItems()[0]?.relativePath.split('/')[0] ?? '';
+  const folderUploadSize = () =>
+    folderUploadItems().reduce((total, item) => total + item.file.size, 0);
+  const folderUploadProgress = () => {
+    const total = folderUploadItems().length;
+    return total ? Math.round((folderUploadCompleted() / total) * 100) : 0;
+  };
 
   createEffect(() => {
     markDirty('files', dirtyEditor());
@@ -131,6 +170,7 @@ export const FilesPage: Component = () => {
   };
 
   const handleUpload = async () => {
+    if (folderUploading()) return;
     if (!devMode()) {
       pushToast(t('fileDevModeRequired') as string, 'error');
       return;
@@ -155,6 +195,7 @@ export const FilesPage: Component = () => {
   };
 
   const handleCreateFolder = async () => {
+    if (folderUploading()) return;
     if (!devMode()) {
       pushToast(t('fileDevModeRequired') as string, 'error');
       return;
@@ -175,6 +216,7 @@ export const FilesPage: Component = () => {
   };
 
   const handleDelete = async (entry: FileEntry) => {
+    if (folderUploading()) return;
     if (!devMode()) {
       pushToast(t('fileDevModeRequired') as string, 'error');
       return;
@@ -198,6 +240,107 @@ export const FilesPage: Component = () => {
         }
       } else {
         pushToast(msg, 'error');
+      }
+    }
+  };
+
+  const handleFolderSelection = (files: FileList | null) => {
+    const selected = Array.from(files ?? []);
+    setFolderUploadItems([]);
+    setFolderUploadCompleted(0);
+    setFolderUploadCurrent('');
+    if (!selected.length) {
+      pushToast(t('fileFolderUploadEmpty') as string, 'error');
+      return;
+    }
+
+    const items: FolderUploadItem[] = [];
+    const paths = new Set<string>();
+    let invalidPath = '';
+    for (const file of selected) {
+      const relativePath = normalizeFolderPath(file);
+      if (!relativePath || paths.has(relativePath)) {
+        invalidPath = file.webkitRelativePath || file.name;
+        break;
+      }
+      paths.add(relativePath);
+      items.push({ file, relativePath });
+    }
+    const roots = new Set(items.map((item) => item.relativePath.split('/')[0]));
+    if (invalidPath || roots.size !== 1) {
+      if (folderInputRef) folderInputRef.value = '';
+      pushToast(
+        tf('fileFolderUploadInvalidPath', { path: invalidPath || [...roots].join(', ') }),
+        'error',
+      );
+      return;
+    }
+    setFolderUploadItems(items);
+  };
+
+  const handleFolderUpload = async () => {
+    if (folderUploading()) return;
+    if (!devMode()) {
+      pushToast(t('fileDevModeRequired') as string, 'error');
+      return;
+    }
+    const items = folderUploadItems();
+    const first = items[0];
+    if (!first) {
+      pushToast(t('fileFolderUploadEmpty') as string, 'error');
+      return;
+    }
+    const basePath = currentPath();
+    if (
+      !window.confirm(
+        tf('fileFolderUploadConfirm', {
+          name: folderUploadName(),
+          count: items.length,
+          size: humanSize(folderUploadSize()),
+          path: basePath,
+        }),
+      )
+    )
+      return;
+
+    let started = false;
+    let succeeded = false;
+    let activePath = joinPath(basePath, first.relativePath);
+    setFolderUploading(true);
+    setFolderUploadCompleted(0);
+    setFolderUploadCurrent(first.relativePath);
+    try {
+      for (const path of folderUploadDirectories(items, basePath)) {
+        activePath = path;
+        started = true;
+        await createFolder(path, { recursive: true });
+      }
+      for (const [index, item] of items.entries()) {
+        activePath = joinPath(basePath, item.relativePath);
+        setFolderUploadCurrent(item.relativePath);
+        started = true;
+        await uploadFile(activePath, item.file);
+        setFolderUploadCompleted(index + 1);
+      }
+      succeeded = true;
+      pushToast(t('fileFolderUploadComplete') as string, 'success');
+    } catch (err) {
+      pushToast(
+        tf('fileFolderUploadFailed', {
+          path: activePath,
+          completed: folderUploadCompleted(),
+          total: items.length,
+          error: (err as Error).message,
+        }),
+        'error',
+      );
+    } finally {
+      if (started) await loadList();
+      setFolderUploading(false);
+      if (succeeded) {
+        setFolderUploadItems([]);
+        setFolderUploadCurrent('');
+        if (folderInputRef) folderInputRef.value = '';
       }
     }
   };
@@ -305,6 +448,7 @@ export const FilesPage: Component = () => {
   };
 
   const saveEditor = async () => {
+    if (folderUploading()) return;
     const state = editor();
     if (!state.path) return;
     if (state.readOnly) {
@@ -329,7 +473,7 @@ export const FilesPage: Component = () => {
     setEditor(initialEditor);
   };
 
-  const goUp = () => setCurrentPath(parentOf(currentPath()));
+  const navigateToParent = () => setCurrentPath(parentOf(currentPath()));
 
   return (
     <TabShell>
@@ -337,7 +481,13 @@ export const FilesPage: Component = () => {
         title={t('navFiles') as string}
         actions={
           <div class="flex items-center gap-2 flex-wrap">
-            <Button size="sm" variant="secondary" active={devMode()} onClick={toggleDevMode}>
+            <Button
+              size="sm"
+              variant="secondary"
+              active={devMode()}
+              onClick={toggleDevMode}
+              disabled={folderUploading()}
+            >
               {devMode() ? t('fileDevModeOn') : t('fileDevMode')}
             </Button>
             <Button size="sm" variant="secondary" onClick={loadList} disabled={loading()}>
@@ -352,7 +502,12 @@ export const FilesPage: Component = () => {
         </div>
       </Show>
       <div class="px-5 pt-4 flex flex-wrap items-center gap-2">
-        <Button size="sm" variant="secondary" onClick={goUp} disabled={currentPath() === '/'}>
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={navigateToParent}
+          disabled={currentPath() === '/'}
+        >
           {t('fileUpDir')}
         </Button>
         <code class="inline-flex items-center h-9 px-3 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-surface)] text-[0.82rem] font-mono text-[var(--color-text-secondary)]">
@@ -368,8 +523,14 @@ export const FilesPage: Component = () => {
             class="flex-1 min-w-[180px] max-w-sm text-[0.82rem] h-9"
             value={newFolderName()}
             onInput={(event) => setNewFolderName(event.currentTarget.value)}
+            disabled={folderUploading()}
           />
-          <Button size="sm" variant="secondary" onClick={handleCreateFolder}>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={handleCreateFolder}
+            disabled={folderUploading()}
+          >
             {t('fileCreateFolder')}
           </Button>
         </div>
@@ -380,6 +541,7 @@ export const FilesPage: Component = () => {
             class="flex-1 min-w-[180px] max-w-sm text-[0.82rem] h-9"
             value={uploadPath()}
             onInput={(event) => setUploadPath(event.currentTarget.value)}
+            disabled={folderUploading()}
           />
           <div class="flex items-center gap-2 flex-1 min-w-[180px] h-9 px-2 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-input)]">
             <input
@@ -395,17 +557,81 @@ export const FilesPage: Component = () => {
                 }
               }}
             />
-            <Button variant="ghost" size="xs" onClick={() => fileInputRef?.click()}>
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => fileInputRef?.click()}
+              disabled={folderUploading()}
+            >
               {t('fileChoose')}
             </Button>
             <span class="text-[0.82rem] text-[var(--color-text-muted)] flex-1 truncate">
               {fileChosenName() ?? t('fileNoFileSelected')}
             </span>
           </div>
-          <Button size="sm" variant="primary" onClick={handleUpload}>
+          <Button size="sm" variant="primary" onClick={handleUpload} disabled={folderUploading()}>
             {t('fileUpload')}
           </Button>
         </div>
+        <div class="px-5 pt-3 flex flex-wrap gap-2 items-center">
+          <div class="flex items-center gap-2 flex-1 min-w-[280px] h-9 px-2 rounded-[var(--radius-sm)] border border-[var(--color-border-subtle)] bg-[var(--color-bg-input)]">
+            <input
+              ref={(element) => {
+                folderInputRef = element;
+                element.webkitdirectory = true;
+              }}
+              type="file"
+              multiple
+              class="hidden"
+              onChange={(event) => handleFolderSelection(event.currentTarget.files)}
+            />
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => folderInputRef?.click()}
+              disabled={folderUploading()}
+            >
+              {t('fileChooseFolder')}
+            </Button>
+            <span class="text-[0.82rem] text-[var(--color-text-muted)] flex-1 truncate">
+              {folderUploadItems().length
+                ? tf('fileFolderSelectionSummary', {
+                    name: folderUploadName(),
+                    count: folderUploadItems().length,
+                    size: humanSize(folderUploadSize()),
+                  })
+                : t('fileNoFolderSelected')}
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="primary"
+            onClick={handleFolderUpload}
+            disabled={folderUploading() || !folderUploadItems().length}
+          >
+            {t('fileUploadFolder')}
+          </Button>
+        </div>
+        <Show when={folderUploading()}>
+          <div class="px-5 pt-2">
+            <div class="mb-1.5 flex items-center justify-between gap-3 text-[0.76rem] text-[var(--color-text-muted)]">
+              <span class="min-w-0 truncate" title={folderUploadCurrent()}>
+                {tf('fileFolderUploading', {
+                  completed: folderUploadCompleted(),
+                  total: folderUploadItems().length,
+                  path: folderUploadCurrent(),
+                })}
+              </span>
+              <span>{folderUploadProgress()}%</span>
+            </div>
+            <div class="h-2 overflow-hidden rounded-full bg-white/[0.08]">
+              <div
+                class="h-full rounded-full bg-[var(--color-accent)] transition-[width] duration-200"
+                style={{ width: `${folderUploadProgress()}%` }}
+              />
+            </div>
+          </div>
+        </Show>
       </Show>
 
       <div class="p-5">
@@ -493,7 +719,7 @@ export const FilesPage: Component = () => {
                           <button
                             type="button"
                             class="inline-flex h-8 w-8 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-danger)] hover:bg-[rgba(248,113,113,0.08)] disabled:cursor-not-allowed disabled:opacity-50"
-                            disabled={!devMode()}
+                            disabled={!devMode() || folderUploading()}
                             onClick={() => void handleDelete(entry)}
                             title={t('fileDelete') as string}
                             aria-label={t('fileDelete') as string}
@@ -513,6 +739,7 @@ export const FilesPage: Component = () => {
 
       <FileEditorModal
         state={editor}
+        writeBusy={folderUploading()}
         onClose={closeEditor}
         onContentChange={(value) => setEditor((prev) => ({ ...prev, content: value }))}
         onReload={reloadEditor}
@@ -581,6 +808,7 @@ const FolderDownloadPopup: Component<{
 
 const FileEditorModal: Component<{
   state: () => EditorState;
+  writeBusy: boolean;
   onClose: () => void;
   onContentChange: (value: string) => void;
   onReload: () => void;
@@ -611,7 +839,7 @@ const FileEditorModal: Component<{
               size="sm"
               variant="primary"
               onClick={props.onSave}
-              disabled={props.state().saving}
+              disabled={props.state().saving || props.writeBusy}
             >
               {props.state().saving ? '…' : t('fileEditorSave')}
             </Button>

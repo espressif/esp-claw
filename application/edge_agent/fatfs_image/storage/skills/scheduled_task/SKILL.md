@@ -6,9 +6,8 @@
     "cap_groups": [
       "cap_lua",
       "cap_scheduler",
-      "cap_router_mgr"
-    ],
-    "manage_mode": "readonly"
+     "cap_router_mgr"
+    ]
   }
 }
 ---

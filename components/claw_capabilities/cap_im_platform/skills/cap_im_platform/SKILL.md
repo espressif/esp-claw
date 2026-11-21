@@ -7,9 +7,8 @@
       "cap_im_feishu",
       "cap_im_qq",
       "cap_im_tg",
-      "cap_im_wechat"
-    ],
-    "manage_mode": "readonly"
+     "cap_im_wechat"
+    ]
   }
 }
 ---

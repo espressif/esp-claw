@@ -12,7 +12,7 @@ Skill：<LinkToSource relativePath="components/claw_capabilities/cap_web_search/
 
 ## 概述
 
-`cap_web_search` 向 LLM 暴露 `web_search` 工具，允许 Agent 通过配置的搜索服务提供商执行网络搜索。当前支持 **Tavily** 和 **Brave Search** 两个搜索 API 后端。
+`cap_web_search` 向 LLM 暴露 `web_search` 工具，允许 Agent 通过明确选择的搜索服务执行网络搜索。当前支持 **Bocha**、**Tavily** 和 **Brave Search**。
 
 ## 工具描述
 
@@ -34,11 +34,14 @@ Skill：<LinkToSource relativePath="components/claw_capabilities/cap_web_search/
 
 | 提供商 | NVS 配置项 | 说明 |
 |--------|-----------|------|
-| Tavily | `tavily_api_key` | 优先使用（若配置了 Tavily 和 Brave 则 Tavily 优先） |
-| Brave Search | `brave_api_key` | 备选提供商 |
+| Bocha | `bocha_key` | 博查网页搜索，返回摘要 |
+| Tavily | `tavily_key` | 新配置默认选择 |
+| Brave Search | `brave_key` | Brave 网页搜索 |
+
+在网页设置中选择搜索服务（`search_provider`：`bocha` / `tavily` / `brave`），填写对应 Key，保存并重启。旧配置未保存选择项时按原规则保留 Tavily 或 Brave；保存后固定使用所选服务。
 
 <Aside type="note">
-  至少需要配置一个搜索 API Key 才能使用 `web_search` 工具。如果两个都未配置，调用将返回错误。
+  所选服务必须配置 API Key。缺少 Key 或请求失败时返回错误，不会自动切换到其他服务。
 </Aside>
 
 ## 注册与配置
@@ -46,10 +49,9 @@ Skill：<LinkToSource relativePath="components/claw_capabilities/cap_web_search/
 ```c
 #include "cap_web_search.h"
 
-cap_web_search_register_group();
-cap_web_search_set_tavily_key("tvly-xxxxx");
-// 或
-cap_web_search_set_brave_key("BSAxxxxx");
+ESP_ERROR_CHECK(cap_web_search_set_provider("bocha"));
+ESP_ERROR_CHECK(cap_web_search_set_bocha_key("your-api-key"));
+ESP_ERROR_CHECK(cap_web_search_register_group());
 ```
 
 API Key 通常在应用层从 NVS 读取后调用相应的 `set_*_key` 函数设置。

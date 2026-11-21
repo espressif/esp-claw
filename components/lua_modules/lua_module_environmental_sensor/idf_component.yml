@@ -1,5 +1,9 @@
-## IDF Component Manager Manifest File
 dependencies:
   espressif/bme690:
     version: "*"
-  esp-idf-lib/dht: ^1.2.0
+    rules:
+      - if: "$CONFIG{LUA_MODULE_ENVIRONMENTAL_SENSOR_BACKEND_BME690} == True"
+  esp-idf-lib/dht:
+    version: "^1.2.0"
+    rules:
+      - if: "$CONFIG{LUA_MODULE_ENVIRONMENTAL_SENSOR_BACKEND_DHT} == True"

@@ -4,9 +4,8 @@
   "description": "Start a small Lua-hosted web page that shows Hello World and logs switch toggles from the browser.",
   "metadata": {
     "cap_groups": [
-      "cap_lua"
-    ],
-    "manage_mode": "readonly"
+     "cap_lua"
+    ]
   }
 }
 ---

@@ -1,19 +1,17 @@
 # Lua Image
 
-Shared image type and conversion helpers for Lua. Every frame produced by
-`camera` (and any future producer such as JPEG / file / network loaders) is an
-`image.frame` userdata defined by this module, so consumers like
-`display` and `vision` only need to learn one type.
+Shared image type and conversion helpers for Lua. Frames produced by `camera` or `image.load_file()` are `image.frame` objects that can be passed to `display` and `vision`.
 
 ## How to call
 - `local image = require("image")`
-- `image.convert(frame, format)` ensures the requested `image.*` format exists
-  in the frame's shared store and returns a new `image.frame` view for that format.
+- `image.convert(frame, format)` returns an `image.frame` in the requested
+  `image.*` format.
 - `image.resize(frame, opts)` returns a new, independent `image.frame` scaled
   to `opts.width` x `opts.height`. See "Example: resize" below.
 - `image.load_file(path)` reads an image file and returns an `image.frame`.
 - `image.save_file(path, frame)` saves a frame using the format implied by the
-  file suffix.
+  file suffix. It returns no values on success.
+- Invalid arguments and image I/O failures raise Lua errors.
 
 ## Format constants
 
@@ -33,12 +31,11 @@ Use these constants with `image.convert(frame, format)`:
 
 ## Frame type: `image.frame`
 
-An `image.frame` is a Lua-visible format view over a shared image store. The
-store owns the original buffer and any cached converted buffers. Methods:
+An `image.frame` is a Lua-visible image view. Methods:
 
 - `frame:info()` returns `{ width, height, bytes, pixel_format, timestamp_us, valid }`
 - `frame:data()` copies the buffer into a Lua string (slow, allocates)
-- `frame:release()` releases this view; the store is freed when the last view is released
+- `frame:release()` releases this view; it can no longer be read or drawn
 
 Release happens automatically when the variable is declared with the Lua 5.4+
 `<close>` attribute or when it is collected by GC, but explicit `<close>` is the
@@ -52,10 +49,7 @@ end
 -- frame is already released here
 ```
 
-Converted frames share the same store as their source. Releasing the source
-frame does not invalidate converted views that are still alive. For V4L2 camera
-frames, the producer buffer is returned only when the last view for that frame
-is released, so release all frame views promptly so capture can continue.
+Releasing the source frame does not invalidate converted views that are still alive. Release every view of a camera frame promptly so capture can continue.
 
 ## Pixel format names
 
@@ -74,9 +68,7 @@ understands these tokens:
 | `JPEG` | JPEG still |
 | `MJPG` | Motion-JPEG frame |
 
-Consumers internally request the format they need (e.g. `display` asks for
-`RGBP`; `vision` asks for `GREY`); scripts pass the frame object directly and
-never need to select a conversion path manually.
+Consumers request the format they need; scripts usually pass the frame object directly.
 
 ## Example: convert a frame
 
@@ -89,9 +81,7 @@ do
 end
 ```
 
-The converted result is a new `image.frame` view backed by the same shared
-store. Repeated conversions reuse cached buffers when possible. Release views
-with `<close>`, `frame:release()`, or GC.
+The converted result is a new `image.frame` view. Release views with `<close>`, `frame:release()`, or GC.
 
 ## Example: resize
 
@@ -104,6 +94,7 @@ conversion.
 
 ```lua
 local image = require("image")
+local storage = require("storage")
 
 do
     local small <close> = image.resize(frame, { width = 96, height = 96 })
@@ -117,7 +108,7 @@ do
 
     local thumb <close> = image.resize(frame, { width = 160, height = 120 })
     local jpeg  <close> = image.convert(thumb, image.JPEG)
-    image.save_file("/sdcard/thumb.jpg", jpeg)
+    image.save_file(storage.join_path(storage.get_root_dir(), "thumb.jpg"), jpeg)
 end
 ```
 
@@ -127,22 +118,24 @@ end
 local display = require("display")
 local image   = require("image")
 local storage = require("storage")
+local screen <close> = display.open()
+local info = screen:info()
 
 do
     local frame <close> = image.load_file(storage.join_path(storage.get_root_dir(), "picture.jpg"))
     local rgb565 <close> = image.convert(frame, image.RGB565)
-    display.draw_image(0, 0, rgb565, {
-        mode = "fit",
-        width = display.width,
-        height = display.height,
+    screen:begin()
+    screen:image(0, 0, rgb565, {
+        mode = "contain",
+        width = info.width,
+        height = info.height,
     })
+    screen:present()
     image.save_file(storage.join_path(storage.get_root_dir(), "copy.jpg"), frame)
 end
 ```
 
-`load_file()` and `save_file()` currently support `.jpg` / `.jpeg`. The returned
-frame keeps the file bytes alive until `frame:release()`, `<close>`, or GC
-releases it. The frame metadata reports the JPEG width, height, byte size, and
+`load_file()` and `save_file()` currently support `.jpg` / `.jpeg`. The frame metadata reports the JPEG width, height, byte size, and
 `pixel_format = "JPEG"`.
 
 ## Resource limits
@@ -152,13 +145,9 @@ before conversion:
 
 - JPEG files loaded from disk are limited to 4 MiB.
 - Decoded or converted frames are limited to 1920 x 1080 pixels.
-- Conversion may allocate cached output buffers in PSRAM; JPEG encoding may
-  also allocate a compressed output buffer and only creates an aligned input
-  copy when the source buffer is not already 16-byte aligned.
+- Conversion and JPEG encoding may allocate additional buffers.
 
-Use camera resolutions and file sizes that fit the available PSRAM budget, and
-release all `image.frame` views promptly. Cached buffers are frame-local and
-are released when the last view for that frame is released.
+Use camera resolutions and file sizes that fit the available memory budget, and release all `image.frame` views promptly.
 
 ## Example: snapshot to disk
 
@@ -172,21 +161,3 @@ do
     image.save_file(storage.join_path(storage.get_root_dir(), "snapshot.jpg"), frame)
 end
 ```
-
-## C-side use (for module authors)
-
-Other Lua modules can read or produce frames without going through Lua method
-dispatch by linking against this component and using:
-
-- `lua_image_push_frame(L, data, bytes, &info, release_cb, ctx)` — wrap
-  a producer-owned buffer as an `image.frame` userdata. `release_cb`
-  is called exactly once when the frame is released (via `frame:release()`,
-  `<close>`, or `__gc`). On failure the function returns an error code and
-  does not invoke `release_cb`; the caller still owns the buffer.
-- `lua_image_borrow_frame(L, index, &out)` — read `data`, `bytes`, and
-  `info` from the selected frame view without copying. Valid only for the
-  duration of the C call; do not retain the pointer after returning to Lua.
-- `lua_image_require_format(L, index, fmt, &view)` — get the
-  frame in a specific format, possibly converting and caching in the shared
-  store. Pair with `lua_image_release_view(&view)` and do not retain `view.data`
-  after returning to Lua.

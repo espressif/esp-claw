@@ -6,4 +6,6 @@ idf_component_register(
     REQUIRES
         cap_lua
         esp_driver_mcpwm
+    PRIV_REQUIRES
+        esp_driver_gpio
 )

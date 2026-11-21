@@ -168,6 +168,9 @@ claw_memory_backend_format_t claw_memory_backend_format_from_type(const char *ba
     if (strcmp(backend_type, "anthropic_compatible") == 0) {
         return CLAW_MEMORY_BACKEND_FORMAT_ANTHROPIC;
     }
+    if (strcmp(backend_type, "openai_responses") == 0) {
+        return CLAW_MEMORY_BACKEND_FORMAT_OPENAI_RESPONSES;
+    }
     return CLAW_MEMORY_BACKEND_FORMAT_UNKNOWN;
 }
 

@@ -1,0 +1,12 @@
+idf_component_register(
+    SRCS
+        "src/claw_endpoint.c"
+        "src/claw_endpoint_static.c"
+    INCLUDE_DIRS
+        "include"
+    PRIV_INCLUDE_DIRS
+        "src"
+    PRIV_REQUIRES
+        claw_utils
+        esp_timer
+)

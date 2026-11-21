@@ -86,7 +86,6 @@ import LinkToSource from '@/components/LinkToSource.astro';
     - lua_module_json/ JSON 工具
     - lua_module_knob/ 旋钮
     - lua_module_lcd/ LCD
-    - lua_module_lcd_touch/ LCD 触摸
     - lua_module_lvgl/ LVGL UI
     - lua_module_magnetometer/ 磁力计
     - lua_module_sci/ 串口外设集成
@@ -103,10 +102,10 @@ import LinkToSource from '@/components/LinkToSource.astro';
 
 ## 运行时数据目录
 
-所有运行时数据均挂载在 FATFS 文件系统 `/fatfs` 之下：
+可写运行时数据位于 DATA 根。使用 Flash 时 DATA 根为 `/fatfs`；使用 SD 卡时则为板级挂载点：
 
 <FileTree>
-- fatfs/
+- DATA/
   - sessions/ 会话历史（按 session id 拆文件）
   - memory/
     - MEMORY.md 供人类阅读的记忆视图（只读）
@@ -120,6 +119,11 @@ import LinkToSource from '@/components/LinkToSource.astro';
     - skill_id/
       - SKILL.md Skill 元数据与正文
       - scripts/ Skill 自带脚本（可选）
+  - apps/
+    - app_id/
+      - launcher.json App 元数据与 Lua 入口
+      - scripts/ App 脚本
+      - assets/ App 资源（可选）
   - scripts/
     - builtin/ 内置 Lua 测试脚本与库
     - docs/ 内置 Lua 模块文档
@@ -137,5 +141,5 @@ import LinkToSource from '@/components/LinkToSource.astro';
 
 ## 备份与重置
 
-- **备份**：将 `/fatfs` 下的子目录（`sessions/`、`memory/`、`skills/`、`scripts/`、`router_rules/`、`scheduler/`、`static/`、`inbox/`）整体拷贝到外部即可。
+- **备份**：将 DATA 根下的子目录（`sessions/`、`memory/`、`skills/`、`apps/`、`scripts/`、`router_rules/`、`scheduler/`、`static/`、`inbox/`）整体拷贝到外部即可。
 - **重置**：重新烧录 `storage` 分区或重新烧录完整固件。

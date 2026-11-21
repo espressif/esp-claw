@@ -4,9 +4,8 @@
   "description": "Enter Plan Mode and return an executable plan when a user request cannot be directly satisfied by the current Skills, Tools, firmware configuration, hardware, network, storage, or known parameters.",
   "metadata": {
     "cap_groups": [
-      "cap_system"
-    ],
-    "manage_mode": "readonly"
+     "cap_system"
+    ]
   }
 }
 ---

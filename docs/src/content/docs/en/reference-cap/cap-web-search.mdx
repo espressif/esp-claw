@@ -12,7 +12,7 @@ Skill: <LinkToSource relativePath="components/claw_capabilities/cap_web_search/s
 
 ## Overview
 
-`cap_web_search` exposes the `web_search` tool to the LLM, allowing the Agent to run web searches through the configured search provider. It currently supports two search API backends: **Tavily** and **Brave Search**.
+`cap_web_search` exposes the `web_search` tool to the LLM, allowing the Agent to search through an explicitly selected provider. It supports **Bocha**, **Tavily**, and **Brave Search**.
 
 ## Tool description
 
@@ -34,11 +34,14 @@ Returns formatted search result text containing titles, summaries, and links. By
 
 | Provider | NVS config key | Description |
 |----------|----------------|-------------|
-| Tavily | `tavily_api_key` | Preferred provider; if both Tavily and Brave are configured, Tavily is used first |
-| Brave Search | `brave_api_key` | Fallback provider |
+| Bocha | `bocha_key` | Bocha web search with summaries |
+| Tavily | `tavily_key` | Default for new configurations |
+| Brave Search | `brave_key` | Brave web search |
+
+Select the search provider in web settings (`search_provider`: `bocha` / `tavily` / `brave`), enter its key, save, and restart. Legacy settings without a saved selection retain Tavily or Brave according to the previous rules; saving fixes the selection.
 
 <Aside type="note">
-  At least one search API key must be configured to use the `web_search` tool. If neither key is configured, calls return an error.
+  The selected provider must have an API key. Missing keys or failed requests return an error without switching to another provider.
 </Aside>
 
 ## Registration and configuration
@@ -46,10 +49,9 @@ Returns formatted search result text containing titles, summaries, and links. By
 ```c
 #include "cap_web_search.h"
 
-cap_web_search_register_group();
-cap_web_search_set_tavily_key("tvly-xxxxx");
-// or
-cap_web_search_set_brave_key("BSAxxxxx");
+ESP_ERROR_CHECK(cap_web_search_set_provider("bocha"));
+ESP_ERROR_CHECK(cap_web_search_set_bocha_key("your-api-key"));
+ESP_ERROR_CHECK(cap_web_search_register_group());
 ```
 
 API keys are usually read from NVS by the application layer, then passed to the corresponding `set_*_key` function.

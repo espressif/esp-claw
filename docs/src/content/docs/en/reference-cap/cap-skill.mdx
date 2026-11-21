@@ -1,138 +1,96 @@
 ---
-title: cap_skill — Skill management tools
-description: Core-surface reference capability—`claw_skill` behaviors exposed as LLM-callable tools.
+title: cap_skill — Skill tools
+description: Skill activation, publication, removal, and per-session Capability Group visibility.
 ---
 
 import LinkToSource from '@/components/LinkToSource.astro';
 import { Aside } from '@astrojs/starlight/components';
 
-Source: <LinkToSource relativePath="components/claw_capabilities/cap_skill_mgr/src/cap_skill_mgr.c" /> · header: <LinkToSource relativePath="components/claw_capabilities/cap_skill_mgr/include/cap_skill_mgr.h" />
+Source: <LinkToSource relativePath="components/claw_capabilities/cap_skill_mgr/src/cap_skill_mgr.c" /> · Header: <LinkToSource relativePath="components/claw_capabilities/cap_skill_mgr/include/cap_skill_mgr.h" />
 
 ## Role
 
-`cap_skill` is the **thin wrapper that exposes core runtime features as tools**. It contains no standalone product logic; it forwards `claw_skill` (see [claw_skill](@lang/reference-core/claw-skill))—register/unregister Skills and activate Skills—into LLM-callable tools and Console `cap call` entry points.
+`cap_skill_mgr` adapts `claw_skill` operations into tools. `claw_skill` owns file scanning, validation, the registry, and per-session activation state. The Capability layer parses tool input, synchronizes tool visibility, and formats results.
 
-This “thin `cap_*` over `claw_*`” pattern is common: frameworks implement behavior, capabilities adapt it to tools and routing.
+## Tool groups
 
-## Tools exposed
+| Group | Tool | LLM visibility | Purpose |
+|---|---|---|---|
+| `cap_skill` | `activate_skill` | Visible by default | Load Skill instructions and expose its `metadata.cap_groups` for the current session |
+| `cap_skill` | `list_skill` | Hidden | Return the full catalog to Console or internal callers |
+| `cap_skill_manage` | `publish_skill` | Visible after activating a management Skill | Validate a runtime Skill already written to DATA and refresh the registry |
+| `cap_skill_manage` | `remove_skill` | Visible after activating a management Skill | Recursively remove an entire runtime Skill directory and refresh the registry |
 
-`cap_skill` registers four Callables:
+Ordinary sessions only need `activate_skill`. Management Skills such as `skill_creator` and `skills_lab_downloader` declare `cap_skill_manage` to expose publication and removal only when needed.
 
-| Tool ID | Description |
-|---------|-------------|
-| `list_skill` | List every Skill discovered from Markdown under the Skills root |
-| `register_skill` | Create one runtime-managed `skills/<skill_id>/SKILL.md` and reload the registry |
-| `unregister_skill` | Delete one runtime-managed Skill Markdown and reload the registry |
-| `activate_skill` | Activate a Skill, return the complete Skill document as the tool result, and open bound `metadata.cap_groups` |
+## `activate_skill`
 
-Except `list_skill`, all are flagged `CLAW_CAP_FLAG_CALLABLE_BY_LLM`.
+Input:
 
-<Aside type="note">
-  Under normal operation, all Skills‘ IDs and summaries are already exposed to the LLM, so there is no need to expose `list_skill` to the model.
-
-  `list_skill` is mainly kept for human operators, for example listing Skills manually via Console.
-</Aside>
-
-## Implementation notes
-
-### `activate_skill`: tool result as context injection
-
-`activate_skill` is the heart of the flow. It shows how a Capability mutates core runtime state while using the tool result for cache-friendly context injection:
-
-```d2
-direction: down
-
-llm: "LLM\nactivate_skill({skill_id})"
-read_fn: "claw_skill_read_document()"
-activate_fn: "claw_skill_activate_for_session()"
-fatfs: "FATFS\nactive_skills.json"
-sync_fn: "cap_skill_sync_session_visible_groups()"
-set_fn: "claw_cap_set_session_llm_visible_groups()"
-result: "return <skill_content>\ncomplete SKILL.md document\n</skill_content>"
-
-llm -> read_fn: "read Skill document"
-llm -> activate_fn
-llm -> sync_fn
-
-activate_fn -> fatfs: "persist activation"
-sync_fn -> set_fn: "refresh tool allow-list"
-read_fn -> result: "wrap as tool result"
+```json
+{"skill_id":"light_switch"}
 ```
 
-After `activate_skill` runs:
-
-1. It reads the full `SKILL.md` document for the Skill
-2. It calls `claw_skill_activate_for_session` to persist the activation state
-3. It calls `cap_skill_sync_session_visible_groups` to refresh the tool visibility allow-list
-4. It returns the Skill document to the LLM as a **tool-call result** in the form `<skill_content name="skill_id">...</skill_content>`
-
-The LLM receives the complete Skill document in the same turn, and sees the newly opened tools on the next turn. When multiple Skills are needed, the LLM can call several `activate_skill` tools in parallel in one response to fetch multiple documents at once.
-
-<Aside type="tip" title="Why inject through tool results instead of the system prompt?">
-  Earlier implementations injected activated Skill documents into the system prompt through a context provider. Every Skill activation or deactivation changed the system prompt content, invalidating LLM API prompt caches.
-
-  The current design injects Skill documents into conversation history through tool results. The system prompt only contains the stable Skills catalog, avoiding frequent cache-prefix changes and significantly improving cache hit rates.
-</Aside>
-
-### `register_skill`: filesystem checks
-
-Registration enforces integrity:
-
-```c
-// 1. Path safety: no leading "/", no "..", no backslashes
-if (!cap_skill_path_is_valid(file_item->valuestring)) { ... }
-
-// 2. file must match <skill_id>/SKILL.md under /fatfs/skills/
-if (!cap_skill_path_is_valid(skill_id, file)) { ... return ESP_ERR_INVALID_ARG; }
-
-// 3. skill_id must be unique
-if (cap_skill_catalog_contains_id(skills, skill_id)) { ... return ESP_ERR_INVALID_ARG; }
-```
-
-After creating or deleting `SKILL.md`, `claw_skill_reload_registry()` applies changes; failed reload rolls back to keep the catalog consistent.
-
-### Session isolation
-
-`activate_skill` reads `ctx->session_id`, so activation sets differ per session:
-
-- Telegram vs Feishu sessions can load different Skills
-- After reboot, activation state is restored from FATFS
-
-### Response shape
-
-When `activate_skill` succeeds, it returns the raw Skill document wrapped in XML tags:
+The tool reads the complete Skill document, persists activation for the current session, synchronizes its Capability Groups, and returns:
 
 ```xml
-<skill_content name="cap_lua">
-... SKILL.md body ...
+<skill_content name="light_switch">
+...complete SKILL.md...
 </skill_content>
 ```
 
-On failure, it returns structured JSON:
+The document enters conversation history through the tool result. The system prompt keeps only the stable Skill catalog, preserving a cache-friendly prompt prefix.
 
-```jsonc
-{
-  "ok": false,
-  "error": "failed to read skill document",
-  "skill_id": "nonexistent"
-}
+## `publish_skill`
+
+`publish_skill` does not create or modify files. Write the complete Skill under the DATA root's `skills/<skill_id>/` before calling it:
+
+```json
+{"skill_id":"weather_alerts"}
 ```
 
-Other tools (`register_skill`, `unregister_skill`) also return structured JSON describing the operation result.
+The firmware derives the fixed document path from `skill_id`, reloads the registry, and verifies that the target belongs to the primary writable root. Creation and updates use the same idempotent publication flow; an update does not require removing the existing Skill first.
 
-## Skill docs
+A successful publication returns a fixed-size result so large metadata cannot make the tool report failure after the registry has already changed:
 
-`cap_skill` itself has no Skill document—these tools are always visible without activation. The `cap_skill` group is usually part of the boot-time `claw_cap_set_llm_visible_groups` allow-list.
+```json
+{"ok":true,"skill_id":"weather_alerts"}
+```
 
-## Split with `claw_skill`
+Apps and Skills use independent directories and registries. `publish_skill` does not create, update, or reload Apps.
 
-| Layer | Module | Responsibility |
-|-------|--------|------------------|
-| Framework | `claw_skill` | Parse the skills tree, persist activation per session, read documents, and provide the Skills catalog provider |
-| Tooling | `cap_skill` | Expose the above as LLM / Console-callable tools; inject documents through tool results on activation |
+## `remove_skill`
 
-`cap_skill` is a pure adapter: no private state; everything delegates to `claw_skill` while handling JSON IO and error strings.
+Input:
 
-<Aside type="note">
-  To activate manually from the Console, run `cap call activate_skill {"skill_id":"your_skill"}`—equivalent to the LLM tool of the same name.
+```json
+{"skill_id":"weather_alerts"}
+```
+
+Only runtime Skills under the writable root may be removed; System Skills are rejected. The implementation directly removes the entire Skill directory recursively, including `SKILL.md`, scripts, references, and assets, then refreshes the registry. Apps use separate directories and are unaffected by Skill removal. The deletion is not transactional and is not rolled back; a filesystem error may leave the directory partially removed.
+
+Successful result:
+
+```json
+{"ok":true,"skill_id":"weather_alerts"}
+```
+
+<Aside type="caution">
+  `remove_skill` is destructive. To update a Skill, edit its files and call `publish_skill` directly; do not remove it first.
 </Aside>
+
+## Input constraints
+
+All three LLM tools use the same `skill_id` rules: 1–63 characters containing only ASCII letters, digits, underscores, and hyphens. Unknown input fields are rejected. The model neither needs nor may provide the derived `file` path.
+
+## Console
+
+After enabling the `skill` Console command:
+
+```sh
+skill --catalog
+skill --publish weather_alerts
+skill --remove weather_alerts
+skill --activate weather_alerts --session default
+skill --list --session default
+```

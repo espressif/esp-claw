@@ -21,8 +21,10 @@ import { LinkCard } from 'starlight-theme-nova/components'
 - `user_text`：用户输入正文。
 - `source_*` / `target_*`：来源通道、聊天 id、消息 id、来源 cap 等。这些字段会原样传入 `claw_cap_call_from_core`，以便在 Capability 层定向回复或关联上下文。
 
-应用通过 `claw_core_submit` 投递请求，用 `claw_core_receive` / `claw_core_receive_for` 取回 `claw_core_response_t`。
+请求/响应客户端通过 `claw_core_start_run` 显式启动独立 run，再用 `claw_core_receive` / `claw_core_receive_for` 取回 `claw_core_response_t`。
 `claw_core_response_t` 包含助手回复正文（`text` 字段）与错误信息（`error_message`）。
+
+对话型入口统一调用 `claw_core_post_message`。Core 会原子地判断消息应进入当前 run 的收件箱，还是排队启动新 run，并通过 `claw_core_message_receipt_t` 返回归属的 `run_id` 与投递结果。调用方不应先读取运行阶段，再在 submit/append 两个接口间做选择，因为该判断会与 run 收尾产生竞态。
 
 ### 请求标志
 
@@ -32,9 +34,20 @@ import { LinkCard } from 'starlight-theme-nova/components'
 |------|------|
 | `CLAW_CORE_REQUEST_FLAG_PUBLISH_OUT_MESSAGE` | Agent 完成推理后，将响应以 `out_message` 事件发布到 Event Router |
 | `CLAW_CORE_REQUEST_FLAG_SKIP_RESPONSE_QUEUE` | 跳过响应队列，不通过 `claw_core_receive` 返回结果 |
-| `CLAW_CORE_REQUEST_FLAG_USER_INTERRUPT` | 标记本次请求为用户打断（中止前一个请求后发起的新请求） |
+| `CLAW_CORE_REQUEST_FLAG_PUBLISH_STAGE_MESSAGE` | 通过 Event Router 发布 Agent 阶段进度 |
 
-Event Router 的 `run_agent` 动作会同时设置前两个标志，实现异步提交 + 事件发布的响应路径。
+Event Router 的 `run_agent` 动作会设置这些标志，实现异步消息投递以及事件化的进度和响应路径。
+
+## Message 与 Run
+
+用户消息和 Agent run 是两个不同的生命周期对象。`claw_core_post_message` 收到属于当前可插入 run 会话的消息后，Core 会：
+
+1. 把文本复制进该 run 的有界收件箱；
+2. 必要时协作式中止正在进行的 LLM HTTP 调用；
+3. 在 Agent 循环的安全检查点取出收件箱消息；
+4. 先把每条消息持久化为用户上下文，再重建下一次推理输入。
+
+最终响应与取消仍由原 run 持有。消息属于其他会话、当前 run 正在收尾或当前没有活动 run 时，则排队成为新 run。收件箱容量与请求队列是明确的背压边界，UI 不再通过 busy 判断代替运行时决策。
 
 在拼装发往大语言模型的**当前轮用户提示**时，`claw_core` 会附带一段 **Behavior Notes**，说明最终助手结果通常会由框架自动投递给用户，因此一般不必再主动调用 `cap_im_platform` 中的 IM 发送接口返回正文（减少重复回复）。
 

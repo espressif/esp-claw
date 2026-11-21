@@ -1,0 +1,31 @@
+menu "Lua Board Manager Module"
+
+    choice LUA_MODULE_BOARD_MANAGER_DISPLAY_SHAPE
+        prompt "Visible display shape"
+        default LUA_MODULE_BOARD_MANAGER_DISPLAY_SHAPE_RECT
+        help
+            Physical outline of the visible display area, reported by
+            board_manager.get_display_shape(). Apps use it to keep controls
+            away from areas the panel cannot show. Boards set it in
+            sdkconfig.defaults.board.
+
+        config LUA_MODULE_BOARD_MANAGER_DISPLAY_SHAPE_RECT
+            bool "Rectangle"
+
+        config LUA_MODULE_BOARD_MANAGER_DISPLAY_SHAPE_ROUNDED_RECT
+            bool "Rounded rectangle"
+
+        config LUA_MODULE_BOARD_MANAGER_DISPLAY_SHAPE_CIRCLE
+            bool "Circle"
+    endchoice
+
+    config LUA_MODULE_BOARD_MANAGER_DISPLAY_CORNER_RADIUS
+        int "Display corner radius in pixels"
+        depends on LUA_MODULE_BOARD_MANAGER_DISPLAY_SHAPE_ROUNDED_RECT
+        default 40
+        range 1 1024
+        help
+            Radius of each visible corner. A circular display uses half of its
+            shorter side and ignores this value.
+
+endmenu

@@ -6,6 +6,7 @@
 #include "lua_module_led_strip.h"
 
 #include "cap_lua.h"
+#include "cap_lua_hw.h"
 #include "esp_err.h"
 #include "lauxlib.h"
 #include "led_strip.h"
@@ -17,6 +18,7 @@
 
 typedef struct {
     led_strip_handle_t strip;
+    cap_lua_hw_lease_t lease;
 } lua_module_led_strip_ud_t;
 
 static void lua_module_led_strip_hsv_to_rgb(uint32_t hue, uint32_t saturation, uint32_t value,
@@ -101,14 +103,20 @@ static lua_module_led_strip_ud_t *lua_module_led_strip_get_ud(lua_State *L, int 
     return ud;
 }
 
-static int lua_module_led_strip_gc(lua_State *L)
+static esp_err_t led_strip_close(lua_module_led_strip_ud_t *ud)
 {
-    lua_module_led_strip_ud_t *ud =
-        (lua_module_led_strip_ud_t *)luaL_testudata(L, 1, LUA_MODULE_LED_STRIP_METATABLE);
-    if (ud && ud->strip) {
-        led_strip_del(ud->strip);
+    if (ud->strip) {
+        esp_err_t err = led_strip_del(ud->strip);
+        if (err != ESP_OK) return err;
         ud->strip = NULL;
     }
+    return cap_lua_hw_release(&ud->lease);
+}
+
+static int lua_module_led_strip_gc(lua_State *L)
+{
+    lua_module_led_strip_ud_t *ud = luaL_testudata(L, 1, LUA_MODULE_LED_STRIP_METATABLE);
+    if (ud) (void)led_strip_close(ud);
     return 0;
 }
 
@@ -172,12 +180,9 @@ static int lua_module_led_strip_clear(lua_State *L)
 
 static int lua_module_led_strip_close(lua_State *L)
 {
-    lua_module_led_strip_ud_t *ud =
-        (lua_module_led_strip_ud_t *)luaL_checkudata(L, 1, LUA_MODULE_LED_STRIP_METATABLE);
-    if (ud->strip) {
-        led_strip_del(ud->strip);
-        ud->strip = NULL;
-    }
+    lua_module_led_strip_ud_t *ud = luaL_checkudata(L, 1, LUA_MODULE_LED_STRIP_METATABLE);
+    esp_err_t err = led_strip_close(ud);
+    if (err != ESP_OK) return luaL_error(L, "led_strip close failed: %s", esp_err_to_name(err));
     return 0;
 }
 
@@ -185,7 +190,6 @@ static int lua_module_led_strip_new(lua_State *L)
 {
     int gpio = (int)luaL_checkinteger(L, 1);
     int max_leds = (int)luaL_checkinteger(L, 2);
-    led_strip_handle_t strip = NULL;
     esp_err_t err;
 
     if (max_leds <= 0) {
@@ -210,16 +214,17 @@ static int lua_module_led_strip_new(lua_State *L)
         }
     };
 
-    err = led_strip_new_rmt_device(&strip_config, &rmt_config, &strip);
+    lua_module_led_strip_ud_t *ud = lua_newuserdata(L, sizeof(*ud));
+    *ud = (lua_module_led_strip_ud_t){0};
+    luaL_setmetatable(L, LUA_MODULE_LED_STRIP_METATABLE);
+    err = cap_lua_hw_claim_gpio(L, &ud->lease, "lua/led_strip", gpio);
+    if (err == CLAW_HW_ERR_CONFLICT) return luaL_error(L, "led_strip claim failed: GPIO %d is already in use", gpio);
+    if (err != ESP_OK) return luaL_error(L, "led_strip claim failed: GPIO %d: %s (code %d)", gpio, esp_err_to_name(err), (int)err);
+    err = led_strip_new_rmt_device(&strip_config, &rmt_config, &ud->strip);
     if (err != ESP_OK) {
+        (void)led_strip_close(ud);
         return luaL_error(L, "led_strip new failed: %s", esp_err_to_name(err));
     }
-
-    lua_module_led_strip_ud_t *ud =
-        (lua_module_led_strip_ud_t *)lua_newuserdata(L, sizeof(*ud));
-    ud->strip = strip;
-    luaL_getmetatable(L, LUA_MODULE_LED_STRIP_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 

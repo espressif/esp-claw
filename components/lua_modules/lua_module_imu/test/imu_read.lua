@@ -29,7 +29,7 @@ end
 
 local function run()
     print("[imu] opening device " .. DEVICE_NAME)
-    sensor = imu.new(DEVICE_NAME)
+    sensor = imu.new({ device = DEVICE_NAME })
     print("[imu] opened " .. sensor:name())
 
     for i = 1, SAMPLE_COUNT do

@@ -1,7 +1,7 @@
 # Thread Lua module
 
-`thread` provides Lua job management and named FreeRTOS-backed synchronization
-objects shared by independent Lua async jobs.
+`thread` starts and manages Lua jobs and provides named queues, semaphores,
+and locks shared between independent async jobs.
 
 ## API
 
@@ -45,19 +45,21 @@ async timeout `0` means run until cancelled. Async `opts` also accepts `name`,
 - `thread.sync.lock(name, timeout_ms)` returns `true` on success,
   `false, "timeout"` on timeout, and `false, "stopped"` when the Lua job is
   stopped.
-- `thread.sync.unlock(name)` unlocks a mutex. Only the Lua job task that
+- `thread.sync.unlock(name)` unlocks a mutex. Only the Lua job that
   acquired it can unlock it.
 - `thread.sync.lock_delete(name)` deletes an idle unlocked mutex.
 
 Timeouts default to `0`, which means non-blocking. Permanent blocking is not
-provided in the first version.
+supported.
 
 ## Example
 
 ```lua
 local thread = require("thread")
+local storage = require("storage")
 
-local ok, output = thread.run("/system/skills/builtin_lua_modules/scripts/builtin/test/thread_child_a.lua", {
+local script_path = storage.join_path(storage.get_root_dir(), "scripts", "worker.lua")
+local ok, output = thread.run(script_path, {
     mode = "sync",
 }, {
     timeout_ms = 5000,

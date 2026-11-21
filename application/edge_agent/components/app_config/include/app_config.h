@@ -27,6 +27,7 @@ typedef struct {
     char ap_behavior[16];
     char llm_api_key[APP_CONFIG_STR_LEN];
     char llm_backend_type[32];
+    char llm_endpoint_provider[32];
     char llm_model[64];
     char llm_base_url[APP_CONFIG_STR_LEN];
     char llm_auth_type[32];
@@ -34,6 +35,7 @@ typedef struct {
     char llm_max_tokens[16];
     char llm_default_image_max_bytes[16];
     char llm_max_tokens_field[32];
+    char llm_reasoning_effort[16];
     char llm_supports_tools[8];
     char llm_supports_vision[8];
     char llm_image_remote_url_only[8];
@@ -47,6 +49,8 @@ typedef struct {
     char wechat_base_url[APP_CONFIG_STR_LEN];
     char wechat_cdn_base_url[APP_CONFIG_STR_LEN];
     char wechat_account_id[32];
+    char search_provider[16];
+    char search_bocha_key[APP_CONFIG_STR_LEN];
     char search_brave_key[APP_CONFIG_STR_LEN];
     char search_tavily_key[APP_CONFIG_STR_LEN];
     char search_http_allowlist[APP_CONFIG_STR_LEN];

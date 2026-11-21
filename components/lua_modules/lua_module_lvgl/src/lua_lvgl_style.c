@@ -64,6 +64,35 @@ static void lua_lvgl_apply_style_int_field(lua_State *L, int index, lv_obj_t *ob
     }
 }
 
+static void lua_lvgl_apply_text_align_field(lua_State *L, int index, lv_obj_t *obj)
+{
+    static const struct {
+        const char *name;
+        lv_text_align_t align;
+    } s_text_aligns[] = {
+        {"auto",   LV_TEXT_ALIGN_AUTO},
+        {"left",   LV_TEXT_ALIGN_LEFT},
+        {"center", LV_TEXT_ALIGN_CENTER},
+        {"right",  LV_TEXT_ALIGN_RIGHT},
+    };
+    const char *value;
+
+    lua_getfield(L, index, "text_align");
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        return;
+    }
+    value = lua_isstring(L, -1) ? lua_tostring(L, -1) : NULL;
+    for (size_t i = 0; value && i < sizeof(s_text_aligns) / sizeof(s_text_aligns[0]); i++) {
+        if (strcmp(value, s_text_aligns[i].name) == 0) {
+            lua_pop(L, 1);
+            lv_obj_set_style_text_align(obj, s_text_aligns[i].align, 0);
+            return;
+        }
+    }
+    luaL_error(L, "lvgl style 'text_align' must be auto, left, center, or right");
+}
+
 void lua_lvgl_apply_style_opts_locked(lua_State *L, int index, lv_obj_t *obj)
 {
     if (!lua_lvgl_opt_table(L, index)) {
@@ -83,6 +112,7 @@ void lua_lvgl_apply_style_opts_locked(lua_State *L, int index, lv_obj_t *obj)
     lua_lvgl_apply_style_int_field(L, index, obj, "pad_column");
     lua_lvgl_apply_style_int_field(L, index, obj, "line_width");
     lua_lvgl_apply_style_int_field(L, index, obj, "arc_width");
+    lua_lvgl_apply_text_align_field(L, index, obj);
     lua_lvgl_apply_font_style_field(L, index, obj);
 }
 int lua_lvgl_set_style(lua_State *L)

@@ -36,6 +36,9 @@ esp_err_t lua_image_resize_view(const lua_image_view_t *src,
                                 lua_image_resize_filter_t filter,
                                 lua_image_view_t *out);
 
+esp_err_t lua_image_resize_ppa(const lua_image_source_t *src, lua_image_format_t dst_format, int dst_width, int dst_height,
+                               lua_image_resize_filter_t filter, lua_image_view_t *out);
+
 #ifdef __cplusplus
 }
 #endif

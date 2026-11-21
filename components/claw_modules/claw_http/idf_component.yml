@@ -1,0 +1,4 @@
+dependencies:
+  claw_endpoint:
+    path: ../claw_endpoint
+    public: true

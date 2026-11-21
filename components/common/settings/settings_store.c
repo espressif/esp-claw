@@ -192,6 +192,29 @@ esp_err_t settings_store_erase_key(const char *key)
     return err;
 }
 
+esp_err_t settings_store_erase_all(void)
+{
+    nvs_handle_t handle;
+    esp_err_t err = settings_store_open(NVS_READWRITE, &handle);
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        return ESP_OK;
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_open failed: %s", esp_err_to_name(err));
+        return err;
+    }
+
+    err = nvs_erase_all(handle);
+    if (err == ESP_OK) {
+        err = nvs_commit(handle);
+    }
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "erase settings failed: %s", esp_err_to_name(err));
+    }
+    nvs_close(handle);
+    return err;
+}
+
 esp_err_t settings_store_commit(void)
 {
     return ESP_OK;

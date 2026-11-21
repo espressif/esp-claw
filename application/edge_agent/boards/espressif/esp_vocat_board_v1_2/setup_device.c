@@ -10,11 +10,7 @@
 #include "esp_lcd_st77916.h"
 #include "esp_lcd_touch_cst816s.h"
 #include "esp_log.h"
-#include "esp_attr.h"
 #include "esp_err.h"
-#include "driver/gpio.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
 
 static const st77916_lcd_init_cmd_t vendor_specific_init_default[] = {
     {0xF0, (uint8_t[]) {0x28}, 1, 0},
@@ -226,34 +222,9 @@ esp_err_t lcd_panel_factory_entry_t(esp_lcd_panel_io_handle_t io, const esp_lcd_
     return ESP_OK;
 }
 
-/* CST816T 无触摸时进入低功耗、I2C 不响应,需中断驱动读取。
- * 契约: interrupt_callback 非空且 user_data 是二值信号量 -> 上层走中断模式。 */
-static IRAM_ATTR void cst816t_interrupt_cb(esp_lcd_touch_handle_t tp)
-{
-    SemaphoreHandle_t sem = (tp != NULL) ? (SemaphoreHandle_t)tp->config.user_data : NULL;
-    if (sem == NULL) {
-        return;
-    }
-    BaseType_t higher_prio_woken = pdFALSE;
-    xSemaphoreGiveFromISR(sem, &higher_prio_woken);
-    if (higher_prio_woken == pdTRUE) {
-        portYIELD_FROM_ISR();
-    }
-}
-
 esp_err_t lcd_touch_factory_entry_t(esp_lcd_panel_io_handle_t io, const esp_lcd_touch_config_t *touch_dev_config, esp_lcd_touch_handle_t *ret_touch)
 {
-    static SemaphoreHandle_t s_cst816t_int_sem = NULL;
-    esp_lcd_touch_config_t touch_cfg = {0};
-    memcpy(&touch_cfg, touch_dev_config, sizeof(esp_lcd_touch_config_t));
-
-    if (s_cst816t_int_sem == NULL) {
-        s_cst816t_int_sem = xSemaphoreCreateBinary();
-    }
-    touch_cfg.interrupt_callback = cst816t_interrupt_cb;
-    touch_cfg.user_data = (void *)s_cst816t_int_sem;
-
-    esp_err_t ret = esp_lcd_touch_new_i2c_cst816s(io, &touch_cfg, ret_touch);
+    esp_err_t ret = esp_lcd_touch_new_i2c_cst816s(io, touch_dev_config, ret_touch);
     if (ret != ESP_OK) {
         ESP_LOGE("lcd_touch_factory_entry_t", "Failed to create CST816S touch driver: %s", esp_err_to_name(ret));
         return ret;

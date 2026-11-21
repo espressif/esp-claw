@@ -19,6 +19,7 @@ local INTERVAL_MS = int_arg("interval_ms", 1000)
 
 local gauge
 local bus
+local owns_bus = false
 
 local function cleanup()
     if gauge then
@@ -27,13 +28,25 @@ local function cleanup()
         end)
         gauge = nil
     end
+    if owns_bus and bus then
+        pcall(function()
+            bus:close()
+        end)
+        bus = nil
+        owns_bus = false
+    end
 end
 
 local function run()
     local port = int_arg("port", 0)
     local sda = int_arg("sda", 14)
     local scl = int_arg("scl", 13)
-    bus = a.bus or i2c.new(port, sda, scl, FREQ_HZ)
+    if a.bus then
+        bus = a.bus
+    else
+        bus = i2c.new(port, sda, scl, FREQ_HZ)
+        owns_bus = true
+    end
 
     local opts = {
         bus = bus,

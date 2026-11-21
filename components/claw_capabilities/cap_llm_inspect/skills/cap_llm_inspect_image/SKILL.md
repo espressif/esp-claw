@@ -4,9 +4,8 @@
   "description": "How to inspect a local image with inspect_image.",
   "metadata": {
     "cap_groups": [
-      "cap_llm_inspect"
-    ],
-    "manage_mode": "readonly"
+     "cap_llm_inspect"
+    ]
   }
 }
 ---
