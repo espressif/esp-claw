@@ -1,0 +1,160 @@
+version: 1.0.0
+# Devices Configuration
+devices:
+  - name: audio_dac
+    chip: es8311  # Codec chip (ES8311)
+    type: audio_codec
+    version: default
+    config:
+      # DAC Configuration (for audio output)
+      dac_enabled: true
+      dac_max_channel: 1     # ES8311 support 1 DAC channel (default right channel, REG:0x09 - SDP_IN_SEL)
+      dac_channel_mask: "1"  # Enable left channel
+      mclk_enabled: true     # MCLK pin (GPIO13) is wired to ES8311; tell driver to use external MCLK
+
+    peripherals:
+      - name: gpio_pa_control
+        gain: 6
+        active_level: 1
+
+      # I2S interface for audio output
+      - name: i2s_audio_out
+
+      # I2C interface for codec control
+      - name: i2c_master
+        address: 0x30
+        frequency: 400000
+
+  - name: audio_adc
+    chip: es8311  # Codec chip (ES8311)
+    type: audio_codec
+    version: default
+    config:
+      # ADC Configuration (for audio input)
+      adc_enabled: true
+      adc_max_channel: 2            # ES8311 support 1 ADC channel and 1 DAC echo channel, default:ADCL + DACR, refer 8311 datasheet REG44 `ADCDAT_SEL`
+      adc_channel_mask: "11"        # Enable both left and right channels
+      adc_channel_labels: [RE, FC]  # DAC reference and ADC microphone
+      mclk_enabled: true            # MCLK pin (GPIO13) is wired to ES8311; required for stable ADC sampling clock
+
+    # Peripheral configuration
+    peripherals:
+      # I2S interface for audio input
+      - name: i2s_audio_in
+
+      # I2C interface for codec control
+      - name: i2c_master
+        address: 0x30
+        frequency: 400000
+
+  - name: fs_sdcard
+    type: fs_fat
+    sub_type: sdmmc
+    version: default
+    config:
+      sub_config:
+        # Use SDMMC slot 0
+        slot: SDMMC_HOST_SLOT_0
+        frequency: SDMMC_FREQ_HIGHSPEED
+        bus_width: 4
+        # If using slot 0, the pin must be configured as 0, the IO pins actually used are configured by the SDMMC driver
+        # For more details, please check https://github.com/espressif/esp-idf/blob/v5.5.1/components/esp_driver_sdmmc/src/sdmmc_host.c#L668
+        pins:
+          clk: 0
+          cmd: 0
+          d0: 0
+          d1: 0
+          d2: 0
+          d3: 0
+          d4: 0
+          d5: 0
+          d6: 0
+          d7: 0
+        ldo_chan_id: 4  # Use LDO_VO4 to power SDMMC IO
+
+  # DSI Display Device
+  - name: display_lcd
+    chip: jd9165
+    type: display_lcd
+    sub_type: dsi
+    dependencies:
+      espressif/esp_lcd_jd9165: "^2.0.2"
+    config:
+      reset_gpio_num: 0
+      rgb_ele_order: LCD_RGB_ELEMENT_ORDER_RGB
+      data_endian: LCD_RGB_DATA_ENDIAN_LITTLE
+      bits_per_pixel: 24
+      reset_active_high: 0
+      dbi_config:
+        virtual_channel: 0
+        lcd_cmd_bits: 8
+        lcd_param_bits: 8
+      dpi_config:
+        virtual_channel: 0
+        dpi_clk_src: MIPI_DSI_DPI_CLK_SRC_DEFAULT
+        dpi_clock_freq_mhz: 52
+        pixel_format: LCD_COLOR_PIXEL_FORMAT_RGB565
+        in_color_format: LCD_COLOR_FMT_RGB565
+        out_color_format: LCD_COLOR_FMT_RGB565
+        num_fbs: 1
+        flags:
+          use_dma2d: false
+          disable_lp: false
+        video_timing:
+          h_size: 1024
+          v_size: 600
+          hsync_back_porch : 136
+          hsync_pulse_width : 24
+          hsync_front_porch : 160
+          vsync_back_porch : 21
+          vsync_pulse_width : 2
+          vsync_front_porch : 12
+      peripherals:
+      - name: ldo_mipi
+      - name: dsi_display
+
+  # Touch Panel Configuration
+  - name: lcd_touch
+    chip: gt911
+    type: lcd_touch_i2c
+    version: default
+    dependencies:
+      esp_lcd_touch:
+        version: "*"
+        require: public
+      espressif/esp_lcd_touch_gt911: "*"
+    config:
+      # esp_lcd_panel_io_i2c_config_t fields for touch communication
+      io_i2c_config:
+        dev_addr: [0x5D, 0x14]  # GT911 I2C address (ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS)
+        lcd_cmd_bits: 16        # Bit-width of LCD command
+        peripherals:
+          - name: i2c_master    # I2C peripheral for touch communication
+
+      # esp_lcd_touch_config_t fields for touch configuration
+      touch_config:
+        x_max: 1024  # Maximum X coordinate (BSP_LCD_H_RES)
+        y_max: 600   # Maximum Y coordinate (BSP_LCD_V_RES)
+        flags:
+          mirror_x: true
+          mirror_y: true
+
+  - name: lcd_brightness
+    type: ledc_ctrl
+    version: default
+    peripherals:
+      - name: ledc_backlight
+
+  # - name: camera
+  #   type: camera
+  #   version: default
+  #   sub_type: "csi"   # The bus type: csi
+  #   config:
+  #     csi_config:
+  #       reset_io: -1
+  #       pwdn_io: -1
+  #       dont_init_ldo: true  # Using periph_ldo to manager this peripheral
+  #   peripherals:
+  #     - name: "i2c_master"
+  #       frequency: 100000
+  #     - name: ldo_mipi

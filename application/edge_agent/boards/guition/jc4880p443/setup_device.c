@@ -1,0 +1,105 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+#include <string.h>
+#include "esp_log.h"
+#include "dev_display_lcd.h"
+#include "esp_lcd_st7701.h"
+#include "esp_lcd_touch_gt911.h"
+
+static const char *TAG = "P4_FUNCTION_EV_SETUP_DEVICE";
+
+static const st7701_lcd_init_cmd_t lcd_cmd[] = {
+//  {cmd, { data }, data_size, delay_ms}
+    {0xFF, (uint8_t []){0x77,0x01,0x00,0x00,0x13},5,0},
+    {0xEF, (uint8_t []){0x08}, 1, 0},
+    {0xFF, (uint8_t []){0x77,0x01,0x00,0x00,0x10},5,0},
+    {0xC0, (uint8_t []){0x63, 0x00}, 2, 0},
+    {0xC1, (uint8_t []){0x0D, 0x02}, 2, 0},
+    {0xC2, (uint8_t []){0x10, 0x08}, 2, 0},
+    {0xCC, (uint8_t []){0x10}, 1, 0},
+
+    {0xB0, (uint8_t []){0x80, 0x09, 0x53, 0x0C, 0xD0, 0x07, 0x0C, 0x09, 0x09, 0x28, 0x06, 0xD4, 0x13, 0x69, 0x2B, 0x71}, 16, 0},
+    {0xB1, (uint8_t []){0x80, 0x94, 0x5A, 0x10, 0xD3, 0x06, 0x0A, 0x08, 0x08, 0x25, 0x03, 0xD3, 0x12, 0x66, 0x6A, 0x0D}, 16, 0},
+    {0xFF, (uint8_t []){0x77, 0x01, 0x00, 0x00, 0x11}, 5, 0},
+
+    {0xB0, (uint8_t []){0x5D}, 1, 0},
+    {0xB1, (uint8_t []){0x58}, 1, 0},
+    {0xB2, (uint8_t []){0x87}, 1, 0},
+    {0xB3, (uint8_t []){0x80}, 1, 0},
+    {0xB5, (uint8_t []){0x4E}, 1, 0},
+    {0xB7, (uint8_t []){0x85}, 1, 0},
+    {0xB8, (uint8_t []){0x21}, 1, 0},
+    {0xB9, (uint8_t []){0x10, 0x1F}, 2, 0},
+    {0xBB, (uint8_t []){0x03}, 1,0},
+    {0xBC, (uint8_t []){0x00}, 1,0},
+    
+    {0xC1, (uint8_t []){0x78}, 1, 0},
+    {0xC2, (uint8_t []){0x78}, 1, 0},
+    {0xD0, (uint8_t []){0x88}, 1, 0},
+
+    {0xE0, (uint8_t []){0x00, 0x3A, 0x02}, 3, 0},
+    {0xE1, (uint8_t []){0x04, 0xA0, 0x00, 0xA0, 0x05,0xA0, 0x00, 0xA0, 0x00, 0x40, 0x40}, 11, 0},
+    {0xE2, (uint8_t []){0x30, 0x00, 0x40, 0x40, 0x32, 0xA0, 0x00, 0xA0, 0x00, 0xA0, 0x00, 0xA0, 0x00}, 13, 0},
+    {0xE3, (uint8_t []){0x00, 0x00, 0x33, 0x33}, 4, 0},
+    {0xE4, (uint8_t []){0x44, 0x44}, 2, 0},
+    {0xE5, (uint8_t []){0x09, 0x2E, 0xA0, 0xA0, 0x0B, 0x30, 0xA0, 0xA0, 0x05, 0x2A, 0xA0, 0xA0, 0x07, 0x2C, 0xA0, 0xA0}, 16, 0},
+    {0xE6, (uint8_t []){0x00, 0x00, 0x33, 0x33}, 4, 0},
+    {0xE7, (uint8_t []){0x44, 0x44}, 2, 0},
+    {0xE8, (uint8_t []){0x08, 0x2D, 0xA0, 0xA0, 0x0A, 0x2F, 0xA0, 0xA0, 0x04, 0x29, 0xA0, 0xA0, 0x06, 0x2B, 0xA0, 0xA0}, 16, 0},
+
+    {0xEB, (uint8_t []){0x00, 0x00, 0x4E, 0x4E, 0x00, 0x00, 0x00}, 7, 0},
+    {0xEC, (uint8_t []){0x08, 0x01}, 2, 0},
+
+    {0xED, (uint8_t []){0xB0, 0x2B, 0x98, 0xA4, 0x56, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF, 0xF7, 0x65, 0x4A, 0x89, 0xB2, 0x0B}, 16, 0},
+    {0xEF, (uint8_t []){0x08, 0x08, 0x08, 0x45, 0x3F, 0x54}, 6, 0},
+    {0xFF, (uint8_t []){0x77, 0x01, 0x00, 0x00, 0x00}, 5, 0},
+
+    // {0x3A, (uint8_t []){0x66}, 1, 0},
+    {0x11, (uint8_t []){0x00}, 1, 120},
+    {0x29, (uint8_t []){0x00}, 1, 20},
+};
+esp_err_t lcd_dsi_panel_factory_entry_t(esp_lcd_dsi_bus_handle_t dsi_handle, dev_display_lcd_config_t *lcd_cfg, dev_display_lcd_handles_t *lcd_handles)
+{
+    st7701_vendor_config_t vendor_config = {
+        .init_cmds = lcd_cmd,
+        .init_cmds_size = sizeof(lcd_cmd) / sizeof(st7701_lcd_init_cmd_t),
+        .flags.use_mipi_interface = 1,
+        .mipi_config = {
+            .dsi_bus = dsi_handle,
+            .dpi_config = &lcd_cfg->sub_cfg.dsi.dpi_config,
+        },
+    };
+
+    esp_lcd_panel_dev_config_t lcd_dev_config = {
+        .reset_gpio_num = lcd_cfg->sub_cfg.dsi.reset_gpio_num,
+        .rgb_ele_order = lcd_cfg->rgb_ele_order,
+        .bits_per_pixel = lcd_cfg->bits_per_pixel,
+        .data_endian = lcd_cfg->data_endian,
+        .flags = {
+            .reset_active_high = lcd_cfg->sub_cfg.dsi.reset_active_high,
+        },
+        .vendor_config = &vendor_config,
+    };
+
+    esp_err_t ret = esp_lcd_new_panel_st7701(lcd_handles->io_handle, &lcd_dev_config, &lcd_handles->panel_handle);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create ek79007 panel: %s", esp_err_to_name(ret));
+        return ESP_FAIL;
+    }
+
+    return ESP_OK;
+}
+
+esp_err_t lcd_touch_factory_entry_t(esp_lcd_panel_io_handle_t io, const esp_lcd_touch_config_t *touch_dev_config, esp_lcd_touch_handle_t *ret_touch)
+{
+    esp_err_t ret = esp_lcd_touch_new_i2c_gt911(io, touch_dev_config, ret_touch);
+    if (ret != ESP_OK) {
+        ESP_LOGE("lcd_touch_factory_entry_t", "Failed to create gt911 touch driver: %s", esp_err_to_name(ret));
+        return ret;
+    }
+
+    return ESP_OK;
+}

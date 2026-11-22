@@ -1,0 +1,79 @@
+version: 1.0.0
+# Peripherals Configuration for JC8012P4A1C_I_W_Y
+peripherals:
+  # I2C Configuration
+  - name: i2c_master
+    type: i2c
+    role: master
+    config:
+      port: 0
+      pins:
+        sda: 7
+        scl: 8
+
+  # I2S configuration for full-duplex audio with ES8311
+  - name: i2s_audio_out
+    type: i2s
+    format: "std-out"
+    role: master
+    config: &i2s_config
+      port: 0
+      sample_rate_hz: 48000
+      clk_src: "I2S_CLK_SRC_DEFAULT"
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_mode: "I2S_SLOT_MODE_STEREO"
+      slot_mask: "I2S_STD_SLOT_BOTH"
+      ws_width: 16
+      pins:
+        mclk: 13
+        bclk: 12
+        ws: 10
+        dout: 9
+        din: 48
+
+    # I2S configuration for full-duplex audio with ES8311
+  - name: i2s_audio_in
+    type: i2s
+    format: "std-in"
+    role: master
+    config: *i2s_config
+
+  # PA CONTROL
+  - name: gpio_pa_control
+    type: gpio
+    role: io
+    config:
+      pin: 11
+      mode: GPIO_MODE_OUTPUT
+      pull_up: true
+      default_level: 0
+
+  # LDO Configuration for MIPI Power Supply, need to be initialized before MIPI.
+  - name: ldo_mipi
+    type: ldo
+    config:
+      chan_id: 3        # On the P4 function board, VO3_LDO is used to power mipi.
+      voltage_mv: 2500  # For MIPI, the operating voltage needs to be set to 2.5V.
+      adjustable: 1
+      owned_by_hw: 0
+
+  # DSI Configuration
+  - name: dsi_display
+    type: dsi
+    config:
+      bus_id: 0
+      data_lanes: 2
+      phy_clk_src: 0
+      lane_bit_rate_mbps: 750
+
+  # Backlight Control
+  - name: ledc_backlight
+    type: ledc
+    version: default
+    config:
+      gpio_num: 23
+      speed_mode: LEDC_LOW_SPEED_MODE
+      channel: 1
+      timer_sel: 1
+      duty: 0
