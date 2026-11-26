@@ -19,6 +19,16 @@ extern "C" {
 #define SYSTEM_UI_TASK_STATUS_LEN 20
 #define SYSTEM_UI_TASK_DETAIL_LEN 192
 #define SYSTEM_UI_TASK_ID_LEN 16
+#define SYSTEM_UI_AGENT_TEXT_LEN 32
+#define SYSTEM_UI_SERVICE_TEXT_LEN 24
+
+typedef enum {
+    SYSTEM_UI_AGENT_IDLE = 0,
+    SYSTEM_UI_AGENT_PREPARING,
+    SYSTEM_UI_AGENT_THINKING,
+    SYSTEM_UI_AGENT_TOOL,
+    SYSTEM_UI_AGENT_REPLYING,
+} system_ui_agent_state_t;
 
 typedef struct {
     uint32_t buffer_lines;

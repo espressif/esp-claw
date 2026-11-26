@@ -30,6 +30,9 @@
 #if CONFIG_APP_CLAW_CAP_CORE
 #include "claw_cap.h"
 #include "claw_core.h"
+#if CONFIG_APP_CLAW_CAP_IM_TG
+#include "cap_im_tg.h"
+#endif
 #include "claw_agent_mgr.h"
 #endif
 #if CONFIG_APP_CLAW_CAP_EVENT_ROUTER
@@ -47,6 +50,7 @@
 #endif
 #include "esp_check.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -589,6 +593,78 @@ static esp_err_t app_claw_delete_session_history(const char *session_id,
 }
 #endif
 
+#if CONFIG_APP_CLAW_SYSTEM_UI_ENABLE
+#define APP_CLAW_UI_STATUS_POLL_MS 300
+#define APP_CLAW_UI_TG_TEXT_ON  "TG ON"
+#define APP_CLAW_UI_TG_TEXT_OFF "TG OFF"
+
+static esp_timer_handle_t s_ui_status_timer;
+
+static system_ui_agent_state_t app_claw_phase_to_ui_state(claw_core_agent_loop_phase_t phase)
+{
+    switch (phase) {
+    case CLAW_CORE_AGENT_LOOP_PHASE_BEFORE_BUILD_ITERATION_CONTEXT:
+    case CLAW_CORE_AGENT_LOOP_PHASE_BUILDING_ITERATION_CONTEXT:
+        return SYSTEM_UI_AGENT_PREPARING;
+    case CLAW_CORE_AGENT_LOOP_PHASE_BEFORE_LLM_HTTP:
+    case CLAW_CORE_AGENT_LOOP_PHASE_IN_LLM_HTTP:
+        return SYSTEM_UI_AGENT_THINKING;
+    case CLAW_CORE_AGENT_LOOP_PHASE_AFTER_LLM_BEFORE_TOOL:
+    case CLAW_CORE_AGENT_LOOP_PHASE_RUNNING_TOOL:
+        return SYSTEM_UI_AGENT_TOOL;
+    case CLAW_CORE_AGENT_LOOP_PHASE_FINALIZING:
+        return SYSTEM_UI_AGENT_REPLYING;
+    case CLAW_CORE_AGENT_LOOP_PHASE_IDLE:
+    default:
+        return SYSTEM_UI_AGENT_IDLE;
+    }
+}
+
+/* Runs in the esp_timer task; system_ui_set_* only enqueue work, so this never blocks on LVGL. */
+static void app_claw_ui_status_timer_cb(void *arg)
+{
+    static system_ui_agent_state_t s_last_state = SYSTEM_UI_AGENT_IDLE;
+    static bool s_state_sent;
+#if CONFIG_APP_CLAW_CAP_IM_TG
+    static int s_last_tg = -1;
+#endif
+    (void)arg;
+
+    claw_core_handle_t core = app_claw_get_core();
+    system_ui_agent_state_t state = core ? app_claw_phase_to_ui_state(claw_core_get_agent_loop_phase(core))
+                                         : SYSTEM_UI_AGENT_IDLE;
+    if (!s_state_sent || state != s_last_state) {
+        if (system_ui_set_agent_state(state, NULL) == ESP_OK) {
+            s_last_state = state;
+            s_state_sent = true;
+        }
+    }
+
+#if CONFIG_APP_CLAW_CAP_IM_TG
+    int tg = cap_im_tg_is_online() ? 1 : 0;
+    if (tg != s_last_tg) {
+        if (system_ui_set_service_status(tg ? APP_CLAW_UI_TG_TEXT_ON : APP_CLAW_UI_TG_TEXT_OFF) == ESP_OK) {
+            s_last_tg = tg;
+        }
+    }
+#endif
+}
+
+static esp_err_t app_claw_ui_status_start(void)
+{
+    const esp_timer_create_args_t args = {
+        .callback = app_claw_ui_status_timer_cb,
+        .name = "ui_status",
+    };
+
+    if (s_ui_status_timer) {
+        return ESP_OK;
+    }
+    ESP_RETURN_ON_ERROR(esp_timer_create(&args, &s_ui_status_timer), TAG, "create UI status timer failed");
+    return esp_timer_start_periodic(s_ui_status_timer, APP_CLAW_UI_STATUS_POLL_MS * 1000ULL);
+}
+#endif
+
 esp_err_t app_claw_ui_start(void)
 {
 #if CONFIG_APP_CLAW_SYSTEM_UI_ENABLE
@@ -604,7 +680,7 @@ esp_err_t app_claw_ui_start(void)
     ESP_RETURN_ON_ERROR(cap_lua_register_job_event_cb(app_claw_lua_job_event_cb, NULL),
                         TAG, "register Lua job event callback failed");
 #endif
-    return ESP_OK;
+    return app_claw_ui_status_start();
 #else
     return ESP_OK;
 #endif

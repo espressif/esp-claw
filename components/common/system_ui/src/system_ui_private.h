@@ -136,6 +136,8 @@ typedef enum {
     SYSTEM_UI_WORK_EVENT_JOBS_REFRESH,
     SYSTEM_UI_WORK_EVENT_JOBS_ACTION,
     SYSTEM_UI_WORK_EVENT_NETWORK_STATUS,
+    SYSTEM_UI_WORK_EVENT_AGENT_STATE,
+    SYSTEM_UI_WORK_EVENT_SERVICE_STATUS,
 } system_ui_work_event_type_t;
 
 typedef enum {
@@ -160,6 +162,13 @@ typedef struct {
             bool sta_connected;
             char ap_ssid[64];
         } network_status;
+        struct {
+            system_ui_agent_state_t state;
+            char text[SYSTEM_UI_AGENT_TEXT_LEN];
+        } agent_state;
+        struct {
+            char text[SYSTEM_UI_SERVICE_TEXT_LEN];
+        } service_status;
     };
     char launcher_id[SYSTEM_UI_LAUNCHER_ID_LEN];
     char launcher_title[SYSTEM_UI_LAUNCHER_TITLE_LEN];
@@ -185,6 +194,7 @@ typedef struct {
     lv_obj_t *status_label;
     lv_obj_t *time_label;
     lv_obj_t *date_label;
+    lv_obj_t *agent_label;
     lv_timer_t *home_clock_timer;
     lv_obj_t *overlay_root;
     lv_obj_t *overlay_dot;
@@ -235,6 +245,9 @@ typedef struct {
     bool jobs_visible;
     bool sta_connected;
     char ap_ssid[64];
+    system_ui_agent_state_t agent_state;
+    char agent_text[SYSTEM_UI_AGENT_TEXT_LEN];
+    char service_text[SYSTEM_UI_SERVICE_TEXT_LEN];
     char font_path[SYSTEM_UI_PATH_MAX];
 } system_ui_state_t;
 
@@ -292,6 +305,8 @@ esp_err_t system_ui_callback_lock(void);
 void system_ui_callback_unlock(void);
 
 esp_err_t system_ui_set_network_status(bool sta_connected, const char *ap_ssid);
+esp_err_t system_ui_post_agent_state(system_ui_agent_state_t state, const char *text);
+esp_err_t system_ui_post_service_status(const char *text);
 esp_err_t system_ui_overlay_set_visible(bool visible);
 esp_err_t system_ui_launcher_set_select_callback(system_ui_launcher_select_cb_t cb, void *user_ctx);
 esp_err_t system_ui_jobs_set_provider(system_ui_jobs_provider_cb_t cb, void *user_ctx);

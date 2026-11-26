@@ -50,6 +50,7 @@ typedef struct {
 #define APP_DEFAULT_FEISHU_APP_ID            ""
 #define APP_DEFAULT_FEISHU_APP_SECRET        ""
 #define APP_DEFAULT_TG_BOT_TOKEN             ""
+#define APP_DEFAULT_TG_ALLOWED_CHAT_IDS      ""
 #define APP_DEFAULT_WECHAT_TOKEN             ""
 #define APP_DEFAULT_WECHAT_BASE_URL          "https://ilinkai.weixin.qq.com"
 #define APP_DEFAULT_WECHAT_CDN_BASE_URL      "https://novac2c.cdn.weixin.qq.com/c2c"
@@ -89,6 +90,7 @@ static const app_config_field_t s_fields[] = {
     APP_CONFIG_FIELD(feishu_app_id, "feishu_app_id", APP_DEFAULT_FEISHU_APP_ID),
     APP_CONFIG_FIELD(feishu_app_secret, "feishu_secret", APP_DEFAULT_FEISHU_APP_SECRET),
     APP_CONFIG_FIELD(tg_bot_token, "tg_bot_token", APP_DEFAULT_TG_BOT_TOKEN),
+    APP_CONFIG_FIELD(tg_allowed_chat_ids, "tg_allowed_ids", APP_DEFAULT_TG_ALLOWED_CHAT_IDS),
     APP_CONFIG_FIELD(wechat_token, "wechat_token", APP_DEFAULT_WECHAT_TOKEN),
     APP_CONFIG_FIELD(wechat_base_url, "wechat_base_url", APP_DEFAULT_WECHAT_BASE_URL),
     APP_CONFIG_FIELD(wechat_cdn_base_url, "wechat_cdn_url", APP_DEFAULT_WECHAT_CDN_BASE_URL),
@@ -347,6 +349,7 @@ void app_config_to_claw(const app_config_t *config, app_claw_config_t *out)
     strlcpy(out->feishu_app_id, config->feishu_app_id, sizeof(out->feishu_app_id));
     strlcpy(out->feishu_app_secret, config->feishu_app_secret, sizeof(out->feishu_app_secret));
     strlcpy(out->tg_bot_token, config->tg_bot_token, sizeof(out->tg_bot_token));
+    strlcpy(out->tg_allowed_chat_ids, config->tg_allowed_chat_ids, sizeof(out->tg_allowed_chat_ids));
     strlcpy(out->wechat_token, config->wechat_token, sizeof(out->wechat_token));
     strlcpy(out->wechat_base_url, config->wechat_base_url, sizeof(out->wechat_base_url));
     strlcpy(out->wechat_cdn_base_url, config->wechat_cdn_base_url, sizeof(out->wechat_cdn_base_url));

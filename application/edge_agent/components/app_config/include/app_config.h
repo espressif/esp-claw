@@ -14,6 +14,7 @@ extern "C" {
 
 #define APP_CONFIG_STR_LEN        320
 #define APP_CONFIG_TIMEZONE_LEN   32
+#define APP_CONFIG_TG_ALLOWED_IDS_LEN 64
 
 #define APP_WIFI_SSID             CONFIG_APP_WIFI_SSID
 #define APP_WIFI_PASSWORD         CONFIG_APP_WIFI_PASSWORD
@@ -45,6 +46,7 @@ typedef struct {
     char feishu_app_id[64];
     char feishu_app_secret[APP_CONFIG_STR_LEN];
     char tg_bot_token[APP_CONFIG_STR_LEN];
+    char tg_allowed_chat_ids[APP_CONFIG_TG_ALLOWED_IDS_LEN];
     char wechat_token[APP_CONFIG_STR_LEN];
     char wechat_base_url[APP_CONFIG_STR_LEN];
     char wechat_cdn_base_url[APP_CONFIG_STR_LEN];

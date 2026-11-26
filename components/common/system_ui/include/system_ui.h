@@ -24,6 +24,10 @@ esp_err_t system_ui_reload_home(void);
 esp_err_t system_ui_set_callbacks(const system_ui_callbacks_t *callbacks, void *user_ctx);
 esp_err_t system_ui_update_network(const system_ui_network_state_t *state);
 esp_err_t system_ui_set_activity(bool active);
+/* Show the agent state under the date. text may be NULL to use the default label. */
+esp_err_t system_ui_set_agent_state(system_ui_agent_state_t state, const char *text);
+/* Short text appended to the Wi-Fi status line, e.g. "TG ON". NULL or "" clears it. */
+esp_err_t system_ui_set_service_status(const char *text);
 esp_err_t system_ui_show_task_panel(bool visible);
 esp_err_t system_ui_refresh_tasks(void);
 void system_ui_click_feedback(void);

@@ -6,6 +6,7 @@
 #include "system_ui_private.h"
 
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 #include "display_service.h"
@@ -13,6 +14,8 @@
 
 #define SYSTEM_UI_HOME_CLOCK_CENTER_PCT 45
 #define SYSTEM_UI_HOME_DATE_Y_PCT 56
+#define SYSTEM_UI_HOME_AGENT_GAP_PX 36
+#define SYSTEM_UI_HOME_AGENT_BOTTOM_MARGIN_PX 30
 
 typedef struct {
     int32_t pad;
@@ -22,6 +25,7 @@ typedef struct {
     int32_t clock_w;
     int32_t clock_h;
     int32_t date_y;
+    int32_t agent_y;
 } system_ui_home_layout_t;
 
 static system_ui_home_layout_t system_ui_home_layout(void)
@@ -44,6 +48,8 @@ static system_ui_home_layout_t system_ui_home_layout(void)
         .clock_w = clock_w,
         .clock_h = clock_h,
         .date_y = date_y,
+        .agent_y = system_ui_clamp_i32(date_y + SYSTEM_UI_HOME_AGENT_GAP_PX, 0,
+                                       height - SYSTEM_UI_HOME_AGENT_BOTTOM_MARGIN_PX),
     };
 }
 
@@ -76,6 +82,42 @@ static void system_ui_home_clock_timer_cb(lv_timer_t *timer)
     system_ui_home_update_clock_locked();
 }
 
+static const char *system_ui_agent_default_text(system_ui_agent_state_t state)
+{
+    switch (state) {
+    case SYSTEM_UI_AGENT_PREPARING:
+        return "Preparing";
+    case SYSTEM_UI_AGENT_THINKING:
+        return "Thinking";
+    case SYSTEM_UI_AGENT_TOOL:
+        return "Working";
+    case SYSTEM_UI_AGENT_REPLYING:
+        return "Replying";
+    case SYSTEM_UI_AGENT_IDLE:
+    default:
+        return "Idle";
+    }
+}
+
+static void system_ui_home_update_agent_locked(void)
+{
+    char text[SYSTEM_UI_AGENT_TEXT_LEN + 8];
+    const char *label = s_ui.agent_text[0] ? s_ui.agent_text
+                                           : system_ui_agent_default_text(s_ui.agent_state);
+
+    if (!s_ui.agent_label) {
+        return;
+    }
+    /* The UI font is a CJK subset without LVGL symbol glyphs, so use plain ASCII markers. */
+    snprintf(text, sizeof(text), "%s %s",
+             s_ui.agent_state == SYSTEM_UI_AGENT_IDLE ? "-" : ">", label);
+    lv_label_set_text(s_ui.agent_label, text);
+    lv_obj_set_style_text_color(s_ui.agent_label,
+                                system_ui_color(s_ui.agent_state == SYSTEM_UI_AGENT_IDLE
+                                                    ? SYSTEM_UI_COLOR_MUTED
+                                                    : SYSTEM_UI_COLOR_TEXT), 0);
+}
+
 void system_ui_home_update_locked(void)
 {
     char status[96];
@@ -89,9 +131,15 @@ void system_ui_home_update_locked(void)
         snprintf(status, sizeof(status), "WIFI OFF");
     }
 
+    if (s_ui.service_text[0]) {
+        size_t len = strlen(status);
+        snprintf(status + len, sizeof(status) - len, "  |  %s", s_ui.service_text);
+    }
+
     if (s_ui.status_label) {
         lv_label_set_text(s_ui.status_label, status);
     }
+    system_ui_home_update_agent_locked();
     system_ui_home_update_clock_locked();
 }
 
@@ -154,6 +202,14 @@ static esp_err_t system_ui_create_home_tile_locked(void)
     lv_obj_set_style_text_align(s_ui.date_label, LV_TEXT_ALIGN_CENTER, 0);
     system_ui_apply_font(s_ui.date_label);
     lv_obj_align(s_ui.date_label, LV_ALIGN_TOP_MID, 0, layout.date_y);
+
+    s_ui.agent_label = lv_label_create(s_ui.home_tile);
+    ESP_RETURN_ON_FALSE(s_ui.agent_label != NULL, ESP_ERR_NO_MEM, SYSTEM_UI_TAG, "create agent label failed");
+    lv_obj_set_width(s_ui.agent_label, layout.clock_w);
+    lv_label_set_long_mode(s_ui.agent_label, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(s_ui.agent_label, LV_TEXT_ALIGN_CENTER, 0);
+    system_ui_apply_font(s_ui.agent_label);
+    lv_obj_align(s_ui.agent_label, LV_ALIGN_TOP_MID, 0, layout.agent_y);
 
     s_ui.home_clock_timer = lv_timer_create(system_ui_home_clock_timer_cb, 1000, NULL);
     ESP_RETURN_ON_FALSE(s_ui.home_clock_timer != NULL, ESP_ERR_NO_MEM, SYSTEM_UI_TAG, "create home clock timer failed");
@@ -251,6 +307,7 @@ void system_ui_delete_home_locked(void)
     s_ui.status_label = NULL;
     s_ui.time_label = NULL;
     s_ui.date_label = NULL;
+    s_ui.agent_label = NULL;
 }
 
 esp_err_t system_ui_set_network_status(bool sta_connected, const char *ap_ssid)
@@ -265,4 +322,29 @@ esp_err_t system_ui_set_network_status(bool sta_connected, const char *ap_ssid)
     event.network_status.sta_connected = sta_connected;
     strlcpy(event.network_status.ap_ssid, ap_ssid ? ap_ssid : "", sizeof(event.network_status.ap_ssid));
     return system_ui_post_work_event(&event, pdMS_TO_TICKS(100));
+}
+
+esp_err_t system_ui_post_agent_state(system_ui_agent_state_t state, const char *text)
+{
+    system_ui_work_event_t event = {
+        .type = SYSTEM_UI_WORK_EVENT_AGENT_STATE,
+    };
+
+    ESP_RETURN_ON_FALSE(s_ui.started, ESP_ERR_INVALID_STATE, SYSTEM_UI_TAG, "runtime not started");
+    event.generation = s_ui.generation;
+    event.agent_state.state = state;
+    strlcpy(event.agent_state.text, text ? text : "", sizeof(event.agent_state.text));
+    return system_ui_post_work_event(&event, 0);
+}
+
+esp_err_t system_ui_post_service_status(const char *text)
+{
+    system_ui_work_event_t event = {
+        .type = SYSTEM_UI_WORK_EVENT_SERVICE_STATUS,
+    };
+
+    ESP_RETURN_ON_FALSE(s_ui.started, ESP_ERR_INVALID_STATE, SYSTEM_UI_TAG, "runtime not started");
+    event.generation = s_ui.generation;
+    strlcpy(event.service_status.text, text ? text : "", sizeof(event.service_status.text));
+    return system_ui_post_work_event(&event, 0);
 }

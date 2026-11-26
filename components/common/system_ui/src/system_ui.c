@@ -128,6 +128,31 @@ static void system_ui_handle_network_status_event(const system_ui_work_event_t *
     system_ui_unlock();
 }
 
+static void system_ui_handle_agent_state_event(const system_ui_work_event_t *event)
+{
+    if (system_ui_lock() != ESP_OK) {
+        return;
+    }
+    if (s_ui.started && event->generation == s_ui.generation) {
+        s_ui.agent_state = event->agent_state.state;
+        strlcpy(s_ui.agent_text, event->agent_state.text, sizeof(s_ui.agent_text));
+        system_ui_home_update_locked();
+    }
+    system_ui_unlock();
+}
+
+static void system_ui_handle_service_status_event(const system_ui_work_event_t *event)
+{
+    if (system_ui_lock() != ESP_OK) {
+        return;
+    }
+    if (s_ui.started && event->generation == s_ui.generation) {
+        strlcpy(s_ui.service_text, event->service_status.text, sizeof(s_ui.service_text));
+        system_ui_home_update_locked();
+    }
+    system_ui_unlock();
+}
+
 static void system_ui_event_task(void *arg)
 {
     (void)arg;
@@ -174,6 +199,12 @@ static void system_ui_event_task(void *arg)
             break;
         case SYSTEM_UI_WORK_EVENT_NETWORK_STATUS:
             system_ui_handle_network_status_event(&event);
+            break;
+        case SYSTEM_UI_WORK_EVENT_AGENT_STATE:
+            system_ui_handle_agent_state_event(&event);
+            break;
+        case SYSTEM_UI_WORK_EVENT_SERVICE_STATUS:
+            system_ui_handle_service_status_event(&event);
             break;
         case SYSTEM_UI_WORK_EVENT_STOP:
         default:
@@ -491,6 +522,16 @@ esp_err_t system_ui_update_network(const system_ui_network_state_t *state)
 esp_err_t system_ui_set_activity(bool active)
 {
     return system_ui_overlay_set_visible(active);
+}
+
+esp_err_t system_ui_set_agent_state(system_ui_agent_state_t state, const char *text)
+{
+    return system_ui_post_agent_state(state, text);
+}
+
+esp_err_t system_ui_set_service_status(const char *text)
+{
+    return system_ui_post_service_status(text);
 }
 
 esp_err_t system_ui_show_task_panel(bool visible)

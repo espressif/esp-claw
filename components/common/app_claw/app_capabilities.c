@@ -530,6 +530,8 @@ static esp_err_t app_cap_register_im_tg(const app_claw_config_t *config,
         ESP_RETURN_ON_ERROR(cap_im_tg_set_token(config->tg_bot_token),
                             TAG, "Failed to set Telegram bot token");
     }
+    ESP_RETURN_ON_ERROR(cap_im_tg_set_allowed_chat_ids(config->tg_allowed_chat_ids),
+                        TAG, "Failed to set Telegram allowed chat ids");
 
     return ESP_OK;
 }

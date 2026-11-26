@@ -41,6 +41,8 @@ static const char *TAG = "cap_im_tg";
 #define CAP_IM_TG_DEDUP_CACHE_SIZE    64
 #define CAP_IM_TG_PATH_BUF_SIZE       256
 #define CAP_IM_TG_NAME_BUF_SIZE       96
+#define CAP_IM_TG_ALLOWED_IDS_LEN     128
+#define CAP_IM_TG_ALLOWED_IDS_DELIMS  ", ;\t\r\n"
 #define CAP_IM_TG_MULTIPART_BOUNDARY  "----cap_im_tg_boundary"
 
 typedef struct {
@@ -70,6 +72,9 @@ typedef struct {
 
 typedef struct {
     char bot_token[192];
+    /* Allow-list of chat ids; empty means every chat is accepted. Written
+     * only by cap_im_tg_set_allowed_chat_ids() before polling starts. */
+    char allowed_chat_ids[CAP_IM_TG_ALLOWED_IDS_LEN];
     char attachment_root_dir[128];
     size_t max_inbound_file_bytes;
     bool enable_inbound_attachments;
@@ -77,6 +82,8 @@ typedef struct {
     TaskHandle_t attachment_task;
     QueueHandle_t attachment_queue;
     volatile bool stop_requested;
+    /* True after the last getUpdates poll succeeded; read by UI status code. */
+    volatile bool online;
     int64_t next_update_id;
     uint64_t seen_update_keys[CAP_IM_TG_DEDUP_CACHE_SIZE];
     size_t seen_update_idx;
@@ -116,6 +123,27 @@ static uint64_t cap_im_tg_fnv1a64(const char *text)
     }
 
     return hash;
+}
+
+static bool cap_im_tg_chat_allowed(const char *chat_id)
+{
+    char list[CAP_IM_TG_ALLOWED_IDS_LEN];
+    char *saveptr = NULL;
+    char *token;
+
+    if (!s_tg.allowed_chat_ids[0]) {
+        return true;
+    }
+
+    strlcpy(list, s_tg.allowed_chat_ids, sizeof(list));
+    for (token = strtok_r(list, CAP_IM_TG_ALLOWED_IDS_DELIMS, &saveptr);
+            token != NULL;
+            token = strtok_r(NULL, CAP_IM_TG_ALLOWED_IDS_DELIMS, &saveptr)) {
+        if (strcmp(token, chat_id) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool cap_im_tg_dedup_check_and_record(const char *update_key)
@@ -649,6 +677,10 @@ static void cap_im_tg_handle_update(cJSON *update_json)
     }
 
     snprintf(chat_id, sizeof(chat_id), "%" PRId64, (int64_t)chat_id_json->valuedouble);
+    if (!cap_im_tg_chat_allowed(chat_id)) {
+        ESP_LOGW(TAG, "Telegram message from chat %s rejected: not in allow-list", chat_id);
+        return;
+    }
     if (cJSON_IsNumber(from_id_json)) {
         snprintf(sender_id, sizeof(sender_id), "%" PRId64, (int64_t)from_id_json->valuedouble);
     } else {
@@ -1114,7 +1146,10 @@ static void cap_im_tg_poll_task(void *arg)
     (void)arg;
 
     while (!s_tg.stop_requested) {
-        if (cap_im_tg_poll_once() != ESP_OK) {
+        if (cap_im_tg_poll_once() == ESP_OK) {
+            s_tg.online = true;
+        } else {
+            s_tg.online = false;
             if (s_tg.stop_requested) {
                 break;
             }
@@ -1436,6 +1471,29 @@ esp_err_t cap_im_tg_set_token(const char *bot_token)
     s_tg.next_update_id = 0;
     memset(s_tg.seen_update_keys, 0, sizeof(s_tg.seen_update_keys));
     s_tg.seen_update_idx = 0;
+    return ESP_OK;
+}
+
+bool cap_im_tg_is_online(void)
+{
+    return s_tg_initialized && s_tg.poll_task != NULL && s_tg.online;
+}
+
+esp_err_t cap_im_tg_set_allowed_chat_ids(const char *chat_ids)
+{
+    if (!s_tg_initialized) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (!chat_ids) {
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (strlen(chat_ids) >= sizeof(s_tg.allowed_chat_ids)) {
+        return ESP_ERR_INVALID_SIZE;
+    }
+
+    strlcpy(s_tg.allowed_chat_ids, chat_ids, sizeof(s_tg.allowed_chat_ids));
     return ESP_OK;
 }
 

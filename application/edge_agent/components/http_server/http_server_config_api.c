@@ -63,6 +63,7 @@ static const config_field_def_t CONFIG_FIELDS[] = {
     CONFIG_FIELD("im",           feishu_app_id),
     CONFIG_FIELD("im",           feishu_app_secret),
     CONFIG_FIELD("im",           tg_bot_token),
+    CONFIG_FIELD("im",           tg_allowed_chat_ids),
     CONFIG_FIELD("im",           wechat_token),
     CONFIG_FIELD("im",           wechat_base_url),
     CONFIG_FIELD("im",           wechat_cdn_base_url),
