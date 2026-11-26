@@ -1,0 +1,5 @@
+board: ai_module_tft
+chip: esp32s3
+version: 1.0.0
+description: "Generic ESP32-S3 AI module (INMP441 + MAX98357 + ST7789 TFT + WS2812), xiaozhi bread-compact pinout"
+manufacturer: "community"

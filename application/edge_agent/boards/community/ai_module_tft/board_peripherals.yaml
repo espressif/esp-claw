@@ -1,0 +1,99 @@
+version: 1.0.0
+# Peripherals for the generic ESP32-S3 AI module.
+# Pinout follows the public xiaozhi-esp32 "xingzhi-cube-1.54tft-ml307" layout.
+# Backlight on GPIO13 was confirmed on the device; the rest is NOT verified
+# against a vendor schematic.
+
+peripherals:
+
+  # WS2812 status LED
+  - name: rmt_tx
+    type: rmt
+    role: tx
+    config:
+      gpio_num: 48
+      clk_src: RMT_CLK_SRC_DEFAULT
+      resolution_hz: 10000000
+      mem_block_symbols: 64
+      trans_queue_depth: 4
+      intr_priority: 1
+      flags:
+        invert_out: false
+        with_dma: true
+        io_loop_back: false
+        io_od_mode: false
+        allow_pd: false
+        init_level: false
+
+  # ST7789 TFT over SPI (SPI3)
+  - name: spi_display
+    type: spi
+    role: master
+    config:
+      spi_bus_config:
+        spi_port: SPI3_HOST
+        data0_io_num: 10               # MOSI (SDA)
+        sclk_io_num: 9                 # CLK (SCL)
+        max_transfer_sz: 115200
+
+  # TFT backlight (LEDC PWM)
+  - name: ledc_backlight
+    type: ledc
+    role: none
+    config:
+      gpio_num: 13
+      freq_hz: 5000
+      duty: 0
+      duty_resolution: LEDC_TIMER_10_BIT
+      output_invert: false
+
+  # MAX98357 speaker amplifier (I2S STD TX on I2S1)
+  - name: i2s_audio_out
+    type: i2s
+    role: master
+    format: std-out
+    config:
+      port: 1
+      sample_rate_hz: 24000
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_MONO
+      slot_mask: I2S_STD_SLOT_BOTH
+      ws_width: 16
+      pins:
+        mclk: -1
+        bclk: 15
+        ws: 16
+        dout: 7
+        din: -1
+
+  # INMP441 microphone (I2S STD RX on I2S0)
+  - name: i2s_audio_in
+    type: i2s
+    role: master
+    format: std-in
+    config:
+      port: 0
+      sample_rate_hz: 16000
+      mclk_multiple: 256
+      data_bit_width: 16
+      slot_bit_width: I2S_SLOT_BIT_WIDTH_AUTO
+      slot_mode: I2S_SLOT_MODE_MONO
+      slot_mask: I2S_STD_SLOT_BOTH
+      ws_width: 16
+      pins:
+        mclk: -1
+        bclk: 5
+        ws: 4
+        dout: -1
+        din: 6
+
+  # Boot button
+  - name: gpio_boot_btn
+    type: gpio
+    role: io
+    config:
+      pin: 0
+      mode: GPIO_MODE_INPUT
+      default_level: 1
