@@ -160,6 +160,17 @@ def parse_peripheral(out, item):
         out.add('dsi_bus', number(config.get('bus_id', 0), 'number', name))
     elif kind == 'ldo':
         out.add('ldo', number(config.get('chan_id', 3), 'number', name))
+    elif kind == 'adc':
+        unit = number(config.get('unit_id', 'ADC_UNIT_1'), 'adc', name)
+        if unit not in (0, 1):
+            raise BoardResourceError(f'{name}: invalid ADC unit')
+        out.add('adc_unit', unit)
+        channel = config.get('channel_id')
+        if channel is not None:
+            channel = number(channel, 'adc_channel', name)
+            if channel < 0:
+                raise BoardResourceError(f'{name}: invalid ADC channel')
+            out.add('adc_channel', unit, channel)
     else:
         raise BoardResourceError(f'{name}: unsupported standard peripheral type {kind!r}')
 
